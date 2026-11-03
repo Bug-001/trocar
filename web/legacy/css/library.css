@@ -27,7 +27,7 @@
 
 /* one grid for the header and every row, so the columns line up: agent | 会话 | 模型调用 | 最后活动 */
 .libhead,.lrow{display:grid;grid-template-columns:176px minmax(0,1fr) 92px 110px;align-items:center;column-gap:12px;padding:0 16px;}
-.libhead{height:32px;font-size:var(--fs-cap);color:var(--ink-2);background:var(--paper);border-bottom:1px solid var(--rule);}
+.libhead{height:32px;background:var(--paper);border-bottom:1px solid var(--rule);}
 .libhead .ln,.lrow .ln,.libhead .lw,.lrow .lw{text-align:right;}
 .libhead .lhs .popbtn{padding:0 2px;font-size:var(--fs-cap);}
 .liblist{flex:1;min-height:0;overflow:auto;outline:none;}

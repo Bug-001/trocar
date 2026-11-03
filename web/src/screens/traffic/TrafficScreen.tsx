@@ -173,7 +173,7 @@ export default function TrafficScreen({ route, router }: ScreenProps) {
             {fl.note ? <span className="cap-item cap-note">{fl.note}</span> : null}
           </div>
         </div>
-        <div className="trow thead">
+        <div className="trow thead colhead">
           <span className="gut"></span><span className="nm">{W.COL.agent}</span>
           <span className="cell-host">{W.COL.host}</span><span className="cell-first">{W.COL.first}</span>
           <span className="cell num">{W.COL.requests}</span>

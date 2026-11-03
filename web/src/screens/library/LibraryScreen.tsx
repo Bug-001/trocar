@@ -125,7 +125,7 @@ export default function LibraryScreen({ route, router }: ScreenProps) {
       <div className="lib">
         <LibraryTools f={f} all={all} set={set} onClear={clear} inputRef={qRef} />
         <Caption data={q.data ?? null} err={err} listAt={q.dataUpdatedAt} now={q.dataUpdatedAt} onRetry={retry} />
-        <div className="libhead">
+        <div className="libhead colhead">
           <span className="lha">{W.COL_AGENT}</span><span className="lhs">{W.COL_SESSION}<TitleInfo /></span>
           <span className="ln">{W.COL_CALLS}</span><span className="lw">{W.COL_LAST}</span>
         </div>

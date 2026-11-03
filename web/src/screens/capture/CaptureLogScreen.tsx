@@ -106,13 +106,13 @@ export default function CaptureLogScreen({ route }: ScreenProps) {
         {model.state === 'reading' ? <p className="caplog-none">{stale ?? READING}</p> : null}
         {model.state === 'unreadable' ? <><p className="caplog-none">{say}</p>{model.foot ? <Foot foot={model.foot} /> : null}</> : null}
         {model.state === 'ready' ? <>
-          <div className="caplog-bar">
-            <p className="caplog-say">{say}</p>
+          {say.length || model.partial ? <div className="caplog-bar">
+            {say.length ? <p className="caplog-say">{say}</p> : null}
             {model.partial ? <TechDetails pairs={techPairs(model.partial)} copy={pairsText(model.partial)} /> : null}
-          </div>
+          </div> : null}
           <section className="crows" aria-label="Capture failures">
             {model.rows.length ? <>
-              <div className="lr h"><span>Time</span><span>Agent</span><span className="say">What happened</span><span className="cnt">Count</span><span></span></div>
+              <div className="lr h colhead"><span>Time</span><span>Agent</span><span className="say">What happened</span><span className="cnt">Count</span><span></span></div>
               {model.rows.map((r) => <LogRow key={r.key} row={r} open={choice.get(r.key) === true} onOpen={(o) => setOpen(r.key, o)} />)}
             </> : <p className="caplog-none">{model.none}</p>}
           </section>

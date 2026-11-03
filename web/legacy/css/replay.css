@@ -221,7 +221,7 @@
   .cwfline,.cwwin{display:flex;align-items:baseline;gap:7px;margin:0 0 8px;padding:5px 9px;font-size:var(--fs-cap);line-height:1.5;border-radius:6px;}
   .cwfline{color:var(--ink-2);background:color-mix(in srgb,var(--fg) 3%,transparent);border:1px dashed var(--rule-2);}
   /* the row's tech details read at the row's own size (1.5: a mark, not a section head) */
-  .cwfline .disc{border-bottom:0;} .cwfline .disc-t,.cwfline .disc-t b,.cwfline .disc-t .sum{font-size:inherit;min-height:0;color:var(--ink-2);}
+  .cwfline .disc{border-bottom:0;} .cwfline .disc-t,.cwfline .disc-t b,.cwfline .disc-t .sum{font-size:inherit;min-height:0;} /* the kit's colours: the title strong ink everywhere */
   .cwwin{color:var(--dim);background:color-mix(in srgb,var(--fg) 3%,transparent);border:1px dashed var(--border);}
   .cwhalf{flex:none;} .cwffacts{min-width:0;}
   /* D17② schema-tax summary */
@@ -465,7 +465,7 @@
 .fidline + .disc{margin:0;padding:0 16px 4px;background:var(--raised);font-size:var(--fs-cap);}
 /* the quiet 技术细节 disclosures under the fidelity row and in the raw panel: caption size, no 36 px row */
 .fidline + .disc .disc-t,#rawpanel .disc-t{min-height:0;font-size:var(--fs-cap);}
-.fidline + .disc .disc-t b,#rawpanel .disc-t b{font-size:var(--fs-cap);font-weight:var(--fw-regular);color:var(--ink-3);}
+.fidline + .disc .disc-t b,#rawpanel .disc-t b{font-size:var(--fs-cap);} /* size follows the line; weight and ink stay the kit's */
 /* the session info popover's rows: numbers with their Chinese names and marks, links reachable by Tab */
 .pop .sipb{display:flex;flex-direction:column;gap:6px;min-width:240px;}
 .pop .sir{font-size:var(--fs-body);color:var(--ink);}

@@ -40,8 +40,7 @@
 .scard .lastchg{margin-top:8px;}
 
 /* ── 价格 ─────────────────────────────────────────────────────────────────────────────────────────────────────── */
-/* table heads: caption size, the third ink, the strong weight; no caps */
-.ptable th{font-size:var(--fs-cap);color:var(--ink-3);font-weight:var(--fw-strong);text-align:left;padding:6px 10px;border-bottom:1px solid var(--rule);}
+.ptable th{text-align:left;padding:6px 10px;border-bottom:1px solid var(--rule);}
 .ptable th.n,.ptable td.n{text-align:right;}
 .ptable td{padding:5px 10px;border-bottom:1px solid var(--rule);}
 .ptable tr:last-child td{border-bottom:0;}

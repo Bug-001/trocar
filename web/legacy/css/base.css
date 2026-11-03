@@ -15,7 +15,7 @@
   --ink: #1B1828;  --ink-2: #4D4960;  --ink-3: #605B72;
   /* action: only what can be operated */
   --action: #5B47E0;  --action-ink: #FFFFFF;  --action-wash: rgb(91 71 224 / .10);
-  --seg-on: #FFFFFF;  --switch-on: #5B47E0;  --switch-off: #E6E3EE;  --knob-on: #FFFFFF;  --knob-off: #7A7590;  --icon-tile: transparent;
+  --seg-on: #FFFFFF;  --seg-track: #E6E3EE;  --switch-on: #5B47E0;  --switch-off: #E6E3EE;  --knob-on: #FFFFFF;  --knob-off: #7A7590;  --icon-tile: transparent;
   /* state: amber and red are for problems only */
   --bad: #B42318;  --bad-lamp: #E0443A;  --warn: #8A4B00;  --warn-lamp: #C2740E;  --ok: #217A45;  --note-lamp: #1B1828;
   /* instrument: the trace on the glass, --trace-ink where the cache share sits on paper; the cursor is neutral */
@@ -59,6 +59,7 @@
   --fw-regular: 400;  --fw-strong: 600;
   /* space / shape / motion / widths */
   --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px; --s7: 48px;
+  --head-gap: 12px; /* the page head to the first block of content, on every page (1.5 §审美维度 9) */
   --r-1: 4px; --r-2: 8px; --r-3: 12px; --r-4: 16px; --r-pill: 999px;
   --t-tip: 300ms;
   --t-quick: 120ms; --t-panel: 180ms; --ease: cubic-bezier(.2, .7, .2, 1);
@@ -78,7 +79,7 @@
     --rule: #2A2636;  --rule-2: #3B3649;  --control-edge: #7A7491;  --grat: rgb(255 255 255 / .06);
     --ink: #EDEBF5;  --ink-2: #ABA6BF;  --ink-3: #958FA9;
     --action: #A497FF;  --action-ink: #160F33;  --action-wash: rgb(164 151 255 / .14);
-    --seg-on: #3D3752;  --switch-on: #6F5CF2;  --switch-off: #2C2839;  --knob-off: #8A84A0;  --icon-tile: #F4F3F8;
+    --seg-on: #3D3752;  --seg-track: #17141F;  --switch-on: #6F5CF2;  --switch-off: #2C2839;  --knob-off: #8A84A0;  --icon-tile: #F4F3F8;
     --bad: #FF8F85;  --bad-lamp: #FF5D52;  --warn: #F2B35B;  --warn-lamp: #F2A13A;  --ok: #6AD49A;  --note-lamp: #EDEBF5;
     --trace-ink: #5FD3AE;
     --scope-ink-2: #A9A3C7;  --scope-edge: #6A6390;  --scope-rule: rgb(255 255 255 / .11);
@@ -103,7 +104,7 @@
   --rule: #E4E1EC;  --rule-2: #CFCADC;  --control-edge: #848099;  --grat: rgb(255 255 255 / .07);
   --ink: #1B1828;  --ink-2: #4D4960;  --ink-3: #605B72;
   --action: #5B47E0;  --action-ink: #FFFFFF;  --action-wash: rgb(91 71 224 / .10);
-  --seg-on: #FFFFFF;  --switch-on: #5B47E0;  --switch-off: #E6E3EE;  --knob-off: #7A7590;  --icon-tile: transparent;
+  --seg-on: #FFFFFF;  --seg-track: #E6E3EE;  --switch-on: #5B47E0;  --switch-off: #E6E3EE;  --knob-off: #7A7590;  --icon-tile: transparent;
   --bad: #B42318;  --bad-lamp: #E0443A;  --warn: #8A4B00;  --warn-lamp: #C2740E;  --ok: #217A45;  --note-lamp: #1B1828;
   --trace-ink: #167A5F;
   --scope-ink-2: #ABA5CA;  --scope-edge: #6E6890;  --scope-rule: rgb(255 255 255 / .12);
@@ -127,7 +128,7 @@
   --rule: #2A2636;  --rule-2: #3B3649;  --control-edge: #7A7491;  --grat: rgb(255 255 255 / .06);
   --ink: #EDEBF5;  --ink-2: #ABA6BF;  --ink-3: #958FA9;
   --action: #A497FF;  --action-ink: #160F33;  --action-wash: rgb(164 151 255 / .14);
-  --seg-on: #3D3752;  --switch-on: #6F5CF2;  --switch-off: #2C2839;  --knob-off: #8A84A0;  --icon-tile: #F4F3F8;
+  --seg-on: #3D3752;  --seg-track: #17141F;  --switch-on: #6F5CF2;  --switch-off: #2C2839;  --knob-off: #8A84A0;  --icon-tile: #F4F3F8;
   --bad: #FF8F85;  --bad-lamp: #FF5D52;  --warn: #F2B35B;  --warn-lamp: #F2A13A;  --ok: #6AD49A;  --note-lamp: #EDEBF5;
   --trace-ink: #5FD3AE;
   --scope-ink-2: #A9A3C7;  --scope-edge: #6A6390;  --scope-rule: rgb(255 255 255 / .11);
@@ -178,7 +179,8 @@ select{padding:3px 8px 3px 11px;}
 input[type=search]{padding:3px 9px;background:var(--raised);color:var(--ink);border:1px solid var(--control-edge);border-radius:var(--r-2);min-width:0;}
 input::placeholder{color:var(--ink-3);}
 /* the segmented control (.on, or React Aria's [data-selected], = the current value) */
-.seg{display:inline-flex;flex:none;gap:2px;padding:2px;border:1px solid var(--control-edge);border-radius:var(--r-2);background:var(--panel);}
+/* --seg-track has tone of its own so the selected face (--seg-on) reads as a face, not only through its shadow (1.5 第 7 条) */
+.seg{display:inline-flex;flex:none;gap:2px;padding:2px;border:1px solid var(--control-edge);border-radius:var(--r-2);background:var(--seg-track);}
 .seg a,.seg button{height:24px;padding:0 11px;display:inline-flex;align-items:center;font-size:var(--fs-cap);color:var(--ink-2);text-decoration:none;border:0;background:none;border-radius:calc(var(--r-2) - 2px);cursor:pointer;white-space:nowrap;}
 .seg a:hover,.seg button:hover,.seg [data-hovered]{color:var(--ink);text-decoration:none;background:none;}
 /* --seg-on: the selected segment's own face, set apart from the track in both themes (--raised is the track's near twin in dark) */
@@ -233,6 +235,10 @@ input::placeholder{color:var(--ink-3);}
 .v2-modal .mactions{display:flex;justify-content:flex-end;gap:8px;padding:8px 18px 16px;}
 .v2-modal .mbtn.primary{background:var(--action);color:var(--action-ink);border-color:var(--action);font-weight:var(--fw-strong);}
 
+/* one table head for every table on the board (1.5 §审美维度 9): a <th>, or .colhead on a grid table's head row */
+th,.colhead{font-size:var(--fs-cap);font-weight:var(--fw-strong);color:var(--ink-3);}
+/* an agent's icon and name as one unit, wherever it stands (a flex parent's gap or plain inline text) */
+.chip{display:inline-flex;align-items:center;gap:6px;}
 /* ── the popover kit (1.2 §弹出层) and the marks (1.5 §标记) ──────────────────────────────────────────────────── */
 .popbtn{border:0;background:none;color:var(--ink-3);cursor:pointer;font:inherit;padding:0 3px;border-radius:var(--r-1);white-space:nowrap;}
 .popbtn:hover{color:var(--ink);background:var(--hover);}

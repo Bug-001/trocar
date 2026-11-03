@@ -1,7 +1,10 @@
 /* css/overview.css — 总览 (1.7): the card grid and the five cards' rows. Tokens only (1.5 §审美维度; guards
    no-bare-colors / contrast / theme). Narrow screens stack the cards in the RFC's order: capture → items → stats →
    recent; the first-use page shows capture, the agents zone and 开始使用 only. */
-.ovgrid { display: grid; grid-template-columns: minmax(0, 340px) minmax(0, 1fr); gap: var(--s4); align-items: start; }
+.ovgrid { display: grid; grid-template-columns: minmax(0, 340px) minmax(0, 1fr); gap: var(--s4); align-items: stretch; }
+/* cards in one row are one height: each slot is a column and its card fills it (1.5 §审美维度 9) */
+.ovgrid > div { display: flex; flex-direction: column; min-width: 0; }
+.ovgrid > div > .ovcard { flex: 1 1 auto; }
 .ovgrid > .span { grid-column: 1 / -1; }
 .ovgrid > div:empty { display: none; }
 /* first use: the capture card, the agents zone (one row per agent, 1.9 §开关) and 开始使用 */
@@ -9,7 +12,7 @@
 
 /* a card: the prototype's card — raised, a hairline, the large radius and the card shadow; type starts at the body size */
 .ovcard { background: var(--raised); border: 1px solid var(--rule); border-radius: var(--r-4); box-shadow: var(--shadow-card); padding: 16px 18px 14px; min-width: 0; font-size: var(--fs-body); line-height: var(--lh); }
-.ovh { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; font-size: var(--fs-head); font-weight: var(--fw-strong); color: var(--ink); }
+.ovh { display: flex; align-items: center; min-height: 24px; margin: 0 0 10px; font-size: var(--fs-head); font-weight: var(--fw-strong); color: var(--ink); }
 .ovsay { margin: 0 0 6px; font-size: var(--fs-body); color: var(--ink); }
 .ovsay.ok { color: var(--ok); } .ovsay.warn { color: var(--warn); } .ovsay.bad { color: var(--bad); } .ovsay.dim { color: var(--ink-2); }
 .ovsub { margin: 0 0 6px; font-size: var(--fs-cap); color: var(--ink-2); }
@@ -23,6 +26,7 @@
 
 /* the state lamp (1.5 §采集状态: a shape, never colour alone — the sentence beside it says the state) */
 .lamp { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--control-edge); flex: none; }
+.ovh .lamp { margin-right: 8px; } /* the head has no gap of its own: an info glyph keeps the kit's 4 px after its word */
 .lamp.ok { background: var(--ok); }
 .lamp.warn { background: var(--warn-lamp); }
 .lamp.bad { background: var(--bad-lamp); }
@@ -45,8 +49,7 @@
 .ovcard .hscroll { overflow-x: auto; margin-top: 8px; }
 .ovtbl { display: grid; min-width: 620px; }
 .ovtrh, .ovtr { display: grid; grid-template-columns: minmax(150px, 1.4fr) repeat(5, minmax(60px, 1fr)); gap: 0 10px; align-items: center; }
-/* the table head: caption size, the third ink, the strong weight; no caps */
-.ovtrh { padding: 3px 8px 5px; font-size: var(--fs-cap); font-weight: var(--fw-strong); color: var(--ink-3); border-bottom: 1px solid var(--rule); }
+.ovtrh { padding: 3px 8px 5px; border-bottom: 1px solid var(--rule); }
 .ovtr { padding: 5px 8px; font-size: var(--fs-body); text-decoration: none; color: var(--ink); border-radius: var(--r-1); }
 a.ovtr:hover { background: var(--hover); }
 .ovtr .ovag { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; }

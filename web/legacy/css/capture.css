@@ -10,7 +10,6 @@
 
 /* the page */
 .capage{display:flex;flex-direction:column;min-height:100%;}
-.capage .pagehead{padding:0 0 10px;}
 .cap-main{flex:1;min-width:0;}
 
 /* the table is one raised card: the service row, then one row per agent; the log's table is the same card */
@@ -89,12 +88,14 @@
 .caplog-say{font-size:var(--fs-cap);color:var(--ink-2);margin:0;}
 .lr{display:grid;grid-template-columns:minmax(112px,150px) minmax(120px,150px) minmax(0,1fr) 56px 22px;column-gap:12px;align-items:baseline;padding:10px 16px;}
 .lr + .lr{border-top:1px solid var(--rule);}
-.lr.h{padding:7px 16px;font-size:var(--fs-cap);color:var(--ink-3);}
+.lr.h{padding:7px 16px;}
 .lr .t{font-size:var(--fs-cap);color:var(--ink-2);}
 .lr .ag{display:flex;align-items:center;gap:7px;font-size:var(--fs-body);font-weight:var(--fw-strong);min-width:0;}
-.lr .say{font-size:var(--fs-body);line-height:20px;min-width:0;text-wrap:pretty;}
-.lr.h .say,.lr.h .cnt{font-size:var(--fs-cap);color:var(--ink-3);}
-.lr .cnt{text-align:right;font-size:var(--fs-cap);color:var(--ink-2);white-space:nowrap;}
+.lr .say{line-height:20px;min-width:0;text-wrap:pretty;}
+.lr .cnt{text-align:right;white-space:nowrap;}
+/* a row's cells; the head row (.colhead) keeps the kit's table-head type */
+.lr:not(.colhead) .say{font-size:var(--fs-body);}
+.lr:not(.colhead) .cnt{font-size:var(--fs-cap);color:var(--ink-2);}
 .lr .lgo{display:inline-flex;align-items:center;justify-self:end;border:0;background:none;color:var(--ink-3);font-size:var(--fs-cap);cursor:pointer;padding:0 2px;border-radius:var(--r-1);}
 .lr .lgo:hover,.lr .lgo:focus-visible{color:var(--ink);}
 .lr .lx{grid-column:3 / 6;}
