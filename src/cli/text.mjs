@@ -52,9 +52,9 @@ export function pairs(rows, { indent = 2, gap = 2, width = WIDTH } = {}) {
     if (col + value.length <= width) return [`${head}${value}`.trimEnd()]
     const first = value.split(/\s+/)[0]
     // a word that does not even fit beside the label (a path, a command) keeps its own line unbroken, under the label (§1.1⑥)
-    if (col + first.length > width) return [`${pad}${l}`, ...wrap(value, width - indent, pad).map((line, i) => (i ? line : pad + line))]
-    const [head1, ...more] = wrap(value, width - col, ' '.repeat(col))
-    return [`${head}${head1}`, ...more]
+    if (col + first.length > width) return [`${pad}${l}`, ...wrap(value, width - indent).map((line) => pad + line)]
+    // every line of the value has the same room, `width - col`: wrap's hang would count against a line it is not in front of (the first)
+    return wrap(value, width - col).map((line, i) => (i ? ' '.repeat(col) : head) + line)
   })
 }
 

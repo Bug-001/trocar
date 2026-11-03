@@ -45,6 +45,22 @@ test('pairs: a label/value block aligned on the label, indented; a value longer 
   assert.deepEqual(pairs([['path', long]]), ['  path', `  ${long}`], 'the long value is whole, on its own line')
 })
 
+test('pairs: every folded line fills up to the width, the lines under a label as much as the first (§1.1⑥)', () => {
+  for (const width of [30, 47, 80]) {
+    for (const words of [12, 40]) {
+      const value = Array.from({ length: words }, (_, i) => 'w'.repeat(1 + ((i * 7) % 9))).join(' ')
+      const out = pairs([['autostart', value], ['a', 'b']], { width })
+      const col = out.at(-1).indexOf('b')
+      const rows = out.slice(0, -1).map((l) => l.slice(col).split(' '))
+      for (const [i, line] of out.slice(0, -1).entries()) {
+        assert.ok(line.length <= width, `width ${width}: ${JSON.stringify(line)} is past the width`)
+        if (i < rows.length - 1) assert.ok(line.length + 1 + rows[i + 1][0].length > width, `width ${width}: line ${i} stops short: the next word fits on it`)
+      }
+      assert.deepEqual(rows.flat(), value.split(' '), 'every word, in order, in the value column')
+    }
+  }
+})
+
 test('tilde: the home directory becomes ~, and only at the start of a path', () => {
   assert.equal(tilde('/home/u/.trocar/raw', '/home/u'), '~/.trocar/raw')
   assert.equal(tilde('/home/u', '/home/u'), '~')

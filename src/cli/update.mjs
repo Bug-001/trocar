@@ -35,6 +35,8 @@ const NOT_GIT = 'this trocar is not a git checkout, so it cannot update itself. 
 const NEEDS_YES = 'Nothing was changed. Read the plan above, then run it again with --yes'
 const AGAIN = 'Fix that, then run trocar update again'
 const COST = `While it runs those agents are not captured; connections they make still work. ${CUT}`
+/** Set by the update that hands over (step 3) on the process that finishes it: the plan was printed and answered there, so the finish does not print it again (§1.1: one plan per command). */
+export const HANDED_OVER = 'TROCAR_UPDATE_HANDED_OVER'
 
 /** → the exit code. `argv` is what follows `update`. */
 export async function runUpdateCli(argv, { io, env = process.env, home = nodeOs.homedir(), platform = process.platform, deps = {} } = {}) {
@@ -82,8 +84,8 @@ async function update({ io, env, home, platform, deps, flags }) {
   // step included: they stop a daemon and write to the agents' files too, and `--dry-run` writes nothing. → an exit code when nothing
   // is to be done, null to go on.
   // `cost`: what running the plan costs, said under it — null when it costs nothing worth a line
-  const gate = async (rows, planned, cost) => {
-    lines.push('Plan', ...pairs(rows), ...(cost ? ['', ...wrap(cost)] : []))
+  const gate = async (rows, planned, cost, shown = false) => {
+    if (!shown) lines.push('Plan', ...pairs(rows), ...(cost ? ['', ...wrap(cost)] : []))
     if (!json) for (const l of lines.splice(0)) io.out(l) // the plan is read before the question, and before any refusal (§1.4)
     if (dry) return done(EXIT.ok, { planned })
     if (yes) return null // the answer is given on the command line
@@ -109,7 +111,7 @@ async function update({ io, env, home, platform, deps, flags }) {
     r.from = waiting.from || r.from; r.to = to; r.harnesses = waiting.on // C.2: the receipt of the plan says what the finish does, --dry-run and a refused question included
     const replaced = (await daemonCode({ platform, dir, env, fs, deps })) !== to // as replaceDaemon judges it: a collector on this code is left running
     const g = await gate([['Code', `${r.from} -> ${to}`], ['Switched on again', waiting.on.join(', ') || 'nothing was being captured']],
-      [{ what: 'finish', detail: `an update to ${to} is waiting to be finished: ${replaced ? 'the collector is replaced, ' : ''}install runs again${waiting.on.length ? `, and capture is switched on again for ${waiting.on.join(', ')}` : ''}`, harnesses: waiting.on }], replaced ? CUT : null)
+      [{ what: 'finish', detail: `an update to ${to} is waiting to be finished: ${replaced ? 'the collector is replaced, ' : ''}install runs again${waiting.on.length ? `, and capture is switched on again for ${waiting.on.join(', ')}` : ''}`, harnesses: waiting.on }], replaced ? CUT : null, yes && env[HANDED_OVER] === '1')
     if (g !== null) return g
     return finish({ io, env, home, platform, deps, dir, handover, root, fs, r, lines, done, no, waiting })
   }
@@ -158,8 +160,8 @@ async function update({ io, env, home, platform, deps, flags }) {
   /** Step 3: the new code's `trocar update --yes` in a process of its own; this one only waits for it and copies its exit code. */
   async function spawnNew(file, args, opts, to) {
     // a process killed by a signal has no exit code to copy: `child` answers `{signal}` for that, and anything else is its exit code
-    const child = deps.child || ((f, a) => runAsync(f, a, { quiet: true, inherit: true, env, ...opts }).then((x) => (x.status === null ? { signal: x.signal } : x.status)))
-    const ended = await child(file, args)
+    const child = deps.child || ((f, a, e) => runAsync(f, a, { quiet: true, inherit: true, env: e, ...opts }).then((x) => (x.status === null ? { signal: x.signal } : x.status)))
+    const ended = await child(file, args, { ...env, [HANDED_OVER]: '1' })
     if (!Number.isInteger(ended)) {
       return no('child-crashed', `the code is now ${to}, but the process that was to finish this update was killed${ended && ended.signal ? ` by ${ended.signal}` : ''} before it could. This update is written down, so run trocar update again to finish it`)
     }
