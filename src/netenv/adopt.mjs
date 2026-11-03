@@ -5,7 +5,7 @@
 // stored or sent as JSON holds the redacted URL and a hash (redact.mjs).
 import nodeFs from 'node:fs'
 import { parseJsonc, parseDotenv } from '../collector/core/config-read.mjs'
-import { BLOCK_BEGIN, BLOCK_END, OFF_PREFIX } from '../off/text-edit.mjs'
+import { BLOCK_OPEN, BLOCK_END, OFF_PREFIX } from '../off/text-edit.mjs'
 import { redactProxyUrl, settingSha, parseProxyUrl } from './redact.mjs'
 import { readNetenvFile } from './index.mjs'
 import { buildTopology } from './topology.mjs'
@@ -77,7 +77,7 @@ export function readProxySetting(desc, { home, env = process.env, fs = nodeFs, p
 
 /** The region trocar's marked block occupies in a text file, or null: its lines are trocar's, never a place of the user's. */
 function blockRange(text) {
-  const b = text.indexOf(BLOCK_BEGIN), e = text.indexOf(BLOCK_END, b + 1)
+  const b = text.indexOf(BLOCK_OPEN), e = text.indexOf(BLOCK_END, b + 1)
   return b >= 0 && e > b ? [b, e + BLOCK_END.length] : null
 }
 

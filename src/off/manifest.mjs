@@ -19,7 +19,7 @@ import nodeOs from 'node:os'
 import path from 'node:path'
 import { collectorDir, standalonePath } from './paths.mjs'
 import { readOrNull, writeDurable } from './fsutil.mjs'
-import { SENTINEL, OFF_PREFIX, BLOCK_BEGIN, BLOCK_END } from './text-edit.mjs'
+import { SENTINEL, OFF_PREFIX, BLOCK_OPEN, BLOCK_END } from './text-edit.mjs'
 import { TASK_NAME, RUN_KEY } from './win32.mjs' // the undo-by-hand sentences name the same task and Run value the undo touches (the equality is test/off/win32.test.mjs's)
 
 export const MANIFEST = 'install-manifest.json'
@@ -79,7 +79,7 @@ export function undoByHand(e) {
   if (e.kind === 'text' && e.vars) {
     return `edit ${where}: delete the lines from "# >>> ${SENTINEL} >>>" to "# <<< ${SENTINEL} <<<", then remove the prefix "${OFF_PREFIX}" from any line that has it${created}`
   }
-  if (e.kind === 'text' && e.format === 'pem-block') return `edit ${where}: delete the lines from "${BLOCK_BEGIN}" to "${BLOCK_END}" at its end, and nothing else`
+  if (e.kind === 'text' && e.format === 'pem-block') return `edit ${where}: delete the lines from the one that starts "${BLOCK_OPEN}" to "${BLOCK_END}" at its end, and nothing else`
   if (e.kind === 'text') {
     return `edit ${where}: delete the line ${JSON.stringify(e.line)}${e.format === 'yaml-list' ? ' (write [] after the key if the list is empty then)' : ''}${created}`
   }

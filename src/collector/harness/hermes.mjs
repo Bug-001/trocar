@@ -100,7 +100,7 @@ function configHosts(ctx) {
 
 function inject(ctx) {
   const root = hermesRoot(ctx.env, ctx.home)
-  if (!ctx.listDir(root).length) return { notes: [{ code: CODE.harnessNote, text: `${root} does not exist (Hermes is not installed for this user), so no trust entry is written; after installing Hermes, run trocar collector uninstall and install again` }] }
+  if (!ctx.listDir(root).length) return { notes: [{ code: CODE.harnessNote, text: `${root} does not exist (Hermes is not installed for this user), so no trust entry is written; after installing Hermes, run trocar uninstall, then trocar install` }] }
   const profiles = path.join(root, 'profiles')
   const homes = [root, ...ctx.listDir(profiles).sort().filter((n) => ctx.listDir(path.join(profiles, n)).length).map((n) => path.join(profiles, n))]
   const files = homes.map((h) => path.join(h, '.env'))

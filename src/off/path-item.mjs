@@ -6,7 +6,7 @@
 // manifest's own `path_item`, not in `entries`: it names no harness, so neither `off` nor the copy without the source tree ever reads it.
 import nodeFs from 'node:fs'
 import path from 'node:path'
-import { insertLine, lineComment } from './text-edit.mjs'
+import { insertLine, lineComment, holdsMarked } from './text-edit.mjs'
 import { decodeText, encodeText, WHY_TEXT } from './text-codec.mjs'
 import { writeBackup } from './backup.mjs'
 import { writeDurable, sha256, missingDirs, editTarget, readOrNull } from './fsutil.mjs'
@@ -14,7 +14,7 @@ import { undoEntry } from './journal.mjs'
 import { undoByHand } from './manifest.mjs'
 import { execTool } from './exec.mjs'
 
-const MARK = lineComment('puts trocar on your PATH', 'trocar uninstall')
+const MARK = lineComment('puts trocar on your PATH')
 const POSIX = `case ":$PATH:" in *":$HOME/.trocar/bin:"*) ;; *) export PATH="$PATH:$HOME/.trocar/bin" ;; esac ${MARK}`
 const FISH = `contains -- $HOME/.trocar/bin $PATH; or set -gx PATH $PATH $HOME/.trocar/bin ${MARK}`
 // first match wins; `os` absent = any system, `shell` absent = any shell
@@ -79,7 +79,7 @@ export function placePathItem({ platform = process.platform, env = process.env, 
   const before = readOrNull(fs, real)
   const d = before == null ? { ok: true, text: null, charset: 'utf8' } : decodeText(before)
   if (!d.ok) throw new Error(`${t.file} was not changed: trocar cannot tell how it is encoded — ${WHY_TEXT[d.why]}`)
-  if (d.text != null && d.text.includes(t.line)) return null
+  if (holdsMarked(d.text, t.line)) return null // the line is there, whatever command words its marker names (4.6「标记的字」)
   const res = insertLine(d.text, { line: t.line })
   const backup = before == null ? null : writeBackup({ home, file: t.file, data: before, now, fs })
   const created = missingDirs(path.dirname(real), fs)
