@@ -35,7 +35,8 @@ export function createPoller({ run, now = Date.now, base, soon = base, alive = (
       do {
         readerAgain = false
         const t0 = now()
-        const r = await Promise.resolve().then(run).catch(() => ({ ok: false }))
+        let r
+        try { r = await run() } catch { r = { ok: false } }
         if (r && r.ok === false) { fails++; nextAt = now() + backoffMs(fails, base) }
         else {
           const wait = r && r.pending ? soon : fails ? base : Math.max(base, 3 * (now() - t0))
