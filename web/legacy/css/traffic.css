@@ -114,8 +114,10 @@ a.rmark{color:var(--action);}
 /* the small screens: the class folds under the endpoint; 收回 moves into the detail only (1.10 §窄屏) */
 @media (max-width:899px){
   .thost{padding:12px 14px 0;}
-  /* four tracks that shrink with the screen: time · endpoint over class · sent · marks; nothing sticks out of the row */
-  .hhead,.hrow{grid-template-columns:minmax(0,132px) minmax(0,1fr) auto auto;}
+  /* three tracks that shrink with the screen: line 1 time · endpoint · sent, line 2 class · marks. Sent is the last track, so it
+     lines up under its header in every row; the marks sit under it and never take width from the endpoint (1.10 端点任何宽度都不隐藏) */
+  .hhead,.hrow{grid-template-columns:minmax(0,132px) minmax(0,1fr) auto;}
+  .hhead .cell.marks,.hrow .cell.marks{grid-column:3;grid-row:2;justify-content:flex-end;}
   .hhead .cell.recv,.hrow .cell.recv{display:none;}
   .hhead .cell.class{grid-column:2;grid-row:2;}
   /* the two lines fill the row's fixed-height slot (1.10 行高固定; the slot is the list's .vrow) */
