@@ -15,7 +15,7 @@
   --ink: #1B1828;  --ink-2: #4D4960;  --ink-3: #605B72;
   /* action: only what can be operated */
   --action: #5B47E0;  --action-ink: #FFFFFF;  --action-wash: rgb(91 71 224 / .10);
-  --switch-on: #5B47E0;  --switch-off: #E6E3EE;  --knob-on: #FFFFFF;  --knob-off: #7A7590;
+  --seg-on: #FFFFFF;  --switch-on: #5B47E0;  --switch-off: #E6E3EE;  --knob-on: #FFFFFF;  --knob-off: #7A7590;
   /* state: amber and red are for problems only */
   --bad: #B42318;  --bad-lamp: #E0443A;  --warn: #8A4B00;  --warn-lamp: #C2740E;  --ok: #217A45;  --note-lamp: #1B1828;
   /* instrument: the trace on the glass, --trace-ink where the cache share sits on paper; the cursor is neutral */
@@ -78,7 +78,7 @@
     --rule: #2A2636;  --rule-2: #3B3649;  --control-edge: #7A7491;  --grat: rgb(255 255 255 / .06);
     --ink: #EDEBF5;  --ink-2: #ABA6BF;  --ink-3: #958FA9;
     --action: #A497FF;  --action-ink: #160F33;  --action-wash: rgb(164 151 255 / .14);
-    --switch-on: #6F5CF2;  --switch-off: #2C2839;  --knob-off: #8A84A0;
+    --seg-on: #3D3752;  --switch-on: #6F5CF2;  --switch-off: #2C2839;  --knob-off: #8A84A0;
     --bad: #FF8F85;  --bad-lamp: #FF5D52;  --warn: #F2B35B;  --warn-lamp: #F2A13A;  --ok: #6AD49A;  --note-lamp: #EDEBF5;
     --trace-ink: #5FD3AE;
     --scope-ink-2: #A9A3C7;  --scope-edge: #6A6390;  --scope-rule: rgb(255 255 255 / .11);
@@ -103,7 +103,7 @@
   --rule: #E4E1EC;  --rule-2: #CFCADC;  --control-edge: #848099;  --grat: rgb(255 255 255 / .07);
   --ink: #1B1828;  --ink-2: #4D4960;  --ink-3: #605B72;
   --action: #5B47E0;  --action-ink: #FFFFFF;  --action-wash: rgb(91 71 224 / .10);
-  --switch-on: #5B47E0;  --switch-off: #E6E3EE;  --knob-off: #7A7590;
+  --seg-on: #FFFFFF;  --switch-on: #5B47E0;  --switch-off: #E6E3EE;  --knob-off: #7A7590;
   --bad: #B42318;  --bad-lamp: #E0443A;  --warn: #8A4B00;  --warn-lamp: #C2740E;  --ok: #217A45;  --note-lamp: #1B1828;
   --trace-ink: #167A5F;
   --scope-ink-2: #ABA5CA;  --scope-edge: #6E6890;  --scope-rule: rgb(255 255 255 / .12);
@@ -127,7 +127,7 @@
   --rule: #2A2636;  --rule-2: #3B3649;  --control-edge: #7A7491;  --grat: rgb(255 255 255 / .06);
   --ink: #EDEBF5;  --ink-2: #ABA6BF;  --ink-3: #958FA9;
   --action: #A497FF;  --action-ink: #160F33;  --action-wash: rgb(164 151 255 / .14);
-  --switch-on: #6F5CF2;  --switch-off: #2C2839;  --knob-off: #8A84A0;
+  --seg-on: #3D3752;  --switch-on: #6F5CF2;  --switch-off: #2C2839;  --knob-off: #8A84A0;
   --bad: #FF8F85;  --bad-lamp: #FF5D52;  --warn: #F2B35B;  --warn-lamp: #F2A13A;  --ok: #6AD49A;  --note-lamp: #EDEBF5;
   --trace-ink: #5FD3AE;
   --scope-ink-2: #A9A3C7;  --scope-edge: #6A6390;  --scope-rule: rgb(255 255 255 / .11);
@@ -181,7 +181,8 @@ input::placeholder{color:var(--ink-3);}
 .seg{display:inline-flex;flex:none;gap:2px;padding:2px;border:1px solid var(--control-edge);border-radius:var(--r-2);background:var(--panel);}
 .seg a,.seg button{height:24px;padding:0 11px;display:inline-flex;align-items:center;font-size:var(--fs-cap);color:var(--ink-2);text-decoration:none;border:0;background:none;border-radius:calc(var(--r-2) - 2px);cursor:pointer;white-space:nowrap;}
 .seg a:hover,.seg button:hover,.seg [data-hovered]{color:var(--ink);text-decoration:none;background:none;}
-.seg a.on,.seg button.on,.seg [data-selected]{background:var(--raised);color:var(--ink);box-shadow:var(--shadow-pill);}
+/* --seg-on: the selected segment's own face, set apart from the track in both themes (--raised is the track's near twin in dark) */
+.seg a.on,.seg button.on,.seg [data-selected]{background:var(--seg-on);color:var(--ink);box-shadow:var(--shadow-pill);}
 /* the switch: the element is the track, .knob rides on it */
 .hswitch{position:relative;width:36px;height:21px;padding:0;flex:none;border-radius:var(--r-pill);border:1px solid var(--control-edge);background:var(--switch-off);transition:background var(--t-quick);}
 .hswitch .knob{position:absolute;top:2px;left:2px;width:15px;height:15px;border-radius:50%;background:var(--knob-off);transition:transform var(--t-quick) var(--ease),background var(--t-quick);}
@@ -234,6 +235,8 @@ input::placeholder{color:var(--ink-3);}
 .popbtn{border:0;background:none;color:var(--ink-3);cursor:pointer;font:inherit;padding:0 3px;border-radius:var(--r-1);white-space:nowrap;}
 .popbtn:hover{color:var(--ink);background:var(--hover);}
 .popbtn[aria-expanded="true"]{color:var(--ink);}
+/* an info glyph after a word: a gap before it, centred on the line, never taller than the line (the word keeps its baseline) */
+.popbtn:has(> svg:only-child){display:inline-flex;align-items:center;vertical-align:middle;height:var(--lh);margin-left:4px;padding:0 2px;}
 .pop{position:fixed;z-index:40;min-width:200px;max-width:380px;background:var(--raised);border:1px solid var(--rule);border-radius:var(--r-3);box-shadow:var(--shadow-float);padding:12px 14px;font-size:var(--fs-body);color:var(--ink);}
 /* a closed popover must really hide: the plain .pop[hidden] (0,2,0) loses the cascade to a variant rule like
    .pop.menu{display:flex} below (also 0,2,0, later) — a closed filter menu once rendered at the button's position and
@@ -248,11 +251,14 @@ input::placeholder{color:var(--ink-3);}
 .pop.menu a:focus-visible,.pop.menu button:focus-visible,.pop.menu [data-focused]{background:var(--action);color:var(--action-ink);outline:none;}
 /* a disclosure row and 技术细节 */
 .disc{border-bottom:1px solid var(--rule);}
-.disc-t{display:flex;align-items:baseline;gap:10px;min-height:36px;width:100%;border:0;border-radius:0;background:none;color:var(--ink-2);font-size:var(--fs-body);cursor:pointer;text-align:left;padding:0;white-space:normal;}
+.disc:last-child{border-bottom:0;} /* a rule closes a disclosure only when something follows it */
+.disc-t{display:flex;align-items:center;gap:8px;min-height:36px;width:100%;border:0;border-radius:0;background:none;color:var(--ink-2);font-size:var(--fs-body);cursor:pointer;text-align:left;padding:0;white-space:normal;}
 .disc-t:hover{color:var(--ink);background:none;}
 .disc-t b{color:var(--ink);font-weight:var(--fw-strong);font-size:var(--fs-body);}
 .disc-t .sum{font-size:var(--fs-body);}
-.disc-t .chev{width:12px;flex:none;transition:transform var(--t-quick) var(--ease);}
+/* the drawn triangle (icons.mjs DISC_CHEV) of every disclosure: it turns a quarter when its trigger is open */
+.chev{flex:none;transition:transform var(--t-quick) var(--ease);}
+[aria-expanded="true"] > svg.chev{transform:rotate(90deg);}
 /* a closed panel takes no box: React Aria closes one with hidden="until-found" (content-visibility, not display:none) */
 .disc-b[hidden]{display:none;}
 .tech{font-size:var(--fs-cap);line-height:20px;color:var(--ink-2);background:var(--sunk);border:1px solid var(--rule);border-radius:var(--r-3);padding:12px 14px;display:grid;grid-template-columns:max-content minmax(0,1fr);column-gap:16px;margin:6px 0 4px;}

@@ -24,7 +24,7 @@
 .dline.bad a{color:var(--bad);}
 
 /* 保存什么:the level control, its receipt, the clipped rule list (title carries all of it) */
-.ctable td{vertical-align:top;}
+.ctable td{vertical-align:middle;} /* the name, the counts, the glyph and the switch share one centre line */
 .ctable td.lv{white-space:nowrap;}
 .ctable .busy{margin-left:8px;}
 .ctable .crcpt{margin-top:4px;font-size:var(--fs-cap);color:var(--ink-2);white-space:normal;max-width:320px;}

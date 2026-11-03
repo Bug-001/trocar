@@ -3,7 +3,7 @@
 // installUi(doc) is the one wiring pass, installed once by web/src/main.tsx. Nothing touches `document` at import time.
 
 import { esc } from './fmt.mjs'
-import { icon, HALF } from './icons.mjs'
+import { icon, HALF, DISC_CHEV } from './icons.mjs'
 import { MARK_TIP, READ_FAIL } from '../labels/common.mjs'
 
 // A short, polite message that goes away by itself — what the board says when it moved the reader somewhere (an unknown link). It is
@@ -80,7 +80,7 @@ export function segmentedHtml({ label, options = [], value }) {
 export function disclosureHtml({ id, title, summary = '', body = '', open = false }) {
   const bid = `${id}-b`
   return `<div class="disc" id="${esc(id)}"><button type="button" class="disc-t" data-disc="${esc(bid)}" aria-expanded="${open}" aria-controls="${esc(bid)}">` +
-    `<span class="chev" aria-hidden="true">${open ? '▾' : '▸'}</span><b>${esc(title)}</b>${summary ? `<span class="sum">${esc(summary)}</span>` : ''}</button>` +
+    `${DISC_CHEV}<b>${esc(title)}</b>${summary ? `<span class="sum">${esc(summary)}</span>` : ''}</button>` +
     `<div class="disc-b" id="${esc(bid)}"${open ? '' : ' hidden'}>${body}</div></div>`
 }
 
@@ -234,7 +234,6 @@ function setDisc(doc, t, open) {
   if (!body) return
   if (open) body.removeAttribute('hidden'); else body.setAttribute('hidden', '')
   t.setAttribute('aria-expanded', String(open))
-  const chev = t.querySelector('.chev'); if (chev) chev.textContent = open ? '▾' : '▸'
 }
 
 // 1.2 §点击与选中文字 ③: draw `html` into zone `z` unless it is what z last showed, or (`hold`, a poll's draw) the reader's selection

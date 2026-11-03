@@ -9,6 +9,7 @@ import { TechDetails, type TechValue } from '../../ui/TechDetails'
 import { CopyButton } from '../../ui/CopyButton'
 import { HarnessIcon } from '../../ui/HarnessIcon'
 import { HarnessSwitch, type ControlModel } from '../../ui/HarnessSwitch'
+import { Chev } from '../../ui/Chev'
 
 export type Pair = { k: string, v: TechValue }
 type Part = { text: string } | { mono: string }
@@ -50,7 +51,7 @@ export function CapRow({ id, caprow, label, open, onOpen, gut, rest, children }:
       <div className="crow-t">
         {gut}
         <Button slot="trigger" className="nm cap-nm" data-caprow={caprow}>
-          <span className="chev" aria-hidden="true">{open ? '▾' : '▸'}</span>{label}
+          <Chev />{label}
         </Button>
         {rest}
       </div>

@@ -23,7 +23,9 @@
 .crow-t{display:grid;grid-template-columns:16px 12px 28px minmax(0,1fr) fit-content(240px) auto;grid-template-rows:auto auto;column-gap:10px;align-items:center;min-height:58px;padding:9px 16px 9px 0;}
 .crow .gut{grid-column:1;grid-row:1 / 3;display:flex;justify-content:center;}
 .crow .nm{grid-column:2 / 5;grid-row:1 / 3;align-self:stretch;display:grid;grid-template-columns:subgrid;grid-template-rows:subgrid;align-items:center;border:0;background:none;color:var(--ink);font-size:var(--fs-body);font-weight:var(--fw-strong);text-align:left;cursor:pointer;padding:0;border-radius:var(--r-1);min-width:0;}
-.crow .nm .chev{grid-column:1;grid-row:1 / 3;color:var(--ink-3);font-size:var(--fs-cap);text-align:center;}
+.crow .nm .chev{grid-column:1;grid-row:1 / 3;justify-self:center;color:var(--ink-3);}
+/* a row with no icon (the service row): the triangle moves to the icon's place, next to its name */
+.crow .nm:not(:has(.hicon)) .chev{grid-column:2;justify-self:end;}
 .crow .nm .hicon{grid-column:2;grid-row:1 / 3;}
 .crow .nm .hicon,.crow .nm .hicon img,.crow .nm .hicon .hic-svg{width:28px;height:28px;}
 .crow .nm > :last-child{grid-column:3;grid-row:1;align-self:end;min-width:0;overflow-wrap:anywhere;}
@@ -69,7 +71,9 @@
 .hrcpt{font-size:var(--fs-cap);line-height:16px;color:var(--ink-2);text-align:right;max-width:200px;white-space:normal;}
 .hrcpt.bad{color:var(--bad);}
 .capfoot{margin:10px 4px 0;font-size:var(--fs-cap);color:var(--ink-3);}
-.capcopy{padding:2px 0 4px;}
+.capcopy{padding:8px 0 4px;}
+/* Copy diagnostics is an action of the row, so it is the kit's button, not the small copy inside 技术细节 */
+.capcopy .copybtn{padding:3px 12px;line-height:var(--lh);font-size:var(--fs-body);color:var(--ink);}
 
 /* the blocks under the table (本机网络环境 / 改动): a group starts with a hairline */
 .cblock{border-top:1px solid var(--rule);margin-top:24px;padding:12px 0 6px;}
@@ -89,7 +93,7 @@
 .lr .say{font-size:var(--fs-body);line-height:20px;min-width:0;text-wrap:pretty;}
 .lr.h .say,.lr.h .cnt{font-size:var(--fs-cap);color:var(--ink-3);}
 .lr .cnt{text-align:right;font-size:var(--fs-cap);color:var(--ink-2);white-space:nowrap;}
-.lr .lgo{justify-self:end;border:0;background:none;color:var(--ink-3);font-size:var(--fs-cap);cursor:pointer;padding:0 2px;border-radius:var(--r-1);}
+.lr .lgo{display:inline-flex;align-items:center;justify-self:end;border:0;background:none;color:var(--ink-3);font-size:var(--fs-cap);cursor:pointer;padding:0 2px;border-radius:var(--r-1);}
 .lr .lgo:hover,.lr .lgo:focus-visible{color:var(--ink);}
 .lr .lx{grid-column:3 / 6;}
 .lr .lx[hidden]{display:none;}

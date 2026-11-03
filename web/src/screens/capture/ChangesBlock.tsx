@@ -6,6 +6,7 @@ import { Button, Disclosure, DisclosurePanel } from 'react-aria-components'
 import { TechDetails } from '../../ui/TechDetails'
 import { HarnessIcon } from '../../ui/HarnessIcon'
 import { Parts, techPairs, type Pair } from './AgentRow'
+import { Chev } from '../../ui/Chev'
 
 type Part = { text: string } | { mono: string }
 export type ChangesModel = {
@@ -20,7 +21,7 @@ export function ChangesBlock({ ch, open, onOpen }: { ch: ChangesModel, open: boo
   return (
     <section className="cblock" aria-label="Changes trocar made on this computer">
       <Disclosure className="disc" isExpanded={open} onExpandedChange={onOpen}>
-        <Button slot="trigger" className="disc-t"><span className="chev" aria-hidden="true">{open ? '▾' : '▸'}</span><b>{ch.title}</b></Button>
+        <Button slot="trigger" className="disc-t"><Chev /><b>{ch.title}</b></Button>
         <DisclosurePanel className="disc-b">
           {ch.lines.map((l, i) => <Fragment key={i}><p><span className="mono">{l.path}</span></p><p><Parts parts={l.parts} /></p></Fragment>)}
           {ch.pendingLead ? <p>{ch.pendingLead}</p> : null}

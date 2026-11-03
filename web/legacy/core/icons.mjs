@@ -41,6 +41,8 @@ const P = {
 export const icon = (name, cls = 'ico16') =>
   `<svg class="${cls}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[name] || ''}</svg>`
 export const ICON_NAMES = Object.freeze(Object.keys(P))
+// a disclosure's triangle: the chevron at the 12 px size; it turns a quarter when its trigger is [aria-expanded="true"] (base.css)
+export const DISC_CHEV = icon('chevron-right', 'ico12 chev')
 // the partial mark ◐, drawn: no system font has the character, so a borrowed one would come from a fallback family
 export const HALF = icon('half', 'ico12')
 

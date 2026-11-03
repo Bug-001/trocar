@@ -75,7 +75,7 @@
 .pagehead .seg{display:inline-flex;border:1px solid var(--rule-2);border-radius:var(--r-2);padding:1px;background:var(--paper);}
 .pagehead .seg a{padding:0 9px;font-size:var(--fs-cap);line-height:20px;color:var(--ink-2);text-decoration:none;border-radius:var(--r-1);white-space:nowrap;}
 .pagehead .seg a:hover{color:var(--ink);background:var(--hover);text-decoration:none;}
-.pagehead .seg a.on{background:var(--raised);color:var(--ink);font-weight:var(--fw-strong);box-shadow:var(--shadow-pill);}
+.pagehead .seg a.on{background:var(--seg-on);color:var(--ink);font-weight:var(--fw-strong);box-shadow:var(--shadow-pill);}
 .screenwait{color:var(--ink-3);padding:24px 0;}
 .screenerr{margin:16px 20px;padding:10px 14px;border:1px solid var(--bad);border-radius:var(--r-2);background:color-mix(in srgb,var(--bad) 10%,transparent);color:var(--ink);}
 

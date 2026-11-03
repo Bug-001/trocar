@@ -18,6 +18,7 @@ import { HarnessIcon } from '../../ui/HarnessIcon'
 import type { ScreenProps } from '../../ScreenOutlet'
 import { logModel as logModelJs, agentsOf as agentsOfJs } from './log-model.mjs'
 import { Parts, techPairs, type Pair } from './AgentRow'
+import { Chev } from '../../ui/Chev'
 
 type Row = { key: string, time: string, who: { id: string, name: string } | null, whoText: string, text: string, unknown: boolean,
   count: string, tech: Pair[], diag: string }
@@ -57,11 +58,11 @@ function LogRow({ row, open, onOpen }: { row: Row, open: boolean, onOpen: (open:
       <span className="say">{row.text}</span>
       <span className="cnt">{`×${row.count}`}</span>
       <Button slot="trigger" className="lgo" data-lrow={`lx-${row.key}`} aria-label="Expand this row">
-        <span className="chev" aria-hidden="true" title="Expand this row">{open ? '▾' : '▸'}</span>
+        <Chev />
       </Button>
       <DisclosurePanel className="lx">
         <TechDetails pairs={techPairs(row.tech)} copy={pairsText(row.tech)} />
-        <CopyButton text={row.diag} label="Copy diagnostics" />
+        <div className="capcopy"><CopyButton text={row.diag} label="Copy diagnostics" /></div>
       </DisclosurePanel>
     </Disclosure>
   )
@@ -71,14 +72,12 @@ function LogRow({ row, open, onOpen }: { row: Row, open: boolean, onOpen: (open:
 function Foot({ foot }: { foot: NonNullable<Model['foot']> }) {
   return (
     <Disclosure className="disc">
-      {({ isExpanded }) => <>
-        <Button slot="trigger" className="disc-t"><span className="chev" aria-hidden="true">{isExpanded ? '▾' : '▸'}</span><b>Technical details</b></Button>
-        <DisclosurePanel className="disc-b">
-          {foot.expected.length ? <><h3 className="caplog-foot-h">{LOG.expectedTitle}</h3>
-            <ul className="caplog-foot-l">{foot.expected.map((t, i) => <li key={i}>{t}</li>)}</ul></> : null}
-          {foot.errors.length ? <Grid pairs={foot.errors} /> : null}
-        </DisclosurePanel>
-      </>}
+      <Button slot="trigger" className="disc-t"><Chev /><b>Technical details</b></Button>
+      <DisclosurePanel className="disc-b">
+        {foot.expected.length ? <><h3 className="caplog-foot-h">{LOG.expectedTitle}</h3>
+          <ul className="caplog-foot-l">{foot.expected.map((t, i) => <li key={i}>{t}</li>)}</ul></> : null}
+        {foot.errors.length ? <Grid pairs={foot.errors} /> : null}
+      </DisclosurePanel>
     </Disclosure>
   )
 }

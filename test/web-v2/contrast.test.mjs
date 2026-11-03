@@ -85,6 +85,9 @@ test('the action ink, the tag ink and the brand text stay readable on what they 
       assert.ok(ratio(stop, C(theme, '--raised')) >= 4.5, `${theme}: a --brand-text stop on --raised = ${ratio(stop, C(theme, '--raised')).toFixed(2)}`)
   }
 })
+test('the selected segment keeps its label at 4.5:1 on its own face, in both themes', () => {
+  at(4.5, [['--ink', '--seg-on']])
+})
 test('lamps and control edges reach 3:1 on the paper faces, in both themes', () => {
   at(3, cross(['--bad-lamp', '--warn-lamp', '--note-lamp', '--control-edge'], PAPER))
 })
