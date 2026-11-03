@@ -226,7 +226,8 @@ kbd{font-family:var(--mono);background:var(--sunk);border:1px solid var(--rule-2
 .v2-modal.os-linux .mbody{padding:14px 18px 10px;color:var(--ink);}
 .v2-modal.os-linux .mbtn{border-radius:var(--r-1);min-width:84px;}
 
-
+/* an agent's icon and name as one unit, wherever it stands (a flex parent's gap or plain inline text) */
+.chip{display:inline-flex;align-items:center;gap:6px;}
 /* ── the popover kit (1.2 §弹出层) and the marks (1.5 §标记) ──────────────────────────────────────────────────── */
 .popbtn{border:0;background:none;color:var(--ink-3);cursor:pointer;font:inherit;padding:0 3px;border-radius:var(--r-1);white-space:nowrap;}
 .popbtn:hover{color:var(--ink);background:var(--panel);}
@@ -1373,7 +1374,8 @@ a.trow.hi{background:var(--panel);}
 .tbody{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 440px;column-gap:0;}
 .thost.drawer .tbody{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) auto;}
 .tlist{min-width:0;overflow:auto;padding-bottom:40px;}
-.hhead,.hrow{display:grid;grid-template-columns:140px minmax(200px,1fr) 84px 76px 76px minmax(96px,130px) minmax(88px,1fr);column-gap:10px;align-items:center;}
+/* the endpoint takes the width the fixed columns leave: no empty lined track at the end of a wide row */
+.hhead,.hrow{display:grid;grid-template-columns:140px minmax(200px,1fr) 84px 76px 76px minmax(96px,130px);column-gap:10px;align-items:center;}
 .hhead{min-height:28px;font-size:var(--fs-cap);color:var(--ink-3);border-bottom:1px solid var(--rule);}
 .hrow{min-height:34px;font-size:var(--fs-body);color:var(--ink);text-decoration:none;border-bottom:1px solid var(--rule);}
 /* the row is a div: its main link spans the five cells (display:contents keeps them grid items), the marks are siblings */
@@ -1383,11 +1385,12 @@ a.trow.hi{background:var(--panel);}
 .hrow .cell-endpoint{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;}
 .hrow .cell.class{font-size:var(--fs-cap);color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .hrow .cell.marks{font-size:var(--fs-cap);display:flex;gap:8px;align-items:center;white-space:nowrap;overflow:hidden;}
-.hrow .cell.go{text-align:right;white-space:nowrap;overflow:hidden;}
 .rmark{color:var(--ink-2);white-space:nowrap;}
 a.rmark{color:var(--action);}
 .rmark.fail{color:var(--bad);}
 .tcell{color:var(--ink-2);font-size:var(--fs-cap);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;}
+/* the selected row's 2px accent (inset shadow) stands in this start padding, off the time text; the head keeps the same start */
+.hhead,.hrow{padding-inline-start:var(--s2);}
 
 /* the detail: a column at the breakpoint, a bottom sheet under the list below it */
 .hdetail{min-width:0;overflow:auto;background:var(--raised);border-left:1px solid var(--rule);padding:0 0 32px;}
@@ -1431,11 +1434,11 @@ a.rmark{color:var(--action);}
 /* the small screens: the class folds under the endpoint; 收回 moves into the detail only (1.10 §窄屏) */
 @media (max-width:899px){
   .thost{padding:12px 14px 0;}
-  /* three tracks that shrink with the screen: time · endpoint over class · marks; nothing sticks out of the row */
-  .hhead,.hrow{grid-template-columns:minmax(0,132px) minmax(0,1fr) auto;}
-  .hhead .cell.num,.hrow .cell.num,.hhead .cell.go{display:none;}
+  /* four tracks that shrink with the screen: time · endpoint over class · sent · marks; nothing sticks out of the row */
+  .hhead,.hrow{grid-template-columns:minmax(0,132px) minmax(0,1fr) auto auto;}
+  .hhead .cell.recv,.hrow .cell.recv{display:none;}
   .hhead .cell.class{grid-column:2;grid-row:2;}
   /* the two lines fill the row's fixed-height slot (1.10 行高固定; the slot is the list's .vrow) */
-  .hrow{min-height:0;height:100%;padding:0;grid-template-rows:auto auto;align-content:center;line-height:18px;}
+  .hrow{min-height:0;height:100%;grid-template-rows:auto auto;align-content:center;line-height:18px;}
   .hrow .cell.class{grid-column:2;grid-row:2;line-height:14px;}
 }
