@@ -188,6 +188,20 @@ test('V6: each answer leaves its receipt; server words only in technical details
       expect(bodies().length).toBeGreaterThan(n)
     }
   }
+  // 409 to the confirm (the plan went stale) then 200: the same press confirms the new one-class plan once, never the old plan_id again
+  let stale = true
+  answer = (b) => {
+    if (b.confirm && stale) { stale = false; return { ok: false, status: 409, data: { need: 'confirm', plan: { class: b.class, keep: b.keep }, plan_id: 'plan-new' }, error: 'HTTP 409' } }
+    return serve(b)
+  }
+  const c = CLASSES.find((x) => !['llm', 'token-count', 'telemetry'].includes(x))!
+  const before = bodies().length
+  await press(radio(c, 'log'))
+  expect(document.querySelector('[data-confirm]')).toBeNull()
+  expect(bodies().slice(before).map((b) => b.confirm ?? null)).toEqual([null, `plan-${c}`, 'plan-new'])
+  expect(row(c).querySelector('[data-receipt]')?.getAttribute('data-receipt')).toBe('changed')
+  await waitFor(() => expect(radio(c, 'log').getAttribute('aria-checked')).toBe('true'))
+
   answer = () => ({ ok: false, status: 405, data: null, error: 'HTTP 405' })
   control = { control: false, root: true }
   const asked = vi.mocked(api.controlStatus).mock.calls.length
@@ -214,6 +228,8 @@ test('V7: ?class= marks only that row; an unknown class marks none and the table
   await p.go('#/settings/storage?class=nosuch')
   expect(document.querySelectorAll('tr[data-hl="true"]').length).toBe(0)
   expect(document.querySelectorAll('.ctable tbody tr').length).toBe(CLASSES.length)
+  const pointer = [...document.querySelectorAll<HTMLAnchorElement>('#smain a')].find((a) => a.textContent?.startsWith(W.CAPTURE_PAGE_LINE))
+  expect(pointer?.getAttribute('href')).toBe(W.CAPTURE_PAGE_HREF)
 })
 
 test('V8: a failed classes read offers Retry with the reason hidden; a failed segments read is said in the disk card, not as a count', async () => {

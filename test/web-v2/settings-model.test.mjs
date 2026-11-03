@@ -9,6 +9,7 @@ import path from 'node:path'
 import * as M from '../../web/src/screens/settings/storage-model.mjs'
 import { setTheme, themeChoice } from '../../web/src/screens/settings/theme.mjs'
 import { THEME_KEY } from '../../web/legacy/core/ui.mjs'
+import * as W from '../../web/legacy/labels/settings.mjs'
 import { CLASS_IDS, CLASS_DESC, FALLBACK_CLASS } from '../../web/legacy/core/classes.mjs'
 import { unpricedModels, templateText } from '../../web/legacy/settings/prices.mjs'
 import { priceMatch } from '../../web/legacy/core/metrics.mjs'
@@ -39,6 +40,8 @@ test('#1 #15 each window: one row per classes[] entry with that window\'s counts
   for (const w of WINDOWS) {
     const m = M.storageModel(docs, w, { control: CONTROL })
     assert.deepEqual(m.card.rows.map((r) => r.id).sort(), [...CLASS_IDS].sort(), w)
+    const bytes = m.card.rows.map((r) => r.bytes) // the rule's order: most stored bytes in the window first
+    assert.ok(bytes.every((b, i) => i === 0 || bytes[i - 1] >= b), `${w}: ${bytes.join()}`)
     for (const c of docs.classes.classes) {
       const r = m.card.rows.find((x) => x.id === c.class)
       assert.equal(r.calls, c.counts[KEYS[w]].calls); assert.equal(r.bytes, c.counts[KEYS[w]].bytes)
@@ -79,7 +82,13 @@ test('#7 #11 a level can be edited only when the control plane is mounted and th
   assert.equal(at({ ok: true, data: { control: false } }).card.editable, false)
   assert.equal(at({ ok: false, status: 0 }).card.editable, false)
   assert.equal(at(null).card.editable, false)
-  const fatal = at(CONTROL, classesDoc(undefined, { errors: [{ where: 'classes.json', reason: 'not JSON', fatal: true }] }))
+  const FILE = '/home/u/.trocar/classes.json'
+  const fatal = at(CONTROL, classesDoc(undefined, { file: FILE, errors: [{ where: 'classes.json', reason: 'not JSON', fatal: true }] }))
+  const techVals = (x) => x.card.tech.map(([, v]) => v)
+  assert.ok(techVals(fatal).some((v) => v.includes(FILE)), 'the file is in the technical details')
+  assert.ok(techVals(fatal).some((v) => v.includes('not JSON')), 'the reason is in the technical details')
+  assert.ok(fatal.card.tech.some(([k, v]) => k === W.CLASSES_FILE && v === FILE))
+  assert.ok(at(CONTROL).card.tech.some(([k, v]) => k === W.CLASSES_FILE && v === W.FILE_NONE), 'no file → FILE_NONE')
   assert.equal(fatal.card.editable, false); assert.ok(codes(fatal).includes('file-bad')); assert.ok(!codes(fatal).includes('file-some'))
   const some = at(CONTROL, classesDoc(undefined, { errors: [{ where: 'classes.json', reason: 'unknown class "x"' }] }))
   assert.equal(some.card.editable, true); assert.ok(codes(some).includes('file-some')); assert.ok(!codes(some).includes('file-bad'))
