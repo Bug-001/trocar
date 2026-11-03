@@ -4,10 +4,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { scopeModel } from '../../web/src/screens/replay/models.mjs'
-import { deskOf } from './desk-world.mjs'
-import { buildLanes, anchorLane } from '../../web/legacy/replay/lanes.mjs'
+import { deskOf, deskFrom } from './desk-world.mjs'
+import { boardHome, serveBoard } from './real-face.mjs'
+import { buildLanes, anchorLane, turnsReviewed } from '../../web/legacy/replay/lanes.mjs'
 import { problemSteps } from '../../web/legacy/replay/timeline.mjs'
 import { isBreak, isFailed, breakCost, hitRatio, refOf } from '../../web/legacy/core/metrics.mjs'
+import { FLAG } from '../../src/view/head-cols.mjs'
 import { L } from '../../web/legacy/core/labels.mjs'
 import * as W from '../../web/legacy/labels/replay.mjs'
 
@@ -156,3 +158,88 @@ test('1.3 #15 · safety review calls never enter the problem row', () => {
   assert.ok(m.problems.items.every((p) => p.rid.startsWith('R0-')))
 })
 
+// a head (3.5 §会话读 session --head) over N main steps: per-step cells [height, bucket, flags], chapters starting at `starts`
+const b64 = (cells) => Buffer.from(cells.flat()).toString('base64')
+const headOf = (axis, N, { starts = [], inferred = [], flags = {} } = {}) => ({ tier: 1, axis, steps: N, peak: 1000, bucket: 1,
+  cols: b64(Array.from({ length: N }, (_, i) => [(i * 37) % 256, 0x20, flags[i] || 0])),
+  chapters: [0, ...starts].map((s0, k, a) => ({ k, s0, s1: a[k + 1] ?? N, ts0: null, inferred: inferred.includes(s0) })) })
+
+test('1.3 #18 · chapters: k / n, a–b, inferred; ‹ › null at the ends; overview ticks at chapter starts; rough bars keep count and place once rows are held', () => {
+  const N = 12, rows = Array.from({ length: N }, () => ({ usage: U(1, 1, 1) })), starts = [4, 9]
+  for (const [at, k] of [[0, 1], [5, 2], [11, 3]]) {
+    const desk = deskOf([{ kind: 'main', rows }])
+    desk.head = headOf('R0-0', N, { starts, inferred: [9] })
+    const m = scopeModel(stateOf(desk, { at }), 60), c = desk.head.chapters[k - 1]
+    assert.deepEqual([m.chapters.k, m.chapters.n, m.chapters.a, m.chapters.b, m.chapters.inferred], [k, 3, c.s0 + 1, c.s1, c.inferred])
+    assert.equal(m.chapters.prev, k > 1 ? desk.head.chapters[k - 2].s1 - 1 : null)
+    assert.equal(m.chapters.next, k < 3 ? desk.head.chapters[k].s0 : null)
+    assert.deepEqual(m.overview.chapterTicks.map((t) => t.left), [0, ...starts].map((s0) => s0 / N))
+  }
+  const rough = (desk) => { desk.head = headOf('R0-0', N, { starts }); return scopeModel({ desk, anchor: null, playRid: null, lanes: [], initialStep: 7 }, 3) }
+  const before = rough(deskOf([])), after = rough(deskOf([{ kind: 'main', rows }]))
+  assert.ok(before.rough && after.rough)
+  assert.deepEqual(after.bars.map((b) => [b.i, b.col]), before.bars.map((b) => [b.i, b.col]))
+  assert.ok(before.bars.every((b) => b.rid === undefined), 'a cell drawn from cols carries no rid')
+  assert.ok(after.bars.every((b) => typeof b.rid === 'string'), 'a held row carries its rid')
+})
+
+test('1.3 #20 · the prompts row name: K / P known or not (four combinations); P does not move when more of the lane is held', () => {
+  const N = 6, rows = Array.from({ length: N }, () => ({ usage: U(1, 1, 1) })), blocks = rows.map(() => [{ sec: 'system', role: 'system', kind: 'text', bytes: 1 }])
+  const user = [[1, 1], [4, 2]] // [step, k]
+  const deskWith = (heldEvents, steps = N, flagAt = 4) => {
+    const desk = deskOf([{ kind: 'main', rows, blocks, events: heldEvents.map(([i, k]) => ({ type: 'user', rid: `R0-${i}`, lane: 'R0-0', k })) }],
+      { events: user.map(([i]) => ({ type: 'user', rid: `R0-${i}`, lane: 'R0-0' })) })
+    desk.head = headOf('R0-0', steps, { flags: { 1: FLAG.user, [flagAt]: FLAG.user } })
+    return desk
+  }
+  const asks = (desk, at) => scopeModel(stateOf(desk, { at }), 60).asks
+  const cases = [[deskWith(user), 2, 1, 2], [deskWith(user), 0, null, 2], [deskWith(user, N + 1, N), 2, 1, null], [deskWith(user, N + 1, N), 0, null, null]]
+  for (const [desk, at, k, p] of cases) {
+    const a = asks(desk, at)
+    assert.deepEqual([a.k, a.p], [k, p])
+    assert.equal(a.name, W.askRowName(k, p))
+  }
+  assert.equal(asks(deskWith([[4, 2]]), 5).p, asks(deskWith(user), 5).p)
+})
+
+test('2.1 #5 · the review bracket: width = clamp((k − lo) / (hi − lo)); a bar is reviewed iff its i < k, k from turnsReviewed()', () => {
+  const desk = deskOf([{ kind: 'main', rows: ROWS }, { kind: 'monitor', rows: [{ usage: U(1, 1, 1), ts: '2026-10-07T00:00:22.000Z' }] }]) // sent between main steps 5 and 6
+  const lanes = buildLanes(desk), mon = lanes.find((l) => l.kind === 'monitor'), main = anchorLane(lanes)
+  const k = turnsReviewed(main.calls.map((c) => Date.parse(c.ts)), mon.calls[0].ts)
+  assert.ok(k > 3 && k < 9, 'the reviewed range ends inside the narrowed window')
+  for (const view of [{ lo: 0, hi: ROWS.length }, { lo: 3, hi: 9 }]) {
+    const m = scopeModel(stateOf(desk, { view, reviewRange: { k } }), 60)
+    assert.equal(m.review.width, Math.max(0, Math.min(1, (k - view.lo) / (view.hi - view.lo))))
+    for (const b of m.bars) assert.equal(b.reviewed, b.i < k)
+  }
+})
+
+test('keys · every bar, trace cell, problem and tick carries its rid; a row inserted before the window leaves the window\'s rids as they were', () => {
+  const rows = ROWS.map((r, i) => ({ ...r, rid: `X${i}` })), ev = [{ type: 'user', rid: 'X6', lane: 'R0-0' }]
+  const a = scopeModel(stateOf(deskOf([{ kind: 'main', rows }], { events: ev }), { view: { lo: 5, hi: 10 }, at: 6 }), 60)
+  const b = scopeModel(stateOf(deskOf([{ kind: 'main', rows: [{ usage: U(1, 1, 1), rid: 'X-new' }, ...rows] }], { events: ev }), { view: { lo: 6, hi: 11 }, at: 7 }), 60)
+  for (const m of [a, b]) for (const it of [...m.bars, ...m.trace, ...m.problems.items, ...m.asks.ticks]) assert.equal(typeof it.rid, 'string')
+  assert.deepEqual(b.bars.map((x) => x.rid), a.bars.map((x) => x.rid))
+  assert.deepEqual(b.trace.map((x) => x.rid), a.trace.map((x) => x.rid))
+})
+
+test('1.3 #7 · #12 · #13 on the real server: every harness dir\'s session lights the scope, bars = trace = window steps; uncertain steps draw so; ticks only with prompt events', { timeout: 180_000 }, async () => {
+  const face = await serveBoard(boardHome({ bytes: 4e5 }))
+  try {
+    const get = async (name, p) => (await face.get(name, p)).doc
+    const sessions = (await get('sessions')).sessions
+    assert.ok(new Set(sessions.map((x) => x.harness)).size >= 7, 'the set covers the seven harnesses')
+    for (const { session_id: id } of sessions) {
+      const desk = await deskFrom(get, id), lanes = buildLanes(desk), anchor = anchorLane(lanes)
+      if (!anchor) continue
+      const N = anchor.calls.length, s = { desk, meta: desk.meta, lanes, anchor, playhead: 0, playRid: anchor.calls[0].rid, view: { lo: 0, hi: N }, sawView: 'ctx', problems: problemSteps(anchor), pricing: null }
+      const m = scopeModel(s, 60)
+      assert.equal(m.bars.length, N, id)
+      assert.equal(m.trace.length, N, id)
+      anchor.calls.forEach((c, i) => { if (!isFailed(c) && c.usage && c.wire && c.wire.cacheSemanticsKnown === false && hitRatio(c.usage) != null) assert.equal(m.trace[i].state, 'unk', `${id} #12`) })
+      const users = anchor.kind === 'main' ? anchor.events.filter((e) => e.type === 'user') : []
+      assert.equal(m.asks ? m.asks.ticks.length : 0, new Set(users.map((e) => e.rid)).size, `${id} #13`)
+      if (!users.length) assert.equal(m.asks, null, `${id} #13: no prompt events, no row`)
+    }
+  } finally { await face.close() }
+})
