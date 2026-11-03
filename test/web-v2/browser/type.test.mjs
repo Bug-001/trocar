@@ -15,7 +15,7 @@ const PLANTS = [
   ['spacing', 'letter-spacing:.05em', 'Spaced'],
   ['case', 'text-transform:uppercase', 'Loud'],
   ['family', 'font-family:Georgia,serif', 'Serif'],
-  ['rendered', '', 'ⓘ'], // a glyph the two families do not have: Chrome falls back to a third font
+  ['rendered', 'font-weight:var(--fw-strong)', 'ⓘ'], // a glyph the two families do not have, at the strong weight the widened probes cover: Chrome falls back to a third font
 ]
 
 test('the overview has no type fault, and each planted violation is its own fault kind (1.5 #16)', { skip, timeout: 120_000 }, async () => {

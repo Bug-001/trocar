@@ -3,8 +3,8 @@
 // token of the :root blocks, read back through getComputedStyle — no literal here. Exports only.
 //   typeFaults(page, {root}) → { faults: [{kind, text, value}], inventory: {families, sizes, weights, rendered} }
 // Fault kinds (a closed set): family · size (not a --fs-* value; --fs-chart outside #saw / #rails) · weight · spacing · case · numerals ·
-// rendered (Chrome drew the UI's Latin text, CDP CSS.getPlatformFontsForNode, in a font that is neither of the two the --sans and --mono
-// probes are drawn in: a fallback, a third family).
+// rendered (Chrome drew the UI's Latin text, CDP CSS.getPlatformFontsForNode, in a face the --sans and --mono stacks are not drawn in at
+// any --fw-* weight: a fallback, a third family; a weight the OS serves as its own face, Segoe UI Semibold, is the stack's own).
 // The wordmark (.wordmark and inside it) is the one serif: it is left out of the family, spacing, case and rendered checks, not the
 // size and weight ones. Text with a letter of another script than Latin (CJK) or an emoji (verbatim data: 1.5 #5) is left out of the
 // rendered check only.
@@ -44,9 +44,9 @@ export async function typeFaults(page, { root = '#app' } = {}) {
       if (!els.has(el)) els.set(el, '')
       els.set(el, `${els.get(el)} ${t}`.trim())
     }
-    for (const f of ['sans', 'mono']) { // the two families' own platform fonts, read off two probes drawn in them
+    for (const f of ['sans', 'mono']) for (const wt of weights) { // the two stacks' own platform faces at every token weight, read off probes
       const p = document.createElement('span')
-      p.style.cssText = `position:absolute;left:-9999px;font-family:var(--${f})`; p.textContent = 'Aa0'; p.setAttribute('data-type-canon', '')
+      p.style.cssText = `position:absolute;left:-9999px;font-family:var(--${f});font-weight:${wt}`; p.textContent = 'Aa0'; p.setAttribute('data-type-canon', '')
       document.body.append(p); p.getBoundingClientRect() // laid out now: Chrome reports the fonts of laid-out text only
     }
     for (const [el, text] of els) {
