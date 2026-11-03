@@ -17,6 +17,7 @@ import type { ScreenProps } from '../../ScreenOutlet'
 import type { Route } from '../../LegacyScreen'
 import { parseFilters, flattenSessions, applyFilters, listEntries, selectedKey, sessionKey, filterSignature, scrollDecision, capShotMaker } from './model.mjs'
 import { useSessions, type Session, type SessionsData } from './useSessions'
+import { LibraryTools, TitleInfo, WindowSeg } from './LibraryTools'
 import { Caption, FilteredState, LoadingState, NoSessionsState, ReadFailState, VRows, type Entry } from './LibraryParts'
 
 type Shot = ReturnType<ReturnType<typeof capShotMaker>['read']> extends Promise<infer S> ? S : never
@@ -118,11 +119,12 @@ export default function LibraryScreen({ route, router }: ScreenProps) {
 
   return (
     <div className="page">
-      <div id="libhead"><PageHead name={SCREEN_NAME.library} readAt={readAt} /></div>
+      <div id="libhead"><PageHead name={SCREEN_NAME.library} readAt={readAt} tools={<WindowSeg value={f.window} set={set} />} /></div>
       <div className="lib">
+        <LibraryTools f={f} all={all} set={set} onClear={clear} inputRef={qRef} />
         <Caption data={q.data ?? null} err={err} listAt={q.dataUpdatedAt} now={q.dataUpdatedAt} onRetry={retry} />
         <div className="libhead">
-          <span className="lhs">{W.COL_SESSION}</span>
+          <span className="lhs">{W.COL_SESSION}<TitleInfo /></span>
           <span className="ln">{W.COL_CALLS}</span><span className="lw">{W.COL_LAST}</span>
         </div>
         <div className="liblist" id="liblist" aria-label="Sessions" ref={setList}>{body}</div>
