@@ -25,6 +25,8 @@ import { runStatus, down, reply, asDaemon } from './fixtures/status-ctx.mjs'
 import { selfCommand } from '../../src/version.mjs'
 
 const settingsOf = (home) => path.join(home, '.claude', 'settings.json')
+// 1.6 §3.2 sample: the line after `If trocar itself breaks, run:` is the standalone trocar-off, HOME shown as ~
+const breakGlassLine = (text) => { const ls = text.split('\n'); const i = ls.findIndex((l) => l.trim() === 'If trocar itself breaks, run:'); return i < 0 ? undefined : ls[i + 1]?.trim() }
 
 // D55, override #15: the first-run plan and its confirmation are install's now (it writes the user files); on, after install, has no user file left to
 // confirm. The plan names every file, without a terminal and --yes nothing is written (exit 2), the dry run writes nothing, --yes writes.
@@ -81,6 +83,7 @@ test('V7: install in a terminal asks once, only the first time; "n" writes nothi
   assert.equal(yes.asked.length, 1)
   // §1.1③ gives one or two next steps, so the text names the next command and the undo; the four commands live in `--json`'s `commands` (appendix C install)
   assert.match(yes.stdoutText(), /Next: trocar on/, 'the receipt names the next step (R1, 1.6 §3.2)')
+  assert.equal(breakGlassLine(yes.stdoutText()), '~/.trocar/bin/trocar-off', 'and the undo that works without this source tree (1.6 §3.2)')
   assertEnglish(yes.stdoutText(), 'the install receipt')
   const asJson = fakeIo({ tty: false })
   assert.equal(await runInstallCli(['--json'], onCtx(home, asJson)), 0)
@@ -323,7 +326,7 @@ test('V3 (uninstall — the certificate entries are its, D55① — the install 
   assert.ok(!fs.existsSync(path.join(b.s.dir, 'install-manifest.json')) || readManifest(b.s.dir).entries.length === 0)
 })
 
-test('V29: the on receipt after install, in the text and in --json, carries the four commands and the absolute path of trocar-off; every item of the manifest has a kind and an undo_by_hand; flows/ has the install-note and the off-note runs, each ending in a result line', async () => {
+test('V29: the on receipt after install, in the text and in --json, carries the four commands and trocar-off (the text shows it with HOME as ~, --json `standalone` is absolute); every item of the manifest has a kind and an undo_by_hand; flows/ has the install-note and the off-note runs, each ending in a result line', async () => {
   const home = tmpDir('trocar-on-v29-'); seedClaude(home); await installFirst(home)
   const io = fakeIo()
   assert.equal(await runOnCli(['--yes', '--json'], onCtx(home, io)), 0)
@@ -337,6 +340,7 @@ test('V29: the on receipt after install, in the text and in --json, carries the 
   const io2 = fakeIo(); const home2 = tmpDir('trocar-on-v29b-'); seedClaude(home2); await installFirst(home2)
   assert.equal(await runOnCli(['--yes'], onCtx(home2, io2)), 0)
   for (const c of ['trocar on', 'trocar off', 'trocar status', 'trocar uninstall']) assert.ok(io2.stdoutText().includes(c), `the text carries ${c}`)
+  assert.equal(breakGlassLine(io2.stdoutText()), '~/.trocar/bin/trocar-off', 'the text carries trocar-off, HOME as ~ (1.6 §3.2)')
   const m = readManifest(path.join(home, '.trocar', 'collector'))
   const items = [...m.entries, ...m.files]
   assert.ok(items.length >= 3)
