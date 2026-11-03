@@ -62,7 +62,7 @@ function LogRow({ row, open, onOpen }: { row: Row, open: boolean, onOpen: (open:
       </Button>
       <DisclosurePanel className="lx">
         <TechDetails pairs={techPairs(row.tech)} copy={pairsText(row.tech)} />
-        <div className="capcopy"><CopyButton text={row.diag} label="Copy diagnostics" /></div>
+        <div className="capcopy"><CopyButton text={row.diag} label="Copy diagnostics" row /></div>
       </DisclosurePanel>
     </Disclosure>
   )

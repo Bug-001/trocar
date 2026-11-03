@@ -63,7 +63,7 @@ function Unpriced({ overview, rows, source }: { overview: Overview, rows: PriceR
             <div className="umodel" key={m.model ?? '*none*'}>
               <span className="um">{m.model == null ? W.UNPRICED_NO_MODEL : m.model}</span>
               <span className="cap">{W.UNPRICED_SESSIONS(m.sessions)}</span>
-              {tmpl != null ? <div className="tmpl"><code className="well mono" tabIndex={0}>{tmpl}</code><CopyButton text={tmpl} label={W.COPY_TEMPLATE} /></div> : null}
+              {tmpl != null ? <div className="tmpl"><code className="well mono" tabIndex={0}>{tmpl}</code><CopyButton text={tmpl} label={W.COPY_TEMPLATE} row /></div> : null}
             </div>
           )
         })}
@@ -87,19 +87,21 @@ export default function PricesScreen(_props: ScreenProps) {
   return (
     <div className="page">
       <PageHead name={SCREEN_NAME['settings-prices']} readAt={readAt} />
-      <div className="scard"><h2>{W.CARD_PRICE}</h2>
-        <p className="cap">{W.PRICE_NOTE}</p>
-        <p className="cap" data-note="read-only">{W.PRICE_READ_ONLY}</p>
-        {pricing ? (pricing.source && pricing.source !== 'default'
-          ? <p className="cap from mono">{W.PRICE_FROM(pricing.source)}</p> : <p className="cap from">{W.PRICE_DEFAULT}</p>) : null}
-        {fail ? <>
-          <p className="err">{fail.line} · <Button className="linkbtn" onPress={() => { void pq.refetch() }}>{W.RETRY}</Button></p>
-          <TechDetails pairs={techOf(fail.pairs)} copy={flatText(fail.pairs)} />
-        </> : p ? (rows ? <PriceTable rows={rows} /> : <p className="err">{W.PRICE_BAD_SHAPE}</p>) : null}
-        <TechDetails pairs={techOf(TECH)} copy={flatText(TECH)} />
+      <div id="pmain">
+        <div className="scard"><h2>{W.CARD_PRICE}</h2>
+          <p className="cap">{W.PRICE_NOTE}</p>
+          <p className="cap" data-note="read-only">{W.PRICE_READ_ONLY}</p>
+          {pricing ? (pricing.source && pricing.source !== 'default'
+            ? <p className="cap from mono">{W.PRICE_FROM(pricing.source)}</p> : <p className="cap from">{W.PRICE_DEFAULT}</p>) : null}
+          {fail ? <>
+            <p className="err">{fail.line} · <Button className="linkbtn" onPress={() => { void pq.refetch() }}>{W.RETRY}</Button></p>
+            <TechDetails pairs={techOf(fail.pairs)} copy={flatText(fail.pairs)} />
+          </> : p ? (rows ? <PriceTable rows={rows} /> : <p className="err">{W.PRICE_BAD_SHAPE}</p>) : null}
+          <TechDetails pairs={techOf(TECH)} copy={flatText(TECH)} />
+        </div>
+        {overview && overview.usage && Array.isArray(overview.usage.rows)
+          ? <Unpriced overview={overview} rows={rows} source={pricing ? pricing.source : undefined} /> : null}
       </div>
-      {overview && overview.usage && Array.isArray(overview.usage.rows)
-        ? <Unpriced overview={overview} rows={rows} source={pricing ? pricing.source : undefined} /> : null}
     </div>
   )
 }

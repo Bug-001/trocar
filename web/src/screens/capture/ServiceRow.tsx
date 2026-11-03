@@ -28,7 +28,7 @@ export function ServiceRow({ svc, open, onOpen }: { svc: ServiceModel, open: boo
         <span className="ctl" />
       </>}>
       <TechDetails pairs={techPairs(svc.tech)} copy={svc.copy} />
-      <div className="capcopy"><CopyButton text={svc.diag} label="Copy diagnostics" /></div>
+      <div className="capcopy"><CopyButton text={svc.diag} label="Copy diagnostics" row /></div>
     </CapRow>
   )
 }

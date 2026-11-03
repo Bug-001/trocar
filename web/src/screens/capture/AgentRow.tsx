@@ -90,7 +90,7 @@ export function AgentRow({ row, open, onOpen, onDone }: { row: AgentRowModel, op
       ) : null}
       <div className="exp-tech">
         <TechDetails pairs={techPairs(row.tech)} copy={row.copy} />
-        <div className="capcopy"><CopyButton text={row.diag} label="Copy diagnostics" /></div>
+        <div className="capcopy"><CopyButton text={row.diag} label="Copy diagnostics" row /></div>
       </div>
     </CapRow>
   )

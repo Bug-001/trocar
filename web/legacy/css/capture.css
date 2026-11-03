@@ -72,8 +72,6 @@
 .hrcpt.bad{color:var(--bad);}
 .capfoot{margin:10px 4px 0;font-size:var(--fs-cap);color:var(--ink-3);}
 .capcopy{padding:8px 0 4px;}
-/* Copy diagnostics is an action of the row, so it is the kit's button, not the small copy inside 技术细节 */
-.capcopy .copybtn{padding:3px 12px;line-height:var(--lh);font-size:var(--fs-body);color:var(--ink);}
 
 /* the blocks under the table (本机网络环境 / 改动): a group starts with a hairline */
 .cblock{border-top:1px solid var(--rule);margin-top:24px;padding:12px 0 6px;}

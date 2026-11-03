@@ -192,6 +192,8 @@ input::placeholder{color:var(--ink-3);}
 .tip{background:var(--ink);color:var(--paper);font-size:var(--fs-cap);padding:4px 8px;border-radius:var(--r-1);max-width:280px;box-shadow:var(--shadow-float);}
 .copybtn{padding:0 8px;line-height:20px;font-size:var(--fs-cap);color:var(--ink-2);}
 .copybtn:hover{color:var(--ink);}
+/* a copy that is an action of the whole row (Copy diagnostics, Copy template) is the kit's button, not the small copy */
+.copybtn.act{padding:3px 12px;line-height:var(--lh);font-size:var(--fs-body);color:var(--ink);}
 
 /* fidelity badges (invariant 4: a dashed border means NOT verbatim / an estimate) */
 .metabadge,.ffbadge{font-size:var(--fs-cap);color:var(--ink-2);white-space:nowrap;border:1px dashed var(--rule-2);border-radius:var(--r-pill);padding:0 6px;cursor:help;}
