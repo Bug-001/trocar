@@ -86,6 +86,8 @@ const jsonBody = (req) => new Promise((resolve) => {
 /** The answer files a session directory holds (4.4 §答案文件), by `f`: the closed set, so nothing outside ctx/<k>/ is ever named. */
 const D_FILE = /^\/api\/d\/(?:(head)|p(\d{1,6})\.(main|rest)|open\.(main|rest))$/;
 const NDJSON = 'application/x-ndjson';
+// a response that goes nowhere: the worker's answer of a missing head, which is then read from the file it wrote (answerFile)
+const NOWHERE = { writeHead() {}, write: () => true, end() {}, once() {}, destroy() {} };
 const TIP_IDS = 64, TIP_KEYS = 256; // per session the newest model calls; the sessions remembered, least recently tipped dropped first
 
 /** The board's tip table (4.4 §答案文件 `x-trocar-tip`): `add(pairs)` takes the index keeper's [session_key, id] of each pass,
@@ -133,8 +135,10 @@ export function createServer({ home, token, query, tips, uid = process.getuid?.(
     };
 
   /** ⑤ GET /api/d/<f>?id= (4.4 §答案文件). One open, fstat, read and close: the bytes and the tag are of one file even while the worker
-   *  renames a new one in. A file that is not there (or a reader that takes no gzip of a gzip file) is the equivalent named query. */
-  function answerFile(req, res, url) {
+   *  renames a new one in. A file that is not there (or a reader that takes no gzip of a gzip file) is the equivalent named query. The
+   *  head's goes nowhere: the worker writes the head file as it answers, then that file is answered as above (`relayed`), so this first
+   *  read carries the file's tag and the next poll of the same state is a 304; still no file → the query's own answer. */
+  function answerFile(req, res, url, relayed = false) {
     const m = D_FILE.exec(url.pathname);
     if (!m) return sendJson(res, 404, { error: 'unknown endpoint' });
     if (req.method !== 'GET') return sendJson(res, 405, { error: 'method not allowed — the board is read-only' });
@@ -144,8 +148,8 @@ export function createServer({ home, token, query, tips, uid = process.getuid?.(
     const tip = tips && tips(id);
     if (tip) res.setHeader('x-trocar-tip', tip);
     const gzip = /\bgzip\b/.test(req.headers['accept-encoding'] || '');
-    const relay = () => query.relay(head ? { name: 'session', params: { id, head: '' }, res, gzip }
-      : { name: 'lane', params: n != null ? { id, pack: `${n}.${packPart}` } : { id, tail: tailPart }, res, gzip });
+    const relay = (to = res) => query.relay(head ? { name: 'session', params: { id, head: '' }, res: to, gzip }
+      : { name: 'lane', params: n != null ? { id, pack: `${n}.${packPart}` } : { id, tail: tailPart }, res: to, gzip });
     const stored = !tailPart; // head and packs are kept gzipped, the open tails plain
     if (stored && !gzip) return relay();
     const io = fs || nodeFs;
@@ -154,7 +158,7 @@ export function createServer({ home, token, query, tips, uid = process.getuid?.(
     const names = head ? [HEAD_FILES.rest, HEAD_FILES.folding] : [n != null ? `p${n}.${packPart}.ndjson.gz` : `open.${tailPart}.ndjson`];
     let fd, name;
     for (const f of names) { try { fd = io.openSync(path.join(dir, f), 'r'); name = f; break; } catch (e) { if (!(e && e.code === 'ENOENT')) throw e; } }
-    if (name == null) return relay();
+    if (name == null) return head && !relayed ? relay(NOWHERE).then(() => answerFile(req, res, url, true)) : relay();
     if (name === HEAD_FILES.folding) res.once('finish', () => query.follow?.(id));
     try {
       const st = io.fstatSync(fd), size = st.size;
