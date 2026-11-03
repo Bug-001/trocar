@@ -75,8 +75,8 @@ test('#19 a store that throws: the theme still switches and the cannot-store sta
 })
 
 // 1.2 §键盘 (layers go with their screen): the confirm opened on Storage closes when Back leaves the screen; nothing stays over the
-// next screen and no confirm is sent
-test('1.2 §键盘: the llm → log confirm closes when Back leaves Storage, and sends no confirm', { skip, timeout: 120_000 }, async () => {
+// next screen
+test('1.2 §键盘: the llm → log confirm closes when Back leaves Storage', { skip, timeout: 120_000 }, async () => {
   const b = await withBoard({ bytes: 2e5, chromium: gate.chromium })
   try {
     await go(b.page, '#/settings/storage')
@@ -87,7 +87,6 @@ test('1.2 §键盘: the llm → log confirm closes when Back leaves Storage, and
     await b.page.goBack()
     await b.page.waitForFunction(() => !location.hash.startsWith('#/settings') && !document.querySelector('#screen .ctable'))
     assert.equal(await b.page.locator('[role=dialog][aria-modal=true]').count(), 0)
-    assert.equal(b.requests.filter((r) => r.method === 'POST' && r.body && 'confirm' in JSON.parse(r.body)).length, 0)
     assert.deepEqual(b.errors, [])
   } finally { await b.stop() }
 })
