@@ -61,7 +61,7 @@ function Unpriced({ overview, rows, source }: { overview: Overview, rows: PriceR
           const tmpl = m.model == null ? null : templateText(m.model, source)
           return (
             <div className="umodel" key={m.model ?? '*none*'}>
-              <span className="mono um">{m.model == null ? W.UNPRICED_NO_MODEL : m.model}</span>
+              <span className="um">{m.model == null ? W.UNPRICED_NO_MODEL : m.model}</span>
               <span className="cap">{W.UNPRICED_SESSIONS(m.sessions)}</span>
               {tmpl != null ? <div className="tmpl"><code className="well mono" tabIndex={0}>{tmpl}</code><CopyButton text={tmpl} label={W.COPY_TEMPLATE} /></div> : null}
             </div>
