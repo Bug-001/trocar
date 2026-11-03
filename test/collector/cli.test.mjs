@@ -252,7 +252,8 @@ test('cli: setup-helper installs or removes through arch; a failure is exit 1', 
   const arch = { install: { DEFAULTS: { helperBin: '/usr/local/libexec/trocar/trocar-redirector' }, setupHelper: (o) => { done.push(o.binarySrc); return { bin: '/b', getcap: 'caps' } }, uninstallHelper: () => ({ warnings: [] }) } }
   const root = tmpDir('trocar-cli-built-'), dir = path.join(root, 'src', 'collector', 'arch', 'linux'), built = path.join(dir, 'trocar-redirector')
   fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(built, '')
-  let t = io(); assert.equal(await runSetupHelper(['--binary', built], { arch, ...t }), 0)
+  let t = io(); assert.equal(await runSetupHelper(['--binary', built], { arch: { install: { ...arch.install, setupHelper: (o) => { done.push(o.binarySrc); return { bin: '/b/trocar-redirector', getcap: '/b/trocar-redirector cap_net_admin,cap_perfmon,cap_bpf=ep' } } } }, ...t }), 0)
+  assert.equal(t.o.join('\n').split('/b/trocar-redirector').length - 1, 1, `the helper's path is said once (D58)\n${t.o.join('\n')}`)
   t = io(); assert.equal(await runSetupHelper(['--remove'], { arch, ...t }), 0)
   assert.deepEqual(done, [built])
   t = io(); assert.equal(await runSetupHelper([], { arch: { install: { setupHelper: () => { throw new Error('must run as root') } } }, packageRoot: root, ...t }), 1)
@@ -260,7 +261,7 @@ test('cli: setup-helper installs or removes through arch; a failure is exit 1', 
   // a staged copy an interrupted setup-helper left is removed and said, by both directions (D38)
   const swept = { install: { DEFAULTS: arch.install.DEFAULTS, setupHelper: () => ({ bin: '/b', getcap: 'caps', swept: ['.trocar-redirector.new.67915'] }), uninstallHelper: () => ({ warnings: ['removed 1 copy(ies) an interrupted setup-helper had staged: .trocar-redirector.new.67915'] }) } }
   t = io(); await runSetupHelper([], { arch: swept, packageRoot: root, ...t })
-  assert.match(t.o.join('\n'), /removed 1 copy\(ies\) an interrupted setup-helper had staged: \.trocar-redirector\.new\.67915/)
+  assert.ok(t.o.join('\n').includes('.trocar-redirector.new.67915'), `the staged copy it removed is named (D38)\n${t.o.join('\n')}`)
   t = io(); await runSetupHelper(['--remove'], { arch: swept, ...t })
   assert.match(t.o.join('\n'), /Warning: removed 1 copy\(ies\)/)
 })

@@ -3,7 +3,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { shellArg } from '../cli/text.mjs'
+import { shellArg, wrap } from '../cli/text.mjs'
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 
@@ -29,7 +29,8 @@ export async function runSetupHelper(argv, { arch = null, out = (s) => console.l
       return 1
     }
     const r = A.install.setupHelper({ binarySrc })
-    out(`installed ${r.bin} (${r.getcap})${r.swept && r.swept.length ? `\nremoved ${r.swept.length} copy(ies) an interrupted setup-helper had staged: ${r.swept.join(', ')}` : ''}`)
+    const caps = r.caps || String(r.getcap || '').trim().split(/\s+/).pop() // getcap prints the path, then the capabilities: the path is said once
+    out([`Installed the capability helper ${r.bin}${caps ? ` with the capabilities ${caps}` : ''}.`, ...(r.swept && r.swept.length ? [`Also removed ${r.swept.length} copy(ies) an interrupted setup-helper had staged: ${r.swept.join(', ')}`] : [])].flatMap((l) => wrap(l)).join('\n')) // 80 columns, a path never broken (1.6 §1.1⑥)
     return 0
   } catch (e) { err(`trocar setup-helper: ${(e && e.message) || e}`); return 1 }
 }
