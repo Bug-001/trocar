@@ -6,6 +6,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { probe, withBoard, shoot } from './harness.mjs'
 import { INTERVAL } from '../../../src/web/v2/core/poll.mjs'
+import { UNTITLED } from '../../../src/web/v2/labels/common.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
@@ -32,6 +33,23 @@ async function settledTitles(b) {
   }
   await remount(b.page, '.lrow'); await b.page.waitForLoadState('networkidle')
 }
+
+// TODO (open product item): the first `sessions` answer of a fresh home carries title null for every session whose usage sidecar is
+// not filled yet (src/query/named/sessions.mjs titleOf only marks it to fill), and the board reads that null as "no title"
+// (library/logic.mjs titleText, overview/overview.mjs, replay/header.mjs): "not known yet" drawn as "none" (invariant 4). The fix
+// needs a spec decision (a pending title state, or titles computed before the answer); this case is red until then.
+test("1.8 §标题规则 the library's first answer draws no untitled row for a home whose sessions all have titles", { skip, todo: 'a title not known yet is drawn as no title' }, async () => {
+  const b = await withBoard({ bytes: BYTES, width: 1280, chromium: gate.chromium })
+  try {
+    const first = b.page.waitForResponse((r) => new URL(r.url()).pathname === '/api/sessions', { timeout: 15000 })
+    await go(b.page, '#/sessions', '.lrow')
+    const firstNull = ((await (await first).json()).sessions || []).filter((x) => x.title == null).length
+    const drawn = await b.page.$$eval('.lrow .lt', (els, u) => els.filter((e) => e.textContent === u).length, UNTITLED)
+    await settledTitles(b)
+    assert.deepEqual(((await b.get('sessions', {})).doc?.sessions || []).filter((x) => x.title == null), [], 'every session of this home has a title once the sidecar is filled')
+    assert.deepEqual([firstNull, drawn], [0, 0], 'null titles in the first answer, untitled rows drawn from it')
+  } finally { await b.stop() }
+})
 
 const layout = (page) => page.evaluate(() => {
   const txt = (e) => (e ? e.textContent : '')
