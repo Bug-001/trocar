@@ -139,6 +139,20 @@ test('§3.5 `--failures`: one line per kind of problem, then Expected — and a 
   assert.match(failuresBlock(null, null)[0], /^Problems: unknown \(capture health could not be read\)$/)
 })
 
+test('§3.5 · §1.1⑥ `--failures`: a backquoted command in a reason prints whole on a line of its own, for every command length 40-130 and a known or unknown code', () => {
+  const health = { collector: { failures: [], expected: {} }, read: { errors: [] }, summary: { state: 'failing' } }
+  for (let len = 40; len <= 130; len++) {
+    const cmd = `sudo /h/${'x'.repeat(len - 40)}/node /h/trocar.mjs setup-helper` // a selfCommand shape, `len` columns
+    assert.equal(cmd.length, len)
+    for (const g of [{ where: 'helper', code: 'helper-down', harness: 'claude-code' }, { where: 'engine', code: 'no-word-for-this-code' }]) {
+      const reason = `redirector helper not found at /usr/local/libexec/trocar/redirector; install it once per machine with \`${cmd}\``
+      const lines = failuresBlock({ groups: [{ level: 'problem', count: 2, first_ts: '2026-10-18T12:00:00Z', last_ts: '2026-10-18T12:14:00Z', reason, ...g }] }, health, { now: NOW })
+      clean(lines, `status --failures (${g.code}, ${len})`, [cmd])
+      assert.equal(lines.filter((l) => l.trim() === cmd).length, 1, `${g.code} ${len}: the command whole, once, on its own line\n${lines.join('\n')}`)
+    }
+  }
+})
+
 test('§3.5 exit codes: 0 every harness that is on is captured, 1 one of them is not, 3 that cannot be judged — a stale health line never decides it', () => {
   const f = (harnesses, over = {}) => ({ harnesses, install: { state: 'complete' }, cert: { root: { code: null }, key: { state: 'present' } }, ...over })
   const on = (captured, desired = 'on') => ({ desired, judged: { captured, rows: [] } })

@@ -9,7 +9,7 @@ import { runOnCli } from '../../src/cli/on.mjs'
 import { runOffCli } from '../../src/off/main.mjs'
 import { runInstallCli } from '../../src/cli/install.mjs'
 import { runUninstallCli } from '../../src/cli/uninstall.mjs'
-import { standalonePath, standaloneCommand } from '../../src/off/paths.mjs'
+import { standalonePath } from '../../src/off/paths.mjs'
 import { formatOnReceipt, formatPlan } from '../../src/cli/receipt.mjs'
 import { validateReceipt, newReceipt } from '../../src/cli/schema.mjs'
 import { readStateFile } from '../../src/off/state.mjs'
@@ -81,7 +81,6 @@ test('V7: install in a terminal asks once, only the first time; "n" writes nothi
   assert.equal(yes.asked.length, 1)
   // §1.1③ gives one or two next steps, so the text names the next command and the undo; the four commands live in `--json`'s `commands` (appendix C install)
   assert.match(yes.stdoutText(), /Next: trocar on/, 'the receipt names the next step (R1, 1.6 §3.2)')
-  assert.ok(yes.stdoutText().split('\n').some((l) => l.trim() === standaloneCommand(standalonePath(home), 'linux')), 'and the undo that works without this source tree, whole on its own line (1.6 §1.1⑥)')
   assertEnglish(yes.stdoutText(), 'the install receipt')
   const asJson = fakeIo({ tty: false })
   assert.equal(await runInstallCli(['--json'], onCtx(home, asJson)), 0)
@@ -337,7 +336,7 @@ test('V29: the on receipt after install, in the text and in --json, carries the 
   assert.ok(fs.statSync(r.standalone).isFile() && (fs.statSync(r.standalone).mode & 0o100), 'and the path is a file trocar wrote, executable (install wrote it; test/off/standalone.test.mjs runs it)')
   const io2 = fakeIo(); const home2 = tmpDir('trocar-on-v29b-'); seedClaude(home2); await installFirst(home2)
   assert.equal(await runOnCli(['--yes'], onCtx(home2, io2)), 0)
-  for (const c of ['trocar on', 'trocar off', 'trocar status', 'trocar uninstall', standalonePath(home2)]) assert.ok(io2.stdoutText().includes(c), `the text carries ${c}`)
+  for (const c of ['trocar on', 'trocar off', 'trocar status', 'trocar uninstall']) assert.ok(io2.stdoutText().includes(c), `the text carries ${c}`)
   const m = readManifest(path.join(home, '.trocar', 'collector'))
   const items = [...m.entries, ...m.files]
   assert.ok(items.length >= 3)

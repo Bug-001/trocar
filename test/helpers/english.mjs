@@ -26,7 +26,7 @@ export function assertEnglish(text, where = 'the output', { placeholders = false
   if (!width) return
   for (const line of bare.split('\n')) {
     if (!line.trim().includes(' ')) continue // §1.1⑥: one long value (a path, a command) keeps its own line unbroken, however long it is
-    if (/^ {2}(?:sudo |node |"|\/|[A-Za-z]:\\)/.test(line)) continue // §1.1⑥: a command to copy, printed whole on its own line (receipt.mjs commandLine)
+    if (/^ {2}(?:sudo |node |"|~?\/|[A-Za-z]:\\)/.test(line)) continue // §1.1⑥: a command to copy, printed whole on its own line (receipt.mjs commandLine)
     assert.ok(line.length <= WIDTH, `${where} has a line of ${line.length} columns (max ${WIDTH}):\n${line}`)
   }
 }

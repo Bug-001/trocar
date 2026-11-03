@@ -41,11 +41,15 @@ const escRe = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
  *  HOME where it starts a word (after a blank, a quote, a bracket, `=` or `:`) and HOME ends at a separator or the word's end; `/home/al` is not in `/home/alice`. */
 export const tildeText = (s, home) => (home ? s.replace(new RegExp(`(^|[\\s"'(\\[=:])${escRe(home)}(?=[\\\\/]|$|[\\s"'),;\\]])`, 'g'), '$1~') : s)
 
+/** §1.1⑤: a command to copy shows HOME as `~` where sh, zsh and bash expand it — an unquoted word that starts with HOME, then `/` or the word's end. A
+ *  `sudo` line stays absolute (§3.2), and a Windows line keeps its quoted `\` paths: neither matches, so no platform is named here. */
+export const tildeCommand = (s, home) => (home && !/^sudo\s/.test(s) ? s.replace(new RegExp(`(^|\\s)${escRe(home)}(?=/|\\s|$)`, 'g'), '$1~') : s)
+
 /** §1.1⑥: every line fits 80 columns — one that does not is folded on spaces, indented to its own indent, and a word that is longer than the line
  *  (a path, a command) keeps its own line unbroken. A coloured line is left alone: its escape bytes are not columns and must not be cut. `home`: §1.1⑤,
- *  every text line's HOME paths as `~/…` (tildeText); a command to copy is printed as it is. */
+ *  every text line's HOME paths as `~/…` (tildeText), a command to copy's where the shell expands them (tildeCommand). */
 export const fit = (lines, { home = null } = {}) => lines.flatMap((l) => {
-  if (l && typeof l === 'object' && typeof l.command === 'string') return [`  ${l.command}`] // a command to copy (commandLine): one line, never folded, so a paste runs it whole
+  if (l && typeof l === 'object' && typeof l.command === 'string') return [`  ${tildeCommand(l.command, home)}`] // a command to copy (commandLine): one line, never folded, so a paste runs it whole
   // a text of several lines (a refusal with its commands, refuseOldManifest) keeps its lines, and a line of it indented two spaces is a command to copy
   if (String(l).includes('\n')) return fit(String(l).split('\n').map((x) => (/^ {2}\S/.test(x) ? commandLine(x.slice(2)) : x)), { home })
   const s = tildeText(String(l), home)
@@ -173,7 +177,7 @@ export function formatOnReceipt(r, { tense = 'past', home = null, platform = 'li
   for (const b of r.blocked || []) if (b.command) lines.push(commandLine(b.command)) // C.1 blocked[].command: the line that lifts the stop, whole on its own line (§1.1⑥)
   lines.push(`Stop: trocar off`)
   // §1.1③⑥: a command a person copies gets its own line, so folding never cuts it in two
-  if (r.standalone) lines.push('If trocar itself breaks, run:', commandLine(standaloneCommand(r.standalone, platform))) // a command to copy: whole, as it is
+  if (r.standalone) lines.push('If trocar itself breaks, run:', commandLine(standaloneCommand(r.standalone, platform))) // a command to copy: whole
   lines.push(c.dim('Status: trocar status   Remove trocar: trocar uninstall (your captured records stay)'))
   return fit(lines, { home }).join('\n')
 }

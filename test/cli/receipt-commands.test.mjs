@@ -1,6 +1,6 @@
 // test/cli/receipt-commands.test.mjs — 1.6 §1.1 rules 5 and 6 and §3.6, over the pure renderers (receipt.mjs): a row's `command` (on's blocked[],
 // uninstall's left[]) is printed whole on a line of its own, never folded on its spaces (a paste of a folded sudo line runs sudo alone); every text line
-// shows HOME paths as ~ while a command keeps its own spelling; the purge hint is there exactly when something is kept.
+// shows HOME paths as ~, and a command does where the shell expands it; the purge hint is there exactly when something is kept.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { fit, formatOnReceipt, formatUninstallReceipt } from '../../src/cli/receipt.mjs'
@@ -22,12 +22,21 @@ for (const home of HOMES) {
     assert.ok(lines(text).some((l) => l.trim() === cmd), text)
   })
 
-  test(`§1.1⑤ every text line shows HOME as ~ (${home}); a sibling directory and a command are left as they are`, () => {
+  test(`§1.1⑤ every text line shows HOME as ~ (${home}); a sibling directory is left as it is`, () => {
     const s = sep(home)
-    const out = fit([`autostart  ${home}${s}Library${s}LaunchAgents${s}com.trocar.collector.plist: enabled`, `PATH  ${home}${s}.zshrc: line added`, `Kept: ${home}x${s}other`, { command: `${home}${s}.trocar${s}bin${s}trocar-off` }], { home })
+    const out = fit([`autostart  ${home}${s}Library${s}LaunchAgents${s}com.trocar.collector.plist: enabled`, `PATH  ${home}${s}.zshrc: line added`, `Kept: ${home}x${s}other`], { home })
     assert.ok(out.slice(0, 2).every((l) => !l.includes(home) && l.includes(`~${s}`)), out.join('\n'))
     assert.ok(out[2].includes(`${home}x${s}other`), 'a directory whose name only starts like HOME is not HOME')
-    assert.equal(out[3].trim(), `${home}${s}.trocar${s}bin${s}trocar-off`, 'a command to copy is printed as it is')
+  })
+
+  test(`§1.1⑤ a command to copy (${home}): HOME as ~ only where sh expands it; a sudo line, a quoted path and a Windows line stay absolute`, () => {
+    const s = sep(home), posix = s === '/'
+    const off = `${home}${s}.trocar${s}bin${s}trocar-off`
+    const [bare, sudo, quoted, sibling] = fit([{ command: off }, { command: longCommand(home) }, { command: `node "${off}"` }, { command: `${home}x${s}bin${s}tool` }], { home }).map((l) => l.trim())
+    assert.equal(bare, posix ? `~${s}.trocar${s}bin${s}trocar-off` : off)
+    assert.equal(sudo, longCommand(home), 'sudo: root\'s ~ is not yours (§3.2)')
+    assert.equal(quoted, `node "${off}"`, 'a quoted ~ is not expanded')
+    assert.equal(sibling, `${home}x${s}bin${s}tool`)
   })
 }
 
