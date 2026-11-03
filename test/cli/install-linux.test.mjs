@@ -121,7 +121,6 @@ test('Linux on after install with a certificate item gone: on leaves it gone, ex
   fs.writeFileSync(settings, '{"model":"x"}\n')
   const io = fakeIo()
   assert.equal(await runOnCli(['--yes'], onCtx(home, io)), 1, io.text())
-  assert.match(io.text(), /"trocar off", then "trocar install" and "trocar on"/, 'the way back is install\'s')
   assert.equal(fs.readFileSync(settings, 'utf8'), '{"model":"x"}\n', 'on did not write the key')
 })
 

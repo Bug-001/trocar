@@ -435,12 +435,16 @@ export async function turnOn(opts = {}) {
   const unwritten = (r) => { const { standalone: _unwritten, ...rest } = r; return { ...rest, changed: [], created: [], undo: null, log: null } }
   // The helper (D36) is what the real `on` needs and the plan does not: a missing one stops the real run before anything is written, but `--dry-run` still shows the plan — it is what
   // a user reads before deciding to `sudo trocar setup-helper` — and exits 0 (R6, V7) with the stop said in the receipt (`blocked`).
-  let helperBlock = null
+  // C.1 blocked[].command: the sudo line is the stop's own command, printed whole on its own line under the note (1.6 §1.1⑥)
+  let helperBlock = null, helperStop = null
   if (helperState) {
     const h = await helperState()
-    if (h && h.ok === false) helperBlock = `the capability helper is missing or not the right version (${h.reason || 'not usable'}); nothing was changed. Run: sudo ${selfCommand(['setup-helper'])}`
+    if (h && h.ok === false) {
+      helperBlock = `the capability helper is missing or not the right version (${h.reason || 'not usable'})`
+      helperStop = { what: 'trocar on', reason: `${helperBlock}; nothing was changed. Install it with the line below, then run trocar on again`, command: `sudo ${selfCommand(['setup-helper'])}` }
+    }
   }
-  if (helperBlock && !dryRun) return { receipt: unwritten({ ...fresh(), ok: false, notes: [helperBlock] }), manifest: null, plan: null, exit: 1 }
+  if (helperBlock && !dryRun) return { receipt: unwritten({ ...fresh(), ok: false, notes: [helperStop.reason], blocked: [helperStop] }), manifest: null, plan: null, exit: 1 }
   // D61 / 1.6 §3.3: the login entry is `install`'s, so an `on` with none would open doors that nobody opens after the next login
   // (without the login registration, a reboot after `on` leaves every agent unusable). Asked here, before the first write; a `--dry-run` goes on and carries it in `blocked`.
   const autostartBlk = dryRun ? null : autostartBlock({ unit, osName })
@@ -476,7 +480,7 @@ export async function turnOn(opts = {}) {
     if (edited.length) r.notes.push(...edited.map((e) => `you changed the proxy setting of ${e.harness}: ${e.where || 'the proxy field'} is now ${e.now ?? 'empty'} (trocar left ${e.was ?? 'empty'} there); on takes that as the upstream and points the setting back at trocar`))
     if (dryRun) {
       const blk = autostartBlock({ unit, osName })
-      return { receipt: { ...r, dry_run: true, ok: !named, ...(blk ? { blocked: [{ what: 'trocar on', reason: blk }], notes: [...r.notes, `${blk} (a real trocar on stops there)`] } : {}), ...(helperBlock ? { blocked: [{ what: 'trocar on', reason: helperBlock }], notes: [...r.notes, `${helperBlock.replace('nothing was changed. ', '')} (a real trocar on stops there)`] } : {}) }, manifest: plan._.prior, plan, exit: named ? 1 : 0 }
+      return { receipt: { ...r, dry_run: true, ok: !named, ...(blk ? { blocked: [{ what: 'trocar on', reason: blk }], notes: [...r.notes, `${blk} (a real trocar on stops there)`] } : {}), ...(helperBlock ? { blocked: [helperStop], notes: [...r.notes, `${helperBlock} (a real trocar on stops there). Install it with the line below, then run trocar on again`] } : {}) }, manifest: plan._.prior, plan, exit: named ? 1 : 0 }
     }
     if (plan.writing || stateWrite || edited.length) onPlan({ ...plan, state: stateWrite ? stateF : null, edited })
     if (plan.first || plan.newPaths.length || edited.length) {

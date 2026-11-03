@@ -328,8 +328,8 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     const was = receipt.removed.length
     if (!blocked && !left && !receipt.problems.length) scriptCopyLast(w, { home, env, receipt, root: deps.root || packageRoot() })
     if (bare) receipt.notes.push(receipt.removed.length > was ? "there was no install record for this user: only trocar's own program was left, and it is removed" : 'nothing is installed for this user')
-    receipt.ok = receipt.problems.length === 0 && left === 0
-    if (!receipt.ok && !receipt.problems.length) receipt.problems.push(`${left} item(s) could not be undone; the install manifest is kept. Fix them, then run trocar uninstall again`)
+    receipt.ok = receipt.problems.length === 0 && receipt.left.length === 0 // receipt.left: the helper row scriptCopyLast adds counts too
+    if (left && !receipt.problems.length) receipt.problems.push(`${left} item(s) could not be undone; the install manifest is kept. Fix them, then run trocar uninstall again`)
     return { receipt, exit: receipt.ok ? EXIT.ok : EXIT.incomplete }
   } catch (e) { // an error that is not a step's own: recorded where status finds it, then thrown (4.6: a failed run ends with outcome 'failed')
     try { if (fs.existsSync(w.dir)) { put({ event: 'failure', code: (e && e.code) || 'uninstall-error', reason: errText(e) }); put({ kind: 'result', outcome: 'failed', reason: `uninstall failed: ${errText(e)}` }) } } catch { /* the original error is the one that matters */ }
@@ -345,7 +345,8 @@ function scriptCopyLast(w, { home, env, receipt, root }) {
   if (channelOf(root, { home, fs: w.fs }) !== 'script') return
   const app = appDir(home), launcher = launcherPath(home, w.platform)
   if (w.platform === 'linux' && w.fs.existsSync(DEFAULT_REDIRECTOR_BIN)) {
-    receipt.problems.push(`trocar's own code stays in ${app}: the capability helper is still installed, and removing it needs this code. Run: sudo ${selfCommand(['setup-helper', '--remove'], { root })}, then run trocar uninstall again`)
+    // 1.6 §1.1⑥ / C.2 left[].command: the sudo line is the row's own command, printed whole on its own line (folded on its spaces, a paste ran `sudo` alone)
+    receipt.left.push({ what: 'the capability helper', path: DEFAULT_REDIRECTOR_BIN, reason: `still installed; removing it needs trocar's own code, so ${app} stays too. Remove the helper with this line, then run trocar uninstall again:`, command: `sudo ${selfCommand(['setup-helper', '--remove'], { root })}` })
     return
   }
   const dirs = [trocarHome(home), path.dirname(launcher), w.dir] // the run's own removeEmptyDirs came before the code went: these were not empty then

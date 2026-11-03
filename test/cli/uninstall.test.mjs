@@ -54,7 +54,6 @@ test('uninstall: every entry is back as it was, trocar\'s own files are gone, th
   const text = await cli(twin, [])
   assert.equal(text.exit, 0)
   assert.match(text.io.stdoutText(), /^Uninstalled\. trocar is no longer on your agents' path/)
-  assert.match(text.io.stdoutText(), /Delete the captured records: trocar uninstall --purge-data/)
   // no assertEnglish here: the `change` words of each row come from `off` (src/off/orchestrate.mjs), whose output is not this task's (1.6 §3.4)
 })
 

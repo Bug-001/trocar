@@ -346,7 +346,7 @@ test('on: root is refused by the library too (R7), and a missing helper stops it
   const s = await sandbox(); const before = snapshot(s.home)
   await assert.rejects(s.run({ getuid: () => 0 }), /not as root/)
   const r = await s.run({ helperState: () => ({ ok: false, reason: 'no helper' }) })
-  assert.deepEqual([r.exit, r.receipt.ok], [1, false]); assert.ok(r.receipt.notes.join(' ').includes(`sudo ${selfCommand(['setup-helper'])}`), '1.6 §3.2: the command names this copy by absolute paths')
+  assert.deepEqual([r.exit, r.receipt.ok], [1, false]); assert.equal(r.receipt.blocked[0].command, `sudo ${selfCommand(['setup-helper'])}`, '1.6 §3.2: the command names this copy by absolute paths; C.1 blocked[].command')
   assert.deepEqual(snapshot(s.home), before)
 })
 
@@ -383,8 +383,7 @@ test('R6 / V7: `on --dry-run` with the helper missing still prints the plan and 
   assert.deepEqual([dry.exit, dry.receipt.ok, dry.receipt.dry_run], [0, true, true])
   assert.deepEqual([dry.receipt.changed, dry.receipt.created], [ok.receipt.changed, ok.receipt.created], 'the plan is the one a user with a helper would get')
   assert.ok(dry.receipt.created.length > 0, 'and it is a real plan (the unit; every certificate item is install\'s)')
-  assert.deepEqual(dry.receipt.blocked.map((b) => b.what), ['trocar on']) // 附录 C.1: blocked:[{what, reason}]
-  assert.ok(dry.receipt.blocked[0].reason.includes(`sudo ${selfCommand(['setup-helper'])}`))
+  assert.deepEqual(dry.receipt.blocked.map((b) => [b.what, b.command]), [['trocar on', `sudo ${selfCommand(['setup-helper'])}`]]) // 附录 C.1: blocked:[{what, reason, command?}]
   assert.deepEqual(validateReceipt(dry.receipt), [])
   assert.deepEqual(snapshot(s.home), before, 'a dry run writes nothing')
   assert.equal((await s.run({ helperState: () => ({ ok: false, reason: 'no helper' }) })).exit, 1)

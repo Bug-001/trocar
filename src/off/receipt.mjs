@@ -124,7 +124,7 @@ export function formatOffReceipt(r, { home = null, tense = r.dry_run ? 'future' 
   }
   if ((r.still_trusting || []).length) {
     const roots = r.still_trusting.filter((p) => p.what === 'root')
-    for (const p of roots) lines.push(...fit(`Your trust store still holds trocar's root certificate: ${p.reason}. Take it out by hand: ${p.command}`, '  '))
+    for (const p of roots) lines.push(...fit(`Your trust store still holds trocar's root certificate: ${p.reason}. Take it out by hand with this line:`, '  '), `  ${p.command}`) // a command keeps its own line, whole (1.6 §1.1⑥)
     const procs = r.still_trusting.filter((p) => p.what !== 'root')
     if (procs.length) {
       lines.push('Still trusting the trocar certificate, but not going through trocar:')

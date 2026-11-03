@@ -142,7 +142,7 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
     say(fit([`trocar install will change ${planned.length} thing${planned.length === 1 ? '' : 's'}:`,
       ...pairs(planned.map((p) => [p.what, p.detail])),
       ...(only ? (planned.length ? [] : [`${only} has every certificate carrier it needs: there is nothing to set up.`]) : rows.length ? [] : ['No agent was found on this machine: only the root is installed.']),
-      ...wrap(COST), ...wrap(RISK), ...(stale ? wrap(CUT) : [])]).join('\n'))
+      ...wrap(COST), ...wrap(RISK), ...(stale ? wrap(CUT) : [])], { home }).join('\n'))
     if (flags.has('--dry-run')) { if (json) io.out(JSON.stringify({ ...newReceipt('install'), dry_run: true, planned, ...(only && !planned.length ? { notes: [`${only}: nothing to set up`] } : {}) }, null, 2)); return EXIT.ok }
     if (!flags.has('--yes')) {
       if (json || !isInteractive(io)) return needsYes(io, json, planned)
@@ -191,7 +191,7 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
     })
     if (json) io.out(JSON.stringify(receipt, null, 2))
     // a refusal installed nothing: the fingerprint, the risk of an installed root and "Next" would all be untrue, so the stop and its reason are the whole receipt
-    else if (refusal) io.out(fit([`trocar install stopped: ${refusal.message || refusal.reason}`, 'Nothing of yours was changed.']).join('\n'))
+    else if (refusal) io.out(fit([`trocar install stopped: ${refusal.message || refusal.reason}`, 'Nothing of yours was changed.'], { home }).join('\n'))
     else io.out(fit([receipt.ok ? "Installed. trocar's root certificate is trusted by your user." : 'trocar install did not finish. What is missing is below.',
       ...pairs([['Fingerprint (SHA-256)', r.fp256 || 'unknown (no root was made)']]), // the hex is one unbroken word under its label: one block, and in a block of its own, so it does not widen the rows below
       // the login entry install registered, confirmed like every other row (a Windows test machine 2026-10-18: the receipt said nothing about it) — in the carriers' own pairs() call, so its label column lines up with theirs (a Windows test machine 2026-10-19)
@@ -203,7 +203,7 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
       // receipt sample does not carry it); printing it again put the paragraph on the screen twice (a macOS test machine 2026-10-18).
       // `--json` keeps it as `residual_risk`, because a document has no plan above it.
       ...(r.problems.length ? [] : ['Next: trocar on']), // on refuses without the login entry (1.6 §3.3): it is no next step until install has finished
-      `If trocar itself breaks: ${tilde(standalonePath(home), home)}`]).join('\n'))
+      `If trocar itself breaks: ${tilde(standalonePath(home), home)}`], { home }).join('\n'))
     return r.exit
   }
 }
@@ -277,7 +277,7 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
     ...(board ? [`Not done yet: the board's port is pending (${board.reason}). Run again: trocar install`] : []),
     ...problems.map((p) => `Problem: ${p}`),
     ...(problems.length ? [] : sudoHelper ? ['Next: install the capability helper with this line, then run trocar on:', commandLine(sudoHelper)] : ['Next: trocar on']), // on refuses without the login entry (1.6 §3.3) or the helper (§3.8): neither is a next step until it is there
-    `If trocar itself breaks: ${tilde(standalonePath(home), home)}`]).join('\n'))
+    `If trocar itself breaks: ${tilde(standalonePath(home), home)}`], { home }).join('\n'))
   return board || problems.length ? EXIT.incomplete : EXIT.ok
 }
 
