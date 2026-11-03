@@ -26,6 +26,11 @@ function fit(text, indent = '  ') {
   return out
 }
 
+// a text of several lines (refuseOldManifest's refusal) keeps its lines, with HOME as `~` (§1.1⑤): a line indented two spaces is a command to copy,
+// printed whole on its own line (§1.1⑥; `~` only for a POSIX HOME, where the shell expands it), every other line folded by fit
+const tildeWords = (s, home) => s.split(' ').map((w) => offTilde(w, home)).join(' ')
+const textLines = (text, home) => String(text).split('\n').flatMap((l) => (/^ {2}\S/.test(l) ? [home && home.startsWith('/') ? tildeWords(l, home) : l] : fit(tildeWords(l, home))))
+
 // a key the user set to a value of their own while capture was on (D48②, removeTrocarText `prior_left`): their value wins, the old line trocar put out
 // of effect stays so — where it is, and how to have the old value back
 const priorLeftLines = (c) => (c.prior_left || []).flatMap((p) => fit(`    ${p.key} now holds the value you set while capture was on; the old line (line ${p.line}) is still commented out: to put it back, delete the leading ${OFF_PREFIX} on it.`, '    '))
@@ -84,6 +89,7 @@ function daemonLines(r, past, cutNote) {
 export function formatOffReceipt(r, { home = null, tense = r.dry_run ? 'future' : 'past', header = null, extra = [], footer = null, cutNote = ' (--now)' } = {}) {
   const past = tense !== 'future'
   const t = (x) => offTilde(x, home)
+  if (r.error && r.error.code === 'older-install') return textLines(`trocar off: ${r.error.message}`, home).join('\n') // a refusal before anything was read: no off-state lines
   const ids = (r.harnesses || []).map((h) => (typeof h === 'string' ? h : h && h.harness)).filter(Boolean)
   const scope = r.all ? 'all harnesses' : ids.join(', ')
   const lines = [header || (!past
@@ -150,7 +156,7 @@ export function formatOffReceipt(r, { home = null, tense = r.dry_run ? 'future' 
     for (const p of r.pending) lines.push(...fit(`  ${p.harness ? `${p.harness}  ` : ''}${t(p.path)}`, '    '))
   }
   for (const l of r.left || []) lines.push(...fit(`Not undone: ${t(l.path)} (${l.reason || l.result})`))
-  for (const n of r.problems || []) lines.push(...fit(n))
+  for (const n of r.problems || []) lines.push(...(n.includes('\n') ? textLines(n, home) : fit(n)))
   for (const n of r.notes || []) lines.push(...fit(n))
   lines.push(...extra, footer || (past ? 'Certificates stay installed. To remove them: trocar uninstall' : 'Nothing was changed. Run it without --dry-run to do it.'))
   return lines.join('\n')

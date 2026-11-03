@@ -64,8 +64,8 @@ for (const version of [1, 2]) {
   })
 }
 
-test('V69 · 1.6 §1.1⑤⑥ the refusal as text: install, on and uninstall fit 80 columns, each command whole on its own line, HOME as ~', async () => {
-  for (const cmd of ['install', 'on', 'uninstall']) {
+test('V69 · 1.6 §1.1⑤⑥ the refusal as text: install, on, off and uninstall fit 80 columns, each command whole on its own line, HOME as ~', async () => {
+  for (const cmd of ['install', 'on', 'off', 'uninstall']) {
     const home = oldHome(2)
     const io = fakeIo()
     const exit = await runCli(ARGV[cmd], {
