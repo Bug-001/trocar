@@ -1,5 +1,5 @@
-// web/src/ui/poll.ts — the board's polling on TanStack Query (1.5 K-29, 4.4 §live-poll). pollOptions(name) holds the rules every polled
-// query takes: the period of 4.4's table (core/poll.mjs INTERVAL), no timer read while the tab is hidden, one read the moment it is
+// web/src/ui/poll.ts — the board's polling on TanStack Query (1.5 K-29, 4.4 §live-poll). pollOptions(name, {period}) holds the rules every
+// polled query takes: the period of 4.4's table (core/poll.mjs INTERVAL; `period(state)` when a read's period follows its answer), no timer read while the tab is hidden, one read the moment it is
 // visible again, no retry of its own, and after a failure the back-off (core/poll.mjs backoffMs). A query never has two reads in
 // flight: an interval tick while one is out joins it. useStatusQuery() is the C.3 status document every capture screen reads.
 import { useQuery } from '@tanstack/react-query'
@@ -12,7 +12,7 @@ export type PollName = keyof typeof INTERVAL
 
 // the failures since the last success. TanStack Query resets fetchFailureCount at every fetch, so it never passes 1 without its own
 // retry; the run is counted instead as errorUpdateCount less its value at the last success, held per query (lastOk).
-type PollState = { dataUpdatedAt: number, errorUpdatedAt: number, errorUpdateCount: number, fetchFailureCount: number }
+type PollState = { data?: unknown, dataUpdatedAt: number, errorUpdatedAt: number, errorUpdateCount: number, fetchFailureCount: number }
 const lastOk = new WeakMap<object, { at: number, errs: number }>()
 const failuresSinceOk = (q: { state: PollState }) => {
   const s = q.state
@@ -24,11 +24,10 @@ const failuresSinceOk = (q: { state: PollState }) => {
   return s.errorUpdatedAt > s.dataUpdatedAt ? s.errorUpdateCount - m.errs : 0
 }
 
-export function pollOptions(name: PollName) {
-  const base = INTERVAL[name]
+export function pollOptions(name: PollName, { period = () => INTERVAL[name] }: { period?: (state: PollState) => number } = {}) {
   return {
     refetchInterval: (q: { state: PollState }) => {
-      const failures = failuresSinceOk(q)
+      const failures = failuresSinceOk(q), base = period(q.state)
       return failures ? backoffMs(failures, base) : base
     },
     refetchIntervalInBackground: false,

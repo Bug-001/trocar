@@ -3,11 +3,11 @@
 // Periods come from core/poll.mjs (4.4 §live-poll's table), never literals. A fresh QueryClient, fake timers, api.get spied.
 import { afterEach, expect, test, vi } from 'vitest'
 import { act, cleanup, renderHook } from '@testing-library/react'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { api } from '../../legacy/core/api.mjs'
 import { INTERVAL, backoffMs } from '../../legacy/core/poll.mjs'
-import { useStatusQuery } from './poll'
+import { pollOptions, useStatusQuery } from './poll'
 
 afterEach(() => {
   cleanup()
@@ -89,4 +89,22 @@ test('the status read: one per period while visible, none while hidden, one at o
   await tick(1)
   expect(reads()).toBe(failedAt + 5)
   expect(maxInFlight).toBe(1)
+})
+
+test('pollOptions period(state): the next read comes at the period the last answer asks for, and a failure backs off from it', async () => {
+  vi.useFakeTimers()
+  const answers: Array<string | Error> = ['pending', 'done', new Error('boom')]
+  const fetched = vi.fn(async () => { const a = answers.shift() ?? 'done'; if (a instanceof Error) throw a; return a })
+  const period = (s: { data?: unknown }) => (s.data === 'pending' ? INTERVAL.session : INTERVAL.other)
+  const client = new QueryClient()
+  const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>
+  renderHook(() => useQuery({ queryKey: ['p'], queryFn: fetched, ...pollOptions('other', { period }) }), { wrapper })
+  const tick = (ms: number) => act(() => vi.advanceTimersByTimeAsync(ms))
+  await tick(0); expect(fetched).toHaveBeenCalledTimes(1) // 'pending'
+  await tick(INTERVAL.session - 1); expect(fetched).toHaveBeenCalledTimes(1)
+  await tick(1); expect(fetched).toHaveBeenCalledTimes(2) // 'done'
+  await tick(INTERVAL.other - 1); expect(fetched).toHaveBeenCalledTimes(2)
+  await tick(1); expect(fetched).toHaveBeenCalledTimes(3) // fails; the last data is still 'done'
+  await tick(backoffMs(1, INTERVAL.other) - 1); expect(fetched).toHaveBeenCalledTimes(3)
+  await tick(1); expect(fetched).toHaveBeenCalledTimes(4)
 })
