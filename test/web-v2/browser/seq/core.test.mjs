@@ -8,7 +8,7 @@ import { ddmin } from './shrink.mjs'
 import fs from 'node:fs'
 import { generate, keyOf, replayTodo, replayFailure, findOne, DEFAULT_SEEDS, DEFAULT_STEPS } from './runner.mjs'
 import { ACTIONS } from './actions.mjs'
-import { fingerprint } from './invariants.mjs'
+import { fingerprint, TIMING } from './invariants.mjs'
 import { tmpDir } from '../../../helpers/tmp.mjs'
 
 // fails iff the list holds an 'x' somewhere before a 'y'
@@ -59,9 +59,10 @@ test('a fixed regression whose replay meets its own key fails; open and flaky on
   assert.equal(replayTodo({ ...reg, status: 'new' }), false)
 })
 
-test('findOne shrinks a reproduced I-url to its one cause but saves a reproduced I-longtask whole as timing, after one trial', async () => {
+test('findOne shrinks a reproduced I-url to its one cause but saves a reproduced timing one (I-longtask, I-follow, I-mem) whole, after one trial', async () => {
   const steps = ['a', 'b', 'x', 'c', 'd', 'e'].map((a) => ({ a, p: {} }))
-  for (const [id, want] of [['I-url', [steps[2]]], ['I-longtask', steps.slice(0, 5)]]) {
+  for (const id of ['I-longtask', 'I-follow', 'I-mem']) assert.ok(TIMING.has(id), `${id} is judged against a time line`)
+  for (const [id, want] of [['I-url', [steps[2]]], ...[...TIMING].map((id) => [id, steps.slice(0, 5)])]) {
     const v = { id, sig: `${id}:replay`, fp: fingerprint('d'), step: 4, detail: 'd', screenshot: 'x.png' }
     // a trial fails with v's key exactly when its list still holds step 'x'
     const run = async ({ steps: sub }) => (sub.some((s) => s.a === 'x') ? { violation: { sig: v.sig, fp: v.fp } } : {})
@@ -69,8 +70,8 @@ test('findOne shrinks a reproduced I-url to its one cause but saves a reproduced
     const reg = await findOne(v, steps, { seed: 9, viewport: 1280, theme: 'light' }, { run, dir })
     const saved = JSON.parse(fs.readFileSync(reg.file, 'utf8'))
     assert.deepEqual(saved.steps, want, id)
-    assert.equal(saved.status, id === 'I-longtask' ? 'timing' : 'new')
-    if (id === 'I-longtask') assert.equal(reg.trials, 1)
+    assert.equal(saved.status, TIMING.has(id) ? 'timing' : 'new')
+    if (TIMING.has(id)) assert.equal(reg.trials, 1)
     assert.equal(keyOf(saved), keyOf(v))
   }
 })

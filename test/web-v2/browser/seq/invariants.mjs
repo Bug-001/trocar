@@ -13,8 +13,9 @@ export const PENDING = new Map([
   ['I-memcap', 'the page heap stays under memCapBytes (80 MB)'],
 ])
 
-/** Invariants judged against a time line: a run that meets one is reproduced once and saved whole, never shrunk (runner findOne). */
-export const TIMING = new Set(['I-longtask'])
+/** Invariants judged against a time line (a task's length, the follow deadline, the heap's size), so a noisy box can meet one: a run
+ *  that meets one is reproduced once and saved whole, never shrunk (runner findOne). */
+export const TIMING = new Set(['I-longtask', 'I-follow', 'I-mem'])
 
 export const LIMITS = Object.freeze({
   consoleGraceMs: 2000, // an armed fault window's console.error tail (invariant I-console)
