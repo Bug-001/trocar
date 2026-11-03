@@ -177,8 +177,15 @@ export function failureWord(where, code, harness = '', cause = null) {
 /** One line out of many: newlines and runs of whitespace become one space (a launchctl stderr with line breaks must not break the digest's alignment). */
 export const squashed = (s) => String(s ?? '').replace(/\s+/g, ' ').trim()
 
-/** The whole reason, or its head (cut with ASCII dots: 1.6 §1.1 ⑦, the old Windows console prints no other symbol): the digest shows ~100 columns of it — the whole wall is one `--failures` away (R11: relocated, not dropped). */
-export const briefText = (s, max = 100) => { const t = squashed(s); return t.length > max ? `${t.slice(0, max - 3)}...` : t }
+/** The whole reason, or its head cut at the last word boundary that fits (with ASCII dots: 1.6 §1.1 ⑦, the old Windows console prints no other
+ *  symbol; a single word longer than the room is cut where the room ends): the digest shows ~100 columns of it — the whole wall is one `--failures`
+ *  away (R11: relocated, not dropped). */
+export const briefText = (s, max = 100) => {
+  const t = squashed(s)
+  if (t.length <= max) return t
+  const at = t.slice(0, max - 2).lastIndexOf(' ') // a word that ends exactly at the room still fits
+  return `${(at > 0 ? t.slice(0, at) : t.slice(0, max - 3)).replace(/[\s,;:]+$/, '')}...`
+}
 
 /** One failure group (C.3 `failures.groups[]`: { where, code, reason, harness? }) in one sentence, for `status --failures`, the board's capture log and
  *  the overview alike: the catalog's sentence when it knows the code — the code and the raw reason are then the technical details' (the CLI prints the

@@ -134,14 +134,15 @@ export const portOf = (url) => { const m = /^(?:\w+:\/\/)?(?:[^@/]*@)?(?:127\.0\
 // ── `--failures` (§3.5: one line per kind of problem, then Expected) ──────────────────────────────────────────────
 /** One group's line: its harness when the group names one (D38: for whom), the shared sentence, then (when the sentence stands for a known code) the
  *  record's own reason — the CLI has no technical details to fold it into. §3.5 · §1.1⑥: a backquoted span of a reason is a command to copy (the
- *  helper's `sudo … setup-helper`, §3.2): the line briefs the prose before it and ends with the pointer `the line below`, and each command follows whole on
- *  its own line; a reason with no span is briefed as it is. */
+ *  helper's `sudo … setup-helper`, §3.2): the line briefs the whole reason with each span said as the pointer (`the line below`, `the lines below`
+ *  for two or more), the pointer put back at the end when the cut took it, and each command follows whole on its own line; a reason with no span is
+ *  briefed as it is. */
 const COMMAND = /`([^`]+)`/g
-const POINTER = 'the line below'
 const commandsOf = (reason) => [...String(reason || '').matchAll(COMMAND)].map((m) => squashed(m[1]))
 const reasonOf = (reason) => {
-  const s = String(reason || ''), at = s.search(COMMAND), whole = squashed(s.replace(COMMAND, POINTER))
-  return at < 0 || whole.length <= 100 ? whole : `${briefText(s.slice(0, at), 100 - POINTER.length - 1)} ${POINTER}`
+  const n = commandsOf(reason).length, pointer = n > 1 ? 'the lines below' : 'the line below'
+  const whole = squashed(String(reason || '').replace(COMMAND, pointer)), head = briefText(whole)
+  return !n || head.slice(0, -3).includes(pointer) || head === whole ? head : `${briefText(whole, 100 - pointer.length - 1)} ${pointer}`
 }
 const failureLine = (g0) => { const g = { ...g0, reason: reasonOf(g0.reason) }; const r = failureWord(g.where, g.code, g.harness || '') && briefText(g.reason); const s = r ? `${failureBrief(g)}: ${r}` : failureBrief(g); return g.harness ? `${g.harness}: ${s}` : s } // no nested brackets (§1.1②): a reason has its own
 

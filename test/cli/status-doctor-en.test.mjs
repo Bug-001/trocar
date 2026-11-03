@@ -154,6 +154,23 @@ test('§3.5 · §1.1⑥ `--failures`: a backquoted command in a reason prints wh
   }
 })
 
+test('§3.5 `--failures`: a reason that starts with its command keeps the words after it, and two commands are pointed at in the plural, each whole on its own line', () => {
+  const health = { collector: { failures: [], expected: {} }, read: { errors: [] }, summary: { state: 'failing' } }
+  const run = (reason) => failuresBlock({ groups: [{ level: 'problem', where: 'helper', code: 'helper-down', count: 1, first_ts: '2026-10-18T12:00:00Z', last_ts: '2026-10-18T12:14:00Z', reason }] }, health, { now: NOW })
+  const prose = (lines, cmds) => lines.filter((l) => !cmds.includes(l.trim())).map((l) => l.trim()).join(' ')
+  for (let len = 40; len <= 130; len += 15) {
+    const cmd = `sudo /h/${'x'.repeat(len - 40)}/node /h/trocar.mjs setup-helper`, rm = `${cmd} --remove`
+    const first = run(`\`${cmd}\` was never run on this machine, so the capability helper is missing and nothing of any agent is captured until it is`)
+    clean(first, `status --failures (span first, ${len})`, [cmd])
+    assert.equal(first.filter((l) => l.trim() === cmd).length, 1, first.join('\n'))
+    assert.ok(/\bthe line below was never run\b/.test(prose(first, [cmd])), `the words after a leading command stay (R11)\n${first.join('\n')}`)
+    const two = run(`capability helper not found at /usr/local/libexec/trocar/redirector; remove the old copy with \`${rm}\`, then install it once per machine with \`${cmd}\``)
+    clean(two, `status --failures (two spans, ${len})`, [cmd, rm])
+    for (const c of [rm, cmd]) assert.equal(two.filter((l) => l.trim() === c).length, 1, `${c} whole, once\n${two.join('\n')}`)
+    assert.ok(prose(two, [cmd, rm]).includes('the lines below') && !prose(two, [cmd, rm]).includes('the line below'), `two commands, the plural pointer\n${two.join('\n')}`)
+  }
+})
+
 test('§3.5 exit codes: 0 every harness that is on is captured, 1 one of them is not, 3 that cannot be judged — a stale health line never decides it', () => {
   const f = (harnesses, over = {}) => ({ harnesses, install: { state: 'complete' }, cert: { root: { code: null }, key: { state: 'present' } }, ...over })
   const on = (captured, desired = 'on') => ({ desired, judged: { captured, rows: [] } })
