@@ -3,6 +3,7 @@
 import test, { mock } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { api, scoped } from '../../src/web/v2/core/api.mjs'
@@ -272,7 +273,7 @@ test('K-30: after a 403 no request is sent, every read is {ok:false, status:403}
 })
 
 // the real face over a real worker on the empty test machine of this host's own platform (real-face.mjs)
-test('real face: status and doctor answer on the empty machine, health not-installed, and sessions lists the demo session', async () => {
+test('real face: status and doctor answer on the empty machine, health not-installed, and sessions lists the demo session; its worker\'s HOME / USERPROFILE are under the run\'s temp directory', async () => {
   const b = await serveBoard(boardHome())
   try {
     const st = await b.get('status')
@@ -281,5 +282,9 @@ test('real face: status and doctor answer on the empty machine, health not-insta
     assert.equal((await b.get('doctor')).status, 200)
     const ss = await b.get('sessions')
     assert.equal(ss.status, 200); assert.ok(ss.doc.sessions.length >= 1)
+    const under = (p) => { if (typeof p !== 'string') return false; const rel = path.relative(fs.realpathSync(os.tmpdir()), fs.realpathSync(p)); return !rel.startsWith('..') && !path.isAbsolute(rel) }
+    const envs = b.workerEnvs()
+    assert.ok(envs.length >= 1)
+    for (const e of envs) assert.ok(under(e.HOME) && under(e.USERPROFILE), `the face's worker never runs in the operator's own home: ${e.HOME} ${e.USERPROFILE}`)
   } finally { await b.close() }
 })

@@ -9,7 +9,7 @@ import { createServer } from '../../src/server.mjs'
 import { createQueryService } from '../../src/query/service.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { depsFile } from '../helpers/board-world.mjs'
-import { workerFork } from '../helpers/worker-fork.mjs'
+import { workerForkIn } from '../helpers/worker-fork.mjs'
 import { writeSegment } from '../query/raw-home.mjs'
 import { generate } from '../../scripts/gen-dataset.mjs'
 import { TOKEN, request, withToken } from '../server/face.mjs'
@@ -27,11 +27,13 @@ export function boardHome({ bytes = 0 } = {}) {
 }
 
 /** The face on an ephemeral port (`idleMs`: the query worker's idle exit, the service's default when absent). get(name, params) → {status, doc}; close() stops the server and the worker.
- *  workers() → the pids of the query workers it forked that are still alive; killWorker(sig) signals them, → how many. */
+ *  workers() → the pids of the query workers it forked that are still alive; killWorker(sig) signals them, → how many. workerEnvs() → the
+ *  environment each worker it forked was started with: HOME / USERPROFILE are the temp userHome, never the operator's own. */
 export async function serveBoard({ userHome, home, idleMs }) {
-  const deps = depsFile({ home: userHome, env: { HOME: userHome, USERPROFILE: userHome } }, process.platform)
-  const kids = []
-  const svc = createQueryService({ home, idleMs, fork: (h) => { const c = workerFork(h, deps); kids.push(c); return c } })
+  const env = { HOME: userHome, USERPROFILE: userHome }
+  const deps = depsFile({ home: userHome, env }, process.platform)
+  const kids = [], fork = workerForkIn(env)
+  const svc = createQueryService({ home, idleMs, fork: (h) => { const c = fork(h, deps); kids.push(c); return c } })
   const alive = () => kids.filter((c) => c.exitCode === null && c.signalCode === null)
   const { server } = createServer({ home, token: TOKEN, query: svc })
   server.listen(0, '127.0.0.1'); await once(server, 'listening')
@@ -44,5 +46,6 @@ export async function serveBoard({ userHome, home, idleMs }) {
   }
   const workers = () => alive().map((c) => c.pid)
   const killWorker = (sig = 'SIGKILL') => alive().filter((c) => c.kill(sig)).length
-  return { port, base: `http://127.0.0.1:${port}`, token: TOKEN, get, workers, killWorker, close: async () => { svc.stop(); server.close(); await once(server, 'close') } }
+  const workerEnvs = () => kids.map((c) => c.forkEnv)
+  return { port, base: `http://127.0.0.1:${port}`, token: TOKEN, get, workers, killWorker, workerEnvs, close: async () => { svc.stop(); server.close(); await once(server, 'close') } }
 }
