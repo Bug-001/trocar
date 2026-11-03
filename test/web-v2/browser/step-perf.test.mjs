@@ -3,7 +3,8 @@
 // D64⑥: acceptance numbers come from the test machines, not this one). Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard, stats, timed } from './harness.mjs'
+import { probe, withBoard, stats, timed, timerRead } from './harness.mjs'
+import { INTERVAL } from '../../../src/web/v2/core/poll.mjs'
 import { BOARD_LINES } from '../perf-lines.mjs'
 
 const gate = await probe()
@@ -26,33 +27,43 @@ async function openSession(page, id) {
   await page.waitForLoadState('networkidle')
 }
 
-// the /api requests that began at or after t0, as paths
-const since = (b, t0) => b.requests.filter((r) => r.start >= t0).map((r) => r.url)
+// one step change by a click on the step bar or by ←/→, bouncing between the first and the last step; null when there is one step
+async function stepOnce(page, by, bounce) {
+  const [n, m] = await stepNo(page)
+  if (m === 1) return null
+  if (n === 1) bounce.dir = 1
+  if (n === m) bounce.dir = -1
+  const prev = await page.textContent('#stepbar .sb-no')
+  const act = by === 'click'
+    ? () => page.click(`#stepbar .sbbtn[data-step="${bounce.dir < 0 ? 'prev' : 'next'}"]`)
+    : () => page.keyboard.press(bounce.dir < 0 ? 'ArrowLeft' : 'ArrowRight')
+  return timed(page, 'step', prev, act)
+}
+const isHead = (r) => r.url.startsWith('/api/d/head?')
 
-test('D64②: 20 step changes by click and 20 by ←/→ send no request', { skip }, async () => {
+// 1.4 §D64: a step change sends no request; the open session's live-poll round (4.4 §live-poll) is the timer's, not a step change's. Where
+// the timer stands when the steps begin depends on how long the opening round took (a next round 1.5 s or 3x that duration after it), so
+// the steps go on until a round has begun among them and four more follow it: every machine checks the same thing
+test('D64②: 20 step changes by click and 20 by ←/→ send no request; a live-poll round among them is the timer\'s', { skip }, async () => {
   const b = await withBoard({ bytes: BYTES, chromium: gate.chromium })
   try {
     await openSession(b.page, null)
-    const t0 = Date.now()
+    const t0 = Date.now(), bounce = { dir: -1 }
     for (const [kind, by] of [['stepClick', 'click'], ['stepKey', 'key']]) {
-      let dir = -1
-      for (let i = 0; i < 20; i++) {
-        const [n, m] = await stepNo(b.page)
-        if (n === 1) dir = 1
-        if (n === m) dir = -1
-        if (m === 1) break
-        const prev = await b.page.textContent('#stepbar .sb-no')
-        const act = by === 'click'
-          ? () => b.page.click(`#stepbar .sbbtn[data-step="${dir < 0 ? 'prev' : 'next'}"]`)
-          : () => b.page.keyboard.press(dir < 0 ? 'ArrowLeft' : 'ArrowRight')
-        samples[kind].push(await timed(b.page, 'step', prev, act))
-      }
+      for (let i = 0; i < 20; i++) { const ms = await stepOnce(b.page, by, bounce); if (ms == null) break; samples[kind].push(ms) }
     }
-    // the desk's own 1.5 s timer re-reads the session list while it is open; that is not a step change, everything else is
-    const during = since(b, t0).filter((u) => !/^\/api\/(sessions|pricing)\b/.test(u))
-    console.log(`# requests during ${samples.stepClick.length + samples.stepKey.length} step changes (besides the timer's list): ${during.length}`)
+    const round = () => b.requests.some((r) => r.start >= t0 && isHead(r))
+    for (const until = Date.now() + 20 * INTERVAL.session; !round() && Date.now() < until;) await stepOnce(b.page, 'key', bounce)
+    for (let i = 0; i < 4; i++) await stepOnce(b.page, 'click', bounce)
+    await b.page.waitForLoadState('networkidle')
+    const during = b.requests.filter((r) => r.start >= t0)
+    console.log(`# requests while stepping: ${during.length}, of them the timers': ${during.filter(timerRead).length}`)
     assert.ok(samples.stepClick.length > 0 && samples.stepKey.length > 0, 'the session has more than one step')
-    assert.deepEqual(during, [])
+    assert.ok(during.some(isHead), 'a live-poll round began among the step changes')
+    // the heads are the timer's rounds: each at least the poll period after the one before it (the opening round's included)
+    const heads = b.requests.filter(isHead).map((r) => r.start)
+    for (let i = 1; i < heads.length; i++) assert.ok(heads[i] - heads[i - 1] >= INTERVAL.session - 50, `head ${i} came ${Math.round(heads[i] - heads[i - 1])} ms after the one before it`)
+    assert.deepEqual(during.filter((r) => !timerRead(r)).map((r) => r.url), [])
     assert.deepEqual(b.errors, [])
   } finally { await b.stop() }
 })

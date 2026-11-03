@@ -22,6 +22,10 @@ export async function probe({ importer = () => import('playwright-core'), env = 
   return { ok: true, chromium }
 }
 
+/** A logged request a timer sent by itself (4.4 §live-poll), not one a reader's action caused: the session list, status and price reads,
+ *  and the open session's round (its head, and a Range read of each open tail). */
+export const timerRead = (r) => /^\/api\/(sessions|status|pricing)\b/.test(r.url) || r.url.startsWith('/api/d/head?') || (r.range != null && /^\/api\/d\/open\.\w+\?/.test(r.url))
+
 /** The board on a fresh temp HOME in a fresh Chrome. `token`: true = the face's token, a string = that token, false = no fragment.
  *  `missing` lists every static file answered ≥ 400 (`<status> <path>`).
  *  `idleMs`: the face's query worker idles out after that many ms (the service's default when absent).
