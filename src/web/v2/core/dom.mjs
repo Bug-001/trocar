@@ -93,6 +93,19 @@ function wireKeys() {
   }, true)
 }
 
+// 1.2 §键盘「层随屏走」: every layer core opens belongs to the screen mounted when it opened. main.mjs names that screen's signal here
+// (null between screens); screenBound(close) runs close() once that signal aborts — at once when it already has — and → the off() that
+// drops the listener when the layer closes first. The one path: openModal, confirmDialog and installUi's popovers all take it.
+let screenSignal = null
+export function setScreenSignal(signal) { screenSignal = signal || null }
+export function screenBound(close) {
+  const s = screenSignal
+  if (!s) return () => {}
+  if (s.aborted) { close(); return () => {} }
+  s.addEventListener('abort', close, { once: true })
+  return () => s.removeEventListener('abort', close)
+}
+
 export function openModal({ title = '', bodyHtml = '', actions, osStyle } = {}) {
   wireKeys()
   const acts = actions && actions.length ? actions : [{ label: 'Close', value: null }]
@@ -108,12 +121,13 @@ export function openModal({ title = '', bodyHtml = '', actions, osStyle } = {}) 
   document.body.appendChild(back)
   const prevFocus = document.activeElement
   return new Promise((resolve) => {
-    let done = false
+    let done = false, off = null
     const entry = {
       dialog: back.firstElementChild,
       close(value) {
         if (done) return
         done = true
+        if (off) off()
         const at = modalStack.indexOf(entry)
         if (at >= 0) modalStack.splice(at, 1)
         back.remove()
@@ -122,6 +136,7 @@ export function openModal({ title = '', bodyHtml = '', actions, osStyle } = {}) 
       },
     }
     modalStack.push(entry)
+    off = screenBound(() => entry.close(null))
     back.addEventListener('click', (e) => {
       if (e.target === back) return entry.close(null)
       const b = e.target.closest && e.target.closest('.mbtn')
