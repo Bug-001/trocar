@@ -45,14 +45,19 @@ function tagOf(s: DeskState, m: any) {
   return W.axisNo(a.kind === 'main', (a.no ? a.no(b.i) : b.i) + 1)
 }
 
+// a named step on its way to a desk that drew (a chapter jump, Home): its chapter's bars come from the head until it lands
+// (replay.mjs namedRows; landing clears initialStep)
+const named = (s: DeskState) => s.initialStep != null && s.playRid != null && !!s.desk?.head?.tier && !!s.desk.head.steps
+
 function useScope(desk: DeskView) {
   const key = useSyncExternalStore(desk.subscribe, () => READS.map((a) => desk.version(a)).join('.'))
   const ov = useSyncExternalStore(desk.subscribe, () => BACKDROP.map((a) => desk.version(a)).join('.'))
   const K = desk.capacity()
   const m = useMemo(() => {
     void key // the paint the model is computed for
-    const m: any = scopeModel(desk.s, K) // the model's JSDoc shapes; the fields read below are its own
-    return m && { ...m, tag: tagOf(desk.s, m) }
+    const st = named(desk.s) ? { ...desk.s, playRid: null } : desk.s
+    const m: any = scopeModel(st, K) // the model's JSDoc shapes; the fields read below are its own
+    return m && { ...m, tag: tagOf(st, m) }
   }, [desk, key, K])
   return { m, ov }
 }
