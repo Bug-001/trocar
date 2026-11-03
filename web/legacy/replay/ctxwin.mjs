@@ -279,7 +279,8 @@ const yieldNow = () => (globalThis.scheduler && typeof globalThis.scheduler.yiel
   : typeof MessageChannel === 'function' ? new Promise((r) => { const c = new MessageChannel(); c.port1.onmessage = () => { c.port1.close(); r() }; c.port2.postMessage(0) })
     : new Promise((r) => setTimeout(r, 0)))
 // inside open cards only the groups within one window height above and below the visible box are rows (2.3 §窗口按 bid 打补丁 ·
-// rule 4): one group per task, a placeholder near it drawn, then a drawn group far from it put back to its placeholder — never one
+// rule 4): one group per task, a placeholder near it drawn, then a drawn group beyond two window heights put back to its
+// placeholder (the gap: a placeholder's height and its drawn rows' differ a little, one edge for both would loop) — never one
 // holding an open row, the change line, the focus or the selection. A newer repaint (el.__gen) ends this run; scrolling starts one.
 function settle(el, s) {
   if (typeof document === 'undefined' || !el.getBoundingClientRect || el.__settling === el.__gen) return
@@ -300,9 +301,9 @@ function nextJob(el, s) {
   for (const g of el.querySelectorAll('.cwgroup')) {
     const busy = g.hasAttribute('aria-busy'), a = busy ? g : g.firstElementChild, b = busy ? g : g.lastElementChild
     if (!a) continue
-    const near = b.getBoundingClientRect().bottom >= box.top - h && a.getBoundingClientRect().top <= box.bottom + h
-    if (busy && near) return [g.__k, true]
-    if (!busy && !near && !drop && !g.querySelector('.cblk:not(.collapsed), #cachebrk') && !g.contains(document.activeElement) && !(sel && sel.anchorNode && g.contains(sel.anchorNode))) drop = [g.__k, false]
+    const within = (n) => b.getBoundingClientRect().bottom >= box.top - n * h && a.getBoundingClientRect().top <= box.bottom + n * h
+    if (busy && within(1)) return [g.__k, true]
+    if (!busy && !drop && !within(2) && !g.querySelector('.cblk:not(.collapsed), #cachebrk') && !g.contains(document.activeElement) && !(sel && sel.anchorNode && g.contains(sel.anchorNode))) drop = [g.__k, false]
   }
   return drop
 }
