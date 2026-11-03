@@ -124,6 +124,18 @@ test('V3: each class has a named radiogroup checked at its keep; Space changes; 
   await waitFor(() => expect(document.activeElement).toBe(info))
 })
 
+test('V3: a class ⓘ opens on focus and is not modal: outside stays live and takes the focus (1.2 §弹出层)', async () => {
+  await mount()
+  const info = within(row('telemetry')).getByRole('button', { name: CLASS_NAME.telemetry })
+  act(() => info.focus())
+  await waitFor(() => expect(document.querySelector('[role="dialog"]')).not.toBeNull())
+  const t = radio('files', 'full')
+  const free = (el: Element | null): boolean => !el || (!el.hasAttribute('inert') && el.getAttribute('aria-hidden') !== 'true' && free(el.parentElement))
+  expect(free(t), 'outside stays live').toBe(true)
+  act(() => t.focus())
+  expect(document.activeElement, 'outside takes focus').toBe(t)
+})
+
 test('V4: a change plans then confirms, stays busy without disabling, ignores a second press, shows the server\'s level only after the re-read', async () => {
   await mount()
   let release!: (a: Answer) => void
