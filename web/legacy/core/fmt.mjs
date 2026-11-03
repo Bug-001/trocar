@@ -42,6 +42,9 @@ export function fmtUp(ms) {
   const m = Math.max(1, Math.round(ms / 60e3))
   return m < 60 ? `${m} min` : m < 1440 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${Math.floor(m / 1440)} d ${Math.floor((m % 1440) / 60)} h`
 }
+// the weekday's name ("Saturday"), for the library's day heads (1.8 §组名); '' for an empty or unparseable value
+let wdFmt = null
+export const fmtWeekday = (ts) => { const d = dateOf(ts); return d ? (wdFmt ||= new Intl.DateTimeFormat('en-US', { weekday: 'long' })).format(d) : '' }
 // a day, said by its distance from today: 'Today', 'Yesterday', '3 d ago' within the week, else its date; '—' when empty
 export function fmtDay(ts, now = Date.now()) {
   const d = dateOf(ts)

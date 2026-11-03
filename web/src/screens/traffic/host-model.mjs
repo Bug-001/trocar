@@ -1,7 +1,7 @@
 // screens/traffic/host-model.mjs — the host page (1.10 §host 页) as data: what one agent sent to one host, from `calls {harness, host}`
 // paged by `next` (newest first, keyed by ref), the breadcrumb, and each list row's cells and marks. Everything the store did not
 // record reads 未记录, never 0. Framework-free (D75②): no DOM, no timers; HostScreen.tsx only renders what this returns.
-import { bytes, fmtTime, fmtStamp } from '../../../legacy/core/fmt.mjs'
+import { bytes, fmtWhen } from '../../../legacy/core/fmt.mjs'
 import { harnessKey, harnessName } from '../../../legacy/core/chips.mjs'
 import { formatHash } from '../../../legacy/core/router.mjs'
 import * as W from '../../../legacy/labels/traffic.mjs'
@@ -49,8 +49,7 @@ export function crumbsOf({ harness, host, window, cls = null }) {
 // the time cell: the clock when it is today, date and clock otherwise; the ISO time on hover
 function whenOf(ts, now) {
   if (!ts) return { text: W.UNKNOWN_DAY, iso: null }
-  const d = new Date(ts)
-  return { text: isNaN(d.getTime()) ? String(ts) : (d.toDateString() === new Date(now).toDateString() ? fmtTime(d) : fmtStamp(d)), iso: String(ts) }
+  return { text: fmtWhen(ts, now), iso: String(ts) }
 }
 
 // the retention mark: 只记日志 links to its storage cell; 只存了长度 carries the legacy sentence; full has none

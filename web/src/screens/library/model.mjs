@@ -3,7 +3,7 @@
 // Framework-free (D75②): no DOM, no timers, no HTML; LibraryScreen.tsx only renders what this returns. Agent names come from
 // core/chips.mjs only (invariant 3); a field the server does not carry is detected by key presence and its element stays out —
 // never a guess, never 0 (invariant 4). The shared read (loadSessions · freshSessions · sessionKey) stays in legacy/library/logic.mjs.
-import { relTime, fmtStamp } from '../../../legacy/core/fmt.mjs'
+import { relTime, fmtStamp, fmtDate, fmtWeekday } from '../../../legacy/core/fmt.mjs'
 import { HARNESS_ORDER, harnessKey, harnessName, harnessRaw } from '../../../legacy/core/chips.mjs'
 import { formatHash } from '../../../legacy/core/router.mjs'
 import { captureVerdict, capHealthPatch } from '../../../legacy/core/capture-verdict.mjs'
@@ -91,15 +91,12 @@ export function groupOf(s) {
 }
 // a day head: today · yesterday as words, a weekday within the last six days, else the date itself (the year only when it is not
 // this year); `date` rides beside the word unless the word already is the date. No counts (1.8 §表头与分组).
-const MD = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' })
-const YMD = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-const WEEKDAY = new Intl.DateTimeFormat('en-US', { weekday: 'long' })
 export function dayHead(key, now) {
   if (key === 'none') return { word: W.GROUPS.none, date: null }
   const [y, m, d] = key.split('-').map(Number), day = new Date(y, m - 1, d), n = new Date(now)
   const back = Math.round((new Date(n.getFullYear(), n.getMonth(), n.getDate()).getTime() - day.getTime()) / 86400e3) // round: DST days
-  const date = (y === n.getFullYear() ? MD : YMD).format(day)
-  const word = back === 0 ? W.GROUPS.today : back === 1 ? W.GROUPS.yesterday : back > 1 && back < 7 ? WEEKDAY.format(day) : null
+  const date = fmtDate(day, now)
+  const word = back === 0 ? W.GROUPS.today : back === 1 ? W.GROUPS.yesterday : back > 1 && back < 7 ? fmtWeekday(day) : null
   return word ? { word, date } : { word: date, date: null }
 }
 // the virtual list's entries, each with a stable key: rows, with a group entry before each new group only in the 最近 order

@@ -10,6 +10,7 @@ import { SCREEN_NAME } from '../../../legacy/labels/shell.mjs'
 import * as W from '../../../legacy/labels/settings.mjs'
 import { priceRows as priceRowsJs, unpricedModels as unpricedJs, templateText } from '../../../legacy/settings/prices.mjs'
 import { PageHead } from '../../ui/PageHead'
+import { fmtWhen } from '../../../legacy/core/fmt.mjs'
 import type { ScreenProps } from '../../ScreenOutlet'
 import { TechDetails, type TechValue } from '../../ui/TechDetails'
 import { CopyButton } from '../../ui/CopyButton'
@@ -33,12 +34,6 @@ async function read(name: string, signal: AbortSignal): Promise<Answer> {
   try { return { ...(await api.get(name, null, { signal }) as Answer), at: api.now() } } catch (e) { return { ok: false, error: String((e as Error)?.message ?? e) } }
 }
 
-// an S5 as_of is an ISO string; the caption shows HH:MM:SS like every 「截至」 on the board
-function fmtAsOf(iso: string) {
-  const d = new Date(iso)
-  return isNaN(d.getTime()) ? String(iso) : d.toTimeString().slice(0, 8)
-}
-
 function PriceTable({ rows }: { rows: PriceRow[] }) {
   return (
     <div className="hscroll"><table className="ptable">
@@ -55,7 +50,7 @@ function Unpriced({ overview, rows, source }: { overview: Overview, rows: PriceR
   const un = unpricedModels(overview.usage!.rows as unknown[], table)
   return (
     <div className="scard"><h2>{W.CARD_UNPRICED}</h2>
-      {overview.as_of ? <p className="cap">{`${W.UNPRICED_AS_OF} ${fmtAsOf(overview.as_of)}`}</p> : null}
+      {overview.as_of ? <p className="cap">{`${W.UNPRICED_AS_OF} ${fmtWhen(overview.as_of)}`}</p> : null}
       {un.length ? <>
         {un.map((m) => {
           const tmpl = m.model == null ? null : templateText(m.model, source)
