@@ -20,7 +20,7 @@ export type Retry = (group: 'health' | 'sessions' | 'slow') => void
 export type StatsModel = { kind: 'reading' } | { kind: 'failed', fail: Fail } | {
   kind: 'shown', other: boolean, asOf: string, scope: string, missing: string | null, coverage: string | null, priceFail: Fail | null,
   empty: boolean, sessions: Link, calls: string, cost: Tip, unpriced: Link | null, hit: Tip, disk: Link | null,
-  agents: Array<{ id: string, chip: string | null, net: boolean, href: string | null, sessions: unknown, calls: unknown, cost: Tip, hit: Tip, last: string }>,
+  agents: Array<{ id: string, chip: string | null, trafficOnly: boolean, href: string | null, sessions: unknown, calls: unknown, cost: Tip, hit: Tip, last: string }>,
 }
 export type RecentModel = { kind: 'reading' } | { kind: 'none' } | { kind: 'failed', fail: Fail } | {
   kind: 'shown', rows: Array<{ id: string, harness: string, inferred: boolean, title: string, titleTip: string, calls: Tip, when: string, href: string }>,
@@ -99,13 +99,13 @@ export function StatsCard({ m, onRetry }: { m: StatsModel, onRetry: Retry }) {
       {m.agents.map((g) => {
         const inner = <>
           <span className="ovag">{g.chip == null ? <span className="ovsubj">{UNIDENTIFIED}</span> : <Chip id={g.chip} />}</span>
-          {g.net ? <span className="ovnet">{W.NET_ONLY}</span> : <>
+          {g.trafficOnly ? <span className="ovnet">{W.NET_ONLY}</span> : <>
             <span className="n">{String(g.sessions)}</span><span className="n">{String(g.calls)}</span>
             <span className="n" title={tipOf(g.cost.tip)}>{g.cost.text}</span><span className="n" title={tipOf(g.hit.tip)}>{g.hit.text}</span>
             <span className="n">{g.last}</span>
           </>}
         </>
-        const cls = g.net ? 'ovtr nocall' : 'ovtr'
+        const cls = g.trafficOnly ? 'ovtr nocall' : 'ovtr'
         return g.href ? <a className={cls} role="row" href={g.href} key={g.id}>{inner}</a> : <div className={cls} role="row" key={g.id}>{inner}</div>
       })}
     </div></div> : null}

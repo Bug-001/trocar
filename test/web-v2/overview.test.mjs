@@ -337,7 +337,7 @@ test('an agent row with no session and no model call links to its traffic, not t
   for (const w of ['24h', '7d', 'all']) {
     const agents = statsCard({ ...pricedState(doc), w }, NOW).agents
     const by = (h) => agents.find((a) => a.chip === h)
-    assert.equal(by(B).net, true); assert.equal(by(B).href, `#/traffic?h=${encodeURIComponent(B)}&window=${w}`)
+    assert.equal(by(B).trafficOnly, true); assert.equal(by(B).href, `#/traffic?h=${encodeURIComponent(B)}&window=${w}`)
     assert.equal(by(A).href, `#/sessions?h=${encodeURIComponent(A)}&window=${w}`)
   }
 })

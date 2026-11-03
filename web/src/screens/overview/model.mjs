@@ -305,10 +305,10 @@ export function statsCard(s, now) {
   // the per-agent rows: the whole row is one link (1.7 §统计 · 行链接), the unidentified row none. An agent with no session and no
   // model call in the window only made network requests: one dim row to its traffic, not a row of 0s
   const agents = m.byAgent.map((g) => {
-    const net = num(g.sessions) === 0 && num(g.calls) === 0
+    const trafficOnly = num(g.sessions) === 0 && num(g.calls) === 0
     const q = g.harness == null ? null : `?h=${encodeURIComponent(g.harness)}&window=${s.w}`
     return {
-      id: g.harness ?? '*unidentified', chip: g.harness, net, href: q && (net ? `#/traffic${q}` : `#/sessions${q}`),
+      id: g.harness ?? '*unidentified', chip: g.harness, trafficOnly, href: q && (trafficOnly ? `#/traffic${q}` : `#/sessions${q}`),
       sessions: g.sessions ?? '—', calls: g.calls ?? '—', cost: costOfModel(g, priceFail), hit: hitOf(g), last: when(g.last, now),
     }
   })
