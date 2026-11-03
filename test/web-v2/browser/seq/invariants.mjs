@@ -5,6 +5,7 @@
 // Exports only; nothing runs at import.
 import { snap as probeSnap } from './probe.mjs'
 import { WRITE_GAP_MS } from '../../../../src/web/v2/core/router.mjs'
+import { BOARD_LINES } from '../../perf-lines.mjs'
 
 export const IDS = Object.freeze(['I-pageerror', 'I-console', 'I-blank', 'I-keep', 'I-stack', 'I-hscroll', 'I-rate', 'I-write', 'I-leak',
   'I-mem', 'I-heap', 'I-follow', 'I-hold', 'I-url', 'I-cjk', 'I-longtask', 'I-loadstep', 'I-chapter', 'I-pack', 'I-memcap', 'I-select'])
@@ -34,7 +35,7 @@ export const LIMITS = Object.freeze({
   memRatio: 1.5, memSlackBytes: 10 * 2 ** 20, // invariants I-mem (elements) and I-heap
   memCapBytes: 80 * 2 ** 20, // pending: no spec line sets this cap yet
   followMs: 15000, // spec/01-trocar-rfc/1.4-central-board.md:71-73 · 4.4:51
-  longtaskMs: 50, // D64 ②: no task of the page's own over 50 ms after a step starts, unless that step made the document (2.3 #27)
+  longtaskMs: 50, // D64 ②: no task of the page's own over 50 ms after a step inside the open session starts (2.3 #27)
   loaderMax: 3, // spec/01-trocar-rfc/2.3-context-window.md:186 加载器: at most 3 of the desk's loader reads on their way at once
   chapterSettleMs: 1000, // the chapter row and the step bar are drawn by one paint; a check that lands between two frames looks again
 })
@@ -287,10 +288,14 @@ export async function check(ctx) {
   const pk = packFaults(s.fetchLog)
   if (pk.length) bad('I-pack', pk.slice(0, 3).join(' | '))
 
-  // I-longtask (2.3 #27): a task that starts after the step starts; a step that made this document is its boot, none of it judged
+  // I-longtask (2.3 #27): a task that starts after the step starts; a step that made this document is its boot, none of it judged.
+  // 50 ms holds a step that starts and ends in the same session on the desk (D64 ②); a step that opens or switches a session, changes
+  // screen, or presses a button on another screen is held to 0.5 s (D64 ①③). A caller that names no stepHash gets the 50 ms line.
   const from = ctx.stepAt == null ? -Infinity : s.origin >= ctx.stepAt ? Infinity : ctx.stepAt
+  const inSession = ctx.stepHash == null || (screen === 'replay' && routeOf(ctx.stepHash) === route)
+  const line = inSession ? LIMITS.longtaskMs : screen === 'replay' ? BOARD_LINES.sessionOpen : BOARD_LINES.button
   const long = s.longtasks.filter((x) => x.t >= from).reduce((m, x) => Math.max(m, x.ms), 0)
-  if (long > LIMITS.longtaskMs) bad('I-longtask', `a long task of ${Math.round(long)} ms`)
+  if (long > line) bad('I-longtask', `a long task of ${Math.round(long)} ms`)
   if (v.loadStep) bad('I-loadstep', `a load control: ${v.loadStep}`)
   return { violations, pending, view: { t: Date.now(), hash: v.hash, step: v.step, heads: v.heads } }
 }

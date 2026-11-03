@@ -297,6 +297,23 @@ test('V-longtask board: a throttled reload step is not judged; a long task after
   }
 })
 
+// 2.3 #27 (D64 ①②③): 50 ms holds only a step inside the open session; a step that opens the session from the library is held to the
+// 0.5 s line. A 70 ms task of the page's own after each step tells the two apart.
+test('V-longtask scope: a 70 ms task after the step that opened the session is not judged; one after ← in that session is', { skip }, async () => {
+  await fresh()
+  const at = () => b.page.evaluate(() => [performance.timeOrigin + performance.now(), location.hash])
+  const busy = () => b.page.evaluate(() => new Promise((ok) => setTimeout(() => { const t = performance.now(); while (performance.now() - t < 70); setTimeout(ok, 300) })))
+  try {
+    await go('#/sessions'); await b.page.waitForTimeout(1000)
+    let [stepAt, stepHash] = await at()
+    await go(hash); await drawn(b.page); await busy()
+    assert.equal(ids(await check({ page: b.page, stepAt, stepHash })).includes('I-longtask'), false, 'the step that opened the session')
+    ;[stepAt, stepHash] = await at()
+    await b.page.keyboard.press('ArrowLeft'); await busy()
+    assert.ok(ids(await check({ page: b.page, stepAt, stepHash })).includes('I-longtask'), 'a step inside the open session')
+  } finally { await b.page.evaluate((h) => { location.hash = h }, hash) }
+})
+
 // a static page the harness serves at `hash` (not the board), its /api/* answered by `api(url)` → {body, ms}; resolves once
 // window.__planted is true
 async function plantedPage(html, hash, api = () => ({ body: '{}' })) {
