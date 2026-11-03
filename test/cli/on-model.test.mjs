@@ -143,3 +143,20 @@ test('V104 proxy (darwin): the daemon opens doors for the first harness only →
     assert.deepEqual(checkRecord(last), [])
   } finally { await server.close() }
 })
+
+// 1.6 §3.3 要确认时: the plan names each setting once; "since you last said yes" is said only when there was an earlier yes, on the rows it is new for
+test('1.6 §3.3: the plan of on lists every path once, and speaks of an earlier yes only when there was one', async () => {
+  const { readManifest, saveManifest } = await import('../../src/off/manifest.mjs')
+  const w = await modelWorld({ os: 'darwin', commands: ['codex'] })
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  const planOf = async () => { const t = (await on(w, 'darwin', ['--dry-run'])).io.text().split('\n'); const i = t.findIndex((l) => /^trocar on will change/.test(l)); const j = t.findIndex((l) => /^trocar on would/.test(l)); return t.slice(i, j) } // the plan, up to the dry run's receipt
+  const env = '.codex/.env'
+  const once = (plan) => assert.equal(plan.join(' ').split(env).length - 1, 1, `the path is named once\n${plan.join('\n')}`)
+  const first = await planOf()
+  once(first)
+  assert.doesNotMatch(first.join('\n'), /last said yes/, `no earlier yes, so none is spoken of\n${first.join('\n')}`)
+  const m = readManifest(w.dir); saveManifest(w.dir, { ...m, confirmed_paths: [path.join(w.home, 'an', 'earlier', 'file')] })
+  const later = await planOf()
+  once(later)
+  assert.match(later.find((l) => l.includes(env)) || '', /new since you last said yes/, `the new row says so\n${later.join('\n')}`)
+})

@@ -12,7 +12,7 @@ import { primeProcQuestions } from '../off/proc.mjs'
 import { opLockFile } from '../off/paths.mjs'
 import { readManifest, saveManifest } from '../collector/core/trust/journal.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
-import { fit, tilde, formWords, pathList } from './receipt.mjs'
+import { fit, tilde, formWords } from './receipt.mjs'
 import { pairs } from './text.mjs'
 
 const errText = (e) => String((e && e.message) || e)
@@ -88,9 +88,10 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
   const m = readManifest(dir, fs)
   const seen = new Set(m.confirmed_paths || [])
   const fresh = [...new Set(plan.planned.flatMap((p) => p.paths))].filter((p) => !seen.has(p))
+  // 1.6 §3.3: each setting is one row; a row new since an earlier yes says so on itself — with no earlier yes there is no "last" to speak of
+  const isNew = (p) => seen.size > 0 && p.paths.some((x) => fresh.includes(x))
   say(fit([`trocar on will change ${plan.planned.length} setting${plan.planned.length === 1 ? '' : 's'}:`,
-    ...pairs(plan.planned.map((p) => planLine(p, home)), { home }),
-    ...(fresh.length ? pathList('New since you last said yes:', fresh, home) : [])], { home }).join('\n'))
+    ...pairs(plan.planned.map((p) => { const [h, v] = planLine(p, home); return [h, isNew(p) ? `${v} (new since you last said yes)` : v] }), { home })], { home }).join('\n'))
   const blockedSetup = setupBlocked(plan)
   if (flags.has('--dry-run')) return out(receiptOf({ ...plan, exit: 0 }, { dry_run: true, planned: plan.planned, ...(blockedSetup.length ? { blocked: blockedSetup } : {}) }), EXIT.ok)
   if (!plan.on.length && blockedSetup.length) return done(receiptOf(plan, { blocked: blockedSetup, error: setupError(blockedSetup) }), EXIT.incomplete) // nothing to turn on: no daemon started
