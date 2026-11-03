@@ -4,7 +4,6 @@
    media query via host.mjs; 1.10 §一件事只说一处). */
 
 /* ── the traffic table (also the host page's caption / states) ─────────────────────────────────────────────────── */
-.page.traf{padding:14px 28px 56px;}
 .tcap{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 18px;padding:2px 0 8px;font-size:var(--fs-cap);color:var(--ink-2);}
 .cap-item{white-space:nowrap;}
 .tcap [data-note]{white-space:normal;flex:1 1 320px;min-width:0;}
@@ -26,6 +25,8 @@ a.trow.hi{background:var(--hover);}
 .trow.thead{min-height:28px;font-size:var(--fs-cap);font-weight:var(--fw-strong);color:var(--ink-3);border-top:0;border-bottom:1px solid var(--rule);}
 .trow.ttotal{font-weight:var(--fw-strong);border-top:1px solid var(--rule-2);}
 .trow .gut{width:0;}
+/* .cell here is a table cell, not a block cell (cells.css gives .cell an uneven margin that lifts it off the row's line) */
+.trow .cell,.hhead .cell,.hrow .cell{margin:0;}
 .trow .nm{display:flex;align-items:center;gap:8px;min-width:0;overflow:hidden;white-space:nowrap;}
 .trow .nmname{overflow:hidden;text-overflow:ellipsis;}
 .trow .cell-host{min-width:0;}
@@ -50,7 +51,7 @@ a.trow.hi{background:var(--hover);}
 }
 
 /* ── the host page ────────────────────────────────────────────────────────────────────────────────────────────────── */
-.thost{display:flex;flex-direction:column;height:100%;min-height:0;padding:14px 28px 0;}
+.thost{display:flex;flex-direction:column;height:100%;min-height:0;padding:14px 32px 0;}
 .thost .pagehead{margin-bottom:0;}
 .tbody{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 440px;column-gap:0;}
 .thost.drawer .tbody{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) auto;}

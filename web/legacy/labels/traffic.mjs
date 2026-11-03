@@ -14,7 +14,7 @@ export const FILTER_AGENT = 'agent'
 export const FILTER_CLASS = 'class'
 export const CLASS_FILTER_NOTE = (word) => `Only hosts with ${word} requests are listed; the numbers are each host's total across all classes`
 export const WHAT_IS_KEPT = 'What this class keeps ›'
-export const COL = Object.freeze({ agent: 'agent', host: 'host', first: 'first seen', requests: 'requests', sent: 'sent', recv: 'received', classes: 'main classes', total: 'total' })
+export const COL = Object.freeze({ agent: 'Agent', host: 'Host', first: 'First seen', requests: 'Requests', sent: 'Sent', recv: 'Received', classes: 'Main classes', total: 'Total' })
 export const BYTES_TIP = 'Wire bytes of the request body / response body, headers excluded'
 export const NO_HOST = 'host not recorded'
 export const NEW = 'new'
