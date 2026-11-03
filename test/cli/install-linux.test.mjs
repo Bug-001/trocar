@@ -9,7 +9,7 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { runInstallCli } from '../../src/cli/install.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
 import { readManifest, saveManifest } from '../../src/off/manifest.mjs'
-import { codeId } from '../../src/version.mjs'
+import { codeId, selfCommand } from '../../src/version.mjs'
 import { fakeIo, fakeSystem, onCtx, seedClaude, snapshot, changedFiles } from './fixtures/on-ctx.mjs'
 import { unitPath, UNIT_NAME } from '../../src/collector/arch/linux/unit.mjs'
 
@@ -49,6 +49,19 @@ test('Linux install: CA + trust entries (phase install) + trocar-off, no unit, n
   assert.equal(await runOnCli(['--yes'], onCtx(home, onIo)), 0, onIo.text())
   assert.deepEqual(certBytes(home), certs, 'on wrote no certificate byte')
   assert.equal(readManifest(dir).install.code, '0.0.1', 'on leaves the code that ran install as install wrote it')
+})
+
+// V114 (1.6 §3.8, 4.6 「助手还没装」): the helper is an item of its own (D53) — a script install's first `install` never has it, and install still finishes,
+// starts the collector and says the one sudo line that adds it, naming this copy by absolute paths (1.6 §3.2)
+test('Linux install with the capability helper missing: exit 0, the collector started, and the receipt names the sudo setup-helper line', async () => {
+  const home = tmpDir('trocar-install-nohelper-')
+  seedClaude(home)
+  const sys = fakeSystem({ up: false })
+  const io = fakeIo()
+  assert.equal(await runInstallCli(['--yes', '--json'], { ...onCtx(home, io, { exec: sys.exec, daemon: sys.daemon, deps: { helperState: () => ({ ok: false, reason: 'no helper' }) } }), platform: 'linux' }), 0, io.text())
+  const r = io.json()
+  assert.deepEqual([r.ok, r.daemon.state], [true, 'running'])
+  assert.ok(r.notes.some((n) => n.includes(`sudo ${selfCommand(['setup-helper'])}`)), JSON.stringify(r.notes))
 })
 
 // D61 (4.6 「用户级自启单元」, 1.6 §3.2 步骤 5): registering the login entry and pulling the daemon up is install's, not on's — through the

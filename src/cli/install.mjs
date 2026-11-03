@@ -15,7 +15,7 @@ import { fit, tilde, planItems, formWords, carrierWords } from './receipt.mjs'
 import { pairs, wrap } from './text.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
 import { EVENT } from '../collector/core/codes.mjs'
-import { codeId, packageRoot, channelOf } from '../version.mjs'
+import { codeId, packageRoot, channelOf, selfCommand } from '../version.mjs'
 import { CUT, daemonCode, replaceDaemon } from './replace-daemon.mjs'
 
 const NEEDS_YES = 'Nothing was changed. Read the plan above, then run it again with --yes'
@@ -259,7 +259,11 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
   const dmn = r.daemon || { up: false, state: 'not-running', started: false, problems: [], unitFailed: null }
   const problems = [...dmn.problems, ...(done.path && done.path.problem ? [done.path.problem] : [])]
   const rep = r.daemon && dmn.up ? await replaceStale({ platform, home, env, fs, deps, root, unit: args.unit, problems }) : null
-  const receipt = { ...newReceipt('install'), ok: !board && !problems.length, ...(problems.length ? { problems } : {}), ...(board ? { pending: [board] } : {}), undo: UNDO_LINE.install, harnesses: r.manifest.install ? r.manifest.install.harnesses.filter((h) => args.harnesses.some((d) => d.name === h)) : [], /* ㉓: this copy's own */ changed: r.already ? [] : plan.changed.map((c) => ({ ...c, backup: (r.manifest.entries.find((e) => e.path === c.path) || {}).backup ?? null })), created: [...new Set([...(stdl.written ? [stdl.path] : []), ...(r.already ? [] : plan.created), ...(written ? [ingressPath] : [])])], standalone: standalonePath(home), ...(done.path && done.path.rec ? { path_item: done.path.rec } : {}), planned, commands: ['trocar on', 'trocar off', 'trocar status', 'trocar uninstall'], notes: [...(r.plan ? r.plan.notes : []), ...(rep ? rep.notes : [])],
+  // the capability helper is an item of its own (D53, 1.6 §3.8): install never waits on it, the collector runs without it and captures nothing, and the receipt says the one sudo line
+  const helperState = deps.helperState || (parts.arch && parts.arch.install && parts.arch.install.helperState ? () => parts.arch.install.helperState() : null)
+  const h = helperState ? await helperState() : null
+  const sudoHelper = h && h.ok === false ? `sudo ${selfCommand(['setup-helper'], { root })}` : null
+  const receipt = { ...newReceipt('install'), ok: !board && !problems.length, ...(problems.length ? { problems } : {}), ...(board ? { pending: [board] } : {}), undo: UNDO_LINE.install, harnesses: r.manifest.install ? r.manifest.install.harnesses.filter((h) => args.harnesses.some((d) => d.name === h)) : [], /* ㉓: this copy's own */ changed: r.already ? [] : plan.changed.map((c) => ({ ...c, backup: (r.manifest.entries.find((e) => e.path === c.path) || {}).backup ?? null })), created: [...new Set([...(stdl.written ? [stdl.path] : []), ...(r.already ? [] : plan.created), ...(written ? [ingressPath] : [])])], standalone: standalonePath(home), ...(done.path && done.path.rec ? { path_item: done.path.rec } : {}), planned, commands: ['trocar on', 'trocar off', 'trocar status', 'trocar uninstall'], notes: [...(r.plan ? r.plan.notes : []), ...(rep ? rep.notes : []), ...(sudoHelper ? [`the capability helper is not installed (${h.reason || 'not usable'}): the collector runs and captures nothing until it is. Run: ${sudoHelper}`] : [])],
     // `enabled` is the entry asked again after the run (1.6 §3.3: no claim without evidence), not "nothing failed": ensureDaemonUp asks it at the end of every
     // registering run and makes any answer but present its unitFailed, so a run that halted on a stuck daemon (and enabled nothing) says false here too
     ...(r.daemon ? { daemon: daemonRow(dmn, rep), autostart: { entry: args.unit.path, enabled: !dmn.unitFailed } } : {}) }
@@ -270,7 +274,7 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
     ...receipt.notes.map((n) => `Note: ${n}`),
     ...(board ? [`Not done yet: the board's port is pending (${board.reason}). Run again: trocar install`] : []),
     ...problems.map((p) => `Problem: ${p}`),
-    ...(problems.length ? [] : ['Next: trocar on']), // on refuses without the login entry (1.6 §3.3): it is no next step until install has finished
+    ...(problems.length ? [] : [sudoHelper ? `Next: ${sudoHelper}, then trocar on` : 'Next: trocar on']), // on refuses without the login entry (1.6 §3.3) or the helper (§3.8): neither is a next step until it is there
     `If trocar itself breaks: ${tilde(standalonePath(home), home)}`]).join('\n'))
   return board || problems.length ? EXIT.incomplete : EXIT.ok
 }

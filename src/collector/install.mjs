@@ -563,8 +563,8 @@ export async function turnOn(opts = {}) {
         receipt.capture = { desired: status.desired ?? null, actual: status.actual ?? null }
         reached = status.actual === 'on'
         if (!reached) {
-          const why = status.helper && status.helper.ok === false ? `the capability helper speaks protocol ${status.helper.proto}, this daemon expects ${status.helper.expected_proto}; run: sudo trocar setup-helper`
-            : status.degraded ? `the helper is down (${status.degraded.reason}); nothing is steered, agents connect directly`
+          const why = status.degraded ? `the helper is down (${status.degraded.reason}); nothing is steered, agents connect directly` // first: a helper that is not up has no protocol to name
+            : status.helper && status.helper.ok === false ? `the capability helper speaks protocol ${status.helper.proto}, this daemon expects ${status.helper.expected_proto}; run: sudo trocar setup-helper`
               : status.ca && status.ca.ok === false ? `the collector CA is unusable (${status.ca.which}: ${status.ca.reason}); nothing is steered` : `the daemon did not reach on (actual: ${status.actual}); nothing is steered, agents connect directly`
           problems.push(why); put({ event: EVENT.failure, where: 'switch', code: 'state-mismatch', reason: why })
         }
