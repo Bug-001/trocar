@@ -148,7 +148,7 @@ test('a helper that dies under a write (stdin EPIPE) is reported down, never an 
   const pending = c.status() // in flight when the pipe breaks
   m.child.stdin.emit('error', Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }))
   assert.match((await down)[0].reason, /loader stdin: EPIPE/)
-  await assert.rejects(pending, /redirector loader down: loader stdin: EPIPE/)
+  await assert.rejects(pending, { code: 'loader-down' })
 })
 
 // D-14: a helper killed while a request is in flight breaks our stdin before its 'exit' arrives; helper-down still

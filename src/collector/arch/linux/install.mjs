@@ -138,7 +138,7 @@ export function uninstallHelper(opts = {}) {
   // starts fail open and `doctor` reports the missing helper.
   const running = run('pgrep', ['-f', cfg.helperBin])
   const warnings = []
-  if (running.code === 0 && running.out) warnings.push('a redirector is still running; it will keep working until it exits')
+  if (running.code === 0 && running.out) warnings.push('a capability helper is still running; it will keep working until it exits')
   fs.rmSync(cfg.helperBin, { force: true })
   const swept = sweepStaged(cfg.helperDir)
   if (swept.length) warnings.push(`removed ${swept.length} copy(ies) an interrupted setup-helper had staged: ${swept.join(', ')}`)

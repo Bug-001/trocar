@@ -90,7 +90,7 @@ export function createRedirectorClient({
 
   function send(op, extra = {}) {
     if (down || !child || child.exitCode != null || child.signalCode != null) {
-      return Promise.reject(Object.assign(new Error('redirector loader is not running'), { code: 'loader-down' }))
+      return Promise.reject(Object.assign(new Error('the capability helper is not running'), { code: 'loader-down' }))
     }
     const id = nextId++
     const line = JSON.stringify({ id, op, ...extra }) + '\n'
@@ -159,9 +159,9 @@ export function createRedirectorClient({
     if (down) return
     down = true
     stopHeartbeat()
-    for (const { reject } of pending.values()) reject(Object.assign(new Error('redirector loader down: ' + reason), { code: 'loader-down' }))
+    for (const { reject } of pending.values()) reject(Object.assign(new Error('the capability helper stopped: ' + reason), { code: 'loader-down' }))
     pending.clear()
-    if (readyReject) { readyReject(Object.assign(new Error('redirector loader down: ' + reason), { code })); readyResolve = readyReject = null }
+    if (readyReject) { readyReject(Object.assign(new Error('the capability helper stopped: ' + reason), { code })); readyResolve = readyReject = null }
     if (quiet) return // an orderly close: no `down`, so no helper-down failure (the daemon's own daemon-stop records the stop)
     emitter.emit('down', { reason, ...extra, ...(stderrTail.length ? { stderr: [...stderrTail] } : {}) })
   }
