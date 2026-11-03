@@ -102,7 +102,7 @@ export default function HostScreen({ route }: ScreenProps) {
   const [revealed, setRevealed] = useState<{ ref: string, name: string } | null>(null)
   const name = revealed && revealed.ref === ref ? revealed.name : null
   const reveal = useQuery({
-    queryKey: ['calls-ref', ref, 'reveal', name],
+    queryKey: ['calls-ref', ref, 'show', name],
     queryFn: ({ signal }) => revealHeader(api, ref, name, { signal }) as Promise<Answer>,
     enabled: !!ref && !!name, ...ONCE,
   })
