@@ -40,8 +40,9 @@ const P = {
 const DRAW = 'viewBox="0 0 16 16" fill="none" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"'
 // the glyph for one name; `cls` sizes it (.ico16 / .ico14)
 export const icon = (name, cls = 'ico16') => `<svg class="${cls}" ${DRAW} stroke="currentColor" aria-hidden="true">${P[name] || ''}</svg>`
-// the same glyph as a CSS image, for a mark a ::before / ::after draws: used as a mask over currentColor (core/ui.mjs installUi)
-export const glyphCss = (name) => `url("data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" ${DRAW} stroke="#000">${P[name] || ''}</svg>`)}")`
+// a glyph as a CSS image, for a mark a ::before / ::after draws: `svg` is icon() markup serialized as XML (core/ui.mjs installUi
+// has the document that does it); used as a mask, so its currentColor (black in an image) only sets the shape
+export const glyphCss = (svg) => `url("data:image/svg+xml,${encodeURIComponent(svg)}")`
 export const ICON_NAMES = Object.freeze(Object.keys(P))
 // a disclosure's triangle: the chevron at the 12 px size; it turns a quarter when its trigger is [aria-expanded="true"] (base.css).
 // discChev(open) draws the state itself, for a toggle that is not an [aria-expanded] parent of the glyph.

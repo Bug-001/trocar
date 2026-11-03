@@ -142,7 +142,10 @@ export function confirmDialog(opts, doc = typeof document === 'undefined' ? null
 export function installUi(doc = typeof document === 'undefined' ? null : document) {
   if (!doc) return null
   // the disclosure triangle a ::before / ::after draws (replay.css): the icons.mjs chevron as a mask, never a typed ▸
-  doc.documentElement.style.setProperty('--glyph-disc', glyphCss('chevron-right'))
+  // the HTML parser puts the <svg> in the SVG namespace and the serializer writes it out, so no namespace URL is typed here
+  const tpl = doc.createElement('template')
+  tpl.innerHTML = icon('chevron-right')
+  doc.documentElement.style.setProperty('--glyph-disc', glyphCss(new doc.defaultView.XMLSerializer().serializeToString(tpl.content.firstChild)))
   // 1.2 §点击与选中文字 ①: a press that made or changed a selection is not a click. Every toggle on the board listens in the bubble
   // phase, so this one capture-phase listener keeps the click that ends a drag-select (or a double / triple / Shift click) from all of
   // them, and from <summary> / links. A selection already there at pointerdown does not count (a button keeps it in Chrome); a
