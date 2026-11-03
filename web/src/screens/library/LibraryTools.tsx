@@ -3,10 +3,11 @@
 // control and the title column's ⓘ. Each one reads the filters it is handed and writes one exact params patch; nothing here keeps a
 // copy of the route, except the search box's draft while it has focus (the route never rewrites the box someone is typing in).
 import { useState, type Ref } from 'react'
-import { Button, Dialog, DialogTrigger, Heading, Menu, MenuItem, MenuTrigger, Popover, ToggleButton, ToggleButtonGroup, type Key, type Selection } from 'react-aria-components'
+import { Button, Menu, MenuItem, MenuTrigger, Popover, ToggleButton, ToggleButtonGroup, type Key, type Selection } from 'react-aria-components'
 import { harnessName, harnessRaw } from '../../../legacy/core/chips.mjs'
 import * as W from '../../../legacy/labels/library.mjs'
 import { HarnessIcon } from '../../ui/HarnessIcon'
+import { InfoButton } from '../../ui/InfoButton'
 import { agentMenuModel, projectMenuModel, agentLabel, hasFilters } from './model.mjs'
 import type { Session } from './useSessions'
 
@@ -78,13 +79,6 @@ export function WindowSeg({ value, set }: { value: string, set: SetParams }) {
   )
 }
 
-// the title column's ⓘ: where a title comes from
+// the title column's ⓘ: where a title comes from, on the shared 1.2 §弹出层 popover
 const TITLE_I = 'Where the title comes from'
-export const TitleInfo = () => (
-  <DialogTrigger>
-    <Button className="popbtn" aria-label={TITLE_I}>ⓘ</Button>
-    <Popover className="pop" placement="bottom start">
-      <Dialog aria-label={TITLE_I}><Heading slot="title" className="ph">{TITLE_I}</Heading><div className="pb">{W.COL_SESSION_TIP}</div></Dialog>
-    </Popover>
-  </DialogTrigger>
-)
+export const TitleInfo = () => <InfoButton label={TITLE_I} title={TITLE_I} body={W.COL_SESSION_TIP} />

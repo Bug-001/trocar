@@ -4,7 +4,8 @@
 // visible again, no retry of its own. A failed read throws a ReadFail that keeps the answer {status, error}, so the page says the cause
 // class and keeps the reason in 技术细节 (K-29); the last list stays in `data`.
 import { useQuery } from '@tanstack/react-query'
-import { INTERVAL, backoffMs } from '../../../legacy/core/poll.mjs'
+import { INTERVAL } from '../../../legacy/core/poll.mjs'
+import { pollOptions } from '../../ui/poll'
 import { api, scoped } from '../../../legacy/core/api.mjs'
 import { loadSessions } from '../../../legacy/library/logic.mjs'
 
@@ -17,13 +18,6 @@ export class ReadFail extends Error {
   constructor(answer: Failed) { super(String(answer.error || `HTTP ${answer.status}`)); this.answer = answer }
 }
 
-type QState = { state: { fetchFailureCount: number, data?: SessionsData } }
-export const sessionsInterval = (q: QState) => {
-  const failures = q.state.fetchFailureCount
-  if (failures) return backoffMs(failures, INTERVAL.sessions)
-  return q.state.data?.stored ? INTERVAL.session : INTERVAL.sessions
-}
-
 export function useSessions() {
   return useQuery<SessionsData, ReadFail>({
     queryKey: ['sessions'],
@@ -33,9 +27,6 @@ export function useSessions() {
       if (!r || !r.ok) throw new ReadFail((r || { ok: false, error: 'no answer' }) as Failed)
       return r.data!
     },
-    refetchInterval: sessionsInterval,
-    refetchIntervalInBackground: false,
-    refetchOnWindowFocus: true,
-    retry: false,
+    ...pollOptions('sessions', { period: (s) => ((s.data as SessionsData | undefined)?.stored ? INTERVAL.session : INTERVAL.sessions) }),
   })
 }
