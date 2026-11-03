@@ -6,7 +6,7 @@
 // whole. The answer files are served from desk-world (3.5 §会话读's reference server) for any id. Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard, serveWorld, stats } from './harness.mjs'
+import { probe, withBoard, serveWorld, stats, stampFetches } from './harness.mjs'
 import { world } from '../desk-world.mjs'
 import { BOARD_LINES } from '../perf-lines.mjs'
 import { INTERVAL } from '../../../src/web/v2/core/poll.mjs'
@@ -129,32 +129,39 @@ test('1.2 #23 a desk left while following comes back following, its URL naming n
   } finally { await b.stop() }
 })
 
-test('1.2 #23 a desk left while its packs load sends no next pack read while away, and reads the rest once back', { skip }, async () => {
+test('1.2 #23 a desk left while its packs load sends no pack read while away, and once back reads the rest, no pack file twice', { skip }, async () => {
   const L = 300, P = 8, long = world(5, { calls: 160, talk: { pre: 3, len: 60, every: 6, tail: 4 } }), packs = long.files(long.now, P).head.packs.length
-  const b = await withBoard({ bytes: 1e5, width: 1280, chromium: gate.chromium })
+  // every pack read's start and the leave, on the page's clock: the leave is stamped as the router hands the route over (its hashchange)
+  const b = await withBoard({ bytes: 1e5, width: 1280, chromium: gate.chromium, setup: stampFetches })
   try {
     const { page } = b
-    // the pack reads: when each started; the history's end = every sealed pack's two parts answered
-    const started = [], ends = [], got = new Set()
-    page.on('request', (r) => { if (/^\/api\/d\/p\d/.test(new URL(r.url()).pathname)) started.push(Date.now()) })
-    page.on('response', (r) => { const u = new URL(r.url()); if (/^\/api\/d\/p\d/.test(u.pathname) && r.status() === 200) { got.add(u.pathname); if (got.size === 2 * packs) ends.push(Date.now()) } })
+    const packReads = async () => (await page.evaluate(() => globalThis.__fetches)).filter((e) => /^\/api\/d\/p\d/.test(e.url))
     await serveWorld(page, long, { latency: L, pack: P })
     await page.evaluate(() => { location.hash = '#/replay/p/S' })
     await until(page, () => !!document.querySelector('.desk #stepbar .sb-no'))
-    await new Promise((r) => setTimeout(r, L + 100))
-    const left = Date.now()
-    await page.evaluate(() => { location.hash = '#/sessions' })
+    // leave, from inside the page, at the first frame a pack's main is in flight (every answer waits L)
+    const left = await page.evaluate(() => new Promise((resolve) => {
+      const tick = () => {
+        if (!globalThis.__fetches.some((e) => /^\/api\/d\/p\d+\.main/.test(e.url) && e.t1 == null)) return requestAnimationFrame(tick)
+        addEventListener('hashchange', () => resolve(performance.timeOrigin + performance.now()), { once: true })
+        location.hash = '#/sessions'
+      }
+      tick()
+    }))
     await until(page, () => !document.querySelector('.desk'))
-    await new Promise((r) => setTimeout(r, 6 * L))
-    assert.ok(started.some((t) => t <= left) && !ends.length, 'the history was still loading when the reader left')
-    // a read in flight at the leave ends within L; nothing new starts after it
-    assert.deepEqual(started.filter((t) => t > left + L).map((t) => t - left), [], 'pack reads started while away (ms after the leave)')
-    const back = Date.now()
+    await new Promise((r) => setTimeout(r, 4 * L))
+    const away = await packReads()
+    assert.ok(away.some((e) => e.t0 <= left) && new Set(away.filter((e) => e.t1 != null).map((e) => e.url)).size < 2 * packs, 'the history was still loading when the reader left')
+    assert.deepEqual(away.filter((e) => e.t0 > left).map((e) => `${e.url.split('?')[0]} +${Math.round(e.t0 - left)} ms`), [], 'pack reads started while away (ms after the leave)')
     await page.evaluate(() => history.back())
     await until(page, () => !!document.querySelector('.desk #stepbar .sb-no'))
-    while (!ends.length && Date.now() - back < 20000) await new Promise((r) => setTimeout(r, 50))
-    assert.ok(ends.length > 0, 'back on the desk, the loader reads every pack')
-    assert.ok(started.some((t) => t >= back))
+    const t0 = Date.now()
+    while (new Set((await packReads()).filter((e) => e.t1 != null).map((e) => e.url)).size < 2 * packs && Date.now() - t0 < 20000) await new Promise((r) => setTimeout(r, 100))
+    await new Promise((r) => setTimeout(r, 2 * INTERVAL.session))
+    const all = (await packReads()).map((e) => e.url.split('?')[0])
+    assert.equal(new Set(all).size, 2 * packs, 'back on the desk, the loader reads every pack file')
+    assert.deepEqual(all.filter((u, i) => all.indexOf(u) !== i), [], 'pack files read twice')
+    assert.ok((await packReads()).some((e) => e.t0 > left), 'the loader went on after the return')
     assert.deepEqual(b.errors, [])
   } finally { await b.stop() }
 })
