@@ -197,11 +197,11 @@ test('附录 C.2 names exactly the keys of COMMAND_KEYS, for every command', () 
   const rows = table.split('\n').filter((l) => /^\| `/.test(l)).map((l) => l.split('|').slice(1, 3))
   // a key is a code span that IS a key: an identifier, with its value shape after a `:` — so `trocar-off`, a path or a prose span is not one
   const keysIn = (cell) => [...new Set([...cell.matchAll(/`([a-z_][a-z0-9_]*)((?:[:([].*?)?)`/g)].map((m) => m[1]))]
-  const notBuilt = ['rules', 'held', 'resend'] // 5.1 lands in steps: the manual names them first, and each step takes its name out of this list
+  const notBuilt = ['rules', 'held', 'resend', 'rules_stopped'] // 5.1 lands in steps: the manual names them first, and each step takes its name out of this list
   const named = new Map(rows.map(([head, cell]) => [head.match(/`([a-z-]+)/)[1], keysIn(cell)]).filter(([command]) => !notBuilt.includes(command)))
   assert.deepEqual([...named.keys()], Object.keys(COMMAND_KEYS), 'a command per row, in the order of COMMAND_KEYS')
   for (const [command, keys] of named) {
-    const documented = keys.filter((k) => !RECEIPT_KEYS.includes(k)) // the common keys are C.1's; the row does not repeat them
+    const documented = keys.filter((k) => !RECEIPT_KEYS.includes(k) && !notBuilt.includes(k)) // the common keys are C.1's; the row does not repeat them
     assert.deepEqual([...documented].sort(), [...COMMAND_KEYS[command]].sort(), `附录 C.2 and COMMAND_KEYS disagree about ${command}`)
   }
 })
