@@ -4,8 +4,8 @@
 // Asserted on data attributes and step numbers, never on words.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { chapterAt, chapterJump, chapterNavHtml, chapterTicksHtml, placeView, roughWindow } from '../../src/web/v2/replay/timeline.mjs'
-import { keyAction } from '../../src/web/v2/replay/keymap.mjs'
+import { chapterAt, chapterJump, chapterNavHtml, chapterTicksHtml, placeView, roughWindow } from '../../web/legacy/replay/timeline.mjs'
+import { keyAction } from '../../web/legacy/replay/keymap.mjs'
 
 // a head's chapter table (ctx-files.mjs headDoc's shape) over N steps, starting a chapter at each of `starts` (ascending, > 0)
 const table = (N, starts, inferred = new Set()) => [0, ...starts].map((s0, k, a) => ({ k, s0, s1: k + 1 < a.length ? a[k + 1] : N, ts0: null, inferred: inferred.has(s0) }))

@@ -3,7 +3,7 @@
 // `traffic`, the recent list from `sessions`. The documents come from the real face (real server, real query worker).
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { overviewStats, overviewItems, recentRows, renderBody, diskBytes } from '../../src/web/v2/overview/overview.mjs'
+import { overviewStats, overviewItems, recentRows, statsCard, diskBytes } from '../../web/src/screens/overview/model.mjs'
 import { boardHome, serveBoard } from './real-face.mjs'
 
 const docs = (async () => {
@@ -21,8 +21,8 @@ const docs = (async () => {
 const copy = (x) => structuredClone(x)
 const ok = (data) => ({ data, ok: true, err: null })
 const stateOf = (D, now, over = {}) => ({
-  w: 'all', readAt: now, caph: { data: D.status, okAt: now, err: null, ok: true },
-  sessions: ok(D.sessions), classes: ok(D.classes), pricing: ok(D.pricing), stats: ok(D.overview), usageAll: ok(D.overview), traffic: ok(D.traffic), ...over,
+  w: 'all', caph: { data: D.status, okAt: now, err: null, ok: true },
+  sessions: ok(D.sessions), classes: ok(D.classes), pricing: ok(D.pricing), stats: { ...ok(D.overview), other: false }, traffic: ok(D.traffic), ...over,
 })
 
 test('(1) the stats are the overview document\'s numbers; a session the index has not caught up with changes the recent list, not the stats (D24)', async () => {
@@ -33,8 +33,9 @@ test('(1) the stats are the overview document\'s numbers; a session the index ha
   assert.equal(m.calls, D.overview.calls.llm)
   const more = copy(D.sessions)
   more.sessions.push({ ...more.sessions[0], session_id: 'extra-session', last_ts: new Date(now).toISOString() })
-  const a = renderBody(stateOf(D, now), now), b = renderBody(stateOf(D, now, { sessions: ok(more) }), now)
-  assert.equal(b.stats, a.stats)
+  const a = statsCard(stateOf(D, now), now), b = statsCard(stateOf(D, now, { sessions: ok(more) }), now)
+  assert.equal(a.kind, 'shown')
+  assert.deepEqual(b, a)
   assert.deepEqual(overviewStats(D.overview, D.pricing), m)
   assert.equal(recentRows(more)[0].id, 'extra-session')
 })

@@ -5,11 +5,11 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { captureVerdict, capHealthPatch, agentVerdicts, AGENT_TIER } from '../../src/web/v2/core/capture-verdict.mjs'
-import { harnessKey } from '../../src/web/v2/core/chips.mjs'
-import { logRowsOf } from '../../src/web/v2/capture/capture-log.mjs'
-import { pageHtml } from '../../src/web/v2/capture/capture-view.mjs'
-import { overviewItems } from '../../src/web/v2/overview/overview.mjs'
+import { captureVerdict, capHealthPatch, agentVerdicts, AGENT_TIER } from '../../web/legacy/core/capture-verdict.mjs'
+import { harnessKey } from '../../web/legacy/core/chips.mjs'
+import { logModel } from '../../web/src/screens/capture/log-model.mjs'
+import { pageModel } from '../../web/src/screens/capture/model.mjs'
+import { overviewItems } from '../../web/src/screens/overview/model.mjs'
 import { failureWord } from '../../src/cli/words.mjs'
 import { boardHome, serveBoard } from './real-face.mjs'
 
@@ -23,6 +23,7 @@ const HEALTH_STATES = (() => {
   return [...seg.matchAll(/`([a-z-]+)`/g)].map((m) => m[1]).filter((s) => s !== 'state')
 })()
 const NOT_KNOWN = 'unknown' // K-28: health absent → 不知道 = the closed set's `unknown`
+const keyOf = (g) => `${g.level ?? ''}/${g.where ?? ''}/${g.code ?? ''}` // a log row's key: the fold's own (C.3)
 
 test('(1) the real status document carries health (the verdict) and failure groups with where (the log\'s words)', async () => {
   const b = boardHome(), now = new Date()
@@ -38,8 +39,8 @@ test('(1) the real status document carries health (the verdict) and failure grou
     assert.equal(captureVerdict(doc).state, doc.health.state)
     const g = doc.failures.groups.find((x) => x.code === 'trust-rejected')
     assert.equal(g && g.where, 'engine', JSON.stringify(doc.failures.groups))
-    const [row] = logRowsOf(doc).rows.filter((r) => r.g === g)
-    assert.ok(row.s.text.includes(failureWord('engine', 'trust-rejected')), row.s.text)
+    const row = logModel(doc).rows.find((r) => r.key === keyOf(g))
+    assert.ok(row.text.includes(failureWord('engine', 'trust-rejected')), row.text)
   } finally { await face.close() }
 })
 
@@ -60,22 +61,22 @@ test('(2) the spec sample: health.state is the verdict; absent → not known; ev
 
 test('(3) the capture log: one row per failures.groups[] entry, worded by the CLI table\'s sentence; a group without where is reason-unknown', () => {
   const s = sample()
-  const { rows } = logRowsOf(s)
+  const { rows } = logModel(s)
   assert.equal(rows.length, s.failures.groups.length)
-  for (const r of rows) {
-    assert.ok(s.failures.groups.includes(r.g))
-    const word = failureWord(r.g.where, r.g.code)
-    assert.ok(word, `the spec sample's (${r.g.where}, ${r.g.code}) is in the CLI table`)
-    assert.ok(r.s.text.includes(word), r.s.text)
-    assert.equal(r.s.unknown, false)
+  for (const g of s.failures.groups) {
+    const r = rows.find((x) => x.key === keyOf(g))
+    const word = failureWord(g.where, g.code)
+    assert.ok(word, `the spec sample's (${g.where}, ${g.code}) is in the CLI table`)
+    assert.ok(r.text.includes(word), r.text)
+    assert.equal(r.unknown, false)
   }
   const bare = sample(); for (const g of bare.failures.groups) delete g.where
-  const out = logRowsOf(bare)
+  const out = logModel(bare)
   assert.equal(out.rows.length, bare.failures.groups.length)
-  for (const r of out.rows) {
-    assert.equal(r.s.unknown, true)
-    assert.equal(r.s.code, r.g.code)
-    assert.ok(out.html.includes(r.g.code), 'the code is in the technical details')
+  for (const g of bare.failures.groups) {
+    const r = out.rows.find((x) => x.key === keyOf(g))
+    assert.equal(r.unknown, true)
+    assert.ok(r.tech.some((p) => p.k === 'code' && p.v.mono === g.code), 'the code is in the technical details')
   }
 })
 
@@ -100,10 +101,10 @@ test('(5) capHealthPatch: a 200 status document without health is a good answer'
 })
 
 test('(6) before the status document answers, the page states no fact about agents (D38: never an invented empty)', () => {
-  const reading = pageHtml(null, captureVerdict(null, {}))
-  const answered = pageHtml({}, captureVerdict({}, {})) // a document that names no agent
-  assert.equal(/class="capfoot"/.test(reading), false)
-  assert.equal(/class="capfoot"/.test(answered), true) // the same predicate draws it once there is an empty answer
+  const reading = pageModel(null, captureVerdict(null, {}))
+  const answered = pageModel({}, captureVerdict({}, {})) // a document that names no agent
+  assert.equal(reading.foot, null)
+  assert.equal(typeof answered.foot, 'string') // the same predicate says it once there is an empty answer
 })
 
 test('(7) 最近采到 and rule 5 read the overview document\'s harnesses[].last_ts; unread, nothing is claimed', () => {
@@ -118,9 +119,9 @@ test('(7) 最近采到 and rule 5 read the overview document\'s harnesses[].last
   for (const r of rowsOf(seen)) { assert.equal(r.tier, AGENT_TIER.fine, r.text); assert.equal(r.lastCaptured, ts) }
   for (const r of rowsOf({ harnesses: [] })) { assert.notEqual(r.tier, AGENT_TIER.fine, r.text); assert.equal(r.lastCaptured, null) }
   for (const r of rowsOf(null)) assert.equal(r.tier, AGENT_TIER.unknown, r.text)
-  const html = pageHtml(s, captureVerdict(s), { ov: seen })
-  for (const id of ids) assert.ok(html.includes(`href="#/sessions?h=${id}"`), `the 最近采到 link of ${id}`)
-  assert.equal(/#\/sessions\?h=/.test(pageHtml(s, captureVerdict(s), { ov: null })), false, 'overview unread: no link')
+  const m = pageModel(s, captureVerdict(s), { ov: seen })
+  for (const id of ids) assert.equal(m.rows.find((r) => r.id === id).last.href, `#/sessions?h=${id}`, `the 最近采到 link of ${id}`)
+  assert.equal(pageModel(s, captureVerdict(s), { ov: null }).rows.some((r) => r.last), false, 'overview unread: no link')
 })
 
 test('(8) a capture health the server cannot read (4.6 F9): the real document has no health and names it in errors; the board says it could not read it, with that reason — never a bare "not known"', async () => {
@@ -144,7 +145,7 @@ test('(9) an unreadable capture health hides nothing else the document says (K-2
   const h = capHealthPatch({ ok: true, status: 200, data: doc }, 1).capH
   const v = captureVerdict(h, { okAt: 1, now: 1 })
   assert.equal(v.state, 'unreadable')
-  assert.match(pageHtml(h, v), new RegExp(`data-h="${harnessKey('claude-code')}"`), 'the agent row of a harness the document names')
+  assert.ok(pageModel(h, v).rows.some((r) => r.id === harnessKey('claude-code')), 'the agent row of a harness the document names')
   const s = { caph: { data: h, okAt: 1, err: null, ok: true } }
   for (const k of ['sessions', 'classes', 'pricing', 'stats', 'traffic', 'segments']) s[k] = { data: null, ok: null, err: null }
   const cls = overviewItems(s, 1).rows.map((r) => r.cls)

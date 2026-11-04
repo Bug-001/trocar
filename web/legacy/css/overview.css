@@ -1,0 +1,71 @@
+/* css/overview.css — 总览 (1.7): the card grid and the five cards' rows. Tokens only (1.5 §审美维度; guards
+   no-bare-colors / contrast / theme). Narrow screens stack the cards in the RFC's order: capture → items → stats →
+   recent; the first-use page shows capture, the agents zone and 开始使用 only. */
+.ovgrid { display: grid; grid-template-columns: minmax(0, 340px) minmax(0, 1fr); gap: var(--s4); align-items: stretch; }
+/* cards in one row are one height: each slot is a column and its card fills it (1.5 §审美维度 9) */
+.ovgrid > div { display: flex; flex-direction: column; min-width: 0; }
+.ovgrid > div > .ovcard { flex: 1 1 auto; }
+.ovgrid > .span { grid-column: 1 / -1; }
+.ovgrid > div:empty { display: none; }
+/* first use: the capture card, the agents zone (one row per agent, 1.9 §开关) and 开始使用 */
+.ovgrid.first > #ovagents { grid-column: 1 / -1; }
+
+/* a card: the prototype's card — raised, a hairline, the large radius and the card shadow; type starts at the body size */
+.ovcard { background: var(--raised); border: 1px solid var(--rule); border-radius: var(--r-4); box-shadow: var(--shadow-card); padding: 16px 18px 14px; min-width: 0; font-size: var(--fs-body); line-height: var(--lh); }
+.ovh { display: flex; align-items: center; min-height: 24px; margin: 0 0 10px; font-size: var(--fs-head); font-weight: var(--fw-strong); color: var(--ink); }
+.ovsay { margin: 0 0 6px; font-size: var(--fs-body); color: var(--ink); }
+.ovsay.ok { color: var(--ok); } .ovsay.warn { color: var(--warn); } .ovsay.bad { color: var(--bad); } .ovsay.dim { color: var(--ink-2); }
+.ovsub { margin: 0 0 6px; font-size: var(--fs-cap); color: var(--ink-2); }
+.ovsub.warn { color: var(--warn); }
+.ovgo { margin: 6px 0 0; font-size: var(--fs-cap); }
+.ovgo a { color: var(--action); text-decoration: none; }
+.ovempty { margin: 4px 0; font-size: var(--fs-body); color: var(--ink-2); }
+.ovmark { font-size: var(--fs-cap); color: var(--ink-2); }
+/* a card before its first answer, or the stats of the last window while the new one is read (1.7 §读取与刷新): dimmed */
+.ovcard.reading .ovsay, .ovcard.reading .ovtbl, .ovcard.reading .ovtr, .ovempty.reading { color: var(--ink-2); }
+
+/* the card head's lamp is the kit's .lamp (base.css); the head has no gap of its own: an info glyph keeps the kit's 4 px after its word */
+.ovh .lamp { margin-right: 8px; }
+
+/* the item / session rows: one <a> per row, the whole row is the link */
+.ovlist { display: flex; flex-direction: column; gap: 2px; }
+.ovitem { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: var(--r-2); text-decoration: none; color: var(--ink); min-width: 0; }
+.ovitem:hover { background: var(--hover); }
+.ovitem .ovtx { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-body); }
+.ovitem .ovtx.pend { color: var(--ink-3); }
+.ovitem .ovnm { flex: none; font-size: var(--fs-body); }
+.ovitem .ovnum, .ovitem .ovwhen { flex: none; font-size: var(--fs-cap); color: var(--ink-2); }
+.ovitem .go { flex: none; color: var(--ink-2); }
+.ovitem.more { color: var(--ink-2); font-size: var(--fs-cap); }
+.ovsubj { font-size: var(--fs-body); color: var(--ink-2); flex: none; }
+.hicon { display: inline-flex; width: 16px; height: 16px; flex: none; }
+.hicon svg, .hicon img { width: 16px; height: 16px; }
+
+/* the per-agent table: a grid of link rows (the whole row is one <a>, 1.7 §统计); agent column holds the chip */
+.ovcard .hscroll { overflow-x: auto; margin-top: 8px; }
+.ovtbl { display: grid; min-width: 620px; }
+.ovtrh, .ovtr { display: grid; grid-template-columns: minmax(150px, 1.4fr) repeat(5, minmax(60px, 1fr)); gap: 0 10px; align-items: center; }
+.ovtrh { padding: 3px 8px 5px; border-bottom: 1px solid var(--rule); }
+.ovtr { padding: 5px 8px; font-size: var(--fs-body); text-decoration: none; color: var(--ink); border-radius: var(--r-1); }
+a.ovtr:hover { background: var(--hover); }
+.ovtr .ovag { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; }
+.ovtr .ovag .ovnm { font-size: var(--fs-body); }
+/* numbers line up on the right, digits one width (the header cells too) */
+.ovtrh .n, .ovtr .n { text-align: right; font-variant-numeric: tabular-nums; }
+/* an agent with network requests only: one dim sentence across the data columns, linked to its traffic */
+.ovtr.nocall { color: var(--ink-2); }
+.ovtr .ovnet { grid-column: 2 / -1; font-size: var(--fs-cap); }
+/* the money keeps its floor word and its number on one line */
+.ovcost { white-space: nowrap; }
+
+/* the first-run card: four lead-in rows, each a strong word then its sentence */
+.ovcard.start .ovsay b { font-weight: var(--fw-strong); margin-right: 6px; }
+
+@media (max-width: 900px) {
+  .ovgrid { grid-template-columns: minmax(0, 1fr); }
+  .ovgrid > .span { grid-column: auto; }
+  .ovtrh, .ovtr { grid-template-columns: minmax(120px, 1.3fr) repeat(5, minmax(60px, 1fr)); }
+  /* a recent row wraps rather than squeezing its title to nothing */
+  .ovcard.recent .ovitem { flex-wrap: wrap; }
+  .ovcard.recent .ovitem .ovtx { min-width: 8em; }
+}

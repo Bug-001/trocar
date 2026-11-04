@@ -62,7 +62,7 @@ export function itemsView(items) {
   return { logged: loggedView(logged), probes: { count: probes.length, series: probes.filter((p) => p.tokens != null) } };
 }
 // What a session row ships of a call's `wire` and of each of its labels (3.5 §分页): a CLOSED field set, what the board reads.
-// Who reads what (src/web/v2):
+// Who reads what (web/legacy):
 //   wire        cacheSemanticsKnown (cache cell, popover) · contextState contextMissing reqEncoding labels (callFacts, replyMark)
 //   wire.labels[]  id label (callFacts words); the long `text` is a tech detail of a loaded step
 const PAGED_META = Object.freeze({

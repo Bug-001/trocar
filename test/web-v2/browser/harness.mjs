@@ -10,7 +10,7 @@ import { boardHome, serveBoard } from '../real-face.mjs'
 import { tmpDir, removeTmp } from '../../helpers/tmp.mjs'
 import rm from '../../helpers/rm-tree.cjs'
 import { CONTROL_TOKEN_HEADER } from '../../../src/off/token-header.mjs'
-import { INTERVAL, TIMER_ROUND } from '../../../src/web/v2/core/poll.mjs'
+import { INTERVAL, TIMER_ROUND } from '../../../web/legacy/core/poll.mjs'
 
 const SHOTS = fileURLToPath(new URL('./shots/', import.meta.url))
 const CHANNEL = { channel: 'chrome' }
@@ -191,8 +191,12 @@ export async function timed(page, cond, arg, act) {
 export async function serveWorld(page, w, { from = w.marks.length - 1, grow = 0, latency = 0, pack = 32, paced = false } = {}) {
   const last = w.marks.length - 1
   let k = Math.min(from, last), at = null, f = null, granted = paced ? 0 : Infinity
-  const json = (route, doc) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(doc) })
-  const wait = () => new Promise((r) => setTimeout(r, latency))
+  // every answer: `latency` ms, then the one fulfill of what `fn` makes of the request, returned to Playwright. Routes dropped while it
+  // waited (stop's closeQuietly) leave Playwright to continue the request itself; the late fulfill then rejects ("Route is already
+  // handled!") and Playwright ignores it for a route dropped with 'ignoreErrors'. Any other failure fails the case; a fulfill left
+  // floating would instead fail whichever case is stopping. A request the page gave up on takes the fulfill without error.
+  const answer = (pattern, fn) => page.route(pattern, async (route) => { await new Promise((r) => setTimeout(r, latency)); return route.fulfill(fn(route.request())) })
+  const json = (doc) => ({ status: 200, contentType: 'application/json', body: JSON.stringify(doc) })
   const now = () => { if (at !== k) { at = k; f = w.files(w.marks[k], pack); if (k < last) f.head = { ...f.head, pending: { done: k + 1, total: last + 1 } } } return f }
   const tails = new Map() // part → {n, text, last: Map(id → its lines' JSON)}
   function tail(part) {
@@ -208,31 +212,29 @@ export async function serveWorld(page, w, { from = w.marks.length - 1, grow = 0,
     for (const id of [...t.last.keys()]) if (!seen.has(id)) { t.last.delete(id); if (!id.startsWith('l:')) t.text += JSON.stringify({ g: id }) + '\n' }
     return Buffer.from(t.text)
   }
-  await page.route('**/api/d/**', async (route) => {
-    await wait()
-    const req = route.request(), u = new URL(req.url()), name = u.pathname.slice('/api/d/'.length)
+  await answer('**/api/d/**', (req) => {
+    const name = new URL(req.url()).pathname.slice('/api/d/'.length)
     if (name === 'head') {
       if (at != null && granted > 0) { granted--; k = Math.min(last, k + grow) }
       const body = JSON.stringify(now().head), etag = `"${createHash('sha1').update(body).digest('hex').slice(0, 16)}"`
-      if (req.headers()['if-none-match'] === etag) return route.fulfill({ status: 304, headers: { etag } })
-      return route.fulfill({ status: 200, contentType: 'application/json', headers: { etag }, body })
+      if (req.headers()['if-none-match'] === etag) return { status: 304, headers: { etag } }
+      return { status: 200, contentType: 'application/json', headers: { etag }, body }
     }
     const pk = /^p(\d+)\.(main|rest)$/.exec(name), op = /^open\.(main|rest)$/.exec(name)
-    if (pk) { const text = now().pack(+pk[1], pk[2]); return text == null ? json(route, { error: 'no such pack' }) : route.fulfill({ status: 200, contentType: 'application/x-ndjson', body: text }) }
-    if (!op) return route.fulfill({ status: 404, contentType: 'application/json', body: '{"error":"unknown endpoint"}' })
+    if (pk) { const text = now().pack(+pk[1], pk[2]); return text == null ? json({ error: 'no such pack' }) : { status: 200, contentType: 'application/x-ndjson', body: text } }
+    if (!op) return { status: 404, contentType: 'application/json', body: '{"error":"unknown endpoint"}' }
     const buf = tail(op[1]), etag = `"${op[1]}-${tails.get(op[1]).n}"`, ir = req.headers()['if-range']
     const r = ir == null || ir === etag ? /^bytes=(\d+)-$/.exec(req.headers().range || '') : null
-    if (!r) return route.fulfill({ status: 200, contentType: 'application/x-ndjson', headers: { etag }, body: buf })
+    if (!r) return { status: 200, contentType: 'application/x-ndjson', headers: { etag }, body: buf }
     const from = +r[1]
-    if (from >= buf.length) return route.fulfill({ status: 416, headers: { etag, 'content-range': `bytes */${buf.length}` }, body: '' })
-    route.fulfill({ status: 206, contentType: 'application/x-ndjson', headers: { etag, 'content-range': `bytes ${from}-${buf.length - 1}/${buf.length}` }, body: buf.subarray(from) })
+    if (from >= buf.length) return { status: 416, headers: { etag, 'content-range': `bytes */${buf.length}` }, body: '' }
+    return { status: 206, contentType: 'application/x-ndjson', headers: { etag, 'content-range': `bytes ${from}-${buf.length - 1}/${buf.length}` }, body: buf.subarray(from) }
   })
-  await page.route('**/api/lane?**', async (route) => { await wait(); const q = new URL(route.request().url()).searchParams; json(route, w.lane(q.get('lane'), { from: q.get('from') ?? undefined, to: q.get('to') ?? undefined, ledger: q.get('ledger') ?? undefined }, w.marks[k])) })
+  await answer('**/api/lane?**', (req) => { const q = new URL(req.url()).searchParams; return json(w.lane(q.get('lane'), { from: q.get('from') ?? undefined, to: q.get('to') ?? undefined, ledger: q.get('ledger') ?? undefined }, w.marks[k])) })
   // 3.5 §会话读 `block`: one item per asked ref, its bytes made from the ref (the shape of session-read-contract.json `block_multi`)
-  await page.route('**/api/block?**', async (route) => {
-    await wait()
-    const refs = new URL(route.request().url()).searchParams.getAll('ref')
-    json(route, { schema: 2, command: 'block', ok: true, errors: [], blocks: refs.map((ref) => ({ ref, bytes: blockBytes(ref), encoding: 'utf8', fidelity: 'verbatim', truncated: false })) })
+  await answer('**/api/block?**', (req) => {
+    const refs = new URL(req.url()).searchParams.getAll('ref')
+    return json({ schema: 2, command: 'block', ok: true, errors: [], blocks: refs.map((ref) => ({ ref, bytes: blockBytes(ref), encoding: 'utf8', fidelity: 'verbatim', truncated: false })) })
   })
   return { left: () => last - k, more: (n = 1) => { granted += n } }
 }
@@ -275,19 +277,24 @@ export async function shoot(page, name, { width, theme }) {
 /** What a reader would see as broken layout under `root` (1.5 · D64⑤), measured on the painted page — never a count or a wording:
  *  - `overlap`: two pieces of text, or text and a control (a switch, an input), drawn on one another — the boxes intersect by more than 2 px
  *    both ways (a disclosure title under a copy button, a cell note running into the next column, a date over a switch);
- *  - `cut`: text cut off by a box that clips it with no ellipsis (a hidden-overflow ancestor that is not a scroll container, horizontally);
+ *  - `cut`: text cut off by a box that clips it with no ellipsis (a hidden-overflow ancestor that is not a scroll container, horizontally),
+ *    or a line whose glyph box (ascent to descent) sticks out above or below such a box: a line box too short for its font;
  *  - `untitled`: text truncated with an ellipsis whose full text is nowhere on hover (no `title` on it or above it);
- *  - `emptyIcons`: an agent icon box of a known agent that is still empty once its file had ICON_WAIT_MS to arrive (the board fills a box
- *    when the file answers, core/chips.mjs; a slow machine answers it after the screen's data). Overlays (dialogs, popovers, toasts) float by
- *    design and are left out. */
+ *  - `emptyIcons`: an agent icon box of a known agent with no <img>, or whose image failed to decode (K-11: a file that fails to load
+ *    leaves an empty box). The board draws the <img> with the screen; its file answers later, so each box gets ICON_WAIT_MS for its image
+ *    to finish loading before it is judged (a slow machine answers the file after the screen's data). Overlays (dialogs, popovers, toasts)
+ *    float by design and are left out. */
 const ICON_WAIT_MS = 10_000
 export const layoutFaults = (page, root = '#content') => page.evaluate(async ({ root, iconWaitMs }) => {
   const R = document.querySelector(root)
   const out = { overlap: [], cut: [], untitled: [], emptyIcons: [] }
   if (!R) return out
   const shown = (el) => { for (let e = el; e && e !== document.documentElement; e = e.parentElement) { const cs = getComputedStyle(e); if (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') return false } return true }
-  const empty = () => [...R.querySelectorAll('[data-hicon]')].filter((el) => el.getAttribute('data-hicon') !== '?' && shown(el) && !el.querySelector('svg'))
-  for (const t0 = Date.now(); empty().length && Date.now() - t0 < iconWaitMs;) await new Promise((ok) => setTimeout(ok, 50))
+  // a known agent's box holds its <img>; `loading` = no <img> yet or one still loading, `empty` = no <img> or one that failed to decode
+  const known = () => [...R.querySelectorAll('[data-hicon]')].filter((el) => el.getAttribute('data-hicon') !== '?' && shown(el))
+  const loading = () => known().filter((el) => { const img = el.querySelector('img'); return !img || !img.complete })
+  const empty = () => known().filter((el) => { const img = el.querySelector('img'); return !img || (img.complete && img.naturalWidth === 0) })
+  for (const t0 = Date.now(); loading().length && Date.now() - t0 < iconWaitMs;) await new Promise((ok) => setTimeout(ok, 50))
   const floating = (el) => !!el.closest('[role="dialog"], [data-confirm-back], .pop, .popover, .fly, #toasts')
   // the part of a box the reader can see: inside every ancestor that clips (any overflow but visible) and inside the window
   const seen = (el, r) => {
@@ -328,10 +335,15 @@ export const layoutFaults = (page, root = '#content') => page.evaluate(async ({ 
     if (b.control) continue
     for (let e = b.el; e && e !== document.body; e = e.parentElement) {
       const cs = getComputedStyle(e)
-      if (cs.overflowX !== 'hidden' && cs.overflowX !== 'clip') continue
+      const clips = (o) => o === 'hidden' || o === 'clip'
+      if (!clips(cs.overflowX) && !clips(cs.overflowY)) continue
       const er = e.getBoundingClientRect()
       if (er.width <= 2 || er.height <= 2) break // a box hidden on purpose (a screen-reader-only label)
-      if (b.r.right <= er.right + 1 && b.r.left >= er.left - 1) continue
+      // a line whose glyph box sticks out above or below the box that clips it: its ascenders or descenders are cut, and no ellipsis helps
+      if (clips(cs.overflowY) && b.r.bottom > er.top && b.r.top < er.bottom && (b.r.top < er.top - 1 || b.r.bottom > er.bottom + 1)) {
+        out.cut.push(`${JSON.stringify(b.t)} in ${e.tagName.toLowerCase()}.${String(e.className).split(' ')[0]} (top or bottom)`); break
+      }
+      if (!clips(cs.overflowX) || (b.r.right <= er.right + 1 && b.r.left >= er.left - 1)) continue
       let ell = false
       for (let x = b.el; x; x = x.parentElement) { if (getComputedStyle(x).textOverflow === 'ellipsis') { ell = true; break } if (x === e) break }
       if (!ell) out.cut.push(`${JSON.stringify(b.t)} in ${e.tagName.toLowerCase()}.${String(e.className).split(' ')[0]}`)

@@ -114,7 +114,7 @@ test('3.5 lane: /api/lane with ledger is runQuery lane --ledger; ledger with fro
 });
 
 test('V80: no second read path is left in the shell or the page', () => {
-  const files = [path.join(ROOT, 'src', 'server.mjs'), ...fs.readdirSync(path.join(ROOT, 'src', 'web'), { recursive: true }).map((f) => path.join(ROOT, 'src', 'web', f))];
+  const files = [path.join(ROOT, 'src', 'server.mjs'), ...['legacy', 'src'].flatMap((d) => fs.readdirSync(path.join(ROOT, 'web', d), { recursive: true }).map((f) => path.join(ROOT, 'web', d, f)))];
   for (const f of files) {
     if (!fs.statSync(f).isFile()) continue;
     const txt = fs.readFileSync(f, 'utf8');

@@ -3,8 +3,8 @@
 // whose fetch failed is not "filled" — collapsing and reopening it asks again. No DOM: the elements are minimal fakes.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { bodyCache, loadBody, fillBody, isRetryable, noteBodyFidelity } from '../../src/web/v2/replay/blocks.mjs'
-import { toggleCtxBlock } from '../../src/web/v2/replay/ctxwin.mjs'
+import { bodyCache, loadBody, fillBody, isRetryable, noteBodyFidelity } from '../../web/legacy/replay/blocks.mjs'
+import { toggleCtxBlock } from '../../web/legacy/replay/ctxwin.mjs'
 
 const REF = 'sess-a/main#rec1::0-40'
 const blockB = { sec: 'messages', kind: 'text', role: 'user', text_ref: REF } // addressed: no inline body
@@ -82,7 +82,7 @@ test('toggleCtxBlock: reopening a row whose fetch failed asks again; a row that 
 })
 
 test('the drawer: a row whose fetch failed asks again when it is reopened', async () => {
-  const { wireDetail } = await import('../../src/web/v2/replay/detail.mjs')
+  const { wireDetail } = await import('../../web/legacy/replay/detail.mjs')
   const run = async (api) => {
     const body = fakeBody(), cls = new Set() // a drawer row starts folded
     const row = { dataset: { di: '0' }, classList: { contains: (c) => cls.has(c), toggle: (c) => (cls.has(c) ? cls.delete(c) : cls.add(c)) }, querySelector: (sel) => (sel === '.dbbody' ? body : null) }

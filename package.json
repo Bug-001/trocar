@@ -47,10 +47,33 @@
     "test": "node --test --test-force-exit --require ./test/helpers/flush-exit.cjs --require ./test/helpers/leak-guard.cjs --require ./test/helpers/no-real-os.cjs",
     "test:real": "node --test --test-force-exit --require ./test/helpers/flush-exit.cjs --require ./test/helpers/leak-guard.cjs --require ./test/helpers/no-real-os.cjs test/query/real-session.test.mjs",
     "test:browser": "node scripts/test-browser.mjs",
+    "test:build": "node scripts/test-build.mjs",
+    "test:web": "vitest run --config web/vitest.config.mjs",
+    "typecheck": "tsc -p web",
+    "lint": "eslint --config web/eslint.config.mjs web/src",
     "release:check": "node scripts/release.mjs check",
-    "release:pack": "node scripts/release.mjs pack"
+    "release:pack": "node scripts/release.mjs pack",
+    "build:board": "vite build --configLoader native --config web/vite.config.mjs"
   },
   "devDependencies": {
-    "playwright-core": "^1.64.1"
+    "@tanstack/react-query": "5.105.1",
+    "@tanstack/react-virtual": "3.14.25",
+    "@testing-library/dom": "10.4.2",
+    "@testing-library/react": "16.3.3",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@typescript-eslint/parser": "8.72.1",
+    "@vitejs/plugin-react": "6.1.2",
+    "eslint": "10.14.0",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "jsdom": "30.1.3",
+    "playwright-core": "1.64.1",
+    "react": "19.3.1",
+    "react-aria-components": "1.22.1",
+    "react-dom": "19.3.1",
+    "react-router": "8.5.1",
+    "typescript": "6.0.3",
+    "vite": "8.3.5",
+    "vitest": "5.0.5"
   }
 }

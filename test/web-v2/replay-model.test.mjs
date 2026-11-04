@@ -5,7 +5,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { createDesk, applySession, applyLane, listOf, stepOf, laneEvents, askOrdinal, applyLedger, ledgerAsk, ledgerDone,
-  readLedger, seenFiles } from '../../src/web/v2/replay/model.mjs'
+  readLedger, seenFiles } from '../../web/legacy/replay/model.mjs'
 import { world, readLane, deskFrom } from './desk-world.mjs'
 
 const fx = JSON.parse(fs.readFileSync(new URL('../fixtures/session-read-contract.json', import.meta.url), 'utf8'))

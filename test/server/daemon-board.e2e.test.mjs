@@ -45,7 +45,16 @@ for (const platform of ['darwin', 'win32']) {
         const token = fs.readFileSync(file, 'utf8')
         assert.match(token, /^[A-Za-z0-9_-]{43}$/)
         assert.equal(fs.statSync(file).mode & 0o777, 0o600)
-        assert.equal((await get(port, '/')).status, 200)
+        const root = await get(port, '/')
+        assert.equal(root.status, 200)
+        const BOARD = new URL('../../src/web/board/', import.meta.url)
+        assert.equal(root.body, fs.readFileSync(new URL('index.html', BOARD), 'utf8'), '/ is the built index')
+        const refs = [...root.body.matchAll(/(?:src|href)="([^"#][^"]*)"/g)].map((m) => m[1]).filter((u) => !u.startsWith('data:'))
+        assert.ok(refs.length > 0, 'the index loads its build')
+        for (const ref of refs) {
+          const asset = await get(port, new URL(ref, 'http://board/').pathname)
+          assert.deepEqual([ref, asset.status, asset.body], [ref, 200, fs.readFileSync(new URL(ref, BOARD), 'utf8')], `${ref} is the built file`)
+        }
         const api = await get(port, '/api/sessions', { [CONTROL_TOKEN_HEADER]: token })
         assert.equal(api.status, 200, api.body)
         assert.equal(JSON.parse(api.body).command, 'sessions')

@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<script>/* the theme preference, before the first paint (1.5): light / dark pin it, anything else follows the system */try{var t=localStorage.getItem("trocar.v2.theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t}catch(e){}</script>
+<title>trocar</title>
+<link rel="icon" href="data:," /><!-- the tab icon: main.tsx draws the brand mark into it; this empty one keeps the browser from asking for /favicon.ico -->
+  <script type="module" async src="./assets/first.js"></script>
+<script type="module" crossorigin src="./assets/index.js"></script>
+  <link rel="modulepreload" crossorigin href="./assets/useButton.js">
+  <link rel="modulepreload" crossorigin href="./assets/Svg.js">
+  <link rel="modulepreload" crossorigin href="./assets/router.js">
+  <link rel="modulepreload" crossorigin href="./assets/FocusScope.js">
+  <link rel="modulepreload" crossorigin href="./assets/Dialog.js">
+  <link rel="stylesheet" crossorigin href="./assets/index.css">
+</head>
+<body>
+<div id="app"></div><!-- web/src/main.tsx renders the sidebar and #content into it -->
+<div id="detail"></div>
+<div id="toasts" aria-live="polite"></div>
+</body>
+</html>

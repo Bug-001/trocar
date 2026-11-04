@@ -4,11 +4,11 @@
 // PENDING ids are measured and reported, never failed. Selectors are the board's ids / classes / data attributes, never wording.
 // Exports only; nothing runs at import.
 import { snap as probeSnap } from './probe.mjs'
-import { WRITE_GAP_MS } from '../../../../src/web/v2/core/router.mjs'
+import { WRITE_GAP_MS } from '../../../../web/legacy/core/router.mjs'
 import { BOARD_LINES } from '../../perf-lines.mjs'
 
 export const IDS = Object.freeze(['I-pageerror', 'I-console', 'I-blank', 'I-keep', 'I-stack', 'I-hscroll', 'I-rate', 'I-write', 'I-leak',
-  'I-mem', 'I-heap', 'I-follow', 'I-hold', 'I-url', 'I-cjk', 'I-longtask', 'I-loadstep', 'I-chapter', 'I-pack', 'I-memcap', 'I-select'])
+  'I-mem', 'I-heap', 'I-follow', 'I-hold', 'I-url', 'I-cjk', 'I-longtask', 'I-loadstep', 'I-chapter', 'I-pack', 'I-memcap', 'I-select', 'I-review'])
 
 export const PENDING = new Map([
   ['I-memcap', 'the page heap stays under memCapBytes (80 MB)'],
@@ -24,7 +24,7 @@ export const LIMITS = Object.freeze({
   // the desk's poll round (4.4 live-poll): the head and a Range read of each open tail, 1.5 s
   interval: Object.freeze({ status: 5000, sessions: 15000, session: 1500, 'd/head': 1500, 'd/open.main': 1500, 'd/open.rest': 1500 }), // spec/01-trocar-rfc/4.4-server.md:45-52
   intervalOther: 30000, // 4.4:52 「其余 … 每 30 s」
-  backoffCapMs: 30000, // 1.5 K-29 (spec/01-trocar-rfc/1.5-states-aesthetics.md:76): doubling, capped at 30 s
+  backoffCapMs: 30000, // 1.5 K-29 (spec/01-trocar-rfc/1.5-states-aesthetics.md:61): doubling, capped at 30 s
   sessionDurFactor: 3, // 4.4:51 the timer's next read waits ≥ 3 × the last read's duration
   rateSlack: 0.8, // timer jitter: a gap of 0.8 × the expected interval still passes (invariant I-rate)
   actionWindowMs: Object.freeze([-200, 500]), // a read within this of a reader action is the reader's read (4.4:51)
@@ -95,6 +95,9 @@ const viewOf = (page) => page.evaluate((sel) => {
     chapter: ((l) => l && { s0: +l.dataset.s0, s1: +l.dataset.s1 })(document.querySelector('#chapnav .chaplabel')),
     at: ((e) => (e ? +e.dataset.n : null))(document.querySelector('#stepbar .sb-no[data-n], #stepbar .sb-at[data-n]')),
     win: ['#sawstart', '#sawend'].map((id) => +((/\d+/.exec(document.querySelector(id)?.textContent || '') || [])[0] ?? NaN)),
+    // the review range on the main track (2.1 #5): is the bracket drawn with a width, and which drawn bars are .reviewed
+    review: ((br) => ({ bracket: !!br && getComputedStyle(br).display !== 'none' && br.getBoundingClientRect().width > 0,
+      bars: [...document.querySelectorAll('#sawrow .bar')].map((b) => b.classList.contains('reviewed')) }))(document.querySelector('#reviewbracket')),
     sideways: document.documentElement.scrollWidth > innerWidth,
     dom: document.getElementsByTagName('*').length,
   }
@@ -119,14 +122,17 @@ const rateKey = (url) => {
 function rateFaults(log, { actions = [], hidden = [] } = {}) {
   const out = []
   const [lo, hi] = LIMITS.actionWindowMs
-  const byReader = (t) => actions.some((a) => t >= a.t + lo && t <= a.t + hi)
+  // a page load is no reader action (a goto, a background tab's open): its reads are judged as the load's opening below
+  const byReader = (t) => actions.some((a) => a.a !== 'load' && t >= a.t + lo && t <= a.t + hi)
   const hiddenAt = (t) => hidden.some((h) => t > h.from && (h.to == null || t < h.to))
   const sorted = [...log].filter((x) => x.method === 'GET').sort((a, b) => a.start - b.start)
-  // the first read of each key in a window is the screen's own: on becoming visible again (4.4:49-51) and on opening (4.4 「打开时」)
-  const exempt = new Set()
-  const firstIn = (from, to) => { const seen = new Set(); for (const e of sorted) if (e.start >= from && e.start <= to && !seen.has(rateKey(e.url))) { seen.add(rateKey(e.url)); exempt.add(e) } }
+  // the first read of each key in a window is the screen's own: on becoming visible again (4.4:49-51) and on opening (4.4 「打开时」: a load,
+  // a hashchange, a popstate). A load's are kept apart: a page can load in a hidden tab, so its opening reads are judged hidden below
+  const exempt = new Set(), loadExempt = new Set()
+  const firstIn = (from, to, set = exempt) => { const seen = new Set(); for (const e of sorted) if (e.start >= from && e.start <= to && !seen.has(rateKey(e.url))) { seen.add(rateKey(e.url)); set.add(e) } }
   for (const h of hidden) if (h.to != null) firstIn(h.to, h.to + LIMITS.returnReadMs)
   for (const a of actions) if (a.a === 'hashchange' || a.a === 'popstate') firstIn(a.t + lo, a.t + LIMITS.openReadMs)
+  for (const a of actions) if (a.a === 'load') firstIn(a.t + lo, a.t + LIMITS.openReadMs, loadExempt)
   const last = new Map() // key → {start, dur, fails, pending, recovered}
   let sessionAt = -Infinity // the start of the latest poll round (its head read, or a `session` read), whatever caused it
   for (const e of sorted) {
@@ -134,12 +140,17 @@ function rateFaults(log, { actions = [], hidden = [] } = {}) {
     const since = sessionAt, failed = failedRead(e)
     if (name === 'session' || name === 'd/head') sessionAt = e.start
     if (key == null) continue
-    if (byReader(e.start) || exempt.has(e)) { last.delete(key); continue } // the reader's read starts the timer's chain over
+    // the reader's read (and a screen it opened) starts the timer's chain over. Input reaching a hidden page is the harness's emulation:
+    // such reads are the reader's, not the hidden tab's
+    if (byReader(e.start) || exempt.has(e)) { last.delete(key); continue }
+    // a hidden tab reads nothing by itself (1.7 「页面不可见时全部停」), a load's opening reads included. A read on becoming visible again
+    // starts at or after the return: not hidden
+    if (hiddenAt(e.start)) out.push(`${name} read at ${e.start} while hidden`)
+    if (loadExempt.has(e)) { last.delete(key); continue }
     // an open tail read again in its own poll round (no head read since) is the round's whole read after a Range answer that was not
     // the file's lines or a 416 (4.4 §答案文件, replay.mjs readTail): once per round
     if (p && /^d\/open/.test(name) && since <= p.start && !p.chained) { last.set(key, { ...p, chained: true }); continue }
     last.set(key, { start: e.start, dur: (e.end ?? e.start) - e.start, fails: failed ? (p ? p.fails : 0) + 1 : 0, pending: !!e.pending, recovered: !failed && !!p && p.fails > 0 })
-    if (hiddenAt(e.start)) out.push(`${name} read at ${e.start} while hidden`)
     if (!p) continue
     const base = DELTA_PACED.has(name) ? LIMITS.interval.session : LIMITS.interval[name] || LIMITS.intervalOther
     if (DELTA_PACED.has(name) && !p.fails) {
@@ -285,6 +296,11 @@ export async function check(ctx) {
     for (const t0 = Date.now(); chapterOff(x) && Date.now() - t0 < LIMITS.chapterSettleMs;) { await page.waitForTimeout(100); x = await viewOf(page) }
     if (chapterOff(x)) bad('I-chapter', chapterOff(x))
   }
+  // I-review (2.1 #5 · 1.3 §跨轨联动): the bracket is drawn with a width iff some bar is .reviewed, and the .reviewed bars are a prefix
+  // of the drawn bars (the review range is [lo, k))
+  const rv = v.review, some = rv.bars.includes(true), prefix = rv.bars.indexOf(false) < 0 || !rv.bars.slice(rv.bars.indexOf(false)).includes(true)
+  if (rv.bracket !== some) bad('I-review', `the review bracket is ${rv.bracket ? '' : 'not '}drawn and ${some ? 'some' : 'no'} bar is reviewed`)
+  if (!prefix) bad('I-review', 'the reviewed bars are not a prefix of the drawn bars')
   const pk = packFaults(s.fetchLog)
   if (pk.length) bad('I-pack', pk.slice(0, 3).join(' | '))
 

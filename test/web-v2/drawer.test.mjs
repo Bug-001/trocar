@@ -3,17 +3,17 @@
 // through as-is. String level over constructed lanes.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { detailHtml, openDetail, closeDetail } from '../../src/web/v2/replay/detail.mjs'
-import { reviewing } from '../../src/web/v2/replay/rails.mjs'
-import { buildLanes } from '../../src/web/v2/replay/lanes.mjs'
-import { bodyCache } from '../../src/web/v2/replay/cell.mjs'
-import * as W from '../../src/web/v2/labels/replay.mjs'
+import { detailHtml, openDetail, closeDetail } from '../../web/legacy/replay/detail.mjs'
+import { reviewing } from '../../web/legacy/replay/rails.mjs'
+import { buildLanes } from '../../web/legacy/replay/lanes.mjs'
+import { bodyCache } from '../../web/legacy/replay/cell.mjs'
+import * as W from '../../web/legacy/labels/replay.mjs'
 import { deskOf } from './desk-world.mjs'
 
 const ts = (i) => new Date(Date.UTC(2026, 9, 7, 0, 0, i * 5)).toISOString()
 const mainCalls = Array.from({ length: 6 }, (_, i) => ({ gi: i, ts: ts(i), ctx: 100 }))
 const main = { id: 'main', kind: 'main', calls: mainCalls, giLocal: new Map(mainCalls.map((c, i) => [c.gi, i])), peakCtx: 200, events: [], resources: [] }
-const stateOf = (extra = {}) => ({ anchor: main, lanes: [main], anchorTs: mainCalls.map((c) => Date.parse(c.ts)), playhead: 0, pricing: null, root: { querySelectorAll: () => [], querySelector: () => null }, ...extra })
+const stateOf = (extra = {}) => ({ anchor: main, lanes: [main], anchorTs: mainCalls.map((c) => Date.parse(c.ts)), playhead: 0, pricing: null, root: { querySelectorAll: () => [], querySelector: () => null }, paintReview: () => {}, ...extra })
 const blk = (o) => ({ sec: 'messages', kind: 'text', role: 'user', chars: 30, ref: 'r1', head: { role: 'user', tag: 'user', label: 'b' }, ...o })
 
 test('a side-lane call sits near the main step closest in time; opening sets the lane kind on the drawer', () => {

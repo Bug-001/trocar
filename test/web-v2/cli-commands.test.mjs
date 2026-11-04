@@ -7,10 +7,10 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { COMMANDS as BOARD } from '../../src/web/v2/labels/capture.mjs'
+import { COMMANDS as BOARD } from '../../web/legacy/labels/capture.mjs'
 import { COMMANDS as CLI } from '../../src/cli/commands.mjs'
 
-const LABELS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'src', 'web', 'v2', 'labels')
+const LABELS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'web', 'legacy', 'labels')
 const TROCAR = /^(?:sudo )?trocar (\S+)(.*)$/
 
 // does one board command fit one usage line? tokens after the name: a <placeholder> fills a <…> or [<…>…] slot, a

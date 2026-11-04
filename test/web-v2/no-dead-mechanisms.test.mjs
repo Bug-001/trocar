@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url'
 import { findIn } from '../helpers/code-text.mjs'
 
 const REPO = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
-const V2 = path.join(REPO, 'src', 'web', 'v2')
+const V2 = path.join(REPO, 'web', 'legacy')
 const DEAD = [
   /\betl\b/gi, // D59③
   /duckdb/gi, // D59③
@@ -37,8 +37,8 @@ test('the scanner is not vacuous: a dead name in code is reported, the same name
   assert.equal(scan(path.join(V2, 'x.html'), '<!-- DuckDB --><button data-act="uninstall">').length, 1)
 })
 
-test('no code or string in src/web/v2 names a removed mechanism', () => {
-  const files = fs.readdirSync(V2, { recursive: true }).filter((p) => /\.(mjs|html)$/.test(p)).map((p) => path.join(V2, p))
+test('no code or string in web/legacy names a removed mechanism', () => {
+  const files = fs.readdirSync(V2, { recursive: true }).filter((p) => /\.(mjs|html)$/.test(p)).map((p) => path.join(V2, p)).concat(path.join(V2, '..', 'index.html'))
   assert.ok(files.length > 10)
   assert.deepEqual(files.flatMap((f) => scan(f, fs.readFileSync(f, 'utf8'))), [])
 })

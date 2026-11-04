@@ -5,8 +5,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { diskFigures, classRows, fileProblems, problemCount } from '../../src/web/v2/settings/storage.mjs'
-import { priceRows, sourceHtml } from '../../src/web/v2/settings/prices.mjs'
+import { diskFigures, classRows, fileProblems, problemCount } from '../../web/src/screens/settings/storage-model.mjs'
+import { priceRows } from '../../web/legacy/settings/prices.mjs'
 import { boardHome, serveBoard } from './real-face.mjs'
 import { writeSegment } from '../query/raw-home.mjs'
 
@@ -59,7 +59,7 @@ test('(3) the file problems are the segments\' problems and the documents\' erro
   for (const s of segments.segments) if (s.problems.length) assert.ok(list.some((e) => e.where.includes(s.segment)), s.segment)
 })
 
-test('(4) the price rows are pricing.models[] and follow the file the board reads; the source line reads pricing.source', async () => {
+test('(4) the price rows are pricing.models[] and follow the file the board reads', async () => {
   const { pricing } = await plain
   assert.deepEqual(priceRows(pricing).map((r) => r.id), pricing.models.map((m) => m.model))
   const file = { 'zz-fixture-model': [1.5, 2.5, 3.5, 4.5], opus: [7, 8, 9, 10] }
@@ -70,7 +70,4 @@ test('(4) the price rows are pricing.models[] and follow the file the board read
   for (const [k, [input, output, write, readc]] of Object.entries(file)) {
     assert.deepEqual(rows.find((r) => r.id === k), { id: k, input, output, write, read: readc })
   }
-  assert.notEqual(doc.source, 'default')
-  assert.ok(sourceHtml(doc).includes(doc.source))
-  assert.ok(!sourceHtml(pricing).includes(doc.source))
 })

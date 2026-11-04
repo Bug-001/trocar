@@ -3,7 +3,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import http from 'node:http'
-import { probe, withBoard, shoot, launchChrome } from './harness.mjs'
+import { probe, withBoard, shoot, launchChrome, serveWorld } from './harness.mjs'
+import { world } from '../desk-world.mjs'
 
 const gate = await probe()
 
@@ -79,4 +80,24 @@ test('closing a page, a context or the browser while a route handler awaits rout
     for (const res of held) res.destroy()
     await new Promise((r) => server.close(r))
   }
+})
+
+// serveWorld's answers wait `latency` ms before they fulfill: routes dropped meanwhile (stop's closeQuietly) make Playwright continue
+// the request itself, so the late fulfill rejects ("Route is already handled!"). A handler that hands that rejection back to Playwright
+// has it ignored; one that let it float failed whichever case was stopping (desk-pending, desk-load).
+test('dropping the routes while serveWorld answers wait leaves no unhandled rejection', { skip: gate.ok ? false : gate.reason, timeout: 60_000 }, async () => {
+  const rejections = [], onRejection = (e) => rejections.push(String(e))
+  process.on('unhandledRejection', onRejection)
+  try {
+    const b = await withBoard({ bytes: 1e5, chromium: gate.chromium })
+    try {
+      await serveWorld(b.page, world(1, { calls: 400, page: 100 }), { latency: 1000 })
+      const lane = b.page.waitForRequest('**/api/lane?**', { timeout: 20_000 })
+      await b.page.evaluate(() => { location.hash = '#/replay/p/S' })
+      await lane // a lane read is out, its answer waiting
+      await b.page.unrouteAll({ behavior: 'ignoreErrors' }) // stop's first step (closeQuietly), with the page kept open while the answers wake
+      await new Promise((r) => setTimeout(r, 1500))
+    } finally { await b.stop() }
+    assert.deepEqual(rejections, [])
+  } finally { process.off('unhandledRejection', onRejection) }
 })

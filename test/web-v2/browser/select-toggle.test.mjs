@@ -59,7 +59,7 @@ const rowState = (page, head) => page.evaluate((head) => {
   const e = document.querySelector(head), p = document.getElementById(e.getAttribute('aria-controls'))
   return { exp: e.getAttribute('aria-expanded'), hidden: p.hasAttribute('hidden') }
 }, head)
-const discOpen = (page, disc) => page.evaluate((d) => { const t = document.querySelector(d); return !document.getElementById(t.dataset.disc).hasAttribute('hidden') }, disc)
+const discOpen = (page, disc) => page.evaluate((d) => { const t = document.querySelector(d); return !document.getElementById(t.getAttribute('aria-controls')).hasAttribute('hidden') }, disc)
 async function openBoth(page, head, disc) {
   if ((await rowState(page, head)).exp !== 'true') await page.locator(head).first().click()
   await page.waitForSelector(disc)
@@ -76,7 +76,7 @@ test('selecting text inside an expanded row, or clicking there, leaves it open; 
     const head = '.crow [data-caprow]'
     await page.evaluate(() => { location.hash = '#/capture' })
     await page.waitForSelector(head, { timeout: 30_000 })
-    const disc = '.cexp:not([hidden]) [data-disc]'
+    const disc = '.cexp:not([hidden]) .disc-t'
     await openBoth(page, head, disc)
     const at = await dragSelect(page, '.cexp:not([hidden]) .tech')
     assert.deepEqual(await rowState(page, head), { exp: 'true', hidden: false }, 'capture: a drag-select keeps the row open')
@@ -91,7 +91,7 @@ test('selecting text inside an expanded row, or clicking there, leaves it open; 
     assert.equal((await rowState(page, head)).exp, 'false', 'capture: with an old selection, a click on the head closes the row')
 
     // B · the capture log
-    const lhead = '.crows .lr:not(.h) [data-lrow]', ldisc = '.lx:not([hidden]) [data-disc]'
+    const lhead = '.crows .lr:not(.h) [data-lrow]', ldisc = '.lx:not([hidden]) .disc-t'
     await page.evaluate(() => { location.hash = '#/capture/log' })
     await page.waitForSelector(lhead, { timeout: 30_000 })
     await openBoth(page, lhead, ldisc)

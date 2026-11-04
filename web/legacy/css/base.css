@@ -1,0 +1,299 @@
+/* css/base.css — the token block (1.5 §令牌, the one place colours live), base typography, and the shared kit every screen
+   uses (buttons, the segmented control, select and search, the switch, the tooltip, the popover, the disclosure row,
+   技术细节, the fidelity marks, the modal, the detail drawer). Light is the default; dark comes with the OS unless a manual
+   [data-theme] says otherwise — both directions of the manual choice win. A colour that differs between the themes is
+   set in all four blocks; one that does not, and every non-colour token, lives in :root only. */
+:root {
+  color-scheme: light;
+  /* faces */
+  --paper: #F8F7FB;  --panel: #EFEDF5;  --raised: #FFFFFF;  --sunk: #F4F2F8;
+  --scope: #1B1830;  --scope-2: #241A37;  /* the replay desk's inset scope: dark glass in both themes */
+  --scope-bezel: #0F0D1C;  --scope-hi: rgb(255 255 255 / .14);  /* its edge: an outer bezel line and an inner top highlight */
+  /* lines */
+  --rule: #E4E1EC;  --rule-2: #CFCADC;  --control-edge: #848099;  --grat: rgb(255 255 255 / .07);
+  /* ink */
+  --ink: #1B1828;  --ink-2: #4D4960;  --ink-3: #605B72;
+  /* action: only what can be operated */
+  --action: #5B47E0;  --action-ink: #FFFFFF;  --action-wash: rgb(91 71 224 / .10);
+  --seg-on: #FFFFFF;  --seg-track: #E6E3EE;  --switch-on: #5B47E0;  --switch-off: #E6E3EE;  --knob-on: #FFFFFF;  --knob-off: #7A7590;  --icon-tile: #FFFFFF;  --icon-tile-edge: #CFCADC;
+  /* state: amber and red are for problems only */
+  --bad: #B42318;  --bad-lamp: #E0443A;  --warn: #8A4B00;  --warn-lamp: #C2740E;  --ok: #217A45;  --note-lamp: #1B1828;
+  /* instrument: the trace on the glass, --trace-ink where the cache share sits on paper; the cursor is neutral */
+  --trace: #7FE8C8;  --trace-ink: #167A5F;  --cursor: #F4F2FF;  --cursor-ink: #17132B;
+  --scope-ink: #ECE9F7;  --scope-ink-2: #ABA5CA;  --scope-edge: #6E6890;  --scope-rule: rgb(255 255 255 / .12);
+  --scope-fill: rgb(255 255 255 / .06);  --scope-fill-2: rgb(255 255 255 / .16);  --scope-action: #B9AEFF;
+  --scope-glow: rgb(194 82 217 / .18);  --scope-col: rgb(255 255 255 / .09);
+  /* data: content types (charts and legend swatches only) */
+  --ct-tools: #6F7EA3;  --ct-system: #9479E8;  --ct-user: #3E8CF2;  --ct-assistant: #1E9E8F;
+  --ct-thinking: #D262B9;  --ct-tooluse: #A8841F;  --ct-result: #948A82;  --ct-hatch: #8C899C;
+  /* block cells: diff and error tints under ink, diff hunk heads and JSON-tree text (RFC 2.3 §两种模式) */
+  --diff-add-bg: #DCEDE1;  --diff-del-bg: #F5E1DE;  --diff-hunk: #3D5A80;  --err-bg: #FAE6E3;
+  --j-key: #5B3FB0;  --j-str: #1C6B47;  --j-num: #8A4600;  --j-lit: #9A2F72;
+  /* brand: the signature gradient; the tag runs its first two stops so its white ink holds 4.5:1 */
+  --brand-1: #6B5BFF;  --brand-2: #C252D9;  --brand-3: #FF8A5B;  --brand-ink: #FFFFFF;
+  --brand-line: linear-gradient(90deg, var(--brand-1), var(--brand-2) 55%, var(--brand-3));
+  --tag: linear-gradient(90deg, #5A46E6, #9C3BC0);  --tag-ink: #FFFFFF;
+  --brand-text: linear-gradient(100deg, #5A46E6 10%, #A43CC4 70%, #C2513F);
+  --wash: linear-gradient(172deg, #ECE9FC 0%, #F3EDF9 52%, #FBEEF0 100%);
+  --wash-soft: linear-gradient(120deg, rgb(107 91 255 / .07), rgb(194 82 217 / .06) 55%, rgb(255 138 91 / .07));
+  --hover: rgb(27 24 40 / .045);
+  /* depth */
+  --shadow-card: 0 1px 2px rgb(27 24 40 / .05), 0 4px 14px rgb(27 24 40 / .04);
+  --shadow-pill: 0 1px 2px rgb(27 24 40 / .10), 0 0 0 1px rgb(27 24 40 / .05);
+  --shadow-float: 0 12px 32px rgb(27 24 40 / .16), 0 1px 3px rgb(27 24 40 / .10);
+  --shadow-scope: inset 0 1px 0 var(--scope-hi), inset 0 0 0 1px var(--scope-rule), 0 0 0 1px var(--scope-bezel), 0 2px 6px rgb(0 0 0 / .12);
+  --shadow-knob: 0 1px 2px rgb(0 0 0 / .3);
+  --scrim: rgb(10 16 18 / .45);
+  /* type: two families, five sizes, two weights; nothing else sets type. --sans for everything read or operated; --mono
+     only for machine bytes and literal identifiers, at --fs-cap except the verbatim bytes of Raw and Readable cells (--fs-body, the size of the reading text beside them). --wordmark is the logo, not UI text. Numbers are
+     tabular everywhere (set once on body); no letter-spacing, no all-caps, no italic. */
+  --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Segoe UI", "Microsoft YaHei", "Noto Sans CJK SC", "Noto Sans SC", system-ui, sans-serif;
+  --mono: "SF Mono", ui-monospace, Menlo, "Cascadia Mono", Consolas, "DejaVu Sans Mono", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", monospace;
+  --wordmark: "New York", "Iowan Old Style", "Charter", Georgia, serif;
+  --lh: 20px;         /* the body's line */
+  --fs-chart: 11px;   /* only numbers and labels drawn on the scope */
+  --fs-cap: 12px;     /* captions, meta, table heads, small controls, pills, mono outside the cells */
+  --fs-body: 13px;    /* body, rows, controls, row titles, the bytes in Raw and Readable cells */
+  --fs-head: 15px;    /* section and day headings */
+  --fs-title: 20px;   /* screen titles, the step read-out, key figures */
+  --fw-regular: 400;  --fw-strong: 600;
+  /* space / shape / motion / widths */
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px; --s7: 48px;
+  --head-gap: 12px; /* the page head to the first block of content, on every page (1.5 §审美维度 9) */
+  --r-1: 4px; --r-2: 8px; --r-3: 12px; --r-4: 16px; --r-pill: 999px;
+  --t-tip: 300ms;
+  --t-quick: 120ms; --t-panel: 180ms; --ease: cubic-bezier(.2, .7, .2, 1);
+  --side-w: 216px; --rail-w: 52px; --gutter: 16px; --outline-w: 236px; --rightpage-w: 320px;
+  /* old colour names the kept CSS (library / replay) still uses — resolved through the new tokens so both themes follow.
+     --panel is NOT aliased: its old meaning is --raised. */
+  --bg: var(--paper); --fg: var(--ink); --dim: var(--ink-2); --dimmer: var(--ink-3);
+  --border: var(--rule); --rail: var(--panel); --panel2: var(--sunk);
+  --accent: var(--action); --green: var(--ok); --amber: var(--warn); --red: var(--bad); --pink: var(--bad);
+  --cyan: var(--ct-tooluse); --purple: var(--ct-system);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --paper: #121019;  --panel: #1A1724;  --raised: #1E1B29;  --sunk: #17141F;
+    --scope: #191430;  --scope-2: #22163A;  --scope-bezel: #4A416A;  --scope-hi: rgb(255 255 255 / .16);
+    --rule: #2A2636;  --rule-2: #3B3649;  --control-edge: #7A7491;  --grat: rgb(255 255 255 / .06);
+    --ink: #EDEBF5;  --ink-2: #ABA6BF;  --ink-3: #958FA9;
+    --action: #A497FF;  --action-ink: #160F33;  --action-wash: rgb(164 151 255 / .14);
+    --seg-on: #3D3752;  --seg-track: #17141F;  --switch-on: #6F5CF2;  --switch-off: #2C2839;  --knob-off: #8A84A0;  --icon-tile: #F4F3F8;  --icon-tile-edge: #F4F3F8;
+    --bad: #FF8F85;  --bad-lamp: #FF5D52;  --warn: #F2B35B;  --warn-lamp: #F2A13A;  --ok: #6AD49A;  --note-lamp: #EDEBF5;
+    --trace-ink: #5FD3AE;
+    --scope-ink-2: #A9A3C7;  --scope-edge: #6A6390;  --scope-rule: rgb(255 255 255 / .11);
+    --scope-fill: rgb(255 255 255 / .05);  --scope-fill-2: rgb(255 255 255 / .14);  --scope-glow: rgb(194 82 217 / .20);
+    --ct-tools: #7D8CB2;  --ct-system: #A68BF0;  --ct-user: #4F98F5;  --ct-assistant: #2DB09F;
+    --ct-thinking: #DA70C2;  --ct-tooluse: #C49E33;  --ct-result: #A0978F;  --ct-hatch: #8F8BA2;
+    --diff-add-bg: #1E3328;  --diff-del-bg: #3A2624;  --diff-hunk: #93B4DC;  --err-bg: #3B2321;
+    --j-key: #BBA6F5;  --j-str: #7FD1A6;  --j-num: #EBB46C;  --j-lit: #E79ACB;
+    --brand-text: linear-gradient(100deg, #9C8DFF 10%, #E07CF0 70%, #FFA27E);
+    --wash: linear-gradient(172deg, #1C1832 0%, #1D1528 55%, #241520 100%);
+    --wash-soft: linear-gradient(120deg, rgb(107 91 255 / .14), rgb(194 82 217 / .10) 55%, rgb(255 138 91 / .10));
+    --hover: rgb(255 255 255 / .05);
+    --shadow-card: 0 0 0 1px rgb(255 255 255 / .02), 0 4px 16px rgb(0 0 0 / .25);
+    --shadow-pill: 0 1px 2px rgb(0 0 0 / .4), 0 0 0 1px rgb(255 255 255 / .06);
+    --shadow-float: 0 14px 36px rgb(0 0 0 / .55), 0 0 0 1px rgb(255 255 255 / .06);
+  }
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --paper: #F8F7FB;  --panel: #EFEDF5;  --raised: #FFFFFF;  --sunk: #F4F2F8;
+  --scope: #1B1830;  --scope-2: #241A37;  --scope-bezel: #0F0D1C;  --scope-hi: rgb(255 255 255 / .14);
+  --rule: #E4E1EC;  --rule-2: #CFCADC;  --control-edge: #848099;  --grat: rgb(255 255 255 / .07);
+  --ink: #1B1828;  --ink-2: #4D4960;  --ink-3: #605B72;
+  --action: #5B47E0;  --action-ink: #FFFFFF;  --action-wash: rgb(91 71 224 / .10);
+  --seg-on: #FFFFFF;  --seg-track: #E6E3EE;  --switch-on: #5B47E0;  --switch-off: #E6E3EE;  --knob-off: #7A7590;  --icon-tile: #FFFFFF;  --icon-tile-edge: #CFCADC;
+  --bad: #B42318;  --bad-lamp: #E0443A;  --warn: #8A4B00;  --warn-lamp: #C2740E;  --ok: #217A45;  --note-lamp: #1B1828;
+  --trace-ink: #167A5F;
+  --scope-ink-2: #ABA5CA;  --scope-edge: #6E6890;  --scope-rule: rgb(255 255 255 / .12);
+  --scope-fill: rgb(255 255 255 / .06);  --scope-fill-2: rgb(255 255 255 / .16);  --scope-glow: rgb(194 82 217 / .18);
+  --ct-tools: #6F7EA3;  --ct-system: #9479E8;  --ct-user: #3E8CF2;  --ct-assistant: #1E9E8F;
+  --ct-thinking: #D262B9;  --ct-tooluse: #A8841F;  --ct-result: #948A82;  --ct-hatch: #8C899C;
+  --diff-add-bg: #DCEDE1;  --diff-del-bg: #F5E1DE;  --diff-hunk: #3D5A80;  --err-bg: #FAE6E3;
+  --j-key: #5B3FB0;  --j-str: #1C6B47;  --j-num: #8A4600;  --j-lit: #9A2F72;
+  --brand-text: linear-gradient(100deg, #5A46E6 10%, #A43CC4 70%, #C2513F);
+  --wash: linear-gradient(172deg, #ECE9FC 0%, #F3EDF9 52%, #FBEEF0 100%);
+  --wash-soft: linear-gradient(120deg, rgb(107 91 255 / .07), rgb(194 82 217 / .06) 55%, rgb(255 138 91 / .07));
+  --hover: rgb(27 24 40 / .045);
+  --shadow-card: 0 1px 2px rgb(27 24 40 / .05), 0 4px 14px rgb(27 24 40 / .04);
+  --shadow-pill: 0 1px 2px rgb(27 24 40 / .10), 0 0 0 1px rgb(27 24 40 / .05);
+  --shadow-float: 0 12px 32px rgb(27 24 40 / .16), 0 1px 3px rgb(27 24 40 / .10);
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --paper: #121019;  --panel: #1A1724;  --raised: #1E1B29;  --sunk: #17141F;
+  --scope: #191430;  --scope-2: #22163A;  --scope-bezel: #4A416A;  --scope-hi: rgb(255 255 255 / .16);
+  --rule: #2A2636;  --rule-2: #3B3649;  --control-edge: #7A7491;  --grat: rgb(255 255 255 / .06);
+  --ink: #EDEBF5;  --ink-2: #ABA6BF;  --ink-3: #958FA9;
+  --action: #A497FF;  --action-ink: #160F33;  --action-wash: rgb(164 151 255 / .14);
+  --seg-on: #3D3752;  --seg-track: #17141F;  --switch-on: #6F5CF2;  --switch-off: #2C2839;  --knob-off: #8A84A0;  --icon-tile: #F4F3F8;  --icon-tile-edge: #F4F3F8;
+  --bad: #FF8F85;  --bad-lamp: #FF5D52;  --warn: #F2B35B;  --warn-lamp: #F2A13A;  --ok: #6AD49A;  --note-lamp: #EDEBF5;
+  --trace-ink: #5FD3AE;
+  --scope-ink-2: #A9A3C7;  --scope-edge: #6A6390;  --scope-rule: rgb(255 255 255 / .11);
+  --scope-fill: rgb(255 255 255 / .05);  --scope-fill-2: rgb(255 255 255 / .14);  --scope-glow: rgb(194 82 217 / .20);
+  --ct-tools: #7D8CB2;  --ct-system: #A68BF0;  --ct-user: #4F98F5;  --ct-assistant: #2DB09F;
+  --ct-thinking: #DA70C2;  --ct-tooluse: #C49E33;  --ct-result: #A0978F;  --ct-hatch: #8F8BA2;
+  --diff-add-bg: #1E3328;  --diff-del-bg: #3A2624;  --diff-hunk: #93B4DC;  --err-bg: #3B2321;
+  --j-key: #BBA6F5;  --j-str: #7FD1A6;  --j-num: #EBB46C;  --j-lit: #E79ACB;
+  --brand-text: linear-gradient(100deg, #9C8DFF 10%, #E07CF0 70%, #FFA27E);
+  --wash: linear-gradient(172deg, #1C1832 0%, #1D1528 55%, #241520 100%);
+  --wash-soft: linear-gradient(120deg, rgb(107 91 255 / .14), rgb(194 82 217 / .10) 55%, rgb(255 138 91 / .10));
+  --hover: rgb(255 255 255 / .05);
+  --shadow-card: 0 0 0 1px rgb(255 255 255 / .02), 0 4px 16px rgb(0 0 0 / .25);
+  --shadow-pill: 0 1px 2px rgb(0 0 0 / .4), 0 0 0 1px rgb(255 255 255 / .06);
+  --shadow-float: 0 14px 36px rgb(0 0 0 / .55), 0 0 0 1px rgb(255 255 255 / .06);
+}
+
+*{box-sizing:border-box;}
+body{margin:0;background:var(--paper);color:var(--ink);font:var(--fw-regular) var(--fs-body)/var(--lh) var(--sans);font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased;height:100vh;overflow:hidden;}
+a{color:var(--action);text-decoration:none;}
+a:hover{text-decoration:underline;text-underline-offset:3px;}
+:focus-visible,[data-focus-visible]{outline:2px solid var(--action);outline-offset:2px;border-radius:var(--r-1);}
+button,select,input{font:inherit;color:inherit;}
+h1,h2,h3,p{margin:0;}
+b,strong,th,h1,h2,h3,h4{font-weight:var(--fw-strong);}
+.mono{font-family:var(--mono);font-size:var(--fs-cap);font-weight:var(--fw-regular);}
+.c2{color:var(--ink-2);} .c3{color:var(--ink-3);}
+.cap{font-size:var(--fs-cap);line-height:18px;}
+.num{text-align:right;white-space:nowrap;}
+.nw{white-space:nowrap;}
+.sr{position:absolute !important;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;}
+.ico16{width:16px;height:16px;flex:none;} .ico14{width:14px;height:14px;flex:none;} .ico12{width:12px;height:12px;flex:none;}
+@media (prefers-reduced-motion: reduce){*,*::before,*::after{transition:none !important;animation:none !important;}}
+.spacer{flex:1;}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--ink-3);}
+.empty{color:var(--ink-3);padding:40px 12px;text-align:center;}
+kbd{font-family:var(--mono);font-size:var(--fs-cap);background:var(--sunk);border:1px solid var(--rule-2);border-radius:var(--r-1);padding:0 5px;}
+
+/* ── the shared kit (1.5 §组件): every screen draws its controls with these ─────────────────────────────────────── */
+/* buttons, select and search: 28px tall (20px line + padding + edge), the control edge, raised; hover and press sit
+   in :where() so any screen's own button class still wins */
+button,select{padding:3px 12px;max-width:340px;background:var(--raised);color:var(--ink);border:1px solid var(--control-edge);border-radius:var(--r-2);white-space:nowrap;}
+button{cursor:pointer;}
+:where(button:hover,button[data-hovered]){background:var(--panel);}
+:where(button:active,button[data-pressed]){background:var(--rule);}
+button:disabled,button[data-disabled]{opacity:.4;cursor:default;}
+select{padding:3px 8px 3px 11px;}
+input[type=search]{padding:3px 9px;background:var(--raised);color:var(--ink);border:1px solid var(--control-edge);border-radius:var(--r-2);min-width:0;}
+input::placeholder{color:var(--ink-3);}
+/* the segmented control (.on, or React Aria's [data-selected], = the current value) */
+/* --seg-track has tone of its own so the selected face (--seg-on) reads as a face, not only through its shadow (1.5 第 7 条) */
+.seg{display:inline-flex;flex:none;gap:2px;padding:2px;border:1px solid var(--control-edge);border-radius:var(--r-2);background:var(--seg-track);}
+.seg a,.seg button{height:24px;padding:0 11px;display:inline-flex;align-items:center;font-size:var(--fs-cap);color:var(--ink-2);text-decoration:none;border:0;background:none;border-radius:calc(var(--r-2) - 2px);cursor:pointer;white-space:nowrap;}
+.seg a:hover,.seg button:hover,.seg [data-hovered]{color:var(--ink);text-decoration:none;background:none;}
+/* --seg-on: the selected segment's own face, set apart from the track in both themes (--raised is the track's near twin in dark) */
+.seg a.on,.seg button.on,.seg [data-selected]{background:var(--seg-on);color:var(--ink);box-shadow:var(--shadow-pill);}
+/* the switch: the element is the track, .knob rides on it */
+.hswitch{position:relative;width:36px;height:21px;padding:0;flex:none;border-radius:var(--r-pill);border:1px solid var(--control-edge);background:var(--switch-off);transition:background var(--t-quick);}
+.hswitch .knob{position:absolute;top:2px;left:2px;width:15px;height:15px;border-radius:50%;background:var(--knob-off);transition:transform var(--t-quick) var(--ease),background var(--t-quick);}
+.hswitch[aria-checked="true"],.hswitch[data-selected]{background:var(--switch-on);border-color:var(--switch-on);}
+.hswitch[aria-checked="true"] .knob,.hswitch[data-selected] .knob{transform:translateX(15px);background:var(--knob-on);box-shadow:var(--shadow-knob);}
+/* the tooltip */
+.tip{background:var(--ink);color:var(--paper);font-size:var(--fs-cap);padding:4px 8px;border-radius:var(--r-1);max-width:280px;box-shadow:var(--shadow-float);}
+.copybtn{padding:0 8px;line-height:20px;font-size:var(--fs-cap);color:var(--ink-2);}
+.copybtn:hover{color:var(--ink);}
+/* a copy that is an action of the whole row (Copy diagnostics, Copy template) is the kit's button, not the small copy */
+.copybtn.act{padding:3px 12px;line-height:var(--lh);font-size:var(--fs-body);color:var(--ink);}
+
+/* fidelity badges (invariant 4: a dashed border means NOT verbatim / an estimate) */
+.metabadge,.ffbadge{font-size:var(--fs-cap);color:var(--ink-2);white-space:nowrap;border:1px dashed var(--rule-2);border-radius:var(--r-pill);padding:0 6px;cursor:help;}
+.ff-opaque{color:var(--ink-3);}
+
+/* bottom drawer (screens fill #detail and toggle .open) */
+#detail{position:fixed;left:0;right:0;bottom:0;max-height:48vh;overflow:auto;background:var(--raised);border-top:2px solid var(--action);box-shadow:var(--shadow-float);padding:12px 20px 18px;transform:translateY(101%);visibility:hidden;transition:transform var(--t-panel) var(--ease),visibility 0s linear var(--t-panel);z-index:30;}
+/* closed = hidden once the slide ends: no shadow band at the bottom edge, out of the a11y tree */
+#detail.open{transform:none;visibility:visible;transition:transform var(--t-panel) var(--ease),visibility 0s;}
+#detail.k-monitor{border-top-color:var(--ct-thinking);} #detail.k-probe{border-top-color:var(--ct-tooluse);} #detail.k-aux{border-top-color:var(--ink-3);}
+#detail h3{margin:0 0 8px;font-size:var(--fs-head);}
+#detail .dclose{position:absolute;top:10px;right:16px;padding:1px 9px;font-size:var(--fs-cap);color:var(--ink-2);}
+#detail .din{font-size:var(--fs-cap);margin:5px 0;}
+#detail .persona{color:var(--ink-2);}
+#detail pre{background:var(--sunk);border:1px solid var(--rule);border-radius:var(--r-2);padding:8px 11px;font-family:var(--mono);font-size:var(--fs-cap);white-space:pre-wrap;word-break:break-word;margin:4px 0;}
+#detail .callref{color:var(--action);cursor:pointer;text-decoration:underline;font-family:var(--mono);font-size:var(--fs-cap);}
+#detail .callref:hover{color:var(--ink);}
+
+/* the screen host: a screen fills it and scrolls (or splits) inside */
+#screen{flex:1;min-height:0;display:flex;}
+#screen > *, #screen > .screenhost > *{min-width:0;}
+
+/* a screen's own banner: what is wrong (or worth knowing) about what it shows, with the reason — never a silent empty state */
+.banner{padding:6px 16px;font-size:var(--fs-cap);border-bottom:1px solid var(--rule);color:var(--ink);}
+.banner:empty{display:none;}
+.banner.warn{background:color-mix(in srgb,var(--warn) 14%,transparent);border-bottom-color:var(--warn);}
+.banner.bad{background:color-mix(in srgb,var(--bad) 14%,transparent);border-bottom-color:var(--bad);}
+.banner.info{background:var(--action-wash);border-bottom-color:var(--action);}
+
+/* modal (core/dom.mjs openModal) */
+.v2-modal-back{position:fixed;inset:0;z-index:100;background:var(--scrim);display:flex;align-items:center;justify-content:center;padding:16px;}
+.v2-modal{background:var(--raised);color:var(--ink);border:1px solid var(--rule);border-radius:var(--r-3);min-width:min(340px,92vw);max-width:min(560px,92vw);max-height:90vh;overflow:auto;box-shadow:var(--shadow-float);}
+.v2-modal .mtitle{padding:16px 18px 4px;font-size:var(--fs-head);font-weight:var(--fw-strong);}
+.v2-modal .mbody{padding:4px 18px 12px;font-size:var(--fs-body);color:var(--ink-2);}
+.v2-modal .mbody b,.v2-modal .mbody strong{color:var(--ink);}
+.v2-modal .mbody code{font-family:var(--mono);font-size:var(--fs-cap);background:var(--sunk);border-radius:var(--r-1);padding:0 4px;color:var(--ink);}
+.v2-modal .mactions{display:flex;justify-content:flex-end;gap:8px;padding:8px 18px 16px;}
+.v2-modal .mbtn.primary{background:var(--action);color:var(--action-ink);border-color:var(--action);font-weight:var(--fw-strong);}
+
+/* one table head for every table on the board (1.5 §审美维度 9): a <th>, or .colhead on a grid table's head row */
+th,.colhead{font-size:var(--fs-cap);font-weight:var(--fw-strong);color:var(--ink-3);}
+/* an agent's icon and name as one unit, wherever it stands (a flex parent's gap or plain inline text) */
+.chip{display:inline-flex;align-items:center;gap:6px;}
+/* the state lamp (1.5 §前置定义 灯): one 8 px round dot everywhere, colour from the state tokens, centred on its line (in a flex
+   parent by the parent's centring, in text by vertical-align). Grey (.dim, or no state class) = a state that lights nothing. */
+.lamp{--c:var(--control-edge);display:inline-block;flex:none;width:8px;height:8px;border-radius:50%;background:var(--c);vertical-align:middle;align-self:center;}
+.lamp.ok{--c:var(--ok);} .lamp.warn{--c:var(--warn-lamp);} .lamp.bad{--c:var(--bad-lamp);} .lamp.note{--c:var(--note-lamp);}
+/* ── the popover kit (1.2 §弹出层) and the marks (1.5 §标记) ──────────────────────────────────────────────────── */
+.popbtn{border:0;background:none;color:var(--ink-3);cursor:pointer;font:inherit;padding:0 3px;border-radius:var(--r-1);white-space:nowrap;}
+.popbtn:hover{color:var(--ink);background:var(--hover);}
+.popbtn[aria-expanded="true"]{color:var(--ink);}
+/* an info glyph after a word: a gap before it, exactly one line tall and top-aligned, so it neither grows nor shifts the line and
+   the word keeps the baseline of a head without a glyph (1.5 §审美维度 9) */
+.popbtn:has(> svg:only-child){display:inline-flex;align-items:center;vertical-align:top;height:1lh;margin-left:4px;padding:0 2px;}
+.pop{position:fixed;z-index:40;min-width:200px;max-width:380px;background:var(--raised);border:1px solid var(--rule);border-radius:var(--r-3);box-shadow:var(--shadow-float);padding:12px 14px;font-size:var(--fs-body);color:var(--ink);}
+/* a closed popover must really hide: the plain .pop[hidden] (0,2,0) loses the cascade to a variant rule like
+   .pop.menu{display:flex} below (also 0,2,0, later) — a closed filter menu once rendered at the button's position and
+   ate its clicks; the variant selector (0,3,0) wins */
+.pop[hidden],.pop.menu[hidden]{display:none;}
+.pop .ph{font-size:var(--fs-body);font-weight:var(--fw-strong);margin-bottom:6px;}
+.pop .pb{min-width:0;}
+.pop .pb a{color:var(--action);}
+.pop.menu{display:flex;flex-direction:column;padding:5px;min-width:210px;}
+.pop.menu a,.pop.menu button{display:flex;align-items:center;height:30px;padding:0 10px;font-size:var(--fs-body);color:var(--ink);text-decoration:none;border:0;background:none;border-radius:var(--r-2);text-align:left;cursor:pointer;}
+.pop.menu a:hover,.pop.menu button:hover{background:var(--hover);text-decoration:none;}
+.pop.menu a:focus-visible,.pop.menu button:focus-visible,.pop.menu [data-focused]{background:var(--action);color:var(--action-ink);outline:none;}
+/* a disclosure row and 技术细节 */
+.disc{border-bottom:1px solid var(--rule);}
+.disc:last-child{border-bottom:0;} /* a rule closes a disclosure only when something follows it */
+.disc-t{display:flex;align-items:center;gap:8px;min-height:36px;width:100%;border:0;border-radius:0;background:none;color:var(--ink-2);font-size:var(--fs-body);cursor:pointer;text-align:left;padding:0;white-space:normal;}
+.disc-t:hover{color:var(--ink);background:none;}
+.disc-t b{color:var(--ink);font-weight:var(--fw-strong);font-size:var(--fs-body);}
+.disc-t .sum{font-size:var(--fs-body);}
+/* the drawn triangle (icons.mjs DISC_CHEV) of every disclosure: it turns a quarter when its trigger is open */
+.chev{flex:none;transition:transform var(--t-quick) var(--ease);}
+[aria-expanded="true"] > svg.chev{transform:rotate(90deg);}
+/* a menu trigger's mark (icons.mjs MENU_CHEV) sits on the text's line */
+.chev > svg{vertical-align:-1px;}
+/* a closed panel takes no box: React Aria closes one with hidden="until-found" (content-visibility, not display:none) */
+.disc-b[hidden]{display:none;}
+.tech{font-size:var(--fs-cap);line-height:20px;color:var(--ink-2);background:var(--sunk);border:1px solid var(--rule);border-radius:var(--r-3);padding:12px 14px;display:grid;grid-template-columns:max-content minmax(0,1fr);column-gap:16px;margin:6px 0 4px;}
+.tech .k{color:var(--ink-3);}
+.tech .v{color:var(--ink);font-family:var(--mono);overflow-wrap:anywhere;}
+/* the confirm dialog: the impact line carries the consequence, Cancel is the default focus */
+.dialog{max-width:440px;}
+.dialog .impact{padding:8px 18px 0;font-size:var(--fs-body);font-weight:var(--fw-strong);line-height:22px;}
+/* the fidelity marks: quiet, in place, never a status colour */
+.mk{font-size:var(--fs-cap);color:var(--ink-2);white-space:nowrap;cursor:help;}
+.mk[data-ff="verbatim"]{cursor:default;}
+.mk-inf,.mk-struct{border-bottom:1px dotted var(--ink-3);}
+.mk-null-provider,.mk-null-price,.mk-null-na,.mk-unknown{color:var(--ink-3);}
+
+/* the agent chip (1.2 §agent chip): a 16px icon box + the name; same DOM for every harness, unknown included */
+.hicon{display:inline-grid;place-items:center;width:16px;height:16px;flex:none;vertical-align:-3px;}
+.hicon .hic-svg, .hicon img{width:16px;height:16px;display:block;}
+/* official icons come with a white tile, a black tile or none, and their own padding; in both themes every known icon sits on the same
+   light tile (--icon-tile), spread 2px outside the box so the layout does not move, its outer 1px a hairline (--icon-tile-edge: set
+   apart from the paper in light, the tile's own colour in dark) (1.2 §画法); the artwork is unchanged */
+.hicon:not(.hicon-unknown){background:var(--icon-tile);border-radius:25%;box-shadow:0 0 0 1px var(--icon-tile),0 0 0 2px var(--icon-tile-edge);}
+.chipname{white-space:nowrap;}
+.chipep,.chipsyn{font-size:var(--fs-cap);color:var(--ink-2);margin-left:6px;white-space:nowrap;}

@@ -4,7 +4,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { probe, withBoard, stats, timed, timerReads } from './harness.mjs'
-import { INTERVAL } from '../../../src/web/v2/core/poll.mjs'
+import { INTERVAL } from '../../../web/legacy/core/poll.mjs'
 import { BOARD_LINES } from '../perf-lines.mjs'
 
 const gate = await probe()

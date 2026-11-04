@@ -1,50 +1,30 @@
-// test/web-v2/library.test.mjs — the session library's contract (1.8 §验收 1–13), DOM-free: real `sessions` documents from the real
-// face, or constructed session objects in the C.5 shape. Marks are asserted by kind (data-mark), never by their words.
+// test/web-v2/library.test.mjs — the session library's contract (1.8 §验收), DOM-free: constructed session objects in the C.5
+// shape. Marks are asserted by kind, never by their words.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { parseFilters, filtersToParams, applyFilters, listEntries, captionFacts, listSignature, capShotMaker, emptyBoardState, filteredAgentLine, agentMenuModel, flattenSessions, loadSessions, freshSessions } from '../../src/web/v2/library/logic.mjs'
-import { rowHtml, captionHtml, readFailHtml, filteredEmptyHtml, SKELETON } from '../../src/web/v2/library/library.mjs'
-import { harnessKey, harnessName, isKnownHarness } from '../../src/web/v2/core/chips.mjs'
-import { captureVerdict, capHealthPatch } from '../../src/web/v2/core/capture-verdict.mjs'
-import { esc } from '../../src/web/v2/core/fmt.mjs'
-import * as W from '../../src/web/v2/labels/library.mjs'
-import { boardHome, serveBoard } from './real-face.mjs'
+import { parseFilters, filtersToParams, applyFilters, listEntries, dayHead, captionFacts, capShotMaker, emptyBoardState, filteredAgentLine, flattenSessions, rowModel, sessionKey, titleText, titleTipOf } from '../../web/src/screens/library/model.mjs'
+import { loadSessions, freshSessions } from '../../web/legacy/library/logic.mjs'
+import { captureVerdict, capHealthPatch } from '../../web/legacy/core/capture-verdict.mjs'
+import * as W from '../../web/legacy/labels/library.mjs'
 
 const NOW = new Date(2026, 9, 20, 12, 0, 0).getTime()
 const S = (o = {}) => ({ session_id: 'sess-1', project_slug: '_unresolved', project_path: null, harness: 'codex', harness_inferred: false, session_synthesized: false, title: null, title_source: null, entrypoint: null, calls: 3, probes: 0, logged: 0, has_subagent: false, last_ts: new Date(NOW - 60e3).toISOString(), ...o })
-const kinds = (html) => new Set([...html.matchAll(/data-mark="([^"]+)"/g)].map((m) => m[1]))
-const titleCell = (html) => /<span class="lt(?: pend)?"([^>]*)>([^<]*)</.exec(html)
-const callsCell = (html) => /<span class="ln"([^>]*)>([^<]*)</.exec(html)
 
-test('(1) rows: agent name and icon are the chip lookup for harnessKey(harness); the calls cell is `calls`', async () => {
-  const face = await serveBoard(boardHome({ bytes: 200000 }))
-  try {
-    const ss = flattenSessions((await face.get('sessions')).doc)
-    assert.ok(ss.length > 1)
-    for (const s of ss) {
-      const html = rowHtml(s, '', NOW), k = harnessKey(s.harness)
-      assert.equal(/class="lhn"[^>]*>([^<]*)</.exec(html)[1], esc(harnessName(k)), s.session_id)
-      assert.equal(/data-hicon="([^"]*)"/.exec(html)[1], s.harness != null && isKnownHarness(s.harness) ? k : '?')
-      if (!(s.calls === 0 && s.probes > 0)) assert.equal(callsCell(html)[2], String(s.calls))
-    }
-  } finally { await face.close() }
-})
-
-test('(2) title rules: the hover follows title_source, a pending title reads as not read yet; no title ever carries the inferred mark', () => {
+test('(2) title rules: the hover follows title_source and carries the id, a pending title reads as not read yet; the title never carries the id', () => {
   const tips = new Set()
-  for (const [title, title_source, tip] of [['Fix the queue', 'wire', W.titleFromWire], [null, null, W.titleNoKey], [null, 'pending', W.titlePending]]) {
+  for (const [title, title_source, wantTip, wantText] of [['Fix the queue', 'wire', W.titleFromWire, 'Fix the queue'], [null, null, W.titleNoKey, W.UNTITLED], [null, 'pending', W.titlePending, W.TITLE_PENDING]]) {
     for (const harness_inferred of [false, true]) {
-      const html = rowHtml(S({ title, title_source, harness_inferred }), '', NOW), [, attrs, text] = titleCell(html)
-      assert.equal(/title="([^"]*)"/.exec(attrs)[1], esc(tip('sess-1')))
-      assert.equal(text, esc(title ?? (title_source === 'pending' ? W.TITLE_PENDING : W.UNTITLED))); assert.ok(!text.includes('sess-1'), 'the id rides in the hover only')
-      assert.ok(!/data-mark|mk-inf/.test(attrs + text))
-      tips.add(tip('sess-1'))
+      const s = S({ title, title_source, harness_inferred }), tip = titleTipOf(s), why = JSON.stringify({ title_source, harness_inferred })
+      assert.equal(tip, wantTip(s.session_id), why); assert.equal(titleText(s), wantText, why)
+      assert.ok(tip.includes(s.session_id), why); assert.ok(!titleText(s).includes(s.session_id), why)
+      assert.deepEqual([rowModel(s, NOW).titleText, rowModel(s, NOW).titleTip], [titleText(s), tip], why)
+      tips.add(tip)
     }
   }
-  assert.equal(tips.size, 3)
+  assert.equal(tips.size, 3, 'one distinct hover per title_source')
 })
 
-test('(3)(4)(5) row marks follow their fields, table-driven; nothing marks a false or absent field', () => {
+test('(3)(4)(5) row marks follow their fields, table-driven; nothing marks a false or absent field; probe-only is dim', () => {
   const cases = [
     [{}, []],
     [{ entrypoint: 'cli' }, ['entry']], [{ entrypoint: 'something-new' }, ['entry']],
@@ -57,12 +37,12 @@ test('(3)(4)(5) row marks follow their fields, table-driven; nothing marks a fal
     [{ calls: 0, probes: 4 }, ['probe-only']], [{ calls: 0, probes: 0 }, []],
   ]
   for (const [o, want] of cases) {
-    const html = rowHtml(S(o), '', NOW)
-    assert.deepEqual([...kinds(html)].sort(), [...want].sort(), JSON.stringify(o))
-    const dim = o.calls === 0 && o.probes > 0
-    assert.equal(/class="lrow[^"]*\bdim\b/.test(html), dim)
-    if (dim) assert.equal(callsCell(html)[2], esc(W.PROBE_ONLY)) // token-count only, no number
+    const m = rowModel(S(o), NOW)
+    assert.deepEqual(m.marks.map((x) => x.kind).sort(), want.filter((k) => k !== 'probe-only').sort(), JSON.stringify(o))
+    assert.equal(m.dim, want.includes('probe-only'), JSON.stringify(o))
   }
+  const all = rowModel(S({ entrypoint: 'cli', logged: 2, has_subagent: true, harness_inferred: true, session_synthesized: true, harnesses: ['codex', 'cc'], project_slug: 'demo', project_path: '/w/demo' }), NOW)
+  assert.deepEqual(all.marks.map((x) => x.kind), ['entry', 'project', 'inferred', 'synthesized', 'multi', 'subagent', 'logged'], 'the marks keep one order')
 })
 
 test('(6) filters: search, multi-select agents with aliases and h=-, inclusive window, sort ties, groups only in recent, params round-trip', () => {
@@ -80,38 +60,57 @@ test('(6) filters: search, multi-select agents with aliases and h=-, inclusive w
   assert.deepEqual(ids({ window: '24h' }), ['A1', 'c3'], 'exactly 24 h old is inside; no time is outside')
   assert.ok(ids({ window: 'all' }).includes('d4')); assert.ok(!ids({ window: '7d' }).includes('d4'))
   assert.deepEqual(ids({ sort: 'calls' }), ['c3', 'A1', 'b2', 'd4'], 'a calls tie goes to the more recent')
-  const groups = (sort) => listEntries(applyFilters(list, parseFilters({ sort }), NOW), sort === 'calls' ? 'calls' : 'recent', NOW).filter((e) => 'g' in e).map((e) => e.g)
-  assert.deepEqual(groups(undefined), ['today', 'yesterday', 'earlier', 'none']); assert.deepEqual(groups('calls'), [])
+  assert.deepEqual(listEntries(applyFilters(list, parseFilters({ sort: 'calls' }), NOW), 'calls').filter((e) => 'g' in e), [], 'no group under the calls order')
+  for (const sort of ['recent', 'calls']) {
+    const es = listEntries(applyFilters(list, parseFilters({ sort }), NOW), sort, NOW)
+    assert.equal(new Set(es.map((e) => e.key)).size, es.length, 'every entry key is unique')
+    for (const e of es) if (e.s) assert.equal(e.key, sessionKey(e.s))
+  }
   const p = { q: 'x', h: 'cc,kimi', project: 'shop', window: '7d', sort: 'calls', sel: 'shop::b2' }
   assert.deepEqual(filtersToParams(parseFilters(p)), p)
   assert.deepEqual(filtersToParams(parseFilters({})), {})
   assert.deepEqual(filtersToParams(parseFilters({ window: '30d', sort: 'steps' })), {})
 })
 
-test('(7) no number or sentence in the skeleton head or tool row, no window control outside the page head, menu items carry no count', () => {
-  const text = SKELETON.replace(/<[^>]*>/g, ' ').replace(/&#?\w+;/g, ' ')
-  assert.ok(!/\d/.test(text)); assert.ok(!/class="seg"|data-window|name="window"/.test(SKELETON))
-  const m = agentMenuModel([S(), S({ harness: 'cc' }), S({ harness: null })], parseFilters({}))
-  for (const item of m) assert.deepEqual(Object.keys(item).sort(), ['id', 'on'])
-})
-
-test('(8) caption: clean errors[] → none; N errors → a link to #/settings/storage and every where · reason, escaped', () => {
-  assert.equal(captionHtml([], null, null), '')
-  for (const n of [1, 3]) {
-    const errors = Array.from({ length: n }, (_, i) => ({ where: `seg-${i}.ndjson`, reason: `<script>x${i}</script>` }))
-    const html = captionHtml(errors, null, null)
-    assert.equal(captionFacts(errors).facts[0].n, n)
-    assert.ok(html.includes('href="#/settings/storage"'))
-    assert.ok(!html.includes('<script>'))
-    for (const e of errors) { assert.ok(html.includes(esc(e.where))); assert.ok(html.includes(esc(e.reason))) }
+// local dates only (Date's local getters), never toISOString: the groups are the reader's days
+const pad = (n) => String(n).padStart(2, '0')
+const localKey = (t) => { const d = new Date(t); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` }
+test('(6) groups: one per local day of last_ts, newest first, no time last; today and yesterday are words; a head carries no counts', () => {
+  const nows = [new Date(2026, 9, 20, 12, 0, 0), new Date(2026, 9, 20, 0, 0, 10), new Date(2026, 9, 20, 23, 59, 50), new Date(2027, 0, 1, 0, 0, 5), new Date(2026, 2, 30, 1, 0, 0)].map((d) => d.getTime())
+  for (const now of nows) {
+    const n = new Date(now), at = (back, h, m = 0) => new Date(n.getFullYear(), n.getMonth(), n.getDate() - back, h, m, 0).getTime()
+    const times = [now, at(0, 0, 0), at(1, 23, 59), at(1, 0, 1), ...[2, 3, 4, 5, 6].map((b) => at(b, 13)), at(8, 9), new Date(n.getFullYear() - 1, 5, 15, 8).getTime()].filter((t) => t <= now)
+    const sessions = [...times.map((t, i) => S({ session_id: `s${i}`, last_ts: new Date(t).toISOString() })), S({ session_id: 'nt', last_ts: null })]
+    const es = listEntries(applyFilters(sessions, parseFilters({}), now), 'recent'), why = new Date(now).toString()
+    let g = null
+    const keys = []
+    for (const e of es) {
+      if ('g' in e) { g = e.g; keys.push(g); continue }
+      assert.equal(g, e.s.last_ts ? localKey(Date.parse(e.s.last_ts)) : 'none', `(i) ${e.s.session_id} ${why}`)
+    }
+    assert.equal(keys.at(-1), 'none', `(ii) no time is last ${why}`)
+    const dated = keys.slice(0, -1)
+    for (let i = 1; i < dated.length; i++) assert.ok(dated[i - 1] > dated[i], `(ii) ${dated} ${why}`)
+    assert.equal(dayHead(localKey(now), now).word, W.GROUPS.today, `(iii) ${why}`)
+    assert.equal(dayHead(localKey(at(1, 12)), now).word, W.GROUPS.yesterday, `(iii) ${why}`)
+    assert.equal(dayHead('none', now).word, W.GROUPS.none)
+    for (const k of dated) {
+      const [y, m, d] = k.split('-').map(Number), h = dayHead(k, now)
+      const digits = `${h.word} ${h.date ?? ''}`.match(/\d+/g) || []
+      for (const x of digits) assert.ok([String(y), String(m), String(d)].includes(x), `(iv) ${JSON.stringify(h)} for ${k}`)
+    }
   }
 })
 
-test('(9) a failed read with no list is the read-failure state with retry, never the empty library', () => {
-  const html = readFailHtml({ ok: false, status: 500, error: '<b>boom</b>' })
-  assert.ok(html.includes('data-act="retry"')); assert.ok(!html.includes(esc(W.NO_SESSIONS))); assert.ok(!html.includes('<b>boom'))
-  const cap = captionHtml([], { ok: false, status: 500, error: 'boom' }, NOW - 5000) // with an older list, the caption carries retry
-  assert.ok(cap.includes('data-act="retry"'))
+test('(8) caption: n counts the non-note errors; tech lists every entry, notes too; a stored fact exactly when stored is given', () => {
+  const at = new Date(NOW - 90e3).toISOString()
+  for (const errs of [0, 1, 3]) for (const notes of [0, 2]) for (const stored of [null, at]) {
+    const errors = [...Array.from({ length: errs }, (_, i) => ({ where: `seg-${i}.ndjson`, reason: 'r' })), ...Array.from({ length: notes }, (_, i) => ({ where: `n-${i}`, reason: 'slow', level: 'note' }))]
+    const cf = captionFacts(errors, stored), why = JSON.stringify({ errs, notes, stored })
+    assert.deepEqual(cf.facts.filter((x) => x.kind === 'not-all').map((x) => x.n), errs ? [errs] : [], why)
+    assert.deepEqual(cf.facts.filter((x) => x.kind === 'stored').map((x) => x.at), stored ? [stored] : [], why)
+    assert.equal(cf.tech.length, errors.length, why)
+  }
 })
 
 test('(10) empty state: the line is the capture verdict of the status read once; status is read exactly once however often it is asked', async () => {
@@ -132,60 +131,10 @@ test('(10) empty state: the line is the capture verdict of the status read once;
   }
 })
 
-test('(11) a filtered agent that is not captured links #/capture?h=<id>; otherwise only the filter-empty state', () => {
+test('(11) a filtered agent that is not captured links #/capture?h=<id>; captured, or no entry for it, adds nothing', () => {
   const doc = (captured) => ({ health: { state: 'ok' }, harnesses: { 'kimi-code': { captured, ...(captured ? {} : { reason: 'not-steered' }) } } })
-  const f = parseFilters({ h: 'kimi' })
-  const off = filteredEmptyHtml({ h: doc(false), asOf: NOW }, f)
-  assert.ok(off.includes('href="#/capture?h=kimi"')); assert.ok(off.includes('data-act="clear"'))
-  assert.deepEqual(filteredAgentLine({ h: doc(false), asOf: NOW }, 'kimi').href, '#/capture?h=kimi')
-  for (const d of [doc(true), { health: { state: 'ok' } }]) {
-    const on = filteredEmptyHtml({ h: d, asOf: NOW }, f)
-    assert.ok(!on.includes('#/capture')); assert.ok(on.includes('data-act="clear"'))
-  }
-})
-
-test('(12) the repaint signature moves with every displayed field and holds for identical lists', () => {
-  const base = S({ title: 't', title_source: 'wire', project_slug: 'p', project_path: '/w/p' })
-  const sig = (o) => listSignature({ sessions: [{ ...base, ...o }], errors: [] }, null)
-  assert.equal(sig({}), listSignature({ sessions: [{ ...base }], errors: [] }, null))
-  const changes = { title: 'u', title_source: 'pending', harnesses: ['codex', 'cc'], logged: 1, calls: 4, probes: 2, has_subagent: true, last_ts: new Date(NOW).toISOString(), entrypoint: 'cli', harness_inferred: true, session_synthesized: true, project_slug: 'q', project_path: '/w/q' }
-  for (const [k, v] of Object.entries(changes)) assert.notEqual(sig({ [k]: v }), sig({}), k)
-})
-
-test('(13) each row is one <a> with no nested focusable; truncated cells carry a title; the id is escaped in the href', () => {
-  const html = rowHtml(S({ session_id: 'a"<b>', title: 'x'.repeat(300), project_slug: 'demo', project_path: '/w/demo', logged: 1, harnesses: ['codex', 'cc'] }), '', NOW)
-  assert.equal(html.match(/<a\b/g).length, 1)
-  assert.ok(!/<(button|input|select|textarea)\b|tabindex=/.test(html))
-  assert.ok(!html.includes('a"<b>'))
-  for (const cls of ['lt', 'lhn']) assert.match(html, new RegExp(`class="${cls}" title="[^"]+"`))
-  assert.match(html, /data-mark="project" title="[^"]+"/)
-})
-
-test('caption: a note is not counted as an unread file, yet it stays in technical details', () => {
-  const cf = captionFacts([{ where: 'a', reason: 'r', level: 'note' }, { where: 'b', reason: 'r' }, { where: 'c', reason: 'r' }])
-  assert.equal(cf.facts[0].n, 2); assert.equal(cf.tech.length, 3)
-  const only = captionFacts([{ where: 'a', reason: 'r', level: 'note' }])
-  assert.deepEqual(only.facts, []); assert.equal(only.tech.length, 1)
-})
-
-test('the library skeleton holds no <header> landmark of its own', () => {
-  assert.ok(!SKELETON.includes('<header'))
-})
-
-// 1.8 §说明行 「在刷新」 · §数据与刷新 · assertion 17 (unit part): the fact is an element, asserted by its hook, never its words
-test('(17) caption: the refreshing fact is there exactly when the list carries `stored`', () => {
-  const at = new Date(NOW - 90e3).toISOString()
-  for (const errors of [[], [{ where: 'a', reason: 'r' }]]) {
-    assert.match(captionHtml(errors, null, null, { stored: at, now: NOW }), /data-stored/)
-    assert.doesNotMatch(captionHtml(errors, null, null, { stored: null, now: NOW }), /data-stored/)
-  }
-})
-
-test('(17) the repaint signature moves when `stored` comes or goes', () => {
-  const doc = { sessions: [S()], errors: [] }
-  const at = new Date(NOW - 90e3).toISOString()
-  assert.notEqual(listSignature({ ...doc, stored: at }, null), listSignature({ ...doc, stored: null }, null))
-  assert.notEqual(listSignature({ ...doc, stored: at }, null), listSignature(doc, null))
+  assert.equal(filteredAgentLine({ h: doc(false), asOf: NOW }, 'kimi').href, '#/capture?h=kimi')
+  for (const d of [doc(true), { health: { state: 'ok' } }]) assert.equal(filteredAgentLine({ h: d, asOf: NOW }, 'kimi'), null)
 })
 
 // 4.4 §存下的答案: a screen that draws a conclusion from the list (not the Sessions page) waits for a fresh answer

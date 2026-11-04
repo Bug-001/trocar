@@ -348,6 +348,17 @@ test('I-chapter: a playhead or a drawn window outside the label\'s chapter is a 
   }
 })
 
+// the main track with a review range: `bars` = which bars are .reviewed, `w` = the bracket's width in px (0 = hidden)
+const reviewPage = (bars, w) => `<div id="sawrow"><div id="reviewbracket" style="display:${w ? 'block' : 'none'};width:${w}px;height:3px"></div>
+  ${bars.map((r) => `<div class="bar${r ? ' reviewed' : ''}"></div>`).join('')}</div><script>window.__planted = true</script>`
+
+test('I-review: a bracket without reviewed bars, reviewed bars without a bracket, or reviewed bars that are no prefix is a violation', { skip }, async () => {
+  for (const [bars, w, red] of [[[1, 1, 0, 0], 40, false], [[0, 0, 0], 0, false], [[0, 0, 0], 40, true], [[1, 0, 0], 0, true], [[1, 0, 1], 40, true]]) {
+    const pg = await plantedPage(reviewPage(bars, w), '#/replay/p/x')
+    try { assert.equal(ids(await check({ page: pg })).includes('I-review'), red, `${bars} · ${w}px`) } finally { await pg.close() }
+  }
+})
+
 // the head names pack 0 at tag `a`; then the page reads `reads` (a list of /api/d/... paths, all at once)
 const packPage = (reads) => `<script>(async () => {
   await (await fetch('/api/d/head?id=x')).json()

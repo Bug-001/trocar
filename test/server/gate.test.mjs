@@ -10,7 +10,6 @@ import assert from 'node:assert/strict';
 import nodeFs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { SHARED } from '../../src/server.mjs';
 import { CONTROL_TOKEN_HEADER } from '../../src/off/token-header.mjs';
 import { rawHome, writeSegment } from '../query/raw-home.mjs';
 import { serveFace, request as req, withToken } from './face.mjs';
@@ -79,40 +78,28 @@ test('no token or a wrong token: 403 on the data and control planes, with no fil
   } finally { f.close(); }
 });
 
-test('the static plane: src/web/v2 and the shared modules from memory, nothing else (4.4 验收 5)', async () => {
+test('the static plane: the build in src/web/board from memory, nothing else (4.4 验收 5)', async () => {
   const f = await serve(counting());
+  const BOARD = path.join(SRC, 'web', 'board');
   try {
-    // one board (1.2 §托管与打开): `/`, the address `trocar board` opens, is the board's own page, and no second page is served beside it
+    // one board (1.2 §托管与打开): `/`, the address `trocar board` opens, is the build's own page, and no second page is served beside it
     const root = await req(f.port, '/');
     assert.equal(root.status, 200);
-    assert.equal(root.body, nodeFs.readFileSync(path.join(SRC, 'web', 'v2', 'index.html'), 'utf8'), '`/` is src/web/v2/index.html');
-    const pages = [];
-    const walk = (d) => { for (const e of nodeFs.readdirSync(d, { withFileTypes: true })) e.isDirectory() ? walk(path.join(d, e.name)) : e.name.endsWith('.html') && pages.push(e.name) };
-    walk(path.join(SRC, 'web'));
-    assert.deepEqual(pages, ['index.html'], 'src/web holds one page');
-    for (const s of SHARED) {
-      const r = await req(f.port, `/${s}`);
-      assert.equal(r.status, 200, s);
-      assert.match(r.headers['content-type'], /^text\/javascript/, s);
-      assert.equal(r.body, nodeFs.readFileSync(path.join(SRC, s), 'utf8'), `${s}: the module's own bytes`);
+    assert.equal(root.body, nodeFs.readFileSync(path.join(BOARD, 'index.html'), 'utf8'), '`/` is src/web/board/index.html');
+    const built = nodeFs.readdirSync(BOARD, { recursive: true }).filter((p) => nodeFs.statSync(path.join(BOARD, p)).isFile());
+    assert.deepEqual(built.filter((p) => p.endsWith('.html')), ['index.html'], 'the build holds one page');
+    for (const p of built.filter((x) => x !== 'index.html')) {
+      const r = await req(f.port, `/${p.split(path.sep).join('/')}`);
+      assert.equal(r.status, 200, p);
+      assert.match(r.headers['content-type'], /^(text\/javascript|text\/css|text\/markdown|image\/)/, p);
+      assert.equal(r.body, nodeFs.readFileSync(path.join(BOARD, p), 'utf8'), `${p}: the built file's own bytes`);
     }
-    for (const p of ['/../package.json', '/..%2fpackage.json', '/cli/commands.mjs', '/server.mjs', '/web/index.html', '/v2/index.html']) {
+    for (const p of ['/legacy/main.mjs', '/src/cli/words.mjs', '/cli/words.mjs', '/web/index.html', '/../package.json', '/..%2fpackage.json',
+      '/server.mjs', '/src/server.mjs', '/web/board/index.html']) {
       assert.equal((await req(f.port, p)).status, 404, `${p} must not reach a file outside the static plane`);
     }
     assert.equal((await req(f.port, '/api/nope', { headers: withToken() })).status, 404);
     assert.deepEqual(JSON.parse((await req(f.port, '/api/a/b', { headers: withToken() })).body), { error: 'unknown endpoint' });
   } finally { f.close(); }
-});
-
-test('the shared modules are pure and import-closed: no node:*, every relative import is another shared entry (4.4 静态面)', () => {
-  for (const s of SHARED) {
-    const src = nodeFs.readFileSync(path.join(SRC, s), 'utf8');
-    const specs = [...src.matchAll(/^\s*(?:import|export)\b[^'";]*?\bfrom\s*['"]([^'"]+)['"]|^\s*import\s*['"]([^'"]+)['"]|\bimport\(\s*['"]([^'"]+)['"]/gm)].map((m) => m[1] || m[2] || m[3]);
-    for (const spec of specs) {
-      assert.ok(spec.startsWith('.'), `${s} imports ${spec}: only relative imports of other shared modules are allowed`);
-      const target = path.posix.normalize(path.posix.join(path.posix.dirname(s), spec));
-      assert.ok(SHARED.includes(target), `${s} imports ${spec} (${target}), which the allowlist does not serve`);
-    }
-  }
 });
 

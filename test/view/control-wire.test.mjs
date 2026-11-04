@@ -8,7 +8,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { controlRecordWire } from '../../src/view/control-wire.mjs'
 import { isSecretHeader } from '../../src/capture/redact.mjs'
-import { isCredentialHeader } from '../../src/web/v2/core/sensitive.mjs'
+import { isCredentialHeader } from '../../web/legacy/core/sensitive.mjs'
 
 const SEED = JSON.parse(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '../fixtures/old-capture-resp-shapes.ndjson'), 'utf8').split('\n')[0])
 const CASES = [(n) => n, (n) => n.replace(/(^|-)([a-z])/g, (_, d, c) => d + c.toUpperCase()), (n) => n.toUpperCase()]

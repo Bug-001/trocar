@@ -29,7 +29,7 @@ OS and its calls came out verbatim; `not yet` = that has not been shown there. W
 ## See it in 30 seconds, with no capture and no setup
 
 ```sh
-git clone https://github.com/Bug-001/trocar && cd trocar && npm install
+git clone https://github.com/Bug-001/trocar && cd trocar && npm install --omit=dev
 ```
 
 A small **synthetic** sample session ships in `samples/demo-session.ndjson` (fabricated, no real
@@ -134,7 +134,7 @@ stay captured, and connections open at that moment are cut and retried by the ag
 From source (Node ≥ 22): there is no global `trocar` on your PATH, so run it through the repo.
 
 ```sh
-git clone https://github.com/Bug-001/trocar && cd trocar && npm install
+git clone https://github.com/Bug-001/trocar && cd trocar && npm install --omit=dev
 make -C src/collector/arch/linux && sudo "$(command -v node)" bin/trocar.mjs setup-helper   # Linux only, once per machine
 node bin/trocar.mjs install     # once: the certificates
 node bin/trocar.mjs on          # then start capture
@@ -158,7 +158,7 @@ trocar update            # the newest code, and the machine as it was
 ```
 
 One command takes this checkout to the newest code and leaves the machine the way it was: it refuses to touch a checkout with changes of your own, fast-forwards (never merges), runs
-`npm install` when what trocar needs changed, replaces the collector, runs `install`, and switches
+`npm install --omit=dev` (no development tools) when what trocar needs changed, replaces the collector, runs `install`, and switches
 capture on again for the agents that had it on. It prints the plan — which commit to which commit,
 and which agents go off and on again — and asks first; `--yes` answers, `--dry-run` only prints.
 While it runs those agents are not captured (their connections still work), and the collector is
@@ -214,7 +214,8 @@ serves it from `install` on (D66); `trocar board` prints its address with your k
 the board opens again from history or a bookmark. It is the HTTP shell of `trocar query`
 over `GET /api/<name>` (D59), and `trocar status` shows its address (never the key) on its `Board` line. It
 reads `~/.trocar/raw/`, so **the sessions of every captured harness appear side by side on one
-board** (the collector's `flows/`, `audit/` and `replays/` are not envelopes and are not shown).
+board** (the collector's `flows/`, `audit/` and `replays/` are not envelopes and are not shown). Each agent appears by its official icon beside its name. Times read the same on every screen: a day as "Oct 18" (or "Today" / "Yesterday"), a clock time as "08:00:52", both together as "Oct 18, 08:00:52".
+Product names and logos are trademarks of their owners and identify the agents only.
 
 There is one board, at `/`. Besides reading, it writes three things, each through the plan-then-confirm protocol of `/control/*` (it shows the
 files a change touches, focus on Cancel, and Cancel or Esc sends nothing): **an agent's capture on or off**
@@ -223,7 +224,7 @@ trocar (only what that agent is missing), and **a traffic class's level** (the s
 only). Where the board cannot make the change (not installed, or running as root), it shows no control and
 puts the command in the row's technical details. `trocar install` and `trocar uninstall` stay in the CLI: the
 board has no control for them. Replay keys: ← → (Shift: ten steps), Home, End, n / p (next / previous step with a
-problem), [ / ] (previous / next compaction), f (follow latest), ? (the key list), Esc. Selecting text never opens or closes a row, a click inside an expanded row leaves it open, and a refresh keeps your selection and the Technical details you opened. Following latest keeps the newest step in view as calls arrive,
+problem), [ / ] (previous / next compaction), f (follow latest), ? (the key list), Esc. Selecting text never opens or closes a row, a click inside an expanded row leaves it open, and a refresh keeps your selection and the Technical details you opened. On the capture page and the capture log a row opens and closes only from its head (a click, Enter or Space), and the rows keep their order while one is open. Following latest keeps the newest step in view as calls arrive,
 and the context window ends with that step's reply: its text, thinking and tool calls. The address bar reproduces what you see: while following it names no step, otherwise the step on screen. A replay link without a step follows the session live and is still following after a reload, and a link with a step stays on that step, with following off. A session opens at once, also from cold (a new tab, an empty browser cache, no query worker running): the daemon sends a small summary of the session that the worker wrote earlier, and from it the page draws the header with its totals, the whole-session overview, the bars of the part you are in, the step number, the lane names and an empty context frame of the right size; the step's blocks fill in a moment later. On a live session of 3,621 steps in 19 parts, that first page was drawn within 59 ms (p95). A session is cut into parts at its compactions: the row above the trace says **Part k of n · steps a–b** (with **(inferred)** when the boundary is a guess), ‹ and › or [ and ] go to the part before or after, the overview marks every boundary, and the bars stay inside the part you are in. Going to the next part took 14 ms (p95) on that session. The rest of the session is read in the background, at most three pieces at a time: first the piece holding your step, then the pieces next to it, then the rest of its part, then everything else from newest to oldest. A step whose piece has not arrived keeps its outline and costs on screen and fills in when its piece comes, with no load button anywhere; a link that names a step reads that step's piece first. While the desk follows a session it asks every 1.5 s only for the bytes added since its last look to the two files of the part still growing; when nothing new was captured, nothing comes back and no worker starts. The worker rewrites the session's summary only when a group of calls is sealed, a new chapter starts or the reading state changes; the newest calls, the lane names and the counts travel in the growing part's files, so a settled file is never written again because a lane grew. Replaying the last 150 calls of a live session of about 30,000 records, following cost the worker about 22 ms of CPU per call and at most 175 MB of memory between calls. When the worker stops and a new one starts, it carries those growing files on instead of writing them afresh, so a desk that comes back keeps reading from where it was; if a file was replaced in the meantime, the desk notices (each growing file carries a tag that changes only when the file is replaced) and reads it again whole. Leave the replay desk and come back to the same session (from Sessions, Back, the sidebar or a link) and it shows the step you left and asks for nothing but one such look. One quiet line under the header says how current the view is: **Reading this session for the first time · N %** while the worker reads a session it has never read (until then the overview shows calls over time only, with no bars per step and no parts), and **N newer calls are not shown yet** when the capture holds calls newer than the newest one the desk holds; it goes away once they arrive. When the background reading of a session stops (it no longer fits in the worker's memory, or it failed), the line says that reading stopped and why in plain words; the details are under **Technical details**. The resource explorer shows each group's count once the lane's whole list of files and resources has been read; until then the count is left blank, never a partial number. A refresh that fails keeps the
 last good view on screen, says it is out of date, and tries again with a growing pause. When an agent is not captured, its row says why in the same sentence `trocar status` prints in its NOTE column (one
 catalog, `src/cli/words.mjs`, a sentence for every reason).

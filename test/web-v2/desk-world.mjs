@@ -20,7 +20,7 @@
 // fidelity that is not verbatim on some, so rows carry marks or none and labels of any length.
 // deskFrom(get, id) reads `session`, every lane's tail and then its older pages, then the lane's ledger chain.
 import { createHash } from 'node:crypto'
-import { createDesk, applySession, applyLane, readLedger } from '../../src/web/v2/replay/model.mjs'
+import { createDesk, applySession, applyLane, readLedger } from '../../web/legacy/replay/model.mjs'
 
 // the server's step order (3.5: ts_request, then id), written here independently of the model
 const stepCmp = (a, b) => String(a.ts).localeCompare(String(b.ts)) || String(a.rid).localeCompare(String(b.rid))

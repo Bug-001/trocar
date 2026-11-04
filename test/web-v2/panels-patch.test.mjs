@@ -3,11 +3,11 @@
 // step patched to another step equal the panel drawn directly at that step.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { buildLanes } from '../../src/web/v2/replay/lanes.mjs'
-import { serialize, patchUnits, applyOps } from '../../src/web/v2/core/units.mjs'
-import { resourceUnits, resourcesHtml } from '../../src/web/v2/replay/resources.mjs'
-import { outlineUnits, outlineHtml } from '../../src/web/v2/replay/outline.mjs'
-import { rawPanelUnits, renderRawPanel } from '../../src/web/v2/replay/rawpanel.mjs'
+import { buildLanes } from '../../web/legacy/replay/lanes.mjs'
+import { serialize, patchUnits, applyOps } from '../../web/legacy/core/units.mjs'
+import { resourceUnits, resourcesHtml } from '../../web/legacy/replay/resources.mjs'
+import { outlineUnits, outlineHtml } from '../../web/legacy/replay/outline.mjs'
+import { rawPanelUnits, renderRawPanel } from '../../web/legacy/replay/rawpanel.mjs'
 import { world, deskFrom } from './desk-world.mjs'
 
 const SEEDS = Array.from({ length: 16 }, (_, i) => i + 1)

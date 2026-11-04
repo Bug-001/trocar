@@ -9,14 +9,22 @@ import { fileURLToPath } from 'node:url';
 const DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'src', 'dissect');
 const SPEC = /(?:^|\n)\s*(?:import|export)\s+(?:[^'"]*?\s+from\s+)?['"]([^'"]+)['"]|import\(\s*['"]([^'"]+)['"]\s*\)/g;
 
-test('src/dissect imports only ./ siblings and node: built-ins', () => {
+// the one import from outside: the harness registry, safe because it imports nothing (asserted below)
+const REGISTRY = '../off/harness-names.mjs';
+
+test('src/dissect imports only ./ siblings, node: built-ins and the harness registry', () => {
   const files = fs.readdirSync(DIR).filter((n) => n.endsWith('.mjs'));
   assert.ok(files.includes('harnesses.mjs'), 'the harness table lives in src/dissect');
   for (const f of files) {
     const src = fs.readFileSync(path.join(DIR, f), 'utf8');
     for (const m of src.matchAll(SPEC)) {
       const spec = m[1] || m[2];
-      assert.ok(spec.startsWith('./') || spec.startsWith('node:'), `${f} imports ${spec}`);
+      assert.ok(spec.startsWith('./') || spec.startsWith('node:') || spec === REGISTRY, `${f} imports ${spec}`);
     }
   }
+});
+
+test('the harness registry src/dissect imports itself imports nothing', () => {
+  const src = fs.readFileSync(path.join(DIR, REGISTRY), 'utf8');
+  assert.deepEqual([...src.matchAll(SPEC)].map((m) => m[1] || m[2]), []);
 });

@@ -7,7 +7,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { homeWith, query, SEGMENT } from '../helpers/session-doc.mjs';
-import { createDesk, applySession, applyLane, stepOf } from '../../src/web/v2/replay/model.mjs';
+import { createDesk, applySession, applyLane, stepOf } from '../../web/legacy/replay/model.mjs';
 import { parseTextRef } from '../../src/raw/refs.mjs';
 import { fieldTextOf } from '../../src/dissect/record-fields.mjs';
 import { shapeResponse } from '../../src/collector/core/record/body.mjs';

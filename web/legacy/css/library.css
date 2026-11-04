@@ -1,0 +1,83 @@
+/* css/library.css — the session library (1.8). Tokens and color-mix only: no bare colours. Two-line rows
+   (agent | title / entry · project · marks), group rows, a caption row that carries only what changes trust, and the states
+   that stand in for the table. */
+.lib{flex:1;display:flex;flex-direction:column;min-height:0;min-width:0;}
+
+/* the tool row: search · Agent 菜单 · 项目 菜单 · 排序 · the active filters · 清除筛选 */
+.libtools{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px;padding:10px 16px;background:var(--panel);border-bottom:1px solid var(--rule);}
+.libtools input[type=search]{flex:1 1 230px;max-width:360px;min-width:150px;font:inherit;background:var(--paper);color:var(--ink);border:1px solid var(--rule);border-radius:6px;padding:4px 9px;}
+.libtools input[type=search]:focus-visible,.libtools .popbtn:focus-visible,.fchip:focus-visible,.libtools button:focus-visible{outline:2px solid var(--action);outline-offset:1px;}
+.menuwrap{display:inline-flex;}
+.miname{margin-left:2px;}
+.miraw{margin-left:6px;color:var(--ink-3);font-family:var(--mono);font-size:var(--fs-cap);}
+.mchk{display:inline-block;width:14px;color:var(--action);font-weight:var(--fw-strong);}
+.fchips{display:flex;flex-wrap:wrap;gap:5px;}
+.fchip{display:inline-flex;align-items:center;gap:4px;font-size:var(--fs-cap);padding:2px 9px;border-radius:20px;white-space:nowrap;color:var(--action);border-color:var(--action);background:color-mix(in srgb,var(--action) 12%,transparent);}
+.ghostbtn:disabled{opacity:.45;cursor:default;}
+
+/* the caption row: trust facts joined by ·, then 技术细节; empty when there is nothing to say */
+.libcap{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px;padding:5px 16px;font-size:var(--fs-cap);color:var(--ink-2);background:var(--panel);border-bottom:1px solid var(--rule);}
+.libcap:empty{display:none;}
+.libcap a{color:var(--action);}
+.capsep{color:var(--ink-3);}
+.linkbtn{background:none;border:0;padding:0;font:inherit;color:var(--action);cursor:pointer;}
+/* 技术细节 inside the caption speaks at the caption's size and sits on its baseline, not the kit's body size */
+.libcap .disc{border:0;}
+.libcap .disc-t,.libcap .disc-t b{min-height:0;font-size:inherit;font-weight:inherit;color:inherit;}
+
+/* one grid for the header and every row, so the columns line up: agent | 会话 | 模型调用 | 最后活动 */
+.libhead,.lrow{display:grid;grid-template-columns:176px minmax(0,1fr) 92px 110px;align-items:center;column-gap:12px;padding:0 16px;}
+.libhead{height:32px;background:var(--paper);border-bottom:1px solid var(--rule);}
+.libhead .ln,.lrow .ln,.libhead .lw,.lrow .lw{text-align:right;}
+.libhead .lhs .popbtn{padding:0 2px;font-size:var(--fs-cap);}
+.liblist{flex:1;min-height:0;overflow:auto;outline:none;}
+
+/* a day head (only in the 最近 order): the day's word, then its date when the word is not already the date; no counts */
+.lgroup{height:52px;box-sizing:border-box;display:flex;align-items:flex-end;gap:10px;padding:0 16px 8px;background:var(--paper);border-bottom:1px solid var(--rule);}
+.lday{font-size:var(--fs-head);font-weight:var(--fw-strong);color:var(--ink);}
+.ldate{font-size:var(--fs-cap);color:var(--ink-3);}
+
+/* a session row: the agent, then two lines — the title, then entry · project · marks */
+.lrow{min-height:40px;box-sizing:border-box;padding-top:7px;padding-bottom:7px;cursor:pointer;color:inherit;text-decoration:none;border-bottom:1px solid var(--rule);}
+.lrow:hover{background:var(--hover);}
+.lrow:focus-visible{outline:2px solid var(--action);outline-offset:-2px;}
+.lrow.sel{background:var(--action-wash);box-shadow:inset 3px 0 0 var(--action);}
+.lrow.dim .lmain,.lrow.dim .ln,.lrow.dim .lagent{color:var(--ink-3);}
+.lagent{min-width:0;display:flex;align-items:center;gap:8px;font-size:var(--fs-body);color:var(--ink);}
+.lhn{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.lmain{min-width:0;display:flex;flex-direction:column;gap:2px;}
+.lt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink);font-size:var(--fs-body);font-weight:var(--fw-strong);}
+.lt.pend{color:var(--ink-3);}
+/* the marks never wrap (a row has one line or two): they end in … and the line's title holds the full text */
+.lsub{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-3);font-size:var(--fs-cap);}
+.lsub:empty{display:none;}
+.lmark+.lmark::before{content:'·';margin:0 6px;}
+.lrow .ln{font-size:var(--fs-body);color:var(--ink-2);font-variant-numeric:tabular-nums;}
+.lrow .lw{color:var(--ink-2);font-size:var(--fs-cap);}
+
+/* the caption's not-read-in-full link leads with the half glyph */
+.libcap a .ico12{vertical-align:-1px;margin-right:4px;}
+
+/* the states that stand in for the table: loading, 读不出, 还没有会话, nothing matches */
+.libempty{max-width:640px;margin:0 auto;padding:44px 24px;text-align:center;color:var(--ink-2);line-height:2;}
+.libempty a{color:var(--action);}
+.dimline{color:var(--ink-3);}
+
+/* narrow screens: the agent column narrows, its name always stays (ending in … at worst), the marks still end in … (1.8 §窄屏) */
+@media(max-width:820px){
+  .libhead,.lrow{grid-template-columns:128px minmax(0,1fr) 64px 84px;column-gap:10px;padding-inline:12px;}
+  .libtools,.libcap{padding:8px 12px;}
+}
+/* phone widths: no room for an agent column, so the title runs across the first line up to the last-active time, and the
+   agent's name opens the second, before the marks and the call count; the header drops its agent cell (1.8 §窄屏) */
+@media(max-width:640px){
+  .libhead{grid-template-columns:minmax(0,1fr) 44px 64px;column-gap:8px;}
+  .libhead .lha{display:none;}
+  .lrow{grid-template-columns:fit-content(45%) minmax(0,1fr) 44px 64px;column-gap:8px;grid-template-areas:"t t t w" "a s n w";align-content:center;row-gap:2px;}
+  .lrow .lmain{display:contents;}
+  .lrow .lt{grid-area:t;}
+  .lrow .lsub{grid-area:s;}
+  .lrow .lagent{grid-area:a;gap:6px;font-size:var(--fs-cap);color:var(--ink-2);}
+  .lrow .ln{grid-area:n;}
+  .lrow .lw{grid-area:w;}
+}
