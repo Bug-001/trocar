@@ -8,18 +8,22 @@
 // computed bytes past OVERVIEW_USAGE_BYTES: from there nothing more is computed, in this session or a later one.
 // `coverage` says how many sessions and calls it read and why it stopped (invariant 4). With `later` (the query worker),
 // every missing segment is filled after the answer is written.
+// The money and the hit (D83) are worked out from `usage.rows` and the current price table on every answer, never stored:
+// a sum runs in row order, so the document depends only on the calls read and the table.
 import { failedOf } from '../../dissect/endpoints.mjs';
 import { recordsAt } from '../records.mjs';
 import { readUsage, fillUsage, usageFacts, takeFillProblem } from '../usage.mjs';
 import { asOf, indexRows, isModelCall, sessionFactsOf, sessionGroups } from '../rows.mjs';
 import { rowsKey } from '../warm.mjs';
+import { costOf, hitRatio, priceMatch } from '../../view/metrics.mjs';
 import { OVERVIEW_USAGE_BYTES, tsFilter } from './index.mjs';
+import { priceTable } from './pricing.mjs';
 
 export const params = Object.freeze(['since', 'until']);
 
 const add = (sum, v) => (v == null ? sum : (sum ?? 0) + v);
 
-export async function run({ home, fs, now, params: p, errors, later = null, progress = null }) {
+export async function run({ home, fs, env, now, params: p, errors, later = null, progress = null }) {
   const keep = tsFilter(p, now);
   const all = await indexRows({ home, fs, errors, progress });
   const counted = []; // [harness, rows] — one entry per in-window session, and one per in-window session-less row
@@ -54,10 +58,48 @@ export async function run({ home, fs, now, params: p, errors, later = null, prog
   }
   const harnesses = [...by.values()].sort((a, b) => String(a.harness ?? '\uffff').localeCompare(String(b.harness ?? '\uffff')));
 
-  return { as_of: asOf(all), calls, bytes, sessions: { total: inWindow.length }, harnesses, usage: usageOf({ home, fs, inWindow, errors, later }) };
+  return { as_of: asOf(all), calls, bytes, sessions: { total: inWindow.length }, harnesses, usage: usageOf({ home, fs, env, inWindow, errors, later }) };
 }
 
-function usageOf({ home, fs, inWindow, errors, later }) {
+const metered = (r) => r.calls - r.failed - r.no_usage;
+
+/** A row with its price and dollars. A row with nothing metered has no dollars, priced or not. */
+function priced(r, table) {
+  const m = priceMatch(table, r.model);
+  const usd = m && metered(r) > 0 ? costOf(m.row, { fresh: r.input, out: r.output, create: r.cache_write, read: r.cache_read }) : null;
+  return { ...r, usd, price: m && { key: m.key, exact: m.exact } };
+}
+
+// 1.7 §估价规则: a failed call has no usage and no price, and does not make the sum a floor.
+function costOfRows(rows, partial) {
+  let usd = null, no_usage = 0, unpriced = 0;
+  for (const r of rows) {
+    usd = add(usd, r.usd);
+    no_usage += r.no_usage;
+    if (!r.price && metered(r) > 0) unpriced++;
+  }
+  return { usd, floor: no_usage > 0 || unpriced > 0 || partial, no_usage, unpriced, partial };
+}
+
+// 1.7 主对话缓存命中: a null cache_write stays out of the denominator and makes the ratio uncertain.
+function hitOfRows(rows) {
+  const main = rows.filter((r) => r.lane === 'main'), u = { read: 0, create: 0, fresh: 0 };
+  for (const r of main) { u.read += r.cache_read; u.create += r.cache_write ?? 0; u.fresh += r.input; }
+  return { ratio: hitRatio(u), uncertain: main.some((r) => !r.cache_known || r.cache_write == null), main_rows: main.length };
+}
+
+// `sessions` = the most any one row of the model names: a session can sit in several rows, so the sum would count it twice.
+function unpricedOf(rows) {
+  const by = new Map();
+  for (const r of rows) {
+    if (r.price || metered(r) <= 0) continue;
+    const model = r.model || null;
+    by.set(model, Math.max(by.get(model) ?? 0, r.sessions));
+  }
+  return [...by].map(([model, sessions]) => ({ model, sessions }));
+}
+
+function usageOf({ home, fs, env, inWindow, errors, later }) {
   const newest = [...inWindow].sort((a, b) => (a[1].last_ts < b[1].last_ts ? 1 : a[1].last_ts > b[1].last_ts ? -1 : 0));
   const needed = isModelCall;
   const fill = takeFillProblem({ home, fs }); // what the fill after an earlier answer could not do, said once (D38)
@@ -112,10 +154,18 @@ function usageOf({ home, fs, inWindow, errors, later }) {
   // After the answer is written, and only where there is a next query (the worker's `later`): the one-shot CLI never writes one.
   if (later && toFill.size) later(() => fillUsage({ home, fs, segments: [...toFill] }));
   const cmp = (a, b) => (a === b ? 0 : a == null ? 1 : b == null ? -1 : String(a) < String(b) ? -1 : 1);
+  const { table, source } = priceTable({ home, env });
+  const sorted = [...rows.values()].map((r) => priced({ ...r, sessions: r.sessions.size }, table))
+    .sort((a, b) => cmp(a.harness, b.harness) || cmp(a.model, b.model) || cmp(a.lane, b.lane));
+  const partial = callsRead < callsIn, groups = Map.groupBy(sorted, (r) => r.harness);
   return {
     coverage: { sessions_read: read, sessions_in_window: inWindow.length, calls_read: callsRead, calls_in_window: callsIn,
       capped_at: capped ? OVERVIEW_USAGE_BYTES : null, reason: capped ? 'byte-budget' : null },
-    rows: [...rows.values()].map((r) => ({ ...r, sessions: r.sessions.size }))
-      .sort((a, b) => cmp(a.harness, b.harness) || cmp(a.model, b.model) || cmp(a.lane, b.lane)),
+    rows: sorted,
+    cost: costOfRows(sorted, partial),
+    hit: hitOfRows(sorted),
+    harnesses: [...groups].map(([harness, own]) => ({ harness, cost: costOfRows(own, partial), hit: hitOfRows(own) })),
+    unpriced: unpricedOf(sorted),
+    pricing: { source },
   };
 }
