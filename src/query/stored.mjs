@@ -10,13 +10,15 @@ import { indexDir } from './index-build.mjs';
 
 /** How many stored answers the directory keeps: every `after` value leaves one, this bounds them. */
 export const STORED_MAX = 64;
+/** The version of the document's shape, in the file's name: a file of another version is not there for the daemon, and ages out of the rotation. */
+export const STORED_V = 1;
 
 const dirOf = (home) => path.join(indexDir(home), 'stored');
 const canonical = (params) => Object.keys(params).sort().map((k) => [k, Array.isArray(params[k]) ? params[k].map(String) : String(params[k])]);
 
-/** storedFile(home, name, params) → `<home>/index/stored/<name>.<first 16 hex of sha1 of the canonical params>.json.gz`. */
+/** storedFile(home, name, params) → `<home>/index/stored/<name>.v<STORED_V>.<first 16 hex of sha1 of the canonical params>.json.gz`. */
 export const storedFile = (home, name, params = {}) =>
-  path.join(dirOf(home), `${name}.${createHash('sha1').update(JSON.stringify(canonical(params))).digest('hex').slice(0, 16)}.json.gz`);
+  path.join(dirOf(home), `${name}.v${STORED_V}.${createHash('sha1').update(JSON.stringify(canonical(params))).digest('hex').slice(0, 16)}.json.gz`);
 
 /** writeStored(home, name, params, doc, fs): temp file + same-directory rename, then only the STORED_MAX newest files (by mtime) stay. */
 export function writeStored(home, name, params, doc, fs = nodeFs) {
