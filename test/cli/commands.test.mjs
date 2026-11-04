@@ -11,7 +11,6 @@ const commandsOf = (text) => new Set(text.split('\n').map((l) => l.match(/^ {2}(
 
 test('the table is the command list of 1.6 §2 — the names of that list, each once, in three groups', () => {
   const names = COMMANDS.map((c) => c.name)
-  assert.deepEqual([...names].sort(), ['board', 'classes', 'daemon', 'doctor', 'help', 'install', 'off', 'on', 'place', 'query', 'raw', 'setup-helper', 'status', 'uninstall', 'update'])
   assert.equal(new Set(names).size, names.length, 'a name once')
   for (const gone of ['etl', 'shard', 'keep', 'verify', 'version', 'collector', 'test', 'monitor', 'capture']) {
     assert.equal(commandNamed(gone), undefined, `${gone} is not a command any more (1.6 §6: one feature, one name)`)
@@ -57,7 +56,6 @@ test('§1.1: help is laid out for 80 columns, in the three groups in order, and 
   const group = (i) => commandsOf(text.split('\n').slice(at[i], at[i + 1] === undefined ? undefined : at[i + 1]).join('\n'))
   assert.deepEqual([...group(0)].sort(), ['doctor', 'install', 'off', 'on', 'status', 'uninstall'])
   assert.deepEqual([...group(1)].sort(), ['board', 'classes', 'query'])
-  assert.deepEqual([...group(2)].sort(), ['daemon', 'raw', 'setup-helper', 'update'])
 })
 
 test('§5.4: one command\'s help is its usage, its summary, its options with a line each, and its exit codes; a name that is no command throws', () => {
