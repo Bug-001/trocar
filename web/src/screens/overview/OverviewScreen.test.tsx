@@ -158,6 +158,13 @@ test('O2: a selection in a recent row\'s title survives a changed sessions answe
   expect(p.readAt()).not.toBe(at)
 })
 
+test('1.7 #11: a recent row with no title is muted, read failed or not; a row with one is not', async () => {
+  answer.sessions = () => ok({ sessions: [sess('said', 1), { ...sess('none', 2), title: null, title_source: null }, { ...sess('lost', 3), title: null, title_source: 'unread' }] })
+  const p = mount(); await settle()
+  const muted = (id: string) => p.link(replay(id))!.querySelector('.ovtx')!.classList.contains('none')
+  expect(['said', 'none', 'lost'].map(muted)).toEqual([false, true, true])
+})
+
 test('O3: the focused recent-row link keeps focus and its href when a newer session arrives at the top', async () => {
   answer.sessions = (n) => ok({ sessions: n ? [sess('b', 1), sess('a', 60)] : [sess('a', 60)] })
   const p = mount(); await settle()

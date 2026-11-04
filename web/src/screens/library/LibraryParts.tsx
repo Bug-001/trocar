@@ -42,7 +42,7 @@ export const Row = memo(function Row({ s, on, now, onOpen }: { s: Session, on: b
         <span className="lhn" title={m.harnessRaw ? `${m.harnessName} · ${m.harnessRaw}` : m.harnessName}>{m.harnessName}</span>
       </span>
       <span className="lmain">
-        <span className="lt" title={m.titleTip}>{m.titleText}</span>
+        <span className={m.untitled ? 'lt none' : 'lt'} title={m.titleTip}>{m.titleText}</span>
         <span className="lsub" title={m.subTip}>{m.marks.map((k) => k.kind === 'inferred'
           ? <span key={k.kind} className="lmark" data-mark={k.kind}><span className="mk mk-inf" title={k.tip}>{k.text}</span></span>
           : <span key={k.kind} className="lmark" data-mark={k.kind} title={k.tip || undefined}>{k.text}</span>)}</span>

@@ -187,6 +187,13 @@ test('V3b: while a selection holds the rows, the head\'s read-at time stays with
   expect(head(), 'moves once nothing is held').not.toBe(first)
 })
 
+test('1.8 §标题规则: a row with no title is muted, read failed or not; a row with one is not', async () => {
+  lists = [() => [sess('said', 3, 1), sess('none', 3, 2, { title: null, title_source: null }), sess('lost', 3, 3, { title: null, title_source: 'unread' })]]
+  const p = await mount()
+  const muted = (id: string) => p.row(`p1::${id}`)!.querySelector('.lt')!.classList.contains('none')
+  expect(['said', 'none', 'lost'].map(muted)).toEqual([false, true, true])
+})
+
 test('V8: each row is one link with no focusable inside, and its href reads back as the replay route of that session (id escaped)', async () => {
   const ids = ['a"<b>', 'x y/z?#&', 'plain']
   lists = [() => ids.map((id, i) => sess(id, 3, i + 1, { project_slug: `p${i}` }))]

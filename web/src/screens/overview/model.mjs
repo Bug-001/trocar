@@ -330,7 +330,7 @@ export function recentCard(s, now) {
     rows: rows.map((r) => {
       const probe = r.calls === 0 && r.probes > 0, unread = r.title == null && r.titleSource === 'unread'
       return {
-        id: r.key, harness: r.harness, inferred: r.inferred, title: r.title ?? (unread ? PROMPT_UNREAD : UNTITLED),
+        id: r.key, harness: r.harness, inferred: r.inferred, title: r.title ?? (unread ? PROMPT_UNREAD : UNTITLED), untitled: r.title == null,
         titleTip: [r.title != null ? TITLE_FROM_WIRE : unread ? PROMPT_UNREAD_TIP : null, r.id].filter(Boolean).join(' · '),
         calls: { text: probe ? W.PROBE_ONLY : W.CALLS_N(r.calls), tip: probe ? W.PROBE_ONLY_TIP : null }, when: when(r.last, now), href: r.href,
       }
