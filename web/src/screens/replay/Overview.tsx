@@ -46,9 +46,11 @@ function Group({ c, g, label, group, count, none, children }: { c: Ctx, g: strin
 
 function Items({ c, p }: { c: Ctx, p: Part }) {
   const { s } = c
-  const block = (fi: number) => (p.current ? jumpToBlockIndex(s, fi) : s.jumpTo(p.at, fiJump(fi)))
-  const change = () => (p.current ? s.queueJump(anchorJump('cachebrk')) : s.jumpTo(p.at, anchorJump('cachebrk')))
-  const agent = (id: string) => selectTick(s, s.lanes.find((l: { id: string }) => l.id === id), 0)
+  // a jump out of a part the reader opened lands in it: it stays open as the current part, not closed by the flip that opened it
+  const into = (step: number, jump: object) => { s.partFlips?.delete(p.k); s.jumpTo(step, jump) }
+  const block = (fi: number) => (p.current ? jumpToBlockIndex(s, fi) : into(p.at, fiJump(fi)))
+  const change = () => (p.current ? s.queueJump(anchorJump('cachebrk')) : into(p.at, anchorJump('cachebrk')))
+  const agent = (id: string) => { if (!p.current) s.partFlips?.delete(p.k); selectTick(s, s.lanes.find((l: { id: string }) => l.id === id), 0) }
   const { prompts, agents } = p
   return <>
     {p.off ? <div className="ovnone">{p.off.why}</div> : <>
@@ -65,7 +67,7 @@ function Items({ c, p }: { c: Ctx, p: Part }) {
     </>}
     <Group c={c} g="prompts" label={W.GRP_ASK} group={prompts} none={W.NO_PROMPTS_HERE} count={<Count n={prompts.kids && !prompts.partial ? prompts.kids.length : null} />}>
       {(k) => (k.rid != null
-        ? <Row key={`${k.rid}:${k.i}`} jump={`${k.i}:prompt`} go={() => s.jumpTo(k.i, promptJump())} label={k.label} current={k.current}>{k.n != null ? <span className="ovx">{W.rowStep(k.n)}</span> : null}</Row>
+        ? <Row key={`${k.rid}:${k.i}`} jump={`${k.i}:prompt`} go={() => into(k.i, promptJump())} label={k.label} current={k.current}>{k.n != null ? <span className="ovx">{W.rowStep(k.n)}</span> : null}</Row>
         : <Row key={k.jump} jump={`${p.at}:${k.jump}`} go={() => block(k.jump)} label={k.label}>{k.guess ? <span className="ovx" title={W.QUERY_GUESS_TIP}>{W.GUESS}</span> : null}</Row>)}
     </Group>
     {agents.kids.length || agents.partial ? <Group c={c} g="agents" label={W.GRP_AGENTS} group={agents} count={<Count n={agents.partial ? null : agents.kids.length} />}>
@@ -79,7 +81,7 @@ function PartRow({ c, p, here }: { c: Ctx, p: Part, here: Ref<HTMLButtonElement>
   const flip = () => { toggle(c.s.partFlips ??= new Set(), p.k); c.redraw() }
   return <Disclosure className="ovpart" isExpanded={p.open} onExpandedChange={flip}>
     <Button slot="trigger" ref={here} className="ovph" aria-current={p.current ? 'true' : undefined}>
-      <Chev /><span className="ovlbl">{p.name}</span><span className="ovx">{`${p.a + 1}–${p.b}${p.ts0 ? ` · ${fmtWhen(p.ts0)}` : ''}`}</span>
+      <Chev /><span className="ovlbl">{p.name}</span><span className="ovx">{`${p.a + 1 === p.b ? p.b : `${p.a + 1}–${p.b}`}${p.ts0 ? ` · ${fmtWhen(p.ts0)}` : ''}`}</span>
     </Button>
     <DisclosurePanel className="ovbody">{p.open ? <Items c={c} p={p} /> : null}</DisclosurePanel>
   </Disclosure>
