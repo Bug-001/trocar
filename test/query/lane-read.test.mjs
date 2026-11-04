@@ -538,6 +538,16 @@ test('3.5 block: one answer reads a segment\'s index once, however many refs it 
   assert.equal(await reads(reply), one)
 })
 
+// 2.3 #42, recordsAt's rule: one record costs one seek. A scan of the plaintext is the fallback for a row with no offset, and a live segment is 100 MB
+test('3.5 block: a record of a plaintext segment is read at its offset, never by reading the file', async () => {
+  const home = homeWith([call(1), call(2)]), { reply } = await blockRefs(home, SESSION)
+  let whole = 0
+  const counting = new Proxy(fs, { get: (t, k) => (k !== 'readFileSync' ? t[k] : (...a) => { if (String(a[0]).endsWith('.ndjson')) whole++; return t[k](...a) }) })
+  const { blocks } = await q('block', home, { ref: reply }, { fs: counting })
+  assert.ok(blocks.length && blocks.every((x) => typeof x.bytes === 'string'))
+  assert.equal(whole, 0)
+})
+
 test('3.5 block: a request that cannot be parsed costs the view, not the bytes; it is a note and the answer stays ok', async () => {
   const home = homeWith([call(1, { model: 'claude-x', messages: [null] })])
   const ref = seg(1, '::0-20'), doc = await q('block', home, { ref })
