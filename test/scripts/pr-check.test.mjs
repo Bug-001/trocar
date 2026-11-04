@@ -213,7 +213,10 @@ test('AN16: what Git LFS would upload is refused: a pointer, an edit of one, or 
 })
 
 const DATA_URI = ['data', 'image/png;base64,AAAA'].join(':')
-const IMAGES = { 'a data URI': DATA_URI, 'a Markdown image': '![x](u)', 'a Markdown image by reference': '![x][r]', 'an img tag': '<img src=u>', 'an IMG tag': '<IMG SRC=u>' }
+const UNTYPED_URI = ['data', ';base64,AAAA'].join(':')
+const ATTACHMENT = 'https://github.com/user-attachments/assets/0a1b-2c3d'
+const IMAGES = { 'a data URI': DATA_URI, 'a data URI of no type': UNTYPED_URI, 'a Markdown image': '![x](u)', 'a Markdown image by reference': '![x][r]', 'an img tag': '<img src=u>', 'an IMG tag': '<IMG SRC=u>',
+  'a video tag': '<video src=u>', 'an uploaded attachment': ATTACHMENT, 'an attachment with no scheme': 'github.com/user-attachments/files/1/a.log', 'an attachment in a link': `[x](${ATTACHMENT})` }
 
 test('AN16: a data URI of an image is refused in any committed text, in every spelling', () => {
   const w = workspace()
@@ -248,6 +251,7 @@ const uri = ({ d = 'data', colon = ':', i = 'image', slash = '/' } = {}) => [d, 
 const URI_SPELLINGS = {
   'a decimal colon': { colon: '&#58;' }, 'a hex colon': { colon: '&#x3a;' }, 'a bare decimal colon': { colon: '&#58' }, 'a named colon': { colon: '&colon;' },
   'a decimal slash': { slash: '&#47;' }, 'a named slash': { slash: '&sol;' }, 'an entity letter in data': { d: '&#100;ata' }, 'an entity letter in image': { i: '&#105;mage' },
+  'a percent-encoded slash': { slash: '%2F' }, 'a lower-case percent-encoded slash': { slash: '%2f' }, 'a percent-encoded colon': { colon: '%3A' }, 'an entity of a percent': { slash: '&#37;2F' },
   'a newline in the scheme': { d: 'da\nta' }, 'a tab entity in the scheme': { d: 'da&Tab;ta' }, 'a newline after the colon': { colon: ':\n' }, 'a space after the colon': { colon: ': ' }, 'a newline after the slash': { slash: '/\n' },
 }
 for (const [name, parts] of Object.entries(URI_SPELLINGS)) {
@@ -260,6 +264,22 @@ for (const [name, parts] of Object.entries(URI_SPELLINGS)) {
     assert.ok(of(r.doc, 'files').some((f) => f.where === 'body'))
   })
 }
+
+for (const [name, text] of Object.entries({ 'parameters': ['data', ';charset=utf-8;base64,AAAA'].join(':'), 'a newline in it': ['data', ';ba\nse64,AAAA'].join(':'), 'a space after the colon': ['data', ' ;base64,AAAA'].join(':') })) {
+  test(`AN16: a data URI of no type with ${name} is refused in a file and in a body`, () => {
+    const w = workspace()
+    w.commit({ 'a.md': `${text}\n` })
+    const r = w.check({ body: `see ${text}` })
+    assert.deepEqual(named(r.doc, 'files'), ['a.md'])
+    assert.ok(of(r.doc, 'files').some((f) => f.where === 'body'))
+  })
+}
+
+test('AN16: a data URI of a type that is no image passes, typed or not', () => {
+  const w = workspace()
+  w.commit({ 'a.md': `${['data', ',hello'].join(':')}\n${['data', 'text/plain;base64,AAAA'].join(':')}\n` })
+  assert.deepEqual(w.check().doc.findings, [])
+})
 
 test('AN16: the start of a data URI in the base makes nothing after it public', () => {
   const svg = ['data', 'image/svg+xml,'].join(':'), png = ['data', 'image/png;base64,'].join(':')
@@ -274,15 +294,15 @@ test('AN16: the start of a data URI in the base makes nothing after it public', 
 
 test('AN16: a Markdown image or an img tag inside a commit passes', () => {
   const w = workspace()
-  w.commit({ 'docs/a.md': '![x](icon.svg)\n<img src=icon.svg>\n' }, 'subject\n\nDraws ![x](icon.svg) and <img src=icon.svg>.\n')
+  w.commit({ 'docs/a.md': `![x](icon.svg)\n<img src=icon.svg>\n<video src=a>\n${ATTACHMENT}\n` }, `subject\n\nDraws ![x](icon.svg), <img src=icon.svg>, <video src=a> and ${ATTACHMENT}.\n`)
   const { code, doc } = w.check()
   assert.equal(code, 0, JSON.stringify(doc.findings))
 })
 
 test('AN16: an image is public only as the same bytes: other words after the same start, or the same letters, do not pass', () => {
-  const w = workspace({ 'old.md': `![x](u) <img src=u> ${DATA_URI} xu dataimagepngbase64bbbb\n` })
+  const w = workspace({ 'old.md': `![x](u) <img src=u> ${DATA_URI} xu dataimagepngbase64bbbb\n${ATTACHMENT}\n` })
   w.commit({ 'a.txt': 'nothing here\n' })
-  for (const text of ['![x](elsewhere)', '<img src=elsewhere>', `${DATA_URI}BBBB`, '![X](U)', ['data', 'image/png;base64,BBBB'].join(':')]) {
+  for (const text of [`${ATTACHMENT}/other`, ATTACHMENT.replace('0a1b', '9z9z'), '![x](elsewhere)', '<img src=elsewhere>', `${DATA_URI}BBBB`, '![X](U)', ['data', 'image/png;base64,BBBB'].join(':')]) {
     const r = w.check({ body: text })
     assert.equal(r.code, 1, text)
     assert.deepEqual(of(r.doc, 'files').map((f) => f.where), ['body'], text)
@@ -428,6 +448,53 @@ test('AN18: a home path in any spelling is refused; a neutral name or a placehol
   assert.deepEqual(of(v.check().doc, 'identity'), [])
 })
 
+const homeWith = (x) => { const { mac, linux, windows } = homes(x); return [mac, linux, windows].map((p) => p.slice(0, -1)) }
+const texts = (list) => Object.fromEntries(list.map((text, i) => [`h/${i}.txt`, `${text}\n`]))
+const percent = (p) => [...p].map((c) => (/[A-Za-z0-9]/.test(c) ? c : `%${c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')}`)).join('')
+
+test('AN18: a home path needs no separator after the name: a line\'s end, a space or a quote ends it too', () => {
+  const real = texts(homeWith('zorgon7').flatMap((p) => [p, `${p} is where it ran`, `"${p}"`, `'${p}'`]))
+  const w = workspace()
+  w.commit(real)
+  assert.deepEqual(named(w.check().doc, 'identity'), sorted(real))
+  assert.equal(of(w.check({ title: homes('zorgon7').mac.slice(0, -1) }).doc, 'identity').filter((f) => f.where === 'title').length, 1, 'the text\'s very end')
+
+  const v = workspace()
+  v.commit(texts(['alice', 'user', 'runner'].flatMap((x) => homeWith(x).flatMap((p) => [p, `${p} is where it ran`, `"${p}"`]))))
+  assert.deepEqual(of(v.check().doc, 'identity'), [])
+})
+
+test('AN18: a name with a space in it is one name, and a neutral first word does not make it neutral', () => {
+  const real = texts(['John Doe', 'alice smith'].flatMap((x) => Object.values(homes(x))))
+  const w = workspace()
+  w.commit(real)
+  assert.deepEqual(named(w.check().doc, 'identity'), sorted(real))
+})
+
+test('AN18: a percent-encoded home path is refused; a neutral one passes', () => {
+  const real = texts([...Object.values(homes('zorgon7')), ...homeWith('zorgon7'), homes('John Doe').windows].map(percent))
+  const w = workspace()
+  w.commit(real)
+  assert.deepEqual(named(w.check().doc, 'identity'), sorted(real))
+
+  const v = workspace()
+  v.commit(texts([...Object.values(homes('alice')), ...homeWith('alice')].map(percent)))
+  assert.deepEqual(of(v.check().doc, 'identity'), [])
+})
+
+test('AN18: the git email is one of the machine\'s names, and it is at home in the author field', () => {
+  const w = workspace()
+  const email = '7+qmail4@users.noreply.github.com'
+  w.git(['config', 'user.email', email])
+  const plant = planted({ gitemail: email })
+  w.commit(plant, WHY_BODY, { GIT_AUTHOR_EMAIL: email, GIT_COMMITTER_EMAIL: email })
+  const { code, doc } = w.check({ body: `about ${email}` })
+  assert.equal(code, 1)
+  assert.deepEqual(named(doc, 'identity'), sorted(plant))
+  assert.ok(of(doc, 'identity').some((f) => f.where === 'body'))
+  assert.ok(!of(doc, 'identity').some((f) => f.where.endsWith(':author')))
+})
+
 test('AN18: the machine\'s names in any spelling are refused; the git name only outside the author field', () => {
   const w = workspace()
   w.git(['config', 'user.name', 'Wil Quimby'])
@@ -451,7 +518,8 @@ test('AN18: a machine name in the author field is refused unless it is the GitHu
   assert.equal(of(w.check({ env: { USER: 'zorgon' } }).doc, 'identity').length, 1)
 })
 
-for (const [name, email, code] of [['a user noreply address', '2+x@users.noreply.github.com', 0], ['GitHub\'s own', 'noreply@github.com', 0], ['any other address', 'zorgon@example.com', 1]]) {
+for (const [name, email, code] of [['a user noreply address', '2+x@users.noreply.github.com', 0], ['a noreply address with no id', 'x-y@users.noreply.github.com', 0], ['any other address', 'zorgon@example.com', 1],
+  ['GitHub\'s own', 'noreply@github.com', 1], ['a dot in the local part', 'a.b@users.noreply.github.com', 1], ['a plus after a word', 'a+b@users.noreply.github.com', 1], ['more after the domain', 'x@users.noreply.github.com.example.org', 1]]) {
   for (const field of ['AUTHOR', 'COMMITTER']) {
     test(`AN18: ${field} email: ${name}`, () => {
       const w = workspace()
@@ -498,6 +566,23 @@ test('AN21: control bytes in a file or a message are refused; tab, newline and e
   assert.deepEqual(named(doc, 'shape'), ['bad.txt'])
   assert.ok(of(doc, 'shape').some((f) => /:file#\d+:2$/.test(f.where)), 'the line of the new file')
   assert.ok(of(doc, 'shape').some((f) => f.where.endsWith(':message')))
+})
+
+test('AN21: control bytes in a title and a body are refused; tab, newline and escape pass', () => {
+  const w = workspace()
+  w.commit({ 'a.txt': 'clean\n' })
+  const { code, doc } = w.check({ title: 'a\x01title', body: 'a\x02body' })
+  assert.equal(code, 1)
+  assert.deepEqual(of(doc, 'shape').map((f) => f.where).sort(), ['body', 'title'])
+  assert.equal(w.check({ title: 'a\ttitle', body: 'a\tbody\n\x1b[0m\n' }).code, 0)
+})
+
+test('AN21: control bytes in a path are refused', { skip: process.platform === 'win32' }, () => {
+  const w = workspace()
+  w.commit({ 'bad\x01name.txt': 'x\n', 'fine.txt': 'x\n' })
+  const { code, doc } = w.check()
+  assert.equal(code, 1)
+  assert.deepEqual(named(doc, 'shape'), ['bad\x01name.txt'])
 })
 
 test('AN21: text that is not UTF-8 is refused, in a file, a title and a body', () => {
@@ -633,6 +718,25 @@ test('AN24: the line the PR template leaves for the hash does not move it, and a
   const first = hash(`${row} ${VALUE_A}`)
   for (const written of [`${row} ${VALUE_B}`, `${row} \`${VALUE_B}\``, `${row}${VALUE_B}`, row]) assert.equal(hash(written), first, written)
   for (const written of [`${row} ${VALUE_A} and more`, `${row} more`, `${row} ${VALUE_A.slice(1)}`, `${row} \`${VALUE_A}`, `more ${row} ${VALUE_A}`]) assert.notEqual(hash(written), first, written)
+})
+
+test('AN24: the hash line goes empty on the first run and with the hash on the second; any other value is refused', () => {
+  const w = workspace()
+  w.commit({ 'a.txt': 'one\n' })
+  const template = fs.readFileSync(new URL('../../.github/pull_request_template.md', import.meta.url), 'utf8')
+  const row = template.split('\n').find((r) => r.includes('node scripts/pr-check.mjs'))
+  const first = w.check({ body: template })
+  assert.equal(first.code, 0, JSON.stringify(first.doc.findings))
+  for (const written of [`${row} ${first.doc.hash}`, `${row} \`${first.doc.hash}\``]) {
+    const second = w.check({ body: template.replace(row, written) })
+    assert.equal(second.code, 0, JSON.stringify(second.doc.findings))
+    assert.equal(second.doc.hash, first.doc.hash)
+  }
+  for (const args of [[], ['--issue']]) {
+    const r = w.check({ body: `${row} ${first.doc.hash}\n${row} ${VALUE_B}\n`, args })
+    assert.equal(r.code, 1)
+    assert.deepEqual(of(r.doc, 'shape').map((f) => f.where), ['body'])
+  }
 })
 
 test('AN24: the hash holds the commit --base resolves to, not the name it was given', () => {
@@ -771,6 +875,17 @@ test('AN19: each kind of captured fact is refused in any spelling; a word under 
   assert.equal(code, 1)
   assert.deepEqual(named(doc, 'captured-facts'), sorted(plant))
   shapely(doc)
+})
+
+test('AN19: a login that spells a captured fact is refused in the noreply address, and as a login it is no identity', () => {
+  const w = workspace()
+  capture(w, NEWER, [{ host: 'vault7.example.net' }])
+  const email = '2+vault7-example-net@users.noreply.github.com'
+  w.commit({}, WHY_BODY, { GIT_COMMITTER_EMAIL: email })
+  const { code, doc } = w.check({ env: { USER: 'vault7-example-net' } })
+  assert.equal(code, 1)
+  assert.equal(of(doc, 'captured-facts').filter((f) => f.where.endsWith(':author')).length, 1)
+  assert.deepEqual(of(doc, 'identity'), [])
 })
 
 // `query sessions` on a capture no worker has read answers `pending`; `session --head` reads the title itself
