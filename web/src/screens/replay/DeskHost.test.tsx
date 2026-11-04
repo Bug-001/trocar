@@ -8,6 +8,7 @@ import { act, cleanup, render, type RenderResult } from '@testing-library/react'
 import { createBoardRouter } from '../../router'
 import { ScreenBoundary, lazyScreen } from '../../ScreenOutlet'
 import { createSessionCache } from '../../../legacy/replay/session-cache.mjs'
+import { screenBound } from '../../../legacy/core/dom.mjs'
 import type { Route } from '../../LegacyScreen'
 import DeskHost, { type DeskProps } from './DeskHost'
 import type { DeskState, DeskView } from './view'
@@ -103,4 +104,18 @@ test('1.2 #19: a desk module that fails to load says why where the desk would be
   await act(async () => { r = render(<ScreenBoundary><d.Screen router={router} ctx={ctx} host={{ current: null }} isDesk={isDesk} /></ScreenBoundary>) })
   await act(async () => { await d.load().catch(() => {}) })
   expect(r.container.querySelector('.screenerr[role="alert"]')?.textContent).toContain('chunk gone')
+})
+
+test('1.2 「层随屏走」: a core layer opened on the desk closes when the desk is left; one opened after it, on no screen, is not bound', () => {
+  const { router } = host()
+  const closed: string[] = []
+  act(() => { router.go(deskAt('a')) })
+  screenBound(() => closed.push('a'))
+  act(() => { router.go(deskAt('b')) }) // another session is still the desk: its layers stay
+  expect(closed).toEqual([])
+  act(() => { router.go(OVERVIEW) })
+  expect(closed).toEqual(['a'])
+  screenBound(() => closed.push('after'))
+  act(() => { router.go(deskAt('a')); router.go(OVERVIEW) })
+  expect(closed).toEqual(['a'])
 })

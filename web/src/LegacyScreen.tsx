@@ -7,7 +7,7 @@
 import { useLayoutEffect, type RefObject } from 'react'
 import { api, scoped } from '../legacy/core/api.mjs'
 import { setScreenKeys } from '../legacy/core/keys.mjs'
-import { setScreenSignal } from '../legacy/core/dom.mjs'
+import { setScreenSignal, releaseScreenSignal } from '../legacy/core/dom.mjs'
 import { esc } from '../legacy/core/fmt.mjs'
 import { safeMount, screenErrorHtml } from '../legacy/shell/safemount.mjs'
 import { READING } from '../legacy/labels/common.mjs'
@@ -30,8 +30,8 @@ export function createScreenHost(el: HTMLElement, ctx: object, screens: Screens,
     if (cur) {
       try { if (cur.inst) cur.inst.unmount() } catch (e) { console.error('unmount failed', e) }
       cur.ac.abort() // after unmount(): the screen's pollers are stopped, so an aborted answer writes nothing (1.2 #22); its layers close (1.2 §键盘)
+      releaseScreenSignal(cur.ac.signal)
       cur = null
-      setScreenSignal(null)
       setScreenKeys(null)
     }
     el.replaceChildren()
@@ -70,7 +70,7 @@ export function createScreenHost(el: HTMLElement, ctx: object, screens: Screens,
     const inst = safeMount(mod, el, { ...ctx, signal: ac.signal, api: scoped(api, ac.signal) }, { clearKeys: () => setScreenKeys(null) }) as Instance | null
     if (cur !== box) { if (inst) { try { inst.unmount() } catch (e) { console.error('unmount failed', e) } } ac.abort() } // another screen took over while it mounted
     else if (inst) box.inst = inst
-    else { cur = null; setScreenSignal(null); ac.abort() }
+    else { cur = null; releaseScreenSignal(ac.signal); ac.abort() }
     preload()
   }
 

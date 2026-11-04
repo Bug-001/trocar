@@ -7,9 +7,12 @@
 //   · The list of desks and the visible one are React state, applied in the announcing call (flushSync) when the route crosses to or
 //     from another screen's owner, so no frame shows #screen empty; otherwise as a plain update.
 //   · A desk the cache evicts is disposed by the controller; its view's dispose removes it here, which unmounts its subtree.
+//   · The desk is a screen to core's layers (1.2 §键盘「层随屏走」): entering it names a signal (core/dom.mjs setScreenSignal), leaving
+//     aborts it, so a `?` key list or a pinned popover opened on the desk closes with it. Another session on the desk is the same screen.
 import { Activity, useLayoutEffect, useState, type RefObject } from 'react'
 import { createPortal, flushSync } from 'react-dom'
 import { deskRoutes, keyOf } from '../../../legacy/replay/replay.mjs'
+import { setScreenSignal, releaseScreenSignal } from '../../../legacy/core/dom.mjs'
 import type { Route } from '../../LegacyScreen'
 import { DeskFrame } from './DeskFrame'
 import { reactView, type DeskState, type DeskView, type Els } from './view'
@@ -37,23 +40,25 @@ export default function DeskHost({ router, ctx, host, isDesk, cache, open }: Des
       return v
     }
     const routes = deskRoutes(ctx, makeView, { cache, open })
+    let ac: AbortController | null = null
+    const leave = () => { routes.leave(); ac!.abort(); releaseScreenSignal(ac!.signal); ac = null }
     const on = (r: Route) => {
       if (r.unknown) return // the shell turns it into 总览 first
       const desk = isDesk(r), crossing = live && desk !== wasDesk
       wasDesk = desk
       if (desk) {
         visible = keyOf(r)
-        if (shown) routes.update(r); else { shown = true; routes.show(host.current!, r) } // shown first: the desk's own URL write while it attaches is an update
+        if (shown) routes.update(r); else { shown = true; ac = new AbortController(); setScreenSignal(ac.signal); routes.show(host.current!, r) } // shown first: the desk's own URL write while it attaches is an update
       } else {
         visible = null
-        if (shown) { shown = false; routes.leave() }
+        if (shown) { shown = false; leave() }
       }
       publish(crossing)
     }
     const off = router.onRoute(on)
     on(router.current())
     live = true
-    return () => { off(); if (shown) routes.leave() }
+    return () => { off(); if (shown) leave() }
   }, [router, ctx, host, isDesk, cache, open])
   return <>
     {st.desks.map((d) => (
