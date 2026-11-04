@@ -29,6 +29,7 @@ export function createDesk() {
     rows: new Map(), order: [], lanes: new Map(), laneRids: new Map(), events: new Map(), held: new Map(), defs: new Map(),
     // fed by pack / tail files (packs.mjs): the files held by key, each rid's owning file, records by id, def refs, the head answer
     files: new Map(), owner: new Map(), records: new Map(), defRefs: new Map(), stepLane: new Map(), head: null, newest: null,
+    linesBy: new Map(), leaving: new Set(), // packs.mjs: rid → the tails keeping its lines; rows dropped in the apply under way
   }
 }
 

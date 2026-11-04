@@ -43,24 +43,50 @@ function unstep(desk, rid) {
   h.steps.delete(rid); h.events.delete(rid); h.kf.clear(); h.byI = null
 }
 
+// a dropped rid's row stays in place, marked leaving, until the apply ends (settle): a row that comes back in the same apply (a
+// pack claiming it, a tail taking it back, a tail writing it again) replaces it in place when its lane and ts are unchanged, so
+// desk.order and the lane's rids are not spliced twice per row
 function dropRid(desk, rid) {
   unstep(desk, rid)
-  const row = desk.rows.get(rid)
-  if (row) removeRow(desk, row)
+  if (desk.rows.has(rid)) desk.leaving.add(rid)
   desk.events.delete(rid); desk.records.delete(rid)
 }
 
 function putRow(desk, row) {
   const old = desk.rows.get(row.rid)
+  desk.leaving.delete(row.rid)
+  if (old && old.lane === row.lane && old.ts === row.ts) { desk.rows.set(row.rid, row); return }
   if (old) removeRow(desk, old)
   addRow(desk, row)
+}
+
+function settle(desk) {
+  for (const rid of desk.leaving) removeRow(desk, desk.rows.get(rid))
+  desk.leaving.clear()
+}
+
+// desk.linesBy: rid → the tails keeping lines for it, so a released rid finds its next holder without scanning the files
+function keep(desk, e, rid, k, x) {
+  let kept = e.lines.get(rid)
+  if (!kept) {
+    e.lines.set(rid, kept = {})
+    if (!desk.linesBy.has(rid)) desk.linesBy.set(rid, new Set())
+    desk.linesBy.get(rid).add(e)
+  }
+  kept[k] = x
+}
+function unkeep(desk, e, rid) {
+  if (!e.lines?.delete(rid)) return
+  const by = desk.linesBy.get(rid)
+  by.delete(e)
+  if (!by.size) desk.linesBy.delete(rid)
 }
 
 function putStep(desk, { events = [], ...s }) {
   if (desk.stepLane.get(s.rid) !== s.lane) unstep(desk, s.rid)
   desk.stepLane.set(s.rid, s.lane)
   const h = desk.held.get(s.lane) ?? desk.held.set(s.lane, newHeld()).get(s.lane)
-  h.steps.set(s.rid, { ...s, ts: desk.rows.get(s.rid)?.ts })
+  h.steps.set(s.rid, { ...s, ts: desk.leaving.has(s.rid) ? undefined : desk.rows.get(s.rid)?.ts })
   h.kf.clear(); h.byI = null
   if (events.length) {
     h.events.set(s.rid, events)
@@ -86,8 +112,8 @@ function claim(desk, e, rid) {
 function release(desk, e, rid) {
   if (desk.owner.get(rid) !== e) return
   e.rids.delete(rid); desk.owner.delete(rid); dropRid(desk, rid)
-  for (const o of desk.files.values()) {
-    const kept = o !== e && o.lines?.get(rid)
+  for (const o of desk.linesBy.get(rid) ?? []) {
+    const kept = o !== e && o.lines.get(rid)
     if (kept && claim(desk, o, rid)) { for (const k of ['c', 's', 'r']) if (kept[k]) put[k](desk, kept[k]); return }
   }
 }
@@ -97,6 +123,7 @@ function dropFile(desk, key, touched) {
   if (!e) return
   desk.files.delete(key)
   for (const rid of [...e.rids]) release(desk, e, rid)
+  for (const rid of e.lines?.keys() ?? []) unkeep(desk, e, rid)
   for (const b of e.bids) {
     const n = desk.defRefs.get(b) - 1
     if (n) desk.defRefs.set(b, n); else { desk.defRefs.delete(b); desk.defs.delete(b) }
@@ -117,15 +144,16 @@ export function applyFile(desk, file, { head, lines }) {
     const [k] = Object.keys(line), x = line[k]
     if (k in put) {
       const rid = k === 'r' ? x.id : x.rid
-      if (tail) { const kept = e.lines.get(rid) ?? e.lines.set(rid, {}).get(rid); kept[k] = x }
+      if (tail) keep(desk, e, rid, k, x)
       if (claim(desk, e, rid)) put[k](desk, x)
     } else if (k === 'd') {
       desk.defs.set(x.bid, boardDef(x))
       if (!e.bids.has(x.bid)) { e.bids.add(x.bid); desk.defRefs.set(x.bid, (desk.defRefs.get(x.bid) ?? 0) + 1) }
     } else if (k === 'l') { e.heads.set(x.lane, x); touched.add(x.lane) }
     else if (k === 'x') e.fails.set(`${x.where} ${x.code}`, x)
-    else if (k === 'g' && tail) { e.lines.delete(x); release(desk, e, x) }
+    else if (k === 'g' && tail) { unkeep(desk, e, x); release(desk, e, x) }
   }
+  settle(desk)
   mergeHeads(desk, touched)
   const fails = [...desk.files.values()].flatMap((o) => [...o.fails.values()])
   desk.errors = [...desk.errors.filter((x) => !FAILS.has(x)), ...fails]
