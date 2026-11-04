@@ -1,13 +1,15 @@
 // board.mjs — `trocar board` (RFC 1.6 §4.3, D66): the board is the daemon's, so this only prints its address with the token and opens it in the
 // browser. In order: the install record (the daemon's own gate, daemonMayStart: none → exit 1, nothing written); the daemon up through the one
 // seam `on` uses (ensureDaemonUp, with the arch's unit; the login registration is never touched); `GET /board` on the endpoint ensureDaemonUp
-// resolved through controlEndpointFor (no platform branch here). `deps.unit` replaces the arch's unit, `deps.open(file, args)` the browser start (0.1 §3).
+// resolved through controlEndpointFor (no platform branch here). With `--json` it prints that address as one document (C.6) and opens no browser; every
+// failure is then an `error` document, the exit code unchanged. `deps.unit` replaces the arch's unit, `deps.open(file, args)` the browser start (0.1 §3).
 import nodeFs from 'node:fs'
 import { runAsync } from '../off/exec.mjs'
-import { EXIT } from '../off/schema.mjs'
+import { EXIT, SCHEMA_VERSION } from '../off/schema.mjs'
 import { collectorDir } from '../off/paths.mjs'
 import { readManifest, daemonMayStart } from '../off/manifest.mjs'
 import { wrap, WIDTH } from './text.mjs'
+import { printJson, errorDoc } from './json.mjs'
 
 const errText = (e) => String((e && e.message) || e)
 // the platform's own way to hand a URL to the default browser. The URL holds `#`, so cmd gets it quoted and verbatim (`start` takes a first quoted word for a title)
@@ -21,13 +23,19 @@ async function openWith(file, args, env) {
 }
 
 /** → the exit code: 0 the URL is printed · 1 the board is not there (not installed, the daemon did not come up, its port taken) · 2 a usage error. */
-export async function run(argv, { io, env = process.env, home, platform = process.platform, args = { positionals: [] }, deps = {} }) {
-  if (args.positionals.length) { io.err('trocar board: it takes no arguments. Run: trocar board'); return EXIT.usage }
+export async function run(argv, { io, env = process.env, home, platform = process.platform, json = false, args = { positionals: [] }, deps = {} }) {
+  // one failure, two faces: the lines on stderr, or a document whose message is the same words without the fold
+  const fail = (code, lines, exit) => {
+    if (json) printJson(io, errorDoc('board', code, lines.join(' ')))
+    else io.err(lines.join('\n'))
+    return exit
+  }
+  if (args.positionals.length) return fail('usage', ['trocar board: it takes no arguments. Run: trocar board'], EXIT.usage)
   const fs = deps.fs || nodeFs, dir = collectorDir(home)
   let m = null
   try { m = readManifest(dir, fs) } catch { /* unreadable is not installed for this question; status and doctor say why */ }
-  if (!daemonMayStart(m)) { io.err('trocar board: trocar is not installed on this machine. Run: trocar install'); return EXIT.incomplete }
-  const down = (why) => { io.err([...wrap(`trocar board: the board is not running: ${why}`, WIDTH), 'Run: trocar doctor'].join('\n')); return EXIT.incomplete }
+  if (!daemonMayStart(m)) return fail('cert-not-installed', ['trocar board: trocar is not installed on this machine. Run: trocar install'], EXIT.incomplete)
+  const down = (why) => fail('board-down', [...wrap(`trocar board: the board is not running: ${why}`, WIDTH), 'Run: trocar doctor'], EXIT.incomplete)
   let unit = deps.unit
   if (unit === undefined) {
     const A = await (await import('../collector/arch/index.mjs')).loadArch(platform)
@@ -40,6 +48,7 @@ export async function run(argv, { io, env = process.env, home, platform = proces
   try { b = await up.ask({ socketPath: up.sock, method: 'GET', path: '/board', timeoutMs: 5000 }) } catch (e) { return down(`the daemon did not answer GET /board (${errText(e)})`) }
   if (!b || b.state !== 'serving' || !b.port || !b.token) return down((b && b.reason) || `the daemon says the board is ${(b && b.state) || 'not there'}`)
   const url = `http://127.0.0.1:${b.port}/#t=${b.token}`
+  if (json) { printJson(io, { schema: SCHEMA_VERSION, command: 'board', ok: true, url, port: b.port, state: b.state }); return EXIT.ok }
   const [file, list] = (OPENERS[platform] || OPENERS.linux)(url)
   try { await (deps.open || openWith)(file, list, env) } catch (e) {
     io.out([...wrap(`trocar board: your browser could not be opened (${errText(e)}). Open this address yourself:`, WIDTH), url].join('\n'))
