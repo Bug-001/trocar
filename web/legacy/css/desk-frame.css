@@ -1,0 +1,34 @@
+/* web/legacy/css/desk-frame.css — the new desk's frame (1.2 §回放台布局, DeskFrame.tsx, Sidebar.tsx). Only under .desk.next: the legacy desk
+   keeps replay.css alone. Tokens only. */
+.desk.next .deskpanes{flex:1;min-height:0;}
+.desk.next #midcol{height:100%;}
+/* the scope's own cell scrolls: #rails no longer scrolls apart, and the whole-session row stays at the cell's foot (1.3) */
+.desk.next .scopefit{display:flow-root;}
+.desk.next #saw{border-radius:16px;margin-bottom:6px;}
+.desk.next #rails{overflow:visible;}
+.desk.next #saw .tkrow-ovw{position:sticky;bottom:0;z-index:5;background:var(--scope-2);}
+
+/* the boundaries (1.2 「边界的样子」): a 1 px --rule hairline, the library's hit area around it, 2 px --action on hover or drag */
+.desk.next [data-separator]{position:relative;background:var(--rule);outline:none;}
+.desk.next .deskpanes > [data-separator]{width:1px;}
+.desk.next .deskcol > [data-separator]{height:1px;}
+.desk.next [data-separator]::after{content:"";position:absolute;inset:0;z-index:6;}
+.desk.next .deskpanes > [data-separator]::after{left:-1px;}
+.desk.next .deskcol > [data-separator]::after{top:-1px;}
+.desk.next [data-separator=hover]::after,.desk.next [data-separator=active]::after,.desk.next [data-separator]:focus-visible::after{background:var(--action);}
+
+/* the right sidebar */
+.desk.next .deskside{display:flex;flex-direction:column;height:100%;min-height:0;background:var(--raised);}
+.desk.next .deskside.folded{align-items:center;padding-top:6px;}
+.desk.next .sidehead{flex:none;display:flex;align-items:center;gap:4px;padding:6px 6px 0 10px;border-bottom:1px solid var(--rule);}
+.desk.next .sidetabs{flex:1;min-width:0;display:flex;gap:14px;}
+.desk.next .sidetab{padding:4px 0 6px;margin-bottom:-1px;border-bottom:2px solid transparent;font-size:var(--fs-cap);color:var(--ink-2);cursor:pointer;outline:none;}
+.desk.next .sidetab[data-hovered]{color:var(--ink);}
+.desk.next .sidetab[data-selected]{color:var(--ink);border-bottom-color:var(--action);}
+.desk.next .sidetab[data-focus-visible]{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px;}
+.desk.next .sidefold{flex:none;display:flex;width:24px;height:24px;align-items:center;justify-content:center;padding:0;border:0;border-radius:6px;background:none;color:var(--ink-2);cursor:pointer;}
+.desk.next .sidefold svg{transform:scaleX(-1);} /* the left sidebar's pair, mirrored: this panel sits on the right */
+.desk.next .sidefold[data-hovered]{background:var(--hover);color:var(--ink);}
+.desk.next .sidefold[data-focus-visible]{outline:2px solid var(--accent);outline-offset:2px;}
+.desk.next .sidepanel{flex:1;min-height:0;display:flex;flex-direction:column;outline:none;}
+.desk.next .sidepane{flex:1;min-height:0;display:flex;flex-direction:column;}
