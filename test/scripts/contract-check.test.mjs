@@ -68,6 +68,7 @@ const FAULTS = [
   ['one byte changed', /^block\//, `if (argv[0] === 'raw' && argv[1].includes(':')) { const r = JSON.parse(out); r.req_body = '~' + r.req_body.slice(1); out = JSON.stringify(r) + '\\n' }`],
   ['a count changed', /^agree\/records$/, `if (argv[1] === 'overview') { const d = JSON.parse(out); d.calls.total += 1; out = JSON.stringify(d) }`],
   ['a second document', /^json\/status$/, `if (argv[0] === 'status') out += out`],
+  ['a title changed', /^agree\/session\//, `if (argv[1] === 'sessions') { const d = JSON.parse(out); for (const s of d.sessions) s.title = 'FAKE title'; out = JSON.stringify(d) }`],
   ['an unparsed call', /^recognition\//, `if (argv[1] === 'session' && !argv.includes('--head')) { const d = JSON.parse(out); for (const c of d.calls) c.unparsed = true; out = JSON.stringify(d) }`],
 ]
 
@@ -78,6 +79,25 @@ test('AN10: each planted fault turns its own check red and the run exits 1', asy
     assert.equal(doc.ok, false, name)
     assert.ok(doc.checks.some((c) => id.test(c.id) && c.status === 'fail'), name)
   }))
+})
+
+/** → { code, stdout, stderr }, the script run with no `--cli`, so that `dir` alone is where it can look for one. */
+const onPath = (dir) => new Promise((resolve) => {
+  execFile(process.execPath, [SCRIPT, '--json', '--sample', '1'], { env: { ...process.env, PATH: dir, HOME: world.userHome, USERPROFILE: world.userHome }, maxBuffer: 2 ** 28 },
+    (e, stdout, stderr) => resolve({ code: e ? e.code : 0, stdout, stderr }))
+})
+
+test('AN29: with no --cli the check runs the trocar on PATH, and with none there it says so and exits 2', { skip: process.platform === 'win32' }, async () => {
+  const shims = tmpDir('trocar-cc-path-'), called = path.join(shims, 'called')
+  fs.writeFileSync(path.join(shims, 'trocar'), `#!/bin/sh\n: > ${JSON.stringify(called)}\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(standIn())} "$@"\n`, { mode: 0o755 })
+  const found = await onPath(shims)
+  assert.equal(found.code, 0, found.stdout)
+  assert.equal(JSON.parse(found.stdout).ok, true)
+  assert.ok(fs.existsSync(called))
+  const none = await onPath(tmpDir('trocar-cc-empty-'))
+  assert.equal(none.code, 2)
+  assert.equal(none.stdout, '')
+  assert.notEqual(none.stderr, '')
 })
 
 const compressed = (mutate) => `if (argv[0] === 'raw' && argv[1].includes(':')) { const { zstdCompressSync } = await import('node:zlib'); const r = JSON.parse(out)

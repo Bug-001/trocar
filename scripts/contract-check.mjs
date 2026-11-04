@@ -3,27 +3,27 @@
 //
 //   node scripts/contract-check.mjs [--json] [--sample <n>] [--cli <path>]
 //
-// Read-only: it runs no command that changes state, and takes the data from whatever HOME the environment gives the CLI. `--cli` is another
-// CLI script to run with node, the installed one for instance; the default is this clone's. `--sample` is how many segments, how many
-// records, and how many of each harness's newest sessions it reads (default 5).
+// It runs no command that changes state and touches no raw record; a read through the daemon does write the derived layers, which are the
+// daemon's own. The data is whatever HOME the environment gives the CLI. The CLI is the installed `trocar` on PATH; `--cli` names another,
+// `.mjs` and `.js` run with node. `--sample` is how many segments, how many records, and how many of each harness's newest sessions it reads
+// (default 5).
 // The report is {ok, checks: [{id, part, status, expected, observed, contract, reason?}]}: status is pass, fail or skip, and skip says why.
 // It holds counts, ids and sha256 only, never what was captured: captured bytes stay in this process, to be counted and hashed.
-// Exit 0 nothing failed (a skip is not a failure), 1 something failed, 2 usage error.
+// Exit 0 nothing failed (a skip is not a failure), 1 something failed, 2 usage error or no CLI.
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import fs from 'node:fs'
-import { fileURLToPath } from 'node:url'
 import { isDeepStrictEqual, parseArgs } from 'node:util'
 import { COMMANDS } from '../src/cli/commands.mjs'
 import { expandRequestBody } from '../src/dissect/request-body.mjs'
 import { QUERY_NAMES } from '../src/query/client.mjs'
+import { callOf, findCli } from './lib/trocar-cli.mjs'
 
 const USAGE = 'usage: node scripts/contract-check.mjs [--json] [--sample <n>] [--cli <path>]'
 const CALL_MS = 30_000
 const PAGE = ['--limit', '500'] // 1.6 §4.1: the largest page of a list query
 const LISTS = { sessions: 'sessions', traffic: 'hosts' } // query name → the key of its rows
 const NEEDS_ID = ['session', 'lane', 'block'] // these ask about something the other answers name
-const META = ['calls', 'logged', 'probes', 'other', 'harness'] // C.5: `title` differs by design while no daemon has named the session
+const META = ['calls', 'logged', 'probes', 'other', 'harness']
 const CONTRACT = { query: '1.6 C.5', json: '1.6 §1.2 §1.3', records: '1.12 §4, 4.2', bytes: '1.12 §4, 3.5', numbers: '1.12 §4, 1.6 C.5', since: '3.5, 1.6 C.5', recognition: '1.12 §4' }
 const TIMED_OUT = `the CLI call ran past ${CALL_MS / 1000} s`
 const UNREAD = 'a document this needs could not be read'
@@ -46,7 +46,10 @@ const isAfter = (rid, mark) => {
 
 /** run(args, onChunk?) → {code, out, err, timedOut}. With `onChunk` the stdout is handed over as it comes and not kept: a segment can be gigabytes. */
 const runnerOf = (cli) => (args, onChunk) => new Promise((resolve) => {
-  const kid = spawn(process.execPath, [cli, ...args], { stdio: ['ignore', 'pipe', 'pipe'] })
+  let call
+  try { call = callOf(cli, args) } catch { resolve({ code: null, out: '', err: '', timedOut: false }); return }
+  const [file, argv, how] = call
+  const kid = spawn(file, argv, { ...how, stdio: ['ignore', 'pipe', 'pipe'] })
   const out = [], err = []
   const timer = setTimeout(() => { kid.kill('SIGKILL'); resolve({ code: null, out: '', err: '', timedOut: true }) }, CALL_MS)
   kid.stdout.on('data', (b) => { if (onChunk) onChunk(b); else out.push(b) })
@@ -189,8 +192,9 @@ async function contractCheck(run, sample) {
     const headWhy = grew ? GROWING : blocked(head)
     if (headWhy) skip('numbers', `agree/session/${id}`, headWhy)
     else {
-      judge('numbers', `agree/session/${id}`, { ...pick(row, META), lanes_count: d.stats.calls, head_stats: counts(d.stats) },
-        { ...pick(d.meta, META), lanes_count: sum(d.lanes, (l) => l.count), head_stats: counts(head.doc.stats) })
+      const keys = row.title == null ? META : [...META, 'title']
+      judge('numbers', `agree/session/${id}`, { ...pick(row, keys), lanes_count: d.stats.calls, head_stats: counts(d.stats) },
+        { ...pick(d.meta, keys), lanes_count: sum(d.lanes, (l) => l.count), head_stats: counts(head.doc.stats) })
     }
 
     const sinceWhy = incremental || (grew ? GROWING : blocked(since, tip))
@@ -249,9 +253,11 @@ function screen(checks) {
 
 async function main() {
   let opts
-  try { ({ values: opts } = parseArgs({ options: { json: { type: 'boolean' }, sample: { type: 'string', default: '5' }, cli: { type: 'string', default: fileURLToPath(new URL('../bin/trocar.mjs', import.meta.url)) } } })) } catch { opts = null }
-  if (!opts || !/^[1-9]\d*$/.test(opts.sample) || !fs.existsSync(opts.cli)) { process.stderr.write(`${USAGE}\n`); return 2 }
-  const checks = await contractCheck(runnerOf(opts.cli), Number(opts.sample))
+  try { ({ values: opts } = parseArgs({ options: { json: { type: 'boolean' }, sample: { type: 'string', default: '5' }, cli: { type: 'string' } } })) } catch { opts = null }
+  if (!opts || !/^[1-9]\d*$/.test(opts.sample)) { process.stderr.write(`${USAGE}\n`); return 2 }
+  const cli = findCli(opts.cli)
+  if (!cli) { process.stderr.write(`${opts.cli === undefined ? 'no trocar on PATH: install it, or name one with --cli <path>' : `no CLI at ${opts.cli}`}\n`); return 2 }
+  const checks = await contractCheck(runnerOf(cli), Number(opts.sample))
   const ok = !checks.some((c) => c.status === 'fail')
   process.stdout.write(opts.json ? `${JSON.stringify({ ok, checks })}\n` : screen(checks))
   return ok ? 0 : 1
