@@ -1,4 +1,4 @@
-// src/query/named/analysis.mjs — `trocar query analysis` (RFC 3.5 §会话读「`analysis`」; 1.6 C.5; D83 ③; D14).
+// src/query/named/analysis.mjs — `trocar query analysis` (RFC 3.5 §会话读「`analysis`」; 1.6 C.5; D81④; D14).
 //
 // A session's cost and totals, summed over the whole session up to its mark. Money is worked out per answer from the current price
 // table and goes into no answer file (prices are not captured truth, D14), so this reads the session's columns, and a row's line only

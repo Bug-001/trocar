@@ -339,5 +339,19 @@
     "pricing": {"source": "default", "models": [{"model": "claude-x", "key": "claude-x", "exact": true}]},
     "totals": {"cost": {"main": {"usd": 0.0205, "priced": 4, "unpriced": 0, "failed": 1, "approx": 0, "approxKeys": []}, "sub": {"usd": 0.0024, "priced": 1, "unpriced": 0, "failed": 0, "approx": 0, "approxKeys": []}, "bg": {"usd": null, "priced": 0, "unpriced": 0, "failed": 0, "approx": 0, "approxKeys": []}, "total": {"usd": 0.0229, "priced": 5, "unpriced": 0, "failed": 1, "approx": 0, "approxKeys": []}}, "hit": 0.6595744680851063, "hitSteps": 4, "cacheUnknown": false, "breaks": [{"rid": "20261021T101500Z:16", "usd": 0.008225, "why": null}], "breakCost": {"usd": 0.008225, "counted": 1, "uncomputable": 0, "worst": {"rid": "20261021T101500Z:16", "usd": 0.008225}}, "failed": 1, "firstFailed": {"rid": "20261021T101500Z:14", "lane": "20261021T101500Z:12"}, "unpricedSteps": 0},
     "usd": {"20261021T101500Z:12": 2650, "20261021T101500Z:13": 3050, "20261021T101500Z:14": null, "20261021T101500Z:15": 2400, "20261021T101500Z:16": 11550, "20261021T101500Z:17": 3250}
+  },
+  "analysis_window": {
+    "schema": 2,
+    "command": "analysis",
+    "ok": true,
+    "errors": [],
+    "base": "20261021T101500Z:15",
+    "mark": "20261021T101500Z:17",
+    "truncated": null,
+    "pricing": {"source": "default", "models": [{"model": "claude-x", "key": "claude-x", "exact": true}]},
+    "usd": {"20261021T101500Z:16": 8225, "20261021T101500Z:17": null},
+    "breaks": [{"rid": "20261021T101500Z:16", "usd": 0.008225, "why": null}],
+    "prev": "20261021T101500Z:16",
+    "next": null
   }
 }

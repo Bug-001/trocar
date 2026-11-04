@@ -8,7 +8,7 @@
 // computed bytes past OVERVIEW_USAGE_BYTES: from there nothing more is computed, in this session or a later one.
 // `coverage` says how many sessions and calls it read and why it stopped (invariant 4). With `later` (the query worker),
 // every missing segment is filled after the answer is written.
-// The money and the hit (D83) are worked out from `usage.rows` and the current price table on every answer, never stored:
+// The money and the hit (D81④) are worked out from `usage.rows` and the current price table on every answer, never stored:
 // a sum runs in row order, so the document depends only on the calls read and the table.
 import { failedOf } from '../../dissect/endpoints.mjs';
 import { recordsAt } from '../records.mjs';
