@@ -65,8 +65,8 @@ export function reactView(s: DeskState, framed: (E: Els) => void, gone: () => vo
     empty: () => bump('empty'),
     window(d?: object) { if (d) s.win = d; if (depth) bump('window'); else flushSync(() => bump('window')) },
     reveal: (t: Reveal) => (revealer ? revealer(t) : null),
-    // the window's cells too while it draws the legacy rows (Window.tsx)
-    cellRoots: () => (E ? [E.rawpanel, root.querySelector<HTMLElement>('#ctxwin')] : []),
+    // the window's cells are React's (Window.tsx, Cell.tsx): only the raw panel's are wired with the drawer's
+    cellRoots: () => (E ? [E.rawpanel] : []),
     capacity: () => K,
     dispose: gone,
   }
