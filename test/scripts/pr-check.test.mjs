@@ -457,6 +457,46 @@ test('AN28: a base that is HEAD or not an ancestor of it is refused; a comment d
   assert.equal(reply.code, 0, JSON.stringify(reply.doc.findings))
 })
 
+const SHARED = 'the same long sentence that also sits in a capture and is here on purpose to fill sixty bytes or more'
+test('AN28: a base origin/main does not hold is refused, hides no commit and makes nothing public; one it holds is fine', () => {
+  const planted = (setup) => {
+    const w = workspace()
+    w.git(['update-ref', 'refs/remotes/origin/main', 'base'])
+    capture(w, SEGMENT, [line(NOW_THEN, SHARED)])
+    setup(w)
+    return w
+  }
+  const inside = planted((w) => { w.commit({ 'a.txt': `${SHARED}\n` }, `${SHARED}\n\nA body.\n`); w.commit({ 'b.txt': 'clean\n' }) })
+  const past = inside.check({ base: ['--base', 'HEAD~1'] })
+  assert.equal(past.code, 1)
+  assert.equal(of(past.doc, 'base').length, 1, 'a commit of the branch is no base')
+
+  const unpushed = planted((w) => { w.commit({ 'a.txt': `${SHARED}\n` }); w.git(['branch', '-f', 'main', 'HEAD']); w.commit({ 'b.txt': `${SHARED}\n` }) })
+  const local = unpushed.check({ base: ['--base', 'main'] })
+  assert.equal(of(local.doc, 'base').length, 1, 'a local main ahead of origin/main is no base')
+  assert.deepEqual(named(local.doc, 'captured-text'), ['b.txt'], 'nothing of its tree counts as public')
+
+  const reply = inside.check({ base: ['--base', 'HEAD'], args: ['--issue'], body: `${SHARED}\n` })
+  assert.equal(reply.code, 1)
+  assert.deepEqual(reply.doc.findings.map((f) => [f.rule, f.where]), [['captured-text', 'body']], 'a comment judges no base and subtracts no unpublished tree')
+
+  const held = planted((w) => { w.commit({ 'a.txt': 'public\n' }); w.git(['tag', 'mid']); w.git(['update-ref', 'refs/remotes/origin/main', 'HEAD']); w.commit({ 'b.txt': 'mine\n' }) })
+  for (const ref of ['origin/main', 'mid', 'base']) assert.equal(held.check({ base: ['--base', ref] }).code, 0, ref)
+})
+
+test('AN28: a branch behind origin/main is told to rebase', () => {
+  const w = workspace()
+  w.commit({ 'a.txt': 'one\n' })
+  w.git(['checkout', '-q', '-b', 'ahead', 'base'])
+  w.commit({ 'b.txt': 'two\n' })
+  w.git(['update-ref', 'refs/remotes/origin/main', 'HEAD'])
+  w.git(['checkout', '-q', 'work'])
+  const { code, doc } = w.check({ base: ['--base', 'origin/main'] })
+  assert.equal(code, 1)
+  assert.match(of(doc, 'base')[0].why, /rebase/i)
+  assert.doesNotMatch(of(doc, 'base')[0].why, /--base must/)
+})
+
 // ── capture
 const SEGMENT = '20261018T100000Z'
 const NEWER = '20261020T100000Z'
