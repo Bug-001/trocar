@@ -100,6 +100,10 @@ function splice(text, spans) {
   return out + text.slice(pos)
 }
 
+function mustParse(text, spans) {
+  try { JSON.parse(splice(text, spans.toSorted((a, b) => a.start - b.start))) } catch { throw fault('rule-error') }
+}
+
 // The with of a replace, for one match: $1 $& $$ $<name>, the way String.prototype.replace reads them.
 function expand(template, m) {
   return template.replace(/\$(\$|&|\d{1,2}|<[^>]*>)/g, (all, k) => {
@@ -174,7 +178,104 @@ function actHeader(action, state) {
   state.headers = at < 0 ? [...state.headers, [action.header, value]] : state.headers.with(at, [state.headers[at][0], value])
 }
 
-const ACTS = { replace: actReplace, header: actHeader }
+const siblingsOf = (parent) => (parent.kind === 'array' ? parent.items : [...parent.props.values()].sort((a, b) => a.start - b.start))
+
+function skipSeparators(text, i) {
+  while (' ,\t\r\n'.includes(text[i])) i++
+  return i
+}
+
+// Taking nodes out of their parents. Neighbours go as one run, so no two spans fight over a comma: a run with a sibling after it goes up to that
+// sibling, a run at the end goes back to the end of the sibling before it. `head` finds a sibling's first byte, its key if it has one.
+function removals(text, targets) {
+  const byParent = new Map()
+  for (const [parent, node] of targets) byParent.set(parent, (byParent.get(parent) ?? new Set()).add(node))
+  const spans = []
+  for (const [parent, gone] of byParent) {
+    const sibs = siblingsOf(parent), last = sibs.length - 1
+    if (gone.size === sibs.length) { spans.push({ start: parent.start + 1, end: parent.end - 1, ins: '' }); continue }
+    const head = (i) => skipSeparators(text, i ? sibs[i - 1].end : parent.start + 1)
+    for (let i = 0; i <= last; i++) {
+      if (!gone.has(sibs[i])) continue
+      let j = i
+      while (j < last && gone.has(sibs[j + 1])) j++
+      spans.push(j < last ? { start: head(i), end: head(j + 1), ins: '' } : { start: sibs[i - 1].end, end: sibs[j].end, ins: '' })
+      i = j
+    }
+  }
+  return spans
+}
+
+const tokensOf = (pointer) => pointer.split('/').slice(1).map((t) => t.replaceAll('~1', '/').replaceAll('~0', '~'))
+function child(node, token) {
+  if (node?.kind === 'object') return node.props.get(token)
+  return node?.kind === 'array' && /^(0|[1-9]\d*)$/.test(token) ? node.items[+token] : undefined
+}
+
+// → the spans of one json action on one JSON text. What is absent needs no removing; what has nowhere to go is the rule's error.
+function pointerEdit(action, { root, text }) {
+  const path = tokensOf(action.json), last = path.at(-1)
+  const parent = path.slice(0, -1).reduce(child, root)
+  const target = child(parent, last)
+  if (action.remove) {
+    if (!target) return []
+    const spans = removals(text, [[parent, target]])
+    mustParse(text, spans)
+    return spans
+  }
+  const adding = 'add' in action, value = adding ? action.add : action.set, ins = JSON.stringify(value)
+  let spans
+  if (target && !(adding && parent.kind === 'array')) {
+    spans = [{ start: target.start, end: target.end, ins }]
+    if (target.kind === 'string' && typeof value === 'string') return spans
+  } else if (target) spans = [{ start: target.start, end: target.start, ins: `${ins},` }]
+  else {
+    const list = parent?.kind === 'array'
+    if (!list && parent?.kind !== 'object') throw fault('rule-error')
+    if (list && last !== '-' && last !== String(parent.items.length)) throw fault('rule-error')
+    const entry = list ? ins : `${JSON.stringify(last)}:${ins}`
+    const empty = list ? !parent.items.length : !parent.props.size
+    spans = [{ start: parent.end - 1, end: parent.end - 1, ins: empty ? entry : `,${entry}` }]
+  }
+  mustParse(text, spans)
+  return spans
+}
+
+function actJson(action, state, env) {
+  const text = needText(state.text)
+  commit(state, windowsOf(text, env.unit.sse).flatMap(([from, to]) => {
+    const json = scan(text.slice(from, to))
+    if (json) return shifted(pointerEdit(action, json), from)
+    if (env.unit.sse) return [] // [DONE] and the like: an event that is not JSON has no node to point at
+    throw fault('rule-error')
+  }))
+}
+
+// Cut to at most n bytes, back to the start of the character the cut fell in.
+function truncated(text, n) {
+  const bytes = Buffer.from(text)
+  if (bytes.length <= n) return text
+  let end = n
+  while (end > 0 && (bytes[end] & 0xc0) === 0x80) end--
+  return bytes.toString('utf8', 0, end)
+}
+
+function actBlocks(action, state, env) {
+  const text = needText(state.text)
+  if (!action.remove) {
+    const edit = 'set_text' in action ? () => action.set_text : 'append_text' in action ? (t) => t + action.append_text : (t) => truncated(t, action.truncate)
+    return commit(state, rewrite(chosenTextNodes(state, env, action.blocks), edit))
+  }
+  const blocks = blocksOf(env.on, env.unit, text)
+  const chosen = blocks ? select(blocks, action.blocks) : []
+  if (!chosen.length) return
+  const { root } = scan(text)
+  const spans = removals(text, chosen.map((b) => [nodeAt(root, b.remove_path.slice(0, -1)), nodeAt(root, b.remove_path)]))
+  mustParse(text, spans)
+  commit(state, spans)
+}
+
+const ACTS = { replace: actReplace, header: actHeader, json: actJson, blocks: actBlocks }
 
 function act(action, state, env) {
   const run = ACTS[actionKind(action)]
