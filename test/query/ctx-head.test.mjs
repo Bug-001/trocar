@@ -14,6 +14,9 @@ import { workerFork } from '../helpers/worker-fork.mjs'
 import { within } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
+import { FLAG, opensPart } from '../../src/view/head-cols.mjs'
+import { query, homeWith } from '../helpers/session-doc.mjs'
+import { laneOf, fateOf, lanes, SID } from '../helpers/compaction-lane.mjs'
 
 const FIXTURE = JSON.parse(fs.readFileSync(new URL('../fixtures/session-read-contract.json', import.meta.url), 'utf8'))
 // 3.5 §会话读 `session --head`: the closed set of its keys; tier 0 has `buckets` besides
@@ -91,6 +94,27 @@ test('3.5 §会话读 `session --head`: the keys are the closed set, the fixture
   assert.equal(doc.lanes[0].lane, doc.axis, 'the axis lane first')
   assert.equal(doc.last.rid, doc.lanes[0].last, 'last = the axis lane\'s last step')
   assert.ok(fs.statSync(headFileOf(home, id)).size <= HEAD_GZ_MAX)
+})
+
+test('1.3 #18: over every pair of step flags a chapter opens after a marked compaction and on an inferred one, and nowhere else', () => {
+  const rest = [0, FLAG.cacheBreak, FLAG.user | FLAG.failed, FLAG.summarize | FLAG.spawn, FLAG.noUsage]
+  const marked = rest.map((f) => f | FLAG.compaction), inferred = rest.map((f) => f | FLAG.compaction | FLAG.inferred)
+  for (const prev of [...rest, ...marked, ...inferred]) for (const f of [...rest, ...marked, ...inferred])
+    assert.equal(opensPart(prev, f), marked.includes(prev) || inferred.includes(f), `${prev} → ${f}`)
+})
+
+test('1.3 #18: `session --head` over generated lanes: chapters tile the steps, a marked compaction is its chapter\'s last step, an inferred one its first, `inferred` per chapter', async () => {
+  for (const wire of ['anthropic', 'flat']) for (const body of lanes(wire)) for (const steps of [body, [...body, 'mark']]) {
+    const fate = fateOf(steps), why = steps.join(' ')
+    const doc = JSON.parse(JSON.stringify(await query(homeWith(laneOf(wire, steps)), 'session', { id: SID, head: true })))
+    const opens = fate.flatMap((x, i) => (i > 0 && (fate[i - 1] === 'marked' || x === 'inferred') ? [i] : []))
+    assert.equal(doc.steps, steps.length, why)
+    assert.deepEqual(doc.chapters.map((c) => c.s0), [0, ...opens], why)
+    doc.chapters.forEach((c, k) => {
+      assert.equal(c.s1, doc.chapters[k + 1]?.s0 ?? doc.steps, why)
+      assert.equal(c.inferred, fate[c.s0] === 'inferred' && k > 0, why)
+    })
+  }
 })
 
 // Two small sessions in one home: `a` gets a head before the worker starts, `b` has none.

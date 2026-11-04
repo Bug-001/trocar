@@ -1,6 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { markCompaction, compactionVerdict, hasCompactionPreamble } from '../../src/identity/session-identity.mjs'
+import { query, homeWith } from '../helpers/session-doc.mjs'
+import { laneOf, fateOf, lanes, READ, SID } from '../helpers/compaction-lane.mjs'
 
 test('markCompaction: a sharp message-count drop flags compaction with from/to', () => {
   assert.deepEqual(markCompaction(42, 6), { compaction: true, compaction_from: 42, compaction_to: 6 })
@@ -84,3 +86,49 @@ test('compactionVerdict is one rule: the same prev and cur give the same answer 
   assert.equal(compactionVerdict(prev, { hint: true, msgCount: 60 }).basis, 'hint', 'a hint never consults the drop rule')
   assert.equal(compactionVerdict({ msgCount: 4, marker: false }, { marker: true, msgCount: 5 }).basis, 'marker', 'a marker on its rising edge needs no drop')
 })
+
+// 3.4 「一次压缩只算一次」: the evidence each predecessor leaves a call, and what it becomes after a harness's own request.
+test('compactionVerdict: right after a marked request the evidence lands the same compaction; a hint stays a compaction; from / to as ever', () => {
+  const PREV = { none: null, plain: { msgCount: 20, marker: false }, hinted: { msgCount: 20, marker: false, hinted: true }, marker: { msgCount: 20, marker: true } }
+  const CUR = { hint: { hint: true, msgCount: 22 }, rising: { marker: true, msgCount: 21 }, drop: { msgCount: 3 }, small: { msgCount: 18, preamble: true }, nothing: { msgCount: 21 } }
+  const seen = { hint: 'hint', rising: 'marker', drop: 'msg-count-drop', small: 'msg-count-drop', nothing: null }
+  for (const [p, prev] of Object.entries(PREV)) for (const [c, cur] of Object.entries(CUR)) {
+    const fired = c === 'hint' ? 'hint' : p === 'none' || (p === 'marker' && c === 'rising') ? null : seen[c]
+    const lands = p === 'hinted' && fired != null && fired !== 'hint'
+    const v = compactionVerdict(prev, cur), why = `${p} → ${c}`
+    assert.equal(v.basis, fired, why)
+    assert.equal(v.compaction, fired != null && !lands, why)
+    assert.equal(!!v.lands, lands, why)
+    assert.equal(v.compaction_from, fired != null && prev ? prev.msgCount : null, why)
+    assert.equal(v.compaction_to, fired != null ? cur.msgCount : null, why)
+  }
+})
+
+for (const wire of ['anthropic', 'flat']) {
+  test(`${wire}: one compaction is counted once over generated lanes; the landing step rewrites the context and counts nothing`, async () => {
+    for (const steps of lanes(wire)) {
+      const home = homeWith(laneOf(wire, steps)), fate = fateOf(steps), why = steps.join(' ')
+      const doc = await query(home, 'session', { id: SID })
+      assert.equal(doc.calls.length, steps.length, why)
+      const lane = await query(home, 'lane', { id: SID, lane: doc.calls[0].lane })
+      assert.equal(doc.stats.compactions, doc.calls.filter((r) => r.compaction).length, why)
+      const compacted = new Set(lane.events.filter((e) => e.type === 'compaction').map((e) => e.rid))
+      doc.calls.forEach((r, i) => {
+        const at = `${why} @${i}`
+        assert.equal(!!r.compaction, fate[i] === 'marked' || fate[i] === 'inferred', at)
+        assert.equal(!!r.compactionInferred, fate[i] === 'inferred', at)
+        assert.equal(compacted.has(r.rid), !!r.compaction, at)
+        assert.ok(!('lands' in r), at)
+        if (fate[i] === 'lands') assert.equal(r.cacheBreak.cause, 'compaction', at)
+      })
+      if (wire !== 'anthropic') continue
+      // each context rewrite ends the segments open before it: a landing as a counted compaction does
+      const rewrites = doc.calls.filter((r, i) => fate[i] === 'inferred' || fate[i] === 'marked' || fate[i] === 'lands').map((r) => r.rid)
+      const file = lane.resources.find((r) => r.label === READ)
+      assert.ok(file, why)
+      for (const s of file.segments) if (s.evict != null) assert.ok(rewrites.includes(s.evict), `${why}: evicted at ${s.evict}`)
+      const landed = doc.calls.filter((r, i) => fate[i] === 'lands').map((r) => r.rid)
+      assert.ok(landed.every((rid) => file.segments.some((s) => s.evict === rid)), why)
+    }
+  })
+}

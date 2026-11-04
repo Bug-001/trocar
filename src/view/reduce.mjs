@@ -71,7 +71,7 @@ const KEYFRAME = 32; // a materialised list kept every KEYFRAME links of a base 
 // its figure (src/query/projection.mjs lru)
 const LIST_BYTES = 2 << 20, FACTS_BYTES = 2 << 20;
 /** The shape of reduction().snapshot(): one more whenever what it holds changes. */
-export const REDUCE_V = 1;
+export const REDUCE_V = 2;
 /** What a store's reduction caches hold at most beside its block columns (src/query/named/session.mjs counts it with the store's). */
 export const REDUCE_HEAP = 2 * (LIST_BYTES + FACTS_BYTES);
 
@@ -780,7 +780,7 @@ function anthropicFold({ at, B, cacheOf, pushOf, emit, newSub, baseOf, lastOf, i
     call.wire = x.wire;
     call.respRefs = x.respRefs;
     call.usage = x.usage;
-    call.cacheBreak = cacheOf(baseOf(S.base), list, attrs, x, !!call.compaction, call.usage);
+    call.cacheBreak = cacheOf(baseOf(S.base), list, attrs, x, !!(call.compaction || call.lands), call.usage);
     call.gt = call.cacheBreak.gt;
     call.comp = compOf(lastOf(S), list, B);
     if (call.chainsPrefix !== false) S.base = k;
@@ -810,10 +810,10 @@ function flatFold(d, { at, B, cacheOf, pushOf, emit, newSub, baseOf, lastOf, int
     // 3.4: a call whose context is unknown (a body that does not parse; a partial context, an unstored WebSocket request included) has
     // no observed message count: no compaction verdict, and not the next one's predecessor
     const noContext = !!x.unparsed || x.wire.contextState === 'partial';
-    const comp = noContext ? { compaction: false } : compactionMeta(compactionVerdict(S.info,
-      { hint: h.compaction === true, marker: h.compactionMarker === true, msgCount: x.msgCount || 0 }));
-    if (!noContext) S.info = { msgCount: x.msgCount || 0, marker: h.compactionMarker === true };
-    const brk = cacheOf(baseOf(S.base), list, attrs, x, comp.compaction, x.usage);
+    const verdict = noContext ? null : compactionVerdict(S.info, { hint: h.compaction === true, marker: h.compactionMarker === true, msgCount: x.msgCount || 0 });
+    const comp = compactionMeta(verdict);
+    if (verdict) S.info = { msgCount: x.msgCount || 0, marker: h.compactionMarker === true, hinted: verdict.basis === 'hint' };
+    const brk = cacheOf(baseOf(S.base), list, attrs, x, comp.compaction || comp.lands, x.usage);
     const rq = requestOf(x, list, B);
     const call = {
       gi: null, id: x.item.id, streamId: kind, rec: { id: x.item.id, request: rq }, norm: { usage: x.nu || {} }, wireFormat: d.id, ctx: x.ctx || 0,

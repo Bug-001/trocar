@@ -31,7 +31,7 @@ export function hasCompactionPreamble(messages) {
 }
 
 // The compaction verdict of ONE call against its in-lane predecessor (3.4), one rule for query and the board.
-// prev = { msgCount, marker, preamble } of the previous call in the same session lane, or null when there is none;
+// prev = { msgCount, marker, preamble, hinted } of the previous call in the same session lane (hinted: its verdict was step 1), or null when there is none;
 // cur = { hint, marker, msgCount, preamble }. In order:
 //   1. a harness header / request-kind hint (high) — compaction even on a lane's first call;
 //   2. a harness text marker (medium) on its RISING edge only: the marker stays in the history afterwards, and a
@@ -40,6 +40,8 @@ export function hasCompactionPreamble(messages) {
 //   3. only a sharp message-count drop (medium, markCompaction) — no other evidence, no verdict. CC's own preamble
 //      lets a smaller drop count, on its RISING edge only, like the marker: the preamble stays in the first messages of
 //      every later call, so a carried one is no evidence (a 30 → 27 dip long after a compaction is no compaction).
+// A harness's own request still carries the whole history; the summary replaces it on the next call, so step 2 or 3 right after a
+// hint is that same compaction landing, not another: {compaction: false, lands: true}, with its from / to and basis.
 // compaction_from is the predecessor's message count, NULL when the lane has none — never an invented 0
 // (invariant 4). `basis` names the evidence that fired, so a reader can say how sure it is.
 export function compactionVerdict(prev, cur) {
@@ -47,8 +49,9 @@ export function compactionVerdict(prev, cur) {
   const from = prev ? prev.msgCount | 0 : null
   const to = cur.msgCount | 0
   if (cur.hint) return { compaction: true, compaction_from: from, compaction_to: to, basis: 'hint' }
-  if (cur.marker && prev && !prev.marker) return { compaction: true, compaction_from: from, compaction_to: to, basis: 'marker' }
+  const fired = (compaction_from, compaction_to, basis) => (prev && prev.hinted ? { compaction: false, lands: true, compaction_from, compaction_to, basis } : { compaction: true, compaction_from, compaction_to, basis })
+  if (cur.marker && prev && !prev.marker) return fired(from, to, 'marker')
   if (!prev) return NONE
   const m = markCompaction(prev.msgCount | 0, to, { preamble: !!cur.preamble && !prev.preamble })
-  return m.compaction ? { compaction: true, compaction_from: m.compaction_from, compaction_to: m.compaction_to, basis: 'msg-count-drop' } : NONE
+  return m.compaction ? fired(m.compaction_from, m.compaction_to, 'msg-count-drop') : NONE
 }
