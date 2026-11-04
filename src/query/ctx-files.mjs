@@ -141,7 +141,7 @@ export function putFile(fs, file, bytes) {
 // ── Packs and the open tail (3.5 §会话读 `lane --pack` / `--tail`) ──────────────────────────────────────────────────────────────
 // A session state `s` (named/session.mjs stateAt) carries `pos(rid)` (a member's write position, −1: none) and `cut(row)` (in the
 // cut). Every member at or below the mark is folded, so span n is sealed once the mark's position reaches PACK_MEMBERS·(n+1) − 1.
-const axisOf = (V) => (V.lanes.find((l) => l.kind === 'main') || V.lanes[0] || { lane: null }).lane; // as headDoc's axis
+export const axisOf = (V) => (V.lanes.find((l) => l.kind === 'main') || V.lanes[0] || { lane: null }).lane; // as headDoc's axis
 const upToOf = (s) => (s.mark == null ? 0 : s.pos(s.mark) + 1);
 /** sealedOf(s) → how many packs are sealed = the open span's n. */
 export const sealedOf = (s) => Math.floor(upToOf(s) / PACK_MEMBERS);

@@ -9,7 +9,7 @@ import { unknownSummary } from '../view/reduce.mjs';
 import { compareStep } from '../view/step-order.mjs';
 import { COMP_KEYS } from '../view/blockmeta.mjs';
 import { FLAG } from '../view/head-cols.mjs';
-import { CACHE_STATES, QUIET_CAUSES, cacheFacts, cacheState, usageOf } from '../view/metrics.mjs';
+import { CACHE_STATES, cacheFacts, cacheState, isProblemBreak, usageOf } from '../view/metrics.mjs';
 import { callUsage } from '../model/schema.mjs';
 import { posCmp } from './projection.mjs';
 import { QueryArgError } from './named/index.mjs';
@@ -58,16 +58,15 @@ export const columns = (rows) => ({ at: -1, rows, slotOf: rows.slotOf, ts: [], l
   ur: new Float64Array(0), uw: new Float64Array(0), uf: new Float64Array(0), uo: new Float64Array(0), md: new Int32Array(0), ca: new Uint8Array(0), rf: new Int32Array(0),
   models: new Map(), names: [], keys: new Map(), order: [], by: [], lanes: new Set(), heads: new Map(), its: null, sorted: null });
 const tsOf = (cols, rid) => cols.ts[cols.slotOf(rid)];
-// The flag bits of a step: one definition with the board (src/view/head-cols.mjs). A cache break counts when its cause is outside the quiet
-// ones (src/view/metrics.mjs QUIET_CAUSES).
+// The flag bits of a step: one definition with the board (src/view/head-cols.mjs). The cacheBreak bit is a problem break (src/view/metrics.mjs
+// isProblemBreak).
 export { FLAG };
 const EVENT_FLAG = { user: FLAG.user, summarize: FLAG.summarize, spawn: FLAG.spawn };
 function flagsOf(r, events) {
   let f = 0;
   for (const e of events) f |= e.type === 'compaction' ? FLAG.compaction | (e.inferred ? FLAG.inferred : 0) : EVENT_FLAG[e.type] || 0;
-  const b = r.cacheBreak, failed = !!r.error;
-  if (b && b.cause && !b.firstCall && !QUIET_CAUSES.has(b.cause)) f |= FLAG.cacheBreak;
-  if (failed) f |= FLAG.failed; else if (r.usage == null) f |= FLAG.noUsage;
+  if (isProblemBreak(r)) f |= FLAG.cacheBreak;
+  if (r.error) f |= FLAG.failed; else if (r.usage == null) f |= FLAG.noUsage;
   return f;
 }
 /** The `ca` column's byte: the low bits (STATE) the index of the row's state in CACHE_STATES; PROBE a probe; UNKNOWN the wire's cache

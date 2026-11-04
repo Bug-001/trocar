@@ -44,6 +44,12 @@ export function cacheState(row) {
   return mk('reused', { hit, quiet: b.cause === 'volatile-nonce-only' ? 'volatile-nonce-only' : 'append' });
 }
 
+// A whole-window rewrite: the step's cause says its history was replaced, so a cold cache there is expected.
+const rewrites = (row) => !!row.cacheBreak && row.cacheBreak.cause === 'compaction';
+
+/** A cache break that is a problem (2.2 §缓存判定「问题步」): any break but a whole-window rewrite. */
+export const isProblemBreak = (row) => cacheState(row).isBreak && !rewrites(row);
+
 /** Tokens the comparison step had cached that this step did not read. `u` / `r` = the two usages, `hasRef` = a comparison step exists.
  *  → {missed, why}: a value it needs is NULL → missed null with the reason, never 0. */
 export function missedOf(u, r, hasRef) {
@@ -62,7 +68,7 @@ export function cacheFacts(row, ref) {
   if (c.warm) out.warm = true;
   if (c.quiet) out.quiet = c.quiet;
   if (c.zeroInput) out.zeroInput = true;
-  if (row.cacheBreak && row.cacheBreak.cause === 'compaction') out.rewrite = true;
+  if (rewrites(row)) out.rewrite = true;
   if (c.isBreak) {
     out.break = true;
     const { missed, why } = missedOf(usageOf(row), ref.usage, ref.has);

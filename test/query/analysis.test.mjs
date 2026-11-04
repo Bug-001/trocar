@@ -10,6 +10,7 @@ import { bigSession } from './big-session.mjs'
 import { runQuery, QueryArgError } from '../../src/query/named/index.mjs'
 import { ANALYSIS_PAGE_BYTES } from '../../src/query/named/analysis.mjs'
 import { extendSession, sessionState } from '../../src/query/named/session.mjs'
+import { FLAG, cellsOf } from '../../src/view/head-cols.mjs'
 
 const CONTRACT = JSON.parse(fs.readFileSync(new URL('../fixtures/session-read-contract.json', import.meta.url), 'utf8'))
 const homeOf = () => path.join(tmpDir('trocar-analysis-'), '.trocar')
@@ -29,16 +30,16 @@ const SYSTEM = 'You are a coding assistant.', MONITOR = 'You are a security moni
 const wireUsage = ([fresh, out, read, create]) => ({ input_tokens: fresh, output_tokens: out, cache_read_input_tokens: read, cache_creation_input_tokens: create })
 const talk = (n) => Array.from({ length: 2 * n - 1 }, (_, i) => (i % 2 ? { role: 'assistant', content: [{ type: 'text', text: `a${(i + 1) / 2}` }] } : { role: 'user', content: [{ type: 'text', text: `q${i / 2 + 1}` }] }))
 const ID = 'analysis-000-4a1b-9c2d-000000000001'
-/** One session from its steps {n: question, tools?, u?: usage, status?, model?, agent?: a subagent's id, system?, endpoint?} (no `u`: the reply has
+/** One session from its steps {n: question, messages?: instead of the talk up to n, tools?, u?: usage, status?, model?, agent?: a subagent's id, system?, endpoint?} (no `u`: the reply has
  *  none); a step's record id is `<segment>:<its line>`. */
 function writeSession(home, steps, id = ID) {
   fs.mkdirSync(path.join(home, 'raw'), { recursive: true })
-  const lines = steps.map(({ n = 1, tools = TOOLS, u, status = 200, model = 'm-a', agent, system = SYSTEM, endpoint = '/v1/messages' }, i) => {
+  const lines = steps.map(({ n = 1, messages = talk(n), tools = TOOLS, u, status = 200, model = 'm-a', agent, system = SYSTEM, endpoint = '/v1/messages' }, i) => {
     const ts = `2026-10-22T10:00:${String(i).padStart(2, '0')}.000Z`, usage = u ? { usage: wireUsage(u) } : null
     const body = status === 200 ? { id: `msg_${i}`, model, stop_reason: 'end_turn', content: [{ type: 'text', text: `a${n}` }], ...usage } : { type: 'error', error: { type: 'api_error', message: 'boom' }, ...usage }
     return JSON.stringify({ ts, endpoint, method: 'POST', id: `req_${i}`, ts_request: ts, is_llm_call: true, capture: 'transparent', host: 'api.anthropic.com', traffic_class: 'llm',
       req_headers: { host: 'api.anthropic.com', 'content-type': 'application/json', 'user-agent': 'claude-cli/2.0.0 (external, cli)', 'x-claude-code-session-id': id, ...(agent ? { 'x-claude-code-agent-id': agent } : null) },
-      req_body: JSON.stringify({ model, max_tokens: 1024, tools, system: [{ type: 'text', text: system }], messages: talk(n) }),
+      req_body: JSON.stringify({ model, max_tokens: 1024, tools, system: [{ type: 'text', text: system }], messages }),
       resp: { status, kind: 'json', body }, proc: { pid: 1, exe: '/x/claude', agent: 'claude-code' } })
   })
   fs.writeFileSync(path.join(home, 'raw', '20261022T100000Z.ndjson'), `${lines.join('\n')}\n`)
@@ -280,7 +281,7 @@ test('3.5 #48 verdicts: firstFailed goes by the lanes\' order, then step order, 
 test('3.5 #50 closed sets: the default document has only the listed keys, no usd and no breaks; the fixture\'s two analysis entries have every one', async () => {
   const { doc, win } = await worldOf(MIXED)
   const TOP = ['schema', 'command', 'ok', 'errors', 'mark', 'pending', 'truncated', 'pricing', 'totals']
-  const TOTALS = ['cost', 'hit', 'hitSteps', 'cacheUnknown', 'breakCost', 'failed', 'firstFailed', 'unpricedSteps']
+  const TOTALS = ['cost', 'hit', 'hitSteps', 'cacheUnknown', 'breakCost', 'failed', 'firstFailed', 'unpricedSteps', 'problems']
   const BUCKET = ['usd', 'priced', 'unpriced', 'failed', 'approx', 'approxKeys']
   for (const [got, closed] of [[doc, TOP], [doc.totals, TOTALS], [doc.totals.cost.total, BUCKET]]) assert.deepEqual(Object.keys(got).filter((k) => !closed.includes(k)), [])
   assert.ok(!('usd' in doc) && !('breaks' in doc.totals))
@@ -290,6 +291,62 @@ test('3.5 #50 closed sets: the default document has only the listed keys, no usd
   assert.deepEqual(Object.keys(sample.totals).sort(), Object.keys(doc.totals).sort())
   for (const b of ['main', 'sub', 'bg', 'total']) assert.deepEqual(Object.keys(sample.totals.cost[b]).sort(), Object.keys(doc.totals.cost[b]).sort())
   assert.deepEqual(Object.keys(CONTRACT.analysis_window).sort(), Object.keys(win.pages[0]).sort())
+})
+
+// The steps a head's `cols` marks as problems: the problem-break bit or the failed bit, by the step's place on the axis.
+const headProblems = (head) => {
+  const cells = cellsOf(head.cols)
+  return Array.from({ length: head.steps }, (_, s) => s).filter((s) => cells[3 * s + 2] & (FLAG.cacheBreak | FLAG.failed))
+}
+const SUMMARY = [{ role: 'user', content: [{ type: 'text', text: 'Summary of the conversation so far.' }] }]
+
+test('3.5 #56 problems: every kind of step by hand: totals.problems and the head\'s bits name the same main-lane steps, a rewrite and a subagent\'s failure not among them', async () => {
+  const { home, doc, calls } = await worldOf([
+    { n: 1, u: [100, 50, 0, 1000] }, // 0 first
+    { n: 2, u: [100, 20, 1000, 200] }, // 1 reused
+    { n: 3, u: [100, 0, 100, 900] }, // 2 low-hit
+    { n: 4, tools: SWAPPED, u: [100, 10, 100, 900] }, // 3 changed
+    { n: 5, tools: SWAPPED, u: [100, 10, 0, 1000] }, // 4 ttl-rebuild
+    { n: 6, tools: SWAPPED, u: [1000, 10, 0, 0] }, // 5 provider-contradiction
+    { n: 7, tools: SWAPPED, status: 500 }, // 6 failed
+    { n: 8, tools: SWAPPED, u: [100, 10, 1000, 100] }, // 7
+    { n: 1, tools: SWAPPED, messages: SUMMARY, u: [10, 10, 0, 800] }, // 8 the compaction
+    { n: 1, status: 500, agent: 'agent-1' }, // 9 a subagent's failure
+  ])
+  assert.deepEqual(calls.map((r) => r.cache.state).slice(0, 7), ['first', 'reused', 'low-hit', 'changed', 'ttl-rebuild', 'provider-contradiction', 'failed'])
+  assert.equal(calls[8].cache.rewrite, true)
+  assert.equal(calls[8].cache.break, true, 'the rewrite is a break that is no problem')
+  assert.equal(calls[9].cache.state, 'failed')
+  assert.equal(doc.totals.problems, 5)
+  const head = await session(home, { id: ID, head: true }), cells = cellsOf(head.cols)
+  assert.deepEqual(headProblems(head), [2, 3, 4, 5, 6])
+  assert.equal(cells[3 * 8 + 2] & FLAG.cacheBreak, 0)
+  assert.notEqual(cells[3 * 8 + 2] & FLAG.compaction, 0)
+})
+
+for (const wire of ['http', 'threads', 'ws', 'chat']) test(`3.5 #56 problems along the wires (${wire}): the total, the head's bits and the axis rows' cache count the same steps`, async () => {
+  const home = homeOf(), env = envOf({ 'claude-opus-4-8': [1, 2, 3, 4] })
+  const s = bigSession({ home, wire, growth: 300, subEvery: 3, failEvery: 5, compactAt: 3_000 })
+  s.append(100)
+  const rows = []
+  for (let page = await session(home, { id: s.id }); ; page = await session(home, { id: s.id, before: page.calls[0].rid })) {
+    rows.unshift(...page.calls)
+    if (!page.more) break
+  }
+  const head = await session(home, { id: s.id, head: true }), { totals } = await analysis(home, env, {}, s.id)
+  assert.equal(head.bucket, 1)
+  const axis = rows.filter((r) => r.lane === head.axis), problems = axis.filter(({ cache: c }) => (c.break && !c.rewrite) || c.state === 'failed')
+  assert.equal(axis.length, head.steps)
+  assert.ok(axis.some(({ cache: c }) => c.break || c.state === 'failed'), 'the walk meets steps to judge')
+  assert.deepEqual(headProblems(head), axis.flatMap((r, i) => (problems.includes(r) ? [i] : [])))
+  assert.equal(totals.problems, problems.length)
+})
+
+test('3.5 #56 problems with no main lane: they are counted on the lane the axis is on', async () => {
+  const { home, doc, lanes } = await worldOf([{ n: 1, u: [10, 0, 0, 100], agent: 'agent-1' }, { n: 2, status: 500, agent: 'agent-1' }])
+  assert.ok(!lanes.some((l) => l.kind === 'main'))
+  assert.equal(doc.totals.problems, 1)
+  assert.deepEqual(headProblems(await session(home, { id: ID, head: true })), [1])
 })
 
 // One long session for the three tests below: past a window page and past a slice, with compactions for breaks.
