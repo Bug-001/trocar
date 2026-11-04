@@ -57,3 +57,11 @@ test('a string with no closing quote still throws', () => {
   for (const bad of ['"abc', '"abc\\"', '"a\\\\\\"', '{"k\\":1}', '["x\\\\\\"]', '{"a":"b', '"'])
     assert.throws(() => scanJson(bad), undefined, bad)
 })
+
+test('a repeated key: props keeps what JSON.parse keeps, shadowed the values it hid, and an object with none has no such field', () => {
+  const text = '{"a":1,"b":{"c":2},"a":"x","a":[3]}'
+  const root = scanJson(text)
+  assert.deepEqual(JSON.parse(text.slice(root.props.get('a').start, root.props.get('a').end)), JSON.parse(text).a)
+  assert.deepEqual(root.shadowed.map((n) => text.slice(n.start, n.end)), ['1', '"x"'])
+  assert.equal('shadowed' in root.props.get('b'), false)
+})

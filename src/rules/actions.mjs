@@ -6,7 +6,7 @@ import { scanJson, nodeAt } from '../dissect/json-scan.mjs'
 import { ruleBlocksFor } from '../dissect/registry.mjs'
 import { sseEvents } from '../dissect/sse-spans.mjs'
 import { LIMITS } from './closed.mjs'
-import { parseCondition } from './conditions.mjs'
+import { ESCAPE_REACH, parseCondition } from './conditions.mjs'
 import { setHeaders } from './headers.mjs'
 import { spansToSteps, applySteps } from './edits.mjs'
 import { actionKind, conditionsOf } from './validate.mjs'
@@ -14,8 +14,6 @@ import { actionKind, conditionsOf } from './validate.mjs'
 const MAX_BODY = LIMITS.bodyBytes
 const STRING_WIDTHS = ['a', '中']
 const INFLATE = new Map([['gzip', 'gunzipSync'], ['x-gzip', 'gunzipSync'], ['deflate', 'inflateSync'], ['br', 'brotliDecompressSync'], ['zstd', 'zstdDecompressSync']])
-// A hit this close after a backslash may start inside an escape: \uXXXX is the longest, its last digit five bytes on.
-const ESCAPE_REACH = 5
 
 /** Why a unit could not be judged or edited; `why` is a `skipped.why` (closed.mjs). */
 export class RuleFault extends Error {
@@ -69,7 +67,7 @@ function collectStrings(node, text, out) {
     const raw = text.slice(node.start + 1, node.end - 1)
     out.push({ start: node.start, end: node.end, value: raw.includes('\\') ? JSON.parse(text.slice(node.start, node.end)) : raw })
   } else if (node.kind === 'array' || node.kind === 'object') {
-    for (const child of node.items ?? node.props.values()) collectStrings(child, text, out)
+    for (const child of node.items ?? [...node.props.values(), ...(node.shadowed ?? [])]) collectStrings(child, text, out)
   }
 }
 
@@ -178,7 +176,10 @@ function actHeader(action, state) {
   if (!setHeaders(state, [[action.header, action.remove ? null : action.set]])) throw fault('rule-error')
 }
 
-const siblingsOf = (parent) => (parent.kind === 'array' ? parent.items : [...parent.props.values()].sort((a, b) => a.start - b.start))
+// A repeated key hides a value from `props`, so what stands next to what, and what a removal brings back, cannot be told: the rule's error.
+const plainObject = (node) => { if (node.shadowed) throw fault('rule-error'); return node }
+
+const siblingsOf = (parent) => (parent.kind === 'array' ? parent.items : [...plainObject(parent).props.values()].sort((a, b) => a.start - b.start))
 
 function skipSeparators(text, i) {
   while (' ,\t\r\n'.includes(text[i])) i++
@@ -208,7 +209,7 @@ function removals(text, targets) {
 
 const tokensOf = (pointer) => pointer.split('/').slice(1).map((t) => t.replaceAll('~1', '/').replaceAll('~0', '~'))
 function child(node, token) {
-  if (node?.kind === 'object') return node.props.get(token)
+  if (node?.kind === 'object') return plainObject(node).props.get(token)
   return node?.kind === 'array' && /^(0|[1-9]\d*)$/.test(token) ? node.items[+token] : undefined
 }
 

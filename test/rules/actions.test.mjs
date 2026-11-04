@@ -381,3 +381,16 @@ test('a body over 64 MiB is too big, on the wire or once inflated', () => {
   fails('too-big', () => full.decode(unitOf(Buffer.alloc(64 * MIB + 1))));
   fails('too-big', () => full.decode(unitOf(zlib.gzipSync(Buffer.alloc(64 * MIB + 1)), { encoding: 'gzip' })));
 });
+
+test('a repeated key: replace reaches every value, because a reader may take any of them', () => {
+  for (const body of ['{"a":"SECRET","a":"x"}', '{"a":"x","a":"SECRET"}', '{"o":{"a":"SECRET","b":1,"a":["SECRET"]}}']) {
+    assert.ok(!result({ replace: 'SECRET', with: 'x' }, body).includes('SECRET'), body);
+  }
+});
+
+test('json and blocks refuse an object with a repeated key: a removal would bring the hidden value back', () => {
+  for (const action of [{ json: '/b', remove: true }, { json: '/b', set: 'x' }, { json: '/a', remove: true }, { json: '/o/b', remove: true }]) {
+    fails('rule-error', () => run(action, '{"b":"SECRET","a":1,"b":"x","o":{"b":1}}'));
+  }
+  assert.deepEqual(parsed({ json: '/o/b', remove: true }, '{"o":{"b":1,"c":2}}'), { o: { c: 2 } });
+});
