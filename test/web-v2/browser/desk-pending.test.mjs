@@ -3,8 +3,9 @@
 // by 1,000 members at each answer and carries `pending` until the last one, so every answer brings hundreds of rows, relanes and
 // events. The answers are paced by the case's own steps, not by the poll timer, so a slow machine sees the same growth, and some timed
 // inputs run while an answer just taken is being read and drawn. While it grows the reader follows, scrubs 60 steps by ←/→ and jumps
-// by the overlay rows' ticks: no task of the page's own runs over I-longtask's line, and a step change's p95 is within
-// BOARD_LINES.stepClick. Runs only under `npm run test:browser`.
+// by the overlay rows' ticks: every input moves the step, no task of the page's own runs over I-longtask's line, and a step change's
+// p95 is within BOARD_LINES.stepClick. A tick held down while an answer lands moves the step when it is let go. Runs only under
+// `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { probe, withBoard, serveWorld, timed, stats, DESK_NEXT } from './harness.mjs'
@@ -23,35 +24,69 @@ function instrument() {
   window.__head = () => { const e = document.querySelector('#stepbar .sb-no'), m = e && /\/\s*(\d+)/.exec(e.textContent); return e && m ? { n: +e.dataset.n, m: +m[1] } : null }
 }
 
-// A known board shortfall per build, reported and not red (the way an `open` sequence regression is a todo). The line stays as it is
-// (D64⑥); a build's case turns green when that build meets it. What a run measured is in its log line and the PR, not here.
-const SHORT = `${DESK_NEXT ? 'desk-next' : 'the default build'} misses this line while it grows: step p95 over BOARD_LINES.stepClick, and a tick click may not move the step`
-test('2.3 归约前沿 · D64②: a session growing by 1,000 members an answer — following, scrubbing and lane jumps run no long task; step p95 within the line', { skip, todo: SHORT }, async () => {
-  const w = world(12, { calls: 30000, page: 1500, files: 600, compact: 0.02 }) // wide chapters: the window after End holds many steps
+// In the page, in one task: a tick of the overlay rows more than a bar left of the playhead, as a point hit-checked there (a node or an
+// index read in one task and clicked in another can name another tick or a detached one); null when the window shows none.
+const olderTick = (page, j) => page.evaluate((j) => {
+  const cur = document.querySelector('#sawrow .bar.cur'), r0 = cur && cur.getBoundingClientRect()
+  if (!r0) return null
+  const mid = (e) => { const r = e.getBoundingClientRect(); return r.left + r.width / 2 }
+  const ts = [...document.querySelectorAll('#rails .tick[data-lane]')].filter((t) => mid(t) < r0.left - r0.width), t = ts[j % Math.max(1, ts.length)]
+  if (!t) return null
+  const r = t.getBoundingClientRect(), x = r.left + r.width / 2, y = r.top + r.height / 2
+  return document.elementFromPoint(x, y) === t ? { x, y } : null
+}, j)
+// the desk over the growing world `w`, its first answer drawn: page, grant(n) (n more answers, and a wait until head reads have taken
+// them, not until they are drawn; a stall is no head read in 20 s), drawn() (every answer taken is drawn: the step head counts the main
+// lane's steps at the mark the server is at, 1.2 §会话头), stepN() and until(fn, arg, what)
+async function growingDesk(w, fn) {
   const b = await withBoard({ bytes: 1e5, width: 1440, chromium: gate.chromium, setup: (page) => page.addInitScript(instrument) })
   try {
     const { page } = b
-    const from = 4000, growth = await serveWorld(page, w, { from, grow: 1000, pack: 512, paced: true })
-    let asked = 0
+    const growth = await serveWorld(page, w, { from: 4000, grow: 1000, pack: 512, paced: true })
     await page.route('**/api/block?**', (route) => route.fulfill({ status: 200, contentType: 'application/json',
       body: JSON.stringify({ blocks: new URL(route.request().url()).searchParams.getAll('ref').map((ref) => ({ ref, bytes: 'x', encoding: 'utf8', fidelity: 'verbatim', truncated: false })), errors: [] }) }))
-    const longTasks = () => page.evaluate(() => window.__lt.splice(0))
     await page.evaluate(() => { location.hash = '#/replay/p/S' })
     await page.waitForSelector('#stepbar .sb-no')
     const stepN = async () => { const h = await page.evaluate(() => window.__head()); assert.ok(h, 'the step head is drawn'); return h.n }
     const until = (fn, arg, what) => page.waitForFunction(fn, arg, { timeout: 30000, polling: 'raf' }).catch((e) => { throw new Error(`${what}: ${e.message}`) })
-    // n more answers granted, and a wait until head reads have taken them (not until they are drawn); a stall is no head read in 20 s
     const grant = async (n) => {
       const to = growth.left() - n * 1000
-      growth.more(n); asked += n
+      growth.more(n)
       for (let left = growth.left(), t = Date.now(); growth.left() > to; await page.waitForTimeout(50)) {
         if (growth.left() !== left) { left = growth.left(); t = Date.now() }
         assert.ok(Date.now() - t < 20000, `no head read took the granted answers: ${left} members still to come, ${to} asked for`)
       }
     }
-    // every answer taken is drawn: the step head counts the main lane's steps at the mark the server is at (1.2 §会话头)
     const drawn = () => until((a) => window.__head()?.m === a, w.files(w.marks[w.marks.length - 1 - growth.left()], 512).head.steps, 'the answers taken were not drawn')
     await grant(1); await drawn()
+    await fn({ page, growth, grant, drawn, stepN, until })
+    assert.deepEqual(b.errors, [])
+  } finally { await b.stop() }
+}
+const toEnd = async ({ page, until }) => {
+  await page.keyboard.press('End')
+  await until(() => { const h = window.__head(); return !!h && h.n === h.m }, undefined, 'End did not reach the newest step')
+}
+// a tick more than a bar left of the playhead; a last chapter too short to hold one is left by [ to the chapter before it (1.3 §章: the
+// window is the playhead's chapter)
+async function aimOlder(d, j) {
+  let pt = await olderTick(d.page, j)
+  for (let k = 0; k < 5 && !pt; k++) {
+    const n0 = await d.stepN()
+    await d.page.keyboard.press('[')
+    await d.until((a) => { const h = window.__head(); return !!h && h.n !== a }, n0, `[ did not move the step from ${n0}`)
+    pt = await olderTick(d.page, j)
+  }
+  assert.ok(pt, 'the overlay rows draw ticks in the older half of the window')
+  return pt
+}
+
+let growing = null // the first case's step samples, for the line's own case
+test('2.3 归约前沿 · D64②: a session growing by 1,000 members an answer — following, scrubbing and lane jumps move the step and run no long task', { skip }, async () => {
+  const w = world(12, { calls: 30000, page: 1500, files: 600, compact: 0.02 }) // wide chapters: the window after End holds many steps
+  await growingDesk(w, async (d) => {
+    const { page, growth, grant, drawn, stepN } = d, longTasks = () => page.evaluate(() => window.__lt.splice(0))
+    const left0 = growth.left()
     await longTasks() // the open is D64①'s, not this case's
     const seen = { follow: [], scrub: [], lanes: [] }, samples = []
     // a timed input: its step change, judged by the step number, so an input that moves nothing is red however the count grows
@@ -71,45 +106,53 @@ test('2.3 归约前沿 · D64②: a session growing by 1,000 members an answer �
     await drawn()
     seen.scrub = await longTasks()
 
-    // lane jumps: from the newest step, a tick of the overlay rows more than a bar left of the playhead, so the click moves the step;
-    // a last chapter too short to hold one is left by [ to the chapter before it (1.3 §章: the window is the playhead's chapter).
-    // The rows are redrawn by every answer, so the point is aimed and hit-checked in one task (as seq/actions.mjs clickIn) and clicked
-    // as a point: a node or index read in one task and clicked in another can name another tick or a detached one. Every 2nd click
-    // runs while an answer just taken is being read and drawn
-    const older = (j) => page.evaluate((j) => {
-      const cur = document.querySelector('#sawrow .bar.cur'), r0 = cur && cur.getBoundingClientRect()
-      if (!r0) return null
-      const mid = (e) => { const r = e.getBoundingClientRect(); return r.left + r.width / 2 }
-      const ts = [...document.querySelectorAll('#rails .tick[data-lane]')].filter((t) => mid(t) < r0.left - r0.width), t = ts[j % Math.max(1, ts.length)]
-      if (!t) return null
-      const r = t.getBoundingClientRect(), x = r.left + r.width / 2, y = r.top + r.height / 2
-      return document.elementFromPoint(x, y) === t ? { x, y } : null
-    }, j)
+    // lane jumps: from the newest step; every 2nd click runs while an answer just taken is being read and drawn, aimed after that
+    // answer was taken, as the rows it redraws are what the reader aims at
     for (let j = 0; j < 10; j++) {
-      await page.keyboard.press('End')
-      await until(() => { const h = window.__head(); return !!h && h.n === h.m }, undefined, 'End did not reach the newest step')
-      let pt = await older(j)
-      for (let k = 0; k < 5 && !pt; k++) {
-        const n0 = await stepN()
-        await page.keyboard.press('[')
-        await until((a) => { const h = window.__head(); return !!h && h.n !== a }, n0, `[ did not move the step from ${n0}`)
-        pt = await older(j)
-      }
-      assert.ok(pt, 'the overlay rows draw ticks in the older half of the window')
+      await toEnd(d)
       if (j % 2 === 1) await grant(1)
+      const pt = await aimOlder(d, j)
       await input(() => page.mouse.click(pt.x, pt.y))
     }
     await drawn()
     seen.lanes = await longTasks()
 
-    const { p50, p95 } = stats(samples)
-    console.log(`# pending growth: ${growth.left()} members still to come; long tasks follow [${seen.follow.map(Math.round)}] scrub [${seen.scrub.map(Math.round)}] lanes [${seen.lanes.map(Math.round)}]; step n=${samples.length} p50=${p50.toFixed(1)} ms p95=${p95.toFixed(1)} ms line=${BOARD_LINES.stepClick} ms`)
-    assert.equal(growth.left(), w.marks.length - 1 - from - asked * 1000, 'the growth moved by the answers asked, no more')
+    growing = stats(samples)
+    console.log(`# pending growth: ${growth.left()} members still to come; long tasks follow [${seen.follow.map(Math.round)}] scrub [${seen.scrub.map(Math.round)}] lanes [${seen.lanes.map(Math.round)}]; step n=${samples.length} p50=${growing.p50.toFixed(1)} ms p95=${growing.p95.toFixed(1)} ms line=${BOARD_LINES.stepClick} ms`)
+    assert.equal(growth.left(), left0 - 23 * 1000, 'the growth moved by the answers asked, no more')
     assert.ok(growth.left() > 0, 'the session was still pending through every phase')
     for (const [phase, ms] of Object.entries(seen)) assert.ok(Math.max(0, ...ms) <= LIMITS.longtaskMs, `${phase}: a long task of ${Math.round(Math.max(...ms))} ms`)
-    assert.ok(p95 <= BOARD_LINES.stepClick, `step change p95 ${p95.toFixed(1)} ms over the ${BOARD_LINES.stepClick} ms line`)
-    assert.deepEqual(b.errors, [])
-  } finally { await b.stop() }
+  })
+})
+
+// the line, on the samples above. A known board shortfall per build, reported and not red (the way an `open` sequence regression is a
+// todo). The line stays as it is (D64⑥); a build's case turns green when that build meets it. What a run measured is in its log line
+// and the PR, not here.
+const SHORT = `${DESK_NEXT ? 'desk-next' : 'the default build'} misses this line while it grows: step p95 over BOARD_LINES.stepClick`
+test('2.3 归约前沿 · D64②: step p95 within the line while the session grows', { skip, todo: SHORT }, () => {
+  assert.ok(growing, 'the growing case ran')
+  assert.ok(growing.p95 <= BOARD_LINES.stepClick, `step change p95 ${growing.p95.toFixed(1)} ms over the ${BOARD_LINES.stepClick} ms line`)
+})
+
+// 2.3 读者优先: a redraw between a press and its release takes the pressed node away, and the browser then sends no click. A tick held
+// down while answers land still jumps there when let go: the step goes back, where following alone would only take it forward.
+test('2.3 读者优先: a tick held down while an answer lands moves the step when it is let go', { skip }, async () => {
+  const w = world(12, { calls: 30000, page: 1500, files: 600, compact: 0.02 })
+  await growingDesk(w, async (d) => {
+    const { page, grant, drawn, stepN, until } = d
+    await grant(2); await drawn()
+    for (let j = 0; j < 3; j++) {
+      await toEnd(d)
+      const pt = await aimOlder(d, j), n0 = await stepN()
+      await page.mouse.move(pt.x, pt.y)
+      await page.mouse.down()
+      await grant(1)
+      await page.waitForTimeout(400) // the answer read and applied while the pointer is down
+      await page.mouse.up()
+      await until((a) => { const h = window.__head(); return !!h && h.n < a }, n0, `the tick let go at step ${n0} did not move the step`)
+      await drawn()
+    }
+  })
 })
 
 // a world without compactions on its main lane: each answer brings sealed packs (three loader slots) while the followed step's bodies

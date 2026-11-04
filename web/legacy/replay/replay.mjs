@@ -42,6 +42,7 @@ import { loadFold, saveFold } from './fold.mjs'
 import { landPlayhead, createStepReads, packOrder } from './follow.mjs'
 import { createLoader } from './loader.mjs'
 import { createPoller, INTERVAL } from '../core/poll.mjs'
+import { createPace } from './pace.mjs'
 import { renderSaw, renderOverview, repositionBrush, markCurrent, renderProblemNav, problemSteps, wireTimeline, barsThatFit, fitWindow, capWindow, renderRough as roughRows, chapterHere, placeView } from './timeline.mjs'
 import { renderRails, wireRails, highlightRange, reviewing } from './rails.mjs'
 import { renderContextWindow, wireCtxWin, emptyFrameHtml, rowKeys, ensureRow, toggleCtxBlock } from './ctxwin.mjs'
@@ -135,12 +136,12 @@ const yieldNow = () => (globalThis.scheduler && typeof globalThis.scheduler.yiel
 const frame = (f) => (typeof requestAnimationFrame === 'function' ? requestAnimationFrame(f) : setTimeout(f, 16))
 // a read file's lines parsed in slices of at most SLICE_MS, yielding between them (2.3 §归约前沿: 分片解析, 片间让出)
 const SLICE_MS = 4
-async function parseSliced(src, opts) {
+async function parseSliced(src, opts, pace) {
   const g = lineSlices(src, opts)
   for (let t = nowMs(); ;) {
     const x = g.next()
     if (x.done) return x.value
-    if (nowMs() - t > SLICE_MS) { await yieldNow(); t = nowMs() }
+    if (nowMs() - t > SLICE_MS) { await yieldNow(); await pace.slice(); t = nowMs() }
   }
 }
 
@@ -431,15 +432,16 @@ function openDesk(ctx, route0, makeView = legacyView) {
   }
   // the playhead's panels, at most once per animation frame: a call inside a frame that already drew waits for the next one
   let inFrame = false, queued = false, busyTimer = null
+  const pace = createPace({ now: nowMs, sleep: (ms) => new Promise((r) => setTimeout(r, ms)), frame })
   // the outline, the explorer and the raw panel follow the window in a task of their own (2.3 归约前沿: no task over 50 ms): a step of a
   // long session is the window's thousands of nodes plus the ledger's lists, and one task drew both. Several paints before it runs
-  // draw these once, for the playhead then. A tick's drawer opens in that task too, after them (2.3 §归约前沿: 打开着的调用抽屉在下一个任务里画)
+  // draw these once, for the playhead then, once its frame is out and the reader has stopped. A tick's drawer opens in that task too, after them
   let sideDue = false, sidesWanted = false, detailDue = null
   const drawRails = () => onEls(() => { renderRails(E.rails, s); watchRails() })
   const nextTask = () => {
     if (sideDue) return
     sideDue = true
-    yieldNow().then(() => {
+    yieldNow().then(() => pace.calm()).then(() => {
       sideDue = false
       const d = detailDue; detailDue = null
       if (s.dead) return
@@ -633,7 +635,7 @@ function openDesk(ctx, route0, makeView = legacyView) {
   const fileBytes = new Map() // file key → the bytes held of it (bytes(): the session cache's measure)
   const keep = (k, n) => { size += n - (fileBytes.get(k) || 0); fileBytes.set(k, n) }
   let applying = Promise.resolve()
-  const serial = (fn) => { const p = applying.then(fn); applying = p.catch(() => {}); return p }
+  const serial = (fn) => { const p = applying.then(pace.slice).then(fn); applying = p.catch(() => {}); return p }
   // the lanes a file's lines change: the lanes its rows and heads name, before and after, and those of the rids it held before
   function lanesOf(file, lines) {
     const out = new Set(), d = s.desk, was = (rid) => { const r = d.rows.get(rid); if (r) out.add(r.lane) }
@@ -687,7 +689,7 @@ function openDesk(ctx, route0, makeView = legacyView) {
         const r = await getText(`/api/d/p${p.n}.${part}`, { id: s.id }, { signal: join(signal, s.reads.signal) })
         if (gone()) break
         let parsed = null
-        try { parsed = r.ok && r.status === 200 ? await parseSliced(r.text) : null } catch { /* not the file's lines: a failure like any other */ }
+        try { parsed = r.ok && r.status === 200 ? await parseSliced(r.text, undefined, pace) : null } catch { /* not the file's lines: a failure like any other */ }
         if (gone()) break
         if (!parsed) { packFailed = true; if (s.playRid == null && s.initialStep != null) readFailed(r.ok ? { status: r.status, error: 'not the file\'s lines' } : r); break }
         // held once the desk holds it: a part whose apply threw, or never ran, is read again
@@ -801,7 +803,7 @@ function openDesk(ctx, route0, makeView = legacyView) {
     if (!r.ok) return r
     if (r.status === 416) { const size = Number((/\/(\d+)/.exec(r.range || '') || [])[1]); return size === from ? { ok: true } : readTail(part, n, signal, true) }
     let parsed
-    try { parsed = await parseSliced(r.text, { head: r.status !== 206 }) } catch { return from == null ? { ok: false, status: r.status, error: 'not the file\'s lines' } : readTail(part, n, signal, true) }
+    try { parsed = await parseSliced(r.text, { head: r.status !== 206 }, pace) } catch { return from == null ? { ok: false, status: r.status, error: 'not the file\'s lines' } : readTail(part, n, signal, true) }
     if (r.status !== 206 && parsed.head && parsed.head.tail && parsed.head.tail.n !== n) n = parsed.head.tail.n
     const used = (r.status === 206 ? from : 0) + parsed.used
     return serial(() => {
@@ -857,7 +859,9 @@ function openDesk(ctx, route0, makeView = legacyView) {
     const d = redrawDue
     if (d) { d.changed = d.changed === null || changed === null ? null : new Set([...d.changed, ...changed]); return d.p }
     const due = redrawDue = { changed }
-    due.p = yieldNow().then(() => serial(() => { if (redrawDue === due) redrawDue = null; return redrawNow(due.changed) }))
+    // nothing of the playhead's step is drawn yet: nothing to wait for (2.3 §归约前沿 读者优先)
+    const urgent = () => s.playRid == null || s.initialStep != null || s.unheld != null
+    due.p = yieldNow().then(() => pace.redraw(urgent)).then(() => serial(() => { if (redrawDue === due) redrawDue = null; pace.drew(); return redrawNow(due.changed) }))
     return due.p
   }
   async function redrawNow(changed) {
@@ -919,6 +923,9 @@ function openDesk(ctx, route0, makeView = legacyView) {
   // a view whose scope is its own (the new desk's Scope.tsx) frames with no `saw`: its rows are not wired here
   function wire() {
     const rpbar = $('#rpbar'), { rails } = E
+    const onKey = () => pace.input(), onDown = () => pace.press(true), onUp = () => pace.press(false), UPS = ['pointerup', 'pointercancel', 'blur']
+    addEventListener('keydown', onKey, true); addEventListener('pointerdown', onDown, true); for (const k of UPS) addEventListener(k, onUp, true)
+    offs.push(() => { removeEventListener('keydown', onKey, true); removeEventListener('pointerdown', onDown, true); for (const k of UPS) removeEventListener(k, onUp, true) })
     rails.addEventListener('mouseover', onRailHover)
     rpbar.addEventListener('click', onRp); rpbar.addEventListener('keydown', onRpKey)
     offs.push(() => { rpbar.removeEventListener('click', onRp); rpbar.removeEventListener('keydown', onRpKey); rails.removeEventListener('mouseover', onRailHover) },
