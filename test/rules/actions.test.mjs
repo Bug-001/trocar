@@ -28,6 +28,91 @@ function seeded(seed) {
 }
 const undone = (state) => applySteps(state.bytes, invertSteps(state.steps));
 
+const NOISE = ['plain', '中文', '😀😀', 'quote\\"d', 'line\\nbreak', '\\u4e2d', 'back\\\\slash', ''];
+const SEPARATORS = [',', ', ', ',\n  ', ' , '];
+function objectWith(rand, hitAt, size) {
+  const sep = SEPARATORS[rand(SEPARATORS.length)];
+  const entries = Array.from({ length: size }, (_, i) => `"k${i}":${i === hitAt ? `"${NOISE[rand(NOISE.length)]}TOKEN${NOISE[rand(NOISE.length)]}"` : rand(3) ? `"${NOISE[rand(NOISE.length)]}"` : String(i)}`);
+  return { entries, sep, text: `{${entries.join(sep)}}` };
+}
+
+test('a replace leaves every byte outside the string it hit', () => {
+  const rand = seeded(7);
+  for (let round = 0; round < 300; round++) {
+    const size = 1 + rand(6), hitAt = rand(size);
+    const { entries, sep, text } = objectWith(rand, hitAt, size);
+    const before = `{${entries.slice(0, hitAt).map((e) => e + sep).join('')}"k${hitAt}":`;
+    const after = `${entries.slice(hitAt + 1).map((e) => sep + e).join('')}}`;
+    for (const action of [{ replace: 'TOKEN', with: 'x"\ny' }, { replace: 'TO(K)EN', with: '$1' }]) {
+      const out = result(action, text);
+      assert.ok(out.startsWith(before) && out.endsWith(after), text);
+      JSON.parse(out);
+    }
+    assert.equal(result({ replace: 'ABSENT', with: 'x' }, text), text);
+  }
+});
+
+test('a replacement with quotes and line breaks stays JSON, and its value is the one asked for', () => {
+  assert.deepEqual(parsed({ replace: 'ALPHA', with: 'a"b\nc\\d' }, '{"a":"xALPHAy"}'), { a: 'xa"b\nc\\dy' });
+});
+
+test('a text replace leaves keys and numbers alone', () => {
+  const body = '{"model":12,"a":"model 12"}';
+  assert.equal(result([{ replace: 'model', with: 'M' }, { replace: '12', with: 'N' }], body), '{"model":12,"a":"M N"}');
+});
+
+test('a text replace reads the decoded value, so an escaped spelling hits and a string it missed keeps its escapes', () => {
+  assert.equal(result({ replace: '中', with: 'x' }, '{"a":"\\u4e2d文","b":"\\u0041"}'), '{"a":"x文","b":"\\u0041"}');
+  assert.equal(result({ replace: 'nALPHA', with: 'x' }, '{"a":"\\nALPHA"}'), '{"a":"\\nALPHA"}');
+});
+
+test('a body replace works on the text as it stands', () => {
+  assert.equal(result({ replace: '"model":12', with: '"model":13', in: 'body' }, '{"model":12}'), '{"model":13}');
+});
+
+test('a body that is not JSON is replaced as text', () => {
+  for (const body of ['ALPHA', 'x ALPHA y', '{broken ALPHA']) assert.equal(result({ replace: 'ALPHA', with: 'β' }, body), body.replace('ALPHA', 'β'));
+});
+
+test('with expands groups unless the rule says literal', () => {
+  const cases = [
+    [{ replace: '(a)(?<n>b)', with: '[$1|$2|$&|$$|$<n>]' }, 'ab', '[a|b|ab|$|b]'],
+    [{ replace: '(a)', with: '$2' }, 'a', '$2'],
+    [{ replace: '(a)|(b)', with: '<$2>' }, 'a', '<>'],
+    [{ replace: 'a.c', with: '$&', literal: true }, 'abc a.c', 'abc $&'],
+  ];
+  for (const [action, text, want] of cases) assert.equal(parsed(action, JSON.stringify({ t: text })).t, want);
+});
+
+test('an event replace touches the one data line, and a body replace may touch the rest', () => {
+  const event = 'event: ALPHA\ndata: {"t":"ALPHA"}\n\n';
+  assert.equal(result({ replace: 'ALPHA', with: 'β' }, event, { on: 'response', sse: true }), 'event: ALPHA\ndata: {"t":"β"}\n\n');
+  assert.equal(result({ replace: 'ALPHA', with: 'β', in: 'body' }, event, { on: 'response', sse: true }), 'event: β\ndata: {"t":"β"}\n\n');
+  assert.equal(result({ replace: 'DONE', with: 'x' }, 'data: [DONE]\r\n\r\n', { on: 'response', sse: true }), 'data: [x]\r\n\r\n');
+});
+
+test('a header action changes the headers only, and keeps the spelling already there', () => {
+  const headers = () => [['X-Trace', 'a'], ['Accept', 'b'], ['x-trace', 'c']];
+  const set = run({ header: 'x-TRACE', set: 'z' }, 'body', { headers: headers() });
+  assert.deepEqual(set.headers, [['X-Trace', 'z'], ['Accept', 'b'], ['x-trace', 'c']]);
+  assert.deepEqual(set.steps, []);
+  assert.deepEqual(run({ header: 'X-New', set: 'z' }, 'b', { headers: headers() }).headers.at(-1), ['X-New', 'z']);
+  assert.deepEqual(run({ header: 'X-TRACE', remove: true }, 'b', { headers: headers() }).headers, [['Accept', 'b']]);
+  assert.equal(run({ header: 'X-New', set: 'z' }, Buffer.from([0xff])).headers.length, 1, 'a header action does not read the body');
+});
+
+test('a header the check refuses is a rule error at run time', () => {
+  for (const action of [{ header: 'Content-Length', set: '1' }, { header: 'X', set: 'a\r\nb' }, { header: 'bad name', set: 'a' }, { header: 'X', set: 'a'.repeat(9000) }, { header: 'Connection', remove: true }]) {
+    fails('rule-error', () => run(action, 'b'));
+  }
+});
+
+test('a pattern that does not compile is a rule error', () => {
+  fails('rule-error', () => run({ replace: '(', with: 'x' }, '{"a":"b"}'));
+  fails('rule-error', () => judged({ path: { re: '(' } }));
+  fails('rule-error', () => judged({ body: { re: '\\p' } }, 'x'), 'the u flag is on');
+});
+
 test('the body literal: byte hits, decoded hits, and what only looks like a hit', () => {
   const cases = [
     ['<system-reminder>', '{"a":"\\u003csystem-reminder\\u003e"}', true],
