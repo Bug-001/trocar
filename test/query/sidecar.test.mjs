@@ -9,7 +9,8 @@ import path from 'node:path'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
-import { saveIndexes, extendSession } from '../../src/query/named/session.mjs'
+import { saveIndexes, extendSession, sessionState } from '../../src/query/named/session.mjs'
+import { dumpColumns, loadColumns } from '../../src/query/session-doc.mjs'
 import { openProjection, projectionFile, gcProjections, sessionDir } from '../../src/query/projection.mjs'
 import { openFoldLog, foldLogFile } from '../../src/query/fold-log.mjs'
 import { loadSidecar, saveSidecar, FIRST_CHUNK, lineFile } from '../../src/query/line-file.mjs'
@@ -275,4 +276,30 @@ test('4.3 §4 旁索引: a sidecar loads back every part it was saved with, str 
     assert.deepEqual([...got.parts.f], [...parts[1][1]], `n=${n}: the f64 part`)
     assert.deepEqual(got.parts.t, ['only'])
   }
+})
+
+test('4.3 #55: analysis answers the same documents over the sidecar\'s columns and over columns synced from the fold log', async () => {
+  const { home, id } = await written('http', ARRIVALS[3])
+  saveIndexes()
+  const file = path.join(tmpDir('trocar-side-p-'), 'pricing.json')
+  fs.writeFileSync(file, JSON.stringify({ claude: [3, 15, 4, 0.5] }))
+  const docs = async (h) => {
+    const ctx = { env: { TROCAR_PRICING: file } }
+    return { doc: await q('analysis', h, { id }, ctx), win: await q('analysis', h, { id, from: 'not-a-step' }, ctx) }
+  }
+  const kept = await docs(copy(home)), scanned = await docs(copy(home, false))
+  assert.deepEqual(kept, scanned)
+  const { counted, uncomputable } = kept.doc.totals.breakCost
+  assert.ok(counted + uncomputable > 0, 'the session has breaks')
+})
+
+test('4.3 #55: s.rf reads back equal; one that is missing, of another type, short or past the rows loads no columns', async () => {
+  const { home, id } = await written('http', ARRIVALS[0])
+  const { cols } = (await sessionState({ home, fs, writer: true }, id)).V
+  const parts = Object.fromEntries(dumpColumns(cols)), rf = parts['s.rf'], { rows } = cols
+  assert.ok(rf.some((v) => v >= 0), 'a step names its comparison step')
+  assert.deepEqual(loadColumns(rows, parts).rf, rf)
+  const { 's.rf': _rf, ...missing } = parts, past = rf.slice()
+  past[0] = rows.size
+  for (const bad of [missing, { ...parts, 's.rf': Uint8Array.from(rf) }, { ...parts, 's.rf': rf.slice(1) }, { ...parts, 's.rf': past }]) assert.equal(loadColumns(rows, bad), null)
 })

@@ -2,14 +2,14 @@
 //
 // A session's cost and totals, summed over the whole session up to its mark, or with --from, --to or --since one window of what each
 // step cost. Money is worked out per answer from the current price table and goes into no answer file (prices are not captured truth,
-// D14), so this reads the session's columns, and a row's line only for a cache break. Sums run in step order: the same columns and
+// D14), so this reads the session's columns and no row of its fold log. Sums run in step order: the same columns and
 // prices give the same bytes. The default document stays the same size however long the session is; what grows with it is in windows.
 // In the worker it is summed at most every ANALYSIS_EVERY_MS while the session moves; its `mark` says how old the sums are.
 import { QueryArgError } from './index.mjs';
 import { markOn, sayUnknown, sessionState, sinceAt, version as sessionVersion } from './session.mjs';
 import { priceTable, pricingId } from './pricing.mjs';
-import { CA, FLAG, modelAt, stateAt, usageAt, wireRow } from '../session-doc.mjs';
-import { BREAK_STATES, breakUsd, bucketOf, costOf, priceMatch } from '../../view/metrics.mjs';
+import { CA, FLAG, modelAt, refAt, stateAt, usageAt } from '../session-doc.mjs';
+import { BREAK_STATES, breakUsd, bucketOf, costOf, missedOf, priceMatch } from '../../view/metrics.mjs';
 
 export const about = Object.freeze({
   summary: "One session's estimated cost and totals: per bucket, the main lane's cache hit and break cost, and failures. While the answer has pending, the totals are the sums so far: wait until it is gone before using them. With --from, --to or --since, one page of each step's price and the breaks instead of the totals.",
@@ -37,12 +37,12 @@ const added = (list) => list.reduce((a, b) => ({ usd: a.usd + b.usd, priced: a.p
 
 // The one rule for what a step costs, for the totals and the windows: step(rid) → the step's facts, its `usd` (microdollars or null)
 // and its `brk`, the break on the main lane or null. `prices`: every model asked of it so far → its match.
-function pricer({ cols, log, lanes }, table) {
+function pricer({ cols, lanes }, table) {
   const kinds = new Map(lanes.map((l) => [cols.keys.get(l.lane), l.kind])), prices = new Map();
   const priceOf = (m) => { if (!prices.has(m)) prices.set(m, priceMatch(table, m)); return prices.get(m); };
-  // a break's line says its comparison step, the one thing the columns do not hold
+  // what a break missed, as the row's `cache` says it (cacheFacts): the step's usage against its comparison step's
   const breakOf = (rid, k) => {
-    const { missed, why } = wireRow(cols, log.read(...log.latest(rid)).r).cache, p = priceOf(modelAt(cols, k));
+    const ref = refAt(cols, k), { missed, why } = missedOf(usageAt(cols, k), ref.usage, ref.has), p = priceOf(modelAt(cols, k));
     if (why) return { rid, usd: null, why };
     return p ? { rid, usd: breakUsd(usageAt(cols, k), missed, p.row), why: null } : { rid, usd: null, why: 'no-price' };
   };
