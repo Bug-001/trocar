@@ -651,6 +651,7 @@ trocar rules enable|disable|rm <name>... [--json]
 trocar rules off [--json]     # stops every rule, from any terminal
 trocar rules max-delay [<ms>] [--json]
 trocar rules test <name> [--ref <record>]... [--last <n>] [--with-live] [--as-sent] [--run-script] [--json]
+trocar help rules             # the manual: every field, condition and action, with examples
 
 # maintenance
 trocar update [--yes] [--dry-run] [--json]   # the newest code, and the machine as it was (D67)

@@ -14,10 +14,12 @@
 //     hidden      not in help or the README: `place`, which only the install scripts and `trocar update` run (§2).
 //     run         gets the argv after the name and the context of runCli: { io, env, home, platform, uid, args: { positionals, flags }, deps }.
 //   helpText    the help, made from the table: the four sections, or one command when named.
+import { createRequire } from 'node:module'
 import { optionsOf } from './args.mjs'
 import { wrap, WIDTH } from './text.mjs'
 
 export const GROUPS = Object.freeze(['Capture', 'Data', 'Intervene', 'Maintenance'])
+const require = createRequire(import.meta.url) // help is synchronous, and a manual is only read when asked for
 const via = (file, fn) => async (argv, c) => (await import(file))[fn](argv, c)
 const HARNESS = '[<harness>...]'
 const JSON_OPT = ['--json', 'print one JSON document instead of text, and nothing on stderr']
@@ -97,6 +99,7 @@ export const COMMANDS = Object.freeze([
       ['--ref <record>', 'with test: try it on this record; give it again for more', { repeat: true }], ['--last <n>', 'with test: try it on the newest n records its conditions pass, at most 500; the default is 20'],
       ['--with-live', 'with test: stack it on the live rules, in file order'], ['--as-sent', 'with test: show request rules the bytes that went out, not what the agent sent'],
       ['--run-script', 'with test: run scripts too; a script can fetch, so it may have side effects'], JSON_OPT],
+    details: () => require('./rules-manual.mjs').rulesManual(),
     exits: [[0, 'done, shown, or tested, however many records it changed'], [1, 'it could not be done, the collector did not answer `rules off`, or `rules test` could test nothing or failed on a record; it says what is still true'], [2, 'nothing ran: a usage error, a rule that is not valid, an unknown rule, or root']] },
 
   { name: 'update',
