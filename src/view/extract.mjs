@@ -150,14 +150,15 @@ const WIRE_RULES = {
 export function replyBlocks(rec, { d, format }) {
   const parts = format === 'anthropic' ? replyPartsAnthropic(rec) : d && d.replyParts ? d.replyParts(rec) : [];
   const rules = WIRE_RULES[format === 'anthropic' ? 'anthropic' : 'openai'], base = rawRefOf(rec);
-  const out = [];
+  const out = [], texts = new Map(); // a parsed JSON reply's text is written out per read: once per field, not per block
+  const textOf = (field) => { if (!texts.has(field)) texts.set(field, fieldTextOf(rec, field).text ?? null); return texts.get(field); };
   for (const p of parts) {
     const bl = p.block;
     if (!bl || typeof bl !== 'object') continue;
     const tool = /(^|_)tool_use$/.test(bl.type);
     const b = { sec: 'messages', kind: bl.type, role: 'assistant', block: bl, toolName: tool ? bl.name || '' : '', cc: bl.cache_control || null,
       resKey: rules.resourceRef(bl) || '', faithfulness: rules.faith(bl), events: p.events };
-    const text = p.field ? fieldTextOf(rec, p.field).text ?? null : null;
+    const text = p.field ? textOf(p.field) : null;
     const at = p.span ? locate(base, text, p.span, p.field) : { ref: null, exact: null, why: p.why || null };
     out.push({ b, ...at, unit: p.unit ?? 0 });
   }
@@ -764,8 +765,7 @@ export function respRefsOf(rec) {
       : { label, ref: null, chars: f.text.length, why: 'the record carries no id or stream to address' };
   };
   if (part.kind === 'ws' && Array.isArray(part.messages)) return part.messages.map((_, j) => one(`message ${j + 1}${cut}`, `resp.messages.${j}`));
-  if (typeof part.raw === 'string') return [one((part.kind === 'sse' ? 'stream' : 'body') + cut, 'resp.raw')];
-  if (part.body !== undefined) return [{ label: 'body', ref: null, chars: null, why: 'a JSON reply that re-serializes to itself, or one captured before D40, is stored parsed only, so it has no byte-verbatim text to point at (gate G16)' }];
+  if (fieldTextOf(rec, 'resp.raw').text != null) return [one((part.kind === 'sse' ? 'stream' : 'body') + cut, 'resp.raw')];
   if (typeof part.raw_b64 === 'string') {
     return [{ label: 'body', ref: null, chars: null, why: part.encoding_error ? `could not be decoded (${part.encoding_error}); kept as base64 in the record` : 'not UTF-8 text; kept as base64 in the record' }];
   }

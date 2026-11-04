@@ -43,7 +43,6 @@ export function storedReply(rec) {
 // why a stored reply has no streamed text to point into (the reasons respRefsOf gives for the same envelope states)
 export function noSpanWhy(r, part) {
   if (!r) return 'no response is recorded for this call';
-  if (part.body !== undefined) return 'a JSON reply is not streamed: its blocks are read from the parsed body, which has no span per block';
   if (typeof part.raw_b64 === 'string') return part.encoding_error ? `could not be decoded (${part.encoding_error}); kept as base64 in the record` : 'not UTF-8 text; kept as base64 in the record';
   if (part.kind === 'empty') return 'the reply had no body';
   if (typeof part.raw === 'string') return 'the reply is not an event stream';
@@ -70,9 +69,9 @@ export const partsOfUnit = (blocks, field, span, why, events) => blocks.map((b) 
 //   build(key, evts, all, part) → that key's blocks (cross-provider vocabulary), or a string saying why it has none, or
 //     { evt, nodes: [{block, path}] }: `evt`, one of `all`, holds the blocks whole as JSON nodes of its data, each at `path`;
 //     when that data is not one JSON value on one `data:` line, the blocks fall back to the key's event range
-//   jsonBlocks(body) → the blocks of a non-streamed JSON reply
+//   jsonNodes(body) → the blocks of a non-streamed JSON reply as [{block, path}], each at `path` of the body (RFC 3.1 普通 JSON 回复)
 // The events are read from resp.raw; a stream stored without its text (base64) is read from raw_sse, without spans.
-export function streamParts(rec, { keysOf, build, jsonBlocks }) {
+export function streamParts(rec, { keysOf, build, jsonNodes }) {
   const { r, part } = storedReply(rec);
   const f = r ? fieldTextOf(rec, 'resp.raw') : { missing: true };
   const isSse = part && part.kind === 'sse';
@@ -81,8 +80,9 @@ export function streamParts(rec, { keysOf, build, jsonBlocks }) {
   else if (isSse && Array.isArray(part.raw_sse)) events = part.raw_sse.map((evt) => ({ evt }));
   const why = noSpanWhy(r, part || {});
   if (!events) {
-    const blocks = part && part.body && typeof part.body === 'object' ? jsonBlocks(part.body) : [];
-    return blocks.length ? blocks.map((b) => replyPart(b, null, null, why)) : [replyPart(null, null, null, why)];
+    const nodes = part && part.body && typeof part.body === 'object' ? jsonNodes(part.body) : [];
+    if (!nodes.length) return [replyPart(null, null, null, why)];
+    return f.text != null ? nodeParts(nodes, scanned(f.text), 'resp.raw', 0) : nodes.map(({ block }) => replyPart(block, null, null, why));
   }
   const field = f.text != null ? 'resp.raw' : null;
   const groups = new Map(); // key → event positions, in first-appearance order

@@ -31,12 +31,17 @@ test('an error envelope lists what arrived before the failure', async () => {
 const jsonRec = { id: 'j1', ts_request: '2026-10-06T00:00:00Z', endpoint: '/v1/messages', host: 'api.anthropic.com', req_headers: { 'x-claude-code-session-id': 'S' },
   req_body: '{"model":"m","messages":[{"role":"user","content":"q"}]}', resp: { status: 200, kind: 'json', body: { content: [], usage: {} } } };
 
-test('a JSON reply is not byte-verbatim: no ref, and why (gate G16); no response at all says why too', async () => {
-  for (const rec of [jsonRec, { ...jsonRec, resp: { kind: 'error', status: null, error: { type: 'ECONNRESET' } } }]) {
-    const refs = await respRefs(rec, 'S');
-    assert.equal(refs.length, 1);
-    assert.ok(why(refs[0]));
-  }
+test('a JSON reply stored parsed ships one ref, and the block query reads it back as the written-out body (4.2 §回源指针)', async () => {
+  const home = homeWith([jsonRec]), { calls: [call] } = await query(home, 'session', { id: 'S' });
+  const { steps } = await query(home, 'lane', { id: 'S', lane: call.lane });
+  const { detail: { respRefs: [{ ref }] } } = steps.find((s) => s.rid === call.rid);
+  assert.equal((await query(home, 'block', { ref })).blocks[0].bytes, JSON.stringify(jsonRec.resp.body));
+});
+
+test('no response at all has no ref and says why', async () => {
+  const refs = await respRefs({ ...jsonRec, resp: { kind: 'error', status: null, error: { type: 'ECONNRESET' } } }, 'S');
+  assert.equal(refs.length, 1);
+  assert.ok(why(refs[0]));
 });
 
 test('a call whose request could not be parsed still lists its reply', async () => {

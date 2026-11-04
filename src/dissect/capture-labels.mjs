@@ -10,6 +10,7 @@
 // Envelope fields only, no wire knowledge, so the board and the ETL can both use it. Leaf module.
 import { requestEncodingOf, storedRequestBody } from './request-body.mjs';
 import { harnessOf } from './harnesses.mjs';
+import { reserializedReply } from './record-fields.mjs';
 const PARTIAL = {
   'early-response': 'never finished uploading: the upstream answered (e.g. 413 / 401) before it was fully sent',
   aborted: 'never finished uploading: the connection was aborted mid-body',
@@ -163,7 +164,7 @@ export function captureLabelsOf(rec) {
   if (keep) out.push({ id: `retention-${keep.retention}`, label: keep.label, text: keep.text });
   // 4.1 保真边界 ⑤: before D40 a JSON reply was stored as the parsed value, re-serialized on write — not the wire bytes. A record from D40 on
   // carries body_wire_bytes and keeps resp.raw whenever the two differ, so a parsed reply without either is the old kind (the shape alone says so)
-  if (r.kind === 'json' && r.body !== undefined && typeof r.raw !== 'string' && !rec.body_wire_bytes) out.push({ id: 'resp-json-reserialized', label: 'Re-serialized JSON, not the wire bytes',
+  if (reserializedReply(rec)) out.push({ id: 'resp-json-reserialized', label: 'Re-serialized JSON, not the wire bytes',
     text: 'the reply is stored as the parsed JSON and was written back out: whitespace, key order, integers past 2^53 and duplicated keys may differ from what was on the wire (this capture predates the verbatim reply text)' });
   return out;
 }

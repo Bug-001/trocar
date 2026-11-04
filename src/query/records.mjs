@@ -210,20 +210,24 @@ function sealedReader(file, fs) {
 }
 
 /**
- * readRecord({home, segment, lineNo, progress}) → the raw envelope of that record (decoded bodies, nothing else
- * derived; `_stream` says which file it is in), or null when the segment holds no such line. The segment index says where the record is, so
- * neither the segment nor its index is scanned for it. `progress` goes to that index read (a cold scan reports per chunk).
+ * recordReader({home, progress}) → read({segment, lineNo}) → the raw envelope of that record (decoded bodies, nothing else derived;
+ * `_stream` says which file it is in), or null when the segment holds no such line. The segment index says where the record is, so
+ * neither the segment nor its index is scanned for it; one reader reads each segment's index once, so a reader lives for one answer
+ * (2.3 #42). `progress` goes to that index read (a cold scan reports per chunk).
  */
-export async function readRecord({ home = trocarHome(), fs = nodeFs, segment, lineNo, progress = null } = {}) {
-  const { records } = await segmentIndex({ home, segment, fs, progress });
-  const row = records.find((r) => r.id === recordId(segment, lineNo));
-  if (!row) return null;
-  const file = segmentFile({ home, fs, segment });
-  const read = file.endsWith('.sealed') ? sealedReader(file, fs) : plainReader(file, fs);
-  try {
-    const at = { ...row, lineNo };
-    return stamped(expandRequestBody(JSON.parse(read(at))), read.stream ? read.stream(at) : path.basename(file));
-  } finally { read.close(); }
+export function recordReader({ home = trocarHome(), fs = nodeFs, progress = null } = {}) {
+  const rows = new Map(); // segment → record id → its index row
+  return async ({ segment, lineNo }) => {
+    if (!rows.has(segment)) rows.set(segment, new Map((await segmentIndex({ home, segment, fs, progress })).records.map((r) => [r.id, r])));
+    const row = rows.get(segment).get(recordId(segment, lineNo));
+    if (!row) return null;
+    const file = segmentFile({ home, fs, segment });
+    const read = file.endsWith('.sealed') ? sealedReader(file, fs) : plainReader(file, fs);
+    try {
+      const at = { ...row, lineNo };
+      return stamped(expandRequestBody(JSON.parse(read(at))), read.stream ? read.stream(at) : path.basename(file));
+    } finally { read.close(); }
+  };
 }
 
 /** The file a segment's bytes are in (segmentSource: the plaintext while it exists, 4.2:30 明文为准), or throws

@@ -103,7 +103,7 @@ const ANTHROPIC_REPLY = {
     if (json.length) out.input = parsedInput(json.map((d) => d.partial_json || '').join(''))
     return [out]
   },
-  jsonBlocks: (body) => (Array.isArray(body.content) ? body.content : []),
+  jsonNodes: (body) => (Array.isArray(body.content) ? body.content : []).map((block, i) => ({ block, path: ['content', i] })),
 }
 export const replyPartsAnthropic = (rec) => streamParts(rec, ANTHROPIC_REPLY)
 

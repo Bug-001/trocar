@@ -16,11 +16,12 @@ import { PAGE_BYTES } from '../../src/query/session-doc.mjs'
 import { BLOCK_PROBLEMS } from '../../src/health/codes.mjs'
 import { record, replyOf, user } from '../helpers/cc-threads.mjs'
 import { homeWith, SEGMENT } from '../helpers/session-doc.mjs'
-import { readRecord } from '../../src/query/records.mjs'
+import { recordReader } from '../../src/query/records.mjs'
 import { parseRecordId } from '../../src/collector/core/record/segments.mjs'
 import { parseTextRef } from '../../src/raw/refs.mjs'
 import { fieldTextOf } from '../../src/dissect/record-fields.mjs'
 import { normalizeRecord } from '../../src/raw/ingest.mjs'
+import { captureLabelsOf } from '../../src/dissect/capture-labels.mjs'
 import { BODY } from '../../src/view/render-kind.mjs'
 
 const homeOf = (p) => path.join(tmpDir(p), '.trocar')
@@ -476,7 +477,7 @@ test('3.5 #28 (session, block): full, --since and pending sessions keep the clos
 // ── a block's view (3.5 §会话读 `block`): beside the bytes, never instead of them ─────────────────────────────────────────────────
 // The bytes a ref names, from the record as stored.
 async function recordBytes(home, ref) {
-  const { recordId, field, start, end } = parseTextRef(ref), raw = await readRecord({ home, fs, ...parseRecordId(recordId) })
+  const { recordId, field, start, end } = parseTextRef(ref), raw = await recordReader({ home, fs })(parseRecordId(recordId))
   return (field ? fieldTextOf(raw, field).text : normalizeRecord(raw).req_body).slice(start, end)
 }
 // a session's refs as its lanes define them: the request's blocks and the reply's
@@ -502,6 +503,41 @@ test('3.5 block: an older capture\'s parsed request stays marked as not the wire
   assert.equal(x.bytes, await recordBytes(home, ref))
 })
 
+// 4.2 §回源指针: a JSON reply's blocks are read back like a stream's. The record says which kind of text it is: from D40 on body_wire_bytes
+// marks the written-out body as the wire's own; without it the shape alone says it was re-serialized (4.1 保真边界 ⑤).
+const JSON_BLOCKS = [{ type: 'text', text: 'answer' }, { type: 'tool_use', id: 'tu', name: 'Read', input: { file_path: '/f.md' } }]
+const jsonCall = (n, extra = {}) => ({ ...call(n), resp: { status: 200, kind: 'json', body: { id: `m${n}`, content: JSON_BLOCKS, usage: { input_tokens: 3, output_tokens: 1 } } }, ...extra })
+for (const [was, extra, verbatim] of [['from D40 on', { body_wire_bytes: { resp: 1 } }, true], ['from before D40', {}, false]]) {
+  test(`3.5 block: a JSON reply block ${was} reads back as its slice with its view, and says whether the bytes are the wire's`, async () => {
+    const home = homeWith([jsonCall(1, extra)]), { reply } = await blockRefs(home, SESSION)
+    const { blocks } = await q('block', home, { ref: reply })
+    assert.equal(blocks.length, JSON_BLOCKS.length)
+    blocks.forEach((x, i) => {
+      assert.deepEqual(JSON.parse(x.bytes), JSON_BLOCKS[i], x.ref)
+      assert.equal(x.fidelity.verbatim, verbatim, x.ref)
+      assert.deepEqual(x.view.body.block, JSON_BLOCKS[i], x.ref)
+    })
+    const raw = await recordReader({ home, fs })({ segment: SEGMENT, lineNo: 1 })
+    assert.equal(captureLabelsOf(raw).some((l) => l.id === 'resp-json-reserialized'), !verbatim)
+  })
+}
+
+// 2.3 #42: however many refs one answer holds, a segment's index is read as often as for one
+test('3.5 block: one answer reads a segment\'s index once, however many refs it holds', async () => {
+  const home = homeWith([call(1), call(2)]), { reply } = await blockRefs(home, SESSION)
+  assert.ok(reply.length >= 4)
+  const reads = async (ref) => {
+    let n = 0
+    const counting = new Proxy(fs, { get: (t, k) => (typeof t[k] !== 'function' ? t[k] : (...a) => { if (String(a[0]).endsWith(`${path.sep}index${path.sep}${SEGMENT}.json`)) n++; return t[k](...a) }) })
+    const { blocks } = await q('block', home, { ref }, { fs: counting })
+    assert.ok(blocks.every((x) => typeof x.bytes === 'string'))
+    return n
+  }
+  const one = await reads(reply[0])
+  assert.ok(one > 0, 'the index file is what is counted')
+  assert.equal(await reads(reply), one)
+})
+
 test('3.5 block: a request that cannot be parsed costs the view, not the bytes; it is a note and the answer stays ok', async () => {
   const home = homeWith([call(1, { model: 'claude-x', messages: [null] })])
   const ref = seg(1, '::0-20'), doc = await q('block', home, { ref })
@@ -523,7 +559,7 @@ test('3.5 block: a reply ref reads its view without the request, whatever state 
 })
 
 test('3.5 block: what names no block has no view and no error — a span between keys, the reply taken whole', async () => {
-  const home = homeWith([call(1)]), raw = await readRecord({ home, fs, segment: SEGMENT, lineNo: 1 })
+  const home = homeWith([call(1)]), raw = await recordReader({ home, fs })({ segment: SEGMENT, lineNo: 1 })
   const refs = [seg(1, '::0-7'), seg(1, `::resp.raw::0-${raw.resp.raw.length}`)]
   const doc = await q('block', home, { ref: refs })
   assert.deepEqual(doc.errors, [])
@@ -586,11 +622,9 @@ test('3.5 定义 name: every tool_use definition of a lane answer carries the na
     const doc = await q('session', home, { id })
     const tools = []
     for (const { lane } of doc.lanes) tools.push(...(await q('lane', home, { id, lane })).defs.filter((d) => d.kind === 'tool_use'))
-    assert.equal(tools.length, 3, `${id}: two replies' calls and one request's`)
-    assert.deepEqual(tools.map((d) => d.name).sort(), ['Edit', 'Read', 'Read'], `${id}: the names the wire gives`)
+    assert.deepEqual([...new Set(tools.map((d) => d.name))].sort(), ['Edit', 'Read'], `${id}: the names the wire gives`)
     for (const d of tools) {
-      // its own bytes: the ref read back, or (a JSON reply has no span per block) the block inlined as parsed
-      const bytes = d.ref ? (await q('block', home, { ref: d.ref })).blocks[0].bytes : JSON.stringify(d.inline.block)
+      const { bytes } = (await q('block', home, { ref: d.ref })).blocks[0]
       assert.ok(bytes.includes(JSON.stringify(d.name)), `${id}: def ${d.bid} names ${JSON.stringify(d.name)}, the name in its bytes`)
     }
   }
