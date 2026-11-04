@@ -95,7 +95,7 @@ there. Then:
 trocar on                       # start capture
 ```
 
-For developers, from npm (Node ≥ 22). The package is `trocar-cli`; the command it installs is `trocar`.
+For developers, from npm (Node ≥ 22.13). The package is `trocar-cli`; the command it installs is `trocar`.
 
 ```sh
 npm i -g trocar-cli
@@ -131,7 +131,7 @@ makes trocar try decrypting it now; otherwise trocar tries again by itself later
 `trocar install` from another copy of trocar restarts the collector on that copy's code: the agents being captured
 stay captured, and connections open at that moment are cut and retried by the agent.
 
-From source (Node ≥ 22): there is no global `trocar` on your PATH, so run it through the repo.
+From source (Node ≥ 22.13): there is no global `trocar` on your PATH, so run it through the repo.
 
 ```sh
 git clone https://github.com/Bug-001/trocar && cd trocar && npm install --omit=dev

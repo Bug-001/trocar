@@ -4,7 +4,7 @@ Thanks for helping. This file says how the project works so a change can land wi
 
 ## Setup
 
-You need Node 22 or newer.
+You need Node 22.13 or newer.
 
 ```sh
 git clone https://github.com/Bug-001/trocar.git
