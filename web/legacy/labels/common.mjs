@@ -29,20 +29,20 @@ export const MARK_TIP = Object.freeze({
 // `s` = the health object; `W` words a timestamp. Sentence case here, the one source of these words (1.5 §审美维度 9): no screen
 // re-cases them. No subject: a caller that shows it somewhere unnamed prefixes it itself.
 export const HEALTH_WORDS = Object.freeze({
-  ok: (s, W) => `✓ Capturing · since ${W(s.since)}`,
-  failing: (s, W, items) => `! Capture has problems${items && items.length ? `: ${items.join('; ')}` : s.n != null ? `: ${s.n}` : ''}`,
-  off: (s, W) => `○ Off · since ${W(s.since)}`,
-  'not-running': (s, W) => `✗ Stopped · last record ${W(s.since)}${s.signal ? ` · by ${s.signal}` : ''}`,
-  'not-responding': (s, W) => `✗ Not responding · last heartbeat ${W(s.since)}`,
-  unknown: (s) => `? Unknown${s.reason ? `: ${s.reason}` : ''}`,
-  residue: (s) => `– Not installed · ${s.n != null ? `${s.n} changes` : 'changes'} left behind`,
-  'not-installed': () => '– Not installed',
+  ok: (s, W) => `Capturing · since ${W(s.since)}`,
+  failing: (s, W, items) => `Capture has problems${items && items.length ? `: ${items.join('; ')}` : s.n != null ? `: ${s.n}` : ''}`,
+  off: (s, W) => `Off · since ${W(s.since)}`,
+  'not-running': (s, W) => `Stopped · last record ${W(s.since)}${s.signal ? ` · by ${s.signal}` : ''}`,
+  'not-responding': (s, W) => `Not responding · last heartbeat ${W(s.since)}`,
+  unknown: (s) => `Unknown${s.reason ? `: ${s.reason}` : ''}`,
+  residue: (s) => `Not installed · ${s.n != null ? `${s.n} changes` : 'changes'} left behind`,
+  'not-installed': () => 'Not installed',
 })
 export const HEALTH_READ = Object.freeze({
-  unrecognized: (state) => `? Unknown capture health (${state})`,
-  unreadable: '? Capture health could not be read',
-  stale: (at) => `? Not refreshed · as of ${at}`,
-  loading: '? Reading',
+  unrecognized: (state) => `Unknown capture health (${state})`,
+  unreadable: 'Capture health could not be read',
+  stale: (at) => `Not refreshed · as of ${at}`,
+  loading: 'Reading',
   partial: ' · partly unreadable',
   agents: (n) => `${n} agent${n === 1 ? ' is' : 's are'} not fully captured`,
   others: (n) => `${n} other problem${n === 1 ? '' : 's'} open`,
@@ -57,3 +57,6 @@ export const READ_FAIL = (what, status) => `${what} could not be read${status ==
 export const READING = 'Reading…' // the content area while a screen module loads (web/src/LegacyScreen.tsx)
 export const WINDOW_LABEL = Object.freeze({ '24h': '24 hours', '7d': '7 days', all: 'All' })
 export const UNTITLED = 'Untitled session'
+// a title the answer does not know yet (title_source 'pending', 1.8 §标题规则): not the same as no title
+export const TITLE_PENDING = 'Title not read yet'
+export const TITLE_PENDING_TIP = 'The title is still being read from the captured requests; it shows on the next refresh'

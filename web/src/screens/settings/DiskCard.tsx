@@ -38,7 +38,7 @@ export function DiskCard({ disk, onRetry }: { disk: DiskModel, onRetry: () => vo
           <TechDetails pairs={techOf(disk.segFail.pairs)} copy={flatText(disk.segFail.pairs)} /></>
         : disk.bad > 0
           ? <p className="dline bad"><a className="jumpfiles" href="#" onClick={(e) => { e.preventDefault(); setOpen(true); setJumps((n) => n + 1) }}>
-            {`${W.BAD_FILES(disk.bad)} · ${W.BAD_FILES_SHOW} ▸`}</a></p>
+            {`${W.BAD_FILES(disk.bad)} · ${W.BAD_FILES_SHOW} ›`}</a></p>
           : null}
       {disk.slow ? <p className="cap" data-note="slow">{W.SLOW_NOTE}</p> : null}
       <p className="dline"><a href={W.CAPTURE_PAGE_HREF}>{W.CAPTURE_PAGE_LINE} ›</a></p>

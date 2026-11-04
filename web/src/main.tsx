@@ -23,7 +23,6 @@ import { LegacyScreen, type Route } from './LegacyScreen'
 import { ScreenOutlet, ScreenBoundary, lazyScreen, type LazyScreen } from './ScreenOutlet'
 import type { DeskProps } from './screens/replay/DeskHost'
 import { Sidebar } from './shell/Sidebar'
-import { ConfirmProvider } from './ui/Confirm'
 
 // the new replay desk (web/src/screens/replay/) is in the desk-next build only; the default build folds this to false and has none of it
 const DESK_NEXT = import.meta.env.MODE === 'desk-next'
@@ -133,9 +132,7 @@ const root = createRoot(document.getElementById('app')!)
 // no StrictMode: a legacy mount() is not idempotent
 root.render(
   <QueryClientProvider client={new QueryClient()}>
-    <ConfirmProvider>
-      <FacadeContext.Provider value={board.legacy}><RouterProvider router={board.router} /></FacadeContext.Provider>
-    </ConfirmProvider>
+    <FacadeContext.Provider value={board.legacy}><RouterProvider router={board.router} /></FacadeContext.Provider>
   </QueryClientProvider>,
 )
 

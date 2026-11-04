@@ -17,6 +17,7 @@ import { CONTROL_TOKEN_HEADER } from './off/token-header.mjs';
 import { LOCAL_ENV, QUERY_NAMES, paramsOf } from './query/client.mjs';
 import { HEAD_FILES, ctxKey } from './query/ctx-key.mjs';
 import { storedFile } from './query/stored.mjs';
+import { keep } from './query/service.mjs';
 
 // The one board (1.2 §托管与打开): the build in src/web/board/ (web/ through Vite, committed, D75③) is the static plane, served at `/`.
 // Named as new URL('./web/board/', import.meta.url) so test/ci/reachable.test.mjs follows it into the built board.
@@ -81,6 +82,9 @@ const jsonBody = (req) => new Promise((resolve) => {
 /** The answer files a session directory holds (4.4 §答案文件), by `f`: the closed set, so nothing outside ctx/<k>/ is ever named. */
 const D_FILE = /^\/api\/d\/(?:(head)|p(\d{1,6})\.(main|rest)|open\.(main|rest))$/;
 const NDJSON = 'application/x-ndjson';
+// a head relayed for a missing file whose answer left no file is sent as kept up to this size (the answer of an id with no session
+// is a few hundred bytes); a longer one is relayed again rather than held in this process's memory (4.4 §答案文件「文件不在」)
+const KEPT_MAX = 64 * 1024;
 const TIP_IDS = 64, TIP_KEYS = 256; // per session the newest model calls; the sessions remembered, least recently tipped dropped first
 
 /** The board's tip table (4.4 §答案文件 `x-trocar-tip`): `add(pairs)` takes the index keeper's [session_key, id] of each pass,
@@ -128,8 +132,10 @@ export function createServer({ home, token, query, tips, uid = process.getuid?.(
     };
 
   /** ⑤ GET /api/d/<f>?id= (4.4 §答案文件). One open, fstat, read and close: the bytes and the tag are of one file even while the worker
-   *  renames a new one in. A file that is not there (or a reader that takes no gzip of a gzip file) is the equivalent named query. */
-  function answerFile(req, res, url) {
+   *  renames a new one in. A file that is not there (or a reader that takes no gzip of a gzip file) is the equivalent named query, untagged.
+   *  The head's: the worker writes the head file as it answers, and that file is answered as above, so this first read carries the
+   *  file's tag and the next poll of the same state is a 304; the answer it then left no file for (no such session) is `kept`'s. */
+  function answerFile(req, res, url, kept = null) {
     const m = D_FILE.exec(url.pathname);
     if (!m) return sendJson(res, 404, { error: 'unknown endpoint' });
     if (req.method !== 'GET') return sendJson(res, 405, { error: 'method not allowed — the board is read-only' });
@@ -139,8 +145,8 @@ export function createServer({ home, token, query, tips, uid = process.getuid?.(
     const tip = tips && tips(id);
     if (tip) res.setHeader('x-trocar-tip', tip);
     const gzip = /\bgzip\b/.test(req.headers['accept-encoding'] || '');
-    const relay = () => query.relay(head ? { name: 'session', params: { id, head: '' }, res, gzip }
-      : { name: 'lane', params: n != null ? { id, pack: `${n}.${packPart}` } : { id, tail: tailPart }, res, gzip });
+    const relay = (to = res) => query.relay(head ? { name: 'session', params: { id, head: '' }, res: to, gzip: gzip && to === res, file: true }
+      : { name: 'lane', params: n != null ? { id, pack: `${n}.${packPart}` } : { id, tail: tailPart }, res: to, gzip, file: true });
     const stored = !tailPart; // head and packs are kept gzipped, the open tails plain
     if (stored && !gzip) return relay();
     const io = fs || nodeFs;
@@ -149,6 +155,12 @@ export function createServer({ home, token, query, tips, uid = process.getuid?.(
     const names = head ? [HEAD_FILES.rest, HEAD_FILES.folding] : [n != null ? `p${n}.${packPart}.ndjson.gz` : `open.${tailPart}.ndjson`];
     let fd, name;
     for (const f of names) { try { fd = io.openSync(path.join(dir, f), 'r'); name = f; break; } catch (e) { if (!(e && e.code === 'ENOENT')) throw e; } }
+    if (name == null && head && !kept) {
+      const k = keep(res, KEPT_MAX);
+      return relay(k).then(() => { if (!res.headersSent && !res.destroyed) return answerFile(req, res, url, k) });
+    }
+    const body = kept && kept.status ? kept.body() : null;
+    if (name == null && body) { res.writeHead(kept.status, kept.headers); return void res.end(body) }
     if (name == null) return relay();
     if (name === HEAD_FILES.folding) res.once('finish', () => query.follow?.(id));
     try {

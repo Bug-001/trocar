@@ -1,5 +1,6 @@
 // test/query/session-title.test.mjs — a session's title is its main lane's first prompt, taken from the captured request (RFC 4.4
-// §人类标题的来源): `sessions` reads it from the usage sidecar (4.2 §用量旁注 `ask`), so it is null until a sidecar covers a main call,
+// §人类标题的来源): `sessions` reads it from the usage sidecar (4.2 §用量旁注 `ask`), so until a sidecar covers a main call it is null
+// with title_source 'pending' (not known yet, never said as no title),
 // and the list's stamp follows the sidecar (4.4 §条件 GET); `session` says the same title from its own fold.
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -15,13 +16,13 @@ const SEG = '20261020T164737Z'
 const titles = (doc) => doc.sessions.map((m) => [m.session_id, m.title, m.title_source])
 
 for (const wire of ['http', 'chat', 'threads', 'ws']) {
-  test(`${wire}: no sidecar → no title; filled → the main lane's task, from the wire; the sessions stamp moved; session says the same`, async () => {
+  test(`${wire}: no sidecar → title pending; filled → the main lane's task, from the wire; the sessions stamp moved; session says the same`, async () => {
     const home = path.join(tmpDir('trocar-title-'), '.trocar')
     const s = bigSession({ home, wire, growth: 600, subEvery: 3, segment: SEG })
     s.append(9)
     await segmentIndex({ home, segment: SEG, owner: true })
     const ctx = { home, now: () => Date.parse('2026-10-21T00:00:00Z'), env: {} }
-    assert.deepEqual(titles(await runQuery('sessions', {}, ctx)), [[s.id, null, null]])
+    assert.deepEqual(titles(await runQuery('sessions', {}, ctx)), [[s.id, null, 'pending']])
     const stamp = stampOf('sessions', {}, ctx)
 
     // the query worker's `later`: the list schedules the fill the way `overview` does

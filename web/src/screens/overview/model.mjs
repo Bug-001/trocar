@@ -19,7 +19,7 @@ import { unpricedModels } from '../../../legacy/settings/prices.mjs'
 import { controlFor } from '../../../legacy/core/harness-switch.mjs'
 import { failureBrief, failureWord } from '../../../../src/cli/words.mjs'
 import * as W from '../../../legacy/labels/overview.mjs'
-import { WINDOW_LABEL, UNTITLED, READ_FAIL } from '../../../legacy/labels/common.mjs'
+import { WINDOW_LABEL, UNTITLED, READ_FAIL, TITLE_PENDING, TITLE_PENDING_TIP } from '../../../legacy/labels/common.mjs'
 
 const DAY = 24 * 3600e3
 
@@ -320,7 +320,6 @@ export function statsCard(s, now) {
   }
 }
 
-const TITLE_TIP = { 'harness-local-store': W.TITLE_FROM_AGENT, wire: TITLE_FROM_WIRE }
 export function recentCard(s, now) {
   const P = s.sessions
   if (P == null || P.data == null) return P && P.ok === false ? { kind: 'failed', fail: readFail('Session list', P.err) } : { kind: 'reading' }
@@ -330,9 +329,10 @@ export function recentCard(s, now) {
     kind: 'shown',
     rows: rows.map((r) => {
       const probe = r.calls === 0 && r.probes > 0
+      const pending = r.title == null && r.titleSource === 'pending' // not known yet, not "untitled" (1.8 §标题规则)
       return {
-        id: r.key, harness: r.harness, inferred: r.inferred, title: r.title != null ? r.title : UNTITLED,
-        titleTip: [r.title != null ? TITLE_TIP[r.titleSource] : null, r.id].filter(Boolean).join(' · '),
+        id: r.key, harness: r.harness, inferred: r.inferred, title: r.title ?? (pending ? TITLE_PENDING : UNTITLED), pending,
+        titleTip: [r.title != null ? TITLE_FROM_WIRE : pending ? TITLE_PENDING_TIP : null, r.id].filter(Boolean).join(' · '),
         calls: { text: probe ? W.PROBE_ONLY : W.CALLS_N(r.calls), tip: probe ? W.PROBE_ONLY_TIP : null }, when: when(r.last, now), href: r.href,
       }
     }),

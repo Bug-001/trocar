@@ -1,4 +1,4 @@
-// replay/jump.mjs — a jump that has to wait for its lane. The break navigation (◂ ▸), the drawer's 「第 N 步」 links and a resource card
+// replay/jump.mjs — a jump that has to wait for its lane. The problem pager (‹ ›), the drawer's 「第 N 步」 links and a resource card
 // all move the playhead and then scroll to something INSIDE that step's context window (the cache-break marker, a resource's block).
 // When the target step's lane is not held yet (3.5 §会话读: the `lane` read has not landed) its blocks are not on screen, so the element
 // they look for does not exist. The jump is kept (`pending`), run ONCE after the lane has landed and the window has repainted, and

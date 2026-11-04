@@ -55,9 +55,22 @@ const STDERR_HEAD = 4000, STDERR_TAIL = 1000 // V8 prints its FATAL ERROR line a
  *  and the rest of install. A worker killed while the dialog is open would leave no receipt and the carriers unplaced. */
 const CONTROL_DEADLINE_MS = 2 * OS_PROMPT_MS + DEADLINE_MS
 const NL = 0x0a
-/** Where the bytes of a document nobody waits for go: the warm-up query's answer, and the rest of a document whose
- *  caller disconnected (its frame MUST still be read to the end, or the next reply is read as part of it). */
-const SINK = { writeHead() {}, write() { return true }, end() {}, once() {} }
+/** A response no socket gets. `keep(res, max)`: one that keeps a document of at most `max` bytes for its caller to send
+ *  itself (4.4 §答案文件), with `res`'s close passed on, so a caller who leaves still lets the queue skip the job. SINK
+ *  (`keep()`): where the bytes of a document nobody waits for go: the warm-up query's answer, and the rest of a document
+ *  whose caller disconnected (its frame MUST still be read to the end, or the next reply is read as part of it). */
+export function keep(res = null, max = 0) {
+  const k = {
+    status: 0, headers: null, chunks: [], size: 0,
+    writeHead(status, headers) { k.status = status; k.headers = headers },
+    write(b) { k.size += b.length; if (k.chunks && k.size <= max) k.chunks.push(Buffer.from(b)); else k.chunks = null; return true },
+    end() {}, once(ev, f) { res?.once(ev, f) },
+    /** the kept document, or null when it was longer than `max` */
+    body: () => (k.chunks ? Buffer.concat(k.chunks) : null),
+  }
+  return k
+}
+const SINK = keep()
 const NO_WORKER = JSON.stringify({ error: 'no warm query worker in this daemon yet: it is being started, read this one locally' })
 
 /** The serving order of what waits (3.5 §服务队列): these names first, in this order; every other name (and a control verb) after them.
@@ -200,7 +213,7 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
         if (!pending) return // a frame nobody waits for (its request died): the worker is out of step
         pending.bytes = Number(len); pending.cpu = Number(cpu) || 0
         pending.res.writeHead(Number(status), { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'content-length': len,
-          ...(enc === 'gzip' ? { 'content-encoding': 'gzip', vary: 'accept-encoding' } : {}), ...(tag !== '-' ? { etag: `"${tag}"` } : {}) })
+          ...(enc === 'gzip' ? { 'content-encoding': 'gzip', vary: 'accept-encoding' } : {}), ...(tag !== '-' && !pending.file ? { etag: `"${tag}"` } : {}) })
         pending.headed = true
         left = Number(len)
         if (!left) { settle() ; continue }
@@ -258,13 +271,13 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
     statsTimer.unref?.()
   }
 
-  const run = (line, res, ms, name, subject) => new Promise((done, fail) => {
+  const run = (line, res, ms, name, subject, file = null) => new Promise((done, fail) => {
     // A subject inside its cool-down (an episode opened while this one was queued): answered with that failure, not forked into it.
     const ep = cooling(subject)
     if (ep) { fail(new Error(ep.reason)); return }
     const c = child || start()
     errHead = ''; errTail = '' // a crash's reason is THIS request's stderr: a long-lived worker's earlier noise filled the head
-    const p = { res, done, fail, quiet: false, line, ms, headed: false, name, subject, t0: now() }
+    const p = { res, done, fail, quiet: false, line, ms, headed: false, name, subject, file, t0: now() }
     arm(p)
     pending = p
     c.stdin.write(line)
@@ -329,7 +342,7 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
   const follow = (id) => tell({ follow: String(id) })
 
   /** Hand `line` to the worker (forked if there is none: run() starts it) and let its frame flow into `res`. */
-  const answer = (line, res, ms, name, subject) => {
+  const answer = (line, res, ms, name, subject, file = null) => {
     // A subject inside its cool-down is failed at once, not queued behind the worker (3.5 §读不全不静默).
     const ep = cooling(subject)
     if (ep) return Promise.reject(new Error(ep.reason))
@@ -340,7 +353,7 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
     // The handler answers `res` itself, so the server sends nothing: nothing of this document is held in this
     // process's memory as a JavaScript value. A request that failed does not hold the next one up, and its
     // rejection reaches the server, which answers 500.
-    const task = enqueue(name, () => run(line, res, ms, name, subject), () => gone)
+    const task = enqueue(name, () => run(line, res, ms, name, subject, file), () => gone)
     // Answered as soon as EITHER the document is through or the caller is gone; a failure is raised only while there
     // is someone to raise it to (writing a 500 into a closed socket is nobody's answer).
     task.then(() => finish(), (e) => (gone ? finish() : failRoute(e)))
@@ -372,8 +385,9 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
 
   /** The board's `GET /api/<name>` (4.4, D66): the same frame path, but the board has no local path to fall back to,
    *  so with no worker it forks one and waits its turn instead of the cold 503. The caller checked the name. `gzip`: the
-   *  reader takes gzip, so the worker compresses (the daemon never encodes a document, D63 ①). */
-  const relay = ({ name, params = {}, res, gzip = false, etag = null }) => answer(lineOf(name, params, 0, gzip, etag), res, deadlineMs, name, subjectOf(name, params))
+   *  reader takes gzip, so the worker compresses (the daemon never encodes a document, D63 ①). `file`: an answer file's relay
+   *  (4.4 §答案文件), sent with no ETag: the worker's version tag is not the file's tag. */
+  const relay = ({ name, params = {}, res, gzip = false, etag = null, file = null }) => answer(lineOf(name, params, 0, gzip, etag), res, deadlineMs, name, subjectOf(name, params), file)
 
   /** The board's `/control/<verb>` (4.4 §控制面): the same queue and frame path as `relay`, so a control verb waits its turn behind a query and the
    *  worker runs the CLI's own function (src/control/board.mjs). The caller checked the verb and parsed the small request body. */

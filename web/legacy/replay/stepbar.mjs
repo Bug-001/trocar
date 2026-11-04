@@ -1,10 +1,11 @@
 // replay/stepbar.mjs — the step head (2.2 §步头): the middle column's first row. 「‹ 第 N / M 步 › · 第 K 次提问 · 时间 · 模型 ·
-// ◐ · 对比 ▾ · 缓存 · 组成 · ≈ $」 and nothing else — the numbers and the verdicts live behind the three buttons' popovers
+// ◐ · 对比 (menu) · 缓存 · 组成 · ≈ $」 and nothing else — the numbers and the verdicts live behind the three buttons' popovers
 // , computed by core/metrics.mjs alone. The cost cell trio (costCellHtml / usageLineHtml / priceStateNote)
 // moved here from rawpanel.mjs: usage is shown in ONE place (the 缓存 button), the cost in ONE place (the ≈ $ button).
 //   stepBarHtml(s)  the row (popovers inline, hidden)      wireStepBar(el, s)  the actions
 import { esc, kf, usd, bytes, fmtTime } from '../core/fmt.mjs'
 import { popover, menuButton, mark } from '../core/ui.mjs'
+import { MENU_CHEV } from '../core/icons.mjs'
 import { cacheState, usageOf, breakCost, priceMatch, costOf } from '../core/metrics.mjs'
 import { segTax, TAX_ORDER, hasChangeLine, callFacts, refRowOf } from './analysis.mjs'
 import { stepRef } from './lanes.mjs'
@@ -132,7 +133,7 @@ export function compareMenuHtml({ sel = null, cacheRefK = null, cur = null, M = 
   const id = `cmp-${Math.random().toString(36).slice(2, 8)}`
   const def = cacheRefK != null && cur != null && cacheRefK !== cur - 1 ? W.compareDefaultAt(cacheRefK) : W.COMPARE_DEFAULT
   const label = sel ? `${esc(W.compareAt(sel).replace(' ×', ''))} <span class="cmpx" data-cmp-x="1" role="button" tabindex="0" aria-label="${esc(W.CMP_RESET)}" title="${esc(W.CMP_RESET)}" aria-hidden="true">×</span>` : esc(W.COMPARE)
-  return `<span class="sb-cmp"><button type="button" class="popbtn" data-menu="${id}" aria-haspopup="menu" aria-expanded="false" aria-controls="${id}">${label} <span class="chev" aria-hidden="true">▾</span></button>` +
+  return `<span class="sb-cmp"><button type="button" class="popbtn" data-menu="${id}" aria-haspopup="menu" aria-expanded="false" aria-controls="${id}">${label} <span class="chev" aria-hidden="true">${MENU_CHEV}</span></button>` +
     `<div class="pop menu" id="${id}" role="menu" hidden>` +
     `<button type="button" role="menuitem" data-cmp="default">${esc(def)}</button>` +
     `<button type="button" role="menuitem" data-cmp="pick">${esc(W.COMPARE_PICK)}</button>` +

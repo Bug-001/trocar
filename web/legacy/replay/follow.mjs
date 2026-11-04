@@ -29,7 +29,8 @@ export function packOrder(head, at, held = () => false) {
 }
 
 // ── a step's own reads (2.3 §读与画 快速拖动; 4.4 live-poll) ───────────────────────────────────────────────────────────
-// createStepReads({get, setTimer, clearTimer, need, onLane, onBodies, restMs, loader}) → {target(rid), prefetch(key), laneSlot(fn)}. Injected, no DOM.
+// createStepReads({get, setTimer, clearTimer, need, onLane, onBodies, restMs, loader}) → {target(rid), prefetch(key), laneSlot(fn),
+// pause(), resume()}. Injected, no DOM.
 //   · with a `loader` (loader.mjs) every read goes through it: a `block` read at pri 0, a `lane` read at pri 1
 //   · target(rid): the playhead's call. Once it has rested `restMs` with no newer target, need(rid) → {lane: {lane, from?, to?} |
 //     null, refs: string[]} says what that step still lacks; at most one `lane` and one `block` read are in flight at a time
@@ -41,28 +42,33 @@ export function packOrder(head, at, held = () => false) {
 //   · prefetch(key) reads lane `key` only when nothing is in flight and no target is resting
 //   · laneSlot(fn) runs the caller's own lane reads (the poll's) in the one `lane` slot: it waits for the step's lane read in
 //     flight, and the step's next lane read waits for it
+//   · pause() (a left desk, 1.2 §路由「离开再回来」): no read starts until resume() — the rest timer stops, and an answer or a freed
+//     slot that would ask again only notes it; the reads in flight finish, a read still queued in the loader is not sent. resume() lets a target so stopped rest `restMs` again, then asks
 export function createStepReads({ get: get0, setTimer = setTimeout, clearTimer = clearTimeout, need, onLane, onBodies, restMs = 100, loader = null }) {
-  let want = null, timer = null, lastLane = null, slot = null, waited = false
+  let want = null, timer = null, lastLane = null, slot = null, waited = false, paused = false, owed = false
   const out = { lane: null, block: null } // the read in flight of each kind: {rid, ac, p}
   const join = (a, b) => (a && b ? AbortSignal.any([a, b]) : a || b)
-  const get = (name, p, o = {}) => (loader ? loader.run(name === 'block' ? 0 : 1, (sig) => get0(name, p, { ...o, signal: join(o.signal, sig) })) : get0(name, p, o))
-  const api = { get }
+  // a read still queued in the loader when the desk leaves is held back when its slot frees: it is not sent and asks again on resume
+  const get = (f, name, p, o = {}) => (loader ? loader.run(name === 'block' ? 0 : 1, (sig) => paused ? (f.held = true, Promise.resolve({ ok: false, status: 0, error: 'cancelled' }))
+    : get0(name, p, { ...o, signal: join(o.signal, sig) })) : get0(name, p, o))
   function start(kind, rid, what) {
-    const ac = new AbortController(), f = { rid, ac }
+    const ac = new AbortController(), f = { rid, ac }, api = { get: (...a) => get(f, ...a) }
     out[kind] = f
     // a read that threw is a failure like any other: it reaches onLane / onBodies with its reason, never strands the slot
     const why = (e) => String((e && e.message) || e || 'cause not known')
-    const p = kind === 'lane' ? get('lane', what, { signal: ac.signal }).catch((e) => ({ ok: false, error: why(e) }))
+    const p = kind === 'lane' ? api.get('lane', what, { signal: ac.signal }).catch((e) => ({ ok: false, error: why(e) }))
       : loadBodies(api, what, { signal: ac.signal }).catch((e) => what.map(() => ({ status: 'error', error: why(e) })))
     f.p = p.then((r) => {
       out[kind] = null
-      if (ac.signal.aborted) { if (timer == null && want != null) go(); return }
+      if (f.held && kind === 'lane') lastLane = null // never sent: the same lane query may go again
+      if (ac.signal.aborted || f.held) { if (timer == null && want != null) go(); return }
       if (kind === 'block') { onBodies(rid, r, what); return }
       onLane(rid, r, what)
       if (r && r.ok && rid != null && rid === want) go()
     })
   }
   function go() {
+    if (paused) { owed = true; return }
     const rid = want, n = need(rid) || {}
     if (n.lane && slot) waited = true
     else if (n.lane && !out.lane) {
@@ -73,13 +79,22 @@ export function createStepReads({ get: get0, setTimer = setTimeout, clearTimer =
   }
   return {
     target(rid) {
-      want = rid; lastLane = null
+      want = rid; lastLane = null; owed = false // a new target rests its own 100 ms, paused or not
       for (const f of Object.values(out)) if (f && f.rid !== rid) f.ac.abort()
       if (timer != null) clearTimer(timer)
       timer = setTimer(() => { timer = null; go() }, restMs)
     },
+    pause() {
+      paused = true
+      if (timer != null) { clearTimer(timer); timer = null; owed = true }
+    },
+    resume() {
+      paused = false
+      if (owed && want != null && timer == null) timer = setTimer(() => { timer = null; go() }, restMs) // the step rests again
+      owed = false
+    },
     prefetch(key) {
-      if (out.lane || out.block || slot || timer != null) return
+      if (paused || out.lane || out.block || slot || timer != null) return
       start('lane', null, { lane: key })
     },
     async laneSlot(fn) {

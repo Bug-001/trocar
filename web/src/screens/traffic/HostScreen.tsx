@@ -13,6 +13,7 @@ import { setScreenKeys } from '../../../legacy/core/keys.mjs'
 import { revealHeader } from '../../../legacy/core/sensitive.mjs'
 import * as W from '../../../legacy/labels/traffic.mjs'
 import { HarnessIcon } from '../../ui/HarnessIcon'
+import { MenuChev } from '../../ui/Chev'
 import type { ScreenProps } from '../../ScreenOutlet'
 import { queryOf, asOfText, routeHarness, windowLinks as windowLinksJs, failOf as failOfJs } from './model.mjs'
 import { ROW_H, DETAIL_BREAK, callsParams as callsParamsJs, mergePages as mergePagesJs, hostHref as hostHrefJs, crumbsOf as crumbsOfJs, hostRowView as hostRowViewJs, emptyText } from './host-model.mjs'
@@ -53,7 +54,7 @@ const modeNow = () => (mql()?.matches === false ? 'drawer' : 'column')
 function ClassMenu({ items }: { items: Array<{ id: string, label: string, href: string }> }) {
   return (
     <MenuTrigger>
-      <Button className="popbtn" aria-label={W.FILTER_CLASS}>{W.FILTER_CLASS} <span className="chev" aria-hidden="true">▾</span></Button>
+      <Button className="popbtn" aria-label={W.FILTER_CLASS}>{W.FILTER_CLASS} <MenuChev /></Button>
       <Popover className="pop menu" placement="bottom end">
         <Menu aria-label={W.FILTER_CLASS} items={items}>{(i) => <MenuItem id={i.id} href={i.href} textValue={i.label}>{i.label}</MenuItem>}</Menu>
       </Popover>
@@ -165,7 +166,7 @@ export default function HostScreen({ route, router }: ScreenProps) {
       </div>
       <div className="hhead colhead" aria-hidden="true">
         <span className="cell">Time</span><span className="cell-endpoint">Endpoint</span><span className="cell class">Class</span>
-        <span className="cell num">{W.COL.sent}</span><span className="cell num">{W.COL.recv}</span><span className="cell marks"></span>
+        <span className="cell num sent">{W.COL.sent}</span><span className="cell num recv">{W.COL.recv}</span><span className="cell marks"></span>
       </div>
       <div className="hlist" id="hlist" role="list" aria-label="Requests" ref={listRef} style={{ position: 'relative', height: virt.getTotalSize() }}>
         {items.map((it) => {
@@ -177,8 +178,8 @@ export default function HostScreen({ route, router }: ScreenProps) {
                   <span className="tcell" title={v.when.iso ?? undefined}>{v.when.text}</span>
                   <span className="cell-endpoint mono" title={v.endpoint}>{v.endpoint}</span>
                   <span className="cell class">{v.cls}</span>
-                  <span className="cell num">{v.sent}</span>
-                  <span className="cell num">{v.recv}</span>
+                  <span className="cell num sent">{v.sent}</span>
+                  <span className="cell num recv">{v.recv}</span>
                 </a>
                 <span className="cell marks">
                   {v.retention?.kind === 'log' ? <a className="rmark" data-mark="log" href={v.retention.href} title="See what this class keeps in the storage settings">{`${v.retention.label} ›`}</a> : null}

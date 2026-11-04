@@ -12,7 +12,7 @@
 import { esc, bytes } from '../core/fmt.mjs'
 import { KIDS, serialize, patchInto } from '../core/units.mjs'
 import { techDetailsHtml } from '../core/ui.mjs'
-import { HALF } from '../core/icons.mjs'
+import { HALF, discChev } from '../core/icons.mjs'
 import * as W from '../labels/replay.mjs'
 import { messageTurns, keyDiff, refRowOf, hasChangeLine, callFacts } from './analysis.mjs'
 import { contentRefOf, contentRefKOf } from './stepbar.mjs'
@@ -77,7 +77,7 @@ export function removedSectionHtml(removed, refK, open) {
     const label = h.label || b.preview || ''
     return `<div class="cblk removed collapsed" data-rm="${j}" data-sec="${esc(b.sec)}"><div class="cbh"><span class="cbrole">${esc(h.role)}</span><span class="cbtag" title="${esc(tagWord(h.tag) || h.tag)}">${esc(tagWord(h.tag) || h.tag)}</span>${label ? `<span class="cblabel" title="${esc(label)}">${esc(label)}</span>` : ''}${ffBadgeHtml(faithOf(b), { tech: b.unaddressable })}<span class="remnote" title="The full text is read back from its location in step ${esc(String(refK ?? '?'))}">removed</span></div><div class="cbc"></div></div>`
   }).join('')
-  return `<div class="cwremoved ${open ? 'open' : ''}"><div class="cwremhd" data-navtoggle-rem="1" role="button" tabindex="0">${esc(W.removedList(removed.length, refK ?? '?'))} ▸</div>${open ? `<div class="cwrembody">${rows}</div>` : ''}</div>`
+  return `<div class="cwremoved ${open ? 'open' : ''}"><div class="cwremhd" data-navtoggle-rem="1" role="button" tabindex="0">${discChev(open)} ${esc(W.removedList(removed.length, refK ?? '?'))}</div>${open ? `<div class="cwrembody">${rows}</div>` : ''}</div>`
 }
 
 // ── ⑥ ⑦ ⑧ the stand-in states, and the frames of a step whose lane is not held ─────────────────────────────────────

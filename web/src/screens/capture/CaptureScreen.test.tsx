@@ -169,7 +169,7 @@ const LOGGED = (d: Record<string, unknown>) => {
     { level: 'expected', where: 'engine', code: 'y', count: 1, first_ts: T, last_ts: T }] }
 }
 
-test('C5: every trigger on both pages (row name, log row ▸, changes block, technical details) toggles on Enter and Space; clicks elsewhere on a head line or inside the panel do not', async () => {
+test('C5: every trigger on both pages (row name, log row chevron, changes block, technical details) toggles on Enter and Space; clicks elsewhere on a head line or inside the panel do not', async () => {
   answers = [{ opencode: FINE }]
   patch = LOGGED
   const cap = await mount()
@@ -197,6 +197,7 @@ test('C5: every trigger on both pages (row name, log row ▸, changes block, tec
   const lgo = log.container.querySelector<HTMLElement>('.lr .lgo')!
   await keys(lgo, 'log row')
   const lr = lgo.closest('.lr')!
+  expect(lr.firstElementChild, '1.5 #5: an expandable row has its chevron before the words').toBe(lgo)
   const logTriggers = [lr.querySelector<HTMLElement>('.disc-t')!, ...log.container.querySelectorAll<HTMLElement>('#clogmain > .disc > .disc-t')]
   expect(logTriggers.length).toBe(2)
   for (const [i, x] of logTriggers.entries()) await keys(x, `log trigger ${i}`)

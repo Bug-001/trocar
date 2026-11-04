@@ -59,7 +59,7 @@ function inputHtml(c, flat) {
     const foldWord = f ? f.text : faithOf(b)
     // a FOLDED row always says what is folded — its own fidelity word plus 点开 — whether it folded for length or
     // because the call has >40 blocks and none auto-opened (2.6 §B); only an auto-opened row shows the plain size
-    const size = noText ? OPAQUE_SIZE : !sz ? 'size not known' : !open ? `⟨${esc(W.foldAt(foldWord, n, sz.unit))}⟩` : `${n} ${sz.unit}`
+    const size = noText ? OPAQUE_SIZE : !sz ? 'size not known' : !open ? `‹${esc(W.foldAt(foldWord, n, sz.unit))}›` : `${n} ${sz.unit}`
     return `<div class="dblk ${open ? 'open' : ''}" data-di="${i}"><div class="dbh"><span class="dbrole">${esc(h.role)}</span><span class="cbtag">${esc(tagWord(h.tag))}</span>${h.label || b.preview ? `<span class="dblab">${esc(h.label || b.preview)}</span>` : '<span class="dblab"></span>'}${ffBadgeHtml(faithOf(b), { tech: b.unaddressable || String(b.faithfulness ?? '') })}<span class="dbn">${size}</span></div><div class="dbbody"></div></div>`
   }).join('')
 }

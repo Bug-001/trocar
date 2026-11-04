@@ -1,7 +1,7 @@
 // core/icons.mjs — trocar's own glyph set, the only source of the board's interface graphics (1.5 §审美 #5): inline SVG
 // strings on a 16px view box, 1.5px round strokes, open forms with one solid port dot, currentColor, aria-hidden. The
-// info ⓘ and the partial mark ◐ are drawn here too: the system fonts have neither character, so a typed one would be
-// borrowed from a fallback family. The brand mark is a gradient tile — a mark, not a nav icon and not a chart. Harness
+// info ⓘ, the partial mark ◐ and the disclosure / menu triangles are drawn here too: a system font on some test platform
+// lacks each character, so a typed one would be borrowed from a fallback family (1.5 §审美 #5). The brand mark is a gradient tile — a mark, not a nav icon and not a chart. Harness
 // icons live elsewhere: src/off/harness-icons/, which the build copies to assets/harness/, drawn as <img> by
 // core/chips.mjs (1.2 §agent chip).
 const P = {
@@ -37,12 +37,19 @@ const P = {
   // half: the partial-capture mark (1.5 §标记), a ring with its left half filled
   half: '<circle cx="8" cy="8" r="5.75"/><path d="M8 2.25a5.75 5.75 0 0 0 0 11.5z" fill="currentColor" stroke="none"/>',
 }
+const DRAW = 'viewBox="0 0 16 16" fill="none" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"'
 // the glyph for one name; `cls` sizes it (.ico16 / .ico14)
-export const icon = (name, cls = 'ico16') =>
-  `<svg class="${cls}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[name] || ''}</svg>`
+export const icon = (name, cls = 'ico16') => `<svg class="${cls}" ${DRAW} stroke="currentColor" aria-hidden="true">${P[name] || ''}</svg>`
+// a glyph as a CSS image, for a mark a ::before / ::after draws: `svg` is icon() markup serialized as XML (core/ui.mjs installUi
+// has the document that does it); used as a mask, so its currentColor (black in an image) only sets the shape
+export const glyphCss = (svg) => `url("data:image/svg+xml,${encodeURIComponent(svg)}")`
 export const ICON_NAMES = Object.freeze(Object.keys(P))
-// a disclosure's triangle: the chevron at the 12 px size; it turns a quarter when its trigger is [aria-expanded="true"] (base.css)
+// a disclosure's triangle: the chevron at the 12 px size; it turns a quarter when its trigger is [aria-expanded="true"] (base.css).
+// discChev(open) draws the state itself, for a toggle that is not an [aria-expanded] parent of the glyph.
 export const DISC_CHEV = icon('chevron-right', 'ico12 chev')
+export const discChev = (open) => icon(open ? 'chevron-down' : 'chevron-right', 'ico12 chev')
+// a menu trigger's mark
+export const MENU_CHEV = icon('chevron-down', 'ico12')
 // the partial mark ◐, drawn: no system font has the character, so a borrowed one would come from a fallback family
 export const HALF = icon('half', 'ico12')
 

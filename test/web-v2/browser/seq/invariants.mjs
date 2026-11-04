@@ -5,13 +5,19 @@
 // Exports only; nothing runs at import.
 import { snap as probeSnap } from './probe.mjs'
 import { WRITE_GAP_MS } from '../../../../web/legacy/core/router.mjs'
+import { BOARD_LINES } from '../../perf-lines.mjs'
 
 export const IDS = Object.freeze(['I-pageerror', 'I-console', 'I-blank', 'I-keep', 'I-stack', 'I-hscroll', 'I-rate', 'I-write', 'I-leak',
-  'I-mem', 'I-follow', 'I-hold', 'I-url', 'I-cjk', 'I-longtask', 'I-loadstep', 'I-chapter', 'I-pack', 'I-memcap', 'I-select', 'I-review'])
+  'I-mem', 'I-heap', 'I-follow', 'I-hold', 'I-url', 'I-cjk', 'I-longtask', 'I-loadstep', 'I-chapter', 'I-pack', 'I-memcap', 'I-select', 'I-review'])
 
 export const PENDING = new Map([
   ['I-memcap', 'the page heap stays under memCapBytes (80 MB)'],
 ])
+
+/** Invariants judged against a bound a loaded box can cross through noise alone (a task's 50 ms, the follow deadline, the heap's
+ *  growth ratio): a run that meets one is reproduced once and saved whole, never shrunk (runner findOne). I-mem (the element count)
+ *  is exact and is shrunk. */
+export const TIMING = new Set(['I-longtask', 'I-follow', 'I-heap'])
 
 export const LIMITS = Object.freeze({
   consoleGraceMs: 2000, // an armed fault window's console.error tail (invariant I-console)
@@ -26,10 +32,10 @@ export const LIMITS = Object.freeze({
   openReadMs: 10000, // a screen's opening reads after a route change, chained behind its first answers (4.4 「打开时」)
   leakSlack: 2, // a one-time lazy global wiring (core/dom.mjs wireKeys on the first dialog) is no leak; a per-visit one passes it by the 4th visit
   settleMs: 3000, // how long check waits for in-flight fetches to settle before I-leak counts them
-  memRatio: 1.5, memSlackBytes: 10 * 2 ** 20, // invariant I-mem
+  memRatio: 1.5, memSlackBytes: 10 * 2 ** 20, // invariants I-mem (elements) and I-heap
   memCapBytes: 80 * 2 ** 20, // pending: no spec line sets this cap yet
   followMs: 15000, // spec/01-trocar-rfc/1.4-central-board.md:71-73 · 4.4:51
-  longtaskMs: 50, // D64 ②: no task of the page's own over 50 ms
+  longtaskMs: 50, // D64 ②: no task of the page's own over 50 ms after a step inside the open session starts (2.3 #27)
   loaderMax: 3, // spec/01-trocar-rfc/2.3-context-window.md:186 加载器: at most 3 of the desk's loader reads on their way at once
   chapterSettleMs: 1000, // the chapter row and the step bar are drawn by one paint; a check that lands between two frames looks again
 })
@@ -192,7 +198,8 @@ function packFaults(log) {
  * check(ctx) → { violations:[{id, sig, fp, detail}], pending:[{id, value, pointer}], view }.
  * ctx: { page, requests, errors, actions:[{t,a}], faults:[{name, kind, from, to}], hidden:[{from,to}], follow, grownAt (ms of the last
  * growth, or null), truth() → the main-lane count, real, prev (the `view` of the previous check), baseline (Map, optional: per-route
- * first-visit counts; default one per page), drag ({made, changed} of a select step just run, else null) }. Call it when the page has settled.
+ * first-visit counts; default one per page), drag ({made, changed} of a select step just run, else null), stepAt (the step's start on
+ * the page's clock, performance.timeOrigin + now(); default: judge every long task) }. Call it when the page has settled.
  */
 export async function check(ctx) {
   const { page, requests = [], errors = [], actions = [], faults = [], hidden = [], follow = false, grownAt = null, truth, real = false, prev = null, drag = null } = ctx
@@ -219,7 +226,7 @@ export async function check(ctx) {
   const writes = [...requests, ...s.fetchLog].filter((r) => r.method && r.method !== 'GET')
   if (writes.length) bad('I-write', writes.slice(0, 3).map((r) => `${r.method} ${r.url}`).join(' | '))
 
-  // I-leak / I-mem: the route's first visit is its baseline; a later visit may not hold more
+  // I-leak / I-mem / I-heap: the route's first visit is its baseline; a later visit may not hold more
   const deadline = Date.now() + LIMITS.settleMs
   let first = base.get(route)
   // the world grew since the baseline: what the route draws grew with the data, so the baseline is taken again (not a leak)
@@ -239,12 +246,10 @@ export async function check(ctx) {
   else if (!prev || routeOf(prev.hash) !== route) { // a revisit (the route was just entered again); within one visit an open overlay may hold more
     const more = ['window', 'document', 'intervals', 'inflight'].filter((k) => now[k] > first[k] + LIMITS.leakSlack)
     if (more.length) bad('I-leak', more.map((k) => `${k} ${first[k]} → ${now[k]}`).join(', '))
-    const grew = []
-    if (now.dom > LIMITS.memRatio * first.dom) grew.push(`elements ${first.dom} → ${now.dom}`)
+    if (now.dom > LIMITS.memRatio * first.dom) bad('I-mem', `elements ${first.dom} → ${now.dom}`)
     // a first visit's heap is a cold page's (no store, no caches yet): the heap's baseline is the route's first revisit
     if (first.warm == null) first.warm = now.heap
-    else if (now.heap > LIMITS.memRatio * first.warm + LIMITS.memSlackBytes) grew.push(`heap ${first.warm} → ${now.heap}`)
-    if (grew.length) bad('I-mem', grew.join(', '))
+    else if (now.heap > LIMITS.memRatio * first.warm + LIMITS.memSlackBytes) bad('I-heap', `heap ${first.warm} → ${now.heap}`)
   }
   if (now.heap > LIMITS.memCapBytes) pending.push({ id: 'I-memcap', value: now.heap, pointer: PENDING.get('I-memcap') })
 
@@ -299,7 +304,14 @@ export async function check(ctx) {
   const pk = packFaults(s.fetchLog)
   if (pk.length) bad('I-pack', pk.slice(0, 3).join(' | '))
 
-  if (s.longtaskMax > LIMITS.longtaskMs) bad('I-longtask', `a long task of ${Math.round(s.longtaskMax)} ms`)
+  // I-longtask (2.3 #27): a task that starts after the step starts; a step that made this document is its boot, none of it judged.
+  // 50 ms holds a step that starts and ends in the same session on the desk (D64 ②); a step that opens or switches a session, changes
+  // screen, or presses a button on another screen is held to 0.5 s (D64 ①③). A caller that names no stepHash gets the 50 ms line.
+  const from = ctx.stepAt == null ? -Infinity : s.origin >= ctx.stepAt ? Infinity : ctx.stepAt
+  const inSession = ctx.stepHash == null || (screen === 'replay' && routeOf(ctx.stepHash) === route)
+  const line = inSession ? LIMITS.longtaskMs : screen === 'replay' ? BOARD_LINES.sessionOpen : BOARD_LINES.button
+  const long = s.longtasks.filter((x) => x.t >= from).reduce((m, x) => Math.max(m, x.ms), 0)
+  if (long > line) bad('I-longtask', `a long task of ${Math.round(long)} ms`)
   if (v.loadStep) bad('I-loadstep', `a load control: ${v.loadStep}`)
   return { violations, pending, view: { t: Date.now(), hash: v.hash, step: v.step, heads: v.heads } }
 }

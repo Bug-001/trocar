@@ -6,6 +6,7 @@ import { screenErrorHtml } from '../legacy/shell/safemount.mjs'
 import { READING } from '../legacy/labels/common.mjs'
 import type { Route } from './LegacyScreen'
 import type { createBoardRouter } from './router'
+import { ConfirmProvider } from './ui/Confirm'
 
 // router: the board's facade (setParams replaces the hash, go navigates); a screen writes its state through it, never location
 export type ScreenProps = { route: Route, router: ReturnType<typeof createBoardRouter>['legacy'] }
@@ -40,6 +41,7 @@ export class ScreenBoundary extends Component<{ children: ReactNode }, { error: 
   }
 }
 
+// the confirm provider is the screen's own: a question it asked goes with it (1.2 §键盘「层随屏走」)
 export function ScreenOutlet({ screen: { Screen }, name, route, router }: { screen: LazyScreen, name: string } & ScreenProps) {
-  return <ScreenBoundary key={name}><Screen route={route} router={router} /></ScreenBoundary>
+  return <ScreenBoundary key={name}><ConfirmProvider><Screen route={route} router={router} /></ConfirmProvider></ScreenBoundary>
 }

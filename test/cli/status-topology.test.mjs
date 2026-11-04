@@ -77,8 +77,8 @@ test('V44: `status codex` draws the detail — the path a hop to a line, `withou
   const s = await installedViaCli(ENGINE)
   const one = (await status(s, ['codex'])).text
   assert.match(one, /^codex: on, /m)
-  assert.match(one, /^ {4}new processes {2}.*api\.openai\.com/m)
-  assert.match(one, /^ {4}without trocar {2}.*api\.openai\.com/m)
+  assert.match(one, /^ {4}new processes {2}.*the API host it uses/m) // no codex config in this HOME: nothing read, nothing named (1.6 A.1)
+  assert.match(one, /^ {4}without trocar {2}.*the API host it uses/m)
   assert.match(one, /^ {2}To change the proxy: edit codex's own settings/m)
   assert.doesNotMatch(one, /seconds? ago/)
   const all = (await status(s)).text
@@ -130,7 +130,7 @@ test('V42: one hop that cannot be read changes no exit code and no verdict — i
   fs.writeFileSync(file, JSON.stringify({ ...doc, env: { ...doc.env, HTTPS_PROXY: 'http://127.0.0.1:7891' } }, null, 2))
   const nobody = (f, args, o) => (f === 'ss' ? { status: 0, stdout: 'LISTEN 0 4096 127.0.0.1:7891 0.0.0.0:*', stderr: '' } : s.sys.exec.run(f, args, o))
   const r = await status(s, ['claude-code'], { exec: nobody })
-  assert.match(r.text, /^ {4}new processes$\n^ {6}claude-code -> trocar :47123 -> 127\.0\.0\.1:7891 \(unknown: owner-unreadable\) -> unknown$/m, r.text)
+  assert.match(r.text, /^ {4}new processes$\n^ {6}claude-code -> trocar :47123 -> 127\.0\.0\.1:7891 \(unknown: owner not known\) -> internet$/m, r.text)
   assert.equal(r.exit, before.exit, 'a hop that cannot be read is not a verdict that cannot be given: only `captured` null exits 3 (1.6 §2)')
   const j = (await status(s, ['--json'], { exec: nobody })).json()
   assert.deepEqual([j.topology['claude-code'].captured, j.topology['claude-code'].on_path], [true, true])

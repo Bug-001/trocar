@@ -3,10 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 import { qNoLeak, runSelfTest } from '../../src/capture/selftest.mjs';
 import { tmpDir } from '../helpers/tmp.mjs';
-import { osStubs } from '../helpers/os-stubs.mjs';
+import { cliOnEmptyMachine } from '../helpers/board-world.mjs';
 
 // THE ONE SECURITY RED LINE MUST BE ABLE TO GO RED.
 //
@@ -40,10 +39,8 @@ import { osStubs } from '../helpers/os-stubs.mjs';
 //     of silently reading zero records.
 // The red line's new home (file permissions) is pinned in test/capture/verbatim-headers.test.mjs.
 
-const HERE = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = path.resolve(HERE, '..', '..');
-const CLI = path.join(ROOT, 'bin', 'trocar.mjs');
-const OS = osStubs(), OS_PATH = OS.path, OS_NATIVE = OS.nativeDir; // on a Mac `doctor`'s status block asks launchd and the keychain (read-only): stubs in the temp dir answer, the real tools are never run (0.1 §3)
+// `doctor` runs through runCli, as the bin calls it, in a child node on an empty machine (board-world.mjs): its status block asks no OS tool on any host (0.1 §3)
+const doctorOn = (home) => { const c = cliOnEmptyMachine(home, ['doctor'], { TROCAR_SOURCE: '' }); return [c.args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: c.env }] };
 
 // A capture holding a real un-redacted credential. If doctor reads ANY records at all, it must find it.
 function leakySource() {
@@ -104,7 +101,7 @@ test('runSelfTest does not certify when nothing was examined: 无法判定 (exit
   assert.equal(res.hardFail, false);
 });
 
-test('END TO END: doctor hard-fails on a world-readable capture (the red line\'s new home)', () => {
+test('runCli in a child node: doctor hard-fails on a world-readable capture (the red line\'s new home)', () => {
   // Replaces two tests that asserted "finds an un-redacted credential and exits non-zero". Those
   // would now pass for the WRONG REASON — their fixtures were 0644, so ④b would trip regardless of
   // any credential — which is exactly the kind of accidentally-green assertion this suite keeps
@@ -117,8 +114,8 @@ test('END TO END: doctor hard-fails on a world-readable capture (the red line\'s
     fs.chmodSync(path.join(home, 'capture.ndjson'), 0o644);
     let status = 0, out = '';
     try {
-      // the default source of this sandbox HOME (D27), the way a user runs it: no option of its own
-      out = execFileSync(process.execPath, [CLI, 'doctor'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: dir, TROCAR_SOURCE: '', PATH: OS_PATH, TROCAR_NATIVE_DIR: OS_NATIVE } });
+      // the default source of this sandbox HOME (D27): no option of its own, runCli in a child node on stand-in deps
+      out = execFileSync(process.execPath, ...doctorOn(dir));
     } catch (e) { status = e.status; out = String(e.stdout || '') + String(e.stderr || ''); }
     assert.notEqual(status, 0,
       `doctor exited 0 on a world-readable capture holding live credentials.\n--- output ---\n${out}`);
@@ -126,12 +123,12 @@ test('END TO END: doctor hard-fails on a world-readable capture (the red line\'s
 
     // …and passes once the file is owner-only, credentials and all.
     fs.chmodSync(path.join(home, 'capture.ndjson'), 0o600);
-    const ok = execFileSync(process.execPath, [CLI, 'doctor'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: dir, TROCAR_SOURCE: '', PATH: OS_PATH, TROCAR_NATIVE_DIR: OS_NATIVE } });
+    const ok = execFileSync(process.execPath, ...doctorOn(dir));
     assert.match(ok, /^trocar doctor: no problems\.$/m, 'a 0600 capture must pass, credentials and all');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('END TO END: a bare doctor on a CLEAN multi-root capture examines records and passes', () => {
+test('runCli in a child node: a bare doctor on a CLEAN multi-root capture examines records and passes', () => {
   // This is the assertion that isolates the source-resolution fix, and it took a failed mutation to
   // find. Reverting the array handling does NOT make the leak tests green-to-red, because the
   // vacuous-scan guard added above turns *any* read failure into a loud hard-fail — good
@@ -159,9 +156,7 @@ test('END TO END: a bare doctor on a CLEAN multi-root capture examines records a
 
     let status = 0, out = '';
     try {
-      out = execFileSync(process.execPath, [CLI, 'doctor'], {
-        encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: home, TROCAR_SOURCE: '', PATH: OS_PATH, TROCAR_NATIVE_DIR: OS_NATIVE },
-      });
+      out = execFileSync(process.execPath, ...doctorOn(home));
     } catch (e) { status = e.status; out = String(e.stdout || '') + String(e.stderr || ''); }
 
     assert.equal(status, 0,
@@ -173,7 +168,7 @@ test('END TO END: a bare doctor on a CLEAN multi-root capture examines records a
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
 
-test('END TO END: a BARE `trocar doctor` reads the D27 multi-root default', () => {
+test('runCli in a child node: a BARE `trocar doctor` reads the D27 multi-root default', () => {
   // THE ACTUAL REGRESSION, exercised the way it actually happened: no --source at all, so the source
   // is whatever serveSource() returns — an ARRAY of the home and the collector directory. That array went
   // straight into fs.statSync(), which throws ERR_INVALID_ARG_TYPE on a non-path, and the catch
@@ -197,9 +192,7 @@ test('END TO END: a BARE `trocar doctor` reads the D27 multi-root default', () =
 
     let status = 0, out = '';
     try {
-      out = execFileSync(process.execPath, [CLI, 'doctor'], {
-        encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: home, TROCAR_SOURCE: '', PATH: OS_PATH, TROCAR_NATIVE_DIR: OS_NATIVE },
-      });
+      out = execFileSync(process.execPath, ...doctorOn(home));
     } catch (e) { status = e.status; out = String(e.stdout || '') + String(e.stderr || ''); }
     // Subject is SOURCE RESOLUTION, not credentials: a bare doctor must find the legacy root and
     // read the record in it. Before the fix it statSync'd an array, read zero records, and said ✓.

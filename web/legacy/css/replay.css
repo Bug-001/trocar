@@ -118,7 +118,7 @@
   .tlane{position:relative;min-width:0;}
   .railname{text-align:left;cursor:pointer;color:var(--dim);display:flex;align-items:center;gap:5px;font-size:var(--fs-chart);}
   .railname:hover{color:var(--fg);} .railname.col{opacity:.72;}
-  .railname .tw{flex:none;width:9px;color:var(--dimmer);}
+  .railname .tw{flex:none;display:inline-flex;width:12px;color:var(--dimmer);}
   .railname .tn{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
   .railname.group .tn{color:var(--fg);font-weight:var(--fw-strong);}
   .railsonly{font-size:var(--fs-chart);color:var(--dimmer);padding:4px 0;}
@@ -178,7 +178,7 @@
   .rawpre{font-family:var(--mono);font-size:var(--fs-cap);line-height:1.45;white-space:pre-wrap;word-break:break-word;color:var(--dim);margin:5px 0 0;}
   .rpx{float:right;cursor:pointer;font-weight:var(--fw-regular);color:var(--dimmer);font-size:var(--fs-cap);border:1px solid var(--border);border-radius:5px;padding:0 5px;} .rpx:hover{color:var(--fg);}
   .resz{font-size:var(--fs-cap);color:var(--dimmer);margin:0 0 5px;}
-  /* < 1200: the right page folds to one bottom line 「读过的文件 N · 原始数据 ▸」(1.2 §窄屏); opened it rises from the
+  /* < 1200: the right page folds to one bottom line 「读过的文件 N · 原始数据」 and its chevron (1.2 §窄屏); opened it rises from the
      bottom at half height with 资源 and 原始数据 side by side. ≥ 1200 the bar is not drawn at all. */
   #rpbar{display:none;}
   @media(max-width:1199px){
@@ -189,11 +189,10 @@
     #rightpage.open #rawpanel{max-height:none;grid-row:1 / span 2;grid-column:2;}
     #rpbar{display:flex;gap:8px;align-items:center;padding:5px 14px;font-size:var(--fs-cap);color:var(--ink-2);background:var(--raised);cursor:pointer;}
     #rpbar:hover{color:var(--ink);}
-    #rpbar::after{content:"▸";color:var(--ink-3);}
-    #rightpage.open #rpbar::after{content:"▾";}
+    #rpbar::before{color:var(--ink-3);}
     #pages{padding-bottom:26px;}
   }
-  /* < 900: the subagent / bg / 全程 rows fold into one 「▸」 row (1.2 §窄屏) — the fold row itself is rendered by rails.mjs */
+  /* < 900: the subagent / bg / 全程 rows fold into one closed row (1.2 §窄屏) — the fold row itself is rendered by rails.mjs */
   @media(max-width:900px){
     #leftpage:not(.railopen) .tkrow-ovw{display:none;}
   }
@@ -250,8 +249,7 @@
   .cblk.hl{border-color:var(--accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 55%,transparent);}
   .cbh{display:flex;gap:7px;align-items:center;height:var(--cblk-ih);padding:4px 9px;white-space:nowrap;font-size:var(--fs-cap);color:var(--dim);cursor:pointer;}
   .cbh:hover{color:var(--fg);}
-  .cbh::before{content:"▸";color:var(--dimmer);font-size:var(--fs-cap);width:8px;}
-  .cblk:not(.collapsed) .cbh::before{content:"▾";}
+  .cbh::before{color:var(--dimmer);}
   /* nothing in a head wraps: short of room the label and then the tag give it up (an ellipsis; the tag's title holds its word), the
      role, the marks and the size never do */
   .cbrole{color:var(--fg);font-weight:var(--fw-strong);flex:none;}
@@ -267,11 +265,10 @@
   .volbadge{color:var(--amber);font-size:var(--fs-cap);white-space:nowrap;border:1px solid color-mix(in srgb,var(--amber) 40%,var(--border));border-radius:10px;padding:0 5px;}
   /* per-block faithfulness (1.4:52 / 不变式4): dashed = NOT byte-verbatim. Muted amber so it reads as a caveat, not an error. */
   .cbc{padding:0 9px;} .cblk.collapsed .cbc{display:none;}
-  /* messages grouped into turns (point 2): user-query header ▸ nested call-turn blocks */
+  /* messages grouped into turns (point 2): a user-query header over its nested call-turn blocks */
   .cwturn{content-visibility:auto;contain-intrinsic-size:auto var(--cwturn-ih);border:1px solid var(--border);border-radius:7px;margin-bottom:6px;overflow:hidden;background:color-mix(in srgb,var(--accent) 3%,transparent);}
   .cwturnhd{display:flex;align-items:center;gap:8px;height:var(--cwturn-ih);padding:6px 10px;cursor:pointer;font-size:var(--fs-cap);}
-  .cwturnhd::before{content:"▾";color:var(--dimmer);font-size:var(--fs-cap);width:8px;}
-  .cwturn.collapsed .cwturnhd::before{content:"▸";}
+  .cwturnhd::before{color:var(--dimmer);}
   .cwturnhd:hover{background:color-mix(in srgb,var(--fg) 4%,transparent);}
   .cwturnq{color:var(--fg);font-weight:var(--fw-strong);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1;}
   .cwturnq .qk{color:var(--dimmer);font-weight:var(--fw-regular);font-family:var(--mono);font-size:var(--fs-cap);margin-left:6px;}
@@ -316,8 +313,7 @@
   /* a ledger count not known yet (2.4:67): a sized empty box where the digits go, no words */
   .navrow .navct[aria-busy="true"]{display:inline-block;width:2ch;height:10px;border-radius:2px;background:color-mix(in srgb,var(--fg) 6%,transparent);}
   .navrow.head .navlbl{color:var(--fg);font-weight:var(--fw-strong);}
-  .navrow.head::before{content:"▸";color:var(--dimmer);font-size:var(--fs-cap);margin-right:-2px;}
-  .navrow.head.open::before{content:"▾";}
+  .navrow.head::before{color:var(--dimmer);margin-right:-2px;}
   .navkids{margin:1px 0 4px 12px;border-left:1px solid var(--border);padding-left:4px;}
   .navsub{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 6px;padding:3px 6px;border-radius:5px;cursor:pointer;font-size:var(--fs-cap);color:var(--dim);}
   .navsub:hover{background:color-mix(in srgb,var(--accent) 9%,transparent);color:var(--fg);}
@@ -366,8 +362,7 @@
   .res .hits{font-size:var(--fs-cap);color:var(--dimmer);margin-left:auto;white-space:nowrap;}
   /* opened-file expand */
   .res.file .res-hd{cursor:pointer;}
-  .res.file .res-hd .nm::before{content:"▸ ";color:var(--dimmer);}
-  .res.file.expanded .res-hd .nm::before{content:"▾ ";}
+  .res.file .res-hd .nm::before{color:var(--dimmer);margin-right:4px;}
   .lifesum{font-family:var(--mono);font-size:var(--fs-cap);color:var(--dim);margin-top:3px;}
   .lifesum .ev{color:var(--dimmer);}
   .filedetail{display:none;margin:6px 0 2px 10px;border-left:1px solid var(--border);padding-left:9px;}
@@ -428,8 +423,7 @@
 .dblk{border:1px solid var(--border);border-radius:6px;margin:4px 0;background:var(--panel2);}
 .dblk>.dbh{display:flex;gap:7px;align-items:center;padding:3px 9px;font-family:var(--mono);font-size:var(--fs-cap);color:var(--dim);cursor:pointer;}
 .dblk>.dbh:hover{color:var(--fg);}
-.dblk>.dbh::before{content:"▸";color:var(--dimmer);font-size:var(--fs-cap);width:8px;}
-.dblk.open>.dbh::before{content:"▾";}
+.dblk>.dbh::before{color:var(--dimmer);}
 .dblk .dbrole{color:var(--fg);font-weight:var(--fw-strong);} .dblk .dblab{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1;color:var(--ink-2);}
 .dblk .dbn{margin-left:auto;color:var(--dimmer);font-size:var(--fs-cap);white-space:nowrap;}
 .dblk .dbbody{padding:0 9px 6px;} .dblk:not(.open) .dbbody{display:none;}
@@ -448,7 +442,8 @@
 .sh-back,.sh-follow,.sh-info{flex:none;}
 .sh-back{font-size:var(--fs-cap);color:var(--action);text-decoration:none;white-space:nowrap;border:1px solid var(--rule);border-radius:var(--r-pill);padding:2px 10px;}
 .sh-back:hover{color:var(--ink);border-color:var(--ink-2);}
-.sh-name{flex:0 1 auto;min-width:2em;font-size:var(--fs-title);font-weight:var(--fw-strong);color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:44vw;}
+/* the title ellipsizes, so it clips: its line box holds the whole glyph box (Segoe UI at 20 px needs about 27 px; 1.2 §让位次序) */
+.sh-name{flex:0 1 auto;min-width:2em;font-size:var(--fs-title);line-height:1.4;font-weight:var(--fw-strong);color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:44vw;}
 .sh-chip{flex:0 100 auto;min-width:0;overflow:hidden;display:inline-flex;align-items:center;gap:4px;font-size:var(--fs-cap);color:var(--ink-2);text-decoration:none;background:var(--sunk);border:1px solid var(--rule);border-radius:var(--r-pill);padding:2px 9px;white-space:nowrap;}
 .sh-chip:hover{border-color:var(--ink-2);color:var(--ink);}
 .sh-chip .chipname{color:var(--ink);min-width:0;overflow:hidden;text-overflow:ellipsis;}
@@ -561,3 +556,8 @@
 .desk.next #stepbar .pp-row{font-size:var(--fs-body);color:var(--ink);}
 .desk.next #stepbar .pp-calibre,.desk.next #stepbar .pp-diagnose,.desk.next #stepbar .pp-unknown,.desk.next #stepbar .pp-tools-estimated{font-size:var(--fs-cap);color:var(--ink-2);}
 .desk.next #stepbar .pp-busy{min-height:1.6em;}
+
+/* every disclosure triangle a ::before / ::after draws: the icons.mjs chevron as a mask over the text colour (--glyph-disc, set by
+   core/ui.mjs installUi; 1.5 §审美 #5: no typed triangle), 12 px like DISC_CHEV; an open one turns a quarter */
+#rpbar::before,.cbh::before,.cwturnhd::before,.navrow.head::before,.res.file .res-hd .nm::before,.dblk>.dbh::before{content:"";display:inline-block;flex:none;width:12px;height:12px;vertical-align:-2px;background:currentColor;-webkit-mask:var(--glyph-disc) center/12px 12px no-repeat;mask:var(--glyph-disc) center/12px 12px no-repeat;transition:transform var(--t-quick) var(--ease);}
+#rightpage.open #rpbar::before,.cblk:not(.collapsed) .cbh::before,.cwturn:not(.collapsed) .cwturnhd::before,.navrow.head.open::before,.res.file.expanded .res-hd .nm::before,.dblk.open>.dbh::before{transform:rotate(90deg);}

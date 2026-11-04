@@ -40,3 +40,15 @@ test('a trigger slot replaces the ⓘ inside the same button: its name stays the
   expect(btn.getAttribute('aria-expanded')).toBe('true')
   expect(document.getElementById(dlg.getAttribute('aria-labelledby')!)?.textContent).toBe('Head')
 })
+
+test('1.2 「层随屏走」: an open ⓘ layer leaves the document with the screen that opened it', async () => {
+  const { unmount } = render(<main><InfoButton label="About" title="Head" body={<a href="#/capture">link</a>} /></main>)
+  const info = document.querySelector<HTMLElement>('.popbtn')!
+  act(() => info.focus())
+  fireEvent.keyDown(info, { key: 'Enter' }); fireEvent.keyUp(info, { key: 'Enter' })
+  await act(async () => {})
+  expect(document.querySelector('[role="dialog"]')).not.toBeNull()
+  unmount()
+  await act(async () => {})
+  expect(document.querySelector('[role="dialog"]')).toBeNull()
+})

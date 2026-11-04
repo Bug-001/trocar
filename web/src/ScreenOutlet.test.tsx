@@ -2,12 +2,14 @@
 // screen is drawn as soon as the module is in; once the idle preload has loaded it, the screen is drawn in the very render that asks
 // for it, with no 「Reading…」 frame; a module that fails to load says why. (React.lazy behind Suspense did neither of the first two:
 // it suspended on every first render, and React held the fallback it had shown for 300 ms.)
+import { useEffect } from 'react'
 import { afterEach, expect, test, vi } from 'vitest'
 import { act, cleanup, render, type RenderResult } from '@testing-library/react'
 import { createRoot } from 'react-dom/client'
 import { READING } from '../legacy/labels/common.mjs'
 import { ScreenOutlet, lazyScreen, type ScreenProps } from './ScreenOutlet'
 import type { Route } from './LegacyScreen'
+import { useConfirm } from './ui/Confirm'
 
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
@@ -51,4 +53,24 @@ test('a screen whose module fails to load says why, never a blank area', async (
   await act(async () => { r = render(<ScreenOutlet screen={s} name="capture" route={route} router={router} />) })
   await act(async () => { await s.load().catch(() => {}) })
   expect(r.container.querySelector('.screenerr[role="alert"]')?.textContent).toContain('chunk gone')
+})
+
+// 1.2 §键盘「层随屏走」: a React screen's confirm belongs to its screen. The screen leaving (another screen, Back) with the question
+// open answers it as Cancel, so nothing carrying `confirm` is sent, and leaves no dialog behind.
+test('a confirm open on a React screen closes as Cancel when the screen goes', async () => {
+  let answer: Promise<boolean> | undefined
+  function Asking() {
+    const ask = useConfirm()
+    useEffect(() => { answer = ask({ q: 'Turn capture on?', confirmLabel: 'Turn on' }) }, [ask])
+    return <p className="drawn">asking</p>
+  }
+  const a = lazyScreen(async () => ({ default: Asking })), b = lazyScreen(async () => ({ default: Drawn }))
+  await a.load(); await b.load()
+  const other = { area: 'overview', screen: 'overview', params: {} } as Route
+  let r!: RenderResult
+  await act(async () => { r = render(<ScreenOutlet screen={a} name="capture" route={route} router={router} />) })
+  expect(document.querySelector('[data-confirm="ok"]')).not.toBeNull()
+  await act(async () => { r.rerender(<ScreenOutlet screen={b} name="overview" route={other} router={router} />) })
+  expect(document.querySelector('[data-confirm]')).toBeNull()
+  expect(await answer).toBe(false)
 })

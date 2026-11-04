@@ -144,15 +144,15 @@ export const resourcesHtml = (s) => serialize(resourceUnits(s))
 export function renderResources(el, s) {
   if (!s.anchor || !s.anchor.calls.length) { patchInto(el, []); return }
   patchInto(el, [{ key: 'zone', html: `<div class="resz">${esc(W.RES_SECTION)}</div>` }, ...resourceUnits(s)])
-  // the < 1200 px fold line names what the right page holds (1.2 §窄屏): 「读过的文件 N · 原始数据 ▸」. N is the
+  // the < 1200 px fold line names what the right page holds (1.2 §窄屏): 「读过的文件 N · 原始数据」 and the disclosure chevron. N is the
   // 读过的文件 group's own count — the same hasSeg-filtered set the group header counts, so the two cannot drift. No
-  // ledger (null / no key), or nothing the group would count → only 「原始数据 ▸」: never a "0" standing in for absent
+  // ledger (null / no key), or nothing the group would count → only 「原始数据」: never a "0" standing in for absent
   // records (invariant 4) — an empty ledger says so in the page itself, the fold line has nothing to name.
   const bar = s.root && s.root.querySelector && s.root.querySelector('#rpbar')
   if (bar) {
     const h = s.desk && s.desk.held.get(s.anchor.id)
     const n = h && ledgerDone(s.desk, s.anchor.id) ? [...h.resources.values()].filter((r) => r && r.kind === 'file' && hasSeg(r)).length : 0
-    bar.textContent = n > 0 ? `${W.RES_GRP.file} ${n} · ${W.RAW_WORD}` : W.RAW_WORD // the ▸ / ▾ is the bar's own ::after (open state)
+    bar.textContent = n > 0 ? `${W.RES_GRP.file} ${n} · ${W.RAW_WORD}` : W.RAW_WORD // the chevron is the bar's own ::after, a --glyph-disc mask that turns when open (replay.css)
   }
 }
 

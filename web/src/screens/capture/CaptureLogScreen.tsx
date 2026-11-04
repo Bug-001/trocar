@@ -1,7 +1,7 @@
 // screens/capture/CaptureLogScreen.tsx — 采集 · 采集记录 (1.9 §采集记录): the capture failures of the last 24 h, one row per failure
 // group, newest first. It renders logModel (log-model.mjs) of the status document, filtered by `?h=`. A re-read never disturbs the reader
 // (1.9 §页面结构): rows keyed by the group key, open state per group key (cleared when the filter changes), the answer held while a
-// selection lies in the rows (useSelectionHold). Only a row's ▸ button opens or folds it; the rest of the line is selectable text.
+// selection lies in the rows (useSelectionHold). Only a row's triangle button opens or folds it; the rest of the line is selectable text.
 import { Fragment, useCallback, useMemo, useState } from 'react'
 import { Button, Disclosure, DisclosurePanel, Menu, MenuItem, MenuTrigger, Popover } from 'react-aria-components'
 import { harnessName } from '../../../legacy/core/chips.mjs'
@@ -18,7 +18,7 @@ import { HarnessIcon } from '../../ui/HarnessIcon'
 import type { ScreenProps } from '../../ScreenOutlet'
 import { logModel as logModelJs, agentsOf as agentsOfJs } from './log-model.mjs'
 import { Parts, techPairs, type Pair } from './AgentRow'
-import { Chev } from '../../ui/Chev'
+import { Chev, MenuChev } from '../../ui/Chev'
 
 type Row = { key: string, time: string, who: { id: string, name: string } | null, whoText: string, text: string, unknown: boolean,
   count: string, tech: Pair[], diag: string }
@@ -40,7 +40,7 @@ function FilterMenu({ filter, agents }: { filter: string | null, agents: string[
     ...agents.map((a) => ({ id: a, label: harnessName(a), href: `#/capture/log?h=${encodeURIComponent(a)}` }))]
   return (
     <MenuTrigger>
-      <Button className="popbtn" aria-label="Filter by agent">{filter ? harnessName(filter) : 'All agents'} <span className="chev" aria-hidden="true">▾</span></Button>
+      <Button className="popbtn" aria-label="Filter by agent">{filter ? harnessName(filter) : 'All agents'} <MenuChev /></Button>
       <Popover className="pop menu" placement="bottom end">
         <Menu aria-label="Filter by agent" items={items}>
           {(i) => <MenuItem id={i.id} href={i.href} textValue={i.label}>{i.label}</MenuItem>}
@@ -53,13 +53,13 @@ function FilterMenu({ filter, agents }: { filter: string | null, agents: string[
 function LogRow({ row, open, onOpen }: { row: Row, open: boolean, onOpen: (open: boolean) => void }) {
   return (
     <Disclosure className="lr" data-key={row.key} data-unknown={row.unknown ? '1' : undefined} isExpanded={open} onExpandedChange={onOpen}>
+      <Button slot="trigger" className="lgo" data-lrow={`lx-${row.key}`} aria-label="Expand this row">
+        <Chev />
+      </Button>
       <span className="t">{row.time}</span>
       <span className="ag">{row.who ? <><HarnessIcon id={row.who.id} /><span className="chipname">{row.who.name}</span></> : <span className="c2">{row.whoText}</span>}</span>
       <span className="say">{row.text}</span>
       <span className="cnt">{`×${row.count}`}</span>
-      <Button slot="trigger" className="lgo" data-lrow={`lx-${row.key}`} aria-label="Expand this row">
-        <Chev />
-      </Button>
       <DisclosurePanel className="lx">
         <TechDetails pairs={techPairs(row.tech)} copy={pairsText(row.tech)} />
         <div className="capcopy"><CopyButton text={row.diag} label="Copy diagnostics" row /></div>
@@ -112,7 +112,7 @@ export default function CaptureLogScreen({ route }: ScreenProps) {
           </div> : null}
           <section className="crows" aria-label="Capture failures">
             {model.rows.length ? <>
-              <div className="lr h colhead"><span>Time</span><span>Agent</span><span className="say">What happened</span><span className="cnt">Count</span><span></span></div>
+              <div className="lr h colhead"><span></span><span>Time</span><span>Agent</span><span className="say">What happened</span><span className="cnt">Count</span></div>
               {model.rows.map((r) => <LogRow key={r.key} row={r} open={choice.get(r.key) === true} onOpen={(o) => setOpen(r.key, o)} />)}
             </> : <p className="caplog-none">{model.none}</p>}
           </section>

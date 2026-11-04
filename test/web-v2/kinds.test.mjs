@@ -10,6 +10,12 @@ const ENT = { lt: '<', gt: '>', quot: '"', '#39': "'", '#13': '\r', amp: '&' }
 const textOf = (h) => h.replace(/<[^>]*>/g, '').replace(/&(lt|gt|quot|#39|#13|amp);/g, (_, n) => ENT[n])
 const has = (h, c) => new RegExp(`class="[^"]*(?<![\\w-])${c}(?![\\w-])`).test(h)
 const count = (h, re) => [...h.matchAll(re)].length
+// code's ESC byte (2.3 §两种模式): each one sits alone in a kd-esc span (the byte itself, so a copy carries it); none stands bare
+const ESC_SPAN = /<span class="kd-esc"[^>]*>\u001b<\/span>/g
+const escFaults = (h, n) => {
+  const spans = count(h, ESC_SPAN), bare = count(h.replace(ESC_SPAN, ''), /\u001b/g)
+  return spans === n && bare === 0 ? null : { spans, bare, n }
+}
 
 let seed = 0xc311
 const rnd = () => { seed = (seed + 0x6D2B79F5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296 }
@@ -21,14 +27,15 @@ const val = (d) => d <= 0 ? pick([() => str(10), () => rnd() * 1e6 - 5e5, () => 
   : pick([() => Array.from({ length: Math.floor(rnd() * 6) }, () => val(d - 1)),
     () => Object.fromEntries(Array.from({ length: Math.floor(rnd() * 6) }, (_, i) => ['k' + i + str(3), val(d - 1)])), () => val(0)])()
 
-test('text and code: the kind class, and the drawn text is the source (code shows ESC as a visible mark)', () => {
+test('text and code: the kind class, and the drawn text is the source (code marks each ESC byte and keeps it, 1.5 #5)', () => {
   for (let i = 0; i < 300; i++) {
     const s = str(200)
     for (const as of ['text', 'code']) {
       const out = renderKind({ as }, s, { budget: 1e9 })
       assert.ok(has(wrap(out), 'kd-' + as), as)
       assert.equal(out.more, null)
-      assert.equal(textOf(out.html), as === 'code' ? s.replaceAll('\u001b', '␛') : s, as)
+      assert.equal(textOf(out.html), s, as)
+      if (as === 'code') assert.equal(escFaults(out.html, count(s, /\u001b/g)), null, 'each ESC byte is one kd-esc mark')
     }
   }
 })
@@ -51,7 +58,7 @@ test('slicing: the more chain covers the whole string with no gap or overlap', (
         assert.ok(out.more === null || out.more > from, 'progress')
         from = out.more; n++
       } while (from !== null && n < 1e5)
-      assert.equal(got, as === 'code' ? s.replaceAll('\u001b', '␛') : s)
+      assert.equal(got, s)
     }
   }
 })
@@ -141,13 +148,15 @@ test('json: the first paint holds at most 200 nodes, arrays over 100 entries are
 
 test('sections: each top-level tag pair gets a sec-tag label; text outside the tags stays', () => {
   for (let i = 0; i < 100; i++) {
-    const secs = Array.from({ length: 1 + Math.floor(rnd() * 4) }, (_, k) => [pick(['system-reminder', 'error', 'x-y']), str(20).replace(/[<\u001b]/g, '')])
-    const lead = str(10).replace(/</g, '')
+    const code = rnd() < 0.5 // a code child draws ESC bytes in the bodies; other kids get bodies without them
+    const secs = Array.from({ length: 1 + Math.floor(rnd() * 4) }, (_, k) => [pick(['system-reminder', 'error', 'x-y']), str(20).replace(code ? /</g : /[<\u001b]/g, '')])
+    const lead = str(10).replace(/[<\u001b]/g, '')
     const s = lead + secs.map(([t, b]) => `<${t}>${b}</${t}>`).join('\n')
-    const out = renderKind({ as: 'sections', ...(rnd() < 0.5 && { kids: [{ as: 'code' }] }) }, s)
+    const out = renderKind({ as: 'sections', ...(code && { kids: secs.map(() => ({ as: 'code' })) }) }, s)
     assert.ok(has(wrap(out), 'kd-sec'))
     assert.equal(count(out.html, /class="sec-tag"/g), secs.length)
-    for (const [, b] of secs) assert.ok(textOf(out.html).includes(b.replaceAll('\u001b', '␛')))
+    for (const [, b] of secs) assert.ok(textOf(out.html).includes(b))
+    if (code) assert.equal(escFaults(out.html, count(s, /\u001b/g)), null, 'each body ESC byte is one kd-esc mark')
   }
 })
 

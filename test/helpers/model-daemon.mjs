@@ -14,9 +14,36 @@ import { tmpDir } from './tmp.mjs'
 
 const NOBODY = { ownerOf: async () => null, factsOf: async () => null, proc: {}, proxyOf: () => null, systemProxy: () => null, procTable: async () => [], close: () => {} }
 
-/** daemon: more startDaemon options (its `fork` seam, `queryIdleMs` the query service's idle clock). io: doorPartsFor's OS readers (its `io`), for a daemon whose door parts are the arch's own; without it the door parts are NOBODY — `parts` adds to
+/** Can this host serve `platform`'s control endpoint for real? A platform whose endpoint is a pipe name (its control-path exports PIPE_PREFIX) is
+ *  served everywhere: on a POSIX host as a relative unix socket (withScratchCwd). A platform whose endpoint is a unix socket in the tmp directory
+ *  is served only on a POSIX host: libuv on a win32 host listens on pipe names only, and a socket path there is EACCES, a shape no real platform has.
+ *  → false when it can, else the reason: a test's `skip` option as it is (node:test skips on null). */
+export async function unservable(platform, host = process.platform) {
+  const mod = await import(`../../src/collector/arch/${platform}/control-path.mjs`)
+  if ('PIPE_PREFIX' in mod || host !== 'win32') return false
+  return `a ${host} host cannot serve ${platform}'s unix-socket control endpoint (it listens on pipe names only)`
+}
+
+/** The platforms a model world is built for (modelWorld's `os`) whose daemon serves a control endpoint, in the order a test takes them. */
+const WORLDS = ['darwin', 'win32']
+/** → { platform, renderWrapper }: the first of WORLDS this host can serve for real (unservable), and that platform's own renderWrapper (a
+ *  win32 world's is win32's, never darwin's). renderWrapper only renders a wrapper's source: placing a win32 wrapper also takes a compile
+ *  step (model-backends' wrapperKit), which this does not give, so it serves worlds whose harnesses place no wrapper. */
+export async function servableWorld(host = process.platform) {
+  for (const platform of WORLDS) {
+    if (await unservable(platform, host)) continue
+    const { renderWrapper } = await import(`../../src/collector/arch/${platform}/wrapper.mjs`)
+    return { platform, renderWrapper }
+  }
+  throw new Error(`servableWorld: a ${host} host can serve none of ${WORLDS.join(', ')}`)
+}
+
+/** daemon: more startDaemon options (its `fork` seam, `queryIdleMs` the query service's idle clock). Throws, before anything starts, for a platform
+ *  this host cannot serve (unservable). io: doorPartsFor's OS readers (its `io`), for a daemon whose door parts are the arch's own; without it the door parts are NOBODY — `parts` adds to
  *  those (a stand-in `helper` for the daemon's read route, 4.8 §7). */
 export async function liveUnit({ w, platform, io = null, parts = null, daemon = {}, routes = null }) {
+  const cannot = await unservable(platform)
+  if (cannot) throw new Error(`liveUnit: ${cannot}`)
   const { controlEndpoint } = await import(`../../src/collector/arch/${platform}/control-path.mjs`)
   const arch = { os: platform, controlEndpoint }
   const box = { daemon: null, starting: null, enabled: [], startedNow: [], procs: [] } // procs: the process table the daemon's holder judge reads (empty: no holder)
