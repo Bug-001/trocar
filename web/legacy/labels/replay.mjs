@@ -17,13 +17,18 @@ export const LANE_KIND = Object.freeze({
   notify: { word: 'notification summary', row: 'bg', bucket: 'bg', hint: 'The agent asks the model to sum up recent activity in a one-line notification' },
   titlegen: { word: 'title generation', row: 'bg', bucket: 'bg', hint: 'The agent asks the model to give the session a title' },
   quota: { word: 'keep-alive check', row: 'bg', bucket: 'bg', hint: 'A check call with a tiny reply limit; the reply is not used' },
-  aux: { word: 'other background call', row: 'bg', bucket: 'bg', hint: 'Any other helper call outside the main thread and the sub-agents' },
+  suggest: { word: 'Next-prompt suggestion', row: 'bg', bucket: 'bg', hint: 'The agent copies the whole conversation and asks the model what the next prompt might be; the reply is only a hint in the input box and does not enter the conversation' },
+  websearch: { word: 'Web search', row: 'bg', bucket: 'bg', hint: 'A model call the search tool makes on its own' },
+  webfetch: { word: 'Web page summary', row: 'bg', bucket: 'bg', hint: 'A small model answers from one fetched page' },
+  aux: { word: 'Unnamed background call', row: 'bg', bucket: 'bg', hint: 'A background call the board cannot name' },
   probe: { word: 'warm-up request', row: 'bg', bucket: 'bg', hint: 'A warm-up request the agent marked itself: it writes the cache ahead of time; not a step of the main thread' },
   'token-count': { word: 'token count', row: 'tc', bucket: null, hint: 'Token count: generates no reply and is not billed' },
 })
 // a kind the table does not know yet (the server grew one): its own words, the 后台调用 row, no guess about the bucket
-export const laneKind = (kind) => LANE_KIND[kind] || { word: 'other call', row: 'bg', bucket: 'bg', hint: 'The board does not know this kind of call yet' }
+export const laneKind = (kind) => LANE_KIND[kind] || { word: 'Unnamed background call', row: 'bg', bucket: 'bg', hint: 'The board does not know this kind of call yet' }
 export const laneWord = (kind) => laneKind(kind).word
+// the background group row's own hover: the row holds every 'bg' kind
+export const BG_ROW_HINT = 'Helper calls outside the main thread and the sub-agents'
 
 // ── the cache predicate's own words (2.2 §缓存判定; the states are core/metrics.mjs : CACHE_STATES) ──────────────────
 // cacheSentence(state, {laneW, causeW, attrW, hitPct, warm, inferred, errMsg, zeroInput}) → the sentence the 缓存 popover opens

@@ -11,7 +11,7 @@ import { relPath, midClip } from './analysis.mjs'
 import { navGroup, jumpToStepAndBlock } from './outline.mjs'
 import { KIDS, serialize, keyed, patchInto } from '../core/units.mjs'
 import * as W from '../labels/replay.mjs'
-import { resKeyOf, laneEvents, seenFiles, ledgerDone } from './model.mjs'
+import { resKeyOf, laneEvents, seenFiles, ledgerDone, compactionNumbers } from './model.mjs'
 
 const SEEN_CAP = 40
 // a resource is datable (has a lifecycle to speak of) only with a usable segment list; the six display groups and the
@@ -102,10 +102,11 @@ export function resourceUnits(s) {
   const dlRow = (r) => { const l = life(r)
     return `<div class="navsub" data-navstep="${l.enter}"><span class="nsl" title="${esc(r.label)}">${esc(r.kind === 'dir' ? W.DIR_WORD : W.LINK_WORD)} ${rp(r.label)}</span><button type="button" class="navlife" data-navstep="${l.enter}" aria-label="${esc(W.jumpStepTip(at(l.enter)))}">${esc(W.lifeSeen(at(l.enter)))}</button></div>` }
   const dl = [...of('dir'), ...of('link')]
+  const numbers = compactionNumbers(events, (e) => L(e.rid))
   const compRow = (e) => {
-    const atStep = L(e.rid)
+    const atStep = L(e.rid), n = numbers.get(e)
     const word = e.type === 'compaction'
-      ? W.compactRow(at(atStep), e.from != null ? String(e.from) : '—', e.to != null ? String(e.to) : '—') + (e.inferred ? ` · ${W.GUESS}` : '')
+      ? W.compactRow(at(atStep), n.from != null ? String(n.from) : '—', n.to != null ? String(n.to) : '—') + (e.inferred ? ` · ${W.GUESS}` : '')
       : W.summarizeRow(at(atStep), e.out != null ? kf(e.out) : '—')
     return `<div class="navsub" data-navstep="${atStep}"><span class="nsl" title="${esc(word)}">${esc(word)}</span></div>` }
   const comps = events.filter((e) => e && (e.type === 'compaction' || e.type === 'summarize'))

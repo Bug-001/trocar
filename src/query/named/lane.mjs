@@ -177,7 +177,7 @@ export async function run(ctx) {
   const { cols, log } = st.V;
   if (!cols.lanes.has(key)) return empty(markOn(st.plan, st.mark));
   const S = laneStepper(st, key), { L, rids, lines, listAt, replyAt, eventsAt } = S, n = rids.length, wireDef = S.defOf;
-  const CS = (e) => e.type === 'compaction' || e.type === 'summarize';
+  const CS = (e) => e.type === 'compaction' || e.type === 'compaction-landed' || e.type === 'summarize';
   const flagged = [];
   for (let i = 0; i < n; i++) if (cols.cs[L.slots[i]]) flagged.push(i);
   // step i with ops against step i-1 (a keyframe when `keyframe`); its parent is step i-1 either way (the page's base names it)

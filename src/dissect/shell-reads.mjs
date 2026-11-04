@@ -1,11 +1,29 @@
 // src/dissect/shell-reads.mjs — the files one shell command reads, with their real paths (spec 2.4,
-// fidelity boundary item 6). A small lexer into simple commands plus a sequential interpreter that
+// fidelity boundary items 6 and 7). A small lexer into simple commands plus a sequential interpreter that
 // tracks what the command itself settles: literal variables, the current directory, `for` values.
 // Not a shell: anything the run decides stays exactly as written, with a closed-set `runtime` code
 // (output · read · earlier · cwd). Paths are never invented. Pure leaf: no I/O, nothing imported.
 
-const READER = /^(cat|bat|head|tail|tac|nl|less|more|xxd|od|strings)$/;
-const FLAG_TAKES_VALUE = /^(head|tail|sed|xxd|od|strings)$/;
+// Which words of a command are its files; 2.4 fidelity boundary item 7 is the boundary. takes: short flags followed by a value ·
+// long: long flags and how many words they take · script: the first operand is no file, unless a flag matching `given` carries it ·
+// need / not: a flag that makes it a read / keeps it from being one · ranges: [pattern on the joined line, label] · range: else this.
+const LINES = { takes: 'nc', long: { '--lines': 1, '--bytes': 1 } };
+const READS = {
+  cat: {}, tac: {}, more: {}, less: {},
+  nl: { takes: 'bdfhilnpsvw' }, bat: { takes: 'lrHm', long: { '--line-range': 1, '--language': 1 } },
+  xxd: { takes: 'cglos' }, od: { takes: 'AjNStw' }, strings: { takes: 'nte' },
+  head: { ...LINES, ranges: [[/(?:^| )-n? ?(\d+)\b/, 'L1–$1']] },
+  tail: { ...LINES, ranges: [[/(?:^| )-n? ?(\d+)\b/, 'tail $1']] },
+  sed: { script: true, given: /^-[a-zA-Z]*[ef]$|^--(expression|file)/, takes: 'efl', long: { '--expression': 1, '--file': 1 }, need: /^-[a-zA-Z]*n|^--(quiet|silent)$/, not: /^-[a-zA-Z]*i|^--in-place/, range: 'matching lines',
+    ranges: [[/(?:^| )-n(?:e| -e)? ?(\d+),(\d+)\s*p(?: |$)/, 'L$1–$2'], [/(?:^| )-n(?:e| -e)? ?(\d+)\s*p(?: |$)/, 'L$1']] },
+  grep: { script: true, given: /^-[a-zA-Z]*[ef]$|^--(regexp|file)/, takes: 'ABCDdefm', long: { '--regexp': 1, '--file': 1, '--context': 1, '--after-context': 1, '--before-context': 1, '--max-count': 1 },
+    not: /^-[a-zA-Z]*[rRlLcq]|^--(recursive|dereference-recursive|files-with-matches|files-without-match|count|quiet|silent)/, range: 'matching lines' },
+  awk: { script: true, given: /^-[a-zA-Z]*f$|^--file/, takes: 'Ffv', long: { '--file': 1 }, range: 'filtered' },
+  jq: { script: true, given: /^-[a-zA-Z]*f$|^--from-file/, takes: 'fL', long: { '--from-file': 1, '--arg': 2, '--argjson': 2, '--slurpfile': 2, '--rawfile': 2, '--indent': 1 }, range: 'filtered' },
+};
+// commands that run the command behind them; operands: their own, before it
+const PREFIX = { sudo: { takes: 'ugUCDhprtT' }, env: { takes: 'uCS' }, time: { takes: 'fo' }, nohup: {}, nice: { takes: 'n' }, timeout: { takes: 'ks', operands: 1 } };
+const rowOf = (table, name) => (Object.hasOwn(table, name) ? table[name] : null); // a command can be called `constructor`
 const DECLARE = /^(export|local|declare|readonly|typeset)$/;
 const KEYWORDS = new Set(['while', 'until', 'if', 'elif', 'do', 'then', 'else', 'fi', 'done', '{', '}', '!']);
 const GLOB = /[*?{}]/;
@@ -16,9 +34,8 @@ const REDIRECT = /(\d*)(&>>|&>|<<<|<<-|<<|>>|>&|>\||<&|<>|>|<)/y;
 const VAR = /[A-Za-z_]\w*/y;
 const MARK = '\0'; // stands for the home directory inside values, so `..` resolves once it is known
 const ROOTED = /^(?:[/\0]|~[^/]|[A-Za-z]:[\\/])/;
-const MAX_READS = 256;
 const MAX_LOOP = 64; // values of one `for`, and `for`s inside one another
-const MAX_STEPS = 4096;
+const MAX_STEPS = 4096; // what a loop's expansion may walk, and the reads one command may give: a literal list stays whole below it
 
 // The index just past the construct opened right before i: `(`, `{` (of `${`), `"` or a backtick.
 // A stack, not recursion: captured commands can nest as deep as they like.
@@ -147,6 +164,15 @@ function assignment(word) {
 
 const firstOf = (item) => item.words?.[0]?.raw;
 
+// A flag word by its row: `name`, and `value` the words it takes after it. A short cluster reads left to right and the first letter
+// that takes a value ends it: `-A3` and `-vn=f` carry their value. `--x=y` does too, so it takes none.
+function flagOf(word, { takes = '', long = {} }) {
+  if (word[0] !== '-' || word[1] === '-') return { name: word, value: Object.hasOwn(long, word) ? long[word] : 0 };
+  let at = 1;
+  while (at < word.length && !takes.includes(word[at])) at++;
+  return { name: word.slice(0, at + 1), value: at === word.length - 1 ? 1 : 0 };
+}
+
 // the word as the command spells it, outer quotes off
 function writtenOf({ raw, quotes }) {
   return quotes === 1 && raw.length > 1 && `'"`.includes(raw[0]) && raw[raw.length - 1] === raw[0] ? raw.slice(1, -1) : raw;
@@ -155,7 +181,7 @@ function writtenOf({ raw, quotes }) {
 // stdout into a file: `>`, `>>`, `1>`, `&>`. A descriptor target (`>&2`) is no file.
 const isWrite = ({ fd, op, w }) => op[0] === '&' || (op[0] === '>' && (!fd || fd === '1') && !(op === '>&' && /^(\d+|-)$/.test(w.raw)));
 
-export function parseBashReads(command, { home = null, cwd = null } = {}) {
+export function parseBashReads(command, { home = null } = {}) {
   if (!command || typeof command !== 'string') return [];
   const items = lex(command);
   const out = [];
@@ -166,19 +192,11 @@ export function parseBashReads(command, { home = null, cwd = null } = {}) {
   let lost = null; // the runtime code once a `cd` went somewhere unknown
   let steps = 0;
   let nesting = 0;
-  let stated;
-  const workdir = () => {
-    if (stated === undefined) stated = (typeof cwd === 'function' ? cwd() : cwd) || null;
-    return stated;
-  };
-
-  // a relative value on the in-command directory, else on the stated cwd
+  // a relative value on the in-command directory: known once that directory is absolute
   const against = (rel) => {
     if (lost) return { why: lost };
     const full = [dir, rel].filter(Boolean).join('/');
-    if (ROOTED.test(full)) return { v: full };
-    const base = workdir();
-    return base ? { v: [base, full].filter(Boolean).join('/') } : { why: 'cwd', rel: full };
+    return ROOTED.test(full) ? { v: full } : { why: 'cwd', rel: full };
   };
 
   // { v } when the command settles the word, { why } when the run does
@@ -219,33 +237,54 @@ export function parseBashReads(command, { home = null, cwd = null } = {}) {
 
   const view = (word) => ({ ...expand(word.parts), text: writtenOf(word) });
 
-  const readsOf = (name, args, inputs) => {
-    if (name !== 'sed' && !READER.test(name)) return;
-    const words = args.map(view);
-    const line = words.map((w) => w.v ?? w.text).join(' ');
-    let range = 'full file';
-    let script = -1;
-    if (name === 'sed') {
-      const m = /(?:^| )-n ?(\d+),(\d+)\s*p/.exec(line);
-      if (!m) return;
-      range = `L${m[1]}–${m[2]}`;
-      script = words.findIndex((w) => /^\d+,\d+\s*p/.test(w.v));
-    } else {
-      const m = /(?:^| )-n? ?(\d+)\b/.exec(line);
-      if (m && name === 'head') range = `L1–${m[1]}`;
-      else if (m && name === 'tail') range = `tail ${m[1]}`;
+  const said = (word) => { const { v, text } = view(word); return v ?? text; };
+
+  // words from `from` as flags and operands, stopping at the operand past `limit`: `next` is where it stopped
+  const walk = (words, from, row, limit = Infinity) => {
+    const flags = [];
+    const operands = [];
+    let ended = false; // `--` ends the flags
+    let k = from;
+    for (; k < words.length; k++) {
+      const word = said(words[k]);
+      if (!ended && word === '--') ended = true;
+      else if (!ended && /^[-+]/.test(word)) {
+        const flag = flagOf(word, row);
+        flags.push(flag);
+        k += flag.value;
+      } else if (operands.length === limit) break;
+      else operands.push(words[k]);
     }
-    const take = (w) => {
+    return { flags, operands, next: k };
+  };
+
+  const readsOf = (name, args, inputs) => {
+    const row = rowOf(READS, name);
+    if (!row) return;
+    const { flags, operands } = walk(args, 0, row);
+    if (row.need && !flags.some((f) => row.need.test(f.name))) return;
+    if (row.not && flags.some((f) => row.not.test(f.name))) return;
+    const line = args.map(said).join(' ');
+    const hit = row.ranges?.find(([re]) => re.test(line));
+    const range = hit ? line.match(hit[0])[0].replace(hit[0], hit[1]) : row.range ?? 'full file';
+    const scripted = row.script && !flags.some((f) => row.given.test(f.name));
+    for (const word of [...operands.slice(scripted ? 1 : 0), ...inputs]) {
+      const w = view(word);
       const spelled = w.v ?? w.text;
-      if (spelled.startsWith('-') || /^https?:/i.test(spelled)) return;
-      if (!w.why && (!/[./]/.test(spelled) || GLOB.test(spelled))) return;
-      if (out.length < MAX_READS) out.push({ ...locate(w), range });
-    };
-    words.forEach((w, k) => {
-      const flagValue = w.why && FLAG_TAKES_VALUE.test(name) && /^-[A-Za-z]$/.test(words[k - 1]?.text);
-      if (k !== script && !flagValue) take(w);
-    });
-    inputs.forEach((w) => take(view(w)));
+      if (!spelled || /^https?:/i.test(spelled) || (!w.why && GLOB.test(spelled))) continue;
+      if (out.length < MAX_STEPS) out.push({ ...locate(w), range });
+    }
+  };
+
+  const nameOf = (word) => word && expand(word.parts).v?.split('/').pop();
+
+  // the index of the command behind the prefixes at k
+  const pastPrefixes = (words, k) => {
+    for (let row; (row = rowOf(PREFIX, nameOf(words[k])));) {
+      k = walk(words, k + 1, row, row.operands ?? 0).next;
+      while (k < words.length && assignment(words[k])) k++;
+    }
+    return k;
   };
 
   const assign = ({ name, append, parts }) => vars.set(name, append ? { why: 'output' } : expand(parts));
@@ -268,7 +307,8 @@ export function parseBashReads(command, { home = null, cwd = null } = {}) {
     else if (DECLARE.test(head.raw)) args.map(assignment).filter(Boolean).forEach(assign);
     else if (head.raw === 'read') { for (const w of args) if (NAME.test(w.raw)) vars.set(w.raw, { why: 'read' }); }
     else if (!redirs.some(isWrite)) {
-      readsOf(expand(head.parts).v?.split('/').pop(), args, redirs.filter((r) => r.op === '<').map((r) => r.w));
+      const at = pastPrefixes(words, k);
+      readsOf(nameOf(words[at]), words.slice(at + 1), redirs.filter((r) => r.op === '<').map((r) => r.w));
     }
   };
 
@@ -297,7 +337,7 @@ export function parseBashReads(command, { home = null, cwd = null } = {}) {
 
   const run = (from, to) => {
     for (let i = from; i < to; i++) {
-      if (out.length >= MAX_READS || ++steps > MAX_STEPS) return;
+      if (out.length >= MAX_STEPS || ++steps > MAX_STEPS) return;
       const { paren, words, redirs } = items[i];
       if (paren === '(') stack.push({ vars: new Map(vars), dir, lost });
       else if (paren === ')') { if (stack.length) ({ vars, dir, lost } = stack.pop()); }

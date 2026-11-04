@@ -54,7 +54,7 @@ function absorb(H, p, rids) {
 }
 // The rule, on one answer: its events are its steps', but for a base:null page's compaction and summarize events; an answer of more
 // than one step or ledger entry ships ≤ PAGE_BYTES of steps, definitions, events, resources and seen.
-const CS = (e) => e.type === 'compaction' || e.type === 'summarize'
+const CS = (e) => e.type === 'compaction' || e.type === 'compaction-landed' || e.type === 'summarize'
 const bytes = (list) => list.reduce((a, x) => a + Buffer.byteLength(JSON.stringify(x)), 0)
 function pageRule(p) {
   const own = new Set(p.steps.map((st) => st.rid))

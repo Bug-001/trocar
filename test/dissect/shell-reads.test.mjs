@@ -12,7 +12,7 @@ const paths = (cmd, ctx) => parseBashReads(cmd, ctx).map((r) => r.path);
 const READERS = [
   ['cat', 'full file'], ['nl', 'full file'], ['/usr/bin/less', 'full file'],
   ['head -n 7', 'L1–7'], ['head -7', 'L1–7'], ['tail -n 7', 'tail 7'], ['tail -7', 'tail 7'],
-  ["sed -n '3,9p'", 'L3–9'], ['sed -n 3,9p', 'L3–9'],
+  ["sed -n '3,9p'", 'L3–9'], ['sed -n 3,9p', 'L3–9'], ['sed -n 5p', 'L5'],
 ];
 const TARGETS = [['/data/run/logs', 'a.log'], ['/repo/spec', 'b.md'], ['/x', 'y.tar.gz'], ['/deep/er/still', 'noext/z']];
 
@@ -71,37 +71,27 @@ test('~ and $HOME are one spelling: the home when known, ~/rest when not', () =>
     for (const cmd of HOME_SPELLINGS(d, b)) {
       for (const [ctx, want] of [
         [{ home: '/Users/u' }, `/Users/u/${d}/${b}`],
-        [{ home: '/home/u', cwd: '/elsewhere' }, `/home/u/${d}/${b}`],
+        [{ home: '/home/u' }, `/home/u/${d}/${b}`],
         [{}, `~/${d}/${b}`],
-        [{ cwd: '/elsewhere' }, `~/${d}/${b}`],
       ]) {
         assert.deepEqual(parseBashReads(cmd, ctx), [{ path: want, range: 'full file' }], cmd);
       }
     }
   }
-  assert.deepEqual(paths('cat ~other/a.txt', { home: '/Users/u', cwd: '/w' }), ['~other/a.txt']);
+  assert.deepEqual(paths('cat ~other/a.txt', { home: '/Users/u' }), ['~other/a.txt']);
   assert.deepEqual(paths('cat ~/a/b.txt', { home: 'C:\\Users\\u' }), ['C:\\Users\\u/a/b.txt']);
   assert.deepEqual(paths('cat ~/../v/b.txt', { home: '/Users/u' }), ['/Users/v/b.txt']);
 });
 
-test('a relative path joins the in-command directory, else the stated cwd, else stays with cwd', () => {
-  const cases = [['cat a/b.txt', 'a/b.txt'], ['cat ./b.txt', 'b.txt'], ['P=a/b.txt; cat $P', 'a/b.txt']];
-  for (const [cmd, tail] of cases) {
-    assert.deepEqual(paths(cmd, { cwd: '/w' }), [`/w/${tail}`], cmd);
-    assert.deepEqual(paths(cmd, { cwd: () => '/w' }), [`/w/${tail}`], cmd);
-    assert.deepEqual(paths(`cd /c; ${cmd}`, { cwd: '/w' }), [`/c/${tail}`], cmd);
-    const [got] = parseBashReads(cmd);
-    assert.equal(got.runtime, 'cwd', cmd);
-    assert.equal(got.path, cmd.startsWith('P=') ? 'a/b.txt' : cmd.slice(4), cmd);
+test('a relative path stays as written with cwd, unless the command cds to an absolute directory', () => {
+  for (const [cmd, word, tail] of [['cat a/b.txt', 'a/b.txt', 'a/b.txt'], ['cat ./b.txt', './b.txt', 'b.txt'], ['P=a/b.txt; cat $P', 'a/b.txt', 'a/b.txt']]) {
+    assert.deepEqual(parseBashReads(cmd), [{ path: word, range: 'full file', runtime: 'cwd' }], cmd);
+    assert.deepEqual(parseBashReads(`cd /c; ${cmd}`), [{ path: `/c/${tail}`, range: 'full file' }], cmd);
   }
-  assert.deepEqual(paths('cd sub && cat ../b.txt', { cwd: '/w' }), ['/w/b.txt']);
-  assert.deepEqual(parseBashReads('cd sub && cat b.txt').map((r) => r.runtime), ['cwd']);
-  assert.deepEqual(paths('cat $PWD/b.txt', { cwd: '/w' }), ['/w/b.txt']);
-
-  let asked = 0;
-  const cwd = () => { asked += 1; return '/w'; };
-  assert.deepEqual(paths('cat /a/b.txt; cat ~/c.txt; cd /d && cat e.txt', { cwd }), ['/a/b.txt', '~/c.txt', '/d/e.txt']);
-  assert.equal(asked, 0, 'a getter is read only when a relative path needs it');
+  assert.deepEqual(parseBashReads('cd sub && cat ../b.txt').map((r) => r.runtime), ['cwd']);
+  assert.deepEqual(parseBashReads('cd sub && cat b.txt').map((r) => [r.path, r.runtime]), [['sub/b.txt', 'cwd']]);
+  // a caller's stated directory is no input: the same answer with one offered
+  assert.deepEqual(parseBashReads('cat a/b.txt', { cwd: '/w' }).map((r) => [r.path, r.runtime]), [['a/b.txt', 'cwd']]);
 });
 
 // [the command, the word as it stands in the command with outer quotes off, the code]
@@ -140,7 +130,7 @@ const RUN_TIME = (r) => [
 test('a run-time form keeps its word byte for byte, with the expected code, whatever the context', () => {
   for (const r of ['cat', 'tail -n 3', 'head -3', "sed -n '1,2p'"]) {
     for (const [cmd, word, code] of RUN_TIME(r)) {
-      for (const ctx of [{}, { home: '/Users/u' }, { home: '/Users/u', cwd: '/w' }]) {
+      for (const ctx of [{}, { home: '/Users/u' }]) {
         const got = parseBashReads(cmd, ctx);
         assert.deepEqual(got.map((x) => [x.path, x.runtime]), [[word, code]], cmd);
         assert.ok(RUNTIME.has(got[0].runtime));
@@ -159,7 +149,7 @@ test('an unknown directory leaves absolute paths alone, and a known cd takes ove
 
 test('bounds: scope and order of the command decide, and what is not a read stays out', () => {
   // a subshell's cd and variables end at its close paren
-  assert.deepEqual(paths('(cd /a && cat x.txt); cat y.txt', { cwd: '/w' }), ['/a/x.txt', '/w/y.txt']);
+  assert.deepEqual(paths('(cd /a && cat x.txt); cat y.txt'), ['/a/x.txt', 'y.txt']);
   assert.deepEqual(paths('cd /b; (cd /a; (cd /c); cat x.txt); cat y.txt'), ['/a/x.txt', '/b/y.txt']);
   assert.deepEqual(parseBashReads('(P=/a); cat $P/x.txt').map((r) => r.runtime), ['earlier']);
   // a later reassignment wins, also for the same word read twice
@@ -177,9 +167,9 @@ test('bounds: scope and order of the command decide, and what is not a read stay
   assert.deepEqual(paths('for f in a.txt b.txt; do cat /d/$f; done; cat /e/$f'), ['/d/a.txt', '/d/b.txt', '/e/b.txt']);
   const many = Array.from({ length: 100 }, (_, i) => `f${i}.txt`).join(' ');
   assert.ok(paths(`for f in ${many}; do cat /d/$f; done`).length <= 64);
-  assert.ok(paths(`for a in ${many}; do for b in ${many}; do cat /d/$a/$b; done; done`).length <= 256);
+  assert.ok(paths(`for a in ${many}; do for b in ${many}; do cat /d/$a/$b; done; done`).length <= 4096);
   assert.deepEqual(parseBashReads('for a in 1 2; do '.repeat(30000)), []);
-  assert.ok(paths(Array.from({ length: 1000 }, (_, i) => `cat /d/${i}.txt`).join('; ')).length <= 256);
+  assert.ok(paths(Array.from({ length: 5000 }, (_, i) => `cat /d/${i}.txt`).join('; ')).length <= 4096);
 
   const NOT_READS = [
     // heredoc lines are not commands, and the command after the terminator is
@@ -188,11 +178,10 @@ test('bounds: scope and order of the command decide, and what is not a read stay
     'cat /a/x.txt > /b/y.txt', 'cat /a/x.txt >> /b/y.txt', 'cat /a/x.txt 1> /b/y.txt', 'cat /a/x.txt &> /b/y.txt',
     'cat /a/x.txt >/dev/null 2>&1', 'tail -n 2 /a/x.txt >/b/y.txt',
     // no reader, or a reader the command does not reach
-    'ls /a/x.txt', 'echo "cat /a/x.txt"', 'grep x /a/y.txt', 'bash -c "cat /a/x.txt"', `ssh h 'cat /a/x.txt'`,
+    'ls /a/x.txt', 'echo "cat /a/x.txt"', 'bash -c "cat /a/x.txt"', `ssh h 'cat /a/x.txt'`,
     'echo $(cat /a/x.txt)', 'P=$(cat /a/x.txt)', '# cat /a/x.txt', 'sed -i s/a/b/ /a/x.txt', 'sed s/a/b/ /a/x.txt',
-    `sed -n '/a/p' /a/x.txt`,
     // words that are not paths
-    'cat https://a.example/x.txt', 'cat /a/*.log', 'cat /a/{x,y}.txt', 'cat /a/?.txt', 'cat README', 'cat -n',
+    'cat https://a.example/x.txt', 'cat /a/*.log', 'cat /a/{x,y}.txt', 'cat /a/?.txt', 'cat -n', 'cat ""',
     'P=/a; cat $P/*.log', 'head -n $N', 'tail -c $(n)', 'xxd -l $N', '',
   ];
   for (const cmd of NOT_READS) assert.deepEqual(parseBashReads(cmd), [], cmd);
@@ -210,6 +199,46 @@ test('bounds: scope and order of the command decide, and what is not a read stay
   assert.deepEqual(paths('head -n $N /a/x.txt'), ['/a/x.txt']);
   assert.deepEqual(parseBashReads('head -n1 $F').map((r) => r.path), ['$F']);
   assert.deepEqual(parseBashReads('cat -n $F').map((r) => r.path), ['$F']);
+});
+
+// 2.4 item 7, the table: each way of reading, with the range it names
+const WAYS = [
+  ['cat', 'full file'], ['head -n 3', 'L1–3'], ['tail -c 10', 'full file'], ['less +10', 'full file'],
+  ['sed -n 5p', 'L5'], ["sed -n '3,9p'", 'L3–9'], ['sed -n -e 5p', 'L5'], ['sed -ne 5p', 'L5'], ["sed -n '/a/p'", 'matching lines'],
+  ['grep x', 'matching lines'], ['grep -n -A 3 x', 'matching lines'], ['grep -A3 x', 'matching lines'], ['grep -e x', 'matching lines'],
+  ['grep --regexp=x', 'matching lines'], ['grep --regexp x', 'matching lines'], ['grep -f p.txt', 'matching lines'],
+  [`awk -F: '{print $1}'`, 'filtered'], ['awk -f p.awk', 'filtered'], [`awk -vn=f 'NR>1'`, 'filtered'],
+  [`jq -r '.a'`, 'filtered'], [`jq --arg k v '.a'`, 'filtered'],
+  ['xxd -l 64', 'full file'], ['od -N 8', 'full file'], ['strings -n 8', 'full file'],
+];
+const PREFIXES = ['', 'sudo', 'sudo -u root', 'env', 'env A=1', 'time', 'time -p', 'nohup', 'nice -n 5', 'timeout 5', 'sudo env A=1'];
+
+test('every prefix and way of reading names exactly the file, with the range it reads', () => {
+  for (const p of PREFIXES) {
+    for (const [way, range] of WAYS) {
+      for (const file of ['/d/a.log', '/d/Makefile', '/d/noext/z']) {
+        assert.deepEqual(parseBashReads(`${p} ${way} ${file}`), [{ path: file, range }], `${p} ${way} ${file}`);
+      }
+      assert.deepEqual(parseBashReads(`${p} ${way} Makefile`), [{ path: 'Makefile', range, runtime: 'cwd' }], `${p} ${way}`);
+    }
+  }
+});
+
+test('one read per file, however many a reader names', () => {
+  for (const n of [2, 300, 1500]) {
+    const files = Array.from({ length: n }, (_, i) => `/d/${i}`);
+    assert.deepEqual(paths(`cat ${files.join(' ')}`), files);
+  }
+});
+
+test('what 2.4 item 7 says is no read yields nothing, behind a prefix too', () => {
+  const NOT = [
+    'ls a', 'stat a', 'wc -l a', 'du a', 'find . -name a', 'file a', 'cp a b', 'mv a b',
+    `sed -i 's/a/b/' f`, 'sed -ni 5p f', `sed 's/a/b/' f`, 'grep -r x d', 'grep -rn x d', 'grep -l x a', 'grep -c x a', 'grep -q x a',
+    'rg x a', 'diff a b', 'git show a', 'python a.py', `ssh h 'cat x'`, `bash -c 'cat x'`, 'cat a > b', 'xargs cat', 'cat *.log', 'echo a | grep x',
+    'constructor a', '__proto__ a',
+  ];
+  for (const p of ['', 'sudo', 'env A=1']) for (const cmd of NOT) assert.deepEqual(parseBashReads(`${p} ${cmd}`), [], `${p} ${cmd}`);
 });
 
 test('real-shaped seeds', () => {

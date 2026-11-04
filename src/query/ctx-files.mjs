@@ -19,7 +19,7 @@ import { laneOf, placeIn, recOf, FLAG } from './session-doc.mjs';
 import { laneStepper, weigh } from './named/lane.mjs';
 
 /** The answer files' format version (3.5 `v`). */
-export const CTX_V = 5;
+export const CTX_V = 6;
 /** The lane headers a head lists at most, the axis lane first, then the most recently active (3.5 `lanes`, SHOULD 64). */
 export const HEAD_LANES = 64;
 // cells of `cols` at most (3.5 `bucket`), failed members `errors` names at most, tier-0 time buckets at most
