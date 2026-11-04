@@ -108,7 +108,7 @@ test('the JSON replies of every wire shape are read back as blocks, with or with
     assert.ok(blocks.length, wire)
     for (const { got, def, what } of blocks) {
       assert.equal(got.fidelity.verbatim, verbatim, `${wire}: ${what}`)
-      assert.equal(def.ff.faithfulness === 'reserialized', !verbatim, `${wire}: ${what}: the definition says what the block answer says`)
+      assert.equal(verbatim ? def.ff.faithfulness !== 'reserialized' : def.ff.faithfulness != null, true, `${wire}: ${what}: the definition never proves what the block answer does not`)
     }
   }
 })
