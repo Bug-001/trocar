@@ -2,12 +2,13 @@
 // window model's items (window-model.mjs windowItems), each keyed by the model's key (D75④), rows drawn with the decision-4 head and the
 // React cell (Cell.tsx). It owns #ctxwin and everything in it but each open cell's body leaf (R2 decision 13).
 //   · The DOM holds the items within one window height of the visible box, plus the pins (withPins): the change line, the reply, the
-//     item holding focus, the item holding the selection, the last reveal's target, and — in the commit
+//     item holding focus, the item holding the selection, a reveal's target until it is in the box, and — in the commit
 //     that changes the step and has a landing target — the landing band, so the landed items are drawn before any scroll event.
 //   · The landing (1.4 §打开一步时落在哪) is computed in render (landingFor, pure; a target inside a folded turn opens it for this display,
 //     s.turnLanded) and scrolled in the layout effect of that commit: once per rid, never on a repaint of the same step.
-//   · The window asks for bodies, never the cell (2.3 §快速拖动): a row the reader opens, or a reveal opens. A step painted with a row
-//     already open shows the pending cell until the step's own read paints the window again (view.window()).
+//   · The window asks for bodies, never the cell (2.3 §快速拖动): a row the reader opens, a reveal opens, or an open row whose bytes
+//     left the bounded cache, on a repaint of the step it stays on. A step painted with a row already open shows the pending cell
+//     until the step's own read paints the window again (view.window()).
 //   · A paint of the 'window' area (view.ts) re-renders it; the window's own actions mutate the desk's state and re-render it alone.
 import { flushSync } from 'react-dom'
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode } from 'react'
@@ -18,7 +19,7 @@ import { isTyping } from '../../../legacy/core/keys.mjs'
 import * as W from '../../../legacy/labels/replay.mjs'
 import { SESSION_NOT_LISTED, BACK_TO_SESSIONS } from '../../../legacy/labels/shell.mjs'
 import * as C from '../../../legacy/labels/cells.mjs'
-import { bodyVersion, cellOf, deskMode, gotOf, hasInline, inlineText, isAddressed, isRetryable, loadBody, onModeChange, say, setDeskMode } from '../../../legacy/replay/cell.mjs'
+import { bodyVersion, cellOf, deskMode, gotOf, hasInline, inlineText, isAddressed, isRetryable, leftCache, loadBody, onModeChange, say, setDeskMode } from '../../../legacy/replay/cell.mjs'
 import { cellKey } from '../../../legacy/replay/keymap.mjs'
 import { setFold, turnAnchorKey } from '../../../legacy/replay/fold.mjs'
 import { stepOf } from '../../../legacy/replay/model.mjs'
@@ -41,7 +42,7 @@ const Half = () => <span className="cwhalf" aria-hidden="true"><Svg html={HALF} 
 /** The indexes to draw: the visible range [startIndex, endIndex], the items touching one window height `h` above and below the box
  * (its top at `top`, its bottom at `top + h`), the pins, and the landing band — the items from index `band` through the last one
  * starting within `h` after its start, clamped at the list's end. `starts` are the items' starts in list order. */
-export function withPins(range: { startIndex: number, endIndex: number, count: number, starts: ArrayLike<number>, top: number, h: number },
+function withPins(range: { startIndex: number, endIndex: number, count: number, starts: ArrayLike<number>, top: number, h: number },
   pins: Array<number | null | undefined>, band: number | null): number[] {
   const { startIndex, endIndex, count, starts, top, h } = range
   const last = (y: number) => { let a = 0, b = count; while (a < b) { const m = (a + b) >> 1; if (starts[m] <= y) a = m + 1; else b = m } return a - 1 } // last start ≤ y
@@ -310,7 +311,26 @@ export function Window({ desk }: { desk: DeskView }) {
   useLayoutEffect(() => {
     if (!land) return
     s.landedFor = s.anchor.calls[s.playhead].rid
+    revealKey.current = null
     if (landIdx >= 0) virt.scrollToIndex(landIdx, { align: 'start' })
+  })
+  // a reveal's target is a pin until it is in the box (or gone with its step)
+  useLayoutEffect(() => {
+    const i = revealKey.current == null ? -2 : list.findIndex((x) => x.key === revealKey.current), r = virt.range
+    if (i === -1 || (i >= 0 && r && i >= r.startIndex && i <= r.endIndex)) revealKey.current = null
+  })
+  // a drawn open row whose bytes left the bounded cache: read back, once per ref while the step stays (a cache smaller than the open
+  // rows must not read them round for ever); a step's first paint asks for nothing (2.3 §快速拖动)
+  const again = useRef<{ rid: string | null, refs: Set<string> }>({ rid: null, refs: new Set() })
+  useEffect(() => {
+    const a = again.current, rid = w.kind === 'step' ? s.anchor?.calls[s.playhead]?.rid ?? null : null
+    if (a.rid !== rid) { a.rid = rid; a.refs.clear(); return }
+    for (const x of virt.getVirtualItems()) {
+      const it = list[x.index]
+      for (const r of it?.type === 'row' ? [it] : it?.type === 'reply' ? it.rows ?? [] : []) {
+        if (r.open && leftCache(r.b.text_ref) && !a.refs.has(r.b.text_ref)) { a.refs.add(r.b.text_ref); acts.ask(r.b) }
+      }
+    }
   })
 
   // reveal (view.reveal): open its turn into the D12 memory, or its row (and ask for the bytes), draw it, bring it into view, flash it

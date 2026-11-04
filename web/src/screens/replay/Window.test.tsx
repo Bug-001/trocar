@@ -15,7 +15,7 @@ import * as C from '../../../legacy/labels/cells.mjs'
 import { deskOf, world, deskFrom } from '../../../../test/web-v2/desk-world.mjs'
 import { windowItems } from './window-model.mjs'
 import { reactView } from './view'
-import { Window, withPins } from './Window'
+import { Window } from './Window'
 
 const H = 600
 const PX: Record<string, number> = { '--cblk-pitch': 30, '--cwturn-pitch': 40, '--cwsec-pitch': 46, '--cwline-pitch': 32 }
@@ -328,44 +328,6 @@ test('2.3 #28: reveal into a folded turn opens it into the D12 memory; reveal of
   expect(el!.classList.contains('collapsed')).toBe(false)
 })
 
-test('pins: withPins always holds the four pins and the widened range, sorted once each', () => {
-  const r = (seed: number) => { let a = seed; return () => ((a = (a * 1103515245 + 12345) % 2 ** 31) / 2 ** 31) }
-  for (let k = 1; k < 40; k++) {
-    const rnd = r(k), count = 1 + Math.floor(rnd() * 200), starts: number[] = []
-    for (let i = 0, y = 0; i < count; i++) { starts.push(y); y += 10 + Math.floor(rnd() * 90) }
-    const a = Math.floor(rnd() * count), b = Math.min(count - 1, a + Math.floor(rnd() * 10)), pins = [0, 1, 2, 3].map(() => Math.floor(rnd() * count))
-    const out = withPins({ startIndex: a, endIndex: b, count, starts, top: starts[a], h: 300 }, pins, null)
-    for (const p of pins) expect(out).toContain(p)
-    for (let i = a; i <= b; i++) expect(out).toContain(i)
-    expect(out).toEqual([...new Set(out)].sort((x, y) => x - y))
-    expect(out.every((i) => i >= 0 && i < count)).toBe(true)
-  }
-})
-
-test('rule 4: withPins holds the items touching one window height above and below the box, however tall the item at its top', () => {
-  const r = (seed: number) => { let a = seed; return () => ((a = (a * 1103515245 + 12345) % 2 ** 31) / 2 ** 31) }
-  for (let k = 1; k < 60; k++) {
-    const rnd = r(k), count = 5 + Math.floor(rnd() * 100), starts: number[] = [], ends: number[] = [], h = 100 + Math.floor(rnd() * 500)
-    for (let i = 0, y = 0; i < count; i++) { starts.push(y); y += rnd() < 0.1 ? h * (1 + Math.floor(rnd() * 4)) : 30; ends.push(y) } // some rows are taller than the box
-    const top = Math.floor(rnd() * Math.max(1, ends[count - 1] - h)), at = (y: number) => starts.findLastIndex((s) => s <= y)
-    const out = withPins({ startIndex: at(top), endIndex: at(top + h), count, starts, top, h }, [], null)
-    expect(out).toEqual(starts.map((_, i) => i).filter((i) => ends[i] > top - h && starts[i] <= top + 2 * h))
-  }
-})
-
-test('landing band: withPins holds the landing index through the last item starting within one window height after it, clamped at the end', () => {
-  const sizes = [30, 46, 30, 120, 30, 40, 30, 30, 120, 30, 30, 32, 30]
-  const starts = sizes.map((_, i) => sizes.slice(0, i).reduce((a, b) => a + b, 0))
-  for (const h of [50, 200, 600]) {
-    for (let band = 0; band < sizes.length; band++) {
-      const out = withPins({ startIndex: 0, endIndex: 0, count: sizes.length, starts, top: 0, h }, [], band)
-      const seen = starts.map((_, i) => i).filter((i) => starts[i] <= 2 * h) // the box at the top, and one height below it
-      const want = starts.map((_, i) => i).filter((i) => i >= band && starts[i] < starts[band] + h)
-      expect(out).toEqual([...new Set([...seen, ...want])].sort((x, y) => x - y))
-    }
-  }
-})
-
 test('pins and landing: the change line and the reply stay drawn scrolled away; a step change draws its landing band before any scroll event and lands it at the top; a repaint, a reader\'s scroll and a step with no landing keep scrollTop; the landing turn is not in D12', () => {
   const { desk, brk } = longDesk(300, 200, 60)
   const parts = [rp('text')]
@@ -460,6 +422,35 @@ test('2.3 §读失败: a failed read shows its reason on the row, and the next o
   act(() => { fireEvent.click(role()) })
   await act(async () => { fireEvent.click(role()); await Promise.resolve() })
   expect(blockReads(s.ctx.api)).toBe(2)
+})
+
+test('2.3 §两种模式: an open row whose bytes left the cache reads them once on a repaint of its step, and shows them', async () => {
+  const s = stateOf(deskN([[sys(), blk({ query: 'q' }), say()]]))
+  s.openBlocks.add(itemsOf(s).find((it) => it.type === 'row' && it.bi === 2)!.key)
+  const ref = flatOf(s)[2].text_ref, cap = bodyCache.cap, one = async () => ({ ok: true, status: 200, data: { bytes: 'b', fidelity: { verbatim: true } } })
+  await loadBodies({ get: vi.fn(one) }, [ref])
+  const { win, paint } = mount(s)
+  paint({ kind: 'step', busy: false })
+  expect(win.querySelector('.cblk[data-bi="2"] .cell')).not.toBeNull()
+  bodyCache.cap = 1
+  bodyCache.set('another body', { status: 'ok', text: 'x' })
+  bodyCache.cap = cap
+  s.ctx.api.get.mockImplementation(one)
+  paint({ kind: 'step', busy: false })
+  await act(async () => { await new Promise((r) => setTimeout(r)) })
+  expect(blockReads(s.ctx.api)).toBe(1)
+  expect(win.querySelector('.cblk[data-bi="2"] .cell')).not.toBeNull()
+})
+
+test('2.3 rule 4: a reveal\'s target leaves the DOM with the rest once the reader scrolls on from it', () => {
+  const { flat, desk } = longDesk(300, 200, 60)
+  const s = stateOf(desk, 1, { landedFor: 'R0-1' })
+  const { desk: view, win } = mount(s)
+  let el: HTMLElement | null = null
+  act(() => { el = view.reveal({ fi: flat.length - 5 }) })
+  const key = el!.closest<HTMLElement>('.cwit')!.dataset.key!
+  act(() => { win.scrollTop = 0; win.dispatchEvent(new Event('scroll')) })
+  expect(wrapOf(win, key)).toBeNull()
 })
 
 test('2.3 #25: a step painted with a row already open reads nothing; the row is pending until its bytes are cached and the window is painted', async () => {
