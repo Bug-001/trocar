@@ -63,6 +63,19 @@ export function requestsByPath(requests) {
   return out
 }
 
+const sh = (p) => `'${p.replace(/'/g, "'\\''")}'`
+/** The swap of a pre-read (D78 ④) as a shell script for the operator to run, never this check: `side` takes the place of `real`'s index,
+ *  which stays beside it under `before`, only with the daemon stopped. */
+export function preRead({ real, side, before }) {
+  const lock = path.join(real, 'collector', 'lock'), index = path.join(real, 'index'), old = path.join(real, before)
+  return `sh -e <<'SWAP'
+test ! -e ${sh(lock)} || { echo 'the daemon is running: stop it first' >&2; exit 1; }
+test ! -e ${sh(old)} || { echo 'an earlier index is still kept there' >&2; exit 1; }
+mv ${sh(index)} ${sh(old)}
+mv ${sh(side)} ${sh(index)}
+SWAP`
+}
+
 /** `lines`: name → a number, the most `measured[name]` may be, or {idle, times, plusMs}, the most being measured[idle] * times + plusMs.
  *  A value not measured fails: a line nothing was read against has not held. → {pass, failures}: `failures` and each line that did not hold. */
 export function verdict(lines, measured, failures) {
