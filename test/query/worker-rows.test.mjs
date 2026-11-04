@@ -44,22 +44,22 @@ function homeOf() {
 }
 const SEGMENT_A = '20261020T164737Z'
 /** Two sealed sessions with no index on disk: the row pass has every segment to build, and stays shut until `open()`. `env`: over the worker's own
- *  (worker-rows-deps.mjs); `titles: true` holds the title pass until `openTitles()`. `said`: what the workers sent on IPC; `frames`: how many `102`s. */
-async function gated({ env = {}, titles: holdTitles = false } = {}) {
-  const home = homeOf(), gate = path.join(home, 'rows.open'), titlesGate = path.join(home, 'titles.open')
+ *  (worker-rows-deps.mjs); `titles: true` holds the title pass until `openTitles()`, `sweep: true` the sweep at its first head until `sweepGate` is written. `said`: what the workers sent on IPC; `frames`: how many `102`s. */
+async function gated({ env = {}, titles: holdTitles = false, sweep: holdSweep = false } = {}) {
+  const home = homeOf(), gate = path.join(home, 'rows.open'), titlesGate = path.join(home, 'titles.open'), sweepGate = path.join(home, 'sweep.open')
   const a = session(home, A, SEGMENT_A)
   const b = session(home, B, '20261020T164837Z')
   await a.seal(); await b.seal()
   const members = await membersOf(home)
   fs.rmSync(indexDir(home), { recursive: true, force: true })
-  const fork = workerForkIn({ TROCAR_TEST_ROWS_GATE: gate, ...(holdTitles ? { TROCAR_TEST_TITLES_GATE: titlesGate } : null), ...env }), said = [], frames = { again: 0 }
+  const fork = workerForkIn({ TROCAR_TEST_ROWS_GATE: gate, ...(holdTitles ? { TROCAR_TEST_TITLES_GATE: titlesGate } : null), ...(holdSweep ? { TROCAR_TEST_SWEEP_GATE: sweepGate } : null), ...env }), said = [], frames = { again: 0 }
   const watched = (h) => {
     const c = fork(h, DEPS)
     c.on('message', (m) => said.push(m))
     c.stdout.on('data', (d) => { if (String(d).startsWith('102 ')) frames.again++ })
     return c
   }
-  return { home, members, said, frames, open: () => fs.writeFileSync(gate, ''), openTitles: () => fs.writeFileSync(titlesGate, ''), svc: createQueryService({ home, fork: watched }) }
+  return { home, members, said, frames, sweepGate, open: () => fs.writeFileSync(gate, ''), openTitles: () => fs.writeFileSync(titlesGate, ''), svc: createQueryService({ home, fork: watched }) }
 }
 const rowsSaid = (said) => said.some((m) => m.rows === true)
 
@@ -167,6 +167,18 @@ test('3.5 #42: while the title pass is held, session, lane and status answer; it
     assert.deepEqual(titles(home), {}, 'the title pass has saved nothing')
     openTitles()
     await until(() => A in titles(home) && B in titles(home), 'the title pass ended')
+  } finally { svc.stop() }
+})
+
+test('3.5 #42: the table is full before the sweep looks at its first head, and the sweep reads no record for a title', async () => {
+  const { home, sweepGate, open, svc } = await gated({ sweep: true })
+  try {
+    open()
+    svc.sweep() // no request: one would open the newest session, whose fold looks for a head before the sweep does
+    await until(() => fs.existsSync(`${sweepGate}.held`), 'the sweep began')
+    assert.deepEqual(Object.keys(titles(home)).sort(), [A, B], 'the pass wrote the table, not the sweep')
+    fs.writeFileSync(sweepGate, '') // from here no raw file opens: a title read fails, and a failed title leaves no head
+    await until(() => hasHead(home, A) && hasHead(home, B), 'the sweep wrote its heads')
   } finally { svc.stop() }
 })
 

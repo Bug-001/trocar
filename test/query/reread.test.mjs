@@ -93,9 +93,9 @@ for (const [axis, stale] of Object.entries(AXES)) {
       assert.ok(rereads(home, id), 'reread is there')
       let mid = 0
       await whileMoving(async () => {
-        await ask(svc, 'session', { id, head: '' }) // the document of `--head` is an answer too: it writes nothing
-        const now = filesOf(home, id), a = await ask(svc, 'session', { id }) // pending after the read: the fold was not at its end at it
+        const now = filesOf(home, id), a = await ask(svc, 'session', { id }) // pending after the read: the fold was not at its end at it. The read comes first: a fold log's re-read is short
         if (a.pending) { mid++; assert.deepEqual(now, old, 'the files are the old ones, with no new member the head too') }
+        await ask(svc, 'session', { id, head: '' }) // the document of `--head` is an answer too: it writes nothing
         return !rereads(home, id)
       }, () => r.n, 'the re-read ended')
       assert.ok(mid > 0, 'sampled before the end')
@@ -349,9 +349,30 @@ test('a session followed in the middle of another\'s background re-read ends fir
   } finally { svc.stop() }
 })
 
+test('a re-read a request opened gives way to a kick, goes back among the followed, and ends ahead of the one it stopped and the queue (#44)', async () => {
+  const home = homeOf(), [first, second, asked] = [1, 2, 3].map((n) => sessionIn(home, n).id)
+  await foldAll(home, [first, second, asked])
+  for (const id of [first, second, asked]) AXES['PROJ_V changed'](home, id)
+  aged(home, first, 60); aged(home, second, 600); aged(home, asked, 3600)
+  const { r, svc } = serviceOf(home)
+  try {
+    svc.sweep()
+    await whileMoving(() => rereads(home, first), () => r.n, 'the queue began')
+    await ask(svc, 'session', { id: asked })
+    const live = sessionIn(home, 4, 30), rows = sessionGroups(await indexRows({ home })).get(live.id)
+    svc.kick([String(rows.at(-1).id)])
+    await whileMoving(() => isDone(home, live.id), () => r.n, 'the kicked session is at its frontier')
+    assert.ok(rereads(home, asked), 'the one asked for gave way to it')
+    await whileMoving(() => !staleNow(home, asked) && !rereads(home, asked) && isDone(home, asked), () => r.n, 'the one asked for ended')
+    assert.ok(rereads(home, first), 'ahead of the one it stopped, which nobody opened')
+    assert.ok(staleNow(home, second), 'and of the rest of the queue')
+  } finally { svc.stop() }
+})
+
+/** The bytes of a session's projection and fold log, their sidecars left out: the idle save writes those for every session that grew. */
 const foldedOf = (home, id) => {
   const d = sessionDir(home, id)
-  return fs.readdirSync(d).filter((n) => /^(extract|fold)\./.test(n)).reduce((sum, n) => { try { return sum + fs.statSync(path.join(d, n)).size } catch { return sum } }, 0)
+  return fs.readdirSync(d).filter((n) => /^(extract|fold)\./.test(n) && !n.endsWith('.idx')).reduce((sum, n) => { try { return sum + fs.statSync(path.join(d, n)).size } catch { return sum } }, 0)
 }
 
 test('two re-reads, both followed, never alternate: one folds in one run, the other stands still, then the other way round (#44)', async () => {
@@ -368,9 +389,10 @@ test('two re-reads, both followed, never alternate: one folds in one run, the ot
     let was = ids.map((id) => foldedOf(home, id))
     await whileMoving(() => {
       const now = ids.map((id) => foldedOf(home, id)), moved = ids.filter((id, i) => now[i] !== was[i])
+      const ended = ids.every((id) => !staleNow(home, id) && !rereads(home, id)) // read after the sizes: what moved was still the re-reads unless both are over, and then the idle save may seal them
       was = now
-      if (moved.length === 1 && runs.at(-1) !== moved[0]) runs.push(moved[0])
-      return ids.every((id) => !staleNow(home, id) && !rereads(home, id))
+      if (!ended && moved.length === 1 && runs.at(-1) !== moved[0]) runs.push(moved[0])
+      return ended
     }, () => r.n, 'both ended')
     assert.deepEqual(runs, ids)
   } finally { svc.stop() }
