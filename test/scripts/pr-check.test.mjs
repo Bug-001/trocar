@@ -133,6 +133,26 @@ for (const [name, script, code] of [['a rebuild that matches passes', 'node -e 0
   })
 }
 
+const WEB_DRIFT = {
+  'deleted from the working tree': (w) => fs.rmSync(path.join(w.dir, 'src/web/board/logo.png')),
+  'edited in the working tree': (w) => fs.writeFileSync(path.join(w.dir, 'src/web/board/logo.png'), 'y\n'),
+  'untracked in web/': (w) => { fs.mkdirSync(path.join(w.dir, 'web/public'), { recursive: true }); fs.writeFileSync(path.join(w.dir, 'web/public/logo.png'), 'x\n') },
+  'ignored in web/': (w) => { fs.appendFileSync(path.join(w.dir, '.git/info/exclude'), 'web/public\n'); WEB_DRIFT['untracked in web/'](w) },
+}
+for (const [name, drift] of Object.entries(WEB_DRIFT)) {
+  test(`AN16: a board binary is refused, and nothing is built, when the rebuild's input is ${name}`, () => {
+    const w = workspace({ 'package.json': JSON.stringify({ scripts: { 'test:build': 'node -e "require(\'fs\').writeFileSync(\'ran\',\'\')"' } }) })
+    const own = adopt(w)
+    fs.appendFileSync(path.join(w.dir, '.git/info/exclude'), 'ran\n')
+    w.commit({ 'src/web/board/logo.png': 'x\n' })
+    drift(w)
+    const { code, doc } = w.check({ script: own })
+    assert.equal(code, 1)
+    assert.equal(of(doc, 'files').length, 1)
+    assert.equal(fs.existsSync(path.join(w.dir, 'ran')), false)
+  })
+}
+
 test('AN16: of two commits to one board binary only the one HEAD holds goes out', () => {
   const w = workspace({ 'package.json': JSON.stringify({ scripts: { 'test:build': 'node -e 0' } }) })
   const own = adopt(w)
@@ -143,13 +163,39 @@ test('AN16: of two commits to one board binary only the one HEAD holds goes out'
   assert.deepEqual(of(doc, 'files').map((f) => f.where), [`${doc.leaving.commits[0].sha}:file#0`])
 })
 
-test('AN16: an SVG whose new lines embed an image is refused as one; a plain SVG is text', () => {
+test('AN16: an SVG that reaches outside itself is refused as an image, whichever way; plain vector is text', () => {
   const w = workspace({ 'old.svg': '<svg><image href="x"/></svg>\n' })
-  const embedding = { 'a.svg': '<svg><image href="x"/></svg>\n', 'b.svg': '<svg><a href="data:text/plain,x"/></svg>\n', 'c.SVG': '<svg><IMAGE href="x"/></svg>\n', 'd.svg': '<svg><a href="DATA:text/plain,x"/></svg>\n' }
-  w.commit({ ...embedding, 'plain.svg': '<svg/>\n', 'old.svg': '<svg><image href="x"/></svg>\n<!-- end -->\n', 'imagery.svg': '<svg><imagery/></svg>\n' })
+  const embedding = { 'a.svg': '<svg><image href="x"/></svg>\n', 'b.svg': '<svg><a href="data:text/plain,x"/></svg>\n', 'c.SVG': '<svg><IMAGE href="x"/></svg>\n', 'd.svg': '<svg><a href="DATA:text/plain,x"/></svg>\n',
+    'prefixed.svg': '<s:svg xmlns:s="n"><s:image/></s:svg>\n', 'named.svg': '<svg:svg><svg:image/></svg:svg>\n', 'filter.svg': '<svg><filter><feImage href="x"/></filter></svg>\n',
+    'foreign.svg': '<svg><foreignObject><img/></foreignObject></svg>\n', 'video.svg': '<svg><foreignObject><video src="x"/></foreignObject></svg>\n', 'style.svg': '<svg><style>a { fill: url(shot.png) }</style></svg>\n',
+    'quoted.svg': `<svg><style>a { fill: url("shot.png") }</style></svg>\n`, 'use.svg': '<svg><use href="other.svg#a"/></svg>\n', 'xlink.svg': `<svg><use xlink:href='other.svg#a'/></svg>\n`,
+    'entity.svg': '<svg><use href="data&#58;x"/></svg>\n', 'old.svg': '<svg><image href="x"/></svg>\n<!-- end -->\n' }
+  const plain = { 'plain.svg': '<svg/>\n', 'imagery.svg': '<svg><imagery/></svg>\n', 'inner.svg': `<svg xmlns="http://www.w3.org/2000/svg"><use href="#a"/><use xlink:href='#a'/><g fill="url(#g)" stroke="url('#g')"/></svg>\n` }
+  w.commit({ ...embedding, ...plain })
   const { code, doc } = w.check()
   assert.equal(code, 1)
   assert.deepEqual(named(doc, 'files'), sorted(embedding))
+})
+
+test('AN16: an SVG is judged whole, however its lines got there', () => {
+  const w = workspace()
+  w.commit({ 'a.txt': '<svg><image href="x"/></svg>\n' })
+  w.git(['mv', 'a.txt', 'a.svg'])
+  w.commit()
+  assert.deepEqual(named(w.check().doc, 'files'), ['a.svg'])
+  const early = workspace()
+  early.commit({ 'a.svg': '<svg><image href="x"/></svg>\n' })
+  early.commit({ 'a.svg': '<svg/>\n' })
+  assert.equal(of(early.check().doc, 'files').length, 1, 'gone from HEAD, still in the history')
+})
+
+const LFS_HEAD = ['version https:', '', 'git-lfs.github.com', 'spec', 'v1'].join('/')
+test('AN16: what Git LFS would upload is refused: a pointer, an edit of one, or a filter that makes one', () => {
+  const oid = `oid sha256:${'a'.repeat(64)}`
+  const w = workspace({ 'edited.bin': `${LFS_HEAD}\noid sha256:${'b'.repeat(64)}\nsize 1\n` })
+  const lfs = { 'new.txt': `${LFS_HEAD}\n${oid}\nsize 1\n`, 'edited.bin': `${LFS_HEAD}\n${oid}\nsize 1\n`, '.gitattributes': '*.bin filter=lfs diff=lfs merge=lfs -text\n', 'sub/.gitattributes': '*.dat filter=lfs\n' }
+  w.commit({ ...lfs, 'notes.md': 'Our filter=lfs setup and the oid sha256 scheme.\n', 'other/.gitattributes': '*.png binary\n' })
+  assert.deepEqual(named(w.check().doc, 'files'), sorted(lfs))
 })
 
 const DATA_URI = ['data', 'image/png;base64,AAAA'].join(':')

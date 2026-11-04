@@ -32,6 +32,7 @@ const MIN_FACT = 4
 const GIT_BINARY_PEEK = 8000 // how far git looks for a NUL to call a file binary
 const MAX_WORK_MS = 7 * 86_400_000 // a --before further back than this leaves the recent capture out, whatever the reason
 const BOARD = 'src/web/board/'
+const BOARD_INPUT = 'web/'
 const LOCK = /(?:^|\/)package-lock\.json$/
 const isUncounted = (file) => file.startsWith('test/fixtures/') || file.startsWith(BOARD) || LOCK.test(file)
 const INTEGRITY = /"integrity":\s*"[^"]*"/g
@@ -43,7 +44,12 @@ const TOKEN = new RegExp([
   /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/, /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
 ].map((r) => r.source).join('|'), 'g')
 const CREDENTIAL = /(?:authorization|x-api-key)\\*["']?\s*[:=]\s*\\*["']?(?:(?:bearer|basic|token)\s+)?[A-Za-z0-9._~+/=-]{12,}/gi
-const SVG_EMBED = /data:|<image\b/i
+// what makes an SVG more than vector: anything of another kind inside it, or a reference to anything but itself
+const SVG_EMBED = /data:|<(?:[\w-]+:)?(?:image|feimage|img)\b|\bsrc\s*=|url\(\s*(?!["']?#)|href\s*=\s*["'](?!#)/i
+// a pointer passes as text, and what `git lfs push` sends with it is never read here
+const LFS_POINTER = /^(?:version https:\/\/git-lfs\.github\.com\/spec\/|oid sha256:[0-9a-f]{64}$)/m
+const LFS_FILTER = /\bfilter=lfs\b/
+const GITATTRIBUTES = /(?:^|\/)\.gitattributes$/
 const LONG_RUN = /[A-Za-z0-9+=_-]{40,}/g // no slash: a URL or file path is not one run, and base64 holds runs this long between its slashes
 const isMixed = (run) => /[a-z]/.test(run) && /[A-Z]/.test(run) && /[0-9]/.test(run)
 const SEP = String.raw`(?:\\+/?|/)` // a slash, a run of backslashes, an escaped slash
@@ -69,7 +75,7 @@ const HASH_ROW = /^- Written by an agent: the `hash` from `node scripts\/pr-chec
 const WHY = {
   files: 'This file type does not leave the machine: images, video, PDF, archives, capture formats and binaries.',
   image: 'This holds an image in its text: a data URI anywhere, or a Markdown image or img tag in a title, a body or a comment.',
-  build: 'The built board does not match a rebuild: npm run test:build failed.',
+  build: 'The built board does not match a rebuild: web/ or src/web/board/ differs from HEAD in the working tree, or npm run test:build failed.',
   foreign: 'The built board changed in a clone that is not this script\'s, and nothing from another clone is run here: rebuild it in isolation.',
   secrets: 'This has the shape of a credential.',
   identity: 'This names this machine, its user or a home directory.',
@@ -243,9 +249,11 @@ function placeOf(source, text, index) {
   return source.lines[row] === undefined ? source.where : `${source.where}:${source.lines[row]}`
 }
 
-function isBlocked(file) {
+function isBlocked(file, read) {
   const ext = file.path.slice(file.path.lastIndexOf('.')).toLowerCase()
-  return file.binary || BLOCKED.has(ext) || (ext === '.svg' && SVG_EMBED.test(file.added.toString()))
+  const added = file.added.toString()
+  if (file.binary || BLOCKED.has(ext) || LFS_POINTER.test(added) || (GITATTRIBUTES.test(file.path) && LFS_FILTER.test(added))) return true
+  return ext === '.svg' && spelled({ bytes: read() }).some((text) => SVG_EMBED.test(text)) // whole: a rename brings no added lines
 }
 
 /** The object `rev` names, empty when it names none. */
@@ -287,12 +295,15 @@ function checkFiles(commits, cwd, add) {
       const inBoard = file.path.startsWith(BOARD)
       if (inBoard) board ??= file.where
       // what HEAD holds of the board is the build, judged below; what only an earlier commit holds would ride along in the history
-      if (isBlocked(file) && !(inBoard && revOf(cwd, `${commit.sha}:${file.path}`) === revOf(cwd, `HEAD:${file.path}`))) add('files', file.where)
+      const blob = () => git(cwd, 'cat-file', 'blob', `${commit.sha}:${file.path}`)
+      if (isBlocked(file, blob) && !(inBoard && revOf(cwd, `${commit.sha}:${file.path}`) === revOf(cwd, `HEAD:${file.path}`))) add('files', file.where)
     }
   }
   if (!board) return
   // someone else's branch: its package.json is its code, and this machine holds the capture (§1)
   if (fs.realpathSync(git(cwd, 'rev-parse', '--show-toplevel').toString().trim()) !== fs.realpathSync(CLONE)) add('files', board, WHY.foreign)
+  // test:build compares the working tree, so it says nothing of HEAD unless the two are the same
+  else if (git(cwd, 'status', '--porcelain', '--untracked-files=all', '--ignored=matching', '--', BOARD_INPUT, BOARD).length > 0) add('files', board, WHY.build)
   else if (spawnSync('npm', ['run', 'test:build'], { cwd, stdio: 'ignore', shell: process.platform === 'win32' }).status !== 0) add('files', board, WHY.build)
 }
 
