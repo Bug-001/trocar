@@ -6,27 +6,29 @@
 
 // Which words of a command are its files; 2.4 fidelity boundary item 7 is the boundary. takes: short flags followed by a value ·
 // long: long flags and how many words they take · script: the first operand is no file, unless a flag matching `given` carries it ·
-// need / not: a flag that makes it a read / keeps it from being one · ranges: [pattern on the joined line, label] · range: else this.
-const LINES = { takes: 'nc', long: { '--lines': 1, '--bytes': 1 } };
+// max: how many operands are files · need / not: a flag that makes it a read / keeps it from being one · ranges: [pattern on the joined line, label] · range: else this.
+const LINES = { takes: 'nc', long: { '--lines': 1, '--bytes': 1 } }, LINE_COUNT = /(?:^| )(?:-n? ?|--lines[= ])(\d+)\b/, BYTE_COUNT = /(?:^| )(?:-c ?|--bytes[= ])(\d+)\b/;
+const SED_N = '(?:^| )-[a-zA-Z]*n[a-zA-Z]*(?: -[a-zA-Z]+)* ?';
 const READS = {
-  cat: {}, tac: {}, more: {}, less: {},
-  nl: { takes: 'bdfhilnpsvw' }, bat: { takes: 'lrHm', long: { '--line-range': 1, '--language': 1 } },
-  xxd: { takes: 'cglos' }, od: { takes: 'AjNStw' }, strings: { takes: 'nte' },
-  head: { ...LINES, ranges: [[/(?:^| )-n? ?(\d+)\b/, 'L1–$1']] },
-  tail: { ...LINES, ranges: [[/(?:^| )-n? ?(\d+)\b/, 'tail $1']] },
+  cat: {}, tac: {}, more: {}, less: { takes: 'p' },
+  nl: { takes: 'bdfhilnpsvw' }, bat: { takes: 'lrHm', long: { '--line-range': 1, '--language': 1, '--style': 1 } },
+  xxd: { takes: 'cglos', max: 1 }, od: { takes: 'AjNStw' }, strings: { takes: 'nte' },
+  head: { ...LINES, ranges: [[LINE_COUNT, 'L1–$1'], [BYTE_COUNT, 'first $1 bytes']] },
+  tail: { ...LINES, ranges: [[LINE_COUNT, 'tail $1'], [BYTE_COUNT, 'last $1 bytes']] },
   sed: { script: true, given: /^-[a-zA-Z]*[ef]$|^--(expression|file)/, takes: 'efl', long: { '--expression': 1, '--file': 1 }, need: /^-[a-zA-Z]*n|^--(quiet|silent)$/, not: /^-[a-zA-Z]*i|^--in-place/, range: 'matching lines',
-    ranges: [[/(?:^| )-n(?:e| -e)? ?(\d+),(\d+)\s*p(?: |$)/, 'L$1–$2'], [/(?:^| )-n(?:e| -e)? ?(\d+)\s*p(?: |$)/, 'L$1']] },
-  grep: { script: true, given: /^-[a-zA-Z]*[ef]$|^--(regexp|file)/, takes: 'ABCDdefm', long: { '--regexp': 1, '--file': 1, '--context': 1, '--after-context': 1, '--before-context': 1, '--max-count': 1 },
+    ranges: [[/(?:^| )-[a-zA-Z]*e .* -[a-zA-Z]*e /, 'matching lines'], [new RegExp(`${SED_N}(\\d+),(\\d+)\\s*p(?: |$)`), 'L$1–$2'], [new RegExp(`${SED_N}(\\d+)\\s*p(?: |$)`), 'L$1']] },
+  grep: { script: true, given: /^-[a-zA-Z]*[ef]$|^--(regexp|file)/, takes: 'ABCDdefm', long: { '--regexp': 1, '--file': 1, '--context': 1, '--after-context': 1, '--before-context': 1, '--max-count': 1, '--include': 1, '--exclude': 1, '--exclude-dir': 1 },
     not: /^-[a-zA-Z]*[rRlLcq]|^--(recursive|dereference-recursive|files-with-matches|files-without-match|count|quiet|silent)/, range: 'matching lines' },
   awk: { script: true, given: /^-[a-zA-Z]*f$|^--file/, takes: 'Ffv', long: { '--file': 1 }, range: 'filtered' },
-  jq: { script: true, given: /^-[a-zA-Z]*f$|^--from-file/, takes: 'fL', long: { '--from-file': 1, '--arg': 2, '--argjson': 2, '--slurpfile': 2, '--rawfile': 2, '--indent': 1 }, range: 'filtered' },
+  jq: { script: true, given: /^-[a-zA-Z]*f$|^--from-file/, takes: 'fL', long: { '--from-file': 1, '--arg': 2, '--argjson': 2, '--slurpfile': 2, '--rawfile': 2, '--argfile': 2, '--indent': 1 }, range: 'filtered' },
 };
 // commands that run the command behind them; operands: their own, before it
-const PREFIX = { sudo: { takes: 'ugUCDhprtT' }, env: { takes: 'uCS' }, time: { takes: 'fo' }, nohup: {}, nice: { takes: 'n' }, timeout: { takes: 'ks', operands: 1 } };
+const PREFIX = { sudo: { takes: 'ugUCDhprtT', long: { '--user': 1, '--group': 1 } }, env: { takes: 'uCS', long: { '--unset': 1, '--chdir': 1 } }, time: { takes: 'fo' }, nohup: {}, nice: { takes: 'n' },
+  timeout: { takes: 'ks', operands: 1, long: { '--signal': 1, '--kill-after': 1 } } };
 const rowOf = (table, name) => (Object.hasOwn(table, name) ? table[name] : null); // a command can be called `constructor`
 const DECLARE = /^(export|local|declare|readonly|typeset)$/;
 const KEYWORDS = new Set(['while', 'until', 'if', 'elif', 'do', 'then', 'else', 'fi', 'done', '{', '}', '!']);
-const GLOB = /[*?{}]/;
+const GLOB = /[*?{}[\]]/;
 const NAME = /^[A-Za-z_]\w*$/;
 const ASSIGN = /^([A-Za-z_]\w*)(\+?)=/;
 const BREAK = /[\s;&|()<>]/;
@@ -268,7 +270,7 @@ export function parseBashReads(command, { home = null } = {}) {
     const hit = row.ranges?.find(([re]) => re.test(line));
     const range = hit ? line.match(hit[0])[0].replace(hit[0], hit[1]) : row.range ?? 'full file';
     const scripted = row.script && !flags.some((f) => row.given.test(f.name));
-    for (const word of [...operands.slice(scripted ? 1 : 0), ...inputs]) {
+    for (const word of [...operands.slice(scripted ? 1 : 0, row.max), ...inputs]) {
       const w = view(word);
       const spelled = w.v ?? w.text;
       if (!spelled || /^https?:/i.test(spelled) || (!w.why && GLOB.test(spelled))) continue;

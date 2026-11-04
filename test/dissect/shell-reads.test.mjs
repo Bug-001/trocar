@@ -181,8 +181,8 @@ test('bounds: scope and order of the command decide, and what is not a read stay
     'ls /a/x.txt', 'echo "cat /a/x.txt"', 'bash -c "cat /a/x.txt"', `ssh h 'cat /a/x.txt'`,
     'echo $(cat /a/x.txt)', 'P=$(cat /a/x.txt)', '# cat /a/x.txt', 'sed -i s/a/b/ /a/x.txt', 'sed s/a/b/ /a/x.txt',
     // words that are not paths
-    'cat https://a.example/x.txt', 'cat /a/*.log', 'cat /a/{x,y}.txt', 'cat /a/?.txt', 'cat -n', 'cat ""',
-    'P=/a; cat $P/*.log', 'head -n $N', 'tail -c $(n)', 'xxd -l $N', '',
+    'cat https://a.example/x.txt', 'cat /a/*.log', 'cat /a/{x,y}.txt', 'cat /a/?.txt', 'cat /a/x[12].txt', 'cat -n', 'cat ""',
+    'P=/a; cat $P/*.log', 'head -n $N', 'tail -c $(n)', 'xxd -l $N', '', 'sudo', 'env A=1', 'timeout 5',
   ];
   for (const cmd of NOT_READS) assert.deepEqual(parseBashReads(cmd), [], cmd);
   assert.deepEqual(parseBashReads(undefined), []);
@@ -203,12 +203,12 @@ test('bounds: scope and order of the command decide, and what is not a read stay
 
 // 2.4 item 7, the table: each way of reading, with the range it names
 const WAYS = [
-  ['cat', 'full file'], ['head -n 3', 'L1–3'], ['tail -c 10', 'full file'], ['less +10', 'full file'],
-  ['sed -n 5p', 'L5'], ["sed -n '3,9p'", 'L3–9'], ['sed -n -e 5p', 'L5'], ['sed -ne 5p', 'L5'], ["sed -n '/a/p'", 'matching lines'],
-  ['grep x', 'matching lines'], ['grep -n -A 3 x', 'matching lines'], ['grep -A3 x', 'matching lines'], ['grep -e x', 'matching lines'],
+  ['cat', 'full file'], ['head -n 3', 'L1–3'], ['tail -c 10', 'last 10 bytes'], ['head -c 100', 'first 100 bytes'], ['head --lines=5', 'L1–5'], ['head --lines 5', 'L1–5'], ['tail --lines=5', 'tail 5'], ['less +10', 'full file'],
+  ['sed -n 5p', 'L5'], ["sed -n '3,9p'", 'L3–9'], ['sed -n -e 5p', 'L5'], ['sed -nE 5p', 'L5'], ['sed -n -E 5p', 'L5'], ['sed -n -e 5p -e 7p', 'matching lines'], ['sed -ne 5p', 'L5'], ["sed -n '/a/p'", 'matching lines'],
+  ['grep x', 'matching lines'], [`grep --include '*.js' x`, 'matching lines'], ['grep -n -A 3 x', 'matching lines'], ['grep -A3 x', 'matching lines'], ['grep -e x', 'matching lines'],
   ['grep --regexp=x', 'matching lines'], ['grep --regexp x', 'matching lines'], ['grep -f p.txt', 'matching lines'],
   [`awk -F: '{print $1}'`, 'filtered'], ['awk -f p.awk', 'filtered'], [`awk -vn=f 'NR>1'`, 'filtered'],
-  [`jq -r '.a'`, 'filtered'], [`jq --arg k v '.a'`, 'filtered'],
+  [`jq -r '.a'`, 'filtered'], [`jq --arg k v '.a'`, 'filtered'], [`jq --argfile a b '.a'`, 'filtered'], ['bat --style plain', 'full file'], ['less -p pat', 'full file'],
   ['xxd -l 64', 'full file'], ['od -N 8', 'full file'], ['strings -n 8', 'full file'],
 ];
 const PREFIXES = ['', 'sudo', 'sudo -u root', 'env', 'env A=1', 'time', 'time -p', 'nohup', 'nice -n 5', 'timeout 5', 'sudo env A=1'];
