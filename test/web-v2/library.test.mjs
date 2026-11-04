@@ -13,7 +13,7 @@ import { boardHome, serveBoard } from './real-face.mjs'
 const NOW = new Date(2026, 9, 20, 12, 0, 0).getTime()
 const S = (o = {}) => ({ session_id: 'sess-1', project_slug: '_unresolved', project_path: null, harness: 'codex', harness_inferred: false, session_synthesized: false, title: null, title_source: null, entrypoint: null, calls: 3, probes: 0, logged: 0, has_subagent: false, last_ts: new Date(NOW - 60e3).toISOString(), ...o })
 const kinds = (html) => new Set([...html.matchAll(/data-mark="([^"]+)"/g)].map((m) => m[1]))
-const titleCell = (html) => /<span class="lt"([^>]*)>([^<]*)</.exec(html)
+const titleCell = (html) => /<span class="lt(?: pend)?"([^>]*)>([^<]*)</.exec(html)
 const callsCell = (html) => /<span class="ln"([^>]*)>([^<]*)</.exec(html)
 
 test('(1) rows: agent name and icon are the chip lookup for harnessKey(harness); the calls cell is `calls`', async () => {
@@ -30,13 +30,13 @@ test('(1) rows: agent name and icon are the chip lookup for harnessKey(harness);
   } finally { await face.close() }
 })
 
-test('(2) title rules: the hover follows title_source; no title ever carries the inferred mark', () => {
+test('(2) title rules: the hover follows title_source, a pending title reads as not read yet; no title ever carries the inferred mark', () => {
   const tips = new Set()
-  for (const [title, title_source, tip] of [['Fix the queue', 'harness-local-store', W.titleFromAgent], ['Fix the queue', 'wire', W.titleFromWire], [null, null, W.titleNoKey]]) {
+  for (const [title, title_source, tip] of [['Fix the queue', 'wire', W.titleFromWire], [null, null, W.titleNoKey], [null, 'pending', W.titlePending]]) {
     for (const harness_inferred of [false, true]) {
       const html = rowHtml(S({ title, title_source, harness_inferred }), '', NOW), [, attrs, text] = titleCell(html)
       assert.equal(/title="([^"]*)"/.exec(attrs)[1], esc(tip('sess-1')))
-      assert.equal(text, esc(title ?? W.UNTITLED)); assert.ok(!text.includes('sess-1'), 'the id rides in the hover only')
+      assert.equal(text, esc(title ?? (title_source === 'pending' ? W.TITLE_PENDING : W.UNTITLED))); assert.ok(!text.includes('sess-1'), 'the id rides in the hover only')
       assert.ok(!/data-mark|mk-inf/.test(attrs + text))
       tips.add(tip('sess-1'))
     }
@@ -148,7 +148,7 @@ test('(12) the repaint signature moves with every displayed field and holds for 
   const base = S({ title: 't', title_source: 'wire', project_slug: 'p', project_path: '/w/p' })
   const sig = (o) => listSignature({ sessions: [{ ...base, ...o }], errors: [] }, null)
   assert.equal(sig({}), listSignature({ sessions: [{ ...base }], errors: [] }, null))
-  const changes = { title: 'u', title_source: 'harness-local-store', harnesses: ['codex', 'cc'], logged: 1, calls: 4, probes: 2, has_subagent: true, last_ts: new Date(NOW).toISOString(), entrypoint: 'cli', harness_inferred: true, session_synthesized: true, project_slug: 'q', project_path: '/w/q' }
+  const changes = { title: 'u', title_source: 'pending', harnesses: ['codex', 'cc'], logged: 1, calls: 4, probes: 2, has_subagent: true, last_ts: new Date(NOW).toISOString(), entrypoint: 'cli', harness_inferred: true, session_synthesized: true, project_slug: 'q', project_path: '/w/q' }
   for (const [k, v] of Object.entries(changes)) assert.notEqual(sig({ [k]: v }), sig({}), k)
 })
 

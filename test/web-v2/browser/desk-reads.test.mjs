@@ -8,6 +8,7 @@ import assert from 'node:assert/strict'
 import { probe, withBoard, serveWorld } from './harness.mjs'
 import { world } from '../desk-world.mjs'
 import { QUERIES } from '../../../src/query/named/index.mjs'
+import { INTERVAL } from '../../../src/web/v2/core/poll.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
@@ -196,10 +197,12 @@ test('3.5 §手里车道的页: the anchor lane reads its ledger chain to the en
     page.on('requestfinished', end); page.on('requestfailed', end)
     await serveWorld(page, w)
     const json = (route, doc) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(doc) })
-    await page.route('**/api/lane?**', (route) => {
+    await page.route('**/api/lane?**', async (route) => {
       const q = new URL(route.request().url()).searchParams
       if (q.get('lane') !== main) return route.fallback()
       const c = q.get('ledger')
+      // the chain's end is flagged in the page before its last answer can land, so the render that answer brings sees the flag
+      if (c === `c${all.length - 1}`) await page.evaluate(() => { window.__chainEnd = true })
       if (c != null && /^c\d+$/.test(c)) { const i = +c.slice(1); return json(route, { ...w.lane(main, {}), steps: [], defs: [], events: [], prev: null, next: null, ...page1(all, i), ledger_next: next(i + 1) }) }
       if (c != null || !q.has('to')) return route.fallback()
       return json(route, { ...w.lane(main, { to: q.get('to') }), ...page1(all, 0), ledger_next: next(1) })
@@ -211,20 +214,20 @@ test('3.5 §手里车道的页: the anchor lane reads its ledger chain to the en
       new MutationObserver(() => { if (window.__exact && busy()) window.__busyAgain++; else if (window.__chainEnd && !busy() && document.querySelector('#resexp .resz')) window.__exact = true })
         .observe(document.body, { subtree: true, childList: true, attributes: true })
     })
-    page.on('requestfinished', (r) => { const q = new URL(r.url()).searchParams; if (q.get('lane') === main && q.get('ledger') === `c${all.length - 1}`) page.evaluate(() => { window.__chainEnd = true }).catch(() => {}) })
     await page.evaluate(() => { location.hash = '#/replay/p/S' })
     await page.waitForSelector('#ctxwin .cblk', { state: 'attached' })
     const mine = () => log.filter((q) => q.get('lane') === main)
-    const t0 = Date.now()
-    while (Date.now() - t0 < 30000 && !(await page.evaluate(() => window.__chainEnd === true))) await page.waitForTimeout(100)
-    await page.waitForTimeout(500)
+    await page.waitForFunction(() => window.__chainEnd === true, null, { timeout: 30000 }).catch(() => {})
+    const exact = await page.waitForFunction(() => window.__exact === true, null, { timeout: 10000 }).then(() => true, () => false)
+    // a return to the busy box is looked for until the next poll round's head read has answered and drawn
+    if (exact) { await page.waitForResponse((r) => new URL(r.url()).pathname === '/api/d/head', { timeout: 4 * INTERVAL.session }); await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => r()))) }
     const seq = mine()
     const start = seq.findIndex((q) => q.get('to') === main), ledgers = seq.map((q, i) => [i, q.get('ledger')]).filter(([, c]) => c != null)
     assert.ok(start >= 0, 'the ledger opens with the anchor lane\'s --to <its first step> page')
     assert.deepEqual(ledgers.map(([, c]) => c), all.slice(1).map((_, i) => `c${i + 1}`), 'each ledger read names the previous answer\'s ledger_next, to the end')
     assert.ok(ledgers.every(([i]) => i > start), 'after the opening page')
     assert.equal(new Set(ledgers.map(([, c]) => c)).size, ledgers.length, `no cursor read twice: ${ledgers.map(([, c]) => c)}`)
-    assert.equal(await page.evaluate(() => window.__exact === true), true, 'the explorer\'s counts became exact')
+    assert.equal(exact, true, 'the explorer\'s counts became exact')
     assert.equal(await page.evaluate(() => window.__busyAgain), 0, 'no count went back to the busy box')
     assert.ok(most <= 1, `${most} lane reads were in flight at once`)
     assert.deepEqual(b.errors, [])

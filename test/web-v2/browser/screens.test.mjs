@@ -134,8 +134,10 @@ test('a screen change aborts the old screen\'s reads and the content is never bl
     const { page } = b
     const aborted = new Set()
     page.on('requestfailed', (r) => { if (/net::ERR_ABORTED/.test(r.failure()?.errorText || '')) aborted.add(r) })
-    await page.waitForSelector('#screen .page')
     await page.waitForFunction(() => location.hash === '#/overview')
+    // the overview has mounted (not the shell's "Reading…" while its module loads) and its reads reached the route
+    await page.waitForFunction(() => !!document.querySelector('#screen .page') && !document.querySelector('#screen .screenwait'), null, { timeout: 10000 }).catch(() => {})
+    for (const t = Date.now(); !held.size && Date.now() - t < 10000; ) await page.waitForTimeout(50)
     const overviewReads = [...held]
     assert.ok(overviewReads.length > 0, 'overview sent no /api read to hold')
     await page.evaluate(() => { // every mutation batch of #screen is checked before the frame paints

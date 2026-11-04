@@ -7,8 +7,9 @@
 // Membership is one function for this query and for `session` (src/query/rows.mjs), and the document shape
 // is the board's own (src/view/board.mjs sessionMetaOfFacts), so the list and a replay cannot disagree.
 // The TITLE is the main lane's first prompt (4.4 §人类标题的来源), which lives in a request body the index does not parse (D20):
-// it comes from the usage sidecar (4.2 §用量旁注 `ask`) — the earliest main call of the session it covers — and is null until one
-// does. With `later` (the query worker), a page's segments without a sidecar are filled after the answer, as `overview` does.
+// it comes from the usage sidecar (4.2 §用量旁注 `ask`); while a call up to the first main call is not covered yet the title is
+// not known (title_source 'pending'). With `later` (the daemon's query worker), a page's segments without a sidecar are filled
+// after the answer, as `overview` does; the one-shot CLI with no daemon fills nothing, so its answer stays pending (C.5).
 // `stored`: the unwindowed list (only `limit` / `after`) is the answer the worker keeps on disk (3.5 §谁执行它「存下的答案」).
 import { sessionMetaOfFacts } from '../../view/board.mjs';
 import { readUsage, fillUsage } from '../usage.mjs';
@@ -38,17 +39,19 @@ export async function run({ home, fs, now, params: p, errors, later = null, prog
     }
     return notes.get(segment);
   };
+  // → {title, title_pending}: a call not yet covered by the sidecar up to the first main-lane call leaves the title not known yet
+  // (4.4 §人类标题的来源: title_source 'pending', never said as "no title", invariant 4)
   const titleOf = (id) => {
     const calls = rowsOf.get(id).filter(isModelCall).sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : a.lineNo - b.lineNo));
-    let title = null, found = false;
+    let title = null, found = false, pending = false;
     for (const r of calls) {
-      const n = note(r.segment), f = n && r.lineNo <= n.lines ? n.facts.get(r.lineNo) : null;
-      if (!n || r.lineNo > n.lines) toFill.add(r.segment);
-      if (!found && f && f.lane === 'main') { title = f.ask ?? null; found = true; }
+      const n = note(r.segment), covered = !!n && r.lineNo <= n.lines, f = covered ? n.facts.get(r.lineNo) : null;
+      if (!covered) { toFill.add(r.segment); if (!found) pending = true; }
+      if (!found && !pending && f && f.lane === 'main') { title = f.ask ?? null; found = true; }
     }
-    return title;
+    return { title, title_pending: pending };
   };
-  const sessions = items.map((f) => sessionMetaOfFacts({ ...f, title: titleOf(f.session_id) }));
+  const sessions = items.map((f) => sessionMetaOfFacts({ ...f, ...titleOf(f.session_id) }));
   // After the answer is written, and only where there is a next query (the worker's `later`): the one-shot CLI never writes one.
   if (later && toFill.size) later(() => fillUsage({ home, fs, segments: [...toFill] }));
   return { as_of: asOf(index), sessions, next, has_more };

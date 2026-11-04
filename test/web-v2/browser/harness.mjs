@@ -236,6 +236,24 @@ export async function serveWorld(page, w, { from = w.marks.length - 1, grow = 0,
   })
   return { left: () => last - k, more: (n = 1) => { granted += n } }
 }
+/** Stamp every fetch on the page's own clock (for a `setup` or before the first navigation): globalThis.__fetches gets {url
+ *  (path + query), t0 (ms epoch the page called fetch), t1 (ms epoch its body was read, or the fetch failed; null until then)}.
+ *  What the page did, not when the events reached the test, so a busy renderer or a late CDP event shifts nothing. */
+export const stampFetches = (page) => page.addInitScript(() => {
+  const log = globalThis.__fetches = [], at = () => performance.timeOrigin + performance.now(), end = (e) => { if (e && e.t1 == null) e.t1 = at() }
+  const fetch0 = globalThis.fetch
+  globalThis.fetch = function (input, init) {
+    const u = new URL(typeof input === 'string' || input instanceof URL ? String(input) : input.url, location.href), e = { url: u.pathname + u.search, t0: at(), t1: null }
+    log.push(e)
+    return fetch0.call(this, input, init).then((r) => { stamps.set(r, e); return r }, (err) => { end(e); throw err })
+  }
+  const stamps = new WeakMap()
+  for (const m of ['text', 'json', 'arrayBuffer']) {
+    const f = Response.prototype[m]
+    Response.prototype[m] = function () { const e = stamps.get(this); return f.call(this).finally(() => end(e)) }
+  }
+})
+
 /** The bytes serveWorld answers for a `block` ref. */
 export const blockBytes = (ref) => `body of ${ref}`
 

@@ -6,6 +6,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { createStepReads } from '../../src/web/v2/replay/follow.mjs'
 import { loadBodies, bodyCache } from '../../src/web/v2/replay/cell.mjs'
+import { createLoader } from '../../src/web/v2/replay/loader.mjs'
 import { createDesk, applySession, applyLane, stepOf, indexOf } from '../../src/web/v2/replay/model.mjs'
 import { world, readLane } from './desk-world.mjs'
 
@@ -102,6 +103,47 @@ test('2.3 #25: scrubbing keeps ≤ 1 lane and ≤ 1 block read in flight, asks o
     assert.ok(recs.every((x) => x.end !== null), `seed ${seed}: every read ended`)
   }
   for (const [k, v] of Object.entries(seen)) assert.ok(v > 0, `the scrubs include ${k} reads`)
+})
+
+// 1.2 §路由「离开再回来」: a left desk sends no new read. Pause at every point of a step's reads (resting, its lane read out, its block read
+// out, a read queued behind a loader slot another job holds); while paused nothing starts, the reads out finish; resumed, the step
+// rests 100 ms again and then gets what it lacks.
+async function pausedRun({ pauseAt, loader = null, hold = 0 }) {
+  bodyCache.clear()
+  const clk = clock(), starts = []
+  let paused = false, laneHeld = false, bodies = 0
+  const get = (name, p, { signal }) => {
+    starts.push([name, clk.now(), paused])
+    return new Promise((res) => {
+      const id = clk.setTimer(() => res(name === 'lane' ? { ok: true, data: {} } : { ok: true, data: { blocks: p.ref.map((ref) => ({ ref, bytes: 'b', encoding: 'utf8' })), errors: [] } }), 100)
+      signal.addEventListener('abort', () => { clk.clearTimer(id); res({ ok: false, status: 0, error: 'cancelled' }) }, { once: true })
+    })
+  }
+  // an outside job holds the loader's slot for `hold` ms, so the step's first read waits in the queue
+  if (loader && hold) loader.run(5, () => new Promise((res) => clk.setTimer(res, hold)))
+  // the step lacks its lane first, then its bodies (the lane's rows name their refs)
+  const need = () => (laneHeld ? { lane: null, refs: bodies ? [] : ['r1'] } : { lane: { lane: 'L' }, refs: [] })
+  const sr = createStepReads({ get, setTimer: clk.setTimer, clearTimer: clk.clearTimer, need, loader,
+    onLane: (rid, a) => { if (a.ok) laneHeld = true }, onBodies: (rid, got) => { if (got.every((g) => g.status === 'ok')) bodies++ } })
+  sr.target('s1')
+  await clk.advance(pauseAt)
+  paused = true; sr.pause()
+  await clk.advance(1000)
+  const back = clk.now()
+  paused = false; sr.resume()
+  await clk.advance(1000)
+  const tag = `pause at ${pauseAt}${hold ? `, slot held ${hold} ms` : ''}`
+  assert.deepEqual(starts.filter((x) => x[2]), [], `${tag}: no read started while paused`)
+  assert.ok(laneHeld && bodies === 1, `${tag}: once resumed the step got its lane and its bodies`)
+  for (const [name, t] of starts.filter(([, t]) => t >= back)) assert.ok(t - back >= 100, `${tag}: the ${name} read came ${t - back} ms after resume`)
+}
+
+test('1.2 #23: a paused step sends no read until resumed, wherever the pause lands, and then rests 100 ms before it asks', async () => {
+  for (const pauseAt of [0, 50, 120, 170, 260, 400]) await pausedRun({ pauseAt })
+})
+
+test('1.2 #23: a step read queued in the loader when the desk leaves does not start when the slot frees, only after resume', async () => {
+  for (const pauseAt of [120, 150, 199]) await pausedRun({ pauseAt, loader: createLoader({ max: 1 }), hold: 200 })
 })
 
 test('loadBodies (3.5 block): one read for the refs not held; each item fills by its ref; bytes:null takes its errors entry', async () => {
