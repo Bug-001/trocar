@@ -92,17 +92,27 @@ for (const wire of ['http', 'chat', 'threads', 'ws']) {
   })
 
   // the subagents' calls come first in the session and in the file, so the main call is past the first read, or past the second
-  // `marked` is an Anthropic wire's. On Message Threads the marker rides on a thread's create only, so past the first read a subagent's
-  // continuation arrives without the call that says what it is, and the batch reads it as the main lane: the title it gives is not
-  // `session`'s (the todo below stays until 3.5 §访问模式 says how a later read sees what came before it).
+  // `marked` is an Anthropic wire's. On Message Threads the marker rides on a thread's create only: past the first read a subagent's
+  // continuation is told by the calls before it, so a read must fold them too
   for (const lead of [6, 30]) for (const marked of wire === 'http' || wire === 'threads' ? [false, true] : [false]) {
-    test(`3.5 #40: ${wire}: ${lead} subagent calls${marked ? ' told by their system marker' : ''} before the first main call: the title is still the main prompt`, { todo: marked && wire === 'threads' }, async () => {
+    test(`3.5 #40: ${wire}: ${lead} subagent calls${marked ? ' told by their system marker' : ''} before the first main call: the title is still the main prompt`, async () => {
       const home = homeOf()
       const s = bigSession({ home, wire, growth: 300, subEvery: 0, subLanes: 2, quiet: [0, lead], marked, segment: SEG })
       s.append(lead + 3)
       const recs = fs.readFileSync(s.file, 'utf8').trim().split('\n').map((l) => JSON.parse(l))
       const doc = await agreesWithSession(home)
       assert.equal(doc.sessions[0].title, firstAskOf(recs[lead], recs), 'the first call past the subagents\' is the main one')
+    })
+
+    test(`4.2 §标题表: ${wire}: ${lead} subagent calls${marked ? ' told by their system marker' : ''} listed first, the main call appended after: the table reads on to \`session\`'s title`, async () => {
+      const home = homeOf(), warm = cold()
+      const s = bigSession({ home, wire, growth: 300, subEvery: 0, subLanes: 2, quiet: [0, lead], marked, segment: SEG })
+      s.append(lead)
+      assert.deepEqual((await saved(home, { fs: warm })).sessions.map((m) => m.title), [null])
+      s.append(3)
+      const recs = fs.readFileSync(s.file, 'utf8').trim().split('\n').map((l) => JSON.parse(l))
+      assert.deepEqual((await saved(home, { fs: warm })).sessions.map((m) => m.title), [firstAskOf(recs[lead], recs)])
+      assert.deepEqual((await listOf(home)).sessions.map((m) => m.title), [(await metaOf(home, s.id)).title], 'from the file, as from memory')
     })
   }
 
