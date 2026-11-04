@@ -4,7 +4,7 @@
 //   node scripts/side-board.mjs --real [--board-dir <dir>] [--url-file <file>]
 //
 // Both modes run the real createServer and createQueryService over a home in a temp dir, and only GET gets through. --real reads
-// ~/.trocar through links and keeps its own index, so everything the worker writes lands in the temp dir. Ctrl-C removes the temp dir.
+// ~/.trocar's directories through links and keeps its own copy of its files and index, so everything the worker writes lands in the temp dir. Ctrl-C removes the temp dir.
 import { randomBytes } from 'node:crypto'
 import { once } from 'node:events'
 import fs from 'node:fs'
@@ -23,15 +23,24 @@ const USAGE = 'usage: side-board --synthetic [--bytes <n>] | --real, then [--boa
 const say = (line) => process.stderr.write(`side-board: ${line}\n`)
 
 /**
- * A home at `dest` that reads `realHome` and cannot write to it: one link per top-level entry, and a copy of index/ without the context
- * projections, every link followed (an index reached through a link would hand the worker the real one, a second writer, 4.3 §4).
- * The index can be rebuilt, so a file the daemon renames away mid-copy costs the copy, not the run.
+ * A home at `dest` that reads `realHome` and cannot write to it: a link per top-level directory, a copy of each file (a file symlink
+ * needs an elevated account on Windows, a junction does not), and a copy of index/ without the context projections, every link followed
+ * (an index reached through a link would hand the worker the real one, a second writer, 4.3 §4). A socket or a pipe is not data and stays
+ * out. A file the daemon renames away mid-copy costs that file, or the index copy, which can be rebuilt, not the run.
  */
 export function sideHome(realHome, dest) {
   fs.mkdirSync(dest, { recursive: true, mode: 0o700 })
   const entries = fs.readdirSync(realHome, { withFileTypes: true })
   for (const e of entries) {
-    if (e.name !== 'index') fs.symlinkSync(path.resolve(realHome, e.name), path.join(dest, e.name), e.isDirectory() ? 'junction' : 'file') // the type counts on Windows only
+    if (e.name === 'index') continue
+    const from = path.resolve(realHome, e.name), to = path.join(dest, e.name)
+    try {
+      const it = fs.statSync(from)
+      if (it.isDirectory()) fs.symlinkSync(from, to, 'junction')
+      else if (it.isFile()) fs.copyFileSync(from, to)
+    } catch (err) {
+      if (err.code !== 'ENOENT') throw err
+    }
   }
   if (!entries.some((e) => e.name === 'index')) return
   const index = path.join(realHome, 'index'), copy = path.join(dest, 'index')
