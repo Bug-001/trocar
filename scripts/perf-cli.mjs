@@ -3,6 +3,7 @@
 //   node scripts/perf-cli.mjs --home <HOME> [--runs 7] [--only sessions,status] [--json out.json]
 //   node scripts/perf-cli.mjs --idle <pid> [--seconds 60]        ← the resource line of §3.1 (D62④) on a running daemon
 //   node scripts/perf-cli.mjs --write-amp <HOME> [--records 200]  ← the write-amplification line of §3.1, both halves
+//   node scripts/perf-cli.mjs --reply-reads <HOME> --lane-doc a.json[,b.json]  ← 2.3 #42: each step's reply, `block` in one process
 //
 // It reports, per command: the COLD wall clock (the index deleted first), the WARM p50/p95 wall clock, the
 // command's own CPU time and peak RSS, and — separately — the CORE time, which is runQuery inside an already
@@ -298,6 +299,38 @@ function printAmp(o) {
   console.log(`  INDEX + USAGE SIDECAR PER RECORD ${s.index_bytes_per_record} B   (§3.1: ≤ 1 KB; the ratio here would be ${s.bytes_written_per_captured_byte}, which is meaningless at this size)`)
 }
 
+// 2.3 #42: a step's reply text, read the way the desk reads it when the playhead rests on that step: one `block` with the step's own
+// reply refs, in one process, step after step. `--lane-doc` is what `trocar query lane --json` answered (the steps and the definitions
+// their reply ids name), so the walk costs no fold and the dataset needs no projection of this build. Sealed and live are apart: the
+// two read a record differently (a frame decoded, a line at its offset), and a live segment's index is still growing.
+const REPLY_LINE_MS = 50
+async function replyReads({ home, docs }) {
+  const { runQuery } = await import('../src/query/named/index.mjs')
+  const h = path.join(home, '.trocar')
+  const ctx = { home: h, userHome: home, env: { ...process.env, HOME: home, USERPROFILE: home }, platform: process.platform }
+  await runQuery('segments', {}, ctx) // the desk is open: every segment's rows are already in memory
+  const ms = { sealed: [], live: [] }
+  let errors = 0
+  for (const doc of docs) for (const step of doc.steps) {
+    const ref = (step.reply || []).map((bid) => doc.defs.find((d) => d.bid === bid)?.ref).filter(Boolean)
+    if (!ref.length) continue
+    const t = process.hrtime.bigint()
+    const got = await runQuery('block', { ref }, ctx)
+    ms[fs.existsSync(path.join(h, 'raw', `${step.rid.split(':')[0]}.ndjson`)) ? 'live' : 'sealed'].push(Number(process.hrtime.bigint() - t) / 1e6)
+    errors += got.errors.length
+  }
+  const row = (v) => (v.length ? { n: v.length, p50_ms: +pct(v, 50).toFixed(1), p95_ms: +pct(v, 95).toFixed(1), max_ms: +Math.max(...v).toFixed(1) } : { n: 0 })
+  return { line_ms: REPLY_LINE_MS, sealed: row(ms.sealed), live: row(ms.live), errors }
+}
+
+function printReplies(o) {
+  for (const k of ['sealed', 'live']) {
+    const r = o[k]
+    console.log(`${k.padEnd(7)} n ${String(r.n).padStart(4)}${r.n ? `  p50 ${r.p50_ms} ms  p95 ${r.p95_ms} ms  max ${r.max_ms} ms  line ${o.line_ms} ms  ${r.p95_ms <= o.line_ms ? 'within' : 'OVER'}` : ''}`)
+  }
+  console.log(`errors  ${o.errors}`)
+}
+
 function print(out) {
   const t = out.dataset
   console.log(`dataset  ${t.segments} segments  ${t.records} records  ${(t.bytes / 2 ** 30).toFixed(2)} GiB  index build (the keeper's, whole home) ${t.index_build_ms} ms`)
@@ -321,6 +354,13 @@ async function main(argv) {
   if (args['write-amp']) {
     const o = await writeAmp({ home: args['write-amp'], records: args.records ? Number(args.records) : 200 })
     printAmp(o)
+    if (args.json) fs.writeFileSync(args.json, JSON.stringify(o, null, 2))
+    return
+  }
+  if (args['reply-reads']) {
+    const docs = String(args['lane-doc']).split(',').map((f) => JSON.parse(fs.readFileSync(f, 'utf8')))
+    const o = await replyReads({ home: args['reply-reads'], docs })
+    printReplies(o)
     if (args.json) fs.writeFileSync(args.json, JSON.stringify(o, null, 2))
     return
   }
