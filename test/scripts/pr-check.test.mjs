@@ -404,7 +404,7 @@ test('AN24: changing any outbound byte moves the hash, and a re-run does not', (
   const hash = (o = {}) => w.check({ ...text, ...o }).doc.hash
   const first = hash()
   assert.match(first, /^[0-9a-f]{64}$/)
-  assert.equal(hash({ before: '2026-11-02T00:00:00Z' }), first, 'not an outbound byte')
+  assert.notEqual(hash({ before: '2026-11-02T00:00:00Z' }), first, 'the terms it was judged on')
   assert.notEqual(hash({ args: ['--accept-partial'] }), first, 'the terms it was judged on')
   assert.notEqual(hash({ title: 'A titlf' }), first)
   assert.notEqual(hash({ body: 'A bodz' }), first)
@@ -437,6 +437,47 @@ test('AN24: the hash holds the commit --base resolves to, not the name it was gi
   assert.equal(hash('same'), hash('mid'))
   assert.notEqual(hash('base'), hash('mid'))
   assert.notEqual(hash('base', ['--issue']), hash('mid', ['--issue']), 'a comment takes nothing from git, so only the base differs')
+})
+
+test('AN24: what was compared and what was let through move the hash, whatever the outbound bytes', () => {
+  const faulty = (w, rewrite) => {
+    const cli = path.join(w.home, 'cli.mjs')
+    fs.writeFileSync(cli, `import { spawnSync } from 'node:child_process'
+const argv = process.argv.slice(2), real = spawnSync(process.execPath, [${JSON.stringify(BIN)}, ...argv], { maxBuffer: 2 ** 30 })
+let out = real.stdout.toString(), code = real.status
+${rewrite}
+process.stdout.write(out)
+process.exitCode = code
+`)
+    return ['--cli', cli]
+  }
+  const accept = { args: ['--accept-partial'] }
+  const compared = workspace()
+  compared.commit({ 'a.txt': 'nothing here\n' })
+  const segment = capture(compared, SEGMENT, [line(NOW_THEN, 'nothing shared'), OPAQUE['a line that is not JSON']()])
+  const seen = compared.check(accept)
+  assert.equal(seen.code, 0)
+  const noRaw = compared.check({ ...accept, cli: faulty(compared, `if (argv[0] === 'raw') { out = ''; code = 3 }`) })
+  assert.equal(noRaw.code, 0, 'the one flag lets this out too')
+  assert.notEqual(noRaw.doc.hash, seen.doc.hash, 'consent to one unopened record is not consent to no comparison at all')
+  const noCapture = compared.check({ cli: faulty(compared, `out = JSON.stringify({ ok: true, segments: [], sessions: [], hosts: [] }); code = 0`) })
+  assert.equal(noCapture.code, 0)
+  assert.notEqual(noCapture.doc.hash, compared.check().doc.hash, 'no capture is not the capture')
+  fs.appendFileSync(segment, `${line(NOW_THEN, 'one more')}\n`)
+  assert.notEqual(compared.check(accept).doc.hash, seen.doc.hash, 'scanned_bytes')
+  fs.appendFileSync(segment, `${OPAQUE['a line that is not JSON']()}\n`)
+  const more = compared.check(accept)
+  fs.appendFileSync(segment, `${OPAQUE['a line that is not JSON']()}\n`)
+  assert.notEqual(compared.check(accept).doc.hash, more.doc.hash, 'opaque_bytes')
+
+  const { w } = pendingTitle()
+  w.commit({ 'a.txt': 'one\n' })
+  const fine = w.check(accept)
+  const fault = `if (argv.includes('--head')) { const d = JSON.parse(out); d.meta.title = null; d.meta.title_source = 'pending'; out = JSON.stringify(d) }`
+  const shy = w.check({ ...accept, cli: faulty(w, fault) })
+  assert.equal(shy.code, 0)
+  assert.deepEqual([shy.doc.coverage.scanned_bytes, shy.doc.coverage.opaque_bytes], [fine.doc.coverage.scanned_bytes, fine.doc.coverage.opaque_bytes])
+  assert.notEqual(shy.doc.hash, fine.doc.hash, 'the set let through')
 })
 
 // ── AN28
@@ -571,7 +612,7 @@ test('AN20: 60 shared normalized bytes are refused in every spelling, 59 pass, a
   assert.deepEqual(named(doc, 'captured-text'), sorted(texts))
   shapely(doc)
   const size = fs.statSync(file).size
-  assert.deepEqual(doc.coverage, { scanned_bytes: size, opaque_bytes: 0, total_bytes: size, from: NOW_THEN, to: NOW_THEN })
+  assert.deepEqual(doc.coverage, { scanned_bytes: size, opaque_bytes: 0, after_bytes: 0, total_bytes: size, from: NOW_THEN, to: NOW_THEN })
 })
 
 const kept = (o, bytes, coding) => JSON.stringify({ ...JSON.parse(envLine({ ts: NOW_THEN, ...o })), req_body: null, req_body_b64: bytes.toString('base64'), ...(coding ? { req_content_encoding: coding } : {}) })
@@ -660,11 +701,13 @@ test('AN20: a reply the collector left compressed is compared by what is behind 
 test('AN20: a record at or after --before and a segment wholly after it are not compared', () => {
   const w = workspace()
   w.commit({ 'a.txt': `${ascii(60, 1)}\n`, 'b.txt': `${ascii(60, 2)}\n`, 'c.txt': `${ascii(60, 3)}\n`, 'd.txt': `${ascii(60, 4)}\n` })
-  capture(w, SEGMENT, [line(NOW_THEN, ascii(60, 1)), line(BEFORE, ascii(60, 2)), `{"no":"time","text":"${ascii(60, 3)}"}`])
-  capture(w, NEWER, [line('2026-12-01T00:00:00.000Z', ascii(60, 4))])
+  const at = line(BEFORE, ascii(60, 2)), later = line('2026-12-01T00:00:00.000Z', ascii(60, 4))
+  capture(w, SEGMENT, [line(NOW_THEN, ascii(60, 1)), at, `{"no":"time","text":"${ascii(60, 3)}"}`])
+  capture(w, NEWER, [later])
   const { doc } = w.check()
   assert.deepEqual(named(doc, 'captured-text'), ['a.txt', 'c.txt'], 'a record with no time is compared')
   assert.deepEqual([doc.coverage.from, doc.coverage.to], [NOW_THEN, NOW_THEN])
+  assert.equal(doc.coverage.after_bytes, Buffer.byteLength(at) + 1 + Buffer.byteLength(later) + 1, 'a record skipped and a segment skipped')
 })
 
 // ── AN22
@@ -708,7 +751,7 @@ test('AN25: no capture at all is an empty comparison, not a failure', () => {
   w.commit({ 'a.txt': `${ascii(60, 1)}\n` })
   const { code, doc } = w.check()
   assert.equal(code, 0, JSON.stringify(doc.findings))
-  assert.deepEqual(doc.coverage, { scanned_bytes: 0, opaque_bytes: 0, total_bytes: 0, from: null, to: null })
+  assert.deepEqual(doc.coverage, { scanned_bytes: 0, opaque_bytes: 0, after_bytes: 0, total_bytes: 0, from: null, to: null })
 })
 
 test('AN25: a query that cannot read the capture, a segment that cannot be read, and an unreadable git each refuse', () => {
@@ -839,6 +882,26 @@ test('AN31: a capture all of it at or past --before refuses, and --accept-partia
   assert.deepEqual(early.doc.findings.map((f) => [f.rule, f.where]), [['partial', 'capture']])
   assert.equal(early.doc.coverage.scanned_bytes + early.doc.coverage.opaque_bytes, 0)
   assert.equal(w.check({ before: '2026-10-01T00:00:00.000Z', args: ['--accept-partial'] }).code, 0)
+})
+
+test('AN31: a --before a week back that skips records refuses, however little it compared; a recent one does not', () => {
+  const ago = (days) => new Date(Date.now() - days * 86_400_000).toISOString()
+  const w = workspace()
+  w.commit({ 'a.txt': `${ascii(60, 1)}\n` })
+  const skipped = line(ago(1), ascii(60, 1))
+  capture(w, SEGMENT, [line(ago(10), 'nothing shared'), skipped])
+  const early = w.check({ before: ago(8) })
+  assert.equal(early.code, 1)
+  assert.deepEqual(early.doc.findings.map((f) => [f.rule, f.where]), [['partial', 'capture']])
+  assert.equal(early.doc.coverage.after_bytes, Buffer.byteLength(skipped) + 1)
+  assert.ok(early.doc.coverage.scanned_bytes < early.doc.coverage.total_bytes, 'skipped, and said so')
+  assert.equal(w.check({ before: ago(8), args: ['--accept-partial'] }).code, 0)
+  assert.equal(w.check({ before: ago(6) }).code, 0, 'within the week the time is taken at its word')
+
+  const whole = workspace()
+  whole.commit({ 'a.txt': 'nothing here\n' })
+  capture(whole, SEGMENT, [line(ago(10), 'nothing shared')])
+  assert.equal(whole.check({ before: ago(8) }).code, 0, 'nothing was skipped')
 })
 
 // ── AN29

@@ -71,11 +71,11 @@ It judges every commit on the branch (paths, added lines, messages, author and c
 
 Text already in the public repository is public and passes.
 
-By default the check reads every capture through the installed `trocar`, which can take a few minutes. Without trocar installed, add `--cli bin/trocar.mjs`. The report's `coverage` gives the time range it compared (`from`, `to`), `scanned_bytes` and `opaque_bytes`, the bytes of records it could not open.
+By default the check reads every capture through the installed `trocar`, which can take a few minutes. Without trocar installed, add `--cli bin/trocar.mjs`. The report's `coverage` gives the time range it compared (`from`, `to`), `scanned_bytes`, `opaque_bytes`, the bytes of records it could not open, and `after_bytes`, the bytes it skipped for being at or past `--before`.
 
-A comparison that did not finish is a refusal: a segment that cannot be read, a record that cannot be opened, a `--before` earlier than every record. Comparing 0 bytes because there is no capture at all is normal, but tell the user that nothing was compared.
+A comparison that did not finish is a refusal: a segment that cannot be read, a record that cannot be opened, a `--before` earlier than every record, or one over a week old that skips records. Comparing 0 bytes because there is no capture at all is normal, but tell the user that nothing was compared.
 
-If `partial` is the only refusal, show the user `coverage`. Only if they clearly agree to send on that comparison, add `--accept-partial` and keep it on every later run: it moves that refusal into `accepted` and changes the hash. It lets nothing else through.
+If `partial` is the only refusal, show the user `coverage`. Only if they clearly agree to send on that comparison, add `--accept-partial` and keep it on every later run: it moves that refusal into `accepted`. It lets nothing else through. The hash holds `--before`, what was accepted and how much was compared, so a later run that read less gets another hash and goes back to the user.
 
 The check cannot see a paraphrase, so a clean run does not excuse step 3. Reread the text yourself and ask: could someone learn anything about this user's work from it?
 

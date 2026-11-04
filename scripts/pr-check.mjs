@@ -4,11 +4,11 @@
 //   node scripts/pr-check.mjs --before <time> --title <file> --body <file> [--base <ref>] [--accept-partial] [--cli <path>] [--json]
 //   node scripts/pr-check.mjs --issue --before <time> [--title <file>] --body <file> [--base <ref>] [--accept-partial] [--cli <path>] [--json]
 //
-// The report is {ok, hash, findings: [{rule, where, why}], accepted: [{rule, where, why}], coverage: {scanned_bytes, opaque_bytes, total_bytes,
-// from, to}, leaving: {files, commits, identity, branch}}. Exit 0 passed, 1 refused, 2 usage error. A finding names a place and a rule, never a value: `where` points into
+// The report is {ok, hash, findings: [{rule, where, why}], accepted: [{rule, where, why}], coverage: {scanned_bytes, opaque_bytes, after_bytes,
+// total_bytes, from, to}, leaving: {files, commits, identity, branch}}. Exit 0 passed, 1 refused, 2 usage error. A finding names a place and a rule, never a value: `where` points into
 // `leaving.files` by index, because a path is outbound text too, and `why` is one constant sentence per rule. Captured bytes pass through
 // this process to be compared, and nothing of them is printed. What cannot be read is a refusal, not an empty result. For the capture that
-// is a `partial` finding, the one rule --accept-partial moves to `accepted`, and using it changes the hash. The capture is read
+// is a `partial` finding, the one rule --accept-partial moves to `accepted`, and the hash holds what it let through. The capture is read
 // through the installed trocar, or the one --cli names: its reads go by the daemon and may write the derived layer, never the raw records.
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -29,6 +29,7 @@ const PAGE = ['--limit', '500'] // 1.6 §4.1: the largest page of a list query
 const SHORT_SHA = 10
 const MAX_LINES = 400
 const MIN_FACT = 4
+const MAX_WORK_MS = 7 * 86_400_000 // a --before further back than this leaves the recent capture out, whatever the reason
 const BOARD = 'src/web/board/'
 const LOCK = /(?:^|\/)package-lock\.json$/
 const isUncounted = (file) => file.startsWith('test/fixtures/') || file.startsWith(BOARD) || LOCK.test(file)
@@ -78,6 +79,7 @@ const WHY = {
   raw: 'A segment of the capture could not be read to its end, so the rest of it was not compared.',
   opaque: 'Some records could not be opened, so what is behind them was not compared: opaque_bytes counts them.',
   nothing: 'The capture holds records and none of them was compared: all of them are at or past --before, or could not be read.',
+  early: 'This --before is over a week old and records after it were skipped: after_bytes counts them.',
 }
 
 function parse(argv) {
@@ -187,9 +189,11 @@ function readGit(cwd, base, out) {
   }
 }
 
-/** The whole outbound text, source by source, in a form that changes when any of its bytes does, and the terms it was judged on. */
-function hashOf(sources, { base, accepted }) {
-  const hash = createHash('sha256').update(`${base}\0${accepted}\0`)
+/** The whole outbound text, source by source, in a form that changes when any of its bytes does, and the terms it was judged on: what the
+ *  user agrees to is this comparison, so a run that read less or let more through is another one. after_bytes and total_bytes only grow. */
+function hashOf(sources, { base, before, accepting, accepted, coverage }) {
+  const passed = accepted.map((f) => [f.rule, f.where, f.why].join('\0')).sort()
+  const hash = createHash('sha256').update(`${JSON.stringify([base, before, accepting, passed, coverage.scanned_bytes, coverage.opaque_bytes])}\0`)
   for (const s of sources) {
     const bytes = s.kind === 'body' ? Buffer.from(s.bytes.toString('latin1').replace(HASH_ROW, ''), 'latin1') : s.bytes
     hash.update(`${s.kind}\0${s.where}\0${bytes.length}\0`).update(bytes)
@@ -367,12 +371,16 @@ function subtractBase(cwd, base, table, held) {
  *  left unread is a `partial` finding, so the walk does not stop early. Returns the coverage. */
 async function compareCapture(segments, { before, cli }, table, add) {
   const wanted = segments.filter((s) => !s.from || Date.parse(s.from) < before)
-  const coverage = { scanned_bytes: 0, opaque_bytes: 0, total_bytes: wanted.reduce((n, s) => n + s.bytes, 0), from: null, to: null }
+  const bytesOf = (list) => list.reduce((n, s) => n + s.bytes, 0)
+  const coverage = { scanned_bytes: 0, opaque_bytes: 0, after_bytes: bytesOf(segments) - bytesOf(wanted), total_bytes: bytesOf(wanted), from: null, to: null }
   const hit = (slot) => { add('captured-text', table.whereOf(slot)); table.drop(slot) }
   const take = (line, ending) => {
     const ts = RECORD_TS.exec(line.subarray(0, 64).toString('latin1'))?.[1]
     const time = Date.parse(ts)
-    if (time >= before) return
+    if (time >= before) {
+      coverage.after_bytes += line.length + ending
+      return
+    }
     table.scan(line, hit)
     let behind = { texts: [], opaque: true }
     // not JSON: nothing can be opened, and a half line at a segment's end is no record to open (§4), so only its text above is compared
@@ -404,6 +412,7 @@ async function compareCapture(segments, { before, cli }, table, add) {
   }
   if (coverage.opaque_bytes > 0) add('partial', 'capture', WHY.opaque)
   if (coverage.scanned_bytes + coverage.opaque_bytes === 0 && segments.some((s) => s.records > 0)) add('partial', 'capture', WHY.nothing)
+  else if (coverage.after_bytes > 0 && before < Date.now() - MAX_WORK_MS) add('partial', 'capture', WHY.early)
   return coverage
 }
 
@@ -411,8 +420,8 @@ function print(doc) {
   const lines = [`pr-check: ${doc.ok ? 'passed' : `refused, ${doc.findings.length} finding${doc.findings.length === 1 ? '' : 's'}`}`]
   for (const f of doc.findings) lines.push(`  ${f.rule}  ${f.where}  ${f.why}`)
   for (const f of doc.accepted) lines.push(`  accepted ${f.rule}  ${f.where}  ${f.why}`)
-  const { scanned_bytes: scanned, opaque_bytes: opaque, total_bytes: total, from, to } = doc.coverage
-  lines.push(`hash ${doc.hash}`, `capture compared: ${scanned} of ${total} bytes, ${opaque} not opened${from ? `, ${from} to ${to}` : ''}`)
+  const { scanned_bytes: scanned, opaque_bytes: opaque, after_bytes: after, total_bytes: total, from, to } = doc.coverage
+  lines.push(`hash ${doc.hash}`, `capture compared: ${scanned} of ${total} bytes, ${opaque} not opened, ${after} at or past --before${from ? `, ${from} to ${to}` : ''}`)
   if (doc.leaving.branch) lines.push(`branch ${doc.leaving.branch}`)
   for (const person of doc.leaving.identity) lines.push(`identity ${person}`)
   for (const commit of doc.leaving.commits) lines.push(`commit ${commit.sha} ${commit.subject}`)
@@ -475,7 +484,7 @@ async function main() {
   const isAccepted = (f) => accepting && f.rule === 'partial'
   const findings = [...found.values()].filter((f) => !isAccepted(f))
   const accepted = [...found.values()].filter(isAccepted)
-  const doc = { ok: findings.length === 0, hash: hashOf(out.sources, { base, accepted: accepting }), findings, accepted, coverage, leaving: out.leaving }
+  const doc = { ok: findings.length === 0, hash: hashOf(out.sources, { base, before: options.before, accepting, accepted, coverage }), findings, accepted, coverage, leaving: out.leaving }
   if (options.json) process.stdout.write(`${JSON.stringify(doc)}\n`)
   else print(doc)
   process.exitCode = doc.ok ? 0 : 1
