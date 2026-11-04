@@ -137,3 +137,26 @@ test('ease: rows and a rebuilt index are what they are without it, whatever the 
     assert.ok(fs.readFileSync(idx).equals(plainly), `${index}: the rebuilt sealed index, byte for byte`)
   }
 })
+
+// a segment sealed after its index was built (a real daemon's order; a deploy check's clone of the index meets it): the same rows, for a
+// reader that held them and for one reading the sealed home for the first time
+test('an index built on a plain segment lines up once the segment is sealed: no row lost, none twice', async () => {
+  const dir = tmpDir('trocar-rows-sealed-'), home = path.join(dir, 'a', '.trocar'), lockFile = path.join(home, 'collector', 'lock')
+  fs.mkdirSync(path.join(home, 'raw'), { recursive: true })
+  fs.mkdirSync(path.dirname(lockFile), { recursive: true })
+  const lines = Array.from({ length: 8 }, (_, i) => axes(i, '2026-11-01T08:00:00.000Z')).flat()
+  writeSegment(home, PLAIN, lines)
+  writeSegment(home, LIVE, axes(8, '2026-11-01T09:00:00.000Z'))
+  for (const segment of [PLAIN, LIVE]) await segmentIndex({ home, segment, owner: true })
+  const rowsOf = (list) => [...list].map((r) => JSON.stringify(r, (k, v) => (k === 'offset' ? undefined : v))) // a byte offset is the plain file's alone
+  const before = rowsOf(await indexRows({ home }))
+  assert.equal(before.filter((r) => JSON.parse(r).segment === PLAIN).length, lines.length)
+
+  fs.writeFileSync(lockFile, JSON.stringify({ pid: process.pid, segment: LIVE }))
+  await sealSegment(path.join(home, 'raw', `${PLAIN}.ndjson`), { lockFile, journal: null })
+  fs.rmSync(lockFile)
+  assert.deepEqual(rowsOf(await indexRows({ home })), before)
+  const copy = path.join(dir, 'b', '.trocar')
+  fs.cpSync(home, copy, { recursive: true, preserveTimestamps: true })
+  assert.deepEqual(rowsOf(await indexRows({ home: copy })), before)
+})
