@@ -12,7 +12,7 @@ const S = (o = {}) => ({ session_id: 'sess-1', project_slug: '_unresolved', proj
 
 test('(2) title rules: the hover follows title_source and carries the id, a null title is the untitled word; the title never carries the id', () => {
   const tips = new Set()
-  for (const [title, title_source, wantTip, wantText] of [['Fix the queue', 'wire', W.titleFromWire, 'Fix the queue'], [null, null, W.titleNoKey, W.UNTITLED]]) {
+  for (const [title, title_source, wantTip, wantText] of [['Fix the queue', 'wire', W.titleFromWire, 'Fix the queue'], [null, 'unread', W.titleUnread, W.PROMPT_UNREAD], [null, null, W.titleNoKey, W.UNTITLED]]) {
     for (const harness_inferred of [false, true]) {
       const s = S({ title, title_source, harness_inferred }), tip = titleTipOf(s), why = JSON.stringify({ title_source, harness_inferred })
       assert.equal(tip, wantTip(s.session_id), why); assert.equal(titleText(s), wantText, why)
@@ -21,7 +21,7 @@ test('(2) title rules: the hover follows title_source and carries the id, a null
       tips.add(tip)
     }
   }
-  assert.equal(tips.size, 2, 'one distinct hover per title_source')
+  assert.equal(tips.size, 3, 'one distinct hover per title_source')
 })
 
 test('(3)(4)(5) row marks follow their fields, table-driven; nothing marks a false or absent field; probe-only is dim', () => {

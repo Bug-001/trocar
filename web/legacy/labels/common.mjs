@@ -57,3 +57,6 @@ export const READ_FAIL = (what, status) => `${what} could not be read${status ==
 export const READING = 'Reading…' // the content area while a screen module loads (web/src/LegacyScreen.tsx)
 export const WINDOW_LABEL = Object.freeze({ '24h': '24 hours', '7d': '7 days', all: 'All' })
 export const UNTITLED = 'No prompt captured'
+// a title this read could not take from its record (1.8 §标题规则): a read failure, not a fact about the session; the next read tries again
+export const PROMPT_UNREAD = 'Prompt could not be read'
+export const PROMPT_UNREAD_TIP = 'The record that holds this session\'s first prompt could not be read. The next read tries again'

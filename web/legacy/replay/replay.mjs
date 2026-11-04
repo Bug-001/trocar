@@ -617,6 +617,7 @@ function openDesk(ctx, route0, makeView = legacyView) {
     const key = s.anchor && s.anchor.id, desk = s.desk, sk = sessionKey(), signal = s.reads.signal
     if (!key || !host || chaining || (ledgerFailed && !byPoll) || !desk.held.has(key)) return
     const h = desk.held.get(key), head = desk.lanes.get(key)
+    if (byPoll && h.pending && !desk.pending) h.ledgered = false // the head says the read is over and the ledger stood behind it: read it whole (2.4)
     if (h.ledgered && !h.cursors.size && !(grew && ledgerTip !== head.last)) return
     chaining = true
     const gone = () => s.dead || sk !== sessionKey() || desk !== s.desk || signal.aborted

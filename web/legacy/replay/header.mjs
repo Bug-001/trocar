@@ -29,7 +29,8 @@ function titleHtml(meta, lanes) {
   if (meta && meta.title != null) return `<span class="sh-name" title="${esc(W.TITLE_FROM_WIRE)}\n${esc(W.SESSION_ID)} ${esc(id)}">${esc(meta.title)}</span>`
   const sp = spanOf(lanes)
   const t0 = sp ? fmtWhen(sp.t0) : ''
-  return `<span class="sh-name" title="${esc(W.TITLE_UNTITLED_TIP)}\n${esc(W.SESSION_ID)} ${esc(id)}">${W.UNTITLED}${t0 ? ` · ${esc(t0)}` : ''}</span>`
+  const unread = meta && meta.title_source === 'unread'
+  return `<span class="sh-name" title="${esc(unread ? W.PROMPT_UNREAD_TIP : W.TITLE_UNTITLED_TIP)}\n${esc(W.SESSION_ID)} ${esc(id)}">${unread ? W.PROMPT_UNREAD : W.UNTITLED}${t0 ? ` · ${esc(t0)}` : ''}</span>`
 }
 
 // ── the agent chip: the table's icon + name, the meta's quiet marks, S14's 「多个 agent」 only when the field says so ──
@@ -186,7 +187,7 @@ export function totalsOf(s) {
 }
 
 // 1.2 §会话头 读取状态: while the server is still extracting this session (`pending{done, total}` on the session answer) one quiet
-// line says how far — the first read as a share, later the calls still to catch up. Words only: no control (D69).
+// line says how far — the first read as a share, a version's re-read as its own share (`pending.seen`, `read / total`), later the calls still to catch up. Words only: no control (D69).
 // 1.5 K-32: a head behind the capture names how many calls came after it (`behind`, behindOf).
 // 1.5 K-31: a head whose background fold stopped (`pending.stopped`) says so instead.
 export function readStateHtml(desk) {
@@ -196,8 +197,10 @@ export function readStateHtml(desk) {
   if (stop) return `<div class="fidline readstate" data-read-state="stopped">${esc(W.FOLD_STOPPED[stop.code] || W.FOLD_STOPPED['fold-failed'])}</div>` +
     techDetailsHtml([[String(stop.code ?? ''), String(stop.reason ?? '')]], { id: 'readtech' })
   const done = Number(p.done) || 0, total = Number(p.total) || 0
-  const words = desk.firstPending ? W.readingFirst(total > 0 ? Math.floor((done / total) * 100) : 0) : W.catchingUp(Math.max(0, total - done))
-  return `<div class="fidline readstate" data-read-state="${desk.firstPending ? 'reading' : 'catching-up'}">${esc(words)}</div>`
+  const pct = (n) => (total > 0 ? Math.floor((n / total) * 100) : 0)
+  const [state, words] = p.seen ? ['updating', W.updatingTo(pct(Number(p.read) || 0), Number(p.calls) || 0)]
+    : desk.firstPending ? ['reading', W.readingFirst(pct(done))] : ['catching-up', W.catchingUp(p.calls ?? Math.max(0, total - done))]
+  return `<div class="fidline readstate" data-read-state="${state}">${esc(words)}</div>`
 }
 // behindOf(tip, mark) → {n, more} | null (1.5 K-32): of the tip ids (`x-trocar-tip`, the newest model calls, oldest first) the ones that
 // come after `mark` (the newest member the desk holds: packs.mjs desk.newest) in record order; `more` when none of them is at or before

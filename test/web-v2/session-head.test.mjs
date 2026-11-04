@@ -110,6 +110,31 @@ test('the read-state line is present iff the answer is pending, and holds no but
   assert.equal(readStateHtml(createDesk()), '', 'nothing read: no line')
 })
 
+// 1.2 §读取状态 · 1.5 K-33: a version's re-read is no first read: its share is read / total, and it says the calls that wait for its end
+test('a re-read: the line is updating, the share comes from pending.read, and it carries pending.calls', () => {
+  const fx = JSON.parse(readFileSync(new URL('../fixtures/session-read-contract.json', import.meta.url), 'utf8'))
+  for (const calls of [0, 1, 12]) {
+    const desk = createDesk()
+    applySession(desk, { ...fx.session_pending, pending: { done: 90, total: 100, seen: true, calls, read: 38 } })
+    const html = readStateHtml(desk)
+    assert.match(html, /data-read-state="updating"/, `${calls}`)
+    assert.ok(html.includes(W.updatingTo(38, calls)) && !html.includes(W.updatingTo(90, calls)), `${calls}: ${html}`)
+  }
+})
+
+// 1.5 catching-up: the count is pending.calls (telemetry rows are members, not calls); a head without it falls to total - done
+test('catching up counts pending.calls, not total - done; a head with no calls falls back', () => {
+  const fx = JSON.parse(readFileSync(new URL('../fixtures/session-read-contract.json', import.meta.url), 'utf8'))
+  for (const [pending, n] of [[{ done: 5, total: 9, calls: 2 }, 2], [{ done: 5, total: 9, calls: 1 }, 1], [{ done: 5, total: 9 }, 4]]) {
+    const desk = createDesk()
+    applySession(desk, fx.session_full)
+    applySession(desk, { ...fx.session_full, pending })
+    const html = readStateHtml(desk)
+    assert.match(html, /data-read-state="catching-up"/, JSON.stringify(pending))
+    assert.ok(html.includes(W.catchingUp(n)), html)
+  }
+})
+
 // 1.5 K-31 · 3.5 #37: a head whose background fold stopped (pending.stopped) says reading stopped, its code in the technical details;
 // for every FOLD_STOPS code, at a first read and a later one
 test('a stopped fold: the read-state line is the stopped one, its code in the technical details; without the stop it is the reading line', () => {
@@ -237,6 +262,16 @@ const headState = (lanes, answer = {}, extra = {}) => {
   return { desk, meta: desk.meta, lanes: buildLanes(desk, desk.probes), pricing: PRICES, follow: false, ...extra }
 }
 const mainRows = () => [{ usage: U(0, 100, 10), cacheBreak: { firstCall: true } }, { usage: U(0, 120, 10), cacheBreak: { cause: 'content-changed' } }, { error: 'boom', usage: null }, { usage: U(100, 30, 5), cacheBreak: { cause: 'append' } }]
+test('1.2 #17 · title_source unread: the fixed word and its own tip on the desk head, in both copies; a title never reads it', () => {
+  const unread = { session_id: 'S-1', title: null, title_source: 'unread' }
+  const m = sessionHeadModel(headState([{ kind: 'main', rows: mainRows() }], { meta: unread }))
+  assert.equal(m.title.text, null); assert.equal(m.title.fallback, W.PROMPT_UNREAD); assert.equal(m.title.sourceTip, W.PROMPT_UNREAD_TIP)
+  const html = sessionHeadHtml({ meta: unread, lanes: [], follow: false })
+  assert.ok(html.includes(W.PROMPT_UNREAD) && !html.includes(W.UNTITLED), html)
+  const plain = sessionHeadModel(headState([{ kind: 'main', rows: mainRows() }], { meta: { session_id: 'S-1', title: null, title_source: null } }))
+  assert.equal(plain.title.fallback, W.UNTITLED)
+})
+
 const HEAD_PARTS = ['back', 'title', 'chip', 'entry', 'project', 'start', 'follow', 'read', 'stale', 'facts', 'info'] // 1.2 §会话头's table + the 保真行 + ⓘ
 const INFO_KEYS = new Set(['truncated', 'cost', 'hit', 'breaks', 'failed', 'compactions', 'counts', 'duration', 'id', 'project', 'calls']) // 1.2 §信息弹出层
 

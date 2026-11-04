@@ -14,7 +14,7 @@ import { INTERVAL } from '../../web/legacy/core/poll.mjs'
 import { ALIASES, HARNESS_ORDER, UNIDENTIFIED, harnessKey, harnessName } from '../../web/legacy/core/chips.mjs'
 import { TITLE_FROM_WIRE } from '../../web/legacy/labels/replay.mjs'
 import { FILES_NOT_READ } from '../../web/legacy/labels/overview.mjs'
-import { UNTITLED } from '../../web/legacy/labels/common.mjs'
+import { UNTITLED, PROMPT_UNREAD, PROMPT_UNREAD_TIP } from '../../web/legacy/labels/common.mjs'
 import { ERR_WHERE, COMMANDS } from '../../web/legacy/labels/capture.mjs'
 import { fmtWhen, bytes } from '../../web/legacy/core/fmt.mjs'
 
@@ -201,6 +201,12 @@ test('#7 no session in the window: the empty line, never a row of 0s or a cost',
   assert.equal(card.cost, null); assert.equal(card.sessions, null); assert.deepEqual(card.agents, [])
   assert.deepEqual(statsCard(stateOf(quiet(), { stats: { data: null, ok: null, err: null, other: false } }), NOW), { kind: 'reading' })
   assert.equal(statsCard(stateOf(quiet(), { stats: { ...failed(), other: false } }), NOW).kind, 'failed')
+})
+
+test('#11 recent sessions: a title that could not be read says so, with its own hover', () => {
+  const rows = [session(1, { title: null, title_source: 'unread' })]
+  const [r] = recentCard(stateOf(quiet(), { sessions: ok({ sessions: rows, errors: [] }) }), NOW).rows
+  assert.equal(r.title, PROMPT_UNREAD); assert.ok(r.titleTip.includes(PROMPT_UNREAD_TIP), r.titleTip)
 })
 
 test('#11 recent sessions: the five newest by last_ts, the hover by title_source, untitled without a time, the probe-only mark, the replay href', () => {

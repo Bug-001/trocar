@@ -54,11 +54,11 @@ export function flattenSessions(data) {
 }
 const lastMs = (s) => { const t = Date.parse(s.last_ts); return Number.isNaN(t) ? null : t }
 
-// ── the title rule (1.8 §标题规则): `title` as it is, else 没有采到提问; where it came from is `title_source`
-export const titleText = (s) => (s.title != null ? String(s.title) : W.UNTITLED)
+// ── the title rule (1.8 §标题规则): `title` as it is, else `title_source: 'unread'` says the read failed, else 没有采到提问
+export const titleText = (s) => (s.title != null ? String(s.title) : s.title_source === 'unread' ? W.PROMPT_UNREAD : W.UNTITLED)
 export function titleTipOf(s) {
   const id = s.session_id
-  if (s.title == null) return W.titleNoKey(id)
+  if (s.title == null) return s.title_source === 'unread' ? W.titleUnread(id) : W.titleNoKey(id)
   return W.titleFromWire(id) // a title always comes from the wire (4.4 §人类标题的来源)
 }
 

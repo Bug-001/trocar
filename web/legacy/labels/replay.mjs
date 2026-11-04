@@ -122,6 +122,7 @@ export const askNo = (k) => `Prompt ${k}`
 // ── the session head (1.2 §会话头) ────────────────────────────────────────────────────────────────────────────────────
 export const BACK = '‹ Sessions'
 export const UNTITLED = 'No prompt captured'
+export { PROMPT_UNREAD, PROMPT_UNREAD_TIP } from './common.mjs'
 export const FOLLOW = 'Follow latest'
 export const SESSION_INFO_LABEL = 'About this session'
 export const MULTIPLE_AGENTS = 'several agents'
@@ -228,7 +229,11 @@ export const THIS_SESSION = 'This session'
 export const notRefreshed = (t, why) => `Not refreshed since ${t} · ${why}`
 // 1.2 §会话头 读取状态: the server is still extracting this session (first read: share done; later: calls still to catch up)
 export const readingFirst = (pct) => `Reading this session for the first time · ${pct} %`
-export const catchingUp = (n) => `Catching up · ${n} new calls`
+export const catchingUp = (n) => `Catching up · ${n === 1 ? '1 new call' : `${n} new calls`}`
+export const updatingTo = (pct, calls) => `Updating to this version · ${pct}%${calls > 0 ? ` · ${calls === 1 ? '1 new call appears' : `${calls} new calls appear`} when it finishes` : ''}`
+// 2.4 还在读: what stands where the empty list's line would while the ledger is answered behind the fold
+export const FILES_UPDATING = 'Updating to this version · files so far'
+export const FILES_READING = 'Still reading this session · files so far'
 // 1.5 K-31: the server's background read of this session stopped (the head's pending.stopped), one line per code of
 // src/health/codes.mjs FOLD_STOPS (the board does not import it); the code and the reason are in the technical details
 export const FOLD_STOPPED = Object.freeze({

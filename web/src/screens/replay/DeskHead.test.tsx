@@ -7,6 +7,7 @@ import { cleanup, render } from '@testing-library/react'
 import { HARNESS_REGISTRY } from '../../../../src/off/harness-names.mjs'
 import { DeskHead } from './DeskHead'
 import { reactView } from './view'
+import * as W from '../../../legacy/labels/replay.mjs'
 
 afterEach(() => { cleanup(); document.body.replaceChildren() })
 
@@ -35,6 +36,26 @@ test('1.2 #2 / harness seam (d): the chip\'s DOM is the same for every registry 
 
 // the session head's parts (1.2 §会话头's table); a head with another session of the same title draws nothing more
 const PARTS = new Set(['sh-back', 'sh-name', 'sh-chip', 'sh-multi', 'sh-proj', 'sh-start', 'sh-entry', 'spacer', 'sh-follow', 'sh-info'])
+test('1.2 §读取状态: a re-read says updating with read / total and the calls it holds back; catching up counts pending.calls', () => {
+  for (const calls of [0, 1, 12]) {
+    const { el } = head({ desk: { pending: { done: 90, total: 100, seen: true, calls, read: 38 } } })
+    const line = el.querySelector<HTMLElement>('.readstate')!
+    expect(line.dataset.readState).toBe('updating')
+    expect(line.textContent).toBe(W.updatingTo(38, calls))
+    cleanup()
+  }
+  const { el } = head({ desk: { pending: { done: 5, total: 9, calls: 2 } } })
+  expect(el.querySelector<HTMLElement>('.readstate')!.dataset.readState).toBe('catching-up')
+  expect(el.querySelector('.readstate')!.textContent).toBe(W.catchingUp(2))
+})
+
+test('1.2 #17: title_source unread reads the fixed word, not the untitled one', () => {
+  const { el } = head({ meta: { title: null, title_source: 'unread' } })
+  const name = el.querySelector<HTMLElement>('.sh-name')!
+  expect(name.textContent).toBe(W.PROMPT_UNREAD)
+  expect(name.title).toContain(W.PROMPT_UNREAD_TIP)
+})
+
 test('1.2 #3: with another session of the same title, the head is only the table\'s parts and names the title once', () => {
   const title = 'Same name'
   const other = { session_id: 'sid-2', title, harness: 'claude-code' }
