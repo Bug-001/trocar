@@ -135,7 +135,7 @@ export function RecentCard({ m, onRetry }: { m: RecentModel, onRetry: Retry }) {
         <a className="ovitem" key={r.id} href={r.href}>
           <HarnessIcon id={r.harness} />
           <span className="ovnm">{harnessName(r.harness)}{r.inferred ? <> <span className="ovmark" title="agent inferred from the request headers">(inferred)</span></> : null}</span>
-          <span className={r.pending ? 'ovtx pend' : 'ovtx'} title={r.titleTip}>{r.title}</span>
+          <span className="ovtx" title={r.titleTip}>{r.title}</span>
           <span className="ovnum">{r.calls.tip ? <span title={r.calls.tip}>{r.calls.text}</span> : r.calls.text}</span>
           <span className="ovwhen">{r.when}</span>
         </a>

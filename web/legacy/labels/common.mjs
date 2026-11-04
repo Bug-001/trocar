@@ -56,7 +56,4 @@ export const READ_FAIL = (what, status) => `${what} could not be read${status ==
   : typeof status === 'number' ? `: the trocar service returned ${status}` : ''}`
 export const READING = 'Reading…' // the content area while a screen module loads (web/src/LegacyScreen.tsx)
 export const WINDOW_LABEL = Object.freeze({ '24h': '24 hours', '7d': '7 days', all: 'All' })
-export const UNTITLED = 'Untitled session'
-// a title the answer does not know yet (title_source 'pending', 1.8 §标题规则): not the same as no title
-export const TITLE_PENDING = 'Title not read yet'
-export const TITLE_PENDING_TIP = 'The title is still being read from the captured requests; it shows on the next refresh'
+export const UNTITLED = 'No prompt captured'

@@ -19,7 +19,7 @@ import { unpricedModels } from '../../../legacy/settings/prices.mjs'
 import { controlFor } from '../../../legacy/core/harness-switch.mjs'
 import { failureBrief, failureWord } from '../../../../src/cli/words.mjs'
 import * as W from '../../../legacy/labels/overview.mjs'
-import { WINDOW_LABEL, UNTITLED, READ_FAIL, TITLE_PENDING, TITLE_PENDING_TIP } from '../../../legacy/labels/common.mjs'
+import { WINDOW_LABEL, UNTITLED, READ_FAIL } from '../../../legacy/labels/common.mjs'
 
 const DAY = 24 * 3600e3
 
@@ -197,7 +197,7 @@ export function recentRows(sessionsData) {
   if (!sessionsData || !Array.isArray(sessionsData.sessions)) return null
   return [...sessionsData.sessions].filter(Boolean).sort((a, b) => (parseTs(b.last_ts) ?? -1) - (parseTs(a.last_ts) ?? -1)).slice(0, 5).map((m) => ({
     key: `${m.project_slug}::${m.session_id}`, id: m.session_id, harness: m.harness, inferred: !!m.harness_inferred,
-    title: m.title ?? null, titleSource: m.title_source ?? null, calls: m.calls ?? 0, probes: m.probes ?? 0, last: m.last_ts || null,
+    title: m.title ?? null, calls: m.calls ?? 0, probes: m.probes ?? 0, last: m.last_ts || null,
     href: `#/replay/${encodeURIComponent(m.project_slug || '')}/${encodeURIComponent(m.session_id || '')}`,
   }))
 }
@@ -329,10 +329,9 @@ export function recentCard(s, now) {
     kind: 'shown',
     rows: rows.map((r) => {
       const probe = r.calls === 0 && r.probes > 0
-      const pending = r.title == null && r.titleSource === 'pending' // not known yet, not "untitled" (1.8 §标题规则)
       return {
-        id: r.key, harness: r.harness, inferred: r.inferred, title: r.title ?? (pending ? TITLE_PENDING : UNTITLED), pending,
-        titleTip: [r.title != null ? TITLE_FROM_WIRE : pending ? TITLE_PENDING_TIP : null, r.id].filter(Boolean).join(' · '),
+        id: r.key, harness: r.harness, inferred: r.inferred, title: r.title ?? UNTITLED,
+        titleTip: [r.title != null ? TITLE_FROM_WIRE : null, r.id].filter(Boolean).join(' · '),
         calls: { text: probe ? W.PROBE_ONLY : W.CALLS_N(r.calls), tip: probe ? W.PROBE_ONLY_TIP : null }, when: when(r.last, now), href: r.href,
       }
     }),
