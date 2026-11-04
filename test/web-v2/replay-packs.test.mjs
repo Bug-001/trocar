@@ -344,3 +344,48 @@ test('3.5 答案文件 head: an older head of the open span with the same packs 
   assert.deepEqual(new Map([...a.lanes].sort()), new Map([...b.lanes].sort()), 'the same lane heads')
   assert.equal(a.newest, b.newest, 'the same newest member')
 })
+
+// 3.5 §会话读 / 2.3 §归约前沿: a rid held by more than one file. Packs seal over tails that hold their rids (the pack claims them), a
+// tail's rids that its pack lacks go back to the next tail that still holds them (release), a tail lets a rid go by `g`, a tail is
+// read again whole. A rid's lines are the same in every file holding it, so the desk after each load equals the desk built from
+// the same files at once, packs first: rows, step order, each lane's rids, steps, events, records, lane heads.
+test('3.5 §会话读: rids held by several files: after every load the desk equals the same files loaded at once', () => {
+  for (let seed = 1; seed <= 60; seed++) {
+    const r = rng(seed), G = 10, X = 3, line = new Map()
+    const rid = (k) => `S:${k}`, lane = (k) => (k % 3 ? 'A' : 'B')
+    for (let k = 0; k < 3 * G; k++) {
+      const ts = `2026-11-04T00:${String(Math.floor(k / 2 + (r() < 0.2 ? 3 : 0))).padStart(2, '0')}:00Z` // equal ts and late rows
+      line.set(k, [{ c: { rid: rid(k), lane: lane(k), ts, ctx: k } },
+        { s: { rid: rid(k), lane: lane(k), i: k, parent: null, ops: [[1, `b${k}`]], events: k % 4 ? [] : [{ type: 'user', rid: rid(k), lane: lane(k), k: 1 }] } },
+        { r: { id: rid(k), ts_request: ts, is_llm_call: true } }])
+    }
+    const range = (a, b) => Array.from({ length: b - a }, (_, i) => a + i)
+    const lines = (ks) => ks.flatMap((k) => line.get(k))
+    const heads = (n) => [{ l: { lane: 'A', count: 10 + n } }, { l: { lane: 'B', count: 20 + n } }]
+    const gone = 2 * G - 1 // held by tail 1 and pack 1; tail 2 brings it and lets it go
+    const files = [
+      { file: { kind: 'pack', n: 0, part: 'main' }, lines: lines(range(0, G)) },
+      { file: { kind: 'pack', n: 1, part: 'main' }, lines: lines(range(G, 2 * G)) },
+      { file: { kind: 'tail', n: 0, part: 'main' }, lines: [...heads(0), ...lines(range(0, G + X))] },
+      { file: { kind: 'tail', n: 1, part: 'main' }, lines: [...heads(1), ...lines(range(G - X, 2 * G + X))] },
+      { file: { kind: 'tail', n: 2, part: 'main' }, lines: [...heads(2), ...lines([gone, ...range(2 * G - X, 3 * G)]), { g: rid(gone) }] },
+    ]
+    const order = [...files, ...files.filter(() => r() < 0.3).map((f) => (f.file.kind === 'tail' ? { ...f, file: { ...f.file, whole: true } } : f))]
+      .sort(() => r() - 0.5)
+    const keyOf = (f) => `${f.file.kind}${f.file.n}`
+    const view = (d) => ({
+      rows: d.rows, order: d.order, laneRids: d.laneRids, lanes: d.lanes, events: d.events, records: d.records,
+      steps: new Map([...d.held].map(([k, h]) => [k, { steps: new Map([...h.steps].map(([x, s]) => [x, s])), events: h.events }]).filter(([, h]) => h.steps.size)),
+    })
+    const desk = createDesk()
+    order.forEach((f, j) => {
+      applyFile(desk, f.file, { head: null, lines: f.lines })
+      const once = createDesk(), seen = new Map()
+      for (const g of order.slice(0, j + 1)) seen.set(keyOf(g), g)
+      for (const g of [...seen.values()].sort((a, b) => (a.file.kind === b.file.kind ? a.file.n - b.file.n : a.file.kind === 'pack' ? -1 : 1))) {
+        applyFile(once, g.file, { head: null, lines: g.lines })
+      }
+      assert.deepEqual(view(desk), view(once), `seed ${seed} after ${j}: ${order.slice(0, j + 1).map(keyOf).join(' ')}`)
+    })
+  }
+})
