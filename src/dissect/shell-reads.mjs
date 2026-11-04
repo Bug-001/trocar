@@ -16,9 +16,8 @@ const REDIRECT = /(\d*)(&>>|&>|<<<|<<-|<<|>>|>&|>\||<&|<>|>|<)/y;
 const VAR = /[A-Za-z_]\w*/y;
 const MARK = '\0'; // stands for the home directory inside values, so `..` resolves once it is known
 const ROOTED = /^(?:[/\0]|~[^/]|[A-Za-z]:[\\/])/;
-const MAX_READS = 256;
 const MAX_LOOP = 64; // values of one `for`, and `for`s inside one another
-const MAX_STEPS = 4096;
+const MAX_STEPS = 4096; // what a loop's expansion may walk, and the reads one command may give: a literal list stays whole below it
 
 // The index just past the construct opened right before i: `(`, `{` (of `${`), `"` or a backtick.
 // A stack, not recursion: captured commands can nest as deep as they like.
@@ -155,7 +154,7 @@ function writtenOf({ raw, quotes }) {
 // stdout into a file: `>`, `>>`, `1>`, `&>`. A descriptor target (`>&2`) is no file.
 const isWrite = ({ fd, op, w }) => op[0] === '&' || (op[0] === '>' && (!fd || fd === '1') && !(op === '>&' && /^(\d+|-)$/.test(w.raw)));
 
-export function parseBashReads(command, { home = null, cwd = null } = {}) {
+export function parseBashReads(command, ctx = {}) {
   if (!command || typeof command !== 'string') return [];
   const items = lex(command);
   const out = [];
@@ -167,8 +166,9 @@ export function parseBashReads(command, { home = null, cwd = null } = {}) {
   let steps = 0;
   let nesting = 0;
   let stated;
+  const home = ctx.home ?? null;
   const workdir = () => {
-    if (stated === undefined) stated = (typeof cwd === 'function' ? cwd() : cwd) || null;
+    if (stated === undefined) stated = ctx.cwd || null; // a getter may scan text: read here, only for a relative path
     return stated;
   };
 
@@ -239,7 +239,7 @@ export function parseBashReads(command, { home = null, cwd = null } = {}) {
       const spelled = w.v ?? w.text;
       if (spelled.startsWith('-') || /^https?:/i.test(spelled)) return;
       if (!w.why && (!/[./]/.test(spelled) || GLOB.test(spelled))) return;
-      if (out.length < MAX_READS) out.push({ ...locate(w), range });
+      if (out.length < MAX_STEPS) out.push({ ...locate(w), range });
     };
     words.forEach((w, k) => {
       const flagValue = w.why && FLAG_TAKES_VALUE.test(name) && /^-[A-Za-z]$/.test(words[k - 1]?.text);
@@ -297,7 +297,7 @@ export function parseBashReads(command, { home = null, cwd = null } = {}) {
 
   const run = (from, to) => {
     for (let i = from; i < to; i++) {
-      if (out.length >= MAX_READS || ++steps > MAX_STEPS) return;
+      if (out.length >= MAX_STEPS || ++steps > MAX_STEPS) return;
       const { paren, words, redirs } = items[i];
       if (paren === '(') stack.push({ vars: new Map(vars), dir, lost });
       else if (paren === ')') { if (stack.length) ({ vars, dir, lost } = stack.pop()); }

@@ -15,9 +15,10 @@
 // D25: the CC block model (assembly-order walk, volatile rule, resource linking, system labels,
 // bash-read parsing) lives in ONE dissector — src/dissect/cc.mjs — shared with the ETL adapter.
 // linearContext (below) is now just the board's PROJECTION of that dissector's canonical spine.
-import { dissectBlocks, sysLabel, parseBashReads } from '../dissect/cc.mjs'
+import { dissectBlocks, sysLabel } from '../dissect/cc.mjs'
+import { parseBashReads } from '../dissect/shell-reads.mjs'
 import { reqIncompleteOf, wsIncompleteOf, respIncompleteOf } from '../dissect/capture-labels.mjs'
-import { auxKindOf, hintsOf } from '../dissect/harnesses.mjs'
+import { auxKindOf, hintsOf, pathContext } from '../dissect/harnesses.mjs'
 import { sharesBody } from '../dissect/request-body.mjs'
 import { failedOf } from '../dissect/endpoints.mjs'
 import { compareStep } from './step-order.mjs'
@@ -114,19 +115,19 @@ function rangeOf(name, input = {}) {
   return null
 }
 
-// parseBashReads (bash read-target parsing) now lives in the shared CC dissector (src/dissect/cc.mjs,
-// imported above) — a file dumped by cat/head/sed -n … IS resident in context like a Read.
+// A file dumped by cat/head/sed -n … IS resident in context like a Read (src/dissect/shell-reads.mjs).
 
-// The resources one block brings into context, as [kind, label, via, range?] (the lane adds them with addRes at the call that brought
-// the block in). Labels are strings of their own (own): a slice of a command or a text would keep it alive in the lane's ledger.
-function resourcesOf(b) {
+// The resources one block brings into context, as [kind, label, via, range?, runtime?] (the lane adds them with addRes at the call that
+// brought the block in; `runtime` only on a shell read whose path the run settles, range null when it has none). `ctx`: what a shell read
+// resolves against. Labels are strings of their own (own): a slice of a command or a text would keep it alive in the lane's ledger.
+function resourcesOf(b, ctx) {
   const out = []
-  const add = (kind, label, via, range) => out.push(range ? [kind, own(label), via, range] : [kind, own(label), via])
+  const add = (kind, label, via, range, runtime) => out.push(runtime ? [kind, own(label), via, range ?? null, runtime] : range ? [kind, own(label), via, range] : [kind, own(label), via])
   if (b.type === 'tool_use') {
     const arg = toolArg(b.name, b.input)
     if (FILE_OPS.has(b.name) && arg) add('file', arg, b.name, rangeOf(b.name, b.input))
     else if (b.name === 'Bash' && b.input?.command) {
-      for (const rd of parseBashReads(b.input.command)) add('file', rd.path, 'Bash', rd.range)
+      for (const rd of parseBashReads(b.input.command, ctx)) add('file', rd.path, 'Bash', rd.range, rd.runtime)
     } else if (DIR_OPS.has(b.name) && arg) add('dir', arg, b.name)
     else if ((b.name === 'WebFetch' || b.name === 'WebSearch') && arg) add('link', arg, b.name)
     // Skill invocation: fine-grained kind:'skill' (schema 3.2 kind enum / D8 — no `capability` umbrella).
@@ -162,7 +163,7 @@ function resourcesOf(b) {
 }
 // A label or range is a match or split piece of a block's text or a Bash command (links, skills, read paths): kept as a copy of its
 // own, else it would keep the whole text alive for the life of the spine (3.5 §内存有界).
-function addRes(map, kind, label, step, via, range) {
+function addRes(map, kind, label, step, via, range, runtime) {
   const key = kind + '::' + label
   let r = map.get(key)
   if (!r) {
@@ -173,6 +174,7 @@ function addRes(map, kind, label, step, via, range) {
     const last = r.segments[r.segments.length - 1]
     if (last.evict != null && step >= last.evict) r.segments.push({ enter: step, evict: null })
   }
+  if (runtime) r.runtime ??= runtime
   if (range) r.loads.push({ step, range: own(range), via })
 }
 
@@ -333,7 +335,7 @@ const TEXT_OMITTED = 'derived event — full text is not shipped here; read it f
 // blockFacts(block) → the facts of one message block: its type; a tool_use's id and name; a tool_result's tool_use_id and its
 // observation text (`obs`, absent when it has none); the resources it brings in (`res`); the paths it shows (`seen`); a text's
 // user-event pieces (`u`, `ui`).
-export function blockFacts(b) {
+export function blockFacts(b, ctx = {}) {
   const f = { type: b.type }
   if (b.type === 'tool_use') { f.id = b.id; f.name = b.name }
   if (b.type === 'tool_result') {
@@ -346,7 +348,7 @@ export function blockFacts(b) {
     f.seen = seenRuns(b.text)
     Object.assign(f, userText(b.text))
   }
-  const res = resourcesOf(b)
+  const res = resourcesOf(b, ctx)
   if (res.length) f.res = res
   return defined(f)
 }
@@ -394,14 +396,18 @@ export function callFacts(r) {
 // The call view of an admitted, hydrated record: its facts, and its messages' block facts worked out only when the fold reads them
 // (it reads the blocks and the tool uses of the messages new to the lane).
 class MessageView {
-  constructor(m) {
+  constructor(m, ctx) {
+    this.ctx = ctx
     this.role = m.role
     this.content = Array.isArray(m.content) ? m.content : [{ type: 'text', text: m.content }]
     this.uses = Array.isArray(m.content) ? this.content.filter((b) => b.type === 'tool_use').map((b) => [b.id, b.name]) : []
   }
-  get blocks() { return this.memo || (this.memo = this.content.map(blockFacts)) }
+  get blocks() { return this.memo || (this.memo = this.content.map((b) => blockFacts(b, this.ctx))) }
 }
-const viewOf = (r) => ({ facts: callFacts(r), messages: r.request.messages.map((m) => new MessageView(m)) })
+const viewOf = (r) => {
+  const ctx = pathContext(r)
+  return { facts: callFacts(r), messages: r.request.messages.map((m) => new MessageView(m, ctx)) }
+}
 
 // What a compaction verdict says about itself on the board (1.5:38 / 1.5:79: the UI tells confirmed from inferred).
 // A harness header hint is the harness's own word (high, not inferred); a text marker and a count drop are inferred
@@ -651,7 +657,7 @@ export function createAnalyzer({ keep = true, from = null } = {}) {
     // the lane's ledger, and what this step did to it (step.ld, when the fold keeps no step: replayLedger)
     const D = keep ? null : step.ld
     // a fold that keeps nothing keeps no ledger either: its deltas do not depend on it, and replayLedger rebuilds it from them
-    const addR = (kind, label, via, range) => { if (D) D.push(['r', kind, label, via, range ?? null]); else addRes(st.resMap, kind, label, step.at, via, range) }
+    const addR = (kind, label, via, range, runtime) => { if (D) D.push(runtime ? ['r', kind, label, via, range ?? null, runtime] : ['r', kind, label, via, range ?? null]); else addRes(st.resMap, kind, label, step.at, via, range, runtime) }
     const see = (s, cap) => { if (D) { if (s) D.push(['s', s, cap]) } else seeIn(st.seenMap, s, step.at, cap) }
     const f = view.facts, reply = f.reply
     // monitor + aux-family lanes: no ReAct/resource extraction — just one event per call
@@ -728,7 +734,7 @@ export function createAnalyzer({ keep = true, from = null } = {}) {
       step.summarizing = true
       E.push({ type: 'summarize', step: step.at, streamId: s.id, out: f.usage?.output_tokens })
     }
-    for (const m of newMsgs) for (const b of m.blocks) for (const e of b.res || []) addR(e[0], e[1], e[2], e[3])
+    for (const m of newMsgs) for (const b of m.blocks) for (const e of b.res || []) addR(e[0], e[1], e[2], e[3], e[4])
     // seen-but-not-opened filenames: tool-result text (bigger cap) + prose (smaller)
     for (const m of newMsgs) for (const b of m.blocks) see(b.seen, b.type === 'tool_result' ? 80 : 40)
     see(reply.seen, 40)
@@ -872,7 +878,7 @@ export function replayLedger(steps, after, maps = {}, touch = null) {
       if (op[0] === 'r') {
         const key = op[1] + '::' + op[2], r = resMap.get(key), was = r ? r.segments.length + r.loads.length : -1
         if (touch) touch('r', key, r)
-        addRes(resMap, op[1], op[2], n, op[3], op[4] ?? undefined)
+        addRes(resMap, op[1], op[2], n, op[3], op[4] ?? undefined, op[5])
         const now = resMap.get(key)
         units += now.segments.length + now.loads.length - was
       } else if (op[0] === 's') {
@@ -969,7 +975,7 @@ function truncNote(text) {
 // A tools / system entry's parsed source item, the key of the per-block memos (blockBytes, flatBlockText). NON-enumerable: flat entries
 // ship inside page bodies, and the item must never serialize with them. A bare string has no identity to key by: it is left out.
 const withSrc = (d, src) => (src && typeof src === 'object' ? Object.defineProperty(d, 'src', { value: src }) : d)
-export function linearContext(request, keyMemo = null) {
+export function linearContext(request, keyMemo = null, ctx = {}) {
   const flat = []
   // ── resource ↔ RESULT linking ────────────────────────────────────────
   // The 📂 resource explorer promises "the bytes that entered the context". The dissector keys a
@@ -980,7 +986,7 @@ export function linearContext(request, keyMemo = null) {
   // Mirror the file resKey onto its sibling result here, and mark BOTH ends' role, so the request
   // JSON is never silently passed off as content. Scoped to `file::` on purpose: skill/mcp/scaffold
   // resources already resolve to their own verbatim body block, and stealing that is a regression.
-  const spine = dissectBlocks(request)
+  const spine = dissectBlocks(request, ctx)
   const fileKeyByUseId = new Map()  // tool_use_id → 'file::<path>'
   const answered = new Set()        // tool_use_ids that have a result IN THIS request
   for (const e of spine) {
