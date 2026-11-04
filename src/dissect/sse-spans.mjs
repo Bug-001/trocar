@@ -52,7 +52,8 @@ export function noSpanWhy(r, part) {
 const INTERLEAVED = 'its events interleave with another block\'s events in the stream, so no single contiguous span holds only this block';
 const FANNED = 'one streamed item carries several blocks; the span would hold all of them, not this block alone';
 
-export const replyPart = (block, field, span, why) => ({ kind: block ? block.type : null, role: 'assistant', block, field, span, ...(span ? {} : { why }) });
+// `events`: how many stream events the span holds of this block (a part cut from an event range, 3.1 回复块也回源).
+export const replyPart = (block, field, span, why, events) => ({ kind: block ? block.type : null, role: 'assistant', block, field, span, ...(span ? {} : { why }), ...(span && events ? { events } : {}) });
 // Blocks as JSON nodes of one JSON value: `nodes` [{block, path}], `root` that value's scan (null: not scannable), standing at
 // offset `at` of `field`'s text. Each block's span is its own node (RFC 3.1 回复块也回源).
 const UNLOCATED = 'the block could not be located in the JSON that carries it';
@@ -62,7 +63,7 @@ export const nodeParts = (nodes, root, field, at) => nodes.map(({ block, path })
 });
 export const scanned = (text) => { try { return typeof text === 'string' ? scanJson(text) : null; } catch { return null; } };
 // Many blocks from one addressable unit: a span only when it holds exactly one block.
-export const partsOfUnit = (blocks, field, span, why) => blocks.map((b) => (blocks.length === 1 ? replyPart(b, field, span, why) : replyPart(b, field, null, span ? FANNED : why)));
+export const partsOfUnit = (blocks, field, span, why, events) => blocks.map((b) => (blocks.length === 1 ? replyPart(b, field, span, why, events) : replyPart(b, field, null, span ? FANNED : why)));
 
 // rec → [{kind, role, block, field, span, why?}] in reply order, for an SSE wire described by:
 //   keysOf(evt) → the block keys an event carries (from the wire's own fields)
@@ -103,7 +104,7 @@ export function streamParts(rec, { keysOf, build, jsonBlocks }) {
       if (root) { out.push(...nodeParts(blocks.nodes, root, field, events[i].dataAt)); continue; }
       blocks = blocks.nodes.map((n) => n.block);
     }
-    out.push(...partsOfUnit(blocks, field, span, mixed ? INTERLEAVED : why));
+    out.push(...partsOfUnit(blocks, field, span, mixed ? INTERLEAVED : why, at.length));
   }
   return out;
 }

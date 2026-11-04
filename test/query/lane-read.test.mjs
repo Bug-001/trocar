@@ -15,7 +15,13 @@ import { compareStep } from '../../src/view/step-order.mjs'
 import { PAGE_BYTES } from '../../src/query/session-doc.mjs'
 import { BLOCK_PROBLEMS } from '../../src/health/codes.mjs'
 import { record, replyOf, user } from '../helpers/cc-threads.mjs'
-import { homeWith } from '../helpers/session-doc.mjs'
+import { homeWith, SEGMENT } from '../helpers/session-doc.mjs'
+import { readRecord } from '../../src/query/records.mjs'
+import { parseRecordId } from '../../src/collector/core/record/segments.mjs'
+import { parseTextRef } from '../../src/raw/refs.mjs'
+import { fieldTextOf } from '../../src/dissect/record-fields.mjs'
+import { normalizeRecord } from '../../src/raw/ingest.mjs'
+import { BODY } from '../../src/view/render-kind.mjs'
 
 const homeOf = (p) => path.join(tmpDir(p), '.trocar')
 const q = (name, home, params, ctx = {}) => runQuery(name, params, { home, fs, ...ctx })
@@ -397,7 +403,8 @@ const BREAK = ['cause', 'attribution', 'idx', 'refRid', 'gt', 'firstCall']
 const LANE_HEAD = ['lane', 'kind', 'icon', 'label', 'task', 'note', 'count', 'first', 'last', 'peakCtx', 'spawnRid', 'parent', 'flagged']
 const RECORD = ['id', 'ts_request', 'is_llm_call', 'response']
 const BLOCK_TOP = ['schema', 'command', 'ok', 'errors', 'blocks']
-const BLOCK_ITEM = ['ref', 'bytes', 'encoding', 'fidelity', 'truncated']
+const BLOCK_ITEM = ['ref', 'bytes', 'encoding', 'fidelity', 'truncated', 'view']
+const VIEW = ['r', 'body', 'events']
 // 3.5 marks `pending?` and `unknown?` optional; a row's fields are left out when it has none
 const OPTIONAL = ['pending', 'unknown']
 function sessionSets(d, closed, sample) {
@@ -424,9 +431,10 @@ test('3.5 #28 (session, block): full, --since and pending sessions keep the clos
   sessionSets(pend, S_FULL, contract.session_pending)
   assert.ok('pending' in pend && Number.isInteger(pend.pending.done) && pend.pending.done < pend.pending.total)
   await settled(home, big.id)
-  const refs = { req: [], reply: [] }
+  const refs = { req: [], reply: [] }, perShape = []
   const { sessions } = await q('sessions', home, {})
   for (const { session_id: id } of sessions) {
+    const shape = { req: refs.req.length, reply: refs.reply.length }
     const full = await q('session', home, { id })
     sessionSets(full, S_FULL, contract.session_full)
     assert.equal(full.base, null)
@@ -438,6 +446,7 @@ test('3.5 #28 (session, block): full, --since and pending sessions keep the clos
       for (const st of p.steps) for (const b of st.reply) { const r = byBid.get(b); if (r && r.ref && /::resp\./.test(r.ref)) refs.reply.push(r.ref) }
       for (const x of p.defs) if (x.ref && !/::resp\./.test(x.ref)) refs.req.push(x.ref)
     }
+    perShape.push(refs.req[shape.req], refs.reply[shape.reply])
   }
   assert.ok(refs.req.length && refs.reply.length, 'a request ref and a reply ref were met')
   const missing = `${refs.req[0].split('#').pop().split('::')[0].split(':')[0]}:999999`
@@ -445,13 +454,98 @@ test('3.5 #28 (session, block): full, --since and pending sessions keep the clos
   const b = await q('block', home, { ref: asked })
   subset(b, BLOCK_TOP, 'block'); covers(b, contract.block_multi, 'block')
   assert.deepEqual(b.blocks.map((x) => x.ref), asked, 'one item per ref, in the order given')
-  for (const x of b.blocks) { subset(x, BLOCK_ITEM, 'block item'); covers(x, contract.block_multi.blocks[0], 'block item') }
+  for (const x of b.blocks) { subset(x, BLOCK_ITEM, 'block item'); covers(x, contract.block_multi.blocks[1], 'block item') }
   for (const x of b.blocks) {
     const errs = b.errors.filter((e) => e.where === x.ref)
     assert.equal(x.bytes === null, errs.length > 0, `${x.ref}: bytes null ⇔ an errors entry where it`)
     for (const e of errs) assert.ok(BLOCK_PROBLEMS.includes(e.code), `${e.code} is a BLOCK_PROBLEMS code`)
   }
   assert.deepEqual(b.blocks.map((x) => typeof x.bytes), ['string', 'string', 'object'], 'the request and reply refs read; the missing record does not')
+  subset(contract.block_multi.blocks[0].view, VIEW, 'the contract\'s view')
+  // every wire shape's request and reply block: the item and its view keep the closed sets, and the bytes are the record's own
+  const shapes = perShape.filter(Boolean), seen = await q('block', home, { ref: shapes })
+  assert.deepEqual(seen.blocks.map((x) => x.ref), shapes)
+  for (const x of seen.blocks) {
+    subset(x, BLOCK_ITEM, 'block item'); subset(x.view, VIEW, 'view')
+    subset(x.view.body, BODY, 'view.body')
+    assert.equal(typeof x.view.r.as, 'string', `${x.ref}: the view says how to draw`)
+    assert.equal(x.bytes, await recordBytes(home, x.ref), `${x.ref}: the bytes are the record's own slice`)
+  }
+})
+
+// ── a block's view (3.5 §会话读 `block`): beside the bytes, never instead of them ─────────────────────────────────────────────────
+// The bytes a ref names, from the record as stored.
+async function recordBytes(home, ref) {
+  const { recordId, field, start, end } = parseTextRef(ref), raw = await readRecord({ home, fs, ...parseRecordId(recordId) })
+  return (field ? fieldTextOf(raw, field).text : normalizeRecord(raw).req_body).slice(start, end)
+}
+// a session's refs as its lanes define them: the request's blocks and the reply's
+async function blockRefs(home, id) {
+  await settled(home, id)
+  const out = { req: [], reply: [] }
+  for (const { lane } of (await q('session', home, { id })).lanes) {
+    for (const x of (await q('lane', home, { id, lane })).defs) if (x.ref) out[/::resp\./.test(x.ref) ? 'reply' : 'req'].push(x.ref)
+  }
+  return out
+}
+const call = (n, body = { model: 'claude-x', max_tokens: 8, messages: [user(`question ${n}`)] }) => record(`c${n}`, `2026-11-02T10:0${n}:00.000Z`, body,
+  replyOf(`m${n}`, [{ type: 'text', text: `answer ${n}` }, { type: 'tool_use', id: `tu${n}`, name: 'Read', input: { file_path: `/f${n}.md` } }]))
+const SESSION = 'sess-threads'
+const seg = (k, rest) => `${SESSION}/${SEGMENT}.ndjson#${SEGMENT}:${k}${rest}`
+
+test('3.5 block: an older capture\'s parsed request stays marked as not the wire\'s, the stamped copy beside it changes nothing (invariant 4)', async () => {
+  const { req_body, req_headers, resp, ...rest } = call(1)
+  const home = homeWith([{ ...rest, request: JSON.parse(req_body), request_headers: req_headers, response: resp }])
+  const ref = seg(1, '::0-20'), doc = await q('block', home, { ref }), [x] = doc.blocks
+  assert.deepEqual(doc.errors, [])
+  assert.equal(x.fidelity.verbatim, false)
+  assert.equal(x.bytes, await recordBytes(home, ref))
+})
+
+test('3.5 block: a request that cannot be parsed costs the view, not the bytes; it is a note and the answer stays ok', async () => {
+  const home = homeWith([call(1, { model: 'claude-x', messages: [null] })])
+  const ref = seg(1, '::0-20'), doc = await q('block', home, { ref })
+  const [x] = doc.blocks
+  assert.equal(x.bytes, await recordBytes(home, ref))
+  assert.ok(!('view' in x), 'no view')
+  assert.deepEqual(doc.errors.map((e) => [e.where, e.code, e.level]), [[ref, 'view-unreadable', 'note']])
+  assert.ok(BLOCK_PROBLEMS.includes('view-unreadable') && doc.ok)
+})
+
+test('3.5 block: a reply ref reads its view without the request, whatever state the request is in', async () => {
+  const { reply } = await blockRefs(homeWith([call(1)]), SESSION)
+  assert.ok(reply.length)
+  for (const req_body of ['{not json', JSON.stringify({ model: 'claude-x', messages: [null] })]) {
+    const home = homeWith([{ ...call(1), req_body }]), doc = await q('block', home, { ref: reply })
+    assert.deepEqual(doc.errors, [], req_body)
+    for (const x of doc.blocks) { assert.ok(x.view, `${x.ref}: a view over ${req_body}`); assert.equal(x.bytes, await recordBytes(home, x.ref)) }
+  }
+})
+
+test('3.5 block: what names no block has no view and no error — a span between keys, the reply taken whole', async () => {
+  const home = homeWith([call(1)]), raw = await readRecord({ home, fs, segment: SEGMENT, lineNo: 1 })
+  const refs = [seg(1, '::0-7'), seg(1, `::resp.raw::0-${raw.resp.raw.length}`)]
+  const doc = await q('block', home, { ref: refs })
+  assert.deepEqual(doc.errors, [])
+  for (const x of doc.blocks) { assert.equal(typeof x.bytes, 'string'); assert.ok(!('view' in x), `${x.ref}: no view`) }
+})
+
+test('3.5 block: refs of two records given in turn answer in the order given, each with its own record\'s view', async () => {
+  const home = homeWith([call(1), call(2)])
+  const { reply } = await blockRefs(home, SESSION)
+  const of = (n) => reply.filter((r) => r.includes(`${SEGMENT}:${n}::`))
+  const asked = [of(1)[0], of(2)[0], of(1)[1], of(2)[1]]
+  assert.ok(asked.every(Boolean), 'two reply blocks in each record')
+  const { blocks } = await q('block', home, { ref: asked })
+  assert.deepEqual(blocks.map((x) => x.ref), asked)
+  for (const x of blocks) assert.equal(x.bytes, await recordBytes(home, x.ref))
+  assert.deepEqual(blocks.map((x) => x.view.body.block.text ?? x.view.body.block.input.file_path), ['answer 1', 'answer 2', '/f1.md', '/f2.md'])
+})
+
+test('3.5 block: a streamed reply block\'s view says how many stream events its bytes hold', async () => {
+  const home = homeWith([call(1)]), { reply } = await blockRefs(home, SESSION)
+  const { blocks } = await q('block', home, { ref: reply })
+  for (const x of blocks) assert.equal(x.view.events, x.bytes.match(/^data:/gm).length, x.ref)
 })
 
 // 3.5 §会话读 定义 `name?` / 2.6:42: a tool call's definition carries its tool's name, on each wire's request and reply. Two calls

@@ -325,8 +325,9 @@
     "ok": true,
     "errors": [{"where": "s1/main#20261021T101500Z:99::0-40", "code": "record-missing", "reason": "No record at this id"}],
     "blocks": [
-      {"ref": "s1/main#20261021T101500Z:13::1720-2400", "bytes": "{\"type\":\"tool_result\",\"content\":\"import { test } from ...\"}", "encoding": "utf8", "fidelity": "verbatim", "truncated": false},
-      {"ref": "s1/main#20261021T101500Z:99::0-40", "bytes": null, "encoding": null, "fidelity": null, "truncated": false}
+      {"ref": "s1/main#20261021T101500Z:13::1720-2400", "bytes": "{\"type\":\"tool_result\",\"content\":\"import { test } from ...\"}", "encoding": "utf8", "fidelity": "verbatim", "truncated": false,
+        "view": {"r": {"as": "text", "f": {"body": ["block", "content"]}}, "body": {"block": {"type": "tool_result", "content": "import { test } from ..."}}}},
+      {"ref": "s1/main#20261021T101500Z:99::0-40", "bytes": null, "encoding": null, "fidelity": null, "truncated": null}
     ]
   }
 }

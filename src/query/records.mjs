@@ -45,14 +45,15 @@ function* lines(file, fs) {
   }
 }
 
-function recordOf(text, segment, lineNo, stream) {
-  const rec = normalizeRecord(expandRequestBody(JSON.parse(text)));
-  const out = { ...rec, id: recordId(segment, lineNo) };
+const stamped = (rec, stream) => Object.defineProperty(rec, '_stream', { value: stream, enumerable: false, configurable: true });
+/** stampRecord(raw, {segment, lineNo, stream}) → a new record, as a read of that place gives it to extraction: normalized, with its id
+ *  and `_stream`. `raw` stays as it was. */
+export function stampRecord(raw, { segment, lineNo, stream }) {
   // `_stream` is non-enumerable everywhere it is stamped (src/raw/ingest.mjs): it says which file the
   // bytes are in, for a block's ref, and must never appear in a shipped document.
-  Object.defineProperty(out, '_stream', { value: stream, enumerable: false, configurable: true });
-  return out;
+  return stamped({ ...normalizeRecord(raw), id: recordId(segment, lineNo) }, stream);
 }
+const recordOf = (text, segment, lineNo, stream) => stampRecord(expandRequestBody(JSON.parse(text)), { segment, lineNo, stream });
 
 /**
  * recordsAt({home, rows}) → the raw records of the given index rows (src/query/rows.mjs), in the order given.
@@ -210,7 +211,7 @@ function sealedReader(file, fs) {
 
 /**
  * readRecord({home, segment, lineNo, progress}) → the raw envelope of that record (decoded bodies, nothing else
- * derived), or null when the segment holds no such line. The segment index says where the record is, so
+ * derived; `_stream` says which file it is in), or null when the segment holds no such line. The segment index says where the record is, so
  * neither the segment nor its index is scanned for it. `progress` goes to that index read (a cold scan reports per chunk).
  */
 export async function readRecord({ home = trocarHome(), fs = nodeFs, segment, lineNo, progress = null } = {}) {
@@ -219,7 +220,10 @@ export async function readRecord({ home = trocarHome(), fs = nodeFs, segment, li
   if (!row) return null;
   const file = segmentFile({ home, fs, segment });
   const read = file.endsWith('.sealed') ? sealedReader(file, fs) : plainReader(file, fs);
-  try { return expandRequestBody(JSON.parse(read({ ...row, lineNo }))); } finally { read.close(); }
+  try {
+    const at = { ...row, lineNo };
+    return stamped(expandRequestBody(JSON.parse(read(at))), read.stream ? read.stream(at) : path.basename(file));
+  } finally { read.close(); }
 }
 
 /** The file a segment's bytes are in (segmentSource: the plaintext while it exists, 4.2:30 明文为准), or throws
