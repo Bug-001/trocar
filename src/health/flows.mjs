@@ -4,10 +4,10 @@
 // reach back past the last daemon-start AND cover the 24 h window, or until `maxBytes` (then `truncated`). A missing
 // flows/ is "nothing recorded yet"; an unreadable one throws (`status` then has no `health` and names it in `errors`, never "no failures"); one
 // unreadable file is listed in `errors` and the rest is still read.
-//   foldFlows: in file and line order (never by ts: a clock that jumped must not reorder them) — the conditions that
-// still hold since the last daemon-start, the failure groups and expected counts of the last 24 h, each agent's last
-// capture and last failure. Its times are a min / max over the lines' times (a connection row is written when it closes, so lines
-// are not in time order; 4.6 §看得到). Every record that leaves here is cut down to a whitelist of metadata fields: no record
+//   foldFlows: folds in file and line order (conditions, ENDS / ENDED resolution, a group's newest record: never by ts) — the conditions
+// that still hold since the last daemon-start, the failure groups and expected counts of the last 24 h, each agent's last
+// capture and last failure. Its times are a min / max over the lines' times (a connection row stands for its close, ts + duration_ms,
+// and is written then, so lines are not in time order; 4.6 §看得到); groups are listed by last_ts, newest first. Every record that leaves here is cut down to a whitelist of metadata fields: no record
 // bytes (ws.tail_raw, proxy preludes, bodies) ever reach the board.
 import nodeFs from 'node:fs'
 import path from 'node:path'
