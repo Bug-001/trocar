@@ -9,7 +9,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { api } from '../../../legacy/core/api.mjs'
 import { INTERVAL, backoffMs } from '../../../legacy/core/poll.mjs'
 import { TIP_MS } from '../../../legacy/core/ui.mjs'
-import { HEALTH_READ } from '../../../legacy/labels/common.mjs'
+import { HEALTH_READ, TITLE_PENDING } from '../../../legacy/labels/common.mjs'
 import { parseHash } from '../../../legacy/core/router.mjs'
 import { store } from '../../../legacy/core/store.mjs'
 import { ALIASES, HARNESS_ORDER, harnessKey } from '../../../legacy/core/chips.mjs'
@@ -264,6 +264,14 @@ test('O5: every card is drawn before any answer; a window change moves the tab a
   expect([...stats().querySelectorAll('a')].some((a) => a.textContent!.includes(W.SESSIONS_N(LATE)))).toBe(false)
   expect(maxInFlight).toBeLessThanOrEqual(2)
   expect(new Set(calls.map((c) => c.name).filter((n) => SLOW.includes(n)))).toEqual(new Set(SLOW))
+})
+
+test('#11: a recent row whose title is not read yet says so in the weakened style, not as an untitled session', async () => {
+  answer.sessions = () => ok({ sessions: [{ ...sess('a', 60), title: null, title_source: 'pending' }] })
+  const p = mount(); await settle()
+  const t = p.link(replay('a'))!.querySelector('.ovtx')!
+  expect(t.textContent).toBe(TITLE_PENDING)
+  expect(t.classList.contains('pend')).toBe(true)
 })
 
 test('O6: with no session the page is capture + one control per agent + start, writes nothing, and turns into the normal page in place at the first session', async () => {
