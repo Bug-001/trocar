@@ -2,15 +2,17 @@
 // window model's items (window-model.mjs windowItems), each keyed by the model's key (D75④), rows drawn with the decision-4 head and the
 // React cell (Cell.tsx). It owns #ctxwin and everything in it but each open cell's body leaf (R2 decision 13).
 //   · The DOM holds the items within one window height of the visible box, plus the pins (withPins): the change line, the reply, the
-//     item holding focus, the item holding the selection, the last reveal's target, the sticky section header, and — in the commit
+//     item holding focus, the item holding the selection, a reveal's target until it is in the box, and — in the commit
 //     that changes the step and has a landing target — the landing band, so the landed items are drawn before any scroll event.
 //   · The landing (1.4 §打开一步时落在哪) is computed in render (landingFor, pure; a target inside a folded turn opens it for this display,
-//     s.turnLanded) and scrolled in the layout effect of that commit: once per rid, never on a repaint of the same step.
-//   · The window asks for bodies, never the cell (2.3 §快速拖动): a row the reader opens, or a reveal opens. A step painted with a row
-//     already open shows the pending cell until the step's own read paints the window again (view.window()).
+//     s.turnLanded) and scrolled in the layout effect of that commit: once per rid, never on a repaint of the same step (but for
+//     the repaint that brings a late 内容对比步, the reader not having moved).
+//   · The window asks for bodies, never the cell (2.3 §快速拖动): a row the reader opens, a reveal opens, or an open row whose bytes
+//     left the bounded cache, on a repaint of the step it stays on. A step painted with a row already open shows the pending cell
+//     until the step's own read paints the window again (view.window()).
 //   · A paint of the 'window' area (view.ts) re-renders it; the window's own actions mutate the desk's state and re-render it alone.
 import { flushSync } from 'react-dom'
-import { memo, useCallback, useId, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode } from 'react'
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode } from 'react'
 import { useVirtualizer, type Range } from '@tanstack/react-virtual'
 import { esc, bytes, kf } from '../../../legacy/core/fmt.mjs'
 import { HALF, discChev } from '../../../legacy/core/icons.mjs'
@@ -18,7 +20,7 @@ import { isTyping } from '../../../legacy/core/keys.mjs'
 import * as W from '../../../legacy/labels/replay.mjs'
 import { SESSION_NOT_LISTED, BACK_TO_SESSIONS } from '../../../legacy/labels/shell.mjs'
 import * as C from '../../../legacy/labels/cells.mjs'
-import { bodyVersion, cellOf, deskMode, gotOf, hasInline, inlineText, isAddressed, isRetryable, loadBody, onModeChange, say, setDeskMode } from '../../../legacy/replay/cell.mjs'
+import { bodyVersion, cellOf, deskMode, gotOf, hasInline, inlineText, isAddressed, isRetryable, leftCache, loadBody, onModeChange, say, setDeskMode } from '../../../legacy/replay/cell.mjs'
 import { cellKey } from '../../../legacy/replay/keymap.mjs'
 import { setFold, turnAnchorKey } from '../../../legacy/replay/fold.mjs'
 import { stepOf } from '../../../legacy/replay/model.mjs'
@@ -26,7 +28,7 @@ import { tagWord } from '../../../legacy/replay/blocks.mjs'
 import { TechDetails, type TechValue } from '../../ui/TechDetails'
 import { Svg } from '../../ui/Svg'
 import { Cell } from './Cell'
-import { faithOf, windowItems, landingFor, turnsOf, turnOpen } from './window-model.mjs'
+import { faithOf, windowItems, landed, landingFor, turnsOf, turnOpen } from './window-model.mjs'
 import { useDeskVersion } from './useDesk'
 import type { DeskState, DeskView, Reveal } from './view'
 
@@ -38,17 +40,17 @@ const Tech = ({ rows }: { rows: Array<[string, unknown]> }) => (rows.length ? <T
 const Half = () => <span className="cwhalf" aria-hidden="true"><Svg html={HALF} /></span>
 
 // ── the pins (decision 2), pure ───────────────────────────────────────────────────────────────────────────────────────
-/** The indexes to draw: the visible range [startIndex, endIndex] widened by one window height `h` each way (by the item starts), the
- * pins, and the landing band — the items from index `band` through the last one starting within `h` after its start, clamped at the
- * list's end. `starts` are the items' starts in list order. */
-export function withPins(range: { startIndex: number, endIndex: number, count: number, starts: ArrayLike<number>, h: number },
+/** The indexes to draw: the visible range [startIndex, endIndex], the items touching one window height `h` above and below the box
+ * (its top at `top`, its bottom at `top + h`), the pins, and the landing band — the items from index `band` through the last one
+ * starting within `h` after its start, clamped at the list's end. `starts` are the items' starts in list order. */
+function withPins(range: { startIndex: number, endIndex: number, count: number, starts: ArrayLike<number>, top: number, h: number },
   pins: Array<number | null | undefined>, band: number | null): number[] {
-  const { startIndex, endIndex, count, starts, h } = range
+  const { startIndex, endIndex, count, starts, top, h } = range
   const last = (y: number) => { let a = 0, b = count; while (a < b) { const m = (a + b) >> 1; if (starts[m] <= y) a = m + 1; else b = m } return a - 1 } // last start ≤ y
   const out = new Set<number>()
   const span = (lo: number, hi: number) => { for (let i = Math.max(0, lo); i <= Math.min(count - 1, hi); i++) out.add(i) }
   if (count) {
-    span(Math.max(0, last(starts[Math.max(0, startIndex)] - h)), last(starts[Math.min(count - 1, endIndex)] + h))
+    span(Math.min(startIndex, last(top - h)), Math.max(endIndex, last(top + 2 * h)))
     if (band != null && band >= 0 && band < count) span(band, Math.max(band, last(starts[band] + h - 0.5)))
   }
   for (const p of pins) if (p != null && p >= 0 && p < count) out.add(p)
@@ -136,16 +138,17 @@ const Chline = memo(function Chline({ it }: { it: Item }) {
 })
 // the removed list of the 内容对比步 (2.3): its rows open and close here only; their bytes are the window's to ask for
 const Removed = memo(function Removed({ it, acts }: { it: Item, acts: Acts }) {
-  const [open, setOpen] = useState<ReadonlySet<number>>(new Set())
-  const flip = (j: number, b: any) => setOpen((o) => { const n = new Set(o); if (n.has(j)) n.delete(j); else { n.add(j); acts.ask(b) } return n })
+  const [open, setOpen] = useState<ReadonlySet<string>>(new Set()) // by the block's key: another step's list opens only its own rows
+  const flip = (k: string) => setOpen((o) => { const n = new Set(o); if (!n.delete(k)) n.add(k); return n })
+  useEffect(() => { it.blocks.forEach((b: any, j: number) => { if (open.has(it.keys[j])) acts.ask(b) }) }, [open, it, acts]) // an open row is always one asked for
   const onKey = (e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); acts.removed() } }
   return <div className={`cwremoved${it.open ? ' open' : ''}`}>
     <div className="cwremhd" data-navtoggle-rem="1" role="button" tabIndex={0} aria-expanded={it.open} onClick={acts.removed} onKeyDown={onKey}>
       <Svg html={discChev(it.open)} />{' ' + W.removedList(it.blocks.length, it.refK ?? '?')}</div>
     {it.open ? <div className="cwrembody">{it.blocks.map((b: any, j: number) => (
-      <RowView key={j} cls="removed" attrs={{ 'data-rm': j, 'data-sec': b.sec }} head={plainHead(b)} open={open.has(j)} chars={null}
+      <RowView key={it.keys[j]} cls="removed" attrs={{ 'data-rm': j, 'data-sec': b.sec }} head={plainHead(b)} open={open.has(it.keys[j])} chars={null}
         marks={<><FfBadge f={faithOf(b)} tech={b.unaddressable} /><span className="remnote" title={`The full text is read back from its location in step ${it.refK ?? '?'}`}>removed</span></>}
-        onToggle={() => flip(j, b)} body={() => <Body b={b} fail={acts.fail(b)} api={acts.api} />} />
+        onToggle={() => flip(it.keys[j])} body={() => <Body b={b} fail={acts.fail(b)} api={acts.api} />} />
     ))}</div> : null}
   </div>
 })
@@ -260,12 +263,13 @@ export function Window({ desk }: { desk: DeskView }) {
   const revealKey = useRef<string | null>(null)
   const prev = useRef<Item[] | null>(null)
 
+  const boxTop = () => ref.current?.scrollTop ?? 0
   // the model of this render: the step's items, its landing (pure; a folded turn holding the target opens for this display)
   const w = s.win || { kind: 'empty', msg: '' }
   let items: Item[] | null = null, land: any = null
   if (w.kind === 'step') {
     resetReplyFlips(s)
-    land = landingFor(s)
+    land = landingFor(s, boxTop)
     if (land && land.turn != null) s.turnLanded.add(land.turn)
     const m = windowItems(s)
     // a step whose lane is not held keeps the rows drawn until the desk's 150 ms decision (busy) says to draw its frames
@@ -284,15 +288,11 @@ export function Window({ desk }: { desk: DeskView }) {
   const pinKeys = [keyAt(typeof document !== 'undefined' ? document.activeElement : null), keyAt(sel && sel.rangeCount ? sel.anchorNode : null), revealKey.current]
   const pins = [list.findIndex((x) => x.type === 'chline'), list.findIndex((x) => x.type === 'reply'), ...pinKeys.map((k) => (k ? list.findIndex((x) => x.key === k) : -1))]
   const vRef = useRef<ReturnType<typeof useVirtualizer<HTMLDivElement, Element>> | null>(null)
-  // the sticky section header: the last header starting above the visible box's top
-  const top = vRef.current?.scrollOffset ?? 0
-  let stick = -1
-  for (const m of vRef.current?.measurementsCache ?? []) { if (m.start > top) break; if (list[m.index]?.type === 'sec') stick = m.index }
-  if (stick >= 0 && (vRef.current?.measurementsCache[stick]?.start ?? 0) >= top) stick = -1
-  const pinSig = [...pins, stick, landIdx].join(',')
+  // the box's top is in the signature: inside one tall item the range stays, and the band still has to follow the box
+  const pinSig = [...pins, landIdx, vRef.current?.scrollOffset ?? 0].join(',')
   const rangeExtractor = useCallback((r: Range) => {
-    const ms = vRef.current?.measurementsCache ?? [], h = vRef.current?.scrollRect?.height ?? 0
-    return withPins({ startIndex: r.startIndex, endIndex: r.endIndex, count: r.count, starts: ms.map((m) => m.start), h }, [...pins, stick], landIdx >= 0 ? landIdx : null)
+    const ms = vRef.current?.measurementsCache ?? [], h = vRef.current?.scrollRect?.height ?? 0, top = vRef.current?.scrollOffset ?? 0
+    return withPins({ startIndex: r.startIndex, endIndex: r.endIndex, count: r.count, starts: ms.map((m) => m.start), top, h }, pins, landIdx >= 0 ? landIdx : null)
   }, [pinSig]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // eslint-disable-next-line react-hooks/incompatible-library -- the window reads the virtualizer on every render
@@ -304,13 +304,36 @@ export function Window({ desk }: { desk: DeskView }) {
   vRef.current = virt
   prev.current = items
 
-  useLayoutEffect(() => { setP(readPitch(ref.current!)) }, [])
-  useLayoutEffect(() => { if (P) virt.measure() }, [P, virt])
+  // the pitch once per window, and one re-measure when it arrives: showing a hidden <Activity> runs these again, and a re-measure then
+  // would throw away the measured open rows under the restored scrollTop (D71③)
+  const measuredAt = useRef<Pitch | null>(null)
+  useLayoutEffect(() => { setP((p) => p ?? readPitch(ref.current!)) }, [])
+  useLayoutEffect(() => { if (P && measuredAt.current !== P) { measuredAt.current = P; virt.measure() } }, [P, virt])
   // the landing: once per rid, in the commit that drew the step's items (the band holds them before any scroll event)
   useLayoutEffect(() => {
     if (!land) return
-    s.landedFor = s.anchor.calls[s.playhead].rid
+    landed(s, land, boxTop)
+    if (land.wait) return
+    revealKey.current = null
     if (landIdx >= 0) virt.scrollToIndex(landIdx, { align: 'start' })
+  })
+  // a reveal's target is a pin until it is in the box (or gone with its step)
+  useLayoutEffect(() => {
+    const i = revealKey.current == null ? -2 : list.findIndex((x) => x.key === revealKey.current), r = virt.range
+    if (i === -1 || (i >= 0 && r && i >= r.startIndex && i <= r.endIndex)) revealKey.current = null
+  })
+  // a drawn open row whose bytes left the bounded cache: read back, once per ref while the step stays (a cache smaller than the open
+  // rows must not read them round for ever); a step's first paint asks for nothing (2.3 §快速拖动)
+  const again = useRef<{ rid: string | null, refs: Set<string> }>({ rid: null, refs: new Set() })
+  useEffect(() => {
+    const a = again.current, rid = w.kind === 'step' ? s.anchor?.calls[s.playhead]?.rid ?? null : null
+    if (a.rid !== rid) { a.rid = rid; a.refs.clear(); return }
+    for (const x of virt.getVirtualItems()) {
+      const it = list[x.index]
+      for (const r of it?.type === 'row' ? [it] : it?.type === 'reply' ? it.rows ?? [] : []) {
+        if (r.open && leftCache(r.b.text_ref) && !a.refs.has(r.b.text_ref)) { a.refs.add(r.b.text_ref); acts.ask(r.b) }
+      }
+    }
   })
 
   // reveal (view.reveal): open its turn into the D12 memory, or its row (and ask for the bytes), draw it, bring it into view, flash it
@@ -365,9 +388,8 @@ export function Window({ desk }: { desk: DeskView }) {
       {vis.map((x) => {
         const it = list[x.index]
         if (!it) return null
-        const sticky = x.index === stick
-        return <div key={it.key} className={sticky ? 'cwit cwstick' : 'cwit'} data-index={x.index} data-key={it.key} ref={virt.measureElement}
-          style={sticky ? undefined : { transform: `translateY(${x.start}px)` }}><ItemView it={it} acts={acts} hl={hl === it.key} bv={bv} /></div>
+        return <div key={it.key} className="cwit" data-index={x.index} data-key={it.key} ref={virt.measureElement}
+          style={{ transform: `translateY(${x.start}px)` }}><ItemView it={it} acts={acts} hl={hl === it.key} bv={bv} /></div>
       })}
     </div>
   } else if (w.kind === 'rough') body = <Busy n={w.n} />

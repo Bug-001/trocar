@@ -54,7 +54,7 @@ import { openDetail, closeDetail, wireDetail } from './detail.mjs'
 import { initLayout } from './layout.mjs'
 import { renderSessionHead, wireSessionHead, captureGap, behindOf } from './header.mjs'
 import { stepBarHtml, roughStepHtml, wireStepBar } from './stepbar.mjs'
-import { loadBodies, bodyCache, clearOverrides, overrideScope, isRetryable } from './cell.mjs'
+import { loadBodies, bodyCache, clearOverrides, deskMode, onModeChange, overrideScope, isRetryable } from './cell.mjs'
 import { SESSION_NOT_LISTED, BACK_TO_SESSIONS } from '../labels/shell.mjs'
 import { CACHE_LEGEND, CACHE_LEGEND_UNK, KEYS_TITLE, KEY_LIST, RETRY, THIS_SESSION, REVIEW_TIP, MAINDIV_TIP, DIVIDER_TIP, RPBAR_TIP, moreLanes } from '../labels/replay.mjs'
 import { readFailure } from '../core/ui.mjs'
@@ -157,7 +157,10 @@ export function wireWindow(el, s) {
   const onRetry = (e) => { if (e.target.closest && e.target.closest('[data-retry]')) s.poll() }
   el.addEventListener('click', onRetry)
   const off = wireCtxWin(el, s)
-  return () => { el.removeEventListener('click', onRetry); off() }
+  // the desk default changes the section headers' claim at once (2.3 §段头); a cell's own flip does not touch them
+  let mode = deskMode()
+  const unheard = onModeChange(() => { const was = mode; mode = deskMode(); if (mode !== was && s.win?.kind === 'step') paintWindow(el, s) })
+  return () => { el.removeEventListener('click', onRetry); off(); unheard() }
 }
 // a jump scrolls instantly when the viewer asked the system for less motion (1.5)
 const motion = () => (typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth')
@@ -299,7 +302,7 @@ function openDesk(ctx, route0, makeView = legacyView) {
     desk: createDesk(), meta: null, lanes: [], anchor: null, anchorTs: [], breaks: [], problems: [], playhead: 0, playRid: null, follow: true, sawView: 'ctx',
     view: { lo: 0, hi: 0 }, viewSig: null, selTick: null, viewPin: null, diffRef: null, curFlat: [], drawerFlat: [], curRemoved: [],
     followLanding: false, // the playhead was last moved by 跟随最新, not by the reader: the window lands on the reply (1.4 §打开一步时落在哪)
-    landedFor: null, replyFor: null, // the window's landing ran for that rid; the reply rows' open state belongs to that rid
+    landedFor: null, landWait: null, replyFor: null, // the window's landing ran for that rid, or waits ({rid, top}: landingFor); the reply rows' open state belongs to that rid
     navOpen: new Set(['sys', 'life-file', 'life-load']), navSeenExpanded: false, collapsedRails: new Set(), subSeeded: new Set(), subgroupOpen: false, bgOpen: false,
     railsFolded: typeof matchMedia === 'function' && matchMedia('(max-width: 900px)').matches, rpOpen: false, reviewRange: null,
     gap: null, totals: null, errNote: null, lastPhSig: null, unheld: null, notListed: false, goodKey: null, goodAt: null, staleErr: null,

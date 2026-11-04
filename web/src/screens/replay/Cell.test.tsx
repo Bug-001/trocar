@@ -4,7 +4,7 @@
 // itself, and a grown leaf survives a re-render. Bodies are constructed here and from the generated desk world (desk-world.mjs).
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from 'vitest'
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
-import { useState } from 'react'
+import { Activity, useState } from 'react'
 import { DISPLAY_CLIP, bodyCache, cellBodyHtml, cellOf, modeOf, overrideScope, setDeskMode, setMode, wireCells } from '../../../legacy/replay/cell.mjs'
 import { renderKind, valueOf } from '../../../legacy/replay/kinds.mjs'
 import { stepOf } from '../../../legacy/replay/model.mjs'
@@ -159,6 +159,24 @@ test('a slice the sentinel appended survives an unrelated re-render of the paren
   expect(text.startsWith(grown)).toBe(true)
   expect((container.querySelector('.cell') as HTMLElement).dataset.shown).toBe(String(grown.length))
   act(() => poke())
+  expect(leafOf(container)).toBe(leaf)
+  expect(leaf.firstChild).toBe(node)
+  expect(bytesOf(leaf)).toBe(grown)
+})
+
+// D71③: leaving a session hides its desk in an <Activity>; coming back finds the leaf as the reader left it
+test('D71③: a grown leaf survives its <Activity> being hidden and shown', async () => {
+  const text = Array.from({ length: 3 * DISPLAY_CLIP / 40 }, (_, i) => JSON.stringify({ i, v: 'y'.repeat(20) })).join('\n')
+  const cell = inline(text)
+  let show = (_: 'visible' | 'hidden') => {}
+  function Parent() { const [m, setM] = useState<'visible' | 'hidden'>('visible'); show = setM; return <Activity mode={m}><Cell cell={cell} api={noApi} /></Activity> }
+  const { container } = render(<Parent />)
+  const first = bytesOf(leafOf(container))!.length
+  await enter()
+  const leaf = leafOf(container), node = leaf.firstChild, grown = bytesOf(leaf)!
+  expect(grown.length).toBeGreaterThan(first)
+  act(() => show('hidden'))
+  act(() => show('visible'))
   expect(leafOf(container)).toBe(leaf)
   expect(leaf.firstChild).toBe(node)
   expect(bytesOf(leaf)).toBe(grown)
