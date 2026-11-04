@@ -14,7 +14,7 @@ import { compareStep } from '../view/step-order.mjs';
 import { HEAD_FILES } from './ctx-key.mjs';
 import { lru, sessionDir } from './projection.mjs';
 import { isModelCall, sessionFactsOf } from './rows.mjs';
-import { laneOf, placeIn, recOf, FLAG } from './session-doc.mjs';
+import { laneOf, placeIn, recOf, wireRow, FLAG } from './session-doc.mjs';
 import { laneStepper, weigh } from './named/lane.mjs';
 
 /** The answer files' format version (3.5 `v`). */
@@ -164,11 +164,11 @@ function spansOf(s, sp) {
 /** memoBytes() → what the open span's memo holds at most (the least recently used out): one of K's fixed caches (3.5 §内存有界). A
  *  function, hoisted: named/session.mjs reads it while it is evaluated, which can be before this module is (the cycle through lane.mjs). */
 export function memoBytes() { return 4 << 20; }
-function stepLines(S, key, i, p, wrote, memo = null) {
+function stepLines(cols, S, key, i, p, wrote, memo = null) {
   const rid = S.rids[i], k = memo && `${rid}\n${p < 0 ? '' : S.rids[p]}`;
   let st = memo && memo.get(k);
   if (!st) { st = S.step(i, p); if (memo) memo.set(k, st, weigh(st)); }
-  const out = [{ c: S.lineAt(i).r }];
+  const out = [{ c: wireRow(cols, S.lineAt(i).r) }];
   for (const bid of [...st.ops.flatMap((op) => (op[0] === 1 ? op.slice(1) : [])), ...st.reply]) {
     if (wrote.has(bid)) continue;
     wrote.add(bid);
@@ -206,7 +206,7 @@ function* rendering(s, n, part, tail, memo = null, spans = axisSpans(s)) {
   const steppers = new Map(), prev = new Map(), wrote = new Set();
   for (const rid of calls) {
     const key = log.read(...log.latest(rid)).r.lane, S = steppers.get(key) || steppers.set(key, laneStepper(s, key, memo || undefined)).get(key), i = placeIn(cols, S.L, rid);
-    out.push(...stepLines(S, key, i, prev.has(key) ? prev.get(key) : -1, wrote, memo));
+    out.push(...stepLines(cols, S, key, i, prev.has(key) ? prev.get(key) : -1, wrote, memo));
     prev.set(key, i);
     S.release(i);
     yield;
@@ -428,7 +428,7 @@ function* appendTails(s, W, d, N, upTo, fs, fileOf, fresh) {
     const key = log.read(...log.latest(rid)).r.lane, S = steppers.get(key) || steppers.set(key, laneStepper(s, key, W.memo)).get(key), i = placeIn(cols, S.L, rid);
     let p = -1;
     for (let t = i - 1; t >= 0 && t >= i - 64; t--) if (spanOf(s, S.rids[t]) >= N) { p = t; break; }
-    add[partOf(key)].push(...stepLines(S, key, i, p, W.tails[partOf(key)].defs, W.memo));
+    add[partOf(key)].push(...stepLines(cols, S, key, i, p, W.tails[partOf(key)].defs, W.memo));
     yield;
   }
   const axV = ax == null ? -2 : cols.keys.get(ax);

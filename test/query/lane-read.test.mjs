@@ -404,7 +404,7 @@ function sessionSets(d, closed, sample) {
     subset(r.rec, ['id', 'request'], 'row.rec'); if (r.rec.request) subset(r.rec.request, ['model'], 'row.rec.request')
     if (r.wire) { subset(r.wire, ROW_WIRE, 'row.wire'); for (const l of r.wire.labels || []) subset(l, ['id', 'label'], 'row.wire.labels') }
     if (r.cacheBreak) subset(r.cacheBreak, BREAK, 'row.cacheBreak')
-    if (r.cache) subset(r.cache, CACHE, 'row.cache')
+    assert.ok(r.cache, 'every row has its cache'); subset(r.cache, CACHE, 'row.cache')
   }
   for (const h of d.lanes) { subset(h, LANE_HEAD, 'lane header'); covers(h, sample.lanes[0], 'lane header') }
   for (const e of d.events) subset(e, ['type', 'rid', 'lane'], 'event')
