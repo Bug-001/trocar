@@ -81,6 +81,7 @@ export function inWindow(anchorTs, view, ts) {
 // whose times lie in [anchorTs[lo], anchorTs[hi]] is looked at (two binary searches), and inWindow decides each of those. What a render
 // costs follows the window it draws, not the length of the lane.
 export function windowCalls(lane, anchorTs, view) {
+  if (view.none) return [] // a window with steps not held yet: the ticks wait for their rows
   const calls = lane.calls, n = anchorTs.length, lo = view.lo | 0, hi = Math.max(lo + 1, view.hi || n)
   const first = (pred) => { let a = 0, b = calls.length; while (a < b) { const m = (a + b) >> 1; if (pred(toMs(calls[m].ts))) b = m; else a = m + 1 } return a }
   const from = lo > 0 && lo < n ? first((t) => t >= anchorTs[lo]) : 0

@@ -30,6 +30,7 @@
 import { esc } from '../core/fmt.mjs'
 import { api as rootApi, scoped } from '../core/api.mjs'
 import { sessionCache } from './session-cache.mjs'
+import { stepCount, partsOf, stepAt, placeSpan, anchorSpan } from '../../src/screens/replay/strip.mjs'
 import { setScreenKeys } from '../core/keys.mjs'
 import { openModal } from '../core/dom.mjs'
 import { keyAction } from './keymap.mjs'
@@ -297,7 +298,7 @@ function openDesk(ctx, route0, makeView = legacyView) {
   // ── the state every area renders from ────────────────────────────────────────────────────────────────────────────
   const fresh = () => ({
     desk: createDesk(), meta: null, lanes: [], anchor: null, anchorTs: [], breaks: [], problems: [], playhead: 0, playRid: null, follow: true, sawView: 'ctx',
-    view: { lo: 0, hi: 0 }, viewSig: null, selTick: null, viewPin: null, diffRef: null, curFlat: [], drawerFlat: [], curRemoved: [],
+    view: { lo: 0, hi: 0 }, span: null, brushed: false, spanEnd: null, viewSig: null, selTick: null, viewPin: null, diffRef: null, curFlat: [], drawerFlat: [], curRemoved: [],
     followLanding: false, // the playhead was last moved by 跟随最新, not by the reader: the window lands on the reply (1.4 §打开一步时落在哪)
     landedFor: null, replyFor: null, // the window's landing ran for that rid; the reply rows' open state belongs to that rid
     navOpen: new Set(['sys', 'life-file', 'life-load']), navSeenExpanded: false, collapsedRails: new Set(), subSeeded: new Set(), subgroupOpen: false, bgOpen: false,
@@ -346,6 +347,9 @@ function openDesk(ctx, route0, makeView = legacyView) {
     if (i != null) setPlayhead(i, true); else nameStep(g + 1)
   }
   s.setView = setView
+  // the reader's hand on the strip (a view with `spans`): at most one paint a frame, the bars and the rails only: a drag frame reads no body (D64)
+  s.brushTo = (lo, hi) => { if (brushTarget == null) frame(paintBrush); brushTarget = { lo, hi } }
+  s.brushBack = () => { brushTarget = null; s.brushed = false; placeWin(true); paintSpan() }
   // the 内容对比步 (2.3): the compare menu's choice survives scrubbing, clears on a session switch
   s.setDiff = (idx) => { s.diffRef = idx; drawPlayhead() }
   s.renderStep = () => view.step()
@@ -362,7 +366,7 @@ function openDesk(ctx, route0, makeView = legacyView) {
   let emptied = { msg: '', err: null } // the last empty state, null when the rough page was drawn after it: a view whose frame comes later draws that then (catchUp)
   function renderEmpty(msg, err = null) {
     emptied = { msg, err }
-    s.brushDragging = false; s.anchor = null; s.lanes = []; s.curFlat = []; s.curRemoved = []; s.breaks = []; jumps.clear()
+    s.brushDragging = false; s.span = null; s.brushed = false; s.spanEnd = null; s.anchor = null; s.lanes = []; s.curFlat = []; s.curRemoved = []; s.breaks = []; jumps.clear()
     s.landedFor = null; s.turnLanded.clear(); s.lastPhSig = null
     view.empty(msg)
     onEls(() => {
@@ -389,6 +393,7 @@ function openDesk(ctx, route0, makeView = legacyView) {
   // a named step (the URL's `step=`, Home) → its index in the anchor lane once its skeleton row and its lane are here, else -1
   // (2.3 §点名的一步不在手里). A lane read that failed lands it too: the step then says so (2.3 §读失败)
   function namedAt() {
+    if (!s.anchor) return -1
     const a = s.anchor, M = Math.max((s.desk.head && s.desk.head.steps) || 0, a.count || 0, a.calls.length) // the head's steps may lag the tails' (the head is written when a part only it carries changes)
     const rid = ridAt(s.desk, a.id, Math.max(1, Math.min(M, s.initialStep)) - 1), i = rid == null ? undefined : a.ridLocal.get(rid)
     return i ?? -1
@@ -530,25 +535,57 @@ function openDesk(ctx, route0, makeView = legacyView) {
     s.followLanding = followLanding
     jumps.clear() // a move by the reader ends any jump still waiting for its lane (jumpTo queues its own after this)
     s.initialStep = null // and any named step still waiting to land
+    brushTarget = null; s.brushed = false // and the strip goes back to following the playhead
     const N = s.anchor.calls.length, np = Math.max(0, Math.min(N - 1, i | 0))
     if (np !== s.playhead) s.turnLanded.clear() // a different call: no landing turn lingers; open rows stay by bid (1.4:114)
     s.playhead = np; s.playRid = s.anchor.calls[np].rid
     if (manual) s.follow = np === N - 1 // the reader's move: on the newest call it follows, anywhere else it does not
       // keep the scrub target inside the brush window, which stays inside its chapter (1.3 §章): pan it, keeping its width; another
     // chapter's window becomes this chapter's
-    const ch = chapterHere(s), v = placeView(s.view, np, ch.c0, ch.c1, sawCapacity())
-    if (v.lo !== s.view.lo || v.hi !== s.view.hi) {
-      s.view.lo = v.lo; s.view.hi = v.hi
-      view.saw(); drawRails()
-    }
+    if (placeWin()) { view.saw(); drawRails() }
     view.cur() // the common case: only the current marks move
     drawPlayhead()
     restoreSelection()
   }
   // how many bars the scope's bar lane can draw (the view measures it)
   const sawCapacity = () => view.capacity()
+  // the window around the playhead → whether it moved. A view with `spans` holds it in global steps and leaves a window the reader
+  // dragged alone; `rowsMoved`: s.view is taken again even when the span stayed, the lane's indexes may be new
+  function placeWin(rowsMoved = false) {
+    if (!view.spans) {
+      const ch = chapterHere(s), v = placeView(s.view, s.playhead, ch.c0, ch.c1, sawCapacity()), moved = v.lo !== s.view.lo || v.hi !== s.view.hi
+      s.view = v
+      return moved
+    }
+    const was = s.span, end = s.spanEnd
+    s.spanEnd = stepCount(s)
+    if (!s.brushed) s.span = placeSpan(was, stepAt(s), partsOf(s), sawCapacity(), end)
+    const moved = !was || was.lo !== s.span.lo || was.hi !== s.span.hi
+    if (moved || rowsMoved) s.view = anchorSpan(s, s.span)
+    return moved
+  }
+  let brushTarget = null
+  function paintSpan() { view.saw(); drawRails(); view.cur() }
+  function paintBrush() {
+    const t = brushTarget, was = s.span
+    brushTarget = null
+    if (!t || s.dead) return
+    s.brushed = true
+    // never wider than the lane draws: what is cut goes around the window as it stood
+    s.span = capWindow({ ...t, prev: was || t, K: sawCapacity(), playhead: was ? (was.lo + was.hi) >> 1 : t.lo })
+    s.view = anchorSpan(s, s.span)
+    paintSpan()
+  }
   // a window wider than the lane draws is clipped, and the steps it clips are the latest ones: shrink it, keeping the playhead in it
   function fitView() {
+    if (view.spans) {
+      if (!s.span) return false // the rough page's window is the model's, at the K of the moment
+      if (!s.brushed) return placeWin(true)
+      const { lo, hi } = s.span
+      if (hi - lo <= sawCapacity()) return false
+      s.span = fitWindow({ lo, hi, K: sawCapacity(), playhead: (lo + hi) >> 1 }); s.view = anchorSpan(s, s.span)
+      return true
+    }
     if (!s.anchor || !s.anchor.calls.length) return false
     const { c0, c1 } = chapterHere(s), inside = s.view.lo >= c0 && s.view.hi <= c1 && s.view.lo < s.view.hi // 1.3 §章: never across a chapter's edge
     const w = fitWindow({ lo: inside ? s.view.lo : c0, hi: inside ? s.view.hi : c1, K: sawCapacity(), playhead: s.playhead })
@@ -737,7 +774,9 @@ function openDesk(ctx, route0, makeView = legacyView) {
     s.initialStep = n; s.follow = false
     const i = namedAt()
     if (i >= 0) { setPlayhead(i, false); return }
-    renderHeader(); if (s.playRid != null) namedRows(); fill()
+    if (view.spans) { s.brushed = false; if (placeWin()) { view.saw(); drawRails() } }
+    renderHeader(); if (s.playRid != null) namedRows(); else if (view.spans) renderRough()
+    fill()
   }
   // the playhead's rid changed: its reads go out once it rests (createStepReads)
   function aim() { if (s.playRid != null && s.playRid !== targeted) { targeted = s.playRid; steps.target(s.playRid); fill() } }
@@ -893,7 +932,7 @@ function openDesk(ctx, route0, makeView = legacyView) {
       if (keepPins.atEnd) s.view.hi = N // a window parked at the live end grows with it
       s.view.hi = Math.min(N, s.view.hi || N); s.view.lo = Math.max(0, Math.min(s.view.lo, N - 1)); if (s.view.hi <= s.view.lo) s.view.hi = Math.min(N, s.view.lo + 1)
     }
-    const ch = chapterHere(s); s.view = placeView(s.view, s.playhead, ch.c0, ch.c1, sawCapacity())
+    placeWin(true)
     renderAll()
     refreshDrawer()
     chainLedger()
@@ -946,7 +985,7 @@ function openDesk(ctx, route0, makeView = legacyView) {
   const onEscape = () => { if (E && E.detail.classList.contains('open')) closeDetail(E.detail, s); else if (s.rpOpen) onRp() }
   const onVis = () => { if (!document.hidden) poll() } // back in view: read now, not a tick later
   // the lane's width changes with the window and with the right-page divider: watch both. Only a window that no longer fits is touched.
-  const refit = () => { if (s.anchor && alive() && fitView()) { view.saw(); drawRails(); view.overview() } }
+  const refit = () => { if (alive() && fitView()) { view.saw(); drawRails(); view.overview() } }
   const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(refit) : null
   let unwireDetail = null, scrolls = []
 

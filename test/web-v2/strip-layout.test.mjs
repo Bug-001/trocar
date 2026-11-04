@@ -3,7 +3,9 @@
 // Every expected value comes from the layout rules; asserted on numbers only.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { stripLayout, PART_MIN, PART_GAP, PART_HIT } from '../../web/src/screens/replay/strip.mjs'
+import { stripLayout, placeSpan, anchorSpan, PART_MIN, PART_GAP, PART_HIT } from '../../web/src/screens/replay/strip.mjs'
+import { buildLanes, anchorLane } from '../../web/legacy/replay/lanes.mjs'
+import { deskOf } from './desk-world.mjs'
 
 const EPS = 1e-6
 const REAL = [184, 249, 261, 411, 435, 382, 399, 522, 480, 414, 291, 319, 401, 281, 254, 227, 434, 420, 207, 352, 171, 222, 135, 139, 161, 82, 271, 43]
@@ -129,4 +131,36 @@ test('1.3 · 21: hit lands on the part that owns x, on a step of that part; a na
     })
   }
   assert.ok(owned)
+})
+
+test('1.3 #23 · placeSpan: inside g\'s part, holds g, never wider than K, from any window before it', () => {
+  for (const lens of [[1], [600], [184, 249, 3, 411], [1, 1, 1], [5, 600, 2]]) {
+    const parts = chaptersOf(lens), N = parts.at(-1).s1
+    for (let n = 0; n < 200; n++) {
+      const g = rnd(N), c = parts.find((p) => p.s0 <= g && g < p.s1), K = [1, 3, 60, Infinity][rnd(4)], lo = rnd(N), hi = lo + rnd(N - lo + 1)
+      for (const prev of [null, { lo: 0, hi: 0 }, { lo, hi }]) {
+        const w = placeSpan(prev, g, parts, K, [undefined, hi][rnd(2)]), why = JSON.stringify({ lens, g, K, prev, w })
+        assert.ok(w.lo >= c.s0 && w.hi <= c.s1, `inside its part: ${why}`)
+        assert.ok(w.lo <= g && g < w.hi, `holds g: ${why}`)
+        assert.ok(w.hi - w.lo <= K, `fits the lane: ${why}`)
+      }
+    }
+  }
+})
+
+test('1.3 #23 · placeSpan: a window parked at the end grows with the part, lo kept while the part fits; one that is not parked stays', () => {
+  for (const [s0, lo, end, grown, K] of [[0, 0, 10, 14, 60], [100, 103, 110, 125, 60], [0, 2, 10, 20, 18]]) {
+    const parts = [...(s0 ? [{ s0: 0, s1: s0 }] : []), { s0, s1: grown }]
+    assert.deepEqual(placeSpan({ lo, hi: end }, grown - 1, parts, K, end), { lo, hi: grown })
+    assert.deepEqual(placeSpan({ lo, hi: end - 1 }, end - 2, parts, K, end), { lo, hi: end - 1 })
+  }
+})
+
+test('1.3 #23 · anchorSpan: the span\'s local indexes when every step is held in a row; none when one is not', () => {
+  const rows = Array.from({ length: 6 }, () => ({ usage: null })), older = 4
+  const desk = deskOf([{ kind: 'main', rows, head: { count: rows.length + older } }]), s = { desk, anchor: anchorLane(buildLanes(desk)) }
+  assert.deepEqual(anchorSpan(s, { lo: older, hi: older + 6 }), { lo: 0, hi: 6 })
+  assert.deepEqual(anchorSpan(s, { lo: older + 2, hi: older + 4 }), { lo: 2, hi: 4 })
+  for (const span of [{ lo: 0, hi: 3 }, { lo: older - 1, hi: older + 2 }, { lo: older + 5, hi: older + 7 }]) assert.equal(anchorSpan(s, span).none, true, JSON.stringify(span))
+  assert.equal(anchorSpan({ desk, anchor: null }, { lo: 0, hi: 2 }).none, true)
 })
