@@ -21,9 +21,10 @@ const until = async (holds, ms) => {
   while (!holds() && Date.now() < end) await new Promise((r) => setTimeout(r, 25));
   return holds();
 };
-const unit = (text = '{}') => ({ on: 'request', harness: 'codex', pid: 42, method: 'POST', host: 'api.example.com', path: '/v1/messages', class: 'llm', status: null, event_index: null, headers: [], req_headers: [], encoding: null, body: Buffer.from(text) });
+const unit = (text = '{}') => ({ on: 'request', harness: 'codex', pid: 42, method: 'POST', host: 'api.example.com', path: '/v1/messages', class: 'llm', status: null, event_index: null, headers: [['content-length', '2']], req_headers: [], encoding: null, body: Buffer.from(text) });
 const whyOf = (answer) => answer.died ?? answer.why ?? answer.skipped?.[0]?.why;
 
+const HOLD = 'await new Promise((r) => setTimeout(r, 1000))';
 // `body` runs inside the script once the file `die` exists; `top` at the top of the module. `$MARK` is a file only a process the script started could write.
 const sh = (mark) => (WIN ? `cmd /c echo x> ${mark}` : `echo x > ${mark}`);
 const ROWS = [
@@ -52,9 +53,24 @@ const ROWS = [
   { name: 'a cycle in the body key', why: 'bad-result', body: 'const o = {}; o.body = o; return o' },
   { name: 'memory past the limit', why: 'memory', body: 'const keep = []; for (;;) keep.push(Buffer.alloc(8 << 20, 1))', capBytes: 192 * MIB, maxTaskMs: 30000 },
   { name: 'memory reserved but never touched', why: 'memory', body: 'const keep = []; for (;;) { keep.push(Buffer.allocUnsafeSlow(32 << 20)); await new Promise((r) => setTimeout(r, 20)) }', capBytes: 192 * MIB, maxTaskMs: 30000 },
-  { name: 'a frame of its own on the channel', why: 'bad-result', body: 'const b = Buffer.from("{}"); fs.writeSync(3, Buffer.concat([Buffer.from([b.length, 0, 0, 0]), b])); await new Promise((r) => setTimeout(r, 1000))' },
-  { name: 'a frame over 64 KiB on the channel', why: 'bad-result', body: 'fs.writeSync(3, Buffer.from([1, 0, 1, 0])); await new Promise((r) => setTimeout(r, 1000))' },
-  { name: 'bytes that are no frame on the channel', why: 'bad-result', body: 'fs.writeSync(3, Buffer.from([2, 0, 0, 0, 0x7b, 0x7b])); await new Promise((r) => setTimeout(r, 1000))' },
+  { name: 'a signal to its parent', why: 'rule-error', body: 'process.kill(process.ppid, 0)' },
+  { name: 'a signal to its process group', why: 'rule-error', body: 'process.kill(0, 0)' },
+  { name: 'a frame over 64 KiB on the channel', why: 'bad-result', body: `fs.writeSync(3, Buffer.from([1, 0, 1, 0])); ${HOLD}` },
+  { name: 'bytes that are no frame on the channel', why: 'bad-result', body: `fs.writeSync(3, Buffer.from([2, 0, 0, 0, 0x7b, 0x7b])); ${HOLD}` },
+  ...['{}', 'null', '7', '"text"', '[]'].map((json) => ({ name: `the frame ${json} on the channel`, why: 'bad-result', body: `say(${json}); ${HOLD}` })),
+  // A frame with the task's own id, so nothing but the parent's reading of it stands in the way.
+  ...Object.entries({
+    'a body past the end of the slot': '{ body: { at: 1e9, bytes: 5 } }',
+    'a CRLF in a header': '{ headers: [["content-length", "2"], ["x-evil", "a\\r\\nset-cookie: 1"]] }',
+    'a header name that is no token': '{ headers: [["content-length", "2"], ["x y", "1"]] }',
+    'a new value for a header trocar owns': '{ headers: [["content-length", "0"]] }',
+    'a header trocar owns gone': '{ headers: [] }',
+    'a header with no value': '{ headers: [["content-length", "2"], ["x-a", null]] }',
+    'headers that are no list': '{ headers: 7 }',
+    'a why outside the closed set': '{ why: "made-up" }',
+    'a skip outside the closed set': '{ skipped: [{ rule: "x", why: "made-up" }] }',
+    'a death of its own': '{ died: "made-up" }',
+  }).map(([what, fields]) => ({ name: `a frame with its task's id and ${what}`, why: 'bad-result', body: `say({ id: taskId(), ...${fields} }); ${HOLD}` })),
 ];
 
 function moduleOf({ top = '', body }, dir) {
@@ -66,6 +82,12 @@ function moduleOf({ top = '', body }, dir) {
     const WRITE_MARK = ${JSON.stringify(`require('fs').writeFileSync(${JSON.stringify(mark)}, 'x')`)}
     const SHELL_MARK = ${JSON.stringify(sh(mark))}
     const armed = () => fs.existsSync(new URL('./die', import.meta.url))
+    const say = (message) => {
+      const body = Buffer.from(JSON.stringify(message)), head = Buffer.alloc(4)
+      head.writeUInt32LE(body.length)
+      fs.writeSync(3, Buffer.concat([head, body]))
+    }
+    const taskId = () => fs.readFileSync(process.argv[2]).readUInt32LE(0)
     ${top}
     export default async () => {
       if (!armed()) return String(process.pid)
@@ -104,6 +126,24 @@ describe('12e: what a script does to its process', { concurrency: 8 }, () => {
     });
   }
 });
+
+// However the two frames fall across the parent's reads, the process goes, and no later unit lands on it.
+for (const [name, gap] of [['at once', ''], ['a moment apart', 'await new Promise((r) => setTimeout(r, 100))']]) {
+  test(`a question answered twice, ${name}, takes the process with it`, async () => {
+    const dir = tmpDir('trocar-twice-'), script = path.join(dir, 'script.mjs');
+    fs.writeFileSync(script, moduleOf({ body: `say({ id: taskId() }); ${gap}; return "late"` }, dir));
+    const runner = openOneShot({ script, rules: [{ name: 'script', on_error: 'forward', match: { harness: 'any' }, do: [{ script }] }] });
+    try {
+      const pid = Number((await runner.run(unit())).bytes);
+      fs.writeFileSync(path.join(dir, 'die'), '');
+      await runner.run(unit());
+      assert.ok(await until(() => isGone(pid), 2000), 'the process is gone');
+      fs.rmSync(path.join(dir, 'die'));
+      const next = Number((await runner.run(unit())).bytes);
+      assert.ok(next > 0 && next !== pid);
+    } finally { await runner.close(); }
+  });
+}
 
 describe('a load that fails is load-failed, and the next run tries again', { concurrency: 4 }, () => {
   const scripts = [
@@ -168,6 +208,14 @@ test('the watchdog kills a task at its limit by itself, and the slot says why an
 for (const [name, source] of [
   ['stuck in a loop', 'export default (m) => { if (m.text === "pid") return String(process.pid); for (;;); }'],
   ['idle', 'export default (m) => (m.text === "pid" ? String(process.pid) : undefined)'],
+  ['stuck in a loop with its slot closed', `
+    import fs from 'node:fs'
+    export default (m) => {
+      if (m.text === "pid") return String(process.pid)
+      const { ino } = fs.statSync(process.argv[2])
+      for (let fd = 4; fd < 256; fd++) { try { if (fs.fstatSync(fd).ino === ino) fs.closeSync(fd) } catch {} }
+      for (;;);
+    }`],
 ]) {
   test(`a parent killed outright takes the rule process with it within two seconds, ${name}`, async (t) => {
     const dir = tmpDir('trocar-orphan-'), script = path.join(dir, 'script.mjs'), parent = path.join(dir, 'parent.mjs');

@@ -31,10 +31,9 @@ export function writeProgress(fd, { task, rule, slowest, done }) {
   fs.writeSync(fd, head, 0, head.length, 0)
 }
 
-/** Writes the cause down and kills this process. Nothing after this runs: no exit handler, no script. */
+/** Writes the cause down and kills this process. Nothing after this runs: no exit handler, no script. A slot the script closed costs the cause, never the kill. */
 export function die(fd, why) {
-  fs.writeSync(fd, Buffer.of(DEATHS.indexOf(why) + 1), 0, 1, DEATH_AT)
-  process.kill(process.pid, 'SIGKILL')
+  try { fs.writeSync(fd, Buffer.of(DEATHS.indexOf(why) + 1), 0, 1, DEATH_AT) } finally { process.kill(process.pid, 'SIGKILL') }
 }
 
 /** The edits as the envelope will splice them: a comma list with no brackets, empty when there are none. A bug here must not reach the record, so it is parsed once first. */
@@ -51,7 +50,7 @@ export function encodeFrame(message) {
   return Buffer.concat([head, body])
 }
 
-/** → a function to feed chunks to. `onBad` is called once a frame is over `limit` or is not JSON, and nothing after it is read. */
+/** → a function to feed chunks to. `onBad` is called once a frame is over `limit` or is not a JSON object, and nothing after it is read. */
 export function frameReader(onFrame, onBad, limit = Infinity) {
   let held = Buffer.alloc(0), bad = false
   return (chunk) => {
@@ -63,6 +62,7 @@ export function frameReader(onFrame, onBad, limit = Infinity) {
       try {
         if (size > limit) throw new RangeError('frame too long')
         frame = JSON.parse(held.subarray(4, 4 + size))
+        if (Object(frame) !== frame) throw new TypeError('a frame is an object')
       } catch {
         bad = true
         return onBad()

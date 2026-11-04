@@ -12,7 +12,7 @@ import { applyRules } from '../../src/rules/apply.mjs';
 import { byteBudget } from '../../src/rules/budget.mjs';
 import { compileRules } from '../../src/rules/compile.mjs';
 import { memoryCap, openOneShot, runnerArgs } from '../../src/rules/launch.mjs';
-import { editsSegment, HEAD_BYTES, readProgress, writeProgress } from '../../src/rules/slot.mjs';
+import { DEATHS, editsSegment, HEAD_BYTES, readProgress, writeProgress } from '../../src/rules/slot.mjs';
 
 const MIB = 1024 * 1024, GIB = 1024 * MIB;
 const RUNNER = fileURLToPath(new URL('../../src/rules/runner.mjs', import.meta.url));
@@ -132,6 +132,7 @@ test('49: a CR or LF in a script\'s header never lands, and the rule says why', 
 test('a script answers with text, bytes, nothing, or {body, headers} where null removes a header', async () => {
   const cases = [
     ['\'text\'', (a) => assert.equal(String(a.bytes), 'text')],
+    ['(m.bytes[0] = 0x41, m.bytes)', (a) => assert.equal(String(a.bytes), 'A}')],
     ['new Uint8Array([0xff, 0xfe])', (a) => assert.deepEqual([...a.bytes], [0xff, 0xfe])],
     ['undefined', (a) => { assert.equal(a.bytes, null); assert.equal(a.headers, null); }],
     ['null', (a) => assert.equal(a.bytes, null)],
@@ -140,7 +141,17 @@ test('a script answers with text, bytes, nothing, or {body, headers} where null 
     ['({ bdoy: \'typo\' })', (a) => assert.deepEqual(a.skipped.map(({ why }) => why), ['bad-result'])],
     ['7', (a) => assert.deepEqual(a.skipped.map(({ why }) => why), ['bad-result'])],
   ];
-  for (const [value, check] of cases) await withRunner(`export default () => ${value}`, async (runner) => check(await runner.run(unitOf('{}'))));
+  for (const [value, check] of cases) await withRunner(`export default (m) => ${value}`, async (runner) => check(await runner.run(unitOf('{}'))));
+});
+
+test('a script\'s change in place stays in its copy: the record still rebuilds what the agent sent', async () => {
+  const script = scriptFile(`export default (m) => { m.bytes[0] = 0x41 }`);
+  const runner = openOneShot({ script, rules: [scriptRule(script), { name: 'after', on_error: 'forward', match: { harness: 'any' }, do: [{ replace: 'y', with: 'Q', literal: true }] }] });
+  try {
+    const { bytes, edits } = await runner.run(unitOf('xyz'));
+    assert.equal(String(bytes), 'xQz');
+    assert.deepEqual(edits, [{ at: 1, del: 1, ins: 'y' }]);
+  } finally { await runner.close(); }
 });
 
 test('a script sees the unit, with credential headers blanked', () => {
@@ -192,6 +203,17 @@ test('9: the same rules on the same input give the same bytes in the rule proces
   } finally { await runner.close(); }
 });
 
+test('the parent\'s check on an answer lets through what rules may do: their growth adds up, and the agent\'s own headers are not theirs', async () => {
+  const set = (header) => ({ name: header, on_error: 'forward', match: { harness: 'any' }, do: [{ header, set: 'v'.repeat(5000) }] });
+  const runner = openOneShot({ rules: [set('x-a'), set('x-b')] });
+  const own = [['content-length', '2'], ['x-odd', 'a\u0001b']];
+  try {
+    const answer = await runner.run(unitOf('{}', { headers: own }));
+    assert.equal(answer.died, undefined);
+    assert.deepEqual(answer.headers.map(([name]) => name), ['content-length', 'x-odd', 'x-a', 'x-b']);
+  } finally { await runner.close(); }
+});
+
 test('an answer over 64 KiB is rule-error: the parent never parses a large message', async () => {
   const rules = [{ name: 'big', on_error: 'forward', match: { harness: 'any' }, do: [{ reply: { status: 200, body: 'x'.repeat(70 * 1024) } }] }];
   const runner = openOneShot({ rules });
@@ -218,6 +240,9 @@ test('progress: the 24-byte head of a slot reads back what was written, and a wr
     writeProgress(fd, { task: 0xFFFFFFF0, rule: 7, slowest: 3, done: true });
     assert.deepEqual(readProgress(fd), { task: 0xFFFFFFF0, rule: 7, slowest: 3, done: true, death: null });
     assert.equal(fs.fstatSync(fd).size <= HEAD_BYTES, true);
+    fs.writeSync(fd, Buffer.of(DEATHS.indexOf('memory') + 1), 0, 1, 13);
+    writeProgress(fd, { task: 1, rule: 2, slowest: 3, done: false });
+    assert.equal(readProgress(fd).death, 'memory');
   } finally { fs.closeSync(fd); }
 });
 
@@ -226,3 +251,17 @@ test('60: an edits segment that does not parse is bad-result before it reaches t
   assert.deepEqual(JSON.parse(`[${editsSegment([{ at: 1, del: 2, ins: 'x\n' }, { at: 9, del: 0, ins: '"' }])}]`), [{ at: 1, del: 2, ins: 'x\n' }, { at: 9, del: 0, ins: '"' }]);
   assert.throws(() => editsSegment([undefined, undefined]), { why: 'bad-result' });
 });
+
+// A script that swaps JSON.stringify reaches the rule process's own serializing with no test-only door. Its answer is a why, not a death: the process caught it itself.
+for (const [name, swap, why] of [
+  ['60: an edits segment that does not parse never reaches the slot', `if (v?.del !== undefined) return '{'`, 'bad-result'],
+  ['an answer that cannot be serialized is rule-error', `if (v?.console !== undefined) throw new TypeError('no')`, 'rule-error'],
+]) {
+  test(name, () => withRunner(`
+    const real = JSON.stringify
+    JSON.stringify = (v, ...rest) => { ${swap}; return real(v, ...rest) }
+    export default () => 'new'`, async (runner) => {
+    const answer = await runner.run(unitOf('{}'));
+    assert.deepEqual([answer.died, answer.why], [undefined, why]);
+  }));
+}

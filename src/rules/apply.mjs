@@ -234,10 +234,13 @@ async function tier1(unit, compiled, budget) {
   }
 }
 
+// `bytes` is the script's own copy: what it does to them in place must not reach the state or what the record restores. Not pooled, or a script could read the pool's neighbours.
 function scriptMessage(unit, state) {
   const { on, harness, pid, method, host, path, status } = unit
+  const bytes = Buffer.allocUnsafeSlow(state.bytes.length)
+  state.bytes.copy(bytes)
   const headers = state.headers.map(([name, value]) => [name, isSecretHeader(name) ? '' : value])
-  return { on, harness, pid, method, host, path, status, headers, bytes: state.bytes, ...(state.text === null ? {} : { text: state.text }) }
+  return { on, harness, pid, method, host, path, status, headers, bytes, ...(state.text === null ? {} : { text: state.text }) }
 }
 
 // A script's patch is the whole body, so it is one step. Edits are text: bytes that are not UTF-8 on either side leave the record to the whole body.
