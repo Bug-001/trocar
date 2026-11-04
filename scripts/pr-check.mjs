@@ -276,31 +276,32 @@ function checkIdentity(out, cwd, hold, add) {
   for (const commit of out.commits) if (!commit.emails.every((email) => NOREPLY.test(email))) add('identity', `${commit.short}:author`, WHY.email)
 }
 
-/** What `trocar` answered, as a document; a query that could not read the capture says so with `ok: false`. */
-function ask(cli, ...args) {
+/** What `trocar` answered, as a document. A query that read only part of the capture still answers, with `ok: false`: its rows are used and
+ *  the rest is a `partial` finding, so that one bad record does not take the whole comparison with it. No document at all throws. */
+function ask(cli, add, ...args) {
   const [file, argv, options] = callOf(cli, ['query', ...args])
   const r = spawnSync(file, argv, { ...options, maxBuffer: Infinity, stdio: ['ignore', 'pipe', 'ignore'] })
   let doc = null
   try { doc = JSON.parse(r.stdout) } catch { /* no document is the failure below */ }
-  if (r.status !== 0 || doc?.ok !== true) throw new Error('capture')
+  if (doc === null || typeof doc !== 'object') throw new Error('capture')
+  if (r.status !== 0 || doc.ok !== true) add('partial', 'capture', WHY.query)
   return doc
 }
 
-function allPages(cli, name, key) {
+function allPages(cli, add, name, key) {
   const rows = []
   for (let after = null; ;) {
-    const doc = ask(cli, name, ...PAGE, ...(after === null ? [] : ['--after', String(after)]))
-    rows.push(...doc[key])
+    const doc = ask(cli, add, name, ...PAGE, ...(after === null ? [] : ['--after', String(after)]))
+    rows.push(...(doc[key] ?? []))
     if (doc.next == null || doc.next === after) return rows
     after = doc.next
   }
 }
 
-/** The capture's facts as words; a segment's name also covers every `<segment>:<n>` record id. Returns the segments for the text pass. */
-function checkFacts(cli, sources, hold) {
-  const segments = ask(cli, 'segments').segments
-  const facts = [...allPages(cli, 'sessions', 'sessions').flatMap((s) => [s.project_path, s.project_slug, s.session_id, s.title]),
-    ...allPages(cli, 'traffic', 'hosts').map((h) => h.host), ...segments.map((s) => s.segment)]
+/** The capture's facts as words; a segment's name also covers every `<segment>:<n>` record id. */
+function checkFacts(cli, segments, sources, add, hold) {
+  const facts = [...allPages(cli, add, 'sessions', 'sessions').flatMap((s) => [s.project_path, s.project_slug, s.session_id, s.title]),
+    ...allPages(cli, add, 'traffic', 'hosts').map((h) => h.host), ...segments.map((s) => s.segment)]
   const words = new Map()
   for (const fact of facts) {
     if (typeof fact !== 'string') continue
@@ -310,7 +311,6 @@ function checkFacts(cli, sources, hold) {
   for (const word of words.values()) {
     for (const source of sources) if (source.norm.includes(word)) hold(word, 'captured-facts', source.where)
   }
-  return segments
 }
 
 /** §6.3: what `base` already tracks is public. One pass over its blobs takes their windows out of `table` and their words out of `held`. */
@@ -423,7 +423,10 @@ async function main() {
   checkSecrets(out.sources, add)
   checkIdentity(out, cwd, hold, add)
   let segments = []
-  try { segments = checkFacts(options.cli, out.sources, hold) } catch { add('partial', 'capture', WHY.query) }
+  try {
+    segments = ask(options.cli, add, 'segments').segments ?? []
+    checkFacts(options.cli, segments, out.sources, add, hold)
+  } catch { add('partial', 'capture', WHY.query) }
 
   const table = new WindowTable(out.sources)
   if (base) {
