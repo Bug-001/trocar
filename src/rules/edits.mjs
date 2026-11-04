@@ -29,7 +29,8 @@ export function spansToSteps(text, spans, offset = 0) {
 
 // A gap buffer: the cost is how far the gap travels, so a list that runs up the buffer or back
 // down it (every inverted list) is one pass, where copying per step would be steps x length.
-export function applySteps(buf, steps) {
+// `removed`, when given, gets the text each step takes out.
+export function applySteps(buf, steps, removed = null) {
   const size = buf.length + steps.reduce((n, s) => n + byteLength(s.ins), 0);
   const out = Buffer.allocUnsafe(size);
   let gap = 0;
@@ -43,6 +44,7 @@ export function applySteps(buf, steps) {
       out.copy(out, gap, tail, tail + at - gap);
       tail += at - gap;
     }
+    removed?.push(out.toString('utf8', tail, tail + del));
     tail += del;
     gap = at + out.write(ins, at);
   }
@@ -61,6 +63,14 @@ export function invertSteps(steps) {
 export function recordEdits(on, steps) {
   const directed = INVERTED_ON.has(on) ? invertSteps(steps) : steps;
   return directed.map(({ at, del, ins }) => ({ at, del, ins }));
+}
+
+// The way `rules test` says it: from the bytes the rule saw to its result. Going down that is the record's own direction; going up the record runs the other way, from `result`.
+export function editsToResult(on, result, edits) {
+  if (!INVERTED_ON.has(on) || !edits.length) return edits;
+  const removed = [];
+  applySteps(result, edits, removed);
+  return edits.map(({ at, ins }, i) => ({ at, del: byteLength(ins), ins: removed[i] })).reverse();
 }
 
 export function editsCost(edits) {

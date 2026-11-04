@@ -137,5 +137,11 @@ export function wrap(text, width = WIDTH, hang = '') {
   return out
 }
 
+// Controls, the line and paragraph separators, and what reorders a line: each can make a printed text pass for something else.
+const UNPRINTABLE = /[\p{Cc}\p{Zl}\p{Zp}\p{Bidi_C}]/gu
+/** Text that came from a rule or a file, as a terminal may show it: each control character written out as `\u001b`, so it cannot colour the screen, retitle the window or start a line
+ *  that looks like ours. Only around that text, never a whole line: trocar's own colours are control characters too. */
+export const visible = (text) => String(text).replace(UNPRINTABLE, (c) => `\\u${c.codePointAt(0).toString(16).padStart(4, '0')}`)
+
 /** The one way to say a value could not be read (§1.1「读不到就说读不到」): `unknown`, with the reason when there is one. */
 export const unknown = (reason) => (reason ? `unknown (${reason})` : 'unknown')
