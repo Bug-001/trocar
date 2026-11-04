@@ -21,9 +21,6 @@ function rebuilt(stream) {
   return reconstructor.finish()
 }
 
-/** Whether a reply stored anything to read: a stream with no events, or messages kept only by size, have nothing that could hide. */
-const holdsMessages = (resp) => resp.raw_sse?.length > 0 || resp.messages?.some((m) => typeof m === 'string' || typeof m?.b64 === 'string')
-
 /** → {texts: Buffer[], opaque}. `opaque` says some of what the record holds could not be read; what could is in `texts` all the same.
  *  What the capture never held (`body_retention: 'log'`, `{omitted_bytes}`, what a cap cut off) is not opaque. May set `rec.req_body`. */
 export function textsBehind(rec) {
@@ -45,32 +42,33 @@ export function textsBehind(rec) {
       }
     }
     const { r, part } = storedReply(rec)
+    const headers = part?.headers || r?.headers || {}
     let kept = null
     if (typeof part?.raw_b64 === 'string') {
-      kept = open(part.raw_b64, part.encoding_error ? ((part.headers || r.headers || {})['content-encoding'] ?? 'unknown') : null)
+      kept = open(part.raw_b64, part.encoding_error ? (headers['content-encoding'] ?? 'unknown') : null)
       if (kept) texts.push(kept)
     }
     for (const message of [rec.req_body, ...(rec.req_extra_messages ?? []), ...(part?.messages ?? [])]) {
       if (typeof message?.b64 === 'string' && !message.decode_error) texts.push(Buffer.from(message.b64, 'base64'))
     }
     if (wsIncompleteOf(rec)?.undecoded) opaque = true
-    if (part && rec.body_retention !== 'log' && (part.kind === 'sse' || rec.transport === 'ws')) {
-      const stream = kept ?? part.raw
-      const view = { ...rec, resp: part.raw_sse || stream == null ? part : { ...part, ...rebuilt(stream) } }
-      const format = wireFormatOf(view)
-      // the read side has no one entry for this: Anthropic's normResp is its own, the other wires' sit on their dissectors
-      const norm = format === 'anthropic' ? normResp(view) : boardDissectorOf(format)?.normResp(view)
-      if (norm) texts.push(...[norm.text, norm.thinking, JSON.stringify(norm.tools)].filter(Boolean).map((text) => Buffer.from(text)))
-      else if (holdsMessages(view.resp)) opaque = true
-    } else if (part && rec.body_retention !== 'log' && (part.kind === 'text' || part.kind === 'json') && STREAMED.test((part.headers || r.headers || {})['content-type'])) {
-      opaque = true
-    }
-    if (typeof rec.req_body === 'string') {
-      for (const run of longRuns(rec.req_body)) { // a document attached as base64; an image opens to nothing, there being no text in it
-        const text = opened(run)
-        if (text) texts.push(text)
+    if (part && rec.body_retention !== 'log') {
+      if (part.kind === 'sse' || rec.transport === 'ws') {
+        const stream = kept ?? part.raw
+        const resp = part.raw_sse || stream == null ? part : { ...part, ...rebuilt(stream) }
+        const view = { ...rec, resp }
+        const format = wireFormatOf(view)
+        // the read side has no one entry for this: Anthropic's normResp is its own, the other wires' sit on their dissectors
+        const norm = format === 'anthropic' ? normResp(view) : boardDissectorOf(format)?.normResp(view)
+        if (norm) texts.push(...[norm.text, norm.thinking, JSON.stringify(norm.tools)].filter(Boolean).map((text) => Buffer.from(text)))
+        // a stream with no events, or messages kept only by size, have nothing that could hide
+        else if (resp.raw_sse?.length > 0 || resp.messages?.some((m) => typeof m === 'string' || typeof m?.b64 === 'string')) opaque = true
+      } else if ((part.kind === 'text' || part.kind === 'json') && STREAMED.test(headers['content-type'])) {
+        opaque = true
       }
     }
+    // a document attached as base64; an image opens to nothing, there being no text in it
+    if (typeof rec.req_body === 'string') texts.push(...longRuns(rec.req_body).map((run) => opened(run)).filter(Boolean))
   } catch {
     opaque = true
   }
