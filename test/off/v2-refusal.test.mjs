@@ -72,7 +72,7 @@ for (const [cmd, run] of Object.entries(COMMANDS)) {
         assert.equal(exit, 1, io.text())
         const copy = standalonePath(home)
         const text = io.text().slice(io.text().indexOf('Undo it first')) // the guidance, not the heading a failed uninstall prints above it
-        const main = text.indexOf('trocar off'), un = text.indexOf('trocar uninstall'), named = text.indexOf(copy) // the path keeps a line of its own, however the line is wrapped (§1.1 版式 6)
+        const main = text.indexOf('trocar off'), un = text.indexOf('trocar uninstall'), named = text.indexOf(copy.slice(home.length)) // HOME's spelling is §1.1⑤'s; the path keeps a line of its own, however the line is wrapped (§1.1 版式 6)
         assert.ok(main >= 0 && un > main && named > un, `the old build's off, then its uninstall, then the copy — in that order:\n${text}`)
         assert.match(io.text(), new RegExp(`version ${version}`))
       })

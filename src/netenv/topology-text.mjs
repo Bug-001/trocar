@@ -3,6 +3,8 @@
 // English, ASCII only (D58): a chain is `agent (pid N) -> [where it came from] hop -> internet`.
 // What is never printed: a proxy URL's credentials (the facts never held them), a proxy product's name or node names (nothing here has them), and a hop's name when it could not be read — that
 // hop says `unknown (<reason>)` (D58③).
+import { unknownWords } from '../cli/words.mjs'
+
 export const ROUTING_TEXT = Object.freeze({ driver: 'driver mode', proxy: 'proxy mode', legacy: 'the old capture', none: 'no capture', unknown: 'routing unknown' })
 const BRANCH_TEXT = { http: 'HTTP', ws: 'WebSocket' }
 const tri = (v, yes = 'yes', no = 'no') => (v === true ? yes : v === false ? no : 'unknown')
@@ -11,10 +13,7 @@ const base = (p) => String(p).split(/[\\/]/).pop()
 const nodeOf = (t, id) => t.nodes.find((n) => n.id === id)
 const isTrocar = (n) => !!n && n.trocar === true
 const edgeOf = (t, from, to) => t.edges.find((e) => e.from === from && e.to === to) || null
-// the closed set of 附录 C `unknown.reason`, in words (D58③): a code is never printed
-const UNKNOWN_WORDS = { denied: 'not allowed to read', timeout: 'took too long to read', absent: 'not there', unparseable: 'could not be parsed', 'owner-unreadable': 'owner not known',
-  pac: 'a PAC script trocar does not run', 'kernel-filter-invisible': 'a kernel filter it cannot see', 'env-unreadable': 'environment not readable' }
-const unknownText = (n) => `unknown: ${UNKNOWN_WORDS[n.unknown.reason] || String(n.unknown.reason).replace(/-/g, ' ')}`
+const unknownText = (n) => `unknown: ${unknownWords(n.unknown.reason)}` // D58③: a code is never printed
 const passText = (n) => (n.passthrough ? `forwarded only for ${n.passthrough.hosts.join(', ')}` : null)
 const paren = (...parts) => { const p = parts.filter(Boolean); return p.length ? ` (${p.join('; ')})` : '' }
 
@@ -70,8 +69,27 @@ const prefixOf = (t, b, key = 'path') => [new Set(t.branches.map((x) => x.form).
 // the branches that go the same way (same form, same path) are one line
 const distinct = (t) => t.branches.filter((b, i) => t.branches.findIndex((x) => x.form === b.form && x.path.join() === b.path.join()) === i)
 
+/** Between the branches of one harness when they are said on one line (renderCompact's lines joined; `adopted.<h>.chain`, C.1). */
+export const BRANCH_SEP = ' ; '
 /** One line per way a harness's traffic goes: the path with trocar on it (HTTP and WebSocket that take the same path are one line). */
 export const renderCompact = (t) => distinct(t).map((b) => `${prefixOf(t, b)}${chain(t, b.path)}`)
+
+// a branch cut to its agent, trocar and the hop after trocar (附录 A.1's last tier); a branch with no trocar on it keeps its first two hops
+function cutPath(t, path) {
+  const at = path.findIndex((id, i) => i && isTrocar(nodeOf(t, id)))
+  if (at < 0) return path.slice(0, 2)
+  const next = path.findIndex((id, i) => i > at && !isTrocar(nodeOf(t, id)))
+  return [path[0], ...path.slice(at, next < 0 ? undefined : next + 1)]
+}
+/** 附录 A.1 for a harness's compact chain printed in `room` columns: whole when it fits; else with every `[where it came from]` left out; else each
+ *  branch cut to `agent -> trocar -> <next hop> -> ...`. Each tier is drawn from the topology, never by re-reading text (a hop written in brackets, an IPv6
+ *  host, is a hop). Never folded: a line still too long stays one line. */
+export function fitCompact(t, room) {
+  const line = (draw) => distinct(t).map((b) => `${prefixOf(t, b)}${draw(b)}`).join(BRANCH_SEP)
+  const tiers = [line((b) => chain(t, b.path)), line((b) => chain(t, b.path, false, false)),
+    line((b) => { const ids = cutPath(t, b.path); return `${chain(t, ids, false, false)}${ids.length < b.path.length ? ' -> ...' : ''}` })]
+  return tiers.find((x) => x.length <= room) || tiers[2]
+}
 
 /** What `status` says after a branch's chain: `on trocar's path: yes · captured: no (desired-off)`. */
 export const verdictText = (b) => `on trocar's path: ${tri(b.on_path)} · captured: ${tri(b.captured)}${b.reason ? ` (${b.reason})` : ''}`

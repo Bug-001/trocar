@@ -17,5 +17,5 @@
   "status": "fixed",
   "detail": "resizing the window on an open desk throws TypeError reading 'closest' of null: refit → fitView → sawCapacity reads $('#sawrow').closest while #sawrow is not in the document",
   "owner": "desk",
-  "suspect": "src/web/v2/replay/replay.mjs:234"
+  "suspect": "web/legacy/replay/replay.mjs:234"
 }

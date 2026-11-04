@@ -36,6 +36,7 @@
   "files": [
     "bin/",
     "src/",
+    "install/",
     "README.md",
     "LICENSE"
   ],

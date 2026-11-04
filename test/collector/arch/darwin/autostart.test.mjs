@@ -211,7 +211,7 @@ test('W24 `on` on darwin refuses a Node below 22.15 (4.9 §7, MA5: a root added 
 
 const NODE = '/usr/local/bin/node'
 const SCRIPT = '/Users/ada/.npm-global/lib/node_modules/trocar/bin/trocar.mjs'
-const plist = () => plistXml({ node: NODE, trocar: SCRIPT })
+const plist = () => plistXml({ program: [NODE, SCRIPT] })
 const inner = (x, tag) => { const m = new RegExp(`<${tag}(?: [^>]*)?>([\\s\\S]*?)</${tag}>`).exec(x); return m ? m[1] : null }
 /** Is it well formed in the one sense that matters here: every element opened is closed, in order? (There is no XML parser in Node; a typo in a tag name is what this catches.) */
 function balanced(x) {
@@ -239,7 +239,7 @@ test('W24 the plist has the fields of 4.9 §4: Label com.trocar.collector, Progr
   // names leaves the daemon running, so `on` asks the one that is there instead of having launchd spawn one.
   assert.doesNotMatch(x, /ThrottleInterval/, 'launchd\'s own throttle is what bounds a crash loop: trocar does not shorten it (D62 ⑥)')
   assert.doesNotMatch(x, /EnvironmentVariables/, 'no environment needed: the daemon\'s env is empty unless install says otherwise')
-  const withEnv = plistXml({ node: NODE, trocar: SCRIPT, env: { NODE_EXTRA_CA_CERTS: '/usr/local/etc/corp-ca.pem' } })
+  const withEnv = plistXml({ program: [NODE, SCRIPT], env: { NODE_EXTRA_CA_CERTS: '/usr/local/etc/corp-ca.pem' } })
   assert.ok(balanced(withEnv))
   assert.match(withEnv, /<key>EnvironmentVariables<\/key>\s*<dict>\s*<key>NODE_EXTRA_CA_CERTS<\/key>\s*<string>\/usr\/local\/etc\/corp-ca\.pem<\/string>\s*<\/dict>/, 'what install decides the daemon needs is carried (the linux unit\'s Environment=; a launchd job starts with none of the shell\'s exports)')
   assert.equal(plistPath('/h'), path.join('/h', 'Library', 'LaunchAgents', 'com.trocar.collector.plist'))
@@ -248,13 +248,13 @@ test('W24 the plist has the fields of 4.9 §4: Label com.trocar.collector, Progr
 })
 
 test('W24 what goes into the plist is escaped or refused: & < > are escaped, a control character, a non-string or a bad env key is a bug of the caller (a quote in a path is harmless plist element content, unlike the Windows command line)', () => {
-  const x = plistXml({ node: '/opt/R&D/bin/node', trocar: '/Users/ada/a>b/trocar.mjs' })
+  const x = plistXml({ program: ['/opt/R&D/bin/node', '/Users/ada/a>b/trocar.mjs'] })
   assert.ok(balanced(x))
   assert.deepEqual([...inner(x, 'array').matchAll(/<string>([\s\S]*?)<\/string>/g)].map((m) => m[1]), ['/opt/R&amp;D/bin/node', '/Users/ada/a&gt;b/trocar.mjs', 'daemon'])
-  assert.match(plistXml({ node: NODE, trocar: '/Users/张三/.npm-global/lib/node_modules/trocar/bin/trocar.mjs' }), /张三/, 'a profile path in Chinese is carried as it is: UTF-8 holds it')
-  assert.equal(plistXml({ node: '/opt/"node"', trocar: SCRIPT }).includes('"node"'), true, 'a quote is not escaped and not refused here')
-  for (const bad of [{ node: '/no\u0007de' }, { trocar: '' }, { node: undefined }, { env: 'x' }, { env: null }, { env: { 'not a name': 'v' } }, { env: { K: 5 } }]) {
-    assert.throws(() => plistXml({ node: NODE, trocar: SCRIPT, ...bad }), TypeError, JSON.stringify(bad))
+  assert.match(plistXml({ program: [NODE, '/Users/张三/.npm-global/lib/node_modules/trocar/bin/trocar.mjs'] }), /张三/, 'a profile path in Chinese is carried as it is: UTF-8 holds it')
+  assert.equal(plistXml({ program: ['/opt/"node"', SCRIPT] }).includes('"node"'), true, 'a quote is not escaped and not refused here')
+  for (const bad of [{ program: [NODE, '/no\u0007de'] }, { program: [NODE, ''] }, { program: [] }, { program: undefined }, { env: 'x' }, { env: null }, { env: { 'not a name': 'v' } }, { env: { K: 5 } }]) {
+    assert.throws(() => plistXml({ program: [NODE, SCRIPT], ...bad }), TypeError, JSON.stringify(bad))
   }
 })
 
@@ -284,7 +284,7 @@ test('W24 userUnit gives the shape turnOn and install consume: the plist\'s path
   assert.deepEqual(u.links, [], 'a LaunchAgent has no wants/ link — the file in LaunchAgents is the whole registration')
   assert.equal(u.name, 'com.trocar.collector')
   const sinks = daemonLogPaths(o.home)
-  assert.equal(u.text({}), plistXml({ node: NODE, trocar: SCRIPT, logs: sinks }), 'the text is the plist; an empty daemon env is no EnvironmentVariables key')
+  assert.equal(u.text({}), plistXml({ program: [NODE, SCRIPT], logs: sinks }), 'the text is the plist; an empty daemon env is no EnvironmentVariables key')
   assert.match(u.text({}), new RegExp('<key>StandardOutPath</key>\n  <string>' + sinks.out.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '</string>'), 'D46: the daemon console is the log file under ~/.trocar/collector/logs')
   assert.match(u.text({}), new RegExp('<key>StandardErrorPath</key>\n  <string>' + sinks.err.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '</string>'))
   assert.notEqual(u.text({ NODE_EXTRA_CA_CERTS: '/usr/local/etc/corp-ca.pem' }), plist(), 'the daemon env install offers is carried (unlike the win32 task, 4.8 §7)')

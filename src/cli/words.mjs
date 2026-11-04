@@ -125,13 +125,13 @@ export const FAILURE_WORDS = Object.freeze({
   'classes-write-failed': 'the traffic class table could not be saved',
   'classes-log-failed': 'a change to the traffic class table was made but not logged',
   'classify-failed': 'a call could not be classified, so it is kept in full',
-  // the capture helper and the kernel
-  'helper-error': 'the capture helper failed',
+  // trocar's helpers (Linux: the capability helper; Windows: the PowerShell reader; helper-down and helper-start-failed come from either) and the kernel
+  'helper-error': 'the capability helper failed',
   'heartbeat-failed': "the helper's heartbeat failed",
   'heartbeat-gap': "the helper's heartbeat stopped",
-  'loader-down': 'the helper loader is not listening',
-  'loader-timeout': 'the helper loader did not answer in time',
-  'helper-start-failed': 'the capture helper would not start',
+  'loader-down': 'the capability helper is not listening',
+  'loader-timeout': 'the capability helper did not answer in time',
+  'helper-start-failed': "trocar's helper would not start",
   'socktable-unavailable': "the system's connection table could not be read",
   'kernel-drops': 'the kernel dropped packets',
   // on / off, install / uninstall
@@ -158,8 +158,8 @@ export const FAILURE_WORDS = Object.freeze({
   // failure events that carry no code of their own (the group's code is the event)
   failure: 'a problem was recorded',
   'agent-untrusted': "a running agent does not trust trocar's certificate yet",
-  'helper-down': 'the capture helper stopped',
-  'helper-version-mismatch': 'the capture helper is the wrong version',
+  'helper-down': "trocar's helper is not running",
+  'helper-version-mismatch': 'the capability helper is the wrong version',
   'attach-failed': 'capture could not be attached',
   'detach-failed': 'capture could not be detached',
 })
@@ -174,23 +174,36 @@ export function failureWord(where, code, harness = '', cause = null) {
   return (s && s.text) || null
 }
 
+// the closed set of 附录 C `unknown.reason` (src/cli/schema.mjs UNKNOWN_REASONS), in words: what a hop that could not be read says (1.6 A.1, D58③)
+const UNKNOWN_WORDS = Object.freeze({ denied: 'not allowed to read', timeout: 'took too long to read', absent: 'not there', unparseable: 'could not be parsed', 'owner-unreadable': 'owner not known',
+  pac: 'a PAC script trocar does not run', 'kernel-filter-invisible': 'a kernel filter it cannot see', 'env-unreadable': 'environment not readable' })
+/** An `unknown.reason` code in words; a code outside the set is read out as its own words, never printed as a code. */
+export const unknownWords = (reason) => UNKNOWN_WORDS[reason] || String(reason ?? '').replace(/-/g, ' ')
+
 /** One line out of many: newlines and runs of whitespace become one space (a launchctl stderr with line breaks must not break the digest's alignment). */
 export const squashed = (s) => String(s ?? '').replace(/\s+/g, ' ').trim()
 
-/** The whole reason, or its head (cut with ASCII dots: 1.6 §1.1 ⑦, the old Windows console prints no other symbol): the digest shows ~100 columns of it — the whole wall is one `--failures` away (R11: relocated, not dropped). */
-export const briefText = (s, max = 100) => { const t = squashed(s); return t.length > max ? `${t.slice(0, max - 3)}...` : t }
+/** The whole reason, or its head cut at the last word boundary that fits (with ASCII dots: 1.6 §1.1 ⑦, the old Windows console prints no other
+ *  symbol; a single word longer than the room is cut where the room ends): the digest shows ~100 columns of it — the whole wall is one `--failures`
+ *  away (R11: relocated, not dropped). */
+export const briefText = (s, max = 100) => {
+  const t = squashed(s)
+  if (t.length <= max) return t
+  const at = t.slice(0, max - 2).lastIndexOf(' ') // a word that ends exactly at the room still fits
+  return `${(at > 0 ? t.slice(0, at) : t.slice(0, max - 3)).replace(/[\s,;:]+$/, '')}...`
+}
 
 /** One failure group (C.3 `failures.groups[]`: { where, code, reason, harness? }) in one sentence, for `status --failures`, the board's capture log and
  *  the overview alike: the catalog's sentence when it knows the code — the code and the raw reason are then the technical details' (the CLI prints the
  *  reason after it) — else the raw errno / `where/code` with the squashed reason, so an unknown code is never hidden; the `×count` multiplier is the caller's. */
-export function failureBrief(g) {
+export function failureBrief(g, { max = 100 } = {}) { // `max`: the brief of the reason; a caller that briefed it already (status --failures, reasonOf) passes Infinity
   const from = g && typeof g.process === 'string' && g.process !== '' ? `, latest from ${g.process}${Number.isInteger(g.pid) ? ` pid ${g.pid}` : ''}` : '' // every failure that names its program, one way (1.6 §3.5)
-  return brief(g) + from
+  return brief(g, max) + from
 }
-function brief(g) {
+function brief(g, max) {
   const word = failureWord(g && g.where, g && g.code, (g && g.harness) || '')
   if (word) return word
-  const reason = briefText((g && g.reason) || '')
+  const reason = briefText((g && g.reason) || '', max)
   if (g && g.code && ERRNO.test(String(g.code))) return [g.code, reason].filter(Boolean).join(' ')
   return [[...new Set([g && g.where, g && g.code].filter(Boolean))].join('/') || 'a record', reason].filter(Boolean).join(' ') // an event with no code of its own is named once
 }
@@ -225,7 +238,7 @@ export function statusReason(code, { harness = '', pid = null, cause = null } = 
         : [`${hp} refused trocar's certificate for a host; its traffic is passed on unread until trocar tries again`, `to capture it now, restart ${h}`],
     'daemon-not-running': ['trocar is not running in the background'],
     'daemon-not-responding': ['trocar runs in the background but does not answer'],
-    'helper-missing': ["trocar's capture helper is missing or is the wrong version"],
+    'helper-missing': ["trocar's capability helper is missing or is the wrong version"],
     'link-missing': ['trocar is not attached'],
     'entry-missing': ['the setting that points at trocar is gone', null, `trocar on ${h}`],
     'entry-changed': ['the setting that points at trocar holds something else'],

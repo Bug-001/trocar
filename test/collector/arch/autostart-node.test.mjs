@@ -9,7 +9,13 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { tmpDir } from '../../helpers/tmp.mjs'
-import { autostartNode } from '../../../src/collector/arch/autostart-node.mjs'
+import { execFileSync } from 'node:child_process'
+import { autostartNode, autostartProgram } from '../../../src/collector/arch/autostart-node.mjs'
+import { appDir, launcherPath } from '../../../src/off/paths.mjs'
+import { runPlaceCli, nodeExe } from '../../../src/cli/place.mjs'
+import { userUnit as darwinUnit } from '../../../src/collector/arch/darwin/autostart.mjs'
+import { userUnit as linuxUnit } from '../../../src/collector/arch/linux/unit.mjs'
+import { userUnit as winUnit } from '../../../src/collector/arch/win32/autostart.mjs'
 
 // a tree that looks like Homebrew's: a versioned real file and the stable symlink a package manager keeps repointing
 const tree = () => {
@@ -55,4 +61,52 @@ test('the platform decides the separator and the names; Path is read like PATH o
     'node.exe is what a Windows PATH entry holds, and `;` separates')
   assert.equal(autostartNode({ env: { PATH: path.join(t, 'bin') }, execPath: real, platform: 'darwin' }), real,
     'on a POSIX platform node.exe is not looked for: the answer is the asking executable')
+})
+
+// ---- the script channel (D74): the login entry starts whatever version the pointer names ---------------------------------------------------
+// The lab finding it answers (macOS test machine, 2026-11-03): the LaunchAgent named ~/.trocar/app/0.1.0/..., so after `place` switched to
+// 0.1.1 the update's restart through the login entry brought 0.1.0 back. Asserted on the written item of every OS: what it names, and (POSIX)
+// what running exactly that command line starts.
+const target = `${process.platform === 'win32' ? 'win' : process.platform}-${process.arch}`
+function version(app, v, nv) { // a version directory pinning Node `nv`, whose binary echoes its arguments
+  fs.mkdirSync(path.join(app, v, 'bin'), { recursive: true })
+  fs.mkdirSync(path.join(app, v, 'install'), { recursive: true })
+  fs.writeFileSync(path.join(app, v, 'bin', 'trocar.mjs'), '')
+  fs.writeFileSync(path.join(app, v, 'install', 'node.sha256'), `${'0'.repeat(64)}  node-v${nv}-${target}.tar.xz\n`)
+  const exe = nodeExe(app, `${nv}-${target}`)
+  fs.mkdirSync(path.dirname(exe), { recursive: true })
+  fs.writeFileSync(exe, '#!/bin/sh\nprintf "%s|" "$@"\n', { mode: 0o755 })
+}
+const quiet = { out: () => {}, err: () => {} }
+
+test('script channel: the login entry each OS writes names the launcher, so after place switches versions it starts the new one', async () => {
+  const home = tmpDir("autostart script 'q' ")
+  const app = appDir(home)
+  version(app, '0.1.0', '22.0.0')
+  assert.equal(await runPlaceCli([path.join(app, '0.1.0')], { io: quiet, home }), 0)
+  // the copy that runs `install`: the private Node and the versioned script of 0.1.0
+  const asked = { home, node: nodeExe(app, `22.0.0-${target}`), script: path.join(app, '0.1.0', 'bin', 'trocar.mjs'), env: { PATH: '' } }
+  const items = {
+    darwin: darwinUnit({ ...asked, uid: 501 }).text({}),
+    linux: linuxUnit(asked).text({}),
+    win32: winUnit({ ...asked, user: 'H\\ada' }).text(),
+  }
+  version(app, '0.1.1', '22.1.0') // what update's --stage leaves, then its place
+  assert.equal(await runPlaceCli([path.join(app, '0.1.1')], { io: quiet, home }), 0)
+  for (const [os, text] of Object.entries(items)) {
+    assert.ok(text.includes(launcherPath(home, os)), `${os}: the item names ${launcherPath(home, os)}`)
+    assert.ok(!text.includes(path.join(app, '0.1.0')) && !text.includes(path.join(app, 'node')), `${os}: the item names no version directory and no private Node`)
+  }
+  if (process.platform === 'win32') return
+  const plistArgs = [...items.darwin.split('<key>ProgramArguments</key>')[1].split('</array>')[0].matchAll(/<string>(.*?)<\/string>/g)].map((m) => m[1].replace(/&amp;/g, '&'))
+  const execStart = /^ExecStart=(.*)$/m.exec(items.linux)[1].match(/"(?:[^"\\]|\\.)*"|\S+/g).map((w) => w.replace(/^"|"$/g, '').replace(/\\(.)/g, '$1'))
+  for (const [prog, ...args] of [plistArgs, execStart]) {
+    assert.equal(execFileSync(prog, args, { encoding: 'utf8' }), `${path.join(app, '0.1.1', 'bin', 'trocar.mjs')}|daemon|`, 'the item starts the version the pointer names now')
+  }
+})
+
+test('any other copy (npm, a checkout): the entry stays node + that copy\'s script', () => {
+  const home = tmpDir('autostart-npm')
+  const script = path.join(home, 'lib', 'node_modules', 'trocar-cli', 'bin', 'trocar.mjs')
+  assert.deepEqual(autostartProgram({ home, node: process.execPath, script, env: {} }), [process.execPath, script])
 })

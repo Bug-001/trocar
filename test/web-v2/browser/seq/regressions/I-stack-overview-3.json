@@ -14,5 +14,5 @@
   "status": "fixed",
   "detail": "an e500 `overview` read draws the server's whole `error` text (a native stack) in the visible failure line, not under Technical details",
   "owner": "shell/overview/library/capture/settings/traffic",
-  "suspect": "src/web/v2/overview/overview.mjs:380"
+  "suspect": "web/legacy/overview/overview.mjs:380"
 }

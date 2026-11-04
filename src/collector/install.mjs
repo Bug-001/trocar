@@ -26,13 +26,13 @@ import { readText, readTextOrError } from './core/config-read.mjs'
 import { appendEvent } from './core/events.mjs'
 import { runEventWriter } from '../off/events.mjs'
 import { hideUserinfoIn } from '../off/userinfo.mjs'
-import { backupDir, opLockFile, standalonePath } from '../off/paths.mjs'
+import { backupDir, opLockFile, standalonePath, standaloneFiles } from '../off/paths.mjs'
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
 import { readStateFile, emptyState, setDesired, writeStateAtomic } from '../off/state.mjs'
 import { newReceipt, UNDO_LINE } from '../off/schema.mjs'
 import { OFF_VERSION, installComplete } from '../off/manifest.mjs'
-import { writeStandalone, checkStandalone } from '../off/standalone.mjs'
-import { codeId } from '../version.mjs'
+import { writeStandalone, standaloneDue } from '../off/standalone.mjs'
+import { codeId, setupHelperCommand } from '../version.mjs'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const listDir = (d) => { try { return fs.readdirSync(d) } catch { return [] } }
@@ -435,12 +435,16 @@ export async function turnOn(opts = {}) {
   const unwritten = (r) => { const { standalone: _unwritten, ...rest } = r; return { ...rest, changed: [], created: [], undo: null, log: null } }
   // The helper (D36) is what the real `on` needs and the plan does not: a missing one stops the real run before anything is written, but `--dry-run` still shows the plan — it is what
   // a user reads before deciding to `sudo trocar setup-helper` — and exits 0 (R6, V7) with the stop said in the receipt (`blocked`).
-  let helperBlock = null
+  // C.1 blocked[].command: the sudo line is the stop's own command, printed whole on its own line under the note (1.6 §1.1⑥)
+  let helperBlock = null, helperStop = null
   if (helperState) {
     const h = await helperState()
-    if (h && h.ok === false) helperBlock = `the capability helper is missing or not the right version (${h.reason || 'not usable'}); nothing was changed. Run: sudo trocar setup-helper`
+    if (h && h.ok === false) {
+      helperBlock = `the capability helper is missing or not the right version (${h.reason || 'not usable'})`
+      helperStop = { what: 'trocar on', reason: `${helperBlock}; nothing was changed. Install it with the line below, then run trocar on again`, command: setupHelperCommand() }
+    }
   }
-  if (helperBlock && !dryRun) return { receipt: unwritten({ ...fresh(), ok: false, notes: [helperBlock] }), manifest: null, plan: null, exit: 1 }
+  if (helperBlock && !dryRun) return { receipt: unwritten({ ...fresh(), ok: false, notes: [helperStop.reason], blocked: [helperStop] }), manifest: null, plan: null, exit: 1 }
   // D61 / 1.6 §3.3: the login entry is `install`'s, so an `on` with none would open doors that nobody opens after the next login
   // (without the login registration, a reboot after `on` leaves every agent unusable). Asked here, before the first write; a `--dry-run` goes on and carries it in `blocked`.
   const autostartBlk = dryRun ? null : autostartBlock({ unit, osName })
@@ -457,8 +461,9 @@ export async function turnOn(opts = {}) {
     // 附录 C.1: the refusal's code lives in `error`, the one place a client looks (never a top-level `code`)
     if (!isModelOs(osName) && !installComplete(plan._.prior)) { const message = 'certificates are not installed. Run: trocar install'; return { receipt: unwritten({ ...fresh(), ok: false, error: { code: CODE.certNotInstalled, message }, notes: [message] }), manifest: plan._.prior, plan, exit: 1 } }
     // the copy of the undo side that needs no source tree (R3) is one more file trocar writes: listed in the plan and the dry run when it is missing or not what src/off generates now
-    const standaloneCheck = checkStandalone({ home, version: OFF_VERSION, platform: osName, fs })
-    if (!standaloneCheck.ok) { plan.created = [...plan.created, standaloneCheck.path]; plan.standalone = standaloneCheck.path }
+    let due
+    try { due = standaloneDue({ home, version: OFF_VERSION, platform: osName, fs }).map((d) => d.file) } catch { due = standaloneFiles(home, osName) } // a build that fails is said by the write below
+    if (due.length) { plan.created = [...plan.created, ...due]; plan.standalone = standalonePath(home) }
     // A version 1 file (what `collector on|off` wrote before D39) is read for the harnesses installed before and the ones this run turns on, the same set
     // the guard below reads it for — and is written back as version 2 here, before the first guard: the guard must never see a file the daemon's reader
     // and this one read differently (1.6 §1.5, R12)
@@ -476,7 +481,7 @@ export async function turnOn(opts = {}) {
     if (edited.length) r.notes.push(...edited.map((e) => `you changed the proxy setting of ${e.harness}: ${e.where || 'the proxy field'} is now ${e.now ?? 'empty'} (trocar left ${e.was ?? 'empty'} there); on takes that as the upstream and points the setting back at trocar`))
     if (dryRun) {
       const blk = autostartBlock({ unit, osName })
-      return { receipt: { ...r, dry_run: true, ok: !named, ...(blk ? { blocked: [{ what: 'trocar on', reason: blk }], notes: [...r.notes, `${blk} (a real trocar on stops there)`] } : {}), ...(helperBlock ? { blocked: [{ what: 'trocar on', reason: helperBlock }], notes: [...r.notes, `${helperBlock.replace('nothing was changed. ', '')} (a real trocar on stops there)`] } : {}) }, manifest: plan._.prior, plan, exit: named ? 1 : 0 }
+      return { receipt: { ...r, dry_run: true, ok: !named, ...(blk || helperBlock ? { blocked: [...(blk ? [{ what: 'trocar on', reason: blk }] : []), ...(helperBlock ? [helperStop] : [])], notes: [...r.notes, ...(blk ? [`${blk} (a real trocar on stops there)`] : []), ...(helperBlock ? [`${helperBlock} (a real trocar on stops there). Install it with the line below, then run trocar on again`] : [])] } : {}) }, manifest: plan._.prior, plan, exit: named ? 1 : 0 }
     }
     if (plan.writing || stateWrite || edited.length) onPlan({ ...plan, state: stateWrite ? stateF : null, edited })
     if (plan.first || plan.newPaths.length || edited.length) {
@@ -502,7 +507,7 @@ export async function turnOn(opts = {}) {
     // the undo that needs no source tree is in place before the first thing it undoes (R3): written on every `on`, nothing when it already is what src/off generates. A copy that
     // cannot be written stops the run here, before one file of the agents' is touched — the way back first, like the backup of a file (R2) — and `recorded` writes the failure (R11)
     let standalone
-    try { standalone = writeStandalone({ home, version: OFF_VERSION, fs }) } catch (e) {
+    try { standalone = writeStandalone({ home, version: OFF_VERSION, platform: osName, fs }) } catch (e) {
       throw Object.assign(new Error(`${standalonePath(home)}, the undo that works without the source tree, could not be written (${String((e && e.message) || e)}); no file of the agents' was changed — put that right, then run trocar on again`), { code: e && e.code })
     }
     const guard = () => {
@@ -524,7 +529,7 @@ export async function turnOn(opts = {}) {
     const receipt = {
       ...r,
       changed: (written ? written.entries : []).map((e) => ({ path: e.path, change: changeText(e, e.prior_value), backup: e.backup ?? null })),
-      created: [...(plan._.prior ? [] : [manifestPath(dir)]), ...(stateWrite ? [stateF] : []), ...(standalone.written ? [standalone.path] : []), ...(written && written.caCreated ? plan._.ca ? [plan._.ca.key, plan._.ca.pem] : [] : []), ...(written ? [...written.files, ...written.owned] : [])],
+      created: [...(plan._.prior ? [] : [manifestPath(dir)]), ...(stateWrite ? [stateF] : []), ...standalone.files, ...(written && written.caCreated ? plan._.ca ? [plan._.ca.key, plan._.ca.pem] : [] : []), ...(written ? [...written.files, ...written.owned] : [])],
       unchanged: written ? written.intact : [],
     }
     // the result line is the one proxy mode writes (1.6 §1): `harnesses` = the ones this run turned on (the daemon up and the run not halted), `refused` = none
@@ -563,8 +568,8 @@ export async function turnOn(opts = {}) {
         receipt.capture = { desired: status.desired ?? null, actual: status.actual ?? null }
         reached = status.actual === 'on'
         if (!reached) {
-          const why = status.helper && status.helper.ok === false ? `the capability helper speaks protocol ${status.helper.proto}, this daemon expects ${status.helper.expected_proto}; run: sudo trocar setup-helper`
-            : status.degraded ? `the helper is down (${status.degraded.reason}); nothing is steered, agents connect directly`
+          const why = status.degraded ? `the helper is down (${status.degraded.reason}); nothing is steered, agents connect directly` // first: a helper that is not up has no protocol to name
+            : status.helper && status.helper.ok === false ? `the capability helper speaks protocol ${status.helper.proto}, this daemon expects ${status.helper.expected_proto}; run \`${setupHelperCommand()}\``
               : status.ca && status.ca.ok === false ? `the collector CA is unusable (${status.ca.which}: ${status.ca.reason}); nothing is steered` : `the daemon did not reach on (actual: ${status.actual}); nothing is steered, agents connect directly`
           problems.push(why); put({ event: EVENT.failure, where: 'switch', code: 'state-mismatch', reason: why })
         }

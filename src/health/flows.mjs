@@ -142,6 +142,12 @@ export function lastRun(notes) {
 // a folded line (events.mjs: written when the 10 s window closes) re-states the last suppressed record and stands for
 // exactly `suppressed` occurrences — the first one of the window was its own line already
 const PRELUDE_MS = 60_000 // a daemon's start-up lines are written within this before its daemon-start
+// 1.6 C.3「已解决的组」: the ok event that ends a failure's condition. A group whose newest record such an event follows is `resolved`: it stays
+// among the groups (D38: never lost) at level note, and no longer makes the health failing; a later failure of the group makes it a problem again.
+// The ok events are written on a transition within one daemon run; every start judges these conditions again, so a group of them whose newest record
+// precedes the newest run (its prelude included) and that the run did not write again is resolved too — a restart ended it.
+const ENDS = Object.freeze({ 'helper-ok': ['helper-down'], 'ca-ok': ['ca-invalid'], 'agent-list-ok': ['agent-list-invalid'] })
+const ENDED = new Set(Object.values(ENDS).flat())
 const weight = (r) => (r.folded ? 0 : 1) + (typeof r.suppressed === 'number' ? r.suppressed : 0)
 
 /**
@@ -191,6 +197,7 @@ export function foldFlows(records, { now = Date.now(), windowMs = WINDOW_MS } = 
     else if (r.event === 'agent-exit') { untrusted.delete(r.pid); clearNeg(String(r.pid)) }
     else if (r.event === 'negative-cache-cleared') clearNeg(String(r.neg_key ?? r.pid))
     else if (r.event === 'helper-down') degraded = { kind: 'degraded', ...pick(r), since: r.ts }
+    else if (r.event === 'helper-ok') degraded = null // a helper not installed at start came up later (4.6 「助手还没装」)
     else if (r.event === 'helper-version-mismatch') version = { kind: 'helper-version', ...pick(r), since: r.ts }
     else if (r.event === 'switch') mismatch = r.actual && r.actual !== 'unknown' && r.desired !== r.actual ? { kind: 'state-mismatch', ...pick(r), since: r.ts } : null
     else if (r.event === 'failure' && r.code === 'state-mismatch') mismatch = { kind: 'state-mismatch', ...pick(r), since: r.ts }
@@ -225,7 +232,9 @@ export function foldFlows(records, { now = Date.now(), windowMs = WINDOW_MS } = 
   const cutoff = now - windowMs
   const groups = new Map(), agents = new Map()
   const agentRow = (a) => { if (!agents.has(a)) agents.set(a, { agent: a, last_captured: null, last_failure: null, last_failure_key: null }); return agents.get(a) }
-  for (const r of records) {
+  for (let i = 0; i < records.length; i++) {
+    const r = records[i]
+    if (i === from && startIdx >= 0) for (const g of groups.values()) if (ENDED.has(g.last.event) || ENDED.has(g.last.code)) g.resolved = true
     if (typeof r.ts === 'string') out.last_ts = r.ts
     if (r.event === 'install-note' || r.event === 'uninstall-note') out.install[r.event === 'install-note' ? 'install' : 'uninstall'].push(pick(r))
     const t = Date.parse(r.ts)
@@ -234,9 +243,11 @@ export function foldFlows(records, { now = Date.now(), windowMs = WINDOW_MS } = 
     if (isFailure(r)) {
       const key = groupKey(r)
       const g = groups.get(key) || { key, count: 0, first_ts: r.ts, last_ts: r.ts, last: null }
-      g.count += weight(r); g.last_ts = r.ts; g.last = pick(r)
+      g.count += weight(r); g.last_ts = r.ts; g.last = pick(r); delete g.resolved
       groups.delete(key); groups.set(key, g) // the Map's order is the order of each group's newest record
       if (agent) { const a = agentRow(agent); a.last_failure = r.ts; a.last_failure_key = key }
+    } else if (ENDS[r.event]) {
+      for (const g of groups.values()) if (ENDS[r.event].includes(g.last.event) || ENDS[r.event].includes(g.last.code)) g.resolved = true
     } else if (isRow(r)) {
       if (notCapturedClass(r.not_captured, r.reason) === 'expected') {
         const k = expectedKey(r) // a by-design reason counts under its own name ('not-an-agent'), not under 'untracked'
