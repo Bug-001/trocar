@@ -343,32 +343,45 @@ function lowerBound(cols, L, ts, rid) {
 // changed moves every later step of its lane (old and new) — their `i`, the `k` of their user events, the axis numbers — so the
 // packs holding those steps are dirty and those steps in the open span are appended again; a lane whose header changed is appended
 // to its tail; a failed member dirties its span. `axis`: the first place of the axis lane that moved (undefined: none).
-function dirtyOf(s, off, open) {
+// A generator (its result is the return value): every SCAN rids of each loop is a unit of the write (writeFiles), as the end of a
+// re-read has every member changed, each a read of the fold log.
+const SCAN = 256;
+function* dirtyOf(s, off, open) {
   const V = s.V, { cols, log } = V, ax = axisOf(V), packs = new Set(), opens = new Set(), gone = [], lanes = [], fails = [], from = new Map();
   const touch = (key, ts, rid) => { const L = laneOf(cols, key); if (L.v < 0) return; const j = lowerBound(cols, L, ts, rid); if (!(from.get(key) <= j)) from.set(key, j); };
   const rowOf = (at) => { const o = at && log.read(...at); return o && o.c != null ? o.r : null; };
   const ch = log.changedSince(off);
+  let seen = 0;
   for (const rid of ch.rids) {
     const r = rowOf(log.latest(rid)), w = off < 0 ? null : rowOf(log.versionAt(rid, off)), n = spanOf(s, rid);
     if (r) touch(r.lane, r.ts ?? null, rid);
     if (w) touch(w.lane, w.ts ?? null, rid);
     if (n >= 0 && n < open) packs.add(n);
     else if (n >= open && !r && w) gone.push([rid, w.lane === ax ? 'main' : 'rest']);
+    if (++seen % SCAN === 0) yield;
   }
   for (const [key, j] of from) {
     const L = laneOf(cols, key);
-    for (let t = j; t < L.rids.length; t++) { const n = spanOf(s, L.rids[t]); if (n >= open) opens.add(L.rids[t]); else if (n >= 0) packs.add(n); }
+    for (let t = j; t < L.rids.length; t++) {
+      const n = spanOf(s, L.rids[t]);
+      if (n >= open) opens.add(L.rids[t]); else if (n >= 0) packs.add(n);
+      if (++seen % SCAN === 0) yield;
+    }
   }
   // the headers of V.lanes by key are the columns' (session-doc.mjs viewOf): no map of every lane is made for the few that changed
-  for (const key of ch.lanes) if (cols.lanes.has(key)) lanes.push(cols.heads.get(key));
+  for (const key of ch.lanes) { if (cols.lanes.has(key)) lanes.push(cols.heads.get(key)); if (++seen % SCAN === 0) yield; }
   const failing = log.failures.since(off), failed = failing.length ? new Map(V.failed.map((f) => [f.id, f])) : null;
-  for (const rid of failing) { const n = spanOf(s, rid); if (n >= 0 && n < open) packs.add(n); else if (failed.has(rid)) fails.push(failed.get(rid)); }
+  for (const rid of failing) {
+    const n = spanOf(s, rid);
+    if (n >= 0 && n < open) packs.add(n); else if (failed.has(rid)) fails.push(failed.get(rid));
+    if (++seen % SCAN === 0) yield;
+  }
   return { packs, opens, gone, lanes, fails, axis: from.get(ax) };
 }
 
 /** writeFiles(ctx, s, deadline = Infinity) → {packs, open} of the head: brings the session's pack and tail files to the state `s`
  *  (the worker's, after a slice); null when `deadline` (a performance.now() time) passed first: what is left goes on at the next call
- *  at the same state, a unit at a time (a call's render, a piece of a gzip, a file: 3.5 后台抽取与归约); a call at another state
+ *  at the same state, a unit at a time (SCAN rids of the scan for what changed, a call's render, a piece of a gzip, a file: 3.5 后台抽取与归约); a call at another state
  *  goes on from the packs the last one finished. The first slice of a session in this worker (or of a fold log opened again) re-renders the packs with fold-log lines past
  *  the offset its sidecar says the files stood at, takes the others from their files when whole and written under the axis it has
  *  (its checkpoint's; else renders them), and carries
@@ -409,7 +422,8 @@ function* writing(ctx, s) {
     W = { ax, f, open: N, packs: [], tails, rec: tails ? c.rec : 0, files: null, memo: lru(memoBytes()), mn: N, sp: [], c };
     writers.set(log, W);
   }
-  const c = W.c, d = dirtyOf(s, W.f, Math.min(W.open, N)), spans = spansOf(s, axisSteps(s, W.sp, first ? 0 : d.axis ?? W.sp.length));
+  // `sp` stands as far as it was made: a job cut in this scan, before making it, left it empty for the next one
+  const c = W.c, d = yield* dirtyOf(s, W.f, Math.min(W.open, N)), spans = spansOf(s, axisSteps(s, W.sp, Math.min(d.axis ?? Infinity, W.sp.length)));
   W.packs.length = Math.min(W.packs.length, N);
   for (let n = 0; n < N; n++) {
     const k = W.packs[n];
@@ -417,7 +431,7 @@ function* writing(ctx, s) {
     // a pack whose writing a moved frontier cut short goes on where it stood while no member folded since touched its rows or its doc
     // head (3.5 后台抽取与归约): calls arriving faster than one seal do not start it over
     let P = W.part;
-    if (!(P && P.n === n && P.s0 === spans[n][0] && P.s1 === spans[n][1] && (P.f === log.frontier || !dirtyOf(s, P.f, n + 1).packs.has(n))))
+    if (!(P && P.n === n && P.s0 === spans[n][0] && P.s1 === spans[n][1] && (P.f === log.frontier || !(yield* dirtyOf(s, P.f, n + 1)).packs.has(n))))
       W.part = P = { n, s0: spans[n][0], s1: spans[n][1], it: sealing(s, { home, fs, ax, memo: n >= W.open ? W.memo : null }, n, spans, c && c.ax === ax && !d.packs.has(n), k) };
     P.f = log.frontier;
     let r;
