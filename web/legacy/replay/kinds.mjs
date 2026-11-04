@@ -5,7 +5,7 @@
 //
 // renderKind(r, body, {from, budget}) draws view.body and returns {html, more, cls, as, shown, total}: `html` is the inner markup,
 // `cls` the classes of the wrapper the CALLER puts around it (`<div class="cellread ${cls}">`, kind class plus tone class), `more`
-// the next `from` when only a slice was drawn (text, code and markdown), else null; `shown` the characters
+// the next `from` when only a slice was drawn (text, code, markdown and a tool's description), else null; `shown` the characters
 // drawn when a nested part was cut (else null); `total` the cell's readable characters. A continuation slice is appended inside
 // the same wrapper. Nested children (kv, parts) carry their own `<div class="kd-… tone-…">`. One draw spends at most `budget`
 // characters of string (B.c): a string past what is left is cut, and the rest of it opens from a `j-more` disclosure, a slice at a
@@ -15,7 +15,7 @@
 // Security: every byte of input goes through esc() or the markdown renderer; only the allowed cell elements and attributes
 // (RFC 2.3 §两种模式) are emitted.
 import { esc, has, bytes } from '../core/fmt.mjs'
-import { FAIL_LINE, OPAQUE_LINE, NO_ARGS, IMAGE_URL, mediaAlt, moreChars, BEFORE, AFTER, SAVE } from '../labels/cells.mjs'
+import { FAIL_LINE, OPAQUE_LINE, NO_ARGS, REQUIRED, IMAGE_URL, paramsLine, mediaAlt, moreChars, BEFORE, AFTER, SAVE } from '../labels/cells.mjs'
 
 const CLASS = { markdown: 'kd-md' } // every other kind's class is kd-<as>
 const TONE = { error: 'tone-error', quiet: 'tone-quiet' }
@@ -131,6 +131,47 @@ function markdown(r, b, v, o) {
   return { html: (o.from === 0 ? titled(r) : '') + html, more }
 }
 
+// ── tool: the description as markdown, its `more` chain first; Parameters come with the slice that has none. A schema is read by
+// JSON Schema's standard keys only, drawn whole inside the budget (past it the slice after the description has it all to itself);
+// one with no properties, or past a whole slice, is the JSON tree ──────────────────────────────────────────────────────────
+const isObj = (x) => x != null && typeof x === 'object' && !Array.isArray(x)
+const under = (s) => [s.items, s.anyOf, s.oneOf].flat().filter(isObj) // what a value of s holds or may be instead
+const shapes = (s) => [...(isObj(s.properties) ? [s] : []), ...under(s).flatMap(shapes)]
+const enumsOf = (s) => [...[s.enum].flat().filter((x) => x !== undefined), ...under(s).flatMap(enumsOf)]
+function typeOf(s) {
+  const alts = [s.anyOf, s.oneOf].flat().filter(isObj)
+  if (alts.length) return [...new Set(alts.map(typeOf).filter(Boolean))].join(' | ')
+  const t = [s.type].flat().filter((x) => typeof x === 'string').join(' | ')
+  if (t !== 'array' || !isObj(s.items)) return t
+  const item = typeOf(s.items)
+  return item.includes(' | ') ? `(${item})[]` : item ? `${item}[]` : t
+}
+const word = (c, s) => (s ? `<span class="${c}">${shown(s)}</span>` : '')
+const paramsOf = (schema) => shapes(schema).map((x) => Object.keys(x.properties).map((k) => {
+  const s = isObj(x.properties[k]) ? x.properties[k] : {}, kids = paramsOf(s)
+  return `<div class="parm">${word('pn', k)}${word('pt', typeOf(s))}${word('pr', [x.required].flat().includes(k) && REQUIRED)}` +
+    `${word('pe', enumsOf(s).map(asText).join(' | '))}${word('pd', typeof s.description === 'string' && s.description)}${kids && `<div class="pk">${kids}</div>`}</div>`
+}).join('')).join('')
+function tool(r, b, v, o) {
+  const f = r.f || {}, desc = f.desc != null ? get(v, f.desc) : undefined, schema = f.schema != null ? get(v, f.schema) : undefined
+  if (desc === undefined ? schema === undefined : typeof desc !== 'string') fail()
+  const len = desc?.length ?? 0
+  let html = ''
+  if (o.from < len) {
+    const d = draw({ as: 'markdown' }, desc, { ...o, root: [...o.root, ...f.desc] })
+    html = `<div class="${d.cls}">${d.html}</div>`
+    if (d.more != null) return { html, more: d.more }
+  }
+  if (schema === undefined) return { html }
+  const at = [...o.root, ...f.schema], size = JSON.stringify(schema).length, fits = size <= o.B.c
+  if (!fits && o.from < len) return { html, more: len }
+  const read = isObj(schema) && fits ? shapes(schema) : []
+  if (!read.length) return { html: html + child({ as: 'text' }, schema, o, at) }
+  o.B.c -= size
+  const names = read.flatMap((s) => Object.keys(s.properties))
+  return { html: html + (names.length ? `<details class="tool-params" ${dpath(at)}><summary>${shown(paramsLine(names))}</summary>${paramsOf(schema)}</details>` : `<div class="kd-note">${esc(NO_ARGS)}</div>`) }
+}
+
 // ── diff: unified only; every changed line starts with its sign character ────────────────────────────────────────────
 const SIGN = { ' ': 'd-ctx', '-': 'd-del', '+': 'd-add' }
 const dline = (c, s) => `<div class="${c}">${shown(s)}</div>`
@@ -218,7 +259,7 @@ function media(r, b, v, o) {
   if (/^(?:png|jpe?g|gif|webp)$/.test(sub)) fail() // an image type whose header does not read
   return { html: `<div class="kd-file">${esc((sub || mime || '?').toUpperCase())} · ${esc(bytes(bin.length))} <button type="button" data-cellsave ${src}>${esc(SAVE)}</button></div>` }
 }
-const R = { text, code, shell, json, kv, opaque, parts, markdown, diff, media }
+const R = { text, code, shell, json, kv, opaque, parts, markdown, diff, media, tool }
 
 // ── json tree: <details> per object / array; 2 levels open on a first paint, at most FIRST nodes; the rest closed and empty ─
 const prim = (v, path, B) => typeof v === 'string' ? `<span class="j-str">&quot;${cutStr(v, 0, B, path, true)}</span>`
