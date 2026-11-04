@@ -3,7 +3,8 @@
 // The wrapper below is the caller's (cell.mjs): renderKind gives the inner html and the wrapper's classes in `cls`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { renderKind, valueOf, jsonNodeHtml } from '../../web/legacy/replay/kinds.mjs'
+import { renderKind, setMarkdown, valueOf, jsonNodeHtml } from '../../web/legacy/replay/kinds.mjs'
+import { FAIL_LINE, IMAGE_URL, NO_ARGS, OPAQUE_LINE } from '../../web/legacy/labels/cells.mjs'
 
 const wrap = ({ html, cls }) => `<div class="cellread ${cls}">${html}</div>`
 const ENT = { lt: '<', gt: '>', quot: '"', '#39': "'", '#13': '\r', amp: '&' }
@@ -45,6 +46,7 @@ test('code with a gutter: line numbers go into aria-hidden gut spans, the title 
   const out = renderKind({ as: 'code', title: 'p.txt', f: { gutter: true } }, lines.join('\n'), { budget: 1e9 })
   assert.ok(has(out.html, 'kd-title'))
   assert.equal(count(out.html, /<span class="gut" aria-hidden="true">/g), lines.length)
+  assert.ok(has(wrap(renderKind({ as: 'code', f: { wrap: true } }, lines[0])), 'kd-wrap'))
 })
 
 test('slicing: the more chain covers the whole string with no gap or overlap', () => {
@@ -93,33 +95,35 @@ test('one draw spends at most its budget on strings; a cut string opens the rest
   }
 })
 
-test('shell: a $ prompt followed by the command; argv is joined; note and other keys are drawn below', () => {
+test('shell: a $ prompt followed by the command; argv is joined; the note is the shell\'s, other keys are drawn below', () => {
   for (let i = 0; i < 200; i++) {
     const argv = rnd() < 0.5
     const cmd = argv ? Array.from({ length: 1 + Math.floor(rnd() * 4) }, word) : str(30)
     const extra = Object.fromEntries(Array.from({ length: Math.floor(rnd() * 4) }, (_, k) => ['x' + k, val(1)]))
-    const v = { command: cmd, description: 'n' + str(10), ...extra }
+    const note = 'NOTE' + i, v = { command: cmd, description: note, ...extra }
     const out = renderKind({ as: 'shell', f: { body: [], cmd: ['command'], note: ['description'] } }, v)
     const h = wrap(out)
-    assert.ok(has(h, 'kd-shell') && has(h, 'kd-note'))
+    assert.ok(has(h, 'kd-shell'))
+    assert.ok(!textOf(h).includes(note), 'the note is not drawn here')
     const m = h.match(/<span class="sh-ps"[^>]*>\$<\/span>([^<]*)/)
     assert.ok(m, 'sh-ps then the command')
     const shown = textOf(m[1]).trim()
     if (!argv) assert.equal(shown, cmd.trim())
     else for (const a of cmd.filter((a) => /^[\w./=-]+$/.test(a))) assert.ok(shown.split(' ').includes(a), a)
-    assert.equal(count(h, /<dt>/g), Object.keys(extra).length)
+    assert.deepEqual([...h.matchAll(/class="kv-k">([^<]*)/g)].map((x) => x[1]), Object.keys(extra))
   }
 })
 
-test('kv: one dt and one dd per key, each child drawn by its own spec', () => {
+test('kv: every key and value is there, each child drawn by its own spec; an empty object says so', () => {
   for (let i = 0; i < 200; i++) {
-    const v = Object.fromEntries(Array.from({ length: Math.floor(rnd() * 8) }, (_, k) => [str(5) + k, val(2)]))
-    const out = renderKind({ as: 'kv', kids: { [Object.keys(v)[0]]: { as: 'code' } } }, v)
-    const h = wrap(out)
+    const first = 'first' + i
+    const v = { [first]: 'v' + str(120), ...Object.fromEntries(Array.from({ length: Math.floor(rnd() * 8) }, (_, k) => [str(5) + k, pick([str(200), Math.floor(rnd() * 1e6), rnd() < 0.5])])) }
+    const out = renderKind({ as: 'kv', kids: { [first]: { as: 'code' } } }, v), h = wrap(out), got = textOf(h)
     assert.ok(has(h, 'kd-kv'))
-    assert.equal(count(h, /<dt>/g), Object.keys(v).length)
-    assert.equal(count(h, /<dd>/g), Object.keys(v).length)
+    assert.ok(has(h, 'kd-code'), 'a kid keeps its own kind')
+    for (const [k, x] of Object.entries(v)) assert.ok(got.includes(k) && got.includes(String(x)), k)
   }
+  assert.equal(textOf(renderKind({ as: 'kv' }, {}).html), NO_ARGS)
 })
 
 test('json: the first paint holds at most 200 nodes, arrays over 100 entries are grouped, closed nodes open on demand', () => {
@@ -146,27 +150,12 @@ test('json: the first paint holds at most 200 nodes, arrays over 100 entries are
   assert.ok(count(out.html, /class="j-num"/g) <= 200)
 })
 
-test('sections: each top-level tag pair gets a sec-tag label; text outside the tags stays', () => {
-  for (let i = 0; i < 100; i++) {
-    const code = rnd() < 0.5 // a code child draws ESC bytes in the bodies; other kids get bodies without them
-    const secs = Array.from({ length: 1 + Math.floor(rnd() * 4) }, (_, k) => [pick(['system-reminder', 'error', 'x-y']), str(20).replace(code ? /</g : /[<\u001b]/g, '')])
-    const lead = str(10).replace(/[<\u001b]/g, '')
-    const s = lead + secs.map(([t, b]) => `<${t}>${b}</${t}>`).join('\n')
-    const out = renderKind({ as: 'sections', ...(code && { kids: secs.map(() => ({ as: 'code' })) }) }, s)
-    assert.ok(has(wrap(out), 'kd-sec'))
-    assert.equal(count(out.html, /class="sec-tag"/g), secs.length)
-    for (const [, b] of secs) assert.ok(textOf(out.html).includes(b))
-    if (code) assert.equal(escFaults(out.html, count(s, /\u001b/g)), null, 'each body ESC byte is one kd-esc mark')
-  }
-})
-
-test('opaque and parts: the signature byte length; each part drawn by its own spec', async () => {
-  const { opaqueLine } = await import('../../web/legacy/labels/cells.mjs')
+test('opaque and parts: the fidelity line and no bytes of the signature; each part drawn by its own spec', () => {
   for (let i = 0; i < 50; i++) {
-    const sig = str(60), v = { signature: sig, thinking: '' }
-    const out = renderKind({ as: 'opaque', f: { sig: ['signature'] } }, v)
+    const sig = 'SIG' + str(60), v = { signature: sig, thinking: '' }
+    const out = renderKind({ as: 'opaque', f: { body: [] } }, v)
     assert.ok(has(wrap(out), 'kd-opaque'))
-    assert.equal(textOf(out.html), opaqueLine(new TextEncoder().encode(sig).length))
+    assert.equal(textOf(out.html), OPAQUE_LINE)
     const parts = Array.from({ length: Math.floor(rnd() * 5) }, () => str(10))
     const kinds = parts.map(() => pick(['text', 'code']))
     const p = renderKind({ as: 'parts', kids: kinds.map((as) => ({ as })) }, parts)
@@ -186,6 +175,7 @@ test('fallbacks: unknown as, missing r, text over an object; a failure is kd-fai
       [{ as: 'kv', f: { body: ['missing'] } }, o], [{ as: 'kv' }, { get a() { throw new Error('x') } }], [{ as: 'parts' }, s]]) {
       const h = wrap(renderKind(r, v))
       assert.ok(has(h, 'kd-fail') && has(h, 'kd-text'), JSON.stringify(r))
+      assert.ok(textOf(h).startsWith(FAIL_LINE), 'one line, no kind word')
     }
   }
 })
@@ -209,23 +199,65 @@ test('valueOf: JSON when it parses, else the text itself', () => {
 // ── markdown, diff, media ─────────────────────────────────────────────────────────────────────────────────────────
 const plain = () => str(12).replace(/[\u001b\r\n|*_`[\]\\#>~+-]/g, '') + 'w' // a table cell / text run with no markdown syntax in it
 
-test('markdown: an HTML tag stays text, a link is text and URL with no href, a pipe table becomes cells', () => {
+test('markdown: with no renderer registered it is text with every source byte', () => {
   for (let i = 0; i < 100; i++) {
-    const tag = pick(['b', 'script', 'a', 'img', 'h1']), html = `<${tag} x="${plain()}">${plain()}</${tag}>`
-    const url = 'https://e.x/' + plain().replace(/[\s()]/g, '')
-    const cols = 1 + Math.floor(rnd() * 4), rows = Math.floor(rnd() * 5)
-    const line = (f) => '| ' + Array.from({ length: cols }, f).join(' | ') + ' |'
-    const lvl = 1 + Math.floor(rnd() * 6)
-    const src = [`${'#'.repeat(lvl)} ${plain()}`, html, `see [${plain()}](${url})`, '', line(plain), line(() => '---'),
-      ...Array.from({ length: rows }, () => line(plain)), '', `- ${plain()}`, `> ${plain()}`].join('\n')
-    const out = renderKind({ as: 'markdown' }, src)
-    assert.ok(has(wrap(out), 'kd-md'))
-    assert.ok(textOf(out.html).includes(html), 'the tag is shown as text')
-    assert.ok(textOf(out.html).includes(url), 'the URL is shown')
-    assert.doesNotMatch(out.html, /href|<a[\s>]|<h\d|<ul|<li|<em|<strong/)
-    assert.equal(count(out.html, /<th>/g), cols)
-    assert.equal(count(out.html, /<td>/g), cols * rows)
-    for (const c of ['md-h' + lvl, 'md-li', 'md-q', 'md-table']) assert.ok(has(out.html, c), c)
+    const src = `# ${plain()}\n${str(100)}`, out = renderKind({ as: 'markdown' }, src, { budget: 1e9 })
+    assert.ok(has(wrap(out), 'kd-text'))
+    assert.equal(textOf(out.html), src)
+  }
+})
+
+test('markdown: a registered renderer gets the source, from, budget and file, and its more comes back as it is', () => {
+  const calls = []
+  setMarkdown((src, o) => { calls.push({ src, ...o }); return { html: '<p>x</p>', more: o.from > 0 ? null : 7 } })
+  try {
+    for (let i = 0; i < 50; i++) {
+      calls.length = 0
+      const lines = Array.from({ length: 1 + Math.floor(rnd() * 5) }, plain), gutter = rnd() < 0.5, file = rnd() < 0.5
+      const src = lines.map((l, k) => (gutter ? `${String(k + 1).padStart(6)}→${l}` : l)).join('\n')
+      const budget = 100 + Math.floor(rnd() * 1000), r = { as: 'markdown', f: { gutter, file } }
+      const one = renderKind(r, src, { budget }), two = renderKind(r, src, { from: 7, budget })
+      assert.ok(has(wrap(one), 'kd-md'))
+      assert.equal(one.more, 7)
+      assert.equal(two.more, null)
+      assert.deepEqual(calls, [{ src: lines.join('\n'), from: 0, budget, file }, { src: lines.join('\n'), from: 7, budget, file }].map((c) => (gutter ? c : { ...c, src })))
+    }
+  } finally { setMarkdown(null) }
+})
+
+// ── paths: every data-path and data-media is absolute from the view's body ──────────────────────────────────────────────
+const pathsIn = (h, attr) => [...h.matchAll(new RegExp(`${attr}="([^"]*)"`, 'g'))].map((m) => JSON.parse(textOf(m[1])))
+const TEXT = { as: 'text', f: { body: ['text'] } }
+
+test('parts: a part cut by the budget opens its tail at the path it names, and the siblings after it stay reachable', () => {
+  for (const budget of [20000, 7000, 29999]) {
+    const a = 'x'.repeat(30000), b = 'second part', body = { block: { content: [{ type: 'text', text: a }, { type: 'text', text: b }] } }
+    const r = { as: 'parts', f: { body: ['block', 'content'] }, kids: { 0: TEXT, 1: TEXT } }
+    const out = renderKind(r, body, { budget })
+    const opened = [...out.html.matchAll(/<details class="j-more" data-path="([^"]*)" data-span="(\d+),(\d+)">/g)].map((m) => {
+      let at = +m[2], got = ''
+      while (at != null) {
+        const h = jsonNodeHtml(body, JSON.parse(textOf(m[1])), [at, +m[3]], { budget })
+        got += textOf(h.replace(/<summary>[^<]*<\/summary>/g, ''))
+        at = /data-span="(\d+),/.exec(h)?.[1] ?? null
+        if (at != null) at = +at
+      }
+      return [+m[2], got]
+    })
+    const whole = textOf(out.html.replace(/<details[^]*?<\/details>/g, ''))
+    assert.equal(whole + opened.map(([, t]) => t).join(''), a + b)
+  }
+})
+
+test('a JSON tree stored in a string opens below two levels from the absolute path', () => {
+  for (let i = 0; i < 50; i++) {
+    const leaf = 'leaf' + i, v = { a: { b: { c: { d: [leaf] } } } }, body = { block: { text: JSON.stringify(v) } }
+    const out = renderKind({ as: 'json', f: { body: ['block', 'text'] } }, body)
+    const closed = out.html.match(/<details (?:class="[^"]*" )?data-path="([^"]*)"><summary>/)
+    assert.ok(closed, 'a closed node')
+    const path = JSON.parse(textOf(closed[1]))
+    assert.deepEqual(path.slice(0, 2), ['block', 'text'])
+    assert.notEqual(jsonNodeHtml(body, path), '')
   }
 })
 
@@ -288,11 +320,13 @@ const MEDIA = { as: 'media', f: { data: ['d'], mime: ['m'] } }
 test('media: width and height come from the image header; no src; svg is code; other data a file with Save; a URL is text', () => {
   for (let i = 0; i < 300; i++) {
     const kind = pick(Object.keys(MAX)), w = 1 + Math.floor(rnd() * MAX[kind]), h = 1 + Math.floor(rnd() * MAX[kind])
-    const out = renderKind(MEDIA, { d: header(kind, w, h).toString('base64'), m: 'image/' + kind.split('-')[0] }, { bid: 'b' + i })
+    const out = renderKind(MEDIA, { d: header(kind, w, h).toString('base64'), m: 'image/' + kind.split('-')[0] })
     assert.ok(has(wrap(out), 'kd-media'))
     const img = out.html.match(/<img ([^>]*)>/)
     assert.ok(img, kind)
-    assert.match(img[1], new RegExp(`data-media="b${i}" width="${w}" height="${h}"`))
+    assert.deepEqual(pathsIn(img[1], 'data-media'), [['d']])
+    assert.match(img[1], new RegExp(`data-mime="image/${kind.split('-')[0]}"`))
+    assert.match(img[1], new RegExp(`width="${w}" height="${h}"`))
     assert.doesNotMatch(img[1], /\bsrc=/)
   }
   const svg = '<svg xmlns="http://www.w3.org/2000/svg"><text>' + plain() + '</text></svg>'
@@ -300,10 +334,31 @@ test('media: width and height come from the image header; no src; svg is code; o
   assert.ok(has(wrap(s), 'kd-code'))
   assert.equal(textOf(s.html), svg)
   const pdf = renderKind(MEDIA, { d: Buffer.from('%PDF-1.7').toString('base64'), m: 'application/pdf' })
-  assert.match(pdf.html, /class="kd-file"[^]*<button type="button" data-cellsave>/)
-  const url = renderKind({ as: 'media', f: { data: ['d'] } }, { url: 'https://e.x/a.png' })
-  assert.doesNotMatch(url.html, /<img|src=/)
-  assert.ok(textOf(url.html).includes('https://e.x/a.png'))
+  assert.match(pdf.html, /class="kd-file"[^]*<button type="button" data-cellsave/)
+  assert.deepEqual(pathsIn(pdf.html, 'data-media'), [['d']])
+  assert.match(pdf.html, /data-mime="application\/pdf"/)
+  const url = renderKind({ as: 'media', f: { body: [], url: ['url'] } }, { url: 'https://e.x/a.png' })
+  assert.doesNotMatch(url.html, /<img|src=|href=/)
+  assert.ok(textOf(url.html).includes('https://e.x/a.png') && textOf(url.html).includes(IMAGE_URL))
+})
+
+test('media: images in parts each carry the absolute path of their own data', () => {
+  const pic = (w) => ({ type: 'image', source: { media_type: 'image/png', data: header('png', w, 3).toString('base64') } })
+  const body = { block: { content: [pic(1), pic(2)] } }, kid = { as: 'media', f: { body: [], data: ['source', 'data'], mime: ['source', 'media_type'] } }
+  const out = renderKind({ as: 'parts', f: { body: ['block', 'content'] }, kids: { 0: kid, 1: kid } }, body)
+  const paths = pathsIn(out.html, 'data-media')
+  assert.equal(new Set(paths.map(String)).size, 2)
+  assert.deepEqual(paths.map((p) => p.reduce((x, k) => x[k], body)), body.block.content.map((x) => x.source.data))
+})
+
+test('total: a string is its length, an object the sum of its strings, drawn or not', () => {
+  const strings = (v) => typeof v === 'string' ? v.length : v && typeof v === 'object' ? Object.values(v).reduce((n, x) => n + strings(x), 0) : 0
+  for (let i = 0; i < 100; i++) {
+    const v = val(4), budget = 1 + Math.floor(rnd() * 50)
+    assert.equal(renderKind({ as: typeof v === 'string' ? 'text' : 'json', f: { body: ['b'] } }, { b: v, other: 'not this cell' }, { budget }).total, strings(v))
+  }
+  const wide = renderKind({ as: 'json' }, Array.from({ length: 2e6 }, () => 'ab'))
+  assert.ok(wide.total > 0 && wide.total < 4e6, 'a bounded walk')
 })
 
 test('markdown, diff, media: input they cannot draw falls back to text with the fail line', () => {
@@ -313,6 +368,7 @@ test('markdown, diff, media: input they cannot draw falls back to text with the 
       [MEDIA, { d: '!' + plain(), m: 'image/png' }], [MEDIA, { d: header('png', 3, 4).subarray(0, 14).toString('base64'), m: 'image/png' }]]) {
       const h = wrap(renderKind(r, v))
       assert.ok(has(h, 'kd-fail') && has(h, 'kd-text'), JSON.stringify(r))
+      assert.ok(textOf(h).startsWith(FAIL_LINE), 'one line, no kind word')
     }
   }
 })
