@@ -71,6 +71,13 @@ function nextDecode() {
   }
 }
 
+// The output buffer of one async decode: the whole frame plus a byte, so it comes back in one trip through the pool. At the
+// default 16 KiB a 4 MiB frame makes ~256 trips, each a turn of JS on the thread the decode was moved off, and is then
+// concatenated: twice the wall time and 6–10× the event loop time on a 36 MB record. 64 is the least zlib takes, and it
+// throws below that; the budget keeps a frame table that claims too much from reaching an allocation only the pool's
+// callback would see fail, where nothing can catch it. A frame over the budget just takes more trips.
+const chunkFor = (dlen) => Math.min(Math.max(64, dlen + 1), FRAME_CACHE_BYTES);
+
 let fileSeq = 0;
 
 export function openSealed(file, { fs = nodeFs, frameCache = createFrameCache(), lineCache = createLineCache() } = {}) {
@@ -213,7 +220,7 @@ function makeReader({ fs, fd, file, st, tables, indexOffset, version, frameCache
       try { c = readFrame(f); } catch { /* lineAt reports it */ }
       if (!held) close();
       if (!c) return end(null);
-      zlib.brotliDecompress(c, (err, out) => {
+      zlib.brotliDecompress(c, { chunkSize: chunkFor(frames[f][2]) }, (err, out) => {
         if (err || out.length !== frames[f][2]) return end(null);
         frameCache.set(ck, out);
         end(out);
