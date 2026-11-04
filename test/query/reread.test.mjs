@@ -4,19 +4,24 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
+import http from 'node:http'
 import path from 'node:path'
+import { once } from 'node:events'
 import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { gunzipSync, gzipSync } from 'node:zlib'
+import { createServer } from '../../src/server.mjs'
 import { createQueryService } from '../../src/query/service.mjs'
 import { projectionFile, projectionStale, sessionDir, PROJ_V } from '../../src/query/projection.mjs'
 import { foldLogFile, foldStale, FOLD_V } from '../../src/query/fold-log.mjs'
 import { lineFile } from '../../src/query/line-file.mjs'
 import { headFile, readHead, rereadFile, PACK_MEMBERS } from '../../src/query/ctx-files.mjs'
+import { CACHE_STATES } from '../../src/view/metrics.mjs'
 import { workerFork, workerForkIn } from '../helpers/worker-fork.mjs'
 import { within, whileMoving, reporting } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
+import { TOKEN, withToken } from '../server/face.mjs'
 
 const SCAN_DEPS = fileURLToPath(new URL('./worker-scan-deps.mjs', import.meta.url))
 const CALLS = 1300 // past two packs, far past a slice
@@ -101,6 +106,58 @@ for (const [axis, stale] of Object.entries(AXES)) {
     } finally { svc.stop() }
   })
 }
+
+// the packs and tails of a session, each as its parsed lines: a pack is gzipped, a tail plain
+const linesOf = (home, id) => answerNames(home, id).filter((n) => !n.startsWith('head')).map((n) => {
+  const f = path.join(sessionDir(home, id), n), b = fs.readFileSync(f)
+  return { n, f, lines: (n.endsWith('.gz') ? gunzipSync(b) : b).toString('utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) }
+})
+const rowsAndSteps = (home, id) => {
+  const all = linesOf(home, id).flatMap((x) => x.lines), rows = all.filter((l) => l.c).map((l) => l.c), steps = all.filter((l) => l.s).map((l) => l.s)
+  assert.ok(rows.length && steps.length, 'the files hold rows and steps')
+  return { rows, steps }
+}
+/** The packs and tails as code before `cache` and `detail.tax` wrote them; the head as it was. */
+function beforeTheFacts(home, id) {
+  for (const { n, f, lines } of linesOf(home, id)) {
+    for (const l of lines) { if (l.c) delete l.c.cache; if (l.s) delete l.s.detail.tax }
+    const text = Buffer.from(lines.map((l) => `${JSON.stringify(l)}\n`).join(''), 'utf8')
+    fs.writeFileSync(f, n.endsWith('.gz') ? gzipSync(text) : text)
+  }
+}
+const fileGet = (port, id, name) => new Promise((resolve, reject) => {
+  const route = name.replace(/\.(ndjson|json)(\.gz)?$/, ''), headers = withToken(name.endsWith('.gz') ? { 'accept-encoding': 'gzip' } : {})
+  const r = http.request({ host: '127.0.0.1', port, path: `/api/d/${route}?id=${encodeURIComponent(id)}`, headers, agent: false }, (res) => {
+    const chunks = []; res.on('data', (c) => chunks.push(c)); res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(chunks) }))
+  })
+  r.on('error', reject); r.end()
+})
+
+test('an answer file with no `cache` and no `detail.tax` is served as it is, and the next version change\'s re-read brings both with `v` where it was (#49)', async (t) => {
+  const home = homeOf(), { id } = sessionIn(home)
+  await foldAll(home, [id])
+  const { v } = readHead(home, id)
+  beforeTheFacts(home, id)
+  const old = rowsAndSteps(home, id)
+  assert.ok(old.rows.every((c) => !('cache' in c)) && old.steps.every((s) => !('tax' in s.detail)), 'neither key is in the files')
+  AXES['PROJ_V changed'](home, id)
+  const { r, svc } = serviceOf(home), { server } = createServer({ home, token: TOKEN, query: svc })
+  server.listen(0, '127.0.0.1'); await once(server, 'listening')
+  t.after(() => { server.close(); svc.stop() })
+  for (const name of answerNames(home, id)) {
+    const got = await fileGet(server.address().port, id, name)
+    assert.equal(got.status, 200, `${name} is served`)
+    assert.ok(got.body.equals(fs.readFileSync(path.join(sessionDir(home, id), name))), `${name}: the bytes on disk`)
+    const text = (name.endsWith('.gz') ? gunzipSync(got.body) : got.body).toString('utf8')
+    for (const l of text.split('\n').filter(Boolean)) JSON.parse(l)
+  }
+  await ask(svc, 'session', { id })
+  await whileMoving(() => !rereads(home, id) && isDone(home, id), () => r.n, 'the re-read ended')
+  const now = rowsAndSteps(home, id)
+  for (const c of now.rows) assert.ok(CACHE_STATES.includes(c.cache?.state), 'every row has its cache verdict')
+  for (const s of now.steps) assert.ok('tax' in s.detail, 'every step has its tax key')
+  assert.equal(readHead(home, id).v, v, 'the format version is where it was')
+})
 
 test('a new member past the last multiple of a pack: the head says done at the old mark, total, seen at once, the rest of it as it was (#43)', async () => {
   const home = homeOf(), s = sessionIn(home), { id } = s
