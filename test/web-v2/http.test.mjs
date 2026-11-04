@@ -272,6 +272,31 @@ test('K-30: after a 403 no request is sent, every read is {ok:false, status:403}
   assert.equal(fired, 1)
 })
 
+// K-30 is keyed on the status: the latch closes when a 403's head arrives, not when its body has (a read the page asks while that body
+// is still on its way sends nothing), and a 403 whose body is cut off latches too — for each of the three ways out (get, getText, post)
+test('K-30: a 403 latches at its head — a read asked while its body is held, or after its body is cut off, sends nothing', async () => {
+  const held = () => { let c; return { res: new Response(new ReadableStream({ start(x) { c = x } }), { status: 403 }), end: () => c.close() } }
+  const cut = () => new Response(new ReadableStream({ start(c) { c.error(new Error('socket closed')) } }), { status: 403 })
+  for (const send of [(h) => h.get('/api/status'), (h) => h.getText('/api/d/open.main', { id: 'S' }), (h) => h.post('/control/on', {})]) {
+    for (const body of ['held', 'cut']) {
+      const http = await freshHttp()
+      let fired = 0
+      http.onForbidden(() => fired++)
+      const h = held()
+      await withFetch(() => (body === 'held' ? h.res : cut()), async (calls) => {
+        const first = send(http)
+        await new Promise((r) => setImmediate(r)) // the head is in; the held body is not
+        const later = await http.get('/api/pricing')
+        assert.equal(calls.length, 1, `${body}: a read after the 403's head left the page`)
+        assert.deepEqual([later.ok, later.status], [false, 403], body)
+        assert.equal(fired, 1, body)
+        h.end()
+        assert.equal((await first).status, 403, body)
+      })
+    }
+  }
+})
+
 // the real face over a real worker on the empty test machine of this host's own platform (real-face.mjs)
 test('real face: status and doctor answer on the empty machine, health not-installed, and sessions lists the demo session; its worker\'s HOME / USERPROFILE are under the run\'s temp directory', async () => {
   const b = await serveBoard(boardHome())
