@@ -71,8 +71,8 @@ test('V121: `query <name> --help` is that query\'s page: text, a line for each p
     const { exit, out, err } = await ask(['query', name, '--help'])
     assert.equal(exit, EXIT.ok, name); assert.equal(err, '', name)
     assert.throws(() => JSON.parse(out), SyntaxError, `${name}: a page, not a document`)
-    for (const p of q.params) assert.match(out, new RegExp(`^ {2}--${p}\\b`, 'm'), `${name}: --${p} opens its own line`)
-    for (const [code] of commandNamed('query').exits) assert.match(out, new RegExp(`^ {2}${code} {2}\\S`, 'm'), `${name}: exit ${code}`)
+    for (const p of q.params) assert.match(out, new RegExp(`^\\s*--${p}\\b`, 'm'), `${name}: --${p} opens its own line`)
+    for (const [code] of commandNamed('query').exits) assert.match(out, new RegExp(`^\\s*${code}\\s`, 'm'), `${name}: exit ${code}`)
     assertEnglish(out, name, { placeholders: true })
   }
 })

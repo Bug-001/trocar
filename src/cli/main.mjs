@@ -15,7 +15,7 @@ import { commandNamed, printHelp } from './commands.mjs'
 import { parseArgs } from './args.mjs'
 import { wrap, WIDTH } from './text.mjs'
 import { printJson, errorDoc } from './json.mjs'
-import { EXIT } from './schema.mjs'
+import { EXIT, SCHEMA_VERSION } from './schema.mjs'
 import { codeId, selfCommand } from '../version.mjs'
 import { recordUserPath } from '../off/user-path.mjs'
 import { COMMAND_INDENT } from '../off/receipt.mjs'
@@ -32,9 +32,13 @@ export async function runCli(argv, { io = makeIo({ stdin: process.stdin, stdout:
     else { io.err(message); if (usage) for (const line of wrap(usage, WIDTH, '  ')) io.err(line) } // §1.1⑥: the usage line folds like help's, it does not pass 80 columns
     return exit
   }
-  const [first, ...rest] = argv
-  if (first === undefined || helpWord(first)) return printHelp({ io, json }) // `trocar` with nothing = `trocar help` (§2)
-  if (first === '--version') { io.out(`trocar ${codeId()}`); return EXIT.ok } // §2, D67⑤: the version, with HEAD's first 7 in a git checkout
+  const [first, ...rest] = argv[0] === '--json' ? [...argv.slice(1), '--json'] : argv // §2: `trocar --json status` is `trocar status --json`
+  if (first === undefined || first === '--json' || helpWord(first)) return printHelp({ io, json }) // `trocar` with nothing = `trocar help` (§2)
+  if (first === '--version') { // §2, D67⑤: the version, with HEAD's first 7 in a git checkout
+    if (json) printJson(io, { schema: SCHEMA_VERSION, command: 'version', ok: true, version: codeId() })
+    else io.out(`trocar ${codeId()}`)
+    return EXIT.ok
+  }
   const cmd = commandNamed(first)
   if (!cmd) return refuse(first, 'usage', `trocar: unknown command '${first}'. Run: trocar help`)
   if (rest.some(helpWord)) {

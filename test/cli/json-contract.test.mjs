@@ -38,6 +38,16 @@ test('V120: into a pipe every --json command prints one line holding one documen
   }
 })
 
+test('V120: --json may come first, and the two words with no command answer with a document too', async () => {
+  const help = await fresh(['--json'])
+  assert.equal(help.exit, EXIT.ok); assert.equal(oneLine(help.out, 'trocar --json').command, 'help')
+  assert.equal((await fresh(['--json', '--help'])).out, help.out)
+  assert.equal(oneLine((await fresh(['--json', 'status'])).out, 'trocar --json status').command, 'status')
+  const version = oneLine((await fresh(['--version', '--json'])).out, '--version')
+  assert.equal(version.command, 'version'); assert.equal(version.ok, true)
+  assert.equal(`trocar ${version.version}\n`, (await fresh(['--version'])).out)
+})
+
 test('V120: a positional no command knows is refused with one `usage` document on one line, and the exit of the text mode', async () => {
   for (const name of ROWS) {
     const { exit, out, err } = await fresh([name, 'no-such-name', '--json'])

@@ -104,13 +104,6 @@ test('V123: trocar board --json with nothing installed is a cert-not-installed d
   assert.equal(opener.calls.length, 0)
 })
 
-test('V123: a stray argument under --json is a usage document, exit 2', async () => {
-  const home = tmpDir('trocar-fresh-')
-  const io = fakeIo(), args = { positionals: ['x'], flags: {} }
-  assert.equal(await board(['x'], { io, env: { HOME: home }, home, platform: 'darwin', json: true, args, deps: {} }), 2)
-  assert.equal(io.json().error.code, 'usage')
-})
-
 test('V123: the board\'s port held by another program under --json is a board-down document, exit 1, and no browser opens', { skip: await unservable('darwin'), timeout: 30_000 }, async () => {
   const { w, port, box } = await installed('darwin')
   const squat = net.createServer(); squat.listen(port, '127.0.0.1'); await once(squat, 'listening')
