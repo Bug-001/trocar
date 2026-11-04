@@ -16,7 +16,7 @@ import { codeId } from '../version.mjs'
 import { installComplete, itemsOfPhase, undoByHand, OFF_VERSION } from '../off/manifest.mjs'
 import { writeStandalone } from '../off/standalone.mjs'
 import { standaloneFiles } from '../off/paths.mjs'
-import { missingDirs } from '../off/fsutil.mjs'
+import { missingDirs, pathKey } from '../off/fsutil.mjs'
 import { resolveLoc, readSrc, holds, isPresent } from './core/proxymode/sources.mjs'
 import { noProxyNames } from './core/proxymode/entries.mjs'
 import { placeWrapper, managedTree } from './core/proxymode/hooks/wrapper.mjs'
@@ -269,7 +269,7 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
     return (r.set ? r.all : []).flatMap(({ value, where }) => {
       const file = typeof value === 'string' ? value.trim() : ''
       if (!path.isAbsolute(file)) { notes.push(`${desc.name}: ${where} (${file || typeof value}) is not an absolute path; its certificates are not in trocar's bundle`); return [] }
-      if (file.startsWith(dir + path.sep)) return []
+      if (inTrocar(file, home, ctx.os)) return []
       let buf
       try { buf = fs.readFileSync(file) } catch (e) { notes.push(`${desc.name}: ${file} (${where}) is unreadable (${e.code || errText(e)}); its certificates are not in trocar's bundle`); return [] }
       const got = certsOf(file, buf)
@@ -300,14 +300,15 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
   }
 }
 
-// a path inside trocar's own tree (~/.trocar): a setting that names one was set by install (trocar's bundle or root), never the user's own file
-const inTrocar = (file, home) => path.resolve(home, file).startsWith(path.join(home, '.trocar') + path.sep)
+// a path inside trocar's own tree (~/.trocar): a setting that names one was set by install (trocar's bundle or root), never the user's own file.
+// Compared as the OS compares paths (pathKey: no case on Windows and macOS), so another spelling of trocar's own file is still trocar's (4.11 rule U)
+const inTrocar = (file, home, os) => { const k = (p) => pathKey(p, { platform: os, realpath: null }); return k(path.resolve(home, file)).startsWith(`${k(path.join(home, '.trocar'))}/`) }
 
 /** Is a `config-key` carrier's setting the user's already (P4, CM10)? Set to a file outside trocar's tree — or, for an `add` key, set in the install
  *  env — install leaves the key alone and rule U appends to that file instead. Read by install and by its plan alike. */
 function keyIsUsers(c, ctx, home) {
   const at = readSrc({ file: c.file, format: c.format, keys: c.keys }, ctx)
-  if (at.set && !(typeof at.value === 'string' && inTrocar(at.value, home))) return true
+  if (at.set && !(typeof at.value === 'string' && inTrocar(at.value, home, ctx.os))) return true
   return c.semantics === 'add' && !!readSrc({ env: c.keys.at(-1) }, ctx).set
 }
 
@@ -320,7 +321,7 @@ export function ruleUFiles(desc, ctx, { home, owns, fs = nodeFs }) {
     const r = readSrc(src, ctx)
     if (r.error || !r.set || typeof r.value !== 'string') continue
     const file = path.isAbsolute(r.value) ? r.value : path.resolve(home, r.value)
-    if (!inTrocar(file, home) && !out.some((x) => x.file === file)) out.push({ file, why: usersFileWhy(file, { fs, owns }) })
+    if (!inTrocar(file, home, ctx.os) && !out.some((x) => x.file === file)) out.push({ file, why: usersFileWhy(file, { fs, owns }) })
   }
   return out
 }

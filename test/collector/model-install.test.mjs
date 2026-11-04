@@ -7,7 +7,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import tls from 'node:tls'
 import { modelWorld, sharedCertFileWorld } from '../helpers/model-world.mjs'
-import { planInstall } from '../../src/collector/model-install.mjs'
+import { planInstall, ruleUFiles } from '../../src/collector/model-install.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { readManifest } from '../../src/off/manifest.mjs'
 import { codeId } from '../../src/version.mjs'
@@ -301,3 +301,14 @@ test('CM37: a loaderless plugin cert → one owned plugin file in its folder, no
   assert.equal(exit, 0, JSON.stringify({ p: receipt.problems, l: receipt.left }))
   assert.deepEqual(snapshot(ext), before)
 })
+
+// 4.11 rule U: a setting that names trocar's own tree is never the user's file; on the OSes whose file names ignore case, a setting spelled in
+// another case names the same file (a Windows test machine: trocar's own bundle, spelled in another case, took a rule U block)
+for (const os of ['win32', 'darwin']) {
+  test(`rule U (${os}): a setting naming trocar's own tree in another letter case is trocar's, not the user's file`, async () => {
+    const own = (home) => path.join(home, '.TROCAR', 'Collector', 'ca', 'trocar-ca.pem')
+    const w = await modelWorld({ os, env: (home) => ({ NODE_EXTRA_CA_CERTS: own(home), SSL_CERT_FILE: own(home) }) })
+    const named = w.harnesses.filter((d) => d.proxyMode).flatMap((d) => ruleUFiles(d, w.ctx, { home: w.home, owns: w.owns }).map((x) => `${d.name}: ${x.file}`))
+    assert.deepEqual(named, [])
+  })
+}
