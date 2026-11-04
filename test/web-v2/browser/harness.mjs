@@ -8,6 +8,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { boardHome, serveBoard } from '../real-face.mjs'
 import { tmpDir, removeTmp } from '../../helpers/tmp.mjs'
+import rm from '../../helpers/rm-tree.cjs'
 import { CONTROL_TOKEN_HEADER } from '../../../src/off/token-header.mjs'
 import { INTERVAL, TIMER_ROUND } from '../../../src/web/v2/core/poll.mjs'
 
@@ -32,16 +33,23 @@ function closeQuietly(t, routed) {
 const LOCAL_STATE = { password_manager: { os_password_blank: false, os_password_last_changed: '9223372036854775807' } }
 
 /** The system Chrome (`chromium` is playwright-core's), with a temp directory of its own as TMP / TEMP / TMPDIR and as the parent of its
- *  profile (seeded with LOCAL_STATE): what it leaves there (on Windows a chrome_url_fetcher_* folder) goes when the browser closes, never
- *  into the run's temp directory, which leak-guard checks. Closing the browser, any context or any page of it first drops the routes on
- *  what closes (closeQuietly). */
+ *  profile (seeded with LOCAL_STATE): what it leaves there (on Windows a chrome_url_fetcher_* folder) goes once close() has seen Chrome
+ *  exit (at 'disconnected' Windows Chrome still holds profile files), never into the run's temp directory, which leak-guard checks; what
+ *  is still held then, or a browser never closed, goes when the process exits (tmpDir). Closing the browser, any context or any page of
+ *  it first drops the routes on what closes (closeQuietly). */
 export async function launchChrome(chromium) {
   const tmp = tmpDir('trocar-chrome-')
   const profile = path.join(tmp, 'profile')
   fs.mkdirSync(profile)
   fs.writeFileSync(path.join(profile, 'Local State'), JSON.stringify(LOCAL_STATE))
   const browser = (await chromium.launchPersistentContext(profile, { ...CHANNEL, env: { ...process.env, TMP: tmp, TEMP: tmp, TMPDIR: tmp } })).browser()
-  browser.once('disconnected', () => removeTmp(tmp))
+  const close = browser.close.bind(browser)
+  browser.close = async (...a) => {
+    try { return await close(...a) } finally {
+      rm.removeTree(tmp)
+      if (!fs.existsSync(tmp)) removeTmp(tmp)
+    }
+  }
   const newContext = browser.newContext.bind(browser)
   browser.newContext = async (...a) => {
     const c = await newContext(...a)
