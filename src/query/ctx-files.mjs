@@ -60,10 +60,11 @@ export function headDoc(s) {
     let ch = chapters.at(-1);
     const before = i ? cols.fl[lane.slots[i - 1]] : 0;
     if (!ch || opensPart(before, f)) {
-      ch = { k: chapters.length, s0: i, s1: i, rid0: lane.rids[i], ts0: cols.ts[k] ?? null, ts1: null, inferred: !!(ch && f & FLAG.inferred && !isMarked(before)), peakCtx: 0 };
+      ch = { k: chapters.length, s0: i, s1: i, rid0: lane.rids[i], ts0: cols.ts[k] ?? null, ts1: null, inferred: !!(ch && f & FLAG.inferred && !isMarked(before)), peakCtx: 0, prompts: 0 };
       chapters.push(ch);
     }
     ch.s1 = i + 1; ch.ts1 = cols.ts[k] ?? null;
+    if (f & FLAG.user) ch.prompts++;
     if (cols.cx[k] > ch.peakCtx) ch.peakCtx = cols.cx[k];
   }
   // the axis lane, then the others by their last step, the newest first

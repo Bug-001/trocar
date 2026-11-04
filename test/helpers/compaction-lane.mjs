@@ -1,6 +1,7 @@
 // test/helpers/compaction-lane.mjs — a generated main lane of compactions (3.4 §关键区分「一次压缩只算一次」), on a wire of its own, in the
 // records the collector writes. A lane is a list of steps; each names what the call does to the context:
 //   grow   the history gets longer            mark   the harness's compaction request: the history as it was, and the wire's header
+//   ask    the person asks something new
 //   drop   a sharp drop: a summary and the last half   small  a small drop with Claude Code's preamble first (Anthropic only)
 //   junk   a body that does not parse (no observed context)
 //   failmark / failgrow / faildrop   the same call answered with a failure; a failed drop's history is not kept: the retry sends what it had
@@ -30,9 +31,10 @@ const WIRES = {
   },
 }
 
-/** laneOf(wire, steps) → one record a step; the history opens on a tool use of `READ`, so a ledger has something to evict. */
+/** laneOf(wire, steps, {agent}) → one record a step; the history opens on a tool use of `READ`, so a ledger has something to evict. `agent`:
+ *  the lane is that sub-agent's (Anthropic only), with its own record ids. */
 export const READ = '/work/a.mjs'
-export function laneOf(wire, steps) {
+export function laneOf(wire, steps, { agent = null } = {}) {
   const w = WIRES[wire]
   let history = [], turns = 0
   const grow = () => {
@@ -43,15 +45,16 @@ export function laneOf(wire, steps) {
   history = [text('user', 'Fix the retry queue')]
   for (let k = 0; k < 40; k++) grow() // enough history for every drop of a lane to be sharp
   return steps.map((step, i) => {
-    let headers = {}
+    let headers = agent ? { 'x-claude-code-agent-id': agent } : {}
     const failed = step.startsWith('fail'), op = failed ? step.slice(4) : step, before = history
     if (op === 'grow') grow()
-    if (op === 'mark') headers = { [w.compact]: '1' }
+    if (op === 'ask') history = [...history, text('assistant', `answer ${i}`), text('user', `Question ${i}`)]
+    if (op === 'mark') headers = { ...headers, [w.compact]: '1' }
     if (op === 'drop') history = [text('user', `Summary ${i} of the conversation so far`), ...history.slice(-2 * Math.floor(history.length / 4))]
     if (op === 'small') history = [text('user', `This session is being continued from a previous conversation. Summary ${i}.`), ...history.slice(2, -1)]
     const body = op === 'junk' ? '{"model":"claude-opus-4-8","messages":[{"role"' : JSON.stringify(w.body(history))
     if (step === 'faildrop') history = before
-    return { ts: stamp(i), ts_request: stamp(i), id: `r${i}`, method: 'POST', is_llm_call: true, capture: 'transparent', traffic_class: 'llm', ...w.env(i, body, headers),
+    return { ts: stamp(i), ts_request: stamp(i), id: `${agent ?? 'r'}${i}`, method: 'POST', is_llm_call: true, capture: 'transparent', traffic_class: 'llm', ...w.env(i, body, headers),
       ...(failed ? { resp: { status: 500, kind: 'json', body: { error: { type: 'api_error', message: 'overloaded' } } } } : null) }
   })
 }
@@ -95,8 +98,8 @@ export function landedOf(steps, records) {
 /** lanes(wire) → the generated step lists of a wire, every op after every op, with and without junk between. */
 export function lanes(wire) {
   const drops = wire === 'anthropic' ? ['drop', 'small'] : ['drop']
-  const ops = ['grow', 'mark', ...drops], out = []
-  for (const a of ops) for (const b of ops) for (const gap of [[], ['junk']]) out.push(['grow', 'grow', a, ...gap, b, 'grow', 'mark', ...gap, ...drops.slice(0, 1), 'grow'])
+  const ops = ['grow', 'ask', 'mark', ...drops], out = []
+  for (const a of ops) for (const b of ops) for (const gap of [[], ['junk']]) out.push(['grow', 'grow', a, ...gap, b, 'grow', 'mark', ...gap, ...drops.slice(0, 1), 'ask'])
   return out
 }
 
