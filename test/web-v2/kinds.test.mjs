@@ -3,7 +3,7 @@
 // The wrapper below is the caller's (cell.mjs): renderKind gives the inner html and the wrapper's classes in `cls`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { renderKind, setMarkdown, valueOf, jsonNodeHtml } from '../../web/legacy/replay/kinds.mjs'
+import { renderKind, setMarkdown, jsonNodeHtml } from '../../web/legacy/replay/kinds.mjs'
 import { FAIL_LINE, IMAGE_URL, NO_ARGS, OPAQUE_LINE } from '../../web/legacy/labels/cells.mjs'
 
 const wrap = ({ html, cls }) => `<div class="cellread ${cls}">${html}</div>`
@@ -268,15 +268,6 @@ test('tone: error and quiet put their class on the wrapper of any kind', () => {
   for (const as of ['text', 'code', 'json', 'kv', 'nope']) {
     assert.ok(has(wrap(renderKind({ as, tone: 'error' }, { a: 1 })), 'tone-error'))
     assert.ok(has(wrap(renderKind({ as, tone: 'quiet' }, 'x')), 'tone-quiet'))
-  }
-})
-
-test('valueOf: JSON when it parses, else the text itself', () => {
-  for (let i = 0; i < 100; i++) {
-    const v = val(3), t = JSON.stringify(v)
-    assert.deepEqual(valueOf(t), JSON.parse(t))
-    const s = '{' + str(10)
-    assert.equal(valueOf(s), s)
   }
 })
 

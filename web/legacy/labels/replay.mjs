@@ -186,7 +186,6 @@ export const FF_TIP = Object.freeze({
   reserialized: 'These bytes were reserialized on their way into the capture; they are not a verbatim record of the wire bytes',
   verbatim: 'Verbatim: what is stored for this block is the wire bytes, unchanged',
 })
-export const INLINE_NOTE = 'This text came inline with the block; it is not cut verbatim from the raw capture'
 // the body of a tool definition an older capture kept as metadata only (2.3 逐值 metadata)
 export const SCHEMA_NOT_KEPT = 'schema text not retained (length only)'
 export const NO_BODY = 'This block has no body and no source location'
