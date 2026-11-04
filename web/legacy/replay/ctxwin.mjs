@@ -156,9 +156,9 @@ function replyUnit({ failed, empty, stop, rows }) {
   if (failed) return replyGroup(`<div class="cwrline">${esc(W.FAILED_NO_REPLY)}${failed.reason ? techDetailsHtml([['reason', failed.reason]], { id: 'cwfail' }) : ''}</div>`)
   const st = stop ? `<span class="cbstop">${W.stopReasonRow(`<span class="mono">${esc(stop)}</span>`)}</span>` : ''
   if (empty) return replyGroup(`<div class="cwrline">${esc(empty === 'unread' ? W.UNREAD_REPLY : W.EMPTY_REPLY)}${st}</div>`)
-  const kids = rows.map(({ key, b, tag, mark, open, last }) => ({ key, html: blockRowHtml({ role: 'assistant', tag, label: b.preview || '' }, {
+  const kids = rows.map(({ key, b, tag, mark, sr, open, last }) => ({ key, html: blockRowHtml({ role: 'assistant', tag, label: b.preview || '' }, {
     cls: `r-assistant k-${esc(b.kind)}`, attrs: ` data-rp="${esc(key)}" data-ff="${mark}"`,
-    badges: (mark === 'verbatim' ? `<span class="sr-only">,${esc(W.FF_WORD.verbatim)}</span>` : ffBadgeHtml(mark)) + (last ? st : ''),
+    badges: (mark === 'verbatim' ? `<span class="sr-only">,${esc(W.FF_WORD[sr])}</span>` : ffBadgeHtml(mark)) + (last ? st : ''),
     chars: typeof b.chars === 'number' ? b.chars : null, open, body: open ? bodyFor(b) : '' }) }))
   return { ...replyGroup(`<div class="cwrrows" data-kids>${KIDS}</div>`), kids }
 }

@@ -286,7 +286,7 @@ test('the real face: an opened reply row with no source location shows the text 
       const st = stepOf(desk, s.anchor.calls[p].rid)
       if (!st.held || s.anchor.calls[p].error) continue
       s.playhead = p
-      const h = seg(ctxWindowHtml(s)), bodies = [...h.matchAll(/<div class="cellread [^"]*">([\s\S]*?)<\/div>/g)].map((m) => m[1]).join('\n') // no ref: no bytes, Readable only
+      const h = seg(ctxWindowHtml(s)), bodies = [...h.matchAll(/<div class="cellread [^"]*">([\s\S]*?)<\/div>/g)].map((m) => m[1]).join('\n')
       for (const d of st.reply.filter((x) => x.ref == null)) {
         seen++
         assert.ok(d.inline && typeof d.inline === 'object', `step ${p + 1} ${d.bid}: the definition carries its body (3.5 §会话读)`)

@@ -1,20 +1,20 @@
 // replay/cell.mjs — one block body, drawn the same everywhere (spec 2.3 §两种模式, D70):
 // the request's blocks, the reply's parts, the raw panel's non-block keys and the drawer. A cell is
-// {bid, ref?, inline?, r, ff, chars, preview, view?, reads?, block}. Two modes: Readable (the default: the `view` the `block` answer
-// or the definition brings, drawn by kinds.mjs) and Raw (the bytes, laid out by jsonlay). A cell has both, only Raw (no view), or only
-// Readable (a block the capture holds no bytes for). The bytes are fetched, cached and copied by `ref` only (a content key is not an
-// exact-byte id); `bid` keys only view state. DOM-free above wireCells, so the strings can be tested in Node.
+// {bid, ref?, inline?, r, ff, chars, preview, view?, reads?, block, noRange?}. Two modes: Readable (the default: the `view` the `block`
+// answer or the definition brings, drawn by kinds.mjs) and Raw (the bytes, laid out by jsonlay; a block with no byte range of its own
+// has its stored parse there). A cell has both, or only Raw (no view). The bytes are fetched, cached and copied by `ref` only (a
+// content key is not an exact-byte id); `bid` keys only view state. DOM-free above wireCells, so the strings can be tested in Node.
 import { esc, kf } from '../core/fmt.mjs'
 import * as W from '../labels/replay.mjs'
 import { HALF } from '../core/icons.mjs'
 import * as C from '../labels/cells.mjs'
 import { layout } from './jsonlay.mjs'
-import { renderKind, jsonNodeHtml, get } from './kinds.mjs'
+import { renderKind, jsonNodeHtml, get, textOf } from './kinds.mjs'
 import { cellKey } from './keymap.mjs'
 import { isTyping } from '../core/keys.mjs'
 
 export const DISPLAY_CLIP = 20000
-export const CELL_CAP = 2000000 // characters a cell shows at most; Copy bytes still copies all
+export const CELL_CAP = 2000000 // characters a cell shows at most; the copy button still copies all
 const BODY_CHARS = 16000000, HTML_CHARS = 8000000, OVERRIDES = 500, CELLS = 2000
 
 // escape for <pre>. A leading newline right after <pre> is dropped by the parser and a raw CR is read as LF: guard both
@@ -96,7 +96,7 @@ export const hasInline = (b) => { const x = ownBody(b); return x.text !== undefi
 export const isAddressed = (b) => !!b.text_ref && !hasInline(b)
 
 // the text of an inline message block (the block vocabulary: text · thinking · tool_use · tool_result · image · document)
-export function rawContentText(bl) {
+function rawContentText(bl) {
   if (bl == null) return ''
   if (typeof bl === 'string') return bl
   if (bl.type === 'text') return bl.text || ''
@@ -108,8 +108,8 @@ export function rawContentText(bl) {
   if (bl.type === 'redacted_thinking') return '[redacted_thinking]'
   return JSON.stringify(bl, null, 2)
 }
-// the text of a block that carries its body inline
-export function inlineText(b) {
+// the plain text Readable shows of a block whose definition has no render spec of today's shape
+function inlineText(b) {
   const x = ownBody(b)
   // a tools definition: the metadata-only body only where its fidelity says an older capture kept no schema (ff.faithfulness, via
   // boardDef; `verbatim: false` on a block built in the browser); any other draws what it carries, a tool with neither text too
@@ -127,18 +127,25 @@ export function inlineText(b) {
 const fnv = (s) => { let h = 0x811c9dc5; for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 0x01000193); return (h >>> 0).toString(36) }
 const synth = (text) => `i:${text.length}:${fnv(text)}` // an identity derived from the inline bytes themselves
 const PLAIN = Object.freeze({ as: 'text', f: Object.freeze({ body: Object.freeze([]) }) })
-// a flat definition ({sec, …}), a non-block key ({key, ref, chars}) or a body the caller holds ({inline, view?}) as a cell. A string
-// `x.inline` is that body: the text the cell shows and copies, never an envelope made up around it (a parsed reply part is its own
-// text). A block with no ref has no bytes: its `inline` is only its identity, and what it shows is its view, the definition's own
-// render spec over its own body, or its text as plain text when the definition has no such spec.
+// what Raw shows of a body with no ref: the stored parse as it is, never an envelope made up around it
+function parsedText(x) {
+  const o = ownBody(x)
+  return o.block !== undefined ? JSON.stringify(o.block) : o.text !== undefined ? String(o.text) : JSON.stringify({ desc: o.desc, schema: o.schema })
+}
+// a flat definition ({sec, …}), a non-block key ({key, ref, chars}) or a body the caller holds ({inline, view?}) as a cell; a non-block
+// key with neither is null, its row says why. A string `x.inline` is that body: the text the cell shows and copies (a parsed reply
+// part is its own text). A block with no ref has no byte range of its own: `inline` is its stored parse, for Raw, and Readable reads
+// the definition's render spec over that parse, or plain text when the definition has no such spec.
+/** @returns {any} */
 export function cellOf(x) {
   const held = typeof x.inline === 'string' ? x.inline : undefined, block = x.sec != null
   const tail = { r: x.r || { as: 'text' }, ff: x.ff ?? null, preview: x.preview ?? '', reads: x.reads, block }
   if (!block && x.ref) return { ...tail, bid: 'nbk:' + x.ref, ref: x.ref, inline: held, view: x.view, chars: x.chars ?? held?.length ?? 0 }
   const ref = isAddressed(x) ? x.text_ref : undefined
-  const inline = held ?? (ref ? undefined : String(inlineText(x) ?? ''))
-  const view = x.view ?? (ref || !block ? undefined : hasInline(x) && Array.isArray(x.r?.f?.body) ? { r: x.r, body: ownBody(x) } : { r: PLAIN, body: inline })
-  return { ...tail, bid: x.bid || x.key || x.text_ref || synth(inline ?? ''), ref, inline, view, chars: x.chars ?? inline?.length ?? 0 }
+  if (!block && ref == null && held === undefined && !hasInline(x)) return null
+  const inline = held ?? (ref ? undefined : parsedText(x))
+  const view = x.view ?? (ref || !block ? undefined : hasInline(x) && Array.isArray(x.r?.f?.body) ? { r: x.r, body: ownBody(x) } : { r: PLAIN, body: held ?? String(inlineText(x) ?? '') })
+  return { ...tail, bid: x.bid || x.key || x.text_ref || synth(inline ?? ''), ref, inline, view, noRange: x.ff?.unaddressable, chars: x.chars ?? inline?.length ?? 0 }
 }
 // the byte identity of a cell's body: its ref, or the inline text's own digest
 export const byteKey = (cell) => cell.ref != null && cell.inline === undefined ? 'r:' + cell.ref : synth(cell.inline ?? '')
@@ -152,8 +159,8 @@ export function rOf(cell, view) {
   const { r } = view
   return r.guess && cell.reads ? { ...r, as: cell.reads, f: { ...r.f, ...(cell.reads === 'code' ? { wrap: true } : { file: true }) } } : r
 }
-// the one mode a cell has, or null when it has both: a block with no bytes is Readable only, a body with no view Raw only
-export const onlyMode = (cell, got) => (cell.block && cell.ref == null ? 'read' : readable(cell, got) ? null : 'raw')
+// the one mode a cell has, or null when it has both: a body with no view is Raw only
+export const onlyMode = (cell, got) => (readable(cell, got) ? null : 'raw')
 
 // ── mode state ────────────────────────────────────────────────────────────────────────────────────────────────────────
 const DESK_KEY = 'trocar.v2.cellMode'
@@ -240,15 +247,19 @@ export function entryOf(cell, mode, got, upto = 0) {
   while (e.shown < upto && e.next != null && e.shown < CELL_CAP) e = grow(cell, mode, e, got).entry
   return e
 }
-export const clipLine = (shown, total) => shown >= total ? '' : shown >= CELL_CAP ? C.atCap(shown, total) : C.showing(shown, total)
+export const clipLine = (shown, total, copy) => shown >= total ? '' : shown >= CELL_CAP ? C.atCap(shown, total, copy) : C.showing(shown, total)
 const lines = (chars) => Math.max(1, Math.min(20, Math.ceil((Number(chars) || 0) / 100)))
-// the Raw button's title: what the line breaks are, and how many stream events the part was assembled from when it was
-export const rawTip = (view) => (view?.events ? `${C.RAW_TIP} ${C.rawEvents(view.events)}` : C.RAW_TIP)
-// the line a Readable cell says above its body: why it has no Raw, or what a shell command says it does
+// the Raw title: what the line breaks are, whether the copy is the bytes, and how many stream events the part was assembled from when it was
+export function rawTip(cell, view) {
+  const tip = cell.ref == null ? C.PARSED_TIP : C.RAW_TIP
+  return view?.events ? `${tip} ${C.rawEvents(view.events)}` : tip
+}
+// the line a cell says above its body: that a block has no byte range of its own and why, in either mode; else, in Readable, what a
+// shell command says it does
 export function headNote(cell, got, mode = modeOf(cell.bid)) {
-  const only = onlyMode(cell, got), view = viewIn(cell, got)
-  if (only === 'read') return C.READ_ONLY_NOTE
-  if (only || mode !== 'read') return null
+  if (cell.block && cell.ref == null) return C.noRange(cell.noRange)
+  const view = viewIn(cell, got)
+  if (!view || mode !== 'read') return null
   const r = rOf(cell, view), note = r.as === 'shell' ? get(view.body, r.f?.note) : null
   return typeof note === 'string' && note ? note : null
 }
@@ -261,13 +272,13 @@ export function cellBodyHtml(cell, mode) {
   const only = onlyMode(cell, got), m = only ?? (mode === 'read' ? 'read' : 'raw'), k = cell.bid
   remember(k, cell)
   const e = entryOf(cell, m, got)
-  const btn = (v, word, tip) => `<button type="button" data-cellmode="${v}" aria-pressed="${m === v}" title="${esc(tip)}">${esc(word)}</button>`
-  const clip = clipLine(e.shown, e.total), note = headNote(cell, got, m)
-  const tools = (only ? '' : `<span class="cellview" role="group" aria-label="${esc(C.VIEW_GROUP)}">${btn('read', C.READABLE, C.READ_TIP)}${btn('raw', C.RAW, rawTip(viewIn(cell, got)))}</span>`) +
-    (only === 'read' ? '' : `<button type="button" class="cellcopy" data-cellcopy>${esc(C.COPY)}</button>`) +
-    (m === 'raw' ? `<span class="cellstate" title="${esc(C.RAW_TIP)}">${esc(C.RAW_STATE)}</span>` : '') +
+  const btn = (v, word, tip, label) => `<button type="button" data-cellmode="${v}" aria-pressed="${m === v}" title="${esc(tip)}"${label ? ` aria-label="${esc(label)}"` : ''}>${esc(word)}</button>`
+  const copy = copyWord(cell, m), clip = clipLine(e.shown, e.total, copy), note = headNote(cell, got, m)
+  const tools = (only ? '' : `<span class="cellview" role="group" aria-label="${esc(C.VIEW_GROUP)}">${btn('read', C.READABLE, C.READ_TIP, C.READ_TIP)}${btn('raw', C.RAW, rawTip(cell, viewIn(cell, got)))}</span>`) +
+    `<button type="button" class="cellcopy" data-cellcopy>${esc(copy)}</button>` +
+    (m === 'raw' ? `<span class="cellstate" title="${esc(rawTip(cell))}">${esc(C.RAW_STATE)}</span>` : '') +
     (clip ? `<span class="cellclip">${esc(clip)}</span>` : '')
-  const bar = (tools ? `<div class="cellbar">${tools}</div>` : '') + (note ? `<div class="cellnote">${esc(note)}</div>` : '') +
+  const bar = `<div class="cellbar">${tools}</div>` + (note ? `<div class="cellnote">${esc(note)}</div>` : '') +
     (only === 'raw' && cell.block ? `<div class="cellnote" data-noread>${esc(C.NO_READABLE)}</div>` : '')
   const body = m === 'raw' ? `<pre class="cellraw">${e.body}</pre>` : `<div class="cellread ${esc(e.cls)}">${e.body}</div>`
   const more = e.next != null && e.shown < CELL_CAP ? `<span class="cellmore" data-at="${e.next}"></span>` : ''
@@ -367,23 +378,28 @@ function redraw(el, opt) {
   el.remove()
   if (inside && neu) (neu.querySelector(which === 'copy' ? '[data-cellcopy]' : `[data-cellmode="${which}"]`) || neu).focus?.()
 }
-async function copyBytes(el) {
-  if (el.dataset.only === 'read') { say(C.READ_ONLY); return }
-  const x = held(el) ?? await hold(el)
-  if (!x) { say(C.COPY_FAILED); return }
-  return copyText(x.text)
+// the copy button's word: Readable gives the text, and so does a cell with no bytes behind it (2.3 §工具栏)
+export const copyWord = (cell, mode) => (mode === 'read' || cell.ref == null ? C.COPY_TEXT : C.COPY)
+// the one copy of a cell, its button and `c` alike: Readable the whole text (slices not drawn too), Raw what it holds. The body may
+// have left the bounded cache while the cell stayed open: the reader's own click reads it.
+export async function copyCell(cell, mode, ask = api) {
+  let got = gotOf(cell)
+  if ((!got || got.status !== 'ok') && ask && cell.ref != null && cell.inline === undefined) got = await loadBody(ask, cell.ref)
+  if (!got || got.status !== 'ok') { say(C.COPY_FAILED); return }
+  const view = mode === 'read' ? viewIn(cell, got) : null, text = view ? textOf(rOf(cell, view), view.body) : String(got.text ?? '')
+  return copyText(text, copyWord(cell, mode) === C.COPY ? C.copied(new TextEncoder().encode(text).length) : C.copiedText(text.length))
 }
-// the exact text to the clipboard (the clipboard API, else a selected textarea), said in the live region
-export async function copyText(text) {
-  const n = new TextEncoder().encode(text).length
-  try { await navigator.clipboard.writeText(text); say(C.copied(n)); return } catch { /* no clipboard API here: the textarea way */ }
+const copyAt = (el) => { const cell = cells.get(el.dataset.ck); return cell ? copyCell(cell, el.dataset.mode) : say(C.COPY_FAILED) }
+// the exact text to the clipboard (the clipboard API, else a selected textarea), the line said in the live region
+async function copyText(text, line) {
+  try { await navigator.clipboard.writeText(text); say(line); return } catch { /* no clipboard API here: the textarea way */ }
   const back = document.activeElement, ta = document.createElement('textarea')
   ta.value = text; ta.setAttribute('readonly', ''); ta.className = 'sr-only'
   document.body.appendChild(ta); ta.select()
   let ok = false
   try { ok = document.execCommand('copy') } catch { /* refused */ }
   ta.remove(); back && back.focus && back.focus()
-  say(ok ? C.copied(n) : C.COPY_FAILED)
+  say(ok ? line : C.COPY_FAILED)
 }
 // the offset in the cell's bytes of a DOM point inside its .cellraw: the verbatim text nodes before it, the .lay ones skipped
 export function offsetIn(pre, c, o) {
@@ -419,7 +435,7 @@ export function wireCells(roots, s = {}) {
   const sameBid = (bid, fn) => each('.cell', (el) => { if (el.dataset.bid === bid) fn(el) })
   function flip(el, m) {
     const bid = el.dataset.bid
-    if (el.dataset.only) { say(el.dataset.only === 'raw' ? C.RAW_ONLY : C.READ_ONLY); return }
+    if (el.dataset.only) { say(C.RAW_ONLY); return }
     setMode(bid, m ?? (modeOf(bid, opt) === 'raw' ? 'read' : 'raw'), opt)
     const now = modeOf(bid, opt)
     sameBid(bid, (c) => redraw(c, opt))
@@ -462,7 +478,7 @@ export function wireCells(roots, s = {}) {
     leaf?.insertAdjacentHTML('beforeend', html)
     if (leaf && mode === 'read') reopen(leaf, x.cell, viewIn(x.cell, x.got))
     el.dataset.shown = String(entry.shown)
-    const line = clipLine(entry.shown, entry.total), clip = el.querySelector('.cellclip')
+    const line = clipLine(entry.shown, entry.total, copyWord(x.cell, mode)), clip = el.querySelector('.cellclip')
     if (line && clip) clip.textContent = line; else if (!line && clip) clip.remove()
     if (entry.next != null && entry.shown < CELL_CAP) { sent.dataset.at = String(entry.next); io.observe(sent) } else sent.remove()
   }
@@ -484,7 +500,7 @@ export function wireCells(roots, s = {}) {
     const el = b && b.closest('.cell')
     if (!el) return
     if (b.dataset.cellmode != null) flip(el, b.dataset.cellmode)
-    else if (b.dataset.cellcopy != null) copyBytes(el)
+    else if (b.dataset.cellcopy != null) copyAt(el)
     else { const u = blobAt(b); if (u) { const a = document.createElement('a'); a.href = u; a.download = ''; a.click() } }
   }
   const onKey = (e) => {
@@ -494,7 +510,7 @@ export function wireCells(roots, s = {}) {
     const el = row.querySelector('.cell')
     if (!el) return
     e.preventDefault()
-    if (a.flip) flip(el); else copyBytes(el)
+    if (a.flip) flip(el); else copyAt(el)
   }
   const onCopy = (e) => { // exact bytes from a selection inside one Raw cell; a selection that leaves it is the browser's
     const sel = getSelection(), r = sel && sel.rangeCount === 1 ? sel.getRangeAt(0) : null

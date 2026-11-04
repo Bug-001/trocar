@@ -48,7 +48,7 @@ const refRow = (x, label, { word = false, value = '' } = {}) => {
   const tag = word ? 'span' : 'code'
   return `<span class="rpkv">${x.ref
     ? `<${tag} class="nbk" data-nbk="${esc(x.ref)}" style="cursor:pointer">${esc(label)}</${tag}>${x.chars != null ? ' ' + kf(x.chars) + ' characters' : ''}`
-    : `<${tag}>${esc(label)}</${tag}> <span class="metabadge" title="${esc(x.why || '')}">${esc(x.why ? 'no bytes to read back' : W.NO_RAW_REPLY)}</span>`}${value}</span>`
+    : `<${tag}>${esc(label)}</${tag}> <span class="metabadge">${esc(x.why ? W.noBytesWhy(x.why) : W.NO_RAW_REPLY)}</span>`}${value}</span>`
 }
 function rawReplyHtml(d, w) {
   const rs = refsOf(d.respRefs)

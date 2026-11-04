@@ -104,7 +104,7 @@ const Row = memo(function Row({ it, acts, hl }: { it: Item, acts: Acts, hl: bool
       {m.volatile ? <span className="volbadge" title={W.VOLATILE_MARK_TIP}>{W.VOLATILE_MARK}</span> : null}
       {m.isNew ? <span className="newmark" title={W.NEW_MARK_TIP}>{W.NEW_MARK}</span> : null}
       {m.badge ? <FfBadge f={m.ff} tech={m.tech} /> : null}
-      {m.sr ? <SrWord f={m.ff} /> : null}
+      {m.sr ? <SrWord f={m.sr} /> : null}
     </>}
     onToggle={() => acts.row(it)} b={b} fail={it.fail} api={acts.api} />
 }, (p, n) => p.it.key === n.it.key && p.it.b === n.it.b && p.it.open === n.it.open && p.it.fail === n.it.fail && p.it.turn === n.it.turn
@@ -160,7 +160,7 @@ const Reply = memo(function Reply({ it, acts }: { it: Item, acts: Acts, bv: numb
     inner = <div className="cwrrows">{it.rows.map((r: any) => (
       <RowView key={r.key} cls={`r-assistant k-${r.b.kind}`} attrs={{ 'data-rp': r.key, 'data-ff': r.mark }} head={{ role: 'assistant', tag: r.tag, preview: r.b.preview }}
         open={r.open} chars={typeof r.b.chars === 'number' && !r.hideChars ? r.b.chars : null}
-        marks={<>{r.mark === 'verbatim' ? <SrWord f="verbatim" /> : <FfBadge f={r.mark} />}{r.last ? stop : null}</>}
+        marks={<>{r.mark === 'verbatim' ? <SrWord f={r.sr} /> : <FfBadge f={r.mark} />}{r.last ? stop : null}</>}
         onToggle={() => acts.reply(r)} b={r.b} fail={acts.fail(r.b)} api={acts.api} />
     ))}</div>
   }
@@ -360,7 +360,7 @@ export function Window({ desk }: { desk: DeskView }) {
     const flip = a.flip ? control(`[data-cellmode="${cell.dataset.mode === 'raw' ? 'read' : 'raw'}"]`) : null
     if (!a.flip) control('[data-cellcopy]')?.click()
     else if (flip) flip.click()
-    else if (cell.dataset.only) say(cell.dataset.only === 'read' ? C.READ_ONLY : C.RAW_ONLY)
+    else if (cell.dataset.only) say(C.RAW_ONLY)
   }
 
   let body: ReactNode

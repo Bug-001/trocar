@@ -9,6 +9,10 @@ import { cellKey, keyAction } from '../../web/legacy/replay/keymap.mjs'
 const CELL = new URL('../../web/legacy/replay/cell.mjs', import.meta.url).href
 const memStorage = () => { const m = new Map(); return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)) } }
 
+test('a non-block key with no ref is no cell: its row says why instead', () => {
+  assert.equal(cellOf({ key: 'stream', ref: null, why: 'nothing to point at' }), null)
+})
+
 test('an override follows the block across steps that re-send it, whatever its byte locator', () => {
   // one block re-sent at two steps: the same content key, two records
   const def1 = { sec: 'messages', role: 'user', kind: 'text', key: 'K:1', text_ref: 's/main#r1::10-20', chars: 6, preview: 'abc' }

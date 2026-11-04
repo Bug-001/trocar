@@ -1,7 +1,7 @@
 // web/src/screens/replay/Cell.test.tsx — the React cell of the context window (spec 2.3 §两种模式, 1.4 #7): Raw shows the bytes (the
 // leaf's text without its .lay spans is the source), Readable is renderKind's markup over the view unchanged, the first slice is a
-// prefix with its own clip status, the view mode is cell.mjs's state on either side, a cell with one mode has no switch, a pending or
-// failed body has no control, the cell never reads a body itself, what the reader opened comes back, and a grown leaf survives a
+// prefix with its own clip status, the view mode is cell.mjs's state on either side, a cell with one mode has no switch, a block with no
+// byte range of its own has both, the copy follows the mode, a pending or failed body has no control, the cell never reads a body itself, what the reader opened comes back, and a grown leaf survives a
 // re-render. Bodies are constructed here and from the generated desk world (desk-world.mjs).
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from 'vitest'
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
@@ -175,7 +175,7 @@ function bothDraws(cell: any): Array<[string, HTMLElement]> {
   return [['react', render(<Cell cell={cell} api={noApi} />).container], ['legacy', host]]
 }
 
-test('2.3 #11: a view shorter than its bytes counts the view, draws a prefix of it, and Copy bytes still gives every byte', async () => {
+test('2.3 #11: a view shorter than its bytes counts the view, draws a prefix of it, and Raw\'s copy still gives every byte', async () => {
   const words = Array.from({ length: 1500 }, (_, i) => `line ${i} of the reply`).join('\n')
   const bytes = words.split('\n').map((w) => `data: {"type":"delta","text":${JSON.stringify(w)}}\n\n`).join('')
   const ref = 's/x#m::resp.raw::0-9', api = { get: vi.fn() }
@@ -193,6 +193,7 @@ test('2.3 #11: a view shorter than its bytes counts the view, draws a prefix of 
   }
   const { container } = render(<Cell cell={cell} api={api} />)
   expect(container.querySelector('.cellread')!.compareDocumentPosition(container.querySelector('.cellclip')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  act(() => setDeskMode('raw'))
   await act(async () => { fireEvent.click(container.querySelector('[data-cellcopy]')!); await Promise.resolve() })
   expect(copied).toEqual([bytes])
 })
@@ -215,31 +216,74 @@ test('2.3 #16: a cell with no view has only Raw: no switch, and only a block say
   }
 })
 
-test('2.3 #40: a block with no bytes has only Readable: no switch, no Copy bytes, no Raw, and v leaves it there', () => {
-  const r = { as: 'text', f: { body: ['block', 'text'] } }, block = { type: 'text', text: 'the parsed words' }
-  const cases: Array<[string, any]> = [
-    ['a definition\'s spec', { sec: 'messages', kind: 'text', bid: 'B40a', r, inline: { block } }],
-    ['the older shape', { sec: 'messages', kind: 'text', bid: 'B40b', r: { as: 'text' }, inline: { block } }],
+test('2.3 #40: a block with no byte range of its own has both modes, Raw is the stored parse, both say why, and its copy never says bytes', async () => {
+  const why = 'the reply stream interleaves this block', block = { type: 'text', text: 'the parsed words', citations: [{ n: 1 }] }
+  const tool = { desc: 'what it does', schema: { type: 'object' } }
+  const cases: Array<[string, any, unknown, string]> = [
+    ['a definition\'s spec', { sec: 'messages', kind: 'text', bid: 'B40a', r: { as: 'text', f: { body: ['block', 'text'] } }, inline: { block } }, block, 'the parsed words'],
+    ['the older shape', { sec: 'messages', kind: 'text', bid: 'B40b', r: { as: 'text' }, inline: { block } }, block, 'the parsed words'],
+    ['a tool', { sec: 'tools', kind: 'tool', bid: 'B40c', name: 'T', r: { as: 'tool', f: { body: [], desc: ['desc'], schema: ['schema'] } }, inline: tool }, tool, 'what it does'],
   ]
-  setDeskMode('raw')
-  for (const [why, def] of cases) {
-    const cell = cellOf(def)
+  const copied: string[] = []
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (t: string) => { copied.push(t) } } })
+  for (const [name, def, parsed, words] of cases) for (const mode of ['read', 'raw'] as const) {
+    setDeskMode(mode)
+    const cell = cellOf({ ...def, ff: { unaddressable: why } })
     for (const [how, c] of bothDraws(cell)) {
-      const el = c.querySelector('.cell') as HTMLElement, at = `${why} ${how}`
-      expect([at, el.dataset.mode, el.dataset.only]).toEqual([at, 'read', 'read'])
-      expect(el.querySelector('[data-cellmode], [data-cellcopy], .cellraw')).toBeNull()
-      expect(el.querySelector('.cellread')!.textContent).toContain('the parsed words')
-      expect(el.querySelector('.cellnote')!.textContent).toBe(C.READ_ONLY_NOTE)
+      const el = c.querySelector('.cell') as HTMLElement, at = `${name} ${mode} ${how}`
+      expect([at, el.dataset.mode, el.dataset.only]).toEqual([at, mode, undefined])
+      expect(el.querySelectorAll('[data-cellmode]').length).toBe(2)
+      expect(el.querySelector('.cellnote')!.textContent).toContain(why)
+      expect(el.querySelector('[data-cellcopy]')!.textContent).toBe(C.COPY_TEXT)
+      if (mode === 'raw') expect(JSON.parse(bytesOf(el.querySelector('.cellraw')!)!)).toEqual(parsed)
+      else expect(el.querySelector('.cellread')!.textContent).toContain(words)
     }
+    const { container } = render(<Cell cell={cell} api={noApi} />)
+    await act(async () => { fireEvent.click(container.querySelector('[data-cellcopy]')!); await Promise.resolve() })
+    const got = copied.at(-1)!
+    if (mode === 'raw') expect(JSON.parse(got)).toEqual(parsed); else expect(got).toContain(words)
+    expect(document.querySelector('[aria-live="polite"]')!.textContent).toBe(C.copiedText(got.length))
+    cleanup()
+  }
+  setDeskMode('read')
+  const old = render(<Cell cell={cellOf({ ...cases[1][1], ff: { unaddressable: why } })} api={noApi} />).container
+  expect(old.querySelector('.cellread')!.textContent).toBe('the parsed words') // plain text, under the same note
+})
+
+test('2.3 #41: the copy follows the mode: Readable gives the whole text past the slice drawn, markdown as written; Raw the bytes; c the same', async () => {
+  const words = '# A title\n\n' + Array.from({ length: 4000 }, (_, i) => `**line ${i}** of the source`).join('\n\n')
+  const bytes = JSON.stringify({ type: 'text', text: words }), ref = 's/x#m41::0-9'
+  bodyCache.set(ref, blockGot({ ref, bytes, fidelity: { verbatim: true }, view: { r: { as: 'markdown', f: { body: ['text'] } }, body: { text: words } } }))
+  const copied: string[] = []
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (t: string) => { copied.push(t) } } })
+  const cell = cellOf({ sec: 'messages', kind: 'text', bid: 'C41', text_ref: ref, chars: bytes.length, preview: '' })
+  const copy = (c: Element) => c.querySelector('[data-cellcopy]') as HTMLElement
+  setDeskMode('read')
+  const { container } = render(<Cell cell={cell} api={noApi} />)
+  const drawn = container.querySelector('.cellread')!.textContent!.length
+  expect(copy(container).textContent).toBe(C.COPY_TEXT)
+  await act(async () => { fireEvent.click(copy(container)); await Promise.resolve() })
+  expect(copied.at(-1)).toBe(words)
+  expect(copied.at(-1)!.length).toBeGreaterThan(drawn)
+  expect(document.querySelector('[aria-live="polite"]')!.textContent).toBe(C.copiedText(words.length))
+  fireEvent.click(container.querySelector('[data-cellmode="raw"]')!)
+  expect(copy(container).textContent).toBe(C.COPY)
+  await act(async () => { fireEvent.click(copy(container)); await Promise.resolve() })
+  expect(copied.at(-1)).toBe(bytes)
+  expect(document.querySelector('[aria-live="polite"]')!.textContent).toBe(C.copied(new TextEncoder().encode(bytes).length))
+  cleanup()
+  // the legacy cell's button and key take the same way
+  for (const [mode, want] of [['read', words], ['raw', bytes]] as const) {
+    setDeskMode(mode)
     const row = document.createElement('div')
     row.className = 'cblk'
-    row.innerHTML = cellBodyHtml(cell, 'raw')
+    row.innerHTML = cellBodyHtml(cell, mode)
     document.body.appendChild(row)
     const off = wireCells(row), el = row.querySelector('.cell') as HTMLElement
-    for (const key of ['v', 'c']) {
-      el.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }))
-      expect((row.querySelector('.cell') as HTMLElement).dataset.mode).toBe('read')
-      expect(document.querySelector('[aria-live="polite"]')!.textContent).toBe(C.READ_ONLY)
+    for (const press of [() => copy(row).click(), () => el.dispatchEvent(new KeyboardEvent('keydown', { key: 'c', bubbles: true }))]) {
+      copied.length = 0
+      await act(async () => { press(); await Promise.resolve() })
+      expect(copied).toEqual([want])
     }
     off(); row.remove()
   }

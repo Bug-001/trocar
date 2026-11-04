@@ -1,7 +1,7 @@
 // web/src/screens/replay/window-model.mjs — the window's rules, framework-free (2.3 §读与画「长对话的窗口」 · 1.4 ①–⑨): the
 // playhead step's context window as keyed items in drawing order, drawn by both desks (legacy ctxwin.mjs maps them to units).
 // The proof rule (2.3 §保真标) and the reply rule (2.3 §这一步的回复) live here; blocks.mjs and rawpanel.mjs re-export them.
-import { bodyCache, cellOf, isAddressed, bodyVersion, deskMode, modeOf, modeVersion } from '../../../legacy/replay/cell.mjs'
+import { bodyCache, cellOf, isAddressed, bodyVersion, deskMode, modeOf, modeVersion, viewIn } from '../../../legacy/replay/cell.mjs'
 import { messageTurns, keyDiff, refRowOf, hasChangeLine, callFacts } from '../../../legacy/replay/analysis.mjs'
 import { turnAnchorKey, turnIsOpen } from '../../../legacy/replay/fold.mjs'
 import { stepOf } from '../../../legacy/replay/model.mjs'
@@ -65,8 +65,13 @@ export function replyOf({ row, reply, detail } = {}) {
 }
 
 // ── one request row's marks (2.3 §block 卡 · §保真标 · §窗口行) ──────────────────────────────────────────────────────────
-/** @typedef {{ ff: string, badge: boolean, quiet: boolean, sr: boolean, tech: string, cc: any, volatile: boolean, isNew: boolean }} RowMarks */
-/** What a request row says about itself. `open`: the row is open (an opened body that came back unproven outranks the
+/** @typedef {{ ff: string, badge: boolean, quiet: boolean, sr: string | null, tech: string, cc: any, volatile: boolean, isNew: boolean }} RowMarks */
+// what a proven row reads out: Readable shows no bytes, so it is no 逐字; a body back with no view is Raw (2.3 §保真标)
+function provenWord(b) {
+  const got = b.text_ref ? bodyCache.get(b.text_ref) : null
+  return modeOf(b.bid) === 'raw' || (got?.status === 'ok' && !viewIn(b, got)) ? 'verbatim' : 'reading'
+}
+/** What a request row says about itself. `sr` is the FF_WORD key only a screen reader hears, or null. `open`: the row is open (an opened body that came back unproven outranks the
  * metadata's claim); `prevKeys`: the 内容对比步's content keys (null: no 「新」); `windowLine`: the window line is up.
  * @returns {RowMarks} */
 export function rowMarks(b, { prevKeys = null, open = false, windowLine = false } = {}) {
@@ -74,7 +79,7 @@ export function rowMarks(b, { prevKeys = null, open = false, windowLine = false 
   // the window line already said "nothing here resolves": the per-block 不能回源 is not repeated, its screen-reader word is
   const quiet = ff === 'unaddressable' && !!windowLine
   return {
-    ff, quiet, badge: !quiet && ff !== 'verbatim', sr: ff === 'verbatim' || quiet,
+    ff, quiet, badge: !quiet && ff !== 'verbatim', sr: ff === 'verbatim' ? provenWord(b) : quiet ? ff : null,
     tech: ff === 'unknown' ? String(b.faithfulness) : ff === 'unaddressable' ? (b.unaddressable || '') : '',
     cc: b.cc || null, volatile: !!b.volatile, isNew: !!(prevKeys && !b.volatile && !prevKeys.has(b.key)),
   }
@@ -227,7 +232,7 @@ function replyItem(s, st, call) {
     map.set(key, b)
     const sealed = partMark(d) === 'opaque', open = !sealed !== s.openBlocks.has(key), got = bodyCache.get(b.text_ref)
     assembled ||= open && !!got?.view?.events && modeOf(cellOf(b).bid) === 'read'
-    return { key, b, tag: d.head ? d.head.tag : d.kind, mark: (open && openedFf(got)) || partMark(d) || 'verbatim', open, hideChars: sealed, last: i === r.parts.length - 1 }
+    return { key, b, tag: d.head ? d.head.tag : d.kind, mark: (open && openedFf(got)) || partMark(d) || 'verbatim', sr: provenWord(b), open, hideChars: sealed, last: i === r.parts.length - 1 }
   })
   return { item: { key: 'reply', type: 'reply', stop: r.stop, rows, assembled }, map }
 }

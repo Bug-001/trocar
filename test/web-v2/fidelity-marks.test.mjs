@@ -15,7 +15,7 @@ import { stepBarHtml } from '../../web/legacy/replay/stepbar.mjs'
 import { rawPanelUnits } from '../../web/legacy/replay/rawpanel.mjs'
 import { serialize } from '../../web/legacy/core/units.mjs'
 import { bodyCache, showBody } from '../../web/legacy/replay/blocks.mjs'
-import { loadBodies, setDeskMode } from '../../web/legacy/replay/cell.mjs'
+import { loadBodies, setDeskMode, setMode } from '../../web/legacy/replay/cell.mjs'
 import { stepOf } from '../../web/legacy/replay/model.mjs'
 import * as W from '../../web/legacy/labels/replay.mjs'
 import * as C from '../../web/legacy/labels/cells.mjs'
@@ -155,10 +155,9 @@ test('2.3 #2 · 1.4 #4: each ff value with and without a ref, in each section, g
       for (const r of rows) {
         const d = flat[r.bi]
         if (d.ref) assert.ok(r.body.includes(esc(`BYTES of ${d.ref}`)), `${why} row ${r.bi}: the opened body is the bytes`)
-        else { // 2.3 §没有 def.ref: the body the definition brings, under the line saying the capture holds no bytes for it
-          assert.ok(visible(r.body).includes(w(C.READ_ONLY_NOTE)), `${why} row ${r.bi}: the note of a block with no bytes`)
-          if (d.sec === 'tools' && want(d) === 'metadata') assert.ok(visible(r.body).includes(w(W.TOOL_METADATA_ONLY)) && r.body.includes(d.name), `${why} row ${r.bi}: the metadata-only body`)
-          else assert.ok(r.body.includes(`BODY-${d.bid.slice(1)}-q`), `${why} row ${r.bi}: the inline body`)
+        else { // 2.3 §没有 def.ref: the body the definition brings, under the line saying it has no byte range of its own and why
+          assert.ok(visible(r.body).includes(w(C.noRange(d.unaddressable))), `${why} row ${r.bi}: the note of a block with no byte range`)
+          if (!(d.sec === 'tools' && want(d) === 'metadata')) assert.ok(r.body.includes(`BODY-${d.bid.slice(1)}-q`), `${why} row ${r.bi}: the inline body`)
         }
       }
     }
@@ -214,6 +213,7 @@ test('2.3 #2: a new trace\'s tool definition is proven and opens on its full sch
   const flat = [fresh, oldRef, oldInline, def('system', undefined, true), def('messages', undefined, true)]
   const desk = deskOfSteps([flat]), s = stateOf(desk)
   for (const b of [fresh, oldRef, oldInline]) s.openBlocks.add(`${b.bid}#0`)
+  setMode(oldInline.bid, 'read')
   await loadBodies(blockApi((ref) => OK(ref, ref === fresh.ref ? schema : '{"name":"Read","input_schema_props":["file_path_q"],"description_chars":11}')), [fresh.ref, oldRef.ref])
   const h = ctxWindowHtml(s), rows = rowsOf(h)
   assertMark(rows[0], 'verbatim', 'new trace')
@@ -230,11 +230,11 @@ test('2.3 #2: an opaque block opens on a placeholder, never on empty text, in th
     const x = def('messages', { faithfulness: 'opaque' }, false, { r, role: 'assistant', kind: 'thinking', head: { role: 'assistant', tag: 'thinking', label: 'thinking' }, inline: { block } })
     const flat = [def('system', undefined, true), x], s = stateOf(deskOfSteps([flat]))
     s.openBlocks.add(`${x.bid}#0`)
+    setMode(x.bid, 'read')
     const [row] = rowsOf(ctxWindowHtml(s)).filter((y) => flat[y.bi] === x)
     assertMark(row, 'opaque', 'opaque')
     const cell = /<div class="cellread [^"]*">([\s\S]*?)<\/div><\/div>/.exec(row.body)
     assert.ok(cell && cell[1].replace(/<[^>]*>/g, '').trim().length > 0, `the Readable body is a placeholder, not blank: ${JSON.stringify(r)}`)
-    assert.ok(!row.body.includes('cellraw'), 'no bytes, so no Raw')
   }
 })
 
