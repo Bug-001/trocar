@@ -43,8 +43,8 @@ function foldedHost(unit, budget) {
   return folded.get(unit)
 }
 
-// Three answers: true, false, null when tier 1 cannot say. A spent budget says null from here on, so it needs no path of its own.
-function truth(node, value, budget, leaf) {
+/** Three answers: true, false, null when a leaf cannot say, which stands unless the rest settles it. A spent budget says null from here on, so it needs no path of its own. */
+export function truth(node, value, budget, leaf) {
   if (node.t === 'not') {
     const inner = truth(node.of[0], value, budget, leaf)
     return inner === null ? null : !inner
@@ -78,10 +78,13 @@ function manyDataLines(bytes, budget) {
   return false
 }
 
-/** Would tier 2 read these bytes at all? It refuses what is not UTF-8 and an event of many data lines, so tier 1 may not answer for them, either way. False also when the passes
+/** UTF-8 with no NUL byte: the UTF-16 of ASCII text is valid UTF-8, and no search finds a word in it. */
+export const isText = (bytes) => isUtf8(bytes) && !bytes.includes(0)
+
+/** Would tier 2 read these bytes at all? It refuses what is not text and an event of many data lines, so tier 1 may not answer for them, either way. False also when the passes
  *  cannot be paid for. */
 export function readable(bytes, sse, budget) {
-  return budget.spend(bytes.length) && isUtf8(bytes) && !(sse && (!budget.spend(bytes.length) || manyDataLines(bytes, budget)))
+  return budget.spend(bytes.length) && isUtf8(bytes) && budget.spend(bytes.length) && !bytes.includes(0) && !(sse && (!budget.spend(bytes.length) || manyDataLines(bytes, budget)))
 }
 
 // Paid once per unit, however many rules read its body. A spent budget says nothing about the bytes, so it is not kept.

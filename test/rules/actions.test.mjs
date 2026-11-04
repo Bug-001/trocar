@@ -256,6 +256,15 @@ test('the selector keys narrow the choice', () => {
   assert.equal(parsed({ blocks: { max_bytes: 2, section: 'system' }, set_text: 'x' }, body).system, 'sys');
 });
 
+test('a body with a NUL is not text, whichever way it got there', () => {
+  for (const body of [Buffer.from('{"a":"ALPHA"}', 'utf16le'), Buffer.from('ALPHA\0'), Buffer.from('\0')]) {
+    assert.equal(full.decode(unitOf(body)).text, null);
+    fails('not-utf8', () => run({ replace: 'ALPHA', with: 'x' }, body));
+    fails('not-utf8', () => judged({ body: 'ALPHA' }, body));
+  }
+  assert.equal(full.decode(unitOf('{"a":"\\u0000"}')).text, '{"a":"\\u0000"}', 'an escape is no NUL byte');
+});
+
 test('a text action does not count the blocks that have no text', () => {
   const body = JSON.stringify({ model: 'm', messages: [
     { role: 'assistant', content: [{ type: 'text', text: 'old' }, { type: 'tool_use', id: 't', name: 'Bash', input: {} }] },

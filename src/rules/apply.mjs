@@ -1,10 +1,10 @@
 // apply.mjs (src/rules) — applyRules, the one entry of `rules test`, the live path and `resend` (RFC 5.1 §规则「多条规则都命中时」, §分派), and the tier 1
 // replace. The daemon loads this file, so the rule process's half comes in as `full`, and a script as `script`: tier 1 touches neither.
-import { Buffer, isUtf8 } from 'node:buffer'
+import { Buffer } from 'node:buffer'
 import { isSecretHeader } from '../capture/redact.mjs'
 import { CONDITION_COST } from './budget.mjs'
 import { LIMITS } from './closed.mjs'
-import { readable } from './compile.mjs'
+import { isText, readable } from './compile.mjs'
 import { isFastReplace } from './conditions.mjs'
 import { applySteps, editsCost, editsLimit, INVERTED_ON, recordEdits, recoverOf } from './edits.mjs'
 import { setHeaders, spendHead } from './headers.mjs'
@@ -185,11 +185,11 @@ function scriptMessage(unit, state) {
   return { on, harness, pid, method, host, path, status, headers, bytes, ...(state.text === null ? {} : { text: state.text }) }
 }
 
-// A script's patch is the whole body, so it is one step. Edits are text: bytes that are not UTF-8 on either side leave the record to the whole body.
+// A script's patch is the whole body, so it is one step. Edits are text: bytes that are not text on either side leave the record to the whole body.
 function setBody(state, next) {
   const bytes = Buffer.from(next), old = state.bytes
   if (bytes.equals(old)) return
-  const text = isUtf8(bytes) ? bytes.toString() : null
+  const text = isText(bytes) ? bytes.toString() : null
   if (text === null || state.text === null) state.opaque = true
   else state.steps.push({ at: 0, del: old.length, ins: text, old: state.text })
   Object.assign(state, { bytes, text })

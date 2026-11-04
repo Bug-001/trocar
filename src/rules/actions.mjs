@@ -1,12 +1,13 @@
 // actions.mjs (src/rules) — the built-in edits and the full (tier 2) judge (RFC 5.1 §动作, §怎么算改动, §条件的写法). Pure functions over a unit's
 // bytes. Only the rule process loads this file: it compiles regexes, so it stays out of the daemon's import graph.
 import zlib from 'node:zlib'
-import { Buffer, isUtf8 } from 'node:buffer'
+import { Buffer } from 'node:buffer'
 import { scanJson, nodeAt } from '../dissect/json-scan.mjs'
 import { ruleBlocksFor } from '../dissect/registry.mjs'
 import { sseEvents } from '../dissect/sse-spans.mjs'
 import { LIMITS } from './closed.mjs'
-import { ESCAPE_REACH, parseCondition } from './conditions.mjs'
+import { isText, truth } from './compile.mjs'
+import { FAST_LITERAL, parseCondition } from './conditions.mjs'
 import { setHeaders } from './headers.mjs'
 import { spansToSteps, applySteps } from './edits.mjs'
 import { actionKind, conditionsOf } from './validate.mjs'
@@ -33,7 +34,7 @@ function decode(unit) {
     if (!inflate) throw fault('encoding')
     try { bytes = inflate(bytes, { maxOutputLength: MAX_BODY }) } catch (e) { throw fault(e.code === 'ERR_BUFFER_TOO_LARGE' ? 'too-big' : 'encoding') }
   }
-  return { bytes, text: isUtf8(bytes) ? bytes.toString('utf8') : null }
+  return { bytes, text: isText(bytes) ? bytes.toString('utf8') : null }
 }
 
 const compiled = new Map()
@@ -71,15 +72,22 @@ function collectStrings(node, text, out) {
   }
 }
 
-// A window read as JSON, or null. scanJson takes any bare word for a literal, so [DONE] is text only once the literals are checked here.
+// A window read as JSON, or null. scanJson takes any bare word for a literal, so [DONE] is text only once the literals are checked here. Too deep to walk is not plain text: read
+// as text, its strings would go unread and a `with` could break the JSON.
 function scan(text) {
   try {
     const root = scanJson(text)
     const strings = []
     collectStrings(root, text, strings)
     return { root, text, strings }
-  } catch { return null }
+  } catch (e) {
+    if (e instanceof RangeError) throw fault('rule-error')
+    return null
+  }
 }
+
+// What the bytes settle with no JSON read, as tier 1 reads them (5.1 §条件的写法): not there, and no `\u` to spell it. Past this a body too deep to read could not fault a rule tier 1 finished.
+const plainlyAbsent = (literal, text) => FAST_LITERAL.test(literal) && !text.includes(literal) && !text.includes('\\u')
 
 function commit(state, spans) {
   if (!spans.length) return
@@ -162,12 +170,13 @@ function actReplace(action, state, env) {
   const text = needText(state.text)
   const edit = (value) => splice(value, hits(value, action))
   if (action.blocks) return commit(state, rewrite(chosenTextNodes(state, env, action.blocks), edit))
-  if (action.in === 'body') {
-    windowsOf(text, env.unit.sse) // no window is read, but an event of many data lines is left alone all the same
-    return commit(state, hits(text, action))
-  }
-  commit(state, windowsOf(text, env.unit.sse).flatMap(([from, to]) => {
+  const windows = windowsOf(text, env.unit.sse) // `in: body` reads none, but an event of many data lines is left alone all the same
+  if (action.literal && action.with === action.replace) return undefined
+  if (action.in === 'body') return commit(state, hits(text, action))
+  if (action.literal && plainlyAbsent(action.replace, text)) return undefined
+  return commit(state, windows.flatMap(([from, to]) => {
     const window = text.slice(from, to), json = scan(window)
+    if (!json && window.includes('\\u')) throw fault('not-json')
     return shifted(json ? rewrite(json.strings, edit) : hits(window, action), from)
   }))
 }
@@ -284,10 +293,9 @@ function act(action, state, env) {
   run(action, state, env)
 }
 
-function holds(node, leaf) {
-  if (node.t === 'any') return node.of.some((c) => holds(c, leaf))
-  return node.t === 'not' ? !holds(node.of[0], leaf) : leaf(node)
-}
+// Tier 1's reading of a condition, with nothing to pay.
+const FREE = { spend: () => true }
+const holds = (node, leaf) => truth(node, null, FREE, leaf)
 
 function compares(node, value) {
   switch (node.t) {
@@ -309,29 +317,59 @@ function headerValue(headers, name) {
   return values.length ? values.join(', ') : undefined
 }
 
-// What a body condition reads: the decoded strings of each JSON window, and the windows that are not JSON as they stand.
+// Where the escapes of a text stand, as a flat list of from, to: a backslash and the character after it, six characters for \uXXXX. Walked from the left, so the second backslash of
+// `\\` starts nothing.
+function escapesOf(text) {
+  const out = []
+  for (let at = text.indexOf('\\'), to; at !== -1; at = text.indexOf('\\', to)) {
+    to = at + (/^u[0-9a-fA-F]{4}/.test(text.slice(at + 1, at + 6)) ? 6 : 2)
+    out.push(at, to)
+  }
+  return out
+}
+
+// What a body condition reads: the text as it stands and where its escapes are. An event of many data lines is refused here, before anything hits.
 const readings = new WeakMap()
 function readingOf(decoded, unit) {
   if (!readings.has(decoded)) {
-    const text = needText(decoded.text), strings = []
-    for (const [from, to] of windowsOf(text, unit.sse)) {
-      const window = text.slice(from, to), json = scan(window)
-      if (json) for (const s of json.strings) strings.push(s.value)
-      else strings.push(window)
-    }
-    readings.set(decoded, strings)
+    const text = needText(decoded.text)
+    readings.set(decoded, { text, windows: windowsOf(text, unit.sse), escapes: escapesOf(text), strings: null, unsure: false })
   }
   return readings.get(decoded)
 }
 
-// Hit in the bytes as they stand, away from any escape: this is how a key or a number hits. A hit holding a backslash read an escape as text.
-function bodyHit(node, text, strings) {
-  const source = node.t === 're' ? node.v : escaped(node.v)
-  for (const m of text.matchAll(regex(source, 'gu'))) {
-    if (!m[0].includes('\\') && !text.slice(Math.max(0, m.index - ESCAPE_REACH), m.index).includes('\\')) return true
+// The decoded strings of each JSON window and the windows that are not JSON as they stand, read the first time the bytes leave a condition open. `unsure`: one of those holds a `\u`.
+function stringsOf(reading) {
+  if (reading.strings) return reading.strings
+  const strings = []
+  for (const [from, to] of reading.windows) {
+    const window = reading.text.slice(from, to), json = scan(window)
+    if (json) for (const s of json.strings) strings.push(s.value)
+    else {
+      strings.push(window)
+      reading.unsure ||= window.includes('\\u')
+    }
   }
+  reading.strings = strings
+  return strings
+}
+
+// Hit in the bytes as they stand, clear of any real escape: this is how a key or a number hits. A hit that touches an escape read it as text, so the search goes on one character
+// later, and hits may overlap. What the bytes leave open the decoded strings say; null when no one can, because a `\u` in what is not JSON could spell anything.
+function bodyHit(node, reading) {
+  const { text, escapes } = reading, source = node.t === 're' ? node.v : escaped(node.v)
+  const search = regex(source, 'gu')
+  for (let m = search.exec(text), e = 0; m; m = search.exec(text)) {
+    while (e < escapes.length && escapes[e + 1] <= m.index) e += 2
+    if (e === escapes.length || escapes[e] >= m.index + m[0].length) {
+      search.lastIndex = 0 // the regex is shared, and it is left the way it came
+      return true
+    }
+    search.lastIndex = m.index + (text.codePointAt(m.index) > 0xffff ? 2 : 1)
+  }
+  if (node.t !== 're' && plainlyAbsent(node.v, text)) return false
   const re = regex(source, 'u')
-  return strings.some((s) => re.test(s))
+  return stringsOf(reading).some((s) => re.test(s)) || (reading.unsure ? null : false)
 }
 
 const FIELDS = ['pid', 'path', 'method', 'class', 'status', 'event_index']
@@ -349,8 +387,10 @@ function judge(rule, unit, decoded) {
     }
   }
   if (m.body !== undefined) {
-    const strings = readingOf(decoded, unit)
-    if (!holds(parseCondition(m.body, { key: 'body' }), (n) => bodyHit(n, decoded.text, strings))) return false
+    const reading = readingOf(decoded, unit)
+    const answer = holds(parseCondition(m.body, { key: 'body' }), (n) => bodyHit(n, reading))
+    if (answer === null) throw fault('not-json')
+    if (!answer) return false
   }
   if (m.blocks === undefined) return true
   const blocks = blocksOf(rule.on ?? 'request', unit, needText(decoded.text))
