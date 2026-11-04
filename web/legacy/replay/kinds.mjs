@@ -84,17 +84,21 @@ function code(r, b, v, o) {
 }
 // for display only: an argv array as one line a shell would read back
 const quote = (a) => (/^[\w./=:,@%+-]+$/.test(a) ? a : `'${a.replace(/'/g, `'\\''`)}'`)
+const cmdLine = (r, v) => {
+  const cmd = get(v, r.f?.cmd)
+  return typeof cmd === 'string' ? cmd : Array.isArray(cmd) && cmd.length && cmd.every((a) => typeof a === 'string') ? cmd.map(quote).join(' ') : fail()
+}
+// the keys of a shell's input that are neither its command nor its note
+function shellRest(r, b) {
+  if (!b || typeof b !== 'object' || Array.isArray(b)) return []
+  const f = r.f || {}
+  const own = (p) => Array.isArray(p) && p.length === (f.body?.length ?? 0) + 1 && (f.body ?? []).every((k, i) => k === p[i]) ? p.at(-1) : undefined
+  const skip = new Set([own(f.cmd), own(f.note)])
+  return Object.keys(b).filter((k) => !skip.has(k))
+}
 function shell(r, b, v, o) {
-  const f = r.f || {}, cmd = get(v, f.cmd)
-  const line = typeof cmd === 'string' ? cmd : Array.isArray(cmd) && cmd.length && cmd.every((a) => typeof a === 'string') ? cmd.map(quote).join(' ') : fail()
-  let html = `<div><span class="sh-ps">$</span> ${shown(line)}</div>`
-  if (b && typeof b === 'object' && !Array.isArray(b)) {
-    const own = (p) => Array.isArray(p) && p.length === (f.body?.length ?? 0) + 1 && (f.body ?? []).every((k, i) => k === p[i]) ? p.at(-1) : undefined
-    const skip = new Set([own(f.cmd), own(f.note)])
-    const rest = Object.keys(b).filter((k) => !skip.has(k))
-    if (rest.length) html += `<div class="kd-kv">${rows(rest, b, r, o)}</div>`
-  }
-  return { html }
+  const rest = shellRest(r, b)
+  return { html: `<div><span class="sh-ps">$</span> ${shown(cmdLine(r, v))}</div>` + (rest.length ? `<div class="kd-kv">${rows(rest, b, r, o)}</div>` : '') }
 }
 const short = (x) => typeof x === 'number' || typeof x === 'boolean' || (typeof x === 'string' && x.length <= SHORT && !x.includes('\n'))
 const rows = (keys, b, r, o) => keys.map((k) =>
@@ -150,10 +154,13 @@ const paramsOf = (schema) => shapes(schema).map((x) => Object.keys(x.properties)
   return `<div class="parm">${word('pn', k)}${word('pt', typeOf(s))}${word('pr', [x.required].flat().includes(k) && REQUIRED)}` +
     `${word('pe', enumsOf(s).map(asText).join(' | '))}${word('pd', typeof s.description === 'string' && s.description)}${kids && `<div class="pk">${kids}</div>`}</div>`
 }).join('')).join('')
-function tool(r, b, v, o) {
-  const f = r.f || {}, desc = f.desc != null ? get(v, f.desc) : undefined, schema = f.schema != null ? get(v, f.schema) : undefined
+function toolOf(f, v) {
+  const desc = f.desc != null ? get(v, f.desc) : undefined, schema = f.schema != null ? get(v, f.schema) : undefined
   if (desc === undefined ? schema === undefined : typeof desc !== 'string') fail()
-  const len = desc?.length ?? 0
+  return { desc, schema }
+}
+function tool(r, b, v, o) {
+  const f = r.f || {}, { desc, schema } = toolOf(f, v), len = desc?.length ?? 0
   let html = ''
   if (o.from < len) {
     const d = draw({ as: 'markdown' }, desc, { ...o, root: [...o.root, ...f.desc] })
@@ -201,19 +208,25 @@ function back(trace, a, b, off) {
   }
   return out.reverse()
 }
+const hunk = (l) => l.startsWith('@@') || l.startsWith('***')
+function editOf(f, v) { // an edit pair and its line diff (null: two panes)
+  const a = get(v, f.old), c = get(v, f.new)
+  if (typeof a !== 'string' || typeof c !== 'string') fail()
+  return { a, c, ops: myers(a.split('\n'), c.split('\n')) }
+}
+function patchOf(f, b, v) {
+  const p = f.patch != null ? get(v, f.patch) : b
+  if (typeof p !== 'string' || !p.split('\n').some(hunk)) fail() // not a patch
+  return p
+}
 function diff(r, b, v) {
   const f = r.f || {}, cap = titled(r)
   if (f.old != null || f.new != null) {
-    const a = get(v, f.old), c = get(v, f.new)
-    if (typeof a !== 'string' || typeof c !== 'string') fail()
-    const ops = myers(a.split('\n'), c.split('\n'))
+    const { a, c, ops } = editOf(f, v)
     return { html: cap + (ops ? ops.map(([s, l]) => dline(SIGN[s], s + l)).join('') : pane(BEFORE, a) + pane(AFTER, c)) }
   }
-  const p = f.patch != null ? get(v, f.patch) : b
-  if (typeof p !== 'string') fail()
-  const L = p.split('\n'), hunk = (l) => l.startsWith('@@') || l.startsWith('***')
+  const L = patchOf(f, b, v).split('\n')
   if (L.at(-1) === '') L.pop()
-  if (!L.some(hunk)) fail() // not a patch
   let head = true
   return { html: cap + L.map((l) => {
     if (hunk(l)) head = false
@@ -245,19 +258,56 @@ function dims(s) { // [type, width, height] from the image header, else null
   }
   return null
 }
-function media(r, b, v, o) {
-  const f = r.f || {}, data = f.data != null ? get(v, f.data) : undefined, url = f.url != null ? get(v, f.url) : undefined
-  if (data == null) return { html: typeof url === 'string' ? `<div class="kd-note">${esc(IMAGE_URL)}</div><div>${shown(url)}</div>` : `<div>${shown(asText(b))}</div>` }
+// what a media spec reads: {url?} with no data, else {url?, mime} and one of svg (its source), dims and alt (an image), file (its line)
+function mediaOf(f, v) {
+  const data = f.data != null ? get(v, f.data) : undefined, u = f.url != null ? get(v, f.url) : undefined, url = typeof u === 'string' ? u : undefined
+  if (data == null) return { url }
   if (typeof data !== 'string') fail()
-  const bin = atob(data), mime = String((f.mime != null && get(v, f.mime)) || '').toLowerCase().split(';')[0].trim()
-  const sub = mime.split('/')[1] || '', src = `data-media="${esc(JSON.stringify([...o.root, ...f.data]))}" data-mime="${esc(mime)}"`
-  if (sub.startsWith('svg')) return { as: 'code', body: new TextDecoder().decode(Uint8Array.from(bin, (c) => c.charCodeAt(0))) }
+  const bin = atob(data), mime = String((f.mime != null && get(v, f.mime)) || '').toLowerCase().split(';')[0].trim(), sub = mime.split('/')[1] || ''
+  if (sub.startsWith('svg')) return { url, mime, svg: new TextDecoder().decode(Uint8Array.from(bin, (c) => c.charCodeAt(0))) }
   const d = dims(bin)
-  if (d) return { html: `<img ${src} width="${d[1]}" height="${d[2]}" alt="${esc(mediaAlt(d[0], d[1], d[2], bin.length))}" decoding="async">` }
+  if (d) return { url, mime, dims: d, alt: mediaAlt(d[0], d[1], d[2], bin.length) }
   if (/^(?:png|jpe?g|gif|webp)$/.test(sub)) fail() // an image type whose header does not read
-  return { html: `<div class="kd-file">${esc((sub || mime || '?').toUpperCase())} · ${esc(bytes(bin.length))} <button type="button" data-cellsave ${src}>${esc(SAVE)}</button></div>` }
+  return { url, mime, file: `${(sub || mime || '?').toUpperCase()} · ${bytes(bin.length)}` }
+}
+function media(r, b, v, o) {
+  const f = r.f || {}, m = mediaOf(f, v)
+  if (m.mime === undefined) return { html: m.url != null ? `<div class="kd-note">${esc(IMAGE_URL)}</div><div>${shown(m.url)}</div>` : `<div>${shown(asText(b))}</div>` }
+  if (m.svg != null) return { as: 'code', body: m.svg }
+  const src = `data-media="${esc(JSON.stringify([...o.root, ...f.data]))}" data-mime="${esc(m.mime)}"`
+  if (m.dims) return { html: `<img ${src} width="${m.dims[1]}" height="${m.dims[2]}" alt="${esc(m.alt)}" decoding="async">` }
+  return { html: `<div class="kd-file">${esc(m.file)} <button type="button" data-cellsave ${src}>${esc(SAVE)}</button></div>` }
 }
 const R = { text, code, shell, json, kv, opaque, parts, markdown, diff, media, tool }
+
+// ── the text of a block, what Copy text gives (2.3 §工具栏): each kind's own reading as draw has it, no HTML and no budget ───────
+const headed = (r, s) => (r.title != null ? `${r.title}\n${s}` : s)
+const written = (r, b) => (typeof b !== 'string' ? T.json(r, b) : headed(r, r.f?.gutter ? b.split('\n').map((l) => l.replace(GUT, '')).join('\n') : b))
+const pairs = (r, b, keys) => keys.map((k) => `${k}: ${textOf(r.kids?.[k], b[k])}`)
+const T = {
+  text: written,
+  code: written,
+  markdown: (r, b) => (typeof b === 'string' ? written(r, b) : fail()),
+  json: (r, b) => asText(typeof b === 'string' ? JSON.parse(b) : b),
+  shell: (r, b, v) => [`$ ${cmdLine(r, v)}`, ...pairs(r, b, shellRest(r, b))].join('\n'),
+  kv: (r, b) => (!b || typeof b !== 'object' ? fail() : pairs(r, b, Object.keys(b)).join('\n') || NO_ARGS),
+  parts: (r, b) => (Array.isArray(b) ? b.map((x, i) => textOf(r.kids?.[i], x)).join('\n\n') : fail()),
+  opaque: () => OPAQUE_LINE,
+  tool(r, b, v) {
+    const { desc, schema } = toolOf(r.f || {}, v)
+    return [desc, schema === undefined ? undefined : asText(schema)].filter((x) => x !== undefined).join('\n\n')
+  },
+  diff(r, b, v) {
+    const f = r.f || {}
+    if (f.old == null && f.new == null) return headed(r, patchOf(f, b, v))
+    const { a, c, ops } = editOf(f, v)
+    return headed(r, ops ? ops.map(([s, l]) => s + l).join('\n') : `${BEFORE}\n${a}\n\n${AFTER}\n${c}`)
+  },
+  media(r, b, v) {
+    const m = mediaOf(r.f || {}, v)
+    return m.url ?? m.svg ?? m.alt ?? m.file ?? asText(b)
+  },
+}
 
 // ── json tree: <details> per object / array; 2 levels open on a first paint, at most FIRST nodes; the rest closed and empty ─
 const prim = (v, path, B) => typeof v === 'string' ? `<span class="j-str">&quot;${cutStr(v, 0, B, path, true)}</span>`
@@ -302,8 +352,18 @@ export function jsonNodeHtml(value, path, span, { q = false, budget = 20000 } = 
 
 // ── dispatch ────────────────────────────────────────────────────────────────────────────────────────────────────────
 const toneOf = (r) => (r && has(TONE, r.tone) ? ' ' + TONE[r.tone] : '')
+const kindOf = (r) => (r && typeof r.as === 'string' && has(R, r.as) ? r.as : 'text')
+// textOf(r, value) → every character of the block as text: the spec and body draw would read, failing to the same text
+export function textOf(r, value) {
+  let body
+  try {
+    body = get(value, r?.f?.body)
+    if (body === undefined && r?.f?.body != null) fail()
+    return T[kindOf(r)](r || {}, body, value)
+  } catch { return asText(body ?? value) }
+}
 function draw(r, value, o) {
-  let as = r && typeof r.as === 'string' && has(R, r.as) ? r.as : 'text', body
+  let as = kindOf(r), body
   const tone = toneOf(r), from = r?.f?.body, at = [...o.root, ...(Array.isArray(from) ? from : [])]
   try {
     body = get(value, from)
