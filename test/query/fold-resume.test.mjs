@@ -31,7 +31,7 @@ const SHAPE = { growth: 2_000, compactAt: 20_000, subEvery: 3, subLanes: 3, late
 
 // The worker's background in a process of its own: slices of `ms`, an idle period (saveIndexes) after a slice with probability
 // `idle`, an abrupt exit after slice `kill` (0: never; at the end an idle period). Prints {slices, killed, ticks}: `ticks` = its
-// progress reports, one per member it folded.
+// progress reports: a few per slice, and one per member it extracted and folded.
 const WORKER = `
 await import(${at('../../src/query/named/index.mjs')})
 const { extendSession, saveIndexes } = await import(${at('../../src/query/named/session.mjs')})
@@ -190,8 +190,10 @@ test('a worker that only read an unchanged session leaves the reduction state: t
   s.append(300)
   await worker(home, s.id, { idle: 0 })
   assert.ok(state(), 'the fold left its state in the sidecar')
+  const side = sidecarOf(foldLogFile(home, s.id)), written = fs.statSync(side).ino
   await worker(home, s.id, { idle: 0 })
   assert.ok(state(), 'the state is still there after a worker that only read')
+  assert.equal(fs.statSync(side).ino, written, 'a read that moved nothing wrote no sidecar')
   s.append(1)
   const { ticks } = await worker(home, s.id, { idle: 0 })
   assert.ok(ticks < 100, `the new member alone is folded, not the session: ${ticks} ticks`)
