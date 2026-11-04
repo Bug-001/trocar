@@ -26,6 +26,77 @@ const seeded = (seed) => (n) => { seed = (Math.imul(seed, 1103515245) + 12345) &
 // Everything a caller reads except the times, which are the only field two runs may differ in.
 const outcome = ({ rule_ms, survivors, escalate, skipped, ...rest }) => ({ ...rest, skipped: names(skipped) });
 
+test('9, 63: wherever tier 1 finishes, its bytes, edits and every other field are those of tier 2', async () => {
+  const strings = ['ALPHA', 'xALPHAy', 'ALPHA ALPHA', '中文ALPHA😀', 'plain', '中文', 'a\\nALPHA', 'q\\"ALPHA', 'b\\\\ALPHA', 'a\\/ALPHA', '\\u0041LPHA', '\\nALPHA', 'nALPHA', 'a\\/ far enough ALPHA', 'a\t far enough ALPHA', 'a\\n far enough ALPHA'];
+  const values = (r) => {
+    const s = () => strings[r(strings.length)];
+    return [`"${s()}"`, `"${s()}"`, `"${s()}"`, '12', '1.0', 'true', 'null', `["${s()}",7]`, `{"in":"${s()}"}`][r(9)];
+  };
+  const keys = ['a', 'b', 'ALPHA', '备注', 'k\\n'];
+  const shapes = [
+    (r) => `{${[0, 1, 2].map(() => `"${keys[r(keys.length)]}":${values(r)}`).join([',', ', ', ',\n  '][r(3)])}}`,
+    (r) => `[${[0, 1].map(() => values(r)).join(',')}]`,
+    (r) => ` \n{"a":${values(r)}} `,
+    (r) => `{"a":${values(r)}`, // cut short: tier 2 reads it as plain text
+    (r) => `{"a":tru,"b":${values(r)}}`,
+    (r) => `"${strings[r(strings.length)]}"`,
+    () => 'ALPHA',
+    () => 'plain ALPHA text, ALPHA again',
+    () => '',
+    () => '{"a":"ALPHA","a":"other"}', // a repeated key
+    () => '{"a":"\tALPHA"}', // a raw control character
+    () => '{"a":"\\q far enough ALPHA"}', // a bad escape: tier 2 reads the body as plain text
+    () => '{"a":"\\/ far enough ALPHA"}', // an escape JSON.stringify would not write back
+    () => Buffer.from([0x7b, 0xff, 0x41, 0x4c, 0x50, 0x48, 0x41]), // not UTF-8
+  ];
+  const actions = [
+    lit('ALPHA', 'BRAVO'), lit('ALPHA', 'A LONGER ONE'), lit('ALPHA', ''), lit('ALPHA', 'ALPHA'), lit('nALPHA', 'x'), lit('中文', 'Z', { in: 'body' }),
+    lit('ALPHA', 'B"\\\n中', { in: 'body' }), lit('ALPHA', 'B"'), lit('中文', 'Z'), lit('😀', 'smile', { in: 'body' }),
+    { header: 'x-note', set: 'on' }, { header: 'content-type', remove: true }, { delay_ms: 1500 }, { inject: 'data: x\n\n' }, { json: '/a', set: 1 },
+  ];
+  const r = seeded(9);
+  const finished = new Set();
+  for (let round = 0; round < 1500; round++) {
+    const body = shapes[r(shapes.length)](r);
+    const list = Array.from({ length: 1 + r(3) }, (_, i) => rule(`r${i}`, [actions[r(actions.length)], actions[r(actions.length)]]));
+    const on = ['request', 'response'][r(2)];
+    const unit = unitOf(body, { on, sse: on === 'response' && r(2) === 0 });
+    const compiled = rules(...list);
+    const first = await tier1(unit, compiled);
+    if (first.escalate) continue;
+    const second = await tier2(unit, compiled);
+    assert.deepEqual(outcome(first), outcome(second), `${body} ${JSON.stringify(list)}`);
+    if (first.bytes) finished.add(list.flatMap((r) => r.do).find((a) => a.replace)?.in ?? 'text');
+  }
+  assert.deepEqual([...finished].sort(), ['body', 'text'], 'tier 1 finished edits both ways');
+});
+
+test('9, 63: a rule tier 1 cannot finish hands every survivor to tier 2 and nothing else', async () => {
+  const cases = [
+    [lit('ALPHA', 'B'), '{"ALPHA":1}'], // the hit is a key
+    [lit('ALPHA', 'B'), '{"a":12,"b":"\\u0041"}'], // \u could spell it
+    [lit('ALPHA', 'B'), '{"a":"\\nALPHA"}'], // a backslash just before the hit
+    [lit('ALPHA', 'B'), '[truALPHA]'], // the hit is in a value that is no string
+    [lit('AL.HA', 'B"'), '{"a":"AL.HA"}'], // with needs escaping
+    [{ replace: 'ALPHA', with: 'B' }, '{"a":"ALPHA"}'], // a regex
+    [{ json: '/a', set: 1 }, '{"a":"ALPHA"}'],
+    [{ blocks: { role: 'user' }, remove: true }, '{"a":"ALPHA"}'],
+    [lit('ALPHA', 'B', { blocks: { role: 'user' } }), '{"a":"ALPHA"}'],
+    [{ script: '/abs/s.mjs' }, '{"a":"ALPHA"}'],
+  ];
+  for (const [action, body] of cases) {
+    const compiled = rules(rule('head', { header: 'x-a', set: '1' }), rule('edit', action), rule('other', { drop: true }, { match: { method: 'GET' } }));
+    const result = await tier1(unitOf(body), compiled);
+    assert.equal(result.escalate, true, JSON.stringify(action));
+    assert.deepEqual(result.survivors.map((c) => c.name), ['head', 'edit']);
+    assert.equal(result.bytes, undefined);
+  }
+  const zipped = await tier1(unitOf(zlib.gzipSync('{"a":"ALPHA"}'), { encoding: 'gzip' }), rules(rule('r', lit('ALPHA', 'B', { in: 'body' }))));
+  assert.equal(zipped.escalate, true);
+  const unread = await tier1(unitOf(null), rules(rule('r', lit('ALPHA', 'B'))));
+  assert.equal(unread.escalate, true);
+});
+
 test('tier 1 never reaches for the rule process, and finishes head-only work with the body unread', async () => {
   const compiled = rules(rule('head', [{ header: 'x-a', set: '1' }, { delay_ms: 10 }]));
   const result = await applyRules(unitOf(null), compiled, { tier: 1, budget: byteBudget(), full: new Proxy({}, { get() { throw new Error('tier 1 touched full'); } }) });
@@ -91,3 +162,175 @@ test('would: what rules test cannot do is reported per rule, and reply names its
   assert.equal(result.bytes, null);
 });
 
+test('38: the output limits send an edit to tier 2 before anything is allocated', async () => {
+  const big = () => byteBudget(1024 * MIB);
+  const cases = [
+    ['256 KiB of spaces, a 3000-byte with', ' '.repeat(256 * KIB), lit(' ', 'x'.repeat(3000), { in: 'body' }), byteBudget()],
+    ['the same on a roomy budget', ' '.repeat(256 * KIB), lit(' ', 'x'.repeat(3000), { in: 'body' }), big()],
+    ['over 4096 hits, no growth', 'a'.repeat(4097), lit('a', 'b', { in: 'body' }), big()],
+    ['grows by over 256 KiB', 'a'.repeat(100), lit('a', 'x'.repeat(3 * KIB), { in: 'body' }), big()],
+    ['over 1 MiB out', `${'.'.repeat(MIB)}a`, lit('a', 'xx', { in: 'body' }), big()],
+  ];
+  for (const [name, body, action, budget] of cases) {
+    for (const more of [{}, { on: 'response', sse: true }]) {
+      const result = await tier1(unitOf(body, more), rules(rule('r', action)), budget);
+      assert.equal(result.escalate, true, name);
+    }
+  }
+  const atTheLimit = await tier1(unitOf('a'.repeat(4096)), rules(rule('r', lit('a', 'b', { in: 'body' }))), big());
+  assert.equal(atTheLimit.escalate, false);
+});
+
+test('38: rules that grow the body one after another pay for the body as it is, so the bill stays bounded', async () => {
+  const chain = Array.from({ length: 12 }, (_, i) => rule(`r${i}`, lit(`m${i}`, `m${i + 1} ${'x'.repeat(60 * KIB)} `, { in: 'body' })));
+  for (const more of [{}, { on: 'response', sse: true }]) {
+    const budget = byteBudget();
+    const result = await tier1(unitOf('m0', more), rules(...chain), budget);
+    assert.equal(result.escalate, true);
+    assert.ok(budget.spent <= UNIT_BYTES + 2 * MIB, `spent ${budget.spent}`);
+  }
+  const passes = [];
+  const counting = { spend(n) { passes.push(n); return true; }, get over() { return false; }, get spent() { return 0; } };
+  const two = await tier1(unitOf('m0'), rules(...chain.slice(0, 2)), counting);
+  assert.equal(two.escalate, false);
+  assert.equal(Math.max(...passes), two.bytes.length, 'a pass is charged at the length it reads');
+  assert.ok(passes.includes(2 + 60 * KIB + 1 + 1), 'the second rule pays for the first rule\'s output');
+});
+
+test('61: the second script of a unit is skipped, by its on_error, and the first one stands', async () => {
+  const calls = [];
+  const script = (r, message) => { calls.push(r.name); return { body: `${message.text}!` }; };
+  const compiled = (onError) => rules(rule('a', { script: '/abs/a.mjs' }), rule('b', [{ header: 'x-b', set: '1' }, { script: '/abs/b.mjs' }], { on_error: onError, match: { host: '*' } }));
+  const forward = await tier2(unitOf('body'), compiled('forward'), { script });
+  assert.deepEqual(calls, ['a']);
+  assert.equal(text(forward), 'body!');
+  assert.equal(forward.headers, null, 'the skipped rule keeps none of its changes');
+  assert.deepEqual(names(forward.skipped), [['b', 'multi-script']]);
+  assert.equal(forward.verdict, 'forward');
+  assert.equal((await tier2(unitOf('body'), compiled('drop'), { script })).verdict, 'drop');
+});
+
+test('61: a rule that fails loses only its own changes, later rules run, and on_error decides', async () => {
+  const before = rule('before', lit('ALPHA', 'BRAVO', { in: 'body' }));
+  const after = rule('after', lit('BRAVO', 'CHARLIE', { in: 'body' }));
+  const bad = (onError) => rule('bad', [lit('}', '!', { in: 'body' }), { header: 'x-bad', set: '1' }, { delay_ms: 50 }, { json: '/x/y', set: 1 }], { on_error: onError, match: { host: '*' } });
+  const forward = await tier2(unitOf('{"a":"ALPHA"}'), rules(before, bad('forward'), after));
+  assert.equal(text(forward), '{"a":"CHARLIE"}');
+  assert.deepEqual(applyEdits(forward.bytes, forward.edits), Buffer.from('{"a":"ALPHA"}'));
+  assert.deepEqual(names(forward.skipped), [['bad', 'rule-error']]);
+  assert.equal(typeof forward.skipped[0].ms, 'number');
+  assert.deepEqual([forward.headers, forward.delay_ms, forward.verdict], [null, 0, 'forward']);
+  assert.deepEqual(forward.hits, ['before', 'bad', 'after']);
+  assert.equal((await tier2(unitOf('{"a":"ALPHA"}'), rules(before, bad('drop'), after))).verdict, 'drop');
+});
+
+test('61: a script that throws is a rule-error, and what a script may return is checked', async () => {
+  const compiled = rules(rule('s', { script: '/abs/s.mjs' }));
+  const skippedBy = async (script) => names((await tier2(unitOf('body'), compiled, { script })).skipped);
+  assert.deepEqual(await skippedBy(() => { throw new Error('boom'); }), [['s', 'rule-error']]);
+  assert.deepEqual(await skippedBy(() => ({ headers: [['content-length', '1']] })), [['s', 'rule-error']]);
+  assert.deepEqual(await skippedBy(() => ({ headers: [['x', 'a\r\nb']] })), [['s', 'rule-error']]);
+  assert.deepEqual(await skippedBy(() => ({ body: 7 })), [['s', 'bad-result']]);
+  assert.deepEqual(await skippedBy(() => 7), [['s', 'bad-result']]);
+});
+
+test('a script reads the message of 5.1, on the bytes the rules before it left, with credentials blanked', async () => {
+  let seen;
+  const script = (_, message) => { seen = message; };
+  const unit = unitOf('ALPHA', { headers: [['authorization', 'Bearer real'], ['x-api-key', 'real'], ['accept', '*/*']] });
+  const result = await tier2(unit, rules(rule('a', lit('ALPHA', '中文', { in: 'body' })), rule('s', { script: '/abs/s.mjs' })), { script });
+  assert.deepEqual(seen.bytes, Buffer.from('中文'));
+  assert.equal(seen.text, '中文');
+  assert.deepEqual({ ...seen, bytes: 0, text: 0 }, { on: 'request', harness: 'codex', pid: 42, method: 'POST', host: 'api.example.com', path: '/v1/messages', status: null, headers: [['authorization', ''], ['x-api-key', ''], ['accept', '*/*']], bytes: 0, text: 0 });
+  assert.equal(text(result), '中文', 'an empty return changes nothing');
+
+  await tier2(unitOf(Buffer.from([0xff, 0xfe])), rules(rule('s', { script: '/abs/s.mjs' })), { script });
+  assert.equal('text' in seen, false);
+});
+
+test('a script changes the body and the headers, in binary too', async () => {
+  const binary = Buffer.from([0, 0xff, 1]);
+  const compiled = rules(rule('s', { script: '/abs/s.mjs' }));
+  const headers = await tier2(unitOf('x'), compiled, { script: () => ({ headers: [['x-a', '1'], ['content-type', null]] }) });
+  assert.deepEqual(headers.headers, [['x-a', '1']]);
+  assert.equal(headers.bytes, null);
+
+  const up = await tier2(unitOf(binary), compiled, { script: () => Buffer.from([1, 2]) });
+  assert.deepEqual(up.bytes, Buffer.from([1, 2]));
+  assert.equal(up.recover.recover, 'inline');
+  assert.equal(up.recover.body_b64, binary.toString('base64'));
+
+  const down = await tier2(unitOf('plain', { on: 'response' }), compiled, { script: () => binary });
+  assert.equal(down.recover.recover, 'inline');
+  assert.equal(down.recover.body_b64, binary.toString('base64'));
+
+  const same = await tier2(unitOf('plain'), compiled, { script: () => 'plain' });
+  assert.equal(same.bytes, null);
+});
+
+test('rules test without --run-script: the script is reported, not run', async () => {
+  const result = await tier2(unitOf('body'), rules(rule('s', [{ header: 'x-a', set: '1' }, { script: '/abs/s.mjs' }])));
+  assert.deepEqual(result.would, [{ rule: 's', text: 'script' }]);
+  assert.deepEqual(result.skipped, []);
+  assert.equal(result.bytes, null);
+});
+
+test('a unit that cannot be read skips the rules that read it, not the rest', async () => {
+  const notUtf8 = await tier2(unitOf(Buffer.from([0xff, 0x41])), rules(
+    rule('text', lit('A', 'B', { in: 'body' })), rule('body', { delay_ms: 3 }, { match: { body: 'A' } }), rule('head', { delay_ms: 5 }), rule('other-host', { drop: true }, { match: { host: 'x', body: 'A' } }),
+  ));
+  assert.deepEqual(names(notUtf8.skipped), [['body', 'not-utf8'], ['text', 'not-utf8']]);
+  assert.deepEqual([notUtf8.delay_ms, notUtf8.verdict], [5, 'forward']);
+
+  const coded = rules(rule('edit', lit('A', 'B'), { on_error: 'drop', match: { host: '*' } }), rule('head', { header: 'x-a', set: '1' }));
+  const unknown = await tier2(unitOf('A', { encoding: 'nonsense' }), coded);
+  assert.deepEqual(names(unknown.skipped), [['edit', 'encoding']]);
+  assert.deepEqual([unknown.verdict, unknown.bytes, unknown.headers.at(-1)], ['drop', null, ['x-a', '1']]);
+});
+
+test('edits-full: a change the record cannot hold is no change, and on_error decides', async () => {
+  const wide = 'x'.repeat(2 * MIB);
+  const compiled = (onError) => rules(rule('a', lit('ALPHA', wide, { in: 'body' }), { on_error: onError, match: { host: '*' } }), rule('h', { header: 'x-a', set: '1' }));
+  const response = { on: 'response' };
+  const forward = await tier2(unitOf('ALPHA', response), compiled('forward'));
+  assert.deepEqual([forward.bytes, forward.headers, forward.recover, forward.edits, forward.verdict], [null, null, null, [], 'forward']);
+  assert.deepEqual(names(forward.skipped), [['a', 'edits-full'], ['h', 'edits-full']]);
+  assert.equal((await tier2(unitOf('ALPHA', response), compiled('drop'))).verdict, 'drop');
+  const fits = await tier2(unitOf('ALPHA'), compiled('forward')); // going up the record holds what was taken out
+  assert.equal(fits.bytes.length, wide.length);
+  assert.deepEqual(fits.skipped, []);
+});
+
+test('AC-I: edits take the wire bytes back to the agent\'s bytes, each way, across wide characters', async () => {
+  const body = `{"备注":"中文😀","a":"中文😀ALPHA","b":"ALPHA ALPHA","pad":"${'p'.repeat(600)}"}`;
+  const edit = rule('r', lit('ALPHA', 'β'.repeat(3), { in: 'body' }));
+  const fast = rule('f', lit('ALPHA', 'BR'));
+  for (const list of [[edit], [fast], [fast, rule('g', lit('BR', 'ALPHA ', { in: 'body' }))]]) {
+    for (const run of [tier1, tier2]) {
+      const up = await run(unitOf(body), rules(...list));
+      assert.deepEqual(applyEdits(up.bytes, up.edits), Buffer.from(body));
+      assert.equal(up.recover.recover, 'patch');
+      assert.deepEqual(up.recover.edits, up.edits);
+      const down = await run(unitOf(body, { on: 'response' }), rules(...list));
+      assert.deepEqual(applyEdits(Buffer.from(body), down.edits), down.bytes);
+    }
+  }
+});
+
+test('AC-I: a compressed body goes out plain, without content-encoding, and the record keeps what the agent sent', async () => {
+  const plain = `{"a":"ALPHA","pad":"${'p'.repeat(600)}"}`, zipped = zlib.gzipSync(plain);
+  const headers = [['Content-Encoding', 'gzip'], ['content-type', 'application/json']];
+  const compiled = rules(rule('r', lit('ALPHA', 'BRAVO')));
+  const up = await tier2(unitOf(zipped, { encoding: 'gzip', headers }), compiled);
+  assert.equal(text(up), plain.replace('ALPHA', 'BRAVO'));
+  assert.deepEqual(up.headers, [['content-type', 'application/json']]);
+  assert.equal(up.recover.recover, 'inline');
+  assert.deepEqual(Buffer.from(up.recover.body_b64, 'base64'), zipped);
+
+  const down = await tier2(unitOf(zipped, { on: 'response', encoding: 'gzip', headers }), compiled);
+  assert.deepEqual(down.headers, [['content-type', 'application/json']]);
+  assert.deepEqual(applyEdits(Buffer.from(plain), down.recover.edits), down.bytes, 'the base of a response is its decoded text, so a patch still holds');
+
+  const untouched = await tier2(unitOf(zipped, { encoding: 'gzip', headers }), rules(rule('r', lit('BRAVO', 'X'))));
+  assert.deepEqual([untouched.bytes, untouched.headers, untouched.recover], [null, null, null]);
+});
