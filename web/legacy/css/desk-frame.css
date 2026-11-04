@@ -45,7 +45,7 @@
 .desk.next .deskside.bottom .sidepanel{position:absolute;left:0;right:0;bottom:var(--siderow);height:50%;z-index:8;background:var(--raised);border-top:1px solid var(--rule);}
 @media (max-width:899.98px){
   .desk.next #saw,.desk.next #rails{--gut:0px;} /* px: scope.css adds it to a length in calc() */
-  .desk.next .tgut{display:none;}
+  .desk.next .tgut,.desk.next #saw #sawgut{display:none;}
   .desk.next .tkrow > *,.desk.next .chaprow > *{grid-column:2;} /* the lanes keep their column with the name cell gone */
 }
 @media (max-width:599.98px){
