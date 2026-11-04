@@ -7,12 +7,24 @@
 import { applyOps, eolOf, markLen } from './json-text.mjs'
 import { sameEnvName, foldEnvName } from './env-names.mjs'
 
+// A marker (4.6「标记的字」) is the fixed sentinel part — the block's open and close lines, a line's `# trocar collector: <what>` — plus human words: the
+// commands that wrote the entry and that remove it, in backquotes. Everything that finds, judges or undoes an entry keys on the fixed part and on
+// trocar's own text, never on those words, so what a release with other command names wrote is the same entry (sameMarked / holdsMarked below).
 export const SENTINEL = 'trocar collector'
-export const BLOCK_BEGIN = `# >>> ${SENTINEL} >>> written by \`trocar collector install\`; \`trocar collector uninstall\` removes this block`
+export const BLOCK_OPEN = `# >>> ${SENTINEL} >>>`
 export const BLOCK_END = `# <<< ${SENTINEL} <<<`
+export const LINE_MARK = `# ${SENTINEL}: `
+const REMOVER = Object.freeze({ install: 'trocar uninstall', on: 'trocar off' }) // the command that takes out an entry of each phase (D55①)
+const removerOf = (phase) => { if (!REMOVER[phase]) throw new Error(`no command removes an entry of phase ${phase}`); return REMOVER[phase] }
+export const blockBegin = (phase = 'install') => `${BLOCK_OPEN} written by \`trocar ${phase}\`; \`${removerOf(phase)}\` removes this block`
 // A user's line of the same name family, put out of effect by trocar (4.6 §身份与信任「名字族」): uninstall strips exactly this prefix.
 export const OFF_PREFIX = `#${SENTINEL.replace(' ', '-')}-off# `
-export const lineComment = (what) => `# ${SENTINEL}: ${what} (\`trocar collector uninstall\` removes this line)`
+// every line trocar writes is install's (the Kimi PATH line, the dsh loader row, the PATH item): `trocar uninstall` takes it out
+export const lineComment = (what) => `${LINE_MARK}${what} (\`${REMOVER.install}\` removes this line)`
+// the human words of a marker are the trocar commands it names in backquotes: two texts that differ only there hold the same marker
+const unmark = (s) => String(s).replace(/`trocar(?: [a-z][a-z-]*)*`/g, '`trocar`')
+export const sameMarked = (a, b) => typeof a === 'string' && typeof b === 'string' && unmark(a) === unmark(b)
+export const holdsMarked = (text, line) => typeof text === 'string' && typeof line === 'string' && unmark(text).includes(unmark(line))
 
 const SAFE_VALUE = /^[^\s"'`#$\\]+$/ // unquoted dotenv value: an absolute path without spaces, quotes, # or $
 // Inside double quotes a space, a single quote, brackets and # are plain characters; what dotenvy and python-dotenv read as an escape (\), a substitution ($, `) or the end of the line is
@@ -66,7 +78,7 @@ function putOutOfEffect(src, names, fold, skip = () => false) {
 // `at: 'end'` (4.11 kind `dotenv-block`, ruling ④): the block goes after the user's last line instead — the last assignment wins, so the user's
 // lines of the same names stay in the file byte for byte and none is put out of effect; `prior` is still what the agent read before (the last
 // assignment of each name). A file whose last line has no line ending gets one ahead of the block (the only byte of the user's line that moves).
-export function dotenvBlock(text, vars, { quote = false, neutralize = [], fold = false, at = 'top' } = {}) {
+export function dotenvBlock(text, vars, { quote = false, neutralize = [], fold = false, at = 'top', phase = 'install' } = {}) {
   const shown = shownVars(vars, quote)
   const src = text == null ? '' : text
   const eol = eolOf(src)
@@ -75,7 +87,7 @@ export function dotenvBlock(text, vars, { quote = false, neutralize = [], fold =
   const found = putOutOfEffect(src, familyOf(vars, neutralize), fold)
   const ops = end ? [] : found.ops
   const prior = found.prior
-  const block = [BLOCK_BEGIN, ...Object.entries(shown).map(([k, v]) => `${k}=${v}`), BLOCK_END].join(eol) + eol
+  const block = [blockBegin(phase), ...Object.entries(shown).map(([k, v]) => `${k}=${v}`), BLOCK_END].join(eol) + eol
   if (end) ops.push({ offset: src.length, removed: '', inserted: (src === '' || src.endsWith('\n') ? '' : eol) + block })
   else ops.push({ offset: markLen(src), removed: '', inserted: block }) // after the mark: the file still starts with it
   return { text: applyOps(src, ops), ops, prior: Object.keys(prior).length ? prior : null }
@@ -90,7 +102,7 @@ export function dotenvBlock(text, vars, { quote = false, neutralize = [], fold =
 export function joinDotenvBlock(text, vars, { quote = false, neutralize = [], fold = false } = {}) {
   const shown = shownVars(vars, quote)
   if (text == null) throw new Error('there is no trocar block to join')
-  const begin = text.indexOf(BLOCK_BEGIN)
+  const begin = text.indexOf(BLOCK_OPEN)
   const end = text.indexOf(BLOCK_END)
   if (begin < 0 || end < begin) throw new Error('there is no trocar block to join')
   const eol = eolOf(text)
@@ -137,13 +149,13 @@ const one = (src, offset, inserted) => ({ text: applyOps(src, [{ offset, removed
 // A marked PEM block at the END of a user's certificate file (4.11 rule U, `text` / `pem-block`): the file's own line ending, a line ending first when
 // its last line has none (the only byte added in front of the user's text). PEM readers skip text outside BEGIN / END lines, so the marks are inert.
 // The op carries `pem: true`: removeTrocarText takes the block out by its marks, never line by line (a certificate line may be the user's too).
-export function pemBlock(text, pem) {
+export function pemBlock(text, pem, phase = 'install') {
   const src = text == null ? '' : text
   const eol = eolOf(src)
   const body = String(pem).split(/\r?\n/).filter((l) => l !== '')
   if (!body.length || !/^-----BEGIN [A-Z0-9 ]+-----$/.test(body[0]) || !/^-----END [A-Z0-9 ]+-----$/.test(body.at(-1))) throw new Error('pemBlock: not a PEM block')
   const lead = src.length > markLen(src) && !src.endsWith('\n') ? eol : ''
-  const op = { offset: src.length, removed: '', inserted: lead + [BLOCK_BEGIN, ...body, BLOCK_END].join(eol) + eol, pem: true }
+  const op = { offset: src.length, removed: '', inserted: lead + [blockBegin(phase), ...body, BLOCK_END].join(eol) + eol, pem: true }
   return { text: applyOps(src, [op]), ops: [op] }
 }
 // Take one marked PEM block out of `t` → the text without it, or null when no block with the same lines is there. Only the block's bytes go (its BEGIN
@@ -151,9 +163,9 @@ export function pemBlock(text, pem) {
 const pemLines = (x) => x.split('\n').map((l) => l.replace(/\r$/, '')).filter((l) => l !== '')
 function removePemBlock(t, op) {
   const want = pemLines(op.inserted).join('\n')
-  const re = new RegExp(`(^\uFEFF?|\n)(${escapeRe(BLOCK_BEGIN)}\r?\n[\\s\\S]*?${escapeRe(BLOCK_END)}\r?(?:\n|$))`, 'g')
+  const re = new RegExp(`(^\uFEFF?|\n)(${escapeRe(BLOCK_OPEN)}[^\r\n]*\r?\n[\\s\\S]*?${escapeRe(BLOCK_END)}\r?(?:\n|$))`, 'g')
   for (let m; (m = re.exec(t));) {
-    if (pemLines(m[2]).join('\n') !== want) { re.lastIndex = m.index + m[0].length - 1; continue }
+    if (!sameMarked(pemLines(m[2]).join('\n'), want)) { re.lastIndex = m.index + m[0].length - 1; continue }
     let from = m.index + m[1].length
     const to = from + m[2].length
     const lead = /^\r?\n/.exec(op.inserted)

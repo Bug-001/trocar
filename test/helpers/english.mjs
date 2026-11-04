@@ -2,6 +2,7 @@
 // and 80 columns. One place, so a new command's test says `assertEnglish(text)` and inherits every rule.
 import assert from 'node:assert/strict'
 import { WIDTH } from '../../src/cli/text.mjs'
+import { COMMAND_INDENT } from '../../src/off/receipt.mjs'
 
 const BAD = [
   [/[\u3000-\u303f\u3400-\u4dbf\u4e00-\u9fff\uff00-\uffef]/, 'CJK or fullwidth characters'],
@@ -26,6 +27,7 @@ export function assertEnglish(text, where = 'the output', { placeholders = false
   if (!width) return
   for (const line of bare.split('\n')) {
     if (!line.trim().includes(' ')) continue // §1.1⑥: one long value (a path, a command) keeps its own line unbroken, however long it is
+    if (line.startsWith(COMMAND_INDENT) && /^(?:sudo |node |cmd |"|\/|[A-Za-z]:\\)/.test(line.slice(COMMAND_INDENT.length))) continue // §1.1⑥: a command to copy, printed whole on its own line (receipt.mjs commandLine)
     assert.ok(line.length <= WIDTH, `${where} has a line of ${line.length} columns (max ${WIDTH}):\n${line}`)
   }
 }

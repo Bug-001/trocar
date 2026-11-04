@@ -7,28 +7,58 @@
 import path from 'node:path'
 import { OFF_PREFIX } from './text-edit.mjs'
 
+/** 1.6 §1.1⑥: the column of a command to copy — deeper than a sentence (column 0) and a label's item (column 2), so a path printed as an item and
+ *  the same path printed as a command never look alike. Every receipt and refusal prints its commands here, and a line of a several-line text
+ *  (a refusal) that starts here is that text's command. */
+export const COMMAND_INDENT = '    '
+/** Where the folded lines of an indented line (an item) start: two deeper than the line and than COMMAND_INDENT, so no fold is ever at a command's
+ *  column (§1.1⑥). A column-0 line folds at column 0. */
+export const foldHang = (lead) => (lead ? ' '.repeat(Math.max(lead.length, COMMAND_INDENT.length) + 2) : '')
+/** Is this line of a several-line text a command to copy (it starts at COMMAND_INDENT)? */
+export const isCommandLine = (l) => String(l).startsWith(COMMAND_INDENT) && /\S/.test(String(l).charAt(COMMAND_INDENT.length))
+
 const WIDTH = 80
 const offTilde = (p, home) => (home && typeof p === 'string' && (p === home || p.startsWith(home + path.sep)) ? `~${p.slice(home.length)}` : p)
 const UNTIL_WORDS = { restart: 'until it restarts', 'next-connection': 'until its next new connection', 'next-handshake': 'until its next handshake', 'session-end': 'until its current session ends' }
 
-/** One line of at most 80 columns, or the line split at spaces with `indent` in front of every line after the first. A single word longer than the
- *  width (a path, a command) is never broken: it keeps its own line (§1.1 版式 6). White space the text starts with is kept as the first line's lead. */
-function fit(text, indent = '  ') {
+/** One line of at most 80 columns, or the line split at spaces (§1.1 版式 6): a text at column 0 folds at column 0, an indented one hangs at
+ *  foldHang. A single word longer than the width (a path, a command) is never broken:
+ *  it keeps its own line. */
+function fit(text) {
   const s = String(text)
-  const lead = s.slice(0, s.length - s.trimStart().length)
+  const lead = s.slice(0, s.length - s.trimStart().length), hang = foldHang(lead)
   const out = []
   let line = ''
   for (const word of s.trimStart().split(/\s+/).filter(Boolean)) {
-    const next = line ? `${line} ${word}` : `${out.length ? indent : lead}${word}`
-    if (line && next.length > WIDTH) { out.push(line); line = `${indent}${word}` } else line = next
+    const next = line ? `${line} ${word}` : `${lead}${word}`
+    if (line && next.length > WIDTH) { out.push(line); line = `${hang}${word}` } else line = next
   }
   if (line) out.push(line)
   return out
 }
 
+// a text of several lines (refuseOldManifest's refusal) keeps its lines, with HOME as `~` (§1.1⑤): a line at COMMAND_INDENT is a command to copy,
+// printed whole on its own line (§1.1⑥; `~` only for a POSIX HOME, where the shell expands it), every other line folded by fit
+const tildeWords = (s, home) => s.split(' ').map((w) => offTilde(w, home)).join(' ')
+export const textLines = (text, home) => String(text).split('\n').flatMap((l) => (isCommandLine(l) ? [home && home.startsWith('/') ? tildeWords(l, home) : l] : fit(tildeWords(l, home))))
+/** Rows of [label, value] as a labelled list (§1.1②, cli/text.mjs pairs' layout, written here for the same reason as fit): each label at column 2, padded so every
+ *  value starts in one column; a value folds at its own column (never COMMAND_INDENT: that column is at least 2 + 1 + 2), a word longer than the room keeps
+ *  its line whole; HOME as ~. */
+export const labelLines = (rows, home) => {
+  const label = Math.max(0, ...rows.map(([l]) => String(l).length)), col = 2 + label + 2
+  return rows.flatMap(([l, v]) => {
+    const out = []
+    let line = `  ${String(l).padEnd(label)}  `, empty = true
+    for (const word of tildeWords(String(v ?? ''), home).split(/\s+/).filter(Boolean)) {
+      if (!empty && line.length + 1 + word.length > WIDTH) { out.push(line); line = ' '.repeat(col) + word } else { line += (empty ? '' : ' ') + word; empty = false }
+    }
+    return [...out, line.trimEnd()]
+  })
+}
+
 // a key the user set to a value of their own while capture was on (D48②, removeTrocarText `prior_left`): their value wins, the old line trocar put out
 // of effect stays so — where it is, and how to have the old value back
-const priorLeftLines = (c) => (c.prior_left || []).flatMap((p) => fit(`    ${p.key} now holds the value you set while capture was on; the old line (line ${p.line}) is still commented out: to put it back, delete the leading ${OFF_PREFIX} on it.`, '    '))
+const priorLeftLines = (c) => (c.prior_left || []).flatMap((p) => fit(`    ${p.key} now holds the value you set while capture was on; the old line (line ${p.line}) is still commented out: to put it back, delete the leading ${OFF_PREFIX} on it.`))
 
 // the status of one changed file
 function rowStatus(c, t) {
@@ -45,7 +75,7 @@ function rowLines(c, t, past, width) {
   const status = past ? rowStatus(c, t) : c.backup ? `will be undone. A copy of the file as it is: ${t(c.backup)}` : 'will be undone'
   const head = `  ${label}  ${where}`
   const one = `${head}${/ /.test(status) ? ': ' : ' '}${status}`
-  return [...(one.length <= WIDTH ? [one] : [head, ...fit(`    ${status}`, '    ')]), ...priorLeftLines(c)]
+  return [...(one.length <= WIDTH ? [one] : [head, ...fit(`    ${status}`)]), ...priorLeftLines(c)]
 }
 
 // a program still connected through trocar when the doors closed: the door it uses stays open, passing its traffic on and recording nothing (P12)
@@ -84,6 +114,7 @@ function daemonLines(r, past, cutNote) {
 export function formatOffReceipt(r, { home = null, tense = r.dry_run ? 'future' : 'past', header = null, extra = [], footer = null, cutNote = ' (--now)' } = {}) {
   const past = tense !== 'future'
   const t = (x) => offTilde(x, home)
+  if (r.error && r.error.code === 'older-install') return textLines(`trocar off: ${r.error.message}`, home).join('\n') // a refusal before anything was read: no off-state lines
   const ids = (r.harnesses || []).map((h) => (typeof h === 'string' ? h : h && h.harness)).filter(Boolean)
   const scope = r.all ? 'all harnesses' : ids.join(', ')
   const lines = [header || (!past
@@ -93,7 +124,7 @@ export function formatOffReceipt(r, { home = null, tense = r.dry_run ? 'future' 
       : `Capture is off for ${scope}. trocar is no longer on ${r.all || ids.length > 1 ? 'their' : 'its'} path.`)]
   if (r.nothing_installed) { // trocar is not on this machine: said first and alone, not "off" with a list of nothing (§1.1)
     const out = [header || 'Nothing to turn off. trocar is not installed on this machine.']
-    if ((r.skipped || []).length) for (const s of r.skipped) out.push(...fit(`  ${t(s.what)}: ${s.reason}`, '    '))
+    if ((r.skipped || []).length) for (const s of r.skipped) out.push(...fit(`  ${t(s.what)}: ${s.reason}`))
     if ((r.user_processes || []).length) for (const p of r.user_processes) out.push(...fit(`Still running, started by you: ${p.command} (pid ${p.pid}, ${p.note}).`))
     for (const n of r.notes || []) out.push(...fit(n))
     out.push(...extra, footer || 'Turn capture on: trocar install, then trocar on') // `on` refuses with no certificates installed (§3.3 前提), so the next step is install first
@@ -107,9 +138,9 @@ export function formatOffReceipt(r, { home = null, tense = r.dry_run ? 'future' 
     for (const row of new Set(changed.map((c) => rowLines(c, t, past, width).join('\n')))) lines.push(...row.split('\n'))
   } else lines.push(past ? 'No file of yours was changed.' : 'No file of yours would be changed.')
   // a file is said once: several entries of one file (json keys) are one removal
-  for (const p of [...new Set(removed.map((x) => t(typeof x === 'string' ? x : x.path)))]) lines.push(...fit(`  ${past ? 'Deleted' : 'Will delete'}, trocar created it: ${p}`, '    '))
+  for (const p of [...new Set(removed.map((x) => t(typeof x === 'string' ? x : x.path)))]) lines.push(...fit(`  ${past ? 'Deleted' : 'Will delete'}, trocar created it: ${p}`))
   const listed = new Set(changed.map((c) => c.path)) // a file is said once: what was undone is not also "already as it was"
-  for (const s of (r.skipped || []).filter((x) => !listed.has(x.what))) lines.push(...fit(`  ${t(s.what)}: ${s.reason}`, '    '))
+  for (const s of (r.skipped || []).filter((x) => !listed.has(x.what))) lines.push(...fit(`  ${t(s.what)}: ${s.reason}`))
   if (changed.length) lines.push('')
   if (past && r.routing && !r.routing.confirmed) lines.push(...fit(`trocar could not confirm it is off their path (${r.routing.state || 'reason unknown'}).`))
   lines.push(...daemonLines(r, past, cutNote))
@@ -124,11 +155,11 @@ export function formatOffReceipt(r, { home = null, tense = r.dry_run ? 'future' 
   }
   if ((r.still_trusting || []).length) {
     const roots = r.still_trusting.filter((p) => p.what === 'root')
-    for (const p of roots) lines.push(...fit(`Your trust store still holds trocar's root certificate: ${p.reason}. Take it out by hand: ${p.command}`, '  '))
+    for (const p of roots) lines.push(...fit(`Your trust store still holds trocar's root certificate: ${p.reason}. Take it out by hand with this line:`), `${COMMAND_INDENT}${p.command}`) // a command keeps its own line, whole (1.6 §1.1⑥)
     const procs = r.still_trusting.filter((p) => p.what !== 'root')
     if (procs.length) {
       lines.push('Still trusting the trocar certificate, but not going through trocar:')
-      for (const p of procs) lines.push(...fit(`  ${p.harness} (pid ${p.pid}) ${UNTIL_WORDS[p.until] || UNTIL_WORDS.restart}`, '    '))
+      for (const p of procs) lines.push(...fit(`  ${p.harness} (pid ${p.pid}) ${UNTIL_WORDS[p.until] || UNTIL_WORDS.restart}`))
     }
   }
   for (const k of r.kept_bundles || []) {
@@ -147,10 +178,10 @@ export function formatOffReceipt(r, { home = null, tense = r.dry_run ? 'future' 
   for (const p of r.user_processes || []) lines.push(...fit(`Still running, started by you: ${p.command} (pid ${p.pid}, ${p.note}).`))
   if ((r.pending || []).length) {
     lines.push(past ? 'Found by trocar\'s own marks and not undone yet:' : 'Will be undone by trocar\'s own marks:')
-    for (const p of r.pending) lines.push(...fit(`  ${p.harness ? `${p.harness}  ` : ''}${t(p.path)}`, '    '))
+    for (const p of r.pending) lines.push(...fit(`  ${p.harness ? `${p.harness}  ` : ''}${t(p.path)}`))
   }
   for (const l of r.left || []) lines.push(...fit(`Not undone: ${t(l.path)} (${l.reason || l.result})`))
-  for (const n of r.problems || []) lines.push(...fit(n))
+  for (const n of r.problems || []) lines.push(...(n.includes('\n') ? textLines(n, home) : fit(n)))
   for (const n of r.notes || []) lines.push(...fit(n))
   lines.push(...extra, footer || (past ? 'Certificates stay installed. To remove them: trocar uninstall' : 'Nothing was changed. Run it without --dry-run to do it.'))
   return lines.join('\n')

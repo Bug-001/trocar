@@ -178,11 +178,11 @@ for (const platform of ['darwin', 'win32']) {
         assert.equal(await runOffCli([], { io: io2, home: w.home, env: w.env, platform, deps }), 0, io2.text())
         const uninstall = async () => { const o = fakeIo(); const exit = await runUninstallCli(['--yes'], { io: o, env: w.env, home: w.home, platform, deps: { ...deps, custody: w.custody } }); return { exit, text: o.text() } }
         const up = await uninstall()
-        assert.equal(up.exit, 1, up.text); assert.match(up.text.replace(/\n\s+/g, ' '), /codex \(pid 4711\)/, 'daemon up: GET /holders names it')
+        assert.equal(up.exit, 1, up.text); assert.match(up.text.replace(/\s+/g, ' '), /codex \(pid 4711\)/, 'daemon up: GET /holders names it')
         await box.stop()
         http.globalAgent.destroy() // a CLI is a new process: no kept-alive socket to the stopped daemon's server
         const down = await uninstall()
-        assert.equal(down.exit, 1, down.text); assert.match(down.text.replace(/\n\s+/g, ' '), /codex \(pid 4711\)/, 'daemon down: the CLI judges it from the manifest\'s window and the table')
+        assert.equal(down.exit, 1, down.text); assert.match(down.text.replace(/\s+/g, ' '), /codex \(pid 4711\)/, 'daemon down: the CLI judges it from the manifest\'s window and the table')
         assert.equal(readManifest(w.dir).install.state, 'complete', 'nothing was undone')
         assert.ok(readManifest(w.dir).liveness.codex.off_at, 'the real off closed the window in the manifest')
         table = []

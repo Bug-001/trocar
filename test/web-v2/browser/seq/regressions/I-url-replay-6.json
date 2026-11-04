@@ -15,5 +15,5 @@
   "status": "fixed",
   "detail": "a same-session hash change to step=0 (out of range below) leaves the URL step= unclamped while another step is shown; 1.2:91 clamps. Same root as I-url-replay-4 (its fp keeps the minus sign)",
   "owner": "desk",
-  "suspect": "src/web/v2/replay/replay.mjs:84 stepOf (null for step < 1) and :477"
+  "suspect": "web/legacy/replay/replay.mjs:84 stepOf (null for step < 1) and :477"
 }

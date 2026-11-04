@@ -9,6 +9,7 @@
 //     exits       [[code, 'what it means']], out of the five codes of §1.3.
 //     mutates     changes the user's own state, so it refuses root (§1.5): true, or a function of the parsed args when only some subcommands do
 //                 (`classes set|add|rm|reset` refuse root; `classes` shown does not). needsRoot: setup-helper, the one command that must be root.
+//     hidden      not in help or the README: `place`, which only the install scripts and `trocar update` run (§2).
 //     run         gets the argv after the name and the context of runCli: { io, env, home, platform, uid, args: { positionals, flags }, deps }.
 //   helpText    the help, made from the table: the three sections, or one command when named.
 import { optionsOf } from './args.mjs'
@@ -55,7 +56,7 @@ export const COMMANDS = Object.freeze([
     options: [['--failures', 'list every failure of the last day, not just the newest'], JSON_OPT],
     exits: [[0, 'every agent is being captured'], [1, 'some are not'], [2, 'a usage error, or an unknown agent'], [3, 'it could not be read; the reason is in the output']] },
   { name: 'uninstall',
-    group: 'Capture', mutates: true, run: via('./uninstall.mjs', 'runUninstallCli'),
+    group: 'Capture', mutates: true, recordsPath: false, run: via('./uninstall.mjs', 'runUninstallCli'), // 4.11 present: it deletes the recorded PATH
     usage: 'trocar uninstall [--purge-data] [--yes] [--dry-run] [--json]',
     summary: 'Removes what install put on this machine: the root, the certificates the agents read, and the records of both. Capture must be off first. Your captured data stays unless you ask for it to go.',
     options: [['--purge-data', 'also delete the captured records'], YES, DRY, JSON_OPT],
@@ -99,7 +100,7 @@ export const COMMANDS = Object.freeze([
     options: [],
     exits: [[0, 'the records are on stdout'], [1, 'the segment or a record number does not exist, or could not be read'], [2, 'a usage error']] },
   { name: 'daemon',
-    group: 'Maintenance', mutates: true, run: via('./daemon.mjs', 'runDaemonCli'),
+    group: 'Maintenance', mutates: true, recordsPath: false, run: via('./daemon.mjs', 'runDaemonCli'), // 4.11 present: the login service's PATH is not the user's
     usage: 'trocar daemon [--supervise]',
     summary: 'Runs the collector in the foreground. This is what starts at login, so you do not normally type it. It drains what is in flight before it stops.',
     options: [['--supervise', 'on Windows: the parent the scheduled task starts, which keeps the collector running']],
@@ -107,9 +108,16 @@ export const COMMANDS = Object.freeze([
   { name: 'setup-helper',
     group: 'Maintenance', mutates: false, needsRoot: true, run: via('./setup-helper.mjs', 'run'),
     usage: 'sudo trocar setup-helper [--remove] [--binary <path>]',
-    summary: 'Installs the kernel helper trocar needs on Linux, once per machine. This is the only command that needs root, and it is not needed on macOS or Windows.',
+    summary: 'Installs the capability helper trocar needs on Linux, once per machine. This is the only command that needs root, and it is not needed on macOS or Windows.',
     options: [['--remove', 'remove the helper instead of installing it'], ['--binary <path>', 'install this helper binary, one you built yourself']],
     exits: [[0, 'the helper is in place, or gone'], [1, 'it could not be installed, and it says why'], [2, 'nothing ran: a usage error, not root, or not Linux']] },
+  // not in help (§2): only the install scripts and `trocar update` run it
+  { name: 'place', hidden: true,
+    group: null, mutates: true, run: via('./place.mjs', 'runPlaceCli'),
+    usage: 'trocar place <dir>',
+    summary: 'Switches this machine to a version the install script has put in ~/.trocar/app. Old versions nothing can still run are removed.',
+    options: [],
+    exits: [[0, 'that version is the one the trocar command runs'], [1, 'it could not be switched to, and it says why'], [2, 'a usage error or root']] },
   // `help` is the trailer of the first screen, not an entry of a section (§2).
   { name: 'help',
     group: null, mutates: false, run: help,

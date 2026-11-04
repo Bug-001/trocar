@@ -11,6 +11,11 @@ const NATIVE_DIR = 'src/collector/arch/darwin/native'
 const LIFECYCLE = 'prepare prepack postpack prepublish prepublishOnly publish postpublish preinstall install postinstall preuninstall uninstall postuninstall preversion version postversion dependencies'.split(' ')
 const ALWAYS = /^(README|LICENSE|LICENCE)(\.[^/]*)?$/i // npm packs these whatever `files` says
 
+// (target, format) of install/node.sha256: one line each (spec 4.5 §A, release check `node-pin`)
+const NODE_BUILDS = ['darwin-arm64.tar.xz', 'darwin-x64.tar.xz', 'linux-x64.tar.xz', 'linux-x64.tar.gz', 'linux-arm64.tar.xz', 'linux-arm64.tar.gz', 'win-x64.zip', 'win-arm64.zip']
+const SCRIPTS = ['install/install.sh', 'install/install.ps1']
+const MAX_PATH = 259 // a Windows path, without long-path support
+
 const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 /** The `docs/release-notes/*.md` paths linked from the `## [<version>]` section of the changelog; null when there is no such section. */
@@ -21,6 +26,44 @@ function noteLinks(changelog, version) {
   const end = lines.findIndex((l, i) => i > start && l.startsWith('## '))
   const body = lines.slice(start + 1, end < 0 ? undefined : end).join('\n')
   return [...body.matchAll(/\]\((docs\/release-notes\/[^)\s]+\.md)\)/g)].map((m) => m[1])
+}
+
+/** The data lines of a script's `# >>> SOURCES` … `# <<< SOURCES` block; null when there is none. */
+const sourcesOf = (text) => {
+  const m = /^# >>> SOURCES.*\n([\s\S]*?)^# <<< SOURCES/m.exec(text)
+  return m && m[1].split('\n').filter((l) => /^(package|registry|node) /.test(l))
+}
+
+/** Why the two installer scripts would not ship as they are; '' when they would. */
+function installerWhy({ sh, ps1, shSyntax } = {}, packed, name) {
+  if (!SCRIPTS.every((p) => packed.has(p))) return `not in the pack list: ${SCRIPTS.filter((p) => !packed.has(p)).join(', ')}`
+  const text = { 'install.sh': sh, 'install.ps1': ps1 }
+  for (const [n, b] of Object.entries(text)) if (!b || [...Buffer.from(b)].some((x) => x > 0x7f)) return `${n} is missing or not pure ASCII`
+  if (Buffer.from(sh).includes(13)) return 'install.sh has a CR'
+  if (shSyntax !== 0) return 'sh -n install.sh fails'
+  const [a, b] = [sourcesOf(String(sh)), sourcesOf(String(ps1))]
+  if (!a?.length || a.join('\n') !== b?.join('\n')) return 'the SOURCES data lines of install.sh and install.ps1 differ'
+  if (!a.includes(`package ${name}`)) return `the SOURCES block does not name the package ${name}`
+  return ''
+}
+
+/** Why install/node.sha256 is not one verbatim SHASUMS256.txt line per Node build of one version that `engines` allows; '' when it is. */
+function nodePinWhy(pin, shasums, engines) {
+  const lines = String(pin ?? '').split('\n').filter(Boolean)
+  const rows = lines.map((l) => /^[0-9a-f]{64} {2}node-v(\d+)\.(\d+)\.(\d+)-(\S+)$/.exec(l))
+  if (!rows.length || rows.some((m) => !m)) return 'install/node.sha256 is missing or has a line that is not `<sha256>  node-v<version>-<build>`'
+  const versions = new Set(rows.map((m) => m.slice(1, 4).join('.')))
+  if (versions.size !== 1) return `more than one Node version: ${[...versions].join(', ')}`
+  const builds = rows.map((m) => m[4]).sort()
+  if (builds.join() !== [...NODE_BUILDS].sort().join()) return `the builds are not one each of ${NODE_BUILDS.join(', ')}`
+  const want = /^>=\s*(\d+)(?:\.(\d+))?(?:\.(\d+))?$/.exec(String(engines ?? '').trim())
+  const have = rows[0].slice(1, 4).map(Number)
+  const below = want && want.slice(1, 4).map((x) => Number(x ?? 0)).reduce((r, w, i) => r ?? (have[i] === w ? null : have[i] < w), null)
+  if (!want || below) return `Node ${[...versions][0]} does not satisfy engines ${engines}`
+  if (shasums == null) return `https://nodejs.org/dist/v${[...versions][0]}/SHASUMS256.txt could not be read`
+  const official = new Set(String(shasums).split('\n'))
+  const odd = lines.filter((l) => !official.has(l))
+  return odd.length ? `not in SHASUMS256.txt: ${odd.join('; ')}` : ''
 }
 
 /** facts → [{ check, why }]; empty = pass. Pure: everything it reads is in `facts`. */
@@ -54,6 +97,13 @@ export function releaseVerdict(f) {
   if (badNative.length) fail('native', `not packed with an execute bit: ${badNative.join(', ')}`)
   const badPins = names.filter((n) => !f.diskSha?.[n] || f.diskSha[n] !== f.pins?.[n])
   if (badPins.length) fail('pins', `sha256 on disk differs from pins.json: ${badPins.join(', ')}`)
+  const inst = installerWhy(f.installer, packed, pkg.name)
+  if (inst) fail('installer', inst)
+  const pin = nodePinWhy(f.nodePin, f.nodeShasums, pkg.engines?.node)
+  if (pin) fail('node-pin', pin)
+  const prefix = `C:\\Users\\${'x'.repeat(32)}\\.trocar\\app\\.staging-99999\\${pkg.version}\\`
+  const longest = [...packed.keys()].reduce((a, p) => (p.length > a.length ? p : a), '')
+  if (prefix.length + longest.length > MAX_PATH) fail('pathlen', `${longest} is ${prefix.length + longest.length} characters long once placed (at most ${MAX_PATH})`)
   const links = noteLinks(f.changelog, pkg.version)
   if (!links) fail('notes', `CHANGELOG.md has no ## [${pkg.version}] section`)
   else if (!links.length) fail('notes', `the ## [${pkg.version}] section links no docs/release-notes/*.md`)
@@ -69,10 +119,11 @@ const realRun = (cmd, args, opts = {}) => {
   return { code: r.status ?? 1, out: r.stdout ?? '', err: r.stderr || (r.error ? String(r.error.message) : '') }
 }
 const stdio = { out: (s) => process.stdout.write(`${s}\n`), err: (s) => process.stderr.write(`${s}\n`) }
+const realFetch = async (url) => { try { const r = await fetch(url); return r.ok ? await r.text() : null } catch { return null } }
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
-/** Gathers the facts with `run` (git, npm) and the files under `root`; `facts` overrides any of them. */
-function gather(root, run, overrides) {
+/** Gathers the facts with `run` (git, npm, sh), `fetchText` (nodejs.org) and the files under `root`; `facts` overrides any of them. */
+async function gather(root, run, fetchText, overrides) {
   const opts = { cwd: root }
   const read = (rel) => { try { return fs.readFileSync(path.join(root, rel)) } catch { return null } }
   const line = (args) => { const r = run('git', args, opts); return r.code === 0 ? r.out.trim() : null }
@@ -84,6 +135,8 @@ function gather(root, run, overrides) {
   let pack = null
   try { pack = JSON.parse(dry.out)[0] } catch { /* the pack list is empty: files / bin / native / license fail */ }
   const changelog = read('CHANGELOG.md')
+  const nodePin = read('install/node.sha256')?.toString('utf8') ?? null
+  const nodeVer = /node-v(\d+\.\d+\.\d+)-/.exec(nodePin ?? '')?.[1]
   return {
     pkg,
     branch: line(['rev-parse', '--abbrev-ref', 'HEAD']),
@@ -97,15 +150,18 @@ function gather(root, run, overrides) {
     diskSha: Object.fromEntries(Object.values(NATIVE).map((n) => { const b = read(`${NATIVE_DIR}/${n}`); return [n, b && sha256(b)] })),
     pins: pins(),
     changelog: changelog && changelog.toString('utf8'),
+    installer: { sh: read(SCRIPTS[0]), ps1: read(SCRIPTS[1]), shSyntax: run('sh', ['-n', SCRIPTS[0]], opts).code },
+    nodePin,
+    nodeShasums: nodeVer ? await fetchText(`https://nodejs.org/dist/v${nodeVer}/SHASUMS256.txt`) : null,
     exists: (rel) => fs.existsSync(path.join(root, rel)),
     ...overrides,
   }
 }
 
 /** argv = ['check'] | ['pack'] → exit code. */
-export async function main(argv, { io = stdio, root = REPO, run = realRun, facts = {} } = {}) {
+export async function main(argv, { io = stdio, root = REPO, run = realRun, fetchText = realFetch, facts = {} } = {}) {
   if (argv.length !== 1 || !['check', 'pack'].includes(argv[0])) { io.err('usage: node scripts/release.mjs check|pack'); return 2 }
-  const f = gather(root, run, facts)
+  const f = await gather(root, run, fetchText, facts)
   const verdict = releaseVerdict(f)
   for (const { check, why } of verdict) io.err(`release: ${check}: ${why}`)
   if (verdict.length) return 1

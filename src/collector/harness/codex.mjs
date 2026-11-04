@@ -56,7 +56,7 @@ function inject(ctx) {
   for (const env of [ctx.env, ...ctx.running]) if (env.get('CODEX_HOME')) homes.add(path.resolve(codexHome(env, ctx.home)))
   const present = [...homes].filter((h) => ctx.listDir(h).length)
   const notes = [...homes].filter((h) => !present.includes(h)).map((h) => ({ code: CODE.harnessNote, text: `CODEX_HOME ${h} does not exist, so no trust entry is written there` }))
-  if (!present.length) return { notes: [...notes, { code: CODE.harnessNote, text: `no Codex home exists (${def}, or a CODEX_HOME of this shell or of a running codex), so no trust entry is written; after running Codex once, run trocar collector uninstall and install again` }] }
+  if (!present.length) return { notes: [...notes, { code: CODE.harnessNote, text: `no Codex home exists (${def}, or a CODEX_HOME of this shell or of a running codex), so no trust entry is written; after running Codex once, run trocar uninstall, then trocar install` }] }
   const bundle = path.join(ctx.collectorDir, 'ca', 'combined-codex.pem')
   const seen = new Set() // SSL_CERT_FILE values the block overrides: the user's lines, the launch env
   const see = (v) => { if (typeof v === 'string' && v !== '' && !isOwnPath(ctx, v)) seen.add(v) }

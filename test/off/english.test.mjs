@@ -86,7 +86,7 @@ test('D62 ⑥: the receipt never claims both "no door open" and that trocar exit
   readable('off-proxy-holder', held)
   assert.doesNotMatch(held, /no door open/, `a door IS open for the holder below: ${held}`)
   assert.doesNotMatch(held, /trocar exits|exits when/, `in proxy mode the daemon never exits: ${held}`)
-  assert.match(held, /The daemon \(pid 4012\) keeps running, with one door still open for the\n {2}connections below\./)
+  assert.match(held.replace(/\s+/g, ' '), /\b4012\b[^.]*\bkeeps running\b[^.]*\bdoor\b/, 'D62 ⑥: the daemon stays, a door open for the holder')
   assert.match(held, /^That door closes when it exits; the daemon keeps running\.$/m)
 
   const idle = formatOffReceipt({ ...base, daemon: { pid: 4012, state: 'running' }, holders: [] })
@@ -102,4 +102,21 @@ test('D62 ⑥: the receipt never claims both "no door open" and that trocar exit
   const dry = formatOffReceipt({ ...base, dry_run: true, daemon: { pid: null, state: 'running' }, holders: [] })
   readable('off-proxy-dry', dry)
   assert.match(dry, /^The daemon will keep running, with no door open\.$/m)
+})
+
+// 1.6 §1.1⑥: the list a marker-only off asks about — each file an item at column 2 with what would be done to it on the same item, folded past
+// the command column, never a line at column 4 that is not a command, and HOME as ~
+test('§1.1⑥ the marker-only listing: one item a file, its words with it, nothing at the command column, inside 80 columns', async () => {
+  const { markerListing } = await import('../../src/off/orchestrate.mjs')
+  const home = '/home/alice'
+  for (const depth of [1, 5]) {
+    const plan = ['block', 'json-value', 'owned-file'].map((how, i) => ({ harness: ['codex', 'claude-code', 'opencode'][i], how, path: `${home}/${'deep/'.repeat(depth)}file-${i}` }))
+    const out = markerListing(plan, home).split('\n')
+    assert.ok(out.every((l) => l.length <= 80 || !/\s/.test(l.trim())), `80 columns, a path whole\n${out.join('\n')}`)
+    assert.ok(!out.some((l) => /^ {4}\S/.test(l)), `no line at the command column\n${out.join('\n')}`)
+    assert.ok(out.every((l) => !l.includes(home)), out.join('\n'))
+    for (const p of plan) assert.ok(out.some((l) => /^ {2}\S/.test(l) && l.includes(p.harness)), `${p.harness} is an item at column 2\n${out.join('\n')}`)
+    const starts = plan.map((p) => out.find((l) => l.startsWith(`  ${p.harness} `)).indexOf('~/'))
+    assert.equal(new Set(starts).size, 1, `§1.1②: every path starts in one value column\n${out.join('\n')}`)
+  }
 })

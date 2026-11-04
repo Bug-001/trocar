@@ -63,5 +63,5 @@
   "status": "fixed",
   "detail": "a step named in the URL while the desk holds no lane yet (a desk just opened by a deep link, here step=0 then step=4): update() kept the pending step but left follow on, so the chip read pressed until the step landed and turned it off with no reader action; I-follow judged the desk as following and saw it stop at step 4 / 18",
   "owner": "desk",
-  "suspect": "src/web/v2/replay/replay.mjs:805"
+  "suspect": "web/legacy/replay/replay.mjs:805"
 }

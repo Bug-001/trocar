@@ -41,6 +41,14 @@ test('a reason cut to its head stays ASCII and within the width (1.6 §1.1 ⑦: 
   assert.ok(/^[\x20-\x7e]*$/.test(t) && t.length <= 100, t)
 })
 
+test('a reason cut to its head ends on a whole word of it, never inside one', () => {
+  const s = 'capability helper not found at /usr/local/libexec/trocar/trocar-redirector; install it once per machine with the line below'
+  for (let max = 20; max < s.length; max++) {
+    const t = briefText(s, max), head = t.slice(0, -3)
+    assert.ok(t.endsWith('...') && t.length <= max && s.startsWith(head) && /^[\s,;:]/.test(s.slice(head.length)), `${max}: ${t}`)
+  }
+})
+
 test('an unknown code is never hidden: it falls back to where/code with the reason', () => {
   assert.equal(failureBrief({ where: 'engine', code: 'no-such-code', reason: 'why' }), 'engine/no-such-code why')
   assert.equal(failureBrief({ where: 'engine', code: 'EPERM', reason: 'chmod' }), 'EPERM chmod')

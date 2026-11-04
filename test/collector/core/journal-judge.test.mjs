@@ -6,7 +6,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { applyJsonKey, applyTextEntry, installedAt, judgeEntry, judgeOwned, newManifest, saveManifest, sha256, writeOwnedFile } from '../../../src/collector/core/trust/journal.mjs'
-import { BLOCK_BEGIN } from '../../../src/off/text-edit.mjs'
+import { BLOCK_OPEN } from '../../../src/off/text-edit.mjs'
 import { tmpDir } from '../../helpers/tmp.mjs'
 
 const K = ['env', 'CA_FILE']
@@ -98,7 +98,7 @@ test('X18: the trust block is written to Home/Codex/.env; the proxy block joins 
     const joined = applyTextEntry({ phase: 'on', dir, home: root, manifest: m, harness: 'codex', file: other, edit: { format: 'dotenv-block', vars: { HTTPS_PROXY: 'http://127.0.0.1:1' }, joinBlock: true } })
     assert.ok(joined, `${label}: the join is written, not refused as text from an unlisted install`)
     const text = fs.readFileSync(file, 'utf8')
-    assert.equal(text.split(BLOCK_BEGIN).length, 2, `${label}: one block in the file`)
+    assert.equal(text.split(BLOCK_OPEN).length, 2, `${label}: one block in the file`)
     assert.match(text, /HTTPS_PROXY/, label)
     // the planned trust entry under the other spelling is the entry the manifest has: intact, not written again
     assert.equal(judgeEntry({ manifest: m, planned: { harness: 'codex', kind: 'text', path: other, format: 'dotenv-block', vars: { SSL_CERT_FILE: '/ca.pem' } } }).action, 'skip-intact', label)
