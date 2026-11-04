@@ -1,12 +1,13 @@
 // board.mjs — `trocar board` (RFC 1.6 §4.3, D66): the board is the daemon's, so this only prints its address with the token and opens it in the
 // browser. In order: the install record (the daemon's own gate, daemonMayStart: none → exit 1, nothing written); the daemon up through the one
 // seam `on` uses (ensureDaemonUp, with the arch's unit; the login registration is never touched); `GET /board` on the endpoint ensureDaemonUp
-// resolved through controlEndpointFor (no platform branch here). With `--json` it prints that address as one document (C.6) and opens no browser; every
+// resolved through controlEndpointFor (no platform branch here). With `--json` it prints that address without the token, and the token file's path, as one document (C.6) and opens no browser; every
 // failure is then an `error` document, the exit code unchanged. `deps.unit` replaces the arch's unit, `deps.open(file, args)` the browser start (0.1 §3).
 import nodeFs from 'node:fs'
+import path from 'node:path'
 import { runAsync } from '../off/exec.mjs'
 import { EXIT, SCHEMA_VERSION } from '../off/schema.mjs'
-import { collectorDir } from '../off/paths.mjs'
+import { collectorDir, BOARD_TOKEN_FILE } from '../off/paths.mjs'
 import { readManifest, daemonMayStart } from '../off/manifest.mjs'
 import { wrap, WIDTH } from './text.mjs'
 import { printJson, errorDoc } from './json.mjs'
@@ -47,8 +48,9 @@ export async function run(argv, { io, env = process.env, home, platform = proces
   let b
   try { b = await up.ask({ socketPath: up.sock, method: 'GET', path: '/board', timeoutMs: 5000 }) } catch (e) { return down(`the daemon did not answer GET /board (${errText(e)})`) }
   if (!b || b.state !== 'serving' || !b.port || !b.token) return down((b && b.reason) || `the daemon says the board is ${(b && b.state) || 'not there'}`)
-  const url = `http://127.0.0.1:${b.port}/#t=${b.token}`
-  if (json) { printJson(io, { schema: SCHEMA_VERSION, command: 'board', ok: true, url, port: b.port, state: b.state }); return EXIT.ok }
+  const origin = `http://127.0.0.1:${b.port}/`, url = `${origin}#t=${b.token}`
+  // §4.3: the one who asks for a document is an agent, and its stdout reaches a model; the token stays in its file, for a script to read
+  if (json) { printJson(io, { schema: SCHEMA_VERSION, command: 'board', ok: true, url: origin, token_file: path.join(dir, BOARD_TOKEN_FILE), port: b.port, state: b.state }); return EXIT.ok }
   const [file, list] = (OPENERS[platform] || OPENERS.linux)(url)
   try { await (deps.open || openWith)(file, list, env) } catch (e) {
     io.out([...wrap(`trocar board: your browser could not be opened (${errText(e)}). Open this address yourself:`, WIDTH), url].join('\n'))
