@@ -22,7 +22,7 @@ import { tmpDir } from '../helpers/tmp.mjs';
 import { bigSession } from '../query/big-session.mjs';
 
 const SEG = '20261020T164737Z', STREAM = `${SEG}.ndjson`, KEY = 'big-0000-4a1b-9c2d-000000000001';
-// sub-agents' first prompts that open with one long preamble: each new one moves where its siblings depart (4.4 `lanes[].task`)
+// sub-agents' first prompts that open with one long preamble: each new one may make a line shared (4.4 `lanes[].task`)
 const PREAMBLE = Array.from({ length: 12 }, (_, i) => `[workflow] shared instruction ${i}: work only in the given worktree.`).join('\n');
 const ARRIVALS = [{ late: 0, subLanes: 1 }, { late: 3, subLanes: 1 }, { late: 0, subLanes: 4 }, { late: 3, subLanes: 4 }];
 // `spawns` (a whole context per request): before each subagent's first call, the last main call's tool use becomes a Task whose prompt

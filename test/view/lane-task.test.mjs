@@ -1,28 +1,33 @@
-// test/view/lane-task.test.mjs — every lane says what it was asked (RFC 4.4 §看板 v2 需要的补充 `lanes[].task`): the spawn's
-// argument when the spawn is known, else the first prompt of the lane's first call, the same rule on every wire (invariant 3).
+// test/view/lane-task.test.mjs — every lane says what it was asked (RFC 4.4 §看板 v2 需要的补充 `lanes[].task`): a sub-agent the
+// spawn's description, else the first line of its first text that fewer than 3 sub-agent lanes share; the other lanes the first prompt
+// of their first call. The same rule on every wire (invariant 3).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { tmpDir } from '../helpers/tmp.mjs'
-import { bigSession, firstAskOf, rng } from '../query/big-session.mjs'
+import { bigSession, firstAskOf, firstPromptOf, rng } from '../query/big-session.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
-import { sessionDoc } from '../helpers/session-doc.mjs'
-import { departer } from '../../src/view/blockmeta.mjs'
+import { SEGMENT, homeWith, query, sessionDoc } from '../helpers/session-doc.mjs'
 
+// Every sub-agent's first prompt opens with these lines, more of them than the lanes' own: only the lanes' own lines say a task.
+const PREAMBLE = Array.from({ length: 40 }, (_, i) => `[workflow] shared instruction ${i}: work only in the given worktree and report back.`).join('\n')
+const squashed = (t) => t.replace(/\s+/g, ' ').trim().slice(0, 80)
+const subTasks = (doc) => doc.lanes.filter((l) => l.kind === 'subagent').map((l) => l.task)
 for (const wire of ['http', 'chat', 'threads', 'ws']) {
-  test(`${wire}: every lane's task is its first call's first prompt, and no label says "subagent:"`, async () => {
+  test(`${wire}: a sub-agent's task is its first own line, the other lanes' their first prompt, and no label says "subagent:"`, async () => {
     const home = path.join(tmpDir('trocar-lanetask-'), '.trocar')
-    const s = bigSession({ home, wire, growth: 600, subEvery: 3, subLanes: 3, subLen: 6 })
+    const s = bigSession({ home, wire, growth: 600, subEvery: 3, subLanes: 3, subLen: 6, preamble: PREAMBLE })
     s.append(24)
     const recs = fs.readFileSync(s.file, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) // a call's id is <segment>:<line> (3.5)
     const doc = await runQuery('session', { id: s.id }, { home })
-    const lanes = doc.lanes
+    const lanes = doc.lanes, shared = new Set(subTasks(doc).length < 3 ? [] : PREAMBLE.split('\n')) // a flat wire's sub-agents are one doc lane
     assert.ok(lanes.some((l) => l.kind === 'main') && lanes.some((l) => l.kind === 'subagent'))
     for (const l of lanes) {
       const rec = recs[Number(String(l.first).split(':').pop()) - 1]
       assert.ok(rec, `lane ${l.lane}: its first call names a record`)
-      assert.equal(l.task, firstAskOf(rec, recs), `lane ${l.lane}`)
+      const own = firstPromptOf(rec, recs).split('\n').find((x) => x.trim() && !shared.has(x.trim()))
+      assert.equal(l.task, l.kind === 'subagent' ? squashed(own) : firstAskOf(rec, recs), `lane ${l.lane}`)
       assert.ok(!String(l.label).includes('subagent:'), l.label)
     }
   })
@@ -50,24 +55,80 @@ test('a prompt that is only wrapped reminders is skipped for the next text; a la
   assert.deepEqual(lanes.map((l) => [l.kind, l.task]), [['main', 'Fix the retry queue'], ['subagent', null]])
 })
 
-test('sub-agents whose first prompts share a long preamble are told apart by the first line where each departs from the others', async () => {
-  const preamble = Array.from({ length: 120 }, (_, i) => `[harness] shared instruction line ${i}: work in the given worktree and report back.`).join('\n')
-  const ask = (line) => [{ role: 'user', content: [{ type: 'text', text: `${preamble}\n${line}\nmore   text that follows\n` }] }]
-  const recs = [
-    rec(1, [{ role: 'user', content: [{ type: 'text', text: 'Run the plan' }] }]),
-    rec(2, ask('## Your task: implement   the retry queue in src/queue.mjs and its tests'), 'agent-a'),
-    rec(3, ask('## Your task: review the branch'), 'agent-b'),
-    rec(4, ask('## Your task: review the branch'), 'agent-c'), // the same prompt twice: still told apart from agent-a
-  ]
-  const { lanes } = await sessionDoc(recs, 'S')
-  const from = (line) => `${line}\nmore   text that follows`.replace(/\s+/g, ' ').trim().slice(0, 80) // that line on, squashed, ≤ 80
-  assert.deepEqual(lanes.map((l) => l.task), ['Run the plan', from('## Your task: implement   the retry queue in src/queue.mjs and its tests'),
-    from('## Your task: review the branch'), from('## Your task: review the branch')])
+const user = (...texts) => [{ role: 'user', content: texts.map((text) => ({ type: 'text', text })) }]
+// a main lane and one sub-agent lane a first message: its text blocks, or its one text
+const session = (messages) => [rec(1, user('Run the plan')), ...messages.map((m, i) => rec(i + 2, user(...[m].flat()), `agent-${i}`))]
+const tasksOf = async (messages) => subTasks(await sessionDoc(session(messages), 'S'))
+
+for (const k of [2, 3, 4]) for (const at of [0, 1, 2, 3])
+  test(`${k} lanes sharing three lines, each its own at line ${at}: the task is the first line held by fewer than 3 lanes`, async () => {
+    const text = (own) => { const l = ['Work in the given worktree.', 'Report back when done.', 'Do not push.']; l.splice(at, 0, own); return l.join('\n') }
+    const owns = Array.from({ length: k }, (_, i) => `implement   the part ${i}`)
+    assert.deepEqual(await tasksOf(owns.map(text)), owns.map((o) => squashed(k < 3 ? text(o).split('\n')[0] : o)))
+  })
+
+test('leading heading, list and quote marks are not words; a line of only punctuation is passed over; what only looks like a mark stays', async () => {
+  const marks = ['# ', '###### ', '- ', '* ', '+ ', '1. ', '12) ', '> ', '> - ', '## 1. ', '']
+  const lines = ['fix the queue', '修复队列', 'v2', '#tag', '-x', '1.5 is the rate', '*bold* first']
+  const punct = ['---', '***', '...', '## ---', '> - !', '-', '====', '§§', '#', '1.', '()']
+  const cases = marks.flatMap((m, i) => lines.map((l, j) => ({ text: `${punct[(i + j) % punct.length]}\n${m}${l}`, want: l })))
+  for (let i = 0; i < cases.length; i += 8) { // lanes few enough that no punctuation line is shared: only the rule passes it over
+    const part = cases.slice(i, i + 8)
+    assert.deepEqual(await tasksOf(part.map((c) => c.text)), part.map((c) => c.want))
+  }
+})
+
+for (const k of [3, 4])
+  test(`${k} lanes that share every line have no task`, async () => {
+    assert.deepEqual(await tasksOf(Array(k).fill('Work in the given worktree.\n\n  Report back when done.  ')), Array(k).fill(null))
+  })
+
+test('a spawn\'s description names its lane, and that lane still counts toward what is shared', async () => {
+  const text = (own) => `Work in the given worktree.\n${own}`
+  const recs = session([text('first own line'), text('second own line'), text('third own line')])
+  recs[0].resp.body = { ...recs[0].resp.body, stop_reason: 'tool_use',
+    content: [{ type: 'tool_use', id: 't1', name: 'Agent', input: { description: 'Scan the repo', prompt: text('first own line') } }] }
+  const lanes = (await sessionDoc(recs, 'S')).lanes.filter((l) => l.kind === 'subagent')
+  assert.ok(lanes[0].spawnRid != null, 'the first sub-agent lane is linked to its spawn')
+  assert.deepEqual(lanes.map((l) => l.task), ['Scan the repo', 'second own line', 'third own line'])
+})
+
+test('a first message in several text blocks: the words may be in a later block, and reminders are not words', async () => {
+  const blocks = (own) => [`${R('skills: a, b')}\nWork in the given worktree.`, R('date'), `${R('env')}\n${own} ${R('late')}\nmore`]
+  assert.deepEqual(await tasksOf(['part a', 'part b', 'part c'].map(blocks)), ['part a', 'part b', 'part c'])
+})
+
+test('a third lane moves the words of the two before it, and the --since answer carries those lanes', async () => {
+  const text = (own) => `Work in the given worktree.\n${own}`
+  const [main, a, b, c] = session(['a', 'b', 'c'].map((x) => text(`part ${x}`)))
+  const home = homeWith([main, a, b])
+  const full = await query(home, 'session', { id: 'S' })
+  assert.deepEqual(subTasks(full), Array(2).fill('Work in the given worktree.'))
+  fs.appendFileSync(path.join(home, 'raw', `${SEGMENT}.ndjson`), JSON.stringify(c) + '\n')
+  const d = await query(home, 'session', { id: 'S', since: full.mark })
+  assert.deepEqual(subTasks(d), ['part a', 'part b', 'part c'])
+})
+
+test('the tasks do not depend on the order calls arrive in, nor on how many answers the fold took', async () => {
+  const lines = (own, ...more) => [...more, own, 'Report back when done.'].join('\n')
+  const texts = [lines('own a', 'All', 'Pair'), lines('own b', 'All', 'Pair'), lines('own c', 'All', 'Trio'), lines('own d', 'All', 'Trio'), lines('own e', 'All', 'Trio')]
+  // each lane two calls: its first message opens both
+  const recs = [...session(texts), ...texts.map((t, i) => rec(i + 20, [...user(t), { role: 'assistant', content: [{ type: 'text', text: 'ok' }] }, ...user('go on')], `agent-${i}`))]
+  const sorted = (doc) => subTasks(doc).sort()
+  const want = ['Pair', 'Pair', 'own c', 'own d', 'own e'].sort()
+  assert.deepEqual(sorted(await sessionDoc(recs, 'S')), want)
+  for (const seed of [3, 17, 29]) {
+    const next = rng(seed), mixed = recs.map((r) => [next(), r]).sort((x, y) => x[0] - y[0]).map(([, r]) => r)
+    assert.deepEqual(sorted(await sessionDoc(mixed, 'S')), want, `seed ${seed} in one answer`)
+    const home = homeWith(mixed.slice(0, 1)), raw = path.join(home, 'raw', `${SEGMENT}.ndjson`)
+    await query(home, 'session', { id: 'S' })
+    for (const r of mixed.slice(1)) { fs.appendFileSync(raw, JSON.stringify(r) + '\n'); await query(home, 'session', { id: 'S' }) }
+    assert.deepEqual(sorted(await query(home, 'session', { id: 'S' })), want, `seed ${seed} a call at a time`)
+  }
 })
 
 // A session whose sub-agents come on two wires (D37 ①: the wire is per call): Claude Code's, and a flat-lane wire's, every sub-agent's
 // first prompt opening with the same workflow preamble. The rule is one over every sub-agent lane of the session (invariant 3).
-const PREAMBLE = Array.from({ length: 40 }, (_, i) => `[workflow] shared instruction ${i}: work only in the given worktree and report back.`).join('\n')
 for (const flat of ['chat', 'ws'])
   test(`http + ${flat}: sub-agents sharing a preamble are told apart on every wire, none named by the preamble`, async () => {
     const home = path.join(tmpDir('trocar-lanetask-'), '.trocar')
@@ -80,34 +141,3 @@ for (const flat of ['chat', 'ws'])
     for (const l of subs) assert.ok(l.task && !PREAMBLE.startsWith(l.task.slice(0, 20)), `lane ${l.lane} is not named by the preamble: ${l.task}`)
     assert.equal(new Set(subs.map((l) => l.task)).size, subs.length, 'each sub-agent its own task')
   })
-
-// departer (4.4 §看板 v2 需要的补充 `lanes[].task`): a prompt departs from its siblings at the line where it parts from the DISTINCT prompt
-// it shares the longest prefix with (an identical prompt is no sibling); 0 when it parts at the start, never parts, or has no sibling.
-// Seeded add / remove sequences over prompts that share long multi-line preambles, with duplicates, prefixes and a leading newline.
-test('departer: after every add and remove each prompt departs where the brute-force rule says, and every prompt that moved is named', () => {
-  const ref = (h, present) => {
-    let d = -1
-    for (const o of present) if (o !== h) { let i = 0; while (i < h.length && i < o.length && h[i] === o[i]) i++; d = Math.max(d, i) }
-    return d <= 0 || d >= h.length ? 0 : h.lastIndexOf('\n', d - 1) + 1
-  }
-  const pre = (tag, n) => Array.from({ length: n }, (_, i) => `[${tag}] shared line ${i}: work in the given worktree`).join('\n')
-  for (const seed of [3, 17, 29, 101]) {
-    const next = rng(seed), pick = (a) => a[Math.floor(next() * a.length)]
-    const pres = [pre('a', 30), pre('a', 12), pre('b', 30), '', '\n']
-    const tails = ['', '\n## task: retry queue', '\n## task: retry queue\nmore', '\n## task: review', 'x', '\n## task: review the branch\n']
-    const pool = Array.from({ length: 24 }, () => pick(pres) + pick(tails)).filter(Boolean)
-    const dep = departer(), held = []
-    for (let op = 0; op < 400; op++) {
-      const before = new Map([...new Set(held)].map((h) => [h, ref(h, new Set(held))]))
-      let moved
-      if (held.length && next() < 0.45) moved = dep.remove(held.splice(Math.floor(next() * held.length), 1)[0])
-      else { const h = pick(pool); held.push(h); moved = dep.add(h) }
-      const present = new Set(held)
-      for (const h of present) {
-        const want = ref(h, present)
-        assert.equal(dep.offset(h), want, `seed ${seed} op ${op}: ${JSON.stringify(h.slice(-40))}`)
-        if (before.get(h) !== want) assert.ok(moved.includes(h), `seed ${seed} op ${op}: a prompt whose offset moved is named`)
-      }
-    }
-  }
-})
