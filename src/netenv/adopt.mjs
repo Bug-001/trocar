@@ -5,11 +5,11 @@
 // stored or sent as JSON holds the redacted URL and a hash (redact.mjs).
 import nodeFs from 'node:fs'
 import { parseJsonc, parseDotenv } from '../collector/core/config-read.mjs'
-import { BLOCK_BEGIN, BLOCK_END, OFF_PREFIX } from '../off/text-edit.mjs'
+import { BLOCK_OPEN, BLOCK_END, OFF_PREFIX } from '../off/text-edit.mjs'
 import { redactProxyUrl, settingSha, parseProxyUrl } from './redact.mjs'
 import { readNetenvFile } from './index.mjs'
 import { buildTopology } from './topology.mjs'
-import { renderCompact } from './topology-text.mjs'
+import { renderCompact, BRANCH_SEP } from './topology-text.mjs'
 
 const errCode = (e) => (e && e.code) || String((e && e.message) || e)
 const unknown = (reason, detail) => ({ unknown: { reason, detail } })
@@ -77,7 +77,7 @@ export function readProxySetting(desc, { home, env = process.env, fs = nodeFs, p
 
 /** The region trocar's marked block occupies in a text file, or null: its lines are trocar's, never a place of the user's. */
 function blockRange(text) {
-  const b = text.indexOf(BLOCK_BEGIN), e = text.indexOf(BLOCK_END, b + 1)
+  const b = text.indexOf(BLOCK_OPEN), e = text.indexOf(BLOCK_END, b + 1)
   return b >= 0 && e > b ? [b, e + BLOCK_END.length] : null
 }
 
@@ -174,7 +174,7 @@ export const sameAdoption = (a, b) => !!a && !!b && FIELDS.every((k) => JSON.str
 export function adoptedRecord({ facts, topology, h, now = Date.now, files = null, paths = null, prev = null, written = null }) {
   const s = (facts.harnesses[h] && facts.harnesses[h].setting) || { value: null, source: [], sha256: null }
   const rec = {
-    at: new Date(typeof now === 'function' ? now() : now).toISOString(), routing: facts.routing, chain: topology && topology[h] ? renderCompact(topology[h]).join(' ; ') : '',
+    at: new Date(typeof now === 'function' ? now() : now).toISOString(), routing: facts.routing, chain: topology && topology[h] ? renderCompact(topology[h]).join(BRANCH_SEP) : '',
     source: s.source || [], sha256: s.sha256 ?? null, file_sha256: files ? files.sha256 ?? null : s.sha256 ?? null, file_paths: paths, proxy: s.value ?? null,
     ...(s.unknown ? { unknown: s.unknown } : {}), ...(written ? { written_sha256: written.sha256 ?? null } : {}),
   }

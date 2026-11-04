@@ -21,7 +21,7 @@ import nodeFs from 'node:fs'
 import { isDeepStrictEqual } from 'node:util'
 import path from 'node:path'
 import { setKey, addItem, getPath, reverseOps, parseJsonText } from '../../../off/json-text.mjs'
-import { dotenvBlock, joinDotenvBlock, insertLine, pemBlock, removeTrocarText, BLOCK_BEGIN } from '../../../off/text-edit.mjs'
+import { dotenvBlock, joinDotenvBlock, insertLine, pemBlock, removeTrocarText, BLOCK_OPEN, sameMarked, holdsMarked } from '../../../off/text-edit.mjs'
 import { sha256, readOrNull, writeDurable, missingDirs, editTarget, pathKey } from '../../../off/fsutil.mjs'
 import { saveManifest, undoByHand, PHASES } from '../../../off/manifest.mjs'
 import { writeBackup } from '../../../off/backup.mjs'
@@ -116,7 +116,7 @@ const sameNames = (a, b) => !!a && !!b && JSON.stringify(Object.keys(a).sort()) 
 // the manifest's entry for what is planned: same harness, file (by pathKey: one file under any spelling, X18) and thing (a JSON key path, a block's variables, a line)
 const entryOf = (manifest, p, fs) => ((manifest && manifest.entries) || []).find((x) => x.harness === p.harness && samePath(x.path, p.path, fs)
   && (x.kind ?? (x.format ? 'text' : 'json-key')) === p.kind
-  && (p.kind === 'json-key' || p.kind === 'json-array-item' ? sameKeys(x.keys, p.keys) && (p.kind === 'json-key' || isDeepStrictEqual(x.item, p.item)) : x.format === p.format && (p.vars ? sameNames(x.vars, p.vars) : x.line === p.line)))
+  && (p.kind === 'json-key' || p.kind === 'json-array-item' ? sameKeys(x.keys, p.keys) && (p.kind === 'json-key' || isDeepStrictEqual(x.item, p.item)) : x.format === p.format && (p.vars ? sameNames(x.vars, p.vars) : x.line === p.line || sameMarked(x.line, p.line))))
 // is trocar's text still in the file? a JSON key by its value, a block or line by the text it inserted (the same test undo makes of an edited file)
 function holds(x, text) {
   if (text == null) return false
@@ -251,19 +251,19 @@ export function applyJsonArrayItem({ dir, manifest, harness, phase, file, keys, 
 // under an install this manifest does not list is refused: a second block or row would only be undone once. `joined` (the
 // caller has checked the manifest lists the block for this harness) is the only way past that refusal, and only into the
 // existing block (text-edit.mjs joinDotenvBlock); the default stays the refusal, so nothing joins by accident.
-function editText(file, text, edit, { joined = false } = {}) {
-  if (text != null && (text.includes(BLOCK_BEGIN) || (edit.line && text.includes(edit.line)))) {
-    if (!(joined && text.includes(BLOCK_BEGIN) && edit.format === 'dotenv-block')) {
+function editText(file, text, edit, { joined = false, phase = 'install' } = {}) {
+  if (text != null && (text.includes(BLOCK_OPEN) || (edit.line && holdsMarked(text, edit.line)))) { // the marker's fixed part: what any release wrote (4.6「标记的字」)
+    if (!(joined && text.includes(BLOCK_OPEN) && edit.format === 'dotenv-block')) {
       throw new Error(`${file} already holds trocar's text from an install this manifest does not list; take it out, then install again`)
     }
   }
   try {
     if (edit.format === 'dotenv-block') {
-      const how = { quote: edit.quote === true, neutralize: edit.neutralize || [], fold: edit.fold === true, at: edit.at || 'top' } // `at: 'end'`: 4.11 P5 dotenv-block, after the user's lines
-      if (joined && text != null && text.includes(BLOCK_BEGIN)) return joinDotenvBlock(text, edit.vars, how)
+      const how = { quote: edit.quote === true, neutralize: edit.neutralize || [], fold: edit.fold === true, at: edit.at || 'top', phase } // `at: 'end'`: 4.11 P5 dotenv-block, after the user's lines
+      if (joined && text != null && text.includes(BLOCK_OPEN)) return joinDotenvBlock(text, edit.vars, how)
       return dotenvBlock(text, edit.vars, how)
     }
-    if (edit.format === 'pem-block') return { ...pemBlock(text, edit.pem), prior: null } // rule U (4.11): a marked block at the end of the user's own certificate file
+    if (edit.format === 'pem-block') return { ...pemBlock(text, edit.pem, phase), prior: null } // rule U (4.11): a marked block at the end of the user's own certificate file
     if (edit.format === 'line' || edit.format === 'yaml-list') return { ...insertLine(text, { line: edit.line, after: edit.after || null, format: edit.format === 'yaml-list' ? 'yaml-list' : 'lines' }), prior: null }
   } catch (e) { throw new Error(`${file}: ${e.message}`) }
   throw new Error(`${file}: unknown text edit ${edit.format}`)
@@ -287,7 +287,7 @@ export function applyTextEntry({ dir, manifest, harness, phase, file, edit, home
   if (j.adopt) { j.entry.post_sha256 = sha256(before); saveManifest(dir, manifest, fs); return j.entry }
   // an intent a crashed run left, whose write never happened: the file is still as it was, so its text is not yet in it
   const read = readUserText(file, before)
-  const res = editText(file, read.text, edit, { joined })
+  const res = editText(file, read.text, edit, { joined, phase })
   const resumed = j.action === 'resume' ? j.entry : null
   const fresh = {
     kind: 'text', harness, phase, path: file, ...(real !== file ? { real_path: real } : {}), format: edit.format,

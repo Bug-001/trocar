@@ -9,6 +9,7 @@ import { once } from 'node:events'
 import { PassThrough } from 'node:stream'
 import { EventEmitter } from 'node:events'
 import { createRedirectorClient, REDIRECTOR_PROTO, DEFAULT_REDIRECTOR_BIN } from '../../../../src/collector/arch/linux/redirector-client.mjs'
+import { setupHelperCommand } from '../../../../src/version.mjs'
 
 function replyFor(msg) {
   if (msg.op === 'lookup') return { id: msg.id, ok: true, found: false, dst: null, pid: null, decrypt: 0 }
@@ -90,12 +91,13 @@ test('binary defaults to the helper path and TROCAR_REDIRECTOR_BIN overrides it'
   await c2.close()
 })
 
-test('a missing helper (ENOENT) rejects start with a clear setup-helper message', async () => {
+// 1.6 §3.2: the reason names the one setup-helper line install and on print (absolute node and trocar.mjs): a script install's root has no trocar on its PATH
+test('a missing helper (ENOENT) rejects start with the setup-helper line install prints', async () => {
   const m = mock()
   const c = createRedirectorClient({ binary: '/usr/local/libexec/trocar/trocar-redirector', spawn: m.spawn, autoHeartbeatMs: 0 })
   const p = c.start()
   m.child.emit('error', Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' }))
-  await assert.rejects(p, /install it once per machine with "sudo trocar setup-helper"/)
+  await assert.rejects(p, (e) => e.message.includes(setupHelperCommand()))
 })
 
 test('a protocol-version mismatch fails open: start still resolves, a warning fires, ops still work', async () => {
@@ -146,7 +148,7 @@ test('a helper that dies under a write (stdin EPIPE) is reported down, never an 
   const pending = c.status() // in flight when the pipe breaks
   m.child.stdin.emit('error', Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }))
   assert.match((await down)[0].reason, /loader stdin: EPIPE/)
-  await assert.rejects(pending, /redirector loader down: loader stdin: EPIPE/)
+  await assert.rejects(pending, { code: 'loader-down' })
 })
 
 // D-14: a helper killed while a request is in flight breaks our stdin before its 'exit' arrives; helper-down still

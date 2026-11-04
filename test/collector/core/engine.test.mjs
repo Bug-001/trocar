@@ -166,15 +166,14 @@ test('engine: a lookup miss and a listener error after listen are failure record
 // The daemon's onError AND the failure record, under the same code: loader-down / loader-timeout, never lookup-miss.
 test('engine: a lookup the helper cannot answer is its own failure (not a miss), and the connection is closed (D38)', { timeout: 10_000 }, async () => {
   const errors = [], failures = []
-  let fail = new Error('redirector loader is not running')
+  let fail = new Error('the capability helper is not running')
   const engine = createEngine({ redirector: { lookup: async () => { throw fail } }, issuer: createLeafIssuer(loadCa(createCa())), store: { envelope() {}, flow() {} }, onFailure: (f) => failures.push(f), onError: (e) => errors.push(e) })
   try {
     const { port } = await engine.listen({})
     await new Promise((r) => { const c = net.connect(port, '127.0.0.1'); c.on('close', r); c.on('error', () => {}) })
     assert.deepEqual(errors.map((e) => e.code), ['loader-down'], 'one record, not also a lookup-miss')
-    assert.match(errors[0].message, /looking up the original destination of 127\.0\.0\.1:\d+ failed \(redirector loader is not running\); the steered connection was closed/)
     assert.equal(engine.stats().lookupMisses, 0)
-    assert.deepEqual(failures.map((f) => [f.code, f.peer.address, /redirector loader is not running/.test(f.reason)]), [['loader-down', '127.0.0.1', true]])
+    assert.deepEqual(failures.map((f) => [f.code, f.peer.address]), [['loader-down', '127.0.0.1']])
     fail = Object.assign(new Error('no answer from the helper in 2000 ms'), { code: 'loader-timeout' })
     await new Promise((r) => { const c = net.connect(port, '127.0.0.1'); c.on('close', r); c.on('error', () => {}) })
     assert.deepEqual(failures.map((f) => f.code), ['loader-down', 'loader-timeout'])

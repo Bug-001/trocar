@@ -13,7 +13,7 @@
 // resolved it: its variable (XDG_CONFIG_HOME, CODEX_HOME, HERMES_HOME) and the per-user folders (loc.mjs dirsFor) followed. Imports only node:* and src/off.
 import nodeFs from 'node:fs'
 import path from 'node:path'
-import { SENTINEL, restoreOffLines } from './text-edit.mjs'
+import { SENTINEL, BLOCK_OPEN, BLOCK_END, LINE_MARK, restoreOffLines } from './text-edit.mjs'
 import { foldsEnvNames } from './env-names.mjs'
 import { getPath, setKey, removeKey, parseJsonText, unreadableJson, markLen } from './json-text.mjs'
 import { writeDurable, editTarget, removeEmptyDirs, readOrNull } from './fsutil.mjs'
@@ -49,9 +49,6 @@ export const MARKER_PATHS = Object.freeze({
   pi: [{ how: 'owned-file', file: '.pi/agent/extensions/trocar-ca.js' }],
 })
 
-const BLOCK_OPEN = `# >>> ${SENTINEL} >>>`
-const BLOCK_CLOSE = `# <<< ${SENTINEL} <<<`
-const LINE_MARK = `# ${SENTINEL}: `
 const under = (v, root) => typeof v === 'string' && v.startsWith(root + path.sep)
 // The text of a file by what its bytes prove (4.6「文件的编码」, text-codec.mjs): { text, charset } | { why }. A U+FEFF at offset 0 (the mark) is
 // before the first line, not part of it: linesOf starts after it, so a block or a line at the top of a marked file is found and the mark stays.
@@ -67,7 +64,7 @@ function linesOf(t) { const out = []; for (let at = markLen(t); at < t.length;) 
 // door's URL); a block whose close line the user deleted ends at the last variable line under trocar's home that follows the open line directly.
 // → [{ from, to }] offsets
 const isVar = (l) => /^[A-Za-z_]\w*=/.test(l)
-const isClose = (l) => l.trimEnd() === BLOCK_CLOSE // trimEnd: a CRLF file's lines end in \r
+const isClose = (l) => l.trimEnd() === BLOCK_END // trimEnd: a CRLF file's lines end in \r
 function blocksIn(t, root) {
   const ls = linesOf(t), out = []
   for (let i = 0; i < ls.length; i++) {

@@ -48,18 +48,44 @@ async function daemonAnswering(w, holders) {
 test('CM24 · daemon up: a holder the daemon names (GET /holders over its real endpoint) → refused, named, nothing changed, exit 1', async () => {
   const w = await installed()
   const server = await daemonAnswering(w, [{ harness: 'codex', pid: 4242, start: 1, why: 'started-in-window' }])
+  const running = { procs: async () => [{ pid: 4242, startedAt: 1, argv: ['codex'] }] } // the daemon's holder is still in a fresh table
   try {
     const before = tree(w.home)
-    const { receipt, exit } = await uninstall(w)
+    const { receipt, exit } = await uninstall(w, running)
     assert.deepEqual([exit, receipt.error && receipt.error.code], [1, 'collectors-online'])
     assert.ok(receipt.problems.some((p) => p.includes('trocar off') && p.includes('trocar uninstall')), 'the refusal gives the steps: trocar off, then trocar uninstall (1.6 §9.6 collectors-online)')
     assert.match(receipt.problems.join('\n'), /codex \(pid 4242\)/)
     assert.deepEqual(tree(w.home), before, 'not one file changed')
-    const purged = await uninstall(w, {}, { purgeData: true }) // the receipt of a refused --purge-data says the captures stay (it said 「采集数据已删」)
+    const purged = await uninstall(w, running, { purgeData: true }) // the receipt of a refused --purge-data says the captures stay (it said 「采集数据已删」)
     assert.deepEqual([purged.exit, purged.receipt.error && purged.receipt.error.code, tree(w.home)], [1, 'collectors-online', before])
     assert.doesNotMatch(formatUninstallReceipt(purged.receipt), /your captured records \(--purge-data\)/)
   } finally { await server.close() }
 })
+
+// CM24 · daemon up (4.11 §1 uninstall): the daemon's holders are its last poll's answer, up to 10 s old; uninstall checks them against a fresh read of the
+// process table before refusing. A life no longer in it (gone, or its pid now another process's) is no holder; one still in it refuses; a table that
+// cannot be read keeps the daemon's list and says so, with the reason (D38). Evidence: on a Windows 11 machine uninstall named pids taskkill had ended.
+// The daemon's start and the fresh table's may come from two readers (on Windows its resident helper and the CLI's PowerShell question), which agree
+// to within 2 s (4.8 §7): a start that differs by less, or a start the table does not know, is the same life and still holds (D50).
+const START = Date.parse('2026-11-04T01:00:00.000Z')
+const TABLES = { gone: [], 'pid-reused': [{ pid: 4242, startedAt: START + 60000, argv: ['other'] }], 'another reader': [{ pid: 4242, startedAt: START + 700, startGrain: 1, argv: ['codex'] }], 'start not known': [{ pid: 4242, startedAt: null, argv: ['codex'] }] }
+for (const table of [...Object.keys(TABLES), 'unreadable']) {
+  const holds = !['gone', 'pid-reused'].includes(table)
+  test(`CM24 · daemon up: the daemon names a holder, a fresh table ${table} → ${holds ? 'refused' : 'not refused for it'}`, async () => {
+    const w = await installed()
+    const server = await daemonAnswering(w, [{ harness: 'codex', pid: 4242, start: new Date(START).toISOString(), why: 'started-in-window' }])
+    const procs = table === 'unreadable' ? async () => { throw new Error('the table broke') } : async () => TABLES[table]
+    try {
+      const { receipt, exit } = await uninstall(w, { procs })
+      const code = receipt.error && receipt.error.code
+      if (!holds) { assert.notEqual(code, 'collectors-online', JSON.stringify(receipt.problems)); return }
+      assert.deepEqual([exit, code], [1, 'collectors-online'])
+      assert.match(receipt.problems.join('\n'), /codex \(pid 4242\)/)
+      assert.equal(receipt.problems.filter((p) => /trocar off/.test(p)).length, 1, `the next step is given once (1.6 §1.1③): ${JSON.stringify(receipt.problems)}`)
+      if (table === 'unreadable') assert.match([...receipt.problems, ...receipt.notes].join('\n'), /the table broke/, 'the failed read is said with its reason (D38)')
+    } finally { await server.close() }
+  })
+}
 
 test('CM24 · a harness still on (desired on) → refused and named, nothing changed — uninstall never does off', async () => {
   const w = await installed()
