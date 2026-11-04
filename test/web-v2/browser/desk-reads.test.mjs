@@ -33,7 +33,7 @@ test('2.3 #25: scrubbing the desk reads nothing before a 100 ms rest, keeps ≤ 
     await page.route('**/api/block?**', (route) => {
       if (hold) { held.push(route); return }
       const refs = new URL(route.request().url()).searchParams.getAll('ref')
-      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ blocks: refs.map((ref) => ({ ref, bytes: 'x', encoding: 'utf8', fidelity: 'verbatim', truncated: false })), errors: [] }) })
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ blocks: refs.map((ref) => ({ ref, bytes: 'x', encoding: 'utf8', fidelity: 'verbatim', truncated: false })), errors: [] }) })
     })
 
     await page.evaluate(() => { location.hash = '#/replay/p/S' })
@@ -138,7 +138,7 @@ test('4.4 §答案文件: a tail replaced by a render with a line boundary at th
       const r = ir == null || ir === etag ? /^bytes=(\d+)-$/.exec(req.headers().range || '') : null
       if (!r) return route.fulfill({ status: 200, contentType: 'application/x-ndjson', headers: { etag }, body: buf })
       if (+r[1] >= buf.length) return route.fulfill({ status: 416, headers: { etag, 'content-range': `bytes */${buf.length}` }, body: '' })
-      route.fulfill({ status: 206, contentType: 'application/x-ndjson', headers: { etag, 'content-range': `bytes ${r[1]}-${buf.length - 1}/${buf.length}` }, body: buf.subarray(+r[1]) })
+      return route.fulfill({ status: 206, contentType: 'application/x-ndjson', headers: { etag, 'content-range': `bytes ${r[1]}-${buf.length - 1}/${buf.length}` }, body: buf.subarray(+r[1]) })
     })
     await page.evaluate(() => { location.hash = '#/replay/p/S' })
     // the following desk's playhead is on the anchor lane's newest step: its number (data-n) names how many steps the desk holds
