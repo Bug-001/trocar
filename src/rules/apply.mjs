@@ -44,7 +44,7 @@ const EFFECTS = {
   },
 }
 
-const replaceFits = (action, unit) => isFastReplace(action) && !unit.encoding && unit.body !== null && (action.in === 'body' || !unit.sse)
+const replaceFits = (action, unit) => isFastReplace(action) && !unit.encoding && unit.body !== null
 
 const fitsTier1 = (action, unit) => (actionKind(action) === 'replace' ? replaceFits(action, unit) : !NOT_TIER_1.has(actionKind(action)))
 

@@ -184,3 +184,14 @@ for (const shape of shapes) {
     assert.deepEqual(readRules({ home }).doc.rules.map((r) => r.name), ['a'])
   })
 }
+
+test('a packed file near the size limit still takes an edit that shrinks it, though its indented form would not fit', () => {
+  const pad = 'x'.repeat(4000)
+  const rules = Array.from({ length: 240 }, (_, i) => ({ ...rule(`r${i}`), note: pad, armed: { off: 0, rules: 0 } }))
+  const packed = JSON.stringify({ max_delay_ms: DEFAULT_MAX_DELAY_MS, rules })
+  assert.ok(packed.length < LIMITS.fileBytes && JSON.stringify(JSON.parse(packed), null, 8).length > packed.length)
+  const home = seeded(packed.replaceAll('"note"', ' "note"'))
+  const e = edit((doc) => ({ ...doc, rules: doc.rules.map(({ armed: _a, ...r }) => r) }), { home, op: 'off', onBad: 'aside' })
+  assert.equal(e.ok, true)
+  assert.equal(readRules({ home }).doc.rules.some((r) => r.armed), false)
+})

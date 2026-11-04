@@ -439,3 +439,14 @@ test('AC-I: a compressed body goes out plain, without content-encoding, and the 
   const untouched = await tier2(unitOf(zipped, { encoding: 'gzip', headers }), rules(rule('r', lit('BRAVO', 'X'))));
   assert.deepEqual([untouched.bytes, untouched.headers, untouched.recover], [null, null, null]);
 });
+
+test('an SSE event a fast literal misses in text stays on tier 1, and a hit leaves for tier 2 with the same answer', async () => {
+  const swap = rules(rule('swap', lit('ALPHA', 'BRAVO'), { on: 'response' }));
+  const more = { on: 'response', sse: true };
+  const missed = await tier1(unitOf('data: {"t":"plain"}\n\n', more), swap);
+  assert.equal(missed.escalate, false);
+  assert.equal(missed.bytes, null);
+  const hit = unitOf('data: {"t":"ALPHA"}\n\n', more);
+  assert.equal((await tier1(hit, swap)).escalate, true);
+  assert.equal(text(await tier2(hit, swap)), 'data: {"t":"BRAVO"}\n\n');
+});

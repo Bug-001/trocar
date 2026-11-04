@@ -31,7 +31,7 @@ function requestUnits(rec, unit, asSent) {
   const wire = wireRequest(rec), recover = rec.intervention?.agent_request
   const body = recover && !asSent ? agentRequest(wire, recover) : wire
   if (recover && !asSent && !body) return { cannot: 'not-restorable' }
-  return { units: [{ ...unit, encoding: rec.req_content_encoding ?? null, body }] }
+  return { units: [{ ...unit, encoding: (recover && !asSent ? recover.encoding : rec.req_content_encoding) ?? null, body }] }
 }
 
 // Each event's cut runs to the next one's, so that what lies between events stays with one of them and the cuts add up to the text. A text without events is one unit.

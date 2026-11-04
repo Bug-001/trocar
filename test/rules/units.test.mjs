@@ -131,3 +131,13 @@ test('restored bytes that fail their check cannot be tested, and the wire\'s sti
     assert.equal(String(unitsOf(changed(recover), req, { asSent: true }).units[0].body), WIRE)
   }
 })
+
+test('a compressed request restored inline reads through the encoding the record kept for it, and --as-sent through the wire\'s', () => {
+  const agent = gzipSync('{"a":"agent"}'), wire = '{"a":"wire"}'
+  const recover = { recover: 'inline', encoding: 'gzip', body_b64: agent.toString('base64'), base_sha256: sha(wire), result_sha256: sha(agent) }
+  const rec = record({ req_body: wire, intervention: { agent_request: recover } })
+  const [unit] = unitsOf(rec, req).units
+  assert.deepEqual([unit.encoding, unit.body], ['gzip', agent])
+  const [sent] = unitsOf(rec, req, { asSent: true }).units
+  assert.equal(sent.encoding, null)
+})

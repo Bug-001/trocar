@@ -6,6 +6,9 @@ import { LIMITS } from './closed.mjs'
 /** A literal the byte search may decide (5.1 §条件的写法): anything else could be written another way inside a JSON body. */
 export const FAST_LITERAL = /^[A-Za-z0-9 _\-.:]+$/
 
+/** How far back a backslash can reach a byte: \uXXXX is the longest escape, its last digit five bytes on. */
+export const ESCAPE_REACH = 5
+
 /** A replace tier 1 may take up, told from the rule alone. One test for what the rule does and what `query rules` says about it. In `in: body` it may edit; in `in: text` it can
  *  only say that nothing hits, because a hit is a string to escape again. Past the length a search stops being linear (5.1 §条件的写法). */
 export const isFastReplace = (action) => action.literal === true && !action.blocks && Buffer.byteLength(action.replace) <= LIMITS.literalBytes && action.replace.isWellFormed()
@@ -60,6 +63,9 @@ export const leaves = (node) => (node.of ? node.of.reduce((n, c) => n + leaves(c
 
 /** The literal strings of the condition's leaves (a regex has none). */
 export const literals = (node) => (node.of ? node.of.flatMap(literals) : node.t === 're' || node.t === 'all' ? [] : [node.v])
+
+/** The regexes of the condition's leaves. */
+export const patterns = (node) => (node.of ? node.of.flatMap(patterns) : node.t === 're' ? [node.v] : [])
 
 /** The values of a condition that is nothing but exact matches, or null: what the host index buckets on (5.1 §分派). */
 export function exactValues(node) {

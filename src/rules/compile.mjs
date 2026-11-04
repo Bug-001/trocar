@@ -1,7 +1,7 @@
 // compile.mjs (src/rules) — a checked rule file → closures, the host index and the tier 1 verdict (RFC 5.1 §规则, §分派). The daemon loads this file: it
 // builds no regex, parses no body and runs no action. A verdict is `hit` or `miss` only when the bytes settle it; the rest is `tier2`.
 import { Buffer, isUtf8 } from 'node:buffer'
-import { exactValues, parseCondition, tierOf } from './conditions.mjs'
+import { ESCAPE_REACH, exactValues, parseCondition, tierOf } from './conditions.mjs'
 import { normalizeRule, readsBody } from './validate.mjs'
 import { CONDITION_COST } from './budget.mjs'
 
@@ -10,7 +10,6 @@ const BACKSLASH = 0x5C
 const LF = 0x0A, CR = 0x0D
 const DATA_FIELD = Buffer.from('data:')
 // `\uXXXX` is the longest escape: a hit starting up to five bytes after a backslash may be the tail of one.
-const ESCAPE_BYTES = 5
 
 /** Header pairs → Map of lowercase name → value, repeats joined with `, `. */
 export function headersMap(pairs) {
@@ -87,7 +86,7 @@ function bodyLeaf(node, unit, budget) {
   if (body === null || unit.encoding || !readableUnit(unit, budget) || !budget.spend(body.length)) return null
   let doubt = false
   for (let at = body.indexOf(node.v); at !== -1; at = body.indexOf(node.v, at + 1)) {
-    if (!body.subarray(Math.max(0, at - ESCAPE_BYTES), at).includes(BACKSLASH)) return true
+    if (!body.subarray(Math.max(0, at - ESCAPE_REACH), at).includes(BACKSLASH)) return true
     doubt = true
     if (!budget.spend(CONDITION_COST)) return null
   }

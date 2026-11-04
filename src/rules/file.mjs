@@ -103,6 +103,12 @@ const dropLock = (fs, lock, token) => {
   try { if (holds(fs, lock, token)) fs.unlinkSync(lock) } catch { /* it ages out, and the edit's result is what matters */ }
 }
 
+// A hand-packed file near the limit is over it once indented, and `rules off` still has to be able to write it.
+function serialized(doc) {
+  const pretty = Buffer.from(JSON.stringify(doc, null, 2) + '\n')
+  return pretty.length > LIMITS.fileBytes ? Buffer.from(JSON.stringify(doc) + '\n') : pretty
+}
+
 /** The names of the rules an edit added, removed or changed. */
 function changedRules(before, after) {
   const text = (doc) => new Map(doc.rules.map((r) => [r.name, JSON.stringify(r)]))
@@ -135,7 +141,7 @@ export function edit(fn, { home, fs = nodeFs, now = () => new Date(), source = '
     }
     const invalid = checkFile(after)
     if (invalid.length) return { ok: false, before, after, written: [], invalid }
-    const bytes = Buffer.from(JSON.stringify(after, null, 2) + '\n') // what is written must read back: the pretty form can be over the size the check cannot see
+    const bytes = serialized(after) // what is written must read back: its size is something the check cannot see
     const { problem } = parseRulesBytes(bytes)
     if (problem) return { ok: false, before, after, written: [], invalid: [{ path: '', reason: problem.reason }] }
     const planned = { ok: true, before, after, written: [], ...(broken && { kept_delay: read.kept_delay }) }
