@@ -458,13 +458,13 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
       }
       if (!d.ok) {
         r.detach()
-        if (d.kind === 'refused') { counters.refused++; refuse({ ...base, upstream: { ...shown, ...(d.reply != null ? { reply: d.reply } : {}) } }, { decision: 'tunnel', not_captured: 'proxy-refused', reason: d.reason }); return o.refusedBy(d) }
+        if (d.kind === 'refused') { counters.refused++; refuse({ ...base, upstream: { ...shown, ...(d.reply != null ? { reply: d.reply } : {}) } }, { decision: 'tunnel', not_captured: 'proxy-refused', reason: d.reason, duration_ms: Date.now() - waited.t0 }); return o.refusedBy(d) }
         counters.unreachable++
         const at = now(), last = lastUnreachable.get(group)
         // only a failure of the door's upstream proxy itself blames the door (4.8 W73): a dead target host — dialled direct, or dropped by a proxy that took
         // the TCP connection — is that connection's row alone, and must not use up the 60 s window a real proxy outage needs
         if (d.proxy && (last === undefined || at - last >= 60_000)) { lastUnreachable.set(group, at); failure({ where: 'netenv', code: 'upstream-unreachable', group, upstream: shown, reason: `the upstream of ${group || 'this door'} cannot be dialled (${d.error.type}: ${d.error.message}); its agents get 502 until it is back (one event per 60 s)` }) }
-        refuse({ ...base, upstream: shown }, { decision: 'error', not_captured: 'error', error: { type: d.error.type, message: d.error.message, side: 'upstream' } })
+        refuse({ ...base, upstream: shown }, { decision: 'error', not_captured: 'error', error: { type: d.error.type, message: d.error.message, side: 'upstream' }, duration_ms: Date.now() - waited.t0 })
         return o.badGateway(d.error.type)
       }
       return { base, shown, d, up }

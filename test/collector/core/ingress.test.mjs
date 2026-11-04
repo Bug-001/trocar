@@ -273,6 +273,20 @@ test('W13 an upstream that cannot be reached is a 502, never a 200 first; the ro
   assert.equal(L.engine.stats().ingress.unreachable, 1)
 })
 
+test('W13 refused and unreachable rows carry the wait: ts is when it began, ts + duration_ms the answer (4.6 §看得到)', T, async (t) => {
+  const failLater = () => { const s = hungSocket(); setTimeout(() => s.destroy(Object.assign(new Error('refused'), { code: 'ECONNREFUSED' })), 150); return s }
+  const late = net.createServer((c) => c.once('data', () => setTimeout(() => c.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n'), 150)))
+  await new Promise((r) => late.listen(0, '127.0.0.1', r)); t.after(() => late.close())
+  const U = await lab(t, { connectUpstream: failLater })
+  const P = await lab(t, { meta: { upstream: { kind: 'http', host: '127.0.0.1', port: late.address().port } } })
+  for (const [X, what] of [[U, 'unreachable'], [P, 'proxy-refused']]) {
+    const sent = Date.now(); const c = X.client(); c.write(connectHead('upstream.test:443')); await c.head(); const answered = Date.now(); await X.settled(1)
+    const [row] = X.flows
+    assert.ok(row.duration_ms >= 100, `${what}: the wait is on the row: ${JSON.stringify(row)}`)
+    assert.ok(Date.parse(row.ts) >= sent - 5 && Date.parse(row.ts) + row.duration_ms <= answered + 5, `${what}: ts is when the wait began: ${row.ts} vs sent ${new Date(sent).toISOString()}`)
+  }
+})
+
 test('W73 upstream-unreachable blames the door\'s upstream only when the upstream proxy itself fails before a target is named (dial, SOCKS5 method / auth stage) or its kind cannot be dialled; a dead target host, direct or after the proxy got the request naming it, stays on its row', T, async (t) => {
   const deadPort = () => new Promise((r) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => r(p)) }) })
   const listen = async (onConn) => { const s = net.createServer((c) => { c.on('error', () => {}); onConn(c) }); await new Promise((r) => s.listen(0, '127.0.0.1', r)); t.after(() => s.close()); return s.address().port }
@@ -887,20 +901,21 @@ test('W13 a client that leaves while the upstream is being dialled takes the dia
   const hung = []
   const L = await lab(t, { connectUpstream: (d) => (d.port === 1 ? (hung.push(hungSocket()), hung.at(-1)) : net.connect(d.port, d.address)) })
   const a = L.client(); a.write(connectHead('127.0.0.1:1')) // a direct upstream whose connect never completes
-  await until(() => hung.length, 'the ingress to dial'); a.sock.destroy()
+  await until(() => hung.length, 'the ingress to dial'); await sleep(150); const leftA = Date.now(); a.sock.destroy()
   await within(closedOf(hung[0]), 1500, 'the direct upstream to be destroyed')
   const proxy = await silentProxy(t) // an http proxy that has the prelude and never answers
   const P = await lab(t, { meta: { upstream: { kind: 'http', host: '127.0.0.1', port: proxy.port } } })
   const b = P.client(); b.write(connectHead('upstream.test:443'))
-  await until(() => proxy.socks.length && proxy.socks[0].got.length, 'the proxy to get the prelude'); b.sock.destroy()
+  await until(() => proxy.socks.length && proxy.socks[0].got.length, 'the proxy to get the prelude'); await sleep(150); const leftB = Date.now(); b.sock.destroy()
   await within(proxy.socks[0].closed, 1500, 'the connection to the proxy to be destroyed')
   await sleep(100)
   // no flow existed, but the give-up is on record: who left, during which wait, for how long (the one signal that would show trocar delaying agents)
-  for (const [X, phase] of [[L, 'connect'], [P, 'proxy-reply']]) {
+  for (const [X, phase, left] of [[L, 'connect', leftA], [P, 'proxy-reply', leftB]]) {
     assert.equal(X.flows.length, 1, phase)
     const [row] = X.flows
     assert.deepEqual([row.decision, row.not_captured, row.error.type, row.error.side, row.error.wait?.phase], ['error', 'error', 'closed_before_reply', 'client', phase])
     assert.ok(row.error.wait.ms >= 0 && row.duration_ms === row.error.wait.ms, JSON.stringify(row)); assert.deepEqual(checkRecord(row), [])
+    assert.ok(Date.parse(row.ts) <= left - 100, `ts is when the wait began (150 ms before the client left), as on every connection row (4.6 §看得到): ${row.ts} vs left ${new Date(left).toISOString()}`)
     assert.deepEqual(X.failures, []); assert.deepEqual(X.engine.stats().ingress, IDLE)
   }
   assert.equal(proxy.socks.length, 1, 'nothing dialled again')
