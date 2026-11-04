@@ -9,7 +9,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { createHash } from 'node:crypto';
-import { extract, createExtractContext, materialize, materializeAttrs } from '../../src/view/extract.mjs';
+import { extract, createExtractContext, materialize, materializeAttrs, anthropicFlat, replyBlocks } from '../../src/view/extract.mjs';
 import { parseTextRef } from '../../src/raw/refs.mjs';
 import { fieldTextOf } from '../../src/dissect/record-fields.mjs';
 import { shapeResponse } from '../../src/collector/core/record/body.mjs';
@@ -283,4 +283,18 @@ test('(d) a member that does not read back is held with every row after it; the 
       for (const r of recs) assert.deepEqual(again.rows.get(r.id), one.rows.get(r.id), `${name} k=${k} ${r.id}`);
     });
   }
+});
+
+test('reasoning with no plaintext on the wire is opaque on both sides of a call: signature only, or a redacted block', () => {
+  const blocks = [{ type: 'redacted_thinking', data: 'ciphertext' }, { type: 'thinking', thinking: '', signature: 's' }, { type: 'thinking', thinking: 'seen', signature: 's' }];
+  const want = ['opaque', 'opaque', undefined];
+  assert.deepEqual(anthropicFlat({ messages: [{ role: 'assistant', content: blocks }] }, null).map((b) => b.faithfulness), want);
+  const events = [{ type: 'message_start', message: { id: 'm', type: 'message', role: 'assistant', content: [] } },
+    ...blocks.flatMap(({ thinking, signature, ...start }, index) => [{ type: 'content_block_start', index, content_block: { ...start, ...(thinking === undefined ? null : { thinking: '' }) } },
+      ...(thinking ? [{ type: 'content_block_delta', index, delta: { type: 'thinking_delta', thinking } }] : []),
+      ...(signature ? [{ type: 'content_block_delta', index, delta: { type: 'signature_delta', signature } }] : []),
+      { type: 'content_block_stop', index }]), { type: 'message_stop' }];
+  const sse = events.map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join('');
+  const resp = shapeResponse({ status: 200, headers: [['content-type', 'text/event-stream']], body: Buffer.from(sse) });
+  assert.deepEqual(replyBlocks({ resp }, { format: 'anthropic' }).map((x) => x.b.faithfulness), want);
 });

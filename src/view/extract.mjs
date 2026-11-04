@@ -139,9 +139,11 @@ const locate = (base, text, span, field = null) => {
   return { ref: composeTextRef(base, span, field), exact: text.slice(span[0], span[1]), why: null, span };
 };
 
+// reasoning with no plaintext on the wire: a thinking block with its signature only, a redacted block with its data
+const sealedThinking = (bl) => (bl.type === 'redacted_thinking' || (bl.type === 'thinking' && bl.signature)) && !(bl.thinking || bl.text);
 // a reply part as a flat entry of the same vocabulary (section messages, role assistant)
 const WIRE_RULES = {
-  anthropic: { links: true, resourceRef: ccResourceRef, faith: (bl) => ((bl.type === 'thinking' || bl.type === 'redacted_thinking') && bl.signature && !(bl.thinking || bl.text) ? 'opaque' : undefined) },
+  anthropic: { links: true, resourceRef: ccResourceRef, faith: (bl) => (sealedThinking(bl) ? 'opaque' : undefined) },
   openai: { resourceRef: oaResourceRef, faith: (bl) => (bl.type === 'thinking' ? oaFaithfulness(bl) : undefined) },
 };
 /** replyBlocks(rec, wire) → [{ b, ref, exact, why }] in reply order: the call's own reply blocks (a part with no block has none). */
@@ -797,14 +799,12 @@ export function nonBlockKeysOf(rec, format) {
 }
 
 // The blocks of an Anthropic-wire request, tagged with their faithfulness SERVER-SIDE (reads provider block shape here, not in
-// the browser → invariant 3). opaque = encrypted/redacted reasoning replayed as signature-only, no plaintext on the wire
-// (thinking/redacted_thinking with a signature but empty text). The board renders a badge off b.faithfulness so nobody
-// mistakes ciphertext for verbatim content (invariant 4). (1.4:52)
+// the browser → invariant 3). opaque = encrypted/redacted reasoning, no plaintext on the wire (sealedThinking). The board renders
+// a badge off b.faithfulness so nobody mistakes ciphertext for verbatim content (invariant 4). (1.4:52)
 export function anthropicFlat(request, keyMemo) {
   const flat = linearContext(request, keyMemo);
   for (const b of flat) {
-    const bl = b.block || {};
-    if ((b.kind === 'thinking' || b.kind === 'redacted_thinking') && bl.signature && !(bl.thinking || bl.text)) b.faithfulness = 'opaque';
+    if (sealedThinking(b.block || {})) b.faithfulness = 'opaque';
   }
   return flat;
 }
