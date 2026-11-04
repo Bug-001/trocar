@@ -110,8 +110,8 @@ export function normalizeRule(rule) {
   return out
 }
 
-// Every condition of a match that is one, with the path and the key it is parsed under: a header's conditions one by one.
-function* conditionsOf(match) {
+/** Every condition of a match that is one, with the path and the key it is parsed under: a header's conditions one by one. */
+export function* conditionsOf(match) {
   for (const key of Object.keys(match)) {
     if (key === 'harness' || key === 'pid' || key === 'blocks' || !has(MATCH_PLACES, key)) continue
     if (key === 'header' || key === 'req_header') {
