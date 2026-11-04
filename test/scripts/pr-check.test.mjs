@@ -289,3 +289,150 @@ test('AN24: changing any outbound byte moves the hash, and a re-run does not', (
   moved(() => w.git(['commit', '-q', '--amend', '--no-edit', '--reset-author'], { GIT_AUTHOR_NAME: 'Anon Authos' }))
   moved(() => w.commit({ 'a.txt': 'onf\n' }))
 })
+
+// ── capture
+const SEGMENT = '20261018T100000Z'
+const NEWER = '20261020T100000Z'
+const line = (ts, text) => JSON.stringify({ ...JSON.parse(envLine({ ts })), req_body: JSON.stringify({ prompt: text }) })
+/** `n` normalized bytes of text no other seed shares, in words: ASCII, or Han characters of three bytes each. */
+const ascii = (n, seed) => Array.from({ length: n }, (_, i) => 'abcdefghijklmnopqrstuvwxyz'[(i * i * 7 + i * seed * 13 + seed * 5) % 26] + (i % 6 === 5 ? ' ' : '')).join('').trim()
+const han = (n, seed) => Array.from({ length: n / 3 }, (_, i) => String.fromCodePoint(0x4e00 + ((i * 97 + seed * 131) % 5000))).join('')
+const escaped = (text) => [...text].map((c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`).join('')
+const capture = (w, name, rows) => { fs.mkdirSync(path.join(w.trocar, 'raw'), { recursive: true }); return writeSegment(w.trocar, name, rows) }
+const query = (w, ...args) => JSON.parse(spawnSync(process.execPath, [BIN, 'query', ...args], { env: w.env, maxBuffer: 2 ** 28 }).stdout)
+
+// ── AN19
+test('AN19: each kind of captured fact is refused in any spelling; a word under four characters is skipped', async () => {
+  const w = workspace()
+  const s = bigSession({ home: w.trocar, wire: 'http', growth: 600, subEvery: 3, segment: SEGMENT })
+  s.append(9)
+  capture(w, NEWER, [{ host: 'vault7.example.net' }, { host: 'a.b' }])
+  const face = await serveFace({ home: w.trocar })
+  try {
+    for (const end = Date.now() + 30_000; Date.now() < end;) {
+      const { body } = await request(face.port, '/api/sessions', { headers: withToken() })
+      if (JSON.parse(body).sessions?.some((row) => row.title_source === 'wire')) break
+      await new Promise((resolve) => setTimeout(resolve, 200))
+    }
+  } finally { face.close() }
+  const [row] = query(w, 'sessions').sessions.filter((r) => r.title_source === 'wire')
+  assert.ok(row, 'the worker named the session')
+  // project_path is null and project_slug a placeholder in every capture for now (src/view/board.mjs), so the path has no value to plant
+  assert.equal(row.project_path, null)
+  const facts = { project_slug: row.project_slug, session_id: row.session_id, title: row.title, host: 'vault7.example.net', segment: NEWER, record: `${NEWER}:1` }
+  const plant = planted(facts)
+  w.commit({ ...plant, 'plain.txt': 'nothing here\n', 'short.txt': 'a.b\n' })
+  const { code, doc } = w.check()
+  assert.equal(code, 1)
+  assert.deepEqual(named(doc, 'captured-facts'), sorted(plant))
+  shapely(doc)
+})
+
+// ── AN20
+const NOW_THEN = '2026-10-18T10:00:00.000Z'
+test('AN20: 60 shared normalized bytes are refused in every spelling, 59 pass, and the coverage is all of it', () => {
+  const w = workspace()
+  const spelled = {
+    ascii: [ascii(60, 1), ascii(60, 1)], upper: [ascii(60, 2).toUpperCase(), ascii(60, 2)], lines: [ascii(60, 3).replaceAll(' ', '\n'), ascii(60, 3)],
+    outbound_escapes: [escaped(ascii(60, 4)), ascii(60, 4)], han: [han(60, 5), han(60, 5)], captured_escapes: [han(60, 6), escaped(han(60, 6))], both_escaped: [escaped(han(60, 7)), han(60, 7)],
+  }
+  const under = { under_ascii: ascii(59, 8), under_han: han(57, 9) }
+  const texts = Object.fromEntries(Object.entries(spelled).map(([k, [out]]) => [`t/${k}.txt`, `${out}\n`]))
+  w.commit({ ...texts, ...Object.fromEntries(Object.entries(under).map(([k, t]) => [`t/${k}.txt`, `${t}\n`])) })
+  const file = capture(w, SEGMENT, [...Object.values(spelled).map(([, captured]) => line(NOW_THEN, captured)), ...Object.values(under).map((t) => line(NOW_THEN, t))])
+  const { code, doc } = w.check()
+  assert.equal(code, 1)
+  assert.deepEqual(named(doc, 'captured-text'), sorted(texts))
+  shapely(doc)
+  const size = fs.statSync(file).size
+  assert.deepEqual(doc.coverage, { scanned_bytes: size, total_bytes: size, from: NOW_THEN, to: NOW_THEN })
+})
+
+test('AN20: a record at or after --before and a segment wholly after it are not compared', () => {
+  const w = workspace()
+  w.commit({ 'a.txt': `${ascii(60, 1)}\n`, 'b.txt': `${ascii(60, 2)}\n`, 'c.txt': `${ascii(60, 3)}\n`, 'd.txt': `${ascii(60, 4)}\n` })
+  capture(w, SEGMENT, [line(NOW_THEN, ascii(60, 1)), line(BEFORE, ascii(60, 2)), `{"no":"time","text":"${ascii(60, 3)}"}`])
+  capture(w, NEWER, [line('2026-12-01T00:00:00.000Z', ascii(60, 4))])
+  const { doc } = w.check()
+  assert.deepEqual(named(doc, 'captured-text'), ['a.txt', 'c.txt'], 'a record with no time is compared')
+  assert.deepEqual([doc.coverage.from, doc.coverage.to], [NOW_THEN, NOW_THEN])
+})
+
+test('AN20: a budget stops at the newest segments, the coverage says so, and the exit follows what was reached', () => {
+  const w = workspace()
+  w.commit({ 'a.txt': `${ascii(60, 1)}\n`, 'b.txt': `${ascii(60, 2)}\n` })
+  capture(w, SEGMENT, [line(NOW_THEN, ascii(60, 1))])
+  capture(w, NEWER, [line('2026-10-20T10:00:00.000Z', 'nothing shared'), line('2026-10-20T10:00:01.000Z', 'nothing shared')])
+  const cut = w.check({ args: ['--budget', '1'] })
+  assert.equal(cut.code, 0)
+  assert.ok(cut.doc.coverage.scanned_bytes > 0 && cut.doc.coverage.scanned_bytes < cut.doc.coverage.total_bytes)
+  const whole = w.check()
+  assert.equal(whole.code, 1)
+  assert.equal(whole.doc.coverage.scanned_bytes, whole.doc.coverage.total_bytes)
+  capture(w, NEWER, [line('2026-10-20T10:00:02.000Z', ascii(60, 2))])
+  assert.equal(w.check({ args: ['--budget', String(cut.doc.coverage.total_bytes - 1)] }).code, 1)
+})
+
+// ── AN22
+test('AN22: text and words the base already tracks pass; the same ones outside it do not', () => {
+  const home = ['', 'Users', 'zorgon7', ''].join('/')
+  const w = workspace({ 'docs/old.md': `${ascii(60, 1)}\nvault7.example.net\nzorgon7\n${home}\n` })
+  w.commit({ 'known.txt': `${ascii(60, 1)}\nVAULT7.EXAMPLE.NET\nzorgon7\n${home}\n`, 'new.txt': `${ascii(60, 2)}\n` })
+  capture(w, SEGMENT, [{ ts: NOW_THEN, host: 'vault7.example.net' }, line(NOW_THEN, ascii(60, 1)), line(NOW_THEN, ascii(60, 2))])
+  const { doc } = w.check({ env: { USER: 'zorgon7' } })
+  assert.deepEqual(doc.findings.map((f) => [f.rule, doc.leaving.files[/#(\d+)/.exec(f.where)[1]]]), [['captured-text', 'new.txt']])
+
+  const issue = (cwd) => spawnSync(process.execPath, [SCRIPT, '--json', '--issue', '--before', BEFORE, '--body', path.join(w.home, 'reply'), '--base', 'base'], { cwd, env: w.env })
+  fs.writeFileSync(path.join(w.home, 'reply'), `${ascii(60, 1)}\n`)
+  assert.equal(issue(w.dir).status, 0, 'the base subtracts for a comment too')
+  const outside = issue(w.home)
+  assert.equal(outside.status, 1, 'with no base to read, nothing is subtracted')
+  const report = JSON.parse(outside.stdout)
+  assert.deepEqual(report.findings.map((f) => [f.rule, f.where]), [['captured-text', 'body']])
+  assert.deepEqual(report.leaving, { files: [], commits: [], identity: [], branch: null }, 'a comment takes nothing from git')
+})
+
+// ── AN23
+test('AN23: findings hold none of the values, not even one that sits in a path', () => {
+  const w = workspace()
+  const token = `ghp_${MIXED}`, name = 'zorgon7', home = homes('quimby4').mac, host = 'vault7.example.net', text = ascii(60, 1)
+  const values = [token, name, 'quimby4', host, text, 'secretfile', 'hidden@example.com', 'hiddenbranch']
+  w.git(['branch', '-m', 'work', `feature/${name}-hiddenbranch`])
+  w.commit({ [`dir-${name}/${token}.txt`]: 'x\n', [`${host}/secretfile.png`]: 'x\n', 'text.txt': `${home}\n${text}\n${token}\n` }, `about ${host}\n\n${home}\n`, { GIT_AUTHOR_EMAIL: 'hidden@example.com' })
+  capture(w, SEGMENT, [{ ts: NOW_THEN, host }, line(NOW_THEN, text)])
+  const { code, doc } = w.check({ env: { USER: name }, title: `${name} ${host}`, body: `${home} ${token} ${text}` })
+  assert.equal(code, 1)
+  assert.deepEqual([...new Set(doc.findings.map((f) => f.rule))].sort(), ['captured-facts', 'captured-text', 'files', 'identity', 'secrets'])
+  shapely(doc)
+  const printed = JSON.stringify(doc.findings)
+  for (const value of values) assert.ok(!printed.toLowerCase().includes(value.toLowerCase()))
+})
+
+// ── AN25
+test('AN25: no capture at all is an empty comparison, not a failure', () => {
+  const w = workspace()
+  w.commit({ 'a.txt': `${ascii(60, 1)}\n` })
+  const { code, doc } = w.check()
+  assert.equal(code, 0, JSON.stringify(doc.findings))
+  assert.deepEqual(doc.coverage, { scanned_bytes: 0, total_bytes: 0, from: null, to: null })
+})
+
+test('AN25: a query that cannot read the capture, a segment that cannot be read, and an unreadable git each refuse', () => {
+  const broken = workspace()
+  fs.writeFileSync(broken.trocar, 'not a folder')
+  const query = broken.check()
+  assert.equal(query.code, 1)
+  assert.deepEqual(query.doc.findings.map((f) => f.where), ['capture'])
+
+  const sealed = workspace()
+  sealed.commit({ 'a.txt': `${ascii(60, 1)}\n` })
+  fs.mkdirSync(path.join(sealed.trocar, 'raw'), { recursive: true })
+  fs.writeFileSync(path.join(sealed.trocar, 'raw', `${SEGMENT}.sealed`), 'this is not a sealed segment')
+  const unread = sealed.check()
+  assert.equal(unread.code, 1)
+  assert.ok(unread.doc.findings.some((f) => f.where === 'capture'))
+
+  const noBase = workspace().check({ base: ['--base', 'no-such-ref'] })
+  assert.equal(noBase.code, 1)
+  assert.deepEqual(noBase.doc.findings.map((f) => f.where), ['git'])
+})
