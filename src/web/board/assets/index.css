@@ -559,17 +559,17 @@ a.ovtr:hover { background: var(--hover); }
   .bar:hover{opacity:.85;}
   .bar.reviewed{opacity:.95;box-shadow:inset 0 0 0 1.5px var(--pink);}
   .bar.err{background:var(--red);opacity:.8;}
-  /* context-type colors (stacked bar segments + legend swatches) */
-  .ct-tools{background:var(--amber);} .ct-system{background:var(--purple);} .ct-user{background:var(--accent);}
-  .ct-assistant{background:var(--green);} .ct-thinking{background:var(--pink);} .ct-tool_use{background:var(--cyan);}
-  .ct-tool_result{background:var(--dim);} .ct-image{background:var(--dimmer);}
-  /* an unrecognized block role — shown as its own colour, never mis-coloured as user/system */
-  .ct-other{background:repeating-linear-gradient(45deg,var(--dimmer) 0 2px,transparent 2px 4px);}
-  /* a call whose body was not shipped on this page (paged_out): composition UNKNOWN, not empty */
-  .ct-unloaded{background:repeating-linear-gradient(45deg,var(--dim) 0 3px,transparent 3px 6px);opacity:.55;}
+  /* content-type colours (stacked bar segments + legend swatches): each kind draws with its own data token only (1.5 §前置定义) */
+  .ct-tools{background:var(--ct-tools);} .ct-system{background:var(--ct-system);} .ct-user{background:var(--ct-user);}
+  .ct-assistant{background:var(--ct-assistant);} .ct-thinking{background:var(--ct-thinking);} .ct-tool_use{background:var(--ct-tooluse);}
+  .ct-tool_result{background:var(--ct-result);}
+  /* image and an unrecognized block role are hatched, never mis-coloured as user/system */
+  .ct-image,.ct-other{background:repeating-linear-gradient(45deg,var(--ct-hatch) 0 2px,transparent 2px 4px);}
+  /* a call whose body was not shipped on this page (paged_out): composition UNKNOWN, not empty; a wider, fainter stripe */
+  .ct-unloaded{background:repeating-linear-gradient(45deg,var(--ct-hatch) 0 3px,transparent 3px 7px);opacity:.55;}
   .barlegend{display:flex;flex-wrap:wrap;gap:2px 8px;font-size:var(--fs-chart);color:var(--dim);min-width:0;}
   .barlegend>span{white-space:nowrap;}
-  .barlegend i{width:8px;height:8px;border-radius:2px;display:inline-block;margin-right:3px;vertical-align:middle;}
+  .barlegend i{width:10px;height:10px;border-radius:2px;display:inline-block;margin-right:3px;vertical-align:middle;}
   .bar.cost{background:var(--dim);}
   .bar.cost>span{display:none;}
   /* the cost view keeps a failed step's bar red (1.3 §视图切换: 失败步照主轨画矮柱 + ×) — .bar.cost must not paint over it */
@@ -646,7 +646,7 @@ a.ovtr:hover { background: var(--hover); }
   /* shared timeline grid: fixed left gutter (track titles) | aligned plotting lane (point 3) */
   #saw,#rails{--gut:140px;--barcap:25px;}
   /* 1.3 §窗内步少时收窄: every detail lane narrows to (bars in the brush window) × the bar cap, left-aligned, so the /N
-     columns stay one grid; --nbars is written on #leftpage by renderSaw. The whole-session strip keeps the full width. */
+     columns stay one grid; --nbars is written on #leftpage by renderSaw (the legacy desk) or on #saw by Scope.tsx. The whole-session strip keeps the full width. */
   #saw .tkrow:not(.tkrow-ovw):not(.tkrow-chap)>.tlane,#rails .tlane{max-width:calc(var(--nbars,100000) * var(--barcap));}
   .tkrow{display:grid;grid-template-columns:var(--gut) 1fr;align-items:center;column-gap:8px;}
   .tkrow-bars{align-items:end;}
@@ -690,11 +690,14 @@ a.ovtr:hover { background: var(--hover); }
   /* B layout: left page (replay backbone) | divider | right page (overlays as wing) */
   #pages{flex:1;display:flex;min-height:0;}
   #leftpage{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0;}
-  #divider{flex:none;width:6px;cursor:col-resize;background:repeating-linear-gradient(180deg,var(--border) 0 4px,transparent 4px 8px);touch-action:none;}
-  #divider:hover{background:var(--accent);}
+  /* the boundaries (1.2 「边界的样子」): a 1px --rule hairline centred in a hit area at least 6px wide, 2px --action on hover or drag;
+     it is the only line there, so the outline and the right page draw no border of their own on that side */
+  #divider,#maindiv{cursor:col-resize;touch-action:none;background:linear-gradient(var(--rule) 0 0) center/1px 100% no-repeat;}
+  #divider:hover,#divider:active,#maindiv:hover,#maindiv:active{background:linear-gradient(var(--action) 0 0) center/2px 100% no-repeat;}
+  #divider{flex:none;width:6px;}
   body.resizing{cursor:col-resize;user-select:none;}
   body.resizing #ctxwin,body.resizing #resexp{pointer-events:none;}
-  #rightpage{flex:none;width:var(--rightpage-w);display:flex;flex-direction:column;min-height:0;border-left:1px solid var(--border);background:var(--raised);}
+  #rightpage{flex:none;width:var(--rightpage-w);display:flex;flex-direction:column;min-height:0;background:var(--raised);}
   #rpbody{flex:1;min-height:0;display:flex;flex-direction:column;}
   #resexp{flex:1 1 0;min-height:0;overflow-y:auto;padding:9px 10px 30px;}
   /* the right page splits in halves (1.2 §回放台 B 布局): the raw panel reaches the page's bottom, never stops a third of the way down */
@@ -737,9 +740,7 @@ a.ovtr:hover { background: var(--hover); }
   /* the window keeps half the left page (1.2:230): an opened rail group scrolls inside #rails instead of pushing it off */
   @media(max-width:820px){#leftpage > main{grid-template-columns:1fr;} #ctxnav,#maindiv{display:none;}}
   /* outline to center adjustable boundary (Q1) — second draggable gutter, own CSS var + LS key */
-  #maindiv{cursor:col-resize;background:repeating-linear-gradient(180deg,var(--border) 0 4px,transparent 4px 8px);touch-action:none;}
-  #maindiv:hover{background:var(--accent);}
-  #ctxnav{overflow-y:auto;border-right:1px solid var(--border);background:var(--raised);padding:10px 9px 40px;}
+  #ctxnav{overflow-y:auto;background:var(--raised);padding:10px 9px 40px;}
   #midcol{display:flex;flex-direction:column;min-width:0;min-height:0;}
 
   /* ── the context window (tools → system → messages, faithful order) ── */
@@ -1056,10 +1057,91 @@ a.ovtr:hover { background: var(--hover); }
 /* a session the server does not know: only the window speaks (its link back to the list); no empty timeline around it */
 .desk.notlisted #saw,.desk.notlisted #rails,.desk.notlisted #stepbar{display:none;}
 
+/* ── the new desk (.desk.next, web/src/screens/replay): the session head's start time and entry word (1.2 §会话头) ─────────────── */
+/* the start time gives way first (1.2 让位次序: start → project → chip → title); the entry word is a short word, never cut */
+.desk.next .sh-start{flex:0 100000 auto;min-width:0;font-size:var(--fs-cap);color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.desk.next .sh-entry{flex:none;font-size:var(--fs-cap);color:var(--ink-3);white-space:nowrap;}
+
+/* ── the new desk's step head (2.2 §步头): one row ‹ [N / M over model · time] › · ◐ · Compare · three read-outs ───────────────── */
+/* Too narrow (2.2 §步头放不下): only the model name gives way, down to 8 characters (--mn: fewer for a shorter name; the line clamp keeps its min-content at 8ch, so
+   the row wraps only then); then the read-outs go to the next row. The time, the number, Compare and the read-outs are never cut. */
+.desk.next #stepbar{flex-wrap:wrap;align-items:center;gap:4px 10px;}
+.desk.next #stepbar .sb-nav{flex:1 1 0;display:flex;align-items:center;gap:6px;}
+.desk.next #stepbar .sb-id{display:flex;flex-direction:column;min-width:0;}
+.desk.next #stepbar .sb-line{display:flex;align-items:baseline;gap:4px;white-space:nowrap;}
+.desk.next #stepbar .sb-lane{font-size:var(--fs-cap);color:var(--ink-2);}
+.desk.next #stepbar .sb-no,.desk.next #stepbar .sb-at{font-size:var(--fs-body);font-weight:var(--fw-regular);white-space:nowrap;}
+.desk.next #stepbar .sb-n{font-size:var(--fs-title);font-weight:var(--fw-strong);background:var(--brand-text);-webkit-background-clip:text;background-clip:text;color:transparent;}
+.desk.next #stepbar .sb-m{color:var(--ink-3);}
+.desk.next #stepbar .sb-meta{display:flex;align-items:baseline;gap:4px;font-family:var(--sans);font-size:var(--fs-cap);color:var(--ink-2);}
+.desk.next #stepbar .sb-model{flex:0 1 auto;min-width:calc(var(--mn,8) * 1ch);max-width:none;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:1;overflow:hidden;word-break:break-all;}
+.desk.next #stepbar .sb-sep{flex:none;color:var(--ink-3);}
+.desk.next #stepbar .sb-time{flex:none;white-space:nowrap;}
+.desk.next #stepbar .sb-fid,.desk.next #stepbar .sb-cmp,.desk.next #stepbar .sb-reads{flex:none;}
+.desk.next #stepbar .sb-cmp{display:inline-flex;align-items:center;gap:4px;}
+.desk.next #stepbar .sb-cmpbtn{display:inline-flex;align-items:center;gap:4px;font-size:var(--fs-cap);color:var(--ink-2);border:1px solid var(--rule);border-radius:var(--r-pill);padding:2px 10px;}
+.desk.next #stepbar .cmpx{font:inherit;font-size:var(--fs-cap);color:var(--ink-3);background:transparent;border:1px solid var(--rule);border-radius:var(--r-1);padding:0 4px;cursor:pointer;}
+.desk.next #stepbar .cmpx:hover{color:var(--bad);border-color:var(--bad);}
+.desk.next #stepbar .sb-cmp [role="menuitem"]{display:flex;align-items:center;height:30px;padding:0 10px;font-size:var(--fs-body);color:var(--ink);border-radius:var(--r-2);cursor:pointer;outline:none;}
+.desk.next #stepbar .sb-cmp [role="menuitem"][data-focused]{background:var(--action);color:var(--action-ink);}
+.desk.next #stepbar .sb-reads{display:flex;align-items:stretch;gap:4px;margin-left:auto;}
+.desk.next #stepbar .sb-ro{display:flex;flex-direction:column;align-items:flex-start;gap:1px;padding:2px 8px;border:1px solid var(--rule);border-radius:var(--r-2);color:var(--ink);}
+.desk.next #stepbar .sb-ro:hover,.desk.next #stepbar .sb-ro[aria-expanded="true"]{border-color:var(--control-edge);}
+.desk.next #stepbar .ro-name{font-size:var(--fs-cap);color:var(--ink-2);}
+.desk.next #stepbar .ro-val{display:flex;align-items:center;gap:6px;font-size:var(--fs-body);font-weight:var(--fw-strong);}
+.desk.next #stepbar .ro-bar{display:flex;width:44px;height:8px;border-radius:var(--r-1);overflow:hidden;background:var(--sunk);}
+.desk.next #stepbar .pp-row{font-size:var(--fs-body);color:var(--ink);}
+.desk.next #stepbar .pp-calibre,.desk.next #stepbar .pp-diagnose,.desk.next #stepbar .pp-unknown,.desk.next #stepbar .pp-tools-estimated{font-size:var(--fs-cap);color:var(--ink-2);}
+.desk.next #stepbar .pp-busy{min-height:1.6em;}
+
 /* every disclosure triangle a ::before / ::after draws: the icons.mjs chevron as a mask over the text colour (--glyph-disc, set by
    core/ui.mjs installUi; 1.5 §审美 #5: no typed triangle), 12 px like DISC_CHEV; an open one turns a quarter */
 #rpbar::before,.cbh::before,.cwturnhd::before,.navrow.head::before,.res.file .res-hd .nm::before,.dblk>.dbh::before{content:"";display:inline-block;flex:none;width:12px;height:12px;vertical-align:-2px;background:currentColor;-webkit-mask:var(--glyph-disc) center/12px 12px no-repeat;mask:var(--glyph-disc) center/12px 12px no-repeat;transition:transform var(--t-quick) var(--ease);}
 #rightpage.open #rpbar::before,.cblk:not(.collapsed) .cbh::before,.cwturn:not(.collapsed) .cwturnhd::before,.navrow.head.open::before,.res.file.expanded .res-hd .nm::before,.dblk.open>.dbh::before{transform:rotate(90deg);}
+/* css/scope.css — the new desk's scope (1.3 §排布, Scope.tsx). Only under .desk.next: the legacy desk keeps replay.css alone. The rows,
+   bars, marks, chapter row and overview keep their replay.css rules (classes and ids are shared, so are the .ct-* colours and the
+   .barlegend swatch); this file adds what the new layout has and the old did not: the legend on top, the cache trace as a line, the
+   axis tag, the one cursor line and the gutter's shares. --gut stays declared once, in replay.css, for #saw and #rails together.
+   Tokens only; --fs-chart is the scope's own size. */
+.desk.next #saw .sawlegend{margin:0 0 4px;}
+.desk.next #saw .sawlegend .sampled{color:var(--dimmer);font-size:var(--fs-chart);}
+.desk.next #saw .tracekey{display:inline-block;width:12px;height:0;border-top:1.5px solid var(--trace);vertical-align:middle;margin-right:4px;}
+.desk.next #saw .tracekey.unk{border-top-style:dotted;border-color:var(--purple);margin-left:2px;}
+/* the detail rows share one positioned box, so the cursor is one line through all of them */
+.desk.next #saw .sdetail{position:relative;}
+.desk.next #saw .scur{position:absolute;top:0;bottom:0;width:1px;margin-left:-.5px;background:var(--cursor);opacity:.7;pointer-events:none;z-index:4;
+  left:calc(var(--gut) + 8px + min(100% - var(--gut) - 8px, var(--nbars,100000) * var(--barcap)) * var(--f));}
+.desk.next #saw .tkrow-axis .sawaxis{position:relative;margin:0 0 2px;}
+.desk.next #saw .sawaxis [data-covered]{visibility:hidden;}
+.desk.next #saw .axtag{position:absolute;top:-1px;transform:translateX(-50%);padding:0 5px;border-radius:6px;background:var(--tag);color:var(--tag-ink);
+  font-size:var(--fs-chart);line-height:1.4;white-space:nowrap;z-index:5;pointer-events:none;}
+/* the problem marks are buttons: no box of their own beyond replay.css's mark */
+.desk.next #probrow button{font:inherit;font-size:var(--fs-chart);border:0;padding:0;margin:0;background-color:transparent;}
+.desk.next #probrow button.pflag{background:var(--pink);}
+.desk.next #probrow button:focus-visible{outline:1.5px solid var(--fg);}
+/* the main track is the scope's tallest row, its tallest bar --barh: as tall as it can be, but it yields first when the viewport is short
+   (1.2 §上下文窗的高度 comes before the main track's height, 1.3 §排布): at most 80px, and 7.5% of the viewport's height below that */
+.desk.next #saw{--barh:min(80px, 7.5vh);}
+.desk.next #saw .sawrow{height:calc(var(--barh) + 2px);}
+/* the main track's gutter never grows its row (1.3 §排布: #ctxwin's half comes first): its name and peak on one line as every gutter
+   title (replay.css .tgut), the shares wrapped under it. Every line is 1lh and the gutter a whole number of them, so when the shares do
+   not all fit their box shrinks to whole lines and the rest is not drawn, never half a line; the gutter's title lists them all.
+   1.4 lh keeps a glyph's box inside its line, so the first line not drawn has no pixel inside the box. */
+.desk.next #saw #sawgut{white-space:normal;align-self:stretch;display:flex;flex-direction:column;align-items:flex-end;justify-content:flex-end;
+  line-height:1.4;max-height:round(down, calc(var(--barh) + 2px), 1lh);}
+.desk.next #saw .ghead{flex:none;max-width:100%;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}
+.desk.next #saw .gshares{overflow:hidden;display:flex;flex-wrap:wrap;justify-content:flex-end;gap:0 6px;color:var(--dimmer);}
+.desk.next #saw .gshare{white-space:nowrap;}
+.desk.next #saw .gshare i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:3px;vertical-align:middle;}
+/* the cache trace: a line on three levels, dashed where there is no usage, its own style where the meaning is not certain, a gap where
+   the call failed; each column is a transparent hover target on the bars' /N axis */
+.desk.next #saw .cacherow{position:relative;height:12px;margin-top:2px;}
+.desk.next #saw .ctrace{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible;}
+.desk.next #saw .ctrace path{fill:none;stroke-width:1.5;vector-effect:non-scaling-stroke;}
+.desk.next #saw .ctrace .tier{stroke:var(--trace);}
+.desk.next #saw .ctrace .none{stroke:var(--dimmer);stroke-dasharray:3 3;}
+.desk.next #saw .ctrace .unk{stroke:var(--purple);stroke-dasharray:1 2;}
+.desk.next #saw .cacherow .cbar{background:none;opacity:1;border:0;height:100%;}
 /* css/cells.css — the two-mode block cell (Raw / Readable) inside a row of the context window, the reply and the drawer.
    Styles exactly the cell class vocabulary (RFC 2.3 §两种模式); colours only through tokens (base.css, §2.5). The cell grows in
    the page flow: no max-height and no inner scroller on the body; only code, diff and tables scroll sideways inside the cell. */

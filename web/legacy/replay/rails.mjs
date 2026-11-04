@@ -10,7 +10,7 @@ import { attrSel } from '../core/dom.mjs'
 import { when } from './analysis.mjs'
 import { xOf, windowCalls, nearestByX, nearestByTs, turnsReviewed } from './lanes.mjs'
 import { usageOf, priceMatch, costOf, isFailed as failOf } from '../core/metrics.mjs'
-import { laneKind, laneWord, SUBAGENT_ROW, BG_ROW, TC_ROW, laneTimes, callsWord, TC_SAMPLED_TIP, TC_NO_SIZE, FLAGGED_WORD, REVIEW_TIP, ONLY_MAIN } from '../labels/replay.mjs'
+import { laneKind, laneWord, SUBAGENT_ROW, BG_ROW, TC_ROW, laneTimes, callsWord, TC_SAMPLED_TIP, TC_NO_SIZE, FLAGGED_WORD, ONLY_MAIN } from '../labels/replay.mjs'
 import { L } from '../core/labels.mjs'
 
 // only the lanes that read the conversation get the review bracket (2.1 ⑤)
@@ -125,23 +125,15 @@ export function renderRails(el, s) {
   if (s.selTick) { const t = el.querySelector(`[data-lane="${attrSel(s.selTick.laneId)}"][data-i="${s.selTick.i}"]`); if (t) t.classList.add('sel') }
 }
 
-// ── the review bracket: how much of the conversation a monitor / token-count call looked at ─────────────────────────
+// ── the review bracket: how much of the conversation a monitor / token-count call looked at (s.reviewRange = {k}: the first k
+// steps; the desk's view draws it on the bars) ──────────────────────────────────────────────────────────────────────────
 export function highlightRange(s, lane, i) {
   const c = lane.calls[i]
   if (!c) return
-  const k = turnsReviewed(s.anchorTs, c.ts)
-  for (const b of s.root.querySelectorAll('#sawrow .bar')) b.classList.toggle('reviewed', +b.dataset.i < k) // bars carry a GLOBAL data-i
-  const br = s.root.querySelector('#reviewbracket')
-  if (br) {
-    br.style.display = 'block'
-    br.style.width = (Math.max(0, Math.min(1, (k - s.view.lo) / Math.max(1, s.view.hi - s.view.lo))) * 100).toFixed(2) + '%'
-    br.title = REVIEW_TIP(k)
-  }
+  s.reviewRange = { k: turnsReviewed(s.anchorTs, c.ts) }
+  s.paintReview()
 }
-export function clearRange(s) {
-  for (const b of s.root.querySelectorAll('#sawrow .bar.reviewed')) b.classList.remove('reviewed')
-  const br = s.root.querySelector('#reviewbracket'); if (br) br.style.display = 'none'
-}
+export function clearRange(s) { s.reviewRange = null; s.paintReview() }
 
 export function selectTick(s, lane, i) {
   if (i == null || i < 0 || !lane.calls[i]) return // an empty-window click must never open the drawer on -1
@@ -161,8 +153,7 @@ export function wireRails(el, s) {
     const uf = e.target.closest('[data-railunfold]')
     if (uf) {
       s.railsFolded = !s.railsFolded
-      const lp = el.closest('#leftpage')
-      if (lp) lp.classList.toggle('railopen', !s.railsFolded)
+      s.paintFrame() // the desk's view opens or folds the rows around the rails
       renderRails(el, s); return
     }
     const gt = e.target.closest('[data-grouptoggle]')

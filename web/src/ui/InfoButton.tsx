@@ -14,7 +14,8 @@ import { Svg } from './Svg'
 type How = 'hover' | 'focus' | 'pinned'
 let current: { close: () => void } | null = null // one popover at a time
 
-export function InfoButton({ label, title, body }: { label: string, title: string, body: ReactNode }) {
+// `trigger`: the button's content (default the ⓘ glyph), e.g. a read-out's two lines; `className` joins .popbtn. Behaviour is the same.
+export function InfoButton({ label, title, body, trigger, className }: { label: string, title: string, body: ReactNode, trigger?: ReactNode, className?: string }) {
   const id = useId()
   const btn = useRef<HTMLButtonElement>(null), layer = useRef<HTMLDivElement>(null)
   const [how, setHow] = useState<How | null>(null)
@@ -45,11 +46,11 @@ export function InfoButton({ label, title, body }: { label: string, title: strin
 
   return (
     <>
-      <Button ref={btn} className="popbtn" aria-label={label} aria-expanded={how != null} aria-controls={`${id}-pop`}
+      <Button ref={btn} className={className ? `popbtn ${className}` : 'popbtn'} aria-label={label} aria-haspopup="dialog" aria-expanded={how != null} aria-controls={`${id}-pop`}
         onPress={() => show('pinned')}
         onFocus={() => { if (!backTo.current) show('focus') }}
         onMouseEnter={() => { clearTimeout(timer.current); timer.current = setTimeout(() => show('hover'), TIP_MS) }}
-        onMouseLeave={left}><Svg html={icon('info')} /></Button>
+        onMouseLeave={left}>{trigger ?? <Svg html={icon('info')} />}</Button>
       <span ref={setHost} />
       <Popover triggerRef={btn} isOpen={how != null && host != null} onOpenChange={(o) => { if (!o) self.close() }} isNonModal
         placement="bottom start" containerPadding={8} UNSTABLE_portalContainer={host ?? undefined}>

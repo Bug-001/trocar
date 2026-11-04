@@ -1,7 +1,8 @@
 // test/web-v2/imports.test.mjs — the board's import rule (0.1 §2, 4.4 §静态面): every relative specifier in web/**/*.{mjs,ts,tsx}
 // resolves to a file inside web/, or to a src/ module whose whole import closure stays in src/ and imports no `node:*` (it is bundled
 // into the build); a bare specifier in web/ names a devDependency (`node:*` only in the Node-side configs at the top of web/), and web/legacy/ has none (so core/first.mjs, the cold open's early
-// read, has no framework in its closure, 1.2 #24); src/ never imports web/; every relative specifier in test/web-v2 resolves.
+// read, has no framework in its closure, 1.2 #24); src/ never imports web/; every relative specifier in test/web-v2 resolves. The component
+// tests under web/ (*.test.tsx, the files web/vitest.config.mjs collects, D75④) are never bundled, so they get only the test/web-v2 check.
 // The scanner is proven not vacuous on a planted tree with one violation of each kind.
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -22,6 +23,7 @@ const codeUnder = (dir, skip = () => false) => (fs.existsSync(dir) ? fs.readdirS
 const inside = (dir, p) => !path.relative(dir, p).startsWith('..') && !path.isAbsolute(path.relative(dir, p))
 const fileAt = (p) => ['', '.ts', '.tsx'].map((x) => p + x).find((c) => fs.existsSync(c) && fs.statSync(c).isFile())
 const pkgOf = (spec) => spec.split('/').slice(0, spec.startsWith('@') ? 2 : 1).join('/')
+const isTest = (p) => /\.test\.tsx$/.test(p) // web/vitest.config.mjs `include: ['web/**/*.test.tsx']`
 
 /** → the import-rule violations of the tree at `root` (a repo: web/, src/, package.json), each `<file>: <specifier>`. */
 function violations(root) {
@@ -41,12 +43,13 @@ function violations(root) {
   }
   for (const f of codeUnder(web, (p) => p.startsWith('public/') || p.includes('node_modules/'))) {
     for (const s of specsOf(f)) {
+      if (isTest(f)) { if (s.startsWith('.') && !fileAt(path.resolve(path.dirname(f), s.split(/[?#]/)[0]))) say(f, s); continue }
       if (!s.startsWith('.')) {
         if (inside(legacy, f) || !(s.startsWith('node:') ? path.dirname(f) === web : dev.has(pkgOf(s)))) say(f, s)
         continue
       }
       const t = fileAt(path.resolve(path.dirname(f), s.split(/[?#]/)[0]))
-      if (!t || !(inside(web, t) || (inside(src, t) && srcClean(t)))) say(f, s)
+      if (!t || isTest(t) || !(inside(web, t) || (inside(src, t) && srcClean(t)))) say(f, s) // a test file is never bundled, so nothing bundled reaches it
     }
   }
   for (const f of codeUnder(src)) {
@@ -77,6 +80,9 @@ test('the scanner is not vacuous: one planted violation of each kind is reported
     "import { useState } from 'react'",
   ].join('\n'))
   put('web/src/main.tsx', "import { useQuery } from '@tanstack/react-query'\nimport { a } from '../../src/view/pure.mjs'\nimport 'left-pad'\n")
+  put('web/src/fixture.tsx', "import { w } from '../../test/web-v2/world.mjs'\nimport './main.test.tsx'\n")
+  put('web/src/main.test.tsx', "import { w } from '../../test/web-v2/world.mjs'\nimport fs from 'node:fs'\nimport './gone.mjs'\n")
+  put('test/web-v2/world.mjs', "import { createHash } from 'node:crypto'\n")
   put('web/vite.config.mjs', "import { fileURLToPath } from 'node:url'\n")
   put('web/public/assets/x.mjs', "import 'not-scanned'\n")
   assert.deepEqual(violations(root).sort(), [
@@ -87,6 +93,9 @@ test('the scanner is not vacuous: one planted violation of each kind is reported
     'web/legacy/bad.mjs: ./core/no-such-file.mjs',
     'web/legacy/bad.mjs: ./nope/y.mjs',
     'web/legacy/bad.mjs: react',
+    'web/src/fixture.tsx: ../../test/web-v2/world.mjs',
+    'web/src/fixture.tsx: ./main.test.tsx',
+    'web/src/main.test.tsx: ./gone.mjs',
     'web/src/main.tsx: left-pad',
   ])
 })

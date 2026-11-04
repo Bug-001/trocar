@@ -191,8 +191,12 @@ export async function timed(page, cond, arg, act) {
 export async function serveWorld(page, w, { from = w.marks.length - 1, grow = 0, latency = 0, pack = 32, paced = false } = {}) {
   const last = w.marks.length - 1
   let k = Math.min(from, last), at = null, f = null, granted = paced ? 0 : Infinity
-  const json = (route, doc) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(doc) })
-  const wait = () => new Promise((r) => setTimeout(r, latency))
+  // every answer: `latency` ms, then the one fulfill of what `fn` makes of the request, returned to Playwright. Routes dropped while it
+  // waited (stop's closeQuietly) leave Playwright to continue the request itself; the late fulfill then rejects ("Route is already
+  // handled!") and Playwright ignores it for a route dropped with 'ignoreErrors'. Any other failure fails the case; a fulfill left
+  // floating would instead fail whichever case is stopping. A request the page gave up on takes the fulfill without error.
+  const answer = (pattern, fn) => page.route(pattern, async (route) => { await new Promise((r) => setTimeout(r, latency)); return route.fulfill(fn(route.request())) })
+  const json = (doc) => ({ status: 200, contentType: 'application/json', body: JSON.stringify(doc) })
   const now = () => { if (at !== k) { at = k; f = w.files(w.marks[k], pack); if (k < last) f.head = { ...f.head, pending: { done: k + 1, total: last + 1 } } } return f }
   const tails = new Map() // part → {n, text, last: Map(id → its lines' JSON)}
   function tail(part) {
@@ -208,31 +212,29 @@ export async function serveWorld(page, w, { from = w.marks.length - 1, grow = 0,
     for (const id of [...t.last.keys()]) if (!seen.has(id)) { t.last.delete(id); if (!id.startsWith('l:')) t.text += JSON.stringify({ g: id }) + '\n' }
     return Buffer.from(t.text)
   }
-  await page.route('**/api/d/**', async (route) => {
-    await wait()
-    const req = route.request(), u = new URL(req.url()), name = u.pathname.slice('/api/d/'.length)
+  await answer('**/api/d/**', (req) => {
+    const name = new URL(req.url()).pathname.slice('/api/d/'.length)
     if (name === 'head') {
       if (at != null && granted > 0) { granted--; k = Math.min(last, k + grow) }
       const body = JSON.stringify(now().head), etag = `"${createHash('sha1').update(body).digest('hex').slice(0, 16)}"`
-      if (req.headers()['if-none-match'] === etag) return route.fulfill({ status: 304, headers: { etag } })
-      return route.fulfill({ status: 200, contentType: 'application/json', headers: { etag }, body })
+      if (req.headers()['if-none-match'] === etag) return { status: 304, headers: { etag } }
+      return { status: 200, contentType: 'application/json', headers: { etag }, body }
     }
     const pk = /^p(\d+)\.(main|rest)$/.exec(name), op = /^open\.(main|rest)$/.exec(name)
-    if (pk) { const text = now().pack(+pk[1], pk[2]); return text == null ? json(route, { error: 'no such pack' }) : route.fulfill({ status: 200, contentType: 'application/x-ndjson', body: text }) }
-    if (!op) return route.fulfill({ status: 404, contentType: 'application/json', body: '{"error":"unknown endpoint"}' })
+    if (pk) { const text = now().pack(+pk[1], pk[2]); return text == null ? json({ error: 'no such pack' }) : { status: 200, contentType: 'application/x-ndjson', body: text } }
+    if (!op) return { status: 404, contentType: 'application/json', body: '{"error":"unknown endpoint"}' }
     const buf = tail(op[1]), etag = `"${op[1]}-${tails.get(op[1]).n}"`, ir = req.headers()['if-range']
     const r = ir == null || ir === etag ? /^bytes=(\d+)-$/.exec(req.headers().range || '') : null
-    if (!r) return route.fulfill({ status: 200, contentType: 'application/x-ndjson', headers: { etag }, body: buf })
+    if (!r) return { status: 200, contentType: 'application/x-ndjson', headers: { etag }, body: buf }
     const from = +r[1]
-    if (from >= buf.length) return route.fulfill({ status: 416, headers: { etag, 'content-range': `bytes */${buf.length}` }, body: '' })
-    route.fulfill({ status: 206, contentType: 'application/x-ndjson', headers: { etag, 'content-range': `bytes ${from}-${buf.length - 1}/${buf.length}` }, body: buf.subarray(from) })
+    if (from >= buf.length) return { status: 416, headers: { etag, 'content-range': `bytes */${buf.length}` }, body: '' }
+    return { status: 206, contentType: 'application/x-ndjson', headers: { etag, 'content-range': `bytes ${from}-${buf.length - 1}/${buf.length}` }, body: buf.subarray(from) }
   })
-  await page.route('**/api/lane?**', async (route) => { await wait(); const q = new URL(route.request().url()).searchParams; json(route, w.lane(q.get('lane'), { from: q.get('from') ?? undefined, to: q.get('to') ?? undefined, ledger: q.get('ledger') ?? undefined }, w.marks[k])) })
+  await answer('**/api/lane?**', (req) => { const q = new URL(req.url()).searchParams; return json(w.lane(q.get('lane'), { from: q.get('from') ?? undefined, to: q.get('to') ?? undefined, ledger: q.get('ledger') ?? undefined }, w.marks[k])) })
   // 3.5 §会话读 `block`: one item per asked ref, its bytes made from the ref (the shape of session-read-contract.json `block_multi`)
-  await page.route('**/api/block?**', async (route) => {
-    await wait()
-    const refs = new URL(route.request().url()).searchParams.getAll('ref')
-    json(route, { schema: 2, command: 'block', ok: true, errors: [], blocks: refs.map((ref) => ({ ref, bytes: blockBytes(ref), encoding: 'utf8', fidelity: 'verbatim', truncated: false })) })
+  await answer('**/api/block?**', (req) => {
+    const refs = new URL(req.url()).searchParams.getAll('ref')
+    return json({ schema: 2, command: 'block', ok: true, errors: [], blocks: refs.map((ref) => ({ ref, bytes: blockBytes(ref), encoding: 'utf8', fidelity: 'verbatim', truncated: false })) })
   })
   return { left: () => last - k, more: (n = 1) => { granted += n } }
 }

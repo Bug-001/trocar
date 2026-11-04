@@ -51,7 +51,7 @@ const FOLDS = '[aria-expanded], details, .cblk, .cwturn, .dblk, .navrow.head, .c
  *  its width. Sets ctx.lastDrag = {made: the drag made a new selection, changed: the folds whose state the drag changed}. */
 async function selectDrag(ctx, p) {
   const { page } = ctx
-  const at = await page.evaluate(([sel, folds, f, span, deny]) => {
+  const at = await page.evaluate(([sel, f, span, deny]) => {
     const runs = []
     for (const root of document.querySelectorAll(sel)) {
       const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
@@ -69,15 +69,20 @@ async function selectDrag(ctx, p) {
     const b = r.getBoundingClientRect(), y = b.top + b.height / 2
     const hit = document.elementFromPoint(b.left + 1, y)
     if (!hit || !hit.contains(pickd[0].parentElement) && !pickd[0].parentElement.contains(hit)) return null
+    return { x0: b.left + 1, x1: b.left + Math.max(8, span * (b.width - 2)), y }
+  }, [SELECT_IN[p.where], p.f, p.span, DENY])
+  if (!at) return SKIP
+  // the fold states are read with the pointer already at the drag's start: getting there may close a hover-opened layer (1.2
+  // §弹出层: the pointer left it), which is the pointer moving, not the drag
+  await page.mouse.move(at.x0, at.y)
+  await page.evaluate((folds) => new Promise((done) => requestAnimationFrame(() => {
     const state = (e) => [e.getAttribute('aria-expanded'), e.open, e.classList.contains('collapsed'), e.classList.contains('open')].join()
     const s = document.getSelection()
     window.__seqFolds = new Map([...document.querySelectorAll(folds)].map((e) => [e, state(e)]))
     window.__seqSelKey = s.isCollapsed ? '' : [s.anchorOffset, s.focusOffset, String(s)].join()
     window.__seqFoldState = state
-    return { x0: b.left + 1, x1: b.left + Math.max(8, span * (b.width - 2)), y }
-  }, [SELECT_IN[p.where], FOLDS, p.f, p.span, DENY])
-  if (!at) return SKIP
-  await page.mouse.move(at.x0, at.y)
+    done()
+  })), FOLDS)
   await page.mouse.down()
   await page.mouse.move(at.x1, at.y, { steps: 5 })
   await page.mouse.up()

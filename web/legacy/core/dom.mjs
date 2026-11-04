@@ -96,11 +96,13 @@ function wireKeys() {
   }, true)
 }
 
-// 1.2 §键盘「层随屏走」: every layer core opens belongs to the screen mounted when it opened. main.mjs names that screen's signal here
-// (null between screens); screenBound(close) runs close() once that signal aborts — at once when it already has — and → the off() that
+// 1.2 §键盘「层随屏走」: every layer core opens belongs to the screen mounted when it opened. The screen's host (LegacyScreen.tsx, or the
+// new desk's DeskHost.tsx) names that screen's signal here and gives back only its own (null between screens: the two hosts both hear
+// one route, in either order); screenBound(close) runs close() once that signal aborts — at once when it already has — and → the off() that
 // drops the listener when the layer closes first. The one path: openModal, confirmDialog and installUi's popovers all take it.
 let screenSignal = null
 export function setScreenSignal(signal) { screenSignal = signal || null }
+export function releaseScreenSignal(signal) { if (screenSignal === signal) screenSignal = null }
 export function screenBound(close) {
   const s = screenSignal
   if (!s) return () => {}

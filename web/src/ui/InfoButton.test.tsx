@@ -26,6 +26,21 @@ test('with an open ⓘ, the next tabbable after the ⓘ is the first link in its
   expect(order[order.indexOf(info) + 1]).toBe(link)
 })
 
+test('a trigger slot replaces the ⓘ inside the same button: its name stays the aria-label, and a press opens the same titled layer', async () => {
+  render(<InfoButton label="About" title="Head" className="extra" body={<p>body</p>} trigger={<><span className="w">Word</span><span className="v">42</span></>} />)
+  const btn = document.querySelector<HTMLElement>('button.popbtn.extra')!
+  expect(btn.getAttribute('aria-label')).toBe('About')
+  expect(btn.querySelector('.w')?.textContent).toBe('Word')
+  expect(btn.querySelector('svg')).toBeNull()
+  expect(btn.getAttribute('aria-expanded')).toBe('false')
+  act(() => btn.focus())
+  fireEvent.keyDown(btn, { key: 'Enter' }); fireEvent.keyUp(btn, { key: 'Enter' })
+  await act(async () => {})
+  const dlg = document.querySelector('[role="dialog"]')!
+  expect(btn.getAttribute('aria-expanded')).toBe('true')
+  expect(document.getElementById(dlg.getAttribute('aria-labelledby')!)?.textContent).toBe('Head')
+})
+
 test('1.2 「层随屏走」: an open ⓘ layer leaves the document with the screen that opened it', async () => {
   const { unmount } = render(<main><InfoButton label="About" title="Head" body={<a href="#/capture">link</a>} /></main>)
   const info = document.querySelector<HTMLElement>('.popbtn')!

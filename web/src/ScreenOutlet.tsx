@@ -10,16 +10,17 @@ import { ConfirmProvider } from './ui/Confirm'
 
 // router: the board's facade (setParams replaces the hash, go navigates); a screen writes its state through it, never location
 export type ScreenProps = { route: Route, router: ReturnType<typeof createBoardRouter>['legacy'] }
-export type LazyScreen = { load(): Promise<unknown>, Screen: ComponentType<ScreenProps> }
+export type LazyScreen<P extends object = ScreenProps> = { load(): Promise<unknown>, Screen: ComponentType<P> }
 
 // lazyScreen(importer) → { load, Screen }: the module is loaded once, by the idle preload or the first render, whichever comes first.
 // A screen whose module is in is drawn in the render that asks for it; one still loading reads 「Reading…」 until it is in, and not a
 // moment longer. Not React.lazy behind Suspense: lazy suspends on its first render even with the module in, and React holds a
 // fallback it has shown for 300 ms before revealing what replaced it, so every first visit, and every cold open, cost 300 ms.
-export function lazyScreen(importer: () => Promise<{ default: ComponentType<ScreenProps> }>): LazyScreen {
-  let Loaded: ComponentType<ScreenProps> | undefined, pending: Promise<unknown> | undefined
+// A screen's props are ScreenProps; the new desk's host (screens/replay/DeskHost.tsx) is loaded the same way with its own.
+export function lazyScreen<P extends object = ScreenProps>(importer: () => Promise<{ default: ComponentType<P> }>): LazyScreen<P> {
+  let Loaded: ComponentType<P> | undefined, pending: Promise<unknown> | undefined
   const load = () => (pending ??= importer().then((m) => { Loaded = m.default }))
-  function Screen(props: ScreenProps) {
+  function Screen(props: P) {
     const [, loaded] = useState(false)
     const [failed, setFailed] = useState<{ e: unknown } | null>(null)
     useEffect(() => { if (!Loaded) load().then(() => loaded(true), (e: unknown) => setFailed({ e })) }, [])
@@ -29,7 +30,8 @@ export function lazyScreen(importer: () => Promise<{ default: ComponentType<Scre
   return { load, Screen }
 }
 
-class ScreenBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
+// what a screen that throws while it loads or renders leaves in the content area (also the new desk's host, main.tsx)
+export class ScreenBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
   state = { error: null as string | null }
   static getDerivedStateFromError(e: unknown) { return { error: String((e as Error)?.message ?? e) } }
   componentDidCatch(e: unknown, info: ErrorInfo) { console.error('screen failed', e, info.componentStack) }
