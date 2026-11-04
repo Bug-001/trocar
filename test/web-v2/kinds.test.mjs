@@ -357,7 +357,7 @@ test('diff: past the edit or line cap, two panes; a patch is classed by its firs
   const many = (n, p) => Array.from({ length: n }, (_, k) => p + k).join('\n')
   for (const [o, n] of [[many(300, 'a'), many(300, 'b')], [many(2001, 'a'), many(2001, 'a') + '\nz']]) {
     const t0 = Date.now()
-    const out = renderKind({ as: 'diff', f: { old: ['o'], new: ['n'] } }, { o, n })
+    const out = renderKind({ as: 'diff', f: { old: ['o'], new: ['n'] } }, { o, n }, { budget: o.length + n.length })
     assert.equal(count(out.html, /class="d-pane"/g), 2)
     assert.equal(count(out.html, /class="d-panel"/g), 2)
     assert.ok(Date.now() - t0 < 2000, 'bounded work')
@@ -369,6 +369,39 @@ test('diff: past the edit or line cap, two panes; a patch is classed by its firs
     const want = body.map((l) => ({ '+': 'd-add', '-': 'd-del', ' ': 'd-ctx' }[l[0]]))
     assert.deepEqual(dlines(out.html).map(([c]) => c), want)
     assert.ok(has(out.html, 'd-hunk'))
+  }
+})
+
+// 2.3 §切片: a kind drawn whole is drawn within the budget whatever its body's shape, the slices read back as its text, and what it
+// draws is spent, so what follows it in the block gets what is left
+test('diff and shell over an object body: past the budget their text in slices within it; what they draw is spent', () => {
+  const lines = (n) => { let s = '@@ -1 +1 @@'; while (s.length < n) s += '\n+' + plain(); return s.slice(0, n) }
+  const kinds = [
+    ['patch', { as: 'diff', f: { body: ['input'], patch: ['input', 'p'] } }, (t) => ({ input: { p: t } })],
+    ['pair', { as: 'diff', f: { body: ['input'], old: ['input', 'o'], new: ['input', 'n'] } }, (t) => ({ input: { o: t, n: t.slice(0, t.length >> 1) } })],
+    ['shell', { as: 'shell', f: { body: ['input'], cmd: ['input', 'c'] } }, (t) => ({ input: { c: t } })],
+  ]
+  for (const budget of [500, 3000]) for (const [name, r, of] of kinds) for (const n of [budget >> 2, budget - 1, budget + 1, budget * 3, budget * 20]) {
+    const v = of(lines(n)), at = `${name} ${n}/${budget}`, want = copyOf(r, v)
+    let out = renderKind(r, v, { budget }), got = textOf(out.html).replace(/\n+/g, '\n'), from = 0, steps = 0
+    if (out.more == null) { assert.ok(out.cls.includes(name === 'shell' ? 'kd-shell' : 'kd-diff'), at); continue }
+    assert.ok(n > budget >> 1, at)
+    assert.equal(out.total, want.length, at)
+    let read = ''
+    while (out) {
+      const end = out.more ?? want.length
+      assert.ok(end - from <= budget + 1, `${at}: a slice of ${end - from}`)
+      read += want.slice(from, end); from = end; steps++
+      out = out.more == null ? null : renderKind(r, v, { from, budget })
+    }
+    assert.equal(read, want, at)
+    assert.ok(steps > 1, at)
+  }
+  const t = lines(300), left = 100
+  for (const [, r, of] of kinds) {
+    const v = of(t), spent = t.length + (v.input.n?.length ?? 0)
+    const out = renderKind({ as: 'parts', kids: [r, { as: 'text' }] }, [v, 'Y'.repeat(1000)], { budget: spent + left })
+    assert.equal(count(out.html, /Y/g), left, 'what follows a whole kind has what it left')
   }
 })
 

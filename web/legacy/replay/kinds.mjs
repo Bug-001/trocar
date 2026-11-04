@@ -209,9 +209,13 @@ function back(trace, a, b, off) {
   return out.reverse()
 }
 const hunk = (l) => l.startsWith('@@') || l.startsWith('***')
-function editOf(f, v) { // an edit pair and its line diff (null: two panes)
+function pairOf(f, v) {
   const a = get(v, f.old), c = get(v, f.new)
   if (typeof a !== 'string' || typeof c !== 'string') fail()
+  return { a, c }
+}
+function editOf(f, v) { // an edit pair and its line diff (null: two panes)
+  const { a, c } = pairOf(f, v)
   return { a, c, ops: myers(a.split('\n'), c.split('\n')) }
 }
 function patchOf(f, b, v) {
@@ -362,17 +366,29 @@ export function textOf(r, value) {
     return T[kindOf(r)](r || {}, body, value)
   } catch { return asText(body ?? value) }
 }
+// the characters of a kind drawn whole, whatever its body's shape: past the budget it is its text, sliced (2.3 §切片)
+const WHOLE = {
+  diff(r, b, v) {
+    const f = r.f || {}
+    if (f.old == null && f.new == null) return patchOf(f, b, v).length
+    const { a, c } = pairOf(f, v)
+    return a.length + c.length
+  },
+  shell: (r, b, v) => cmdLine(r, v).length,
+}
 function draw(r, value, o) {
   let as = kindOf(r), body
   const tone = toneOf(r), from = r?.f?.body, at = [...o.root, ...(Array.isArray(from) ? from : [])]
   try {
     body = get(value, from)
     if (body === undefined && from != null) fail()
-    if (as === 'diff' && typeof body === 'string' && (o.from > 0 || body.length > o.budget)) as = 'text' // drawn whole: past the budget it is text, sliced
+    const whole = has(WHOLE, as) ? WHOLE[as](r || {}, body, value) : null, sliced = whole != null && (o.from > 0 || whole > o.budget)
+    if (sliced) { body = T[as](r || {}, body, value); as = 'text' } else if (whole != null) o.B.c -= whole
     const d = { ...o, path: at }
     let out = R[as](r || {}, body, value, d)
     if (out.as) { as = out.as; out = R[as](r || {}, has(out, 'body') ? out.body : body, value, d) }
-    return { html: out.html, more: out.more ?? null, cls: (CLASS[as] || 'kd-' + as) + (as === 'code' && r?.f?.wrap ? ' kd-wrap' : '') + tone, as, src: body, at }
+    // a sliced whole kind's text is made here, not found in the value: nothing at `at` to open the rest from
+    return { html: out.html, more: out.more ?? null, cls: (CLASS[as] || 'kd-' + as) + (as === 'code' && r?.f?.wrap ? ' kd-wrap' : '') + tone, as, src: sliced ? null : body, at, size: sliced ? body.length : undefined }
   } catch {
     const all = asText(body ?? value), [s, more] = slice(all, o.from, o.budget)
     return { html: (o.from === 0 ? `<div class="kd-fail">${esc(FAIL_LINE)}</div>` : '') + shown(take(o, s)), more, cls: 'kd-text' + tone, as: 'text', src: typeof body === 'string' ? body : null, at, size: all.length }
