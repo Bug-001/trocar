@@ -118,16 +118,20 @@ function numstat(out) {
 }
 
 /** `git show --unified=0`, one entry per file: the added lines, the line each has in the new file, whether the file went away, and whether
- *  git calls it binary. */
+ *  git calls it binary. A file that became a link or the reverse is printed as a deletion and a creation under one header, and is one entry
+ *  that did not go away, whichever comes first. */
 function patches(out) {
   const files = []
-  let file = null, inHunk = false, line = 0
+  let file = null, header = null, inHunk = false, line = 0
   for (let at = 0; at < out.length;) {
     const nl = out.indexOf(10, at), end = nl < 0 ? out.length : nl
     const row = out.subarray(at, end)
     at = end + 1
     if (row.subarray(0, DIFF_HEADER.length).toString('latin1') === DIFF_HEADER) {
-      files.push(file = { added: [], lines: [], gone: false, binary: false })
+      const split = header?.equals(row)
+      if (!split) files.push(file = { added: [], lines: [], gone: false, split: false, binary: false })
+      else Object.assign(file, { gone: false, split: true })
+      header = row
       inHunk = false
     } else if (row[0] === 0x40) { // @@ -a,b +c,d @@
       inHunk = true
@@ -137,7 +141,7 @@ function patches(out) {
       file.added.push(row.subarray(1))
       file.lines.push(line++)
     } else if (file && row.subarray(0, 12).toString() === 'deleted file') {
-      file.gone = true
+      file.gone = !file.split
     } else if (file && row.subarray(0, 13).toString() === 'Binary files ') {
       file.binary = true
     }
