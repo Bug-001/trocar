@@ -1,5 +1,6 @@
 // test/query/write-slices.test.mjs — no long slice at the end of a re-read or at a checkpoint (3.5 后台抽取与归约, §谁执行它「答案文件」,
-// D78): the scan for what changed gives way like the rest of the write and loses no rid, whatever happens while it is cut.
+// D78): the scan for what changed gives way like the rest of the write and loses no rid, whatever happens while it is cut; the
+// step-order columns come to the frontier a background slice at a time and read back whole from any checkpoint.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -10,7 +11,9 @@ import { bigSession } from './big-session.mjs'
 import '../../src/query/named/index.mjs' // first: the cycle through session.mjs is entered here
 import { extendSession, saveIndexes, sessionState } from '../../src/query/named/session.mjs'
 import { writeFiles } from '../../src/query/ctx-files.mjs'
-import { sessionDir } from '../../src/query/projection.mjs'
+import { openProjection, sessionDir } from '../../src/query/projection.mjs'
+import { openFoldLog } from '../../src/query/fold-log.mjs'
+import { columns, dumpColumns, loadColumns, sync } from '../../src/query/session-doc.mjs'
 
 const SHAPE = { growth: 120, compactAt: 6_000, subEvery: 3, subLanes: 2, late: 3 }
 const homeOf = () => { const home = path.join(tmpDir('trocar-slices-'), '.trocar'); fs.mkdirSync(path.join(home, 'raw'), { recursive: true, mode: 0o700 }); return home }
@@ -117,4 +120,76 @@ test('the first write of a worker that starts from a checkpoint, cut in its scan
   sliced.a.append(3); whole.a.append(3)
   await cutToTheEnd(sliced.ctx, id); await toTheEnd(whole.ctx, id)
   sameFiles(sliced, whole, 'from a checkpoint', (n) => !n.startsWith('head')) // one id in both homes: what the worker keeps of a head is shared
+})
+
+// The columns as they read: a lane by its key (its int is only the order it was met in), slots with no row left out, the live lanes as a set.
+function said(parts) {
+  const p = Object.fromEntries(parts), row = (k) => p['s.tk'][k] !== 0, by = (a) => Array.from(a, (v, k) => (row(k) ? v : null))
+  return { at: p['s.at'][0], tk: [...p['s.tk']], ts: p['s.ts'], ln: Array.from(p['s.ln'], (v, k) => (row(k) ? p['s.keys'][v] : null)), uc: by(p['s.uc']), cs: by(p['s.cs']), cx: by(p['s.cx']), cb: by(p['s.cb']), fl: by(p['s.fl']), order: [...p['s.order']], lanes: [...p['s.lanes']].sort() }
+}
+function opened(home, id) {
+  const p = openProjection({ home, fs, key: id, write: false, errors: [] })
+  const log = openFoldLog({ home, fs, key: id, write: false, projection: { id: p.id, bytes: p.bytes }, errors: [] })
+  return { p, log, close() { p.close(); log.close() } }
+}
+
+for (const [name, shape] of [['rows arriving in order', { growth: 120, subEvery: 3 }], ['late rows, lanes side by side, compactions', SHAPE]]) {
+  test(`a checkpoint at any slice of a fold reads back the columns of a full recompute at its frontier: ${name}`, async () => {
+    const { home, id, ctx } = homeWith(300, shape)
+    let checked = 0
+    for (let more = true; more;) {
+      more = await extendSession(ctx, id, 5)
+      saveIndexes() // what a killed worker leaves
+      const o = opened(home, id), cols = o.log.saved && loadColumns(o.p.rows, o.log.saved.parts)
+      if (cols) {
+        assert.equal(cols.at, o.log.frontier, 'the columns stand at the frontier')
+        assert.deepEqual(said(dumpColumns(cols)), said(dumpColumns(sync(columns(o.p.rows.slotOf), o.log))))
+        checked++
+      }
+      o.close()
+    }
+    assert.ok(checked > 1, 'more than one checkpoint')
+  })
+}
+
+test('a background slice leaves the columns at its frontier: a checkpoint has only its own slice to bring', async () => {
+  const { id, ctx } = homeWith(600), seen = new Set(), { st } = await sessionState(ctx, id)
+  while (await extendSession(ctx, id, 2)) {
+    assert.equal(st.target, null, 'a reduction writing into its log')
+    if (st.log.frontier == null) continue
+    assert.equal(st.cols.at, st.log.frontier)
+    seen.add(st.log.frontier)
+  }
+  assert.ok(seen.size > 1, 'the frontier moved between slices')
+})
+
+test('sync walking oldest to newest gives what newest to oldest gave', async () => {
+  const { home, id, ctx } = homeWith(700)
+  await toTheEnd(ctx, id)
+  const o = opened(home, id)
+  const other = Object.create(o.log, { changedSince: { value: (off) => { const c = o.log.changedSince(off); return { ...c, rids: [...c.rids].reverse() } } } })
+  const one = sync(columns(o.p.rows.slotOf), o.log), two = sync(columns(o.p.rows.slotOf), other)
+  assert.deepEqual(said(dumpColumns(one)), said(dumpColumns(two)))
+  assert.deepEqual([...one.lanes].sort(), [...two.lanes].sort())
+  for (const key of one.keys.keys()) assert.deepEqual(one.by[one.keys.get(key)], { ...two.by[two.keys.get(key)], v: one.keys.get(key) }, `lane ${key}`)
+  o.close()
+})
+
+test('a whole sync says it is working while it runs, here and on a cold read with no columns saved', async () => {
+  const { home, id, ctx } = homeWith(700)
+  await toTheEnd(ctx, id)
+  saveIndexes()
+  const o = opened(home, id)
+  let said1 = 0
+  sync(columns(o.p.rows.slotOf), o.log, () => { said1++ })
+  o.close()
+  assert.ok(said1 > 0, 'sync reports through the progress it is given')
+  const coldRead = async (drop) => {
+    const to = path.join(tmpDir('trocar-slices-cold-'), '.trocar')
+    fs.cpSync(home, to, { recursive: true, filter: (f) => !(drop && path.basename(f) === 'fold.idx') })
+    let n = 0
+    await sessionState({ home: to, fs, writer: true, progress: () => { n++ } }, id)
+    return n
+  }
+  assert.ok(await coldRead(true) > await coldRead(false), 'columns made from the log are heard, columns read from the sidecar need not be')
 })

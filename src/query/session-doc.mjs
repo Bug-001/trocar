@@ -120,12 +120,16 @@ function slot(cols, k) {
   for (const c of ['ln', 'uc', 'cs', 'cx', 'cb', 'fl']) { const a = new cols[c].constructor(n); a.set(cols[c]); cols[c] = a; }
 }
 const laneInt = (cols, key) => { let v = cols.keys.get(key); if (v === undefined) cols.keys.set(key, (v = cols.keys.size)); return v; };
-export function sync(cols, log) {
+// sync(cols, log, progress) → the columns at the log's frontier. changedSince gives the newest first: walked from the oldest, an insert
+// lands near the end of the arrays. `progress` hears every SYNC_ROWS rows, so a whole sync is not taken for a wedged worker.
+const SYNC_ROWS = 256;
+export function sync(cols, log, progress = null) {
   const f = log.frontier;
   if (f == null || f === cols.at) return cols;
   const ch = log.changedSince(cols.at);
-  for (const rid of ch.rids) {
-    const k = cols.slotOf(rid);
+  for (let i = ch.rids.length - 1; i >= 0; i--) {
+    if (progress && i % SYNC_ROWS === 0) progress();
+    const rid = ch.rids[i], k = cols.slotOf(rid);
     if (k === undefined) throw new Error(`the fold log names ${rid}, which the context projection has no row for`);
     const old = cols.ts[k], o = log.peek(...log.latest(rid)), r = rowOf(o);
     if (old !== undefined) {
@@ -210,12 +214,12 @@ function itemsOf(cols, log) {
   return c.view;
 }
 
-/** viewOf({id, log, cols, members, plan, mark}) → what every answer at the log's frontier reads besides its page: the rows' order
+/** viewOf({id, log, cols, members, plan, mark, progress}) → what every answer at the log's frontier reads besides its page: the rows' order
  *  (cols), the lane headers in the order of their first row, stats (the last frontier line's `st`), logged, probes, unknown, the
  *  failed members, meta (the plan's facts of the index rows, src/query/rows.mjs sessionFacts), and the cut (`plan.read`, the index rows the reduction reads, in step order) and mark the
  *  records are taken from. */
-export function viewOf({ id, log, cols, members, plan, mark }) {
-  sync(cols, log);
+export function viewOf({ id, log, cols, members, plan, mark, progress }) {
+  sync(cols, log, progress);
   const f = log.frontier, its = itemsOf(cols, log);
   const at = (rid) => (tsOf(cols, rid) === undefined ? Infinity : placeOf(cols, tsOf(cols, rid), rid));
   const head = (k) => cols.heads.get(k) || cols.heads.set(k, headOf(log.read(...log.lane(k)))).get(k); // a loaded column's: read once

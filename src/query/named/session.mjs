@@ -327,7 +327,7 @@ function sidecars(store) {
   if (!st || !store.indexed) return;
   try {
     const live = st.R && st.target == null && st.relay.cur === st.log;
-    st.log.saveIndex([...dumpColumns(sync(st.cols, st.log)),
+    st.log.saveIndex([...dumpColumns(sync(st.cols, st.log, st.progress)),
       ...(live ? [['r.s', v8.serialize(st.R.snapshot())], ['r.m', [JSON.stringify({ rv: REDUCE_V, cut: st.cut })]]] : []),
       ...filesParts(st.log)], filesAt(st.log)); // where the answer files stand (ctx-files.mjs writeFiles)
   } catch { /* the next idle period */ }
@@ -460,7 +460,7 @@ function grow(box, { ctx, id, store, plan, F, foldMs, request, resolve, progress
   // a state grown across requests is held against the heap it began from; its meter is kept with it, so the live heap is looked at
   // by the stored bytes folded since the last look across slices, not once per slice
   const meter = Object.assign(st.meter ||= { base: st.base, since: 0, gap: 0, held: null }, { n: st.n });
-  st.resolve = resolve;
+  st.resolve = resolve; st.progress = progress;
   st.hook = (rid) => { progress(); bounded(meter, ++meter.n, (plan.byId.get(rid) || {}).stored_bytes || 0); };
   const now = st.target == null || (!(ctx.writer === true && request) && pastOf(plan, st.target, F));
   try {
@@ -550,6 +550,8 @@ async function advance(ctx, id, { budgetMs, request }) {
       continue;
     } finally { release(); kept.clear(); keptBytes = 0; keeping = false; }
     states.get(k, st, () => st); // kept once the work's reservation is given back: the next slice grows it
+    // the columns go with the fold, a background slice at a time: a checkpoint (sidecars) has only what came since to bring
+    if (!request && st.writer && st.target == null) sync(st.cols, st.log, progress);
     return { st, plan, members, ex, errors, indexErrors: index.errors };
   }
 }
@@ -719,7 +721,7 @@ function stateAt(ctx, r, id, reading = false) {
   const { st, plan, members, ex, errors, indexErrors } = r, mark = markOf(st.log);
   if (!(st.view && st.view.f === st.log.frontier && st.view.plan === plan && st.view.gen === plan.gen)) {
     st.view = null; // the old view let go before the new one is built
-    st.view = { f: st.log.frontier, plan, gen: plan.gen, V: viewOf({ id: String(id), log: st.log, cols: st.cols, members, plan, mark }) };
+    st.view = { f: st.log.frontier, plan, gen: plan.gen, V: viewOf({ id: String(id), log: st.log, cols: st.cols, members, plan, mark, progress: st.progress }) };
   }
   // the members at or below the mark are the first `done` of the list; any of the cut past them is above it
   const V = st.view.V, done = mark == null ? 0 : posOf(plan, mark) + 1;
