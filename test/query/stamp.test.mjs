@@ -7,6 +7,8 @@ import path from 'node:path'
 import { rawHome, writeSegment, requiredFor } from './raw-home.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { QUERIES, stampOf, QueryArgError } from '../../src/query/named/index.mjs'
+import * as stamp from '../../src/query/stamp.mjs'
+import { PRICING_DIGEST } from '../../src/view/pricing.mjs'
 
 const CORPUS = ['sessions', 'session', 'calls', 'block', 'segments', 'traffic', 'overview']
 const SEG = '20261018T100000Z'
@@ -71,6 +73,30 @@ test('TROCAR_PRICING pointed elsewhere, or that file touched, changes pricing', 
   assert.notEqual(stampOf('pricing', {}, ctxOf(home)), sa)
   fs.appendFileSync(a, ' ')
   assert.notEqual(stampOf('pricing', {}, ctxOf(home, { env: { TROCAR_PRICING: a } })), sa)
+})
+
+test('4.4 #9 price identity: the file edited or TROCAR_PRICING moved changes overview and pricing, and no other name', () => {
+  const home = world(), dir = tmpDir('trocar-stamp-id-')
+  const moved = path.join(dir, 'other.json'), own = path.join(home, 'pricing.json')
+  fs.writeFileSync(moved, '{}')
+  const names = ['overview', 'pricing', 'sessions', 'session', 'lane', 'calls']
+  const same = (a, b) => { for (const n of ['sessions', 'session', 'lane', 'calls']) assert.equal(a[n], b[n], n) }
+  const moves = (a, b) => { for (const n of ['overview', 'pricing']) assert.notEqual(a[n], b[n], n) }
+  const start = stamps(names, ctxOf(home))
+  fs.writeFileSync(own, '{"m-a":[1,2,3,4]}')
+  const edited = stamps(names, ctxOf(home))
+  moves(start, edited); same(start, edited)
+  fs.writeFileSync(own, '{"m-a":[1,2,3,5]}')
+  const again = stamps(names, ctxOf(home))
+  moves(edited, again); same(edited, again)
+  const pointed = stamps(names, ctxOf(home, { env: { TROCAR_PRICING: moved } }))
+  moves(again, pointed); same(again, pointed)
+})
+
+test('4.4 #9 price identity: the built-in table is part of it, with no price file at all', () => {
+  const home = world(), ctx = { home, fs, env: { TROCAR_PRICING: path.join(home, 'no-such.json') } }
+  for (const parts of [stamp.overview(ctx), stamp.pricing(ctx)]) assert.ok(parts.includes(PRICING_DIGEST))
+  assert.ok(!stamp.usage(ctx).includes(PRICING_DIGEST))
 })
 
 test('the minute tick: classes and a relative window move with the clock, an absolute window does not', () => {
