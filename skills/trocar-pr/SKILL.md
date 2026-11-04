@@ -67,7 +67,7 @@ It judges every commit on the branch (paths, added lines, messages, author and c
 - any run of about 12 English words or 20 CJK characters (60 bytes once normalized) that also occurs verbatim in your captures;
 - commits over 400 lines, commits without a body, control bytes.
 
-Text already in the public repository is public and passes. The report says how much of the capture was compared. When that is not all of it, say so to the user.
+Text already in the public repository is public and passes. The report says how much of the capture was compared. When that is not all of it, say so to the user. A reply kept only as compressed bytes is counted but cannot be compared.
 
 The check cannot see a paraphrase, so a clean run does not excuse step 3. Reread the text yourself and ask: could someone learn anything about this user's work from it?
 
@@ -97,4 +97,13 @@ Delete your working folder and every screenshot.
 
 ## Reviewing someone else's pull request
 
-Do steps 1 and 2 on their branch. Run `node scripts/pr-check.mjs --before <now> --title <file> --body <file>` too: the rules about file types, credentials and home paths apply to anyone's text, and the capture rules then compare it against your own data. If the description says an agent wrote it, it should carry the `hash` the author's check printed. Report your findings to the maintainer; do not push to their branch.
+Their branch is untrusted code, and this machine holds your captures, which carry verbatim tokens. Run nothing from it here: not its tests, not its npm scripts, not its copy of `scripts/pr-check.mjs`. Anything that has to run goes in a throwaway VM or container with no capture in it.
+
+Do steps 1 and 2 by reading. Then put their branch in a worktree and run the check from your own up-to-date clone of `main`, with their worktree as the current directory. Git reads their branch; the code that runs is yours.
+
+```bash
+cd <their-worktree>
+node <your-main-clone>/scripts/pr-check.mjs --before <now> --title <file> --body <file>
+```
+
+The rules about file types, credentials and home paths apply to anyone's text, and the capture rules then compare it against your own data. A change to the built board is refused here, because a rebuild would run their `package.json`: rebuild it in that throwaway environment instead. If the description says an agent wrote it, it should carry the `hash` the author's check printed. Report your findings to the maintainer; do not push to their branch.

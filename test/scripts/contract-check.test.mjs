@@ -80,6 +80,16 @@ test('AN10: each planted fault turns its own check red and the run exits 1', asy
   }))
 })
 
+const compressed = (mutate) => `if (argv[0] === 'raw' && argv[1].includes(':')) { const { zstdCompressSync } = await import('node:zlib'); const r = JSON.parse(out)
+  r.req_body_b64 = zstdCompressSync(Buffer.from(${mutate})).toString('base64'); r.req_content_encoding = 'zstd'; r.req_body = null; out = JSON.stringify(r) + '\\n' }`
+test('AN10: a record that keeps its body compressed is compared like any other', async () => {
+  const same = await report(world.userHome, standIn(compressed('r.req_body')), '--sample', '2')
+  const bytes = same.doc.checks.filter((c) => c.part === 'bytes')
+  assert.ok(bytes.length > 0 && bytes.every((c) => c.status === 'pass'), JSON.stringify(bytes))
+  const changed = await report(world.userHome, standIn(compressed(`'~' + r.req_body.slice(1)`)), '--sample', '2')
+  assert.ok(changed.doc.checks.some((c) => c.part === 'bytes' && c.status === 'fail'))
+})
+
 test('AN11: what was captured never reaches the output', async () => {
   const sentence = 'FAKE planted sentence that must stay in the capture'
   const userHome = tmpDir('trocar-cc-home-')

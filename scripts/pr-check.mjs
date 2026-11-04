@@ -14,6 +14,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
+import { expandRequestBody, MAX_DECODED_BYTES, requestEncodingOf } from '../src/dissect/request-body.mjs'
 import { parseTime } from '../src/query/named/index.mjs'
 import { SEALED_EXT } from '../src/raw/seal.mjs'
 import { normalize, WindowTable } from './lib/text-windows.mjs'
@@ -21,6 +22,7 @@ import { normalize, WindowTable } from './lib/text-windows.mjs'
 const USAGE = `usage: node scripts/pr-check.mjs --before <time> --title <file> --body <file> [--base <ref>] [--budget <bytes>] [--json]
        node scripts/pr-check.mjs --issue --before <time> [--title <file>] --body <file> [--base <ref>] [--budget <bytes>] [--json]`
 const CLI = fileURLToPath(new URL('../bin/trocar.mjs', import.meta.url))
+const CLONE = fileURLToPath(new URL('..', import.meta.url))
 const BUDGET = 2e9
 const PAGE = ['--limit', '500'] // 1.6 §4.1: the largest page of a list query
 const SHORT_SHA = 10
@@ -46,11 +48,14 @@ const NEUTRAL = new Set(['me', 'you', 'user', 'alice', 'bob', 'test', 'runner', 
 const NOREPLY = /(?:@users\.noreply\.github\.com|^noreply@github\.com)$/i
 const CONTROL = /[\x00-\x08]/g
 const RECORD_TS = /^\{"ts":"([^"]+)"/
+const DIFF_HEADER = /^diff --(?:git|cc|combined) /
 const NEWLINE = Buffer.from('\n')
+const BODY_B64 = Buffer.from('"req_body_b64":"')
 
 const WHY = {
   files: 'This file type does not leave the machine: images, video, PDF, archives, capture formats and binaries.',
   build: 'The built board does not match a rebuild: npm run test:build failed.',
+  foreign: 'The built board changed in a clone that is not this script\'s, and nothing from another clone is run here: rebuild it in isolation.',
   secrets: 'This has the shape of a credential.',
   identity: 'This names this machine, its user or a home directory.',
   email: 'The commit email is not a GitHub noreply address. Run git config user.email with your noreply address, then git rebase --exec "git commit --amend --no-edit --reset-author" onto the base.',
@@ -61,6 +66,7 @@ const WHY = {
   control: 'This holds control bytes.',
   git: 'git could not be read, so what is leaving is not known.',
   capture: 'The capture could not be read, so it was not compared.',
+  compressed: 'A compressed request body in the capture could not be decoded, so it was not compared.',
 }
 
 function parse(argv) {
@@ -99,31 +105,52 @@ function numstat(out) {
   return files
 }
 
-/** `git show --unified=0`, one entry per file in numstat's order: the added lines, the line each has in the new file, and whether the file went away. */
+/** `git show --unified=0`, plain or combined (`-c`, one mark column per parent), one entry per file: the lines added against every parent,
+ *  the line each has in the new file, whether the file went away, and whether git calls it binary. */
 function patches(out) {
   const files = []
-  let file = null, inHunk = false, line = 0
+  let file = null, inHunk = false, line = 0, columns = 1
   for (let at = 0; at < out.length;) {
     const nl = out.indexOf(10, at), end = nl < 0 ? out.length : nl
     const row = out.subarray(at, end)
     at = end + 1
-    if (row.subarray(0, 11).toString() === 'diff --git ') {
-      files.push(file = { added: [], lines: [], gone: false })
+    if (DIFF_HEADER.test(row.subarray(0, 16).toString('latin1'))) {
+      files.push(file = { added: [], lines: [], gone: false, binary: false })
       inHunk = false
-    } else if (row[0] === 0x40) { // @@ -a,b +c,d @@
+    } else if (row[0] === 0x40) { // @@ -a,b +c,d @@, one more @ and one more -a,b per further parent
       inHunk = true
+      columns = row.indexOf(0x20) - 1
       line = Number(/\+(\d+)/.exec(row.toString('latin1'))[1])
-    } else if (inHunk && row[0] === 0x2b) {
-      file.added.push(row.subarray(1))
-      file.lines.push(line++)
-    } else if (!inHunk && file && row.subarray(0, 12).toString() === 'deleted file') {
+    } else if (inHunk) {
+      const marks = row.subarray(0, columns)
+      if (marks.some((mark) => mark !== 0x2b && mark !== 0x20)) continue // not in the new file: a removed line, or `\ No newline`
+      if (marks.every((mark) => mark === 0x2b)) {
+        file.added.push(row.subarray(columns))
+        file.lines.push(line)
+      }
+      line++
+    } else if (file && row.subarray(0, 12).toString() === 'deleted file') {
       file.gone = true
+    } else if (file && row.subarray(0, 13).toString() === 'Binary files ') {
+      file.binary = true
     }
   }
   return files
 }
 
-/** Everything `base..HEAD` takes out, into `out`. A merge brings its message and author only: its diff is its parents' commits. */
+/** What `sha` itself brings, {stats, diffs} file by file. A merge brings the files that differ from every parent, and in them the lines no
+ *  parent has: what a parent has came with that parent's commit, and what is new was written while merging. */
+function brought(cwd, sha, merge) {
+  const show = (...args) => git(cwd, 'show', '--format=', ...args, sha)
+  const diffs = patches(show('--unified=0', '--no-color', '--no-ext-diff', '--no-textconv', merge ? '-c' : '-M'))
+  const stats = merge
+    ? show('--name-only', '-z', '-c').toString().split('\0').filter(Boolean).map((name, i) => ({ path: name, binary: diffs[i]?.binary, lines: diffs[i]?.added.length }))
+    : numstat(show('--numstat', '-z', '-M'))
+  if (stats.length !== diffs.length) throw new Error('git')
+  return { stats, diffs }
+}
+
+/** Everything `base..HEAD` takes out, into `out`. */
 function readGit(cwd, base, out) {
   out.leaving.branch = git(cwd, 'rev-parse', '--abbrev-ref', 'HEAD').toString().trim()
   out.sources.push({ where: 'branch', kind: 'branch', bytes: Buffer.from(out.leaving.branch) })
@@ -139,10 +166,7 @@ function readGit(cwd, base, out) {
     out.sources.push({ where: `${short}:author`, kind: 'author', bytes: Buffer.from(people.join('\n')), norm: wordOf(`${authorName}\n${committerName}`) })
     const commit = { short, message, merge: parents.includes(' '), emails: [authorEmail, committerEmail], lines: 0, changed: [] }
     out.commits.push(commit)
-    if (commit.merge) continue
-    const stats = numstat(git(cwd, 'show', '--format=', '--numstat', '-z', '-M', sha))
-    const diffs = patches(git(cwd, 'show', '--format=', '--unified=0', '--no-color', '--no-ext-diff', '--no-textconv', '-M', sha))
-    if (stats.length !== diffs.length) throw new Error('git')
+    const { stats, diffs } = brought(cwd, sha, commit.merge)
     stats.forEach((stat, i) => {
       if (!isUncounted(stat.path)) commit.lines += stat.lines
       if (diffs[i].gone) return
@@ -178,13 +202,16 @@ function checkFiles(commits, cwd, add) {
       else if (file.binary || BLOCKED.has(file.path.slice(file.path.lastIndexOf('.')).toLowerCase())) add('files', file.where)
     }
   }
-  if (board && spawnSync('npm', ['run', 'test:build'], { cwd, stdio: 'ignore', shell: process.platform === 'win32' }).status !== 0) add('files', board, WHY.build)
+  if (!board) return
+  // someone else's branch: its package.json is its code, and this machine holds the capture (§1)
+  if (fs.realpathSync(git(cwd, 'rev-parse', '--show-toplevel').toString().trim()) !== fs.realpathSync(CLONE)) add('files', board, WHY.foreign)
+  else if (spawnSync('npm', ['run', 'test:build'], { cwd, stdio: 'ignore', shell: process.platform === 'win32' }).status !== 0) add('files', board, WHY.build)
 }
 
 function checkShape(commits, sources, add) {
   for (const commit of commits) {
     if (commit.lines > MAX_LINES) add('shape', commit.short, WHY.lines)
-    if (commit.merge) continue
+    if (commit.merge && commit.changed.every((file) => !file.lines)) continue
     const paragraphs = commit.message.trim().split(/\n\s*\n/).slice(1)
     const trailers = paragraphs.at(-1)?.split('\n').every((row) => /^[A-Za-z][A-Za-z0-9-]*: /.test(row))
     if (paragraphs.length - (trailers ? 1 : 0) < 1) add('shape', `${commit.short}:message`, WHY.body)
@@ -251,10 +278,18 @@ function allPages(name, key) {
   }
 }
 
+/** A session's title. The list does not know it until the sidecar covers the session (C.5), and not known is not none: the head does. */
+function titleOf(row) {
+  if (row.title_source !== 'pending') return row.title
+  const { meta } = ask('session', '--id', row.session_id, '--head')
+  if (!meta || meta.title_source === 'pending') throw new Error('capture')
+  return meta.title
+}
+
 /** The capture's facts as words; a segment's name also covers every `<segment>:<n>` record id. Returns the segments for the text pass. */
 function checkFacts(sources, hold) {
   const segments = ask('segments').segments
-  const facts = [...allPages('sessions', 'sessions').flatMap((s) => [s.project_path, s.project_slug, s.session_id, s.title]),
+  const facts = [...allPages('sessions', 'sessions').flatMap((s) => [s.project_path, s.project_slug, s.session_id, titleOf(s)]),
     ...allPages('traffic', 'hosts').map((h) => h.host), ...segments.map((s) => s.segment)]
   const words = new Map()
   for (const fact of facts) {
@@ -285,6 +320,16 @@ function subtractBase(cwd, base, table, held) {
   }
 }
 
+/** The bytes behind a body the record keeps as base64, which the line's own text hides: through the reader's one decoder, whatever the
+ *  record is. Null when they cannot be had. */
+function bodyBehind(line) {
+  let rec
+  try { rec = JSON.parse(line) } catch { return null }
+  expandRequestBody(rec, { maxBytes: MAX_DECODED_BYTES })
+  if (typeof rec.req_body === 'string') return Buffer.from(rec.req_body)
+  return requestEncodingOf(rec) ? null : Buffer.from(rec.req_body_b64 ?? '', 'base64')
+}
+
 /** Streams each segment through `table`, newest first, until the budget or the table runs out. Returns the coverage. */
 async function compareCapture(segments, { before, budget }, table, add) {
   const wanted = segments.filter((s) => !s.from || Date.parse(s.from) < before).sort((a, b) => b.segment.localeCompare(a.segment))
@@ -295,7 +340,13 @@ async function compareCapture(segments, { before, budget }, table, add) {
     const ts = RECORD_TS.exec(line.subarray(0, 64).toString('latin1'))?.[1]
     const time = Date.parse(ts)
     if (time >= before) return
-    table.scan(line, (slot) => { add('captured-text', table.whereOf(slot)); table.drop(slot) })
+    const hit = (slot) => { add('captured-text', table.whereOf(slot)); table.drop(slot) }
+    table.scan(line, hit)
+    if (line.includes(BODY_B64)) {
+      const body = bodyBehind(line)
+      if (body) table.scan(body, hit)
+      else add('unreadable', 'capture', WHY.compressed)
+    }
     if (Number.isNaN(time)) return
     if (coverage.from === null || time < Date.parse(coverage.from)) coverage.from = ts
     if (coverage.to === null || time > Date.parse(coverage.to)) coverage.to = ts

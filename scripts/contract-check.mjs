@@ -15,6 +15,7 @@ import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { isDeepStrictEqual, parseArgs } from 'node:util'
 import { COMMANDS } from '../src/cli/commands.mjs'
+import { expandRequestBody } from '../src/dissect/request-body.mjs'
 import { QUERY_NAMES } from '../src/query/client.mjs'
 
 const USAGE = 'usage: node scripts/contract-check.mjs [--json] [--sample <n>] [--cli <path>]'
@@ -218,7 +219,7 @@ async function contractCheck(run, sample) {
     const [segment, line] = posOf(rid), id = `block/${rid}`
     const raw = await run(['raw', `${segment}:${line}`])
     if (raw.timedOut) { skip('bytes', id, TIMED_OUT); continue }
-    const body = documentOf(raw.out)?.req_body
+    const body = expandRequestBody(documentOf(raw.out))?.req_body
     if (typeof body !== 'string') { skip('bytes', id, 'the record holds no request body as a string'); continue }
     const r = await query('block', '--ref', rid), block = r.doc?.blocks?.[0]
     if (r.timedOut) skip('bytes', id, TIMED_OUT)
