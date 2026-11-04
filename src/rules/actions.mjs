@@ -2,10 +2,13 @@
 // bytes. Only the rule process loads this file: it compiles regexes, so it stays out of the daemon's import graph.
 import zlib from 'node:zlib'
 import { Buffer, isUtf8 } from 'node:buffer'
-import { scanJson } from '../dissect/json-scan.mjs'
+import { scanJson, nodeAt } from '../dissect/json-scan.mjs'
 import { ruleBlocksFor } from '../dissect/registry.mjs'
 import { sseEvents } from '../dissect/sse-spans.mjs'
 import { parseCondition } from './conditions.mjs'
+import { checkHeaderSet } from './headers.mjs'
+import { spansToSteps, applySteps } from './edits.mjs'
+import { actionKind } from './validate.mjs'
 
 const MAX_BODY = 64 * 1024 * 1024
 const INFLATE = new Map([['gzip', 'gunzipSync'], ['x-gzip', 'gunzipSync'], ['deflate', 'inflateSync'], ['br', 'brotliDecompressSync'], ['zstd', 'zstdDecompressSync']])
@@ -78,6 +81,52 @@ function scan(text) {
   } catch { return null }
 }
 
+function commit(state, spans) {
+  if (!spans.length) return
+  const steps = spansToSteps(state.text, spans.toSorted((a, b) => a.start - b.start))
+  state.bytes = applySteps(state.bytes, steps)
+  state.text = state.bytes.toString('utf8')
+  for (const step of steps) state.steps.push(step)
+}
+
+const shifted = (spans, by) => spans.map((s) => ({ ...s, start: s.start + by, end: s.end + by }))
+
+function splice(text, spans) {
+  let out = '', pos = 0
+  for (const { start, end, ins } of spans) {
+    out += text.slice(pos, start) + ins
+    pos = end
+  }
+  return out + text.slice(pos)
+}
+
+// The with of a replace, for one match: $1 $& $$ $<name>, the way String.prototype.replace reads them.
+function expand(template, m) {
+  return template.replace(/\$(\$|&|\d{1,2}|<[^>]*>)/g, (all, k) => {
+    if (k === '$') return '$'
+    if (k === '&') return m[0]
+    if (k[0] === '<') return m.groups ? m.groups[k.slice(1, -1)] ?? '' : all
+    if (+k >= 1 && +k < m.length) return m[+k] ?? ''
+    return k.length === 2 && +k[0] >= 1 && +k[0] < m.length ? (m[+k[0]] ?? '') + k[1] : all
+  })
+}
+
+function hits(text, action) {
+  const re = regex(action.literal ? escaped(action.replace) : action.replace, 'gu')
+  const out = []
+  for (const m of text.matchAll(re)) {
+    const ins = action.literal ? action.with : expand(action.with, m)
+    if (ins !== m[0]) out.push({ start: m.index, end: m.index + m[0].length, ins })
+  }
+  return out
+}
+
+// String nodes through f: a string f leaves alone keeps its bytes, a changed one is escaped again.
+const rewrite = (nodes, f) => nodes.flatMap(({ start, end, value }) => {
+  const next = f(value)
+  return next === value ? [] : [{ start, end, ins: JSON.stringify(next) }]
+})
+
 const blocksOf = (on, unit, text) => ruleBlocksFor({ endpoint: unit.path, transport: on === 'ws-client' ? 'ws' : undefined, req_body: text })
 
 const NAMED = ['section', 'kind', 'role', 'name']
@@ -93,6 +142,44 @@ function select(blocks, selector, { textOnly = false } = {}) {
   if (selector.skip_newest) out = out.slice(0, Math.max(0, out.length - selector.skip_newest))
   if (selector.newest !== undefined) out = out.slice(Math.max(0, out.length - selector.newest))
   return out
+}
+
+function chosenTextNodes(state, env, selector) {
+  const blocks = blocksOf(env.on, env.unit, state.text)
+  if (!blocks) return []
+  const { root } = scan(state.text)
+  return select(blocks, selector, { textOnly: true }).map((b) => {
+    const { start, end } = nodeAt(root, b.text_path)
+    return { start, end, value: b.text }
+  })
+}
+
+function actReplace(action, state, env) {
+  const text = needText(state.text)
+  const edit = (value) => splice(value, hits(value, action))
+  if (action.blocks) return commit(state, rewrite(chosenTextNodes(state, env, action.blocks), edit))
+  if (action.in === 'body') return commit(state, hits(text, action))
+  commit(state, windowsOf(text, env.unit.sse).flatMap(([from, to]) => {
+    const window = text.slice(from, to), json = scan(window)
+    return shifted(json ? rewrite(json.strings, edit) : hits(window, action), from)
+  }))
+}
+
+function actHeader(action, state) {
+  const value = action.remove ? null : action.set
+  if (checkHeaderSet([[action.header, value]], { before: state.headers }).length) throw fault('rule-error')
+  const same = ([name]) => name.toLowerCase() === action.header.toLowerCase()
+  if (value === null) { state.headers = state.headers.filter((h) => !same(h)); return }
+  const at = state.headers.findIndex(same)
+  state.headers = at < 0 ? [...state.headers, [action.header, value]] : state.headers.with(at, [state.headers[at][0], value])
+}
+
+const ACTS = { replace: actReplace, header: actHeader }
+
+function act(action, state, env) {
+  const run = ACTS[actionKind(action)]
+  if (!run) throw fault('rule-error')
+  run(action, state, env)
 }
 
 function holds(node, leaf) {
@@ -168,5 +255,6 @@ function judge(rule, unit, decoded) {
   return !!blocks && select(blocks, m.blocks).length > 0
 }
 
-/** The rule process's half of a rule, injected into applyRules: `decode(unit)` → `{bytes, text|null}`, `judge(rule, unit, decoded)` → boolean. Both throw RuleFault. */
-export const full = { decode, judge }
+/** The rule process's half of a rule, injected into applyRules: `decode(unit)` → `{bytes, text|null}`, `judge(rule, unit, decoded)` → boolean,
+ *  `act(action, state, {on, unit})` moves `state` = `{bytes, text, headers, steps}` on. All three throw RuleFault. */
+export const full = { decode, judge, act }
