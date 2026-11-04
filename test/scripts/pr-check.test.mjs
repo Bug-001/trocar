@@ -57,6 +57,7 @@ function workspace(files = {}) {
   git(['init', '-q', '-b', 'main'])
   commit({ 'README.md': 'A readme.\n', ...files }, 'base\n\nThe base.\n')
   git(['tag', 'base'])
+  git(['update-ref', 'refs/remotes/origin/main', 'base'])
   git(['checkout', '-q', '-b', 'work'])
   return { home, dir, env, git, commit, check, trocar: path.join(home, '.trocar') }
 }
@@ -716,6 +717,7 @@ for (const [name, swap] of Object.entries({
       for (const file of TYPECHANGED) { fs.rmSync(path.join(w.dir, file)); fs.symlinkSync('elsewhere', path.join(w.dir, file)) }
       w.commit()
       w.git(['tag', '-f', 'base'])
+      w.git(['update-ref', 'refs/remotes/origin/main', 'base'])
     }
     for (const file of TYPECHANGED) swap(path.join(w.dir, file))
     w.commit({ 'after.txt': 'x\n' })
@@ -834,14 +836,14 @@ test('AN24: what was compared and what was let through move the hash, whatever t
 })
 
 // ── AN28
-test('AN28: a base that is HEAD or not an ancestor of it is refused; a comment does not judge it', () => {
+test('AN28: a base that is HEAD or shares no history with it is refused; a comment does not judge it', () => {
   const w = workspace()
   w.commit({ 'a.txt': 'one\n' })
-  w.git(['checkout', '-q', '-b', 'elsewhere', 'base'])
+  w.git(['checkout', '-q', '--orphan', 'apart'])
   w.commit({ 'b.txt': 'two\n' })
   w.git(['checkout', '-q', 'work'])
   assert.deepEqual(of(w.check().doc, 'base'), [])
-  for (const ref of ['HEAD', 'elsewhere']) {
+  for (const ref of ['HEAD', 'apart']) {
     const { code, doc } = w.check({ base: ['--base', ref] })
     assert.equal(code, 1, ref)
     assert.equal(of(doc, 'base').length, 1, ref)
@@ -852,10 +854,9 @@ test('AN28: a base that is HEAD or not an ancestor of it is refused; a comment d
 })
 
 const SHARED = 'the same long sentence that also sits in a capture and is here on purpose to fill sixty bytes or more'
-test('AN28: a base origin/main does not hold is refused, hides no commit and makes nothing public; one it holds is fine', () => {
+test('AN28: a base no remote main holds is refused, hides no commit and makes nothing public; one it holds is fine', () => {
   const planted = (setup) => {
     const w = workspace()
-    w.git(['update-ref', 'refs/remotes/origin/main', 'base'])
     capture(w, SEGMENT, [line(NOW_THEN, SHARED)])
     setup(w)
     return w
@@ -878,17 +879,36 @@ test('AN28: a base origin/main does not hold is refused, hides no commit and mak
   for (const ref of ['origin/main', 'mid', 'base']) assert.equal(held.check({ base: ['--base', ref] }).code, 0, ref)
 })
 
-test('AN28: a branch behind origin/main is told to rebase', () => {
-  const w = workspace()
-  w.commit({ 'a.txt': 'one\n' })
-  w.git(['checkout', '-q', '-b', 'ahead', 'base'])
-  w.commit({ 'b.txt': 'two\n' })
-  w.git(['update-ref', 'refs/remotes/origin/main', 'HEAD'])
-  w.git(['checkout', '-q', 'work'])
-  const { code, doc } = w.check({ base: ['--base', 'origin/main'] })
-  assert.equal(code, 1)
-  assert.match(of(doc, 'base')[0].why, /rebase/i)
-  assert.doesNotMatch(of(doc, 'base')[0].why, /--base must/)
+for (const remote of ['origin', 'upstream']) {
+  test(`AN28: a branch ${remote}/main has moved past goes out as it stands, with its own commits and nothing else`, () => {
+    const w = workspace()
+    w.commit({ 'a.txt': 'one\n' })
+    w.git(['checkout', '-q', '-b', 'ahead', 'base'])
+    w.commit({ 'b.txt': 'two\n' })
+    w.git(['update-ref', '-d', 'refs/remotes/origin/main'])
+    w.git(['update-ref', `refs/remotes/${remote}/main`, 'HEAD'])
+    w.git(['checkout', '-q', 'work'])
+    const { code, doc } = w.check({ base: ['--base', `${remote}/main`] })
+    assert.equal(code, 0, JSON.stringify(doc.findings))
+    assert.deepEqual(doc.leaving.files, ['a.txt'])
+    assert.equal(doc.hash, w.check({ base: ['--base', 'base'] }).doc.hash, 'the base is the fork point, by either name')
+  })
+}
+
+test('AN28: with no remote main there is nothing to stand on: told to fetch, and nothing is public', () => {
+  const w = workspace({ 'old.txt': `${SHARED}\n` })
+  capture(w, SEGMENT, [line(NOW_THEN, SHARED)])
+  w.commit({ 'a.txt': `${SHARED}\n` })
+  assert.equal(w.check().code, 0, 'the base holds it')
+  w.git(['update-ref', '-d', 'refs/remotes/origin/main'])
+  for (const ref of ['refs/remotes/origin/release', 'refs/remotes/origin/team/main']) w.git(['update-ref', ref, 'base'])
+  for (const base of [['--base', 'base'], []]) {
+    const { code, doc } = w.check({ base })
+    assert.equal(code, 1)
+    assert.deepEqual([...new Set(doc.findings.map((f) => f.rule))].filter((rule) => rule !== 'captured-text'), ['base'], base.join(' '))
+    assert.match(of(doc, 'base')[0].why, /fetch/i)
+  }
+  assert.deepEqual(named(w.check().doc, 'captured-text'), ['a.txt'], 'nothing of its tree counts as public')
 })
 
 // ── capture
