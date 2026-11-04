@@ -105,6 +105,24 @@ const growing = (n: number) => [
   ...base.map((i) => sess(`s${i}`, 10 + i + n, 1 + i)),
 ]
 
+// 1.8 §载入: until `sessions` answers there is nothing to conclude. A worker's `102` never reaches the browser: the daemon asks again and
+// the fetch stays open (3.5 §行表先读), so a parked read looks here like one held for many polls.
+test('1.8 载入: a held answer is Loading, across polls, and No sessions yet only follows an empty answer', async () => {
+  let answer: (r: unknown) => void = () => {}
+  vi.mocked(api.get).mockImplementation((name: string) => (name === 'sessions'
+    ? new Promise((res) => { answer = res }) as never : Promise.resolve({ ok: false, status: 404, data: null, error: 'HTTP 404' }) as never))
+  const p = await mount()
+  for (let i = 0; i < 2; i++) {
+    expect(p.list.textContent).toContain(W.LOADING)
+    expect(p.container.textContent).not.toContain(W.NO_SESSIONS)
+    await poll()
+  }
+  await act(async () => { answer({ ok: true, status: 200, data: { schema: 2, command: 'sessions', ok: true, errors: [], as_of: iso(0), next: null, sessions: [] } }) })
+  await settle()
+  expect(p.list.textContent).not.toContain(W.LOADING)
+  expect(p.list.textContent).toContain(W.NO_SESSIONS)
+})
+
 test('V1: across polls that add sessions above and change counts, a session keeps its row node, the highlight and the scroll', async () => {
   lists = [growing]
   const selKey = key(sess('s3', 0, 0))

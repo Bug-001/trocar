@@ -177,6 +177,31 @@ test('2.3 §读失败: a poll round whose tail reads fail keeps the drawn window
   } finally { await b.stop() }
 })
 
+// 2.4 还在读: a ledger answered behind the fold is not whole; a head without `pending` ends that, and the poll round reads it again from
+// `to`, once: the answer without `pending` closes it
+test('2.4 还在读: a lane answered with pending is walked again when the head has none, and only until an answer has none', { skip }, async () => {
+  const b = await withBoard({ bytes: 1e5, chromium: gate.chromium })
+  try {
+    const { page } = b, w = world(7, { calls: 60 })
+    const main = w.full().lanes.find((h) => h.kind === 'main').lane
+    await serveWorld(page, w)
+    let tos = 0
+    await page.route('**/api/lane?**', async (route) => {
+      const q = new URL(route.request().url()).searchParams
+      if (q.get('lane') !== main || !q.has('to')) return route.fallback()
+      const doc = w.lane(main, { to: q.get('to') })
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(++tos === 1 ? { ...doc, pending: { done: 1, total: 2, calls: 0 } } : doc) })
+    })
+    await page.evaluate(() => { location.hash = '#/replay/p/S' })
+    await page.waitForSelector('#ctxwin .cblk', { state: 'attached' })
+    for (const t0 = Date.now(); tos < 2 && Date.now() - t0 < 6 * INTERVAL.session;) await page.waitForTimeout(100)
+    assert.equal(tos, 2, 'the pending answer is followed by a whole read')
+    for (let i = 0; i < 2; i++) await page.waitForResponse((r) => new URL(r.url()).pathname === '/api/d/head', { timeout: 4 * INTERVAL.session })
+    assert.equal(tos, 2, 'an answer without pending ends it')
+    assert.deepEqual(b.errors, [])
+  } finally { await b.stop() }
+})
+
 // 3.5 §手里车道的页: once the anchor lane is in hand its ledger is read — a `lane --to <its first step>` page (no step, the
 // ledger at mark in its room), then along its `ledger_next` chain; each read names the previous answer's cursor, none is read twice, and
 // once the counts are exact no 2.4 count goes back to the busy box

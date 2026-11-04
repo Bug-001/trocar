@@ -58,11 +58,12 @@ export function sessionHeadModel(s, { libraryHash = '', now = Date.now() } = {})
   const slugOk = meta.project_slug && meta.project_slug !== '_unresolved'
   const hs = Array.isArray(meta.harnesses) ? meta.harnesses : null // the `sessions` multi-harness field; provider:'mixed' is never this signal (D37 ①)
   const hk = meta.harness != null ? harnessKey(meta.harness) : null
+  const unread = meta.title_source === 'unread'
   return {
     back: { href: libraryHash || '#/sessions', text: W.BACK },
     // the title never borrows the id or the start time (the start is its own part)
-    title: { text: meta.title ?? null, fallback: meta.title == null ? W.UNTITLED : null, id: meta.session_id || '',
-      sourceTip: meta.title == null ? W.TITLE_UNTITLED_NEXT_TIP : W.TITLE_FROM_WIRE }, // a title always comes from the wire (4.4)
+    title: { text: meta.title ?? null, fallback: meta.title != null ? null : unread ? W.PROMPT_UNREAD : W.UNTITLED, id: meta.session_id || '',
+      sourceTip: meta.title != null ? W.TITLE_FROM_WIRE : unread ? W.PROMPT_UNREAD_TIP : W.TITLE_UNTITLED_NEXT_TIP }, // a title always comes from the wire (4.4)
     chip: { key: hk, name: harnessName(meta.harness), raw: harnessRaw(meta.harness), icon: harnessIconUrl(meta.harness),
       href: hk ? `#/capture?h=${encodeURIComponent(hk)}` : '#/capture', inferred: !!meta.harness_inferred, synthesized: !!meta.session_synthesized,
       multi: hs && hs.length > 1 ? { text: W.MULTIPLE_AGENTS, tip: W.MULTIPLE_AGENTS_TIP, inferred: hs.some((x) => x && (x.inferred || x.harness_inferred)) } : null },
@@ -83,8 +84,10 @@ function readOf(desk) {
   if (!p) return b ? { state: 'behind', n: b.n, more: !!b.more, text: W.behindBy(b.n, b.more) } : null
   if (p.stopped) return { state: 'stopped', code: p.stopped.code ?? null, reason: p.stopped.reason ?? null, text: W.FOLD_STOPPED[p.stopped.code] || W.FOLD_STOPPED['fold-failed'] }
   const done = Number(p.done) || 0, total = Number(p.total) || 0
-  if (desk.firstPending) { const pct = total > 0 ? Math.floor((done / total) * 100) : 0; return { state: 'reading', pct, text: W.readingFirst(pct) } }
-  const n = Math.max(0, total - done)
+  const share = (x) => (total > 0 ? Math.floor((x / total) * 100) : 0)
+  if (p.seen) { const pct = share(Number(p.read) || 0), n = Number(p.calls) || 0; return { state: 'updating', pct, n, text: W.updatingTo(pct, n) } }
+  if (desk.firstPending) { const pct = share(done); return { state: 'reading', pct, text: W.readingFirst(pct) } }
+  const n = p.calls ?? Math.max(0, total - done)
   return { state: 'catching-up', n, text: W.catchingUp(n) }
 }
 

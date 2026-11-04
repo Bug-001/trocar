@@ -133,9 +133,10 @@ export function applySession(desk, a, { before = false } = {}) {
 
 // held lane: steps by rid in step order (`rids`), lane events per rid (several per rid), the ledger by resource key / path, and
 // the `ledger_next` cursors still to read; `byI` = step number → rid over the steps that carry their lane index `i` (built on read)
-// `ledgered` = a page carrying the whole ledger at its mark (a base:null lane answer) was applied: the cursors then say what is left
+// `ledgered` = a page carrying the whole ledger at its mark (a base:null lane answer) was applied: the cursors then say what is left;
+// `pending` = the last lane answer stood behind the fold, so the ledger is not whole however the cursors stand (2.4 还在读)
 export const newHeld = () => ({ steps: new Map(), rids: [], prev: null, next: null, resources: new Map(), seen: new Map(), events: new Map(), kf: new Map(),
-  cursors: new Set(), byI: null, ledgered: false })
+  cursors: new Set(), byI: null, ledgered: false, pending: false })
 
 // drop held steps from index i on, with their cached keyframes and lane events
 function cut(h, i) {
@@ -183,6 +184,7 @@ export function applyLane(desk, a) {
     cut(h, h.rids.indexOf(a.base) + 1)
     h.next = a.next ?? null
   }
+  h.pending = !!a.pending
   const fresh = steps.filter((s) => !h.steps.has(s.rid))
   for (const s of fresh) h.steps.set(s.rid, s)
   const rids = fresh.map((s) => s.rid)
@@ -236,6 +238,7 @@ export function applyLedger(desk, key, cursor, a) {
   changed(desk)
   if (cursor == null && a.base == null) { h.resources = new Map(); h.seen = new Map(); h.cursors = new Set(); h.ledgered = true }
   mergeLedger(h, a)
+  h.pending = !!a.pending
   h.cursors.delete(cursor)
   if (a.ledger_next != null) h.cursors.add(a.ledger_next)
 }
@@ -246,8 +249,8 @@ export function ledgerAsk(desk, key) {
   return c == null ? null : { lane: key, ledger: c }
 }
 
-/** The lane is held and its ledger chain is read to the end (2.4's group counts are exact). */
-export const ledgerDone = (desk, key) => !!desk.held.get(key)?.ledgered && desk.held.get(key).cursors.size === 0
+/** The lane is held, its ledger chain is read to the end and no answer of it stood behind the fold (2.4's group counts are exact). */
+export const ledgerDone = (desk, key) => { const h = desk.held.get(key); return !!h?.ledgered && !h.pending && h.cursors.size === 0 }
 
 /**
  * Read lane `key`'s ledger chain to the end with `read(name, params)` (envelope {ok, data, error}). A failed read stops and
