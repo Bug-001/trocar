@@ -91,10 +91,13 @@ export const COMMANDS = Object.freeze([
 
   { name: 'rules',
     group: 'Intervene', mutates: (args) => ['add', 'enable', 'disable', 'rm', 'off'].includes(args.positionals[0]) || (args.positionals[0] === 'max-delay' && args.positionals.length > 1), run: via('./rules.mjs', 'run'),
-    usage: 'trocar rules [<name>] [--json]\ntrocar rules add <file|-> [--replace] [--dry-run] [--json]\ntrocar rules enable|disable|rm <name>... [--json]\ntrocar rules off [--json]\ntrocar rules max-delay [<ms>] [--json]',
+    usage: 'trocar rules [<name>] [--json]\ntrocar rules add <file|-> [--replace] [--dry-run] [--json]\ntrocar rules enable|disable|rm <name>... [--json]\ntrocar rules off [--json]\ntrocar rules max-delay [<ms>] [--json]\ntrocar rules test <name> [--ref <record>]... [--last <n>] [--with-live] [--as-sent] [--run-script] [--json]',
     summary: 'Shows and edits your rules: what trocar changes in the traffic it sees, and only what you wrote down. A rule is added switched off. trocar rules off stops them all at any time, from any terminal.',
-    options: [['--replace', 'with add: change the rule of that name, which switches it off'], ['--dry-run', 'with add: check the rule and print what would happen, writing nothing'], JSON_OPT],
-    exits: [[0, 'done, or shown'], [1, 'it could not be done, or the collector did not answer `rules off`; it says what is still true'], [2, 'nothing ran: a usage error, a rule that is not valid, an unknown rule, or root']] },
+    options: [['--replace', 'with add: change the rule of that name, which switches it off'], ['--dry-run', 'with add: check the rule and print what would happen, writing nothing'],
+      ['--ref <record>', 'with test: try it on this record; give it again for more', { repeat: true }], ['--last <n>', 'with test: try it on the newest n records its conditions pass, at most 500; the default is 20'],
+      ['--with-live', 'with test: stack it on the live rules, in file order'], ['--as-sent', 'with test: show request rules the bytes that went out, not what the agent sent'],
+      ['--run-script', 'with test: run scripts too; a script can fetch, so it may have side effects'], JSON_OPT],
+    exits: [[0, 'done, shown, or tested, however many records it changed'], [1, 'it could not be done, the collector did not answer `rules off`, or `rules test` could test nothing or failed on a record; it says what is still true'], [2, 'nothing ran: a usage error, a rule that is not valid, an unknown rule, or root']] },
 
   { name: 'update',
     group: 'Maintenance', mutates: true, run: via('./update.mjs', 'runUpdateCli'),

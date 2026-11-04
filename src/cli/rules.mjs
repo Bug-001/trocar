@@ -6,6 +6,7 @@ import { EXIT, newReceipt } from './schema.mjs'
 import { printJson, errorDoc } from './json.mjs'
 import { colors, columns, ago, pairs, tilde, wrap } from './text.mjs'
 import { commandNamed } from './commands.mjs'
+import { testRule } from './rules-test.mjs'
 import { controlEndpointFor } from '../off/control-client.mjs'
 import { trocarHome } from '../off/paths.mjs'
 import { collectorHome, rulesFile, rulesLog } from '../paths.mjs'
@@ -255,12 +256,13 @@ async function show(c, [name]) {
 }
 
 const VERBS = Object.freeze({
-  add: { args: [1, 1], run: add },
+  add: { args: [1, 1], flags: ['replace', 'dry-run'], run: add },
   enable: { args: [1, Infinity], run: (c, names) => enable(c, [...new Set(names)]) },
   disable: { args: [1, Infinity], run: (c, names) => stop(c, [...new Set(names)], { verb: 'disable', change: (r) => [disarm(r)], past: 'Turned off' }) },
   rm: { args: [1, Infinity], run: (c, names) => stop(c, [...new Set(names)], { verb: 'rm', change: () => [], past: 'Removed' }) },
   off: { args: [0, 0], run: off },
   'max-delay': { args: [0, 1], run: maxDelay },
+  test: { args: [1, 1], flags: ['ref', 'last', 'with-live', 'as-sent', 'run-script'], run: testRule },
 })
 
 /** → the exit code. `argv` is what follows `rules`; the parsed form is `ctx.args` ({ positionals, flags }). */
@@ -271,7 +273,7 @@ export async function run(argv, { io, json, args, home, env, platform, deps = {}
   const [least, most] = verb ? VERBS[verb].args : [0, 1]
   const flags = Object.keys(args.flags).filter((f) => f !== 'json')
   const c = { io, env, platform, json, flags: args.flags, user: home, home: trocarHome(home), now: deps.ms || Date.now }
-  const misused = given.length < least || given.length > most || (verb !== 'add' && flags.length > 0)
+  const misused = given.length < least || given.length > most || flags.some((flag) => !(verb && VERBS[verb].flags?.includes(flag)))
   const out = misused ? refused(verb ? `rules ${verb}` : 'rules', { code: 'usage', message: 'this does not take these arguments.' })
     : await (verb ? VERBS[verb].run(c, given) : show(c, given))
   const { doc, lines = [], errors = [] } = out

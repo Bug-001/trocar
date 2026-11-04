@@ -10,7 +10,7 @@ import { ANSWER_BYTES, encodeFrame, frameReader, HEAD_BYTES, NO_RULE, readProgre
 
 const MIB = 1024 * 1024
 const GIB = 1024 * MIB
-const APP = new URL('../../', import.meta.url)
+const APP = new URL('../..', import.meta.url) // no trailing slash: test/ci/reachable.test.mjs reads one as "everything in this directory"
 const RUNNER = new URL('./runner.mjs', import.meta.url)
 // The watchdog gets there first. This one is for a process frozen whole, watchdog included.
 const FROZEN_MS = 100

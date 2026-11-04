@@ -4,7 +4,7 @@ const { fileURLToPath } = await import('node:url')
 const capMiB = process.execArgv.map((arg) => /^--max-old-space-size=(\d+)$/.exec(arg)?.[1]).find(Boolean)
 const { permission } = process
 // A Node that would quietly give more than the flags asked for gets no rules at all.
-if (!permission || permission.has('child') || permission.has('fs.write', fileURLToPath(new URL('../../', import.meta.url))) || !capMiB) process.exit(78)
+if (!permission || permission.has('child') || permission.has('fs.write', fileURLToPath(new URL('../..', import.meta.url))) || !capMiB) process.exit(78)
 
 const [{ Buffer }, { once }, fs, net, { pathToFileURL }, util, { Worker }, { full, RuleFault }, { applyRules }, { byteBudget }, { LIMITS }, { compileRules }, slots] = await Promise.all([
   import('node:buffer'), import('node:events'), import('node:fs'), import('node:net'), import('node:url'), import('node:util'), import('node:worker_threads'),
