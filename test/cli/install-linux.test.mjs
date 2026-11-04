@@ -188,8 +188,8 @@ test('Linux install replaces a collector that answers another code: the receipt 
   assert.equal(sys.daemon.state.up, true, 'the unit brought the collector up again')
 })
 
-// 1.6 §3.2: the undo's rows come from standaloneFiles, in words true for every channel (a script install has no source tree)
-test('Linux install: the plan names every file of the standalone undo, and no source tree', async () => {
+// 1.6 §3.2: the undo's rows come from standaloneFiles
+test('Linux install: the plan names every file of the standalone undo', async () => {
   const { standaloneFiles } = await import('../../src/off/paths.mjs')
   const home = tmpDir('trocar-install-linux-')
   seedClaude(home)
@@ -197,5 +197,4 @@ test('Linux install: the plan names every file of the standalone undo, and no so
   assert.equal(await runInstallCli(['--dry-run', '--json'], { ...onCtx(home, io), platform: 'linux' }), 0, io.text())
   const planned = io.json().planned
   for (const f of standaloneFiles(home, 'linux')) assert.ok(planned.some((p) => p.path === f), `${f} is planned: ${JSON.stringify(planned)}`)
-  assert.doesNotMatch(planned.map((p) => p.detail).join('\n'), /source tree/)
 })

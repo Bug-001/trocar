@@ -5,6 +5,7 @@
 // process table) from daemon.mjs. Install lists every file before touching one. The way back — `trocar off` and
 // `trocar uninstall` — is src/off/ (the entries, the daemon stop, the lock) and src/cli/uninstall.mjs (1.6 §1.4, R3).
 import { retriedNote } from '../cli/words.mjs'
+import { UNDO_WORDS } from '../cli/receipt.mjs'
 import { isModelOs } from './model-install.mjs' // macOS / Windows: their on is turnOnModel (src/cli/on-model.mjs); this turnOn is Linux's
 import fs from 'node:fs'
 import net from 'node:net'
@@ -508,7 +509,7 @@ export async function turnOn(opts = {}) {
     // cannot be written stops the run here, before one file of the agents' is touched — the way back first, like the backup of a file (R2) — and `recorded` writes the failure (R11)
     let standalone
     try { standalone = writeStandalone({ home, version: OFF_VERSION, platform: osName, fs }) } catch (e) {
-      throw Object.assign(new Error(`${standalonePath(home)}, the undo that works without the source tree, could not be written (${String((e && e.message) || e)}); no file of the agents' was changed — put that right, then run trocar on again`), { code: e && e.code })
+      throw Object.assign(new Error(`${standalonePath(home)}, ${UNDO_WORDS}, could not be written (${String((e && e.message) || e)}); no file of the agents' was changed — put that right, then run trocar on again`), { code: e && e.code })
     }
     const guard = () => {
       let st
