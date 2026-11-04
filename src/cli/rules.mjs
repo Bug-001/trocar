@@ -45,8 +45,14 @@ async function notifyDaemon(c, route) {
   }
 }
 
+const isCount = (n) => Number.isSafeInteger(n) && n >= 0
+
 /** What a daemon's reply says it did with the held units: nothing when there is no daemon, not known when it did not say. */
-const heldOf = (said) => (said === 'absent' ? { ...NO_HELD } : said.answer?.held ?? 'unknown')
+function heldOf(said) {
+  if (said === 'absent') return { ...NO_HELD }
+  const held = said.answer?.held
+  return isCount(held?.released) && isCount(held?.cut) ? held : 'unknown'
+}
 
 function heldLines(held) {
   if (held === 'unknown') return ['What happened to held requests is not known.']

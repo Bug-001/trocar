@@ -261,3 +261,15 @@ for (const body of ['null', '[]', '5', '"stopped"', '<html>', '']) {
     } finally { await w.close() }
   })
 }
+
+test('C.2: held counts that are not counts are not passed on: what happened to held requests is not known', async () => {
+  for (const held of [{ released: 'x' }, { released: 1 }, { released: 1, cut: -1 }, 5, []]) {
+    const w = await world('darwin', json(200, { held, seq: { written: true, reason: null } }))
+    try {
+      w.seed([rule(armed)])
+      const { doc } = await w.rules(['off'])
+      valid(doc)
+      assert.equal(doc.held, 'unknown', JSON.stringify(held))
+    } finally { await w.close() }
+  }
+})
