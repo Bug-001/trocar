@@ -9,6 +9,7 @@ import os from 'node:os'
 import path from 'node:path'
 import zlib from 'node:zlib'
 import { spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { envLine, writeSegment } from '../query/raw-home.mjs'
@@ -72,6 +73,19 @@ function adopt(w) {
   }
   fs.appendFileSync(path.join(w.dir, '.git/info/exclude'), `scripts\n${links.join('\n')}\n`)
   return path.join(w.dir, 'scripts/pr-check.mjs')
+}
+
+/** A CLI that answers as the real one, with `rewrite` run over `argv`, `out` and `code` first. */
+function faulty(w, rewrite) {
+  const cli = path.join(w.home, 'cli.mjs')
+  fs.writeFileSync(cli, `import { spawnSync } from 'node:child_process'
+const argv = process.argv.slice(2), real = spawnSync(process.execPath, [${JSON.stringify(BIN)}, ...argv], { maxBuffer: 2 ** 30 })
+let out = real.stdout.toString(), code = real.status
+${rewrite}
+process.stdout.write(out)
+process.exitCode = code
+`)
+  return ['--cli', cli]
 }
 
 const of = (doc, rule) => doc.findings.filter((f) => f.rule === rule)
@@ -329,6 +343,46 @@ test('AN17: the lock\'s integrity and src/web/board/** skip the entropy rule, no
   assert.deepEqual(named(w.check().doc, 'secrets'), ['package-lock.json', 'src/web/board/app.js'])
 })
 
+const noise = (n) => { const out = []; for (let i = 0; out.length < n; i++) out.push(...createHash('sha256').update(String(i)).digest()); return Buffer.from(out.slice(0, n)) }
+const folded = (text, width = 38) => text.match(new RegExp(`[^]{1,${width}}`, 'g')).join('\n')
+const base32 = (bytes) => {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567', bits = [...bytes].map((b) => b.toString(2).padStart(8, '0')).join('')
+  return bits.match(/.{1,5}/g).map((five) => alphabet[parseInt(five.padEnd(5, '0'), 2)]).join('')
+}
+const ENCODED = {
+  'base64, folded': (t) => folded(Buffer.from(t).toString('base64')),
+  'base64, folded at 76 with a short last line': (t) => folded(Buffer.from(`${t}  ${t}`).toString('base64'), 76),
+  'gzip and base64, folded': (t) => folded(zlib.gzipSync(t).toString('base64')),
+  'deflate and base64, folded': (t) => folded(zlib.deflateSync(t).toString('base64')),
+  'base64 folded inside string literals': (t) => folded(Buffer.from(t).toString('base64'), 32).split('\n').map((row) => `  "${row}" +`).join('\n'),
+  'hex': (t) => Buffer.from(t).toString('hex'),
+  'gzip and hex': (t) => zlib.gzipSync(t).toString('hex'),
+  'hex, folded': (t) => folded(Buffer.from(t).toString('hex'), 32),
+  'base32': (t) => base32(Buffer.from(t)),
+}
+for (const [name, encode] of Object.entries(ENCODED)) {
+  test(`AN17: text kept as ${name} is compared by what it says`, () => {
+    const w = workspace(), posted = workspace()
+    const text = noise(90).toString('hex') // ascii() is periodic, and two folded rows of it are a whole deflated text
+    w.commit({ 'a.txt': `${encode(text)}\n`, 'b.txt': `${encode(noise(180).subarray(90).toString('hex'))}\n` })
+    posted.commit({ 'a.txt': 'nothing here\n' })
+    capture(w, SEGMENT, [line(NOW_THEN, text)])
+    capture(posted, SEGMENT, [line(NOW_THEN, text)])
+    const { code, doc } = w.check()
+    assert.equal(code, 1)
+    assert.deepEqual(named(doc, 'captured-text'), ['a.txt'])
+    assert.deepEqual(of(posted.check({ body: encode(text) }).doc, 'captured-text').map((f) => f.where), ['body'])
+  })
+}
+
+test('AN17: a folded block that opens to no text is refused; a list of hashes or of plain lines is not', () => {
+  const w = workspace()
+  const blocks = { 'b.html': `${folded(noise(3000).toString('base64'))}\n`, 'c.txt': `${folded(base32(noise(300)))}\n`, 'd.txt': `${folded(zlib.gzipSync(noise(300)).subarray(0, 200).toString('base64'))}\n` }
+  const hashes = Array.from({ length: 5 }, (_, i) => createHash('sha1').update(String(i)).digest('hex')).join('\n')
+  w.commit({ ...blocks, 'hashes.txt': `${hashes}\n`, 'gitignore.txt': '/dist\n/node_modules\n/coverage/reports/html\n/test-results\n', 'words.txt': 'alpha\nbravo\ncharlie\n' })
+  assert.deepEqual(named(w.check().doc, 'secrets'), sorted(blocks))
+})
+
 // ── AN18
 const homes = (x) => ({ mac: ['', 'Users', x, ''].join('/'), linux: ['', 'home', x, ''].join('/'), windows: ['C:', 'Users', x, ''].join('\\') })
 const pathSpellings = (p) => ({ plain: p, upper: p.toUpperCase(), json: JSON.stringify(p).slice(1, -1), slashes: p.replaceAll('/', '\\/'),
@@ -524,17 +578,6 @@ test('AN24: the hash holds the commit --base resolves to, not the name it was gi
 })
 
 test('AN24: what was compared and what was let through move the hash, whatever the outbound bytes', () => {
-  const faulty = (w, rewrite) => {
-    const cli = path.join(w.home, 'cli.mjs')
-    fs.writeFileSync(cli, `import { spawnSync } from 'node:child_process'
-const argv = process.argv.slice(2), real = spawnSync(process.execPath, [${JSON.stringify(BIN)}, ...argv], { maxBuffer: 2 ** 30 })
-let out = real.stdout.toString(), code = real.status
-${rewrite}
-process.stdout.write(out)
-process.exitCode = code
-`)
-    return ['--cli', cli]
-  }
   const accept = { args: ['--accept-partial'] }
   const compared = workspace()
   compared.commit({ 'a.txt': 'nothing here\n' })
@@ -919,6 +962,20 @@ test('AN25: a query that cannot read the capture, a segment that cannot be read,
   assert.deepEqual(noBase.doc.findings.map((f) => [f.rule, f.where]), [['unreadable', 'git']])
 })
 
+test('AN25: a raw that exits 0 with less than the segment holds refuses, and the record it left out is not called compared', () => {
+  const w = workspace()
+  w.commit({ 'a.txt': `${ascii(60, 1)}\n` })
+  capture(w, SEGMENT, [line(NOW_THEN, 'nothing shared')])
+  capture(w, NEWER, [line(NOW_THEN, ascii(60, 1))])
+  const cut = (segment) => `if (argv[0] === 'raw' && argv[1] === '${segment}') out = ''`
+  const { code, doc } = w.check({ cli: faulty(w, cut(NEWER)) })
+  assert.equal(code, 1)
+  assert.deepEqual(doc.findings.map((f) => [f.rule, f.where]), [['partial', 'capture']])
+  assert.ok(doc.coverage.scanned_bytes < doc.coverage.total_bytes)
+  const writing = `if (argv[1] === 'segments') { const d = JSON.parse(out); d.segments.forEach((s) => { s.state = 'writing' }); out = JSON.stringify(d) }`
+  assert.deepEqual(of(w.check({ cli: faulty(w, `${cut(NEWER)}; ${writing}`) }).doc, 'partial'), [], 'a segment being written is not held to the size it was listed at')
+})
+
 const HEAD_FAULTS = {
   'answers pending too': `const d = JSON.parse(out); d.meta.title = null; d.meta.title_source = 'pending'; out = JSON.stringify(d)`,
   'answers no document': `out = 'not a document'`,
@@ -927,15 +984,7 @@ for (const [name, rewrite] of Object.entries(HEAD_FAULTS)) {
   test(`AN25: a pending title whose head ${name} refuses, and every other fact is still compared`, () => {
     const { w, id } = pendingTitle()
     w.commit({ 'a.txt': 'one\n' })
-    const cli = path.join(w.home, 'cli.mjs')
-    fs.writeFileSync(cli, `import { spawnSync } from 'node:child_process'
-const argv = process.argv.slice(2), real = spawnSync(process.execPath, [${JSON.stringify(BIN)}, ...argv], { maxBuffer: 2 ** 30 })
-let out = real.stdout.toString()
-if (argv.includes('--head')) { ${rewrite} }
-process.stdout.write(out)
-process.exitCode = real.status
-`)
-    const { code, doc } = w.check({ body: `Seen in ${id}.`, cli: ['--cli', cli] })
+    const { code, doc } = w.check({ body: `Seen in ${id}.`, cli: faulty(w, `if (argv.includes('--head')) { ${rewrite} }`) })
     assert.equal(code, 1)
     assert.ok(of(doc, 'partial').some((f) => f.where === 'capture'))
     assert.ok(of(doc, 'captured-facts').some((f) => f.where === 'body'))
@@ -952,6 +1001,8 @@ const OPAQUE = {
   'a WebSocket message that did not decompress': () => wsCall([{ b64: 'AAAA', decode_error: 'no' }]),
   'a stream no wire claims': () => wireless(stored(events([{ x: 1 }]))),
   'a line that is not JSON': () => `{"ts":"${NOW_THEN}","cut`,
+  'a reply streamed as NDJSON deltas': () => reply(CHAT, shapeResponse({ status: 200, headers: [['content-type', 'application/x-ndjson']], body: Buffer.from('{"delta":"a"}\n{"delta":"b"}\n') })),
+  'a reply streamed as JSON lines of another name': () => reply(CHAT, shapeResponse({ status: 200, headers: [['content-type', 'application/stream+json']], body: Buffer.from('{"delta":"a"}\n{"delta":"b"}\n') })),
 }
 for (const [name, row] of Object.entries(OPAQUE)) {
   test(`AN30: ${name} is counted opaque and refuses; --accept-partial lets it through and moves the hash`, () => {
@@ -971,6 +1022,27 @@ for (const [name, row] of Object.entries(OPAQUE)) {
     assert.notEqual(let_through.doc.hash, held.doc.hash)
   })
 }
+
+test('AN30: a reply that is no stream is not opaque, whatever else it is', () => {
+  const w = workspace()
+  w.commit({ 'a.txt': 'nothing here\n' })
+  const plain = (type, body) => reply(CHAT, shapeResponse({ status: 200, headers: [['content-type', type]], body: Buffer.from(body) }))
+  capture(w, SEGMENT, [plain('text/plain', 'words'), plain('application/json', '{"a":1}'), plain('application/octet-stream', 'words')])
+  const { code, doc } = w.check()
+  assert.equal(code, 0, JSON.stringify(doc.findings))
+  assert.equal(doc.coverage.opaque_bytes, 0)
+})
+
+const attached = (bytes) => JSON.stringify({ ...JSON.parse(envLine({ ts: NOW_THEN })), req_body: JSON.stringify({ messages: [{ content: [{ source: { type: 'base64', data: bytes.toString('base64') } }] }] }) })
+test('AN30: a text attached as base64 inside a request is compared, and an image attached the same way has no text to hide', () => {
+  const w = workspace()
+  w.commit({ 'a.txt': `${ascii(60, 1)}\n`, 'b.txt': `${ascii(60, 2)}\n`, 'c.txt': `${ascii(59, 3)}\n` })
+  capture(w, SEGMENT, [attached(Buffer.from(ascii(60, 1))), attached(zlib.gzipSync(Buffer.from(ascii(60, 2)))), attached(Buffer.from(ascii(59, 3))), attached(noise(3000))])
+  const { code, doc } = w.check()
+  assert.equal(code, 1)
+  assert.deepEqual(named(doc, 'captured-text'), ['a.txt', 'b.txt'])
+  assert.equal(doc.coverage.opaque_bytes, 0)
+})
 
 test('AN30: what the capture never held is not opaque', () => {
   const w = workspace()
