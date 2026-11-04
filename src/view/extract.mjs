@@ -18,7 +18,7 @@ import { resourceRef as ccResourceRef } from '../dissect/cc.mjs';
 import { resourceRef as oaResourceRef, faithfulness as oaFaithfulness } from '../dissect/openai.mjs';
 import { scanJson, spanAt } from '../dissect/json-scan.mjs';
 import { scannedRequestBody, sharesBody, parsedRequestBody, storedRequestBody, requestEncodingOf } from '../dissect/request-body.mjs';
-import { fieldTextOf, respOf, headersOf } from '../dissect/record-fields.mjs';
+import { fieldTextOf, reserializedReply, respOf, headersOf } from '../dissect/record-fields.mjs';
 import { composeTextRef, mintRawRef } from '../raw/refs.mjs';
 import { V0_CONVERTED } from '../raw/ingest.mjs';
 import { boardDissectorFor, wireFormatOf, flatLaneOf, contextStateOf, blockKeysOf, MULTI_LANE_CONTEXT } from '../dissect/registry.mjs';
@@ -86,8 +86,10 @@ function factsOf(b) {
 
 /** definition(b, ref, exact, why, bid) → { bid, def }: `exact` the text the ref names (null: no span, `why` says why); `bid` the
  *  block's id when the caller already hashed it (4.3 §3: a block is hashed once). */
-// a block's id: its verbatim slice's when it has a span, its content's otherwise (3.5 §会话读)
-const bidFor = (b, ref, exact) => (ref != null && exact != null ? bidOf(b.sec, b.role, exact) : unaddressableBid(b.sec, b.role, contentOf(b)));
+// a block's id: its verbatim slice's when it has a span, its content's otherwise (3.5 §会话读). A re-serialized reply's slice or content can
+// equal a later request's block, which is another fact (one definition per bid): the slice's id under 'r' keeps them apart
+const bidFor = (b, ref, exact) => (ref == null || exact == null ? unaddressableBid(b.sec, b.role, contentOf(b))
+  : bidOf(b.faithfulness === 'reserialized' ? 'r' + SEP + b.sec : b.sec, b.role, exact));
 export function definition(b, ref, exact, why = null, bid = bidFor(b, ref, exact)) {
   const s = slimBlock(b, ref != null && exact != null ? ref : null, why);
   // vh: only of a verbatim slice. A block with no span has none, nor one whose faithfulness says its bytes are not the wire's
@@ -152,12 +154,13 @@ export function replyBlocks(rec, { d, format }) {
   const rules = WIRE_RULES[format === 'anthropic' ? 'anthropic' : 'openai'], base = rawRefOf(rec);
   const out = [], texts = new Map(); // a parsed JSON reply's text is written out per read: once per field, not per block
   const textOf = (field) => { if (!texts.has(field)) texts.set(field, fieldTextOf(rec, field).text ?? null); return texts.get(field); };
+  const rewritten = reserializedReply(rec); // resp.raw is the parsed body written out here, not the wire's text: a span of it proves nothing
   for (const p of parts) {
     const bl = p.block;
     if (!bl || typeof bl !== 'object') continue;
     const tool = /(^|_)tool_use$/.test(bl.type);
     const b = { sec: 'messages', kind: bl.type, role: 'assistant', block: bl, toolName: tool ? bl.name || '' : '', cc: bl.cache_control || null,
-      resKey: rules.resourceRef(bl) || '', faithfulness: rules.faith(bl), events: p.events };
+      resKey: rules.resourceRef(bl) || '', faithfulness: rules.faith(bl) ?? (rewritten && p.field === 'resp.raw' ? 'reserialized' : undefined), events: p.events };
     const text = p.field ? textOf(p.field) : null;
     const at = p.span ? locate(base, text, p.span, p.field) : { ref: null, exact: null, why: p.why || null };
     out.push({ b, ...at, unit: p.unit ?? 0 });

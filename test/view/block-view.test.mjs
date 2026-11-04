@@ -106,7 +106,10 @@ test('the JSON replies of every wire shape are read back as blocks, with or with
   for (const [wires, verbatim] of [[WIRES, true], [PRE_D40, false]]) for (const [wire, records] of Object.entries(wires)) {
     const blocks = (await seam(records)).filter((b) => b.reply)
     assert.ok(blocks.length, wire)
-    for (const { got, what } of blocks) assert.equal(got.fidelity.verbatim, verbatim, `${wire}: ${what}`)
+    for (const { got, def, what } of blocks) {
+      assert.equal(got.fidelity.verbatim, verbatim, `${wire}: ${what}`)
+      assert.equal(def.ff.faithfulness === 'reserialized', !verbatim, `${wire}: ${what}: the definition says what the block answer says`)
+    }
   }
 })
 

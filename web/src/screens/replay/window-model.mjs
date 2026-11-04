@@ -9,7 +9,7 @@ import { stepRef } from '../../../legacy/replay/lanes.mjs'
 import { contentRefOf, contentRefKOf } from '../../../legacy/replay/stepbar.mjs'
 
 // ── the proof rule (2.3): what a block's fidelity IS, and what it may claim ──────────────────────────────────────────
-const KNOWN_FF = new Set(['metadata', 'opaque', 'summarized', 'omitted', 'truncated'])
+const KNOWN_FF = new Set(['metadata', 'opaque', 'summarized', 'omitted', 'truncated', 'reserialized'])
 // → one of: verbatim (proven — no visible word) · a known 3.2 value · unknown · unaddressable
 // a tools block by the same rule (2.3): an older capture's tool definitions say `metadata`
 export function faithOf(b) {
@@ -41,8 +41,9 @@ export function faithNow(b) {
 // ── the reply rule: its parts · stop reason · ONE fidelity mark ───────────────────────────────────────────────────
 // replyOf({row, reply, detail}) is the one rule (2.3 §这一步的回复 · 2.6 §A) over a step as the desk holds it: `reply` = the
 // step's reply definitions (thinking · text · tool calls, each with its `ref`), `detail` = the lane step's detail. The mark:
-// the bytes only partially stored → 'partial' (「◐ 回复没采全」); every part resolving to its own span of the reply
-// (`…::resp.raw::a-b`, or `…::resp.messages.<j>::a-b` on WebSocket; RFC 3.1 回复块也回源) → null; anything else → 'parsed' (「◐ 解析后的回复」). 逐字 is never written without that span.
+// the bytes only partially stored → 'partial' (「◐ 回复没采全」); every part resolving to its own span of the wire's reply
+// (`…::resp.raw::a-b`, or `…::resp.messages.<j>::a-b` on WebSocket; RFC 3.1 回复块也回源) → null; a part with no span, or a span of a
+// re-serialized body → 'parsed' (「◐ 解析后的回复」). 逐字 is never written without that span.
 // partMark(d) marks ONE part as the window's rows do: the request rows' proof rule (faithOf) over the part's span — proven on it
 // with no non-verbatim value, a known value is that value's mark, no span is 'parsed' (the partial fact is the call line's, 2.3)
 const RESP_SPAN = /::resp\.(raw|messages\.\d+)::\d+-\d+$/
@@ -51,11 +52,12 @@ export function partMark(d) {
   const f = faithOf({ ...d, text_ref: onSpan(d) ? d.ref : null })
   return f === 'verbatim' ? null : f === 'unaddressable' ? 'parsed' : f
 }
+const UNPROVEN = new Set(['parsed', 'reserialized'])
 const PARTIAL_LABELS = new Set(['resp-truncated', 'resp-partial', 'resp-undecoded'])
 export function replyOf({ row, reply, detail } = {}) {
   const c = row || {}, parts = reply || [], norm = (detail && detail.norm) || {}
   const partial = !!(c.respIncomplete || ((c.wire && c.wire.labels) || []).some((l) => PARTIAL_LABELS.has(l.id)))
-  const mark = partial ? 'partial' : parts.every(onSpan) ? null : 'parsed'
+  const mark = partial ? 'partial' : parts.some((d) => UNPROVEN.has(partMark(d))) ? 'parsed' : null
   // an unparsed step is a REQUEST-body fact; where the response itself parsed, the reply still renders (2.6 §A)
   let failed = null
   if (!(c.unparsed && parts.length) && c.error) {

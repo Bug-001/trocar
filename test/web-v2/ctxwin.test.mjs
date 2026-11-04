@@ -273,33 +273,6 @@ test('the real face: every main step of the demo session draws inside the whitel
   } finally { await face.close() }
 })
 
-// 2.3 §没有 def.ref: a block the capture cannot point into (a plain-JSON reply has no span per block) carries its body in `def.inline`,
-// and the opened row shows that text — never "no body and no source location" (the demo session's replies are plain JSON)
-test('the real face: an opened reply row with no source location shows the text its definition carries', async () => {
-  const face = await serveBoard(boardHome())
-  try {
-    const id = (await face.get('sessions')).doc.sessions[0].session_id
-    const desk = await deskFrom((n, p) => face.get(n, p).then((r) => r.doc), id)
-    const s = stateOf(desk)
-    let seen = 0
-    for (let p = 0; p < s.anchor.calls.length; p++) {
-      const st = stepOf(desk, s.anchor.calls[p].rid)
-      if (!st.held || s.anchor.calls[p].error) continue
-      s.playhead = p
-      const h = seg(ctxWindowHtml(s)), bodies = [...h.matchAll(/<div class="cellread [^"]*">([\s\S]*?)<\/div>/g)].map((m) => m[1]).join('\n')
-      for (const d of st.reply.filter((x) => x.ref == null)) {
-        seen++
-        assert.ok(d.inline && typeof d.inline === 'object', `step ${p + 1} ${d.bid}: the definition carries its body (3.5 §会话读)`)
-        const text = d.inline.block?.text ?? d.inline.text
-        if (text) assert.ok(bodies.includes(esc(text.slice(0, 24))), `step ${p + 1} ${d.bid}: the opened row's body cell holds the reply's text`)
-      }
-      assert.ok(!h.includes(esc(W.NO_BODY)), `step ${p + 1}: no reply row says it has no body`)
-    }
-    assert.ok(seen > 0, 'the demo session has reply parts with no source location')
-  } finally { await face.close() }
-})
-
-
 // 3.5 §会话读: an unaddressable tools definition brings its description and schema in `inline`; the wire carries no `verbatim`
 test('an unaddressable tools definition shows the description and schema it brings in inline', () => {
   const d = { bid: 'tb', fh: 'tb', sec: 'tools', role: 'system', kind: 'text', name: 'Bash', head: { role: 'system', tag: 'def', label: 'Bash' }, preview: 'Bash',

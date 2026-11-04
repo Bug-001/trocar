@@ -76,7 +76,7 @@ const resolve = (rec, ref) => {
   const t = field ? fieldTextOf(rec, field).text : rec.req_body;
   return t.slice(start, end);
 };
-const expectedBid = (byId, d) => (d.ref ? b64(`${d.sec}\x1F${d.role}\x1F${resolve(byId.get(parseTextRef(d.ref).recordId), d.ref)}`)
+const expectedBid = (byId, d) => (d.ref ? b64(`${d.ff.faithfulness === 'reserialized' ? 'r\x1F' : ''}${d.sec}\x1F${d.role}\x1F${resolve(byId.get(parseTextRef(d.ref).recordId), d.ref)}`)
   : b64(`u\x1F${d.sec}\x1F${d.role}\x1F${canon(d.sec === 'system' ? d.text : d.block)}`));
 
 test('(a) every definition resolves to the bytes its bid hashes; a block with no span hashes its canonical JSON', () => {
