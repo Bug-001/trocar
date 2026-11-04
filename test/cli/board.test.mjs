@@ -14,6 +14,7 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { fakeIo, snapshot } from './fixtures/on-ctx.mjs'
 import { readIngressConfig } from '../../src/collector/core/ingress-config.mjs'
 import { run as board } from '../../src/cli/board.mjs'
+import { runCli } from '../../src/cli/main.mjs'
 
 const NO_ARGS = { positionals: [], flags: {} }
 async function installed(platform) {
@@ -22,7 +23,7 @@ async function installed(platform) {
   return { w, port: await boardPortOf(w.dir), box: await liveUnit({ w, platform, daemon: { fork: workerFork } }) }
 }
 const recorder = (fail = false) => { const calls = []; return { calls, open: async (file, args) => { calls.push([file, ...args].join(' ')); if (fail) throw new Error('no display') } } }
-const runBoard = (w, platform, box, opener, argv = []) => { const io = fakeIo(); return board(argv, { io, env: w.env, home: w.home, platform, args: NO_ARGS, deps: { unit: box.unit, open: opener.open } }).then((exit) => ({ exit, io })) }
+const runBoard = (w, platform, box, opener, json = false) => { const io = fakeIo(); return board([], { io, env: w.env, home: w.home, platform, json, args: NO_ARGS, deps: { unit: box.unit, open: opener.open } }).then((exit) => ({ exit, io })) }
 
 for (const platform of ['darwin', 'win32']) {
   test(`${platform} · 4.4 #8 · V84: trocar board starts the daemon, prints http://127.0.0.1:<boardPort>/#t=<board.token>, opens exactly that URL, exit 0; an opener that fails still prints it, exit 0`, { skip: await unservable(platform), timeout: 30_000 }, async () => {
@@ -48,6 +49,27 @@ for (const platform of ['darwin', 'win32']) {
       } finally { await box.stop() }
     })
   })
+
+  test(`${platform} · V123: trocar board --json is one document with the address the real daemon gives, and no browser opens`, { skip: await unservable(platform), timeout: 30_000 }, async () => {
+    const { w, box } = await installed(platform)
+    await withScratchCwd(platform, async () => {
+      try {
+        const opener = recorder()
+        const { exit, io } = await runBoard(w, platform, box, opener, true)
+        assert.equal(exit, 0, io.stdoutText())
+        assert.equal(io.stdoutText().trimEnd().split('\n').length, 1)
+        const doc = io.json()
+        assert.deepEqual(Object.keys(doc), ['schema', 'command', 'ok', 'url', 'port', 'state'])
+        assert.equal(doc.command, 'board')
+        assert.equal(doc.ok, true)
+        assert.equal(doc.port, readIngressConfig({ dir: w.dir }).boardPort)
+        assert.equal(doc.url, `http://127.0.0.1:${doc.port}/#t=${fs.readFileSync(path.join(w.dir, 'board.token'), 'utf8')}`)
+        assert.equal(doc.state, 'serving')
+        assert.equal(opener.calls.length, 0)
+        assert.equal(io.stderrText(), '')
+      } finally { await box.stop() }
+    })
+  })
 }
 
 test('§4.3: trocar board on a machine with nothing installed exits 1 and the HOME stays byte-identical; an unknown argument exits 2', async () => {
@@ -69,5 +91,34 @@ test('V84: the board\'s port held by another program → trocar board exits 1, o
     assert.equal(exit, 1)
     assert.equal(opener.calls.length, 0)
     assert.equal(readIngressConfig({ dir: w.dir }).boardPort, port)
+  } finally { await box.stop(); squat.close() }
+})
+
+test('V123: trocar board --json with nothing installed is a cert-not-installed document, exit 1, and the HOME stays byte-identical', async () => {
+  const home = tmpDir('trocar-fresh-')
+  const before = snapshot(home), opener = recorder(), io = fakeIo()
+  assert.equal(await runCli(['board', '--json'], { io, env: { HOME: home }, home, platform: 'darwin', deps: { open: opener.open } }), 1)
+  assert.equal(io.json().error.code, 'cert-not-installed')
+  assert.equal(io.stderrText(), '')
+  assert.deepEqual(snapshot(home), before)
+  assert.equal(opener.calls.length, 0)
+})
+
+test('V123: a stray argument under --json is a usage document, exit 2', async () => {
+  const home = tmpDir('trocar-fresh-')
+  const io = fakeIo(), args = { positionals: ['x'], flags: {} }
+  assert.equal(await board(['x'], { io, env: { HOME: home }, home, platform: 'darwin', json: true, args, deps: {} }), 2)
+  assert.equal(io.json().error.code, 'usage')
+})
+
+test('V123: the board\'s port held by another program under --json is a board-down document, exit 1, and no browser opens', { skip: await unservable('darwin'), timeout: 30_000 }, async () => {
+  const { w, port, box } = await installed('darwin')
+  const squat = net.createServer(); squat.listen(port, '127.0.0.1'); await once(squat, 'listening')
+  try {
+    const opener = recorder()
+    const { exit, io } = await runBoard(w, 'darwin', box, opener, true)
+    assert.equal(exit, 1)
+    assert.equal(io.json().error.code, 'board-down')
+    assert.equal(opener.calls.length, 0)
   } finally { await box.stop(); squat.close() }
 })

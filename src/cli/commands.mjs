@@ -82,9 +82,9 @@ export const COMMANDS = Object.freeze([
     exits: [[0, 'done, or shown'], [1, 'the class or rule could not be read or written'], [2, 'nothing ran: a usage error, an unknown class, or root']] },
   { name: 'board',
     group: 'Data', mutates: false, run: via('./board.mjs', 'run'),
-    usage: 'trocar board',
-    summary: 'Opens the board in your browser. The board is served by the collector from install on, so there is nothing to start; this prints its address with your key and opens it.',
-    options: [],
+    usage: 'trocar board [--json]',
+    summary: 'Opens the board in your browser. The board is served by the collector from install on, so there is nothing to start; this prints its address with your key and opens it. With --json it gives the address as a document and opens no browser.',
+    options: [JSON_OPT],
     exits: [[0, 'the address is printed'], [1, 'the board is not there: trocar is not installed, the collector did not start, or its port is taken'], [2, 'a usage error']] },
 
   { name: 'update',

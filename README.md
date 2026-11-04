@@ -642,7 +642,7 @@ trocar classes set <class> full|log
 trocar classes add <class> <host-regex> [<path-regex>] [--harness <harness>]
 trocar classes rm <class> [<rule>]
 trocar classes reset
-trocar board                  # prints the board's address with your key and opens it; exit 1 when the board is not there
+trocar board [--json]         # prints the board's address with your key and opens it; exit 1 when the board is not there
 
 # maintenance
 trocar update [--yes] [--dry-run] [--json]   # the newest code, and the machine as it was (D67)
