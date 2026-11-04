@@ -647,6 +647,7 @@ trocar board                  # prints the board's address with your key and ope
 # maintenance
 trocar update [--yes] [--dry-run] [--json]   # the newest code, and the machine as it was (D67)
 trocar raw <segment>[:<from>[-<to>]]
+trocar skill [<name>] [--json]   # the agent skills that ship with trocar: lists them, or prints one byte for byte
 sudo trocar setup-helper [--remove] [--binary <path>]   # Linux, once per machine
 trocar daemon [--supervise]   # the daemon in the foreground; the autostart unit runs it (Windows's task with --supervise)
                               # another daemon already answering: exits 0, nothing to do. The control endpoint held by
