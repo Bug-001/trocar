@@ -205,7 +205,7 @@ export function Scope({ desk }: { desk: DeskView }) {
         {' '}<button type="button" className="pgbtn" id="probPrev" aria-label={W.PROBLEM_PREV} title={W.PROBLEM_PREV} onClick={() => probGo(-1)}>‹</button>
         <button type="button" className="pgbtn" id="probNext" aria-label={W.PROBLEM_NEXT} title={W.PROBLEM_NEXT} onClick={() => probGo(1)}>›</button></> : null}</> : W.PROBLEM_ROW}</div>
         <div className="tlane"><div className="probrow" id="probrow">{pr ? bars.map((b, col) => { const p = items.get(col); return p ? <ProblemMark key={keyAt(col)} p={p} /> : <span key={keyAt(col)} className="pcell" /> }) : null}</div></div></div>
-      <div className="tkrow tkrow-bars"><div className="tgut tgut-ctx" id="sawgut">{gutName} <b title={m?.peak.tip || undefined}>{m?.peak.text || ''}</b>
+      <div className="tkrow tkrow-bars"><div className="tgut tgut-ctx" id="sawgut"><span className="ghead">{gutName} <b title={m?.peak.tip || undefined}>{m?.peak.text || ''}</b></span>
         {!cost && m?.gutter.length ? <span className="gshares">{m.gutter.map((x: { ct: string, share: string }) => <span key={x.ct} className="gshare"><i className={`ct-${x.ct}`} />{x.share}</span>)}</span> : null}</div>
         <div className="tlane"><div className="sawrow" id="sawrow">
           <div id="reviewbracket" style={m?.review ? { display: 'block', width: pct(m.review.width) } : { display: 'none' }} title={m?.review?.tip}><span className="rbend" aria-hidden="true">{W.GUESS}</span></div>
