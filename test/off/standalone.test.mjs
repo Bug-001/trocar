@@ -455,3 +455,12 @@ test('D74: the copy runs with no node on PATH: sh starts the Node that ../app/cu
   assert.equal(r.status, 0, r.stderr)
   assert.equal(r.stdout, 'ran a b c')
 })
+
+test('V120: with no ../app/current the copy starts the node on PATH and says nothing on stderr (npm and source installs have no such file)', { skip: process.platform === 'win32' && 'on Windows trocar-off.cmd starts it (1.6 §3.2 step 1)' }, () => {
+  const text = buildStandalone({ version: 'test' }).replace(STANDALONE_ENTRY, "(process.stdout.write('ran'), 0)")
+  const t = tmpDir('trocar-polyglot-'), file = path.join(t, 'bin', 'trocar-off')
+  fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text, { mode: 0o700 })
+  const r = spawnSync('/bin/sh', [file], { encoding: 'utf8', env: { PATH: path.dirname(process.execPath) } })
+  assert.equal(r.status, 0, r.stderr)
+  assert.equal(r.stdout, 'ran'); assert.equal(r.stderr, '')
+})
