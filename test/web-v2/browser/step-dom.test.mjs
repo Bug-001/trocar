@@ -28,8 +28,6 @@ async function onBoard(w, fn) {
   try {
     const { page } = b
     await serveWorld(page, w)
-    await page.route('**/api/block?**', (route) => route.fulfill({ status: 200, contentType: 'application/json',
-      body: JSON.stringify({ blocks: new URL(route.request().url()).searchParams.getAll('ref').map((ref) => ({ ref, bytes: 'x', encoding: 'utf8', fidelity: 'verbatim', truncated: false })), errors: [] }) }))
     const go = async (k) => {
       await page.evaluate((k) => { location.hash = `#/replay/p/S?step=${k}` }, k)
       await page.waitForFunction(([k, re]) => {

@@ -69,7 +69,7 @@ export function world(seed, { calls: count, cut: cuts = false, page: pageSize, s
     const b = createHash('sha256').update(`${seed}:${bn++}`).digest('base64url').slice(0, 22)
     const fh = createHash('sha256').update(`fh:${b}`).digest('base64url').slice(0, 22)
     defs.set(b, { bid: b, fh, ref: `s/x#b${bn}::0-10`, sec, role, kind: 'text', ff: { faithfulness: 'verbatim' }, head: { role, tag: 'text', label: 'text' },
-      preview: b.slice(0, 8), chars: 8, bytes: 10, r: { as: 'markdown' } })
+      preview: b.slice(0, 8), chars: 8, bytes: 10 })
     if (hr) {
       const label = hpick(['', 'a short label', `a long label ${'that runs on '.repeat(40)}`])
       Object.assign(defs.get(b), { head: { role, tag: hpick(['text', 'thinking', 'action · Read', 'observation · error']), label }, preview: label },
@@ -313,6 +313,8 @@ export function world(seed, { calls: count, cut: cuts = false, page: pageSize, s
 
   return { seed, marks, now, page, full, since, lane, get, files: answerFiles,
     list: (rid) => byRid.get(rid).list,
+    /** the refs of every reply block */
+    replyRefs: new Set(calls.flatMap((c) => c.reply).map((b) => defs.get(b).ref)),
     /** lane `key`'s whole ledger at mark `at`: {resources, seen} in key order */
     ledgerAt: (key, at = now) => pack(ledgerOf(docAt(at).laneCalls.get(key) || []), Infinity),
     /** lane `key`'s events at mark `at`, in step order, `k` on user events */

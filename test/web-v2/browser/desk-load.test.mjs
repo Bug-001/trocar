@@ -121,7 +121,7 @@ test('2.3 #30: a step named in another pack is that pack\'s first read and lands
   }
 })
 
-test('2.3 #32: a rest of 100 ms reads the reply bodies of the anchor lane\'s ±8 held steps in one block read; stepping there draws them at once', { skip }, async () => {
+test('2.3 #32: a rest of 100 ms reads the step\'s own bodies, then the reply bodies of the anchor lane\'s ±8 held steps in one more read; stepping there draws them at once', { skip }, async () => {
   const w = world(5, { calls: 60, page: 100, talk: { pre: 3, len: 30, every: 6, tail: 4 } }), R = 8
   const main = w.full().lanes.find((h) => h.kind === 'main').lane
   // every main step's reply refs, from the lane's pages
@@ -132,7 +132,8 @@ test('2.3 #32: a rest of 100 ms reads the reply bodies of the anchor lane\'s ±8
     for (const st of a.steps) replyRefs.set(st.rid, st.reply.map((b) => ref.get(b)))
   }
   const failed = new Set(w.full(w.now, { limit: 0 }).calls.filter((c) => c.status !== 200).map((c) => c.rid)) // a failed call's reply shows no parts
-  const rids = w.laneRidsAt().get(main), k = rids.length - 2 * R - 3 // 1-based, the 17 around it all held, away from the newest
+  const rids = w.laneRidsAt().get(main), shows = (rid) => replyRefs.get(rid).length > 0 && !failed.has(rid)
+  const k = rids.findLastIndex((rid, i) => i < rids.length - 2 * R - 3 && shows(rid)) + 1 // 1-based, the 17 around it all held, away from the newest, with a reply of its own
   assert.ok(k - R >= 1, 'the main lane is long enough')
   const near = rids.slice(k - 1 - R, k + R), nearRefs = new Set(near.flatMap((rid) => replyRefs.get(rid)))
   assert.ok(nearRefs.size >= R, 'the steps around have replies')
@@ -147,12 +148,14 @@ test('2.3 #32: a rest of 100 ms reads the reply bodies of the anchor lane\'s ±8
     await page.waitForTimeout(800)
     const asked = new Set(blocks.flatMap((x) => x.refs)), t0 = Date.now()
     await page.evaluate((k) => { location.hash = `#/replay/p/S?step=${k}` }, k)
-    await page.waitForTimeout(600)
-    // (1) exactly one block read, carrying every not-yet-read reply ref of the 17 steps
-    const rest = blocks.filter((x) => x.t >= t0)
-    assert.equal(rest.length, 1, `block reads after the rest on step ${k}: ${rest.length}`)
-    const missing = [...nearRefs].filter((ref) => !asked.has(ref) && !rest[0].refs.includes(ref))
-    assert.deepEqual(missing, [], 'the rest read carries the ±8 steps\' reply refs')
+    assert.ok(await until(page, async () => blocks.filter((x) => x.t >= t0).length >= 2, 5000), 'a second block read followed the first')
+    await page.waitForTimeout(400)
+    // (1) the first block read carries step k's own refs alone; when it is back, exactly one more carries every not-yet-read reply ref of the 17 steps
+    const rest = blocks.filter((x) => x.t >= t0), own = replyRefs.get(rids[k - 1])
+    assert.equal(rest.length, 2, `block reads after the rest on step ${k}: ${rest.length}`)
+    assert.deepEqual([...rest[0].refs].sort(), [...own].sort(), 'the first read carries this step\'s own refs')
+    const missing = [...nearRefs].filter((ref) => !asked.has(ref) && !own.includes(ref) && !rest[1].refs.includes(ref))
+    assert.deepEqual(missing, [], 'the second read carries the ±8 steps\' reply refs')
     // (2) each of the 17 steps, reached by ←/→ and rested on ≥ 150 ms, shows its open reply part with its bytes, no placeholder
     const t1 = Date.now()
     const at = async (n) => {
