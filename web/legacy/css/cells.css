@@ -16,7 +16,6 @@
 .cellbar button[aria-pressed="true"]{position:relative;color:var(--action);background:var(--action-wash);border-color:var(--action);font-weight:var(--fw-strong);}
 .cellbar button:focus-visible{outline:2px solid var(--action);outline-offset:1px;position:relative;}
 @media (pointer: coarse){.cellbar button{min-height:44px;}}
-.cellkind{color:var(--ink-2);}
 .cellstate,.cellclip{color:var(--ink-3);min-width:0;overflow-wrap:anywhere;}
 
 /* Raw: the bytes, laid out for reading; the inserted breaks and indents (.lay) are not selectable and not read out */
@@ -29,10 +28,11 @@
 
 /* Readable: reading text in sans, machine bytes in mono */
 .cellread{min-width:0;color:var(--ink);overflow-wrap:anywhere;}
-.kd-text,.kd-md{font-family:var(--sans);font-size:var(--fs-body);line-height:1.6;max-width:42em;}
-.kd-text{white-space:pre-wrap;overflow-wrap:anywhere;}
-.kd-code,.kd-shell,.kd-json,.kd-diff,.kd-kv dt,.kd-opaque,.sec-tag{font-family:var(--mono);font-size:var(--fs-body);line-height:1.6;}
+.kd-text,.kd-md,.kd-tool{font-family:var(--sans);font-size:var(--fs-body);line-height:1.6;}
+.kd-text{max-width:42em;white-space:pre-wrap;overflow-wrap:anywhere;}
+.kd-code,.kd-shell,.kd-json,.kd-diff,.kv-k,.kd-opaque{font-family:var(--mono);font-size:var(--fs-body);line-height:1.6;}
 .kd-code,.kd-diff{white-space:pre;overflow-x:auto;max-width:100%;overflow-wrap:normal;padding:var(--s2);background:var(--sunk);border-radius:var(--r-1);}
+.kd-wrap{white-space:pre-wrap;overflow-x:visible;overflow-wrap:anywhere;}
 /* code's ESC byte (kinds.mjs): the byte stays in the text for copy and is hidden; the box and the word say what it is, not a colour */
 .kd-esc{color:transparent;}
 .kd-esc::before{content:'ESC';color:var(--ink-3);border:1px solid var(--rule-2);border-radius:var(--r-1);padding:0 2px;}
@@ -42,14 +42,37 @@
 .sh-ps{color:var(--ink-3);user-select:none;-webkit-user-select:none;}
 .kd-note{color:var(--ink-2);font-family:var(--sans);font-size:var(--fs-cap);margin-top:var(--s1);}
 
-/* markdown */
-.md-h1,.md-h2,.md-h3,.md-h4,.md-h5,.md-h6{font-weight:var(--fw-strong);margin:var(--s2) 0 var(--s1);line-height:1.35;}
-.md-h1{font-size:var(--fs-title);} .md-h2{font-size:var(--fs-head);} .md-h3,.md-h4,.md-h5,.md-h6{font-size:var(--fs-body);}
-.md-li{padding-left:1.2em;}
-.md-q{border-left:3px solid var(--rule-2);padding-left:var(--s3);color:var(--ink-2);}
-.md-em{font-style:normal;} .md-b{font-weight:var(--fw-strong);}
-.md-table{display:block;max-width:100%;overflow-x:auto;border-collapse:collapse;font-size:var(--fs-body);margin:var(--s2) 0;}
+/* markdown: prose keeps the reading measure, tables and code take the cell's width */
+.kd-md{--measure:44em;}
+.kd-md > :first-child{margin-top:0;} .kd-md > :last-child{margin-bottom:0;}
+.kd-md :is(p,ul,ol,blockquote,h1,h2,h3,h4,h5,h6,hr,.md-tag,.md-tagv){max-width:var(--measure);}
+.kd-md p{margin:0 0 var(--s2);}
+.kd-md :is(h1,h2,h3,h4,h5,h6){font-weight:var(--fw-strong);line-height:1.35;margin:var(--s4) 0 var(--s1);}
+.kd-md :is(h1,h2){font-size:var(--fs-head);} .kd-md :is(h3,h4,h5,h6){font-size:var(--fs-body);}
+.kd-md :is(ul,ol){margin:0 0 var(--s2);padding-left:1.6em;}
+.kd-md li{margin:2px 0;} .kd-md li > p{margin:0 0 2px;} .kd-md li > :is(ul,ol){margin-bottom:0;}
+.kd-md blockquote{margin:0 0 var(--s2);padding-left:var(--s3);border-left:3px solid var(--rule-2);color:var(--ink-2);}
+.kd-md code{font-family:var(--mono);font-size:var(--fs-body);background:var(--sunk);border-radius:3px;padding:0 3px;overflow-wrap:anywhere;}
+.kd-md pre{margin:0 0 var(--s2);padding:var(--s2);background:var(--sunk);border-radius:var(--r-1);overflow-x:auto;max-width:100%;}
+.kd-md pre code{background:none;padding:0;white-space:pre;overflow-wrap:normal;}
+.kd-md hr{border:0;border-top:1px solid var(--rule);margin:var(--s3) 0;}
+.kd-md em{font-style:normal;color:var(--ink-2);text-decoration:underline dotted var(--rule-2);text-underline-offset:2px;}
+.kd-md strong{font-weight:var(--fw-strong);}
+.kd-md a,.md-link{color:var(--action);}
+.kd-md a{text-decoration:underline;text-underline-offset:2px;}
+.md-link{border-bottom:1px dotted var(--rule-2);}
+.md-img{color:var(--ink-2);}
+.md-table{max-width:100%;overflow-x:auto;margin:0 0 var(--s2);}
+.md-table table{border-collapse:collapse;}
 .md-table th,.md-table td{border:1px solid var(--rule);padding:2px var(--s2);text-align:left;vertical-align:top;}
+.md-table th{background:var(--sunk);font-weight:var(--fw-strong);}
+.md-table .md-center{text-align:center;} .md-table .md-right{text-align:right;}
+/* a line that is one tag: its source in a small label, the value of `<k>value</k>` after it */
+.md-tag{display:block;width:max-content;max-width:100%;box-sizing:border-box;margin:var(--s2) 0 var(--s1);padding:0 var(--s1);font-family:var(--mono);font-size:var(--fs-cap);
+  color:var(--ink-2);border:1px solid var(--rule-2);border-radius:var(--r-1);overflow-wrap:anywhere;}
+.md-tag.close{border-color:transparent;padding-left:0;margin-top:0;color:var(--ink-3);}
+.md-tagv{margin:2px 0;}
+.md-tagv .md-tag{display:inline-block;width:auto;margin:0 var(--s2) 0 0;}
 
 /* diff: signs are text; tints carry no meaning alone */
 .d-add{background:var(--diff-add-bg);} .d-del{background:var(--diff-del-bg);}
@@ -63,25 +86,34 @@
 .kd-json summary{cursor:pointer;}
 .j-key{color:var(--j-key);} .j-str{color:var(--j-str);} .j-num{color:var(--j-num);} .j-lit{color:var(--j-lit);}
 
-/* fields: a dt/dd grid that stacks on a phone */
-.kd-kv{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:2px var(--s3);margin:0;}
-.kd-kv dt{color:var(--ink-2);}
-.kd-kv dd{margin:0;min-width:0;}
+/* fields: a short value follows its key on the line, a long one takes the lines under it */
+.kv-row{margin:0 0 2px;}
+.kv-k{color:var(--ink-2);margin-right:var(--s2);}
+.kv-long > .kv-k{display:block;margin:var(--s2) 0 2px;}
 
-/* sections, parts, media, opaque, the fallback line */
-.kd-sec > div + div,.kd-parts > * + *{margin-top:var(--s2);}
-.sec-tag{display:inline-block;margin-right:var(--s2);padding:0 var(--s1);border:1px solid var(--rule-2);border-radius:var(--r-1);color:var(--ink-2);}
+/* a tool: the description reads as text, Parameters open under it */
+.tool-params{margin-top:var(--s2);border-top:1px solid var(--rule);padding-top:var(--s1);}
+.tool-params > summary{cursor:pointer;font-size:var(--fs-cap);color:var(--ink-2);padding:2px 0;overflow-wrap:anywhere;}
+.parm{padding:var(--s1) 0;border-top:1px solid var(--rule);}
+.parm:first-of-type{border-top:0;}
+.pn{font-family:var(--mono);font-size:var(--fs-body);font-weight:var(--fw-strong);}
+.pt{font-family:var(--mono);font-size:var(--fs-cap);color:var(--ink-2);margin-left:var(--s2);}
+.pr{font-size:var(--fs-cap);color:var(--ink-3);margin-left:var(--s2);}
+.pe{font-family:var(--mono);font-size:var(--fs-cap);color:var(--ink-2);margin-top:2px;overflow-wrap:anywhere;}
+.pd{margin-top:2px;}
+.pk{margin:var(--s1) 0 0 var(--s4);border-left:2px solid var(--rule);padding-left:var(--s3);}
+
+/* parts, media, opaque, the fallback line */
+.kd-parts > * + *{margin-top:var(--s2);}
 .kd-media img[data-media]{display:block;max-width:100%;height:auto;}
 .kd-file{color:var(--ink-2);}
 .kd-opaque{color:var(--ink-3);}
 .kd-fail{font-family:var(--sans);font-size:var(--fs-cap);color:var(--ink-3);margin-bottom:var(--s1);}
 
-/* tones: error is bordered and tinted; quiet (thinking) is dimmed */
-.tone-error{border:1px solid var(--bad);background:var(--err-bg);color:var(--bad);border-radius:var(--r-1);padding:var(--s2);}
+/* tones: error is an edge, the text stays readable; quiet (thinking) is dimmed */
+.tone-error{border-left:3px solid var(--bad);padding-left:var(--s2);}
 .tone-quiet{color:var(--ink-2);}
 
 @media (max-width: 480px){
-  .kd-kv{grid-template-columns:minmax(0,1fr);}
-  .kd-kv dd{padding-left:var(--s3);margin-bottom:var(--s1);}
   .kd-json details > :not(summary){padding-left:10px;}
 }
