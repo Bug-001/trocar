@@ -6,7 +6,7 @@ import { scanJson, nodeAt } from '../dissect/json-scan.mjs'
 import { ruleBlocksFor } from '../dissect/registry.mjs'
 import { sseEvents } from '../dissect/sse-spans.mjs'
 import { LIMITS } from './closed.mjs'
-import { isText, truth } from './compile.mjs'
+import { headersMap, isText, truth } from './compile.mjs'
 import { FAST_LITERAL, parseCondition } from './conditions.mjs'
 import { setHeaders } from './headers.mjs'
 import { spansToSteps, applySteps } from './edits.mjs'
@@ -139,16 +139,23 @@ const rewrite = (nodes, f) => nodes.flatMap(({ start, end, value }) => {
   return next === value ? [] : [{ start, end, ins: JSON.stringify(next) }]
 })
 
-const blocksOf = (on, unit, text) => ruleBlocksFor({ endpoint: unit.path, transport: on === 'ws-client' ? 'ws' : undefined, req_body: text })
+// `unit.headers` are the request's: blocks only stand where a request does. The readers take them as an object of lowercase names.
+const blocksOf = (on, unit, text) => ruleBlocksFor({ endpoint: unit.path, transport: on === 'ws-client' ? 'ws' : undefined, req_headers: Object.fromEntries(headersMap(unit.headers ?? [])), req_body: text })
+
+// An action that wants blocks where no wire can be told: it did not run, and that is not the same as no block being chosen.
+function actionBlocks(env, text, selector) {
+  const blocks = blocksOf(env.on, env.unit, text)
+  if (!blocks) throw fault('no-blocks')
+  return select(blocks, selector)
+}
 
 const NAMED = ['section', 'kind', 'role', 'name']
 const byteSize = (b) => (b.text === null ? 0 : Buffer.byteLength(b.text))
 
 // Blocks run oldest first. skip_newest goes first, so newest counts what it left.
-function select(blocks, selector, { textOnly = false } = {}) {
+function select(blocks, selector) {
   const text = selector.text === undefined ? null : parseCondition(selector.text, { key: 'body' })
-  let out = blocks.filter((b) => (!textOnly || b.text_path)
-    && NAMED.every((k) => selector[k] === undefined || selector[k] === b[k])
+  let out = blocks.filter((b) => NAMED.every((k) => selector[k] === undefined || selector[k] === b[k])
     && byteSize(b) >= (selector.min_bytes ?? 0) && byteSize(b) <= (selector.max_bytes ?? Infinity)
     && (!text || (b.text !== null && holds(text, (n) => compares(n, b.text)))))
   if (selector.skip_newest) out = out.slice(0, Math.max(0, out.length - selector.skip_newest))
@@ -157,10 +164,10 @@ function select(blocks, selector, { textOnly = false } = {}) {
 }
 
 function chosenTextNodes(state, env, selector) {
-  const blocks = blocksOf(env.on, env.unit, state.text)
-  if (!blocks) return []
+  const chosen = actionBlocks(env, state.text, selector)
+  if (chosen.some((b) => !b.text_path)) throw fault('no-blocks')
   const { root } = scan(state.text)
-  return select(blocks, selector, { textOnly: true }).map((b) => {
+  return chosen.map((b) => {
     const { start, end } = nodeAt(root, b.text_path)
     return { start, end, value: b.text }
   })
@@ -276,8 +283,7 @@ function actBlocks(action, state, env) {
     const edit = 'set_text' in action ? () => action.set_text : 'append_text' in action ? (t) => t + action.append_text : (t) => truncated(t, action.truncate)
     return commit(state, rewrite(chosenTextNodes(state, env, action.blocks), edit))
   }
-  const blocks = blocksOf(env.on, env.unit, text)
-  const chosen = blocks ? select(blocks, action.blocks) : []
+  const chosen = actionBlocks(env, text, action.blocks)
   if (!chosen.length) return
   const { root } = scan(text)
   const spans = removals(text, chosen.map((b) => [nodeAt(root, b.remove_path.slice(0, -1)), nodeAt(root, b.remove_path)]))

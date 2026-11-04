@@ -207,6 +207,22 @@ test('5.1 §怎么算改动: a body too deep to read is the rule\'s error, not p
   }
 });
 
+test('5.1 §按块改: a block action that cannot act follows on_error, and leaves what the rules around it did', async () => {
+  const anthropic = '{"model":"m","messages":[{"role":"assistant","content":[{"type":"tool_use","id":"t","name":"f","input":{"q":"SECRET"}}]}]}';
+  const units = [[anthropic, {}, { blocks: { kind: 'tool_use' }, set_text: 'Z' }], ['{"a":"b"}', { path: '/v1/models' }, { blocks: {}, remove: true }], [anthropic, { path: '/v1/messages/count_tokens' }, { blocks: {}, remove: true }]];
+  for (const [body, more, action] of units) {
+    for (const on_error of ['forward', 'drop']) {
+      const list = rules(rule('before', { header: 'x-a', set: '1' }), rule('r', [{ header: 'x-b', set: '1' }, action], { on_error }));
+      const result = await tier2(unitOf(body, more), list);
+      assert.deepEqual(result.hits, ['before', 'r']);
+      assert.deepEqual(names(result.skipped), [['r', 'no-blocks']]);
+      assert.equal(result.verdict, on_error === 'drop' ? 'drop' : 'forward');
+      assert.equal(result.bytes, null);
+      assert.deepEqual(result.headers.map(([name]) => name), ['content-type', 'x-a']);
+    }
+  }
+});
+
 test('one readable pass per unit, however many rules read its body', async () => {
   const body = 'plain text with no hit '.repeat(100), list = Array.from({ length: 5 }, (_, i) => rule(`r${i}`, { drop: true }, { match: { body: `ABSENT${i}` } }));
   const spentOn = async (compiled) => { const budget = byteBudget(); await tier1(unitOf(body), compiled, budget); return budget.spent; };

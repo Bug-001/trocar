@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import zlib from 'node:zlib';
 import { full, RuleFault } from '../../src/rules/actions.mjs';
 import { applySteps, invertSteps } from '../../src/rules/edits.mjs';
+import { ruleBlocksOf, wireFormatOf } from '../../src/dissect/registry.mjs';
 
 const unitOf = (body, extra = {}) => ({
   host: 'api.example.com', path: '/v1/messages', method: 'POST', class: 'llm', harness: 'claude-code', pid: 42, headers: [], encoding: null,
@@ -265,12 +266,46 @@ test('a body with a NUL is not text, whichever way it got there', () => {
   assert.equal(full.decode(unitOf('{"a":"\\u0000"}')).text, '{"a":"\\u0000"}', 'an escape is no NUL byte');
 });
 
-test('a text action does not count the blocks that have no text', () => {
+test('a text action on a chosen block with no text path is no-blocks, and a removal still takes that block', () => {
   const body = JSON.stringify({ model: 'm', messages: [
-    { role: 'assistant', content: [{ type: 'text', text: 'old' }, { type: 'tool_use', id: 't', name: 'Bash', input: {} }] },
+    { role: 'assistant', content: [{ type: 'text', text: 'old' }, { type: 'tool_use', id: 't', name: 'Bash', input: { q: 'SECRET' } }] },
   ] });
-  assert.equal(parsed({ blocks: { newest: 1 }, set_text: 'new' }, body).messages[0].content[0].text, 'new');
-  assert.equal(parsed({ blocks: { kind: 'tool_use' }, set_text: 'new' }, body).messages[0].content[1].text, undefined);
+  for (const selector of [{ kind: 'tool_use' }, { newest: 1 }, { role: 'assistant' }]) {
+    for (const action of [{ set_text: 'x' }, { append_text: 'x' }, { truncate: 1 }, { replace: 'SECRET', with: 'x' }]) fails('no-blocks', () => run({ blocks: selector, ...action }, body));
+  }
+  assert.equal(parsed({ blocks: { kind: 'text' }, set_text: 'new' }, body).messages[0].content[0].text, 'new');
+  assert.equal(result({ blocks: { kind: 'image' }, set_text: 'new' }, body), body, 'no block chosen is nothing to do');
+  assert.deepEqual(parsed({ blocks: { kind: 'tool_use' }, remove: true }, body).messages[0].content.map((b) => b.type), ['text']);
+});
+
+test('a call whose arguments are a string takes a text action there, and nothing else moves', () => {
+  const chat = { model: 'm', messages: [{ role: 'assistant', content: 'said', tool_calls: [{ id: 'c', type: 'function', function: { name: 'f', arguments: '{"q":"SECRET"}' } }] }] };
+  const responses = { model: 'm', input: [{ type: 'function_call', name: 'f', arguments: '{"q":"SECRET"}', call_id: 'c' }] };
+  for (const [path, req, read] of [['/v1/chat/completions', chat, (r) => r.messages[0].tool_calls[0].function], ['/v1/responses', responses, (r) => r.input[0]]]) {
+    const body = JSON.stringify(req), edit = (action) => parsed({ blocks: { kind: 'tool_use' }, ...action }, body, { path });
+    assert.equal(read(edit({ set_text: '{}' })).arguments, '{}', path);
+    assert.equal(read(edit({ replace: 'SECRET', with: 'x' })).arguments, '{"q":"x"}', path);
+    assert.deepEqual({ ...read(edit({ set_text: '{}' })), arguments: read(req).arguments }, read(req), path);
+    assert.equal(judged({ blocks: { text: 'SECRET' } }, body, { path }), true, path);
+  }
+});
+
+test('the wire is told the way the readers tell it, by the headers too', () => {
+  const body = JSON.stringify({ model: 'm', max_tokens: 1, messages: [{ role: 'user', content: 'SECRET' }] });
+  const shapes = [[], [['anthropic-version', '2023-06-01']], [['Anthropic-Version', '2023-06-01']], [['anthropic-beta', 'x']], [['x-other', '1']]];
+  const told = new Set();
+  for (const path of ['/relay/x', '/v1/messages', '/v1/chat/completions', '/v1/responses', '/v1/messages/count_tokens', '/v1/models']) {
+    for (const headers of shapes) {
+      const label = `${path} ${JSON.stringify(headers)}`, action = { blocks: { text: 'SECRET' }, remove: true };
+      const format = wireFormatOf({ endpoint: path, req_body: body, req_headers: Object.fromEntries(headers.map(([n, v]) => [n.toLowerCase(), v])) });
+      const known = ruleBlocksOf(format), reached = !!known?.(JSON.parse(body)).some((b) => b.text === 'SECRET');
+      told.add(format);
+      if (known) assert.equal(result(action, body, { path, headers }).includes('SECRET'), !reached, label);
+      else fails('no-blocks', () => run(action, body, { path, headers }));
+      assert.equal(judged({ blocks: { text: 'SECRET' } }, body, { path, headers }), reached, label);
+    }
+  }
+  assert.ok(told.has('anthropic') && told.has('openai-chat') && told.has(null));
 });
 
 test('truncate cuts in bytes on a character boundary', () => {
@@ -284,10 +319,9 @@ test('truncate cuts in bytes on a character boundary', () => {
   assert.equal(result({ blocks: { role: 'user' }, truncate: 100 }, body('中')), body('中'));
 });
 
-test('a body with no blocks stays as it is', () => {
-  for (const [path, body] of [['/v1/models', '{"a":"b"}'], ['/v1/messages', 'not json']]) {
-    assert.equal(result({ blocks: {}, remove: true }, body, { path }), body);
-    assert.equal(result({ replace: 'a', with: 'x', blocks: {} }, body, { path }), body);
+test('an action on the blocks of a body that has none is no-blocks; a condition on them does not hold', () => {
+  for (const [path, body] of [['/v1/models', '{"a":"b"}'], ['/v1/messages', 'not json'], ['/v1/messages/count_tokens', '{"messages":[{"role":"user","content":"a"}]}']]) {
+    for (const action of [{ blocks: {}, remove: true }, { blocks: {}, set_text: 'x' }, { replace: 'a', with: 'x', blocks: {} }]) fails('no-blocks', () => run(action, body, { path }));
     assert.equal(judged({ blocks: {} }, body, { path }), false);
   }
 });

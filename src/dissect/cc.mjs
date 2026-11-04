@@ -155,14 +155,16 @@ export function dissectBlocks(req) {
 // non-string, is null. A key of a message (sub of one key) goes with its message unless it shares it.
 const nodeAt = (root, path) => path.reduce((n, k) => (n == null ? undefined : n[k]), root);
 const str = (x) => (typeof x === 'string' ? x : '');
-const TEXT_KEYS = ['text', 'thinking', 'refusal', 'description', 'content', 'output'];
+const TEXT_KEYS = ['text', 'thinking', 'refusal', 'description', 'content', 'output', 'arguments'];
 const textPathOf = (node, path, text) => {
   if (typeof text !== 'string') return null;
   if (node === text) return path;
+  if (node?.function?.arguments === text) return [...path, 'function', 'arguments'];
   const key = node && typeof node === 'object' ? TEXT_KEYS.find((k) => node[k] === text) : undefined;
   return key ? [...path, key] : null;
 };
-const textOf = (b) => [b?.text, b?.thinking, b?.content].find((x) => typeof x === 'string');
+// A call's arguments are read off the wire and not the block: the block holds them parsed, and on the wire they are one string, Chat's under `function`.
+const textOf = (b, node) => [b?.text, b?.thinking, b?.content, node?.arguments, node?.function?.arguments].find((x) => typeof x === 'string');
 // the wire's own naming, as the board reads it: a server-run tool's call and result, redacted thinking; anything else is JSON
 const kindOf = (type) => {
   const t = str(type);
@@ -193,7 +195,7 @@ export function ruleBlocksFrom(req, entries) {
       const parts = key ? node[key] : node, at = key ? [...path, key] : path;
       if (Array.isArray(parts) && parts.length) return parts.map((p, k) => out(p, [...at, k], typeof p === 'string' ? p : p?.text, [...at, k]));
     }
-    return [out(node, path, textOf(block), sub.length === 1 && !shared ? base : path)];
+    return [out(node, path, textOf(block, node), sub.length === 1 && !shared ? base : path)];
   });
 }
 export function ruleBlocks(req) {

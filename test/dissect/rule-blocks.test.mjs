@@ -111,11 +111,14 @@ test('a tool_result carries its tool\'s name through the id, \'\' with no such c
     { role: 'tool', tool_call_id: 'a', content: 'r' }, { role: 'tool', tool_call_id: 'x', content: 'r' }] }), ['shell', '']);
 });
 
-test('a tool call is no text: its arguments and encrypted reasoning are not offered for editing', () => {
+test('a call\'s arguments are its text where the wire holds them as one string; encrypted reasoning and structured input have none', () => {
   for (const wire of ['openai-responses', 'openai-chat']) for (const req of requests(wire)) for (const b of ruleBlocksOf(wire)(req)) {
-    assert.ok(!/not text|cipher/.test(b.text ?? ''));
-    if (b.kind === 'tool_use') assert.equal(b.text_path, null);
+    assert.ok(!/cipher/.test(b.text ?? ''));
+    if (b.kind === 'tool_use') { assert.doesNotThrow(() => JSON.parse(b.text)); assert.equal(b.text_path.at(-1), 'arguments'); }
   }
+  for (const req of requests('anthropic')) for (const b of ruleBlocksOf('anthropic')(req)) if (b.kind === 'tool_use') assert.equal(b.text_path, null);
+  const object = { input: [{ type: 'function_call', name: 'f', arguments: { q: 1 }, call_id: 'c' }] };
+  assert.equal(ruleBlocksOf('openai-responses')(object)[0].text_path, null);
 });
 
 test('Chat: a system or developer message is in the system section wherever it stands', () => {
