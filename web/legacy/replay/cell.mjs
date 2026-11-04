@@ -247,6 +247,11 @@ export function entryOf(cell, mode, got, upto = 0) {
   while (e.shown < upto && e.next != null && e.shown < CELL_CAP) e = grow(cell, mode, e, got).entry
   return e
 }
+// a body drawn ahead of the step it belongs to, at rest: the key press onto that step only sets what is drawn here (2.3 §正文预取)
+export function drawAhead(x) {
+  const cell = cellOf(x), got = cell && gotOf(cell)
+  if (got?.status === 'ok') entryOf(cell, onlyMode(cell, got) ?? modeOf(cell.bid), got)
+}
 export const clipLine = (shown, total, copy) => shown >= total ? '' : shown >= CELL_CAP ? C.atCap(shown, total, copy) : C.showing(shown, total)
 const lines = (chars) => Math.max(1, Math.min(20, Math.ceil((Number(chars) || 0) / 100)))
 // the Raw title: what the line breaks are, whether the copy is the bytes, and how many stream events the part was assembled from when it was

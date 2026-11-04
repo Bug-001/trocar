@@ -13,7 +13,7 @@ import { setMarkdown } from '../../../legacy/replay/kinds.mjs'
 const LINKED = /^(?:https?:\/\/|mailto:)/i
 const TAG_LINE = /^<\/?[A-Za-z][\w:.-]*(?:\s[^<>]*)?\/?>\s*$/
 const TAG_PAIR = /^<(([A-Za-z][\w:.-]*)(?:\s[^<>]*)?)>(.*)<\/\2>\s*$/
-const KEPT = 4 // parsed documents kept per reader: a slice's next read finds its tokens
+const KEPT = 20 // parsed documents kept per reader, past the bodies drawn ahead (2.3 §正文预取): a slice's next read finds its tokens
 
 // `<tag attrs>` or `<tag>value</tag>` alone on a line. It ends a paragraph, list, quote or table like any block; its value is bytes
 function tagLine(state, start, end, silent) {

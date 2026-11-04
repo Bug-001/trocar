@@ -54,7 +54,7 @@ import { openDetail, closeDetail, wireDetail } from './detail.mjs'
 import { initLayout } from './layout.mjs'
 import { renderSessionHead, wireSessionHead, captureGap, behindOf } from './header.mjs'
 import { stepBarHtml, roughStepHtml, wireStepBar } from './stepbar.mjs'
-import { loadBodies, bodyCache, clearOverrides, overrideScope, isRetryable } from './cell.mjs'
+import { loadBodies, bodyCache, clearOverrides, drawAhead, idle as whenIdle, overrideScope, isRetryable } from './cell.mjs'
 import { SESSION_NOT_LISTED, BACK_TO_SESSIONS } from '../labels/shell.mjs'
 import { CACHE_LEGEND, CACHE_LEGEND_UNK, KEYS_TITLE, KEY_LIST, RETRY, THIS_SESSION, REVIEW_TIP, MAINDIV_TIP, DIVIDER_TIP, RPBAR_TIP, moreLanes } from '../labels/replay.mjs'
 import { readFailure } from '../core/ui.mjs'
@@ -597,16 +597,24 @@ function openDesk(ctx, route0, makeView = legacyView) {
     const rows = [...st.reply, ...st.flat.filter((b, i) => s.openBlocks.has(keys[i]))]
     return [...new Set(rows.map((d) => d.ref).filter((r) => r && !bodyCache.has(r)))]
   }
-  // the reply parts' refs of the held steps up to NEAR on either side of `rid` on the anchor lane, not cached: read with the rest's
-  // own bodies so a step within reach draws its reply at once (2.3 §正文预取)
+  // the reply parts of the held steps up to NEAR on either side of `rid` on the anchor lane: their refs not cached are read with the
+  // rest's own bodies, and what came back is drawn ahead, one part per idle turn, so a step within reach draws its reply at once (2.3 §正文预取)
   const NEAR = 8
-  function nearRefs(rid) {
+  function nearParts(rid) {
     const calls = s.anchor ? s.anchor.calls : [], i = calls[s.playhead] && calls[s.playhead].rid === rid ? s.playhead : calls.findIndex((c) => c.rid === rid)
     if (i < 0) return []
     return calls.slice(Math.max(0, i - NEAR), i + NEAR + 1).flatMap((c) => {
       const st = deskStep(s.desk, c.rid)
-      return st.held ? st.reply.map((d) => d.ref).filter((r) => r && !bodyCache.has(r)) : []
+      return st.held ? st.reply : []
     })
+  }
+  const nearRefs = (rid) => nearParts(rid).map((d) => d.ref).filter((r) => r && !bodyCache.has(r))
+  let ahead = []
+  const drawNext = () => { const d = ahead.shift(); if (d) { drawAhead({ ...d, text_ref: d.ref }); whenIdle(drawNext) } }
+  function drawNear(rid) {
+    const idling = ahead.length > 0
+    ahead = nearParts(rid)
+    if (!idling) whenIdle(drawNext)
   }
   // what a resting playhead still lacks: its open bodies first, alone, so this step's reply never waits for the ±NEAR read that comes
   // after them (2.3 §正文预取); a body already asked for this target is not lacked again (a step's row and its step come in one file:
@@ -626,6 +634,7 @@ function openDesk(ctx, route0, makeView = legacyView) {
         refs.forEach((ref, i) => { if (isRetryable(got[i])) s.bodyFail.set(ref, got[i]); else s.bodyFail.delete(ref) })
         if (rid !== s.playRid || !s.anchor) return
         if (host && E) { view.window({ kind: 'step', busy: false }); s.renderRaw() } else { s.lastPhSig = null; missed = true }
+        drawNear(rid)
       },
     })
   }
