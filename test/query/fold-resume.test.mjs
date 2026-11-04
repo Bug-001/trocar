@@ -30,21 +30,23 @@ const at = (p) => JSON.stringify(new URL(p, import.meta.url).href)
 const SHAPE = { growth: 2_000, compactAt: 20_000, subEvery: 3, subLanes: 3, late: 2 }
 
 // The worker's background in a process of its own: slices of `ms`, an idle period (saveIndexes) after a slice with probability
-// `idle`, an abrupt exit after slice `kill` (0: never; at the end an idle period). Prints {slices, killed}.
+// `idle`, an abrupt exit after slice `kill` (0: never; at the end an idle period). Prints {slices, killed, ticks}: `ticks` = its
+// progress reports, one per member it folded.
 const WORKER = `
 await import(${at('../../src/query/named/index.mjs')})
 const { extendSession, saveIndexes } = await import(${at('../../src/query/named/session.mjs')})
 const { rng } = await import(${at('./big-session.mjs')})
 const [home, id, kill, idle, seed] = [process.argv[1], process.argv[2], Number(process.argv[3]), Number(process.argv[4]), Number(process.argv[5])]
 const r = rng(seed)
-let k = 0
-while (await extendSession({ home, writer: true }, id, 4)) {
+let k = 0, ticks = 0
+const ctx = { home, writer: true, progress: () => { ticks++ } }
+while (await extendSession(ctx, id, 4)) {
   if (r() < idle) saveIndexes()
-  if (++k === kill) { process.stdout.write(JSON.stringify({ slices: k, killed: true })); process.exit(0) }
+  if (++k === kill) { process.stdout.write(JSON.stringify({ slices: k, killed: true, ticks })); process.exit(0) }
   await new Promise((ok) => setImmediate(ok))
 }
 saveIndexes()
-process.stdout.write(JSON.stringify({ slices: k, killed: false }))`
+process.stdout.write(JSON.stringify({ slices: k, killed: false, ticks }))`
 
 async function worker(home, id, { kill = 0, idle = 0.2, seed = 1 } = {}) {
   const c = spawn(process.execPath, ['--require', NO_REAL_OS, '--input-type=module', '-e', WORKER, home, id, String(kill), String(idle), String(seed)], { stdio: ['ignore', 'pipe', 'pipe'] })
@@ -178,6 +180,45 @@ async function reopenAt(calls, M) {
 test('a reopened worker over a grown session folds only the new members: what it reads past opening at 4N is what it reads at N (3.5:42; 4.3 #7)', { timeout: 300_000 }, async () => {
   const M = 6, a = await reopenAt(300, M), b = await reopenAt(1200, M)
   assert.ok(b.read <= a.read + b.appended, `projection and fold log bytes read past opening at 300 / 1200 calls (+${M} new): ${JSON.stringify({ a, b })}`)
+})
+
+// A worker that comes back to a session and only reads it (cold: no live reduction) does not cost the session its reduction state
+// (4.3 §4 旁索引): the state stays in the fold log's sidecar, so the next member folds alone instead of rebuilding the session.
+test('a worker that only read an unchanged session leaves the reduction state: the next member folds alone (4.3 §4 旁索引)', { timeout: 120_000 }, async () => {
+  const home = path.join(tmpDir('trocar-idle-'), '.trocar'), s = bigSession({ home, ...SHAPE })
+  const state = () => loadSidecar({ file: foldLogFile(home, s.id) })?.parts['r.s']
+  s.append(300)
+  await worker(home, s.id, { idle: 0 })
+  assert.ok(state(), 'the fold left its state in the sidecar')
+  await worker(home, s.id, { idle: 0 })
+  assert.ok(state(), 'the state is still there after a worker that only read')
+  s.append(1)
+  const { ticks } = await worker(home, s.id, { idle: 0 })
+  assert.ok(ticks < 100, `the new member alone is folded, not the session: ${ticks} ticks`)
+})
+
+// The same read over a log the state does not reach (a worker killed after a save): the sidecar stays as it was, for the cut back.
+// A sidecar written over the whole log would say the state reaches the last frontier, and no fold would cut back.
+test('a read over a log its state does not reach leaves the sidecar, and the fold after it cuts back to the state (4.3 §4 旁索引)', { timeout: 120_000 }, async () => {
+  const home = path.join(tmpDir('trocar-idle-'), '.trocar'), s = bigSession({ home, ...SHAPE })
+  const side = sidecarOf(foldLogFile(home, s.id))
+  s.append(300)
+  await worker(home, s.id, { idle: 0 })
+  const saved = fs.readFileSync(side)
+  s.append(100)
+  await worker(home, s.id, { idle: 0 })
+  fs.writeFileSync(side, saved) // the sidecar the killed worker left, over the log it went on to write
+  await worker(home, s.id, { idle: 0 })
+  assert.ok(fs.readFileSync(side).equals(saved), 'the read wrote no sidecar')
+  s.append(1)
+  const { ticks } = await worker(home, s.id, { idle: 0 })
+  assert.ok(ticks < 200, `what lies past the state is folded, not the session: ${ticks} ticks`)
+  const ref = path.join(tmpDir('trocar-idle-'), '.trocar')
+  fs.cpSync(path.join(home, 'raw'), path.join(ref, 'raw'), { recursive: true })
+  while (await extendSession({ home: ref, writer: true }, s.id, Infinity));
+  const since = (await runQuery('session', { id: s.id }, { home })).calls[100].rid
+  assert.deepEqual(await answers(home, s.id, since), await answers(ref, s.id, since))
+  assert.deepEqual(differ(keyed(home, s.id), keyed(ref, s.id)), { lines: [], more: 0, last: true })
 })
 
 // A worker that only folds still writes the extraction context into the projection's sidecar (4.3 §4 旁索引). The projection holds

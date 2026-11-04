@@ -291,16 +291,21 @@ export function sealParts(deadline = Infinity) {
 // store holds `t` rows: an open cuts them off, and the state's rows with them), the fold log's: the state's step-order columns synced to
 // its frontier and, when the state is a live reduction writing into this file log (never a rebuild's, before it takes the log over),
 // that reduction's state (`r.s`, v8.serialize of R.snapshot()) and what it was folded under (`r.m`: REDUCE_V, the cut). Between adds
-// the log ends at the frontier line the sidecar covers to, so the state is the one the sidecar's indexes describe. A sidecar that
-// cannot be written is not one: the next open scans, the next fold rebuilds.
+// the log ends at the frontier line the sidecar covers to, so the state is the one the sidecar's indexes describe. A save with no
+// live reduction carries the `r.s` and `r.m` the sidecar was loaded with, so a read of a session that did not grow loses nothing.
+// When they cover less than the log's last frontier nothing is written: a sidecar over the whole log would say they reach it, and
+// resumed() would not cut the log back. No save was made, so `saved` and `savedAt` stand; only a cold state gets here, and it does
+// not checkpoint (fold). A sidecar that cannot be written is not one: the next open scans, the next fold rebuilds.
 function sidecars(store) {
   try { if (!store.indexed) store.saveIndex(extractSeed(store)); } catch { /* the next idle period */ }
   const st = fileLogs.get(store);
   if (!st || !store.indexed) return;
   try {
     const live = st.R && st.target == null && st.relay.cur === st.log;
+    const sv = st.log.saved, held = !live && sv && sv.parts['r.m'] && sv.parts['r.s'];
+    if (held && !(sv.bytes > st.log.frontier)) return;
     st.log.saveIndex([...dumpColumns(sync(st.cols, st.log)),
-      ...(live ? [['r.s', v8.serialize(st.R.snapshot())], ['r.m', [JSON.stringify({ rv: REDUCE_V, cut: st.cut })]]] : []),
+      ...(live ? [['r.s', v8.serialize(st.R.snapshot())], ['r.m', [JSON.stringify({ rv: REDUCE_V, cut: st.cut })]]] : held ? [['r.s', held], ['r.m', sv.parts['r.m']]] : []),
       ...filesParts(st.log)], filesAt(st.log)); // where the answer files stand (ctx-files.mjs writeFiles)
   } catch { /* the next idle period */ }
   st.saved = st.n; st.savedAt = performance.now();
