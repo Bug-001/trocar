@@ -53,6 +53,16 @@ for (const os of ['darwin', 'win32']) {
     assert.equal(fs.existsSync(path.join(w.home, '.codex', '.env')), false, 'no entry written')
   })
 
+  // 1.6 §3.3: each row says what changes in its file (a row of a bare path said nothing); V85's plan = act is model-on.test.mjs's
+  test(`1.6 §3.3 (${os}): every on plan row is "path: what changes there"`, async () => {
+    const w = await modelWorld({ os, commands: ['codex', 'opencode'] })
+    assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+    const planned = (await on(w, os, ['--dry-run', '--json'])).io.json().planned
+    const text = (await on(w, os, ['--dry-run'])).io.text()
+    assert.ok(planned.length >= 2 && planned.every((p) => p.paths.length), JSON.stringify(planned))
+    for (const f of planned.flatMap((p) => p.paths)) assert.match(text, new RegExp(`${f.replace(w.home, '~').replace(/[\\^$.*+?()[\]{}|]/g, '\\$&')}: \\S`), `${f}: the row says what changes there\n${text}`)
+  })
+
   // D61 / 1.6 §3.3 (H-2): the login entry is install's, so an `on` with none would leave the agents pointing at doors nobody opens
   // after the next login — it refuses before its first write. A --dry-run says so in `blocked` and still exits 0.
   test(`1.6 §3.3 (${os}): no login entry registered → autostart-missing, exit 2, HOME byte for byte unchanged; --dry-run exits 0 with it in blocked`, async () => {

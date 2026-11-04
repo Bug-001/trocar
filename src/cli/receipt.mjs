@@ -32,6 +32,12 @@ const CARRIER_WORDS = Object.freeze({
 export const formWords = (id) => { const s = String(id ?? '').split('.').slice(1).join('.'); return FORM_WORDS[s] || s.replace(/-/g, ' ') || String(id ?? '') }
 /** A certificate carrier kind (`config-key`, `pem-block`) as what it is to the reader. */
 export const carrierWords = (kind) => CARRIER_WORDS[kind] || String(kind ?? '').replace(/-/g, ' ')
+// 1.6 §3.3: what an `on` plan row says changes in its file, by the route's kind (C.2 `planned[].kind`; the keys are the item's `keys`)
+const ROUTE_WORDS = Object.freeze({ 'json-key': 'its proxy setting', 'dotenv-block': "trocar's proxy block", 'plugin-file': "trocar's routing plug-in", 'switch-file': "trocar's switch file" })
+export const routeWords = (p) => ROUTE_WORDS[p.kind] || String(p.kind ?? '').replace(/-/g, ' ')
+/** 1.6 §3.2: what an install plan row (planInstall's) says changes in its file — a config key by its key, a plug-in loaded from that file by the line
+ *  that loads it, any other carrier in carrierWords' words. */
+export const planWords = (r) => (r.carrier === 'config-key' && r.keys ? `its certificate setting ${r.keys.join('.')}` : `${r.loader ? 'the line that loads ' : ''}${carrierWords(r.carrier)}`)
 
 const BARE = /\u001b\[\d+m/g
 
@@ -122,7 +128,8 @@ export function formatPlan(p, { home = null, platform = 'linux', command = 'on',
   return fit([
     c.bold(`trocar ${command} will write ${items.length} file${items.length === 1 ? '' : 's'}:`),
     ...pairs(items.map((i) => [i.what, i.detail]), { home }),
-    `A copy of every file of yours it changes goes to ${backups}/ first.`,
+    // only when it edits a file of yours (an entry): trocar's own files and the ones it makes have no earlier bytes to keep
+    ...((p.entries || []).length ? [`A copy of every file of yours it changes goes to ${backups}/ first.`] : []),
     ...watchLines(p.watch, t).map((l) => `  ${l}`),
     ...(p.skipped && p.skipped.length ? [`Skipped: ${p.skipped.map((s) => `${t(s.what)} (${s.reason})`).join('; ')}`] : []),
     ...(p.edited || []).map((e) => `You changed the proxy setting of ${e.harness}: ${e.where || 'its proxy field'} is now ${e.now ?? 'empty'} (trocar left ${e.was ?? 'empty'} there). Going on takes your value as the upstream and points the setting back at trocar.`),

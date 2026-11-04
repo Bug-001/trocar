@@ -11,7 +11,7 @@ import { refuseOldManifest, readManifest, saveManifest } from '../off/manifest.m
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
 import { opLockFile, standalonePath, launcherPath, standaloneCommand } from '../off/paths.mjs'
 import { isInteractive, confirm } from '../off/io.mjs'
-import { fit, tilde, planItems, formWords, carrierWords, commandLine } from './receipt.mjs'
+import { fit, tilde, planItems, formWords, carrierWords, planWords, commandLine } from './receipt.mjs'
 import { pairs, wrap } from './text.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
 import { EVENT } from '../collector/core/codes.mjs'
@@ -115,7 +115,7 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
     const harnesses = deps.harnesses || await (await import('../collector/harness/index.mjs')).loadHarnesses()
     const ctx = sourcesCtx({ os: platform, home, env, dirs: b.dirs, policy: b.policy, which: deps.which || null, fs })
     const need = await missingOf(only, { platform, harnesses, ctx, home, rootStore: b.rootStore, fs })
-    const rows = planInstall({ os: platform, harnesses, ctx }).filter(need.row)
+    const rows = planInstall({ os: platform, harnesses, ctx, home, owns: deps.owns || ownsBy({ os: platform, home, fs }), fs }).filter(need.row)
     // the login entry is install's (D61: registered AND started here, 4.11 §1 install 7; 4.9 §4, 4.8 §7): the arch's unit, or the test's `deps.unit`
     const unit = deps.unit !== undefined ? deps.unit : (await (await import('../collector/daemon.mjs')).loadArch(platform)).unit.userUnit({ home, node: process.execPath, script: deps.script || process.argv[1], run: deps.exec || null, env, ...(deps.spawn ? { spawn: deps.spawn } : {}) })
     const root = deps.root || packageRoot()
@@ -125,7 +125,7 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
     const carrierOf = (r) => (r.carrier === 'root'
       ? 'reads your user trust store'
       : r.paths && r.paths.length
-        ? `${r.paths.map((p) => tilde(p, home)).join(', ')}: ${r.keys ? r.keys.join('.') : carrierWords(r.carrier)}` // 1.6 §3.2: what changes there, in the receipt's words when no key says it
+        ? `${r.paths.map((p) => tilde(p, home)).join(', ')}: ${planWords(r)}` // 1.6 §3.2: what changes there
         : `path not known yet: the place of its ${r.carrier} could not be resolved on this machine`)
     const planned = [
       ...(only && !need.root ? [] : [{ what: 'root', detail: "this machine's own root certificate, trusted for your user (the system asks you once; the key cannot be exported)" }]),
@@ -294,7 +294,7 @@ async function missingOf(only, { platform, harnesses, ctx, home, rootStore, fs }
   const root = manifest && manifest.install ? await rootOf({ dir, m: manifest, rootStore, fs }) : null
   const missing = setupOf(harnesses.find((d) => d.name === only), { os: platform, manifest, ctx, root, fs }).missing
   const forms = new Set(missing.map((x) => x.form))
-  return { row: (r) => r.harness === only && forms.has(r.form), root: missing.some((x) => x.what === 'root-missing') }
+  return { row: (r) => r.harness === only && (r.form == null || forms.has(r.form)), root: missing.some((x) => x.what === 'root-missing') } // form null: rule U's file, the harness's own
 }
 
 /** The board's port (4.4 §Plan 「端口」), chosen once by install: none free (or the file cannot be written) is a pending row with the reason, never a throw. */

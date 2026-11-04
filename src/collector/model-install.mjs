@@ -179,7 +179,7 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
       if (!done.has(f.cert)) done.set(f.cert, await carrier(desc, c))
       carriers.push({ harness: desc.name, form: f.id, carrier: c.kind, ...done.get(f.cert) })
     }
-    for (const src of pm.userCertFiles || []) ruleU(desc, src)
+    for (const { file, why } of ruleUFiles(desc, ctx, { home, owns, fs })) ruleU(desc, file, why)
   }
 
   // d · the autostart unit. It carries this shell's NODE_EXTRA_CA_CERTS: the door's upstream trust includes the daemon's own (4.11 §3 ⑭), and a
@@ -226,10 +226,8 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
       if (c.kind === 'config-key') {
         const at = readSrc({ file: c.file, format: c.format, keys: c.keys }, ctx)
         if (at.error) return { state: 'skipped', code: 'config-unreadable', why: `${at.where}: ${at.error}` }
-        const inEnv = c.semantics === 'add' && readSrc({ env: c.keys.at(-1) }, ctx).set // CM10: absent in the settings AND the install env
         const file = resolveLoc(c.file, ctx)[0]
-        if (at.set && !(m.entries.some((e) => e.kind === 'json-key' && e.phase === 'install' && e.path === file && JSON.stringify(e.keys) === JSON.stringify(c.keys)))) return { state: 'rule-u' }
-        if (inEnv) return { state: 'rule-u' }
+        if (keyIsUsers(c, ctx, home)) return { state: 'rule-u' }
         if (c.semantics === 'replace') { // CM9: Node's own roots, the user CAs the key makes ineffective, the trocar root; no system roots
           const bundle = path.join(dir, 'ca', `bundle-${desc.name}.pem`)
           const merged = (c.merges || []).flatMap((s) => userCertsOf(desc, s))
@@ -280,13 +278,8 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
     })
   }
 
-  // rule U: a setting that already names a certificate file → a marked block at its end, only in the user's own file
-  function ruleU(desc, src) {
-    const r = readSrc(src, ctx)
-    if (r.error || !r.set || typeof r.value !== 'string') return
-    if (m.entries.some((e) => e.kind === 'json-key' && e.phase === 'install' && e.value === r.value)) return // trocar's own key, set by this install
-    const file = path.isAbsolute(r.value) ? r.value : path.resolve(home, r.value)
-    const why = usersFileWhy(file, { fs, owns })
+  // rule U: a setting that already names a certificate file → a marked block at its end, only in the user's own file (ruleUFiles: which, and why not)
+  function ruleU(desc, file, why) {
     if (why) { carriers.push({ harness: desc.name, carrier: 'pem-block', path: file, state: 'skipped', code: NOT_USERS, why }); return }
     try {
       // ㉒: a block this manifest placed for an older root comes out by its marks (the user's bytes outside them stay, read and written as bytes),
@@ -307,25 +300,56 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
   }
 }
 
+// a path inside trocar's own tree (~/.trocar): a setting that names one was set by install (trocar's bundle or root), never the user's own file
+const inTrocar = (file, home) => path.resolve(home, file).startsWith(path.join(home, '.trocar') + path.sep)
+
+/** Is a `config-key` carrier's setting the user's already (P4, CM10)? Set to a file outside trocar's tree — or, for an `add` key, set in the install
+ *  env — install leaves the key alone and rule U appends to that file instead. Read by install and by its plan alike. */
+function keyIsUsers(c, ctx, home) {
+  const at = readSrc({ file: c.file, format: c.format, keys: c.keys }, ctx)
+  if (at.set && !(typeof at.value === 'string' && inTrocar(at.value, home))) return true
+  return c.semantics === 'add' && !!readSrc({ env: c.keys.at(-1) }, ctx).set
+}
+
+/** Rule U's files (4.11 P4) for one harness, from its `userCertFiles` settings as they are now: each file one names, once, in the descriptor's order,
+ *  outside trocar's own tree → [{ file, why }] (`why`: not this user's own file — said, never written). The one list install acts on and its plan
+ *  names (1.6 V85: the plan names every file install changes). */
+export function ruleUFiles(desc, ctx, { home, owns, fs = nodeFs }) {
+  const out = []
+  for (const src of desc.proxyMode.userCertFiles || []) {
+    const r = readSrc(src, ctx)
+    if (r.error || !r.set || typeof r.value !== 'string') continue
+    const file = path.isAbsolute(r.value) ? r.value : path.resolve(home, r.value)
+    if (!inTrocar(file, home) && !out.some((x) => x.file === file)) out.push({ file, why: usersFileWhy(file, { fs, owns }) })
+  }
+  return out
+}
+
 const pick = (o, keys) => Object.fromEntries(keys.filter((k) => o && o[k] != null).map((k) => [k, o[k]]))
 
 /** What install would place, read only (the plan 1.6 §1.6 prints before it asks): one row per present form → { harness, form, carrier }. */
 // The certificate carrier of one form, as a path and a key: whatever shape the descriptor uses for it (a config file and its keys, a plugin's
 // directory and its loader, a wrapper's bin directory) resolved the way `on` and `install` resolve it — so the plan names the file it will change
 // (1.6 §1.4「计划写全」) instead of a kind alone. A carrier whose place cannot be resolved on this machine says so, and why.
-const carrierLoc = (c) => c.file || (c.loader && c.loader.file) || c.dir || c.binDir || null
-const carrierKeys = (c) => c.keys || (c.loader && c.loader.keys) || (c.file && c.file.keys) || null
+const carrierLoc = (c) => c.file || c.dir || c.binDir || null
+const carrierKeys = (c) => c.keys || (c.file && c.file.keys) || null
 
-export function planInstall({ os, harnesses, ctx }) {
+export function planInstall({ os, harnesses, ctx, home, owns, fs = nodeFs }) {
   const rows = []
   for (const desc of harnesses.filter((d) => d.proxyMode)) {
-    for (const f of desc.proxyMode.forms.filter((x) => x.os.includes(os) && isPresent(x, ctx))) {
+    const forms = desc.proxyMode.forms.filter((x) => x.os.includes(os) && isPresent(x, ctx))
+    for (const f of forms) {
       const c = f.cert === 'root' ? null : desc.proxyMode.certs[f.cert]
       const when = c && c.when ? holds(c.when, ctx) : true
       const carrier = !c || when === false ? 'root' : c.kind
-      const loc = carrier === 'root' ? null : carrierLoc(c)
-      const paths = loc ? resolveLoc(loc, ctx) : []
-      rows.push({ harness: desc.name, form: f.id, carrier, paths, keys: carrierKeys(c || {}) || null })
+      if (carrier === 'config-key' && keyIsUsers(c, ctx, home)) continue // the key stays the user's: rule U's file below is what changes
+      // a plug-in is two places when a file loads it: its folder (the plug-in file goes there) and the loader file (a line that loads it)
+      const places = carrier === 'root' ? [{ loc: null }] : c.kind === 'plugin' && c.loader ? [{ loc: c.dir }, { loc: c.loader.file, keys: c.loader.keys, loader: true }] : [{ loc: carrierLoc(c), keys: carrierKeys(c) }]
+      for (const { loc, keys = null, loader } of places) rows.push({ harness: desc.name, form: f.id, carrier, paths: loc ? resolveLoc(loc, ctx) : [], keys: keys || null, ...(loader ? { loader } : {}) })
+    }
+    // rule U, as install runs it: one block per file, placed by the first harness whose settings name it (the next finds it there)
+    if (forms.length) for (const { file, why } of ruleUFiles(desc, ctx, { home, owns, fs })) {
+      if (!why && !rows.some((r) => r.carrier === 'pem-block' && r.paths[0] === file)) rows.push({ harness: desc.name, form: null, carrier: 'pem-block', paths: [file], keys: null })
     }
   }
   return rows

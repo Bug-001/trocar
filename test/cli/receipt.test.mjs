@@ -414,3 +414,13 @@ test('the standalone trocar-off is printed as a runnable command: on win32 the .
   for (const p of ['darwin', 'linux']) assert.equal(standaloneCommand(posix, p), posix)
   assert.ok(!formatOnReceipt({ ...newReceipt('on'), ok: true, standalone: posix }, { platform: 'darwin' }).includes('.cmd'))
 })
+
+// D58: the plan says a copy of your files goes to the backups only when it changes a file of yours (an entry); trocar's own files have none to keep
+test('formatPlan: the backup line only when the plan changes a file of yours', async () => {
+  const { formatPlan } = await import('../../src/cli/receipt.mjs')
+  const home = '/home/a'
+  const own = { owned: [{ harness: 'dsh', path: '/home/a/.trocar/collector/plugins/dsh/index.js', role: 'plugin' }] }
+  const edits = { ...own, entries: [{ harness: 'claude-code', path: '/home/a/.claude/settings.json', keys: ['env', 'NODE_EXTRA_CA_CERTS'] }] }
+  assert.doesNotMatch(formatPlan(own, { home }), /\.trocar\/backup/)
+  assert.match(formatPlan(edits, { home }), /\.trocar\/backup/)
+})
