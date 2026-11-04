@@ -27,19 +27,18 @@ export const PRICING_DIGEST = createHash('sha1').update(JSON.stringify(DEFAULT_P
 
 const isRow = (v) => Array.isArray(v) && v.length === 4 && v.every((n) => typeof n === 'number' && n >= 0);
 
-// loadPricing(p) → { pricing, source }. Merges a valid config file over the defaults (each row must
-// be [4 non-negative numbers]); malformed rows are ignored (defaults win) so a typo can't zero a cost.
+// loadPricing(p) → { pricing, source, unreadable? }. Merges a valid config file over the defaults (each row must
+// be [4 non-negative numbers]); malformed rows are ignored (defaults win) so a typo can't zero a cost. A file that is there
+// but does not read, parse or hold a JSON object leaves the defaults whole, and `unreadable` says why; no file is no failure.
 export function loadPricing(p) {
   const out = { ...DEFAULT_PRICING };
-  let source = 'default';
+  if (!p || !existsSync(p)) return { pricing: out, source: 'default' };
   try {
-    if (p && existsSync(p)) {
-      const cfg = JSON.parse(readFileSync(p, 'utf8'));
-      if (cfg && typeof cfg === 'object') {
-        for (const [k, v] of Object.entries(cfg)) if (isRow(v)) out[k] = v;
-        source = p;
-      }
-    }
-  } catch { /* malformed file → defaults */ }
-  return { pricing: out, source };
+    const cfg = JSON.parse(readFileSync(p, 'utf8'));
+    if (cfg === null || typeof cfg !== 'object' || Array.isArray(cfg)) return { pricing: out, source: 'default', unreadable: `${p} does not hold a JSON object` };
+    for (const [k, v] of Object.entries(cfg)) if (isRow(v)) out[k] = v;
+    return { pricing: out, source: p };
+  } catch (e) {
+    return { pricing: out, source: 'default', unreadable: e.message };
+  }
 }

@@ -6,6 +6,7 @@
 import path from 'node:path';
 import { loadPricing, PRICING_DIGEST } from '../../view/pricing.mjs';
 import { statKey } from '../warm.mjs';
+import { PRICING_PROBLEMS } from '../../health/codes.mjs';
 
 export const params = Object.freeze([]);
 const UNIT = '$/Mtok';
@@ -14,10 +15,10 @@ const UNIT = '$/Mtok';
  *  absent). `priceTable` and `pricingId` both ask this, so they cannot disagree about which file the answer depends on. */
 const pricingFile = ({ home, env }) => (env ?? process.env).TROCAR_PRICING || path.join(home, 'pricing.json');
 
-/** The table an answer prices with, and where it came from. */
+/** The table an answer prices with, where it came from, and the `errors` entry its answer carries when the file did not read. */
 export function priceTable({ home, env }) {
-  const { pricing, source } = loadPricing(pricingFile({ home, env }));
-  return { table: pricing, source };
+  const { pricing, source, unreadable } = loadPricing(pricingFile({ home, env }));
+  return { table: pricing, source, ...(unreadable ? { problem: { where: 'pricing', code: PRICING_PROBLEMS[0], reason: unreadable } } : null) };
 }
 
 /** The price identity (4.4 §条件 GET): which file, that file's identity, and the built-in table, which changes with a version
@@ -27,8 +28,9 @@ export function pricingId({ home, fs, env }) {
   return [f, statKey(f, fs), PRICING_DIGEST];
 }
 
-export async function run({ home, env }) {
-  const { table, source } = priceTable({ home, env });
+export async function run({ home, env, errors }) {
+  const { table, source, problem } = priceTable({ home, env });
+  if (problem) errors.push(problem);
   return {
     models: Object.entries(table).map(([model, [input, output, cache_write, cache_read]]) =>
       ({ model, input, output, cache_read, cache_write, unit: UNIT })),
