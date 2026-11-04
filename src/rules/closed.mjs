@@ -41,4 +41,7 @@ export const LIMITS = Object.freeze({
   releaseAfterMs: 86_400_000,
   delayMs: 60_000,
   maxDelayMs: 60_000,
+  bodyBytes: 64 * 1024 * 1024,
+  loadMs: 10_000,
+  regexLoadMs: 2_000,
 })

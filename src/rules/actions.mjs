@@ -5,12 +5,14 @@ import { Buffer, isUtf8 } from 'node:buffer'
 import { scanJson, nodeAt } from '../dissect/json-scan.mjs'
 import { ruleBlocksFor } from '../dissect/registry.mjs'
 import { sseEvents } from '../dissect/sse-spans.mjs'
+import { LIMITS } from './closed.mjs'
 import { parseCondition } from './conditions.mjs'
 import { checkHeaderSet } from './headers.mjs'
 import { spansToSteps, applySteps } from './edits.mjs'
-import { actionKind } from './validate.mjs'
+import { actionKind, conditionsOf } from './validate.mjs'
 
-const MAX_BODY = 64 * 1024 * 1024
+const MAX_BODY = LIMITS.bodyBytes
+const STRING_WIDTHS = ['a', '中']
 const INFLATE = new Map([['gzip', 'gunzipSync'], ['x-gzip', 'gunzipSync'], ['deflate', 'inflateSync'], ['br', 'brotliDecompressSync'], ['zstd', 'zstdDecompressSync']])
 // A hit this close after a backslash may start inside an escape: \uXXXX is the longest, its last digit five bytes on.
 const ESCAPE_REACH = 5
@@ -356,6 +358,32 @@ function judge(rule, unit, decoded) {
   return !!blocks && select(blocks, m.blocks).length > 0
 }
 
+function* regexesOf(node) {
+  if (node.t === 're') yield node.v
+  for (const inner of node.of ?? []) yield* regexesOf(inner)
+}
+
+// V8 compiles a regex once per string width, on first use. `before` runs ahead of each one, for the load's clock (5.1 §规则进程「载入有时限」).
+function warm(rule, before) {
+  const run = (source, flags) => {
+    before()
+    const re = regex(source, flags)
+    for (const sample of STRING_WIDTHS) {
+      re.lastIndex = 0
+      re.test(sample)
+    }
+  }
+  const selectors = [rule.match.blocks, ...rule.do.map((action) => action.blocks)].filter((selector) => selector?.text !== undefined)
+  const nodes = [...[...conditionsOf(rule.match)].map(({ key, value }) => parseCondition(value, { key })), ...selectors.map(({ text }) => parseCondition(text, { key: 'body' }))]
+  for (const source of nodes.flatMap((node) => [...regexesOf(node)])) {
+    run(source, 'u')
+    run(source, 'gu')
+  }
+  for (const action of rule.do) {
+    if (actionKind(action) === 'replace') run(action.literal ? escaped(action.replace) : action.replace, 'gu')
+  }
+}
+
 /** The rule process's half of a rule, injected into applyRules: `decode(unit)` → `{bytes, text|null}`, `judge(rule, unit, decoded)` → boolean,
- *  `act(action, state, {on, unit})` moves `state` = `{bytes, text, headers, steps}` on. All three throw RuleFault. */
-export const full = { decode, judge, act }
+ *  `act(action, state, {on, unit})` moves `state` = `{bytes, text, headers, steps}` on. All three throw RuleFault. `warm(rule, before)` is the load's, not applyRules's. */
+export const full = { decode, judge, act, warm }
