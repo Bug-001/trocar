@@ -120,14 +120,15 @@ test('1.4: the landed item is what is on top at its own top edge', { skip: nextO
         const el = document.querySelector('#ctxwin'), t = el.querySelector('.cblk.is-new')
         if (!t) return null
         const a = t.getBoundingClientRect(), hit = document.elementFromPoint(a.left + 24, a.top + 8)
-        return { at: Math.round(a.top - el.getBoundingClientRect().top), own: t.contains(hit), hit: hit?.className ?? null }
+        return { at: Math.round(a.top - el.getBoundingClientRect().top), h: el.clientHeight, own: t.contains(hit), hit: hit?.className ?? null }
       })
       if (x) rows.push(x)
     }
   })
   console.log(`# landed rows at ${rows.map((x) => x.at)} px`)
   assert.ok(rows.some((x) => x.at <= 2), 'some step lands on a 「新」 row at the box top')
-  for (const x of rows) assert.ok(x.own, JSON.stringify(x))
+  // a row off the box has no pixel to hit: the case judges what the box shows
+  for (const x of rows.filter((r) => r.at >= 0 && r.at + 8 < r.h)) assert.ok(x.own, JSON.stringify(x))
 })
 
 // 2.3 §窗口按 bid 打补丁 · rule 4: inside open cards only the groups within one window height above and below the visible box are
