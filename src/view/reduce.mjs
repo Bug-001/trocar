@@ -14,7 +14,7 @@
 import { createAnalyzer, stepOrder, OrderBound, breakOf, blockDiff, compactionMeta, unparsedErrMsg, laneMeta, replayLedger } from './analyze.mjs';
 import { callRow, itemsView } from './board.mjs';
 import { compareStep } from './step-order.mjs';
-import { compactionVerdict } from '../identity/session-identity.mjs';
+import { compactionVerdict, compactionBaseline } from '../identity/session-identity.mjs';
 import { boardDissectorOf } from '../dissect/registry.mjs';
 import { COMP_KEYS, sharedLines, taskOf, HEAD } from './blockmeta.mjs';
 import { posCmp, lru, num52, numTable } from '../query/projection.mjs';
@@ -804,9 +804,10 @@ function flatFold(d, { at, B, cacheOf, pushOf, emit, newSub, baseOf, lastOf, int
     // 3.4: a call whose context is unknown (a body that does not parse; a partial context, an unstored WebSocket request included) has
     // no observed message count: no compaction verdict, and not the next one's predecessor
     const noContext = !!x.unparsed || x.wire.contextState === 'partial';
-    const verdict = noContext ? null : compactionVerdict(S.info, { hint: h.compaction === true, marker: h.compactionMarker === true, msgCount: x.msgCount || 0 });
+    const cur = { hint: h.compaction === true, marker: h.compactionMarker === true, msgCount: x.msgCount || 0, failed: !!x.error };
+    const verdict = noContext ? null : compactionVerdict(S.info, cur);
     const comp = compactionMeta(verdict);
-    if (verdict) S.info = { msgCount: x.msgCount || 0, marker: h.compactionMarker === true, hinted: verdict.basis === 'hint' };
+    if (verdict) S.info = compactionBaseline(S.info, cur, verdict);
     const brk = cacheOf(baseOf(S.base), list, attrs, x, comp.compaction || comp.lands, x.usage);
     const rq = requestOf(x, list, B);
     const call = {

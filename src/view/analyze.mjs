@@ -22,7 +22,7 @@ import { auxKindOf, hintsOf, pathContext } from '../dissect/harnesses.mjs'
 import { sharesBody } from '../dissect/request-body.mjs'
 import { failedOf } from '../dissect/endpoints.mjs'
 import { compareStep } from './step-order.mjs'
-import { compactionVerdict, hasCompactionPreamble } from '../identity/session-identity.mjs'
+import { compactionVerdict, compactionBaseline, hasCompactionPreamble } from '../identity/session-identity.mjs'
 // Envelope drift guard (R1): the D10 envelope stores the response under `resp`, demo v0 under
 // `response`. Reading `.response` directly is the bug class that silently killed every HTTP status
 // on real captures — so go through the shared helper, never the raw key.
@@ -705,9 +705,9 @@ export function createAnalyzer({ keep = true, from = null } = {}) {
     // 3.4: a request stored in part (the collector's req_* labels, the ETL's context_state 'partial') shows what arrived,
     // not the context the model saw: its message count is no observation, so no verdict and no new baseline
     const blindCount = step.reqIncomplete || step.ctxPartial
-    const verdict = blindCount ? { compaction: false }
-      : compactionVerdict(st.prevInfo, { hint: h.compaction === true, marker, msgCount: msgs.length, preamble: hasPreamble })
-    if (!blindCount) st.prevInfo = { msgCount: msgs.length, marker, preamble: hasPreamble, hinted: verdict.basis === 'hint' }
+    const cur = { hint: h.compaction === true, marker, msgCount: msgs.length, preamble: hasPreamble, failed: step.error }
+    const verdict = blindCount ? { compaction: false } : compactionVerdict(st.prevInfo, cur)
+    if (!blindCount) st.prevInfo = compactionBaseline(st.prevInfo, cur, verdict)
     let newMsgs
     if (verdict.compaction || verdict.lands) {
       Object.assign(step, compactionMeta(verdict, preambleNew))
