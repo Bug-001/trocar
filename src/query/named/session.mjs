@@ -29,13 +29,13 @@
 import nodeFs from 'node:fs';
 import v8 from 'node:v8';
 import { reduction, memoryLog, BlockUnread, REDUCE_HEAP, LEDGER_BYTES, REDUCE_V } from '../../view/reduce.mjs';
-import { openFoldLog, LOG_BYTES } from '../fold-log.mjs';
+import { foldStale, openFoldLog, LOG_BYTES } from '../fold-log.mjs';
 import { trocarHome } from '../../paths.mjs';
 import { extractMembers, extractSeed, blockAt, CHUNK_STORED, TAIL_HEAP, releaseTails } from '../../view/extract.mjs';
 import { compareStep } from '../../view/step-order.mjs';
 import { recordsAt, releaseDecoded, STRETCH_HEAP } from '../records.mjs';
 import { indexRows, sessionGroups, sessionFacts } from '../rows.mjs';
-import { openProjection, STORE_HEAP } from '../projection.mjs';
+import { openProjection, projectionStale, STORE_HEAP } from '../projection.mjs';
 import { releaseParts } from '../line-file.mjs';
 import { warmCache, fsTag, heapBudget, heapCeiling, hold, liveHeap, usedHeap, yieldCaches } from '../warm.mjs';
 import { parseTextRef } from '../../raw/refs.mjs';
@@ -213,6 +213,8 @@ const works = new Map();
 // end; a slice brings the head's `pending` no further than `seen` (backlog). `reread` on disk tells the next worker.
 const rereads = new Set();
 const rereading = (ctx, id) => ctx.writer === true && rereads.has(id);
+/** rereadingNow(id) → whether this process is re-reading the session: the worker's scheduler asks at a slice's boundary. */
+export const rereadingNow = (id) => rereads.has(id);
 const isRebuilt = (e) => e.code === 'projection-rebuilt';
 // A rebuild just said (`rebuilt`), or the marker of a worker that was killed, with a tier-1 head of this CTX_V on disk: a re-read. With
 // any other head there is no answer to keep: the session folds as a first read, and a marker goes.
@@ -231,6 +233,8 @@ const stores = new Map();
 function storeOf(ctx, id, k) {
   let s = stores.get(k);
   if (s) { stores.delete(k); stores.set(k, s); return s; }
+  // the marker before the open that rebuilds: a kill between the two loses no re-read
+  if (ctx.writer === true && (projectionStale({ home: ctx.home, fs: ctx.fs, key: id }) || foldStale({ home: ctx.home, fs: ctx.fs, key: id }))) rereadOn(ctx, id, true);
   const opened = [];
   s = openProjection({ home: ctx.home, fs: ctx.fs, key: id, write: ctx.writer === true, errors: opened });
   s.opened = opened; s.session = id;
@@ -554,11 +558,14 @@ export async function extendSession(ctx, id, budgetMs) {
   if (rereading(ctx, s.id)) {
     stops.delete(s.id);
     heads.delete(s.id); // what this worker wrote at this mark may be from before the rebuild
-    if ((s.mark == null || s.files) && putHead(ctx, s)) { // the marker goes only behind a whole answer; a write that failed ends this turn, and the next request, follow, sweep or worker tries again
-      rereads.delete(s.id); oldDone.delete(s.id);
+    if ((s.mark == null || s.files) && putHead(ctx, s, null, (e) => writeFailed(ctx, s.id, e))) { // the marker goes only behind a whole answer; a write that failed ends this turn, and the next request, kick, follow, sweep or worker tries again
+      rereads.delete(s.id); oldDone.delete(s.id); writeFails.delete(s.id);
       try { clearReread(ctx.home ?? trocarHome(), s.id, ctx.fs || nodeFs); } catch { /* the next worker reads it once more */ }
     }
-  } else if (stops.delete(s.id)) putHead(ctx, s); else headAt(ctx, s); // a stop is cleared at once
+  } else {
+    if (s.files) writeFails.delete(s.id);
+    if (stops.delete(s.id)) putHead(ctx, s); else headAt(ctx, s); // a stop is cleared at once
+  }
   releaseParts(); // folded to its frontier: between calls the worker holds no decoded part (3.5:40 ⑤)
   return false;
 }
@@ -626,22 +633,30 @@ function headAt(ctx, s) {
 /** files(ctx, s) → a request's turn at the answer files: toState(), or nothing while the session is re-read. */
 export const files = (ctx, s) => rereading(ctx, s.id) || toState(ctx, s);
 // false while the session's pack and tail files are short of the state `s` at `deadline` (the next slice goes on: ctx-files.mjs
-// writeFiles), else true: brought to it (the worker only), their `packs` / `open` kept on `s` for its head; a write that failed is done
-// afresh at the next slice.
+// writeFiles), else true: brought to it (the worker only), their `packs` / `open` kept on `s` for its head; a write that failed, or a render
+// that threw, is writeFailed's and is done afresh at the session's next turn.
 function toState(ctx, s, deadline = Infinity) {
   if (ctx.writer !== true || s.mark == null) return true;
-  try { s.files = writeFiles({ home: ctx.home ?? trocarHome(), fs: ctx.fs || nodeFs }, s, deadline); } catch { forget(s.V.log); return true; }
+  try { s.files = writeFiles({ home: ctx.home ?? trocarHome(), fs: ctx.fs || nodeFs }, s, deadline); } catch (e) { forget(s.V.log); writeFailed(ctx, s.id, e); return true; }
   return s.files != null;
+}
+// An answer file or head that could not be written is a D38 record once per episode of a session, whatever turn tried it; a whole write ends
+// the episode (3.5 §访问模式「版本变更的重读」②).
+const writeFails = new Set();
+function writeFailed(ctx, id, e) {
+  if (writeFails.has(id)) return;
+  writeFails.add(id);
+  ctx.persist?.({ where: 'projection', code: 'projection-write-failed', reason: `The answer files of session ${id} could not be written (${String((e && (e.code || e.message)) || e).split('\n')[0]}); its old answer stands and the next turn tries again.` });
 }
 /** headOf(ctx, s) → the session's `session --head` document: tier 1 at its mark, tier 0 while it has none (ctx-files.mjs), the same bytes
  *  here and in the worker: the title is a function of the disk. */
 const headOf = (ctx, s) => (s.mark == null ? tier0Doc(s.id, s.rows, s.indexErrors, titleOf({ home: ctx.home ?? trocarHome(), fs: ctx.fs || nodeFs, id: s.id, members: s.rows }).title)
   : headDoc({ ...s, ...(s.files || packsOf(s)), mark: markOn(s.plan, s.mark), markTs: s.plan.byId.get(s.mark)?.ts ?? null }));
-// → whether the head at this state is on disk
-function putHead(ctx, s, doc = null) {
+// → whether the head at this state is on disk; `failed(e)` hears why it is not
+function putHead(ctx, s, doc = null, failed = () => {}) {
   const h = heads.get(s.id), sig = sigOf(s), home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs;
   if (!(h && h.sig === sig && hasHead(home, s.id, fs))) {
-    try { writeHead(home, s.id, doc || headOf(ctx, s), fs); } catch { return false; } // a head not written is written at the next slice
+    try { writeHead(home, s.id, doc || headOf(ctx, s), fs); } catch (e) { failed(e); return false; } // a head not written is written at the next slice
     heads.set(s.id, { sig, shape: shapeOf(s) });
   }
   lagging.delete(s.id);

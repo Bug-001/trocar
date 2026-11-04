@@ -6,13 +6,17 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import http from 'node:http'
+import path from 'node:path'
 import { spawn } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 import { gunzipSync } from 'node:zlib'
 import { boardHome, serveBoard } from '../web-v2/real-face.mjs'
 import { serveFace, withToken } from './face.mjs'
 import { createQueryService } from '../../src/query/service.mjs'
 import { storedFile, writeStored, STORED_V } from '../../src/query/stored.mjs'
 import { rawHome, writeSegment } from '../query/raw-home.mjs'
+import { workerForkIn } from '../helpers/worker-fork.mjs'
+import { within } from '../helpers/bounded.mjs'
 
 /** GET with `accept-encoding: gzip` → {status, headers, doc, ms}; the body is gunzipped when the answer says gzip. */
 const get = (port, p) => new Promise((resolve, reject) => {
@@ -107,4 +111,40 @@ test('3.5 #38: a file of another STORED_V, or from before versions, is not hande
       assert.equal(got.doc.stored, undefined, name)
     } finally { w.close() }
   }
+})
+
+// The real worker, forked by the daemon's `sweep` before anyone asks, its row pass held shut (test/query/worker-rows-deps.mjs).
+const ROWS_DEPS = fileURLToPath(new URL('../query/worker-rows-deps.mjs', import.meta.url))
+const heldWorker = async (home) => {
+  const gate = path.join(home, 'rows.open'), fork = workerForkIn({ TROCAR_TEST_ROWS_GATE: gate })
+  const svc = createQueryService({ home, failure: () => {}, fork: (h) => fork(h, ROWS_DEPS) })
+  const face = await serveFace({ home, query: svc })
+  svc.sweep()
+  return { port: face.port, open: () => fs.writeFileSync(gate, ''), close: () => { face.close(); svc.stop() } }
+}
+
+test('4.4 #18: a worker forked by the sweep with its rows held: the stored file answers at once', { timeout: 60_000 }, async () => {
+  const home = rawHome('trocar-stored-held-')
+  writeStored(home, 'sessions', PARAMS, { sessions: [], stored: { at: '2020-01-01T00:00:00.000Z' } })
+  const w = await heldWorker(home)
+  try {
+    const got = await within(get(w.port, LIST), 30_000, 'the stored answer')
+    assert.equal(got.status, 200)
+    assert.ok(got.doc.stored, 'from the file')
+  } finally { w.close() }
+})
+
+test('4.4 #18: a worker forked by the sweep with its rows held and no stored file: sessions waits for the rows', { timeout: 60_000 }, async () => {
+  const home = rawHome('trocar-stored-held-')
+  const w = await heldWorker(home)
+  try {
+    let settled = false
+    const asked = get(w.port, LIST).finally(() => { settled = true })
+    assert.equal((await within(get(w.port, '/api/status'), 30_000, 'status')).status, 200, 'the worker is up')
+    assert.equal(settled, false, 'sessions is still unanswered')
+    w.open()
+    const got = await within(asked, 30_000, 'sessions')
+    assert.equal(got.status, 200)
+    assert.equal(got.doc.stored, undefined)
+  } finally { w.close() }
 })

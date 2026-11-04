@@ -9,8 +9,8 @@ import { fileURLToPath } from 'node:url'
 import { createQueryService } from '../../src/query/service.mjs'
 import { indexDir } from '../../src/query/index-build.mjs'
 import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
-import { hasHead, readHead, tier0Doc, writeHead } from '../../src/query/ctx-files.mjs'
-import { titlesFile } from '../../src/query/titles.mjs'
+import { hasHead, headFile, readHead, tier0Doc, writeHead } from '../../src/query/ctx-files.mjs'
+import { TITLE_BUDGET_MS, titlesFile } from '../../src/query/titles.mjs'
 import { workerFork, workerForkIn } from '../helpers/worker-fork.mjs'
 import { within } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -42,17 +42,26 @@ function homeOf() {
   fs.mkdirSync(path.join(home, 'collector'), { recursive: true, mode: 0o700 })
   return home
 }
-/** Two sealed sessions with no index on disk: the row pass has every segment to build, and stays shut until `open()`. */
-async function gated() {
-  const home = homeOf(), gate = path.join(home, 'rows.open')
-  const a = session(home, A, '20261020T164737Z')
+const SEGMENT_A = '20261020T164737Z'
+/** Two sealed sessions with no index on disk: the row pass has every segment to build, and stays shut until `open()`. `env`: over the worker's own
+ *  (worker-rows-deps.mjs); `titles: true` holds the title pass until `openTitles()`. `said`: what the workers sent on IPC; `frames`: how many `102`s. */
+async function gated({ env = {}, titles: holdTitles = false } = {}) {
+  const home = homeOf(), gate = path.join(home, 'rows.open'), titlesGate = path.join(home, 'titles.open')
+  const a = session(home, A, SEGMENT_A)
   const b = session(home, B, '20261020T164837Z')
   await a.seal(); await b.seal()
   const members = await membersOf(home)
   fs.rmSync(indexDir(home), { recursive: true, force: true })
-  const fork = workerForkIn({ TROCAR_TEST_ROWS_GATE: gate })
-  return { home, members, open: () => fs.writeFileSync(gate, ''), svc: createQueryService({ home, fork: (h) => fork(h, DEPS) }) }
+  const fork = workerForkIn({ TROCAR_TEST_ROWS_GATE: gate, ...(holdTitles ? { TROCAR_TEST_TITLES_GATE: titlesGate } : null), ...env }), said = [], frames = { again: 0 }
+  const watched = (h) => {
+    const c = fork(h, DEPS)
+    c.on('message', (m) => said.push(m))
+    c.stdout.on('data', (d) => { if (String(d).startsWith('102 ')) frames.again++ })
+    return c
+  }
+  return { home, members, said, frames, open: () => fs.writeFileSync(gate, ''), openTitles: () => fs.writeFileSync(titlesGate, ''), svc: createQueryService({ home, fork: watched }) }
 }
+const rowsSaid = (said) => said.some((m) => m.rows === true)
 
 test('3.5 #42: while the rows are read, status and block answer ahead of a sessions in flight, whose answer is the one read after', async () => {
   const { members, open, svc } = await gated()
@@ -112,7 +121,7 @@ test('3.5 §谁执行它: the first idle period titles every session, and tier-0
   const svc = createQueryService({ home, fork: workerFork })
   try {
     svc.sweep()
-    await until(() => [A, B, C].every((id) => id in titles(home)), 'the title table holds every session')
+    await until(() => [A, B, C].every((id) => id in titles(home) && readHead(home, id)?.meta.title === titles(home)[id].t), 'every head says the table\'s title')
     const { doc } = await ask(svc, 'sessions')
     for (const id of [A, B, C]) {
       const head = readHead(home, id), { title } = doc.sessions.find((s) => s.session_id === id)
@@ -122,5 +131,66 @@ test('3.5 §谁执行它: the first idle period titles every session, and tier-0
       assert.equal(head.meta.title_source, 'wire')
     }
     assert.deepEqual(readHead(home, C).pending, stopped, 'a stop stays the session\'s record')
+  } finally { svc.stop() }
+})
+
+test('3.5 #42: the service hears `{rows: true}` only once the rows are read', async () => {
+  const { said, open, svc } = await gated()
+  try {
+    assert.equal((await ask(svc, 'status')).status, 200, 'the worker is up')
+    await new Promise((r) => setTimeout(r, HOLD_MS))
+    assert.equal(rowsSaid(said), false, 'not while the pass is held')
+    open()
+    await until(() => rowsSaid(said), 'the pass ended')
+  } finally { svc.stop() }
+})
+
+test('3.5 #42: a row pass that fails says `{rows: true}` all the same, and each request reads the rows itself', async () => {
+  const { said, svc } = await gated({ env: { TROCAR_TEST_ROWS_FAIL: '1' } })
+  try {
+    assert.equal((await ask(svc, 'status')).status, 200)
+    await until(() => rowsSaid(said), 'the pass ended')
+    assert.deepEqual((await ask(svc, 'sessions')).doc.sessions.map((s) => s.session_id).sort(), [A, B])
+  } finally { svc.stop() }
+})
+
+test('3.5 #42: while the title pass is held, session, lane and status answer; it then leaves every title in the table', async () => {
+  const { home, said, open, openTitles, svc } = await gated({ titles: true })
+  try {
+    open()
+    await ask(svc, 'status')
+    await until(() => rowsSaid(said), 'the rows are read')
+    const { status, doc } = await ask(svc, 'session', { id: A })
+    assert.equal(status, 200)
+    assert.equal((await ask(svc, 'lane', { id: A, lane: doc.lanes[0].lane })).status, 200)
+    assert.equal((await ask(svc, 'status')).status, 200)
+    assert.deepEqual(titles(home), {}, 'the title pass has saved nothing')
+    openTitles()
+    await until(() => A in titles(home) && B in titles(home), 'the title pass ended')
+  } finally { svc.stop() }
+})
+
+test('3.5 #42: a page whose titles run past the budget is answered 102 by the real worker, then whole', async () => {
+  const { home, said, frames, open, svc } = await gated({ titles: true, env: { TROCAR_TEST_RAW_SLOW_MS: String(TITLE_BUDGET_MS + 20) } })
+  try {
+    open()
+    await ask(svc, 'status')
+    await until(() => rowsSaid(said), 'the rows are read')
+    const { status, doc } = await ask(svc, 'sessions')
+    assert.equal(status, 200)
+    assert.ok(frames.again > 0, 'it said ask again')
+    assert.deepEqual(doc.sessions.map((s) => s.title_source), ['wire', 'wire'])
+  } finally { svc.stop() }
+})
+
+test('3.5 §谁执行它: a record the sweep cannot read leaves the tier-0 head as it was, byte for byte', async () => {
+  const { home, members, open, svc } = await gated({ env: { TROCAR_TEST_RAW_LOST: SEGMENT_A } })
+  try {
+    writeHead(home, A, tier0Doc(A, members.get(A), [], 'a title from before'))
+    const file = headFile(home, A, true), bytes = fs.readFileSync(file)
+    open()
+    svc.sweep()
+    await until(() => hasHead(home, B), 'the sweep went on to the next session')
+    assert.deepEqual(fs.readFileSync(file), bytes)
   } finally { svc.stop() }
 })

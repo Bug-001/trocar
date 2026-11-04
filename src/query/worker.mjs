@@ -21,8 +21,8 @@
 // out, cost the caller the answer it was already sent.
 //
 // THE WRITER (4.3 §4 写者): this process alone writes the context projections (`writer: true` on every answer's ctx). BACKGROUND
-// WORK (3.5 后台抽取), one scheduler: from boot it reads the rows (readRows, 3.5 §行表先读; until that pass ends a request that needs them is
-// answered `102`, ask again, and no slice runs); then, while no request line is waiting or being answered (the last frame written whole), it runs
+// WORK (3.5 后台抽取), one scheduler: from boot it reads the rows, then every session's title (readRows, 3.5 §行表先读; until the rows are read a
+// request that needs them is answered `102`, ask again, and until the titles are done no slice runs); then, while no request line is waiting or being answered (the last frame written whole), it runs
 // slices of ≤ SLICE_MS — the members of the session last answered (session / lane) extracted until none is left, then those of the
 // sessions of the model calls the daemon kicked (`{kick: ids}` on IPC: their record ids, just indexed) and of the heads it handed out
 // still folding (`{follow: id}`: the board opened a session never folded, 3.5 §谁执行它「答案文件」), then, after IDLE_SLICE_MS with no request, those
@@ -45,17 +45,17 @@ import { LOCAL_ENV } from './client.mjs'
 import { QUERIES } from './named/index.mjs'
 import { answer } from './answers.mjs'
 import { lowerPriority } from '../low-priority.mjs'
-import { extendSession, indexed, openSessions, saveIndexes, sealParts } from './named/session.mjs'
+import { extendSession, indexed, openSessions, rereadingNow, saveIndexes, sealParts } from './named/session.mjs'
 import { indexRows, sessionGroups } from './rows.mjs'
 import { dirUse, gcProjections, posCmp, projectionStale, sessionDir } from './projection.mjs'
 import { foldStale } from './fold-log.mjs'
-import { hasHead, headFile, readHead, skipFile, tier0Doc, writeHead, writeSkip } from './ctx-files.mjs'
+import { hasHead, hasReread, headFile, readHead, skipFile, tier0Doc, writeHead, writeSkip } from './ctx-files.mjs'
 import { saveTitles, titleOf } from './titles.mjs'
 
 const home = process.argv[2]
 // The board's control verbs (`{control, body}`, 4.4 §控制面) run the CLI's own functions, which take `deps` for what they ask of the machine.
-// The daemon never passes argv[3]; a test fork names an ES module whose default export is that `deps` object. `beforeRows`, a test's alone, is
-// awaited before the row pass starts.
+// The daemon never passes argv[3]; a test fork names an ES module whose default export is that `deps` object. `beforeRows` and `beforeTitles`, a
+// test's alone, are awaited before the row pass starts and before the title pass behind it.
 const depsP = process.argv[3] ? import(pathToFileURL(process.argv[3]).href).then((m) => m.default) : Promise.resolve({})
 // What the CLI's own environment may change about an answer goes local (client.mjs LOCAL_ENV); this worker serves
 // every caller, so it answers as a clean environment would and never as the daemon's happened to be.
@@ -126,7 +126,7 @@ let busy = 0, lastAt = Date.now(), target = null, newestDone = true, gcDone = fa
 // the idle save's parts still to seal (session.mjs sealParts): a slice at a time; a request or kick stops it, the next idle period goes on
 let sealing = false
 let rowsRead = false // the boot's pass over the rows has ended (readRows)
-let sweeping = false // a sweep is between two sessions: it gives way to requests, not to other background work
+let sweeping = false // a sweep, a scan or the title pass is between two sessions: it gives way to requests, not to other background work
 let rawUnlisted = false // raw/ could not be listed at the last GC: its D38 record is sent
 // The sweep (3.5 §谁执行它「答案文件」): at the first idle period of this worker's life, and again on the daemon's `{sweep: true}`, a
 // title for every session (a titleOf that fails is said by the next `sessions`, D38), a tier-0 head (ctx-files.mjs, from the segment index and
@@ -140,6 +140,9 @@ let sweepDue = true
 // The re-read group goes first (3.5 §访问模式「版本变更的重读」): a `reread` marker, or a projection or fold log of another version by its
 // first line, whatever else the directory holds: within it the newest directory first, which is the most recently opened.
 let upgrade = null, up = null
+/** Whether the disk says this session is to be re-read: a `reread` marker, or a first line of another version. */
+const staleOnDisk = (id) => { try { return hasReread(home, id) || projectionStale({ home, key: id }) || foldStale({ home, key: id }) } catch { return false } }
+const rereadOf = (id) => rereadingNow(id) || staleOnDisk(id)
 async function upgradeQueue(ctx) {
   const list = []
   for (const [id, ms] of sessionGroups((await indexed(ctx)).rows)) {
@@ -149,7 +152,7 @@ async function upgradeQueue(ctx) {
     const last = String(ms[ms.length - 1].id)
     const first = answered.has(id) || follow.has(id)
     await ease() // first lines of every session: a request is read between two
-    if (names.length && (names.includes('reread') || projectionStale({ home, key: id }) || foldStale({ home, key: id }))) { list.push([true, first, dirUse(sessionDir(home, id)).t, last, id]); continue }
+    if (names.length && staleOnDisk(id)) { list.push([true, first, dirUse(sessionDir(home, id)).t, last, id]); continue }
     if (names.includes('upgrade.skip')) { try { if (nodeFs.readFileSync(skipFile(home, id), 'utf8') === last) continue } catch { /* gone: queued */ } }
     if (!names.includes('open.main.ndjson') && (flat || names.some((f) => f.startsWith('fold.')))) list.push([false, first, 0, last, id])
   }
@@ -158,6 +161,7 @@ async function upgradeQueue(ctx) {
 const answered = new Set() // the sessions this worker answered: never collected under it
 const follow = new Set() // the sessions the daemon kicked or followed (3.5 §后台抽取与归约): folded in turn from their checkpoints
 const kicked = new Set() // the record ids of the kicked model calls, not yet looked up: their sessions go to `follow`
+const opened = new Set() // the sessions a request or a follow of a re-read asked for, until their turn ends: a re-read gives way to these (giveWay)
 /** The sessions of the kicked records, by the one session rule (sessionGroups: a synthesized key too). The kicked calls are the
  *  newest rows, so each session's members are looked at from its last back to the oldest kicked id only. */
 async function kickedSessions(ctx) {
@@ -174,6 +178,17 @@ async function kickedSessions(ctx) {
     await saveTitles({ home, fs: nodeFs })
   } catch (e) { say(e) }
 }
+/** A slice's boundary, with `target` in a re-read (3.5 §访问模式「版本变更的重读」): it gives way to a followed session that is not in one, and to an
+ *  opened one unless it is opened itself, so two re-reads never alternate. What gave way goes back to where it came from, the head of the
+ *  upgrade queue or the end of the followed ones. */
+function giveWay() {
+  for (const s of follow) {
+    if (rereadOf(s) && (!opened.has(s) || opened.has(target))) continue
+    if (up && up[0] === target) { upgrade?.unshift(up); up = null } else { follow.delete(target); follow.add(target) }
+    follow.delete(s); target = s
+    return
+  }
+}
 const kick = () => { if (!queued && !busy) { queued = true; setImmediate(() => { queued = false; background().catch(say) }) } }
 /** Wait until IDLE_SLICE_MS after the last request or kick: true when the scheduler must come back later (its one timer is armed). */
 const notIdle = () => {
@@ -186,7 +201,11 @@ async function background() {
   if (busy || !rowsRead || sweeping) return
   // `progress`: the segment index read before the first slice is background work too, reported per segment and chunk (3.5 后台抽取与归约)
   const ctx = { home, fs: nodeFs, writer: true, persist, once, progress }
-  if (target == null && !follow.size && kicked.size) await kickedSessions(ctx)
+  if (kicked.size) {
+    try { await kickedSessions(ctx) } catch (e) { say(e) }
+    if (busy) return // a request came during the look: it goes first, and kicks when it is answered
+  }
+  if (target != null && follow.size && rereadOf(target)) giveWay()
   if (target == null && follow.size) { const [k] = follow; follow.delete(k); target = k }
   if (target == null && !newestDone) {
     if (notIdle()) return
@@ -201,7 +220,7 @@ async function background() {
     if (!more && up && up[0] === target && !answered.has(target) && !follow.has(target) && !nodeFs.existsSync(path.join(sessionDir(home, target), 'open.main.ndjson'))) {
       try { writeSkip(home, target, up[1]) } catch { /* the next worker tries again */ }
     }
-    if (!more) { target = null; up = null }
+    if (!more) { opened.delete(target); target = null; up = null }
     if (more) progress(); else worked() // a slice done: the daemon's idle clock starts again
     return kick()
   }
@@ -214,22 +233,24 @@ async function background() {
       let wrote = 0
       for (const [id, ms] of sessionGroups(index.rows)) {
         try {
-          const { title } = titleOf({ home, fs: nodeFs, id, members: ms }), d = readHead(home, id)
-          // a head under the name its pending does not say (one written before the names did) is put under the right one: the daemon
-          // tells a folding head by its name only, so a misnamed one would never be followed (3.5 §谁执行它「答案文件」)
-          const misnamed = d && d.pending && !d.pending.stopped && nodeFs.existsSync(headFile(home, id))
-          const head = d && d.tier === 0 && d.meta.title !== title ? { ...tier0Doc(id, ms, index.errors, title), pending: d.pending } // a stop stays the session's record (D38)
-            : misnamed ? d : hasHead(home, id) ? null : tier0Doc(id, ms, index.errors, title)
-          if (head && writeHead(home, id, head)) wrote++
+          const unread = [], { title } = titleOf({ home, fs: nodeFs, id, members: ms, errors: unread })
+          if (!unread.length) { // a record not read says nothing of the title: the head stays as it is
+            const d = readHead(home, id)
+            // a head under the name its pending does not say (one written before the names did) is put under the right one: the daemon
+            // tells a folding head by its name only, so a misnamed one would never be followed (3.5 §谁执行它「答案文件」)
+            const misnamed = d && d.pending && !d.pending.stopped && nodeFs.existsSync(headFile(home, id))
+            const head = d && d.tier === 0 && d.meta.title !== title ? { ...tier0Doc(id, ms, index.errors, title), pending: d.pending } // a stop stays the session's record (D38)
+              : misnamed ? d : hasHead(home, id) ? null : tier0Doc(id, ms, index.errors, title)
+            if (head && writeHead(home, id, head)) wrote++
+          }
         } catch (e) { say(e) }
         progress()
         await ease()
       }
       await saveTitles({ home, fs: nodeFs })
       if (wrote) worked()
-      upgrade = null
-    } finally { sweeping = false }
-    return kick()
+    } finally { sweeping = false; upgrade = null; kick() } // a table not saved stops no background work
+    return
   }
   if (upgrade == null) {
     sweeping = true
@@ -269,7 +290,7 @@ process.stdin.on('data', (d) => {
     busy++; once = {}; newestDone = false; gcDone = false; sealing = false; clearTimeout(timer) // a new idle period begins after this one is answered
     chain = chain.then(() => serve(line)).then((asked) => {
       const id = asked && (asked.name === 'session' || asked.name === 'lane') && asked.params && asked.params.id
-      if (id != null && id !== '') { if (target != null && target !== String(id)) follow.add(target); target = String(id); answered.add(String(id)) } // a followed session keeps its turn
+      if (id != null && id !== '') { if (target != null && target !== String(id)) follow.add(target); target = String(id); answered.add(String(id)); opened.add(String(id)) } // a followed session keeps its turn
     }, say).finally(() => { busy--; lastAt = Date.now(); kick() })
   }
 })
@@ -279,21 +300,34 @@ process.stdin.on('data', (d) => {
 // must not hold off the idle save and the GC).
 process.on('message', (m) => {
   if (m && m.sweep === true) { sweepDue = true; kick(); return }
-  if (m && typeof m.follow === 'string') { if (target !== m.follow) follow.add(m.follow); kick(); return }
+  if (m && typeof m.follow === 'string') { if (rereadOf(m.follow)) opened.add(m.follow); if (target !== m.follow) follow.add(m.follow); kick(); return }
   if (!m || !Array.isArray(m.kick)) return
   for (const id of m.kick) kicked.add(String(id))
   once = {}; gcDone = false; sealing = false; lastAt = Date.now()
   kick()
 })
-/** The boot's pass over the rows (3.5 §行表先读): a failure is said and ends the wait all the same, each request then reads the rows itself. */
+/** The boot's pass over the rows (3.5 §行表先读): a failure is said and ends the wait all the same, each request then reads the rows itself. Then
+ *  the title of every session, requests going first and slices waiting, so the scans after it find the table full; a title that fails is said by
+ *  the next `sessions` (D38). */
 async function readRows() {
+  let rows = []
   try {
     await (await depsP).beforeRows?.()
-    await indexRows({ home, fs: nodeFs, errors: [], progress, ease })
+    rows = await indexRows({ home, fs: nodeFs, errors: [], progress, ease })
   } catch (e) { say(e) }
   rowsRead = true
   if (process.connected) process.send({ rows: true }) // the daemon's word for a warm worker (4.4 刷新)
-  kick() // the first idle period: the sweep
+  sweeping = true
+  try {
+    await (await depsP).beforeTitles?.()
+    let n = 0
+    for (const [id, members] of sessionGroups(rows)) {
+      try { titleOf({ home, fs: nodeFs, id, members, progress }) } catch (e) { say(e) }
+      await ease()
+      if (++n % 8 === 0) await saveTitles({ home, fs: nodeFs })
+    }
+    await saveTitles({ home, fs: nodeFs })
+  } catch (e) { say(e) } finally { sweeping = false; kick() } // the first idle period: the sweep
 }
 readRows()
 process.stdin.on('end', () => process.exit(0))
