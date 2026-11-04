@@ -25,8 +25,6 @@ const SHORT = 80 // kv: a value this long or shorter, on one line, stays on the 
 const WALK = 100000 // total: the most values one count visits
 const DMAX = 256, NMAX = 2000 // diff: an edit pair gets a line diff up to D edits and this many lines per side, else two panes
 
-export const valueOf = (text) => { try { return JSON.parse(text) } catch { return text } }
-
 export const get = (v, path) => {
   if (path == null) return v
   if (!Array.isArray(path)) return undefined
