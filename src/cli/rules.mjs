@@ -15,7 +15,7 @@ import { runQuery, QueryArgError } from '../query/named/index.mjs'
 import { ENGINE_ACTIONS, LIMITS } from '../rules/closed.mjs'
 import { parseCondition, patterns } from '../rules/conditions.mjs'
 import { buffersOf } from '../rules/describe.mjs'
-import { edit, readRules, RuleRefused } from '../rules/file.mjs'
+import { badScriptPlace, edit, readRules, RuleRefused } from '../rules/file.mjs'
 import { isArmed, readRuleFacts, ruleState } from '../rules/state.mjs'
 import { actionKind, checkRule, conditionsOf, normalizeRule, parseRulesBytes } from '../rules/validate.mjs'
 
@@ -121,7 +121,7 @@ async function parsedInput(c, source) {
   if (problem) return { problem: `${source}: ${problem.reason}` }
   const rule = normalizeRule(doc), [first] = checkRule(rule, { input: true })
   if (first) return { problem: `${first.path ? `${first.path}: ` : ''}${first.reason}` }
-  const bad = badRegex(rule)
+  const bad = badRegex(rule) ?? badScriptPlace(rule, c.home)
   return bad ? { problem: bad } : { rule }
 }
 

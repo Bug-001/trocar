@@ -10,7 +10,7 @@ import path from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { rulesFile, rulesLock, rulesLog } from '../paths.mjs'
 import { readBounded, sha256, writeDurable } from '../off/fsutil.mjs'
-import { checkFile, parseRulesBytes, LIMITS, DEFAULT_MAX_DELAY_MS } from './validate.mjs'
+import { checkFile, scriptOf, parseRulesBytes, LIMITS, DEFAULT_MAX_DELAY_MS } from './validate.mjs'
 
 const LOCK_WAIT_MS = 2000
 const LOCK_STALE_MS = 2000
@@ -95,6 +95,17 @@ const dropLock = (fs, lock, token) => {
 function serialized(doc) {
   const pretty = Buffer.from(JSON.stringify(doc, null, 2) + '\n')
   return pretty.length > LIMITS.fileBytes ? Buffer.from(JSON.stringify(doc) + '\n') : pretty
+}
+
+/** A script reads everything in its directory (5.1 §隔离), so that directory may not hold the control token. */
+export function badScriptPlace(rule, home) {
+  const script = scriptOf(rule)
+  if (!script) return null
+  // What is not there yet is read through what is: macOS's temporary folders are behind a link.
+  const real = (p) => { try { return nodeFs.realpathSync(p) } catch { return path.join(real(path.dirname(p)), path.basename(p)) } }
+  const dir = path.dirname(real(script)), trocar = real(home)
+  const within = (inner, outer) => inner === outer || inner.startsWith(outer + path.sep)
+  return within(dir, trocar) || within(trocar, dir) ? `do: a script reads its whole folder, so ${dir} would give it trocar's own files. Put the script in a folder of its own.` : null
 }
 
 /** The names of the rules an edit added, removed or changed. */

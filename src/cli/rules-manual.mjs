@@ -263,7 +263,7 @@ export function rulesManual() {
       indented(SCRIPT),
       '',
       bullets(
-        'It cannot start a process or write a file. To use another program go over HTTP with fetch, to a service you started on this machine.',
+        'It cannot start a process or a thread, send a signal or write a file. To use another program go over HTTP with fetch, to a service you started on this machine. It reads its own folder, so give it a folder of its own, outside your home folder\'s top level and outside ~/.trocar.',
         'console.log is seen only in rules test.',
         'It can import only files inside its own directory. A node_modules in a parent directory and a link that leaves the directory are refused, and the error does not name the path.',
         'If you change the script file, run rules enable again; until then the rule is not live. Files it imports are not checked for changes.',

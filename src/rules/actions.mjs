@@ -165,10 +165,10 @@ function select(blocks, selector) {
 }
 
 function chosenTextNodes(state, env, selector) {
-  const chosen = actionBlocks(env, state.text, selector)
-  if (chosen.some((b) => !b.text_path)) throw fault('no-blocks')
+  const chosen = actionBlocks(env, state.text, selector), written = chosen.filter((b) => b.text_path)
+  if (chosen.length && !written.length) throw fault('no-blocks')
   const { root } = scan(state.text)
-  return chosen.map((b) => {
+  return written.map((b) => {
     const { start, end } = nodeAt(root, b.text_path)
     return { start, end, value: b.text }
   })

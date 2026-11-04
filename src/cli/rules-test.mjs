@@ -14,7 +14,7 @@ import { indexRows } from '../query/rows.mjs'
 import { byteBudget } from '../rules/budget.mjs'
 import { compileRules } from '../rules/compile.mjs'
 import { editsToResult } from '../rules/edits.mjs'
-import { readRules } from '../rules/file.mjs'
+import { badScriptPlace, readRules } from '../rules/file.mjs'
 import { headerChanges } from '../rules/headers.mjs'
 import { openOneShot } from '../rules/launch.mjs'
 import { readRuleFacts, ruleState } from '../rules/state.mjs'
@@ -186,6 +186,8 @@ export async function testRule(c, [name]) {
   const facts = withLive ? readRuleFacts({ home: c.home }).facts : null
   const set = read.doc.rules.filter((r) => r === written || (withLive && ruleState(r, facts) === 'live')).map(normalizeRule)
   const { script, rules, left } = scriptSet(set, rule, runScript)
+  const place = script ? badScriptPlace({ do: [{ script }] }, c.home) : null
+  if (place) return refused('rule-invalid', place)
   const notes = []
   const picked = [...await Promise.all(refs.map((ref) => namedRecord(c, ref))), ...(last === null ? [] : await lastRecords(c, rule, last, notes))]
 

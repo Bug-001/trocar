@@ -622,3 +622,13 @@ test('a reader that goes away is no error: nothing on stderr, the command\'s own
     assert.deepEqual([exit, err], [0, ''], argv.join(' '))
   }
 })
+
+test('12i: a script whose folder would hold trocar\'s own files is exit 2, and one beside them is not', async () => {
+  const s = sandbox(), scriptRule = (script) => rule({ do: [{ script }] })
+  for (const script of [path.join(s.home, 'a.mjs'), path.join(s.trocar, 'a.mjs'), path.join(s.trocar, 'collector', 'a.mjs')]) {
+    const { exit, doc } = await add(s, scriptRule(script))
+    assert.equal(exit, 2, script)
+    assert.equal(doc.error.code, 'rule-invalid')
+  }
+  assert.equal((await add(s, scriptRule(path.join(s.home, 'scripts', 'a.mjs')))).exit, 0)
+})

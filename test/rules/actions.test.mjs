@@ -270,10 +270,11 @@ test('a text action on a chosen block with no text path is no-blocks, and a remo
   const body = JSON.stringify({ model: 'm', messages: [
     { role: 'assistant', content: [{ type: 'text', text: 'old' }, { type: 'tool_use', id: 't', name: 'Bash', input: { q: 'SECRET' } }] },
   ] });
-  for (const selector of [{ kind: 'tool_use' }, { newest: 1 }, { role: 'assistant' }]) {
+  for (const selector of [{ kind: 'tool_use' }, { newest: 1 }]) {
     for (const action of [{ set_text: 'x' }, { append_text: 'x' }, { truncate: 1 }, { replace: 'SECRET', with: 'x' }]) fails('no-blocks', () => run({ blocks: selector, ...action }, body));
   }
   assert.equal(parsed({ blocks: { kind: 'text' }, set_text: 'new' }, body).messages[0].content[0].text, 'new');
+  assert.equal(parsed({ blocks: { role: 'assistant' }, set_text: 'new' }, body).messages[0].content[0].text, 'new', 'blocks with text change, whatever else was chosen');
   assert.equal(result({ blocks: { kind: 'image' }, set_text: 'new' }, body), body, 'no block chosen is nothing to do');
   assert.deepEqual(parsed({ blocks: { kind: 'tool_use' }, remove: true }, body).messages[0].content.map((b) => b.type), ['text']);
 });
