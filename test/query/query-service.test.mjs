@@ -511,13 +511,13 @@ test('a projection the worker cannot write: both answers whole, one persisted pr
   } finally { svc.stop(); fs.chmodSync(ctxDir, 0o700) }
 })
 
-// 3.5 #27 服务队列: one request in flight; the rest are served block, lane, session, then the others, first come first served
-// within a class; a caller gone before its turn is never written to the worker. The stub answers each line 100 ms after it arrives
-// and the fork records every line the service writes to it.
-const queueWorld = () => {
+// 3.5 #27 服务队列: one request in flight; the rest are served block, status, sessions, lane, session, then the others, first come
+// first served within a class; a caller gone before its turn is never written to the worker. The stub answers each line 100 ms after
+// it arrives (`worker`: what it does with a line instead) and the fork records every line the service writes to it.
+const queueWorld = ({ worker = `setTimeout(() => process.stdout.write('200 2\\n{}'), 100)`, ...opts } = {}) => {
   const got = []
-  const svc = createQueryService({ home: rawHome('trocar-qsvc-'), failure: () => {}, fork: () => {
-    const c = spawn(process.execPath, ['-e', `process.stdin.on('data', (d) => { for (const l of String(d).split('\\n').filter(Boolean)) setTimeout(() => process.stdout.write('200 2\\n{}'), 100) })`], { stdio: ['pipe', 'pipe', 'pipe'] })
+  const svc = createQueryService({ home: rawHome('trocar-qsvc-'), failure: () => {}, ...opts, fork: () => {
+    const c = spawn(process.execPath, ['-e', `let n = 0; process.stdin.on('data', (d) => { for (const l of String(d).split('\\n').filter(Boolean)) { n++; ${worker} } })`], { stdio: ['pipe', 'pipe', 'pipe'] })
     const w = c.stdin.write.bind(c.stdin)
     c.stdin.write = (l, ...a) => (got.push(JSON.parse(l).params.tag), w(l, ...a))
     return c
@@ -526,12 +526,126 @@ const queueWorld = () => {
   return { svc, got, ask }
 }
 
-test('#27: with one request in flight, the queue is served block, lane, session, then the rest', async () => {
+test('#27: with one request in flight, the queue is served block, status, sessions, lane, session, then the rest', async () => {
   const { svc, got, ask } = queueWorld()
   try {
-    const all = [ask('segments', 'first'), ask('sessions', 'sessions'), ask('session', 'session'), ask('lane', 'lane'), ask('block', 'block')]
+    const all = [ask('segments', 'first'), ask('segments', 'rest'), ask('session', 'session'), ask('lane', 'lane'), ask('sessions', 'sessions'), ask('status', 'status'), ask('block', 'block')]
     await within(Promise.all(all), 10_000, 'every queued request')
-    assert.deepEqual(got, ['first', 'block', 'lane', 'session', 'sessions'])
+    assert.deepEqual(got, ['first', 'block', 'status', 'sessions', 'lane', 'session', 'rest'])
+  } finally { svc.stop() }
+})
+
+// 3.5 §行表先读: the worker may answer `102`, meaning ask again. Through a real pipe: the line is written again and the caller sees only
+// the answer that followed it.
+test('3.5 102: the line is written again, and the caller gets the real status and body under one head', async () => {
+  const { svc, got, ask } = queueWorld({ againMs: 5, worker: `process.stdout.write(n === 1 ? '102 0 - 0 -\\n' : '404 2\\n{}')` })
+  const res = recorder(), heads = [], head = res.writeHead
+  res.writeHead = (s) => { heads.push(s); head(s) }
+  try {
+    await within(ask('sessions', 'a', res), 10_000, 'the answer after the 102')
+    assert.deepEqual(got, ['a', 'a'])
+    assert.deepEqual(heads, [404])
+    assert.equal(res.text(), '{}')
+    assert.equal(res.ended, true)
+  } finally { svc.stop() }
+})
+
+// What a parked request does is a matter of which frame came when, so here the worker is a stand-in the test feeds by hand: `frame()`
+// is the worker saying that frame, and once `parked()` is through the service has taken it in.
+const handWorld = (opts = {}) => {
+  const got = [], said = []
+  let forks = 0, child = null
+  const svc = createQueryService({ home: rawHome('trocar-qsvc-'), failure: (where, e) => said.push(e.code), ...opts, fork: () => {
+    forks++
+    child = Object.assign(new EventEmitter(), { stdout: Object.assign(new EventEmitter(), { pause() {}, resume() {} }), stderr: new EventEmitter(),
+      stdin: Object.assign(new EventEmitter(), { write: (l) => got.push(JSON.parse(l).params.tag) }), kill() {} })
+    return child
+  } })
+  const frame = (s) => child.stdout.emit('data', Buffer.from(s))
+  const parked = () => { frame('102 0 - 0 -\n'); return new Promise(setImmediate) }
+  const ask = (name, tag, res = recorder()) => svc.relay({ name, params: { tag }, res })
+  /** Until `n` lines were written to the worker. */
+  const sent = (n) => within((async () => { while (got.length < n) await new Promise((d) => setTimeout(d, 2)) })(), 10_000, `line ${n} to the worker`)
+  return { svc, got, said, frame, parked, ask, sent, forks: () => forks }
+}
+
+test('3.5 102: a request queued while another is parked is written in between, whatever their ranks', async () => {
+  for (const [parks, passes] of [['sessions', 'status'], ['status', 'sessions']]) {
+    const { svc, got, frame, parked, ask, sent } = handWorld({ againMs: 30 })
+    try {
+      const first = ask(parks, 'parked')
+      await parked()
+      const second = ask(passes, 'passing')
+      assert.deepEqual(got, ['parked', 'passing'])
+      frame('200 2\n{}')
+      await within(second, 10_000, 'the one that passed')
+      await sent(3)
+      assert.deepEqual(got, ['parked', 'passing', 'parked'])
+      frame('200 2\n{}')
+      await within(first, 10_000, 'the parked one')
+    } finally { svc.stop() }
+  }
+})
+
+test('3.5 102: a caller gone while parked is not asked for again, and its promise settles', async () => {
+  const { svc, got, parked, ask } = handWorld({ againMs: 5 })
+  const gone = Object.assign(new EventEmitter(), { writeHead() {}, write: () => true, end() {} })
+  try {
+    const left = ask('sessions', 'left', gone)
+    await parked()
+    gone.emit('close')
+    await within(left, 10_000, 'the promise of the one who left')
+    await new Promise((d) => setTimeout(d, 30)) // a timer that outlasts the park's: its turn came and went
+    assert.deepEqual(got, ['left'])
+  } finally { svc.stop() }
+})
+
+test('3.5 102: stop() while parked rejects the caller and nothing is written after it', async () => {
+  const { svc, got, parked, ask, forks } = handWorld({ againMs: 5 })
+  const caller = ask('sessions', 'a')
+  await parked()
+  svc.stop()
+  await assert.rejects(within(caller, 10_000, 'the parked caller'))
+  await new Promise((d) => setTimeout(d, 30))
+  assert.deepEqual(got, ['a'])
+  assert.equal(forks(), 1)
+})
+
+test('3.5 102: stop() with a request queued behind one in flight rejects both and forks nothing', async () => {
+  const { svc, got, ask, forks } = handWorld()
+  const flight = ask('sessions', 'a'), queued = ask('lane', 'b')
+  svc.stop()
+  await assert.rejects(within(flight, 10_000, 'the one in flight'))
+  await assert.rejects(within(queued, 10_000, 'the queued one'))
+  assert.deepEqual(got, ['a'])
+  assert.equal(forks(), 1)
+})
+
+test('3.5 102: a parked request keeps the worker: the idle clock stays off', async () => {
+  const { svc, got, frame, parked, ask, sent, forks } = handWorld({ againMs: 40, idleMs: 5 })
+  try {
+    const caller = ask('sessions', 'a')
+    await parked()
+    await sent(2)
+    frame('200 2\n{}')
+    await within(caller, 10_000, 'the answer')
+    assert.deepEqual(got, ['a', 'a'])
+    assert.equal(forks(), 1, 'the second send went to the same worker')
+  } finally { svc.stop() }
+})
+
+// #42, its wedged part (the rest is on a real worker in test/query/worker-rows.test.mjs): the park itself is not silence, the re-send
+// is a request of its own and a worker that says nothing to it is the failure it always was.
+test('#42: a worker that answers 102 and then stays silent fails the re-sent request, one query-failed', async () => {
+  const { svc, got, said, parked, ask, sent } = handWorld({ againMs: 40, deadlineMs: 10 })
+  try {
+    const caller = ask('sessions', 'a')
+    await parked()
+    await sent(2)
+    await assert.rejects(within(caller, 10_000, 'the wedged worker\'s caller'))
+    assert.deepEqual(got, ['a', 'a'])
+    assert.equal(said.length, 1)
+    assert.ok(said.every((c) => c === 'query-failed' && isCode(c)))
   } finally { svc.stop() }
 })
 
