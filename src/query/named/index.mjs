@@ -17,6 +17,7 @@ import * as block from './block.mjs';
 import * as pricing from './pricing.mjs';
 import * as traffic from './traffic.mjs';
 import * as overview from './overview.mjs';
+import * as rules from './rules.mjs';
 import { createHash } from 'node:crypto';
 import * as src from '../stamp.mjs';
 
@@ -40,6 +41,7 @@ export const QUERIES = Object.freeze({
   classes: { params: classes.params, run: classes.run, stamp: src.classes, clock: true },
   segments: { params: segments.params, run: segments.run, stamp: src.corpus, times: TIMES },
   pricing: { params: pricing.params, run: pricing.run, stamp: src.pricing },
+  rules: { params: rules.params, run: rules.run, stamp: src.rules, clock: true }, // a rule's state moves with its `limit.until` and `resting_until`
 });
 
 /**
