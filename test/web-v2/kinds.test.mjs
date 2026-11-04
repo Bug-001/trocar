@@ -3,7 +3,7 @@
 // The wrapper below is the caller's (cell.mjs): renderKind gives the inner html and the wrapper's classes in `cls`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { renderKind, setMarkdown, jsonNodeHtml } from '../../web/legacy/replay/kinds.mjs'
+import { renderKind, setMarkdown, jsonNodeHtml, textOf as copyOf } from '../../web/legacy/replay/kinds.mjs'
 import { FAIL_LINE, IMAGE_URL, NO_ARGS, OPAQUE_LINE } from '../../web/legacy/labels/cells.mjs'
 
 const wrap = ({ html, cls }) => `<div class="cellread ${cls}">${html}</div>`
@@ -337,6 +337,7 @@ test('a JSON tree stored in a string opens below two levels from the absolute pa
 })
 
 const dlines = (h) => [...h.matchAll(/<div class="(d-add|d-del|d-ctx)">([^<]*)<\/div>/g)].map((m) => [m[1], textOf(m[2])])
+const lineBits_ = ['a', 'b', 'c', 'x = 1', '', '  }', '<p>', '"q"']
 const lineBits = () => pick(['a', 'b', 'c', 'x = 1', '', '  }', '<p>', '"q"', '\r'])
 test('diff: an edit pair read back with its signs rebuilds old and new', () => {
   for (let i = 0; i < 200; i++) {
@@ -446,4 +447,64 @@ test('markdown, diff, media: input they cannot draw falls back to text with the 
       assert.ok(textOf(h).startsWith(FAIL_LINE), 'one line, no kind word')
     }
   }
+})
+
+// ── textOf: what Copy text gives (2.3 #41) ───────────────────────────────────────────────────────────────────────────
+const LONG = 'a line of the body\n'.repeat(3000) // past a slice; a copy is not cut by any budget
+const PNG = btoa(String.fromCharCode(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 9, 0, 0, 0, 7, 8, 2, 0, 0, 0))
+const kinds = (S) => ({
+  text: [{ as: 'text', f: { body: ['t'] } }, { t: S + LONG + S }],
+  'text over an object': [{ as: 'text', f: { body: ['t'] } }, { t: { k: S } }],
+  code: [{ as: 'code', title: S, f: { body: ['t'] } }, { t: LONG + S }],
+  markdown: [{ as: 'markdown', f: { body: ['t'] } }, { t: `# ${S}\n\n**b** ${LONG}` }],
+  shell: [{ as: 'shell', f: { body: ['input'], cmd: ['input', 'command'], note: ['input', 'description'] } }, { input: { command: `echo ${S}`, description: 'x', timeout: S + 'T' } }],
+  'shell argv': [{ as: 'shell', f: { body: [], cmd: ['cmd'] } }, { cmd: ['echo', S] }],
+  'diff patch': [{ as: 'diff', f: { body: ['p'] } }, { p: `--- a\n+++ b\n@@ -1 +1 @@\n-x\n+${S}\n` }],
+  'diff pair': [{ as: 'diff', f: { body: [], old: ['o'], new: ['n'] } }, { o: 'same\nold', n: `same\n${S}` }],
+  kv: [{ as: 'kv', f: { body: ['i'] }, kids: { a: { as: 'code', f: { body: [] } } } }, { i: { a: S, b: { deep: S + 'B' } } }],
+  json: [{ as: 'json', f: { body: ['j'] } }, { j: { a: [S] } }],
+  'json in a string': [{ as: 'json', f: { body: ['j'] } }, { j: JSON.stringify({ a: S }) }],
+  parts: [{ as: 'parts', f: { body: ['c'] }, kids: { 0: { as: 'text', f: { body: ['text'] } } } }, { c: [{ text: S }, S + 'P'] }],
+  tool: [TOOL, { desc: S, schema: { properties: { [S + 'K']: { type: 'string' } } } }],
+  'media url': [{ as: 'media', f: { body: [], url: ['u'] } }, { u: `https://x.test/${S}` }],
+})
+test('2.3 #41: textOf holds the view\'s words for every kind, whole, past any slice', () => {
+  for (let i = 0; i < 40; i++) {
+    const S = `S${i}-${pick(['plain', '<tag>', 'a&b', 'é😀'])}`
+    for (const [name, [r, v]] of Object.entries(kinds(S))) {
+      const t = copyOf(r, v)
+      assert.equal(typeof t, 'string', name)
+      assert.ok(t.includes(S), `${name}: holds what the view holds`)
+      assert.ok(!t.includes('<div') && !t.includes('<span'), `${name}: no markup`)
+    }
+    assert.equal(copyOf(kinds(S).text[0], kinds(S).text[1]), S + LONG + S)
+  }
+  assert.equal(copyOf({ as: 'opaque' }, { signature: 'SIG' }), OPAQUE_LINE)
+  assert.ok(copyOf({ as: 'media', f: { body: [], data: ['d'], mime: ['m'] } }, { d: PNG, m: 'image/png' }).includes('9×7'), 'an image with no URL: its description')
+})
+
+test('2.3 #41: textOf reads each kind\'s source: markdown as written, a gutter and a parts break, an edit pair signed line by line', () => {
+  const src = '# T\n\n**bold** `c`\n'
+  assert.equal(copyOf({ as: 'markdown', f: { body: [] } }, src), src)
+  assert.equal(copyOf({ as: 'code', title: 'file.txt', f: { body: [], gutter: true } }, '     1→one\n     2→two'), 'file.txt\none\ntwo')
+  assert.equal(copyOf({ as: 'parts', f: { body: [] } }, ['a', 'b']), 'a\n\nb')
+  assert.deepEqual(JSON.parse(copyOf({ as: 'json', f: { body: [] } }, { a: [1] })), { a: [1] })
+  for (let i = 0; i < 50; i++) {
+    const a = Array.from({ length: Math.floor(rnd() * 8) }, () => pick(lineBits_)), b = Array.from({ length: Math.floor(rnd() * 8) }, () => pick(lineBits_))
+    const L = copyOf({ as: 'diff', f: { body: [], old: ['o'], new: ['n'] } }, { o: a.join('\n'), n: b.join('\n') }).split('\n')
+    assert.deepEqual(L.filter((l) => l[0] !== '+').map((l) => l.slice(1)).join('\n'), a.join('\n'))
+    assert.deepEqual(L.filter((l) => l[0] !== '-').map((l) => l.slice(1)).join('\n'), b.join('\n'))
+  }
+  const big = Array.from({ length: 2500 }, (_, i) => `l${i}`).join('\n'), both = copyOf({ as: 'diff', f: { body: [], old: ['o'], new: ['n'] } }, { o: big, n: 'NEW-' + big })
+  assert.ok(both.includes(big) && both.includes('NEW-'), 'past the line cap: both sides whole')
+})
+
+test('2.3 #41: what cannot be drawn is copied as the fallback text, never a throw', () => {
+  const S = 'SENTINEL', cases = [
+    [{ as: 'markdown', f: { body: [] } }, { a: S }], [{ as: 'diff', f: { body: [] } }, `not a patch ${S}`], [{ as: 'kv', f: { body: ['a'] } }, { a: S }],
+    [{ as: 'shell', f: { body: [], cmd: ['x'] } }, { y: S }], [{ as: 'tool', f: { body: [], desc: ['d'] } }, { y: S }], [{ as: 'parts', f: { body: [] } }, S],
+    [{ as: 'media', f: { body: [], data: ['d'], mime: ['m'] } }, { d: '*not base64*', m: 'image/png', S }], [{ as: 'json', f: { body: [] } }, `{half ${S}`],
+    [{ as: 'text', f: { body: ['gone'] } }, { S }], [{ as: 'no such kind' }, S], [undefined, S], [null, { S }],
+  ]
+  for (const [r, v] of cases) assert.ok(copyOf(r, v).includes(S), JSON.stringify(r))
 })
