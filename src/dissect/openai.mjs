@@ -98,7 +98,7 @@ function blockText(b) {
   if (b.type === 'thinking') return b.thinking || b.signature || '';
   if (b.type === 'tool_use') return (b.name || '') + '::' + JSON.stringify(b.input || {});
   if (b.type === 'tool_result') return (b.tool_use_id || '') + '::' + (typeof b.content === 'string' ? b.content : JSON.stringify(b.content));
-  if (b.type === 'image') return 'image:' + (b.source && (b.source.media_type || b.source.type) || '');
+  if (b.type === 'image') return 'image:' + (b.source && (b.source.url || b.source.data) || '');
   return JSON.stringify(b);
 }
 function hash(s) { let h = 0; for (let i = 0; i < s.length; i++) h = (Math.imul(31, h) + s.charCodeAt(i)) | 0; return (h >>> 0).toString(36); }
@@ -134,6 +134,23 @@ export function sysLabel(text) {
 const partsText = (s) => (Array.isArray(s) ? s.map((x) => (x && (x.text || x.summary_text)) || '').filter(Boolean).join('\n\n') : typeof s === 'string' ? s : '');
 // a reasoning item's readable text: its summary, then its content (reasoning_text parts); '' when only ciphertext came
 const reasoningText = (item) => [partsText(item.summary), partsText(item.content)].filter(Boolean).join('\n\n');
+const TEXT_PARTS = new Set(['text', 'input_text', 'output_text']);
+const IMAGE_PARTS = new Set(['image', 'image_url', 'input_image']);
+// where an image's bytes are: a base64 data URL is its data, anything else stays the URL it is
+function imageSource(url) {
+  const comma = url.indexOf(',');
+  const head = comma < 0 ? null : /^data:([^;,]*)(?:;[^;,]*)*;base64$/i.exec(url.slice(0, comma));
+  return head ? { type: 'base64', media_type: head[1], data: url.slice(comma + 1) } : { type: 'url', url };
+}
+// one content part → its block, on either OpenAI wire and in a tool's result alike. A part of no known kind, or an image with no
+// URL, is shown as the JSON it is, so nothing it carried is lost.
+function partBlock(c) {
+  if (!c || typeof c !== 'object') return { type: 'text', text: String(c ?? '') };
+  if (TEXT_PARTS.has(c.type) || (c.type == null && c.text != null)) return { type: 'text', text: c.text || '' };
+  if (c.type === 'refusal') return { type: 'text', text: c.refusal || '' };
+  const url = IMAGE_PARTS.has(c.type) ? (c.image_url && c.image_url.url) || c.image_url : null;
+  return typeof url === 'string' && url ? { type: 'image', source: imageSource(url) } : { type: 'text', text: JSON.stringify(c) };
+}
 // returns [{ role, block, sub }] — one per rendered block (a message may fan out to several content blocks, none without content).
 // `sub` = the JSON path of the block's bytes WITHIN the item (the board's text_ref locator, 4.2:40).
 export function itemToBlocks(item) {
@@ -146,21 +163,14 @@ export function itemToBlocks(item) {
     const arr = Array.isArray(item.content);
     // no content (absent or null) is no block, as content: [] is: request and reply side alike (RFC 3.1)
     const content = arr ? item.content : item.content == null ? [] : [{ type: 'input_text', text: String(item.content) }];
-    return content.map((c, ci) => {
-      const sub = arr ? ['content', ci] : ['content'];
-      if (!c || typeof c !== 'object') return { role, block: { type: 'text', text: String(c ?? '') }, sub };
-      if (c.type === 'input_text' || c.type === 'output_text' || c.type === 'text') return { role, block: { type: 'text', text: c.text || '' }, sub };
-      if (c.type === 'input_image' || c.type === 'image') return { role, block: { type: 'image', source: { media_type: c.image_url || c.detail || 'image' } }, sub };
-      if (c.type === 'refusal') return { role, block: { type: 'text', text: c.refusal || '' }, sub };
-      return { role, block: { type: 'text', text: JSON.stringify(c) }, sub };
-    });
+    return content.map((c, ci) => ({ role, block: partBlock(c), sub: arr ? ['content', ci] : ['content'] }));
   }
   // tools, by the wire's own naming (no tool names): `*_call_output` is a call's result; `*_call` with a call_id is a call the
   // client runs, without one a call the server ran. Anything else is shown as the JSON it is, never as assistant text.
   const ty = typeof t === 'string' ? t : '';
   if (ty.endsWith('_call_output')) {
     const out = item.output;
-    const content = typeof out === 'string' ? out : (out && out.content) || JSON.stringify(out ?? '');
+    const content = typeof out === 'string' ? out : Array.isArray(out) ? out.map(partBlock) : (out && out.content) || JSON.stringify(out ?? '');
     return [{ role: 'tool', block: { type: 'tool_result', tool_use_id: item.call_id || '', content }, sub: [] }];
   }
   if (ty.endsWith('_call')) {
@@ -231,7 +241,7 @@ const chatText = (content) => {
 export function chatMessageToBlocks(m) {
   if (!m || typeof m !== 'object') return [{ role: 'user', block: { type: 'text', text: String(m ?? '') }, sub: [] }];
   const role = m.role || 'user';
-  if (role === 'tool') return [{ role: 'tool', block: { type: 'tool_result', tool_use_id: m.tool_call_id || '', content: chatText(m.content) }, sub: ['content'] }];
+  if (role === 'tool') return [{ role: 'tool', block: { type: 'tool_result', tool_use_id: m.tool_call_id || '', content: Array.isArray(m.content) ? m.content.map(partBlock) : chatText(m.content) }, sub: ['content'] }];
   const out = [];
   // DeepSeek / Kimi / GLM thinking models: an assistant turn's reasoning travels as `reasoning_content` (plain
   // text), echoed back on later requests. It came before that turn's reply, so its block goes first. (Its exact
@@ -240,17 +250,11 @@ export function chatMessageToBlocks(m) {
     out.push({ role: 'assistant', block: { type: 'thinking', thinking: m.reasoning_content }, sub: ['reasoning_content'] });
   }
   if (Array.isArray(m.content)) {
-    m.content.forEach((c, ci) => {
-      const sub = ['content', ci];
-      if (!c || typeof c !== 'object') { out.push({ role, block: { type: 'text', text: String(c ?? '') }, sub }); return; }
-      if (c.type === 'image_url' || c.type === 'input_image' || c.type === 'image') {
-        const u = c.image_url; out.push({ role, block: { type: 'image', source: { media_type: (u && (u.url || u.detail)) || 'image' } }, sub });
-      } else if (c.type === 'refusal') out.push({ role, block: { type: 'text', text: c.refusal || '' }, sub });
-      else out.push({ role, block: { type: 'text', text: c.text != null ? c.text : JSON.stringify(c) }, sub });
-    });
+    m.content.forEach((c, ci) => out.push({ role, block: partBlock(c), sub: ['content', ci] }));
   } else if (typeof m.content === 'string' && m.content.length) {
     out.push({ role, block: { type: 'text', text: m.content }, sub: ['content'] });
   }
+  if (typeof m.refusal === 'string' && m.refusal) out.push({ role, block: { type: 'text', text: m.refusal }, sub: ['refusal'] });
   (Array.isArray(m.tool_calls) ? m.tool_calls : []).forEach((tc, k) => {
     const f = (tc && tc.function) || {};
     out.push({ role: 'assistant', block: { type: 'tool_use', name: f.name || '', id: (tc && tc.id) || '', input: safeJson(f.arguments) }, sub: ['tool_calls', k] });
@@ -401,7 +405,7 @@ export function ctxTokens(norm) {
 // ── reply parts (sse-spans.mjs): each reply block addressed as a span of resp.raw. Responses keys an event by its
 // `output_index` and takes the event that delivers the item whole: its output_item.done, else the terminal's output, so each
 // block is its own node in that event's data. Chat keys
-// a chunk by choice index and what its delta carries (reasoning, text, or tool call `index`).
+// a chunk by choice index and what its delta carries (reasoning, text, a refusal, or tool call `index`).
 const replyBlocksOf = (items) => items.flatMap((it) => itemToBlocks(it)).map((x) => x.block);
 // an output item's blocks as JSON nodes, the item standing at `path` (RFC 3.1 回复块也回源: the request side's rule for the same item)
 export const itemNodes = (item, path) => itemToBlocks(item).map(({ block, sub }) => ({ block, path: [...path, ...sub] }));
@@ -417,10 +421,10 @@ const RESPONSES_REPLY = {
   jsonBlocks: (body) => replyBlocksOf(Array.isArray(body.output) ? body.output : []),
 };
 const chatDeltas = (e) => (Array.isArray(e.choices) ? e.choices : []).map((c, i) => [c && c.index !== undefined ? c.index : i, (c && (c.delta || c.message)) || {}]);
+const CHAT_TEXT_FIELDS = { thinking: 'reasoning_content', text: 'content', refusal: 'refusal' }; // key kind → the delta field its text comes in
 const CHAT_REPLY = {
   keysOf: (e) => chatDeltas(e).flatMap(([ci, d]) => [
-    ...(typeof d.reasoning_content === 'string' && d.reasoning_content ? [`${ci}:thinking`] : []),
-    ...(typeof d.content === 'string' && d.content ? [`${ci}:text`] : []),
+    ...Object.entries(CHAT_TEXT_FIELDS).flatMap(([kind, f]) => (typeof d[f] === 'string' && d[f] ? [`${ci}:${kind}`] : [])),
     ...(Array.isArray(d.tool_calls) ? d.tool_calls.map((tc, n) => `${ci}:tool:${tc && tc.index !== undefined ? tc.index : n}`) : []),
   ]),
   build: (k, evts) => {
@@ -428,8 +432,7 @@ const CHAT_REPLY = {
     let text = '', id = '', name = '', args = '';
     for (const e of evts) for (const [c, d] of chatDeltas(e)) {
       if (String(c) !== ci) continue;
-      if (kind === 'thinking' && typeof d.reasoning_content === 'string') text += d.reasoning_content;
-      if (kind === 'text' && typeof d.content === 'string') text += d.content;
+      if (typeof d[CHAT_TEXT_FIELDS[kind]] === 'string') text += d[CHAT_TEXT_FIELDS[kind]];
       if (kind === 'tool') (Array.isArray(d.tool_calls) ? d.tool_calls : []).forEach((tc, n) => {
         if (String(tc && tc.index !== undefined ? tc.index : n) !== ti) return;
         const f = tc.function || {};
