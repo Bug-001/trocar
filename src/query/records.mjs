@@ -194,6 +194,14 @@ function sharedSealed(file, fs) {
   return e;
 }
 
+// A step's reply is one record in 6–8 frames: they decode off the thread first, in parallel, so the read below finds them in the
+// shared cache (2.3 #42). Before sealedReader, not inside it: an await ends the stretch, and the read that follows must be in one.
+async function warmSealed(file, fs, lineNo) {
+  const { sf, at } = sharedSealed(file, fs);
+  const i = at.get(lineNo);
+  if (i !== undefined) await sf.warm(i);
+}
+
 function sealedReader(file, fs) {
   const { sf, at } = sharedSealed(file, fs);
   const read = (r) => {
@@ -223,7 +231,9 @@ export function recordReader({ home = trocarHome(), fs = nodeFs, progress = null
     const row = rows.get(segment).get(recordId(segment, lineNo));
     if (!row) return null;
     const file = segmentFile({ home, fs, segment });
-    const read = file.endsWith('.sealed') ? sealedReader(file, fs) : plainReader(file, fs);
+    const sealed = file.endsWith('.sealed');
+    if (sealed) await warmSealed(file, fs, lineNo);
+    const read = sealed ? sealedReader(file, fs) : plainReader(file, fs);
     try {
       const at = { lineNo, offset: row.offset, stored_bytes: row.stored_bytes };
       return stamped(expandRequestBody(JSON.parse(read(at))), read.stream ? read.stream(at) : path.basename(file));
