@@ -142,33 +142,41 @@ test('3.5 row `cache`: the facts of one row of each kind', () => {
   assert.deepEqual(cacheFacts({ error: 'boom', usage: null }, ref), { state: 'failed' });
 });
 
-test('3.5 #45 rewrite: along the cause axis it is there, as true, exactly when the cause is compaction, with usage or failed', () => {
-  const ref = { has: true, usage: U };
+test('3.5 #45 rewrite: along the verdict and cause axes it is there, as true, exactly when either says so, with usage or failed', () => {
+  const steps = [{ usage: U }, { error: 'boom', usage: U }];
   const breaks = [undefined, ...[...QUIET_CAUSES, 'content-changed', 'compaction'].map((cause) => ({ cause }))];
-  for (const cacheBreak of breaks) for (const step of [{ usage: U }, { error: 'boom', usage: null }]) {
-    const f = cacheFacts({ ...step, cacheBreak }, ref);
-    const compaction = !!cacheBreak && cacheBreak.cause === 'compaction';
-    assert.equal('rewrite' in f, compaction, JSON.stringify({ step, cacheBreak }));
-    if (compaction) assert.equal(f.rewrite, true);
+  for (const step of steps) for (const compaction of [undefined, false, true]) for (const cacheBreak of breaks) {
+    const f = cacheFacts({ ...step, compaction, cacheBreak }, { has: false, usage: null });
+    const rewrite = compaction === true || (!!cacheBreak && cacheBreak.cause === 'compaction');
+    assert.equal('rewrite' in f, rewrite, JSON.stringify({ step, compaction, cacheBreak }));
+    if (rewrite) assert.equal(f.rewrite, true);
   }
 });
 
-test('3.5 #56 problem breaks: a whole-window rewrite is none, whatever else the step says; the other four break states are; and off the rewrite it is isBreak', () => {
-  const rewrite = { cause: 'compaction' };
+test('3.5 #56 problem breaks: a whole-window rewrite is none and keeps its state; the other four break states are; and off the rewrite it is isBreak', () => {
+  const landed = { cause: 'compaction' };
   const cases = [
-    [{ usage: U, compaction: true, cacheBreak: rewrite }, false],
-    [{ usage: U, compaction: false, lands: true, cacheBreak: rewrite }, false],
-    [{ usage: U, compaction: true, cacheBreak: rewrite, gt: 'ttl-rebuild' }, false],
-    [{ usage: LOW, cacheBreak: append }, true],
-    [{ usage: U, cacheBreak: changed }, true],
-    [{ usage: U, cacheBreak: append, gt: 'ttl-rebuild' }, true],
-    [{ usage: U, cacheBreak: append, gt: 'provider-contradiction' }, true],
-    [{ error: 'boom', usage: U, cacheBreak: changed }, false],
-    [{ usage: null, cacheBreak: changed }, false],
-    [{ usage: U, cacheBreak: { firstCall: true } }, false],
-    [{ usage: U, cacheBreak: append }, false],
+    // the verdict alone: a pure truncation, a compaction request with a whole prefix, one that also changed a block
+    [{ usage: LOW, compaction: true, cacheBreak: append }, false, 'low-hit'],
+    [{ usage: ZERO_READ, compaction: true, cacheBreak: append, gt: 'ttl-rebuild' }, false, 'ttl-rebuild'],
+    [{ usage: U, compaction: true, cacheBreak: changed }, false, 'changed'],
+    // the cause alone
+    [{ usage: U, compaction: false, cacheBreak: landed }, false, 'changed'],
+    [{ usage: U, cacheBreak: landed, gt: 'ttl-rebuild' }, false, 'ttl-rebuild'],
+    // neither
+    [{ usage: LOW, compaction: false, cacheBreak: append }, true, 'low-hit'],
+    [{ usage: U, compaction: false, cacheBreak: changed }, true, 'changed'],
+    [{ usage: U, cacheBreak: append, gt: 'ttl-rebuild' }, true, 'ttl-rebuild'],
+    [{ usage: U, cacheBreak: append, gt: 'provider-contradiction' }, true, 'provider-contradiction'],
+    [{ error: 'boom', usage: U, cacheBreak: changed }, false, 'failed'],
+    [{ usage: null, cacheBreak: changed }, false, 'no-usage'],
+    [{ usage: U, cacheBreak: { firstCall: true } }, false, 'first'],
+    [{ usage: U, cacheBreak: append }, false, 'reused'],
   ];
-  for (const [row, problem] of cases) assert.equal(isProblemBreak(row), problem, JSON.stringify(row));
+  for (const [row, problem, state] of cases) {
+    assert.equal(isProblemBreak(row), problem, JSON.stringify(row));
+    assert.equal(cacheState(row).state, state, JSON.stringify(row));
+  }
   for (const [row, , isBreak] of TABLE) assert.equal(isProblemBreak(row), isBreak, JSON.stringify(row));
 });
 

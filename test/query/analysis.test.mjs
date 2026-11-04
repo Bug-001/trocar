@@ -30,15 +30,15 @@ const SYSTEM = 'You are a coding assistant.', MONITOR = 'You are a security moni
 const wireUsage = ([fresh, out, read, create]) => ({ input_tokens: fresh, output_tokens: out, cache_read_input_tokens: read, cache_creation_input_tokens: create })
 const talk = (n) => Array.from({ length: 2 * n - 1 }, (_, i) => (i % 2 ? { role: 'assistant', content: [{ type: 'text', text: `a${(i + 1) / 2}` }] } : { role: 'user', content: [{ type: 'text', text: `q${i / 2 + 1}` }] }))
 const ID = 'analysis-000-4a1b-9c2d-000000000001'
-/** One session from its steps {n: question, messages?: instead of the talk up to n, tools?, u?: usage, status?, model?, agent?: a subagent's id, system?, endpoint?} (no `u`: the reply has
+/** One session from its steps {n: question, messages?: instead of the talk up to n, tools?, u?: usage, status?, model?, agent?: a subagent's id, system?, endpoint?, headers?} (no `u`: the reply has
  *  none); a step's record id is `<segment>:<its line>`. */
 function writeSession(home, steps, id = ID) {
   fs.mkdirSync(path.join(home, 'raw'), { recursive: true })
-  const lines = steps.map(({ n = 1, messages = talk(n), tools = TOOLS, u, status = 200, model = 'm-a', agent, system = SYSTEM, endpoint = '/v1/messages' }, i) => {
+  const lines = steps.map(({ n = 1, messages = talk(n), tools = TOOLS, u, status = 200, model = 'm-a', agent, system = SYSTEM, endpoint = '/v1/messages', headers }, i) => {
     const ts = `2026-10-22T10:00:${String(i).padStart(2, '0')}.000Z`, usage = u ? { usage: wireUsage(u) } : null
     const body = status === 200 ? { id: `msg_${i}`, model, stop_reason: 'end_turn', content: [{ type: 'text', text: `a${n}` }], ...usage } : { type: 'error', error: { type: 'api_error', message: 'boom' }, ...usage }
     return JSON.stringify({ ts, endpoint, method: 'POST', id: `req_${i}`, ts_request: ts, is_llm_call: true, capture: 'transparent', host: 'api.anthropic.com', traffic_class: 'llm',
-      req_headers: { host: 'api.anthropic.com', 'content-type': 'application/json', 'user-agent': 'claude-cli/2.0.0 (external, cli)', 'x-claude-code-session-id': id, ...(agent ? { 'x-claude-code-agent-id': agent } : null) },
+      req_headers: { host: 'api.anthropic.com', 'content-type': 'application/json', 'user-agent': 'claude-cli/2.0.0 (external, cli)', 'x-claude-code-session-id': id, ...(agent ? { 'x-claude-code-agent-id': agent } : null), ...headers },
       req_body: JSON.stringify({ model, max_tokens: 1024, tools, system: [{ type: 'text', text: system }], messages }),
       resp: { status, kind: 'json', body }, proc: { pid: 1, exe: '/x/claude', agent: 'claude-code' } })
   })
@@ -300,7 +300,7 @@ const headProblems = (head) => {
 }
 const SUMMARY = [{ role: 'user', content: [{ type: 'text', text: 'Summary of the conversation so far.' }] }]
 
-test('3.5 #56 problems: every kind of step by hand: totals.problems and the head\'s bits name the same main-lane steps, a rewrite and a subagent\'s failure not among them', async () => {
+test('3.5 #56 problems: every kind of step by hand: totals.problems and the head\'s bits name the same main-lane steps, the three kinds of rewrite and a subagent\'s failure not among them', async () => {
   const { home, doc, calls } = await worldOf([
     { n: 1, u: [100, 50, 0, 1000] }, // 0 first
     { n: 2, u: [100, 20, 1000, 200] }, // 1 reused
@@ -310,18 +310,24 @@ test('3.5 #56 problems: every kind of step by hand: totals.problems and the head
     { n: 6, tools: SWAPPED, u: [1000, 10, 0, 0] }, // 5 provider-contradiction
     { n: 7, tools: SWAPPED, status: 500 }, // 6 failed
     { n: 8, tools: SWAPPED, u: [100, 10, 1000, 100] }, // 7
-    { n: 1, tools: SWAPPED, messages: SUMMARY, u: [10, 10, 0, 800] }, // 8 the compaction
-    { n: 1, status: 500, agent: 'agent-1' }, // 9 a subagent's failure
+    { n: 2, tools: SWAPPED, u: [100, 10, 100, 900] }, // 8 a pure truncation: 15 messages to 3, the prefix kept
+    { n: 3, tools: SWAPPED, u: [100, 10, 1000, 100] }, // 9
+    { n: 4, tools: SWAPPED, headers: { 'x-cc-compaction-request': '1' }, u: [10, 10, 0, 1000] }, // 10 a compaction request: the prefix whole, the cache cold
+    { n: 1, tools: SWAPPED, messages: SUMMARY, u: [10, 10, 100, 800] }, // 11 the compaction lands
+    { n: 1, status: 500, agent: 'agent-1' }, // 12 a subagent's failure
   ])
   assert.deepEqual(calls.map((r) => r.cache.state).slice(0, 7), ['first', 'reused', 'low-hit', 'changed', 'ttl-rebuild', 'provider-contradiction', 'failed'])
-  assert.equal(calls[8].cache.rewrite, true)
-  assert.equal(calls[8].cache.break, true, 'the rewrite is a break that is no problem')
-  assert.equal(calls[9].cache.state, 'failed')
+  for (const [i, state, cause] of [[8, 'low-hit', 'append'], [10, 'ttl-rebuild', 'append'], [11, 'changed', 'compaction']]) {
+    assert.equal(calls[i].cacheBreak.cause, cause)
+    assert.equal(calls[i].cache.state, state, 'a rewrite keeps its state')
+    assert.equal(calls[i].cache.break, true, 'a rewrite is a break that is no problem')
+    assert.equal(calls[i].cache.rewrite, true)
+  }
+  assert.equal(calls[12].cache.state, 'failed')
   assert.equal(doc.totals.problems, 5)
   const head = await session(home, { id: ID, head: true }), cells = cellsOf(head.cols)
   assert.deepEqual(headProblems(head), [2, 3, 4, 5, 6])
-  assert.equal(cells[3 * 8 + 2] & FLAG.cacheBreak, 0)
-  assert.notEqual(cells[3 * 8 + 2] & FLAG.compaction, 0)
+  for (const i of [8, 10, 11]) assert.notEqual(cells[3 * i + 2] & FLAG.compaction, 0)
 })
 
 for (const wire of ['http', 'threads', 'ws', 'chat']) test(`3.5 #56 problems along the wires (${wire}): the total, the head's bits and the axis rows' cache count the same steps`, async () => {

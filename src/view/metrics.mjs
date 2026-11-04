@@ -44,8 +44,9 @@ export function cacheState(row) {
   return mk('reused', { hit, quiet: b.cause === 'volatile-nonce-only' ? 'volatile-nonce-only' : 'append' });
 }
 
-// A whole-window rewrite: the step's cause says its history was replaced, so a cold cache there is expected.
-const rewrites = (row) => !!row.cacheBreak && row.cacheBreak.cause === 'compaction';
+// A whole-window rewrite, so a cold cache there is expected: the compaction verdict (a pure truncation and a compaction request with
+// its prefix whole have a quiet cause) or the cause that says the history was replaced.
+const rewrites = (row) => row.compaction === true || (!!row.cacheBreak && row.cacheBreak.cause === 'compaction');
 
 /** A cache break that is a problem (2.2 §缓存判定「问题步」): any break but a whole-window rewrite. */
 export const isProblemBreak = (row) => cacheState(row).isBreak && !rewrites(row);
