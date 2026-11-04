@@ -138,10 +138,10 @@ for (const theme of ['light', 'dark']) for (const width of WIDTHS) {
       await atRest(page, 'after the step was drawn')
       await page.evaluate(() => { document.querySelector('#ctxwin').scrollTop = 0 })
       await atRest(page, 'after scrolling to the top')
-      // in the page: the window's scroll numbers and the last non-sticky item starting inside the visible box
+      // in the page: the window's scroll numbers and the last item starting inside the visible box
       const look = () => page.evaluate(() => {
         const W = document.querySelector('#ctxwin'), box = W.getBoundingClientRect()
-        const it = [...W.querySelectorAll('.cwit:not(.cwstick)')].filter((e) => { const r = e.getBoundingClientRect(); return r.top >= box.top && r.top < box.bottom }).pop()
+        const it = [...W.querySelectorAll('.cwit')].filter((e) => { const r = e.getBoundingClientRect(); return r.top >= box.top && r.top < box.bottom }).pop()
         return { top: W.scrollTop, sh: W.scrollHeight, h: W.clientHeight, key: it?.dataset.key ?? null, y: it ? it.getBoundingClientRect().top : null }
       })
       const yOf = (key) => page.evaluate((k) => document.querySelector(`#ctxwin .cwit[data-key="${CSS.escape(k)}"]`)?.getBoundingClientRect().top ?? null, key)

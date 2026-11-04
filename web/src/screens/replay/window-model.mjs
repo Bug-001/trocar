@@ -171,7 +171,7 @@ function build(s, call, st, refFlat, fid) {
   const mark = (i) => (line && i === brk.idx ? [
     { key: 'chline', type: 'chline', k: refNo(s, refRowOf(s.anchor, s.playhead)), cause: brk.cause, compaction: brk.cause === 'compaction',
       inferred: !!call.compactionInferred, auto: !flat.some((b) => b.cc), first: flat[brk.idx] || {} },
-    ...(removed.length ? [{ key: 'removed', type: 'removed', blocks: removed, refK: contentRefKOf(s), open: s.navOpen.has('cwremoved') }] : []),
+    ...(removed.length ? [{ key: 'removed', type: 'removed', blocks: removed, keys: rowKeys(removed), refK: contentRefKOf(s), open: s.navOpen.has('cwremoved') }] : []),
   ] : [])
   const prevKeys = diff ? diff.refKeys : null
   const fail = (b) => (s.bodyFail && b.text_ref && s.bodyFail.get(b.text_ref)) || null

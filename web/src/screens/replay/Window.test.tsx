@@ -5,10 +5,11 @@
 // element's offsetHeight is the height window.css gives its kind (PX: a closed row, a turn head, a section header, a one-line item).
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from 'vitest'
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
-import { useState } from 'react'
+import { Activity, useState } from 'react'
 import { buildLanes, anchorLane } from '../../../legacy/replay/lanes.mjs'
 import { stepOf } from '../../../legacy/replay/model.mjs'
-import { bodyCache, deskMode, loadBodies, overrideScope, setDeskMode } from '../../../legacy/replay/cell.mjs'
+import { bodyCache, deskMode, loadBodies, overrideScope, setDeskMode, setMode } from '../../../legacy/replay/cell.mjs'
+import { paintWindow, wireWindow } from '../../../legacy/replay/replay.mjs'
 import { initKeys, setScreenKeys } from '../../../legacy/core/keys.mjs'
 import * as C from '../../../legacy/labels/cells.mjs'
 import { deskOf, world, deskFrom } from '../../../../test/web-v2/desk-world.mjs'
@@ -81,6 +82,7 @@ function mount(s: B) {
   return { desk, win, paint: (d?: object) => act(() => { desk.window(d) }) }
 }
 const itemsOf = (s: B) => windowItems(s).items as B[]
+const reads = async (_: string, q: { ref: string | string[] }) => ({ ok: true, doc: { blocks: [q.ref].flat().map((ref) => ({ ref, bytes: 'read back', encoding: 'utf8', fidelity: 'verbatim', truncated: false })), errors: [] } })
 const drawn = (win: HTMLElement) => [...win.querySelectorAll<HTMLElement>('.cwit')].map((w) => w.dataset.key!)
 const yOf = (w: HTMLElement) => Number(/translateY\(([-\d.]+)px\)/.exec(w.style.transform)?.[1] ?? NaN)
 const wrapOf = (win: HTMLElement, key: string) => win.querySelector<HTMLElement>(`.cwit[data-key="${CSS.escape(key)}"]`)
@@ -194,6 +196,72 @@ test('2.3 #14: the desk default Readable makes every section header say Readable
   expect(claims()).toEqual(raw)
 })
 
+// the default build's window (replay.mjs wireWindow): the same 当场, heard from cell.mjs, for as long as the window is wired
+test('2.3 #14: the legacy window repaints the section headers when the desk default flips, not when one cell flips, and stops when unwired', () => {
+  const s = stateOf(deskN([[tool(), sys(), blk({ query: 'q' }), say()]]))
+  const el = document.createElement('div')
+  el.id = 'ctxwin'
+  const off = wireWindow(el, s)
+  paintWindow(el, s)
+  const claims = () => [...el.querySelectorAll('.cwsec .cwsecff')].map((h) => h.textContent)
+  const raw = claims()
+  expect(raw).toHaveLength(3)
+  expect(raw).not.toContain(C.READABLE_VIEW)
+  setDeskMode('read')
+  expect(claims()).toEqual(raw.map(() => C.READABLE_VIEW))
+  setDeskMode('raw')
+  expect(claims()).toEqual(raw)
+  const before = el.innerHTML
+  setMode('some bid', 'read')
+  expect(el.innerHTML).toBe(before)
+  off()
+  setDeskMode('read')
+  expect(el.innerHTML).toBe(before)
+})
+
+// D75④: a removed row is keyed by its block, so the same place on another step's list is another row: closed until the reader opens it
+test('2.3 内容对比步: a removed row opened on one step leaves no row open without a read on the next; a block on both lists stays open with its read', async () => {
+  const p = sys({ bid: 'p' }), q = blk({ bid: 'q', query: 'q' }), [a, b, c, d] = ['a', 'b', 'c', 'd'].map((bid) => say({ bid }))
+  const brk = (refRid: string) => ({ cacheBreak: { cause: 'content-changed', idx: 2, firstCall: false, refRid } })
+  const s = stateOf(deskN([[p, q, a, b], [p, q, c], [p, q, d]], [{}, brk('R0-0'), brk('R0-1')]), 1)
+  s.ctx.api.get.mockImplementation(reads)
+  const { win, paint } = mount(s)
+  const rows = () => [...win.querySelectorAll<HTMLElement>('.cblk[data-rm]')]
+  const opened = () => rows().filter((x) => !x.classList.contains('collapsed'))
+  expect(rows()).toHaveLength(2)
+  await act(async () => { fireEvent.click(rows()[0].querySelector('.cbh')!); await new Promise((r) => setTimeout(r, 5)) })
+  expect(opened()).toEqual([rows()[0]])
+  expect(opened()[0].querySelector('.cellpend')).toBeNull()
+  // the next step, against its own predecessor: its list's first row is another block
+  s.playhead = 2
+  paint({ kind: 'step', busy: false })
+  expect(rows()).toHaveLength(1)
+  expect(opened()).toEqual([])
+  // the same step against the first one: the row opened there is on this list too, at its place, with its bytes
+  s.anchor.calls[2].cacheBreak.refRid = 'R0-0'
+  paint({ kind: 'step', busy: false })
+  expect(rows()).toHaveLength(2)
+  expect(opened()).toHaveLength(1)
+  expect(opened()[0].querySelector('.cellpend')).toBeNull()
+})
+
+// D71③: leaving a session hides its desk in an <Activity>; a measured open row keeps its measured height when the desk is shown again
+test('D71③: showing a hidden window keeps the sizes it measured', () => {
+  const s = stateOf(deskN([[tool(), sys(), blk({ query: 'q' }), say(), say()]]))
+  s.ctx.api.get.mockImplementation(reads)
+  const desk = reactView(s, () => {}, () => {})
+  let show = (_: 'visible' | 'hidden') => {}
+  function Parent() { const [m, setM] = useState<'visible' | 'hidden'>('visible'); show = setM; return <Activity mode={m}><Window desk={desk} /></Activity> }
+  const { container } = render(<Parent />)
+  const win = container.querySelector('#ctxwin') as HTMLElement
+  act(() => { fireEvent.click(win.querySelector('.cblk.collapsed > .cbh')!) })
+  act(() => show('hidden'))
+  act(() => show('visible'))
+  const items = [...win.querySelectorAll<HTMLElement>('.cwit')]
+  expect(items).toHaveLength(itemsOf(s).length)
+  expect((win.querySelector('.cwlist') as HTMLElement).style.height).toBe(`${items.reduce((a, x) => a + x.offsetHeight, 0)}px`)
+})
+
 test('2.3 #13: one .cblk[data-rp] per reply row, none with data-bi / data-rk / data-sec, the stop reason on the last head only, the reply a named group', () => {
   const parts = [rp('thinking'), rp('text'), rp('tool_use', { name: 'Bash' })]
   const s = stateOf(deskN([[sys(), blk({ query: 'q', resKey: 'f' })]], [{}], { replies: [parts], details: [{ norm: { stop_reason: 'tool_use' } }] }))
@@ -266,11 +334,22 @@ test('pins: withPins always holds the four pins and the widened range, sorted on
     const rnd = r(k), count = 1 + Math.floor(rnd() * 200), starts: number[] = []
     for (let i = 0, y = 0; i < count; i++) { starts.push(y); y += 10 + Math.floor(rnd() * 90) }
     const a = Math.floor(rnd() * count), b = Math.min(count - 1, a + Math.floor(rnd() * 10)), pins = [0, 1, 2, 3].map(() => Math.floor(rnd() * count))
-    const out = withPins({ startIndex: a, endIndex: b, count, starts, h: 300 }, pins, null)
+    const out = withPins({ startIndex: a, endIndex: b, count, starts, top: starts[a], h: 300 }, pins, null)
     for (const p of pins) expect(out).toContain(p)
     for (let i = a; i <= b; i++) expect(out).toContain(i)
     expect(out).toEqual([...new Set(out)].sort((x, y) => x - y))
     expect(out.every((i) => i >= 0 && i < count)).toBe(true)
+  }
+})
+
+test('rule 4: withPins holds the items touching one window height above and below the box, however tall the item at its top', () => {
+  const r = (seed: number) => { let a = seed; return () => ((a = (a * 1103515245 + 12345) % 2 ** 31) / 2 ** 31) }
+  for (let k = 1; k < 60; k++) {
+    const rnd = r(k), count = 5 + Math.floor(rnd() * 100), starts: number[] = [], ends: number[] = [], h = 100 + Math.floor(rnd() * 500)
+    for (let i = 0, y = 0; i < count; i++) { starts.push(y); y += rnd() < 0.1 ? h * (1 + Math.floor(rnd() * 4)) : 30; ends.push(y) } // some rows are taller than the box
+    const top = Math.floor(rnd() * Math.max(1, ends[count - 1] - h)), at = (y: number) => starts.findLastIndex((s) => s <= y)
+    const out = withPins({ startIndex: at(top), endIndex: at(top + h), count, starts, top, h }, [], null)
+    expect(out).toEqual(starts.map((_, i) => i).filter((i) => ends[i] > top - h && starts[i] <= top + 2 * h))
   }
 })
 
@@ -279,8 +358,8 @@ test('landing band: withPins holds the landing index through the last item start
   const starts = sizes.map((_, i) => sizes.slice(0, i).reduce((a, b) => a + b, 0))
   for (const h of [50, 200, 600]) {
     for (let band = 0; band < sizes.length; band++) {
-      const out = withPins({ startIndex: 0, endIndex: 0, count: sizes.length, starts, h }, [], band)
-      const seen = starts.map((_, i) => i).filter((i) => starts[i] <= h) // the visible range (item 0) widened by h
+      const out = withPins({ startIndex: 0, endIndex: 0, count: sizes.length, starts, top: 0, h }, [], band)
+      const seen = starts.map((_, i) => i).filter((i) => starts[i] <= 2 * h) // the box at the top, and one height below it
       const want = starts.map((_, i) => i).filter((i) => i >= band && starts[i] < starts[band] + h)
       expect(out).toEqual([...new Set([...seen, ...want])].sort((x, y) => x - y))
     }

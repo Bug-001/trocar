@@ -54,7 +54,7 @@ import { openDetail, closeDetail, wireDetail } from './detail.mjs'
 import { initLayout } from './layout.mjs'
 import { renderSessionHead, wireSessionHead, captureGap, behindOf } from './header.mjs'
 import { stepBarHtml, roughStepHtml, wireStepBar } from './stepbar.mjs'
-import { loadBodies, bodyCache, clearOverrides, overrideScope, isRetryable } from './cell.mjs'
+import { loadBodies, bodyCache, clearOverrides, deskMode, onModeChange, overrideScope, isRetryable } from './cell.mjs'
 import { SESSION_NOT_LISTED, BACK_TO_SESSIONS } from '../labels/shell.mjs'
 import { CACHE_LEGEND, CACHE_LEGEND_UNK, KEYS_TITLE, KEY_LIST, RETRY, THIS_SESSION, REVIEW_TIP, MAINDIV_TIP, DIVIDER_TIP, RPBAR_TIP, moreLanes } from '../labels/replay.mjs'
 import { readFailure } from '../core/ui.mjs'
@@ -157,7 +157,10 @@ export function wireWindow(el, s) {
   const onRetry = (e) => { if (e.target.closest && e.target.closest('[data-retry]')) s.poll() }
   el.addEventListener('click', onRetry)
   const off = wireCtxWin(el, s)
-  return () => { el.removeEventListener('click', onRetry); off() }
+  // the desk default changes the section headers' claim at once (2.3 §段头); a cell's own flip does not touch them
+  let mode = deskMode()
+  const unheard = onModeChange(() => { const was = mode; mode = deskMode(); if (mode !== was && s.win?.kind === 'step') paintWindow(el, s) })
+  return () => { el.removeEventListener('click', onRetry); off(); unheard() }
 }
 // a jump scrolls instantly when the viewer asked the system for less motion (1.5)
 const motion = () => (typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth')
