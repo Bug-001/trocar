@@ -6,6 +6,7 @@ import { buildLanes, anchorLane } from '../../web/legacy/replay/lanes.mjs'
 import { stepOf } from '../../web/legacy/replay/model.mjs'
 import { setDeskMode, loadBodies } from '../../web/legacy/replay/cell.mjs'
 import { windowItems, landed, landingFor } from '../../web/src/screens/replay/window-model.mjs'
+import { refPending } from '../../web/legacy/replay/analysis.mjs'
 import { deskOf, world, deskFrom } from './desk-world.mjs'
 
 let rn = 0
@@ -132,6 +133,24 @@ test('1.4 #10: a landing waits for the 内容对比步\'s list, lands when it is
   assert.deepEqual([moved.t, moved.wait], [null, false])
   landed(there, moved, box)
   assert.equal(there.landedFor, 'R0-1')
+})
+
+test('2.3 内容对比步: the comparison step is on its way when the row the server named is not here, or the walk went over unread steps', () => {
+  // generated: held step numbers with gaps, a failed run before a step; the walk's answer is "pending" exactly when a step between is not held
+  for (let seed = 1; seed < 200; seed++) {
+    let a = seed; const rnd = () => ((a = (a * 1103515245 + 12345) % 2 ** 31) / 2 ** 31)
+    const nos = [], calls = []
+    for (let n = Math.floor(rnd() * 3); calls.length < 12; n += rnd() < 0.3 ? 2 + Math.floor(rnd() * 4) : 1) { nos.push(n); calls.push({ rid: `r${n}`, error: rnd() < 0.2 ? 'failed' : undefined }) }
+    const lane = { calls, ridLocal: new Map(calls.map((c, i) => [c.rid, i])), no: (i) => nos[i] }
+    for (let i = 0; i < calls.length; i++) {
+      let j = i - 1
+      while (j >= 0 && calls[j].error) j--
+      const unread = Array.from({ length: nos[i] }, (_, n) => n).some((n) => n > (j >= 0 ? nos[j] : -1) && !nos.includes(n))
+      assert.equal(refPending(lane, i), unread, `seed ${seed} step ${nos[i]}`)
+    }
+  }
+  const lane = { calls: [{ rid: 'a' }, { rid: 'b', cacheBreak: { refRid: 'gone' } }, { rid: 'c', cacheBreak: { refRid: 'a' } }, { rid: 'd', cacheBreak: { firstCall: true } }], ridLocal: new Map([['a', 0], ['b', 1], ['c', 2], ['d', 3]]) }
+  assert.deepEqual([1, 2, 3].map((i) => refPending(lane, i)), [true, false, false])
 })
 
 test('2.3 #2: an open row whose body comes back unproven gets a non-verbatim mark and its section stops claiming 以下逐字 on the next call over the same list', async () => {

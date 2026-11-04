@@ -108,6 +108,16 @@ export function refRowOf(lane, i) {
   const k = rid != null && lane.ridLocal ? lane.ridLocal.get(rid) : null
   return k != null ? lane.calls[k] : refOf(lane ? lane.calls : [], i)
 }
+// is the 缓存对比步 of lane.calls[i] still on its way? The row the server named is not here, or the walk went over a gap in the rows
+// held (their step numbers `lane.no` jump): what it found is an older step, and the rows between are unread
+export function refPending(lane, i) {
+  const c = lane && lane.calls[i], rid = c && c.cacheBreak && c.cacheBreak.refRid
+  if (!c || (c.cacheBreak && c.cacheBreak.firstCall)) return false
+  if (rid != null) return !!lane.ridLocal && !lane.ridLocal.has(rid)
+  if (!lane.no || !lane.ridLocal) return false
+  const r = refOf(lane.calls, i), j = r ? lane.ridLocal.get(r.rid) : -1
+  return lane.no(i) - (r ? lane.no(j) : -1) > i - j
+}
 // does THIS step's window draw the 变化线? ONE predicate for the step bar's 「跳到变化处」 and the window: the prefix
 // actually changed (cause outside QUIET_CAUSES) and there is a block to stand before in the step's blocks (`flat`, null
 // while its lane is not held).

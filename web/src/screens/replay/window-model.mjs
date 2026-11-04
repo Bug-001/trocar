@@ -2,7 +2,7 @@
 // playhead step's context window as keyed items in drawing order, drawn by both desks (legacy ctxwin.mjs maps them to units).
 // The proof rule (2.3 §保真标) and the reply rule (2.3 §这一步的回复) live here; blocks.mjs and rawpanel.mjs re-export them.
 import { bodyCache, isAddressed, bodyVersion, deskMode } from '../../../legacy/replay/cell.mjs'
-import { messageTurns, keyDiff, refRowOf, hasChangeLine, callFacts } from '../../../legacy/replay/analysis.mjs'
+import { messageTurns, keyDiff, refPending, refRowOf, hasChangeLine, callFacts } from '../../../legacy/replay/analysis.mjs'
 import { turnAnchorKey, turnIsOpen } from '../../../legacy/replay/fold.mjs'
 import { stepOf } from '../../../legacy/replay/model.mjs'
 import { stepRef } from '../../../legacy/replay/lanes.mjs'
@@ -143,8 +143,7 @@ export function windowItems(s) {
   const st = s.desk ? stepOf(s.desk, call.rid) : null
   if (!st || !st.held) return { state: 'frames', items: [...fid, { key: 'frames', type: 'frames', frames: framesOf(call) }] }
   const flat = st.flat
-  const ref = contentRefOf(s) // the 内容对比步: the pinned step, else the 缓存对比步
-  const refFlat = ref && s.desk ? stepOf(s.desk, ref.rid).flat : null // its lane not held: no 「新」, no removed list
+  const refFlat = s.desk ? refList(s).flat : null // its lane not held: no 「新」, no removed list
   const marks = [s.openBlocks, s.turnFold, s.turnLanded, s.bodyFail], sigs = marks.map(sigOf)
   // a store that is not a plain Set / Map (a stand-in) has no signature: no cache then
   const memo = sigs.every((x, i) => x != null || marks[i] == null)
@@ -230,6 +229,14 @@ function replyItem(s, st, call) {
   return { item: { key: 'reply', type: 'reply', stop: r.stop, rows }, map }
 }
 
+// the 内容对比步's list: the pinned step's, else the 缓存对比步's. `wait`: not here yet (flat null), and this step's 「新」 not known
+function refList(s) {
+  const ref = contentRefOf(s), pinned = !!ref && ref === s.anchor.calls[s.diffRef]
+  const wait = (!pinned && refPending(s.anchor, s.playhead)) || (!!ref && !stepOf(s.desk, ref.rid).held)
+  return { flat: ref && !wait ? stepOf(s.desk, ref.rid).flat : null, wait }
+}
+export const refWaits = (s) => !!s.anchor && !!s.desk && refList(s).wait
+
 // ── the landing rule (1.4 §打开一步时落在哪): a step 跟随最新 brought in → the reply ⑨; else the 变化线, else the first 「新」
 // block, else the top. Pure: it names the target only; it never reorders blocks.
 export function landingTarget(s) {
@@ -241,8 +248,7 @@ export function landingTarget(s) {
   const flat = st.flat
   const brk = call.cacheBreak
   if (hasChangeLine(call, flat)) return { anchor: 'cachebrk', idx: brk.idx }
-  const ref = contentRefOf(s)
-  const refFlat = ref ? stepOf(s.desk, ref.rid).flat : null
+  const refFlat = refList(s).flat
   if (refFlat) {
     const refKeys = new Set(refFlat.map((b) => b.key))
     const i = flat.findIndex((b) => !b.volatile && !refKeys.has(b.key))
@@ -262,7 +268,7 @@ export function landingFor(s, top) {
   if (!st.held) return null
   const moved = s.landWait?.rid === call.rid && s.landWait.top !== top()
   const t = moved ? null : landingTarget(s), flat = st.flat
-  if (!t) { const ref = moved ? null : contentRefOf(s); return { t, fi: null, turn: null, wait: !!ref && !stepOf(s.desk, ref.rid).held } }
+  if (!t) return { t, fi: null, turn: null, wait: !moved && refList(s).wait }
   if (t.reply) return { t, fi: flat.length - 1, turn: null, wait: false }
   const fi = t.anchor ? t.idx : t.bi, T = turnsOf(flat), ti = T.at[fi] ?? -1
   return { t, fi, turn: ti >= 0 && !turnOpen(s, flat, T, ti) ? turnAnchorKey(flat, T.list[ti]) : null, wait: false }

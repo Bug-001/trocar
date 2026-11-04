@@ -45,6 +45,7 @@ import { createPoller, INTERVAL } from '../core/poll.mjs'
 import { renderSaw, renderOverview, repositionBrush, markCurrent, renderProblemNav, problemSteps, wireTimeline, barsThatFit, fitWindow, capWindow, renderRough as roughRows, chapterHere, placeView } from './timeline.mjs'
 import { renderRails, wireRails, highlightRange, reviewing } from './rails.mjs'
 import { renderContextWindow, wireCtxWin, emptyFrameHtml, rowKeys, ensureRow, toggleCtxBlock } from './ctxwin.mjs'
+import { refWaits } from '../../src/screens/replay/window-model.mjs'
 import { renderOutline, wireOutline, jumpToAnchor, jumpToResourceBlock } from './outline.mjs'
 import { createJumpQueue } from './jump.mjs'
 import { createPricingLoader } from './pricing.mjs'
@@ -104,7 +105,7 @@ export function playheadSig(s, frame = 'rows') {
   const st = c && s.desk ? deskStep(s.desk, c.rid) : null
   const ref = a && s.diffRef != null ? a.calls[s.diffRef] : null
   return JSON.stringify([a && a.id, c, frame, st && st.held ? [st.flat.map((b) => b.bid), st.reply, st.detail] : null,
-    ref ? ref.rid : null, [...(s.openBlocks || [])].sort(), [...(s.navOpen || [])].sort(), s.viewPin ? s.viewPin.resKey : null,
+    ref ? ref.rid : null, refWaits(s), [...(s.openBlocks || [])].sort(), [...(s.navOpen || [])].sort(), s.viewPin ? s.viewPin.resKey : null,
     !!s.pricing, s.pricingErr || null, s.bodyFail ? s.bodyFail.size : 0])
 }
 
