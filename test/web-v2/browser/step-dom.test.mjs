@@ -1,9 +1,11 @@
-// test/web-v2/browser/step-dom.test.mjs — 2.3 #34 · D71②: a ±1 step on the mounted desk touches DOM in proportion to what changed,
-// not to the list length. Over desk-long's generated long conversation (desk-world.mjs `talk`: main lane ~1,800 steps, the newest
+// test/web-v2/browser/step-dom.test.mjs — 2.3 #34 · D71②: a ±1 step on the mounted desk touches DOM in proportion to what changed
+// and to the window's height, not to the list length. Over desk-long's generated long conversation (desk-world.mjs `talk`: main lane ~1,800 steps, the newest
 // list 1,000–1,400 blocks), for 30 seeded adjacent pairs (→ and ←, and one with a turn card the reader opened) plus a
 // step across a compaction (a generated world whose main lane compacts), a MutationObserver on #ctxwin (subtree, childList) counts the nodes added and removed from the key press
 // until two animation frames after the step is drawn; Δ = the list positions whose key (bid#occurrence) differs between the two
-// steps' lists, as the reference server hands them to the page. Every pair: count ≤ 4Δ + 64. Runs only under `npm run test:browser`.
+// steps' lists, as the reference server hands them to the page. Every pair: count ≤ 4Δ + 64 on the legacy desk, 4Δ + 2B + 8 on the new
+// one (B: the closed rows three box heights hold; a landing that moves the box swaps one band for another). Runs only under
+// `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { probe, withBoard, serveWorld, DESK_NEXT, gapInPage, windowGap } from './harness.mjs'
@@ -54,7 +56,7 @@ async function onBoard(w, fn) {
             await raf(); await raf()
             for (const r of window.__mo.takeRecords()) window.__mut += r.addedNodes.length + r.removedNodes.length
             window.__mo.disconnect()
-            return resolve({ n: window.__mut, from: +was, to: +x[1] })
+            return resolve({ n: window.__mut, from: +was, to: +x[1], h: document.querySelector('#ctxwin').clientHeight })
           }
           if (performance.now() - t0 > 10000) return reject(new Error(`step not drawn in 10 s after ${was}`))
           requestAnimationFrame(tick)
@@ -62,18 +64,18 @@ async function onBoard(w, fn) {
         tick()
       }), [was, NO.source])
     }
-    await fn({ page, go, count })
+    await fn({ page, go, count: async (key) => ({ ...(await count(key)), pitch: DESK_NEXT ? (await windowGap(page)).pitch : 0 }) })
     assert.deepEqual(b.errors, [])
   } finally { await b.stop() }
 }
 const mainRids = (w) => w.laneRidsAt().get(w.full().lanes.find((l) => l.kind === 'main').lane)
 
-test('2.3 #34 · D71②: a ±1 step adds and removes at most 4Δ + 64 nodes in #ctxwin', { skip }, async () => {
+test('2.3 #34 · D71②: a ±1 step adds and removes at most 4Δ + 64 nodes in #ctxwin (new desk: 4Δ + 2B + 8)', { skip }, async () => {
   const out = []
   const check = async (label, w, rids, step) => {
-    const { n, from, to } = await step()
+    const { n, from, to, h, pitch } = await step()
     const d = delta(w.list(rids[from - 1]), w.list(rids[to - 1]))
-    out.push({ label, from, to, n, d, line: 4 * d + 64 })
+    out.push({ label, from, to, n, d, line: 4 * d + (DESK_NEXT ? 2 * Math.ceil(3 * h / pitch) + 8 : 64) })
   }
   // the long conversation: 30 seeded pairs, then a folded turn card the reader opened and a step each way
   const w = world(7, { calls: 2100, page: 2100, talk: { pre: 90, len: 1200, every: 40, tail: 800 } }), rids = mainRids(w), M = rids.length
@@ -102,7 +104,30 @@ test('2.3 #34 · D71②: a ±1 step adds and removes at most 4Δ + 64 nodes in #
 
   const worst = out.reduce((a, x) => (x.n - x.line > a.n - a.line ? x : a))
   console.log(`# ±1 step DOM over ${out.length} pairs (long main ${M} steps): worst ${worst.label} ${worst.from}→${worst.to}: ${worst.n} nodes, Δ=${worst.d}, line ${worst.line}`)
-  for (const x of out) assert.ok(x.n <= x.line, `${x.label} ${x.from}→${x.to}: ${x.n} nodes added+removed, over 4Δ+64 = ${x.line} (Δ=${x.d})`)
+  for (const x of out) assert.ok(x.n <= x.line, `${x.label} ${x.from}→${x.to}: ${x.n} nodes added+removed, over the line ${x.line} (Δ=${x.d})`)
+})
+
+// 1.4 §打开一步时落在哪: what a landing brings to the box's top is what the reader sees there. elementFromPoint a little inside the
+// landed item's top, for steps landing on their first 「新」 row in a window short enough for it to reach the box's top, is inside that
+// item: nothing lies over it. (The newest reply after `f`: replay-shots.test.mjs. The generated worlds draw no change line.)
+test('1.4: the landed item is what is on top at its own top edge', { skip: nextOnly }, async () => {
+  const w = world(7, { calls: 2100, page: 2100, talk: { pre: 90, len: 1200, every: 40, tail: 800 } }), M = mainRids(w).length, r = rng(14), rows = []
+  await onBoard(w, async ({ page, go }) => {
+    await page.setViewportSize({ width: 1440, height: 520 })
+    for (let j = 0; j < 12; j++) {
+      await go(2 + Math.floor(r() * (M - 2)))
+      const x = await page.evaluate(() => {
+        const el = document.querySelector('#ctxwin'), t = el.querySelector('.cblk.is-new')
+        if (!t) return null
+        const a = t.getBoundingClientRect(), hit = document.elementFromPoint(a.left + 24, a.top + 8)
+        return { at: Math.round(a.top - el.getBoundingClientRect().top), own: t.contains(hit), hit: hit?.className ?? null }
+      })
+      if (x) rows.push(x)
+    }
+  })
+  console.log(`# landed rows at ${rows.map((x) => x.at)} px`)
+  assert.ok(rows.some((x) => x.at <= 2), 'some step lands on a 「新」 row at the box top')
+  for (const x of rows) assert.ok(x.own, JSON.stringify(x))
 })
 
 // 2.3 §窗口按 bid 打补丁 · rule 4: inside open cards only the groups within one window height above and below the visible box are

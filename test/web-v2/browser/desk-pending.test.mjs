@@ -23,11 +23,9 @@ function instrument() {
   window.__head = () => { const e = document.querySelector('#stepbar .sb-no'), m = e && /\/\s*(\d+)/.exec(e.textContent); return e && m ? { n: +e.dataset.n, m: +m[1] } : null }
 }
 
-// A known board shortfall per build, reported and not red (the way an `open` sequence regression is a todo); each text carries what three
-// runs at 1x measured. The line stays as it is (D64⑥); a build's case turns green when that build meets it.
-const SHORT = DESK_NEXT
-  ? 'desk-next misses this line while it grows: no long task, but step p50 29-36 / p95 60.1-60.3 ms against BOARD_LINES.stepClick; in one run of three a tick click did not move the step in 10 s'
-  : 'the default build misses this line while it grows: no long task, but step p50 25.5-26.9 / p95 43.6-50.1 ms against BOARD_LINES.stepClick; in one run of three a tick click did not move the step in 10 s'
+// A known board shortfall per build, reported and not red (the way an `open` sequence regression is a todo). The line stays as it is
+// (D64⑥); a build's case turns green when that build meets it. What a run measured is in its log line and the PR, not here.
+const SHORT = `${DESK_NEXT ? 'desk-next' : 'the default build'} misses this line while it grows: step p95 over BOARD_LINES.stepClick, and a tick click may not move the step`
 test('2.3 归约前沿 · D64②: a session growing by 1,000 members an answer — following, scrubbing and lane jumps run no long task; step p95 within the line', { skip, todo: SHORT }, async () => {
   const w = world(12, { calls: 30000, page: 1500, files: 600, compact: 0.02 }) // wide chapters: the window after End holds many steps
   const b = await withBoard({ bytes: 1e5, width: 1440, chromium: gate.chromium, setup: (page) => page.addInitScript(instrument) })

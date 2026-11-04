@@ -4,7 +4,7 @@
 // bottom. Shots: the replay, the bottom sheet open at 1024, the cost view. Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard, shoot, layoutFaults } from './harness.mjs'
+import { probe, withBoard, shoot, layoutFaults, DESK_NEXT } from './harness.mjs'
 import { typeFaults } from './type-inventory.mjs'
 import { CACHE_POPOVER_LABEL } from '../../../web/legacy/labels/replay.mjs'
 import { CT_ORDER } from '../../../web/legacy/replay/analysis.mjs'
@@ -174,10 +174,10 @@ test('turning follow latest on from an earlier step lands the window on the newe
     const at = await b.page.evaluate(() => new Promise((ok) => requestAnimationFrame(() => {
       const w = document.querySelector('#ctxwin'), r = document.querySelector('#ctxwin .cwreply').getBoundingClientRect(), wr = w.getBoundingClientRect()
       const sb = document.querySelector('#stepbar'), top = wr.top + (sb && w.contains(sb) ? sb.getBoundingClientRect().height : 0)
-      ok({ reply: r.top, top, bottom: wr.bottom, atEnd: w.scrollTop >= w.scrollHeight - w.clientHeight - 1 })
+      ok({ reply: r.top, top, bottom: wr.bottom, atEnd: w.scrollTop >= w.scrollHeight - w.clientHeight - 1, own: !!document.elementFromPoint(r.left + 24, r.top + 8)?.closest('.cwreply') })
     })))
     // at the top of the window, or the window scrolled as far as it goes with the reply in view
-    assert.ok(at.reply >= at.top - 2 && at.reply < at.bottom && (at.reply <= at.top + 2 || at.atEnd), JSON.stringify(at))
+    assert.ok(at.reply >= at.top - 2 && at.reply < at.bottom && (at.reply <= at.top + 2 || at.atEnd) && at.own, JSON.stringify(at))
     assert.deepEqual(b.errors, [])
   } finally { await b.stop() }
 })
@@ -198,12 +198,13 @@ test('a reply row has the request row\'s head frame and opens by keyboard', { sk
     }
     const frame = (sel, i) => b.page.$$eval(sel, (hs, i) => { const s = getComputedStyle(hs.at(i)); return [s.fontFamily, s.fontSize, s.paddingLeft, s.paddingRight] }, i)
     assert.deepEqual(await frame(head, 0), await frame('#ctxwin .cblk[data-bi] > .cbh', -1)) // the first reply row against the last request row
-    assert.equal(await b.page.$eval(head, (e) => e.tabIndex), 0)
+    const control = DESK_NEXT ? `${head} .cbtog` : head // the new desk's head holds a button (2.3 §block 卡)
+    assert.equal(await b.page.$eval(control, (e) => e.tabIndex), 0)
     const shut = () => b.page.$eval(head, (e) => e.parentElement.classList.contains('collapsed'))
     const before = await shut()
-    await b.page.focus(head); await b.page.keyboard.press('Enter')
+    await b.page.focus(control); await b.page.keyboard.press('Enter')
     assert.equal(await shut(), !before)
-    await b.page.focus(head); await b.page.keyboard.press('Enter')
+    await b.page.focus(control); await b.page.keyboard.press('Enter')
     assert.equal(await shut(), before)
     assert.deepEqual(b.errors, [])
   } finally { await b.stop() }
