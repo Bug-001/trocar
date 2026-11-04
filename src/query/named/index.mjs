@@ -36,7 +36,7 @@ export const QUERIES = Object.freeze({
   lane: { params: lane.params, run: lane.run, version: lane.version, stamp: src.corpus },
   calls: { params: calls.params, run: calls.run, stamp: src.corpus, times: TIMES },
   traffic: { params: traffic.params, run: traffic.run, stamp: src.corpus, times: TIMES },
-  overview: { params: overview.params, run: overview.run, stamp: src.usage, times: TIMES },
+  overview: { params: overview.params, run: overview.run, stamp: src.overview, times: TIMES },
   block: { params: block.params, lists: block.lists, run: block.run, stamp: src.corpus, rowFree: true },
   classes: { params: classes.params, run: classes.run, stamp: src.classes, clock: true },
   segments: { params: segments.params, run: segments.run, stamp: src.corpus, times: TIMES },
