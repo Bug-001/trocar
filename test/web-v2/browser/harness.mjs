@@ -7,11 +7,59 @@ import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { boardHome, serveBoard } from '../real-face.mjs'
+import { tmpDir, removeTmp } from '../../helpers/tmp.mjs'
+import rm from '../../helpers/rm-tree.cjs'
 import { CONTROL_TOKEN_HEADER } from '../../../src/off/token-header.mjs'
 import { INTERVAL, TIMER_ROUND } from '../../../src/web/v2/core/poll.mjs'
 
 const SHOTS = fileURLToPath(new URL('./shots/', import.meta.url))
 const CHANNEL = { channel: 'chrome' }
+
+/** Before `t.close()` runs, every route on what `routed()` lists is dropped with behavior 'ignoreErrors': a handler still awaiting
+ *  route.fetch when its page goes would otherwise reject with nobody to await it, an unhandled rejection that fails whichever case runs. */
+function closeQuietly(t, routed) {
+  const close = t.close.bind(t)
+  t.close = async (...a) => {
+    for (const x of routed()) { try { await x.unrouteAll({ behavior: 'ignoreErrors' }) } catch { /* already closed */ } }
+    return close(...a)
+  }
+}
+
+/** Chrome on Windows learns whether the account's password is blank by logging on with an empty one (LogonUser, interactive), soon after
+ *  start, and caches the answer in the profile's Local State under these two keys; it tries again only once the password changes after
+ *  `os_password_last_changed` (Chrome time, µs since 1601). A fresh profile has no cache, so every launch made one failed logon, and the ten
+ *  launches of one browser file in ten minutes locked the account out (Security log 4625 then 4740), ssh with it. The cached answer, dated
+ *  at the largest value, means no launch ever tries; other systems never read the keys. */
+const LOCAL_STATE = { password_manager: { os_password_blank: false, os_password_last_changed: '9223372036854775807' } }
+
+/** The system Chrome (`chromium` is playwright-core's), with a temp directory of its own as TMP / TEMP / TMPDIR and as the parent of its
+ *  profile (seeded with LOCAL_STATE): what it leaves there (on Windows a chrome_url_fetcher_* folder) goes once close() has seen Chrome
+ *  exit (at 'disconnected' Windows Chrome still holds profile files), never into the run's temp directory, which leak-guard checks; what
+ *  is still held then, or a browser never closed, goes when the process exits (tmpDir). Closing the browser, any context or any page of
+ *  it first drops the routes on what closes (closeQuietly). */
+export async function launchChrome(chromium) {
+  const tmp = tmpDir('trocar-chrome-')
+  const profile = path.join(tmp, 'profile')
+  fs.mkdirSync(profile)
+  fs.writeFileSync(path.join(profile, 'Local State'), JSON.stringify(LOCAL_STATE))
+  const browser = (await chromium.launchPersistentContext(profile, { ...CHANNEL, env: { ...process.env, TMP: tmp, TEMP: tmp, TMPDIR: tmp } })).browser()
+  const close = browser.close.bind(browser)
+  browser.close = async (...a) => {
+    try { return await close(...a) } finally {
+      rm.removeTree(tmp)
+      if (!fs.existsSync(tmp)) removeTmp(tmp)
+    }
+  }
+  const newContext = browser.newContext.bind(browser)
+  browser.newContext = async (...a) => {
+    const c = await newContext(...a)
+    c.on('page', (p) => closeQuietly(p, () => [p]))
+    closeQuietly(c, () => [c, ...c.pages()])
+    return c
+  }
+  closeQuietly(browser, () => browser.contexts().flatMap((c) => [c, ...c.pages()]))
+  return browser
+}
 
 /** { ok:true, chromium } when the browser suite may run here; { ok:false, reason } otherwise (the reason is printed). */
 export async function probe({ importer = () => import('playwright-core'), env = process.env } = {}) {
@@ -19,7 +67,7 @@ export async function probe({ importer = () => import('playwright-core'), env = 
   if (env.TROCAR_PLAYWRIGHT !== '1') return no('TROCAR_PLAYWRIGHT is not 1 (run it with `npm run test:browser`)')
   let chromium
   try { chromium = (await importer()).chromium } catch (e) { return no(`playwright-core is not installed: ${e?.message || e}`) }
-  try { await (await chromium.launch(CHANNEL)).close() } catch (e) { return no(`Google Chrome did not launch: ${String(e?.message || e).split('\n')[0]}`) }
+  try { await (await launchChrome(chromium)).close() } catch (e) { return no(`Google Chrome did not launch: ${String(e?.message || e).split('\n')[0]}`) }
   return { ok: true, chromium }
 }
 
@@ -79,7 +127,7 @@ export async function withBoard({ bytes, home, base, idleMs, token = true, width
     }
   }
   try {
-    browser = await chromium.launch(CHANNEL)
+    browser = await launchChrome(chromium)
     context = await browser.newContext({ viewport: { width, height }, colorScheme: theme })
     page = await context.newPage()
     page.on('pageerror', (e) => errors.push(String(e)))
@@ -211,12 +259,17 @@ export async function shoot(page, name, { width, theme }) {
  *    both ways (a disclosure title under a copy button, a cell note running into the next column, a date over a switch);
  *  - `cut`: text cut off by a box that clips it with no ellipsis (a hidden-overflow ancestor that is not a scroll container, horizontally);
  *  - `untitled`: text truncated with an ellipsis whose full text is nowhere on hover (no `title` on it or above it);
- *  - `emptyIcons`: an agent icon box of a known agent that is still empty. Overlays (dialogs, popovers, toasts) float by design and are left out. */
-export const layoutFaults = (page, root = '#content') => page.evaluate((root) => {
+ *  - `emptyIcons`: an agent icon box of a known agent that is still empty once its file had ICON_WAIT_MS to arrive (the board fills a box
+ *    when the file answers, core/chips.mjs; a slow machine answers it after the screen's data). Overlays (dialogs, popovers, toasts) float by
+ *    design and are left out. */
+const ICON_WAIT_MS = 10_000
+export const layoutFaults = (page, root = '#content') => page.evaluate(async ({ root, iconWaitMs }) => {
   const R = document.querySelector(root)
   const out = { overlap: [], cut: [], untitled: [], emptyIcons: [] }
   if (!R) return out
   const shown = (el) => { for (let e = el; e && e !== document.documentElement; e = e.parentElement) { const cs = getComputedStyle(e); if (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') return false } return true }
+  const empty = () => [...R.querySelectorAll('[data-hicon]')].filter((el) => el.getAttribute('data-hicon') !== '?' && shown(el) && !el.querySelector('svg'))
+  for (const t0 = Date.now(); empty().length && Date.now() - t0 < iconWaitMs;) await new Promise((ok) => setTimeout(ok, 50))
   const floating = (el) => !!el.closest('[role="dialog"], [data-confirm-back], .pop, .popover, .fly, #toasts')
   // the part of a box the reader can see: inside every ancestor that clips (any overflow but visible) and inside the window
   const seen = (el, r) => {
@@ -268,7 +321,7 @@ export const layoutFaults = (page, root = '#content') => page.evaluate((root) =>
       break
     }
   }
-  for (const el of R.querySelectorAll('[data-hicon]')) if (el.getAttribute('data-hicon') !== '?' && shown(el) && !el.querySelector('svg')) out.emptyIcons.push(el.getAttribute('data-hicon'))
+  out.emptyIcons = empty().map((el) => el.getAttribute('data-hicon'))
   for (const k of Object.keys(out)) out[k] = [...new Set(out[k])]
   return out
-}, root)
+}, { root, iconWaitMs: ICON_WAIT_MS })

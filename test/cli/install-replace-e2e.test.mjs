@@ -9,7 +9,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { modelWorld } from '../helpers/model-world.mjs'
-import { liveUnit, withScratchCwd } from '../helpers/model-daemon.mjs'
+import { liveUnit, withScratchCwd, unservable } from '../helpers/model-daemon.mjs'
 import { within } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { flowsOf } from '../helpers/model-io.mjs'
@@ -49,7 +49,7 @@ const olderOff = (routes) => ({ ...routes, 'POST /off': async (q) => {
 for (const platform of ['darwin', 'win32']) for (const kase of [null, 'older', ...Object.keys(FAILS)]) {
   const fail = FAILS[kase] ? kase : null
   const older = kase === 'older'
-  test(`${platform}: V108 — install from another copy ${fail ? `fails (${fail}) and says so` : `replaces the collector on other code${older ? ' (an earlier build whose /off accepts only update and uninstall)' : ''}; routing is untouched; a second install leaves it`}`, { timeout: 60_000 }, async () => {
+  test(`${platform}: V108 — install from another copy ${fail ? `fails (${fail}) and says so` : `replaces the collector on other code${older ? ' (an earlier build whose /off accepts only update and uninstall)' : ''}; routing is untouched; a second install leaves it`}`, { skip: await unservable(platform), timeout: 60_000 }, async () => {
     const w = await modelWorld({ os: platform, commands: ['codex'] })
     fs.mkdirSync(path.join(w.home, '.codex'), { recursive: true }); fs.writeFileSync(path.join(w.home, '.codex', '.env'), '')
     const boxA = await liveUnit({ w, platform, ...(older ? { routes: olderOff } : {}) }) // answers this checkout's code

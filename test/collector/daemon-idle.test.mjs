@@ -16,7 +16,7 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { modelWorld } from '../helpers/model-world.mjs'
-import { liveUnit, withScratchCwd, boardPortOf } from '../helpers/model-daemon.mjs'
+import { liveUnit, withScratchCwd, boardPortOf, unservable } from '../helpers/model-daemon.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
@@ -49,7 +49,7 @@ function ioFor(platform) {
 }
 
 for (const platform of ['darwin', 'win32']) {
-  test(`${platform}: an idle daemon (one harness on, the door and the board listening, no traffic) arms no interval shorter than ${IDLE_FLOOR_MS} ms`, { timeout: 30_000 }, async () => {
+  test(`${platform}: an idle daemon (one harness on, the door and the board listening, no traffic) arms no interval shorter than ${IDLE_FLOOR_MS} ms`, { skip: await unservable(platform), timeout: 30_000 }, async () => {
     const w = await modelWorld({ os: platform, commands: ['codex'] })
     assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
     const envFile = path.join(w.home, '.codex', '.env')

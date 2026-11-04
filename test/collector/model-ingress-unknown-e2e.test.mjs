@@ -12,7 +12,7 @@ import fs from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
 import { modelWorld } from '../helpers/model-world.mjs'
-import { liveUnit, withScratchCwd } from '../helpers/model-daemon.mjs'
+import { liveUnit, withScratchCwd, unservable } from '../helpers/model-daemon.mjs'
 import { within, onceWithin } from '../helpers/bounded.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
@@ -22,7 +22,7 @@ import { PID, agentOf, darwinExec, win32Io, flowsOf, freePort, statusDoc } from 
 const HOST = 'probe.example'
 
 for (const platform of ['darwin', 'win32']) {
-  test(`${platform}: the real door closes an opener it cannot take and names its sender, relays a stranger's absolute-form plain http and records the agent's`, { timeout: 60_000 }, async () => {
+  test(`${platform}: the real door closes an opener it cannot take and names its sender, relays a stranger's absolute-form plain http and records the agent's`, { skip: await unservable(platform), timeout: 60_000 }, async () => {
     const w = await modelWorld({ os: platform, commands: ['codex'] })
     assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
     fs.mkdirSync(path.join(w.home, '.codex'), { recursive: true }); fs.writeFileSync(path.join(w.home, '.codex', '.env'), '')

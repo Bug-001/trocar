@@ -46,7 +46,7 @@ function proxyNode(g, F, host, port) {
   const name = `${host}:${port}`
   if (l && l.unknown) return g.node({ kind: 'proxy', name, addr: host, port, unknown: l.unknown })
   if (l) return g.node({ kind: 'proxy', name: l.exe ? base(l.exe) : name, addr: host, port, pid: l.pid })
-  const gone = F.unknowns.find((u) => u.fact === 'listeners') // the listeners could not be read: that is why nobody is named, not that nobody listens
+  const gone = F.unknowns.find((u) => u.fact === 'listeners' || u.fact === 'arch') // the listeners could not be read (alone, or with the whole platform part): that is why nobody is named, not that nobody listens
   return g.node({ kind: 'proxy', name, addr: host, port, ...(gone ? { unknown: { reason: gone.reason, detail: gone.detail } } : { down: true }) })
 }
 

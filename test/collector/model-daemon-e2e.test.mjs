@@ -12,7 +12,7 @@ import http from 'node:http'
 import net from 'node:net'
 import path from 'node:path'
 import { modelWorld } from '../helpers/model-world.mjs'
-import { liveUnit, withScratchCwd } from '../helpers/model-daemon.mjs'
+import { liveUnit, withScratchCwd, unservable } from '../helpers/model-daemon.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
 import { runOffCli } from '../../src/off/main.mjs'
@@ -40,7 +40,7 @@ function fakeIo() {
 const canConnect = (port) => new Promise((resolve) => { const s = net.connect(port, '127.0.0.1'); s.once('connect', () => { s.destroy(); resolve(true) }); s.once('error', () => resolve(false)) })
 
 for (const platform of ['darwin', 'win32']) {
-  test(`${platform}: trocar on → a real daemon (model collector, real endpoint) opens the door → the CLI writes the entry → trocar off restores it byte for byte, closes the doors and leaves the daemon running`, { timeout: 30_000 }, async () => {
+  test(`${platform}: trocar on → a real daemon (model collector, real endpoint) opens the door → the CLI writes the entry → trocar off restores it byte for byte, closes the doors and leaves the daemon running`, { skip: await unservable(platform), timeout: 30_000 }, async () => {
     const w = await modelWorld({ os: platform, commands: ['codex'] })
     assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
     const envFile = path.join(w.home, '.codex', '.env')
@@ -159,7 +159,7 @@ for (const platform of ['darwin', 'win32']) {
 // the real `off` closes it (the manifest's off_at) while a codex started inside it still lives; `uninstall` through the real endpoint refuses with the
 // daemon up (GET /holders) and, the daemon stopped, again (the CLI judges the same table from the manifest); once the holder has exited it uninstalls.
 for (const platform of ['darwin', 'win32']) {
-  test(`${platform}: CM24 · a holder from the on window: uninstall refuses with the daemon up and with it down, and uninstalls once the holder exits`, { timeout: 30_000 }, async () => {
+  test(`${platform}: CM24 · a holder from the on window: uninstall refuses with the daemon up and with it down, and uninstalls once the holder exits`, { skip: await unservable(platform), timeout: 30_000 }, async () => {
     const w = await modelWorld({ os: platform, commands: ['codex'] })
     assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
     const box = await liveUnit({ w, platform, parts: { helper: { close: async () => {}, call: async (verb) => { if (verb === 'ps') return { procs: [] }; throw Object.assign(new Error(`not in this stand-in: ${verb}`), { code: 'helper-verb-error' }) } } } })

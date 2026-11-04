@@ -6,6 +6,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { readProxySetting, proxyFilesOf } from '../../src/netenv/adopt.mjs'
 import { gatherNetFacts } from '../../src/netenv/facts.mjs'
+import { buildTopology } from '../../src/netenv/topology.mjs'
+import { diagnose } from '../../src/netenv/findings.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 
@@ -116,6 +118,22 @@ test('gatherNetFacts: a platform part that throws leaves the routing unknown and
   assert.equal(none.routing, 'unknown')
   assert.equal(none.unknowns[0].reason, 'absent')
   await assert.rejects(gatherNetFacts({ ...base, home, status: status(), archFacts: async () => { throw Object.assign(new Error('refusing to run ss'), { code: 'ESANDBOX' }) } }), /refusing to run ss/)
+})
+
+test('a platform part that throws or is absent leaves the listeners unread: a loopback proxy in the setting is an unknown hop with that reason, never down, and no finding says it is dead (R11, invariant 4)', async () => {
+  const env = { HTTPS_PROXY: 'http://127.0.0.1:7890' }
+  const throws = async () => { throw Object.assign(new Error('boom'), { code: 'EBOOM' }) }
+  for (const [label, over] of [['throws', { archFacts: throws }], ['absent', { platform: 'plan9' }]]) {
+    const f = await gatherNetFacts({ ...base, env, home: tmpDir('trocar-gather-unread-'), status: status(), ...over })
+    const t = buildTopology(f)
+    const proxies = Object.values(t).flatMap((x) => (x.nodes || []).filter((n) => n.kind === 'proxy' && n.port === 7890))
+    assert.ok(proxies.length > 0, `${label}: the setting's proxy is drawn`)
+    for (const n of proxies) {
+      assert.ok(!n.down, `${label}: ${JSON.stringify(n)} is not down`)
+      assert.ok(n.unknown && n.unknown.reason, `${label}: ${JSON.stringify(n)} says why it is not named`)
+    }
+    assert.deepEqual(diagnose({ facts: f, topology: t }).filter((x) => x.code === 'proxy-dead'), [], `${label}: no proxy-dead from an unread table`)
+  }
 })
 
 test('gatherNetFacts: the host\'s linger state and another redirector, the files and keys a harness reads its proxy from (to name the line in a command), and a fake-ip an arch part saw', async () => {

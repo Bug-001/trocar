@@ -16,7 +16,7 @@ import path from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { modelWorld } from '../helpers/model-world.mjs'
-import { liveUnit, withScratchCwd } from '../helpers/model-daemon.mjs'
+import { liveUnit, withScratchCwd, unservable } from '../helpers/model-daemon.mjs'
 import { within } from '../helpers/bounded.mjs'
 import { WITH_PARENT, watchEnv } from '../helpers/standin.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -62,7 +62,7 @@ const TITLE = {
   http: 'a decrypted response that ends 1 s after the exit request — the drain wait sees it end (status relayed.closing 1, then the daemon goes) within 5 s, and nothing is cut',
 }
 for (const platform of ['darwin', 'win32']) for (const kind of ['ws', 'http']) {
-test(`${platform}: update replaces a daemon holding ${TITLE[kind]}`, { timeout: 90_000 }, async () => {
+test(`${platform}: update replaces a daemon holding ${TITLE[kind]}`, { skip: await unservable(platform), timeout: 90_000 }, async () => {
   const w = await modelWorld({ os: platform, commands: ['codex'] })
   fs.mkdirSync(path.join(w.home, '.codex'), { recursive: true }); fs.writeFileSync(path.join(w.home, '.codex', '.env'), '')
   const upCa = createCa({ commonName: 'e2e upstream CA' }), upIssuer = createLeafIssuer(loadCa(upCa))

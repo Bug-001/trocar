@@ -16,7 +16,7 @@ import path from 'node:path'
 import zlib from 'node:zlib'
 import net from 'node:net'
 import { modelWorld } from '../helpers/model-world.mjs'
-import { liveUnit, boardPortOf } from '../helpers/model-daemon.mjs'
+import { liveUnit, boardPortOf, unservable } from '../helpers/model-daemon.mjs'
 import { workerFork } from '../helpers/worker-fork.mjs'
 import { within } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -113,7 +113,7 @@ function grow(s, rid, name) {
   return `${name}:1`
 }
 
-test('darwin: a read goes through the real daemon and gives the very bytes the local path gives; a new record of a session is in its next query', { timeout: 60_000 }, async () => {
+test('darwin: a read goes through the real daemon and gives the very bytes the local path gives; a new record of a session is in its next query', { skip: await unservable('darwin'), timeout: 60_000 }, async () => {
   const { w, trocar, pristine, box, local } = await seam({ seed: 7 })
   try {
     // the endpoint the daemon itself wrote: this is what the CLI resolves, through the one resolver
@@ -183,7 +183,7 @@ function hangUp({ socketPath, token, path: p }) {
   })
 }
 
-test('darwin: the cold read is local, the worker is warmed behind it, and a caller that hangs up mid-document leaves the worker usable', { timeout: 60_000 }, async () => {
+test('darwin: the cold read is local, the worker is warmed behind it, and a caller that hangs up mid-document leaves the worker usable', { skip: await unservable('darwin'), timeout: 60_000 }, async () => {
   const w = await modelWorld({ os: 'darwin' })
   const trocar = path.join(w.home, '.trocar')
   generate({ home: trocar, seed: 11, bytes: 3_000_000, segmentBytes: 1 << 20 })
@@ -226,7 +226,7 @@ test('darwin: the cold read is local, the worker is warmed behind it, and a call
 /** The session document `session --id <id>` prints through the daemon, parsed, and the bytes. */
 const fullOf = async (s, id) => { const r = await s.daemon(['session', '--id', id, '--json']); return { doc: JSON.parse(r.out), text: r.out } }
 
-test('darwin · 3.5 #7 · #25: a never-projected session through the daemon — its first worker answer carries pending, the CLI asks until none, exits 0, and prints the local bytes', { timeout: 180_000 }, async () => {
+test('darwin · 3.5 #7 · #25: a never-projected session through the daemon — its first worker answer carries pending, the CLI asks until none, exits 0, and prints the local bytes', { skip: await unservable('darwin'), timeout: 180_000 }, async () => {
   const s = await seam({ seed: 7, big: 16 << 20 })
   try {
     const id = s.big
@@ -249,7 +249,7 @@ test('darwin · 3.5 #7 · #25: a never-projected session through the daemon — 
   } finally { await s.box.stop() }
 })
 
-test('darwin · 3.5 #19 · 4.3 #4b: a record of S lands; `session --since <mark>` through the daemon carries its rid on base = that mark, and applied to the full answer gives the fresh full answer', { timeout: 90_000 }, async () => {
+test('darwin · 3.5 #19 · 4.3 #4b: a record of S lands; `session --since <mark>` through the daemon carries its rid on base = that mark, and applied to the full answer gives the fresh full answer', { skip: await unservable('darwin'), timeout: 90_000 }, async () => {
   const s = await seam({ seed: 7 })
   try {
     const id = biggestSession((await s.warm('sessions')).text)
@@ -265,7 +265,7 @@ test('darwin · 3.5 #19 · 4.3 #4b: a record of S lands; `session --since <mark>
   } finally { await s.box.stop() }
 })
 
-test('darwin · 3.5 #7: `lane` and a multi-ref `block` through the daemon are the local bytes; a repeated single-valued option exits 2', { timeout: 90_000 }, async () => {
+test('darwin · 3.5 #7: `lane` and a multi-ref `block` through the daemon are the local bytes; a repeated single-valued option exits 2', { skip: await unservable('darwin'), timeout: 90_000 }, async () => {
   const s = await seam({ seed: 11 })
   try {
     const id = biggestSession((await s.warm('sessions')).text)
@@ -298,7 +298,7 @@ const boardGet = (port, p, headers) => within(new Promise((resolve, reject) => {
   r.on('error', reject); r.end()
 }), 30_000, `GET ${p}`)
 
-test('darwin · 4.4 #9 on the daemon\'s board: an unchanged session is 304, another session growing keeps it 304, S growing is 200 with a new tag whose body is the CLI\'s bytes', { timeout: 90_000 }, async () => {
+test('darwin · 4.4 #9 on the daemon\'s board: an unchanged session is 304, another session growing keeps it 304, S growing is 200 with a new tag whose body is the CLI\'s bytes', { skip: await unservable('darwin'), timeout: 90_000 }, async () => {
   const s = await seam({ seed: 7, board: true })
   try {
     const ep = controlEndpointFor({ platform: 'darwin', dir: s.w.dir, env: s.w.env })
@@ -322,7 +322,7 @@ test('darwin · 4.4 #9 on the daemon\'s board: an unchanged session is 304, anot
   } finally { await s.box.stop() }
 })
 
-test('darwin · 3.5 #30: a cold read of a session the worker must build waits on that worker instead of folding it here, and says so', { timeout: 180_000 }, async () => {
+test('darwin · 3.5 #30: a cold read of a session the worker must build waits on that worker instead of folding it here, and says so', { skip: await unservable('darwin'), timeout: 180_000 }, async () => {
   const s = await seam({ seed: 7, big: 16 << 20, queryIdleMs: 1500 })
   try {
     const first = s.forks.at(-1)
@@ -342,7 +342,7 @@ test('darwin · 3.5 #30: a cold read of a session the worker must build waits on
   } finally { await s.box.stop() }
 })
 
-test('darwin · 3.5 cold reopen: after the worker leaves on its idle clock, a fresh worker answers `session` and `lane` from the fold log with the bytes of before', { timeout: 90_000 }, async () => {
+test('darwin · 3.5 cold reopen: after the worker leaves on its idle clock, a fresh worker answers `session` and `lane` from the fold log with the bytes of before', { skip: await unservable('darwin'), timeout: 90_000 }, async () => {
   const s = await seam({ seed: 11, queryIdleMs: 1500 })
   try {
     const id = biggestSession((await s.warm('sessions')).text)
