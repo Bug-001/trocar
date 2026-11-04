@@ -28,7 +28,7 @@ export function costRowHtml(c, table, tableErr) {
 }
 
 // the reply: the step's reply definitions, each a cell like every other body, marked by the SAME rule as the raw panel
-// (replyOf: every part on its span of the streamed reply → no mark; partially stored → 「◐ 回复没采全」; else 「◐ 解析后的回复」).
+// (replyOf: every part on its own span of the reply → no mark; partially stored → 「◐ 回复没采全」; else 「◐ 解析后的回复」).
 // A monitor's verdict text is shown as-is, with no mark of its own beyond that.
 function outputHtml(c, st) {
   if (!st || !st.held) return `<div class="din rpbusy" aria-busy="true"></div>`

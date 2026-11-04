@@ -2,13 +2,16 @@
 // resp.raw; reply blocks get resp.raw::a-b, RFC 3.1). One generic rule for every SSE wire: each event
 // gets a block key from the wire's own field (the wire says which, through `keysOf`); a block's span runs from the start
 // of its first event to the end of its last. When an event with another key lies inside that range (an interleaved
-// stream), no contiguous exact span exists: the span is null and says why (invariant 4). Offsets are JS string indexes
-// into the field text (fieldTextOf), as every text_ref is. No product, model or version knowledge.
+// stream), no contiguous exact span exists: the span is null and says why (invariant 4). A wire whose closing event carries
+// the item whole as one JSON value addresses each block as its own JSON node in that event's data instead (RFC 3.1).
+// Offsets are JS string indexes into the field text (fieldTextOf), as every text_ref is. No product, model or version knowledge.
 // Leaf module.
 import { fieldTextOf } from './record-fields.mjs';
+import { scanJson, spanAt } from './json-scan.mjs';
 
 // SSE text → its events, each its lines up to and including the blank line that ends it. `start` = offset of its first
-// line, `end` = offset after the terminating blank line (or the text end), `data` = the joined `data:` payload or null.
+// line, `end` = offset after the terminating blank line (or the text end), `data` = the joined `data:` payload or null,
+// `dataAt` = where `data` stands in the text when it is one `data:` line (else null).
 export function sseEvents(text) {
   const out = [];
   const s = typeof text === 'string' ? text : '';
@@ -20,13 +23,13 @@ export function sseEvents(text) {
     const line = s.slice(i, nl === -1 ? s.length : nl).replace(/\r$/, '');
     if (line === '') { if (cur) { cur.end = next; out.push(cur); cur = null; } }
     else {
-      if (!cur) cur = { start: i, end: s.length, data: null, _d: [] };
-      if (line.startsWith('data:')) cur._d.push(line.slice(5).replace(/^ /, ''));
+      if (!cur) cur = { start: i, end: s.length, data: null, dataAt: null, _d: [] };
+      if (line.startsWith('data:')) { cur.dataAt = i + (line[5] === ' ' ? 6 : 5); cur._d.push(line.slice(5).replace(/^ /, '')); }
     }
     i = next;
   }
   if (cur) out.push(cur);
-  for (const e of out) { e.data = e._d.length ? e._d.join('\n') : null; delete e._d; }
+  for (const e of out) { e.data = e._d.length ? e._d.join('\n') : null; if (e._d.length !== 1) e.dataAt = null; delete e._d; }
   return out;
 }
 
@@ -50,12 +53,22 @@ const INTERLEAVED = 'its events interleave with another block\'s events in the s
 const FANNED = 'one streamed item carries several blocks; the span would hold all of them, not this block alone';
 
 export const replyPart = (block, field, span, why) => ({ kind: block ? block.type : null, role: 'assistant', block, field, span, ...(span ? {} : { why }) });
+// Blocks as JSON nodes of one JSON value: `nodes` [{block, path}], `root` that value's scan (null: not scannable), standing at
+// offset `at` of `field`'s text. Each block's span is its own node (RFC 3.1 回复块也回源).
+const UNLOCATED = 'the block could not be located in the JSON that carries it';
+export const nodeParts = (nodes, root, field, at) => nodes.map(({ block, path }) => {
+  const s = root && spanAt(root, path);
+  return replyPart(block, field, s && [at + s[0], at + s[1]], UNLOCATED);
+});
+export const scanned = (text) => { try { return typeof text === 'string' ? scanJson(text) : null; } catch { return null; } };
 // Many blocks from one addressable unit: a span only when it holds exactly one block.
 export const partsOfUnit = (blocks, field, span, why) => blocks.map((b) => (blocks.length === 1 ? replyPart(b, field, span, why) : replyPart(b, field, null, span ? FANNED : why)));
 
 // rec → [{kind, role, block, field, span, why?}] in reply order, for an SSE wire described by:
 //   keysOf(evt) → the block keys an event carries (from the wire's own fields)
-//   build(key, evts, all, part) → that key's blocks (cross-provider vocabulary), or a string saying why it has none
+//   build(key, evts, all, part) → that key's blocks (cross-provider vocabulary), or a string saying why it has none, or
+//     { evt, nodes: [{block, path}] }: `evt`, one of `all`, holds the blocks whole as JSON nodes of its data, each at `path`;
+//     when that data is not one JSON value on one `data:` line, the blocks fall back to the key's event range
 //   jsonBlocks(body) → the blocks of a non-streamed JSON reply
 // The events are read from resp.raw; a stream stored without its text (base64) is read from raw_sse, without spans.
 export function streamParts(rec, { keysOf, build, jsonBlocks }) {
@@ -75,14 +88,21 @@ export function streamParts(rec, { keysOf, build, jsonBlocks }) {
   const keys = events.map((e) => (e.evt ? keysOf(e.evt) : []));
   keys.forEach((ks, i) => { for (const k of ks) { if (!groups.has(k)) groups.set(k, []); groups.get(k).push(i); } });
   const all = events.map((e) => e.evt);
-  const out = [];
+  const out = [], roots = new Map(); // event position → its scanned data (a terminal holds many items: scanned once)
+  const rootAt = (i) => { if (!roots.has(i)) roots.set(i, field && events[i].dataAt != null ? scanned(events[i].data) : null); return roots.get(i); };
   for (const [k, at] of groups) {
     const first = at[0], last = at[at.length - 1];
     let mixed = false;
     for (let i = first; i <= last && !mixed; i++) mixed = keys[i].some((x) => x !== k);
     const span = field && !mixed ? [events[first].start, events[last].end] : null;
-    const blocks = build(k, at.map((i) => all[i]), all, part);
+    const evts = at.map((i) => all[i]);
+    let blocks = build(k, evts, all, part);
     if (typeof blocks === 'string') { out.push(replyPart(null, field, null, blocks)); continue; }
+    if (!Array.isArray(blocks)) {
+      const i = all.indexOf(blocks.evt), root = i < 0 ? null : rootAt(i);
+      if (root) { out.push(...nodeParts(blocks.nodes, root, field, events[i].dataAt)); continue; }
+      blocks = blocks.nodes.map((n) => n.block);
+    }
     out.push(...partsOfUnit(blocks, field, span, mixed ? INTERLEAVED : why));
   }
   return out;

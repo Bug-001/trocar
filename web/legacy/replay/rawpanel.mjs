@@ -16,11 +16,11 @@ import * as W from '../labels/replay.mjs'
 // ── the reply: its parts · stop reason · ONE fidelity mark ─────────────────────────────────────────────────────────
 // replyOf({row, reply, detail}) is the one rule (2.3 §这一步的回复 · 2.6 §A) over a step as the desk holds it: `reply` = the
 // step's reply definitions (thinking · text · tool calls, each with its `ref`), `detail` = the lane step's detail. The mark:
-// the bytes only partially stored → 'partial' (「◐ 回复没采全」); every part resolving to its span of the streamed reply
-// (`…::resp.raw::a-b`) → null; anything else → 'parsed' (「◐ 解析后的回复」). 逐字 is never written without that span.
+// the bytes only partially stored → 'partial' (「◐ 回复没采全」); every part resolving to its own span of the reply
+// (`…::resp.raw::a-b`, or `…::resp.messages.<j>::a-b` on WebSocket; RFC 3.1 回复块也回源) → null; anything else → 'parsed' (「◐ 解析后的回复」). 逐字 is never written without that span.
 // partMark(d) marks ONE part as the window's rows do: the request rows' proof rule (faithOf) over the part's span — proven on it
 // with no non-verbatim value, a known value is that value's mark, no span is 'parsed' (the partial fact is the call line's, 2.3)
-const RESP_SPAN = /::resp\.raw::\d+-\d+$/
+const RESP_SPAN = /::resp\.(raw|messages\.\d+)::\d+-\d+$/
 const onSpan = (d) => RESP_SPAN.test(String(d.ref || ''))
 export function partMark(d) {
   const f = faithOf({ ...d, text_ref: onSpan(d) ? d.ref : null })

@@ -43,15 +43,16 @@ const respItems = (t) => [
 ];
 const respEvents = (item, k) => {
   const ev = [{ type: 'response.output_item.added', output_index: k, item: { ...item, ...(item.content ? { content: [] } : {}) } }];
-  if (item.type === 'message') for (const x of halves(item.content[0].text)) ev.push({ type: 'response.output_text.delta', output_index: k, content_index: 0, delta: x });
+  if (item.type === 'message') (item.content || []).forEach((c, ci) => { for (const x of halves(c.text || '')) ev.push({ type: 'response.output_text.delta', output_index: k, content_index: ci, delta: x }); });
   if (item.type === 'function_call') for (const x of halves(item.arguments)) ev.push({ type: 'response.function_call_arguments.delta', output_index: k, delta: x });
   ev.push({ type: 'response.output_item.done', output_index: k, item });
   return ev;
 };
 const completed = (items) => ({ type: 'response.completed', response: { id: 'resp1', status: 'completed', output: items, usage: { input_tokens: 3, output_tokens: 2 } } });
 const respBlocks = (items) => items.flatMap((it) => itemToBlocks(it)).map((b) => b.block);
-// a slice of Responses events → its block: the item the wire closes it with
-const respSlice = (text) => respBlocks(sliceEvents(text).filter((e) => e.type === 'response.output_item.done').map((e) => e.item));
+// an SSE slice's closing events (data lines of one event joined, as SSE does) → their items' blocks
+const respSlice = (text) => respBlocks(text.split(/\r?\n\r?\n/).map((ev) => ev.split(/\r?\n/).filter((l) => l.startsWith('data:')).map((l) => l.slice(5).trim()).join('\n'))
+  .filter(Boolean).map((d) => JSON.parse(d)).filter((e) => e.type === 'response.output_item.done').map((e) => e.item));
 function sliceEvents(text) {
   const out = [];
   for (const line of text.split(/\r?\n/)) if (line.startsWith('data:')) { const d = line.slice(5).trim(); if (d && d !== '[DONE]') out.push(JSON.parse(d)); }
@@ -86,7 +87,7 @@ function assertParts(r, parts, expected, recon) {
   }
 }
 
-test('every reply span, resolved, reassembles to the normalised reply block (Anthropic, Responses, Chat SSE; WebSocket)', () => {
+test('every reply span, resolved, reassembles to the normalised reply block (Anthropic, Chat SSE)', () => {
   for (const t of TEXTS) {
     for (const eol of EOLS) {
       // Anthropic: text, thinking, tool_use, server_tool_use, a *_tool_result
@@ -94,36 +95,78 @@ test('every reply span, resolved, reassembles to the normalised reply block (Ant
       const ar = rec(stored(sseOf(anthStream(ab), eol)));
       assertParts(ar, replyPartsAnthropic(ar), ar.resp.content_blocks, anthRecon);
       assert.ok(ar.resp.content_blocks.length === ab.length);
-      // Responses SSE
-      const items = respItems(t);
-      const rr = rec(stored(sseOf([{ type: 'response.created', response: { id: 'resp1' } }, ...items.flatMap(respEvents), completed(items)], eol)));
-      assertParts(rr, RESPONSES.replyParts(rr), respBlocks(completed(items).response.output), respSlice);
       // Chat SSE
       const cr = rec(stored(chatSse(chatGroups(t).flat(), eol)));
       assertParts(cr, CHAT.replyParts(cr), chatBlocks(cr.resp.raw_sse), (s) => chatBlocks(sliceEvents(s)));
     }
-    // WebSocket: one server message per event; the part is the item of the message that closes it
-    const items = respItems(t);
-    const server = [{ type: 'response.created', response: { id: 'resp1' } }, ...items.flatMap(respEvents), completed(items)].map((e) => JSON.stringify(e));
-    const wr = buildWsEnvelope({ id: 'w1', seq: 1, wsRaw: [], flow: { id: 'F', host: 'h', scheme: 'https', dst: {}, proc: {} },
-      upgrade: { req: { head: { raw: Buffer.from(''), method: 'GET', target: '/v1/responses', headers: [] } }, resp: { head: { raw: Buffer.from(''), headers: [] } } },
-      call: { client: ['{"type":"response.create"}'], server, tsStart: 't', tsRespStart: 't', tsEnd: 't', partial: [], truncated: false } });
-    assertParts(wr, RESPONSES_WS.replyParts(wr), respBlocks(completed(items).response.output), (s) => respBlocks([JSON.parse(s)]));
   }
 });
 
-test('a reply block whose events interleave with another block has no span, and says why', () => {
+test('a reply block whose events interleave with another block has no event-range span, and says why (Anthropic, Chat SSE)', () => {
   const zip = (a, b) => { const out = []; for (let i = 0; i < Math.max(a.length, b.length); i++) out.push(...(a[i] ? [a[i]] : []), ...(b[i] ? [b[i]] : [])); return out; };
   const a = stored(sseOf(anthStream([zip(anth.text(0, 'left side'), anth.tool('tool_use')(1, 'right'))]), '\n'));
-  const items = respItems('x').slice(1);
-  const r = stored(sseOf([...zip(respEvents(items[0], 0), respEvents(items[1], 1)), completed(items)], '\n'));
   const c = stored(chatSse(zip(chatGroups('ab')[2], chatGroups('ab')[3]), '\n'));
-  for (const parts of [replyPartsAnthropic(rec(a)), RESPONSES.replyParts(rec(r)), CHAT.replyParts(rec(c))]) {
+  for (const parts of [replyPartsAnthropic(rec(a)), CHAT.replyParts(rec(c))]) {
     assert.ok(parts.length >= 2);
     for (const p of parts) {
       assert.equal(p.span, null);
       assert.ok(typeof p.why === 'string' && p.why.length > 0);
       assert.ok(p.block && p.block.type);
+    }
+  }
+});
+
+// Responses, WebSocket and HTTP SSE: the message or event that closes an output item carries it whole as one JSON value, so a
+// reply block is addressed as the JSON node it is: the item's path plus the block's own path within the item (itemToBlocks'
+// `sub`, the path the request side addresses the same item by). Every content part of a message is its own block with its own
+// span; a one-part message's span is that part; interleaved items still have theirs. An item no event closed is its node in the
+// terminal's output, item by item (other items of the reply may be closed). Where the data that delivers the item is not one JSON
+// value on one data line, an SSE block falls back to its item's event range: one block alone in it parses back to that block; a
+// block that shares it with another has no span and says why.
+const ZIP = (lists) => { const out = []; for (let i = 0; lists.some((l) => i < l.length); i++) for (const l of lists) if (i < l.length) out.push(l[i]); return out; };
+const sseSplit = (events, eol) => events.map((e) => { // a closing event's data over two data: lines (valid SSE, one value)
+  const d = JSON.stringify(e), cut = e.type === 'response.output_item.done' ? d.indexOf(',') + 1 : d.length;
+  return `event: ${e.type}${eol}data: ${d.slice(0, cut)}${eol}${cut < d.length ? `data: ${d.slice(cut)}${eol}` : ''}${eol}`;
+}).join('');
+test('a Responses reply block\'s span is exactly its own JSON node, one per content part (WebSocket and HTTP SSE)', () => {
+  for (const t of TEXTS) {
+    const items = [...respItems(t), { type: 'message', id: 'm2', role: 'assistant', content: [{ type: 'output_text', text: t }, { type: 'refusal', refusal: `no ${t}` }, { type: 'output_text', text: 'tail' }] },
+      { type: 'message', id: 'm3', role: 'assistant' }, { type: 'message', id: 'm4', role: 'assistant', content: null }]; // no content: no block
+    const nodesOf = (it) => (it.type === 'message' ? it.content || [] : [it]);
+    const nodes = items.flatMap(nodesOf);
+    const units = items.flatMap((it, u) => nodesOf(it).map(() => u));
+    for (const closed of ['all', 'none', 'some']) { // closed by output_item.done, or only listed in response.completed, or each other one
+      const shut = (k) => closed === 'all' || (closed === 'some' && k % 2 === 0);
+      const perItem = items.map((it, k) => respEvents(it, k).filter((e) => shut(k) || e.type !== 'response.output_item.done'));
+      const created = { type: 'response.created', response: { id: 'resp1' } };
+      // WebSocket: one server message per event
+      const server = [created, ...perItem.flat(), completed(items)].map((e) => JSON.stringify(e));
+      const wr = buildWsEnvelope({ id: 'w1', seq: 1, wsRaw: [], flow: { id: 'F', host: 'h', scheme: 'https', dst: {}, proc: {} },
+        upgrade: { req: { head: { raw: Buffer.from(''), method: 'GET', target: '/v1/responses', headers: [] } }, resp: { head: { raw: Buffer.from(''), headers: [] } } },
+        call: { client: ['{"type":"response.create"}'], server, tsStart: 't', tsRespStart: 't', tsEnd: 't', partial: [], truncated: false } });
+      const runs = [['ws', wr, RESPONSES_WS, () => true]];
+      // HTTP SSE: in order or interleaved, each line ending, the closing data on one line or split over two
+      for (const order of ['seq', 'zip']) for (const eol of EOLS) for (const split of [false, true]) {
+        const evs = [created, ...(order === 'zip' ? ZIP(perItem) : perItem.flat()), completed(items)];
+        runs.push([`sse ${order} ${JSON.stringify(eol)} split=${split}`, rec(stored((split ? sseSplit : sseOf)(evs, eol))), RESPONSES, (k) => !(split && shut(k))]);
+      }
+      for (const [name, r, d, nodal] of runs) {
+        const parts = d.replyParts(r), at = `${name} closed=${closed}`;
+        assert.deepEqual(parts.map((p) => p.block), respBlocks(items), at);
+        assert.equal(parts.length, nodes.length, at);
+        if (d === RESPONSES_WS) assert.deepEqual(parts.map((p) => p.unit), units, `${at}: unit = the output item`);
+        parts.forEach((p, k) => {
+          if (nodal(units[k])) {
+            assert.ok(p.span, `${at} #${k} ${p.kind} has a span (${p.why})`);
+            const text = fieldTextOf(r, p.field).text;
+            assert.deepEqual(JSON.parse(text.slice(p.span[0], p.span[1])), nodes[k], `${at} #${k}: exactly its own node`);
+          } else {
+            assert.ok(p.span || (typeof p.why === 'string' && p.why.length > 0), `${at} #${k}: a span or a why`);
+            if (nodesOf(items[units[k]]).length > 1) assert.equal(p.span, null, `${at} #${k}: one event range, several blocks`);
+            else if (p.span) assert.deepEqual(respSlice(fieldTextOf(r, p.field).text.slice(p.span[0], p.span[1])), [p.block], `${at} #${k}: its event range parses back to it`);
+          }
+        });
+      }
     }
   }
 });
