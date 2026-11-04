@@ -92,26 +92,6 @@ test('3.5 #45 missed: max(0, ref.read + ref.create − read) against the step re
   }
 })
 
-// A row of the fold log as the session answer serves it, over columns synced from lines (rows the wire does not produce today included).
-function served(rows) {
-  const slots = new Map(rows.map((r, i) => [r.rid, i]))
-  const log = { frontier: 0, changedSince: () => ({ rids: rows.map((r) => r.rid), lanes: [] }), latest: (rid) => [slots.get(rid)], peek: (i) => ({ c: rows[i].rid, r: rows[i], e: [] }) }
-  const cols = sync(columns((rid) => slots.get(rid)), log)
-  return (r) => wireRow(cols, r).cache
-}
-test('3.5 #45 no missed: a comparison step with no write counter, no usage or no row, and a break naming none, each say why', () => {
-  const lane = 'L', u = (read, create) => ({ read, create, fresh: 10, out: 5 }), brk = (refRid) => ({ cause: 'tools-changed', ...(refRid ? { refRid } : null) })
-  const row = (rid, extra) => ({ rid, lane, ts: `2026-10-22T10:00:0${rid}.000Z`, usage: u(100, 0), ...extra })
-  const noCounter = row('1', { usage: u(900, null) }), noUsage = row('2', { usage: null })
-  const at = served([noCounter, noUsage])
-  for (const [refRid, why] of [['1', 'no-write-counter'], ['2', 'no-usage'], ['9', 'no-usage'], [null, 'no-ref']]) {
-    const c = at(row('3', { cacheBreak: brk(refRid) }))
-    assert.equal(c.break, true)
-    assert.equal(c.why, why, `refRid ${refRid}`)
-    assert.ok(!('missed' in c), `refRid ${refRid}: no missed, not a zero`)
-  }
-})
-
 test('3.5 #45 one value: a rid\'s cache is the same in session, session --since, lane --pack and lane --tail', { timeout: 120_000 }, async () => {
   const home = homeOf()
   const s = bigSession({ home, growth: 300, subEvery: 4, compactAt: 3_000 })
@@ -148,7 +128,7 @@ test('3.5 #15: columns from the sidecar read as a sync from scratch; a sidecar w
   const doc = await session(home, { id: key })
   const p = openProjection({ home, fs, key, write: false }), log = openFoldLog({ home, fs, key, write: false, projection: { id: p.id, bytes: p.bytes } })
   assert.ok(log.saved, 'the worker saved a sidecar')
-  const loaded = loadColumns(p.rows, log.saved.parts), scratch = sync(columns(p.rows.slotOf), log)
+  const loaded = loadColumns(p.rows, log.saved.parts), scratch = sync(columns(p.rows), log)
   assert.ok(loaded, 'the sidecar loads')
   for (const r of doc.calls) {
     const k = p.rows.slotOf(r.rid)

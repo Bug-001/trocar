@@ -10,6 +10,7 @@ import { compareStep } from '../view/step-order.mjs';
 import { COMP_KEYS } from '../view/blockmeta.mjs';
 import { FLAG } from '../view/head-cols.mjs';
 import { CACHE_STATES, QUIET_CAUSES, cacheFacts, cacheState, usageOf } from '../view/metrics.mjs';
+import { callUsage } from '../model/schema.mjs';
 import { posCmp } from './projection.mjs';
 import { QueryArgError } from './named/index.mjs';
 
@@ -46,13 +47,13 @@ const rowOf = (o) => (o && o.c != null ? o.r : null);
 const headOf = (o) => { if (!o || o.l == null) return null; const { l, p, ...h } = o; return h; };
 export const recOf = (r) => ({ id: String(r.id), ts_request: r.ts ?? null, is_llm_call: !!r.is_llm, response: { status: r.status ?? null } });
 
-/** columns(slotOf) → the step-order columns of a fold log's calls, by each call's slot in the projection (`slotOf`): its row's ts, its
+/** columns(rows) → the step-order columns of a fold log's calls, by each call's slot in the projection's `rows`: its row's ts, its
  *  lane (`ln`, the lane keys interned in `keys`), how many `user` events it has (`uc`) and whether it has a compaction or summarize
  *  event (`cs`), its context bytes (`cx`), its largest composition bucket and share (`cb`), its flag bits (`fl`, flagsOf), its usage (`ur` `uw` `uf` `uo`: read, create,
  *  fresh, out, NaN where the row has no number), its model (`md`, the models interned in `models` and `names`; −1: none) and its cache byte (`ca`, caOf); the rids in step order, and each lane's rids and slots in step order (`by`, by lane int); the live lane keys. sync()
  *  brings them to the log's frontier from the lines past the last sync (and keeps the lane headers it reads: `heads`), each moved row taken out and put back by binary search: a
  *  warm state and a cold open build the same columns. */
-export const columns = (slotOf) => ({ at: -1, slotOf, ts: [], ln: new Int32Array(0), uc: new Int32Array(0), cs: new Uint8Array(0),
+export const columns = (rows) => ({ at: -1, rows, slotOf: rows.slotOf, ts: [], ln: new Int32Array(0), uc: new Int32Array(0), cs: new Uint8Array(0),
   cx: new Float64Array(0), cb: new Uint8Array(0), fl: new Uint8Array(0),
   ur: new Float64Array(0), uw: new Float64Array(0), uf: new Float64Array(0), uo: new Float64Array(0), md: new Int32Array(0), ca: new Uint8Array(0),
   models: new Map(), names: [], keys: new Map(), order: [], by: [], lanes: new Set(), heads: new Map(), its: null, sorted: null });
@@ -82,10 +83,16 @@ function modelInt(cols, m) {
   if (v === undefined) { cols.models.set(m, (v = cols.names.length)); cols.names.push(m); }
   return v;
 }
+// A row's write counter. The stored row says 0 for a wire that reports none too; the call's own usage tells that from a reported 0 (3.2: NULL, never 0).
+function writeOf(cols, u, rid) {
+  if (u.create !== 0) return u.create;
+  const c = callUsage(cols.rows.get(rid).x);
+  return c ? c.cache_write : 0;
+}
 // slot k's usage, model and cache byte, of the row `r` (null: no row)
 function factsInto(cols, k, r) {
   const u = r && usageOf(r), rq = r && r.rec && r.rec.request;
-  cols.ur[k] = numOf(u && u.read); cols.uw[k] = numOf(u && u.create); cols.uf[k] = numOf(u && u.fresh); cols.uo[k] = numOf(u && u.out);
+  cols.ur[k] = numOf(u && u.read); cols.uw[k] = numOf(u && writeOf(cols, u, r.rid)); cols.uf[k] = numOf(u && u.fresh); cols.uo[k] = numOf(u && u.out);
   cols.md[k] = modelInt(cols, rq && rq.model); cols.ca[k] = r ? caOf(r) : 0;
 }
 /** usageAt(cols, k) → slot k's {read, create, fresh, out}, a counter the row has none of null; null when it has no usage. */
@@ -95,11 +102,12 @@ export const modelAt = (cols, k) => (cols.md[k] < 0 ? null : cols.names[cols.md[
 /** stateAt(cols, k) → slot k's state of CACHE_STATES (a slot that holds a row). */
 export const stateAt = (cols, k) => CACHE_STATES[cols.ca[k] & CA.STATE];
 /** wireRow(cols, r) → the fold log's row as an answer serves it: with its `cache` (3.5 §会话读), a function of the row and its comparison
- *  step's usage, which the columns hold (asked for only on a break). Every path that serves a row serves this. */
+ *  step's usage, which the columns hold (asked for only on a break), and its `usage.create` null where the wire reports no write counter.
+ *  Every path that serves a row serves this. */
 export function wireRow(cols, r) {
   const rid = r.cacheBreak ? r.cacheBreak.refRid ?? null : null;
   const ref = { has: rid != null, get usage() { const k = rid == null ? undefined : cols.slotOf(rid); return k !== undefined && cols.ts[k] !== undefined ? usageAt(cols, k) : null; } };
-  return { ...r, cache: cacheFacts(r, ref) };
+  return { ...r, ...(r.usage && Number.isNaN(cols.uw[cols.slotOf(r.rid)]) ? { usage: { ...r.usage, create: null } } : null), cache: cacheFacts(r, ref) };
 }
 // The largest composition bucket (its index in COMP_KEYS, high 4 bits) and its share of the composition in 15ths (low 4 bits).
 function compByte(comp) {
@@ -129,7 +137,7 @@ export function loadColumns(rows, p) {
   for (const c of ['s.ln', 's.uc', 's.md']) if (!(p[c] instanceof Int32Array) || p[c].length !== n) return null;
   for (const [c, T] of [['s.cs', Uint8Array], ['s.cx', Float64Array], ['s.cb', Uint8Array], ['s.fl', Uint8Array], ['s.ca', Uint8Array], ['s.ur', Float64Array], ['s.uw', Float64Array], ['s.uf', Float64Array], ['s.uo', Float64Array]]) if (!(p[c] instanceof T) || p[c].length !== n) return null;
   if (!(p['s.order'] instanceof Int32Array) || !Array.isArray(p['s.keys']) || !Array.isArray(p['s.lanes']) || !Array.isArray(p['s.models'])) return null;
-  const cols = { ...columns(rows.slotOf), at: at[0], ln: p['s.ln'], uc: p['s.uc'], cs: p['s.cs'], cx: p['s.cx'], cb: p['s.cb'], fl: p['s.fl'],
+  const cols = { ...columns(rows), at: at[0], ln: p['s.ln'], uc: p['s.uc'], cs: p['s.cs'], cx: p['s.cx'], cb: p['s.cb'], fl: p['s.fl'],
     ur: p['s.ur'], uw: p['s.uw'], uf: p['s.uf'], uo: p['s.uo'], md: p['s.md'], ca: p['s.ca'], models: new Map(p['s.models'].map((m, i) => [m, i])), names: p['s.models'], keys: new Map(p['s.keys'].map((k, i) => [k, i])), lanes: new Set(p['s.lanes']) };
   let j = 0;
   for (let k = 0; k < n; k++) if (tk[k]) cols.ts[k] = tk[k] === 1 ? null : p['s.ts'][j++];
