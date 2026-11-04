@@ -13,6 +13,9 @@ import { projectionFile, projectionStale, sessionDir, PROJ_V } from '../../src/q
 import { foldLogFile, foldStale, FOLD_V } from '../../src/query/fold-log.mjs'
 import { lineFile } from '../../src/query/line-file.mjs'
 import { headFile, readHead, rereadFile, PACK_MEMBERS } from '../../src/query/ctx-files.mjs'
+import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
+import '../../src/query/named/index.mjs' // first: the named queries' registry imports session.mjs
+import { extendSession } from '../../src/query/named/session.mjs'
 import { workerFork, workerForkIn } from '../helpers/worker-fork.mjs'
 import { within, whileMoving, reporting } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -21,9 +24,9 @@ import { bigSession } from './big-session.mjs'
 const SCAN_DEPS = fileURLToPath(new URL('./worker-scan-deps.mjs', import.meta.url))
 const CALLS = 1300 // past two packs, far past a slice
 const homeOf = () => { const home = path.join(tmpDir('trocar-reread-'), '.trocar'); fs.mkdirSync(path.join(home, 'raw'), { recursive: true, mode: 0o700 }); return home }
-const sessionIn = (home, n = 1) => {
+const sessionIn = (home, n = 1, calls = CALLS) => {
   const s = bigSession({ home, id: `big-0000-4a1b-9c2d-00000000000${n}`, segment: `20261020T16473${n}Z`, growth: 120, compactAt: 6_000 })
-  s.append(CALLS)
+  s.append(calls)
   return s
 }
 const recorder = () => {
@@ -239,6 +242,137 @@ test('an answer that cannot be written ends that session\'s turn: reread stays, 
     await ask(svc, 'session', { id: broken })
     await whileMoving(() => !rereads(home, broken), () => r.n, 'the request finished it')
     assert.deepEqual(readHead(home, broken), freshHead)
+  } finally { svc.stop() }
+})
+
+// A worker that spins on a failed write reports every 100 ms: a stretch with no report, past the idle save, says it is quiet. A worker starved for that
+// long only lets a fault pass.
+const QUIET_MS = 3_000
+async function quiet(r) {
+  await within((async () => { for (let n = -1; n !== r.n;) { n = r.n; await new Promise((d) => setTimeout(d, QUIET_MS)) } })(), 60_000, 'the worker went quiet')
+}
+
+test('an answer that cannot be written: the worker goes quiet with one record for the episode, the marker kept, and one request finishes it (#43)', async () => {
+  const home = homeOf(), { id } = sessionIn(home)
+  await foldAll(home, [id])
+  const freshHead = readHead(home, id), tail = path.join(sessionDir(home, id), 'open.main.ndjson')
+  AXES['PROJ_V changed'](home, id)
+  fs.rmSync(tail)
+  fs.mkdirSync(path.join(tail, 'in-the-way'), { recursive: true })
+  const said = [], r = reporting(workerFork), svc = createQueryService({ home, fork: r.fork, failure: (w, e) => said.push(e.code) })
+  try {
+    svc.sweep()
+    await whileMoving(() => said.length > 0, () => r.n, 'the write failed')
+    await quiet(r)
+    r.kids[0].send({ follow: id }) // tried again: the same episode
+    await quiet(r)
+    assert.deepEqual(said, ['projection-write-failed'])
+    assert.ok(rereads(home, id), 'reread stays')
+    fs.rmSync(tail, { recursive: true })
+    await ask(svc, 'session', { id })
+    await whileMoving(() => !rereads(home, id), () => r.n, 'the request finished it')
+    assert.deepEqual(readHead(home, id), freshHead)
+  } finally { svc.stop() }
+})
+
+test('a head that cannot be written ends the turn the same way: one record, the marker kept, the next try finishes it (#43)', async () => {
+  const home = homeOf(), { id } = sessionIn(home, 1, 120)
+  await foldAll(home, [id])
+  const freshHead = readHead(home, id)
+  lastVersion(home, id)
+  AXES['PROJ_V changed'](home, id)
+  const said = [], refusing = { ...fs, renameSync: (a, b) => { if (b === headFile(home, id)) throw Object.assign(new Error('injected: no room'), { code: 'ENOSPC' }); return fs.renameSync(a, b) } }
+  const turn = async (f) => { while (await extendSession({ home, fs: f, writer: true, persist: (e) => said.push(e.code) }, id, 1_000)); }
+  await turn(refusing)
+  await turn(refusing)
+  assert.deepEqual(said, ['projection-write-failed'])
+  assert.ok(rereads(home, id), 'reread stays')
+  await turn(fs)
+  assert.equal(rereads(home, id), false)
+  assert.deepEqual(readHead(home, id), freshHead)
+})
+
+test('a kill between the marker and the rebuild loses no re-read: reread is on disk first, and a worker ends it (#43)', async () => {
+  const home = homeOf(), { id } = sessionIn(home)
+  await foldAll(home, [id])
+  const fresh = filesOf(home, id), freshHead = readHead(home, id)
+  AXES['PROJ_V changed'](home, id)
+  const fork = workerForkIn({ TROCAR_TEST_KILL_AT: 'extract.' }), k = reporting((h) => fork(h, SCAN_DEPS)), killed = createQueryService({ home, fork: k.fork })
+  try {
+    killed.sweep()
+    await whileMoving(() => k.kids[0] && gone(k.kids[0]), () => k.n, 'the worker died at the rebuild')
+  } finally { killed.stop() }
+  assert.equal(k.kids[0].signalCode, 'SIGKILL')
+  assert.ok(rereads(home, id), 'the marker came before the rebuild')
+  const { r, svc } = serviceOf(home)
+  try {
+    svc.sweep()
+    await whileMoving(() => !rereads(home, id) && !staleNow(home, id), () => r.n, 'a worker ended it')
+    assert.deepEqual(readHead(home, id), freshHead)
+    assert.equal(readHead(home, id).tier, 1)
+    assert.deepEqual(filesOf(home, id), fresh)
+  } finally { svc.stop() }
+})
+
+test('a kicked session reaches its frontier in the middle of a re-read, which then goes on (#44)', async () => {
+  const home = homeOf(), { id } = sessionIn(home)
+  await foldAll(home, [id])
+  AXES['PROJ_V changed'](home, id)
+  const { r, svc } = serviceOf(home)
+  try {
+    svc.sweep()
+    await whileMoving(() => rereads(home, id), () => r.n, 'the re-read began')
+    const live = sessionIn(home, 2, 30), rows = sessionGroups(await indexRows({ home })).get(live.id)
+    svc.kick([String(rows.at(-1).id)])
+    await whileMoving(() => isDone(home, live.id), () => r.n, 'the kicked session is at its frontier')
+    assert.ok(rereads(home, id), 'with the re-read not over')
+    await whileMoving(() => !rereads(home, id), () => r.n, 'the re-read went on')
+  } finally { svc.stop() }
+})
+
+test('a session followed in the middle of another\'s background re-read ends first, and the one that gave way goes back to the head of the queue (#44)', async () => {
+  const home = homeOf(), [first, second, followed] = [1, 2, 3].map((n) => sessionIn(home, n).id)
+  await foldAll(home, [first, second, followed])
+  for (const id of [first, second, followed]) AXES['PROJ_V changed'](home, id)
+  aged(home, first, 60); aged(home, second, 600); aged(home, followed, 3600)
+  const { r, svc } = serviceOf(home)
+  try {
+    svc.sweep()
+    await whileMoving(() => rereads(home, first), () => r.n, 'the queue began')
+    r.kids[0].send({ follow: followed })
+    await whileMoving(() => !staleNow(home, followed) && !rereads(home, followed) && isDone(home, followed), () => r.n, 'the followed one ended')
+    assert.ok(rereads(home, first), 'ahead of the one it stopped')
+    await whileMoving(() => {
+      if (!staleNow(home, second)) assert.ok(!rereads(home, first), 'that one ended before the rest of the queue began')
+      return !rereads(home, first)
+    }, () => r.n, 'that one went on')
+  } finally { svc.stop() }
+})
+
+const foldedOf = (home, id) => {
+  const d = sessionDir(home, id)
+  return fs.readdirSync(d).filter((n) => /^(extract|fold)\./.test(n)).reduce((sum, n) => { try { return sum + fs.statSync(path.join(d, n)).size } catch { return sum } }, 0)
+}
+
+test('two re-reads, both followed, never alternate: one folds in one run, the other stands still, then the other way round (#44)', async () => {
+  const home = homeOf(), ids = [1, 2].map((n) => sessionIn(home, n).id)
+  await foldAll(home, ids)
+  for (const id of ids) AXES['PROJ_V changed'](home, id)
+  aged(home, ids[0], 60); aged(home, ids[1], 3600)
+  const { r, svc } = serviceOf(home)
+  try {
+    svc.sweep()
+    await whileMoving(() => rereads(home, ids[0]), () => r.n, 'the queue began')
+    for (const id of ids) r.kids[0].send({ follow: id })
+    const runs = []
+    let was = ids.map((id) => foldedOf(home, id))
+    await whileMoving(() => {
+      const now = ids.map((id) => foldedOf(home, id)), moved = ids.filter((id, i) => now[i] !== was[i])
+      was = now
+      if (moved.length === 1 && runs.at(-1) !== moved[0]) runs.push(moved[0])
+      return ids.every((id) => !staleNow(home, id) && !rereads(home, id))
+    }, () => r.n, 'both ended')
+    assert.deepEqual(runs, ids)
   } finally { svc.stop() }
 })
 
