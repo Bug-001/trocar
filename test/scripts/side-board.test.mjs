@@ -6,6 +6,7 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import fs from 'node:fs'
+import net from 'node:net'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -159,4 +160,33 @@ test('sideHome: a file gone from the real index mid-copy leaves an empty index o
   assert.deepEqual(fs.readdirSync(path.join(side, 'index')), [])
   assert.equal(fs.lstatSync(path.join(side, 'index')).isSymbolicLink(), false)
   assert.equal(fs.realpathSync(path.join(side, 'raw')), fs.realpathSync(path.join(home, 'raw')))
+})
+
+test('sideHome: a top-level directory is a link, a file is a copy no write gets through, and what is neither stays out', async () => {
+  const { home } = await realHome()
+  const here = process.cwd(), pipe = net.createServer()
+  process.chdir(home) // a relative socket path: a temp dir can be longer than a socket name may be
+  try { pipe.listen('live.sock'); await once(pipe, 'listening') } finally { process.chdir(here) }
+  try {
+    const bytes = Buffer.from([0, 0xff, 0x0d, 0x0a])
+    fs.writeFileSync(path.join(home, 'plain.json'), bytes)
+    fs.mkdirSync(path.join(home, 'empty'))
+    fs.symlinkSync(path.join(home, 'plain.json'), path.join(home, 'file-link'))
+    fs.symlinkSync(path.join(home, 'raw'), path.join(home, 'dir-link'))
+    fs.symlinkSync(path.join(home, 'no-such-file'), path.join(home, 'gone.tmp-1')) // what the walk meets when the daemon renames a file away
+    const side = path.join(tmpDir('trocar-sb-side-'), '.trocar')
+    sideHome(home, side)
+    for (const e of fs.readdirSync(home, { withFileTypes: true })) {
+      if (e.name === 'index') continue
+      const inSide = path.join(side, e.name), real = path.join(home, e.name)
+      const st = fs.existsSync(real) && fs.statSync(real)
+      if (st && st.isDirectory()) assert.equal(fs.realpathSync(inSide), fs.realpathSync(real), e.name)
+      else if (st && st.isFile()) {
+        assert.equal(fs.lstatSync(inSide).isSymbolicLink(), false, `${e.name} is not a link`)
+        assert.deepEqual(fs.readFileSync(inSide), fs.readFileSync(real), e.name)
+      } else assert.equal(fs.readdirSync(side).includes(e.name), false, `${e.name} stays out`)
+    }
+    fs.writeFileSync(path.join(side, 'plain.json'), 'side')
+    assert.deepEqual(fs.readFileSync(path.join(home, 'plain.json')), bytes)
+  } finally { pipe.close() }
 })
