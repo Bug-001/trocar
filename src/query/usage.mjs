@@ -35,7 +35,7 @@ function usageOf(x) {
   try { return mapUsage(x.format, raw, { vendor: x.wire.vendor }); } catch { return null; }
 }
 
-/** foldFacts({rows, read}) → [{id, lane, model, failed, cache_known, usage, ask?}] (`ask`: a main-lane call's lane task) — one per call `session` reduces from
+/** foldFacts({rows, read}) → [{id, lane, model, failed, cache_known, usage, ask?}] (`ask`: a main or subagent lane call's lane task) — one per call `session` reduces from
  *  these rows (index rows), by the same extraction (view/extract.mjs) and reduction (view/reduce.mjs). `read(rows)` → their records, asked for one at a time as the
  *  fold reaches them, so the fold holds no more than one. A session is the segment index's `session_id`; its store is held in memory for this call only. Items and failed members give no line. */
 export function foldFacts({ rows, read }) {
@@ -52,8 +52,8 @@ export function foldFacts({ rows, read }) {
         const x = store.rows.get(row.rid).x, h = kinds.get(row.lane) || {}, failed = !!row.error, u = failed ? null : usageOf(x);
         out.push({ id: row.rid, lane: h.kind, model: (row.rec && row.rec.request && row.rec.request.model) ?? null, failed,
           cache_known: !!(row.wire && row.wire.cacheSemanticsKnown), usage: u ? [u.input_uncached, u.output, u.cache_read, u.cache_write] : null,
-          // the main lane's task rides on its calls: the title table takes the earliest one's (src/query/titles.mjs); no sidecar line holds it
-          ...(h.kind === 'main' ? { ask: h.task ?? null } : null) });
+          // a main or subagent lane's task rides on its calls: the title table takes the earliest one's (src/query/titles.mjs); no sidecar line holds it
+          ...(h.kind === 'main' || h.kind === 'subagent' ? { ask: h.task ?? null } : null) });
       }
     } finally { store.close(); }
   }

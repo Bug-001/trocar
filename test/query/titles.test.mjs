@@ -11,7 +11,8 @@ import { workerFork } from '../helpers/worker-fork.mjs'
 import { SEVEN } from '../helpers/seven-shapes.mjs'
 import { bigSession, firstAskOf, rng } from './big-session.mjs'
 import { runQuery, stampOf } from '../../src/query/named/index.mjs'
-import { TITLE_V, titlesFile } from '../../src/query/titles.mjs'
+import { TITLE_BUDGET_MS, TITLE_V, titlesFile } from '../../src/query/titles.mjs'
+import { answer } from '../../src/query/answers.mjs'
 import { fillUsage, usageFile } from '../../src/query/usage.mjs'
 import { indexDir, segmentIndex } from '../../src/query/index-build.mjs'
 import { createQueryService } from '../../src/query/service.mjs'
@@ -108,8 +109,9 @@ for (const wire of ['http', 'chat', 'threads', 'ws']) {
       const home = homeOf(), warm = cold()
       const s = bigSession({ home, wire, growth: 300, subEvery: 0, subLanes: 2, quiet: [0, lead], marked, segment: SEG })
       s.append(lead)
-      assert.deepEqual((await saved(home, { fs: warm })).sessions.map((m) => m.title), [null])
-      s.append(3)
+      const first = JSON.parse(fs.readFileSync(s.file, 'utf8').split('\n')[0])
+      assert.deepEqual((await saved(home, { fs: warm })).sessions.map((m) => m.title), [firstAskOf(first, [first])], 'no main call yet: the first subagent lane\'s task')
+      s.append(Math.max(3, Math.ceil(lead / 8)))
       const recs = fs.readFileSync(s.file, 'utf8').trim().split('\n').map((l) => JSON.parse(l))
       assert.deepEqual((await saved(home, { fs: warm })).sessions.map((m) => m.title), [firstAskOf(recs[lead], recs)])
       assert.deepEqual((await listOf(home)).sessions.map((m) => m.title), [(await metaOf(home, s.id)).title], 'from the file, as from memory')
@@ -197,21 +199,36 @@ for (let seed = 1; seed <= 6; seed++) {
   test(`3.5 #41: seed ${seed}: calls landing anywhere in a session keep \`sessions\` equal to \`session\`, from the table in memory and from its file`, async () => {
     const r = rng(seed), home = homeOf(), sid = `grow-${seed}-4a1b-9c2d-000000000001`
     const warm = cold()
-    const titles = new Set()
+    const titles = new Set(), sent = []
+    let said = null
     for (let i = 0; i < 14; i++) {
       // a first run of calls of other lanes, so the list has read past calls with no main one; the main calls land in and before them
       const kind = i < 5 ? rest[Math.floor(r() * rest.length)] : KINDS[Math.floor(r() * KINDS.length)]
-      const { body, headers } = kind(i)
-      append(home, [envelope(CC, sid, body, replyTo(CC, i), stamp(Math.floor(r() * 10_000)), headers)])
+      const { body, headers } = kind(i), ts = stamp(Math.floor(r() * 10_000))
+      append(home, [envelope(CC, sid, body, replyTo(CC, i), ts, headers)])
+      sent.push({ ts, agent: headers?.['x-claude-code-agent-id'], ask: JSON.parse(body).messages[0].content })
       const meta = await metaOf(home, sid)
       const live = await saved(home, { fs: warm })
       assert.deepEqual(live.errors, [])
-      assert.deepEqual(live.sessions.map((s) => [s.title, s.title_source]), [[meta.title, meta.title == null ? null : 'wire']], `call ${i}, warm`)
-      assert.equal((await listOf(home)).sessions[0].title, meta.title, `call ${i}, from the file`)
-      titles.add(meta.title)
+      // no main call: the first subagent lane's task, the first prompt in step order
+      const whole = meta.title ?? sent.filter((c) => c.agent).sort((a, b) => a.ts.localeCompare(b.ts))[0]?.ask ?? null
+      // an entry with no main call stands until the session has an eighth more calls (4.2 §标题表): the title lags, no further
+      const { r: found, c: read } = table(home).titles[sid]
+      const want = found == null && meta.title != null && sent.length * 8 < read * 9 ? said : whole
+      assert.deepEqual(live.sessions.map((s) => [s.title, s.title_source]), [[want, want == null ? null : 'wire']], `call ${i}, warm`)
+      assert.equal((await listOf(home)).sessions[0].title, want, `call ${i}, from the file`)
+      titles.add(want)
+      said = want
     }
     assert.ok(titles.size > 1, 'the generated rows moved the title')
   })
+}
+
+const subCall = (sid, ask, agent, i) => envelope(CC, sid, anth([{ role: 'user', content: ask }]), replyTo(CC, i), stamp(i), { 'x-claude-code-agent-id': agent })
+// A filesystem whose raw files cannot be opened once `broken` is set.
+const faultyFs = (home) => {
+  const f = Object.assign(cold(), { broken: false, openSync: (p, ...a) => { if (f.broken && String(p).startsWith(path.join(home, 'raw'))) throw Object.assign(new Error('EIO: i/o error'), { code: 'EIO' }); return fs.openSync(p, ...a) } })
+  return f
 }
 
 test('4.2 §标题表: a growing session whose title stands does not rewrite the table', async () => {
@@ -224,23 +241,102 @@ test('4.2 §标题表: a growing session whose title stands does not rewrite the
   assert.equal(fs.readFileSync(titlesFile(home), 'utf8'), bytes)
 })
 
-test('3.5 #41: a record that cannot be read: title null, one `errors` entry, nothing in the table; the next read tries again', async () => {
+test('3.5 #41: a record that cannot be read and no entry: title null from `unread`, one `errors` entry, nothing in the table; the next read tries again', async () => {
   const home = homeOf(), sid = 'lost-0000-4a1b-9c2d-000000000001'
   append(home, [0, 1, 2, 3, 4, 5].map((t) => envelope(CC, sid, CC.body(sid, t), replyTo(CC, t), stamp(t))))
   await segmentIndex({ home, segment: SEG, owner: true })
-  let broken = false
-  const faulty = Object.assign(cold(), { openSync: (f, ...a) => { if (broken && String(f).startsWith(path.join(home, 'raw'))) throw Object.assign(new Error('EIO: i/o error'), { code: 'EIO' }); return fs.openSync(f, ...a) } })
+  const faulty = faultyFs(home)
   await runQuery('segments', {}, { home, fs: faulty })
-  broken = true
+  faulty.broken = true
   const doc = await saved(home, { fs: faulty })
-  assert.deepEqual(doc.sessions.map((s) => [s.title, s.title_source]), [[null, null]])
+  assert.deepEqual(doc.sessions.map((s) => [s.title, s.title_source]), [[null, 'unread']])
   assert.deepEqual(doc.errors.map((e) => [e.where, e.code]), [[`session/${sid}`, 'record-unreadable']])
   assert.ok(!fs.existsSync(titlesFile(home)) || !(sid in table(home).titles), 'not in the table')
-  broken = false
+  faulty.broken = false
   const back = await saved(home, { fs: faulty })
   assert.deepEqual(back.errors, [])
   assert.deepEqual(back.sessions.map((s) => s.title), [(await metaOf(home, sid)).title])
   assert.ok(table(home).titles[sid].t, 'read again, it is kept')
+})
+
+test('3.5 #41: a record that cannot be read beside an entry with a title: the title stands, from the wire, one `errors` entry, the table as it was', async () => {
+  const home = homeOf(), sid = 'kept-0000-4a1b-9c2d-000000000001', warm = faultyFs(home)
+  append(home, [1, 2, 3].map((t) => envelope(CC, sid, CC.body(sid, t), replyTo(CC, t), stamp(t))))
+  await segmentIndex({ home, segment: SEG, owner: true })
+  const { sessions: [{ title }] } = await saved(home, { fs: warm })
+  assert.ok(title, 'the table has it')
+  const bytes = fs.readFileSync(titlesFile(home))
+  append(home, [envelope(CC, sid, CC.body(sid, 0), replyTo(CC, 0), stamp(0))]) // sorts before the entry's call: the session is read again
+  await segmentIndex({ home, segment: SEG, owner: true })
+  await runQuery('segments', {}, { home, fs: warm })
+  warm.broken = true
+  const doc = await saved(home, { fs: warm })
+  assert.deepEqual(doc.sessions.map((s) => [s.title, s.title_source]), [[title, 'wire']])
+  assert.deepEqual(doc.errors.map((e) => [e.where, e.code]), [[`session/${sid}`, 'record-unreadable']])
+  assert.deepEqual(fs.readFileSync(titlesFile(home)), bytes)
+})
+
+test('3.5 #40: a session of subagent calls only: the title is the task of the first lane in step order, from the wire, the entry names no main call; a main call then replaces it', async () => {
+  const home = homeOf(), sid = 'subs-0000-4a1b-9c2d-000000000001', warm = cold()
+  append(home, [subCall(sid, 'second', 'lane-b', 2), subCall(sid, 'first', 'lane-a', 1), subCall(sid, 'third', 'lane-b', 3)])
+  const doc = await saved(home, { fs: warm })
+  assert.deepEqual(doc.sessions.map((s) => [s.title, s.title_source]), [['first', 'wire']])
+  assert.equal(table(home).titles[sid].r, null)
+  append(home, [envelope(CC, sid, anth([{ role: 'user', content: 'the main prompt' }]), replyTo(CC, 4), stamp(4))])
+  assert.deepEqual((await saved(home, { fs: warm })).sessions.map((s) => [s.title, s.title_source]), [['the main prompt', 'wire']])
+  assert.notEqual(table(home).titles[sid].r, null)
+})
+
+for (const read of [2, 3, 8, 9, 16, 40]) {
+  test(`4.2 §标题表: ${read} calls read and no main one: no record is read again until the session has an eighth more calls`, async () => {
+    const home = homeOf(), sid = 'lags-0000-4a1b-9c2d-000000000001'
+    let opened = 0
+    const counting = Object.assign(cold(), { openSync: (f, ...a) => { if (String(f).startsWith(path.join(home, 'raw'))) opened++; return fs.openSync(f, ...a) } })
+    const grown = async (i) => {
+      append(home, [subCall(sid, `task ${i}`, 'lane-a', i)])
+      await runQuery('segments', {}, { home, fs: counting }) // the rows warm first, so what is counted is what the titles read
+      opened = 0
+      await saved(home, { fs: counting })
+    }
+    append(home, Array.from({ length: read - 1 }, (_, i) => subCall(sid, `task ${i}`, 'lane-a', i)))
+    await grown(read - 1)
+    let calls = read
+    while ((calls + 1) * 8 < read * 9) { await grown(calls++); assert.equal(opened, 0, `at ${calls} calls`) }
+    await grown(calls++)
+    assert.ok(opened > 0, `at ${calls} calls`)
+    assert.equal(table(home).titles[sid].c, calls)
+  })
+}
+
+test('3.5 §访问模式: in the worker a page of titles gives way at the budget, a title further each ask, what was computed saved; the one-shot path answers at once', async () => {
+  const home = sevenHome(), wait = new Int32Array(new SharedArrayBuffer(4))
+  await segmentIndex({ home, segment: SEG, owner: true })
+  const local = await listOf(home)
+  const slowFs = () => {
+    const slow = Object.assign(cold(), { burn: false, openSync: (f, ...a) => { if (slow.burn && String(f).startsWith(path.join(home, 'raw'))) Atomics.wait(wait, 0, 0, TITLE_BUDGET_MS + 20); return fs.openSync(f, ...a) } })
+    return slow
+  }
+  const warmed = async () => { const f = slowFs(); await runQuery('segments', {}, { home, fs: f }); f.burn = true; return f }
+
+  const inWorker = await warmed(), queue = []
+  const ask = () => answer({ name: 'sessions' }, { home, fs: inWorker, writer: true, later: (fn) => queue.push(fn) })
+  let got = await ask(), gaveWay = 0
+  while (got.status === 102) {
+    gaveWay++
+    assert.ok(gaveWay <= local.sessions.length, 'each ask computes a title')
+    assert.equal(got.bytes.length, 0)
+    for (const fn of queue.splice(0)) await fn()
+    assert.ok(Object.keys(table(home).titles).length >= gaveWay, 'the titles computed are in the table')
+    got = await ask()
+  }
+  assert.ok(gaveWay > 0, 'the list gave way')
+  assert.equal(got.status, 200)
+  assert.deepEqual(JSON.parse(got.bytes), local)
+
+  fs.unlinkSync(titlesFile(home))
+  const oneShot = await answer({ name: 'sessions' }, { home, fs: await warmed() })
+  assert.equal(oneShot.status, 200)
+  assert.deepEqual(JSON.parse(oneShot.bytes), local)
 })
 
 test('3.5 §访问模式: a window that narrows to later rows leaves the title as it is', async () => {

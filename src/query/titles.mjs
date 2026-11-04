@@ -1,7 +1,8 @@
 // src/query/titles.mjs — the TITLE TABLE: every session's title, beside the segment index (RFC 4.2 §标题表; 3.5 §访问模式; D78 ①).
 //
-// A title is the main lane's first prompt, `session`'s own `meta.title`. It lives in a request body the segment index does not parse
-// (D20), and only a session's first calls hold it, so `sessions` reads it from one small table: `index/titles.json`, a projection like
+// A title is the main lane's first prompt, `session`'s own `meta.title`; until a session has a main call, its first subagent lane's task.
+// It lives in a request body the segment index does not parse (D20), and only a session's first calls hold it, so `sessions` reads it
+// from one small table: `index/titles.json`, a projection like
 // the index (invariant 2). A session the table does not have is computed on the spot from its first model calls in step order, so the
 // list is never left not knowing. Only the query worker writes the file (saveTitles, through `later`); the one-shot CLI computes the
 // same answer in memory and writes nothing.
@@ -16,6 +17,9 @@ import { fsTag, statKey } from './warm.mjs';
 import { trocarHome } from '../paths.mjs';
 
 export const TITLE_V = 1;
+export const TITLE_BUDGET_MS = 100; // how long a `sessions` in the worker computes titles before it says ask again (3.5 §访问模式)
+/** Thrown by titleOf past its `deadline`: the answer is a `102`, what was computed stays in the table. */
+export class TitlesPending extends Error {}
 const FIRST_READ = 4, GROWTH = 4; // model calls read at first, and how many times more each next read takes in (3.5 §访问模式: 4, 16, 64 …)
 
 export const titlesFile = (home) => path.join(indexDir(home), 'titles.json');
@@ -41,12 +45,13 @@ function tableOf(home, fs) {
   return table;
 }
 
-// What the table says after this session's new members are checked: `keep` (the entry stands), or how far the calls are known to hold no main one.
+// What the table says after this session's new members are checked: `keep` (the entry stands; `waits`: on model calls past `m` that are
+// still too few to fold again, so `m` stays where the count starts), or how far the calls are known to hold no main one.
 function check(was, members) {
   if (!was || members.length < was.m) return { from: 0 };
   const fresh = members.slice(was.m).filter(isModelCall);
   if (!fresh.length) return { keep: true };
-  if (was.r == null) return { from: was.c };
+  if (was.r == null) return fresh.length * 8 >= was.c ? { from: was.c } : { keep: true, waits: true }; // at c*9/8 calls (4.2 §标题表)
   const at = members.find((r) => r.id === was.r);
   return at && !fresh.some((r) => byStep(r, at) < 0) ? { keep: true } : { from: 0 }; // `t` null with a main call found is final too
 }
@@ -55,37 +60,45 @@ function check(was, members) {
 // → {t, r, c}, or {unread} when a record could not be read. Each read folds the calls from the first one on, in write order, as `session`
 // does: a call may be told by the one it continues (4 16 64 … of them, so about a third more reads than calls); a later part folded alone
 // would read a subagent's continuation as the main lane. Whatever sorts into the part read before is in the next read too. The records
-// are read one at a time, so a long read holds one record and the fold.
-function firstMain({ home, fs, calls, steps, from }) {
+// are read one at a time, so a long read holds one record and the fold. With every call read and no main one, `t` is the first subagent
+// lane's task and `r` stays null: a main call found later replaces it.
+function firstMain({ home, fs, calls, steps, from, progress }) {
   let end = FIRST_READ;
   while (end <= from) end *= GROWTH;
   for (;; end *= GROWTH) {
     const head = steps.slice(0, end), held = new Set(head), errs = [];
     let lost = false;
-    const read = (rs) => { const got = recordsAt({ home, fs, rows: rs, errors: errs, remember: false }); lost ||= got.length < rs.length; return got; };
+    const read = (rs) => { progress(); const got = recordsAt({ home, fs, rows: rs, errors: errs, remember: false }); lost ||= got.length < rs.length; return got; };
     const facts = new Map(foldFacts({ rows: calls.filter((r) => held.has(r)), read }).map((f) => [String(f.id), f]));
     if (lost || errs.some((e) => e.io)) return { unread: errs[0] ? errs[0].reason : 'a record is missing' };
     const main = head.find((r) => (facts.get(String(r.id)) || {}).lane === 'main');
     if (main) return { t: facts.get(String(main.id)).ask ?? null, r: main.id, c: head.length };
-    if (end >= steps.length) return { t: null, r: null, c: steps.length };
+    if (end >= steps.length) {
+      const sub = head.map((r) => facts.get(String(r.id))).find((f) => f && f.lane === 'subagent');
+      return { t: sub ? sub.ask : null, r: null, c: steps.length };
+    }
   }
 }
 
-/** titleOf({home, fs, id, members, errors}) → the session's title, or null: no main prompt in its calls, or (with one `errors` entry,
- *  D38, and nothing kept) a record that could not be read back. `members`: the WHOLE session, in write order. */
-export function titleOf({ home = trocarHome(), fs = nodeFs, id, members, errors = [] }) {
+const said = (t) => ({ title: t, title_source: t != null ? 'wire' : null });
+
+/** titleOf({home, fs, id, members, errors, progress, deadline}) → {title, title_source}. `title_source`: 'wire', null (no prompt in its
+ *  calls), or 'unread': a record that could not be read back and no title to stand in; a read that fails leaves one `errors` entry (D38)
+ *  and the table as it was, an old title standing. `members`: the WHOLE session, in write order. `progress`: called at each read.
+ *  `deadline`: a performance.now() time; past it, a title that needs a read throws TitlesPending. */
+export function titleOf({ home = trocarHome(), fs = nodeFs, id, members, errors = [], progress = () => {}, deadline = null }) {
   const table = tableOf(home, fs), was = table.titles.get(id), state = check(was, members);
-  if (state.keep) { was.m = members.length; return was.t; }
+  if (state.keep) { if (!state.waits) was.m = members.length; return said(was.t); }
+  if (deadline != null && performance.now() >= deadline) throw new TitlesPending();
   const calls = members.filter(isModelCall);
-  const got = firstMain({ home, fs, calls, steps: [...calls].sort(byStep), from: state.from });
+  const got = firstMain({ home, fs, calls, steps: [...calls].sort(byStep), from: state.from, progress });
   if (got.unread) {
-    if (table.titles.delete(id)) table.dirty = true;
     errors.push({ where: `session/${id}`, code: 'record-unreadable', reason: got.unread });
-    return null;
+    return was && was.t != null ? said(was.t) : { title: null, title_source: 'unread' };
   }
   if (!was || was.t !== got.t || was.r !== got.r || was.c !== got.c) table.dirty = true;
   table.titles.set(id, { ...got, m: members.length });
-  return got.t;
+  return said(got.t);
 }
 
 /** saveTitles({home, fs}): the table as this process holds it, whole, when it changed; nothing otherwise. The query worker's alone. */

@@ -13,7 +13,7 @@ const isLogged = (r) => !!r.is_llm_call && isLogOnly(r);
 // The ONE place the session document's shape lives (附录 C.5): `trocar query sessions` derives the same facts from the segment
 // index (src/query/rows.mjs sessionFactsOf) and hands them to this function, so the list the board draws and the list the CLI prints
 // are one document, however they were counted. The title is the main lane's task — the first prompt of the captured request (4.4
-// §人类标题的来源) — so where it came from is always the wire. No project is known from the capture: '_unresolved', no path.
+// §人类标题的来源) — so where it came from is the wire, unless `title_source` says otherwise. No project is known from the capture: '_unresolved', no path.
 function sessionDoc(base) {
   const title = base.title ?? null;
   return {
@@ -28,7 +28,7 @@ function sessionDoc(base) {
     session_synthesized: !!base.session_synthesized,
     provider: base.provider ?? null,
     title,
-    title_source: title != null ? 'wire' : null,
+    title_source: base.title_source !== undefined ? base.title_source : (title != null ? 'wire' : null),
     calls: base.calls || 0,
     logged: base.logged || 0, // D40: inference calls kept as a log line only (a meta.json written before D40 has none)
     probes: base.probes || 0,
