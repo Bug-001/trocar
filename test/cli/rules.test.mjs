@@ -7,6 +7,9 @@ import path from 'node:path'
 import { runCli } from '../../src/cli/main.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
+import { RULE_STATES } from '../../src/rules/closed.mjs'
+import { armedKey } from '../../src/rules/state.mjs'
+import { rulesState, rulesStats } from '../../src/paths.mjs'
 import { fakeIo, snapshot } from './fixtures/on-ctx.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 
@@ -149,7 +152,7 @@ test('V115: --replace takes the place of the rule, off again, and the receipt sa
   assert.equal(stored(s).rules[1].note, 'new')
   assert.equal(Object.hasOwn(stored(s).rules[1], 'armed'), false)
   assert.equal(Object.hasOwn(stored(s).rules[1], 'armed_at'), false)
-  assert.ok(doc.notes.length > 0, 'a rule that was on and is off now is named')
+  assert.ok(doc.notes.some((n) => n.includes('tag-header')), 'a rule that was on and is off now is named')
 })
 
 test('C.2: --dry-run gives the same receipt with planned and writes nothing', async () => {
@@ -169,24 +172,36 @@ test('C.2: --dry-run gives the same receipt with planned and writes nothing', as
   assert.equal((await add(s, rule(), '--dry-run')).doc.error.code, 'rule-invalid', 'it refuses what the run would')
 })
 
-test('§4.4: the notes follow how the rule is written, one sentence each', async () => {
-  const host = { harness: 'any', host: 'x.example' }
-  const cases = [
-    [rule(), 0],
-    [rule({ on: 'response' }), 0], // a head-only rule gathers no body, so nothing about bodies applies
-    [rule({ on: 'response', match: host, do: [{ replace: 'a', with: 'b', in: 'body' }] }), 1],
-    [rule({ on: 'response', whole: true, match: host, do: [{ replace: 'a', with: 'b', in: 'body' }] }), 1],
-    [rule({ on_error: 'drop', match: host }), 1],
-    [rule({ do: [{ hold: true, release_after_ms: 1000 }] }), 1],
-    [rule({ on: 'response', whole: true, do: [{ hold: true, release_after_ms: 1000 }] }), 2],
-    [rule({ on: 'response', on_error: 'drop', match: host, whole: true, do: [{ hold: true, release_after_ms: 1000 }] }), 3],
-  ]
-  for (const [input, count] of cases) {
+test('§4.4: the notes follow how the rule is written: each way of writing it brings its own reminder and takes none of the others along', async () => {
+  const notesOf = async (input) => {
     const { doc } = await add(sandbox(), input)
     assert.equal(doc.ok, true, JSON.stringify(doc.error))
-    assert.equal(doc.notes.length, count, JSON.stringify(input))
-    for (const note of doc.notes) assert.equal(typeof note, 'string')
+    return new Set(doc.notes)
   }
+  const only = (a, b) => [...a].filter((n) => !b.has(n))
+  const host = { harness: 'any', host: 'x.example' }, body = { match: host, do: [{ replace: 'a', with: 'b', in: 'body' }] }, hold = { do: [{ hold: true, release_after_ms: 1000 }] }
+
+  assert.deepEqual([...await notesOf(rule())], [])
+  assert.deepEqual([...await notesOf(rule({ on: 'response' }))], [], 'a rule on the head of a response gathers no body')
+
+  const forward = await notesOf(rule({ on: 'response', ...body }))
+  const dropped = await notesOf(rule({ on: 'response', on_error: 'drop', ...body }))
+  const dropHead = await notesOf(rule({ on_error: 'drop', match: host }))
+  const [passes] = only(forward, dropped), [cut] = only(dropped, dropHead)
+  assert.deepEqual(only(forward, new Set([passes])), [], 'a body rule on a response has one reminder')
+  assert.deepEqual(only(dropped, new Set([cut, ...dropHead])), [], 'and with on_error drop, that reminder and the one about drop')
+  assert.ok(passes && cut && passes !== cut, 'the response passing unchanged and the response being cut are not the same sentence')
+
+  const whole = await notesOf(rule({ on: 'response', whole: true, ...body }))
+  const [delays] = only(whole, forward)
+  assert.deepEqual([...whole], [delays], 'whole takes the slow-response reminder away and brings its own')
+  assert.deepEqual(only(await notesOf(rule({ on: 'response', on_error: 'drop', whole: true, ...body })), new Set([delays, ...dropHead])), [])
+
+  const held = await notesOf(rule(hold))
+  const heldResponse = await notesOf(rule({ on: 'response', whole: true, ...hold }))
+  assert.deepEqual(new Set([...heldResponse]), new Set([delays, ...held]), 'a hold on a response reminds of both')
+  const [holds] = held, [drops] = dropHead
+  assert.equal(new Set([passes, cut, delays, holds, drops]).size, 5, 'no two reminders are the same')
 })
 
 test('V115: a name that is not there is exit 2 rule-unknown on enable, disable and rm, all or nothing', async () => {
@@ -282,6 +297,7 @@ test('V116: no daemon and the file cannot be written: exit 1 rules-unwritable, a
       assert.equal(typeof doc.file.reason, 'string')
       assert.ok(doc.problems.length > 0, what)
       assert.deepEqual(doc.rules.map((r) => r.name), ['on-one'], 'the rules it meant to stop')
+      assert.notEqual(doc.rules[0].state, 'disabled', 'nothing stopped them, so the receipt does not say they are off')
       valid(doc)
       assert.deepEqual(fs.readFileSync(s.file), bytes, what)
     } finally { free() }
@@ -324,8 +340,10 @@ test('§4.4: rules off sets a bad rules.json aside, keeps the delay it can still
     assert.equal(exit, 0, what)
     valid(doc)
     assert.deepEqual(stored(s), { max_delay_ms: delay, rules: [] }, what)
-    assert.equal(fs.readdirSync(s.trocar).filter((f) => f.startsWith('rules.json.bad-')).length, 1, what)
-    assert.equal(doc.notes.length, kept ? 1 : 2, `${what}: the file set aside, and the delay when it was lost`)
+    const aside = fs.readdirSync(s.trocar).filter((f) => f.startsWith('rules.json.bad-'))
+    assert.equal(aside.length, 1, what)
+    assert.ok(doc.notes.some((n) => n.includes(aside[0])), `${what}: the file set aside is named`)
+    assert.equal(doc.notes.some((n) => !n.includes(aside[0])), !kept, `${what}: a delay that was lost is named, and one that was kept is not`)
   }
 })
 
@@ -362,19 +380,53 @@ test('§4.4: `rules --json` is the document of trocar query rules, for all rules
   assert.deepEqual(one.doc.rules.map((r) => r.name), ['two'])
 })
 
-test('§1.2: without --json the exit codes are the same, every rule is listed, and a machine code never reaches the screen', async () => {
+const printed = async (s, ...argv) => {
+  const io = fakeIo()
+  return { exit: await runCli(['rules', ...argv], { io, home: s.home, env: { HOME: s.home }, platform: 'darwin', uid: 1000 }), out: io.text() }
+}
+
+test('§1.2: without --json the exit codes are the same, and every rule is listed', async () => {
   const s = sandbox()
   seed(s, [rule({ name: 'one' }), rule({ ...armed, name: 'two' })])
-  const text = async (...argv) => {
-    const io = fakeIo()
-    return { exit: await runCli(['rules', ...argv], { io, home: s.home, env: { HOME: s.home }, platform: 'darwin', uid: 1000 }), out: io.text() }
-  }
-  const list = await text()
+  const list = await printed(s)
   assert.equal(list.exit, 0)
   for (const name of ['one', 'two']) assert.ok(list.out.includes(name))
-  for (const code of ['disabled', 'stopped-by-off', 'load-failed']) assert.ok(!list.out.includes(code), code)
-  assert.equal((await text('two')).exit, 0)
-  assert.equal((await text('no-such')).exit, 2)
-  assert.equal((await text('enable', 'one')).exit, 1)
-  assert.equal((await text('off')).exit, 0)
+  assert.equal((await printed(s, 'two')).exit, 0)
+  assert.equal((await printed(s, 'no-such')).exit, 2)
+  assert.equal((await printed(s, 'enable', 'one')).exit, 1)
+  assert.equal((await printed(s, 'off')).exit, 0)
+})
+
+// What puts a rule in each state, in the files the state is read from. A state with no row here fails the first assertion below.
+const recording = { 'claude-code': { desired: 'on', off_seq: 0 } }
+const STATE_FILES = {
+  live: { armed, switches: recording },
+  resting: { armed, switches: recording, stat: { not_applied_by: { timeout: 3 }, resting_until: new Date(Date.now() + 600_000).toISOString() } },
+  waiting: { armed },
+  'stopped-by-off': { armed, switches: { 'claude-code': { desired: 'off', off_seq: 1 } } },
+  'limit-reached': { armed, limit: { times: 1 }, stat: { limit_used: 1 } },
+  'process-gone': { armed, stat: { process_gone: true } },
+  'load-failed': { armed, stat: { load_failed: true } },
+  disabled: {},
+  tripped: { armed, stops: { unclean_stops: 2 } },
+}
+const SAID_AS_IS = ['live', 'resting'] // 1.6 §4.4's table gives these two their own code as the word
+
+test('§4.4, §1.1: in every state a rule can be in, a person reads a word and never a machine code', async () => {
+  assert.deepEqual(Object.keys(STATE_FILES).sort(), [...RULE_STATES].sort())
+  for (const [state, { armed: on, limit, stat = {}, switches = {}, stops = {} }] of Object.entries(STATE_FILES)) {
+    const s = sandbox(), written = rule({ ...on, ...(limit ? { limit } : {}) })
+    seed(s, [written])
+    fs.mkdirSync(path.dirname(rulesStats(s.trocar)), { recursive: true })
+    fs.writeFileSync(rulesStats(s.trocar), JSON.stringify({ at: armed.armed_at, rules: { [written.name]: { armed_key: armedKey(written), ...stat } } }))
+    fs.writeFileSync(rulesState(s.trocar), JSON.stringify(stops))
+    fs.writeFileSync(path.join(s.trocar, 'collector', 'state.json'), JSON.stringify({ version: 2, harnesses: switches }))
+    assert.equal((await rules(s, [])).doc.rules[0].state, state)
+    for (const argv of [[], [written.name]]) {
+      const { exit, out } = await printed(s, ...argv)
+      assert.equal(exit, 0, state)
+      assert.ok(!out.includes('undefined'), `${state}: ${out}`)
+      for (const code of RULE_STATES.filter((c) => !SAID_AS_IS.includes(c))) assert.ok(!out.includes(code), `${state} prints ${code}: ${out}`)
+    }
+  }
 })
