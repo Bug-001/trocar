@@ -131,6 +131,9 @@ export async function withBoard({ bytes, home, base, idleMs, token = true, width
     context = await browser.newContext({ viewport: { width, height }, colorScheme: theme })
     page = await context.newPage()
     page.on('pageerror', (e) => errors.push(String(e)))
+    // TROCAR_CPU_RATE=<n>: the page's CPU slowed n times (CDP), for report-only runs on a slower machine's footing
+    const rate = Number(process.env.TROCAR_CPU_RATE)
+    if (rate > 1) await (await context.newCDPSession(page)).send('Emulation.setCPUThrottlingRate', { rate })
     page.on('response', (r) => {
       const u = new URL(r.url())
       if (!/^\/(api|control)\//.test(u.pathname) && r.status() >= 400) missing.push(`${r.status()} ${u.pathname}`) // a static file the page asked for and did not get (a /favicon.ico once)
@@ -148,6 +151,8 @@ export async function withBoard({ bytes, home, base, idleMs, token = true, width
   return { url: face ? face.base : ext.origin, get, face, page, stop, requests, errors, missing }
 }
 
+// the build the face serves: the desk-next build under `npm run test:browser -- --desk-next` (scripts/test-browser.mjs), else the default
+export const DESK_NEXT = process.env.TROCAR_DESK_NEXT === '1'
 export const mark = (page, name) => page.evaluate((n) => { performance.mark(n) }, name)
 /** ms from `startMark` to now, recorded as measure `name`. */
 export const measure = (page, name, startMark) => page.evaluate(([n, s]) => performance.measure(n, s).duration, [name, startMark])
