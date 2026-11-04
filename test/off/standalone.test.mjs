@@ -86,6 +86,13 @@ test('V2: with the repository out of reach the copy install wrote does what `tro
   assert.equal(r.stderr, '')
 })
 
+test('V120: the copy, refused under --json, answers with one `usage` document on one line and nothing on stderr', async () => {
+  const r = await runWritten(await brokenTrocar(), ['no-such-name', '--json'])
+  assert.equal(r.status, 2); assert.equal(r.stderr, '')
+  assert.ok(r.stdout.endsWith('\n') && r.stdout.indexOf('\n') === r.stdout.length - 1, r.stdout)
+  assert.equal(JSON.parse(r.stdout).error.code, 'usage')
+})
+
 test('V2: the text a person reads is the same too, and a per-harness off leaves the other harness alone', async () => {
   const a = await brokenTrocar(), b = await brokenTrocar()
   const io = fakeIo()
