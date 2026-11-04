@@ -6,6 +6,7 @@ import { scanJson, nodeAt } from '../dissect/json-scan.mjs'
 import { ruleBlocksFor } from '../dissect/registry.mjs'
 import { sseEvents } from '../dissect/sse-spans.mjs'
 import { LIMITS } from './closed.mjs'
+import { FREE } from './budget.mjs'
 import { headersMap, isText, truth } from './compile.mjs'
 import { FAST_LITERAL, parseCondition } from './conditions.mjs'
 import { setHeaders } from './headers.mjs'
@@ -299,8 +300,7 @@ function act(action, state, env) {
   run(action, state, env)
 }
 
-// Tier 1's reading of a condition, with nothing to pay.
-const FREE = { spend: () => true }
+// Tier 1's reading of a condition.
 const holds = (node, leaf) => truth(node, null, FREE, leaf)
 
 function compares(node, value) {

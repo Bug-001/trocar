@@ -6,6 +6,9 @@
 export const UNIT_BYTES = 256 * 1024;
 export const CONDITION_COST = 64;
 
+// For the rule process, where the same reading runs with nothing to pay.
+export const FREE = { spend: () => true };
+
 export function byteBudget(limit = UNIT_BYTES, parent = null) {
   let spent = 0;
   const over = () => spent > limit || (parent !== null && parent.over);

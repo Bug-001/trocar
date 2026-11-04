@@ -2,7 +2,7 @@
 // replace. The daemon loads this file, so the rule process's half comes in as `full`, and a script as `script`: tier 1 touches neither.
 import { Buffer } from 'node:buffer'
 import { isSecretHeader } from '../capture/redact.mjs'
-import { CONDITION_COST } from './budget.mjs'
+import { CONDITION_COST, FREE } from './budget.mjs'
 import { LIMITS } from './closed.mjs'
 import { isText, readable } from './compile.mjs'
 import { isFastReplace } from './conditions.mjs'
@@ -116,19 +116,28 @@ async function runRules(hits, state, out, edit, unreadable = null) {
 }
 
 // `base` is what arrived, decoded. Edits run from the wire to the agent: going up the changed bytes are the wire's, coming down they are the agent's.
-function recordOf(unit, state, { base, coded, spend }) {
+function recordOf(unit, state, { base, coded, budget }) {
   const up = INVERTED_ON.has(unit.on)
   const edits = state.opaque ? [] : recordEdits(unit.on, state.steps)
   const wire = up ? state.bytes : base, agent = up ? unit.body ?? base : state.bytes
-  if (![wire.length, agent.length, agent.length].every(spend)) throw ESCALATE
+  if (![wire.length, agent.length, agent.length].every((n) => budget.spend(n))) throw ESCALATE
   return { edits, recover: recoverOf({ wire, agent, edits, compressed: state.opaque || (up && coded) }) }
 }
 
-function settle(unit, state, out, { base, survivors, spend = () => true }) {
-  const touched = state.steps.length > 0 || state.opaque, coded = Boolean(unit.body) && base !== unit.body
-  const record = touched ? recordOf(unit, state, { base, coded, spend }) : { edits: [], recover: null }
+const sameHead = (a, b) => a.length === b.length && a.every(([name, value], i) => name === b[i][0] && value === b[i][1])
+
+// Did the rules leave anything different from what arrived? Rules that ended where they began are no change (5.1 §四个词), and telling is a pass like any other.
+function moved(state, base, budget) {
+  const edited = state.steps.length > 0 || state.opaque, retold = state.headers !== state.start
+  if ((edited && !budget.spend(base.length)) || (retold && !spendHead(state.start, budget))) throw ESCALATE
+  return { touched: edited && !state.bytes.equals(base), reheaded: retold && !sameHead(state.headers, state.start) }
+}
+
+function settle(unit, state, out, { base, survivors, budget = FREE }) {
+  const { touched, reheaded } = moved(state, base, budget), coded = Boolean(unit.body) && base !== unit.body
+  const record = touched ? recordOf(unit, state, { base, coded, budget }) : { edits: [], recover: null }
   let bytes = touched ? state.bytes : null
-  let headers = state.headers === state.start ? null : state.headers
+  let headers = reheaded ? state.headers : null
   if (touched && coded) headers = state.headers.filter(([name]) => name.toLowerCase() !== 'content-encoding')
   const { recover } = record
   if (recover && (recover.edits ? editsCost(recover.edits) : recover.body_b64.length) > editsLimit(unit.body?.length ?? 0)) {
@@ -169,7 +178,7 @@ async function tier1(unit, compiled, budget) {
   }
   try {
     await runRules(survivors, state, out, edit)
-    return settle(unit, state, out, { base: unit.body, survivors, spend: (n) => budget.spend(n) })
+    return settle(unit, state, out, { base: unit.body, survivors, budget })
   } catch (e) {
     if (e === ESCALATE) return { escalate: true, survivors }
     throw e

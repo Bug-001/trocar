@@ -223,6 +223,59 @@ test('5.1 §按块改: a block action that cannot act follows on_error, and leav
   }
 });
 
+test('5.1 §四个词: bytes and headers that end where they began are no change, whatever ran on them', async () => {
+  const back = (a, b, more = {}) => [rule('there', lit(a, b, more)), rule('back', lit(b, a, more))];
+  const head = [['content-type', 'application/json'], ['x-a', '1']];
+  const cases = [
+    ['A', {}, back('A', 'B', { in: 'body' })],
+    ['{"a":"A"}', {}, back('A', 'B')],
+    ['{"a":"x"}', {}, [rule('r', { json: '/a', set: 'x' })]],
+    ['{"a":1}', {}, [rule('r', { json: '/a', set: 1 })]],
+    ['{"a":"x"}', {}, [rule('r', { json: '/a', set: 'y' }), rule('s', { json: '/a', set: 'x' })]],
+    ['x', { headers: head }, [rule('r', { header: 'x-a', set: '1' })]],
+    ['x', { headers: head }, [rule('r', { header: 'x-none', remove: true })]],
+    ['x', { headers: head }, [rule('r', [{ header: 'x-a', set: '2' }, { header: 'x-a', set: '1' }])]],
+    ['x', { headers: head }, [rule('r', [{ header: 'x-b', set: '2' }, { header: 'x-b', remove: true }])]],
+  ];
+  for (const [body, more, list] of cases) {
+    const compiled = rules(...list);
+    for (const run of [tier1, tier2]) {
+      const result = await run(unitOf(body, more), compiled);
+      if (result.escalate) continue;
+      const label = `${body} ${JSON.stringify(list.map((one) => one.do))}`;
+      assert.deepEqual([result.bytes, result.headers, result.edits, result.recover], [null, null, [], null], label);
+      assert.deepEqual(result.hits, list.map((one) => one.name), label);
+      assert.equal(result.skipped.length, 0, label);
+    }
+  }
+  const gz = zlib.gzipSync('{"a":"A"}'), coded = await tier2(unitOf(gz, { encoding: 'gzip', headers: [['content-encoding', 'gzip']] }), rules(...back('A', 'B')));
+  assert.deepEqual([coded.bytes, coded.headers, coded.recover], [null, null, null], 'a compressed body that came back goes out as it came');
+  const moved = await tier2(unitOf('{"a":"A"}'), rules(...back('A', 'B'), rule('h', { header: 'x-b', set: '1' })));
+  assert.deepEqual([moved.bytes, moved.recover, moved.edits], [null, null, []], 'the body came back; the headers did not');
+  assert.equal(moved.headers.at(-1)[0], 'x-b');
+  const reordered = await tier2(unitOf('x', { headers: head }), rules(rule('r', [{ header: 'content-type', remove: true }, { header: 'content-type', set: 'application/json' }])));
+  assert.deepEqual(reordered.headers, [head[1], head[0]], 'a head in another order is another head');
+});
+
+test('5.1 §字节预算: telling a result from what arrived is the last pass paid for, and past the counter tier 2 does it', async () => {
+  const counted = async (unit, list) => {
+    const passes = [], counting = { spend(n) { passes.push(n); return true; }, get over() { return false; } };
+    return { passes, result: await tier1(unit, list, counting) };
+  };
+  const body = 'A'.repeat(1000), compiled = rules(rule('a', lit('AA', 'BB', { in: 'body' })), rule('b', lit('BB', 'AA', { in: 'body' })));
+  const { passes, result } = await counted(unitOf(body), compiled);
+  assert.equal(result.bytes, null);
+  assert.equal(passes.at(-1), body.length);
+  const total = passes.reduce((n, pass) => n + pass, 0);
+  assert.equal((await tier1(unitOf(body), compiled, byteBudget(total))).escalate, false);
+  assert.equal((await tier1(unitOf(body), compiled, byteBudget(total - 1))).escalate, true);
+
+  const head = pairsOf(100), list = rules(rule('r', [{ header: 'x-h0', set: 'w' }, { header: 'x-h0', set: 'v' }]));
+  const told = await counted(unitOf('x', { headers: head }), list);
+  assert.equal(told.result.headers, null);
+  assert.equal(told.passes.at(-1), headBytes(head));
+});
+
 test('one readable pass per unit, however many rules read its body', async () => {
   const body = 'plain text with no hit '.repeat(100), list = Array.from({ length: 5 }, (_, i) => rule(`r${i}`, { drop: true }, { match: { body: `ABSENT${i}` } }));
   const spentOn = async (compiled) => { const budget = byteBudget(); await tier1(unitOf(body), compiled, budget); return budget.spent; };
