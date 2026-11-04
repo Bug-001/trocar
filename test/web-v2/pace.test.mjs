@@ -39,26 +39,30 @@ test('2.3 读者优先: a slice runs at once with no input, and after a paint wi
 })
 
 test('2.3 读者优先: a redraw comes REDRAW_MS after the last one, and urgent ends the wait', async () => {
-  const c = clock(), pace = createPace(c), log = []
+  let hot = false
+  const c = clock(), pace = createPace({ ...c, urgent: () => hot }), log = []
   pace.drew()
   const t0 = c.now()
-  done(c, pace.redraw(() => false), log)
+  done(c, pace.redraw(), log)
   await c.to(t0 + REDRAW_MS - 1)
   assert.equal(log.length, 0)
   await c.to(t0 + REDRAW_MS + 1)
   assert.equal(log.length, 1)
   pace.drew()
-  const hot = []
-  done(c, pace.redraw(() => true), hot)
+  hot = true
+  const now = []
+  done(c, pace.redraw(), now)
   await c.to(c.now())
-  assert.equal(hot.length, 1)
+  assert.equal(now.length, 1)
+  pace.input()
+  assert.equal(pace.slice(), undefined, 'the reader waits for this slice')
 })
 
 test('2.3 读者优先: inputs every few ms hold a redraw at most HOLD_MS; one stop lets it go at once', async () => {
   for (const every of [10, 30, 60, 90]) {
     const c = clock(), pace = createPace(c), log = [], t0 = c.now()
     pace.input()
-    done(c, pace.redraw(() => false), log)
+    done(c, pace.redraw(), log)
     for (let t = t0; t < t0 + HOLD_MS + 200; t += every) { pace.input(); await c.to(t + every) }
     assert.equal(log.length, 1, `inputs every ${every} ms`)
     assert.ok(log[0] - t0 <= HOLD_MS + 60, `released ${log[0] - t0} ms after, inputs every ${every} ms`)
@@ -67,9 +71,9 @@ test('2.3 读者优先: inputs every few ms hold a redraw at most HOLD_MS; one s
 
 test('2.3 读者优先: a pointer held down holds a redraw, urgent or not, until it comes up or PRESS_MS has passed', async () => {
   for (const urgent of [false, true]) {
-    const c = clock(), pace = createPace(c), log = [], t0 = c.now()
+    const c = clock(), pace = createPace({ ...c, urgent: () => urgent }), log = [], t0 = c.now()
     pace.press(true)
-    done(c, pace.redraw(() => urgent), log)
+    done(c, pace.redraw(), log)
     await c.to(t0 + 2000)
     assert.equal(log.length, 0)
     pace.press(false)
@@ -77,7 +81,7 @@ test('2.3 读者优先: a pointer held down holds a redraw, urgent or not, until
     assert.equal(log.length, 1)
     const held = [], t1 = c.now()
     pace.press(true)
-    done(c, pace.redraw(() => urgent), held)
+    done(c, pace.redraw(), held)
     await c.to(t1 + PRESS_MS + 100)
     assert.equal(held.length, 1, 'a pointer-up that never came holds nothing for good')
   }

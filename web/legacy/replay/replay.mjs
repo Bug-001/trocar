@@ -432,7 +432,8 @@ function openDesk(ctx, route0, makeView = legacyView) {
   }
   // the playhead's panels, at most once per animation frame: a call inside a frame that already drew waits for the next one
   let inFrame = false, queued = false, busyTimer = null
-  const pace = createPace({ now: nowMs, sleep: (ms) => new Promise((r) => setTimeout(r, ms)), frame })
+  // nothing of the playhead's step is drawn yet: the background work is what the reader waits for (2.3 §归约前沿 读者优先)
+  const pace = createPace({ now: nowMs, sleep: (ms) => new Promise((r) => setTimeout(r, ms)), frame, urgent: () => s.playRid == null || s.initialStep != null || s.unheld != null })
   // the outline, the explorer and the raw panel follow the window in a task of their own (2.3 归约前沿: no task over 50 ms): a step of a
   // long session is the window's thousands of nodes plus the ledger's lists, and one task drew both. Several paints before it runs
   // draw these once, for the playhead then, once its frame is out and the reader has stopped. A tick's drawer opens in that task too, after them
@@ -859,9 +860,7 @@ function openDesk(ctx, route0, makeView = legacyView) {
     const d = redrawDue
     if (d) { d.changed = d.changed === null || changed === null ? null : new Set([...d.changed, ...changed]); return d.p }
     const due = redrawDue = { changed }
-    // nothing of the playhead's step is drawn yet: nothing to wait for (2.3 §归约前沿 读者优先)
-    const urgent = () => s.playRid == null || s.initialStep != null || s.unheld != null
-    due.p = yieldNow().then(() => pace.redraw(urgent)).then(() => serial(() => { if (redrawDue === due) redrawDue = null; pace.drew(); return redrawNow(due.changed) }))
+    due.p = yieldNow().then(() => pace.redraw()).then(() => serial(() => { if (redrawDue === due) redrawDue = null; pace.drew(); return redrawNow(due.changed) }))
     return due.p
   }
   async function redrawNow(changed) {
