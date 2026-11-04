@@ -887,20 +887,21 @@ test('W13 a client that leaves while the upstream is being dialled takes the dia
   const hung = []
   const L = await lab(t, { connectUpstream: (d) => (d.port === 1 ? (hung.push(hungSocket()), hung.at(-1)) : net.connect(d.port, d.address)) })
   const a = L.client(); a.write(connectHead('127.0.0.1:1')) // a direct upstream whose connect never completes
-  await until(() => hung.length, 'the ingress to dial'); a.sock.destroy()
+  await until(() => hung.length, 'the ingress to dial'); await sleep(150); const leftA = Date.now(); a.sock.destroy()
   await within(closedOf(hung[0]), 1500, 'the direct upstream to be destroyed')
   const proxy = await silentProxy(t) // an http proxy that has the prelude and never answers
   const P = await lab(t, { meta: { upstream: { kind: 'http', host: '127.0.0.1', port: proxy.port } } })
   const b = P.client(); b.write(connectHead('upstream.test:443'))
-  await until(() => proxy.socks.length && proxy.socks[0].got.length, 'the proxy to get the prelude'); b.sock.destroy()
+  await until(() => proxy.socks.length && proxy.socks[0].got.length, 'the proxy to get the prelude'); await sleep(150); const leftB = Date.now(); b.sock.destroy()
   await within(proxy.socks[0].closed, 1500, 'the connection to the proxy to be destroyed')
   await sleep(100)
   // no flow existed, but the give-up is on record: who left, during which wait, for how long (the one signal that would show trocar delaying agents)
-  for (const [X, phase] of [[L, 'connect'], [P, 'proxy-reply']]) {
+  for (const [X, phase, left] of [[L, 'connect', leftA], [P, 'proxy-reply', leftB]]) {
     assert.equal(X.flows.length, 1, phase)
     const [row] = X.flows
     assert.deepEqual([row.decision, row.not_captured, row.error.type, row.error.side, row.error.wait?.phase], ['error', 'error', 'closed_before_reply', 'client', phase])
     assert.ok(row.error.wait.ms >= 0 && row.duration_ms === row.error.wait.ms, JSON.stringify(row)); assert.deepEqual(checkRecord(row), [])
+    assert.ok(Date.parse(row.ts) <= left - 100, `ts is when the wait began (150 ms before the client left), as on every connection row (4.6 §看得到): ${row.ts} vs left ${new Date(left).toISOString()}`)
     assert.deepEqual(X.failures, []); assert.deepEqual(X.engine.stats().ingress, IDLE)
   }
   assert.equal(proxy.socks.length, 1, 'nothing dialled again')

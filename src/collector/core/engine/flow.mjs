@@ -81,9 +81,10 @@ const parentsOf = (meta) => ({ ...(meta.parentPid != null ? { parent_pid: meta.p
  * the error). The agent was answered 502 or the proxy's own refusal; this is the record that it happened (D38).
  */
 export function writeRefusal(meta, ctx, info) {
-  const rec = {
-    ts: new Date().toISOString(), flow_id: ctx.newFlowId(), pid: meta.pid ?? null, agent: meta.agent ?? null, ...parentsOf(meta),
-    dst: meta.dst, host: meta.dst.address, decision: info.decision, reason: info.reason ?? null, bytes_up: 0, bytes_down: 0, duration_ms: info.duration_ms ?? 0,
+  const ms = info.duration_ms ?? 0
+  const rec = { // ts = when the connection opened, as on every connection row (4.6 §看得到): the agent waited `ms` before this
+    ts: new Date(Date.now() - ms).toISOString(), flow_id: ctx.newFlowId(), pid: meta.pid ?? null, agent: meta.agent ?? null, ...parentsOf(meta),
+    dst: meta.dst, host: meta.dst.address, decision: info.decision, reason: info.reason ?? null, bytes_up: 0, bytes_down: 0, duration_ms: ms,
     ...ingressFields(meta), not_captured: info.not_captured, ...(info.error ? { error: info.error } : {}),
   }
   let ok = true, why = null
