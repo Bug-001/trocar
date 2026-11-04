@@ -594,7 +594,7 @@ async function stopped(ctx, id, e) {
   if (h && h.sig === sig && hasHead(home, id, fs)) return;
   try {
     const index = await indexed(ctx), members = sessionGroups(index.rows).get(id);
-    if (members) { writeHead(home, id, pendingHead(home, id, members, index.errors, (d, done) => ({ done, total: members.length, stopped: stop }), fs, titleOf({ home, fs, id, members })), fs); heads.set(id, { sig, shape: null }); }
+    if (members) { writeHead(home, id, pendingHead(home, id, members, index.errors, (d, done) => ({ done, total: members.length, stopped: stop }), fs, titleOf({ home, fs, id, members }).title), fs); heads.set(id, { sig, shape: null }); }
   } catch { /* a head not written is written at the next stop or slice */ }
 }
 // A slice that leaves members past the frontier writes no answer file (3.5 §后台抽取与归约); the head's `pending` alone is brought to
@@ -611,7 +611,7 @@ function backlog(ctx, id, { st, plan, members, indexErrors }) {
   const news = re && oldDone.get(id) < total; // the first head that says `seen` waits for no multiple
   if (!cleared && !news && was != null && Math.floor(was / PACK_MEMBERS) === Math.floor(done / PACK_MEMBERS) && hasHead(home, id, fs)) return;
   const pending = re ? (d, at) => (at < total ? { done: at, total, seen: true } : null) : () => ({ done, total });
-  try { writeHead(home, id, pendingHead(home, id, members, indexErrors, pending, fs, titleOf({ home, fs, id, members })), fs); } catch { if (cleared) stops.add(id); return; } // tried again next slice
+  try { writeHead(home, id, pendingHead(home, id, members, indexErrors, pending, fs, titleOf({ home, fs, id, members }).title), fs); } catch { if (cleared) stops.add(id); return; } // tried again next slice
   if (news) oldDone.set(id, Infinity);
   shown.set(id, done);
   heads.set(id, { sig: JSON.stringify(['pending', done]), shape: null });
@@ -635,7 +635,7 @@ function toState(ctx, s, deadline = Infinity) {
 }
 /** headOf(ctx, s) → the session's `session --head` document: tier 1 at its mark, tier 0 while it has none (ctx-files.mjs), the same bytes
  *  here and in the worker: the title is a function of the disk. */
-const headOf = (ctx, s) => (s.mark == null ? tier0Doc(s.id, s.rows, s.indexErrors, titleOf({ home: ctx.home ?? trocarHome(), fs: ctx.fs || nodeFs, id: s.id, members: s.rows }))
+const headOf = (ctx, s) => (s.mark == null ? tier0Doc(s.id, s.rows, s.indexErrors, titleOf({ home: ctx.home ?? trocarHome(), fs: ctx.fs || nodeFs, id: s.id, members: s.rows }).title)
   : headDoc({ ...s, ...(s.files || packsOf(s)), mark: markOn(s.plan, s.mark), markTs: s.plan.byId.get(s.mark)?.ts ?? null }));
 // → whether the head at this state is on disk
 function putHead(ctx, s, doc = null) {

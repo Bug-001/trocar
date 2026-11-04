@@ -214,7 +214,7 @@ async function background() {
       let wrote = 0
       for (const [id, ms] of sessionGroups(index.rows)) {
         try {
-          const title = titleOf({ home, fs: nodeFs, id, members: ms }), d = readHead(home, id)
+          const { title } = titleOf({ home, fs: nodeFs, id, members: ms }), d = readHead(home, id)
           // a head under the name its pending does not say (one written before the names did) is put under the right one: the daemon
           // tells a folding head by its name only, so a misnamed one would never be followed (3.5 §谁执行它「答案文件」)
           const misnamed = d && d.pending && !d.pending.stopped && nodeFs.existsSync(headFile(home, id))
