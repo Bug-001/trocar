@@ -153,8 +153,10 @@ test('1.3 #22: a grip moves its edge alone, stays in the part, keeps a step, and
 })
 
 test('1.3 #22: a double-click on the box gives the largest window the part fits, around the box', () => {
-  const { s, $ } = world({ K: 20, span: { lo: 70, hi: 74 } })
-  fireEvent.doubleClick($('#ovbrush')!)
+  const { s, strip, px } = world({ K: 20, span: { lo: 70, hi: 74 } })
+  fireEvent.doubleClick(strip, { clientX: px(30) })
+  expect(s.brushTo).not.toHaveBeenCalled()
+  fireEvent.doubleClick(strip, { clientX: px(72) }) // the strip: it holds the pointer's capture from the press
   const { lo, hi } = last(s)
   expect(hi - lo).toBe(20)
   expect(lo).toBeGreaterThanOrEqual(40)

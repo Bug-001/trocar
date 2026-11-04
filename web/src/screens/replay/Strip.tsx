@@ -50,7 +50,7 @@ const Blocks = memo(function Blocks({ l, lit }: { l: Layout, lit: number }) {
 export function Strip({ desk, m, ov }: { desk: DeskView, m: any, ov: Overview | null }) {
   const el = useRef<HTMLDivElement>(null), press = useRef<Press | null>(null)
   const [w, setW] = useState(0)
-  const [label, setLabel] = useState<{ x: number, g: number, k: number } | null>(null)
+  const [label, setLabel] = useState<{ f: number, g: number, k: number } | null>(null)
   const s = desk.s
 
   useLayoutEffect(() => {
@@ -87,7 +87,7 @@ export function Strip({ desk, m, ov }: { desk: DeskView, m: any, ov: Overview | 
       const { k, g } = l!.hit(x)
       if (k !== p.part) { p.part = k; p.grab = 0 }
       p.win = panSpan(p.win, l!.parts[k], g - p.grab, K)
-      setLabel({ x, g, k })
+      setLabel({ f: Math.max(0, Math.min(1, x / l!.W)), g, k })
     } else {
       const c = l!.parts[p.part], edge = Math.round(l!.stepOf(x)), { lo, hi } = p.win
       const next = p.mode === 'l' ? { lo: Math.max(c.s0, Math.min(hi - 1, edge)), hi } : { lo, hi: Math.min(c.s1, Math.max(lo + 1, edge)) }
@@ -101,10 +101,11 @@ export function Strip({ desk, m, ov }: { desk: DeskView, m: any, ov: Overview | 
     if (p?.mode === 'pending') s.chapterGo(l!.hit(e.clientX - p.left).g)
     end()
   }
-  const widen = (e: MouseEvent) => {
-    if (!on || !(e.target as Element).closest('.ovbrush')) return
-    const c = l!.parts[m.part], { lo, hi } = m.view
-    e.preventDefault()
+  // by the step under the pointer, not the event's target: under the press's capture a double-click lands on the strip itself
+  const widen = (e: MouseEvent<HTMLDivElement>) => {
+    if (!on || !m.box) return
+    const { lo, hi } = m.box, g = l!.hit(e.clientX - e.currentTarget.getBoundingClientRect().left).g, c = l!.parts[m.part]
+    if (g < lo || g >= hi) return
     const f = fitWindow({ lo: c.s0, hi: c.s1, K: desk.capacity(), playhead: (lo + hi) >> 1 })
     s.brushTo(f.lo, f.hi)
   }
@@ -117,7 +118,7 @@ export function Strip({ desk, m, ov }: { desk: DeskView, m: any, ov: Overview | 
       <Backdrop ov={ov} l={l} />
       {on && m.box ? <div className="ovbrush" id="ovbrush" style={span(l, l.xOf(m.box.lo), l.xOf(m.box.hi))}><span className="ovh ovh-l" /><span className="ovh ovh-r" /></div> : null}
       {on ? <div className="ovpin" id="ovpin" style={{ left: pct(l.xOf(m.at + 0.5) / l.W) }} /> : null}
-      {label ? <div className="ovlabel" data-step={label.g} style={{ left: pct(label.x / l.W), '--f': Math.max(0, Math.min(1, label.x / l.W)) } as CSSProperties}>{W.stripAt(wordAt(label.k), label.g + 1)}</div> : null}
+      {label ? <div className="ovlabel" data-step={label.g} style={{ left: pct(label.f), '--f': label.f } as CSSProperties}>{W.stripAt(wordAt(label.k), label.g + 1)}</div> : null}
     </> : null}
   </div>
 }
