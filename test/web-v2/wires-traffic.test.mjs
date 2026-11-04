@@ -1,11 +1,13 @@
 // wires-traffic.test.mjs — the traffic screens (1.10) read the C.5 documents as they are: the table from `traffic`, the host
 // list from `calls {harness, host}` paged by `next`, the request detail from `calls {ref}`. The documents come from the real
-// face (real server, real query worker); unrecorded bytes stay null (invariant 4), and what C.5 has no field for is not drawn.
+// face (real server, real query worker); unrecorded bytes stay null (invariant 4), and the views draw only what C.5 has a field for.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { tableModel, classWord } from '../../web/legacy/traffic/traffic.mjs'
-import { listModel, appendPage, readPage, replayLinkOf, detailLeadHtml } from '../../web/legacy/traffic/host.mjs'
-import { detailModel, requestDetailHtml } from '../../web/legacy/traffic/request-view.mjs'
+import { tableModel } from '../../web/src/screens/traffic/model.mjs'
+import { mergePages, callsParams } from '../../web/src/screens/traffic/host-model.mjs'
+import { detailModel, requestView } from '../../web/src/screens/traffic/request-model.mjs'
+import { bytes } from '../../web/legacy/core/fmt.mjs'
+import * as W from '../../web/legacy/labels/traffic.mjs'
 import { boardHome, serveBoard } from './real-face.mjs'
 
 const face = (async () => {
@@ -13,13 +15,9 @@ const face = (async () => {
   const traffic = await f.get('traffic', { limit: 500 })
   assert.equal(traffic.status, 200)
   assert.ok(traffic.doc.hosts.length > 1, 'the fixture has several hosts')
-  const classes = await f.get('classes')
-  assert.equal(classes.status, 200)
-  return { f, T: traffic.doc, C: classes.doc }
+  return { f, T: traffic.doc }
 })()
 test.after(async () => { (await face).f.close() })
-// the board's api.get over the real face
-const apiOf = (f) => ({ get: async (n, p) => { const r = await f.get(n, Object.fromEntries(Object.entries(p || {}).filter(([, v]) => v != null))); return { ok: r.status === 200, status: r.status, data: r.doc } } })
 const busiest = (T) => T.hosts.reduce((a, b) => (b.requests > a.requests ? b : a))
 const key = (r) => `${r.harness}\u0000${r.host}`
 
@@ -32,28 +30,36 @@ test('(1) one table row per `traffic.hosts` entry, keyed harness+host; totals.is
   assert.equal(m.floor, true)
 })
 
-test('(2) a host whose received_bytes is null reads as not recorded (null), never 0', async () => {
+test('(2) a host whose received_bytes is null reads as not recorded, never 0', async () => {
   const { T } = await face
   const doc = structuredClone(T)
   const hit = doc.hosts[0]
   hit.received_bytes = null
   const row = tableModel(doc).flat.find((r) => key(r) === key(hit))
-  assert.equal(row.recv.value, null)
+  assert.equal(row.recv.main, W.UNRECORDED)
   const other = tableModel(T).flat.find((r) => key(r) === key(hit))
-  assert.equal(other.recv.value, T.hosts[0].received_bytes)
+  assert.ok(other.recv.main.includes(bytes(T.hosts[0].received_bytes)))
 })
 
 test('(3) the host list follows `next` until null and collects exactly the ids of one unpaged `calls`', async () => {
   const { f, T } = await face
-  const h = busiest(T), api = apiOf(f)
+  const h = busiest(T)
   assert.ok(h.requests > 2, 'the busiest host spans several pages of 2')
   const q = { harness: h.harness, host: h.host, limit: 2 }
-  let list = listModel((await readPage(api, q)).data), pages = 1
-  while (list.next != null) { list = appendPage(list, (await readPage(api, { ...q, after: list.next })).data); pages++ }
-  assert.ok(pages > 1)
+  const pages = [(await f.get('calls', callsParams(q))).doc]
+  let list = mergePages(pages)
+  while (list.next != null) { pages.push((await f.get('calls', callsParams({ ...q, after: list.next }))).doc); list = mergePages(pages) }
+  assert.ok(pages.length > 1)
   const all = await f.get('calls', { harness: h.harness, host: h.host, limit: 500 })
   assert.equal(all.doc.next, null)
   assert.deepEqual(list.rows.map((r) => r.id), all.doc.records.map((r) => r.id))
+  // #12 the caption's count and as-of are the last page's fields, not the rows drawn so far
+  assert.equal(typeof all.doc.total, 'number')
+  assert.equal(list.total, pages.at(-1).total)
+  assert.equal(list.total, all.doc.total)
+  assert.equal(list.asOf, pages.at(-1).as_of)
+  // a page read twice (the first page re-read) draws its refs once
+  assert.deepEqual(mergePages([...pages, pages[0]]).rows.map((r) => r.id), all.doc.records.map((r) => r.id))
 })
 
 test('(4) a real `calls {ref}` record builds the request detail; its byte figures are the record\'s sent_bytes / received_bytes', async () => {
@@ -67,18 +73,6 @@ test('(4) a real `calls {ref}` record builds the request detail; its byte figure
     const d = detailModel(one.doc)
     assert.equal(d.sent, one.doc.records[0].sent_bytes)
     assert.equal(d.received, one.doc.records[0].received_bytes)
-    assert.doesNotThrow(() => requestDetailHtml(d))
-  }
-})
-
-test('(5) no real row carries 未分类 or a replay link (C.5 has neither field)', async () => {
-  const { f, T, C } = await face
-  for (const r of tableModel(T).flat) for (const id of Object.keys(r.classes || {})) assert.equal(classWord(id, r.harness, C.unmatched).unclassified, false)
-  for (const h of T.hosts) {
-    const page = await f.get('calls', { harness: h.harness, host: h.host, limit: 500 })
-    for (const row of page.doc.records) {
-      assert.equal(replayLinkOf(row), null)
-      assert.equal(detailLeadHtml(row), null)
-    }
+    assert.doesNotThrow(() => requestView(d))
   }
 })

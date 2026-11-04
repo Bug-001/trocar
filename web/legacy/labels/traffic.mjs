@@ -20,7 +20,6 @@ export const NO_HOST = 'host not recorded'
 export const NEW = 'new'
 export const NEW_TIP = 'This agent never connected to this host before these 24 hours (inferred from the records counted in the stats)'
 export const FIRST_SEEN_TIP = 'From the records counted in the stats'
-export const UNCLASSIFIED_TIP = 'This agent\'s traffic cannot be split further yet'
 export const UNRECORDED = 'not recorded'
 export const UNRECORDED_N = (n) => `${n} not recorded`
 export const ONLY_THESE = 'these rows only'
@@ -37,9 +36,6 @@ export const EMPTY_HOST = 'No requests to this host in this window'
 export const EMPTY_HOST_CLASS = (word) => `No ${word} requests to this host in this window`
 export const PICK_ONE = 'Pick a request to see its request and response'
 export const CLOSE_DETAIL = 'Close request details'
-export const OPEN_IN_REPLAY = 'Open in replay ›'
-export const MODEL_CALL_LEAD = 'This is a model call; its content is in replay ›'
-export const RAW_REQUEST = 'Raw request'
 export const FAILED = 'failed'
 export const UNKNOWN_DAY = '—'
 
