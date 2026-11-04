@@ -251,12 +251,17 @@ export async function shoot(page, name, { width, theme }) {
  *    both ways (a disclosure title under a copy button, a cell note running into the next column, a date over a switch);
  *  - `cut`: text cut off by a box that clips it with no ellipsis (a hidden-overflow ancestor that is not a scroll container, horizontally);
  *  - `untitled`: text truncated with an ellipsis whose full text is nowhere on hover (no `title` on it or above it);
- *  - `emptyIcons`: an agent icon box of a known agent that is still empty. Overlays (dialogs, popovers, toasts) float by design and are left out. */
-export const layoutFaults = (page, root = '#content') => page.evaluate((root) => {
+ *  - `emptyIcons`: an agent icon box of a known agent that is still empty once its file had ICON_WAIT_MS to arrive (the board fills a box
+ *    when the file answers, core/chips.mjs; a slow machine answers it after the screen's data). Overlays (dialogs, popovers, toasts) float by
+ *    design and are left out. */
+const ICON_WAIT_MS = 10_000
+export const layoutFaults = (page, root = '#content') => page.evaluate(async ({ root, iconWaitMs }) => {
   const R = document.querySelector(root)
   const out = { overlap: [], cut: [], untitled: [], emptyIcons: [] }
   if (!R) return out
   const shown = (el) => { for (let e = el; e && e !== document.documentElement; e = e.parentElement) { const cs = getComputedStyle(e); if (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') return false } return true }
+  const empty = () => [...R.querySelectorAll('[data-hicon]')].filter((el) => el.getAttribute('data-hicon') !== '?' && shown(el) && !el.querySelector('svg'))
+  for (const t0 = Date.now(); empty().length && Date.now() - t0 < iconWaitMs;) await new Promise((ok) => setTimeout(ok, 50))
   const floating = (el) => !!el.closest('[role="dialog"], [data-confirm-back], .pop, .popover, .fly, #toasts')
   // the part of a box the reader can see: inside every ancestor that clips (any overflow but visible) and inside the window
   const seen = (el, r) => {
@@ -308,7 +313,7 @@ export const layoutFaults = (page, root = '#content') => page.evaluate((root) =>
       break
     }
   }
-  for (const el of R.querySelectorAll('[data-hicon]')) if (el.getAttribute('data-hicon') !== '?' && shown(el) && !el.querySelector('svg')) out.emptyIcons.push(el.getAttribute('data-hicon'))
+  out.emptyIcons = empty().map((el) => el.getAttribute('data-hicon'))
   for (const k of Object.keys(out)) out[k] = [...new Set(out[k])]
   return out
-}, root)
+}, { root, iconWaitMs: ICON_WAIT_MS })

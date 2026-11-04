@@ -128,6 +128,7 @@ test('an expanded problem row: nothing drawn on one another, the two right-hand 
       const b = await open(gate.chromium, ctx, { width })
       try {
         const now = new Date().toISOString()
+        await b.page.route((u) => new URL(u).pathname.startsWith('/assets/harness/'), async (r) => { await new Promise((ok) => setTimeout(ok, 1000)); await r.continue() }) // the icon files answer after the screen's data, as on a slow machine: a box still loading is not an empty one
         await b.page.route((u) => new URL(u).pathname === '/api/status', async (r) => {
           const res = await r.fetch(), j = await res.json()
           j.harnesses.codex = { ...j.harnesses.codex, desired: 'on', captured: false, reason: 'config-after-start', why: [] }
