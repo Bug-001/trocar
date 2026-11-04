@@ -149,7 +149,7 @@ export function applyHead(desk, head) {
   held(desk, head.mark)
   for (const k of SCALARS) desk[k] = head[k] ?? null
   desk.logged = head.logged ?? 0; desk.probes = head.probes ?? 0
-  if (!head.pending) desk.firstPending = false
+  if (!head.pending || head.pending.seen) desk.firstPending = false
   desk.errors = [...(head.errors || []), ...desk.errors.filter((x) => FAILS.has(x))]
   mergeHeads(desk, touched)
 }
