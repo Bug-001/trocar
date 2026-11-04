@@ -10,7 +10,7 @@ import { cacheState, isFailed, breakCost, usageOf, priceMatch, costOf, hitTier }
 import { CT_ORDER, segTax, TAX_ORDER, hasChangeLine, callFacts, refRowOf } from '../../../legacy/replay/analysis.mjs'
 import { stepRef, stepsOf } from '../../../legacy/replay/lanes.mjs'
 import { stepOf, askOrdinal, ridAt } from '../../../legacy/replay/model.mjs'
-import { windowOf, roughWindow, chapterHere, chapterAt, chapterJump, problemSteps, OVW_BARCAP } from '../../../legacy/replay/timeline.mjs'
+import { windowOf, roughWindow, chapterHere, chapterAt, chapterJump, problemSteps, OVW_BARCAP, BAR_KEYS } from '../../../legacy/replay/timeline.mjs'
 import { cacheLabel, costLabel, contentRefOf, contentRefKOf, priceStateNote } from '../../../legacy/replay/stepbar.mjs'
 import { totalsOf } from '../../../legacy/replay/header.mjs'
 import { FLAG, cellsOf } from '../../../../src/view/head-cols.mjs'
@@ -21,6 +21,7 @@ const has = (o, k) => o != null && Object.prototype.hasOwnProperty.call(o, k)
 const modelOf = (c) => (c && c.rec && c.rec.request && c.rec.request.model) || null
 const errMsgOf = (c) => { const e = c && c.error; return !e ? '' : typeof e === 'string' ? e : (e.message || e.msg || c.errMsg || '') }
 const clamp01 = (x) => Math.max(0, Math.min(1, x))
+const CT_WORD = Object.fromEntries(BAR_KEYS) // a content type's word in the legend; image and other are their own words
 const OVW_POINTS = 240 // the overview's most points (1.3 §overview)
 const PROBES = 4 // values read per overview point when a point covers many steps: the strip is a sampled map there
 const FAIL_H = 20 / 72, MIN_H = 3 / 72, FLAG_NONE_H = 0.55 // a failed step's fixed low bar; the least bar; a flag whose extra cost is unknown
@@ -245,7 +246,8 @@ function costRows(s, call, model) {
  * @typedef {{rid: string, col: number, state: 'high'|'mid'|'low'|'none'|'unk'|'fail', pct: number|null, tip: string}} TraceCell
  * @typedef {{view: {lo: number, hi: number, N: number}, rough: boolean, legend: object, chapters: object|null, problems: object|null,
  *   bars: Bar[], peak: {text: string, tip: string|null}, trace: TraceCell[], asks: object|null, review: {width: number, tip: string}|null,
- *   overview: object, axis: {start: string, end: string}|null, gutter: Array<{ct: string, pct: number, share: string}>, cursor: {col: number|null}}} Scope
+ *   overview: object, axis: {start: string, end: string}|null, gutter: Array<{ct: string, pct: number, share: string}>,
+ *   gutterTip?: string|null, cursor: {col: number|null}}} Scope
  */
 /** @returns {Scope|null} `K` = the bars the row can draw (timeline.mjs barsThatFit); it shapes the rough page's window */
 export function scopeModel(s, K) {
@@ -289,6 +291,8 @@ export function scopeModel(s, K) {
     overview: { ...ov, chapterTicks: ch.chs.map((c) => ({ k: c.k ?? null, left: ch.pos(c.s0) / N })), brush: { left: lo / N, width: (hi - lo) / N }, pin: (s.playhead + 0.5) / N },
     axis: { start: W.axisNo(main, no(lo)), end: W.axisNo(main, no(hi - 1)) },
     gutter: shares ? shares.map(([ct, f]) => ({ ct, pct: Math.round(f * 100), share: W.approxShare(Math.round(f * 100)) })) : [],
+    // every share with its type's word: the gutter shows the lines its row holds, its hover all of them (1.3 §排布)
+    gutterTip: shares ? shares.map(([ct, f]) => `${CT_WORD[ct] || ct} ${W.approxShare(Math.round(f * 100))}`).join(' · ') : null,
     cursor: { col: s.playhead >= lo && s.playhead < hi ? s.playhead - lo : null },
     noMain: main ? null : W.noMainLane(W.laneWord(a.kind)),
   }
