@@ -119,10 +119,12 @@ const refCallOf = (s, i) => refRowOf(s.anchor, i)
 const priceRowOf = (s, c) => (s.pricing ? priceMatch(s.pricing, modelOf(c)) : null)
 
 // the problem steps of the whole main lane (window-independent): every cache break and every failed call, in order.
-// A compaction step is NOT one (1.3): it draws the neutral 「压缩」 word — a rewrite is not a problem, and it never counts in n.
+// A compaction step is NOT one (1.3): it draws the neutral 「压缩」 word — a rewrite is not a problem, and it never counts in n. The step
+// a marked compaction lands on is the same rewrite (3.4): no compaction of its own, so it draws nothing at all.
+export const landing = (c) => !c.compaction && !!c.cacheBreak && c.cacheBreak.cause === 'compaction'
 export function problemSteps(lane) {
   const out = []
-  ;((lane && lane.calls) || []).forEach((c, i) => { if (isFailed(c) || (isBreak(c, refRowOf(lane, i)) && !c.compaction)) out.push(i) })
+  ;((lane && lane.calls) || []).forEach((c, i) => { if (isFailed(c) || (isBreak(c, refRowOf(lane, i)) && !c.compaction && !landing(c))) out.push(i) })
   return out
 }
 
@@ -154,6 +156,7 @@ function problemRowHtml(s, { lo, hi }) {
     }
     // neutral, not a flag: a small mark with no text of its own; the word rides the hover and the screen-reader name
     if (c.compaction) { const tip = `${W.COMPACT_WORD}${c.compactionInferred ? ' · ' + W.GUESS : ''} — ${W.compactTip(n, c.compactionInferred)}`; cells[i - lo] = `<span class="pcompact${c.compactionInferred ? ' inf' : ''}" data-i="${i}" role="button" tabindex="0" title="${esc(tip)}" aria-label="${esc(tip)}"></span>`; continue }
+    if (landing(c)) continue
     const st = cacheState(c, refCallOf(s, i))
     if (st.isBreak) breaks.push({ i, n, usd: breakCost(c, refCallOf(s, i), priceRowOf(s, c)).usd, struct: st.state === 'changed' })
   }

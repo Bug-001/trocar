@@ -13,6 +13,8 @@ import { bigSession } from './big-session.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
 import { extendSession, saveIndexes } from '../../src/query/named/session.mjs'
 import { sessionDir } from '../../src/query/projection.mjs'
+import { homeWith, SEGMENT } from '../helpers/session-doc.mjs'
+import { laneOf, SID } from '../helpers/compaction-lane.mjs'
 
 const J = JSON.stringify, PACK = 512 // 3.5 §会话读 `lane --pack`: pack n = the members at write positions [512n, 512(n+1))
 
@@ -56,4 +58,25 @@ test('3.5 #36: only a slice that seals a pack or starts a chapter rewrites the h
   fs.unlinkSync(file)
   const answer = JSON.stringify(await runQuery('session', { id: s.id, head: true }, ctx))
   assert.equal(onDisk(), answer, 'the request wrote the missing head, its own bytes')
+})
+
+test('3.5 #36: the slice after a marked compaction writes the head with one more chapter, though it counts no compaction', { timeout: 60_000 }, async () => {
+  const recs = laneOf('anthropic', ['grow', 'grow', 'grow', 'mark', 'drop', 'grow'])
+  const home = homeWith(recs.slice(0, 3)), ctx = { home, writer: true }, file = path.join(sessionDir(home, SID), 'head.json.gz')
+  const onDisk = () => gunzipSync(fs.readFileSync(file)).toString('utf8')
+  const slice = async (rec) => {
+    fs.appendFileSync(path.join(home, 'raw', `${SEGMENT}.ndjson`), `${J(rec)}\n`)
+    while (await extendSession(ctx, SID, Infinity));
+    return JSON.parse(onDisk())
+  }
+  while (await extendSession(ctx, SID, Infinity));
+  const marked = await slice(recs[3])
+  assert.equal(marked.chapters.length, 1, 'the marked step closes its chapter; the next one has not come')
+  const landed = await slice(recs[4])
+  assert.equal(landed.stats.compactions, marked.stats.compactions)
+  assert.equal(landed.chapters.length, marked.chapters.length + 1)
+  assert.equal(onDisk(), J(await runQuery('session', { id: SID, head: true }, { home })), 'the local path\'s head at that mark')
+  const before = onDisk()
+  await slice(recs[5])
+  assert.equal(onDisk(), before, 'the slice after that only grows the open span')
 })

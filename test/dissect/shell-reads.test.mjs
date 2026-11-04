@@ -88,7 +88,6 @@ test('a relative path joins the in-command directory, else the stated cwd, else 
   const cases = [['cat a/b.txt', 'a/b.txt'], ['cat ./b.txt', 'b.txt'], ['P=a/b.txt; cat $P', 'a/b.txt']];
   for (const [cmd, tail] of cases) {
     assert.deepEqual(paths(cmd, { cwd: '/w' }), [`/w/${tail}`], cmd);
-    assert.deepEqual(paths(cmd, { cwd: () => '/w' }), [`/w/${tail}`], cmd);
     assert.deepEqual(paths(`cd /c; ${cmd}`, { cwd: '/w' }), [`/c/${tail}`], cmd);
     const [got] = parseBashReads(cmd);
     assert.equal(got.runtime, 'cwd', cmd);
@@ -99,8 +98,8 @@ test('a relative path joins the in-command directory, else the stated cwd, else 
   assert.deepEqual(paths('cat $PWD/b.txt', { cwd: '/w' }), ['/w/b.txt']);
 
   let asked = 0;
-  const cwd = () => { asked += 1; return '/w'; };
-  assert.deepEqual(paths('cat /a/b.txt; cat ~/c.txt; cd /d && cat e.txt', { cwd }), ['/a/b.txt', '~/c.txt', '/d/e.txt']);
+  const ctx = { get cwd() { asked += 1; return '/w'; } };
+  assert.deepEqual(paths('cat /a/b.txt; cat ~/c.txt; cd /d && cat e.txt', ctx), ['/a/b.txt', '~/c.txt', '/d/e.txt']);
   assert.equal(asked, 0, 'a getter is read only when a relative path needs it');
 });
 
@@ -177,9 +176,9 @@ test('bounds: scope and order of the command decide, and what is not a read stay
   assert.deepEqual(paths('for f in a.txt b.txt; do cat /d/$f; done; cat /e/$f'), ['/d/a.txt', '/d/b.txt', '/e/b.txt']);
   const many = Array.from({ length: 100 }, (_, i) => `f${i}.txt`).join(' ');
   assert.ok(paths(`for f in ${many}; do cat /d/$f; done`).length <= 64);
-  assert.ok(paths(`for a in ${many}; do for b in ${many}; do cat /d/$a/$b; done; done`).length <= 256);
+  assert.ok(paths(`for a in ${many}; do for b in ${many}; do cat /d/$a/$b; done; done`).length <= 4096);
   assert.deepEqual(parseBashReads('for a in 1 2; do '.repeat(30000)), []);
-  assert.ok(paths(Array.from({ length: 1000 }, (_, i) => `cat /d/${i}.txt`).join('; ')).length <= 256);
+  assert.ok(paths(Array.from({ length: 5000 }, (_, i) => `cat /d/${i}.txt`).join('; ')).length <= 4096);
 
   const NOT_READS = [
     // heredoc lines are not commands, and the command after the terminator is

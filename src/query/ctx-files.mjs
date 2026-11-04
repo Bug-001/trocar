@@ -11,6 +11,7 @@ import { SCHEMA_VERSION } from '../cli/schema.mjs';
 import { sessionMetaOfFacts } from '../view/board.mjs';
 import { listOf } from '../view/reduce.mjs';
 import { compareStep } from '../view/step-order.mjs';
+import { isMarked, opensPart } from '../view/head-cols.mjs';
 import { HEAD_FILES } from './ctx-key.mjs';
 import { lru, sessionDir } from './projection.mjs';
 import { isModelCall, sessionFactsOf } from './rows.mjs';
@@ -18,7 +19,7 @@ import { laneOf, placeIn, recOf, FLAG } from './session-doc.mjs';
 import { laneStepper, weigh } from './named/lane.mjs';
 
 /** The answer files' format version (3.5 `v`). */
-export const CTX_V = 3;
+export const CTX_V = 6;
 /** The lane headers a head lists at most, the axis lane first, then the most recently active (3.5 `lanes`, SHOULD 64). */
 export const HEAD_LANES = 64;
 // cells of `cols` at most (3.5 `bucket`), failed members `errors` names at most, tier-0 time buckets at most
@@ -57,8 +58,9 @@ export function headDoc(s) {
     if (i % bucket === 0 || h > cells[c]) { cells[c] = h; cells[c + 1] = cols.cb[k]; }
     cells[c + 2] |= f;
     let ch = chapters.at(-1);
-    if (!ch || f & FLAG.compaction && i > 0) {
-      ch = { k: chapters.length, s0: i, s1: i, rid0: lane.rids[i], ts0: cols.ts[k] ?? null, ts1: null, inferred: !!(ch && f & FLAG.inferred), peakCtx: 0 };
+    const before = i ? cols.fl[lane.slots[i - 1]] : 0;
+    if (!ch || opensPart(before, f)) {
+      ch = { k: chapters.length, s0: i, s1: i, rid0: lane.rids[i], ts0: cols.ts[k] ?? null, ts1: null, inferred: !!(ch && f & FLAG.inferred && !isMarked(before)), peakCtx: 0 };
       chapters.push(ch);
     }
     ch.s1 = i + 1; ch.ts1 = cols.ts[k] ?? null;

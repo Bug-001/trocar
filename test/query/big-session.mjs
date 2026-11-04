@@ -256,10 +256,10 @@ export function live(scale = 1) {
     compactAt: 110_000, cc: 16, shared: 12_000, paths: 4, prompt: 12_000, writes: 1_200, bigEvery: 400, bigBytes: 2_000_000, bigRun: 4 }
 }
 
-/** firstAskOf(record, records) → what 4.4 §看板 v2 需要的补充 says a lane's `task` is, read straight off the request bytes: the first
- *  user text of the call's context that is not only <system-reminder> blocks, whitespace runs squashed to one space, trimmed, at most
- *  80 characters. A call that continues a server-held context (a `previous_*_id`) has its predecessors' messages first. */
-export function firstAskOf(rec, records = []) {
+/** firstPromptOf(record, records) → the first prompt of a lane read straight off the request bytes: the first user text of the call's
+ *  context that is not only <system-reminder> blocks, those removed. A call that continues a server-held context (a `previous_*_id`)
+ *  has its predecessors' messages first. */
+export function firstPromptOf(rec, records = []) {
   const users = [], prev = []
   const walk = (o) => {
     if (Array.isArray(o)) { for (const x of o) walk(x); return }
@@ -270,14 +270,17 @@ export function firstAskOf(rec, records = []) {
   walk(JSON.parse(rec.req_body))
   const answered = (r) => { const t = JSON.stringify(r.resp); return t.includes(`"${prev[0]}"`) || t.includes(`\\"${prev[0]}\\"`) }
   const before = prev.length ? records.find((r) => r !== rec && answered(r)) : null
-  const head = before ? firstAskOf(before, records) : null
+  const head = before ? firstPromptOf(before, records) : null
   if (head) return head
   for (const m of users) {
     const parts = typeof m.content === 'string' ? [m.content] : (m.content || []).filter((p) => p && typeof p.text === 'string').map((p) => p.text)
     for (const t of parts) {
-      const h = t.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').replace(/\s+/g, ' ').trim()
-      if (h) return h.slice(0, 80)
+      const h = t.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim()
+      if (h) return h
     }
   }
   return null
 }
+/** firstAskOf(record, records) → what 4.4 §看板 v2 需要的补充 says the `task` of a lane that is no sub-agent is: its first prompt,
+ *  whitespace runs squashed to one space, at most 80 characters. */
+export const firstAskOf = (rec, records = []) => { const p = firstPromptOf(rec, records); return p && p.replace(/\s+/g, ' ').trim().slice(0, 80) }
