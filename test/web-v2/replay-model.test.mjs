@@ -11,6 +11,14 @@ import { world, readLane, deskFrom } from './desk-world.mjs'
 const fx = JSON.parse(fs.readFileSync(new URL('../fixtures/session-read-contract.json', import.meta.url), 'utf8'))
 const SEEDS = Array.from({ length: 40 }, (_, i) => i + 1)
 
+test('1.5 K-31: a session answer with pending.seen is not a first read; plain pending is, and no pending ends it', () => {
+  for (const [pending, first] of [[{ done: 1, total: 4, seen: true }, false], [{ done: 1, total: 4 }, true], [null, false]]) {
+    const desk = createDesk()
+    applySession(desk, { ...fx.session_full, pending })
+    assert.equal(desk.firstPending, first, JSON.stringify(pending))
+  }
+})
+
 test('2.3 #22: lane pages materialise to lists whose every bid is defined and whose copies stay in the parent', async () => {
   const desk = createDesk()
   applySession(desk, fx.session_full)

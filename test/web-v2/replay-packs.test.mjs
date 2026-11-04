@@ -11,7 +11,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { createDesk, listOf, stepOf, indexOf, ridAt, laneEvents } from '../../web/legacy/replay/model.mjs'
 import { parseLines, applyFile, applyHead } from '../../web/legacy/replay/packs.mjs'
-import { behindOf } from '../../web/legacy/replay/header.mjs'
+import { behindOf, readStateHtml } from '../../web/legacy/replay/header.mjs'
 import { world } from './desk-world.mjs'
 
 const fx = JSON.parse(fs.readFileSync(new URL('../fixtures/session-read-contract.json', import.meta.url), 'utf8'))
@@ -303,6 +303,16 @@ test('3.5 §会话读 {l}: a held tail\'s lane header wins over the head\'s, the
   assert.equal(desk.lanes.get('A').count, 3, 'tail 0 sealed: the head\'s header')
   applyFile(desk, { kind: 'tail', part: 'main' }, tail(1, 7))
   assert.equal(desk.lanes.get('A').count, 7, 'tail 1\'s header')
+})
+
+// 1.5 K-31 · 1.2 §会话头 读取状态: `pending.seen` is the version-change re-read of a session already read, so it is not a first read
+test('1.5 K-31: a head with pending.seen is not a first read; plain pending is, and no pending ends it', () => {
+  for (const [pending, first, state] of [[{ done: 1, total: 4, seen: true }, false, 'catching-up'], [{ done: 1, total: 4 }, true, 'reading'], [null, false, null]]) {
+    const desk = createDesk()
+    applyHead(desk, { mark: 'S:1', lanes: [], pending })
+    assert.equal(desk.firstPending, first, J(pending))
+    assert.equal(readStateHtml(desk).match(/data-read-state="([^"]+)"/)?.[1] ?? null, state, J(pending))
+  }
 })
 
 // 1.5 K-32: the calls behind are the tip ids after the newest member the desk holds — the head's mark, or a held `{r}` id past it.
