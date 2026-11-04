@@ -2,9 +2,10 @@
 // recorded per call; never from the UA or the harness). The board (src/view/extract.mjs) and the ETL
 // adapters both dispatch through this, so the two readers cannot disagree about what a record is.
 // Leaf module.
-import { detect as anthropicShape, serverEdited, CC_SECTIONS } from './cc.mjs';
+import { detect as anthropicShape, serverEdited, CC_SECTIONS, ruleBlocks } from './cc.mjs';
 import { contextStateOfRequest } from './capture-labels.mjs';
-import { wireShape, RESPONSES, CHAT } from './openai.mjs';
+import { wireShape, RESPONSES, CHAT, ruleBlocksResponses, ruleBlocksChat } from './openai.mjs';
+import { parsedRequestBody } from './request-body.mjs';
 import { isWsHandshake } from './ws-handshake.mjs';
 import { hintsOf } from './harnesses.mjs';
 import { RESPONSES_WS } from './openai-ws.mjs';
@@ -72,6 +73,15 @@ const ANTHROPIC_BLOCK_KEYS = Object.freeze(CC_SECTIONS.map((x) => x.id));
 export function blockKeysOf(format) {
   if (format === 'anthropic') return ANTHROPIC_BLOCK_KEYS;
   return (BOARD[format] && BOARD[format].blockKeys) || [];
+}
+
+// The context blocks a rule reads and edits (5.1 按块改), per wire format: the only door rule code uses, so it has no provider
+// branch. A WebSocket client message has the Responses request's shape. null = not a model call, or a body that did not parse.
+const RULE_BLOCKS = new Map([['anthropic', ruleBlocks], ['openai-responses', ruleBlocksResponses], ['openai-chat', ruleBlocksChat], ['openai-responses-ws', ruleBlocksResponses]]);
+export const ruleBlocksOf = (format) => RULE_BLOCKS.get(format) ?? null;
+export function ruleBlocksFor(rec) {
+  const blocksOf = ruleBlocksOf(wireFormatOf(rec)), body = parsedRequestBody(rec);
+  return blocksOf && body && typeof body === 'object' ? blocksOf(body) : null;
 }
 
 // 3.2:52 context_state of an HTTP-wire call: 'partial' when the stored request is incomplete (gate G17,
