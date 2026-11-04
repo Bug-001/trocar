@@ -1,5 +1,5 @@
-// trocar collector: trust plugin for a Node agent that imports one module of trocar's (DeepSeek dsh, pi). `trocar collector install`
-// writes it where that agent loads it, followed by the exports that agent looks for (plugins/<harness>/exports.js); `trocar collector
+// trocar collector: trust plugin for a Node agent that imports one module of trocar's (DeepSeek dsh, pi). `trocar install`
+// writes it where that agent loads it, followed by the exports that agent looks for (plugins/<harness>/exports.js); `trocar
 // uninstall` removes it (RFC 4.6 §身份与信任, D37④ bounded exception, acceptance T13). What it does, and nothing else:
 //   reads   the trocar CA file, Node's default roots, this process's own Node flags and start time
 //   changes Node's default trusted roots to those defaults + the trocar CA (appended, nothing taken away; not again when it is already in)

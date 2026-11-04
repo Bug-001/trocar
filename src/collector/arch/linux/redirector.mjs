@@ -46,7 +46,7 @@ export function createLinuxRedirector({ makeClient, procRoot = '/proc', uid = pr
     c.on('loader-error', (m) => ev.emit('helper-error', m))
     c.on('heartbeat-error', (m) => ev.emit('heartbeat-error', m))
   }
-  const need = () => { if (!client) throw new Error('redirector helper is not running'); return client }
+  const need = () => { if (!client) throw new Error('capability helper is not running'); return client }
   // a process of this uid whose exe cannot be read is never judged: say so (D-30) instead of dropping its exec. The event
   // carries what is still readable (comm, the command line) so the daemon can tell a process that could be an agent from one
   // that is merely not dumpable (4.6 exe-unreadable); the helper's own pid is ours, never a finding. unreadable() lists the
@@ -68,7 +68,7 @@ export function createLinuxRedirector({ makeClient, procRoot = '/proc', uid = pr
     detach: () => need().detach(),
     status: () => need().status(),
     heartbeat: () => need().heartbeat(),
-    lookup: (peer) => (client ? client.lookup(peer) : Promise.reject(Object.assign(new Error('redirector helper is not running'), { code: 'loader-down' }))), // never a miss (D-13)
+    lookup: (peer) => (client ? client.lookup(peer) : Promise.reject(Object.assign(new Error('capability helper is not running'), { code: 'loader-down' }))), // never a miss (D-13)
     watch: (pid, verdict) => need().watch(pid, verdict),
     unwatch: (pid) => need().unwatch(pid),
     unreadable: () => [...unreadable.values()],

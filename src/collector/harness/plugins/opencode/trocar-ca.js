@@ -1,4 +1,4 @@
-// trocar collector: trust plugin for OpenCode. Written by `trocar collector install`; `trocar collector uninstall`
+// trocar collector: trust plugin for OpenCode. Written by `trocar install`; `trocar uninstall`
 // removes it (RFC 4.6 §身份与信任, D37④ bounded exception, acceptance T13). What it does, and nothing else:
 //   reads   the trocar CA file, the process's default roots, this process's start time
 //   changes globalThis.fetch: each call goes on unchanged except that tls.ca = the caller's own ca (or, when it

@@ -102,7 +102,7 @@ function Handoff([string]$root, [string]$verb) { # `trocar install` / `update` o
   if ($other -and $other.Source -ne "$bin\trocar.cmd") { Say "Another trocar is on your PATH: $($other.Source). It is found before $bin\trocar.cmd until you remove it." }
   $tty = $false
   try { $tty = [Environment]::UserInteractive -and -not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected } catch { }
-  if (-not $tty) { Say "Next: $bin\trocar.cmd $verb"; return }
+  if (-not $tty) { Say "Next: cmd --% /c @`"$bin\trocar.cmd`" $verb"; return } # runs unchanged in PowerShell and cmd, spaces and & in the path too (spec 1.6, 1.1 rule 5)
   $env:Path = "$env:Path;$bin" # this session only; `trocar install` adds it for good
   & "$bin\trocar.cmd" $verb
   $st.code = $LASTEXITCODE; if ($st.code) { throw "trocar $verb exited with $($st.code)." }

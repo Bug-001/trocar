@@ -11,9 +11,9 @@ import path from 'node:path'
 import { resolveHarnesses } from '../off/harness-names.mjs'
 import { EXIT, newReceipt } from './schema.mjs'
 import { isInteractive, confirm as ask } from '../off/io.mjs'
-import { formatOnReceipt, formatPlan, planItems } from './receipt.mjs'
+import { fit, formatOnReceipt, formatPlan, planItems } from './receipt.mjs'
 import { colors, noColor } from './text.mjs'
-import { renderCompact } from '../netenv/topology-text.mjs'
+import { renderCompact, BRANCH_SEP } from '../netenv/topology-text.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
 import { readAgentList } from '../off/identity.mjs'
 import { prepareAdoption, editedFields, recordAdoption } from './on-adopt.mjs'
@@ -24,7 +24,7 @@ import { runModelOn } from './on-model.mjs'
 
 const USAGE = usageLine(commandNamed('on'))
 const FLAGS = new Set(['--dry-run', '--yes', '--json'])
-const chainText = (t) => renderCompact(t).join(' ; ')
+const chainText = (t) => renderCompact(t).join(BRANCH_SEP)
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
 
 /** → the exit code. `argv` is what follows `on`. `io` = { out, err, stdin, stdout, stderr } (src/off/io.mjs makeIo). */
@@ -54,7 +54,7 @@ export async function runOn({ io, env = process.env, home = os.homedir(), platfo
   const old = refuseOldManifest({ home, platform, fs: deps.fs || nodeFs })
   if (old) {
     const receipt = { ...newReceipt('on'), ok: false, error: { code: 'older-install', message: old.message }, harnesses: named.ids, notes: [old.message] }
-    if (json) io.out(JSON.stringify(receipt, null, 2)); else io.err(`trocar on: ${old.message}`)
+    if (json) io.out(JSON.stringify(receipt, null, 2)); else io.err(fit([`trocar on: ${old.message}`], { home }).join('\n'))
     return EXIT.incomplete
   }
   try {
@@ -107,10 +107,7 @@ export async function runOn({ io, env = process.env, home = os.homedir(), platfo
     }
     const adoption = await prepareAdoption({ home, env, platform, deps, parts, now: deps.now ? () => deps.now().getTime() : Date.now }) // §9.5: the proxy each agent already uses, and the chain once trocar is on
     const routing = deps.routing || (parts.arch && typeof parts.arch.routing === 'function' ? parts.arch.routing({ harnesses: parts.harnesses, home, env, fs: deps.fs }) : null) // §9.5's proxy-mode routing: the platform supplies it beside prepare (win32); a platform without one (Linux's driver mode) adopts nothing extra and every existing on is its guard
-    const planText = (raw) => {
-      const adopted = adoption && !adoption.error ? Object.entries(adoption.chains(raw.targets)).filter(([h]) => raw.targets.includes(h)).map(([h, t]) => ({ harness: h, chain: chainText(t) })).filter((x) => /\s->\s/.test(x.chain) || false) : [] // D46: the degenerate one-hop chain says nothing and is not printed
-      return formatPlan({ ...raw, adopted }, { home, platform, colors: c })
-    }
+    const planText = (raw) => formatPlan(raw, { home, platform, colors: c }) // the route each harness takes is the receipt's line (§3.3), said once
     // The combined bundles' OS roots are the arch's (the flip checklist ②, 4.9 §4 末): the plan asks it through the one resolver (tls/roots.mjs bundleRoots), so the FIRST
     // install's bundles carry them — not only the daemon's next rebuild — and a read that fails stops the on before one file of the agents' is touched (D38); `deps.roots` overrides them.
     let { receipt, exit, plan } = await install.turnOn({
@@ -134,7 +131,8 @@ export async function runOn({ io, env = process.env, home = os.homedir(), platfo
     else {
       // D46: the harnesses THIS run newly wired (their one-time 说明 notes print; a harness wired before keeps its notes in doctor and --json — the receipt object is untouched, R5/R11)
       const fresh = plan ? new Set((plan.targets || []).filter((id) => !(plan.installed || []).includes(id))) : null
-      io.out(formatOnReceipt(receipt, { tense: receipt.dry_run ? 'future' : 'past', home, platform, fresh, colors: c }))
+      const topology = adoption && !adoption.error && receipt.adopted ? adoption.chains(receipt.harnesses || []) : null // the route lines degrade from it (A.1)
+      io.out(formatOnReceipt(receipt, { tense: receipt.dry_run ? 'future' : 'past', home, platform, fresh, topology, colors: c }))
     }
     return exit
   } catch (e) {

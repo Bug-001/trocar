@@ -3,7 +3,7 @@
 // any OS against a temp directory. Node built-ins, src/paths.mjs, src/off/exec.mjs and src/off/win32.mjs only (this file never imports a harness, 4.6 §结构).
 import nodeFs from 'node:fs'
 import { directStartEnv, startDaemonDirect } from '../direct-start.mjs'
-import { autostartNode } from '../autostart-node.mjs'
+import { autostartProgram } from '../autostart-node.mjs'
 import os from 'node:os'
 import path from 'node:path'
 import { spawn as nodeSpawn } from 'node:child_process'
@@ -53,11 +53,14 @@ const plain = (name, v, { quoted = false } = {}) => {
 }
 const xmlText = (v) => v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
-const daemonArgs = (node, trocar) => `--headless "${plain('node', node, { quoted: true })}" "${plain('trocar', trocar, { quoted: true })}" daemon --supervise`
-/** The task's action as one command line, which is what the Run value holds: `conhost.exe --headless "<node>" "<trocar>" daemon --supervise` (no window; the supervisor parent; 4.8 §7). */
-export function daemonCommandLine({ node, trocar, conhost = 'conhost.exe' } = {}) {
+const daemonArgs = (program) => {
+  if (!Array.isArray(program) || !program.length) throw new TypeError(`task: program is a non-empty array, got ${JSON.stringify(program)}`)
+  return `--headless ${program.map((v, i) => `"${plain(`program[${i}]`, v, { quoted: true })}"`).join(' ')} daemon --supervise`
+}
+/** The task's action as one command line, which is what the Run value holds: `conhost.exe --headless "<program>"… daemon --supervise` (autostartProgram: `"<node>" "<trocar>"`, or the script channel's launcher) (no window; the supervisor parent; 4.8 §7). */
+export function daemonCommandLine({ program, conhost = 'conhost.exe' } = {}) {
   const c = plain('conhost', conhost, { quoted: true })
-  return `${/\s/.test(c) ? `"${c}"` : c} ${daemonArgs(node, trocar)}`
+  return `${/\s/.test(c) ? `"${c}"` : c} ${daemonArgs(program)}`
 }
 
 /** `DOMAIN\name`, the form the Task Scheduler wants for a trigger and a principal: from USERDOMAIN and USERNAME, the name alone without a domain, the OS's own answer when the environment says nothing. */
@@ -69,12 +72,12 @@ export function taskUser(env = process.env) {
 /**
  * The task XML (4.8 §7; the form that registered at Medium integrity in the T0 measurement). A login trigger of this user; this user as the principal, `InteractiveToken` at `LeastPrivilege` (S4U is not subject to UAC
  * filtering, so it would be High integrity: R7); no time limit, no stop on battery, one instance; restart on failure every minute, 999 times (the supervisor parent does the real restarting: the T0 measurement showed the task
- * does not bring back a killed daemon, §7). The action is `conhost.exe --headless "<node>" "<trocar>" daemon --supervise`: no window, the supervisor parent, and no `--use-system-ca` (it needs Node 22.15, and an older Node would
+ * does not bring back a killed daemon, §7). The action is `conhost.exe --headless "<program>"… daemon --supervise` (autostartProgram: `"<node>" "<trocar>"`, or the script channel's launcher): no window, the supervisor parent, and no `--use-system-ca` (it needs Node 22.15, and an older Node would
  * exit at every login with "bad option"). The XML says UTF-16 because that is the form that was measured; `register` hands schtasks a UTF-16 copy, while the file install writes is this text as it stands.
  */
-export function taskXml({ user, node, trocar, conhost = 'conhost.exe' } = {}) {
+export function taskXml({ user, program, conhost = 'conhost.exe' } = {}) {
   const u = xmlText(plain('user', user))
-  const args = daemonArgs(node, trocar)
+  const args = daemonArgs(program)
   return [
     '<?xml version="1.0" encoding="UTF-16"?>',
     '<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">',
@@ -259,12 +262,12 @@ const settle = (task, k) => ({ code: (task.code !== 0 ? task.code : k.code) ?? 1
  *   remove({ prior }) `uninstall`: the task is deleted (`/Delete /F`) and the Run value taken out the same way. A task that is not there is already as asked (found with `/Query`, never by parsing a localised error text); a `/Query` that did not run at all is not "not there": it is a failure (`task: 'failed'`, code 1) and nothing is changed on a guess.
  */
 export function userUnit({ home, node, script, run = null, env = process.env, fs = nodeFs, spawn = nodeSpawn, user = null, conhost = 'conhost.exe' } = {}) {
-  node = autostartNode({ env, execPath: node, fs, platform: 'win32' }) // D61: a node the task can still name after a node upgrade (one rule, all three OSes)
+  const program = autostartProgram({ home, node, script, env, fs, platform: 'win32' }) // D61 · D74: what the task names survives a node upgrade and a `place` (one rule, all three OSes)
   const file = path.join(collectorHome(path.join(home, '.trocar')), TASK_FILE)
   const tools = { run, env }
   // the daemon this run starts itself: the scheduled task's own environment and the task's own log files (direct-start.mjs)
   const startDirect = (carry) => {
-    const r = startDaemonDirect({ home, env, carry, command: conhost, argv: ['--headless', node, script, 'daemon', '--supervise'], spawn, fs, spawnOpts: { windowsHide: true } })
+    const r = startDaemonDirect({ home, env, carry, command: conhost, argv: ['--headless', ...program, 'daemon', '--supervise'], spawn, fs, spawnOpts: { windowsHide: true } })
     return r.code === 0 ? { ...ok, ...r } : r.err === 'the daemon did not start' ? { ...r, err: `${conhost} did not start the supervised daemon` } : r
   }
   // the task is changed or deleted when it is there, and trocar's Run value is taken out; each says what it did
@@ -286,7 +289,7 @@ export function userUnit({ home, node, script, run = null, env = process.env, fs
   }
   return {
     name: 'trocar-collector', path: file, links: [],
-    text: () => taskXml({ user: user || taskUser(env), node, trocar: script, conhost }),
+    text: () => taskXml({ user: user || taskUser(env), program, conhost }),
     enable({ now = true, prior = null } = {}) {
       const c = register({ file, run, env, fs })
       if (c.code === 0) {
@@ -300,7 +303,7 @@ export function userUnit({ home, node, script, run = null, env = process.env, fs
       }
       if (c.precondition) return { ...c, via: 'task' }
       const why = errOf(c)
-      const f = runKeyFallback({ command: daemonCommandLine({ node, trocar: script, conhost }), run, env })
+      const f = runKeyFallback({ command: daemonCommandLine({ program, conhost }), run, env })
       if (!f.ok) {
         const reason = `schtasks /Create was refused (${why}) and the HKCU Run entry ${RUN_KEY.name} could not be written either (${f.reason}): trocar does not start at login`
         return { code: c.code ?? 1, out: '', err: `${why}; the Run-key fallback failed too: ${f.reason}`, via: 'task', ...(f.entry ? { ledger: f.entry } : {}), event: { event: 'failure', where: 'install', code: 'task-register-failed', reason } }

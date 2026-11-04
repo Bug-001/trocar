@@ -513,6 +513,30 @@ test('daemon: a helper that exits at start leaves nothing listening; the next st
   } finally { p.done(); s.done() }
 })
 
+// V114 (4.6 「助手还没装」): the helper's path resolved the product's way (TROCAR_REDIRECTOR_BIN, the real Linux redirector and client), with nothing
+// there yet — a script install's first `install` always meets this. The daemon answers and attaches nothing; once a helper is at that path, `on` brings it up.
+test('daemon: with no helper at its path it starts, answers and steers nothing (helper-down); once the helper is there, on starts it and attaches (helper-ok)', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  const bin = path.join(s.root, 'libexec', 'trocar-redirector')
+  const makeClient = () => createRedirectorClient({ env: { ...process.env, TROCAR_FAKE_LOADER: '1', TROCAR_REDIRECTOR_BIN: bin }, autoHeartbeatMs: 0 })
+  const arch = { os: 'linux', createRedirector: () => createLinuxRedirector({ makeClient, procRoot: p.root, uid: UID }) }
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc] })
+  try {
+    const st = await req(s.sock, 'GET', '/status')
+    assert.deepEqual([st.actual, typeof st.helper.down], ['off', 'string'])
+    assert.ok(flowsOf(s).some((f) => f.event === 'helper-down' && f.reason), 'the reason is on disk (D38)')
+    assert.ok(st.health.collector.conditions.some((c) => c.kind === 'degraded'), 'and the board says so')
+    fs.mkdirSync(path.dirname(bin), { recursive: true })
+    fs.writeFileSync(bin, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(FAKE)} "$@"\n`, { mode: 0o755 })
+    const on = await req(s.sock, 'POST', '/on', {})
+    assert.deepEqual([on.desired, on.actual, on.degraded], ['on', 'on', null])
+    assert.ok(flowsOf(s).some((f) => f.event === 'helper-ok'))
+    const after = (await req(s.sock, 'GET', '/status')).health.collector.conditions
+    assert.deepEqual(after.filter((c) => c.kind === 'degraded'), [], 'the board no longer says the helper is down')
+  } finally { await d.stop(); p.done(); s.done() }
+})
+
 test('daemon: the install-time engine port held by another process → start fails with the reason, no helper spawned, nothing steered (G3)', async () => {
   const s = sandbox(); const p = fakeProc()
   const squat = net.createServer(); await new Promise((r) => squat.listen(0, '127.0.0.1', r))

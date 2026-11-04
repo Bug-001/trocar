@@ -104,7 +104,7 @@ function originHost(env) {
 
 function inject(ctx) {
   const zdir = path.join(ctx.home, '.zcode')
-  if (!ctx.listDir(zdir).length) return { notes: [{ code: CODE.harnessNote, text: `${zdir} does not exist (Z-Code has not run for this user), so no trust entry is written; after running Z-Code once, run trocar collector uninstall and install again` }] }
+  if (!ctx.listDir(zdir).length) return { notes: [{ code: CODE.harnessNote, text: `${zdir} does not exist (Z-Code has not run for this user), so no trust entry is written; after running Z-Code once, run trocar uninstall, then trocar install` }] }
   const cfg = path.join(zdir, 'cli', 'config.json')
   const bundle = path.join(ctx.collectorDir, 'ca', 'combined-z-code.pem')
   const seen = new Set()

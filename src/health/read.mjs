@@ -174,7 +174,7 @@ function collectorSummary(c) {
   return c.installed === null && RANK[s.state] < RANK.unknown ? { state: 'unknown', reason: c.manifest_error } : s
 }
 function judgedSummary(c) {
-  const d = c.daemon, n = c.conditions.length + c.failures.length
+  const d = c.daemon, n = c.conditions.length + c.failures.filter((g) => !g.resolved).length // a resolved group is a note (C.3), not a problem
   if (d.state === 'not-running') return { state: 'not-running', since: d.last_record_at, n, ...(d.unclean ? { reason: d.why } : d.last_stop ? { signal: d.last_stop.signal ?? null, reason: d.last_stop.reason ?? null } : {}) }
   if (d.state === 'not-responding') return { state: 'not-responding', since: d.lock_refreshed_at, n }
   if (n) return { state: 'failing', n }
@@ -215,7 +215,7 @@ function netenvOf({ home, fs }) {
  * directory) cannot be read at all — never an empty answer.
  */
 export function captureHealth({ home = trocarHome(), harnesses, now = Date.now(), fs = nodeFs, alive = pidAlive, identity = procIdentity, maxBytes } = {}) {
-  const read = { files: [], errors: [], truncated: false, unparsable: 0, window_hours: WINDOW_MS / 3600e3 }
+  const read = { files: [], errors: [], truncated: false, unparsable: 0, window_hours: WINDOW_MS / 3600e3, since: new Date(now - WINDOW_MS).toISOString() } // since: the window's start (1.6 C.3 failures.since)
   const collector = collectorHealth({ dir: path.join(home, 'collector'), harnesses, now, fs, alive, identity, maxBytes, read })
   const raw = rawHealth({ home, now, fs, read })
   let summary = collector.summary
