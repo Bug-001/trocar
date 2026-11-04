@@ -38,7 +38,9 @@ export const legacyManifestPath = (home = os.homedir()) => path.join(trocarHome(
 /** ~/.trocar/legacy-op.lock: the lock of the one `on` / `off` / `uninstall` that changes the old capture at a time (1.6 R12; the old capture has no ~/.trocar/collector/). */
 export const legacyLockPath = (home = os.homedir()) => path.join(trocarHome(home), 'legacy-op.lock')
 /** What the operator asked for, per harness (1.6 §1.5); the daemon reads the same file. */
-export const stateFile = (home = os.homedir()) => path.join(collectorDir(home), 'state.json')
+export const stateFile = (home = os.homedir()) => stateFileIn(trocarHome(home))
+/** The same file named from the TROCAR home (see collectorIn). */
+export const stateFileIn = (home) => path.join(collectorIn(home), 'state.json')
 /** The user's PATH as the last state-changing command run in a terminal saw it (user-path.mjs, 4.11 §2.3 `present`). */
 export const USER_PATH_FILE = 'user-path.json'
 /** The daemon's own state in ~/.trocar/collector (not captures, 0.2): every uninstall removes these once the daemon has stopped, and its plan names
