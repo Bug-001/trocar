@@ -10,7 +10,7 @@
 //               what a command runs (a test's spy: what was dispatched, not what it does)
 //   The command gets `(argv, ctx)`; `ctx.args` is the parsed form of argv ({ positionals, flags }) and `ctx.json` whether `--json` was asked.
 import os from 'node:os'
-import { makeIo, hidingIo } from '../off/io.mjs'
+import { makeIo, hidingIo, asOneDocument } from '../off/io.mjs'
 import { commandNamed, helpText, usageLine } from './commands.mjs'
 import { parseArgs } from './args.mjs'
 import { wrap, WIDTH } from './text.mjs'
@@ -55,7 +55,8 @@ export async function runCli(argv, { io = makeIo({ stdin: process.stdin, stdout:
   const remember = () => { if (mutates && cmd.recordsPath !== false && run === cmd.run) try { recordUserPath({ home, env, ...(deps.fs ? { fs: deps.fs } : {}) }) } catch { /* the next command records it */ } }
   remember()
   try {
-    return await run(rest, { io: cio, env, home, platform, uid, json, args, deps: { getuid: () => uid, ...deps } })
+    const body = (cmdIo) => run(rest, { io: cmdIo, env, home, platform, uid, json, args, deps: { getuid: () => uid, ...deps } })
+    return await (json ? asOneDocument(cio, cmd.name, body) : body(cio)) // §1.2: a refusal the command only says on stderr still answers with a document
   } catch (e) {
     // §1.3: 70 is trocar's own fault. The message is one line; the stack belongs in `--json` and in a report, never on a person's screen.
     const message = `trocar: internal error: ${(e && e.message) || e}`
