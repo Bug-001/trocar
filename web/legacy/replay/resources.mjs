@@ -8,10 +8,11 @@
 import { esc, kf } from '../core/fmt.mjs'
 import { resState } from './lanes.mjs'
 import { relPath, midClip } from './analysis.mjs'
-import { navGroup, jumpToStepAndBlock } from './outline.mjs'
+import { navGroup, jumpToStepAndBlock, jumpToBlockIndex } from './outline.mjs'
+import { blockJump } from './jump.mjs'
 import { KIDS, serialize, keyed, patchInto } from '../core/units.mjs'
 import * as W from '../labels/replay.mjs'
-import { resKeyOf, laneEvents, seenFiles, ledgerDone } from './model.mjs'
+import { resKeyOf, laneEvents, seenFiles, ledgerDone, stepOf } from './model.mjs'
 
 const SEEN_CAP = 40
 // a resource is datable (has a lifecycle to speak of) only with a usable segment list; the six display groups and the
@@ -163,12 +164,25 @@ export function viewResource(s, step, resKey, label) {
   s.viewPin = { resKey, label }
   s.renderRaw()
 }
+// the desk with no raw panel (D80): the name reveals the block in the window. In the step at the playhead it does so on the spot, the
+// playhead staying, the content preferred over the call that asked for it; else it moves to the target step and lands there by
+// resKey. The list is the step's own: s.curFlat outlives a step that has none. A target step with no list says so (s.noBlock).
+export function revealResource(s, step, resKey) {
+  const cur = s.anchor && s.anchor.calls[s.playhead]
+  const flat = (cur && cur.rec && !cur.unparsed && s.desk && stepOf(s.desk, cur.rid).flat) || []
+  const content = flat.findIndex((b) => b.resKey === resKey && b.kind !== 'tool_use')
+  const fi = content >= 0 ? content : flat.findIndex((b) => b.resKey === resKey)
+  if (fi >= 0) { jumpToBlockIndex(s, fi); return }
+  const target = s.anchor && s.anchor.calls[step]
+  if (!target || !target.rec || target.unparsed) s.noBlock()
+  else s.jumpTo(step, blockJump(resKey))
+}
 export function wireResources(el, s) {
   const onClick = (e) => {
     const tg = e.target.closest('[data-navtoggle]')
     if (tg) { const k = tg.dataset.navtoggle; if (s.navOpen.has(k)) s.navOpen.delete(k); else s.navOpen.add(k); s.renderNav(); return }
     const v = e.target.closest('[data-view]')
-    if (v) { e.stopPropagation(); viewResource(s, +v.dataset.viewstep, v.dataset.view, v.dataset.viewlabel); return }
+    if (v) { e.stopPropagation(); if (s.rawPanelGone) revealResource(s, +v.dataset.viewstep, v.dataset.view); else viewResource(s, +v.dataset.viewstep, v.dataset.view, v.dataset.viewlabel); return }
     if (e.target.closest('[data-navmore]')) { s.navSeenExpanded = !s.navSeenExpanded; s.renderNav(); return }
     const st = e.target.closest('[data-navstep]')
     if (st) jumpToStepAndBlock(s, +st.dataset.navstep, st.dataset.navres || '')

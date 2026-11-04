@@ -6,7 +6,7 @@
 // String level over desk-model states: the ledger is the anchor lane's `lane` answer as the desk holds it (desk-world.mjs).
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { resourcesHtml, renderResources } from '../../web/legacy/replay/resources.mjs'
+import { resourcesHtml, renderResources, wireResources } from '../../web/legacy/replay/resources.mjs'
 import * as W from '../../web/legacy/labels/replay.mjs'
 import { relPath } from '../../web/legacy/replay/analysis.mjs'
 import { buildLanes, anchorLane } from '../../web/legacy/replay/lanes.mjs'
@@ -194,4 +194,47 @@ test('2.4 #1: seen minus opened files; ledger counts busy until the ledger chain
     const base = r.label.split('/').pop()
     assert.ok(!chips.some((t) => t.includes(base)), `${r.label}: an opened file is not a name-only chip under any spelling`)
   }
+})
+
+// a click on a resource's name, through the panel's own listener; every hand the click can reach out with is a recorder
+function clickName(lane, { playhead = 0, step, resKey = 'file:a', rawPanelGone = true }) {
+  const s = stateOf(lane, { playhead, rawPanelGone }), got = { reveal: [], jumpTo: [], noBlock: 0, playhead: [], renderRaw: 0 }
+  Object.assign(s, { reveal: (x) => got.reveal.push(x), jumpTo: (t, j) => got.jumpTo.push([t, j]), noBlock: () => { got.noBlock++ }, setPlayhead: (t) => got.playhead.push(t), renderRaw: () => { got.renderRaw++ } })
+  let onClick = null
+  wireResources({ addEventListener: (_, f) => { onClick = f }, removeEventListener() {} }, s)
+  const name = { dataset: { view: resKey, viewstep: String(step), viewlabel: 'a' } }
+  onClick({ target: { closest: (q) => (q === '[data-view]' ? name : null) }, stopPropagation() {} })
+  return { s, got }
+}
+const blkOf = (o) => ({ sec: 'messages', role: 'user', kind: 'text', head: { role: 'user', tag: 'user', label: 'b' }, preview: 'p', chars: 5, bytes: 5, ref: 's/m#R::0-5', ...o })
+const carrying = () => [blkOf({}), blkOf({ kind: 'tool_use', resKey: 'file:a' }), blkOf({ kind: 'tool_result', resKey: 'file:a' })]
+const laneOf = (rows, blocks) => ({ kind: 'main', rows, blocks })
+
+test('2.4 #3: the name reveals the block in this step, the content over the call that asked for it, and the playhead stays', () => {
+  const { got } = clickName(laneOf([{}, {}], [[], carrying()]), { playhead: 1, step: 0 })
+  assert.deepEqual(got.reveal.map((x) => x.fi), [2])
+  assert.deepEqual([got.jumpTo, got.playhead, got.noBlock], [[], [], 0])
+})
+
+test('2.4 #3: a resource this step does not carry moves to its step and lands by resKey', () => {
+  const { got } = clickName(laneOf([{}, {}], [[], carrying()]), { playhead: 0, step: 1 })
+  assert.deepEqual(got.jumpTo, [[1, { kind: 'block', resKey: 'file:a' }]])
+  assert.deepEqual(got.reveal, [])
+})
+
+test('2.4 #4: a name is never a dead click: a target step with no list says so, and a list left over from another step does not count', () => {
+  for (const row of [{ unparsed: true }, { rec: null }]) {
+    const { got } = clickName(laneOf([{}, row], [[], []]), { playhead: 0, step: 1 })
+    assert.deepEqual([got.noBlock, got.jumpTo, got.reveal], [1, [], []])
+  }
+  const stale = clickName(laneOf([{ unparsed: true }, {}], [carrying(), []]), { playhead: 0, step: 1 })
+  assert.deepEqual([stale.got.reveal, stale.got.jumpTo.length], [[], 1])
+})
+
+test('2.4: without the flag the name pins the resource as before', () => {
+  const { s, got } = clickName(laneOf([{}, {}], [[], carrying()]), { playhead: 0, step: 1, rawPanelGone: false })
+  assert.deepEqual(got.playhead, [1])
+  assert.equal(s.viewPin.resKey, 'file:a')
+  assert.equal(got.renderRaw, 1)
+  assert.deepEqual([got.reveal, got.jumpTo, got.noBlock], [[], [], 0])
 })
