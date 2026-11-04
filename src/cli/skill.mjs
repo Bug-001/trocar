@@ -12,11 +12,11 @@ const SKILLS = new URL('../../skills/', import.meta.url)
 const START_WITH = 'trocar-debug'
 
 /** The `name:` or `description:` line between the two `---` of a skill's front matter. */
-const field = (text, key) => new RegExp(`^${key}: *(.*)$`, 'm').exec(/^---\n([\s\S]*?)\n---\n/.exec(text)?.[1] ?? '')?.[1] ?? ''
+const field = (text, key) => new RegExp(`^${key}: *(.*)$`, 'm').exec(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/.exec(text)?.[1] ?? '')?.[1] ?? ''
 
 /** Every skill of the package, by name: [{ name, description, bytes, text }]. */
 function skills() {
-  return fs.readdirSync(SKILLS).sort().map((dir) => {
+  return fs.readdirSync(SKILLS, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name).sort().map((dir) => {
     const bytes = fs.readFileSync(new URL(`${dir}/SKILL.md`, SKILLS))
     const text = bytes.toString('utf8')
     return { name: field(text, 'name'), description: field(text, 'description'), bytes, text }
