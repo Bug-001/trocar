@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 // scripts/pr-check.mjs — what is about to leave this machine, checked against the rules and against the capture (spec 1.12 §6).
 //
-//   node scripts/pr-check.mjs --before <time> --title <file> --body <file> [--base <ref>] [--budget <bytes>] [--json]
-//   node scripts/pr-check.mjs --issue --before <time> [--title <file>] --body <file> [--base <ref>] [--budget <bytes>] [--json]
+//   node scripts/pr-check.mjs --before <time> --title <file> --body <file> [--base <ref>] [--budget <bytes>] [--cli <path>] [--json]
+//   node scripts/pr-check.mjs --issue --before <time> [--title <file>] --body <file> [--base <ref>] [--budget <bytes>] [--cli <path>] [--json]
 //
 // The report is {ok, hash, findings: [{rule, where, why}], coverage: {scanned_bytes, total_bytes, from, to}, leaving: {files, commits,
 // identity, branch}}. Exit 0 passed, 1 refused, 2 usage error. A finding names a place and a rule, never a value: `where` points into
 // `leaving.files` by index, because a path is outbound text too, and `why` is one constant sentence per rule. Captured bytes pass through
-// this process to be compared, and nothing of them is printed. There is no override: what cannot be read is a refusal, not an empty result.
+// this process to be compared, and nothing of them is printed. What cannot be read is a refusal, not an empty result. The capture is read
+// through the installed trocar, or the one --cli names: its reads go by the daemon and may write the derived layer, never the raw records.
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
@@ -18,10 +19,10 @@ import { expandRequestBody, MAX_DECODED_BYTES, requestEncodingOf } from '../src/
 import { parseTime } from '../src/query/named/index.mjs'
 import { SEALED_EXT } from '../src/raw/seal.mjs'
 import { normalize, WindowTable } from './lib/text-windows.mjs'
+import { callOf, findCli } from './lib/trocar-cli.mjs'
 
-const USAGE = `usage: node scripts/pr-check.mjs --before <time> --title <file> --body <file> [--base <ref>] [--budget <bytes>] [--json]
-       node scripts/pr-check.mjs --issue --before <time> [--title <file>] --body <file> [--base <ref>] [--budget <bytes>] [--json]`
-const CLI = fileURLToPath(new URL('../bin/trocar.mjs', import.meta.url))
+const USAGE = `usage: node scripts/pr-check.mjs --before <time> --title <file> --body <file> [--base <ref>] [--budget <bytes>] [--cli <path>] [--json]
+       node scripts/pr-check.mjs --issue --before <time> [--title <file>] --body <file> [--base <ref>] [--budget <bytes>] [--cli <path>] [--json]`
 const CLONE = fileURLToPath(new URL('..', import.meta.url))
 const BUDGET = 2e9
 const PAGE = ['--limit', '500'] // 1.6 §4.1: the largest page of a list query
@@ -51,6 +52,8 @@ const RECORD_TS = /^\{"ts":"([^"]+)"/
 const DIFF_HEADER = /^diff --(?:git|cc|combined) /
 const NEWLINE = Buffer.from('\n')
 const BODY_B64 = Buffer.from('"req_body_b64":"')
+// the row of .github/pull_request_template.md the hash is written on: it cannot hold its own hash, and holds nothing else or it counts
+const HASH_ROW = /^- Written by an agent: the `hash` from `node scripts\/pr-check\.mjs`:[ \t]*(?:(`?)[0-9a-f]{64}\1[ \t]*)?\r?$/gm
 
 const WHY = {
   files: 'This file type does not leave the machine: images, video, PDF, archives, capture formats and binaries.',
@@ -65,6 +68,7 @@ const WHY = {
   body: 'This commit message has no body.',
   control: 'This holds control bytes.',
   git: 'git could not be read, so what is leaving is not known.',
+  base: 'The base is not behind this branch: --base must name an ancestor of HEAD other than HEAD itself.',
   capture: 'The capture could not be read, so it was not compared.',
   compressed: 'A compressed request body in the capture could not be decoded, so it was not compared.',
 }
@@ -73,11 +77,13 @@ function parse(argv) {
   let values
   try {
     ({ values } = parseArgs({ args: argv, options: { before: { type: 'string' }, title: { type: 'string' }, body: { type: 'string' }, base: { type: 'string' },
-      budget: { type: 'string' }, issue: { type: 'boolean' }, json: { type: 'boolean' } } }))
+      budget: { type: 'string' }, cli: { type: 'string' }, issue: { type: 'boolean' }, json: { type: 'boolean' } } }))
     if (!values.before || !values.body || !(values.title || values.issue)) return null
     const budget = values.budget === undefined ? BUDGET : Number(values.budget)
     if (!Number.isSafeInteger(budget) || budget < 0) return null
-    return { ...values, budget, before: parseTime(values.before), base: values.base ?? 'origin/main',
+    const cli = findCli(values.cli)
+    if (!cli) return null
+    return { ...values, budget, cli, before: parseTime(values.before), base: values.base ?? 'origin/main',
       title: values.title && fs.readFileSync(values.title), body: fs.readFileSync(values.body) }
   } catch {
     return null
@@ -179,10 +185,13 @@ function readGit(cwd, base, out) {
   }
 }
 
-/** The whole outbound text, source by source, in a form that changes when any of its bytes does. */
-function hashOf(sources) {
-  const hash = createHash('sha256')
-  for (const s of sources) hash.update(`${s.kind}\0${s.where}\0${s.bytes.length}\0`).update(s.bytes)
+/** The whole outbound text, source by source, in a form that changes when any of its bytes does, and the terms it was judged on. */
+function hashOf(sources, { base, accepted }) {
+  const hash = createHash('sha256').update(`${base}\0${accepted}\0`)
+  for (const s of sources) {
+    const bytes = s.kind === 'body' ? Buffer.from(s.bytes.toString('latin1').replace(HASH_ROW, ''), 'latin1') : s.bytes
+    hash.update(`${s.kind}\0${s.where}\0${bytes.length}\0`).update(bytes)
+  }
   return hash.digest('hex')
 }
 
@@ -260,18 +269,19 @@ function checkIdentity(out, cwd, hold, add) {
 }
 
 /** What `trocar` answered, as a document; a query that could not read the capture says so with `ok: false`. */
-function ask(...args) {
-  const r = spawnSync(process.execPath, [CLI, 'query', ...args], { maxBuffer: Infinity, stdio: ['ignore', 'pipe', 'ignore'] })
+function ask(cli, ...args) {
+  const [file, argv, options] = callOf(cli, ['query', ...args])
+  const r = spawnSync(file, argv, { ...options, maxBuffer: Infinity, stdio: ['ignore', 'pipe', 'ignore'] })
   let doc = null
   try { doc = JSON.parse(r.stdout) } catch { /* no document is the failure below */ }
   if (r.status !== 0 || doc?.ok !== true) throw new Error('capture')
   return doc
 }
 
-function allPages(name, key) {
+function allPages(cli, name, key) {
   const rows = []
   for (let after = null; ;) {
-    const doc = ask(name, ...PAGE, ...(after === null ? [] : ['--after', String(after)]))
+    const doc = ask(cli, name, ...PAGE, ...(after === null ? [] : ['--after', String(after)]))
     rows.push(...doc[key])
     if (doc.next == null || doc.next === after) return rows
     after = doc.next
@@ -279,18 +289,18 @@ function allPages(name, key) {
 }
 
 /** A session's title. The list does not know it until the sidecar covers the session (C.5), and not known is not none: the head does. */
-function titleOf(row) {
+function titleOf(cli, row) {
   if (row.title_source !== 'pending') return row.title
-  const { meta } = ask('session', '--id', row.session_id, '--head')
+  const { meta } = ask(cli, 'session', '--id', row.session_id, '--head')
   if (!meta || meta.title_source === 'pending') throw new Error('capture')
   return meta.title
 }
 
 /** The capture's facts as words; a segment's name also covers every `<segment>:<n>` record id. Returns the segments for the text pass. */
-function checkFacts(sources, hold) {
-  const segments = ask('segments').segments
-  const facts = [...allPages('sessions', 'sessions').flatMap((s) => [s.project_path, s.project_slug, s.session_id, titleOf(s)]),
-    ...allPages('traffic', 'hosts').map((h) => h.host), ...segments.map((s) => s.segment)]
+function checkFacts(cli, sources, hold) {
+  const segments = ask(cli, 'segments').segments
+  const facts = [...allPages(cli, 'sessions', 'sessions').flatMap((s) => [s.project_path, s.project_slug, s.session_id, titleOf(cli, s)]),
+    ...allPages(cli, 'traffic', 'hosts').map((h) => h.host), ...segments.map((s) => s.segment)]
   const words = new Map()
   for (const fact of facts) {
     if (typeof fact !== 'string') continue
@@ -331,7 +341,7 @@ function bodyBehind(line) {
 }
 
 /** Streams each segment through `table`, newest first, until the budget or the table runs out. Returns the coverage. */
-async function compareCapture(segments, { before, budget }, table, add) {
+async function compareCapture(segments, { before, budget, cli }, table, add) {
   const wanted = segments.filter((s) => !s.from || Date.parse(s.from) < before).sort((a, b) => b.segment.localeCompare(a.segment))
   const coverage = { scanned_bytes: 0, total_bytes: wanted.reduce((n, s) => n + s.bytes, 0), from: null, to: null }
   const spent = () => coverage.scanned_bytes >= budget || table.size === 0
@@ -353,7 +363,9 @@ async function compareCapture(segments, { before, budget }, table, add) {
   }
   for (const segment of wanted) {
     if (spent()) break
-    const kid = spawn(process.execPath, [CLI, 'raw', segment.segment], { stdio: ['ignore', 'pipe', 'ignore'] })
+    let call
+    try { call = callOf(cli, ['raw', segment.segment]) } catch { add('unreadable', 'capture', WHY.capture); continue }
+    const kid = spawn(call[0], call[1], { ...call[2], stdio: ['ignore', 'pipe', 'ignore'] })
     const exit = new Promise((resolve) => { kid.on('close', resolve); kid.on('error', () => resolve(-1)) })
     let parts = []
     for await (const chunk of kid.stdout) {
@@ -407,8 +419,16 @@ async function main() {
     held.get(key).hits.push({ rule, where })
   }
   const out = { sources: [], commits: [], leaving: { files: [], commits: [], identity: [], branch: null } }
+  let base = null // one commit from here on: a ref could move between reads
+  try { base = git(cwd, 'rev-parse', '--verify', '--quiet', `${options.base}^{commit}`).toString().trim() } catch { /* no base: below */ }
   if (!options.issue) {
-    try { readGit(cwd, options.base, out) } catch { add('unreadable', 'git', WHY.git) }
+    try {
+      if (!base) throw new Error('git')
+      readGit(cwd, base, out)
+      // nothing past an ancestor means it is HEAD
+      const behind = spawnSync('git', ['merge-base', '--is-ancestor', base, 'HEAD'], { cwd, stdio: 'ignore' }).status === 0
+      if (!behind || out.commits.length === 0) add('base', 'git', WHY.base)
+    } catch { add('unreadable', 'git', WHY.git) }
   }
   if (options.title) out.sources.push({ where: 'title', kind: 'title', bytes: options.title })
   out.sources.push({ where: 'body', kind: 'body', bytes: options.body })
@@ -419,18 +439,17 @@ async function main() {
   checkSecrets(out.sources, add)
   checkIdentity(out, cwd, hold, add)
   let segments = []
-  try { segments = checkFacts(out.sources, hold) } catch { add('unreadable', 'capture', WHY.capture) }
+  try { segments = checkFacts(options.cli, out.sources, hold) } catch { add('unreadable', 'capture', WHY.capture) }
 
   const table = new WindowTable(out.sources)
-  const hasBase = spawnSync('git', ['rev-parse', '--verify', '--quiet', `${options.base}^{commit}`], { cwd, stdio: 'ignore' }).status === 0
-  if (hasBase) {
-    try { subtractBase(cwd, options.base, table, held) } catch { add('unreadable', 'git', WHY.git) }
+  if (base) {
+    try { subtractBase(cwd, base, table, held) } catch { add('unreadable', 'git', WHY.git) }
   }
   for (const { hits } of held.values()) for (const hit of hits) add(hit.rule, hit.where)
   const coverage = await compareCapture(segments, options, table, add)
 
   const findings = [...found.values()]
-  const doc = { ok: findings.length === 0, hash: hashOf(out.sources), findings, coverage, leaving: out.leaving }
+  const doc = { ok: findings.length === 0, hash: hashOf(out.sources, { base, accepted: false }), findings, coverage, leaving: out.leaving }
   if (options.json) process.stdout.write(`${JSON.stringify(doc)}\n`)
   else print(doc)
   process.exitCode = doc.ok ? 0 : 1
