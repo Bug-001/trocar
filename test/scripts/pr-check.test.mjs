@@ -462,7 +462,7 @@ test('AN17: a folded block that opens to no text is refused; a list of hashes or
 
 // ── AN18
 const homes = (x) => ({ mac: ['', 'Users', x, ''].join('/'), linux: ['', 'home', x, ''].join('/'), windows: ['C:', 'Users', x, ''].join('\\') })
-const pathSpellings = (p) => ({ plain: p, upper: p.toUpperCase(), json: JSON.stringify(p).slice(1, -1), slashes: p.replaceAll('/', '\\/'),
+const pathSpellings = (p) => ({ plain: p, json: JSON.stringify(p).slice(1, -1), slashes: p.replaceAll('/', '\\/'),
   unicode: p.replace(/[/\\]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`) })
 const homeFiles = (x) => Object.fromEntries(Object.entries(homes(x)).flatMap(([form, p]) =>
   Object.entries(pathSpellings(p)).map(([how, text]) => [`h/${form}-${how}.txt`, `path ${text}file\n`])))
@@ -494,6 +494,25 @@ test('AN18: a home path needs no separator after the name: a line\'s end, a spac
 
   const v = workspace()
   v.commit(texts(['alice', 'user', 'runner'].flatMap((x) => homeWith(x).flatMap((p) => [p, `${p} is where it ran`, `"${p}"`]))))
+  assert.deepEqual(of(v.check().doc, 'identity'), [])
+})
+
+test('AN18: Users and home count in their own case only: a route is no home directory', () => {
+  const { mac, linux, windows } = homes('zorgon7')
+  const w = workspace()
+  w.commit(texts([`GET /api${mac.replace('Users', 'users')}profile`, mac.replace('Users', 'users'), windows.replace('Users', 'users'), mac.toUpperCase(), windows.toUpperCase(), linux.toUpperCase(), linux.replace('home', 'Home')]))
+  assert.deepEqual(of(w.check().doc, 'identity'), [])
+})
+
+test('AN18: punctuation after a name ends the name, so a neutral name stays neutral and any other is still refused', () => {
+  const around = (p) => [`${p},`, `${p}, and on`, `${p};`, `${p}:8080`, `(${p})`, `[${p}]`, `see (${p}), then`]
+  const real = texts(homeWith('zorgon7').flatMap(around))
+  const w = workspace()
+  w.commit(real)
+  assert.deepEqual(named(w.check().doc, 'identity'), sorted(real))
+
+  const v = workspace()
+  v.commit(texts(['user', 'alice'].flatMap((x) => homeWith(x).flatMap(around))))
   assert.deepEqual(of(v.check().doc, 'identity'), [])
 })
 
@@ -552,7 +571,7 @@ test('AN18: a machine name in the author field is refused unless it is the GitHu
 })
 
 for (const [name, email, code] of [['a user noreply address', '2+x@users.noreply.github.com', 0], ['a noreply address with no id', 'x-y@users.noreply.github.com', 0], ['any other address', 'zorgon@example.com', 1],
-  ['GitHub\'s own', 'noreply@github.com', 1], ['a dot in the local part', 'a.b@users.noreply.github.com', 1], ['a plus after a word', 'a+b@users.noreply.github.com', 1], ['more after the domain', 'x@users.noreply.github.com.example.org', 1]]) {
+  ['GitHub\'s own', 'noreply@github.com', 0], ['a word before GitHub\'s own', 'xnoreply@github.com', 1], ['more after GitHub\'s own', 'noreply@github.com.example.org', 1], ['a dot in the local part', 'a.b@users.noreply.github.com', 1], ['a plus after a word', 'a+b@users.noreply.github.com', 1], ['more after the domain', 'x@users.noreply.github.com.example.org', 1]]) {
   for (const field of ['AUTHOR', 'COMMITTER']) {
     test(`AN18: ${field} email: ${name}`, () => {
       const w = workspace()

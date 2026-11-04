@@ -62,9 +62,9 @@ const GITATTRIBUTES = /(?:^|\/)\.gitattributes$/
 const LONG_RUN = /[A-Za-z0-9+=_-]{40,}/g // no slash: a URL or file path is not one run, and base64 holds runs this long between its slashes
 const isMixed = (run) => /[a-z]/.test(run) && /[A-Z]/.test(run) && /[0-9]/.test(run)
 const SEP = String.raw`(?:\\+/?|/)` // a slash, a run of backslashes, an escaped slash
-const HOME_NAME = String.raw`[^\s\\/"'$<>{}*]+`
+const HOME_NAME = String.raw`[^\s\\/"'$<>{}*,;:()[\]]+`
 // only a separator closes a name with a space in it: anywhere else the space is the sentence going on
-const HOME_PATH = new RegExp(`${SEP}(?:users|home)${SEP}(${HOME_NAME}(?: ${HOME_NAME})?(?=${SEP})|${HOME_NAME}(?=$|[\\s"']))`, 'gi')
+const HOME_PATH = new RegExp(`${SEP}(?:Users|home)${SEP}(${HOME_NAME}(?: ${HOME_NAME})?(?=${SEP})|${HOME_NAME}(?=$|[\\s"',;:()[\\]]))`, 'g')
 const GAP = '[\\t\\r\\n ]*' // a URL parser drops tabs and newlines, and a data: URI survives the rest
 const spaced = (word) => [...word].join(GAP)
 const URI = String.raw`[\w.~:/?#@!$&*+,;=%\\-]*` // what an address is made of: a quote, a bracket or a space ends it
@@ -75,7 +75,7 @@ const ENTITY = /&(?:#(\d+)|#x([0-9a-f]+)|(colon|sol|tab|newline));?/gi
 const NAMED = { colon: ':', sol: '/', tab: '\t', newline: '\n' }
 const POSTED_IMAGE = /!\[[^\]]*\](?:\([^)]*\)|\[[^\]]*\])?|<(?:img|video)\b[^>]*>?|github\.com\/user-attachments\/\S*/gi
 const NEUTRAL = new Set(['me', 'you', 'user', 'alice', 'bob', 'test', 'runner', 'someone'])
-const NOREPLY = /^(?:\d+\+)?[a-z0-9-]+@users\.noreply\.github\.com$/i
+const NOREPLY = /^(?:(?:\d+\+)?[a-z0-9-]+@users\.noreply\.github\.com|noreply@github\.com)$/i // the second is the committer of a web edit
 const CONTROL = /[\x00-\x08]/g
 const TEXT_KINDS = new Set(['added', 'message', 'header', 'title', 'body'])
 const CONTROL_KINDS = new Set(['added', 'message', 'path', 'title', 'body'])
