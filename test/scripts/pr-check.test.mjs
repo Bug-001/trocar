@@ -16,6 +16,7 @@ import { bigSession } from '../query/big-session.mjs'
 import { shapeResponse } from '../../src/collector/core/record/body.mjs'
 import { buildWsEnvelope } from '../../src/collector/core/record/envelope.mjs'
 import { request, serveFace, withToken } from '../server/face.mjs'
+import { callOf } from '../../scripts/lib/trocar-cli.mjs'
 
 const SCRIPT = fileURLToPath(new URL('../../scripts/pr-check.mjs', import.meta.url))
 const BIN = fileURLToPath(new URL('../../bin/trocar.mjs', import.meta.url))
@@ -801,6 +802,13 @@ test('AN31: a capture all of it at or past --before refuses, and --accept-partia
 })
 
 // ── AN29
+test('AN29: what a shell would read as more than a word never reaches one', () => {
+  const shelled = { file: 'trocar', lead: [], shell: true }
+  assert.throws(() => callOf(shelled, ['query', 'session', '--id', 'a&b']))
+  assert.deepEqual(callOf(shelled, ['query', 'session', '--id', 'a.b'])[1], ['query', 'session', '--id', 'a.b'])
+  assert.deepEqual(callOf({ ...shelled, shell: false }, ['a&b'])[1], ['a&b'])
+})
+
 test('AN29: with no --cli the trocar on PATH answers both the query and the raw read, and with none there it is exit 2', { skip: process.platform === 'win32' }, () => {
   const w = workspace()
   w.commit({ 'a.txt': 'nothing here\n' })
