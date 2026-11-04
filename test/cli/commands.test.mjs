@@ -9,9 +9,9 @@ import { WIDTH } from '../../src/cli/text.mjs'
 /** The command names a screen of help lists, by the shape of a usage line. */
 const commandsOf = (text) => new Set(text.split('\n').map((l) => l.match(/^ {2}(?:sudo )?trocar ([a-z-]+)/)).filter(Boolean).map((m) => m[1]))
 
-test('the table is the command list of 1.6 §2 — the names of that list, each once, in three groups', () => {
+test('the table is the command list of 1.6 §2 — the names of that list, each once, in its groups', () => {
   const names = COMMANDS.map((c) => c.name)
-  assert.deepEqual([...names].sort(), ['board', 'classes', 'daemon', 'doctor', 'help', 'install', 'off', 'on', 'place', 'query', 'raw', 'setup-helper', 'status', 'uninstall', 'update'])
+  assert.deepEqual([...names].sort(), ['board', 'classes', 'daemon', 'doctor', 'help', 'install', 'off', 'on', 'place', 'query', 'raw', 'rules', 'setup-helper', 'status', 'uninstall', 'update'])
   assert.equal(new Set(names).size, names.length, 'a name once')
   for (const gone of ['etl', 'shard', 'keep', 'verify', 'version', 'collector', 'test', 'monitor', 'capture']) {
     assert.equal(commandNamed(gone), undefined, `${gone} is not a command any more (1.6 §6: one feature, one name)`)
@@ -47,17 +47,18 @@ test('D58: every word of help is English ASCII — no section number, decision n
   }
 })
 
-test('§1.1: help is laid out for 80 columns, in the three groups in order, and lists every command of the table', () => {
+test('§1.1: help is laid out for 80 columns, in its groups in order, and lists every command of the table', () => {
   const text = helpText()
   assert.deepEqual([...commandsOf(text)].sort(), COMMANDS.filter((c) => c.group).map((c) => c.name).sort())
   assert.match(text.split('\n').at(-1), /^trocar help \[<command>\] {3}trocar <command> --help {3}trocar --version$/, 'help itself is the trailer (§2)')
   const at = GROUPS.map((g) => text.split('\n').findIndex((l) => l === g))
-  assert.ok(at.every((i) => i > 0) && [...at].sort((a, b) => a - b).join() === at.join(), `the three groups in order: ${at}`)
+  assert.ok(at.every((i) => i > 0) && [...at].sort((a, b) => a - b).join() === at.join(), `the groups in order: ${at}`)
   for (const line of text.split('\n')) assert.ok(line.length <= WIDTH, `${line.length} columns: ${line}`) // §1.1⑥: a long usage line folds under its own column, it does not pass 80
   const group = (i) => commandsOf(text.split('\n').slice(at[i], at[i + 1] === undefined ? undefined : at[i + 1]).join('\n'))
   assert.deepEqual([...group(0)].sort(), ['doctor', 'install', 'off', 'on', 'status', 'uninstall'])
   assert.deepEqual([...group(1)].sort(), ['board', 'classes', 'query'])
-  assert.deepEqual([...group(2)].sort(), ['daemon', 'raw', 'setup-helper', 'update'])
+  assert.deepEqual([...group(2)].sort(), ['rules'])
+  assert.deepEqual([...group(3)].sort(), ['daemon', 'raw', 'setup-helper', 'update'])
 })
 
 test('§5.4: one command\'s help is its usage, its summary, its options with a line each, and its exit codes; a name that is no command throws', () => {
