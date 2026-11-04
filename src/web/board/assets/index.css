@@ -1229,6 +1229,36 @@ a.ovtr:hover { background: var(--hover); }
   .kd-kv dd{padding-left:var(--s3);margin-bottom:var(--s1);}
   .kd-json details > :not(summary){padding-left:10px;}
 }
+/* web/legacy/css/window.css — the new desk's context window (.desk.next #ctxwin, web/src/screens/replay/Window.tsx): one virtual list
+   (2.3 §读与画「长对话的窗口」). Every item sits in an absolute layer at the offset the list measured, so nothing in it is laid out
+   off screen at a guessed size (content-visibility: visible). The item heights CSS fixes are custom properties here, read once by
+   the window as its estimates: a closed row (--cblk-pitch, replay.css), a folded turn's head, a section header, a one-line item.
+   The row head (1.4 ③, R2 decision 4): a reset button holding the chevron and the role, then the tag, the preview, the marks and
+   the character count, as in the prototype's row. The legacy desk never carries .next: its look does not change. */
+.desk.next #ctxwin{padding-top:0;
+  --cwturn-pitch:calc(var(--cwturn-ih) + 8px);
+  --cwsec-pitch:calc(var(--lh) + 26px);
+  --cwline-pitch:calc(var(--lh) + 12px);}
+.desk.next #ctxwin .cwlist{position:relative;width:100%;}
+.desk.next #ctxwin .cwit{position:absolute;top:0;left:0;width:100%;}
+/* the section header of the part being read stays at the top of the box */
+.desk.next #ctxwin .cwit.cwstick{position:sticky;z-index:1;background:var(--paper);}
+.desk.next #ctxwin .cblk,.desk.next #ctxwin .cwturn{content-visibility:visible;}
+.desk.next #ctxwin .cwsec{box-sizing:border-box;height:var(--cwsec-pitch);margin:0;padding-top:10px;}
+.desk.next #ctxwin .cwturn{margin-bottom:6px;}
+/* the rows of an open turn follow its head, indented under it */
+.desk.next #ctxwin .cblk.cwtrow{margin-left:12px;}
+/* the head: the whole of it toggles; the button inside it is the keyboard's way in */
+.desk.next #ctxwin .cbh::before{content:none;}
+.desk.next #ctxwin .cbh{gap:10px;}
+.desk.next #ctxwin .cbtog{display:flex;align-items:center;gap:6px;flex:none;min-width:9ch;margin:0;padding:0;border:0;background:none;font:inherit;color:inherit;text-align:left;cursor:pointer;}
+.desk.next #ctxwin .cbtog:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px;}
+.desk.next #ctxwin .cbtag{flex:none;color:var(--ink);background:var(--sunk);border:1px solid var(--rule);border-radius:5px;padding:0 6px;line-height:18px;}
+.desk.next #ctxwin .cblk:not(.collapsed) > .cbh{background:var(--sunk);}
+.desk.next #ctxwin .cblk:not(.collapsed) > .cbh .cbtag{background:var(--raised);}
+.desk.next #ctxwin .cbh:hover{background:var(--hover);}
+.desk.next #ctxwin .cblabel{color:var(--ink-2);}
+.desk.next #ctxwin .cbchars{text-align:right;color:var(--ink-2);}
 /* css/capture.css — the 采集 page + 采集记录 (1.9). Tokens only (1.5 D77), both themes follow. */
 
 /* the page */
