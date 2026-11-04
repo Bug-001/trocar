@@ -11,6 +11,7 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { generate } from '../../scripts/gen-dataset.mjs'
 import { writeSegment, DATA_QUERIES, requiredFor } from './raw-home.mjs'
 import { segmentIndex, segmentFiles, warmSegmentIndex, indexDir } from '../../src/query/index-build.mjs'
+import { indexRows } from '../../src/query/rows.mjs'
 import { sealSegment } from '../../src/raw/seal.mjs'
 
 const NOW = Date.parse('2026-11-02T00:00:00Z')
@@ -91,4 +92,48 @@ test('段索引行按列存:时刻列读回的文本 = 存进去的文本 = toIS
   const view = rowTable(entries)
   for (let pass = 0; pass < 2; pass++) // forwards, then backwards
     for (let k = 0; k < entries.length; k++) { const i = pass ? entries.length - 1 - k : k; assert.equal(view.at(i).ts, entries[i].ts, `ms ${ms[i]}`) }
+})
+
+// 3.5 §行表先读: a read of the rows may give way (`ease`), between segments and inside a scan, and what it reads does not change. The
+// axes: a segment plain or sealed × its index kept, of another version, or missing. The `fs` here takes 60 ms per read, so a scan is long
+// enough to give way inside (no time is asserted); the other read is of a copy of the home, which nothing has read yet.
+test('ease: rows and a rebuilt index are what they are without it, whatever the segment kind and the state of its index', async () => {
+  const block = new Int32Array(new SharedArrayBuffer(4))
+  const slow = { ...fs, readSync: (...a) => { Atomics.wait(block, 0, 0, 60); return fs.readSync(...a) } }
+  const rowsOf = (list) => [...list].map((r) => JSON.stringify(r))
+  for (const sealed of [false, true]) for (const index of ['kept', 'other version', 'missing']) {
+    const dir = tmpDir('trocar-ease-'), home = path.join(dir, 'a', '.trocar'), lockFile = path.join(home, 'collector', 'lock')
+    fs.mkdirSync(path.join(home, 'raw'), { recursive: true })
+    fs.mkdirSync(path.dirname(lockFile), { recursive: true })
+    const segments = [PLAIN, SEALED, LIVE]
+    segments.forEach((s, k) => writeSegment(home, s, Array.from({ length: 8 }, (_, i) => axes(k * 8 + i, '2026-11-01T08:00:00.000Z')).flat()))
+    fs.writeFileSync(lockFile, JSON.stringify({ pid: process.pid, segment: LIVE }))
+    if (sealed) for (const s of [PLAIN, SEALED]) await sealSegment(path.join(home, 'raw', `${s}.ndjson`), { lockFile, journal: null })
+    fs.rmSync(lockFile)
+    for (const segment of segments) await segmentIndex({ home, segment, owner: true })
+    if (index === 'missing') fs.rmSync(indexDir(home), { recursive: true })
+    if (index === 'other version') for (const segment of segments) {
+      const f = path.join(indexDir(home), `${segment}.json`)
+      fs.writeFileSync(f, fs.readFileSync(f, 'utf8').replace(/"v":\d+\}\n/g, '"v":1}\n'))
+    }
+    const copy = path.join(dir, 'b', '.trocar')
+    fs.cpSync(home, copy, { recursive: true, preserveTimestamps: true })
+
+    let eased = 0
+    const give = async () => { eased++; await new Promise(setImmediate) }
+    const read = await indexRows({ home, fs: slow, ease: give })
+    assert.deepEqual(rowsOf(read), rowsOf(await indexRows({ home: copy })), `${sealed} ${index}`)
+    assert.ok(eased >= 1, `${sealed} ${index}`)
+    if (index === 'kept') continue
+    const inside = eased
+    await segmentIndex({ home, segment: LIVE, fs: slow, ease: give })
+    assert.ok(eased > inside, `${sealed} ${index}: a plain scan gave way`)
+    if (!sealed) continue
+    const idx = path.join(indexDir(home), `${SEALED}.json`), plainly = fs.readFileSync(idx)
+    fs.rmSync(idx)
+    eased = 0
+    await segmentIndex({ home, segment: SEALED, fs: slow, ease: give })
+    assert.ok(eased >= 1, `${index}: a sealed scan gave way`)
+    assert.ok(fs.readFileSync(idx).equals(plainly), `${index}: the rebuilt sealed index, byte for byte`)
+  }
 })

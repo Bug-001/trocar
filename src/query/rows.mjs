@@ -42,20 +42,23 @@ const fpOf = (s) => (s == null ? null : s ? s.split(' ').map(Number) : []);
 const lineOf = (id) => Number(String(id).split(':').pop());
 
 /**
- * indexRows({home, fs, errors}) → a read-only row list (length, at, iteration, find, filter / map / slice → arrays) of
+ * indexRows({home, fs, errors, progress, ease}) → a read-only row list (length, at, iteration, find, filter / map / slice → arrays) of
  * {…index row, segment, lineNo, session_id, synthesized}, oldest segment first, capture order inside a segment — the order the
  * synthesized keys (3.4 合成键) are assigned in, the same order the board stamps them in, so both name a session the same. It is
  * shared by every reader until a segment moves. What a segment could not say goes into `errors` (D38), never silently missing — on
  * every call. `progress` is called after every segment and every chunk of raw bytes a cold segment's scan reads: the query worker
- * reports that work, so the daemon's idle clock does not end it in the middle of a long read (3.5 后台抽取与归约).
+ * reports that work, so the daemon's idle clock does not end it in the middle of a long read (3.5 后台抽取与归约). `ease`, an async
+ * function, is awaited after every segment and inside a long scan (index-build.mjs `easing`), so a read of every segment leaves the
+ * event loop to others (3.5 §行表先读); the rows are the same with it or without.
  */
-export async function indexRows({ home = trocarHome(), fs = nodeFs, errors = [], progress = null } = {}) {
+export async function indexRows({ home = trocarHome(), fs = nodeFs, errors = [], progress = null, ease = null } = {}) {
   const segs = [];
   for (const [segment, at] of segmentFiles(home, fs, errors)) {
-    const { records, problems } = await warmSegmentIndex({ home, segment, fs, at, progress });
+    const { records, problems } = await warmSegmentIndex({ home, segment, fs, at, progress, ease });
     if (progress) progress();
     for (const pr of problems) errors.push(problemEntry(`segments/${segment}`, pr));
     segs.push({ segment, records, entry: recordsId(records) });
+    if (ease) await ease();
   }
   const stamp = segs.map((s) => `${s.segment}#${s.entry}`).join('\n');
   return lists.get(`${fsTag(fs)}\n${home}`, stamp, (old) => rowList(segs, old)).rows;
