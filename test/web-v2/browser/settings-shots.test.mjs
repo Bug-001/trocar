@@ -144,3 +144,20 @@ test('#19 a store that throws still switches the theme and says so; a kept choic
     assert.deepEqual(b.errors, [])
   } finally { await b.stop() }
 })
+
+// 1.2 §键盘 (layers go with their screen): the confirm opened on Storage closes when Back leaves the screen; nothing stays over the
+// next screen
+test('1.2 §键盘: the llm → log confirm closes when Back leaves Storage', { skip, timeout: 120_000 }, async () => {
+  const b = await withBoard({ bytes: 2e5, chromium: gate.chromium })
+  try {
+    await go(b.page, '#/settings/storage')
+    const seg = '[data-lvl="llm"] [data-keep="log"]'
+    await b.page.waitForSelector(seg, { timeout: 30000 })
+    await b.page.click(seg)
+    await b.page.waitForSelector('[role=dialog][aria-modal=true]', { timeout: 30000 })
+    await b.page.goBack()
+    await b.page.waitForFunction(() => !location.hash.startsWith('#/settings') && !document.querySelector('#screen .ctable'))
+    assert.equal(await b.page.locator('[role=dialog][aria-modal=true]').count(), 0)
+    assert.deepEqual(b.errors, [])
+  } finally { await b.stop() }
+})

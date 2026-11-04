@@ -23,7 +23,7 @@ export type StatsModel = { kind: 'reading' } | { kind: 'failed', fail: Fail } | 
   agents: Array<{ id: string, chip: string | null, trafficOnly: boolean, href: string | null, sessions: unknown, calls: unknown, cost: Tip, hit: Tip, last: string }>,
 }
 export type RecentModel = { kind: 'reading' } | { kind: 'none' } | { kind: 'failed', fail: Fail } | {
-  kind: 'shown', rows: Array<{ id: string, harness: string, inferred: boolean, title: string, titleTip: string, calls: Tip, when: string, href: string }>,
+  kind: 'shown', rows: Array<{ id: string, harness: string, inferred: boolean, title: string, pending: boolean, titleTip: string, calls: Tip, when: string, href: string }>,
 }
 export type AgentRowM = { id: string, harness: string, desired: string, control: ControlModel, commands: Array<[string, string]> | null }
 
@@ -135,7 +135,7 @@ export function RecentCard({ m, onRetry }: { m: RecentModel, onRetry: Retry }) {
         <a className="ovitem" key={r.id} href={r.href}>
           <HarnessIcon id={r.harness} />
           <span className="ovnm">{harnessName(r.harness)}{r.inferred ? <> <span className="ovmark" title="agent inferred from the request headers">(inferred)</span></> : null}</span>
-          <span className="ovtx" title={r.titleTip}>{r.title}</span>
+          <span className={r.pending ? 'ovtx pend' : 'ovtx'} title={r.titleTip}>{r.title}</span>
           <span className="ovnum">{r.calls.tip ? <span title={r.calls.tip}>{r.calls.text}</span> : r.calls.text}</span>
           <span className="ovwhen">{r.when}</span>
         </a>

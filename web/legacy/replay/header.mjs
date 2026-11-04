@@ -24,10 +24,9 @@ function spanOf(lanes) {
 // ── the title: the fallback chain and where each title came from (1.2) ───────────────────────────────────────────────
 // meta.title (its source = meta.title_source) → 「未命名会话」 + the first step's time. The tip names the source and carries
 // the session id; a title is never invented from the id.
-const titleFrom = (meta) => (meta.title_source === 'wire' ? W.TITLE_FROM_WIRE : W.TITLE_FROM_META)
 function titleHtml(meta, lanes) {
   const id = (meta && meta.session_id) || ''
-  if (meta && meta.title != null) return `<span class="sh-name" title="${esc(titleFrom(meta))}\n${esc(W.SESSION_ID)} ${esc(id)}">${esc(meta.title)}</span>`
+  if (meta && meta.title != null) return `<span class="sh-name" title="${esc(W.TITLE_FROM_WIRE)}\n${esc(W.SESSION_ID)} ${esc(id)}">${esc(meta.title)}</span>`
   const sp = spanOf(lanes)
   const t0 = sp ? fmtWhen(sp.t0) : ''
   return `<span class="sh-name" title="${esc(W.TITLE_UNTITLED_TIP)}\n${esc(W.SESSION_ID)} ${esc(id)}">${W.UNTITLED}${t0 ? ` · ${esc(t0)}` : ''}</span>`
@@ -166,10 +165,9 @@ export function sessionInfoHtml({ meta, lanes, probes, totals, truncated }) {
     const dur = t0 && t1 ? fmtUp(Date.parse(t1) - Date.parse(t0)) : null
     rows.push(`<div class="sir">${esc(W.START_LINE)} ${esc(fmtWhen(t0))}${dur ? ` · ${esc(W.DURATION_WORD)} ${esc(dur)}` : ''}</div>`)
   }
-  // 8 会话 id (copyable) · where the title came from — only when the title is the agent's own record
+  // 8 会话 id (copyable)
   const idRow = meta && meta.session_id ? `<span class="sirmono">${esc(meta.session_id)}</span> ${copyBtn(meta.session_id, W.COPY)}` : ''
-  const fromTitle = meta && meta.title != null && meta.title_source === 'harness-local-store' ? ` <span class="sirsub">${esc(W.TITLE_FROM_META)}</span>` : ''
-  if (idRow || fromTitle) rows.push(`<div class="sir">${esc(W.SESSION_ID)} ${idRow}${fromTitle}</div>`)
+  if (idRow) rows.push(`<div class="sir">${esc(W.SESSION_ID)} ${idRow}</div>`)
   // < 900 px: the head's 项目 moves in as the last row (CSS shows .sir-narrow only there)
   if (meta && meta.project_slug && meta.project_slug !== '_unresolved') {
     const name = meta.project_path ? String(meta.project_path).split('/').filter(Boolean).pop() : meta.project_slug

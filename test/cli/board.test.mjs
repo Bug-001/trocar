@@ -8,7 +8,7 @@ import net from 'node:net'
 import path from 'node:path'
 import { once } from 'node:events'
 import { modelWorld } from '../helpers/model-world.mjs'
-import { liveUnit, withScratchCwd, boardPortOf } from '../helpers/model-daemon.mjs'
+import { liveUnit, withScratchCwd, boardPortOf, unservable } from '../helpers/model-daemon.mjs'
 import { workerFork } from '../helpers/worker-fork.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { fakeIo, snapshot } from './fixtures/on-ctx.mjs'
@@ -25,7 +25,7 @@ const recorder = (fail = false) => { const calls = []; return { calls, open: asy
 const runBoard = (w, platform, box, opener, argv = []) => { const io = fakeIo(); return board(argv, { io, env: w.env, home: w.home, platform, args: NO_ARGS, deps: { unit: box.unit, open: opener.open } }).then((exit) => ({ exit, io })) }
 
 for (const platform of ['darwin', 'win32']) {
-  test(`${platform} · 4.4 #8 · V84: trocar board starts the daemon, prints http://127.0.0.1:<boardPort>/#t=<board.token>, opens exactly that URL, exit 0; an opener that fails still prints it, exit 0`, { timeout: 30_000 }, async () => {
+  test(`${platform} · 4.4 #8 · V84: trocar board starts the daemon, prints http://127.0.0.1:<boardPort>/#t=<board.token>, opens exactly that URL, exit 0; an opener that fails still prints it, exit 0`, { skip: await unservable(platform), timeout: 30_000 }, async () => {
     const { w, port, box } = await installed(platform)
     await withScratchCwd(platform, async () => {
       try {
@@ -60,7 +60,7 @@ test('§4.3: trocar board on a machine with nothing installed exits 1 and the HO
   assert.equal(await board(['x'], { io: fakeIo(), env: { HOME: home }, home, platform: 'darwin', args: { positionals: ['x'], flags: {} }, deps: { open: opener.open } }), 2)
 })
 
-test('V84: the board\'s port held by another program → trocar board exits 1, opens nothing, and takes no other port', { timeout: 30_000 }, async () => {
+test('V84: the board\'s port held by another program → trocar board exits 1, opens nothing, and takes no other port', { skip: await unservable('darwin'), timeout: 30_000 }, async () => {
   const { w, port, box } = await installed('darwin')
   const squat = net.createServer(); squat.listen(port, '127.0.0.1'); await once(squat, 'listening')
   try {

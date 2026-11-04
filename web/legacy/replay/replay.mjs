@@ -473,8 +473,11 @@ function openDesk(ctx, route0) {
   }
 
   // ── the sealed packs (2.3 加载器): each read `main` then `rest` by the loader, in packOrder's order at the moment its slot opens,
-  // so a reader's move (a step, a deep link, Home) puts the pack it needs first. A pack held at the head's tag is not read again.
-  const packTag = new Map(), packing = new Set() // pack n → the tag held; the packs on their way
+  // so a reader's move (a step, a deep link, Home) puts the pack it needs first. A part held at the head's tag is not read again, so a pack
+  // left after its `main` reads only its `rest` once back (1.2 §路由「离开再回来」).
+  const PARTS = ['main', 'rest']
+  const packHeld = new Map(), packing = new Set() // pack n → {tag, parts: the parts applied at that tag}; the packs on their way
+  const heldParts = (n, tag) => { const h = packHeld.get(n); return h && h.tag === tag ? h.parts : new Set() }
   let jobs = 0, packFailed = false
   const playStep = () => {
     if (s.initialStep != null) return s.initialStep - 1
@@ -482,7 +485,7 @@ function openDesk(ctx, route0) {
     const i = indexOf(s.desk, s.anchor.id, s.playRid)
     return i < 0 ? null : i
   }
-  const packsDue = () => packOrder(s.desk.head, playStep(), (p) => packTag.get(p.n) === p.tag || packing.has(p.n))
+  const packsDue = () => packOrder(s.desk.head, playStep(), (p) => heldParts(p.n, p.tag).size === PARTS.length || packing.has(p.n))
   function fill(byPoll = false) {
     if (s.dead || !host || !s.desk.head || (packFailed && !byPoll)) return
     packFailed = false
@@ -496,20 +499,27 @@ function openDesk(ctx, route0) {
     if (!p) return
     const sk = sessionKey(), tag = s.desk.head.packs.find((x) => x.n === p.n).tag, gone = () => s.dead || sk !== sessionKey() || signal.aborted
     packing.add(p.n)
-    const applies = []
-    let whole = false, err = null
+    const applies = [], had = heldParts(p.n, tag), got = []
+    let err = null
     try {
-      for (const part of ['main', 'rest']) {
+      for (const part of PARTS.filter((x) => !had.has(x))) {
+        if (!host) break // a detached desk sends no next read, the pack's later part included: attach() goes on
         const r = await getText(`/api/d/p${p.n}.${part}`, { id: s.id }, { signal: join(signal, s.reads.signal) })
         if (gone()) break
         let parsed = null
         try { parsed = r.ok && r.status === 200 ? parseLines(r.text) : null } catch { /* not the file's lines: a failure like any other */ }
         if (!parsed) { packFailed = true; if (s.playRid == null && s.initialStep != null) readFailed(r.ok ? { status: r.status, error: 'not the file\'s lines' } : r); break }
-        applies.push(serial(() => { if (gone()) return; keep(`p${p.n}.${part}`, r.text.length); return redraw(applyParsed({ kind: 'pack', n: p.n, part }, parsed)) }))
-        whole = part === 'rest'
+        // held once the desk holds it: a part whose apply threw, or never ran, is read again
+        applies.push(serial(() => { if (gone()) return; keep(`p${p.n}.${part}`, r.text.length); const ch = applyParsed({ kind: 'pack', n: p.n, part }, parsed); got.push(part); return redraw(ch) }))
       }
     } catch (e) { err = e }
-    const applied = Promise.all(applies).then(() => { if (whole) packTag.set(p.n, tag) }).finally(() => packing.delete(p.n))
+    // every apply settles before the pack's record is written, so a part still applying is neither held nor read twice
+    const applied = Promise.allSettled(applies).then((rs) => {
+      if (got.length) packHeld.set(p.n, { tag, parts: new Set([...had, ...got]) })
+      packing.delete(p.n)
+      const bad = rs.find((x) => x.status === 'rejected')
+      if (bad) throw bad.reason
+    })
     if (err) { applied.catch(() => {}); throw err }
     return { applied }
   }
@@ -767,7 +777,7 @@ function openDesk(ctx, route0) {
     if (hasStep(route)) update(route)
     // a step left mid-wait draws now; the URL names the drawn step at once (syncUrl). Answers applied while away were not drawn: all areas then
     if (s.anchor) { if (missed) { missed = false; renderAll() } else paintPlayhead() }
-    chainLedger(); fill() // what a leave paused goes on (a desk that holds every pack reads nothing here)
+    steps.resume(); chainLedger(); fill() // what a leave paused goes on (a desk that holds every pack reads nothing here)
     poll() // the first open, or one round: the head If-None-Match, a Range on each tail
   }
   // leave the page: the poll stops, every listener outside the root goes, the reads in flight finish into the desk's state (drawn on
@@ -776,6 +786,7 @@ function openDesk(ctx, route0) {
     if (!host) return
     scrolls = SCROLLED.map((sel) => [sel, $(sel) ? $(sel).scrollTop : 0])
     poller.stop()
+    steps.pause() // the step's rest timer and its asks after an answer: resume() on attach
     if (busyTimer != null) { clearTimeout(busyTimer); busyTimer = null }
     jumps.clear()
     setScreenKeys(null)

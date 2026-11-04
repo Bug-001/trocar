@@ -15,6 +15,7 @@ import { startControlServer } from '../../src/collector/core/control.mjs'
 import { readManifest, saveManifest } from '../../src/off/manifest.mjs'
 import { recordingExec } from './fixtures/on-ctx.mjs'
 import { DOOR_SEEN_FILE } from '../../src/off/door-seen.mjs'
+import { USER_PATH_FILE } from '../../src/off/paths.mjs'
 
 const MACHO = Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 1, 2, 3, 4])
 const USER_PEM = `${tls.rootCertificates[2].trim()}\n`
@@ -188,6 +189,7 @@ test('invariant 5 · offline uninstall: ~/.trocar keeps only the captures — th
   const helper = path.join(w.home, '.trocar', 'bin', 'trocar-sign-helper')
   fs.writeFileSync(helper, MACHO, { mode: 0o755 })
   fs.writeFileSync(path.join(w.dir, 'board.token'), 'A'.repeat(43), { mode: 0o600 }) // the daemon's board token (4.4: it goes with uninstall)
+  fs.writeFileSync(path.join(w.dir, USER_PATH_FILE), '{"PATH":"/usr/bin"}\n', { mode: 0o600 }) // the PATH a terminal command recorded (1.6 §3.6: it goes with uninstall)
   const { receipt, exit } = await uninstall(w)
   assert.equal(exit, 0, JSON.stringify({ p: receipt.problems, l: receipt.left }))
   assert.deepEqual(leftUnder(w.home), [], 'nothing of trocar\'s but the captures')

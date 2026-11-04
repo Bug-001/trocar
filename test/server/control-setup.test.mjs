@@ -9,7 +9,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { once } from 'node:events'
 import { modelWorld } from '../helpers/model-world.mjs'
-import { liveUnit, withScratchCwd, boardPortOf } from '../helpers/model-daemon.mjs'
+import { liveUnit, withScratchCwd, boardPortOf, unservable } from '../helpers/model-daemon.mjs'
 import { workerFork } from '../helpers/worker-fork.mjs'
 import { depsFile, sharedTrust, standInUnit } from '../helpers/board-world.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -47,7 +47,7 @@ async function withBoard(platform, run) {
 }
 
 for (const platform of ['darwin', 'win32']) {
-  test(`${platform} · 4.4 #13 · V67: Set up for a harness installed after install — a plan of its carriers only, a stale plan_id, confirm places them and nothing else; a second Set up changes nothing`, { timeout: 60_000 }, async () => {
+  test(`${platform} · 4.4 #13 · V67: Set up for a harness installed after install — a plan of its carriers only, a stale plan_id, confirm places them and nothing else; a second Set up changes nothing`, { skip: await unservable(platform), timeout: 60_000 }, async () => {
     await withBoard(platform, async ({ w, post, trust }) => {
       assert.equal((await post({ harness: 'not-a-harness' })).status, 400)
       fs.mkdirSync(path.join(w.home, '.zcode'), { recursive: true })
@@ -106,7 +106,7 @@ for (const platform of ['darwin', 'win32']) {
     })
   })
 
-  test(`${platform} · 4.11 ㉒: the root key gone before a Set up — no new root for one harness; pending names trocar install, no byte of A's or the store's changes`, { timeout: 60_000 }, async () => {
+  test(`${platform} · 4.11 ㉒: the root key gone before a Set up — no new root for one harness; pending names trocar install, no byte of A's or the store's changes`, { skip: await unservable(platform), timeout: 60_000 }, async () => {
     await withBoard(platform, async ({ w, post, trust, state }) => {
       fs.rmSync(path.join(state, 'custody.json'))
       fs.mkdirSync(path.join(w.home, '.zcode'), { recursive: true })
@@ -122,7 +122,7 @@ for (const platform of ['darwin', 'win32']) {
     })
   })
 
-  test(`${platform} · 4.4 #13 「Set up 的三件实话」: a root not in the store and a dialog nobody answers → pending with trocar install; B's carrier placed all the same`, { timeout: 60_000 }, async () => {
+  test(`${platform} · 4.4 #13 「Set up 的三件实话」: a root not in the store and a dialog nobody answers → pending with trocar install; B's carrier placed all the same`, { skip: await unservable(platform), timeout: 60_000 }, async () => {
     await withBoard(platform, async ({ w, post, trust }) => {
       trust.setStore({ held: [], answer: 'pending' })
       fs.mkdirSync(path.join(w.home, '.zcode'), { recursive: true })
@@ -139,7 +139,7 @@ for (const platform of ['darwin', 'win32']) {
     })
   })
 
-  test(`${platform} · 4.4 「Set up 的三件实话」: a root prompt that outlasts the query deadline — the worker is not killed; the receipt is pending with trocar install, B's carrier placed`, { timeout: 60_000 }, async () => {
+  test(`${platform} · 4.4 「Set up 的三件实话」: a root prompt that outlasts the query deadline — the worker is not killed; the receipt is pending with trocar install, B's carrier placed`, { skip: await unservable(platform), timeout: 60_000 }, async () => {
     await withBoard(platform, async ({ w, trust, deps }) => {
       trust.setStore({ held: [], answer: 'pending', delayMs: 1500 })
       fs.mkdirSync(path.join(w.home, '.zcode'), { recursive: true })

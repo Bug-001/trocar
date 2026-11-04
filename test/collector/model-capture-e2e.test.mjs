@@ -16,7 +16,7 @@ import net from 'node:net'
 import tls from 'node:tls'
 import path from 'node:path'
 import { modelWorld } from '../helpers/model-world.mjs'
-import { liveUnit, withScratchCwd } from '../helpers/model-daemon.mjs'
+import { liveUnit, withScratchCwd, unservable } from '../helpers/model-daemon.mjs'
 import { within, onceWithin } from '../helpers/bounded.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { createCa, loadCa } from '../../src/collector/core/tls/ca.mjs'
@@ -30,7 +30,7 @@ import { listenLocalhost } from '../helpers/localhost.mjs'
 
 
 for (const platform of ['darwin', 'win32']) {
-  test(`${platform}: a codex connection through the real door is decrypted and recorded verbatim; after off this holder is forwarded only, and the daemon stays up with its door forward-only`, { timeout: 60_000 }, async () => {
+  test(`${platform}: a codex connection through the real door is decrypted and recorded verbatim; after off this holder is forwarded only, and the daemon stays up with its door forward-only`, { skip: await unservable(platform), timeout: 60_000 }, async () => {
     const w = await modelWorld({ os: platform, commands: ['codex'] })
     assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
     fs.mkdirSync(path.join(w.home, '.codex'), { recursive: true }); fs.writeFileSync(path.join(w.home, '.codex', '.env'), '# the user\'s own\n')
@@ -157,7 +157,7 @@ for (const platform of ['darwin', 'win32']) {
 // the daemon's own verdict for the process it judged; for one it never saw, the door's rule over the on windows: started inside an earlier window
 // of the same door → routed; started while the harness was off (it read no entry, D31①) → config-after-start.
 for (const platform of ['darwin', 'win32']) {
-  test(`${platform}: after off → on, status takes the door's verdict for a decrypted process and judges the unseen ones by the on windows`, { timeout: 60_000 }, async () => {
+  test(`${platform}: after off → on, status takes the door's verdict for a decrypted process and judges the unseen ones by the on windows`, { skip: await unservable(platform), timeout: 60_000 }, async () => {
     const w = await modelWorld({ os: platform, commands: ['codex'] })
     assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
     fs.mkdirSync(path.join(w.home, '.codex'), { recursive: true }); fs.writeFileSync(path.join(w.home, '.codex', '.env'), '')

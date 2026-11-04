@@ -1,13 +1,15 @@
 // core.test.mjs — the sequence harness's pure parts, no browser (runs in `npm test`): ddmin shrinks to a 1-minimal failing list
 // and never hands back a list that did not fail; generate() is a pure function of its seed and the default seeds draw every action
 // kind; a violation's key tells two bugs of one `<id>:<screen>` apart but not two runs of one bug; a saved regression's replay
-// counts by its status.
+// counts by its status; a timing invariant is saved whole (status `timing`), never shrunk.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { ddmin } from './shrink.mjs'
-import { generate, keyOf, replayTodo, replayFailure, DEFAULT_SEEDS, DEFAULT_STEPS } from './runner.mjs'
+import fs from 'node:fs'
+import { generate, keyOf, replayTodo, replayFailure, findOne, DEFAULT_SEEDS, DEFAULT_STEPS } from './runner.mjs'
 import { ACTIONS } from './actions.mjs'
-import { fingerprint } from './invariants.mjs'
+import { fingerprint, TIMING } from './invariants.mjs'
+import { tmpDir } from '../../../helpers/tmp.mjs'
 
 // fails iff the list holds an 'x' somewhere before a 'y'
 const xBeforeY = async (list) => { const i = list.indexOf('x'); return i >= 0 && list.indexOf('y', i + 1) > i }
@@ -55,4 +57,20 @@ test('a fixed regression whose replay meets its own key fails; open and flaky on
   assert.equal(replayFailure(reg, {}), null)
   for (const status of ['open', 'flaky']) assert.ok(replayTodo({ ...reg, status }))
   assert.equal(replayTodo({ ...reg, status: 'new' }), false)
+})
+
+test('findOne shrinks a reproduced I-url or I-mem (an element count) to its one cause but saves a reproduced timing one (I-longtask, I-follow, I-heap) whole, after one trial', async () => {
+  const steps = ['a', 'b', 'x', 'c', 'd', 'e'].map((a) => ({ a, p: {} }))
+  for (const [id, want] of [['I-url', [steps[2]]], ['I-mem', [steps[2]]], ...[...TIMING].map((id) => [id, steps.slice(0, 5)])]) {
+    const v = { id, sig: `${id}:replay`, fp: fingerprint('d'), step: 4, detail: 'd', screenshot: 'x.png' }
+    // a trial fails with v's key exactly when its list still holds step 'x'
+    const run = async ({ steps: sub }) => (sub.some((s) => s.a === 'x') ? { violation: { sig: v.sig, fp: v.fp } } : {})
+    const dir = tmpDir()
+    const reg = await findOne(v, steps, { seed: 9, viewport: 1280, theme: 'light' }, { run, dir })
+    const saved = JSON.parse(fs.readFileSync(reg.file, 'utf8'))
+    assert.deepEqual(saved.steps, want, id)
+    assert.equal(saved.status, TIMING.has(id) ? 'timing' : 'new')
+    if (TIMING.has(id)) assert.equal(reg.trials, 1)
+    assert.equal(keyOf(saved), keyOf(v))
+  }
 })

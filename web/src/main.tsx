@@ -22,7 +22,6 @@ import { createBoardRouter } from './router'
 import { LegacyScreen, type Route } from './LegacyScreen'
 import { ScreenOutlet, lazyScreen, type LazyScreen } from './ScreenOutlet'
 import { Sidebar } from './shell/Sidebar'
-import { ConfirmProvider } from './ui/Confirm'
 
 // every screen of every route (core/router.mjs): the legacy ones here, the React ones in REACT_SCREENS
 const SCREENS = {
@@ -120,9 +119,7 @@ const root = createRoot(document.getElementById('app')!)
 // no StrictMode: a legacy mount() is not idempotent
 root.render(
   <QueryClientProvider client={new QueryClient()}>
-    <ConfirmProvider>
-      <FacadeContext.Provider value={board.legacy}><RouterProvider router={board.router} /></FacadeContext.Provider>
-    </ConfirmProvider>
+    <FacadeContext.Provider value={board.legacy}><RouterProvider router={board.router} /></FacadeContext.Provider>
   </QueryClientProvider>,
 )
 

@@ -13,7 +13,7 @@ import { readManifest } from '../../../../src/off/manifest.mjs'
 
 for (const os of OSES) {
   for (const desc of all) {
-    const forms = desc.proxyMode.forms.filter((f) => f.os.includes(os))
+    const forms = desc.proxyMode.forms.filter((f) => f.os.includes(os) && !(f.verified && f.verified[os] && f.verified[os].reason === 'out-of-scope')) // D56⑥: a form put out of scope is not drawn
     test(`CM21 / V70 ${os} ${desc.name}: config-prior, direct and system-proxy from the door's own rule (a PAC's door: the PAC's own leg); written and prior side by side, redacted`, async () => {
       for (const [prior, sys, want] of [[PRIOR, null, 'config-prior'], [null, null, 'direct'], [null, SYS, ['unknown', true].includes(desc.proxy.systemProxy.http) ? 'system-proxy' : 'direct']]) {
         const { home, m, doors } = world(desc, { prior })
