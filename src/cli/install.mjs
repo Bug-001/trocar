@@ -292,16 +292,18 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
 const breakGlass = (home, platform) => ['If trocar itself breaks, run:', commandLine(standaloneCommand(standalonePath(home), platform))]
 
 // Set up (only): a row of the plan is one of that harness's forms whose own carrier install has not placed (setupOf's `missing`, the judgement
-// status and on read, with the root read as on reads it: `root` when it is gone from the user's store, so install's run asks for it again); without
-// `only`, every row → { row, root }
+// status and on read, with the root read as on reads it: `root` when it is gone from the user's store, so install's run asks for it again); rule U's
+// file (form null) only when its block is not on record intact, as the run then finds it; a row that changes nothing (`state`) when the run runs at all.
+// Without `only`, every row → { row, root }
 async function missingOf(only, { platform, harnesses, ctx, home, rootStore, fs }) {
   if (!only) return { row: () => true, root: true }
-  const [{ setupOf }, { readManifest }, { rootOf }] = await Promise.all([import('../collector/core/proxymode/status-facts.mjs'), import('../collector/core/trust/journal.mjs'), import('../collector/model-on.mjs')])
+  const [{ setupOf, intactOf }, { readManifest }, { rootOf }, { itemsOfPhase }] = await Promise.all([import('../collector/core/proxymode/status-facts.mjs'), import('../collector/core/trust/journal.mjs'), import('../collector/model-on.mjs'), import('../off/manifest.mjs')])
   const dir = path.join(home, '.trocar', 'collector'), manifest = readManifest(dir, fs)
   const root = manifest && manifest.install ? await rootOf({ dir, m: manifest, rootStore, fs }) : null
   const missing = setupOf(harnesses.find((d) => d.name === only), { os: platform, manifest, ctx, root, fs }).missing
   const forms = new Set(missing.map((x) => x.form))
-  return { row: (r) => r.harness === only && (r.form == null || forms.has(r.form)), root: missing.some((x) => x.what === 'root-missing') } // form null: rule U's file, the harness's own
+  const intact = (file) => itemsOfPhase(manifest, 'install').some((i) => i.kind === 'text' && i.path === file && intactOf(manifest, i, fs))
+  return { row: (r) => r.harness === only && (r.form != null ? forms.has(r.form) : r.state ? forms.size > 0 : !intact(r.paths[0])), root: missing.some((x) => x.what === 'root-missing') }
 }
 
 /** The board's port (4.4 §Plan 「端口」), chosen once by install: none free (or the file cannot be written) is a pending row with the reason, never a throw. */

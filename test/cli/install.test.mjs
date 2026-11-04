@@ -232,3 +232,25 @@ test('1.6 §3.2: every plan row that names a path says what changes there, a car
   assert.ok(plan.some((p) => p.what === 'kimi-code'), JSON.stringify(plan))
   for (const p of plan.filter((x) => /^~[\\/]/.test(x.detail))) assert.match(p.detail, /^\S.*: \S/, `${p.what}: the path, then what changes there`)
 })
+
+// 4.4 Set up (install <harness>) · V85: its plan names only what the run then changes — rule U's block already intact in the user's certificate file
+// is not a "will change" row, though another carrier of that harness is missing
+test('V85 · Set up: a rule U block that is intact is not in the plan of the harness that is set up again', async () => {
+  const { install } = await import('../../src/cli/install.mjs')
+  const { readManifest } = await import('../../src/off/manifest.mjs')
+  const w = await modelWorld({ commands: ['kimi'], env: (home) => ({ NODE_EXTRA_CA_CERTS: path.join(home, 'certs', 'mine.pem') }) })
+  w.file = w.env.NODE_EXTRA_CA_CERTS
+  fs.mkdirSync(path.dirname(w.file), { recursive: true }); fs.writeFileSync(w.file, `${(await import('node:tls')).rootCertificates[1].trim()}\n`)
+  const kimi = path.join(w.home, '.kimi-code', 'bin', 'kimi')
+  fs.mkdirSync(path.dirname(kimi), { recursive: true }); fs.writeFileSync(kimi, Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 0, 0, 0, 0])) // its native program: the wrapper's precondition
+  await w.install({ wrapperKit: { renderWrapper } })
+  const wrapper = readManifest(w.dir).files.find((f) => f.harness === 'kimi-code' && f.role === 'wrapper')
+  assert.ok(wrapper, 'kimi-code has a carrier of its own to lose')
+  fs.writeFileSync(wrapper.path, Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 9, 9, 9, 9])) // the agent's update put its own program back over trocar's launch command
+  const io = fakeIo()
+  const deps = { getuid: () => 501, unit: null, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, harnesses: w.harnesses.filter((d) => d.name === 'kimi-code'), which: w.ctx.which, owns: w.owns } // kimi-code alone: this machine's own agents name no file of this world
+  assert.equal(await install({ io, env: w.env, home: w.home, platform: 'darwin', deps, flags: new Set(['--dry-run', '--json']), only: 'kimi-code' }), 0, io.text())
+  const planned = io.json().planned
+  assert.ok(planned.some((p) => p.carrier === 'wrapper'), `the lost carrier is planned: ${JSON.stringify(planned)}`)
+  assert.deepEqual(planned.filter((p) => !p.state && (p.paths || []).includes(w.file)), [], 'the intact block is not a change')
+})

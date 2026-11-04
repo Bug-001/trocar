@@ -20,7 +20,8 @@ const HOOKS = new Set(['wrapper', 'plugin']) // a carrier that also applies the 
 const INSTALL = 'trocar install'
 const red = (v) => (typeof v === 'string' && v.trim() ? redactProxyUrl(v) : null)
 const latest = (items) => { const t = items.map((i) => Date.parse(i.installed_at)).filter(Number.isFinite); return t.length ? new Date(Math.max(...t)).toISOString() : null }
-const intactOf = (m, e, fs) => { try { return (e.kind === 'owned-file' ? judgeOwned({ manifest: m, file: e.path, fs }) : judgeEntry({ manifest: m, planned: e, fs })).action === 'skip-intact' } catch { return false } }
+/** Is one install item still on disk as trocar recorded it (a file trocar owns, or a key / block it placed in a file of yours)? Unreadable → false. */
+export const intactOf = (m, e, fs) => { try { return (e.kind === 'owned-file' ? judgeOwned({ manifest: m, file: e.path, fs }) : judgeEntry({ manifest: m, planned: e, fs })).action === 'skip-intact' } catch { return false } }
 
 /** The files a harness's `userCertFiles` keys name now, in the descriptor's order. */
 const userFilesOf = (desc, ctx) => (desc.proxyMode.userCertFiles || []).map((src) => readSrc(src, ctx)).filter((r) => r.set && typeof r.value === 'string').map((r) => r.value)
