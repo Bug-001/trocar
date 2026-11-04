@@ -16,8 +16,9 @@ const make = (actions, { on = 'request', match = HOST, whole } = {}) => {
 
 const ACTIONS = {
   'regex replace': [{ replace: 'a+', with: 'b' }, 2],
-  'literal replace of fast characters': [{ replace: 'alpha', with: 'beta', literal: true }, 1],
-  'literal replace with nothing': [{ replace: 'alpha', with: '', literal: true }, 1],
+  'literal replace of fast characters: a hit in a string runs in the rule process': [{ replace: 'alpha', with: 'beta', literal: true }, 2],
+  'literal replace with nothing': [{ replace: 'alpha', with: '', literal: true }, 2],
+  'literal replace with nothing on the raw body': [{ replace: 'alpha', with: '', literal: true, in: 'body' }, 1],
   'literal replace that needs escaping': [{ replace: '<tag>', with: 'x', literal: true }, 2],
   'literal replace of a value that needs escaping': [{ replace: 'alpha', with: 'a"b', literal: true }, 2],
   'literal replace on the raw body': [{ replace: '<tag>', with: 'a"b', literal: true, in: 'body' }, 1],

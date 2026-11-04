@@ -204,8 +204,8 @@ test('9: the same rules on the same input give the same bytes in the rule proces
   } finally { await runner.close(); }
 });
 
-test('the parent\'s check on an answer lets through what rules may do: their growth adds up, and the agent\'s own headers are not theirs', async () => {
-  const set = (header) => ({ name: header, on_error: 'forward', match: { harness: 'any' }, do: [{ header, set: 'v'.repeat(5000) }] });
+test('the parent\'s check on an answer lets through what rules may do: the agent\'s own headers are not theirs, and the growth the unit allows passes whole', async () => {
+  const set = (header) => ({ name: header, on_error: 'forward', match: { harness: 'any' }, do: [{ header, set: 'v'.repeat(4000) }] });
   const runner = openOneShot({ rules: [set('x-a'), set('x-b')] });
   const own = [['content-length', '2'], ['x-odd', 'a\u0001b']];
   try {
@@ -215,8 +215,26 @@ test('the parent\'s check on an answer lets through what rules may do: their gro
   } finally { await runner.close(); }
 });
 
+test('42: what a reply and an injected event say stays out of the answer, however long, and comes back from the rules', async () => {
+  const words = 'x'.repeat(100 * 1000);
+  const of = (name, on, action) => ({ name, on, on_error: 'forward', match: { harness: 'any' }, do: [{ delay_ms: 1 }, action] });
+  const runner = openOneShot({ rules: [of('answer', 'request', { reply: { status: 429, body: words } })] });
+  try {
+    const answer = await runner.run(unitOf('{"a":/'));
+    assert.equal(answer.why, undefined);
+    assert.equal(answer.verdict, 'reply');
+    assert.deepEqual(answer.reply, { status: 429, body: words });
+  } finally { await runner.close(); }
+  const events = openOneShot({ rules: [of('one', 'response', { inject: `data: ${words}\n\n` }), of('two', 'response', { inject: `data: 2${words}\n\n` })] });
+  try {
+    const answer = await events.run(unitOf('{"a":/', { on: 'response' }));
+    assert.equal(answer.why, undefined);
+    assert.deepEqual(answer.inject, [`data: ${words}\n\n`, `data: 2${words}\n\n`]);
+  } finally { await events.close(); }
+});
+
 test('an answer over 64 KiB is rule-error: the parent never parses a large message', async () => {
-  const rules = [{ name: 'big', on_error: 'forward', match: { harness: 'any' }, do: [{ reply: { status: 200, body: 'x'.repeat(70 * 1024) } }] }];
+  const rules = Array.from({ length: 700 }, (_, i) => ({ name: `${'n'.repeat(100)}${i}`, on_error: 'forward', match: { harness: 'any' }, do: [{ drop: true }] }));
   const runner = openOneShot({ rules });
   try { assert.equal((await runner.run(unitOf('{}'))).why, 'rule-error'); } finally { await runner.close(); }
 });

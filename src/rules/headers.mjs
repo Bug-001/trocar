@@ -40,3 +40,20 @@ export function checkHeaderSet(pairs, { before = [] } = {}) {
   if (growth > LIMITS.headerGrowthBytes) out.push({ at: null, reason: `these headers grow by more than ${LIMITS.headerGrowthBytes} bytes` })
   return out
 }
+
+/** `pairs` onto `state.headers`, as checkHeaderSet reads them. The limit is the unit's and not the rule's: `state.start` is what arrived, so what several rules add counts as one
+ *  set. False, and nothing changed, when a pair may not be written or the whole grows past the limit. */
+export function setHeaders(state, pairs) {
+  if (checkHeaderSet(pairs).some(({ at }) => at !== null)) return false
+  let next = state.headers
+  for (const [name, value] of pairs) {
+    const same = ([n]) => n.toLowerCase() === name.toLowerCase()
+    const at = next.findIndex(same)
+    if (value === null) next = next.filter((h) => !same(h))
+    else next = at < 0 ? [...next, [name, value]] : next.with(at, [next[at][0], value])
+  }
+  const start = state.start ?? state.headers
+  if (checkHeaderSet(headerChanges(start, next), { before: start }).length) return false
+  state.headers = next
+  return true
+}

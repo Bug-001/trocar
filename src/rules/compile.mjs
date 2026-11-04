@@ -1,11 +1,14 @@
 // compile.mjs (src/rules) — a checked rule file → closures, the host index and the tier 1 verdict (RFC 5.1 §规则, §分派). The daemon loads this file: it
 // builds no regex, parses no body and runs no action. A verdict is `hit` or `miss` only when the bytes settle it; the rest is `tier2`.
+import { Buffer, isUtf8 } from 'node:buffer'
 import { exactValues, parseCondition, tierOf } from './conditions.mjs'
 import { normalizeRule, readsBody } from './validate.mjs'
 import { CONDITION_COST } from './budget.mjs'
 
 const has = Object.hasOwn
 const BACKSLASH = 0x5C
+const LF = 0x0A, CR = 0x0D
+const DATA_FIELD = Buffer.from('data:')
 // `\uXXXX` is the longest escape: a hit starting up to five bytes after a backslash may be the tail of one.
 const ESCAPE_BYTES = 5
 
@@ -53,11 +56,35 @@ function textLeaf(node, text, budget) {
   return budget.spend(text.length) ? text.includes(node.v) : null
 }
 
+// Two `data:` lines. Two events of a whole stream count too: that costs a trip to tier 2 and no wrong answer.
+function manyDataLines(bytes) {
+  let lines = 0
+  for (let at = bytes.indexOf(DATA_FIELD); at !== -1; at = bytes.indexOf(DATA_FIELD, at + 1)) {
+    if ((at === 0 || bytes[at - 1] === LF || bytes[at - 1] === CR) && ++lines === 2) return true
+  }
+  return false
+}
+
+/** Would tier 2 read these bytes at all? It refuses what is not UTF-8 and an event of many data lines, so tier 1 may not answer for them, either way. False also when the passes
+ *  cannot be paid for. */
+export function readable(bytes, sse, budget) {
+  return budget.spend(bytes.length) && isUtf8(bytes) && !(sse && (!budget.spend(bytes.length) || manyDataLines(bytes)))
+}
+
+// Paid once per unit, however many rules read its body. A spent budget says nothing about the bytes, so it is not kept.
+const read = new WeakMap()
+function readableUnit(unit, budget) {
+  if (read.has(unit)) return read.get(unit)
+  const answer = readable(unit.body, unit.sse, budget)
+  if (!budget.over) read.set(unit, answer)
+  return answer
+}
+
 // The literal has only FAST_LITERAL's characters, so a clean hit is the text. A hit behind a backslash may be an escape's tail (`ABC` holds
 // `41BC`, `\nALPHA` holds `nALPHA`), and `\u` can spell any character, so neither lets the search say no.
 function bodyLeaf(node, unit, budget) {
   const { body } = unit
-  if (body === null || unit.encoding || !budget.spend(body.length)) return null
+  if (body === null || unit.encoding || !readableUnit(unit, budget) || !budget.spend(body.length)) return null
   let doubt = false
   for (let at = body.indexOf(node.v); at !== -1; at = body.indexOf(node.v, at + 1)) {
     if (!body.subarray(Math.max(0, at - ESCAPE_BYTES), at).includes(BACKSLASH)) return true

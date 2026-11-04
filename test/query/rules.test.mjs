@@ -79,7 +79,7 @@ test('rows follow the file, and say what the rule file says', async () => {
   assert.deepEqual([scrub.on_error, tag.on_error, surgery.on_error], ['forward', 'forward', 'drop'])
   assert.deepEqual([scrub.script, tag.script, surgery.script], [false, false, true])
   assert.deepEqual([scrub.resend_ok, tag.resend_ok, surgery.resend_ok], [false, true, true])
-  assert.deepEqual([scrub.tier, tag.tier, surgery.tier], [1, 0, 2])
+  assert.deepEqual([scrub.tier, tag.tier, surgery.tier], [2, 0, 2])
   assert.deepEqual([scrub.buffers, tag.buffers, surgery.buffers], ['stream', 'none', 'request'])
   assert.deepEqual([scrub.on, tag.harness, surgery.harness], ['response', ['claude-code'], 'any'])
   assert.deepEqual([tag.note, surgery.note], ['marks the call', null])

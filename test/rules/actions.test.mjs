@@ -130,7 +130,7 @@ test('an event replace touches the one data line, and a body replace may touch t
 
 test('an event with several data lines refuses every body action', () => {
   const event = 'data: {"t":\ndata: "ALPHA"}\n\n';
-  for (const action of [{ replace: 'ALPHA', with: 'x' }, { json: '/t', set: 'x' }]) {
+  for (const action of [{ replace: 'ALPHA', with: 'x' }, { replace: 'ALPHA', with: 'x', in: 'body' }, { replace: 'none', with: 'x', in: 'body' }, { json: '/t', set: 'x' }]) {
     fails('multi-line-event', () => run(action, event, { on: 'response', sse: true }));
   }
   fails('multi-line-event', () => judged({ body: 'ALPHA' }, event, { sse: true }, 'response'));

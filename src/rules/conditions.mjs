@@ -1,9 +1,15 @@
 // conditions.mjs (src/rules) — a match condition as written in a rule → its AST, and which tier it runs in (RFC 5.1 §条件的写法). Only parses: a
 // regex is length-checked here and compiled nowhere near this file, because the daemon validates through it too.
+import { Buffer } from 'node:buffer'
 import { LIMITS } from './closed.mjs'
 
 /** A literal the byte search may decide (5.1 §条件的写法): anything else could be written another way inside a JSON body. */
 export const FAST_LITERAL = /^[A-Za-z0-9 _\-.:]+$/
+
+/** A replace tier 1 may take up, told from the rule alone. One test for what the rule does and what `query rules` says about it. In `in: body` it may edit; in `in: text` it can
+ *  only say that nothing hits, because a hit is a string to escape again. Past the length a search stops being linear (5.1 §条件的写法). */
+export const isFastReplace = (action) => action.literal === true && !action.blocks && Buffer.byteLength(action.replace) <= LIMITS.literalBytes && action.replace.isWellFormed()
+  && (action.in === 'body' || FAST_LITERAL.test(action.replace))
 
 // `*` is a wildcard only at the two ends; `body` strings are literals, "the text has this".
 function literal(s, key) {

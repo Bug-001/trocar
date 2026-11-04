@@ -1,8 +1,7 @@
 // describe.mjs (src/rules) — what can be said about one rule from the rule alone (RFC 1.6 C.5, 5.1 §三档开销): its sentence, its hash, its tier, what it
 // buffers and whether resend takes it. Reads a rule that passed checkRule, so every key has its form.
 import { createHash } from 'node:crypto'
-import { LIMITS } from './closed.mjs'
-import { FAST_LITERAL, exactValues, parseCondition, tierOf } from './conditions.mjs'
+import { exactValues, isFastReplace, parseCondition, tierOf } from './conditions.mjs'
 import { actionKind, conditionsOf, normalizeRule, readsBody } from './validate.mjs'
 
 const has = Object.hasOwn
@@ -30,7 +29,7 @@ export function summaryOf(written) {
   const agents = match.harness === 'any' ? 'any agent' : match.harness.join(', ')
   const host = !has(match, 'host') ? 'any host' : typeof match.host === 'string' ? match.host : 'matching hosts'
   const others = Object.keys(match).filter((key) => key !== 'harness' && key !== 'host')
-  const when = others.length ? `, where ${others.join(', ')} also match` : ''
+  const when = others.length ? `, where ${others.join(', ')} also ${others.length === 1 ? 'matches' : 'match'}` : ''
   return `On ${SUBJECT[on]} between ${agents} and ${host}${when}: ${actions.map((a) => SAYS[actionKind(a)](a)).join(', then ')}.`
 }
 
@@ -49,12 +48,8 @@ function conditionTier(match) {
   return tier
 }
 
-// The fast path of 5.1's table: a literal that needs no escaping, because it works on the raw body or holds only the characters no JSON writes another way.
-const escapeFree = (text) => text === '' || FAST_LITERAL.test(text)
-function replaceTier(action) {
-  if (action.literal !== true || has(action, 'blocks') || Buffer.byteLength(action.replace) > LIMITS.literalBytes) return 2
-  return action.in === 'body' || (escapeFree(action.replace) && escapeFree(action.with)) ? 1 : 2
-}
+// Only `in: body` edits on the main thread: a hit in `in: text` runs in the rule process.
+const replaceTier = (action) => (isFastReplace(action) && action.in === 'body' ? 1 : 2)
 const ACTION_TIER = { replace: replaceTier, json: () => 2, blocks: () => 2, script: () => 2 }
 const actionTier = (action) => ACTION_TIER[actionKind(action)]?.(action) ?? 0
 

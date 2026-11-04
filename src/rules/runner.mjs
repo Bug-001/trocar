@@ -146,8 +146,9 @@ function readBody(size) {
   return body
 }
 
-// `recover`'s bulk stays out of the frame: its edits are the edits segment, its inline body the bytes the parent holds.
-function answerOf(id, { escalate, survivors, bytes, edits, recover, ...rest }, end) {
+// `recover`'s bulk stays out of the frame: its edits are the edits segment, its inline body the bytes the parent holds. So does what a reply and an injected event say:
+// the rule file allows them far more than a frame holds, and the parent has the rules, so `reply_at` and `inject_at` are enough.
+function answerOf(id, { escalate, survivors, bytes, edits, recover, reply, inject, ...rest }, end) {
   const answer = { id, ...rest, recover: null, body: null, edits: null }
   if (recover) answer.recover = { recover: recover.recover, base_sha256: recover.base_sha256, result_sha256: recover.result_sha256 }
   if (bytes) {

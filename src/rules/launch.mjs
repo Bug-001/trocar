@@ -6,6 +6,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { LIMITS, SKIP_WHY } from './closed.mjs'
 import { checkHeaderSet, headerChanges } from './headers.mjs'
+import { normalizeRule } from './validate.mjs'
 import { ANSWER_BYTES, encodeFrame, frameReader, HEAD_BYTES, NO_RULE, readProgress } from './slot.mjs'
 
 const MIB = 1024 * 1024
@@ -102,18 +103,25 @@ export function openOneShot({ script, rules, maxTaskMs = 2000, tmp = os.tmpdir()
     return out
   }
 
-  // A script can write on the channel too, so what makes an answer safe to use is checked here, not only where the answer was made. The size of a header set is not:
-  // that limit is each rule's, and rules add up.
+  // A script can write on the channel too, so what makes an answer safe to use is checked here, not only where the answer was made.
   function trusted({ why, skipped = [], headers }, unit) {
     const inClosedSet = [{ why }, ...skipped].every((skip) => skip.why === undefined || SKIP_WHY.includes(skip.why))
     const changes = headers === null || headers === undefined ? [] : headerChanges(unit.headers ?? [], headers)
-    return inClosedSet && checkHeaderSet(changes).every(({ at }) => at === null)
+    return inClosedSet && checkHeaderSet(changes, { before: unit.headers ?? [] }).length === 0
+  }
+
+  // What the action at `[rule, at]` says under `key`. A place that holds no such thing throws, which is a bad answer like any other.
+  function effectAt([rule, at], key) {
+    const value = normalizeRule(rules[rule]).do[at][key]
+    if (value === undefined) throw new RangeError(`no ${key} there`)
+    return value
   }
 
   function take({ body, edits, ...answer }, unit) {
     try {
       if ('died' in answer || !trusted(answer, unit)) throw new RangeError('an answer the rules could not have given')
-      return { ...answer, bytes: body ? slice(body) : null, edits: edits ? JSON.parse(`[${slice(edits)}]`) : [] }
+      const reply = answer.reply_at ? effectAt(answer.reply_at, 'reply') : null, inject = (answer.inject_at ?? []).map((at) => effectAt(at, 'inject'))
+      return { ...answer, reply, inject, bytes: body ? slice(body) : null, edits: edits ? JSON.parse(`[${slice(edits)}]`) : [] }
     } catch {
       runner.kill('bad-result')
       return { died: 'bad-result' }

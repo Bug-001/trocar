@@ -7,6 +7,7 @@ import { applyRules } from '../../src/rules/apply.mjs';
 import { full } from '../../src/rules/actions.mjs';
 import { compileRules } from '../../src/rules/compile.mjs';
 import { byteBudget, UNIT_BYTES } from '../../src/rules/budget.mjs';
+import { tierOfRule } from '../../src/rules/describe.mjs';
 import { applyEdits } from '../../src/rules/edits.mjs';
 
 const KIB = 1024, MIB = 1024 * KIB;
@@ -74,11 +75,108 @@ test('9, 63: wherever tier 1 finishes, its bytes, edits and every other field ar
     assert.deepEqual(outcome(first), outcome(second), `${body} ${JSON.stringify(list)}`);
     if (first.bytes) finished.add(list.flatMap((r) => r.do).find((a) => a.replace)?.in ?? 'text');
   }
-  assert.deepEqual([...finished].sort(), ['body', 'text'], 'tier 1 finished edits both ways');
+  assert.ok(finished.has('body'), 'tier 1 finished edits');
+});
+
+test('9, 63: bytes tier 2 refuses get the same answer at any size: a body or a replace on them is never settled by the search', async () => {
+  const notText = Buffer.concat([Buffer.from('{"a":"ALPHA"}'), Buffer.from([0xff])]);
+  const bodies = [
+    [notText, {}], [Buffer.from([0xff, 0x41]), {}],
+    ['data: ALPHA\ndata: two\n\n', { on: 'response', sse: true }], ['data: one\ndata: two\n\n', { on: 'response', sse: true }],
+    ['data: ALPHA\r\ndata: two\r\n\r\n', { on: 'response', sse: true }],
+  ];
+  const conditions = [{ body: 'ALPHA' }, { body: { not: 'ALPHA' } }, { body: 'ABSENT' }];
+  const actions = [{ drop: true }, { delay_ms: 5 }, { header: 'x-a', set: '1' }];
+  const replaces = [lit('ALPHA', 'BRAVO', { in: 'body' }), lit('ABSENT', 'BRAVO', { in: 'body' }), lit('ALPHA', 'BRAVO')];
+  const lists = [
+    ...conditions.flatMap((match) => actions.map((action) => rule('r', action, { match }))),
+    ...replaces.map((action) => rule('r', action)),
+  ].flatMap((one) => ['forward', 'drop'].map((on_error) => ({ ...one, on_error })));
+  for (const [body, more] of bodies) {
+    for (const one of lists) {
+      const label = `${String(body)} ${JSON.stringify(one)}`;
+      const unit = unitOf(body, more), compiled = rules(one);
+      const small = await tier1(unit, compiled), large = await tier1(unitOf(body, more), compiled, byteBudget(0));
+      assert.equal(small.escalate, true, label);
+      assert.equal(large.escalate, true, label);
+      assert.ok((await tier2(unit, compiled)).skipped.every(({ why }) => ['not-utf8', 'multi-line-event'].includes(why)), label);
+    }
+  }
+});
+
+test('one readable pass per unit, however many rules read its body', async () => {
+  const body = 'plain text with no hit', list = Array.from({ length: 5 }, (_, i) => rule(`r${i}`, { drop: true }, { match: { body: `ABSENT${i}` } }));
+  const spentOn = async (compiled) => { const budget = byteBudget(); await tier1(unitOf(body), compiled, budget); return budget.spent; };
+  const one = await spentOn(rules(list[0])), five = await spentOn(rules(...list));
+  assert.equal(five - one, 4 * (2 * body.length + 64), 'each further rule pays its search and its look for \\u, and its compare');
+});
+
+test('39: a literal past 256 bytes is the rule process\'s, however it is written: the main thread does not look at the body for it', async () => {
+  const body = 'a'.repeat(120 * KIB);
+  for (const size of [257, 512, 16 * KIB, 64 * KIB]) {
+    for (const needle of ['a'.repeat(size), `${'a'.repeat(size - 2)}ba`]) {
+      const budget = byteBudget();
+      const result = await tier1(unitOf(body), rules(rule('r', lit(needle, 'x', { in: 'body' }))), budget);
+      assert.equal(result.escalate, true, `${size} bytes`);
+      assert.equal(budget.spent, 0, `${size} bytes: no pass over the body`);
+    }
+  }
+  assert.equal((await tier1(unitOf('a'.repeat(KIB)), rules(rule('r', lit('a'.repeat(256), 'x', { in: 'body' }))))).escalate, false, '256 bytes is the fast path');
+});
+
+test('the tier `query rules` says is the tier that runs: one edit on a body it hits', async () => {
+  const body = '{"a":"ALPHA <b>"}';
+  const axes = [
+    ...['ALPHA', '<b>'].flatMap((replace) => ['', 'BRAVO', 'a"b'].flatMap((to) => [{}, { in: 'body' }, { in: 'text' }].map((where) => lit(replace, to, where)))),
+    lit('A'.repeat(257), 'x', { in: 'body' }), { replace: 'ALPHA', with: 'x', in: 'body' }, { replace: 'ALPHA', with: 'x' }, lit('ALPHA', 'x', { blocks: { role: 'user' } }),
+  ];
+  for (const action of axes) {
+    const one = rule('r', action, { match: { path: '/v1/messages' } });
+    const padded = action.replace.length > 256 ? `${body}${action.replace}` : body;
+    assert.equal((await tier1(unitOf(padded), rules(one))).escalate, tierOfRule(one) === 2, JSON.stringify(action));
+  }
+});
+
+test('5.1 §头的写法: the 8 KiB is the unit\'s, whatever rules and scripts add up to', async () => {
+  const big = (name, header, on_error = 'forward') => rule(name, { header, set: 'v'.repeat(7000) }, { on_error });
+  const three = rules(big('a', 'x-a'), big('b', 'x-b'), big('c', 'x-c'));
+  assert.equal((await tier1(unitOf('{}'), three)).escalate, true, 'tier 1 leaves it to the rule that can say why');
+  const after = await tier2(unitOf('{}'), three);
+  assert.deepEqual(names(after.skipped), [['b', 'rule-error'], ['c', 'rule-error']]);
+  assert.deepEqual(after.headers.map(([name]) => name), ['content-type', 'x-a']);
+  assert.deepEqual(after.hits, ['a', 'b', 'c']);
+
+  const drops = await tier2(unitOf('{}'), rules(big('a', 'x-a'), big('b', 'x-b', 'drop')));
+  assert.equal(drops.verdict, 'drop', 'on_error goes for a rule that would have grown the headers too far');
+
+  const undone = await tier2(unitOf('{}'), rules(big('a', 'x-a'), rule('b', [{ header: 'x-keep', set: '1' }, { header: 'x-b', set: 'v'.repeat(7000) }])));
+  assert.deepEqual(undone.headers.map(([name]) => name), ['content-type', 'x-a'], 'a rule that fails leaves none of its headers');
+
+  const script = async () => ({ headers: [['x-s', 'v'.repeat(7000)]] });
+  const scripted = await tier2(unitOf('{}'), rules(big('a', 'x-a'), rule('s', { script: '/abs/s.mjs' })), { script });
+  assert.deepEqual(names(scripted.skipped), [['s', 'rule-error']]);
+
+  const room = [['content-type', 'application/json'], ['x-old', 'v'.repeat(7000)]];
+  const freed = rules(rule('gone', { header: 'x-old', remove: true }), big('a', 'x-a'), big('b', 'x-b'));
+  for (const run of [tier1, tier2]) {
+    const result = await run(unitOf('{}', { headers: room }), freed);
+    assert.deepEqual(result.skipped, [], 'what a rule took away is room for the next one');
+    assert.equal(result.headers.length, 3);
+  }
+});
+
+test('12g: `in: text` on the main thread stops at the first hit: the search and nothing that parses', async () => {
+  for (const size of [4 * KIB, 16 * KIB, 48 * KIB]) {
+    const body = `{"a":"${'p'.repeat(size)} ALPHA"}`, budget = byteBudget();
+    const result = await tier1(unitOf(body), rules(rule('r', lit('ALPHA', 'BRAVO'))), budget);
+    assert.equal(result.escalate, true);
+    assert.equal(budget.spent, 2 * body.length, 'UTF-8 and the search');
+  }
 });
 
 test('9, 63: a rule tier 1 cannot finish hands every survivor to tier 2 and nothing else', async () => {
   const cases = [
+    [lit('ALPHA', 'B'), '{"a":"ALPHA"}'], // a hit in a string is escaped again, and the daemon parses no body
     [lit('ALPHA', 'B'), '{"ALPHA":1}'], // the hit is a key
     [lit('ALPHA', 'B'), '{"a":12,"b":"\\u0041"}'], // \u could spell it
     [lit('ALPHA', 'B'), '{"a":"\\nALPHA"}'], // a backslash just before the hit
@@ -311,8 +409,9 @@ test('AC-I: edits take the wire bytes back to the agent\'s bytes, each way, acro
   const body = `{"备注":"中文😀","a":"中文😀ALPHA","b":"ALPHA ALPHA","pad":"${'p'.repeat(600)}"}`;
   const edit = rule('r', lit('ALPHA', 'β'.repeat(3), { in: 'body' }));
   const fast = rule('f', lit('ALPHA', 'BR'));
+  const settled = async (unit, compiled) => { const first = await tier1(unit, compiled); return first.escalate ? tier2(unit, compiled) : first; };
   for (const list of [[edit], [fast], [fast, rule('g', lit('BR', 'ALPHA ', { in: 'body' }))]]) {
-    for (const run of [tier1, tier2]) {
+    for (const run of [settled, tier2]) {
       const up = await run(unitOf(body), rules(...list));
       assert.deepEqual(applyEdits(up.bytes, up.edits), Buffer.from(body));
       assert.equal(up.recover.recover, 'patch');

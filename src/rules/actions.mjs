@@ -7,7 +7,7 @@ import { ruleBlocksFor } from '../dissect/registry.mjs'
 import { sseEvents } from '../dissect/sse-spans.mjs'
 import { LIMITS } from './closed.mjs'
 import { parseCondition } from './conditions.mjs'
-import { checkHeaderSet } from './headers.mjs'
+import { setHeaders } from './headers.mjs'
 import { spansToSteps, applySteps } from './edits.mjs'
 import { actionKind, conditionsOf } from './validate.mjs'
 
@@ -164,7 +164,10 @@ function actReplace(action, state, env) {
   const text = needText(state.text)
   const edit = (value) => splice(value, hits(value, action))
   if (action.blocks) return commit(state, rewrite(chosenTextNodes(state, env, action.blocks), edit))
-  if (action.in === 'body') return commit(state, hits(text, action))
+  if (action.in === 'body') {
+    windowsOf(text, env.unit.sse) // no window is read, but an event of many data lines is left alone all the same
+    return commit(state, hits(text, action))
+  }
   commit(state, windowsOf(text, env.unit.sse).flatMap(([from, to]) => {
     const window = text.slice(from, to), json = scan(window)
     return shifted(json ? rewrite(json.strings, edit) : hits(window, action), from)
@@ -172,12 +175,7 @@ function actReplace(action, state, env) {
 }
 
 function actHeader(action, state) {
-  const value = action.remove ? null : action.set
-  if (checkHeaderSet([[action.header, value]], { before: state.headers }).length) throw fault('rule-error')
-  const same = ([name]) => name.toLowerCase() === action.header.toLowerCase()
-  if (value === null) { state.headers = state.headers.filter((h) => !same(h)); return }
-  const at = state.headers.findIndex(same)
-  state.headers = at < 0 ? [...state.headers, [action.header, value]] : state.headers.with(at, [state.headers[at][0], value])
+  if (!setHeaders(state, [[action.header, action.remove ? null : action.set]])) throw fault('rule-error')
 }
 
 const siblingsOf = (parent) => (parent.kind === 'array' ? parent.items : [...parent.props.values()].sort((a, b) => a.start - b.start))
