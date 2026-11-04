@@ -295,8 +295,8 @@ test('4.3 #55: analysis answers the same documents over the sidecar\'s columns a
 
 test('4.3 #55: s.rf reads back equal; one that is missing, of another type, short or past the rows loads no columns', async () => {
   const { home, id } = await written('http', ARRIVALS[0])
-  const { cols } = (await sessionState({ home, fs, writer: true }, id)).V
-  const parts = Object.fromEntries(dumpColumns(cols)), rf = parts['s.rf'], { rows } = cols
+  const { V: { cols }, st: { store: { rows } } } = await sessionState({ home, fs, writer: true }, id)
+  const parts = Object.fromEntries(dumpColumns(cols)), rf = parts['s.rf']
   assert.ok(rf.some((v) => v >= 0), 'a step names its comparison step')
   assert.deepEqual(loadColumns(rows, parts).rf, rf)
   const { 's.rf': _rf, ...missing } = parts, past = rf.slice()
