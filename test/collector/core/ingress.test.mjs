@@ -273,6 +273,20 @@ test('W13 an upstream that cannot be reached is a 502, never a 200 first; the ro
   assert.equal(L.engine.stats().ingress.unreachable, 1)
 })
 
+test('W13 refused and unreachable rows carry the wait: ts is when it began, ts + duration_ms the answer (4.6 §看得到)', T, async (t) => {
+  const failLater = () => { const s = hungSocket(); setTimeout(() => s.destroy(Object.assign(new Error('refused'), { code: 'ECONNREFUSED' })), 150); return s }
+  const late = net.createServer((c) => c.once('data', () => setTimeout(() => c.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n'), 150)))
+  await new Promise((r) => late.listen(0, '127.0.0.1', r)); t.after(() => late.close())
+  const U = await lab(t, { connectUpstream: failLater })
+  const P = await lab(t, { meta: { upstream: { kind: 'http', host: '127.0.0.1', port: late.address().port } } })
+  for (const [X, what] of [[U, 'unreachable'], [P, 'proxy-refused']]) {
+    const sent = Date.now(); const c = X.client(); c.write(connectHead('upstream.test:443')); await c.head(); const answered = Date.now(); await X.settled(1)
+    const [row] = X.flows
+    assert.ok(row.duration_ms >= 100, `${what}: the wait is on the row: ${JSON.stringify(row)}`)
+    assert.ok(Date.parse(row.ts) >= sent - 5 && Date.parse(row.ts) + row.duration_ms <= answered + 5, `${what}: ts is when the wait began: ${row.ts} vs sent ${new Date(sent).toISOString()}`)
+  }
+})
+
 test('W73 upstream-unreachable blames the door\'s upstream only when the upstream proxy itself fails before a target is named (dial, SOCKS5 method / auth stage) or its kind cannot be dialled; a dead target host, direct or after the proxy got the request naming it, stays on its row', T, async (t) => {
   const deadPort = () => new Promise((r) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => r(p)) }) })
   const listen = async (onConn) => { const s = net.createServer((c) => { c.on('error', () => {}); onConn(c) }); await new Promise((r) => s.listen(0, '127.0.0.1', r)); t.after(() => s.close()); return s.address().port }
