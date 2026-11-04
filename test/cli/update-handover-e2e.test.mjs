@@ -27,7 +27,7 @@ import { plistFilePath } from '../../src/off/darwin.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
 import { runUpdateCli } from '../../src/cli/update.mjs'
 import { EXIT } from '../../src/cli/schema.mjs'
-import { agentOf, flowsOf, freePort, reqOf, through, win32Io } from '../helpers/model-io.mjs'
+import { agentOf, flowsOf, freePort, reqOf, startAfterNow, through, win32Io } from '../helpers/model-io.mjs'
 import { controlEndpointFor } from '../../src/off/control-client.mjs'
 import { fakeIo } from './fixtures/on-ctx.mjs'
 import { codeId } from '../../src/version.mjs'
@@ -90,6 +90,7 @@ test(`${platform}: update replaces a daemon holding ${TITLE[kind]}`, { skip: awa
     let goneAt = null
     const exited = new Promise((resolve) => child.on('exit', (code, signal) => { goneAt = Date.now(); resolve({ code, signal }) }))
     await within(Promise.race([until(() => /trocar collector:/.test(out), 30_000, 'the readiness line'), exited.then((r) => { throw new Error(`the old daemon exited before it was ready: ${JSON.stringify(r)} ${err}`) })]), 30_000, `the readiness line (err=${err})`)
+    a.start = startAfterNow(); publish() // the child installed the carrier before its readiness line, however long its start took under load: the agent starts after it (4.11 P11 rule 3)
     const rootPem = fs.readFileSync(path.join(w.dir, 'ca', 'trocar-ca.pem'), 'utf8')
     fs.writeFileSync(bundle, rootPem + upCa.certPem)
 
