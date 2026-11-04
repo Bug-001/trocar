@@ -6,11 +6,11 @@ const { permission } = process
 // A Node that would quietly give more than the flags asked for gets no rules at all.
 if (!permission || permission.has('child') || permission.has('fs.write', fileURLToPath(new URL('../..', import.meta.url))) || !capMiB) process.exit(78)
 
-const [{ Buffer }, { once }, fs, net, { pathToFileURL }, util, { Worker }, { full, RuleFault }, { applyRules }, { byteBudget }, { LIMITS }, { compileRules }, slots] = await Promise.all([
-  import('node:buffer'), import('node:events'), import('node:fs'), import('node:net'), import('node:url'), import('node:util'), import('node:worker_threads'),
+const [{ Buffer }, { once }, fs, net, { pathToFileURL }, util, threads, modules, os, { full, RuleFault }, { applyRules }, { byteBudget }, { LIMITS }, { compileRules }, slots] = await Promise.all([
+  import('node:buffer'), import('node:events'), import('node:fs'), import('node:net'), import('node:url'), import('node:util'), import('node:worker_threads'), import('node:module'), import('node:os'),
   import('./actions.mjs'), import('./apply.mjs'), import('./budget.mjs'), import('./closed.mjs'), import('./compile.mjs'), import('./slot.mjs'),
 ])
-const { ANSWER_BYTES, die, editsSegment, encodeFrame, frameReader, HEAD_BYTES, NO_RULE, writeProgress } = slots
+const { ANSWER_BYTES, editsSegment, encodeFrame, frameReader, HEAD_BYTES, NO_RULE, writeProgress } = slots
 
 const MIB = 1024 * 1024
 const NS_PER_MS = 1_000_000n
@@ -25,6 +25,7 @@ const slot = fs.openSync(slotPath, 'r+')
 const shared = new SharedArrayBuffer(16)
 const deadline = new BigInt64Array(shared, 0, 1)
 const wake = new Int32Array(shared, 8, 1)
+const overMemory = new Int32Array(shared, 12, 1)
 const setClock = (at) => {
   Atomics.store(deadline, 0, at)
   Atomics.add(wake, 0, 1)
@@ -32,26 +33,33 @@ const setClock = (at) => {
 }
 const arm = (ms) => setClock(process.hrtime.bigint() + BigInt(Math.max(0, Math.ceil(ms))) * NS_PER_MS)
 
-const watchdog = new Worker(new URL('./watchdog.mjs', import.meta.url), { workerData: { shared, fd: slot, capBytes, ppid: process.ppid } })
+const watchdog = new threads.Worker(new URL('./watchdog.mjs', import.meta.url), { workerData: { shared, fd: slot, capBytes, ppid: process.ppid } })
 watchdog.once('exit', () => process.exit(1)) // no rule runs unwatched
 await once(watchdog, 'online')
+
+// The permission model has no say over signals, and a thread has a `process` of its own. Only the watchdog needs either and it is up, so the door closes behind it, before any rule or
+// script loads (5.1 §隔离). syncBuiltinESMExports carries the change to what `import` hands out. A hooks thread is a thread too, and renicing the daemon is a signal by another name.
+const refused = (what) => function refuse() { throw new Error(`a rule process has no ${what}`) }
+for (const name of ['kill', '_kill', '_debugProcess', '_debugEnd']) delete process[name]
+threads.default.Worker = refused('threads')
+modules.default.register = refused('threads')
+os.default.setPriority = refused('say over other processes')
+modules.syncBuiltinESMExports()
 
 // RSS misses pages macOS compressed and Windows trimmed. A stuck main thread stops this one, but then what it allocates is in the RSS.
 setInterval(() => {
   const { heapUsed, external, arrayBuffers } = process.memoryUsage()
-  if (heapUsed + external + arrayBuffers > capBytes) die(slot, 'memory')
+  if (heapUsed + external + arrayBuffers > capBytes) {
+    Atomics.store(overMemory, 0, 1) // the watchdog kills: this thread no longer can
+    Atomics.add(wake, 0, 1)
+    Atomics.notify(wake, 0)
+  }
 }, 1000).unref()
 
 let printed = ''
 const print = (...args) => { printed = `${printed}${util.format(...args)}\n`.slice(0, CONSOLE_BYTES) }
 for (const name of ['log', 'info', 'warn', 'error', 'debug']) console[name] = print
 
-// The permission model has no say over signals, and a script holds the agent's pid. This stops the plain call on this thread; a thread the script starts has a `process` of its own.
-const { pid: self, _kill: signal } = process
-process._kill = (target, name) => {
-  if (target !== self) throw new Error('a rule process signals nothing but itself')
-  return signal.call(process, target, name)
-}
 // Counted as the frame carries it: 16 KiB of control characters is 96 KiB of escapes.
 function consoleText() {
   let text = printed

@@ -36,8 +36,7 @@ const ROWS = [
   { name: 'process.exit()', why: 'crashed', body: 'process.exit()' },
   { name: 'process.exit(78)', why: 'crashed', body: 'process.exit(78)' },
   { name: 'process.abort()', why: 'crashed', body: 'process.abort()' },
-  { name: 'a SIGSEGV to itself', why: 'crashed', body: 'process.kill(process.pid, "SIGSEGV"); await new Promise((r) => setTimeout(r, 1000))', posix: 'Windows has no SIGSEGV to send' },
-  { name: 'a SIGSTOP to itself, watchdog and all', why: 'timeout', body: 'process.kill(process.pid, "SIGSTOP"); await new Promise((r) => setTimeout(r, 1000))', maxTaskMs: 300, posix: 'Windows has no SIGSTOP' },
+  { name: 'frozen from outside, watchdog and all', why: 'timeout', body: 'return "late"', freeze: true, maxTaskMs: 300, posix: 'Windows has no SIGSTOP' },
   { name: 'abort in a top-level setTimeout', why: 'crashed', top: 'const tick = () => (armed() ? process.abort() : setTimeout(tick, 10)); setTimeout(tick, 10)', body: 'await new Promise((r) => setTimeout(r, 1500))' },
   { name: 'a throw in a setInterval', why: 'crashed', top: 'setInterval(() => { if (armed()) throw new Error("boom") }, 10)', body: 'await new Promise((r) => setTimeout(r, 1500))' },
   { name: 'spawn', why: 'rule-error', body: 'cp.spawn(process.execPath, ["-e", WRITE_MARK], { stdio: "ignore" }); await new Promise((r) => setTimeout(r, 200))' },
@@ -116,6 +115,7 @@ describe('12e: what a script does to its process', { concurrency: 8 }, () => {
         assert.ok(pid > 0, 'a healthy script answers first');
 
         fs.writeFileSync(path.join(dir, 'die'), '');
+        if (row.freeze) process.kill(pid, 'SIGSTOP');
         const answer = await runner.run(unit());
         assert.equal(whyOf(answer), row.why);
         assert.ok(CLOSED.has(whyOf(answer)));
