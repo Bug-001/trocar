@@ -7,14 +7,15 @@ import { runCli } from '../../src/cli/main.mjs'
 import { COMMANDS } from '../../src/cli/commands.mjs'
 import { optionsOf } from '../../src/cli/args.mjs'
 import { SCHEMA_VERSION, EXIT } from '../../src/cli/schema.mjs'
+import { printJson, errorDoc } from '../../src/cli/json.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { sandbox, installedViaCli, fakeIo } from './fixtures/dispatch-ctx.mjs'
 
 const ROWS = COMMANDS.filter((c) => optionsOf(c).has('--json')).map((c) => c.name)
 
 /** `argv` in a world of its own where nothing is installed. */
-async function fresh(argv, { tty = false } = {}) {
-  const c = sandbox({ install: false }).ctx({ io: fakeIo({ tty }), deps: { root: tmpDir('trocar-root-') } })
+async function fresh(argv, { tty = false, commands } = {}) {
+  const c = sandbox({ install: false }).ctx({ io: fakeIo({ tty }), deps: { root: tmpDir('trocar-root-'), ...(commands ? { commands } : {}) } })
   const exit = await runCli(argv, c)
   return { exit, out: c.io.stdoutText(), err: c.io.stderrText() }
 }
@@ -35,13 +36,31 @@ test('V120: into a pipe every --json command prints one line holding one documen
   }
 })
 
-test('V120: a positional no command knows still gets one document on one line, a usage exit is a `usage` error, and a refusal exits as the text mode does', async () => {
+test('V120: a positional no command knows is refused with one `usage` document on one line, and the exit of the text mode', async () => {
   for (const name of ROWS) {
     const { exit, out, err } = await fresh([name, 'no-such-name', '--json'])
     const doc = oneLine(out, name)
     assert.equal(err, '', name)
-    if (exit === EXIT.usage) { assert.equal(doc.ok, false, name); assert.equal(doc.error.code, 'usage', name) }
-    if (!doc.ok) assert.equal(exit, (await fresh([name, 'no-such-name'])).exit, `${name}: the same exit as without --json`)
+    assert.equal(doc.ok, false, name); assert.equal(doc.error.code, 'usage', name)
+    assert.equal(exit, (await fresh([name, 'no-such-name'])).exit, `${name}: the same exit as without --json`)
+  }
+})
+
+test('V74: a command that only says why it failed answers with a `failed` document holding those lines, under its own exit', async () => {
+  for (const name of ROWS) {
+    const spy = async (_argv, ctx) => { ctx.io.err('first'); ctx.io.err('second'); return EXIT.incomplete }
+    const { exit, out, err } = await fresh([name, '--json'], { commands: { [name]: spy } })
+    assert.equal(exit, EXIT.incomplete, name); assert.equal(err, '', name)
+    assert.deepEqual(oneLine(out, name), JSON.parse(JSON.stringify(errorDoc(name, 'failed', 'first\nsecond'))), name)
+  }
+})
+
+test('V120: a command that says something on stderr and prints its document leaves that one document and nothing else', async () => {
+  for (const name of ROWS) {
+    const doc = errorDoc(name, 'its-own', 'its own words')
+    const spy = async (_argv, ctx) => { ctx.io.err('on the way'); printJson(ctx.io, doc); return EXIT.incomplete }
+    const { out, err } = await fresh([name, '--json'], { commands: { [name]: spy } })
+    assert.equal(err, '', name); assert.deepEqual(oneLine(out, name), JSON.parse(JSON.stringify(doc)), name)
   }
 })
 

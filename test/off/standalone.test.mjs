@@ -93,6 +93,13 @@ test('V120: the copy, refused under --json, answers with one `usage` document on
   assert.equal(JSON.parse(r.stdout).error.code, 'usage')
 })
 
+test('1.6 §1.2: the document the copy makes of a refusal hides a URL password too', async () => {
+  const pw = 'pw-not-a-real-secret-41f9'
+  const r = await runWritten(await brokenTrocar(), [`http://u:${pw}@proxy.example:8080`, '--json'])
+  assert.equal(r.status, 2); assert.equal(r.stderr, '')
+  assert.ok(!r.stdout.includes(pw), r.stdout); assert.match(JSON.parse(r.stdout).error.message, /\*\*\*@proxy\.example/)
+})
+
 test('V2: the text a person reads is the same too, and a per-harness off leaves the other harness alone', async () => {
   const a = await brokenTrocar(), b = await brokenTrocar()
   const io = fakeIo()
