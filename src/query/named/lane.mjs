@@ -12,7 +12,7 @@
 // entries an answer owes go in key order into the room its page leaves; the rest are named by `ledger_next`, a cursor `--ledger`
 // goes on from (3.5 `resources` 与 `seen`).
 import { sessionState, markOn, files, version as sessionVersion } from './session.mjs';
-import { listOf, laneLedger, ledgerWeight, LEDGER_BYTES } from '../../view/reduce.mjs';
+import { listOf, taxOf, laneLedger, ledgerWeight, LEDGER_BYTES } from '../../view/reduce.mjs';
 import { lru } from '../projection.mjs';
 import { inheritedRender } from '../../view/render-kind.mjs';
 import { PAGE_BYTES, laneOf, placeIn } from '../session-doc.mjs';
@@ -151,7 +151,7 @@ export function laneStepper(st, key, uses = lru(DEF_BYTES)) {
     for (const op of ops) if (op[0] === 1) for (let k = 1; k < op.length; k++) { const a = attrOf(C.attrs[op[k]]); if (a) attrs[op[k]] = a; op[k] = C.bids[op[k]]; }
     return { rid: rids[i], parent: prev < 0 ? null : rids[prev], ops, reply: replyAt(i), attrs,
       detail: { norm: { stop_reason: x.stop_reason ?? null, usage: (x.facts ? x.facts.usage : x.nu) ?? null }, respRefs: x.respRefs || [],
-        nonBlockKeys: x.nonBlockKeys || [], extraMessages: x.extraMessages || [], wire: x.wire ?? null } };
+        nonBlockKeys: x.nonBlockKeys || [], extraMessages: x.extraMessages || [], wire: x.wire ?? null, tax: taxOf(store, rids[i]) } };
   }
   // release(keep): let go of every list but step `keep`'s, of the lines read and of the wire definitions (a render walks a span)
   const release = (keep) => { for (const k of lists.keys()) if (k !== keep) lists.delete(k); lines.clear(); wires.clear(); };
