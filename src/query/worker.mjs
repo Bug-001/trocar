@@ -47,7 +47,8 @@ import { answer } from './answers.mjs'
 import { lowerPriority } from '../low-priority.mjs'
 import { extendSession, indexed, openSessions, saveIndexes, sealParts } from './named/session.mjs'
 import { indexRows, sessionGroups } from './rows.mjs'
-import { gcProjections, posCmp, sessionDir } from './projection.mjs'
+import { dirUse, gcProjections, posCmp, projectionStale, sessionDir } from './projection.mjs'
+import { foldStale } from './fold-log.mjs'
 import { hasHead, headFile, readHead, skipFile, tier0Doc, writeHead, writeSkip } from './ctx-files.mjs'
 import { saveTitles, titleOf } from './titles.mjs'
 
@@ -136,6 +137,8 @@ let sweepDue = true
 // files existed, the flat layout's moved in) are folded in idle slices, each to its end, which writes its head, packs and tails: the
 // answered and followed first, then the most recently active. Made once per sweep, each session taken once, so it ends. One that ends
 // (folded to its end, or stopped) with no tail file is marked with its last member (upgrade.skip) and not queued again until that changes.
+// The re-read group goes first (3.5 §访问模式「版本变更的重读」): a `reread` marker, or a projection or fold log of another version by its
+// first line, whatever else the directory holds: within it the newest directory first, which is the most recently opened.
 let upgrade = null, up = null
 async function upgradeQueue(ctx) {
   const list = []
@@ -144,10 +147,13 @@ async function upgradeQueue(ctx) {
     try { names = nodeFs.readdirSync(sessionDir(home, id)) } catch { /* no directory: the flat layout's fold log still counts */ }
     const flat = nodeFs.existsSync(`${sessionDir(home, id)}.fold.ndjson`) // moved in when the fold opens it (4.3 §4 迁移)
     const last = String(ms[ms.length - 1].id)
+    const first = answered.has(id) || follow.has(id)
+    await ease() // first lines of every session: a request is read between two
+    if (names.length && (names.includes('reread') || projectionStale({ home, key: id }) || foldStale({ home, key: id }))) { list.push([true, first, dirUse(sessionDir(home, id)).t, last, id]); continue }
     if (names.includes('upgrade.skip')) { try { if (nodeFs.readFileSync(skipFile(home, id), 'utf8') === last) continue } catch { /* gone: queued */ } }
-    if (!names.includes('open.main.ndjson') && (flat || names.some((f) => f.startsWith('fold.')))) list.push([answered.has(id) || follow.has(id), last, id])
+    if (!names.includes('open.main.ndjson') && (flat || names.some((f) => f.startsWith('fold.')))) list.push([false, first, 0, last, id])
   }
-  return list.sort((a, b) => (b[0] - a[0]) || posCmp(b[1], a[1])).map((x) => [x[2], x[1]])
+  return list.sort((a, b) => (b[0] - a[0]) || (b[1] - a[1]) || (b[2] - a[2]) || posCmp(b[3], a[3])).map((x) => [x[4], x[3]])
 }
 const answered = new Set() // the sessions this worker answered: never collected under it
 const follow = new Set() // the sessions the daemon kicked or followed (3.5 §后台抽取与归约): folded in turn from their checkpoints
@@ -225,7 +231,10 @@ async function background() {
     } finally { sweeping = false }
     return kick()
   }
-  if (upgrade == null) upgrade = await upgradeQueue(ctx)
+  if (upgrade == null) {
+    sweeping = true
+    try { upgrade = await upgradeQueue(ctx) } finally { sweeping = false }
+  }
   if (upgrade.length) {
     if (busy || notIdle()) return
     up = upgrade.shift(); target = up[0]

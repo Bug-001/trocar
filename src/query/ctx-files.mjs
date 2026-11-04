@@ -95,15 +95,18 @@ export function tier0Doc(id, members, errors, title = null) {
   });
 }
 
+/** headDone(d, members) → the members head `d` has done: its `pending.done`, else the members at or below its mark. */
+export function headDone(d, members) {
+  const rid = d.mark == null ? null : String(d.mark).replace(/@.*$/, ''); // a cut's mark is `rid@cut` (named/session.mjs markOn)
+  return d.pending ? d.pending.done : rid == null ? 0 : members.findIndex((r) => String(r.id) === rid) + 1;
+}
 /** pendingHead(home, id, members, errors, pending, fs, title) → the head on disk (else the tier-0 head of `members`, saying `title`) with `pending` put in,
  *  the rest as it was written (3.5 §会话读「`session --head`」 pending): `pending(d, done)` → the pending of head `d`, `done` the
  *  members at or below its mark. A stopped fold's (`stopped`) and the progress of a backlog no answer file is written in. */
 export function pendingHead(home, id, members, errors, pending, fs = nodeFs, title = null) {
   let d = readHead(home, id, fs);
   if (!d || d.v !== CTX_V) d = tier0Doc(id, members, errors, title);
-  const rid = d.mark == null ? null : String(d.mark).replace(/@.*$/, ''); // a cut's mark is `rid@cut` (named/session.mjs markOn)
-  const done = d.pending ? d.pending.done : rid == null ? 0 : members.findIndex((r) => String(r.id) === rid) + 1;
-  return { ...d, pending: pending(d, done) };
+  return { ...d, pending: pending(d, headDone(d, members)) };
 }
 
 /** writeHead(home, id, doc, fs) → whether the file changed: the gzip of the doc's compact JSON (putFile) under the name its `pending`
@@ -119,6 +122,12 @@ export function writeHead(home, id, doc, fs = nodeFs) {
  *  was `rid`, was folded to its end (or stopped) and still has no tail file. */
 export const skipFile = (home, id) => path.join(sessionDir(home, id), 'upgrade.skip');
 export const writeSkip = (home, id, rid, fs = nodeFs) => putFile(fs, skipFile(home, id), Buffer.from(rid, 'utf8'));
+/** The re-read marker (3.5 §访问模式「版本变更的重读」, 4.3 §4「目录」): an empty file, there while the session's answer files are the last
+ *  version's whole answer and the fold that replaces them is not at its end. */
+export const rereadFile = (home, id) => path.join(sessionDir(home, id), 'reread');
+export const hasReread = (home, id, fs = nodeFs) => fs.existsSync(rereadFile(home, id));
+export const markReread = (home, id, fs = nodeFs) => putFile(fs, rereadFile(home, id), Buffer.alloc(0));
+export function clearReread(home, id, fs = nodeFs) { try { fs.unlinkSync(rereadFile(home, id)); } catch (e) { if (e.code !== 'ENOENT') throw e; } }
 // A whole file written to a temporary file and renamed over (EPERM / EBUSY, a reader holding it on Windows: tried 3 times).
 export function putFile(fs, file, bytes) {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });

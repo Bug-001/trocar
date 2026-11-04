@@ -418,6 +418,25 @@ export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = 
   };
 }
 
+/** staleHeader({home, fs, key, name, v}) → whether the session's line file `name` holds a first line that is not of version `v` (one
+ *  that does not parse, or a file that is not one line file, is not): the first line alone, the file not opened as a store. No file:
+ *  false. projectionStale({home, fs, key}): the projection's (3.5 §访问模式「版本变更的重读」). */
+export function staleHeader({ home = trocarHome(), fs = nodeFs, key, name, v }) {
+  const lf = lineFile({ fs, base: path.join(sessionDir(home, key), name), write: false });
+  try {
+    for (const l of lf.scan(0)) { const o = parse(l.text); return !o || o.v !== v; }
+    return lf.unreadable != null;
+  } finally { lf.close(); }
+}
+export const projectionStale = (o) => staleHeader({ ...o, name: 'extract', v: PROJ_V });
+/** dirUse(dir, fs) → {size, t}: the sum of a session directory's file sizes and the newest of their mtimes (opening touches the
+ *  projection: 4.3 §4 回收, the re-read queue's order too). */
+export function dirUse(dir, fs = nodeFs) {
+  const u = { size: 0, t: 0 };
+  try { for (const f of fs.readdirSync(dir)) { const st = fs.statSync(path.join(dir, f)); u.size += st.size; u.t = Math.max(u.t, st.mtimeMs); } } catch { /* gone meanwhile */ }
+  return u;
+}
+
 /** gcProjections({home, fs, liveKeys, keepKeys, capBytes, capOnly}) → {deleted: [path]}: by session directory (4.3 §4 回收; its size = the
  *  sum of its files): drops the directories of sessions not in `liveKeys` (not when `capOnly`: `liveKeys` may miss some), then the least recently opened (the newest mtime of its
  *  files: opening touches the projection) until the total is within `capBytes` (512 MiB), and the flat layout's files of sessions
@@ -437,8 +456,7 @@ export function gcProjections({ home = trocarHome(), fs = nodeFs, liveKeys, keep
     if (!h || keep.has(h)) continue;
     if (m) { if (!live.has(h) && !capOnly) drop(p); continue; }
     if (!live.has(h) && !capOnly) { drop(p, { recursive: true }); continue; }
-    const u = { p, size: 0, t: 0 };
-    try { for (const f of fs.readdirSync(p)) { const st = fs.statSync(path.join(p, f)); u.size += st.size; u.t = Math.max(u.t, st.mtimeMs); } } catch { /* gone meanwhile */ }
+    const u = { p, ...dirUse(p, fs) };
     total += u.size; kept.push(u);
   }
   for (const u of kept.sort((a, b) => a.t - b.t)) {

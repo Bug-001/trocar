@@ -25,7 +25,7 @@ import nodeFs from 'node:fs';
 import path from 'node:path';
 import { trocarHome } from '../paths.mjs';
 import { lineFile } from './line-file.mjs';
-import { sessionDir, lineIndex, lru, HEAP_PER_LINE_BYTE } from './projection.mjs';
+import { sessionDir, lineIndex, lru, staleHeader, HEAP_PER_LINE_BYTE } from './projection.mjs';
 
 export const FOLD_V = 1;
 /** The heap the read cache keeps of parsed lines (two times it): a K term of the reduction's bound (3.5 §内存有界). */
@@ -35,6 +35,8 @@ const KINDS = new Set(['c', 'g', 'l', 'lg', 'i', 'x', 'f']);
 
 /** The fold log's plain file from byte 0: all its lines while none is sealed (line-file.mjs). */
 export const foldLogFile = (home, key) => path.join(sessionDir(home, key), 'fold.0.ndjson');
+/** foldStale({home, fs, key}) → whether the fold log's first line is of another FOLD_V (projection.mjs staleHeader). */
+export const foldStale = (o) => staleHeader({ ...o, name: 'fold', v: FOLD_V });
 
 // lineIndex() whose slots are also linked in the order of their latest offset, the newest last (a set moves its slot there; a load
 // links them by offset): since(off) → the keys whose latest offset is past `off`, walked back from the newest, O(what it returns)
