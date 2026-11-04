@@ -232,7 +232,8 @@ catalog, `src/cli/words.mjs`, a sentence for every reason).
 Per call, on one board: **context replay** (the full assembled request, block by block, plus the raw
 wire body) · **cache overlay** (real `cache_read` / `cache_write` counts, the marked break, its cause
 and fix hint) · **reconstructed streamed reply** with usage and an estimated cost · **resource
-lifecycle** — which files entered context, when, via which tool *(Claude Code only — see Limits)*.
+lifecycle** — which files entered context, when, via which tool *(Claude Code only — see Limits)*; a
+file printed by a shell command (`cat`, `sed -n`, `grep`, `jq` and the like) counts as read, one entry per file.
 
 Cost is a local, editable estimate in `~/.trocar/pricing.json` (or the file `TROCAR_PRICING` names;
 `trocar query pricing` prints the table in effect and says where it came from); providers return
@@ -315,11 +316,13 @@ writes it and answers.
 `trocar query session --id <id>` gives the newest page of call rows (at most 1,000 rows and 1 MB) with every lane's
 header; `--before <call>` gives the page just before that call, `--limit <n>` makes pages smaller, and
 `--since <mark>` gives only what changed since the `mark` of an earlier answer, and `--head` gives the session's summary,
-the same bytes the board opens from.
+the same bytes the board opens from. A lane header's `parts` is the lane's number of parts, and each entry of `chapters`
+in `--head` gives its number of prompts as `prompts`.
 `trocar query lane --id <id> --lane <key>` gives one lane's steps: the last page by default, `--from <call>` the
 steps after that call, `--to <call>` the page that ends just before it. Each step is its block list as changes
 against the step before, with the definitions of the blocks the page brings, the files the lane has seen and
-the resources it holds. When those do not all fit in the 1 MB page beside the steps, the answer's `ledger_next`
+the resources it holds; a compaction is one `compaction` event, and the step where its history was replaced a
+`compaction-landed` event with `from` and `to`. When those do not all fit in the 1 MB page beside the steps, the answer's `ledger_next`
 names the rest: `--ledger <ledger_next>` gives the next part, until `ledger_next` is null. `--pack <n>.main` (or
 `.rest`) gives the board's file for the session's n-th settled group of 512 calls (counting from 0), and `--tail main` (or `rest`) the file
 of the part still growing. `trocar query block --ref <ref>` opens one block's verbatim bytes; give `--ref` more than
