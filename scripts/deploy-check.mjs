@@ -5,6 +5,9 @@
 //
 //   node scripts/deploy-check.mjs [--home ~/.trocar] [--out <dir>] [--no-bump] [--seconds 90] [--full] [--keep]
 //
+// A pre-read: `--no-bump --full --keep` leaves a side index at this code's versions, and a run that passes prints how to put it in place of the
+// real one with the daemon stopped, so an update meets no re-read. This script never runs that itself.
+//
 // The real home is only read, and that is checked: raw/ is listed before and after, and a sealed segment that moved, an open one that shrank or
 // a segment that went is a refusal (exit 2, naming the file). A side home in <out> links raw/ to the real one and holds a clone of its index/,
 // every link followed, so whatever the worker writes lands there; it is removed at exit unless --keep. This checkout's code runs over it from a
@@ -65,7 +68,7 @@ function bumped() {
 }
 const code = o['no-bump'] ? checkout : bumped()
 const from = (file) => import(path.join(code, file)) // anything versioned is read by the code under check, never by this checkout
-const { clone, p95, rawDiff, rawList, requestsByPath, rereading, segmentCheck, verdict } = await from('scripts/deploy-check-lib.mjs')
+const { clone, p95, preRead, rawDiff, rawList, requestsByPath, rereading, segmentCheck, verdict } = await from('scripts/deploy-check-lib.mjs')
 const { withBoard } = await from('test/web-v2/browser/harness.mjs')
 const { NO_SESSIONS } = await from('web/legacy/labels/library.mjs')
 const { storedFile } = await from('src/query/stored.mjs')
@@ -209,4 +212,9 @@ if (!o.keep) { fs.rmSync(userHome, { recursive: true, force: true }); if (code !
 for (const f of failures) console.log(`FAIL ${f}`)
 for (const r of moved.refused) console.log(`REFUSED ${r.file}: it was ${JSON.stringify(r.was)}, it is ${JSON.stringify(r.now)}`)
 console.log(`${moved.ok ? (pass ? 'PASS' : 'FAIL') : 'REFUSED'} · ${out}`)
+if (moved.ok && pass && o['no-bump'] && o.full && o.keep) {
+  const { version } = JSON.parse(fs.readFileSync(path.join(code, 'package.json'), 'utf8')), before = `index.before-${version}`
+  console.log(`\nA side index of this code's versions is ready. With the daemon stopped, to put it in place:\n\n${preRead({ real, side: path.join(home, 'index'), before })}\n`)
+  console.log(`Then check status, the biggest session's head and the growing segments; ${path.join(real, before)} is yours to remove by hand after that.`)
+}
 process.exit(moved.ok ? (pass ? 0 : 1) : 2)

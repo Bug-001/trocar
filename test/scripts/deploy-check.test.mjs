@@ -7,7 +7,7 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { tmpDir } from '../helpers/tmp.mjs'
-import { rawDiff, rawList, segmentCheck, verdict } from '../../scripts/deploy-check-lib.mjs'
+import { preRead, rawDiff, rawList, segmentCheck, verdict } from '../../scripts/deploy-check-lib.mjs'
 
 const SCRIPT = fileURLToPath(new URL('../../scripts/deploy-check.mjs', import.meta.url))
 const A = '20261101T080000Z', B = '20261101T090000Z'
@@ -87,6 +87,26 @@ test('verdict: a line against the idle p95 holds at idle * times + plus, not pas
   assert.equal(verdict(lines, { busyP95: 11, idleP95: 0 }, []).pass, false)
   assert.equal(verdict(lines, { busyP95: 1 }, []).pass, false, 'no idle value')
   assert.equal(verdict(lines, { idleP95: 100 }, []).pass, false, 'no value under the re-read')
+})
+
+test('preRead: what it prints swaps the index with the daemon gone, keeps the old one, and touches nothing while the lock is there', () => {
+  const dir = tmpDir("trocar-deploy it's-"), real = path.join(dir, '.trocar'), side = path.join(dir, 'side', 'index')
+  fs.mkdirSync(path.join(real, 'collector'), { recursive: true }); fs.mkdirSync(path.join(real, 'index')); fs.mkdirSync(side, { recursive: true })
+  fs.writeFileSync(path.join(real, 'index', 'x.json'), 'old'); fs.writeFileSync(path.join(side, 'x.json'), 'new')
+  const lock = path.join(real, 'collector', 'lock'), script = preRead({ real, side, before: 'index.before-1' })
+  const swap = () => spawnSync('sh', ['-c', script], { encoding: 'utf8' }).status
+  const read = (...p) => fs.readFileSync(path.join(real, ...p), 'utf8')
+
+  fs.writeFileSync(lock, '{}')
+  assert.equal(swap(), 1)
+  assert.equal(read('index', 'x.json'), 'old')
+  assert.ok(fs.existsSync(side))
+
+  fs.rmSync(lock)
+  assert.equal(swap(), 0)
+  assert.equal(read('index', 'x.json'), 'new')
+  assert.equal(read('index.before-1', 'x.json'), 'old')
+  assert.ok(!fs.existsSync(side))
 })
 
 test('deploy-check: a home with no raw/ is refused with exit 2, before anything is made', () => {
