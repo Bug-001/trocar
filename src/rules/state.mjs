@@ -5,6 +5,7 @@
 // { <why>: n }, last_not_applied, resting_until, load_failed, process_gone, limit_used } } }. `changes` and `not_applied_by` are the rule's whole account;
 // the rest is about one `rules enable`, the one `armed_key` names, so what an earlier enable left does not count against the rule.
 import nodeFs from 'node:fs'
+import { readSmall } from '../off/fsutil.mjs'
 import { readStateFile } from '../off/state.mjs'
 import { stateFileIn } from '../off/paths.mjs'
 import { rulesState, rulesStats } from '../paths.mjs'
@@ -70,7 +71,7 @@ export function ruleState(rule, facts) {
 // A JSON object from a file, null when there is no file. Throws what could not be read.
 function readObject(fs, file) {
   let text
-  try { text = fs.readFileSync(file, 'utf8') } catch (e) {
+  try { text = readSmall(fs, file) } catch (e) {
     if (e.code === 'ENOENT') return null
     throw e
   }
@@ -108,11 +109,18 @@ function readSwitches(fs, home, errors) {
   }
 }
 
+// A number that is there and is no count is a file that cannot be read: this one remembers a `rules off`, so 0 would let the rules back.
+function stopCount(doc, key) {
+  if (!has(doc, key)) return 0
+  if (count(doc[key]) !== doc[key]) throw new Error(`${key} is not a count`)
+  return doc[key]
+}
+
 // A file that cannot be read is `rules off` (5.1): every rule enabled before now is off, whatever number it carries.
 function readStops(fs, home, errors) {
   try {
     const doc = readObject(fs, rulesState(home)) ?? {}
-    return { rulesOffSeq: count(doc.rules_off_seq), tripped: count(doc.unclean_stops) >= TRIP_AT }
+    return { rulesOffSeq: stopCount(doc, 'rules_off_seq'), tripped: stopCount(doc, 'unclean_stops') >= TRIP_AT }
   } catch (e) {
     errors.push({ where: 'rules-state.json', reason: e.message })
     return { rulesOffSeq: Infinity, tripped: false }

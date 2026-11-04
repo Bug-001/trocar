@@ -9,7 +9,7 @@ import nodeFs from 'node:fs'
 import path from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { rulesFile, rulesLock, rulesLog } from '../paths.mjs'
-import { sha256, writeDurable } from '../off/fsutil.mjs'
+import { readBounded, sha256, writeDurable } from '../off/fsutil.mjs'
 import { checkFile, parseRulesBytes, LIMITS, DEFAULT_MAX_DELAY_MS } from './validate.mjs'
 
 const LOCK_WAIT_MS = 2000
@@ -20,22 +20,6 @@ const TOKEN_BYTES = 16
 /** Thrown by an edit's `fn` to give the edit up; `code` and `message` become the result's `error` as they are. */
 export class RuleRefused extends Error {
   constructor(code, message) { super(message); this.code = code }
-}
-
-const notRegular = () => Object.assign(new Error('not a regular file'), { code: 'not-regular' })
-
-/** At most `limit` bytes of a regular file. Throws for anything else, the file's own error or `not-regular`. A path swapped for a FIFO after the stat
- *  still cannot block: O_NONBLOCK, then fstat what was opened. */
-export function readBounded(fs, file, limit) {
-  if (!fs.statSync(file).isFile()) throw notRegular()
-  const fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK || 0))
-  try {
-    if (!fs.fstatSync(fd).isFile()) throw notRegular()
-    const buf = Buffer.allocUnsafe(limit)
-    let got = 0
-    for (let n; got < limit && (n = fs.readSync(fd, buf, got, limit - got, got)) > 0;) got += n
-    return buf.subarray(0, got)
-  } finally { fs.closeSync(fd) }
 }
 
 /** The delay a broken file still says, the default if it is an object that says none, undefined when it cannot be told. */
@@ -73,16 +57,20 @@ const holds = (fs, lock, token) => {
   try { return readBounded(fs, lock, token.length + 1).toString() === token } catch { return false }
 }
 
-/** Removes the lock if it has aged out. Goes by way of a private name: of two takers the slower one renames the lock the faster has just made, sees it is
- *  fresh and puts it back. Should a third writer get in first, the faster one finds its lock gone before its rename and gives up: never two writers. */
+/** Removes the lock if it has aged out, and a clock can have run back since it was written, so the age goes both ways. What is no regular file was never a writer's lock. Goes by way
+ *  of a private name: of two takers the slower one renames the lock the faster has just made, sees it is fresh and puts it back. Should a third writer get in first, the faster one
+ *  finds its lock gone before its rename and gives up: never two writers. */
 function takeStale(fs, lock, token) {
-  const stale = (file) => Date.now() - fs.statSync(file).mtimeMs > LOCK_STALE_MS
+  const stale = (file) => {
+    const stat = fs.lstatSync(file)
+    return !stat.isFile() || Math.abs(Date.now() - stat.mtimeMs) > LOCK_STALE_MS
+  }
   const aside = `${lock}.stale-${token}`
   try {
     if (!stale(lock)) return
     fs.renameSync(lock, aside)
     if (!stale(aside)) try { fs.linkSync(aside, lock) } catch { /* see above */ }
-    fs.unlinkSync(aside)
+    fs.rmSync(aside, { recursive: true, force: true })
   } catch (e) { if (e.code !== 'ENOENT') throw e } // the lock went while looking at it: the next try gets it
 }
 
@@ -120,15 +108,17 @@ function changedRules(before, after) {
  * The one way to change the rule file. Under rules.lock: read, `fn(doc)` → the new doc, check, rename, one line in logs/rules.ndjson.
  * → `{ok, before, after, written, invalid?, error?, log_failed?, kept_delay?}`. `fn` may throw RuleRefused to give up; `invalid` lists what the new doc
  * fails; `error.code` is otherwise `rules-unwritable`, and that covers a bad file too unless `onBad` is `aside` (`rules off`): the bad file is renamed to
- * rules.json.bad-<time> by the write, `fn` gets no rules and the delay it still says, and `kept_delay` says whether it could say. `dryRun` stops before the
- * write with `before` and `after` filled in. A change the log could not record is still `ok`, with `log_failed` the reason.
+ * rules.json.bad-<time> by the write, `fn` gets no rules and the delay it still says, and `kept_delay` says whether it could say. `dryRun` reads without the lock,
+ * makes nothing and stops before the write with `before` and `after` filled in. A change the log could not record is still `ok`, with `log_failed` the reason.
  */
 export function edit(fn, { home, fs = nodeFs, now = () => new Date(), source = 'cli', op, dryRun = false, onBad = 'refuse' } = {}) {
   const file = rulesFile(home), lock = rulesLock(home)
   const unwritable = (message, rest) => ({ ok: false, written: [], ...rest, error: { code: 'rules-unwritable', message } })
-  let token
-  try { token = takeLock(fs, lock) } catch (e) { return unwritable(`${lock} could not be made (${e.message})`) }
-  if (!token) return unwritable(`${lock} stayed held for ${LOCK_WAIT_MS} ms`)
+  let token = null
+  if (!dryRun) {
+    try { token = takeLock(fs, lock) } catch (e) { return unwritable(`${lock} could not be made (${e.message})`) }
+    if (!token) return unwritable(`${lock} stayed held for ${LOCK_WAIT_MS} ms`)
+  }
   try {
     const read = readRules({ home, fs })
     const broken = read.state === 'bad'
@@ -165,5 +155,5 @@ export function edit(fn, { home, fs = nodeFs, now = () => new Date(), source = '
       written.push(logFile)
     } catch (e) { return { ...planned, log_failed: e.message } }
     return planned
-  } finally { dropLock(fs, lock, token) }
+  } finally { if (token) dropLock(fs, lock, token) }
 }

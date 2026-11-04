@@ -127,16 +127,45 @@ test('a home it cannot write is rules-unwritable', () => {
   assert.equal(out.error.code, 'rules-unwritable')
 })
 
-test('a lock that never ages out ends the wait in rules-unwritable, near the two seconds', () => {
+test('a lock that stays fresh for the whole wait ends it in rules-unwritable, near the two seconds', () => {
   const home = seeded('{"rules": []}')
   fs.writeFileSync(rulesLock(home), 'someone')
-  const later = new Date(Date.now() + 3600_000)
-  fs.utimesSync(rulesLock(home), later, later)
+  const soon = new Date(Date.now() + 1000) // at most a second away from now for all of the two seconds
+  fs.utimesSync(rulesLock(home), soon, soon)
   const started = Date.now()
   const out = edit(add('a'), { home, op: 'add' })
   assert.equal(out.error.code, 'rules-unwritable')
   assert.ok(Date.now() - started >= 1900)
   assert.equal(fs.readFileSync(rulesLock(home), 'utf8'), 'someone')
+})
+
+// Whatever is on the lock's name that no writer of today holds: the first edit takes it, and nothing of it stays.
+const deadLocks = [
+  ['a file from a clock set far ahead', (l) => { fs.writeFileSync(l, 'x'); const later = new Date('2100-01-01'); fs.utimesSync(l, later, later) }],
+  ['a file aged out', (l) => { fs.writeFileSync(l, 'x'); fs.utimesSync(l, new Date(0), new Date(0)) }],
+  ['a link to nothing', (l) => fs.symlinkSync(`${l}.gone`, l)],
+  ['a link to itself', (l) => fs.symlinkSync(l, l)],
+  ['an empty directory', (l) => fs.mkdirSync(l)],
+  ['a directory with files in it', (l) => { fs.mkdirSync(path.join(l, 'a'), { recursive: true }); fs.writeFileSync(path.join(l, 'a', 'b'), 'x') }],
+]
+for (const [name, make] of deadLocks) {
+  test(`${name} on rules.lock does not hold up the first edit and leaves nothing behind`, { skip: !posix && 'links and renamed directories go by other rules on Windows' }, () => {
+    const home = seeded('{"rules": []}')
+    make(rulesLock(home))
+    const out = edit(add('a'), { home, op: 'add' })
+    assert.equal(out.ok, true, out.error?.message)
+    assert.deepEqual(fs.readdirSync(home).filter((n) => n.includes('.lock')), [])
+  })
+}
+
+test('dryRun takes no lock and makes no directory: a held lock and a home that is not there change nothing about the answer', () => {
+  const home = seeded('{"rules": []}')
+  fs.writeFileSync(rulesLock(home), 'someone')
+  const held = edit(add('a'), { home, op: 'add', dryRun: true })
+  assert.deepEqual([held.ok, held.after.rules.map((r) => r.name), fs.readFileSync(rulesLock(home), 'utf8')], [true, ['a'], 'someone'])
+  const nowhere = path.join(tmpDir('trocar-rules-'), 'not', 'here')
+  assert.equal(edit(add('a'), { home: nowhere, op: 'add', dryRun: true }).ok, true)
+  assert.equal(fs.existsSync(path.dirname(nowhere)), false)
 })
 
 // Every shape a hostile or broken path can take. The edit is synchronous, so a hang would hang the caller: it runs in a child under a bound.

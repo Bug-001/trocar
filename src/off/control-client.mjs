@@ -8,6 +8,7 @@
 import nodeFs from 'node:fs'
 import nodeHttp from 'node:http'
 import path from 'node:path'
+import { readSmall } from './fsutil.mjs'
 // The header a token-guarded request carries lives in token-header.mjs (import-free, so the board's page can load it); imported, not
 // re-exported: standalone.mjs's bundle refuses `export { }`.
 import { CONTROL_TOKEN_HEADER } from './token-header.mjs'
@@ -32,7 +33,7 @@ export function controlSocketPath({ env = process.env } = {}) {
  *  a daemon of a newer build wrote — a wrong token is the daemon's own 401 to answer, an unreadable file is a shape error to say. */
 export function controlEndpointOf({ dir, fs = nodeFs } = {}) {
   let text
-  try { text = fs.readFileSync(path.join(dir, CONTROL_FILE), 'utf8') } catch (e) {
+  try { text = readSmall(fs, path.join(dir, CONTROL_FILE)) } catch (e) {
     if (e && e.code === 'ENOENT') return null
     return { error: `${path.join(dir, CONTROL_FILE)} cannot be read (${(e && e.code) || (e && e.message) || e})` }
   }
@@ -64,11 +65,12 @@ export function controlEndpointFor({ platform = process.platform, dir, env = pro
 }
 
 /** One request → the parsed JSON reply. A non-2xx reply rejects with `status`; a socket that is absent / refuses has `code` ENOENT / ECONNREFUSED;
- *  no answer within `timeoutMs` rejects with code ETIMEDOUT. `token`: the secret a token-guarded endpoint (a Windows pipe) expects in
+ *  no answer within `timeoutMs` rejects with code ETIMEDOUT, and `totalMs`, when given, bounds the whole exchange the same way: a reply that keeps dripping
+ *  never runs `timeoutMs` out. `token`: the secret a token-guarded endpoint (a Windows pipe) expects in
  *  CONTROL_TOKEN_HEADER; null (the Linux unix socket) sends none. A Windows pipe path reaches Node's http through the same `socketPath`.
  *  `raw`: resolve with the reply's BYTES instead of a parsed object — a query document is written on as it stands and must not be
  *  re-encoded on the way (D63 ②: the daemon path and the local path print the same bytes). A non-2xx reply still rejects with its message. */
-export function controlRequest({ socketPath, method = 'GET', path: p = '/status', body = null, token = null, timeoutMs = 10000, raw = false }) {
+export function controlRequest({ socketPath, method = 'GET', path: p = '/status', body = null, token = null, timeoutMs = 10000, totalMs = null, raw = false }) {
   return new Promise((resolve, reject) => {
     const payload = body == null ? null : JSON.stringify(body)
     const headers = payload ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) } : {}
@@ -86,8 +88,11 @@ export function controlRequest({ socketPath, method = 'GET', path: p = '/status'
         else reject(Object.assign(new Error(`${res.statusCode}: ${obj && obj.error}`), { status: res.statusCode }))
       })
     })
-    req.setTimeout(timeoutMs, () => req.destroy(Object.assign(new Error('control request timed out'), { code: 'ETIMEDOUT' })))
+    const expired = () => Object.assign(new Error('control request timed out'), { code: 'ETIMEDOUT' })
+    const deadline = totalMs === null ? null : setTimeout(() => { reject(expired()); req.destroy() }, totalMs)
+    req.setTimeout(timeoutMs, () => req.destroy(expired()))
     req.on('error', reject)
+    req.on('close', () => clearTimeout(deadline))
     req.end(payload ?? undefined)
   })
 }
