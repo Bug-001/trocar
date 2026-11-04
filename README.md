@@ -64,7 +64,38 @@ thinking / tool_use / tool_result), so you see *which* part grew and when.
 
 ## Install
 
-From npm (Node ≥ 22). The package is `trocar-cli`; the command it installs is `trocar`.
+One line, nothing needed first: no npm, no Node. The script downloads trocar and an official Node build of its own,
+checks both against the hashes the npm registry and the package record, and puts them in `~/.trocar/app`. It needs
+no root and writes nothing outside `~/.trocar`. Then it runs `trocar install`, which prints its plan and asks
+before it changes anything.
+
+```sh
+curl -fsSL https://github.com/Bug-001/trocar/releases/latest/download/install.sh | sh     # macOS, Linux
+wget -qO- https://github.com/Bug-001/trocar/releases/latest/download/install.sh | sh      # a Linux with wget and no curl
+```
+
+```bat
+powershell -NoProfile -ExecutionPolicy Bypass -c "irm https://github.com/Bug-001/trocar/releases/latest/download/install.ps1 | iex"
+```
+
+The Windows line works in cmd, PowerShell and Win+R. In China, the scripts are also at
+`https://cdn.jsdelivr.net/npm/trocar-cli/install/install.sh` (or `.../install/install.ps1`); each download tries npm
+and nodejs.org first and moves to npmmirror when that source fails or is too slow. When security software blocks `irm | iex`, save the script first and run it as a file (cmd):
+
+```bat
+curl.exe -fsSLo "%TEMP%\trocar-install.ps1" https://github.com/Bug-001/trocar/releases/latest/download/install.ps1 && powershell -NoProfile -ExecutionPolicy Bypass -File "%TEMP%\trocar-install.ps1" & del "%TEMP%\trocar-install.ps1"
+```
+
+`trocar install` adds `~/.trocar/bin` at the end of your PATH (one marked line in your shell's start file; on
+Windows one element of your user `Path`), so `trocar` works in a new terminal. A shell that is not interactive may not
+read that file (Ubuntu's `~/.bashrc` stops early for one, so `ssh host trocar` does not find it): use `~/.trocar/bin/trocar`
+there. Then:
+
+```sh
+trocar on                       # start capture
+```
+
+For developers, from npm (Node ≥ 22). The package is `trocar-cli`; the command it installs is `trocar`.
 
 ```sh
 npm i -g trocar-cli
@@ -84,6 +115,12 @@ sudo apt-get install build-essential clang libbpf-dev libelf-dev zlib1g-dev linu
 make -C "$(npm root -g)/trocar-cli/src/collector/arch/linux"
 sudo "$(command -v node)" "$(command -v trocar)" setup-helper   # root's PATH may lack node or trocar (an nvm node), so both go by their paths
 ```
+
+Installed with the script, the helper cannot come first: its source arrives with the script. `trocar install` finishes
+without it; the collector then runs and captures nothing, `trocar status` says the helper is missing, and the receipt's
+last line is the `sudo` line to run. The code is under `~/.trocar/app/<version>` (the version is the first word of
+`~/.trocar/app/current`): build with `make -C ~/.trocar/app/<version>/src/collector/arch/linux`, run that `sudo` line
+(it names this copy's Node and code by their full paths; `trocar on` prints it too), then `trocar on`.
 
 The same five commands on every OS, in this order: `trocar install` (once) → `trocar on` → `trocar off` →
 `trocar status` (any time) → `trocar uninstall`. `install` lists every file it will touch and writes them after you
@@ -131,6 +168,10 @@ new one does not report that the previous one ended without a clean stop. The ro
 say that `update` (or `uninstall`) stopped it. An update that stops half way leaves a note
 behind: run `trocar update` again and it goes on from where it stopped.
 
+A copy installed with the script updates with the same `trocar update`, or by running the install line again: it
+downloads and checks the new version into its own folder before any agent goes off, then switches to it and finishes
+as below. The previous version is kept until nothing can still start it.
+
 A copy installed with npm updates through npm: `npm i -g trocar-cli@latest`, then `trocar update` finishes the
 way a git update does: the collector on the new code, `install` again, and the agents that were being captured
 switched on again. It finishes also when the collector already came back on the new code by itself (a reboot or a new
@@ -144,10 +185,20 @@ a clone of this repo and `trocar install`. Nothing the old name left is read or 
 
 ```sh
 trocar off                     # first: uninstall refuses while capture is on
-trocar uninstall               # removes all of trocar's changes; keeps your records (~/.trocar/raw)
+trocar uninstall               # removes all of trocar's changes; keeps your records (~/.trocar/raw, ~/.trocar/collector/flows)
 trocar uninstall --purge-data  # also deletes the records and their index (asks first)
-sudo "$(command -v node)" "$(command -v trocar)" setup-helper --remove   # Linux, last: the machine's capability helper
 ```
+
+On Linux the machine's capability helper is one more step, with `sudo`. Installed from npm, run it after `uninstall`:
+`sudo "$(command -v node)" "$(command -v trocar)" setup-helper --remove`.
+
+Installed with the script, `uninstall` also removes trocar itself as its last step: `~/.trocar/app` (the code and its
+Node), the `trocar` launcher and the PATH item. On Windows the folder goes as soon as the command exits. On Linux,
+removing the helper needs that code, so while the helper is installed the code, the launcher and the PATH item stay,
+no captured record is deleted (even with `--purge-data`), `uninstall` exits 1 and prints the
+`sudo ... setup-helper --remove` line with full paths. Run that line, then `trocar uninstall` once more: the second
+run removes the code, the launcher and the PATH item. Once trocar itself is gone, the receipt names the kept folders to
+delete by hand.
 
 `uninstall` always prints its plan and asks first; without a terminal and without `--yes` it changes
 nothing and exits 2. `uninstall` never does `off` for you. While a harness is on, or (macOS / Windows) a process started during `on` still
@@ -326,11 +377,12 @@ website you visit cannot reach it.
 
 Certificates belong to `install` / `uninstall`, routing belongs to `on` / `off` (D55): `on` and `off` never write a
 certificate byte. `off` works when trocar itself is broken — no daemon, no source tree, no `node_modules`:
-`~/.trocar/bin/trocar-off` is one file that needs only `node`, and `install` writes it. Every command that changes
-something lists what it changed (each file, its backup, how to undo it) and takes `--json`; before it changes a file of
-yours it keeps a copy in `~/.trocar/backup/`. `on` never restarts an agent or a capture that is running: the processes
-that need a restart are listed. Name an agent (`trocar off claude-code`) to switch only that one; `on; on` and
-`off; off` write nothing the second time (D54).
+`~/.trocar/bin/trocar-off` is one file that needs only `node`, and `install` writes it (on Windows with a
+`trocar-off.cmd` beside it, run as `cmd --% /c @"<path>\trocar-off.cmd"`, a line PowerShell and cmd both run as
+printed). Every command that changes something lists what it changed (each file, its backup, how to undo it) and takes
+`--json`; before it changes a file of yours it keeps a copy in `~/.trocar/backup/`. `on` never restarts an agent or a
+capture that is running: the processes that need a restart are listed. Name an agent (`trocar off claude-code`) to
+switch only that one; `on; on` and `off; off` write nothing the second time (D54).
 
 `trocar status` and `trocar doctor` show, per agent, whether it is captured and why not, and where trocar forwards its
 connections — agent → door → upstream, and where the upstream comes from: the agent's own proxy, the system proxy, or a

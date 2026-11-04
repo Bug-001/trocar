@@ -15,7 +15,8 @@ test('closure: the files an entry reaches by import, require, new URL and a temp
   put('lab/probe.mjs', "const c = require('../c.cjs')\nmodule.exports = c\n")
   put('lab/tmpl/x.sh.tmpl', 'echo hi\n')
   put('c.cjs', "const os = require('os')\nmodule.exports = os\n")
-  assert.deepEqual(closure(['lab/ok.mjs'], { root }), { files: ['c.cjs', 'lab/ok.mjs', 'lab/probe.mjs', 'lab/tmpl/x.sh.tmpl', 'src/a.mjs'], problems: [] })
+  put('lab/jxa.mjs', "export const js = 'ObjC.import(\"AppKit\"); ObjC.import(\'Foundation\')'\nexport const run = (ObjC) => { ObjC.import('AppKit'); return reimport('x') }\n") // a member call named import is no module
+  assert.deepEqual(closure(['lab/ok.mjs', 'lab/jxa.mjs'], { root }), { files: ['c.cjs', 'lab/jxa.mjs', 'lab/ok.mjs', 'lab/probe.mjs', 'lab/tmpl/x.sh.tmpl', 'src/a.mjs'], problems: [] })
 })
 
 test('closure: a missing file and a bare package are each reported, with the file that names them', () => {

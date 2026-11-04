@@ -351,6 +351,8 @@ test('a daemon that does not answer is daemon-not-responding; --json is one docu
   const j = await run(s, ['--json'], { request: asDaemon(reply({ agents })) })
   const doc = j.io.json()
   assert.deepEqual(validateReceipt(doc), [])
+  assert.deepEqual([doc.daemon.code, (await run(s, ['--json'], { request: asDaemon(reply({ agents, code: '9.9.9' })) })).io.json().daemon.code], [null, '9.9.9'], 'C.3: the code the daemon itself answered, null when it names none')
+  assert.equal((await run(s, ['--json'], { request: down('ETIMEDOUT') })).io.json().daemon.code, null)
   assert.deepEqual(doc.restart, [{ harness: 'claude-code', pid: 4388, reason: 'config-after-start' }])
   assert.deepEqual(Object.entries(doc.harnesses).map(([h, x]) => [h, x.captured, x.reason]), [['claude-code', false, 'config-after-start'], ['codex', true, null]])
   assert.equal(j.io.stderrText(), '', 'stdout carries the one JSON, nothing leaks to stderr')

@@ -184,7 +184,7 @@ test('V51 a harness the user names with nothing in the facts to explain it: `cau
   assert.match(found.what, /^If claude-code still cannot connect: /, 'a condition, not a statement')
   assert.equal(found.commands[0].run, 'trocar off claude-code')
   const text = renderFindings([found]).join('\n')
-  assert.ok(text.includes('if it still fails, trocar is not the cause'))
+  assert.ok(text.replace(/\s+/g, ' ').includes('if it still fails, trocar is not the cause'))
   assert.doesNotMatch(text, /^\d+\. /m, 'a note is not numbered among the problems')
   assert.match(text, /^Note: If claude-code still cannot connect: /)
   assert.match(found.verify, /Try claude-code again/)
@@ -513,4 +513,19 @@ test('4.11 §3 ⑱ not-routed says the model plan\'s reason for the form (the ro
   for (const r of reasons) assert.deepEqual(validateFinding(nr(r, '/x')), [], r)
   const refused = findingFor('collectors-online', { platform: 'darwin', online: 'codex' })
   assert.deepEqual([refused.class, refused.commands.map((c) => c.run)], ['problem', ['trocar off', 'trocar uninstall']])
+})
+
+// §1.1⑥ applied to a step in an application (`shell: 'gui'`): it is prose, so it folds inside 80 columns, two deeper than its first line; only a
+// command to copy keeps its line whole (local-upstream's step names every API host its config names, so it grows with the config)
+test('§1.1⑥ renderFindings: a GUI step folds inside 80 columns, hanging two deeper; a command keeps its own line whole', () => {
+  const hosts = ['127.0.0.1:11434', 'localhost:8080', '[::1]:9000', 'localhost:4000']
+  const cmd = `sudo /opt/node/bin/node ${'/very/long/path/'.repeat(4)}bin/trocar.mjs setup-helper`
+  const lines = renderFindings([{ code: 'local-upstream', class: 'expected', harness: 'codex', what: 'codex sends its model calls here.', why: null,
+    commands: [{ run: `No action needed: codex keeps working, and its calls to ${hosts.join(', ')} are not recorded`, shell: 'gui' }, { run: cmd, shell: 'sh' }], verify: 'trocar status codex' }])
+  const step = lines.findIndex((l) => l.includes('No action needed'))
+  const at = lines[step].indexOf('No action needed')
+  assert.ok(lines.filter((l) => !l.includes(cmd)).every((l) => l.length <= 80), lines.join('\n'))
+  assert.ok(hosts.every((h) => lines.join(' ').includes(h)), 'nothing of the step is dropped')
+  assert.ok(lines[step + 1].startsWith(' '.repeat(at + 2)) && lines[step + 1][at + 2] !== ' ', `the fold hangs two deeper:\n${lines.join('\n')}`)
+  assert.ok(lines.some((l) => l.trim() === cmd), 'the command is whole on its own line')
 })

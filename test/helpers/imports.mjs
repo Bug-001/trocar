@@ -31,14 +31,15 @@ export function stripComments(src) {
 }
 
 // `import … from 'x'` and `export … from 'x'` at the start of a statement (the clause is names, braces, commas, `*` and `as`: nothing
-// that could be code), `import 'x'`, and `import('x')` anywhere. A string that merely mentions an import is not one.
-const IMPORT_RE = /(?:^|[;{}\n])[ \t]*(?:import|export)\s+[\w\s{},*$]*?\bfrom\s*(['"])([^'"]+)\1|\bimport\s*\(\s*(['"])([^'"]+)\3\s*\)|(?:^|[;{}\n])[ \t]*import\s+(['"])([^'"]+)\5/gm
+// that could be code), `import 'x'`, and `import('x')` anywhere — but not a member or another name's call (`ObjC.import('AppKit')`, `reimport('x')`).
+// A string that merely mentions an import is not one.
+const IMPORT_RE = /(?:^|[;{}\n])[ \t]*(?:import|export)\s+[\w\s{},*$]*?\bfrom\s*(['"])([^'"]+)\1|(?<![.\w$])import\s*\(\s*(['"])([^'"]+)\3\s*\)|(?:^|[;{}\n])[ \t]*import\s+(['"])([^'"]+)\5/gm
 // `require('x')` with a plain string (a .cjs file's imports), and `new URL('./x', import.meta.url)`: a file the module reads or starts by
 // path (common.mjs → mcp-probe.mjs), which has to travel with it as surely as an import.
 const REQUIRE_RE = /\brequire\s*\(\s*(['"])([^'"]+)\1\s*\)/g
 const FILE_URL_RE = /\bnew\s+URL\(\s*(['"])(\.{1,2}\/[^'"]+)\1\s*,\s*import\.meta\.url\s*\)/g
 /** `import(expr)` with anything but a plain string, and `require(` / `createRequire`: a way in no scan can read. */
-export const OPAQUE = /\bimport\s*\(\s*(?!['"])|\brequire\s*\(|\bcreateRequire\b/
+export const OPAQUE = /(?<![.\w$])import\s*\(\s*(?!['"])|\brequire\s*\(|\bcreateRequire\b/
 
 /** The specifiers `src` imports (import / export-from clauses, `import 'x'`, `import('x')`), in source order; comments ignored.
  *  `{ refs: true }` adds the `require('x')` strings and the relative files `new URL('./x', import.meta.url)` names. */

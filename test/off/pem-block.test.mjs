@@ -9,7 +9,7 @@ import tls from 'node:tls'
 import { modelWorld } from '../helpers/model-world.mjs'
 import { undoHarnesses } from '../../src/off/undo.mjs'
 import { readManifest } from '../../src/off/manifest.mjs'
-import { BLOCK_BEGIN } from '../../src/off/text-edit.mjs'
+import { blockBegin } from '../../src/off/text-edit.mjs'
 
 const USER_PEM = tls.rootCertificates[0].trim()
 const FORMS = {
@@ -34,7 +34,7 @@ for (const [form, bytes] of Object.entries(FORMS)) {
       assert.equal(row && row.state, 'placed', JSON.stringify(r.carriers))
       const after = fs.readFileSync(file, 'utf8')
       assert.ok(after.startsWith(bytes), 'the user bytes stay in front, untouched')
-      assert.equal(after.split(BLOCK_BEGIN).length, 2, 'exactly one block')
+      assert.equal(after.split(blockBegin()).length, 2, 'exactly one block')
       assert.deepEqual((await w.install()).carriers.find((c) => c.carrier === 'pem-block').state, 'intact', 'a second install appends nothing')
       if (later) fs.appendFileSync(file, LATER)
       const u = await uninstall(w)

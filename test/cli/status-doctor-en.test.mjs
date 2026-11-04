@@ -12,11 +12,11 @@ import { STATUS_REASONS } from '../../src/health/codes.mjs'
 const NOW = Date.parse('2026-10-18T12:24:00Z')
 const BAD = [[/[\u3000-\u9fff\uff00-\uffef]/, 'CJK'], [/\bundefined\b/, 'undefined'], [/\bnull\b/, 'null'], [/\bNaN\b/, 'NaN'], [/§/, 'a section sign'], [/\bD\d+\b/, 'a decision number'], [/<[a-z_]+>/, 'an unfilled placeholder'], [/[^\x20-\x7e]/, 'a non-ASCII character']]
 
-/** Every rule of D58 one output must keep. */
-function clean(lines, what) {
+/** Every rule of D58 one output must keep. `whole`: commands that print whole on their line, however long (§1.1⑥: a command is never folded). */
+function clean(lines, what, whole = []) {
   for (const l of lines) {
     for (const [re, name] of BAD) assert.doesNotMatch(l, re, `${what}: ${name} in ${JSON.stringify(l)}`)
-    assert.ok(l.length <= 80, `${what}: ${l.length} columns in ${JSON.stringify(l)}`)
+    assert.ok(l.length <= 80 || whole.some((c) => l.endsWith(` ${c}`)), `${what}: ${l.length} columns in ${JSON.stringify(l)}`)
   }
 }
 
@@ -59,7 +59,7 @@ test('§1.1 · §3.5 a long NOTE folds under its own column: every line of the s
     table.forEach((l, i) => {
       if (names.some((h) => l.startsWith(`  ${h} `))) return
       assert.equal(l.search(/\S/), note, `${code}: a folded line starts under NOTE: ${JSON.stringify(l)}`)
-      assert.ok(table[i - 1].length + 1 + l.trim().split(' ')[0].length > 80, `${code}: folded only where the next word does not fit: ${JSON.stringify(table[i - 1])}`)
+      assert.ok(table[i - 1].length + 1 + l.trim().match(/^(trocar [a-z][a-z-]*\S*|\S+)/)[0].length > 80, /* `trocar <command>` is one word to the wrapper (§1.1⑥) */ `${code}: folded only where the next word does not fit: ${JSON.stringify(table[i - 1])}`)
     })
   }
 })
@@ -139,6 +139,40 @@ test('§3.5 `--failures`: one line per kind of problem, then Expected — and a 
   assert.match(failuresBlock(null, null)[0], /^Problems: unknown \(capture health could not be read\)$/)
 })
 
+test('§3.5 · §1.1⑥ `--failures`: a backquoted command in a reason prints whole on a line of its own, for every command length 40-130 and a known or unknown code', () => {
+  const health = { collector: { failures: [], expected: {} }, read: { errors: [] }, summary: { state: 'failing' } }
+  for (let len = 40; len <= 130; len++) {
+    const cmd = `sudo /h/${'x'.repeat(len - 40)}/node /h/trocar.mjs setup-helper` // a selfCommand shape, `len` columns
+    assert.equal(cmd.length, len)
+    for (const [g, action] of [{ where: 'helper', code: 'helper-down', harness: 'claude-code' }, { where: 'engine', code: 'no-word-for-this-code' }].flatMap((g) => ['install it once per machine with', 'to install it once per machine, run:'].map((a) => [g, a]))) {
+      const reason = `capability helper not found at /usr/local/libexec/trocar/redirector; ${action} \`${cmd}\`` // the command after `with` or after `run:` (a colon inside the clause)
+      const lines = failuresBlock({ groups: [{ level: 'problem', count: 2, first_ts: '2026-10-18T12:00:00Z', last_ts: '2026-10-18T12:14:00Z', reason, ...g }] }, health, { now: NOW })
+      clean(lines, `status --failures (${g.code}, ${len})`, [cmd])
+      assert.equal(lines.filter((l) => l.trim() === cmd).length, 1, `${g.code} ${len}: the command whole, once, on its own line\n${lines.join('\n')}`)
+      const prose = lines.filter((l) => l.trim() !== cmd).map((l) => l.trim()).join(' ')
+      assert.ok(prose.includes(`${action} the line below`), `${g.code} ${len}: the clause that points at its command is whole, its action kept (1.6 --failures)\n${lines.join('\n')}`)
+      if (g.code === 'helper-down') assert.doesNotMatch(prose, /\bstopped\b/, `a helper that was never installed has not stopped (D58: only what is true)\n${lines.join('\n')}`)
+    }
+  }
+})
+
+test('§3.5 `--failures`: a reason that starts with its command keeps the words after it, and two commands are pointed at in the plural, each whole on its own line', () => {
+  const health = { collector: { failures: [], expected: {} }, read: { errors: [] }, summary: { state: 'failing' } }
+  const run = (reason) => failuresBlock({ groups: [{ level: 'problem', where: 'helper', code: 'helper-down', count: 1, first_ts: '2026-10-18T12:00:00Z', last_ts: '2026-10-18T12:14:00Z', reason }] }, health, { now: NOW })
+  const prose = (lines, cmds) => lines.filter((l) => !cmds.includes(l.trim())).map((l) => l.trim()).join(' ')
+  for (let len = 40; len <= 130; len += 15) {
+    const cmd = `sudo /h/${'x'.repeat(len - 40)}/node /h/trocar.mjs setup-helper`, rm = `${cmd} --remove`
+    const first = run(`\`${cmd}\` was never run on this machine, so the capability helper is missing and nothing of any agent is captured until it is`)
+    clean(first, `status --failures (span first, ${len})`, [cmd])
+    assert.equal(first.filter((l) => l.trim() === cmd).length, 1, first.join('\n'))
+    assert.ok(/\bthe line below was never run\b/.test(prose(first, [cmd])), `the words after a leading command stay (R11)\n${first.join('\n')}`)
+    const two = run(`capability helper not found at /usr/local/libexec/trocar/redirector; remove the old copy with \`${rm}\`, then install it once per machine with \`${cmd}\``)
+    clean(two, `status --failures (two spans, ${len})`, [cmd, rm])
+    for (const c of [rm, cmd]) assert.equal(two.filter((l) => l.trim() === c).length, 1, `${c} whole, once\n${two.join('\n')}`)
+    assert.ok(prose(two, [cmd, rm]).includes('the lines below') && !prose(two, [cmd, rm]).includes('the line below'), `two commands, the plural pointer\n${two.join('\n')}`)
+  }
+})
+
 test('§3.5 exit codes: 0 every harness that is on is captured, 1 one of them is not, 3 that cannot be judged — a stale health line never decides it', () => {
   const f = (harnesses, over = {}) => ({ harnesses, install: { state: 'complete' }, cert: { root: { code: null }, key: { state: 'present' } }, ...over })
   const on = (captured, desired = 'on') => ({ desired, judged: { captured, rows: [] } })
@@ -160,7 +194,7 @@ test('附录 B · §3.7: every code in the catalogue renders as English sentence
     assert.ok(found.what && found.why, `${code}: what and why say something`)
     assert.ok(['problem', 'expected', 'note'].includes(found.class), `${code}: ${found.class} is a class of 附录 B`)
     if (found.class !== 'note') assert.ok(found.commands.length, `${code}: a problem or an expected finding says what to do`)
-    clean(renderFindings([found]), `doctor finding ${code}`)
+    clean(renderFindings([found]), `doctor finding ${code}`, found.commands.map((c) => c.run))
   }
 })
 

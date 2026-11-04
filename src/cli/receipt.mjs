@@ -4,9 +4,11 @@
 // receipt, nothing written). Pure: no disk, no clock, no process. Paths under HOME are shown as `~/…` (the way the user knows them); `--json` keeps
 // the absolute path.
 import path from 'node:path'
-import { standaloneCommand } from '../off/paths.mjs'
-import { noColor, WIDTH, wrap, pairs, size } from './text.mjs'
+import { standaloneCommand, appDir } from '../off/paths.mjs'
+import { COMMAND_INDENT, isCommandLine, foldHang } from '../off/receipt.mjs'
+import { noColor, WIDTH, wrap, pairs, size, tildeText, escRe } from './text.mjs'
 import { HARNESS_IDS } from '../off/harness-names.mjs'
+import { fitCompact } from '../netenv/topology-text.mjs'
 
 /** `/home/alice/.claude/x` → `~/.claude/x` when `p` is under `home`. */
 export const tilde = (p, home) => (home && typeof p === 'string' && (p === home || p.startsWith(home + path.sep)) ? `~${p.slice(home.length)}` : p)
@@ -22,28 +24,62 @@ const FORM_WORDS = Object.freeze({
 })
 const CARRIER_WORDS = Object.freeze({
   root: 'reads your user trust store', 'config-key': "the certificate setting of its own configuration", 'pem-block': 'a block in your certificate file',
-  plugin: 'a plug-in trocar installed', wrapper: 'a launch command trocar installed', 'switch-file': "trocar's switch file",
+  // no tense: the plan (before) and the receipt (after) say them alike
+  plugin: "trocar's plug-in", wrapper: "trocar's launch command", 'switch-file': "trocar's switch file",
   bundle: 'a certificate bundle trocar wrote', env: 'the certificate variable of its settings',
 })
 /** A form id (`codex.vscode`) as the form a user would name it by — the harness prefix goes. */
 export const formWords = (id) => { const s = String(id ?? '').split('.').slice(1).join('.'); return FORM_WORDS[s] || s.replace(/-/g, ' ') || String(id ?? '') }
 /** A certificate carrier kind (`config-key`, `pem-block`) as what it is to the reader. */
 export const carrierWords = (kind) => CARRIER_WORDS[kind] || String(kind ?? '').replace(/-/g, ' ')
+// 1.6 §3.3: what an `on` plan row says changes in its file, by the route's kind (C.2 `planned[].kind`; the keys are the item's `keys`)
+const ROUTE_WORDS = Object.freeze({ 'json-key': 'its proxy setting', 'dotenv-block': "trocar's proxy block", 'plugin-file': "trocar's routing plug-in", 'switch-file': "trocar's switch file" })
+export const routeWords = (p) => ROUTE_WORDS[p.kind] || String(p.kind ?? '').replace(/-/g, ' ')
+/** 1.6 §3.2: what an install plan row (planInstall's) says changes in its file — a config key by its key, a plug-in loaded from that file by the line
+ *  that loads it, any other carrier in carrierWords' words. */
+export const planWords = (r) => (r.carrier === 'config-key' && r.keys ? `its certificate setting ${r.keys.join('.')}` : `${r.loader ? 'the line that loads ' : ''}${carrierWords(r.carrier)}`)
 
 const BARE = /\u001b\[\d+m/g
 
-/** §1.1⑥: every line fits 80 columns — one that does not is folded on spaces, indented to its own indent, and a word that is longer than the line
- *  (a path, a command) keeps its own line unbroken. A coloured line is left alone: its escape bytes are not columns and must not be cut. */
-export const fit = (lines) => lines.flatMap((l) => {
-  const s = String(l)
+/** A command the reader is to copy, for `fit`: printed on a line of its own, indented, whole — a long `sudo <node> <trocar.mjs> …` folded on its spaces
+ *  would paste as `sudo` alone and then a Node with no script (§1.1⑥: a command keeps its own line unbroken). */
+export const commandLine = (command) => ({ command })
+/** A line `fit` prints as it is, at column 0, never folded (HOME as `~` still): on's route line, which 附录 A.1 shortens instead of folding. */
+export const wholeLine = (whole) => ({ whole })
+
+export { tildeText } from './text.mjs'
+
+/** §1.1⑤: a command to copy shows HOME as `~` where sh, zsh and bash expand it — an unquoted word that starts with a POSIX HOME, then `/` or the word's
+ *  end. A path after a `sudo` word keeps the absolute form selfCommand writes (§3.2), and a Windows HOME is never a `~`. */
+export const tildeCommand = (s, home) => (home && home.startsWith('/')
+  ? s.replace(new RegExp(`(^|\\s)${escRe(home)}(?=/|\\s|$)`, 'g'), (m, pre, at) => (/(^|\s)sudo\s/.test(s.slice(0, at + pre.length)) ? m : `${pre}~`))
+  : s)
+
+/** §1.1⑥: every line fits 80 columns — one that does not is folded on spaces: a column-0 line folds at column 0, an indented line (an item) hangs at
+ *  foldHang, past the command column; a command to copy sits at COMMAND_INDENT, right under the column-0 line that says what it is for; a word that is longer than the line (a path, a command) keeps its own line unbroken. A coloured line is left alone: its escape bytes are not columns and must not be cut. `home`: §1.1⑤,
+ *  every text line's HOME paths as `~/…` (tildeText), a command to copy's where the shell expands them (tildeCommand). */
+export const fit = (lines, { home = null } = {}) => lines.flatMap((l) => {
+  if (l && typeof l === 'object' && typeof l.command === 'string') return [`${COMMAND_INDENT}${tildeCommand(l.command, home)}`] // a command to copy (commandLine): one line, never folded, so a paste runs it whole
+  if (l && typeof l === 'object' && typeof l.whole === 'string') return [tildeText(l.whole, home)] // wholeLine
+  // a text of several lines (a refusal with its commands, refuseOldManifest) keeps its lines, and a line of it at COMMAND_INDENT is a command to copy
+  if (String(l).includes('\n')) return fit(String(l).split('\n').map((x) => (isCommandLine(x) ? commandLine(x.slice(COMMAND_INDENT.length)) : x)), { home })
+  const s = tildeText(String(l), home)
   if (s.length <= WIDTH || BARE.test(s)) return [s]
   const own = ' '.repeat(s.length - s.trimStart().length)
-  const [first, ...more] = wrap(s.trimStart(), WIDTH - own.length - 2, `${own}  `)
+  const [first, ...more] = wrap(s.trimStart(), WIDTH - own.length, foldHang(own))
   return [own + first, ...more]
 })
 
-/** One harness's chain after `on` (§3.3): where a new connection goes, and the proxy setting it was drawn from (credentials masked). */
-const adoptedLine = (h, x) => `  ${h}: route ${x.chain}${x.proxy ? ` (its proxy setting ${x.proxy}, read from ${(x.source || []).map((s) => (s.kind === 'file' ? `${s.where}${s.key ? ` ${s.key}` : ''}` : s.where)).join(', ') || 'its own settings'})` : ''}`
+/** One harness's chain after `on` (§3.3): where a new connection goes, then the proxy setting it was drawn from (credentials masked). A chain whose
+ *  first hop is the harness's name is not prefixed again; a proxy-mode chain starts with the running process (A.1, `node (pid N)`), so the line names
+ *  the harness (D38: for whom). Column 0, so it never reads as an item of a path list above it, and never folded: a chain too long for the line
+ *  degrades as 附录 A.1 says, drawn from the harness's topology `t` (fitCompact); with none, the recorded chain is printed whole. The proxy setting is
+ *  a sentence of its own below it (§1.1⑥). */
+const adoptedLines = (h, x, t) => {
+  const head = `${String(x.chain || '').startsWith(`${h} `) || x.chain === h ? 'route' : `route of ${h}`}: `
+  return [wholeLine(`${head}${t ? fitCompact(t, WIDTH - head.length) : String(x.chain || '')}`),
+    ...(x.proxy ? [`${h}'s proxy setting ${x.proxy} was read from ${(x.source || []).map((s) => (s.kind === 'file' ? `${s.where}${s.key ? ` ${s.key}` : ''}` : s.where)).join(', ') || 'its own settings'}.`] : [])]
+}
 
 /** D46: a chain that is the harness's own name and nothing else (the degenerate topology a machine whose facts cannot be read leaves) says nothing
  *  and is not printed. A chain with a hop (or a proxy setting named) is real. */
@@ -91,14 +127,14 @@ export function formatPlan(p, { home = null, platform = 'linux', command = 'on',
   const backups = t(p.backups || path.join(home || '~', '.trocar', 'backup'))
   return fit([
     c.bold(`trocar ${command} will write ${items.length} file${items.length === 1 ? '' : 's'}:`),
-    ...pairs(items.map((i) => [i.what, i.detail])),
-    `A copy of every file of yours it changes goes to ${backups}/ first.`,
+    ...pairs(items.map((i) => [i.what, i.detail]), { home }),
+    // only when it edits a file of yours (an entry): trocar's own files and the ones it makes have no earlier bytes to keep
+    ...((p.entries || []).length ? [`A copy of every file of yours it changes goes to ${backups}/ first.`] : []),
     ...watchLines(p.watch, t).map((l) => `  ${l}`),
     ...(p.skipped && p.skipped.length ? [`Skipped: ${p.skipped.map((s) => `${t(s.what)} (${s.reason})`).join('; ')}`] : []),
     ...(p.edited || []).map((e) => `You changed the proxy setting of ${e.harness}: ${e.where || 'its proxy field'} is now ${e.now ?? 'empty'} (trocar left ${e.was ?? 'empty'} there). Going on takes your value as the upstream and points the setting back at trocar.`),
-    ...(p.adopted || []).filter(saysSomething).map((x) => adoptedLine(x.harness, x)),
     ...(p.restart && p.restart.length ? [`Restart to capture: ${p.restart.map((x) => `${x.harness} (pid ${x.pid})`).join(', ')}. Until then they connect as they do now.`] : []),
-  ].filter((l) => l !== null)).join('\n')
+  ].filter((l) => l !== null), { home }).join('\n')
 }
 
 /** The line about logging out (§3.3): linger off says what happens and how to change it (never done for the user); unreadable says unknown and why;
@@ -107,7 +143,9 @@ const lingerText = ({ linger, linger_reason: why = null, user = null }) => (ling
   ? `Capture stops when you log out. To keep it on: loginctl enable-linger ${user || 'your-user-name'}`
   : linger === 'unknown' ? `Whether capture survives a logout is unknown (${why || 'the linger state could not be read'})` : null)
 
-const joinPaths = (list, home) => list.map((x) => tilde(typeof x === 'string' ? x : x.path, home)).join('  ')
+/** A label that lists paths (§1.1⑥): the label on its own line, each path on a line of its own two deeper — two paths on one line fold the second to
+ *  column 0. `more`: a last item after the paths (how many are not shown). */
+export const pathList = (label, list, home, more = null) => [label, ...list.map((x) => `  ${tilde(typeof x === 'string' ? x : x.path, home)}`), ...(more ? [`  ${more}`] : [])]
 
 /** The file lines of a receipt that writes (`on`, Linux `install`): each file changed — path, what, where its backup is — then what trocar made
  *  itself. `past`: false for a dry run (what it would do). */
@@ -116,15 +154,15 @@ export function changeLines(r, { past = true, home = null } = {}) {
   const lines = []
   if (r.changed.length) {
     lines.push(past ? 'Changed:' : 'Will change:')
-    lines.push(...pairs(r.changed.map((x) => [t(x.path), `${x.change}${x.backup ? ` (backup ${t(x.backup)})` : past ? ' (trocar made this file; there was nothing to back up)' : ' (a copy is kept first)'}`])))
+    lines.push(...pairs(r.changed.map((x) => [t(x.path), `${x.change}${x.backup ? ` (backup ${t(x.backup)})` : past ? ' (trocar made this file; there was nothing to back up)' : ' (a copy is kept first)'}`]), { home }))
   } else lines.push(past ? 'No file of yours was changed.' : 'No file of yours will be changed.')
-  if (r.created.length) lines.push(`${past ? "trocar's own files:" : "trocar will make:"} ${joinPaths(r.created, home)}`)
+  if (r.created.length) lines.push(...pathList(past ? "trocar's own files:" : 'trocar will make:', r.created, home))
   return lines
 }
 
 /** The receipt of `trocar on` as text (the verdict first, then every file it changed). `tense`: 'past' | 'future' (the dry run). `fresh` = the set of
  *  harnesses THIS run newly wired (their one-time notes print; the rest live in `doctor` and `--json`); null prints every note. */
-export function formatOnReceipt(r, { tense = 'past', home = null, platform = 'linux', fresh = null, colors: c = noColor() } = {}) {
+export function formatOnReceipt(r, { tense = 'past', home = null, platform = 'linux', fresh = null, topology = null, colors: c = noColor() } = {}) { // `topology`: { <h>: HarnessTopology }, what the route lines degrade from (A.1)
   const past = tense !== 'future'
   const t = (x) => tilde(x, home)
   // an on that wrote everything but has no collector running is done and exits 0, yet captures nothing yet: the header says so
@@ -139,12 +177,11 @@ export function formatOnReceipt(r, { tense = 'past', home = null, platform = 'li
   ]
   lines.push(...changeLines(r, { past, home }))
   if (r.unchanged && r.unchanged.length) { // the display caps at three names; the whole list is in --json, and none of them is rewritten by a second on
-    const shown = joinPaths(r.unchanged.slice(0, 3), home)
-    lines.push(`Already in place, not rewritten: ${shown}${r.unchanged.length > 3 ? `  and ${r.unchanged.length - 3} more (all of them: --json)` : ''}`)
+    lines.push(...pathList('Already in place, not rewritten:', r.unchanged.slice(0, 3), home, r.unchanged.length > 3 ? `and ${r.unchanged.length - 3} more (all of them: --json)` : null))
   }
   if (r.skipped.length) lines.push(`Skipped: ${r.skipped.map((s) => `${t(s.what)} (${s.reason})`).join('; ')}`)
   if (lingerText(r)) lines.push(lingerText(r))
-  for (const [h, x] of Object.entries(r.adopted || {})) if (saysSomething(x)) lines.push(adoptedLine(h, x))
+  for (const [h, x] of Object.entries(r.adopted || {})) if (saysSomething(x)) lines.push(...adoptedLines(h, x, topology && topology[h]))
   if (r.daemon && !daemonBit) lines.push('The collector is not running, so nothing is captured yet.', 'Start it: trocar daemon') // the command keeps its own line: folding must not cut it (§1.1③)
   if (r.restart.length) lines.push(`  ${c.yellow('!')} Restart to capture: ${r.restart.map((x) => `${x.harness} (pid ${x.pid} started before the certificate was there)`).join(', ')}. Until then they connect as they do now.`)
   const nothingNew = fresh && fresh.size === 0 && !(r.changed || []).length && !(r.created || []).length
@@ -157,21 +194,34 @@ export function formatOnReceipt(r, { tense = 'past', home = null, platform = 'li
     const isProblem = problemNotes ? problemNotes.has(n) : r.ok === false && past
     lines.push(`${isProblem ? 'Problem' : 'Note'}: ${n}`)
   }
+  for (const b of r.blocked || []) if (b.command) lines.push(commandLine(b.command)) // C.1 blocked[].command: the line that lifts the stop, whole on its own line (§1.1⑥)
   lines.push(`Stop: trocar off`)
   // §1.1③⑥: a command a person copies gets its own line, so folding never cuts it in two
-  if (r.standalone) lines.push(`If trocar itself breaks: ${c.dim(standaloneCommand(r.standalone, platform))}`)
-  lines.push(c.dim('Status: trocar status   Remove trocar: trocar uninstall (your captured records stay)'))
-  return fit(lines).join('\n')
+  if (r.standalone) lines.push('If trocar itself breaks, run:', commandLine(standaloneCommand(r.standalone, platform))) // a command to copy: whole
+  lines.push(c.dim('Status: trocar status'), c.dim('Remove trocar: trocar uninstall (your captured records stay)')) // one next step a line: a fold never runs them together
+  return fit(lines, { home }).join('\n')
 }
 
 /** The receipt of `trocar uninstall` as text (§3.6): the verdict, what was removed, what was kept, and the one next step. `tense`: 'past' |
  *  'future' (`--dry-run`, or the plan printed when a yes is missing). */
-export function formatUninstallReceipt(r, { home = null, tense = r.dry_run ? 'future' : 'past', dataNote = null } = {}) {
+/** 1.6 §3.6: the uninstall receipt's first line, true on each platform — the root is in the user's trust store on macOS and Windows only; on Linux it
+ *  reached the agents through the certificate settings install gave them (4.6), so that is what is said gone. The one place this line is decided. */
+export function uninstallHeadline({ platform = process.platform, past = true } = {}) {
+  const linux = platform === 'linux'
+  if (!past) return `trocar uninstall will take out everything install put on this machine, ${linux ? 'the certificate settings it gave your agents included' : 'and remove the root certificate from your trust settings'}.`
+  return `Uninstalled. trocar is no longer on your agents' path, and ${linux ? 'the certificate settings it gave them are gone' : 'its root certificate is gone from your trust settings'}.`
+}
+// a root key is named by its custody, `<kind>:<id>` (src/off/undo.mjs keyWhere): said as where it was, never the id (D58)
+const KEY_WHERE = { keychain: "trocar's root key, from your login keychain", cng: "trocar's root key, from Windows' key storage" }
+const removedWords = (p, t) => { const k = /^([a-z]{2,}):/.exec(p); return k ? KEY_WHERE[k[1]] || "trocar's root key" : t(p) }
+
+export function formatUninstallReceipt(r, { home = null, platform = process.platform, tense = r.dry_run ? 'future' : 'past', dataNote = null } = {}) {
   const past = tense !== 'future'
   const t = (x) => tilde(x, home)
   const removed = [], kept = []
   for (const c of r.changed || []) removed.push(`${t(c.path)}: ${c.change}`)
-  for (const p of r.removed || []) removed.push(t(p))
+  const said = new Set((r.changed || []).map((c) => c.path)) // a file both changed and removed (the root certificate: out of the trust store, then deleted) is one row
+  for (const p of r.removed || []) if (!said.has(p)) removed.push(removedWords(p, t))
   if ((r.dropped_backups || []).length) removed.push(`${r.dropped_backups.length} backup${r.dropped_backups.length === 1 ? '' : 's'} in ${t(path.dirname(r.dropped_backups[0]))}/`)
   if (dataNote) kept.push(dataNote)
   else if (r.purge_data) removed.push('your captured records (--purge-data)')
@@ -180,10 +230,7 @@ export function formatUninstallReceipt(r, { home = null, tense = r.dry_run ? 'fu
   if (typeof r.class_table === 'string') kept.push(`your traffic classes, ${t(r.class_table)}`)
   // §3.6 / 4.6: a bundle a live process may still have open is kept with trocar's CA taken out — the receipt says which, and who may hold it
   for (const b of r.kept_bundles || []) kept.push(`${t(b.path)} (trocar's certificate taken out)${(b.pids || []).length ? `: ${(b.pids || []).map((p) => `pid ${p}`).join(', ')} may have loaded it` : ''}`)
-  const lines = [!past
-    ? 'trocar uninstall will take out everything install put on this machine, and remove the root certificate from your trust settings.'
-    : r.ok === false ? 'trocar uninstall did not finish. What is left is below.'
-      : "Uninstalled. trocar is no longer on your agents' path, and its root certificate is gone from your trust settings."]
+  const lines = [past && r.ok === false ? 'trocar uninstall did not finish. What is left is below.' : uninstallHeadline({ platform, past })]
   if (r.nothing_installed) lines.push('Nothing of trocar is installed for your user, so there was nothing to take out.')
   // a file is said once, as `off` says it: several entries of one file (json keys) with the same change are one row
   if (removed.length) lines.push(past ? 'Removed' : 'Will remove', ...[...new Set(removed)].map((x) => `  ${x}`))
@@ -194,11 +241,21 @@ export function formatUninstallReceipt(r, { home = null, tense = r.dry_run ? 'fu
   // §1.1: a connection nothing else would end was cut — how many is said, never left to --json alone
   if ((r.relayed || {}).cut) lines.push(`${r.relayed.cut} connection${r.relayed.cut === 1 ? '' : 's'} that would not end by itself ${r.relayed.cut === 1 ? 'was' : 'were'} cut.`)
   for (const n of r.non_identical || []) lines.push(`Not byte for byte what it was (you changed it after trocar did; only trocar's part was taken out): ${t(n.path)} (backup ${t(n.backup)})`)
-  for (const l of r.left || []) lines.push(`Left in place: ${t(l.path)}: ${l.reason}`)
+  for (const l of r.left || []) lines.push(`Left in place: ${t(l.path)}: ${l.reason}`, ...(l.command ? [commandLine(l.command)] : []))
   for (const p of r.problems || []) lines.push(`Problem: ${p}`)
   for (const n of r.notes || []) lines.push(`Note: ${n}`)
-  lines.push(!past ? 'Nothing was changed. Run it with --yes to do it.'
-    : r.ok === false ? 'Fix what is above, then run: trocar uninstall'
-      : r.purge_data ? 'Install it again: trocar install' : 'Delete the captured records: trocar uninstall --purge-data')
-  return fit(lines).join('\n')
+  // §3.6: the purge hint names what `kept` holds — what --purge-data deletes — and is not given when nothing is kept
+  const keptWhat = (r.kept || []).map((k) => k.what)
+  const and = (xs) => (xs.length > 1 ? `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}` : xs[0])
+  // the script copy's last step removed trocar itself (§3.6): no trocar command is left to name (D58), so the kept paths are said as what to delete by hand
+  const codeGone = home != null && [...(r.removed || []), ...(r.scheduled || [])].includes(appDir(home))
+  // §3.6 / §1.1③: a refusal (error) and a left row with its own command already say the next step — a second one would only repeat it
+  const ownStep = !!r.error || ((r.left || []).length > 0 && r.left.every((l) => l.command) && !(r.problems || []).length)
+  if (!past) lines.push('Nothing was changed. Run it with --yes to do it.')
+  else if (r.ok === false && ownStep) { /* said above */ }
+  else if (r.ok === false) lines.push('Fix what is above, then run: trocar uninstall')
+  else if (!r.purge_data && keptWhat.length && codeGone) lines.push(`trocar itself is removed. To delete what was kept (${and(keptWhat)}), delete ${and(r.kept.map((k) => `${t(k.path)}/`))} by hand.`)
+  else if (!r.purge_data && keptWhat.length) lines.push(`To delete what was kept (${and(keptWhat)}), run:`, commandLine('trocar uninstall --purge-data'))
+  else if (!codeGone) lines.push('Install it again: trocar install')
+  return fit(lines, { home }).join('\n')
 }

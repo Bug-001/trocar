@@ -27,6 +27,11 @@ const SETUP_WHY = { 'carrier-absent': 'trocar has not set up its certificate for
 const errText = (e) => String((e && e.message) || e)
 /** The root's state the way `status` reads it (cert.root.state, 1.6 §9.4): trocar-ca.pem asked of the user's store through the injected reader — the one
  *  store question `on` asks, so ⑪'s root-missing is status's (4.11 P4b). Pending / declined / unreadable → not `missing`: not setup work, or not known. */
+// the place a route writes, as on's plan names it (1.6 V85): its file, its plug-in's file (dir + name), or the directory its file is chosen in
+const routePaths = (route, ctx) => (route.file ? resolveLoc(route.file, ctx)
+  : route.dir ? resolveLoc(route.dir, ctx).map((d) => (ctx.join || path.join)(d, route.name))
+    : route.select ? resolveLoc(route.select.dir, ctx) : [])
+
 export async function rootOf({ dir, m, rootStore, fs }) {
   if (!rootStore) return null
   if ((m.install.pending || []).some((p) => p.item === 'root-store')) return { state: 'pending' }
@@ -62,7 +67,7 @@ export async function turnOnModel({ os, home, env = process.env, ids = null, har
   const wctx = { ...ctx, dir, home, manifest: m, fs, now, persistentEnv, systemProxy, render, ...(newId ? { newId } : {}) }
   const planned = on.map((h) => ({ h, plan: planRoutes(byName.get(h), wctx) }))
   // --dry-run (1.6 §1.1): what would be written — each planned route with the files it resolves to — and nothing written
-  out.planned = planned.flatMap(({ h, plan }) => plan.routes.map((r) => ({ harness: h, route: r.id, kind: r.route.kind, forms: r.forms, paths: r.route.file ? resolveLoc(r.route.file, wctx) : [] })))
+  out.planned = planned.flatMap(({ h, plan }) => plan.routes.map((r) => ({ harness: h, route: r.id, kind: r.route.kind, forms: r.forms, paths: routePaths(r.route, wctx), ...(r.route.proxyKeys ? { keys: r.route.proxyKeys.map((k) => [].concat(k).join('.')) } : {}) })))
   if (dryRun) return { ...out, exit: refused.length || pending.length ? 1 : 0 }
   // desired on first (R9), then the liveness window opens: the holder judge (P12) counts from here
   const stateF = path.join(dir, 'state.json')
