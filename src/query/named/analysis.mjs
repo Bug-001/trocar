@@ -9,10 +9,11 @@ import { QueryArgError } from './index.mjs';
 import { markOn, sayUnknown, sessionState, sinceAt, version as sessionVersion } from './session.mjs';
 import { priceTable, pricingId } from './pricing.mjs';
 import { CA, FLAG, modelAt, refAt, stateAt, usageAt } from '../session-doc.mjs';
+import { axisOf } from '../ctx-files.mjs';
 import { BREAK_STATES, breakUsd, bucketOf, costOf, missedOf, priceMatch } from '../../view/metrics.mjs';
 
 export const about = Object.freeze({
-  summary: "One session's estimated cost and totals: per bucket, the main lane's cache hit and break cost, and failures. While the answer has pending, the totals are the sums so far: wait until it is gone before using them. With --from, --to or --since, one page of each step's price and the breaks instead of the totals.",
+  summary: "One session's estimated cost and totals: per bucket, the main lane's cache hit and break cost, failures, and how many steps are problems. While the answer has pending, the totals are the sums so far: wait until it is gone before using them. With --from, --to or --since, one page of each step's price and the breaks instead of the totals.",
   params: Object.freeze({
     id: 'The session: a session id, as the sessions query lists them. Required.',
     from: "A record id: gives the steps after it. One that is no step of the session gives the last page. Give at most one of --from, --to and --since.",
@@ -30,6 +31,7 @@ const EASE_ROWS = 2000; // the rows summed between two turns of the event loop
 const bytesOf = (v) => Buffer.byteLength(JSON.stringify(v));
 const EMPTY_PAGE = bytesOf({ usd: {}, breaks: [] });
 
+const PROBLEM = FLAG.cacheBreak | FLAG.failed; // the bits of a problem step in the head's `cols`
 const sums = () => ({ usd: 0, priced: 0, unpriced: 0, failed: 0, approx: 0, keys: new Set() });
 const bucket = ({ keys, ...s }) => ({ ...s, usd: s.priced ? s.usd : null, approxKeys: [...keys].sort() });
 const added = (list) => list.reduce((a, b) => ({ usd: a.usd + b.usd, priced: a.priced + b.priced, unpriced: a.unpriced + b.unpriced, failed: a.failed + b.failed,
@@ -59,9 +61,10 @@ const modelsOf = (prices) => [...prices].filter(([m]) => m != null).sort(([a], [
 
 // the whole session priced → the default document's pricing.models and totals. Every EASE_ROWS rows it yields the event loop and says progress; a background
 // slice in flight may sync the columns meanwhile, so the walk is over the step order as it stands now.
-async function totalsOf(ctx, { cols, lanes }, { step, prices }) {
+async function totalsOf(ctx, V, { step, prices }) {
+  const { cols, lanes } = V, axis = cols.keys.get(axisOf(V));
   const cost = { main: sums(), sub: sums(), bg: sums() }, breaks = [], failedIn = new Map(), order = cols.order.slice();
-  let read = 0, tot = 0, hitSteps = 0, cacheUnknown = false;
+  let read = 0, tot = 0, hitSteps = 0, cacheUnknown = false, problems = 0;
   for (let i = 0; i < order.length; i++) {
     if (i > 0 && i % EASE_ROWS === 0) { await ctx.ease?.(); ctx.progress?.(); }
     const s = step(order[i]), { rid, k, b, u } = s;
@@ -71,6 +74,7 @@ async function totalsOf(ctx, { cols, lanes }, { step, prices }) {
       if (t > 0) { read += u.read || 0; tot += t; hitSteps++; }
       if (s.brk) breaks.push(s.brk);
     }
+    if (s.lane === axis && cols.fl[k] & PROBLEM) problems++;
     if (b == null) continue;
     if (s.failed) { cost[b].failed++; if (!failedIn.has(s.lane)) failedIn.set(s.lane, rid); continue; }
     if (s.cost == null) { cost[b].unpriced++; continue; }
@@ -87,7 +91,7 @@ async function totalsOf(ctx, { cols, lanes }, { step, prices }) {
       cost: { main: bucket(cost.main), sub: bucket(cost.sub), bg: bucket(cost.bg), total },
       hit: tot > 0 ? read / tot : null, hitSteps, cacheUnknown,
       breakCost: { usd: counted.length ? counted.reduce((n, x) => n + x.usd, 0) : null, counted: counted.length, uncomputable: breaks.length - counted.length, worst },
-      failed: total.failed, firstFailed: at ? { rid: failedIn.get(cols.keys.get(at.lane)), lane: at.lane } : null, unpricedSteps: total.unpriced,
+      failed: total.failed, firstFailed: at ? { rid: failedIn.get(cols.keys.get(at.lane)), lane: at.lane } : null, unpricedSteps: total.unpriced, problems,
     },
   };
 }

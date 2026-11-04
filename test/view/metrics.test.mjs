@@ -2,7 +2,7 @@
 // by hand from those sections; nothing here is copied from a run of the code.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { QUIET_CAUSES, CACHE_STATES, usageOf, hitRatio, cacheState, missedOf, cacheFacts, priceMatch, costOf, breakUsd, bucketOf } from '../../src/view/metrics.mjs';
+import { QUIET_CAUSES, CACHE_STATES, usageOf, hitRatio, cacheState, isProblemBreak, missedOf, cacheFacts, priceMatch, costOf, breakUsd, bucketOf } from '../../src/view/metrics.mjs';
 import * as board from '../../web/legacy/core/metrics.mjs';
 
 const U = { read: 80, create: 10, fresh: 10, out: 5 }; // hit 0.8
@@ -151,6 +151,25 @@ test('3.5 #45 rewrite: along the cause axis it is there, as true, exactly when t
     assert.equal('rewrite' in f, compaction, JSON.stringify({ step, cacheBreak }));
     if (compaction) assert.equal(f.rewrite, true);
   }
+});
+
+test('3.5 #56 problem breaks: a whole-window rewrite is none, whatever else the step says; the other four break states are; and off the rewrite it is isBreak', () => {
+  const rewrite = { cause: 'compaction' };
+  const cases = [
+    [{ usage: U, compaction: true, cacheBreak: rewrite }, false],
+    [{ usage: U, compaction: false, lands: true, cacheBreak: rewrite }, false],
+    [{ usage: U, compaction: true, cacheBreak: rewrite, gt: 'ttl-rebuild' }, false],
+    [{ usage: LOW, cacheBreak: append }, true],
+    [{ usage: U, cacheBreak: changed }, true],
+    [{ usage: U, cacheBreak: append, gt: 'ttl-rebuild' }, true],
+    [{ usage: U, cacheBreak: append, gt: 'provider-contradiction' }, true],
+    [{ error: 'boom', usage: U, cacheBreak: changed }, false],
+    [{ usage: null, cacheBreak: changed }, false],
+    [{ usage: U, cacheBreak: { firstCall: true } }, false],
+    [{ usage: U, cacheBreak: append }, false],
+  ];
+  for (const [row, problem] of cases) assert.equal(isProblemBreak(row), problem, JSON.stringify(row));
+  for (const [row, , isBreak] of TABLE) assert.equal(isProblemBreak(row), isBreak, JSON.stringify(row));
 });
 
 test('2.1 cost buckets: main, sub, not billed, and everything else in the background bucket', () => {
