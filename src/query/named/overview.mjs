@@ -154,7 +154,8 @@ function usageOf({ home, fs, env, inWindow, errors, later }) {
   // After the answer is written, and only where there is a next query (the worker's `later`): the one-shot CLI never writes one.
   if (later && toFill.size) later(() => fillUsage({ home, fs, segments: [...toFill] }));
   const cmp = (a, b) => (a === b ? 0 : a == null ? 1 : b == null ? -1 : String(a) < String(b) ? -1 : 1);
-  const { table, source } = priceTable({ home, env });
+  const { table, source, problem } = priceTable({ home, env });
+  if (problem) errors.push(problem);
   const ordered = [...rows.values()].sort((a, b) => cmp(a.harness, b.harness) || cmp(a.model, b.model) || cmp(a.lane, b.lane));
   const sorted = ordered.map((r) => priced({ ...r, sessions: r.sessions.size }, table));
   const partial = callsRead < callsIn, groups = Map.groupBy(sorted, (r) => r.harness);
