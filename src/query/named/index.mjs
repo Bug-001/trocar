@@ -24,22 +24,23 @@ import * as src from '../stamp.mjs';
 export class QueryArgError extends Error { constructor(m) { super(m); this.name = 'QueryArgError'; } }
 
 // `times`: the parameters a name reads as times (stampOf's clock tick); `session --since` is a record id, not a time.
+// `rowFree`: the name's answer reads no row list.
 const TIMES = Object.freeze(['since', 'until']);
 export const QUERIES = Object.freeze({
   // `status` and `doctor` are the same documents the two commands print: the query IS that document
   // (src/cli/status.mjs statusDoc / doctor.mjs doctorDoc), so the two can never disagree.
-  status: { params: Object.freeze(['harness']), run: (c) => verdict('status', c), stamp: () => null },
-  doctor: { params: Object.freeze(['harness']), run: (c) => verdict('doctor', c), stamp: () => null },
-  sessions: { params: sessions.params, run: sessions.run, stored: sessions.stored, stamp: src.usage, times: TIMES }, // its titles come from the usage sidecars (4.4 §人类标题的来源)
+  status: { params: Object.freeze(['harness']), run: (c) => verdict('status', c), stamp: () => null, rowFree: true },
+  doctor: { params: Object.freeze(['harness']), run: (c) => verdict('doctor', c), stamp: () => null, rowFree: true },
+  sessions: { params: sessions.params, run: sessions.run, stored: sessions.stored, stamp: src.titles, times: TIMES }, // its titles come from the title table (4.4 §人类标题的来源)
   session: { params: session.params, run: session.run, version: session.version, stamp: src.corpus },
   lane: { params: lane.params, run: lane.run, version: lane.version, stamp: src.corpus },
   calls: { params: calls.params, run: calls.run, stamp: src.corpus, times: TIMES },
   traffic: { params: traffic.params, run: traffic.run, stamp: src.corpus, times: TIMES },
   overview: { params: overview.params, run: overview.run, stamp: src.usage, times: TIMES },
-  block: { params: block.params, lists: block.lists, run: block.run, stamp: src.corpus },
+  block: { params: block.params, lists: block.lists, run: block.run, stamp: src.corpus, rowFree: true },
   classes: { params: classes.params, run: classes.run, stamp: src.classes, clock: true },
   segments: { params: segments.params, run: segments.run, stamp: src.corpus, times: TIMES },
-  pricing: { params: pricing.params, run: pricing.run, stamp: src.pricing },
+  pricing: { params: pricing.params, run: pricing.run, stamp: src.pricing, rowFree: true },
 });
 
 /**

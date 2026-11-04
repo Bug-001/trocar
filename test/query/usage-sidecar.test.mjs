@@ -41,7 +41,7 @@ const docOf = (home, seg = SEG) => fs.readFileSync(usageFile(home, seg), 'utf8')
 const callsOf = (home) => docOf(home).filter((o) => 'line' in o)
 const appendRaw = (home, lines) => fs.appendFileSync(path.join(home, 'raw', `${SEG}.ndjson`), lines.join('\n') + '\n')
 
-test('4.2:53-55 format: one call line per model call, the 3.2 mapping, ask on the main lane, a v3 mark to the last line', async () => {
+test('4.2:53-55 format: one call line per model call, the 3.2 mapping, a v3 mark to the last line', async () => {
   const home = await homeWith(BASE)
   await fillUsage({ home, segments: [SEG] })
   assert.equal(fs.statSync(usageFile(home, SEG)).mode & 0o777, 0o600)
@@ -49,9 +49,7 @@ test('4.2:53-55 format: one call line per model call, the 3.2 mapping, ask on th
   const calls = doc.filter((o) => 'line' in o)
   assert.deepEqual(calls.map((c) => c.line).sort(), [1, 2, 3], 'the LLM lines that are not log-only')
   const KEYS = ['line', 'lane', 'model', 'failed', 'cache_known', 'usage']
-  for (const c of calls) assert.deepEqual(Object.keys(c), c.lane === 'main' ? [...KEYS, 'ask'] : KEYS, 'ask on main-lane calls only')
-  const main = (await runQuery('session', { id: 'a' }, { home })).lanes.find((l) => l.kind === 'main')
-  for (const c of calls.filter((x) => x.lane === 'main')) assert.equal(c.ask, main.task, 'ask = the main lane\'s task')
+  for (const c of calls) assert.deepEqual(Object.keys(c), KEYS)
   const by = new Map(calls.map((c) => [c.line, c]))
   assert.equal(by.get(3).failed, true)
   assert.equal(by.get(3).usage, null)
@@ -68,7 +66,7 @@ test('4.2:53 a sidecar of another version is not read, and the next fill rebuild
   const home = await homeWith(BASE)
   await fillUsage({ home, segments: [SEG] })
   const v2 = fs.readFileSync(usageFile(home, SEG), 'utf8')
-  const v1 = v2.split('\n').filter(Boolean).map((l) => { const { ask, ...o } = JSON.parse(l); if ('v' in o) o.v = 1; return JSON.stringify(o) }).join('\n') + '\n'
+  const v1 = v2.split('\n').filter(Boolean).map((l) => { const o = JSON.parse(l); if ('v' in o) o.v = 1; return JSON.stringify(o) }).join('\n') + '\n'
   fs.writeFileSync(usageFile(home, SEG), v1)
   assert.equal(readUsage({ home, segment: SEG }), null)
   await fillUsage({ home, segments: [SEG] })
