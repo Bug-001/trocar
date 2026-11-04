@@ -5,6 +5,7 @@
 // process table) from daemon.mjs. Install lists every file before touching one. The way back — `trocar off` and
 // `trocar uninstall` — is src/off/ (the entries, the daemon stop, the lock) and src/cli/uninstall.mjs (1.6 §1.4, R3).
 import { retriedNote } from '../cli/words.mjs'
+import { UNDO_WORDS } from '../cli/receipt.mjs'
 import { isModelOs } from './model-install.mjs' // macOS / Windows: their on is turnOnModel (src/cli/on-model.mjs); this turnOn is Linux's
 import fs from 'node:fs'
 import net from 'node:net'
@@ -463,7 +464,7 @@ export async function turnOn(opts = {}) {
     // the copy of the undo side that needs no source tree (R3) is one more file trocar writes: listed in the plan and the dry run when it is missing or not what src/off generates now
     let due
     try { due = standaloneDue({ home, version: OFF_VERSION, platform: osName, fs }).map((d) => d.file) } catch { due = standaloneFiles(home, osName) } // a build that fails is said by the write below
-    if (due.length) { plan.created = [...plan.created, ...due]; plan.standalone = standalonePath(home) }
+    if (due.length) { plan.created = [...plan.created, ...due]; plan.standalone = due } // every file of it (standaloneFiles), each a plan row
     // A version 1 file (what `collector on|off` wrote before D39) is read for the harnesses installed before and the ones this run turns on, the same set
     // the guard below reads it for — and is written back as version 2 here, before the first guard: the guard must never see a file the daemon's reader
     // and this one read differently (1.6 §1.5, R12)
@@ -508,7 +509,7 @@ export async function turnOn(opts = {}) {
     // cannot be written stops the run here, before one file of the agents' is touched — the way back first, like the backup of a file (R2) — and `recorded` writes the failure (R11)
     let standalone
     try { standalone = writeStandalone({ home, version: OFF_VERSION, platform: osName, fs }) } catch (e) {
-      throw Object.assign(new Error(`${standalonePath(home)}, the undo that works without the source tree, could not be written (${String((e && e.message) || e)}); no file of the agents' was changed — put that right, then run trocar on again`), { code: e && e.code })
+      throw Object.assign(new Error(`${standalonePath(home)}, ${UNDO_WORDS}, could not be written (${String((e && e.message) || e)}); no file of the agents' was changed — put that right, then run trocar on again`), { code: e && e.code })
     }
     const guard = () => {
       let st

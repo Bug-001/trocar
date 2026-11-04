@@ -7,7 +7,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import tls from 'node:tls'
 import { modelWorld, sharedCertFileWorld } from '../helpers/model-world.mjs'
-import { planInstall } from '../../src/collector/model-install.mjs'
+import { planInstall, ruleUFiles } from '../../src/collector/model-install.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { readManifest } from '../../src/off/manifest.mjs'
 import { codeId } from '../../src/version.mjs'
@@ -300,4 +300,56 @@ test('CM37: a loaderless plugin cert → one owned plugin file in its folder, no
   const { exit, receipt } = await runUninstall({ home: w.home, env: w.env, yes: true, deps: { platform: 'darwin', exec: exec.run, custody: w.custody, procs: async () => [], sleep: async () => {}, drainMs: 0, getuid: () => 501 } })
   assert.equal(exit, 0, JSON.stringify({ p: receipt.problems, l: receipt.left }))
   assert.deepEqual(snapshot(ext), before)
+})
+
+// 4.11 rule U: a setting that names trocar's own tree is never the user's file; on the OSes whose file names ignore case, a setting spelled in
+// another case names the same file (a Windows test machine: trocar's own bundle, spelled in another case, took a rule U block)
+for (const os of ['win32', 'darwin']) {
+  test(`rule U (${os}): a setting naming trocar's own tree in another letter case is trocar's, not the user's file`, async () => {
+    const own = (home) => path.join(home, '.TROCAR', 'Collector', 'ca', 'trocar-ca.pem')
+    const w = await modelWorld({ os, env: (home) => ({ NODE_EXTRA_CA_CERTS: own(home), SSL_CERT_FILE: own(home) }) })
+    const named = w.harnesses.filter((d) => d.proxyMode).flatMap((d) => ruleUFiles(d, w.ctx, { home: w.home, owns: w.owns }).map((x) => `${d.name}: ${x.file}`))
+    assert.deepEqual(named, [])
+  })
+}
+
+// 1.6 §3.2 / V85: plan and act come from one list — every carrier install records for a form or a file (a key that stays the user's, a rule U file
+// it leaves alone, as well as what it places) has its row in the plan, with the same state when it changes nothing
+for (const shape of ['the key is the user\'s', 'the file is not this user\'s']) {
+  test(`V85: every carrier install records is a row of its plan (${shape})`, async () => {
+    let w, owns
+    if (shape === 'the key is the user\'s') {
+      w = await everything()
+      const mine = path.join(w.home, 'certs', 'z.pem'); put(mine, USER_PEM)
+      put(path.join(w.home, '.zcode', 'cli', 'config.json'), JSON.stringify({ network: { caCertFile: mine } }))
+      owns = w.owns
+    } else {
+      w = await sharedCertFileWorld({ userPem: USER_PEM })
+      const real = fs.realpathSync(w.file)
+      owns = (p) => (p === real ? false : w.owns(p))
+    }
+    const rows = planInstall({ os: 'darwin', harnesses: w.harnesses, ctx: w.ctx, home: w.home, owns })
+    const r = await w.install({ wrapperKit: { renderWrapper }, owns })
+    const acted = r.carriers.filter((c) => c.carrier !== 'root' && (c.state === 'rule-u' || c.code === 'not-users-file'))
+    assert.ok(acted.length > 0, JSON.stringify(r.carriers))
+    for (const c of r.carriers.filter((x) => x.carrier !== 'root')) {
+      const row = rows.find((x) => x.harness === c.harness && (c.form ? x.form === c.form : x.paths.includes(c.path)))
+      assert.ok(row, `${c.harness} ${c.form || c.path} (${c.state}) is in the plan: ${JSON.stringify(rows)}`)
+      if (c.state === 'rule-u' || c.code === 'not-users-file') assert.equal(row.state, c.state, `${c.harness}: the plan says it changes nothing, as the act does`)
+    }
+  })
+}
+
+// 1.6 §3.6: Removed says what was taken out of every file of yours, a file trocar made by writing its key or line into it (and so deletes) included
+test('1.6 §3.6: an uninstall that deletes a file trocar made for its key or line says what it took out there, not the bare path', async () => {
+  const { formatUninstallReceipt, tilde } = await import('../../src/cli/receipt.mjs')
+  const w = await everything()
+  await w.install({ wrapperKit: { renderWrapper } })
+  const exec = recordingExec()
+  const { receipt } = await runUninstall({ home: w.home, env: w.env, yes: true, deps: { platform: 'darwin', exec: exec.run, custody: w.custody, procs: async () => [], sleep: async () => {}, drainMs: 0, getuid: () => 501 } })
+  const held = new Set(receipt.entries.map((e) => e.path)) // a file trocar wrote a key or a line into
+  const yours = receipt.removed.filter((p) => held.has(p))
+  assert.ok(yours.length > 0, JSON.stringify(receipt.removed))
+  const rows = formatUninstallReceipt(receipt, { home: w.home, platform: 'darwin' }).split('\n')
+  for (const p of yours) assert.ok(rows.some((l) => l.trim().startsWith(`${tilde(p, w.home)}: `)), `${p}: what was taken out is said: ${rows.join('\n')}`)
 })

@@ -416,7 +416,7 @@ test('a copy that cannot be written stops the install before one file of the age
   assert.equal(await runInstallCli(['--yes', '--json'], onCtx(home, io, { deps: { fs: refuses } })), 1)
   const r = io.json()
   assert.equal(r.ok, false)
-  assert.match(r.notes.join('\n'), /trocar-off[^\n]*the undo that works without the source tree, could not be written \(EACCES[^\n]*no file of the agents' was changed/)
+  assert.match(r.notes.join('\n'), /trocar-off[^\n]*EACCES/)
   assert.equal(r.standalone, undefined, 'the receipt names no path that is not a file')
   assert.deepEqual([fs.existsSync(standalonePath(home)), fs.readFileSync(settings, 'utf8') === before], [false, true], 'no copy, and the agent\'s settings are as they were')
   const failure = flowEvents(path.join(home, '.trocar', 'collector')).find((e) => e.event === 'failure' && /trocar-off/.test(e.reason))

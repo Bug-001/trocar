@@ -187,3 +187,14 @@ test('Linux install replaces a collector that answers another code: the receipt 
   assert.deepEqual([io.json().daemon.replaced, io.json().daemon.state], [true, 'running'], io.text())
   assert.equal(sys.daemon.state.up, true, 'the unit brought the collector up again')
 })
+
+// 1.6 §3.2: the undo's rows come from standaloneFiles
+test('Linux install: the plan names every file of the standalone undo', async () => {
+  const { standaloneFiles } = await import('../../src/off/paths.mjs')
+  const home = tmpDir('trocar-install-linux-')
+  seedClaude(home)
+  const io = fakeIo()
+  assert.equal(await runInstallCli(['--dry-run', '--json'], { ...onCtx(home, io), platform: 'linux' }), 0, io.text())
+  const planned = io.json().planned
+  for (const f of standaloneFiles(home, 'linux')) assert.ok(planned.some((p) => p.path === f), `${f} is planned: ${JSON.stringify(planned)}`)
+})

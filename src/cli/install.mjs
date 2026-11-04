@@ -9,9 +9,9 @@ import path from 'node:path'
 import { EXIT, newReceipt, UNDO_LINE } from '../off/schema.mjs'
 import { refuseOldManifest, readManifest, saveManifest } from '../off/manifest.mjs'
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
-import { opLockFile, standalonePath, launcherPath, standaloneCommand } from '../off/paths.mjs'
+import { opLockFile, standalonePath, standaloneFiles, launcherPath, standaloneCommand } from '../off/paths.mjs'
 import { isInteractive, confirm } from '../off/io.mjs'
-import { fit, tilde, planItems, formWords, carrierWords, planWords, commandLine } from './receipt.mjs'
+import { fit, tilde, planItems, formWords, carrierWords, planWords, commandLine, UNDO_WORDS, asDir } from './receipt.mjs'
 import { pairs, wrap } from './text.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
 import { EVENT } from '../collector/core/codes.mjs'
@@ -20,8 +20,8 @@ import { CUT, daemonCode, replaceDaemon } from './replace-daemon.mjs'
 
 const NEEDS_YES = 'Nothing was changed. Read the plan above, then run it again with --yes'
 // R5 / R6: no terminal and no --yes — the plan was printed, nothing written, exit 2; with --json stdout is the one receipt, with the plan in `planned`
-function needsYes(io, json, planned = []) {
-  if (json) io.out(JSON.stringify({ ...newReceipt('install'), ok: false, planned, needs_yes: true, notes: [NEEDS_YES] }, null, 2)); else io.err(NEEDS_YES)
+function needsYes(io, json, planned = [], left = []) {
+  if (json) io.out(JSON.stringify({ ...newReceipt('install'), ok: false, planned, ...(left.length ? { left } : {}), needs_yes: true, notes: [NEEDS_YES] }, null, 2)); else io.err(NEEDS_YES)
   return EXIT.usage
 }
 const USAGE = 'usage: trocar install [--dry-run] [--yes] [--json]'
@@ -127,25 +127,31 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
       : r.paths && r.paths.length
         ? `${r.paths.map((p) => tilde(p, home)).join(', ')}: ${planWords(r)}` // 1.6 §3.2: what changes there
         : `path not known yet: the place of its ${r.carrier} could not be resolved on this machine`)
-    const planned = [
+    // one line per (agent, place): the same file reached by three forms of one agent is one line, with the forms named (D46)
+    const byPlace = (rs) => [...rs.reduce((by, r) => by.set(`${r.harness}|${carrierOf(r)}`, [...(by.get(`${r.harness}|${carrierOf(r)}`) || []), r]), new Map()).values()]
+      .map((group) => ({ harness: group[0].harness, forms: group.map((r) => r.form), carrier: group[0].carrier, paths: group[0].paths, keys: group[0].keys, state: group[0].state, code: group[0].code, why: group[0].why, what: group[0].harness, detail: carrierOf(group[0]) }))
+    const changes = [
       ...(only && !need.root ? [] : [{ what: 'root', detail: "this machine's own root certificate, trusted for your user (the system asks you once; the key cannot be exported)" }]),
-      // one line per (agent, place): the same file reached by three forms of one agent is one line, with the forms named (D46)
-      ...[...rows.reduce((by, r) => by.set(`${r.harness}|${carrierOf(r)}`, [...(by.get(`${r.harness}|${carrierOf(r)}`) || []), r]), new Map()).values()]
-        .map((group) => ({ harness: group[0].harness, forms: group.map((r) => r.form), carrier: group[0].carrier, paths: group[0].paths, keys: group[0].keys, what: group[0].harness, detail: carrierOf(group[0]) })),
+      ...byPlace(rows.filter((r) => !r.state)),
       // V85: trocar's own tree is ONE line (uninstall takes all of it back); every file of yours outside it is its own line, above
-      ...(only ? [] : [{ what: 'trocar', detail: `${tilde(path.join(home, '.trocar'), home)}${platform === 'win32' ? '\\' : '/'}: trocar's own files (its root certificate and key, the install record, and ${tilde(standalonePath(home), home)}, the undo that works without this source tree)` }]),
+      ...(only ? [] : [{ what: 'trocar', detail: `${asDir(tilde(path.join(home, '.trocar'), home), platform)}: trocar's own files (its root certificate and key, the install record, and ${standaloneFiles(home, platform).map((f) => tilde(f, home)).join(' and ')}, ${UNDO_WORDS})` }]),
       // D61 (1.6 §3.2 step 5, 4.11 §1 install 7): the login entry is a file of YOURS outside trocar's tree, so it is its own line (V85), and the plan says a daemon runs from now on
       ...staleItem(stale, root),
       ...(pathItem ? [pathItem] : []),
       ...(unit && !only ? [{ what: 'autostart', detail: `${platform === 'win32' ? 'the scheduled task \\trocar\\collector' : tilde(unit.path, home)}: a collector daemon starts at every login from now on, and is started now (trocar uninstall takes it out again)` }] : []),
     ]
-    say(fit([`trocar install will change ${planned.length} thing${planned.length === 1 ? '' : 's'}:`,
-      ...pairs(planned.map((p) => [p.what, p.detail]), { home }),
-      ...(only ? (planned.length ? [] : [`${only} has every certificate carrier it needs: there is nothing to set up.`]) : rows.length ? [] : ['No agent was found on this machine: only the root is installed.']),
+    // 1.6 §3.2 / V85: what install records and changes nothing at (a key that stays yours, a file that is not yours) is said too, apart from the
+    // changes: `planned` is only what the run changes (the board's Set up confirms exactly that list, 4.4 #13), `left` the rest
+    const left = byPlace(rows.filter((r) => r.state))
+    const planned = changes
+    say(fit([`trocar install will change ${changes.length} thing${changes.length === 1 ? '' : 's'}:`,
+      ...pairs(changes.map((p) => [p.what, p.detail]), { home }),
+      ...(left.length ? ['Left as they are:', ...pairs(left.map((p) => [p.what, p.detail]), { home })] : []),
+      ...(only ? (changes.length ? [] : [left.length ? `There is nothing that install can set up for ${only}.` : `${only} has every certificate carrier it needs: there is nothing to set up.`]) : rows.length ? [] : ['No agent was found on this machine: only the root is installed.']),
       ...wrap(COST), ...wrap(RISK), ...(stale ? wrap(CUT) : [])], { home }).join('\n'))
-    if (flags.has('--dry-run')) { if (json) io.out(JSON.stringify({ ...newReceipt('install'), dry_run: true, planned, ...(only && !planned.length ? { notes: [`${only}: nothing to set up`] } : {}) }, null, 2)); return EXIT.ok }
+    if (flags.has('--dry-run')) { if (json) io.out(JSON.stringify({ ...newReceipt('install'), dry_run: true, planned, ...(left.length ? { left } : {}), ...(only && !changes.length ? { notes: [`${only}: nothing to set up`] } : {}) }, null, 2)); return EXIT.ok }
     if (!flags.has('--yes')) {
-      if (json || !isInteractive(io)) return needsYes(io, json, planned)
+      if (json || !isInteractive(io)) return needsYes(io, json, planned, left)
       if (!(await confirm({ ...io, prompt: io.stdout }, 'Proceed?'))) { io.err('You said no: nothing was changed'); return EXIT.incomplete }
     }
     const r = await locked(async () => {
@@ -172,7 +178,7 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
     const receipt = { ...newReceipt('install'), ok: r.exit === 0, undo: UNDO_LINE.install, fp256: r.fp256, items: r.items, carriers: r.carriers, pending: only ? r.pending.map((p) => ({ ...p, command: 'trocar install' })) : r.pending, problems: r.problems, notes: [...r.notes, ...dmnNotes], standalone: standalonePath(home), residual_risk: RISK, daemon: daemonRow(dmn, rep), ...(unit && !only ? { autostart: { entry: platform === 'win32' ? '\\trocar\\collector' : unit.path, enabled: !dmn.unitFailed } } : {}),
       ...(refusal ? { error: { code: refusal.code, message: refusal.reason } } : {}),
       ...(r.path && r.path.rec ? { path_item: r.path.rec } : {}),
-      planned, commands: ['trocar on', 'trocar off', 'trocar status', 'trocar uninstall'] }
+      planned, ...(left.length ? { left } : {}), commands: ['trocar on', 'trocar off', 'trocar status', 'trocar uninstall'] }
     try { appendEvent(dir, { event: EVENT.installNote, where: 'install', kind: 'result', outcome: receipt.ok ? 'installed' : 'partial', reason: `install: root ${r.fp256 || 'not made'}; ${r.carriers.length} carrier row(s); ${r.pending.length} pending` }) } catch (e) { r.problems.push(`the install-note could not be written (${e.message})`) }
     // §1.1: no two rows of a receipt are the same line. One carrier reached through five forms of one agent was five identical rows (a Windows test machine
     // 2026-10-18: `codex root` five times): the rows are the DISTINCT (agent, carrier, state, file) facts, and when the forms of an
@@ -227,15 +233,16 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
   if (plan.created && (await import('../collector/core/ingress-config.mjs')).readIngressConfig({ dir: path.dirname(ingressPath), fs }).boardPort === undefined) plan.created.push(ingressPath) // the board's port, recorded below (V85: the plan names what the run writes)
   // trocar-off (R3) is install's: named in the plan and the dry run when this run would write it, i.e. when it is not already what src/off generates
   const stdPath = standalonePath(home)
-  let stdNew = true
-  try { stdNew = standaloneDue({ home, version: OFF_VERSION, fs }).length > 0 } catch { stdNew = true }
+  let due
+  try { due = standaloneDue({ home, version: OFF_VERSION, platform, fs }).map((d) => d.file) } catch { due = standaloneFiles(home, platform) } // a build that fails is said by the write below
+  const stdNew = due.length > 0
   const root = deps.root || packageRoot()
   const stale = unit ? await staleDaemon({ platform, home, env, fs, deps, root }) : null // 1.6 §3.2 step 5, as on macOS / Windows
   const pathItem = await pathPlan({ root, home, env, platform, fs })
   const daemonItem = [...staleItem(stale, root), ...(pathItem ? [pathItem] : [])]
-  const planned = [...planItems({ ...plan, standalone: stdNew ? stdPath : null }, { home, platform }), ...daemonItem]
-  say([formatPlan({ ...plan, standalone: stdNew ? stdPath : null }, { home, platform, command: 'install' }), ...pairs(daemonItem.map((p) => [p.what, p.detail]), { home }), ...wrap(COST), ...(stale ? wrap(CUT) : [])].join('\n'))
-  if (flags.has('--dry-run')) { if (json) io.out(JSON.stringify({ ...newReceipt('install'), dry_run: true, planned, harnesses: plan.targets, changed: plan.changed, created: [...(stdNew ? [stdPath] : []), ...plan.created] }, null, 2)); return EXIT.ok }
+  const planned = [...planItems({ ...plan, standalone: due }, { home, platform }), ...daemonItem]
+  say([formatPlan({ ...plan, standalone: due }, { home, platform, command: 'install' }), ...pairs(daemonItem.map((p) => [p.what, p.detail]), { home }), ...wrap(COST), ...(stale ? wrap(CUT) : [])].join('\n'))
+  if (flags.has('--dry-run')) { if (json) io.out(JSON.stringify({ ...newReceipt('install'), dry_run: true, planned, harnesses: plan.targets, changed: plan.changed, created: [...due, ...plan.created] }, null, 2)); return EXIT.ok }
   if ((plan.writing || stdNew || stale || pathItem) && !flags.has('--yes')) {
     if (json || !isInteractive(io)) return needsYes(io, json, planned)
     if (!(await confirm({ ...io, prompt: io.stdout }, 'Proceed?'))) { io.err('You said no: nothing was changed'); return EXIT.incomplete }
@@ -244,7 +251,7 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
   const done = await locked(async () => {
     let stdl
     try { stdl = writeStandalone({ home, version: OFF_VERSION, fs }) } catch (e) {
-      const reason = `${stdPath}, the undo that works without the source tree, could not be written (${String((e && e.message) || e)}); no file of the agents' was changed. Put that right, then run trocar install again`
+      const reason = `${stdPath}, ${UNDO_WORDS}, could not be written (${String((e && e.message) || e)}); no file of the agents' was changed. Put that right, then run trocar install again`
       try { appendEvent(path.join(home, '.trocar', 'collector'), { event: EVENT.failure, where: 'install', code: (e && e.code) || 'install-error', reason }) } catch {}
       return { failed: reason }
     }
@@ -285,16 +292,22 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
 const breakGlass = (home, platform) => ['If trocar itself breaks, run:', commandLine(standaloneCommand(standalonePath(home), platform))]
 
 // Set up (only): a row of the plan is one of that harness's forms whose own carrier install has not placed (setupOf's `missing`, the judgement
-// status and on read, with the root read as on reads it: `root` when it is gone from the user's store, so install's run asks for it again); without
-// `only`, every row → { row, root }
+// status and on read, with the root read as on reads it: `root` when it is gone from the user's store, so install's run asks for it again); rule U's
+// file (form null) only when its block is not on record intact, as the run then finds it; a row that changes nothing (`state`) when the run runs at all.
+// Without `only`, every row → { row, root }
 async function missingOf(only, { platform, harnesses, ctx, home, rootStore, fs }) {
   if (!only) return { row: () => true, root: true }
-  const [{ setupOf }, { readManifest }, { rootOf }] = await Promise.all([import('../collector/core/proxymode/status-facts.mjs'), import('../collector/core/trust/journal.mjs'), import('../collector/model-on.mjs')])
+  const [{ setupOf, intactOf }, { readManifest }, { rootOf }, { itemsOfPhase }, { pemBody, holdsRoot }, { caPaths }] = await Promise.all([import('../collector/core/proxymode/status-facts.mjs'),
+    import('../collector/core/trust/journal.mjs'), import('../collector/model-on.mjs'), import('../off/manifest.mjs'), import('../collector/model-install.mjs'), import('../collector/core/tls/ca-store.mjs')])
   const dir = path.join(home, '.trocar', 'collector'), manifest = readManifest(dir, fs)
   const root = manifest && manifest.install ? await rootOf({ dir, m: manifest, rootStore, fs }) : null
   const missing = setupOf(harnesses.find((d) => d.name === only), { os: platform, manifest, ctx, root, fs }).missing
   const forms = new Set(missing.map((x) => x.form))
-  return { row: (r) => r.harness === only && (r.form == null || forms.has(r.form)), root: missing.some((x) => x.what === 'root-missing') } // form null: rule U's file, the harness's own
+  // intact AND of the root of now: a block of an older root is replaced by the run (㉒), so it is a change the plan names (V85)
+  let body = null
+  try { body = pemBody(fs.readFileSync(caPaths(path.join(dir, 'ca')).pem, 'utf8')) } catch { /* no root file: the run makes one, and every block is new */ }
+  const intact = (file) => !!body && itemsOfPhase(manifest, 'install').some((i) => i.kind === 'text' && i.path === file && holdsRoot(i, body) && intactOf(manifest, i, fs))
+  return { row: (r) => r.harness === only && (r.form != null ? forms.has(r.form) : r.state ? forms.size > 0 : !intact(r.paths[0])), root: missing.some((x) => x.what === 'root-missing') }
 }
 
 /** The board's port (4.4 §Plan 「端口」), chosen once by install: none free (or the file cannot be written) is a pending row with the reason, never a throw. */

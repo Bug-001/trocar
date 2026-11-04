@@ -232,3 +232,71 @@ test('1.6 §3.2: every plan row that names a path says what changes there, a car
   assert.ok(plan.some((p) => p.what === 'kimi-code'), JSON.stringify(plan))
   for (const p of plan.filter((x) => /^~[\\/]/.test(x.detail))) assert.match(p.detail, /^\S.*: \S/, `${p.what}: the path, then what changes there`)
 })
+
+// 4.4 Set up (install <harness>): kimi-code installed with a user certificate file (rule U), then its wrapper lost to the agent's own update —
+// the Set up's dry run (`planned` is the plan the board confirms, 4.4 #13 · V85) is asked of it
+async function setUpKimi({ owns = null, after = () => {} } = {}) {
+  const { install } = await import('../../src/cli/install.mjs')
+  const { readManifest } = await import('../../src/off/manifest.mjs')
+  const w = await modelWorld({ commands: ['kimi'], env: (home) => ({ NODE_EXTRA_CA_CERTS: path.join(home, 'certs', 'mine.pem') }) })
+  w.file = w.env.NODE_EXTRA_CA_CERTS
+  const own = owns ? owns(w) : w.owns
+  fs.mkdirSync(path.dirname(w.file), { recursive: true }); fs.writeFileSync(w.file, `${(await import('node:tls')).rootCertificates[1].trim()}\n`)
+  const kimi = path.join(w.home, '.kimi-code', 'bin', 'kimi')
+  fs.mkdirSync(path.dirname(kimi), { recursive: true }); fs.writeFileSync(kimi, Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 0, 0, 0, 0])) // its native program: the wrapper's precondition
+  await w.install({ wrapperKit: { renderWrapper }, owns: own })
+  const wrapper = readManifest(w.dir).files.find((f) => f.harness === 'kimi-code' && f.role === 'wrapper')
+  assert.ok(wrapper, 'kimi-code has a carrier of its own to lose')
+  fs.writeFileSync(wrapper.path, Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 9, 9, 9, 9])) // the agent's update put its own program back over trocar's launch command
+  await after(w)
+  const io = fakeIo()
+  const deps = { getuid: () => 501, unit: null, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, harnesses: w.harnesses.filter((d) => d.name === 'kimi-code'), which: w.ctx.which, owns: own } // kimi-code alone: this machine's own agents name no file of this world
+  assert.equal(await install({ io, env: w.env, home: w.home, platform: 'darwin', deps, flags: new Set(['--dry-run', '--json']), only: 'kimi-code' }), 0, io.text())
+  assert.deepEqual(validateReceipt(io.json()), [], io.text())
+  return { w, planned: io.json().planned, left: io.json().left || [] }
+}
+
+test('V85 · Set up: a rule U block that is intact is not in the plan of the harness that is set up again', async () => {
+  const { w, planned } = await setUpKimi()
+  assert.ok(planned.some((p) => p.carrier === 'wrapper'), `the lost carrier is planned: ${JSON.stringify(planned)}`)
+  assert.deepEqual(planned.filter((p) => (p.paths || []).includes(w.file)), [], 'the intact block is not a change')
+})
+
+test('4.4 #13 · V85 · Set up: a block of an older root in the user file is replaced by the run, so the plan names it', async () => {
+  const tls = await import('node:tls')
+  const { readManifest, saveManifest } = await import('../../src/off/manifest.mjs')
+  const { w, planned } = await setUpKimi({
+    after: (w) => { // the block and its record hold another root (the root was made again since): both rewritten alike, so the block is still intact
+      const m = readManifest(w.dir)
+      const e = m.entries.find((x) => x.kind === 'text' && x.path === w.file)
+      const was = fs.readFileSync(path.join(w.dir, 'ca', 'trocar-ca.pem'), 'utf8').trim()
+      const swap = (t) => { assert.ok(t.includes(was)); return t.split(was).join(tls.rootCertificates[2].trim()) }
+      for (const o of e.ops) if (o.pem) o.inserted = swap(o.inserted)
+      fs.writeFileSync(w.file, swap(fs.readFileSync(w.file, 'latin1')), 'latin1')
+      saveManifest(w.dir, m)
+    },
+  })
+  assert.ok(planned.some((p) => (p.paths || []).includes(w.file)), `the older root's block is a change: ${JSON.stringify(planned)}`)
+})
+
+test('4.4 #13 · Set up: a certificate file that is not this user\'s is no row of the plan the board confirms; the dry run says it apart', async () => {
+  const { w, planned, left } = await setUpKimi({ owns: (w) => (p) => (p === fs.realpathSync(w.env.NODE_EXTRA_CA_CERTS) ? false : w.owns(p)) })
+  assert.ok(planned.some((p) => p.carrier === 'wrapper'), `the lost carrier is planned: ${JSON.stringify(planned)}`)
+  assert.deepEqual(planned.filter((p) => p.state), [], 'every row of the plan is a change')
+  assert.ok(left.some((p) => p.state === 'skipped' && p.code === 'not-users-file' && p.paths.includes(w.file)), JSON.stringify(left))
+})
+
+// 1.6 §3.2: the undo's rows come from standaloneFiles, the one list install writes and uninstall removes (trocar-off.cmd beside it on Windows)
+for (const platform of ['darwin', 'win32']) {
+  test(`1.6 §3.2 (${platform}): the install plan names every file of the standalone undo`, async () => {
+    const { install } = await import('../../src/cli/install.mjs')
+    const { standaloneFiles } = await import('../../src/off/paths.mjs')
+    const { tilde } = await import('../../src/cli/receipt.mjs')
+    const w = await modelWorld({ os: platform })
+    const io = fakeIo()
+    const deps = { getuid: () => 501, unit: null, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, harnesses: [], which: w.ctx.which, owns: w.owns }
+    assert.equal(await install({ io, env: w.env, home: w.home, platform, deps, flags: new Set(['--dry-run', '--json']) }), 0, io.text())
+    const words = io.json().planned.map((p) => p.detail).join('\n')
+    for (const f of standaloneFiles(w.home, platform)) assert.ok(words.includes(tilde(f, w.home)), `${f} is named: ${words}`)
+  })
+}

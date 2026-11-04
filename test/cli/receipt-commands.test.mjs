@@ -115,3 +115,13 @@ test('the rows of on / install measure a HOME path as it is printed (~), so ever
     assert.ok(out.every((l) => l.length <= 80 && !l.includes(home)), out.join('\n'))
   }
 })
+
+// 1.6 §3.6 / §1.1: a directory's trailing mark is the platform's separator — a Windows row never mixes `\` with `/`
+test('1.6 §3.6: the uninstall receipt marks a directory with the separator of its platform', () => {
+  const home = 'C:\\Users\\u', t = (...p) => [home, '.trocar', ...p].join('\\')
+  const r = { ...newReceipt('uninstall'), ok: true, removed: [t('collector', 'run')], dropped_backups: [t('backup', 'a-1'), t('backup', 'b-2')], kept: [{ what: 'your captured records', path: t('raw'), bytes: 10 }, { what: "trocar's own log", path: t('collector', 'flows'), bytes: 10 }], left: [], problems: [], notes: [] }
+  const text = formatUninstallReceipt(r, { home, platform: 'win32' })
+  const rows = text.split('\n').filter((l) => l.includes('\\'))
+  assert.ok(rows.length > 0, text)
+  for (const l of rows) assert.doesNotMatch(l, /\//, `one separator per row: ${l}`)
+})
