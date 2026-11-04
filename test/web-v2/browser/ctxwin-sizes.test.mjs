@@ -136,6 +136,7 @@ for (const theme of ['light', 'dark']) for (const width of WIDTHS) {
         return !!x && +x[1] === m && !document.querySelector('#ctxwin .cwload') && !!document.querySelector('#ctxwin .cblk')
       }, M, { timeout: 30000, polling: 'raf' })
       await atRest(page, 'after the step was drawn')
+      const sh0 = await page.evaluate(() => document.querySelector('#ctxwin').scrollHeight) // before any scroll: nothing above the landing was measured yet
       await page.evaluate(() => { document.querySelector('#ctxwin').scrollTop = 0 })
       await atRest(page, 'after scrolling to the top')
       // in the page: the window's scroll numbers and the last item starting inside the visible box
@@ -147,7 +148,8 @@ for (const theme of ['light', 'dark']) for (const width of WIDTHS) {
       const yOf = (key) => page.evaluate((k) => document.querySelector(`#ctxwin .cwit[data-key="${CSS.escape(k)}"]`)?.getBoundingClientRect().top ?? null, key)
       const r2 = (x) => Math.round(x * 100) / 100
       let at = await look(), scrolls = 0
-      const sh0 = at.sh, moved = []
+      const moved = []
+      assert.equal(at.sh, sh0, `at the top: scrollHeight ${sh0} became ${at.sh}`)
       while (at.top + at.h < at.sh - 1) {
         assert.notEqual(at.key, null, `no item in view at scrollTop ${at.top}`)
         await page.evaluate((d) => { document.querySelector('#ctxwin').scrollTop += d }, Math.floor(at.h / 2))

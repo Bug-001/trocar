@@ -15,6 +15,7 @@
 .desk.next #ctxwin .chline{margin-top:0;padding-top:10px;}
 .desk.next #ctxwin .cblk,.desk.next #ctxwin .cwturn{content-visibility:visible;}
 .desk.next #ctxwin .cwsec{box-sizing:border-box;height:var(--cwsec-pitch);margin:0;padding-top:10px;}
+.desk.next #ctxwin .cwfoldall{box-sizing:border-box;height:var(--cwline-pitch);margin:0;align-items:center;}
 .desk.next #ctxwin .cwturn{margin-bottom:6px;}
 /* the rows of an open turn follow its head, indented under it */
 .desk.next #ctxwin .cblk.cwtrow{margin-left:12px;}
