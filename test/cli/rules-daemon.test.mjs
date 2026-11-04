@@ -8,6 +8,7 @@ import path from 'node:path'
 import { runCli } from '../../src/cli/main.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
 import { CONTROL_TOKEN_HEADER } from '../../src/off/token-header.mjs'
+import { rulesState } from '../../src/paths.mjs'
 import { fakeIo } from './fixtures/on-ctx.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 
@@ -109,9 +110,40 @@ test('V116: the daemon answers: memory stopped, its stats and held passed on, fi
   } finally { await w.close() }
 })
 
+test('§4.4, 5.1: rules off reaches the daemon before it touches the file: the rule is still on in the file when the daemon hears, and off once the command is done', async () => {
+  let inFile = null
+  const w = await world('darwin', (req, res) => { inFile = JSON.parse(fs.readFileSync(w.file, 'utf8')).rules[0]; json(200, STOPPED)(req, res) })
+  try {
+    w.seed([rule(armed)])
+    assert.equal((await w.rules(['off'])).exit, 0)
+    assert.deepEqual(inFile.armed, armed.armed)
+    assert.equal(Object.hasOwn(JSON.parse(fs.readFileSync(w.file, 'utf8')).rules[0], 'armed'), false)
+  } finally { await w.close() }
+})
+
+test('5.1: rules off does not wait on the lock to stop the rules: with rules.lock held the daemon still hears, memory stopped, exit 1 rules-unwritable', async () => {
+  const w = await world('darwin', json(200, STOPPED))
+  try {
+    w.seed([rule(armed)])
+    const bytes = fs.readFileSync(w.file), lock = path.join(w.trocar, 'rules.lock'), later = new Date(Date.now() + 60_000)
+    fs.writeFileSync(lock, 'someone')
+    fs.utimesSync(lock, later, later)
+    const { exit, doc } = await w.rules(['off'])
+    assert.equal(exit, 1)
+    valid(doc)
+    assert.deepEqual(w.asked, [['POST', '/rules/off', w.token]])
+    assert.equal(doc.memory, 'stopped')
+    assert.equal(doc.error.code, 'rules-unwritable')
+    assert.deepEqual(fs.readFileSync(w.file), bytes)
+  } finally { await w.close() }
+})
+
 test('V116: the daemon stopped but the file cannot be written: exit 1 rules-unwritable, memory still stopped, stats.written reported either way', async () => {
   for (const written of [true, false]) {
-    const w = await world('darwin', json(200, { ...STOPPED, stats: { written, reason: written ? null : 'ENOSPC' } }))
+    // What a real daemon does before it answers (5.1): the stop goes into rules-state.json, or it could not be written and the reply says so.
+    const say = json(200, { ...STOPPED, stats: { written, reason: written ? null : 'ENOSPC' } })
+    const w = await world('darwin', (req, res) => { if (written) fs.writeFileSync(rulesState(w.trocar), JSON.stringify({ rules_off_seq: 1 })); say(req, res) })
+    w.seed([rule(armed)])
     fs.chmodSync(w.trocar, 0o500)
     try {
       const { exit, doc } = await w.rules(['off'])
@@ -122,6 +154,8 @@ test('V116: the daemon stopped but the file cannot be written: exit 1 rules-unwr
       assert.equal(doc.file.written, false)
       assert.equal(doc.stats.written, written)
       assert.deepEqual(doc.held, STOPPED.held)
+      assert.deepEqual(doc.rules.map((r) => r.name), ['one'])
+      if (written) assert.equal(doc.rules[0].state, 'disabled', 'the recorded stop holds the rule off though the file still has it on')
     } finally { fs.chmodSync(w.trocar, 0o700); await w.close() }
   }
 })
