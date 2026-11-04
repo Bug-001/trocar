@@ -17,6 +17,7 @@ import { wrap, WIDTH } from './text.mjs'
 import { printJson, errorDoc } from './json.mjs'
 import { EXIT } from './schema.mjs'
 import { codeId } from '../version.mjs'
+import { recordUserPath } from '../off/user-path.mjs'
 
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
 const REPORT = 'Please report it with what you ran: https://github.com/Bug-001/trocar/issues'
@@ -46,6 +47,11 @@ export async function runCli(argv, { io = makeIo({ stdin: process.stdin, stdout:
   if (mutates && uid === 0) return refuse(cmd.name, 'usage', `trocar ${cmd.name}: run this as your own user, not as root.`)
   if (args.error) return refuse(cmd.name, args.error.code, args.error.message, { usage: args.error.usage })
   const run = (deps.commands && deps.commands[cmd.name]) || cmd.run
+  // 4.11 `present`: a command typed in a terminal records the user's PATH while trocar is installed (before the run, for what it reads; after it, for
+  // what `install` just installed), so every asker resolves a form's command alike. `daemon` is the login service's start: its PATH is not the user's.
+  // A command `deps.commands` replaces does nothing of its own, so it records nothing either. A failure to record never changes the answer.
+  const remember = () => { if (mutates && cmd.name !== 'daemon' && run === cmd.run) try { recordUserPath({ home, env, ...(deps.fs ? { fs: deps.fs } : {}) }) } catch { /* the next command records it */ } }
+  remember()
   try {
     return await run(rest, { io: cio, env, home, platform, uid, json, args, deps: { getuid: () => uid, ...deps } })
   } catch (e) {
@@ -54,5 +60,5 @@ export async function runCli(argv, { io = makeIo({ stdin: process.stdin, stdout:
     if (json) { printJson(cio, errorDoc(cmd.name, 'internal', message, (e && e.stack) || String(e))); return EXIT.crash }
     cio.err(message); cio.err(REPORT)
     return EXIT.crash
-  }
+  } finally { remember() }
 }

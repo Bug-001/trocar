@@ -36,7 +36,7 @@ export const Row = memo(function Row({ s, on, now, onOpen }: { s: Session, on: b
     <a className={`lrow${on ? ' sel' : ''}${m.dim ? ' dim' : ''}`} href={m.href} data-key={m.key} aria-current={on ? 'true' : undefined}
       onClick={(e) => { if (!plain(e)) return; e.preventDefault(); onOpen(s) }}>
       <span className="lmain">
-        <span className="lt" title={m.titleTip}>{m.titleText}</span>
+        <span className={m.titlePending ? 'lt pend' : 'lt'} title={m.titleTip}>{m.titleText}</span>
         <span className="lsub" title={m.subTip}>
           <HarnessIcon id={m.harnessId as string} />
           <span className="lhn" title={m.harnessRaw ? `${m.harnessName} · ${m.harnessRaw}` : m.harnessName}>{m.harnessName}</span>

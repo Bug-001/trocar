@@ -36,7 +36,7 @@ for (const row of ROWS) {
     const topo = buildTopology(row.facts), t = topo[row.h]
     assert.deepEqual(t.branches.map((b) => [b.name, b.form]), row.names.map((n, i) => [n, row.forms[i]]), 'one branch per form (and per way of a form)')
     assert.deepEqual(t.branches.map((b) => b.path.map((id) => kindOf(t, id))), row.kinds, 'the kinds of the nodes on each branch')
-    assert.deepEqual([t.on_path, t.captured, t.reason], [row.on_path, row.captured, row.reason], 'the verdict')
+    assert.equal(t.on_path, row.on_path, 'on the path: every branch is (the verdict itself is status\'s, statusDocOf)')
     for (const b of t.branches) assert.deepEqual([b.on_path, b.captured, b.reason], [row.on_path, row.captured, row.reason], 'every branch says the same of the form')
     assert.deepEqual(renderCompact(t).map(squash), row.compact.map(squash), 'the compact line, written out')
     assert.deepEqual(t.notes, row.notes || [], 'the notes the row adds')
@@ -155,7 +155,7 @@ test('the win32 facts are darwin\'s shape (routing proxy, the processes by the n
   assert.deepEqual(f.harnesses['kimi-code'].procs.map((p) => p.pid), [5151], 'the host program (VS Code) is the harness of its hostTree form: the base descriptor\'s win32 proxyMode.forms hosts.processes')
   const t = buildTopology(f)['claude-code']
   assert.match(t.notes.join(' '), /could not be worked out/)
-  assert.deepEqual([t.on_path, t.captured], [null, null])
+  assert.equal(t.on_path, null)
 })
 
 // ---------- W36: the Windows doctor commands (4.8 §10.4) ----------
@@ -263,7 +263,7 @@ test('W36 each §10.4 command equals its literal (the values filled: the entry f
 test('W36 form-unsupported: the plan\'s own reason is the branch\'s verdict (a status reason), and the finding says which form to use instead', () => {
   const f = pfacts('claude-code', form('claude-code.desktop', { entry: null, route: { reason: 'form-unsupported' }, procs: [proc(8801, { name: 'Claude', exe: 'C:\\Program Files\\Claude\\Claude.exe', version: null })] }), fwForm(17996))
   const t = buildTopology(f)['claude-code']
-  assert.deepEqual([t.on_path, t.captured, t.reason], [false, false, 'form-unsupported'], 'the plan\'s reason names the verdict (not the generic not-routed)')
+  assert.deepEqual([t.on_path, t.branches[0].captured, t.branches[0].reason], [false, false, 'form-unsupported'], 'the plan\'s reason names the verdict (not the generic not-routed)')
   assert.deepEqual(validateTopology({ 'claude-code': t }), [], 'and it is a status reason the schema accepts')
   const found = diagnose({ facts: f, topology: { 'claude-code': t }, harnesses: ['claude-code'], user: 'u' }).find((x) => x.code === 'form-unsupported')
   assert.equal(found.what, 'claude-code (claude-code.desktop) cannot take an upstream proxy that needs a login.')

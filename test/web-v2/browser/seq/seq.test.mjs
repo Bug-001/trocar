@@ -1,5 +1,5 @@
 // seq.test.mjs — the sequence suite (only under `npm run test:browser`). First every saved regression replays (regressions/*.json, by
-// name): `fixed` and `new` must not break any invariant; `open` (a triaged product bug, with owner and suspect) and `flaky` are
+// name): `fixed`, `new` and `timing` must not break any invariant; `open` (a triaged product bug, with owner and suspect) and `flaky` are
 // node:test `todo` (replayed and reported, never red), and an open one's key (sig + fingerprint, runner keyOf) is known in the random
 // runs: a violation of the same class with another fingerprint is new. Then one test per seed: SEQ_SEED, or
 // SEQ_SEED_BASE (1) … + SEQ_SEEDS (6) − 1 (runner DEFAULT_SEEDS), each SEQ_STEPS (60) steps, the big world when SEQ_BIG=1. A violation

@@ -41,21 +41,21 @@ export function world(desc, { prior = null, ports = 17990, on = true } = {}) {
 
 /**
  * NetFacts for one harness on `os`, its per-form half from the model through netFormsOf (what arch/{darwin,win32}/netfacts.mjs return beside their OS reads).
- * `reply` null = the daemon is not running; `holders` = pids still on a door; `desired` 'on' | 'off'.
+ * `reply` null = the daemon is not running; `holders` = pids still on a door; `desired` 'on' | 'off'; `row` = more of status's harness row; `procs` = the platform's processes of the harness.
  */
-export async function modelFacts({ os, desc, prior = null, on = true, reply, upstreams = null, systemProxy = null, desired = 'on', holders = [], drift = () => null, root = ROOT_OK, present = true }) {
+export async function modelFacts({ os, desc, prior = null, on = true, reply, upstreams = null, systemProxy = null, desired = 'on', holders = [], drift = () => null, root = ROOT_OK, present = true, row = {}, procs = [] }) {
   const w = world(desc, { prior, on })
   const answer = reply === null ? null : { pid: 4121, doors: w.doors, ...(upstreams ? { upstreams: upstreams(w.doors) } : {}), ...(reply || {}) }
   const status = {
     daemon: answer ? { state: 'running', pid: 4121, reply: { engine: { port: 17980 }, links: [], negatives: [], agents: [], ...answer } } : { state: 'not-running', pid: null, reply: null },
     link: { attached: null, helper: 'ok', ids: [] },
-    harnesses: [{ id: desc.name, installed: true, desired, entry: { state: 'intact' }, installedAt: '2026-10-15T09:00:00.000Z', procs: [] }],
+    harnesses: [{ id: desc.name, installed: true, desired, entry: { state: 'intact' }, installedAt: '2026-10-15T09:00:00.000Z', procs, ...row }],
     holders: holders.map((pid) => ({ harness: desc.name, pid })),
   }
   const sysFact = systemProxy ? { value: systemProxy.url, pac: false } : { value: null, pac: false }
   const archFacts = async () => {
     const model = await modelFormFacts({ harnesses: MODEL, os, manifest: w.m, reply: status.daemon.reply, root, systemProxy, ctx: ctxOf(os, w.home, present), drift })
-    return { routing: 'proxy', listeners: [7890, 7897].map((port) => ({ addr: '127.0.0.1', port, pid: 777, exe: '/opt/proxy/bin/mihomo' })), procs: {}, systemProxy: sysFact, ...netFormsOf({ model, status, systemProxy: sysFact }), unknowns: [] }
+    return { routing: 'proxy', listeners: [7890, 7897].map((port) => ({ addr: '127.0.0.1', port, pid: 777, exe: '/opt/proxy/bin/mihomo' })), procs: { [desc.name]: procs }, systemProxy: sysFact, ...netFormsOf({ model, status, systemProxy: sysFact, procs: { [desc.name]: procs } }), unknowns: [] }
   }
   return gatherNetFacts({ platform: os, home: w.home, env: {}, harnesses: MODEL, status, archFacts, now: () => Date.parse('2026-10-16T10:00:00.000Z') })
 }

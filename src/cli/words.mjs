@@ -231,6 +231,7 @@ export function statusReason(code, { harness = '', pid = null, cause = null } = 
     'entry-changed': ['the setting that points at trocar holds something else'],
     'forwarder-down': [`trocar is not listening, so ${h} cannot connect`],
     'not-routed': [`new connections from ${h} do not go through trocar`],
+    'local-upstream': [`${h} sends its model calls to a program on this machine; calls to this machine do not pass through trocar`], // no fix (1.6 附录 B)
     'route-loop': [`trocar's upstream for ${h} would be trocar itself`],
     'proxy-changed': [`${h}'s proxy setting is not the one trocar connected to`],
     'proxy-dead': [`the proxy ${h} is set to use is not running`],
