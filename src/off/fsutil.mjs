@@ -39,11 +39,12 @@ function renameRetrying(fs, from, to) {
     }
   }
 }
-export function writeDurable(file, data, mode, fs = nodeFs) {
+export function writeDurable(file, data, mode, fs = nodeFs, beforeRename = () => {}) {
   const tmp = `${file}${TMP_MARK}${process.pid}`
   const fd = fs.openSync(tmp, 'w', mode)
   try {
     try { fs.writeSync(fd, data); fs.fchmodSync(fd, mode); fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
+    beforeRename() // the last word on the write: it throws and nothing lands
     renameRetrying(fs, tmp, file)
   } catch (e) {
     try { fs.rmSync(tmp, { force: true }) } catch { /* the error to report is the write's */ }
