@@ -6,11 +6,12 @@
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from 'vitest'
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { useState } from 'react'
-import { DISPLAY_CLIP, bodyCache, cellBodyHtml, cellOf, modeOf, overrideScope, setDeskMode, setMode, wireCells } from '../../../legacy/replay/cell.mjs'
+import { DISPLAY_CLIP, blockGot, bodyCache, cellBodyHtml, cellOf, modeOf, overrideScope, setDeskMode, setMode, wireCells } from '../../../legacy/replay/cell.mjs'
 import { renderKind } from '../../../legacy/replay/kinds.mjs'
+import * as C from '../../../legacy/labels/cells.mjs'
 import { stepOf } from '../../../legacy/replay/model.mjs'
 import { deskFrom, world } from '../../../../test/web-v2/desk-world.mjs'
-import { Cell } from './Cell'
+import { Cell, CellBar } from './Cell'
 
 const KEY = 'trocar.v2.cellMode'
 type Seen = { cb: IntersectionObserverCallback, els: Set<Element> }
@@ -33,6 +34,7 @@ const bytesOf = (pre: Element) => { const c = pre.cloneNode(true) as Element; fo
 const valueOf = (t: string) => { try { return JSON.parse(t) } catch { return t } }
 // a body the caller holds, with the view the server would send for it
 const inline = (text: string, r: object = { as: 'text' }, bid?: string) => cellOf({ inline: text, view: { r: { f: { body: [] }, ...r }, body: valueOf(text) }, ...(bid ? { bid } : {}) })
+const TEXT_R = { as: 'text', f: { body: ['text'] } }
 const leafOf = (c: HTMLElement) => c.querySelector('.cell > .cellraw, .cell > .cellread') as HTMLElement
 // enter every watched sentinel and let the idle callback run
 async function enter() {
@@ -164,4 +166,152 @@ test('a slice the sentinel appended survives an unrelated re-render of the paren
   expect(leafOf(container)).toBe(leaf)
   expect(leaf.firstChild).toBe(node)
   expect(bytesOf(leaf)).toBe(grown)
+})
+
+// the same cell drawn by each of the two builds' drawers: the new desk's React cell and the legacy cell, in a wired host of its own
+function bothDraws(cell: any): Array<[string, HTMLElement]> {
+  const host = document.createElement('div')
+  host.innerHTML = cellBodyHtml(cell, modeOf(cell.bid))
+  return [['react', render(<Cell cell={cell} api={noApi} />).container], ['legacy', host]]
+}
+
+test('2.3 #11: a view shorter than its bytes counts the view, draws a prefix of it, and Copy bytes still gives every byte', async () => {
+  const words = Array.from({ length: 1500 }, (_, i) => `line ${i} of the reply`).join('\n')
+  const bytes = words.split('\n').map((w) => `data: {"type":"delta","text":${JSON.stringify(w)}}\n\n`).join('')
+  const ref = 's/x#m::resp.raw::0-9', api = { get: vi.fn() }
+  bodyCache.set(ref, blockGot({ ref, bytes, fidelity: { verbatim: true }, view: { r: TEXT_R, body: { text: words } } }))
+  const copied: string[] = []
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (t: string) => { copied.push(t) } } })
+  setDeskMode('read')
+  const cell = cellOf({ sec: 'messages', kind: 'text', text_ref: ref, chars: bytes.length, preview: '' })
+  for (const [, c] of bothDraws(cell)) {
+    const el = c.querySelector('.cell') as HTMLElement, leaf = el.querySelector(':scope > .cellread')!
+    expect(Number(el.dataset.chars)).toBe(words.length)
+    expect(words.startsWith(leaf.textContent!)).toBe(true)
+    expect(leaf.textContent!.length).toBeLessThan(words.length)
+    expect(el.querySelector('.cellclip')).not.toBeNull()
+  }
+  const { container } = render(<Cell cell={cell} api={api} />)
+  expect(container.querySelector('.cellread')!.compareDocumentPosition(container.querySelector('.cellclip')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  await act(async () => { fireEvent.click(container.querySelector('[data-cellcopy]')!); await Promise.resolve() })
+  expect(copied).toEqual([bytes])
+})
+
+test('2.3 #16: a cell with no view has only Raw: no switch, and only a block says so', () => {
+  const ref = 's/x#r3::0-9'
+  bodyCache.set(ref, { status: 'ok', text: '{"a":1}' })
+  setDeskMode('read')
+  const cases: Array<[any, boolean]> = [
+    [cellOf({ sec: 'messages', kind: 'text', text_ref: ref, chars: 7, preview: '' }), true],
+    [cellOf({ key: 'nb3', ref, chars: 7 }), false],
+  ]
+  for (const [cell, block] of cases) for (const [how, c] of bothDraws(cell)) {
+    const el = c.querySelector('.cell') as HTMLElement
+    expect([how, el.dataset.mode, el.dataset.only]).toEqual([how, 'raw', 'raw'])
+    expect(el.querySelector('[data-cellmode]')).toBeNull()
+    expect(el.querySelector('[data-cellcopy]')).not.toBeNull()
+    expect(el.querySelector('pre.cellraw')).not.toBeNull()
+    expect(!!el.querySelector('[data-noread]')).toBe(block)
+  }
+})
+
+test('2.3 #40: a block with no bytes has only Readable: no switch, no Copy bytes, no Raw, and v leaves it there', () => {
+  const r = { as: 'text', f: { body: ['block', 'text'] } }, block = { type: 'text', text: 'the parsed words' }
+  const cases: Array<[string, any]> = [
+    ['a definition\'s spec', { sec: 'messages', kind: 'text', bid: 'B40a', r, inline: { block } }],
+    ['the older shape', { sec: 'messages', kind: 'text', bid: 'B40b', r: { as: 'text' }, inline: { block } }],
+  ]
+  setDeskMode('raw')
+  for (const [why, def] of cases) {
+    const cell = cellOf(def)
+    for (const [how, c] of bothDraws(cell)) {
+      const el = c.querySelector('.cell') as HTMLElement, at = `${why} ${how}`
+      expect([at, el.dataset.mode, el.dataset.only]).toEqual([at, 'read', 'read'])
+      expect(el.querySelector('[data-cellmode], [data-cellcopy], .cellraw')).toBeNull()
+      expect(el.querySelector('.cellread')!.textContent).toContain('the parsed words')
+      expect(el.querySelector('.cellnote')!.textContent).toBe(C.READ_ONLY_NOTE)
+    }
+    const row = document.createElement('div')
+    row.className = 'cblk'
+    row.innerHTML = cellBodyHtml(cell, 'raw')
+    document.body.appendChild(row)
+    const off = wireCells(row), el = row.querySelector('.cell') as HTMLElement
+    for (const key of ['v', 'c']) {
+      el.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }))
+      expect((row.querySelector('.cell') as HTMLElement).dataset.mode).toBe('read')
+      expect(document.querySelector('[aria-live="polite"]')!.textContent).toBe(C.READ_ONLY)
+    }
+    off(); row.remove()
+  }
+})
+
+test('2.3 #39: a node the reader opened comes back when the leaf is mounted again; a toggle event alone remembers nothing', () => {
+  const tree = { top: { mid: { deep: { leaf: 'the words at the bottom' } } }, other: { mid: { deep: { leaf: 'not opened' } } } }
+  const cell = inline(JSON.stringify(tree), { as: 'json' }, 'J39')
+  const nodeAt = (c: HTMLElement, path: string[]) => c.querySelector<HTMLDetailsElement>(`details[data-path='${JSON.stringify(path)}']`)
+  setDeskMode('read')
+  // the reader's click, then the toggle the browser fires for it; a node past the first paint exists only once its parent is open
+  const toggled = (d: HTMLDetailsElement) => act(() => { d.open = true; d.dispatchEvent(new Event('toggle')) })
+  const clicked = (d: HTMLDetailsElement) => { fireEvent.click(d.querySelector('summary')!); toggled(d) }
+  const first = render(<Cell cell={cell} api={noApi} />)
+  const TOP = ['top', 'mid'], DEEP = ['top', 'mid', 'deep']
+  clicked(nodeAt(first.container, TOP)!)
+  clicked(nodeAt(first.container, DEEP)!)
+  toggled(nodeAt(first.container, ['other', 'mid'])!)
+  expect(nodeAt(first.container, DEEP)!.textContent).toContain('the words at the bottom')
+  first.unmount()
+  const { container } = render(<Cell cell={cell} api={noApi} />)
+  const reopened = () => { for (const p of [TOP, DEEP]) expect(nodeAt(container, p)!.open).toBe(true); expect(nodeAt(container, DEEP)!.textContent).toContain('the words at the bottom') }
+  reopened()
+  expect(nodeAt(container, ['other', 'mid'])!.open).toBe(false)
+  expect(nodeAt(container, ['other', 'mid'])!.children.length).toBe(1)
+  act(() => setMode('J39', 'raw'))
+  act(() => setMode('J39', 'read'))
+  reopened()
+})
+
+test('2.3 §两种模式: the images of one tool result each take their own data', () => {
+  const png = (w: number) => btoa(String.fromCharCode(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, w, 0, 0, 0, 1, 8, 2, 0, 0, 0))
+  const made: BlobPart[][] = []
+  URL.createObjectURL = vi.fn((b: Blob) => { made.push([b]); return `blob:u${made.length}` })
+  URL.revokeObjectURL = vi.fn()
+  const img = (w: number) => ({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: png(w) } })
+  const kid = { as: 'media', f: { body: [], data: ['source', 'data'], mime: ['source', 'media_type'] } }
+  const view = { r: { as: 'parts', f: { body: ['block', 'content'] }, kids: { 0: kid, 1: kid } }, body: { block: { type: 'tool_result', content: [img(2), img(3)] } } }
+  const ref = 's/x#r5::0-9'
+  bodyCache.set(ref, { status: 'ok', text: 'x', view })
+  setDeskMode('read')
+  const { container } = render(<Cell cell={cellOf({ sec: 'messages', kind: 'tool_result', text_ref: ref, chars: 1, preview: '' })} api={noApi} />)
+  const srcs = [...container.querySelectorAll('img')].map((i) => i.getAttribute('src'))
+  expect(srcs).toHaveLength(2)
+  expect(new Set(srcs).size).toBe(2)
+  expect(srcs.every(Boolean)).toBe(true)
+})
+
+test('2.3 §两种模式: Readable comes first, bar={false} leaves the controls to a CellBar, whose clicks stay out of the row, and it has none before the body', () => {
+  const cell = inline('{"a":1}', { as: 'json' }, 'BAR'), row = vi.fn()
+  setDeskMode('read')
+  const { container } = render(<div onClick={row}><CellBar cell={cell} api={noApi} /><Cell cell={cell} bar={false} api={noApi} /></div>)
+  expect(container.querySelector('.cell .cellbar')).toBeNull()
+  expect([...container.querySelectorAll<HTMLElement>('.cellbar [data-cellmode]')].map((b) => b.dataset.cellmode)).toEqual(['read', 'raw'])
+  fireEvent.click(container.querySelector('.cellbar [data-cellmode="raw"]')!)
+  expect((container.querySelector('.cell') as HTMLElement).dataset.mode).toBe('raw')
+  expect(row).not.toHaveBeenCalled()
+  const pending = cellOf({ key: 'nb5', ref: 's/x#r6::0-9', chars: 9, preview: 'p' })
+  expect(render(<CellBar cell={pending} api={noApi} />).container.innerHTML).toBe('')
+})
+
+test('2.3 §两种模式: a shell command\'s note sits under the controls in Readable, and a guess gives way to what the tool call reads', () => {
+  const shell = { r: { as: 'shell', f: { body: ['block', 'input'], cmd: ['block', 'input', 'command'], note: ['block', 'input', 'description'] } }, body: { block: { input: { command: 'ls -la', description: 'List the files' } } } }
+  const ref = 's/x#r7::0-9'
+  bodyCache.set(ref, { status: 'ok', text: 'x', view: shell })
+  setDeskMode('read')
+  const { container, unmount } = render(<Cell cell={cellOf({ sec: 'messages', kind: 'tool_use', bid: 'SH', text_ref: ref, chars: 1, preview: '' })} api={noApi} />)
+  expect(container.querySelector('.cellnote')!.textContent).toBe('List the files')
+  act(() => setMode('SH', 'raw'))
+  expect(container.querySelector('.cellnote')).toBeNull()
+  unmount()
+  bodyCache.set(ref, { status: 'ok', text: 'x', view: { r: { as: 'text', guess: true, f: { body: ['text'] } }, body: { text: 'plain output' } } })
+  const out = render(<Cell cell={cellOf({ sec: 'messages', kind: 'tool_result', bid: 'GU', text_ref: ref, reads: 'code', chars: 1, preview: '' })} api={noApi} />)
+  expect(out.container.querySelector('.cellread')!.classList.contains('kd-code')).toBe(true)
 })
