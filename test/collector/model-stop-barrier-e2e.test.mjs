@@ -20,7 +20,7 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { createCa, loadCa } from '../../src/collector/core/tls/ca.mjs'
 import { createLeafIssuer } from '../../src/collector/core/tls/leaf.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
-import { PID, agentOf, win32Io, flowsOf, freePort, through } from '../helpers/model-io.mjs'
+import { PID, agentOf, startAfterNow, win32Io, flowsOf, freePort, through } from '../helpers/model-io.mjs'
 import { listenLocalhost } from '../helpers/localhost.mjs'
 
 const CHILD = fileURLToPath(new URL('./fixtures/model-daemon-child.mjs', import.meta.url))
@@ -65,6 +65,7 @@ for (const platform of ['darwin', 'win32']) {
         child.stdout.on('data', (b) => { out += b }); child.stderr.on('data', (b) => { err += b })
         const exited = new Promise((resolve) => child.on('exit', (code, signal) => resolve({ code, signal, at: Date.now() })))
         await within(Promise.race([until(() => /trocar collector:/.test(out), 30_000, 'the readiness line'), exited.then((r) => { throw new Error(`the daemon exited before it was ready: ${JSON.stringify(r)} ${err}`) })]), 30_000, `the readiness line (err=${err})`)
+        a.start = startAfterNow(); publish() // the child installed the carrier before its readiness line, however long its start took under load: the agent starts after it (4.11 P11 rule 3)
         const rootPem = fs.readFileSync(path.join(w.dir, 'ca', 'trocar-ca.pem'), 'utf8')
         fs.writeFileSync(bundle, rootPem + upCa.certPem) // what this codex trusts: the trocar root and the upstream's CA
 

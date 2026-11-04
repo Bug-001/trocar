@@ -29,9 +29,14 @@ const p2 = (n) => String(n).padStart(2, '0')
 /** ps's lstart in the C locale, local time: "Mon Oct  8 17:00:00 2026". */
 const lstart = (ms) => { const d = new Date(ms); return `${W[d.getDay()]} ${M[d.getMonth()]} ${String(d.getDate()).padStart(2, ' ')} ${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())} ${d.getFullYear()}` }
 
-/** The agent as the OS readers see it: { pid, exe, start, uid, env, cwd, ports (its sockets' local ports), alive }. */
+/** A process start the OS readers report as later than every moment so far: the second after the next whole one (ps's lstart counts whole
+ *  seconds). The door decrypts only a process that started after its carrier was installed (4.11 P11 rule 3). */
+export const startAfterNow = () => Math.ceil(Date.now() / 1000) * 1000 + 1000
+
+/** The agent as the OS readers see it: { pid, exe, start, uid, env, cwd, ports (its sockets' local ports), alive }. Its start is after now: a
+ *  test whose install runs later (a daemon child installs as it starts) gives it `startAfterNow()` again once that install is done. */
 export function agentOf({ w, name, env }) {
-  return { pid: PID, name, exe: path.join(w.home, 'bin', name), start: Math.ceil(Date.now() / 1000) * 1000 + 1000, uid: process.getuid(), env, cwd: w.home, ports: new Set(), alive: true }
+  return { pid: PID, name, exe: path.join(w.home, 'bin', name), start: startAfterNow(), uid: process.getuid(), env, cwd: w.home, ports: new Set(), alive: true }
 }
 
 /** darwin: the spawnSync-shaped runner of the socktable helper / lsof / ps / procenv (socktable, procinfo, the process table, scutil) answering for `a` only. */
