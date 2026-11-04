@@ -606,6 +606,7 @@ const OPAQUE = {
   'a kept reply whose coding was not recorded': () => reply(CHAT, unnamed),
   'a WebSocket message that did not decompress': () => wsCall([{ b64: 'AAAA', decode_error: 'no' }]),
   'a stream no wire claims': () => wireless(stored(events([{ x: 1 }]))),
+  'a line that is not JSON': () => `{"ts":"${NOW_THEN}","cut`,
 }
 for (const [name, row] of Object.entries(OPAQUE)) {
   test(`AN30: ${name} is counted opaque and refuses; --accept-partial lets it through and moves the hash`, () => {
@@ -639,7 +640,7 @@ test('AN30: --accept-partial lets through no other rule, and an opaque record is
   const w = workspace()
   const text = ascii(60, 1)
   w.commit({ 'a.txt': `${text}\n`, 'b.txt': `ghp_${MIXED}\n` })
-  capture(w, SEGMENT, [JSON.stringify({ ...JSON.parse(OPAQUE['a coding the reader does not know']()), note: text })])
+  capture(w, SEGMENT, [JSON.stringify({ ...JSON.parse(OPAQUE['a coding the reader does not know']()), note: text }), OPAQUE['a line that is not JSON']()])
   const { code, doc } = w.check({ args: ['--accept-partial'] })
   assert.equal(code, 1)
   assert.deepEqual(named(doc, 'captured-text'), ['a.txt'])
