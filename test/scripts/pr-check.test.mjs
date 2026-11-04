@@ -7,6 +7,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import zlib from 'node:zlib'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -41,11 +42,11 @@ function workspace(files = {}) {
     git(['add', '-A'])
     git(['commit', '-q', '--allow-empty', '-m', message], extra)
   }
-  const check = ({ title = 'A title', body = 'A body', args = [], env: extra = {}, cwd = dir, base = ['--base', 'base'], before = BEFORE } = {}) => {
+  const check = ({ title = 'A title', body = 'A body', args = [], env: extra = {}, cwd = dir, base = ['--base', 'base'], before = BEFORE, script = SCRIPT } = {}) => {
     const titleFile = path.join(texts, 'title'), bodyFile = path.join(texts, 'body')
     fs.writeFileSync(titleFile, title)
     fs.writeFileSync(bodyFile, body)
-    const r = spawnSync(process.execPath, [SCRIPT, '--json', '--before', before, '--title', titleFile, '--body', bodyFile, ...base, ...args],
+    const r = spawnSync(process.execPath, [script, '--json', '--before', before, '--title', titleFile, '--body', bodyFile, ...base, ...args],
       { cwd, env: { ...env, ...extra }, maxBuffer: 2 ** 28 })
     return { code: r.status, doc: JSON.parse(r.stdout.toString()) }
   }
@@ -54,6 +55,20 @@ function workspace(files = {}) {
   git(['tag', 'base'])
   git(['checkout', '-q', '-b', 'work'])
   return { home, dir, env, git, commit, check, trocar: path.join(home, '.trocar') }
+}
+
+/** `w`'s repo made the check's own clone: the check sits in it, what it imports is linked in, and none of that is tracked. */
+function adopt(w) {
+  const root = fileURLToPath(new URL('../../', import.meta.url))
+  fs.cpSync(path.join(root, 'scripts/lib'), path.join(w.dir, 'scripts/lib'), { recursive: true })
+  fs.copyFileSync(SCRIPT, path.join(w.dir, 'scripts/pr-check.mjs'))
+  const links = ['bin', 'src/query', 'src/raw', 'src/dissect']
+  for (const link of links) {
+    fs.mkdirSync(path.dirname(path.join(w.dir, link)), { recursive: true })
+    fs.symlinkSync(path.join(root, link), path.join(w.dir, link), 'junction')
+  }
+  fs.appendFileSync(path.join(w.dir, '.git/info/exclude'), `scripts\n${links.join('\n')}\n`)
+  return path.join(w.dir, 'scripts/pr-check.mjs')
 }
 
 const of = (doc, rule) => doc.findings.filter((f) => f.rule === rule)
@@ -107,12 +122,22 @@ test('AN16: every blocked type and every file git calls binary is refused, an ed
 for (const [name, script, code] of [['a rebuild that matches passes', 'node -e 0', 0], ['a rebuild that does not match is refused', 'node -e process.exit(1)', 1]]) {
   test(`AN16: src/web/board/**: ${name}`, () => {
     const w = workspace({ 'package.json': JSON.stringify({ scripts: { 'test:build': script } }) })
+    const own = adopt(w)
     w.commit({ 'src/web/board/logo.png': 'x\n' })
-    const r = w.check()
+    const r = w.check({ script: own })
     assert.equal(r.code, code)
     assert.equal(of(r.doc, 'files').length, code)
   })
 }
+
+test('AN16: src/web/board/** in a clone that is not the check\'s own: nothing of that clone is run, and it is refused', () => {
+  const w = workspace({ 'package.json': JSON.stringify({ scripts: { 'test:build': 'node -e "require(\'fs\').writeFileSync(\'ran\',\'\')"' } }) })
+  w.commit({ 'src/web/board/logo.png': 'x\n' })
+  const { code, doc } = w.check()
+  assert.equal(code, 1)
+  assert.deepEqual(named(doc, 'files'), ['src/web/board/logo.png'])
+  assert.equal(fs.existsSync(path.join(w.dir, 'ran')), false)
+})
 
 // ── AN17
 const MIXED = 'aB3dE5gH7j'.repeat(5)
@@ -272,6 +297,50 @@ test('a merge commit brings its message only, and needs no body', () => {
   assert.deepEqual(doc.leaving.files, ['side.txt', 'work.txt'])
 })
 
+/** A merge of `side` into `work`, each with its own commit, left open for what the merge itself writes. */
+const MERGES = {
+  'a resolved conflict': { base: { 'a.txt': 'one\n' }, side: { 'a.txt': 'side\n' }, work: { 'a.txt': 'work\n' } },
+  'a file both sides brought': { base: { 'a.txt': 'one\ntwo\nthree\nfour\nfive\n' }, side: { 'a.txt': 'ONE\ntwo\nthree\nfour\nfive\n' }, work: { 'a.txt': 'one\ntwo\nthree\nfour\nFIVE\n' } },
+  'a file neither side has': { base: {}, side: { 's.txt': 'side\n' }, work: { 'w.txt': 'work\n' } },
+}
+function merging({ base, side, work }) {
+  const w = workspace(base)
+  w.git(['checkout', '-q', '-b', 'side', 'base'])
+  w.commit(side)
+  w.git(['checkout', '-q', 'work'])
+  w.commit(work)
+  spawnSync('git', ['merge', '-q', '--no-commit', '--no-ff', 'side'], { cwd: w.dir, env: w.env })
+  return w
+}
+for (const [name, sides] of Object.entries(MERGES)) {
+  test(`AN21: ${name}: what a merge writes is judged like any commit`, () => {
+    const home = homes('zorgon7').mac
+    const w = merging(sides)
+    w.commit({ 'a.txt': `kept\n${tokens('').ghp}\n${home}\n`, 'b.dat': Buffer.from([1, 0, 2, 0, 10]), 'long.txt': lines(401) }, 'Merge side')
+    const { code, doc } = w.check()
+    assert.equal(code, 1)
+    assert.deepEqual(named(doc, 'secrets'), ['a.txt'])
+    assert.deepEqual(named(doc, 'identity'), ['a.txt'])
+    assert.deepEqual(named(doc, 'files'), ['b.dat'])
+    assert.match(of(doc, 'secrets')[0].where, /:file#\d+:2$/)
+    assert.deepEqual(of(doc, 'shape').map((f) => f.why).sort(), ['This commit changes more than 400 lines.', 'This commit message has no body.'])
+    shapely(doc)
+  })
+}
+
+test('AN21: what a merge takes from a parent outside the range is not judged again', () => {
+  const w = workspace()
+  w.git(['checkout', '-q', 'main'])
+  w.commit({ 'theirs.txt': `${tokens('').ghp}\n` })
+  w.git(['tag', 'moved'])
+  w.git(['checkout', '-q', 'work'])
+  w.commit({ 'mine.txt': 'mine\n' })
+  w.git(['merge', '-q', '--no-ff', '-m', 'Merge main', 'main'])
+  const { code, doc } = w.check({ base: ['--base', 'moved'] })
+  assert.equal(code, 0, JSON.stringify(doc.findings))
+  assert.deepEqual(doc.leaving.files, ['mine.txt'])
+})
+
 // ── AN24
 test('AN24: changing any outbound byte moves the hash, and a re-run does not', () => {
   const w = workspace()
@@ -328,6 +397,20 @@ test('AN19: each kind of captured fact is refused in any spelling; a word under 
   shapely(doc)
 })
 
+test('AN19: a title the list does not know yet comes from the head, so one too short for the text rule is still refused', () => {
+  const w = workspace()
+  bigSession({ home: w.trocar, wire: 'http', growth: 40, subEvery: 3, segment: SEGMENT }).append(3)
+  const [row] = query(w, 'sessions').sessions
+  assert.deepEqual([row.title, row.title_source], [null, 'pending'])
+  const { title } = query(w, 'session', '--id', row.session_id, '--head').meta
+  assert.ok(title.length >= 4 && title.length < 60, title)
+  w.commit({ 'plain.txt': 'nothing here\n', 'named.txt': `${title.toUpperCase()}\n` })
+  const { code, doc } = w.check()
+  assert.equal(code, 1)
+  assert.deepEqual(named(doc, 'captured-facts'), ['named.txt'])
+  assert.deepEqual(of(doc, 'captured-text'), [])
+})
+
 // ── AN20
 const NOW_THEN = '2026-10-18T10:00:00.000Z'
 test('AN20: 60 shared normalized bytes are refused in every spelling, 59 pass, and the coverage is all of it', () => {
@@ -347,6 +430,39 @@ test('AN20: 60 shared normalized bytes are refused in every spelling, 59 pass, a
   const size = fs.statSync(file).size
   assert.deepEqual(doc.coverage, { scanned_bytes: size, total_bytes: size, from: NOW_THEN, to: NOW_THEN })
 })
+
+const kept = (o, bytes, coding) => JSON.stringify({ ...JSON.parse(envLine({ ts: NOW_THEN, ...o })), req_body: null, req_body_b64: bytes.toString('base64'), ...(coding ? { req_content_encoding: coding } : {}) })
+const prompt = (text) => Buffer.from(JSON.stringify({ prompt: text }))
+const CODINGS = { gzip: zlib.gzipSync, deflate: zlib.deflateSync, br: zlib.brotliCompressSync, zstd: zlib.zstdCompressSync, 'gzip, br': (b) => zlib.brotliCompressSync(zlib.gzipSync(b)) }
+test('AN20: a body kept as base64 is compared by what is behind it, whatever hides it, and the coverage counts the record', () => {
+  const w = workspace()
+  const texts = Object.keys(CODINGS).map((coding, i) => [`t/${i}.txt`, ascii(60, i + 1)])
+  const rows = Object.entries(CODINGS).map(([coding, pack], i) => kept({}, pack(prompt(texts[i][1])), coding))
+  texts.push(['t/not-text.txt', ascii(60, 20)])
+  rows.push(kept({}, Buffer.concat([Buffer.from([0xff, 0xfe]), prompt(ascii(60, 20))])))
+  texts.push(['t/not-inference.txt', ascii(60, 21)]) // past the 1 MiB the board reads of a call that is not inference
+  rows.push(kept({ is_llm: false }, zlib.zstdCompressSync(prompt(`${' '.repeat(2 ** 21)}${ascii(60, 21)}`)), 'zstd'))
+  w.commit({ ...Object.fromEntries(texts.map(([file, text]) => [file, `${text}\n`])), 't/under.txt': `${ascii(59, 22)}\n` })
+  const file = capture(w, SEGMENT, [...rows, kept({}, zlib.zstdCompressSync(prompt(ascii(59, 22))), 'zstd')])
+  const { code, doc } = w.check()
+  assert.equal(code, 1)
+  assert.deepEqual(named(doc, 'captured-text'), texts.map(([name]) => name).sort())
+  assert.equal(doc.coverage.scanned_bytes, fs.statSync(file).size)
+})
+
+for (const [name, row] of Object.entries({
+  'a coding the reader does not know': () => kept({}, prompt('x'), 'snappy'),
+  'bytes that do not decode': () => kept({}, prompt('x'), 'zstd'),
+})) {
+  test(`AN20: ${name} is a refusal, not a record compared`, () => {
+    const w = workspace()
+    w.commit({ 'a.txt': 'nothing here\n' })
+    capture(w, SEGMENT, [row()])
+    const { code, doc } = w.check()
+    assert.equal(code, 1)
+    assert.deepEqual(doc.findings.map((f) => [f.rule, f.where]), [['unreadable', 'capture']])
+  })
+}
 
 test('AN20: a record at or after --before and a segment wholly after it are not compared', () => {
   const w = workspace()
