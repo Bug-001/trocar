@@ -9,6 +9,7 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
 import { runQuery, QueryArgError } from '../../src/query/named/index.mjs'
 import { ANALYSIS_PAGE_BYTES } from '../../src/query/named/analysis.mjs'
+import { extendSession, sessionState } from '../../src/query/named/session.mjs'
 
 const CONTRACT = JSON.parse(fs.readFileSync(new URL('../fixtures/session-read-contract.json', import.meta.url), 'utf8'))
 const homeOf = () => path.join(tmpDir('trocar-analysis-'), '.trocar')
@@ -313,6 +314,22 @@ test('3.5 #50 size: the default document of a long session with many breaks stay
   const { breaks } = await walked(home, env, id)
   assert.ok(doc.totals.breakCost.counted > 1 && breaks.length === doc.totals.breakCost.counted + doc.totals.breakCost.uncomputable)
   assert.ok(Buffer.byteLength(JSON.stringify(doc)) <= 2048)
+})
+
+test('3.5 #55 columns only: the totals of a folded session with breaks read no row of the fold log', async () => {
+  const home = homeOf(), ctx = { home, fs, env: envOf({ claude: PRICES['m-a'] }), writer: true }
+  const s = bigSession({ home, growth: 200, subEvery: 7, compactAt: 1_500 })
+  s.append(60)
+  while (await extendSession(ctx, s.id, Infinity));
+  const { V } = await sessionState(ctx, s.id)
+  let rows = 0
+  for (const m of ['read', 'peek']) {
+    const was = V.log[m]
+    V.log[m] = (...a) => { const o = was(...a); if (o?.c != null) rows++; return o }
+  }
+  const { totals } = await runQuery('analysis', { id: s.id }, ctx)
+  assert.ok(totals.breakCost.counted > 0, 'the session has breaks to price')
+  assert.equal(rows, 0)
 })
 
 test('3.5 #51 windows: prev from the tail and next from the first page each give every step once, in step order, every page within the bound', async () => {
