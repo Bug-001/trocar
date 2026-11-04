@@ -86,14 +86,20 @@ for (const width of [1280, 1024]) {
   }
 }
 
-test('(14) at 800 px the page does not scroll sideways and every agent name is visible', { skip }, async () => {
-  const b = await withBoard({ bytes: BYTES, width: 800, chromium: gate.chromium })
-  try {
-    await go(b.page, '#/sessions', '.lrow'); await b.page.waitForLoadState('networkidle')
-    const l = await layout(b.page)
-    assert.equal(l.hscroll, false); assert.equal(l.hiddenNames, 0)
-  } finally { await b.stop() }
-})
+// down to phone width the page does not scroll sideways, every agent name is visible, and each title gets at least half the row
+for (const width of [800, 600, 390]) {
+  test(`(14) at ${width} px the page does not scroll sideways, every agent name is visible and titles keep half the row`, { skip }, async () => {
+    const b = await withBoard({ bytes: BYTES, width, chromium: gate.chromium })
+    try {
+      await go(b.page, '#/sessions', '.lrow'); await b.page.waitForLoadState('networkidle')
+      const l = await layout(b.page)
+      assert.equal(l.hscroll, false); assert.equal(l.hiddenNames, 0)
+      const narrow = await b.page.evaluate(() => [...document.querySelectorAll('.lrow')]
+        .filter((r) => r.querySelector('.lt').getBoundingClientRect().width < r.getBoundingClientRect().width / 2).length)
+      assert.equal(narrow, 0)
+    } finally { await b.stop() }
+  })
+}
 
 test('(13) keys: ↑/↓ move the highlight, / focuses search, nothing fires while typing, Enter opens the replay, Back lands on that row', { skip }, async () => {
   const b = await withBoard({ bytes: BYTES, chromium: gate.chromium })

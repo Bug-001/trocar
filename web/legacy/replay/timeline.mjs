@@ -262,9 +262,9 @@ export function renderSaw(el, s) {
   q(el, '#sawgut').innerHTML = `${esc(costView ? W.VIEW_COST : (isMain ? 'Context' : laneWord(s.anchor.kind)))} <b title="${esc(peakTip)}">${esc(peak)}</b>`
   // the legend row
   q(el, '#viewswitch').innerHTML = `<button type="button" class="segbtn${costView ? '' : ' on'}" data-view="ctx" aria-pressed="${!costView}">${esc(W.VIEW_CTX)}</button><button type="button" class="segbtn${costView ? ' on' : ''}" data-view="cost" aria-pressed="${costView}">${esc(W.VIEW_COST)}</button>`
-  q(el, '#complegend').title = costView ? W.COST_LEGEND : W.COMP_LEGEND // the legend row stays one line; a cut part keeps its words here
+  // the legend row wraps rather than cut a word; each swatch stays with its name
   q(el, '#complegend').innerHTML = costView ? `<span>${esc(W.COST_LEGEND)}</span>` :
-    `<span>${esc(W.COMP_LEGEND)}</span><span class="barlegend" title="${esc(BAR_KEYS.map((k) => k[1]).join(' · '))}">${BAR_KEYS.map(([c, w]) => `<i class="ct-${c}"></i>${esc(w)}`).join('')}</span>`
+    `<span>${esc(W.COMP_LEGEND)}</span><span class="barlegend">${BAR_KEYS.map(([c, w]) => `<span><i class="ct-${c}"></i>${esc(w)}</span>`).join('')}</span>`
   q(el, '#viewrange').textContent = W.showSteps(no(lo), no(hi - 1))
   const ch = chapterHere(s), nav = q(el, '#chapnav')
   if (nav) nav.innerHTML = chapterNavHtml(ch.chs, ch.g, ch.end)

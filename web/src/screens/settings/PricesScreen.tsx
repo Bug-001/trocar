@@ -10,6 +10,7 @@ import { SCREEN_NAME } from '../../../legacy/labels/shell.mjs'
 import * as W from '../../../legacy/labels/settings.mjs'
 import { priceRows as priceRowsJs, unpricedModels as unpricedJs, templateText } from '../../../legacy/settings/prices.mjs'
 import { PageHead } from '../../ui/PageHead'
+import { fmtWhen } from '../../../legacy/core/fmt.mjs'
 import type { ScreenProps } from '../../ScreenOutlet'
 import { TechDetails, type TechValue } from '../../ui/TechDetails'
 import { CopyButton } from '../../ui/CopyButton'
@@ -33,12 +34,6 @@ async function read(name: string, signal: AbortSignal): Promise<Answer> {
   try { return { ...(await api.get(name, null, { signal }) as Answer), at: api.now() } } catch (e) { return { ok: false, error: String((e as Error)?.message ?? e) } }
 }
 
-// an S5 as_of is an ISO string; the caption shows HH:MM:SS like every 「截至」 on the board
-function fmtAsOf(iso: string) {
-  const d = new Date(iso)
-  return isNaN(d.getTime()) ? String(iso) : d.toTimeString().slice(0, 8)
-}
-
 function PriceTable({ rows }: { rows: PriceRow[] }) {
   return (
     <div className="hscroll"><table className="ptable">
@@ -55,15 +50,15 @@ function Unpriced({ overview, rows, source }: { overview: Overview, rows: PriceR
   const un = unpricedModels(overview.usage!.rows as unknown[], table)
   return (
     <div className="scard"><h2>{W.CARD_UNPRICED}</h2>
-      {overview.as_of ? <p className="cap">{`${W.UNPRICED_AS_OF} ${fmtAsOf(overview.as_of)}`}</p> : null}
+      {overview.as_of ? <p className="cap">{`${W.UNPRICED_AS_OF} ${fmtWhen(overview.as_of)}`}</p> : null}
       {un.length ? <>
         {un.map((m) => {
           const tmpl = m.model == null ? null : templateText(m.model, source)
           return (
             <div className="umodel" key={m.model ?? '*none*'}>
-              <span className="mono um">{m.model == null ? W.UNPRICED_NO_MODEL : m.model}</span>
+              <span className="um">{m.model == null ? W.UNPRICED_NO_MODEL : m.model}</span>
               <span className="cap">{W.UNPRICED_SESSIONS(m.sessions)}</span>
-              {tmpl != null ? <div className="tmpl"><code className="well mono" tabIndex={0}>{tmpl}</code><CopyButton text={tmpl} label={W.COPY_TEMPLATE} /></div> : null}
+              {tmpl != null ? <div className="tmpl"><code className="well mono" tabIndex={0}>{tmpl}</code><CopyButton text={tmpl} label={W.COPY_TEMPLATE} row /></div> : null}
             </div>
           )
         })}
@@ -87,19 +82,21 @@ export default function PricesScreen(_props: ScreenProps) {
   return (
     <div className="page">
       <PageHead name={SCREEN_NAME['settings-prices']} readAt={readAt} />
-      <div className="scard"><h2>{W.CARD_PRICE}</h2>
-        <p className="cap">{W.PRICE_NOTE}</p>
-        <p className="cap" data-note="read-only">{W.PRICE_READ_ONLY}</p>
-        {pricing ? (pricing.source && pricing.source !== 'default'
-          ? <p className="cap from mono">{W.PRICE_FROM(pricing.source)}</p> : <p className="cap from">{W.PRICE_DEFAULT}</p>) : null}
-        {fail ? <>
-          <p className="err">{fail.line} · <Button className="linkbtn" onPress={() => { void pq.refetch() }}>{W.RETRY}</Button></p>
-          <TechDetails pairs={techOf(fail.pairs)} copy={flatText(fail.pairs)} />
-        </> : p ? (rows ? <PriceTable rows={rows} /> : <p className="err">{W.PRICE_BAD_SHAPE}</p>) : null}
-        <TechDetails pairs={techOf(TECH)} copy={flatText(TECH)} />
+      <div id="pmain">
+        <div className="scard"><h2>{W.CARD_PRICE}</h2>
+          <p className="cap">{W.PRICE_NOTE}</p>
+          <p className="cap" data-note="read-only">{W.PRICE_READ_ONLY}</p>
+          {pricing ? (pricing.source && pricing.source !== 'default'
+            ? <p className="cap from mono">{W.PRICE_FROM(pricing.source)}</p> : <p className="cap from">{W.PRICE_DEFAULT}</p>) : null}
+          {fail ? <>
+            <p className="err">{fail.line} · <Button className="linkbtn" onPress={() => { void pq.refetch() }}>{W.RETRY}</Button></p>
+            <TechDetails pairs={techOf(fail.pairs)} copy={flatText(fail.pairs)} />
+          </> : p ? (rows ? <PriceTable rows={rows} /> : <p className="err">{W.PRICE_BAD_SHAPE}</p>) : null}
+          <TechDetails pairs={techOf(TECH)} copy={flatText(TECH)} />
+        </div>
+        {overview && overview.usage && Array.isArray(overview.usage.rows)
+          ? <Unpriced overview={overview} rows={rows} source={pricing ? pricing.source : undefined} /> : null}
       </div>
-      {overview && overview.usage && Array.isArray(overview.usage.rows)
-        ? <Unpriced overview={overview} rows={rows} source={pricing ? pricing.source : undefined} /> : null}
     </div>
   )
 }

@@ -4,6 +4,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { probe, withBoard, stats, shoot, layoutFaults, timed, timerReads } from './harness.mjs'
+import { typeFaults } from './type-inventory.mjs'
 import { BOARD_LINES } from '../perf-lines.mjs'
 import { COMMANDS } from '../../../web/legacy/labels/capture.mjs'
 import { THEME_DARK, THEME_LIGHT } from '../../../web/legacy/labels/settings.mjs'
@@ -45,6 +46,7 @@ async function driveEveryScreen(b, { width, theme }) {
     assert.deepEqual(await layoutFaults(page), { overlap: [], cut: [], untitled: [], emptyIcons: [] }, `${name}: layout`)
     await fitsWindow(page, name)
     assert.ok(await page.locator(sel).count() > 0, `${name}: ${sel} at ${await page.evaluate(() => location.hash)} after ${ms} ms`)
+    if (width === 1280 && theme === 'light') { const T = await typeFaults(page); console.log(`# type inventory (${name}): ${JSON.stringify(T.inventory)}`); assert.deepEqual(T.faults, [], name) } // 1.5 #16: two families, five sizes, two weights
     await shoot(page, name, { width, theme })
   }
   await page.waitForSelector('#sidebar a')

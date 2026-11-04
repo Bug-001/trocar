@@ -4,8 +4,7 @@
    media query via host.mjs; 1.10 §一件事只说一处). */
 
 /* ── the traffic table (also the host page's caption / states) ─────────────────────────────────────────────────── */
-.page.traf{padding:14px 28px 56px;}
-.tcap{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 18px;padding:2px 0 8px;font-size:var(--fs-cap);color:var(--ink-2);}
+.tcap{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 18px;padding:0 0 8px;font-size:var(--fs-cap);color:var(--ink-2);}
 .cap-item{white-space:nowrap;}
 .tcap [data-note]{white-space:normal;flex:1 1 320px;min-width:0;}
 .tcap .tfilters{margin-left:auto;}
@@ -18,20 +17,24 @@
 .fchip .x{color:var(--ink-3);}
 
 /* eight tracks for the eight cells: gutter · agent · host · first seen · requests · sent · received · main classes */
-.trow{display:grid;grid-template-columns:0 132px minmax(160px,1.4fr) 96px 72px 110px 132px minmax(120px,1fr);column-gap:10px;align-items:center;min-height:34px;padding:0 2px;border-top:1px solid var(--rule);font-size:var(--fs-body);color:var(--ink);text-decoration:none;}
-a.trow:hover{background:var(--panel);text-decoration:none;}
-a.trow.hi{background:var(--panel);}
+.trow{display:grid;grid-template-columns:0 132px minmax(160px,1.4fr) 96px 72px 110px 132px minmax(120px,1fr);column-gap:10px;align-items:center;min-height:34px;padding:0 2px;border-top:1px solid var(--rule);text-decoration:none;}
+.trow:not(.colhead){font-size:var(--fs-body);color:var(--ink);} /* the head row takes the kit's table-head type (base.css) */
+a.trow:hover{background:var(--hover);text-decoration:none;}
+a.trow.hi{background:var(--hover);}
 .trow.nolink{color:var(--ink-2);}
-.trow.thead{min-height:28px;font-size:var(--fs-cap);color:var(--ink-3);border-top:0;border-bottom:1px solid var(--rule);}
-.trow.ttotal{font-weight:600;border-top:1px solid var(--rule-2);}
+/* the head row: its type is the kit's .colhead */
+.trow.thead{min-height:28px;border-top:0;border-bottom:1px solid var(--rule);}
+.trow.ttotal{font-weight:var(--fw-strong);border-top:1px solid var(--rule-2);}
 .trow .gut{width:0;}
+/* .cell here is a table cell, not a block cell (cells.css gives .cell an uneven margin that lifts it off the row's line) */
+.trow .cell,.hhead .cell,.hrow .cell{margin:0;}
 .trow .nm{display:flex;align-items:center;gap:8px;min-width:0;overflow:hidden;white-space:nowrap;}
 .trow .nmname{overflow:hidden;text-overflow:ellipsis;}
 .trow .cell-host{min-width:0;}
 .trow .host{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .trow .nohost{color:var(--ink-3);font-size:var(--fs-cap);}
 .trow .cell-first{font-size:var(--fs-cap);color:var(--ink-2);white-space:nowrap;}
-.newmark{color:var(--ink);font-weight:600;white-space:nowrap;}
+.newmark{color:var(--ink);font-weight:var(--fw-strong);white-space:nowrap;}
 /* 收回's 「N not recorded」 sits under the number, inside its own cell (1.10: the note is part of the cell) */
 .trow .cell.num .c2{display:block;font-size:var(--fs-cap);line-height:15px;white-space:nowrap;}
 .trow .cell.classes{font-size:var(--fs-cap);color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
@@ -49,19 +52,18 @@ a.trow.hi{background:var(--panel);}
 }
 
 /* ── the host page ────────────────────────────────────────────────────────────────────────────────────────────────── */
-.thost{display:flex;flex-direction:column;height:100%;min-height:0;padding:14px 28px 0;}
-.thost .pagehead{margin-bottom:0;}
+.thost{display:flex;flex-direction:column;height:100%;min-height:0;padding:14px 32px 0;}
 .tbody{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 440px;column-gap:0;}
 .thost.drawer .tbody{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) auto;}
 .tlist{min-width:0;overflow:auto;padding-bottom:40px;}
 /* the endpoint takes the width the fixed columns leave: no empty lined track at the end of a wide row */
 /* the start padding holds the selected row's 2px accent (inset shadow) off the time text; the head keeps the same start */
 .hhead,.hrow{display:grid;grid-template-columns:140px minmax(200px,1fr) 84px 76px 76px minmax(96px,130px);column-gap:10px;align-items:center;padding-inline-start:var(--s2);}
-.hhead{min-height:28px;font-size:var(--fs-cap);color:var(--ink-3);border-bottom:1px solid var(--rule);}
+.hhead{min-height:28px;border-bottom:1px solid var(--rule);}
 .hrow{min-height:34px;font-size:var(--fs-body);color:var(--ink);text-decoration:none;border-bottom:1px solid var(--rule);}
 /* the row is a div: its main link spans the five cells (display:contents keeps them grid items), the marks are siblings */
 .hrow > a.hmain{display:contents;color:inherit;text-decoration:none}
-.hrow:hover{background:var(--panel);text-decoration:none;}
+.hrow:hover{background:var(--hover);text-decoration:none;}
 .hrow.sel,.hrow.sel:hover{background:var(--raised);box-shadow:inset 2px 0 0 var(--action);}
 .hrow .cell-endpoint{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;}
 .hrow .cell.class{font-size:var(--fs-cap);color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
@@ -82,32 +84,31 @@ a.rmark{color:var(--action);}
 
 /* the request detail widget (2.6 §C) */
 .rqd{padding:0 20px 8px;font-size:var(--fs-body);}
-.rqd-line{font-family:var(--mono);font-size:var(--fs-strong);line-height:22px;overflow-wrap:anywhere;margin:0 0 2px;}
-.rqd-line .c2{font-weight:400;}
+.rqd-line{font-family:var(--mono);font-size:var(--fs-cap);line-height:20px;overflow-wrap:anywhere;margin:0 0 2px;}
+.rqd-line .c2{font-weight:var(--fw-regular);}
 .rqd-meta{color:var(--ink-2);font-size:var(--fs-cap);margin:0 0 10px;}
 .rqd-callmarks{margin:0 0 10px;}
 .rqd-host{border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);padding:8px 0;margin:0 0 10px;font-size:var(--fs-cap);color:var(--ink-2);}
 .rqd-host p{margin:0;}
 .rqd-host .mono{color:var(--ink);}
-.rqd-hostdiff{color:var(--ink);font-weight:600;}
+.rqd-hostdiff{color:var(--ink);font-weight:var(--fw-strong);}
 .rqd-sec{padding:8px 0 10px;border-bottom:1px solid var(--rule);}
 .rqd-sh{display:flex;align-items:baseline;gap:10px;margin-bottom:6px;}
-.rqd-sh b{font-size:var(--fs-strong);font-weight:600;}
+.rqd-sh b{font-size:var(--fs-head);font-weight:var(--fw-strong);}
 .rqd-fold{font-size:var(--fs-cap);}
 .rqd-mark{margin:0 0 4px;font-size:var(--fs-cap);color:var(--ink-2);}
 .rqd-kind{margin:0 0 4px;font-size:var(--fs-cap);color:var(--ink-2);}
-.rqd-pre{margin:0;font:var(--fs-cap)/1.6 var(--mono);white-space:pre-wrap;word-break:break-all;color:var(--ink);background:var(--sunk);padding:8px 10px;border-radius:var(--r-2);max-height:340px;overflow:auto;}
+.rqd-pre{margin:0;font-size:var(--fs-cap);line-height:1.6;font-family:var(--mono);white-space:pre-wrap;word-break:break-all;color:var(--ink);background:var(--sunk);padding:8px 10px;border-radius:var(--r-2);max-height:340px;overflow:auto;}
 .rqd-pre.hex{word-break:normal;overflow-wrap:normal;}
-.kvt{display:grid;grid-template-columns:fit-content(45%) minmax(0,1fr);gap:3px 12px;font:var(--fs-cap)/19px var(--mono);}
+.kvt{display:grid;grid-template-columns:fit-content(45%) minmax(0,1fr);gap:3px 12px;font-size:var(--fs-cap);line-height:19px;font-family:var(--mono);}
 .kvt .k{color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .kvt .v{color:var(--ink);overflow-wrap:anywhere;min-width:0;}
-.kvt .v .mask-dots{letter-spacing:1px;color:var(--ink-2);}
+.kvt .v .mask-dots{color:var(--ink-2);}
 .lnk{border:0;background:none;color:var(--action);cursor:pointer;font-size:var(--fs-cap);padding:0;}
 .lnk:hover{text-decoration:underline;}
 .rqd-masknote{margin:6px 0 0;font-size:var(--fs-cap);color:var(--ink-3);}
 .rqd-none{color:var(--ink-2);font-size:var(--fs-cap);}
 .rqd-wire{margin:8px 0 4px;font-size:var(--fs-cap);color:var(--ink-2);}
-.rqd-lead{border:1px solid var(--control-edge);border-radius:var(--r-2);background:var(--sunk);padding:10px 12px;margin:0 0 10px;font-size:var(--fs-strong);}
 .rqd .disc{border-bottom:0;margin-top:8px;}
 
 /* the small screens: the class folds under the endpoint; 收回 moves into the detail only (1.10 §窄屏) */

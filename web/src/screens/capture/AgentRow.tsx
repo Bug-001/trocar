@@ -9,6 +9,7 @@ import { TechDetails, type TechValue } from '../../ui/TechDetails'
 import { CopyButton } from '../../ui/CopyButton'
 import { HarnessIcon } from '../../ui/HarnessIcon'
 import { HarnessSwitch, type ControlModel } from '../../ui/HarnessSwitch'
+import { Chev } from '../../ui/Chev'
 
 export type Pair = { k: string, v: TechValue }
 type Part = { text: string } | { mono: string }
@@ -26,9 +27,9 @@ export type DoneFn = (out: unknown) => void
 export const Parts = ({ parts }: { parts: Part[] }) =>
   <>{parts.map((p, i) => <Fragment key={i}>{'mono' in p ? <span className="mono">{p.mono}</span> : p.text}</Fragment>)}</>
 
-// bad / warn lamps, the ok dot, or nothing (1.5: a normal state lights nothing, an unknown one neither)
+// the kit's lamp in the state's colour (bad / warn / ok), or nothing (1.5: a normal state lights nothing, an unknown one neither)
 export const Gut = ({ gut }: { gut: string | null }) => (
-  <span className="gut">{gut === 'ok' ? <span className="capdot" aria-hidden="true" /> : gut ? <span className={`lamp ${gut}`} aria-hidden="true" /> : null}</span>
+  <span className="gut">{gut ? <span className={`lamp ${gut}`} aria-hidden="true" /> : null}</span>
 )
 
 // the leading state word carries the severity colour (up to the first ':' or ' · '); the rest of the sentence stays ink
@@ -50,7 +51,7 @@ export function CapRow({ id, caprow, label, open, onOpen, gut, rest, children }:
       <div className="crow-t">
         {gut}
         <Button slot="trigger" className="nm cap-nm" data-caprow={caprow}>
-          <span className="chev" aria-hidden="true">{open ? '▾' : '▸'}</span>{label}
+          <Chev />{label}
         </Button>
         {rest}
       </div>
@@ -76,7 +77,7 @@ export function AgentRow({ row, open, onOpen, onDone }: { row: AgentRowModel, op
         <dl className="exp">
           {row.why ? <>
             <dt>Why, and what to do</dt>
-            <dd>{row.why.lines.map((l, i) => <p key={i}>{l}</p>)}<p className="fine">{row.why.tail}</p></dd>
+            <dd className="why-do">{row.why.lines.map((l, i) => <p key={i}>{l}</p>)}<p className="fine">{row.why.tail}</p></dd>
           </> : null}
           {row.changes ? <>
             <dt>Changed for it by trocar</dt>
@@ -89,7 +90,7 @@ export function AgentRow({ row, open, onOpen, onDone }: { row: AgentRowModel, op
       ) : null}
       <div className="exp-tech">
         <TechDetails pairs={techPairs(row.tech)} copy={row.copy} />
-        <div className="capcopy"><CopyButton text={row.diag} label="Copy diagnostics" /></div>
+        <div className="capcopy"><CopyButton text={row.diag} label="Copy diagnostics" row /></div>
       </div>
     </CapRow>
   )

@@ -92,8 +92,8 @@ export default function CaptureScreen({ route }: ScreenProps) {
           {next.map((id) => byId.get(id)).filter((r) => r != null).map((r) => (
             <AgentRow key={r.id} row={r} open={openOf(r.id, r.defaultOpen)} onOpen={(o) => setOpen(r.id, o)} onDone={onDone} />
           ))}
-          {model.foot ? <p className="capfoot">{model.foot}</p> : null}
         </section>
+        {model.foot ? <p className="capfoot">{model.foot}</p> : null}
         {model.changes ? <ChangesBlock ch={model.changes} open={openOf(CHANGES, model.changes.open)} onOpen={(o) => setOpen(CHANGES, o)} /> : null}
       </div>
     </div>

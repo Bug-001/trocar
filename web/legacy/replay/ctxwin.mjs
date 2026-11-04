@@ -12,6 +12,7 @@
 import { esc, bytes } from '../core/fmt.mjs'
 import { KIDS, serialize, patchInto } from '../core/units.mjs'
 import { techDetailsHtml } from '../core/ui.mjs'
+import { HALF, discChev } from '../core/icons.mjs'
 import * as W from '../labels/replay.mjs'
 import { messageTurns, keyDiff, refRowOf, hasChangeLine, callFacts } from './analysis.mjs'
 import { contentRefOf, contentRefKOf } from './stepbar.mjs'
@@ -27,14 +28,14 @@ export { blockBodyHtml } from './blocks.mjs'
 export function callFidelityHtml(call) {
   const { facts, tech } = callFacts(call)
   if (!facts.length) return ''
-  return `<div class="cwfline"><span class="cwhalf" aria-hidden="true">${W.HALF_MARK}</span> <span class="cwffacts">${facts.map((f) => esc(f)).join(' · ')}</span>${tech.length ? techDetailsHtml(tech, { id: 'cwf-tech' }) : ''}</div>`
+  return `<div class="cwfline"><span class="cwhalf" aria-hidden="true">${HALF}</span> <span class="cwffacts">${facts.map((f) => esc(f)).join(' · ')}</span>${tech.length ? techDetailsHtml(tech, { id: 'cwf-tech' }) : ''}</div>`
 }
 
 // ── ② the 窗口行: no block of this step can return to the raw bytes ──────────────────────────────────────────────────
 export function windowLineHtml(flat) {
   if (!flat || !flat.length || flat.some((b) => b.text_ref)) return ''
   const reasons = [...new Set(flat.map((b) => b.unaddressable).filter(Boolean))]
-  return `<div class="cwwin"><span class="cwhalf" aria-hidden="true">${W.HALF_MARK}</span> ${esc(W.WINDOW_LINE)}${reasons.length ? techDetailsHtml(reasons.map((r, i) => ['reason ' + (i + 1), r]), { id: 'cwwin-tech' }) : ''}</div>`
+  return `<div class="cwwin"><span class="cwhalf" aria-hidden="true">${HALF}</span> ${esc(W.WINDOW_LINE)}${reasons.length ? techDetailsHtml(reasons.map((r, i) => ['reason ' + (i + 1), r]), { id: 'cwwin-tech' }) : ''}</div>`
 }
 
 // ── ③ the section header: name · block count · size · 以下逐字 (or just ◐ when the window line is up) ────────────────
@@ -43,7 +44,7 @@ export function sectionHeaderHtml(sec, blocks, { windowLine = false } = {}) {
   const n = (blocks || []).length
   const size = (blocks || []).reduce((a, b) => a + (typeof b.bytes === 'number' ? b.bytes : 0), 0)
   const est = sec === 'tools' && (blocks || []).some((b) => faithOf(b) === 'metadata') // the size of a metadata-only definition is an estimate
-  const ff = windowLine ? `<span class="cwsecff" title="${esc(W.WINDOW_LINE)}">${W.HALF_MARK}</span>`
+  const ff = windowLine ? `<span class="cwsecff" title="${esc(W.WINDOW_LINE)}">${HALF}</span>`
     : (blocks || []).length && (blocks || []).every((b) => faithNow(b) === 'verbatim') ? `<span class="cwsecff v">${esc(W.SECTION_VERBATIM)}</span>` : ''
   return `<div class="cwsec" id="sec-${esc(sec)}"><b>${esc(name)}</b><span class="cwsecn">${esc(String(n))} blocks</span>` +
     `<span class="cwsecsz"${est ? ` title="${esc(W.SECTION_SIZE_EST_TIP)}"` : ` title="${esc(W.SECTION_SIZE_TIP)}"`}>${est ? W.SECTION_SIZE_EST : ''} ${esc(bytes(size))}</span>${ff}</div>`
@@ -76,7 +77,7 @@ export function removedSectionHtml(removed, refK, open) {
     const label = h.label || b.preview || ''
     return `<div class="cblk removed collapsed" data-rm="${j}" data-sec="${esc(b.sec)}"><div class="cbh"><span class="cbrole">${esc(h.role)}</span><span class="cbtag" title="${esc(tagWord(h.tag) || h.tag)}">${esc(tagWord(h.tag) || h.tag)}</span>${label ? `<span class="cblabel" title="${esc(label)}">${esc(label)}</span>` : ''}${ffBadgeHtml(faithOf(b), { tech: b.unaddressable })}<span class="remnote" title="The full text is read back from its location in step ${esc(String(refK ?? '?'))}">removed</span></div><div class="cbc"></div></div>`
   }).join('')
-  return `<div class="cwremoved ${open ? 'open' : ''}"><div class="cwremhd" data-navtoggle-rem="1" role="button" tabindex="0">${esc(W.removedList(removed.length, refK ?? '?'))} ▸</div>${open ? `<div class="cwrembody">${rows}</div>` : ''}</div>`
+  return `<div class="cwremoved ${open ? 'open' : ''}"><div class="cwremhd" data-navtoggle-rem="1" role="button" tabindex="0">${discChev(open)} ${esc(W.removedList(removed.length, refK ?? '?'))}</div>${open ? `<div class="cwrembody">${rows}</div>` : ''}</div>`
 }
 
 // ── ⑥ ⑦ ⑧ the stand-in states, and the frames of a step whose lane is not held ─────────────────────────────────────
@@ -278,7 +279,8 @@ const yieldNow = () => (globalThis.scheduler && typeof globalThis.scheduler.yiel
   : typeof MessageChannel === 'function' ? new Promise((r) => { const c = new MessageChannel(); c.port1.onmessage = () => { c.port1.close(); r() }; c.port2.postMessage(0) })
     : new Promise((r) => setTimeout(r, 0)))
 // inside open cards only the groups within one window height above and below the visible box are rows (2.3 §窗口按 bid 打补丁 ·
-// rule 4): one group per task, a placeholder near it drawn, then a drawn group far from it put back to its placeholder — never one
+// rule 4): one group per task, a placeholder near it drawn, then a drawn group beyond two window heights put back to its
+// placeholder (the gap: a placeholder's height and its drawn rows' differ a little, one edge for both would loop) — never one
 // holding an open row, the change line, the focus or the selection. A newer repaint (el.__gen) ends this run; scrolling starts one.
 function settle(el, s) {
   if (typeof document === 'undefined' || !el.getBoundingClientRect || el.__settling === el.__gen) return
@@ -299,9 +301,9 @@ function nextJob(el, s) {
   for (const g of el.querySelectorAll('.cwgroup')) {
     const busy = g.hasAttribute('aria-busy'), a = busy ? g : g.firstElementChild, b = busy ? g : g.lastElementChild
     if (!a) continue
-    const near = b.getBoundingClientRect().bottom >= box.top - h && a.getBoundingClientRect().top <= box.bottom + h
-    if (busy && near) return [g.__k, true]
-    if (!busy && !near && !drop && !g.querySelector('.cblk:not(.collapsed), #cachebrk') && !g.contains(document.activeElement) && !(sel && sel.anchorNode && g.contains(sel.anchorNode))) drop = [g.__k, false]
+    const within = (n) => b.getBoundingClientRect().bottom >= box.top - n * h && a.getBoundingClientRect().top <= box.bottom + n * h
+    if (busy && within(1)) return [g.__k, true]
+    if (!busy && !drop && !within(2) && !g.querySelector('.cblk:not(.collapsed), #cachebrk') && !g.contains(document.activeElement) && !(sel && sel.anchorNode && g.contains(sel.anchorNode))) drop = [g.__k, false]
   }
   return drop
 }

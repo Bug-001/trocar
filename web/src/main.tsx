@@ -62,7 +62,7 @@ document.addEventListener('v2:escape', () => { document.getElementById('detail')
   if (!link || typeof XMLSerializer === 'undefined') return
   t.innerHTML = BRAND
   const svg = t.content.firstElementChild!, cs = getComputedStyle(document.documentElement)
-  for (const el of [svg, ...svg.querySelectorAll('*')]) for (const a of ['fill', 'stroke']) {
+  for (const el of [svg, ...svg.querySelectorAll('*')]) for (const a of ['fill', 'stroke', 'stop-color']) {
     const m = /^var\((--[\w-]+)\)$/.exec(el.getAttribute(a) || '')
     if (m) el.setAttribute(a, cs.getPropertyValue(m[1]).trim())
   }

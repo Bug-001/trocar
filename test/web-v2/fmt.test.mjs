@@ -1,6 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { kf, bytes, enc, esc, usd, clip, preview, fmtDur, base, fmtTime, fmtWhen, fmtStamp, has } from '../../web/legacy/core/fmt.mjs'
+import fs from 'node:fs'
+import path from 'node:path'
+import { kf, bytes, enc, esc, usd, clip, preview, fmtDur, base, fmtTime, fmtWhen, fmtStamp, fmtDate, fmtDay, has } from '../../web/legacy/core/fmt.mjs'
 
 test('kf', () => { assert.equal(kf(null), '?'); assert.equal(kf(950), '950'); assert.equal(kf(1234), '1.2k'); assert.equal(kf(12345), '12k') })
 test('bytes keeps null as unknown', () => { assert.equal(bytes(null), '—'); assert.equal(bytes(0), '0 B'); assert.equal(bytes(1536), '1.5 KB'); assert.equal(bytes(5 * 1048576), '5.0 MB') })
@@ -43,7 +45,7 @@ test('fmtWhen: empty is a dash, junk is shown as it came, today shows only the t
   const now = Date.parse('2026-10-07T08:00:00Z')
   assert.equal(fmtWhen('', now), '—'); assert.equal(fmtWhen(null, now), '—'); assert.equal(fmtWhen('junk', now), 'junk')
   assert.equal(fmtWhen(now - 1000, now), fmtTime(now - 1000))
-  assert.equal(fmtWhen(now - 3 * 86400e3, now), fmtStamp(now - 3 * 86400e3))
+  assert.equal(fmtWhen(now - 3 * 86400e3, now), fmtStamp(now - 3 * 86400e3, now))
 })
 // 1.2 §页头 「HH:MM:SS」: a 24 h clock whatever the browser's locale, never AM / PM, midnight 00 and never 24
 test('the time format is HH:MM:SS on a 24 h clock, with no AM/PM', () => {
@@ -54,6 +56,33 @@ test('the time format is HH:MM:SS on a 24 h clock, with no AM/PM', () => {
       assert.ok(!/[ap]\.?m\.?/i.test(t), t)
     }
   }
+})
+
+// 1.5 §审美维度 第 8 条: one form per kind — a full time is the date then the clock; the year only when it is not now's
+test('a full time is the date and the clock; the date carries the year only in another year', () => {
+  for (const [ts, now] of [[new Date(2026, 9, 18, 8, 0, 52), new Date(2026, 10, 3)], [new Date(2025, 9, 18, 8, 0, 52), new Date(2026, 0, 2)], [new Date(2026, 0, 1, 0, 0, 0), new Date(2026, 11, 31)]]) {
+    assert.equal(fmtStamp(ts, now), `${fmtDate(ts, now)}, ${fmtTime(ts)}`)
+    assert.equal(fmtDate(ts, now).includes(String(ts.getFullYear())), ts.getFullYear() !== now.getFullYear(), fmtDate(ts, now))
+    assert.ok(!/\d+\/\d+|\d{4}-\d{2}/.test(fmtDate(ts, now)), 'a date is the month word and the day, never 10/18 or 2026-10-18')
+  }
+  assert.equal(fmtDate('', 0), '—'); assert.equal(fmtDate('junk', 0), '—'); assert.equal(fmtStamp('junk', 0), 'junk')
+})
+test('fmtDay: today and yesterday as words, the days of this week as a distance, older ones as the date', () => {
+  const now = new Date(2026, 10, 3, 12)
+  const day = (k) => new Date(2026, 10, 3 - k, 9)
+  assert.notEqual(fmtDay(day(0), now), fmtDay(day(1), now))
+  for (let k = 2; k < 7; k++) assert.ok(fmtDay(day(k), now).includes(String(k)), fmtDay(day(k), now))
+  for (const k of [7, 30, 400]) assert.equal(fmtDay(day(k), now), fmtDate(day(k), now))
+  assert.equal(fmtDay(null, now), '—')
+})
+test('no file of the front end but core/fmt.mjs formats a date itself', () => {
+  const web = path.join(import.meta.dirname, '../../web')
+  const own = path.join(web, 'legacy/core/fmt.mjs')
+  const re = /Intl\.DateTimeFormat|toLocale(?:Date|Time)String|toTimeString\(|toLocaleString\([^)]*\{[^}]*(?:month|hour|weekday)/
+  const files = fs.readdirSync(web, { recursive: true }).map((f) => path.join(web, f)).filter((f) => /(?<!\.test)\.(mjs|ts|tsx)$/.test(f) && !f.includes('node_modules'))
+  const bad = files.filter((f) => f !== own && re.test(fs.readFileSync(f, 'utf8'))).map((f) => path.relative(web, f))
+  assert.deepEqual(bad, [])
+  assert.ok(re.test(fs.readFileSync(own, 'utf8')), 'the scan sees the one formatter (not vacuous)')
 })
 
 test('has: own keys only (a code like "constructor" is not in a lookup table)', () => {

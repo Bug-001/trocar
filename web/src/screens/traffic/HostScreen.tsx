@@ -13,6 +13,7 @@ import { setScreenKeys } from '../../../legacy/core/keys.mjs'
 import { revealHeader } from '../../../legacy/core/sensitive.mjs'
 import * as W from '../../../legacy/labels/traffic.mjs'
 import { HarnessIcon } from '../../ui/HarnessIcon'
+import { MenuChev } from '../../ui/Chev'
 import type { ScreenProps } from '../../ScreenOutlet'
 import { queryOf, asOfText, routeHarness, windowLinks as windowLinksJs, failOf as failOfJs } from './model.mjs'
 import { ROW_H, DETAIL_BREAK, callsParams as callsParamsJs, mergePages as mergePagesJs, hostHref as hostHrefJs, crumbsOf as crumbsOfJs, hostRowView as hostRowViewJs, emptyText } from './host-model.mjs'
@@ -53,7 +54,7 @@ const modeNow = () => (mql()?.matches === false ? 'drawer' : 'column')
 function ClassMenu({ items }: { items: Array<{ id: string, label: string, href: string }> }) {
   return (
     <MenuTrigger>
-      <Button className="popbtn" aria-label={W.FILTER_CLASS}>{W.FILTER_CLASS} <span className="chev" aria-hidden="true">▾</span></Button>
+      <Button className="popbtn" aria-label={W.FILTER_CLASS}>{W.FILTER_CLASS} <MenuChev /></Button>
       <Popover className="pop menu" placement="bottom end">
         <Menu aria-label={W.FILTER_CLASS} items={items}>{(i) => <MenuItem id={i.id} href={i.href} textValue={i.label}>{i.label}</MenuItem>}</Menu>
       </Popover>
@@ -158,13 +159,13 @@ export default function HostScreen({ route, router }: ScreenProps) {
         <div className="tfilters">
           <ClassMenu items={CLASS_IDS.map((id: string) => ({ id, label: W.classWord(id), href: kept(id) }))} />
           {q.cls ? <>
-            <a className="fchip" href={kept(null)} title="Remove this filter">{`${W.FILTER_CLASS}:${W.classWord(q.cls)}`} <span className="x" aria-hidden="true">×</span></a>
+            <a className="fchip" href={kept(null)} title="Remove this filter">{W.filterChip(W.FILTER_CLASS, W.classWord(q.cls))} <span className="x" aria-hidden="true">×</span></a>
             <span className="cap-item cap-note">{W.CLASS_FILTER_NOTE(W.classWord(q.cls))}</span>
           </> : null}
         </div>
       </div>
-      <div className="hhead" aria-hidden="true">
-        <span className="cell">time</span><span className="cell-endpoint">endpoint</span><span className="cell class">class</span>
+      <div className="hhead colhead" aria-hidden="true">
+        <span className="cell">Time</span><span className="cell-endpoint">Endpoint</span><span className="cell class">Class</span>
         <span className="cell num sent">{W.COL.sent}</span><span className="cell num recv">{W.COL.recv}</span><span className="cell marks"></span>
       </div>
       <div className="hlist" id="hlist" role="list" aria-label="Requests" ref={listRef} style={{ position: 'relative', height: virt.getTotalSize() }}>

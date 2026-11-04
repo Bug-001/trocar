@@ -1,9 +1,9 @@
-// core/capture-verdict.mjs — what one `status` document (1.6 C.3) says about the 采集服务 (D38), in ONE place: the state, its mark
-// and tone, its sentence, the per-agent rows and a failure group's sentence. The 总览 capture card, the 采集 page and the session
+// core/capture-verdict.mjs — what one `status` document (1.6 C.3) says about the 采集服务 (D38), in ONE place: the state, its
+// tone, its sentence, the per-agent rows and a failure group's sentence. The 总览 capture card, the 采集 page and the session
 // library's empty state read this and no other, so they cannot word the same state two ways.
 // Pure: no DOM, no timers. The state is the server's `health` (1.5 §采集状态: baked by the server, never re-folded here); its
 // absence is K-28 (not known), never a failure. Field presence decides everywhere, never a version.
-// The marks ✓ ✗ ! ○ – ? are the board's own glyphs, not emoji; the words are labels/common.mjs HEALTH_WORDS.
+// The words are labels/common.mjs HEALTH_WORDS; the tone is a lamp or status dot, never a typed mark (1.5 §采集状态).
 import { fmtWhen, has } from './fmt.mjs'
 import { harnessKey, harnessName, HARNESS_ORDER } from './chips.mjs'
 import { RESTART_CODES, UNKNOWN_REASON } from '../labels/capture.mjs'
@@ -13,17 +13,17 @@ import { INTERVAL } from './poll.mjs'
 
 export const CAPH_MS = INTERVAL.status // the poll period of the pages that show this card while visible (4.4 §live-poll: `status` is the costliest read)
 
-// state → { mark, cls }. cls: ok | warn | bad | dim. `loading`, `stale`, `unreadable` and `unrecognized` are the board's read states.
+// state → { cls }. cls: ok | warn | bad | dim. `loading`, `stale`, `unreadable` and `unrecognized` are the board's read states.
 const LOOK = Object.freeze({
-  unreadable: { mark: '?', cls: 'warn' },
-  'not-running': { mark: '✗', cls: 'bad' }, 'not-responding': { mark: '✗', cls: 'bad' },
-  failing: { mark: '!', cls: 'bad' },
-  unknown: { mark: '?', cls: 'warn' },
-  off: { mark: '○', cls: 'dim' },
-  ok: { mark: '✓', cls: 'ok' },
-  residue: { mark: '–', cls: 'warn' },
-  'not-installed': { mark: '–', cls: 'dim' },
-  loading: { mark: '?', cls: 'dim' }, stale: { mark: '?', cls: 'warn' }, unrecognized: { mark: '?', cls: 'warn' },
+  unreadable: { cls: 'warn' },
+  'not-running': { cls: 'bad' }, 'not-responding': { cls: 'bad' },
+  failing: { cls: 'bad' },
+  unknown: { cls: 'warn' },
+  off: { cls: 'dim' },
+  ok: { cls: 'ok' },
+  residue: { cls: 'warn' },
+  'not-installed': { cls: 'dim' },
+  loading: { cls: 'dim' }, stale: { cls: 'warn' }, unrecognized: { cls: 'warn' },
 })
 const list = (x) => (Array.isArray(x) ? x : [])
 const obj = (x) => (x && typeof x === 'object' && !Array.isArray(x) ? x : {})
@@ -41,7 +41,7 @@ function failingItems(doc) {
 // The 采集服务 state of one answer. `doc` is the last good answer (null before the first), `okAt` when it arrived (epoch ms), `err`
 // the reason of the last failed read (or null), `now` the clock. Precedence: two polls missed → stale; a failure before any answer →
 // stale with no time; no answer yet → loading; a capture health the server could not read → unreadable; then `doc.health`; no `health` → not known (K-28).
-// → { state, mark, cls, n, since, reason, raw, readErrors, text } — text is never empty.
+// → { state, cls, n, since, reason, raw, readErrors, text } — text is never empty.
 export function captureVerdict(doc, { okAt = null, err = null, now = Date.now() } = {}) {
   const mk = (state, text, x = {}) => ({ state, ...LOOK[state], n: null, since: null, reason: null, raw: null, readErrors: 0, text, ...x })
   if (okAt != null && now - okAt > 2 * CAPH_MS) return mk('stale', HEALTH_READ.stale(fmtWhen(okAt, now)))

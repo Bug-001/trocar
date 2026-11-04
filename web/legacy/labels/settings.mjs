@@ -56,7 +56,7 @@ export const RETRY = 'Retry'
 export const PRICE_NOTE = 'Estimated cost = usage × the unit prices here; a local estimate, not a bill · USD per million tokens',
   PRICE_READ_ONLY = 'Read-only on the board; to change a price, edit the price table',
   PRICE_FROM = (p) => `From ${p}`, PRICE_DEFAULT = 'Using trocar\'s built-in default unit prices',
-  COL_KEY = 'Model name contains', COL_IN = 'input', COL_OUT = 'output', COL_WRITE = 'cache write', COL_READ = 'cache read',
+  COL_KEY = 'Model name contains', COL_IN = 'Input', COL_OUT = 'Output', COL_WRITE = 'Cache write', COL_READ = 'Cache read',
   PRICE_TABLE = 'The price table', PRICE_BAD_SHAPE = 'The price table has the wrong shape',
   UNPRICED_AS_OF = 'as of', UNPRICED_SESSIONS = (n) => `used in at least ${n} sessions`,
   UNPRICED_NONE = 'Every model in use has a unit price', UNPRICED_NO_MODEL = 'no model name',

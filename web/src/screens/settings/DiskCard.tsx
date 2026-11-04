@@ -9,6 +9,7 @@ import * as W from '../../../legacy/labels/settings.mjs'
 import { CopyButton } from '../../ui/CopyButton'
 import { TechDetails } from '../../ui/TechDetails'
 import { flatText } from './storage-model.mjs'
+import { Chev } from '../../ui/Chev'
 
 export type Pairs = Array<[string, string]>
 export type DiskModel = {
@@ -37,12 +38,12 @@ export function DiskCard({ disk, onRetry }: { disk: DiskModel, onRetry: () => vo
           <TechDetails pairs={techOf(disk.segFail.pairs)} copy={flatText(disk.segFail.pairs)} /></>
         : disk.bad > 0
           ? <p className="dline bad"><a className="jumpfiles" href="#" onClick={(e) => { e.preventDefault(); setOpen(true); setJumps((n) => n + 1) }}>
-            {`${W.BAD_FILES(disk.bad)} · ${W.BAD_FILES_SHOW} ▸`}</a></p>
+            {`${W.BAD_FILES(disk.bad)} · ${W.BAD_FILES_SHOW} ›`}</a></p>
           : null}
       {disk.slow ? <p className="cap" data-note="slow">{W.SLOW_NOTE}</p> : null}
       <p className="dline"><a href={W.CAPTURE_PAGE_HREF}>{W.CAPTURE_PAGE_LINE} ›</a></p>
       <Disclosure className="disc" ref={files} isExpanded={open} onExpandedChange={setOpen}>
-        <Button slot="trigger" className="disc-t"><span className="chev" aria-hidden="true">{open ? '▾' : '▸'}</span><b>Technical details</b></Button>
+        <Button slot="trigger" className="disc-t"><Chev /><b>Technical details</b></Button>
         <DisclosurePanel className="disc-b">
           <div className="tech">{disk.files.map(([k, v], i) => (
             <Fragment key={`${i}:${k}`}><span className="k">{k}</span><span className="v">{v}</span></Fragment>

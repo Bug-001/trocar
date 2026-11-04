@@ -4,7 +4,9 @@ import { useEffect, useRef, useState } from 'react'
 import { Button } from 'react-aria-components'
 import { writeClipboard, COPY_FLASH } from '../../legacy/core/dom.mjs'
 
-export function CopyButton({ text, label = 'Copy' }: { text: string, label?: string }) {
+// `row`: the copy is an action of the whole row (Copy diagnostics, Copy template), drawn as the kit's button (.copybtn.act, base.css);
+// otherwise it is the small copy beside the bytes it copies
+export function CopyButton({ text, label = 'Copy', row = false }: { text: string, label?: string, row?: boolean }) {
   const [flash, setFlash] = useState<string | null>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   useEffect(() => () => clearTimeout(timer.current), [])
@@ -14,5 +16,5 @@ export function CopyButton({ text, label = 'Copy' }: { text: string, label?: str
     clearTimeout(timer.current)
     timer.current = setTimeout(() => setFlash(null), COPY_FLASH.ms)
   }
-  return <Button className="copybtn" onPress={copy}>{flash ?? label}</Button>
+  return <Button className={row ? 'copybtn act' : 'copybtn'} onPress={copy}>{flash ?? label}</Button>
 }

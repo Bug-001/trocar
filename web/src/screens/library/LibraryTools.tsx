@@ -8,6 +8,7 @@ import { harnessName, harnessRaw } from '../../../legacy/core/chips.mjs'
 import * as W from '../../../legacy/labels/library.mjs'
 import { HarnessIcon } from '../../ui/HarnessIcon'
 import { InfoButton } from '../../ui/InfoButton'
+import { MenuChev } from '../../ui/Chev'
 import { agentMenuModel, projectMenuModel, agentLabel, hasFilters } from './model.mjs'
 import type { Session } from './useSessions'
 
@@ -16,7 +17,6 @@ type SetParams = (patch: Record<string, string | null>) => void
 const ALL = '*all' // the project menu's 「All projects」 item (a slug never starts with *)
 const first = (k: Selection) => (k === 'all' ? null : [...k][0] as string | undefined) ?? null
 const keys = (k: Selection, all: Key[]) => (k === 'all' ? all : [...k]).map(String)
-const Chev = () => <span className="chev" aria-hidden="true">▾</span>
 
 function PopMenu<T extends { id: string }>({ label, trigger, items, mode, selected, onChange, item }: {
   label: string, trigger: string, items: T[], mode: 'single' | 'multiple', selected: string[], onChange: (k: Selection) => void,
@@ -24,7 +24,7 @@ function PopMenu<T extends { id: string }>({ label, trigger, items, mode, select
 }) {
   return (
     <MenuTrigger>
-      <Button className="popbtn" aria-label={label}>{trigger} <Chev /></Button>
+      <Button className="popbtn" aria-label={label}>{trigger} <MenuChev /></Button>
       <Popover className="pop menu" placement="bottom start">
         <Menu aria-label={label} items={items} selectionMode={mode} selectedKeys={selected} onSelectionChange={onChange} disallowEmptySelection={mode === 'single'}>
           {(x) => { const it = item(x); return <MenuItem id={x.id} textValue={it.text}><span title={it.title}>{it.body}</span></MenuItem> }}

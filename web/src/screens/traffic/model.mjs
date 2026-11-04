@@ -2,7 +2,7 @@
 // (the agent only on a group's first row), the 合计 row, the caption facts (截至, coverage, the agent-source note), the filter menus
 // and the window links. The numbers come from ONE C.5 `traffic` document; both filters are client-side over its rows. Everything the
 // store did not record reads 未记录, never 0. Framework-free (D75②): no DOM, no timers; TrafficScreen.tsx only renders what this returns.
-import { bytes, fmtDay } from '../../../legacy/core/fmt.mjs'
+import { bytes, fmtDay, fmtWhen } from '../../../legacy/core/fmt.mjs'
 import { CLASS_IDS } from '../../../legacy/core/classes.mjs'
 import { harnessKey, harnessName, HARNESS_ORDER } from '../../../legacy/core/chips.mjs'
 import { formatHash } from '../../../legacy/core/router.mjs'
@@ -55,14 +55,8 @@ export function isNewHost(row, harnessSince, now) {
   return first > now - DAY_MS && first <= now && since < now - DAY_MS
 }
 
-/** 「10/6 14:02」 — the year only when it is not this one. */
-export function asOfText(ts, now = Date.now()) {
-  if (ts == null || ts === '') return ''
-  const d = new Date(ts)
-  if (isNaN(d.getTime())) return ''
-  const n = new Date(now), p = (x) => String(x).padStart(2, '0')
-  return `${d.getFullYear() === n.getFullYear() ? '' : d.getFullYear() + '/'}${d.getMonth() + 1}/${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}`
-}
+/** 「截至」: the clock today, the date and the clock before (core/fmt.mjs fmtWhen, 1.5 §审美维度 第 8 条); '' when there is none. */
+export const asOfText = (ts, now = Date.now()) => (ts == null || ts === '' || isNaN(new Date(ts).getTime()) ? '' : fmtWhen(ts, now))
 /** The route segment of an agent: the read-side id; an unidentified one is 'unknown' (1.10 §Edge cases). */
 export const routeHarness = (id) => harnessKey(id) || 'unknown'
 
@@ -148,8 +142,8 @@ export function filterLinks({ window, h = [], cls = null, agents = [] }) {
     classes: CLASS_IDS.map((id) => ({ id, label: W.classWord(id), href: hrefOf({ class: id }) })),
     kept: cls ? formatHash({ screen: 'settings-storage', params: h.length ? { h: h.join(','), class: cls } : { class: cls } }) : null,
     chips: [
-      ...h.map((id) => ({ label: `${W.FILTER_AGENT}:${harnessName(id)}`, href: hrefOf({ h: null }) })),
-      ...(cls ? [{ label: `${W.FILTER_CLASS}:${W.classWord(cls)}`, href: hrefOf({ class: null }) }] : []),
+      ...h.map((id) => ({ label: W.filterChip(W.FILTER_AGENT, harnessName(id)), href: hrefOf({ h: null }) })),
+      ...(cls ? [{ label: W.filterChip(W.FILTER_CLASS, W.classWord(cls)), href: hrefOf({ class: null }) }] : []),
     ],
     note: cls ? W.CLASS_FILTER_NOTE(W.classWord(cls)) : null,
   }

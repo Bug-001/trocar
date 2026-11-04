@@ -29,7 +29,8 @@ for (let j = open, depth = 0; j < css.length; j++) {
 const beforeMedia = darkAt < 0 ? css : css.slice(0, darkAt)
 const THEMES = {
   light: declsOf(bodyOf(beforeMedia, ':root')),
-  dark: declsOf(bodyOf(darkBody, ':root:not([data-theme="light"])')),
+  // a token the same in both themes lives in :root only, so dark inherits it as the cascade does
+  dark: { ...declsOf(bodyOf(beforeMedia, ':root')), ...declsOf(bodyOf(darkBody, ':root:not([data-theme="light"])')) },
 }
 
 // WCAG 2.x relative luminance and contrast ratio over #rrggbb (every token value here is a hex or an rgb() with alpha)
@@ -53,28 +54,54 @@ test('the scanner is not vacuous: it knows black on white passes and white on wh
   assert.deepEqual(parseColor('#EEF1F0'), [238, 241, 240])
 })
 
-// 1.5 §验收 #7: the ink colours and the status text colours on every surface ≥ 4.5:1
-const TEXT = ['--ink', '--ink-2', '--ink-3', '--action', '--bad', '--warn', '--ok']
-// lamps, the trace and control edges are drawn on these surfaces; data colours on the chart surfaces
-const CONTROL = ['--bad-lamp', '--warn-lamp', '--note-lamp', '--trace', '--control-edge']
-const SURFACES = ['--paper', '--panel', '--raised', '--scope', '--sunk']
-const DATA = ['--ct-tools', '--ct-system', '--ct-user', '--ct-assistant', '--ct-thinking', '--ct-tooluse', '--ct-result', '--ct-hatch']
-const CHART = ['--scope', '--raised', '--paper']
+const THEME_NAMES = ['light', 'dark']
+const PAPER = ['--paper', '--panel', '--raised', '--sunk']
+const SCOPE = ['--scope', '--scope-2']
+const at = (min, pairs) => {
+  for (const theme of THEME_NAMES) for (const [t, s] of pairs)
+    assert.ok(ratio(C(theme, t), C(theme, s)) >= min, `${theme}: ${t} on ${s} = ${ratio(C(theme, t), C(theme, s)).toFixed(2)} < ${min}`)
+}
+const cross = (fgs, bgs) => fgs.flatMap((f) => bgs.map((b) => [f, b]))
+// the #rrggbb stops of a gradient token; at least two, so a check over them is never vacuous
+const stops = (theme, name) => {
+  const s = [...String(THEMES[theme][name]).matchAll(/#[0-9a-f]{6}\b/gi)].map((m) => parseColor(m[0]))
+  assert.ok(s.length >= 2, `${theme} ${name}: expected a gradient with at least two #rrggbb stops (${THEMES[theme][name]})`)
+  return s
+}
 
-test('text colours reach 4.5:1 on every surface, in both themes', () => {
-  for (const theme of ['light', 'dark']) for (const t of TEXT) for (const s of SURFACES)
-    assert.ok(ratio(C(theme, t), C(theme, s)) >= 4.5, `${theme}: ${t} on ${s} = ${ratio(C(theme, t), C(theme, s)).toFixed(2)}`)
+// 1.5 §验收 #7
+test('ink, action, status and trace-ink text reach 4.5:1 on the paper faces, in both themes', () => {
+  at(4.5, cross(['--ink', '--ink-2', '--ink-3', '--action', '--bad', '--warn', '--ok', '--trace-ink'], PAPER))
 })
-test('the primary button keeps its own ink readable in both themes', () => {
-  for (const theme of ['light', 'dark']) assert.ok(ratio(C(theme, '--action-ink'), C(theme, '--action')) >= 4.5, theme)
+test('scope ink reaches 4.5:1 on the scope glass, in both themes', () => {
+  at(4.5, cross(['--scope-ink', '--scope-ink-2'], SCOPE))
 })
-test('lamps, the trace and control edges reach 3:1 on the surfaces they sit on, in both themes', () => {
-  for (const theme of ['light', 'dark']) for (const l of CONTROL) for (const s of ['--paper', '--panel', '--raised', '--scope'])
-    assert.ok(ratio(C(theme, l), C(theme, s)) >= 3, `${theme}: ${l} on ${s} = ${ratio(C(theme, l), C(theme, s)).toFixed(2)}`)
+test('the action ink, the tag ink and the brand text stay readable on what they sit on, in both themes', () => {
+  at(4.5, [['--action-ink', '--action']])
+  for (const theme of THEME_NAMES) {
+    for (const stop of stops(theme, '--tag'))
+      assert.ok(ratio(C(theme, '--tag-ink'), stop) >= 4.5, `${theme}: --tag-ink on a --tag stop = ${ratio(C(theme, '--tag-ink'), stop).toFixed(2)}`)
+    for (const stop of stops(theme, '--brand-text'))
+      assert.ok(ratio(stop, C(theme, '--raised')) >= 4.5, `${theme}: a --brand-text stop on --raised = ${ratio(stop, C(theme, '--raised')).toFixed(2)}`)
+  }
 })
-test('data colours reach 3:1 on the chart surfaces, in both themes', () => {
-  for (const theme of ['light', 'dark']) for (const d of DATA) for (const s of CHART)
-    assert.ok(ratio(C(theme, d), C(theme, s)) >= 3, `${theme}: ${d} on ${s} = ${ratio(C(theme, d), C(theme, s)).toFixed(2)}`)
+test('the segmented control: the selected label at 4.5:1 on its face, the others on the track, and the face set apart from the track', () => {
+  at(4.5, [['--ink', '--seg-on'], ['--ink-2', '--seg-track']])
+  at(1.25, [['--seg-on', '--seg-track']]) // 1.5 第 7 条: the selected face reads as a face, not only through its shadow
+})
+test('lamps and control edges reach 3:1 on the paper faces, in both themes', () => {
+  at(3, cross(['--bad-lamp', '--warn-lamp', '--note-lamp', '--control-edge'], PAPER))
+})
+test('the agent icon tile is set apart from every paper face by its hairline, in both themes', () => {
+  at(1.25, cross(['--icon-tile-edge'], PAPER)) // 1.2 §画法, 1.5 第 7 条: the same line as the selected segment's face
+})
+test('the trace, cursor, scope action and edge, and the problem lamps reach 3:1 on the scope glass, in both themes', () => {
+  at(3, cross(['--trace', '--cursor', '--scope-action', '--scope-edge', '--bad-lamp', '--warn-lamp'], SCOPE))
+})
+test('data colours reach 3:1 on the scope glass and the chart surfaces, in both themes', () => {
+  const DATA = Object.keys(THEMES.light).filter((k) => k.startsWith('--ct-'))
+  assert.ok(DATA.length >= 2, 'the data colour set is not empty')
+  at(3, cross(DATA, [...SCOPE, '--raised', '--paper']))
 })
 // 1.5 §审美 #7 for the block cells (RFC 2.3 §两种模式): the diff hunk and JSON-tree text colours on every surface a cell sits on;
 // the ink colours on the diff and error tints; the error text on its own tint

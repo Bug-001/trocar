@@ -3,6 +3,7 @@
 // installUi(doc) is the one wiring pass, installed once by web/src/main.tsx. Nothing touches `document` at import time.
 
 import { esc } from './fmt.mjs'
+import { icon, HALF, DISC_CHEV, MENU_CHEV, glyphCss } from './icons.mjs'
 import { screenBound } from './dom.mjs'
 import { MARK_TIP, READ_FAIL } from '../labels/common.mjs'
 
@@ -41,11 +42,11 @@ export function applyThemePref(doc = typeof document === 'undefined' ? null : do
 // verbatim carries no text at all (the proof rule and the section head own the words); a number's estimate is the ≈
 // prefix the caller writes; — and ? are never a zero. `tip` overrides the default legend.
 export const MARK_KINDS = Object.freeze(['verbatim', 'est', 'inf', 'struct', 'part', 'null-provider', 'null-price', 'null-na', 'unknown'])
-const MARK_FORM = { verbatim: '', est: '≈', inf: 'inferred', struct: 'structural estimate', part: '◐', 'null-provider': '—', 'null-price': '—', 'null-na': '—', unknown: '?' }
+const MARK_FORM = { verbatim: '', est: '≈', inf: 'inferred', struct: 'structural estimate', part: HALF, 'null-provider': '—', 'null-price': '—', 'null-na': '—', unknown: '?' }
 export function mark(kind, tip) {
   if (kind === 'verbatim') return `<span class="mk" data-ff="verbatim" aria-label="verbatim"${tip ? ` title="${esc(tip)}"` : ''}></span>`
   const form = MARK_FORM[kind] != null ? MARK_FORM[kind] : String(kind)
-  return `<span class="mk mk-${esc(kind)}"${tip || MARK_TIP[kind] ? ` title="${esc(tip || MARK_TIP[kind])}"` : ''}>${esc(form)}</span>`
+  return `<span class="mk mk-${esc(kind)}"${tip || MARK_TIP[kind] ? ` title="${esc(tip || MARK_TIP[kind])}"` : ''}>${kind === 'part' ? form : esc(form)}</span>`
 }
 
 // ── popovers (1.2 §弹出层): one contract for the whole board ─────────────────────────────────────────────────────────
@@ -55,16 +56,16 @@ export function mark(kind, tip) {
 export const TIP_MS = 300 // the hover delay, = --t-tip
 
 let SEQ = 0
-export function popover({ label, title, body, glyph = 'ⓘ', cls = '' }) {
+export function popover({ label, title, body, glyph = icon('info'), cls = '' }) {
   const id = `po-${++SEQ}`
   return `<button type="button" class="popbtn ${cls}" data-pop="${id}" aria-label="${esc(label)}" aria-expanded="false" aria-controls="${id}">${glyph}</button>` +
     `<div class="pop" id="${id}" role="dialog" aria-labelledby="${id}-t" hidden><div class="ph" id="${id}-t">${esc(title)}</div><div class="pb">${body}</div></div>`
 }
-export const infoButton = (o) => popover({ glyph: 'ⓘ', ...o })
+export const infoButton = (o) => popover({ glyph: icon('info'), ...o })
 
 export function menuButton({ label, title, items }) {
   const id = `menu-${++SEQ}`
-  return `<button type="button" class="popbtn" data-menu="${id}" aria-label="${esc(label)}" aria-haspopup="menu" aria-expanded="false" aria-controls="${id}">${esc(title)} <span class="chev" aria-hidden="true">▾</span></button>` +
+  return `<button type="button" class="popbtn" data-menu="${id}" aria-label="${esc(label)}" aria-haspopup="menu" aria-expanded="false" aria-controls="${id}">${esc(title)} <span class="chev" aria-hidden="true">${MENU_CHEV}</span></button>` +
     `<div class="pop menu" id="${id}" role="menu" aria-labelledby="${id}-b" hidden>` +
     items.map((i) => i.href ? `<a role="menuitem" href="${esc(i.href)}">${esc(i.label)}</a>` : `<button type="button" role="menuitem" data-menu-act="${esc(i.act || '')}">${esc(i.label)}</button>`).join('') + `</div>`
 }
@@ -76,11 +77,11 @@ export function segmentedHtml({ label, options = [], value }) {
     `<a href="${esc(o.href || '#')}"${o.value === value ? ' class="on" aria-current="true"' : ''}>${esc(o.label)}</a>`).join('')}</nav>`
 }
 
-// a disclosure row: ▸ title summary; the body is in the DOM, hidden until opened
+// a disclosure row: triangle, title, summary; the body is in the DOM, hidden until opened
 export function disclosureHtml({ id, title, summary = '', body = '', open = false }) {
   const bid = `${id}-b`
   return `<div class="disc" id="${esc(id)}"><button type="button" class="disc-t" data-disc="${esc(bid)}" aria-expanded="${open}" aria-controls="${esc(bid)}">` +
-    `<span class="chev" aria-hidden="true">${open ? '▾' : '▸'}</span><b>${esc(title)}</b>${summary ? `<span class="sum">${esc(summary)}</span>` : ''}</button>` +
+    `${DISC_CHEV}<b>${esc(title)}</b>${summary ? `<span class="sum">${esc(summary)}</span>` : ''}</button>` +
     `<div class="disc-b" id="${esc(bid)}"${open ? '' : ' hidden'}>${body}</div></div>`
 }
 
@@ -143,6 +144,11 @@ export function confirmDialog(opts, doc = typeof document === 'undefined' ? null
 // room, clamped 8px inside the viewport. A menu ([data-menu]) never opens on hover.
 export function installUi(doc = typeof document === 'undefined' ? null : document) {
   if (!doc) return null
+  // the disclosure triangle a ::before / ::after draws (replay.css): the icons.mjs chevron as a mask
+  // the HTML parser puts the <svg> in the SVG namespace and the serializer writes it out, so no namespace URL is typed here
+  const tpl = doc.createElement('template')
+  tpl.innerHTML = icon('chevron-right')
+  doc.documentElement.style.setProperty('--glyph-disc', glyphCss(new doc.defaultView.XMLSerializer().serializeToString(tpl.content.firstChild)))
   // 1.2 §点击与选中文字 ①: a press that made or changed a selection is not a click. Every toggle on the board listens in the bubble
   // phase, so this one capture-phase listener keeps the click that ends a drag-select (or a double / triple / Shift click) from all of
   // them, and from <summary> / links. A selection already there at pointerdown does not count (a button keeps it in Chrome); a
@@ -221,7 +227,7 @@ export function installUi(doc = typeof document === 'undefined' ? null : documen
     if (btn && btn.dataset.menu && (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openLayer(btn, { pinned: true }) }
     if (open && e.key === 'Escape') close(true)
   })
-  // disclosures: ▸ / ▾ anywhere on the board
+  // disclosures anywhere on the board
   doc.addEventListener('click', (e) => {
     const t = e.target && e.target.closest ? e.target.closest('[data-disc]') : null
     if (!t) return
@@ -237,7 +243,6 @@ function setDisc(doc, t, open) {
   if (!body) return
   if (open) body.removeAttribute('hidden'); else body.setAttribute('hidden', '')
   t.setAttribute('aria-expanded', String(open))
-  const chev = t.querySelector('.chev'); if (chev) chev.textContent = open ? '▾' : '▸'
 }
 
 // 1.2 §点击与选中文字 ③: draw `html` into zone `z` unless it is what z last showed, or (`hold`, a poll's draw) the reader's selection

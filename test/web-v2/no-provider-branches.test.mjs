@@ -71,12 +71,21 @@ const regexIds = (text) => regexLiterals(text).filter((b) => ID_TOKEN.test(b.rep
 // a host literal; a file name such as "foo.dev.mjs" matches too, with its extension, and is then skipped by the check
 const HOSTS = /\b[a-z0-9-]+\.(?:com|net|io|cn|ai|dev|org)\b(?:\.(?:mjs|css|html))?/gi
 
+// a tool name as a quoted literal; in a label file (web/legacy/labels/) a word assigned as a value (`X = 'Agent'`, `{ agent: 'Agent' }`)
+// is display text — the column head "Agent" — not a branch; a comparison, a case or a key there is still caught
+const isLabels = (name) => /(^|[\\/])labels[\\/]/.test(name)
+function toolHits(name, text, re) {
+  if (!isLabels(name) || !re.source.startsWith("['")) return re.test(text)
+  const g = new RegExp(re.source, 'g')
+  for (const m of text.matchAll(g)) if (!/(?:[^=!<>]=|:)\s*$/.test(text.slice(Math.max(0, m.index - 4), m.index))) return true
+  return false
+}
 export function violations(name, text) {
   const out = []
   const lower = text.toLowerCase()
   for (const w of WIRE) if (lower.includes(w)) out.push(`${name}: wire word "${w}"`)
   for (const m of new Set([...text.matchAll(FAMILY_RE)].map((x) => x[0].toLowerCase()))) out.push(`${name}: model / vendor word "${m}"`)
-  for (const re of TOOLS) if (re.test(text)) out.push(`${name}: tool name ${re}`)
+  for (const re of TOOLS) if (toolHits(name, text, re)) out.push(`${name}: tool name ${re}`)
   for (const re of IDS) if (re.test(text)) out.push(`${name}: harness id ${re}`)
   for (const lit of embeddedIdLiterals(text)) out.push(`${name}: harness id inside the string ${lit}`)
   for (const body of regexIds(text)) out.push(`${name}: harness id inside the regex /${body}/`)
@@ -110,6 +119,9 @@ test('the tools the first list lacked are caught as string literals; the same wo
     assert.equal(violations('x.mjs', `if (name === '${t}') go()`).length, 1, t); assert.equal(violations('x.mjs', `case "${t}":`).length, 1, t); assert.equal(violations('x.mjs', `x = \`${t}\``).length, 1, t)
   }
   assert.deepEqual(violations('x.mjs', '// Agent loops and a Task list are prose'), [])
+  // a label file may name a column "Agent"; it may not branch or key on a tool name
+  assert.deepEqual(violations('labels/x.mjs', "export const COL = { agent: 'Agent' }; export const A = 'Agent'"), [])
+  for (const src of ["if (n === 'Agent') go()", "case 'Task':", "const t = { 'Read': 1 }"]) assert.equal(violations('labels/x.mjs', src).length, 1, src)
 })
 test('a harness id is caught inside a regex literal and inside a longer string or template; plain identifiers and division are not', () => {
   for (const src of ['if (/^(cc|codex)$/.test(h)) go()', 'h.match(/hermes/)', 'const r = /\\bkimi\\b/i', 'x = a ? /opencode|zcode/ : null', 'return /dsh/.test(x)', 'const k = `${a}-codex`', "const k = 'x:kimi:y'", 'k = "cc-" + n', "log('hermes started')", "const u = 'pre-cc'", "const k = 'kimi-style'"])

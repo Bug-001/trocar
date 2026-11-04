@@ -275,7 +275,8 @@ export async function shoot(page, name, { width, theme }) {
 /** What a reader would see as broken layout under `root` (1.5 · D64⑤), measured on the painted page — never a count or a wording:
  *  - `overlap`: two pieces of text, or text and a control (a switch, an input), drawn on one another — the boxes intersect by more than 2 px
  *    both ways (a disclosure title under a copy button, a cell note running into the next column, a date over a switch);
- *  - `cut`: text cut off by a box that clips it with no ellipsis (a hidden-overflow ancestor that is not a scroll container, horizontally);
+ *  - `cut`: text cut off by a box that clips it with no ellipsis (a hidden-overflow ancestor that is not a scroll container, horizontally),
+ *    or a line whose glyph box (ascent to descent) sticks out above or below such a box: a line box too short for its font;
  *  - `untitled`: text truncated with an ellipsis whose full text is nowhere on hover (no `title` on it or above it);
  *  - `emptyIcons`: an agent icon box of a known agent with no <img>, or whose image failed to decode (K-11: a file that fails to load
  *    leaves an empty box). The board draws the <img> with the screen; its file answers later, so each box gets ICON_WAIT_MS for its image
@@ -332,10 +333,15 @@ export const layoutFaults = (page, root = '#content') => page.evaluate(async ({ 
     if (b.control) continue
     for (let e = b.el; e && e !== document.body; e = e.parentElement) {
       const cs = getComputedStyle(e)
-      if (cs.overflowX !== 'hidden' && cs.overflowX !== 'clip') continue
+      const clips = (o) => o === 'hidden' || o === 'clip'
+      if (!clips(cs.overflowX) && !clips(cs.overflowY)) continue
       const er = e.getBoundingClientRect()
       if (er.width <= 2 || er.height <= 2) break // a box hidden on purpose (a screen-reader-only label)
-      if (b.r.right <= er.right + 1 && b.r.left >= er.left - 1) continue
+      // a line whose glyph box sticks out above or below the box that clips it: its ascenders or descenders are cut, and no ellipsis helps
+      if (clips(cs.overflowY) && b.r.bottom > er.top && b.r.top < er.bottom && (b.r.top < er.top - 1 || b.r.bottom > er.bottom + 1)) {
+        out.cut.push(`${JSON.stringify(b.t)} in ${e.tagName.toLowerCase()}.${String(e.className).split(' ')[0]} (top or bottom)`); break
+      }
+      if (!clips(cs.overflowX) || (b.r.right <= er.right + 1 && b.r.left >= er.left - 1)) continue
       let ell = false
       for (let x = b.el; x; x = x.parentElement) { if (getComputedStyle(x).textOverflow === 'ellipsis') { ell = true; break } if (x === e) break }
       if (!ell) out.cut.push(`${JSON.stringify(b.t)} in ${e.tagName.toLowerCase()}.${String(e.className).split(' ')[0]}`)

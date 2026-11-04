@@ -3,11 +3,22 @@
    .empty, kbd, .collapsible, the #detail drawer) live in base.css. */
   /* main conversation sawtooth */
   /* overflow-x:clip, not hidden: no scroll container (a programmatic scrollIntoView cannot shift the page sideways) and the failure / compaction marks above the tallest bars still show */
-  #saw{background:var(--rail);border-bottom:1px solid var(--border);padding:6px 12px 4px;user-select:none;overflow-x:clip;}
+  /* the scope (1.5 §审美维度: D77): #saw and #rails are one dark glass in both themes. The timeline rules below speak the legacy
+     aliases; they are rebound here once, so every one of them draws in scope ink. On the scope a status hue is a mark only:
+     text stays scope ink. Popovers inside use the paper tokens by their own names and are not touched. */
+  #saw,#rails{--fg:var(--scope-ink);--dim:var(--scope-ink-2);--dimmer:var(--scope-ink-2);--border:var(--scope-rule);--rail:transparent;
+    --panel2:var(--scope-fill);--accent:var(--scope-action);--red:var(--bad-lamp);--pink:var(--bad-lamp);--amber:var(--warn-lamp);
+    position:relative;color:var(--fg);margin:0 10px;box-shadow:var(--shadow-scope);
+    background:radial-gradient(700px 180px at 88% -30%,var(--scope-glow),transparent 70%),linear-gradient(165deg,var(--scope),var(--scope-2));}
+  #saw{border-radius:16px 16px 0 0;margin-top:6px;padding:8px 12px 4px;user-select:none;overflow-x:clip;}
+  #saw:has(+ #rails:empty){border-radius:16px;}
+  /* the brand hairline is the panel's own top border: it follows the rounded corners and tapers into the sides */
+  #saw::before{content:"";position:absolute;inset:0;border-radius:inherit;border-top:2px solid transparent;background:var(--brand-line) border-box;
+    mask:linear-gradient(var(--ink) 0 0) padding-box exclude,linear-gradient(var(--ink) 0 0) border-box;pointer-events:none;}
   .sawrow{display:flex;align-items:flex-end;gap:1px;height:74px;cursor:pointer;position:relative;}
   .bar{flex:1 1 0;min-width:2px;position:relative;opacity:.62;border-radius:2px 2px 0 0;transition:opacity .1s;display:flex;flex-direction:column-reverse;overflow:hidden;}
   .bar>span{display:block;width:100%;}
-  .bar.cur{opacity:1;outline:2px solid var(--fg);outline-offset:0;z-index:2;}
+  .bar.cur{opacity:1;outline:2px solid var(--cursor);outline-offset:0;z-index:2;}
   .bar:hover{opacity:.85;}
   .bar.reviewed{opacity:.95;box-shadow:inset 0 0 0 1.5px var(--pink);}
   .bar.err{background:var(--red);opacity:.8;}
@@ -19,15 +30,15 @@
   .ct-other{background:repeating-linear-gradient(45deg,var(--dimmer) 0 2px,transparent 2px 4px);}
   /* a call whose body was not shipped on this page (paged_out): composition UNKNOWN, not empty */
   .ct-unloaded{background:repeating-linear-gradient(45deg,var(--dim) 0 3px,transparent 3px 6px);opacity:.55;}
-  .barlegend{display:block;font-size:10px;color:var(--dim);white-space:nowrap;min-width:0;overflow:hidden;text-overflow:ellipsis;} /* one row: the keys that do not fit end in an ellipsis, all of them in the title */
-  .barlegend i{width:8px;height:8px;border-radius:2px;display:inline-block;margin:0 2px 0 6px;vertical-align:middle;}
-  .barlegend i:first-child{margin-left:0;}
+  .barlegend{display:flex;flex-wrap:wrap;gap:2px 8px;font-size:var(--fs-chart);color:var(--dim);min-width:0;}
+  .barlegend>span{white-space:nowrap;}
+  .barlegend i{width:8px;height:8px;border-radius:2px;display:inline-block;margin-right:3px;vertical-align:middle;}
   .bar.cost{background:var(--dim);}
   .bar.cost>span{display:none;}
   /* the cost view keeps a failed step's bar red (1.3 §视图切换: 失败步照主轨画矮柱 + ×) — .bar.cost must not paint over it */
   .bar.cost.err{background:var(--red);}
   #reviewbracket{position:absolute;left:0;bottom:-3px;height:3px;background:var(--pink);display:none;border-radius:2px;pointer-events:none;z-index:3;}
-  #reviewbracket .rbend{position:absolute;right:-2px;top:-14px;font-size:10px;color:var(--pink);white-space:nowrap;}
+  #reviewbracket .rbend{position:absolute;right:-2px;top:-14px;font-size:var(--fs-chart);color:var(--dim);white-space:nowrap;}
   /* 1.3 问题道: flags (height ∝ √ ≈ 多花), × per failed call, 「压缩」 per compaction — one cell per windowed step on the
      bars' own /N axis (same flex basis, same 1px gap): a mark lands on its step's column, never k shares of the row */
   .tkrow-problem{align-items:flex-end;}
@@ -37,10 +48,10 @@
   .pcell{flex:1 1 0;min-width:2px;}
   .pflag{flex:1 1 0;min-width:2px;align-self:flex-end;background:var(--pink);border-radius:2px 2px 0 0;opacity:.75;cursor:pointer;}
   .pflag:hover,.pflag:focus-visible{opacity:1;outline:1.5px solid var(--fg);}
-  .pxmark{flex:1 1 0;min-width:2px;text-align:center;color:var(--red);font-size:11px;line-height:1;align-self:flex-end;cursor:pointer;font-weight:700;}
+  .pxmark{flex:1 1 0;min-width:2px;text-align:center;color:var(--red);font-size:var(--fs-chart);line-height:1;align-self:flex-end;cursor:pointer;font-weight:var(--fw-strong);}
   .pxmark:hover,.pxmark:focus-visible{outline:1.5px solid var(--fg);border-radius:2px;}
   .pcompact{flex:1 1 0;min-width:2px;display:flex;justify-content:center;align-self:flex-end;cursor:pointer;}
-  .pcompact::before{content:"";flex:none;width:6px;height:6px;margin-bottom:1px;box-sizing:border-box;border:1.5px solid var(--ink-3);border-radius:50%;}
+  .pcompact::before{content:"";flex:none;width:6px;height:6px;margin-bottom:1px;box-sizing:border-box;border:1.5px solid var(--scope-ink-2);border-radius:50%;}
   .pcompact.inf::before{border-style:dotted;}
   .pcompact:hover::before,.pcompact:focus-visible::before{border-color:var(--fg);}
   /* 提问刻度: one small tick per user event, below the cache band — one cell per windowed step (the bars' /N axis),
@@ -51,13 +62,13 @@
   .atick::after{content:"";position:absolute;left:50%;bottom:0;width:1.5px;height:5px;background:var(--dim);opacity:.7;}
   /* the legend row's pieces (view switch · composition · cache · view range) */
   .cachelegend{color:var(--dimmer);}
-  .segbtn{font:inherit;font-size:10px;padding:1px 8px;background:transparent;border:1px solid var(--border);color:var(--dim);cursor:pointer;}
+  .segbtn{font:inherit;font-size:var(--fs-chart);padding:1px 8px;background:transparent;border:1px solid var(--border);color:var(--dim);cursor:pointer;}
   .segbtn:first-child{border-radius:8px 0 0 8px;}
   .segbtn:last-child{border-radius:0 8px 8px 0;border-left:none;}
-  .segbtn.on{background:var(--fg);color:var(--paper);border-color:var(--fg);}
-  .pgbtn{font-size:10px;padding:0 6px;line-height:1.5;background:transparent;border:1px solid var(--border);border-radius:4px;color:var(--dim);cursor:pointer;}
+  .segbtn.on{background:var(--scope-fill-2);color:var(--fg);border-color:var(--scope-edge);}
+  .pgbtn{font-size:var(--fs-chart);padding:0 6px;line-height:1.5;background:transparent;border:1px solid var(--border);border-radius:4px;color:var(--dim);cursor:pointer;}
   .pgbtn:hover{color:var(--fg);border-color:var(--dim);}
-  #nomain{color:var(--amber);font-size:10px;}
+  #nomain{color:var(--dim);font-size:var(--fs-chart);}
   /* per-call cache reading — one cell per call, 1:1 under the bars (same flex axis → aligned) */
   .cacherow{display:flex;gap:1px;height:5px;margin-top:2px;}
   .cbar{flex:1 1 0;min-width:2px;border-radius:1px;background:var(--dimmer);opacity:.45;}
@@ -65,37 +76,36 @@
   /* 1.3 cache band: a failed step draws NO tier (empty); unknown-semantics numbers get their own striped-purple shape */
   .cbar.failed{background:transparent;border-bottom:1.5px dotted var(--dimmer);}
   .cbar.unk{background:repeating-linear-gradient(90deg,var(--purple) 0 2px,transparent 2px 4px);opacity:.8;}
-  .cbar.cur{outline:1px solid var(--fg);outline-offset:0;}
-  .sawaxis{display:flex;justify-content:space-between;gap:6px;white-space:nowrap;color:var(--dimmer);font-size:10px;margin-top:2px;font-family:var(--mono);}
+  .cbar.cur{background-color:var(--scope-col);outline:1px solid var(--cursor);outline-offset:0;}
+  .sawaxis{display:flex;justify-content:space-between;gap:6px;white-space:nowrap;color:var(--dimmer);font-size:var(--fs-chart);margin-top:2px;}
   /* 1.3 §章: ‹ at the bars' left, the part's label, › at their right; a header on the bars' grid, not a track (no /N columns of its own):
      it narrows with the bars but never below the words' room, and the label gives way first on a narrow screen. Disabled arrows stay in place. */
   .chaprow{display:grid;grid-template-columns:var(--gut) 1fr;column-gap:8px;}
   .chapnav{display:flex;align-items:center;gap:6px;height:18px;min-width:0;max-width:max(calc(var(--nbars,100000) * var(--barcap)),26em);}
-  .chaplabel{flex:1 1 auto;min-width:0;text-align:center;font-size:10px;color:var(--dim);font-family:var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .chaplabel{flex:1 1 auto;min-width:0;text-align:center;font-size:var(--fs-chart);color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .chapbtn{flex:none;}
   .pgbtn:disabled{opacity:.35;cursor:default;}
   .pgbtn:disabled:hover{color:var(--dim);border-color:var(--border);}
   /* D13 overview strip + brush (focus+context navigator) */
-  .ovstrip{position:relative;height:24px;margin-top:3px;border:1px solid var(--border);border-radius:3px;background:color-mix(in srgb,var(--raised) 60%,transparent);overflow:hidden;touch-action:none;}
+  .ovstrip{position:relative;height:24px;margin-top:3px;border:1px solid var(--border);border-radius:3px;background:var(--scope-fill);overflow:hidden;touch-action:none;}
   .ovbars{display:flex;align-items:flex-end;gap:0;height:100%;padding:1px;}
   .ovbar{flex:1 1 0;min-width:0;background:var(--dim);opacity:.5;border-radius:1px 1px 0 0;}
   .ovbar.err{background:var(--red);opacity:.6;}
   .ovsvg{position:absolute;inset:1px;width:calc(100% - 2px);height:calc(100% - 2px);}
   .ovsvg polyline{fill:none;stroke:var(--dim);stroke-width:.8;opacity:.75;vector-effect:non-scaling-stroke;}
-  .ovsample{position:absolute;top:1px;right:3px;font-size:10px;color:var(--amber);font-family:var(--mono);opacity:.85;pointer-events:none;}
+  .ovsample{position:absolute;top:1px;right:3px;font-size:var(--fs-chart);color:var(--dim);opacity:.85;pointer-events:none;}
   .ovchap{position:absolute;top:0;bottom:0;width:1px;margin-left:-.5px;background:var(--purple);opacity:.45;pointer-events:none;}
-  .ovpin{position:absolute;top:0;bottom:0;width:1px;background:var(--fg);opacity:.55;pointer-events:none;}
+  .ovpin{position:absolute;top:0;bottom:0;width:1px;background:var(--cursor);opacity:.55;pointer-events:none;}
   .ovbrush{position:absolute;top:0;bottom:0;min-width:6px;background:color-mix(in srgb,var(--accent) 22%,transparent);border:1px solid var(--accent);border-radius:2px;cursor:grab;box-sizing:border-box;}
   .ovbrush:active{cursor:grabbing;}
   .ovbrush .ovh{position:absolute;top:-1px;bottom:-1px;width:7px;cursor:col-resize;background:var(--accent);opacity:.55;}
   .ovh-l{left:-1px;border-radius:2px 0 0 2px;} .ovh-r{right:-1px;border-radius:0 2px 2px 0;}
   .ovbrush .ovh:hover{opacity:.9;}
-  /* one line at any width: a part that does not fit is cut with an ellipsis and keeps its words in its title */
-  .sawlegend{display:flex;gap:12px;font-size:10px;color:var(--dim);margin-top:3px;flex-wrap:nowrap;white-space:nowrap;align-items:center;min-width:0;}
-  .sawlegend>span{min-width:0;overflow:hidden;text-overflow:ellipsis;}
-  .sawlegend>#viewswitch,.sawlegend>#viewrange{flex:none;}
-  #complegend{display:flex;gap:6px;align-items:center;}
-  #complegend>span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;}
+  /* never cut: a part that does not fit the line wraps; a swatch never parts from its name */
+  .sawlegend{display:flex;flex-wrap:wrap;gap:2px 12px;font-size:var(--fs-chart);color:var(--dim);margin-top:3px;align-items:center;min-width:0;}
+  .sawlegend>span{min-width:0;}
+  .sawlegend>#viewswitch,.sawlegend>#viewrange{flex:none;white-space:nowrap;}
+  #complegend{display:flex;flex-wrap:wrap;gap:2px 6px;align-items:center;}
   /* shared timeline grid: fixed left gutter (track titles) | aligned plotting lane (point 3) */
   #saw,#rails{--gut:140px;--barcap:25px;}
   /* 1.3 §窗内步少时收窄: every detail lane narrows to (bars in the brush window) × the bar cap, left-aligned, so the /N
@@ -103,34 +113,34 @@
   #saw .tkrow:not(.tkrow-ovw):not(.tkrow-chap)>.tlane,#rails .tlane{max-width:calc(var(--nbars,100000) * var(--barcap));}
   .tkrow{display:grid;grid-template-columns:var(--gut) 1fr;align-items:center;column-gap:8px;}
   .tkrow-bars{align-items:end;}
-  .tgut{font-size:10px;color:var(--dim);text-align:right;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;padding-right:2px;}
-  .tgut-ctx{font-family:var(--mono);color:var(--fg);}
+  .tgut{font-size:var(--fs-chart);color:var(--dim);text-align:right;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;padding-right:2px;}
+  .tgut-ctx{color:var(--fg);}
   .tlane{position:relative;min-width:0;}
-  .railname{text-align:left;cursor:pointer;color:var(--dim);display:flex;align-items:center;gap:5px;font-size:10px;}
+  .railname{text-align:left;cursor:pointer;color:var(--dim);display:flex;align-items:center;gap:5px;font-size:var(--fs-chart);}
   .railname:hover{color:var(--fg);} .railname.col{opacity:.72;}
-  .railname .tw{flex:none;width:9px;color:var(--dimmer);}
+  .railname .tw{flex:none;display:inline-flex;width:12px;color:var(--dimmer);}
   .railname .tn{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-  .railname.group .tn{color:var(--fg);font-weight:600;}
-  .railsonly{font-size:10px;color:var(--dimmer);padding:4px 0;}
-  .tcsample{position:absolute;top:0;right:2px;font-size:10px;color:var(--amber);font-family:var(--mono);pointer-events:none;opacity:.9;}
+  .railname.group .tn{color:var(--fg);font-weight:var(--fw-strong);}
+  .railsonly{font-size:var(--fs-chart);color:var(--dimmer);padding:4px 0;}
+  .tcsample{position:absolute;top:0;right:2px;font-size:var(--fs-chart);color:var(--dim);pointer-events:none;opacity:.9;}
 
   /* lane rails — every other lane of this session, time-aligned under the conversation */
-  #rails{background:var(--rail);border-bottom:1px solid var(--border);padding:2px 12px 6px;user-select:none;min-height:0;overflow-y:auto;}
+  #rails{border-radius:0 0 16px 16px;margin-bottom:6px;padding:2px 12px 6px;user-select:none;min-height:0;overflow-y:auto;}
   .rail{border-top:1px solid var(--border);}
-  .subgrouphd b{color:var(--amber);font-weight:600;}
+  .subgrouphd b{color:var(--fg);font-weight:var(--fw-strong);}
   /* an opened sub-agent group holds at most ~40% of the viewport and scrolls inside itself (1.3 §叠加轨) */
   .subkids{max-height:40vh;overflow-y:auto;}
   .subgroup .subkids{margin-left:12px;border-left:2px solid color-mix(in srgb,var(--amber) 30%,var(--border));padding-left:4px;}
   .subgroup .subkids .rail{border-top:1px dashed color-mix(in srgb,var(--border) 70%,transparent);}
-  .railhead{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--dim);cursor:pointer;padding:4px 0 2px;}
+  .railhead{display:flex;align-items:center;gap:6px;font-size:var(--fs-chart);color:var(--dim);cursor:pointer;padding:4px 0 2px;}
   .railhead:hover{color:var(--fg);}
-  .railhead .rc{font-family:var(--mono);font-size:10px;color:var(--dimmer);}
-  .railhead .rflag{color:var(--red);font-family:var(--mono);font-size:10px;}
-  .railhead .rkind{margin-left:auto;font-size:10px;color:var(--dimmer);font-style:italic;}
+  .railhead .rc{font-size:var(--fs-chart);color:var(--dimmer);}
+  .railhead .rflag{color:var(--dim);font-size:var(--fs-chart);}
+  .railhead .rkind{margin-left:auto;font-size:var(--fs-chart);color:var(--dimmer);}
   .railbody{position:relative;height:20px;margin-bottom:3px;border-radius:4px;cursor:pointer;background:color-mix(in srgb,var(--fg) 3%,transparent);}
   .railbody:hover{background:color-mix(in srgb,var(--fg) 7%,transparent);}
   .rail.k-probe .railbody,.rail.k-token-count .railbody{height:28px;}
-  .tick{position:absolute;top:5px;width:9px;height:9px;border-radius:50%;background:var(--dim);transform:translateX(-50%);cursor:pointer;border:1.5px solid var(--rail);}
+  .tick{position:absolute;top:5px;width:9px;height:9px;border-radius:50%;background:var(--dim);transform:translateX(-50%);cursor:pointer;border:1.5px solid var(--scope);}
   .rail.k-monitor .tick{background:var(--pink);} .rail.k-aux .tick{background:var(--dimmer);} .rail.k-subagent .tick{background:var(--amber);}
   .rail.k-notify .tick{background:var(--green);} .rail.k-titlegen .tick{background:var(--cyan);} .rail.k-quota .tick{background:var(--dimmer);opacity:.6;}
   #detail.k-notify{border-top-color:var(--green);} #detail.k-titlegen{border-top-color:var(--cyan);} #detail.k-quota{border-top-color:var(--dimmer);}
@@ -147,22 +157,25 @@
   #divider:hover{background:var(--accent);}
   body.resizing{cursor:col-resize;user-select:none;}
   body.resizing #ctxwin,body.resizing #resexp{pointer-events:none;}
-  #rightpage{flex:none;width:var(--rightpage-w,320px);display:flex;flex-direction:column;min-height:0;border-left:1px solid var(--border);background:var(--raised);}
+  #rightpage{flex:none;width:var(--rightpage-w);display:flex;flex-direction:column;min-height:0;border-left:1px solid var(--border);background:var(--raised);}
   #rpbody{flex:1;min-height:0;display:flex;flex-direction:column;}
   #resexp{flex:1 1 0;min-height:0;overflow-y:auto;padding:9px 10px 30px;}
   /* the right page splits in halves (1.2 §回放台 B 布局): the raw panel reaches the page's bottom, never stops a third of the way down */
   #rawpanel{flex:1 1 0;min-height:0;overflow-y:auto;border-top:1px solid var(--border);background:var(--rail);padding:8px 10px;}
-  .rphd{font-family:var(--mono);font-size:11px;color:var(--fg);margin-bottom:4px;}
-  .rpk{font-size:10.5px;color:var(--dim);margin:2px 0;} .rpk b{color:var(--fg);font-family:var(--mono);}
+  /* the panel's head and row labels are words (sans, the strong weight); only keys, values and paths are mono (D77②) */
+  .rphd{font-size:var(--fs-cap);font-weight:var(--fw-strong);color:var(--fg);margin-bottom:4px;}
+  .rpk{font-size:var(--fs-cap);color:var(--dim);margin:2px 0;} .rpk b{color:var(--fg);}
+  .rpkv{display:inline-block;max-width:100%;} /* a key and its value wrap as one */
+  .rpk code{font-family:var(--mono);font-size:var(--fs-cap);}
   .rpcost b{color:var(--amber);}
   /* D14 花费保真标:虚线徽章 = 非线上事实,本地估价(可编辑单价) */
-  .rpempty{font-size:10px;color:var(--dimmer);}
+  .rpempty{font-size:var(--fs-cap);color:var(--dimmer);}
   .viewname{cursor:pointer;} .viewname:hover{text-decoration:underline;color:var(--fg);}
-  .viewbtn{cursor:pointer;opacity:.45;font-size:10px;margin-left:4px;} .viewbtn:hover{opacity:1;}
-  .rawpre{font-family:var(--mono);font-size:10px;line-height:1.45;white-space:pre-wrap;word-break:break-word;color:var(--dim);margin:5px 0 0;}
-  .rpx{float:right;cursor:pointer;color:var(--dimmer);font-size:10px;border:1px solid var(--border);border-radius:5px;padding:0 5px;} .rpx:hover{color:var(--fg);}
-  .resz{font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--dimmer);margin:0 0 5px;}
-  /* < 1200: the right page folds to one bottom line 「读过的文件 N · 原始数据 ▸」(1.2 §窄屏); opened it rises from the
+  .viewbtn{cursor:pointer;opacity:.45;font-size:var(--fs-cap);margin-left:4px;} .viewbtn:hover{opacity:1;}
+  .rawpre{font-family:var(--mono);font-size:var(--fs-cap);line-height:1.45;white-space:pre-wrap;word-break:break-word;color:var(--dim);margin:5px 0 0;}
+  .rpx{float:right;cursor:pointer;font-weight:var(--fw-regular);color:var(--dimmer);font-size:var(--fs-cap);border:1px solid var(--border);border-radius:5px;padding:0 5px;} .rpx:hover{color:var(--fg);}
+  .resz{font-size:var(--fs-cap);color:var(--dimmer);margin:0 0 5px;}
+  /* < 1200: the right page folds to one bottom line 「读过的文件 N · 原始数据」 and its chevron (1.2 §窄屏); opened it rises from the
      bottom at half height with 资源 and 原始数据 side by side. ≥ 1200 the bar is not drawn at all. */
   #rpbar{display:none;}
   @media(max-width:1199px){
@@ -173,18 +186,17 @@
     #rightpage.open #rawpanel{max-height:none;grid-row:1 / span 2;grid-column:2;}
     #rpbar{display:flex;gap:8px;align-items:center;padding:5px 14px;font-size:var(--fs-cap);color:var(--ink-2);background:var(--raised);cursor:pointer;}
     #rpbar:hover{color:var(--ink);}
-    #rpbar::after{content:"▸";color:var(--ink-3);}
-    #rightpage.open #rpbar::after{content:"▾";}
+    #rpbar::before{color:var(--ink-3);}
     #pages{padding-bottom:26px;}
   }
-  /* < 900: the subagent / bg / 全程 rows fold into one 「▸」 row (1.2 §窄屏) — the fold row itself is rendered by rails.mjs */
+  /* < 900: the subagent / bg / 全程 rows fold into one closed row (1.2 §窄屏) — the fold row itself is rendered by rails.mjs */
   @media(max-width:900px){
     #leftpage:not(.railopen) .tkrow-ovw{display:none;}
   }
   @media(min-width:901px){.railunfold{display:none;}}
 
   /* session mode: nav sidebar + the ONE faithful context window. control mode: timeline + ledger. */
-  #leftpage > main{flex:1;display:grid;grid-template-columns:var(--outline-w,270px) 6px 1fr;min-height:50%;}
+  #leftpage > main{flex:1;display:grid;grid-template-columns:var(--outline-w) 6px 1fr;min-height:50%;}
   /* the window keeps half the left page (1.2:230): an opened rail group scrolls inside #rails instead of pushing it off */
   @media(max-width:820px){#leftpage > main{grid-template-columns:1fr;} #ctxnav,#maindiv{display:none;}}
   /* outline to center adjustable boundary (Q1) — second draggable gutter, own CSS var + LS key */
@@ -195,52 +207,51 @@
 
   /* ── the context window (tools → system → messages, faithful order) ── */
   .cwmeta{border-bottom:1px solid var(--border);padding-bottom:9px;margin-bottom:6px;}
-  .cwtitle{font-family:var(--mono);font-size:12.5px;color:var(--fg);}
+  .cwtitle{font-family:var(--mono);font-size:var(--fs-cap);color:var(--fg);}
   .cwtitle b{color:var(--accent);}
-  .cwsub{font-size:10.5px;color:var(--dim);margin-top:2px;}
-  .cwsub b{color:var(--fg);font-family:var(--mono);}
+  .cwsub{font-size:var(--fs-cap);color:var(--dim);margin-top:2px;}
+  .cwsub b{color:var(--fg);}
   .cwsec{display:flex;align-items:baseline;gap:8px;margin:16px 0 6px;padding-top:8px;border-top:2px solid var(--border);scroll-margin-top:8px;}
-  .cwsec b{font-size:11px;letter-spacing:1px;color:var(--fg);}
-  .cwsecn{font-family:var(--mono);font-size:10px;color:var(--dimmer);}
-  .cwsecsz{font-family:var(--mono);font-size:10px;color:var(--dim);white-space:nowrap;}
-  .cwsecff{font-size:10px;color:var(--dim);white-space:nowrap;} .cwsecff.v{color:var(--green);}
+  .cwsec b{font-size:var(--fs-cap);color:var(--fg);}
+  .cwsecn{font-size:var(--fs-cap);color:var(--dimmer);}
+  .cwsecsz{font-size:var(--fs-cap);color:var(--dim);white-space:nowrap;}
+  .cwsecff{font-size:var(--fs-cap);color:var(--dim);white-space:nowrap;} .cwsecff.v{color:var(--green);}
   /* ① 调用保真行 · ② 窗口行 (2.3): one quiet line each, the ◐ half-mark leading */
-  .cwfline,.cwwin{display:flex;align-items:baseline;gap:7px;margin:0 0 8px;padding:5px 9px;font-size:10.5px;line-height:1.5;border-radius:6px;}
+  .cwfline,.cwwin{display:flex;align-items:baseline;gap:7px;margin:0 0 8px;padding:5px 9px;font-size:var(--fs-cap);line-height:1.5;border-radius:6px;}
   .cwfline{color:var(--ink-2);background:color-mix(in srgb,var(--fg) 3%,transparent);border:1px dashed var(--rule-2);}
   /* the row's tech details read at the row's own size (1.5: a mark, not a section head) */
-  .cwfline .disc{border-bottom:0;} .cwfline .disc-t,.cwfline .disc-t b,.cwfline .disc-t .sum{font-size:inherit;min-height:0;color:var(--ink-2);}
+  .cwfline .disc{border-bottom:0;} .cwfline .disc-t,.cwfline .disc-t b,.cwfline .disc-t .sum{font-size:inherit;min-height:0;} /* the kit's colours: the title strong ink everywhere */
   .cwwin{color:var(--dim);background:color-mix(in srgb,var(--fg) 3%,transparent);border:1px dashed var(--border);}
   .cwhalf{flex:none;} .cwffacts{min-width:0;}
   /* D17② schema-tax summary */
   .taxbar{display:flex;height:8px;border-radius:4px;overflow:hidden;background:var(--rail);border:1px solid var(--border);}
   .taxseg{display:block;height:100%;}
   .taxseg-tools{background:var(--amber);} .taxseg-system{background:var(--purple);} .taxseg-history{background:var(--dim);} .taxseg-task{background:var(--accent);}
-  .taxlegend{display:flex;flex-wrap:wrap;gap:10px;margin-top:4px;font-size:10px;color:var(--dim);}
+  .taxlegend{display:flex;flex-wrap:wrap;gap:10px;margin-top:4px;font-size:var(--fs-cap);color:var(--dim);}
   .taxlg{display:inline-flex;align-items:center;gap:4px;} .taxlg i{width:8px;height:8px;border-radius:2px;display:inline-block;} .taxlg b{font-family:var(--mono);color:var(--fg);}
-  .taxculprit{font-size:10px;color:var(--dim);margin-top:4px;} .taxculprit b{font-family:var(--mono);color:var(--amber);}
-  .taxest{color:var(--dimmer);font-style:italic;font-size:10px;margin-left:6px;}
+  .taxculprit{font-size:var(--fs-cap);color:var(--dim);margin-top:4px;} .taxculprit b{font-family:var(--mono);color:var(--amber);}
+  .taxest{color:var(--dimmer);font-size:var(--fs-cap);margin-left:6px;}
   /* 步间 diff (2.3/D24): reference picker + removal-aware section */
-  .cwrem-n{font-size:10px;color:var(--amber);border:1px solid color-mix(in srgb,var(--amber) 35%,transparent);border-radius:8px;padding:0 6px;font-family:var(--mono);}
+  .cwrem-n{font-size:var(--fs-cap);color:var(--amber);border:1px solid color-mix(in srgb,var(--amber) 35%,transparent);border-radius:8px;padding:0 6px;}
   .cwremoved{margin:6px 0;border:1px dashed color-mix(in srgb,var(--amber) 40%,transparent);border-radius:6px;background:color-mix(in srgb,var(--amber) 6%,transparent);}
-  .cwremhd{font-size:10px;color:var(--amber);padding:5px 9px;cursor:pointer;} .cwremhd b{font-family:var(--mono);}
+  .cwremhd{font-size:var(--fs-cap);color:var(--amber);padding:5px 9px;cursor:pointer;} .cwremhd b{font-family:var(--mono);}
   .cwrembody{padding:0 8px 6px;} .cblk.removed{opacity:.72;} .cblk.removed .cbh{text-decoration:line-through solid color-mix(in srgb,var(--amber) 50%,transparent);}
-  .rembadge{font-size:10px;color:var(--amber);border:1px solid color-mix(in srgb,var(--amber) 40%,transparent);border-radius:8px;padding:0 5px;white-space:nowrap;font-family:var(--mono);text-decoration:none;}
-  .lifemark{font-size:10px;color:var(--green);border:1px solid color-mix(in srgb,var(--green) 35%,transparent);border-radius:8px;padding:0 5px;white-space:nowrap;font-family:var(--mono);}
+  .rembadge{font-size:var(--fs-cap);color:var(--amber);border:1px solid color-mix(in srgb,var(--amber) 40%,transparent);border-radius:8px;padding:0 5px;white-space:nowrap;font-family:var(--mono);text-decoration:none;}
+  .lifemark{font-size:var(--fs-cap);color:var(--green);border:1px solid color-mix(in srgb,var(--green) 35%,transparent);border-radius:8px;padding:0 5px;white-space:nowrap;font-family:var(--mono);}
   /* 「新」(2.3): a quiet INK vertical line on the block's left + the word — not a green badge */
-  .newmark{font-size:10px;color:var(--fg);border:1px solid var(--rule);border-radius:8px;padding:0 5px;white-space:nowrap;}
+  .newmark{font-size:var(--fs-cap);color:var(--fg);border:1px solid var(--rule);border-radius:8px;padding:0 5px;white-space:nowrap;}
   .cblk.is-new{box-shadow:inset 2px 0 0 var(--ink);}
   /* one block */
   .cblk{border:1px solid var(--border);border-radius:6px;margin-bottom:4px;overflow:hidden;background:var(--raised);scroll-margin-top:8px;content-visibility:auto;contain-intrinsic-size:auto var(--cblk-ih);}
   .cblk.s-tools{background:color-mix(in srgb,var(--amber) 4%,transparent);}
   .cblk.s-system{background:color-mix(in srgb,var(--purple) 5%,transparent);}
   .cblk.hl{border-color:var(--accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 55%,transparent);}
-  .cbh{display:flex;gap:7px;align-items:center;height:var(--cblk-ih);padding:4px 9px;white-space:nowrap;font-family:var(--mono);font-size:10.5px;color:var(--dim);cursor:pointer;}
+  .cbh{display:flex;gap:7px;align-items:center;height:var(--cblk-ih);padding:4px 9px;white-space:nowrap;font-size:var(--fs-cap);color:var(--dim);cursor:pointer;}
   .cbh:hover{color:var(--fg);}
-  .cbh::before{content:"▸";color:var(--dimmer);font-size:10px;width:8px;}
-  .cblk:not(.collapsed) .cbh::before{content:"▾";}
+  .cbh::before{color:var(--dimmer);}
   /* nothing in a head wraps: short of room the label and then the tag give it up (an ellipsis; the tag's title holds its word), the
      role, the marks and the size never do */
-  .cbrole{color:var(--fg);font-weight:600;flex:none;}
+  .cbrole{color:var(--fg);font-weight:var(--fw-strong);flex:none;}
   /* at 600 px and narrower a head is two lines (--cblk-ih): the role, the tag and the marks, then the label, a reply's stop reason
      and the size (::after breaks the line). The first line never wraps: the marks take their full width before the tag gets any, and only when even
      they do not fit do they shrink too (an ellipsis, the title holds the word) */
@@ -248,21 +259,20 @@
     .cbh > :not(.cbrole):not(.cbtag):not(.cblabel):not(.cbstop):not(.cbchars){flex:100 1 0;max-width:max-content;min-width:0;overflow:hidden;text-overflow:ellipsis;}}
   .cbtag{color:var(--dimmer);min-width:0;overflow:hidden;text-overflow:ellipsis;}
   .cblabel{color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1;}
-  .cbchars{margin-left:auto;color:var(--dimmer);font-size:10px;flex:none;}
-  .bpbadge{color:var(--green);font-size:10px;white-space:nowrap;border:1px solid color-mix(in srgb,var(--green) 40%,var(--border));border-radius:10px;padding:0 5px;}
-  .volbadge{color:var(--amber);font-size:10px;white-space:nowrap;border:1px solid color-mix(in srgb,var(--amber) 40%,var(--border));border-radius:10px;padding:0 5px;}
+  .cbchars{margin-left:auto;color:var(--dimmer);font-size:var(--fs-cap);flex:none;}
+  .bpbadge{color:var(--trace-ink);font-size:var(--fs-cap);white-space:nowrap;border:1px solid color-mix(in srgb,var(--trace-ink) 40%,var(--border));border-radius:10px;padding:0 5px;}
+  .volbadge{color:var(--amber);font-size:var(--fs-cap);white-space:nowrap;border:1px solid color-mix(in srgb,var(--amber) 40%,var(--border));border-radius:10px;padding:0 5px;}
   /* per-block faithfulness (1.4:52 / 不变式4): dashed = NOT byte-verbatim. Muted amber so it reads as a caveat, not an error. */
   .cbc{padding:0 9px;} .cblk.collapsed .cbc{display:none;}
-  /* messages grouped into turns (point 2): user-query header ▸ nested call-turn blocks */
+  /* messages grouped into turns (point 2): a user-query header over its nested call-turn blocks */
   .cwturn{content-visibility:auto;contain-intrinsic-size:auto var(--cwturn-ih);border:1px solid var(--border);border-radius:7px;margin-bottom:6px;overflow:hidden;background:color-mix(in srgb,var(--accent) 3%,transparent);}
-  .cwturnhd{display:flex;align-items:center;gap:8px;height:var(--cwturn-ih);padding:6px 10px;cursor:pointer;font-size:11.5px;}
-  .cwturnhd::before{content:"▾";color:var(--dimmer);font-size:10px;width:8px;}
-  .cwturn.collapsed .cwturnhd::before{content:"▸";}
+  .cwturnhd{display:flex;align-items:center;gap:8px;height:var(--cwturn-ih);padding:6px 10px;cursor:pointer;font-size:var(--fs-cap);}
+  .cwturnhd::before{color:var(--dimmer);}
   .cwturnhd:hover{background:color-mix(in srgb,var(--fg) 4%,transparent);}
-  .cwturnq{color:var(--fg);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1;}
-  .cwturnq .qk{color:var(--dimmer);font-weight:400;font-family:var(--mono);font-size:10px;margin-left:6px;}
-  .cwturnn{color:var(--dimmer);font-size:10px;white-space:nowrap;border:1px solid var(--border);border-radius:10px;padding:0 6px;font-family:var(--mono);}
-  .qlabel{font-size:10px;color:var(--dim);border:1px solid var(--border);border-radius:10px;padding:0 6px;margin-right:6px;white-space:nowrap;}
+  .cwturnq{color:var(--fg);font-weight:var(--fw-strong);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1;}
+  .cwturnq .qk{color:var(--dimmer);font-weight:var(--fw-regular);font-family:var(--mono);font-size:var(--fs-cap);margin-left:6px;}
+  .cwturnn{color:var(--dimmer);font-size:var(--fs-cap);white-space:nowrap;border:1px solid var(--border);border-radius:10px;padding:0 6px;}
+  .qlabel{font-size:var(--fs-cap);color:var(--dim);border:1px solid var(--border);border-radius:10px;padding:0 6px;margin-right:6px;white-space:nowrap;}
   .cwturnbody{padding:2px 8px 6px;} .cwturn.collapsed .cwturnbody{display:none;}
   /* rows of an open card in groups (2.3 §读与画「长对话的窗口」): a drawn group is transparent to layout; a placeholder holds K
      closed rows (K × --cblk-pitch), no text, no control */
@@ -277,67 +287,66 @@
   .cwgroup{display:contents;} .cwgroup[aria-busy]{display:block;height:calc(var(--n) * var(--cblk-pitch));}
   /* D12 全展/全折 便捷键 */
   .cwfoldall{display:flex;gap:6px;justify-content:flex-end;margin:-2px 0 5px;}
-  .foldallbtn{background:none;border:1px solid var(--border);border-radius:10px;color:var(--dim);font-size:10px;font-family:var(--mono);padding:1px 7px;cursor:pointer;}
+  .foldallbtn{background:none;border:1px solid var(--border);border-radius:10px;color:var(--dim);font-size:var(--fs-cap);padding:1px 7px;cursor:pointer;}
   .foldallbtn:hover{color:var(--fg);border-color:var(--accent);}
-  .cbc .md{padding:3px 0 7px;font-size:12px;}
+  .cbc .md{padding:3px 0 7px;font-size:var(--fs-cap);}
   /* role accents on the message blocks */
   .cblk.r-user .cbrole{color:var(--green);} .cblk.r-assistant .cbrole{color:var(--accent);}
-  .cblk.k-thinking .cbrole{color:var(--purple);} .cblk.k-tool_use .cbrole{color:var(--amber);} .cblk.k-tool_result .cbrole{color:var(--cyan);}
-  .cblk.r-system .cbrole{color:var(--purple);}
+  .cblk.k-thinking .cbrole{color:var(--ink-2);} .cblk.k-tool_use .cbrole{color:var(--amber);} .cblk.k-tool_result .cbrole{color:var(--ink-2);}
+  .cblk.r-system .cbrole{color:var(--ink-2);}
   /* the 变化线 (2.3): a quiet line where the prefix changed — no cache states, no offsets, nothing else */
   .chline{display:flex;align-items:center;gap:9px;margin:10px 0 6px;scroll-margin-top:8px;}
   .chline .chbar{flex:0 0 auto;width:5px;align-self:stretch;min-height:22px;background:var(--cyan);border-radius:3px;box-shadow:0 0 8px color-mix(in srgb,var(--cyan) 55%,transparent);}
-  .chline .cht{font-size:10.5px;color:var(--cyan);line-height:1.45;}
-  .chline .chest{font-style:normal;font-size:10px;color:var(--dimmer);border:1px solid var(--border);border-radius:8px;padding:0 5px;white-space:nowrap;}
+  .chline .cht{font-size:var(--fs-cap);color:var(--ink-2);line-height:1.45;}
+  .chline .chest{font-style:normal;font-size:var(--fs-cap);color:var(--dimmer);border:1px solid var(--border);border-radius:8px;padding:0 5px;white-space:nowrap;}
   .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;}
 
   /* ── nav sidebar ── */
-  .navz{font-size:10px;text-transform:uppercase;letter-spacing:1.4px;color:var(--dimmer);margin:12px 4px 5px;}
+  .navz{font-size:var(--fs-cap);color:var(--dimmer);margin:12px 4px 5px;}
   .navz:first-child{margin-top:2px;}
-  .navrow{display:flex;align-items:center;gap:7px;padding:4px 7px;border-radius:6px;cursor:pointer;font-size:11.5px;color:var(--dim);}
+  .navrow{display:flex;align-items:center;gap:7px;padding:4px 7px;border-radius:6px;cursor:pointer;font-size:var(--fs-cap);color:var(--dim);}
   .navrow:hover{background:color-mix(in srgb,var(--accent) 9%,transparent);color:var(--fg);}
   .navrow .navic{width:15px;text-align:center;flex:0 0 auto;}
   .navrow .navlbl{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-  .navrow .navct{font-family:var(--mono);font-size:10px;color:var(--dimmer);}
+  .navrow .navct{font-size:var(--fs-cap);color:var(--dimmer);}
   /* a ledger count not known yet (2.4:67): a sized empty box where the digits go, no words */
   .navrow .navct[aria-busy="true"]{display:inline-block;width:2ch;height:10px;border-radius:2px;background:color-mix(in srgb,var(--fg) 6%,transparent);}
-  .navrow.head .navlbl{color:var(--fg);font-weight:600;}
-  .navrow.head::before{content:"▸";color:var(--dimmer);font-size:10px;margin-right:-2px;}
-  .navrow.head.open::before{content:"▾";}
+  .navrow.head .navlbl{color:var(--fg);font-weight:var(--fw-strong);}
+  .navrow.head::before{color:var(--dimmer);margin-right:-2px;}
   .navkids{margin:1px 0 4px 12px;border-left:1px solid var(--border);padding-left:4px;}
-  .navsub{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 6px;padding:3px 6px;border-radius:5px;cursor:pointer;font-size:10.5px;color:var(--dim);font-family:var(--mono);}
+  .navsub{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 6px;padding:3px 6px;border-radius:5px;cursor:pointer;font-size:var(--fs-cap);color:var(--dim);}
   .navsub:hover{background:color-mix(in srgb,var(--accent) 9%,transparent);color:var(--fg);}
   .navsub .nsl{flex:1 1 9em;min-width:6em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-  .navsub .nsx{color:var(--dimmer);font-size:10px;white-space:nowrap;}
+  .navsub .nsx{color:var(--dimmer);font-size:var(--fs-cap);white-space:nowrap;}
   .navsub .bpmark{color:var(--green);} .navsub .vol{color:var(--amber);}
   .navsub.pend{opacity:.42;} .navsub.dead{opacity:.5;} .navsub.dead .viewname{text-decoration:line-through;text-decoration-color:var(--dimmer);}
   .navsub.empty{cursor:default;color:var(--ink-3);} .navsub.empty:hover{background:none;color:var(--ink-3);}
   .navwhy{font-size:var(--fs-cap);color:var(--warn);margin:0 4px 8px;line-height:1.5;}
   .navsince{border:1px solid var(--rule);border-radius:var(--r-pill);padding:0 5px;}
   /* the life text wraps under the name when the panel is narrow — never cut (1.5) */
-  .navlife{font:inherit;font-size:10px;color:var(--ink-3);background:none;border:0;padding:0;cursor:pointer;flex:0 1 auto;min-width:0;text-align:left;overflow-wrap:anywhere;}
+  .navlife{font:inherit;font-size:var(--fs-cap);color:var(--ink-3);background:none;border:0;padding:0;cursor:pointer;flex:0 1 auto;min-width:0;text-align:left;overflow-wrap:anywhere;}
   .navlife:hover{color:var(--action);text-decoration:underline;}
   .navsince:hover{color:var(--ink);border-color:var(--ink-2);}
   .navsub .bpbadge,.navsub .volbadge{flex:0 1 auto;min-width:0;max-width:100%;white-space:normal;} /* a pill longer than the panel wraps inside its row, never past the edge */
   .navsub .en{color:var(--green);} .navsub .ev{color:var(--red);}
   .navseen{display:flex;flex-wrap:wrap;gap:3px 4px;margin:2px 0 4px 14px;}
-  .navchip{font-family:var(--mono);font-size:10px;color:var(--dim);background:var(--panel2);border:1px solid var(--border);border-radius:5px;padding:0 5px;cursor:pointer;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .navchip{font-family:var(--mono);font-size:var(--fs-cap);color:var(--dim);background:var(--panel2);border:1px solid var(--border);border-radius:5px;padding:0 5px;cursor:pointer;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
   .navchip:hover{color:var(--fg);border-color:var(--dim);} .navchip.future{opacity:.4;}
-  .navmore{font-size:10px;color:var(--dimmer);cursor:pointer;padding:2px 0 2px 14px;font-family:var(--mono);}
+  .navmore{font-size:var(--fs-cap);color:var(--dimmer);cursor:pointer;padding:2px 0 2px 14px;}
   .navmore:hover{color:var(--accent);}
   .res{cursor:pointer;}
 
   /* markdown */
-  .md code{font-family:var(--mono);font-size:.92em;background:var(--panel2);border:1px solid var(--border);border-radius:4px;padding:0 4px;}
-  .md pre.mdc{margin:4px 0;background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:7px 10px;font-family:var(--mono);font-size:11.5px;white-space:pre-wrap;word-break:break-word;overflow:auto;}
-  .md strong{color:var(--fg);font-weight:600;} .md em{font-style:italic;} .md a{color:var(--cyan);} .md .mdh{font-weight:700;color:var(--fg);}
+  .md code{font-family:var(--mono);font-size:inherit;background:var(--panel2);border:1px solid var(--border);border-radius:4px;padding:0 4px;}
+  .md pre.mdc{margin:4px 0;background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:7px 10px;font-family:var(--mono);font-size:var(--fs-cap);white-space:pre-wrap;word-break:break-word;overflow:auto;}
+  .md strong{color:var(--fg);font-weight:var(--fw-strong);} .md em{font-style:normal;} .md a{color:var(--action);} .md .mdh{font-weight:var(--fw-strong);color:var(--fg);}
 
   /* ledger */
   .res{margin-bottom:11px;}
   .res .top{display:flex;gap:6px;align-items:baseline;}
-  .res .nm{font-family:var(--mono);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-  .res .via{font-size:10px;color:var(--dimmer);margin-left:auto;white-space:nowrap;}
-  .res.file .nm{color:var(--fg);} .res.scaffold .nm{color:var(--purple);} .res.dir .nm{color:var(--amber);} .res.link .nm{color:var(--cyan);} .res.capability .nm{color:var(--pink);}
+  .res .nm{font-family:var(--mono);font-size:var(--fs-cap);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .res .via{font-size:var(--fs-cap);color:var(--dimmer);margin-left:auto;white-space:nowrap;}
+  .res.file .nm{color:var(--fg);} .res.scaffold .nm{color:var(--ink-2);} .res.dir .nm{color:var(--amber);} .res.link .nm{color:var(--action);} .res.capability .nm{color:var(--pink);}
   .res.dead{opacity:.45;}
   .track{position:relative;height:16px;background:var(--panel2);border-radius:5px;margin-top:4px;overflow:hidden;
     background-image:repeating-linear-gradient(90deg,transparent 0,transparent calc(10% - 1px),color-mix(in srgb,var(--border) 55%,transparent) calc(10% - 1px),color-mix(in srgb,var(--border) 55%,transparent) 10%);}
@@ -348,33 +357,32 @@
   .track .evict{position:absolute;top:0;bottom:0;width:0;border-left:2px dashed var(--red);}
   .track .ph{position:absolute;top:-2px;bottom:-2px;width:2px;background:var(--fg);box-shadow:0 0 4px var(--fg);}
   .res .sub2{display:flex;gap:8px;align-items:baseline;margin-top:3px;}
-  .res .ranges{font-family:var(--mono);font-size:10px;color:var(--cyan);opacity:.9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-  .res .hits{font-size:10px;color:var(--dimmer);margin-left:auto;white-space:nowrap;}
+  .res .ranges{font-family:var(--mono);font-size:var(--fs-cap);color:var(--ink-2);opacity:.9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .res .hits{font-size:var(--fs-cap);color:var(--dimmer);margin-left:auto;white-space:nowrap;}
   /* opened-file expand */
   .res.file .res-hd{cursor:pointer;}
-  .res.file .res-hd .nm::before{content:"▸ ";color:var(--dimmer);}
-  .res.file.expanded .res-hd .nm::before{content:"▾ ";}
-  .lifesum{font-family:var(--mono);font-size:10px;color:var(--dim);margin-top:3px;}
+  .res.file .res-hd .nm::before{color:var(--dimmer);margin-right:4px;}
+  .lifesum{font-family:var(--mono);font-size:var(--fs-cap);color:var(--dim);margin-top:3px;}
   .lifesum .ev{color:var(--dimmer);}
   .filedetail{display:none;margin:6px 0 2px 10px;border-left:1px solid var(--border);padding-left:9px;}
   .res.file.expanded .filedetail{display:block;}
-  .fload{font-family:var(--mono);font-size:10px;color:var(--dim);padding:2px 0;cursor:pointer;display:flex;gap:7px;align-items:baseline;}
+  .fload{font-family:var(--mono);font-size:var(--fs-cap);color:var(--dim);padding:2px 0;cursor:pointer;display:flex;gap:7px;align-items:baseline;}
   .fload:hover{color:var(--fg);}
   .fload .fk{color:var(--accent);} .fload.evict .fk{color:var(--red);} .fload.reinj .fk{color:var(--green);}
-  .fload .fvia{color:var(--dimmer);} .fload .frng{color:var(--cyan);opacity:.85;}
-  .res-viewtext{display:inline-block;margin-top:5px;font-size:10px;font-family:var(--mono);color:var(--accent);cursor:pointer;border:1px solid color-mix(in srgb,var(--accent) 40%,var(--border));border-radius:5px;padding:2px 7px;}
+  .fload .fvia{color:var(--dimmer);} .fload .frng{color:var(--ink-2);opacity:.85;}
+  .res-viewtext{display:inline-block;margin-top:5px;font-size:var(--fs-cap);font-family:var(--mono);color:var(--accent);cursor:pointer;border:1px solid color-mix(in srgb,var(--accent) 40%,var(--border));border-radius:5px;padding:2px 7px;}
   .res-viewtext:hover{background:color-mix(in srgb,var(--accent) 14%,transparent);}
   /* only-seen filenames */
-  .seenhint{font-size:10px;color:var(--dimmer);margin:-2px 0 6px;line-height:1.4;}
+  .seenhint{font-size:var(--fs-cap);color:var(--dimmer);margin:-2px 0 6px;line-height:1.4;}
   .seenlist{display:flex;flex-wrap:wrap;gap:4px 6px;}
-  .seenchip{font-family:var(--mono);font-size:10px;color:var(--dim);background:var(--panel2);border:1px solid var(--border);border-radius:5px;padding:1px 6px;cursor:pointer;white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis;}
+  .seenchip{font-family:var(--mono);font-size:var(--fs-cap);color:var(--dim);background:var(--panel2);border:1px solid var(--border);border-radius:5px;padding:1px 6px;cursor:pointer;white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis;}
   .seenchip:hover{color:var(--fg);border-color:var(--dim);}
   .seenchip.future{opacity:.38;}
   .seenchip .sdot{color:var(--dimmer);}
-  .seenmore{font-size:10px;color:var(--dimmer);cursor:pointer;padding:3px 0;font-family:var(--mono);}
+  .seenmore{font-size:var(--fs-cap);color:var(--dimmer);cursor:pointer;padding:3px 0;}
   .seenmore:hover{color:var(--accent);}
   /* ⑥ ⑦ the stand-in states (1.4); ⑧ and an unheld lane's frames: empty, aria-busy, sized from the row's composition */
-  .cwunparsed,.cwnoreq{margin:24px auto;max-width:560px;padding:14px 16px;border:1px dashed var(--rule-2);border-radius:6px;font-size:11.5px;color:var(--dim);line-height:1.6;}
+  .cwunparsed,.cwnoreq{margin:24px auto;max-width:560px;padding:14px 16px;border:1px dashed var(--rule-2);border-radius:6px;font-size:var(--fs-cap);color:var(--dim);line-height:1.6;}
   .cwunparsed .cwuhd,.cwnoreq{color:var(--fg);}
   .cwbusy{min-height:max(84px, min(calc(var(--n, 0) * var(--cblk-pitch)), 100%));}
   .cwframe{height:calc(var(--fr, 1) * var(--cblk-pitch));margin:16px 0 6px;border:1px dashed var(--rule-2);border-radius:6px;background:color-mix(in srgb,var(--fg) 2%,transparent);}
@@ -384,11 +392,11 @@
 #pages{min-width:0;} #leftpage{min-width:0;}
 /* fidelity marks (2.3 proof rule): a PROVEN block shows no badge at all; every unproven value keeps the dashed caveat look (base .ffbadge) */
 .ff-summarized,.ff-truncated,.ff-metadata,.ff-unaddressable,.ff-unknown,.ff-notfetched,.ff-reserialized,.ff-opaque,.ff-omitted{color:var(--ink-2);}
-.desk .ffbadge{font-size:10px;} /* the desk keeps every badge at 10px or more (1.5) */
-.remnote{font-size:10px;color:var(--amber);border:1px solid color-mix(in srgb,var(--amber) 40%,transparent);border-radius:8px;padding:0 5px;white-space:nowrap;}
-.cbsrc{font-size:10px;color:var(--dimmer);margin:4px 0 0;font-family:var(--mono);}
+.desk .ffbadge{font-size:var(--fs-cap);} /* the desk keeps every badge at 10px or more (1.5) */
+.remnote{font-size:var(--fs-cap);color:var(--amber);border:1px solid color-mix(in srgb,var(--amber) 40%,transparent);border-radius:8px;padding:0 5px;white-space:nowrap;}
+.cbsrc{font-size:var(--fs-cap);color:var(--dimmer);margin:4px 0 0;font-family:var(--mono);}
 .cbsrc.warn{color:var(--ink-2);}
-.estnote{color:var(--dimmer);font-size:10px;font-style:italic;margin-left:6px;}
+.estnote{color:var(--dimmer);font-size:var(--fs-cap);margin-left:6px;}
 /* cache band: a call with no usage is unknown (neutral), not "cold" (red) */
 .cbar.na{background:repeating-linear-gradient(45deg,var(--dimmer) 0 2px,transparent 2px 4px);opacity:.5;}
 /* a hatched cell: not computable (no composition, no price, no usage) — never a zero-height bar */
@@ -398,29 +406,28 @@
 .rpreply{margin-top:4px;}
 /* 2.3 §这一步的回复: the reply's rows continue the request rows in their form, with no head of their own */
 .cwreply{margin-top:10px;padding:0 9px;} /* the rows line up with a turn card's rows (its border + body padding): the rows they continue */
-.cwrline{font-size:11.5px;color:var(--dim);padding:6px 10px;} /* a failed or an empty reply: one line */
-.cbstop{flex:none;font-size:10.5px;color:var(--dim);white-space:nowrap;} .cbstop .mono{font-size:10px;color:var(--fg);} /* the stop reason, on the last row's head */
+.cwrline{font-size:var(--fs-cap);color:var(--dim);padding:6px 10px;} /* a failed or an empty reply: one line */
+.cbstop{flex:none;font-size:var(--fs-cap);color:var(--dim);white-space:nowrap;} .cbstop .mono{font-size:var(--fs-cap);color:var(--fg);} /* the stop reason, on the last row's head */
 .rpbody .rawpre{color:var(--ink-2);}
 #rawpanel .rpbody .rawpre{max-height:280px;overflow:auto;} /* the panel scrolls a long reply; the window's ⑨ is never capped */
-.rptech{font-family:var(--mono);font-size:10px;color:var(--dimmer);margin-top:2px;}
+.rptech{font-family:var(--mono);font-size:var(--fs-cap);color:var(--dimmer);margin-top:2px;}
 .rpobs{color:var(--amber);font-size:var(--fs-cap);}
 .rpok{color:var(--green);} .rpwarn{color:var(--amber);}
 /* the drawer's pieces (2.6 §B) */
 #detail.k-subagent{border-top-color:var(--amber);} #detail.k-token-count{border-top-color:var(--cyan);}
 #detail .dnav{margin:-2px 0 6px;}
-#detail .dback{font:inherit;font-size:11px;color:var(--action);background:none;border:1px solid var(--rule);border-radius:var(--r-1);padding:2px 9px;cursor:pointer;}
+#detail .dback{font:inherit;font-size:var(--fs-cap);color:var(--action);background:none;border:1px solid var(--rule);border-radius:var(--r-1);padding:2px 9px;cursor:pointer;}
 #detail .dback:hover{border-color:var(--action);}
 /* the bottom drawer: input blocks listed one by one */
 .dblk{border:1px solid var(--border);border-radius:6px;margin:4px 0;background:var(--panel2);}
-.dblk>.dbh{display:flex;gap:7px;align-items:center;padding:3px 9px;font-family:var(--mono);font-size:10.5px;color:var(--dim);cursor:pointer;}
+.dblk>.dbh{display:flex;gap:7px;align-items:center;padding:3px 9px;font-family:var(--mono);font-size:var(--fs-cap);color:var(--dim);cursor:pointer;}
 .dblk>.dbh:hover{color:var(--fg);}
-.dblk>.dbh::before{content:"▸";color:var(--dimmer);font-size:10px;width:8px;}
-.dblk.open>.dbh::before{content:"▾";}
-.dblk .dbrole{color:var(--fg);font-weight:600;} .dblk .dblab{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1;color:var(--cyan);}
-.dblk .dbn{margin-left:auto;color:var(--dimmer);font-size:10px;white-space:nowrap;}
+.dblk>.dbh::before{color:var(--dimmer);}
+.dblk .dbrole{color:var(--fg);font-weight:var(--fw-strong);} .dblk .dblab{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1;color:var(--ink-2);}
+.dblk .dbn{margin-left:auto;color:var(--dimmer);font-size:var(--fs-cap);white-space:nowrap;}
 .dblk .dbbody{padding:0 9px 6px;} .dblk:not(.open) .dbbody{display:none;}
 .dblk .dbbody pre{max-height:300px;overflow:auto;}
-.dblk .dbfold{font-family:var(--mono);font-size:10px;color:var(--dimmer);padding:2px 0 4px;}
+.dblk .dbfold{font-family:var(--mono);font-size:var(--fs-cap);color:var(--dimmer);padding:2px 0 4px;}
 .dsel{margin:2px 0 6px;}
 .cbh .ffbadge,.cbh .bpbadge,.cbh .volbadge{flex:none;}
 
@@ -434,7 +441,8 @@
 .sh-back,.sh-follow,.sh-info{flex:none;}
 .sh-back{font-size:var(--fs-cap);color:var(--action);text-decoration:none;white-space:nowrap;border:1px solid var(--rule);border-radius:var(--r-pill);padding:2px 10px;}
 .sh-back:hover{color:var(--ink);border-color:var(--ink-2);}
-.sh-name{flex:0 1 auto;min-width:2em;font-size:var(--fs-strong);font-weight:600;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:44vw;}
+/* the title ellipsizes, so it clips: its line box holds the whole glyph box (Segoe UI at 20 px needs about 27 px; 1.2 §让位次序) */
+.sh-name{flex:0 1 auto;min-width:2em;font-size:var(--fs-title);line-height:1.4;font-weight:var(--fw-strong);color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:44vw;}
 .sh-chip{flex:0 100 auto;min-width:0;overflow:hidden;display:inline-flex;align-items:center;gap:4px;font-size:var(--fs-cap);color:var(--ink-2);text-decoration:none;background:var(--sunk);border:1px solid var(--rule);border-radius:var(--r-pill);padding:2px 9px;white-space:nowrap;}
 .sh-chip:hover{border-color:var(--ink-2);color:var(--ink);}
 .sh-chip .chipname{color:var(--ink);min-width:0;overflow:hidden;text-overflow:ellipsis;}
@@ -452,7 +460,7 @@
 .fidline + .disc{margin:0;padding:0 16px 4px;background:var(--raised);font-size:var(--fs-cap);}
 /* the quiet 技术细节 disclosures under the fidelity row and in the raw panel: caption size, no 36 px row */
 .fidline + .disc .disc-t,#rawpanel .disc-t{min-height:0;font-size:var(--fs-cap);}
-.fidline + .disc .disc-t b,#rawpanel .disc-t b{font-size:var(--fs-cap);font-weight:400;color:var(--ink-3);}
+.fidline + .disc .disc-t b,#rawpanel .disc-t b{font-size:var(--fs-cap);} /* size follows the line; weight and ink stay the kit's */
 /* the session info popover's rows: numbers with their Chinese names and marks, links reachable by Tab */
 .pop .sipb{display:flex;flex-direction:column;gap:6px;min-width:240px;}
 .pop .sir{font-size:var(--fs-body);color:var(--ink);}
@@ -465,26 +473,25 @@
 .pop .sijump{font:inherit;font-size:var(--fs-body);color:var(--action);background:none;border:0;padding:0;cursor:pointer;text-decoration:none;}
 .pop .sijump:hover{text-decoration:underline;}
 /* the step bar: the middle column's first row, sticky, only 2.2's table in it */
-/* too narrow (2.2 §步头放不下): the model name is cut first, then the prompt number and the time; only when those are at their
-   least does the line wrap. Every part that gives way has a flex basis of 0, so it never forces the wrap itself; ‹ step ›, Compare
-   and the three buttons are never cut */
-#stepbar{flex:none;position:sticky;top:0;z-index:5;display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px;padding:4px 14px;background:var(--paper);border-bottom:1px solid var(--rule);font-size:var(--fs-cap);color:var(--ink-2);}
+/* too narrow (2.2 §步头放不下): only the model name is cut, down to eight characters (flex basis 0, so it never forces the wrap
+   itself); then the line wraps. ‹ step ›, the prompt number, the time, Compare and the three buttons are never cut: a short word
+   cut to one letter says nothing */
+#stepbar{flex:none;position:sticky;top:0;z-index:5;display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px;padding:4px 14px;background:var(--raised);border-bottom:1px solid var(--rule);font-size:var(--fs-cap);color:var(--ink-2);}
 #stepbar .sb-nav{display:inline-flex;align-items:center;gap:4px;white-space:nowrap;}
 #stepbar .sbbtn{font:inherit;font-size:var(--fs-body);line-height:1;padding:2px 7px;background:transparent;border:1px solid var(--rule);border-radius:var(--r-1);color:var(--ink-2);cursor:pointer;}
 #stepbar .sbbtn:hover{color:var(--ink);border-color:var(--ink-2);}
-#stepbar .sb-no{font-family:var(--mono);font-size:var(--fs-body);color:var(--ink);white-space:nowrap;}
-/* the free space goes to the prompt number and the time first (grow 1000), the model name gets what is left: it gives way first */
-#stepbar .sb-ask,#stepbar .sb-time{white-space:nowrap;min-width:0;max-width:max-content;overflow:hidden;text-overflow:ellipsis;flex:1000 1 0;}
-#stepbar .sb-nav,#stepbar .sb-cmp,#stepbar>.popbtn{flex:none;}
+#stepbar .sb-no{font-size:var(--fs-body);color:var(--ink);white-space:nowrap;}
+#stepbar .sb-ask,#stepbar .sb-time{white-space:nowrap;}
+#stepbar .sb-nav,#stepbar .sb-ask,#stepbar .sb-time,#stepbar .sb-cmp,#stepbar>.popbtn{flex:none;}
 /* the model name: ellipsis, full name in its title */
-#stepbar .sb-model{font-family:var(--mono);font-size:var(--fs-cap);color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1 1 0;min-width:4ch;max-width:max-content;}
+#stepbar .sb-model{font-size:var(--fs-cap);color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1 1 0;min-width:8ch;max-width:max-content;}
 #stepbar .spacer{flex:none;margin-left:auto;} /* takes only what the parts above leave over */
 #stepbar .sb-cmp .cmpx{margin-left:4px;color:var(--ink-3);cursor:pointer;border:1px solid var(--rule);border-radius:var(--r-1);padding:0 3px;line-height:1.2;}
 #stepbar .sb-cmp .cmpx:hover{color:var(--bad);border-color:var(--bad);}
 .pop .cmpick{display:flex;align-items:center;gap:6px;padding:4px 14px;font-size:var(--fs-body);}
 .pop .cmpick input{width:64px;font-family:var(--mono);}
 /* the three popovers' pieces: the sentence first, then the numbers, then the links */
-.pop .pp-sentence{font-size:var(--fs-strong);color:var(--ink);}
+.pop .pp-sentence{font-size:var(--fs-body);color:var(--ink);}
 .pop .pp-nums{font-size:var(--fs-body);color:var(--ink-2);}
 .pop .pp-nums b,.pop .pp-nums .un-null{font-family:var(--mono);color:var(--ink);}
 .pop .pp-calibre{font-size:var(--fs-cap);color:var(--ink-3);}
@@ -511,3 +518,8 @@
 .v2-modal .keylist kbd{font-family:var(--mono);color:var(--ink);}
 /* a session the server does not know: only the window speaks (its link back to the list); no empty timeline around it */
 .desk.notlisted #saw,.desk.notlisted #rails,.desk.notlisted #stepbar{display:none;}
+
+/* every disclosure triangle a ::before / ::after draws: the icons.mjs chevron as a mask over the text colour (--glyph-disc, set by
+   core/ui.mjs installUi; 1.5 §审美 #5: no typed triangle), 12 px like DISC_CHEV; an open one turns a quarter */
+#rpbar::before,.cbh::before,.cwturnhd::before,.navrow.head::before,.res.file .res-hd .nm::before,.dblk>.dbh::before{content:"";display:inline-block;flex:none;width:12px;height:12px;vertical-align:-2px;background:currentColor;-webkit-mask:var(--glyph-disc) center/12px 12px no-repeat;mask:var(--glyph-disc) center/12px 12px no-repeat;transition:transform var(--t-quick) var(--ease);}
+#rightpage.open #rpbar::before,.cblk:not(.collapsed) .cbh::before,.cwturn:not(.collapsed) .cwturnhd::before,.navrow.head.open::before,.res.file.expanded .res-hd .nm::before,.dblk.open>.dbh::before{transform:rotate(90deg);}

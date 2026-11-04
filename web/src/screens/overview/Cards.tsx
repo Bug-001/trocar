@@ -95,7 +95,7 @@ export function StatsCard({ m, onRetry }: { m: StatsModel, onRetry: Retry }) {
       {' · '}{W.HIT_LABEL} <span className="ovhit" title={tipOf(m.hit.tip)}>{m.hit.text}</span>
     </p>
     {m.agents.length ? <div className="hscroll"><div className="ovtbl" role="table">
-      <div className="ovtrh" role="row"><span>{t.agent}</span><span className="n">{t.sessions}</span><span className="n">{t.calls}</span><span className="n">{t.cost}</span><span className="n">{t.hit}</span><span className="n">{t.last}</span></div>
+      <div className="ovtrh colhead" role="row"><span>{t.agent}</span><span className="n">{t.sessions}</span><span className="n">{t.calls}</span><span className="n">{t.cost}</span><span className="n">{t.hit}</span><span className="n">{t.last}</span></div>
       {m.agents.map((g) => {
         const inner = <>
           <span className="ovag">{g.chip == null ? <span className="ovsubj">{UNIDENTIFIED}</span> : <Chip id={g.chip} />}</span>

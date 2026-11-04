@@ -19,6 +19,7 @@ import { loadBodies } from '../../web/legacy/replay/cell.mjs'
 import { stepOf } from '../../web/legacy/replay/model.mjs'
 import * as W from '../../web/legacy/labels/replay.mjs'
 import { esc } from '../../web/legacy/core/fmt.mjs'
+import { HALF } from '../../web/legacy/core/icons.mjs'
 import { deskOf, deskFrom } from './desk-world.mjs'
 import { boardHome, serveBoard } from './real-face.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -100,7 +101,7 @@ function assertHeaders(h, flat, why, { windowLine = false } = {}) {
     const claims = !windowLine && blocks.every((b) => want(b) === 'verbatim')
     assert.equal(hd.claims, claims, `${why}: ${hd.sec} claims 以下逐字 iff every block is proven`)
     assert.equal(count(visible(hd.html), w(W.SECTION_VERBATIM)), claims ? 1 : 0, `${why}: ${hd.sec} says it once or not at all`)
-    if (windowLine) assert.ok(hd.html.includes(W.HALF_MARK), `${why}: ${hd.sec} carries ◐`)
+    if (windowLine) assert.ok(hd.html.includes(HALF), `${why}: ${hd.sec} carries ◐`)
     if (hd.sec === 'tools') assert.equal(hd.html.includes(w(W.SECTION_SIZE_EST_TIP)), blocks.some((b) => want(b) === 'metadata'), `${why}: an estimated size iff a definition is metadata only`)
   }
   assert.equal(count(visible(h), w(W.SECTION_VERBATIM)), hs.filter((x) => x.claims).length, `${why}: 以下逐字 only on a claiming header`)
@@ -187,7 +188,7 @@ test('2.3 #2: the withdrawal happens on the spot: the row gets its mark, the sec
     bodyCache.clear()
     const d = def('messages', undefined, true), b = { ...d, text_ref: d.ref }
     const [got] = await loadBodies(blockApi(o.item), [b.ref])
-    const hd = { cls: new Set(['cwsecff', 'v']), textContent: W.SECTION_VERBATIM, title: '', classList: { remove(c) { hd.cls.delete(c) } } }
+    const hd = { cls: new Set(['cwsecff', 'v']), textContent: W.SECTION_VERBATIM, title: '', set innerHTML(x) { this.textContent = x.replace(/<[^>]*>/g, '') }, classList: { remove(c) { hd.cls.delete(c) } } }
     const root = { querySelector: (sel) => (sel.includes('sec-messages') && sel.includes('cwsecff') && hd.cls.has('v') ? hd : null) }
     const head = { html: `<span class="cbrole">user</span><span class="sr-only">,${W.FF_WORD.verbatim}</span>`,
       insertAdjacentHTML(_, x) { this.html += x },

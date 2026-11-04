@@ -15,7 +15,7 @@ const LOG = '#/capture/log'
 export function ServiceRow({ svc, open, onOpen }: { svc: ServiceModel, open: boolean, onOpen: (open: boolean) => void }) {
   const lead = <Lead text={svc.lead.text} cls={svc.lead.cls} />
   return (
-    <CapRow id={svc.id} caprow="cap-svc" open={open} onOpen={onOpen} label="Capture service"
+    <CapRow id={svc.id} caprow="cap-svc" open={open} onOpen={onOpen} label={<span className="nmt">Capture service</span>}
       gut={<Gut gut={svc.gut} />}
       rest={<>
         <span className="des" />
@@ -28,7 +28,7 @@ export function ServiceRow({ svc, open, onOpen }: { svc: ServiceModel, open: boo
         <span className="ctl" />
       </>}>
       <TechDetails pairs={techPairs(svc.tech)} copy={svc.copy} />
-      <div className="capcopy"><CopyButton text={svc.diag} label="Copy diagnostics" /></div>
+      <div className="capcopy"><CopyButton text={svc.diag} label="Copy diagnostics" row /></div>
     </CapRow>
   )
 }

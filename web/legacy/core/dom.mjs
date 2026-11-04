@@ -58,11 +58,9 @@ export function installCopy(root) {
 }
 
 // ── modal ─────────────────────────────────────────────────────────────────────────────────────────────────────────
-// openModal({title, bodyHtml, actions:[{label, primary?, value}], osStyle?: 'windows'|'macos'|'linux'}) → Promise<value|null>
+// openModal({title, bodyHtml, actions:[{label, primary?, value}]}) → Promise<value|null>
 // Esc or a click on the backdrop resolves null. The primary button (else the first) takes focus on open, and Tab stays inside the dialog. `bodyHtml` is trusted markup supplied by the caller (escape user data with
-// esc()); `title` is plain text. With `osStyle` the dialog is drawn like the operating system's own elevation prompt
-// (title bar, system font, a shield or lock glyph) so a prototype can simulate UAC / macOS authorization / polkit.
-const OS_GLYPH = { windows: '⊞', macos: '⌘', linux: '≡' }
+// esc()); `title` is plain text.
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
 const modalStack = []
 let keysWired = false
@@ -111,15 +109,14 @@ export function screenBound(close) {
   return () => s.removeEventListener('abort', close)
 }
 
-export function openModal({ title = '', bodyHtml = '', actions, osStyle } = {}) {
+export function openModal({ title = '', bodyHtml = '', actions } = {}) {
   wireKeys()
   const acts = actions && actions.length ? actions : [{ label: 'Close', value: null }]
-  const os = OS_GLYPH[osStyle] ? osStyle : null
   const back = document.createElement('div')
   back.className = 'v2-modal-back'
   back.innerHTML =
-    `<div class="v2-modal${os ? ' os os-' + os : ''}" role="dialog" aria-modal="true" aria-label="${esc(title)}">` +
-    `<div class="mtitle">${os ? `<span class="mglyph" aria-hidden="true">${OS_GLYPH[os]}</span>` : ''}<span class="mt">${esc(title)}</span></div>` +
+    `<div class="v2-modal" role="dialog" aria-modal="true" aria-label="${esc(title)}">` +
+    `<div class="mtitle"><span class="mt">${esc(title)}</span></div>` +
     `<div class="mbody">${bodyHtml}</div>` +
     `<div class="mactions">${acts.map((a, i) => `<button type="button" class="mbtn${a.primary ? ' primary' : ''}" data-i="${i}">${esc(a.label)}</button>`).join('')}</div>` +
     `</div>`

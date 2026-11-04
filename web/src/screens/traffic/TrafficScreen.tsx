@@ -18,6 +18,7 @@ import type { ScreenProps } from '../../ScreenOutlet'
 import { queryOf, sinceOf, tableModel as tableModelJs, coverOf as coverOfJs, filterLinks as filterLinksJs, windowLinks as windowLinksJs, failOf as failOfJs } from './model.mjs'
 import { TrafficHead, type Scope } from './TrafficHead'
 import { InfoButton } from '../../ui/InfoButton'
+import { MenuChev } from '../../ui/Chev'
 import { ReadFail, type Fail } from './ReadFail'
 
 type Cell = { main: string, note: string }
@@ -50,7 +51,7 @@ const Mark = ({ kind, tip, data }: { kind: string, tip: string, data?: string })
 function FilterMenu({ label, items }: { label: string, items: Link[] }) {
   return (
     <MenuTrigger>
-      <Button className="popbtn" aria-label={label}>{label} <span className="chev" aria-hidden="true">▾</span></Button>
+      <Button className="popbtn" aria-label={label}>{label} <MenuChev /></Button>
       <Popover className="pop menu" placement="bottom end">
         <Menu aria-label={label} items={items}>{(i) => <MenuItem id={i.id} href={i.href} textValue={i.label}>{i.label}</MenuItem>}</Menu>
       </Popover>
@@ -173,7 +174,7 @@ export default function TrafficScreen({ route, router }: ScreenProps) {
             {fl.note ? <span className="cap-item cap-note">{fl.note}</span> : null}
           </div>
         </div>
-        <div className="trow thead">
+        <div className="trow thead colhead">
           <span className="gut"></span><span className="nm">{W.COL.agent}</span>
           <span className="cell-host">{W.COL.host}</span><span className="cell-first">{W.COL.first}</span>
           <span className="cell num">{W.COL.requests}</span>
