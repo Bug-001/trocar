@@ -52,6 +52,9 @@ export function blockGot(doc) {
   return { status: 'ok', text: d.bytes, verbatim, fidelity: verbatim ? 'verbatim' : 'reserialized', note: (f && f.note) || null, truncated: d.truncated ?? null }
 }
 const asking = new Map() // ref -> its answer on the way: needs that meet while it is out share it
+// bumped on every body loadBodies puts in bodyCache: a memo over what the cache holds keys on it
+let bodies = 0
+export const bodyVersion = () => bodies
 // The bodies of `refs` → Promise<got[]> in the order asked. One `block` read carries every ref neither in bodyCache nor already
 // on its way; each answer item fills bodyCache by its `ref`, and an item with `bytes:null` takes its `errors` entry (where = ref)
 // as that ref's failure. A failed read is not remembered (the next ask reads again), except a 404.
@@ -61,7 +64,7 @@ export function loadBodies(api, refs, { signal } = {}) {
     const read = api.get('block', { ref: want }, { signal }).then((r) => {
       const out = new Map()
       if (!r.ok) {
-        for (const ref of want) { const got = { status: r.status === 404 ? 'absent' : 'error', error: r.error }; if (r.status === 404) bodyCache.set(ref, got); out.set(ref, got) }
+        for (const ref of want) { const got = { status: r.status === 404 ? 'absent' : 'error', error: r.error }; if (r.status === 404) { bodyCache.set(ref, got); bodies++ } out.set(ref, got) }
         return out
       }
       const d = r.data || {}, errs = d.errors || []
@@ -72,7 +75,7 @@ export function loadBodies(api, refs, { signal } = {}) {
         const it = byRef.get(ref)
         if (!it) { out.set(ref, { status: 'error', error: 'the answer did not carry this block' }); continue }
         const got = typeof it.bytes === 'string' ? blockGot(it) : blockGot({ errors: errs.filter((e) => e.where === ref) })
-        bodyCache.set(ref, got); out.set(ref, got)
+        bodyCache.set(ref, got); bodies++; out.set(ref, got)
       }
       return out
     })
