@@ -15,7 +15,13 @@ import { classifyFidelity } from '../source.mjs';
 import { readRecord } from '../records.mjs';
 import { QueryArgError } from './index.mjs';
 
-export const params = Object.freeze(['ref']);
+export const about = Object.freeze({
+  summary: 'The captured content of each ref, in the order given: a request body, a response body, a context block or a reply block, with a note of how faithful it is.',
+  params: Object.freeze({
+    ref: 'What to read: a record id (segment:line), or a ref taken from a session or lane answer. Required. May be given more than once.',
+  }),
+});
+export const params = Object.freeze(Object.keys(about.params));
 /** `--ref` may be given again and again: one item per ref, in the order given (1.6 §4.1 参数). */
 export const lists = Object.freeze(['ref']);
 

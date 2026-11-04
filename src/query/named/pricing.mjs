@@ -6,7 +6,11 @@
 import path from 'node:path';
 import { loadPricing } from '../../view/pricing.mjs';
 
-export const params = Object.freeze([]);
+export const about = Object.freeze({
+  summary: 'The price table cost estimates are made with, and where it came from.',
+  params: Object.freeze({}),
+});
+export const params = Object.freeze(Object.keys(about.params));
 const UNIT = '$/Mtok';
 
 /** The one file the prices come from: `TROCAR_PRICING`, else ~/.trocar/pricing.json (the built-in table when it is
