@@ -11,6 +11,7 @@
 //   applyLane(desk, answer) → {reset}                            a tail / reset page, an older (--to) page, a --from page
 //   listOf(desk, rid) → bid[] | null    stepOf(desk, rid) → {row, lane, held, flat, reply, attrs, detail}
 //   laneEvents(desk, key) → event[]      askOrdinal(desk, key, rid) → k | 0 | null (2.2 K)
+//   compactionNumbers(events, stepOf) → Map(compaction event → {from, to})   the numbers of 2.4's compaction row
 //   applyLedger / ledgerAsk / ledgerDone / readLedger   the `ledger_next` chain (3.5 `resources` 与 `seen`)
 //   seenFiles(desk, key) → [{path, firstRid, count}] | null   seen minus the lane's opened files (2.4:148)
 // A whole-lane read answers the tail page only; older steps come back by `prev` (`to`) pages.
@@ -209,6 +210,24 @@ export function laneEvents(desk, key) {
   if (!h) return []
   const ts = (rid) => desk.rows.get(rid)?.ts ?? h.steps.get(rid)?.ts ?? ''
   return [...h.events.keys()].sort((x, y) => compareStep(ts(x), x, ts(y), y)).flatMap((rid) => h.events.get(rid))
+}
+
+/**
+ * The numbers 2.4's compaction row shows of each compaction among `events`, walked in `stepOf` order. An inferred compaction keeps its own. A
+ * marked one still carried the whole history, so its numbers are those of the first landing after it and before the next compaction; with
+ * no landing yet, its own `from` and no `to`.
+ */
+export function compactionNumbers(events, stepOf) {
+  const out = new Map()
+  let open = null
+  const walk = events.filter((e) => e && (e.type === 'compaction' || e.type === 'compaction-landed')).sort((x, y) => stepOf(x) - stepOf(y))
+  for (const e of walk) {
+    if (e.type === 'compaction') {
+      open = e.inferred ? null : e
+      out.set(e, { from: e.from, to: e.inferred ? e.to : null })
+    } else if (open) { out.set(open, { from: e.from, to: e.to }); open = null }
+  }
+  return out
 }
 
 /**

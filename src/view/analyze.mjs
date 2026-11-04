@@ -411,10 +411,10 @@ const viewOf = (r) => {
 
 // What a compaction verdict says about itself on the board (1.5:38 / 1.5:79: the UI tells confirmed from inferred).
 // A harness header hint is the harness's own word (high, not inferred); a text marker and a count drop are inferred
-// (medium, 3.4). `preamble` only refines the wording of a drop. A verdict that `lands` a harness's request says only that: the
-// context was rewritten here, and nothing is counted or inferred.
+// (medium, 3.4). `preamble` only refines the wording of a drop. A verdict that `lands` a harness's request says the context was
+// rewritten here, from and to the real message counts, and nothing is counted or inferred.
 export function compactionMeta(v, preamble = false) {
-  if (v && v.lands) return { compaction: false, lands: true }
+  if (v && v.lands) return { compaction: false, lands: true, evictedFrom: v.compaction_from, evictedTo: v.compaction_to }
   if (!v || !v.compaction) return { compaction: false }
   const byHint = v.basis === 'hint'
   return { compaction: true, compactionInferred: !byHint, compactionConfidence: byHint ? 'high' : 'medium',
@@ -730,6 +730,7 @@ export function createAnalyzer({ keep = true, from = null } = {}) {
         // the event travels to the UI on its own — it MUST carry the inference marker with it,
         // otherwise the timeline re-asserts as fact what the step knows is a guess (invariant 4).
         inferred: step.compactionInferred, confidence: step.compactionConfidence, basis: step.compactionBasis })
+    if (step.lands) E.push({ type: 'compaction-landed', step: step.at, streamId: s.id, from: step.evictedFrom, to: step.evictedTo })
     if (isSummarize) {
       step.summarizing = true
       E.push({ type: 'summarize', step: step.at, streamId: s.id, out: f.usage?.output_tokens })

@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { markCompaction, compactionVerdict, compactionBaseline, hasCompactionPreamble } from '../../src/identity/session-identity.mjs'
 import { query, homeWith } from '../helpers/session-doc.mjs'
-import { laneOf, fateOf, lanes, failLanes, sent, LANDS_WITHIN, READ, SID } from '../helpers/compaction-lane.mjs'
+import { laneOf, fateOf, lanes, failLanes, sent, landedOf, LANDS_WITHIN, READ, SID } from '../helpers/compaction-lane.mjs'
 
 test('markCompaction: a sharp message-count drop flags compaction with from/to', () => {
   assert.deepEqual(markCompaction(42, 6), { compaction: true, compaction_from: 42, compaction_to: 6 })
@@ -112,6 +112,8 @@ for (const wire of ['anthropic', 'flat']) {
       assert.equal(doc.calls.length, steps.length, why)
       const lane = await query(home, 'lane', { id: SID, lane: doc.calls[0].lane })
       assert.equal(doc.stats.compactions, doc.calls.filter((r) => r.compaction).length, why)
+      const landed = Object.fromEntries(lane.events.filter((e) => e.type === 'compaction-landed').map((e) => [doc.calls.findIndex((r) => r.rid === e.rid), { from: e.from, to: e.to }]))
+      assert.deepEqual(landed, landedOf(steps, records), why)
       const compacted = new Set(lane.events.filter((e) => e.type === 'compaction').map((e) => e.rid))
       doc.calls.forEach((r, i) => {
         const at = `${why} @${i}`

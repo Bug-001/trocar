@@ -80,13 +80,13 @@ export function fateOf(steps) {
 /** sent(record) → the messages its body holds, read from the bytes. */
 export const sent = (rec) => JSON.parse(rec.req_body).messages.length
 
-/** landedOf(steps, records) → {record id: {from, to}} of each landing step, from the bodies: the last call with a verdict and its own. */
+/** landedOf(steps, records) → {step: {from, to}} of each landing step, from the bodies: the last call with a verdict and its own. */
 export function landedOf(steps, records) {
   const fate = fateOf(steps), out = {}
   let last = null
   records.forEach((rec, i) => {
     if (noVerdict(steps[i])) return
-    if (fate[i] === 'lands') out[rec.id] = { from: last, to: sent(rec) }
+    if (fate[i] === 'lands') out[i] = { from: last, to: sent(rec) }
     last = sent(rec)
   })
   return out

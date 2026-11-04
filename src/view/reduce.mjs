@@ -823,7 +823,8 @@ function flatFold(d, { at, B, cacheOf, pushOf, emit, newSub, baseOf, lastOf, int
     if (!x.error) S.base = k;
     // the compaction events the board's outline lists, carrying the step's inference marker with them (invariant 4)
     const ev = call.compaction ? [{ type: 'compaction', step: null, streamId: kind, from: call.evictedFrom, to: call.evictedTo,
-      inferred: call.compactionInferred, confidence: call.compactionConfidence, basis: call.compactionBasis }] : [];
+      inferred: call.compactionInferred, confidence: call.compactionConfidence, basis: call.compactionBasis }]
+      : call.lands ? [{ type: 'compaction-landed', step: null, streamId: kind, from: call.evictedFrom, to: call.evictedTo }] : [];
     emit(k, S, call, ev, [], x.nu || {});
     return S;
   }
