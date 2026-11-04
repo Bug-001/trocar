@@ -239,7 +239,7 @@ async function background() {
             // a head under the name its pending does not say (one written before the names did) is put under the right one: the daemon
             // tells a folding head by its name only, so a misnamed one would never be followed (3.5 §谁执行它「答案文件」)
             const misnamed = d && d.pending && !d.pending.stopped && nodeFs.existsSync(headFile(home, id))
-            const head = d && d.tier === 0 && d.meta.title !== said.title ? { ...tier0Doc(id, ms, index.errors, said), pending: d.pending } // a stop stays the session's record (D38)
+            const head = d && d.tier === 0 && (d.meta.title !== said.title || (d.meta.title_source ?? null) !== (said.title_source ?? null)) ? { ...tier0Doc(id, ms, index.errors, said), pending: d.pending } // a stop stays the session's record (D38)
               : misnamed ? d : hasHead(home, id) ? null : tier0Doc(id, ms, index.errors, said)
             if (head && writeHead(home, id, head)) wrote++
           }

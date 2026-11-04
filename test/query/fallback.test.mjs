@@ -107,6 +107,16 @@ const folding = () => {
   return { home, id: s.id }
 }
 
+test('3.5 归约前沿: only `session` waits: a `lane` with pending is printed at once, one ask', async () => {
+  const { home, id } = folding(), body = { lane: 'L', base: null, mark: 'm1', pending: { done: 1, total: 9, work: 3, calls: 2 }, steps: [] }
+  let asked = 0
+  const p = await plane({ routes: { 'GET /query': answering(() => { asked++; return [200, body] }) } })
+  try {
+    const got = await queryDocument('lane', { id, lane: 'L' }, { home, dir: p.dir, platform: 'darwin', deadlineMs: DEADLINE })
+    assert.deepEqual([JSON.parse(got.text), got.via, asked], [body, 'daemon', 1])
+  } finally { await p.stop() }
+})
+
 test('3.5 #30: a fold that stops moving (`done` and `work` frozen) is folded here after deadlineMs — the same document, and said', async () => {
   const { home, id } = folding()
   const pending = { base: null, mark: 'm1', pending: { done: 1, total: 9, work: 3 }, calls: [] }

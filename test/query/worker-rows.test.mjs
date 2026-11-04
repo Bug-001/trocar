@@ -10,7 +10,7 @@ import { createQueryService } from '../../src/query/service.mjs'
 import { indexDir } from '../../src/query/index-build.mjs'
 import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
 import { hasHead, headFile, readHead, tier0Doc, writeHead } from '../../src/query/ctx-files.mjs'
-import { TITLE_BUDGET_MS, titlesFile } from '../../src/query/titles.mjs'
+import { TITLE_BUDGET_MS, titleOf, titlesFile } from '../../src/query/titles.mjs'
 import { workerFork, workerForkIn } from '../helpers/worker-fork.mjs'
 import { within } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -192,6 +192,20 @@ test('3.5 #42: a page whose titles run past the budget is answered 102 by the re
     assert.equal(status, 200)
     assert.ok(frames.again > 0, 'it said ask again')
     assert.deepEqual(doc.sessions.map((s) => s.title_source), ['wire', 'wire'])
+  } finally { svc.stop() }
+})
+
+test('3.5 §谁执行它: a tier-0 head whose title_source alone differs from the table is brought to it, its pending kept', async () => {
+  const { home, members, open, svc } = await gated()
+  try {
+    const said = titleOf({ home, id: A, members: members.get(A) })
+    assert.equal(said.title_source, 'wire')
+    const doc = tier0Doc(A, members.get(A), [], { title: said.title, title_source: 'unread' })
+    writeHead(home, A, doc)
+    open()
+    svc.sweep()
+    await until(() => readHead(home, A).meta.title_source === 'wire', 'the sweep wrote it')
+    assert.deepEqual(readHead(home, A).pending, doc.pending)
   } finally { svc.stop() }
 })
 
