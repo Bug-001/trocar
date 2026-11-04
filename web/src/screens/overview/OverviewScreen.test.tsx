@@ -16,6 +16,9 @@ import { ALIASES, HARNESS_ORDER, harnessKey } from '../../../legacy/core/chips.m
 import * as W from '../../../legacy/labels/overview.mjs'
 import { ConfirmProvider } from '../../ui/Confirm'
 import OverviewScreen from './OverviewScreen'
+import type { ScreenProps } from '../../ScreenOutlet'
+
+const router = {} as ScreenProps['router'] // these screens write nothing to the route
 
 const nodeFs = 'node:fs' // the web tsconfig carries no node types; the test reads the spec through a plain dynamic import
 const { readFileSync } = (await import(/* @vite-ignore */ nodeFs)) as { readFileSync: (p: string, enc: string) => string }
@@ -99,7 +102,7 @@ const hold = <V,>(ms: number, v: V) => new Promise<V>((res) => setTimeout(() => 
 
 function mount(hash = '#/overview') {
   client = new QueryClient()
-  const ui = (h: string) => <QueryClientProvider client={client}><ConfirmProvider><OverviewScreen route={parseHash(h)} /></ConfirmProvider></QueryClientProvider>
+  const ui = (h: string) => <QueryClientProvider client={client}><ConfirmProvider><OverviewScreen route={parseHash(h)} router={router} /></ConfirmProvider></QueryClientProvider>
   const r = render(ui(hash))
   const c = r.container
   const region = (name: string) => within(c).queryByRole('region', { name })

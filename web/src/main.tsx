@@ -25,7 +25,6 @@ import { Sidebar } from './shell/Sidebar'
 
 // every screen of every route (core/router.mjs): the legacy ones here, the React ones in REACT_SCREENS
 const SCREENS = {
-  library: () => import('../legacy/library/library.mjs'),
   replay: () => import('../legacy/replay/replay.mjs'),
   'session-link': () => import('../legacy/replay/session-link.mjs'),
   traffic: () => import('../legacy/traffic/traffic.mjs'),
@@ -34,6 +33,7 @@ const SCREENS = {
 const REACT_SCREENS: Record<string, LazyScreen> = {
   overview: lazyScreen(() => import('./screens/overview/OverviewScreen')),
   capture: lazyScreen(() => import('./screens/capture/CaptureScreen')),
+  library: lazyScreen(() => import('./screens/library/LibraryScreen')),
   'capture-log': lazyScreen(() => import('./screens/capture/CaptureLogScreen')),
   'settings-storage': lazyScreen(() => import('./screens/settings/StorageScreen')),
   'settings-prices': lazyScreen(() => import('./screens/settings/PricesScreen')),
@@ -108,7 +108,7 @@ function Shell() {
     <aside id="sidebar"><Sidebar route={route} router={router} store={store} /></aside>
     <div id="content"><div id="screen">
       <div className="screenhost" ref={screenEl} style={{ display: 'contents' }} />
-      {isReact(route) ? <ScreenOutlet screen={REACT_SCREENS[route.screen]} name={route.screen} route={route} /> : null}
+      {isReact(route) ? <ScreenOutlet screen={REACT_SCREENS[route.screen]} name={route.screen} route={route} router={router} /> : null}
     </div></div>
     <LegacyScreen el={screenEl} router={router} ctx={ctx} screens={SCREENS} preloads={PRELOADS} />
   </>

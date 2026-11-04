@@ -51,7 +51,7 @@ async function driveEveryScreen(b, { width, theme }) {
   await nav(page, '#/sessions'); await page.waitForSelector('.lrow')
   await first('overview', '.ovcard .ovitem, .ovcard .ovempty', () => nav(page, '#/overview'))
   await first('library', '.lrow', () => nav(page, '#/sessions'))
-  await page.locator('.pagehead a', { hasText: 'All' }).first().click()
+  await page.locator('#libhead').getByRole('radio', { name: 'All' }).click()
   await page.waitForSelector('.lrow')
 
   // session open: click a row → its step head and context window drawn (D64①); five different rows
@@ -128,7 +128,7 @@ test('a screen change aborts the old screen\'s reads and the content is never bl
         held.add(route.request())
         await new Promise(() => {}) // never answered: only an abort from the page ends it
       })
-      await page.route(/\/assets\/library\.js$/, async (route) => { await libHeld; route.continue().catch(() => {}) })
+      await page.route(/\/assets\/LibraryScreen\.js$/, async (route) => { await libHeld; route.continue().catch(() => {}) })
     },
   })
   try {

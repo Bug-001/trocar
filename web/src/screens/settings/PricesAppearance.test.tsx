@@ -15,6 +15,9 @@ import { templateText } from '../../../legacy/settings/prices.mjs'
 import { fmtTime } from '../../../legacy/core/fmt.mjs'
 import PricesScreen from './PricesScreen'
 import AppearanceScreen from './AppearanceScreen'
+import type { ScreenProps } from '../../ScreenOutlet'
+
+const router = {} as ScreenProps['router'] // these screens write nothing to the route
 
 type Answer = { ok: boolean, status: number, data: unknown, error: string | null }
 const ok = (data: unknown): Answer => ({ ok: true, status: 200, data, error: null })
@@ -50,7 +53,7 @@ test('P1: a failed price read shows Retry with the reason only in the folded det
   let n = 0
   vi.spyOn(api, 'get').mockImplementation(async (name: string) => (name === 'pricing' ? pricing[Math.min(n++, pricing.length - 1)]() : NOT_FOUND))
   const control = vi.spyOn(api, 'control').mockImplementation(async () => ok({}))
-  const { container, findByRole } = wrap(<PricesScreen route={parseHash('#/settings/prices')} />)
+  const { container, findByRole } = wrap(<PricesScreen route={parseHash('#/settings/prices')} router={router} />)
 
   for (let i = 1; i <= 2; i++) {
     const retry = await findByRole('button', { name: W.RETRY })
@@ -75,7 +78,7 @@ test('P2: no unpriced card while overview is not there; each unpriced model copi
   let overview: Answer = NOT_FOUND, source = 'default'
   vi.spyOn(api, 'get').mockImplementation(async (name: string) => (name === 'pricing' ? ok({ source, models: MODELS }) : name === 'overview' ? overview : NOT_FOUND))
 
-  let page = wrap(<PricesScreen route={parseHash('#/settings/prices')} />)
+  let page = wrap(<PricesScreen route={parseHash('#/settings/prices')} router={router} />)
   await waitFor(() => expect(page.container.querySelector('table.ptable')).not.toBeNull())
   await waitFor(() => expect(vi.mocked(api.get).mock.calls.some(([nm]) => nm === 'overview')).toBe(true))
   expect(page.container.querySelector('.umodel')).toBeNull()
@@ -86,7 +89,7 @@ test('P2: no unpriced card while overview is not there; each unpriced model copi
   for (const src of ['/home/u/.trocar/pricing.json', 'default']) {
     source = src
     writeText.mockClear()
-    page = wrap(<PricesScreen route={parseHash('#/settings/prices')} />)
+    page = wrap(<PricesScreen route={parseHash('#/settings/prices')} router={router} />)
     await page.findByRole('heading', { name: W.CARD_UNPRICED })
     // the source line shows the file the table came from; the defaults say so instead of a path (§价格, 验收 16)
     const from = page.container.querySelector('.from')!
@@ -109,7 +112,7 @@ test('P3: every entry reads the price table again; a failed re-read keeps the la
   vi.spyOn(api, 'now').mockImplementation(() => now)
   vi.spyOn(api, 'get').mockImplementation(async (name: string) => (name === 'pricing' ? answer : NOT_FOUND))
   const client = new QueryClient() // one client for the board, as in main.tsx
-  const tree = () => <QueryClientProvider client={client}><PricesScreen route={parseHash('#/settings/prices')} /></QueryClientProvider>
+  const tree = () => <QueryClientProvider client={client}><PricesScreen route={parseHash('#/settings/prices')} router={router} /></QueryClientProvider>
   let r = render(tree())
   await waitFor(() => expect(r.container.querySelector('.readat')?.textContent).toContain(fmtTime(T1)))
   r.unmount()
@@ -126,14 +129,14 @@ test('A1: the theme choice starts from <html data-theme>, Space switches the att
   const route = parseHash('#/settings/appearance')
 
   document.documentElement.setAttribute('data-theme', 'dark')
-  let page = wrap(<AppearanceScreen route={route} />)
+  let page = wrap(<AppearanceScreen route={route} router={router} />)
   const dark = page.getByRole('radio', { name: W.THEME_DARK })
   expect(dark.getAttribute('aria-checked')).toBe('true')
   expect(dark.getAttribute('data-theme-choice')).toBe('dark')
   cleanup()
 
   document.documentElement.removeAttribute('data-theme')
-  page = wrap(<AppearanceScreen route={route} />)
+  page = wrap(<AppearanceScreen route={route} router={router} />)
   expect(page.getByRole('radio', { name: W.THEME_SYSTEM }).getAttribute('aria-checked')).toBe('true')
   const light = page.getByRole('radio', { name: W.THEME_LIGHT })
   await act(async () => { fireEvent.keyDown(light, { key: ' ' }); fireEvent.keyUp(light, { key: ' ' }) })

@@ -5,7 +5,9 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { loadSessions, rowModel } from '../../web/legacy/library/logic.mjs'
+import { loadSessions } from '../../web/legacy/library/logic.mjs'
+import { rowModel } from '../../web/src/screens/library/model.mjs'
+import { harnessKey, harnessName } from '../../web/legacy/core/chips.mjs'
 import { captureGap, fidelityFacts } from '../../web/legacy/replay/header.mjs'
 import { bodyCache, loadBody } from '../../web/legacy/replay/blocks.mjs'
 import { boardHome, serveBoard } from './real-face.mjs'
@@ -31,6 +33,8 @@ test('(1)(2) the library reads every page of `sessions`; a row\'s title fields a
     for (const s of whole.sessions) {
       const m = rowModel(s, Date.now())
       assert.equal(m.title, s.title); assert.equal(m.titleSource, s.title_source); assert.equal(m.untitled, s.title == null && s.title_source !== 'pending')
+      // the agent is the read side's id, named by the one chips table (1.8 #1); the call count is the answer's, absent → 0
+      assert.equal(m.harnessId, s.harness); assert.equal(m.harnessName, harnessName(harnessKey(s.harness))); assert.equal(m.calls, s.calls || 0)
       for (const [title, title_source] of [['t', 'wire'], [null, null], [null, 'pending']]) {
         const v = rowModel({ ...s, title, title_source }, Date.now())
         assert.equal(v.title, title); assert.equal(v.titleSource, title_source)

@@ -13,6 +13,9 @@ import * as W from '../../../legacy/labels/settings.mjs'
 import { fmtTime } from '../../../legacy/core/fmt.mjs'
 import { ConfirmProvider } from '../../ui/Confirm'
 import StorageScreen from './StorageScreen'
+import type { ScreenProps } from '../../ScreenOutlet'
+
+const router = {} as ScreenProps['router'] // these screens write nothing to the route
 
 const T = '2026-10-20T09:00:00Z'
 const CLASSES = Object.keys(CLASS_NAME)
@@ -61,10 +64,10 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); document.body.replaceChildren() })
 
 const settle = () => act(async () => { for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0)) })
-const page = (hash: string) => <QueryClientProvider client={new QueryClient()}><ConfirmProvider><StorageScreen route={parseHash(hash)} /></ConfirmProvider></QueryClientProvider>
+const page = (hash: string) => <QueryClientProvider client={new QueryClient()}><ConfirmProvider><StorageScreen route={parseHash(hash)} router={router} /></ConfirmProvider></QueryClientProvider>
 async function mount(hash = '#/settings/storage') {
   const client = new QueryClient()
-  const tree = (h: string) => <QueryClientProvider client={client}><ConfirmProvider><StorageScreen route={parseHash(h)} /></ConfirmProvider></QueryClientProvider>
+  const tree = (h: string) => <QueryClientProvider client={client}><ConfirmProvider><StorageScreen route={parseHash(h)} router={router} /></ConfirmProvider></QueryClientProvider>
   const r = render(tree(hash))
   await settle()
   return { ...r, go: async (h: string) => { r.rerender(tree(h)); await settle() } }
@@ -280,7 +283,7 @@ test('V9: every entry reads classes again; a cached document drawn on entry keep
   let now = T1
   vi.spyOn(api, 'now').mockImplementation(() => now)
   const client = new QueryClient() // one client for the board, as in main.tsx
-  const tree = () => <QueryClientProvider client={client}><ConfirmProvider><StorageScreen route={parseHash('#/settings/storage')} /></ConfirmProvider></QueryClientProvider>
+  const tree = () => <QueryClientProvider client={client}><ConfirmProvider><StorageScreen route={parseHash('#/settings/storage')} router={router} /></ConfirmProvider></QueryClientProvider>
   let r = render(tree())
   await settle()
   expect(document.querySelector('.readat')!.textContent).toContain(fmtTime(T1))

@@ -15,6 +15,7 @@ import { ConfirmProvider } from '../../ui/Confirm'
 import { HEALTH_READ } from '../../../legacy/labels/common.mjs'
 import CaptureScreen from './CaptureScreen'
 import CaptureLogScreen from './CaptureLogScreen'
+import type { ScreenProps } from '../../ScreenOutlet'
 
 const nodeFs = 'node:fs' // the web tsconfig carries no node types; the test reads the spec through a plain dynamic import
 const { readFileSync } = (await import(/* @vite-ignore */ nodeFs)) as { readFileSync: (p: string, enc: string) => string }
@@ -80,7 +81,7 @@ async function mount(hash = '#/capture', Screen = CaptureScreen) {
   new MutationObserver((ms) => { for (const m of ms) for (const n of m.addedNodes) if ((n as Element).classList?.contains('toast')) made++ }).observe(toasts, { childList: true })
   const client = new QueryClient()
   const { container } = render(
-    <QueryClientProvider client={client}><ConfirmProvider><Screen route={parseHash(hash)} /></ConfirmProvider></QueryClientProvider>,
+    <QueryClientProvider client={client}><ConfirmProvider><Screen route={parseHash(hash)} router={{} as ScreenProps['router']} /></ConfirmProvider></QueryClientProvider>,
   )
   await settle()
   const row = (id: string) => container.querySelector<HTMLElement>(`.crow[data-h="${id}"]`)!

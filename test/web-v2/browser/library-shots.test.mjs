@@ -55,10 +55,10 @@ const layout = (page) => page.evaluate(() => {
     hscroll: document.documentElement.scrollWidth > document.documentElement.clientWidth || document.body.scrollWidth > innerWidth,
     untitled: [...document.querySelectorAll('#content *')].filter((e) => e.getClientRects().length && getComputedStyle(e).textOverflow === 'ellipsis' && e.scrollWidth > e.clientWidth + 0.5 && !e.closest('[title]'))
       .map((e) => `${e.className}: ${e.textContent.slice(0, 40)}`),
-    segs: document.querySelectorAll('#content .seg').length,
-    segInHead: document.querySelectorAll('#libhead .seg').length,
+    segs: document.querySelectorAll('#content [role=radiogroup]').length,
+    segInHead: document.querySelectorAll('#libhead [role=radiogroup]').length,
     // the head's words besides its read-at time and the window control's own options; the tool row as drawn (menus closed)
-    headText: txt(head).replace(txt(ra), '').replace(txt(head && head.querySelector('.seg')), ''),
+    headText: txt(head).replace(txt(ra), '').replace(txt(head && head.querySelector('[role=radiogroup]')), ''),
     toolText: document.querySelector('.libtools').innerText,
     hiddenNames: [...document.querySelectorAll('.lrow .lhn')].filter((e) => !e.getClientRects().length || e.getBoundingClientRect().width < 1).length,
   }
@@ -95,35 +95,55 @@ test('(14) at 800 px the page does not scroll sideways and every agent name is v
   } finally { await b.stop() }
 })
 
-test('(13) keys: ↑/↓ move the highlight, / focuses search, nothing fires while typing, Enter opens the replay', { skip }, async () => {
+test('(13) keys: ↑/↓ move the highlight, / focuses search, nothing fires while typing, Enter opens the replay, Back lands on that row', { skip }, async () => {
   const b = await withBoard({ bytes: BYTES, chromium: gate.chromium })
   const { page } = b
   const sel = () => page.evaluate(() => new URLSearchParams(location.hash.split('?')[1] || '').get('sel'))
   try {
     await go(page, '#/sessions', '.lrow')
-    await page.click('#content .pagehead'); await page.keyboard.press('ArrowDown'); await page.keyboard.press('ArrowDown')
+    await page.locator('#libhead').getByRole('heading').click(); await page.keyboard.press('ArrowDown'); await page.keyboard.press('ArrowDown')
     // the URL follows the highlight within the writer's gap (1.2 §路由: the last value lands), not in the same task
     await page.waitForFunction(() => { const r = document.querySelector('.lrow.sel'); return !!r && new URLSearchParams(location.hash.split('?')[1] || '').get('sel') === r.dataset.key })
     const moved = await sel()
     await page.keyboard.press('/')
-    assert.equal(await page.evaluate(() => document.activeElement && document.activeElement.id), 'libq')
+    assert.equal(await page.getByRole('searchbox', { name: 'Search sessions' }).evaluate((e) => e === document.activeElement), true)
     await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter')
     assert.equal(await sel(), moved); assert.match(await page.evaluate(() => location.hash), /^#\/sessions/)
-    await page.click('#content .pagehead'); await page.keyboard.press('Enter')
+    await page.locator('#libhead').getByRole('heading').click(); await page.keyboard.press('Enter')
     await page.waitForFunction(() => location.hash.startsWith('#/replay/'))
+    // Back returns to the opened row: highlighted and inside the list's box (1.8 #13)
+    await page.goBack()
+    await page.waitForFunction((k) => { const r = document.querySelector(`.lrow[data-key="${CSS.escape(k)}"]`); return !!r && r.getAttribute('aria-current') === 'true' }, moved, { timeout: 15000 })
+    const box = await page.evaluate((k) => {
+      const r = document.querySelector(`.lrow[data-key="${CSS.escape(k)}"]`).getBoundingClientRect(), l = document.querySelector('#liblist').getBoundingClientRect()
+      return r.top >= l.top - 0.5 && r.bottom <= l.bottom + 0.5 && r.left >= l.left - 0.5 && r.right <= l.right + 0.5
+    }, moved)
+    assert.equal(box, true, 'the opened row is inside the list')
     assert.deepEqual(b.errors, [])
   } finally { await b.stop() }
 })
 
-test('(9)(10) a failed read keeps the old list with retry; the empty state reads /api/status once while sessions polls', { skip }, async () => {
+test('(9)(10) a failed read keeps the old list with Retry and its reason out of sight; with no list the empty state has Retry; status is read once', { skip }, async () => {
   const b = await withBoard({ bytes: BYTES, chromium: gate.chromium })
   const { page } = b
+  const TOKEN = `reason-${process.pid}-${Date.now()}` // the server's `error` (1.5 K-29: only in the collapsed technical details)
+  const fail = (r) => r.fulfill({ status: 500, json: { error: TOKEN } })
+  const visible = () => page.locator('#content').innerText()
   try {
-    await go(page, '#/sessions', '.lrow')
-    await page.route('**/api/sessions?**', (r) => r.fulfill({ status: 500, json: { error: 'boom' } }))
-    await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange'))) // coming back to a visible page reads at once
-    await page.waitForSelector('#libcap [data-act="retry"]', { timeout: 10000 })
+    // no list yet: the failed read is the whole page, with Retry and without the reason in sight (1.8 #9)
+    await page.route('**/api/sessions?**', fail)
+    await go(page, '#/sessions', '.libempty')
+    await page.locator('.libempty').getByRole('button', { name: 'Retry' }).waitFor({ timeout: 10000 })
+    assert.ok(!(await visible()).includes(TOKEN), 'the reason is not in the visible text')
+    await page.unroute('**/api/sessions?**')
+    await page.locator('.libempty').getByRole('button', { name: 'Retry' }).click()
+    await page.waitForSelector('.lrow', { timeout: 15000 })
+    // a list on screen: a failed re-read keeps it, says so in the caption with Retry, the reason still out of sight
+    await page.route('**/api/sessions?**', fail)
+    await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange', { bubbles: true }))) // coming back to a visible page reads at once
+    await page.locator('#libcap').getByRole('button', { name: 'Retry' }).waitFor({ timeout: 10000 })
     assert.ok(await page.locator('.lrow').count() > 0, 'the old list stays')
+    assert.ok(!(await visible()).includes(TOKEN), 'the reason is not in the visible text')
     await page.unroute('**/api/sessions?**')
     await page.route('**/api/sessions?**', (r) => r.fulfill({ json: EMPTY }))
     await go(page, '#/settings/appearance', '[data-theme-choice]'); await page.waitForLoadState('networkidle') // a screen that reads no status
