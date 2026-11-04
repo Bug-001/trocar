@@ -251,7 +251,7 @@ const frontiers = new Map();
 // The store's notes that are D38 records besides (4.3 盘满): the worker passes `ctx.persist`, which sends each to the daemon. The store
 // says each once per episode, so one episode is one record.
 const PERSISTED = new Set(['projection-write-failed']);
-const persisted = (ctx, errors) => { if (ctx.persist) for (const e of errors) if (PERSISTED.has(e.code)) ctx.persist(e); };
+const persisted = (ctx, errors, id) => { for (const e of errors) if (PERSISTED.has(e.code)) saidOnce(ctx, id, e); };
 // A request's slice of extraction and of folding (3.5 后台抽取与归约).
 const SLICE_MS = 50;
 
@@ -484,7 +484,7 @@ async function advance(ctx, id, { budgetMs, request }) {
   const ex = extractMembers({ store, members, recordsAt: read, sessionId: id, budgetMs: request ? budgetMs : Math.max(1, budgetMs / 2 - (performance.now() - t0)), errors: exErrors, from });
   passed(planOf(members, k, store, id), ex.done);
   store.work += store.rows.size - had;
-  persisted(ctx, exErrors);
+  persisted(ctx, exErrors, id);
   errors.push(...exErrors);
   // a background slice: extraction has half of it, the fold at least the other half, so the frontier moves from the first slice
   const foldMs = request ? budgetMs : Math.max(budgetMs / 2, budgetMs - (performance.now() - t0));
@@ -640,13 +640,16 @@ function toState(ctx, s, deadline = Infinity) {
   try { s.files = writeFiles({ home: ctx.home ?? trocarHome(), fs: ctx.fs || nodeFs }, s, deadline); } catch (e) { forget(s.V.log); writeFailed(ctx, s.id, e); return true; }
   return s.files != null;
 }
-// An answer file or head that could not be written is a D38 record once per episode of a session, whatever turn tried it; a whole write ends
-// the episode (3.5 §访问模式「版本变更的重读」②).
+// What could not be written of a session, its store or an answer file or head, is one D38 record per episode, whatever turn tried it; a whole
+// write of the answer files ends the episode (3.5 §访问模式「版本变更的重读」②).
 const writeFails = new Set();
-function writeFailed(ctx, id, e) {
+function saidOnce(ctx, id, record) {
   if (writeFails.has(id)) return;
   writeFails.add(id);
-  ctx.persist?.({ where: 'projection', code: 'projection-write-failed', reason: `The answer files of session ${id} could not be written (${String((e && (e.code || e.message)) || e).split('\n')[0]}); its old answer stands and the next turn tries again.` });
+  ctx.persist?.(record);
+}
+function writeFailed(ctx, id, e) {
+  saidOnce(ctx, id, { where: 'projection', code: 'projection-write-failed', reason: `The answer files of session ${id} could not be written (${String((e && (e.code || e.message)) || e).split('\n')[0]}); its old answer stands and the next turn tries again.` });
 }
 /** headOf(ctx, s) → the session's `session --head` document: tier 1 at its mark, tier 0 while it has none (ctx-files.mjs), the same bytes
  *  here and in the worker: the title is a function of the disk. */
