@@ -11,8 +11,8 @@ import { HALF } from '../../../legacy/core/icons.mjs'
 import * as W from '../../../legacy/labels/replay.mjs'
 import * as C from '../../../legacy/labels/cells.mjs'
 import {
-  CELL_CAP, blobFor, byteKey, clipLine, copyText, entryOf, fillNode, gotOf, grow, headNote, idle, loadBody, modeOf, offsetIn, onModeChange,
-  onlyMode, rawTip, say, setMode, viewIn, watcher,
+  CELL_CAP, blobFor, byteKey, clipLine, copyText, entryOf, fillNode, gotOf, grow, headNote, idle, loadBody, modeOf, noteOpened, offsetIn, onModeChange,
+  onlyMode, rawTip, reopen, say, setMode, viewIn, watcher,
 } from '../../../legacy/replay/cell.mjs'
 
 type Mode = 'raw' | 'read'
@@ -81,7 +81,9 @@ function Shown({ cell, mode, got, api, bar }: { cell: CellModel, mode: Mode, got
   const live = useRef({ cell, mode, got, cur })
   useLayoutEffect(() => { live.current = { cell, mode, got, cur } })
   const onSet = (el: HTMLElement) => {
-    mediaIn(el, cell, viewIn(cell, got))
+    const view = viewIn(cell, got)
+    mediaIn(el, cell, view)
+    if (mode === 'read') reopen(el, cell, view)
     setHeld((h) => (h.k === k && h.shown === e.shown && h.next === e.next ? h : { k, shown: e.shown, next: e.next }))
   }
 
@@ -97,6 +99,7 @@ function Shown({ cell, mode, got, api, bar }: { cell: CellModel, mode: Mode, got
       if (en.shown !== cur.shown) lf.innerHTML = inner(mode, en.body)
       else { const g = grow(cell, mode, en, got); lf.insertAdjacentHTML('beforeend', g.html); en = g.entry }
       mediaIn(lf, cell, view)
+      if (mode === 'read') reopen(lf, cell, view)
       setHeld({ k: cur.k, shown: en.shown, next: en.next })
     })
     sentinels().observe(el)
@@ -120,8 +123,10 @@ function Shown({ cell, mode, got, api, bar }: { cell: CellModel, mode: Mode, got
     ev.clipboardData.setData('text/plain', String(got.text ?? '').slice(offsetIn(pre, r.startContainer, r.startOffset), offsetIn(pre, r.endContainer, r.endOffset)))
     ev.preventDefault()
   }
-  const onClick = (ev: MouseEvent) => { // a media cell's save action, inside the Readable markup
-    const save = (ev.target as Element).closest?.<HTMLElement>('[data-cellsave]'), u = save && blobFor(cell, viewIn(cell, got), save)
+  const onClick = (ev: MouseEvent) => { // inside the Readable markup: a node the reader opens, a media cell's save action
+    const t = ev.target as Element
+    noteOpened(cell.bid, t)
+    const save = t.closest?.<HTMLElement>('[data-cellsave]'), u = save && blobFor(cell, viewIn(cell, got), save)
     if (u) { const a = document.createElement('a'); a.href = u; a.download = ''; a.click() }
   }
 
