@@ -11,7 +11,7 @@
 // the kept ledgers, LEDGER_BYTES): an answer reads the lines of the steps it covers and of the steps the replay goes over. The ledger
 // entries an answer owes go in key order into the room its page leaves; the rest are named by `ledger_next`, a cursor `--ledger`
 // goes on from (3.5 `resources` 与 `seen`).
-import { sessionState, markOn, files, version as sessionVersion } from './session.mjs';
+import { sessionState, markOn, files, rereading, version as sessionVersion } from './session.mjs';
 import { listOf, laneLedger, ledgerWeight, LEDGER_BYTES } from '../../view/reduce.mjs';
 import { lru } from '../projection.mjs';
 import { inheritedRender } from '../../view/render-kind.mjs';
@@ -19,7 +19,7 @@ import { PAGE_BYTES, laneOf, placeIn } from '../session-doc.mjs';
 import { compareStep } from '../../view/step-order.mjs';
 import { QueryArgError } from './index.mjs';
 import nodeFs from 'node:fs';
-import { renderSpan, sealedOf, tailFile } from '../ctx-files.mjs';
+import { listedText, renderSpan, sealedOf, tailFile } from '../ctx-files.mjs';
 import { trocarHome } from '../../paths.mjs';
 
 export const about = Object.freeze({
@@ -277,7 +277,8 @@ export async function run(ctx) {
 }
 
 // `--pack <n>.<part>` / `--tail <part>` (3.5 §会话读): the NDJSON text of a sealed pack or of the open tail, as `{$text}` (named/index.mjs
-// runQuery hands it on as the answer's bytes). Both render from the state (ctx-files.mjs renderSpan); the worker's tail is its file.
+// runQuery hands it on as the answer's bytes). Both render from the state (ctx-files.mjs renderSpan); the worker's tail is its file, and
+// during a re-read so is every file the head on disk lists, whatever the frontier: it answers the head's tags.
 async function fileAnswer(ctx, id, others) {
   const { pack, tail } = ctx.params;
   if (others || (pack != null && tail != null)) throw new QueryArgError('trocar query lane: --pack and --tail go with --id only, one of them at a time');
@@ -285,7 +286,9 @@ async function fileAnswer(ctx, id, others) {
   if (!m) throw new QueryArgError(pack != null ? 'trocar query lane: --pack takes <n>.<part>: a pack number, a dot, and main or rest' : 'trocar query lane: --tail takes main or rest');
   const st = await sessionState(ctx, id);
   if (!st) { ctx.errors.push({ where: `session/${id}`, code: 'session-unknown', reason: 'no session with this id among the captured records' }); return {}; }
-  const sealed = sealedOf(st), part = m[2];
+  const part = m[2], listed = rereading(ctx, id) ? listedText(ctx.home ?? trocarHome(), id, pack == null ? null : Number(m[1]), part, ctx.fs || nodeFs) : null;
+  if (listed != null) return { $text: listed };
+  const sealed = sealedOf(st);
   files(ctx, st); // the worker's files at this state
   if (pack == null) {
     if (ctx.writer === true && st.files) try { return { $text: (ctx.fs || nodeFs).readFileSync(tailFile(ctx.home ?? trocarHome(), id, part), 'utf8') }; } catch { /* rendered */ }
