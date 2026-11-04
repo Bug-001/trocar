@@ -510,6 +510,52 @@ test('AN21: text that is not UTF-8 is refused, in a file, a title and a body', (
   assert.deepEqual(of(doc, 'shape').filter((f) => !f.where.includes(':')).map((f) => f.where).sort(), ['body', 'title'])
 })
 
+test('AN21: what is judged is the object that leaves, not a view of it', () => {
+  const planted = 'zorgon7'
+  const seen = (w, o = {}) => named(w.check({ env: { USER: planted }, ...o }).doc, 'identity')
+
+  const replaced = workspace()
+  replaced.commit({ 'a.txt': `${planted}\n` }, `about ${planted}\n\nThe reason.\n`)
+  const real = replaced.git(['rev-parse', 'HEAD']).trim()
+  replaced.git(['checkout', '-q', 'base'])
+  replaced.git(['checkout', '-q', '-b', 'decoy'])
+  replaced.commit({ 'a.txt': 'clean\n' })
+  const decoy = replaced.git(['rev-parse', 'HEAD']).trim()
+  replaced.git(['checkout', '-q', 'work'])
+  replaced.git(['replace', real, decoy])
+  assert.deepEqual(seen(replaced), ['a.txt'], 'git replace')
+
+  const relative = workspace()
+  relative.commit({ 'top.txt': `${planted}\n`, 'sub/inner.txt': 'clean\n' })
+  relative.git(['config', 'diff.relative', 'true'])
+  assert.deepEqual(seen(relative, { cwd: path.join(relative.dir, 'sub') }), ['top.txt'], 'diff.relative')
+
+  const headed = workspace()
+  headed.commit({ 'a.txt': 'clean\n' })
+  const object = headed.git(['cat-file', 'commit', 'HEAD']).replace('\n\n', `\nx-note ${planted}\n\n`)
+  const sha = spawnSync('git', ['hash-object', '-t', 'commit', '-w', '--stdin', '--literally'], { cwd: headed.dir, env: headed.env, input: object }).stdout.toString().trim()
+  headed.git(['update-ref', 'refs/heads/work', sha])
+  const report = headed.check({ env: { USER: planted } }).doc
+  assert.equal(of(report, 'identity').filter((f) => f.where.endsWith(':message')).length, 1, 'a header git log does not print')
+})
+
+test('AN21: a signature is compared and not taken for a credential', () => {
+  const w = workspace()
+  w.commit({ 'a.txt': 'clean\n' })
+  const signature = ['gpgsig -----BEGIN PGP SIGNATURE-----', ' ', ...folded(noise(300).toString('base64'), 64).split('\n').map((row) => ` ${row}`), ' -----END PGP SIGNATURE-----'].join('\n')
+  const signed = (extra) => {
+    const object = w.git(['cat-file', 'commit', 'work']).replace(/\n\n/, `\n${signature}${extra}\n\n`)
+    return spawnSync('git', ['hash-object', '-t', 'commit', '-w', '--stdin', '--literally'], { cwd: w.dir, env: w.env, input: object }).stdout.toString().trim()
+  }
+  const plain = signed('')
+  w.git(['update-ref', 'refs/heads/work', plain])
+  assert.equal(w.check().code, 0)
+  const text = ascii(60, 1)
+  capture(w, SEGMENT, [line(NOW_THEN, text)])
+  w.git(['update-ref', 'refs/heads/work', signed(`\n ${text}`)])
+  assert.equal(of(w.check().doc, 'captured-text').length, 1)
+})
+
 test('a rename, a mode change and an awkward name are read as themselves', () => {
   const w = workspace({ 'old.txt': lines(500), 'run.sh': 'x\n' })
   w.git(['mv', 'old.txt', 'new.txt'])
