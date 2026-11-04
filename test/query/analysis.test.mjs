@@ -8,6 +8,7 @@ import path from 'node:path'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
 import { runQuery, QueryArgError } from '../../src/query/named/index.mjs'
+import { ANALYSIS_PAGE_BYTES } from '../../src/query/named/analysis.mjs'
 
 const CONTRACT = JSON.parse(fs.readFileSync(new URL('../fixtures/session-read-contract.json', import.meta.url), 'utf8'))
 const homeOf = () => path.join(tmpDir('trocar-analysis-'), '.trocar')
@@ -42,13 +43,25 @@ function writeSession(home, steps, id = ID) {
   fs.writeFileSync(path.join(home, 'raw', '20261022T100000Z.ndjson'), `${lines.join('\n')}\n`)
 }
 const analysis = (home, env, ctx = {}, id = ID) => runQuery('analysis', { id }, { home, fs, env, ...ctx })
+const windowOf = (home, env, p, id = ID, ctx = {}) => runQuery('analysis', { id, ...p }, { home, fs, env, ...ctx })
+const NOT_A_STEP = 'not-a-step'
+/** The session's windows from the tail back along `prev`, first page first, and what they hold together. */
+async function walked(home, env, id = ID) {
+  const pages = []
+  for (let w = await windowOf(home, env, { from: NOT_A_STEP }, id); ; w = await windowOf(home, env, { to: w.prev }, id)) {
+    assert.deepEqual(w.errors, [])
+    pages.unshift(w)
+    if (w.prev == null) break
+  }
+  return { pages, rids: pages.flatMap((w) => Object.keys(w.usd)), usd: Object.assign({}, ...pages.map((w) => w.usd)), breaks: pages.flatMap((w) => w.breaks) }
+}
 const session = (home, params, ctx = {}) => runQuery('session', params, { home, fs, ...ctx })
 async function worldOf(steps, prices) {
   const home = homeOf(), env = envOf(prices)
   writeSession(home, steps)
   const doc = await analysis(home, env), { calls, lanes } = await session(home, { id: ID })
   assert.deepEqual(doc.errors, [])
-  return { home, env, doc, rid: calls.map((r) => r.rid), calls, lanes }
+  return { home, env, doc, win: await walked(home, env), rid: calls.map((r) => r.rid), calls, lanes }
 }
 
 // Main: 0 first, 1 reused, 2 failed, 3 a reordered tool list against 1. Subagent: 4. Background: 5, by a family key. Token count: 6.
@@ -62,8 +75,8 @@ const MIXED = [
   { n: 1, endpoint: '/v1/messages/count_tokens' },
 ]
 
-test('3.5 #48 totals: main, subagent, background and a token count by hand; the three buckets sum to the total; the usd table says each step', async () => {
-  const { doc, rid, calls } = await worldOf(MIXED)
+test('3.5 #48 totals: main, subagent, background and a token count by hand; the three buckets sum to the total; the windows say each step', async () => {
+  const { doc, win, rid, calls } = await worldOf(MIXED)
   const { cost, hit, hitSteps, cacheUnknown, failed, unpricedSteps } = doc.totals
   near(cost.main.usd, (5050 + 1900 + 4100) / 1e6, 'main')
   assert.deepEqual([cost.main.priced, cost.main.unpriced, cost.main.failed, cost.main.approx], [3, 0, 1, 0])
@@ -74,54 +87,60 @@ test('3.5 #48 totals: main, subagent, background and a token count by hand; the 
   near(cost.total.usd, cost.main.usd + cost.sub.usd + cost.bg.usd, 'total')
   assert.deepEqual([cost.total.priced, cost.total.unpriced, cost.total.failed, cost.total.approx, cost.total.approxKeys], [5, 0, 1, 1, ['fam']])
   assert.equal(calls.length, 6, 'a token count is no call')
-  assert.deepEqual(rid.map((r) => doc.usd[r]), [5050, 1900, null, 4100, 580, 1200])
-  assert.deepEqual(Object.keys(doc.usd), rid, 'one entry per row, in step order')
+  assert.deepEqual(rid.map((r) => win.usd[r]), [5050, 1900, null, 4100, 580, 1200])
+  assert.deepEqual(win.rids, rid, 'one entry per row, in step order')
   assert.equal(hit, 1100 / 3500, 'the main lane, token-weighted')
   assert.equal(hitSteps, 3)
   assert.equal(cacheUnknown, false)
   assert.equal(failed, 1)
   assert.equal(unpricedSteps, 0)
   assert.deepEqual(doc.pricing.models, [{ model: 'fam-2', key: 'fam', exact: false }, { model: 'm-a', key: 'm-a', exact: true }])
-  assert.equal(doc.totals.breaks.length, 1)
-  assert.equal(doc.totals.breaks[0].rid, rid[3])
-  near(doc.totals.breaks[0].usd, (1000 + 200 - 100) * (4 - 0.5) / 1e6, 'the break')
-  assert.equal(doc.totals.breaks[0].why, null)
-  near(doc.totals.breakCost.usd, doc.totals.breaks[0].usd)
+  assert.equal(win.breaks.length, 1)
+  assert.equal(win.breaks[0].rid, rid[3])
+  near(win.breaks[0].usd, (1000 + 200 - 100) * (4 - 0.5) / 1e6, 'the break')
+  assert.equal(win.breaks[0].why, null)
+  near(doc.totals.breakCost.usd, win.breaks[0].usd)
   assert.deepEqual([doc.totals.breakCost.counted, doc.totals.breakCost.uncomputable, doc.totals.breakCost.worst.rid], [1, 0, rid[3]])
 })
 
-test('3.5 #48 pages: the totals are the sum over every --before page, and no --limit moves them', async () => {
+test('3.5 #48 pages: the totals are the sum over every --before page and over the windows, and no --limit moves them', async () => {
   const home = homeOf(), env = envOf({ 'claude-opus-4-8': [1, 2, 3, 4] })
   const s = bigSession({ home, growth: 300, subEvery: 3, failEvery: 5 })
-  s.append(60)
+  const CALLS = 60
+  s.append(CALLS)
   const rows = []
   for (let page = await session(home, { id: s.id, limit: '7' }); ; page = await session(home, { id: s.id, limit: '7', before: page.calls[0].rid })) {
     rows.unshift(...page.calls)
-    assert.ok(page.calls.length < 60)
+    assert.ok(page.calls.length < CALLS)
     if (!page.more) break
   }
-  assert.equal(rows.length, 60)
+  assert.equal(rows.length, CALLS)
   const { lanes } = await session(home, { id: s.id }), kind = new Map(lanes.map((l) => [l.lane, l.kind]))
   const sum = (bucket) => rows.filter((r) => !r.error && kind.get(r.lane) === bucket).reduce((n, { usage: u }) => n + u.fresh + 2 * u.out + 3 * u.create + 4 * u.read, 0)
   const doc = await analysis(home, env, {}, s.id)
   near(doc.totals.cost.main.usd, sum('main') / 1e6, 'main')
   near(doc.totals.cost.sub.usd, sum('subagent') / 1e6, 'sub')
-  assert.equal(doc.totals.cost.total.priced + doc.totals.cost.total.failed, 60)
+  assert.equal(doc.totals.cost.total.priced + doc.totals.cost.total.failed, CALLS)
   assert.ok(doc.totals.failed > 0)
-  assert.deepEqual(Object.keys(doc.usd), rows.map((r) => r.rid))
+  const win = await walked(home, env, s.id), micro = Object.values(win.usd).reduce((n, v) => n + (v ?? 0), 0)
+  assert.deepEqual(win.rids, rows.map((r) => r.rid))
+  assert.ok(Math.abs(micro / 1e6 - doc.totals.cost.total.usd) <= CALLS * 0.5e-6, 'the table rounds each step to a microdollar')
   assert.deepEqual(await runQuery('analysis', { id: s.id }, { home, fs: { ...fs }, env }), doc, 'a process that read no page answers the same')
 })
 
 test('3.5 #48 at the mark: an answer with pending counts the members at or below the mark, and says pending', async () => {
   const home = homeOf(), env = envOf({ 'claude-opus-4-8': [1, 2, 3, 4] })
   const s = bigSession({ home, growth: 4_000, subEvery: 3, compactAt: 40_000, subLanes: 3, late: 2 })
-  s.append(160)
+  const CALLS = 160
+  s.append(CALLS)
   const own = { ...fs }
   let doc, partial = 0
   for (let i = 0; i < 400; i++) {
     doc = await runQuery('analysis', { id: s.id }, { home, fs: own, env, writer: true })
     if (!doc.pending) break
     partial++
+    assert.equal(doc.ok, true, 'pending is no error')
+    assert.deepEqual(doc.errors, [])
     if (partial > 6) continue // each compared answer reads a home of its own
     const at = homeOf()
     fs.mkdirSync(path.join(at, 'raw'), { recursive: true })
@@ -133,16 +152,16 @@ test('3.5 #48 at the mark: an answer with pending counts the members at or below
   }
   assert.ok(partial > 0, 'the worker\'s slices left members above the frontier at least once')
   assert.equal(doc.pending, undefined)
-  assert.equal(Object.keys(doc.usd).length, 160)
+  assert.equal(doc.totals.cost.total.priced + doc.totals.cost.total.failed + doc.totals.cost.total.unpriced, CALLS)
 })
 
 test('3.5 #48 unknown: no usage and no price are null in the table and count as unpriced, never $0', async () => {
-  const { doc, rid } = await worldOf([
+  const { doc, win, rid } = await worldOf([
     { n: 1, u: [100, 0, 0, 0] },
     { n: 2 },
     { n: 3, u: [100, 0, 0, 0], model: 'zz-nobody' },
   ])
-  assert.deepEqual(rid.map((r) => doc.usd[r]), [300, null, null])
+  assert.deepEqual(rid.map((r) => win.usd[r]), [300, null, null])
   assert.deepEqual([doc.totals.cost.total.priced, doc.totals.cost.total.unpriced, doc.totals.unpricedSteps], [1, 2, 2])
   assert.deepEqual(doc.pricing.models.find((m) => m.model === 'zz-nobody'), { model: 'zz-nobody', key: null, exact: false })
   assert.equal(doc.totals.cost.sub.usd, null, 'an empty bucket has no sum')
@@ -158,10 +177,10 @@ test('3.5 #48 unknown: when nothing can be priced the total is null, not 0, and 
 test('3.5 #48 unknown: a break with no price or no usage on its comparison step says why, and breakCost counts it', async () => {
   const swap = { n: 3, tools: SWAPPED, u: [100, 0, 10, 900] }
   const noPrice = await worldOf([{ n: 1, u: [0, 0, 0, 900], model: 'zz-nobody' }, { n: 2, u: [0, 0, 900, 50], model: 'zz-nobody' }, { ...swap, model: 'zz-nobody' }])
-  assert.deepEqual(noPrice.doc.totals.breaks, [{ rid: noPrice.rid[2], usd: null, why: 'no-price' }])
+  assert.deepEqual(noPrice.win.breaks, [{ rid: noPrice.rid[2], usd: null, why: 'no-price' }])
   assert.deepEqual(noPrice.doc.totals.breakCost, { usd: null, counted: 0, uncomputable: 1, worst: null })
   const noUsage = await worldOf([{ n: 1, u: [0, 0, 0, 900] }, { n: 2 }, swap])
-  assert.deepEqual(noUsage.doc.totals.breaks, [{ rid: noUsage.rid[2], usd: null, why: 'no-usage' }])
+  assert.deepEqual(noUsage.win.breaks, [{ rid: noUsage.rid[2], usd: null, why: 'no-usage' }])
   assert.deepEqual(noUsage.doc.totals.breakCost, { usd: null, counted: 0, uncomputable: 1, worst: null })
 })
 
@@ -194,7 +213,7 @@ async function wireWorld(w) {
   const [doc, { calls }] = [await analysis(home, env), await session(home, { id: ID })]
   assert.deepEqual(doc.errors, [])
   assert.equal(calls[2].cache.break, true)
-  return { doc, calls }
+  return { doc, win: await walked(home, env), calls }
 }
 
 const none = () => null
@@ -204,10 +223,10 @@ for (const [name, w] of Object.entries({
   responses: responses(none),
   'anthropic wire, another vendor': anthropic('api.deepseek.com', none),
 })) test(`3.5 #45 #48 no write counter (${name}): create is null, a break has no missed and no dollars, and says why`, async () => {
-  const { doc, calls } = await wireWorld(w)
+  const { doc, win, calls } = await wireWorld(w)
   for (const r of calls) assert.equal(r.usage.create, null, `${r.rid}: NULL, not 0`)
   assert.deepEqual(calls[2].cache, { state: 'changed', hit: 100 / 1000, break: true, why: 'no-write-counter' })
-  assert.deepEqual(doc.totals.breaks, [{ rid: calls[2].rid, usd: null, why: 'no-write-counter' }])
+  assert.deepEqual(win.breaks, [{ rid: calls[2].rid, usd: null, why: 'no-write-counter' }])
   assert.deepEqual(doc.totals.breakCost, { usd: null, counted: 0, uncomputable: 1, worst: null })
 })
 
@@ -215,18 +234,18 @@ for (const [name, w] of Object.entries({
   anthropic: anthropic('api.anthropic.com', () => 0),
   'responses relay': responses(() => 0),
 })) test(`3.5 #45 #48 a reported zero (${name}): create stays 0 and the break is priced at the write price`, async () => {
-  const { doc, calls } = await wireWorld(w)
+  const { win, calls } = await wireWorld(w)
   for (const r of calls) assert.equal(r.usage.create, 0)
   assert.equal(calls[2].cache.missed, 800, '900 + 0 − 100')
   assert.ok(!('why' in calls[2].cache))
-  near(doc.totals.breaks[0].usd, (800 * (4 - 0.5)) / 1e6)
+  near(win.breaks[0].usd, (800 * (4 - 0.5)) / 1e6)
 })
 
 test('3.5 #45 #48 a step with no write counter against a comparison step that has one: priced at the uncached input', async () => {
-  const { doc, calls } = await wireWorld(responses((i) => (i === 2 ? null : 50)))
+  const { win, calls } = await wireWorld(responses((i) => (i === 2 ? null : 50)))
   assert.equal(calls[2].usage.create, null)
   assert.equal(calls[2].cache.missed, 850, '900 + 50 − 100')
-  near(doc.totals.breaks[0].usd, (850 * (3 - 0.5)) / 1e6)
+  near(win.breaks[0].usd, (850 * (3 - 0.5)) / 1e6)
 })
 
 test('3.5 #48 verdicts: a failed step stays out of the hit even when its reply has usage', async () => {
@@ -236,15 +255,15 @@ test('3.5 #48 verdicts: a failed step stays out of the hit even when its reply h
 })
 
 test('3.5 #48 verdicts: a compaction counts as a break, and only the main lane\'s breaks and hit are the totals\'', async () => {
-  const { doc, rid, calls } = await worldOf([
+  const { doc, win, rid, calls } = await worldOf([
     ...[1, 2, 3, 4, 5, 6].map((n) => ({ n, u: [10, 0, 100 * n, 100] })),
     { n: 1, u: [10, 0, 0, 800] },
     { n: 1, agent: 'agent-1', u: [10, 0, 0, 100] },
     { n: 2, agent: 'agent-1', tools: SWAPPED, u: [10, 0, 0, 100] },
   ])
   assert.ok(calls[6].compaction, 'the step that drops the history is a compaction')
-  assert.deepEqual(doc.totals.breaks.map((b) => b.rid), [rid[6]])
-  near(doc.totals.breaks[0].usd, (600 + 100 - 0) * (4 - 0.5) / 1e6, 'the compaction')
+  assert.deepEqual(win.breaks.map((b) => b.rid), [rid[6]])
+  near(win.breaks[0].usd, (600 + 100 - 0) * (4 - 0.5) / 1e6, 'the compaction')
   assert.equal(doc.totals.hitSteps, 7)
 })
 
@@ -257,16 +276,115 @@ test('3.5 #48 verdicts: firstFailed goes by the lanes\' order, then step order, 
   assert.equal(both.doc.totals.failed, 2)
 })
 
-test('3.5 §会话读 closed sets: the top level and totals have only the listed keys; the fixture\'s analysis entry has every one', async () => {
-  const { doc } = await worldOf(MIXED)
-  const TOP = ['schema', 'command', 'ok', 'errors', 'mark', 'pending', 'truncated', 'pricing', 'totals', 'usd']
-  const TOTALS = ['cost', 'hit', 'hitSteps', 'cacheUnknown', 'breaks', 'breakCost', 'failed', 'firstFailed', 'unpricedSteps']
+test('3.5 #50 closed sets: the default document has only the listed keys, no usd and no breaks; the fixture\'s two analysis entries have every one', async () => {
+  const { doc, win } = await worldOf(MIXED)
+  const TOP = ['schema', 'command', 'ok', 'errors', 'mark', 'pending', 'truncated', 'pricing', 'totals']
+  const TOTALS = ['cost', 'hit', 'hitSteps', 'cacheUnknown', 'breakCost', 'failed', 'firstFailed', 'unpricedSteps']
   const BUCKET = ['usd', 'priced', 'unpriced', 'failed', 'approx', 'approxKeys']
   for (const [got, closed] of [[doc, TOP], [doc.totals, TOTALS], [doc.totals.cost.total, BUCKET]]) assert.deepEqual(Object.keys(got).filter((k) => !closed.includes(k)), [])
+  assert.ok(!('usd' in doc) && !('breaks' in doc.totals))
+  assert.ok('breakCost' in doc.totals)
   const sample = CONTRACT.analysis
   assert.deepEqual(Object.keys(sample).sort(), Object.keys(doc).sort())
   assert.deepEqual(Object.keys(sample.totals).sort(), Object.keys(doc.totals).sort())
   for (const b of ['main', 'sub', 'bg', 'total']) assert.deepEqual(Object.keys(sample.totals.cost[b]).sort(), Object.keys(doc.totals.cost[b]).sort())
+  assert.deepEqual(Object.keys(CONTRACT.analysis_window).sort(), Object.keys(win.pages[0]).sort())
+})
+
+// One long session for the three tests below: past a window page and past a slice, with compactions for breaks.
+let long = null
+const longSession = () => (long ??= (async () => {
+  const home = homeOf(), env = envOf({ 'claude-opus-4-8': [1, 2, 3, 4] })
+  const s = bigSession({ home, growth: 200, subEvery: 7, compactAt: 8_000 })
+  s.append(3)
+  const early = (await analysis(home, env, {}, s.id)).mark
+  s.append(2_600)
+  const steps = []
+  for (let page = await session(home, { id: s.id }); ; page = await session(home, { id: s.id, before: page.calls[0].rid })) {
+    steps.unshift(...page.calls.map((r) => r.rid))
+    if (!page.more) break
+  }
+  return { home, env, id: s.id, doc: await analysis(home, env, {}, s.id), steps, early }
+})())
+
+test('3.5 #50 size: the default document of a long session with many breaks stays small', async () => {
+  const { doc, home, env, id } = await longSession()
+  assert.deepEqual(doc.errors, [])
+  const { breaks } = await walked(home, env, id)
+  assert.ok(doc.totals.breakCost.counted > 1 && breaks.length === doc.totals.breakCost.counted + doc.totals.breakCost.uncomputable)
+  assert.ok(Buffer.byteLength(JSON.stringify(doc)) <= 2048)
+})
+
+test('3.5 #51 windows: prev from the tail and next from the first page each give every step once, in step order, every page within the bound', async () => {
+  const { home, env, id, doc, steps } = await longSession()
+  const back = await walked(home, env, id)
+  assert.ok(back.pages.length > 1, 'the session is longer than a page')
+  assert.equal(back.pages.at(-1).base, null)
+  assert.deepEqual(back.rids, steps)
+  for (const w of back.pages) {
+    assert.ok(Object.keys(w.usd).length > 0)
+    assert.ok(Buffer.byteLength(JSON.stringify({ usd: w.usd, breaks: w.breaks })) <= ANALYSIS_PAGE_BYTES)
+    assert.equal(w.mark, doc.mark)
+    assert.ok(!('totals' in w))
+  }
+  const forth = [back.pages[0]]
+  while (forth.at(-1).next != null) {
+    const from = forth.at(-1).next, w = await windowOf(home, env, { from }, id)
+    assert.equal(w.base, from)
+    forth.push(w)
+  }
+  assert.deepEqual(forth.flatMap((w) => Object.keys(w.usd)), steps)
+  assert.deepEqual(forth.flatMap((w) => w.breaks), back.breaks)
+  assert.deepEqual(Object.assign({}, ...forth.map((w) => w.usd)), back.usd)
+})
+
+test('3.5 #51 windows: a page lists only the models it walks', async () => {
+  const { win, rid, doc, home, env } = await worldOf(MIXED)
+  assert.deepEqual(win.pages[0].pricing, doc.pricing, 'the whole session on a page')
+  const first = await windowOf(home, env, { to: rid[5] })
+  assert.deepEqual(first.pricing.models, [{ model: 'm-a', key: 'm-a', exact: true }])
+  assert.deepEqual(Object.keys(first.usd), rid.slice(0, 5))
+  assert.equal(first.prev, null)
+})
+
+test('3.5 #51 --since: after an append only the new steps and base M; a mark not known is the tail with base null', async () => {
+  const home = homeOf(), env = envOf(), steps = MIXED.slice(0, 3)
+  writeSession(home, steps)
+  const { mark } = await analysis(home, env)
+  assert.deepEqual(Object.keys((await windowOf(home, env, { since: mark })).usd), [], 'nothing since the mark itself')
+  writeSession(home, [...steps, { n: 3, u: [100, 10, 100, 900] }, { n: 4, u: [100, 10, 100, 900] }])
+  const rids = (await session(home, { id: ID })).calls.map((r) => r.rid), w = await windowOf(home, env, { since: mark })
+  assert.equal(w.base, mark)
+  assert.deepEqual(Object.keys(w.usd), rids.slice(steps.length))
+  assert.deepEqual([w.prev, w.next], [null, null])
+  const unknown = await windowOf(home, env, { since: NOT_A_STEP })
+  assert.equal(unknown.base, null)
+  assert.deepEqual(Object.keys(unknown.usd), rids)
+})
+
+test('3.5 #51 --since past a page: next goes on with --from, and prev is null', async () => {
+  const { home, env, id, steps, early } = await longSession()
+  const w = await windowOf(home, env, { since: early }, id), first = steps.indexOf(early) + 1
+  assert.equal(w.base, early)
+  assert.equal(w.prev, null)
+  assert.ok(w.next != null)
+  assert.deepEqual(Object.keys(w.usd), steps.slice(first, first + Object.keys(w.usd).length))
+  assert.equal(Object.keys((await windowOf(home, env, { from: w.next }, id)).usd)[0], steps[steps.indexOf(w.next) + 1])
+})
+
+test('3.5 #51 refused: more than one of --from, --to and --since', async () => {
+  const { home, env, rid } = await worldOf(MIXED)
+  for (const p of [{ from: rid[0], to: rid[1] }, { from: rid[0], since: rid[1] }, { to: rid[0], since: rid[1] }]) {
+    await assert.rejects(windowOf(home, env, p), QueryArgError, JSON.stringify(p))
+  }
+})
+
+test('3.5 #52 slices: past the slice size an answer gives way and says progress, and the document is the same', async () => {
+  const { home, env, id, doc } = await longSession()
+  let eased = false, said = false
+  const got = await analysis(home, env, { ease: async () => { eased = true }, progress: () => { said = true } }, id)
+  assert.deepEqual(got, doc)
+  assert.ok(eased && said)
 })
 
 test('3.5 §会话读: a session nobody captured is said in errors with an empty document; no --id is refused', async () => {
@@ -275,6 +393,10 @@ test('3.5 §会话读: a session nobody captured is said in errors with an empty
   const doc = await analysis(home, envOf(), {}, 'no-such-session')
   assert.deepEqual(doc.errors.map((e) => [e.where, e.code]), [['session/no-such-session', 'session-unknown']])
   const { schema, command, ok, errors, ...rest } = doc
-  assert.deepEqual(rest, { mark: null, truncated: null, pricing: { source: doc.pricing.source, models: [] }, totals: null, usd: {} })
+  assert.deepEqual(rest, { mark: null, truncated: null, pricing: { source: doc.pricing.source, models: [] }, totals: null })
+  const window = await windowOf(home, envOf(), { from: NOT_A_STEP }, 'no-such-session')
+  assert.deepEqual(window.errors.map((e) => e.code), ['session-unknown'])
+  const { schema: _s, command: _c, ok: _o, errors: _e, ...empty } = window
+  assert.deepEqual(empty, { base: null, mark: null, truncated: null, pricing: { source: window.pricing.source, models: [] }, usd: {}, breaks: [], prev: null, next: null })
   await assert.rejects(runQuery('analysis', {}, { home, fs }), QueryArgError)
 })
