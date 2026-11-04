@@ -13,10 +13,9 @@
 // bytes carry its whole input (3.1:60). The bytes are untouched: every stitched block is located in the record
 // and field it came from (locate), so it resolves verbatim through a field-qualified text_ref (4.2:40, gate G1).
 // Leaf module.
-import { boardFlat, reqCountsFor, ctxTokens, normEvents, itemToBlocks } from './openai.mjs';
-import { scanJson, spanAt } from './json-scan.mjs';
+import { boardFlat, reqCountsFor, ctxTokens, normEvents, itemNodes } from './openai.mjs';
 import { storedRequestBody } from './request-body.mjs';
-import { storedReply, noSpanWhy, replyPart } from './sse-spans.mjs';
+import { storedReply, noSpanWhy, replyPart, nodeParts, scanned } from './sse-spans.mjs';
 import { isWsHandshake } from './ws-handshake.mjs'; // not ./registry.mjs: the registry imports THIS module
 import { headerOf } from './harnesses.mjs';
 import { extendChain, linked, segmentsIn, createLinks, withUnread } from './chain.mjs';
@@ -173,31 +172,33 @@ export function normRespWs(rec) {
 }
 
 // The reply's blocks as addressable parts (sse-spans.mjs): the server message that closes an item
-// (response.output_item.done) holds it whole, so a block's span is its own node inside that message, field resp.messages.<j>:
-// the `item` node's path plus the block's path within the item (itemToBlocks' `sub`, as the request side addresses the same item),
-// so each content part of a message is its own span. Each part carries `unit`, the output item it is a block of (one item = one
-// message of a successor's context). A stream whose items no message closed has them in its response.completed: there the path
-// starts at the item's node in that message's output.
+// (response.output_item.done) holds it whole, so a block's span is its own node inside that message, field resp.messages.<j>,
+// at the `item` node's path plus the block's path within the item (itemNodes: the request side's rule for the same item), so
+// each content part of a message is its own span (RFC 3.1 回复块也回源). Each part carries `unit`, the output item it is a block
+// of (one item = one message of a successor's context). A stream whose items no message closed has them in its
+// response.completed: there the path starts at the item's node in that message's output. Each message is scanned once.
 export function replyPartsWs(rec) {
+  const msgs = serverMessages(rec), held = []; // [j, [[item, path], …]]
+  msgs.forEach((m, j) => {
+    const e = parse(m);
+    if (e && e.type === 'response.output_item.done' && e.item && typeof e.item === 'object') held.push([j, [[e.item, ['item']]]]);
+  });
+  const done = held.length ? null : completed(rec);
+  if (done && Array.isArray(done.e.response.output) && done.e.response.output.length) held.push([done.j, done.e.response.output.map((item, i) => [item, ['response', 'output', i]])]);
+  if (!held.length) {
+    const { r, part } = storedReply(rec);
+    return [replyPart(null, null, null, r && msgs.length ? 'no server message closed an output item' : noSpanWhy(r, part || {}))];
+  }
   const out = [];
   let unit = 0;
-  const push = (item, m, j, path) => {
-    let root = null;
-    try { root = scanJson(m); } catch { /* parsed, so scannable */ }
-    for (const { block, sub } of itemToBlocks(item)) {
-      out.push({ ...replyPart(block, `resp.messages.${j}`, root && spanAt(root, [...path, ...sub]), 'the block could not be located in its message'), unit });
+  for (const [j, items] of held) {
+    const root = scanned(msgs[j]);
+    for (const [item, path] of items) {
+      for (const p of nodeParts(itemNodes(item, path), root, `resp.messages.${j}`, 0)) out.push({ ...p, unit });
+      unit++;
     }
-    unit++;
-  };
-  serverMessages(rec).forEach((m, j) => {
-    const e = parse(m);
-    if (e && e.type === 'response.output_item.done' && e.item && typeof e.item === 'object') push(e.item, m, j, ['item']);
-  });
-  const done = out.length ? null : completed(rec);
-  if (done) (Array.isArray(done.e.response.output) ? done.e.response.output : []).forEach((item, i) => push(item, serverMessages(rec)[done.j], done.j, ['response', 'output', i]));
-  if (out.length) return out;
-  const { r, part } = storedReply(rec);
-  return [replyPart(null, null, null, r && serverMessages(rec).length ? 'no server message closed an output item' : noSpanWhy(r, part || {}))];
+  }
+  return out;
 }
 
 // stitchOf(rec) → what the id-level stitch (src/view/extract.mjs) needs of one record, read from it alone (as CC_THREADS.stitchOf);

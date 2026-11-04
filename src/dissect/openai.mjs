@@ -136,7 +136,7 @@ function summaryText(item) {
   if (Array.isArray(s)) return s.map((x) => (x && (x.text || x.summary_text)) || '').join('');
   return typeof s === 'string' ? s : '';
 }
-// returns [{ role, block, sub }] — one per rendered block (a message may fan out to several content blocks).
+// returns [{ role, block, sub }] — one per rendered block (a message may fan out to several content blocks, none without content).
 // `sub` = the JSON path of the block's bytes WITHIN the item (the board's text_ref locator, 4.2:40).
 export function itemToBlocks(item) {
   if (!item || typeof item !== 'object') return [{ role: 'user', block: { type: 'text', text: String(item ?? '') }, sub: [] }];
@@ -144,7 +144,8 @@ export function itemToBlocks(item) {
   if (t === 'message' || (item.content && !/_call(_output)?$/.test(t || ''))) {
     const role = item.role || 'user';
     const arr = Array.isArray(item.content);
-    const content = arr ? item.content : [{ type: 'input_text', text: String(item.content ?? '') }];
+    // no content (absent or null) is no block, as content: [] is: request and reply side alike (RFC 3.1)
+    const content = arr ? item.content : item.content == null ? [] : [{ type: 'input_text', text: String(item.content) }];
     return content.map((c, ci) => {
       const sub = arr ? ['content', ci] : ['content'];
       if (!c || typeof c !== 'object') return { role, block: { type: 'text', text: String(c ?? '') }, sub };
@@ -399,15 +400,19 @@ export function ctxTokens(norm) {
 // are the request's top-level keys that become context blocks (everything else is a non-block key).
 // `messageCount` — the message count compaction compares (3.4).
 // ── reply parts (sse-spans.mjs): each reply block addressed as a span of resp.raw. Responses keys an event by its
-// `output_index` and takes the item the wire closes it with (output_item.done, else the terminal's output); Chat keys
+// `output_index` and takes the item the wire closes it with: output_item.done holds it whole, so each block is its own node in
+// that event's data; else the terminal's output, the blocks spanned by the item's events. Chat keys
 // a chunk by choice index and what its delta carries (reasoning, text, or tool call `index`).
 const replyBlocksOf = (items) => items.flatMap((it) => itemToBlocks(it)).map((x) => x.block);
+// an output item's blocks as JSON nodes, the item standing at `path` (RFC 3.1 回复块也回源: the request side's rule for the same item)
+export const itemNodes = (item, path) => itemToBlocks(item).map(({ block, sub }) => ({ block, path: [...path, ...sub] }));
 const RESPONSES_REPLY = {
   keysOf: (e) => (Number.isInteger(e.output_index) ? [String(e.output_index)] : []),
   build: (k, evts, all) => {
-    const done = evts.find((e) => e.type === 'response.output_item.done' && e.item);
+    const done = evts.find((e) => e.type === 'response.output_item.done' && e.item && typeof e.item === 'object');
+    if (done) return { evt: done, nodes: itemNodes(done.item, ['item']) };
     const term = all.find((e) => e && /^response\.(completed|incomplete|failed)$/.test(e.type) && e.response);
-    const item = done ? done.item : term && Array.isArray(term.response.output) ? term.response.output[Number(k)] : null;
+    const item = term && Array.isArray(term.response.output) ? term.response.output[Number(k)] : null;
     return item ? replyBlocksOf([item]) : 'this output item did not finish before the stream ended';
   },
   jsonBlocks: (body) => replyBlocksOf(Array.isArray(body.output) ? body.output : []),
