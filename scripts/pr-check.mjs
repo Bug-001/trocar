@@ -108,7 +108,7 @@ const WHY = {
   encoding: 'This is not valid UTF-8, so it cannot be compared: write it as UTF-8.',
   merge: 'This is a merge commit, and a branch goes out without them: rebase it onto the base.',
   git: 'git could not be read, so what is leaving is not known.',
-  base: 'This branch does not stand on a commit origin/main already holds: rebase it onto origin/main.',
+  base: 'No remote main holds the commit this branch stands on, or nothing is past it: fetch the project\'s main, then rebase the branch onto it.',
   query: 'trocar query could not read the capture, so it was not compared.',
   title: 'A session title could not be read yet, so it was not compared.',
   raw: 'A segment of the capture could not be read to its end, so the rest of it was not compared.',
@@ -295,7 +295,8 @@ function isBlocked(file, read) {
 }
 
 /** The object `rev` names, empty when it names none. */
-const revOf = (cwd, rev) => spawnSync('git', ['rev-parse', '--verify', '--quiet', rev], { cwd, stdio: ['ignore', 'pipe', 'ignore'] }).stdout.toString().trim()
+const answer = (cwd, ...args) => spawnSync('git', args, { cwd, stdio: ['ignore', 'pipe', 'ignore'] }).stdout.toString().trim()
+const revOf = (cwd, rev) => answer(cwd, 'rev-parse', '--verify', '--quiet', rev)
 const isAncestor = (cwd, older, newer) => spawnSync('git', ['merge-base', '--is-ancestor', older, newer], { cwd, stdio: 'ignore' }).status === 0
 
 const undoEntities = (text) => text.replace(ENTITY, (all, decimal, hex, name) => {
@@ -408,7 +409,7 @@ function openEncoded(sources, add) {
 function checkIdentity(out, cwd, hold, add) {
   const host = os.hostname()
   const names = [os.userInfo().username, host, host.split('.')[0], process.env.USER, process.env.LOGNAME, process.env.USERNAME, process.env.COMPUTERNAME]
-  const gitConfig = (key) => spawnSync('git', ['config', '--get', key], { cwd, stdio: ['ignore', 'pipe', 'ignore'] }).stdout?.toString().trim()
+  const gitConfig = (key) => answer(cwd, 'config', '--get', key)
   const gitName = gitConfig('user.name')
   const own = wordOf(gitName || '')
   for (const name of [...names, gitName, gitConfig('user.email')].filter(Boolean)) {
@@ -577,16 +578,16 @@ async function main() {
     held.get(key).hits.push({ rule, where, why })
   }
   const out = { sources: [], commits: [], leaving: { files: [], commits: [], identity: [], branch: null } }
-  const base = revOf(cwd, `${options.base}^{commit}`) // one commit from here on: a ref could move between reads
-  const published = revOf(cwd, 'refs/remotes/origin/main^{commit}')
+  const given = revOf(cwd, `${options.base}^{commit}`)
+  const base = given && answer(cwd, 'merge-base', given, 'HEAD') // the fork point, as one commit from here on: a ref could move between reads
+  const mains = answer(cwd, 'for-each-ref', '--format=%(objectname)', 'refs/remotes/*/main').split('\n').filter(Boolean)
   // what comes before the base is not judged and its tree exempts what comes after, so it has to be out already
-  const isPublic = base && (!published || isAncestor(cwd, base, published))
+  const isPublic = base && mains.some((main) => isAncestor(cwd, base, main))
   if (!options.issue) {
     try {
-      if (!base) throw new Error('git')
-      readGit(cwd, base, out)
-      // nothing past an ancestor means it is HEAD
-      if (!isAncestor(cwd, base, 'HEAD') || out.commits.length === 0 || !isPublic) add('base', 'git', WHY.base)
+      if (!given && mains.length > 0) throw new Error('git')
+      if (base) readGit(cwd, base, out)
+      if (out.commits.length === 0 || !isPublic) add('base', 'git', WHY.base)
     } catch { add('unreadable', 'git', WHY.git) }
   }
   if (options.title) out.sources.push({ where: 'title', kind: 'title', bytes: options.title })
