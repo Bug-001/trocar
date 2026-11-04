@@ -100,7 +100,7 @@ export async function timerReads(b) {
 /** The board on a fresh temp HOME in a fresh Chrome. `token`: true = the face's token, a string = that token, false = no fragment.
  *  `missing` lists every static file answered ≥ 400 (`<status> <path>`).
  *  `idleMs`: the face's query worker idles out after that many ms (the service's default when absent).
- *  `setup(page)` runs before the first navigation (routes a case must hold from the first request on).
+ *  `setup(page, face)` runs before the first navigation (routes a case must hold from the first request on).
  *  `home`: a prebuilt {userHome, home} served instead of boardHome({bytes}). `base`: an external board's URL carrying `#t=<token>` — no
  *  face is started (`face` is null) and `get` reads that board with the token header.
  *  `requests` logs every /api (the answer files /api/d/* too) and /control response as {url, method, body (the request's post data, or null), range (its Range header, or null), status, start (ms epoch the request began), t (ms epoch it answered)}; `errors` collects pageerrors; `get(name, params)` reads the face directly (no page, no request log). Always `await stop()`. */
@@ -141,7 +141,7 @@ export async function withBoard({ bytes, home, base, idleMs, token = true, width
       globalThis.__timerRounds = []
       new PerformanceObserver((l) => { for (const e of l.getEntries()) if (e.name === name) globalThis.__timerRounds.push({ at: performance.timeOrigin + e.startTime, base: e.detail && e.detail.base }) }).observe({ type: 'mark' })
     }, TIMER_ROUND)
-    await setup?.(page)
+    await setup?.(page, face)
     const t = token === true ? face?.token : token
     await page.goto(face ? `${face.base}/${t ? `#t=${encodeURIComponent(t)}` : ''}` : base, { waitUntil: 'load' })
   } catch (e) { await stop(); throw e }

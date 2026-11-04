@@ -27,7 +27,7 @@ export function boardHome({ bytes = 0 } = {}) {
 }
 
 /** The face on an ephemeral port (`idleMs`: the query worker's idle exit, the service's default when absent). get(name, params) → {status, doc}; close() stops the server and the worker.
- *  workers() → the pids of the query workers it forked that are still alive; killWorker(sig) signals them, → how many. workerEnvs() → the
+ *  sweep(): what the daemon tells its worker at start (src/collector/daemon.mjs), and the fork of the first worker. workers() → the pids of the query workers it forked that are still alive; killWorker(sig) signals them, → how many. workerEnvs() → the
  *  environment each worker it forked was started with: HOME / USERPROFILE are the temp userHome, never the operator's own. */
 export async function serveBoard({ userHome, home, idleMs }) {
   const env = { HOME: userHome, USERPROFILE: userHome }
@@ -47,5 +47,5 @@ export async function serveBoard({ userHome, home, idleMs }) {
   const workers = () => alive().map((c) => c.pid)
   const killWorker = (sig = 'SIGKILL') => alive().filter((c) => c.kill(sig)).length
   const workerEnvs = () => kids.map((c) => c.forkEnv)
-  return { port, base: `http://127.0.0.1:${port}`, token: TOKEN, get, workers, killWorker, workerEnvs, close: async () => { svc.stop(); server.close(); await once(server, 'close') } }
+  return { port, base: `http://127.0.0.1:${port}`, token: TOKEN, get, workers, killWorker, workerEnvs, sweep: () => svc.sweep(), close: async () => { svc.stop(); server.close(); await once(server, 'close') } }
 }
