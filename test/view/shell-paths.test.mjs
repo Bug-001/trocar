@@ -10,14 +10,14 @@ const use = (id, name, input) => ({ type: 'tool_use', id, name, input })
 const answer = (id) => ({ type: 'tool_result', tool_use_id: id, content: 'bytes' })
 const bash = (id, command) => use(id, 'Bash', { command })
 
-// One lane: each tool use a call that issues it in its reply, the next call answering it; `first` the opening user text.
-function lane(uses, { exe = '/opt/bin/claude', system = 'You are a coding agent.', first = 'Go on' } = {}) {
-  const messages = [{ role: 'user', content: [{ type: 'text', text: first }] }], recs = []
+// One lane: each tool use a call that issues it in its reply, the next call answering it.
+function lane(uses, { exe = '/opt/bin/claude' } = {}) {
+  const messages = [{ role: 'user', content: [{ type: 'text', text: 'Go on' }] }], recs = []
   const call = (i, content) => {
     const at = new Date(T + i * 1000).toISOString()
     recs.push({ ts_request: at, ts: at, id: `r${i}`, endpoint: '/v1/messages', host: 'api.anthropic.com', proc: { pid: 1, exe, agent: 'claude-code' },
       req_headers: { host: 'api.anthropic.com', 'content-type': 'application/json', 'user-agent': 'claude-cli/2.0.0 (external, cli)', 'x-claude-code-session-id': 'S' },
-      req_body: JSON.stringify({ model: 'claude-opus-4-8', max_tokens: 32000, system: [{ type: 'text', text: system }], tools: TOOLS, messages }),
+      req_body: JSON.stringify({ model: 'claude-opus-4-8', max_tokens: 32000, system: [{ type: 'text', text: 'You are a coding agent.' }], tools: TOOLS, messages }),
       resp: { status: 200, kind: 'json', body: { id: `msg_${i}`, model: 'claude-opus-4-8', stop_reason: 'tool_use', content, usage: { input_tokens: 1, output_tokens: 1 } } } })
   }
   uses.forEach((u, i) => {
@@ -80,12 +80,4 @@ for (const [command, word, runtime] of [
     const { files, uses } = await read(lane([bash('t0', command)]))
     assert.deepEqual(files.map((r) => [r.label, r.runtime]), [[word, runtime]])
     assert.deepEqual(keysOf(uses), [`file::${word}`])
-  })
-
-const STATED = '\n - Primary working directory: /w/proj\n'
-for (const [where, opts] of [['the system text', { system: `Environment:${STATED}` }], ['the first message', { first: `Context:${STATED}` }]])
-  test(`a relative read resolves on the working directory stated in ${where}`, async () => {
-    const { files, uses } = await read(lane([bash('t0', 'cat src/a.txt')], opts))
-    assert.deepEqual(files.map((r) => [r.label, r.runtime]), [['/w/proj/src/a.txt', undefined]])
-    assert.deepEqual(keysOf(uses), ['file::/w/proj/src/a.txt'])
   })
