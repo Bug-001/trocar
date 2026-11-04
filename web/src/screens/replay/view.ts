@@ -7,6 +7,7 @@
 //   · roughDrawn(part): the step head and the scope report the rough page; 'desk-rough' is marked once, when both have
 //   · window(d?): the context window (replay.mjs header: s.win), drawn by Window.tsx. The bump is flushed at once (flushSync), so the
 //     controller's next line sees the window drawn, except while a React lifecycle runs (`during`): flushSync there logs an error
+//   · spans: the bars' window is s.span, in global steps (replay.mjs placeWin); s.view is only its image for the rails
 //   · reveal(t): the function the window registered (setRevealer), null without one; cellRoots(): the cells the desk wires
 // `during(f)` runs f as part of a React lifecycle (a render, an effect): the controller calls the hosts make from their effects go
 // through it (DeskHost's routes, this view's framed and setCapacity).
@@ -38,7 +39,7 @@ export function reactView(s: DeskState, framed: (E: Els) => void, gone: () => vo
   const reported = new Set<'step' | 'scope'>()
   const bump = (a: Area) => { v[a]++; for (const f of [...subs]) f() }
   return {
-    root, s, key: keyOf(s) as string,
+    root, s, key: keyOf(s) as string, spans: true,
     // the components' side
     subscribe(f: () => void) { subs.add(f); return () => { subs.delete(f) } },
     version: (a: Area) => v[a],

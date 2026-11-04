@@ -1,6 +1,6 @@
 // screens/replay/models.mjs — the replay desk's session head (1.2 §会话头), step head (2.2 §步头) and scope (1.3) as data.
 // Framework-free (D75②): no DOM, no timers, no HTML. Each function reads the controller's state object `s` (replay.mjs openDesk:
-// desk, meta, lanes, anchor, playhead, playRid, view, sawView, problems, pricing, diffRef, follow, staleErr, gap, reviewRange) and
+// desk, meta, lanes, anchor, playhead, playRid, span, sawView, problems, pricing, diffRef, follow, staleErr, gap, reviewRange) and
 // returns plain data; DeskHead / StepHead / Scope only render it. Every word comes from labels/replay.mjs; every number from
 // core/metrics.mjs; a step number only through lanes.mjs : stepRef(). One answer's work is bounded by the window plus at most 240
 // overview points (2.3 §归约前沿): nothing here walks the whole lane, except info() and the popover rows, which run when opened.
@@ -10,11 +10,12 @@ import { cacheState, isFailed, breakCost, usageOf, priceMatch, costOf, hitTier }
 import { CT_ORDER, segTax, TAX_ORDER, hasChangeLine, callFacts, refRowOf } from '../../../legacy/replay/analysis.mjs'
 import { stepRef, stepsOf } from '../../../legacy/replay/lanes.mjs'
 import { stepOf, askOrdinal, ridAt } from '../../../legacy/replay/model.mjs'
-import { windowOf, roughWindow, chapterHere, chapterAt, chapterJump, problemSteps, landing, OVW_BARCAP, BAR_KEYS } from '../../../legacy/replay/timeline.mjs'
+import { chapterAt, chapterJump, problemSteps, landing, OVW_BARCAP, BAR_KEYS } from '../../../legacy/replay/timeline.mjs'
 import { cacheLabel, costLabel, contentRefOf, contentRefKOf, priceStateNote } from '../../../legacy/replay/stepbar.mjs'
 import { totalsOf } from '../../../legacy/replay/header.mjs'
 import { FLAG, cellsOf } from '../../../../src/view/head-cols.mjs'
 import { ENTRY, ENTRY_TIP } from '../../../legacy/labels/library.mjs'
+import { stepCount, partsOf, stepAt, placeSpan } from './strip.mjs'
 import * as W from '../../../legacy/labels/replay.mjs'
 
 const has = (o, k) => o != null && Object.prototype.hasOwnProperty.call(o, k)
@@ -32,8 +33,20 @@ const rowAt = (s) => (s.anchor && s.playRid != null ? s.anchor.calls[s.playhead]
 const roughAt = (s) => { const h = s.desk && s.desk.head; return h && h.steps ? Math.max(0, Math.min(h.steps, s.initialStep ?? h.steps) - 1) : null }
 const flatOf = (s, c) => (s.desk && c ? stepOf(s.desk, c.rid).flat : null)
 const localNo = (s, c) => { const r = c && stepRef(s.lanes, c.rid); return r ? (r.step ? r.n : r.k) : null }
-// cell c of a head's `cols` (3 bytes = 4 base64 characters, so one cell decodes alone): [height, bucket << 4 | share, flags]
-const cellAt = (cols, c) => cellsOf(String(cols || '').slice(4 * c, 4 * c + 4))
+// a head's `cols` decoded once per head (3 bytes a cell: height, bucket << 4 | share, flags)
+const COLS = new WeakMap()
+function colsOf(head) {
+  let c = COLS.get(head)
+  if (!c) COLS.set(head, c = cellsOf(head.cols))
+  return c
+}
+// head → (step g → the bytes of the cell that holds it, null where the head covers no such step)
+function cellOf(head) {
+  const cells = head ? colsOf(head) : [], per = (head && head.bucket) || 1
+  return (g) => { const j = 3 * Math.floor(g / per); return j + 2 < cells.length ? [cells[j], cells[j + 1], cells[j + 2]] : null }
+}
+// the global step of calls[i]
+const stepOfRow = (a, i) => (a.no ? a.no(i) : i)
 // a skeleton row's `comp` as [[type, share]] in CT_ORDER, zero types left out; null without one
 function compShares(comp) {
   if (!comp) return null
@@ -239,63 +252,87 @@ function costRows(s, call, model) {
   return rows
 }
 
-// ── the scope (1.3): the window's rows, the chapter row, the overview and its brush ─────────────────────────────────
+// ── the scope (1.3): the window's steps, the chapter row, the overview and its brush ─────────────────────────────────
 /**
- * @typedef {{rid?: string, i: number, col: number, h: number, segs: Array<[string, number]>|null, hatched: boolean, fail: boolean,
+ * @typedef {{rid?: string, i?: number, g: number, col: number, h: number, segs: Array<[string, number]>|null, hatched: boolean, fail: boolean,
  *   compact: boolean, cur: boolean, reviewed: boolean, tip: string}} Bar
- * @typedef {{rid: string, col: number, state: 'high'|'mid'|'low'|'none'|'unk'|'fail', pct: number|null, tip: string}} TraceCell
- * @typedef {{view: {lo: number, hi: number, N: number}, rough: boolean, legend: object, chapters: object|null, problems: object|null,
+ * @typedef {{rid?: string, col: number, state: 'high'|'mid'|'low'|'none'|'unk'|'fail'|'gap', pct?: number|null, tip: string}} TraceCell
+ * @typedef {{view: {lo: number, hi: number, N: number}, at: number|null, rough: boolean, legend: object, chapters: object|null, problems: object|null,
  *   bars: Bar[], peak: {text: string, tip: string|null}, trace: TraceCell[], asks: object|null, review: {width: number, tip: string}|null,
  *   overview: object, axis: {start: string, end: string}|null, gutter: Array<{ct: string, pct: number, share: string}>,
  *   gutterTip?: string|null, cursor: {col: number|null}}} Scope
  */
-/** @returns {Scope|null} `K` = the bars the row can draw (timeline.mjs barsThatFit); it shapes the rough page's window */
+/**
+ * One path, rows held or not (1.3 acceptance 23): the bars are the steps of s.span, global, in any part. A held row draws as itself; any
+ * other step draws its head cell (the cell that holds it when `bucket` > 1), and the rows' tracks stay empty there until it is here.
+ * @returns {Scope|null} `K` = the bars the row can draw (timeline.mjs barsThatFit); it shapes the window until s.span is placed
+ */
 export function scopeModel(s, K) {
-  const head = s.desk && s.desk.head
-  if (!rowAt(s)) return head && head.steps ? roughScope(s, head, K) : null
-  const a = s.anchor, main = a.kind === 'main', calls = a.calls, cost = s.sawView === 'cost'
-  const { lo, hi, N } = windowOf(s)
-  const no = (i) => (a.no ? a.no(i) : i) + 1
-  const rk = s.reviewRange && s.reviewRange.k != null ? s.reviewRange.k : null
+  const desk = s.desk, head = desk && desk.head, a = s.anchor, rows = !!a && a.calls.length > 0, pc = rowAt(s), rough = !pc
+  if (!rows && !(head && head.steps)) return null
+  if (rough && head && head.steps && !head.tier) return timeScope(head)
+  const N = stepCount(s), parts = partsOf(s), at = stepAt(s), { lo, hi } = s.span ?? placeSpan(null, at, parts, K)
+  const main = !a || a.kind === 'main', cost = s.sawView === 'cost' && !rough, key = a ? a.id : head.axis
+  const axis = head && (!a || a.id === head.axis) ? head : null // the head's cells and peak are its axis lane's
+  const pk = Math.max(1, (a && a.peakCtx) || 0, (axis && axis.peak) || 0)
+  const rk = a && s.reviewRange && s.reviewRange.k != null ? s.reviewRange.k : null, gk = rk == null ? null : rk > 0 ? stepOfRow(a, rk - 1) + 1 : 0
+  const cell = cellOf(axis)
+  const rowOf = (g) => { const rid = ridAt(desk, key, g); return rid != null ? desk.rows.get(rid) ?? null : null }
   const priceOf = (c) => (s.pricing ? priceMatch(s.pricing, modelOf(c)) : null)
-  // the main track: context bars (h ∝ ctx / the lane's peak) or cost bars (h ∝ ≈ estimate / the window's largest)
-  const costs = cost ? calls.slice(lo, hi).map((c) => { const u = usageOf(c), m = u && !isFailed(c) ? priceOf(c) : null; return { u, m, v: m ? costOf(m.row, u) : null } }) : null
-  const maxCost = cost ? Math.max(0, ...costs.map((x) => x.v ?? 0)) : 0, pk = Math.max(1, a.peakCtx || 0)
-  const bars = []
-  for (let i = lo; i < hi; i++) {
-    const c = calls[i], fail = isFailed(c), b = { rid: c.rid, i, col: i - lo, h: 0, segs: null, hatched: false, fail, compact: !!c.compaction, cur: i === s.playhead, reviewed: rk != null && i < rk, tip: '' }
-    if (fail) Object.assign(b, { h: FAIL_H, tip: W.barTip(main, no(i), W.failTip(no(i), errMsgOf(c))) })
+  const steps = []
+  for (let g = lo; g < hi; g++) { const row = rowOf(g); steps.push({ g, row, i: row && a ? a.ridLocal.get(row.rid) : undefined }) }
+  // the main track: context bars (h ∝ ctx / the session's peak) or cost bars (h ∝ ≈ estimate / the window's largest)
+  const costs = cost ? steps.map(({ row: c }) => { if (!c) return null; const u = usageOf(c), m = u && !isFailed(c) ? priceOf(c) : null; return { u, m, v: m ? costOf(m.row, u) : null } }) : null
+  const maxCost = cost ? Math.max(0, ...costs.map((x) => x?.v ?? 0)) : 0
+  const bars = steps.map(({ g, row: c, i }, col) => {
+    const b = { rid: c ? c.rid : undefined, i, g, col, h: 0, segs: null, hatched: false, fail: false, compact: false, cur: g === at, reviewed: gk != null && g < gk, tip: W.barTip(main, g + 1, '') }
+    if (!c) {
+      const x = cost ? null : cell(g)
+      if (!x) return b // no cost is known without the row, and it is not unknowable either: an empty column
+      const fail = !!(x[2] & FLAG.failed)
+      return Object.assign(b, { fail, compact: !!(x[2] & FLAG.compaction), h: fail ? FAIL_H : Math.max(MIN_H, x[0] / 255), segs: fail ? null : [[CT_ORDER[x[1] >> 4] || 'other', 1]] })
+    }
+    b.fail = isFailed(c); b.compact = !!c.compaction
+    if (b.fail) Object.assign(b, { h: FAIL_H, tip: W.barTip(main, g + 1, W.failTip(g + 1, errMsgOf(c))) })
     else if (cost) {
-      const x = costs[i - lo]
-      if (x.v == null) Object.assign(b, { hatched: true, tip: W.barTip(main, no(i), !x.u ? W.CACHE_CELL_NONE_TIP : W.COST_WHY['no-price']) })
-      else Object.assign(b, { h: Math.max(MIN_H, x.v / Math.max(1e-9, maxCost)), tip: W.barTip(main, no(i), W.approxUsd(usd(x.v)) + (x.m.exact ? '' : ` · ${W.PRICE_BY_KEY(x.m.key)}`)) })
+      const x = costs[col]
+      if (x.v == null) Object.assign(b, { hatched: true, tip: W.barTip(main, g + 1, !x.u ? W.CACHE_CELL_NONE_TIP : W.COST_WHY['no-price']) })
+      else Object.assign(b, { h: Math.max(MIN_H, x.v / Math.max(1e-9, maxCost)), tip: W.barTip(main, g + 1, W.approxUsd(usd(x.v)) + (x.m.exact ? '' : ` · ${W.PRICE_BY_KEY(x.m.key)}`)) })
     } else {
       b.h = Math.max(MIN_H, Math.min(1, (c.ctx || 0) / pk)); b.segs = compShares(c.comp); b.hatched = !b.segs
-      b.tip = W.barTip(main, no(i), b.hatched ? W.COMP_NOT_COMPUTED : W.peakCtx(kf(c.ctx)))
+      b.tip = W.barTip(main, g + 1, b.hatched ? W.COMP_NOT_COMPUTED : W.peakCtx(kf(c.ctx)))
     }
-    bars.push(b)
-  }
-  const peak = cost ? { text: costs.some((x) => x.v != null) ? W.approxUsd(usd(maxCost)) : W.COST_NONE, tip: null } : { text: W.peakCtx(kf(pk)), tip: W.PEAK_CTX_TIP }
-  const pc = rowAt(s), shares = !cost && pc ? compShares(pc.comp) : null
-  const ov = overviewOf(N, (i) => (calls[i].ctx || 0) / pk, (i) => isFailed(calls[i]))
-  const ch = chapterHere(s)
+    return b
+  })
+  const peak = cost ? { text: costs.some((x) => x?.v != null) ? W.approxUsd(usd(maxCost)) : W.COST_NONE, tip: null } : { text: W.peakCtx(kf(pk)), tip: W.PEAK_CTX_TIP }
+  const shares = !cost && pc ? compShares(pc.comp) : null
+  const ov = overviewOf(N, (g) => { const x = cell(g); if (x) return x[0] / 255; const r = rowOf(g); return r ? (r.ctx || 0) / pk : 0 },
+    (g) => { const x = cell(g); if (x) return !!(x[2] & FLAG.failed); const r = rowOf(g); return !!r && isFailed(r) })
   return {
-    view: { lo, hi, N }, rough: false,
-    legend: { estimate: cost ? W.COST_LEGEND : W.COMP_LEGEND, cache: [W.CACHE_LEGEND, W.CACHE_LEGEND_UNK], range: [no(lo), no(hi - 1)], rangeText: W.showSteps(no(lo), no(hi - 1)), sampled: ov.sampled },
-    chapters: chaptersOf(ch.chs, ch.g, ch.end),
-    problems: problemsOf(s, lo, hi),
+    view: { lo, hi, N }, at, rough,
+    legend: { estimate: cost ? W.COST_LEGEND : W.COMP_LEGEND, cache: [W.CACHE_LEGEND, W.CACHE_LEGEND_UNK], range: [lo + 1, hi], rangeText: W.showSteps(lo + 1, hi), sampled: ov.sampled },
+    chapters: chaptersOf(parts, lo),
+    problems: rows ? problemsOf(s, bars) : null,
     bars, peak,
-    trace: bars.map((b) => traceOf(calls[b.i], refRowOf(a, b.i), b.col)),
-    asks: main ? asksOf(s, lo, hi) : null,
-    review: rk != null ? { width: clamp01((rk - lo) / Math.max(1, hi - lo)), tip: W.REVIEW_TIP(rk) } : null,
-    overview: { ...ov, chapterTicks: ch.chs.map((c) => ({ k: c.k ?? null, left: ch.pos(c.s0) / N })), brush: { left: lo / N, width: (hi - lo) / N }, pin: (s.playhead + 0.5) / N },
-    axis: { start: W.axisNo(main, no(lo)), end: W.axisNo(main, no(hi - 1)) },
+    trace: bars.map((b) => (b.i != null ? traceOf(a.calls[b.i], refRowOf(a, b.i), b.col) : { col: b.col, state: 'gap', tip: '' })),
+    asks: rows && main ? asksOf(s, bars) : null,
+    review: rk != null ? { width: clamp01((gk - lo) / Math.max(1, hi - lo)), tip: W.REVIEW_TIP(rk) } : null,
+    overview: { ...ov, chapterTicks: parts.map((c) => ({ k: c.k ?? null, left: c.s0 / N })), brush: { left: lo / N, width: (hi - lo) / N }, pin: (at + 0.5) / N },
+    axis: { start: W.axisNo(main, lo + 1), end: W.axisNo(main, hi) },
     gutter: shares ? shares.map(([ct, f]) => ({ ct, pct: Math.round(f * 100), share: W.approxShare(Math.round(f * 100)) })) : [],
     // every share with its type's word: the gutter shows the lines its row holds, its hover all of them (1.3 §排布)
     gutterTip: shares ? shares.map(([ct, f]) => `${CT_WORD[ct] || ct} ${W.approxShare(Math.round(f * 100))}`).join(' · ') : null,
-    cursor: { col: s.playhead >= lo && s.playhead < hi ? s.playhead - lo : null },
+    cursor: { col: at >= lo && at < hi ? at - lo : null },
     noMain: main ? null : W.noMainLane(W.laneWord(a.kind)),
   }
+}
+
+// a tier-0 head (1.5 K-31): the calls by time, sampled, no bars
+function timeScope(head) {
+  const bs = head.buckets || [], mx = Math.max(1, ...bs.map((b) => b.calls))
+  return { view: { lo: 0, hi: 0, N: head.steps }, at: null, rough: true, chapters: null, problems: null, bars: [], trace: [], asks: null, review: null, axis: null, gutter: [], cursor: { col: null }, noMain: null,
+    peak: { text: '', tip: null }, legend: { estimate: W.COMP_LEGEND, cache: [W.CACHE_LEGEND, W.CACHE_LEGEND_UNK], range: null, rangeText: '', sampled: true },
+    overview: { mode: 'buckets', sampled: true, marks: bs.map((b, i) => ({ x: (i + 0.5) / bs.length, v: b.calls / mx, failed: false })), chapterTicks: [], brush: null, pin: null } }
 }
 
 // one cache-trace cell, drawn by cacheState()'s own order (1.3 §缓存迹线)
@@ -309,47 +346,49 @@ function traceOf(c, ref, col) {
 
 // the 问题道 (1.3 §问题道): a flag per break (h ∝ √ ≈ extra cost), × per failed call, a neutral compaction mark; k / n over the
 // whole lane from the controller's problem list (problemSteps, computed when the anchor changes)
-function problemsOf(s, lo, hi) {
+function problemsOf(s, bars) {
   const a = s.anchor, probs = s.problems || problemSteps(a), items = [], flags = []
-  const no = (i) => (a.no ? a.no(i) : i) + 1
-  for (let i = lo; i < hi; i++) {
-    const c = a.calls[i], n = no(i), base = { rid: c.rid, i, col: i - lo }
+  for (const { i, g, col } of bars) {
+    if (i == null) continue
+    const c = a.calls[i], n = g + 1, base = { rid: c.rid, i, col }
     if (isFailed(c)) { const tip = W.failTip(n, errMsgOf(c)); items.push({ ...base, kind: 'x', h: null, tip, aria: tip }); continue }
     if (c.compaction) { const tip = `${W.COMPACT_WORD}${c.compactionInferred ? ' · ' + W.GUESS : ''} — ${W.compactTip(n, c.compactionInferred)}`; items.push({ ...base, kind: 'compact', h: null, tip, aria: tip }); continue }
     if (landing(c)) continue
     const ref = refRowOf(a, i), st = cacheState(c, ref)
     if (!st.isBreak) continue
-    const it = { ...base, kind: 'flag', h: null, tip: '', aria: '', usd: breakCost(c, ref, s.pricing ? priceMatch(s.pricing, modelOf(c)) : null).usd, struct: st.state === 'changed' }
+    const it = { ...base, n, kind: 'flag', h: null, tip: '', aria: '', usd: breakCost(c, ref, s.pricing ? priceMatch(s.pricing, modelOf(c)) : null).usd, struct: st.state === 'changed' }
     items.push(it); flags.push(it)
   }
   const max = Math.max(0, ...flags.map((f) => f.usd ?? 0))
   for (const f of flags) {
     f.h = f.usd == null ? FLAG_NONE_H : Math.sqrt(f.usd / Math.max(1e-9, max))
-    f.tip = f.aria = W.breakFlagTip(no(f.i), f.usd == null ? W.BREAK_COST_NONE : `${W.BREAK_COST_LINE} ${usd(f.usd)}`, f.struct)
-    delete f.usd; delete f.struct
+    f.tip = f.aria = W.breakFlagTip(f.n, f.usd == null ? W.BREAK_COST_NONE : `${W.BREAK_COST_LINE} ${usd(f.usd)}`, f.struct)
+    delete f.usd; delete f.struct; delete f.n
   }
   let at = -1, l = 0, r = probs.length - 1 // binary search: the lane's problem list is in step order
   while (l <= r) { const m = (l + r) >> 1; if (probs[m] === s.playhead) { at = m; break } if (probs[m] < s.playhead) l = m + 1; else r = m - 1 }
   return { k: at >= 0 ? at + 1 : null, n: probs.length, name: W.problemPager(at >= 0 ? at + 1 : null, probs.length), items }
 }
 
-// the chapter row (1.3 §章): k / n, the steps a–b, inferred, where ‹ / › land (null at the ends: disabled, not hidden)
-function chaptersOf(chs, g, end) {
-  const k = chapterAt(chs, g), c = chs[k], last = k === chs.length - 1, b = last ? Math.max(c.s1, end) : c.s1
+// the chapter row (1.3 §章): the part step `g` is in (the window's: the label says what the bars show): k / n, the steps a–b, inferred,
+// where ‹ / › land (null at the ends: disabled, not hidden)
+function chaptersOf(chs, g) {
+  const k = chapterAt(chs, g), c = chs[k], b = c.s1
   return { k: k + 1, n: chs.length, a: c.s0 + 1, b, inferred: !!c.inferred, prev: chapterJump(chs, g, -1), next: chapterJump(chs, g, 1),
     label: W.chapterLabel(k + 1, chs.length, c.s0 + 1, b, !!c.inferred), prevTip: W.CHAPTER_PREV, nextTip: W.CHAPTER_NEXT }
 }
 
 // the 提问刻度 (1.3 §提问刻度): ticks from the skeleton's user events on the window's rows; K and P are the server's `k`, never a count
-function asksOf(s, lo, hi) {
+function asksOf(s, bars) {
   const a = s.anchor, desk = s.desk
   if (!desk || !(a.events || []).some((e) => e && e.type === 'user')) return null // no prompt events: no row, no name
   const held = desk.held.get(a.id), ticks = []
-  for (let i = lo; i < hi; i++) {
+  for (const { i, col } of bars) {
+    if (i == null) continue
     const rid = a.calls[i].rid
     if (!(desk.events.get(rid) || []).some((e) => e.type === 'user')) continue
     const evs = held && held.events.get(rid) ? held.events.get(rid).filter((e) => e.type === 'user' && e.k != null) : []
-    ticks.push({ rid, i, col: i - lo, tip: evs.length ? evs.map((e) => W.askScaleTip(e.k, e.preview || '')).join('\n') : W.askScaleStepTip(stepRef(s.lanes, rid)) })
+    ticks.push({ rid, i, col, tip: evs.length ? evs.map((e) => W.askScaleTip(e.k, e.preview || '')).join('\n') : W.askScaleStepTip(stepRef(s.lanes, rid)) })
   }
   const k0 = askOrdinal(desk, a.id, a.calls[s.playhead].rid), k = k0 >= 1 ? k0 : null, p = askTotal(desk)
   return { k, p, name: W.askRowName(k, p), ticks }
@@ -358,10 +397,10 @@ function asksOf(s, lo, hi) {
 function askTotal(desk) {
   const head = desk.head
   if (!head || !head.cols || head.axis == null) return null
-  const h = desk.held.get(head.axis), per = head.bucket || 1
+  const h = desk.held.get(head.axis), per = head.bucket || 1, cells = colsOf(head)
   if (!h) return null
-  for (let c = Math.floor(String(head.cols).length / 4) - 1; c >= 0; c--) {
-    if (!(cellAt(head.cols, c)[2] & FLAG.user)) continue
+  for (let c = Math.floor(cells.length / 3) - 1; c >= 0; c--) {
+    if (!(cells[3 * c + 2] & FLAG.user)) continue
     let p = null
     for (let g = c * per; g < Math.min(head.steps, (c + 1) * per); g++) {
       const rid = ridAt(desk, head.axis, g)
@@ -385,31 +424,4 @@ function overviewOf(N, val, failed) {
     marks.push({ x: (lo + hi) / 2 / N, v: clamp01(v), failed: f })
   }
   return { mode: N > B ? 'buckets' : 'line', sampled: N > B, marks }
-}
-
-// the rough page (2.3 §大致页面 · 1.3 §章): the session head alone. Tier 0: the calls by time, sampled, no bars. Otherwise the
-// playhead chapter's window, one bar a step: a held row draws as itself (with its rid), any other step from its `cols` cell (no rid).
-function roughScope(s, head, K) {
-  const N = head.steps, at = roughAt(s), empty = { view: { lo: 0, hi: 0, N }, rough: true, chapters: null, problems: null, bars: [], trace: [], asks: null, review: null, axis: null, gutter: [], cursor: { col: null }, noMain: null }
-  if (!head.tier) {
-    const bs = head.buckets || [], mx = Math.max(1, ...bs.map((b) => b.calls))
-    return { ...empty, peak: { text: '', tip: null }, legend: { estimate: W.COMP_LEGEND, cache: [W.CACHE_LEGEND, W.CACHE_LEGEND_UNK], range: null, rangeText: '', sampled: true },
-      overview: { mode: 'buckets', sampled: true, marks: bs.map((b, i) => ({ x: (i + 0.5) / bs.length, v: b.calls / mx, failed: false })), chapterTicks: [], brush: null, pin: null } }
-  }
-  const per = head.bucket || 1, pk = Math.max(1, head.peak), cell = (i) => cellAt(head.cols, Math.floor(i / per))
-  const chs = head.chapters && head.chapters.length ? head.chapters : [{ s0: 0, s1: N, inferred: false }]
-  const { lo, hi } = roughWindow(head, at, K), bars = []
-  for (let i = lo; per === 1 && i < hi; i++) {
-    const rid = ridAt(s.desk, head.axis, i), row = rid != null ? s.desk.rows.get(rid) : null
-    const f = row ? isFailed(row) : !!(cell(i)[2] & FLAG.failed), base = { i, col: i - lo, segs: null, hatched: false, fail: f, cur: i === at, reviewed: false, tip: W.barTip(true, i + 1, '') }
-    if (row) { const segs = compShares(row.comp); bars.push({ ...base, rid, compact: !!row.compaction, h: f ? FAIL_H : Math.max(MIN_H, Math.min(1, (row.ctx || 0) / pk)), segs, hatched: !f && !segs }); continue }
-    const c = cell(i)
-    bars.push({ ...base, compact: !!(c[2] & FLAG.compaction), h: f ? FAIL_H : Math.max(MIN_H, c[0] / 255), segs: f ? null : [[CT_ORDER[c[1] >> 4] || 'other', 1]] })
-  }
-  const ov = overviewOf(N, (i) => cell(i)[0] / 255, (i) => !!(cell(i)[2] & FLAG.failed))
-  return { ...empty, view: { lo, hi, N }, bars, chapters: chaptersOf(chs, at, N),
-    peak: { text: W.peakCtx(kf(head.peak)), tip: W.PEAK_CTX_TIP },
-    legend: { estimate: W.COMP_LEGEND, cache: [W.CACHE_LEGEND, W.CACHE_LEGEND_UNK], range: [lo + 1, hi], rangeText: W.showSteps(lo + 1, hi), sampled: ov.sampled },
-    overview: { ...ov, chapterTicks: chs.map((c) => ({ k: c.k ?? null, left: c.s0 / N })), brush: { left: lo / N, width: (hi - lo) / N }, pin: (at + 0.5) / N },
-    axis: { start: W.axisNo(true, lo + 1), end: W.axisNo(true, hi) }, cursor: { col: at >= lo && at < hi ? at - lo : null } }
 }

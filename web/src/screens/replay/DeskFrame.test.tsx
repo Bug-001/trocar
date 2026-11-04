@@ -10,7 +10,7 @@ import { reactView, type Els } from './view'
 afterEach(() => { cleanup(); document.body.replaceChildren() })
 
 function frame(state: object = {}) {
-  const s = { project: 'p', id: 'i', view: { lo: 0, hi: 0 }, railsFolded: false, rpOpen: false, ...state }
+  const s = { project: 'p', id: 'i', span: { lo: 0, hi: 0 }, railsFolded: false, rpOpen: false, ...state }
   const handed: Els[] = []
   const desk = reactView(s, (E) => { handed.push(E) }, () => {})
   document.body.append(desk.root)
@@ -40,7 +40,7 @@ test('decision 12: #leftpage has railopen iff the rails are not folded, kept acr
     const { s, desk, $ } = frame({ railsFolded: !folded })
     act(() => { s.railsFolded = folded; desk.frame() })
     expect($('#leftpage')!.classList.contains('railopen'), `folded=${folded}`).toBe(!folded)
-    act(() => { s.view = { lo, hi }; desk.saw() })
+    act(() => { s.span = { lo, hi }; desk.saw() })
     expect($('#leftpage')!.classList.contains('railopen'), `folded=${folded} after a scope paint`).toBe(!folded)
     cleanup(); document.body.replaceChildren()
   }

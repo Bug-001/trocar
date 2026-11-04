@@ -27,11 +27,11 @@ const ROWS = [
 ]
 const EVENTS = [{ type: 'user', rid: 'R0-1', lane: 'R0-0' }, { type: 'user', rid: 'R0-4', lane: 'R0-0' }]
 
-function stateOf(desk: any, { at = 0, view = null as null | { lo: number, hi: number }, ...extra } = {}) {
-  const lanes = buildLanes(desk), anchor = anchorLane(lanes), N = anchor.calls.length
-  return { desk, meta: desk.meta, lanes, anchor, playhead: at, playRid: anchor.calls[at].rid, view: view || { lo: 0, hi: N }, sawView: 'ctx',
+function stateOf(desk: any, { at = 0, ...extra }: { at?: number, [k: string]: unknown } = {}) {
+  const lanes = buildLanes(desk), anchor = anchorLane(lanes)
+  return { desk, meta: desk.meta, lanes, anchor, playhead: at, playRid: anchor.calls[at].rid, sawView: 'ctx',
     problems: problemSteps(anchor), pricing: { m: [3, 15, 3.75, 0.3] }, diffRef: null, reviewRange: null,
-    setPlayhead: vi.fn(), setView: vi.fn(), chapterGo: vi.fn(), jumpTo: vi.fn(), refit: () => {}, ...extra } as any
+    setPlayhead: vi.fn(), brushTo: vi.fn(), chapterGo: vi.fn(), jumpTo: vi.fn(), refit: () => {}, ...extra } as any
 }
 function mount(s: any) {
   const desk = reactView(s, () => {}, () => {})
@@ -42,7 +42,7 @@ function mount(s: any) {
   const $$ = (sel: string) => [...desk.root.querySelectorAll<HTMLElement>(sel)]
   return { s, desk, $, $$, r, model: () => scopeModel(s, desk.capacity()) as any }
 }
-const world = (o: object = {}) => mount(stateOf(deskOf([{ kind: 'main', rows: ROWS }], { events: EVENTS }), o))
+const world = (o: Record<string, unknown> = {}) => mount(stateOf(deskOf([{ kind: 'main', rows: ROWS }], { events: EVENTS }), o))
 
 test('1.3 #1: every track is a .tkrow of exactly a .tgut and a .tlane', () => {
   const { $ } = world({ at: 2 })
@@ -74,7 +74,7 @@ test('1.3 #19: the legend is the first row; #rails comes after the prompts row a
 })
 
 test('1.3 #8 gestures: dragging the brush body pans, a grip zooms, a double-click shows all', () => {
-  const view = { lo: 2, hi: 5 }, { s, $ } = world({ at: 3, view }), N = ROWS.length, W = 800
+  const span = { lo: 2, hi: 5 }, { s, $ } = world({ at: 3, span }), N = ROWS.length, W = 800
   const strip = $('#ovstrip')!
   strip.getBoundingClientRect = () => ({ width: W, left: 0, right: W, top: 0, bottom: 20, height: 20, x: 0, y: 0, toJSON() {} }) as DOMRect
   const drag = (sel: string, steps: number) => {
@@ -82,11 +82,10 @@ test('1.3 #8 gestures: dragging the brush body pans, a grip zooms, a double-clic
     fireEvent.pointerMove(strip, { clientX: 100 + (steps * W) / N, pointerId: 1 })
     fireEvent.pointerUp(strip, { pointerId: 1 })
   }
-  drag('#ovbrush', 1); expect(s.setView).toHaveBeenLastCalledWith(view.lo + 1, view.hi + 1, false)
-  drag('.ovh-l', -1); expect(s.setView).toHaveBeenLastCalledWith(view.lo - 1, view.hi, false)
-  drag('.ovh-r', 2); expect(s.setView).toHaveBeenLastCalledWith(view.lo, view.hi + 2, false)
-  expect(s.brushDragging).toBe(false)
-  fireEvent.doubleClick($('#ovbrush')!); expect(s.setView).toHaveBeenLastCalledWith(0, N, true)
+  drag('#ovbrush', 1); expect(s.brushTo).toHaveBeenLastCalledWith(span.lo + 1, span.hi + 1)
+  drag('.ovh-l', -1); expect(s.brushTo).toHaveBeenLastCalledWith(span.lo - 1, span.hi)
+  drag('.ovh-r', 2); expect(s.brushTo).toHaveBeenLastCalledWith(span.lo, span.hi + 2)
+  fireEvent.doubleClick($('#ovbrush')!); expect(s.brushTo).toHaveBeenLastCalledWith(0, N)
 })
 
 test('1.3 #18 render: label k / n, a–b and inferred; ‹ › disabled at the ends; one overview tick per chapter start', () => {
@@ -94,7 +93,7 @@ test('1.3 #18 render: label k / n, a–b and inferred; ‹ › disabled at the e
   for (const at of [0, 4, 7]) {
     const desk = deskOf([{ kind: 'main', rows: ROWS }], { events: EVENTS })
     desk.head = { tier: 1, axis: 'R0-0', steps: N, peak: 1000, bucket: 1, chapters: starts.map((s0, k) => ({ k, s0, s1: starts[k + 1] ?? N, ts0: null, inferred: s0 === 6 })) }
-    const { $, $$, model } = mount(stateOf(desk, { at, view: null }))
+    const { $, $$, model } = mount(stateOf(desk, { at }))
     const c = model().chapters, lab = $('#chapnav .chaplabel')!
     expect([lab.dataset.part, lab.dataset.of, lab.dataset.s0, lab.dataset.s1, lab.dataset.inferred]).toEqual([c.k, c.n, c.a - 1, c.b, c.inferred].map(String))
     expect(lab.textContent).toBe(c.label)
@@ -120,21 +119,34 @@ test('1.3 marks: trace columns, flags, × and compaction carry the model\'s tip 
   fireEvent.click(bar); expect(s.setPlayhead).toHaveBeenLastCalledWith(m.bars[4].i, true)
 })
 
+test('1.3 #23 render: a step without its row is a bar that names its step; its trace column is empty', () => {
+  const N = ROWS.length + 3, desk = deskOf([{ kind: 'main', rows: ROWS, head: { count: N } }], { events: EVENTS })
+  const { s, $, $$, model } = mount(stateOf(desk, { at: 1, span: { lo: 0, hi: 5 } }))
+  const m = model(), first = m.bars.findIndex((b: any) => b.i != null)
+  expect(first).toBe(3)
+  const bar = $$('#sawrow .bar')[1]
+  expect(bar.dataset.i).toBeUndefined()
+  fireEvent.click(bar); expect(s.chapterGo).toHaveBeenLastCalledWith(m.bars[1].g)
+  const gap = $$('#cacherow .cbar')[1]
+  expect(gap.hasAttribute('title')).toBe(false)
+  expect($('#sawrow .bar[data-step="3"]')).toBeNull()
+})
+
 test('D75④: with a row inserted before the window (every i + 1), the bars of unchanged rows are the same DOM nodes', () => {
   const rid = (i: number) => ({ rid: `k${i}` })
   const rows = ROWS.map((r, i) => ({ ...r, ...rid(i) }))
   const one = (extra: object[]) => deskOf([{ kind: 'main', rows: [{ usage: U(1, 1, 1) }, ...extra, ...rows] }])
-  const s = stateOf(one([]), { at: 3, view: { lo: 1, hi: 1 + rows.length } })
+  const s = stateOf(one([]), { at: 3, span: { lo: 1, hi: 1 + rows.length } })
   const { desk, $$ } = mount(s)
   const before = $$('#sawrow .bar'), at0 = before.map((b) => +b.dataset.i!)
-  act(() => { Object.assign(s, stateOf(one([{ usage: U(2, 2, 2), rid: 'new' }]), { at: 4, view: { lo: 2, hi: 2 + rows.length } })); desk.saw() })
+  act(() => { Object.assign(s, stateOf(one([{ usage: U(2, 2, 2), rid: 'new' }]), { at: 4, span: { lo: 2, hi: 2 + rows.length } })); desk.saw() })
   const after = $$('#sawrow .bar')
   expect(after.map((b) => +b.dataset.i!)).toEqual(at0.map((i) => i + 1))
   before.forEach((b, j) => expect(after[j], `bar ${j}`).toBe(b))
 })
 
 test('2.1 #5 render: with a review range the bars below k are .reviewed and the bracket is review.width wide, through a step change', () => {
-  const k = 5, { s, desk, $, $$, model } = world({ at: 1, view: { lo: 2, hi: ROWS.length }, reviewRange: { k } })
+  const k = 5, { s, desk, $, $$, model } = world({ at: 1, span: { lo: 2, hi: ROWS.length }, reviewRange: { k } })
   act(() => { desk.review() })
   for (const at of [1, 6]) {
     if (at !== 1) act(() => { s.playhead = at; s.playRid = s.anchor.calls[at].rid; desk.cur() })
@@ -146,19 +158,19 @@ test('2.1 #5 render: with a review range the bars below k are .reviewed and the 
 })
 
 // 1.3 §窗内步少时收窄: the detail lanes narrow to the bars the window draws. On a held row that is the model's window; on the rough page
-// (2.3 §大致页面: the head alone, no row held, s.view still the fresh 0..0) it is the rough window, not one bar.
+// (2.3 §大致页面: the head alone, no row held, s.span not placed yet) it is the rough window, not one bar.
 test('1.3 narrowing: #saw carries --nbars = the model window\'s width, on a held row and on the rough page', () => {
   const N = ROWS.length
-  for (const view of [{ lo: 0, hi: N }, { lo: 2, hi: 5 }, { lo: 3, hi: 4 }]) {
-    const { $, model } = world({ at: view.lo, view })
+  for (const span of [{ lo: 0, hi: N }, { lo: 2, hi: 5 }, { lo: 3, hi: 4 }]) {
+    const { $, model } = world({ at: span.lo, span })
     const v = model().view
-    expect($('#saw')!.style.getPropertyValue('--nbars'), JSON.stringify(view)).toBe(String(Math.max(1, v.hi - v.lo)))
+    expect($('#saw')!.style.getPropertyValue('--nbars'), JSON.stringify(span)).toBe(String(Math.max(1, v.hi - v.lo)))
     cleanup(); document.body.replaceChildren()
   }
   for (const starts of [[0], [0, 3, 6]]) for (const initialStep of [undefined, 2, N]) {
     const desk = deskOf([{ kind: 'main', rows: ROWS }], { events: EVENTS })
     desk.head = { tier: 1, axis: 'R0-0', steps: N, peak: 1000, bucket: 1, chapters: starts.map((s0, k) => ({ k, s0, s1: starts[k + 1] ?? N, ts0: null, inferred: false })) }
-    const s = { ...stateOf(desk), anchor: null, playRid: null, playhead: 0, view: { lo: 0, hi: 0 }, initialStep }
+    const s = { ...stateOf(desk), anchor: null, playRid: null, playhead: 0, initialStep }
     const { $, desk: d, model } = mount(s)
     expect(model().rough).toBe(true)
     const w = roughWindow(desk.head, Math.max(0, Math.min(N, initialStep ?? N) - 1), d.capacity())

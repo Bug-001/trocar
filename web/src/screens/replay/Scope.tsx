@@ -7,15 +7,15 @@
 // (view.setCapacity); the rough page reports itself drawn (view.roughDrawn). The brush is a port of timeline.mjs : wireTimeline.
 import { memo, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type MouseEvent, type PointerEvent } from 'react'
 import { SKELETON, laneCapacity } from '../../../legacy/replay/replay.mjs'
-import { BAR_KEYS, chapterHere, problemJump } from '../../../legacy/replay/timeline.mjs'
+import { BAR_KEYS, problemJump } from '../../../legacy/replay/timeline.mjs'
 import { L } from '../../../legacy/core/labels.mjs'
 import * as W from '../../../legacy/labels/replay.mjs'
 import { scopeModel } from './models.mjs'
 import { useDeskVersion } from './useDesk'
 import type { Area, DeskState, DeskView } from './view'
 
-type Bar = { rid?: string, i: number, col: number, h: number, segs: Array<[string, number]> | null, hatched: boolean, fail: boolean, compact: boolean, cur: boolean, reviewed: boolean, tip: string }
-type Cell = { rid: string, col: number, state: string, tip: string }
+type Bar = { rid?: string, i?: number, g: number, col: number, h: number, segs: Array<[string, number]> | null, hatched: boolean, fail: boolean, compact: boolean, cur: boolean, reviewed: boolean, tip: string }
+type Cell = { rid?: string, col: number, state: string, tip: string }
 type Item = { rid: string, i: number, col: number, kind: 'flag' | 'x' | 'compact', h: number | null, tip: string, aria: string }
 type Mark = { x: number, v: number, failed: boolean }
 
@@ -25,7 +25,7 @@ const BAR_PX = 80, FLAG_PX = 14
 const barH = (f: number) => `calc(var(--barh) * ${f.toFixed(4)})`
 const READS: Area[] = ['saw', 'overview', 'cur', 'problems', 'review', 'rough', 'empty'] // the areas the scope draws
 const BACKDROP: Area[] = ['overview', 'rough', 'empty'] // the paints that rebuild the overview's backdrop (the brush moves on any)
-// the controller's state is plain JS the renderers share: a gesture writes its flags through here, not on a value React tracks
+// the controller's state is plain JS the renderers share: the view switch writes through here, not on a value React tracks
 const put = (s: DeskState, k: string, v: unknown) => { s[k] = v }
 const pct = (f: number) => `${(f * 100).toFixed(3)}%`
 
@@ -40,17 +40,10 @@ function skel() {
 }
 
 // the playhead's step tag on the axis: the step's own global number (1.2 §编号)
-function tagOf(s: DeskState, m: any) {
+function tagOf(m: any) {
   const b = m.cursor.col != null ? m.bars[m.cursor.col] : null
-  if (!b) return null
-  if (m.rough) return W.axisNo(true, b.i + 1)
-  const a = s.anchor
-  return W.axisNo(a.kind === 'main', (a.no ? a.no(b.i) : b.i) + 1)
+  return b ? W.axisNo(!m.noMain, b.g + 1) : null
 }
-
-// a named step on its way to a desk that drew (a chapter jump, Home): its chapter's bars come from the head until it lands
-// (replay.mjs namedRows; landing clears initialStep)
-const named = (s: DeskState) => s.initialStep != null && s.playRid != null && !!s.desk?.head?.tier && !!s.desk.head.steps
 
 function useScope(desk: DeskView) {
   const key = useSyncExternalStore(desk.subscribe, () => READS.map((a) => desk.version(a)).join('.'))
@@ -58,38 +51,38 @@ function useScope(desk: DeskView) {
   const K = desk.capacity()
   const m = useMemo(() => {
     void key // the paint the model is computed for
-    const st = named(desk.s) ? { ...desk.s, playRid: null } : desk.s
-    const m: any = scopeModel(st, K) // the model's JSDoc shapes; the fields read below are its own
-    return m && { ...m, tag: tagOf(st, m) }
+    const m: any = scopeModel(desk.s, K) // the model's JSDoc shapes; the fields read below are its own
+    return m && { ...m, tag: tagOf(m) }
   }, [desk, key, K])
   return { m, ov }
 }
 
 const sameSegs = (a: Bar['segs'], b: Bar['segs']) => a === b || (!!a && !!b && a.length === b.length && a.every((x, j) => x[0] === b[j][0] && x[1] === b[j][1]))
-const sameBar = (p: { b: Bar, cost: boolean, rough: boolean }, n: { b: Bar, cost: boolean, rough: boolean }) => p.cost === n.cost && p.rough === n.rough &&
-  (['i', 'h', 'hatched', 'fail', 'compact', 'cur', 'reviewed', 'tip'] as const).every((k) => p.b[k] === n.b[k]) && sameSegs(p.b.segs, n.b.segs)
+const sameBar = (p: { b: Bar, cost: boolean }, n: { b: Bar, cost: boolean }) => p.cost === n.cost &&
+  (['i', 'g', 'h', 'hatched', 'fail', 'compact', 'cur', 'reviewed', 'tip'] as const).every((k) => p.b[k] === n.b[k]) && sameSegs(p.b.segs, n.b.segs)
 
-const BarView = memo(function BarView({ b, cost, rough }: { b: Bar, cost: boolean, rough: boolean }) {
+const BarView = memo(function BarView({ b, cost }: { b: Bar, cost: boolean }) {
   // a hatched cost bar is 0 high: its stripe says the estimate cannot be made
   const cls = ['bar', cost && 'cost', b.fail && 'err', b.compact && 'compact', b.cur && 'cur', b.reviewed && 'reviewed'].filter(Boolean).join(' ')
-  const at = rough ? { 'data-step': b.i } : { 'data-i': b.i }
+  const at = b.i != null ? { 'data-i': b.i } : { 'data-step': b.g } // a step without its row yet is a control too: it names the step
   return <div className={cls} {...at} style={{ height: barH(b.h) }} title={b.tip}>
     {b.fail ? null : b.hatched ? <span className="ct-unloaded" style={{ height: `max(6px, ${barH(b.h)})` }} />
       : cost || !b.segs ? null : b.segs.map(([k, f]) => f * b.h * BAR_PX < 0.4 ? null : <span key={k} className={`ct-${k}`} style={{ height: barH(f * b.h) }} />)}
   </div>
 }, sameBar)
 
-const TraceCell = memo(function TraceCell({ c, i }: { c: Cell, i: number }) {
+const TraceCell = memo(function TraceCell({ c, i }: { c: Cell, i?: number }) {
+  if (c.state === 'gap') return <div className="cbar gap" /> // no row yet: an empty column, nothing to say
   return <div className={`cbar ${c.state}`} data-i={i} role="img" title={c.tip} aria-label={c.tip} />
 }, (p, n) => p.i === n.i && p.c.state === n.c.state && p.c.tip === n.c.tip)
 
-// the cache trace as one path per line style: a tier is a level, no usage a dashed middle line, uncertain its own style, failed a gap
+// the cache trace as one path per line style: a tier is a level, no usage a dashed middle line, uncertain its own style, failed or no row a gap
 const LEVEL: Record<string, number> = { high: 2, mid: 5, low: 8, none: 5, unk: 5 }
 function tracePaths(cells: Cell[]) {
   const d: Record<'tier' | 'none' | 'unk', string> = { tier: '', none: '', unk: '' }
   let prev: string | null = null
   cells.forEach((c, x) => {
-    const k = c.state === 'fail' ? null : c.state === 'none' || c.state === 'unk' ? c.state : 'tier'
+    const k = c.state === 'fail' || c.state === 'gap' ? null : c.state === 'none' || c.state === 'unk' ? c.state : 'tier'
     if (k) d[k as 'tier'] += `${k === 'tier' && prev === 'tier' ? 'V' : `M${x} `}${LEVEL[c.state]}H${x + 1}`
     prev = k
   })
@@ -116,7 +109,7 @@ export function Scope({ desk }: { desk: DeskView }) {
   const s = desk.s
   const vRough = useDeskVersion(desk, 'rough')
   const [drag, setDrag] = useState(false)
-  const g = useRef({ mode: '', x: 0, lo: 0, hi: 0 })
+  const g = useRef({ mode: '', x: 0, lo: 0, hi: 0, N: 1, c0: 0, c1: 1 })
 
   // the lane's capacity: measured on the bars row's grid column, on mount and on every resize
   useLayoutEffect(() => {
@@ -138,34 +131,35 @@ export function Scope({ desk }: { desk: DeskView }) {
   }, [m])
 
   const cost = s.sawView === 'cost', rough = !!m?.rough, bars: Bar[] = m ? m.bars : [], n = Math.max(1, bars.length)
-  const keyAt = (col: number) => bars[col]?.rid ?? `s${bars[col]?.i}`
+  const keyAt = (col: number) => bars[col]?.rid ?? `s${bars[col]?.g}`
   const f = m && m.cursor.col != null ? (m.cursor.col + 0.5) / n : null
 
-  // the brush (1.3 §overview+detail): drag the body = pan inside the playhead's chapter, drag a grip = zoom, double-click = all
-  const N = () => (s.anchor ? s.anchor.calls.length : 1)
+  // the brush (1.3 §overview+detail), in global steps: drag the body = pan inside the window's part, drag a grip = zoom, double-click = all
   const down = (e: PointerEvent<HTMLDivElement>) => {
     const t = e.target as Element, mode = t.classList.contains('ovh-l') ? 'l' : t.classList.contains('ovh-r') ? 'r' : t.closest('.ovbrush') ? 'pan' : ''
-    if (!mode || !s.anchor) return
-    g.current = { mode, x: e.clientX, lo: s.view.lo, hi: s.view.hi }
-    put(s, 'brushDragging', true); setDrag(true)
+    if (!mode || !m) return
+    g.current = { mode, x: e.clientX, lo: m.view.lo, hi: m.view.hi, N: m.view.N, c0: m.chapters.a - 1, c1: m.chapters.b }
+    setDrag(true)
     try { t.setPointerCapture(e.pointerId) } catch { /* no capture: the drag still works while the pointer stays over the strip */ }
     e.stopPropagation(); e.preventDefault()
   }
   const move = (e: PointerEvent<HTMLDivElement>) => {
-    const { mode, x, lo, hi } = g.current
+    const { mode, x, lo, hi, N, c0, c1 } = g.current
     if (!mode) return
-    const d = Math.round(((e.clientX - x) / Math.max(1, e.currentTarget.getBoundingClientRect().width)) * N())
-    if (mode === 'pan') { const { c0, c1 } = chapterHere(s), dd = Math.max(c0 - lo, Math.min(c1 - hi, d)); s.setView(lo + dd, hi + dd, false) } // never across a chapter's edge
-    else if (mode === 'l') s.setView(Math.min(hi - 1, lo + d), hi, false)
-    else s.setView(lo, Math.max(lo + 1, hi + d), false)
+    const d = Math.round(((e.clientX - x) / Math.max(1, e.currentTarget.getBoundingClientRect().width)) * N)
+    if (mode === 'pan') { const dd = Math.max(c0 - lo, Math.min(c1 - hi, d)); s.brushTo(lo + dd, hi + dd) } // never across a chapter's edge
+    else if (mode === 'l') s.brushTo(Math.max(c0, Math.min(hi - 1, lo + d)), hi)
+    else s.brushTo(lo, Math.min(c1, Math.max(lo + 1, hi + d)))
   }
-  const up = () => { if (!g.current.mode) return; g.current.mode = ''; put(s, 'brushDragging', false); setDrag(false) }
-  const all = (e: MouseEvent) => { if ((e.target as Element).closest('.ovbrush') && s.anchor) { e.preventDefault(); s.setView(0, N(), true) } }
+  const up = () => { if (!g.current.mode) return; g.current.mode = ''; setDrag(false) }
+  const all = (e: MouseEvent) => { if ((e.target as Element).closest('.ovbrush') && m) { e.preventDefault(); s.brushTo(m.chapters.a - 1, m.chapters.b) } }
 
-  // a bar, a flag, a × or a compaction mark moves the playhead to its step (the rough page's bars are no control)
+  // a bar, a flag, a × or a compaction mark moves the playhead to its step; a bar without its row names the step (s.chapterGo)
   const pick = (e: MouseEvent) => {
-    const t = (e.target as Element).closest('#sawrow [data-i], #probrow [data-i]') as HTMLElement | null
-    if (t && !rough) s.setPlayhead(+t.dataset.i!, true)
+    const t = (e.target as Element).closest('#sawrow [data-i], #sawrow [data-step], #probrow [data-i]') as HTMLElement | null
+    if (!t) return
+    if (t.dataset.i != null) s.setPlayhead(+t.dataset.i, true)
+    else s.chapterGo(+t.dataset.step!)
   }
   const probGo = (dir: number) => {
     if (!s.anchor) return
@@ -178,8 +172,7 @@ export function Scope({ desk }: { desk: DeskView }) {
   const ticks = new Map<number, any>((m?.asks?.ticks || []).map((t: any) => [t.col, t]))
   const paths = tracePaths(m ? m.trace : [])
   const gutName = cost ? W.VIEW_COST : !m || rough || s.anchor?.kind === 'main' ? w.ctx : W.laneWord(s.anchor.kind)
-  // the bars the window draws, which every detail lane (and #rails, inside #saw) narrows to: the model's window, so the rough page's
-  // chapter window too (1.3 §窗内步少时收窄)
+  // the bars the window draws, which every detail lane (and #rails, inside #saw) narrows to: the model's window (1.3 §窗内步少时收窄)
   const nb = m ? { '--nbars': String(Math.max(1, m.view.hi - m.view.lo)) } as CSSProperties : undefined
   return <div id="saw" ref={el} style={nb}>
     <div className="sawlegend">
@@ -209,7 +202,7 @@ export function Scope({ desk }: { desk: DeskView }) {
         {!cost && m?.gutter.length ? <span className="gshares">{m.gutter.map((x: { ct: string, share: string }) => <span key={x.ct} className="gshare"><i className={`ct-${x.ct}`} />{x.share}</span>)}</span> : null}</div>
         <div className="tlane"><div className="sawrow" id="sawrow">
           <div id="reviewbracket" style={m?.review ? { display: 'block', width: pct(m.review.width) } : { display: 'none' }} title={m?.review?.tip}><span className="rbend" aria-hidden="true">{W.GUESS}</span></div>
-          {bars.map((b, col) => <BarView key={keyAt(col)} b={b} cost={cost && !rough} rough={rough} />)}
+          {bars.map((b, col) => <BarView key={keyAt(col)} b={b} cost={cost && !rough} />)}
         </div></div></div>
       <div className="tkrow tkrow-cache"><div className="tgut">{W.CACHE_TITLE}</div><div className="tlane"><div className="cacherow" id="cacherow">
         <svg className="ctrace" viewBox={`0 0 ${n} 10`} preserveAspectRatio="none" aria-hidden="true">
