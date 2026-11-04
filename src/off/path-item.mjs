@@ -41,14 +41,14 @@ export function pathItemTarget({ platform = process.platform, env = process.env,
 // the kind never changes; an absent value is created REG_EXPAND_SZ. `add` appends ';' + element to a value that is not empty; `remove` takes out
 // exactly that (or the element and its ';' when it leads), so the user's own separators stay byte for byte; a value add created and that is empty
 // again goes. The answer is one JSON line {result}.
-const psScript = (op, { created = false } = {}) => [
+export const psScript = (op, { created = false } = {}) => [
   "$ErrorActionPreference = 'Stop'",
   `$el = '${WIN_ELEMENT}'`,
   '$abs = [Environment]::ExpandEnvironmentVariables($el)',
   "$k = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment')",
   "$v = $k.GetValue('Path', $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)",
   "if ($null -ne $v) { $kind = $k.GetValueKind('Path'); if ($kind -ne 'String' -and $kind -ne 'ExpandString') { throw \"Path is a $kind value, not a string\" } }",
-  "$alt = '(' + [regex]::Escape($el) + '|' + [regex]::Escape($abs) + ')\\?'",
+  "$alt = '(' + [regex]::Escape($el) + '|' + [regex]::Escape($abs) + ')\\\\?'", // PowerShell receives ')\\?': an optional trailing backslash
   op === 'add'
     ? "if ($null -eq $v) { $k.SetValue('Path', $el, 'ExpandString'); $r = 'created' } elseif ([regex]::IsMatch($v, '(?i)(^|;)' + $alt + '(?=;|$)')) { $r = 'present' } else { $add = if ($kind -eq 'ExpandString') { $el } else { $abs }; $k.SetValue('Path', $(if ($v -eq '') { $add } else { $v + ';' + $add }), $kind); $r = 'added' }"
     : `$m = $null; if ($null -ne $v) { $m = [regex]::Match($v, '(?i);' + $alt + '(?=;|$)'); if (-not $m.Success) { $m = [regex]::Match($v, '(?i)^' + $alt + '(;|$)') } }; if (-not ($m -and $m.Success)) { $r = 'absent' } else { $new = $v.Remove($m.Index, $m.Length); if ($new -eq '' -and $${created ? 'true' : 'false'}) { $k.DeleteValue('Path') } else { $k.SetValue('Path', $new, $kind) }; $r = 'removed' }`,
@@ -93,12 +93,14 @@ export function placePathItem({ platform = process.platform, env = process.env, 
 }
 
 const LEFT = new Set(['left-unparsable', 'left-unreadable', 'left-link', 'left-text', 'error'])
-/** Takes the item out again → { ok, path, result, reason? }. A file the user edited since keeps their edits (only trocar's line goes); a value they
- *  changed keeps theirs, without the one element. */
+const NOT_THERE = new Set(['absent', 'already-removed', 'already-restored', 'missing']) // the item was gone before this run: nothing was taken out
+/** Takes the item out again → { ok, path, result, taken, reason? }: `taken` is whether this run took it out (false: it was no longer there, so a
+ *  receipt does not say it was). A file the user edited since keeps their edits (only trocar's line goes); a value they changed keeps theirs, without the one element. */
 export function removePathItem(rec, { env = process.env, fs = nodeFs, run = null } = {}) {
+  const ok = (result) => ({ ok: true, path: rec.path, result, taken: !NOT_THERE.has(result) })
   if (rec.kind === 'user-path') {
-    try { return { ok: true, path: rec.path, result: winPath('remove', { run, env, created: rec.created === true }) } } catch (e) { return { ok: false, path: rec.path, result: 'error', reason: `${e.message}; by hand: ${rec.undo_by_hand}` } }
+    try { return ok(winPath('remove', { run, env, created: rec.created === true })) } catch (e) { return { ok: false, path: rec.path, result: 'error', taken: false, reason: `${e.message}; by hand: ${rec.undo_by_hand}` } }
   }
   const r = undoEntry(rec, { fs })
-  return LEFT.has(r.result) ? { ok: false, path: rec.path, result: r.result, reason: `${r.reason || r.result}; by hand: ${rec.undo_by_hand}` } : { ok: true, path: rec.path, result: r.result }
+  return LEFT.has(r.result) ? { ok: false, path: rec.path, result: r.result, taken: false, reason: `${r.reason || r.result}; by hand: ${rec.undo_by_hand}` } : ok(r.result)
 }

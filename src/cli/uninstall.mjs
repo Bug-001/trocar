@@ -236,7 +236,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
       // and the backup it names (before the sweep below: a taken-out item no longer names its backup, so the sweep drops it)
       if (m && m.path_item && !helperRow) {
         const p = removePathItem(m.path_item, { env, fs, run: w.exec })
-        if (p.ok) { receipt.changed.push({ path: p.path, change: 'the PATH item taken out' }); delete m.path_item }
+        if (p.ok) { if (p.taken) receipt.changed.push({ path: p.path, change: 'the PATH item taken out' }); else receipt.notes.push(`the PATH item was no longer in ${p.path}: nothing to take out`); delete m.path_item }
         else { receipt.left.push({ path: p.path, result: p.result, reason: p.reason }); failed.push({ code: 'entry-not-undone', path: p.path, reason: p.reason }) }
       }
       if (m) {

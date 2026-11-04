@@ -9,7 +9,7 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { runInstallCli } from '../../src/cli/install.mjs'
 import { runUninstallCli } from '../../src/cli/uninstall.mjs'
 import { readManifest } from '../../src/off/manifest.mjs'
-import { pathItemTarget } from '../../src/off/path-item.mjs'
+import { pathItemTarget, psScript, WIN_ELEMENT } from '../../src/off/path-item.mjs'
 import { appDir, launcherPath } from '../../src/off/paths.mjs'
 import { orphanBackups } from '../../src/off/backup.mjs'
 import { fakeIo, onCtx, seedClaude } from '../cli/fixtures/on-ctx.mjs'
@@ -69,6 +69,37 @@ test('V112 V113: a script-channel install adds the PATH item once; uninstall tak
   assert.deepEqual([fs.existsSync(appDir(home)), fs.existsSync(path.dirname(launcherPath(home, 'linux'))), fs.readFileSync(raw, 'utf8')], [false, false, '{"keep":1}\n'], 'app/, the launcher and the bin/ they leave empty are gone; the records stay')
 })
 
+// The Windows script's patterns as PowerShell receives them (the text of psScript, not a copy): its single-quoted literals ('' is one '), $alt, and
+// [regex]::Escape of the element and of its expansion. Evaluated here as .NET would, without a PowerShell: an element with or without a trailing
+// backslash, REG_EXPAND_SZ (as written) and REG_SZ (expanded) shapes, first / middle / last / alone, is found by add and taken out by remove.
+const ABS = 'C:\\Users\\u\\.trocar\\bin'
+const netEscape = (x) => x.replace(/[\\*+?|{[()^$.#\s]/g, '\\$&') // .NET Regex.Escape's set
+const psExpr = (expr, vars) => expr.split(' + ').map((t) => (t.startsWith("'") ? t.slice(1, -1).replace(/''/g, "'") : t in vars ? vars[t] : assert.fail(`unknown term ${t}`))).join('')
+const netRegex = (p) => new RegExp(p.replace(/^\(\?i\)/, ''), /^\(\?i\)/.test(p) ? 'i' : '')
+function scriptOps() {
+  const vars = { '[regex]::Escape($el)': netEscape(WIN_ELEMENT), '[regex]::Escape($abs)': netEscape(ABS) }
+  vars.$alt = psExpr(/^\$alt = (.+?)(?:,|$)/m.exec(psScript('add'))[1], vars)
+  const calls = (op) => [...psScript(op).matchAll(/\[regex\]::(?:IsMatch|Match)\(\$v, ((?:'(?:[^']|'')*'|\$alt)(?: \+ (?:'(?:[^']|'')*'|\$alt))*)\)/g)].map((m) => netRegex(psExpr(m[1], vars)))
+  const [present] = calls('add'), [mid, lead] = calls('remove')
+  return {
+    present: (v) => present.test(v),
+    remove: (v) => { const m = mid.exec(v) || lead.exec(v); return m ? v.slice(0, m.index) + v.slice(m.index + m[0].length) : null },
+  }
+}
+test('D74⑤: the Windows PATH script finds and takes out the element with or without its trailing backslash, unexpanded or expanded', () => {
+  const ops = scriptOps()
+  for (const el of [WIN_ELEMENT, `${WIN_ELEMENT}\\`, ABS, `${ABS}\\`, WIN_ELEMENT.toLowerCase()]) {
+    for (const [v, rest] of [[`C:\\x;${el}`, 'C:\\x'], [`${el};D:\\y`, 'D:\\y'], [`C:\\x;${el};D:\\y`, 'C:\\x;D:\\y'], [el, '']]) {
+      assert.equal(ops.present(v), true, `add sees it in ${v}`)
+      assert.equal(ops.remove(v), rest, `remove takes exactly it out of ${v}`)
+    }
+  }
+  for (const v of ['C:\\x;D:\\y', `C:\\x;${ABS}x`, `C:\\x;${ABS}?`, '']) {
+    assert.equal(ops.present(v), false, `not in ${v}`)
+    assert.equal(ops.remove(v), null, `nothing taken out of ${v}`)
+  }
+})
+
 // a script install on Linux with records on disk; `helper`: the capability helper is installed (its fixed path exists)
 function scriptLinux({ helper = false } = {}) {
   const home = tmpDir('trocar-path-helper-')
@@ -120,4 +151,14 @@ test('D58: once a script uninstall removed trocar itself, its receipt names no t
   const named = COMMANDS.filter((c) => new RegExp(`\\btrocar ${c.name}\\b`).test(io.text())).map((c) => c.name)
   assert.deepEqual(named, [], io.text())
   assert.ok(io.text().includes('~/.trocar/raw'), io.text())
+})
+
+test('D58: a PATH item that was gone before uninstall is not said to be taken out', async () => {
+  const s = scriptLinux()
+  assert.equal(await runInstallCli(['--yes'], s.ctx(fakeIo())), 0)
+  fs.writeFileSync(s.rc, 'alias ll="ls -l"\n') // the user took the line out by hand
+  const io = fakeIo()
+  assert.equal(await runUninstallCli(['--yes', '--json'], s.ctx(io)), 0, io.text())
+  const r = JSON.parse(io.text())
+  assert.deepEqual(r.changed.filter((c) => c.path === s.rc), [], JSON.stringify(r.changed))
 })
