@@ -11,7 +11,7 @@ import { refuseOldManifest, readManifest, saveManifest } from '../off/manifest.m
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
 import { opLockFile, standalonePath, standaloneFiles, launcherPath, standaloneCommand } from '../off/paths.mjs'
 import { isInteractive, confirm } from '../off/io.mjs'
-import { fit, tilde, planItems, formWords, carrierWords, planWords, commandLine, UNDO_WORDS } from './receipt.mjs'
+import { fit, tilde, planItems, formWords, carrierWords, planWords, commandLine, UNDO_WORDS, asDir } from './receipt.mjs'
 import { pairs, wrap } from './text.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
 import { EVENT } from '../collector/core/codes.mjs'
@@ -136,7 +136,7 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
       // one line per (agent, place): the same file reached by three forms of one agent is one line, with the forms named (D46)
       ...byPlace(rows.filter((r) => !r.state)),
       // V85: trocar's own tree is ONE line (uninstall takes all of it back); every file of yours outside it is its own line, above
-      ...(only ? [] : [{ what: 'trocar', detail: `${tilde(path.join(home, '.trocar'), home)}${platform === 'win32' ? '\\' : '/'}: trocar's own files (its root certificate and key, the install record, and ${standaloneFiles(home, platform).map((f) => tilde(f, home)).join(' and ')}, ${UNDO_WORDS})` }]),
+      ...(only ? [] : [{ what: 'trocar', detail: `${asDir(tilde(path.join(home, '.trocar'), home), platform)}: trocar's own files (its root certificate and key, the install record, and ${standaloneFiles(home, platform).map((f) => tilde(f, home)).join(' and ')}, ${UNDO_WORDS})` }]),
       // D61 (1.6 §3.2 step 5, 4.11 §1 install 7): the login entry is a file of YOURS outside trocar's tree, so it is its own line (V85), and the plan says a daemon runs from now on
       ...staleItem(stale, root),
       ...(pathItem ? [pathItem] : []),

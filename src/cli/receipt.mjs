@@ -22,6 +22,8 @@ const FORM_WORDS = Object.freeze({
   'desktop-prebuilt': 'the prebuilt desktop app', acp: 'the editor plug-in', web: 'the web interface', npx: 'a run through npx',
   wsl: 'the Windows Subsystem for Linux', gateway: 'the gateway', dashboard: 'the dashboard',
 })
+/** A directory as a row shows it: its path, then the separator of its platform (§1.1: one style per row, never `~\\.trocar\\backup/`). The one place. */
+export const asDir = (shown, platform = process.platform) => `${shown}${platform === 'win32' ? '\\' : '/'}`
 /** 1.6 §3.2: what the standalone undo is, true for every channel (a script install has no source tree): the plan's words for each of its files. */
 export const UNDO_WORDS = 'the undo that works even when trocar itself is broken'
 const CARRIER_WORDS = Object.freeze({
@@ -101,14 +103,13 @@ function watchLines(watch, t) {
  *  to put in `--json` as `planned`. `p` = what planOn returns (its `files` / `owned` / `entries` / `unit` are only what would be written). */
 export function planItems(p, { home = null, platform = 'linux' } = {}) {
   const t = (x) => tilde(x, home)
-  const sep = platform === 'win32' ? '\\' : '/' // one separator style per platform (§1.1): a directory shown as `~\\.trocar\\collector/` mixes two
   const items = []
   const add = (what, path_, detail) => items.push({ what, path: path_ || null, detail })
   if (p.manifest) add('record', p.manifest, `${t(p.manifest)}: what was installed`)
   if (p.state) add('record', p.state, `${t(p.state)}: which agents are on`)
   for (const f of [].concat(p.standalone || [])) add('undo', f, `${t(f)}: ${UNDO_WORDS}`) // standaloneFiles: trocar-off, and trocar-off.cmd beside it on Windows
   for (const c of p.ca || []) add('certificate', c, `${t(c)}: in no trust store`)
-  if (p.run) add('record', p.run, `${t(p.run)}${sep}: what the plugins trust`)
+  if (p.run) add('record', p.run, `${asDir(t(p.run), platform)}: what the plugins trust`)
   for (const f of p.files || []) add(f.harness, f.path, `${t(f.path)}: ${f.sources.length ? `the certificates of ${f.sources.map((x) => String(x).split(/[\\/]/).pop()).join(', ')} plus trocar's` : "trocar's certificate"}`)
   for (const o of p.owned || []) add(o.harness, o.path, `${t(o.path)}: trocar's ${o.role}`)
   for (const e of p.entries || []) add(e.harness, e.path, `${t(e.path)}${e.real_path ? ` -> ${t(e.real_path)}` : ''}: ${e.what || e.keys.join('.')}`)
@@ -116,11 +117,11 @@ export function planItems(p, { home = null, platform = 'linux' } = {}) {
   // §1.4「计划写全」: the symlink `enable` makes is a file of the user's too, so it is named as well
   if (p.unit) for (const l of p.unit.links || []) add('autostart', l, `${t(l)}: the link that enables it`)
   for (const l of p.logs || []) add('log', l, `${t(l)}: the collector's own output`)
-  if (p.records) add('record', p.records, `${t(p.records)}${sep}: what each run did`)
+  if (p.records) add('record', p.records, `${asDir(t(p.records), platform)}: what each run did`)
   else if (p.events) add('record', p.events, `${t(p.events)}: what each run did`)
   // V85 / §1.4「计划写全」: trocar's own tree is ONE line, as it is in the model install's plan — every run of trocar keeps its record, its
   // desired state and its own logs there, and `trocar uninstall` takes all of it back. Every file of YOURS is its own line, above.
-  if (home) add('trocar', path.join(home, '.trocar'), `${t(path.join(home, '.trocar'))}${sep}: trocar's own files (its install record, what is turned on, its logs); trocar uninstall takes all of it back`)
+  if (home) add('trocar', path.join(home, '.trocar'), `${asDir(t(path.join(home, '.trocar')), platform)}: trocar's own files (its install record, what is turned on, its logs); trocar uninstall takes all of it back`)
   return items
 }
 
@@ -222,15 +223,19 @@ const removedWords = (p, t) => { const k = /^([a-z]{2,}):/.exec(p); return k ? K
 export function formatUninstallReceipt(r, { home = null, platform = process.platform, tense = r.dry_run ? 'future' : 'past', dataNote = null } = {}) {
   const past = tense !== 'future'
   const t = (x) => tilde(x, home)
+  const P = platform === 'win32' ? path.win32 : path.posix
   const removed = [], kept = []
   for (const c of r.changed || []) removed.push(`${t(c.path)}: ${c.change}`)
   const said = new Set((r.changed || []).map((c) => c.path)) // a file both changed and removed (the root certificate: out of the trust store, then deleted) is one row
-  for (const p of r.removed || []) if (!said.has(p)) removed.push(removedWords(p, t))
-  if ((r.dropped_backups || []).length) removed.push(`${r.dropped_backups.length} backup${r.dropped_backups.length === 1 ? '' : 's'} in ${t(path.dirname(r.dropped_backups[0]))}/`)
+  // a file trocar made by writing its key or line into it, and so deleted: what was taken out (its entries' `change`), then that the file went too
+  const made = new Map()
+  for (const e of r.entries || []) if (e && e.change && (r.removed || []).includes(e.path)) made.set(e.path, [...new Set([...(made.get(e.path) || []), e.change])])
+  for (const p of r.removed || []) if (!said.has(p)) removed.push(made.has(p) ? `${t(p)}: ${made.get(p).join(', ')}; the file, which trocar had made, ${past ? 'is gone' : 'goes'} too` : removedWords(p, t))
+  if ((r.dropped_backups || []).length) removed.push(`${r.dropped_backups.length} backup${r.dropped_backups.length === 1 ? '' : 's'} in ${asDir(t(P.dirname(r.dropped_backups[0])), platform)}`)
   if (dataNote) kept.push(dataNote)
   else if (r.purge_data) removed.push('your captured records (--purge-data)')
   // 附录 C.2 `kept`: every path that stays, with its size — the records are segments under ~/.trocar/raw (D60), not the collector's directory
-  for (const k of r.kept || []) kept.push(`${k.what}, in ${t(k.path)}/ (${size(k.bytes)})`)
+  for (const k of r.kept || []) kept.push(`${k.what}, in ${asDir(t(k.path), platform)} (${size(k.bytes)})`)
   if (typeof r.class_table === 'string') kept.push(`your traffic classes, ${t(r.class_table)}`)
   // §3.6 / 4.6: a bundle a live process may still have open is kept with trocar's CA taken out — the receipt says which, and who may hold it
   for (const b of r.kept_bundles || []) kept.push(`${t(b.path)} (trocar's certificate taken out)${(b.pids || []).length ? `: ${(b.pids || []).map((p) => `pid ${p}`).join(', ')} may have loaded it` : ''}`)
@@ -258,7 +263,7 @@ export function formatUninstallReceipt(r, { home = null, platform = process.plat
   if (!past) lines.push('Nothing was changed. Run it with --yes to do it.')
   else if (r.ok === false && ownStep) { /* said above */ }
   else if (r.ok === false) lines.push('Fix what is above, then run: trocar uninstall')
-  else if (!r.purge_data && keptWhat.length && codeGone) lines.push(`trocar itself is removed. To delete what was kept (${and(keptWhat)}), delete ${and(r.kept.map((k) => `${t(k.path)}/`))} by hand.`)
+  else if (!r.purge_data && keptWhat.length && codeGone) lines.push(`trocar itself is removed. To delete what was kept (${and(keptWhat)}), delete ${and(r.kept.map((k) => asDir(t(k.path), platform)))} by hand.`)
   else if (!r.purge_data && keptWhat.length) lines.push(`To delete what was kept (${and(keptWhat)}), run:`, commandLine('trocar uninstall --purge-data'))
   else if (!codeGone) lines.push('Install it again: trocar install')
   return fit(lines, { home }).join('\n')

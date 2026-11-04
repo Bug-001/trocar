@@ -339,3 +339,17 @@ for (const shape of ['the key is the user\'s', 'the file is not this user\'s']) 
     }
   })
 }
+
+// 1.6 §3.6: Removed says what was taken out of every file of yours, a file trocar made by writing its key or line into it (and so deletes) included
+test('1.6 §3.6: an uninstall that deletes a file trocar made for its key or line says what it took out there, not the bare path', async () => {
+  const { formatUninstallReceipt, tilde } = await import('../../src/cli/receipt.mjs')
+  const w = await everything()
+  await w.install({ wrapperKit: { renderWrapper } })
+  const exec = recordingExec()
+  const { receipt } = await runUninstall({ home: w.home, env: w.env, yes: true, deps: { platform: 'darwin', exec: exec.run, custody: w.custody, procs: async () => [], sleep: async () => {}, drainMs: 0, getuid: () => 501 } })
+  const held = new Set(receipt.entries.map((e) => e.path)) // a file trocar wrote a key or a line into
+  const yours = receipt.removed.filter((p) => held.has(p))
+  assert.ok(yours.length > 0, JSON.stringify(receipt.removed))
+  const rows = formatUninstallReceipt(receipt, { home: w.home, platform: 'darwin' }).split('\n')
+  for (const p of yours) assert.ok(rows.some((l) => l.trim().startsWith(`${tilde(p, w.home)}: `)), `${p}: what was taken out is said: ${rows.join('\n')}`)
+})
