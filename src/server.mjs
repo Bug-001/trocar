@@ -25,7 +25,7 @@ const WEB_DIR = path.resolve(fileURLToPath(new URL('./web/board/', import.meta.u
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
   '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
-  '.json': 'application/json; charset=utf-8', '.svg': 'image/svg+xml', '.ico': 'image/x-icon',
+  '.json': 'application/json; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon',
   '.woff2': 'font/woff2', '.map': 'application/json; charset=utf-8', '.md': 'text/markdown; charset=utf-8',
 };
 const JSON_HEAD = { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' };

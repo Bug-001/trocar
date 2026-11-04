@@ -271,7 +271,7 @@ kbd{font-family:var(--mono);background:var(--sunk);border:1px solid var(--rule-2
 
 /* the agent chip (1.2 §agent chip): a 16px icon box + the name; same DOM for every harness, unknown included */
 .hicon{display:inline-grid;place-items:center;width:16px;height:16px;flex:none;vertical-align:-3px;}
-.hicon .hic-svg{width:16px;height:16px;display:block;}
+.hicon .hic-svg, .hicon img{width:16px;height:16px;display:block;}
 .chipname{white-space:nowrap;}
 .chipep,.chipsyn{font-size:var(--fs-cap);color:var(--ink-2);margin-left:6px;white-space:nowrap;}
 /* css/shell.css — the frame (visual design §3 / §4.1, cut to what 1.2 §侧栏 allows): the sidebar and its 52px rail on
@@ -476,7 +476,7 @@ main.forbidden p:last-child{margin:0;}
 .ovitem.more { color: var(--dim); font-size: var(--fs-cap); }
 .ovsubj { font-size: var(--fs-strong); color: var(--dim); flex: none; }
 .hicon { display: inline-flex; width: 16px; height: 16px; flex: none; }
-.hicon svg { width: 16px; height: 16px; }
+.hicon svg, .hicon img { width: 16px; height: 16px; }
 
 /* the per-agent table: a grid of link rows (the whole row is one <a>, 1.7 §统计); agent column holds the chip */
 .hscroll { overflow-x: auto; margin-top: 8px; }

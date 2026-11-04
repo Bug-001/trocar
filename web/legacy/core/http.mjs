@@ -158,11 +158,6 @@ export async function post(path, body) {
   return { ok: r.ok && !b.bad, status: r.status, data, error }
 }
 
-// a static file of the board (the harness svg icons): its text, or null when it is not there
-export function asset(path) {
-  return fetch(path).then((r) => (r.ok ? r.text() : null)).catch(() => null)
-}
-
 // The token arrives in the URL fragment (#t=<token>, never sent to any server or log); keep it in the board origin's localStorage and
 // wipe it from the address, so a later load without the fragment (history, a bookmark, a new tab) reads it (4.4 §每用户口令, D66①).
 // Run before the router reads the hash. → the token for this page, or null.

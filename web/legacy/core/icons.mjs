@@ -1,7 +1,7 @@
 // core/icons.mjs — the UI's own glyphs as inline SVG strings: 16px view box, 1.5px stroke, currentColor, aria-hidden
 // (1.5 §审美 #5: interface graphics come from here and the few allowed characters; never an emoji). The brand mark is
-// a filled tile with a trace — a mark, not a nav icon and not a chart. Harness icons live elsewhere: assets/harness/,
-// loaded by core/chips.mjs (1.2 §agent chip).
+// a filled tile with a trace — a mark, not a nav icon and not a chart. Harness icons live elsewhere: src/off/harness-icons/, which the
+// build copies to assets/harness/, drawn as <img> by core/chips.mjs (1.2 §agent chip).
 const P = {
   'chevron-left': '<path d="M10 3.5 5.5 8l4.5 4.5"/>',
   'chevron-right': '<path d="M6 3.5 10.5 8 6 12.5"/>',

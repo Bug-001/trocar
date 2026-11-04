@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import {
   HARNESSES, harnessOf, sessionKeyOf, hintsOf, observerEffectsOf, headerOf, wireProviderOfEndpoint,
 } from '../../src/dissect/harnesses.mjs';
+import { HARNESS_REGISTRY, readIdOf } from '../../src/off/harness-names.mjs';
 
 const proc = (agent, pid = 4242) => ({ pid, exe: '/x/' + agent, agent });
 const rec = ({ agent, headers = {}, body = {}, capture = 'transparent', pid } = {}) => ({
@@ -67,8 +68,7 @@ test('the session key never reads pid, flow_id or dst', () => {
 });
 
 test('gate G2: both proc.agent spellings name the same harness; gate G3: a CC body metadata.user_id is no key', () => {
-  for (const [agent, id] of [['cc', 'cc'], ['claude-code', 'cc'], ['kimi', 'kimi'], ['kimi-code', 'kimi'],
-    ['dsh', 'dsh'], ['deepseek-dsh', 'dsh'], ['zcode', 'zcode'], ['z-code', 'zcode']]) assert.equal(harnessOf(rec({ agent })).id, id, agent);
+  for (const r of HARNESS_REGISTRY.filter((x) => !x.legacy)) for (const agent of [r.id, readIdOf(r)]) assert.equal(harnessOf(rec({ agent })).id, readIdOf(r), agent);
   assert.equal(sessionKeyOf(rec({ agent: 'cc', body: { metadata: { user_id: 'acct-hash' }, messages: [] } })).key, null);
 });
 
