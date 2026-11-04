@@ -766,6 +766,26 @@ test('AN30: --accept-partial lets through no other rule, and an opaque record is
   assert.deepEqual(of(doc, 'partial'), [])
 })
 
+test('AN30: a half line at a segment\'s end is no record: it is not opaque, and its text is still compared', () => {
+  const plain = line(NOW_THEN, 'nothing shared')
+  const half = (text) => `{"ts":"${NOW_THEN}","note":"${text}`
+  const w = workspace()
+  w.commit({ 'a.txt': `${ascii(60, 1)}\n` })
+  const segment = capture(w, SEGMENT, [plain])
+  fs.appendFileSync(segment, half('cut short'))
+  const { code, doc } = w.check()
+  assert.equal(code, 0, JSON.stringify(doc.findings))
+  assert.equal(doc.coverage.opaque_bytes, 0)
+  assert.equal(doc.coverage.scanned_bytes, fs.statSync(segment).size)
+
+  const shared = workspace()
+  shared.commit({ 'a.txt': `${ascii(60, 1)}\n` })
+  fs.appendFileSync(capture(shared, SEGMENT, [plain]), half(ascii(60, 1)))
+  const refused = shared.check()
+  assert.deepEqual(refused.doc.findings.map((f) => f.rule), ['captured-text'])
+  assert.deepEqual(refused.doc.accepted, [])
+})
+
 // ── AN31
 test('AN31: a capture all of it at or past --before refuses, and --accept-partial is what lets it out; an empty capture folder is no failure', () => {
   const w = workspace()

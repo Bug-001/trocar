@@ -378,7 +378,8 @@ async function compareCapture(segments, { before, cli }, table, add) {
     if (time >= before) return
     table.scan(line, hit)
     let behind = { texts: [], opaque: true }
-    try { behind = textsBehind(JSON.parse(line)) } catch { /* not JSON: nothing can be opened */ }
+    // not JSON: nothing can be opened, and a half line at a segment's end is no record to open (§4), so only its text above is compared
+    try { behind = textsBehind(JSON.parse(line)) } catch { behind.opaque = ending > 0 }
     for (const text of behind.texts) table.scan(text, hit)
     coverage[behind.opaque ? 'opaque_bytes' : 'scanned_bytes'] += line.length + ending
     if (Number.isNaN(time)) return
