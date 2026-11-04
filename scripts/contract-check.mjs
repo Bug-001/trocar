@@ -192,9 +192,10 @@ async function contractCheck(run, sample) {
     const headWhy = grew ? GROWING : blocked(head)
     if (headWhy) skip('numbers', `agree/session/${id}`, headWhy)
     else {
-      const keys = row.title == null ? META : [...META, 'title']
-      judge('numbers', `agree/session/${id}`, { ...pick(row, keys), lanes_count: d.stats.calls, head_stats: counts(d.stats) },
-        { ...pick(d.meta, keys), lanes_count: sum(d.lanes, (l) => l.count), head_stats: counts(head.doc.stats) })
+      // a title is what the user asked: only its hash goes into the report
+      const title = (o) => (row.title == null ? {} : { title_sha256: o.title == null ? null : sha256(String(o.title)) })
+      judge('numbers', `agree/session/${id}`, { ...pick(row, META), ...title(row), lanes_count: d.stats.calls, head_stats: counts(d.stats) },
+        { ...pick(d.meta, META), ...title(d.meta), lanes_count: sum(d.lanes, (l) => l.count), head_stats: counts(head.doc.stats) })
     }
 
     const sinceWhy = incremental || (grew ? GROWING : blocked(since, tip))
