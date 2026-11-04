@@ -28,9 +28,18 @@ export function mapUsage(provider, raw = {}, opts = {}) {
 }
 
 // The board's usage {read, create, fresh, out}: a projection of mapUsage's output, never a second mapping (3.2).
-// An unreported write shows as 0 on the board; the canonical NULL stays in mapUsage's output.
+// An unreported write is a 0 in the stored row; an answer serves it as NULL again (callUsage below, src/query/session-doc.mjs).
 export function boardUsage(c) {
   return { read: c.cache_read, create: c.cache_write ?? 0, fresh: c.input_uncached, out: c.output };
+}
+
+/** callUsage(x) → the provider usage a call's stored facts carry (x.facts.usage on the anthropic wire, x.nu on a flat one), in the
+ *  canonical form by the wire it arrived in and the vendor that answered; null when the reply reported none, or in a wire format no
+ *  mapping exists for. */
+export function callUsage(x) {
+  const raw = x.format === 'anthropic' ? x.facts && x.facts.usage : x.nu;
+  if (!raw || typeof raw !== 'object' || !Object.keys(raw).length || !x.wire) return null;
+  try { return mapUsage(x.format, raw, { vendor: x.wire.vendor }); } catch { return null; }
 }
 
 // OpenAI Responses: input_tokens is the TOTAL input (cached included); input_tokens_details.cached_tokens

@@ -344,7 +344,7 @@ function stateOf(ctx, id, store, plan) {
   const writer = ctx.writer === true, home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs;
   const open = (upTo) => openFoldLog({ home, fs, key: id, write: writer, projection: { id: store.id, bytes: store.bytes }, errors: s.sink, upTo });
   const s = { base: liveHeap(), meter: null, store, cut: cutOf(plan), n: 0, cost: 0, sink: [], hook: null, resolve: null,
-    cols: columns(store.rows.slotOf), view: null, R: null, T: null, relay: null, target: null, fc: 0, fp: null, writer, open, saved: 0, savedAt: performance.now() };
+    cols: columns(store.rows), view: null, R: null, T: null, relay: null, target: null, fc: 0, fp: null, writer, open, saved: 0, savedAt: performance.now() };
   const log = open(), m = markOf(log);
   if (s.sink.some(isRebuilt)) rereadOn(ctx, id, true);
   if (m != null && foldedUnder(log, plan, m)) {
@@ -363,7 +363,7 @@ function stateOf(ctx, id, store, plan) {
 // lines past them), else from scratch
 function seed(s) {
   const sv = s.log.saved, c = sv && loadColumns(s.store.rows, sv.parts);
-  s.cols = c && c.at <= s.log.frontier ? c : columns(s.store.rows.slotOf);
+  s.cols = c && c.at <= s.log.frontier ? c : columns(s.store.rows);
 }
 // v8.deserialize, every typed array in its own bytes: the default makes an aligned one a view over the whole serialized state, which
 // would stay alive (as large as the state itself) for as long as the reduction holds that array.

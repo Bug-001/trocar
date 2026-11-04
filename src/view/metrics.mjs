@@ -14,7 +14,7 @@ const LOW_HIT = 0.3;
 
 const num = (v) => typeof v === 'number' && Number.isFinite(v);
 
-/** A row's usage {read, create, fresh, out}, or null when the wire returned none. `create` stays null when the vendor has no cache-write counter. */
+/** A row's usage {read, create, fresh, out}, or null when the wire returned none. */
 export const usageOf = (row) => (row && row.usage && typeof row.usage === 'object' ? row.usage : null);
 
 /** read / (read + create + fresh); null when there is no usage or nothing was measured, never a zero hit. */

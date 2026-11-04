@@ -8,7 +8,6 @@ import path from 'node:path'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
 import { runQuery, QueryArgError } from '../../src/query/named/index.mjs'
-import { sessionState } from '../../src/query/named/session.mjs'
 
 const CONTRACT = JSON.parse(fs.readFileSync(new URL('../fixtures/session-read-contract.json', import.meta.url), 'utf8'))
 const homeOf = () => path.join(tmpDir('trocar-analysis-'), '.trocar')
@@ -166,22 +165,68 @@ test('3.5 #48 unknown: a break with no price or no usage on its comparison step 
   assert.deepEqual(noUsage.doc.totals.breakCost, { usd: null, counted: 0, uncomputable: 1, worst: null })
 })
 
-// boardUsage reports an absent write counter as 0 and the fold names a comparison step for every break, so these two reasons have no
-// record that reaches them; the case puts the fact into the warm state the answer reads: the columns' NaN, a row with no refRid.
-test('3.5 #48 unknown: a comparison step with no write counter and a break that names none say why', async () => {
-  const W = await worldOf([{ n: 1, u: [0, 0, 0, 900] }, { n: 2, u: [0, 0, 900, 50] }, { n: 3, tools: SWAPPED, u: [100, 0, 10, 900] }])
-  const { V: { cols, log } } = await sessionState({ home: W.home, fs, env: W.env, params: { id: ID }, errors: [] }, ID)
-  const slot = cols.slotOf(W.rid[1]), counter = cols.uw[slot]
-  cols.uw[slot] = NaN
-  const noCounter = await analysis(W.home, W.env)
-  cols.uw[slot] = counter
-  assert.deepEqual(noCounter.totals.breaks, [{ rid: W.rid[2], usd: null, why: 'no-write-counter' }])
-  const read = log.read
-  log.read = (...at) => { const o = read.apply(log, at); return o.r?.cacheBreak ? { ...o, r: { ...o.r, cacheBreak: { ...o.r.cacheBreak, refRid: undefined } } } : o }
-  const noRef = await analysis(W.home, W.env)
-  log.read = read
-  assert.deepEqual(noRef.totals.breaks, [{ rid: W.rid[2], usd: null, why: 'no-ref' }])
-  assert.deepEqual(noRef.totals.breakCost, { usd: null, counted: 0, uncomputable: 1, worst: null })
+// The three steps on each wire: a first, a reused one and a reordered tool list against it, written as the wire writes them.
+const fn = (t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.input_schema } })
+const chatTalk = (n) => talk(n).map((m) => ({ role: m.role, content: m.content[0].text }))
+const chat = (usage) => ({ host: 'api.deepseek.com', endpoint: '/chat/completions', agent: 'dsh', hdr: { 'x-deepseek-harness-session-id': ID },
+  req: (n, tools) => ({ model: 'm-a', tools: tools.map(fn), messages: [{ role: 'system', content: SYSTEM }, ...chatTalk(n)] }),
+  reply: (i, n, read, fresh) => ({ id: `c${i}`, model: 'm-a', choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: `a${n}` } }], usage: { completion_tokens: 5, ...usage(read, fresh) } }) })
+const responses = (write) => ({ host: 'chatgpt.com', endpoint: '/backend-api/codex/responses', agent: 'codex', hdr: { 'session-id': ID, originator: 'codex_cli_rs' },
+  req: (n, tools) => ({ model: 'm-a', instructions: SYSTEM, tools: tools.map((t) => ({ type: 'function', name: t.name, parameters: t.input_schema })),
+    input: chatTalk(n).map((m) => ({ type: 'message', role: m.role, content: [{ type: m.role === 'user' ? 'input_text' : 'output_text', text: m.content }] })) }),
+  resp: (i, n, read, fresh) => ({ status: 200, kind: 'sse', raw_sse: [{ type: 'response.completed', response: { id: `r${i}`, model: 'm-a', status: 'completed',
+    output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: `a${n}` }] }],
+    usage: { input_tokens: read + fresh + (write(i) ?? 0), output_tokens: 5, input_tokens_details: { cached_tokens: read, ...(write(i) == null ? null : { cache_write_tokens: write(i) }) } } } }] }) })
+const anthropic = (host, write) => ({ host, endpoint: '/v1/messages', agent: 'claude-code', hdr: { 'x-claude-code-session-id': ID, 'user-agent': 'claude-cli/2.0.0 (external, cli)' },
+  req: (n, tools) => ({ model: 'm-a', max_tokens: 9, tools, system: [{ type: 'text', text: SYSTEM }], messages: talk(n) }),
+  reply: (i, n, read, fresh) => ({ id: `msg_${i}`, model: 'm-a', stop_reason: 'end_turn', content: [{ type: 'text', text: `a${n}` }],
+    usage: { input_tokens: fresh, output_tokens: 5, cache_read_input_tokens: read, ...(write(i) == null ? null : { cache_creation_input_tokens: write(i) }) } }) })
+async function wireWorld(w) {
+  const home = homeOf(), env = envOf()
+  fs.mkdirSync(path.join(home, 'raw'), { recursive: true })
+  const lines = [[1, TOOLS, 0, 900], [2, TOOLS, 900, 50], [3, SWAPPED, 100, 900]].map(([n, tools, read, fresh], i) => {
+    const ts = `2026-10-22T10:00:0${i}.000Z`
+    return JSON.stringify({ ts, endpoint: w.endpoint, method: 'POST', id: `req_${i}`, ts_request: ts, is_llm_call: true, capture: 'transparent', host: w.host, traffic_class: 'llm',
+      req_headers: { host: w.host, 'content-type': 'application/json', ...w.hdr }, req_body: JSON.stringify(w.req(n, tools)),
+      resp: w.resp ? w.resp(i, n, read, fresh) : { status: 200, kind: 'json', body: w.reply(i, n, read, fresh) }, proc: { pid: 1, exe: `/x/${w.agent}`, agent: w.agent } })
+  })
+  fs.writeFileSync(path.join(home, 'raw', '20261022T100000Z.ndjson'), `${lines.join('\n')}\n`)
+  const [doc, { calls }] = [await analysis(home, env), await session(home, { id: ID })]
+  assert.deepEqual(doc.errors, [])
+  assert.equal(calls[2].cache.break, true)
+  return { doc, calls }
+}
+
+const none = () => null
+for (const [name, w] of Object.entries({
+  'chat, hit and miss counters': chat((read, fresh) => ({ prompt_tokens: read + fresh, prompt_cache_hit_tokens: read, prompt_cache_miss_tokens: fresh })),
+  'chat, cached_tokens': chat((read, fresh) => ({ prompt_tokens: read + fresh, prompt_tokens_details: { cached_tokens: read } })),
+  responses: responses(none),
+  'anthropic wire, another vendor': anthropic('api.deepseek.com', none),
+})) test(`3.5 #45 #48 no write counter (${name}): create is null, a break has no missed and no dollars, and says why`, async () => {
+  const { doc, calls } = await wireWorld(w)
+  for (const r of calls) assert.equal(r.usage.create, null, `${r.rid}: NULL, not 0`)
+  assert.deepEqual(calls[2].cache, { state: 'changed', hit: 100 / 1000, break: true, why: 'no-write-counter' })
+  assert.deepEqual(doc.totals.breaks, [{ rid: calls[2].rid, usd: null, why: 'no-write-counter' }])
+  assert.deepEqual(doc.totals.breakCost, { usd: null, counted: 0, uncomputable: 1, worst: null })
+})
+
+for (const [name, w] of Object.entries({
+  anthropic: anthropic('api.anthropic.com', () => 0),
+  'responses relay': responses(() => 0),
+})) test(`3.5 #45 #48 a reported zero (${name}): create stays 0 and the break is priced at the write price`, async () => {
+  const { doc, calls } = await wireWorld(w)
+  for (const r of calls) assert.equal(r.usage.create, 0)
+  assert.equal(calls[2].cache.missed, 800, '900 + 0 − 100')
+  assert.ok(!('why' in calls[2].cache))
+  near(doc.totals.breaks[0].usd, (800 * (4 - 0.5)) / 1e6)
+})
+
+test('3.5 #45 #48 a step with no write counter against a comparison step that has one: priced at the uncached input', async () => {
+  const { doc, calls } = await wireWorld(responses((i) => (i === 2 ? null : 50)))
+  assert.equal(calls[2].usage.create, null)
+  assert.equal(calls[2].cache.missed, 850, '900 + 50 − 100')
+  near(doc.totals.breaks[0].usd, (850 * (3 - 0.5)) / 1e6)
 })
 
 test('3.5 #48 verdicts: a failed step stays out of the hit even when its reply has usage', async () => {

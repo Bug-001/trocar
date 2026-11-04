@@ -15,7 +15,7 @@ import { extractMembers, blockAt } from '../view/extract.mjs';
 import { parseTextRef } from '../raw/refs.mjs';
 import { reduce, NO_FILE } from '../view/reduce.mjs';
 import { openProjection } from './projection.mjs';
-import { mapUsage } from '../model/schema.mjs';
+import { callUsage } from '../model/schema.mjs';
 import { recordsAt } from './records.mjs';
 import { isModelCall, sessionGroups, indexRows } from './rows.mjs';
 import { indexDir, readIndex, tailMark, usability, storeIndex, segmentSource, plainMark, sealedMark, segStamp } from './index-build.mjs';
@@ -26,14 +26,6 @@ const USAGE_V = 3; // 3: the facts are the session's extraction and reduction (l
 export const USAGE_CHUNK_BYTES = 4 << 20; // stored bytes of model calls read back per chunk (4.2 §用量旁注 ④)
 
 export const usageFile = (home, segment) => path.join(indexDir(home), `${segment}.usage.json`);
-
-// The provider usage a call row carries (x.facts.usage on the anthropic wire, x.nu on a flat one), in 3.2's canonical form by the
-// wire it arrived in and the vendor that answered; null when the reply reported none, or in a wire format no mapping exists for.
-function usageOf(x) {
-  const raw = x.format === 'anthropic' ? x.facts && x.facts.usage : x.nu;
-  if (!raw || typeof raw !== 'object' || !Object.keys(raw).length || !x.wire) return null;
-  try { return mapUsage(x.format, raw, { vendor: x.wire.vendor }); } catch { return null; }
-}
 
 /** foldFacts({rows, read}) → [{id, lane, model, failed, cache_known, usage, ask?}] (`ask`: a main or subagent lane call's lane task) — one per call `session` reduces from
  *  these rows (index rows), by the same extraction (view/extract.mjs) and reduction (view/reduce.mjs). `read(rows)` → their records, asked for one at a time as the
@@ -49,7 +41,7 @@ export function foldFacts({ rows, read }) {
       const resolve = (ref) => { const row = byId.get(parseTextRef(ref).recordId), rec = row && read([row])[0]; return rec ? blockAt(rec, ref) : null; };
       const doc = reduce(store, own, { resolve }), kinds = new Map(doc.lanes.map((h) => [h.lane, h]));
       for (const row of doc.rows) {
-        const x = store.rows.get(row.rid).x, h = kinds.get(row.lane) || {}, failed = !!row.error, u = failed ? null : usageOf(x);
+        const x = store.rows.get(row.rid).x, h = kinds.get(row.lane) || {}, failed = !!row.error, u = failed ? null : callUsage(x);
         out.push({ id: row.rid, lane: h.kind, model: (row.rec && row.rec.request && row.rec.request.model) ?? null, failed,
           cache_known: !!(row.wire && row.wire.cacheSemanticsKnown), usage: u ? [u.input_uncached, u.output, u.cache_read, u.cache_write] : null,
           // a main or subagent lane's task rides on its calls: the title table takes the earliest one's (src/query/titles.mjs); no sidecar line holds it
