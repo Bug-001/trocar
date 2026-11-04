@@ -1,6 +1,6 @@
 // replay/cell.mjs — one block body, drawn the same everywhere (spec 2.3 §两种模式, D70):
 // the request's blocks, the reply's parts, the raw panel's non-block keys and the drawer. A cell is
-// {bid, ref?, inline?, r, ff, chars, preview, view?, reads?, block, noRange?}. Two modes: Readable (the default: the `view` the `block`
+// {bid, ref?, inline?, r, ff, chars, preview, view?, reads?, block, noRange?, sides?}. Two modes: Readable (the default: the `view` the `block`
 // answer or the definition brings, drawn by kinds.mjs) and Raw (the bytes, laid out by jsonlay; a block with no byte range of its own
 // has its stored parse there). A cell has both, or only Raw (no view). The bytes are fetched, cached and copied by `ref` only (a
 // content key is not an exact-byte id); `bid` keys only view state. DOM-free above wireCells, so the strings can be tested in Node.
@@ -127,9 +127,11 @@ function inlineText(b) {
 const fnv = (s) => { let h = 0x811c9dc5; for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 0x01000193); return (h >>> 0).toString(36) }
 const synth = (text) => `i:${text.length}:${fnv(text)}` // an identity derived from the inline bytes themselves
 const PLAIN = Object.freeze({ as: 'text', f: Object.freeze({ body: Object.freeze([]) }) })
-// what Raw shows of a body with no ref: the stored parse as it is, never an envelope made up around it
+// what Raw shows of a body with no ref: the stored parse as it is, never an envelope made up around it; with no parse stored (a tool
+// an older capture kept as metadata only), what Readable says of it
 function parsedText(x) {
   const o = ownBody(x)
+  if (!hasInline(x)) return String(inlineText(x) ?? '')
   return o.block !== undefined ? JSON.stringify(o.block) : o.text !== undefined ? String(o.text) : JSON.stringify({ desc: o.desc, schema: o.schema })
 }
 // a flat definition ({sec, …}), a non-block key ({key, ref, chars}) or a body the caller holds ({inline, view?}) as a cell; a non-block
@@ -139,7 +141,7 @@ function parsedText(x) {
 /** @returns {any} */
 export function cellOf(x) {
   const held = typeof x.inline === 'string' ? x.inline : undefined, block = x.sec != null
-  const tail = { r: x.r || { as: 'text' }, ff: x.ff ?? null, preview: x.preview ?? '', reads: x.reads, block }
+  const tail = { r: x.r || { as: 'text' }, ff: x.ff ?? null, preview: x.preview ?? '', reads: x.reads, block, ...(x.sides === undefined ? null : { sides: x.sides }) }
   if (!block && x.ref) return { ...tail, bid: 'nbk:' + x.ref, ref: x.ref, inline: held, view: x.view, chars: x.chars ?? held?.length ?? 0 }
   const ref = isAddressed(x) ? x.text_ref : undefined
   if (!block && ref == null && held === undefined && !hasInline(x)) return null
@@ -184,7 +186,7 @@ export function deskMode({ storage = local() } = {}) {
 }
 export function setDeskMode(m, { storage = local() } = {}) {
   desk = MODES.has(m) ? m : 'read'
-  overrides.clear()
+  overrides.clear(); opened.clear()
   try { storage && storage.setItem(DESK_KEY, desk) } catch { /* full or denied: the choice holds for this page only */ }
   modeChanged()
 }

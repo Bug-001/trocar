@@ -43,7 +43,7 @@
 .kd-note{color:var(--ink-2);font-family:var(--sans);font-size:var(--fs-cap);margin-top:var(--s1);}
 
 /* markdown: prose keeps the reading measure, tables and code take the cell's width */
-.kd-md{--measure:44em;}
+.kd-md{--measure:42em;}
 .kd-md > :first-child{margin-top:0;} .kd-md > :last-child{margin-bottom:0;}
 .kd-md :is(p,ul,ol,blockquote,h1,h2,h3,h4,h5,h6,hr,.md-tag,.md-tagv){max-width:var(--measure);}
 .kd-md p{margin:0 0 var(--s2);}

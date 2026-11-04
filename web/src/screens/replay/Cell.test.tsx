@@ -6,9 +6,10 @@
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from 'vitest'
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { useState } from 'react'
-import { DISPLAY_CLIP, blockGot, bodyCache, cellBodyHtml, cellOf, modeOf, overrideScope, setDeskMode, setMode, wireCells } from '../../../legacy/replay/cell.mjs'
+import { DISPLAY_CLIP, blockGot, bodyCache, cellBodyHtml, cellOf, clearOverrides, modeOf, overrideScope, setDeskMode, setMode, wireCells } from '../../../legacy/replay/cell.mjs'
 import { renderKind } from '../../../legacy/replay/kinds.mjs'
 import * as C from '../../../legacy/labels/cells.mjs'
+import * as W from '../../../legacy/labels/replay.mjs'
 import { stepOf } from '../../../legacy/replay/model.mjs'
 import { deskFrom, world } from '../../../../test/web-v2/desk-world.mjs'
 import { Cell, CellBar } from './Cell'
@@ -312,6 +313,46 @@ test('2.3 #39: a node the reader opened comes back when the leaf is mounted agai
   act(() => setMode('J39', 'raw'))
   act(() => setMode('J39', 'read'))
   reopened()
+  cleanup()
+  // a tool's Parameters come back the same way
+  const tool = inline(JSON.stringify({ desc: 'what it does', schema: { type: 'object', properties: { a: { type: 'string' } } } }), { as: 'tool', f: { body: [], desc: ['desc'], schema: ['schema'] } }, 'T39')
+  const params = (c: HTMLElement) => c.querySelector<HTMLDetailsElement>('details.tool-params')!
+  const before = render(<Cell cell={tool} api={noApi} />)
+  clicked(params(before.container))
+  before.unmount()
+  const openAfter = (c: typeof tool, pick: (el: HTMLElement) => HTMLDetailsElement) => { const r = render(<Cell cell={c} api={noApi} />), open = pick(r.container).open; r.unmount(); return open }
+  expect(openAfter(tool, params)).toBe(true)
+  // the desk's memory goes with its overrides: when the desk leaves the cache, and when the desk default flips
+  const top = (el: HTMLElement) => nodeAt(el, TOP)!
+  expect(openAfter(cell, top)).toBe(true)
+  clearOverrides(`case ${n - 1}`)
+  expect([openAfter(cell, top), openAfter(tool, params)]).toEqual([false, false])
+  const again = render(<Cell cell={tool} api={noApi} />)
+  clicked(params(again.container))
+  again.unmount()
+  setDeskMode('raw')
+  setDeskMode('read')
+  expect(openAfter(tool, params)).toBe(false)
+})
+
+test('2.3 #40: a tool an older capture kept as metadata only says so in Raw and in the copy, never an empty parse', async () => {
+  const cell = cellOf({ sec: 'tools', kind: 'tool', bid: 'M40', name: 'Read', faithfulness: 'metadata', props: ['path'], descChars: 11, ff: { faithfulness: 'metadata', unaddressable: 'no bytes' }, inline: {} })
+  const copied: string[] = []
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (t: string) => { copied.push(t) } } })
+  setDeskMode('raw')
+  const { container } = render(<Cell cell={cell} api={noApi} />), raw = bytesOf(container.querySelector('.cellraw')!)!
+  expect(raw).toContain(W.SCHEMA_NOT_KEPT)
+  expect(raw).toContain('Read')
+  await act(async () => { fireEvent.click(container.querySelector('[data-cellcopy]')!); await Promise.resolve() })
+  expect(copied).toEqual([raw])
+})
+
+test('2.3 §前置定义: a cell carries `sides` as given, and has no such key when none is given', () => {
+  const sides = { before: 'a', after: 'b' }
+  for (const x of [{ key: 'k', ref: 's/x#r1::0-1' }, { sec: 'messages', text_ref: 's/x#r1::0-1' }, { sec: 'system', inline: { text: 'held' } }]) {
+    expect('sides' in cellOf(x)).toBe(false)
+    expect(cellOf({ ...x, sides }).sides).toBe(sides)
+  }
 })
 
 test('2.3 §两种模式: the images of one tool result each take their own data', () => {
