@@ -107,7 +107,7 @@
 | 客户端的摘要 | a client summary, not the original | |
 | 服务端改过上下文 | the server edited the context | |
 | 加密 | encrypted; no plaintext | |
-| 不透明 | opaque — only a signature on the wire | |
+| 不透明 | opaque — no plaintext on the wire | |
 | 不能回源 | not addressable | |
 | 取不到字节 | bytes could not be fetched | |
 | 已遮挡 | masked | |
