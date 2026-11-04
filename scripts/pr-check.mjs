@@ -41,6 +41,7 @@ const TOKEN = new RegExp([
   /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/, /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
 ].map((r) => r.source).join('|'), 'g')
 const CREDENTIAL = /(?:authorization|x-api-key)\\*["']?\s*[:=]\s*\\*["']?(?:(?:bearer|basic|token)\s+)?[A-Za-z0-9._~+/=-]{12,}/gi
+const SVG_EMBED = /data:|<image\b/i
 const LONG_RUN = /[A-Za-z0-9+=_-]{40,}/g // no slash: a URL or file path is not one run, and base64 holds runs this long between its slashes
 const isMixed = (run) => /[a-z]/.test(run) && /[A-Z]/.test(run) && /[0-9]/.test(run)
 const SEP = String.raw`(?:\\+/?|/)` // a slash, a run of backslashes, an escaped slash
@@ -49,7 +50,7 @@ const NEUTRAL = new Set(['me', 'you', 'user', 'alice', 'bob', 'test', 'runner', 
 const NOREPLY = /(?:@users\.noreply\.github\.com|^noreply@github\.com)$/i
 const CONTROL = /[\x00-\x08]/g
 const RECORD_TS = /^\{"ts":"([^"]+)"/
-const DIFF_HEADER = /^diff --(?:git|cc|combined) /
+const DIFF_HEADER = 'diff --git '
 const NEWLINE = Buffer.from('\n')
 const BODY_B64 = Buffer.from('"req_body_b64":"')
 // the row of .github/pull_request_template.md the hash is written on: it cannot hold its own hash, and holds nothing else or it counts
@@ -67,6 +68,7 @@ const WHY = {
   lines: `This commit changes more than ${MAX_LINES} lines.`,
   body: 'This commit message has no body.',
   control: 'This holds control bytes.',
+  merge: 'This is a merge commit, and a branch goes out without them: rebase it onto the base.',
   git: 'git could not be read, so what is leaving is not known.',
   base: 'The base is not behind this branch: --base must name an ancestor of HEAD other than HEAD itself.',
   capture: 'The capture could not be read, so it was not compared.',
@@ -104,37 +106,33 @@ function numstat(out) {
   const fields = out.toString().split('\0')
   const files = []
   for (let i = 0; i + 1 < fields.length; i++) {
-    const [added, deleted, name] = fields[i].split('\t')
+    const columns = fields[i].split('\t')
+    const [added, deleted] = columns, name = columns.slice(2).join('\t')
     if (!name) i += 2
     files.push({ path: name || fields[i], binary: added === '-', lines: (Number(added) || 0) + (Number(deleted) || 0) })
   }
   return files
 }
 
-/** `git show --unified=0`, plain or combined (`-c`, one mark column per parent), one entry per file: the lines added against every parent,
- *  the line each has in the new file, whether the file went away, and whether git calls it binary. */
+/** `git show --unified=0`, one entry per file: the added lines, the line each has in the new file, whether the file went away, and whether
+ *  git calls it binary. */
 function patches(out) {
   const files = []
-  let file = null, inHunk = false, line = 0, columns = 1
+  let file = null, inHunk = false, line = 0
   for (let at = 0; at < out.length;) {
     const nl = out.indexOf(10, at), end = nl < 0 ? out.length : nl
     const row = out.subarray(at, end)
     at = end + 1
-    if (DIFF_HEADER.test(row.subarray(0, 16).toString('latin1'))) {
+    if (row.subarray(0, DIFF_HEADER.length).toString('latin1') === DIFF_HEADER) {
       files.push(file = { added: [], lines: [], gone: false, binary: false })
       inHunk = false
-    } else if (row[0] === 0x40) { // @@ -a,b +c,d @@, one more @ and one more -a,b per further parent
+    } else if (row[0] === 0x40) { // @@ -a,b +c,d @@
       inHunk = true
-      columns = row.indexOf(0x20) - 1
       line = Number(/\+(\d+)/.exec(row.toString('latin1'))[1])
     } else if (inHunk) {
-      const marks = row.subarray(0, columns)
-      if (marks.some((mark) => mark !== 0x2b && mark !== 0x20)) continue // not in the new file: a removed line, or `\ No newline`
-      if (marks.every((mark) => mark === 0x2b)) {
-        file.added.push(row.subarray(columns))
-        file.lines.push(line)
-      }
-      line++
+      if (row[0] !== 0x2b) continue // not in the new file: a removed line, or `\ No newline`
+      file.added.push(row.subarray(1))
+      file.lines.push(line++)
     } else if (file && row.subarray(0, 12).toString() === 'deleted file') {
       file.gone = true
     } else if (file && row.subarray(0, 13).toString() === 'Binary files ') {
@@ -144,14 +142,11 @@ function patches(out) {
   return files
 }
 
-/** What `sha` itself brings, {stats, diffs} file by file. A merge brings the files that differ from every parent, and in them the lines no
- *  parent has: what a parent has came with that parent's commit, and what is new was written while merging. */
-function brought(cwd, sha, merge) {
-  const show = (...args) => git(cwd, 'show', '--format=', ...args, sha)
-  const diffs = patches(show('--unified=0', '--no-color', '--no-ext-diff', '--no-textconv', merge ? '-c' : '-M'))
-  const stats = merge
-    ? show('--name-only', '-z', '-c').toString().split('\0').filter(Boolean).map((name, i) => ({ path: name, binary: diffs[i]?.binary, lines: diffs[i]?.added.length }))
-    : numstat(show('--numstat', '-z', '-M'))
+/** What `sha` brings, {stats, diffs} file by file. */
+function brought(cwd, sha) {
+  const show = (...args) => git(cwd, 'show', '--format=', '-M', ...args, sha)
+  const diffs = patches(show('--unified=0', '--no-color', '--no-ext-diff', '--no-textconv'))
+  const stats = numstat(show('--numstat', '-z'))
   if (stats.length !== diffs.length) throw new Error('git')
   return { stats, diffs }
 }
@@ -170,17 +165,19 @@ function readGit(cwd, base, out) {
     out.sources.push({ where: `${short}:message`, kind: 'message', bytes: Buffer.from(message) })
     // the noreply address is a public login, judged by the email rule; the names are what the identity words read
     out.sources.push({ where: `${short}:author`, kind: 'author', bytes: Buffer.from(people.join('\n')), norm: wordOf(`${authorName}\n${committerName}`) })
-    const commit = { short, message, merge: parents.includes(' '), emails: [authorEmail, committerEmail], lines: 0, changed: [] }
+    const commit = { sha, short, message, merge: parents.includes(' '), emails: [authorEmail, committerEmail], lines: 0, changed: [] }
     out.commits.push(commit)
-    const { stats, diffs } = brought(cwd, sha, commit.merge)
+    if (commit.merge) continue // the shape rule refuses it whole, so its diff is not read
+    const { stats, diffs } = brought(cwd, sha)
     stats.forEach((stat, i) => {
       if (!isUncounted(stat.path)) commit.lines += stat.lines
       if (diffs[i].gone) return
       if (!index.has(stat.path)) index.set(stat.path, out.leaving.files.push(stat.path) - 1)
       const where = `${short}:file#${index.get(stat.path)}`
-      commit.changed.push({ ...stat, where })
+      const added = Buffer.concat(diffs[i].added.flatMap((row) => [row, NEWLINE]))
+      commit.changed.push({ ...stat, where, added })
       out.sources.push({ where, kind: 'path', bytes: Buffer.from(stat.path) })
-      out.sources.push({ where, kind: 'added', path: stat.path, lines: diffs[i].lines, bytes: Buffer.concat(diffs[i].added.flatMap((row) => [row, NEWLINE])) })
+      out.sources.push({ where, kind: 'added', path: stat.path, lines: diffs[i].lines, bytes: added })
     })
   }
 }
@@ -203,12 +200,24 @@ function placeOf(source, text, index) {
   return source.lines[row] === undefined ? source.where : `${source.where}:${source.lines[row]}`
 }
 
+function isBlocked(file) {
+  const ext = file.path.slice(file.path.lastIndexOf('.')).toLowerCase()
+  return file.binary || BLOCKED.has(ext) || (ext === '.svg' && SVG_EMBED.test(file.added.toString()))
+}
+
+/** The blob `path` has in `commit`, empty when it has none. */
+function blobOf(cwd, commit, path) {
+  return spawnSync('git', ['rev-parse', '--verify', '--quiet', `${commit}:${path}`], { cwd, stdio: ['ignore', 'pipe', 'ignore'] }).stdout.toString().trim()
+}
+
 function checkFiles(commits, cwd, add) {
   let board = null
   for (const commit of commits) {
     for (const file of commit.changed) {
-      if (file.path.startsWith(BOARD)) board ??= file.where
-      else if (file.binary || BLOCKED.has(file.path.slice(file.path.lastIndexOf('.')).toLowerCase())) add('files', file.where)
+      const inBoard = file.path.startsWith(BOARD)
+      if (inBoard) board ??= file.where
+      // what HEAD holds of the board is the build, judged below; what only an earlier commit holds would ride along in the history
+      if (isBlocked(file) && !(inBoard && blobOf(cwd, commit.sha, file.path) === blobOf(cwd, 'HEAD', file.path))) add('files', file.where)
     }
   }
   if (!board) return
@@ -219,8 +228,8 @@ function checkFiles(commits, cwd, add) {
 
 function checkShape(commits, sources, add) {
   for (const commit of commits) {
+    if (commit.merge) add('shape', commit.short, WHY.merge)
     if (commit.lines > MAX_LINES) add('shape', commit.short, WHY.lines)
-    if (commit.merge && commit.changed.every((file) => !file.lines)) continue
     const paragraphs = commit.message.trim().split(/\n\s*\n/).slice(1)
     const trailers = paragraphs.at(-1)?.split('\n').every((row) => /^[A-Za-z][A-Za-z0-9-]*: /.test(row))
     if (paragraphs.length - (trailers ? 1 : 0) < 1) add('shape', `${commit.short}:message`, WHY.body)
@@ -288,18 +297,10 @@ function allPages(cli, name, key) {
   }
 }
 
-/** A session's title. The list does not know it until the sidecar covers the session (C.5), and not known is not none: the head does. */
-function titleOf(cli, row) {
-  if (row.title_source !== 'pending') return row.title
-  const { meta } = ask(cli, 'session', '--id', row.session_id, '--head')
-  if (!meta || meta.title_source === 'pending') throw new Error('capture')
-  return meta.title
-}
-
 /** The capture's facts as words; a segment's name also covers every `<segment>:<n>` record id. Returns the segments for the text pass. */
 function checkFacts(cli, sources, hold) {
   const segments = ask(cli, 'segments').segments
-  const facts = [...allPages(cli, 'sessions', 'sessions').flatMap((s) => [s.project_path, s.project_slug, s.session_id, titleOf(cli, s)]),
+  const facts = [...allPages(cli, 'sessions', 'sessions').flatMap((s) => [s.project_path, s.project_slug, s.session_id, s.title]),
     ...allPages(cli, 'traffic', 'hosts').map((h) => h.host), ...segments.map((s) => s.segment)]
   const words = new Map()
   for (const fact of facts) {

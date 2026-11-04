@@ -130,6 +130,25 @@ for (const [name, script, code] of [['a rebuild that matches passes', 'node -e 0
   })
 }
 
+test('AN16: of two commits to one board binary only the one HEAD holds goes out', () => {
+  const w = workspace({ 'package.json': JSON.stringify({ scripts: { 'test:build': 'node -e 0' } }) })
+  const own = adopt(w)
+  w.commit({ 'src/web/board/logo.png': 'first\n' })
+  w.commit({ 'src/web/board/logo.png': 'second\n' })
+  const { code, doc } = w.check({ script: own })
+  assert.equal(code, 1)
+  assert.deepEqual(of(doc, 'files').map((f) => f.where), [`${doc.leaving.commits[0].sha}:file#0`])
+})
+
+test('AN16: an SVG whose new lines embed an image is refused as one; a plain SVG is text', () => {
+  const w = workspace({ 'old.svg': '<svg><image href="x"/></svg>\n' })
+  const embedding = { 'a.svg': '<svg><image href="x"/></svg>\n', 'b.svg': '<svg><a href="data:text/plain,x"/></svg>\n', 'c.SVG': '<svg><IMAGE href="x"/></svg>\n', 'd.svg': '<svg><a href="DATA:text/plain,x"/></svg>\n' }
+  w.commit({ ...embedding, 'plain.svg': '<svg/>\n', 'old.svg': '<svg><image href="x"/></svg>\n<!-- end -->\n', 'imagery.svg': '<svg><imagery/></svg>\n' })
+  const { code, doc } = w.check()
+  assert.equal(code, 1)
+  assert.deepEqual(named(doc, 'files'), sorted(embedding))
+})
+
 test('AN16: src/web/board/** in a clone that is not the check\'s own: nothing of that clone is run, and it is refused', () => {
   const w = workspace({ 'package.json': JSON.stringify({ scripts: { 'test:build': 'node -e "require(\'fs\').writeFileSync(\'ran\',\'\')"' } }) })
   w.commit({ 'src/web/board/logo.png': 'x\n' })
@@ -278,67 +297,25 @@ test('a rename, a mode change and an awkward name are read as themselves', () =>
   const w = workspace({ 'old.txt': lines(500), 'run.sh': 'x\n' })
   w.git(['mv', 'old.txt', 'new.txt'])
   fs.chmodSync(path.join(w.dir, 'run.sh'), 0o755)
-  w.commit({ 'with space/naïve "q".txt': 'x\n' })
+  const tabbed = process.platform === 'win32' ? [] : ['tab\tname.txt'] // Windows has no such file name
+  w.commit({ 'with space/naïve "q".txt': 'x\n', ...Object.fromEntries(tabbed.map((name) => [name, 'x\n'])) })
   const { code, doc } = w.check()
   assert.equal(code, 0, JSON.stringify(doc.findings))
-  assert.deepEqual(doc.leaving.files.sort(), ['new.txt', 'run.sh', 'with space/naïve "q".txt'])
+  assert.deepEqual(doc.leaving.files.sort(), ['new.txt', 'run.sh', ...tabbed, 'with space/naïve "q".txt'])
 })
 
-test('a merge commit brings its message only, and needs no body', () => {
+test('AN21: a merge commit in the branch is refused by its own sha', () => {
   const w = workspace()
   w.git(['checkout', '-q', '-b', 'side', 'base'])
   w.commit({ 'side.txt': 'side\n' })
   w.git(['checkout', '-q', 'work'])
   w.commit({ 'work.txt': 'work\n' })
   w.git(['merge', '-q', '--no-ff', '-m', 'Merge side', 'side'])
+  const sha = w.git(['rev-parse', 'HEAD']).trim()
   const { code, doc } = w.check()
-  assert.equal(code, 0, JSON.stringify(doc.findings))
-  assert.equal(doc.leaving.commits.length, 3)
-  assert.deepEqual(doc.leaving.files, ['side.txt', 'work.txt'])
-})
-
-/** A merge of `side` into `work`, each with its own commit, left open for what the merge itself writes. */
-const MERGES = {
-  'a resolved conflict': { base: { 'a.txt': 'one\n' }, side: { 'a.txt': 'side\n' }, work: { 'a.txt': 'work\n' } },
-  'a file both sides brought': { base: { 'a.txt': 'one\ntwo\nthree\nfour\nfive\n' }, side: { 'a.txt': 'ONE\ntwo\nthree\nfour\nfive\n' }, work: { 'a.txt': 'one\ntwo\nthree\nfour\nFIVE\n' } },
-  'a file neither side has': { base: {}, side: { 's.txt': 'side\n' }, work: { 'w.txt': 'work\n' } },
-}
-function merging({ base, side, work }) {
-  const w = workspace(base)
-  w.git(['checkout', '-q', '-b', 'side', 'base'])
-  w.commit(side)
-  w.git(['checkout', '-q', 'work'])
-  w.commit(work)
-  spawnSync('git', ['merge', '-q', '--no-commit', '--no-ff', 'side'], { cwd: w.dir, env: w.env })
-  return w
-}
-for (const [name, sides] of Object.entries(MERGES)) {
-  test(`AN21: ${name}: what a merge writes is judged like any commit`, () => {
-    const home = homes('zorgon7').mac
-    const w = merging(sides)
-    w.commit({ 'a.txt': `kept\n${tokens('').ghp}\n${home}\n`, 'b.dat': Buffer.from([1, 0, 2, 0, 10]), 'long.txt': lines(401) }, 'Merge side')
-    const { code, doc } = w.check()
-    assert.equal(code, 1)
-    assert.deepEqual(named(doc, 'secrets'), ['a.txt'])
-    assert.deepEqual(named(doc, 'identity'), ['a.txt'])
-    assert.deepEqual(named(doc, 'files'), ['b.dat'])
-    assert.match(of(doc, 'secrets')[0].where, /:file#\d+:2$/)
-    assert.deepEqual(of(doc, 'shape').map((f) => f.why).sort(), ['This commit changes more than 400 lines.', 'This commit message has no body.'])
-    shapely(doc)
-  })
-}
-
-test('AN21: what a merge takes from a parent outside the range is not judged again', () => {
-  const w = workspace()
-  w.git(['checkout', '-q', 'main'])
-  w.commit({ 'theirs.txt': `${tokens('').ghp}\n` })
-  w.git(['tag', 'moved'])
-  w.git(['checkout', '-q', 'work'])
-  w.commit({ 'mine.txt': 'mine\n' })
-  w.git(['merge', '-q', '--no-ff', '-m', 'Merge main', 'main'])
-  const { code, doc } = w.check({ base: ['--base', 'moved'] })
-  assert.equal(code, 0, JSON.stringify(doc.findings))
-  assert.deepEqual(doc.leaving.files, ['mine.txt'])
+  assert.equal(code, 1)
+  assert.ok(of(doc, 'shape').some((f) => /^[0-9a-f]{7,}$/.test(f.where) && sha.startsWith(f.where)), JSON.stringify(doc.findings))
+  shapely(doc)
 })
 
 // ── AN24
@@ -437,20 +414,6 @@ test('AN19: each kind of captured fact is refused in any spelling; a word under 
   assert.equal(code, 1)
   assert.deepEqual(named(doc, 'captured-facts'), sorted(plant))
   shapely(doc)
-})
-
-test('AN19: a title the list does not know yet comes from the head, so one too short for the text rule is still refused', () => {
-  const w = workspace()
-  bigSession({ home: w.trocar, wire: 'http', growth: 40, subEvery: 3, segment: SEGMENT }).append(3)
-  const [row] = query(w, 'sessions').sessions
-  assert.deepEqual([row.title, row.title_source], [null, 'pending'])
-  const { title } = query(w, 'session', '--id', row.session_id, '--head').meta
-  assert.ok(title.length >= 4 && title.length < 60, title)
-  w.commit({ 'plain.txt': 'nothing here\n', 'named.txt': `${title.toUpperCase()}\n` })
-  const { code, doc } = w.check()
-  assert.equal(code, 1)
-  assert.deepEqual(named(doc, 'captured-facts'), ['named.txt'])
-  assert.deepEqual(of(doc, 'captured-text'), [])
 })
 
 // ── AN20
