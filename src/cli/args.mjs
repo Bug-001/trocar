@@ -1,9 +1,11 @@
 // args.mjs — the option parsing of the command line (RFC 1.6 §1, §2): which options a command takes is declared in its table entry
 // (src/cli/commands.mjs `options: [['--port <port>', 'one line of help'], …]`), so nothing is guessed from the shape of an argument —
 // `--port 9801 file` used to hand `9801` back as the file — and an option nobody declared is a usage error instead of silence.
-//   optionsOf(cmd)          → Map '--name' → { name, value: 'port' | null, help }
+//   optionsOf(cmd)          → Map '--name' → { name, value: 'port' | null, help, repeat? }. A declaration's third item is `{ repeat: true }`:
+//                             `['--ref <record>', 'help', { repeat: true }]`.
 //   parseArgs(cmd, argv)    → { positionals, flags, error }. `flags` is keyed by the option's name without the dashes
-//                             (`--dry-run` → `flags['dry-run']`); a declared value is a string, a plain option is `true`.
+//                             (`--dry-run` → `flags['dry-run']`); a declared value is a string (a repeat option's is the array of its
+//                             values, in the order given, and no key when it is not given), a plain option is `true`.
 //                             `error` is `{ code: 'usage', message, usage }` or null; `cmd.openOptions` (query, whose parameters belong
 //                             to the query, not to the CLI) keeps every option it is given instead of refusing it, and reads a negative
 //                             number (`--limit -1`) as a value, since no option is named that; an open option given more than
@@ -16,10 +18,10 @@ const negativeNumber = (arg) => /^-\d+(\.\d+)?$/.test(arg)
 /** The declared options of a table entry, in the order the entry lists them. */
 export function optionsOf(cmd) {
   const out = new Map()
-  for (const [decl, help] of cmd.options || []) {
+  for (const [decl, help, extra] of cmd.options || []) {
     const m = DECL.exec(decl)
     if (!m) throw new RangeError(`${cmd.name}: not an option declaration: ${decl}`)
-    out.set(m[1], { name: m[1], value: m[2] || null, help })
+    out.set(m[1], { name: m[1], value: m[2] || null, help, ...extra })
   }
   return out
 }
@@ -49,7 +51,7 @@ export function parseArgs(cmd, argv) {
     }
     const value = inline !== null ? inline : argv[++i]
     if (value === undefined) return fail(`option '${name}' needs a value`)
-    flags[key(name)] = value
+    flags[key(name)] = opt.repeat ? [...(flags[key(name)] || []), value] : value
   }
   return { positionals, flags, error: null }
 }
