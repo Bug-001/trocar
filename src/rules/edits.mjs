@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 
 const MIB = 1024 * 1024;
 const EDIT_OVERHEAD = 32;
-const INVERTED_ON = new Set(['request', 'ws-client']);
+export const INVERTED_ON = new Set(['request', 'ws-client']);
 
 const byteLength = (s) => Buffer.byteLength(s, 'utf8');
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
