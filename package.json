@@ -23,7 +23,7 @@
   "author": "Haitao Su",
   "license": "FSL-1.1-ALv2",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13"
   },
   "os": [
     "darwin",
