@@ -46,6 +46,15 @@ const rawDir = (home = trocarHome()) => path.join(home, 'raw');
 export const indexDir = (home = trocarHome()) => path.join(home, 'index');
 const INDEX_V = 7;
 const CHUNK = 1 << 20;
+/** How long a scan that was given `ease` holds the event loop at most, give or take a chunk or EASE_EVERY records (3.5 §行表先读). */
+const EASE_MS = 50, EASE_EVERY = 64;
+/** easing(ease) → an async check a scan awaits at its checkpoints: it awaits `ease` once EASE_MS passed since the last time. Null with
+ *  no `ease`, and a scan then never awaits at all: the keeper and the seal worker run as one piece, as they always did. */
+const easing = (ease) => {
+  if (!ease) return null;
+  let last = performance.now();
+  return async () => { if (performance.now() - last >= EASE_MS) { await ease(); last = performance.now(); } };
+};
 // How many appended bytes one catch-up of the daemon's keeper takes (src/collector/index-keeper.mjs imports it): the
 // unit of "a chunk of index work". A READER that had to read more than this from a segment is the honest definition of
 // a cold index (D62 · D38): the keeper never leaves that much behind, so nothing was keeping this index current.
@@ -126,12 +135,13 @@ export function indexEntryOf(env, { segment, lineNo, storedBytes, offset = null 
 // `maxBytes` stops the scan at the first line boundary past that many bytes (`done: false`); it always takes at least
 // one whole line, so a caller that loops until `done` always makes progress, however long a single line is.
 // `progress` is called after every chunk read: a scan of a cold segment is background work the query worker reports (3.5 后台抽取与归约).
-function scanNdjson(fs, file, from, firstLine, segment, problems, maxBytes = Infinity, progress = null) {
+// `ease`: see `easing`; the fd stays open across it, and the scan reads only as far as the size it saw when it began.
+async function scanNdjson(fs, file, from, firstLine, segment, problems, maxBytes = Infinity, progress = null, ease = null) {
   const fd = fs.openSync(file, 'r');
   try {
     const st = fs.fstatSync(fd);
     const buf = Buffer.allocUnsafe(CHUNK);
-    const records = [];
+    const records = [], breathe = easing(ease);
     let pos = from, lineStart = from, lineNo = firstLine - 1, pending = Buffer.alloc(0);
     const take = (lineBuf) => {
       lineNo++;
@@ -154,6 +164,7 @@ function scanNdjson(fs, file, from, firstLine, segment, problems, maxBytes = Inf
       if (seg < n) pending = Buffer.concat([pending, buf.subarray(seg, n)]);
       pos += n;
       if (progress) progress();
+      if (breathe) await breathe();
     }
     const end = lineStart;
     const done = pos >= st.size;
@@ -169,15 +180,16 @@ function scanNdjson(fs, file, from, firstLine, segment, problems, maxBytes = Inf
 // A sealed segment: its own index already knows every line's number and length, so the records come
 // out with the ids they had before sealing (V88). A file that cannot be read is reported, never
 // silently empty.
-function scanSealed(fs, file, segment, problems) {
+async function scanSealed(fs, file, segment, problems, ease = null) {
   let sf;
   try { sf = openSealed(file, { fs }); } catch (e) {
     problems.push({ code: 'segment-unreadable', reason: `${path.basename(file)}: ${String((e && e.message) || e)}` });
     return { records: [], mark: { size: fs.statSync(file).size, sealed: true }, bytesRead: 0, done: true };
   }
   try {
-    const records = [];
+    const records = [], breathe = easing(ease);
     for (let i = 0; i < sf.count; i++) {
+      if (breathe && i % EASE_EVERY === 0) await breathe();
       const r = sf.records[i], lineNo = Number(r[R.lineNo]) + 1;
       if (r[R.flags] & FLAG_UNPARSEABLE) { problems.push({ code: 'record-unparseable', reason: `${recordId(segment, lineNo)} was not JSON when it was sealed; it is left out of the index` }); continue; }
       let line;
@@ -471,9 +483,11 @@ export const problemEntry = (where, p) => ({ where, code: p.code, ...(p.level ? 
  *     entry}], in line order; see fromEntries). Taken ONLY when they account for the segment exactly from the stored
  *     mark to its current size, so the answer is the scan's answer; anything else falls back to the scan.
  *   progress: called after every chunk the scan reads (a reader's; scanNdjson).
+ *   ease: an async function a scan awaits at least every EASE_MS or so, so a long one leaves the event loop to others (a reader's;
+ *     `easing`). The answer and any index written are the same with it or without.
  * Never throws for a segment it cannot read: the reason is in `problems` and the caller lists it in `errors`.
  */
-export async function segmentIndex({ home = trocarHome(), segment, fs = nodeFs, maxBytes = Infinity, owner = false, entries = null, past = null, progress = null } = {}) {
+export async function segmentIndex({ home = trocarHome(), segment, fs = nodeFs, maxBytes = Infinity, owner = false, entries = null, past = null, progress = null, ease = null } = {}) {
   const problems = [];
   const source = segmentSource(home, segment, fs);
   const sealed = /\.sealed$/.test(source);
@@ -492,9 +506,9 @@ export async function segmentIndex({ home = trocarHome(), segment, fs = nodeFs, 
   let got;
   try {
     got = sealed
-      ? scanSealed(fs, source, segment, problems)
+      ? await scanSealed(fs, source, segment, problems, ease)
       : (owner && fromEntries(fs, source, stored, how, entries))
-        || scanNdjson(fs, source, how === 'resume' ? stored.mark.end : 0, how === 'resume' ? stored.mark.lines + 1 : 1, segment, problems, maxBytes, progress);
+        || await scanNdjson(fs, source, how === 'resume' ? stored.mark.end : 0, how === 'resume' ? stored.mark.lines + 1 : 1, segment, problems, maxBytes, progress, ease);
   } catch (e) {
     problems.push({ code: 'segment-unreadable', reason: `${path.basename(source)}: ${String((e && e.message) || e)}` });
     return { segment, source, records: stored && how === 'resume' ? stored.records || [] : [], problems: [...prior, ...problems], bytesRead: 0, done: true, stored: kept, grown: false };
@@ -544,16 +558,16 @@ export const segStamp = (home, segment, fs, at = null) => {
   if (!f) stampFiles.set(k, (f = [path.join(rawDir(home), `${segment}.ndjson`), path.join(rawDir(home), `${segment}.sealed`)]));
   return `${!at || at.plain ? statKey(f[0], fs) : null}|${!at || at.sealed ? statKey(f[1], fs) : null}`;
 };
-/** warmSegmentIndex({home, segment, fs, at}) → the same `segmentIndex()` answer, read from disk only when that segment's
+/** warmSegmentIndex({home, segment, fs, at, progress, ease}) → the same `segmentIndex()` answer, read from disk only when that segment's
  *  file moved. For READERS only: a pass of the daemon's keeper (`owner`) writes, so it is never served from memory.
  *  A note (`level`, e.g. `index-cold`) is about the read that RAN segmentIndex, so it is never kept: a later read
  *  served from memory did none of that work, and an index write does not move the stamp (3.5 读不全 #17). */
-export const warmSegmentIndex = async ({ home = trocarHome(), segment, fs = nodeFs, at = null, progress = null } = {}) => {
+export const warmSegmentIndex = async ({ home = trocarHome(), segment, fs = nodeFs, at = null, progress = null, ease = null } = {}) => {
   let notes = [];
   const kept = await segRows.get(`${fsTag(fs)}\n${home}\n${segment}`, segStamp(home, segment, fs, at), async (old) => {
     // the answer this segment had: its index read goes on from where that one stopped (4.2:49)
     const prev = old ? await Promise.resolve(old).catch(() => null) : null; // kept as the promise it was computed as
-    const got = columnar(await segmentIndex({ home, segment, fs, past: prev && prev.stored, progress }), segment);
+    const got = columnar(await segmentIndex({ home, segment, fs, past: prev && prev.stored, progress, ease }), segment);
     if (got.grown && got.records !== prev.records && got.records.length >= prev.records.length) grew.set(got.records, recordsId(prev.records));
     notes = got.problems.filter((p) => p.level);
     return notes.length ? { ...got, problems: got.problems.filter((p) => !p.level) } : got;
