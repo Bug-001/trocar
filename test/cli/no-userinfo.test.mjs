@@ -6,7 +6,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { runCli } from '../../src/cli/main.mjs'
 import { COMMANDS } from '../../src/cli/commands.mjs'
-import { parseArgs } from '../../src/cli/args.mjs'
+import { parseArgs, optionsOf } from '../../src/cli/args.mjs'
 
 const PW = 'pw-not-a-real-secret-41f9'
 const URLS = [
@@ -29,9 +29,11 @@ const mutatingArgv = (cmd) => {
   return null
 }
 
+const argvOf = (cmd) => mutatingArgv(cmd) ?? (cmd.name === 'query' ? ['calls'] : [])
+
 for (const cmd of COMMANDS.filter((c) => !c.needsRoot && c.name !== 'help')) {
   test(`${cmd.name}: what it prints ${mutatingArgv(cmd) ? 'carries no URL password' : 'is printed as it is'}`, async () => {
-    const argv = mutatingArgv(cmd) ?? (cmd.name === 'query' ? ['calls'] : [])
+    const argv = argvOf(cmd)
     for (const url of URLS) {
       for (const carry of CARRIERS) {
         const said = []
@@ -46,6 +48,26 @@ for (const cmd of COMMANDS.filter((c) => !c.needsRoot && c.name !== 'help')) {
           }
           if (carry === CARRIERS[3]) assert.doesNotThrow(() => JSON.parse(said[0]), 'a JSON document stays one')
         } else assert.deepEqual(said, [carry(url), carry(url)], `${cmd.name} reads data: its bytes are its own`)
+      }
+    }
+  })
+}
+
+// Under `--json` a run leaves through its own path (src/off/io.mjs asOneDocument): the document the command printed, or the one made of what it only said on stderr.
+for (const cmd of COMMANDS.filter((c) => !c.needsRoot && c.name !== 'help' && optionsOf(c).has('--json'))) {
+  test(`${cmd.name} --json: the one document ${mutatingArgv(cmd) ? 'carries no URL password' : 'is printed as it is'}, printed or made from stderr`, async () => {
+    for (const url of URLS) {
+      for (const carry of CARRIERS) {
+        for (const spy of [async (_a, ctx) => { ctx.io.err(carry(url)); ctx.io.out(carry(url)); return 0 }, async (_a, ctx) => { ctx.io.err(carry(url)); return 1 }]) {
+          const said = []
+          const io = { out: (s) => said.push(s), err: (s) => said.push(s), stdin: { isTTY: false }, stdout: { isTTY: false } }
+          await runCli([cmd.name, ...argvOf(cmd), '--json'], { io, uid: 1000, platform: 'linux', deps: { commands: { [cmd.name]: spy } } })
+          assert.equal(said.length, 1, said.join('\n'))
+          if (mutatingArgv(cmd)) {
+            assert.ok(!said[0].includes(PW), `${cmd.name} printed a password: ${said[0]}`)
+            assert.ok(said[0].includes('***@'), `${cmd.name}: the URL is still shown, its userinfo as ***@: ${said[0]}`)
+          } else assert.ok(said[0].includes(PW), `${cmd.name} reads data: its bytes are its own`)
+        }
       }
     }
   })

@@ -21,6 +21,7 @@ import { formatInstallNotes } from './status-text.mjs'
 import { trocarHome, backupDir, collectorDir } from '../off/paths.mjs'
 import { readManifest, manifestPath } from '../off/manifest.mjs'
 import { memoProcQuestions, daemonProcReader } from '../off/proc.mjs'
+import { printJson } from './json.mjs'
 
 const USAGE = 'usage: trocar doctor [<harness>...] [--json]'
 const LIMIT = 5000 // records sampled (the head of the capture)
@@ -165,7 +166,7 @@ export async function runDoctor(argv, { io, env = process.env, home = nodeOs.hom
   if (!named.ok) { io.err(`trocar doctor: unknown harness '${named.unknown.join(', ')}'. Known: ${named.known.join(', ')}`); return EXIT.usage }
   const doc = await doctorDoc({ names: named.ids, home, env, platform, deps })
   const { exit } = doc
-  if (json) { const { exit: _drop, ...out } = doc; io.out(JSON.stringify(out, null, 2)); return exit }
+  if (json) { const { exit: _drop, ...out } = doc; printJson(io, out); return exit }
   const s = doc.summary
   // §3.7: the headline says what the list below it numbers — problems AND the expected findings (a Windows test machine 2026-10-18:
   // "1 problem." over three numbered entries). Notes are not numbered, so they are not counted here. The exit code is unchanged.

@@ -10,17 +10,18 @@
 //               what a command runs (a test's spy: what was dispatched, not what it does)
 //   The command gets `(argv, ctx)`; `ctx.args` is the parsed form of argv ({ positionals, flags }) and `ctx.json` whether `--json` was asked.
 import os from 'node:os'
-import { makeIo, hidingIo } from '../off/io.mjs'
-import { commandNamed, helpText, usageLine } from './commands.mjs'
+import { makeIo, hidingIo, asOneDocument } from '../off/io.mjs'
+import { commandNamed, printHelp } from './commands.mjs'
 import { parseArgs } from './args.mjs'
 import { wrap, WIDTH } from './text.mjs'
 import { printJson, errorDoc } from './json.mjs'
-import { EXIT } from './schema.mjs'
+import { EXIT, SCHEMA_VERSION } from './schema.mjs'
 import { codeId, selfCommand } from '../version.mjs'
 import { recordUserPath } from '../off/user-path.mjs'
 import { COMMAND_INDENT } from '../off/receipt.mjs'
 
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
+const helpWord = (a) => a === '--help' || a === '-h'
 const REPORT = 'Please report it with what you ran: https://github.com/Bug-001/trocar/issues'
 
 export async function runCli(argv, { io = makeIo({ stdin: process.stdin, stdout: process.stdout, stderr: process.stderr }), env = process.env, home = os.homedir(), platform = process.platform, uid = processUid(), deps = {} } = {}) {
@@ -31,12 +32,20 @@ export async function runCli(argv, { io = makeIo({ stdin: process.stdin, stdout:
     else { io.err(message); if (usage) for (const line of wrap(usage, WIDTH, '  ')) io.err(line) } // §1.1⑥: the usage line folds like help's, it does not pass 80 columns
     return exit
   }
-  const [first, ...rest] = argv
-  if (first === undefined || first === '--help' || first === '-h') { io.out(helpText()); return EXIT.ok } // `trocar` with nothing = `trocar help` (§2)
-  if (first === '--version') { io.out(`trocar ${codeId()}`); return EXIT.ok } // §2, D67⑤: the version, with HEAD's first 7 in a git checkout
+  const [first, ...rest] = argv[0] === '--json' ? [...argv.slice(1), '--json'] : argv // §2: `trocar --json status` is `trocar status --json`
+  if (first === undefined || first === '--json' || helpWord(first)) return printHelp({ io, json }) // `trocar` with nothing = `trocar help` (§2)
+  if (first === '--version') { // §2, D67⑤: the version, with HEAD's first 7 in a git checkout
+    if (json) printJson(io, { schema: SCHEMA_VERSION, command: 'version', ok: true, version: codeId() })
+    else io.out(`trocar ${codeId()}`)
+    return EXIT.ok
+  }
   const cmd = commandNamed(first)
   if (!cmd) return refuse(first, 'usage', `trocar: unknown command '${first}'. Run: trocar help`)
-  if (rest.includes('--help') || rest.includes('-h')) { io.out(helpText(cmd.name)); return EXIT.ok }
+  if (rest.some(helpWord)) {
+    // the word comes out before parsing: an open option would otherwise take what follows it as its value (`query --help status`)
+    const left = rest.filter((a) => !helpWord(a)), args = parseArgs(cmd, left)
+    return cmd.topics && args.positionals.length ? cmd.topics(left, { io, json, args }) : printHelp({ io, json }, cmd.name)
+  }
   // §1.5: the commands that change your own state refuse root, and the one that needs root refuses everyone else — before anything is read or written.
   if (cmd.needsRoot && platform !== 'linux') return refuse(cmd.name, 'usage', `trocar ${cmd.name}: not needed on this platform.`)
   if (cmd.needsRoot && uid !== 0) return refuse(cmd.name, 'usage', `trocar ${cmd.name}: run it with sudo:\n${COMMAND_INDENT}sudo ${selfCommand([cmd.name, ...rest])}`)
@@ -55,7 +64,8 @@ export async function runCli(argv, { io = makeIo({ stdin: process.stdin, stdout:
   const remember = () => { if (mutates && cmd.recordsPath !== false && run === cmd.run) try { recordUserPath({ home, env, ...(deps.fs ? { fs: deps.fs } : {}) }) } catch { /* the next command records it */ } }
   remember()
   try {
-    return await run(rest, { io: cio, env, home, platform, uid, json, args, deps: { getuid: () => uid, ...deps } })
+    const body = (cmdIo) => run(rest, { io: cmdIo, env, home, platform, uid, json, args, deps: { getuid: () => uid, ...deps } })
+    return await (json ? asOneDocument(cio, cmd.name, body) : body(cio)) // §1.2: a refusal the command only says on stderr still answers with a document
   } catch (e) {
     // §1.3: 70 is trocar's own fault. The message is one line; the stack belongs in `--json` and in a report, never on a person's screen.
     const message = `trocar: internal error: ${(e && e.message) || e}`
