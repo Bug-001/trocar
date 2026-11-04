@@ -8,7 +8,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { gunzipSync } from 'node:zlib'
 import { answer } from '../../src/query/answers.mjs'
-import { storedFile, STORED_MAX } from '../../src/query/stored.mjs'
+import { storedFile, writeStored, STORED_MAX, STORED_V } from '../../src/query/stored.mjs'
 import { rawHome, writeSegment } from './raw-home.mjs'
 
 const DEMO = fileURLToPath(new URL('../../samples/demo-session.ndjson', import.meta.url))
@@ -67,4 +67,22 @@ test('the directory keeps at most STORED_MAX files, the newest among them', asyn
   for (let i = 0; i <= STORED_MAX; i++) { last = { limit: '1', after: String(i) }; await asWorker(h, last) }
   assert.equal(files(h).length, STORED_MAX)
   assert.ok(fs.existsSync(storedFile(h, 'sessions', last)))
+})
+
+test('the rotation counts files of other versions too, and they go first: they are older', () => {
+  const h = rawHome('trocar-stored-')
+  const file = (i) => storedFile(h, 'sessions', { limit: '1', after: String(i) })
+  const seg = `.v${STORED_V}.`
+  assert.ok(path.basename(file(0)).includes(seg), 'the name carries STORED_V')
+  writeStored(h, 'sessions', { limit: '1' }, { sessions: [] })
+  const past = new Date(Date.now() - 3_600_000)
+  for (let i = 0; i < STORED_MAX; i++) {
+    const to = file(i).replace(seg, i % 2 ? '.' : `.v${STORED_V + 1}.`) // the name before versions, and another version
+    fs.writeFileSync(to, 'old')
+    fs.utimesSync(to, past, past)
+  }
+  writeStored(h, 'sessions', { limit: '1', after: 'now' }, { sessions: [] })
+  assert.equal(files(h).length, STORED_MAX)
+  assert.ok(fs.existsSync(storedFile(h, 'sessions', { limit: '1', after: 'now' })))
+  assert.ok(fs.existsSync(storedFile(h, 'sessions', { limit: '1' })))
 })

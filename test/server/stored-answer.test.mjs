@@ -6,11 +6,13 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import http from 'node:http'
+import { spawn } from 'node:child_process'
 import { gunzipSync } from 'node:zlib'
 import { boardHome, serveBoard } from '../web-v2/real-face.mjs'
-import { withToken } from './face.mjs'
-import { storedFile } from '../../src/query/stored.mjs'
-import { writeSegment } from '../query/raw-home.mjs'
+import { serveFace, withToken } from './face.mjs'
+import { createQueryService } from '../../src/query/service.mjs'
+import { storedFile, writeStored, STORED_V } from '../../src/query/stored.mjs'
+import { rawHome, writeSegment } from '../query/raw-home.mjs'
 
 /** GET with `accept-encoding: gzip` → {status, headers, doc, ms}; the body is gunzipped when the answer says gzip. */
 const get = (port, p) => new Promise((resolve, reject) => {
@@ -63,4 +65,46 @@ test('4.4 §存下的答案: with no worker, sessions answers at once from the s
     assert.equal(fresh.doc.as_of, ts)
     assert.ok(fresh.headers.etag, 'the fresh answer carries its ETag')
   } finally { await b.close() }
+})
+
+// The real face and service over a stand-in worker that answers every line at once and has no rows pass of its own: kids[0].emit says `{rows: true}`.
+const standIn = async (home) => {
+  const body = '{"sessions":[]}', kids = []
+  const script = `process.stdin.on('data', (d) => { for (const l of String(d).split('\\n').filter(Boolean)) process.stdout.write(${JSON.stringify(`200 ${body.length}\n${body}`)}) })`
+  const svc = createQueryService({ home, failure: () => {}, fork: () => { const c = spawn(process.execPath, ['-e', script], { stdio: ['pipe', 'pipe', 'pipe'] }); kids.push(c); return c } })
+  const face = await serveFace({ home, query: svc })
+  return { kids, port: face.port, close: () => { face.close(); svc.stop() } }
+}
+const LIST = '/api/sessions?limit=500', PARAMS = { limit: '500' }
+
+test('4.4 #18: a live worker that has not said `{rows: true}` leaves sessions to the file; once it has, sessions is forwarded', { timeout: 60_000 }, async () => {
+  const home = rawHome('trocar-stored-face-')
+  writeStored(home, 'sessions', PARAMS, { sessions: [], stored: { at: '2020-01-01T00:00:00.000Z' } })
+  const w = await standIn(home)
+  try {
+    assert.equal((await get(w.port, '/api/segments')).status, 200)
+    assert.equal(w.kids.length, 1, 'the worker is alive')
+    const unread = await get(w.port, LIST)
+    assert.equal(unread.status, 200)
+    assert.ok(unread.doc.stored, 'rows unread: from the file')
+    w.kids[0].emit('message', { rows: true })
+    const read = await until('a forwarded answer', async () => { const r = await get(w.port, LIST); return r.doc && !r.doc.stored ? r : null })
+    assert.equal(read.status, 200)
+  } finally { w.close() }
+})
+
+test('3.5 #38: a file of another STORED_V, or from before versions, is not handed out', { timeout: 60_000 }, async () => {
+  const seg = `.v${STORED_V}.`
+  for (const name of ['.', `.v${STORED_V + 1}.`]) {
+    const home = rawHome('trocar-stored-face-')
+    writeStored(home, 'sessions', PARAMS, { sessions: [], stored: { at: '2020-01-01T00:00:00.000Z' } })
+    const file = storedFile(home, 'sessions', PARAMS)
+    fs.renameSync(file, file.replace(seg, name))
+    const w = await standIn(home)
+    try {
+      const got = await get(w.port, LIST)
+      assert.equal(got.status, 200)
+      assert.equal(got.doc.stored, undefined, name)
+    } finally { w.close() }
+  }
 })
