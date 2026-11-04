@@ -126,6 +126,90 @@ test('kv: every key and value is there, each child drawn by its own spec; an emp
   assert.equal(textOf(renderKind({ as: 'kv' }, {}).html), NO_ARGS)
 })
 
+// a generated schema with what a reader must find in its Parameters: every name, its types and allowed values, how many are required
+function schemaOf(depth) {
+  const seen = { names: [], words: [], required: 0 }
+  const scalar = () => pick(['string', 'number', 'integer', 'boolean'])
+  const prop = (d) => {
+    const a = scalar(), b = 'null', vals = ['v' + Math.floor(rnd() * 1e6), 'w' + Math.floor(rnd() * 1e6)], description = 'about' + Math.floor(rnd() * 1e6)
+    const shapes = [
+      () => { seen.words.push(a); return { type: a } },
+      () => { seen.words.push(a, b); return { type: [a, b] } },
+      () => { seen.words.push(a, b); return { [pick(['anyOf', 'oneOf'])]: [{ type: a }, { type: b }] } },
+      () => { seen.words.push('string', ...vals); return { type: 'string', enum: vals } },
+      () => { seen.words.push('array', ...vals); return { type: 'array', items: { enum: vals } } },
+      ...(d > 0 ? [() => { seen.words.push('object'); return { type: 'object', ...object(d - 1) } },
+        () => { seen.words.push('object'); return { type: 'array', items: { type: 'object', ...object(d - 1) } } }] : []),
+    ]
+    const s = pick(shapes)()
+    if (rnd() < 0.5) { s.description = description; seen.words.push(description) }
+    return s
+  }
+  const object = (d) => {
+    const names = Array.from({ length: 1 + Math.floor(rnd() * 4) }, (_, k) => `p${seen.names.length + k}x`)
+    seen.names.push(...names)
+    const required = names.filter(() => rnd() < 0.5)
+    seen.required += required.length
+    return { properties: Object.fromEntries(names.map((n) => [n, prop(d)])), ...(required.length && { required }) }
+  }
+  const top = object(depth)
+  return { schema: { type: 'object', ...top }, top: Object.keys(top.properties), ...seen }
+}
+const TOOL = { as: 'tool', f: { body: [], desc: ['desc'], schema: ['schema'] } }
+
+test('tool: every parameter, type, allowed value and required mark is read from the schema; the summary lists the names', () => {
+  for (let i = 0; i < 300; i++) {
+    const { schema, top, names, words, required } = schemaOf(2)
+    const out = renderKind(TOOL, { desc: 'Does a thing', schema }), h = wrap(out), got = textOf(h)
+    assert.ok(has(h, 'kd-tool') && !has(h, 'kd-fail'))
+    assert.ok(got.includes('Does a thing'))
+    const m = h.match(/<details class="tool-params" data-path="([^"]*)"><summary>([^<]*)<\/summary>/)
+    assert.ok(m, 'Parameters, closed')
+    assert.deepEqual(JSON.parse(textOf(m[1])), ['schema'])
+    for (const n of top) assert.ok(m[2].includes(n), n)
+    for (const w of [...names, ...words]) assert.ok(got.includes(w), w)
+    assert.equal(count(h, /class="pr"/g), required)
+  }
+})
+
+test('tool: a union is written a | b', () => {
+  for (const u of [{ type: ['string', 'null'] }, { anyOf: [{ type: 'string' }, { type: 'null' }] }, { oneOf: [{ type: 'string' }, { type: 'null' }] }]) {
+    assert.ok(textOf(renderKind(TOOL, { schema: { properties: { a: u } } }).html).includes('string | null'))
+  }
+})
+
+test('tool: a schema with no properties to read falls back to the JSON tree, never the fail line; no arguments is said', () => {
+  for (const schema of [{}, { type: 'object' }, { type: 'string' }, { $ref: '#/x' }, [], [{ type: 'object' }], { properties: 7 }, { properties: ['a'] }]) {
+    const h = wrap(renderKind(TOOL, { desc: 'd', schema }))
+    assert.ok(has(h, 'kd-json') && !has(h, 'kd-fail') && !has(h, 'tool-params'), JSON.stringify(schema))
+  }
+  const none = wrap(renderKind(TOOL, { desc: 'd', schema: { type: 'object', properties: {} } }))
+  assert.ok(textOf(none).includes(NO_ARGS) && !has(none, 'kd-fail'))
+})
+
+test('tool: the description slices through more; Parameters come with the slice that has no more', () => {
+  for (let i = 0; i < 100; i++) {
+    const { schema } = schemaOf(1), budget = JSON.stringify(schema).length + 1 + Math.floor(rnd() * 200)
+    const desc = 'word '.repeat(budget * (1 + Math.floor(rnd() * 3))), v = { desc, schema }
+    let from = 0, got = '', out, n = 0
+    do {
+      out = renderKind(TOOL, v, { from, budget })
+      assert.ok(out.more === null || out.more > from, 'progress')
+      assert.equal(has(out.html, 'tool-params'), out.more === null)
+      got += textOf(out.html.replace(/<details class="tool-params"[^]*$/, ''))
+      from = out.more
+    } while (from !== null && ++n < 1e4)
+    assert.equal(got, desc)
+  }
+})
+
+test('tool: a schema past the budget is the JSON tree, inside the budget', () => {
+  const { schema } = schemaOf(2), budget = 20
+  let from = 0, out, n = 0
+  do { out = renderKind(TOOL, { schema }, { from, budget }); from = out.more } while (from !== null && ++n < 100)
+  assert.ok(has(wrap(out), 'kd-json') && !has(out.html, 'tool-params'))
+})
+
 test('json: the first paint holds at most 200 nodes, arrays over 100 entries are grouped, closed nodes open on demand', () => {
   const nodes = (h) => count(h, /<details|<div>/g)
   for (let i = 0; i < 100; i++) {
