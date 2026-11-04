@@ -41,7 +41,7 @@ const docOf = (home, seg = SEG) => fs.readFileSync(usageFile(home, seg), 'utf8')
 const callsOf = (home) => docOf(home).filter((o) => 'line' in o)
 const appendRaw = (home, lines) => fs.appendFileSync(path.join(home, 'raw', `${SEG}.ndjson`), lines.join('\n') + '\n')
 
-test('4.2:53-55 format: one call line per model call, the 3.2 mapping, ask on the main lane, a mark of the spec's version to the last line', async () => {
+test('4.2:53-55 format: one call line per model call, the 3.2 mapping, ask on the main lane, a v4 mark to the last line', async () => {
   const home = await homeWith(BASE)
   await fillUsage({ home, segments: [SEG] })
   assert.equal(fs.statSync(usageFile(home, SEG)).mode & 0o777, 0o600)
