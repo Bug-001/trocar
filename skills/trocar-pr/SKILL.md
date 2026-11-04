@@ -62,13 +62,13 @@ node scripts/pr-check.mjs --before <start-time> --title <title-file> --body <bod
 
 It judges every commit on the branch (paths, added lines, messages, author and committer), the branch name, the title and the body. It refuses, with the place and the rule but never the value:
 
-- images, video, PDF, archives, capture formats and other binary files; Git LFS pointers; an SVG that reaches outside itself, by data, an image or a reference to another file; a `data:` URI of an image or of no type in any text (an SVG prefix that an expression finishes at run time holds no image and passes), and a Markdown image, an `<img` or `<video` tag or a bare `github.com/user-attachments/` address in a title, body or comment (inside a committed file those are fine); a change to the built board that a rebuild does not reproduce;
+- images, video, PDF, archives, capture formats and other binary files; Git LFS pointers; an SVG that reaches outside itself, by data, an image or a reference to another file; a `data:` URI of a bitmap, or in base64 with an image type or no type, in any text (one of SVG text is text, read by the rules below, and a bitmap URI inside it is refused), and a Markdown image, an `<img` or `<video` tag or a bare `github.com/user-attachments/` address in a title, body or comment (inside a committed file those are fine); a change to the built board that a rebuild does not reproduce;
 - credentials and key material, and a folded block of encoded text that opens to nothing readable; encoded text that does open is judged by what it says;
-- your user name, host name, real name, git email, home paths in any OS's spelling, and a commit email that is not a GitHub noreply address, which `gh api user --jq '"\(.id)+\(.login)@users.noreply.github.com"'` prints for you;
+- your user name, host name, real name, git email, home paths in any OS's spelling, and a commit email that is not a GitHub noreply address, which `gh api user --jq '"\(.id)+\(.login)@users.noreply.github.com"'` prints for you (`noreply@github.com` passes: a web edit is committed by it);
 - project paths, session ids, session titles, hosts, segment names and record ids from your captures, in the login of a commit email too;
 - any run of about 12 English words or 20 CJK characters (60 bytes once normalized) that also occurs verbatim in your captures;
 - commits over 400 lines, commits without a body, control bytes in any text, path, title or body, text that is not UTF-8, a hash line holding anything but this run's hash, and merge commits (rebase instead);
-- a branch that does not stand on a commit `origin/main` already holds: rebase it onto `origin/main`, do not look for another `--base`.
+- a branch that forks from a commit no remote `main` holds: fetch the project's main and rebase onto it, do not look for another `--base`. A branch that is only behind main needs no rebase.
 
 Text already in the public repository is public and passes.
 
