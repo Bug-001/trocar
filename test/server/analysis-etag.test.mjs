@@ -98,4 +98,14 @@ test('4.4 #9: analysis has a two-part ETag that a new price moves, as it moves o
     assert.equal(after[k].etag, before[k].etag, `${k}: its ETag`)
     assert.ok(after[k].body.equals(before[k].body), `${k}: its bytes`)
   }
+
+  // #53: the session grows. Older sums than the session's have no ETag, so no stamp can pin the board on them; the session's own have both parts.
+  const was = JSON.parse(after.session.body).mark
+  s.append(2)
+  await whileMoving(async () => { const doc = JSON.parse((await api(`/api/session?id=${id}`)).body); return doc.mark !== was && !doc.pending }, () => `${reported.n}`, 'the session answers its new mark')
+  const { mark } = JSON.parse((await api(`/api/session?id=${id}`)).body)
+  let grew = null
+  await whileMoving(async () => { grew = await analysis(); return !JSON.parse(grew.body).pending }, () => `${reported.n}`, 'analysis has no pending')
+  if (JSON.parse(grew.body).mark !== mark) assert.equal(grew.etag, undefined, 'older sums than the session\'s')
+  else assert.equal(parts(grew.etag).length, 2, 'the session\'s own sums')
 })
