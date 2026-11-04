@@ -2,6 +2,10 @@
 
 <!-- What this changes and why it is needed. -->
 
+## Repro
+
+<!-- The test on synthetic data that goes red without this change. -->
+
 ## How verified
 
 <!-- Fresh-HOME full run: `HOME=$(mktemp -d) npm test`, with the counts (pass / fail / skip) and which tests skipped and why. Name the OS it ran on, and any extra runs on other OSes. -->
