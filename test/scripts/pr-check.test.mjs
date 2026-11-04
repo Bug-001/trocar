@@ -337,7 +337,7 @@ test('AN17: each credential shape is refused, in a file and in the body; carryin
 })
 
 test('AN17: FAKE counts standing alone; run into a token, it is part of the token', () => {
-  const stuck = { end: `ghp_${MIXED}FAKE`, start: `ghp_FAKE${MIXED}`, middle: `sk-ant-${MIXED}FAKE${MIXED}`, entropy: `${MIXED}FAKE`, key: `Authorization: Bearer FAKEabcdef123456` }
+  const stuck = { end: `ghp_${MIXED}FAKE`, start: `ghp_FAKE${MIXED}`, middle: `sk-ant-${MIXED}FAKE${MIXED}`, entropy: `${MIXED}FAKE`, key: `Authorization: Bearer ${'FAKE'}abcdef123456` }
   const w = workspace()
   w.commit(files(stuck))
   assert.deepEqual(named(w.check().doc, 'secrets'), sorted(files(stuck)))
@@ -345,7 +345,7 @@ test('AN17: FAKE counts standing alone; run into a token, it is part of the toke
 
 test('AN17: a credential is read through the same spellings as everything else, and across a line break', () => {
   const token = `ghp_${MIXED}`
-  const written = { unicode: `ghp\\u005f${MIXED}`, header: `\\u0041uthorization: Bearer abcdef123456`, reference: `&#65;uthorization: Bearer abcdef123456`, split: `${token.slice(0, 25)}\n${token.slice(25)}`, indented: `${token.slice(0, 25)}\n    ${token.slice(25)}` }
+  const written = { unicode: `ghp\\u005f${MIXED}`, header: `\\u0041uthorization: Bearer ${'abcdef'}123456`, reference: `&#65;uthorization: Bearer ${'abcdef'}123456`, split: `${token.slice(0, 25)}\n${token.slice(25)}`, indented: `${token.slice(0, 25)}\n    ${token.slice(25)}` }
   const w = workspace()
   w.commit(files(written))
   assert.deepEqual(named(w.check().doc, 'secrets'), sorted(files(written)))
