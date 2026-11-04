@@ -6,7 +6,8 @@
 // unreadable file is listed in `errors` and the rest is still read.
 //   foldFlows: in file and line order (never by ts: a clock that jumped must not reorder them) — the conditions that
 // still hold since the last daemon-start, the failure groups and expected counts of the last 24 h, each agent's last
-// capture and last failure. Every record that leaves here is cut down to a whitelist of metadata fields: no record
+// capture and last failure. Its times are a min / max over the lines' times (a connection row is written when it closes, so lines
+// are not in time order; 4.6 §看得到). Every record that leaves here is cut down to a whitelist of metadata fields: no record
 // bytes (ws.tail_raw, proxy preludes, bodies) ever reach the board.
 import nodeFs from 'node:fs'
 import path from 'node:path'
@@ -122,6 +123,14 @@ export function pick(rec) {
 
 // ── folding ───────────────────────────────────────────────────────────────────────────────────────────────────
 const isRow = (r) => r.event == null
+/** The time a line stands for, in ms (NaN when its ts does not read): an event line its ts; a connection row is written when the
+ *  connection closes and its ts is the open time, so it stands for its close, ts + duration_ms (4.6 §看得到). */
+const timeOf = (r) => Date.parse(r.ts) + (isRow(r) && r.duration_ms > 0 ? r.duration_ms : 0)
+// lines are not in time order, so every first / last time is a min / max over ISO times (null = none yet); at a tie the later-written line wins
+const later = (cur, iso) => cur == null || iso >= cur
+/** Sorts spans newest last_ts first; the sort is stable, so a tie keeps the order given (C.3: the log's order) */
+export const byNewest = (spans) => spans.sort((a, b) => (a.last_ts < b.last_ts ? 1 : a.last_ts > b.last_ts ? -1 : 0))
+export function widen(s, iso) { if (s.first_ts == null || iso < s.first_ts) s.first_ts = iso; if (later(s.last_ts, iso)) s.last_ts = iso }
 /** The group a failure belongs to: where + code for a failure event, the event (and resolver reason) otherwise,
  *  not_captured for a connection row. */
 export function groupKey(r) {
@@ -235,30 +244,34 @@ export function foldFlows(records, { now = Date.now(), windowMs = WINDOW_MS } = 
   for (let i = 0; i < records.length; i++) {
     const r = records[i]
     if (i === from && startIdx >= 0) for (const g of groups.values()) if (ENDED.has(g.last.event) || ENDED.has(g.last.code)) g.resolved = true
-    if (typeof r.ts === 'string') out.last_ts = r.ts
     if (r.event === 'install-note' || r.event === 'uninstall-note') out.install[r.event === 'install-note' ? 'install' : 'uninstall'].push(pick(r))
-    const t = Date.parse(r.ts)
+    const t = timeOf(r)
+    if (!Number.isFinite(t)) continue
+    const iso = new Date(t).toISOString()
+    if (later(out.last_ts, iso)) out.last_ts = iso
     if (!(t >= cutoff)) continue
     const agent = r.agent || r.harness || (r.proc && r.proc.agent) || null
     if (isFailure(r)) {
       const key = groupKey(r)
-      const g = groups.get(key) || { key, count: 0, first_ts: r.ts, last_ts: r.ts, last: null }
-      g.count += weight(r); g.last_ts = r.ts; g.last = pick(r); delete g.resolved
-      groups.delete(key); groups.set(key, g) // the Map's order is the order of each group's newest record
-      if (agent) { const a = agentRow(agent); a.last_failure = r.ts; a.last_failure_key = key }
+      const g = groups.get(key) || { key, count: 0, first_ts: null, last_ts: null, last: null }
+      // `last` stays the newest record written (the resolution rules above read it); the times are a span over the records' times
+      g.count += weight(r); widen(g, iso); g.last = pick(r); delete g.resolved
+      groups.delete(key); groups.set(key, g) // the Map's order is the order of each group's newest record written
+      if (agent) { const a = agentRow(agent); if (later(a.last_failure, iso)) { a.last_failure = iso; a.last_failure_key = key } }
     } else if (ENDS[r.event]) {
       for (const g of groups.values()) if (ENDS[r.event].includes(g.last.event) || ENDS[r.event].includes(g.last.code)) g.resolved = true
     } else if (isRow(r)) {
       if (notCapturedClass(r.not_captured, r.reason) === 'expected') {
         const k = expectedKey(r) // a by-design reason counts under its own name ('not-an-agent'), not under 'untracked'
         out.expected[k] = (out.expected[k] || 0) + 1
-        const e = out.expected_groups[k] || (out.expected_groups[k] = { count: 0, first_ts: r.ts, last_ts: r.ts })
-        e.count += 1; e.last_ts = r.ts
+        const e = out.expected_groups[k] || (out.expected_groups[k] = { count: 0, first_ts: null, last_ts: null })
+        e.count += 1; widen(e, iso)
       }
-      else if (r.decision === 'decrypt' && r.not_captured == null && agent) agentRow(agent).last_captured = r.ts
+      else if (r.decision === 'decrypt' && r.not_captured == null && agent) { const a = agentRow(agent); if (later(a.last_captured, iso)) a.last_captured = iso }
     }
   }
-  out.groups = [...groups.values()].reverse() // newest record first: one ts can hold several lines, the log's order breaks the tie (C.3)
+  // newest time first; one time can hold several groups, the log's order (each group's newest record written) breaks the tie (C.3)
+  out.groups = byNewest([...groups.values()].reverse())
   out.agents = [...agents.values()]
   // one batch per kind: the newest run's lines
   for (const k of ['install', 'uninstall']) out.install[k] = lastRun(out.install[k])

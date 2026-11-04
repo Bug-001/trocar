@@ -85,3 +85,16 @@ test('CM39: captureHealth reads the switch for the table only: a table id off an
   assert.equal(sw.desired, 'off')
   assert.deepEqual(Object.keys(sw.harnesses), [HARNESS_IDS[0]])
 })
+
+// ── the raw layer's failure groups: first / last are a min / max over the journal lines' times, in any order (4.6 §看得到) ──
+test('captureHealth: a raw failure group spans its oldest to its newest line whatever order the journal holds them in', () => {
+  const now = Date.parse('2026-10-07T12:00:00Z'), at = (h) => new Date(now - h * 3600e3).toISOString()
+  const recs = [{ ts: at(5), op: 'seal', outcome: 'error' }, { ts: at(1), op: 'seal', outcome: 'error' }, { ts: at(3), op: 'seal', outcome: 'error' }]
+  for (const order of [recs, [...recs].reverse()]) {
+    const home = tmpDir('trocar-raw-times-')
+    fs.mkdirSync(path.join(home, 'raw'))
+    fs.writeFileSync(path.join(home, 'raw', 'journal.jsonl'), order.map((r) => JSON.stringify(r) + '\n').join(''))
+    const [g] = captureHealth({ home, harnesses: [], now, alive: () => false }).raw.failures
+    assert.deepEqual([g.count, g.first_ts, g.last_ts], [3, at(5), at(1)])
+  }
+})

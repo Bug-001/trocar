@@ -205,3 +205,45 @@ test('foldFlows: by-design untracked / untrusted rows count as expected under th
   assert.deepEqual(f.expected, { 'not-an-agent': 2, 'group-off': 1, 'not-verified': 1 })
   assert.deepEqual(f.groups.map((g) => [g.last.not_captured, g.last.reason, g.count]), [['untracked', 'pid-unresolved', 1]])
 })
+
+// ── a connection row is written when the connection closes, with `ts` = its open time (4.6 §看得到): rows are not in time order, and every
+// first / last time of the fold is a min / max over the lines' times — a row's time is its close, ts + duration_ms — whatever order they were written in ──
+test('foldFlows: the same times in every write order; a connection row stands for its close (ts + duration_ms), also for the 24 h window', () => {
+  const row = (agent, openAgo, dur, more = {}) => ({ ts: at(openAgo), agent, decision: 'decrypt', not_captured: null, duration_ms: dur, ...more })
+  const lines = [
+    row('codex', 10 * H, 9.5 * H), // long-lived, captured, closed 0.5 h ago
+    row('codex', 2 * H, 1000),
+    row('codex', 5 * H, 4 * H, { not_captured: 'untrusted', reason: 'not-verified' }), // expected, closed 1 h ago
+    row('codex', 3 * H, 0, { not_captured: 'untrusted', reason: 'not-verified' }),
+    { ts: at(4 * H), event: 'failure', where: 'engine', code: 'leaf-error', agent: 'codex', reason: 'x' },
+    row('codex', 6 * H, 5.75 * H, { decision: 'tunnel', not_captured: 'upstream-cert', reason: 'CERT_HAS_EXPIRED' }), // failed, closed 0.25 h ago
+    { ts: at(1.5 * H), event: 'failure', where: 'engine', code: 'describe-error', agent: 'claude-code', reason: 'y' },
+    row('claude-code', 30 * H, 29 * H), // opened outside the window, closed inside it
+    row('claude-code', 30 * H, 1 * H, { not_captured: 'untrusted', reason: 'not-verified' }), // closed outside the window
+  ]
+  const end = (r) => Date.parse(r.ts) + (r.duration_ms || 0)
+  const byTs = [...lines].sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts))
+  const orders = { opened: byTs, reversed: [...byTs].reverse(), closed: [...lines].sort((a, b) => end(a) - end(b)), 'long-lived last': [...byTs.slice(1), byTs[0]] }
+  const view = (f) => ({ last_ts: f.last_ts, expected: f.expected, expected_groups: f.expected_groups,
+    groups: f.groups.map((g) => ({ key: g.key, count: g.count, first_ts: g.first_ts, last_ts: g.last_ts })),
+    agents: [...f.agents].sort((a, b) => (a.agent < b.agent ? -1 : 1)) })
+  const want = {
+    last_ts: at(0.25 * H), expected: { 'not-verified': 2 }, expected_groups: { 'not-verified': { count: 2, first_ts: at(3 * H), last_ts: at(1 * H) } },
+    groups: [
+      { key: groupKey(lines[5]), count: 1, first_ts: at(0.25 * H), last_ts: at(0.25 * H) },
+      { key: groupKey(lines[6]), count: 1, first_ts: at(1.5 * H), last_ts: at(1.5 * H) },
+      { key: groupKey(lines[4]), count: 1, first_ts: at(4 * H), last_ts: at(4 * H) },
+    ],
+    agents: [
+      { agent: 'claude-code', last_captured: at(1 * H), last_failure: at(1.5 * H), last_failure_key: groupKey(lines[6]) },
+      { agent: 'codex', last_captured: at(0.5 * H), last_failure: at(0.25 * H), last_failure_key: groupKey(lines[5]) },
+    ],
+  }
+  for (const [name, recs] of Object.entries(orders)) assert.deepEqual(view(foldFlows(recs, { now: NOW })), want, `written ${name}`)
+  // two failures of one group, the later-opened one closing first: the span is still first ≤ last
+  const twice = [row('codex', 6 * H, 5 * H, { not_captured: 'upstream-cert', reason: 'a' }), row('codex', 3 * H, 0, { not_captured: 'upstream-cert', reason: 'b' })]
+  for (const recs of [twice, [...twice].reverse()]) {
+    const [g] = foldFlows(recs, { now: NOW }).groups
+    assert.deepEqual([g.count, g.first_ts, g.last_ts], [2, at(3 * H), at(1 * H)])
+  }
+})
