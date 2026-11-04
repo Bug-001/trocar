@@ -24,15 +24,15 @@ const SWAPPED = [...TOOLS].reverse()
 const usage = (read, create, fresh = 10) => ({ input_tokens: fresh, output_tokens: 5, cache_read_input_tokens: read, cache_creation_input_tokens: create })
 // the conversation at its n-th question
 const talk = (n) => Array.from({ length: 2 * n - 1 }, (_, i) => (i % 2 ? { role: 'assistant', content: [{ type: 'text', text: `a${(i + 1) / 2}` }] } : { role: 'user', content: [{ type: 'text', text: `q${i / 2 + 1}` }] }))
-/** One Anthropic session from its steps {n: question, tools?, usage?, status?, model?} (no `usage`: the reply has none). */
+/** One Anthropic session from its steps {n: question, messages?, tools?, usage?, status?, model?} (no `usage`: the reply has none). */
 function writeSession(home, id, steps) {
   fs.mkdirSync(path.join(home, 'raw'), { recursive: true })
-  const lines = steps.map(({ n, tools = TOOLS, usage: u, status = 200, model = 'claude-opus-4-8' }, i) => {
+  const lines = steps.map(({ n, messages = talk(n), tools = TOOLS, usage: u, status = 200, model = 'claude-opus-4-8' }, i) => {
     const ts = `2026-10-22T10:00:${String(i).padStart(2, '0')}.000Z`
     const body = status === 200 ? { id: `msg_${i}`, model, stop_reason: 'end_turn', content: [{ type: 'text', text: `a${n}` }], ...(u ? { usage: u } : null) } : { type: 'error', error: { type: 'api_error', message: 'boom' } }
     return JSON.stringify({ ts, endpoint: '/v1/messages', method: 'POST', id: `req_${i}`, ts_request: ts, is_llm_call: true, capture: 'transparent', host: 'api.anthropic.com', traffic_class: 'llm',
       req_headers: { host: 'api.anthropic.com', 'content-type': 'application/json', 'user-agent': 'claude-cli/2.0.0 (external, cli)', 'x-claude-code-session-id': id },
-      req_body: JSON.stringify({ model, max_tokens: 1024, tools, system: [{ type: 'text', text: 'You are a coding assistant.' }], messages: talk(n) }),
+      req_body: JSON.stringify({ model, max_tokens: 1024, tools, system: [{ type: 'text', text: 'You are a coding assistant.' }], messages }),
       resp: { status, kind: 'json', body }, proc: { pid: 1, exe: '/x/claude', agent: 'claude-code' } })
   })
   fs.writeFileSync(path.join(home, 'raw', '20261022T100000Z.ndjson'), `${lines.join('\n')}\n`)
@@ -90,6 +90,14 @@ test('3.5 #45 missed: max(0, ref.read + ref.create − read) against the step re
     assert.equal(row.cache.missed, missed, `read ${read}`)
     assert.ok(!('why' in row.cache))
   }
+})
+
+test('3.5 #45 rewrite: the step that replaces the history with a summary says so in its cache, and no other row has the key', async () => {
+  const summary = [{ role: 'user', content: [{ type: 'text', text: 'Summary of the conversation so far.' }] }]
+  const calls = await rowsOf([...[1, 2, 3, 4, 5, 6].map((n) => ({ n, usage: usage(100 * n, 100) })), { n: 1, messages: summary, usage: usage(0, 800) }])
+  assert.ok(calls[6].compaction, 'the seventh step is a compaction')
+  assert.equal(calls[6].cache.rewrite, true)
+  assert.deepEqual(calls.slice(0, 6).filter((r) => 'rewrite' in r.cache).map((r) => r.rid), [])
 })
 
 test('3.5 #45 one value: a rid\'s cache is the same in session, session --since, lane --pack and lane --tail', { timeout: 120_000 }, async () => {
