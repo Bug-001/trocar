@@ -9,7 +9,7 @@ import { unknownSummary } from '../view/reduce.mjs';
 import { compareStep } from '../view/step-order.mjs';
 import { COMP_KEYS } from '../view/blockmeta.mjs';
 import { FLAG } from '../view/head-cols.mjs';
-import { QUIET_CAUSES } from '../view/metrics.mjs';
+import { CACHE_STATES, QUIET_CAUSES, cacheFacts, cacheState, usageOf } from '../view/metrics.mjs';
 import { posCmp } from './projection.mjs';
 import { QueryArgError } from './named/index.mjs';
 
@@ -48,12 +48,14 @@ export const recOf = (r) => ({ id: String(r.id), ts_request: r.ts ?? null, is_ll
 
 /** columns(slotOf) → the step-order columns of a fold log's calls, by each call's slot in the projection (`slotOf`): its row's ts, its
  *  lane (`ln`, the lane keys interned in `keys`), how many `user` events it has (`uc`) and whether it has a compaction or summarize
- *  event (`cs`), its context bytes (`cx`), its largest composition bucket and share (`cb`) and its flag bits (`fl`, flagsOf); the rids in step order, and each lane's rids and slots in step order (`by`, by lane int); the live lane keys. sync()
+ *  event (`cs`), its context bytes (`cx`), its largest composition bucket and share (`cb`), its flag bits (`fl`, flagsOf), its usage (`ur` `uw` `uf` `uo`: read, create,
+ *  fresh, out, NaN where the row has no number), its model (`md`, the models interned in `models` and `names`; −1: none) and its cache byte (`ca`, caOf); the rids in step order, and each lane's rids and slots in step order (`by`, by lane int); the live lane keys. sync()
  *  brings them to the log's frontier from the lines past the last sync (and keeps the lane headers it reads: `heads`), each moved row taken out and put back by binary search: a
  *  warm state and a cold open build the same columns. */
 export const columns = (slotOf) => ({ at: -1, slotOf, ts: [], ln: new Int32Array(0), uc: new Int32Array(0), cs: new Uint8Array(0),
   cx: new Float64Array(0), cb: new Uint8Array(0), fl: new Uint8Array(0),
-  keys: new Map(), order: [], by: [], lanes: new Set(), heads: new Map(), its: null, sorted: null });
+  ur: new Float64Array(0), uw: new Float64Array(0), uf: new Float64Array(0), uo: new Float64Array(0), md: new Int32Array(0), ca: new Uint8Array(0),
+  models: new Map(), names: [], keys: new Map(), order: [], by: [], lanes: new Set(), heads: new Map(), its: null, sorted: null });
 const tsOf = (cols, rid) => cols.ts[cols.slotOf(rid)];
 // The flag bits of a step: one definition with the board (src/view/head-cols.mjs). A cache break counts when its cause is outside the quiet
 // ones (src/view/metrics.mjs QUIET_CAUSES).
@@ -67,6 +69,38 @@ function flagsOf(r, events) {
   if (failed) f |= FLAG.failed; else if (r.usage == null) f |= FLAG.noUsage;
   return f;
 }
+/** The `ca` column's byte: the low bits (STATE) the index of the row's state in CACHE_STATES; PROBE a probe; UNKNOWN the wire's cache
+ *  semantics are not known; USAGE the row has usage. */
+export const CA = Object.freeze({ STATE: 0x0f, PROBE: 0x10, UNKNOWN: 0x20, USAGE: 0x40 });
+const STATE_AT = new Map(CACHE_STATES.map((s, i) => [s, i]));
+const caOf = (r) => STATE_AT.get(cacheState(r).state) | (r.probe ? CA.PROBE : 0) | (r.wire && r.wire.cacheSemanticsKnown === false ? CA.UNKNOWN : 0) | (usageOf(r) ? CA.USAGE : 0);
+const numOf = (v) => (typeof v === 'number' ? v : NaN);
+const orNull = (v) => (Number.isNaN(v) ? null : v);
+function modelInt(cols, m) {
+  if (typeof m !== 'string') return -1;
+  let v = cols.models.get(m);
+  if (v === undefined) { cols.models.set(m, (v = cols.names.length)); cols.names.push(m); }
+  return v;
+}
+// slot k's usage, model and cache byte, of the row `r` (null: no row)
+function factsInto(cols, k, r) {
+  const u = r && usageOf(r), rq = r && r.rec && r.rec.request;
+  cols.ur[k] = numOf(u && u.read); cols.uw[k] = numOf(u && u.create); cols.uf[k] = numOf(u && u.fresh); cols.uo[k] = numOf(u && u.out);
+  cols.md[k] = modelInt(cols, rq && rq.model); cols.ca[k] = r ? caOf(r) : 0;
+}
+/** usageAt(cols, k) → slot k's {read, create, fresh, out}, a counter the row has none of null; null when it has no usage. */
+export const usageAt = (cols, k) => (cols.ca[k] & CA.USAGE ? { read: orNull(cols.ur[k]), create: orNull(cols.uw[k]), fresh: orNull(cols.uf[k]), out: orNull(cols.uo[k]) } : null);
+/** modelAt(cols, k) → slot k's model, or null. */
+export const modelAt = (cols, k) => (cols.md[k] < 0 ? null : cols.names[cols.md[k]] ?? null);
+/** stateAt(cols, k) → slot k's state of CACHE_STATES (a slot that holds a row). */
+export const stateAt = (cols, k) => CACHE_STATES[cols.ca[k] & CA.STATE];
+/** wireRow(cols, r) → the fold log's row as an answer serves it: with its `cache` (3.5 §会话读), a function of the row and its comparison
+ *  step's usage, which the columns hold (asked for only on a break). Every path that serves a row serves this. */
+export function wireRow(cols, r) {
+  const rid = r.cacheBreak ? r.cacheBreak.refRid ?? null : null;
+  const ref = { has: rid != null, get usage() { const k = rid == null ? undefined : cols.slotOf(rid); return k !== undefined && cols.ts[k] !== undefined ? usageAt(cols, k) : null; } };
+  return { ...r, cache: cacheFacts(r, ref) };
+}
 // The largest composition bucket (its index in COMP_KEYS, high 4 bits) and its share of the composition in 15ths (low 4 bits).
 function compByte(comp) {
   let top = -1, max = 0, sum = 0;
@@ -74,7 +108,7 @@ function compByte(comp) {
   return top < 0 ? 0 : (top << 4) | Math.round((15 * max) / sum);
 }
 // The columns in a fold log's sidecar (4.3 §4 旁索引, its `extra`): `s.at` the frontier they were synced to; by slot `s.tk` whether the
-// ts is undefined (0), null (1) or a string (2, in `s.ts` in slot order), `s.ln`, `s.uc`, `s.cs`, `s.cx`, `s.cb`, `s.fl`; `s.keys` the lane keys in int order;
+// ts is undefined (0), null (1) or a string (2, in `s.ts` in slot order), `s.ln`, `s.uc`, `s.cs`, `s.cx`, `s.cb`, `s.fl`, `s.ur`, `s.uw`, `s.uf`, `s.uo`, `s.md`, `s.ca`; `s.keys` the lane keys and `s.models` the models in int order;
 // `s.order` the step order as slots; `s.lanes` the live lane keys. A string holding a newline, or a value of another type, saves none.
 const strs = (a) => a.every((x) => typeof x === 'string' && !x.includes('\n'));
 /** dumpColumns(cols) → the sidecar parts of synced columns ([] when they cannot be: never synced, or a key no `str` part holds). */
@@ -82,19 +116,21 @@ export function dumpColumns(cols) {
   const n = cols.ts.length, tk = new Uint8Array(n), ts = [];
   for (let k = 0; k < n; k++) { const t = cols.ts[k]; tk[k] = t === undefined ? 0 : t === null ? 1 : 2; if (tk[k] === 2) ts.push(t); }
   const keys = [...cols.keys.keys()], lanes = [...cols.lanes];
-  if (cols.at < 0 || !strs(ts) || !strs(keys) || !strs(lanes)) return [];
+  if (cols.at < 0 || !strs(ts) || !strs(keys) || !strs(lanes) || !strs(cols.names)) return [];
   return [['s.at', Float64Array.of(cols.at)], ['s.tk', tk], ['s.ts', ts], ['s.ln', cols.ln.slice(0, n)], ['s.uc', cols.uc.slice(0, n)],
-    ['s.cs', cols.cs.slice(0, n)], ['s.cx', cols.cx.slice(0, n)], ['s.cb', cols.cb.slice(0, n)], ['s.fl', cols.fl.slice(0, n)], ['s.keys', keys], ['s.order', Int32Array.from(cols.order, (rid) => cols.slotOf(rid))], ['s.lanes', lanes]];
+    ['s.cs', cols.cs.slice(0, n)], ['s.cx', cols.cx.slice(0, n)], ['s.cb', cols.cb.slice(0, n)], ['s.fl', cols.fl.slice(0, n)],
+    ...['ur', 'uw', 'uf', 'uo', 'md', 'ca'].map((c) => [`s.${c}`, cols[c].slice(0, n)]), ['s.models', cols.names], ['s.keys', keys], ['s.order', Int32Array.from(cols.order, (rid) => cols.slotOf(rid))], ['s.lanes', lanes]];
 }
 /** loadColumns(rows, parts) → the columns dumpColumns saved, over the projection's rows (`slotOf`, `keyAt`, `size`): equal to a sync
  *  to their `at`; null when the parts are not of that shape or name a slot the rows do not have. */
 export function loadColumns(rows, p) {
   const at = p['s.at'], tk = p['s.tk'], n = tk ? tk.length : -1;
   if (!(at instanceof Float64Array) || at.length !== 1 || !(tk instanceof Uint8Array) || n > rows.size || !Array.isArray(p['s.ts'])) return null;
-  for (const c of ['s.ln', 's.uc']) if (!(p[c] instanceof Int32Array) || p[c].length !== n) return null;
-  for (const [c, T] of [['s.cs', Uint8Array], ['s.cx', Float64Array], ['s.cb', Uint8Array], ['s.fl', Uint8Array]]) if (!(p[c] instanceof T) || p[c].length !== n) return null;
-  if (!(p['s.order'] instanceof Int32Array) || !Array.isArray(p['s.keys']) || !Array.isArray(p['s.lanes'])) return null;
-  const cols = { ...columns(rows.slotOf), at: at[0], ln: p['s.ln'], uc: p['s.uc'], cs: p['s.cs'], cx: p['s.cx'], cb: p['s.cb'], fl: p['s.fl'], keys: new Map(p['s.keys'].map((k, i) => [k, i])), lanes: new Set(p['s.lanes']) };
+  for (const c of ['s.ln', 's.uc', 's.md']) if (!(p[c] instanceof Int32Array) || p[c].length !== n) return null;
+  for (const [c, T] of [['s.cs', Uint8Array], ['s.cx', Float64Array], ['s.cb', Uint8Array], ['s.fl', Uint8Array], ['s.ca', Uint8Array], ['s.ur', Float64Array], ['s.uw', Float64Array], ['s.uf', Float64Array], ['s.uo', Float64Array]]) if (!(p[c] instanceof T) || p[c].length !== n) return null;
+  if (!(p['s.order'] instanceof Int32Array) || !Array.isArray(p['s.keys']) || !Array.isArray(p['s.lanes']) || !Array.isArray(p['s.models'])) return null;
+  const cols = { ...columns(rows.slotOf), at: at[0], ln: p['s.ln'], uc: p['s.uc'], cs: p['s.cs'], cx: p['s.cx'], cb: p['s.cb'], fl: p['s.fl'],
+    ur: p['s.ur'], uw: p['s.uw'], uf: p['s.uf'], uo: p['s.uo'], md: p['s.md'], ca: p['s.ca'], models: new Map(p['s.models'].map((m, i) => [m, i])), names: p['s.models'], keys: new Map(p['s.keys'].map((k, i) => [k, i])), lanes: new Set(p['s.lanes']) };
   let j = 0;
   for (let k = 0; k < n; k++) if (tk[k]) cols.ts[k] = tk[k] === 1 ? null : p['s.ts'][j++];
   if (j !== p['s.ts'].length) return null;
@@ -117,7 +153,7 @@ const byLane = (cols, v) => cols.by[v] || (cols.by[v] = { v, rids: [], slots: []
 function slot(cols, k) {
   if (k < cols.ln.length) return;
   const n = Math.max(k + 1, 2 * cols.ln.length, 64);
-  for (const c of ['ln', 'uc', 'cs', 'cx', 'cb', 'fl']) { const a = new cols[c].constructor(n); a.set(cols[c]); cols[c] = a; }
+  for (const c of ['ln', 'uc', 'cs', 'cx', 'cb', 'fl', 'ur', 'uw', 'uf', 'uo', 'md', 'ca']) { const a = new cols[c].constructor(n); a.set(cols[c]); cols[c] = a; }
 }
 const laneInt = (cols, key) => { let v = cols.keys.get(key); if (v === undefined) cols.keys.set(key, (v = cols.keys.size)); return v; };
 export function sync(cols, log) {
@@ -142,6 +178,7 @@ export function sync(cols, log) {
       cols.cs[k] = o.e.some((e) => e.type === 'compaction' || e.type === 'summarize') ? 1 : 0;
       cols.cx[k] = r.ctx || 0; cols.cb[k] = compByte(r.comp); cols.fl[k] = flagsOf(r, o.e);
     } else { cols.ts[k] = undefined; cols.ln[k] = -1; cols.uc[k] = 0; cols.cs[k] = 0; cols.cx[k] = 0; cols.cb[k] = 0; cols.fl[k] = 0; }
+    factsInto(cols, k, r);
   }
   // the kept lane order (viewOf) holds while every lane's first row is the one it was sorted by and kept its place; a new lane is
   // placed into it there
@@ -256,16 +293,16 @@ function upTo(plan, rid) {
 export function pageOf(V, before, limit) {
   const { cols, log, f, plan, mark } = V, order = cols.order, end = before != null ? placeOf(cols, tsOf(cols, before), before) : order.length;
   let start = end, bytes = 0;
-  const lines = [];
+  const lines = [], rows = [];
   while (start > 0 && end - start < limit) {
-    const o = rowAt(log, order[start - 1], f), n = Buffer.byteLength(JSON.stringify(o.r));
+    const o = rowAt(log, order[start - 1], f), w = wireRow(cols, o.r), n = Buffer.byteLength(JSON.stringify(w));
     if (start < end && bytes + n > PAGE_BYTES) break;
-    bytes += n; start--; lines.unshift(o);
+    bytes += n; start--; lines.unshift(o); rows.unshift(w);
   }
   const a = start > 0 ? upTo(plan, order[start - 1]) : 0, b = end < order.length && end > 0 ? upTo(plan, order[end - 1]) : plan.read.length;
   const records = [];
   for (let i = a; i < b; i++) if (mark != null && posCmp(String(plan.read[i].id), mark) <= 0) records.push(recOf(plan.read[i]));
-  return { more: start > 0, lanes: V.lanes, calls: lines.map((o) => o.r), events: eventsOf(lines), records };
+  return { more: start > 0, lanes: V.lanes, calls: rows, events: eventsOf(lines), records };
 }
 
 // the records of the members `added` and of the rows `calls`, each once, in step order
@@ -275,8 +312,9 @@ function recordsOf(V, added, calls) {
   return [...rows.values()].sort((a, b) => compareStep(a.ts ?? null, String(a.id), b.ts ?? null, String(b.id))).map(recOf);
 }
 
-/** deltaOf(V, then, cands) → the rows and lane headers at V's frontier that are new or whose bytes differ from those of the log
- *  `then.log` at byte `then.off`, and what that had that V has not, among the candidates `cands: {rids, lanes}` (the shared log's
+/** deltaOf(V, then, cands) → the rows and lane headers at V's frontier that are new or whose fold-log bytes differ from those of the log
+ *  `then.log` at byte `then.off` (a row's `cache` needs no comparing: a rid's usage is its record's, and another comparison step is another
+ *  `refRid`, so an unchanged line has an unchanged `cache`), and what that had that V has not, among the candidates `cands: {rids, lanes}` (the shared log's
  *  changedSince, else every rid and lane of either log); their events; the records (index rows) of those rows and of the members
  *  `then.added` (the cut's members past `then.mark` up to V's mark, calls or not: what a full page holds of them), in step order;
  *  `unknown` when it differs from the one at `then.mark` (null when it is gone). */
@@ -301,7 +339,7 @@ export function deltaOf(V, then, cands) {
   const was = same ? V.unknown : unknownOf(its.list.filter((o) => upToM(o.i)), order.some(upToM));
   return {
     ...(JSON.stringify(was) !== JSON.stringify(V.unknown) ? { unknown: V.unknown ?? null } : null),
-    calls: calls.map((o) => o.r), gone: gone.sort(posCmp), lanes: V.lanes.filter((h) => lanes.has(h.lane)), lanes_gone: lanesGone.sort(posCmp),
+    calls: calls.map((o) => wireRow(V.cols, o.r)), gone: gone.sort(posCmp), lanes: V.lanes.filter((h) => lanes.has(h.lane)), lanes_gone: lanesGone.sort(posCmp),
     events: eventsOf(calls), records: recordsOf(V, then.added, calls),
   };
 }
