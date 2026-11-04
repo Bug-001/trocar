@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 // scripts/pr-check.mjs — what is about to leave this machine, checked against the rules and against the capture (spec 1.12 §6).
 //
-//   node scripts/pr-check.mjs --before <time> --title <file> --body <file> [--base <ref>] [--budget <bytes>] [--cli <path>] [--json]
-//   node scripts/pr-check.mjs --issue --before <time> [--title <file>] --body <file> [--base <ref>] [--budget <bytes>] [--cli <path>] [--json]
+//   node scripts/pr-check.mjs --before <time> --title <file> --body <file> [--base <ref>] [--accept-partial] [--cli <path>] [--json]
+//   node scripts/pr-check.mjs --issue --before <time> [--title <file>] --body <file> [--base <ref>] [--accept-partial] [--cli <path>] [--json]
 //
-// The report is {ok, hash, findings: [{rule, where, why}], coverage: {scanned_bytes, total_bytes, from, to}, leaving: {files, commits,
-// identity, branch}}. Exit 0 passed, 1 refused, 2 usage error. A finding names a place and a rule, never a value: `where` points into
+// The report is {ok, hash, findings: [{rule, where, why}], accepted: [{rule, where, why}], coverage: {scanned_bytes, opaque_bytes, total_bytes,
+// from, to}, leaving: {files, commits, identity, branch}}. Exit 0 passed, 1 refused, 2 usage error. A finding names a place and a rule, never a value: `where` points into
 // `leaving.files` by index, because a path is outbound text too, and `why` is one constant sentence per rule. Captured bytes pass through
-// this process to be compared, and nothing of them is printed. What cannot be read is a refusal, not an empty result. The capture is read
+// this process to be compared, and nothing of them is printed. What cannot be read is a refusal, not an empty result. For the capture that
+// is a `partial` finding, the one rule --accept-partial moves to `accepted`, and using it changes the hash. The capture is read
 // through the installed trocar, or the one --cli names: its reads go by the daemon and may write the derived layer, never the raw records.
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -15,16 +16,15 @@ import fs from 'node:fs'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
-import { expandRequestBody, MAX_DECODED_BYTES, requestEncodingOf } from '../src/dissect/request-body.mjs'
 import { parseTime } from '../src/query/named/index.mjs'
 import { SEALED_EXT } from '../src/raw/seal.mjs'
+import { textsBehind } from './lib/record-text.mjs'
 import { normalize, WindowTable } from './lib/text-windows.mjs'
 import { callOf, findCli } from './lib/trocar-cli.mjs'
 
-const USAGE = `usage: node scripts/pr-check.mjs --before <time> --title <file> --body <file> [--base <ref>] [--budget <bytes>] [--cli <path>] [--json]
-       node scripts/pr-check.mjs --issue --before <time> [--title <file>] --body <file> [--base <ref>] [--budget <bytes>] [--cli <path>] [--json]`
+const USAGE = `usage: node scripts/pr-check.mjs --before <time> --title <file> --body <file> [--base <ref>] [--accept-partial] [--cli <path>] [--json]
+       node scripts/pr-check.mjs --issue --before <time> [--title <file>] --body <file> [--base <ref>] [--accept-partial] [--cli <path>] [--json]`
 const CLONE = fileURLToPath(new URL('..', import.meta.url))
-const BUDGET = 2e9
 const PAGE = ['--limit', '500'] // 1.6 §4.1: the largest page of a list query
 const SHORT_SHA = 10
 const MAX_LINES = 400
@@ -52,7 +52,6 @@ const CONTROL = /[\x00-\x08]/g
 const RECORD_TS = /^\{"ts":"([^"]+)"/
 const DIFF_HEADER = 'diff --git '
 const NEWLINE = Buffer.from('\n')
-const BODY_B64 = Buffer.from('"req_body_b64":"')
 // the row of .github/pull_request_template.md the hash is written on: it cannot hold its own hash, and holds nothing else or it counts
 const HASH_ROW = /^- Written by an agent: the `hash` from `node scripts\/pr-check\.mjs`:[ \t]*(?:(`?)[0-9a-f]{64}\1[ \t]*)?\r?$/gm
 
@@ -71,21 +70,21 @@ const WHY = {
   merge: 'This is a merge commit, and a branch goes out without them: rebase it onto the base.',
   git: 'git could not be read, so what is leaving is not known.',
   base: 'The base is not behind this branch: --base must name an ancestor of HEAD other than HEAD itself.',
-  capture: 'The capture could not be read, so it was not compared.',
-  compressed: 'A compressed request body in the capture could not be decoded, so it was not compared.',
+  query: 'trocar query could not read the capture, so it was not compared.',
+  raw: 'A segment of the capture could not be read to its end, so the rest of it was not compared.',
+  opaque: 'Some records could not be opened, so what is behind them was not compared: opaque_bytes counts them.',
+  nothing: 'The capture holds records and none of them was compared: all of them are at or past --before, or could not be read.',
 }
 
 function parse(argv) {
   let values
   try {
     ({ values } = parseArgs({ args: argv, options: { before: { type: 'string' }, title: { type: 'string' }, body: { type: 'string' }, base: { type: 'string' },
-      budget: { type: 'string' }, cli: { type: 'string' }, issue: { type: 'boolean' }, json: { type: 'boolean' } } }))
+      'accept-partial': { type: 'boolean' }, cli: { type: 'string' }, issue: { type: 'boolean' }, json: { type: 'boolean' } } }))
     if (!values.before || !values.body || !(values.title || values.issue)) return null
-    const budget = values.budget === undefined ? BUDGET : Number(values.budget)
-    if (!Number.isSafeInteger(budget) || budget < 0) return null
     const cli = findCli(values.cli)
     if (!cli) return null
-    return { ...values, budget, cli, before: parseTime(values.before), base: values.base ?? 'origin/main',
+    return { ...values, cli, before: parseTime(values.before), base: values.base ?? 'origin/main',
       title: values.title && fs.readFileSync(values.title), body: fs.readFileSync(values.body) }
   } catch {
     return null
@@ -331,71 +330,55 @@ function subtractBase(cwd, base, table, held) {
   }
 }
 
-/** The bytes behind a body the record keeps as base64, which the line's own text hides: through the reader's one decoder, whatever the
- *  record is. Null when they cannot be had. */
-function bodyBehind(line) {
-  let rec
-  try { rec = JSON.parse(line) } catch { return null }
-  expandRequestBody(rec, { maxBytes: MAX_DECODED_BYTES })
-  if (typeof rec.req_body === 'string') return Buffer.from(rec.req_body)
-  return requestEncodingOf(rec) ? null : Buffer.from(rec.req_body_b64 ?? '', 'base64')
-}
-
-/** Streams each segment through `table`, newest first, until the budget or the table runs out. Returns the coverage. */
-async function compareCapture(segments, { before, budget, cli }, table, add) {
-  const wanted = segments.filter((s) => !s.from || Date.parse(s.from) < before).sort((a, b) => b.segment.localeCompare(a.segment))
-  const coverage = { scanned_bytes: 0, total_bytes: wanted.reduce((n, s) => n + s.bytes, 0), from: null, to: null }
-  const spent = () => coverage.scanned_bytes >= budget || table.size === 0
+/** Streams every segment that can hold a record before `before` through `table`, to its end whatever the table holds by then: a record
+ *  left unread is a `partial` finding, so the walk does not stop early. Returns the coverage. */
+async function compareCapture(segments, { before, cli }, table, add) {
+  const wanted = segments.filter((s) => !s.from || Date.parse(s.from) < before)
+  const coverage = { scanned_bytes: 0, opaque_bytes: 0, total_bytes: wanted.reduce((n, s) => n + s.bytes, 0), from: null, to: null }
+  const hit = (slot) => { add('captured-text', table.whereOf(slot)); table.drop(slot) }
   const take = (line, ending) => {
-    coverage.scanned_bytes += line.length + ending
     const ts = RECORD_TS.exec(line.subarray(0, 64).toString('latin1'))?.[1]
     const time = Date.parse(ts)
     if (time >= before) return
-    const hit = (slot) => { add('captured-text', table.whereOf(slot)); table.drop(slot) }
     table.scan(line, hit)
-    if (line.includes(BODY_B64)) {
-      const body = bodyBehind(line)
-      if (body) table.scan(body, hit)
-      else add('unreadable', 'capture', WHY.compressed)
-    }
+    let behind = { texts: [], opaque: true }
+    try { behind = textsBehind(JSON.parse(line)) } catch { /* not JSON: nothing can be opened */ }
+    for (const text of behind.texts) table.scan(text, hit)
+    coverage[behind.opaque ? 'opaque_bytes' : 'scanned_bytes'] += line.length + ending
     if (Number.isNaN(time)) return
     if (coverage.from === null || time < Date.parse(coverage.from)) coverage.from = ts
     if (coverage.to === null || time > Date.parse(coverage.to)) coverage.to = ts
   }
   for (const segment of wanted) {
-    if (spent()) break
     let call
-    try { call = callOf(cli, ['raw', segment.segment]) } catch { add('unreadable', 'capture', WHY.capture); continue }
+    try { call = callOf(cli, ['raw', segment.segment]) } catch { add('partial', 'capture', WHY.raw); continue }
     const kid = spawn(call[0], call[1], { ...call[2], stdio: ['ignore', 'pipe', 'ignore'] })
     const exit = new Promise((resolve) => { kid.on('close', resolve); kid.on('error', () => resolve(-1)) })
     let parts = []
     for await (const chunk of kid.stdout) {
       let at = 0
-      for (let nl = chunk.indexOf(10); nl >= 0 && !spent(); nl = chunk.indexOf(10, at)) {
+      for (let nl = chunk.indexOf(10); nl >= 0; nl = chunk.indexOf(10, at)) {
         parts.push(chunk.subarray(at, nl))
         take(parts.length === 1 ? parts[0] : Buffer.concat(parts), 1)
         parts = []
         at = nl + 1
       }
-      if (spent()) break
       if (at < chunk.length) parts.push(chunk.subarray(at))
     }
-    if (spent()) {
-      kid.kill()
-      await exit
-      break
-    }
     if (parts.length > 0) take(Buffer.concat(parts), 0)
-    if (await exit !== 0) add('unreadable', 'capture', WHY.capture)
+    if (await exit !== 0) add('partial', 'capture', WHY.raw)
   }
+  if (coverage.opaque_bytes > 0) add('partial', 'capture', WHY.opaque)
+  if (coverage.scanned_bytes + coverage.opaque_bytes === 0 && segments.some((s) => s.records > 0)) add('partial', 'capture', WHY.nothing)
   return coverage
 }
 
 function print(doc) {
   const lines = [`pr-check: ${doc.ok ? 'passed' : `refused, ${doc.findings.length} finding${doc.findings.length === 1 ? '' : 's'}`}`]
   for (const f of doc.findings) lines.push(`  ${f.rule}  ${f.where}  ${f.why}`)
-  const { scanned_bytes: scanned, total_bytes: total, from, to } = doc.coverage
-  lines.push(`hash ${doc.hash}`, `capture compared: ${scanned} of ${total} bytes${from ? `, ${from} to ${to}` : ''}`)
+  for (const f of doc.accepted) lines.push(`  accepted ${f.rule}  ${f.where}  ${f.why}`)
+  const { scanned_bytes: scanned, opaque_bytes: opaque, total_bytes: total, from, to } = doc.coverage
+  lines.push(`hash ${doc.hash}`, `capture compared: ${scanned} of ${total} bytes, ${opaque} not opened${from ? `, ${from} to ${to}` : ''}`)
   if (doc.leaving.branch) lines.push(`branch ${doc.leaving.branch}`)
   for (const person of doc.leaving.identity) lines.push(`identity ${person}`)
   for (const commit of doc.leaving.commits) lines.push(`commit ${commit.sha} ${commit.subject}`)
@@ -440,7 +423,7 @@ async function main() {
   checkSecrets(out.sources, add)
   checkIdentity(out, cwd, hold, add)
   let segments = []
-  try { segments = checkFacts(options.cli, out.sources, hold) } catch { add('unreadable', 'capture', WHY.capture) }
+  try { segments = checkFacts(options.cli, out.sources, hold) } catch { add('partial', 'capture', WHY.query) }
 
   const table = new WindowTable(out.sources)
   if (base) {
@@ -449,8 +432,11 @@ async function main() {
   for (const { hits } of held.values()) for (const hit of hits) add(hit.rule, hit.where)
   const coverage = await compareCapture(segments, options, table, add)
 
-  const findings = [...found.values()]
-  const doc = { ok: findings.length === 0, hash: hashOf(out.sources, { base, accepted: false }), findings, coverage, leaving: out.leaving }
+  const accepting = options['accept-partial'] === true
+  const isAccepted = (f) => accepting && f.rule === 'partial'
+  const findings = [...found.values()].filter((f) => !isAccepted(f))
+  const accepted = [...found.values()].filter(isAccepted)
+  const doc = { ok: findings.length === 0, hash: hashOf(out.sources, { base, accepted: accepting }), findings, accepted, coverage, leaving: out.leaving }
   if (options.json) process.stdout.write(`${JSON.stringify(doc)}\n`)
   else print(doc)
   process.exitCode = doc.ok ? 0 : 1

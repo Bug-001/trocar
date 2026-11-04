@@ -1,4 +1,4 @@
-// test/scripts/pr-check.test.mjs — scripts/pr-check.mjs on a temp repo and a temp HOME (spec 1.12 §6, AN15-AN25, AN28, AN29).
+// test/scripts/pr-check.test.mjs — scripts/pr-check.mjs on a temp repo and a temp HOME (spec 1.12 §6, AN15-AN25, AN28-AN31).
 //
 // Every token, home path and machine name here is put together at run time, and what must pass carries FAKE or a neutral name: the
 // outbound checks of this very repository read this file too.
@@ -13,6 +13,8 @@ import { fileURLToPath } from 'node:url'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { envLine, writeSegment } from '../query/raw-home.mjs'
 import { bigSession } from '../query/big-session.mjs'
+import { shapeResponse } from '../../src/collector/core/record/body.mjs'
+import { buildWsEnvelope } from '../../src/collector/core/record/envelope.mjs'
 import { request, serveFace, withToken } from '../server/face.mjs'
 
 const SCRIPT = fileURLToPath(new URL('../../scripts/pr-check.mjs', import.meta.url))
@@ -62,7 +64,7 @@ function adopt(w) {
   const root = fileURLToPath(new URL('../../', import.meta.url))
   fs.cpSync(path.join(root, 'scripts/lib'), path.join(w.dir, 'scripts/lib'), { recursive: true })
   fs.copyFileSync(SCRIPT, path.join(w.dir, 'scripts/pr-check.mjs'))
-  const links = ['src/query', 'src/raw', 'src/dissect']
+  const links = ['src/query', 'src/raw', 'src/dissect', 'src/view', 'src/capture']
   for (const link of links) {
     fs.mkdirSync(path.dirname(path.join(w.dir, link)), { recursive: true })
     fs.symlinkSync(path.join(root, link), path.join(w.dir, link), 'junction')
@@ -90,13 +92,13 @@ const planted = (words, dir = 'plant') => Object.fromEntries(Object.entries(word
   Object.entries(spellings(word)).map(([how, text]) => [`${dir}/${kind}-${how}.txt`, `${text}\n`])))
 
 // ── AN15
-test('AN15: a missing option, a bad time, a bad budget or a CLI that is not there is exit 2, and nothing was read', () => {
+test('AN15: a missing option, a bad time or a CLI that is not there is exit 2, and nothing was read', () => {
   const w = workspace()
   const text = path.join(w.home, 'text')
   fs.writeFileSync(text, 'x')
   const before = ['--before', BEFORE], title = ['--title', text], body = ['--body', text]
   for (const args of [[...title, ...body], [...before, ...title], [...before, ...body], ['--issue', ...before], ['--issue', ...body],
-    ['--before', 'not a time', ...title, ...body], [...before, ...title, ...body, '--budget', 'lots'], [...before, ...title, ...body, '--frob'],
+    ['--before', 'not a time', ...title, ...body], [...before, ...title, ...body, '--frob'],
     [...before, ...title, '--body', path.join(w.home, 'no-such-file')], [...before, ...title, ...body, '--cli', path.join(w.home, 'no-such-cli')]]) {
     const r = spawnSync(process.execPath, [SCRIPT, '--cli', BIN, ...args], { cwd: w.dir, env: w.env })
     assert.equal(r.status, 2, args.join(' '))
@@ -326,7 +328,8 @@ test('AN24: changing any outbound byte moves the hash, and a re-run does not', (
   const hash = (o = {}) => w.check({ ...text, ...o }).doc.hash
   const first = hash()
   assert.match(first, /^[0-9a-f]{64}$/)
-  assert.equal(hash({ before: '2026-11-02T00:00:00Z', args: ['--budget', '1'] }), first, 'not an outbound byte')
+  assert.equal(hash({ before: '2026-11-02T00:00:00Z' }), first, 'not an outbound byte')
+  assert.notEqual(hash({ args: ['--accept-partial'] }), first, 'the terms it was judged on')
   assert.notEqual(hash({ title: 'A titlf' }), first)
   assert.notEqual(hash({ body: 'A bodz' }), first)
   const moved = (change) => { const before = hash(); change(); assert.notEqual(hash(), before) }
@@ -433,7 +436,7 @@ test('AN20: 60 shared normalized bytes are refused in every spelling, 59 pass, a
   assert.deepEqual(named(doc, 'captured-text'), sorted(texts))
   shapely(doc)
   const size = fs.statSync(file).size
-  assert.deepEqual(doc.coverage, { scanned_bytes: size, total_bytes: size, from: NOW_THEN, to: NOW_THEN })
+  assert.deepEqual(doc.coverage, { scanned_bytes: size, opaque_bytes: 0, total_bytes: size, from: NOW_THEN, to: NOW_THEN })
 })
 
 const kept = (o, bytes, coding) => JSON.stringify({ ...JSON.parse(envLine({ ts: NOW_THEN, ...o })), req_body: null, req_body_b64: bytes.toString('base64'), ...(coding ? { req_content_encoding: coding } : {}) })
@@ -455,19 +458,69 @@ test('AN20: a body kept as base64 is compared by what is behind it, whatever hid
   assert.equal(doc.coverage.scanned_bytes, fs.statSync(file).size)
 })
 
-for (const [name, row] of Object.entries({
-  'a coding the reader does not know': () => kept({}, prompt('x'), 'snappy'),
-  'bytes that do not decode': () => kept({}, prompt('x'), 'zstd'),
-})) {
-  test(`AN20: ${name} is a refusal, not a record compared`, () => {
-    const w = workspace()
-    w.commit({ 'a.txt': 'nothing here\n' })
-    capture(w, SEGMENT, [row()])
-    const { code, doc } = w.check()
-    assert.equal(code, 1)
-    assert.deepEqual(doc.findings.map((f) => [f.rule, f.where]), [['unreadable', 'capture']])
-  })
+// A reply as the collector stores it: a wire's events carry the shared text cut into pieces of 10, so no line holds 60 bytes of it in a row.
+const pieces = (text) => text.match(/[^]{1,10}/g)
+const events = (list) => list.map((e) => `data: ${JSON.stringify(e)}\n\n`).join('')
+const stored = (text, o = {}) => shapeResponse({ status: 200, headers: [['content-type', 'text/event-stream']], body: Buffer.from(text), ...o })
+const reply = (path, resp, o = {}) => JSON.stringify({ ...JSON.parse(envLine({ ts: NOW_THEN, path, ...o })), req_body: '{"model":"m","messages":[]}', resp })
+const MESSAGES = '/v1/messages', CHAT = '/v1/chat/completions', RESPONSES = '/v1/responses'
+const anthropicDeltas = (key, kind, text) => events([{ type: 'message_start', message: { id: 'm' } }, { type: 'content_block_start', index: 0, content_block: { type: kind, [key]: '' } },
+  ...pieces(text).map((piece) => ({ type: 'content_block_delta', index: 0, delta: { type: `${key}_delta`, [key]: piece } })), { type: 'content_block_stop', index: 0 }])
+const chatDeltas = (delta, text) => `${events(pieces(text).map((piece) => ({ choices: [{ index: 0, delta: delta(piece) }] })))}data: [DONE]\n\n`
+const chatText = (text) => chatDeltas((content) => ({ content }), text)
+const toolDelta = (args) => ({ tool_calls: [{ index: 0, function: { arguments: args } }] })
+const wsCall = (server, error = null) => JSON.stringify({ ...buildWsEnvelope({ id: 'w1', seq: 1, wsRaw: [], error, flow: { id: 'F', host: 'h', scheme: 'https', dst: {}, proc: {} },
+  upgrade: { req: { head: { raw: Buffer.from(''), method: 'GET', target: RESPONSES, headers: [] } }, resp: { head: { raw: Buffer.from(''), headers: [] } } },
+  call: { client: ['{"type":"response.create"}'], server, tsStart: NOW_THEN, tsRespStart: NOW_THEN, tsEnd: NOW_THEN, partial: [], truncated: false } }), ts: NOW_THEN })
+const textDeltas = (text) => pieces(text).map((delta) => ({ type: 'response.output_text.delta', delta }))
+const WIRES = {
+  'anthropic text': (text) => reply(MESSAGES, stored(anthropicDeltas('text', 'text', text))),
+  'anthropic thinking': (text) => reply(MESSAGES, stored(anthropicDeltas('thinking', 'thinking', text))),
+  'chat text': (text) => reply(CHAT, stored(chatText(text))),
+  'chat thinking': (text) => reply(CHAT, stored(chatDeltas((reasoning_content) => ({ reasoning_content }), text))),
+  'chat tool arguments': (text) => reply(CHAT, stored(chatDeltas(toolDelta, JSON.stringify({ path: text })))),
+  'responses cut before its end': (text) => reply(RESPONSES, stored(events(textDeltas(text)))),
+  'responses over a WebSocket, cut': (text) => wsCall(textDeltas(text).map((e) => JSON.stringify(e)), { type: 'closed', message: 'gone' }),
+  'an error envelope around a chat stream': (text) => reply(CHAT, { status: null, kind: 'error', error: { type: 'reset', message: 'gone' }, partial: stored(chatText(text)) }),
 }
+/** Files for 60 shared bytes per row, one file of 59 per row that must pass, and the capture; the seeds keep every row's text its own. */
+function sharing(rows) {
+  const names = Object.keys(rows)
+  const over = names.map((name, i) => ascii(60, 1 + i)), under = names.map((name, i) => ascii(59, 14 + i)) // ascii() repeats every 26 seeds
+  const refused = Object.fromEntries(names.map((name, i) => [`t/over-${i}.txt`, `${over[i]}\n`]))
+  const passing = Object.fromEntries(names.map((name, i) => [`t/under-${i}.txt`, `${under[i]}\n`]))
+  return { refused, files: { ...refused, ...passing }, capture: names.flatMap((name, i) => [rows[name](over[i]), rows[name](under[i])]) }
+}
+test('AN20: a text that only exists once its stream is put together is refused at 60 bytes, on every wire, and passes at 59', () => {
+  const w = workspace()
+  const { refused, files, capture: rows } = sharing(WIRES)
+  w.commit(files)
+  const file = capture(w, SEGMENT, rows)
+  const { code, doc } = w.check()
+  assert.equal(code, 1)
+  assert.deepEqual(named(doc, 'captured-text'), sorted(refused))
+  assert.equal(doc.coverage.scanned_bytes, fs.statSync(file).size)
+  assert.equal(doc.coverage.opaque_bytes, 0)
+})
+
+const BIG = ' '.repeat(2 ** 21) // past the 1 MiB the collector expands of a call that is not inference
+const packed = (type, text) => shapeResponse({ status: 200, headers: [['content-type', type], ['content-encoding', 'gzip']], body: zlib.gzipSync(text), llm: false })
+const COMPRESSED = {
+  'a JSON reply': (text) => reply(CHAT, packed('application/json', JSON.stringify({ pad: BIG, answer: text })), { is_llm: false }),
+  'a chat stream': (text) => reply(CHAT, packed('text/event-stream', `:${BIG}\n\n${chatText(text)}`), { is_llm: false }),
+  'an anthropic stream': (text) => reply(MESSAGES, packed('text/event-stream', `:${BIG}\n\n${anthropicDeltas('text', 'text', text)}`), { is_llm: false }),
+}
+test('AN20: a reply the collector left compressed is compared by what is behind it', () => {
+  const w = workspace()
+  const { refused, files, capture: rows } = sharing(COMPRESSED)
+  w.commit(files)
+  capture(w, SEGMENT, rows)
+  assert.ok(rows.every((row) => JSON.parse(row).resp.encoding_error), 'the collector kept the wire bytes')
+  const { code, doc } = w.check()
+  assert.equal(code, 1)
+  assert.deepEqual(named(doc, 'captured-text'), sorted(refused))
+  assert.equal(doc.coverage.opaque_bytes, 0)
+})
 
 test('AN20: a record at or after --before and a segment wholly after it are not compared', () => {
   const w = workspace()
@@ -477,21 +530,6 @@ test('AN20: a record at or after --before and a segment wholly after it are not 
   const { doc } = w.check()
   assert.deepEqual(named(doc, 'captured-text'), ['a.txt', 'c.txt'], 'a record with no time is compared')
   assert.deepEqual([doc.coverage.from, doc.coverage.to], [NOW_THEN, NOW_THEN])
-})
-
-test('AN20: a budget stops at the newest segments, the coverage says so, and the exit follows what was reached', () => {
-  const w = workspace()
-  w.commit({ 'a.txt': `${ascii(60, 1)}\n`, 'b.txt': `${ascii(60, 2)}\n` })
-  capture(w, SEGMENT, [line(NOW_THEN, ascii(60, 1))])
-  capture(w, NEWER, [line('2026-10-20T10:00:00.000Z', 'nothing shared'), line('2026-10-20T10:00:01.000Z', 'nothing shared')])
-  const cut = w.check({ args: ['--budget', '1'] })
-  assert.equal(cut.code, 0)
-  assert.ok(cut.doc.coverage.scanned_bytes > 0 && cut.doc.coverage.scanned_bytes < cut.doc.coverage.total_bytes)
-  const whole = w.check()
-  assert.equal(whole.code, 1)
-  assert.equal(whole.doc.coverage.scanned_bytes, whole.doc.coverage.total_bytes)
-  capture(w, NEWER, [line('2026-10-20T10:00:02.000Z', ascii(60, 2))])
-  assert.equal(w.check({ args: ['--budget', String(cut.doc.coverage.total_bytes - 1)] }).code, 1)
 })
 
 // ── AN22
@@ -535,7 +573,7 @@ test('AN25: no capture at all is an empty comparison, not a failure', () => {
   w.commit({ 'a.txt': `${ascii(60, 1)}\n` })
   const { code, doc } = w.check()
   assert.equal(code, 0, JSON.stringify(doc.findings))
-  assert.deepEqual(doc.coverage, { scanned_bytes: 0, total_bytes: 0, from: null, to: null })
+  assert.deepEqual(doc.coverage, { scanned_bytes: 0, opaque_bytes: 0, total_bytes: 0, from: null, to: null })
 })
 
 test('AN25: a query that cannot read the capture, a segment that cannot be read, and an unreadable git each refuse', () => {
@@ -544,7 +582,7 @@ test('AN25: a query that cannot read the capture, a segment that cannot be read,
   fs.writeFileSync(broken.trocar, 'not a folder')
   const query = broken.check()
   assert.equal(query.code, 1)
-  assert.deepEqual(query.doc.findings.map((f) => f.where), ['capture'])
+  assert.deepEqual(query.doc.findings.map((f) => [f.rule, f.where]), [['partial', 'capture']])
 
   const sealed = workspace()
   sealed.commit({ 'a.txt': `${ascii(60, 1)}\n` })
@@ -552,11 +590,76 @@ test('AN25: a query that cannot read the capture, a segment that cannot be read,
   fs.writeFileSync(path.join(sealed.trocar, 'raw', `${SEGMENT}.sealed`), 'this is not a sealed segment')
   const unread = sealed.check()
   assert.equal(unread.code, 1)
-  assert.ok(unread.doc.findings.some((f) => f.where === 'capture'))
+  assert.ok(of(unread.doc, 'partial').some((f) => f.where === 'capture'))
 
   const noBase = workspace().check({ base: ['--base', 'no-such-ref'] })
   assert.equal(noBase.code, 1)
-  assert.deepEqual(noBase.doc.findings.map((f) => f.where), ['git'])
+  assert.deepEqual(noBase.doc.findings.map((f) => [f.rule, f.where]), [['unreadable', 'git']])
+})
+
+// ── AN30
+const wireless = (o) => reply('/events', o, { is_llm: false })
+const unnamed = { ...shapeResponse({ status: 200, headers: [['content-type', 'application/json'], ['content-encoding', 'gzip']], body: Buffer.from('not gzip') }), headers: {} }
+const OPAQUE = {
+  'a coding the reader does not know': () => kept({}, prompt('x'), 'snappy'),
+  'bytes that do not decode': () => kept({}, prompt('x'), 'zstd'),
+  'a kept reply whose coding was not recorded': () => reply(CHAT, unnamed),
+  'a WebSocket message that did not decompress': () => wsCall([{ b64: 'AAAA', decode_error: 'no' }]),
+  'a stream no wire claims': () => wireless(stored(events([{ x: 1 }]))),
+}
+for (const [name, row] of Object.entries(OPAQUE)) {
+  test(`AN30: ${name} is counted opaque and refuses; --accept-partial lets it through and moves the hash`, () => {
+    const w = workspace()
+    w.commit({ 'a.txt': 'nothing here\n' })
+    const plain = line(NOW_THEN, 'nothing shared')
+    capture(w, SEGMENT, [plain, row()])
+    const held = w.check()
+    assert.equal(held.code, 1)
+    assert.deepEqual([...new Set(held.doc.findings.map((f) => `${f.rule} ${f.where}`))], ['partial capture'])
+    assert.equal(held.doc.coverage.opaque_bytes, Buffer.byteLength(row()) + 1)
+    assert.equal(held.doc.coverage.scanned_bytes, Buffer.byteLength(plain) + 1)
+    const let_through = w.check({ args: ['--accept-partial'] })
+    assert.equal(let_through.code, 0)
+    assert.deepEqual(let_through.doc.findings, [])
+    assert.deepEqual(let_through.doc.accepted, held.doc.findings)
+    assert.notEqual(let_through.doc.hash, held.doc.hash)
+  })
+}
+
+test('AN30: what the capture never held is not opaque', () => {
+  const w = workspace()
+  w.commit({ 'a.txt': 'nothing here\n' })
+  capture(w, SEGMENT, [wireless({ status: 200, kind: 'sse' }), wireless({ status: 200, kind: 'ws', messages: [{ omitted_bytes: 9 }] }), JSON.stringify({ ...JSON.parse(wireless({ status: 200, kind: 'sse' })), body_retention: 'log' })])
+  const { code, doc } = w.check()
+  assert.equal(code, 0, JSON.stringify(doc.findings))
+  assert.equal(doc.coverage.opaque_bytes, 0)
+})
+
+test('AN30: --accept-partial lets through no other rule, and an opaque record is still compared as far as it can be', () => {
+  const w = workspace()
+  const text = ascii(60, 1)
+  w.commit({ 'a.txt': `${text}\n`, 'b.txt': `ghp_${MIXED}\n` })
+  capture(w, SEGMENT, [JSON.stringify({ ...JSON.parse(OPAQUE['a coding the reader does not know']()), note: text })])
+  const { code, doc } = w.check({ args: ['--accept-partial'] })
+  assert.equal(code, 1)
+  assert.deepEqual(named(doc, 'captured-text'), ['a.txt'])
+  assert.deepEqual(named(doc, 'secrets'), ['b.txt'])
+  assert.deepEqual([...new Set(doc.accepted.map((f) => f.rule))], ['partial'])
+  assert.deepEqual(of(doc, 'partial'), [])
+})
+
+// ── AN31
+test('AN31: a capture all of it at or past --before refuses, and --accept-partial is what lets it out; an empty capture folder is no failure', () => {
+  const w = workspace()
+  w.commit({ 'a.txt': 'nothing here\n' })
+  fs.mkdirSync(path.join(w.trocar, 'raw'), { recursive: true })
+  assert.equal(w.check().code, 0, 'nothing to compare yet')
+  capture(w, SEGMENT, [line(NOW_THEN, 'nothing shared')])
+  const early = w.check({ before: '2026-10-01T00:00:00.000Z' })
+  assert.equal(early.code, 1)
+  assert.deepEqual(early.doc.findings.map((f) => [f.rule, f.where]), [['partial', 'capture']])
+  assert.equal(early.doc.coverage.scanned_bytes + early.doc.coverage.opaque_bytes, 0)
+  assert.equal(w.check({ before: '2026-10-01T00:00:00.000Z', args: ['--accept-partial'] }).code, 0)
 })
 
 // ── AN29
