@@ -65,6 +65,8 @@ A finding here is a lead. Confirm it before you report it.
 | CLI | One document under `--json`, the documented exit codes, plain English | `trocar help --json` | 1.6 §1 |
 | Board | The twelve checks | Step 5 | `trocar skill trocar-ux` |
 
+While `query analysis` carries `pending`, its `totals` are the partial sums so far: wait until `pending` is gone before using them.
+
 Read the contract, form one hypothesis, and test it with the smallest read that can prove it wrong. Do not guess at causes from the symptom alone: follow the data from the record to the query to the screen, and find the first place it goes wrong.
 
 ### 5. Look at the board

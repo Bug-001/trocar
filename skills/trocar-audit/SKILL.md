@@ -69,7 +69,7 @@ trocar query session --id <id> --head
 trocar query analysis --id <session>
 ```
 
-Read a session's spend from `totals.cost` in `query analysis`.
+Read a session's spend from `totals.cost` in `query analysis`. While the answer carries `pending`, `totals` is the partial sum so far: wait until `pending` is gone before using it.
 
 Take the sessions that cost the most. Look for: a low cache hit rate that lasts, a repeated cache break with the same cause, full context resent where only the new turn should go, sub-agents or background calls that outweigh the main thread, and retries in bursts.
 
