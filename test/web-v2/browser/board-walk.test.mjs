@@ -82,6 +82,30 @@ test('AN12 every screen of the board is walked, one item and one PNG each, and n
   } finally { await face.close() }
 })
 
+// port 9: nothing serves it here, and Chrome refuses it anyway
+const CLOSED = 'http://127.0.0.1:9'
+const unreachable = {
+  'a one-line address': (tmp, token) => `${CLOSED}/#t=${encodeURIComponent(token)}\n`,
+  'board --json': (tmp, token) => {
+    const tokenFile = path.join(tmp, 'token')
+    fs.writeFileSync(tokenFile, `${token}\n`)
+    return JSON.stringify({ schema: 2, command: 'board', ok: true, url: `${CLOSED}/`, token_file: tokenFile, port: 9, state: 'running' })
+  },
+}
+for (const [form, write] of Object.entries(unreachable)) {
+  for (const token of ['FAKEtoken0123456789', 'FAKE+tok/en=1']) {
+    test(`AN12 a board that does not answer is exit 2 and no walk.json, and the token stays out: ${form}, ${token}`, { skip }, async () => {
+      const tmp = tmpDir('trocar-walk-'), board = path.join(tmp, 'board'), out = path.join(tmp, 'out')
+      fs.writeFileSync(board, write(tmp, token))
+      const r = await walk({ userHome: tmp }, board, out)
+      assert.equal(r.code, 2, r.stderr)
+      assert.notEqual(r.stderr, '')
+      assert.ok(!fs.existsSync(path.join(out, 'walk.json')))
+      for (const secret of [token, encodeURIComponent(token)]) assert.ok(!`${r.stdout}${r.stderr}`.includes(secret))
+    })
+  }
+}
+
 test('AN13 a seeded dead control is reported by role and exits 1, its text stays out, the console is clipped, a POST never leaves; past the cap the rest is counted in skipped', { skip }, async () => {
   const dead = '<button aria-expanded="false" aria-label="seeded-dead" style="position:fixed;left:0;bottom:0;z-index:2147483647">x</button>' +
     '<div role="separator" tabindex="0" aria-label="seeded-split" style="position:fixed;left:40px;bottom:0;width:8px;height:40px;z-index:2147483647"></div>' +

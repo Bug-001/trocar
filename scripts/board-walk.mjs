@@ -5,7 +5,8 @@
 //
 // --board: `trocar board --json`'s document, whose `url` has no token and whose `token_file` this script reads itself, so the token never passes
 // through the caller; or a one-line address with the token in it (side-board's --url-file).
-// Writes <out>/walk.json and one <screen>.png per screen. Exit 0 nothing found, 1 something found, 2 usage or no playwright-core / Chrome.
+// Writes <out>/walk.json and one <screen>.png per screen. Exit 0 nothing found, 1 something found, 2 usage, no playwright-core / Chrome, or a walk
+// that could not go on (the board does not answer, --out cannot be written): stderr says why, without the address, and there is no walk.json.
 // Controls are found by ARIA role and generic attributes only, never by class or id, so a rewrite of the board's markup leaves this
 // as it is. It judges no content, naming or look: that is the job of whoever reads the screenshots. Read-only: every request but GET is stopped and
 // lands in `errors.requests`. What the board shows stays out of the output, as it can be captured text: a control is its role and a number
@@ -240,12 +241,15 @@ async function main() {
       if (typeof route === 'string') item.skipped.reason = route
       else await walkScreen(context, o.origin, item, formatHash({ screen, ...route }), o.out, clip)
     }
+    const doc = { ok: !screens.some(found), viewport: { width: o.width, height: o.height, theme: o.theme }, screens }
+    const clean = JSON.parse(JSON.stringify(doc), (_, v) => (typeof v === 'string' ? redact(v) : v))
+    fs.writeFileSync(path.join(o.out, 'walk.json'), `${JSON.stringify(clean, null, 2)}\n`)
+    console.log(`${screens.length} screens walked, ${screens.filter(found).length} with findings`)
+    process.exitCode = doc.ok ? 0 : 1
+  } catch (e) { // Playwright's message spells out the address it was given
+    console.error(`board-walk: ${redact(String(e?.message || e))}`)
+    process.exitCode = 2
   } finally { await browser.close() }
-  const doc = { ok: !screens.some(found), viewport: { width: o.width, height: o.height, theme: o.theme }, screens }
-  const clean = JSON.parse(JSON.stringify(doc), (_, v) => (typeof v === 'string' ? redact(v) : v))
-  fs.writeFileSync(path.join(o.out, 'walk.json'), `${JSON.stringify(clean, null, 2)}\n`)
-  console.log(`${screens.length} screens walked, ${screens.filter(found).length} with findings`)
-  process.exitCode = doc.ok ? 0 : 1
 }
 
 await main()
