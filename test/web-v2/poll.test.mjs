@@ -143,6 +143,32 @@ test('poller start(): after a long pending round no two timer rounds come less t
   }
 })
 
+// 4.4 live-poll 「每 1.5 s 一轮」: a round the timer began starts at least one period after the round before it, however long a reader's
+// read took and whatever it answered; both ways the board drives the engine: startPoll, and a started createPoller (the replay desk)
+for (const drive of ['startPoll', 'start()']) {
+  test(`poller (${drive}): no timer round comes less than one period after the round before it`, async (t) => {
+    mock.timers.enable({ apis: ['setTimeout', 'Date'] }); t.after(() => mock.timers.reset())
+    const base = INTERVAL.session
+    for (const took of [base / 3 + 1, base - 1, base + 341, 2.5 * base])
+      for (const answer of [{}, { pending: { done: 1, total: 9 } }]) {
+        const reads = []
+        const run = () => new Promise((res) => { reads.push(Date.now()); setTimeout(() => res(answer), reads.length === 1 ? took : 5) })
+        const settle = async () => { for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r)) }
+        let stop
+        if (drive === 'start()') {
+          const p = createPoller({ base, run })
+          p.start(); p.poll(true); stop = p.stop
+        } else stop = startPoll({ run, base, doc: { hidden: false, addEventListener() {}, removeEventListener() {} } }).stop
+        const t0 = Date.now()
+        while (Date.now() - t0 < 3 * took + 3 * base) { mock.timers.tick(50); await settle() }
+        stop()
+        const label = `took ${took}, ${JSON.stringify(answer)}`
+        assert.ok(reads.length >= 3, `${label}: ${reads.length} reads`)
+        for (let i = 1; i < reads.length; i++) assert.ok(reads[i] - reads[i - 1] >= base, `${label}: read ${i + 1} came ${reads[i] - reads[i - 1]} ms after the one before`)
+      }
+  })
+}
+
 // ── startPoll over every period of 4.4's table (mock timers; a fake document and reader) ─────────────────────────────────
 import fs from 'node:fs'
 

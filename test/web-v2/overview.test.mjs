@@ -13,8 +13,8 @@ import { capHealthPatch, captureVerdict } from '../../web/legacy/core/capture-ve
 import { INTERVAL } from '../../web/legacy/core/poll.mjs'
 import { ALIASES, HARNESS_ORDER, UNIDENTIFIED, harnessKey, harnessName } from '../../web/legacy/core/chips.mjs'
 import { TITLE_FROM_WIRE } from '../../web/legacy/labels/replay.mjs'
-import { TITLE_FROM_AGENT, FILES_NOT_READ } from '../../web/legacy/labels/overview.mjs'
-import { UNTITLED } from '../../web/legacy/labels/common.mjs'
+import { FILES_NOT_READ } from '../../web/legacy/labels/overview.mjs'
+import { UNTITLED, TITLE_PENDING, TITLE_PENDING_TIP } from '../../web/legacy/labels/common.mjs'
 import { ERR_WHERE, COMMANDS } from '../../web/legacy/labels/capture.mjs'
 import { fmtWhen, bytes } from '../../web/legacy/core/fmt.mjs'
 
@@ -203,9 +203,9 @@ test('#7 no session in the window: the empty line, never a row of 0s or a cost',
   assert.equal(statsCard(stateOf(quiet(), { stats: { ...failed(), other: false } }), NOW).kind, 'failed')
 })
 
-test('#11 recent sessions: the five newest by last_ts, the hover by title_source, untitled without a time, the probe-only mark, the replay href', () => {
-  const rows = [session(3), session(1, { title: null, title_source: null }), session(6), session(2, { title_source: 'harness-local-store' }),
-    session(4, { calls: 0, probes: 3 }), session(7), session(5)]
+test('#11 recent sessions: the five newest by last_ts, the hover by title_source, untitled without a time, a pending title as not read yet, the probe-only mark, the replay href', () => {
+  const rows = [session(3), session(1, { title: null, title_source: null }), session(6), session(2),
+    session(4, { calls: 0, probes: 3 }), session(7), session(5, { title: null, title_source: 'pending' })]
   const want = [...rows].sort((a, b) => Date.parse(b.last_ts) - Date.parse(a.last_ts)).slice(0, 5)
   assert.deepEqual(recentRows({ sessions: rows }).map((r) => r.id), want.map((r) => r.session_id))
   const card = recentCard(stateOf(quiet(), { sessions: ok({ sessions: rows, errors: [] }) }), NOW)
@@ -214,14 +214,20 @@ test('#11 recent sessions: the five newest by last_ts, the hover by title_source
     const r = card.rows[i]
     assert.equal(r.id, `${m.project_slug}::${m.session_id}`)
     assert.equal(r.href, `#/replay/${m.project_slug}/${m.session_id}`)
-    if (m.title != null) assert.ok(r.titleTip.includes(m.title_source === 'wire' ? TITLE_FROM_WIRE : TITLE_FROM_AGENT), r.titleTip)
-    else {
+    if (m.title != null) assert.ok(r.titleTip.includes(TITLE_FROM_WIRE), r.titleTip)
+    else if (m.title_source === 'pending') {
+      assert.equal(r.title, TITLE_PENDING, 'a title not read yet is not drawn as untitled')
+      assert.equal(r.pending, true)
+      assert.ok(r.titleTip.includes(TITLE_PENDING_TIP), r.titleTip)
+    } else {
       assert.equal(r.title, UNTITLED)
+      assert.equal(r.pending, false)
       assert.ok(!r.title.includes(fmtWhen(Date.parse(m.last_ts), NOW)), 'the untitled title carries no time: the row has its last-active column')
     }
     assert.equal(r.calls.tip != null, m.calls === 0 && m.probes > 0, `probe-only mark · ${m.session_id}`)
     assert.doesNotMatch(r.title, /[0-9a-f]{6,}/)
   })
+  assert.ok(want.some((m) => m.title_source === 'pending'), 'the five newest hold the pending row')
   assert.equal(recentCard(stateOf(quiet(), { sessions: ok({ sessions: [], errors: [] }) }), NOW).kind, 'none')
 })
 

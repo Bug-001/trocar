@@ -137,7 +137,7 @@ export default function HostScreen({ route, router }: ScreenProps) {
 
   const scope: Scope = { label: 'window', options: windowLinks(q.window, (w) => hostHref({ harness, host, window: w, cls: q.cls })) }
   const crumbs = crumbsOf({ harness, host, window: q.window, cls: q.cls })
-    .map((c) => (c.harness ? { ...c, node: <><HarnessIcon id={c.harness} />{c.label}</> } : c))
+    .map((c) => (c.harness ? { ...c, node: <span className="chip"><HarnessIcon id={c.harness} />{c.label}</span> } : c))
   const readAt = pages ? list.dataUpdatedAt : null
 
   let body
@@ -165,7 +165,7 @@ export default function HostScreen({ route, router }: ScreenProps) {
       </div>
       <div className="hhead" aria-hidden="true">
         <span className="cell">time</span><span className="cell-endpoint">endpoint</span><span className="cell class">class</span>
-        <span className="cell num">{W.COL.sent}</span><span className="cell num">{W.COL.recv}</span><span className="cell marks"></span><span className="cell go"></span>
+        <span className="cell num sent">{W.COL.sent}</span><span className="cell num recv">{W.COL.recv}</span><span className="cell marks"></span>
       </div>
       <div className="hlist" id="hlist" role="list" aria-label="Requests" ref={listRef} style={{ position: 'relative', height: virt.getTotalSize() }}>
         {items.map((it) => {
@@ -177,8 +177,8 @@ export default function HostScreen({ route, router }: ScreenProps) {
                   <span className="tcell" title={v.when.iso ?? undefined}>{v.when.text}</span>
                   <span className="cell-endpoint mono" title={v.endpoint}>{v.endpoint}</span>
                   <span className="cell class">{v.cls}</span>
-                  <span className="cell num">{v.sent}</span>
-                  <span className="cell num">{v.recv}</span>
+                  <span className="cell num sent">{v.sent}</span>
+                  <span className="cell num recv">{v.recv}</span>
                 </a>
                 <span className="cell marks">
                   {v.retention?.kind === 'log' ? <a className="rmark" data-mark="log" href={v.retention.href} title="See what this class keeps in the storage settings">{`${v.retention.label} ›`}</a> : null}

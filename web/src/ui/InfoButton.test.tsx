@@ -25,3 +25,15 @@ test('with an open ⓘ, the next tabbable after the ⓘ is the first link in its
   const order = tabbables()
   expect(order[order.indexOf(info) + 1]).toBe(link)
 })
+
+test('1.2 「层随屏走」: an open ⓘ layer leaves the document with the screen that opened it', async () => {
+  const { unmount } = render(<main><InfoButton label="About" title="Head" body={<a href="#/capture">link</a>} /></main>)
+  const info = document.querySelector<HTMLElement>('.popbtn')!
+  act(() => info.focus())
+  fireEvent.keyDown(info, { key: 'Enter' }); fireEvent.keyUp(info, { key: 'Enter' })
+  await act(async () => {})
+  expect(document.querySelector('[role="dialog"]')).not.toBeNull()
+  unmount()
+  await act(async () => {})
+  expect(document.querySelector('[role="dialog"]')).toBeNull()
+})

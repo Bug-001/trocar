@@ -3,7 +3,7 @@
 // relaxed, D64⑥). Shots: every screen × 1280 / 1024 × light / dark. Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard, stats, shoot, layoutFaults, timed } from './harness.mjs'
+import { probe, withBoard, stats, shoot, layoutFaults, timed, timerReads } from './harness.mjs'
 import { BOARD_LINES } from '../perf-lines.mjs'
 import { COMMANDS } from '../../../web/legacy/labels/capture.mjs'
 import { THEME_DARK, THEME_LIGHT } from '../../../web/legacy/labels/settings.mjs'
@@ -82,7 +82,8 @@ async function driveEveryScreen(b, { width, theme }) {
       samples[kind].push(await timed(page, 'step', prev, act))
     }
   }
-  const during = b.requests.filter((r) => r.start >= tStep).map((r) => r.url)
+  const timerRead = await timerReads(b)
+  const during = b.requests.filter((r) => r.start >= tStep && !timerRead(r)).map((r) => r.url) // a timer's read is not a step change (1.4 §D64)
   console.log(`# ${width} ${theme}: requests during 40 step changes: ${during.length}${during.length ? ' · ' + [...new Set(during)].join(' ') : ''}`)
   await shoot(page, 'replay-step', { width, theme })
 
@@ -134,8 +135,10 @@ test('a screen change aborts the old screen\'s reads and the content is never bl
     const { page } = b
     const aborted = new Set()
     page.on('requestfailed', (r) => { if (/net::ERR_ABORTED/.test(r.failure()?.errorText || '')) aborted.add(r) })
-    await page.waitForSelector('#screen .page')
     await page.waitForFunction(() => location.hash === '#/overview')
+    // the overview has mounted (not the shell's "Reading…" while its module loads) and its reads reached the route
+    await page.waitForFunction(() => !!document.querySelector('#screen .page') && !document.querySelector('#screen .screenwait'), null, { timeout: 10000 }).catch(() => {})
+    for (const t = Date.now(); !held.size && Date.now() - t < 10000; ) await page.waitForTimeout(50)
     const overviewReads = [...held]
     assert.ok(overviewReads.length > 0, 'overview sent no /api read to hold')
     await page.evaluate(() => { // every mutation batch of #screen is checked before the frame paints

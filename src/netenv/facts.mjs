@@ -7,7 +7,7 @@
 //     forwarder: null | { pid, up, forms: { <form>: { h, port, state: 'on' | 'forward-only', upstream, source, clients: [pid] } } },   // proxy mode: trocar's local proxy hop, which is the engine's own door (D47; 4.8 §10.1)
 //     harnesses: { <h>: { installed, entry: { state }, installedAt, setting, fileSetting (the same read of the files alone: drift is measured on it), systemProxy: null | { value, pac } | { unknown },
 //                         behaviour: { env, follows: { http, ws }, schemes, unsupported, branches, measured, restart, files, fileKeys }, procs: [ { pid, name, exe, version, startedAt, watched, trusted, reason, negative,
-//                         startSetting: null | setting, elevated } ], negatives: [ { pid, host, reason, cause } ], apiHosts, noProxy: [the API hosts the NO_PROXY of this shell covers], adopted: null | { at, routing, chain, source, sha256 }, forms: null | [ … ] } },
+//                         startSetting: null | setting, elevated } ], negatives: [ { pid, host, reason, cause } ], apiHosts, localUpstream (status's: they are all loopback, 4.11 P6), noProxy: [the API hosts the NO_PROXY of this shell covers], adopted: null | { at, routing, chain, source, sha256 }, forms: null | [ … ] } },
 //     identity: { <h>: { names, ignored, unknown } } | null (status's name list, D51③⑤), agentList: { path, state, problems } | null (the file, once),
 //     linger: true | false | null (Linux: does the OS keep the daemon after the last logout), otherRedirector: true | false | null (another connect-rewriter on the machine: a platform that cannot tell says null),
 //     unknowns: [ { fact, reason, detail } ] }                                                    // a read that failed: said with its reason, never left out (R11)
@@ -68,7 +68,7 @@ export async function gatherNetFacts({ platform = process.platform, home, env = 
       behaviour: { env: [...pr.env], follows: { ...pr.systemProxy }, schemes: [...pr.schemes], unsupported: { ...pr.unsupported }, branches: [...pr.branches], measured: pr.measured[platform] || 'inferred', restart: { ...pr.restart }, files: proxyFilesOf(d, { home, env }),
         fileKeys: pr.files.map((x) => ({ path: x.path({ home, env }), format: x.format, key: x.format === 'json' ? x.keys[0].join('.') : x.keys[0] })) },
       procs, negatives: reply && Array.isArray(reply.negatives) ? reply.negatives.filter((n) => procs.some((p) => p.pid === n.pid)).map((n) => ({ pid: n.pid, host: n.host, reason: 'negative-cache', ...(n.cause ? { cause: n.cause } : {}), ...(Number.isFinite(n.retry_at) ? { retry_at: new Date(n.retry_at).toISOString() } : {}) })) : [], // `cause`: the engine's, it picks the finding's words; `retry_at`: when trocar tries the host again
-      apiHosts: [...(d.hosts || [])], noProxy: noProxyNames(env.NO_PROXY || env.no_proxy, d.hosts || []), fakeIp: part.fakeIp && part.fakeIp[h.id] === true ? true : null, adopted: adopted && adopted[h.id] ? adopted[h.id] : null, forms: (part.forms && part.forms[h.id]) || null,
+      apiHosts: [...(h.hosts || [])], localUpstream: h.localUpstream === true, noProxy: noProxyNames(env.NO_PROXY || env.no_proxy, d.hosts || []), fakeIp: part.fakeIp && part.fakeIp[h.id] === true ? true : null, adopted: adopted && adopted[h.id] ? adopted[h.id] : null, forms: (part.forms && part.forms[h.id]) || null,
       ...(part.setup && part.setup[h.id] ? { setup: part.setup[h.id] } : {}),
       ...(part.legacy && part.legacy[h.id] ? { legacy: part.legacy[h.id] } : {}),
     }

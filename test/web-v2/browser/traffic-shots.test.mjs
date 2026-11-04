@@ -111,10 +111,18 @@ test('收回 partly not recorded stays in its cell; every agent cell has its ico
 
 // 1.10 行高固定: the host list is a fixed-height virtual list, so each row (the class folded under the endpoint on a small screen)
 // lies inside its own `.vrow` slot and its class line inside the row — no row spills into the next one's slot. 390 (folded) / 1280.
-test('every host row and its class line lie inside the row\'s fixed-height slot (390 / 1280)', { skip, timeout: 240_000 }, async () => {
+// 1.10 §窄屏: below 900 px only 收回 leaves the row (it stays in the detail); 发出 keeps its cell inside the row. 1.10 端点任何宽度都不隐藏:
+// every row's endpoint has width and lies inside the row, also for the widest marks — the list page's rows made sent-not-recorded,
+// log-only and failed in turn with length-only (the real answer otherwise).
+test('every host row, its class line and its sent cell lie inside the row\'s fixed-height slot; received leaves a narrow row (390 / 1280)', { skip, timeout: 240_000 }, async () => {
   for (const width of [390, 1280]) {
     const b = await withBoard({ bytes: 2e6, width, chromium: gate.chromium })
     try {
+      await b.page.route((u) => { const x = new URL(u); return x.pathname === '/api/calls' && x.searchParams.has('host') }, async (r) => {
+        const res = await r.fetch(), j = await res.json()
+        for (const [i, c] of (j.records || []).entries()) Object.assign(c, i % 2 ? { retention: 'legacy-meta' } : { sent_bytes: null, retention: 'log', error: true })
+        await r.fulfill({ response: res, json: j })
+      })
       const host = await openPages(b)
       await go(b.page, host)
       await requests(b.page).locator('.vrow > .hrow').first().waitFor({ timeout: 30000 })
@@ -122,12 +130,17 @@ test('every host row and its class line lie inside the row\'s fixed-height slot 
         const inside = (a, b) => a.left >= b.left - 0.5 && a.top >= b.top - 0.5 && a.right <= b.right + 0.5 && a.bottom <= b.bottom + 0.5
         const box = (e) => { const r = e.getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom } }
         return [...document.querySelectorAll('#hlist .vrow > .hrow')].map((a) => {
-          const slot = box(a.parentElement), row = box(a), cls = box(a.querySelector('.cell.class'))
-          return { rowInSlot: inside(row, slot), classInRow: inside(cls, row), slot, row, cls }
+          const slot = box(a.parentElement), row = box(a), cls = box(a.querySelector('.cell.class')), sent = box(a.querySelector('.cell.sent')), end = box(a.querySelector('.cell-endpoint'))
+          const shown = (e) => e.getClientRects().length > 0
+          return { rowInSlot: inside(row, slot), classInRow: inside(cls, row), sentInRow: shown(a.querySelector('.cell.sent')) && inside(sent, row), recvShown: shown(a.querySelector('.cell.recv')),
+            endpointShown: end.right - end.left > 0 && inside(end, row), slot, row, cls, sent, end }
         })
       })
       assert.ok(out.length > 0)
-      for (const x of out) assert.deepEqual({ rowInSlot: x.rowInSlot, classInRow: x.classInRow }, { rowInSlot: true, classInRow: true }, `${width}: ${JSON.stringify(x)}`)
+      for (const x of out) {
+        assert.deepEqual({ rowInSlot: x.rowInSlot, classInRow: x.classInRow, sentInRow: x.sentInRow, recvShown: x.recvShown, endpointShown: x.endpointShown },
+          { rowInSlot: true, classInRow: true, sentInRow: true, recvShown: width >= 900, endpointShown: true }, `${width}: ${JSON.stringify(x)}`)
+      }
       await shoot(b.page, 'traffic-host-rows', { width, theme: 'light' })
       assert.deepEqual(b.errors, [])
     } finally { await b.stop() }

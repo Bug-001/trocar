@@ -7,6 +7,7 @@ import path from 'node:path'
 import { isModelOs } from '../model-install.mjs'
 import { redactProxyUrl } from '../../netenv/redact.mjs'
 import { recordDrift } from '../../netenv/adopt.mjs'
+import { userPathEnv } from '../../off/user-path.mjs'
 export { MODEL_OS, isModelOs } from '../model-install.mjs' // the one list of the OSes the model runs on
 
 /** The installed signing helper the darwin custody runs (4.11 P1): under ~/.trocar/bin, beside trocar-off. */
@@ -29,12 +30,13 @@ export const ownsBy = ({ os, home, uid = typeof process.getuid === 'function' ? 
   try { return uid == null ? null : fs.statSync(p).uid === uid } catch { return null }
 }
 
-/** The sources ctx (sources.mjs header) for this machine and user. */
+/** The sources ctx (sources.mjs header) for this machine and user. A `{ command }` resolves against the user's recorded PATH (4.11 `present`), never
+ *  the asking process's own once one is recorded: the daemon and its worker run with the login service's PATH, the CLI with the shell's. */
 export function sourcesCtx({ os, home, env = process.env, cwd = process.cwd(), dirs, fs = nodeFs, which = null, policy = null }) {
   return {
     os, home, cwd, env, dirs: dirs || {},
     readFile: (p) => fs.readFileSync(p, 'utf8'), exists: (p) => fs.existsSync(p), readdir: (p) => fs.readdirSync(p),
-    which: which || whichIn(env, { os, exists: (p) => fs.existsSync(p) }), policy: policy || (() => ({ set: false })),
+    which: which || whichIn(userPathEnv({ home, env, fs }), { os, exists: (p) => fs.existsSync(p) }), policy: policy || (() => ({ set: false })),
   }
 }
 

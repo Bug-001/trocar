@@ -121,6 +121,8 @@ const NEG = {
     why: () => 'If the host does want a client certificate, it refuses again and its traffic stays unread.',
     commands: (c) => [trocar(c, `trocar on ${c.h}`), trocar(c, 'trocar status --failures')] },
 }
+// the API hosts its own config names (facts `apiHosts`, the words the topology's direct hop uses when it read none)
+const localHosts = (c) => { const hs = (c.hf && c.hf.apiHosts) || []; return hs.length ? hs.join(', ') : 'the API host it uses' }
 /** The negative-cache causes the catalogue words (the engine's `cause`; any other reads as client-rejected-leaf). */
 export const NEG_CAUSES = Object.freeze(Object.keys(NEG))
 export const FINDINGS = {
@@ -175,6 +177,9 @@ export const FINDINGS = {
     commands: (c) => [gui(`Point ${c.h}'s certificate setting at a file you own`), trocar(c, 'trocar install')], verify: (c) => `trocar status ${c.h}` },
   'not-verified': { cls: 'expected', trocarFirst: false, what: (c) => `This form of ${c.h} is not verified on this platform yet; it is forwarded only.`, why: () => 'trocar only decrypts the forms it has verified.',
     commands: (c) => [gui(`No action needed: ${c.h} keeps working, and these connections are not decrypted`)], verify: (c) => `trocar status ${c.h}` },
+  // 4.11 P6: the API hosts its config names (status's `hosts`) are all on this machine, and loopback never reaches the door
+  'local-upstream': { cls: 'expected', trocarFirst: false, what: (c) => `${c.h} sends its model calls to ${localHosts(c)}, a program on this machine, so trocar does not see them.`, why: () => 'Calls to this machine never go through a proxy, so they never reach trocar.',
+    commands: (c) => [gui(`No action needed: ${c.h} keeps working, and its calls to ${localHosts(c)} are not recorded`)], verify: (c) => `trocar status ${c.h}` },
   'prior-proxy-unknown': { cls: 'note', trocarFirst: false, what: (c) => `trocar could not recover the proxy ${c.h}${c.pids && c.pids.length ? ` (pid ${c.pids.join(', ')})` : ''} started with.`,
     why: () => 'The process that set it has quit, so trocar uses the system proxy, or none.', commands: (c) => [gui(setAt(c.h, placeOf(c.hf, null), unknownValue('proxy address', 'env-unreadable'))), trocar(c, `trocar on ${c.h}`), gui(`Restart ${c.h}`)],
     verify: (c) => `trocar status ${c.h}` },

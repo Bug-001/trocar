@@ -27,9 +27,11 @@ export const legacyManifestPath = (home = os.homedir()) => path.join(trocarHome(
 export const legacyLockPath = (home = os.homedir()) => path.join(trocarHome(home), 'legacy-op.lock')
 /** What the operator asked for, per harness (1.6 §1.5); the daemon reads the same file. */
 export const stateFile = (home = os.homedir()) => path.join(collectorDir(home), 'state.json')
+/** The user's PATH as the last state-changing command run in a terminal saw it (user-path.mjs, 4.11 §2.3 `present`). */
+export const USER_PATH_FILE = 'user-path.json'
 /** The daemon's own state in ~/.trocar/collector (not captures, 0.2): every uninstall removes these once the daemon has stopped, and its plan names
  *  the same list, so for these files the plan and the act cannot drift. door-seen.json is read by uninstall's holder check first (4.11 P12). */
-export const COLLECTOR_STATE_FILES = ['state.json', CONTROL_FILE, 'board.token', 'update.json', DOOR_SEEN_FILE]
+export const COLLECTOR_STATE_FILES = ['state.json', CONTROL_FILE, 'board.token', 'update.json', DOOR_SEEN_FILE, USER_PATH_FILE]
 /** The lock of the one command that changes state at a time (1.6 R12). */
 export const opLockFile = (home = os.homedir()) => path.join(collectorDir(home), 'op.lock')
 
