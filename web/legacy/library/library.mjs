@@ -72,7 +72,7 @@ export function rowHtml(s, sel, now) {
   const subTip = [m.harnessName, ...ms.map((x) => x[3])].join(' · ')
   return `<a class="lrow${on ? ' sel' : ''}${m.dim ? ' dim' : ''}" href="${esc(m.href)}" data-key="${esc(m.key)}"${on ? ' aria-current="true"' : ''}>` +
     `<span class="lmain">` +
-    `<span class="lt" title="${esc(m.titleTip)}">${esc(m.titleText)}</span>` +
+    `<span class="lt${m.titlePending ? ' pend' : ''}" title="${esc(m.titleTip)}">${esc(m.titleText)}</span>` +
     `<span class="lsub" title="${esc(subTip)}">${m.harnessIcon}<span class="lhn" title="${esc(m.harnessRaw ? `${m.harnessName} · ${m.harnessRaw}` : m.harnessName)}">${esc(m.harnessName)}</span>${marks ? `<span class="lmarks">${marks}</span>` : ''}</span>` +
     `</span>` +
     `<span class="ln"${m.dim ? ' data-mark="probe-only"' : ''} title="${esc(m.dim ? W.PROBE_ONLY_TIP : W.COL_CALLS)}">${m.dim ? esc(W.PROBE_ONLY) : m.calls}</span>` +

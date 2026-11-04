@@ -8,8 +8,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
-import { osStubs } from '../helpers/os-stubs.mjs'
-import { fileURLToPath } from 'node:url'
+import { cliOnEmptyMachine } from '../helpers/board-world.mjs'
 import { installCollector } from '../../src/collector/install.mjs'
 import { appendEvent } from '../../src/collector/core/events.mjs'
 import { createCa } from '../../src/collector/core/tls/ca.mjs'
@@ -19,8 +18,6 @@ import { runDoctor } from '../../src/cli/doctor.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import codex from '../../src/collector/harness/codex.mjs'
 
-const CLI = fileURLToPath(new URL('../../bin/trocar.mjs', import.meta.url))
-const OS = osStubs(), OS_PATH = OS.path, OS_NATIVE = OS.nativeDir // on a Mac `doctor`'s status block asks launchd and the keychain (read-only): stubs answer, the real tools are never run (0.1 §3)
 const KEY = '-----BEGIN PRIVATE KEY-----\nU0VDUkVULUtFWQ==\n-----END PRIVATE KEY-----\n'
 // a clean, owner-only capture: doctor's own verdicts (a vacuous scan is 无法判定, exit 3) are not what this file is about
 const CLEAN = { id: 'req_1', is_llm_call: true, endpoint: 'https://api.anthropic.com/v1/messages', ts_request: '2026-01-01T00:00:00.000Z',
@@ -30,7 +27,8 @@ const CLEAN = { id: 'req_1', is_llm_call: true, endpoint: 'https://api.anthropic
 const cleanSource = (home) => { const d = path.join(home, 'src'); fs.mkdirSync(d); fs.writeFileSync(path.join(d, 'capture.ndjson'), JSON.stringify(CLEAN) + '\n', { mode: 0o600 }); return d }
 const doctor = (home, source, args = []) => {
   let status = 0, out = ''
-  try { out = execFileSync(process.execPath, [CLI, 'doctor', ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: home, PATH: OS_PATH, TROCAR_NATIVE_DIR: OS_NATIVE, XDG_RUNTIME_DIR: '', TROCAR_SOURCE: source } }) } catch (e) { status = e.status; out = String(e.stdout || '') + String(e.stderr || '') }
+  const c = cliOnEmptyMachine(home, ['doctor', ...args], { XDG_RUNTIME_DIR: '', TROCAR_SOURCE: source })
+  try { out = execFileSync(process.execPath, c.args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: c.env }) } catch (e) { status = e.status; out = String(e.stdout || '') + String(e.stderr || '') }
   return { status, out }
 }
 

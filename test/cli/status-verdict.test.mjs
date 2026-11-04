@@ -10,7 +10,7 @@ import path from 'node:path'
 import { modelWorld } from '../helpers/model-world.mjs'
 import { turnOnModel } from '../../src/collector/model-on.mjs'
 import { renderHook } from '../../src/collector/harness/templates/index.mjs'
-import { runStatusCli } from '../../src/cli/status.mjs'
+import { runStatusCli, judgeHarness } from '../../src/cli/status.mjs'
 import { runDoctor } from '../../src/cli/doctor.mjs'
 import { EXIT, validateReceipt } from '../../src/cli/schema.mjs'
 import { holdersOf } from '../../src/off/holders.mjs'
@@ -183,4 +183,11 @@ test('1.6 §2 判词: captured + not-seen → the harness is captured (exit 0); 
     const d = (await run(c, table, { cmd: runDoctor })).j
     assert.equal((d.findings || []).some((f) => f.code === 'config-after-start'), false, JSON.stringify(d.findings))
   }
+})
+
+// 4.11 P6: loopback never reaches the door — so with no process the config decides (local-upstream), but a process the door observed decrypted stays captured
+test('4.11 P6: config naming only loopback hosts → local-upstream; a process the door judged keeps the door\'s word', () => {
+  const on = { desired: 'on', entryIntact: true, attached: true, daemon: 'running', deadDoor: true, localUpstream: true }
+  assert.deepEqual(judgeHarness(on).rows, [{ captured: false, reason: 'local-upstream' }])
+  assert.deepEqual(judgeHarness({ ...on, procs: [{ pid: 9, trusted: true }] }), { captured: true, rows: [{ pid: 9, captured: true, reason: null }] })
 })

@@ -5,6 +5,7 @@ import { Component, useEffect, useState, type ComponentType, type ErrorInfo, typ
 import { screenErrorHtml } from '../legacy/shell/safemount.mjs'
 import { READING } from '../legacy/labels/common.mjs'
 import type { Route } from './LegacyScreen'
+import { ConfirmProvider } from './ui/Confirm'
 
 export type ScreenProps = { route: Route }
 export type LazyScreen = { load(): Promise<unknown>, Screen: ComponentType<ScreenProps> }
@@ -36,6 +37,7 @@ class ScreenBoundary extends Component<{ children: ReactNode }, { error: string 
   }
 }
 
+// the confirm provider is the screen's own: a question it asked goes with it (1.2 §键盘「层随屏走」)
 export function ScreenOutlet({ screen: { Screen }, name, route }: { screen: LazyScreen, name: string, route: Route }) {
-  return <ScreenBoundary key={name}><Screen route={route} /></ScreenBoundary>
+  return <ScreenBoundary key={name}><ConfirmProvider><Screen route={route} /></ConfirmProvider></ScreenBoundary>
 }

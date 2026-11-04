@@ -10,7 +10,7 @@ import path from 'node:path'
 import net from 'node:net'
 import { once } from 'node:events'
 import { modelWorld } from '../helpers/model-world.mjs'
-import { liveUnit, withScratchCwd, boardPortOf } from '../helpers/model-daemon.mjs'
+import { liveUnit, withScratchCwd, boardPortOf, unservable } from '../helpers/model-daemon.mjs'
 import { workerFork } from '../helpers/worker-fork.mjs'
 import { depsFile } from '../helpers/board-world.mjs'
 import { request } from './face.mjs'
@@ -50,7 +50,8 @@ async function withBoard(platform, run) {
 }
 
 for (const platform of ['darwin', 'win32']) {
-  test(`${platform} · 4.4 #11: on and off from the board — 409 with the plan and nothing written, a stale plan_id → a new plan, confirm → the CLI's receipt; off keeps the user's edit`, { timeout: 60_000 }, async () => {
+  const skip = await unservable(platform) // a darwin world on a win32 host: its unix socket cannot be listened on there
+  test(`${platform} · 4.4 #11: on and off from the board — 409 with the plan and nothing written, a stale plan_id → a new plan, confirm → the CLI's receipt; off keeps the user's edit`, { skip, timeout: 60_000 }, async () => {
     await withBoard(platform, async ({ w, post, sameView }) => {
       const envFile = path.join(w.home, '.codex', '.env')
       fs.mkdirSync(path.dirname(envFile), { recursive: true }); fs.writeFileSync(envFile, '# the user\'s own\nOPENAI_BASE_URL=https://relay.example\n')
@@ -107,7 +108,7 @@ for (const platform of ['darwin', 'win32']) {
     })
   })
 
-  test(`${platform} · 4.4 #11 gates: no token → 403, a daemon as root → 405, a bad body → 400; nothing written`, { timeout: 60_000 }, async () => {
+  test(`${platform} · 4.4 #11 gates: no token → 403, a daemon as root → 405, a bad body → 400; nothing written`, { skip, timeout: 60_000 }, async () => {
     await withBoard(platform, async ({ w, post }) => {
       const home0 = snapshot(w.home)
       assert.equal((await post({ harness: 'codex', on: true }, {})).status, 403)
