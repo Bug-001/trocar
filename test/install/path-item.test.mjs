@@ -164,29 +164,36 @@ test('D58: a PATH item that was gone before uninstall is not said to be taken ou
 })
 
 // 1.6 §3.6 / C.2 `scheduled`: on Windows the code and the launcher go only once this process has exited, so the receipt lists them as scheduled, never
-// as removed (D58); the command that removes them is handed exactly those paths. `cmd.exe` is a stub on PATH that records what it was handed.
-test('V113 (Windows): a script uninstall schedules app\\ and trocar.cmd for after it exits and does not call them removed', async () => {
-  const { runUninstall } = await import('../../src/cli/uninstall.mjs')
-  const { recordingExec } = await import('../cli/fixtures/on-ctx.mjs')
-  const home = tmpDir('trocar-win-script-')
-  const root = path.join(appDir(home), '9.9.9')
-  fs.mkdirSync(path.join(root, 'bin'), { recursive: true })
-  fs.writeFileSync(path.join(root, 'package.json'), '{"name":"trocar-cli","version":"9.9.9"}\n')
-  fs.writeFileSync(path.join(root, 'bin', 'trocar.mjs'), '')
-  fs.writeFileSync(path.join(appDir(home), 'current'), '9.9.9 node-x\n')
-  const launcher = launcherPath(home, 'win32')
-  fs.mkdirSync(path.dirname(launcher), { recursive: true }); fs.writeFileSync(launcher, '@echo off\r\n')
-  const bin = path.join(home, 'stub-bin'); fs.mkdirSync(bin)
-  const seen = path.join(home, 'cmd-saw.json')
-  fs.writeFileSync(path.join(bin, 'cmd.exe'), `#!/bin/sh\nexec "${process.execPath}" -e 'require("fs").writeFileSync(process.argv[1], JSON.stringify(Object.fromEntries(Object.entries(process.env).filter(([k]) => k.startsWith("TROCAR_RM_")))))' "${seen}"\n`, { mode: 0o755 })
-  const { exit, receipt } = await runUninstall({ home, env: { HOME: home, PATH: bin }, yes: true, deps: { platform: 'win32', root, exec: recordingExec().run, procs: async () => [], sleep: async () => {}, drainMs: 0, getuid: () => 1000 } })
-  assert.equal(exit, 0, JSON.stringify(receipt.problems))
-  assert.deepEqual(receipt.removed.filter((p) => p === appDir(home) || p === launcher), [], 'not removed yet when the receipt is made')
-  assert.deepEqual(receipt.scheduled, [appDir(home), launcher])
-  for (let i = 0; i < 50 && !fs.existsSync(seen); i++) await new Promise((r) => setTimeout(r, 20))
-  const got = JSON.parse(fs.readFileSync(seen, 'utf8'))
-  assert.deepEqual([got.TROCAR_RM_APP, got.TROCAR_RM_LAUNCHER, got.TROCAR_RM_POINTER], [appDir(home), launcher, '9.9.9 node-x'], 'handed the paths it removes and the pointer it checks')
-})
+// as removed (D58); the command that removes them is handed exactly those paths, the pointer it checks (NO_POINTER when app\current was absent) and the
+// failure line it leaves in flows/ when app\ is still there once its time is up (D38). There is no install record here: the receipt says the program
+// goes, never that nothing was installed. `cmd.exe` is a stub on PATH that records what it was handed.
+for (const current of ['9.9.9 node-x\n', null]) {
+  test(`V113 (Windows): a script uninstall with no install record schedules app\\ and trocar.cmd for after it exits (app\\current ${current ? 'read' : 'absent'})`, async () => {
+    const { runUninstall, NO_POINTER } = await import('../../src/cli/uninstall.mjs')
+    const { recordingExec } = await import('../cli/fixtures/on-ctx.mjs')
+    const home = tmpDir('trocar-win-script-')
+    const root = path.join(appDir(home), '9.9.9')
+    fs.mkdirSync(path.join(root, 'bin'), { recursive: true })
+    fs.writeFileSync(path.join(root, 'package.json'), '{"name":"trocar-cli","version":"9.9.9"}\n')
+    fs.writeFileSync(path.join(root, 'bin', 'trocar.mjs'), '')
+    if (current) fs.writeFileSync(path.join(appDir(home), 'current'), current)
+    const launcher = launcherPath(home, 'win32')
+    fs.mkdirSync(path.dirname(launcher), { recursive: true }); fs.writeFileSync(launcher, '@echo off\r\n')
+    const bin = path.join(home, 'stub-bin'); fs.mkdirSync(bin)
+    const seen = path.join(home, 'cmd-saw.json')
+    fs.writeFileSync(path.join(bin, 'cmd.exe'), `#!/bin/sh\nexec "${process.execPath}" -e 'require("fs").writeFileSync(process.argv[1], JSON.stringify(Object.fromEntries(Object.entries(process.env).filter(([k]) => k.startsWith("TROCAR_RM_")))))' "${seen}"\n`, { mode: 0o755 })
+    const { exit, receipt } = await runUninstall({ home, env: { HOME: home, PATH: bin }, yes: true, deps: { platform: 'win32', root, exec: recordingExec().run, procs: async () => [], sleep: async () => {}, drainMs: 0, getuid: () => 1000 } })
+    assert.equal(exit, 0, JSON.stringify(receipt.problems))
+    assert.deepEqual(receipt.removed.filter((p) => p === appDir(home) || p === launcher), [], 'not removed yet when the receipt is made')
+    assert.deepEqual(receipt.scheduled, [appDir(home), launcher])
+    assert.ok(!receipt.notes.some((n) => /nothing is installed/i.test(n)), `the program is scheduled, so something was installed: ${JSON.stringify(receipt.notes)}`)
+    for (let i = 0; i < 50 && !fs.existsSync(seen); i++) await new Promise((r) => setTimeout(r, 20))
+    const got = JSON.parse(fs.readFileSync(seen, 'utf8'))
+    assert.deepEqual([got.TROCAR_RM_APP, got.TROCAR_RM_LAUNCHER, got.TROCAR_RM_POINTER], [appDir(home), launcher, current ? '9.9.9 node-x' : NO_POINTER], 'handed the paths it removes and the pointer it checks')
+    const line = JSON.parse(got.TROCAR_RM_FAILED)
+    assert.deepEqual([path.dirname(got.TROCAR_RM_FLOW), line.event, line.code, line.path], [path.join(home, '.trocar', 'collector', 'flows'), 'failure', 'residue-not-removed', appDir(home)], 'what it leaves where status reads failures')
+  })
+}
 
 // how the deferred removal waits (src/off/exec.mjs spawnDetached): the child's stdin ends only when the process that started it has exited
 test('spawnDetached: the child reads the end of its stdin only once its parent has exited', async () => {

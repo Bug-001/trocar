@@ -21,6 +21,7 @@ import { rawHome, indexHome, classesLog, collectorHome } from '../paths.mjs' // 
 import { netenvFile } from '../netenv/index.mjs'
 import { dropBackup, orphanBackups } from '../off/backup.mjs'
 import { removeOwnedFile } from '../off/journal.mjs'
+import { flowFile } from '../off/events.mjs'
 import { removeEmptyDirs, sweepTemps, strictlyInside } from '../off/fsutil.mjs'
 import { execTool, spawnDetached } from '../off/exec.mjs'
 import { removePathItem } from '../off/path-item.mjs'
@@ -34,11 +35,17 @@ import { refuseElevatedByWhoami, disableScheduledTask, TASK_NAME } from '../off/
 import { holdersOf } from '../off/holders.mjs'
 import { readDoorSeen, msOf } from '../off/door-seen.mjs'
 import { readStateFile } from '../off/state.mjs'
+import { SUPERVISOR_START_TOLERANCE_MS as START_AGREE_MS } from '../off/daemon-stop.mjs' // two readers of one process's start agree to within this (4.8 §7)
 import { readAgentList } from '../off/identity.mjs'
 import { signHelperPath } from '../collector/arch/model-backends.mjs'
 import { NATIVE } from '../collector/arch/darwin/native.mjs'
 import { daemonLogPaths } from '../collector/arch/daemon-logs.mjs'
 import { isModelOs } from '../collector/model-install.mjs' // macOS / Windows run the collector model (4.11): uninstall never does off — it refuses while capture is online (1.6 §1.1, CM24)
+
+/** Is the daemon's holder (its `start`) the life `p` of a fresh table? The daemon's start and this CLI's may come from different readers (on Windows its
+ *  resident helper, here the one PowerShell question when the daemon's helper is not asked): they agree to within START_AGREE_MS (4.8 §7), or the
+ *  row's own grain when that is coarser. A start either side does not know is the same life (D50). */
+const sameLife = (start, p) => { const a = msOf(start), b = msOf(p.startedAt); return a == null || b == null || Math.abs(a - b) <= Math.max(START_AGREE_MS, Number.isFinite(p.startGrain) ? p.startGrain : 0) }
 
 /** Is capture online (1.6 §1.1 「下线」)? → null when offline, else { on, holders, unknown } — `on`: harnesses whose desired state is on or that still have
  *  phase-on items; `holders`: P12's table, from the daemon (GET /holders) when it answers, else judged here from the manifest's liveness and the
@@ -54,10 +61,11 @@ async function captureOnline(w, m, notes = []) {
     if (!w.socketPath) throw Object.assign(new Error('no endpoint'), { code: 'ENOENT' })
     const r = await w.request({ socketPath: w.socketPath, method: 'GET', path: '/holders', timeoutMs: 2000 })
     if (r && Array.isArray(r.holders)) holders = r.holders; else unknown = 'the daemon does not know its holders yet'
-    // the daemon's answer is its last poll's (every 10 s, HOLDER_POLL_MS): a holder that has quit since is no holder. The same reader (src/off/proc.mjs)
-    // reads the table afresh; a life still in it — the same pid and start, or the same pid when the start is not known (D50) — still holds (4.11 §1 uninstall)
+    // the daemon's answer is its last poll's (every 10 s, HOLDER_POLL_MS): a holder that has quit since is no holder. The table is read afresh
+    // (src/off/proc.mjs); a life still in it — the same pid with a start within what two readers of one process's start differ by, or the same pid
+    // when either start is not known (D50: one holder too many, never one too few) — still holds (4.11 §1 uninstall)
     if (holders && holders.length) {
-      try { const t = await w.procs(); holders = holders.filter((h) => t.some((p) => p.pid === h.pid && (msOf(h.start) == null || msOf(h.start) === msOf(p.startedAt)))) } catch (t) { stale = errText(t) }
+      try { const t = await w.procs(); holders = holders.filter((h) => t.some((p) => p.pid === h.pid && sameLife(h.start, p))) } catch (t) { stale = errText(t) }
     }
   } catch (e) {
     if (e && (e.code === 'ENOENT' || e.code === 'ECONNREFUSED')) { // the daemon is down: the CLI judges, by the same rule
@@ -157,7 +165,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     // CM24: on macOS / Windows uninstall never does off — capture online (a harness on, a holder, or not knowable) is named and nothing changes
     const online = isModelOs(w.platform) && m && !m.unsupported ? await captureOnline(w, m, receipt.notes) : null
     if (online) {
-      const why = [online.on.length ? `capture is still on for ${online.on.join(', ')}` : null, online.holders.length ? `these processes still have trocar in their environment: ${online.holders.map((x) => `${x.harness} (pid ${x.pid})`).join(', ')}${online.stale ? ` (trocar's last check, which may be out of date: the process table could not be read just now: ${online.stale})` : ''}` : null, online.unknown ? `whether any process still has trocar in its environment is unknown (${online.unknown})` : null].filter(Boolean).join('; ') + '. Nothing was changed. Run: trocar off, wait for those processes to quit, then run trocar uninstall again'
+      const why = [online.on.length ? `capture is still on for ${online.on.join(', ')}` : null, online.holders.length ? `these processes still have trocar in their environment: ${online.holders.map((x) => `${x.harness} (pid ${x.pid})`).join(', ')}${online.stale ? ` (trocar's last check, which may be out of date: the process table could not be read just now: ${online.stale})` : ''}` : null, online.unknown ? `whether any process still has trocar in its environment is unknown (${online.unknown})` : null].filter(Boolean).join('; ') + '. Nothing was changed' // the next step is the doctor's line below, said once (1.6 §1.1③)
       // 附录 C.1: the refusal's code lives in `error` and nowhere else; `message` is the sentence the text form prints
       receipt.ok = false; receipt.error = { code: 'collectors-online', message: why }; receipt.purge_data = false; receipt.kept = keptOf(home, fs) // nothing changed: --purge-data deleted nothing either
       receipt.problems.push(why)
@@ -337,9 +345,10 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     try { list = await w.procs() } catch (e) { receipt.notes.push(`the process table could not be read (${errText(e)}), so the trocar processes you started yourself are not listed`) }
     receipt.user_processes = userProcessesOf(list)
     receipt.kept = keptOf(home, fs) // what is still there now this run is done: after a purge, nothing
-    const was = receipt.removed.length
-    if (!blocked && !left && !receipt.problems.length) scriptCopyLast(w, { home, env, receipt, root: deps.root || packageRoot() })
-    if (bare && !helperRow) receipt.notes.push(receipt.removed.length > was ? "there was no install record for this user: only trocar's own program was left, and it is removed" : 'nothing is installed for this user')
+    const goneCount = () => receipt.removed.length + receipt.scheduled.length // Windows schedules the code instead of removing it (scriptCopyLast)
+    const was = goneCount(), wasScheduled = receipt.scheduled.length
+    if (!blocked && !left && !receipt.problems.length) scriptCopyLast(w, { home, env, receipt, root: deps.root || packageRoot(), run })
+    if (bare && !helperRow) receipt.notes.push(goneCount() > was ? `there was no install record for this user: only trocar's own program was left, and it is removed${receipt.scheduled.length > wasScheduled ? ' once this command exits' : ''}` : 'nothing is installed for this user')
     receipt.ok = receipt.problems.length === 0 && receipt.left.length === 0
     // §3.6: a left row with its own command (the helper's) is the next step itself; only the rows without one need this line
     const bareLeft = receipt.left.filter((l) => !l.command).length
@@ -355,7 +364,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
  *  with no manifest. Only after a clean run: one that left anything needs this code to run again. POSIX unlinks the running files; Windows cannot, so a
  *  detached cmd (deferredRemoval) waits for this process to exit and deletes them then — the receipt lists them as `scheduled`, not `removed`. Either way the directories left empty go with them. (A Linux capability helper
  *  still installed keeps the code: helperHoldsCode's left row, so this never runs then.) */
-function scriptCopyLast(w, { home, env, receipt, root }) {
+function scriptCopyLast(w, { home, env, receipt, root, run }) {
   if (channelOf(root, { home, fs: w.fs }) !== 'script') return
   const app = appDir(home), launcher = launcherPath(home, w.platform)
   const dirs = [trocarHome(home), path.dirname(launcher), w.dir] // the run's own removeEmptyDirs came before the code went: these were not empty then
@@ -365,10 +374,16 @@ function scriptCopyLast(w, { home, env, receipt, root }) {
     return
   }
   // The launcher's last line runs node and exits in one parsed line, so cmd never reads the file again: only this process holds the files. The
-  // removal runs only while app\current still says what it says now, so an install run again in the meantime is never removed.
-  let pointer = ''
-  try { pointer = w.fs.readFileSync(path.join(app, 'current'), 'utf8').split(/\r?\n/)[0] } catch { /* none: the removal then needs it still absent */ }
-  const d = deferredRemoval({ app, launcher, pointer, dirs, env })
+  // removal runs only while app\current still says what it says now (or is still absent), so an install run again in the meantime is never removed.
+  let pointer = NO_POINTER
+  try { pointer = w.fs.readFileSync(path.join(app, 'current'), 'utf8').split(/\r?\n/)[0] || NO_POINTER } catch (e) {
+    if (!e || e.code !== 'ENOENT') { receipt.problems.push(`${path.join(app, 'current')} could not be read (${errText(e)}), so ${app} was not scheduled for removal; remove it and ${launcher} by hand once this command has exited`); return }
+  }
+  const at = w.clock()
+  // what is left behind when app\ is still there once the tries are up: one failure line in flows/, where `trocar status` reads it (D38); trocar.cmd stays, so it can be run again
+  const failure = { file: flowFile(w.dir, at), line: JSON.stringify({ ts: at.toISOString(), event: 'failure', where: 'uninstall', run, code: 'residue-not-removed', path: app,
+    reason: `${app} could not be removed within ${REMOVE_WITHIN_S} s of trocar uninstall exiting (a program still held a file in it); ${launcher} was kept: run trocar uninstall again` }) }
+  const d = deferredRemoval({ app, launcher, pointer, dirs, env, failure })
   try {
     spawnDetached(d.file, d.args, { env: d.env, verbatim: true })
     receipt.scheduled.push(app, launcher) // not `removed`: they go once this process has exited, after the receipt is printed (D58)
@@ -376,20 +391,31 @@ function scriptCopyLast(w, { home, env, receipt, root }) {
   } catch (e) { receipt.problems.push(`${app} could not be scheduled for removal (${errText(e)}); remove it and ${launcher} by hand once this command has exited`) }
 }
 
+/** What deferredRemoval compares app\current with when there was none (or it was empty) at uninstall time: a value no first line of it is read as. */
+export const NO_POINTER = '<none>'
+const REMOVE_WITHIN_S = 10 // how long app\ is tried for once this process has exited (1.6 §3.6)
+const REMOVE_TRIES = 20000 // and a count, in case the clock cannot be read as hh:mm:ss.cc
+
 /** 1.6 §3.6 (Windows): the command that removes `app` and `launcher` once this process has exited → { file, args, env } for spawnDetached. The script
  *  is a constant: the paths reach it only as environment values, read by delayed expansion, so no character of a path is parsed as cmd syntax and it
  *  acts on no path it was not given. cmd built-ins only (no child program, so no console window): `set /p` reads its stdin, the pipe this process
- *  holds, to its end — that is, until this process is gone; then, while app\current still holds `pointer`, it removes app\ (retried while Windows
- *  releases node.exe's image), the launcher and the directories `dirs` left empty (innermost first). */
-export function deferredRemoval({ app, launcher, pointer, dirs, env }) {
+ *  holds, to its end — that is, until this process is gone; then, while app\current still holds `pointer` (NO_POINTER: still absent or empty), it
+ *  removes app\, retried while Windows releases node.exe's image for REMOVE_WITHIN_S seconds by the clock (and at most REMOVE_TRIES times). Only once
+ *  app\ is gone do the launcher and the directories `dirs` left empty (innermost first) go; when it is still there, `failure.line` is appended to
+ *  `failure.file` and the launcher stays, so the next `trocar uninstall` can be run. */
+export function deferredRemoval({ app, launcher, pointer, dirs, env, failure }) {
   const v = Object.fromEntries(Object.entries(env).filter(([k]) => !/^TROCAR_RM_/i.test(k)))
-  Object.assign(v, { TROCAR_RM_APP: app, TROCAR_RM_LAUNCHER: launcher, ...(pointer ? { TROCAR_RM_POINTER: pointer } : {}) })
+  Object.assign(v, { TROCAR_RM_APP: app, TROCAR_RM_LAUNCHER: launcher, TROCAR_RM_POINTER: pointer, TROCAR_RM_FAILED: failure.line, TROCAR_RM_FLOW: failure.file, TROCAR_RM_FLOWS: path.win32.dirname(failure.file) }) // Windows only: win32 reads either separator
   ;[...dirs].reverse().forEach((dir, i) => { v[`TROCAR_RM_DIR${i}`] = dir })
   const ours = 'if "!TROCAR_RM_NOW!"=="!TROCAR_RM_POINTER!"'
-  const script = ['set /p TROCAR_RM_WAIT=', '(set /p TROCAR_RM_NOW=<"!TROCAR_RM_APP!\\current") 2>nul',
-    `${ours} (for /l %i in (1,1,300) do @if exist "!TROCAR_RM_APP!\\" rd /s /q "!TROCAR_RM_APP!" 2>nul)`,
+  // centiseconds into the hour, from one read of %time% (hh:mm:ss.cc, fixed positions; "1" before each pair keeps 08 / 09 decimal)
+  const clock = (to) => `set "TROCAR_RM_C=!time!" & set /a "${to}=1!TROCAR_RM_C:~3,2!*6000+1!TROCAR_RM_C:~6,2!*100+1!TROCAR_RM_C:~9,2!" >nul`
+  const script = ['set /p TROCAR_RM_WAIT=', `set "TROCAR_RM_NOW=${NO_POINTER}"`, '(set /p TROCAR_RM_NOW=<"!TROCAR_RM_APP!\\current") 2>nul', 'set "TROCAR_RM_E=0"', clock('TROCAR_RM_T0'),
+    // every `if` in its own parentheses: cmd reads `if c (x) & y` as `if c (x & y)`, so an `if` left bare would swallow the steps after it
+    `(${ours} (for /l %i in (1,1,${REMOVE_TRIES}) do @if !TROCAR_RM_E! lss ${REMOVE_WITHIN_S * 100} if exist "!TROCAR_RM_APP!\\" (rd /s /q "!TROCAR_RM_APP!" 2>nul & ${clock('TROCAR_RM_E')} & set /a "TROCAR_RM_E-=TROCAR_RM_T0" >nul & if !TROCAR_RM_E! lss 0 set /a "TROCAR_RM_E+=360000" >nul)))`,
     // one `rd` per directory, never a for-variable: a for-variable's value is expanded again, so a ! or ^ in the path would change it
-    `${ours} (del /f /q "!TROCAR_RM_LAUNCHER!" 2>nul & ${dirs.map((_, i) => `rd "!TROCAR_RM_DIR${i}!" 2>nul`).join(' & ')})`].join(' & ')
+    `(${ours} if not exist "!TROCAR_RM_APP!\\" (del /f /q "!TROCAR_RM_LAUNCHER!" 2>nul & ${dirs.map((_, i) => `rd "!TROCAR_RM_DIR${i}!" 2>nul`).join(' & ')}))`,
+    `(${ours} if exist "!TROCAR_RM_APP!\\" ((if not exist "!TROCAR_RM_FLOWS!\\" md "!TROCAR_RM_FLOWS!" 2>nul) & echo(!TROCAR_RM_FAILED!>>"!TROCAR_RM_FLOW!"))`].join(' & ')
   return { file: 'cmd.exe', args: ['/d', '/v:on', '/s', '/c', `"${script}"`], env: v }
 }
 
