@@ -9,7 +9,7 @@ import { captureVerdict, capHealthPatch, agentVerdicts, AGENT_TIER } from '../..
 import { harnessKey } from '../../web/legacy/core/chips.mjs'
 import { logModel } from '../../web/src/screens/capture/log-model.mjs'
 import { pageModel } from '../../web/src/screens/capture/model.mjs'
-import { overviewItems } from '../../web/legacy/overview/overview.mjs'
+import { overviewItems } from '../../web/src/screens/overview/model.mjs'
 import { failureWord } from '../../src/cli/words.mjs'
 import { boardHome, serveBoard } from './real-face.mjs'
 

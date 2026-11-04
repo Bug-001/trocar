@@ -3,7 +3,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFailure } from '../../web/legacy/core/ui.mjs'
-import { statsCardHtml, recentCardHtml, capCardHtml } from '../../web/legacy/overview/overview.mjs'
+import { statsCard, recentCard, capCard } from '../../web/src/screens/overview/model.mjs'
 import { capHealthPatch } from '../../web/legacy/core/capture-verdict.mjs'
 import * as trafficPage from '../../web/legacy/traffic/traffic.mjs'
 import * as hostPage from '../../web/legacy/traffic/host.mjs'
@@ -46,29 +46,37 @@ test('readFailure: the visible line holds none of the reason; the reason is esca
   assert.notEqual(readFailure('Stats', { status: 0 }).line, readFailure('Stats', { status: 500 }).line)
 })
 
-test('overview cards: stats and recent read failures, the price line and an unreadable capture card keep the reason out of the visible text', () => {
+test('overview cards: stats and recent read failures, the price line and an unreadable capture card keep the reason out of the visible line; the technical pairs carry it', () => {
   const NOW = Date.parse('2026-10-20T12:00:00Z')
   const stats = { as_of: new Date(NOW - 3600e3).toISOString(), sessions: { total: 1 }, calls: { llm: 2 }, harnesses: [], usage: { rows: [], coverage: {} } }
+  const hides = (line, pairs, t, given, where) => {
+    assert.ok(typeof line === 'string' && line.trim(), where)
+    assert.ok(!line.includes(t), `${where}: reason in the visible line`)
+    if (given) assert.ok(pairs.some(([, v]) => v.includes(t)), `${where}: reason not kept in the technical details`)
+  }
   for (const status of [0, 500, 503]) {
     for (const make of [0, 1, 2, 3]) {
       const t = tok(), reason = reasonsWith(t)[make], given = reason !== ''
       const ans = { ok: false, status, error: reason }
       const where = (card) => `${card} · ${status} · ${make}`
-      const st = statsCardHtml({ w: '24h', stats: { data: null, ok: false, err: ans } }, NOW)
-      hidesReason(st, t, given, where('stats'))
-      assert.ok(st.includes('data-act="retry"'), where('stats'))
-      const rc = recentCardHtml({ sessions: { data: null, ok: false, err: ans } }, NOW)
-      hidesReason(rc, t, given, where('recent'))
-      assert.ok(rc.includes('data-act="retry"'), where('recent'))
-      const pr = statsCardHtml({ w: '24h', stats: { data: stats, ok: true, err: null, w: '24h' }, pricing: { data: null, ok: false, err: ans } }, NOW)
-      hidesReason(pr, t, given, where('price line'))
+      const st = statsCard({ w: '24h', stats: { data: null, ok: false, err: ans, other: false } }, NOW)
+      assert.equal(st.kind, 'failed', where('stats'))
+      hides(st.fail.line, st.fail.pairs, t, given, where('stats'))
+      const rc = recentCard({ sessions: { data: null, ok: false, err: ans } }, NOW)
+      assert.equal(rc.kind, 'failed', where('recent'))
+      hides(rc.fail.line, rc.fail.pairs, t, given, where('recent'))
+      const pr = statsCard({ w: '24h', stats: { data: stats, ok: true, err: null, other: false }, pricing: { data: null, ok: false, err: ans } }, NOW)
+      hides(pr.priceFail.line, pr.priceFail.pairs, t, given, where('price line'))
+      assert.ok(!JSON.stringify([pr.cost, pr.agents]).includes(t), where('price line'))
     }
   }
-  for (const make of [0, 1, 2, 3]) { // a capture health the server could not read (no health, errors names it): its reason only in the collapsed details (K-29)
+  for (const make of [0, 1, 2, 3]) { // a capture health the server could not read (no health, errors names it): its reason only in the technical pairs (K-29)
     const t = tok(), reason = reasonsWith(t)[make]
     if (reason === '') continue
     const p = capHealthPatch({ ok: true, status: 200, data: { errors: [{ where: 'capture health', reason }] } }, NOW)
-    hidesReason(capCardHtml({ caph: { data: p.capH, okAt: p.capHOkAt, err: null, ok: true } }, NOW), t, true, `capture · ${make}`)
+    const c = capCard({ data: p.capH, okAt: p.capHOkAt, err: null, ok: true }, NOW)
+    assert.ok(![c.text, ...c.subs].some((x) => x.includes(t)), `capture · ${make}: reason in the visible line`)
+    assert.ok(c.tech && c.tech.some(([, v]) => String(v).includes(t)), `capture · ${make}: reason not kept in the technical details`)
   }
 })
 

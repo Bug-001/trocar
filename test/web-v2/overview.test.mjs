@@ -1,23 +1,22 @@
-// overview.test.mjs — the overview (1.7 §验收): the capture card is never blank, each 事项 class appears iff its trigger holds and
-// links to its page, no false 「nothing to handle」, the window moves only the stats, no alert semantics, read-only, first use,
-// the recent list and the harness identity. Status documents are the C.3 sample of spec 1.6 with fields changed per case; the
-// closed set of health.state is read off the same table. Assertions are on fields, hrefs, marks and element kinds, never prose.
-import test, { mock } from 'node:test'
+// overview.test.mjs — the overview's model (1.7 §验收, web/src/screens/overview/model.mjs): the capture card is never blank, each
+// 事项 class appears iff its trigger holds and links to its page, no false 「nothing to handle」, the stats' marks, the recent list,
+// the first-use agent rows and the harness identity. The component's contracts (window, read-only, alert semantics, re-reads) are
+// in OverviewScreen.test.tsx. Status documents are the C.3 sample of spec 1.6 with fields changed per case; the closed set of
+// health.state is read off the same table. Assertions are on fields, hrefs, ids and labels/*.mjs words, never prose.
+import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import {
-  overviewItems, capCardHtml, itemsCardHtml, statsCardHtml, renderBody, recentRows, recentCardHtml, mount, SKELETON, headHtml,
-} from '../../web/legacy/overview/overview.mjs'
-import { capHealthPatch } from '../../web/legacy/core/capture-verdict.mjs'
-import { backoffMs, INTERVAL } from '../../web/legacy/core/poll.mjs'
-import { within } from '../helpers/bounded.mjs'
-import { ALIASES, HARNESS_ORDER, UNIDENTIFIED, UNKNOWN_ICON, harnessKey, harnessName } from '../../web/legacy/core/chips.mjs'
+  overviewItems, recentRows, firstUse, capCard, itemsCard, statsCard, recentCard, agentRows,
+} from '../../web/src/screens/overview/model.mjs'
+import { capHealthPatch, captureVerdict } from '../../web/legacy/core/capture-verdict.mjs'
+import { INTERVAL } from '../../web/legacy/core/poll.mjs'
+import { ALIASES, HARNESS_ORDER, UNIDENTIFIED, harnessKey, harnessName } from '../../web/legacy/core/chips.mjs'
 import { TITLE_FROM_WIRE } from '../../web/legacy/labels/replay.mjs'
 import { FILES_NOT_READ } from '../../web/legacy/labels/overview.mjs'
-import * as W from '../../web/legacy/labels/overview.mjs'
-import { ERR_WHERE, SWITCH_WORD } from '../../web/legacy/labels/capture.mjs'
-import { esc, fmtWhen } from '../../web/legacy/core/fmt.mjs'
-import { TITLE_PENDING, TITLE_PENDING_TIP } from '../../web/legacy/labels/common.mjs'
+import { UNTITLED, TITLE_PENDING, TITLE_PENDING_TIP } from '../../web/legacy/labels/common.mjs'
+import { ERR_WHERE, COMMANDS } from '../../web/legacy/labels/capture.mjs'
+import { fmtWhen, bytes } from '../../web/legacy/core/fmt.mjs'
 
 const SPEC = fs.readFileSync(new URL('../../spec/01-trocar-rfc/1.6-cli.md', import.meta.url), 'utf8')
 const C3 = SPEC.slice(SPEC.indexOf('### C.3'))
@@ -50,16 +49,16 @@ const session = (i, over = {}) => ({
 const ok = (data) => ({ data, ok: true, err: null })
 const failed = (data = null) => ({ data, ok: false, err: 'HTTP 500' })
 const stateOf = (status, over = {}) => ({
-  w: '24h', readAt: NOW, caph: { data: status, okAt: NOW, err: null, ok: true },
+  w: '24h', caph: { data: status, okAt: NOW, err: null, ok: true },
   sessions: ok({ sessions: [session(1)], errors: [] }), classes: ok({ disk: { trocar_bytes: 1e6 } }), pricing: ok({ models: [] }),
-  stats: ok({ as_of: iso(H), sessions: { total: 1 }, calls: { llm: 2 }, harnesses: [], usage: { rows: [], coverage: {} } }),
+  stats: { ...ok({ as_of: iso(H), sessions: { total: 1 }, calls: { llm: 2 }, harnesses: [], usage: { rows: [], coverage: {} } }), other: false },
   traffic: ok({ hosts: [], harness_since: {} }), segments: ok({ segments: [] }), ...over,
 })
-const norm = (h) => h.replace(/po-\d+/g, "po")
-const sayOf = (html) => (/<p class="ovsay[^"]*">([^<]*)</.exec(html) || [])[1]
+const statsOk = (doc) => ({ ...ok(doc), other: false })
 const group = (o) => ({ level: 'problem', where: 'engine', code: 'trust-rejected', count: 2, first_ts: iso(2 * H), last_ts: iso(H), reason: 'r', ...o })
+const BAD = /undefined|NaN|Invalid/
 
-test('#1 the capture card says a sentence for every capture state, an unreadable capture health, a stale read and an unknown state — never blank (D38②)', () => {
+test('#1 the capture card says the verdict\'s sentence for every capture state, an unreadable health, a stale read and an unknown state — never blank (D38②)', () => {
   assert.ok(HEALTH_STATES.length >= 8, String(HEALTH_STATES))
   const cases = []
   for (const state of HEALTH_STATES) cases.push([state, { data: { ...quiet(), health: { state, since: iso(H), n: 2 } }, okAt: NOW }])
@@ -74,10 +73,12 @@ test('#1 the capture card says a sentence for every capture state, an unreadable
   cases.push(['read_errors', { data: { ...quiet(), health: { state: 'ok', since: iso(H), read_errors: 2 } }, okAt: NOW }])
   cases.push(['all errors', { data: { ok: false, errors: [{ where: 'status', reason: 'x' }] }, okAt: NOW }])
   for (const [name, caph] of cases) {
-    const html = capCardHtml({ caph: { err: null, ok: true, ...caph } }, NOW)
-    const say = sayOf(html)
-    assert.ok(say && say.trim(), `${name}: ${html}`)
-    assert.doesNotMatch(html, /undefined|NaN|Invalid/, name)
+    const c = { err: null, ok: true, ...caph }
+    const card = capCard(c, NOW)
+    assert.ok(card.text && card.text.trim(), name)
+    // the capture page's service row says the same sentence (1.7 §采集卡: one function)
+    assert.equal(card.text, captureVerdict(c.data, { okAt: c.okAt, err: c.err, now: NOW }).text, name)
+    assert.doesNotMatch(JSON.stringify(card), BAD, name)
   }
 })
 
@@ -108,13 +109,16 @@ const CASES = [
   ['O6 · capture files not read whole', (s) => { s.sessions = ok({ sessions: [session(1)], errors: [{ where: 'a', reason: 'r' }, { where: 'b', reason: 'r' }] }) }, { O6: ['#/settings/storage'] }],
 ]
 
-test('#2 each item class appears iff its trigger holds, and links to the page of the 1.7 table', () => {
+test('#2 each item class appears iff its trigger holds, and links to the page of the 1.7 table; the card rows keep the hrefs under unique ids', () => {
   for (const [name, change, want] of CASES) {
     const s = stateOf(quiet()); change(s)
-    const items = overviewItems(s, NOW)
     const got = {}
-    for (const r of items.rows) (got[r.cls] ||= []).push(r.href)
+    for (const r of overviewItems(s, NOW).rows) (got[r.cls] ||= []).push(r.href)
     assert.deepEqual(got, want, name)
+    const card = itemsCard(s, NOW), cardGot = {}
+    for (const r of card.rows) (cardGot[r.cls] ||= []).push(r.href)
+    assert.deepEqual(cardGot, want, name)
+    assert.equal(new Set(card.rows.map((r) => r.id)).size, card.rows.length, `${name}: ids are unique`)
   }
   const s = stateOf(quiet()); s.caph.data.health = { state: 'unknown' }; s.caph.data.daemon.error = 'lock file is not JSON'
   assert.ok(overviewItems(s, NOW).rows.find((r) => r.cls === 'O2').text.includes('lock file is not JSON'), 'O2 carries daemon.error')
@@ -130,7 +134,7 @@ test('an item with an agent chip does not name the agent again: O1 is the captur
   s.caph.data.critical = [{ kind: 'untrusted', harness: B, code: 'var-missing', since: iso(H) }]
   s.caph.data.failures.groups = [group({ harness: B })]
   s.traffic = ok({ hosts: [{ harness: A, host: 'h.example', first_seen: iso(H), requests: 1 }, { harness: null, host: 'n.example', first_seen: iso(H), requests: 1 }], harness_since: { [A]: iso(48 * H), null: iso(48 * H) } })
-  const rows = overviewItems(s, NOW).rows
+  const rows = itemsCard(s, NOW).rows
   const said = new Map(agentVerdicts(s.caph.data).map((r) => [r.harness, r.text]))
   assert.ok(rows.some((r) => r.cls === 'O1') && rows.some((r) => r.cls === 'O9'), JSON.stringify(rows.map((r) => r.cls)))
   for (const r of rows) {
@@ -140,170 +144,63 @@ test('an item with an agent chip does not name the agent again: O1 is the captur
   }
 })
 
-test('#2 a class with more than five items shows five and one 「N more」 link', () => {
+test('#2 a class with more than five items shows five and one 「N more」 link to its page', () => {
   const s = stateOf(quiet())
   s.caph.data.critical = Array.from({ length: 7 }, (_, i) => ({ kind: `k${i}`, reason: 'r' }))
   s.caph.data.failures.groups = Array.from({ length: 8 }, (_, i) => group({ code: `c${i}` }))
-  const items = overviewItems(s, NOW)
-  assert.equal(items.rows.filter((r) => r.cls === 'O1p').length, 5); assert.equal(items.more.O1p, 2)
-  assert.equal(items.rows.filter((r) => r.cls === 'O3').length, 5); assert.equal(items.more.O3, 3)
-  const html = itemsCardHtml(s, NOW)
-  assert.equal((html.match(/class="ovitem more"/g) || []).length, 2)
+  const card = itemsCard(s, NOW)
+  assert.equal(card.rows.filter((r) => r.cls === 'O1p').length, 5)
+  assert.equal(card.rows.filter((r) => r.cls === 'O3').length, 5)
+  assert.deepEqual(card.more.map((m) => m.href).sort(), ['#/capture', '#/capture/log'])
+  assert.equal(new Set(card.more.map((m) => m.id)).size, 2)
 })
 
 test('#3 no false 「nothing to handle」: a failed source draws the partial note; a capture state that is not fine has an item', () => {
   for (const slot of ['sessions', 'classes', 'pricing', 'stats', 'traffic', 'segments']) {
     for (const v of [failed(), failed(stateOf(quiet())[slot].data)]) {
-      const html = itemsCardHtml(stateOf(quiet(), { [slot]: v }), NOW)
-      assert.doesNotMatch(html, /class="ovempty"/, slot); assert.match(html, /ovpart/, slot)
+      const card = itemsCard(stateOf(quiet(), { [slot]: v }), NOW)
+      assert.equal(card.empty, null, slot); assert.ok(card.partial, slot)
     }
   }
   const s = stateOf(quiet()); s.caph = { data: quiet(), okAt: NOW, err: 'HTTP 500', ok: false }
-  assert.doesNotMatch(itemsCardHtml(s, NOW), /class="ovempty"/); assert.match(itemsCardHtml(s, NOW), /ovpart/)
-  assert.match(itemsCardHtml(stateOf(quiet()), NOW), /class="ovempty"/, 'all read and nothing triggered → the empty line')
+  assert.equal(itemsCard(s, NOW).empty, null); assert.ok(itemsCard(s, NOW).partial)
+  const all = itemsCard(stateOf(quiet()), NOW)
+  assert.equal(all.empty, 'none', 'all read and nothing triggered → the empty line'); assert.equal(all.partial, null)
+  assert.notEqual(itemsCard(stateOf(quiet(), { traffic: { data: null, ok: null, err: null } }), NOW).empty, 'none', 'a source not answered yet is not 「none」')
   for (const state of [...HEALTH_STATES.filter((x) => !QUIET.includes(x)), 'zz-new']) {
     for (const health of [{ state, since: iso(H), n: 1 }, { state, since: iso(H), reason: 'r' }]) {
-      const items = overviewItems(stateOf({ ...quiet(), health }), NOW)
-      assert.ok(items.rows.length >= 1, `${JSON.stringify(health)} has an item`)
+      assert.ok(itemsCard(stateOf({ ...quiet(), health }), NOW).rows.length >= 1, `${JSON.stringify(health)} has an item`)
     }
   }
   const items = overviewItems(stateOf(capHealthPatch({ ok: true, status: 200, data: { errors: [{ where: 'capture health', reason: 'e' }] } }, NOW).capH), NOW)
   assert.ok(items.rows.length >= 1, 'an unreadable capture health has an item')
 })
 
-// a mounted overview on a fake element and a fake api that logs every call
-// hold(name, params, opts) → a promise to wait on before answering (the test decides when a read answers), or null to answer at once
-function fakeMount({ status = quiet(), sessions = { sessions: [session(1)], errors: [], next: null }, window = '24h', control = {}, answer = { ok: true }, hold = null, doc = null } = {}) {
-  const log = [], on = {}
-  const docs = { status, sessions, classes: { disk: { trocar_bytes: 1 } }, pricing: { models: [] }, traffic: { hosts: [], harness_since: {} }, segments: { segments: [] } }
-  const api = {
-    now: () => NOW,
-    get: async (name, params, opts) => {
-      log.push({ method: 'GET', name, params: params || {} })
-      const held = hold && hold(name, params || {}, opts || {})
-      if (held) return held
-      return name === 'overview' ? { ok: true, status: 200, data: stateOf(quiet()).stats.data } : { ok: true, status: 200, data: docs[name] }
-    },
-    post: async (p) => { log.push({ method: 'POST', name: p }); return { ok: true } },
-    control: async (v, body) => { log.push({ method: 'POST', name: v, body }); return answer },
-    controlStatus: async () => { log.push({ method: 'GET', name: 'control/status' }); return { ok: true, data: control } },
-  }
-  const zones = {}
-  const el = {
-    set innerHTML(v) { for (const id of v.match(/id="([^"]+)"/g).map((x) => x.slice(4, -1))) zones[id] = { innerHTML: '', classList: { toggle() {} } } },
-    querySelector: (sel) => zones[sel.slice(1)],
-    addEventListener(type, fn) { on[type] = fn }, removeEventListener() {}, replaceChildren() {}, ownerDocument: doc,
-  }
-  const router = { current: () => ({ params: { window } }) }
-  const inst = mount(el, { api, router, store: {}, toast: () => {} })
-  return { inst, log, zones, on }
-}
-const settle = () => new Promise((r) => setTimeout(r, 60))
-
-// 4.4 §存下的答案: only the Sessions page shows a stored answer; the overview reads the list again until it is fresh
-test('a stored sessions answer is not shown: the overview reads the list again and shows the fresh one', async () => {
-  let reads = 0
-  const fresh = { sessions: [session(7, { title: 'fresh-title' })], errors: [], next: null }
-  const old = { sessions: [session(9, { title: 'stored-title' })], errors: [], next: null, stored: { at: iso(0) } }
-  const { inst, zones } = fakeMount({ hold: (name) => (name === 'sessions' ? Promise.resolve({ ok: true, status: 200, data: ++reads === 1 ? old : fresh }) : null) })
-  const html = () => Object.values(zones).map((z) => z.innerHTML).join('')
-  try {
-    await settle()
-    assert.ok(!html().includes('stored-title'), 'the stored list is not shown')
-    await within((async () => { while (!html().includes('fresh-title')) await new Promise((d) => setTimeout(d, 50)) })(), 10_000, 'the fresh list')
-    assert.ok(!html().includes('stored-title'))
-    assert.ok(reads >= 2, `read again (${reads})`)
-  } finally { inst.unmount() }
-})
-
-// 1.7 §读取与刷新: the slow reads share two sockets, and 「页面不可见时全部停」 — a read still queued when the page is hidden is not sent
-test('a slow read whose socket comes free while the page is hidden is not sent', async () => {
-  const doc = { hidden: false }, held = []
-  const { inst, log } = fakeMount({ doc, hold: (name) => (name === 'classes' || name === 'pricing' ? new Promise((res) => held.push(() => res({ ok: true, status: 200, data: name === 'classes' ? { disk: { trocar_bytes: 1 } } : { models: [] } }))) : null) })
-  const slow = () => log.filter((x) => ['overview', 'segments', 'traffic'].includes(x.name)).length
-  try {
-    await settle()
-    assert.equal(held.length, 2, 'classes and pricing hold both sockets')
-    assert.equal(slow(), 0, 'the other slow reads wait for a socket')
-    doc.hidden = true
-    for (const f of held) f()
-    await settle()
-    assert.equal(slow(), 0, JSON.stringify(log.map((x) => x.name)))
-  } finally { inst.unmount() }
-})
-
-test('#4 the window only moves the stats: items are identical across 24h / 7d / all; the overview read carries since=24h / 7d / none', async () => {
-  const s = quiet(); s.failures.groups = [group({ harness: A })]
-  const { inst, log, zones } = fakeMount({ status: s })
-  try {
-    const seen = {}
-    for (const w of ['24h', '7d', 'all']) {
-      const from = log.length
-      inst.update({ params: { window: w } }); await settle()
-      const ov = log.slice(from).filter((x) => x.name === 'overview')
-      if (w !== '24h') assert.equal(ov.length, 1, w)
-      for (const x of ov) assert.equal(x.params.since ?? null, w === 'all' ? null : w)
-      seen[w] = norm(zones.ovitems.innerHTML)
-    }
-    assert.ok(seen['24h'].includes('ovitem'))
-    assert.equal(seen['7d'], seen['24h']); assert.equal(seen.all, seen['24h'])
-  } finally { inst.unmount() }
-})
-
-test('#9 read-only: a full poll of a mounted overview, first use included, sends only GETs', async () => {
-  for (const sessions of [undefined, { sessions: [], errors: [], next: null }]) {
-    const { inst, log } = fakeMount({ sessions })
-    try {
-      await settle()
-      for (const w of ['7d', 'all']) { inst.update({ params: { window: w } }); await settle() }
-      assert.ok(['status', 'sessions', 'overview', 'classes', 'pricing'].every((n) => log.some((x) => x.name === n)), JSON.stringify(log))
-      assert.deepEqual(log.filter((x) => x.method !== 'GET'), [])
-    } finally { inst.unmount() }
-  }
-})
-
 test('#5 the hit carries the 「?」 mark when a main row\'s cache figures are not known; no priced row → the unknown mark, never $0', () => {
   const row = (o) => ({ harness: A, model: 'zz-unpriced-model', lane: 'main', sessions: 1, calls: 3, failed: 0, no_usage: 0, input: 10, output: 5, cache_read: 30, cache_write: 10, cache_known: true, ...o })
   const doc = { as_of: iso(H), sessions: { total: 1 }, calls: { llm: 3 }, harnesses: [{ harness: A, sessions: 1, calls: 3, last_ts: iso(H) }], usage: { rows: [row(), row({ cache_known: false })], coverage: { sessions_read: 1, sessions_in_window: 1 } } }
-  const html = statsCardHtml(stateOf(quiet(), { stats: ok(doc) }), NOW)
-  assert.match(html, /\d+%\?/)
-  assert.doesNotMatch(html, /\$0(?![.\d]*[1-9])/)
-  assert.match(html, /≈ —/)
+  const card = statsCard(stateOf(quiet(), { stats: statsOk(doc) }), NOW)
+  assert.equal(card.kind, 'shown')
+  assert.match(card.hit.text, /^\d+%\?$/); assert.ok(card.hit.tip)
+  assert.equal(card.cost.text, '≈ —')
+  assert.doesNotMatch(JSON.stringify(card), /\$0(?![.\d]*[1-9])/)
+  assert.ok(card.asOf.includes(fmtWhen(Date.parse(doc.as_of), NOW)), 'the card says 截至 <as_of>')
 })
 
 test('#6 the coverage line names the agents with sessions in the window that the overview document lacks, and only those', () => {
-  const stats = ok({ as_of: iso(H), sessions: { total: 1 }, calls: { llm: 1 }, harnesses: [{ harness: HARNESS_ORDER[2], sessions: 1, calls: 1, last_ts: iso(H) }], usage: { rows: [], coverage: {} } })
+  const stats = statsOk({ as_of: iso(H), sessions: { total: 1 }, calls: { llm: 1 }, harnesses: [{ harness: HARNESS_ORDER[2], sessions: 1, calls: 1, last_ts: iso(H) }], usage: { rows: [], coverage: {} } })
   const sessions = ok({ sessions: [session(1, { harness: A }), session(30, { harness: B }), session(2, { harness: HARNESS_ORDER[2] })], errors: [] })
-  const warn = (w) => (statsCardHtml({ ...stateOf(quiet(), { stats, sessions }), w }, NOW).match(/<p class="ovsub warn">[^<]*/g) || []).join(' ')
-  assert.ok(warn('24h').includes(esc(harnessName(A)))); assert.ok(!warn('24h').includes(esc(harnessName(B))))
-  assert.ok(warn('all').includes(esc(harnessName(B)))); assert.ok(!warn('all').includes(esc(harnessName(HARNESS_ORDER[2]))))
+  const missing = (w) => statsCard({ ...stateOf(quiet(), { stats, sessions }), w }, NOW).missing || ''
+  assert.ok(missing('24h').includes(harnessName(A))); assert.ok(!missing('24h').includes(harnessName(B)))
+  assert.ok(missing('all').includes(harnessName(B))); assert.ok(!missing('all').includes(harnessName(HARNESS_ORDER[2])))
 })
 
-test('#8 no alert semantics: no alert role, live region, badge, unread count or dismiss control; the only buttons are disclosures and retry', () => {
-  const s = quiet(); s.failures.groups = [group({ harness: A })]; s.critical = [{ kind: 'k', reason: 'r' }]
-  const bodies = [
-    stateOf(s), stateOf(quiet(), { sessions: ok({ sessions: [], errors: [] }) }), stateOf(quiet(), { stats: failed(), sessions: failed() }),
-    stateOf({ ...quiet(), health: { state: 'not-installed' } }, { sessions: ok({ sessions: [], errors: [] }) }),
-  ]
-  for (const st of bodies) {
-    const b = renderBody(st, NOW)
-    const html = Object.values(b).filter((x) => typeof x === 'string').join('')
-    assert.doesNotMatch(html, /role="alert"|aria-live|badge|unread|dismiss|data-close/)
-    for (const btn of html.match(/<button[^>]*>/g) || []) assert.match(btn, /data-act="retry"|data-disc=|data-copy=|data-pop=/, btn)
-  }
-})
-
-test('#10 first use: no session → the capture card and the start card only; no install / uninstall control, no disabled control', () => {
-  for (const state of HEALTH_STATES) {
-    const b = renderBody(stateOf({ ...quiet(), health: { state, since: iso(H) } }, { sessions: ok({ sessions: [], errors: [] }) }), NOW)
-    assert.equal(b.first, true, state)
-    assert.equal(b.items, ''); assert.equal(b.stats, '')
-    assert.match(b.cap, /class="ovcard cap"/); assert.match(b.recent, /class="ovcard start"/)
-    const html = b.cap + b.recent + b.agents
-    assert.doesNotMatch(html, /disabled|data-act="(install|uninstall)"/)
-    for (const btn of html.match(/<button[^>]*>/g) || []) assert.match(btn, /data-disc=|data-copy=/, btn)
-  }
-  assert.equal(renderBody(stateOf(quiet()), NOW).first, false, 'a session → the normal page')
+test('#7 no session in the window: the empty line, never a row of 0s or a cost', () => {
+  const card = statsCard(stateOf(quiet(), { stats: statsOk({ as_of: iso(H), sessions: { total: 0 }, calls: { llm: 0 }, harnesses: [], usage: { rows: [], coverage: {} } }) }), NOW)
+  assert.equal(card.kind, 'shown'); assert.equal(card.empty, true)
+  assert.equal(card.cost, null); assert.equal(card.sessions, null); assert.deepEqual(card.agents, [])
+  assert.deepEqual(statsCard(stateOf(quiet(), { stats: { data: null, ok: null, err: null, other: false } }), NOW), { kind: 'reading' })
+  assert.equal(statsCard(stateOf(quiet(), { stats: { ...failed(), other: false } }), NOW).kind, 'failed')
 })
 
 test('#11 recent sessions: the five newest by last_ts, the hover by title_source, untitled without a time, a pending title as not read yet, the probe-only mark, the replay href', () => {
@@ -311,46 +208,56 @@ test('#11 recent sessions: the five newest by last_ts, the hover by title_source
     session(4, { calls: 0, probes: 3 }), session(7), session(5, { title: null, title_source: 'pending' })]
   const want = [...rows].sort((a, b) => Date.parse(b.last_ts) - Date.parse(a.last_ts)).slice(0, 5)
   assert.deepEqual(recentRows({ sessions: rows }).map((r) => r.id), want.map((r) => r.session_id))
-  const html = recentCardHtml(stateOf(quiet(), { sessions: ok({ sessions: rows, errors: [] }) }), NOW)
-  const items = html.split('<a class="ovitem"').slice(1)
-  assert.equal(items.length, 5)
+  const card = recentCard(stateOf(quiet(), { sessions: ok({ sessions: rows, errors: [] }) }), NOW)
+  assert.equal(card.kind, 'shown'); assert.equal(card.rows.length, 5)
   want.forEach((m, i) => {
-    const it = items[i]
-    assert.ok(it.includes(`href="#/replay/${m.project_slug}/${m.session_id}"`), it)
-    if (m.title != null) assert.ok(it.includes(esc(TITLE_FROM_WIRE)), it)
-    else assert.doesNotMatch(it, /title="[^"]*title from/)
-    if (m.calls === 0 && m.probes > 0) assert.match(it, /ovnum"><span title=/)
+    const r = card.rows[i]
+    assert.equal(r.id, `${m.project_slug}::${m.session_id}`)
+    assert.equal(r.href, `#/replay/${m.project_slug}/${m.session_id}`)
+    if (m.title != null) assert.ok(r.titleTip.includes(TITLE_FROM_WIRE), r.titleTip)
+    else if (m.title_source === 'pending') {
+      assert.equal(r.title, TITLE_PENDING, 'a title not read yet is not drawn as untitled')
+      assert.equal(r.pending, true)
+      assert.ok(r.titleTip.includes(TITLE_PENDING_TIP), r.titleTip)
+    } else {
+      assert.equal(r.title, UNTITLED)
+      assert.equal(r.pending, false)
+      assert.ok(!r.title.includes(fmtWhen(Date.parse(m.last_ts), NOW)), 'the untitled title carries no time: the row has its last-active column')
+    }
+    assert.equal(r.calls.tip != null, m.calls === 0 && m.probes > 0, `probe-only mark · ${m.session_id}`)
+    assert.doesNotMatch(r.title, /[0-9a-f]{6,}/)
   })
-  const u = want.findIndex((m) => m.title == null)
-  const titleCell = /<span class="ovtx"[^>]*>([^<]*)</.exec(items[u])[1]
-  assert.ok(!titleCell.includes(esc(fmtWhen(Date.parse(want[u].last_ts), NOW))), 'the untitled title carries no time: the row has its last-active column')
-  const pend = /<span class="ovtx[^"]*" title="([^"]*)">([^<]*)</.exec(items[want.findIndex((m) => m.title_source === 'pending')])
-  assert.equal(pend[2], esc(TITLE_PENDING), 'a title not read yet is not drawn as untitled')
-  assert.ok(pend[1].includes(esc(TITLE_PENDING_TIP)), pend[1])
-  assert.doesNotMatch(html, /[0-9a-f]{6,}<\/span>/)
+  assert.ok(want.some((m) => m.title_source === 'pending'), 'the five newest hold the pending row')
+  assert.equal(recentCard(stateOf(quiet(), { sessions: ok({ sessions: [], errors: [] }) }), NOW).kind, 'none')
 })
 
-test('#12 · R1–R3: one disk line, no per-day figure, no theme control, no list of unpriced models', () => {
+test('#12 · R1–R3: one disk line from classes.disk.trocar_bytes, none when classes failed; no per-day figure; no list of unpriced models', () => {
   const doc = { as_of: iso(H), sessions: { total: 1 }, calls: { llm: 3 }, harnesses: [], usage: { rows: [{ harness: A, model: 'zz-unpriced-model', lane: 'main', calls: 3, failed: 0, no_usage: 0, input: 1, output: 1, cache_read: 1, cache_write: 1, cache_known: true }], coverage: {} } }
-  const b = renderBody(stateOf(quiet(), { stats: ok(doc) }), NOW)
-  const html = Object.values(b).filter((x) => typeof x === 'string').join('')
-  assert.equal((html.match(/href="#\/settings\/storage"/g) || []).length, 1)
-  assert.doesNotMatch(html, /\/\s*day|per day|data-theme/i)
-  assert.doesNotMatch(html, /zz-unpriced-model/)
-  assert.match(html, /href="#\/settings\/prices"/)
+  const s = stateOf(quiet(), { stats: statsOk(doc) })
+  const card = statsCard(s, NOW)
+  assert.equal(card.disk.href, '#/settings/storage')
+  assert.ok(card.disk.text.includes(bytes(s.classes.data.disk.trocar_bytes)), card.disk.text)
+  assert.equal(statsCard({ ...s, classes: failed(s.classes.data) }, NOW).disk, null)
+  const json = JSON.stringify(card)
+  assert.doesNotMatch(json, /\/\s*day|per day/i)
+  assert.doesNotMatch(json, /zz-unpriced-model/)
+  assert.equal(card.unpriced.href, '#/settings/prices')
 })
 
-test('#13 a CLI harness id renders the read-side chip; an unknown id renders the unidentified chip', () => {
-  const card = (id) => itemsCardHtml(stateOf({ ...quiet(), critical: [{ kind: 'k', harness: id, reason: 'r' }] }), NOW)
-  const table = (id) => statsCardHtml(stateOf(quiet(), { stats: ok({ as_of: iso(H), sessions: { total: 1 }, calls: { llm: 1 }, harnesses: [{ harness: id, sessions: 1, calls: 1, last_ts: iso(H) }], usage: { rows: [], coverage: {} } }) }), NOW)
+test('#13 a CLI harness id gives the read-side chip; an unknown id gives the unidentified chip', () => {
+  const items = (id) => itemsCard(stateOf({ ...quiet(), critical: [{ kind: 'k', harness: id, reason: 'r' }] }), NOW)
+  const table = (id) => statsCard(stateOf(quiet(), { stats: statsOk({ as_of: iso(H), sessions: { total: 1 }, calls: { llm: 1 }, harnesses: [{ harness: id, sessions: 1, calls: 1, last_ts: iso(H) }], usage: { rows: [], coverage: {} } }) }), NOW)
   for (const [cli, read] of Object.entries(ALIASES)) {
-    assert.equal(norm(card(cli)), norm(card(read)), cli)
-    assert.equal(table(cli), table(read), cli)
+    assert.deepEqual(items(cli), items(read), cli)
+    assert.deepEqual(table(cli), table(read), cli)
   }
-  for (const html of [card('zz-agent'), table('zz-agent')]) { assert.ok(html.includes(UNIDENTIFIED)); assert.ok(html.includes(UNKNOWN_ICON) || html.includes('ovsubj')) }
+  const o1 = items('zz-agent').rows.find((r) => r.cls === 'O1')
+  assert.equal(harnessName(o1.chip), UNIDENTIFIED)
+  for (const a of table('zz-agent').agents) assert.equal(harnessName(a.chip), UNIDENTIFIED)
+  assert.equal(statsCard(stateOf(quiet(), { stats: statsOk({ as_of: iso(H), sessions: { total: 1 }, calls: { llm: 1 }, harnesses: [{ harness: null, sessions: 1, calls: 1, last_ts: iso(H) }], usage: { rows: [], coverage: {} } }) }), NOW).agents[0].href, null, 'the unidentified row links nowhere')
 })
 
-// first use with agent rows (1.7 #10, #8 / #9 as amended; 1.9 §开关): the status document lists two harnesses (CLI ids, read through chips)
+// first use with agent rows (1.7 #10; 1.9 §开关): the status document lists two harnesses (CLI ids, read through chips)
 const TWO = Object.keys(ALIASES).slice(0, 2)
 const twoAgents = (o = {}) => {
   const d = quiet(), [h0] = Object.values(SAMPLE.harnesses)
@@ -360,18 +267,15 @@ const twoAgents = (o = {}) => {
 }
 const CTL_ON = { ok: true, status: 200, data: { control: true } }
 const NONE = { sessions: [], errors: [], next: null }
-const firstWith = (status, control, sessions = NONE) => ({ ...stateOf(status, { sessions: ok(sessions) }), control, ui: new Map() })
-const hctls = (html) => [...html.matchAll(/<[^>]*data-hctl="([^"]*)"[^>]*>/g)].map((m) => ({ kind: m[1], h: /data-h="([^"]*)"/.exec(m[0])[1] }))
-const rowHtml = (html, h) => html.split('class="ovitem ovagent"').find((x) => x.startsWith(` data-h="${h}"`)) || ''
-const rowsOf = (html) => [...new Set([...html.matchAll(/data-h="([^"]*)"/g)].map((m) => m[1]))].sort()
+const firstWith = (status, control, sessions = NONE) => ({ ...stateOf(status, { sessions: ok(sessions) }), control })
 
-test('#10 first use: one row per listed agent with exactly one control (switch, or Set up when setup is needed); none and nothing disabled where the board cannot act', () => {
+test('#10 first use: one row per listed agent with one control (switch, or setup when setup is needed); where the board cannot act, the command instead — never a disabled control', () => {
   const keys = TWO.map(harnessKey).sort()
-  const a = renderBody(firstWith(twoAgents(), CTL_ON), NOW).agents
-  assert.deepEqual(hctls(a).map((x) => x.h).sort(), keys)
-  assert.ok(hctls(a).every((x) => x.kind === 'switch'))
-  const s = renderBody(firstWith(twoAgents({ [TWO[0]]: { setup: { state: 'needed', missing: [] } } }), CTL_ON), NOW).agents
-  assert.deepEqual(hctls(s).find((x) => x.h === harnessKey(TWO[0])).kind, 'setup')
+  const on = agentRows(firstWith(twoAgents(), CTL_ON))
+  assert.deepEqual(on.map((r) => r.id).sort(), keys)
+  assert.ok(on.every((r) => r.control.kind === 'switch' && r.commands === null))
+  const setup = agentRows(firstWith(twoAgents({ [TWO[0]]: { setup: { state: 'needed', missing: [] } } }), CTL_ON))
+  assert.equal(setup.find((r) => r.id === harnessKey(TWO[0])).control.kind, 'setup')
   const cannot = [
     firstWith(twoAgents(), { ok: true, status: 200, data: { control: false } }),
     firstWith(twoAgents(), { ok: true, status: 200, data: { control: false, root: true } }),
@@ -379,56 +283,29 @@ test('#10 first use: one row per listed agent with exactly one control (switch, 
     firstWith(twoAgents(), null),
   ]
   for (const st of cannot) {
-    const b = renderBody(st, NOW), html = b.cap + b.agents + b.recent
-    assert.deepEqual(rowsOf(b.agents), keys)
-    assert.deepEqual(hctls(html), [])
-    assert.doesNotMatch(html, /disabled/)
-    // each row still says what it can't do here: the command (1.6's usage: install, or on / off <the document's key>)
-    const installed = !(st.caph.data.health && st.caph.data.health.state === 'not-installed')
+    const rows = agentRows(st)
+    assert.deepEqual(rows.map((r) => r.id).sort(), keys)
+    const installed = st.caph.data.health.state !== 'not-installed'
     for (const id of TWO) {
-      const row = rowHtml(b.agents, harnessKey(id))
-      assert.ok(row.includes(installed ? `trocar on ${id}` : 'trocar install'), row)
+      const r = rows.find((x) => x.id === harnessKey(id))
+      assert.equal(r.control.kind, null)
+      const cmds = r.commands.map(([, c]) => c)
+      assert.ok(installed ? cmds.includes(COMMANDS.on.replace('<id>', id)) : cmds.includes(COMMANDS.install), JSON.stringify(cmds))
     }
   }
   for (const st of [firstWith(twoAgents(), CTL_ON), ...cannot]) {
-    const b = renderBody(st, NOW), html = b.cap + b.agents + b.recent
-    assert.doesNotMatch(html, /data-act="(install|uninstall)"/)
-    // every row writes the desired state as text, whatever control it gets (1.9 §开关)
-    for (const [id, v] of Object.entries(st.caph.data.harnesses)) {
-      if (SWITCH_WORD[v.desired]) assert.match(rowHtml(b.agents, harnessKey(id)), new RegExp(`class="ovtx">${SWITCH_WORD[v.desired]}<`))
+    assert.equal(firstUse(st), true)
+    // every row carries the desired state, whatever control it gets (1.9 §开关), and is either a control or commands
+    for (const r of agentRows(st)) {
+      const [, v] = Object.entries(st.caph.data.harnesses).find(([id]) => harnessKey(id) === r.id)
+      assert.equal(r.desired, v.desired)
+      assert.ok(r.control.kind != null || (r.commands && r.commands.length), JSON.stringify(r))
     }
-    assert.ok(hctls(html).every((x) => x.kind === 'switch' || x.kind === 'setup'))
   }
+  assert.equal(firstUse(firstWith(twoAgents(), CTL_ON, { sessions: [session(1)], errors: [], next: null })), false, 'a session → the normal page')
 })
 
-test('#9 first use: until a control is clicked only GETs go out; a click goes through planConfirm, its first control call carries no confirm', async () => {
-  const answer = { ok: false, status: 409, data: { need: 'confirm', plan: [], plan_id: 'p1' } }
-  const { inst, log, zones, on } = fakeMount({ status: twoAgents(), sessions: NONE, control: { control: true }, answer })
-  try {
-    await settle()
-    assert.deepEqual(log.filter((x) => x.method !== 'GET'), [])
-    assert.ok(log.some((x) => x.name === 'control/status'))
-    const [m] = [...zones.ovagents.innerHTML.matchAll(/<[^>]*data-hctl="[^"]*"[^>]*>/g)]
-    const attr = (n) => (new RegExp(`${n}="([^"]*)"`).exec(m[0]) || [])[1] ?? null
-    const btn = { getAttribute: attr, setAttribute() {}, removeAttribute() {}, isConnected: true }
-    await on.click({ target: { closest: (sel) => sel === '[data-hctl]' ? btn : null }, preventDefault() {} }); await settle()
-    const posts = log.filter((x) => x.method !== 'GET')
-    assert.ok(posts.length >= 1)
-    assert.equal(posts[0].name, 'harness')
-    assert.equal(posts[0].body.harness, attr('data-cli'))
-    assert.equal('confirm' in posts[0].body, false)
-  } finally { inst.unmount() }
-})
-
-test('#10 the first session arrives → no agent control and no start card are left on the overview', () => {
-  const b = renderBody(firstWith(twoAgents(), CTL_ON, { sessions: [session(1)], errors: [], next: null }), NOW)
-  const html = Object.values(b).filter((x) => typeof x === 'string').join('')
-  assert.equal(b.first, false)
-  assert.deepEqual(hctls(html), [])
-  assert.doesNotMatch(html, /class="ovcard start"/)
-})
-
-// ── level notes, partial coverage, agent links, page head, window reads ──────────────────────────────────────────────────────────────────────────
+// ── level notes, partial coverage, agent links ──────────────────────────────────────────────────────────────────────────────────────
 test('entries with level note are not counted: no O3 raw row for them, O6 counts only the rest', () => {
   const segs = ok({ segments: [{ to: iso(H), problems: [{ code: 'zz-note', level: 'note', reason: 'r' }, { code: 'zz-real', reason: 'r' }] }] })
   const keys = overviewItems(stateOf(quiet(), { segments: segs }), NOW).rows.filter((r) => r.cls === 'O3').map((r) => r.key)
@@ -443,118 +320,30 @@ const usageDoc = (coverage, harnesses = [{ harness: A, sessions: 1, calls: 3, la
   as_of: iso(H), sessions: { total: 1 }, calls: { llm: 3 }, harnesses,
   usage: { rows: [{ harness: A, model: 'zz-priced', lane: 'main', sessions: 1, calls: 3, failed: 0, no_usage: 0, input: 1000, output: 500, cache_read: 3000, cache_write: 100, cache_known: true }], coverage },
 })
-const pricedState = (doc) => stateOf(quiet(), { stats: ok(doc), pricing: ok({ models: [{ model: 'zz-priced', input: 1, output: 2, cache_write: 1, cache_read: 0.1 }] }) })
-const spanOf = (html, cls) => (new RegExp(`<span class="${cls}"[^>]*>([^<]*)<`).exec(html) || [])[1]
+const pricedState = (doc) => stateOf(quiet(), { stats: statsOk(doc), pricing: ok({ models: [{ model: 'zz-priced', input: 1, output: 2, cache_write: 1, cache_read: 0.1 }] }) })
 
 test('partial coverage puts a floor on the money only: the hit text is the same, the cost text differs', () => {
-  const full = statsCardHtml(pricedState(usageDoc({ sessions_read: 2, sessions_in_window: 2 })), NOW)
-  const part = statsCardHtml(pricedState(usageDoc({ sessions_read: 1, sessions_in_window: 2 })), NOW)
-  assert.ok(spanOf(full, 'ovhit') != null && spanOf(full, 'ovcost') != null, full)
-  assert.equal(spanOf(part, 'ovhit'), spanOf(full, 'ovhit'))
-  assert.notEqual(spanOf(part, 'ovcost'), spanOf(full, 'ovcost'))
+  const full = statsCard(pricedState(usageDoc({ sessions_read: 2, sessions_in_window: 2 })), NOW)
+  const part = statsCard(pricedState(usageDoc({ sessions_read: 1, sessions_in_window: 2 })), NOW)
+  assert.notEqual(full.cost.text, '≈ —')
+  assert.equal(part.hit.text, full.hit.text)
+  assert.notEqual(part.cost.text, full.cost.text)
 })
 
 test('the coverage note never prints the reason code; it reads the calls pair, else the sessions pair', () => {
-  const html = (cov) => statsCardHtml(pricedState(usageDoc(cov)), NOW)
-  const bySessions = html({ sessions_read: 1, sessions_in_window: 2, reason: 'byte-budget' })
-  assert.ok(!bySessions.includes('byte-budget')); assert.match(bySessions, /class="[^"]*\bovcov\b/)
-  assert.match(html({ sessions_read: 2, sessions_in_window: 2, calls_read: 5, calls_in_window: 9, reason: 'byte-budget' }), /class="[^"]*\bovcov\b/)
-  assert.doesNotMatch(html({ sessions_read: 2, sessions_in_window: 2 }), /\bovcov\b/)
+  const cov = (c) => statsCard(pricedState(usageDoc(c)), NOW).coverage
+  const bySessions = cov({ sessions_read: 1, sessions_in_window: 2, reason: 'byte-budget' })
+  assert.ok(bySessions && !bySessions.includes('byte-budget'))
+  assert.ok(cov({ sessions_read: 2, sessions_in_window: 2, calls_read: 5, calls_in_window: 9, reason: 'byte-budget' }))
+  assert.equal(cov({ sessions_read: 2, sessions_in_window: 2 }), null)
 })
 
 test('an agent row with no session and no model call links to its traffic, not to sessions', () => {
   const doc = usageDoc({}, [{ harness: A, sessions: 1, calls: 3, last_ts: iso(H) }, { harness: B, sessions: 0, calls: 0, last_ts: iso(H) }])
   for (const w of ['24h', '7d', 'all']) {
-    const html = statsCardHtml({ ...pricedState(doc), w }, NOW)
-    assert.ok(html.includes(`href="${esc(`#/traffic?h=${encodeURIComponent(B)}&window=${w}`)}"`), html)
-    assert.ok(!html.includes(esc(`#/sessions?h=${encodeURIComponent(B)}`)))
-    assert.ok(html.includes(esc(`#/sessions?h=${encodeURIComponent(A)}&window=${w}`)))
+    const agents = statsCard({ ...pricedState(doc), w }, NOW).agents
+    const by = (h) => agents.find((a) => a.chip === h)
+    assert.equal(by(B).trafficOnly, true); assert.equal(by(B).href, `#/traffic?h=${encodeURIComponent(B)}&window=${w}`)
+    assert.equal(by(A).href, `#/sessions?h=${encodeURIComponent(A)}&window=${w}`)
   }
-})
-
-test('the page head is drawn once: the skeleton holds no <header>, headHtml one', () => {
-  assert.ok(!SKELETON.includes('<header'))
-  assert.equal((headHtml({ w: '24h', readAt: NOW }).match(/<header/g) || []).length, 1)
-})
-
-const deferred = () => { let resolve; const promise = new Promise((r) => { resolve = r }); return { promise, resolve } }
-const statsDoc = (total) => ({ ok: true, status: 200, data: { ...stateOf(quiet()).stats.data, sessions: { total } } })
-const tabOn = (html, w) => new RegExp(`href="#/overview\\?window=${w}"[^>]*aria-current`).test(html)
-
-test('right after mount, before any answer: the head has its window tab, the stats and recent cards say reading, no card zone is blank', () => {
-  const { inst, zones } = fakeMount({ hold: () => new Promise(() => {}) })
-  try {
-    assert.ok(tabOn(zones.ovhead.innerHTML, '24h'))
-    for (const z of ['ovstats', 'ovrecent']) assert.match(zones[z].innerHTML, /class="ovcard[^"]*\breading\b/, z)
-    for (const z of ['ovhead', 'ovcap', 'ovitems', 'ovstats', 'ovrecent']) assert.notEqual(zones[z].innerHTML, '', z)
-  } finally { inst.unmount() }
-})
-
-test('a window change moves the tab at once and an answer for another window never reaches the stats card', async () => {
-  const held = []
-  const { inst, zones } = fakeMount({ hold: (name, params) => { if (name !== 'overview') return null; const d = deferred(); held.push({ since: params.since ?? null, d }); return d.promise } })
-  try {
-    inst.update({ params: { window: '7d' } }); inst.update({ params: { window: 'all' } })
-    assert.ok(tabOn(zones.ovhead.innerHTML, 'all'))
-    const of = (since) => held.find((x) => x.since === since)
-    const n = (k) => esc(W.SESSIONS_N(k))
-    of(null).d.resolve(statsDoc(9)); await settle()
-    assert.ok(zones.ovstats.innerHTML.includes(n(9)))
-    assert.doesNotMatch(zones.ovstats.innerHTML, /\breading\b/)
-    of('7d').d.resolve(statsDoc(4)); if (of('24h')) of('24h').d.resolve(statsDoc(1)); await settle()
-    assert.ok(zones.ovstats.innerHTML.includes(n(9)))
-    assert.ok(!zones.ovstats.innerHTML.includes(n(4)) && !zones.ovstats.innerHTML.includes(n(1)))
-  } finally { inst.unmount() }
-})
-
-test('the slow reads go at most two at a time, a window change included, and all five are read in the end', async () => {
-  const SLOW = ['classes', 'pricing', 'overview', 'segments', 'traffic']
-  const pending = [], asked = new Set()
-  let most = 0
-  const { inst } = fakeMount({
-    hold: (name, params, opts) => {
-      if (!SLOW.includes(name)) return null
-      asked.add(name); const d = deferred(); const x = { name, d, done: false }; pending.push(x)
-      // an aborted read frees its socket at once in a browser, so it no longer counts as in flight
-      if (opts.signal) opts.signal.addEventListener('abort', () => { x.done = true }, { once: true })
-      most = Math.max(most, pending.filter((p) => !p.done).length)
-      return d.promise.then((v) => { x.done = true; return v })
-    },
-  })
-  try {
-    await settle()
-    inst.update({ params: { window: '7d' } }); await settle() // the window's own read joins while two slow reads are out
-    for (let i = 0; i < 10 && pending.some((p) => !p.done); i++) {
-      const next = pending.find((p) => !p.done)
-      next.d.resolve(next.name === 'overview' ? statsDoc(1) : { ok: true, status: 200, data: {} }); await settle()
-    }
-    assert.ok(most <= 2, `most in flight ${most}`)
-    assert.deepEqual([...asked].sort(), [...SLOW].sort())
-  } finally { inst.unmount() }
-})
-
-test('K-29 on the overview: every GET fails for 120 s → each name\'s reads are at least its back-off apart; none while hidden', async (t) => {
-  mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'] })
-  const listeners = new Map(), had = Object.getOwnPropertyDescriptor(globalThis, 'document')
-  globalThis.document = { hidden: false, addEventListener: (k, f) => listeners.set(k, f), removeEventListener: (k) => listeners.delete(k) }
-  t.after(() => { mock.timers.reset(); if (had) Object.defineProperty(globalThis, 'document', had); else delete globalThis.document })
-  const at = {}
-  const { inst } = fakeMount({ hold: (name) => { (at[name] ||= []).push(Date.now()); return Promise.resolve({ ok: false, status: 500, error: 'down' }) } })
-  const idle = async () => { for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r)) }
-  const run = async (ms) => { for (let i = 0; i < ms; i += 250) { mock.timers.tick(250); await idle() } }
-  try {
-    await idle(); await run(120000)
-    for (const name of ['status', 'sessions', 'classes', 'pricing', 'segments', 'traffic', 'overview']) {
-      const reads = at[name] || [], base = INTERVAL[name] ?? INTERVAL.other
-      assert.ok(reads.length >= 2, `${name}: ${reads.length} reads`)
-      for (let k = 1; k < reads.length; k++) {
-        const gap = reads[k] - reads[k - 1]
-        assert.ok(gap >= backoffMs(k, base), `${name}: read ${k + 1} came ${gap} ms after failure ${k}; the back-off is ${backoffMs(k, base)}`)
-      }
-    }
-    const before = Object.values(at).flat().length
-    globalThis.document.hidden = true
-    await run(120000)
-    assert.equal(Object.values(at).flat().length, before, 'no read while hidden')
-  } finally { inst.unmount() }
 })

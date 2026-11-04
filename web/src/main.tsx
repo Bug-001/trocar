@@ -25,7 +25,6 @@ import { Sidebar } from './shell/Sidebar'
 
 // every screen of every route (core/router.mjs): the legacy ones here, the React ones in REACT_SCREENS
 const SCREENS = {
-  overview: () => import('../legacy/overview/overview.mjs'),
   library: () => import('../legacy/library/library.mjs'),
   replay: () => import('../legacy/replay/replay.mjs'),
   'session-link': () => import('../legacy/replay/session-link.mjs'),
@@ -36,6 +35,7 @@ const SCREENS = {
   'settings-appearance': () => import('../legacy/settings/appearance.mjs'),
 }
 const REACT_SCREENS: Record<string, LazyScreen> = {
+  overview: lazyScreen(() => import('./screens/overview/OverviewScreen')),
   capture: lazyScreen(() => import('./screens/capture/CaptureScreen')),
   'capture-log': lazyScreen(() => import('./screens/capture/CaptureLogScreen')),
 }
