@@ -170,13 +170,13 @@ export const reqEncodingFact = (enc) => `The request body was compressed on the 
 // block-level marks (2.3 §保真标): one visible word per unproven block; the codes are the 3.2 closed set plus
 // trocar's own opened-body outcomes (notfetched · reserialized · unknown)
 export const FF_WORD = Object.freeze({
-  metadata: 'metadata only', opaque: 'encrypted; no plaintext', summarized: 'a client summary, not the original', omitted: 'omitted by the source',
+  metadata: 'metadata only', opaque: 'no plaintext', summarized: 'a client summary, not the original', omitted: 'omitted by the source',
   truncated: 'truncated at the source', unaddressable: 'not addressable', unknown: 'fidelity unknown', notfetched: 'bytes could not be fetched',
   reserialized: 'reserialized, not the wire bytes', verbatim: 'verbatim', parsed: 'parsed reply',
 })
 export const FF_TIP = Object.freeze({
   metadata: 'Metadata only: the full JSON schema was not captured (an older capture); the model received the full schema',
-  opaque: 'Encrypted / redacted reasoning: the wire carries only a signature or ciphertext; there is no plaintext to restore',
+  opaque: 'Reasoning without plaintext: the wire carries a signature or ciphertext at most; there is no plaintext to restore',
   summarized: 'A client summary replaced the original (for example in compaction); this is not the verbatim original',
   omitted: 'The source omitted the content of this block',
   truncated: 'The source itself was not captured in full (truncated at the capture limit); the full text is not on disk',
@@ -399,7 +399,7 @@ export const TC_INPUT = Object.freeze({
   old: 'The request body is not in the session; see each one on the traffic page under the "token-count" class (retention: an older capture, length only)',
 })
 export const TC_MEASURED = (n) => `Measured ${n} tokens`
-export const OPAQUE_ROW = 'opaque — only a signature on the wire, no plaintext'
+export const OPAQUE_ROW = 'opaque — no plaintext on the wire'
 
 // ── the `?` key list (1.2 §键盘) ──────────────────────────────────────────────────────────────────────────────────────
 export const KEYS_TITLE = 'Keyboard'

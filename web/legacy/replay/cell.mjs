@@ -114,7 +114,7 @@ export function inlineText(b) {
       : `${b.name}${b.ttype ? ' · ' + b.ttype : ''}\nparams (names only): ${(b.props || []).join(', ') || '—'}\ndescription: ${kf(b.descChars)} chars captured — ${W.SCHEMA_NOT_KEPT}\n\n${W.TOOL_METADATA_ONLY}`
   }
   if (b.sec === 'system') return x.text
-  if (b.faithfulness === 'opaque') return String(rawContentText(x.block) || '') || '[Encrypted / redacted reasoning: the wire carries only a signature or ciphertext, no plaintext. There is nothing to restore verbatim.]'
+  if (b.faithfulness === 'opaque') return String(rawContentText(x.block) || '') || '[Reasoning without plaintext: the wire carries a signature or ciphertext at most. There is nothing to restore verbatim.]'
   return rawContentText(x.block ?? x.text)
 }
 
