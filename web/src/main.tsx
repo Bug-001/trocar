@@ -30,14 +30,14 @@ const SCREENS = {
   'session-link': () => import('../legacy/replay/session-link.mjs'),
   traffic: () => import('../legacy/traffic/traffic.mjs'),
   'traffic-host': () => import('../legacy/traffic/host.mjs'),
-  'settings-storage': () => import('../legacy/settings/storage.mjs'),
-  'settings-prices': () => import('../legacy/settings/prices.mjs'),
-  'settings-appearance': () => import('../legacy/settings/appearance.mjs'),
 }
 const REACT_SCREENS: Record<string, LazyScreen> = {
   overview: lazyScreen(() => import('./screens/overview/OverviewScreen')),
   capture: lazyScreen(() => import('./screens/capture/CaptureScreen')),
   'capture-log': lazyScreen(() => import('./screens/capture/CaptureLogScreen')),
+  'settings-storage': lazyScreen(() => import('./screens/settings/StorageScreen')),
+  'settings-prices': lazyScreen(() => import('./screens/settings/PricesScreen')),
+  'settings-appearance': lazyScreen(() => import('./screens/settings/AppearanceScreen')),
 }
 const PRELOADS = [...Object.values(SCREENS), ...Object.values(REACT_SCREENS).map((s) => s.load)] // the idle preload loads both kinds
 const isReact = (r: Route) => !r.unknown && Object.hasOwn(REACT_SCREENS, r.screen)

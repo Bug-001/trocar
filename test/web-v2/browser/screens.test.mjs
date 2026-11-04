@@ -6,6 +6,7 @@ import assert from 'node:assert/strict'
 import { probe, withBoard, stats, shoot, layoutFaults, timed, timerReads } from './harness.mjs'
 import { BOARD_LINES } from '../perf-lines.mjs'
 import { COMMANDS } from '../../../web/legacy/labels/capture.mjs'
+import { THEME_DARK, THEME_LIGHT } from '../../../web/legacy/labels/settings.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
@@ -92,11 +93,11 @@ async function driveEveryScreen(b, { width, theme }) {
   await first('traffic', 'a.trow', () => page.locator('.pagehead a', { hasText: /^all$/i }).first().click())
   await first('host', '.hrow', () => page.locator('a.trow').first().click())
   await first('request', '.rqd', () => page.locator('.hrow').first().click())
-  await first('storage', '#smain .scard', () => nav(page, '#/settings/storage'))
-  await first('prices', '.ptable tbody tr', () => nav(page, '#/settings/prices'))
-  await first('appearance', '[data-theme-choice]', () => nav(page, '#/settings/appearance'))
+  await first('storage', '#screen [role="radiogroup"]', () => nav(page, '#/settings/storage'))
+  await first('prices', '#screen .ptable tbody tr', () => nav(page, '#/settings/prices'))
+  await first('appearance', '[role="radio"][data-theme-choice]', () => nav(page, '#/settings/appearance'))
   const other = theme === 'dark' ? 'light' : 'dark'
-  samples.button.push(await timed(page, 'sel', `html[data-theme="${other}"]`, () => page.click(`[data-theme-choice="${other}"]`)))
+  samples.button.push(await timed(page, 'sel', `html[data-theme="${other}"]`, () => page.getByRole('radio', { name: other === 'dark' ? THEME_DARK : THEME_LIGHT }).click()))
   await shoot(page, 'appearance-switched', { width, theme })
 }
 
