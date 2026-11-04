@@ -35,7 +35,7 @@ import { openModal } from '../core/dom.mjs'
 import { keyAction } from './keymap.mjs'
 import { buildLanes, anchorLane, stepsOf, nearestByTs } from './lanes.mjs'
 import { createDesk, readLedger, applyLedger, indexOf, ridAt, stepOf as deskStep } from './model.mjs'
-import { parseLines, applyFile, applyHead } from './packs.mjs'
+import { lineSlices, applyFile, applyHead } from './packs.mjs'
 import { get, getText } from '../core/http.mjs'
 import { breakSteps } from './analysis.mjs'
 import { loadFold, saveFold } from './fold.mjs'
@@ -132,6 +132,16 @@ const yieldNow = () => (globalThis.scheduler && typeof globalThis.scheduler.yiel
   : typeof MessageChannel === 'function' ? new Promise((r) => { const c = new MessageChannel(); c.port1.onmessage = () => { c.port1.close(); r() }; c.port2.postMessage(0) })
     : new Promise((r) => setTimeout(r, 0)))
 const frame = (f) => (typeof requestAnimationFrame === 'function' ? requestAnimationFrame(f) : setTimeout(f, 16))
+// a read file's lines parsed in slices of at most SLICE_MS, yielding between them (2.3 §归约前沿: 分片解析, 片间让出)
+const SLICE_MS = 4
+async function parseSliced(src, opts) {
+  const g = lineSlices(src, opts)
+  for (let t = nowMs(); ;) {
+    const x = g.next()
+    if (x.done) return x.value
+    if (nowMs() - t > SLICE_MS) { await yieldNow(); t = nowMs() }
+  }
+}
 
 // ── the context window: one painter and one jump for both views ──────────────────────────────────────────────────────
 // `el` is the view's #ctxwin; what it shows is s.win (the header's interface)
@@ -230,6 +240,11 @@ function legacyView(s, framed) {
   const E = { saw: $('#saw'), rails: $('#rails'), deskhead: $('#deskhead'), stepbar: $('#stepbar'), ctxnav: $('#ctxnav'), resexp: $('#resexp'), rawpanel: $('#rawpanel'), detail: document.getElementById('detail') }
   const win = $('#ctxwin'), unwire = wireWindow(win, s)
   let roughMarked = false
+  // the lane's capacity, measured when its track is laid out or resized (a ResizeObserver), not by a style read per paint
+  let K = null
+  const track = E.saw && E.saw.querySelector('#sawrow')?.closest('.tkrow')
+  const ro = track && typeof ResizeObserver === 'function' ? new ResizeObserver(() => { const k = laneCapacity(E.saw); if (k !== K) { const was = K; K = k; if (was != null) s.refit?.() } }) : null
+  ro?.observe(track)
   const view = {
     root, els: () => E,
     head: () => renderSessionHead(E.deskhead, s),
@@ -255,8 +270,8 @@ function legacyView(s, framed) {
     window(d) { if (d) s.win = d; paintWindow(win, s) },
     reveal: (t) => revealIn(root, s, t),
     cellRoots: () => [root],
-    capacity: () => laneCapacity(E.saw),
-    dispose: unwire,
+    capacity: () => (ro && K != null && K !== Infinity ? K : (K = laneCapacity(E.saw))), // Infinity = not laid out yet: measured again
+    dispose: () => { ro?.disconnect(); unwire() },
   }
   framed(E)
   return view
@@ -321,7 +336,9 @@ function openDesk(ctx, route0, makeView = legacyView) {
   })
   s.jumpTo = (step, jump) => { setPlayhead(step, true); jumps.queue(s.playhead, jump) }
   s.queueJump = (jump) => jumps.queue(s.playhead, jump)
-  s.openDetail = (lane, i) => openDetail(E.detail, s, lane, i)
+  // the drawer as drawn: the selected call's row object and whether its step is held (refreshDrawer redraws on a change only)
+  let drawnDetail = null
+  s.openDetail = (lane, i) => { const c = lane.calls[i]; drawnDetail = c ? { row: s.desk.rows.get(c.rid) ?? c, held: heldAt(c) } : null; openDetail(E.detail, s, lane, i) }
   s.setPlayhead = setPlayhead
   // ‹ › and [ ] (1.3 §章): to global step g — at once when its row is here, else as a named step whose bars come from the head's cols
   s.chapterGo = (g) => {
@@ -412,10 +429,22 @@ function openDesk(ctx, route0, makeView = legacyView) {
   let inFrame = false, queued = false, busyTimer = null
   // the outline, the explorer and the raw panel follow the window in a task of their own (2.3 归约前沿: no task over 50 ms): a step of a
   // long session is the window's thousands of nodes plus the ledger's lists, and one task drew both. Several paints before it runs
-  // draw these once, for the playhead then.
-  let sideDue = false
+  // draw these once, for the playhead then. A tick's drawer opens in that task too, after them (2.3 §归约前沿: 打开着的调用抽屉在下一个任务里画)
+  let sideDue = false, sidesWanted = false, detailDue = null
   const drawRails = () => onEls(() => { renderRails(E.rails, s); watchRails() })
-  const drawSides = () => { if (sideDue) return; sideDue = true; yieldNow().then(() => { sideDue = false; if (!s.dead && s.anchor) { s.renderNav(); s.renderRaw() } }) }
+  const nextTask = () => {
+    if (sideDue) return
+    sideDue = true
+    yieldNow().then(() => {
+      sideDue = false
+      const d = detailDue; detailDue = null
+      if (s.dead) return
+      if (sidesWanted && s.anchor) { sidesWanted = false; s.renderNav(); s.renderRaw() }
+      if (d && E) s.openDetail(...d)
+    })
+  }
+  const drawSides = () => { sidesWanted = true; nextTask() }
+  s.openDetailNext = (lane, i) => { detailDue = [lane, i]; nextTask() }
   function drawPlayhead() {
     if (inFrame) { if (!queued) { queued = true; frame(() => { queued = false; if (!s.dead) paintPlayhead() }) } return }
     inFrame = true; frame(() => { inFrame = false })
@@ -473,11 +502,14 @@ function openDesk(ctx, route0, makeView = legacyView) {
     if (s.initialStep == null || !head || !head.tier || !head.steps) return false
     view.rough(Math.min(head.steps, s.initialStep) - 1, sawCapacity()); return true
   }
-  // the drawer was built from the rows of an earlier answer: repaint it for the selected tick
-  function refreshDrawer() {
+  // the drawer was built from the rows of an earlier answer: repaint it for the selected tick when its row or its held state changed
+  // (`always`: something else it draws changed, the price table)
+  function refreshDrawer(always = false) {
     if (!s.selTick || !E || !E.detail || !E.detail.classList.contains('open')) return
-    const l = s.lanes.find((x) => x.id === s.selTick.laneId)
-    if (l && l.calls[s.selTick.i]) openDetail(E.detail, s, l, s.selTick.i)
+    const l = s.lanes.find((x) => x.id === s.selTick.laneId), c = l && l.calls[s.selTick.i]
+    if (!c) return
+    const d = drawnDetail
+    if (always || !d || d.row !== (s.desk.rows.get(c.rid) ?? c) || d.held !== heldAt(c)) s.openDetail(l, s.selTick.i)
   }
 
   // ── navigation ───────────────────────────────────────────────────────────────────────────────────────────────────
@@ -651,10 +683,12 @@ function openDesk(ctx, route0, makeView = legacyView) {
         const r = await getText(`/api/d/p${p.n}.${part}`, { id: s.id }, { signal: join(signal, s.reads.signal) })
         if (gone()) break
         let parsed = null
-        try { parsed = r.ok && r.status === 200 ? parseLines(r.text) : null } catch { /* not the file's lines: a failure like any other */ }
+        try { parsed = r.ok && r.status === 200 ? await parseSliced(r.text) : null } catch { /* not the file's lines: a failure like any other */ }
+        if (gone()) break
         if (!parsed) { packFailed = true; if (s.playRid == null && s.initialStep != null) readFailed(r.ok ? { status: r.status, error: 'not the file\'s lines' } : r); break }
         // held once the desk holds it: a part whose apply threw, or never ran, is read again
-        applies.push(serial(() => { if (gone()) return; keep(`p${p.n}.${part}`, r.text.length); const ch = applyParsed({ kind: 'pack', n: p.n, part }, parsed); got.push(part); return redraw(ch) }))
+        applies.push(serial(() => { if (gone()) return; keep(`p${p.n}.${part}`, r.text.length); const ch = applyParsed({ kind: 'pack', n: p.n, part }, parsed); got.push(part); return { ch } })
+          .then((x) => x && redraw(x.ch)))
       }
     } catch (e) { err = e }
     // every apply settles before the pack's record is written, so a part still applying is neither held nor read twice
@@ -733,7 +767,7 @@ function openDesk(ctx, route0, makeView = legacyView) {
     if (!(await prices.load()) || s.dead) return
     s.pricing = prices.table(); s.pricingErr = prices.err()
     if (s.pricing) s.ctx.store.set({ pricing: s.pricing })
-    renderHeader(); if (s.anchor) { s.renderRaw(); refreshDrawer() }
+    renderHeader(); if (s.anchor) { s.renderRaw(); refreshDrawer(true) }
   }
 
   // one round in flight; a failed round backs off; the reader's own actions read at once (core/poll.mjs createPoller). A hidden tab and a
@@ -763,15 +797,14 @@ function openDesk(ctx, route0, makeView = legacyView) {
     if (!r.ok) return r
     if (r.status === 416) { const size = Number((/\/(\d+)/.exec(r.range || '') || [])[1]); return size === from ? { ok: true } : readTail(part, n, signal, true) }
     let parsed
-    try { parsed = parseLines(r.text, { head: r.status !== 206 }) } catch { return from == null ? { ok: false, status: r.status, error: 'not the file\'s lines' } : readTail(part, n, signal, true) }
+    try { parsed = await parseSliced(r.text, { head: r.status !== 206 }) } catch { return from == null ? { ok: false, status: r.status, error: 'not the file\'s lines' } : readTail(part, n, signal, true) }
     if (r.status !== 206 && parsed.head && parsed.head.tail && parsed.head.tail.n !== n) n = parsed.head.tail.n
     const used = (r.status === 206 ? from : 0) + parsed.used
     return serial(() => {
       tails.set(part, { n, used, tag: r.etag }); keep(`t.${part}`, used)
       const ch = applyParsed({ kind: 'tail', n, part, whole: r.status !== 206 }, parsed)
-      const anchor = !!ch && !!s.anchor && parsed.lines.some((l) => l.s && l.s.lane === s.anchor.id)
-      return redraw(ch).then((x) => ({ ok: true, anchor, x }))
-    })
+      return { ch, anchor: !!ch && !!s.anchor && parsed.lines.some((l) => l.s && l.s.lane === s.anchor.id) }
+    }).then(({ ch, anchor }) => redraw(ch).then((x) => ({ ok: true, anchor, x })))
   }
 
   // a poll round: the head (If-None-Match), then each open tail by Range; a newly sealed or changed pack is read by the loader (fill)
@@ -796,8 +829,8 @@ function openDesk(ctx, route0, makeView = legacyView) {
     }
     if (s.notListed) { s.notListed = false; root.classList.remove('notlisted') }
     // left while the head was on its way: the head is the round's last read (a detached desk sends no next read); attach's round reads the tails
-    if (!host) { if (h.data) await serial(() => redraw(null)); return { ok: true } }
-    if (h.data && s.playRid == null) await serial(() => redraw(null)) // the rough page from the head, before any file (2.3 §大致页面)
+    if (!host) { if (h.data) await redraw(null); return { ok: true } }
+    if (h.data && s.playRid == null) await redraw(null) // the rough page from the head, before any file (2.3 §大致页面)
     else if (moved) renderHeader()
     if (stale()) return
     const rs = head.open ? await Promise.all(['main', 'rest'].map((part) => readTail(part, head.open.n, signal))) : []
@@ -805,15 +838,26 @@ function openDesk(ctx, route0, makeView = legacyView) {
     const bad = rs.find((r) => !r.ok)
     if (bad) { s.staleErr = { r: bad, since: lastGood }; s.goodAt = lastGood }
     const caught = behind()
-    if (h.data || hadStale || bad) { await serial(() => redraw(h.data ? null : new Set())); renderHeader() } else if (caught) renderHeader()
+    if (h.data || hadStale || bad) { await redraw(h.data ? null : new Set()); renderHeader() } else if (caught) renderHeader()
     fill(true); reask()
     chainLedger(true, rs.some((r) => r.anchor))
     return bad ? { ok: false } : { ok: true, pending: head.pending || undefined }
   }
 
-  // after a file or a head: the lanes it changed (null = every lane, false = nothing applied) rebuilt, the playhead found again by its rid (or a named step landed), the redraw
-  async function redraw(changed) {
-    if (changed === false || s.dead) return
+  // after a file or a head: the lanes it changed (null = every lane, false = nothing applied) rebuilt, the playhead found again by its
+  // rid (or a named step landed), the redraw — in a task of its own on `serial`, after the apply (2.3 §归约前沿: 解析、应用、画之间让出).
+  // Applies queued before it runs share it: it redraws the union of their lanes.
+  let redrawDue = null
+  function redraw(changed) {
+    if (changed === false || s.dead) return Promise.resolve()
+    const d = redrawDue
+    if (d) { d.changed = d.changed === null || changed === null ? null : new Set([...d.changed, ...changed]); return d.p }
+    const due = redrawDue = { changed }
+    due.p = yieldNow().then(() => serial(() => { if (redrawDue === due) redrawDue = null; return redrawNow(due.changed) }))
+    return due.p
+  }
+  async function redrawNow(changed) {
+    if (s.dead) return
     const desk = s.desk, keepPins = pin(), prevRow = curCall()
     s.meta = desk.meta
     s.lanes = buildLanes(desk, { count: desk.probes || 0, series: [] }, { prev: s.lanes, changed })
