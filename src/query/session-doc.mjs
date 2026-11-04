@@ -10,7 +10,6 @@ import { compareStep } from '../view/step-order.mjs';
 import { COMP_KEYS } from '../view/blockmeta.mjs';
 import { FLAG } from '../view/head-cols.mjs';
 import { CACHE_STATES, cacheFacts, cacheState, isProblemBreak, usageOf } from '../view/metrics.mjs';
-import { callUsage } from '../model/schema.mjs';
 import { posCmp } from './projection.mjs';
 import { QueryArgError } from './named/index.mjs';
 
@@ -53,7 +52,7 @@ export const recOf = (r) => ({ id: String(r.id), ts_request: r.ts ?? null, is_ll
  *  fresh, out, NaN where the row has no number), its model (`md`, the models interned in `models` and `names`; −1: none) and its cache byte (`ca`, caOf), its comparison step's slot (`rf`, REF where it has none); the rids in step order, and each lane's rids and slots in step order (`by`, by lane int); the live lane keys. sync()
  *  brings them to the log's frontier from the lines past the last sync (and keeps the lane headers it reads: `heads`), each moved row taken out and put back by binary search: a
  *  warm state and a cold open build the same columns. */
-export const columns = (rows) => ({ at: -1, rows, slotOf: rows.slotOf, ts: [], ln: new Int32Array(0), uc: new Int32Array(0), cs: new Uint8Array(0),
+export const columns = (rows) => ({ at: -1, slotOf: rows.slotOf, ts: [], ln: new Int32Array(0), uc: new Int32Array(0), cs: new Uint8Array(0),
   cx: new Float64Array(0), cb: new Uint8Array(0), fl: new Uint8Array(0),
   ur: new Float64Array(0), uw: new Float64Array(0), uf: new Float64Array(0), uo: new Float64Array(0), md: new Int32Array(0), ca: new Uint8Array(0), rf: new Int32Array(0),
   models: new Map(), names: [], keys: new Map(), order: [], by: [], lanes: new Set(), heads: new Map(), its: null, sorted: null });
@@ -82,18 +81,12 @@ function modelInt(cols, m) {
   if (v === undefined) { cols.models.set(m, (v = cols.names.length)); cols.names.push(m); }
   return v;
 }
-// A row's write counter. The stored row says 0 for a wire that reports none too; the call's own usage tells that from a reported 0 (3.2: NULL, never 0).
-function writeOf(cols, u, rid) {
-  if (u.create !== 0) return u.create;
-  const c = callUsage(cols.rows.get(rid).x);
-  return c ? c.cache_write : 0;
-}
 /** The `rf` column where it holds no slot: the row has no comparison step; it names one the projection has no row for. */
 export const REF = Object.freeze({ NONE: -1, UNKNOWN: -2 });
 // slot k's usage, model, cache byte and comparison step, of the row `r` (null: no row)
 function factsInto(cols, k, r) {
   const u = r && usageOf(r), rq = r && r.rec && r.rec.request;
-  cols.ur[k] = numOf(u && u.read); cols.uw[k] = numOf(u && writeOf(cols, u, r.rid)); cols.uf[k] = numOf(u && u.fresh); cols.uo[k] = numOf(u && u.out);
+  cols.ur[k] = numOf(u && u.read); cols.uw[k] = numOf(u && u.create); cols.uf[k] = numOf(u && u.fresh); cols.uo[k] = numOf(u && u.out);
   cols.md[k] = modelInt(cols, rq && rq.model); cols.ca[k] = r ? caOf(r) : 0;
   const ref = r && r.cacheBreak ? r.cacheBreak.refRid ?? null : null;
   cols.rf[k] = ref == null ? REF.NONE : cols.slotOf(ref) ?? REF.UNKNOWN;
@@ -107,12 +100,8 @@ export const modelAt = (cols, k) => (cols.md[k] < 0 ? null : cols.names[cols.md[
 /** stateAt(cols, k) → slot k's state of CACHE_STATES (a slot that holds a row). */
 export const stateAt = (cols, k) => CACHE_STATES[cols.ca[k] & CA.STATE];
 /** wireRow(cols, r) → the fold log's row as an answer serves it: with its `cache` (3.5 §会话读), a function of the row and its comparison
- *  step's usage, which the columns hold (asked for only on a break), and its `usage.create` null where the wire reports no write counter.
- *  Every path that serves a row serves this. */
-export function wireRow(cols, r) {
-  const k = cols.slotOf(r.rid);
-  return { ...r, ...(r.usage && Number.isNaN(cols.uw[k]) ? { usage: { ...r.usage, create: null } } : null), cache: cacheFacts(r, refAt(cols, k)) };
-}
+ *  step's usage, which the columns hold (asked for only on a break). Every path that serves a row serves this. */
+export const wireRow = (cols, r) => ({ ...r, cache: cacheFacts(r, refAt(cols, cols.slotOf(r.rid))) });
 // The largest composition bucket (its index in COMP_KEYS, high 4 bits) and its share of the composition in 15ths (low 4 bits).
 function compByte(comp) {
   let top = -1, max = 0, sum = 0;

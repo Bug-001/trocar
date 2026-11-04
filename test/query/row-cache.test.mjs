@@ -24,14 +24,14 @@ const SWAPPED = [...TOOLS].reverse()
 const usage = (read, create, fresh = 10) => ({ input_tokens: fresh, output_tokens: 5, cache_read_input_tokens: read, cache_creation_input_tokens: create })
 // the conversation at its n-th question
 const talk = (n) => Array.from({ length: 2 * n - 1 }, (_, i) => (i % 2 ? { role: 'assistant', content: [{ type: 'text', text: `a${(i + 1) / 2}` }] } : { role: 'user', content: [{ type: 'text', text: `q${i / 2 + 1}` }] }))
-/** One Anthropic session from its steps {n: question, messages?, tools?, usage?, status?, model?} (no `usage`: the reply has none). */
+/** One Anthropic session from its steps {n: question, messages?, tools?, usage?, status?, model?, host?} (no `usage`: the reply has none). */
 function writeSession(home, id, steps) {
   fs.mkdirSync(path.join(home, 'raw'), { recursive: true })
-  const lines = steps.map(({ n, messages = talk(n), tools = TOOLS, usage: u, status = 200, model = 'claude-opus-4-8' }, i) => {
+  const lines = steps.map(({ n, messages = talk(n), tools = TOOLS, usage: u, status = 200, model = 'claude-opus-4-8', host = 'api.anthropic.com' }, i) => {
     const ts = `2026-10-22T10:00:${String(i).padStart(2, '0')}.000Z`
     const body = status === 200 ? { id: `msg_${i}`, model, stop_reason: 'end_turn', content: [{ type: 'text', text: `a${n}` }], ...(u ? { usage: u } : null) } : { type: 'error', error: { type: 'api_error', message: 'boom' } }
-    return JSON.stringify({ ts, endpoint: '/v1/messages', method: 'POST', id: `req_${i}`, ts_request: ts, is_llm_call: true, capture: 'transparent', host: 'api.anthropic.com', traffic_class: 'llm',
-      req_headers: { host: 'api.anthropic.com', 'content-type': 'application/json', 'user-agent': 'claude-cli/2.0.0 (external, cli)', 'x-claude-code-session-id': id },
+    return JSON.stringify({ ts, endpoint: '/v1/messages', method: 'POST', id: `req_${i}`, ts_request: ts, is_llm_call: true, capture: 'transparent', host, traffic_class: 'llm',
+      req_headers: { host, 'content-type': 'application/json', 'user-agent': 'claude-cli/2.0.0 (external, cli)', 'x-claude-code-session-id': id },
       req_body: JSON.stringify({ model, max_tokens: 1024, tools, system: [{ type: 'text', text: 'You are a coding assistant.' }], messages }),
       resp: { status, kind: 'json', body }, proc: { pid: 1, exe: '/x/claude', agent: 'claude-code' } })
   })
@@ -120,6 +120,23 @@ test('3.5 #45 one value: a rid\'s cache is the same in session, session --since,
     assert.ok(rows.some((r) => r.cache.break), `${name}: a break among them`)
     for (const r of rows) assert.deepEqual(r.cache, byRid.get(r.rid), `${name} ${r.rid}`)
   }
+})
+
+test('3.5 #45 #48 the columns read no row of the projection: a build over rows that cannot be read gives the same usage, NULL write counters and all', async () => {
+  const home = homeOf(), key = ID
+  writeSession(home, key, [
+    { n: 1, usage: usage(0, 900) },
+    { n: 2, usage: usage(900, 0) },
+    { n: 3, usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 900 } }, // no write counter at all
+  ].map((s) => ({ ...s, host: 'api.deepseek.com' })))
+  while (await extendSession({ home, writer: true }, key, Infinity));
+  const doc = await session(home, { id: key })
+  assert.deepEqual(doc.calls.map((r) => r.usage.create), [900, 0, null], 'a reported 0 stays 0, an unreported counter is NULL')
+  const p = openProjection({ home, fs, key, write: false }), log = openFoldLog({ home, fs, key, write: false, projection: { id: p.id, bytes: p.bytes } })
+  const unread = { slotOf: p.rows.slotOf, get() { throw new Error('a read of a projection row') } }
+  const cols = sync(columns(unread), log)
+  for (const r of doc.calls) assert.deepEqual(usageAt(cols, p.rows.slotOf(r.rid)), r.usage, r.rid)
+  log.close()
 })
 
 test('3.5 #15: columns from the sidecar read as a sync from scratch; a sidecar without them is no sidecar, and the answer stays the same bytes', async () => {
