@@ -134,18 +134,74 @@ export function dissectBlocks(req) {
   const messages = Array.isArray(req?.messages) ? req.messages : [];
   for (let mi = 0; mi < messages.length; mi++) {
     const m = messages[mi];
-    if (Array.isArray(m.content)) {
+    if (Array.isArray(m?.content)) {
       for (let bi = 0; bi < m.content.length; bi++) {
         const b = m.content[bi]; // raw element (usually an object, rarely a bare string)
         spine.push({ section: 'messages', seq: seq++, role: m.role, parsed: b, path: { mi, bi, arrayContent: true }, volatile: false, resourceRef: resourceRef(b) });
       }
     } else {
       // whole content is a string (or missing) → ONE synthesized text block (matches both parsers)
-      const parsed = { type: 'text', text: m.content };
-      spine.push({ section: 'messages', seq: seq++, role: m.role, parsed, path: { mi, bi: 0, arrayContent: false }, volatile: false, resourceRef: resourceRef(parsed) });
+      const parsed = { type: 'text', text: m?.content };
+      spine.push({ section: 'messages', seq: seq++, role: m?.role, parsed, path: { mi, bi: 0, arrayContent: false }, volatile: false, resourceRef: resourceRef(parsed) });
     }
   }
   return spine;
+}
+
+// ── rule blocks (5.1 按块改): the one description rule code reads, whatever the wire. Each wire hands its canonical blocks here
+// as entries { section, role, block, base, sub, shared }: `base` = the path of the message or item, `sub` = the block's path
+// within it (the board's locator), `shared` = other blocks live in the same message. A block's text is offered only when one
+// string node holds exactly it, so text_path always leads to text; a text assembled from several nodes, or derived from a
+// non-string, is null. A key of a message (sub of one key) goes with its message unless it shares it.
+const nodeAt = (root, path) => path.reduce((n, k) => (n == null ? undefined : n[k]), root);
+const str = (x) => (typeof x === 'string' ? x : '');
+const TEXT_KEYS = ['text', 'thinking', 'refusal', 'description', 'content', 'output'];
+const textPathOf = (node, path, text) => {
+  if (typeof text !== 'string') return null;
+  if (node === text) return path;
+  const key = node && typeof node === 'object' ? TEXT_KEYS.find((k) => node[k] === text) : undefined;
+  return key ? [...path, key] : null;
+};
+const textOf = (b) => [b?.text, b?.thinking, b?.content].find((x) => typeof x === 'string');
+// the wire's own naming, as the board reads it: a server-run tool's call and result, redacted thinking; anything else is JSON
+const kindOf = (type) => {
+  const t = str(type);
+  if (t === 'text' || t === 'image' || t === 'tool_use') return t;
+  if (t.endsWith('_tool_use')) return 'server_tool_use';
+  if (t.endsWith('tool_result')) return 'tool_result';
+  return t.endsWith('thinking') ? 'thinking' : 'json';
+};
+// every wire keeps its tools in top-level tools[]; Chat nests the definition under `function`
+const toolEntries = (req) => (Array.isArray(req?.tools) ? req.tools : []).map((t, i) => {
+  const fn = typeof t?.function?.description === 'string' ? t.function : null;
+  return { section: 'tools', role: 'tool', block: { name: t?.function?.name || t?.name || t?.type, text: (fn || t)?.description }, base: ['tools', i], sub: fn ? ['function'] : [] };
+});
+export function ruleBlocksFrom(req, entries) {
+  const names = new Map();
+  for (const { block: b } of entries) if (str(b?.type).endsWith('tool_use')) names.set(b.id, str(b.name));
+  const ordered = [...toolEntries(req), ...entries.filter((e) => e.section === 'system'), ...entries.filter((e) => e.section !== 'system')];
+  return ordered.flatMap(({ section, role, block, base, sub, shared }) => {
+    const kind = section === 'tools' ? 'tool' : section === 'system' ? 'system' : kindOf(block?.type);
+    const name = kind === 'tool_result' ? names.get(block.tool_use_id) ?? '' : str(block?.name);
+    const out = (node, path, text, remove_path) => {
+      const text_path = textPathOf(node, path, text);
+      return { section, kind, role: str(role), name, text: text_path ? text : null, text_path, remove_path };
+    };
+    const path = [...base, ...sub], node = nodeAt(req, path);
+    if (kind === 'tool_result') { // a result that is a list: each part is a block of its own
+      const key = ['content', 'output'].find((k) => Array.isArray(node?.[k]));
+      const parts = key ? node[key] : node, at = key ? [...path, key] : path;
+      if (Array.isArray(parts) && parts.length) return parts.map((p, k) => out(p, [...at, k], typeof p === 'string' ? p : p?.text, [...at, k]));
+    }
+    return [out(node, path, textOf(block), sub.length === 1 && !shared ? base : path)];
+  });
+}
+export function ruleBlocks(req) {
+  return ruleBlocksFrom(req, dissectBlocks(req).filter((e) => e.section !== 'tools').map(({ section, role, parsed, path }) => ({
+    section, role, block: typeof parsed === 'string' ? { type: 'text', text: parsed } : parsed,
+    base: section === 'system' ? (path.str ? ['system'] : ['system', path.i]) : path.arrayContent ? ['messages', path.mi, 'content', path.bi] : ['messages', path.mi],
+    sub: section === 'messages' && !path.arrayContent ? ['content'] : [],
+  })));
 }
 
 // 3.2:52 context_state 'server_edited': the RESPONSE reports that the server edited the context it was
