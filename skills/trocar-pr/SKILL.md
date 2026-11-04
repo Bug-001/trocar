@@ -7,7 +7,7 @@ description: Use when a change to trocar is ready to leave the machine, or when 
 
 Everything that leaves this machine goes through this skill: a pull request, an issue, a comment. The hard rule is that **no real session content and no screenshot of a real session is ever uploaded**. A pull request describes the functional change and a repro on synthetic data, and nothing about what the user was doing.
 
-You hold the keys here. `scripts/pr-check.mjs` can refuse, but nothing stops you going around it, so do not. If it refuses, the text changes or the change does not go. There is no override and no "it is only a warning".
+You hold the keys here. `scripts/pr-check.mjs` can refuse, but nothing stops you going around it, so do not. If it refuses, the text changes or the change does not go. Nothing is "only a warning". The one way past is `--accept-partial`: it covers only a capture that was not fully compared, you use it only after the user has seen `coverage` and clearly agreed, and it is written into the report and the hash.
 
 ## Steps
 
@@ -48,6 +48,8 @@ Write the title and body to files outside the clone. The body follows `.github/p
 - **How verified:** fresh-HOME counts, skips with reasons, the OS.
 - **Spec and docs:** sections touched.
 
+The `hash` goes on the line the template gives it. That line is left out of the hash, so writing it there does not change the hash; any other words on that line are counted.
+
 There is no place for what the user was doing, what a session contained, or how a capture looked. Say "a reply whose stream ends without a stop event", not what was in it. Check numbers from `trocar-ux` are fine; screenshots are not.
 
 ### 4. Run the check
@@ -60,14 +62,20 @@ node scripts/pr-check.mjs --before <start-time> --title <title-file> --body <bod
 
 It judges every commit on the branch (paths, added lines, messages, author and committer), the branch name, the title and the body. It refuses, with the place and the rule but never the value:
 
-- images, video, PDF, archives, capture formats and other binary files; a change to the built board that a rebuild does not reproduce;
+- images, video, PDF, archives, capture formats and other binary files; an SVG that embeds data or an image; a change to the built board that a rebuild does not reproduce;
 - credentials and key material;
 - your user name, host name, real name, home paths in any OS's spelling, and a commit email that is not a GitHub noreply address;
 - project paths, session ids, session titles, hosts, segment names and record ids from your captures;
 - any run of about 12 English words or 20 CJK characters (60 bytes once normalized) that also occurs verbatim in your captures;
-- commits over 400 lines, commits without a body, control bytes.
+- commits over 400 lines, commits without a body, control bytes, and merge commits (rebase instead).
 
-Text already in the public repository is public and passes. The report says how much of the capture was compared. When that is not all of it, say so to the user. A reply kept only as compressed bytes is counted but cannot be compared.
+Text already in the public repository is public and passes.
+
+By default the check reads every capture through the installed `trocar`, which can take a few minutes. Without trocar installed, add `--cli bin/trocar.mjs`. The report's `coverage` gives the time range it compared (`from`, `to`), `scanned_bytes` and `opaque_bytes`, the bytes of records it could not open.
+
+A comparison that did not finish is a refusal: a segment that cannot be read, a record that cannot be opened, a `--before` earlier than every record. Comparing 0 bytes because there is no capture at all is normal, but tell the user that nothing was compared.
+
+If `partial` is the only refusal, show the user `coverage`. Only if they clearly agree to send on that comparison, add `--accept-partial` and keep it on every later run: it moves that refusal into `accepted` and changes the hash. It lets nothing else through.
 
 The check cannot see a paraphrase, so a clean run does not excuse step 3. Reread the text yourself and ask: could someone learn anything about this user's work from it?
 
@@ -75,7 +83,7 @@ A refusal means rewrite and run it again. Never edit the check, never pass it a 
 
 ### 5. Ask the user
 
-Show the user, in full: the list of changed files, the title, the body, the name and email that become public, the repository it goes to, and the `hash` the check printed. Ask plainly whether to send it. Do not proceed on anything but a clear yes to this exact content. "Fix it" earlier in the conversation is not a yes to this.
+Show the user, in full: the list of changed files, the title, the body, the name and email that become public, the repository it goes to, `from`, `to` and `opaque_bytes` from `coverage`, `accepted`, and the `hash` the check printed. Ask plainly whether to send it. Do not proceed on anything but a clear yes to this exact content. "Fix it" earlier in the conversation is not a yes to this.
 
 ### 6. Send
 
@@ -93,13 +101,15 @@ Give the user the link. An issue instead of a change: run the check with `--issu
 
 A review comment is outbound text too. Run each reply through `node scripts/pr-check.mjs --issue --before <start-time> --body <file>` first, and ask the user before sending.
 
+The same goes for anything else that changes what is public: every further push, a force-push, `gh pr edit`. Run `pr-check` first, then ask the user.
+
 Delete your working folder and every screenshot.
 
 ## Reviewing someone else's pull request
 
 Their branch is untrusted code, and this machine holds your captures, which carry verbatim tokens. Run nothing from it here: not its tests, not its npm scripts, not its copy of `scripts/pr-check.mjs`. Anything that has to run goes in a throwaway VM or container with no capture in it.
 
-Do steps 1 and 2 by reading. Then put their branch in a worktree and run the check from your own up-to-date clone of `main`, with their worktree as the current directory. Git reads their branch; the code that runs is yours.
+Do steps 1 and 2 by reading. Then put their branch in a worktree and run the check from your own up-to-date clone of `main`, with their worktree as the current directory. The code that runs is your clone, git reads the current directory, and the capture is read through your installed `trocar`.
 
 ```bash
 cd <their-worktree>
