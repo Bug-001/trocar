@@ -4,6 +4,7 @@
 // step cost. Money is worked out per answer from the current price table and goes into no answer file (prices are not captured truth,
 // D14), so this reads the session's columns, and a row's line only for a cache break. Sums run in step order: the same columns and
 // prices give the same bytes. The default document stays the same size however long the session is; what grows with it is in windows.
+// In the worker it is summed at most every ANALYSIS_EVERY_MS while the session moves; its `mark` says how old the sums are.
 import { QueryArgError } from './index.mjs';
 import { markOn, sessionState, sinceAt, version as sessionVersion } from './session.mjs';
 import { priceTable, pricingId } from './pricing.mjs';
@@ -23,6 +24,8 @@ export const params = Object.freeze(Object.keys(about.params));
 
 /** The bound on a window's `usd` and `breaks` together (3.5 §会话读「`analysis`」). */
 export const ANALYSIS_PAGE_BYTES = 64 * 1024;
+/** How often the worker sums a session's default document while its version moves: the board's `INTERVAL.other` (3.5 节流). */
+export const ANALYSIS_EVERY_MS = 30_000;
 const EASE_ROWS = 2000; // the rows summed between two turns of the event loop
 const bytesOf = (v) => Buffer.byteLength(JSON.stringify(v));
 const EMPTY_PAGE = bytesOf({ usd: {}, breaks: [] });
@@ -119,13 +122,33 @@ function windowOf(st, { step }, { from, to, since }) {
 }
 
 const one = (v) => (v == null || v === '' ? null : String(v));
+const windowsIn = ({ from, to, since }) => [from, to, since].filter((v) => one(v) != null).length;
+
+// THE THROTTLE (3.5 节流): the sums the worker last made of a session's default document, by home and id, oldest out first. Between
+// two sums `version` says null while the session has moved on: those sums are not this version's, so they must be neither kept under
+// it nor tagged. Kept, they would stay the answer once the session stops growing; tagged, the daemon would answer 304 on them.
+const HELD_SESSIONS = 8;
+const held = new Map();
+const heldAt = ({ home, params }) => `${home}\n${one(params.id)}`;
+const priceOf = (ctx) => JSON.stringify(pricingId(ctx));
+function standing(ctx, price) {
+  if (ctx.writer !== true || windowsIn(ctx.params)) return null;
+  const h = held.get(heldAt(ctx));
+  return h && (ctx.now || Date.now)() - h.at < ANALYSIS_EVERY_MS && h.price === price ? h : null;
+}
+function hold(ctx, entry) {
+  const at = heldAt(ctx);
+  held.delete(at);
+  held.set(at, entry);
+  if (held.size > HELD_SESSIONS) held.delete(held.keys().next().value);
+}
 
 export async function run(ctx) {
   const { params: p, errors } = ctx, id = one(p.id), asked = { from: one(p.from), to: one(p.to), since: one(p.since) };
   if (id == null) throw new QueryArgError('trocar query analysis: --id is required (a session id; `trocar query sessions` lists them)');
-  const windows = Object.values(asked).filter((v) => v != null).length;
+  const windows = windowsIn(asked);
   if (windows > 1) throw new QueryArgError('trocar query analysis: give at most one of --from, --to and --since');
-  const { table, source, problem } = priceTable(ctx);
+  const price = priceOf(ctx), { table, source, problem } = priceTable(ctx);
   if (problem) errors.push(problem);
   const st = await sessionState(ctx, id);
   if (!st) {
@@ -136,8 +159,12 @@ export async function run(ctx) {
   errors.push(...st.errors, ...st.failed.map((f) => ({ where: f.id, code: f.code, reason: f.reason })));
   const priced = pricer(st.V, table), head = { mark: markOn(st.plan, st.mark), ...(st.pending ? { pending: st.pending } : null), truncated: st.truncated };
   if (!windows) {
-    const { models, totals } = await totalsOf(ctx, st.V, priced);
-    return { ...head, pricing: { source, models }, totals };
+    // only the sums are held: `pending` is this moment's, and sums made while folding end with it, so the answer without it is whole
+    const h = standing(ctx, price);
+    if (h && (st.pending || !h.partial)) return { mark: h.mark, ...(st.pending ? { pending: st.pending } : null), truncated: h.truncated, pricing: h.pricing, totals: h.totals };
+    const { models, totals } = await totalsOf(ctx, st.V, priced), pricing = { source, models };
+    if (ctx.writer === true) hold(ctx, { at: (ctx.now || Date.now)(), price, key: (await versionNow(ctx)).key, partial: !!st.pending, mark: head.mark, truncated: st.truncated, pricing, totals });
+    return { ...head, pricing, totals };
   }
   const { base, page, prev, next } = windowOf(st, priced, asked);
   return {
@@ -146,9 +173,15 @@ export async function run(ctx) {
   };
 }
 
-/** version(ctx) → the session's version and the price identity: a new price is a new answer, as the stamp says too (the stamp alone
- *  would let the worker answer 304 on an equal version, the version alone would let the daemon answer it on an equal stamp). */
-export async function version(ctx) {
+async function versionNow(ctx) {
   const v = await sessionVersion(ctx);
   return v && { key: JSON.stringify([v.key, pricingId(ctx)]), errors: v.errors };
+}
+
+/** version(ctx) → the session's version and the price identity: a new price is a new answer, as the stamp says too (the stamp alone
+ *  would let the worker answer 304 on an equal version, the version alone would let the daemon answer it on an equal stamp). null
+ *  while the throttle holds sums of another version. */
+export async function version(ctx) {
+  const v = await versionNow(ctx), h = v && standing(ctx, priceOf(ctx));
+  return h && h.key !== v.key ? null : v;
 }
