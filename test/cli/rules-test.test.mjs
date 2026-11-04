@@ -113,7 +113,7 @@ test('V117: a script runs only with --run-script, and its console comes back', a
 test('V115: --run-script runs the file on disk now, whatever the rule recorded when it was enabled', async () => {
   const body = (word) => `export default (m) => m.text.replace('ALPHA', '${word}')`
   const script = scriptFile(body('OLD'))
-  const s = sandbox([rule({ name: 'scripted', do: [{ script }], script_sha256: sha(body('OLD')) })], [record()])
+  const s = sandbox([rule({ name: 'scripted', do: [{ script }], script_entry_sha256: sha(body('OLD')) })], [record()])
   const first = await rulesTest(s, 'scripted', '--ref', refOf(1), '--run-script')
   assert.deepEqual(results(first.doc), ['change'])
   fs.writeFileSync(script, 'export default () => { console.log("the new one") }')

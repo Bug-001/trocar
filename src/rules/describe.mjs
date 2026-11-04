@@ -36,7 +36,7 @@ export function summaryOf(written) {
 
 /** The sha256 of the rule as written, without what `rules enable` writes into it. */
 export function ruleSha256(rule) {
-  const { armed: _armed, armed_at: _at, script_sha256: _script, ...written } = rule
+  const { armed: _armed, armed_at: _at, script_entry_sha256: _script, ...written } = rule
   return createHash('sha256').update(JSON.stringify(written)).digest('hex')
 }
 

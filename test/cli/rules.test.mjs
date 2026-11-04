@@ -88,7 +88,7 @@ test('V115: every kind of rule that may not be written is exit 2 rule-invalid an
     'unknown key': rule({ armd: true }),
     'armed': rule({ armed: { off: 0, rules: 0 } }),
     'armed_at': rule({ armed_at: '2026-11-05T10:00:00.000Z' }),
-    'script_sha256': rule({ script_sha256: 'a'.repeat(64) }),
+    'script_entry_sha256': rule({ script_entry_sha256: 'a'.repeat(64) }),
     'script reading match.body': rule({ match: { harness: 'any', host: 'x.example', body: 'a' }, do: [{ script: '/tmp/s.mjs' }] }),
     'script reading match.blocks': rule({ match: { harness: 'any', host: 'x.example', blocks: { type: 'text' } }, do: [{ script: '/tmp/s.mjs' }] }),
     'script with a regex condition': rule({ match: { harness: 'any', host: 'x.example', path: { re: '^/v' } }, do: [{ script: '/tmp/s.mjs' }] }),
@@ -239,7 +239,7 @@ test('V115 (5.1): no engine yet: rules enable is exit 1 engine-unsupported for e
 
 test('§4.4, C.1: disable takes back what enable wrote and its undo is the enable line; a rule already off has nothing to undo', async () => {
   const s = sandbox()
-  seed(s, [rule({ ...armed, name: 'one' }), rule({ ...armed, name: 'two', script_sha256: 'b'.repeat(64) }), rule({ name: 'three' })])
+  seed(s, [rule({ ...armed, name: 'one' }), rule({ ...armed, name: 'two', script_entry_sha256: 'b'.repeat(64) }), rule({ name: 'three' })])
   const { exit, doc } = await rules(s, ['disable', 'one', 'two'])
   assert.equal(exit, 0)
   valid(doc)
@@ -247,7 +247,7 @@ test('§4.4, C.1: disable takes back what enable wrote and its undo is the enabl
   assert.deepEqual(doc.held, { released: 0, cut: 0 })
   assert.equal(doc.loaded, null)
   assert.equal(doc.undo, 'trocar rules enable one two')
-  for (const r of stored(s).rules) for (const key of ['armed', 'armed_at', 'script_sha256']) assert.equal(Object.hasOwn(r, key), false, `${r.name}.${key}`)
+  for (const r of stored(s).rules) for (const key of ['armed', 'armed_at', 'script_entry_sha256']) assert.equal(Object.hasOwn(r, key), false, `${r.name}.${key}`)
   assert.equal((await rules(s, ['disable', 'three'])).doc.undo, null)
 })
 
@@ -271,7 +271,7 @@ test('V116: no daemon: rules off writes every rule off, exit 0, memory no-daemon
   assert.equal(exit, 0)
   valid(doc)
   assert.equal(doc.memory, 'no-daemon')
-  assert.equal(Object.hasOwn(doc, 'stats'), false, 'C.2: no stats key unless the memory stopped')
+  assert.equal(Object.hasOwn(doc, 'seq'), false, 'C.2: no seq key unless the memory stopped')
   assert.deepEqual(doc.file, { written: true, reason: null })
   assert.deepEqual(doc.rules, [{ name: 'on-one', state: 'disabled' }])
   assert.deepEqual(stored(s).rules.map((r) => Object.hasOwn(r, 'armed')), [false, false])

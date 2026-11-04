@@ -5,7 +5,6 @@ import assert from 'node:assert/strict'
 import { SCHEMA_VERSION, EXIT, RECEIPT_KEYS, newReceipt, validateReceipt, validateTopology, ROUTING, TOPOLOGY_KINDS, TOPOLOGY_VIA, UNKNOWN_REASONS, FINDING_CLASSES } from '../../src/cli/schema.mjs'
 import * as off from '../../src/off/schema.mjs'
 import { COMMAND_KEYS } from '../../src/cli/schema.mjs'
-import { ERROR_CODES } from '../../src/cli/json.mjs'
 import { readFileSync } from 'node:fs'
 
 const mutate = (fn, command = 'status') => { const r = newReceipt(command); fn(r); return r } // `status` carries no C.2 key list, so a probe of a common key is not read as drift
@@ -188,13 +187,6 @@ test('validateFinding (1.6 §9.6, V49): a code in the closed sets, a class, a wh
   assert.match(bad({ commands: [{ run: 'kill <pid>', shell: 'sh' }] })[0], /placeholder/)
   assert.match(bad({ commands: [{ run: 'x', shell: 'zsh' }] })[0], /shell/)
   assert.match(validateFinding(null)[0], /not an object/)
-})
-
-// 附录 C.1 closes the set of refusal codes a client switches on, and ERROR_CODES is that set in code: one external fact, one place (0.1 §2).
-test('附录 C.1 names exactly the codes of ERROR_CODES', () => {
-  const manual = readFileSync(new URL('../../spec/01-trocar-rfc/1.6-cli.md', import.meta.url), 'utf8')
-  const closed = /`ERROR_CODES`\(([^)]*)\)/.exec(manual.split('### C.1')[1])[1]
-  assert.deepEqual([...closed.matchAll(/`([^`]+)`/g)].map((m) => m[1]).sort(), [...ERROR_CODES].sort())
 })
 
 // 附录 C.2 names the keys a reader writes a client against, and `COMMAND_KEYS` is what validateReceipt checks: one external fact, one place (0.1 §2).

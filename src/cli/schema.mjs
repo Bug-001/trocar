@@ -24,7 +24,7 @@ export const COMMAND_KEYS = Object.freeze({
   'rules enable': RULE_SWITCH_KEYS,
   'rules disable': RULE_SWITCH_KEYS,
   'rules rm': RULE_SWITCH_KEYS,
-  'rules off': Object.freeze(['rules', 'memory', 'file', 'stats', 'held', 'notes']),
+  'rules off': Object.freeze(['rules', 'memory', 'file', 'seq', 'held', 'notes']),
   'rules max-delay': Object.freeze(['max_delay_ms', 'before', 'loaded']),
   'rules test': Object.freeze(['rule', 'input', 'with_live', 'run_script', 'counts', 'records', 'rule_ms', 'over_max_delay', 'passthrough_hosts', 'notes']),
   'held show': Object.freeze(['id', 'harness', 'pid', 'on', 'method', 'host', 'path', 'rules', 'since', 'waited_ms', 'left_ms', 'on_timeout', 'body_bytes', 'edited', 'headers']),

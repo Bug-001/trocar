@@ -56,7 +56,7 @@ async function world(platform, reply) {
 const json = (status, body) => (req, res) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)) }
 const valid = (doc) => assert.deepEqual(validateReceipt(doc), [])
 
-const STOPPED = { held: { released: 2, cut: 1 }, stats: { written: true, reason: null } }
+const STOPPED = { held: { released: 2, cut: 1 }, seq: { written: true, reason: null } }
 
 test('the seam: add, disable, rm and max-delay POST /rules/reload and off POST /rules/off, on each platform\'s real endpoint, with its token', async () => {
   for (const platform of Object.keys(WORLDS)) {
@@ -96,7 +96,7 @@ test('C.2: disable and rm pass on what the daemon released and cut', async () =>
   } finally { await w.close() }
 })
 
-test('V116: the daemon answers: memory stopped, its stats and held passed on, file written, exit 0', async () => {
+test('V116: the daemon answers: memory stopped, its seq and held passed on, file written, exit 0', async () => {
   const w = await world('darwin', json(200, STOPPED))
   try {
     w.seed([rule(armed)])
@@ -104,7 +104,7 @@ test('V116: the daemon answers: memory stopped, its stats and held passed on, fi
     assert.equal(exit, 0)
     valid(doc)
     assert.equal(doc.memory, 'stopped')
-    assert.deepEqual(doc.stats, STOPPED.stats)
+    assert.deepEqual(doc.seq, STOPPED.seq)
     assert.deepEqual(doc.held, STOPPED.held)
     assert.deepEqual(doc.file, { written: true, reason: null })
   } finally { await w.close() }
@@ -138,10 +138,10 @@ test('5.1: rules off does not wait on the lock to stop the rules: with rules.loc
   } finally { await w.close() }
 })
 
-test('V116: the daemon stopped but the file cannot be written: exit 1 rules-unwritable, memory still stopped, stats.written reported either way', async () => {
+test('V116: the daemon stopped but the file cannot be written: exit 1 rules-unwritable, memory still stopped, seq.written reported either way', async () => {
   for (const written of [true, false]) {
     // What a real daemon does before it answers (5.1): the stop goes into rules-state.json, or it could not be written and the reply says so.
-    const say = json(200, { ...STOPPED, stats: { written, reason: written ? null : 'ENOSPC' } })
+    const say = json(200, { ...STOPPED, seq: { written, reason: written ? null : 'ENOSPC' } })
     const w = await world('darwin', (req, res) => { if (written) fs.writeFileSync(rulesState(w.trocar), JSON.stringify({ rules_off_seq: 1 })); say(req, res) })
     w.seed([rule(armed)])
     fs.chmodSync(w.trocar, 0o500)
@@ -152,7 +152,7 @@ test('V116: the daemon stopped but the file cannot be written: exit 1 rules-unwr
       assert.equal(doc.error.code, 'rules-unwritable')
       assert.equal(doc.memory, 'stopped')
       assert.equal(doc.file.written, false)
-      assert.equal(doc.stats.written, written)
+      assert.equal(doc.seq.written, written)
       assert.deepEqual(doc.held, STOPPED.held)
       assert.deepEqual(doc.rules.map((r) => r.name), ['one'])
       if (written) assert.equal(doc.rules[0].state, 'disabled', 'the recorded stop holds the rule off though the file still has it on')
@@ -170,7 +170,7 @@ test('V116: the daemon does not answer: exit 1 even with the file written; neith
     assert.equal(first.doc.memory, 'no-answer')
     assert.equal(first.doc.ok, false)
     assert.equal(first.doc.file.written, true)
-    assert.equal(Object.hasOwn(first.doc, 'stats'), false)
+    assert.equal(Object.hasOwn(first.doc, 'seq'), false)
     assert.ok(first.doc.problems.length > 0)
     fs.chmodSync(w.trocar, 0o500)
     const second = await w.rules(['off'])

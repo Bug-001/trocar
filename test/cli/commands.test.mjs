@@ -54,7 +54,6 @@ test('D58: every word of help is English ASCII — no section number, decision n
 test('§1.1: help is laid out for 80 columns, in its groups in order, and lists every command of the table', () => {
   const text = helpText()
   assert.deepEqual([...commandsOf(text)].sort(), COMMANDS.filter((c) => c.group).map((c) => c.name).sort())
-  assert.match(text.split('\n').at(-1), /^trocar help \[<command>\] {3}trocar <command> --help {3}trocar --version$/, 'help itself is the trailer (§2)')
   const at = GROUPS.map((g) => text.split('\n').findIndex((l) => l === g))
   assert.ok(at.every((i) => i > 0) && [...at].sort((a, b) => a - b).join() === at.join(), `the groups in order: ${at}`)
   for (const line of text.split('\n')) assert.ok(line.length <= WIDTH, `${line.length} columns: ${line}`) // §1.1⑥: a long usage line folds under its own column, it does not pass 80

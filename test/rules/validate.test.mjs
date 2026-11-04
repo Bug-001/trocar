@@ -113,7 +113,7 @@ test('an action carries exactly the keys of its form', () => {
   passes(rule({ do: [{ replace: 'x'.repeat(LIMITS.regexBytes), with: '' }] }))
 })
 
-test('a rule has at most one script: it carries one script_sha256', () => {
+test('a rule has at most one script: it carries one script_entry_sha256', () => {
   refused(rule({ do: [{ script: '/a.mjs' }, { script: '/b.mjs' }] }), 'do.1')
 })
 
@@ -170,14 +170,14 @@ test('hard rule: a script rule decides nothing from the body and nothing in the 
   refused(withMatch({ path: 'p'.repeat(LIMITS.literalBytes + 1) }, script), 'match.path')
 })
 
-test('hard rule: armed, armed_at and script_sha256 are the enable step\'s: refused in input, fine in the file', () => {
-  const written = { armed: { off: 3, rules: 1 }, armed_at: '2026-11-05T12:00:00Z', script_sha256: 'a'.repeat(64) }
+test('hard rule: armed, armed_at and script_entry_sha256 are the enable step\'s: refused in input, fine in the file', () => {
+  const written = { armed: { off: 3, rules: 1 }, armed_at: '2026-11-05T12:00:00Z', script_entry_sha256: 'a'.repeat(64) }
   for (const [key, value] of Object.entries(written)) {
     refused(rule({ [key]: value }), key)
     assert.deepEqual(checkRule(rule({ [key]: value }), { input: false }), [])
   }
   assert.deepEqual(checkRule(rule({ armed: 'yes' }), { input: false }).map((p) => p.path), ['armed'])
-  assert.deepEqual(checkRule(rule({ script_sha256: 'short' }), { input: false }).map((p) => p.path), ['script_sha256'])
+  assert.deepEqual(checkRule(rule({ script_entry_sha256: 'short' }), { input: false }).map((p) => p.path), ['script_entry_sha256'])
 })
 
 test('replies: the status range, no body on 204 and 304, no framing headers', () => {

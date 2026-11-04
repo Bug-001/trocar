@@ -45,7 +45,8 @@ export const stateFileIn = (home) => path.join(collectorIn(home), 'state.json')
 export const USER_PATH_FILE = 'user-path.json'
 /** The daemon's own state in ~/.trocar/collector (not captures, 0.2): every uninstall removes these once the daemon has stopped, and its plan names
  *  the same list, so for these files the plan and the act cannot drift. door-seen.json is read by uninstall's holder check first (4.11 P12). */
-export const COLLECTOR_STATE_FILES = ['state.json', CONTROL_FILE, 'board.token', 'update.json', DOOR_SEEN_FILE, USER_PATH_FILE]
+export const BOARD_TOKEN_FILE = 'board.token' // the board's per-user token, 0600 (4.4, D26③)
+export const COLLECTOR_STATE_FILES = ['state.json', CONTROL_FILE, BOARD_TOKEN_FILE, 'update.json', DOOR_SEEN_FILE, USER_PATH_FILE]
 /** The lock of the one command that changes state at a time (1.6 R12). */
 export const opLockFile = (home = os.homedir()) => path.join(collectorDir(home), 'op.lock')
 

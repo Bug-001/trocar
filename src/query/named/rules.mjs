@@ -6,7 +6,13 @@ import { buffersOf, resendOk, ruleSha256, summaryOf, tierOfRule } from '../../ru
 import { armedStatOf, isArmed, readRuleFacts, ruleState, statOf, stoppedOn } from '../../rules/state.mjs';
 import { normalizeRule, scriptOf } from '../../rules/validate.mjs';
 
-export const params = Object.freeze(['rule']);
+export const about = Object.freeze({
+  summary: 'The rules, each with what it does, whether it runs now and what it has done.',
+  params: Object.freeze({
+    rule: 'Only this rule: its name, with the rule as written in the rule field of the answer. Without it, every rule.',
+  }),
+});
+export const params = Object.freeze(Object.keys(about.params));
 
 function rowOf(rule, facts, known) {
   const { on, match } = normalizeRule(rule);

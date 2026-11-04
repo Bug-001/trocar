@@ -11,8 +11,22 @@ import { recordsAt } from '../records.mjs';
 import { posCmp } from '../projection.mjs';
 import { asOf, indexRows } from '../rows.mjs';
 import { QueryArgError, listOf, paginate, tsFilter } from './index.mjs';
+import { HARNESS, PAGE, WINDOW } from './about.mjs';
 
-export const params = Object.freeze(['class', 'harness', 'session', 'host', 'ref', 'since', 'until', 'limit', 'after', 'reveal']);
+export const about = Object.freeze({
+  summary: 'Calls of any class: time, agent, class, host, endpoint, status, bytes sent and received, how much was kept, record id. Without --class, --host or --ref it gives only how many calls each class has.',
+  params: Object.freeze({
+    class: 'Only these traffic classes: comma-separated names, as the classes query lists them.',
+    harness: HARNESS,
+    session: 'Only these sessions: comma-separated session ids, as the sessions query lists them.',
+    host: 'Only these hosts: comma-separated names.',
+    ref: 'Only this record: a record id (segment:line). The answer has the same shape as a list.',
+    ...WINDOW,
+    ...PAGE,
+    reveal: 'The name of one credential header of the record --ref names: gives that one value, which every answer otherwise leaves empty. Needs --ref. It is for a person pressing Show at the board, not for scripts.',
+  }),
+});
+export const params = Object.freeze(Object.keys(about.params));
 
 export async function run({ home, fs, now, params: p, errors, progress = null }) {
   if (p.ref != null && !parseRecordId(String(p.ref))) throw new QueryArgError(`trocar query calls: --ref ${JSON.stringify(String(p.ref))} names no record — a record is \`<segment>:<line>\``);

@@ -68,4 +68,4 @@ A harness is data, not code. Add a descriptor in [`src/collector/harness/`](src/
 
 ## Licensing
 
-trocar is licensed under FSL-1.1-ALv2 (see [LICENSE](LICENSE)). By contributing you agree that your contribution is licensed under the project's license (FSL-1.1-ALv2) and that the maintainer may relicense it; a change to the kernel-side eBPF program in `src/collector/arch/linux/bpf/` is licensed GPL-2.0-only OR MIT, as those files say. The pull request template asks you to tick this agreement; a pull request without it is not merged.
+trocar's own code is licensed under FSL-1.1-ALv2 (see [LICENSE](LICENSE)); the [License](README.md#license) section of the README lists what it does not cover. By contributing you agree that your contribution is licensed under the project's license (FSL-1.1-ALv2) and that the maintainer may relicense it; a change to the kernel-side eBPF program in `src/collector/arch/linux/bpf/` is licensed GPL-2.0-only OR MIT, as those files say. The pull request template asks you to tick this agreement; a pull request without it is not merged.

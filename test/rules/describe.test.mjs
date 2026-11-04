@@ -107,7 +107,7 @@ test('the rule\'s hash leaves out what rules enable writes, and nothing else', (
   const rule = make({ drop: true })
   const hash = createHash('sha256').update(JSON.stringify(rule)).digest('hex')
   assert.equal(ruleSha256(rule), hash)
-  const enabled = { ...rule, armed: { off: 3, rules: 1 }, armed_at: '2026-11-05T00:00:00.000Z', script_sha256: 'a'.repeat(64) }
+  const enabled = { ...rule, armed: { off: 3, rules: 1 }, armed_at: '2026-11-05T00:00:00.000Z', script_entry_sha256: 'a'.repeat(64) }
   assert.equal(ruleSha256(enabled), hash)
   assert.notEqual(ruleSha256({ ...rule, on_error: 'drop' }), hash)
 })

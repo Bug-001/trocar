@@ -54,7 +54,7 @@ const MATCH_PLACES = {
 }
 
 const RULE_KEYS = new Set(['name', 'note', 'on', 'whole', 'match', 'do', 'on_error', 'limit'])
-const ENABLE_KEYS = ['armed', 'armed_at', 'script_sha256']
+const ENABLE_KEYS = ['armed', 'armed_at', 'script_entry_sha256']
 const RESERVED_NAMES = new Set(['add', 'test', 'enable', 'disable', 'rm', 'off', 'max-delay'])
 
 // An action's form: `need` every key, `one` exactly one of them, `may` any of them, nothing else. The key that names the kind comes first in `need`.
@@ -214,7 +214,7 @@ function checkEnableKeys(rule, input, bad) {
     if (!isObject(a) || Object.keys(a).some((k) => k !== 'off' && k !== 'rules') || !isSeq(a.off) || !isCount(a.rules)) bad('armed', 'the two off sequence numbers')
   }
   if (has(rule, 'armed_at') && rule.armed_at !== null && !isString(rule.armed_at)) bad('armed_at', 'a time')
-  if (has(rule, 'script_sha256') && !/^[0-9a-f]{64}$/.test(String(rule.script_sha256))) bad('script_sha256', 'a sha256')
+  if (has(rule, 'script_entry_sha256') && !/^[0-9a-f]{64}$/.test(String(rule.script_entry_sha256))) bad('script_entry_sha256', 'a sha256')
 }
 
 /** Everything wrong with one rule, `[]` when nothing is. `input`: the rule comes from the operator (`rules add`), so what `rules enable` writes is refused. */

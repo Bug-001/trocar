@@ -28,7 +28,7 @@ const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`
 const exitOf = (code) => (['usage', 'rule-invalid', 'rule-unknown'].includes(code) ? EXIT.usage : EXIT.incomplete)
 const refused = (command, { code, message }) => ({ doc: errorDoc(command, code, `trocar ${command}: ${message}`) })
 const failureOf = (e) => e.error ?? { code: 'rule-invalid', message: `${e.invalid[0].path}: ${e.invalid[0].reason}` }
-const disarm = ({ armed: _armed, armed_at: _at, script_sha256: _script, ...rule }) => rule
+const disarm = ({ armed: _armed, armed_at: _at, script_entry_sha256: _script, ...rule }) => rule
 
 /** POST to the daemon → 'absent' when nobody is there or it has no such route yet, 'no-answer' when it is there and did not answer, or `{answer}`. */
 async function notifyDaemon(c, route) {
@@ -159,10 +159,10 @@ async function stop(c, names, { verb, change, past }) {
 }
 
 /** What a run of `rules off` amounts to, in the words of 1.6 §4.4: the line it leads with, and what is still wrong. */
-function offOutcome(memory, written, stats) {
+function offOutcome(memory, written, seq) {
   if (written && memory !== 'no-answer') return { lead: 'All rules are off.', problems: [] }
   if (written) return { lead: 'The rule file has every rule off.', problems: ['The collector did not answer: until it reads the file, rules may still be acting.'] }
-  if (memory === 'stopped') return { lead: 'All rules have stopped, but the rule file was not changed.', problems: [stats.written ? 'Only trocar rules enable brings a rule back.' : 'The collector could not record the stop either, so the rules come back when it restarts.'] }
+  if (memory === 'stopped') return { lead: 'All rules have stopped, but the rule file was not changed.', problems: [seq.written ? 'Only trocar rules enable brings a rule back.' : 'The collector could not record the stop either, so the rules come back when it restarts.'] }
   if (memory === 'no-daemon') return { lead: 'The rule file was not changed.', problems: ['The collector is not running, and the rules come back when it starts.'] }
   return { lead: 'Rules have not stopped.', problems: ['The collector did not answer and the rule file was not changed. To take trocar out of the way: trocar off'] }
 }
@@ -172,7 +172,7 @@ async function off(c) {
   const said = await notifyDaemon(c, '/rules/off')
   const memory = said === 'absent' ? 'no-daemon' : said === 'no-answer' ? 'no-answer' : 'stopped'
   const e = edit((doc) => ({ ...doc, rules: doc.rules.map(disarm) }), { home: c.home, op: 'off', onBad: 'aside' })
-  const stats = memory === 'stopped' ? said.answer.stats ?? { written: false, reason: 'the collector did not say' } : undefined
+  const seq = memory === 'stopped' ? said.answer.seq ?? { written: false, reason: 'the collector did not say' } : undefined
   const held = heldOf(said)
 
   const was = (e.before ?? readRules({ home: c.home }).doc).rules.filter(isArmed)
@@ -182,10 +182,10 @@ async function off(c) {
   const notes = [...moved.map((p) => `${rulesFile(c.home)} could not be used. It is kept as ${p}.`), ...(e.kept_delay === false ? [`The max delay could not be read from it, so it is ${e.after.max_delay_ms} ms now.`] : [])]
 
   const reason = e.ok ? null : failureOf(e).message
-  const { lead, problems } = offOutcome(memory, e.ok, stats)
+  const { lead, problems } = offOutcome(memory, e.ok, seq)
   const w = wrote(c, e)
   const doc = { ...newReceipt(command), ...w.fields, ok: e.ok && memory !== 'no-answer', rules, memory, file: { written: e.ok, reason },
-    ...(stats ? { stats } : {}), held, notes, problems: [...problems, ...w.problems], ...(reason ? { error: { code: 'rules-unwritable', message: `trocar ${command}: ${reason}` } } : {}) }
+    ...(seq ? { seq } : {}), held, notes, problems: [...problems, ...w.problems], ...(reason ? { error: { code: 'rules-unwritable', message: `trocar ${command}: ${reason}` } } : {}) }
   return { doc, lines: [[lead, ...heldLines(held)].join(' '), ...notes.flatMap((n) => wrap(n))], exit: doc.ok ? EXIT.ok : EXIT.incomplete }
 }
 
