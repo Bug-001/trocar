@@ -188,9 +188,10 @@ test('2.4 还在读: a lane answered with pending is walked again when the head 
     let tos = 0
     await page.route('**/api/lane?**', async (route) => {
       const q = new URL(route.request().url()).searchParams
-      if (q.get('lane') !== main || !q.has('to')) return route.fallback()
-      const doc = w.lane(main, { to: q.get('to') })
-      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(++tos === 1 ? { ...doc, pending: { done: 1, total: 2, calls: 0 } } : doc) })
+      if (q.get('lane') !== main) return route.fallback()
+      if (q.has('to')) tos++
+      const doc = w.lane(main, { to: q.get('to') ?? undefined, ledger: q.get('ledger') ?? undefined }) // the first walk, its chain too, stands behind the fold
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(tos === 1 ? { ...doc, pending: { done: 1, total: 2, calls: 0 } } : doc) })
     })
     await page.evaluate(() => { location.hash = '#/replay/p/S' })
     await page.waitForSelector('#ctxwin .cblk', { state: 'attached' })
