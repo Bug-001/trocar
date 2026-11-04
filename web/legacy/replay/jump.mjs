@@ -6,6 +6,8 @@
 
 export const anchorJump = (id) => ({ kind: 'anchor', id })     // scroll to the element with this id
 export const blockJump = (resKey) => ({ kind: 'block', resKey }) // open and highlight the block of this resource
+export const fiJump = (fi) => ({ kind: 'fi', fi })             // open and highlight the step's block number fi
+export const promptJump = () => ({ kind: 'prompt' })           // open and highlight the step's last prompt block
 
 // what to do with the pending jump `p` ({ ...jump, step }) now: 'none' (nothing pending) · 'wait' (the target step's lane is not held)
 // · 'run' · 'drop' (the playhead is no longer on its step, or the step has no blocks that could ever land: unparsed, no request)
@@ -15,8 +17,9 @@ export function jumpDecision(p, { playhead, call, held }) {
   return held ? 'run' : 'wait'
 }
 
-// getPlayhead / getCall / getHeld read the desk's live state (getHeld: is the playhead step's lane held); perform(jump) scrolls.
-export function createJumpQueue({ getPlayhead, getCall, getHeld, perform }) {
+// getPlayhead / getCall / getHeld read the desk's live state (getHeld: is the playhead step's lane held); perform(jump) scrolls;
+// dropped(jump) hears a jump its step can never land (the playhead is on it, it has no blocks), not one the reader moved away from.
+export function createJumpQueue({ getPlayhead, getCall, getHeld, perform, dropped }) {
   let pending = null
   const q = {
     // aim a jump at `step` and try it right away (a step whose lane is held needs no waiting)
@@ -28,6 +31,7 @@ export function createJumpQueue({ getPlayhead, getCall, getHeld, perform }) {
       const { step, ...jump } = pending
       pending = null
       if (d === 'run') perform(jump)
+      else if (step === getPlayhead()) dropped?.(jump)
     },
     clear() { pending = null },
     pending() { return pending },

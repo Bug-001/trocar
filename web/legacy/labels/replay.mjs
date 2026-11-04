@@ -449,3 +449,18 @@ export const SAMPLED_TIP = 'Sampled: one point per bucket, not one per step (the
 export const MAINDIV_TIP = 'Drag to resize the outline · double-click to reset'
 export const DIVIDER_TIP = 'Drag to resize the right page · double-click to reset'
 export const RPBAR_TIP = 'Expand the right page'
+// the desk's frame (1.2 §回放台布局): the two boundaries and the sidebar
+export const SIDE_SPLIT_TIP = 'Drag to resize the sidebar · double-click to reset'
+export const SCOPE_SPLIT_TIP = 'Drag to resize the tracks · double-click to reset'
+export const SIDE_TABS = 'Session panels'
+export const TAB_OVERVIEW = 'Overview'
+export const TAB_RESOURCES = 'Resources'
+export const COLLAPSE_SIDE = 'Collapse the sidebar'
+export const EXPAND_SIDE = 'Expand the sidebar'
+// 2.5: a chapter's name (k: compactions before it), a group, a row's step and calls
+export const partName = (k, inferred) => `${k === 0 ? 'Before the first compaction' : `Since compaction ${k}`}${inferred ? ' (inferred)' : ''}`
+export const GRP_AGENTS = 'Sub-agents'
+export const rowStep = (n) => `step ${n}`
+export const agentCalls = (n) => count(n, 'call')
+// 2.6 §A: the folded row after the reply
+export const CALL_DETAILS = 'Call details'

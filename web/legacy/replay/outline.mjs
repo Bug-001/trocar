@@ -33,11 +33,11 @@ const flatOf = (s, call) => (s.desk && call ? stepOf(s.desk, call.rid).flat : nu
 // from the LAST one backwards — a pair matches only when the shorter folded text is a prefix of the other; the first pair
 // that fails kills its number and every earlier row's (a shifted pairing would misname them). An event whose page is not
 // held is not there to pair, so its row has no number. Only on the main lane, only through stepRef(); never a guess.
-export function queryStepLabels(s, turns) {
+export function queryStepLabels(s, turns, at = s.playhead) {
   const anchor = s.anchor
   if (!anchor || anchor.kind !== 'main' || !turns.length) return []
-  const at = (rid) => { const i = anchor.ridLocal && anchor.ridLocal.get(rid); return i == null ? Infinity : i }
-  const evs = (s.desk ? laneEvents(s.desk, anchor.id) : []).filter((e) => e && e.type === 'user' && e.rid != null && at(e.rid) <= s.playhead)
+  const localOf = (rid) => { const i = anchor.ridLocal && anchor.ridLocal.get(rid); return i == null ? Infinity : i }
+  const evs = (s.desk ? laneEvents(s.desk, anchor.id) : []).filter((e) => e && e.type === 'user' && e.rid != null && localOf(e.rid) <= at)
   if (!evs.length) return []
   const out = new Array(turns.length).fill(null)
   for (let k = 0; k < Math.min(evs.length, turns.length); k++) {
@@ -63,15 +63,15 @@ const unheldChange = (call) => {
 
 // the one entry table both the column and any narrow-screen dropdown draw from (2.5 #10): same names, same order, same jump.
 // `kids` is null for a group the step cannot list yet (its lane is not held); `tools` then carries the row's count.
-export function outlineEntries(s) {
-  const call = s.anchor && s.anchor.calls[s.playhead]
+export function outlineEntries(s, at = s.playhead) {
+  const call = s.anchor && s.anchor.calls[at]
   if (!call) return { head: '', groups: [], changeLine: false, off: null, held: false }
   const off = bodyState(call)
   const flat = off ? [] : flatOf(s, call)
   const held = !!flat
   const rowsOf = (sec) => flat.map((b, i) => ({ b, i })).filter((x) => x.b.sec === sec)
   const turns = held ? humanTurns(flat) : []
-  const since = queryStepLabels(s, turns)
+  const since = queryStepLabels(s, turns, at)
   const groups = [
     // no counts on the group heads (2.5 §只做导航): the sizes are the middle column's section rows; an off step says why
     { key: 'tools', label: W.GRP_TOOLS, tools: !held && !off && typeof call.tools === 'number' ? call.tools : null,
@@ -118,10 +118,16 @@ export function renderOutline(el, s) { patchInto(el, outlineUnits(s)) }
 export const jumpToAnchor = (s, id) => { s.reveal({ anchor: id, flash: 1600 }) }
 export const jumpToBlockIndex = (s, fi) => { s.reveal({ fi, open: true, flash: 2000 }) }
 // open and highlight the block that carries a resource, in the step the playhead is on. Found in the step's list, not the DOM:
-// its row may sit in a folded turn or a group not drawn yet, which the jump draws first.
+// its row may sit in a folded turn or a group not drawn yet, which the jump draws first. → whether the step carries that block.
 export function jumpToResourceBlock(s, resKey) {
   const fi = (s.curFlat || []).findIndex((b) => b.resKey === resKey)
   if (fi >= 0) jumpToBlockIndex(s, fi)
+  return fi >= 0
+}
+// open and highlight the step's last prompt block (2.5: a prompt row's jump)
+export function jumpToLastPrompt(s) {
+  const t = humanTurns(s.curFlat || []).at(-1)
+  if (t) jumpToBlockIndex(s, t.fi)
 }
 // move to a step and land on a block of it. When that step's lane is not held the landing waits for the lane (jump.mjs).
 export function jumpToStepAndBlock(s, step, resKey) { s.jumpTo(step, resKey ? blockJump(resKey) : null) }

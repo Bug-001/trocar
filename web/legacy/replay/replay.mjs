@@ -27,6 +27,7 @@
 //     `flash` ms; null when there is none. Legacy: revealIn; React: the function the window registered (view.setRevealer)
 //   view.cellRoots() the elements whose cells the desk wires with the drawer's (detail.mjs): legacy [root]
 //   s.reveal(t) = view.reveal(t), s.cellRoots() = view.cellRoots(): the areas' way to them
+//   view.nav()       optional: the view draws its own sidebar, s.renderNav only tells it to (the new desk)
 import { esc } from '../core/fmt.mjs'
 import { api as rootApi, scoped } from '../core/api.mjs'
 import { sessionCache } from './session-cache.mjs'
@@ -45,7 +46,7 @@ import { createPoller, INTERVAL } from '../core/poll.mjs'
 import { renderSaw, renderOverview, repositionBrush, markCurrent, renderProblemNav, problemSteps, wireTimeline, barsThatFit, fitWindow, capWindow, renderRough as roughRows, chapterHere, placeView } from './timeline.mjs'
 import { renderRails, wireRails, highlightRange, reviewing } from './rails.mjs'
 import { renderContextWindow, wireCtxWin, emptyFrameHtml, rowKeys, ensureRow, toggleCtxBlock } from './ctxwin.mjs'
-import { renderOutline, wireOutline, jumpToAnchor, jumpToResourceBlock } from './outline.mjs'
+import { renderOutline, wireOutline, jumpToAnchor, jumpToResourceBlock, jumpToBlockIndex, jumpToLastPrompt } from './outline.mjs'
 import { createJumpQueue } from './jump.mjs'
 import { createPricingLoader } from './pricing.mjs'
 import { renderResources, wireResources } from './resources.mjs'
@@ -56,8 +57,8 @@ import { renderSessionHead, wireSessionHead, captureGap, behindOf } from './head
 import { stepBarHtml, roughStepHtml, wireStepBar } from './stepbar.mjs'
 import { loadBodies, bodyCache, clearOverrides, overrideScope, isRetryable } from './cell.mjs'
 import { SESSION_NOT_LISTED, BACK_TO_SESSIONS } from '../labels/shell.mjs'
-import { CACHE_LEGEND, CACHE_LEGEND_UNK, KEYS_TITLE, KEY_LIST, RETRY, THIS_SESSION, REVIEW_TIP, MAINDIV_TIP, DIVIDER_TIP, RPBAR_TIP, moreLanes } from '../labels/replay.mjs'
-import { readFailure } from '../core/ui.mjs'
+import { CACHE_LEGEND, CACHE_LEGEND_UNK, KEYS_TITLE, KEY_LIST, RETRY, THIS_SESSION, REVIEW_TIP, MAINDIV_TIP, DIVIDER_TIP, RPBAR_TIP, UNPARSED_LINE, NO_REQUEST, RES_NOT_FOUND, moreLanes } from '../labels/replay.mjs'
+import { readFailure, toast } from '../core/ui.mjs'
 
 const POLL_MS = INTERVAL.session
 const BUSY_MS = 150 // 2.3 §车道未到手: how long a step whose lane is not held leaves the desk as it is
@@ -324,18 +325,27 @@ function openDesk(ctx, route0, makeView = legacyView) {
 
   // ── actions the areas call back into ─────────────────────────────────────────────────────────────────────────────
   s.persistFold = () => saveFold(storage(), s.turnFold)
-  s.renderRaw = () => onEls(() => renderRawPanel(E.rawpanel, s))
-  s.renderNav = () => onEls(() => { renderOutline(E.ctxnav, s); renderResources(E.resexp, s) })
+  // a view with a `nav` slot draws its sidebar itself (the new desk) and has no raw panel (s.rawPanelGone, reactView)
+  s.renderRaw = () => onEls(() => { if (E.rawpanel) renderRawPanel(E.rawpanel, s) })
+  s.renderNav = () => (view.nav ? view.nav() : onEls(() => { renderOutline(E.ctxnav, s); renderResources(E.resexp, s) }))
   const curCall = () => (s.anchor && s.anchor.calls[s.playhead]) || null
   const heldAt = (c) => !!(c && deskStep(s.desk, c.rid).held)
   // a jump (the problem pager, a drawer call link, a resource card) aimed at a step whose lane is not held waits for the lane and
   // runs once after the window has repainted; the next reader move clears it (jump.mjs)
   const jumps = createJumpQueue({
     getPlayhead: () => s.playhead, getCall: curCall, getHeld: () => heldAt(curCall()),
-    perform: (j) => (j.kind === 'anchor' ? jumpToAnchor(s, j.id) : jumpToResourceBlock(s, j.resKey)),
+    perform: (j) => {
+      if (j.kind === 'anchor') jumpToAnchor(s, j.id)
+      else if (j.kind === 'fi') jumpToBlockIndex(s, j.fi)
+      else if (j.kind === 'prompt') jumpToLastPrompt(s)
+      else if (!jumpToResourceBlock(s, j.resKey)) s.noBlock?.()
+    },
+    dropped: (j) => { if (j.kind === 'block') s.noBlock?.() },
   })
   s.jumpTo = (step, jump) => { setPlayhead(step, true); jumps.queue(s.playhead, jump) }
   s.queueJump = (jump) => jumps.queue(s.playhead, jump)
+  // a resource name is never a dead click (2.4): the new desk says why its block is not in this step
+  if (s.rawPanelGone) s.noBlock = () => { const c = curCall(); toast(c && c.unparsed ? UNPARSED_LINE : c && !c.rec ? NO_REQUEST : RES_NOT_FOUND) }
   // the drawer as drawn: the selected call's row object and whether its step is held (refreshDrawer redraws on a change only)
   let drawnDetail = null
   s.openDetail = (lane, i) => { const c = lane.calls[i]; drawnDetail = c ? { row: s.desk.rows.get(c.rid) ?? c, held: heldAt(c) } : null; openDetail(E.detail, s, lane, i) }
@@ -367,7 +377,10 @@ function openDesk(ctx, route0, makeView = legacyView) {
     view.empty(msg)
     onEls(() => {
       view.window({ kind: 'empty', msg, err })
-      E.ctxnav.innerHTML = ''; E.rails.innerHTML = ''; E.resexp.innerHTML = ''; E.rawpanel.innerHTML = ''
+      E.rails.innerHTML = ''; E.resexp.innerHTML = ''
+      if (E.ctxnav) E.ctxnav.innerHTML = ''
+      if (E.rawpanel) E.rawpanel.innerHTML = ''
+      view.nav?.()
     })
     view.problems() // no problems: the row name stops quoting the last session's count and ‹ › disappear
     if (host && E) closeDetail(E.detail, s) // the drawer is shared by every screen: a detached desk closed it when it left
@@ -728,7 +741,7 @@ function openDesk(ctx, route0, makeView = legacyView) {
       chaining = false
       if (!r || gone()) return
       ledgerFailed = !r.ok
-      if (s.playRid != null) { if (host && E) renderResources(E.resexp, s); else missed = true }
+      if (s.playRid != null) { if (!host || !E) missed = true; else if (view.nav) view.nav(); else renderResources(E.resexp, s) }
       if (s.anchor && s.anchor.id !== key) chainLedger()
     }, (e) => { chaining = false; console.error(e) })
   }
@@ -910,16 +923,23 @@ function openDesk(ctx, route0, makeView = legacyView) {
 
   // ── the desk's own listeners (inside its root): wired once its frame is there, kept while it is detached, dropped by dispose() ──
   const onRp = () => { s.rpOpen = !s.rpOpen; view.frame() }
+  s.toggleRise = onRp // the bottom panel on a narrow new desk (1.2 §窄屏); Escape lowers it through onEscape
   const onRpKey = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onRp() } }
   const offs = []
   // a view whose scope is its own (the new desk's Scope.tsx) frames with no `saw`: its rows are not wired here
   function wire() {
     const rpbar = $('#rpbar'), { rails } = E
     rails.addEventListener('mouseover', onRailHover)
-    rpbar.addEventListener('click', onRp); rpbar.addEventListener('keydown', onRpKey)
-    offs.push(() => { rpbar.removeEventListener('click', onRp); rpbar.removeEventListener('keydown', onRpKey); rails.removeEventListener('mouseover', onRailHover) },
-      E.saw ? wireTimeline(E.saw, s) : () => {}, wireRails(rails, s), wireOutline(E.ctxnav, s), wireResources(E.resexp, s),
-      wireRawPanel(E.rawpanel, s), initLayout(root))
+    offs.push(() => rails.removeEventListener('mouseover', onRailHover),
+      E.saw ? wireTimeline(E.saw, s) : () => {}, wireRails(rails, s), wireResources(E.resexp, s))
+    // the legacy desk's own: the new desk has no outline column, no raw panel and its boundaries are the library's
+    if (rpbar) {
+      rpbar.addEventListener('click', onRp); rpbar.addEventListener('keydown', onRpKey)
+      offs.push(() => { rpbar.removeEventListener('click', onRp); rpbar.removeEventListener('keydown', onRpKey) })
+    }
+    if (E.ctxnav) offs.push(wireOutline(E.ctxnav, s))
+    if (E.rawpanel) offs.push(wireRawPanel(E.rawpanel, s))
+    if ($('#divider')) offs.push(initLayout(root))
     // a view that draws the session head and the step head itself (the React view) hands no #deskhead / #stepbar: it acts on them too
     if (E.deskhead) offs.push(wireSessionHead(E.deskhead, s))
     if (E.stepbar) offs.push(wireStepBar(E.stepbar, s))
