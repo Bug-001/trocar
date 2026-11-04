@@ -49,7 +49,7 @@ function violations(root) {
         continue
       }
       const t = fileAt(path.resolve(path.dirname(f), s.split(/[?#]/)[0]))
-      if (!t || !(inside(web, t) || (inside(src, t) && srcClean(t)))) say(f, s)
+      if (!t || isTest(t) || !(inside(web, t) || (inside(src, t) && srcClean(t)))) say(f, s) // a test file is never bundled, so nothing bundled reaches it
     }
   }
   for (const f of codeUnder(src)) {
@@ -80,7 +80,7 @@ test('the scanner is not vacuous: one planted violation of each kind is reported
     "import { useState } from 'react'",
   ].join('\n'))
   put('web/src/main.tsx', "import { useQuery } from '@tanstack/react-query'\nimport { a } from '../../src/view/pure.mjs'\nimport 'left-pad'\n")
-  put('web/src/fixture.tsx', "import { w } from '../../test/web-v2/world.mjs'\n")
+  put('web/src/fixture.tsx', "import { w } from '../../test/web-v2/world.mjs'\nimport './main.test.tsx'\n")
   put('web/src/main.test.tsx', "import { w } from '../../test/web-v2/world.mjs'\nimport fs from 'node:fs'\nimport './gone.mjs'\n")
   put('test/web-v2/world.mjs', "import { createHash } from 'node:crypto'\n")
   put('web/vite.config.mjs', "import { fileURLToPath } from 'node:url'\n")
@@ -94,6 +94,7 @@ test('the scanner is not vacuous: one planted violation of each kind is reported
     'web/legacy/bad.mjs: ./nope/y.mjs',
     'web/legacy/bad.mjs: react',
     'web/src/fixture.tsx: ../../test/web-v2/world.mjs',
+    'web/src/fixture.tsx: ./main.test.tsx',
     'web/src/main.test.tsx: ./gone.mjs',
     'web/src/main.tsx: left-pad',
   ])
