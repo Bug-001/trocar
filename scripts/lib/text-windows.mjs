@@ -1,10 +1,18 @@
 // scripts/lib/text-windows.mjs — spec 1.12 §6.2: the one normalization that outbound text and capture both go
-// through,. Everything here works on bytes and
+// through, and the table of normalized windows pr-check compares them with. Everything here works on bytes and
 // typed arrays: the scanned side is gigabytes, so the hot loops make no strings and call no regex.
 
 export const WINDOW = 60
 
 const BACKSLASH = 0x5c
+// Slots per window. The scan probes once per byte, and at 8 an empty slot answers nearly all of them without a
+// mispredicted branch: measured about 3x the throughput of 2.
+const SPARSITY = 8
+const HASH_BASE = 0x01000193
+const HASH_MIX = 0x9e3779b1
+// HASH_BASE ** (WINDOW - 1) mod 2^32: what the byte leaving the window contributed.
+let hashTop = 1
+for (let i = 1; i < WINDOW; i++) hashTop = Math.imul(hashTop, HASH_BASE)
 
 // Code point → first code point of its lowercase, 0 for anything that is not a letter or a number.
 let foldTable = null
@@ -129,4 +137,134 @@ const capacity = (bytes) => 2 * bytes.length + 4
 export function normalize(bytes) {
   const out = new Uint8Array(capacity(bytes))
   return out.slice(0, normalizeInto(bytes, out))
+}
+
+function hashOf(bytes, at) {
+  let hash = 0
+  for (let i = at; i < at + WINDOW; i++) hash = (Math.imul(hash, HASH_BASE) + bytes[i]) | 0
+  return hash
+}
+
+const nextHash = (hash, leaving, entering) => (Math.imul(hash - Math.imul(leaving, hashTop), HASH_BASE) + entering) | 0
+
+// Open addressing over typed arrays. offsets[slot] is the window's place in the concatenated normalized sources
+// plus one (0 = empty); hashes[slot] saves touching those bytes for most probes. A dropped slot stays in place, so
+// probe chains keep working and whereOf still answers for it.
+export class WindowTable {
+  #text
+  #wheres = []
+  #starts = []
+  #offsets
+  #hashes
+  #dropped
+  #shift
+  #mask
+  #size = 0
+  #scratch = new Uint8Array(0)
+
+  constructor(sources) {
+    const parts = sources.map((source) => normalize(source.bytes))
+    this.#text = new Uint8Array(parts.reduce((total, part) => total + part.length, 0))
+    let room = 2
+    let bits = 1
+    const windows = parts.reduce((total, part) => total + Math.max(0, part.length - WINDOW + 1), 0)
+    while (room < SPARSITY * windows) {
+      room *= 2
+      bits++
+    }
+    this.#offsets = new Uint32Array(room)
+    this.#hashes = new Int32Array(room)
+    this.#dropped = new Uint8Array(room)
+    this.#shift = 32 - bits
+    this.#mask = room - 1
+
+    let start = 0
+    for (let p = 0; p < parts.length; p++) {
+      const part = parts[p]
+      this.#text.set(part, start)
+      this.#starts.push(start)
+      this.#wheres.push(sources[p].where)
+      if (part.length >= WINDOW) {
+        let hash = hashOf(part, 0)
+        for (let at = 0; ; at++) {
+          const found = this.#find(hash, this.#text, start + at)
+          if (found < 0) {
+            const slot = ~found
+            this.#offsets[slot] = start + at + 1
+            this.#hashes[slot] = hash
+            this.#size++
+          }
+          if (at + WINDOW >= part.length) break
+          hash = nextHash(hash, part[at], part[at + WINDOW])
+        }
+      }
+      start += part.length
+    }
+  }
+
+  // The slot holding the window at bytes[at], or ~(the empty slot it would take).
+  #find(hash, bytes, at) {
+    const offsets = this.#offsets
+    const hashes = this.#hashes
+    const mask = this.#mask
+    let slot = Math.imul(hash, HASH_MIX) >>> this.#shift
+    for (;;) {
+      const offset = offsets[slot]
+      if (offset === 0) return ~slot
+      if (hashes[slot] === hash && this.#same(offset - 1, bytes, at)) return slot
+      slot = (slot + 1) & mask
+    }
+  }
+
+  #same(offset, bytes, at) {
+    const text = this.#text
+    for (let i = 0; i < WINDOW; i++) if (text[offset + i] !== bytes[at + i]) return false
+    return true
+  }
+
+  scan(bytes, onHit) {
+    if (this.#size === 0) return
+    if (this.#scratch.length < capacity(bytes)) this.#scratch = new Uint8Array(capacity(bytes))
+    const text = this.#scratch
+    const length = normalizeInto(bytes, text)
+    if (length < WINDOW) return
+    const offsets = this.#offsets
+    const shift = this.#shift
+    const dropped = this.#dropped
+    let hash = hashOf(text, 0)
+    for (let at = 0; ; at++) {
+      // Almost every position lands on an empty slot: that check stays here, off the call path.
+      if (offsets[Math.imul(hash, HASH_MIX) >>> shift] !== 0) {
+        const slot = this.#find(hash, text, at)
+        if (slot >= 0 && dropped[slot] === 0) {
+          onHit(slot)
+          if (this.#size === 0) return
+        }
+      }
+      if (at + WINDOW >= length) return
+      hash = nextHash(hash, text[at], text[at + WINDOW])
+    }
+  }
+
+  drop(slot) {
+    if (this.#dropped[slot] !== 0) return
+    this.#dropped[slot] = 1
+    this.#size--
+  }
+
+  whereOf(slot) {
+    const offset = this.#offsets[slot] - 1
+    let low = 0
+    let high = this.#starts.length - 1
+    while (low < high) {
+      const middle = (low + high + 1) >> 1
+      if (this.#starts[middle] <= offset) low = middle
+      else high = middle - 1
+    }
+    return this.#wheres[low]
+  }
+
+  get size() {
+    return this.#size
+  }
 }
