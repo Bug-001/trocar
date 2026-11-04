@@ -12,7 +12,7 @@ for (const row of ROWS) {
   test(`V41 row ${row.n}: ${row.title}`, () => {
     const topo = buildTopology(row.facts), t = topo[row.h]
     assert.deepEqual(t.branches.map((b) => b.path.map((id) => kindOf(t, id))), row.kinds, 'the kinds of the nodes on each branch')
-    assert.deepEqual([t.on_path, t.captured, t.reason], [row.on_path, row.captured, row.reason], 'the verdict')
+    assert.equal(t.on_path, row.on_path, 'on the path: every branch is (the verdict itself is status\'s, statusDocOf)')
     for (const b of t.branches) assert.deepEqual([b.on_path, b.captured, b.reason], [row.on_path, row.captured, row.reason], 'every branch says the same of the harness')
     assert.deepEqual(validateTopology(topo), [], 'and the object is one the schema accepts (V43)')
   })
@@ -138,7 +138,7 @@ test('a scheme the agent cannot speak and does not fail on (dsh, SOCKS) is a dir
   assert.ok(!t.nodes.some((n) => n.kind === 'proxy'), 'and no proxy hop is drawn for a value it ignores')
   const into = t.edges.find((e) => e.to === t.branches[0].off_path[1])
   assert.deepEqual([into.via, into.inferred, into.evidence], ['direct', true, ['unsupported-scheme:socks5']])
-  assert.match(renderCompact(t)[0], /:443 \(direct, inferred\)$/, 'and the words say it')
+  assert.match(renderCompact(t)[0], / \(direct, inferred\)$/, 'and the words say it')
   const lab = buildTopology(facts('deepseek-dsh', {}, { ...socks, behaviour: { ...harness('deepseek-dsh').behaviour, measured: 'lab' } }))['deepseek-dsh']
   assert.equal(lab.edges.find((e) => e.to === lab.branches[0].off_path[1]).inferred, undefined, 'measured: not said to be inferred')
   assert.ok(!/inferred/.test(renderCompact(lab).join()))
@@ -150,16 +150,16 @@ test('a scheme the agent cannot speak and does not fail on (dsh, SOCKS) is a dir
 test('proxy mode verdicts the platform\'s facts can ask for: a form it refused to wire (route-loop), an upstream the engine cannot dial (upstream-unreachable, trocar is on the path and the connection fails)', () => {
   const pf = (fm, fw) => buildTopology(pfacts('codex', fm, fw)).codex
   const loop = pf(form('codex.cli', { routeLoop: true, entry: null, procs: [proc(5530, { name: 'codex app-server' })] }), fwForm(17992))
-  assert.deepEqual([loop.on_path, loop.captured, loop.reason], [false, false, 'route-loop'])
+  assert.deepEqual([loop.on_path, loop.branches[0].captured, loop.branches[0].reason], [false, false, 'route-loop'])
   const up = pf(form('codex.cli', { setting: proxyOf('http://proxy.corp:8080'), procs: [proc(5530, { name: 'codex app-server' })] }), fwForm(17992, { upstream: 'http://proxy.corp:8080', source: 'agent', upstream_error: 'ECONNREFUSED' }))
-  assert.deepEqual([up.on_path, up.captured, up.reason], [true, false, 'upstream-unreachable'])
+  assert.deepEqual([up.on_path, up.branches[0].captured, up.branches[0].reason], [true, false, 'upstream-unreachable'])
 })
 
 // ── what the Linux reads gave and the topology dropped (4.6 「eBPF 模式下的网络拓扑」) ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 test('D49: a TUN device or a VPN product in the facts changes nothing of the topology: a direct agent stops at the API host, with or without trocar, whatever F.tun and F.vpn say', () => {
   const plain = renderCompact(buildTopology(facts('claude-code'))['claude-code'])[0]
-  assert.equal(plain, 'claude (pid 4121) -> [ebpf] trocar :47123 -> api.anthropic.com:443 (direct)')
+  assert.equal(plain, 'claude (pid 4121) -> [ebpf] trocar :47123 -> api.anthropic.com (direct)')
   for (const f of [facts('claude-code', { tun: true }), facts('claude-code', { tun: true, vpn: mihomoVpn({ tun: true }) }), facts('claude-code', { vpn: mihomoVpn({ tun: true }) })]) {
     const t = buildTopology(f)['claude-code']
     assert.equal(renderCompact(t)[0], plain)
@@ -205,4 +205,14 @@ test('on_path is false — not true, not unknown — when trocar cannot be on th
   assert.deepEqual(noLink.branches[0].path.map((id) => kindOf(noLink, id)), ['agent', 'upstream'])
   const unread = buildTopology(facts('claude-code', { link: { attached: null, helper: 'ok', ids: [] } }, { procs: [] }))['claude-code']
   assert.equal(unread.on_path, null, 'a link that could not be read is not known, and not "no link"')
+})
+
+// 1.6 A.1: the direct hop names only the hosts read from the agent's own config (status's `hosts`, 4.11 configHosts), never the descriptor's list or a port
+test('1.6 A.1: the direct hop is the host the config named, else `the API host it uses`; a form that follows the OS proxy goes through it without trocar', () => {
+  const upstreamOf = (apiHosts) => { const t = buildTopology(facts('claude-code', {}, { apiHosts }))['claude-code']; return t.nodes.find((n) => n.kind === 'upstream') }
+  assert.equal(upstreamOf([]).name, 'the API host it uses')
+  assert.deepEqual([upstreamOf(['127.0.0.1']).name, upstreamOf(['127.0.0.1']).port], ['127.0.0.1', undefined])
+  const sys = { value: 'http://127.0.0.1:7897', pac: false }
+  const t = buildTopology(pfacts('claude-code', form('claude-code.desktop', { systemProxy: sys, follows: { http: true, ws: true }, procs: [proc(7001)] }), fwForm(17995)))['claude-code']
+  assert.deepEqual(t.branches[0].off_path.map((id) => kindOf(t, id)), ['agent', 'proxy', 'egress'], 'without trocar it takes the OS proxy, as the form does (4.11 form systemProxy)')
 })

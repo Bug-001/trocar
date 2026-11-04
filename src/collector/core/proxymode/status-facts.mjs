@@ -106,7 +106,8 @@ export async function modelFormFacts({ harnesses, os, manifest: m, reply = null,
     const plan = planRoutes(desc, ctx), d = drift(h), own = itemsFor(desc, inst, ctx)
     const uf = userFileOf(desc, { m, ctx, fs, own })
     const forms = []
-    for (const f of pm.forms.filter((x) => x.os.includes(os) && isPresent(x, ctx))) {
+    // a form the user put out of scope (D56⑥) is not drawn as live; setupOf still reads it
+    for (const f of pm.forms.filter((x) => x.os.includes(os) && !(x.verified && x.verified[os] && x.verified[os].reason === 'out-of-scope') && isPresent(x, ctx))) {
       const c = f.cert === 'root' ? null : (pm.certs || {})[f.cert]
       const carrier = !c || (c.when && holds(c.when, ctx) === false) ? 'root' : CARRIER[c.kind] ?? null
       const r = root || {}
@@ -139,7 +140,7 @@ export async function modelFormFacts({ harnesses, os, manifest: m, reply = null,
         plan: blocked ? { reason: blocked.reason, at: blocked.at ?? null, code: blocked.code } : null,
         // the form's own way of being made to read its settings again, and the places it runs from: the doctor's restart steps come from the form the
         // process belongs to, never one fixed sentence (1.6 附录 B). No `restart` of its own: the harness's (`proxy.restart`), through the facts' behaviour.
-        restart: f.restart || null, paths: presentPaths(f, ctx),
+        restart: f.restart || null, paths: presentPaths(f, ctx), follows: f.systemProxy || null, // the form's own OS-proxy behaviour (4.11 form `systemProxy`), else the harness's
         hook: HOOKS.has(carrier) && !certificate.in_effect && ['entry-changed', 'entry-missing'].includes(certificate.code) ? certificate.code : null,
         setting: main ? settingOf(priorRaw, priorItem || main) : null,
         notes: plan.notes.filter((n) => !n.form || n.form === f.id).map((n) => ({ code: n.code, text: n.text, ...(n.paths ? { paths: n.paths } : {}) })),
@@ -160,8 +161,14 @@ export function netFormsOf({ model, status, procs = {}, systemProxy = null, sett
   for (const [h, list] of Object.entries(model)) {
     const row = (status.harnesses || []).find((x) => x.id === h) || {}
     const clients = (status.holders || []).filter((x) => x.harness === h).map((x) => x.pid)
-    forms[h] = list.map((x) => ({ id: x.id, setting: x.setting || settings[h] || { value: null, scheme: null, host: null, port: null, source: [], sha256: null }, systemProxy, procs: procs[h] || [],
-      entry: x.entry, route: x.plan, hook: x.hook, certificate: x.certificate, proxy: x.proxy, notes: x.notes, restart: x.restart, paths: x.paths }))
+    // a form's processes: the forms status found each can be on (`p.forms`, its one predicate over the form's programs and host processes; absent = not told, every form), and
+    // where that leaves more than one, the ones whose door group saw it (`upstreams['<h>:<route>']`) — the door's memory only breaks a tie: a process it never answered
+    // (started before `on`, not connected yet, after a daemon restart) is still on its form
+    const seen = (x) => new Set((((reply && reply.upstreams) || {})[`${h}:${x.route}`] || []).map((a) => a.pid))
+    const can = (p) => list.filter((x) => !Array.isArray(p.forms) || p.forms.includes(x.id))
+    const on = (p) => { const c = can(p), saw = c.filter((x) => seen(x).has(p.pid)); return saw.length ? saw : c }
+    forms[h] = list.map((x) => ({ id: x.id, setting: x.setting || settings[h] || { value: null, scheme: null, host: null, port: null, source: [], sha256: null }, systemProxy, procs: (procs[h] || []).filter((p) => on(p).includes(x)),
+      entry: x.entry, route: x.plan, hook: x.hook, certificate: x.certificate, proxy: x.proxy, notes: x.notes, restart: x.restart, paths: x.paths, follows: x.follows }))
     for (const x of list) {
       const written = x.proxy.written ? parseProxyUrl(x.proxy.written) : null
       const port = doors[`${h}:${x.route}`] ?? (written ? written.port : null)

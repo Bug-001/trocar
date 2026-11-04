@@ -6,7 +6,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { modelWorld } from '../helpers/model-world.mjs'
-import { liveUnit, withScratchCwd } from '../helpers/model-daemon.mjs'
+import { liveUnit, withScratchCwd, unservable } from '../helpers/model-daemon.mjs'
 import { daemonReader, DAEMON_READ_VERBS } from '../../src/off/daemon-read.mjs'
 import { regReadAllowed, REG_READ_ALLOW } from '../../src/collector/arch/win32/helper.mjs'
 import { memoProcQuestions, listProcs } from '../../src/off/proc.mjs'
@@ -16,7 +16,7 @@ const CREATED = 1_740_000_123_456
 const ROW = { pid: 7171, ppid: 1, name: 'codex.exe', exe: 'C:\\Users\\a\\codex.exe', startedAt: CREATED, cmdline: '"C:\\Users\\a\\codex.exe" app-server', cmdlineState: 'ok' }
 
 for (const platform of ['win32', 'darwin']) {
-  test(`${platform}: the CLI's read question reaches the daemon's resident helper over the real control endpoint, and the table reader takes that answer instead of asking the OS`, { timeout: 30_000 }, async () => {
+  test(`${platform}: the CLI's read question reaches the daemon's resident helper over the real control endpoint, and the table reader takes that answer instead of asking the OS`, { skip: await unservable(platform), timeout: 30_000 }, async () => {
     const w = await modelWorld({ os: platform, commands: ['codex'] })
     const asked = []
     const helper = { close: async () => {}, call: async (verb, args) => { asked.push(verb); if (verb === 'ps') return { sessionId: 1, procs: [ROW] }; if (verb === 'reg-read') return { keyExists: true, values: { ProxyEnable: 0 } }; throw Object.assign(new Error(`not in this stand-in: ${verb}`), { code: 'helper-verb-error' }) } }

@@ -13,7 +13,7 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { modelWorld } from '../helpers/model-world.mjs'
-import { liveUnit, withScratchCwd } from '../helpers/model-daemon.mjs'
+import { liveUnit, withScratchCwd, unservable } from '../helpers/model-daemon.mjs'
 import { within } from '../helpers/bounded.mjs'
 import { WITH_PARENT, watchEnv } from '../helpers/standin.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -36,7 +36,7 @@ const until = async (ok, ms, what) => within((async () => { for (;;) { const v =
 const tsMs = (r) => Date.parse(r.ts)
 
 for (const platform of ['darwin', 'win32']) {
-  test(`${platform}: SIGTERM with a WebSocket open — the daemon cuts it within the grace, writes its row before daemon-stop, writes nothing after, exits 0 and leaves no lock`, { timeout: 60_000 }, async () => {
+  test(`${platform}: SIGTERM with a WebSocket open — the daemon cuts it within the grace, writes its row before daemon-stop, writes nothing after, exits 0 and leaves no lock`, { skip: await unservable(platform), timeout: 60_000 }, async () => {
     const w = await modelWorld({ os: platform, commands: ['codex'] })
     fs.mkdirSync(path.join(w.home, '.codex'), { recursive: true }); fs.writeFileSync(path.join(w.home, '.codex', '.env'), '')
     const upCa = createCa({ commonName: 'e2e upstream CA' }), upIssuer = createLeafIssuer(loadCa(upCa))

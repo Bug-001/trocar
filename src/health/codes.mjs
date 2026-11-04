@@ -158,7 +158,7 @@ const NET_FAILURE_OWN = ['not-routed', 'proxy-dead', 'proxy-unsupported', 'eleva
 export const NET_CODES = Object.freeze([...NET_FAILURE_OWN, 'proxy-changed', 'netenv-changed', 'linger-off', 'system-proxy-pac', 'other-redirector', 'fake-ip', 'inferred-behaviour', 'cause-unknown', 'prior-proxy-unknown', 'not-verified', ROUTE_LOOP, FORWARDER_DOWN, EGRESS_DIFFERS]) // the last two before the shared ones: 1.6 §9.7's net group (4.11 §3 ⑱)
 export const NET_FAILURE_CODES = Object.freeze([...NET_FAILURE_OWN, ROUTE_LOOP, FORWARDER_DOWN])
 // the net names `status` gives as the reason an agent is not captured (1.6 §9.7); the proxy-mode reasons of 4.8 §12 (`form-unsupported`) is ROUTE_STATUS_REASONS above; a process on no name list is `process-unknown` (a state event, D51⑥), not a status reason
-const NET_STATUS_REASONS = Object.freeze(['not-routed', 'proxy-changed', 'elevated-agent', 'upstream-unreachable', 'shim-not-on-path', ROUTE_LOOP, FORWARDER_DOWN])
+const NET_STATUS_REASONS = Object.freeze(['not-routed', 'local-upstream', 'proxy-changed', 'elevated-agent', 'upstream-unreachable', 'shim-not-on-path', ROUTE_LOOP, FORWARDER_DOWN])
 
 // What `trocar status` says of an agent that is not captured (RFC 1.6 §2 / V32, 4.6 §记录「事件与码的名字」): one name from this closed set, whatever the reason. trocar's own, then every trust
 // reason above (the resolver's and the harnesses' own). A block of its own, as the ones above are. The Windows collector's reasons (ROUTE_STATUS_REASONS: what a form that is not captured says; ROUTE_TRUST_REASONS: why a running agent is not trusted) are part of it. `negative-cache` is also a code of the engine.

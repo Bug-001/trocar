@@ -55,7 +55,7 @@ const row = (r) => { ROWS.push(r); return r }
 // ── driver mode (Linux eBPF; 4.6 「eBPF 模式下的网络拓扑」) ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 row({ n: 1, title: 'no proxy in the agent: eBPF → engine → the API host, direct', h: 'claude-code', facts: facts('claude-code'),
   kinds: [['agent', 'trocar-engine', 'upstream']], on_path: true, captured: true, reason: null,
-  compact: ['claude (pid 4121) -> [ebpf] trocar :47123 -> api.anthropic.com:443 (direct)'], findings: [] })
+  compact: ['claude (pid 4121) -> [ebpf] trocar :47123 -> api.anthropic.com (direct)'], findings: [] })
 
 row({ n: 2, title: 'the agent has its own proxy (HTTPS_PROXY → mihomo, rule mode): the engine hands the CONNECT on', h: 'claude-code',
   facts: facts('claude-code', { listeners: [MIHOMO], vpn: mihomoVpn() }, viaMihomo),
@@ -65,7 +65,7 @@ row({ n: 2, title: 'the agent has its own proxy (HTTPS_PROXY → mihomo, rule mo
 row({ n: 3, title: 'a VPN with TUN on is not read (D49): with no proxy in the agent the path stops at the API host, direct', h: 'claude-code',
   facts: facts('claude-code', { vpn: mihomoVpn({ product: 'clash-verge', tun: true }) }),
   kinds: [['agent', 'trocar-engine', 'upstream']], on_path: true, captured: true, reason: null,
-  compact: ['claude (pid 4121) -> [ebpf] trocar :47123 -> api.anthropic.com:443 (direct)'], findings: [] })
+  compact: ['claude (pid 4121) -> [ebpf] trocar :47123 -> api.anthropic.com (direct)'], findings: [] })
 
 row({ n: 4, title: 'trocar is off (after `trocar off`): the agent goes to its own proxy', h: 'claude-code',
   facts: facts('claude-code', { desired: { 'claude-code': 'off' }, listeners: [MIHOMO], vpn: mihomoVpn() }, { ...viaMihomo, procs: [proc(4121, { watched: 'absent', trusted: false, reason: 'off' })] }),
@@ -103,13 +103,13 @@ export const pfacts = (h, fm, fw, over = {}) => facts(h, {
 }, { forms: [fm], procs: fm.procs, behaviour: { ...BEHAVE[h], measured: 'lab' } }) // what the Windows branch measured on a test machine: nothing here is inferred
 const codexForm = (over = {}) => form('codex.cli', { procs: [proc(5530, CODEX_PROC)], ...over })
 const ENGINE_AND_KERNEL = ['agent', 'trocar-forwarder', 'trocar-engine']
-const CODEX_VIA_CLASH = '(pid 5530) -> [.env HTTPS_PROXY, written by trocar] trocar :17992 -> trocar :17990 -> [system proxy] verge-mihomo.exe :7897 -> internet'
+const CODEX_VIA_CLASH = '(pid 5530) -> [.env HTTPS_PROXY, written by trocar] trocar :17992 -> [system proxy] verge-mihomo.exe :7897 -> internet'
 const viaSystemProxy = (port = 7897) => ({ listeners: [{ ...CLASH, port }], vpn: clashVpn({ port }) })
 
 row({ n: 8, title: 'proxy mode: the agent has no proxy and there is no VPN: the kernel and the engine dial the API host', h: 'claude-code',
   facts: pfacts('claude-code', form('claude-code.cli', { entry: { where: SETTINGS, trocar: true, opt_in: false, intact: true }, procs: [proc(4121)] }), fwForm(17991)),
   kinds: [[...ENGINE_AND_KERNEL, 'upstream']], on_path: true, captured: true, reason: null,
-  compact: ['claude (pid 4121) -> [settings env.HTTPS_PROXY, written by trocar] trocar :17991 -> trocar :17990 -> api.anthropic.com:443 (direct)'], findings: [] })
+  compact: ['claude (pid 4121) -> [settings env.HTTPS_PROXY, written by trocar] trocar :17991 -> api.anthropic.com (direct)'], findings: [] })
 
 row({ n: 9, title: 'proxy mode: a form that follows the OS proxy (Codex HTTP) with the OS proxy on: the upstream is the OS proxy; the WebSocket used to go direct', h: 'codex',
   facts: pfacts('codex', codexForm({ systemProxy: sysProxy(), follows: { http: true, ws: false } }), fwForm(17992, { upstream: 'http://127.0.0.1:7897', source: 'system-proxy' }), viaSystemProxy()),
@@ -119,12 +119,12 @@ row({ n: 9, title: 'proxy mode: a form that follows the OS proxy (Codex HTTP) wi
 row({ n: 10, title: 'proxy mode: the agent had a proxy of its own: it is the upstream, the entry points at the kernel', h: 'codex',
   facts: pfacts('codex', codexForm({ setting: proxyOf('http://proxy.corp:8080', [{ kind: 'file', where: 'C:\\Users\\u\\.codex\\.env', key: 'HTTPS_PROXY' }]) }), fwForm(17992, { upstream: 'http://proxy.corp:8080', source: 'agent' })),
   kinds: [[...ENGINE_AND_KERNEL, 'proxy', 'egress']], on_path: true, captured: true, reason: null,
-  compact: ['codex app-server (pid 5530) -> [.env HTTPS_PROXY, written by trocar] trocar :17992 -> trocar :17990 -> [CONNECT passed on as it is] proxy.corp:8080 -> internet'], findings: [] })
+  compact: ['codex app-server (pid 5530) -> [.env HTTPS_PROXY, written by trocar] trocar :17992 -> [CONNECT passed on as it is] proxy.corp:8080 -> internet'], findings: [] })
 
 row({ n: 11, title: 'proxy mode: the OS proxy is a PAC and the form follows it: trocar does not run a PAC, the form is not wired', h: 'codex',
   facts: pfacts('codex', codexForm({ systemProxy: { value: null, pac: true }, follows: { http: true, ws: false }, entry: null }), fwForm(17992, { state: 'forward-only' })),
   kinds: [['agent', 'unknown'], ['agent', 'upstream']], on_path: false, captured: false, reason: 'not-routed',
-  compact: ['HTTP codex app-server (pid 5530) -> [system proxy] PAC (unknown: pac)', 'WebSocket codex app-server (pid 5530) -> chatgpt.com:443 (direct)'], findings: ['not-routed', 'system-proxy-pac'] })
+  compact: ['HTTP codex app-server (pid 5530) -> [system proxy] PAC (unknown: a PAC script trocar does not run)', 'WebSocket codex app-server (pid 5530) -> chatgpt.com (direct)'], findings: ['not-routed', 'system-proxy-pac'] })
 
 row({ n: 12, title: 'proxy mode: wanted on, the engine is gone: the kernel falls back to the upstream and only forwards', h: 'codex',
   facts: pfacts('codex', codexForm({ systemProxy: sysProxy(), follows: { http: true, ws: false } }), fwForm(17992, { upstream: 'http://127.0.0.1:7897', source: 'system-proxy' }), { daemon: { state: 'not-running', pid: null, enginePort: null }, ...viaSystemProxy() }),
@@ -155,7 +155,7 @@ row({ n: 18, title: 'proxy mode: the OS proxy changed its port: the kernel was r
 row({ n: 19, title: 'proxy mode: the agent runs elevated: the kernel cannot tell the process and only forwards', h: 'claude-code',
   facts: pfacts('claude-code', form('claude-code.cli', { entry: { where: SETTINGS, trocar: true, opt_in: false, intact: true }, procs: [proc(4121, { elevated: true })] }), fwForm(17991)),
   kinds: [['agent', 'trocar-forwarder', 'upstream']], on_path: true, captured: false, reason: 'elevated-agent',
-  compact: ['claude (pid 4121, elevated) -> [settings env.HTTPS_PROXY, written by trocar] trocar :17991 (forwarded only) -> api.anthropic.com:443 (direct)'], findings: ['elevated-agent'] })
+  compact: ['claude (pid 4121, elevated) -> [settings env.HTTPS_PROXY, written by trocar] trocar :17991 (forwarded only) -> api.anthropic.com (direct)'], findings: ['elevated-agent'] })
 
 // ── the macOS old capture (§4) ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 row({ n: 20, title: 'old capture: Claude Desktop → the OS proxy (the VPN) → the VPN\'s block → trocar\'s old MITM → the VPN again', h: 'claude-code',
@@ -171,17 +171,17 @@ row({ n: 21, title: 'the owner of the proxy port cannot be read: that hop is 「
   facts: facts('hermes', { listeners: [{ addr: '127.0.0.1', port: 7891, unknown: { reason: 'owner-unreadable', detail: 'ss lists no process for it' } }] },
     { setting: proxyOf('http://127.0.0.1:7891', [{ kind: 'env', where: 'ALL_PROXY' }]), procs: [proc(6001, { name: 'hermes', exe: '/usr/bin/python3', version: null })] }),
   kinds: [['agent', 'trocar-engine', 'proxy', 'egress']], on_path: true, captured: true, reason: null,
-  compact: ['hermes (pid 6001) -> [ebpf] trocar :47123 -> [CONNECT passed on as it is] 127.0.0.1:7891 (unknown: owner-unreadable) -> unknown'], findings: ['inferred-behaviour'] })
+  compact: ['hermes (pid 6001) -> [ebpf] trocar :47123 -> [CONNECT passed on as it is] 127.0.0.1:7891 (unknown: owner not known) -> internet'], findings: ['inferred-behaviour'] })
 
 row({ n: 22, title: 'the OS proxy is a PAC and the agent follows it for HTTP (not for WebSocket): the HTTP branch ends at 「不知道 · pac」', h: 'codex',
   facts: facts('codex', {}, { systemProxy: { value: null, pac: true }, procs: [proc(5530, { name: 'codex app-server', exe: '/home/u/.codex/codex', version: '0.160.1' })] }),
   kinds: [['agent', 'trocar-engine', 'unknown'], ['agent', 'trocar-engine', 'upstream']], on_path: true, captured: true, reason: null,
-  compact: ['HTTP codex app-server (pid 5530) -> [ebpf] trocar :47123 -> [system proxy] PAC (unknown: pac)', 'WebSocket codex app-server (pid 5530) -> [ebpf] trocar :47123 -> chatgpt.com:443 (direct)'], findings: ['system-proxy-pac', 'inferred-behaviour'] })
+  compact: ['HTTP codex app-server (pid 5530) -> [ebpf] trocar :47123 -> [system proxy] PAC (unknown: a PAC script trocar does not run)', 'WebSocket codex app-server (pid 5530) -> [ebpf] trocar :47123 -> chatgpt.com (direct)'], findings: ['system-proxy-pac', 'inferred-behaviour'] })
 
 row({ n: 23, title: 'Windows: a kernel-level filter this user cannot see is said once, and changes no verdict', h: 'claude-code',
   facts: { ...ROWS.find((r) => r.n === 8).facts, unknowns: [{ fact: 'kernel-filter', reason: 'kernel-filter-invisible', detail: 'WFP filters are not readable by a user token' }] },
   kinds: [[...ENGINE_AND_KERNEL, 'upstream']], on_path: true, captured: true, reason: null,
-  compact: ['claude (pid 4121) -> [settings env.HTTPS_PROXY, written by trocar] trocar :17991 -> trocar :17990 -> api.anthropic.com:443 (direct)'], findings: [], notes: ['A kernel filter such as WFP is not visible to your user.'] })
+  compact: ['claude (pid 4121) -> [settings env.HTTPS_PROXY, written by trocar] trocar :17991 -> api.anthropic.com (direct)'], findings: [], notes: ['A kernel filter such as WFP is not visible to your user.'] })
 
 // Row 24 is not in the spec's table of §9.3 as an example of its own: it is the case the table's rows left out, found by running the real binary (a proxy whose owner is a readable process). D49: the hop is named by
 // its executable and keeps its port; trocar does not say which product it is.

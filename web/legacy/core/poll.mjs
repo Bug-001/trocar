@@ -7,6 +7,13 @@ export const INTERVAL = Object.freeze({ status: 5000, sessions: 15000, session: 
 
 // ── the poll loop: one read in flight, back-off after a failure (1.5 K-29) ──────────────────────────────────────────────
 export const BACKOFF_MAX_MS = 30000
+// the performance mark a round the timer began sets as it starts (detail: {base}), so a timer's read can be told from one a reader's
+// action caused (1.4 §D64: a step change sends none); dropped from the timeline at once, so a board left open holds none of them
+export const TIMER_ROUND = 'poll-timer'
+const markTimerRound = (base) => {
+  if (typeof performance === 'undefined' || !performance.mark) return
+  performance.mark(TIMER_ROUND, { detail: { base } }); performance.clearMarks(TIMER_ROUND)
+}
 // the wait after `n` (≥ 1) failures in a row: the poll interval doubled n times, at most BACKOFF_MAX_MS
 export const backoffMs = (n, base) => Math.min(base * 2 ** n, BACKOFF_MAX_MS)
 
@@ -31,6 +38,7 @@ export function createPoller({ run, now = Date.now, base, soon = base, alive = (
     if (busy) { readerAgain = readerAgain || byReader; return }
     if (!byReader && (idle() || now() < nextAt)) { if (!timer) arm(Math.max(nextAt, now() + (idle() ? base : 0))); return }
     busy = true; clearTimeout(timer); timer = 0
+    if (!byReader) markTimerRound(base) // a round chained by a reader's ask (readerAgain) is the reader's: no mark
     try {
       do {
         readerAgain = false

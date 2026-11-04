@@ -133,6 +133,7 @@ function proxyModeProblems(pm) {
     if (f.hostTree && !(obj(f.hosts) && Array.isArray(f.hosts.processes) && f.hosts.processes.length && f.hosts.processes.every(nonEmpty))) say('shape', `${at} is a hostTree form without hosts.processes: the door could not tell its host program (4.8 §3)`)
     else if (f.hostTree) for (const n of f.hosts.processes) if (normalizeName(n) !== n) say('shape', `${at}.hosts.processes names ${JSON.stringify(n)}, not the normalized program name ${JSON.stringify(normalizeName(n))}: the door reads a process by that one name (D51)`)
     if (f.forwardOnlyHosts !== undefined && !(Array.isArray(f.forwardOnlyHosts) && f.forwardOnlyHosts.every(nonEmpty))) say('shape', `${at}.forwardOnlyHosts is not a list of hosts`)
+    if (f.systemProxy !== undefined && !(obj(f.systemProxy) && ['http', 'ws'].every((k) => [true, false, 'unknown'].includes(f.systemProxy[k])))) say('shape', `${at}.systemProxy is not { http, ws } of true, false or 'unknown'`)
   }
   for (const [id, r] of Object.entries(routes)) {
     if (r.kind !== 'switch-file') continue

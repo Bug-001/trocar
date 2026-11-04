@@ -140,5 +140,5 @@ test('selecting text inside an expanded row, or clicking there, leaves it open; 
     await page.locator(`${blk} > .cbh .cbrole`).click()
     assert.notEqual((await state()).collapsed, s0.collapsed, 'desk: a plain click on the head still toggles')
     assert.deepEqual(b.errors, [])
-  } finally { await b.page.unrouteAll({ behavior: "ignoreErrors" }); await b.stop() }
+  } finally { await b.stop() }
 })
