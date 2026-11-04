@@ -22,7 +22,7 @@ const SCRIPT = fileURLToPath(new URL('../../scripts/pr-check.mjs', import.meta.u
 const BIN = fileURLToPath(new URL('../../bin/trocar.mjs', import.meta.url))
 const BEFORE = '2026-11-01T00:00:00.000Z'
 const NOREPLY = '1+nobody@users.noreply.github.com'
-const WHERE = /^[0-9a-f]{7,}(:file#\d+(:\d+)?|:message|:author)?$|^(title|body|branch|git|capture)$/
+const WHERE = /^[0-9a-f]{7,}(:file#\d+(:\d+)?|:message|:author)?$|^tree:file#\d+(:\d+)?$|^(title|body|branch|git|capture)$/
 const WHY_BODY = 'subject\n\nThe reason for this change.\n'
 
 /** A repo on branch `work`, one commit past tag `base`'s `files`, and a HOME with no capture in it. */
@@ -613,6 +613,29 @@ test('AN20: 60 shared normalized bytes are refused in every spelling, 59 pass, a
   shapely(doc)
   const size = fs.statSync(file).size
   assert.deepEqual(doc.coverage, { scanned_bytes: size, opaque_bytes: 0, after_bytes: 0, total_bytes: size, from: NOW_THEN, to: NOW_THEN })
+})
+
+test('AN20: what two commits each bring half of is judged by the tree they leave', () => {
+  const text = ascii(80, 1), cut = text.length >> 1
+  const halves = (w, name = 'a.txt') => { w.commit({ [name]: `${text.slice(0, cut)}\n` }); w.commit({ [name]: `${text.slice(0, cut)}\n${text.slice(cut)}\n` }) }
+  const w = workspace()
+  halves(w)
+  capture(w, SEGMENT, [line(NOW_THEN, text)])
+  const { code, doc } = w.check()
+  assert.equal(code, 1)
+  assert.deepEqual(named(doc, 'captured-text'), ['a.txt'])
+  assert.ok(of(doc, 'captured-text').every((f) => f.where.startsWith('tree:file#')), 'no one commit holds it')
+  shapely(doc)
+  const whole = workspace()
+  whole.commit({ 'a.txt': `${text}\n` })
+  whole.commit({ 'b.txt': 'clean\n' })
+  capture(whole, SEGMENT, [line(NOW_THEN, text)])
+  assert.deepEqual(named(whole.check().doc, 'captured-text'), ['a.txt'])
+
+  const word = workspace()
+  word.commit({ 'a.txt': 'zorg\n' })
+  word.commit({ 'a.txt': 'zorg\non7\n' })
+  assert.deepEqual(named(word.check({ env: { USER: 'zorgon7' } }).doc, 'identity'), ['a.txt'], 'a word the same way')
 })
 
 const kept = (o, bytes, coding) => JSON.stringify({ ...JSON.parse(envLine({ ts: NOW_THEN, ...o })), req_body: null, req_body_b64: bytes.toString('base64'), ...(coding ? { req_content_encoding: coding } : {}) })
