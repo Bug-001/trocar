@@ -73,10 +73,13 @@ const POSTED_IMAGE = /!\[[^\]]*\](?:\([^)]*\)|\[[^\]]*\])?|<img\b[^>]*>?/gi
 const NEUTRAL = new Set(['me', 'you', 'user', 'alice', 'bob', 'test', 'runner', 'someone'])
 const NOREPLY = /(?:@users\.noreply\.github\.com|^noreply@github\.com)$/i
 const CONTROL = /[\x00-\x08]/g
-const TEXT_KINDS = new Set(['added', 'message', 'title', 'body'])
+const TEXT_KINDS = new Set(['added', 'message', 'header', 'title', 'body'])
 const RECORD_TS = /^\{"ts":"([^"]+)"/
 const DIFF_HEADER = 'diff --git '
 const NEWLINE = Buffer.from('\n')
+const STANDARD_HEADER = /^(?:tree|parent|author|committer|encoding) .*\n/gm
+const SIGNATURE = /^gpgsig(?:-sha256)? .*\n(?: .*\n)*/gm
+const PERSON = (role) => new RegExp(`^${role} (.*) <(.*)> \\d+ [+-]\\d+$`, 'm')
 const ALNUM = String.raw`[\p{L}\p{N}]`
 const isAlnum = (char) => char !== undefined && new RegExp(ALNUM, 'u').test(char)
 // the row of .github/pull_request_template.md the hash is written on: it cannot hold its own hash, and holds nothing else or it counts
@@ -176,7 +179,7 @@ function patches(out) {
 
 /** What one commit brings, or what lies between two, {stats, diffs} file by file. */
 function brought(cwd, ...revs) {
-  const read = (...args) => git(cwd, ...(revs.length === 1 ? ['show', '--format='] : ['diff']), '-M', ...args, ...revs)
+  const read = (...args) => git(cwd, ...(revs.length === 1 ? ['show', '--format='] : ['diff']), '-M', '--no-relative', ...args, ...revs)
   const diffs = patches(read('--unified=0', '--no-color', '--no-ext-diff', '--no-textconv'))
   const stats = numstat(read('--numstat', '-z'))
   if (stats.length !== diffs.length) throw new Error('git')
@@ -200,6 +203,19 @@ const asIs = (bytes) => (text) => {
 
 const addedOf = (diff) => Buffer.concat(diff.added.flatMap((row) => [row, NEWLINE]))
 
+/** A commit as it is stored: every byte is in here, whatever `git log` would print of it. */
+function commitObject(cwd, sha) {
+  const raw = git(cwd, 'cat-file', 'commit', sha)
+  const split = raw.indexOf('\n\n')
+  const head = raw.subarray(0, split + 1).toString()
+  const person = (role) => {
+    const [, name, email] = PERSON(role).exec(head)
+    return { name, email }
+  }
+  return { message: raw.subarray(split + 2), author: person('author'), committer: person('committer'), merge: head.match(/^parent /gm)?.length > 1,
+    signature: head.match(SIGNATURE)?.join('') ?? '', extra: head.replace(SIGNATURE, '').replace(STANDARD_HEADER, '') }
+}
+
 /** Everything `base..HEAD` takes out, into `out`. */
 function readGit(cwd, base, out) {
   out.leaving.branch = git(cwd, 'rev-parse', '--abbrev-ref', 'HEAD').toString().trim()
@@ -211,14 +227,17 @@ function readGit(cwd, base, out) {
   }
   for (const sha of git(cwd, 'rev-list', '--reverse', `${base}..HEAD`).toString().split('\n').filter(Boolean)) {
     const short = sha.slice(0, SHORT_SHA)
-    const [parents, authorName, authorEmail, committerName, committerEmail, message] = git(cwd, 'log', '-1', '--format=%P%x00%an%x00%ae%x00%cn%x00%ce%x00%B', sha).toString().split('\0')
-    const people = [`${authorName} <${authorEmail}>`, `${committerName} <${committerEmail}>`]
+    const { message: bytes, author, committer, merge, signature, extra } = commitObject(cwd, sha)
+    const message = bytes.toString()
+    const people = [author, committer].map(({ name, email }) => `${name} <${email}>`)
     for (const person of people) if (!out.leaving.identity.includes(person)) out.leaving.identity.push(person)
     out.leaving.commits.push({ sha: short, subject: message.split('\n')[0] })
-    out.sources.push({ where: `${short}:message`, kind: 'message', bytes: Buffer.from(message) })
+    out.sources.push({ where: `${short}:message`, kind: 'message', bytes })
+    if (extra) out.sources.push({ where: `${short}:message`, kind: 'header', bytes: Buffer.from(extra) })
+    if (signature) out.sources.push({ where: `${short}:message`, kind: 'signature', bytes: Buffer.from(signature) })
     // the noreply address is a public login, judged by the email rule; the names are what the identity words read
-    out.sources.push({ where: `${short}:author`, kind: 'author', bytes: Buffer.from(people.join('\n')), norm: wordOf(`${authorName}\n${committerName}`) })
-    const commit = { sha, short, message, merge: parents.includes(' '), emails: [authorEmail, committerEmail], lines: 0, changed: [] }
+    out.sources.push({ where: `${short}:author`, kind: 'author', bytes: Buffer.from(people.join('\n')), norm: wordOf(`${author.name}\n${committer.name}`) })
+    const commit = { sha, short, message, merge, emails: [author.email, committer.email], lines: 0, changed: [] }
     out.commits.push(commit)
     if (commit.merge) continue // the shape rule refuses it whole, so its diff is not read
     const { stats, diffs } = brought(cwd, sha)
@@ -336,7 +355,7 @@ function checkShape(commits, sources, add) {
 
 /** A source's text for the rules on long runs, none for the built board, and the lock's integrity lines are hashes and nothing else. */
 function runnable(source) {
-  if (source.path?.startsWith(BOARD)) return null
+  if (source.path?.startsWith(BOARD) || source.kind === 'signature') return null
   const text = source.bytes.toString()
   return source.path && LOCK.test(source.path) ? text.replace(INTEGRITY, '') : text
 }
@@ -525,6 +544,7 @@ function print(doc) {
 }
 
 async function main() {
+  process.env.GIT_NO_REPLACE_OBJECTS = '1' // a replacement is local: what is pushed is the object it hides
   const options = parse(process.argv.slice(2))
   if (!options) {
     process.stderr.write(`${USAGE}\n`)
