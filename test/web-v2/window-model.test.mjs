@@ -31,7 +31,7 @@ async function* generated() {
 }
 
 // 1.4 ①–⑨ by item type; ⑥–⑧ stand in for ③④⑨
-const SLOT = { fid: 1, win: 2, sec: 3, foldall: 3, row: 3, turn: 3, chline: 3, removed: 3, unparsed: 6, noreq: 7, frames: 8, reply: 9 }
+const SLOT = { fid: 1, win: 2, sec: 3, foldall: 3, row: 3, card: 3, chline: 3, removed: 3, unparsed: 6, noreq: 7, frames: 8, reply: 9 }
 function whitelist(items, why) {
   const slots = items.map((it) => { assert.ok(SLOT[it.type], `${why}: ${it.type} is not in the whitelist`); return SLOT[it.type] })
   for (let i = 1; i < slots.length; i++) assert.ok(slots[i] >= slots[i - 1], `${why}: whitelist order ${slots}`)
@@ -56,7 +56,7 @@ test('2.3 #28: a folded turn has its head and no rows; every turn open draws one
     const anchors = [...new Set(flat.filter((b) => b.sec === 'messages').map((b) => b.key))]
     s.turnFold = new Map(anchors.map((a, i) => [a, i % 2 === 0])) // the fold store: every other turn shut
     const items = windowItems(s).items
-    for (const t of items.filter((it) => it.type === 'turn')) {
+    for (const t of items.filter((it) => it.type === 'card')) {
       assert.equal(t.open, s.turnFold.has(t.anchor) ? s.turnFold.get(t.anchor) : t.open, 'a turn follows the fold store')
       if (!t.open) assert.ok(!items.some((it) => it.type === 'row' && it.turn === t.anchor), `${t.anchor}: a folded turn has no rows`)
     }

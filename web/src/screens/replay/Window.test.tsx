@@ -312,7 +312,7 @@ test('2.3 #28: reveal into a folded turn opens it into the D12 memory; reveal of
   const s = stateOf(desk, 1, { landedFor: 'R0-1' }) // no landing: the window stays at its top
   s.ctx.api.get.mockReturnValue(new Promise(() => {}))
   const { desk: view, win } = mount(s)
-  const folded = itemsOf(s).find((x) => x.type === 'turn' && !x.open)!
+  const folded = itemsOf(s).find((x) => x.type === 'card' && !x.open)!
   const fi = flatOf(s).findIndex((b: B, i: number) => i > brk && b.sec === 'messages' && i < 200)
   let el: HTMLElement | null = null
   act(() => { el = view.reveal({ fi }) })
@@ -349,7 +349,7 @@ test('pins and landing: the change line and the reply stay drawn scrolled away; 
     expect(w, items[i].key).not.toBeNull()
     y = yOf(w!) + sizeOf(w!.firstElementChild)
   }
-  const turn = items.find((x) => x.type === 'turn' && x.anchor && s.turnLanded.has(x.anchor))
+  const turn = items.find((x) => x.type === 'card' && x.anchor && s.turnLanded.has(x.anchor))
   expect(turn).toBeDefined()
   expect(s.turnFold.has(turn!.anchor)).toBe(false)
   // the pins, scrolled far away
@@ -386,7 +386,7 @@ test('2.3 #3: the cache mark iff the block declares one, the volatile mark iff i
   expect(rows.some((x) => x.marks.isNew)).toBe(true)
   for (const it of rows) {
     const h = win.querySelector(`.cblk[data-bi="${it.bi}"] > .cbh`)!
-    expect(!!h.querySelector('.bpbadge')).toBe(!!it.marks.cc)
+    expect(!!h.querySelector('.bpbadge')).toBe(!!it.marks.cacheMark)
     expect(!!h.querySelector('.volbadge')).toBe(it.marks.volatile)
     if (it.marks.volatile) expect(h.querySelector('.newmark')).toBeNull()
   }

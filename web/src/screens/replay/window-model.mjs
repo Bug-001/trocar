@@ -65,7 +65,7 @@ export function replyOf({ row, reply, detail } = {}) {
 }
 
 // ── one request row's marks (2.3 §block 卡 · §保真标 · §窗口行) ──────────────────────────────────────────────────────────
-/** @typedef {{ ff: string, badge: boolean, quiet: boolean, sr: boolean, tech: string, cc: any, volatile: boolean, isNew: boolean }} RowMarks */
+/** @typedef {{ ff: string, badge: boolean, quiet: boolean, sr: boolean, tech: string, cacheMark: any, volatile: boolean, isNew: boolean }} RowMarks */
 /** What a request row says about itself. `open`: the row is open (an opened body that came back unproven outranks the
  * metadata's claim); `prevKeys`: the 内容对比步's content keys (null: no 「新」); `windowLine`: the window line is up.
  * @returns {RowMarks} */
@@ -76,7 +76,7 @@ export function rowMarks(b, { prevKeys = null, open = false, windowLine = false 
   return {
     ff, quiet, badge: !quiet && ff !== 'verbatim', sr: ff === 'verbatim' || quiet,
     tech: ff === 'unknown' ? String(b.faithfulness) : ff === 'unaddressable' ? (b.unaddressable || '') : '',
-    cc: b.cc || null, volatile: !!b.volatile, isNew: !!(prevKeys && !b.volatile && !prevKeys.has(b.key)),
+    cacheMark: b.cc || null, volatile: !!b.volatile, isNew: !!(prevKeys && !b.volatile && !prevKeys.has(b.key)),
   }
 }
 // ② the reasons of the window line, or null when some block of the step can return to the raw bytes
@@ -128,7 +128,7 @@ const replyTag = (d) => (d.kind === 'tool_use' ? 'action · ' + (d.name || '') :
 const MEMO = new WeakMap()
 const sigOf = (x) => (x instanceof Set ? [...x].join('\n') : x instanceof Map ? [...x].map(([k, v]) => k + '\t' + JSON.stringify(v)).join('\n') : null)
 
-/** The window of the playhead's step as keyed items, in 1.4's order ① fid · ② win · ③ sec / foldall / row / turn with ④ chline
+/** The window of the playhead's step as keyed items, in 1.4's order ① fid · ② win · ③ sec / foldall / row / card with ④ chline
  * and its removed list before row `cacheBreak.idx` · ⑨ reply; ⑥–⑧ (unparsed · noreq · frames) stand in for ③④⑨. The rows of
  * an open turn follow its turn item; a folded turn has its head only. Pure but for the desk's scratch it sets: s.curFlat,
  * s.curKeys, s.curReply (when the reply has parts), s.curRemoved.
@@ -202,7 +202,7 @@ function build(s, call, st, refFlat, fid) {
     if (t.items[0] !== i) return // a later item of a turn already drawn
     const open = turnOpen(s, flat, T, ti), anchor = turnAnchorKey(flat, t)
     const n = tk.get(anchor) || 0; tk.set(anchor, n + 1)
-    items.push({ key: `q:${anchor}#${n}`, type: 'turn', anchor, ti, label: t.label, query: t.query, acts: t.acts, n: t.items.length, open })
+    items.push({ key: `q:${anchor}#${n}`, type: 'card', anchor, ti, label: t.label, query: t.query, acts: t.acts, n: t.items.length, open })
     if (open) for (const j of t.items) items.push(...mark(j), row(flat[j], j, anchor)) // a folded turn draws its head only (rule 2)
   })
   const reply = replyItem(s, st, call) // ⑨

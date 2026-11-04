@@ -104,7 +104,7 @@ export function ctxWindowUnits(s, { all = false, focus = null } = {}) {
   const winLine = items.some((it) => it.type === 'win'), out = [], groups = []
   let turn = null, g = null, pend = [] // the open turn's kids; its current group; the change line waiting for its row
   for (const it of items) {
-    if (it.type === 'turn') {
+    if (it.type === 'card') {
       turn = it.open ? [] : null; g = null
       out.push({ key: it.key, set: { 'data-turn': it.ti }, html: turnHtml(it), kids: turn || [] })
       continue
