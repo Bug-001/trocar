@@ -40,6 +40,7 @@ import { warmCache, fsTag, heapBudget, heapCeiling, hold, liveHeap, usedHeap, yi
 import { parseTextRef } from '../../raw/refs.mjs';
 import { QueryArgError } from './index.mjs';
 import { columns, dumpColumns, loadColumns, sync, viewOf, pageOf, deltaOf, limitOf, markOf } from '../session-doc.mjs';
+import { titleOf } from '../titles.mjs';
 import { filesAt, filesParts, forget, hasHead, headDoc, packsOf, pendingHead, tier0Doc, writeFiles, writeHead, memoBytes, PACK_MEMBERS } from '../ctx-files.mjs';
 
 export const params = Object.freeze(['id', 'since', 'before', 'limit', 'head']);
@@ -567,7 +568,7 @@ async function stopped(ctx, id, e) {
   if (h && h.sig === sig && hasHead(home, id, fs)) return;
   try {
     const index = await indexed(ctx), members = sessionGroups(index.rows).get(id);
-    if (members) { writeHead(home, id, pendingHead(home, id, members, index.errors, (d, done) => ({ done, total: members.length, stopped: stop }), fs), fs); heads.set(id, { sig, shape: null }); }
+    if (members) { writeHead(home, id, pendingHead(home, id, members, index.errors, (d, done) => ({ done, total: members.length, stopped: stop }), fs, titleOf({ home, fs, id, members })), fs); heads.set(id, { sig, shape: null }); }
   } catch { /* a head not written is written at the next stop or slice */ }
 }
 // A slice that leaves members past the frontier writes no answer file (3.5 §后台抽取与归约); the head's `pending` alone is brought to
@@ -579,7 +580,7 @@ function backlog(ctx, id, { st, plan, members, indexErrors }) {
   const home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs, mark = markOf(st.log), done = mark == null ? 0 : posOf(plan, mark) + 1;
   const was = shown.get(id), cleared = stops.delete(id);
   if (!cleared && was != null && Math.floor(was / PACK_MEMBERS) === Math.floor(done / PACK_MEMBERS) && hasHead(home, id, fs)) return;
-  try { writeHead(home, id, pendingHead(home, id, members, indexErrors, () => ({ done, total: members.length }), fs), fs); } catch { if (cleared) stops.add(id); return; } // tried again next slice
+  try { writeHead(home, id, pendingHead(home, id, members, indexErrors, () => ({ done, total: members.length }), fs, titleOf({ home, fs, id, members })), fs); } catch { if (cleared) stops.add(id); return; } // tried again next slice
   shown.set(id, done);
   heads.set(id, { sig: JSON.stringify(['pending', done]), shape: null });
   lagging.delete(id);
@@ -598,13 +599,14 @@ export function files(ctx, s, deadline = Infinity) {
   try { s.files = writeFiles({ home: ctx.home ?? trocarHome(), fs: ctx.fs || nodeFs }, s, deadline); } catch { forget(s.V.log); return true; }
   return s.files != null;
 }
-/** headOf(s) → the session's `session --head` document: tier 1 at its mark, tier 0 while it has none (ctx-files.mjs). */
-const headOf = (s) => (s.mark == null ? tier0Doc(s.id, s.rows, s.indexErrors)
+/** headOf(ctx, s) → the session's `session --head` document: tier 1 at its mark, tier 0 while it has none (ctx-files.mjs), the same bytes
+ *  here and in the worker: the title is a function of the disk. */
+const headOf = (ctx, s) => (s.mark == null ? tier0Doc(s.id, s.rows, s.indexErrors, titleOf({ home: ctx.home ?? trocarHome(), fs: ctx.fs || nodeFs, id: s.id, members: s.rows }))
   : headDoc({ ...s, ...(s.files || packsOf(s)), mark: markOn(s.plan, s.mark), markTs: s.plan.byId.get(s.mark)?.ts ?? null }));
 function putHead(ctx, s, doc = null) {
   const h = heads.get(s.id), sig = sigOf(s), home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs;
   if (!(h && h.sig === sig && hasHead(home, s.id, fs))) {
-    try { writeHead(home, s.id, doc || headOf(s), fs); } catch { return; } // a head not written is written at the next slice
+    try { writeHead(home, s.id, doc || headOf(ctx, s), fs); } catch { return; } // a head not written is written at the next slice
     heads.set(s.id, { sig, shape: shapeOf(s) });
   }
   lagging.delete(s.id);
@@ -679,7 +681,7 @@ export async function run(ctx) {
   }
   files(ctx, s);
   if (asHead) {
-    const doc = headOf(s);
+    const doc = headOf(ctx, s);
     if (ctx.writer === true) putHead(ctx, s, doc); // the answer is the file (writeHead: the same bytes are not written)
     errors.push(...doc.errors);
     return doc;

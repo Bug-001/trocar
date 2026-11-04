@@ -78,9 +78,9 @@ export function headDoc(s) {
   });
 }
 
-/** tier0Doc(id, members, errors) → the tier-0 head of a session with no reduction state: from its segment index rows only (meta as
- *  the `sessions` query has it, its model calls in ≤ BUCKETS equal spans of time). */
-export function tier0Doc(id, members, errors) {
+/** tier0Doc(id, members, errors, title) → the tier-0 head of a session with no reduction state: from its segment index rows and its title
+ *  (src/query/titles.mjs; meta as the `sessions` query has it, its model calls in ≤ BUCKETS equal spans of time). */
+export function tier0Doc(id, members, errors, title = null) {
   const f = sessionFactsOf(id, members), calls = members.filter(isModelCall);
   const ts = calls.map((r) => Date.parse(r.ts)).filter((t) => !Number.isNaN(t)).sort((a, b) => a - b), buckets = [];
   if (ts.length) {
@@ -90,17 +90,17 @@ export function tier0Doc(id, members, errors) {
   }
   return docOf(errorsOf(errors, []), {
     id, tier: 0, mark: null, markTs: null, pending: { done: 0, total: members.length }, truncated: null, failed: 0,
-    meta: sessionMetaOfFacts({ ...f, title: null }), stats: { calls: f.calls }, logged: f.logged, probes: f.probes,
+    meta: sessionMetaOfFacts({ ...f, title }), stats: { calls: f.calls }, logged: f.logged, probes: f.probes,
     axis: null, steps: calls.length, peak: 0, cols: '', bucket: 1, chapters: [], packs: [], open: null, lanes: [], lanesMore: 0, last: null, buckets,
   });
 }
 
-/** pendingHead(home, id, members, errors, pending, fs) → the head on disk (else the tier-0 head of `members`) with `pending` put in,
+/** pendingHead(home, id, members, errors, pending, fs, title) → the head on disk (else the tier-0 head of `members`, saying `title`) with `pending` put in,
  *  the rest as it was written (3.5 §会话读「`session --head`」 pending): `pending(d, done)` → the pending of head `d`, `done` the
  *  members at or below its mark. A stopped fold's (`stopped`) and the progress of a backlog no answer file is written in. */
-export function pendingHead(home, id, members, errors, pending, fs = nodeFs) {
+export function pendingHead(home, id, members, errors, pending, fs = nodeFs, title = null) {
   let d = readHead(home, id, fs);
-  if (!d || d.v !== CTX_V) d = tier0Doc(id, members, errors);
+  if (!d || d.v !== CTX_V) d = tier0Doc(id, members, errors, title);
   const rid = d.mark == null ? null : String(d.mark).replace(/@.*$/, ''); // a cut's mark is `rid@cut` (named/session.mjs markOn)
   const done = d.pending ? d.pending.done : rid == null ? 0 : members.findIndex((r) => String(r.id) === rid) + 1;
   return { ...d, pending: pending(d, done) };

@@ -156,15 +156,17 @@ test('3.5:93 #10 through the real worker: after it fills, coverage is whole and 
     child.stdout.on('data', (d) => {
       buf = Buffer.concat([buf, d])
       for (let nl; (nl = buf.indexOf(10)) >= 0;) {
-        const len = Number(buf.subarray(0, nl).toString().split(' ')[1])
+        const [status, size] = buf.subarray(0, nl).toString().split(' '), len = Number(size)
         if (buf.length < nl + 1 + len) return
         const body = buf.subarray(nl + 1, nl + 1 + len).toString()
         buf = buf.subarray(nl + 1 + len)
-        waiting.shift()(JSON.parse(body))
+        if (status === '102') setTimeout(line, 5) // the rows are still being read: ask again, as the daemon does
+        else waiting.shift()(JSON.parse(body))
       }
     })
+    const line = () => child.stdin.write('{"name":"overview","params":{}}\n')
     const ask = () => Promise.race([
-      new Promise((r) => { waiting.push(r); child.stdin.write('{"name":"overview","params":{}}\n') }),
+      new Promise((r) => { waiting.push(r); line() }),
       new Promise((_, no) => setTimeout(() => no(new Error('the worker did not answer within 30 s')), 30_000).unref()),
     ])
     const first = await ask()
