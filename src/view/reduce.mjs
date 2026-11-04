@@ -101,14 +101,17 @@ function enumOf() {
   const ix = new Map(), names = [];
   return { id: (v) => { let k = ix.get(v); if (k === undefined) { k = names.length; names.push(v); ix.set(v, k); } return k; }, name: (k) => names[k] };
 }
+// a definition's bytes are no verbatim text: its faithfulness says metadata, or an older capture's tool definition
+// says `verbatim: false` (analyze.mjs) with no faithfulness of its own
+const metadataOnly = (D) => (D.ff && D.ff.faithfulness ? D.ff.faithfulness === 'metadata' : D.verbatim === false);
 const BLOCKS = new WeakMap(); // store → its block columns
 function blocksOf(store) {
   if (BLOCKS.has(store)) return BLOCKS.get(store);
-  let cap = 0, known, key, vh, name, bytes, chars, sec, role, bucket;
+  let cap = 0, known, key, vh, name, bytes, chars, sec, role, bucket, meta;
   const grow = (n) => {
     const to = Math.max(256, cap * 2, n), m = (T, a) => { const x = new T(to); if (a) x.set(a); return x; };
     known = m(Uint8Array, known); key = m(Int32Array, key); vh = m(Int32Array, vh); name = m(Int32Array, name);
-    bytes = m(Uint32Array, bytes); chars = m(Uint32Array, chars); sec = m(Uint16Array, sec); role = m(Uint16Array, role); bucket = m(Uint16Array, bucket);
+    bytes = m(Uint32Array, bytes); chars = m(Uint32Array, chars); sec = m(Uint16Array, sec); role = m(Uint16Array, role); bucket = m(Uint16Array, bucket); meta = m(Uint8Array, meta);
     cap = to;
   };
   const E = enumOf(), facts = lru(2 * FACTS_BYTES);
@@ -130,6 +133,7 @@ function blocksOf(store) {
     name[k] = typeof D.name === 'string' ? names(D.name, k) : -1;
     bytes[k] = D.bytes || 0; chars[k] = D.chars || 0;
     sec[k] = E.id(D.sec); role[k] = E.id(D.role); bucket[k] = E.id((D.f && D.f.bucket) || 'other');
+    meta[k] = metadataOnly(D) ? 1 : 0;
     known[k] = 1;
     if (D.sec === 'messages') remember(k, factsOf(D)); // a block seen the first time is a new one: its facts are asked next
     return k;
@@ -144,6 +148,7 @@ function blocksOf(store) {
     sec: (k) => { fill(k); return E.name(sec[k]); },
     role: (k) => { fill(k); return E.name(role[k]); },
     bucket: (k) => { fill(k); return E.name(bucket[k]); },
+    meta: (k) => { fill(k); return meta[k] === 1; },
     // the facts of a block of the messages (null for one of the tools or system), read back when the cache no longer holds them
     f: (k) => {
       if (B.sec(k) !== 'messages') return null;
@@ -207,6 +212,25 @@ function listsOf(store) {
 export function listOf(store, rid) {
   const L = listsOf(store), e = L.at(String(rid));
   return e ? { bids: e.list.map(L.bid), attrs: e.attrs, mb: e.mb.slice() } : null;
+}
+
+/** taxOf(store, rid) → the four segments of a call row's context (2.2 §组成:段权重; 3.5 `detail.tax`): `task` the bytes of its last turn,
+ *  `chars` per segment, `allVerbatim` no tool definition kept as metadata only; null for a row with no blocks or no row. The turn opens at
+ *  the last block of the messages with a query (none: at the first), read off the attributes: a flat wire's `mb` may be empty. */
+export function taxOf(store, rid) {
+  const e = listsOf(store).at(String(rid));
+  if (!e || !e.list.length) return null;
+  const B = blocksOf(store), { list, attrs } = e, chars = { tools: 0, system: 0, history: 0, task: 0 };
+  let t0 = 0, task = 0, allVerbatim = true;
+  for (const i in attrs) if (attrs[i].query && B.sec(list[i]) === 'messages') t0 = Math.max(t0, +i);
+  for (let i = 0; i < list.length; i++) {
+    const k = list[i], sec = B.sec(k), n = B.chars(k);
+    if (sec === 'tools') { chars.tools += n; if (B.meta(k)) allVerbatim = false; }
+    else if (sec === 'system') chars.system += n;
+    else if (sec === 'messages' && i >= t0) { chars.task += n; task += B.bytes(k); }
+    else chars.history += n;
+  }
+  return { task, chars, allVerbatim };
 }
 
 // ── reduce ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
