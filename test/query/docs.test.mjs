@@ -15,7 +15,7 @@ const SID = 's-1'
 const BODY = '{"model":"m"}' // what test/query/raw-home.mjs stores as the request body
 // §4.1 的必填参数在 test/query/raw-home.mjs 一处(`session --id` · `block --ref`)
 const required = (name) => requiredFor(name, { segment: SEG, session: SID })
-const NEEDS_PARAM = ['block', 'session', 'lane']
+const NEEDS_PARAM = ['analysis', 'block', 'session', 'lane']
 const homeWithData = () => {
   const home = rawHome()
   writeSegment(home, SEG, [

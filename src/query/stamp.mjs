@@ -32,6 +32,9 @@ export const overview = (ctx) => [...usage(ctx), ...pricingId(ctx)];
 /** `sessions`: the corpus + the title table (a table written moves the stamp, so a new title is never held back by a 304). */
 export const titles = (ctx) => [...corpus(ctx), statKey(titlesFile(ctx.home), ctx.fs)];
 
+/** `analysis`: the corpus + the price identity (its money reads the table). */
+export const analysis = (ctx) => [...corpus(ctx), ...pricingId(ctx)];
+
 /** `classes`: the corpus + the user's table and the classification log. */
 export const classes = (ctx) => [...corpus(ctx), statKey(classesFile(ctx.home), ctx.fs), statKey(classesLog(ctx.home), ctx.fs)];
 

@@ -17,6 +17,7 @@ import * as block from './block.mjs';
 import * as pricing from './pricing.mjs';
 import * as traffic from './traffic.mjs';
 import * as overview from './overview.mjs';
+import * as analysis from './analysis.mjs';
 import { createHash } from 'node:crypto';
 import * as src from '../stamp.mjs';
 
@@ -34,6 +35,7 @@ export const QUERIES = Object.freeze({
   sessions: { params: sessions.params, run: sessions.run, stored: sessions.stored, stamp: src.titles, times: TIMES }, // its titles come from the title table (4.4 §人类标题的来源)
   session: { params: session.params, run: session.run, version: session.version, stamp: src.corpus },
   lane: { params: lane.params, run: lane.run, version: lane.version, stamp: src.corpus },
+  analysis: { params: analysis.params, run: analysis.run, version: analysis.version, stamp: src.analysis },
   calls: { params: calls.params, run: calls.run, stamp: src.corpus, times: TIMES },
   traffic: { params: traffic.params, run: traffic.run, stamp: src.corpus, times: TIMES },
   overview: { params: overview.params, run: overview.run, stamp: src.overview, times: TIMES },

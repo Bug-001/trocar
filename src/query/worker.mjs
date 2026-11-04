@@ -268,7 +268,7 @@ process.stdin.on('data', (d) => {
     if (!line) continue
     busy++; once = {}; newestDone = false; gcDone = false; sealing = false; clearTimeout(timer) // a new idle period begins after this one is answered
     chain = chain.then(() => serve(line)).then((asked) => {
-      const id = asked && (asked.name === 'session' || asked.name === 'lane') && asked.params && asked.params.id
+      const id = asked && ['session', 'lane', 'analysis'].includes(asked.name) && asked.params && asked.params.id
       if (id != null && id !== '') { if (target != null && target !== String(id)) follow.add(target); target = String(id); answered.add(String(id)) } // a followed session keeps its turn
     }, say).finally(() => { busy--; lastAt = Date.now(); kick() })
   }
