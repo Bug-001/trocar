@@ -95,11 +95,13 @@ export function tier0Doc(id, members, errors, title = null) {
   });
 }
 
-/** headDone(d, members) → the members head `d` has done: its `pending.done`, else the members at or below its mark. */
-export function headDone(d, members) {
+/** markDone(d, members) → the members at or below the mark of head `d`. */
+export function markDone(d, members) {
   const rid = d.mark == null ? null : String(d.mark).replace(/@.*$/, ''); // a cut's mark is `rid@cut` (named/session.mjs markOn)
-  return d.pending ? d.pending.done : rid == null ? 0 : members.findIndex((r) => String(r.id) === rid) + 1;
+  return rid == null ? 0 : members.findIndex((r) => String(r.id) === rid) + 1;
 }
+/** headDone(d, members) → the members head `d` has done: its `pending.done`, else the members at or below its mark. */
+export const headDone = (d, members) => (d.pending ? d.pending.done : markDone(d, members));
 /** pendingHead(home, id, members, errors, pending, fs, title) → the head on disk (else the tier-0 head of `members`, saying `title`: {title, title_source}) with `pending` put in,
  *  the rest as it was written (3.5 §会话读「`session --head`」 pending): `pending(d, done)` → the pending of head `d`, `done` the
  *  members at or below its mark. A stopped fold's (`stopped`) and the progress of a backlog no answer file is written in. */
@@ -316,6 +318,13 @@ function readText(fs, file, gz) {
     const b = gz ? gunzipSync(fs.readFileSync(file)) : fs.readFileSync(file);
     return b[b.length - 1] === 10 && JSON.parse(b.subarray(0, b.indexOf(10)).toString('utf8')).v === CTX_V ? b : null;
   } catch { return null; }
+}
+/** listedText(home, id, n, part, fs) → the text of pack `n` (null: the open tail) as the head on disk lists it, else null: not listed, or its file gone or torn. */
+export function listedText(home, id, n, part, fs = nodeFs) {
+  const d = readHead(home, id, fs), gz = n != null;
+  if (!d || !(gz ? d.packs.some((p) => p.n === n) : d.open)) return null;
+  const t = readText(fs, gz ? packFile(home, id, n, part) : tailFile(home, id, part), gz);
+  return t && t.toString('utf8');
 }
 const same = (a, b) => !!a && a.equals(b);
 // a file's text begins with the doc-head line `o`

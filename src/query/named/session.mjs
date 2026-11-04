@@ -42,7 +42,7 @@ import { parseTextRef } from '../../raw/refs.mjs';
 import { QueryArgError } from './index.mjs';
 import { columns, dumpColumns, loadColumns, sync, viewOf, pageOf, deltaOf, limitOf, markOf } from '../session-doc.mjs';
 import { titleOf } from '../titles.mjs';
-import { clearReread, endReread, setMtimes, filesAt, filesParts, filesReach, forget, hasHead, hasReread, headDoc, markReread, packsOf, pendingHead, readHead, tailsReach, tier0Doc, writeFiles, writeHead, memoBytes, CTX_V, PACK_MEMBERS } from '../ctx-files.mjs';
+import { clearReread, endReread, setMtimes, filesAt, filesParts, filesReach, forget, hasHead, hasReread, headDoc, markDone, markReread, packsOf, pendingHead, readHead, tailsReach, tier0Doc, writeFiles, writeHead, memoBytes, CTX_V, PACK_MEMBERS } from '../ctx-files.mjs';
 
 export const about = Object.freeze({
   summary: "One session's outline: its calls in step order, its lanes, events, member records and totals.",
@@ -222,12 +222,12 @@ const works = new Map();
 // answer in its answer files, which stay. While it is here (the worker's alone) only extendSession writes them, once folded to the
 // end; meanwhile a slice changes the head's `pending` alone (backlog). `reread` on disk tells the next worker.
 const rereads = new Set();
-const rereading = (ctx, id) => ctx.writer === true && rereads.has(id);
+export const rereading = (ctx, id) => ctx.writer === true && rereads.has(id);
 /** rereadingNow(id) → whether this process is re-reading the session: the worker's scheduler asks at a slice's boundary. */
 export const rereadingNow = (id) => rereads.has(id);
 const isRebuilt = (e) => e.code === 'projection-rebuilt';
 // The idle save after a re-read writes the sidecars and parts of what it folded, which is no use of the session (4.3 §4 回收): they take the
-// directory's mtime once sealed (sealParts). session id → {home, fs, at}
+// directory's mtime once sealed (sealParts), unless its store is opened first: that is a use. session id → {home, fs, at}
 const rereadAt = new Map();
 // A rebuild just said (`rebuilt`), or the marker of a worker that was killed, with a tier-1 head of this CTX_V on disk: a re-read. With
 // any other head there is no answer to keep: the session folds as a first read, and a marker goes.
@@ -248,6 +248,7 @@ function storeOf(ctx, id, k) {
   if (s) { stores.delete(k); stores.set(k, s); return s; }
   // the marker before the open that rebuilds: a kill between the two loses no re-read
   if (ctx.writer === true && (projectionStale({ home: ctx.home, fs: ctx.fs, key: id }) || foldStale({ home: ctx.home, fs: ctx.fs, key: id }))) rereadOn(ctx, id, true);
+  rereadAt.delete(id);
   const opened = [];
   s = openProjection({ home: ctx.home, fs: ctx.fs, key: id, write: ctx.writer === true, errors: opened });
   s.opened = opened; s.session = id;
@@ -635,7 +636,7 @@ function backlog(ctx, id, { st, plan, members, indexErrors }) {
   const was = shown.get(id), cleared = stops.delete(id), re = rereading(ctx, id), total = members.length;
   const calls = callsPast(plan, reachOf(ctx, id, st.log, members));
   if (!cleared && was && was.called === calls > 0 && Math.floor(was.read / PACK_MEMBERS) === Math.floor(read / PACK_MEMBERS) && hasHead(home, id, fs)) return;
-  const pending = (d, at) => (re && d.tier === 1 ? { done: at, total, seen: true, calls, read } : { done: read, total, calls });
+  const pending = (d) => (re && d.tier === 1 ? { done: markDone(d, members), total, seen: true, calls, read } : { done: read, total, calls });
   try { writeHead(home, id, pendingHead(home, id, members, indexErrors, pending, fs, titleOf({ home, fs, id, members })), fs); } catch { if (cleared) stops.add(id); return; } // tried again next slice
   shown.set(id, { read, called: calls > 0 });
   heads.set(id, { sig: JSON.stringify(['pending', read]), shape: null });
@@ -759,6 +760,7 @@ function thenOf(s, M) {
   return { then: { log: T, off: T.frontier ?? -1, mark: M, added }, cands: { rids: new Set([...a.rids, ...b.rids]), lanes: new Set([...a.lanes, ...b.lanes]) }, close: () => T.close() };
 }
 
+const headKept = (ctx, id) => readHead(ctx.home ?? trocarHome(), id, ctx.fs || nodeFs);
 export async function run(ctx) {
   const { params: p, errors } = ctx;
   const id = one(p.id), since = one(p.since), before = one(p.before);
@@ -775,13 +777,16 @@ export async function run(ctx) {
   }
   files(ctx, s);
   if (asHead) {
-    const doc = headOf(s);
+    const doc = (rereading(ctx, id) && headKept(ctx, id)) || headOf(s); // a re-read's is the file (3.5 #33), the frontier's only when it is gone
     if (ctx.writer === true && !rereading(ctx, id)) putHead(ctx, s, doc); // the answer is the file (writeHead: the same bytes are not written)
     errors.push(...doc.errors);
     return doc;
   }
   headAt(ctx, s);
   errors.push(...s.errors, ...s.failed.map((f) => ({ where: f.id, code: f.code, reason: f.reason })));
+  const kept = since != null && rereading(ctx, id) && headKept(ctx, id);
+  // the answer a client holds stays until the switch: nothing of the frontier, whose scalars are half way (3.5 §访问模式「版本变更的重读」①)
+  if (kept) return { base: since, mark: since, pending: s.pending, truncated: kept.truncated, meta: kept.meta, stats: kept.stats, logged: kept.logged, probes: kept.probes, calls: [], gone: [], lanes: [], lanes_gone: [], events: [], records: [] };
   const { V } = s;
   if (before != null && !V.has(before)) throw new QueryArgError(`trocar query session: --before ${JSON.stringify(before)} is not a call of this session`);
   const head = { mark: markOn(s.plan, s.mark), ...(s.pending ? { pending: s.pending } : null), truncated: s.truncated };
