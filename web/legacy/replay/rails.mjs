@@ -143,7 +143,8 @@ export function selectTick(s, lane, i) {
   if (reviewing(lane)) highlightRange(s, lane, i); else clearRange(s)
   const c = lane.calls[i]
   if (c && s.anchor.calls.length) { s.follow = false; s.setPlayhead(nearestByTs(s.anchor, c.ts, s.playhead), false) } // the conversation jumps to the same moment
-  s.openDetail(lane, i) // its lane not held yet: the drawer draws the row first and fills in when the lane lands (2.3 §读与画)
+  // in the task after the step's paint (2.3 §归约前沿); its lane not held yet: the drawer draws the row first and fills in when the lane lands (2.3 §读与画)
+  s.openDetailNext(lane, i)
 }
 
 export function wireRails(el, s) {

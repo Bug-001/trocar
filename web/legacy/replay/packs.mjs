@@ -9,6 +9,7 @@
 // a rid that one tail lets go (g, or the tail sealed) comes back from another tail that still has it.
 //
 //   parseLines(text | bytes[, {head}]) → {head, lines, used}   only whole lines; `used` = bytes through the last newline
+//   lineSlices(text | bytes[, {head}]) → a generator yielding after each line, returning parseLines' answer
 //   applyFile(desk, {kind:'pack', n, part} | {kind:'tail', n?, part, whole?}, parsed) → false when the file is already sealed;
 //     `whole` = the tail's bytes from 0 (a rewritten tail): what it held before is let go first
 //   applyHead(desk, head) → the `session --head` answer as the desk's head: its scalars and its lane heads
@@ -21,11 +22,21 @@ import { changed, addRow, removeRow, newHeld, boardDef } from './model.mjs'
 
 const enc = new TextEncoder(), dec = new TextDecoder()
 
-export function parseLines(src, { head = true } = {}) {
-  const bytes = typeof src === 'string' ? enc.encode(src) : src
-  const used = bytes.lastIndexOf(10) + 1
-  const lines = dec.decode(bytes.subarray(0, used)).split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l))
+// lineSlices: the same parse, resumable: a generator that yields after each line and returns parseLines' answer (the caller decides
+// when to give the thread back, 2.3 §归约前沿 分片解析)
+export function* lineSlices(src, { head = true } = {}) {
+  let text, used
+  if (typeof src === 'string') { text = src.slice(0, src.lastIndexOf('\n') + 1); used = enc.encode(text).length } else { used = src.lastIndexOf(10) + 1; text = dec.decode(src.subarray(0, used)) }
+  const lines = []
+  for (let at = 0, j; (j = text.indexOf('\n', at)) >= 0; at = j + 1) {
+    const l = text.slice(at, j)
+    if (l.trim()) lines.push(JSON.parse(l))
+    yield
+  }
   return { head: head ? lines.shift() ?? null : null, lines, used }
+}
+export function parseLines(src, opts) {
+  for (const g = lineSlices(src, opts); ;) { const x = g.next(); if (x.done) return x.value }
 }
 
 const rank = (e) => (e.kind === 'pack' ? e.n : e.n + 0.5)
