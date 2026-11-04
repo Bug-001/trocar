@@ -86,7 +86,7 @@ function assertParts(r, parts, expected, recon) {
   }
 }
 
-test('every reply span, resolved, reassembles to the normalised reply block (Anthropic, Responses, Chat SSE; WebSocket)', () => {
+test('every reply span, resolved, reassembles to the normalised reply block (Anthropic, Responses, Chat SSE)', () => {
   for (const t of TEXTS) {
     for (const eol of EOLS) {
       // Anthropic: text, thinking, tool_use, server_tool_use, a *_tool_result
@@ -102,13 +102,6 @@ test('every reply span, resolved, reassembles to the normalised reply block (Ant
       const cr = rec(stored(chatSse(chatGroups(t).flat(), eol)));
       assertParts(cr, CHAT.replyParts(cr), chatBlocks(cr.resp.raw_sse), (s) => chatBlocks(sliceEvents(s)));
     }
-    // WebSocket: one server message per event; the part is the item of the message that closes it
-    const items = respItems(t);
-    const server = [{ type: 'response.created', response: { id: 'resp1' } }, ...items.flatMap(respEvents), completed(items)].map((e) => JSON.stringify(e));
-    const wr = buildWsEnvelope({ id: 'w1', seq: 1, wsRaw: [], flow: { id: 'F', host: 'h', scheme: 'https', dst: {}, proc: {} },
-      upgrade: { req: { head: { raw: Buffer.from(''), method: 'GET', target: '/v1/responses', headers: [] } }, resp: { head: { raw: Buffer.from(''), headers: [] } } },
-      call: { client: ['{"type":"response.create"}'], server, tsStart: 't', tsRespStart: 't', tsEnd: 't', partial: [], truncated: false } });
-    assertParts(wr, RESPONSES_WS.replyParts(wr), respBlocks(completed(items).response.output), (s) => respBlocks([JSON.parse(s)]));
   }
 });
 
@@ -124,6 +117,33 @@ test('a reply block whose events interleave with another block has no span, and 
       assert.equal(p.span, null);
       assert.ok(typeof p.why === 'string' && p.why.length > 0);
       assert.ok(p.block && p.block.type);
+    }
+  }
+});
+
+// WebSocket: each server message is one JSON value, so a reply block is addressed as the JSON node it is, by the item's path in
+// the message that closes it plus the block's own path within the item (itemToBlocks' `sub`, the path the request side addresses
+// the same item by): every content part of a message is its own block with its own span, a one-part message's span is that part.
+test('a WebSocket reply block\'s span is exactly its own JSON node: one per content part of a message, the item for the rest', () => {
+  for (const t of TEXTS) {
+    const items = [...respItems(t), { type: 'message', id: 'm2', role: 'assistant', content: [{ type: 'output_text', text: t }, { type: 'refusal', refusal: `no ${t}` }, { type: 'output_text', text: 'tail' }] }];
+    for (const closed of [true, false]) { // closed by output_item.done, or only listed in response.completed
+      const server = [{ type: 'response.created', response: { id: 'resp1' } }, ...items.flatMap((it, k) => respEvents(it, k)).filter((e) => closed || e.type !== 'response.output_item.done'), completed(items)].map((e) => JSON.stringify(e));
+      const wr = buildWsEnvelope({ id: 'w1', seq: 1, wsRaw: [], flow: { id: 'F', host: 'h', scheme: 'https', dst: {}, proc: {} },
+        upgrade: { req: { head: { raw: Buffer.from(''), method: 'GET', target: '/v1/responses', headers: [] } }, resp: { head: { raw: Buffer.from(''), headers: [] } } },
+        call: { client: ['{"type":"response.create"}'], server, tsStart: 't', tsRespStart: 't', tsEnd: 't', partial: [], truncated: false } });
+      // expected, independent of the dissector's span code: per item, its content parts when it is a message, else the item
+      const nodes = items.flatMap((it) => (it.type === 'message' ? it.content : [it]));
+      const parts = RESPONSES_WS.replyParts(wr);
+      assert.deepEqual(parts.map((p) => p.block), respBlocks(items));
+      assert.equal(parts.length, nodes.length);
+      parts.forEach((p, k) => {
+        assert.ok(p.span, `${closed} #${k} ${p.kind} has a span (${p.why})`);
+        const text = fieldTextOf(wr, p.field).text;
+        assert.deepEqual(JSON.parse(text.slice(p.span[0], p.span[1])), nodes[k], `${closed} #${k}`);
+        assert.ok(p.span[0] > 0 && p.span[1] < text.length, 'inside its server message, not the whole message');
+      });
+      assert.deepEqual(parts.map((p) => p.unit), items.flatMap((it, u) => (it.type === 'message' ? it.content.map(() => u) : [u])), 'unit = the output item');
     }
   }
 });

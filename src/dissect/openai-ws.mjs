@@ -16,7 +16,7 @@
 import { boardFlat, reqCountsFor, ctxTokens, normEvents, itemToBlocks } from './openai.mjs';
 import { scanJson, spanAt } from './json-scan.mjs';
 import { storedRequestBody } from './request-body.mjs';
-import { storedReply, noSpanWhy, replyPart, partsOfUnit } from './sse-spans.mjs';
+import { storedReply, noSpanWhy, replyPart } from './sse-spans.mjs';
 import { isWsHandshake } from './ws-handshake.mjs'; // not ./registry.mjs: the registry imports THIS module
 import { headerOf } from './harnesses.mjs';
 import { extendChain, linked, segmentsIn, createLinks, withUnread } from './chain.mjs';
@@ -173,16 +173,20 @@ export function normRespWs(rec) {
 }
 
 // The reply's blocks as addressable parts (sse-spans.mjs): the server message that closes an item
-// (response.output_item.done) holds it whole, so its span is the `item` node inside that message, field resp.messages.<j>.
-// Each part carries `unit`, the output item it is a block of (one item = one message of a successor's context). A stream whose
-// items no message closed has them in its response.completed: there the span is the item's node in that message's output.
+// (response.output_item.done) holds it whole, so a block's span is its own node inside that message, field resp.messages.<j>:
+// the `item` node's path plus the block's path within the item (itemToBlocks' `sub`, as the request side addresses the same item),
+// so each content part of a message is its own span. Each part carries `unit`, the output item it is a block of (one item = one
+// message of a successor's context). A stream whose items no message closed has them in its response.completed: there the path
+// starts at the item's node in that message's output.
 export function replyPartsWs(rec) {
   const out = [];
   let unit = 0;
   const push = (item, m, j, path) => {
-    let span = null;
-    try { span = spanAt(scanJson(m), path); } catch { /* parsed, so scannable */ }
-    out.push(...partsOfUnit(itemToBlocks(item).map((x) => x.block), `resp.messages.${j}`, span, 'the item could not be located in its message').map((p) => ({ ...p, unit })));
+    let root = null;
+    try { root = scanJson(m); } catch { /* parsed, so scannable */ }
+    for (const { block, sub } of itemToBlocks(item)) {
+      out.push({ ...replyPart(block, `resp.messages.${j}`, root && spanAt(root, [...path, ...sub]), 'the block could not be located in its message'), unit });
+    }
     unit++;
   };
   serverMessages(rec).forEach((m, j) => {
