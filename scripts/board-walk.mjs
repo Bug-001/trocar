@@ -3,10 +3,13 @@
 //
 //   node scripts/board-walk.mjs --board <file> --out <dir> [--session <id>] [--width 1280] [--height 900] [--theme light|dark]
 //
-// --board: a JSON document with a `url` field (`trocar board --json`) or a one-line address (side-board's --url-file).
+// --board: `trocar board --json`'s document, whose `url` has no token and whose `token_file` this script reads itself, so the token never passes
+// through the caller; or a one-line address with the token in it (side-board's --url-file).
 // Writes <out>/walk.json and one <screen>.png per screen. Exit 0 nothing found, 1 something found, 2 usage or no playwright-core / Chrome.
 // Controls are found by ARIA role and generic attributes only, never by class or id, so a rewrite of the board's markup leaves this
-// as it is. It judges no content, naming or look: that is the job of whoever reads the screenshots. The board's token never reaches the output.
+// as it is. It judges no content, naming or look: that is the job of whoever reads the screenshots. Read-only: every request but GET is stopped and
+// lands in `errors.requests`. What the board shows stays out of the output, as it can be captured text: a control is its role and a number
+// (`button#3`), and an error is cut at ERROR_CHARS. The board's token never reaches the output.
 import fs from 'node:fs'
 import path from 'node:path'
 import { parseArgs } from 'node:util'
@@ -19,6 +22,7 @@ const CAP = 40 // actions of one kind on one screen; the rest is counted in `ski
 const SETTLE_MS = 2000 // after a load: the board polls, so `networkidle` may never come, and the desk's packs take a moment
 const TICK_MS = 200 // after one action
 const CLICK_MS = 1000 // a control something covers gives up after this and counts as skipped
+const ERROR_CHARS = 200 // of one page or console error
 const KINDS = ['expand', 'scroll', 'drag']
 
 // each screen's route, from `data` (what the board's documents gave); a route function answering a string says why the screen cannot be walked
@@ -42,15 +46,21 @@ function pageTools(kinds) {
   }
   const seen = new WeakSet()
   const left = (kind) => [...find[kind]()].filter((el) => !seen.has(el))
-  const name = (el) => el.getAttribute('aria-label') || el.textContent.trim().replace(/\s+/g, ' ').slice(0, 80) || el.getAttribute('title') || ''
-  const id = (el) => ({ role: el.getAttribute('role') || el.localName, name: name(el) })
+  const label = (el) => el.getAttribute('aria-label') || el.textContent.trim().replace(/\s+/g, ' ').slice(0, 80) || el.getAttribute('title') || '' // never for the output: it can be captured text
+  const numbers = new WeakMap()
+  let last = 0
+  const id = (el) => {
+    if (!numbers.has(el)) numbers.set(el, ++last)
+    const role = el.getAttribute('role') || el.localName
+    return { role, name: `${role}#${numbers.get(el)}` }
+  }
   const box = (el) => { if (!el) return null; const r = el.getBoundingClientRect(); return [r.x, r.y, r.width, r.height] }
   const inView = (el) => {
     const r = el.getBoundingClientRect()
     return r.width > 0 && r.height > 0 && el.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2))
   }
   const anchors = () => [...document.querySelectorAll('[role=heading], h1, h2, h3, h4, h5, h6, button, [role=button]')]
-    .filter((el) => (/^h\d$/.test(el.localName) || el.getAttribute('role') === 'heading' || /close|back/i.test(name(el))) && inView(el))
+    .filter((el) => (/^h\d$/.test(el.localName) || el.getAttribute('role') === 'heading' || /close|back/i.test(label(el))) && inView(el))
   globalThis.__walk = {
     // the next control of `kind` not yet acted on; one hidden or disabled stays in `left`, so it ends up counted as skipped
     next(kind) {
@@ -136,12 +146,12 @@ const blank = (screen) => ({
   errors: { page: [], console: [], requests: [] },
 })
 
-async function walkScreen(context, origin, item, hash, out) {
+async function walkScreen(context, origin, item, hash, out, clip) {
   const page = await context.newPage()
   const seen = { page: new Set(), console: new Set(), requests: new Set() }
-  page.on('pageerror', (e) => seen.page.add(String(e)))
+  page.on('pageerror', (e) => seen.page.add(clip(String(e))))
   // Chrome's own line for a failed load only repeats what `requests` holds
-  page.on('console', (m) => { if (m.type() === 'error' && !m.text().startsWith('Failed to load resource')) seen.console.add(m.text()) })
+  page.on('console', (m) => { if (m.type() === 'error' && !m.text().startsWith('Failed to load resource')) seen.console.add(clip(m.text())) })
   // 416 to a Range read means no bytes past that offset yet: how the board asks a growing file for more, not a failure
   page.on('response', (r) => { if (r.status() >= 400 && !(r.status() === 416 && r.request().headers().range)) seen.requests.add(`${r.status()} ${r.request().method()} ${r.url()}`) })
   // an abort is the board dropping a read it no longer needs, or this page closing: not a failure
@@ -194,19 +204,21 @@ function readOptions() {
   if (!['light', 'dark'].includes(values.theme)) usage('--theme takes light or dark')
   let text
   try { text = fs.readFileSync(values.board, 'utf8').trim() } catch { usage('--board file cannot be read') }
-  let address = text.split('\n')[0]
-  try { address = JSON.parse(text).url } catch { /* not JSON: the one-line form */ }
+  let doc = null
+  try { doc = JSON.parse(text) } catch { /* not JSON: the one-line form */ }
   let url
-  try { url = new URL(address) } catch { usage('--board file holds no address') }
-  const token = new URLSearchParams(url.hash.slice(1)).get('t')
-  if (!token) usage('the address in --board carries no token')
-  return { ...values, width, height, address, origin: url.origin, token }
+  try { url = new URL(doc ? doc.url : text.split('\n')[0]) } catch { usage('--board file holds no address') }
+  let token = new URLSearchParams(url.hash.slice(1)).get('t')
+  if (!token && doc?.token_file) try { token = fs.readFileSync(doc.token_file, 'utf8').trim() } catch { usage('the token_file in --board cannot be read') }
+  if (!token) usage('--board gives no token: neither in its address nor in a token_file')
+  return { ...values, width, height, address: `${url.origin}/#t=${encodeURIComponent(token)}`, origin: url.origin, token }
 }
 
 async function main() {
   const o = readOptions()
   const secrets = [o.address, o.origin, encodeURIComponent(o.token), o.token]
   const redact = (s) => secrets.reduce((x, k) => x.split(k).join('<board>'), s)
+  const clip = (s) => redact(s).slice(0, ERROR_CHARS) // in this order: half a token is past what redact can find
   let browser
   try {
     const { chromium } = await import('playwright-core')
@@ -216,6 +228,7 @@ async function main() {
   try {
     fs.mkdirSync(o.out, { recursive: true })
     const context = await browser.newContext({ viewport: { width: o.width, height: o.height }, colorScheme: o.theme })
+    await context.route('**/*', (r) => (r.request().method() === 'GET' ? r.continue() : r.abort('blockedbyclient')))
     const boot = await context.newPage() // the board keeps the token for its origin, so each screen after this opens at the bare address
     await boot.goto(o.address, { waitUntil: 'load' })
     await boot.waitForTimeout(TICK_MS)
@@ -225,7 +238,7 @@ async function main() {
       const item = blank(screen), route = ROUTES[screen] ? ROUTES[screen](data) : 'no route for this screen in board-walk'
       screens.push(item)
       if (typeof route === 'string') item.skipped.reason = route
-      else await walkScreen(context, o.origin, item, formatHash({ screen, ...route }), o.out)
+      else await walkScreen(context, o.origin, item, formatHash({ screen, ...route }), o.out, clip)
     }
   } finally { await browser.close() }
   const doc = { ok: !screens.some(found), viewport: { width: o.width, height: o.height, theme: o.theme }, screens }
