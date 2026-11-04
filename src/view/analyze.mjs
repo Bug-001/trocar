@@ -800,7 +800,7 @@ export function createAnalyzer({ keep = true, from = null } = {}) {
       const resources = EVENT_ONLY_KINDS.has(s.kind) ? [] : [...st.resMap.values()].map((r) => ({ ...r,
         segments: r.segments.map((g) => ({ enter: gi(g.enter), evict: gi(g.evict) })), loads: r.loads.map((l) => ({ ...l, step: gi(l.step) })) }))
       const out = { id, kind: s.kind, calls: [...s.calls], events, resources, parent: b ? sid.get(b.streamId) : null, spawnArg: b ? b.arg : null,
-        // a spawned lane says its spawn's argument; the rest, their first prompt, said by the reduction (src/view/reduce.mjs, blockmeta.mjs departer) once every wire's lanes are in (4.4 §看板 v2 需要的补充)
+        // a spawned lane says its spawn's argument; the rest, their first prompt, said by the reduction (src/view/reduce.mjs, blockmeta.mjs sharedLines) once every wire's lanes are in (4.4 §看板 v2 需要的补充)
         ...(b ? { task: b.arg || taskOf(st.ask) } : { task: null, [HEAD]: st.ask ?? null }) }
       if (!EVENT_ONLY_KINDS.has(s.kind)) {
         // "only seen" = matched paths minus anything actually opened. Dedupe absolute-vs-relative

@@ -197,9 +197,9 @@ function queryOf(b, raw, max = PREVIEW_MAX) {
   return human ? shorten(human, max) : null;
 }
 // How long a lane's task is (4.4 §看板 v2 需要的补充 `lanes[].task`; the session title is the main lane's), and how much of a lane's first
-// prompt is kept to tell sibling sub-agents apart (their prompts often share a long preamble: a workflow's own instructions).
+// prompt is kept to find a sub-agent's words in (sharedLines).
 export const TASK_MAX = 80;
-export const TASK_HEAD = 16384;
+export const TASK_HEAD = 4096;
 /** taskOf(text) → the text squashed (whitespace runs → one space, trimmed), ≤ TASK_MAX characters, or null. */
 export const taskOf = (text) => (text ? shorten(text, TASK_MAX) || null : null);
 /** firstHuman(flat) → the first human prompt of a context (blockQuery's rule: a user text block, <system-reminder> stripped, not empty),
@@ -214,28 +214,36 @@ export function firstHuman(flat) {
 }
 /** A lane's first prompt (firstHuman of its first call), kept on the lane under a symbol key: no document carries it. */
 export const HEAD = Symbol('first prompt');
-// Sub-agents a spawn does not name are told apart by their first prompts (4.4 §看板 v2 需要的补充 `lanes[].task`): a lane's task starts at the
-// line where its prompt departs from the sibling it shares the longest prefix with (an identical prompt is no sibling to depart from).
-// Sorted, that sibling is a neighbour of its distinct prompts: n lanes cost a sort, not n² comparisons, and a prompt that comes or
-// goes moves the offsets of its two neighbours only (departer).
-const common = (a, b) => { let i = 0; while (i < a.length && i < b.length && a[i] === b[i]) i++; return i; };
-const departOf = (h, p, n) => { const d = Math.max(p == null ? 0 : common(h, p), n == null ? 0 : common(h, n)); return d > 0 && d < h.length ? h.lastIndexOf('\n', d - 1) + 1 : 0; };
-/** departer(heads?) → the offsets of a set of first prompts that changes a prompt at a time: add(h) / remove(h) (equal prompts
- *  counted, one entry) → the prompts whose offset changed; offset(h) → where h departs from its siblings (0: from the start). */
-export function departer(heads = []) {
-  const U = [...new Set(heads)].sort(), cnt = new Map(), off = new Map();
-  for (const h of heads) cnt.set(h, (cnt.get(h) || 0) + 1);
-  U.forEach((h, i) => off.set(h, departOf(h, U[i - 1], U[i + 1])));
-  const find = (h) => { let lo = 0, hi = U.length; while (lo < hi) { const m = (lo + hi) >> 1; if (U[m] < h) lo = m + 1; else hi = m; } return lo; };
-  const redo = (out, ...is) => { for (const i of is) if (i >= 0 && i < U.length) { const h = U[i], o = departOf(h, U[i - 1], U[i + 1]); if (off.get(h) !== o) { off.set(h, o); out.push(h); } } return out; };
+// A sub-agent's first text often opens with what a workflow tells all its sub-agents (4.4 §看板 v2 需要的补充 `lanes[].task`): a line
+// SHARED_LANES lanes of a session hold says nothing of any of them, whatever the harness. Lines are trimmed; a lane counts a line once.
+export const SHARED_LANES = 3;
+const linesOf = (text) => new Set(String(text).split('\n').map((l) => l.trim()).filter(Boolean));
+const MARKS = /^(?:(?:#{1,6}|[-*+>]|\d+[.)])(?:\s+|$))+/;
+const WORD = /[\p{L}\p{N}]/u;
+/** sharedLines() → which lines of the lanes' texts are shared, a lane at a time. add(text, lane) → the lanes whose words may have moved
+ *  (only the first lanes of a line that just became shared: later ones have passed it over already); words(text) → the first line of
+ *  `text` that is not shared and has a letter or digit once its leading marks are gone, without them, or null. */
+export function sharedLines() {
+  const seen = new Map(); // line → { n: the lanes holding it, first: those lanes, until it is shared }
   return {
-    add(h) { const c = cnt.get(h) || 0; cnt.set(h, c + 1); if (c) return []; const i = find(h); U.splice(i, 0, h); return redo([], i - 1, i, i + 1); },
-    remove(h) { const c = cnt.get(h) || 0; if (c > 1) { cnt.set(h, c - 1); return []; } if (!c) return []; cnt.delete(h); off.delete(h); const i = find(h); U.splice(i, 1); return redo([], i - 1, i); },
-    offset: (h) => off.get(h) || 0,
+    add(text, lane) {
+      const moved = [];
+      for (const l of linesOf(text)) {
+        const e = seen.get(l) || seen.set(l, { n: 0, first: [] }).get(l);
+        if (++e.n === SHARED_LANES) { moved.push(...e.first); e.first = null; } else if (e.first) e.first.push(lane);
+      }
+      return moved;
+    },
+    words(text) {
+      for (const l of linesOf(text)) {
+        if ((seen.get(l)?.n || 0) >= SHARED_LANES) continue;
+        const w = l.replace(MARKS, '');
+        if (WORD.test(w)) return w;
+      }
+      return null;
+    },
   };
 }
-/** departs(lane) → whether a lane's first prompt is told apart from its siblings': a sub-agent's that no spawn named. */
-export const departs = (l) => l.kind === 'subagent' && !!l[HEAD];
 
 // Fields that carry the block's CONTENT. These are what must not cross the wire; everything else on
 // a block is metadata the collapsed row, the diff and the timeline need on every call.
