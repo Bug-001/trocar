@@ -30,6 +30,20 @@ test('AN1: `skill --json` lists every skill under skills/, its name the director
   }
 })
 
+test('AN1: a plain file under skills/ is no skill, and a CRLF front matter reads without its carriage returns', () => {
+  const pkg = tmpDir('trocar-skill-pkg-')
+  fs.cpSync(path.join(REPO, 'bin'), path.join(pkg, 'bin'), { recursive: true })
+  fs.copyFileSync(path.join(REPO, 'package.json'), path.join(pkg, 'package.json'))
+  fs.cpSync(path.join(REPO, 'src'), path.join(pkg, 'src'), { recursive: true, filter: (p) => p !== path.join(REPO, 'src', 'web') })
+  fs.mkdirSync(path.join(pkg, 'skills', 'crlf-skill'), { recursive: true })
+  fs.writeFileSync(path.join(pkg, 'skills', 'a-plain-file'), 'not a skill\n')
+  fs.writeFileSync(path.join(pkg, 'skills', 'crlf-skill', 'SKILL.md'), '---\r\nname: crlf-skill\r\ndescription: Written on Windows.\r\n---\r\n\r\nBody.\r\n')
+  const home = tmpDir()
+  const r = spawnSync(process.execPath, [path.join(pkg, 'bin/trocar.mjs'), 'skill', '--json'], { env: { ...process.env, HOME: home, USERPROFILE: home } })
+  assert.equal(r.status, 0, r.stderr.toString())
+  assert.deepEqual(JSON.parse(r.stdout).skills, [{ name: 'crlf-skill', description: 'Written on Windows.' }])
+})
+
 test('AN2: `skill <name>` prints the file byte for byte, and `--json` carries the same text', () => {
   const home = tmpDir()
   for (const name of names) {
