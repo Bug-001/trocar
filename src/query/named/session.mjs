@@ -48,11 +48,10 @@ export const params = Object.freeze(['id', 'since', 'before', 'limit', 'head']);
 
 /** What a session read keeps in the heap per call (the reduction's columns and its lanes' shares, the projection's row and shared
  *  value index, the plan's entry, the kept mark's digest), until a reduction of THIS session measured it (HeapBound below).
- *  Measured 2026-10-22 as what a cold read of a test/query/big-session.mjs live(0.48) session holds more than one of live(0.24),
- *  per call, after a forced GC, the objects each part dominates summed (a heap snapshot's dominator tree; the caches of K, the
- *  segment index rows and the blocks' columns left out): 633 B (the reduction state and its marks 346, the row and shared value
- *  index 203, the plan 84), × 1.25. */
-export const SPINE_PER_ROW = 792;
+ *  Measured 2026-11-05 as what a cold read of a test/query/big-session.mjs live(0.48) session holds more than one of live(0.24),
+ *  per call, after a forced GC, what its new blocks hold taken out (test/query/spine-heap.test.mjs's call term, so it also holds
+ *  what the fixed caches still fill between the two sizes): 757 B, × 1.25. */
+export const SPINE_PER_ROW = 946;
 /** What the reduction keeps in the heap per distinct block of the session (its store's slot, its block columns and interned keys:
  *  src/view/reduce.mjs, src/query/projection.mjs): 222 B measured (after a forced GC, in a heap of the worker's size) as what a
  *  read of a test/query/big-session.mjs session holds more with 1,500 fresh tool definitions a call than with none, per block
