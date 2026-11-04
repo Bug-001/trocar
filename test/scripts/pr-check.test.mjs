@@ -1,4 +1,4 @@
-// test/scripts/pr-check.test.mjs — scripts/pr-check.mjs on a temp repo and a temp HOME (spec 1.12 §6, AN15-AN25).
+// test/scripts/pr-check.test.mjs — scripts/pr-check.mjs on a temp repo and a temp HOME (spec 1.12 §6, AN15-AN25, AN28, AN29).
 //
 // Every token, home path and machine name here is put together at run time, and what must pass carries FAKE or a neutral name: the
 // outbound checks of this very repository read this file too.
@@ -42,11 +42,11 @@ function workspace(files = {}) {
     git(['add', '-A'])
     git(['commit', '-q', '--allow-empty', '-m', message], extra)
   }
-  const check = ({ title = 'A title', body = 'A body', args = [], env: extra = {}, cwd = dir, base = ['--base', 'base'], before = BEFORE, script = SCRIPT } = {}) => {
+  const check = ({ title = 'A title', body = 'A body', args = [], env: extra = {}, cwd = dir, base = ['--base', 'base'], before = BEFORE, script = SCRIPT, cli = ['--cli', BIN] } = {}) => {
     const titleFile = path.join(texts, 'title'), bodyFile = path.join(texts, 'body')
     fs.writeFileSync(titleFile, title)
     fs.writeFileSync(bodyFile, body)
-    const r = spawnSync(process.execPath, [script, '--json', '--before', before, '--title', titleFile, '--body', bodyFile, ...base, ...args],
+    const r = spawnSync(process.execPath, [script, '--json', '--before', before, '--title', titleFile, '--body', bodyFile, ...base, ...cli, ...args],
       { cwd, env: { ...env, ...extra }, maxBuffer: 2 ** 28 })
     return { code: r.status, doc: JSON.parse(r.stdout.toString()) }
   }
@@ -62,7 +62,7 @@ function adopt(w) {
   const root = fileURLToPath(new URL('../../', import.meta.url))
   fs.cpSync(path.join(root, 'scripts/lib'), path.join(w.dir, 'scripts/lib'), { recursive: true })
   fs.copyFileSync(SCRIPT, path.join(w.dir, 'scripts/pr-check.mjs'))
-  const links = ['bin', 'src/query', 'src/raw', 'src/dissect']
+  const links = ['src/query', 'src/raw', 'src/dissect']
   for (const link of links) {
     fs.mkdirSync(path.dirname(path.join(w.dir, link)), { recursive: true })
     fs.symlinkSync(path.join(root, link), path.join(w.dir, link), 'junction')
@@ -90,15 +90,15 @@ const planted = (words, dir = 'plant') => Object.fromEntries(Object.entries(word
   Object.entries(spellings(word)).map(([how, text]) => [`${dir}/${kind}-${how}.txt`, `${text}\n`])))
 
 // ── AN15
-test('AN15: a missing option, a bad time or a bad budget is exit 2, and nothing was read', () => {
+test('AN15: a missing option, a bad time, a bad budget or a CLI that is not there is exit 2, and nothing was read', () => {
   const w = workspace()
   const text = path.join(w.home, 'text')
   fs.writeFileSync(text, 'x')
   const before = ['--before', BEFORE], title = ['--title', text], body = ['--body', text]
   for (const args of [[...title, ...body], [...before, ...title], [...before, ...body], ['--issue', ...before], ['--issue', ...body],
     ['--before', 'not a time', ...title, ...body], [...before, ...title, ...body, '--budget', 'lots'], [...before, ...title, ...body, '--frob'],
-    [...before, ...title, '--body', path.join(w.home, 'no-such-file')]]) {
-    const r = spawnSync(process.execPath, [SCRIPT, ...args], { cwd: w.dir, env: w.env })
+    [...before, ...title, '--body', path.join(w.home, 'no-such-file')], [...before, ...title, ...body, '--cli', path.join(w.home, 'no-such-cli')]]) {
+    const r = spawnSync(process.execPath, [SCRIPT, '--cli', BIN, ...args], { cwd: w.dir, env: w.env })
     assert.equal(r.status, 2, args.join(' '))
     assert.equal(r.stdout.length, 0)
     assert.equal(fs.existsSync(w.trocar), false, 'no query ran')
@@ -359,6 +359,48 @@ test('AN24: changing any outbound byte moves the hash, and a re-run does not', (
   moved(() => w.commit({ 'a.txt': 'onf\n' }))
 })
 
+const VALUE_A = 'a'.repeat(64), VALUE_B = 'b'.repeat(64)
+test('AN24: the line the PR template leaves for the hash does not move it, and anything else on that line does', () => {
+  const w = workspace()
+  w.commit({ 'a.txt': 'one\n' })
+  const template = fs.readFileSync(new URL('../../.github/pull_request_template.md', import.meta.url), 'utf8')
+  const row = template.split('\n').find((r) => r.includes('node scripts/pr-check.mjs'))
+  const hash = (written) => w.check({ body: `Before\n${written}\nAfter\n` }).doc.hash
+  const first = hash(`${row} ${VALUE_A}`)
+  for (const written of [`${row} ${VALUE_B}`, `${row} \`${VALUE_B}\``, `${row}${VALUE_B}`, row]) assert.equal(hash(written), first, written)
+  for (const written of [`${row} ${VALUE_A} and more`, `${row} more`, `${row} ${VALUE_A.slice(1)}`, `${row} \`${VALUE_A}`, `more ${row} ${VALUE_A}`]) assert.notEqual(hash(written), first, written)
+})
+
+test('AN24: the hash holds the commit --base resolves to, not the name it was given', () => {
+  const w = workspace()
+  w.commit({ 'a.txt': 'one\n' })
+  w.git(['tag', 'mid'])
+  w.git(['tag', 'same', 'mid'])
+  w.commit({ 'b.txt': 'two\n' })
+  const hash = (ref, args = []) => w.check({ base: ['--base', ref], args }).doc.hash
+  assert.equal(hash('same'), hash('mid'))
+  assert.notEqual(hash('base'), hash('mid'))
+  assert.notEqual(hash('base', ['--issue']), hash('mid', ['--issue']), 'a comment takes nothing from git, so only the base differs')
+})
+
+// ── AN28
+test('AN28: a base that is HEAD or not an ancestor of it is refused; a comment does not judge it', () => {
+  const w = workspace()
+  w.commit({ 'a.txt': 'one\n' })
+  w.git(['checkout', '-q', '-b', 'elsewhere', 'base'])
+  w.commit({ 'b.txt': 'two\n' })
+  w.git(['checkout', '-q', 'work'])
+  assert.deepEqual(of(w.check().doc, 'base'), [])
+  for (const ref of ['HEAD', 'elsewhere']) {
+    const { code, doc } = w.check({ base: ['--base', ref] })
+    assert.equal(code, 1, ref)
+    assert.equal(of(doc, 'base').length, 1, ref)
+    shapely(doc)
+  }
+  const reply = w.check({ base: ['--base', 'HEAD'], args: ['--issue'] })
+  assert.equal(reply.code, 0, JSON.stringify(reply.doc.findings))
+})
+
 // ── capture
 const SEGMENT = '20261018T100000Z'
 const NEWER = '20261020T100000Z'
@@ -498,7 +540,7 @@ test('AN22: text and words the base already tracks pass; the same ones outside i
   const { doc } = w.check({ env: { USER: 'zorgon7' } })
   assert.deepEqual(doc.findings.map((f) => [f.rule, doc.leaving.files[/#(\d+)/.exec(f.where)[1]]]), [['captured-text', 'new.txt']])
 
-  const issue = (cwd) => spawnSync(process.execPath, [SCRIPT, '--json', '--issue', '--before', BEFORE, '--body', path.join(w.home, 'reply'), '--base', 'base'], { cwd, env: w.env })
+  const issue = (cwd) => spawnSync(process.execPath, [SCRIPT, '--json', '--issue', '--before', BEFORE, '--body', path.join(w.home, 'reply'), '--base', 'base', '--cli', BIN], { cwd, env: w.env })
   fs.writeFileSync(path.join(w.home, 'reply'), `${ascii(60, 1)}\n`)
   assert.equal(issue(w.dir).status, 0, 'the base subtracts for a comment too')
   const outside = issue(w.home)
@@ -535,6 +577,7 @@ test('AN25: no capture at all is an empty comparison, not a failure', () => {
 
 test('AN25: a query that cannot read the capture, a segment that cannot be read, and an unreadable git each refuse', () => {
   const broken = workspace()
+  broken.commit({ 'a.txt': 'one\n' })
   fs.writeFileSync(broken.trocar, 'not a folder')
   const query = broken.check()
   assert.equal(query.code, 1)
@@ -551,4 +594,28 @@ test('AN25: a query that cannot read the capture, a segment that cannot be read,
   const noBase = workspace().check({ base: ['--base', 'no-such-ref'] })
   assert.equal(noBase.code, 1)
   assert.deepEqual(noBase.doc.findings.map((f) => f.where), ['git'])
+})
+
+// ── AN29
+test('AN29: with no --cli the trocar on PATH answers both the query and the raw read, and with none there it is exit 2', { skip: process.platform === 'win32' }, () => {
+  const w = workspace()
+  w.commit({ 'a.txt': 'nothing here\n' })
+  capture(w, SEGMENT, [line(NOW_THEN, 'nothing shared')])
+  const bin = tmpDir('trocar-prc-path-'), mark = path.join(bin, 'called')
+  const realGit = spawnSync('sh', ['-c', 'command -v git']).stdout.toString().trim()
+  fs.symlinkSync(realGit, path.join(bin, 'git'))
+  const env = { PATH: bin }
+  const text = path.join(w.home, 'text')
+  fs.writeFileSync(text, 'x')
+  const bare = spawnSync(process.execPath, [SCRIPT, '--json', '--before', BEFORE, '--title', text, '--body', text, '--base', 'base'], { cwd: w.dir, env: { ...w.env, ...env } })
+  assert.equal(bare.status, 2)
+  assert.equal(bare.stdout.length, 0)
+
+  const shim = path.join(bin, 'trocar')
+  fs.writeFileSync(shim, `#!/bin/sh\necho "$1" >> "${mark}"\nexec "${process.execPath}" "${BIN}" "$@"\n`)
+  fs.chmodSync(shim, 0o755)
+  const { code, doc } = w.check({ cli: [], env })
+  assert.equal(code, 0, JSON.stringify(doc.findings))
+  const called = fs.readFileSync(mark, 'utf8').split('\n')
+  assert.ok(called.includes('query') && called.includes('raw'), called.join(' '))
 })
