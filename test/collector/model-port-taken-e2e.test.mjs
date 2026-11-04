@@ -9,7 +9,7 @@ import http from 'node:http'
 import net from 'node:net'
 import path from 'node:path'
 import { modelWorld } from '../helpers/model-world.mjs'
-import { liveUnit, withScratchCwd } from '../helpers/model-daemon.mjs'
+import { liveUnit, withScratchCwd, unservable } from '../helpers/model-daemon.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
 import { runOffCli } from '../../src/off/main.mjs'
@@ -27,7 +27,7 @@ const squat = (port) => new Promise((resolve, reject) => { const s = net.createS
 const events = (w) => (fs.existsSync(path.join(w.dir, 'flows')) ? fs.readdirSync(path.join(w.dir, 'flows')).flatMap((n) => fs.readFileSync(path.join(w.dir, 'flows', n), 'utf8').split('\n')).filter(Boolean).map((l) => { try { return JSON.parse(l) } catch { return {} } }) : [])
 
 for (const platform of ['darwin', 'win32']) {
-  test(`${platform} · G9: the door's port taken by another program while off → the next trocar on says engine-port-taken, moves the port, the entry follows`, { timeout: 30_000 }, async () => {
+  test(`${platform} · G9: the door's port taken by another program while off → the next trocar on says engine-port-taken, moves the port, the entry follows`, { skip: await unservable(platform), timeout: 30_000 }, async () => {
     const w = await modelWorld({ os: platform, commands: ['codex'] })
     assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
     const envFile = path.join(w.home, '.codex', '.env')

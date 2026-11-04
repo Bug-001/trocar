@@ -7,10 +7,59 @@ import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { boardHome, serveBoard } from '../real-face.mjs'
+import { tmpDir, removeTmp } from '../../helpers/tmp.mjs'
+import rm from '../../helpers/rm-tree.cjs'
 import { CONTROL_TOKEN_HEADER } from '../../../src/off/token-header.mjs'
+import { INTERVAL, TIMER_ROUND } from '../../../web/legacy/core/poll.mjs'
 
 const SHOTS = fileURLToPath(new URL('./shots/', import.meta.url))
 const CHANNEL = { channel: 'chrome' }
+
+/** Before `t.close()` runs, every route on what `routed()` lists is dropped with behavior 'ignoreErrors': a handler still awaiting
+ *  route.fetch when its page goes would otherwise reject with nobody to await it, an unhandled rejection that fails whichever case runs. */
+function closeQuietly(t, routed) {
+  const close = t.close.bind(t)
+  t.close = async (...a) => {
+    for (const x of routed()) { try { await x.unrouteAll({ behavior: 'ignoreErrors' }) } catch { /* already closed */ } }
+    return close(...a)
+  }
+}
+
+/** Chrome on Windows learns whether the account's password is blank by logging on with an empty one (LogonUser, interactive), soon after
+ *  start, and caches the answer in the profile's Local State under these two keys; it tries again only once the password changes after
+ *  `os_password_last_changed` (Chrome time, µs since 1601). A fresh profile has no cache, so every launch made one failed logon, and the ten
+ *  launches of one browser file in ten minutes locked the account out (Security log 4625 then 4740), ssh with it. The cached answer, dated
+ *  at the largest value, means no launch ever tries; other systems never read the keys. */
+const LOCAL_STATE = { password_manager: { os_password_blank: false, os_password_last_changed: '9223372036854775807' } }
+
+/** The system Chrome (`chromium` is playwright-core's), with a temp directory of its own as TMP / TEMP / TMPDIR and as the parent of its
+ *  profile (seeded with LOCAL_STATE): what it leaves there (on Windows a chrome_url_fetcher_* folder) goes once close() has seen Chrome
+ *  exit (at 'disconnected' Windows Chrome still holds profile files), never into the run's temp directory, which leak-guard checks; what
+ *  is still held then, or a browser never closed, goes when the process exits (tmpDir). Closing the browser, any context or any page of
+ *  it first drops the routes on what closes (closeQuietly). */
+export async function launchChrome(chromium) {
+  const tmp = tmpDir('trocar-chrome-')
+  const profile = path.join(tmp, 'profile')
+  fs.mkdirSync(profile)
+  fs.writeFileSync(path.join(profile, 'Local State'), JSON.stringify(LOCAL_STATE))
+  const browser = (await chromium.launchPersistentContext(profile, { ...CHANNEL, env: { ...process.env, TMP: tmp, TEMP: tmp, TMPDIR: tmp } })).browser()
+  const close = browser.close.bind(browser)
+  browser.close = async (...a) => {
+    try { return await close(...a) } finally {
+      rm.removeTree(tmp)
+      if (!fs.existsSync(tmp)) removeTmp(tmp)
+    }
+  }
+  const newContext = browser.newContext.bind(browser)
+  browser.newContext = async (...a) => {
+    const c = await newContext(...a)
+    c.on('page', (p) => closeQuietly(p, () => [p]))
+    closeQuietly(c, () => [c, ...c.pages()])
+    return c
+  }
+  closeQuietly(browser, () => browser.contexts().flatMap((c) => [c, ...c.pages()]))
+  return browser
+}
 
 /** { ok:true, chromium } when the browser suite may run here; { ok:false, reason } otherwise (the reason is printed). */
 export async function probe({ importer = () => import('playwright-core'), env = process.env } = {}) {
@@ -18,8 +67,34 @@ export async function probe({ importer = () => import('playwright-core'), env = 
   if (env.TROCAR_PLAYWRIGHT !== '1') return no('TROCAR_PLAYWRIGHT is not 1 (run it with `npm run test:browser`)')
   let chromium
   try { chromium = (await importer()).chromium } catch (e) { return no(`playwright-core is not installed: ${e?.message || e}`) }
-  try { await (await chromium.launch(CHANNEL)).close() } catch (e) { return no(`Google Chrome did not launch: ${String(e?.message || e).split('\n')[0]}`) }
+  try { await (await launchChrome(chromium)).close() } catch (e) { return no(`Google Chrome did not launch: ${String(e?.message || e).split('\n')[0]}`) }
   return { ok: true, chromium }
+}
+
+const isHead = (r) => r.url.startsWith('/api/d/head?')
+const tailPart = (r) => (/^\/api\/d\/open\.(\w+)\?/.exec(r.url) || [])[1]
+/** → a predicate of the logged requests a timer sent by itself (4.4 §live-poll), not one a reader's action caused: the session list,
+ *  status and price reads, and the open session's rounds, tied to the marks the poll engine sets as a timer round starts (core/poll.mjs
+ *  TIMER_ROUND): a round's head is the first head read within a third of the period after its mark, and its tails are the first Range
+ *  read of each open tail after that head and before the next mark (a read again after a 416, readTail's, too). Any other head or tail
+ *  read — one a step change sent, however long after the last round — is not the timer's. */
+export async function timerReads(b) {
+  const marks = (await b.page.evaluate(() => globalThis.__timerRounds || [])).filter((m) => m.base === INTERVAL.session).map((m) => m.at).sort((x, y) => x - y)
+  const byStart = (x, y) => x.start - y.start
+  const heads = b.requests.filter(isHead).sort(byStart), tails = b.requests.filter((r) => tailPart(r)).sort(byStart)
+  const timer = new Set()
+  marks.forEach((m, i) => {
+    const h = heads.find((r) => !timer.has(r) && r.start >= m - 50 && r.start <= m + INTERVAL.session / 3)
+    if (!h) return
+    timer.add(h)
+    const end = i + 1 < marks.length ? marks[i + 1] : Infinity, last = {}
+    for (const r of tails) {
+      if (r.start <= h.start || r.start >= end) continue
+      const part = tailPart(r), prev = last[part]
+      if (prev === undefined ? r.range != null : prev.status === 416) { timer.add(r); last[part] = r } else last[part] = { status: 0 }
+    }
+  })
+  return (r) => /^\/api\/(sessions|status|pricing)\b/.test(r.url) || timer.has(r)
 }
 
 /** The board on a fresh temp HOME in a fresh Chrome. `token`: true = the face's token, a string = that token, false = no fragment.
@@ -52,7 +127,7 @@ export async function withBoard({ bytes, home, base, idleMs, token = true, width
     }
   }
   try {
-    browser = await chromium.launch(CHANNEL)
+    browser = await launchChrome(chromium)
     context = await browser.newContext({ viewport: { width, height }, colorScheme: theme })
     page = await context.newPage()
     page.on('pageerror', (e) => errors.push(String(e)))
@@ -61,6 +136,11 @@ export async function withBoard({ bytes, home, base, idleMs, token = true, width
       if (!/^\/(api|control)\//.test(u.pathname) && r.status() >= 400) missing.push(`${r.status()} ${u.pathname}`) // a static file the page asked for and did not get (a /favicon.ico once)
       if (/^\/(api|control)\//.test(u.pathname)) requests.push({ url: u.pathname + u.search, method: r.request().method(), body: r.request().postData(), range: r.request().headers().range ?? null, status: r.status(), start: r.request().timing().startTime, t: Date.now() })
     })
+    // the poll engine's timer-round marks (timerReads), seen as they are set: the engine drops each from the timeline at once
+    await page.addInitScript((name) => {
+      globalThis.__timerRounds = []
+      new PerformanceObserver((l) => { for (const e of l.getEntries()) if (e.name === name) globalThis.__timerRounds.push({ at: performance.timeOrigin + e.startTime, base: e.detail && e.detail.base }) }).observe({ type: 'mark' })
+    }, TIMER_ROUND)
     await setup?.(page)
     const t = token === true ? face?.token : token
     await page.goto(face ? `${face.base}/${t ? `#t=${encodeURIComponent(t)}` : ''}` : base, { waitUntil: 'load' })
@@ -156,6 +236,24 @@ export async function serveWorld(page, w, { from = w.marks.length - 1, grow = 0,
   })
   return { left: () => last - k, more: (n = 1) => { granted += n } }
 }
+/** Stamp every fetch on the page's own clock (for a `setup` or before the first navigation): globalThis.__fetches gets {url
+ *  (path + query), t0 (ms epoch the page called fetch), t1 (ms epoch its body was read, or the fetch failed; null until then)}.
+ *  What the page did, not when the events reached the test, so a busy renderer or a late CDP event shifts nothing. */
+export const stampFetches = (page) => page.addInitScript(() => {
+  const log = globalThis.__fetches = [], at = () => performance.timeOrigin + performance.now(), end = (e) => { if (e && e.t1 == null) e.t1 = at() }
+  const fetch0 = globalThis.fetch
+  globalThis.fetch = function (input, init) {
+    const u = new URL(typeof input === 'string' || input instanceof URL ? String(input) : input.url, location.href), e = { url: u.pathname + u.search, t0: at(), t1: null }
+    log.push(e)
+    return fetch0.call(this, input, init).then((r) => { stamps.set(r, e); return r }, (err) => { end(e); throw err })
+  }
+  const stamps = new WeakMap()
+  for (const m of ['text', 'json', 'arrayBuffer']) {
+    const f = Response.prototype[m]
+    Response.prototype[m] = function () { const e = stamps.get(this); return f.call(this).finally(() => end(e)) }
+  }
+})
+
 /** The bytes serveWorld answers for a `block` ref. */
 export const blockBytes = (ref) => `body of ${ref}`
 
@@ -180,12 +278,21 @@ export async function shoot(page, name, { width, theme }) {
  *  - `cut`: text cut off by a box that clips it with no ellipsis (a hidden-overflow ancestor that is not a scroll container, horizontally),
  *    or a line whose glyph box (ascent to descent) sticks out above or below such a box: a line box too short for its font;
  *  - `untitled`: text truncated with an ellipsis whose full text is nowhere on hover (no `title` on it or above it);
- *  - `emptyIcons`: an agent icon box of a known agent with no <img>, or whose image failed to decode. Overlays (dialogs, popovers, toasts) float by design and are left out. */
-export const layoutFaults = (page, root = '#content') => page.evaluate((root) => {
+ *  - `emptyIcons`: an agent icon box of a known agent with no <img>, or whose image failed to decode (K-11: a file that fails to load
+ *    leaves an empty box). The board draws the <img> with the screen; its file answers later, so each box gets ICON_WAIT_MS for its image
+ *    to finish loading before it is judged (a slow machine answers the file after the screen's data). Overlays (dialogs, popovers, toasts)
+ *    float by design and are left out. */
+const ICON_WAIT_MS = 10_000
+export const layoutFaults = (page, root = '#content') => page.evaluate(async ({ root, iconWaitMs }) => {
   const R = document.querySelector(root)
   const out = { overlap: [], cut: [], untitled: [], emptyIcons: [] }
   if (!R) return out
   const shown = (el) => { for (let e = el; e && e !== document.documentElement; e = e.parentElement) { const cs = getComputedStyle(e); if (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') return false } return true }
+  // a known agent's box holds its <img>; `loading` = no <img> yet or one still loading, `empty` = no <img> or one that failed to decode
+  const known = () => [...R.querySelectorAll('[data-hicon]')].filter((el) => el.getAttribute('data-hicon') !== '?' && shown(el))
+  const loading = () => known().filter((el) => { const img = el.querySelector('img'); return !img || !img.complete })
+  const empty = () => known().filter((el) => { const img = el.querySelector('img'); return !img || (img.complete && img.naturalWidth === 0) })
+  for (const t0 = Date.now(); loading().length && Date.now() - t0 < iconWaitMs;) await new Promise((ok) => setTimeout(ok, 50))
   const floating = (el) => !!el.closest('[role="dialog"], [data-confirm-back], .pop, .popover, .fly, #toasts')
   // the part of a box the reader can see: inside every ancestor that clips (any overflow but visible) and inside the window
   const seen = (el, r) => {
@@ -242,12 +349,7 @@ export const layoutFaults = (page, root = '#content') => page.evaluate((root) =>
       break
     }
   }
-  // a known agent's box holds its <img>, and the image decoded (K-11: a file that fails to load leaves an empty box, so it is counted here)
-  for (const el of R.querySelectorAll('[data-hicon]')) {
-    if (el.getAttribute('data-hicon') === '?' || !shown(el)) continue
-    const img = el.querySelector('img')
-    if (!img || (img.complete && img.naturalWidth === 0)) out.emptyIcons.push(el.getAttribute('data-hicon'))
-  }
+  out.emptyIcons = empty().map((el) => el.getAttribute('data-hicon'))
   for (const k of Object.keys(out)) out[k] = [...new Set(out[k])]
   return out
-}, root)
+}, { root, iconWaitMs: ICON_WAIT_MS })

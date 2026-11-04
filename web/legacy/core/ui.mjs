@@ -4,6 +4,7 @@
 
 import { esc } from './fmt.mjs'
 import { icon, HALF, DISC_CHEV, MENU_CHEV, glyphCss } from './icons.mjs'
+import { screenBound } from './dom.mjs'
 import { MARK_TIP, READ_FAIL } from '../labels/common.mjs'
 
 // A short, polite message that goes away by itself — what the board says when it moved the reader somewhere (an unknown link). It is
@@ -122,9 +123,11 @@ export function confirmDialog(opts, doc = typeof document === 'undefined' ? null
     host.innerHTML = confirmDialogHtml(opts)
     const back = host.firstElementChild
     doc.body.appendChild(back)
-    const done = (ok) => { back.remove(); doc.removeEventListener('keydown', onKey, true); resolve(ok) }
+    let off = null, over = false
+    const done = (ok) => { if (over) return; over = true; back.remove(); doc.removeEventListener('keydown', onKey, true); if (off) off(); resolve(ok) }
     const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); done(false) } }
     doc.addEventListener('keydown', onKey, true)
+    off = screenBound(() => done(false)) // its screen left: Cancel (1.2 §键盘「层随屏走」)
     back.addEventListener('click', (e) => {
       const b = e.target && e.target.closest ? e.target.closest('[data-confirm]') : null
       if (b) done(b.dataset.confirm === 'ok')
@@ -165,7 +168,7 @@ export function installUi(doc = typeof document === 'undefined' ? null : documen
     if (!open) return
     const { btn, layer } = open
     btn.setAttribute('aria-expanded', 'false'); layer.hidden = true
-    open = null
+    open.off(); open = null
     if (toBtn && btn.focus) {
       backTo = btn
       try { btn.focus() } catch { /* gone */ }
@@ -189,7 +192,8 @@ export function installUi(doc = typeof document === 'undefined' ? null : documen
     if (typeof CustomEvent === 'function') btn.dispatchEvent(new CustomEvent('v2:popopen', { bubbles: true }))
     layer.hidden = false; btn.setAttribute('aria-expanded', 'true')
     place(btn, layer)
-    open = { btn, layer, pinned, hover }
+    const o = open = { btn, layer, pinned, hover, off: () => {} }
+    o.off = screenBound(() => close(false)) // its screen left (1.2 §键盘「层随屏走」)
   }
   const trig = (el) => el && el.closest ? el.closest('[data-pop],[data-menu]') : null
   let hoverTimer = null

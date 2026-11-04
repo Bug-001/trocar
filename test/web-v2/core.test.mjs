@@ -143,3 +143,32 @@ test('techDetailsHtml: every pair is exactly one key cell and one value cell, va
     }
   }
 })
+
+// 1.2 §键盘「层随屏走」: a popover or menu pinned open on a screen closes when that screen's signal aborts (main.mjs aborts it on unmount);
+// a document stand-in carries the listeners installUi adds, the bits its glyph pass touches, and one trigger + layer pair per kind
+test('1.2 layers go with their screen: a pinned popover and a pinned menu close when their screen\'s signal aborts', async () => {
+  const { installUi } = await import('../../web/legacy/core/ui.mjs')
+  const on = {}
+  const layers = {}
+  const doc = {
+    addEventListener(t, f) { (on[t] ||= []).push(f) }, getElementById: (id) => layers[id] || null, getSelection: () => null,
+    createElement: () => ({ content: { firstChild: null } }), documentElement: { style: { setProperty() {} } },
+    defaultView: { XMLSerializer: class { serializeToString() { return '<svg/>' } } },
+  }
+  installUi(doc)
+  for (const kind of ['pop', 'menu']) {
+    const layer = layers[kind] = { hidden: true, contains: () => false }
+    const attrs = {}
+    const btn = { dataset: { [kind]: kind }, setAttribute(k, v) { attrs[k] = v }, dispatchEvent() {}, focus() {} }
+    btn.closest = (sel) => (sel === '[data-pop],[data-menu]' ? btn : null)
+    const ac = new AbortController()
+    domMod.setScreenSignal(ac.signal)
+    for (const f of on.click) f({ target: btn, detail: 1, preventDefault() {}, stopImmediatePropagation() {} })
+    assert.equal(layer.hidden, false, `${kind}: pinned open`)
+    assert.equal(attrs['aria-expanded'], 'true')
+    ac.abort()
+    assert.equal(layer.hidden, true, `${kind}: closed with its screen`)
+    assert.equal(attrs['aria-expanded'], 'false')
+    domMod.setScreenSignal(null)
+  }
+})

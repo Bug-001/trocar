@@ -81,7 +81,6 @@ export const TBL = Object.freeze({ agent: 'Agent', sessions: 'Sessions', calls: 
 export const ALL_SESSIONS = 'All sessions ›'
 export const PROBE_ONLY = 'token counts only'
 export const PROBE_ONLY_TIP = 'this session has only token-count calls, no full content'
-export const TITLE_FROM_AGENT = "title from the agent's own record"
 export const RETRY = 'Retry'
 export const DISK_USE = (b) => `${b} used by trocar`
 export const SEE_STORAGE = 'Storage ›'

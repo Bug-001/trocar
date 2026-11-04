@@ -4,6 +4,7 @@
 import { columns, pairs, wrap, unknown, ago, noColor, WIDTH } from './text.mjs'
 import { renderRoutes, routeNotes } from '../netenv/topology-text.mjs'
 import { briefText, failureBrief, failureWord, statusNote } from './words.mjs'
+import { carrierWords } from './receipt.mjs'
 
 // ── the summary (§3.5) ────────────────────────────────────────────────────────────────────────────────────────────
 /** The NOTE column of the summary: one short English clause for the reason a harness is not captured (the shared catalog, src/cli/words.mjs statusNote). Values are filled in; a code with no sentence there says the code is unknown, never prints a code name. */
@@ -103,7 +104,7 @@ export function statusDetail(doc, h, { finding = null, now = Date.now(), colors:
     if (finding.why) rows.push(['', finding.why])
     finding.commands.forEach((cmd, i) => rows.push([i ? '' : 'Fix', cmd.run]))
     rows.push(['Check', finding.verify])
-  } else if (x.captured === true && !notSeenYet(x)) rows.push(['Why', 'every running process of it is captured'])
+  } else if (x.captured === true && !notSeenYet(x)) rows.push(['Why', (x.processes || []).length ? 'every running process of it is captured' : 'no process of it is running; new ones will be captured']) // never claims processes that are not there
   if (rows.length) lines.push(...rows.flatMap(([l, v]) => wrap(v, WIDTH - 9).map((t, i) => `  ${(i ? '' : l).padEnd(5)}  ${t}`)), '')
   const forms = x.forms || []
   if (forms.length) {
@@ -111,9 +112,9 @@ export function statusDetail(doc, h, { finding = null, now = Date.now(), colors:
     const w = Math.max(...forms.map((f) => String(f.form).length))
     for (const f of forms) {
       const k = f.certificate || {}, p = f.proxy || {}
-      const rows = [[String(f.form).padEnd(w), 'certificate', k.in_effect ? `in effect (${k.carrier || 'unknown carrier'})` : noteText(k.code, { harness: h }) || unknown('your trust store could not be read')],
+      const rows = [[String(f.form).padEnd(w), 'certificate', k.in_effect ? `in effect (${k.carrier ? carrierWords(k.carrier) : 'unknown carrier'})` : noteText(k.code, { harness: h }) || unknown('your trust store could not be read')],
         ['', 'proxy', p.written ? `points at trocar ${portOf(p.written)}` : p.connected ? 'connected' : 'not connected']]
-      if (p.prior !== undefined) rows.push(['', '', `(was: ${p.prior || 'none'})`])
+      if (p.prior) rows.push(['', '', `(was: ${p.prior})`]) // only a value `on` recorded: no record is not "none"
       lines.push(...columns(rows, { width: WIDTH - 2 }).map((l) => `  ${l}`))
     }
     // the forms' harness-notes (4.11 CM31 · CM32 · CM38), one a few forms share said once
@@ -128,7 +129,7 @@ export function statusDetail(doc, h, { finding = null, now = Date.now(), colors:
 }
 
 /** A local loopback address prints as its port alone (§1.1⑤). */
-export const portOf = (url) => { const m = /^(?:\w+:\/\/)?(?:127\.0\.0\.1|\[?::1\]?|localhost):(\d+)/.exec(String(url || '')); return m ? `:${m[1]}` : String(url || unknown('no address recorded')) }
+export const portOf = (url) => { const m = /^(?:\w+:\/\/)?(?:[^@/]*@)?(?:127\.0\.0\.1|\[?::1\]?|localhost):(\d+)/.exec(String(url || '')); return m ? `:${m[1]}` : String(url || unknown('no address recorded')) }
 
 // ── `--failures` (§3.5: one line per kind of problem, then Expected) ──────────────────────────────────────────────
 /** One group's line: its harness when the group names one (D38: for whom), the shared sentence, then (when the sentence stands for a known code) the record's own reason — the CLI has no technical details to fold it into. */

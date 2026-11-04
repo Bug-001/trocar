@@ -92,6 +92,19 @@ export function presentPaths(form, ctx) {
   })
 }
 
+/** The API hosts the agent's own config names (descriptor `configHosts`, 4.11 §2.3): files only — cwd = home, no env, no argv — so every asker
+ *  reads the same answer. → { hosts: [lowercase, once each], errors: [text] }; a file there but unreadable or unparsable is an error (D38), never "none". */
+export function configuredHosts(desc, { home, os, readFile, readdir }) {
+  const errors = []
+  const readText = (p) => { try { return readFile(p) } catch (e) { if (!absent(e)) errors.push(`${p}: ${(e && e.code) || e}`); return null } }
+  const listDir = (p) => { try { return readdir(p) } catch { return [] } }
+  let found = []
+  try {
+    found = (desc.configHosts && desc.configHosts({ home, os, cwd: home, argv: [], env: new Map(), environ: new Map(), readText, listDir, mtimeOf: () => null, unparsable: (f) => errors.push(`${f}: unparsable`) })) || []
+  } catch (e) { errors.push(String((e && e.message) || e)) }
+  return { hosts: [...new Set(found.filter(Boolean).map((h) => String(h).toLowerCase()))], errors }
+}
+
 // The smallest YAML reader for the key paths descriptors declare: block maps and lists (of scalars or of maps), one-line flow
 // collections, plain / single- / double-quoted scalars kept as strings, comments, one leading `---`. Anything else (multi-line flow, block scalars, anchors, tags, tabs in indentation) throws,
 // so readSrc reports { error } rather than guessing.

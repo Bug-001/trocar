@@ -2,7 +2,8 @@
 // scripts run (page.addInitScript): live listeners on window / document / other targets (keyed by target, type, listener, capture),
 // live intervals, in-flight fetches and the log of every /api · /control fetch (start, end, status, failed / aborted / cut body, an
 // answer carrying `pending`, the route (hash before `?`) it was sent from, and for a head answer its sealed packs' tags {n: tag}),
-// AbortControllers created / aborted, long tasks, console.error calls, and a per-frame sampler of two reader-visible faults:
+// AbortControllers created / aborted, long tasks (each start on the page's clock, performance.timeOrigin + startTime; `origin` is the
+// document's timeOrigin, 2.3 #27), console.error calls, and a per-frame sampler of two reader-visible faults:
 //   blank — after #screen first held visible content, a frame where it has no element child or no visible text (1.5 K-29);
 //   keep  — a replay desk that was drawn (#ctxwin holds rows) for the route still in the hash, replaced by the never-drawn failure
 //           state (replay.mjs renderEmpty: `#ctxwin > .empty`, not the not-listed one) (1.5 K-29).
@@ -145,7 +146,7 @@ function pageProbe() {
       intervals: S.intervals.size,
       inflight: S.inflight,
       ac: { ...S.ac },
-      longtasks: S.longtasks.slice(), longtaskMax: S.longtasks.reduce((m, x) => Math.max(m, x.ms), 0),
+      longtasks: S.longtasks.slice(), longtaskMax: S.longtasks.reduce((m, x) => Math.max(m, x.ms), 0), origin: performance.timeOrigin,
       consoleErrors: S.consoleErrors.slice(),
       blank: S.blank.slice(), keep: S.keep.slice(),
       fetchLog: S.fetchLog.map((x) => ({ ...x })),

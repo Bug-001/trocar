@@ -9,8 +9,12 @@ const tri = (v, yes = 'yes', no = 'no') => (v === true ? yes : v === false ? no 
 const base = (p) => String(p).split(/[\\/]/).pop()
 
 const nodeOf = (t, id) => t.nodes.find((n) => n.id === id)
+const isTrocar = (n) => !!n && n.trocar === true
 const edgeOf = (t, from, to) => t.edges.find((e) => e.from === from && e.to === to) || null
-const unknownText = (n) => `unknown: ${n.unknown.reason}`
+// the closed set of 附录 C `unknown.reason`, in words (D58③): a code is never printed
+const UNKNOWN_WORDS = { denied: 'not allowed to read', timeout: 'took too long to read', absent: 'not there', unparseable: 'could not be parsed', 'owner-unreadable': 'owner not known',
+  pac: 'a PAC script trocar does not run', 'kernel-filter-invisible': 'a kernel filter it cannot see', 'env-unreadable': 'environment not readable' }
+const unknownText = (n) => `unknown: ${UNKNOWN_WORDS[n.unknown.reason] || String(n.unknown.reason).replace(/-/g, ' ')}`
 const passText = (n) => (n.passthrough ? `forwarded only for ${n.passthrough.hosts.join(', ')}` : null)
 const paren = (...parts) => { const p = parts.filter(Boolean); return p.length ? ` (${p.join('; ')})` : '' }
 
@@ -54,9 +58,10 @@ function edgeLabel(e, from, to, detail) {
 function chain(t, ids, detail = false, labels = true) {
   return ids.map((id, i) => {
     const n = nodeOf(t, id), e = i ? edgeOf(t, ids[i - 1], id) : null
+    if (i && isTrocar(n) && isTrocar(nodeOf(t, ids[i - 1]))) return null // trocar's door and engine are one process (D47): one `trocar` hop
     const label = i && labels ? edgeLabel(e, nodeOf(t, ids[i - 1]), n, detail) : ''
     return `${label ? `[${label}] ` : ''}${hopText(n, e && e.via, detail, !!(e && e.inferred))}`
-  }).join(' -> ')
+  }).filter((s) => s !== null).join(' -> ')
 }
 
 // Which words a branch's line needs in front: its form when the harness has more than one, HTTP / WebSocket when the branches of its form do not all go the same way (`key`: the path with trocar, or without).
@@ -71,7 +76,6 @@ export const renderCompact = (t) => distinct(t).map((b) => `${prefixOf(t, b)}${c
 /** What `status` says after a branch's chain: `on trocar's path: yes · captured: no (desired-off)`. */
 export const verdictText = (b) => `on trocar's path: ${tri(b.on_path)} · captured: ${tri(b.captured)}${b.reason ? ` (${b.reason})` : ''}`
 
-const isTrocar = (n) => n.trocar === true
 /** The first hop after trocar on a branch (the first one that is not trocar's own), and the first hop of the same branch with trocar taken out: 附录 A says they are the same. */
 export function firstHopAfterTrocar(t, b) {
   const nodes = b.path.map((id) => nodeOf(t, id))
@@ -96,7 +100,9 @@ export const routeNotes = (t) => [...(t.on_path === true ? [`If your VPN or prox
 /** The `Routes` rows of `status <harness>` (§3.5): `[[label, chain], …]` — the path of new connections, the path with trocar taken out, and each running process that goes another way. */
 function routeRows(t, { labels = true } = {}) {
   const rows = []
-  for (const b of distinct(t)) rows.push([`new processes${prefixOf(t, b) ? ` (${prefixOf(t, b).trim()})` : ''}`, chain(t, b.path, true, labels)])
+  // a branch drawn from a process its door group saw is that process's; else it is the path a new process takes (1.6 A.1)
+  const who = (b) => { const a = nodeOf(t, b.path[0]); return a && a.pid ? `pid ${a.pid}` : 'new processes' }
+  for (const b of distinct(t)) rows.push([`${who(b)}${prefixOf(t, b) ? ` (${prefixOf(t, b).trim()})` : ''}`, chain(t, b.path, true, labels)])
   if (t.branches.some((b) => b.path.some((id) => isTrocar(nodeOf(t, id))))) for (const b of distinct(t)) rows.push([`without trocar${prefixOf(t, b, 'off_path') ? ` (${prefixOf(t, b, 'off_path').trim()})` : ''}`, chain(t, b.off_path, true, labels)])
   for (const r of t.running || []) rows.push([`pid ${r.pid} now`, chain(t, r.path, true, labels)])
   return rows

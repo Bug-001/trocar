@@ -54,12 +54,14 @@ export function flattenSessions(data) {
 }
 const lastMs = (s) => { const t = Date.parse(s.last_ts); return Number.isNaN(t) ? null : t }
 
-// ── the title rule (1.8 §标题规则): `title` as it is, else 未命名会话; where it came from is `title_source` ─────────────
-export const titleText = (s) => (s.title != null ? String(s.title) : W.UNTITLED)
+// ── the title rule (1.8 §标题规则): `title` as it is, else 标题还没读到 while it is pending, else 未命名会话; where it came from is `title_source`
+const pendingTitle = (s) => s.title == null && s.title_source === 'pending'
+export const titleText = (s) => (s.title != null ? String(s.title) : pendingTitle(s) ? W.TITLE_PENDING : W.UNTITLED)
 export function titleTipOf(s) {
   const id = s.session_id
+  if (pendingTitle(s)) return W.titlePending(id)
   if (s.title == null) return W.titleNoKey(id)
-  return s.title_source === 'wire' ? W.titleFromWire(id) : W.titleFromAgent(id)
+  return W.titleFromWire(id) // a title always comes from the wire (4.4 §人类标题的来源)
 }
 
 function matches(s, f, now, title) {
@@ -161,7 +163,7 @@ export function rowModel(s, now) {
     key: sessionKey(s),
     href: formatHash({ area: 'replay', screen: 'replay', project: s.project_slug, id: s.session_id, params: {} }),
     harnessId: s.harness, harnessName: hn, harnessRaw: harnessRaw(s.harness),
-    title: s.title ?? null, titleSource: s.title_source ?? null, untitled: s.title == null, titleText: titleText(s), titleTip: titleTipOf(s),
+    title: s.title ?? null, titleSource: s.title_source ?? null, untitled: s.title == null && !pendingTitle(s), titlePending: pendingTitle(s), titleText: titleText(s), titleTip: titleTipOf(s),
     dim: !s.calls && s.probes > 0, calls: s.calls || 0, probes: s.probes || 0,
     logged, subagent, inferred, synthesized, multi, multiNames, entry, entryTip, project,
     when: relTime(s.last_ts, now), whenTip: s.last_ts ? fmtStamp(s.last_ts) : '',

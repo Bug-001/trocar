@@ -166,7 +166,7 @@ export default function HostScreen({ route, router }: ScreenProps) {
       </div>
       <div className="hhead colhead" aria-hidden="true">
         <span className="cell">Time</span><span className="cell-endpoint">Endpoint</span><span className="cell class">Class</span>
-        <span className="cell num">{W.COL.sent}</span><span className="cell num">{W.COL.recv}</span><span className="cell marks"></span>
+        <span className="cell num sent">{W.COL.sent}</span><span className="cell num recv">{W.COL.recv}</span><span className="cell marks"></span>
       </div>
       <div className="hlist" id="hlist" role="list" aria-label="Requests" ref={listRef} style={{ position: 'relative', height: virt.getTotalSize() }}>
         {items.map((it) => {
@@ -178,8 +178,8 @@ export default function HostScreen({ route, router }: ScreenProps) {
                   <span className="tcell" title={v.when.iso ?? undefined}>{v.when.text}</span>
                   <span className="cell-endpoint mono" title={v.endpoint}>{v.endpoint}</span>
                   <span className="cell class">{v.cls}</span>
-                  <span className="cell num">{v.sent}</span>
-                  <span className="cell num">{v.recv}</span>
+                  <span className="cell num sent">{v.sent}</span>
+                  <span className="cell num recv">{v.recv}</span>
                 </a>
                 <span className="cell marks">
                   {v.retention?.kind === 'log' ? <a className="rmark" data-mark="log" href={v.retention.href} title="See what this class keeps in the storage settings">{`${v.retention.label} ›`}</a> : null}
