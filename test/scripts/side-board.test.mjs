@@ -1,6 +1,7 @@
 // test/scripts/side-board.test.mjs — the side board (RFC 1.12 §3, AN5-AN8): the real script in its own process, on a real socket.
-// Every home here is a temp one, the "real" home of --real included. The worker the script forks has no no-real-os preload, so these
-// never ask `status` or `doctor`, the two names that read the machine (test/query/raw-home.mjs).
+// Every home here is a temp one, the "real" home of --real included. The worker the script forks has no no-real-os preload, only the inherited
+// TROCAR_TEST_SANDBOX, which refuses a real tool in src/off/exec.mjs: AN6 asks `status` for what it leaves behind and not for its code, as a tool
+// refused here is not one refused on a machine.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
@@ -23,10 +24,11 @@ const SEGMENT = '20260719T090000Z'
 const DEMO_SESSION = 'demo-0000-4a1b-9c2d-000000000001' // the session id in the sample's own request headers
 const SMALL = ['--synthetic', '--bytes', '200000']
 const START_MS = 120_000, EXIT_MS = 30_000, BUILD_MS = 120_000
+const STATS_WAIT_MS = 65_000 // the service's read line comes once a minute (4.4 §服务形状)
 
 /** The script's process in a temp HOME and a temp TMPDIR of its own, until it exits. */
-function run(args, { home = tmpDir('trocar-sb-user-'), tmp = tmpDir('trocar-sb-tmp-') } = {}) {
-  const child = spawn(process.execPath, [SCRIPT, ...args], { env: { ...process.env, HOME: home, USERPROFILE: home, TMPDIR: tmp, TMP: tmp, TEMP: tmp }, stdio: ['ignore', 'pipe', 'pipe'] })
+function run(args, { home = tmpDir('trocar-sb-user-'), tmp = tmpDir('trocar-sb-tmp-'), script = SCRIPT } = {}) {
+  const child = spawn(process.execPath, [script, ...args], { env: { ...process.env, HOME: home, USERPROFILE: home, TMPDIR: tmp, TMP: tmp, TEMP: tmp }, stdio: ['ignore', 'pipe', 'pipe'] })
   const out = { stdout: '', stderr: '' }
   child.stdout.setEncoding('utf8').on('data', (c) => { out.stdout += c })
   child.stderr.setEncoding('utf8').on('data', (c) => { out.stderr += c })
@@ -92,7 +94,7 @@ test('AN5: --synthetic serves the demo session and the generated ones, SIGINT ex
 test('AN6: --real answers every read over a real home, and that home keeps every byte and name', { timeout: START_MS + BUILD_MS + EXIT_MS + 30_000 }, async () => {
   const { user, home } = await realHome()
   const before = snapshot(home)
-  const end = await withBoard(['--real'], { home: user }, async ({ get }) => {
+  const end = await withBoard(['--real'], { home: user }, async ({ get, raw }) => {
     const { sessions } = await get('sessions')
     const id = sessions.find((s) => s.session_id.includes(DEMO_SESSION)).session_id
     const t0 = Date.now()
@@ -106,6 +108,7 @@ test('AN6: --real answers every read over a real home, and that home keeps every
     assert.equal((await get('lane', { id, lane })).lane, lane)
     assert.equal((await get('block', { ref: `${SEGMENT}:1` })).ok, true)
     for (const name of ['overview', 'classes', 'segments', 'traffic']) assert.equal((await get(name)).ok, true, name)
+    await raw('/api/status')
   })
   assert.deepEqual([end.code, end.signal], [0, null], end.stderr)
   assert.deepEqual(snapshot(home), before, 'the real home is byte for byte what it was, and a link followed on the way out took nothing with it')
@@ -142,6 +145,23 @@ test('AN8: --url-file holds the address and stdout does not, stdout is one line 
     assert.match(at, /^http:\/\/127\.0\.0\.1:\d+\/#t=\S+$/)
   })
   assert.equal(loud.stdout.trimEnd().split('\n').length, 1, loud.stdout)
+})
+
+test('AN8: once the service has written its read line, stderr has grown and stdout is still the one line', { timeout: START_MS + STATS_WAIT_MS + EXIT_MS + 30_000 }, async () => {
+  const end = await withBoard(SMALL, {}, async ({ get, out }) => {
+    await get('sessions')
+    const before = out.stderr.length
+    await new Promise((r) => setTimeout(r, STATS_WAIT_MS))
+    assert.ok(out.stderr.length > before)
+  })
+  assert.equal(end.stdout.trimEnd().split('\n').length, 1, end.stdout)
+})
+
+test('reached through a symbolic link the script still runs: no arguments is 2, not a silent 0', { timeout: EXIT_MS + 30_000 }, async () => {
+  const script = path.join(tmpDir('trocar-sb-link-'), 'side-board')
+  fs.symlinkSync(SCRIPT, script)
+  const p = run([], { script })
+  assert.equal((await within(p.exited, EXIT_MS, 'side-board through a link')).code, 2, p.out.stderr)
 })
 
 test('a run that names no one mode is refused with 2; --real with no ~/.trocar with 1', { timeout: 3 * EXIT_MS }, async () => {
