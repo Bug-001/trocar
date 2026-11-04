@@ -18,7 +18,7 @@ import { statusFacts, statusDocOf } from './status.mjs'
 import { diagnose, renderFindings } from '../netenv/findings.mjs'
 import { serveSource } from '../paths.mjs'
 import { formatInstallNotes } from './status-text.mjs'
-import { trocarHome, backupDir, collectorDir, standaloneCommand } from '../off/paths.mjs'
+import { trocarHome, backupDir, collectorDir } from '../off/paths.mjs'
 import { readManifest, manifestPath } from '../off/manifest.mjs'
 import { memoProcQuestions, daemonProcReader } from '../off/proc.mjs'
 
@@ -132,7 +132,7 @@ async function doctorDocOf({ names, home, env, platform, deps }) {
   const installed = !!(status.install && status.install.state)
   const standalone = installed ? (() => { try { return checkStandalone({ home, platform, fs }) } catch (e) { rethrowSandbox(e); return { ok: false, error: errText(e) } } })() : { ok: true }
   if (standalone.error) extra.push({ code: 'standalone-unreadable', class: 'problem', what: 'The standalone undo program could not be checked.', why: standalone.error, commands: [{ run: 'trocar install', shell: 'sh' }], verify: 'trocar doctor' })
-  else if (!standalone.ok) extra.push({ code: 'standalone-stale', class: 'problem', what: `${standaloneCommand(standalone.path, platform)} is not the current version, so it may not undo everything.`, why: standalone.reason || 'its bytes are not the ones this trocar writes', commands: [{ run: 'trocar install', shell: 'sh' }], verify: 'trocar doctor' })
+  else if (!standalone.ok) extra.push({ code: 'standalone-stale', class: 'problem', what: `${standalone.path} ${standalone.missing ? 'is not there' : 'is not the current version'}, so it may not undo everything.`, why: standalone.reason || 'its bytes are not the ones this trocar writes', commands: [{ run: 'trocar install', shell: 'sh' }], verify: 'trocar doctor' })
   let orphans = [], orphansError = null
   try { const m = readManifest(collectorDir(home), fs); orphans = m && m.unsupported ? null : orphanBackups({ home, manifest: m, fs }); if (orphans === null) orphansError = 'the install record is of a version this trocar does not read, so which backups it names cannot be said' } catch (e) { orphansError = `${manifestPath(collectorDir(home))}: ${errText(e)}` }
   if (orphans && orphans.length) extra.push({ code: 'backup-unclaimed', class: 'note', what: `${orphans.length} backup file(s) belong to no install record.`, why: 'An edit that was interrupted left them behind.', commands: [{ run: `Look at them, then remove them: ${orphans[0]}`, shell: 'sh' }], verify: 'trocar doctor' })

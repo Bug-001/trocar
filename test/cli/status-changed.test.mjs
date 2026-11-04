@@ -75,3 +75,22 @@ test('validateReceipt: the C.3 status document validates; a status changed item 
   assert.equal(bad.length, 1, JSON.stringify(bad))
   assert.ok(bad[0].includes('changed[0].undo'))
 })
+
+// C.3「已解决的组」: each failure and the ok event that ends its condition (one record shape per pair, as the daemon writes them)
+const ENDED = [
+  [{ event: 'helper-down', where: 'helper', reason: 'no helper at /usr/local/libexec/trocar/redirector' }, { event: 'helper-ok' }],
+  [{ event: 'failure', where: 'ca', code: 'ca-invalid', reason: 'the CA does not parse' }, { event: 'ca-ok' }],
+  [{ event: 'failure', where: 'agents', code: 'agent-list-invalid', reason: 'agents.json is not JSON' }, { event: 'agent-list-ok' }],
+]
+for (const [fail, ok] of ENDED) {
+  test(`C.3 failures.groups: a ${fail.code || fail.event} group that ${ok.event} ended stays, at level note, and counts as no problem; a new one makes it a problem again`, async () => {
+    const s = await installedHome()
+    const recs = [{ ts: ago(3000), ...fail }, { ts: ago(2000), ...ok }]
+    const resolved = await docOf(s, { request: down(), deps: { captureHealth: () => healthOf(recs) } })
+    const g = resolved.failures.groups.filter((x) => x.code === (fail.code || fail.event))
+    assert.deepEqual(g.map((x) => [x.level, x.count, x.reason]), [['note', 1, fail.reason]], 'the group is kept with its count and reason')
+    assert.equal(resolved.failures.problem, 0)
+    const again = await docOf(s, { request: down(), deps: { captureHealth: () => healthOf([...recs, { ts: ago(1000), ...fail }]) } })
+    assert.deepEqual(again.failures.groups.filter((x) => x.code === (fail.code || fail.event)).map((x) => [x.level, x.count]), [['problem', 2]])
+  })
+}

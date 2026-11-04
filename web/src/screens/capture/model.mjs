@@ -42,7 +42,7 @@ export function commandsFor(h, { row = null, service = false } = {}) {
     out.push(['start capturing', fill(cmds.on)], ['stop capturing', fill(cmds.off)], ['see the full status', fill(cmds.status)], ['diagnose', fill(cmds.doctor)])
   }
   if (h && h.health && h.health.state === 'not-installed') out.push(['install', cmds.install])
-  if (list(h && h.critical).some((k) => k && (k.kind === 'degraded' || k.kind === 'helper-version'))) out.push(['repair the capture helper (needs sudo)', cmds.helper])
+  if (list(h && h.critical).some((k) => k && (k.kind === 'degraded' || k.kind === 'helper-version'))) out.push(['repair the capability helper (needs sudo)', cmds.helper])
   if (h && h.linger === false) out.push(['keep capturing after logout', cmds.linger])
   return out
 }

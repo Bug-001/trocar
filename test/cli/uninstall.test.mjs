@@ -8,7 +8,8 @@ import path from 'node:path'
 import { runUninstallCli } from '../../src/cli/uninstall.mjs'
 import { formatUninstallReceipt } from '../../src/cli/receipt.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
-import { standalonePath } from '../../src/off/paths.mjs'
+import { standalonePath, standaloneFiles } from '../../src/off/paths.mjs'
+import { writeStandalone } from '../../src/off/standalone.mjs'
 import { installedHome, writeDaemonLock, flowEvents, procTable, fakeClock, DAEMON_ROWS, hangsOnStatus, snapshot } from '../off/fixtures/off-ctx.mjs'
 import { fakeIo } from './fixtures/on-ctx.mjs'
 import { assertEnglish } from '../helpers/english.mjs'
@@ -54,7 +55,6 @@ test('uninstall: every entry is back as it was, trocar\'s own files are gone, th
   const text = await cli(twin, [])
   assert.equal(text.exit, 0)
   assert.match(text.io.stdoutText(), /^Uninstalled\. trocar is no longer on your agents' path/)
-  assert.match(text.io.stdoutText(), /Delete the captured records: trocar uninstall --purge-data/)
   // no assertEnglish here: the `change` words of each row come from `off` (src/off/orchestrate.mjs), whose output is not this task's (1.6 §3.4)
 })
 
@@ -71,6 +71,21 @@ test('uninstall --dry-run writes nothing and asks the daemon nothing: the same r
   const json = (await cli(s, ['--dry-run', '--json'])).io.json()
   assert.deepEqual([json.dry_run, json.ok, validateReceipt(json)], [true, true, []])
   assert.ok(json.removed.includes(standalonePath(s.home)) && json.removed.includes(path.join(s.dir, 'install-manifest.json')))
+})
+
+// win32's run is the model platform's, which refuses while capture is on (collectors-online); its plan reads the same list as the run (standaloneFiles)
+test('1.6 §3.2 step 1: uninstall lists every file of the standalone copy — trocar-off, and on win32 the trocar-off.cmd beside it — and removes them', async () => {
+  for (const platform of ['win32', 'linux']) {
+    const s = await installedHome({ names: ['claude-code'] })
+    writeStandalone({ home: s.home, platform })
+    const files = standaloneFiles(s.home, platform)
+    const plan = (await cli(s, ['--dry-run', '--json'], { platform, deps: { platform } })).io.json()
+    assert.deepEqual(files.filter((f) => !plan.removed.includes(f)), [], `${platform}: the plan names each file`)
+    if (platform !== 'linux') continue
+    const r = await cli(s, ['--yes', '--json'], { platform, deps: { platform } })
+    assert.equal(r.exit, 0, r.io.text())
+    assert.deepEqual([files.filter((f) => fs.existsSync(f)), files.filter((f) => !r.io.json().removed.includes(f))], [[], []], 'each is gone, and the receipt says so')
+  }
 })
 
 test('R6: --purge-data takes the collector machine with the data — kernel/, kernel-archive/, forwarder/ and control.json / ingress.json (the pinned kernel copy and cache, the kernel config with its secret, the daemon control endpoint) — while a plain uninstall leaves them for the next on, except ingress.json (uninstall deletes it, so the next install chooses its ports again)', async () => {
@@ -495,6 +510,22 @@ test('D60: a plain uninstall keeps every byte under raw/ and names it with its s
   assert.equal(p.exit, 0, p.io.text())
   assert.deepEqual(records(purged), Object.fromEntries(Object.keys(SEGMENTS).map((k) => [k, null])), 'nothing of the records or the index is left')
   assert.deepEqual(p.io.json().kept, [], 'and the receipt claims nothing is kept')
+})
+
+// 1.6 §3.6: every place a plain uninstall keeps — raw/ (index/ with it), collector/flows/, audit/, replays/, the class-change log — is a `kept` row that is on disk;
+// --purge-data keeps none of them (a macOS test machine 2026-11-03: flows/ stayed with no Kept row, under "Delete the captured records")
+test('§3.6: a plain uninstall lists every place it keeps — flows/, audit/, replays/ — each still on disk; --purge-data lists and leaves none', async () => {
+  const seedPlaces = (s) => { for (const d of ['audit', 'replays']) { fs.mkdirSync(path.join(s.dir, d), { recursive: true }); fs.writeFileSync(path.join(s.dir, d, 'x.ndjson'), '{}\n') } }
+  const plain = await installedHome({ names: ['claude-code'] }); seedPlaces(plain)
+  const r = await cli(plain, ['--json'])
+  assert.equal(r.exit, 0, r.io.text())
+  const kept = r.io.json().kept.map((k) => k.path)
+  for (const d of ['flows', 'audit', 'replays']) assert.ok(kept.includes(path.join(plain.dir, d)), `${d}/ is a kept row: ${JSON.stringify(kept)}`)
+  assert.ok(kept.every((p) => fs.existsSync(p)), 'every kept row is on disk')
+  const purged = await installedHome({ names: ['claude-code'] }); seedPlaces(purged)
+  const p = await cli(purged, ['--purge-data', '--json'])
+  assert.equal(p.exit, 0, p.io.text())
+  assert.deepEqual([p.io.json().kept, ['flows', 'audit', 'replays'].filter((d) => fs.existsSync(path.join(purged.dir, d)))], [[], []])
 })
 
 test('the text receipt says a file once: two entries of one file with the same change, or a file named twice as removed, are one row', () => {

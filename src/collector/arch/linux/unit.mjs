@@ -6,7 +6,7 @@ import nodeFs from 'node:fs'
 import path from 'node:path'
 import { spawn as nodeSpawn } from 'node:child_process'
 import { startDaemonDirect } from '../direct-start.mjs'
-import { autostartNode } from '../autostart-node.mjs'
+import { autostartProgram } from '../autostart-node.mjs'
 import { execTool } from '../../../off/exec.mjs'
 import { removeWantsLinks } from '../../../off/autostart.mjs'
 import { daemonLogPaths, ensureDaemonLogs } from '../daemon-logs.mjs'
@@ -25,11 +25,11 @@ export const wantsLink = (home) => path.join(path.dirname(unitPath(home)), 'defa
 // — the daemon's own console, a journald-free face an `ssh` in can read (systemd creates the file on first write; the
 // directory and the two empty 0600 files are made at unit-write time by ensureDaemonLogs). `%` in a path is a specifier
 // there too, so it is doubled.
-export function unitText({ node, script, env = {}, logs = null }) {
+export function unitText({ program, env = {}, logs = null }) {
   return [
     '[Unit]', 'Description=trocar transparent collector (per user)', '',
     '[Service]', 'Type=simple', ...Object.entries(env).map(([k, v]) => `Environment="${esc(`${k}=${v}`)}"`),
-    `ExecStart=${quoteExec(node)} ${quoteExec(script)} daemon`,
+    `ExecStart=${program.map(quoteExec).join(' ')} daemon`,
     ...(logs ? [`StandardOutput=append:${logs.out.replace(/%/g, '%%')}`, `StandardError=append:${logs.err.replace(/%/g, '%%')}`] : []),
     // KillMode=mixed: a stop sends SIGTERM to the daemon alone, which closes its helper (an orderly stop records no helper-down, 4.6 F3(h)); the
     // default sends it to the helper too, which may exit first, unasked. What is still running when the daemon is gone gets SIGKILL.
@@ -52,15 +52,15 @@ export { removeWantsLinks } from '../../../off/autostart.mjs'
 // `start()` is the fallback when the OS mechanism refuses (no systemd --user bus): this run's own daemon, started directly.
 // `reload` is for a unit file rewritten under a loaded unit.
 export function userUnit({ home, node, script, run = null, env = process.env, spawn = nodeSpawn, fs = nodeFs }) {
-  node = autostartNode({ env, execPath: node, fs }) // D61: a node the entry can still name after a node upgrade (one rule, all three OSes)
+  const program = autostartProgram({ home, node, script, env, fs, platform: 'linux' }) // D61 · D74: what the entry names survives a node upgrade and a `place` (one rule, all three OSes)
   const sc = (args) => systemctl(args, { run, env })
   // this run's own daemon: no systemd unit is involved, so a user with no systemd --user bus gets a collector all the same — with the unit's own
   // environment and the unit's own log files (direct-start.mjs), so a start by hand trusts what a start at login trusts and leaves its reason behind
   // `carry`: what the unit's Environment= would carry (install's daemonEnv) — the caller hands it in, the arch never reads the install's rules
-  const startDirect = (carry) => startDaemonDirect({ home, env, carry, command: node, argv: [script, 'daemon'], spawn, fs: nodeFs })
+  const startDirect = (carry) => startDaemonDirect({ home, env, carry, command: program[0], argv: [...program.slice(1), 'daemon'], spawn, fs: nodeFs })
   return {
     name: UNIT_NAME, path: unitPath(home), links: [wantsLink(home)],
-    text: (e) => unitText({ node, script, env: e, logs: daemonLogPaths(home) }),
+    text: (e) => unitText({ program, env: e, logs: daemonLogPaths(home) }),
     // D46: the daemon's log files, made at unit-write time and listed in the manifest (install calls these); never rewritten by a later on
     logFiles: () => { const { out, err } = daemonLogPaths(home); return [{ path: out }, { path: err }] },
     ensureLogs: () => ensureDaemonLogs(home, { fs: nodeFs }),

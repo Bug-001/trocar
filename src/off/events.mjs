@@ -8,8 +8,10 @@ import { hideUserinfo } from './userinfo.mjs'
 
 /** Appends `{ts, ...rec}` to `<dir>/flows/<day>.ndjson` (0600, the directory 0700). `day` (YYYY-MM-DD): the file to write when the caller keeps a
  *  day that never goes back (the daemon's recorder); default the UTC day of `now`. Throws what the write throws. */
+/** The flows/ file a line written at `now` goes to: one per UTC day. */
+export const flowFile = (dir, now = new Date(), day = null) => path.join(dir, 'flows', `${day || now.toISOString().slice(0, 10)}.ndjson`)
 export function appendFlowEvent(dir, rec, { now = new Date(), day = null, fs = nodeFs } = {}) {
-  const file = path.join(dir, 'flows', `${day || now.toISOString().slice(0, 10)}.ndjson`)
+  const file = flowFile(dir, now, day)
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
   fs.appendFileSync(file, hideUserinfo(JSON.stringify({ ts: now.toISOString(), ...rec })) + '\n', { mode: 0o600 }) // a line names a URL without its userinfo (1.6 §1.2)
 }

@@ -94,3 +94,18 @@ test('4.6 F9: a capture health that cannot be read is no `health`, an `errors` e
   assert.ok(e && typeof e.reason === 'string' && e.reason.length > 0, JSON.stringify(doc.errors))
   assert.equal(r.exit, EXIT.unknown)
 })
+
+// C.3 `failures`: the three counts are one unit (each level's groups' counts summed — a standing condition is one record) and `since` is the window's start
+test('C.3 failures: each count is the sum of its level\'s group counts, a resolved group included; since is the start of the 24 h window', async () => {
+  const health = healthOver([
+    { ts: at(500), event: 'helper-down', reason: 'not found' },
+    { ts: at(400), event: 'failure', where: 'helper', code: 'helper-error', reason: 'a' },
+    { ts: at(390), event: 'failure', where: 'helper', code: 'helper-error', reason: 'b' },
+    { ts: at(300), event: 'failure', where: 'engine', code: 'tls-client-error', reason: 'c' },
+  ])
+  const doc = (await sandbox().run(['status', '--json'], { deps: { captureHealth: () => health } })).io.json()
+  const f = doc.failures
+  for (const level of ['problem', 'note']) assert.equal(f[level], f.groups.filter((g) => g.level === level).reduce((n, g) => n + g.count, 0), `${level}: ${JSON.stringify(f)}`)
+  assert.ok(f.note >= 1, 'the helper-down condition is a note group')
+  assert.equal(Date.parse(f.since), Date.parse(health.generated_at) - 24 * 3600e3)
+})
