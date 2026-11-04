@@ -22,7 +22,7 @@ if (window) {
 const REF = 's/main#r7::0-64'
 const BYTES = '{"role":"user","content":"line one\\nline two \\u00e9 <b>&amp;</b>"}\r\n  trailing'
 const storage = (() => { const m = new Map(); return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)) } })()
-const api = { asks: 0, get: async (name, q) => { assert.equal(name, 'block'); api.asks++; await new Promise((r) => setTimeout(r, 5)); return { ok: true, data: { blocks: q.ref.map((ref) => ({ ref, bytes: BYTES, fidelity: { verbatim: true } })) } } } }
+const api = { asks: 0, get: async (name, q) => { assert.equal(name, 'block'); api.asks++; await new Promise((r) => setTimeout(r, 5)); return { ok: true, data: { blocks: q.ref.map((ref) => ({ ref, bytes: BYTES, fidelity: { verbatim: true }, view: { r: { as: 'text', f: { body: ['text'] } }, body: { text: BYTES } } })) } } } }
 const until = async (fn, what) => { for (let i = 0; i < 200; i++) { if (fn()) return; await new Promise((r) => setTimeout(r, 10)) } assert.fail(`timed out waiting for ${what}`) }
 const settle = () => new Promise((r) => setTimeout(r, 60))
 

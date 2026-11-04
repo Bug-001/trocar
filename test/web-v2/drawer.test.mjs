@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import { detailHtml, openDetail, closeDetail } from '../../web/legacy/replay/detail.mjs'
 import { reviewing } from '../../web/legacy/replay/rails.mjs'
 import { buildLanes } from '../../web/legacy/replay/lanes.mjs'
-import { bodyCache } from '../../web/legacy/replay/cell.mjs'
+import { bodyCache, setDeskMode } from '../../web/legacy/replay/cell.mjs'
 import * as W from '../../web/legacy/labels/replay.mjs'
 import { deskOf } from './desk-world.mjs'
 
@@ -81,6 +81,7 @@ test('a monitor verdict is passed through as-is, as the cell of its reply part',
 
 test('the reply cell holds the reply part\'s own bytes: its Raw body and its size are those bytes', () => {
   const ENT = { lt: '<', gt: '>', quot: '"', '#39': "'", '#13': '\r', amp: '&' }
+  setDeskMode('raw', { storage: null })
   for (const text of ['Hello\nworld', '{"type":"text","text":"x"}', 'a"b\\c\r\n<i>']) {
     const ref = `s/x#r::resp.raw::0-${text.length}`
     bodyCache.set(ref, { status: 'ok', text, fidelity: 'verbatim' })

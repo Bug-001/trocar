@@ -23,11 +23,11 @@ export function preEsc(t) {
 }
 
 // ── bodies ────────────────────────────────────────────────────────────────────────────────────────────────────────────
-// text_ref -> {status, text, fidelity, error}, bounded by the characters it holds, oldest out first. `onEvict(ref, got)` hears
+// text_ref -> {status, text, view?, w?, fidelity, error}, bounded by the characters it holds (a view's `w` among them), oldest out first. `onEvict(ref, got)` hears
 // each eviction (media blob URLs made from those bytes are revoked there).
 class BodyCache extends Map {
   constructor(cap) { super(); this.cap = cap; this.total = 0; this.onEvict = null }
-  static weight(got) { return 1 + String((got && got.text) ?? '').length }
+  static weight(got) { return 1 + String((got && got.text) ?? '').length + ((got && got.w) || 0) }
   set(k, v) {
     if (super.has(k)) this.total -= BodyCache.weight(super.get(k))
     super.delete(k); super.set(k, v); this.total += BodyCache.weight(v)
@@ -44,12 +44,13 @@ class BodyCache extends Map {
 export const bodyCache = new BodyCache(BODY_CHARS)
 // What is cached: the bytes (200), and a 404 — the server looked the locator up in every capture root and found no such record,
 // kept as `absent`. A network failure, a 400 / 409 / 5xx is shown (status 'error') but never remembered: the next ask may work.
-// one item of a `block` answer ({ref, bytes, encoding, fidelity, truncated}, 3.5 §会话读) as the body the cell shows
+// one item of a `block` answer ({ref, bytes, encoding, fidelity, truncated, view?}, 3.5 §会话读) as the body the cell shows
 export function blockGot(doc) {
   const d = doc || {}
   if (typeof d.bytes !== 'string') return { status: 'absent', error: ((d.errors || [])[0] || {}).reason || 'the capture has no such block' }
   const f = d.fidelity, verbatim = f === 'verbatim' || !!(f && f.verbatim)
-  return { status: 'ok', text: d.bytes, verbatim, fidelity: verbatim ? 'verbatim' : 'reserialized', note: (f && f.note) || null, truncated: d.truncated ?? null }
+  return { status: 'ok', text: d.bytes, verbatim, fidelity: verbatim ? 'verbatim' : 'reserialized', note: (f && f.note) || null, truncated: d.truncated ?? null,
+    ...(d.view ? { view: d.view, w: JSON.stringify(d.view).length } : null) }
 }
 const asking = new Map() // ref -> its answer on the way: needs that meet while it is out share it
 // bumped on every body loadBodies puts in bodyCache: a memo over what the cache holds keys on it
