@@ -12,7 +12,7 @@ import nodeFs from 'node:fs'
 import path from 'node:path'
 import { trocarHome } from '../paths.mjs'
 import { procIdentity, pidAlive } from '../off/proc.mjs'
-import { readFlows, readDay, foldFlows, pick, groupKey, lastRun, WINDOW_MS, HealthUnreadable } from './flows.mjs'
+import { readFlows, readDay, foldFlows, pick, groupKey, lastRun, widen, byNewest, WINDOW_MS, HealthUnreadable } from './flows.mjs'
 
 // Has `install` finished? The same reading as src/off/manifest.mjs installComplete (D55: `install.state`, which replaced v2's `complete`); src/health imports no manifest code (0.1 §2)
 const installComplete = (m) => !!(m && m.install && m.install.state === 'complete')
@@ -82,11 +82,11 @@ const groupsOf = (recs, now, key = groupKey) => {
   for (const r of recs) {
     if (!(Date.parse(r.ts) >= now - WINDOW_MS)) continue
     const k = key(r)
-    const g = m.get(k) || { key: k, count: 0, first_ts: r.ts, last_ts: r.ts, last: null }
-    g.count += 1 + (typeof r.suppressed === 'number' ? r.suppressed : 0); g.last_ts = r.ts; g.last = pick(r)
-    m.delete(k); m.set(k, g) // ordered by each group's newest record
+    const g = m.get(k) || { key: k, count: 0, first_ts: null, last_ts: null, last: null }
+    g.count += 1 + (typeof r.suppressed === 'number' ? r.suppressed : 0); widen(g, new Date(r.ts).toISOString()); g.last = pick(r)
+    m.delete(k); m.set(k, g) // ordered by each group's newest record written
   }
-  return [...m.values()].reverse() // newest record first, the log's order breaking a tie of ts (C.3)
+  return byNewest([...m.values()].reverse()) // newest time first, the log's order breaking a tie (C.3)
 }
 
 // The notes the last install / uninstall wrote (install-note / uninstall-note): in the window read, else in the day
