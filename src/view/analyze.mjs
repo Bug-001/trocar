@@ -324,6 +324,13 @@ function userEventOf(blocks) {
   }
   return { preview: preview.slice(0, PREVIEW_CHARS), chars }
 }
+const askKey = (e) => `${e.chars}:${e.preview}`
+// A rewrite sends the history again, so of its messages only the last can be someone asking: not the summary that opens them, not the
+// prompt the lane has had (`said`, its askKey). Words of the person inside the message the summary opens are the summary's (3.4).
+function askOfRewrite(msgs, said) {
+  const texts = msgs.filter((m) => m.role === 'user' && userEventOf(m.blocks)), m = texts.at(-1)
+  return texts.length > 1 && m === msgs.at(-1) && askKey(userEventOf(m.blocks)) !== said ? [m] : []
+}
 
 function textOfResult(b) {
   const c = b.content
@@ -517,7 +524,7 @@ export function createAnalyzer({ keep = true, from = null } = {}) {
   const laneOfStep = new WeakMap() // step → its stream
   const usageOf = new WeakMap() // step → its call's usage (callFacts)
   let n = o.n ?? 0, top = o.top ?? null, late = o.late ?? false, byOrder = o.byOrder ?? false
-  const state = o.state || new Map() // stream → { resMap, seenMap, prevCount, prevCtx, prevInfo, firstText, ask, tools }
+  const state = o.state || new Map() // stream → { resMap, seenMap, prevCount, prevCtx, prevInfo, said, firstText, ask, tools }
   // a fold that keeps nothing keeps a lane's tool names (tool use id → name) in one table of numbers for all its lanes, keyed by the
   // lane state's generation `g` and the id (num52: two ids of one number would share a name, odds about n² / 2⁵³), a name as an index
   let toolT = null, toolGen = o.toolGen ?? 0
@@ -537,7 +544,7 @@ export function createAnalyzer({ keep = true, from = null } = {}) {
   // an index whose name is none: a tool name a rewind takes back
   const none = () => { let i = toolIx.get(undefined); if (i === undefined) { i = toolNames.length; toolNames.push(undefined); toolIx.set(undefined, i) } return i }
   const getTool = (t, id) => { if (keep) return t.get(id); const i = toolT ? toolT.get(num52(t.g + id)) : undefined; return i === undefined ? undefined : toolNames[i] }
-  const fresh = () => ({ resMap: new Map(), seenMap: new Map(), prevCount: 0, prevCtx: 0, prevInfo: null, firstText: '', ask: null, tools: toolsOf() })
+  const fresh = () => ({ resMap: new Map(), seenMap: new Map(), prevCount: 0, prevCtx: 0, prevInfo: null, said: null, firstText: '', ask: null, tools: toolsOf() })
   function mkStream(kind) {
     const s = { id: 's' + streams.length, kind, calls: [], events: [], n: 0 }
     streams.push(s)
@@ -708,7 +715,7 @@ export function createAnalyzer({ keep = true, from = null } = {}) {
     const cur = { hint: h.compaction === true, marker, msgCount: msgs.length, preamble: hasPreamble, failed: step.error }
     const verdict = blindCount ? { compaction: false } : compactionVerdict(st.prevInfo, cur)
     if (!blindCount) st.prevInfo = compactionBaseline(st.prevInfo, cur, verdict)
-    let newMsgs
+    let newMsgs, asked = null
     if (verdict.compaction || verdict.lands) {
       Object.assign(step, compactionMeta(verdict, preambleNew))
       if (D) D.push(['x'])
@@ -717,6 +724,7 @@ export function createAnalyzer({ keep = true, from = null } = {}) {
         if (last.evict == null) last.evict = step.at
       }
       newMsgs = msgs
+      asked = verdict.basis === 'hint' ? [] : askOfRewrite(msgs, st.said) // a harness's request is the harness talking
     } else if (drop) {
       newMsgs = []
     } else {
@@ -739,10 +747,10 @@ export function createAnalyzer({ keep = true, from = null } = {}) {
     // seen-but-not-opened filenames: tool-result text (bigger cap) + prose (smaller)
     for (const m of newMsgs) for (const b of m.blocks) see(b.seen, b.type === 'tool_result' ? 80 : 40)
     see(reply.seen, 40)
-    for (const m of newMsgs) {
+    for (const m of asked ?? newMsgs) {
       if (m.role !== 'user') continue
       const e = userEventOf(m.blocks)
-      if (e) E.push({ type: 'user', step: step.at, streamId: s.id, ...shown(e) })
+      if (e) { E.push({ type: 'user', step: step.at, streamId: s.id, ...shown(e) }); st.said = askKey(e) }
     }
     for (const m of newMsgs) {
       if (m.role !== 'user') continue
@@ -764,7 +772,8 @@ export function createAnalyzer({ keep = true, from = null } = {}) {
         E.push(e)
       }
     }
-    st.prevCount = msgs.length
+    // a failed call is no baseline (3.4): it only raises the count, so neither the history a retry sends again nor what it brought itself is new twice
+    st.prevCount = step.error ? Math.max(st.prevCount, msgs.length) : msgs.length
   }
 
   function finish() {
@@ -853,7 +862,7 @@ export function createAnalyzer({ keep = true, from = null } = {}) {
   }
   // save(lane) → the lane's state as a push left it (its first text is set by its first push and stays: a rewind keeps that push);
   // rewind(lane, saved, undos): back to it, `undos` the steps' `undo` of every push of the lane after it, oldest first
-  const save = (s) => { const st = state.get(s); return { n: s.n, last: s._lastMsg, prevInfo: st.prevInfo, prevCount: st.prevCount, prevCtx: st.prevCtx } }
+  const save = (s) => { const st = state.get(s); return { n: s.n, last: s._lastMsg, prevInfo: st.prevInfo, prevCount: st.prevCount, prevCtx: st.prevCtx, said: st.said } }
   function rewind(s, saved, undos) {
     for (let u = undos.length - 1; u >= 0; u--) for (let i = undos[u].length - 2; i >= 0; i -= 2) toolT.set(undos[u][i], undos[u][i + 1] ?? none())
     const { n, last, ...st } = saved

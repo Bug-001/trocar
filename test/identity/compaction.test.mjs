@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { markCompaction, compactionVerdict, compactionBaseline, hasCompactionPreamble } from '../../src/identity/session-identity.mjs'
 import { query, homeWith } from '../helpers/session-doc.mjs'
-import { laneOf, fateOf, lanes, failLanes, sent, landedOf, LANDS_WITHIN, READ, SID } from '../helpers/compaction-lane.mjs'
+import { laneOf, fateOf, askedOf, lanes, failLanes, sent, landedOf, LANDS_WITHIN, READ, SID } from '../helpers/compaction-lane.mjs'
 
 test('markCompaction: a sharp message-count drop flags compaction with from/to', () => {
   assert.deepEqual(markCompaction(42, 6), { compaction: true, compaction_from: 42, compaction_to: 6 })
@@ -147,6 +147,23 @@ for (const wire of ['anthropic', 'flat']) {
       const rewrites = new Set(doc.calls.filter((r, i) => fate[i] != null).map((r) => r.rid))
       const { resources } = await query(home, 'lane', { id: SID, lane: doc.calls[0].lane })
       for (const s of resources.find((r) => r.label === READ).segments) if (s.evict != null) assert.ok(rewrites.has(s.evict), `${why}: evicted at ${s.evict}`)
+    }
+  })
+
+  // 3.4 「失败的 call」: nor is it the baseline of what is new, so the history after a failed drop reads as the lane without the failures
+  test(`${wire}: a failed call sends nothing new twice, its lane reads as the one that never failed`, async () => {
+    const read = async (steps) => {
+      const home = homeWith(laneOf(wire, steps)), doc = await query(home, 'session', { id: SID })
+      const { events, resources } = await query(home, 'lane', { id: SID, lane: doc.calls[0].lane })
+      const count = (t) => events.filter((e) => e.type === t).length
+      return { doc, events, user: count('user'), observation: count('observation'), loads: resources.find((r) => r.label === READ)?.loads.length ?? 0 }
+    }
+    for (const lane of failLanes()) {
+      const steps = [lane[0], 'ask', ...lane.slice(1)], why = steps.join(' ')
+      const failed = await read(steps), clean = await read(steps.filter((op) => op !== 'failmark' && op !== 'faildrop').map((op) => op.replace(/^fail/, '')))
+      assert.deepEqual([failed.user, failed.observation, failed.loads], [clean.user, clean.observation, clean.loads], why)
+      if (wire !== 'anthropic') continue
+      assert.deepEqual([...new Set(failed.events.filter((e) => e.type === 'user').map((e) => failed.doc.calls.findIndex((r) => r.rid === e.rid)))], askedOf(steps), why)
     }
   })
 }

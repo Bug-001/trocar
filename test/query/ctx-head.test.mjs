@@ -16,7 +16,7 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
 import { FLAG, opensPart } from '../../src/view/head-cols.mjs'
 import { query, homeWith } from '../helpers/session-doc.mjs'
-import { laneOf, fateOf, lanes, failLanes, SID } from '../helpers/compaction-lane.mjs'
+import { laneOf, fateOf, askedOf, lanes, failLanes, SID } from '../helpers/compaction-lane.mjs'
 
 const FIXTURE = JSON.parse(fs.readFileSync(new URL('../fixtures/session-read-contract.json', import.meta.url), 'utf8'))
 // 3.5 §会话读 `session --head`: the closed set of its keys; tier 0 has `buckets` besides
@@ -108,16 +108,16 @@ const opensOf = (fate) => fate.flatMap((x, i) => (i > 0 && (fate[i - 1] === 'mar
 const answers = async (home, id) => { const [doc, full] = await Promise.all([query(home, 'session', { id, head: true }), query(home, 'session', { id })]); return JSON.parse(JSON.stringify({ doc, full })) }
 
 test('1.3 #18, 3.5 `chapters[].prompts` and 车道头 `parts`: over generated lanes, failed calls among them, chapters tile the steps, a marked compaction is its chapter\'s last step, an inferred one its first, `inferred` and `prompts` per chapter, and the axis lane\'s `parts` is the chapter count', async () => {
-  for (const wire of ['anthropic', 'flat']) for (const steps of [...lanes(wire).flatMap((body) => [body, [...body, 'mark']]), ...failLanes()]) {
+  for (const wire of ['anthropic', 'flat']) for (const steps of [...lanes(wire).flatMap((body) => [body, [...body, 'mark']]), ...failLanes(), ...['grow', 'ask', 'mark', 'drop'].map((a) => ['grow', a, 'dropask', 'grow', 'ask'])]) {
     const fate = fateOf(steps), why = steps.join(' ')
     const { doc, full } = await answers(homeWith(laneOf(wire, steps)), SID)
-    const axis = full.calls.filter((c) => c.lane === doc.axis).map((c) => c.rid), asked = new Set(full.events.filter((e) => e.type === 'user').map((e) => e.rid))
+    const asked = wire === 'anthropic' ? askedOf(steps) : [] // 1.3: the chat wire has no prompt events
     assert.equal(doc.steps, steps.length, why)
     assert.deepEqual(doc.chapters.map((c) => c.s0), [0, ...opensOf(fate)], why)
     doc.chapters.forEach((c, k) => {
       assert.equal(c.s1, doc.chapters[k + 1]?.s0 ?? doc.steps, why)
       assert.equal(c.inferred, fate[c.s0] === 'inferred' && k > 0, why)
-      assert.equal(c.prompts, axis.slice(c.s0, c.s1).filter((rid) => asked.has(rid)).length, why)
+      assert.equal(c.prompts, asked.filter((i) => i >= c.s0 && i < c.s1).length, why)
     })
     for (const d of [doc, full]) assert.equal(d.lanes.find((l) => l.lane === doc.axis).parts, doc.chapters.length, why)
   }
