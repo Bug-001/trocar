@@ -5,6 +5,7 @@ import { COMMAND_INDENT } from '../off/receipt.mjs'
 import { WIDTH, wrap, size } from './text.mjs'
 
 const GAP = 2
+const SCRIPT_EXAMPLE = '/Users/me/rules/surgery.mjs'
 const seconds = (ms) => `${ms / 1000} seconds`
 
 /** One row of cells, each folded in its own column; `widths` is every column but the last, which takes what is left of the line. */
@@ -77,7 +78,7 @@ const EXAMPLES = [
   "on": "response",
   "whole": true,
   "match": { "pid": 4242, "host": "api.openai.com", "class": "llm" },
-  "do": [ { "script": "/Users/me/rules/surgery.mjs" } ],
+  "do": [ { "script": "${SCRIPT_EXAMPLE}" } ],
   "on_error": "drop"
 }`],
 ]
@@ -201,7 +202,7 @@ export function rulesManual() {
         { blocks: { role: 'user', newest: 1 }, set_text: 'hello' },
         { blocks: { section: 'system' }, append_text: 'Be brief.' }),
       action('script', 'Hands the message to your ES module, by absolute path. See Scripts.',
-        { script: '/Users/me/rules/surgery.mjs' }),
+        { script: SCRIPT_EXAMPLE }),
       action('hold', `Keeps the message until release_after_ms, which is required, from 1 to ${LIMITS.releaseAfterMs}, then goes by on_error: forward sends what it holds, drop cuts the connection.`,
         { hold: true, release_after_ms: 60000 }),
       action('drop', 'Cuts the connection.', { drop: true }),
