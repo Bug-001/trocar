@@ -57,7 +57,7 @@ function check(was, members) {
 }
 
 // The first main-lane call of the model calls (`calls` in write order, `steps` in step order), past the first `from` known to hold none.
-// → {t, r, c}, or {unread} when a record could not be read. Each read folds the calls from the first one on, in write order, as `session`
+// → {t, r, c}, or {unread} when a record could not be read or the fold threw. Each read folds the calls from the first one on, in write order, as `session`
 // does: a call may be told by the one it continues (4 16 64 … of them, so about a third more reads than calls); a later part folded alone
 // would read a subagent's continuation as the main lane. Whatever sorts into the part read before is in the next read too. The records
 // are read one at a time, so a long read holds one record and the fold. With every call read and no main one, `t` is the first subagent
@@ -69,7 +69,9 @@ function firstMain({ home, fs, calls, steps, from, progress }) {
     const head = steps.slice(0, end), held = new Set(head), errs = [];
     let lost = false;
     const read = (rs) => { progress(); const got = recordsAt({ home, fs, rows: rs, errors: errs, remember: false }); lost ||= got.length < rs.length; return got; };
-    const facts = new Map(foldFacts({ rows: calls.filter((r) => held.has(r)), read }).map((f) => [String(f.id), f]));
+    let facts;
+    try { facts = new Map(foldFacts({ rows: calls.filter((r) => held.has(r)), read }).map((f) => [String(f.id), f])); }
+    catch (e) { return { unread: String((e && e.message) || e).split('\n')[0] }; } // one session's fold, not the list's or its `session`'s (3.5 #41)
     if (lost || errs.some((e) => e.io)) return { unread: errs[0] ? errs[0].reason : 'a record is missing' };
     const main = head.find((r) => (facts.get(String(r.id)) || {}).lane === 'main');
     if (main) return { t: facts.get(String(main.id)).ask ?? null, r: main.id, c: head.length };
@@ -83,7 +85,7 @@ function firstMain({ home, fs, calls, steps, from, progress }) {
 const said = (t) => ({ title: t, title_source: t != null ? 'wire' : null });
 
 /** titleOf({home, fs, id, members, errors, progress, deadline}) → {title, title_source}. `title_source`: 'wire', null (no prompt in its
- *  calls), or 'unread': a record that could not be read back and no title to stand in; a read that fails leaves one `errors` entry (D38)
+ *  calls), or 'unread': a record that could not be read back, or a fold that threw, and no title to stand in; either leaves one `errors` entry (D38)
  *  and the table as it was, an old title standing. `members`: the WHOLE session, in write order. `progress`: called at each read.
  *  `deadline`: a performance.now() time; past it, a title that needs a read throws TitlesPending. */
 export function titleOf({ home = trocarHome(), fs = nodeFs, id, members, errors = [], progress = () => {}, deadline = null }) {

@@ -262,6 +262,28 @@ test('3.5 #41: a record that cannot be read and no entry: title null from `unrea
   assert.ok(table(home).titles[sid].t, 'read again, it is kept')
 })
 
+test('3.5 #41: a fold that throws is its own session\'s: one `errors` entry, the other sessions answered; the next read tries again', async () => {
+  const home = homeOf(), good = 'good-0000-4a1b-9c2d-000000000001', bad = 'thrown-00-4a1b-9c2d-000000000001', OTHER = '20261022T110000Z'
+  const calls = (sid) => [0, 1, 2].map((t) => envelope(CC, sid, CC.body(sid, t), replyTo(CC, t), stamp(t)))
+  append(home, calls(good))
+  fs.appendFileSync(path.join(home, 'raw', `${OTHER}.ndjson`), calls(bad).join('\n') + '\n')
+  for (const segment of [SEG, OTHER]) await segmentIndex({ home, segment, owner: true })
+  // a read-back that throws instead of saying so: the segment gone from under an index that still has its rows
+  const gone = Object.assign(cold(), { broken: false, existsSync: (p) => !(gone.broken && String(p).endsWith(`${OTHER}.ndjson`)) && fs.existsSync(p) })
+  await runQuery('segments', {}, { home, fs: gone })
+  gone.broken = true
+  const doc = await saved(home, { fs: gone }), row = (id) => doc.sessions.find((s) => s.session_id === id)
+  assert.deepEqual([row(bad).title, row(bad).title_source], [null, 'unread'])
+  assert.equal(row(good).title, (await metaOf(home, good)).title); assert.ok(row(good).title)
+  assert.deepEqual(doc.errors.map((e) => [e.where, e.code]), [[`session/${bad}`, 'record-unreadable']])
+  assert.match(doc.errors[0].reason, /^[^\n]+$/)
+  assert.ok(!(bad in table(home).titles), 'not in the table')
+  gone.broken = false
+  const back = await saved(home, { fs: gone })
+  assert.deepEqual(back.errors, [])
+  assert.equal(back.sessions.find((s) => s.session_id === bad).title, (await metaOf(home, bad)).title)
+})
+
 test('3.5 #41: a record that cannot be read beside an entry with a title: the title stands, from the wire, one `errors` entry, the table as it was', async () => {
   const home = homeOf(), sid = 'kept-0000-4a1b-9c2d-000000000001', warm = faultyFs(home)
   append(home, [1, 2, 3].map((t) => envelope(CC, sid, CC.body(sid, t), replyTo(CC, t), stamp(t))))
