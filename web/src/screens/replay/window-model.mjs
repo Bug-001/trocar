@@ -276,5 +276,8 @@ export function landingFor(s, top) {
 /** The landing `due` (landingFor) ran: the step has landed, or waits with the box at `top()`. */
 export function landed(s, due, top) {
   const { rid } = callOf(s)
-  if (due.wait) s.landWait = { rid, top: top() }; else s.landedFor = rid
+  if (due.wait) s.landWait = { rid, top: top() }; else { s.landedFor = rid; s.landWait = null }
 }
+/** The playhead stands on `rid`: a landing that waited on another step ended with that visit. Coming back is a new arrival, and the box
+ * it finds moved by the steps between, not by the reader. */
+export function arrived(s, rid) { if (s.landWait?.rid !== rid) s.landWait = null }

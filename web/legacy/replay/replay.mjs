@@ -46,7 +46,7 @@ import { createPace } from './pace.mjs'
 import { renderSaw, renderOverview, repositionBrush, markCurrent, renderProblemNav, problemSteps, wireTimeline, barsThatFit, fitWindow, capWindow, renderRough as roughRows, chapterHere, placeView } from './timeline.mjs'
 import { renderRails, wireRails, highlightRange, reviewing } from './rails.mjs'
 import { renderContextWindow, wireCtxWin, emptyFrameHtml, rowKeys, ensureRow, toggleCtxBlock } from './ctxwin.mjs'
-import { refWaits } from '../../src/screens/replay/window-model.mjs'
+import { arrived, refWaits } from '../../src/screens/replay/window-model.mjs'
 import { renderOutline, wireOutline, jumpToAnchor, jumpToResourceBlock } from './outline.mjs'
 import { createJumpQueue } from './jump.mjs'
 import { createPricingLoader } from './pricing.mjs'
@@ -539,7 +539,7 @@ function openDesk(ctx, route0, makeView = legacyView) {
     s.initialStep = null // and any named step still waiting to land
     const N = s.anchor.calls.length, np = Math.max(0, Math.min(N - 1, i | 0))
     if (np !== s.playhead) s.turnLanded.clear() // a different call: no landing turn lingers; open rows stay by bid (1.4:114)
-    s.playhead = np; s.playRid = s.anchor.calls[np].rid
+    s.playhead = np; s.playRid = s.anchor.calls[np].rid; arrived(s, s.playRid)
     if (manual) s.follow = np === N - 1 // the reader's move: on the newest call it follows, anywhere else it does not
       // keep the scrub target inside the brush window, which stays inside its chapter (1.3 §章): pan it, keeping its width; another
     // chapter's window becomes this chapter's
@@ -888,6 +888,7 @@ function openDesk(ctx, route0, makeView = legacyView) {
     const moved = placePlayhead(prevRow)
     if (s.playRid == null) { renderRough(); chainLedger(); fill(); return } // the rough page until the named step is here
     // the followed step's open reply bodies in one read before it is drawn, so its newest reply shows with its bytes; the same
+    arrived(s, s.playRid)
     // read carries the ±NEAR prefetch (2.3 §正文预取), so the rest after it finds nothing left and a delta stays one `block` (4.4:52)
     if (s.follow && moved && !first && host) {
       const refs = openRefs(s.playRid)

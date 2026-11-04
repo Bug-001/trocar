@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 import { buildLanes, anchorLane } from '../../web/legacy/replay/lanes.mjs'
 import { stepOf } from '../../web/legacy/replay/model.mjs'
 import { setDeskMode, loadBodies } from '../../web/legacy/replay/cell.mjs'
-import { windowItems, landed, landingFor } from '../../web/src/screens/replay/window-model.mjs'
+import { arrived, windowItems, landed, landingFor } from '../../web/src/screens/replay/window-model.mjs'
 import { refPending } from '../../web/legacy/replay/analysis.mjs'
 import { deskOf, world, deskFrom } from './desk-world.mjs'
 
@@ -133,6 +133,21 @@ test('1.4 #10: a landing waits for the 内容对比步\'s list, lands when it is
   assert.deepEqual([moved.t, moved.wait], [null, false])
   landed(there, moved, box)
   assert.equal(there.landedFor, 'R0-1')
+})
+
+test('1.4 #10: a wait ends with its visit: back on the step, a box the steps between moved is not a reader who moved it', () => {
+  const ref = [sys({ key: 's' }), blk({ key: 'x' })], cur = [...ref, say({ key: 'z' })]
+  const waiting = desk1([ref, cur]), h = waiting.held.get('R0-0')
+  h.steps.delete('R0-0'); h.kf.clear(); h.byI = null
+  let top = 120
+  const box = () => top, s = stateOf(waiting, 1)
+  landed(s, landingFor(s, box), box)
+  arrived(s, 'R0-1') // a redraw on the same step: still this visit
+  assert.deepEqual(s.landWait, { rid: 'R0-1', top: 120 })
+  arrived(s, 'R0-2'); top = 40 // left; the next step's landing moved the box
+  arrived(s, 'R0-1') // back, its comparison step here by now
+  const back = stateOf(desk1([ref, cur]), 1, { landWait: s.landWait })
+  assert.equal(landingFor(back, box).fi, 2)
 })
 
 test('2.3 内容对比步: the comparison step is on its way when the row the server named is not here, or the walk went over unread steps', () => {
