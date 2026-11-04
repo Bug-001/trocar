@@ -28,7 +28,7 @@ function sessionDoc(base) {
     session_synthesized: !!base.session_synthesized,
     provider: base.provider ?? null,
     title,
-    title_source: title != null ? 'wire' : null,
+    title_source: title != null ? 'wire' : base.title_pending ? 'pending' : null, // pending: not known yet (4.4 §人类标题的来源)
     calls: base.calls || 0,
     logged: base.logged || 0, // D40: inference calls kept as a log line only (a meta.json written before D40 has none)
     probes: base.probes || 0,

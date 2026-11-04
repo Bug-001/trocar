@@ -2,7 +2,8 @@
 // with a printed reason wherever it cannot run (D38: not silently). Only `npm run test:browser` runs the browser cases.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard, shoot } from './harness.mjs'
+import http from 'node:http'
+import { probe, withBoard, shoot, launchChrome } from './harness.mjs'
 
 const gate = await probe()
 
@@ -35,4 +36,47 @@ test('the suite skips with a reason when it is not asked for, or playwright-core
   }
   assert.equal(imported, 0)
   assert.equal(launched, 0)
+})
+
+// A route handler still awaiting route.fetch when its page, its context or the browser closes rejects with nobody to await it: an
+// unhandled rejection that failed whichever case was running (a Windows run, capture-shots: "route.fetch: Request context disposed" on
+// a status poll in flight at close). Every close of what launchChrome hands out leaves no such rejection.
+test('closing a page, a context or the browser while a route handler awaits route.fetch leaves no unhandled rejection', { skip: gate.ok ? false : gate.reason, timeout: 60_000 }, async () => {
+  const held = [], waiting = []
+  const server = http.createServer((req, res) => {
+    if (req.url !== '/slow') return res.end('<!doctype html><title>t</title>')
+    held.push(res); for (const w of waiting.splice(0)) w() // never answered: the handler's route.fetch is in flight until the close
+  })
+  await new Promise((r) => server.listen(0, '127.0.0.1', r))
+  const base = `http://127.0.0.1:${server.address().port}`
+  const rejections = [], onRejection = (e) => rejections.push(String(e))
+  process.on('unhandledRejection', onRejection)
+  const browser = await launchChrome(gate.chromium)
+  try {
+    const inFlight = async (context, at) => {
+      const page = await context.newPage()
+      await page.goto(`${base}/`)
+      const reached = new Promise((r) => waiting.push(r))
+      await (at === 'page' ? page : context).route('**/slow', async (r) => { const res = await r.fetch(); await r.fulfill({ response: res }) })
+      await page.evaluate(() => { fetch('/slow').catch(() => {}) })
+      await reached
+      return page
+    }
+    const a = await browser.newContext()
+    await (await inFlight(a, 'page')).close()
+    await a.close()
+    const b = await browser.newContext()
+    await inFlight(b, 'context')
+    await b.close()
+    await inFlight(await browser.newContext(), 'page')
+    await inFlight(await browser.newContext(), 'context')
+    await browser.close()
+    await new Promise((r) => setTimeout(r, 500)) // a rejection the closes caused is raised well within this
+    assert.deepEqual(rejections, [])
+  } finally {
+    process.off('unhandledRejection', onRejection)
+    await browser.close()
+    for (const res of held) res.destroy()
+    await new Promise((r) => server.close(r))
+  }
 })

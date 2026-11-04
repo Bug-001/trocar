@@ -7,18 +7,18 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { probe, shoot, layoutFaults } from './harness.mjs'
+import { probe, shoot, layoutFaults, launchChrome } from './harness.mjs'
 import { BOARD_LINES } from '../perf-lines.mjs'
 import { modelWorld } from '../../helpers/model-world.mjs'
-import { liveUnit, withScratchCwd, boardPortOf } from '../../helpers/model-daemon.mjs'
+import { liveUnit, withScratchCwd, boardPortOf, servableWorld } from '../../helpers/model-daemon.mjs'
 import { workerFork } from '../../helpers/worker-fork.mjs'
 import { depsFile } from '../../helpers/board-world.mjs'
 import { snapshot } from '../../query/raw-home.mjs'
-import { renderWrapper } from '../../../src/collector/arch/darwin/wrapper.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
-const platform = 'darwin'
+// the first model world this host can serve for real, with its own arch's wrapper: control-harness.e2e proves both worlds, each on the hosts that can serve it
+const { platform, renderWrapper } = await servableWorld()
 const HELPER = { close: async () => {}, call: async (verb) => { if (verb === 'ps') return { procs: [] }; throw Object.assign(new Error(`not in this stand-in: ${verb}`), { code: 'helper-verb-error' }) } }
 
 async function withDaemonBoard(run) {
@@ -35,7 +35,7 @@ async function withDaemonBoard(run) {
 }
 
 async function open(chromium, { base, token }, { width = 1280, theme = 'light' } = {}) {
-  const browser = await chromium.launch({ channel: 'chrome' })
+  const browser = await launchChrome(chromium)
   const context = await browser.newContext({ viewport: { width, height: 900 }, colorScheme: theme })
   const page = await context.newPage()
   const posts = [], errors = []
@@ -128,6 +128,7 @@ test('an expanded problem row: nothing drawn on one another, the two right-hand 
       const b = await open(gate.chromium, ctx, { width })
       try {
         const now = new Date().toISOString()
+        await b.page.route((u) => new URL(u).pathname.startsWith('/assets/harness/'), async (r) => { await new Promise((ok) => setTimeout(ok, 1000)); await r.continue() }) // the icon files answer after the screen's data, as on a slow machine: a box still loading is not an empty one
         await b.page.route((u) => new URL(u).pathname === '/api/status', async (r) => {
           const res = await r.fetch(), j = await res.json()
           j.harnesses.codex = { ...j.harnesses.codex, desired: 'on', captured: false, reason: 'config-after-start', why: [] }

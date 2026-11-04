@@ -10,7 +10,7 @@ import fs from 'node:fs'
 import tls from 'node:tls'
 import path from 'node:path'
 import { modelWorld } from '../helpers/model-world.mjs'
-import { liveUnit, withScratchCwd } from '../helpers/model-daemon.mjs'
+import { liveUnit, withScratchCwd, unservable } from '../helpers/model-daemon.mjs'
 import { within } from '../helpers/bounded.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { createCa, loadCa } from '../../src/collector/core/tls/ca.mjs'
@@ -22,7 +22,7 @@ import { PID, BODY, reqOf, REPLY, agentOf, darwinExec, win32Io, flowsOf, freePor
 import { listenLocalhost } from '../helpers/localhost.mjs'
 
 for (const platform of ['darwin', 'win32']) {
-  test(`${platform}: V109 a host whose certificate does not verify is passed on; trocar on codex while on retries it now, and the next connection is decrypted`, { timeout: 60_000 }, async () => {
+  test(`${platform}: V109 a host whose certificate does not verify is passed on; trocar on codex while on retries it now, and the next connection is decrypted`, { skip: await unservable(platform), timeout: 60_000 }, async () => {
     const w = await modelWorld({ os: platform, commands: ['codex'] })
     assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
     fs.mkdirSync(path.join(w.home, '.codex'), { recursive: true }); fs.writeFileSync(path.join(w.home, '.codex', '.env'), '# the user\'s own\n')

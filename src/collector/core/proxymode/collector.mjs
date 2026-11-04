@@ -25,6 +25,7 @@ import { holdersRoute } from '../control.mjs'
 import { makeIssuer } from '../tls/issuer.mjs'
 import { bypassHit } from '../upstream-shape.mjs'
 import { hostSetOf } from '../host-agent.mjs'
+import { configuredHosts } from './sources.mjs'
 import { CODE } from '../codes.mjs'
 import { agentTrustSet, createAgentTrust, CERT_VARS } from './upstream-trust.mjs'
 import { redactProxyUrl } from '../../../netenv/redact.mjs'
@@ -82,9 +83,7 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
   const treeHosts = (f) => {
     const t = treeOf.get(f)
     if (!t || clock() - t.at <= 1000) return t ? t.hosts : null
-    const errs = [], readText = (p) => { try { return ctx.readFile(p) } catch (e) { if (!['ENOENT', 'ENOTDIR'].includes(e && e.code)) errs.push(`${p}: ${(e && e.code) || e}`); return null } }
-    let found = []
-    try { found = (t.d.configHosts && t.d.configHosts({ ...ctx, env: new Map(), readText, listDir: (p) => { try { return ctx.readdir(p) } catch { return [] } } })) || [] } catch (e) { errs.push(String((e && e.message) || e)) }
+    const { hosts: found, errors: errs } = configuredHosts(t.d, ctx)
     let extra = []
     try { extra = ((readSt().harnesses || {})[t.d.name] || {}).extra_hosts || [] } catch { /* no state: no extra hosts */ }
     if (errs.length && once(`config-unreadable\0${f.id}`)) { record({ event: 'failure', where: 'harness', code: CODE.configUnreadable, harness: t.d.name, form: f.id, reason: `${f.id}'s own settings could not be read (${errs.join('; ')}); its host set is ${t.d.name}'s hosts and the extra hosts only, so a relay they name is forwarded, not decrypted` }) }
