@@ -39,7 +39,7 @@ trocar --version
 git clone https://github.com/Bug-001/trocar.git
 ```
 
-Check out the tag for your version, or the commit after the `+` in a version like `0.1.0+1a2b3c4`, and run `npm install`. The clone holds the spec (`spec/01-trocar-rfc/`, written in Chinese), the board's source, the scripts below, and the place a fix will happen. The installed package has none of these. Without network access, work from `trocar help --json` and say what you could not check.
+Check out the tag for your version, or the commit after the `+` in a version like `0.1.0+1a2b3c4`, and run `npm install`. If the tag or commit does not exist, or it has no `scripts/`, use the scripts from `origin/main`, run them with `--cli "$(command -v trocar)"`, and put the version gap in the report. The clone holds the spec (`spec/01-trocar-rfc/`, written in Chinese), the board's source, the scripts below, and the place a fix will happen. The installed package has none of these. Without network access, work from `trocar help --json` and say what you could not check.
 
 ### 3. Run the machine check
 
@@ -47,7 +47,7 @@ Check out the tag for your version, or the commit after the `+` in a version lik
 node scripts/contract-check.mjs --json > "$RUN/contract.json"
 ```
 
-It reads through the CLI, changes nothing and prints only counts and ids. It checks what can be decided mechanically: every query answers and lists what it could not read; `--json` is one document and exit codes are the documented ones; `segments` agrees with the stored records; block bytes equal the record they came from; the same number agrees across documents; incremental reads add up to a full read; and, per agent, how many calls are unparsed, filed under other, have an inferred agent, or have an incomplete reply. That last group is where deep use of one agent shows up.
+By default it reads the installed `trocar`. It runs no command that changes state and does not touch the raw records, though reads through the daemon refresh its index and projections. It prints only counts and ids. It checks what can be decided mechanically: every query answers and lists what it could not read; `--json` is one document and exit codes are the documented ones; `segments` agrees with the stored records; block bytes equal the record they came from; the same number agrees across documents; incremental reads add up to a full read; and, per agent, how many calls are unparsed, filed under other, have an inferred agent, or have an incomplete reply. That last group is where deep use of one agent shows up.
 
 A finding here is a lead. Confirm it before you report it.
 
@@ -76,7 +76,7 @@ trocar board --json > "$RUN/board.json"
 node scripts/board-walk.mjs --board "$RUN/board.json" --out "$RUN/walk"
 ```
 
-The address holds the board's token: keep it in the file, out of your messages. `board-walk` needs the clone's `npm install` and Google Chrome. If your harness has its own browser tool, you can use that instead. Read `web/` for the screen first, so you know what each control promises. Look at every screenshot yourself: the script finds dead controls and overflow, and only you can find a wrong name or a screen that wastes its space.
+`trocar board --json` starts the daemon if it is not running, so tell the user first. The document holds no token: `board-walk` reads `token_file` itself, so the token never passes through you. `board-walk` needs the clone's `npm install` and Google Chrome. If your harness has its own browser tool, you can use that instead. Read `web/` for the screen first, so you know what each control promises. Look at every screenshot yourself: the script finds dead controls and overflow, and only you can find a wrong name or a screen that wastes its space.
 
 `node scripts/side-board.mjs --synthetic` gives you a board over generated data, for anything you want to try without the user's data. `--real` serves the clone's code over the user's captures, read-only, and the sequence soak can run against it (`docs/reproduce.md`).
 
