@@ -62,6 +62,7 @@ export function cacheFacts(row, ref) {
   if (c.warm) out.warm = true;
   if (c.quiet) out.quiet = c.quiet;
   if (c.zeroInput) out.zeroInput = true;
+  if (row.cacheBreak && row.cacheBreak.cause === 'compaction') out.rewrite = true;
   if (c.isBreak) {
     out.break = true;
     const { missed, why } = missedOf(usageOf(row), ref.usage, ref.has);

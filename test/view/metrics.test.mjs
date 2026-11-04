@@ -114,7 +114,7 @@ test('2.2 §花费: priceMatch takes the same name first, then the longest key, 
 });
 
 test('3.5 row `cache`: along the state axis only the closed keys appear, and null or false is never written', () => {
-  const CLOSED = new Set(['state', 'hit', 'break', 'warm', 'quiet', 'zeroInput', 'missed', 'why']);
+  const CLOSED = new Set(['state', 'hit', 'break', 'rewrite', 'warm', 'quiet', 'zeroInput', 'missed', 'why']);
   const refs = [{ has: true, usage: { read: 500, create: 500, fresh: 0, out: 1 } }, { has: true, usage: { read: 500, create: null, fresh: 0, out: 1 } }, { has: true, usage: null }, { has: false, usage: null }];
   for (const [row, state, isBreak] of TABLE) for (const ref of refs) {
     const f = cacheFacts(row, ref);
@@ -140,6 +140,17 @@ test('3.5 row `cache`: the facts of one row of each kind', () => {
   assert.deepEqual(cacheFacts({ usage: U, cacheBreak: { cause: 'volatile-nonce-only' } }, ref), { state: 'reused', hit: 0.8, quiet: 'volatile-nonce-only' });
   assert.deepEqual(cacheFacts({ usage: { read: 0, create: 0, fresh: 0, out: 1 }, cacheBreak: append }, ref), { state: 'no-usage', zeroInput: true });
   assert.deepEqual(cacheFacts({ error: 'boom', usage: null }, ref), { state: 'failed' });
+});
+
+test('3.5 #45 rewrite: along the cause axis it is there, as true, exactly when the cause is compaction, with usage or failed', () => {
+  const ref = { has: true, usage: U };
+  const breaks = [undefined, ...[...QUIET_CAUSES, 'content-changed', 'compaction'].map((cause) => ({ cause }))];
+  for (const cacheBreak of breaks) for (const step of [{ usage: U }, { error: 'boom', usage: null }]) {
+    const f = cacheFacts({ ...step, cacheBreak }, ref);
+    const compaction = !!cacheBreak && cacheBreak.cause === 'compaction';
+    assert.equal('rewrite' in f, compaction, JSON.stringify({ step, cacheBreak }));
+    if (compaction) assert.equal(f.rewrite, true);
+  }
 });
 
 test('2.1 cost buckets: main, sub, not billed, and everything else in the background bucket', () => {
