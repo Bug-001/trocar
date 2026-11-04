@@ -67,7 +67,7 @@ export const partsOfUnit = (blocks, field, span, why) => blocks.map((b) => (bloc
 // rec → [{kind, role, block, field, span, why?}] in reply order, for an SSE wire described by:
 //   keysOf(evt) → the block keys an event carries (from the wire's own fields)
 //   build(key, evts, all, part) → that key's blocks (cross-provider vocabulary), or a string saying why it has none, or
-//     { evt, nodes: [{block, path}] }: `evt`, one of `evts`, holds the blocks whole as JSON nodes of its data, each at `path`;
+//     { evt, nodes: [{block, path}] }: `evt`, one of `all`, holds the blocks whole as JSON nodes of its data, each at `path`;
 //     when that data is not one JSON value on one `data:` line, the blocks fall back to the key's event range
 //   jsonBlocks(body) → the blocks of a non-streamed JSON reply
 // The events are read from resp.raw; a stream stored without its text (base64) is read from raw_sse, without spans.
@@ -88,7 +88,8 @@ export function streamParts(rec, { keysOf, build, jsonBlocks }) {
   const keys = events.map((e) => (e.evt ? keysOf(e.evt) : []));
   keys.forEach((ks, i) => { for (const k of ks) { if (!groups.has(k)) groups.set(k, []); groups.get(k).push(i); } });
   const all = events.map((e) => e.evt);
-  const out = [];
+  const out = [], roots = new Map(); // event position → its scanned data (a terminal holds many items: scanned once)
+  const rootAt = (i) => { if (!roots.has(i)) roots.set(i, field && events[i].dataAt != null ? scanned(events[i].data) : null); return roots.get(i); };
   for (const [k, at] of groups) {
     const first = at[0], last = at[at.length - 1];
     let mixed = false;
@@ -98,9 +99,8 @@ export function streamParts(rec, { keysOf, build, jsonBlocks }) {
     let blocks = build(k, evts, all, part);
     if (typeof blocks === 'string') { out.push(replyPart(null, field, null, blocks)); continue; }
     if (!Array.isArray(blocks)) {
-      const e = events[at[evts.indexOf(blocks.evt)]];
-      const root = field && e && e.dataAt != null ? scanned(e.data) : null;
-      if (root) { out.push(...nodeParts(blocks.nodes, root, field, e.dataAt)); continue; }
+      const i = all.indexOf(blocks.evt), root = i < 0 ? null : rootAt(i);
+      if (root) { out.push(...nodeParts(blocks.nodes, root, field, events[i].dataAt)); continue; }
       blocks = blocks.nodes.map((n) => n.block);
     }
     out.push(...partsOfUnit(blocks, field, span, mixed ? INTERLEAVED : why));

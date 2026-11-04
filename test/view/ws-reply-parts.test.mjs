@@ -14,11 +14,12 @@ import { shapeResponse } from '../../src/collector/core/record/body.mjs';
 
 const user = (t) => ({ type: 'message', role: 'user', content: [{ type: 'input_text', text: t }] });
 // one call as the collector writes it: on WebSocket (connection F) the client's response.create, then the server messages; over
-// HTTP the request body, then the SSE stream. Each output item is closed by an output_item.done (`closed`), or only listed in
-// response.completed (then an SSE block has its item's event range, so only a one-block item keeps a ref).
+// HTTP the request body, then the SSE stream. Each output item is opened by output_item.added and closed by an output_item.done (`closed`), or only listed in
+// response.completed (then a block is its node in that message's or event's output).
 function call(n, { input, prev = null, id, output, closed = true, wire }) {
-  const done = output.map((item, k) => ({ type: 'response.output_item.done', output_index: k, item }));
-  const events = [{ type: 'response.created', response: { id } }, ...(closed ? done : []),
+  const items = output.flatMap((item, k) => [{ type: 'response.output_item.added', output_index: k, item: { ...item, ...(item.content ? { content: [] } : {}) } },
+    ...(closed ? [{ type: 'response.output_item.done', output_index: k, item }] : [])]);
+  const events = [{ type: 'response.created', response: { id } }, ...items,
     { type: 'response.completed', response: { id, status: 'completed', output, usage: { input_tokens: 10, output_tokens: 2 } } }];
   const body = { model: 'm', instructions: 'You are Codex.', tools: [], input, ...(prev ? { previous_response_id: prev } : {}) };
   const base = { id: `w${n}`, ts_request: `2026-10-06T00:00:0${n}Z`, endpoint: '/v1/responses', host: 'chatgpt.com', proc: { pid: 2, exe: '/x/codex', agent: 'codex' }, req_headers: { 'session-id': 'CX' } };
@@ -42,7 +43,7 @@ const bytesOf = (records, ref) => {
 const runAt = (list, sub) => list.findIndex((_, i) => sub.every((b, k) => list[i + k] === b));
 
 test('a Responses reply (WebSocket, HTTP SSE): one ref per content part, exactly that part\'s bytes; a later call carrying it splits it the same way', async () => {
-  for (const [wire, closed] of [['ws', true], ['ws', false], ['sse', true]]) {
+  for (const [wire, closed] of [['ws', true], ['ws', false], ['sse', true], ['sse', false]]) {
     const twoPart = { type: 'message', id: 'm1', role: 'assistant', content: [{ type: 'output_text', text: 'first 你好' }, { type: 'output_text', text: 'second — ok' }] };
     const fc = { type: 'function_call', id: 'fc1', call_id: 'c1', name: 'shell', arguments: '{"cmd":"ls"}' };
     const onePart = { type: 'message', id: 'm2', role: 'assistant', content: [{ type: 'output_text', text: 'only part' }] };

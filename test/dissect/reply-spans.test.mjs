@@ -50,6 +50,9 @@ const respEvents = (item, k) => {
 };
 const completed = (items) => ({ type: 'response.completed', response: { id: 'resp1', status: 'completed', output: items, usage: { input_tokens: 3, output_tokens: 2 } } });
 const respBlocks = (items) => items.flatMap((it) => itemToBlocks(it)).map((b) => b.block);
+// an SSE slice's closing events (data lines of one event joined, as SSE does) → their items' blocks
+const respSlice = (text) => respBlocks(text.split(/\r?\n\r?\n/).map((ev) => ev.split(/\r?\n/).filter((l) => l.startsWith('data:')).map((l) => l.slice(5).trim()).join('\n'))
+  .filter(Boolean).map((d) => JSON.parse(d)).filter((e) => e.type === 'response.output_item.done').map((e) => e.item));
 function sliceEvents(text) {
   const out = [];
   for (const line of text.split(/\r?\n/)) if (line.startsWith('data:')) { const d = line.slice(5).trim(); if (d && d !== '[DONE]') out.push(JSON.parse(d)); }
@@ -116,12 +119,13 @@ test('a reply block whose events interleave with another block has no event-rang
 // Responses, WebSocket and HTTP SSE: the message or event that closes an output item carries it whole as one JSON value, so a
 // reply block is addressed as the JSON node it is: the item's path plus the block's own path within the item (itemToBlocks'
 // `sub`, the path the request side addresses the same item by). Every content part of a message is its own block with its own
-// span; a one-part message's span is that part; interleaved items still have theirs. Where no closing event arrived, or its
-// data is not one JSON value on one data line, an SSE block falls back to its item's event range: a block that shares it with
-// another has no span and says why.
+// span; a one-part message's span is that part; interleaved items still have theirs. An item no event closed is its node in the
+// terminal's output, item by item (other items of the reply may be closed). Where the data that delivers the item is not one JSON
+// value on one data line, an SSE block falls back to its item's event range: one block alone in it parses back to that block; a
+// block that shares it with another has no span and says why.
 const ZIP = (lists) => { const out = []; for (let i = 0; lists.some((l) => i < l.length); i++) for (const l of lists) if (i < l.length) out.push(l[i]); return out; };
 const sseSplit = (events, eol) => events.map((e) => { // a closing event's data over two data: lines (valid SSE, one value)
-  const d = JSON.stringify(e), cut = e.type === 'response.output_item.done' ? Math.floor(d.length / 2) : d.length;
+  const d = JSON.stringify(e), cut = e.type === 'response.output_item.done' ? d.indexOf(',') + 1 : d.length;
   return `event: ${e.type}${eol}data: ${d.slice(0, cut)}${eol}${cut < d.length ? `data: ${d.slice(cut)}${eol}` : ''}${eol}`;
 }).join('');
 test('a Responses reply block\'s span is exactly its own JSON node, one per content part (WebSocket and HTTP SSE)', () => {
@@ -131,19 +135,20 @@ test('a Responses reply block\'s span is exactly its own JSON node, one per cont
     const nodesOf = (it) => (it.type === 'message' ? it.content || [] : [it]);
     const nodes = items.flatMap(nodesOf);
     const units = items.flatMap((it, u) => nodesOf(it).map(() => u));
-    for (const closed of [true, false]) { // closed by output_item.done, or only listed in response.completed
-      const perItem = items.map((it, k) => respEvents(it, k).filter((e) => closed || e.type !== 'response.output_item.done'));
+    for (const closed of ['all', 'none', 'some']) { // closed by output_item.done, or only listed in response.completed, or each other one
+      const shut = (k) => closed === 'all' || (closed === 'some' && k % 2 === 0);
+      const perItem = items.map((it, k) => respEvents(it, k).filter((e) => shut(k) || e.type !== 'response.output_item.done'));
       const created = { type: 'response.created', response: { id: 'resp1' } };
       // WebSocket: one server message per event
       const server = [created, ...perItem.flat(), completed(items)].map((e) => JSON.stringify(e));
       const wr = buildWsEnvelope({ id: 'w1', seq: 1, wsRaw: [], flow: { id: 'F', host: 'h', scheme: 'https', dst: {}, proc: {} },
         upgrade: { req: { head: { raw: Buffer.from(''), method: 'GET', target: '/v1/responses', headers: [] } }, resp: { head: { raw: Buffer.from(''), headers: [] } } },
         call: { client: ['{"type":"response.create"}'], server, tsStart: 't', tsRespStart: 't', tsEnd: 't', partial: [], truncated: false } });
-      const runs = [['ws', wr, RESPONSES_WS, true]];
+      const runs = [['ws', wr, RESPONSES_WS, () => true]];
       // HTTP SSE: in order or interleaved, each line ending, the closing data on one line or split over two
       for (const order of ['seq', 'zip']) for (const eol of EOLS) for (const split of [false, true]) {
         const evs = [created, ...(order === 'zip' ? ZIP(perItem) : perItem.flat()), completed(items)];
-        runs.push([`sse ${order} ${JSON.stringify(eol)} split=${split}`, rec(stored((split ? sseSplit : sseOf)(evs, eol))), RESPONSES, closed && !split]);
+        runs.push([`sse ${order} ${JSON.stringify(eol)} split=${split}`, rec(stored((split ? sseSplit : sseOf)(evs, eol))), RESPONSES, (k) => !(split && shut(k))]);
       }
       for (const [name, r, d, nodal] of runs) {
         const parts = d.replyParts(r), at = `${name} closed=${closed}`;
@@ -151,13 +156,14 @@ test('a Responses reply block\'s span is exactly its own JSON node, one per cont
         assert.equal(parts.length, nodes.length, at);
         if (d === RESPONSES_WS) assert.deepEqual(parts.map((p) => p.unit), units, `${at}: unit = the output item`);
         parts.forEach((p, k) => {
-          if (nodal) {
+          if (nodal(units[k])) {
             assert.ok(p.span, `${at} #${k} ${p.kind} has a span (${p.why})`);
             const text = fieldTextOf(r, p.field).text;
             assert.deepEqual(JSON.parse(text.slice(p.span[0], p.span[1])), nodes[k], `${at} #${k}: exactly its own node`);
           } else {
             assert.ok(p.span || (typeof p.why === 'string' && p.why.length > 0), `${at} #${k}: a span or a why`);
             if (nodesOf(items[units[k]]).length > 1) assert.equal(p.span, null, `${at} #${k}: one event range, several blocks`);
+            else if (p.span) assert.deepEqual(respSlice(fieldTextOf(r, p.field).text.slice(p.span[0], p.span[1])), [p.block], `${at} #${k}: its event range parses back to it`);
           }
         });
       }
