@@ -18,7 +18,8 @@ let rn = 0
 const blk = (o = {}) => ({ sec: 'messages', role: 'user', kind: 'text', head: { role: 'user', tag: 'user', label: 'b' }, preview: 'p', chars: 5, bytes: 5, ref: `s/m#R::${rn++}-9`, ...o })
 const sys = (o) => blk({ sec: 'system', role: 'system', head: { role: 'system', tag: 'text', label: 's' }, ...o })
 const tool = (o) => blk({ sec: 'tools', role: 'system', head: { role: 'system', tag: 'def', label: 't' }, ...o })
-const rp = (kind, o = {}) => ({ kind, name: kind === 'tool_use' ? 'Bash' : undefined, head: { role: 'assistant', tag: kind, label: kind }, preview: kind, chars: 4, bytes: 4, ref: `s/m#R::resp.raw::${rn++}-9`, ...o })
+const HEAD_TAG = { text: () => 'say', tool_use: (name) => `action · ${name}` } // blockHead's words for a reply part; the rest say thinking
+const rp = (kind, o = {}) => ({ kind, name: kind === 'tool_use' ? 'Bash' : undefined, head: { role: 'assistant', tag: HEAD_TAG[kind]?.(o.name ?? 'Bash') ?? 'thinking', label: '' }, preview: kind, chars: 4, bytes: 4, ref: `s/m#R::resp.raw::${rn++}-9`, ...o })
 const stateOf = (desk, playhead = 0, extra = {}) => {
   const lanes = buildLanes(desk)
   return { desk, lanes, anchor: anchorLane(lanes), playhead, diffRef: null, navOpen: new Set(['cwremoved']), openBlocks: new Set(), turnFold: new Map(), turnLanded: new Set(), ctx: {}, ...extra }
@@ -235,17 +236,20 @@ test('2.3 #13: a reply with no readable part says so without claiming the reply 
   assert.ok(visible(known).includes(W.EMPTY_REPLY))
 })
 
-test('2.3:195: default open text → tool call → thinking; a flip stays across re-renders of the step, not across a step change', () => {
-  for (const [parts, open] of [[['thinking', 'text', 'tool_use'], 'k-text'], [['thinking', 'tool_use'], 'k-tool_use'], [['thinking'], 'k-thinking']]) {
-    for (const r of rows(ctxWindowHtml(stateOf(replyDesk([parts.map((k) => rp(k))]))))) assert.equal(r.cls.includes('collapsed'), !r.cls.includes(open), `${parts}: ${r.cls}`)
+test('2.3 #13: every reply row opens by default but a no-plaintext one; a flip stays across re-renders of the step, not across a step change', () => {
+  const sealed = { ff: { faithfulness: 'opaque' } }
+  for (const parts of [[rp('thinking'), rp('text'), rp('tool_use')], [rp('thinking', sealed), rp('text'), rp('tool_use')], [rp('redacted_thinking', sealed), rp('text')], [rp('thinking', sealed)]]) {
+    const rs = rows(ctxWindowHtml(stateOf(replyDesk([parts])))), open = rs.filter((r) => !r.cls.includes('collapsed'))
+    assert.equal(open.length, parts.filter((d) => !d.ff).length)
+    assert.ok(open.every((r) => !r.attrs.includes('data-ff="opaque"')), 'no open row is a no-plaintext one')
   }
   const desk = replyDesk([[rp('text'), rp('tool_use')], [rp('text'), rp('tool_use')]]), s = stateOf(desk, 0)
   const key = /data-rp="([^"]+)"/.exec(rows(ctxWindowHtml(s))[1].attrs)[1]
-  s.openBlocks.add(key) // the reader opened the tool call
-  assert.ok(!rows(ctxWindowHtml(s))[1].cls.includes('collapsed'))
-  assert.ok(!rows(ctxWindowHtml(s))[1].cls.includes('collapsed'), 'kept on a re-render')
+  s.openBlocks.add(key) // the reader closed the tool call
+  assert.ok(rows(ctxWindowHtml(s))[1].cls.includes('collapsed'))
+  assert.ok(rows(ctxWindowHtml(s))[1].cls.includes('collapsed'), 'kept on a re-render')
   s.playhead = 1; ctxWindowHtml(s); s.playhead = 0
-  assert.ok(rows(ctxWindowHtml(s))[1].cls.includes('collapsed'), 'reset by the step change')
+  assert.ok(!rows(ctxWindowHtml(s))[1].cls.includes('collapsed'), 'reset by the step change')
 })
 
 test('2.3 #13: a failed step\'s segment is one line, its reason in the technical details', () => {
@@ -282,10 +286,7 @@ test('the real face: an opened reply row with no source location shows the text 
       const st = stepOf(desk, s.anchor.calls[p].rid)
       if (!st.held || s.anchor.calls[p].error) continue
       s.playhead = p
-      for (const d of st.reply) if (d.ref == null) s.openBlocks.add('rp:' + d.bid) // a flip opens the rows that are closed by default…
-      const open = seg(ctxWindowHtml(s))
-      for (const d of st.reply) if (d.ref == null) s.openBlocks.delete('rp:' + d.bid) // …and closes the one open by default; both views are read
-      const h = open + seg(ctxWindowHtml(s)), bodies = [...h.matchAll(/<div class="cellread [^"]*">([\s\S]*?)<\/div>/g)].map((m) => m[1]).join('\n') // no ref: no bytes, Readable only
+      const h = seg(ctxWindowHtml(s)), bodies = [...h.matchAll(/<div class="cellread [^"]*">([\s\S]*?)<\/div>/g)].map((m) => m[1]).join('\n') // no ref: no bytes, Readable only
       for (const d of st.reply.filter((x) => x.ref == null)) {
         seen++
         assert.ok(d.inline && typeof d.inline === 'object', `step ${p + 1} ${d.bid}: the definition carries its body (3.5 §会话读)`)

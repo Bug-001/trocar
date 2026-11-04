@@ -1,7 +1,7 @@
 // web/src/screens/replay/window-model.mjs — the window's rules, framework-free (2.3 §读与画「长对话的窗口」 · 1.4 ①–⑨): the
 // playhead step's context window as keyed items in drawing order, drawn by both desks (legacy ctxwin.mjs maps them to units).
 // The proof rule (2.3 §保真标) and the reply rule (2.3 §这一步的回复) live here; blocks.mjs and rawpanel.mjs re-export them.
-import { bodyCache, isAddressed, bodyVersion, deskMode } from '../../../legacy/replay/cell.mjs'
+import { bodyCache, cellOf, isAddressed, bodyVersion, deskMode, modeOf, modeVersion } from '../../../legacy/replay/cell.mjs'
 import { messageTurns, keyDiff, refRowOf, hasChangeLine, callFacts } from '../../../legacy/replay/analysis.mjs'
 import { turnAnchorKey, turnIsOpen } from '../../../legacy/replay/fold.mjs'
 import { stepOf } from '../../../legacy/replay/model.mjs'
@@ -122,8 +122,6 @@ const callOf = (s) => (s.anchor && s.anchor.calls[s.playhead]) || null
 // ── the items ────────────────────────────────────────────────────────────────────────────────────────────────────────
 /** @typedef {{ key: string, type: string, [k: string]: any }} Item */
 /** @typedef {{ state: 'none' | 'noreq' | 'unparsed' | 'frames' | 'items', items: Item[] }} WindowItems */
-const REPLY_OPEN_ORDER = ['text', 'tool_use', 'thinking']
-const replyTag = (d) => (d.kind === 'tool_use' ? 'action · ' + (d.name || '') : d.kind === 'thinking' ? 'thinking' : 'say')
 // per list: the last call's inputs and answer (a repaint with nothing moved is one compare)
 const MEMO = new WeakMap()
 const sigOf = (x) => (x instanceof Set ? [...x].join('\n') : x instanceof Map ? [...x].map(([k, v]) => k + '\t' + JSON.stringify(v)).join('\n') : null)
@@ -148,7 +146,7 @@ export function windowItems(s) {
   const marks = [s.openBlocks, s.turnFold, s.turnLanded, s.bodyFail], sigs = marks.map(sigOf)
   // a store that is not a plain Set / Map (a stand-in) has no signature: no cache then
   const memo = sigs.every((x, i) => x != null || marks[i] == null)
-    ? [call, refFlat, st.reply, st.detail, s.lanes, contentRefKOf(s), s.navOpen && s.navOpen.has('cwremoved'), deskMode(), bodyVersion(), ...sigs] : null
+    ? [call, refFlat, st.reply, st.detail, s.lanes, contentRefKOf(s), s.navOpen && s.navOpen.has('cwremoved'), modeVersion(), bodyVersion(), ...sigs] : null
   const hit = memo && MEMO.get(flat)
   if (hit && hit.key.length === memo.length && hit.key.every((x, i) => x === memo[i])) return scratch(s, hit.out)
   const out = build(s, call, st, refFlat, fid)
@@ -184,10 +182,12 @@ function build(s, call, st, refFlat, fid) {
   const T = turnsOf(flat), tk = new Map(), hk = new Map(), bySec = new Map(), readable = deskMode() === 'read'
   // a header reads its rows as drawn: an open row's body that came back unproven takes back 以下逐字 on every repaint (2.3 §保真标)
   flat.forEach((b, i) => { if (!bySec.has(b.sec)) bySec.set(b.sec, []); bySec.get(b.sec).push(s.openBlocks.has(keys[i]) ? { ...b, _open: true } : b) })
+  // an open block whose answer has no view is drawn as Raw whatever the desk says: its section cannot call itself readable
+  const noView = (b) => { const got = b._open && isAddressed(b) ? bodyCache.get(b.text_ref) : null; return got?.status === 'ok' && !got.view }
   const head = (sec) => {
     const n = hk.get(sec) || 0, blocks = bySec.get(sec)
     hk.set(sec, n + 1)
-    const claim = readable ? 'readable' : windowLine ? 'half' : blocks.every((b) => faithNow(b) === 'verbatim') ? 'verbatim' : null
+    const claim = readable ? (blocks.some(noView) ? null : 'readable') : windowLine ? 'half' : blocks.every((b) => faithNow(b) === 'verbatim') ? 'verbatim' : null
     items.push({ key: `sec:${sec}#${n}`, type: 'sec', sec, n: blocks.length, size: blocks.reduce((a, b) => a + (typeof b.bytes === 'number' ? b.bytes : 0), 0),
       est: sec === 'tools' && blocks.some((b) => faithOf(b) === 'metadata'), claim }) // the size of a metadata-only definition is an estimate
   }
@@ -210,24 +210,26 @@ function build(s, call, st, refFlat, fid) {
   if (reply.item) items.push(reply.item)
   return { flat, keys, removed, reply: reply.map, result: { state: 'items', items } }
 }
-// ⑨ this step's reply (2.3 §这一步的回复): one row per reply definition; default open = the rows of the first present kind
-// among text → tool call → thinking, a reader's flip being `rp:<bid>` in s.openBlocks. Each row its own mark: an opened body
-// that came back unproven outranks the span's proof, on every repaint (as faithNow for a request row).
+// ⑨ this step's reply (2.3 §这一步的回复): one row per reply definition, in its definition's words; default open but for a row
+// with no plaintext, a reader's flip being `rp:<bid>` in s.openBlocks. Each row its own mark: an opened body that came back
+// unproven outranks the span's proof, on every repaint (as faithNow for a request row). `assembled`: some open row reads a part
+// put together from stream events, in Readable.
 function replyItem(s, st, call) {
   const r = replyOf({ row: call, reply: st.reply, detail: st.detail })
   if (r.failed) return { item: { key: 'reply', type: 'reply', failed: r.failed, stop: r.stop, rows: [] } }
   // no part: empty only when the bytes are whole; otherwise nothing is claimed about the content (the call line says why)
   if (!r.parts.length) return { item: { key: 'reply', type: 'reply', empty: r.mark === 'partial' ? 'unread' : 'empty', stop: r.stop, rows: [] } }
-  const first = REPLY_OPEN_ORDER.find((k) => r.parts.some((d) => d.kind === k))
   const map = new Map(), seen = new Map()
+  let assembled = false
   const rows = r.parts.map((d, i) => {
     const n = seen.get(d.bid) || 0; seen.set(d.bid, n + 1)
     const key = 'rp:' + d.bid + (n ? '#' + n : ''), b = { ...d, text_ref: d.ref }
     map.set(key, b)
-    const open = (d.kind === first) !== s.openBlocks.has(key)
-    return { key, b, tag: replyTag(d), mark: (open && openedFf(bodyCache.get(b.text_ref))) || partMark(d) || 'verbatim', open, last: i === r.parts.length - 1 }
+    const sealed = partMark(d) === 'opaque', open = !sealed !== s.openBlocks.has(key), got = bodyCache.get(b.text_ref)
+    assembled ||= open && !!got?.view?.events && modeOf(cellOf(b).bid) === 'read'
+    return { key, b, tag: d.head ? d.head.tag : d.kind, mark: (open && openedFf(got)) || partMark(d) || 'verbatim', open, hideChars: sealed, last: i === r.parts.length - 1 }
   })
-  return { item: { key: 'reply', type: 'reply', stop: r.stop, rows }, map }
+  return { item: { key: 'reply', type: 'reply', stop: r.stop, rows, assembled }, map }
 }
 
 // ── the landing rule (1.4 §打开一步时落在哪): a step 跟随最新 brought in → the reply ⑨; else the 变化线, else the first 「新」

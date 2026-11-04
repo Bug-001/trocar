@@ -162,7 +162,9 @@ const local = () => { try { return globalThis.localStorage ?? null } catch { ret
 let desk = null // the last desk mode set here, for when storage cannot hold it
 const heard = new Set() // who hears a mode change: the React cells and each wireCells root
 export const onModeChange = (fn) => { heard.add(fn); return () => { heard.delete(fn) } }
-const modeChanged = () => { for (const fn of [...heard]) try { fn() } catch { /* one listener never stops the others */ } }
+let modeRev = 0 // moves with every mode change, a single cell's too
+export const modeVersion = () => modeRev
+const modeChanged = () => { modeRev++; for (const fn of [...heard]) try { fn() } catch { /* one listener never stops the others */ } }
 const overrides = new Map() // scope + bid -> mode; Map order = least recently set first
 const opened = new Map() // scope + bid -> Map('path|span' -> open): what the reader opened or closed inside a cell, same order
 // the overrides are the shown desk's: each cached desk (session-cache.mjs) keeps its own under its session key (2.3 §逐格覆盖)

@@ -18,14 +18,14 @@ import { isTyping } from '../../../legacy/core/keys.mjs'
 import * as W from '../../../legacy/labels/replay.mjs'
 import { SESSION_NOT_LISTED, BACK_TO_SESSIONS } from '../../../legacy/labels/shell.mjs'
 import * as C from '../../../legacy/labels/cells.mjs'
-import { bodyVersion, cellOf, deskMode, gotOf, hasInline, isAddressed, isRetryable, loadBody, onModeChange, say, setDeskMode } from '../../../legacy/replay/cell.mjs'
+import { bodyVersion, cellOf, deskMode, gotOf, hasInline, headNote, isAddressed, isRetryable, loadBody, modeOf, modeVersion, onModeChange, say, setDeskMode } from '../../../legacy/replay/cell.mjs'
 import { cellKey } from '../../../legacy/replay/keymap.mjs'
 import { setFold, turnAnchorKey } from '../../../legacy/replay/fold.mjs'
 import { stepOf } from '../../../legacy/replay/model.mjs'
 import { tagWord } from '../../../legacy/replay/blocks.mjs'
 import { TechDetails, type TechValue } from '../../ui/TechDetails'
 import { Svg } from '../../ui/Svg'
-import { Cell } from './Cell'
+import { Cell, CellBar, type CellModel } from './Cell'
 import { faithOf, windowItems, landingFor, turnsOf, turnOpen } from './window-model.mjs'
 import { useDeskVersion } from './useDesk'
 import type { DeskState, DeskView, Reveal } from './view'
@@ -56,23 +56,25 @@ export function withPins(range: { startIndex: number, endIndex: number, count: n
 }
 // ── the items ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 const plainHead = (b: any) => b.head || { role: b.role || '', tag: b.kind || '', label: '' }
-// an open row's body: the cell of its bytes (addressed: the cache, `fail`, else pending), or the body the block carries itself
-function Body({ b, fail, api }: { b: any, fail: any, api: any }) {
-  if (isAddressed(b)) return <Cell cell={cellOf(b)} fail={fail} api={api} />
-  const inline = hasInline(b) || (b.sec === 'tools' && (b.name != null || b.descChars != null || (b.props && b.props.length)))
-  if (!inline) return <div className="cbsrc warn"><Svg html={HALF} />{' ' + W.NO_BODY}</div>
-  return <Cell cell={cellOf(b)} api={api} />
+// the cell an open row holds: its bytes (addressed: the cache, `fail`, else pending), or the body the block carries itself; null: neither
+const cellFor = (b: any): CellModel | null => (isAddressed(b) || hasInline(b) || (b.sec === 'tools' && (b.name != null || b.descChars != null || (b.props && b.props.length))) ? cellOf(b) : null)
+// the words at an open row's label place: what its cell says of itself (headNote, by the cell's mode), else the row's own label
+function HeadNote({ cell, label, id }: { cell: CellModel, label: string, id: string }) {
+  const mode = useSyncExternalStore(onModeChange, () => modeOf(cell.bid)), got = gotOf(cell)
+  const text = (got?.status === 'ok' && headNote(cell, got, mode)) || label
+  return text ? <span className="cblabel" id={id} title={text}>{text}</span> : null
 }
 const FfBadge = ({ f, tech = '' }: { f: string, tech?: string }) => (f == null || f === 'verbatim' ? null
   : <span className={`ffbadge ff-${f}`} data-ff={f} title={tech || W.FF_WORD[f as keyof typeof W.FF_WORD] || W.FF_WORD.unknown}><Svg html={HALF} />{' ' + (W.FF_WORD[f as keyof typeof W.FF_WORD] || W.FF_WORD.unknown)}</span>)
 const SrWord = ({ f }: { f: string }) => <span className="sr-only">,{W.FF_WORD[f as keyof typeof W.FF_WORD]}</span>
 
 // THE row (2.3 §block 卡, decision 4): a plain click anywhere on the head toggles (one onClick on .cbh; the button's keyboard click
-// bubbles to it); the button holds the chevron and the role, the reading text sits after it, so a drag over the label selects
+// bubbles to it); the button holds the chevron and the role, the reading text sits after it, so a drag over the label selects. Open,
+// the head holds the cell's controls where the preview was (`head.preview`: the row's words only while closed)
 type RowProps = { cls: string, attrs: Record<string, string | number | undefined>, head: any, open: boolean, chars: number | null,
-  marks: ReactNode, onToggle: () => void, body: () => ReactNode }
-function RowView({ cls, attrs, head, open, chars, marks, onToggle, body }: RowProps) {
-  const id = useId(), tag = tagWord(head.tag), label = head.label || ''
+  marks: ReactNode, onToggle: () => void, b: any, fail: any, api: any }
+function RowView({ cls, attrs, head, open, chars, marks, onToggle, b, fail, api }: RowProps) {
+  const id = useId(), tag = tagWord(head.tag), label = (open ? head.label : head.label || head.preview) || '', cell = open ? cellFor(b) : null
   return (
     <div className={`cblk${open ? '' : ' collapsed'} ${cls}`} {...attrs}>
       <div className="cbh" onClick={onToggle}>
@@ -80,11 +82,13 @@ function RowView({ cls, attrs, head, open, chars, marks, onToggle, body }: RowPr
           <Svg html={discChev(open)} /><span className="cbrole" id={id + 'r'}>{head.role}</span>
         </button>
         <span className="cbtag" title={tag || String(head.tag || '')}>{tag || W.TAG_UNKNOWN}</span>
-        {label ? <span className="cblabel" id={id + 'l'} title={label}>{label}</span> : null}
+        {cell ? <HeadNote cell={cell} label={label} id={id + 'l'} /> : label ? <span className="cblabel" id={id + 'l'} title={label}>{label}</span> : null}
         {marks}
         {typeof chars === 'number' ? <span className="cbchars">{`${kf(chars)} ${W.CHARS_WORD}`}</span> : null}
+        {cell ? <CellBar cell={cell} api={api} /> : null}
       </div>
-      <div className="cbc" id={id + 'c'} hidden={!open}>{open ? body() : null}</div>
+      <div className="cbc" id={id + 'c'} hidden={!open}>{!open ? null : cell ? <Cell cell={cell} fail={fail} api={api} bar={false} />
+        : <div className="cbsrc warn"><Svg html={HALF} />{' ' + W.NO_BODY}</div>}</div>
     </div>
   )
 }
@@ -94,7 +98,7 @@ const Row = memo(function Row({ it, acts, hl }: { it: Item, acts: Acts, hl: bool
   const { b, marks: m, open } = it, h = plainHead(b)
   return <RowView cls={`${m.isNew ? 'is-new' : ''} s-${b.sec} r-${b.role} k-${b.kind}${it.turn != null ? ' cwtrow' : ''}${hl ? ' hl' : ''}`}
     attrs={{ 'data-bi': it.bi, 'data-sec': b.sec, 'data-ff': m.ff, 'data-rk': b.resKey || undefined, 'data-turn': it.turn ?? undefined }}
-    head={{ role: h.role, tag: h.tag, label: h.label || b.preview || '' }} open={open} chars={typeof b.chars === 'number' ? b.chars : null}
+    head={{ role: h.role, tag: h.tag, label: h.label, preview: b.preview }} open={open} chars={typeof b.chars === 'number' ? b.chars : null}
     marks={<>
       {m.cc ? <span className="bpbadge" title={`${W.CACHE_MARK_TIP} · declared value: ${JSON.stringify(m.cc)}`}>{W.CACHE_MARK}</span> : null}
       {m.volatile ? <span className="volbadge" title={W.VOLATILE_MARK_TIP}>{W.VOLATILE_MARK}</span> : null}
@@ -102,7 +106,7 @@ const Row = memo(function Row({ it, acts, hl }: { it: Item, acts: Acts, hl: bool
       {m.badge ? <FfBadge f={m.ff} tech={m.tech} /> : null}
       {m.sr ? <SrWord f={m.ff} /> : null}
     </>}
-    onToggle={() => acts.row(it)} body={() => <Body b={b} fail={it.fail} api={acts.api} />} />
+    onToggle={() => acts.row(it)} b={b} fail={it.fail} api={acts.api} />
 }, (p, n) => p.it.key === n.it.key && p.it.b === n.it.b && p.it.open === n.it.open && p.it.fail === n.it.fail && p.it.turn === n.it.turn
   && sameMarks(p.it.marks, n.it.marks) && p.hl === n.hl && p.acts === n.acts && (!n.it.open || p.bv === n.bv))
 
@@ -142,7 +146,7 @@ const Removed = memo(function Removed({ it, acts }: { it: Item, acts: Acts }) {
     {it.open ? <div className="cwrembody">{it.blocks.map((b: any, j: number) => (
       <RowView key={j} cls="removed" attrs={{ 'data-rm': j, 'data-sec': b.sec }} head={plainHead(b)} open={open.has(j)} chars={null}
         marks={<><FfBadge f={faithOf(b)} tech={b.unaddressable} /><span className="remnote" title={`The full text is read back from its location in step ${it.refK ?? '?'}`}>removed</span></>}
-        onToggle={() => flip(j, b)} body={() => <Body b={b} fail={acts.fail(b)} api={acts.api} />} />
+        onToggle={() => flip(j, b)} b={b} fail={acts.fail(b)} api={acts.api} />
     ))}</div> : null}
   </div>
 })
@@ -154,13 +158,13 @@ const Reply = memo(function Reply({ it, acts }: { it: Item, acts: Acts, bv: numb
   else if (it.empty) inner = <div className="cwrline">{it.empty === 'unread' ? W.UNREAD_REPLY : W.EMPTY_REPLY}{stop}</div>
   else {
     inner = <div className="cwrrows">{it.rows.map((r: any) => (
-      <RowView key={r.key} cls={`r-assistant k-${r.b.kind}`} attrs={{ 'data-rp': r.key, 'data-ff': r.mark }} head={{ role: 'assistant', tag: r.tag, label: r.b.preview || '' }}
-        open={r.open} chars={typeof r.b.chars === 'number' ? r.b.chars : null}
+      <RowView key={r.key} cls={`r-assistant k-${r.b.kind}`} attrs={{ 'data-rp': r.key, 'data-ff': r.mark }} head={{ role: 'assistant', tag: r.tag, preview: r.b.preview }}
+        open={r.open} chars={typeof r.b.chars === 'number' && !r.hideChars ? r.b.chars : null}
         marks={<>{r.mark === 'verbatim' ? <SrWord f="verbatim" /> : <FfBadge f={r.mark} />}{r.last ? stop : null}</>}
-        onToggle={() => acts.reply(r)} body={() => <Body b={r.b} fail={acts.fail(r.b)} api={acts.api} />} />
+        onToggle={() => acts.reply(r)} b={r.b} fail={acts.fail(r.b)} api={acts.api} />
     ))}</div>
   }
-  return <div className="cwreply" role="group" aria-label={W.REPLY_WORD}>{inner}</div>
+  return <div className="cwreply" role="group" aria-label={W.REPLY_WORD}>{inner}{it.assembled ? <div className="cwrline" data-assembled="">{C.ASSEMBLED}</div> : null}</div>
 })
 const Fid = ({ it }: { it: Item }) => <div className="cwfline"><Half />{' '}<span className="cwffacts">{it.facts.join(' · ')}</span><Tech rows={it.tech} /></div>
 const Win = ({ it }: { it: Item }) => <div className="cwwin"><Half />{' ' + W.WINDOW_LINE}<Tech rows={it.reasons.map((r: string, i: number) => [`reason ${i + 1}`, r])} /></div>
@@ -223,13 +227,14 @@ function readPitch(el: HTMLElement): Pitch {
   p.remove()
   return out
 }
+const rowEst = (open: boolean, P: Pitch) => (open ? P.row * 6 : P.row)
 const estimate = (it: Item | undefined, P: Pitch) => {
   if (!it) return P.row
   switch (it.type) {
-    case 'row': return it.open ? P.row * 6 : P.row
+    case 'row': return rowEst(it.open, P)
     case 'turn': return P.turn
     case 'sec': return P.sec
-    case 'reply': return P.line + P.row * Math.max(1, it.rows.length)
+    case 'reply': return P.line + (it.rows.reduce((a: number, r: any) => a + rowEst(r.open, P), 0) || P.row)
     case 'frames': return it.frames.reduce((a: number, f: any) => a + f.fr * P.row, 0) || P.row
     default: return P.line
   }
@@ -250,7 +255,7 @@ export function Window({ desk }: { desk: DeskView }) {
   const ref = useRef<HTMLDivElement>(null)
   useDeskVersion(desk, 'window') // a paint of the 'window' area re-renders it
   const [, bump] = useReducer((n: number) => n + 1, 0)
-  useSyncExternalStore(onModeChange, () => deskMode()) // a Shift+V re-renders the section claims
+  useSyncExternalStore(onModeChange, modeVersion) // a mode change re-renders the section claims and the reply's closing line
   const acts = useMemo(() => makeActs(s, bump), [s])
   const [P, setP] = useState<Pitch | null>(null)
   const [hl, setHl] = useState<string | null>(null)
@@ -351,20 +356,23 @@ export function Window({ desk }: { desk: DeskView }) {
     const cell = row.querySelector<HTMLElement>(':scope > .cbc .cell')
     if (a.flipDesk) { flipDesk(); return }
     if (!cell) return
-    if (a.flip) cell.querySelector<HTMLButtonElement>(`[data-cellmode="${cell.dataset.mode === 'raw' ? 'read' : 'raw'}"]`)?.click()
-    else cell.querySelector<HTMLButtonElement>('[data-cellcopy]')?.click()
+    const control = (sel: string) => row.querySelector<HTMLButtonElement>(`:scope > .cbh ${sel}`) // the controls sit in the row's head
+    const flip = a.flip ? control(`[data-cellmode="${cell.dataset.mode === 'raw' ? 'read' : 'raw'}"]`) : null
+    if (!a.flip) control('[data-cellcopy]')?.click()
+    else if (flip) flip.click()
+    else if (cell.dataset.only) say(cell.dataset.only === 'read' ? C.READ_ONLY : C.RAW_ONLY)
   }
 
   let body: ReactNode
   if (w.kind === 'step' && items) {
-    const vis = virt.getVirtualItems()
+    const vis = virt.getVirtualItems() // placed by `top`: in a transformed item an open row's sticky head does not stick
     body = <div className="cwlist" style={{ height: virt.getTotalSize() }}>
       {vis.map((x) => {
         const it = list[x.index]
         if (!it) return null
         const sticky = x.index === stick
         return <div key={it.key} className={sticky ? 'cwit cwstick' : 'cwit'} data-index={x.index} data-key={it.key} ref={virt.measureElement}
-          style={sticky ? undefined : { transform: `translateY(${x.start}px)` }}><ItemView it={it} acts={acts} hl={hl === it.key} bv={bv} /></div>
+          style={sticky ? undefined : { top: x.start }}><ItemView it={it} acts={acts} hl={hl === it.key} bv={bv} /></div>
       })}
     </div>
   } else if (w.kind === 'rough') body = <Busy n={w.n} />

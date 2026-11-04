@@ -82,7 +82,7 @@ function mount(s: B) {
 }
 const itemsOf = (s: B) => windowItems(s).items as B[]
 const drawn = (win: HTMLElement) => [...win.querySelectorAll<HTMLElement>('.cwit')].map((w) => w.dataset.key!)
-const yOf = (w: HTMLElement) => Number(/translateY\(([-\d.]+)px\)/.exec(w.style.transform)?.[1] ?? NaN)
+const yOf = (w: HTMLElement) => parseFloat(w.style.top)
 const wrapOf = (win: HTMLElement, key: string) => win.querySelector<HTMLElement>(`.cwit[data-key="${CSS.escape(key)}"]`)
 // a long step: tools · system · a folded first turn (prompt a, rows to `split`) · the open last turn (prompt b), the change line at `brk`
 function longDesk(len = 160, split = 90, brk = 60) {
@@ -237,6 +237,126 @@ test('1.2 格的键 · 2.3 #19: v, Shift+V and c act only from inside a row; f, 
   seen.length = 0
   for (const k of pass) fireEvent.keyDown(tog, { key: k })
   expect(seen).toEqual(pass)
+})
+
+const viewed = (o: B = {}) => ({ status: 'ok', text: 'the stored bytes', view: { r: { as: 'text', f: { body: [] } }, body: 'the words', ...o } })
+const said = () => document.querySelector('[aria-live="polite"]')!.textContent
+
+test('2.3 #14: an open block that comes back with no view takes Readable view off its section header, and only its own', async () => {
+  const s = stateOf(deskN([[sys(), blk({ query: 'q' }), say()]]))
+  s.openBlocks.add(itemsOf(s).find((it) => it.type === 'row' && it.bi === 2)!.key)
+  setDeskMode('read')
+  const { win, paint } = mount(s)
+  expect(win.querySelector('#sec-messages .cwsecff')!.textContent).toBe(C.READABLE_VIEW)
+  await loadBodies({ get: vi.fn(async () => ({ ok: true, status: 200, data: { bytes: 'no view came back', fidelity: { verbatim: true } } })) }, [flatOf(s)[2].text_ref])
+  paint()
+  expect(win.querySelector('#sec-messages .cwsecff')).toBeNull()
+  expect(win.querySelector('#sec-system .cwsecff')!.textContent).toBe(C.READABLE_VIEW)
+})
+
+test('2.3 #19: v on a one-mode cell leaves it and says the mode it has; Shift+V still flips the desk; c takes the head\'s copy control', async () => {
+  const s = stateOf(deskN([[sys(), blk({ query: 'q' }), say(), say({ ref: undefined, unaddressable: 'inline', inline: { text: 'the parsed words' } })]]))
+  for (const it of itemsOf(s)) if (it.type === 'row' && it.bi >= 2) s.openBlocks.add(it.key)
+  bodyCache.set(flatOf(s)[2].text_ref, { status: 'ok', text: 'no view' })
+  const writes: string[] = []
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (t: string) => { writes.push(t) } } })
+  const { win } = mount(s)
+  for (const [bi, only, word] of [[2, 'raw', C.RAW_ONLY], [3, 'read', C.READ_ONLY]] as const) {
+    const row = win.querySelector<HTMLElement>(`.cblk[data-bi="${bi}"]`)!, tog = row.querySelector<HTMLElement>('.cbtog')!
+    const cell = () => row.querySelector<HTMLElement>('.cell')!
+    expect(cell().dataset.only).toBe(only)
+    tog.focus()
+    act(() => { fireEvent.keyDown(tog, { key: 'v' }) })
+    expect(cell().dataset.mode).toBe(only)
+    expect(said()).toBe(word)
+    const d0 = deskMode()
+    act(() => { fireEvent.keyDown(tog, { key: 'V', shiftKey: true }) })
+    expect(deskMode()).not.toBe(d0)
+    expect(cell().dataset.mode).toBe(only)
+  }
+  await act(async () => { fireEvent.keyDown(win.querySelector('.cblk[data-bi="2"] .cbtog')!, { key: 'c' }); await Promise.resolve() })
+  expect(writes).toEqual(['no view'])
+})
+
+test('2.3 #38 · 1.2 §点击与选中文字②: an open row holds the controls in its head; they never open or close it; the preview leaves the head, the row\'s own label stays', () => {
+  const own = blk({ query: 'q', head: { role: 'user', tag: 'user', label: 'own label' }, preview: 'the preview a' })
+  const bare = say({ head: { role: 'assistant', tag: 'say', label: '' }, preview: 'the preview b' })
+  const reply = rp('text', { preview: 'the preview c' })
+  const s = stateOf(deskN([[sys(), own, bare]], [{}], { replies: [[reply]] }))
+  const rowOf = (bi: number) => itemsOf(s).find((it) => it.type === 'row' && it.bi === bi)!
+  for (const bi of [1, 2]) { s.openBlocks.add(rowOf(bi).key); bodyCache.set(flatOf(s)[bi].text_ref, viewed()) }
+  bodyCache.set(reply.ref, viewed())
+  const { win } = mount(s)
+  const rows = [win.querySelector('.cblk[data-bi="1"]')!, win.querySelector('.cblk[data-bi="2"]')!, win.querySelector('.cblk[data-rp]')!]
+  const label = (r: Element) => r.querySelector(':scope > .cbh .cblabel')?.textContent ?? null
+  for (const r of rows) {
+    expect(r.querySelector(':scope > .cbh [data-cellmode]')).not.toBeNull()
+    expect(r.querySelector(':scope > .cbc .cellbar')).toBeNull()
+    for (const c of r.querySelectorAll<HTMLElement>(':scope > .cbh [data-cellmode], :scope > .cbh [data-cellcopy]')) {
+      fireEvent.click(c)
+      expect(r.querySelector('.cbtog')!.getAttribute('aria-expanded')).toBe('true')
+    }
+  }
+  expect(rows.map(label)).toEqual(['own label', null, null])
+  for (const r of rows) fireEvent.click(r.querySelector('.cbtog')!)
+  expect(rows.map(label)).toEqual(['own label', 'the preview b', 'the preview c'])
+  for (const r of rows) expect(r.querySelector(':scope > .cbh .cellbar')).toBeNull()
+})
+
+test('2.3 #38: an open shell row puts its description at the label\'s place while Readable', () => {
+  const s = stateOf(deskN([[sys(), blk({ query: 'q' }), say({ head: { role: 'assistant', tag: 'action · Bash', label: 'own label' } })]]))
+  s.openBlocks.add(itemsOf(s).find((it) => it.type === 'row' && it.bi === 2)!.key)
+  bodyCache.set(flatOf(s)[2].text_ref, { status: 'ok', text: '{}', view: { r: { as: 'shell', f: { body: [], cmd: ['command'], note: ['description'] } }, body: { command: 'ls', description: 'what the command is for' } } })
+  setDeskMode('read')
+  const { win } = mount(s)
+  const label = () => win.querySelector('.cblk[data-bi="2"] > .cbh .cblabel')!.textContent
+  expect(label()).toBe('what the command is for')
+  act(() => { fireEvent.click(win.querySelector('.cblk[data-bi="2"] [data-cellmode="raw"]')!) })
+  expect(label()).toBe('own label')
+})
+
+test('2.3 #13: a no-plaintext reply row starts closed and writes no character count, closed or open; the other rows keep theirs', () => {
+  const sealed = rp('redacted_thinking', { ff: { faithfulness: 'opaque' } }), text = rp('text')
+  const s = stateOf(deskN([[sys(), blk({ query: 'q' })]], [{}], { replies: [[sealed, text]] }))
+  s.ctx.api.get.mockReturnValue(new Promise(() => {}))
+  const { win } = mount(s)
+  const [a, b] = win.querySelectorAll<HTMLElement>('.cwreply .cblk[data-rp]')
+  expect(a.classList.contains('collapsed')).toBe(true)
+  expect(b.classList.contains('collapsed')).toBe(false)
+  expect(b.querySelector('.cbchars')).not.toBeNull()
+  expect(a.querySelector('.cbchars')).toBeNull()
+  act(() => { fireEvent.click(a.querySelector('.cbtog')!) })
+  expect(a.classList.contains('collapsed')).toBe(false)
+  expect(a.querySelector('.cbchars')).toBeNull()
+})
+
+test('2.3 #13: Assembled from the stream closes the reply once while an open row from events is Readable, and leaves with the last such row', () => {
+  const a = rp('text'), b = rp('tool_use'), c = rp('text')
+  const s = stateOf(deskN([[sys(), blk({ query: 'q' })], [sys(), blk({ query: 'q' })]], [{}, {}], { replies: [[a, b], [c]] }))
+  bodyCache.set(a.ref, viewed({ events: 3 })); bodyCache.set(b.ref, viewed({ events: 2 })); bodyCache.set(c.ref, viewed())
+  setDeskMode('read')
+  const { win, paint } = mount(s)
+  const marks = () => win.querySelectorAll('[data-assembled]')
+  const row = (i: number) => win.querySelectorAll('.cwreply .cblk[data-rp]')[i]
+  const raw = (i: number) => act(() => { fireEvent.click(row(i).querySelector('[data-cellmode="raw"]')!) })
+  expect(marks().length).toBe(1)
+  expect(win.querySelector('.cwreply')!.lastElementChild).toBe(marks()[0])
+  raw(0)
+  expect(marks().length).toBe(1)
+  raw(1)
+  expect(marks().length).toBe(0)
+  act(() => { fireEvent.click(row(0).querySelector('[data-cellmode="read"]')!) })
+  expect(marks().length).toBe(1)
+  act(() => { fireEvent.click(row(0).querySelector('.cbtog')!) })
+  expect(marks().length).toBe(0)
+  s.playhead = 1
+  paint({ kind: 'step', busy: false })
+  expect(marks().length).toBe(0) // no part came from events
+  s.playhead = 0
+  paint({ kind: 'step', busy: false })
+  expect(marks().length).toBe(1)
+  act(() => { setDeskMode('raw') })
+  expect(marks().length).toBe(0)
 })
 
 test('2.3 #28: reveal into a folded turn opens it into the D12 memory; reveal of a row not drawn returns it drawn and open', () => {

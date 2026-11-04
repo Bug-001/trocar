@@ -131,3 +131,10 @@ test('2.3 #2: an open row whose body comes back unproven gets a non-verbatim mar
   assert.notEqual(rowOf(after).marks.ff, 'verbatim')
   assert.notEqual(secOf(after).claim, 'verbatim')
 })
+
+test('2.3 #13: a reply row says what its definition\'s head says, a server-side tool call among them', () => {
+  const head = (tag) => ({ head: { role: 'assistant', tag, label: '' } })
+  const parts = [rp('thinking', head('thinking')), rp('text', head('say')), rp('server_tool_use', head('action · web_search'))]
+  const reply = windowItems(stateOf(desk1([[sys(), blk()]], undefined, { replies: [parts] }))).items.find((it) => it.type === 'reply')
+  assert.deepEqual(reply.rows.map((r) => r.tag), parts.map((d) => d.head.tag))
+})
