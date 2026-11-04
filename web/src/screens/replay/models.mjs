@@ -88,7 +88,7 @@ function readOf(desk) {
   if (p.seen) { const pct = share(Number(p.read) || 0), n = Number(p.calls) || 0; return { state: 'updating', pct, n, text: W.updatingTo(pct, n) } }
   if (desk.firstPending) { const pct = share(done); return { state: 'reading', pct, text: W.readingFirst(pct) } }
   const n = p.calls ?? Math.max(0, total - done)
-  return { state: 'catching-up', n, text: W.catchingUp(n) }
+  return n ? { state: 'catching-up', n, text: W.catchingUp(n) } : null
 }
 
 // 1.2 §会话保真行: each fact in plain words (the row exists iff one does); raw values only as technical-detail pairs

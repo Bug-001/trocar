@@ -198,8 +198,10 @@ export function readStateHtml(desk) {
     techDetailsHtml([[String(stop.code ?? ''), String(stop.reason ?? '')]], { id: 'readtech' })
   const done = Number(p.done) || 0, total = Number(p.total) || 0
   const pct = (n) => (total > 0 ? Math.floor((n / total) * 100) : 0)
+  const calls = p.calls ?? Math.max(0, total - done)
+  if (!p.seen && !desk.firstPending && !calls) return ''
   const [state, words] = p.seen ? ['updating', W.updatingTo(pct(Number(p.read) || 0), Number(p.calls) || 0)]
-    : desk.firstPending ? ['reading', W.readingFirst(pct(done))] : ['catching-up', W.catchingUp(p.calls ?? Math.max(0, total - done))]
+    : desk.firstPending ? ['reading', W.readingFirst(pct(done))] : ['catching-up', W.catchingUp(calls)]
   return `<div class="fidline readstate" data-read-state="${state}">${esc(words)}</div>`
 }
 // behindOf(tip, mark) → {n, more} | null (1.5 K-32): of the tip ids (`x-trocar-tip`, the newest model calls, oldest first) the ones that

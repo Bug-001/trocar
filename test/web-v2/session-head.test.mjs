@@ -135,6 +135,16 @@ test('catching up counts pending.calls, not total - done; a head with no calls f
   }
 })
 
+test('1.2 §读取状态: a later read with no new call has no read-state line; a first read and a re-read still have theirs', () => {
+  const fx = JSON.parse(readFileSync(new URL('../fixtures/session-read-contract.json', import.meta.url), 'utf8'))
+  const desk = createDesk()
+  applySession(desk, fx.session_full)
+  applySession(desk, { ...fx.session_full, pending: { done: 9, total: 9, calls: 0 } })
+  assert.equal(readStateHtml(desk), '')
+  applySession(desk, { ...fx.session_full, pending: { done: 9, total: 9, calls: 0, seen: true, read: 4 } })
+  assert.match(readStateHtml(desk), /data-read-state="updating"/)
+})
+
 // 1.5 K-31 · 3.5 #37: a head whose background fold stopped (pending.stopped) says reading stopped, its code in the technical details;
 // for every FOLD_STOPS code, at a first read and a later one
 test('a stopped fold: the read-state line is the stopped one, its code in the technical details; without the stop it is the reading line', () => {
