@@ -49,6 +49,13 @@ setInterval(() => {
 let printed = ''
 const print = (...args) => { printed = `${printed}${util.format(...args)}\n`.slice(0, CONSOLE_BYTES) }
 for (const name of ['log', 'info', 'warn', 'error', 'debug']) console[name] = print
+
+// The permission model has no say over signals, and a script holds the agent's pid. This stops the plain call on this thread; a thread the script starts has a `process` of its own.
+const { pid: self, _kill: signal } = process
+process._kill = (target, name) => {
+  if (target !== self) throw new Error('a rule process signals nothing but itself')
+  return signal.call(process, target, name)
+}
 // Counted as the frame carries it: 16 KiB of control characters is 96 KiB of escapes.
 function consoleText() {
   let text = printed

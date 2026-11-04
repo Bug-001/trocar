@@ -4,7 +4,8 @@ import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { LIMITS } from './closed.mjs'
+import { LIMITS, SKIP_WHY } from './closed.mjs'
+import { checkHeaderSet, headerChanges } from './headers.mjs'
 import { ANSWER_BYTES, encodeFrame, frameReader, HEAD_BYTES, NO_RULE, readProgress } from './slot.mjs'
 
 const MIB = 1024 * 1024
@@ -31,7 +32,8 @@ export function runnerArgs({ script, slot, app = APP, capBytes, allowed = proces
   return [...flags.filter((flag) => allowed.has(flag.split('=')[0])), real(RUNNER), slotPath, ...(target ? [target] : [])]
 }
 
-// One process and its one question at a time. An answer nobody asked for is the process breaking the rule, so it goes.
+// One process and its one question at a time. An answer nobody asked for is the process breaking the rule, so it goes. `ask` resolves to `{frame}` or to `{died, code}`:
+// a process says what it answers, never how it ended.
 function talkTo(args, slot) {
   const { XDG_RUNTIME_DIR } = process.env
   const child = spawn(process.execPath, args, { stdio: ['ignore', 'ignore', 'ignore', 'pipe'], env: XDG_RUNTIME_DIR ? { XDG_RUNTIME_DIR } : {} })
@@ -48,10 +50,11 @@ function talkTo(args, slot) {
     clearTimeout(timer)
     resolve(value)
   }
-  pipe?.on('data', frameReader((frame) => (asked && frame.id === asked.id ? settle(frame) : kill('bad-result')), () => kill('bad-result'), ANSWER_BYTES))
+  pipe?.on('data', frameReader((frame) => (asked && frame.id === asked.id ? settle({ frame }) : kill('bad-result')), () => kill('bad-result'), ANSWER_BYTES))
   pipe?.on('error', () => {}) // the write to a dead process: 'close' below says what happened
   const link = {
     dead: false,
+    get killed() { return killed }, // set before `dead`: until 'close' the process is going, and hears nothing more
     kill,
     ask: (message, ms) => new Promise((resolve) => {
       asked = { id: message.id, resolve, timer: setTimeout(() => kill('timeout'), ms) }
@@ -83,11 +86,11 @@ export function openOneShot({ script, rules, maxTaskMs = 2000, tmp = os.tmpdir()
     const args = runnerArgs({ script, slot: file, capBytes })
     if (!args) return { died: 'runner-down' }
     runner = talkTo(args, slot)
-    const answer = await runner.ask({ load: { rules, max_delay_ms: maxTaskMs } }, LIMITS.loadMs + FROZEN_MS)
-    if (answer.ready) return answer
+    const { frame, died, code } = await runner.ask({ load: { rules, max_delay_ms: maxTaskMs } }, LIMITS.loadMs + FROZEN_MS)
+    if (frame?.ready) return null
     runner.kill('load-failed')
     await runner.gone
-    return { died: answer.code === SELF_CHECK_FAILED ? 'runner-down' : 'load-failed', reason: answer.reason ?? answer.died }
+    return { died: code === SELF_CHECK_FAILED ? 'runner-down' : 'load-failed', reason: frame?.reason ?? died }
   }
 
   const slice = ({ at, bytes }) => {
@@ -96,8 +99,17 @@ export function openOneShot({ script, rules, maxTaskMs = 2000, tmp = os.tmpdir()
     return out
   }
 
-  function take({ body, edits, ...answer }) {
+  // A script can write on the channel too, so what makes an answer safe to use is checked here, not only where the answer was made. The size of a header set is not:
+  // that limit is each rule's, and rules add up.
+  function trusted({ why, skipped = [], headers }, unit) {
+    const inClosedSet = [{ why }, ...skipped].every((skip) => skip.why === undefined || SKIP_WHY.includes(skip.why))
+    const changes = headers === null || headers === undefined ? [] : headerChanges(unit.headers ?? [], headers)
+    return inClosedSet && checkHeaderSet(changes).every(({ at }) => at === null)
+  }
+
+  function take({ body, edits, ...answer }, unit) {
     try {
+      if ('died' in answer || !trusted(answer, unit)) throw new RangeError('an answer the rules could not have given')
       return { ...answer, bytes: body ? slice(body) : null, edits: edits ? JSON.parse(`[${slice(edits)}]`) : [] }
     } catch {
       runner.kill('bad-result')
@@ -106,15 +118,17 @@ export function openOneShot({ script, rules, maxTaskMs = 2000, tmp = os.tmpdir()
   }
 
   async function run({ body, ...unit }) {
+    if (runner?.killed) await runner.gone
     if (!runner || runner.dead) {
-      const started = await start()
-      if (started.died) return started
+      const failed = await start()
+      if (failed) return failed
     }
     const id = ++task
     if (body) fs.writeSync(slot, body, 0, body.length, HEAD_BYTES)
-    const frame = await runner.ask({ id, unit, body_bytes: body ? body.length : null }, maxTaskMs + FROZEN_MS)
+    const { frame, died } = await runner.ask({ id, unit, body_bytes: body ? body.length : null }, maxTaskMs + FROZEN_MS)
     const { task: ran, rule } = readProgress(slot)
-    const answer = frame.died ? { died: frame.died, rule: ran === id && rule !== NO_RULE ? rule : null } : take(frame)
+    const fate = died ?? runner.killed // a second answer in the same read as the first
+    const answer = fate ? { died: fate, rule: ran === id && rule !== NO_RULE ? rule : null } : take(frame, unit)
     fs.ftruncateSync(slot, 0) // the body is an agent's: it stays here only as long as the task
     return answer
   }

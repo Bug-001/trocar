@@ -13,6 +13,15 @@ export const checkHeaderName = (n) => (typeof n === 'string' && TOKEN.test(n) ? 
 /** A header value: a string with no control character, so CR and LF never reach a header. */
 export const checkHeaderValue = (v) => (typeof v === 'string' && !CONTROL.test(v) ? [] : [{ reason: 'a header value has no control characters' }])
 
+/** What `after` did to `before`, in the shape checkHeaderSet reads: the pairs that are new, and a null for a name that went. What the agent sent is no rule's doing. A null in
+ *  `after` is no removal: it stays a bad value. */
+export function headerChanges(before, after) {
+  const key = (pair) => JSON.stringify(pair)
+  const had = new Set(before.map(key)), kept = new Set(after.map(([name]) => String(name).toLowerCase()))
+  const fresh = after.filter((pair) => !had.has(key(pair))).map(([name, value]) => [name, value ?? undefined])
+  return [...fresh, ...before.filter(([name]) => !kept.has(name.toLowerCase())).map(([name]) => [name, null])]
+}
+
 const lineBytes = (name, value) => Buffer.byteLength(`${name}: ${value}\r\n`)
 
 /** Headers a rule or a script sets: `pairs` is `[[name, value]…]` in order, a null value removes; `before` the same shape, the headers they land
