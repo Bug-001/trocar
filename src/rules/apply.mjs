@@ -1,12 +1,13 @@
 // apply.mjs (src/rules) — applyRules, the one entry of `rules test`, the live path and `resend` (RFC 5.1 §规则「多条规则都命中时」, §分派), and the tier 1
 // replace. The daemon loads this file, so the rule process's half comes in as `full`, and a script as `script`: tier 1 touches neither.
-import { Buffer, isUtf8 } from 'node:buffer'
+import { Buffer } from 'node:buffer'
 import { isSecretHeader } from '../capture/redact.mjs'
+import { CONDITION_COST, FREE } from './budget.mjs'
 import { LIMITS } from './closed.mjs'
-import { readable } from './compile.mjs'
+import { isText, readable } from './compile.mjs'
 import { isFastReplace } from './conditions.mjs'
 import { applySteps, editsCost, editsLimit, INVERTED_ON, recordEdits, recoverOf } from './edits.mjs'
-import { setHeaders } from './headers.mjs'
+import { setHeaders, spendHead } from './headers.mjs'
 import { actionKind } from './validate.mjs'
 
 const MAX_HITS = 4096
@@ -46,7 +47,10 @@ const EFFECTS = {
 
 const replaceFits = (action, unit) => isFastReplace(action) && !unit.encoding && unit.body !== null
 
-const fitsTier1 = (action, unit) => (actionKind(action) === 'replace' ? replaceFits(action, unit) : !NOT_TIER_1.has(actionKind(action)))
+function fitsTier1(action, unit) {
+  const kind = actionKind(action)
+  return kind === 'replace' ? replaceFits(action, unit) : !NOT_TIER_1.has(kind)
+}
 
 // False sends the unit to tier 2. Past the checks here the bytes and the steps are the ones `full.act` makes. Every pass over the body is paid for first. A hit in `in: text` leaves
 // too: it is a JSON string to find and escape again, and the daemon parses no body.
@@ -57,7 +61,7 @@ function tier1Replace(action, state, unit, budget) {
   if (!budget.spend(length)) return false
   const needle = Buffer.from(action.replace), hits = []
   for (let at = bytes.indexOf(needle); at !== -1; at = bytes.indexOf(needle, at + needle.length)) {
-    if (hits.length === MAX_HITS) return false
+    if (hits.length === MAX_HITS || !budget.spend(CONDITION_COST)) return false
     hits.push(at)
   }
   if (action.in !== 'body') return !hits.length && budget.spend(length) && !bytes.includes('\\u')
@@ -112,19 +116,28 @@ async function runRules(hits, state, out, edit, unreadable = null) {
 }
 
 // `base` is what arrived, decoded. Edits run from the wire to the agent: going up the changed bytes are the wire's, coming down they are the agent's.
-function recordOf(unit, state, { base, coded, spend }) {
+function recordOf(unit, state, { base, coded, budget }) {
   const up = INVERTED_ON.has(unit.on)
   const edits = state.opaque ? [] : recordEdits(unit.on, state.steps)
   const wire = up ? state.bytes : base, agent = up ? unit.body ?? base : state.bytes
-  if (![wire.length, agent.length, agent.length].every(spend)) throw ESCALATE
+  if (![wire.length, agent.length, agent.length].every((n) => budget.spend(n))) throw ESCALATE
   return { edits, recover: recoverOf({ wire, agent, edits, compressed: state.opaque || (up && coded) }) }
 }
 
-function settle(unit, state, out, { base, survivors, spend = () => true }) {
-  const touched = state.steps.length > 0 || state.opaque, coded = Boolean(unit.body) && base !== unit.body
-  const record = touched ? recordOf(unit, state, { base, coded, spend }) : { edits: [], recover: null }
+const sameHead = (a, b) => a.length === b.length && a.every(([name, value], i) => name === b[i][0] && value === b[i][1])
+
+// Did the rules leave anything different from what arrived? Rules that ended where they began are no change (5.1 §四个词), and telling is a pass like any other.
+function moved(state, base, budget) {
+  const edited = state.steps.length > 0 || state.opaque, retold = state.headers !== state.start
+  if ((edited && !budget.spend(base.length)) || (retold && !spendHead(state.start, budget))) throw ESCALATE
+  return { touched: edited && !state.bytes.equals(base), reheaded: retold && !sameHead(state.headers, state.start) }
+}
+
+function settle(unit, state, out, { base, survivors, budget = FREE }) {
+  const { touched, reheaded } = moved(state, base, budget), coded = Boolean(unit.body) && base !== unit.body
+  const record = touched ? recordOf(unit, state, { base, coded, budget }) : { edits: [], recover: null }
   let bytes = touched ? state.bytes : null
-  let headers = state.headers === state.start ? null : state.headers
+  let headers = reheaded ? state.headers : null
   if (touched && coded) headers = state.headers.filter(([name]) => name.toLowerCase() !== 'content-encoding')
   const { recover } = record
   if (recover && (recover.edits ? editsCost(recover.edits) : recover.body_b64.length) > editsLimit(unit.body?.length ?? 0)) {
@@ -144,24 +157,28 @@ function settle(unit, state, out, { base, survivors, spend = () => true }) {
 async function tier1(unit, compiled, budget) {
   const out = newOutcome(), survivors = []
   let waits = false
-  for (const rule of compiled) {
+  for (const [at, rule] of compiled.entries()) {
+    if (!budget.spend(CONDITION_COST)) return { escalate: true, survivors: [...survivors, ...compiled.slice(at)] }
     const since = performance.now(), verdict = rule.judge(unit, budget)
     out.tally(rule.name, since)
     if (verdict === 'miss') continue
     survivors.push(rule)
     if (verdict === 'tier2') waits = true
   }
-  if (waits || budget.over || survivors.some(({ rule }) => !rule.do.every((action) => fitsTier1(action, unit)))) return { escalate: true, survivors }
+  // Every action is paid for here, the ones that touch no bytes too, before the first of them runs.
+  const fits = ({ rule }) => budget.spend(rule.do.length * CONDITION_COST) && rule.do.every((action) => fitsTier1(action, unit))
+  if (waits || budget.over || !survivors.every(fits)) return { escalate: true, survivors }
   out.hits = survivors.map((rule) => rule.name)
   const start = unit.headers ?? []
-  const state = { bytes: unit.body, headers: start, start, steps: [], opaque: false }
+  const state = { bytes: unit.body, headers: start, start, grown: 0, steps: [], opaque: false }
   const edit = (_, action) => {
-    const done = actionKind(action) === 'replace' ? tier1Replace(action, state, unit, budget) : setHeaders(state, [[action.header, action.remove ? null : action.set]])
+    const done = actionKind(action) === 'replace' ? tier1Replace(action, state, unit, budget)
+      : spendHead(state.headers, budget) && setHeaders(state, [[action.header, action.remove ? null : action.set]])
     if (!done) throw ESCALATE
   }
   try {
     await runRules(survivors, state, out, edit)
-    return settle(unit, state, out, { base: unit.body, survivors, spend: (n) => budget.spend(n) })
+    return settle(unit, state, out, { base: unit.body, survivors, budget })
   } catch (e) {
     if (e === ESCALATE) return { escalate: true, survivors }
     throw e
@@ -177,11 +194,11 @@ function scriptMessage(unit, state) {
   return { on, harness, pid, method, host, path, status, headers, bytes, ...(state.text === null ? {} : { text: state.text }) }
 }
 
-// A script's patch is the whole body, so it is one step. Edits are text: bytes that are not UTF-8 on either side leave the record to the whole body.
+// A script's patch is the whole body, so it is one step. Edits are text: bytes that are not text on either side leave the record to the whole body.
 function setBody(state, next) {
   const bytes = Buffer.from(next), old = state.bytes
   if (bytes.equals(old)) return
-  const text = isUtf8(bytes) ? bytes.toString() : null
+  const text = isText(bytes) ? bytes.toString() : null
   if (text === null || state.text === null) state.opaque = true
   else state.steps.push({ at: 0, del: old.length, ins: text, old: state.text })
   Object.assign(state, { bytes, text })
@@ -223,7 +240,7 @@ async function tier2(unit, compiled, { full, script }) {
   out.hits = hits.map((rule) => rule.name)
   const base = decoded?.bytes ?? unit.body ?? Buffer.alloc(0)
   const start = unit.headers ?? []
-  const state = { bytes: base, text: decoded?.text ?? null, headers: start, start, steps: [], opaque: false }
+  const state = { bytes: base, text: decoded?.text ?? null, headers: start, start, grown: 0, steps: [], opaque: false }
   let scripts = 0
   const edit = ({ rule, name }, action) => {
     if (actionKind(action) !== 'script') return full.act(action, state, { on: rule.on, unit })

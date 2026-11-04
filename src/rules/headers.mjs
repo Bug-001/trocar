@@ -1,5 +1,6 @@
 // headers.mjs (src/rules) — the one check on what a rule may do to a header (RFC 5.1 §怎么算改动「头的写法」): `rules add`, the daemon loading rules and
 // a script's result all go through it, because the daemon does not trust the CLI. Every check returns a list of problems and never throws.
+import { CONDITION_COST } from './budget.mjs'
 import { LIMITS } from './closed.mjs'
 
 const TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/
@@ -41,19 +42,30 @@ export function checkHeaderSet(pairs, { before = [] } = {}) {
   return out
 }
 
-/** `pairs` onto `state.headers`, as checkHeaderSet reads them. The limit is the unit's and not the rule's: `state.start` is what arrived, so what several rules add counts as one
- *  set. False, and nothing changed, when a pair may not be written or the whole grows past the limit. */
+/** `pairs` onto `state.headers`, as checkHeaderSet reads them. The limit is the unit's and not the rule's: `state.grown` is what the head has grown by since it arrived, net of what
+ *  went, and a rule that fails takes its part back with the rest of the state. False, and nothing changed, when a pair may not be written or the whole grows past the limit. */
 export function setHeaders(state, pairs) {
   if (checkHeaderSet(pairs).some(({ at }) => at !== null)) return false
-  let next = state.headers
+  let next = state.headers, { grown } = state
   for (const [name, value] of pairs) {
-    const same = ([n]) => n.toLowerCase() === name.toLowerCase()
+    const key = name.toLowerCase(), same = ([n]) => n.toLowerCase() === key
     const at = next.findIndex(same)
-    if (value === null) next = next.filter((h) => !same(h))
-    else next = at < 0 ? [...next, [name, value]] : next.with(at, [next[at][0], value])
+    if (value === null) {
+      for (const pair of next) if (same(pair)) grown -= lineBytes(...pair)
+      next = next.filter((h) => !same(h))
+    } else if (at < 0) {
+      grown += lineBytes(name, value)
+      next = [...next, [name, value]]
+    } else {
+      grown += lineBytes(next[at][0], value) - lineBytes(...next[at])
+      next = next.with(at, [next[at][0], value])
+    }
   }
-  const start = state.start ?? state.headers
-  if (checkHeaderSet(headerChanges(start, next), { before: start }).length) return false
-  state.headers = next
+  if (grown > LIMITS.headerGrowthBytes) return false
+  Object.assign(state, { headers: next, grown })
   return true
 }
+
+/** Pays for one pass over a head (5.1 §主线程的字节预算), before it. Its pairs are counted first: that takes no pass, and the walk that counts the bytes is one. */
+export const spendHead = (pairs, budget) => budget.spend(pairs.length * CONDITION_COST)
+  && budget.spend(pairs.reduce((n, [name, value]) => n + name.length + value.length, 0))

@@ -6,7 +6,7 @@ import zlib from 'node:zlib';
 import { applyRules } from '../../src/rules/apply.mjs';
 import { full } from '../../src/rules/actions.mjs';
 import { compileRules } from '../../src/rules/compile.mjs';
-import { byteBudget, UNIT_BYTES } from '../../src/rules/budget.mjs';
+import { byteBudget, CONDITION_COST, UNIT_BYTES } from '../../src/rules/budget.mjs';
 import { tierOfRule } from '../../src/rules/describe.mjs';
 import { applyEdits } from '../../src/rules/edits.mjs';
 
@@ -84,6 +84,7 @@ test('9, 63: bytes tier 2 refuses get the same answer at any size: a body or a r
     [notText, {}], [Buffer.from([0xff, 0x41]), {}],
     ['data: ALPHA\ndata: two\n\n', { on: 'response', sse: true }], ['data: one\ndata: two\n\n', { on: 'response', sse: true }],
     ['data: ALPHA\r\ndata: two\r\n\r\n', { on: 'response', sse: true }],
+    [Buffer.from('{"a":"ALPHA"}', 'utf16le'), {}], [Buffer.from('ALPHA\0'), {}], // UTF-8 to the letter, and no search finds the words of the first
   ];
   const conditions = [{ body: 'ALPHA' }, { body: { not: 'ALPHA' } }, { body: 'ABSENT' }];
   const actions = [{ drop: true }, { delay_ms: 5 }, { header: 'x-a', set: '1' }];
@@ -104,11 +105,187 @@ test('9, 63: bytes tier 2 refuses get the same answer at any size: a body or a r
   }
 });
 
+// A key, a number, wide characters and repeats, each next to an escape, so that a hit lands on every side of one.
+test('9, 63: a body condition is one judgement: what tier 1 says, tier 2 says, under not and in lists too', async () => {
+  const escapes = ['\\n', '\\"', '\\\\', '\\\\\\n', '\\/', '\\t', '\\u0041', '\\u4e2d', '\\ud83d\\ude00'];
+  const pieces = ['AAA', 'AAAAAAA', 'ALPHA', '123', '12345', '中', '中中', '😀', 'x', 'n', 'nALPHA', '41BC', 'stream'];
+  const literals = ['ALPHA', 'AAA', 'AA', '123', 'n', 'nA', '41', 'stream', 'x1'];
+  const conditions = (l) => [l, { not: l }, [l, 'ZZZ'], ['ZZZ', l], { not: ['ZZZ', l] }];
+  const r = seeded(63), pick = (list) => list[r(list.length)];
+  const text = () => Array.from({ length: 1 + r(4) }, () => pick(r(2) ? escapes : pieces)).join('');
+  const shapes = [
+    () => `{"${text()}":${pick(['1', '12345', 'true', '"x"'])}}`,
+    () => `{"a":"${text()}","${pick(pieces)}":${pick(['12345', '[]', '"v"'])}}`,
+    () => `["${text()}",12345,"${text()}"]`,
+    () => `{"${text()}":"${text()}"}`,
+    () => `"${text()}"`,
+    () => `plain ${text()} text`,
+    () => `{"a":"${text()}"}\n{"b":${pick(['12345', '"x"'])}}\n`,
+  ];
+  const said = new Set();
+  for (let round = 0; round < 6000; round++) {
+    const body = pick(shapes)(), one = rule('r', { delay_ms: 1 }, { match: { host: '*', body: pick(conditions(pick(literals))) }, on_error: pick(['forward', 'drop']) });
+    const compiled = rules(one), first = await tier1(unitOf(body), compiled);
+    if (first.escalate) continue;
+    said.add(first.hits.length);
+    assert.deepEqual(outcome(first), outcome(await tier2(unitOf(body), compiled)), `${body} ${JSON.stringify(one.match.body)}`);
+  }
+  assert.deepEqual([...said].sort(), [0, 1], 'tier 1 settled both ways');
+});
+
+test('5.1 §条件的写法: only a real escape takes a hit away: what follows a string that ends in one is plain bytes', async () => {
+  const hit = async (literal, body) => (await tier2(unitOf(body), rules(rule('r', { delay_ms: 1 }, { match: { host: '*', body: literal } })))).hits.length === 1;
+  const cases = [
+    ['stream', '{"system":"be brief\\n","stream":true}', true],
+    ['"stream":true', '{"system":"be brief\\n","stream":true}', true],
+    ['tools', '{"s":"x\\n","tools":[]}', true],
+    ['123', '["\\n",123]', true],
+    ['nALPHA', '{"a":"\\\\nALPHA"}', true], // an escaped backslash, then plain letters
+    ['nALPHA', '{"nALPHA":"\\n"}', true],
+    ['nALPHA', '{"a":"\\nALPHA"}', false], // an escape, then ALPHA
+    ['\\nALPHA', '{"a":"\\nALPHA"}', false],
+    ['n', '{"a":"\\n"}', false],
+    ['41BC', '{"a":"\\u0041BC"}', false],
+    ['0041', '{"a":"\\u0041"}', false],
+    ['u004', '{"a":"\\\\u004"}', true],
+    ['ABC', '{"a":"\\u0041BC"}', true], // the decoded text has it
+    [{ re: 'ALPHA' }, '{"\\nALPHA":1}', true],
+    [{ re: 'n.LPHA' }, '{"\\nALPHA":1}', false],
+    [{ re: '(?=n)' }, '{"\\nALPHA":1}', false],
+    [{ re: 'n|ALPHA' }, '{"\\nALPHA":1}', true],
+    [{ re: '😀.?' }, '{"\\n😀":1,"\\n😀😀":1}', true],
+  ];
+  for (const [literal, body, want] of cases) assert.equal(await hit(literal, body), want, `${JSON.stringify(literal)} in ${body}`);
+});
+
+test('5.1 §怎么算改动: a body that is not JSON and holds a \\u cannot be read through, so on_error decides, on both tiers', async () => {
+  const bodies = [['{"a":"\\u0041LPHA"}\n{"b":1}\n', {}], ['\ufeff{"a":"\\u0041LPHA"}', {}], ['plain \\u0041LPHA', {}], ['data: x\\u0041\n\n', { on: 'response', sse: true }]];
+  const lists = [
+    rule('r', lit('ABSENT', 'x')), rule('r', { replace: 'ABSENT', with: 'x' }), rule('r', { delay_ms: 1 }, { match: { host: '*', body: 'ABSENT' } }), rule('r', { delay_ms: 1 }, { match: { host: '*', body: { not: 'ABSENT' } } }),
+  ];
+  for (const [body, more] of bodies) {
+    for (const one of lists) {
+      for (const on_error of ['forward', 'drop']) {
+        const label = `${body} ${JSON.stringify(one.match)} ${on_error}`, compiled = rules({ ...one, on_error });
+        assert.equal((await tier1(unitOf(body, more), compiled)).escalate, true, label);
+        const result = await tier2(unitOf(body, more), compiled);
+        assert.deepEqual(names(result.skipped), [['r', 'not-json']], label);
+        assert.equal(result.verdict, on_error === 'drop' ? 'drop' : 'forward', label);
+        assert.equal(result.bytes, null, label);
+      }
+    }
+  }
+  const says = async (match, body) => {
+    const compiled = rules(rule('r', { delay_ms: 1 }, { match })), first = await tier1(unitOf(body), compiled), second = await tier2(unitOf(body), compiled);
+    if (!first.escalate) assert.deepEqual(outcome(first), outcome(second), `${JSON.stringify(match)} ${body}`);
+    return [second.hits, names(second.skipped)];
+  };
+  const found = 'FOUND \\u0041 far away from it';
+  assert.deepEqual(await says({ host: '*', body: 'FOUND' }, found), [['r'], []], 'a literal in the bytes hits all the same');
+  assert.deepEqual(await says({ host: '*', body: { not: 'FOUND' } }, found), [[], []]);
+  assert.deepEqual(await says({ host: '*', body: ['ABSENT', 'FOUND'] }, found), [['r'], []], 'a list that a part settles is settled');
+  assert.deepEqual(await says({ host: '*', body: ['ABSENT', 'OTHER'] }, found), [[], [['r', 'not-json']]]);
+  assert.deepEqual(names((await tier2(unitOf('plain ALPHA text'), rules(rule('r', { delay_ms: 1 }, { match: { host: '*', body: 'ABSENT' } })))).skipped), [], 'no \\u, no doubt');
+  assert.equal(text(await tier2(unitOf('plain ALPHA text'), rules(rule('r', lit('ALPHA', 'x'))))), 'plain x text');
+  assert.equal(text(await tier2(unitOf('plain \\u0041 ALPHA'), rules(rule('r', lit('ALPHA', 'x', { in: 'body' }))))), 'plain \\u0041 x', '`in: body` reads no text');
+  assert.equal((await tier2(unitOf('plain \\u0041 ALPHA'), rules(rule('r', lit('ALPHA', 'ALPHA'))))).skipped.length, 0, 'a replace that cannot change anything has nothing to fail at');
+});
+
+test('5.1 §怎么算改动: a body too deep to read is the rule\'s error, not plain text, wherever tier 2 had to read it', async () => {
+  const depth = 200_000, deep = `${'['.repeat(depth)}"\\u0041LPHA"${']'.repeat(depth)}`, inner = `{"a":"ALPHA","deep":${'['.repeat(depth)}${']'.repeat(depth)}}`;
+  assert.doesNotThrow(() => JSON.parse(inner));
+  for (const [body, action] of [[inner, lit('ALPHA', 'B"')], [inner, { replace: 'A.PHA', with: 'B"' }], [deep, lit('ALPHA', 'B')], [inner, { json: '/a', set: 1 }]]) {
+    for (const on_error of ['forward', 'drop']) {
+      const result = await tier2(unitOf(body), rules(rule('r', action, { on_error })));
+      assert.deepEqual(names(result.skipped), [['r', 'rule-error']], JSON.stringify(action));
+      assert.equal(result.bytes, null);
+      assert.equal(result.verdict, on_error === 'drop' ? 'drop' : 'forward');
+    }
+  }
+  const judged = await tier2(unitOf(deep), rules(rule('r', { delay_ms: 1 }, { match: { host: '*', body: 'ALPHA' } })));
+  assert.deepEqual(names(judged.skipped), [['r', 'rule-error']]);
+  const big = byteBudget(1 << 24); // what the bytes settle reads no JSON: tier 1's answer stands, at any depth
+  for (const one of [rule('r', { delay_ms: 1 }, { match: { host: '*', body: 'ALPHA' } }), rule('r', { delay_ms: 1 }, { match: { host: '*', body: 'ABSENT' } }), rule('r', lit('ABSENT', 'x')), rule('r', lit('deep', 'deep'))]) {
+    const compiled = rules(one), first = await tier1(unitOf(inner), compiled, big);
+    assert.equal(first.escalate, false, JSON.stringify(one));
+    assert.deepEqual(outcome(first), outcome(await tier2(unitOf(inner), compiled)), JSON.stringify(one));
+  }
+});
+
+test('5.1 §按块改: a block action that cannot act follows on_error, and leaves what the rules around it did', async () => {
+  const anthropic = '{"model":"m","messages":[{"role":"assistant","content":[{"type":"tool_use","id":"t","name":"f","input":{"q":"SECRET"}}]}]}';
+  const units = [[anthropic, {}, { blocks: { kind: 'tool_use' }, set_text: 'Z' }], ['{"a":"b"}', { path: '/v1/models' }, { blocks: {}, remove: true }], [anthropic, { path: '/v1/messages/count_tokens' }, { blocks: {}, remove: true }]];
+  for (const [body, more, action] of units) {
+    for (const on_error of ['forward', 'drop']) {
+      const list = rules(rule('before', { header: 'x-a', set: '1' }), rule('r', [{ header: 'x-b', set: '1' }, action], { on_error }));
+      const result = await tier2(unitOf(body, more), list);
+      assert.deepEqual(result.hits, ['before', 'r']);
+      assert.deepEqual(names(result.skipped), [['r', 'no-blocks']]);
+      assert.equal(result.verdict, on_error === 'drop' ? 'drop' : 'forward');
+      assert.equal(result.bytes, null);
+      assert.deepEqual(result.headers.map(([name]) => name), ['content-type', 'x-a']);
+    }
+  }
+});
+
+test('5.1 §四个词: bytes and headers that end where they began are no change, whatever ran on them', async () => {
+  const back = (a, b, more = {}) => [rule('there', lit(a, b, more)), rule('back', lit(b, a, more))];
+  const head = [['content-type', 'application/json'], ['x-a', '1']];
+  const cases = [
+    ['A', {}, back('A', 'B', { in: 'body' })],
+    ['{"a":"A"}', {}, back('A', 'B')],
+    ['{"a":"x"}', {}, [rule('r', { json: '/a', set: 'x' })]],
+    ['{"a":1}', {}, [rule('r', { json: '/a', set: 1 })]],
+    ['{"a":"x"}', {}, [rule('r', { json: '/a', set: 'y' }), rule('s', { json: '/a', set: 'x' })]],
+    ['x', { headers: head }, [rule('r', { header: 'x-a', set: '1' })]],
+    ['x', { headers: head }, [rule('r', { header: 'x-none', remove: true })]],
+    ['x', { headers: head }, [rule('r', [{ header: 'x-a', set: '2' }, { header: 'x-a', set: '1' }])]],
+    ['x', { headers: head }, [rule('r', [{ header: 'x-b', set: '2' }, { header: 'x-b', remove: true }])]],
+  ];
+  for (const [body, more, list] of cases) {
+    const compiled = rules(...list);
+    for (const run of [tier1, tier2]) {
+      const result = await run(unitOf(body, more), compiled);
+      if (result.escalate) continue;
+      const label = `${body} ${JSON.stringify(list.map((one) => one.do))}`;
+      assert.deepEqual([result.bytes, result.headers, result.edits, result.recover], [null, null, [], null], label);
+      assert.deepEqual(result.hits, list.map((one) => one.name), label);
+      assert.equal(result.skipped.length, 0, label);
+    }
+  }
+  const gz = zlib.gzipSync('{"a":"A"}'), coded = await tier2(unitOf(gz, { encoding: 'gzip', headers: [['content-encoding', 'gzip']] }), rules(...back('A', 'B')));
+  assert.deepEqual([coded.bytes, coded.headers, coded.recover], [null, null, null], 'a compressed body that came back goes out as it came');
+  const moved = await tier2(unitOf('{"a":"A"}'), rules(...back('A', 'B'), rule('h', { header: 'x-b', set: '1' })));
+  assert.deepEqual([moved.bytes, moved.recover, moved.edits], [null, null, []], 'the body came back; the headers did not');
+  assert.equal(moved.headers.at(-1)[0], 'x-b');
+  const reordered = await tier2(unitOf('x', { headers: head }), rules(rule('r', [{ header: 'content-type', remove: true }, { header: 'content-type', set: 'application/json' }])));
+  assert.deepEqual(reordered.headers, [head[1], head[0]], 'a head in another order is another head');
+});
+
+test('5.1 §字节预算: telling a result from what arrived is the last pass paid for, and past the counter tier 2 does it', async () => {
+  const counted = async (unit, list) => {
+    const passes = [], counting = { spend(n) { passes.push(n); return true; }, get over() { return false; } };
+    return { passes, result: await tier1(unit, list, counting) };
+  };
+  const body = 'A'.repeat(1000), compiled = rules(rule('a', lit('AA', 'BB', { in: 'body' })), rule('b', lit('BB', 'AA', { in: 'body' })));
+  const { passes, result } = await counted(unitOf(body), compiled);
+  assert.equal(result.bytes, null);
+  assert.equal(passes.at(-1), body.length);
+  const total = passes.reduce((n, pass) => n + pass, 0);
+  assert.equal((await tier1(unitOf(body), compiled, byteBudget(total))).escalate, false);
+  assert.equal((await tier1(unitOf(body), compiled, byteBudget(total - 1))).escalate, true);
+
+  const head = pairsOf(100), list = rules(rule('r', [{ header: 'x-h0', set: 'w' }, { header: 'x-h0', set: 'v' }]));
+  const told = await counted(unitOf('x', { headers: head }), list);
+  assert.equal(told.result.headers, null);
+  assert.equal(told.passes.at(-1), headBytes(head));
+});
+
 test('one readable pass per unit, however many rules read its body', async () => {
-  const body = 'plain text with no hit', list = Array.from({ length: 5 }, (_, i) => rule(`r${i}`, { drop: true }, { match: { body: `ABSENT${i}` } }));
+  const body = 'plain text with no hit '.repeat(100), list = Array.from({ length: 5 }, (_, i) => rule(`r${i}`, { drop: true }, { match: { body: `ABSENT${i}` } }));
   const spentOn = async (compiled) => { const budget = byteBudget(); await tier1(unitOf(body), compiled, budget); return budget.spent; };
   const one = await spentOn(rules(list[0])), five = await spentOn(rules(...list));
-  assert.equal(five - one, 4 * (2 * body.length + 64), 'each further rule pays its search and its look for \\u, and its compare');
+  assert.ok(five - one < 4 * 3 * body.length, 'each further rule pays its search and its look for \\u, not the reading');
 });
 
 test('39: a literal past 256 bytes is the rule process\'s, however it is written: the main thread does not look at the body for it', async () => {
@@ -118,7 +295,7 @@ test('39: a literal past 256 bytes is the rule process\'s, however it is written
       const budget = byteBudget();
       const result = await tier1(unitOf(body), rules(rule('r', lit(needle, 'x', { in: 'body' }))), budget);
       assert.equal(result.escalate, true, `${size} bytes`);
-      assert.equal(budget.spent, 0, `${size} bytes: no pass over the body`);
+      assert.ok(budget.spent < size, `${size} bytes: no pass over the body`);
     }
   }
   assert.equal((await tier1(unitOf('a'.repeat(KIB)), rules(rule('r', lit('a'.repeat(256), 'x', { in: 'body' }))))).escalate, false, '256 bytes is the fast path');
@@ -165,12 +342,56 @@ test('5.1 §头的写法: the 8 KiB is the unit\'s, whatever rules and scripts a
   }
 });
 
+const pairsOf = (n) => Array.from({ length: n }, (_, i) => [`x-h${i}`, 'v']);
+const headBytes = (pairs) => pairs.reduce((n, [name, value]) => n + name.length + value.length, 0);
+
+test('5.1 §字节预算: every rule and action is paid for, whatever it does, so a file of them cannot outrun the counter', async () => {
+  const kinds = [{ delay_ms: 1 }, { header: 'a', set: 'b' }, { header: 'x-none', remove: true }, lit('q', 'r', { in: 'body' }), lit('q', 'r')];
+  for (const action of kinds) {
+    for (const [count, each] of [[1, 1], [1, 64], [100, 5], [700, 50], [1000, 30]]) {
+      const label = `${count} × ${each} ${JSON.stringify(action)}`, budget = byteBudget();
+      const compiled = rules(...Array.from({ length: count }, (_, i) => rule(`r${i}`, Array(each).fill(action))));
+      const result = await tier1(unitOf('a'), compiled, budget);
+      if (result.escalate) assert.deepEqual(result.survivors, compiled, label);
+      else assert.ok(budget.spent >= count * each * CONDITION_COST, label);
+      if (count * each * CONDITION_COST > UNIT_BYTES) assert.equal(result.escalate, true, label);
+    }
+  }
+});
+
+test('5.1 §字节预算: an action on a header pays for the head it lands on, and past the counter tier 2 does it', async () => {
+  for (const size of [0, 10, 100, 1000]) {
+    for (const each of [1, 5, 64]) {
+      const label = `${size} headers, ${each} actions`, budget = byteBudget(), headers = pairsOf(size);
+      const compiled = rules(rule('r', Array(each).fill({ header: 'a', set: 'b' })));
+      const result = await tier1(unitOf('x', { headers }), compiled, budget);
+      if (!result.escalate) assert.ok(budget.spent >= each * headBytes(headers), label);
+      if (each * headBytes(headers) > UNIT_BYTES) assert.equal(result.escalate, true, label);
+      const done = result.escalate ? await tier2(unitOf('x', { headers }), compiled) : result;
+      assert.deepEqual(done.headers.at(-1), ['a', 'b'], label);
+    }
+  }
+});
+
+test('5.1 §字节预算: every hit is paid for, so rules that swap a body back and forth leave for tier 2', async () => {
+  const swap = (i) => lit(i % 2 ? 'b' : 'a', i % 2 ? 'a' : 'b', { in: 'body' });
+  for (const size of [1, 256, 4096]) {
+    for (const count of [1, 2, 21, 300]) {
+      const label = `${size} bytes, ${count} rules`, budget = byteBudget();
+      const compiled = rules(...Array.from({ length: count }, (_, i) => rule(`r${i}`, swap(i))));
+      const result = await tier1(unitOf('a'.repeat(size)), compiled, budget);
+      if (!result.escalate) assert.ok(budget.spent >= size * count * CONDITION_COST, label);
+      if (size * count * CONDITION_COST > UNIT_BYTES) assert.equal(result.escalate, true, label);
+    }
+  }
+});
+
 test('12g: `in: text` on the main thread stops at the first hit: the search and nothing that parses', async () => {
   for (const size of [4 * KIB, 16 * KIB, 48 * KIB]) {
     const body = `{"a":"${'p'.repeat(size)} ALPHA"}`, budget = byteBudget();
     const result = await tier1(unitOf(body), rules(rule('r', lit('ALPHA', 'BRAVO'))), budget);
     assert.equal(result.escalate, true);
-    assert.equal(budget.spent, 2 * body.length, 'UTF-8 and the search');
+    assert.ok(budget.spent < 4 * body.length, 'reading it as text and the search');
   }
 });
 
