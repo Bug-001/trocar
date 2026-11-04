@@ -14,11 +14,10 @@ const HEX = /^[0-9a-f]+$/i
 const BASE32 = /^[A-Z2-7]+=*$/
 const BASE32_DIGITS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
 const CONTROL = /[\x00-\x08\x0e-\x1f]/
-const GZIP = [0x1f, 0x8b]
 const isZlib = (a, b) => (a & 0x0f) === 8 && (a * 256 + b) % 31 === 0
 
 export const isHex = (run) => HEX.test(run)
-export const longRuns = (text) => [...text.matchAll(LONG_RUN)].map((match) => match[0])
+export const longRuns = (text) => text.match(LONG_RUN) ?? []
 
 /** Blocks of at least three rows of one width, the last perhaps shorter, as a tool folds what it encodes: [{index, run}], `run` the rows joined. */
 export function foldedRuns(text) {
@@ -31,12 +30,12 @@ export function foldedRuns(text) {
   let at = 0
   for (const row of text.split('\n')) {
     const piece = BLOCK_ROW.exec(row)?.[1]
-    if (piece === undefined) close()
-    else if (block && piece.length === block.width) block.rows.push(piece)
-    else if (block && piece.length < block.width) { block.rows.push(piece); close() }
-    else {
+    if (piece?.length <= block?.width) {
+      block.rows.push(piece)
+      if (piece.length < block.width) close()
+    } else {
       close()
-      if (piece.length >= MIN_ROW) block = { index: at, width: piece.length, rows: [piece] }
+      if (piece?.length >= MIN_ROW) block = { index: at, width: piece.length, rows: [piece] }
     }
     at += row.length + 1
   }
@@ -45,24 +44,14 @@ export function foldedRuns(text) {
 }
 
 function base32(run) {
-  const out = []
-  let bits = 0, value = 0
-  for (const digit of run.replace(/=+$/, '')) {
-    value = (value << 5) | BASE32_DIGITS.indexOf(digit)
-    bits += 5
-    if (bits >= 8) {
-      out.push((value >> (bits - 8)) & 0xff)
-      bits -= 8
-      value &= (1 << bits) - 1
-    }
-  }
-  return Buffer.from(out)
+  const bits = [...run.replace(/=+$/, '')].map((digit) => BASE32_DIGITS.indexOf(digit).toString(2).padStart(5, '0')).join('')
+  return Buffer.from((bits.match(/.{8}/g) ?? []).map((byte) => parseInt(byte, 2)))
 }
 
 /** The text behind a run, through gzip or zlib when it has their magic; null when what is behind it is not text. */
 export function opened(run) {
   let bytes = isHex(run) ? Buffer.from(run, 'hex') : BASE32.test(run) ? base32(run) : Buffer.from(run, 'base64')
-  const coding = bytes[0] === GZIP[0] && bytes[1] === GZIP[1] ? 'gzip' : isZlib(bytes[0], bytes[1]) ? 'deflate' : null
+  const coding = bytes[0] === 0x1f && bytes[1] === 0x8b ? 'gzip' : isZlib(bytes[0], bytes[1]) ? 'deflate' : null
   if (coding) {
     const { buf, decoded } = decodeContent(bytes, coding, { maxBytes: MAX_DECODED_BYTES })
     if (!decoded) return null
