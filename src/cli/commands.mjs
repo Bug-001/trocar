@@ -1,12 +1,14 @@
 // commands.mjs — the one table of commands (RFC 1.6 §2, §5.4, D58): one list that `trocar help` prints, src/cli/main.mjs dispatches over,
 // src/cli/args.mjs parses by, and test/cli/{commands,dispatch}.test.mjs holds equal. One feature has one name: there are no hidden aliases
 // and no test-only public option (D58⑤).
-//   COMMANDS  [{ name, group, usage, summary, options, exits, mutates, needsRoot?, openOptions?, run(argv, ctx) → exit }]
+//   COMMANDS  [{ name, group, usage, summary, options, exits, details?, mutates, needsRoot?, openOptions?, run(argv, ctx) → exit }]
 //     group       'Capture' | 'Data' | 'Maintenance' — the three sections of help, in that order.
 //     usage       one or more lines, each beginning `trocar <name>` or `sudo trocar <name>` (the first is the one a usage error prints).
 //     summary     two or three sentences of English a user understands: no section numbers, decision numbers, source paths or internal code names.
-//     options     [['--name' | '--name <value>', 'one line of help']] — the declaration src/cli/args.mjs parses by (nothing is guessed).
+//     options     [['--name' | '--name <value>', 'one line of help', { repeat: true }?]] — the declaration src/cli/args.mjs parses by (nothing is guessed).
 //     exits       [[code, 'what it means']], out of the five codes of §1.3.
+//     details     the command's long manual: a string, or a function returning one so it loads only when asked for. Printed after the exit
+//                 codes in that command's own help (§2, §5.4), never in `trocar help`.
 //     mutates     changes the user's own state, so it refuses root (§1.5): true, or a function of the parsed args when only some subcommands do
 //                 (`classes set|add|rm|reset` refuse root; `classes` shown does not). needsRoot: setup-helper, the one command that must be root.
 //     hidden      not in help or the README: `place`, which only the install scripts and `trocar update` run (§2).
@@ -170,6 +172,7 @@ export function helpText(name) {
     const options = [...optionsOf(cmd).values()]
     if (options.length) out.push('', 'Options', ...block(options.map((o) => [o.value ? `${o.name} <${o.value}>` : o.name, o.help])))
     out.push('', 'Exit codes', ...block(cmd.exits.map(([c, what]) => [String(c), what])))
+    if (cmd.details) out.push('', typeof cmd.details === 'function' ? cmd.details() : cmd.details)
     return out.join('\n')
   }
   const out = [...wrap('trocar - see every byte your agents really send to a model: captured as it is, replayed and taken apart'), '']

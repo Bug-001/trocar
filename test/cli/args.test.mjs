@@ -32,6 +32,17 @@ test('parseArgs: an option nobody declared, and a value-taking option with nothi
   assert.equal(parseArgs(cmd, ['-x']).error.message, "trocar demo: unknown option '-x'", 'a short option nobody declared too')
 })
 
+test('parseArgs: an option declared {repeat: true} is the list of its values, in the order given, and absent when not given (1.6 §4.4)', () => {
+  const rep = { name: 'demo', usage: 'trocar demo [--ref <record>...] [--port <port>]', options: [['--ref <record>', 'a record', { repeat: true }], ['--port <port>', 'the port']] }
+  assert.deepEqual(parseArgs(rep, ['--ref', 'a', '--ref', 'b']), { positionals: [], flags: { ref: ['a', 'b'] }, error: null })
+  assert.deepEqual(parseArgs(rep, ['--ref=a']).flags, { ref: ['a'] }, 'given once it is still a list')
+  assert.deepEqual(parseArgs(rep, ['--ref=b', 'x', '--ref', 'a']), { positionals: ['x'], flags: { ref: ['b', 'a'] }, error: null })
+  assert.deepEqual(parseArgs(rep, []).flags, {}, 'not given, there is no key')
+  assert.deepEqual(parseArgs(rep, ['--port', '1', '--port', '2']).flags, { port: '2' }, 'an option not declared so keeps the last value')
+  assert.equal(parseArgs(rep, ['--ref']).error.code, 'usage', 'a value is still needed')
+  assert.equal(optionsOf(rep).get('--ref').repeat, true)
+})
+
 test('parseArgs: a command with open options (query, whose parameters are the query\'s own) keeps every option it is given', () => {
   const open = { name: 'query', usage: 'trocar query <name> [--<param> <value>...]', openOptions: true }
   assert.deepEqual(parseArgs(open, ['sessions', '--since', '7d', '--limit', '10']), { positionals: ['sessions'], flags: { since: '7d', limit: '10' }, error: null })

@@ -72,6 +72,17 @@ test('§5.4: one command\'s help is its usage, its summary, its options with a l
   assert.throws(() => helpText('nope'), /nope/)
 })
 
+test('§2, §5.4: a command\'s details come after its options and exit codes in its own help, and never in the overview; a function is called for them', () => {
+  const entry = commandNamed('on')
+  for (const [details, text] of [['MANUAL-AS-TEXT', 'MANUAL-AS-TEXT'], [() => 'MANUAL-FROM-A-CALL', 'MANUAL-FROM-A-CALL']]) {
+    entry.details = details
+    try {
+      assert.ok(helpText('on').endsWith(text), helpText('on'))
+      assert.ok(!helpText().includes(text))
+    } finally { delete entry.details }
+  }
+})
+
 test('every command of the table parses its own usage line: every option the usage shows is declared, and nothing is declared twice', () => {
   for (const c of COMMANDS) {
     const declared = [...optionsOf(c).keys()]
