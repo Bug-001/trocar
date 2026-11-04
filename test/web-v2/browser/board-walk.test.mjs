@@ -1,5 +1,6 @@
 // test/web-v2/browser/board-walk.test.mjs — scripts/board-walk.mjs (1.12 §5) in a child process against the real face on a temp HOME:
-// AN12 walks every screen and keeps the token out of what it writes; AN13 reports a seeded dead control and counts what the cap left out.
+// AN12 walks every screen from `board --json`'s document and keeps the token out of what it writes; AN13 reports a seeded dead control by its
+// role alone, counts what the cap left out, clips what the console says and stops every request but GET.
 // Asserted on walk.json's fields, the exit code and the files, never on words. Browser suite only (`npm run test:browser`).
 import fs from 'node:fs'
 import path from 'node:path'
@@ -63,7 +64,10 @@ test('AN12 every screen of the board is walked, one item and one PNG each, and n
   try {
     const tmp = tmpDir('trocar-walk-')
     const board = path.join(tmp, 'board'), out = path.join(tmp, 'out')
-    fs.writeFileSync(board, `${address(face)}\n`)
+    const tokenFile = path.join(tmp, 'token')
+    fs.writeFileSync(tokenFile, `${face.token}\n`, { mode: 0o600 })
+    fs.writeFileSync(board, JSON.stringify({ schema: 2, command: 'board', ok: true, url: `${face.base}/`, token_file: tokenFile, port: Number(new URL(face.base).port), state: 'running' }), { mode: 0o600 })
+    assert.ok(!fs.readFileSync(board).includes(face.token))
     const r = await walk(home, board, out)
     assert.deepEqual(r.doc.screens.map((s) => s.screen).sort(), Object.keys(SCREEN_NAME).sort())
     for (const s of r.doc.screens) {
@@ -78,15 +82,21 @@ test('AN12 every screen of the board is walked, one item and one PNG each, and n
   } finally { await face.close() }
 })
 
-test('AN13 a seeded dead control is reported and exits 1; past the cap the rest is counted in skipped', { skip }, async () => {
+test('AN13 a seeded dead control is reported by role and exits 1, its text stays out, the console is clipped, a POST never leaves; past the cap the rest is counted in skipped', { skip }, async () => {
   const dead = '<button aria-expanded="false" aria-label="seeded-dead" style="position:fixed;left:0;bottom:0;z-index:2147483647">x</button>' +
-    '<div role="separator" tabindex="0" aria-label="seeded-split" style="position:fixed;left:40px;bottom:0;width:8px;height:40px;z-index:2147483647"></div>'
+    '<div role="separator" tabindex="0" aria-label="seeded-split" style="position:fixed;left:40px;bottom:0;width:8px;height:40px;z-index:2147483647"></div>' +
+    '<button aria-expanded="false" onclick="fetch(\'/control/x\',{method:\'POST\'})" style="position:fixed;left:60px;bottom:0;z-index:2147483647">y</button>' +
+    '<script>console.error(\'x\'.repeat(5000))</script>'
   const one = await seeded(dead, '#/settings/appearance', '[aria-expanded], summary', (url) => JSON.stringify({ url }))
   const walked = one.doc.screens.find((s) => s.screen === 'settings-appearance')
   assert.equal(one.code, 1)
   assert.equal(one.doc.ok, false)
-  assert.ok(walked.dead.some((d) => d.name === 'seeded-dead'))
-  assert.ok(walked.dead.some((d) => d.role === 'separator' && d.name === 'seeded-split'))
+  assert.ok(walked.dead.some((d) => d.role === 'button'))
+  assert.ok(walked.dead.some((d) => d.role === 'separator'))
+  for (const text of ['seeded-dead', 'seeded-split']) assert.ok(!JSON.stringify(one.doc).includes(text), text)
+  assert.ok(walked.errors.console.length > 0)
+  for (const line of walked.errors.console) assert.ok(line.length <= 200, line.slice(0, 40))
+  assert.ok(walked.errors.requests.some((line) => line.includes('POST') && !/^\d/.test(line)), JSON.stringify(walked.errors.requests)) // no HTTP status: it never reached the server
 
   const many = Array.from({ length: 50 }, (_, i) => `<button aria-expanded="false" style="width:9px;height:9px;padding:0">${i}</button>`).join('')
   const crowd = await seeded(`<div style="position:fixed;left:0;right:0;bottom:0;display:flex;flex-wrap:wrap;z-index:2147483647">${many}</div>`,
