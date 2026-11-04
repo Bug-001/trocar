@@ -430,3 +430,23 @@ test('§4.4, §1.1: in every state a rule can be in, a person reads a word and n
     }
   }
 })
+
+test('V115: a regex that does not parse is exit 2 rule-invalid wherever a rule writes one, and a good one passes', async () => {
+  const llm = { harness: 'claude-code', host: 'api.anthropic.com' }
+  const bad = [
+    rule({ match: { ...llm, path: { re: '(' } } }),
+    rule({ match: { ...llm, header: { 'x-a': { not: [{ re: '[' }] } } } }),
+    rule({ match: { ...llm, blocks: { text: { re: '\\-' } } } }),
+    rule({ do: [{ replace: '(', with: 'x' }] }),
+    rule({ do: [{ blocks: { text: { re: '(' } }, remove: true }] }),
+  ]
+  for (const value of bad) {
+    const s = sandbox()
+    const { exit, doc } = await add(s, value)
+    assert.equal(exit, 2, JSON.stringify(value))
+    assert.equal(doc.error.code, 'rule-invalid')
+    assert.equal(fs.existsSync(s.file), false)
+  }
+  const s = sandbox()
+  assert.equal((await add(s, rule({ do: [{ replace: '(', with: 'x', literal: true }] }))).exit, 0)
+})

@@ -101,9 +101,11 @@ test('V117: a script runs only with --run-script, and its console comes back', a
     assert.equal(skipped.doc.records[0].console, undefined)
     assert.equal(called.requests(), 0)
     assert.equal(skipped.exit, 1, 'nothing could be tested')
+    assert.equal(skipped.doc.error.code, 'rule-test-incomplete')
 
     const ran = await rulesTest(s, 'scripted', '--ref', refOf(1), '--run-script')
     assert.equal(ran.exit, 0)
+    assert.equal(Object.hasOwn(ran.doc, 'error'), false)
     assert.equal(ran.doc.run_script, true)
     assert.match(ran.doc.records[0].console, /the script ran/)
     assert.equal(called.requests(), 1)

@@ -4,7 +4,7 @@
 import nodeFs from 'node:fs'
 import { EXIT, newReceipt } from './schema.mjs'
 import { printJson, errorDoc } from './json.mjs'
-import { colors, columns, ago, pairs, tilde, wrap } from './text.mjs'
+import { colors, columns, ago, pairs, size, tilde, wrap } from './text.mjs'
 import { commandNamed } from './commands.mjs'
 import { testRule } from './rules-test.mjs'
 import { controlEndpointFor } from '../off/control-client.mjs'
@@ -12,10 +12,11 @@ import { trocarHome } from '../off/paths.mjs'
 import { collectorHome, rulesFile, rulesLog } from '../paths.mjs'
 import { runQuery, QueryArgError } from '../query/named/index.mjs'
 import { ENGINE_ACTIONS, LIMITS } from '../rules/closed.mjs'
+import { parseCondition, patterns } from '../rules/conditions.mjs'
 import { buffersOf } from '../rules/describe.mjs'
 import { edit, readBounded, readRules, RuleRefused } from '../rules/file.mjs'
 import { isArmed, readRuleFacts, ruleState } from '../rules/state.mjs'
-import { actionKind, checkRule, normalizeRule, parseRulesBytes } from '../rules/validate.mjs'
+import { actionKind, checkRule, conditionsOf, normalizeRule, parseRulesBytes } from '../rules/validate.mjs'
 
 const DAEMON_TIMEOUT_MS = 3000
 const WORDS = Object.freeze({ live: 'live', resting: 'resting', waiting: 'waits for on', 'stopped-by-off': 'stopped by off', 'limit-reached': 'limit reached', 'process-gone': 'process ended', 'load-failed': 'not loaded', disabled: 'off', tripped: 'not running' })
@@ -71,7 +72,7 @@ const withProblems = (receipt, problems) => (problems.length ? { ...receipt, pro
 /** 1.6 §4.4: a reminder per way of writing a rule. `stream` and not `on: response`: a rule that only touches the head of a response gathers no body to run out of time on. */
 function notesOf(rule) {
   const kinds = rule.do.map(actionKind), holds = kinds.includes('hold'), out = []
-  if (rule.whole === true) out.push('This rule delays the whole response: the agent gets no byte until it is complete, up to 67 MB and 10 minutes.')
+  if (rule.whole === true) out.push(`This rule delays the whole response: the agent gets no byte until it is complete, up to ${size(LIMITS.bodyBytes)} and 10 minutes.`)
   if (rule.on_error === 'drop') out.push('on_error drop: this rule cuts the connection whenever it cannot judge a request, for any reason, so write its conditions narrowly. On its hosts that includes connections trocar doesn\'t decrypt, connections that aren\'t HTTP, and connections where it can\'t see where requests start.')
   if (buffersOf(rule) === 'stream' && rule.on === 'response') out.push(`This rule does not apply to a response that isn't SSE and doesn't finish within the max delay: ${rule.on_error === 'drop' ? 'the response is cut, each time' : 'the response passes unchanged'}. Add "whole": true to wait for the whole response.`)
   if (holds) out.push('A hold longer than the upstream\'s idle timeout closes the agent\'s connection only on a tunnel or a credentialed proxy; elsewhere trocar dials again on release.')
@@ -90,13 +91,27 @@ async function inputBytes(c, source) {
   return Buffer.concat(chunks)
 }
 
+/** The first regex of a rule that does not parse, and why. The shared check cannot tell, because the daemon goes through it and builds no regex; here building one only parses it. */
+function badRegex(rule) {
+  const selectors = [rule.match.blocks, ...rule.do.map((action) => action.blocks)].filter((selector) => selector?.text !== undefined)
+  const written = [...conditionsOf(rule.match), ...selectors.map(({ text }) => ({ path: 'blocks.text', key: 'body', value: text }))]
+    .flatMap(({ path, key, value }) => patterns(parseCondition(value, { key })).map((source) => ({ path, source })))
+  written.push(...rule.do.filter((action) => actionKind(action) === 'replace' && action.literal !== true).map((action) => ({ path: 'replace', source: action.replace })))
+  for (const { path, source } of written) {
+    try { new RegExp(source, 'u') } catch (e) { return `${path}: ${e.message}` }
+  }
+  return null
+}
+
 async function parsedInput(c, source) {
   let bytes
   try { bytes = await inputBytes(c, source) } catch (e) { return { problem: `${source} cannot be read: ${e.code === 'ENOENT' ? 'there is no such file' : e.message}` } }
   const { doc, problem } = parseRulesBytes(bytes)
   if (problem) return { problem: `${source}: ${problem.reason}` }
   const rule = normalizeRule(doc), [first] = checkRule(rule, { input: true })
-  return first ? { problem: `${first.path ? `${first.path}: ` : ''}${first.reason}` } : { rule }
+  if (first) return { problem: `${first.path ? `${first.path}: ` : ''}${first.reason}` }
+  const bad = badRegex(rule)
+  return bad ? { problem: bad } : { rule }
 }
 
 async function add(c, [source]) {
@@ -161,7 +176,7 @@ async function stop(c, names, { verb, change, past }) {
 /** What a run of `rules off` amounts to, in the words of 1.6 §4.4: the line it leads with, and what is still wrong. */
 function offOutcome(memory, written, seq) {
   if (written && memory !== 'no-answer') return { lead: 'All rules are off.', problems: [] }
-  if (written) return { lead: 'The rule file has every rule off.', problems: ['The collector did not answer: until it reads the file, rules may still be acting.'] }
+  if (written) return { lead: 'The rule file has every rule off.', problems: ['Until the collector reads the file, rules may still be acting.'] }
   if (memory === 'stopped') return { lead: 'All rules have stopped, but the rule file was not changed.', problems: [seq.written ? 'Only trocar rules enable brings a rule back.' : 'The collector could not record the stop either, so the rules come back when it restarts.'] }
   if (memory === 'no-daemon') return { lead: 'The rule file was not changed.', problems: ['The collector is not running, and the rules come back when it starts.'] }
   return { lead: 'Rules have not stopped.', problems: ['The collector did not answer and the rule file was not changed. To take trocar out of the way: trocar off'] }
@@ -182,10 +197,11 @@ async function off(c) {
   const notes = [...moved.map((p) => `${rulesFile(c.home)} could not be used. It is kept as ${p}.`), ...(e.kept_delay === false ? [`The max delay could not be read from it, so it is ${e.after.max_delay_ms} ms now.`] : [])]
 
   const reason = e.ok ? null : failureOf(e).message
+  const failure = reason ? { code: 'rules-unwritable', message: reason } : memory === 'no-answer' ? { code: 'rules-no-answer', message: 'the collector did not answer.' } : null
   const { lead, problems } = offOutcome(memory, e.ok, seq)
   const w = wrote(c, e)
   const doc = { ...newReceipt(command), ...w.fields, ok: e.ok && memory !== 'no-answer', rules, memory, file: { written: e.ok, reason },
-    ...(seq ? { seq } : {}), held, notes, problems: [...problems, ...w.problems], ...(reason ? { error: { code: 'rules-unwritable', message: `trocar ${command}: ${reason}` } } : {}) }
+    ...(seq ? { seq } : {}), held, notes, problems: [...problems, ...w.problems], ...(failure ? { error: { ...failure, message: `trocar ${command}: ${failure.message}` } } : {}) }
   return { doc, lines: [[lead, ...heldLines(held)].join(' '), ...notes.flatMap((n) => wrap(n))], exit: doc.ok ? EXIT.ok : EXIT.incomplete }
 }
 

@@ -185,11 +185,12 @@ export async function testRule(c, [name]) {
   if (counts.untested) notes.push('Scripts did not run: they can fetch, so they may have side effects. Add --run-script to run them.')
 
   const over = Object.keys(times).filter((n) => times[n] > read.doc.max_delay_ms)
-  const exit = !tested || errors ? EXIT.incomplete : EXIT.ok
+  const short = !tested ? 'no record could be tried' : errors ? `${records(errors)} ended in an error` : null
+  const exit = short ? EXIT.incomplete : EXIT.ok
   const doc = {
     ...newReceipt(COMMAND), ok: exit === EXIT.ok, rule: name, input: asSent ? 'as-sent' : 'default', with_live: withLive, run_script: runScript,
     counts: { tested, ...counts, continuations }, records: rows, rule_ms: Object.fromEntries(Object.entries(times).map(([n, ms]) => [n, Math.ceil(ms)])), over_max_delay: over,
-    passthrough_hosts: hosts, notes,
+    passthrough_hosts: hosts, notes, ...(short ? { error: { code: 'rule-test-incomplete', message: `trocar ${COMMAND}: ${short}.` } } : {}),
   }
   return { doc, exit, lines: textOf(doc, { name, last, maxDelay: read.doc.max_delay_ms }) }
 }

@@ -169,6 +169,7 @@ test('V116: the daemon does not answer: exit 1 even with the file written; neith
     valid(first.doc)
     assert.equal(first.doc.memory, 'no-answer')
     assert.equal(first.doc.ok, false)
+    assert.equal(first.doc.error.code, 'rules-no-answer')
     assert.equal(first.doc.file.written, true)
     assert.equal(Object.hasOwn(first.doc, 'seq'), false)
     assert.ok(first.doc.problems.length > 0)

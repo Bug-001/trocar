@@ -8,7 +8,7 @@ export { printJson } from '../off/io.mjs'
 export { errorDoc } from '../off/schema.mjs'
 
 // 附录 C.1: the ONE place a refusal's code lives. A receipt never carries a top-level `code` — a client reads `error.code` and nothing else.
-export const ERROR_CODES = Object.freeze(['usage', 'failed', 'internal', 'key-custody-failed', 'older-install', 'cert-not-installed', 'collectors-online', 'autostart-missing', 'setup-needed', 'board-down', 'unreadable',
+export const ERROR_CODES = Object.freeze(['usage', 'failed', 'internal', 'rules-no-answer', 'rule-test-incomplete', 'key-custody-failed', 'older-install', 'cert-not-installed', 'collectors-online', 'autostart-missing', 'setup-needed', 'board-down', 'unreadable',
   'checkout-unreadable', 'child-crashed', 'daemon-not-replaced', 'fetch-failed', 'handover-not-removed', 'handover-unwritable', 'installer-failed', 'installer-missing', 'local-changes', 'merge-failed', 'no-upstream', 'not-a-checkout',
   'not-fast-forward', 'npm-failed', 'npm-package', 'off-failed', 'place-failed', 'state-unreadable',
   'rule-invalid', 'rule-unknown', 'engine-unsupported', 'too-many-scripts', 'rules-unwritable', 'held-unknown', 'held-gone', 'held-body-rejected', 'daemon-absent',

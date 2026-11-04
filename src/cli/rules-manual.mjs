@@ -115,11 +115,11 @@ export function rulesManual() {
       table([18], [
         ['--ref <record>', 'names a record; give it again for more'],
         ['--last <n>', 'the newest n records, at most 500'],
-        ['--with-live', 'runs the rules that are on first, in file order, and this one after them'],
+        ['--with-live', 'runs it together with the rules that are on, in file order, as the live path would'],
         ['--as-sent', 'a request rule reads the bytes as they went on the wire, not what the agent sent'],
         ['--run-script', 'runs a script rule. Without it the record is marked untested, because a script can reach the network'],
       ]),
-      wrap(`Each record has ${seconds(2000)} at most, and the output says how long each rule took. A rule over the max delay will time out once it is on.`)),
+      wrap(`Each record has ${seconds(2000)} at most, and the output says how long each rule took. A rule over the max delay will time out once it is on. It exits 1 when no record could be tried or a record ended in an error, so trocar rules test x && trocar rules enable x stops there.`)),
     ...section('A rule',
       wrap('A rule file holds one JSON object with these keys.'),
       table([9], [
@@ -264,7 +264,7 @@ export function rulesManual() {
       )),
     ...section('Before you rely on a rule',
       bullets(
-        'replace reaches every string of the body, the model name and signature fields included. Narrow it with blocks.',
+        'replace reaches every string value of the body, the model name and signature fields included. Narrow it with blocks. It leaves object keys alone unless it says in: body.',
         'A text rule on the OpenAI Responses API has to write whole. Without it the deltas stay as they were and the final text changes, so what the agent shows and what it stores differ.',
         'A compressed request body is sent as plain text after a change, without its content-encoding. Our tests cannot confirm that an upstream takes plain text in place of zstd.',
         'How long a hold can really wait also depends on the agent\'s own client timeout.',
