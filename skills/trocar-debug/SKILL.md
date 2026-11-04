@@ -60,7 +60,7 @@ A finding here is a lead. Confirm it before you report it.
 | Records | The stored bytes are the truth; everything else can be rebuilt from them | `query segments`, contract-check | 4.2 |
 | Agent recognition | Each call lands in the right session and lane, under an honest name | `query sessions`, `query session --id <id> --head` | 3.1, 3.4 |
 | Replay | Each step shows what was really sent and received | `query session`, `query lane`, `query block` | 1.4, 3.5 |
-| Cache and cost | Numbers come from reported usage; unknown stays unknown | `query session --id <id> --head`, `query pricing` | 3.3 |
+| Cache and cost | Numbers come from reported usage; unknown stays unknown | `query session --id <id> --head`, `query analysis`, `query pricing` | 3.3 |
 | Traffic and storage | Every host and class is accounted for | `query traffic`, `query calls`, `query classes` | 1.10, 1.11 |
 | CLI | One document under `--json`, the documented exit codes, plain English | `trocar help --json` | 1.6 §1 |
 | Board | The twelve checks | Step 5 | `trocar skill trocar-ux` |
