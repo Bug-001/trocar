@@ -68,7 +68,7 @@ const HOME_PATH = new RegExp(`${SEP}(?:Users|home)${SEP}(${HOME_NAME}(?: ${HOME_
 const GAP = '[\\t\\r\\n ]*' // a URL parser drops tabs and newlines, and a data: URI survives the rest
 const spaced = (word) => [...word].join(GAP)
 // a bitmap, or anything in base64: SVG as text is text. Up to a quote, a bracket or a space, where the address ends, so that only the same image is already public, whatever else its line holds
-const DATA_IMAGE = new RegExp(`${spaced('data:')}${GAP}(?:${spaced('image')}${GAP}${SEP}${GAP}(?!${spaced('svg')}(?![^,\\s]*;${GAP}${spaced('base64')}))|;${GAP}[^,\\r\\n]*?${spaced('base64')})[\\w.~:/?#@!$&*+,;=%\\\\-]*`, 'gi')
+const DATA_IMAGE = new RegExp(`${spaced('data:')}${GAP}(?:${spaced('image')}${GAP}(?!${SEP}${GAP}${spaced('svg')}(?![^,\\s]*;${GAP}${spaced('base64')}))${SEP}|;${GAP}[^,\\r\\n]*?${spaced('base64')})[\\w.~:/?#@!$&*+,;=%\\\\-]*`, 'gi')
 const HAS_PAYLOAD = /,./ // past the comma: without it this is only how a URI starts, and that is public everywhere
 const ENTITY = /&(?:#(\d+)|#x([0-9a-f]+)|(colon|sol|tab|newline));?/gi
 const NAMED = { colon: ':', sol: '/', tab: '\t', newline: '\n' }
