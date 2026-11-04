@@ -369,13 +369,13 @@ export function renderRough(el, s, at, K) {
   if (!head.tier) {
     if (nav) nav.innerHTML = ''
     const bs = head.buckets || [], mx = Math.max(1, ...bs.map((b) => b.calls))
-        q(el, '#ovstrip').innerHTML = bs.length ? stripHtml(bs.length, (i) => bs[i].calls / mx, () => false, true) : ''
+    q(el, '#ovstrip').innerHTML = bs.length ? stripHtml(bs.length, (i) => bs[i].calls / mx, () => false, true) : ''
     rows.innerHTML = BRACKET()
     return
   }
   const cells = cellsOf(head.cols), per = head.bucket || 1, pk = Math.max(1, head.peak), at3 = (i) => 3 * Math.floor(i / per)
   const chs = head.chapters && head.chapters.length ? head.chapters : [{ s0: 0, s1: N, ts0: null, inferred: false }]
-    q(el, '#ovstrip').innerHTML = stripHtml(N, (i) => cells[at3(i)] / 255, (i) => !!(cells[at3(i) + 2] & FLAG.failed)) + chapterTicksHtml(chs, (g) => g, N) + BRUSH()
+  q(el, '#ovstrip').innerHTML = stripHtml(N, (i) => cells[at3(i)] / 255, (i) => !!(cells[at3(i) + 2] & FLAG.failed)) + chapterTicksHtml(chs, (g) => g, N) + BRUSH()
   if (nav) nav.innerHTML = chapterNavHtml(chs, at, N)
   const { lo, hi } = roughWindow(head, at, K)
   placeBrush(el, N, lo, hi, at)

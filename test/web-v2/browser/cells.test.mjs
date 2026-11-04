@@ -143,6 +143,7 @@ test('Shift+V redraws the cells within one window height below the visible area 
       return h
     })
     assert.ok(h, 'an open cell far enough down to start below the visible area')
+    await b.page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))) // the window draws for the scroll in its own frame
     await b.page.waitForFunction(() => { const R = document.querySelector('#ctxwin').getBoundingClientRect(); return [...document.querySelectorAll('#ctxwin .cblk')].some((x) => { const r = x.getBoundingClientRect(); return r.bottom > R.top && r.top < R.bottom }) })
     const cellsBelow = () => b.page.evaluate((h) => {
       const R = document.querySelector('#ctxwin').getBoundingClientRect()
