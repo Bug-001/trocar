@@ -30,8 +30,9 @@
 .desk.next #ctxwin .cblabel{color:var(--ink-2);}
 .desk.next #ctxwin .cbchars{text-align:right;color:var(--ink-2);}
 /* an open head stays under the section header while its block is read, and holds the cell's controls at the right: the buttons take one
-   line of the head; where a finger needs 44 px, or at 600 px and narrower where they take a line of their own, the head grows */
-.desk.next #ctxwin .cblk:not(.collapsed) > .cbh{position:sticky;top:var(--cwsec-pitch);z-index:1;height:auto;min-height:var(--cblk-ih);}
+   line of the head; where a finger needs 44 px, at 600 px and narrower where they take a line of their own, or where the marks leave
+   them no room on the first line (the row clips what overflows it), the head grows */
+.desk.next #ctxwin .cblk:not(.collapsed) > .cbh{position:sticky;top:var(--cwsec-pitch);z-index:1;flex-wrap:wrap;height:auto;min-height:var(--cblk-ih);}
 .desk.next #ctxwin .cblk:not(.collapsed) > .cbh:hover{background:linear-gradient(var(--hover),var(--hover)),var(--sunk);}
 .desk.next #ctxwin .cbh > .cellbar{flex:0 1 auto;flex-wrap:nowrap;min-width:0;max-width:none;margin:0 0 0 auto;overflow:visible;white-space:nowrap;cursor:default;}
 .desk.next #ctxwin .cbh > .cbchars + .cellbar{margin-left:0;}
