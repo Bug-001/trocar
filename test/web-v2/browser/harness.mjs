@@ -24,12 +24,23 @@ function closeQuietly(t, routed) {
   }
 }
 
-/** The system Chrome (`chromium` is playwright-core's), with a temp directory of its own as TMP / TEMP / TMPDIR: what it leaves there (on
- *  Windows a chrome_url_fetcher_* folder) goes when the browser closes, never into the run's temp directory, which leak-guard checks.
- *  Closing the browser, any context or any page of it first drops the routes on what closes (closeQuietly). */
+/** Chrome on Windows learns whether the account's password is blank by logging on with an empty one (LogonUser, interactive), soon after
+ *  start, and caches the answer in the profile's Local State under these two keys; it tries again only once the password changes after
+ *  `os_password_last_changed` (Chrome time, µs since 1601). A fresh profile has no cache, so every launch made one failed logon, and the ten
+ *  launches of one browser file in ten minutes locked the account out (Security log 4625 then 4740), ssh with it. The cached answer, dated
+ *  at the largest value, means no launch ever tries; other systems never read the keys. */
+const LOCAL_STATE = { password_manager: { os_password_blank: false, os_password_last_changed: '9223372036854775807' } }
+
+/** The system Chrome (`chromium` is playwright-core's), with a temp directory of its own as TMP / TEMP / TMPDIR and as the parent of its
+ *  profile (seeded with LOCAL_STATE): what it leaves there (on Windows a chrome_url_fetcher_* folder) goes when the browser closes, never
+ *  into the run's temp directory, which leak-guard checks. Closing the browser, any context or any page of it first drops the routes on
+ *  what closes (closeQuietly). */
 export async function launchChrome(chromium) {
   const tmp = tmpDir('trocar-chrome-')
-  const browser = await chromium.launch({ ...CHANNEL, env: { ...process.env, TMP: tmp, TEMP: tmp, TMPDIR: tmp } })
+  const profile = path.join(tmp, 'profile')
+  fs.mkdirSync(profile)
+  fs.writeFileSync(path.join(profile, 'Local State'), JSON.stringify(LOCAL_STATE))
+  const browser = (await chromium.launchPersistentContext(profile, { ...CHANNEL, env: { ...process.env, TMP: tmp, TEMP: tmp, TMPDIR: tmp } })).browser()
   browser.once('disconnected', () => removeTmp(tmp))
   const newContext = browser.newContext.bind(browser)
   browser.newContext = async (...a) => {
