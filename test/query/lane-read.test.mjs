@@ -14,6 +14,8 @@ import { listOf } from '../../src/view/reduce.mjs'
 import { compareStep } from '../../src/view/step-order.mjs'
 import { PAGE_BYTES } from '../../src/query/session-doc.mjs'
 import { BLOCK_PROBLEMS } from '../../src/health/codes.mjs'
+import { record, replyOf, user } from '../helpers/cc-threads.mjs'
+import { homeWith } from '../helpers/session-doc.mjs'
 
 const homeOf = (p) => path.join(tmpDir(p), '.trocar')
 const q = (name, home, params, ctx = {}) => runQuery(name, params, { home, fs, ...ctx })
@@ -290,9 +292,9 @@ const TOP = ['schema', 'command', 'ok', 'errors', 'lane', 'base', 'mark', 'steps
 const STEP = ['rid', 'parent', 'ops', 'reply', 'attrs', 'detail']
 const DETAIL = ['norm', 'respRefs', 'nonBlockKeys', 'extraMessages', 'wire']
 const NORM = ['stop_reason', 'usage']
-const DEF = ['bid', 'fh', 'ref', 'sec', 'role', 'kind', 'label', 'name', 'mcp', 'cc', 'ff', 'head', 'preview', 'chars', 'bytes', 'resKey', 'r', 'unaddressable', 'inline']
+const DEF = ['bid', 'fh', 'ref', 'sec', 'role', 'kind', 'label', 'name', 'mcp', 'cc', 'ff', 'head', 'preview', 'chars', 'bytes', 'resKey', 'reads', 'r', 'unaddressable', 'inline']
 const HEAD = ['role', 'tag', 'label']
-const R = ['as', 'tone', 'title', 'f']
+const R = ['as', 'tone', 'title', 'guess', 'f', 'kids']
 const ATTR = ['query', 'volatile']
 const SEEN = ['path', 'firstRid', 'count']
 const contract = JSON.parse(fs.readFileSync(new URL('../fixtures/session-read-contract.json', import.meta.url), 'utf8'))
@@ -309,7 +311,9 @@ function closedSets(p, sample) {
   const must = Object.keys(sample.defs[0] || {}).filter((k) => DEF.includes(k) && !['label', 'name', 'mcp', 'cc', 'resKey'].includes(k))
   for (const d of p.defs) {
     subset(d, DEF, 'def'); for (const k of must) assert.ok(k in d, `def: ${k} is missing`)
-    subset(d.head, HEAD, 'def.head'); subset(d.r, R, 'def.r')
+    subset(d.head, HEAD, 'def.head')
+    assert.equal('r' in d, 'inline' in d, `${d.bid}: only a block read from its inline body comes with a render spec`)
+    if (d.r) { subset(d.r, R, 'def.r'); assert.ok(Array.isArray(d.r.f.body), `${d.bid}: r.f.body`) }
     assert.match(d.bid, /^[A-Za-z0-9_-]{22}$/); assert.match(d.fh, /^[A-Za-z0-9_-]{22}$/)
     assert.equal(d.ref === null, 'unaddressable' in d, `${d.bid}: an unaddressable block has ref null and says why`)
   }
@@ -496,6 +500,26 @@ test('3.5 定义 name: every tool_use definition of a lane answer carries the na
       assert.ok(bytes.includes(JSON.stringify(d.name)), `${id}: def ${d.bid} names ${JSON.stringify(d.name)}, the name in its bytes`)
     }
   }
+})
+
+// 3.5 §会话读 `reads`: a call and its result sit in different records on the thread wire; the result's definition still says how it reads
+test('lane: a tool_result takes its reads from the tool_use of the same id, in another record', async () => {
+  const id = 'sess-threads'
+  const calls = { shell: { command: 'ls' }, doc: { filePath: '/w/notes.md' }, src: { file_path: '/w/a.mjs' }, edit: { file_path: '/w/notes.md', old_string: 'a', new_string: 'b' },
+    write: { file_path: '/w/new.md', content: '# new' } }
+  const uses = Object.entries(calls).map(([k, input]) => ({ type: 'tool_use', id: `tu_${k}`, name: 'T', input }))
+  const results = Object.keys(calls).map((k) => ({ type: 'tool_result', tool_use_id: `tu_${k}`, content: `result of ${k}` }))
+  const billing = { type: 'text', text: 'x-anthropic-billing-header: cc_version=2.1; cch=1;' }
+  const base = { model: 'claude-opus-x', max_tokens: 100, stream: true, metadata: { user_id: JSON.stringify({ device_id: 'd', session_id: id }) } }
+  const home = homeWith([
+    record('M0', '2026-10-20T00:00:01.000Z', { ...base, thread: { type: 'create' }, system: [billing, { type: 'text', text: 'You are Claude Code, the main agent.' }], tools: [{ name: 'T', description: 'd', input_schema: { type: 'object' } }], messages: [user('go')] }, replyOf('msg_0', uses)),
+    record('M1', '2026-10-20T00:00:02.000Z', { ...base, thread: { type: 'continue', previous_message_id: 'msg_0' }, system: [billing], tools: [], messages: [{ role: 'user', content: results }] }, replyOf('msg_1', [{ type: 'text', text: 'done' }]))])
+  const { lanes } = await q('session', home, { id })
+  assert.equal(lanes.length, 1, 'one thread, one lane')
+  const { defs } = await q('lane', home, { id, lane: lanes[0].lane })
+  const reads = Object.fromEntries(defs.filter((d) => d.kind === 'tool_result').map((d) => [d.preview.replace('result of ', ''), d.reads]))
+  assert.deepEqual(reads, { shell: 'code', doc: 'markdown', src: undefined, edit: undefined, write: undefined })
+  for (const d of defs) if (d.kind !== 'tool_result') assert.ok(!('reads' in d), `${d.kind}: reads is a tool_result's`)
 })
 
 // 2.3 §保真标 · 3.5 §会话读: a tool definition an older capture kept only as metadata (no description text, no schema) goes out with
