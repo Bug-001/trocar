@@ -26,7 +26,7 @@ const notRegular = () => Object.assign(new Error('not a regular file'), { code: 
 
 /** At most `limit` bytes of a regular file. Throws for anything else, the file's own error or `not-regular`. A path swapped for a FIFO after the stat
  *  still cannot block: O_NONBLOCK, then fstat what was opened. */
-function readBounded(fs, file, limit) {
+export function readBounded(fs, file, limit) {
   if (!fs.statSync(file).isFile()) throw notRegular()
   const fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK || 0))
   try {

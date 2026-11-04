@@ -624,7 +624,7 @@ Whether Desktop's own model calls come out decrypted verbatim is not claimed her
 
 ## Commands
 
-`trocar help` prints the same, in three sections; `trocar help <command>` says one command.
+`trocar help` prints the same, in four sections; `trocar help <command>` says one command.
 
 ```sh
 # common
@@ -643,6 +643,13 @@ trocar classes add <class> <host-regex> [<path-regex>] [--harness <harness>]
 trocar classes rm <class> [<rule>]
 trocar classes reset
 trocar board                  # prints the board's address with your key and opens it; exit 1 when the board is not there
+
+# intervene
+trocar rules [<name>] [--json]
+trocar rules add <file|-> [--replace] [--dry-run] [--json]   # a rule is added switched off
+trocar rules enable|disable|rm <name>... [--json]
+trocar rules off [--json]     # stops every rule, from any terminal
+trocar rules max-delay [<ms>] [--json]
 
 # maintenance
 trocar update [--yes] [--dry-run] [--json]   # the newest code, and the machine as it was (D67)

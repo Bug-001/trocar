@@ -2,7 +2,7 @@
 // src/cli/args.mjs parses by, and test/cli/{commands,dispatch}.test.mjs holds equal. One feature has one name: there are no hidden aliases
 // and no test-only public option (D58⑤).
 //   COMMANDS  [{ name, group, usage, summary, options, exits, details?, mutates, needsRoot?, openOptions?, run(argv, ctx) → exit }]
-//     group       'Capture' | 'Data' | 'Maintenance' — the three sections of help, in that order.
+//     group       'Capture' | 'Data' | 'Intervene' | 'Maintenance' — the four sections of help, in that order.
 //     usage       one or more lines, each beginning `trocar <name>` or `sudo trocar <name>` (the first is the one a usage error prints).
 //     summary     two or three sentences of English a user understands: no section numbers, decision numbers, source paths or internal code names.
 //     options     [['--name' | '--name <value>', 'one line of help', { repeat: true }?]] — the declaration src/cli/args.mjs parses by (nothing is guessed).
@@ -13,11 +13,11 @@
 //                 (`classes set|add|rm|reset` refuse root; `classes` shown does not). needsRoot: setup-helper, the one command that must be root.
 //     hidden      not in help or the README: `place`, which only the install scripts and `trocar update` run (§2).
 //     run         gets the argv after the name and the context of runCli: { io, env, home, platform, uid, args: { positionals, flags }, deps }.
-//   helpText    the help, made from the table: the three sections, or one command when named.
+//   helpText    the help, made from the table: the four sections, or one command when named.
 import { optionsOf } from './args.mjs'
 import { wrap, WIDTH } from './text.mjs'
 
-export const GROUPS = Object.freeze(['Capture', 'Data', 'Maintenance'])
+export const GROUPS = Object.freeze(['Capture', 'Data', 'Intervene', 'Maintenance'])
 const via = (file, fn) => async (argv, c) => (await import(file))[fn](argv, c)
 const HARNESS = '[<harness>...]'
 const JSON_OPT = ['--json', 'print one JSON document instead of text, and nothing on stderr']
@@ -89,6 +89,13 @@ export const COMMANDS = Object.freeze([
     options: [],
     exits: [[0, 'the address is printed'], [1, 'the board is not there: trocar is not installed, the collector did not start, or its port is taken'], [2, 'a usage error']] },
 
+  { name: 'rules',
+    group: 'Intervene', mutates: (args) => ['add', 'enable', 'disable', 'rm', 'off'].includes(args.positionals[0]) || (args.positionals[0] === 'max-delay' && args.positionals.length > 1), run: via('./rules.mjs', 'run'),
+    usage: 'trocar rules [<name>] [--json]\ntrocar rules add <file|-> [--replace] [--dry-run] [--json]\ntrocar rules enable|disable|rm <name>... [--json]\ntrocar rules off [--json]\ntrocar rules max-delay [<ms>] [--json]',
+    summary: 'Shows and edits your rules: what trocar changes in the traffic it sees, and only what you wrote down. A rule is added switched off. trocar rules off stops them all at any time, from any terminal.',
+    options: [['--replace', 'with add: change the rule of that name, which switches it off'], ['--dry-run', 'with add: check the rule and print what would happen, writing nothing'], JSON_OPT],
+    exits: [[0, 'done, or shown'], [1, 'it could not be done, or the collector did not answer `rules off`; it says what is still true'], [2, 'nothing ran: a usage error, a rule that is not valid, an unknown rule, or root']] },
+
   { name: 'update',
     group: 'Maintenance', mutates: true, run: via('./update.mjs', 'runUpdateCli'),
     usage: 'trocar update [--yes] [--dry-run] [--json]',
@@ -141,7 +148,7 @@ const split = (line) => {
   return at < 0 ? [line, ''] : [line.slice(0, at), line.slice(at + 1)]
 }
 
-/** The listed usage lines of the three sections, aligned on one column (the `sudo` line is longer than the rest and keeps one space, §2).
+/** The listed usage lines of the sections, aligned on one column (the `sudo` line is longer than the rest and keeps one space, §2).
  *  A line that would pass 80 columns goes on as a second line indented to that column, never ragged at the margin (§1.1⑥). */
 function listing() {
   const rows = COMMANDS.filter((c) => c.group).flatMap((c) => c.usage.split('\n').map((l) => [c.group, ...split(l)]))
@@ -163,7 +170,7 @@ const block = (rows) => {
   })
 }
 
-/** The help (§2, §5.4): the three sections, or `helpText('on')` for one command. A name that is no command throws. */
+/** The help (§2, §5.4): the four sections, or `helpText('on')` for one command. A name that is no command throws. */
 export function helpText(name) {
   if (name !== undefined) {
     const cmd = commandNamed(name)
