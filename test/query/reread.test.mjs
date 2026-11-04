@@ -18,7 +18,7 @@ import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
 import { runQuery } from '../../src/query/named/index.mjs' // first: the named queries' registry imports session.mjs
 import { extendSession } from '../../src/query/named/session.mjs'
 import { answer } from '../../src/query/answers.mjs'
-import { titlesFile } from '../../src/query/titles.mjs'
+import { saveTitles, titlesFile } from '../../src/query/titles.mjs'
 import { workerFork, workerForkIn } from '../helpers/worker-fork.mjs'
 import { within, whileMoving, reporting } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -138,6 +138,21 @@ for (const axis of ['PROJ_V changed', 'FOLD_V changed']) {
     assert.equal(readHead(home, id).pending, null)
   })
 }
+
+test('with no new member `read` follows the frontier in steps of a pack: one head at the first slice, one past each multiple, none between (#43)', async () => {
+  const home = homeOf(), { id } = sessionIn(home), ctx = inWorker(home), spans = (n) => Math.floor(n / PACK_MEMBERS)
+  await foldAll(home, [id])
+  AXES['PROJ_V changed'](home, id)
+  const reads = []
+  for (;;) { // background slices alone: a request's slice would jump the frontier past what the head says
+    await extendSession(ctx, id, 1)
+    if (!rereads(home, id)) break
+    const { read } = readHead(home, id).pending
+    if (read !== reads.at(-1)) reads.push(read)
+  }
+  assert.ok(reads.at(-1) >= PACK_MEMBERS, `read passed a multiple of a pack: ${reads}`)
+  reads.slice(1).forEach((r, i) => assert.ok(spans(r) > spans(reads[i]), `each new read is in a later span: ${reads}`))
+})
 
 test('a new member past the last multiple of a pack: the head says done at the old mark, total, seen at once, the rest of it as it was (#43)', async () => {
   const home = homeOf(), s = sessionIn(home), { id } = s
@@ -431,20 +446,38 @@ test('calls counts no telemetry row, and starts where the tails reach, past the 
   assert.equal(rereads(home, id), false)
 })
 
+test('calls of a session past its first read start where the writer\'s tails reach, round after round, the head\'s mark behind them, and count no telemetry row (#43)', async () => {
+  const home = homeOf(), s = sessionIn(home, 1, 30), { id } = s, ctx = inWorker(home)
+  await foldAll(home, [id])
+  await toTheEnd(ctx, id)
+  for (const k of [40, 60, 50]) {
+    telemetry(s, 3)
+    s.append(k)
+    assert.equal(await extendSession(ctx, id, 0), true, 'the slice leaves members past the frontier')
+    assert.equal(readHead(home, id).pending.calls, k, 'the calls of this round alone')
+    await toTheEnd(ctx, id) // the tails reach them; a mark that moved alone leaves the head where it was
+  }
+})
+
 test('a lane answers with pending during a re-read, at the frontier, in the contract\'s closed set, and with none after it, at an unchanged version too (#43)', async () => {
   const home = homeOf(), { id } = sessionIn(home, 1, 120)
   await foldAll(home, [id])
   lastVersion(home, id)
   AXES['PROJ_V changed'](home, id)
-  const lane = readHead(home, id).axis, set = (d) => Object.keys(d).sort()
+  const lane = readHead(home, id).axis, was = readHead(home, id), set = (d) => Object.keys(d).sort()
   let refuse = true
   const f = Object.assign(Object.create(fs), { renameSync: (a, b) => { if (refuse && b === headFile(home, id)) throw Object.assign(new Error('injected: no room'), { code: 'ENOSPC' }); return fs.renameSync(a, b) } })
-  const ctx = inWorker(home, f), ask = async () => JSON.parse((await answer({ name: 'lane', params: { id, lane } }, ctx)).bytes)
+  const ctx = inWorker(home, f), ask = async (key = lane) => JSON.parse((await answer({ name: 'lane', params: { id, lane: key } }, ctx)).bytes)
+  assert.equal(await extendSession(ctx, id, 0), true, 'the slice leaves members past the frontier: the head says pending')
   const first = await ask()
   assert.deepEqual(set(first), set(CONTRACT.lane_ops))
   assert.deepEqual(set(first.pending), set(CONTRACT.lane_ops.pending))
+  assert.deepEqual(set((await ask('no-such-lane')).pending), set(CONTRACT.lane_ops.pending), 'an empty lane says it too')
   await toTheEnd(ctx, id) // to the last member and the files: the head alone is refused, so the re-read is not over
   assert.ok(rereads(home, id))
+  assert.ok(fs.existsSync(headFile(home, id, true)), 'the head that failed left the one there was')
+  assert.equal(readHead(home, id).pending.seen, true)
+  assert.deepEqual({ ...readHead(home, id), pending: null }, { ...was, pending: null })
   const end = await ask()
   assert.equal(end.pending.done, end.pending.total, 'nothing above the mark, and pending all the same')
   refuse = false
@@ -452,6 +485,7 @@ test('a lane answers with pending during a re-read, at the frontier, in the cont
   assert.equal(rereads(home, id), false)
   const after = await ask(), { pending, ...plain } = CONTRACT.lane_ops
   assert.deepEqual(set(after), set(plain))
+  assert.equal('pending' in await ask('no-such-lane'), false)
   assert.equal(after.mark, end.mark, 'the same frontier')
 })
 
@@ -517,6 +551,42 @@ test('4.4 §人类标题的来源: an unread title alone changes no head: the by
   assert.deepEqual([doc.meta.title, doc.meta.title_source], [null, 'unread'])
   assert.ok(doc.errors.some((e) => e.code === 'record-unreadable'))
   assert.deepEqual(fs.readFileSync(file), bytes)
+})
+
+test('4.4 §人类标题的来源: past a head this worker wrote, a mark that moved and an unread title write no head', async () => {
+  const home = homeOf(), s = sessionIn(home, 1, 30), { id } = s, file = headFile(home, id), raws = new Set()
+  const f = Object.assign(Object.create(fs), {
+    below: 0, // the raw bytes under this offset read as lost
+    openSync: (p, ...a) => { const fd = fs.openSync(p, ...a); if (String(p).startsWith(path.join(home, 'raw'))) raws.add(fd); return fd },
+    readSync: (fd, b, o, n, at, ...a) => { if (raws.has(fd) && at < f.below) throw Object.assign(new Error('EIO: i/o error'), { code: 'EIO' }); return fs.readSync(fd, b, o, n, at, ...a) },
+  }), ctx = inWorker(home, f)
+  await foldAll(home, [id])
+  await toTheEnd(ctx, id)
+  await saveTitles({ home, fs: f })
+  fs.rmSync(titlesFile(home))
+  const bytes = fs.readFileSync(file), { mark } = readHead(home, id)
+  s.append(2)
+  await runQuery('segments', {}, { home, fs: f })
+  f.below = fs.readFileSync(s.file, 'utf8').indexOf('\n') // the first call alone: the new members fold whole, the title is what is lost
+  await toTheEnd(ctx, id)
+  const doc = await runQuery('session', { id }, ctx)
+  assert.notEqual(doc.mark, mark, 'the mark moved')
+  assert.deepEqual([doc.meta.title, doc.meta.title_source], [null, 'unread'])
+  assert.deepEqual(fs.readFileSync(file), bytes)
+})
+
+test('4.4 §人类标题的来源: a head at one mark takes a title the table has since: the next slice writes it', async () => {
+  const home = homeOf(), { id } = sessionIn(home, 1, 3), ctx = inWorker(home)
+  await toTheEnd(ctx, id)
+  const { mark } = readHead(home, id)
+  await saveTitles({ home, fs })
+  const table = JSON.parse(fs.readFileSync(titlesFile(home), 'utf8'))
+  table.titles[id].t = 'a title found since'
+  fs.writeFileSync(titlesFile(home), JSON.stringify(table))
+  await extendSession(ctx, id, 1_000)
+  const { meta, mark: now } = readHead(home, id)
+  assert.equal(now, mark)
+  assert.deepEqual([meta.title, meta.title_source], ['a title found since', 'wire'])
 })
 
 test('a marker with no t leaves the mtimes as they are (#43)', async () => {
