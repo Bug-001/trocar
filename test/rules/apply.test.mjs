@@ -21,7 +21,12 @@ const tier1 = (unit, compiled, budget = byteBudget()) => applyRules(unit, compil
 const tier2 = (unit, compiled, more = {}) => applyRules(unit, compiled, { tier: 2, full, ...more });
 const text = (result) => result.bytes.toString();
 const names = (skipped) => skipped.map(({ rule: name, why }) => [name, why]);
-const seeded = (seed) => (n) => { seed = (Math.imul(seed, 1103515245) + 12345) & 0x7fffffff; return seed % n; };
+const seeded = (seed) => (n) => { // mulberry32: the low bits of a plain LCG cycle, and would never reach most pairs of axes
+  seed = (seed + 0x6D2B79F5) | 0;
+  let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+  return ((t ^ (t >>> 14)) >>> 0) % n;
+};
 
 // Everything a caller reads except the times, which are the only field two runs may differ in.
 const outcome = ({ rule_ms, survivors, escalate, skipped, ...rest }) => ({ ...rest, skipped: names(skipped) });
@@ -47,11 +52,12 @@ test('9, 63: wherever tier 1 finishes, its bytes, edits and every other field ar
     () => '{"a":"\tALPHA"}', // a raw control character
     () => '{"a":"\\q far enough ALPHA"}', // a bad escape: tier 2 reads the body as plain text
     () => '{"a":"\\/ far enough ALPHA"}', // an escape JSON.stringify would not write back
+    () => '{"a":"\ufffd"}', // the byte form a lone surrogate takes in a Buffer
     () => Buffer.from([0x7b, 0xff, 0x41, 0x4c, 0x50, 0x48, 0x41]), // not UTF-8
   ];
   const actions = [
     lit('ALPHA', 'BRAVO'), lit('ALPHA', 'A LONGER ONE'), lit('ALPHA', ''), lit('ALPHA', 'ALPHA'), lit('nALPHA', 'x'), lit('中文', 'Z', { in: 'body' }),
-    lit('ALPHA', 'B"\\\n中', { in: 'body' }), lit('ALPHA', 'B"'), lit('中文', 'Z'), lit('😀', 'smile', { in: 'body' }),
+    lit('ALPHA', 'B"\\\n中', { in: 'body' }), lit('ALPHA', 'B"'), lit('中文', 'Z'), lit('😀', 'smile', { in: 'body' }), lit('\ud800', 'Z', { in: 'body' }),
     { header: 'x-note', set: 'on' }, { header: 'content-type', remove: true }, { delay_ms: 1500 }, { inject: 'data: x\n\n' }, { json: '/a', set: 1 },
   ];
   const r = seeded(9);
