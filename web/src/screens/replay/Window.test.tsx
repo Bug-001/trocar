@@ -209,7 +209,7 @@ test('1.2 格的键 · 2.3 #19: v, Shift+V and c act only from inside a row; f, 
   const s = stateOf(deskN([[sys(), blk({ query: 'q' }), say()]]))
   const key = itemsOf(s).find((it) => it.type === 'row' && it.bi === 2)!.key
   s.openBlocks.add(key)
-  bodyCache.set(flatOf(s)[2].text_ref, { status: 'ok', text: '{"a":1}' })
+  bodyCache.set(flatOf(s)[2].text_ref, { status: 'ok', text: '{"a":1}', view: { r: { as: 'json', f: { body: [] } }, body: { a: 1 } } })
   const writes: string[] = []
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (t: string) => { writes.push(t) } } })
   const seen: string[] = []
