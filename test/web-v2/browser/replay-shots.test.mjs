@@ -7,6 +7,7 @@ import assert from 'node:assert/strict'
 import { probe, withBoard, shoot, layoutFaults } from './harness.mjs'
 import { typeFaults } from './type-inventory.mjs'
 import { CACHE_POPOVER_LABEL } from '../../../web/legacy/labels/replay.mjs'
+import { CT_ORDER } from '../../../web/legacy/replay/analysis.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
@@ -47,6 +48,10 @@ const editFiles = (b, edit) => b.page.route((u) => /^\/api\/d\/(p\d+|open)\./.te
   await r.fulfill({ status: 200, contentType: 'application/x-ndjson', body: lines.map((l) => JSON.stringify(l) + '\n').join('') })
 })
 
+// every step's composition carries every content type at an equal share (1.3 §排布: the gutter lists each, two-digit shares, the
+// most it can ever be asked to hold); the rows are the `c` lines of the pack and tail files
+const everyType = (b) => editFiles(b, (line) => { if (line.c && line.c.comp) for (const k of CT_ORDER) line.c.comp[k] = 1 })
+
 // every measured fact in one page pass
 const layout = (page) => page.evaluate(() => {
   const q = (s) => document.querySelector(s)
@@ -72,6 +77,7 @@ for (const width of [1440, 1280, 1024, 800]) {
     test(`the replay desk fits at ${width} in ${theme}: nothing clipped, the window holds half the height, no side scroll`, { skip }, async () => {
       const b = await withBoard({ bytes: BYTES, width, theme, chromium: gate.chromium })
       try {
+        await everyType(b)
         await openBusiest(b)
         const L = await layout(b.page)
         const F = await layoutFaults(b.page) // the side panel's rows included: a resource's life text wraps, never cut (1.5)
@@ -116,14 +122,19 @@ for (const width of [1440, 1280, 1024, 800]) {
   }
 }
 
-// 1.2 §上下文窗的高度 at a short 1280 × 800 viewport: the step bar stays one row (2.2 §步头放不下: at 1280 the
-// model name shrinks, nothing wraps) and #ctxwin keeps half the available height. 1.3 §窗内步少时收窄: in the session with the
+// 1.2 §上下文窗的高度 at a short 1280 × 800 viewport, every step carrying every content type: the step bar stays one row
+// (2.2 §步头放不下: at 1280 the model name shrinks, nothing wraps) and #ctxwin keeps half the available height. 1.3 §窗内步少时收窄: in the session with the
 // fewest steps every detail lane is at most (bars in the window) × the bar cap wide; the whole-session strip keeps the full width.
 test('at 1280 × 800 the step bar is one row, the window holds half the height, and a few-step session narrows its lanes', { skip, timeout: 120_000 }, async () => {
   const b = await withBoard({ bytes: BYTES, width: 1280, height: 800, chromium: gate.chromium })
   try {
+    await everyType(b)
     await openBusiest(b)
     const L = await layout(b.page)
+    // 1.3 §排布: a step with every content type keeps the main track's row; no gutter glyph is cut (the new desk lists each share)
+    const shares = await b.page.evaluate(() => document.querySelectorAll('#sawgut .gshare').length)
+    assert.ok(shares === 0 || shares === CT_ORDER.length, `${shares} shares in the gutter`)
+    assert.deepEqual((await layoutFaults(b.page, '#saw')).cut, [])
     // one row: every drawn part's middle lies inside the arrows' box (center-aligned parts of different heights share a row)
     const off = await b.page.evaluate(() => {
       const nav = document.querySelector('#stepbar .sb-nav').getBoundingClientRect()
