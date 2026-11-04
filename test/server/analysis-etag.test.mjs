@@ -39,6 +39,7 @@ test('4.4 #9: analysis has a two-part ETag that a new price moves, as it moves o
   const port = server.address().port, id = encodeURIComponent(s.id)
   const api = (p, h) => get(port, p, h), d = (f) => get(port, `/api/d/${f}?id=${id}`, GZ)
   const analysis = (h) => api(`/api/analysis?id=${id}`, h)
+  const window = () => api(`/api/analysis?id=${id}&from=none`) // not a step: the tail page, the whole of this session
 
   let pendings = 0, done = null
   await whileMoving(async () => {
@@ -66,7 +67,7 @@ test('4.4 #9: analysis has a two-part ETag that a new price moves, as it moves o
   assert.notEqual(parts(other.etag)[0], parts(first.etag)[0], 'the stamp moved')
   assert.equal(parts(other.etag)[1], parts(first.etag)[1], 'the version did not')
 
-  const held = JSON.parse((await analysis()).body)
+  const held = JSON.parse((await window()).body)
   const lane = JSON.parse((await api(`/api/session?id=${id}`)).body).lanes[0].lane
   const stable = async () => ({
     session: await api(`/api/session?id=${id}`), lane: await api(`/api/lane?id=${id}&lane=${encodeURIComponent(lane)}`), head: await d('head'), pack: await d('p0.main'),
@@ -84,7 +85,7 @@ test('4.4 #9: analysis has a two-part ETag that a new price moves, as it moves o
   const priced = await analysis({ 'if-none-match': other.etag })
   assert.equal(priced.status, 200, 'a new price is a new answer')
   assert.notEqual(priced.etag, other.etag)
-  const usd = JSON.parse(priced.body).usd, rids = Object.keys(usd).filter((r) => usd[r] != null)
+  const usd = JSON.parse((await window()).body).usd, rids = Object.keys(usd).filter((r) => usd[r] != null)
   assert.ok(rids.length > 0)
   for (const r of rids) assert.equal(usd[r], 10 * held.usd[r], `${r}: ten times the price`)
   const moved = await api('/api/overview', { 'if-none-match': overview.etag })
