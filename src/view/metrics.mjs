@@ -9,7 +9,7 @@
 export const QUIET_CAUSES = new Set(['append', 'first-call', 'volatile-nonce-only']);
 
 export const CACHE_STATES = Object.freeze(['failed', 'no-usage', 'first', 'ttl-rebuild', 'provider-contradiction', 'changed', 'low-hit', 'reused', 'unjudged']);
-const BREAK_STATES = new Set(['ttl-rebuild', 'provider-contradiction', 'changed', 'low-hit']);
+export const BREAK_STATES = new Set(['ttl-rebuild', 'provider-contradiction', 'changed', 'low-hit']);
 const LOW_HIT = 0.3;
 
 const num = (v) => typeof v === 'number' && Number.isFinite(v);
