@@ -6,11 +6,14 @@
 // steps' lists, as the reference server hands them to the page. Every pair: count ≤ 4Δ + 64. Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard, serveWorld } from './harness.mjs'
+import { probe, withBoard, serveWorld, DESK_NEXT, gapInPage, windowGap } from './harness.mjs'
 import { world } from '../desk-world.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
+// which desk a case is about (2.3 rule 4): the legacy desk's groups, or the new desk's virtual list
+const legacyOnly = skip || (DESK_NEXT ? "the legacy desk's groups (2.3 rule 4, 旧台)" : false)
+const nextOnly = skip || (DESK_NEXT ? false : "the new desk's virtual list (2.3 rule 4)")
 const PAIRS = 30
 
 const keysOf = (list) => { const seen = new Map(); return list.map((b) => { const n = seen.get(b) || 0; seen.set(b, n + 1); return `${b}#${n}` }) }
@@ -106,7 +109,7 @@ test('2.3 #34 · D71②: a ±1 step adds and removes at most 4Δ + 64 nodes in #
 // rows; the rest are sized placeholders. Settled at the newest step (an 800-block open turn) and again after scrolling half way:
 // no drawn group lies wholly outside that band unless it holds an open row or the change line, and no placeholder lies inside the
 // visible box.
-test('2.3 #34 · rule 4: inside open cards only the groups near the visible box are rows', { skip }, async () => {
+test('2.3 #34 · rule 4: inside open cards only the groups near the visible box are rows', { skip: legacyOnly }, async () => {
   const w = world(7, { calls: 2100, page: 2100, talk: { pre: 90, len: 1200, every: 40, tail: 800 } }), M = mainRids(w).length
   await onBoard(w, async ({ page, go }) => {
     const faults = () => page.evaluate(() => {
@@ -127,5 +130,51 @@ test('2.3 #34 · rule 4: inside open cards only the groups near the visible box 
     assert.ok(top.groups > 4, 'the newest step has many groups (the shape this case is about)')
     assert.deepEqual(top.out, [])
     assert.deepEqual(mid.out, [])
+  })
+})
+
+// 2.3 #28 · rule 4 (新台): the virtual list holds only the items within one window height above and below the visible box, and the
+// pinned ones (the change line #cachebrk, the reply, the item holding focus, the item holding the selection); no aria-busy group; and
+// the visible box has no gap (harness gapInPage). Settled at the newest step and half way down, and on the first animation frame after
+// each of 20 ←/→ presses: a keydown capture listener arms one requestAnimationFrame, which runs after the step's synchronous commit and
+// before its first paint.
+test('2.3 #28: the rendered window holds only the items within one window height of the view, and the pinned ones; the visible box has no gap', { skip: nextOnly }, async () => {
+  const w = world(7, { calls: 2100, page: 2100, talk: { pre: 90, len: 1200, every: 40, tail: 800 } }), M = mainRids(w).length
+  await onBoard(w, async ({ page, go }) => {
+    const faults = () => page.evaluate(() => {
+      const el = document.querySelector('#ctxwin'), box = el.getBoundingClientRect(), h = el.clientHeight, out = []
+      const sel = document.getSelection(), anchor = sel && sel.rangeCount ? sel.anchorNode : null
+      const pinned = (it) => !!it.querySelector('#cachebrk, .cwreply') || it.matches('.cwreply') || it.contains(document.activeElement) || (!!anchor && it.contains(anchor))
+      const items = [...el.querySelectorAll('.cwit')]
+      for (const it of items) {
+        const r = it.getBoundingClientRect()
+        if ((r.bottom < box.top - h - 1 || r.top > box.bottom + h + 1) && !pinned(it)) out.push(`${it.dataset.key} (${it.firstElementChild?.className}) ${Math.round(r.top - box.top)} px from the box top, box ${h} px`)
+      }
+      if (el.querySelector('[aria-busy]')) out.push('an aria-busy group')
+      return { out, items: items.length }
+    })
+    const atRest = async () => ({ ...(await faults()), ...(await windowGap(page)) })
+    await go(M)
+    const top = await atRest()
+    await page.evaluate(() => { const el = document.querySelector('#ctxwin'); el.scrollTop = el.scrollHeight / 2 })
+    await page.waitForTimeout(400)
+    const mid = await atRest()
+    // the first frame after each press
+    await page.evaluate(`window.__gaps = []; addEventListener('keydown', () => requestAnimationFrame(() => window.__gaps.push((${gapInPage})())), true)`)
+    const no = () => page.evaluate(() => document.querySelector('#stepbar .sb-no')?.textContent)
+    for (const key of [...Array(10).fill('ArrowLeft'), ...Array(10).fill('ArrowRight')]) {
+      const was = await no()
+      await page.keyboard.press(key)
+      await page.waitForFunction((was) => document.querySelector('#stepbar .sb-no')?.textContent !== was, was, { timeout: 10000, polling: 'raf' })
+      await page.waitForTimeout(100)
+    }
+    const first = await page.evaluate(() => window.__gaps)
+    console.log(`# newest step: ${top.items} items, gap ${top.gap} px; half way: ${mid.items} items, gap ${mid.gap} px; first frames: worst gap ${Math.max(...first.map((g) => g.gap))} px (pitch ${top.pitch} px)`)
+    assert.ok(top.pitch > 0, 'one --cblk-pitch measures a height')
+    assert.deepEqual(top.out, [])
+    assert.deepEqual(mid.out, [])
+    assert.ok(top.gap <= top.pitch && mid.gap <= mid.pitch, `a gap in the visible box at rest: ${top.gap} / ${mid.gap} px, pitch ${top.pitch}`)
+    assert.equal(first.length, 20, 'one record per press')
+    assert.deepEqual(first.filter((g) => !(g.gap <= g.pitch)), [], 'a gap in the visible box on the first frame after a step')
   })
 })

@@ -157,9 +157,37 @@ export const mark = (page, name) => page.evaluate((n) => { performance.mark(n) }
 /** ms from `startMark` to now, recorded as measure `name`. */
 export const measure = (page, name, startMark) => page.evaluate(([n, s]) => performance.measure(n, s).duration, [name, startMark])
 
+/** In the page (no closure; also sent as source): the largest stretch (px) of #ctxwin's visible box that no drawn item covers, from the
+ *  box's top to the nearer of its bottom and the last item's bottom (empty space below a short window is no gap), and one
+ *  --cblk-pitch in px: { gap, pitch }. Drawn items are the window's units (2.3 §读与画, 1.4 白名单) and the legacy desk's group
+ *  placeholder (rule 4 旧台, a drawn stand-in). A gap is a stretch taller than one pitch (row margins are smaller). No #ctxwin: an
+ *  infinite gap. */
+export function gapInPage() {
+  const W = document.querySelector('#ctxwin')
+  const probe = document.body.appendChild(document.createElement('div'))
+  probe.style.cssText = 'position:absolute;visibility:hidden;height:var(--cblk-pitch)'
+  const pitch = probe.offsetHeight
+  probe.remove()
+  if (!W) return { gap: Infinity, pitch }
+  const box = W.getBoundingClientRect(), top = box.top + W.clientTop, bottom = top + W.clientHeight
+  const sel = ['.cwfline', '.cwwin', '.cwsec', '.cwfoldall', '.chline', '.cwremoved', '.cwturn > .cwturnhd', '.cblk', '.cwreply', '.cwbusy',
+    '.cwframe', '.cwnoreq', '.cwunparsed', '.empty', '.cwgroup[aria-busy]'].join(', ')
+  const rs = [...W.querySelectorAll(sel)].map((e) => e.getBoundingClientRect()).filter((r) => r.height > 0)
+  const end = Math.min(bottom, Math.max(top, ...rs.map((r) => r.bottom)))
+  let at = top, gap = 0
+  for (const r of rs.filter((r) => r.bottom > top && r.top < end).sort((a, b) => a.top - b.top)) {
+    if (r.top > at) gap = Math.max(gap, r.top - at)
+    at = Math.max(at, r.bottom)
+  }
+  return { gap: Math.max(gap, end - at), pitch }
+}
+export const windowGap = (page) => page.evaluate(gapInPage)
+
 /** ms from the input `act` makes (its first pointerdown / keydown, marked by a listener armed and awaited before it, so the input can
  *  never outrun it) until `cond` holds and that frame has painted: 'replay' (a session's window drawn), 'step' (the step head no longer
- *  reads `arg` and the window is drawn), 'n' (the step head's number, data-n, is no longer `arg` and the window is drawn), 'sel' (selector `arg` matches). Rejects after 10 s. */
+ *  reads `arg` and the window is drawn), 'n' (the step head's number, data-n, is no longer `arg` and the window is drawn), 'sel'
+ *  (selector `arg` matches). 'step' and 'n' also wait for the visible box to be filled, in the same frame: no gap over one pitch
+ *  (gapInPage; D64② a step counts once it is completely drawn). Rejects after 10 s. */
 export async function timed(page, cond, arg, act) {
   await page.evaluate(() => {
     performance.clearMarks('in')
@@ -167,12 +195,13 @@ export async function timed(page, cond, arg, act) {
     addEventListener('pointerdown', arm, true); addEventListener('keydown', arm, true)
   })
   await act()
-  return page.evaluate(([cond, a]) => new Promise((resolve, reject) => {
+  return page.evaluate(`(${([cond, a], gapOf) => new Promise((resolve, reject) => {
     const q = (s) => document.querySelector(s)
+    const filled = () => { const g = gapOf(); return g.gap <= g.pitch }
     const holds = {
       replay: () => location.hash.startsWith('#/replay/') && !!q('#stepbar .sb-no') && !!q('#ctxwin') && !q('#ctxwin .cwload'),
-      step: () => !!q('#stepbar .sb-no') && q('#stepbar .sb-no').textContent !== a && !q('#ctxwin .cwload'),
-      n: () => !!q('#stepbar .sb-no') && +q('#stepbar .sb-no').dataset.n !== a && !q('#ctxwin .cwload'),
+      step: () => !!q('#stepbar .sb-no') && q('#stepbar .sb-no').textContent !== a && !q('#ctxwin .cwload') && filled(),
+      n: () => !!q('#stepbar .sb-no') && +q('#stepbar .sb-no').dataset.n !== a && !q('#ctxwin .cwload') && filled(),
       sel: () => !!q(a),
     }[cond]
     const t0 = performance.now()
@@ -182,7 +211,7 @@ export async function timed(page, cond, arg, act) {
       requestAnimationFrame(tick)
     }
     tick()
-  }), [cond, arg])
+  })})(${JSON.stringify([cond, arg])}, ${gapInPage})`)
 }
 
 /** The board's reads answered from desk-world `w` (desk-world.mjs, 3.5 §会话读's reference server) at the mark w.marks[k], k starting at

@@ -8,7 +8,7 @@ import { WRITE_GAP_MS } from '../../../../web/legacy/core/router.mjs'
 import { BOARD_LINES } from '../../perf-lines.mjs'
 
 export const IDS = Object.freeze(['I-pageerror', 'I-console', 'I-blank', 'I-keep', 'I-stack', 'I-hscroll', 'I-rate', 'I-write', 'I-leak',
-  'I-mem', 'I-heap', 'I-follow', 'I-hold', 'I-url', 'I-cjk', 'I-longtask', 'I-loadstep', 'I-chapter', 'I-pack', 'I-memcap', 'I-select', 'I-review'])
+  'I-mem', 'I-heap', 'I-follow', 'I-hold', 'I-url', 'I-cjk', 'I-longtask', 'I-loadstep', 'I-chapter', 'I-pack', 'I-memcap', 'I-select', 'I-review', 'I-order'])
 
 export const PENDING = new Map([
   ['I-memcap', 'the page heap stays under memCapBytes (80 MB)'],
@@ -98,6 +98,8 @@ const viewOf = (page) => page.evaluate((sel) => {
     // the review range on the main track (2.1 #5): is the bracket drawn with a width, and which drawn bars are .reviewed
     review: ((br) => ({ bracket: !!br && getComputedStyle(br).display !== 'none' && br.getBoundingClientRect().width > 0,
       bars: [...document.querySelectorAll('#sawrow .bar')].map((b) => b.classList.contains('reviewed')) }))(document.querySelector('#reviewbracket')),
+    // the window's request rows in DOM order (I-order): data-bi, and the top of each row that has a box (null: none)
+    order: [...document.querySelectorAll('#ctxwin .cblk[data-bi]')].map((e) => [+e.dataset.bi, e.getClientRects().length ? e.getBoundingClientRect().top : null]),
     sideways: document.documentElement.scrollWidth > innerWidth,
     dom: document.getElementsByTagName('*').length,
   }
@@ -301,6 +303,12 @@ export async function check(ctx) {
   const rv = v.review, some = rv.bars.includes(true), prefix = rv.bars.indexOf(false) < 0 || !rv.bars.slice(rv.bars.indexOf(false)).includes(true)
   if (rv.bracket !== some) bad('I-review', `the review bracket is ${rv.bracket ? '' : 'not '}drawn and ${some ? 'some' : 'no'} bar is reviewed`)
   if (!prefix) bad('I-review', 'the reviewed bars are not a prefix of the drawn bars')
+  // I-order (2.3 rule 4 · D75④): the window's request rows stand in list order, in the DOM and on screen — data-bi strictly
+  // increasing in DOM order, and each row with a box below the one before (virtualized items never swap or overlap)
+  const ord = v.order.findIndex(([bi], i) => i > 0 && !(bi > v.order[i - 1][0]))
+  if (ord > 0) bad('I-order', `row data-bi ${v.order[ord][0]} after ${v.order[ord - 1][0]} in the DOM`)
+  const boxed = v.order.filter(([, y]) => y != null), up = boxed.findIndex(([, y], i) => i > 0 && !(y > boxed[i - 1][1]))
+  if (up > 0) bad('I-order', `row data-bi ${boxed[up][0]} at ${boxed[up][1]} px is not below row ${boxed[up - 1][0]} at ${boxed[up - 1][1]} px`)
   const pk = packFaults(s.fetchLog)
   if (pk.length) bad('I-pack', pk.slice(0, 3).join(' | '))
 

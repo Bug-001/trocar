@@ -10,11 +10,14 @@
 // Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard, serveWorld } from './harness.mjs'
+import { probe, withBoard, serveWorld, DESK_NEXT } from './harness.mjs'
 import { world } from '../desk-world.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
+// which desk a case is about (2.3 #35): the legacy desk's skipped content and placeholders, or the new desk's estimates
+const legacyOnly = skip || (DESK_NEXT ? "the legacy desk's groups (2.3 rule 4, 旧台)" : false)
+const nextOnly = skip || (DESK_NEXT ? false : "the new desk's virtual list (2.3 rule 4)")
 const WIDTHS = [1440, 480]
 
 const frames = () => new Promise((f) => requestAnimationFrame(() => requestAnimationFrame(f)))
@@ -79,7 +82,7 @@ async function placeholderDrawn(frames) {
 }
 
 for (const theme of ['light', 'dark']) for (const width of WIDTHS) {
-  test(`2.3 #35: a closed row and a folded card are their real size off screen; a placeholder drawn moves nothing below (${theme}, ${width})`, { skip }, async () => {
+  test(`2.3 #35: a closed row and a folded card are their real size off screen; a placeholder drawn moves nothing below (${theme}, ${width})`, { skip: legacyOnly }, async () => {
     const w = world(11, { calls: 80, page: 80, heads: true, talk: { pre: 10, len: 700, every: 40, tail: 500 } })
     const main = w.full().lanes.find((l) => l.kind === 'main')
     const M = w.laneRidsAt().get(main.lane).length
@@ -109,6 +112,54 @@ for (const theme of ['light', 'dark']) for (const width of WIDTHS) {
       console.log(`# ${theme} ${width}: ${sizes.length} kinds, sizes ${[...new Set(sizes.map((s) => s.real))].join('/')} px; a placeholder of ${swap.rows} rows held ${swap.before} px, drawn ${swap.after} px`)
       assert.equal(swap.after, swap.before, 'drawing the placeholder and bringing its rows on screen moved the unit below it')
       await atRest(page, 'after the placeholder was drawn')
+      assert.deepEqual(b.errors, [])
+    } finally { await b.stop() }
+  })
+}
+
+// 2.3 #35 (新台): the list estimates every item at its real height, so from the top to the bottom, half a window at a time, #ctxwin's
+// scrollHeight never changes and an item in view before a scroll moves on screen by exactly the scroll distance; after the step is
+// drawn and after each scroll the window comes to rest (30 frames without a node added or removed). The same world, both themes, a
+// width where a row's head is one line and one where its label takes a line of its own.
+for (const theme of ['light', 'dark']) for (const width of WIDTHS) {
+  test(`2.3 #35: the estimated height is the real height: scrolling half a window keeps scrollHeight and moves what is in view by the scroll (${theme}, ${width})`, { skip: nextOnly }, async () => {
+    const w = world(11, { calls: 80, page: 80, heads: true, talk: { pre: 10, len: 700, every: 40, tail: 500 } })
+    const main = w.full().lanes.find((l) => l.kind === 'main')
+    const M = w.laneRidsAt().get(main.lane).length
+    const b = await withBoard({ bytes: 1e5, width, theme, chromium: gate.chromium })
+    try {
+      const { page } = b
+      await serveWorld(page, w)
+      await page.evaluate((m) => { location.hash = `#/replay/p/S?step=${m}` }, M)
+      await page.waitForFunction((m) => {
+        const x = /(\d+)\s*\/\s*(\d+)/.exec(document.querySelector('#stepbar .sb-no')?.textContent || '')
+        return !!x && +x[1] === m && !document.querySelector('#ctxwin .cwload') && !!document.querySelector('#ctxwin .cblk')
+      }, M, { timeout: 30000, polling: 'raf' })
+      await atRest(page, 'after the step was drawn')
+      await page.evaluate(() => { document.querySelector('#ctxwin').scrollTop = 0 })
+      await atRest(page, 'after scrolling to the top')
+      // in the page: the window's scroll numbers and the last non-sticky item starting inside the visible box
+      const look = () => page.evaluate(() => {
+        const W = document.querySelector('#ctxwin'), box = W.getBoundingClientRect()
+        const it = [...W.querySelectorAll('.cwit:not(.cwstick)')].filter((e) => { const r = e.getBoundingClientRect(); return r.top >= box.top && r.top < box.bottom }).pop()
+        return { top: W.scrollTop, sh: W.scrollHeight, h: W.clientHeight, key: it?.dataset.key ?? null, y: it ? it.getBoundingClientRect().top : null }
+      })
+      const yOf = (key) => page.evaluate((k) => document.querySelector(`#ctxwin .cwit[data-key="${CSS.escape(k)}"]`)?.getBoundingClientRect().top ?? null, key)
+      const r2 = (x) => Math.round(x * 100) / 100
+      let at = await look(), scrolls = 0
+      const sh0 = at.sh, moved = []
+      while (at.top + at.h < at.sh - 1) {
+        assert.notEqual(at.key, null, `no item in view at scrollTop ${at.top}`)
+        await page.evaluate((d) => { document.querySelector('#ctxwin').scrollTop += d }, Math.floor(at.h / 2))
+        await atRest(page, `after scroll ${++scrolls}`)
+        const now = await look(), y = await yOf(at.key)
+        moved.push({ key: at.key, by: y == null ? null : r2(at.y - y), scrolled: r2(now.top - at.top) })
+        assert.equal(now.sh, sh0, `scroll ${scrolls}: scrollHeight ${sh0} became ${now.sh}`)
+        at = now
+      }
+      console.log(`# ${theme} ${width}: ${scrolls} half-window scrolls over ${sh0} px`)
+      assert.ok(scrolls > 2, 'the window is several screens tall (the shape this case is about)')
+      assert.deepEqual(moved.filter((m) => m.by !== m.scrolled), [], 'an item in view moved by another distance than the scroll')
       assert.deepEqual(b.errors, [])
     } finally { await b.stop() }
   })
