@@ -1241,8 +1241,9 @@ a.ovtr:hover { background: var(--hover); }
   --cwline-pitch:calc(var(--lh) + 12px);}
 .desk.next #ctxwin .cwlist{position:relative;width:100%;}
 .desk.next #ctxwin .cwit{position:absolute;top:0;left:0;width:100%;}
-/* the section header of the part being read stays at the top of the box */
-.desk.next #ctxwin .cwit.cwstick{position:sticky;z-index:1;background:var(--paper);}
+/* what the landing puts at the box's top starts at its item's top: the gap above it is its own padding, not a margin inside the item */
+.desk.next #ctxwin .cwreply{margin-top:0;padding-top:10px;}
+.desk.next #ctxwin .chline{margin-top:0;padding-top:10px;}
 .desk.next #ctxwin .cblk,.desk.next #ctxwin .cwturn{content-visibility:visible;}
 .desk.next #ctxwin .cwsec{box-sizing:border-box;height:var(--cwsec-pitch);margin:0;padding-top:10px;}
 .desk.next #ctxwin .cwturn{margin-bottom:6px;}
