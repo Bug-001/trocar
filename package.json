@@ -37,6 +37,7 @@
     "bin/",
     "src/",
     "install/",
+    "skills/",
     "README.md",
     "LICENSE"
   ],

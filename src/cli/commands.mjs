@@ -99,6 +99,12 @@ export const COMMANDS = Object.freeze([
     summary: 'Prints captured records byte for byte; a sealed segment is decoded first. <from> and <to> are record numbers, both included. Sealing itself is the daemon\'s job.',
     options: [],
     exits: [[0, 'the records are on stdout'], [1, 'the segment or a record number does not exist, or could not be read'], [2, 'a usage error']] },
+  { name: 'skill',
+    group: 'Maintenance', mutates: false, run: via('./skill.mjs', 'run'),
+    usage: 'trocar skill [<name>] [--json]',
+    summary: 'Lists the agent skills that ship with this trocar, or prints one byte for byte. To keep one, redirect it into your agent\'s skills directory. It writes no file and works before `trocar install`.',
+    options: [JSON_OPT],
+    exits: [[0, 'listed or printed'], [2, 'there is no such skill, or a usage error']] },
   { name: 'daemon',
     group: 'Maintenance', mutates: true, recordsPath: false, run: via('./daemon.mjs', 'runDaemonCli'), // 4.11 present: the login service's PATH is not the user's
     usage: 'trocar daemon [--supervise]',
