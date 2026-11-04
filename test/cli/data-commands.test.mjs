@@ -55,9 +55,14 @@ test('V80: `trocar status --json` and `trocar doctor --json` print exactly the d
     const asked = await runQuery(name, {}, { home: path.join(s.home, '.trocar'), userHome: s.home, env: c.env, platform: c.platform, deps: c.deps })
     assert.deepEqual(printed, asked, `${name}: the command and the query are one document`)
     assert.ok([0, 1, 3].includes(exit), `${name}: exit ${exit}`)
-    // and the same document comes out of `trocar query <name>` on the command line
-    const viaQuery = await runCli(['query', name], s.ctx())
-    assert.ok([0, 1].includes(viaQuery), `query ${name}: exit ${viaQuery}`)
+    // and the same bytes come out of `trocar query <name>` on the command line, into a pipe and at a terminal
+    for (const tty of [false, true]) {
+      const command = s.ctx({ io: fakeIo({ tty }), deps: { ms: () => at } }), query = s.ctx({ io: fakeIo({ tty }), deps: { ms: () => at } })
+      await runCli([name, '--json'], command)
+      const viaQuery = await runCli(['query', name], query)
+      assert.ok([0, 1].includes(viaQuery), `query ${name}: exit ${viaQuery}`)
+      assert.equal(query.io.stdoutText(), command.io.stdoutText(), `${name}: byte for byte (terminal: ${tty})`)
+    }
   }
 })
 

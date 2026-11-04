@@ -17,11 +17,12 @@ import { appendEvent } from '../collector/core/events.mjs'
 import { EVENT } from '../collector/core/codes.mjs'
 import { codeId, packageRoot, channelOf, setupHelperCommand } from '../version.mjs'
 import { CUT, daemonCode, replaceDaemon } from './replace-daemon.mjs'
+import { printJson } from './json.mjs'
 
 const NEEDS_YES = 'Nothing was changed. Read the plan above, then run it again with --yes'
 // R5 / R6: no terminal and no --yes — the plan was printed, nothing written, exit 2; with --json stdout is the one receipt, with the plan in `planned`
 function needsYes(io, json, planned = [], left = []) {
-  if (json) io.out(JSON.stringify({ ...newReceipt('install'), ok: false, planned, ...(left.length ? { left } : {}), needs_yes: true, notes: [NEEDS_YES] }, null, 2)); else io.err(NEEDS_YES)
+  if (json) printJson(io, { ...newReceipt('install'), ok: false, planned, ...(left.length ? { left } : {}), needs_yes: true, notes: [NEEDS_YES] }); else io.err(NEEDS_YES)
   return EXIT.usage
 }
 const USAGE = 'usage: trocar install [--dry-run] [--yes] [--json]'
@@ -94,7 +95,7 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
   if ((deps.getuid || processUid)() === 0) { io.err('trocar install: run this as your own user, not as root.'); return EXIT.usage }
   const fs = deps.fs || nodeFs
   const old = refuseOldManifest({ home, platform, fs })
-  if (old) { if (json) io.out(JSON.stringify({ ...newReceipt('install'), ok: false, error: { code: 'older-install', message: old.message }, notes: [old.message] }, null, 2)); else io.err(fit([`trocar install: ${old.message}`], { home }).join('\n')); return EXIT.incomplete }
+  if (old) { if (json) printJson(io, { ...newReceipt('install'), ok: false, error: { code: 'older-install', message: old.message }, notes: [old.message] }); else io.err(fit([`trocar install: ${old.message}`], { home }).join('\n')); return EXIT.incomplete }
   const { isModelOs } = await import('../collector/model-install.mjs')
   const model = isModelOs(platform)
   // R12: the writes run under op.lock, taken after the yes (a plan that is only printed takes nothing and writes nothing)
@@ -149,7 +150,7 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
       ...(left.length ? ['Left as they are:', ...pairs(left.map((p) => [p.what, p.detail]), { home })] : []),
       ...(only ? (changes.length ? [] : [left.length ? `There is nothing that install can set up for ${only}.` : `${only} has every certificate carrier it needs: there is nothing to set up.`]) : rows.length ? [] : ['No agent was found on this machine: only the root is installed.']),
       ...wrap(COST), ...wrap(RISK), ...(stale ? wrap(CUT) : [])], { home }).join('\n'))
-    if (flags.has('--dry-run')) { if (json) io.out(JSON.stringify({ ...newReceipt('install'), dry_run: true, planned, ...(left.length ? { left } : {}), ...(only && !changes.length ? { notes: [`${only}: nothing to set up`] } : {}) }, null, 2)); return EXIT.ok }
+    if (flags.has('--dry-run')) { if (json) printJson(io, { ...newReceipt('install'), dry_run: true, planned, ...(left.length ? { left } : {}), ...(only && !changes.length ? { notes: [`${only}: nothing to set up`] } : {}) }); return EXIT.ok }
     if (!flags.has('--yes')) {
       if (json || !isInteractive(io)) return needsYes(io, json, planned, left)
       if (!(await confirm({ ...io, prompt: io.stdout }, 'Proceed?'))) { io.err('You said no: nothing was changed'); return EXIT.incomplete }
@@ -195,7 +196,7 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
       const which = forms.length && forms.length < all.length ? ` (${forms.map(formWords).join(', ')})` : ''
       return [c.harness || 'root', `${carrierWords(c.carrier)}${c.state ? `, ${c.state}` : ''}${c.path ? `: ${tilde(c.path, home)}` : ''}${c.why ? ` (${c.why})` : ''}${which}`]
     })
-    if (json) io.out(JSON.stringify(receipt, null, 2))
+    if (json) printJson(io, receipt)
     // a refusal installed nothing: the fingerprint, the risk of an installed root and "Next" would all be untrue, so the stop and its reason are the whole receipt
     else if (refusal) io.out(fit([`trocar install stopped: ${refusal.message || refusal.reason}`, 'Nothing of yours was changed.'], { home }).join('\n'))
     else io.out(fit([receipt.ok ? "Installed. trocar's root certificate is trusted by your user." : 'trocar install did not finish. What is missing is below.',
@@ -242,7 +243,7 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
   const daemonItem = [...staleItem(stale, root), ...(pathItem ? [pathItem] : [])]
   const planned = [...planItems({ ...plan, standalone: due }, { home, platform }), ...daemonItem]
   say([formatPlan({ ...plan, standalone: due }, { home, platform, command: 'install' }), ...pairs(daemonItem.map((p) => [p.what, p.detail]), { home }), ...wrap(COST), ...(stale ? wrap(CUT) : [])].join('\n'))
-  if (flags.has('--dry-run')) { if (json) io.out(JSON.stringify({ ...newReceipt('install'), dry_run: true, planned, harnesses: plan.targets, changed: plan.changed, created: [...due, ...plan.created] }, null, 2)); return EXIT.ok }
+  if (flags.has('--dry-run')) { if (json) printJson(io, { ...newReceipt('install'), dry_run: true, planned, harnesses: plan.targets, changed: plan.changed, created: [...due, ...plan.created] }); return EXIT.ok }
   if ((plan.writing || stdNew || stale || pathItem) && !flags.has('--yes')) {
     if (json || !isInteractive(io)) return needsYes(io, json, planned)
     if (!(await confirm({ ...io, prompt: io.stdout }, 'Proceed?'))) { io.err('You said no: nothing was changed'); return EXIT.incomplete }
@@ -260,7 +261,7 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
     return { stdl, board, written, r, path: pathItem ? await placePath({ home, env, platform, fs, deps }) : null }
   })
   if (!done) return EXIT.incomplete
-  if (done.failed) { if (json) io.out(JSON.stringify({ ...newReceipt('install'), ok: false, notes: [done.failed] }, null, 2)); else io.err(`trocar install: ${done.failed}`); return EXIT.incomplete }
+  if (done.failed) { if (json) printJson(io, { ...newReceipt('install'), ok: false, notes: [done.failed] }); else io.err(`trocar install: ${done.failed}`); return EXIT.incomplete }
   const { stdl, r, board, written } = done
   // D61 (1.6 §3.2 step 5): the login entry is an item of the install like any other — one that could not be registered is a problem and exit 1, never only a note
   const dmn = r.daemon || { up: false, state: 'not-running', started: false, problems: [], unitFailed: null }
@@ -276,7 +277,7 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
     // `enabled` is the entry asked again after the run (1.6 §3.3: no claim without evidence), not "nothing failed": ensureDaemonUp asks it at the end of every
     // registering run and makes any answer but present its unitFailed, so a run that halted on a stuck daemon (and enabled nothing) says false here too
     ...(r.daemon ? { daemon: daemonRow(dmn, rep), autostart: { entry: args.unit.path, enabled: !dmn.unitFailed } } : {}) }
-  if (json) io.out(JSON.stringify(receipt, null, 2))
+  if (json) printJson(io, receipt)
   else io.out(fit([problems.length ? 'trocar install did not finish. What is missing is below.' : r.already && ((r.entryBefore && r.entryBefore !== 'present') || dmn.started) ? 'Installed. The certificates were in place; the login entry and the collector are up again.' : r.already && !(rep && rep.replaced) ? 'Already installed. Nothing was changed.' : "Installed. trocar's certificates are in place.",
     ...(r.already ? [] : changeLines(receipt, { home })),
     ...pairs([...replacedRow(rep, root), ...pathRow(done.path)], { home }),

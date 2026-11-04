@@ -3,6 +3,7 @@
 // before anything else (one daemon, one helper per user), spawns the capability helper through arch, serves the
 // engine on loopback, restores the desired switch state, and fails open everywhere: a dead helper means direct
 // connections, never broken ones. It never mints the CA: `trocar on` does, inside the manifest.
+import { BOARD_TOKEN_FILE } from '../off/paths.mjs'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import tls from 'node:tls'
@@ -260,7 +261,7 @@ function queryRouteFor({ P, failure, fork, queryIdleMs }) {
 /** The board's token (4.4, D26③): 32 random bytes, base64url, in <collector>/board.token (0600). Kept across restarts so a bookmarked URL
  *  still opens; a file that is missing or is not one is replaced (tmp + rename). Only the daemon writes it; uninstall removes it. */
 function boardToken(dir) {
-  const file = path.join(dir, 'board.token')
+  const file = path.join(dir, BOARD_TOKEN_FILE)
   try { const t = fs.readFileSync(file, 'utf8').trim(); if (/^[A-Za-z0-9_-]{43}$/.test(t)) return t } catch { /* absent or unreadable: a new one */ }
   const t = crypto.randomBytes(32).toString('base64url')
   const tmp = `${file}.tmp-${process.pid}`

@@ -41,6 +41,7 @@ import { signHelperPath } from '../collector/arch/model-backends.mjs'
 import { NATIVE } from '../collector/arch/darwin/native.mjs'
 import { daemonLogPaths } from '../collector/arch/daemon-logs.mjs'
 import { isModelOs } from '../collector/model-install.mjs' // macOS / Windows run the collector model (4.11): uninstall never does off — it refuses while capture is online (1.6 §1.1, CM24)
+import { printJson } from './json.mjs'
 
 /** Is the daemon's holder (its `start`) the life `p` of a fresh table? The daemon's start and this CLI's may come from different readers (on Windows its
  *  resident helper, here the one PowerShell question when the daemon's helper is not asked): they agree to within START_AGREE_MS (4.8 §7), or the
@@ -444,13 +445,13 @@ export async function runUninstallCli(argv, { io, env = process.env, home = node
     // the root's key goes last through its custody (4.11 P13): the platform's backend unless a test hands one in
     if (deps.custody === undefined && isModelOs(platform)) deps = { ...deps, custody: (await (await import('../collector/arch/model-backends.mjs')).backendsFor({ os: platform, home, run: deps.exec || null, env })).custody }
     const { receipt, exit } = await runUninstall({ home, env, purgeData: flags.has('--purge-data'), yes: flags.has('--yes'), dryRun: flags.has('--dry-run'), interactive: !json && isInteractive(io), io: { ...io, prompt: io.stdout }, say: json ? null : io.out, deps: { platform, ...deps } }) // the CLI's platform is offWorld's default (deps.platform of a test's still wins) — the same seam `off` has
-    if (json) io.out(JSON.stringify(receipt, null, 2))
+    if (json) printJson(io, receipt)
     else if (receipt.needs_yes || receipt.declined) { for (const n of receipt.notes) io.err(n) } // the plan went out before the question was asked; what is left to say is why nothing was done (R6)
     else io.out(formatUninstallReceipt(receipt, { home, platform: deps.platform || platform }))
     return exit
   } catch (e) {
     const message = errText(e)
-    if (json) io.out(JSON.stringify({ ...newReceipt('uninstall'), ok: false, notes: [message] }, null, 2)); else io.err(`trocar uninstall: ${message}`)
+    if (json) printJson(io, { ...newReceipt('uninstall'), ok: false, notes: [message] }); else io.err(`trocar uninstall: ${message}`)
     return EXIT.incomplete
   }
 }
