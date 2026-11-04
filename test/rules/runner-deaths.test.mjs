@@ -115,12 +115,13 @@ describe('12e: what a script does to its process', { concurrency: 8 }, () => {
         const answer = await runner.run(unit());
         assert.equal(whyOf(answer), row.why);
         assert.ok(CLOSED.has(whyOf(answer)));
-        if (answer.died) assert.ok(await until(() => isGone(pid), 2000), 'the process is gone');
         assert.ok(!fs.existsSync(path.join(dir, 'started')), 'nothing a script started ran');
 
+        // At once: a process on its way out must not take the next unit with it.
         fs.rmSync(path.join(dir, 'die'));
         const next = await runner.run(unit());
         assert.ok(Number(next.bytes) > 0, 'the next unit gets an answer');
+        if (answer.died) assert.ok(await until(() => isGone(pid), 2000), 'the process is gone');
       } finally { await runner.close(); }
       assert.ok(await until(() => isGone(pid), 2000));
     });
