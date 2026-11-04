@@ -1,11 +1,10 @@
 // src/view/pricing.mjs — editable unit-price config (RFC 2.2 / D14). Price is an EXTERNAL,
 // user-editable variable (providers return token usage, never $ price); cost = usage × price is a
 // derived local estimate and MUST NOT enter the normalized model. So pricing lives in a config the
-// user can edit (TROCAR_PRICING or ~/.atrace/pricing.json), served to the board; absent → defaults.
+// user can edit (TROCAR_PRICING or ~/.trocar/pricing.json), served to the board; absent → defaults.
 // Shape: { <modelKey>: [input, output, cache_write, cache_read] } in $/Mtok.
+import { createHash } from 'node:crypto';
 import { readFileSync, existsSync } from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
 
 // Built-in prices: the vendor's (Anthropic) model price list as of 2026-10-06, in $/Mtok
 // [input, output, cache_write, cache_read]; cache write = 1.25x input (the 5-minute TTL), cache read =
@@ -23,13 +22,14 @@ export const DEFAULT_PRICING = {
   'haiku-5': [0.1, 0.5, 0.125, 0.01], // Haiku 5.5
 };
 
-export const DEFAULT_PRICING_PATH = process.env.TROCAR_PRICING || path.join(os.homedir(), '.atrace', 'pricing.json');
+// Names the built-in table inside a price identity: a new release with new prices is a new identity even when no price file changed.
+export const PRICING_DIGEST = createHash('sha1').update(JSON.stringify(DEFAULT_PRICING)).digest('hex').slice(0, 16);
 
 const isRow = (v) => Array.isArray(v) && v.length === 4 && v.every((n) => typeof n === 'number' && n >= 0);
 
-// loadPricing(p?) → { pricing, source }. Merges a valid config file over the defaults (each row must
+// loadPricing(p) → { pricing, source }. Merges a valid config file over the defaults (each row must
 // be [4 non-negative numbers]); malformed rows are ignored (defaults win) so a typo can't zero a cost.
-export function loadPricing(p = DEFAULT_PRICING_PATH) {
+export function loadPricing(p) {
   const out = { ...DEFAULT_PRICING };
   let source = 'default';
   try {
