@@ -14,6 +14,7 @@ import { listOf } from '../../src/view/reduce.mjs'
 import { compareStep } from '../../src/view/step-order.mjs'
 import { PAGE_BYTES } from '../../src/query/session-doc.mjs'
 import { BLOCK_PROBLEMS } from '../../src/health/codes.mjs'
+import { compactionNumbers } from '../../web/legacy/replay/model.mjs'
 
 const homeOf = (p) => path.join(tmpDir(p), '.trocar')
 const q = (name, home, params, ctx = {}) => runQuery(name, params, { home, fs, ...ctx })
@@ -228,6 +229,26 @@ for (const [wire, axes] of [['http', { late: 8, subLanes: 1, subLen: 6, paths: 4
 
 // 3.5:61-66 the rule, on a main lane of several pages with compactions: every page (whole, and a --from chain from its first step)
 // ships its own steps' events, the base:null ones the lane's compaction and summarize events too, within PAGE_BYTES; user k 1..n.
+// 3.5, 2.4: the tail page of a long lane brings the landings before it, so the compaction row has its numbers before the page that holds them.
+test('3.5 lane: a base:null answer carries the landings outside its steps, with the messages the two bodies hold, and 2.4 pairs them', async () => {
+  const home = homeOf('trocar-lane-landed-')
+  const s = bigSession({ home, growth: 300, subEvery: 0, compactAt: 40_000, paths: 4, compactMark: true })
+  s.append(600)
+  const doc = await settled(home, s.id), lane = doc.lanes.find((l) => l.kind === 'main').lane
+  const tail = await q('lane', home, { id: s.id, lane }, { writer: true })
+  const rids = doc.calls.filter((c) => c.lane === lane).map((c) => c.rid), at = (e) => rids.indexOf(e.rid), own = new Set(tail.steps.map((st) => st.rid))
+  const lines = fs.readFileSync(path.join(home, 'raw', '20261020T164737Z.ndjson'), 'utf8').trim().split('\n')
+  const sent = (rid) => JSON.parse(JSON.parse(lines[Number(rid.split(':').at(-1)) - 1]).req_body).messages.length // a rid names its line
+  const landed = tail.events.filter((e) => e.type === 'compaction-landed' && !own.has(e.rid)), numbers = compactionNumbers(tail.events, at)
+  assert.ok(landed.length > 0, 'a landing lies before the tail page')
+  for (const e of landed) {
+    assert.deepEqual([e.from, e.to], [sent(rids[at(e) - 1]), sent(e.rid)], `${e.rid}: the two bodies' messages`)
+    const request = tail.events.filter((x) => x.type === 'compaction' && at(x) < at(e)).at(-1)
+    assert.equal(at(request), at(e) - 1, `${e.rid}: its request is the call before`)
+    assert.deepEqual(numbers.get(request), { from: e.from, to: e.to }, `${e.rid}: the row of its compaction`)
+  }
+})
+
 test('3.5 lane: events are the page\'s steps\', base:null adds the lane\'s compactions, user k runs 1..n, a page fits PAGE_BYTES', async () => {
   const home = homeOf('trocar-lane-rule-')
   const s = bigSession({ home, growth: 300, subEvery: 0, compactAt: 40_000, paths: 4 })
