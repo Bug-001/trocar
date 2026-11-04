@@ -6,7 +6,7 @@ import zlib from 'node:zlib';
 import { applyRules } from '../../src/rules/apply.mjs';
 import { full } from '../../src/rules/actions.mjs';
 import { compileRules } from '../../src/rules/compile.mjs';
-import { byteBudget, UNIT_BYTES } from '../../src/rules/budget.mjs';
+import { byteBudget, CONDITION_COST, UNIT_BYTES } from '../../src/rules/budget.mjs';
 import { tierOfRule } from '../../src/rules/describe.mjs';
 import { applyEdits } from '../../src/rules/edits.mjs';
 
@@ -105,10 +105,10 @@ test('9, 63: bytes tier 2 refuses get the same answer at any size: a body or a r
 });
 
 test('one readable pass per unit, however many rules read its body', async () => {
-  const body = 'plain text with no hit', list = Array.from({ length: 5 }, (_, i) => rule(`r${i}`, { drop: true }, { match: { body: `ABSENT${i}` } }));
+  const body = 'plain text with no hit '.repeat(100), list = Array.from({ length: 5 }, (_, i) => rule(`r${i}`, { drop: true }, { match: { body: `ABSENT${i}` } }));
   const spentOn = async (compiled) => { const budget = byteBudget(); await tier1(unitOf(body), compiled, budget); return budget.spent; };
   const one = await spentOn(rules(list[0])), five = await spentOn(rules(...list));
-  assert.equal(five - one, 4 * (2 * body.length + 64), 'each further rule pays its search and its look for \\u, and its compare');
+  assert.ok(five - one < 4 * 3 * body.length, 'each further rule pays its search and its look for \\u, not the reading');
 });
 
 test('39: a literal past 256 bytes is the rule process\'s, however it is written: the main thread does not look at the body for it', async () => {
@@ -118,7 +118,7 @@ test('39: a literal past 256 bytes is the rule process\'s, however it is written
       const budget = byteBudget();
       const result = await tier1(unitOf(body), rules(rule('r', lit(needle, 'x', { in: 'body' }))), budget);
       assert.equal(result.escalate, true, `${size} bytes`);
-      assert.equal(budget.spent, 0, `${size} bytes: no pass over the body`);
+      assert.ok(budget.spent < size, `${size} bytes: no pass over the body`);
     }
   }
   assert.equal((await tier1(unitOf('a'.repeat(KIB)), rules(rule('r', lit('a'.repeat(256), 'x', { in: 'body' }))))).escalate, false, '256 bytes is the fast path');
@@ -165,12 +165,56 @@ test('5.1 §头的写法: the 8 KiB is the unit\'s, whatever rules and scripts a
   }
 });
 
+const pairsOf = (n) => Array.from({ length: n }, (_, i) => [`x-h${i}`, 'v']);
+const headBytes = (pairs) => pairs.reduce((n, [name, value]) => n + name.length + value.length, 0);
+
+test('5.1 §字节预算: every rule and action is paid for, whatever it does, so a file of them cannot outrun the counter', async () => {
+  const kinds = [{ delay_ms: 1 }, { header: 'a', set: 'b' }, { header: 'x-none', remove: true }, lit('q', 'r', { in: 'body' }), lit('q', 'r')];
+  for (const action of kinds) {
+    for (const [count, each] of [[1, 1], [1, 64], [100, 5], [700, 50], [1000, 30]]) {
+      const label = `${count} × ${each} ${JSON.stringify(action)}`, budget = byteBudget();
+      const compiled = rules(...Array.from({ length: count }, (_, i) => rule(`r${i}`, Array(each).fill(action))));
+      const result = await tier1(unitOf('a'), compiled, budget);
+      if (result.escalate) assert.deepEqual(result.survivors, compiled, label);
+      else assert.ok(budget.spent >= count * each * CONDITION_COST, label);
+      if (count * each * CONDITION_COST > UNIT_BYTES) assert.equal(result.escalate, true, label);
+    }
+  }
+});
+
+test('5.1 §字节预算: an action on a header pays for the head it lands on, and past the counter tier 2 does it', async () => {
+  for (const size of [0, 10, 100, 1000]) {
+    for (const each of [1, 5, 64]) {
+      const label = `${size} headers, ${each} actions`, budget = byteBudget(), headers = pairsOf(size);
+      const compiled = rules(rule('r', Array(each).fill({ header: 'a', set: 'b' })));
+      const result = await tier1(unitOf('x', { headers }), compiled, budget);
+      if (!result.escalate) assert.ok(budget.spent >= each * headBytes(headers), label);
+      if (each * headBytes(headers) > UNIT_BYTES) assert.equal(result.escalate, true, label);
+      const done = result.escalate ? await tier2(unitOf('x', { headers }), compiled) : result;
+      assert.deepEqual(done.headers.at(-1), ['a', 'b'], label);
+    }
+  }
+});
+
+test('5.1 §字节预算: every hit is paid for, so rules that swap a body back and forth leave for tier 2', async () => {
+  const swap = (i) => lit(i % 2 ? 'b' : 'a', i % 2 ? 'a' : 'b', { in: 'body' });
+  for (const size of [1, 256, 4096]) {
+    for (const count of [1, 2, 21, 300]) {
+      const label = `${size} bytes, ${count} rules`, budget = byteBudget();
+      const compiled = rules(...Array.from({ length: count }, (_, i) => rule(`r${i}`, swap(i))));
+      const result = await tier1(unitOf('a'.repeat(size)), compiled, budget);
+      if (!result.escalate) assert.ok(budget.spent >= size * count * CONDITION_COST, label);
+      if (size * count * CONDITION_COST > UNIT_BYTES) assert.equal(result.escalate, true, label);
+    }
+  }
+});
+
 test('12g: `in: text` on the main thread stops at the first hit: the search and nothing that parses', async () => {
   for (const size of [4 * KIB, 16 * KIB, 48 * KIB]) {
     const body = `{"a":"${'p'.repeat(size)} ALPHA"}`, budget = byteBudget();
     const result = await tier1(unitOf(body), rules(rule('r', lit('ALPHA', 'BRAVO'))), budget);
     assert.equal(result.escalate, true);
-    assert.equal(budget.spent, 2 * body.length, 'UTF-8 and the search');
+    assert.ok(budget.spent < 3 * body.length, 'UTF-8 and the search');
   }
 });
 

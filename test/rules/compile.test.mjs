@@ -147,6 +147,46 @@ test('each compared condition is charged, and a contains pays for the value it r
   assert.ok(budget.spent >= 2 * CONDITION_COST + value.length, `spent ${budget.spent}`);
 });
 
+const headOf = (n) => Array.from({ length: n }, (_, i) => [`x-h${i}`, 'v']);
+const headBytes = (pairs) => pairs.reduce((n, [name, value]) => n + name.length + value.length, 0);
+
+test('the first read of a head is paid by its bytes, once per unit, and a head too big to pay for is not read', () => {
+  for (const size of [1, 50, 1000]) {
+    const headers = headOf(size), list = compileRules({ rules: [1, 2, 3].map((i) => rule(`r${i}`, { header: { 'x-q': `v${i}` } })) }).rules;
+    const budget = byteBudget(), u = unit({ headers });
+    assert.deepEqual(list.map((r) => r.judge(u, budget)), ['miss', 'miss', 'miss']);
+    assert.ok(budget.spent >= headBytes(headers), `${size} headers`);
+    assert.ok(budget.spent < 2 * headBytes(headers) + size * CONDITION_COST + 3 * CONDITION_COST, `${size} headers`);
+  }
+  for (const headers of [headOf(16_000), [['x-q', 'v'.repeat(UNIT_BYTES + 1)]]]) {
+    const budget = byteBudget();
+    assert.equal(judge({ header: { 'x-q': 'nothing' } }, { headers }, budget), 'tier2');
+    assert.ok(budget.over);
+  }
+});
+
+test('a host is folded once per unit and paid for: a long one costs one pass, however many rules read it', () => {
+  const host = `${'a'.repeat(60 * 1024)}.Example.com`;
+  const list = compileRules({ rules: Array.from({ length: 100 }, (_, i) => rule(`r${i}`, { host: '*.example.com' })) }).rules;
+  const budget = byteBudget(), u = unit({ host });
+  assert.ok(list.every((r) => r.judge(u, budget) === 'hit'));
+  assert.ok(budget.spent >= host.length, `spent ${budget.spent}`);
+  assert.ok(budget.spent < 2 * host.length, `spent ${budget.spent}`);
+  const over = byteBudget();
+  assert.equal(judge({ host: '*.example.com' }, { host: 'a'.repeat(UNIT_BYTES + 1) }, over), 'tier2');
+  assert.ok(over.over);
+  assert.equal(judge({ host: '*.example.com' }, { host: null }), 'miss');
+});
+
+test('every look for a second data line is paid for, and a body of them leaves for tier 2', () => {
+  for (const count of [1, 100, 3000, 26_000]) {
+    const budget = byteBudget(), body = Buffer.from('data:'.repeat(count));
+    const verdict = judge({ body: 'ZZ' }, { on: 'response', sse: true, body }, budget);
+    if (count * CONDITION_COST > UNIT_BYTES) assert.equal(verdict, 'tier2', `${count} of them`);
+    else assert.ok(budget.spent >= count * CONDITION_COST, `${count} of them`);
+  }
+});
+
 test('a compiled rule carries its place in the file, its tier and whether it reads the body', () => {
   const { rules } = compileRules({ rules: [rule('a', { path: '/x' }), rule('b', { path: '/x', body: 'ALPHA' }), rule('c', { path: { re: 'x' } }), rule('d', { path: '/x', blocks: { role: 'system' } })] });
   assert.deepEqual(rules.map((r) => [r.name, r.index, r.tier, r.readsBody]), [['a', 0, 1, false], ['b', 1, 1, true], ['c', 2, 2, false], ['d', 3, 2, true]]);

@@ -11,7 +11,7 @@ const unitOf = (body, extra = {}) => ({
 });
 function run(actions, body, { on = 'request', ...extra } = {}) {
   const unit = unitOf(body, extra), { bytes, text } = full.decode(unit);
-  const state = { bytes, text, headers: unit.headers, steps: [] };
+  const state = { bytes, text, headers: unit.headers, grown: 0, steps: [] };
   for (const action of [].concat(actions)) full.act(action, state, { on, unit });
   return state;
 }

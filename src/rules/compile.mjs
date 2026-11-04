@@ -4,6 +4,7 @@ import { Buffer, isUtf8 } from 'node:buffer'
 import { ESCAPE_REACH, exactValues, parseCondition, tierOf } from './conditions.mjs'
 import { normalizeRule, readsBody } from './validate.mjs'
 import { CONDITION_COST } from './budget.mjs'
+import { spendHead } from './headers.mjs'
 
 const has = Object.hasOwn
 const BACKSLASH = 0x5C
@@ -21,12 +22,25 @@ export function headersMap(pairs) {
   return map
 }
 
-// Once per unit, not once per rule; a unit's pairs do not change while it is judged, and the unit itself is not written.
+// Once per unit, not once per rule; a unit's pairs do not change while it is judged, and the unit itself is not written. Null when the budget cannot pay for the read.
 const seen = new WeakMap()
-function headersOf(pairs) {
+function headersOf(pairs, budget) {
   if (!pairs) return new Map()
-  if (!seen.has(pairs)) seen.set(pairs, headersMap(pairs))
+  if (!seen.has(pairs)) {
+    if (!spendHead(pairs, budget)) return null
+    seen.set(pairs, headersMap(pairs))
+  }
   return seen.get(pairs)
+}
+
+// The same for the host: it is as long as the request made it, and every rule with a host condition reads it.
+const folded = new WeakMap()
+function foldedHost(unit, budget) {
+  if (!folded.has(unit)) {
+    if (!budget.spend(unit.host.length)) return null
+    folded.set(unit, unit.host.toLowerCase())
+  }
+  return folded.get(unit)
 }
 
 // Three answers: true, false, null when tier 1 cannot say. A spent budget says null from here on, so it needs no path of its own.
@@ -55,11 +69,11 @@ function textLeaf(node, text, budget) {
   return budget.spend(text.length) ? text.includes(node.v) : null
 }
 
-// Two `data:` lines. Two events of a whole stream count too: that costs a trip to tier 2 and no wrong answer.
-function manyDataLines(bytes) {
+// Two `data:` lines. Two events of a whole stream count too: that costs a trip to tier 2 and no wrong answer, and so does a search the budget cannot pay for.
+function manyDataLines(bytes, budget) {
   let lines = 0
   for (let at = bytes.indexOf(DATA_FIELD); at !== -1; at = bytes.indexOf(DATA_FIELD, at + 1)) {
-    if ((at === 0 || bytes[at - 1] === LF || bytes[at - 1] === CR) && ++lines === 2) return true
+    if (!budget.spend(CONDITION_COST) || ((at === 0 || bytes[at - 1] === LF || bytes[at - 1] === CR) && ++lines === 2)) return true
   }
   return false
 }
@@ -67,7 +81,7 @@ function manyDataLines(bytes) {
 /** Would tier 2 read these bytes at all? It refuses what is not UTF-8 and an event of many data lines, so tier 1 may not answer for them, either way. False also when the passes
  *  cannot be paid for. */
 export function readable(bytes, sse, budget) {
-  return budget.spend(bytes.length) && isUtf8(bytes) && !(sse && (!budget.spend(bytes.length) || manyDataLines(bytes)))
+  return budget.spend(bytes.length) && isUtf8(bytes) && !(sse && (!budget.spend(bytes.length) || manyDataLines(bytes, budget)))
 }
 
 // Paid once per unit, however many rules read its body. A spent budget says nothing about the bytes, so it is not kept.
@@ -100,11 +114,19 @@ const foldCase = (node) => {
 }
 
 // A missing pid, status or event_index is no match, whatever the condition says.
-const scalar = (key, node, read = (unit) => unit[key]) => (unit, budget) => {
-  const value = read(unit)
+const scalar = (key, node) => (unit, budget) => {
+  const value = unit[key]
   return value === null || value === undefined ? false : truth(node, String(value), budget, textLeaf)
 }
-const header = (side, name, node) => (unit, budget) => truth(node, headersOf(unit[side]).get(name), budget, textLeaf)
+const host = (node) => (unit, budget) => {
+  if (unit.host === null || unit.host === undefined) return false
+  const value = foldedHost(unit, budget)
+  return value === null ? null : truth(node, value, budget, textLeaf)
+}
+const header = (side, name, node) => (unit, budget) => {
+  const map = headersOf(unit[side], budget)
+  return map && truth(node, map.get(name), budget, textLeaf)
+}
 const body = (node) => (unit, budget) => truth(node, unit, budget, bodyLeaf)
 
 const hostOf = (match) => (has(match, 'host') ? foldCase(parseCondition(match.host, { key: 'host' })) : null)
@@ -120,7 +142,7 @@ function conditionsOf(match) {
   for (const key of ['method', 'path', 'class', 'pid', 'status', 'event_index']) {
     if (has(match, key)) add(key, parseCondition(match[key], { key }), (node) => scalar(key, node))
   }
-  if (has(match, 'host')) add('host', hostOf(match), (node) => scalar('host', node, (unit) => unit.host?.toLowerCase()))
+  if (has(match, 'host')) add('host', hostOf(match), host)
   for (const [key, side] of [['header', 'headers'], ['req_header', 'req_headers']]) {
     for (const name of Object.keys(match[key] ?? {})) add(key, parseCondition(match[key][name], { key }), (node) => header(side, name.toLowerCase(), node))
   }
