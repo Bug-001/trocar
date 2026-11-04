@@ -10,13 +10,13 @@ import path from 'node:path';
 import { compareStep } from '../view/step-order.mjs';
 import { recordsAt } from './records.mjs';
 import { isModelCall } from './rows.mjs';
-import { usageFacts } from './usage.mjs';
+import { foldFacts } from './usage.mjs';
 import { indexDir } from './index-build.mjs';
 import { fsTag, statKey } from './warm.mjs';
 import { trocarHome } from '../paths.mjs';
 
 export const TITLE_V = 1;
-const FIRST_READ = 4, GROWTH = 4; // model calls read at first, and how much larger each next read is (3.5 §访问模式: 4, 16, 64 …)
+const FIRST_READ = 4, GROWTH = 4; // model calls read at first, and how many times more each next read takes in (3.5 §访问模式: 4, 16, 64 …)
 
 export const titlesFile = (home) => path.join(indexDir(home), 'titles.json');
 
@@ -41,32 +41,34 @@ function tableOf(home, fs) {
   return table;
 }
 
-// What the table says after this session's new members are checked: `keep` (the entry stands), or the place in the calls to read on from.
+// What the table says after this session's new members are checked: `keep` (the entry stands), or how far the calls are known to hold no main one.
 function check(was, members) {
   if (!was || members.length < was.m) return { from: 0 };
   const fresh = members.slice(was.m).filter(isModelCall);
   if (!fresh.length) return { keep: true };
-  if (was.r != null) {
-    const at = members.find((r) => r.id === was.r);
-    return at && !fresh.some((r) => byStep(r, at) < 0) ? { keep: true } : { from: 0 }; // `t` null with a main call found is final too
-  }
-  return { from: was.c, fresh: new Set(fresh) };
+  if (was.r == null) return { from: was.c };
+  const at = members.find((r) => r.id === was.r);
+  return at && !fresh.some((r) => byStep(r, at) < 0) ? { keep: true } : { from: 0 }; // `t` null with a main call found is final too
 }
 
-// Reads `steps` (the model calls in step order) from `from`, batch by batch, until a main-lane call. → {t, r, c}, or {unread} when a
-// record could not be read. A batch goes back to write order for the fold, as a session's members are folded.
-function firstMain({ home, fs, steps, from, order }) {
-  let size = FIRST_READ;
-  for (let at = from; at < steps.length; at += size, size *= GROWTH) {
-    const batch = steps.slice(at, at + size), errs = [];
-    const rows = [...batch].sort((a, b) => order.get(a) - order.get(b));
-    const records = recordsAt({ home, fs, rows, errors: errs, remember: false });
-    if (errs.some((e) => e.io) || records.length < rows.length) return { unread: errs[0] ? errs[0].reason : 'a record is missing' };
-    const facts = new Map(usageFacts({ rows, records }).map((f) => [String(f.id), f]));
-    const main = batch.find((r) => (facts.get(String(r.id)) || {}).lane === 'main');
-    if (main) return { t: facts.get(String(main.id)).ask ?? null, r: main.id, c: Math.min(at + size, steps.length) };
+// The first main-lane call of the model calls (`calls` in write order, `steps` in step order), past the first `from` known to hold none.
+// → {t, r, c}, or {unread} when a record could not be read. Each read folds the calls from the first one on, in write order, as `session`
+// does: a call may be told by the one it continues (4 16 64 … of them, so about a third more reads than calls); a later part folded alone
+// would read a subagent's continuation as the main lane. Whatever sorts into the part read before is in the next read too. The records
+// are read one at a time, so a long read holds one record and the fold.
+function firstMain({ home, fs, calls, steps, from }) {
+  let end = FIRST_READ;
+  while (end <= from) end *= GROWTH;
+  for (;; end *= GROWTH) {
+    const head = steps.slice(0, end), held = new Set(head), errs = [];
+    let lost = false;
+    const read = (rs) => { const got = recordsAt({ home, fs, rows: rs, errors: errs, remember: false }); lost ||= got.length < rs.length; return got; };
+    const facts = new Map(foldFacts({ rows: calls.filter((r) => held.has(r)), read }).map((f) => [String(f.id), f]));
+    if (lost || errs.some((e) => e.io)) return { unread: errs[0] ? errs[0].reason : 'a record is missing' };
+    const main = head.find((r) => (facts.get(String(r.id)) || {}).lane === 'main');
+    if (main) return { t: facts.get(String(main.id)).ask ?? null, r: main.id, c: head.length };
+    if (end >= steps.length) return { t: null, r: null, c: steps.length };
   }
-  return { t: null, r: null, c: steps.length };
 }
 
 /** titleOf({home, fs, id, members, errors}) → the session's title, or null: no main prompt in its calls, or (with one `errors` entry,
@@ -74,10 +76,8 @@ function firstMain({ home, fs, steps, from, order }) {
 export function titleOf({ home = trocarHome(), fs = nodeFs, id, members, errors = [] }) {
   const table = tableOf(home, fs), was = table.titles.get(id), state = check(was, members);
   if (state.keep) { was.m = members.length; return was.t; }
-  const calls = members.filter(isModelCall), order = new Map(calls.map((r, i) => [r, i])), steps = [...calls].sort(byStep);
-  // a new call that sorts into the part already read would never be read: the part is read again
-  const from = state.fresh && steps.slice(0, state.from).some((r) => state.fresh.has(r)) ? 0 : state.from;
-  const got = firstMain({ home, fs, steps, from, order });
+  const calls = members.filter(isModelCall);
+  const got = firstMain({ home, fs, calls, steps: [...calls].sort(byStep), from: state.from });
   if (got.unread) {
     if (table.titles.delete(id)) table.dirty = true;
     errors.push({ where: `session/${id}`, code: 'record-unreadable', reason: got.unread });
