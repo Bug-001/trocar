@@ -5,6 +5,7 @@ import assert from 'node:assert/strict'
 import { SCHEMA_VERSION, EXIT, RECEIPT_KEYS, newReceipt, validateReceipt, validateTopology, ROUTING, TOPOLOGY_KINDS, TOPOLOGY_VIA, UNKNOWN_REASONS, FINDING_CLASSES } from '../../src/cli/schema.mjs'
 import * as off from '../../src/off/schema.mjs'
 import { COMMAND_KEYS } from '../../src/cli/schema.mjs'
+import { ERROR_CODES } from '../../src/cli/json.mjs'
 import { readFileSync } from 'node:fs'
 
 const mutate = (fn, command = 'status') => { const r = newReceipt(command); fn(r); return r } // `status` carries no C.2 key list, so a probe of a common key is not read as drift
@@ -189,15 +190,29 @@ test('validateFinding (1.6 §9.6, V49): a code in the closed sets, a class, a wh
   assert.match(validateFinding(null)[0], /not an object/)
 })
 
+// 附录 C.1 closes the set of refusal codes a client switches on, and ERROR_CODES is that set in code: one external fact, one place (0.1 §2).
+test('附录 C.1 names exactly the codes of ERROR_CODES', () => {
+  const manual = readFileSync(new URL('../../spec/01-trocar-rfc/1.6-cli.md', import.meta.url), 'utf8')
+  const closed = /`ERROR_CODES`\(([^)]*)\)/.exec(manual.split('### C.1')[1])[1]
+  assert.deepEqual([...closed.matchAll(/`([^`]+)`/g)].map((m) => m[1]).sort(), [...ERROR_CODES].sort())
+})
+
 // 附录 C.2 names the keys a reader writes a client against, and `COMMAND_KEYS` is what validateReceipt checks: one external fact, one place (0.1 §2).
 // The drift this guard catches is the one the test machines found (macOS and Windows test machines, 2026-10-18: thirteen keys the manual named nowhere).
 test('附录 C.2 names exactly the keys of COMMAND_KEYS, for every command', () => {
   const manual = readFileSync(new URL('../../spec/01-trocar-rfc/1.6-cli.md', import.meta.url), 'utf8')
   const table = manual.split('### C.2')[1].split('###')[0]
   const rows = table.split('\n').filter((l) => /^\| `/.test(l)).map((l) => l.split('|').slice(1, 3))
-  // a key is a code span that IS a key: an identifier, with its value shape after a `:` — so `trocar-off`, a path or a prose span is not one
-  const keysIn = (cell) => [...new Set([...cell.matchAll(/`([a-z_][a-z0-9_]*)((?:[:([].*?)?)`/g)].map((m) => m[1]))]
-  const named = new Map(rows.map(([head, cell]) => [head.match(/`([a-z-]+)/)[1], keysIn(cell)]))
+  // a key is a code span that IS a key: an identifier, with its value shape after a `:` — so `trocar-off`, a path or a prose span is not one.
+  // What a parenthesis says about a key, and the prose after the sentence of keys, name values and other tables' keys, not this row's.
+  const keysIn = (cell) => [...new Set([...cell.replace(/\([^()]*\)/g, '').split('。')[0].matchAll(/`([a-z_][a-z0-9_]*)((?:[:([].*?)?)`/g)].map((m) => m[1]))]
+  // C.1: a `rules` or `held` receipt's command carries its verb, so `rules enable` / `disable` is two commands; `classes set` / `add` is the one `classes`
+  const commandsIn = (head) => {
+    const [first, ...more] = [...head.matchAll(/`([^`]+)`/g)].map((m) => m[1])
+    const [name, verb] = first.split(' ')
+    return name === 'rules' || name === 'held' ? [first, ...more.map((v) => `${name} ${v}`)] : verb ? [name] : [first]
+  }
+  const named = new Map(rows.flatMap(([head, cell]) => commandsIn(head).map((c) => [c, keysIn(cell)])))
   assert.deepEqual([...named.keys()], Object.keys(COMMAND_KEYS), 'a command per row, in the order of COMMAND_KEYS')
   for (const [command, keys] of named) {
     const documented = keys.filter((k) => !RECEIPT_KEYS.includes(k)) // the common keys are C.1's; the row does not repeat them

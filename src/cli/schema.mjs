@@ -10,13 +10,27 @@ export { SCHEMA_VERSION, EXIT, RECEIPT_KEYS, UNDO_LINE, newReceipt }
 /** 附录 C.2: besides the common keys of C.1, the keys each state-changing command's receipt may carry — the list a reader of 附录 C writes a client against.
  *  A receipt with a key outside its list is drift (tested 2026-10-18: thirteen keys 附录 C named nowhere), so `validateReceipt` reports it.
  *  C.2's table and this object name the same keys (test/cli/schema.test.mjs). */
+const RULE_SWITCH_KEYS = Object.freeze(['rules', 'loaded', 'held', 'notes'])
+const HELD_DECISION_KEYS = Object.freeze(['id', 'outcome', 'rules', 'harness'])
 export const COMMAND_KEYS = Object.freeze({
   install: Object.freeze(['fp256', 'items', 'carriers', 'harnesses', 'pending', 'standalone', 'commands', 'residual_risk', 'daemon', 'autostart', 'left', 'notes']),
-  on: Object.freeze(['harnesses', 'refused', 'routes', 'user', 'standalone', 'commands', 'unchanged', 'capture', 'daemon', 'linger', 'linger_reason', 'adopted', 'notes']),
-  off: Object.freeze(['harnesses', 'all', 'outcome', 'daemon', 'daemon_stop', 'holders', 'left', 'kept_backups', 'orphan_backups', 'kept_bundles', 'still_trusting', 'residue', 'undone_by_marker', 'routing', 'install_items', 'pending', 'user_processes', 'nothing_installed', 'relayed_reason', 'notes']),
+  on: Object.freeze(['harnesses', 'refused', 'routes', 'user', 'standalone', 'commands', 'unchanged', 'capture', 'daemon', 'linger', 'linger_reason', 'adopted', 'rules_stopped', 'notes']),
+  off: Object.freeze(['harnesses', 'all', 'outcome', 'daemon', 'daemon_stop', 'holders', 'left', 'kept_backups', 'orphan_backups', 'kept_bundles', 'still_trusting', 'residue', 'undone_by_marker', 'routing', 'install_items', 'pending', 'user_processes', 'nothing_installed', 'relayed_reason', 'held', 'notes']),
   uninstall: Object.freeze(['harnesses', 'all', 'purge_data', 'kept', 'kept_bundles', 'still_trusting', 'residue', 'dropped_backups', 'non_identical', 'entries', 'left', 'pending', 'scheduled', 'autostart', 'daemon', 'relayed_reason', 'routing', 'user_processes', 'declined', 'notes']),
   update: Object.freeze(['from', 'to', 'harnesses', 'restarted', 'install', 'on', 'notes']),
   classes: Object.freeze(['class', 'before', 'after']),
+  // C.1: a `rules` or `held` receipt's command carries its verb, so the key is the whole name
+  'rules add': Object.freeze(['rules', 'loaded', 'notes']),
+  'rules enable': RULE_SWITCH_KEYS,
+  'rules disable': RULE_SWITCH_KEYS,
+  'rules rm': RULE_SWITCH_KEYS,
+  'rules off': Object.freeze(['rules', 'memory', 'file', 'stats', 'held', 'notes']),
+  'rules max-delay': Object.freeze(['max_delay_ms', 'before', 'loaded']),
+  'rules test': Object.freeze(['rule', 'input', 'with_live', 'run_script', 'counts', 'records', 'rule_ms', 'over_max_delay', 'passthrough_hosts', 'notes']),
+  'held show': Object.freeze(['id', 'harness', 'pid', 'on', 'method', 'host', 'path', 'rules', 'since', 'waited_ms', 'left_ms', 'on_timeout', 'body_bytes', 'edited', 'headers']),
+  'held release': HELD_DECISION_KEYS,
+  'held drop': HELD_DECISION_KEYS,
+  resend: Object.freeze(['batch', 'sent', 'failed', 'replays', 'hop', 'notes']),
 })
 /** C.1: the keys any receipt may carry besides `RECEIPT_KEYS` — a refusal's `error`, and what a run stopped before writing says (`planned`, `blocked`, `needs_yes`, `dry_run`). */
 const COMMON_OPTIONAL = Object.freeze(['error', 'problems', 'planned', 'blocked', 'needs_yes', 'dry_run'])
