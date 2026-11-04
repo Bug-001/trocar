@@ -695,7 +695,7 @@ function openDesk(ctx, route0, makeView = legacyView) {
         if (!parsed) { packFailed = true; if (s.playRid == null && s.initialStep != null) readFailed(r.ok ? { status: r.status, error: 'not the file\'s lines' } : r); break }
         // held once the desk holds it: a part whose apply threw, or never ran, is read again
         applies.push(serial(() => { if (gone()) return; keep(`p${p.n}.${part}`, r.text.length); const ch = applyParsed({ kind: 'pack', n: p.n, part }, parsed); got.push(part); return { ch } })
-          .then((x) => x && redraw(x.ch)))
+          .then((x) => { if (x) redraw(x.ch).catch((e) => console.error(e)) })) // the redraw is paced: the pack's slot does not wait for it
       }
     } catch (e) { err = e }
     // every apply settles before the pack's record is written, so a part still applying is neither held nor read twice
