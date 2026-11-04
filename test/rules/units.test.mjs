@@ -141,3 +141,39 @@ test('a compressed request restored inline reads through the encoding the record
   const [sent] = unitsOf(rec, req, { asSent: true }).units
   assert.equal(sent.encoding, null)
 })
+
+// What no rule could have read must never look like a miss, and what has no body must not look like what was lost.
+const LOST_BODIES = {
+  'only its size': { req_body: { verbatim: false, raw_chars: 5000 } },
+  'an object with no size': { req_body: { verbatim: false } },
+  'null, it did not decode': { req_body: null, req_encoding_error: 'zstd' },
+  'null on a POST': { req_body: null },
+  'no key on a POST': { req_body: undefined },
+}
+for (const [name, over] of Object.entries(LOST_BODIES)) {
+  for (const is_llm_call of [true, false]) {
+    test(`a request body kept as ${name} (llm ${is_llm_call}) cannot be tested, with or without asSent`, () => {
+      for (const options of [{}, { asSent: true }]) assert.deepEqual(unitsOf(record({ ...over, is_llm_call }), req, options), { cannot: 'body-not-kept' })
+    })
+  }
+}
+
+test('no body is a body: an empty string, a size of 0, a GET with null', () => {
+  assert.equal(String(unitsOf(record({ req_body: '' }), req).units[0].body), '')
+  for (const over of [{ req_body: { verbatim: false, raw_chars: 0 } }, { req_body: null, method: 'GET' }]) assert.equal(unitsOf(record(over), req).units[0].body, null)
+})
+
+const ws = (over = {}) => record({ transport: 'ws', req_body: 'open', resp: { status: 101, kind: 'ws', headers: {}, messages: ['hi'] }, ...over })
+const wsClient = { on: 'ws-client' }, wsServer = { on: 'ws-server' }
+
+test('a WebSocket call whose opening message or reply was not kept cannot be tested, and one kept whole gives its units', () => {
+  for (const over of [{ req_body: null }, { req_body: undefined }, { req_body: { raw_chars: 9, verbatim: false } }]) assert.deepEqual(unitsOf(ws(over), wsClient), { cannot: 'message-not-kept' })
+  for (const over of [{ resp: undefined }, { resp: { status: 101, kind: 'ws', headers: {} } }]) assert.deepEqual(unitsOf(ws(over), wsServer), { cannot: 'message-not-kept' })
+  assert.deepEqual(unitsOf(ws({ req_extra_messages: ['two'] }), wsClient).units.map((u) => String(u.body)), ['open', 'two'])
+  assert.deepEqual(unitsOf(ws(), wsServer).units.map((u) => String(u.body)), ['hi'])
+  assert.deepEqual(unitsOf(ws({ resp: { status: 101, kind: 'ws', headers: {}, messages: [] } }), wsServer), { units: [] })
+})
+
+test('a line that is no object is a bad record', () => {
+  for (const line of [5, 'x', true, []]) assert.deepEqual(unitsOf(line, req), { cannot: 'bad-record' })
+})

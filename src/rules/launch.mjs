@@ -77,13 +77,13 @@ function talkTo(args, slot) {
   return link
 }
 
-/** A rule process for `rules test`: `run(unit)` → the answer, `{died}` when the process died on it, one at a time; the next run starts a new one. `close()` takes the process and
- *  its slot away. An answer is applyRules's result less `survivors`, plus `console`, `edits` parsed and `bytes` read back; or `{id, why}` when the process would not answer. */
+/** A rule process for `rules test`: `run(unit)` → the answer, `{died}` when the process died on it, one at a time; the next run starts a new one, unless it was the load that failed:
+ *  every run after that gets the same `{died, reason}`. `close()` takes the process and its slot away. An answer is applyRules's result less `survivors`, plus `console`, `edits` parsed and `bytes` read back; or `{id, why}` when the process would not answer. */
 export function openOneShot({ script, rules, maxTaskMs = 2000, tmp = os.tmpdir(), capBytes = memoryCap() }) {
   const dir = fs.mkdtempSync(path.join(fs.realpathSync(tmp), 'trocar-slot-'))
   const file = path.join(dir, 'slot.bin')
   const slot = fs.openSync(file, 'wx+', 0o600)
-  let runner = null, task = 0
+  let runner = null, task = 0, unloaded = null
 
   async function start() {
     fs.ftruncateSync(slot, 0)
@@ -129,10 +129,11 @@ export function openOneShot({ script, rules, maxTaskMs = 2000, tmp = os.tmpdir()
   }
 
   async function run({ body, ...unit }) {
+    if (unloaded) return unloaded
     if (runner?.killed) await runner.gone
     if (!runner || runner.dead) {
-      const failed = await start()
-      if (failed) return failed
+      unloaded = await start().catch((e) => ({ died: 'load-failed', reason: e.message }))
+      if (unloaded) return unloaded
     }
     const id = ++task
     if (body) fs.writeSync(slot, body, 0, body.length, HEAD_BYTES)

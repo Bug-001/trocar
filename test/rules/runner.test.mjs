@@ -284,3 +284,19 @@ for (const [name, swap, why] of [
     assert.deepEqual([answer.died, answer.why], [undefined, why]);
   }));
 }
+
+test('a load that fails says why', async () => {
+  const script = scriptFile('throw new Error("broken at load");');
+  const runner = openOneShot({ script, rules: [scriptRule(script)] });
+  try { assert.match((await runner.run(unitOf('a'))).reason, /broken at load/); } finally { await runner.close(); }
+});
+
+test('a script that is not there is a load that failed, with a reason that names it', async () => {
+  const script = path.join(tmpDir('trocar-runner-'), 'gone.mjs');
+  const runner = openOneShot({ script, rules: [scriptRule(script)] });
+  try {
+    const answer = await runner.run(unitOf('a'));
+    assert.equal(answer.died, 'load-failed');
+    assert.ok(answer.reason.includes(script), answer.reason);
+  } finally { await runner.close(); }
+});
