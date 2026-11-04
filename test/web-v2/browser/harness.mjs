@@ -186,7 +186,7 @@ export const windowGap = (page) => page.evaluate(gapInPage)
 /** ms from the input `act` makes (its first pointerdown / keydown, marked by a listener armed and awaited before it, so the input can
  *  never outrun it) until `cond` holds and that frame has painted: 'replay' (a session's window drawn), 'step' (the step head no longer
  *  reads `arg` and the window is drawn), 'n' (the step head's number, data-n, is no longer `arg` and the window is drawn), 'sel'
- *  (selector `arg` matches). 'step' and 'n' also wait for the visible box to be filled, in the same frame: no gap over one pitch
+ *  (selector `arg` matches), 'reply' (below). 'step', 'n' and 'reply' also wait for the visible box to be filled, in the same frame: no gap over one pitch
  *  (gapInPage; D64② a step counts once it is completely drawn). Rejects after 10 s. */
 export async function timed(page, cond, arg, act) {
   await page.evaluate(() => {
@@ -203,6 +203,9 @@ export async function timed(page, cond, arg, act) {
       step: () => !!q('#stepbar .sb-no') && q('#stepbar .sb-no').textContent !== a && !q('#ctxwin .cwload') && filled(),
       n: () => !!q('#stepbar .sb-no') && +q('#stepbar .sb-no').dataset.n !== a && !q('#ctxwin .cwload') && filled(),
       sel: () => !!q(a),
+      // a step's reply wholly drawn: the step head moved (a[0], as 'step'), the visible box is filled, and a table of the reply holds a[1]
+      reply: () => !!q('#stepbar .sb-no') && q('#stepbar .sb-no').textContent !== a[0] && !q('#ctxwin .cwload') && filled()
+        && [...document.querySelectorAll('#ctxwin .cwreply .md-table')].some((t) => t.textContent.includes(a[1])),
     }[cond]
     const t0 = performance.now()
     const tick = () => {

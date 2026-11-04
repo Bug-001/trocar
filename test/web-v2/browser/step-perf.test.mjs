@@ -3,14 +3,15 @@
 // D64⑥: acceptance numbers come from the test machines, not this one). Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard, stats, timed, timerReads } from './harness.mjs'
+import { probe, withBoard, serveWorld, stats, timed, timerReads } from './harness.mjs'
+import { world } from '../desk-world.mjs'
 import { INTERVAL } from '../../../web/legacy/core/poll.mjs'
 import { BOARD_LINES } from '../perf-lines.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
 const BYTES = 5e6
-const samples = { stepClick: [], stepKey: [] }
+const samples = { stepClick: [], stepKey: [], longReply: [] }
 
 const stepNo = async (page) => (await page.textContent('#stepbar .sb-no')).match(/(\d+)\s*\/\s*(\d+)/).slice(1).map(Number)
 
@@ -100,11 +101,61 @@ test('1.2 §键盘: the ? key list closes when the desk is left for another scre
   } finally { await b.stop() }
 })
 
+// 2.3 #43's reply: 20,000 characters, one slice of the cell, ending in a table that holds `word`
+function longReply(word) {
+  const row = (i) => `| ${i} | 第 ${i} 行的说明 | \`value-${i}\` |`
+  const section = (i) => [`## Section ${i}`, 'A paragraph with **bold** words, a [link](https://example.com/a) and `code`. 这一段说明这一步做了什么，以及为什么这样做。',
+    '- first point\n- second point\n  - a nested point\n- third point', '```js\nconst value = compute(input)\nif (!value) throw new Error(\'no value\')\nreturn value\n```',
+    `| n | what | key |\n|---|---|---|\n${[1, 2, 3].map(row).join('\n')}`].join('\n\n') + '\n\n'
+  let text = ''
+  for (let i = 1; text.length < 19600; i++) text += section(i)
+  return `${text}| end |\n|---|\n| ${word} |\n`
+}
+
+// D64②: a step is counted once it is completely drawn. The reader has rested on the step before, so the prefetch brought this one's body
+// (2.3 §正文预取), and every long reply is another text: each step pays its own parse, in both directions but the last few
+test('2.3 #43 · D64②: ←/→ onto a step whose reply is 20,000 characters of markdown draws it whole within the line', { skip }, async () => {
+  const w = world(5, { calls: 120, page: 200 })
+  const main = w.full().lanes.find((l) => l.kind === 'main').lane, doc = w.lane(main), refOf = new Map(doc.defs.map((d) => [d.bid, d.ref]))
+  const failed = new Set(w.full(w.now, { limit: 0 }).calls.filter((c) => c.status !== 200).map((c) => c.rid))
+  const word = new Map(), text = new Map() // step number → the word its reply ends in; ref → that reply
+  doc.steps.forEach((st, i) => {
+    const ref = refOf.get(st.reply[0])
+    if (!ref || failed.has(st.rid)) return
+    word.set(i + 1, `reply-of-step-${i + 1}`)
+    text.set(ref, longReply(word.get(i + 1)))
+  })
+  assert.ok(word.size >= 8, 'the world has steps with a reply')
+  for (const t of text.values()) assert.ok(t.length > 19500 && t.length <= 20000, `the reply is ${t.length} characters`)
+  const b = await withBoard({ bytes: 1e5, chromium: gate.chromium })
+  try {
+    const { page } = b
+    await serveWorld(page, w)
+    await page.route('**/api/block?**', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ schema: 2, command: 'block', ok: true, errors: [],
+      blocks: new URL(route.request().url()).searchParams.getAll('ref').map((ref) => { const t = text.get(ref) ?? `body of ${ref}`
+        return { ref, bytes: t, view: { r: { as: 'markdown', f: { body: ['text'] } }, body: { text: t } }, encoding: 'utf8', fidelity: 'verbatim', truncated: false } }) }) }))
+    await page.evaluate(() => { location.hash = '#/replay/p/S?step=1' })
+    await page.waitForSelector('#stepbar .sb-no')
+    const go = async (key, n) => {
+      await page.waitForTimeout(150) // the rest
+      await page.waitForLoadState('networkidle')
+      const prev = await page.textContent('#stepbar .sb-no'), press = () => page.keyboard.press(key)
+      if (word.has(n)) samples.longReply.push(await timed(page, 'reply', [prev, word.get(n)], press))
+      else await timed(page, 'step', prev, press)
+    }
+    for (let n = 2; n <= doc.steps.length; n++) await go('ArrowRight', n)
+    for (let n = doc.steps.length - 1; n >= 1; n--) await go('ArrowLeft', n)
+    assert.deepEqual(b.errors, [])
+    const { p95 } = stats(samples.longReply)
+    assert.ok(p95 <= BOARD_LINES.stepClick, `a long reply's step change p95 ${p95.toFixed(1)} ms over the ${BOARD_LINES.stepClick} ms line`)
+  } finally { await b.stop() }
+})
+
 // D64④⑥: p50 and p95 next to the line, printed; this run is a baseline — acceptance numbers come from the test machines, not from it (PR 6)
 test.after(() => {
   for (const [k, v] of Object.entries(samples)) {
     if (!v.length) continue
     const { p50, p95 } = stats(v)
-    console.log(`# D64 ${k}: n=${v.length} p50=${p50.toFixed(1)} ms p95=${p95.toFixed(1)} ms line=${BOARD_LINES.stepClick} ms ${p95 <= BOARD_LINES.stepClick ? 'within' : 'OVER'}`)
+    console.log(`# D64 ${k}: n=${v.length} p50=${p50.toFixed(1)} ms p95=${p95.toFixed(1)} ms max=${Math.max(...v).toFixed(1)} ms line=${BOARD_LINES.stepClick} ms ${p95 <= BOARD_LINES.stepClick ? 'within' : 'OVER'}`)
   }
 })
