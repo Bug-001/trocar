@@ -60,6 +60,7 @@ async function readBody(r) {
 // → true when r is a 403, which closes the latch (once)
 function latched(r) {
   if (r.status !== 403) return false
+  if (r.body) r.body.cancel().catch(() => {}) // its body is never read: let the connection go
   if (forbidden) return true
   forbidden = true
   // the token this page sent is wrong: drop the kept copy, unless another tab has since kept a newer one (4.4 §每用户口令)
