@@ -28,9 +28,9 @@ export function mapUsage(provider, raw = {}, opts = {}) {
 }
 
 // The board's usage {read, create, fresh, out}: a projection of mapUsage's output, never a second mapping (3.2).
-// An unreported write is a 0 in the stored row; an answer serves it as NULL again (callUsage below, src/query/session-doc.mjs).
+// An unreported write is NULL in the stored row too, never a 0: readers take the row's word and decode no frame to tell the two apart.
 export function boardUsage(c) {
-  return { read: c.cache_read, create: c.cache_write ?? 0, fresh: c.input_uncached, out: c.output };
+  return { read: c.cache_read, create: c.cache_write, fresh: c.input_uncached, out: c.output };
 }
 
 /** callUsage(x) → the provider usage a call's stored facts carry (x.facts.usage on the anthropic wire, x.nu on a flat one), in the
