@@ -288,7 +288,7 @@ test('3.5 lane: a ledger past PAGE_BYTES goes by ledger_next — every answer fi
 // ── 3.5 #28 (the lane part): the closed sets, on a session of each harness shape ─────────────────────────────────────────────────
 const TOP = ['schema', 'command', 'ok', 'errors', 'lane', 'base', 'mark', 'steps', 'defs', 'resources', 'seen', 'events', 'prev', 'next', 'ledger_next']
 const STEP = ['rid', 'parent', 'ops', 'reply', 'attrs', 'detail']
-const DETAIL = ['norm', 'respRefs', 'nonBlockKeys', 'extraMessages', 'wire']
+const DETAIL = ['norm', 'respRefs', 'nonBlockKeys', 'extraMessages', 'wire', 'tax']
 const NORM = ['stop_reason', 'usage']
 const DEF = ['bid', 'fh', 'ref', 'sec', 'role', 'kind', 'label', 'name', 'mcp', 'cc', 'ff', 'head', 'preview', 'chars', 'bytes', 'resKey', 'r', 'unaddressable', 'inline']
 const HEAD = ['role', 'tag', 'label']
@@ -387,9 +387,10 @@ test('3.5 #28 (lane): tail, --from and reset pages of every shape keep the close
 // ── 3.5 #28 (the session and block parts): the same closed sets on the seven-shapes HOME, a long Message Threads session beside ─
 const S_FULL = ['schema', 'command', 'ok', 'errors', 'base', 'mark', 'pending', 'truncated', 'more', 'meta', 'stats', 'logged', 'probes', 'unknown', 'lanes', 'calls', 'events', 'records']
 const S_SINCE = ['schema', 'command', 'ok', 'errors', 'base', 'mark', 'pending', 'truncated', 'meta', 'stats', 'logged', 'probes', 'unknown', 'calls', 'gone', 'lanes', 'lanes_gone', 'events', 'records']
-const ROW = ['rid', 'lane', 'ts', 'ctx', 'comp', 'usage', 'tools', 'status', 'error', 'errMsg', 'unparsed', 'rec', 'compaction', 'compactionInferred', 'gt', 'probe', 'reqIncomplete', 'wsIncomplete', 'respIncomplete', 'wire', 'cacheBreak']
+const ROW = ['rid', 'lane', 'ts', 'ctx', 'comp', 'usage', 'tools', 'status', 'error', 'errMsg', 'unparsed', 'rec', 'compaction', 'compactionInferred', 'gt', 'probe', 'reqIncomplete', 'wsIncomplete', 'respIncomplete', 'wire', 'cacheBreak', 'cache']
 const ROW_WIRE = ['cacheSemanticsKnown', 'contextState', 'contextMissing', 'reqEncoding', 'labels']
 const BREAK = ['cause', 'attribution', 'idx', 'refRid', 'gt', 'firstCall']
+const CACHE = ['state', 'hit', 'break', 'warm', 'quiet', 'zeroInput', 'missed', 'why']
 const LANE_HEAD = ['lane', 'kind', 'icon', 'label', 'task', 'note', 'count', 'first', 'last', 'peakCtx', 'spawnRid', 'parent', 'flagged']
 const RECORD = ['id', 'ts_request', 'is_llm_call', 'response']
 const BLOCK_TOP = ['schema', 'command', 'ok', 'errors', 'blocks']
@@ -403,6 +404,7 @@ function sessionSets(d, closed, sample) {
     subset(r.rec, ['id', 'request'], 'row.rec'); if (r.rec.request) subset(r.rec.request, ['model'], 'row.rec.request')
     if (r.wire) { subset(r.wire, ROW_WIRE, 'row.wire'); for (const l of r.wire.labels || []) subset(l, ['id', 'label'], 'row.wire.labels') }
     if (r.cacheBreak) subset(r.cacheBreak, BREAK, 'row.cacheBreak')
+    if (r.cache) subset(r.cache, CACHE, 'row.cache')
   }
   for (const h of d.lanes) { subset(h, LANE_HEAD, 'lane header'); covers(h, sample.lanes[0], 'lane header') }
   for (const e of d.events) subset(e, ['type', 'rid', 'lane'], 'event')

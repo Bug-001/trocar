@@ -136,11 +136,12 @@ export function world(seed, { calls: count, cut: cuts = false, page: pageSize, s
     const rows = new Map(), events = [], lanes = new Map(), laneCalls = new Map()
     for (const c of live) {
       const lane = keyOf.get(laneOf.get(c.rid)), ctx = 1000 + c.list.length * 100
-      const row = { rid: c.rid, lane, ts: c.ts, ctx, comp: { system: 250, user: ctx - 250 }, usage: c.status === 200 ? { input: ctx, output: 80, cache_read: 0, cache_write: 0 } : null,
+      const row = { rid: c.rid, lane, ts: c.ts, ctx, comp: { system: 250, user: ctx - 250 }, usage: c.status === 200 ? { read: 0, create: 0, fresh: ctx, out: 80 } : null,
         tools: 0, status: c.status, rec: { id: c.rid, request: { model: 'm' } },
         wire: { cacheSemanticsKnown: true, contextState: 'complete', contextMissing: 0, reqEncoding: 'identity', labels: [] } }
       if (c.status !== 200) Object.assign(row, { error: 'overloaded_error', errMsg: 'Overloaded' })
       if (lane === c.rid) row.cacheBreak = { cause: 'first', attribution: 'none', idx: 0, refRid: null, gt: null, firstCall: true }
+      row.cache = c.status !== 200 ? { state: 'failed' } : { state: row.cacheBreak ? 'first' : 'unjudged', hit: 0 }
       rows.set(c.rid, row)
       for (const type of c.evs) events.push({ type, rid: c.rid, lane })
     }
