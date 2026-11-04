@@ -419,6 +419,25 @@ test('AN19: each kind of captured fact is refused in any spelling; a word under 
   shapely(doc)
 })
 
+// `query sessions` on a capture no worker has read answers `pending`; `session --head` reads the title itself
+const DEMO = fileURLToPath(new URL('../../samples/demo-session.ndjson', import.meta.url))
+function pendingTitle() {
+  const w = workspace()
+  capture(w, SEGMENT, fs.readFileSync(DEMO, 'utf8').split('\n').filter(Boolean))
+  const [row] = query(w, 'sessions').sessions
+  assert.equal(row.title_source, 'pending')
+  const { title } = query(w, 'session', '--id', row.session_id, '--head').meta
+  assert.ok(title && Buffer.byteLength(title) < 60, 'a title short enough for captured-text to miss')
+  return { w, id: row.session_id, title }
+}
+test('AN19: a title the list has not read yet is read through the head, and refused', () => {
+  const { w, title } = pendingTitle()
+  w.commit({ 'a.txt': 'one\n' })
+  const { code, doc } = w.check({ body: `Seen in ${title.toUpperCase()}.` })
+  assert.equal(code, 1)
+  assert.deepEqual(doc.findings.map((f) => [f.rule, f.where]), [['captured-facts', 'body']])
+})
+
 // ── AN20
 const NOW_THEN = '2026-10-18T10:00:00.000Z'
 test('AN20: 60 shared normalized bytes are refused in every spelling, 59 pass, and the coverage is all of it', () => {
@@ -596,6 +615,29 @@ test('AN25: a query that cannot read the capture, a segment that cannot be read,
   assert.equal(noBase.code, 1)
   assert.deepEqual(noBase.doc.findings.map((f) => [f.rule, f.where]), [['unreadable', 'git']])
 })
+
+const HEAD_FAULTS = {
+  'answers pending too': `const d = JSON.parse(out); d.meta.title = null; d.meta.title_source = 'pending'; out = JSON.stringify(d)`,
+  'answers no document': `out = 'not a document'`,
+}
+for (const [name, rewrite] of Object.entries(HEAD_FAULTS)) {
+  test(`AN25: a pending title whose head ${name} refuses, and every other fact is still compared`, () => {
+    const { w, id } = pendingTitle()
+    w.commit({ 'a.txt': 'one\n' })
+    const cli = path.join(w.home, 'cli.mjs')
+    fs.writeFileSync(cli, `import { spawnSync } from 'node:child_process'
+const argv = process.argv.slice(2), real = spawnSync(process.execPath, [${JSON.stringify(BIN)}, ...argv], { maxBuffer: 2 ** 30 })
+let out = real.stdout.toString()
+if (argv.includes('--head')) { ${rewrite} }
+process.stdout.write(out)
+process.exitCode = real.status
+`)
+    const { code, doc } = w.check({ body: `Seen in ${id}.`, cli: ['--cli', cli] })
+    assert.equal(code, 1)
+    assert.ok(of(doc, 'partial').some((f) => f.where === 'capture'))
+    assert.ok(of(doc, 'captured-facts').some((f) => f.where === 'body'))
+  })
+}
 
 // ── AN30
 const wireless = (o) => reply('/events', o, { is_llm: false })

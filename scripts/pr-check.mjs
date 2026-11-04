@@ -71,6 +71,7 @@ const WHY = {
   git: 'git could not be read, so what is leaving is not known.',
   base: 'The base is not behind this branch: --base must name an ancestor of HEAD other than HEAD itself.',
   query: 'trocar query could not read the capture, so it was not compared.',
+  title: 'A session title could not be read yet, so it was not compared.',
   raw: 'A segment of the capture could not be read to its end, so the rest of it was not compared.',
   opaque: 'Some records could not be opened, so what is behind them was not compared: opaque_bytes counts them.',
   nothing: 'The capture holds records and none of them was compared: all of them are at or past --before, or could not be read.',
@@ -298,9 +299,19 @@ function allPages(cli, add, name, key) {
   }
 }
 
+/** A row's title. The list says `pending` for one it has not read, and the CLI read here is the installed one, of whatever version: the head
+ *  answers then, and a title neither gives is a `partial` finding, as it is content this could not compare. */
+function titleOf(cli, add, row) {
+  if (row.title_source !== 'pending') return row.title
+  let meta = null
+  try { ({ meta } = ask(cli, add, 'session', '--id', row.session_id, '--head')) } catch { /* no document: below */ }
+  if (!meta || meta.title_source === 'pending') add('partial', 'capture', WHY.title)
+  return meta?.title
+}
+
 /** The capture's facts as words; a segment's name also covers every `<segment>:<n>` record id. */
 function checkFacts(cli, segments, sources, add, hold) {
-  const facts = [...allPages(cli, add, 'sessions', 'sessions').flatMap((s) => [s.project_path, s.project_slug, s.session_id, s.title]),
+  const facts = [...allPages(cli, add, 'sessions', 'sessions').flatMap((s) => [s.project_path, s.project_slug, s.session_id, titleOf(cli, add, s)]),
     ...allPages(cli, add, 'traffic', 'hosts').map((h) => h.host), ...segments.map((s) => s.segment)]
   const words = new Map()
   for (const fact of facts) {
