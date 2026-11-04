@@ -47,7 +47,7 @@ Check out the tag for your version, or the commit after the `+` in a version lik
 node scripts/contract-check.mjs --json > "$RUN/contract.json"
 ```
 
-By default it reads the installed `trocar`. It runs no command that changes state and does not touch the raw records, though reads through the daemon refresh its index and projections. It prints only counts and ids. It checks what can be decided mechanically: every query answers and lists what it could not read; `--json` is one document and exit codes are the documented ones; `segments` agrees with the stored records; block bytes equal the record they came from; the same number agrees across documents; incremental reads add up to a full read; and, per agent, how many calls are unparsed, filed under other, have an inferred agent, or have an incomplete reply. That last group is where deep use of one agent shows up.
+By default it reads the installed `trocar`. It runs no command that changes state and does not touch the raw records, though reads through the daemon refresh its index and projections. It prints only counts, ids and hashes. It checks what can be decided mechanically: every query answers and lists what it could not read; `--json` is one document and exit codes are the documented ones; `segments` agrees with the stored records; block bytes equal the record they came from; the same number agrees across documents; incremental reads add up to a full read; and, per agent, how many calls are unparsed, filed under other, have an inferred agent, or have an incomplete reply. That last group is where deep use of one agent shows up.
 
 A finding here is a lead. Confirm it before you report it.
 

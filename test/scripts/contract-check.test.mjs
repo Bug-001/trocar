@@ -131,3 +131,21 @@ test('AN11: what was captured never reaches the output', async () => {
   assert.ok(!json.stdout.includes(sentence))
   assert.ok(!text.stdout.includes(sentence))
 })
+
+// the list and the session each answer `title` for what they name; the check compares them, and neither reaches the report
+const titled = (list, session) => `if (argv[1] === 'sessions') { const d = JSON.parse(out); for (const s of d.sessions) s.title = ${JSON.stringify(list)}; out = JSON.stringify(d) }
+if (argv[1] === 'session' && !argv.includes('--head')) { const d = JSON.parse(out); d.meta.title = ${JSON.stringify(session)}; out = JSON.stringify(d) }`
+const LIST_TITLE = 'FAKE question the user asked first', SESSION_TITLE = 'FAKE question answered by the session'
+for (const [name, session, status] of [['a title that agrees', LIST_TITLE, 'pass'], ['a title that differs', SESSION_TITLE, 'fail']]) {
+  test(`AN11: ${name} is judged by its hash and stays out of the output`, async () => {
+    const cli = standIn(titled(LIST_TITLE, session))
+    const json = await check(world.userHome, cli, '--json', '--sample', '1')
+    const text = await check(world.userHome, cli, '--sample', '1')
+    const agree = JSON.parse(json.stdout).checks.filter((c) => c.id.startsWith('agree/session/'))
+    assert.ok(agree.length > 0 && agree.every((c) => c.status === status && 'title_sha256' in c.expected), JSON.stringify(agree))
+    for (const title of [LIST_TITLE, SESSION_TITLE]) {
+      assert.ok(!json.stdout.includes(title))
+      assert.ok(!text.stdout.includes(title))
+    }
+  })
+}
