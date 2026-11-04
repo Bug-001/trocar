@@ -13,7 +13,7 @@ import { cellKey } from './keymap.mjs'
 import { isTyping } from '../core/keys.mjs'
 
 export const DISPLAY_CLIP = 20000
-const CELL_CAP = 2000000 // characters a cell shows at most; Copy bytes still copies all
+export const CELL_CAP = 2000000 // characters a cell shows at most; Copy bytes still copies all
 const BODY_CHARS = 16000000, HTML_CHARS = 8000000, OVERRIDES = 500, CELLS = 2000
 
 // escape for <pre>. A leading newline right after <pre> is dropped by the parser and a raw CR is read as LF: guard both
@@ -134,15 +134,18 @@ export function cellOf(x) {
   return { bid: x.bid || x.key || x.text_ref || synth(inline ?? ''), ref, inline, r: x.r || { as: 'text' }, ff: x.ff ?? null, chars: x.chars ?? inline?.length ?? 0, preview: x.preview ?? '' }
 }
 // the byte identity of a cell's body: its ref, or the inline text's own digest
-const byteKey = (cell) => cell.ref != null && cell.inline === undefined ? 'r:' + cell.ref : synth(cell.inline ?? '')
+export const byteKey = (cell) => cell.ref != null && cell.inline === undefined ? 'r:' + cell.ref : synth(cell.inline ?? '')
 // the body a cell holds right now: {status:'ok', text} | a failed answer | null (not here yet)
-const gotOf = (cell) => cell.inline !== undefined ? { status: 'ok', text: cell.inline } : cell.ref != null ? bodyCache.get(cell.ref) ?? null : null
+export const gotOf = (cell) => cell.inline !== undefined ? { status: 'ok', text: cell.inline } : cell.ref != null ? bodyCache.get(cell.ref) ?? null : null
 
 // ── mode state ────────────────────────────────────────────────────────────────────────────────────────────────────────
 const DESK_KEY = 'trocar.v2.cellView'
 const MODES = new Set(['raw', 'read'])
 const local = () => { try { return globalThis.localStorage ?? null } catch { return null } }
 let desk = null // the last desk mode set here, for when storage cannot hold it
+const heard = new Set() // who hears a mode change: the React cells and each wireCells root
+export const onModeChange = (fn) => { heard.add(fn); return () => { heard.delete(fn) } }
+const modeChanged = () => { for (const fn of [...heard]) try { fn() } catch { /* one listener never stops the others */ } }
 const overrides = new Map() // scope + bid -> mode; Map order = least recently set first
 // the overrides are the shown desk's: each cached desk (session-cache.mjs) keeps its own under its session key (2.3 §逐格覆盖)
 let scope = ''
@@ -156,9 +159,10 @@ export function setDeskMode(m, { storage = local() } = {}) {
   desk = MODES.has(m) ? m : 'raw'
   overrides.clear()
   try { storage && storage.setItem(DESK_KEY, desk) } catch { /* full or denied: the choice holds for this page only */ }
+  modeChanged()
 }
 // a desk that leaves the cache drops its overrides
-export const clearOverrides = (key) => { for (const k of [...overrides.keys()]) if (k.startsWith(String(key) + '\n')) overrides.delete(k) }
+export const clearOverrides = (key) => { for (const k of [...overrides.keys()]) if (k.startsWith(String(key) + '\n')) overrides.delete(k); modeChanged() }
 export const modeOf = (bid, opt) => overrides.get(scope + bid) ?? deskMode(opt)
 // set one cell's mode; back to the desk default drops its override
 export function setMode(bid, m, opt) {
@@ -167,6 +171,7 @@ export function setMode(bid, m, opt) {
   let n = 0 // the cap is per desk: another cached desk's overrides are not this desk's to evict (2.3 §逐格覆盖)
   for (const k of overrides.keys()) if (k.startsWith(scope)) n++
   if (n > OVERRIDES) for (const k of overrides.keys()) if (k.startsWith(scope)) { overrides.delete(k); break }
+  modeChanged()
 }
 
 // ── drawing ───────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -194,7 +199,7 @@ function first(cell, mode, text) {
   return { body: o.html, next: o.more, state: null, shown: o.more ?? o.shown ?? text.length, cls: o.cls, as: o.as }
 }
 // the next slice of a drawn entry → {html, entry} (a new entry; the old one is left as it was)
-function grow(cell, mode, entry, text) {
+export function grow(cell, mode, entry, text) {
   if (entry.next == null || entry.shown >= CELL_CAP) return { html: '', entry }
   const o = mode === 'raw' ? layout(text, entry.next, DISPLAY_CLIP, entry.state) : renderKind(cell.r, valueOf(text), { from: entry.next, budget: DISPLAY_CLIP, bid: cell.bid })
   const next = mode === 'raw' ? o.next : o.more
@@ -203,14 +208,14 @@ function grow(cell, mode, entry, text) {
   return { html: o.html, entry: e }
 }
 // the drawn entry of a cell in a mode, rebuilt up to `upto` shown characters when the LRU let it go
-function entryOf(cell, mode, text, upto = 0) {
+export function entryOf(cell, mode, text, upto = 0) {
   const k = cell.bid + '|' + mode, src = byteKey(cell)
   let e = drawn.get(k)
   if (!e || e.src !== src) { e = { ...first(cell, mode, text), src }; keep(k, e) } // a bid drawn from other bytes is drawn again
   while (e.shown < upto && e.next != null && e.shown < CELL_CAP) e = grow(cell, mode, e, text).entry
   return e
 }
-const clipLine = (shown, total) => shown >= total ? '' : shown >= CELL_CAP ? C.atCap(shown, total) : C.showing(shown, total)
+export const clipLine = (shown, total) => shown >= total ? '' : shown >= CELL_CAP ? C.atCap(shown, total) : C.showing(shown, total)
 const lines = (chars) => Math.max(1, Math.min(20, Math.ceil((Number(chars) || 0) / 100)))
 
 // the whole body of a cell: toolbar + Raw or Readable + the sentinel; the sized pending box; or the reason the bytes are missing
@@ -252,12 +257,13 @@ async function hold(el) {
   await loadBody(api, cell.ref)
   return held(el)
 }
-function blobOf(el) {
-  const x = held(el), f = (x && x.cell.r && x.cell.r.f) || {}
-  if (!x || !Array.isArray(f.data)) return null
-  const k = byteKey(x.cell)
+// the blob: URL of a media cell's bytes, one per byte key; null when the cell is not media or its data does not decode
+export function blobOf(cell, text) {
+  const f = (cell.r && cell.r.f) || {}
+  if (!Array.isArray(f.data)) return null
+  const k = byteKey(cell)
   if (blobs.has(k)) return blobs.get(k)
-  const v = valueOf(x.text), data = at(v, f.data), mime = Array.isArray(f.mime) ? String(at(v, f.mime) ?? '') : ''
+  const v = valueOf(text), data = at(v, f.data), mime = Array.isArray(f.mime) ? String(at(v, f.mime) ?? '') : ''
   if (typeof data !== 'string') return null
   try {
     const bin = atob(data), url = URL.createObjectURL(new Blob([Uint8Array.from(bin, (c) => c.charCodeAt(0))], { type: mime }))
@@ -265,8 +271,9 @@ function blobOf(el) {
     return url
   } catch { return null }
 }
+const blobAt = (el) => { const x = held(el); return x && blobOf(x.cell, x.text) }
 let live = null // the one polite live region every cell speaks through
-function say(msg) {
+export function say(msg) {
   if (!live || !live.isConnected) {
     live = document.createElement('div')
     live.className = 'sr-only'; live.setAttribute('aria-live', 'polite'); live.setAttribute('role', 'status')
@@ -288,10 +295,14 @@ function redraw(el, opt) {
 async function copyBytes(el) {
   const x = held(el) ?? await hold(el)
   if (!x) { say(C.COPY_FAILED); return }
-  const n = new TextEncoder().encode(x.text).length
-  try { await navigator.clipboard.writeText(x.text); say(C.copied(n)); return } catch { /* no clipboard API here: the textarea way */ }
+  return copyText(x.text)
+}
+// the exact text to the clipboard (the clipboard API, else a selected textarea), said in the live region
+export async function copyText(text) {
+  const n = new TextEncoder().encode(text).length
+  try { await navigator.clipboard.writeText(text); say(C.copied(n)); return } catch { /* no clipboard API here: the textarea way */ }
   const back = document.activeElement, ta = document.createElement('textarea')
-  ta.value = x.text; ta.setAttribute('readonly', ''); ta.className = 'sr-only'
+  ta.value = text; ta.setAttribute('readonly', ''); ta.className = 'sr-only'
   document.body.appendChild(ta); ta.select()
   let ok = false
   try { ok = document.execCommand('copy') } catch { /* refused */ }
@@ -299,7 +310,7 @@ async function copyBytes(el) {
   say(ok ? C.copied(n) : C.COPY_FAILED)
 }
 // the offset in the cell's bytes of a DOM point inside its .cellraw: the verbatim text nodes before it, the .lay ones skipped
-function offsetIn(pre, c, o) {
+export function offsetIn(pre, c, o) {
   const pt = document.createRange(); pt.setStart(c, o)
   const w = document.createTreeWalker(pre, NodeFilter.SHOW_TEXT)
   let acc = 0
@@ -313,13 +324,13 @@ function offsetIn(pre, c, o) {
 }
 // IntersectionObservers rooted at each target's nearest scrolling ancestor (the viewport when none), one per scroller: a margin
 // of one scroller height ahead then reaches inside the scroller, where a viewport-rooted one sees nothing past its clip
-function watcher(cb) {
+export function watcher(cb) {
   const by = new Map()
   const scroller = (el) => { for (let p = el.parentElement; p; p = p.parentElement) if (/^(auto|scroll|overlay)$/.test(getComputedStyle(p).overflowY)) return p; return null }
   const of = (el) => { const root = scroller(el); if (!by.has(root)) by.set(root, new IntersectionObserver(cb, { root, rootMargin: '100% 0px' })); return by.get(root) }
   return { observe: (el) => of(el).observe(el), unobserve: (el) => { for (const o of by.values()) o.unobserve(el) }, disconnect: () => { for (const o of by.values()) o.disconnect(); by.clear() } }
 }
-const idle = (fn) => (typeof requestIdleCallback === 'function' ? requestIdleCallback(fn, { timeout: 500 }) : setTimeout(fn, 0))
+export const idle = (fn) => (typeof requestIdleCallback === 'function' ? requestIdleCallback(fn, { timeout: 500 }) : setTimeout(fn, 0))
 
 // click / keys / copy / growth / media / json disclosure on the given roots → a disposer. `s.storage` overrides localStorage.
 export function wireCells(roots, s = {}) {
@@ -354,11 +365,15 @@ export function wireCells(roots, s = {}) {
     for (const en of ents) if (en.isIntersecting || !en.target.isConnected) { stale.unobserve(en.target); if (en.isIntersecting) q.push(en.target) }
     pump()
   })
+  // any mode change, made here or by a React cell: a cell drawn in another mode than its own now is stale
+  const restale = () => {
+    stale.disconnect(); q.length = 0 // a cell from an earlier flip is stale again (or gone)
+    each('.cell', (el) => { if (el.dataset.mode !== modeOf(el.dataset.bid, opt)) stale.observe(el) })
+  }
+  const unheard = onModeChange(restale)
   function flipDesk() {
     setDeskMode(deskMode(opt) === 'raw' ? 'read' : 'raw', opt)
     say(deskMode(opt) === 'read' ? C.READABLE_VIEW : C.RAW_VIEW)
-    stale.disconnect(); q.length = 0 // a cell from an earlier flip is stale again (or gone)
-    each('.cell', (el) => stale.observe(el))
   }
   async function more(sent) { // append the next slice where the reader is heading
     const el = sent.isConnected && sent.closest('.cell'), x = held(el) ?? await hold(el)
@@ -380,7 +395,7 @@ export function wireCells(roots, s = {}) {
     if (n.nodeType !== 1) return
     for (const el of [n, ...n.querySelectorAll('.cellmore, img[data-media]:not([src])')]) {
       if (el.matches('.cellmore')) io.observe(el)
-      else if (el.matches('img[data-media]:not([src])') && el.dataset.media) { const u = blobOf(el.closest('.cell')); if (u) el.src = u }
+      else if (el.matches('img[data-media]:not([src])') && el.dataset.media) { const u = blobAt(el.closest('.cell')); if (u) el.src = u }
     }
   }
   const onClick = (e) => {
@@ -389,7 +404,7 @@ export function wireCells(roots, s = {}) {
     if (!el) return
     if (b.dataset.cellmode != null) flip(el, b.dataset.cellmode)
     else if (b.dataset.cellcopy != null) copyBytes(el)
-    else { const u = blobOf(el); if (u) { const a = document.createElement('a'); a.href = u; a.download = ''; a.click() } }
+    else { const u = blobAt(el); if (u) { const a = document.createElement('a'); a.href = u; a.download = ''; a.click() } }
   }
   const onKey = (e) => {
     const a = isTyping(e) ? null : cellKey(e), row = a && e.target.closest && e.target.closest('.cblk, .dblk')
@@ -427,7 +442,7 @@ export function wireCells(roots, s = {}) {
   })
   return () => {
     for (const mo of mos) mo.disconnect()
-    io.disconnect(); stale.disconnect(); q.length = 0
+    io.disconnect(); stale.disconnect(); q.length = 0; unheard()
     for (const r of rs) { r.removeEventListener('click', onClick); r.removeEventListener('keydown', onKey); r.removeEventListener('copy', onCopy); r.removeEventListener('toggle', onToggle, true) }
   }
 }
