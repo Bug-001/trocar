@@ -12,7 +12,7 @@ import * as W from '../labels/replay.mjs'
 import { HALF } from '../core/icons.mjs'
 import { DISPLAY_CLIP, cellOf, cellBodyHtml, modeOf, bodyCache, hasInline, isAddressed, loadBody, isRetryable } from './cell.mjs'
 import { openedFf, rowMarks } from '../../src/screens/replay/window-model.mjs'
-export { DISPLAY_CLIP, preEsc, rawContentText, inlineText, hasInline, isAddressed, blockGot, loadBody, isRetryable, bodyCache } from './cell.mjs'
+export { DISPLAY_CLIP, preEsc, hasInline, isAddressed, blockGot, loadBody, isRetryable, bodyCache } from './cell.mjs'
 
 // the DISPLAY clip: what exceeds 20 000 characters is folded with the full count said — the full text stays reachable in the
 // source; this is a display control, NOT a faithfulness mark (2.3: 显示剪裁 ≠ 源截断)
@@ -136,7 +136,7 @@ export function ctxBlockHtml(b, { prevKeys, open, windowLine = false, marks = ro
   const nw = marks.isNew ? `<span class="newmark" title="${esc(W.NEW_MARK_TIP)}">${esc(W.NEW_MARK)}</span>` : ''
   // the window line already said "nothing here resolves": the per-block 不能回源 is not repeated, its screen-reader word is (2.3 §窗口行)
   const badge = marks.badge ? ffBadgeHtml(f, { tech: marks.tech }) : ''
-  const sr = marks.sr ? `<span class="sr-only">,${esc(W.FF_WORD[f])}</span>` : ''
+  const sr = marks.sr ? `<span class="sr-only">,${esc(W.FF_WORD[marks.sr])}</span>` : ''
   const rk = b.resKey ? ` data-rk="${esc(b.resKey)}"` : ''
   return blockRowHtml({ role: h.role, tag: h.tag, label: h.label || b.preview || '' }, {
     cls: `${marks.isNew ? 'is-new' : ''} s-${esc(b.sec)} r-${esc(b.role)} k-${esc(b.kind)}`,

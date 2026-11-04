@@ -11,13 +11,13 @@ import { HALF } from '../../../legacy/core/icons.mjs'
 import * as W from '../../../legacy/labels/replay.mjs'
 import * as C from '../../../legacy/labels/cells.mjs'
 import {
-  CELL_CAP, blobFor, byteKey, clipLine, copyText, entryOf, fillNode, gotOf, grow, headNote, idle, loadBody, modeOf, noteOpened, offsetIn, onModeChange,
+  CELL_CAP, blobFor, byteKey, clipLine, copyCell, copyWord, entryOf, fillNode, gotOf, grow, headNote, idle, modeOf, noteOpened, offsetIn, onModeChange,
   onlyMode, rawTip, reopen, say, setMode, viewIn, watcher,
 } from '../../../legacy/replay/cell.mjs'
 
 type Mode = 'raw' | 'read'
 type View = { r: any, body: unknown, events?: number }
-export type CellModel = { bid: string, ref?: string, inline?: string, r: any, ff: unknown, chars: number, preview: string, view?: View, reads?: string, block?: boolean }
+export type CellModel = { bid: string, ref?: string, inline?: string, r: any, ff: unknown, chars: number, preview: string, view?: View, reads?: string, block?: boolean, noRange?: string }
 export type Got = { status: string, text?: string, error?: string, reason?: string, view?: View }
 type Api = { get: (...a: any[]) => Promise<any> }
 
@@ -48,25 +48,17 @@ export function Cell({ cell, fail, api, bar = true }: { cell: CellModel, fail?: 
   return <Shown cell={cell} mode={onlyMode(cell, got) ?? mode} got={got} api={api} bar={bar} />
 }
 
-// the bytes may have left the bounded cache while the cell stayed open: the reader's own click reads them
-async function copyCell(cell: CellModel, api?: Api) {
-  let got = gotOf(cell)
-  if ((!got || got.status !== 'ok') && api && cell.ref != null && cell.inline === undefined) got = await loadBody(api, cell.ref)
-  if (got && got.status === 'ok') copyText(String(got.text ?? '')); else say(C.COPY_FAILED)
-}
-
 export function CellBar({ cell, api }: { cell: CellModel, api?: Api }) {
   const desk = useDeskMode(cell), got: Got | null = gotOf(cell)
   if (!got || got.status !== 'ok') return null
   const only = onlyMode(cell, got), mode = only ?? desk
-  if (only === 'read') return null
   const flip = (m: Mode) => { setMode(cell.bid, m); say(m === 'read' ? C.READABLE_VIEW : C.RAW_VIEW) }
-  const btn = (v: Mode, word: string, tip: string) => <button type="button" data-cellmode={v} aria-pressed={mode === v} title={tip} onClick={() => flip(v)}>{word}</button>
+  const btn = (v: Mode, word: string, tip: string, label?: string) => <button type="button" data-cellmode={v} aria-pressed={mode === v} title={tip} aria-label={label} onClick={() => flip(v)}>{word}</button>
   return (
     <div className="cellbar" onClick={(ev) => ev.stopPropagation()}>
-      {only ? null : <span className="cellview" role="group" aria-label={C.VIEW_GROUP}>{btn('read', C.READABLE, C.READ_TIP)}{btn('raw', C.RAW, rawTip(viewIn(cell, got)))}</span>}
-      <button type="button" className="cellcopy" data-cellcopy="" onClick={() => copyCell(cell, api)}>{C.COPY}</button>
-      {mode === 'raw' ? <span className="cellstate" title={C.RAW_TIP}>{C.RAW_STATE}</span> : null}
+      {only ? null : <span className="cellview" role="group" aria-label={C.VIEW_GROUP}>{btn('read', C.READABLE, C.READ_TIP, C.READ_TIP)}{btn('raw', C.RAW, rawTip(cell, viewIn(cell, got)))}</span>}
+      <button type="button" className="cellcopy" data-cellcopy="" onClick={() => copyCell(cell, mode, api)}>{copyWord(cell, mode)}</button>
+      {mode === 'raw' ? <span className="cellstate" title={rawTip(cell)}>{C.RAW_STATE}</span> : null}
     </div>
   )
 }
@@ -130,7 +122,7 @@ function Shown({ cell, mode, got, api, bar }: { cell: CellModel, mode: Mode, got
     if (u) { const a = document.createElement('a'); a.href = u; a.download = ''; a.click() }
   }
 
-  const clip = clipLine(cur.shown, e.total), note = bar ? headNote(cell, got, mode) : null
+  const clip = clipLine(cur.shown, e.total, copyWord(cell, mode)), note = bar ? headNote(cell, got, mode) : null
   return (
     <div ref={root} className="cell" data-bid={cell.bid} data-mode={mode} data-only={only ?? undefined} data-chars={e.total} data-shown={cur.shown} data-ref={cell.ref} onCopy={onCopy} onClick={onClick}>
       {bar ? <CellBar cell={cell} api={api} /> : null}

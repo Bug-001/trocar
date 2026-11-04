@@ -11,6 +11,7 @@ import { stepOf } from '../../../legacy/replay/model.mjs'
 import { bodyCache, deskMode, loadBodies, overrideScope, setDeskMode } from '../../../legacy/replay/cell.mjs'
 import { initKeys, setScreenKeys } from '../../../legacy/core/keys.mjs'
 import * as C from '../../../legacy/labels/cells.mjs'
+import * as W from '../../../legacy/labels/replay.mjs'
 import { deskOf, world, deskFrom } from '../../../../test/web-v2/desk-world.mjs'
 import { windowItems } from './window-model.mjs'
 import { reactView } from './view'
@@ -232,7 +233,7 @@ test('1.2 格的键 · 2.3 #19: v, Shift+V and c act only from inside a row; f, 
   await act(async () => { fireEvent.keyDown(out, { key: 'c' }); await Promise.resolve() })
   expect(writes).toEqual([])
   await act(async () => { fireEvent.keyDown(tog, { key: 'c' }); await Promise.resolve() })
-  expect(writes).toEqual(['{"a":1}'])
+  expect(writes).toEqual([JSON.stringify({ a: 1 }, null, 2)]) // the desk is Readable here: c gives the text
   const pass = ['f', '?', 'n', 'p', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']
   seen.length = 0
   for (const k of pass) fireEvent.keyDown(tog, { key: k })
@@ -261,21 +262,39 @@ test('2.3 #19: v on a one-mode cell leaves it and says the mode it has; Shift+V 
   const writes: string[] = []
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (t: string) => { writes.push(t) } } })
   const { win } = mount(s)
-  for (const [bi, only, word] of [[2, 'raw', C.RAW_ONLY], [3, 'read', C.READ_ONLY]] as const) {
-    const row = win.querySelector<HTMLElement>(`.cblk[data-bi="${bi}"]`)!, tog = row.querySelector<HTMLElement>('.cbtog')!
-    const cell = () => row.querySelector<HTMLElement>('.cell')!
-    expect(cell().dataset.only).toBe(only)
-    tog.focus()
-    act(() => { fireEvent.keyDown(tog, { key: 'v' }) })
-    expect(cell().dataset.mode).toBe(only)
-    expect(said()).toBe(word)
-    const d0 = deskMode()
-    act(() => { fireEvent.keyDown(tog, { key: 'V', shiftKey: true }) })
-    expect(deskMode()).not.toBe(d0)
-    expect(cell().dataset.mode).toBe(only)
-  }
+  const row = win.querySelector<HTMLElement>('.cblk[data-bi="2"]')!, tog = row.querySelector<HTMLElement>('.cbtog')!
+  const cell = () => row.querySelector<HTMLElement>('.cell')!
+  expect(cell().dataset.only).toBe('raw')
+  tog.focus()
+  act(() => { fireEvent.keyDown(tog, { key: 'v' }) })
+  expect(cell().dataset.mode).toBe('raw')
+  expect(said()).toBe(C.RAW_ONLY)
+  const d0 = deskMode()
+  act(() => { fireEvent.keyDown(tog, { key: 'V', shiftKey: true }) })
+  expect(deskMode()).not.toBe(d0)
+  expect(cell().dataset.mode).toBe('raw')
+  // a block with no byte range of its own has both modes: v flips it
+  const both = win.querySelector<HTMLElement>('.cblk[data-bi="3"]')!, was = both.querySelector<HTMLElement>('.cell')!.dataset.mode
+  act(() => { fireEvent.keyDown(both.querySelector<HTMLElement>('.cbtog')!, { key: 'v' }) })
+  expect(both.querySelector<HTMLElement>('.cell')!.dataset.mode).not.toBe(was)
   await act(async () => { fireEvent.keyDown(win.querySelector('.cblk[data-bi="2"] .cbtog')!, { key: 'c' }); await Promise.resolve() })
   expect(writes).toEqual(['no view'])
+})
+
+test('2.3 §保真标: a proven row and a proven reply read out "reading view" in Readable and "verbatim" in Raw; a body with no view is Raw', () => {
+  const s = stateOf(deskN([[sys(), blk({ query: 'q' }), say(), say()]], [{}], { replies: [[rp('text')]] }))
+  bodyCache.set(flatOf(s)[3].text_ref, { status: 'ok', text: 'no view' })
+  setDeskMode('read')
+  const { win } = mount(s)
+  const sr = (sel: string) => [...win.querySelector(sel)!.querySelectorAll(':scope > .cbh .sr-only')].map((e) => e.textContent).join(' ')
+  for (const [mode, word, not] of [['read', W.FF_WORD.reading, W.FF_WORD.verbatim], ['raw', W.FF_WORD.verbatim, W.FF_WORD.reading]] as const) {
+    act(() => setDeskMode(mode))
+    for (const sel of ['.cblk[data-bi="2"]', '.cblk[data-rp]']) {
+      expect(sr(sel)).toContain(word)
+      expect(sr(sel)).not.toContain(not)
+    }
+    expect(sr('.cblk[data-bi="3"]')).toContain(W.FF_WORD.verbatim)
+  }
 })
 
 test('2.3 #38 · 1.2 §点击与选中文字②: an open row holds the controls in its head; they never open or close it; the preview leaves the head, the row\'s own label stays', () => {
