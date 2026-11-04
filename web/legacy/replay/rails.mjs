@@ -10,7 +10,7 @@ import { attrSel } from '../core/dom.mjs'
 import { when } from './analysis.mjs'
 import { xOf, windowCalls, nearestByX, nearestByTs, turnsReviewed } from './lanes.mjs'
 import { usageOf, priceMatch, costOf, isFailed as failOf } from '../core/metrics.mjs'
-import { laneKind, laneWord, SUBAGENT_ROW, BG_ROW, TC_ROW, laneTimes, callsWord, TC_SAMPLED_TIP, TC_NO_SIZE, FLAGGED_WORD, ONLY_MAIN } from '../labels/replay.mjs'
+import { laneKind, laneWord, SUBAGENT_ROW, BG_ROW, BG_ROW_HINT, TC_ROW, laneTimes, callsWord, TC_SAMPLED_TIP, TC_NO_SIZE, FLAGGED_WORD, ONLY_MAIN } from '../labels/replay.mjs'
 import { L } from '../core/labels.mjs'
 
 // only the lanes that read the conversation get the review bracket (2.1 ⑤)
@@ -115,7 +115,7 @@ export function renderRails(el, s) {
   if (bgs.length) {
     const open = s.bgOpen
     html += `<div class="rail tkrow">` +
-      `<div class="tgut railname group ${open ? '' : 'col'}" data-grouptoggle="bg" title="${esc(laneKind('aux').hint)}"><span class="tw">${discChev(open)}</span> <span class="tn">${esc(BG_ROW(bgs.reduce((n, l) => n + (l.count ?? l.calls.length), 0)))}</span></div>` +
+      `<div class="tgut railname group ${open ? '' : 'col'}" data-grouptoggle="bg" title="${esc(BG_ROW_HINT)}"><span class="tw">${discChev(open)}</span> <span class="tn">${esc(BG_ROW(bgs.reduce((n, l) => n + (l.count ?? l.calls.length), 0)))}</span></div>` +
       `<div class="tlane">${open ? '' : `<div class="railbody groupbody">${collapsedMarks(bgs, s)}</div>`}</div></div>` +
       (open ? `<div class="bgkids">${bgs.map((l) => railHtml(l, s)).join('')}</div>` : '')
   }

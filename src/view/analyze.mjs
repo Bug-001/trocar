@@ -17,7 +17,7 @@
 // linearContext (below) is now just the board's PROJECTION of that dissector's canonical spine.
 import { dissectBlocks, sysLabel, parseBashReads } from '../dissect/cc.mjs'
 import { reqIncompleteOf, wsIncompleteOf, respIncompleteOf } from '../dissect/capture-labels.mjs'
-import { hintsOf } from '../dissect/harnesses.mjs'
+import { auxKindOf, hintsOf } from '../dissect/harnesses.mjs'
 import { sharesBody } from '../dissect/request-body.mjs'
 import { failedOf } from '../dissect/endpoints.mjs'
 import { compareStep } from './step-order.mjs'
@@ -44,22 +44,6 @@ function hash(s) {
 const sysText = (r) => (r.request?.system || []).map((b) => b.text || '').join('\n')
 const isSub = (sys) => /cc_is_subagent=true/.test(sys)
 const isMonitor = (sys) => /you are a security monitor/i.test(sys)
-const userTextOf = (r) => (r.request?.messages || [])
-  .map((m) => Array.isArray(m.content) ? m.content.map((b) => (b.type === 'text' ? b.text || '' : '')).join('') : String(m.content || ''))
-  .join(' ')
-
-// The "aux" wire (0 tools, ≤2 msgs) is really THREE utilities with different fates for their output:
-//   notify   = background activity summarizer (system: "…walked away. Read the tail…") → JSON status
-//              that drives Claude Desktop's push notifications; output consumed by the client, never shown.
-//   titlegen = "2-4 word lowercase label for this job" → becomes the session's human-readable name.
-//   quota    = max_tokens:1 "quota" ping → liveness / keep-alive; the 1-token reply is discarded.
-function auxSubkind(r, userText) {
-  const mt = r.request?.max_tokens || 0
-  if (mt <= 1 || /^\s*quota\s*$/i.test(userText)) return 'quota'
-  if (/lowercase label for this job/i.test(userText)) return 'titlegen'
-  if (/walked away|Read the tail of what the agent/i.test(sysText(r))) return 'notify'
-  return 'aux'
-}
 
 // Unify the two response shapes: streamed SSE (already reconstructed into
 // response.{usage,text,tool_calls}) and non-streaming JSON (raw body in response.body). The reply's tool calls leave
@@ -384,7 +368,7 @@ export function callFacts(r) {
     sub, monitor, small: /haiku/i.test(req.model || ''), model: req.model,
     msgCount: req.message_count, tools: req.tool_count || 0,
     // which utility a small call is (only a call that can land in an aux lane is asked)
-    aux: h.lane === 'aux' || req.message_count <= 2 ? auxSubkind(r, userTextOf(r)) : undefined,
+    aux: h.lane === 'aux' || req.message_count <= 2 ? auxKindOf(r) : undefined,
     continued: !!(r._ctx && r._ctx.continued), lineage: r._ctx ? r._ctx.lineage : undefined,
     ctxPartial: !!(r._ctx && r._ctx.contextState === 'partial'),
     status, failed: failedCall(r),
@@ -439,13 +423,16 @@ const LANE_META = {
   notify: { icon: '📣', label: 'activity → notification' },
   titlegen: { icon: '🏷', label: 'session title-gen' },
   quota: { icon: '🔌', label: 'quota / keep-alive' },
-  aux: { icon: '⚙', label: 'other util' },
+  suggest: { icon: '💡', label: 'next-prompt suggestion' },
+  websearch: { icon: '🔎', label: 'web search' },
+  webfetch: { icon: '🌐', label: 'web page summary' },
+  aux: { icon: '⚙', label: 'unnamed background call' },
   // only a harness hint puts an inference call here (count_tokens probes are no inference call: the page draws them)
   probe: { icon: '👁', label: 'warm-up / probe requests',
     note: 'A request the harness itself marks as a warm-up or probe: it primes the cache and is not a conversation turn. Its body is kept verbatim like any call, and a later call may build on it.' },
 }
-const LANE_ORDER = { main: 0, subagent: 1, monitor: 2, notify: 3, titlegen: 4, quota: 5, aux: 6, probe: 7 }
-const AUX_KINDS = new Set(['aux', 'notify', 'titlegen', 'quota'])
+const LANE_ORDER = { main: 0, subagent: 1, monitor: 2, notify: 3, suggest: 4, titlegen: 5, quota: 6, websearch: 7, webfetch: 8, aux: 9, probe: 10 }
+const AUX_KINDS = new Set(['aux', 'notify', 'suggest', 'titlegen', 'quota', 'websearch', 'webfetch'])
 const EVENT_ONLY_KINDS = new Set(['monitor', 'probe', ...AUX_KINDS]) // one event per call, no ReAct / resource walk
 
 // ── admission (invariant 4) ──────────────────────────────────────────
