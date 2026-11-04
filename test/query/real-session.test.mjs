@@ -4,10 +4,9 @@
 // killed the worker while every generated one passed), so this runs before every `trocar update` on the machine that runs trocar:
 // `TROCAR_REAL_HOME=<a trocar home> npm run test:real`. No timing is asserted: the numbers are measured and logged.
 //
-// The home is only read: the worker runs over a side home in a temp dir whose raw/ is a link to the real one and whose index/ is a
-// copy of its segment index without the context projections (index/ctx), with every link followed (a home whose index/ is a link
-// would otherwise hand the worker the real index), so the session is extracted and folded from scratch and whatever that writes
-// lands in the temp dir. Without TROCAR_REAL_HOME it is skipped and says why.
+// The home is only read: the worker runs over the side board's side home (scripts/side-board.mjs sideHome, RFC 1.12 §3), so the
+// session is extracted and folded from scratch and whatever that writes lands in the temp dir. Without TROCAR_REAL_HOME it is skipped
+// and says why.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import path from 'node:path'
@@ -15,6 +14,7 @@ import fs from 'node:fs'
 import { serveFace, request, withToken } from '../server/face.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
+import { sideHome } from '../../scripts/side-board.mjs'
 
 const REAL = process.env.TROCAR_REAL_HOME
 const skip = REAL ? (fs.existsSync(path.join(REAL, 'raw')) ? false : `TROCAR_REAL_HOME has no raw/: ${REAL}`)
@@ -25,10 +25,7 @@ const POLL_MS = 1500, BUILD_MS = 20 * 60_000
 
 test('the largest real session, built from scratch by the real worker, answers its session page and main lane page whole', { skip, timeout: BUILD_MS + 120_000 }, async () => {
   const home = path.join(tmpDir('trocar-real-'), '.trocar')
-  fs.mkdirSync(home, { recursive: true, mode: 0o700 })
-  fs.symlinkSync(path.join(path.resolve(REAL), 'raw'), path.join(home, 'raw'))
-  const index = path.join(REAL, 'index')
-  if (fs.existsSync(index)) fs.cpSync(index, path.join(home, 'index'), { recursive: true, dereference: true, filter: (p) => path.relative(index, p).split(path.sep)[0] !== 'ctx' })
+  sideHome(REAL, home)
   // A link left in the copy would let the worker write into the real home (a second writer beside the real one, 4.3 §4).
   const links = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => e.isSymbolicLink() ? [path.join(d, e.name)] : e.isDirectory() ? links(path.join(d, e.name)) : [])
   if (fs.existsSync(path.join(home, 'index'))) {
