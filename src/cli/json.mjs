@@ -7,7 +7,9 @@
 import { SCHEMA_VERSION } from '../off/schema.mjs'
 
 // 附录 C.1: the ONE place a refusal's code lives. A receipt never carries a top-level `code` — a client reads `error.code` and nothing else.
-export const ERROR_CODES = Object.freeze(['usage', 'internal', 'key-custody-failed', 'older-install', 'cert-not-installed', 'collectors-online', 'autostart-missing', 'setup-needed'])
+export const ERROR_CODES = Object.freeze(['usage', 'internal', 'key-custody-failed', 'older-install', 'cert-not-installed', 'collectors-online', 'autostart-missing', 'setup-needed',
+  'rule-invalid', 'rule-unknown', 'engine-unsupported', 'too-many-scripts', 'rules-unwritable', 'held-unknown', 'held-gone', 'held-body-rejected', 'daemon-absent',
+  'resend-busy', 'resend-continuation', 'resend-hop-credentialed', 'resend-hop-unknown', 'resend-no-bytes', 'resend-rule-no-change'])
 
 /** The one JSON document of a run, on stdout. */
 export function printJson(io, doc) {
