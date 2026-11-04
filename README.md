@@ -349,9 +349,12 @@ calls, bytes and token usage over a `--since` / `--until` window; its token usag
 files the query worker writes beside the index, so the first look may cover only the newest sessions
 (`usage.coverage` says how far) and later looks cover the whole window. The same card gives the estimated cost and the
 cache hit ratio, overall and per harness, and names the models with no price in the table. `trocar query analysis --id
-<session>` is one session's numbers at the current prices: its estimated cost for the main conversation, subagents and
-background calls, the main conversation's cache hit and cache breaks, its failures and each step's price, counted up to
-the session's `mark`. `trocar query calls --host <host>` lists the
+<session>` is one session's totals at the current prices: its estimated cost for the main conversation, subagents and
+background calls, the main conversation's cache hit and cache breaks, and its failures, counted up to the session's
+`mark`. While the answer has `pending` the totals are the sums so far, so wait until it is gone before using them. With
+`--from`, `--to` or `--since` it gives one page of what each step cost and of the cache breaks instead of the totals.
+While a session is growing, the daemon works out its totals again at most every 30 seconds; `mark` says how far they
+go. `trocar query calls --host <host>` lists the
 calls to one host, newest first, and `--ref <segment>:<line>` opens one call. Documents read from the segment index carry
 `as_of`, the time of the newest call they were counted over.
 
