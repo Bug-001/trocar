@@ -11,6 +11,8 @@ import { workerFork } from '../helpers/worker-fork.mjs'
 import { SEVEN } from '../helpers/seven-shapes.mjs'
 import { bigSession, firstAskOf, rng } from './big-session.mjs'
 import { runQuery, stampOf } from '../../src/query/named/index.mjs'
+import { extendSession } from '../../src/query/named/session.mjs'
+import { readHead } from '../../src/query/ctx-files.mjs'
 import { TITLE_BUDGET_MS, TITLE_V, titlesFile } from '../../src/query/titles.mjs'
 import { answer } from '../../src/query/answers.mjs'
 import { fillUsage, usageFile } from '../../src/query/usage.mjs'
@@ -206,15 +208,16 @@ for (let seed = 1; seed <= 6; seed++) {
       const kind = i < 5 ? rest[Math.floor(r() * rest.length)] : KINDS[Math.floor(r() * KINDS.length)]
       const { body, headers } = kind(i), ts = stamp(Math.floor(r() * 10_000))
       append(home, [envelope(CC, sid, body, replyTo(CC, i), ts, headers)])
-      sent.push({ ts, agent: headers?.['x-claude-code-agent-id'], ask: JSON.parse(body).messages[0].content })
+      sent.push({ ts, agent: headers?.['x-claude-code-agent-id'], main: !headers && body !== MONITOR, ask: JSON.parse(body).messages[0].content })
       const meta = await metaOf(home, sid)
       const live = await saved(home, { fs: warm })
       assert.deepEqual(live.errors, [])
-      // no main call: the first subagent lane's task, the first prompt in step order
-      const whole = meta.title ?? sent.filter((c) => c.agent).sort((a, b) => a.ts.localeCompare(b.ts))[0]?.ask ?? null
+      // the first main prompt; no main call: the first subagent lane's task, the first prompt in step order
+      const inStep = [...sent].sort((a, b) => a.ts.localeCompare(b.ts)), whole = (inStep.find((c) => c.main) || inStep.find((c) => c.agent))?.ask ?? null
       // an entry with no main call stands until the session has an eighth more calls (4.2 §标题表): the title lags, no further
       const { r: found, c: read } = table(home).titles[sid]
-      const want = found == null && meta.title != null && sent.length * 8 < read * 9 ? said : whole
+      const want = found == null && sent.some((c) => c.main) && sent.length * 8 < read * 9 ? said : whole
+      assert.equal(meta.title, want, `call ${i}, session`)
       assert.deepEqual(live.sessions.map((s) => [s.title, s.title_source]), [[want, want == null ? null : 'wire']], `call ${i}, warm`)
       assert.equal((await listOf(home)).sessions[0].title, want, `call ${i}, from the file`)
       titles.add(want)
@@ -285,6 +288,40 @@ test('3.5 #40: a session of subagent calls only: the title is the task of the fi
   append(home, [envelope(CC, sid, anth([{ role: 'user', content: 'the main prompt' }]), replyTo(CC, 4), stamp(4))])
   assert.deepEqual((await saved(home, { fs: warm })).sessions.map((s) => [s.title, s.title_source]), [['the main prompt', 'wire']])
   assert.notEqual(table(home).titles[sid].r, null)
+})
+
+test('3.5 #40: a session of subagent calls only says the title `sessions` says at tier 0, on the head and on `session`', async () => {
+  const home = homeOf(), sid = 'subs-0000-4a1b-9c2d-000000000002'
+  append(home, [subCall(sid, 'second', 'lane-b', 2), subCall(sid, 'first', 'lane-a', 1), subCall(sid, 'third', 'lane-b', 3)])
+  const said = ({ title, title_source }) => ({ title, title_source }), listed = said((await listOf(home)).sessions[0])
+  assert.deepEqual(listed, { title: 'first', title_source: 'wire' })
+  let fail = true
+  const failing = Object.assign(cold(), { openSync: (f, ...a) => { if (fail && String(f).includes(`${path.sep}ctx${path.sep}`)) { fail = false; throw new Error('injected: the projection could not be read') } return fs.openSync(f, ...a) } })
+  await assert.rejects(extendSession({ home, fs: failing, writer: true }, sid, 10))
+  const tier0 = readHead(home, sid)
+  assert.equal(tier0.tier, 0)
+  assert.deepEqual(said(tier0.meta), listed)
+  const ctx = { home, fs: cold(), writer: true }
+  while (await extendSession(ctx, sid, 1_000));
+  const head = readHead(home, sid)
+  assert.equal(head.tier, 1)
+  assert.deepEqual(said(head.meta), listed)
+  assert.deepEqual(said((await runQuery('session', { id: sid }, ctx)).meta), listed)
+})
+
+test('3.5 #40: a head at a first slice short of the first main call has the title', async () => {
+  const home = homeOf(), sid = 'late-0000-4a1b-9c2d-000000000001', pad = 'x'.repeat(1 << 19)
+  // a slice extracts a chunk of stored bytes: these subagent calls are more than one, the main call is past it
+  append(home, Array.from({ length: 20 }, (_, i) => envelope(CC, sid, anth([{ role: 'user', content: `task ${i}` }, { role: 'assistant', content: 'a' }, { role: 'user', content: pad }]), replyTo(CC, i), stamp(i), { 'x-claude-code-agent-id': 'lane-a' })))
+  append(home, [envelope(CC, sid, anth([{ role: 'user', content: 'the main prompt' }]), replyTo(CC, 20), stamp(20))])
+  const wait = new Int32Array(new SharedArrayBuffer(4)), slow = Object.assign(cold(), { burn: false, openSync: (f, ...a) => { if (slow.burn && String(f).startsWith(path.join(home, 'raw'))) Atomics.wait(wait, 0, 0, 60); return fs.openSync(f, ...a) } })
+  const ctx = { home, fs: slow, writer: true }, { sessions: [listed] } = await runQuery('sessions', {}, ctx)
+  assert.equal(listed.title, 'the main prompt')
+  slow.burn = true
+  const head = await runQuery('session', { id: sid, head: true }, ctx)
+  assert.ok(head.tier === 1 && head.pending, 'tier 1, short of the end')
+  assert.ok(!head.lanes.some((l) => l.kind === 'main'), 'short of the main call')
+  assert.deepEqual([head.meta.title, head.meta.title_source], [listed.title, listed.title_source])
 })
 
 for (const read of [2, 3, 8, 9, 16, 40]) {

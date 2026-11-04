@@ -91,10 +91,12 @@ test('3.5 #37: the first background slice that does not throw clears pending.sto
   await assert.rejects(extendSession({ home, fs: failing, writer: true }, s.id, 10))
   const stoppedAt = headOf(home, s.id)
   assert.equal(stoppedAt && stoppedAt.pending && stoppedAt.pending.stopped && stoppedAt.pending.stopped.code, 'fold-failed', 'the slice that threw wrote the stop')
+  assert.equal(stoppedAt.pending.calls, 120, 'no answer file reaches a call yet')
   assert.equal(await extendSession({ home, fs, writer: true }, s.id, 10), true, 'the next slice leaves members past the frontier')
   const h = headOf(home, s.id)
   assert.ok(h.pending && h.pending.done < h.pending.total, 'members are left past the frontier')
   assert.equal(h.pending.stopped, undefined, 'the stop is gone from the head')
+  assert.equal(h.pending.calls, 120)
   saysTheTitle(stoppedAt, (await runQuery('sessions', {}, { home })).sessions[0])
 })
 

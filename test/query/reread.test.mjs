@@ -13,9 +13,12 @@ import { projectionFile, projectionStale, sessionDir, PROJ_V } from '../../src/q
 import { foldLogFile, foldStale, FOLD_V } from '../../src/query/fold-log.mjs'
 import { lineFile } from '../../src/query/line-file.mjs'
 import { headFile, readHead, rereadFile, PACK_MEMBERS } from '../../src/query/ctx-files.mjs'
+import { dirUse, gcProjections } from '../../src/query/projection.mjs'
 import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
-import '../../src/query/named/index.mjs' // first: the named queries' registry imports session.mjs
+import { runQuery } from '../../src/query/named/index.mjs' // first: the named queries' registry imports session.mjs
 import { extendSession } from '../../src/query/named/session.mjs'
+import { answer } from '../../src/query/answers.mjs'
+import { titlesFile } from '../../src/query/titles.mjs'
 import { workerFork, workerForkIn } from '../helpers/worker-fork.mjs'
 import { within, whileMoving, reporting } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -47,6 +50,11 @@ const answerNames = (home, id) => fs.readdirSync(sessionDir(home, id)).filter((n
 // every answer file, by the sha1 of its bytes
 const filesOf = (home, id) => Object.fromEntries(answerNames(home, id).map((n) => [n, createHash('sha1').update(fs.readFileSync(path.join(sessionDir(home, id), n))).digest('hex')]))
 const packsOf = (home, id) => Object.fromEntries(Object.entries(filesOf(home, id)).filter(([n]) => n.startsWith('p')))
+// the old answer as a re-read keeps it: every pack and tail by its bytes, the head but for `pending`
+const oldAnswer = (home, id) => ({ files: Object.fromEntries(Object.entries(filesOf(home, id)).filter(([n]) => !n.startsWith('head'))), head: { ...readHead(home, id), pending: null } })
+const CONTRACT = JSON.parse(fs.readFileSync(new URL('../fixtures/session-read-contract.json', import.meta.url), 'utf8'))
+const inWorker = (home, f = fs) => ({ home, fs: f, writer: true })
+const toTheEnd = async (ctx, id) => { while (await extendSession(ctx, id, 1_000)); }
 
 /** Folds these sessions to their end in one worker, which then leaves: the first read's files, on disk. */
 async function foldAll(home, ids) {
@@ -87,14 +95,14 @@ for (const [axis, stale] of Object.entries(AXES)) {
     const fresh = filesOf(home, id), freshHead = readHead(home, id)
     lastVersion(home, id)
     stale(home, id)
-    const old = filesOf(home, id), { r, svc } = serviceOf(home)
+    const old = oldAnswer(home, id), { r, svc } = serviceOf(home)
     try {
       assert.ok((await ask(svc, 'session', { id })).pending, 'the first answer stops at the frontier')
       assert.ok(rereads(home, id), 'reread is there')
       let mid = 0
       await whileMoving(async () => {
-        const now = filesOf(home, id), a = await ask(svc, 'session', { id }) // pending after the read: the fold was not at its end at it. The read comes first: a fold log's re-read is short
-        if (a.pending) { mid++; assert.deepEqual(now, old, 'the files are the old ones, with no new member the head too') }
+        const now = oldAnswer(home, id), a = await ask(svc, 'session', { id }) // pending short of the end after the read: the fold was not at its end at it. The read comes first: a fold log's re-read is short
+        if (a.pending?.done < a.pending?.total) { mid++; assert.deepEqual(now, old, 'the packs and tails are the old ones, and the head but for pending') } // the answer files change once it is at its end
         await ask(svc, 'session', { id, head: '' }) // the document of `--head` is an answer too: it writes nothing
         return !rereads(home, id)
       }, () => r.n, 'the re-read ended')
@@ -102,6 +110,32 @@ for (const [axis, stale] of Object.entries(AXES)) {
       assert.deepEqual(readHead(home, id), freshHead, 'the head is a fresh fold\'s, at the last member')
       assert.deepEqual(filesOf(home, id), fresh, 'and so is every pack and tail')
     } finally { svc.stop() }
+  })
+}
+
+for (const axis of ['PROJ_V changed', 'FOLD_V changed']) {
+  test(`${axis}, no new member: from the first slice the head is the one the daemon follows, the old one but for a pending whose read only grows (#43)`, async () => {
+    const home = homeOf(), { id } = sessionIn(home, 1, 600), ctx = inWorker(home)
+    await foldAll(home, [id])
+    lastVersion(home, id)
+    AXES[axis](home, id)
+    const old = oldAnswer(home, id), total = sessionGroups(await indexRows({ home })).get(id).length
+    let read = 0, n = 0
+    for (;;) {
+      await extendSession(ctx, id, 5)
+      const a = await runQuery('session', { id }, ctx)
+      if (!(a.pending?.done < total)) break // at its end the answer files change
+      const { pending } = readHead(home, id)
+      assert.ok(fs.existsSync(headFile(home, id, true)) && !fs.existsSync(headFile(home, id)))
+      assert.deepEqual({ ...pending, read: 0 }, { done: total, total, seen: true, calls: 0, read: 0 })
+      assert.ok(pending.read >= read, 'read never falls')
+      assert.deepEqual(oldAnswer(home, id), old)
+      read = pending.read; n++
+    }
+    assert.ok(n > 0, 'seen before the end')
+    await toTheEnd(ctx, id)
+    assert.equal(rereads(home, id), false)
+    assert.equal(readHead(home, id).pending, null)
   })
 }
 
@@ -120,8 +154,9 @@ test('a new member past the last multiple of a pack: the head says done at the o
     s.append(3)
     await ask(svc, 'session', { id })
     let d
-    await whileMoving(() => { d = readHead(home, id); return d?.pending != null || !rereads(home, id) }, () => r.n, 'the head says the new members')
-    assert.deepEqual(d.pending, { done: total, total: total + 3, seen: true })
+    await whileMoving(() => { d = readHead(home, id); return d?.pending?.total > total || !rereads(home, id) }, () => r.n, 'the head says the new members')
+    assert.ok(d.pending.read > past, 'read is the frontier')
+    assert.deepEqual({ ...d.pending, read: 0 }, { done: total, total: total + 3, seen: true, calls: 3, read: 0 })
     assert.deepEqual({ ...d, pending: null }, was, 'nothing else of the head moved')
     assert.deepEqual(packsOf(home, id), packs, 'nor any pack')
     await whileMoving(() => isDone(home, id) && !rereads(home, id), () => r.n, 'the re-read ended')
@@ -135,19 +170,20 @@ test('a worker killed in the re-read: reread stays, and the next worker folds it
   const fresh = filesOf(home, id)
   lastVersion(home, id)
   AXES['PROJ_V changed'](home, id)
-  const old = filesOf(home, id), a = serviceOf(home)
+  const old = oldAnswer(home, id), { t } = dirUse(sessionDir(home, id)), a = serviceOf(home)
   try {
     await ask(a.svc, 'session', { id })
     a.r.kids[0].kill('SIGKILL')
     await whileMoving(() => gone(a.r.kids[0]), () => a.r.n, 'the worker died')
   } finally { a.svc.stop() }
   assert.ok(rereads(home, id), 'reread is on disk')
-  assert.deepEqual(filesOf(home, id), old, 'the old answer stands')
+  assert.deepEqual(oldAnswer(home, id), old, 'the old answer stands')
   const b = serviceOf(home)
   try {
     b.svc.sweep()
-    await whileMoving(() => !rereads(home, id), () => b.r.n, 'the next worker finished it')
+    await whileMoving(() => { const on = rereads(home, id); if (on) assert.equal(Number(fs.readFileSync(rereadFile(home, id), 'utf8')), t, 'the marker keeps its t'); return !on }, () => b.r.n, 'the next worker finished it')
     assert.deepEqual(filesOf(home, id), fresh)
+    assert.ok(Math.abs(fs.statSync(headFile(home, id)).mtimeMs - (t + 1)) < 1, 'the first worker\'s t is the one that ends it')
   } finally { b.svc.stop() }
 })
 
@@ -367,6 +403,143 @@ test('a re-read a request opened gives way to a kick, goes back among the follow
     assert.ok(rereads(home, first), 'ahead of the one it stopped, which nobody opened')
     assert.ok(staleNow(home, second), 'and of the rest of the queue')
   } finally { svc.stop() }
+})
+
+// A member that is no model call, as a session's own telemetry is captured.
+const telemetry = (s, n) => {
+  const last = JSON.parse(fs.readFileSync(s.file, 'utf8').trim().split('\n').at(-1))
+  for (let i = 0; i < n; i++) fs.appendFileSync(s.file, `${JSON.stringify({ ...last, id: `telemetry_${i}`, endpoint: '/api/event_logging/batch', is_llm_call: false, traffic_class: 'telemetry' })}\n`)
+}
+
+test('calls counts no telemetry row, and starts where the tails reach, past the head\'s mark (#43)', async () => {
+  const home = homeOf(), s = sessionIn(home, 1, 300), { id } = s, ctx = inWorker(home), behind = 10
+  await foldAll(home, [id])
+  const rows = sessionGroups(await indexRows({ home })).get(id), total = rows.length
+  fs.writeFileSync(headFile(home, id), gzipSync(Buffer.from(JSON.stringify({ ...readHead(home, id), mark: String(rows.at(-1 - behind).id) }), 'utf8'))) // the tail ran past the head
+  AXES['PROJ_V changed'](home, id)
+  telemetry(s, 5)
+  await extendSession(ctx, id, 1)
+  const { pending } = readHead(home, id)
+  assert.deepEqual({ ...pending, read: 0 }, { done: total - behind, total: total + 5, seen: true, calls: 0, read: 0 })
+  assert.equal((await runQuery('session', { id }, ctx)).pending.calls, 0)
+  s.append(2)
+  assert.equal((await runQuery('session', { id }, ctx)).pending.calls, 2)
+  await extendSession(ctx, id, 1)
+  assert.equal(readHead(home, id).pending.calls, 2, 'calls left 0: the head says it at once')
+  await toTheEnd(ctx, id)
+  assert.equal(readHead(home, id).pending, null)
+  assert.equal(rereads(home, id), false)
+})
+
+test('a lane answers with pending during a re-read, at the frontier, in the contract\'s closed set, and with none after it, at an unchanged version too (#43)', async () => {
+  const home = homeOf(), { id } = sessionIn(home, 1, 120)
+  await foldAll(home, [id])
+  lastVersion(home, id)
+  AXES['PROJ_V changed'](home, id)
+  const lane = readHead(home, id).axis, set = (d) => Object.keys(d).sort()
+  let refuse = true
+  const f = Object.assign(Object.create(fs), { renameSync: (a, b) => { if (refuse && b === headFile(home, id)) throw Object.assign(new Error('injected: no room'), { code: 'ENOSPC' }); return fs.renameSync(a, b) } })
+  const ctx = inWorker(home, f), ask = async () => JSON.parse((await answer({ name: 'lane', params: { id, lane } }, ctx)).bytes)
+  const first = await ask()
+  assert.deepEqual(set(first), set(CONTRACT.lane_ops))
+  assert.deepEqual(set(first.pending), set(CONTRACT.lane_ops.pending))
+  await toTheEnd(ctx, id) // to the last member and the files: the head alone is refused, so the re-read is not over
+  assert.ok(rereads(home, id))
+  const end = await ask()
+  assert.equal(end.pending.done, end.pending.total, 'nothing above the mark, and pending all the same')
+  refuse = false
+  await toTheEnd(ctx, id)
+  assert.equal(rereads(home, id), false)
+  const after = await ask(), { pending, ...plain } = CONTRACT.lane_ops
+  assert.deepEqual(set(after), set(plain))
+  assert.equal(after.mark, end.mark, 'the same frontier')
+})
+
+test('after the switch a client that starts its ledger over on the tag change walks to the bytes of a one-shot fold (#43)', async () => {
+  const home = homeOf(), id = 'big-0000-4a1b-9c2d-000000000001', s = bigSession({ home, id, segment: '20261020T164731Z', growth: 120, compactAt: 6_000, paths: 8, reads: 6 }), ctx = inWorker(home)
+  s.append(600)
+  await foldAll(home, [id])
+  const was = readHead(home, id)
+  fs.writeFileSync(headFile(home, id), gzipSync(Buffer.from(JSON.stringify({ ...was, packs: was.packs.map((p) => ({ ...p, tag: 'last' })) }), 'utf8')))
+  AXES['PROJ_V changed'](home, id)
+  const walk = async (c) => {
+    const all = { resources: [], seen: [] }
+    for (let ledger, p; ledger !== null; ledger = p.ledger_next) {
+      p = await runQuery('lane', { id, lane: was.axis, ...(ledger ? { ledger } : null) }, c)
+      all.resources.push(...p.resources); all.seen.push(...p.seen)
+      assert.ok(p.pending || c !== ctx || !rereads(home, id), 'a ledger page says pending too')
+    }
+    return all
+  }
+  const during = await walk(ctx)
+  await toTheEnd(ctx, id)
+  assert.notDeepEqual(readHead(home, id).packs.map((p) => p.tag), was.packs.map(() => 'last'), 'the tags changed')
+  const after = await walk(ctx), other = homeOf()
+  fs.cpSync(path.join(home, 'raw'), path.join(other, 'raw'), { recursive: true })
+  const once = await walk({ home: other })
+  assert.ok(during.seen.length < once.seen.length, 'the walk during the re-read stopped at the frontier')
+  assert.ok(once.resources.length && once.seen.length)
+  assert.equal(JSON.stringify(after), JSON.stringify(once))
+})
+
+test('three sessions re-read in another order keep the order of 4.3 §4 回收, past the idle save (#43)', async () => {
+  const home = homeOf(), [newest, middle, oldest] = [1, 2, 3].map((n) => sessionIn(home, n, 120).id), ids = [newest, middle, oldest]
+  await foldAll(home, ids)
+  for (const id of ids) AXES['PROJ_V changed'](home, id)
+  aged(home, newest, 60); aged(home, middle, 600); aged(home, oldest, 3600)
+  const before = ids.map((id) => dirUse(sessionDir(home, id)).t), { r, svc } = serviceOf(home)
+  try {
+    for (const id of [oldest, newest, middle]) {
+      await ask(svc, 'session', { id })
+      await whileMoving(() => !staleNow(home, id) && !rereads(home, id) && isDone(home, id), () => r.n, 'it ended')
+    }
+    await quiet(r)
+  } finally { svc.stop() }
+  await whileMoving(() => r.kids.every(gone), () => r.n, 'the worker left')
+  const after = ids.map((id) => dirUse(sessionDir(home, id)))
+  after.forEach((u, i) => assert.ok(Math.abs(u.t - (before[i] + 1)) < 1, 'its newest mtime is t + 1 ms'))
+  const { deleted } = gcProjections({ home, liveKeys: ids, capBytes: after.reduce((a, u) => a + u.size, 0) - 1 })
+  assert.deepEqual(deleted, [sessionDir(home, oldest)])
+})
+
+test('4.4 §人类标题的来源: an unread title alone changes no head: the bytes on disk stay through a slice, and the answer says it', async () => {
+  const home = homeOf(), { id } = sessionIn(home, 1, 30), file = headFile(home, id)
+  await foldAll(home, [id])
+  const bytes = fs.readFileSync(file), said = readHead(home, id).meta
+  assert.equal(said.title_source, 'wire')
+  fs.rmSync(titlesFile(home), { force: true })
+  const raw = path.join(home, 'raw'), f = Object.assign(Object.create(fs), { broken: false, openSync: (p, ...a) => { if (f.broken && String(p).startsWith(raw)) throw Object.assign(new Error('EIO: i/o error'), { code: 'EIO' }); return fs.openSync(p, ...a) } }), ctx = inWorker(home, f)
+  await runQuery('segments', {}, { home, fs: f })
+  f.broken = true
+  await extendSession(ctx, id, 1_000)
+  assert.deepEqual(fs.readFileSync(file), bytes)
+  const doc = await runQuery('session', { id }, ctx)
+  assert.deepEqual([doc.meta.title, doc.meta.title_source], [null, 'unread'])
+  assert.ok(doc.errors.some((e) => e.code === 'record-unreadable'))
+  assert.deepEqual(fs.readFileSync(file), bytes)
+})
+
+test('a marker with no t leaves the mtimes as they are (#43)', async () => {
+  const home = homeOf(), { id } = sessionIn(home, 1, 600), ctx = inWorker(home), pack = path.join(sessionDir(home, id), 'p0.main.ndjson.gz')
+  await foldAll(home, [id])
+  AXES['PROJ_V changed'](home, id)
+  fs.writeFileSync(rereadFile(home, id), '')
+  const { mtimeMs } = fs.statSync(pack)
+  await toTheEnd(ctx, id)
+  assert.equal(rereads(home, id), false)
+  assert.equal(fs.statSync(pack).mtimeMs, mtimeMs)
+})
+
+test('a head of the old size written after a re-read has another `<size>-<mtimeMs>`, the head having been the newest file (#43, 4.4 §答案文件)', async () => {
+  const home = homeOf(), { id } = sessionIn(home, 1, 120), ctx = inWorker(home), file = headFile(home, id)
+  await foldAll(home, [id])
+  AXES['PROJ_V changed'](home, id)
+  const soon = Date.now() / 1000 + 5
+  fs.utimesSync(file, soon, soon)
+  const tagOf = () => { const st = fs.statSync(headFile(home, id)); return `${st.size}-${st.mtimeMs}` }, old = tagOf(), { size } = fs.statSync(file)
+  await toTheEnd(ctx, id)
+  assert.equal(fs.statSync(file).size, size)
+  assert.notEqual(tagOf(), old)
 })
 
 /** The bytes of a session's projection and fold log, their sidecars left out: the idle save writes those for every session that grew. */
