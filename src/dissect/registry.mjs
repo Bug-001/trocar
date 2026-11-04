@@ -84,6 +84,12 @@ export function ruleBlocksFor(rec) {
   return blocksOf && body && typeof body === 'object' ? blocksOf(body) : null;
 }
 
+// A call that holds only the new part of its conversation: the rest is on the server, or in earlier records (rules test says so, 1.6 §4.4).
+export function isContinuationOf(rec) {
+  const body = parsedRequestBody(rec);
+  return isContinuation(rec) || !!(body && typeof body === 'object' && body.previous_response_id);
+}
+
 // 3.2:52 context_state of an HTTP-wire call: 'partial' when the stored request is incomplete (gate G17,
 // capture-labels.mjs), 'server_edited' when an Anthropic response reports context edits, else 'complete'.
 // (A WebSocket call's state comes from its previous_response_id chain instead.) The ETL's Anthropic
