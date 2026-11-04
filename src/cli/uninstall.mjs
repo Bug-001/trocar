@@ -103,7 +103,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
   const w = offWorld({ home, env, deps })
   const fs = w.fs
   const run = w.clock().toISOString()
-  const receipt = { ...newReceipt('uninstall'), all: true, harnesses: [], purge_data: purgeData, kept: [], undo: UNDO_LINE.uninstall, log: path.join(w.dir, 'flows'), left: [], kept_bundles: [], still_trusting: [], residue: [], dropped_backups: [], non_identical: [], entries: [], pending: [], user_processes: [], notes: [], problems: [] }
+  const receipt = { ...newReceipt('uninstall'), all: true, harnesses: [], purge_data: purgeData, kept: [], undo: UNDO_LINE.uninstall, log: path.join(w.dir, 'flows'), left: [], kept_bundles: [], still_trusting: [], residue: [], dropped_backups: [], non_identical: [], entries: [], pending: [], scheduled: [], user_processes: [], notes: [], problems: [] }
   const put = flowWriter(w, run, receipt.notes, { event: 'uninstall-note', where: 'uninstall' })
   // 4.11 ⑰: a manifest of version 1 / 2 is refused before any write (no lock, no state, no record); the receipt names the tools that undo it
   const old = refuseOldManifest({ home, platform: w.platform, fs })
@@ -348,7 +348,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
 
 /** 1.6 §3.6 「脚本渠道的最后一步」 (D74⑧): a copy the install script placed goes last — the launcher and ~/.trocar/app (the code and its private Node), also
  *  with no manifest. Only after a clean run: one that left anything needs this code to run again. POSIX unlinks the running files; Windows cannot, so a
- *  detached hidden PowerShell waits for this process and deletes them then. Either way the directories left empty go with them. (A Linux capability helper
+ *  detached cmd (deferredRemoval) waits for this process to exit and deletes them then — the receipt lists them as `scheduled`, not `removed`. Either way the directories left empty go with them. (A Linux capability helper
  *  still installed keeps the code: helperHoldsCode's left row, so this never runs then.) */
 function scriptCopyLast(w, { home, env, receipt, root }) {
   if (channelOf(root, { home, fs: w.fs }) !== 'script') return
@@ -361,16 +361,31 @@ function scriptCopyLast(w, { home, env, receipt, root }) {
   }
   // The launcher's last line runs node and exits in one parsed line, so cmd never reads the file again: only this process holds the files. The
   // removal runs only while app\current still says what it says now, so an install run again in the meantime is never removed.
-  const q = (p) => `'${p.replace(/'/g, "''")}'`
   let pointer = ''
-  try { pointer = w.fs.readFileSync(path.join(app, 'current'), 'utf8').split(/\r?\n/)[0] } catch { /* none: the guard below then needs it still absent */ }
-  const same = `((Get-Content -LiteralPath ${q(path.join(app, 'current'))} -TotalCount 1 -ErrorAction SilentlyContinue) -ceq ${pointer ? q(pointer) : '$null'})`
-  const rmEmpty = [...dirs].reverse().map((d) => `if (-not (Get-ChildItem -LiteralPath ${q(d)} -Force -ErrorAction SilentlyContinue)) { Remove-Item -LiteralPath ${q(d)} -Force -ErrorAction SilentlyContinue }`).join('; ')
+  try { pointer = w.fs.readFileSync(path.join(app, 'current'), 'utf8').split(/\r?\n/)[0] } catch { /* none: the removal then needs it still absent */ }
+  const d = deferredRemoval({ app, launcher, pointer, dirs, env })
   try {
-    spawnDetached('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', `Wait-Process -Id ${process.pid} -ErrorAction SilentlyContinue; if (${same}) { Remove-Item -LiteralPath ${q(app)},${q(launcher)} -Recurse -Force -ErrorAction SilentlyContinue; ${rmEmpty} }`], { env })
-    receipt.removed.push(app, launcher)
+    spawnDetached(d.file, d.args, { env: d.env, verbatim: true })
+    receipt.scheduled.push(app, launcher) // not `removed`: they go once this process has exited, after the receipt is printed (D58)
     receipt.notes.push(`${app} and ${launcher} are removed as soon as this command exits`)
   } catch (e) { receipt.problems.push(`${app} could not be scheduled for removal (${errText(e)}); remove it and ${launcher} by hand once this command has exited`) }
+}
+
+/** 1.6 §3.6 (Windows): the command that removes `app` and `launcher` once this process has exited → { file, args, env } for spawnDetached. The script
+ *  is a constant: the paths reach it only as environment values, read by delayed expansion, so no character of a path is parsed as cmd syntax and it
+ *  acts on no path it was not given. cmd built-ins only (no child program, so no console window): `set /p` reads its stdin, the pipe this process
+ *  holds, to its end — that is, until this process is gone; then, while app\current still holds `pointer`, it removes app\ (retried while Windows
+ *  releases node.exe's image), the launcher and the directories `dirs` left empty (innermost first). */
+export function deferredRemoval({ app, launcher, pointer, dirs, env }) {
+  const v = Object.fromEntries(Object.entries(env).filter(([k]) => !/^TROCAR_RM_/i.test(k)))
+  Object.assign(v, { TROCAR_RM_APP: app, TROCAR_RM_LAUNCHER: launcher, ...(pointer ? { TROCAR_RM_POINTER: pointer } : {}) })
+  ;[...dirs].reverse().forEach((dir, i) => { v[`TROCAR_RM_DIR${i}`] = dir })
+  const ours = 'if "!TROCAR_RM_NOW!"=="!TROCAR_RM_POINTER!"'
+  const script = ['set /p TROCAR_RM_WAIT=', '(set /p TROCAR_RM_NOW=<"!TROCAR_RM_APP!\\current") 2>nul',
+    `${ours} (for /l %i in (1,1,300) do @if exist "!TROCAR_RM_APP!\\" rd /s /q "!TROCAR_RM_APP!" 2>nul)`,
+    // one `rd` per directory, never a for-variable: a for-variable's value is expanded again, so a ! or ^ in the path would change it
+    `${ours} (del /f /q "!TROCAR_RM_LAUNCHER!" 2>nul & ${dirs.map((_, i) => `rd "!TROCAR_RM_DIR${i}!" 2>nul`).join(' & ')})`].join(' & ')
+  return { file: 'cmd.exe', args: ['/d', '/v:on', '/s', '/c', `"${script}"`], env: v }
 }
 
 /** 1.6 §3.6: on a script install, a Linux capability helper still installed needs this code to be removed → the left row that keeps the code (and the

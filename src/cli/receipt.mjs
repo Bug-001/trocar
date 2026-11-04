@@ -241,7 +241,7 @@ export function formatUninstallReceipt(r, { home = null, platform = process.plat
   const keptWhat = (r.kept || []).map((k) => k.what)
   const and = (xs) => (xs.length > 1 ? `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}` : xs[0])
   // the script copy's last step removed trocar itself (§3.6): no trocar command is left to name (D58), so the kept paths are said as what to delete by hand
-  const codeGone = home != null && (r.removed || []).includes(appDir(home))
+  const codeGone = home != null && [...(r.removed || []), ...(r.scheduled || [])].includes(appDir(home))
   // §3.6 / §1.1③: a refusal (error) and a left row with its own command already say the next step — a second one would only repeat it
   const ownStep = !!r.error || ((r.left || []).length > 0 && r.left.every((l) => l.command) && !(r.problems || []).length)
   if (!past) lines.push('Nothing was changed. Run it with --yes to do it.')

@@ -59,11 +59,16 @@ export function spawnTool(file, args, { env = process.env } = {}) {
   return spawn(file, args, { env, stdio: ['pipe', 'pipe', 'ignore'] })
 }
 
-/** Starts `file args…` detached, hidden and unwatched, to outlive this process (uninstall's deferred delete on Windows, 1.6 §3.6). Refuses a real
- *  tool under npm test as execTool does. → the child's pid, or throws what spawn throws. */
-export function spawnDetached(file, args, { env = process.env } = {}) {
+/** Starts `file args…` detached, hidden and unwatched, to outlive this process (uninstall's deferred delete on Windows, 1.6 §3.6). Its stdin is a
+ *  pipe this process holds open and never writes: the child reads its end only once this process has exited, which is how it waits for that.
+ *  `verbatim`: spawn's windowsVerbatimArguments (cmd's own quoting). Refuses a real tool under npm test as execTool does. → the child's pid, or throws. */
+export function spawnDetached(file, args, { env = process.env, verbatim = false } = {}) {
   if (process.env.TROCAR_TEST_SANDBOX === '1' || env.TROCAR_TEST_SANDBOX === '1') refuseRealTool(file, args, env)
-  const c = spawn(file, args, { env, detached: true, windowsHide: true, stdio: 'ignore' })
+  const c = spawn(file, args, { env, detached: true, windowsHide: true, windowsVerbatimArguments: verbatim, stdio: ['pipe', 'ignore', 'ignore'] })
+  c.on('error', () => {}) // a start that failed has no pid: thrown below
+  if (!c.pid) throw new Error(`${file} could not be started`)
+  c.stdin.on('error', () => {}) // the child may close its end first
+  c.stdin.unref()
   c.unref()
   return c.pid
 }
