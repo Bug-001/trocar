@@ -248,11 +248,12 @@ test('2.3 #9: no block with a ref draws the window line, ◐ on each header, 不
 })
 
 // ── this step's reply (2.3 §这一步的回复 · 2.6 #3) ─────────────────────────────────────────────────────────────────────
-test('2.3 #2 · 2.6 #3: a reply part is proven only on its resp.raw span, else parsed; the panel\'s one mark never says 逐字 without the spans', () => {
-  const SPAN = /::resp\.raw::\d+-\d+$/
+test('2.3 #2 · 2.6 #3: a reply part is proven only on its own span (resp.raw or resp.messages.<j>), else parsed; the panel\'s one mark never says 逐字 without the spans', () => {
+  const SPAN = /::resp\.(raw|messages\.\d+)::\d+-\d+$/
   const part = (where, ff) => {
     const k = n++, d = { bid: `P${k}`, kind: 'text', head: { role: 'assistant', tag: 'say', label: 'say' }, preview: `say ${k}`, chars: 4, bytes: 4, r: { as: 'text' }, ...(ff ? { ff } : null) }
     if (where === 'span') return { ...d, ref: `S/m.ndjson#R:1::resp.raw::${k}-${k + 4}` }
+    if (where === 'ws') return { ...d, ref: `S/m.ndjson#R:1::resp.messages.${k % 3}::${k}-${k + 4}` }
     if (where === 'req') return { ...d, ref: `S/m.ndjson#R:1::${k}-${k + 4}` }
     return { ...d, ref: null, unaddressable: WHY, ff: { ...ff, unaddressable: WHY }, inline: { block: { type: 'text', text: `say ${k}` } } }
   }
@@ -261,8 +262,8 @@ test('2.3 #2 · 2.6 #3: a reply part is proven only on its resp.raw span, else p
     if (v != null && v !== 'verbatim') return KNOWN.includes(v) ? v : 'unknown'
     return SPAN.test(d.ref || '') ? 'verbatim' : 'parsed'
   }
-  const replies = ['span', 'req', 'none'].map((where) => FFS.map((ff) => part(where, ff)))
-  replies.push(FFS.slice(0, 3).map((ff) => part('span', ff))) // a reply whose every part is on its span
+  const replies = ['span', 'ws', 'req', 'none'].map((where) => FFS.map((ff) => part(where, ff)))
+  for (const where of ['span', 'ws']) replies.push(FFS.slice(0, 3).map((ff) => part(where, ff))) // a reply whose every part is on its span
   // each reply with no reply-side fact, and with each that says the reply was not stored whole (2.6 §A 「◐ 回复没采全」)
   const facts = [{}, { respIncomplete: { truncated: true } }, ...['resp-truncated', 'resp-undecoded'].map((id) => ({ wire: { labels: [{ id, label: 'RESP-LABEL-q' }] } }))]
   const steps = replies.flatMap((parts) => facts.map((row) => ({ parts, row })))
