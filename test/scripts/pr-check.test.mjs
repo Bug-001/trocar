@@ -358,6 +358,29 @@ test('a rename, a mode change and an awkward name are read as themselves', () =>
   assert.deepEqual(doc.leaving.files.sort(), ['new.txt', 'run.sh', ...tabbed, 'with space/naïve "q".txt'])
 })
 
+// git prints such a change as two diffs of one path and numstat as one row
+const TYPECHANGED = ['plain.txt', 'with space/naïve "q".txt', ...(process.platform === 'win32' ? [] : ['tab\tname.txt'])]
+for (const [name, swap] of Object.entries({
+  'a file that becomes a link': (at) => { fs.rmSync(at); fs.symlinkSync('x/zorgon7/y', at) },
+  'a link that becomes a file': (at) => { fs.rmSync(at); fs.writeFileSync(at, 'x/zorgon7/y\n') },
+})) {
+  test(`${name}, under any name, is read as itself`, { skip: process.platform === 'win32' }, () => {
+    const w = workspace(Object.fromEntries(TYPECHANGED.map((file) => [file, 'x\n'])))
+    if (name.startsWith('a link')) {
+      for (const file of TYPECHANGED) { fs.rmSync(path.join(w.dir, file)); fs.symlinkSync('elsewhere', path.join(w.dir, file)) }
+      w.commit()
+      w.git(['tag', '-f', 'base'])
+    }
+    for (const file of TYPECHANGED) swap(path.join(w.dir, file))
+    w.commit({ 'after.txt': 'x\n' })
+    const clean = w.check()
+    assert.equal(clean.code, 0, JSON.stringify(clean.doc.findings))
+    assert.deepEqual(clean.doc.leaving.files.sort(), ['after.txt', ...TYPECHANGED].sort())
+    const { doc } = w.check({ env: { USER: 'zorgon7' } })
+    assert.deepEqual(named(doc, 'identity'), [...TYPECHANGED].sort(), 'what the path holds now was read')
+  })
+}
+
 test('AN21: a merge commit in the branch is refused by its own sha', () => {
   const w = workspace()
   w.git(['checkout', '-q', '-b', 'side', 'base'])
