@@ -55,7 +55,8 @@ export async function answer({ name, params = {}, indent = 0, gzip: zip = false,
     // stopped is cut again, 3.5 §内存有界), and then the next ask is answered afresh, never with these bytes
     const w = v && (await versionOf(name, params, c))
     if (!(w && w.key === v.key && JSON.stringify(doc.errors) === JSON.stringify(v.errors))) version = null
-    if (version != null && !doc.pending) tag = tagOf(name, params, version)
+    if (doc.pending) version = null // never kept: at the same version the fold goes on, or a re-read has ended
+    if (version != null) tag = tagOf(name, params, version)
     text = typeof doc.$text === 'string' ? doc.$text : JSON.stringify(doc, null, Number(indent) || 0) // a text answer: its bytes, never re-stringified
     if (typeof doc.$text !== 'string' && QUERIES[name]?.stored?.(params) && typeof ctx.later === 'function') ctx.later(() => writeStored(home, name, params, { ...doc, stored: { at } }, fs))
   } catch (e) {

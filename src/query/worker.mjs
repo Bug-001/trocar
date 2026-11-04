@@ -233,14 +233,14 @@ async function background() {
       let wrote = 0
       for (const [id, ms] of sessionGroups(index.rows)) {
         try {
-          const unread = [], { title } = titleOf({ home, fs: nodeFs, id, members: ms, errors: unread })
+          const unread = [], said = titleOf({ home, fs: nodeFs, id, members: ms, errors: unread })
           if (!unread.length) { // a record not read says nothing of the title: the head stays as it is
             const d = readHead(home, id)
             // a head under the name its pending does not say (one written before the names did) is put under the right one: the daemon
             // tells a folding head by its name only, so a misnamed one would never be followed (3.5 §谁执行它「答案文件」)
             const misnamed = d && d.pending && !d.pending.stopped && nodeFs.existsSync(headFile(home, id))
-            const head = d && d.tier === 0 && d.meta.title !== title ? { ...tier0Doc(id, ms, index.errors, title), pending: d.pending } // a stop stays the session's record (D38)
-              : misnamed ? d : hasHead(home, id) ? null : tier0Doc(id, ms, index.errors, title)
+            const head = d && d.tier === 0 && d.meta.title !== said.title ? { ...tier0Doc(id, ms, index.errors, said), pending: d.pending } // a stop stays the session's record (D38)
+              : misnamed ? d : hasHead(home, id) ? null : tier0Doc(id, ms, index.errors, said)
             if (head && writeHead(home, id, head)) wrote++
           }
         } catch (e) { say(e) }

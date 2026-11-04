@@ -34,15 +34,15 @@ import { trocarHome } from '../../paths.mjs';
 import { extractMembers, extractSeed, blockAt, CHUNK_STORED, TAIL_HEAP, releaseTails } from '../../view/extract.mjs';
 import { compareStep } from '../../view/step-order.mjs';
 import { recordsAt, releaseDecoded, STRETCH_HEAP } from '../records.mjs';
-import { indexRows, sessionGroups, sessionFacts } from '../rows.mjs';
-import { openProjection, projectionStale, STORE_HEAP } from '../projection.mjs';
+import { indexRows, isModelCall, sessionGroups, sessionFacts } from '../rows.mjs';
+import { dirUse, openProjection, projectionStale, sessionDir, STORE_HEAP } from '../projection.mjs';
 import { releaseParts } from '../line-file.mjs';
 import { warmCache, fsTag, heapBudget, heapCeiling, hold, liveHeap, usedHeap, yieldCaches } from '../warm.mjs';
 import { parseTextRef } from '../../raw/refs.mjs';
 import { QueryArgError } from './index.mjs';
 import { columns, dumpColumns, loadColumns, sync, viewOf, pageOf, deltaOf, limitOf, markOf } from '../session-doc.mjs';
 import { titleOf } from '../titles.mjs';
-import { clearReread, filesAt, filesParts, forget, hasHead, hasReread, headDoc, headDone, markReread, packsOf, pendingHead, readHead, tier0Doc, writeFiles, writeHead, memoBytes, CTX_V, PACK_MEMBERS } from '../ctx-files.mjs';
+import { clearReread, endReread, setMtimes, filesAt, filesParts, filesReach, forget, hasHead, hasReread, headDoc, markReread, packsOf, pendingHead, readHead, tailsReach, tier0Doc, writeFiles, writeHead, memoBytes, CTX_V, PACK_MEMBERS } from '../ctx-files.mjs';
 
 export const params = Object.freeze(['id', 'since', 'before', 'limit', 'head']);
 
@@ -210,12 +210,15 @@ export async function again(ctx, id, f) {
 const works = new Map();
 // THE RE-READ (3.5 §访问模式「版本变更的重读」): a session whose projection or fold log is rebuilt whole has its last version's complete
 // answer in its answer files, which stay. While it is here (the worker's alone) only extendSession writes them, once folded to the
-// end; a slice brings the head's `pending` no further than `seen` (backlog). `reread` on disk tells the next worker.
+// end; meanwhile a slice changes the head's `pending` alone (backlog). `reread` on disk tells the next worker.
 const rereads = new Set();
 const rereading = (ctx, id) => ctx.writer === true && rereads.has(id);
 /** rereadingNow(id) → whether this process is re-reading the session: the worker's scheduler asks at a slice's boundary. */
 export const rereadingNow = (id) => rereads.has(id);
 const isRebuilt = (e) => e.code === 'projection-rebuilt';
+// The idle save after a re-read writes the sidecars and parts of what it folded, which is no use of the session (4.3 §4 回收): they take the
+// directory's mtime once sealed (sealParts). session id → {home, fs, at}
+const rereadAt = new Map();
 // A rebuild just said (`rebuilt`), or the marker of a worker that was killed, with a tier-1 head of this CTX_V on disk: a re-read. With
 // any other head there is no answer to keep: the session folds as a first read, and a marker goes.
 function rereadOn(ctx, id, rebuilt) {
@@ -223,8 +226,8 @@ function rereadOn(ctx, id, rebuilt) {
   const home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs;
   if (!rebuilt && !hasReread(home, id, fs)) return;
   const d = readHead(home, id, fs), kept = !!d && d.v === CTX_V && d.tier === 1;
-  if (kept) rereads.add(id);
-  try { if (kept) markReread(home, id, fs); else clearReread(home, id, fs); } catch { /* this worker re-reads all the same; the next one by the versions */ }
+  if (kept && !rereads.has(id)) { rereads.add(id); shown.delete(id); } // its first slice writes `pending`
+  try { if (kept) markReread(home, id, dirUse(sessionDir(home, id), fs).t, fs); else clearReread(home, id, fs); } catch { /* this worker re-reads all the same; the next one by the versions */ }
 }
 // The projection store of a session, open across requests (the least recently used closed past STORES). What opening it said (a
 // rebuild) stays with the store (`opened`) until the next answer of that session says it, whoever opened it: a background slice
@@ -298,6 +301,8 @@ export function sealParts(deadline = Infinity) {
     }
   }
   releaseParts();
+  for (const [id, { home, fs, at }] of rereadAt) { try { setMtimes(home, id, at, fs, (n) => /^(extract|fold)\./.test(n)); } catch { /* the GC order only */ } }
+  rereadAt.clear();
   return false;
 }
 // The store's sidecar first (the log's names the projection's bytes); then, when it covers every line of the store (none while the
@@ -552,15 +557,16 @@ export async function extendSession(ctx, id, budgetMs) {
   if (!r) return false;
   const { st, plan, ex } = r;
   if (ex.done < ex.total || (st.target != null ? pastOf(plan, st.target, ex.done) : st.fp !== plan || st.fc < plan.n)) { backlog(ctx, String(id), r); return true; }
-  const s = stateAt(r, String(id));
+  const s = stateAt(ctx, r, String(id));
   shown.delete(s.id);
   if (!toState(ctx, s, end)) return true;
   if (rereading(ctx, s.id)) {
     stops.delete(s.id);
     heads.delete(s.id); // what this worker wrote at this mark may be from before the rebuild
     if ((s.mark == null || s.files) && putHead(ctx, s, null, (e) => writeFailed(ctx, s.id, e))) { // the marker goes only behind a whole answer; a write that failed ends this turn, and the next request, kick, follow, sweep or worker tries again
-      rereads.delete(s.id); oldDone.delete(s.id); writeFails.delete(s.id);
-      try { clearReread(ctx.home ?? trocarHome(), s.id, ctx.fs || nodeFs); } catch { /* the next worker reads it once more */ }
+      rereads.delete(s.id); writeFails.delete(s.id);
+      const home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs;
+      try { const at = endReread(home, s.id, fs); if (at) rereadAt.set(s.id, { home, fs, at }); } catch { /* the next worker reads it once more */ }
     }
   } else {
     if (s.files) writeFails.delete(s.id);
@@ -577,16 +583,16 @@ export async function extendSession(ctx, id, budgetMs) {
 // (and cut) it was last written at is not made again while its file is there.
 const heads = new Map(); // session id → {sig, shape} of its last head write in this worker
 const lagging = new Map(); // session id → {s, home, fs}: the state whose head a slice did not write (advance lets it go before a slice)
-const sigOf = (s) => JSON.stringify([s.mark, s.pending && s.pending.done, s.truncated]);
+const sigOf = (s) => JSON.stringify([s.mark, s.pending && s.pending.done, s.truncated, s.title]);
 // the parts only the head carries, in O(packs): tier, axis, the packs (with their tags) and the open span, the compactions (a new
 // chapter on the axis; one on another lane too), the cut, pending's presence, the failures and the index's codes, and the meta the
 // board takes from the head alone (web/legacy/replay/header.mjs) — never a count that grows with each call
 const META = ['title', 'title_source', 'session_id', 'harness', 'harnesses', 'project_slug', 'project_path'];
 function shapeOf(s) {
-  if (s.mark == null) return JSON.stringify([0, s.indexErrors.map((e) => e.code)]);
-  const V = s.V, ax = V.lanes.find((l) => l.kind === 'main') || V.lanes[0] || null;
+  if (s.mark == null) return JSON.stringify([0, s.indexErrors.map((e) => e.code), s.title]);
+  const V = s.V, ax = V.lanes.find((l) => l.kind === 'main') || V.lanes[0] || null, meta = { ...V.meta, ...s.title };
   return JSON.stringify([1, ax && ax.lane, s.files || null, V.stats.compactions, s.truncated, !!s.pending, s.failed.length,
-    s.indexErrors.filter((e) => !e.level).map((e) => e.code), META.map((k) => V.meta && V.meta[k])]);
+    s.indexErrors.filter((e) => !e.level).map((e) => e.code), META.map((k) => meta[k])]);
 }
 // A background fold that stopped (3.5 §会话读「`session --head`」 pending.stopped, D38②): the slice that threw writes the head at once,
 // with the stop's code (FOLD_STOPS) and the first line of its message; the same stop again writes nothing. The session's next slice
@@ -601,27 +607,28 @@ async function stopped(ctx, id, e) {
   if (h && h.sig === sig && hasHead(home, id, fs)) return;
   try {
     const index = await indexed(ctx), members = sessionGroups(index.rows).get(id);
-    if (members) { writeHead(home, id, pendingHead(home, id, members, index.errors, (d, done) => ({ done, total: members.length, stopped: stop }), fs, titleOf({ home, fs, id, members }).title), fs); heads.set(id, { sig, shape: null }); }
+    if (members) {
+      const k = keyOf(ctx, id), store = stores.get(k), calls = callsPast({ members, n: members.length }, reachOf(ctx, id, store && fileLogs.get(store)?.log, members));
+      writeHead(home, id, pendingHead(home, id, members, index.errors, (d, done) => ({ done, total: members.length, calls, stopped: stop }), fs, titleOf({ home, fs, id, members })), fs);
+      heads.set(id, { sig, shape: null });
+    }
   } catch { /* a head not written is written at the next stop or slice */ }
 }
 // A slice that leaves members past the frontier writes no answer file (3.5 §后台抽取与归约); the head's `pending` alone is brought to
 // the frontier (the rest of the head as written: pendingHead) on the first such slice, each time the frontier passes a multiple of
-// PACK_MEMBERS and when a stop is cleared, so the board sees pending.done grow and the stop go (D64, D69). O(1) per 512 members.
-const shown = new Map(); // session id → the pending.done this worker last put into its head while members were left
-// A re-read's head keeps its mark, so only the members past that are news: `pending` says them with `seen` (none: null, the bytes stay).
-const oldDone = new Map(); // session id → the members its head had done when the re-read's first backlog read it; Infinity once a `seen` is written
+// PACK_MEMBERS, when `calls` leaves 0 and when a stop is cleared, so the board sees pending.done grow and the stop go (D64, D69). O(1)
+// per 512 members. A re-read's head keeps its mark, so its `pending` keeps `done` there and says how far the fold is in `read`.
+const shown = new Map(); // session id → {read, called} of the pending this worker last put into its head while members were left
 function backlog(ctx, id, { st, plan, members, indexErrors }) {
   if (ctx.writer !== true) return;
-  const home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs, mark = markOf(st.log), done = mark == null ? 0 : posOf(plan, mark) + 1;
+  const home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs, mark = markOf(st.log), read = mark == null ? 0 : posOf(plan, mark) + 1;
   const was = shown.get(id), cleared = stops.delete(id), re = rereading(ctx, id), total = members.length;
-  if (re && !oldDone.has(id)) { const d = readHead(home, id, fs); oldDone.set(id, d ? headDone(d, members) : 0); }
-  const news = re && oldDone.get(id) < total; // the first head that says `seen` waits for no multiple
-  if (!cleared && !news && was != null && Math.floor(was / PACK_MEMBERS) === Math.floor(done / PACK_MEMBERS) && hasHead(home, id, fs)) return;
-  const pending = re ? (d, at) => (at < total ? { done: at, total, seen: true } : null) : () => ({ done, total });
-  try { writeHead(home, id, pendingHead(home, id, members, indexErrors, pending, fs, titleOf({ home, fs, id, members }).title), fs); } catch { if (cleared) stops.add(id); return; } // tried again next slice
-  if (news) oldDone.set(id, Infinity);
-  shown.set(id, done);
-  heads.set(id, { sig: JSON.stringify(['pending', done]), shape: null });
+  const calls = callsPast(plan, reachOf(ctx, id, st.log, members));
+  if (!cleared && was && was.called === calls > 0 && Math.floor(was.read / PACK_MEMBERS) === Math.floor(read / PACK_MEMBERS) && hasHead(home, id, fs)) return;
+  const pending = (d, at) => (re && d.tier === 1 ? { done: at, total, seen: true, calls, read } : { done: read, total, calls });
+  try { writeHead(home, id, pendingHead(home, id, members, indexErrors, pending, fs, titleOf({ home, fs, id, members })), fs); } catch { if (cleared) stops.add(id); return; } // tried again next slice
+  shown.set(id, { read, called: calls > 0 });
+  heads.set(id, { sig: JSON.stringify(['pending', read]), shape: null });
   lagging.delete(id);
 }
 function headAt(ctx, s) {
@@ -651,33 +658,54 @@ function saidOnce(ctx, id, record) {
 function writeFailed(ctx, id, e) {
   saidOnce(ctx, id, { where: 'projection', code: 'projection-write-failed', reason: `The answer files of session ${id} could not be written (${String((e && (e.code || e.message)) || e).split('\n')[0]}); its old answer stands and the next turn tries again.` });
 }
-/** headOf(ctx, s) → the session's `session --head` document: tier 1 at its mark, tier 0 while it has none (ctx-files.mjs), the same bytes
+/** headOf(s) → the session's `session --head` document: tier 1 at its mark, tier 0 while it has none (ctx-files.mjs), the same bytes
  *  here and in the worker: the title is a function of the disk. */
-const headOf = (ctx, s) => (s.mark == null ? tier0Doc(s.id, s.rows, s.indexErrors, titleOf({ home: ctx.home ?? trocarHome(), fs: ctx.fs || nodeFs, id: s.id, members: s.rows }).title)
+const headOf = (s) => (s.mark == null ? tier0Doc(s.id, s.rows, s.indexErrors, s.title)
   : headDoc({ ...s, ...(s.files || packsOf(s)), mark: markOn(s.plan, s.mark), markTs: s.plan.byId.get(s.mark)?.ts ?? null }));
 // → whether the head at this state is on disk; `failed(e)` hears why it is not
 function putHead(ctx, s, doc = null, failed = () => {}) {
   const h = heads.get(s.id), sig = sigOf(s), home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs;
   if (!(h && h.sig === sig && hasHead(home, s.id, fs))) {
-    try { writeHead(home, s.id, doc || headOf(ctx, s), fs); } catch (e) { failed(e); return false; } // a head not written is written at the next slice
+    try { writeHead(home, s.id, doc || headOf(s), fs); } catch (e) { failed(e); return false; } // a head not written is written at the next slice
     heads.set(s.id, { sig, shape: shapeOf(s) });
   }
   lagging.delete(s.id);
   return true;
 }
 
+// `calls` of a pending (3.5 归约前沿): the model calls past the members the answer files reach, never telemetry. `reach`: the tails', not
+// the head's mark, which they run past. Counted on the plan from where it last stood, so a slice pays for its new members.
+function callsPast(p, reach) {
+  const c = p.past?.reach === reach ? p.past : (p.past = { reach, n: reach, calls: 0 });
+  for (; c.n < p.n; c.n++) if (isModelCall(p.members[c.n])) c.calls++;
+  return c.calls;
+}
+// session key → how far the tails on disk reach while no writer or sidecar of this log says so (a re-read's are the last version's)
+const tailReach = new Map();
+function reachOf(ctx, id, log, members) {
+  const at = filesReach(log), k = keyOf(ctx, id);
+  if (at != null) { tailReach.delete(k); return at; }
+  if (!tailReach.has(k)) tailReach.set(k, tailsReach(ctx.home ?? trocarHome(), id, members, ctx.fs || nodeFs));
+  return tailReach.get(k);
+}
+// What a head says of the title: titleOf's. `unread` alone changes no head: the head on disk's stands (4.4 §人类标题的来源).
+function headTitle(ctx, id, said) {
+  const m = said.title_source === 'unread' && readHead(ctx.home ?? trocarHome(), id, ctx.fs || nodeFs)?.meta;
+  return m ? { title: m.title, title_source: m.title_source } : said;
+}
+
 /** sessionState(ctx, id) → null (no such session) | {id, rows, store, mark, pending, truncated, V, failed, errors, plan}: the
  *  session after this request's slice (the local path: everything), read from its fold log at the reduction frontier `mark` (V:
  *  src/query/session-doc.mjs viewOf, its columns synced to that frontier), `pending:
- *  {done, total, work}` while members are above the mark (`done` = the members at or below it; `work` = the store's members
- *  extracted and handed to a reduction so far, a rebuild's included), the cut. `errors`: the index's problems
- *  and the store's notes. The state stays warm. */
+ *  {done, total, work, calls}` while members are above the mark or the session is re-read (`done` = the members at or below it; `work` =
+ *  the store's members extracted and handed to a reduction so far, a rebuild's included; callsPast), the cut. `errors`: the index's
+ *  problems, the store's notes and a title that could not be read. The state stays warm. */
 export async function sessionState(ctx, id) {
   const r = await advance(ctx, String(id), { budgetMs: ctx.writer === true ? SLICE_MS : Infinity, request: true });
-  return r && stateAt(r, String(id));
+  return r && stateAt(ctx, r, String(id), rereading(ctx, String(id)));
 }
-// the session state of one slice's result (advance)
-function stateAt(r, id) {
+// the session state of one slice's result (advance); `reading`: it says `pending` with nothing above the mark too
+function stateAt(ctx, r, id, reading = false) {
   const { st, plan, members, ex, errors, indexErrors } = r, mark = markOf(st.log);
   if (!(st.view && st.view.f === st.log.frontier && st.view.plan === plan && st.view.gen === plan.gen)) {
     st.view = null; // the old view let go before the new one is built
@@ -687,8 +715,10 @@ function stateAt(r, id) {
   const V = st.view.V, done = mark == null ? 0 : posOf(plan, mark) + 1;
   let above = ex.done < ex.total;
   for (let i = done; !above && i < members.length; i++) above = inCut(plan, members[i]);
-  return { id, rows: members, store: st.store, mark, pending: above ? { done, total: members.length, work: st.store.work } : null,
-    truncated: plan.bound, V, failed: V.failed, errors, indexErrors, st, plan, pos: (rid) => posOf(plan, rid), cut: (row) => inCut(plan, row) };
+  const said = titleOf({ home: ctx.home ?? trocarHome(), fs: ctx.fs || nodeFs, id, members, errors });
+  V.meta = { ...V.meta, ...said };
+  return { id, rows: members, store: st.store, mark, pending: above || reading ? { done, total: members.length, work: st.store.work, calls: callsPast(plan, reachOf(ctx, id, st.log, members)) } : null,
+    title: headTitle(ctx, id, said), truncated: plan.bound, V, failed: V.failed, errors, indexErrors, st, plan, pos: (rid) => posOf(plan, rid), cut: (row) => inCut(plan, row) };
 }
 
 /** version(ctx) → {key, errors} | null (3.5 §谁执行它 答案缓存): the session's member rows, its reduction frontier as it is now, the
@@ -735,7 +765,7 @@ export async function run(ctx) {
   }
   files(ctx, s);
   if (asHead) {
-    const doc = headOf(ctx, s);
+    const doc = headOf(s);
     if (ctx.writer === true && !rereading(ctx, id)) putHead(ctx, s, doc); // the answer is the file (writeHead: the same bytes are not written)
     errors.push(...doc.errors);
     return doc;

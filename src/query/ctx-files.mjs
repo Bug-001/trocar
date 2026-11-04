@@ -70,16 +70,16 @@ export function headDoc(s) {
   const lanes = ax ? [ax, ...others.slice(0, HEAD_LANES - 1)] : [];
   const lastRid = n ? lane.rids[n - 1] : null, list = lastRid && listOf(s.store, lastRid);
   return docOf(errorsOf(s.indexErrors, s.failed), {
-    id: s.id, tier: 1, mark: s.mark, markTs: s.markTs, pending: s.pending ? { done: s.pending.done, total: s.pending.total } : null,
-    truncated: s.truncated, failed: s.failed.length, meta: V.meta, stats: V.stats, logged: V.logged, probes: V.probes,
+    id: s.id, tier: 1, mark: s.mark, markTs: s.markTs, pending: s.pending ? { done: s.pending.done, total: s.pending.total, calls: s.pending.calls } : null,
+    truncated: s.truncated, failed: s.failed.length, meta: { ...V.meta, ...s.title }, stats: V.stats, logged: V.logged, probes: V.probes,
     ...(V.unknown ? { unknown: V.unknown } : null),
     axis: ax ? ax.lane : null, steps: n, peak, cols: cells.toString('base64'), bucket, chapters, packs: s.packs, open: s.open,
     lanes, lanesMore: V.lanes.length - lanes.length, last: lastRid ? { rid: lastRid, n: list ? list.bids.length : 0 } : null,
   });
 }
 
-/** tier0Doc(id, members, errors, title) → the tier-0 head of a session with no reduction state: from its segment index rows and its title
- *  (src/query/titles.mjs; meta as the `sessions` query has it, its model calls in ≤ BUCKETS equal spans of time). */
+/** tier0Doc(id, members, errors, title) → the tier-0 head of a session with no reduction state: from its segment index rows and its
+ *  {title, title_source} (src/query/titles.mjs titleOf; meta as the `sessions` query has it, its model calls in ≤ BUCKETS equal spans of time). */
 export function tier0Doc(id, members, errors, title = null) {
   const f = sessionFactsOf(id, members), calls = members.filter(isModelCall);
   const ts = calls.map((r) => Date.parse(r.ts)).filter((t) => !Number.isNaN(t)).sort((a, b) => a - b), buckets = [];
@@ -89,8 +89,8 @@ export function tier0Doc(id, members, errors, title = null) {
     for (const t of ts) buckets[Math.min(m - 1, w ? Math.floor((t - t0) / w) : 0)].calls++;
   }
   return docOf(errorsOf(errors, []), {
-    id, tier: 0, mark: null, markTs: null, pending: { done: 0, total: members.length }, truncated: null, failed: 0,
-    meta: sessionMetaOfFacts({ ...f, title }), stats: { calls: f.calls }, logged: f.logged, probes: f.probes,
+    id, tier: 0, mark: null, markTs: null, pending: { done: 0, total: members.length, calls: calls.length }, truncated: null, failed: 0,
+    meta: sessionMetaOfFacts({ ...f, ...title }), stats: { calls: f.calls }, logged: f.logged, probes: f.probes,
     axis: null, steps: calls.length, peak: 0, cols: '', bucket: 1, chapters: [], packs: [], open: null, lanes: [], lanesMore: 0, last: null, buckets,
   });
 }
@@ -100,7 +100,7 @@ export function headDone(d, members) {
   const rid = d.mark == null ? null : String(d.mark).replace(/@.*$/, ''); // a cut's mark is `rid@cut` (named/session.mjs markOn)
   return d.pending ? d.pending.done : rid == null ? 0 : members.findIndex((r) => String(r.id) === rid) + 1;
 }
-/** pendingHead(home, id, members, errors, pending, fs, title) → the head on disk (else the tier-0 head of `members`, saying `title`) with `pending` put in,
+/** pendingHead(home, id, members, errors, pending, fs, title) → the head on disk (else the tier-0 head of `members`, saying `title`: {title, title_source}) with `pending` put in,
  *  the rest as it was written (3.5 §会话读「`session --head`」 pending): `pending(d, done)` → the pending of head `d`, `done` the
  *  members at or below its mark. A stopped fold's (`stopped`) and the progress of a backlog no answer file is written in. */
 export function pendingHead(home, id, members, errors, pending, fs = nodeFs, title = null) {
@@ -110,24 +110,40 @@ export function pendingHead(home, id, members, errors, pending, fs = nodeFs, tit
 }
 
 /** writeHead(home, id, doc, fs) → whether the file changed: the gzip of the doc's compact JSON (putFile) under the name its `pending`
- *  says (HEAD_FILES), the other name removed first, so at most one exists; nothing is written when the bytes are the file's. */
+ *  says (HEAD_FILES); nothing is written when the bytes are the file's. The other name goes after: a write that fails leaves the head
+ *  there was, a re-read's old answer among them. */
 export function writeHead(home, id, doc, fs = nodeFs) {
   const folding = !!doc.pending && !doc.pending.stopped, file = headFile(home, id, folding), bytes = gzipSync(Buffer.from(JSON.stringify(doc), 'utf8'));
-  try { if (fs.readFileSync(file).equals(bytes)) return false; } catch { /* none yet */ }
+  let same = false;
+  try { same = fs.readFileSync(file).equals(bytes); } catch { /* none yet */ }
+  if (!same) putFile(fs, file, bytes);
   try { fs.unlinkSync(headFile(home, id, !folding)); } catch (e) { if (e.code !== 'ENOENT') throw e; }
-  putFile(fs, file, bytes);
-  return true;
+  return !same;
 }
 /** writeSkip(home, id, rid, fs): the upgrade queue's marker (3.5 §谁执行它「答案文件」, 4.3 §4「目录」): this session, whose last member
  *  was `rid`, was folded to its end (or stopped) and still has no tail file. */
 export const skipFile = (home, id) => path.join(sessionDir(home, id), 'upgrade.skip');
 export const writeSkip = (home, id, rid, fs = nodeFs) => putFile(fs, skipFile(home, id), Buffer.from(rid, 'utf8'));
-/** The re-read marker (3.5 §访问模式「版本变更的重读」, 4.3 §4「目录」): an empty file, there while the session's answer files are the last
- *  version's whole answer and the fold that replaces them is not at its end. */
+/** The re-read marker (3.5 §访问模式「版本变更的重读」, 4.3 §4「目录」): a file there while the session's answer files are the last version's
+ *  whole answer and the fold that replaces them is not at its end. It holds `t`, the newest mtime of the directory when it was written:
+ *  written once, so it outlives the workers. A marker with nothing in it has no `t`. */
 export const rereadFile = (home, id) => path.join(sessionDir(home, id), 'reread');
 export const hasReread = (home, id, fs = nodeFs) => fs.existsSync(rereadFile(home, id));
-export const markReread = (home, id, fs = nodeFs) => putFile(fs, rereadFile(home, id), Buffer.alloc(0));
+export function markReread(home, id, t, fs = nodeFs) { if (!hasReread(home, id, fs)) putFile(fs, rereadFile(home, id), Buffer.from(String(t), 'utf8')); }
 export function clearReread(home, id, fs = nodeFs) { try { fs.unlinkSync(rereadFile(home, id)); } catch (e) { if (e.code !== 'ENOENT') throw e; } }
+/** setMtimes(home, id, ms, fs, named): the session's files, those `named` says, to mtime `ms`. A file that went meanwhile is skipped. */
+export function setMtimes(home, id, ms, fs = nodeFs, named = () => true) {
+  const dir = sessionDir(home, id);
+  for (const n of fs.readdirSync(dir)) if (named(n)) { try { fs.utimesSync(path.join(dir, n), ms / 1000, ms / 1000); } catch (e) { if (e.code !== 'ENOENT') throw e; } }
+}
+/** endReread(home, id, fs) → the mtime the directory was given, else null: the new answer is on disk, so every file gets `t` + 1 ms, past
+ *  each mtime it ever had: the order of 4.3 §4 回收 stays, and no `<size>-<mtimeMs>` of 4.4 §答案文件 is an old one. Then the marker goes. */
+export function endReread(home, id, fs = nodeFs) {
+  const t = Number(fs.readFileSync(rereadFile(home, id), 'utf8')), at = t ? t + 1 : null;
+  if (at) setMtimes(home, id, at, fs);
+  clearReread(home, id, fs);
+  return at;
+}
 // A whole file written to a temporary file and renamed over (EPERM / EBUSY, a reader holding it on Windows: tried 3 times).
 export function putFile(fs, file, bytes) {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
@@ -245,6 +261,28 @@ const writers = new WeakMap();
  *  that say so (named/session.mjs sidecars): `w.f` that offset, so a worker that starts again re-renders the packs that changed past
  *  it; `w.t` the tails' checkpoint (the axis, the records appended up to, each tail's size), so it appends to the tails. */
 export const filesAt = (log) => (writers.has(log) ? writers.get(log).f : -1);
+/** filesReach(log) → the members the tails reach (from the first, in write order), as this log's writer or its sidecar's checkpoint
+ *  says, else null: neither speaks for the tails on disk (a re-read's new log, a first read). */
+export function filesReach(log) {
+  const W = log && writers.get(log);
+  if (W && W.tails) return W.rec;
+  try { return JSON.parse(log.saved.parts['w.t'][0]).rec; } catch { return null; }
+}
+/** tailsReach(home, id, members, fs) → the same read off the tails on disk: past the last `{r}` line of the two, at least the first
+ *  member of their span; 0 with no tail. */
+export function tailsReach(home, id, members, fs = nodeFs) {
+  const R = Buffer.from('\n{"r":'), last = new Set();
+  let reach = 0;
+  for (const part of PARTS) {
+    try {
+      const t = fs.readFileSync(tailFile(home, id, part)), j = t.lastIndexOf(R);
+      reach = Math.max(reach, JSON.parse(t.subarray(0, t.indexOf(10)).toString('utf8')).tail.n * PACK_MEMBERS);
+      if (j >= 0) last.add(JSON.parse(t.subarray(j + 1, t.indexOf(10, j + 1)).toString('utf8')).r.id);
+    } catch { /* none, or torn: it says nothing */ }
+  }
+  for (let i = members.length - 1; last.size && i >= reach; i--) if (last.has(String(members[i].id))) return i + 1;
+  return reach;
+}
 export function filesParts(log) {
   const W = writers.get(log);
   return [['w.f', Float64Array.of(W ? W.f : -1)], ...(W && W.tails ? [['w.t', [JSON.stringify({ ax: W.ax, rec: W.rec, size: PARTS.map((p) => W.tails[p].size) })]]] : [])];

@@ -167,7 +167,8 @@ export async function run(ctx) {
   if ([from, to, ledger].filter((x) => x != null).length > 1) throw new QueryArgError('trocar query lane: give at most one of --from, --to and --ledger');
   const after = ledger == null ? null : cursorOf(ledger);
   const st = await sessionState(ctx, id);
-  const empty = (mark) => ({ lane: key, base: null, mark, steps: [], defs: [], resources: [], seen: [], events: [], prev: null, next: null, ledger_next: null });
+  const reading = st && st.pending ? { pending: st.pending } : null; // 3.5 `pending?`: this answer stops at the frontier
+  const empty = (mark) => ({ lane: key, base: null, mark, ...reading, steps: [], defs: [], resources: [], seen: [], events: [], prev: null, next: null, ledger_next: null });
   if (!st) {
     errors.push({ where: `session/${id}`, code: 'session-unknown', reason: 'no session with this id among the captured records' });
     return empty(null);
@@ -257,7 +258,7 @@ export async function run(ctx) {
   }
   const last = i > 0 ? owed[i - 1] : [0, ''];
   return {
-    lane: key, base, mark: markOn(st.plan, st.mark), steps, defs: wireDefs, resources: out[0], seen: out[1], events,
+    lane: key, base, mark: markOn(st.plan, st.mark), ...reading, steps, defs: wireDefs, resources: out[0], seen: out[1], events,
     prev: lo > 0 && steps.length ? rids[lo] : null, next: hi < n && steps.length ? rids[hi - 1] : null,
     ledger_next: i < owed.length ? Buffer.from(JSON.stringify([LISTS[last[0]], last[1]])).toString('base64url') : null,
   };

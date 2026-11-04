@@ -198,7 +198,7 @@ test('3.5 #42: a page whose titles run past the budget is answered 102 by the re
 test('3.5 §谁执行它: a record the sweep cannot read leaves the tier-0 head as it was, byte for byte', async () => {
   const { home, members, open, svc } = await gated({ env: { TROCAR_TEST_RAW_LOST: SEGMENT_A } })
   try {
-    writeHead(home, A, tier0Doc(A, members.get(A), [], 'a title from before'))
+    writeHead(home, A, tier0Doc(A, members.get(A), [], { title: 'a title from before' }))
     const file = headFile(home, A, true), bytes = fs.readFileSync(file)
     open()
     svc.sweep()

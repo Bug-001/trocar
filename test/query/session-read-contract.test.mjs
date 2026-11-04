@@ -27,12 +27,14 @@ test('every answer carries the common keys (an NDJSON answer: on its first line,
   }
 })
 
-test('session: a delta is based on a full answer\'s mark; pending is {done, total, work}', () => {
+test('session: a delta is based on a full answer\'s mark; pending is {done, total, work, calls}, on a lane too', () => {
   assert.equal(doc.session_full.base, null)
   assert.equal(doc.session_since.base, doc.session_full.mark)
-  const { pending } = doc.session_pending
-  assert.ok(Number.isInteger(pending.done) && Number.isInteger(pending.total) && pending.done < pending.total)
-  assert.ok(Number.isInteger(pending.work) && pending.work >= 0)
+  for (const { pending } of [doc.session_pending, doc.lane_ops]) {
+    assert.ok(Number.isInteger(pending.done) && Number.isInteger(pending.total) && pending.done < pending.total)
+    assert.ok(Number.isInteger(pending.work) && pending.work >= 0)
+    assert.ok(Number.isInteger(pending.calls) && pending.calls >= 0)
+  }
 })
 
 // A page's steps rebuilt from their ops: every bid is defined, copies stay in the parent's list.

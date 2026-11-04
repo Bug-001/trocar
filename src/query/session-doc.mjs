@@ -232,11 +232,11 @@ export function viewOf({ id, log, cols, members, plan, mark }) {
     keys.splice(lo, 0, k);
   }
   const lanes = cols.sorted.keys.map(head);
-  const main = lanes.find((l) => l.kind === 'main'), fl = f == null ? null : log.read(f);
+  const fl = f == null ? null : log.read(f);
   return {
     log, f, cols, plan, mark, lanes, failed: its.failed, logged: its.logged, probes: its.probes, unknown: its.unknown,
     stats: fl ? fl.st : { calls: 0, streams: 0, subagents: 0, monitors: 0, compactions: 0, totalIn: 0, totalOut: 0, peakCtx: 0 },
-    meta: sessionMetaOfFacts({ ...plan.facts.facts(), title: main ? main.task ?? null : null }),
+    meta: sessionMetaOfFacts(plan.facts.facts()), // the title is titleOf's (named/session.mjs stateAt)
     has: (rid) => { const k = cols.slotOf(rid); return k !== undefined && cols.ts[k] !== undefined; },
   };
 }
