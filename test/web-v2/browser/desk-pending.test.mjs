@@ -33,7 +33,7 @@ const olderTick = (page, j) => page.evaluate((j) => {
   const ts = [...document.querySelectorAll('#rails .tick[data-lane]')].filter((t) => mid(t) < r0.left - r0.width), t = ts[j % Math.max(1, ts.length)]
   if (!t) return null
   const r = t.getBoundingClientRect(), x = r.left + r.width / 2, y = r.top + r.height / 2
-  return document.elementFromPoint(x, y) === t ? { x, y } : null
+  return document.elementFromPoint(x, y) === t ? { x, y, lane: t.dataset.lane, i: t.dataset.i } : null
 }, j)
 // the desk over the growing world `w`, its first answer drawn: page, grant(n) (n more answers, and a wait until head reads have taken
 // them, not until they are drawn; a stall is no head read in 20 s), drawn() (every answer taken is drawn: the step head counts the main
@@ -126,7 +126,7 @@ test('2.3 归约前沿 · D64②: a session growing by 1,000 members an answer �
 })
 
 // 2.3 读者优先: a redraw between a press and its release takes the pressed node away, and the browser then sends no click. A tick held
-// down while answers land still jumps there when let go: the step goes back, where following alone would only take it forward.
+// down while answers land still jumps there when let go: that tick is selected and the step moved (following alone selects nothing).
 test('2.3 读者优先: a tick held down while an answer lands moves the step when it is let go', { skip }, async () => {
   const w = world(12, { calls: 30000, page: 1500, files: 600, compact: 0.02 })
   await growingDesk(w, async (d) => {
@@ -140,7 +140,8 @@ test('2.3 读者优先: a tick held down while an answer lands moves the step wh
       await grant(1)
       await page.waitForTimeout(400) // the answer read and applied while the pointer is down
       await page.mouse.up()
-      await until((a) => { const h = window.__head(); return !!h && h.n < a }, n0, `the tick let go at step ${n0} did not move the step`)
+      await until(({ n0, lane, i }) => { const h = window.__head(); return !!h && h.n !== n0 && !!document.querySelector(`#rails [data-lane="${CSS.escape(lane)}"][data-i="${i}"].sel`) },
+        { n0, ...pt }, `the tick let go at step ${n0} did not move the step`)
       await drawn()
     }
   })

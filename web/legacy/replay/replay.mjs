@@ -922,9 +922,6 @@ function openDesk(ctx, route0, makeView = legacyView) {
   // a view whose scope is its own (the new desk's Scope.tsx) frames with no `saw`: its rows are not wired here
   function wire() {
     const rpbar = $('#rpbar'), { rails } = E
-    const onKey = () => pace.input(), onDown = () => pace.press(true), onUp = () => pace.press(false), UPS = ['pointerup', 'pointercancel', 'blur']
-    addEventListener('keydown', onKey, true); addEventListener('pointerdown', onDown, true); for (const k of UPS) addEventListener(k, onUp, true)
-    offs.push(() => { removeEventListener('keydown', onKey, true); removeEventListener('pointerdown', onDown, true); for (const k of UPS) removeEventListener(k, onUp, true) })
     rails.addEventListener('mouseover', onRailHover)
     rpbar.addEventListener('click', onRp); rpbar.addEventListener('keydown', onRpKey)
     offs.push(() => { rpbar.removeEventListener('click', onRp); rpbar.removeEventListener('keydown', onRpKey); rails.removeEventListener('mouseover', onRailHover) },
@@ -986,8 +983,11 @@ function openDesk(ctx, route0, makeView = legacyView) {
   }
 
   // hang the desk in `el` as it was left; the URL decides the view only when it names a step (1.2 §路由「离开再回来」)
+  // the reader's inputs, heard before anything acts on them, while the desk is on the page (the pace of its background work)
+  const INPUTS = [['keydown', () => pace.input()], ['pointerdown', () => pace.press(true)], ...['pointerup', 'pointercancel', 'blur'].map((k) => [k, () => pace.press(false)])]
   function attach(el, ctx, route) {
     host = el
+    for (const [k, f] of INPUTS) window.addEventListener(k, f, true)
     s.ctx = { ...ctx, api: areaApi }
     overrideScope(sessionKey())
     el.replaceChildren(root)
@@ -1015,6 +1015,7 @@ function openDesk(ctx, route0, makeView = legacyView) {
     document.removeEventListener('v2:escape', onEscape)
     document.removeEventListener('visibilitychange', onVis)
     window.removeEventListener('resize', refit)
+    for (const [k, f] of INPUTS) window.removeEventListener(k, f, true)
     if (ro) ro.disconnect()
     if (io) io.disconnect()
     if (E) { closeDetail(E.detail, s); E.detail.innerHTML = '' }
