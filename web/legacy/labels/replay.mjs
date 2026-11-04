@@ -462,5 +462,6 @@ export const partName = (k, inferred) => `${k === 0 ? 'Before the first compacti
 export const GRP_AGENTS = 'Sub-agents'
 export const rowStep = (n) => `step ${n}`
 export const agentCalls = (n) => count(n, 'call')
+export const NO_PROMPTS_HERE = 'No prompts in these steps'
 // 2.6 §A: the folded row after the reply
 export const CALL_DETAILS = 'Call details'
