@@ -14,7 +14,7 @@ import http from 'node:http'
 import tls from 'node:tls'
 import path from 'node:path'
 import { modelWorld } from '../helpers/model-world.mjs'
-import { liveUnit, withScratchCwd } from '../helpers/model-daemon.mjs'
+import { liveUnit, withScratchCwd, unservable } from '../helpers/model-daemon.mjs'
 import { within } from '../helpers/bounded.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { createCa, loadCa } from '../../src/collector/core/tls/ca.mjs'
@@ -30,7 +30,7 @@ import { listenLocalhost } from '../helpers/localhost.mjs'
 const recordsOf = (raw) => (fs.existsSync(raw) ? fs.readdirSync(raw) : []).filter((n) => n.endsWith('.ndjson')).flatMap((n) => fs.readFileSync(path.join(raw, n), 'utf8').split('\n').filter(Boolean))
 
 for (const platform of ['darwin', 'win32']) {
-  test(`${platform}: after a daemon restart, the door's durable row says the decrypted agent is captured (status), a holder (off) and online (uninstall, daemon down)`, { timeout: 60_000 }, async () => {
+  test(`${platform}: after a daemon restart, the door's durable row says the decrypted agent is captured (status), a holder (off) and online (uninstall, daemon down)`, { skip: await unservable(platform), timeout: 60_000 }, async () => {
     const w = await modelWorld({ os: platform, commands: ['codex'] })
     assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
     fs.mkdirSync(path.join(w.home, '.codex'), { recursive: true }); fs.writeFileSync(path.join(w.home, '.codex', '.env'), '')

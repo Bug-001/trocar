@@ -144,3 +144,24 @@ test('#19 a store that throws still switches the theme and says so; a kept choic
     assert.deepEqual(b.errors, [])
   } finally { await b.stop() }
 })
+
+// 1.2 §键盘 (layers go with their screen): the confirm opened on Storage closes when Back leaves the screen; nothing stays over the
+// next screen, and leaving answers it as Cancel, so nothing carrying `confirm` is sent (invariant 1; 1.11 取消或 Esc 不发带 confirm 的请求)
+test('1.2 §键盘: the llm → log confirm closes when Back leaves Storage; no confirm is sent', { skip, timeout: 120_000 }, async () => {
+  const b = await withBoard({ bytes: 2e5, chromium: gate.chromium })
+  try {
+    const { page } = b
+    await go(page, '#/settings/storage')
+    const llmLog = level(page, 'llm').getByRole('radio', { name: KEEP_NAME.log })
+    await llmLog.waitFor({ timeout: 30000 })
+    await llmLog.click()
+    await page.getByRole('dialog').waitFor({ timeout: 30000 })
+    await page.goBack()
+    await page.waitForFunction(() => !location.hash.startsWith('#/settings'))
+    await level(page, 'llm').waitFor({ state: 'detached', timeout: 30000 })
+    assert.equal(await page.locator('[role=dialog], [role=alertdialog]').count(), 0)
+    const sentConfirm = b.requests.filter((r) => r.method !== 'GET' && r.body && 'confirm' in JSON.parse(r.body))
+    assert.deepEqual(sentConfirm, [])
+    assert.deepEqual(b.errors, [])
+  } finally { await b.stop() }
+})

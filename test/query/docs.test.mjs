@@ -9,6 +9,7 @@ import { rawHome, writeSegment, requiredFor, DATA_QUERIES } from './raw-home.mjs
 import { QUERIES, runQuery, parseTime, QueryArgError } from '../../src/query/named/index.mjs'
 import { QUERY_NAMES } from '../../src/query/client.mjs'
 import { validateQueryDoc } from '../../src/cli/schema.mjs'
+import { fillUsage } from '../../src/query/usage.mjs'
 
 const SEG = '20261018T100000Z'
 const SID = 's-1'
@@ -151,10 +152,14 @@ test('读段索引的名字都带 as_of', async () => {
   }
 })
 
-// C.5 sessions:title_source ∈ harness-local-store · wire · null —— 没有标题就是 null
-test('没有标题的会话 title_source 为 null', async () => {
-  const doc = await runQuery('sessions', {}, { home: homeWithData() })
-  assert.deepEqual(doc.sessions.map((m) => [m.title, m.title_source]), [[null, null]])
+// C.5 sessions:title_source ∈ wire · pending · null —— 旁注还没覆盖时是 pending(还不知道),覆盖后没有标题才是 null
+test('没有标题的会话:旁注覆盖前 title_source 为 pending,覆盖后为 null', async () => {
+  const home = homeWithData()
+  assert.deepEqual((await runQuery('sessions', {}, { home })).sessions.map((m) => [m.title, m.title_source]), [[null, 'pending']])
+  let fill = null
+  await runQuery('sessions', {}, { home, later: (fn) => { fill = fn } })
+  await fill(); await fillUsage({ home, segments: [] })
+  assert.deepEqual((await runQuery('sessions', {}, { home })).sessions.map((m) => [m.title, m.title_source]), [[null, null]])
 })
 
 test('盘上没有数据时每个文档照样出,退 0 的形状', async () => {

@@ -63,6 +63,7 @@ test('the status read: one per period while visible, none while hidden, one at o
   expect(reads()).toBe(6)
   release(ok)
   await tick(0)
+  expect(reads()).toBe(6) // the ticks that came while it was out joined it: none is queued to run when it answers
   expect(maxInFlight).toBe(1)
   // a failure: the next read waits backoffMs(1, base), not the plain period
   await tick(base)
