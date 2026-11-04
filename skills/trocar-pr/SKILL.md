@@ -48,7 +48,7 @@ Write the title and body to files outside the clone. The body follows `.github/p
 - **How verified:** fresh-HOME counts, skips with reasons, the OS.
 - **Spec and docs:** sections touched.
 
-The `hash` goes on the line the template gives it. That line is left out of the hash, so writing it there does not change the hash; any other words on that line are counted.
+The `hash` goes on the line the template gives it. That line is left out of the hash, so writing it there does not change the hash; any other words on that line are counted. Leave it empty on the first run. After that the only value it takes is the hash the run prints: the check refuses any other.
 
 There is no place for what the user was doing, what a session contained, or how a capture looked. Say "a reply whose stream ends without a stop event", not what was in it. Check numbers from `trocar-ux` are fine; screenshots are not.
 
@@ -62,12 +62,12 @@ node scripts/pr-check.mjs --before <start-time> --title <title-file> --body <bod
 
 It judges every commit on the branch (paths, added lines, messages, author and committer), the branch name, the title and the body. It refuses, with the place and the rule but never the value:
 
-- images, video, PDF, archives, capture formats and other binary files; Git LFS pointers; an SVG that reaches outside itself, by data, an image or a reference to another file; a `data:` URI of an image in any text, and a Markdown image or `<img` tag in a title, body or comment (inside a committed file those two are fine); a change to the built board that a rebuild does not reproduce;
+- images, video, PDF, archives, capture formats and other binary files; Git LFS pointers; an SVG that reaches outside itself, by data, an image or a reference to another file; a `data:` URI of an image or of no type in any text, and a Markdown image, an `<img` or `<video` tag or a bare `github.com/user-attachments/` address in a title, body or comment (inside a committed file those are fine); a change to the built board that a rebuild does not reproduce;
 - credentials and key material, and a folded block of encoded text that opens to nothing readable; encoded text that does open is judged by what it says;
-- your user name, host name, real name, home paths in any OS's spelling, and a commit email that is not a GitHub noreply address;
-- project paths, session ids, session titles, hosts, segment names and record ids from your captures;
+- your user name, host name, real name, git email, home paths in any OS's spelling, and a commit email that is not a GitHub noreply address, which `gh api user --jq '"\(.id)+\(.login)@users.noreply.github.com"'` prints for you;
+- project paths, session ids, session titles, hosts, segment names and record ids from your captures, in the login of a commit email too;
 - any run of about 12 English words or 20 CJK characters (60 bytes once normalized) that also occurs verbatim in your captures;
-- commits over 400 lines, commits without a body, control bytes, text that is not UTF-8, and merge commits (rebase instead);
+- commits over 400 lines, commits without a body, control bytes in any text, path, title or body, text that is not UTF-8, a hash line holding anything but this run's hash, and merge commits (rebase instead);
 - a branch that does not stand on a commit `origin/main` already holds: rebase it onto `origin/main`, do not look for another `--base`.
 
 Text already in the public repository is public and passes.
@@ -92,9 +92,12 @@ Run the check once more. If the hash differs from what the user saw, go back to 
 
 ```bash
 gh repo fork Bug-001/trocar --clone=false
-git push <your-fork-remote> <branch>
+git remote add fork https://github.com/<your-login>/trocar.git
+git push fork <branch>
 gh pr create -R Bug-001/trocar --head <your-login>:<branch> --title "$(cat <title-file>)" --body-file <body-file>
 ```
+
+Do not use `gh repo fork --remote`: it renames `origin`, so the default base becomes your fork's.
 
 Give the user the link. An issue instead of a change: run the check with `--issue`, then `gh issue create -R Bug-001/trocar --title "$(cat <title-file>)" --body-file <body-file>`.
 

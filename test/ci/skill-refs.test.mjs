@@ -36,3 +36,11 @@ test('AN27: every path, command and query name a skill names exists', () => {
   const problems = files.flatMap((f) => problemsIn(fs.readFileSync(f, 'utf8')).map((p) => `${path.relative(ROOT, f)}: ${p}`))
   assert.deepEqual(problems, [])
 })
+
+test('AN27: each part trocar-pr says a body has is a heading of the pull request template', () => {
+  const skill = fs.readFileSync(path.join(SKILLS, 'trocar-pr', 'SKILL.md'), 'utf8')
+  const headings = [...fs.readFileSync(path.join(ROOT, '.github/pull_request_template.md'), 'utf8').matchAll(/^## (.+)$/gm)].map((m) => m[1])
+  const parts = [...skill.slice(skill.indexOf('### 3.'), skill.indexOf('### 4.')).matchAll(/^- \*\*(.+?):\*\*/gm)].map((m) => m[1])
+  assert.ok(parts.length > 0, 'step 3 lists the parts')
+  assert.deepEqual(parts.filter((part) => !headings.some((heading) => part.includes(heading))), [])
+})
