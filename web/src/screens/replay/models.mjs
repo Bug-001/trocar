@@ -10,7 +10,7 @@ import { cacheState, isFailed, breakCost, usageOf, priceMatch, costOf, hitTier }
 import { CT_ORDER, segTax, TAX_ORDER, hasChangeLine, callFacts, refRowOf } from '../../../legacy/replay/analysis.mjs'
 import { stepRef, stepsOf } from '../../../legacy/replay/lanes.mjs'
 import { stepOf, askOrdinal, ridAt } from '../../../legacy/replay/model.mjs'
-import { windowOf, roughWindow, chapterHere, chapterAt, chapterJump, problemSteps, OVW_BARCAP, BAR_KEYS } from '../../../legacy/replay/timeline.mjs'
+import { windowOf, roughWindow, chapterHere, chapterAt, chapterJump, problemSteps, landing, OVW_BARCAP, BAR_KEYS } from '../../../legacy/replay/timeline.mjs'
 import { cacheLabel, costLabel, contentRefOf, contentRefKOf, priceStateNote } from '../../../legacy/replay/stepbar.mjs'
 import { totalsOf } from '../../../legacy/replay/header.mjs'
 import { FLAG, cellsOf } from '../../../../src/view/head-cols.mjs'
@@ -316,6 +316,7 @@ function problemsOf(s, lo, hi) {
     const c = a.calls[i], n = no(i), base = { rid: c.rid, i, col: i - lo }
     if (isFailed(c)) { const tip = W.failTip(n, errMsgOf(c)); items.push({ ...base, kind: 'x', h: null, tip, aria: tip }); continue }
     if (c.compaction) { const tip = `${W.COMPACT_WORD}${c.compactionInferred ? ' · ' + W.GUESS : ''} — ${W.compactTip(n, c.compactionInferred)}`; items.push({ ...base, kind: 'compact', h: null, tip, aria: tip }); continue }
+    if (landing(c)) continue
     const ref = refRowOf(a, i), st = cacheState(c, ref)
     if (!st.isBreak) continue
     const it = { ...base, kind: 'flag', h: null, tip: '', aria: '', usd: breakCost(c, ref, s.pricing ? priceMatch(s.pricing, modelOf(c)) : null).usd, struct: st.state === 'changed' }

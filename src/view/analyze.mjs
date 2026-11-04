@@ -421,8 +421,10 @@ const viewOf = (r) => ({ facts: callFacts(r), messages: r.request.messages.map((
 
 // What a compaction verdict says about itself on the board (1.5:38 / 1.5:79: the UI tells confirmed from inferred).
 // A harness header hint is the harness's own word (high, not inferred); a text marker and a count drop are inferred
-// (medium, 3.4). `preamble` only refines the wording of a drop.
+// (medium, 3.4). `preamble` only refines the wording of a drop. A verdict that `lands` a harness's request says only that: the
+// context was rewritten here, and nothing is counted or inferred.
 export function compactionMeta(v, preamble = false) {
+  if (v && v.lands) return { compaction: false, lands: true }
   if (!v || !v.compaction) return { compaction: false }
   const byHint = v.basis === 'hint'
   return { compaction: true, compactionInferred: !byHint, compactionConfidence: byHint ? 'high' : 'medium',
@@ -712,9 +714,9 @@ export function createAnalyzer({ keep = true, from = null } = {}) {
     const blindCount = step.reqIncomplete || step.ctxPartial
     const verdict = blindCount ? { compaction: false }
       : compactionVerdict(st.prevInfo, { hint: h.compaction === true, marker, msgCount: msgs.length, preamble: hasPreamble })
-    if (!blindCount) st.prevInfo = { msgCount: msgs.length, marker, preamble: hasPreamble }
+    if (!blindCount) st.prevInfo = { msgCount: msgs.length, marker, preamble: hasPreamble, hinted: verdict.basis === 'hint' }
     let newMsgs
-    if (verdict.compaction) {
+    if (verdict.compaction || verdict.lands) {
       Object.assign(step, compactionMeta(verdict, preambleNew))
       if (D) D.push(['x'])
       else for (const res of st.resMap.values()) {
