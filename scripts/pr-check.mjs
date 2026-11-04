@@ -149,20 +149,26 @@ function patches(out) {
   return files
 }
 
-/** What `sha` brings, {stats, diffs} file by file. */
-function brought(cwd, sha) {
-  const show = (...args) => git(cwd, 'show', '--format=', '-M', ...args, sha)
-  const diffs = patches(show('--unified=0', '--no-color', '--no-ext-diff', '--no-textconv'))
-  const stats = numstat(show('--numstat', '-z'))
+/** What one commit brings, or what lies between two, {stats, diffs} file by file. */
+function brought(cwd, ...revs) {
+  const read = (...args) => git(cwd, ...(revs.length === 1 ? ['show', '--format='] : ['diff']), '-M', ...args, ...revs)
+  const diffs = patches(read('--unified=0', '--no-color', '--no-ext-diff', '--no-textconv'))
+  const stats = numstat(read('--numstat', '-z'))
   if (stats.length !== diffs.length) throw new Error('git')
   return { stats, diffs }
 }
+
+const addedOf = (diff) => Buffer.concat(diff.added.flatMap((row) => [row, NEWLINE]))
 
 /** Everything `base..HEAD` takes out, into `out`. */
 function readGit(cwd, base, out) {
   out.leaving.branch = git(cwd, 'rev-parse', '--abbrev-ref', 'HEAD').toString().trim()
   out.sources.push({ where: 'branch', kind: 'branch', bytes: Buffer.from(out.leaving.branch) })
   const index = new Map()
+  const indexOf = (path) => {
+    if (!index.has(path)) index.set(path, out.leaving.files.push(path) - 1)
+    return index.get(path)
+  }
   for (const sha of git(cwd, 'rev-list', '--reverse', `${base}..HEAD`).toString().split('\n').filter(Boolean)) {
     const short = sha.slice(0, SHORT_SHA)
     const [parents, authorName, authorEmail, committerName, committerEmail, message] = git(cwd, 'log', '-1', '--format=%P%x00%an%x00%ae%x00%cn%x00%ce%x00%B', sha).toString().split('\0')
@@ -179,14 +185,19 @@ function readGit(cwd, base, out) {
     stats.forEach((stat, i) => {
       if (!isUncounted(stat.path)) commit.lines += stat.lines
       if (diffs[i].gone) return
-      if (!index.has(stat.path)) index.set(stat.path, out.leaving.files.push(stat.path) - 1)
-      const where = `${short}:file#${index.get(stat.path)}`
-      const added = Buffer.concat(diffs[i].added.flatMap((row) => [row, NEWLINE]))
+      const where = `${short}:file#${indexOf(stat.path)}`
+      const added = addedOf(diffs[i])
       commit.changed.push({ ...stat, where, added })
       out.sources.push({ where, kind: 'path', bytes: Buffer.from(stat.path) })
       out.sources.push({ where, kind: 'added', path: stat.path, lines: diffs[i].lines, bytes: added })
     })
   }
+  if (out.commits.length < 2) return
+  // a window does not cross sources, and what two commits each bring half of sits whole in the tree they leave
+  const { stats, diffs } = brought(cwd, base, 'HEAD')
+  stats.forEach((stat, i) => {
+    if (!diffs[i].gone) out.sources.push({ where: `tree:file#${indexOf(stat.path)}`, kind: 'added', path: stat.path, lines: diffs[i].lines, bytes: addedOf(diffs[i]) })
+  })
 }
 
 /** The whole outbound text, source by source, in a form that changes when any of its bytes does, and the terms it was judged on: what the
