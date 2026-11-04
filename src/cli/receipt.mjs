@@ -22,6 +22,8 @@ const FORM_WORDS = Object.freeze({
   'desktop-prebuilt': 'the prebuilt desktop app', acp: 'the editor plug-in', web: 'the web interface', npx: 'a run through npx',
   wsl: 'the Windows Subsystem for Linux', gateway: 'the gateway', dashboard: 'the dashboard',
 })
+/** 1.6 §3.2: what the standalone undo is, true for every channel (a script install has no source tree): the plan's words for each of its files. */
+export const UNDO_WORDS = 'the undo that works even when trocar itself is broken'
 const CARRIER_WORDS = Object.freeze({
   root: 'reads your user trust store', 'config-key': "the certificate setting of its own configuration", 'pem-block': 'a block in your certificate file',
   // no tense: the plan (before) and the receipt (after) say them alike
@@ -104,7 +106,7 @@ export function planItems(p, { home = null, platform = 'linux' } = {}) {
   const add = (what, path_, detail) => items.push({ what, path: path_ || null, detail })
   if (p.manifest) add('record', p.manifest, `${t(p.manifest)}: what was installed`)
   if (p.state) add('record', p.state, `${t(p.state)}: which agents are on`)
-  if (p.standalone) add('undo', p.standalone, `${t(p.standalone)}: works without this source tree`)
+  for (const f of [].concat(p.standalone || [])) add('undo', f, `${t(f)}: ${UNDO_WORDS}`) // standaloneFiles: trocar-off, and trocar-off.cmd beside it on Windows
   for (const c of p.ca || []) add('certificate', c, `${t(c)}: in no trust store`)
   if (p.run) add('record', p.run, `${t(p.run)}${sep}: what the plugins trust`)
   for (const f of p.files || []) add(f.harness, f.path, `${t(f.path)}: ${f.sources.length ? `the certificates of ${f.sources.map((x) => String(x).split(/[\\/]/).pop()).join(', ')} plus trocar's` : "trocar's certificate"}`)

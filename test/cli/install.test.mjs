@@ -254,3 +254,20 @@ test('V85 · Set up: a rule U block that is intact is not in the plan of the har
   assert.ok(planned.some((p) => p.carrier === 'wrapper'), `the lost carrier is planned: ${JSON.stringify(planned)}`)
   assert.deepEqual(planned.filter((p) => !p.state && (p.paths || []).includes(w.file)), [], 'the intact block is not a change')
 })
+
+// 1.6 §3.2: the undo's rows come from standaloneFiles, the one list install writes and uninstall removes (trocar-off.cmd beside it on Windows), in
+// words true for every channel — a script install has no source tree
+for (const platform of ['darwin', 'win32']) {
+  test(`1.6 §3.2 (${platform}): the install plan names every file of the standalone undo, and no source tree`, async () => {
+    const { install } = await import('../../src/cli/install.mjs')
+    const { standaloneFiles } = await import('../../src/off/paths.mjs')
+    const { tilde } = await import('../../src/cli/receipt.mjs')
+    const w = await modelWorld({ os: platform })
+    const io = fakeIo()
+    const deps = { getuid: () => 501, unit: null, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, harnesses: [], which: w.ctx.which, owns: w.owns }
+    assert.equal(await install({ io, env: w.env, home: w.home, platform, deps, flags: new Set(['--dry-run', '--json']) }), 0, io.text())
+    const words = io.json().planned.map((p) => p.detail).join('\n')
+    for (const f of standaloneFiles(w.home, platform)) assert.ok(words.includes(tilde(f, w.home)), `${f} is named: ${words}`)
+    assert.doesNotMatch(words, /source tree/)
+  })
+}
