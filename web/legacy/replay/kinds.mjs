@@ -283,6 +283,8 @@ function media(r, b, v, o) {
   return { html: `<div class="kd-file">${esc(m.file)} <button type="button" data-cellsave ${src}>${esc(SAVE)}</button></div>` }
 }
 const R = { text, code, shell, json, kv, opaque, parts, markdown, diff, media, tool }
+// what a shell call says it does (its `f.note`): the cell's shell puts it in the row head, so the kind does not draw it
+export const noteOf = (r, value) => { const n = R[r?.as] === shell && r.f?.note != null ? get(value, r.f.note) : null; return typeof n === 'string' && n ? n : null }
 
 // ── the text of a block, what Copy text gives (2.3 §工具栏): each kind's own reading as draw has it, no HTML and no budget ───────
 const headed = (r, s) => (r.title != null ? `${r.title}\n${s}` : s)

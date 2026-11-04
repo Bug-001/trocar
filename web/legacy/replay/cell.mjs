@@ -9,7 +9,7 @@ import * as W from '../labels/replay.mjs'
 import { HALF } from '../core/icons.mjs'
 import * as C from '../labels/cells.mjs'
 import { layout } from './jsonlay.mjs'
-import { renderKind, jsonNodeHtml, get, textOf } from './kinds.mjs'
+import { renderKind, jsonNodeHtml, get, textOf, noteOf } from './kinds.mjs'
 import { cellKey } from './keymap.mjs'
 import { isTyping } from '../core/keys.mjs'
 
@@ -269,8 +269,7 @@ export function headNote(cell, got, mode = modeOf(cell.bid)) {
   if (cell.block && cell.ref == null) return C.noRange(cell.noRange)
   const view = viewIn(cell, got)
   if (!view || mode !== 'read') return null
-  const r = rOf(cell, view), note = r.as === 'shell' ? get(view.body, r.f?.note) : null
-  return typeof note === 'string' && note ? note : null
+  return noteOf(rOf(cell, view), view.body)
 }
 
 // the whole body of a cell: toolbar + what it says + Raw or Readable + the sentinel; the sized pending box; or the reason the bytes are missing
