@@ -16,7 +16,10 @@
 // open after a stored answer's format changed) `firstListMs` is reported instead of `listMs`; the page must say it is loading, and
 // never that there are no sessions.
 //
-// PASS LINES, each measured from the moment the page is asked, all must hold (exit 0; else 1 and the report says which):
+// Then the agent's side: a real daemon on a home of its own re-reads the same copy, and scripts/deploy-check-daemon.mjs times one request through
+// its door and the index that follows, in windows under the re-read and idle. With nothing to re-read those two lines are not measured, and fail.
+//
+// PASS LINES, the times measured from the moment the page is asked, all must hold (exit 0; else 1 and the report says which):
 const LINES = Object.freeze({
   listMs: 1000, // the session list on screen, its rows with their titles
   headMs: 200, // the biggest session's head file (D71①)
@@ -25,7 +28,10 @@ const LINES = Object.freeze({
   sessionsP95: 500, // `sessions`, while the re-read runs
   smallP95: 500, // a small session's head, while the re-read runs
   fullMs: 30 * 60_000, // --full: the whole re-read, nothing left over any session
+  roundTripP95: { idle: 'roundTripIdleP95', times: 1.5, plusMs: 10 }, // one request through a real daemon's door, under the re-read, against idle
+  indexP95: { idle: 'indexIdleP95', times: 1.5, plusMs: 10 }, // from that reply to its segment's index growing, the same
 })
+const AGENT_PATH = Object.freeze({ windowMs: 20_000, pairs: 3, probeMs: 3000 }) // windows under the re-read and idle, in turn (deploy-check-daemon.mjs)
 // and: no answer of 500 or more, no worker lost, no "not read yet" on screen, no first-read state on the biggest session (`updating` is what a
 // re-read says), never "no sessions" while the list loads, and no title source outside {wire, unread, null}.
 import fs from 'node:fs'
@@ -33,6 +39,7 @@ import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import zlib from 'node:zlib'
+import { fork } from 'node:child_process'
 import { parseArgs } from 'node:util'
 
 const { values: o } = parseArgs({ options: { home: { type: 'string' }, out: { type: 'string' }, 'no-bump': { type: 'boolean' }, seconds: { type: 'string' }, full: { type: 'boolean' }, keep: { type: 'boolean' } } })
@@ -180,7 +187,19 @@ async function theBoard() {
   } finally { await b.stop() }
 }
 
-try { await theBoard() } catch (e) { fail(`the check stopped: ${e.stack || e}`) }
+// after the board has stopped: its re-read would load both kinds of window alike
+function theAgentPath() {
+  const { windowMs, pairs } = AGENT_PATH
+  return new Promise((resolve) => {
+    const child = fork(path.join(code, 'scripts/deploy-check-daemon.mjs'), [JSON.stringify({ real, ...AGENT_PATH })],
+      { execArgv: ['--require', path.join(code, 'test/helpers/no-real-os.cjs')], env: { ...process.env, HOME: out, USERPROFILE: out } })
+    const cut = setTimeout(() => child.kill('SIGKILL'), windowMs * pairs * 2 + 10 * 60_000)
+    child.on('message', (m) => { report.agentPath = m; Object.assign(report.measured, m.measured); for (const [k, v] of Object.entries(m.measured)) console.log(`${k.padEnd(18)} ${v} ms`) })
+    child.on('exit', (status, signal) => { clearTimeout(cut); if (status !== 0) fail(`the agent path's daemon ended with ${status ?? signal}`); resolve() })
+  })
+}
+
+try { await theBoard(); await theAgentPath() } catch (e) { fail(`the check stopped: ${e.stack || e}`) }
 const moved = rawDiff(rawBefore, rawList(realRaw))
 report.raw = moved
 const { pass, failures } = verdict(lines, report.measured, report.failures)
