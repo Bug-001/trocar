@@ -12,7 +12,7 @@ const paths = (cmd, ctx) => parseBashReads(cmd, ctx).map((r) => r.path);
 const READERS = [
   ['cat', 'full file'], ['nl', 'full file'], ['/usr/bin/less', 'full file'],
   ['head -n 7', 'L1–7'], ['head -7', 'L1–7'], ['tail -n 7', 'tail 7'], ['tail -7', 'tail 7'],
-  ["sed -n '3,9p'", 'L3–9'], ['sed -n 3,9p', 'L3–9'],
+  ["sed -n '3,9p'", 'L3–9'], ['sed -n 3,9p', 'L3–9'], ['sed -n 5p', 'L5'],
 ];
 const TARGETS = [['/data/run/logs', 'a.log'], ['/repo/spec', 'b.md'], ['/x', 'y.tar.gz'], ['/deep/er/still', 'noext/z']];
 
@@ -178,11 +178,10 @@ test('bounds: scope and order of the command decide, and what is not a read stay
     'cat /a/x.txt > /b/y.txt', 'cat /a/x.txt >> /b/y.txt', 'cat /a/x.txt 1> /b/y.txt', 'cat /a/x.txt &> /b/y.txt',
     'cat /a/x.txt >/dev/null 2>&1', 'tail -n 2 /a/x.txt >/b/y.txt',
     // no reader, or a reader the command does not reach
-    'ls /a/x.txt', 'echo "cat /a/x.txt"', 'grep x /a/y.txt', 'bash -c "cat /a/x.txt"', `ssh h 'cat /a/x.txt'`,
+    'ls /a/x.txt', 'echo "cat /a/x.txt"', 'bash -c "cat /a/x.txt"', `ssh h 'cat /a/x.txt'`,
     'echo $(cat /a/x.txt)', 'P=$(cat /a/x.txt)', '# cat /a/x.txt', 'sed -i s/a/b/ /a/x.txt', 'sed s/a/b/ /a/x.txt',
-    `sed -n '/a/p' /a/x.txt`,
     // words that are not paths
-    'cat https://a.example/x.txt', 'cat /a/*.log', 'cat /a/{x,y}.txt', 'cat /a/?.txt', 'cat README', 'cat -n',
+    'cat https://a.example/x.txt', 'cat /a/*.log', 'cat /a/{x,y}.txt', 'cat /a/?.txt', 'cat -n', 'cat ""',
     'P=/a; cat $P/*.log', 'head -n $N', 'tail -c $(n)', 'xxd -l $N', '',
   ];
   for (const cmd of NOT_READS) assert.deepEqual(parseBashReads(cmd), [], cmd);
@@ -200,6 +199,46 @@ test('bounds: scope and order of the command decide, and what is not a read stay
   assert.deepEqual(paths('head -n $N /a/x.txt'), ['/a/x.txt']);
   assert.deepEqual(parseBashReads('head -n1 $F').map((r) => r.path), ['$F']);
   assert.deepEqual(parseBashReads('cat -n $F').map((r) => r.path), ['$F']);
+});
+
+// 2.4 item 7, the table: each way of reading, with the range it names
+const WAYS = [
+  ['cat', 'full file'], ['head -n 3', 'L1–3'], ['tail -c 10', 'full file'], ['less +10', 'full file'],
+  ['sed -n 5p', 'L5'], ["sed -n '3,9p'", 'L3–9'], ['sed -n -e 5p', 'L5'], ['sed -ne 5p', 'L5'], ["sed -n '/a/p'", 'matching lines'],
+  ['grep x', 'matching lines'], ['grep -n -A 3 x', 'matching lines'], ['grep -A3 x', 'matching lines'], ['grep -e x', 'matching lines'],
+  ['grep --regexp=x', 'matching lines'], ['grep --regexp x', 'matching lines'], ['grep -f p.txt', 'matching lines'],
+  [`awk -F: '{print $1}'`, 'filtered'], ['awk -f p.awk', 'filtered'], [`awk -vn=f 'NR>1'`, 'filtered'],
+  [`jq -r '.a'`, 'filtered'], [`jq --arg k v '.a'`, 'filtered'],
+  ['xxd -l 64', 'full file'], ['od -N 8', 'full file'], ['strings -n 8', 'full file'],
+];
+const PREFIXES = ['', 'sudo', 'sudo -u root', 'env', 'env A=1', 'time', 'time -p', 'nohup', 'nice -n 5', 'timeout 5', 'sudo env A=1'];
+
+test('every prefix and way of reading names exactly the file, with the range it reads', () => {
+  for (const p of PREFIXES) {
+    for (const [way, range] of WAYS) {
+      for (const file of ['/d/a.log', '/d/Makefile', '/d/noext/z']) {
+        assert.deepEqual(parseBashReads(`${p} ${way} ${file}`), [{ path: file, range }], `${p} ${way} ${file}`);
+      }
+      assert.deepEqual(parseBashReads(`${p} ${way} Makefile`), [{ path: 'Makefile', range, runtime: 'cwd' }], `${p} ${way}`);
+    }
+  }
+});
+
+test('one read per file, however many a reader names', () => {
+  for (const n of [2, 300, 1500]) {
+    const files = Array.from({ length: n }, (_, i) => `/d/${i}`);
+    assert.deepEqual(paths(`cat ${files.join(' ')}`), files);
+  }
+});
+
+test('what 2.4 item 7 says is no read yields nothing, behind a prefix too', () => {
+  const NOT = [
+    'ls a', 'stat a', 'wc -l a', 'du a', 'find . -name a', 'file a', 'cp a b', 'mv a b',
+    `sed -i 's/a/b/' f`, 'sed -ni 5p f', `sed 's/a/b/' f`, 'grep -r x d', 'grep -rn x d', 'grep -l x a', 'grep -c x a', 'grep -q x a',
+    'rg x a', 'diff a b', 'git show a', 'python a.py', `ssh h 'cat x'`, `bash -c 'cat x'`, 'cat a > b', 'xargs cat', 'cat *.log', 'echo a | grep x',
+    'constructor a', '__proto__ a',
+  ];
+  for (const p of ['', 'sudo', 'env A=1']) for (const cmd of NOT) assert.deepEqual(parseBashReads(`${p} ${cmd}`), [], `${p} ${cmd}`);
 });
 
 test('real-shaped seeds', () => {
