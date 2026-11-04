@@ -1,4 +1,4 @@
-// skill.mjs — `trocar skill [<name>] [--json]` (RFC 1.6 §5.6, D80): the agent skills that ship with this trocar, listed or printed byte for byte.
+// skill.mjs — `trocar skill [<name>] [--json]` (RFC 1.6 §5.6, D81①): the agent skills that ship with this trocar, listed or printed byte for byte.
 // It reads skills/<name>/SKILL.md in the package and nothing else: no file is written, ~/.trocar is not needed, and it runs on a machine that never
 // ran `install`. A name is only ever matched against the list, so what is typed never becomes a path.
 import fs from 'node:fs'
