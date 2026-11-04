@@ -11,7 +11,7 @@
 //                reasoning:{effort}, prompt_cache_key(=session id), include:['reasoning.encrypted_content'] }
 //   input[] item kinds: {type:'message',role,content:[{type:'input_text'|'output_text',text}]} ·
 //     {type:'function_call',name,arguments(str),call_id} · {type:'function_call_output',call_id,output} ·
-//     {type:'reasoning',summary[],encrypted_content}  (encrypted → opaque, no plaintext on the wire)
+//     {type:'reasoning',summary[],content[](reasoning_text),encrypted_content}  (no text → opaque)
 //   response = SSE; usage lives in the response.completed event: {input_tokens, input_tokens_details:
 //     {cached_tokens, cache_write_tokens}, output_tokens, output_tokens_details:{reasoning_tokens}}
 
@@ -131,7 +131,7 @@ export function sysLabel(text) {
 }
 
 // ── input[] item → canonical (Anthropic-shaped) blocks ─────────────────────────────────────────
-const partsText = (s) => (Array.isArray(s) ? s.map((x) => (x && (x.text || x.summary_text)) || '').join('') : typeof s === 'string' ? s : '');
+const partsText = (s) => (Array.isArray(s) ? s.map((x) => (x && (x.text || x.summary_text)) || '').filter(Boolean).join('\n\n') : typeof s === 'string' ? s : '');
 // a reasoning item's readable text: its summary, then its content (reasoning_text parts); '' when only ciphertext came
 const reasoningText = (item) => [partsText(item.summary), partsText(item.content)].filter(Boolean).join('\n\n');
 // returns [{ role, block, sub }] — one per rendered block (a message may fan out to several content blocks, none without content).

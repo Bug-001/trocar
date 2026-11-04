@@ -97,10 +97,10 @@ test('detect: claims by wire shape, not by a header alone; CC → not', () => {
 });
 
 // 3.1 Responses: a reasoning item is read as reasoning whatever keys it carries: one assistant thinking block holding every
-// summary and content text, opaque only when there is no text but the ciphertext (invariant 4)
+// summary and content text, each part apart, opaque when there is no text (invariant 4)
 test('a reasoning item is one assistant thinking block with its summary and content text, whatever keys it carries', () => {
   const S = 'weighing the plan 你好', C = 'step one, then step two';
-  for (const summary of [[], [{ type: 'summary_text', text: S }]]) for (const content of [undefined, [], [{ type: 'reasoning_text', text: C }]]) for (const enc of [true, false]) {
+  for (const summary of [[], [{ type: 'summary_text', text: S }], [{ type: 'summary_text', text: S }, { type: 'summary_text', text: 'second thought' }]]) for (const content of [undefined, [], [{ type: 'reasoning_text', text: C }]]) for (const enc of [true, false]) {
     const item = { type: 'reasoning', id: 'rs_1', summary, ...(content ? { content } : {}), ...(enc ? { encrypted_content: 'gAAAAB-ciphertext' } : {}) };
     const at = JSON.stringify(item);
     const flat = boardFlat({ input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'go' }] }, item] }).filter((b) => b.mi === 1);
@@ -109,6 +109,7 @@ test('a reasoning item is one assistant thinking block with its summary and cont
     assert.deepEqual([b.kind, b.role, b.path], ['thinking', 'assistant', ['input', 1]], at);
     const texts = [...summary.map((x) => x.text), ...(content || []).map((x) => x.text)];
     for (const t of texts) assert.ok(b.block.thinking.includes(t), `${at}: holds ${t}`);
+    for (let i = 1; i < texts.length; i++) assert.ok(!b.block.thinking.includes(texts[i - 1] + texts[i]), `${at}: parts ${i - 1} and ${i} stay apart`);
     assert.equal(b.faithfulness, texts.length ? 'verbatim' : 'opaque', at);
   }
 });

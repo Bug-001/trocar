@@ -151,9 +151,9 @@ test('a Responses reply block\'s span is exactly its own JSON node, one per cont
       // HTTP SSE: in order or interleaved, each line ending, the closing data on one line or split over two
       for (const order of ['seq', 'zip']) for (const eol of EOLS) for (const split of [false, true]) {
         const evs = [created, ...(order === 'zip' ? ZIP(perItem) : perItem.flat()), completed(items)];
-        runs.push([`sse ${order} ${JSON.stringify(eol)} split=${split}`, rec(stored((split ? sseSplit : sseOf)(evs, eol))), RESPONSES, (k) => !(split && shut(k))]);
+        runs.push([`sse ${order} ${JSON.stringify(eol)} split=${split}`, rec(stored((split ? sseSplit : sseOf)(evs, eol))), RESPONSES, (k) => !(split && shut(k)), order === 'seq']);
       }
-      for (const [name, r, d, nodal] of runs) {
+      for (const [name, r, d, nodal, inOrder] of runs) {
         const parts = d.replyParts(r), at = `${name} closed=${closed}`;
         assert.deepEqual(parts.map((p) => p.block), respBlocks(items), at);
         assert.equal(parts.length, nodes.length, at);
@@ -165,9 +165,13 @@ test('a Responses reply block\'s span is exactly its own JSON node, one per cont
             const text = fieldTextOf(r, p.field).text;
             assert.deepEqual(JSON.parse(text.slice(p.span[0], p.span[1])), nodes[k], `${at} #${k}: exactly its own node`);
           } else {
-            assert.ok(p.span || (typeof p.why === 'string' && p.why.length > 0), `${at} #${k}: a span or a why`);
-            if (nodesOf(items[units[k]]).length > 1) assert.equal(p.span, null, `${at} #${k}: one event range, several blocks`);
-            else if (p.span) assert.deepEqual(respSlice(fieldTextOf(r, p.field).text.slice(p.span[0], p.span[1])), [p.block], `${at} #${k}: its event range parses back to it`);
+            if (nodesOf(items[units[k]]).length > 1) assert.ok(p.span === null && typeof p.why === 'string' && p.why.length > 0, `${at} #${k}: one event range, several blocks: no span, a why`);
+            else {
+              // one block alone in its item's events: its range is exact unless another block's events fall inside it
+              if (inOrder) assert.ok(p.span, `${at} #${k}: one block, its event range is exact (${p.why})`);
+              else assert.ok(p.span || (typeof p.why === 'string' && p.why.length > 0), `${at} #${k}: interleaved, a span or a why`);
+              if (p.span) assert.deepEqual(respSlice(fieldTextOf(r, p.field).text.slice(p.span[0], p.span[1])), [p.block], `${at} #${k}: its event range parses back to it`);
+            }
           }
         });
       }
