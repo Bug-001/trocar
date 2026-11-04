@@ -647,6 +647,11 @@ function putHead(ctx, s, doc = null) {
   return true;
 }
 
+/** sayUnknown(ctx, id): what a read of a session sessionState() did not find puts in `errors`. The index's own problems come first:
+ *  the id may live in the segment that could not be read (3.5 读不全不静默). */
+export async function sayUnknown(ctx, id) {
+  ctx.errors.push(...(await indexed(ctx)).errors, { where: `session/${id}`, code: 'session-unknown', reason: 'no session with this id among the captured records' });
+}
 /** sessionState(ctx, id) → null (no such session) | {id, rows, store, mark, pending, truncated, V, failed, errors, plan}: the
  *  session after this request's slice (the local path: everything), read from its fold log at the reduction frontier `mark` (V:
  *  src/query/session-doc.mjs viewOf, its columns synced to that frontier), `pending:
@@ -710,8 +715,7 @@ export async function run(ctx) {
   const limit = limitOf(p.limit);
   const s = await sessionState(ctx, id);
   if (!s) {
-    const idx = await indexed(ctx);
-    errors.push(...idx.errors, { where: `session/${id}`, code: 'session-unknown', reason: 'no session with this id among the captured records' });
+    await sayUnknown(ctx, id);
     return { base: null, mark: null, truncated: null, more: false, meta: null, stats: null, logged: null, probes: null, lanes: [], calls: [], events: [], records: [] };
   }
   files(ctx, s);

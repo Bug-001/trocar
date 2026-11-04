@@ -50,6 +50,23 @@ test('一个段读不出:文档照出,errors 说哪个段', async () => {
   assert.ok(docs.classes.errors.some((e) => e.where === 'segments/20261017T090000Z'))
 })
 
+// 3.5 读不全不静默: the id may live in the segment that could not be read, so every read of one session says both facts.
+test('一个段读不出时问一场没读到的会话:每条会话读都说段的问题,也说 session-unknown', async () => {
+  const home = rawHome()
+  writeSegment(home, SEG, [{ id: 'a' }])
+  fs.writeFileSync(path.join(home, 'raw', '20261017T090000Z.sealed'), 'this is not a sealed file')
+  const reads = [
+    ['session', {}], ['session', { head: true }], ['analysis', {}], ['analysis', { from: 'x' }],
+    ['lane', { lane: 'x' }], ['lane', { pack: '0.main' }], ['lane', { tail: 'main' }],
+  ]
+  for (const [name, params] of reads) {
+    const { errors } = await runQuery(name, { id: 'behind-the-bad-segment', ...params }, { home, env: {} })
+    const said = JSON.stringify([name, params])
+    assert.ok(errors.some((e) => e.code === 'segment-unreadable'), said)
+    assert.ok(errors.some((e) => e.code === 'session-unknown'), said)
+  }
+})
+
 // 4.3 §4 回收: a raw/ that cannot be listed (here a file in its place) is said in the read's `errors` as `where:'raw'`
 // `segment-unreadable`; a raw/ that is not there is no segments, not an error.
 test('raw/ 列不出:读的 errors 有 where raw 的 segment-unreadable;raw/ 不在时没有', async () => {

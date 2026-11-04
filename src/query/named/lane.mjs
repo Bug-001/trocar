@@ -11,7 +11,7 @@
 // the kept ledgers, LEDGER_BYTES): an answer reads the lines of the steps it covers and of the steps the replay goes over. The ledger
 // entries an answer owes go in key order into the room its page leaves; the rest are named by `ledger_next`, a cursor `--ledger`
 // goes on from (3.5 `resources` 与 `seen`).
-import { sessionState, markOn, files, version as sessionVersion } from './session.mjs';
+import { sayUnknown, sessionState, markOn, files, version as sessionVersion } from './session.mjs';
 import { listOf, taxOf, laneLedger, ledgerWeight, LEDGER_BYTES } from '../../view/reduce.mjs';
 import { lru } from '../projection.mjs';
 import { inheritedRender } from '../../view/render-kind.mjs';
@@ -169,7 +169,7 @@ export async function run(ctx) {
   const st = await sessionState(ctx, id);
   const empty = (mark) => ({ lane: key, base: null, mark, steps: [], defs: [], resources: [], seen: [], events: [], prev: null, next: null, ledger_next: null });
   if (!st) {
-    errors.push({ where: `session/${id}`, code: 'session-unknown', reason: 'no session with this id among the captured records' });
+    await sayUnknown(ctx, id);
     return empty(null);
   }
   errors.push(...st.errors);
@@ -271,7 +271,7 @@ async function fileAnswer(ctx, id, others) {
   const m = pack != null ? /^(0|[1-9]\d{0,8})\.(main|rest)$/.exec(String(pack)) : /^()(main|rest)$/.exec(String(tail));
   if (!m) throw new QueryArgError(pack != null ? 'trocar query lane: --pack takes <n>.<part>: a pack number, a dot, and main or rest' : 'trocar query lane: --tail takes main or rest');
   const st = await sessionState(ctx, id);
-  if (!st) { ctx.errors.push({ where: `session/${id}`, code: 'session-unknown', reason: 'no session with this id among the captured records' }); return {}; }
+  if (!st) { await sayUnknown(ctx, id); return {}; }
   const sealed = sealedOf(st), part = m[2];
   files(ctx, st); // the worker's files at this state
   if (pack == null) {
