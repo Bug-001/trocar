@@ -1,9 +1,5 @@
 // runner.mjs (src/rules) — a rule process (RFC 5.1 §规则进程): the only place a rule's regex, JSON edit or script runs. `node --permission … runner.mjs <slot> [<script>]`, see
 // launch.mjs. Channel on fd 3. First frame `{load: {rules, max_delay_ms}}` → `{ready: true}`; each task `{id, unit, body_bytes}` with the body in the slot → one answer.
-import v8 from 'node:v8'
-
-v8.setFlagsFromString('--no-regexp-tier-up')
-
 const { fileURLToPath } = await import('node:url')
 const capMiB = process.execArgv.map((arg) => /^--max-old-space-size=(\d+)$/.exec(arg)?.[1]).find(Boolean)
 const { permission } = process

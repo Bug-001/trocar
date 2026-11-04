@@ -50,6 +50,7 @@ test('57: the flags a Node knows, and nothing else; no --permission means no pro
   assert.ok(!args({}).includes('--allow-net'), 'the built-in process does not reach the network');
   assert.ok(!args({ script, allowed: known(all.filter((f) => f !== '--allow-net')) }).includes('--allow-net'));
   assert.ok(args({}).includes('--max-old-space-size=512'));
+  assert.ok(args({}).includes('--no-regexp-tier-up'), 'set before Node compiles a regex: a running process that flips it crashes now and then');
   assert.ok(args({ script: path.join(link, 'a.mjs'), slot: path.join(link, 'slot') }).every((a) => !a.includes(link)), 'a symlinked path in the allow list stops the process starting');
   assert.deepEqual(args({ script }).slice(-3).slice(1), [slot, script]);
 });

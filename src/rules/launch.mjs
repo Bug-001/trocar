@@ -16,6 +16,9 @@ const RUNNER = new URL('./runner.mjs', import.meta.url)
 const FROZEN_MS = 100
 // runner.mjs exits with this before it loads anything. After the load the same number is a script's process.exit(78).
 const SELF_CHECK_FAILED = 78
+// V8's, so `allowed` does not list it. On the command line and not from v8.setFlagsFromString: flipped in a running process, about one start in three hundred under load died of
+// SIGBUS on entering a regex's code. From the command line none in the same run did.
+const REGEX_FLAG = '--no-regexp-tier-up'
 
 /** The memory limit of one rule process: at most six run, so together they stay under 3/8 of the machine. */
 export const memoryCap = (total = os.totalmem()) => Math.min(GIB, Math.floor(total / 16))
@@ -29,7 +32,7 @@ export function runnerArgs({ script, slot, app = APP, capBytes, allowed = proces
     `--allow-fs-read=${path.join(real(app), '*')}`, ...(target ? [`--allow-fs-read=${path.join(path.dirname(target), '*')}`] : []),
     `--allow-fs-read=${slotPath}`, `--allow-fs-write=${slotPath}`, `--max-old-space-size=${Math.ceil(capBytes / MIB)}`,
   ]
-  return [...flags.filter((flag) => allowed.has(flag.split('=')[0])), real(RUNNER), slotPath, ...(target ? [target] : [])]
+  return [REGEX_FLAG, ...flags.filter((flag) => allowed.has(flag.split('=')[0])), real(RUNNER), slotPath, ...(target ? [target] : [])]
 }
 
 // One process and its one question at a time. An answer nobody asked for is the process breaking the rule, so it goes. `ask` resolves to `{frame}` or to `{died, code}`:
