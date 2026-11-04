@@ -3,11 +3,13 @@
 // held to this by itself. Nothing here reaches the machine the tests run on: a temp HOME, injected deps, and a temp `root` so `update` has no checkout to fetch (0.1 §3).
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import nodeFs from 'node:fs'
+import path from 'node:path'
 import { runCli } from '../../src/cli/main.mjs'
 import { COMMANDS } from '../../src/cli/commands.mjs'
 import { optionsOf } from '../../src/cli/args.mjs'
-import { SCHEMA_VERSION, EXIT } from '../../src/cli/schema.mjs'
-import { printJson, errorDoc } from '../../src/cli/json.mjs'
+import { SCHEMA_VERSION, EXIT, UNDO_LINE, newReceipt } from '../../src/cli/schema.mjs'
+import { printJson, errorDoc, ERROR_CODES } from '../../src/cli/json.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { sandbox, installedViaCli, fakeIo } from './fixtures/dispatch-ctx.mjs'
 
@@ -53,6 +55,46 @@ test('V74: a command that only says why it failed answers with a `failed` docume
     assert.equal(exit, EXIT.incomplete, name); assert.equal(err, '', name)
     assert.deepEqual(oneLine(out, name), JSON.parse(JSON.stringify(errorDoc(name, 'failed', 'first\nsecond'))), name)
   }
+})
+
+// The failures a command writes its own receipt for, each made by an injected dep. `install` fails where its undo copy cannot be placed; the rest come through the deps each asks first.
+const boom = () => { throw new Error('the injected failure') }
+const FAILURES = [
+  ['on: thrown', 'on', (d) => ({ parts: { ...d.parts, arch: { ...d.parts.arch, nodePreflight: boom } } })],
+  ['on: the Node floor', 'on', (d) => ({ parts: { ...d.parts, arch: { ...d.parts.arch, nodePreflight: () => ({ ok: false, doctor: 'too old' }) } } })],
+  ['on: refused', 'on', (d) => ({ parts: { ...d.parts, arch: { ...d.parts.arch, refuseElevated: async () => ({ code: 'elevated', reason: 'elevated' }) } } })],
+  ['on: half done', 'on', () => ({ install: { turnOn: async () => ({ receipt: { ...newReceipt('on'), ok: false, notes: ['half done'] }, exit: EXIT.incomplete }) } })],
+  ['off: thrown', 'off', () => ({ now: boom })],
+  ['uninstall: thrown', 'uninstall', () => ({ now: boom })],
+  ['install: the copy', 'install', () => ({ fs: { ...nodeFs, mkdirSync: (p, ...rest) => (path.basename(String(p)) === 'bin' ? boom() : nodeFs.mkdirSync(p, ...rest)) } })],
+]
+
+test('V74: a command that fails on its own road answers with error.code from the closed set, nothing on stderr, and the exit of the text mode', async () => {
+  assert.deepEqual([...new Set(FAILURES.map(([, name]) => name))].sort(), Object.keys(UNDO_LINE).sort(), 'every command that changes state has a row')
+  for (const [label, name, over] of FAILURES) {
+    const run = async (argv) => { const s = sandbox({ install: false }); const c = s.ctx({ io: fakeIo(), deps: { ...over(s.deps()), root: tmpDir('trocar-root-') } }); return { exit: await runCli(argv, c), out: c.io.stdoutText(), err: c.io.stderrText() } }
+    const { exit, out, err } = await run([name, '--yes', '--json'])
+    const doc = oneLine(out, label)
+    assert.equal(doc.schema, SCHEMA_VERSION, label); assert.equal(doc.command, name, label); assert.equal(doc.ok, false, label)
+    assert.ok(ERROR_CODES.includes(doc.error.code), `${label}: ${JSON.stringify(doc.error)}`); assert.ok(doc.error.message, label)
+    assert.equal(err, '', label); assert.equal(exit, EXIT.incomplete, `${label}: its own failure, not a crash`)
+    assert.equal(exit, (await run([name, '--yes'])).exit, `${label}: the same exit as without --json`)
+  }
+})
+
+test('V74: every failed receipt carries an error whatever it says; one that waits for a person does not, a code of its own stays, and a reading is left alone', () => {
+  const printed = (doc) => { let line; printJson({ out: (s) => { line = s } }, doc); return JSON.parse(line) }
+  for (const name of Object.keys(UNDO_LINE)) {
+    const failed = { ...newReceipt(name), ok: false }
+    for (const said of [{}, { notes: ['a note'] }, { problems: ['a problem'], notes: ['a note'] }, { problems: [], notes: [] }]) {
+      const { error } = printed({ ...failed, ...said })
+      assert.equal(error.code, 'failed', name); assert.equal(error.message, said.problems?.[0] ?? said.notes?.[0] ?? error.message, name); assert.ok(error.message, name)
+    }
+    for (const stop of ['needs_yes', 'declined', 'dry_run']) assert.equal(printed({ ...failed, [stop]: true }).error, undefined, `${name} ${stop}`)
+    assert.equal(printed({ ...failed, error: { code: 'older-install', message: 'old' } }).error.code, 'older-install', name)
+    assert.equal(printed(newReceipt(name)).error, undefined, name)
+  }
+  assert.equal(printed({ schema: SCHEMA_VERSION, command: 'status', ok: false, health: 'failing' }).error, undefined)
 })
 
 test('V120: a command that says something on stderr and prints its document leaves that one document and nothing else', async () => {

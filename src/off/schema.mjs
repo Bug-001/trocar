@@ -21,6 +21,14 @@ export const errorDoc = (command, code, message, detail) => ({
   schema: SCHEMA_VERSION, command, ok: false, error: { code, message, ...(detail ? { detail } : {}) },
 })
 
+/** C.1: a client reads `error.code` and nothing else, so a receipt that says `ok: false` always has one: `failed` with its first sentence, unless the command gave its own. A run that
+ *  stopped before writing to wait for a person (`needs_yes`, `declined`, `dry_run`) did not fail, and a reading's `ok` (status, doctor, a query) is its own conclusion, not a failure. */
+export function withError(doc) {
+  if (doc.ok !== false || doc.error || doc.needs_yes || doc.declined || doc.dry_run || !RECEIPT_KEYS.every((k) => Object.hasOwn(doc, k))) return doc
+  const said = [...(doc.problems || []), ...(doc.notes || [])].find((s) => typeof s === 'string' && s)
+  return { ...doc, error: { code: 'failed', message: said || `trocar ${doc.command} did not finish; the rest of this document says what is left` } }
+}
+
 /** An empty receipt for `command`, ok until something says otherwise; a fresh object (its lists are the caller's to fill). `relayed`
  *  starts as `'unknown'` (R5 / R11: what was not read is not 0): a command that counted connections writes `{closing, waiting, cut}`
  *  over it — `on`, which has none to count, writes zeros on purpose — and one that forgot prints 「不知道」, not a confident 0. `linger`

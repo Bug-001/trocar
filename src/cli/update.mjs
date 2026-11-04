@@ -93,8 +93,8 @@ async function update({ io, env, home, platform, deps, flags }) {
     if (!json) for (const l of lines.splice(0)) io.out(l) // the plan is read before the question, and before any refusal (§1.4)
     if (dry) return done(EXIT.ok, { planned })
     if (yes) return null // the answer is given on the command line
-    if (json || !isInteractive(io)) { if (!json) io.err(NEEDS_YES); return done(EXIT.usage, { planned, blocked: [NEEDS_YES] }) }
-    if (!(await confirm(io, 'Proceed? [y/N] '))) { io.out('Nothing was changed.'); return done(EXIT.usage, { planned, blocked: ['you answered no'] }) }
+    if (json || !isInteractive(io)) { if (!json) io.err(NEEDS_YES); r.needs_yes = true; return done(EXIT.usage, { planned, blocked: [NEEDS_YES] }) }
+    if (!(await confirm(io, 'Proceed? [y/N] '))) { io.out('Nothing was changed.'); r.declined = true; return done(EXIT.usage, { planned, blocked: ['you answered no'] }) }
     return null
   }
 
