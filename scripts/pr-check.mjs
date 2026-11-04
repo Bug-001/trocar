@@ -10,6 +10,7 @@
 // this process to be compared, and nothing of them is printed. What cannot be read is a refusal, not an empty result. For the capture that
 // is a `partial` finding, the one rule --accept-partial moves to `accepted`, and the hash holds what it let through. The capture is read
 // through the installed trocar, or the one --cli names: its reads go by the daemon and may write the derived layer, never the raw records.
+import { isUtf8 } from 'node:buffer'
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
@@ -64,6 +65,7 @@ const POSTED_IMAGE = /!\[[^\]]*\](?:\([^)]*\)|\[[^\]]*\])?|<img\b[^>]*>?/gi
 const NEUTRAL = new Set(['me', 'you', 'user', 'alice', 'bob', 'test', 'runner', 'someone'])
 const NOREPLY = /(?:@users\.noreply\.github\.com|^noreply@github\.com)$/i
 const CONTROL = /[\x00-\x08]/g
+const TEXT_KINDS = new Set(['added', 'message', 'title', 'body'])
 const RECORD_TS = /^\{"ts":"([^"]+)"/
 const DIFF_HEADER = 'diff --git '
 const NEWLINE = Buffer.from('\n')
@@ -85,6 +87,7 @@ const WHY = {
   lines: `This commit changes more than ${MAX_LINES} lines.`,
   body: 'This commit message has no body.',
   control: 'This holds control bytes.',
+  encoding: 'This is not valid UTF-8, so it cannot be compared: write it as UTF-8.',
   merge: 'This is a merge commit, and a branch goes out without them: rebase it onto the base.',
   git: 'git could not be read, so what is leaving is not known.',
   base: 'This branch does not stand on a commit origin/main already holds: rebase it onto origin/main.',
@@ -316,6 +319,7 @@ function checkShape(commits, sources, add) {
     if (paragraphs.length - (trailers ? 1 : 0) < 1) add('shape', `${commit.short}:message`, WHY.body)
   }
   for (const source of sources) {
+    if (TEXT_KINDS.has(source.kind) && !isUtf8(source.bytes)) add('shape', source.where, WHY.encoding)
     if (source.kind !== 'added' && source.kind !== 'message') continue
     const text = source.bytes.toString()
     for (const match of text.matchAll(CONTROL)) add('shape', placeOf(source, text, match.index), WHY.control)
