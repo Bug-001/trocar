@@ -57,7 +57,19 @@ If the spec looks wrong, say so in the pull request with the change you propose;
 
 ## Adding a harness
 
-A harness is data, not code. Add a descriptor in [`src/collector/harness/`](src/collector/harness/) that picks from the primitives in spec 4.11 §2 (which file, which key, which format), following the steps of [spec 4.11 §2.4](spec/01-trocar-rfc/4.11-collector-model.md) ("加一个 harness", adding a harness). Do not add product-, version- or file-specific branches to the editing code; if a harness needs something the primitives cannot express, propose widening a primitive first.
+A harness is data, not code. Add a descriptor in [`src/collector/harness/`](src/collector/harness/) that picks from the primitives in spec 4.11 §2 (which file, which key, which format), following the steps of [spec 4.11 §2.4](spec/01-trocar-rfc/4.11-collector-model.md) ("加一个 harness", adding a harness). Do not add product-, version- or file-specific branches to the editing code; if a harness needs something the primitives cannot express, propose widening a primitive first. The full path, from measuring the agent to what evidence to give, is [docs/adding-a-harness.md](docs/adding-a-harness.md).
+
+## Working with an agent
+
+An agent can do this work, and the skills that ship with trocar tell it how. `trocar skill` lists them and `trocar skill <name>` prints one.
+
+1. `trocar-debug` checks each part against its contract and writes a report.
+2. `trocar-fix` turns a confirmed defect into a tested change on synthetic data ([docs/reproduce.md](docs/reproduce.md)).
+3. `trocar-pr` reviews the diff and sends it, once you agree.
+
+`trocar-ux` is the standard for building or reviewing a board screen. `trocar-audit` is for asking what an agent really sent, which is a question about the agent, not about trocar.
+
+Before anything leaves your machine, the whole branch gets one review by an agent in a fresh context, and [`scripts/pr-check.mjs`](scripts/pr-check.mjs) passes. The pull request carries the `hash` it printed.
 
 ## Commits and pull requests
 

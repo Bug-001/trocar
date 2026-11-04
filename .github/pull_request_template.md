@@ -9,6 +9,7 @@
 - Fresh-HOME `npm test`: pass … / fail … / skip …
 - Skips:
 - Other checks:
+- Written by an agent: the `hash` from `node scripts/pr-check.mjs`:
 
 ## Spec
 

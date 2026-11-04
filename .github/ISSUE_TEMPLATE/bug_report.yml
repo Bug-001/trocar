@@ -2,6 +2,10 @@ name: Bug report
 description: Something trocar does is wrong or broken.
 labels: [bug]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        This issue is public. Do not paste real session content, screenshots of real sessions, tokens or your file paths. Describe the shape of what you saw (keys, types, sizes, order of events) instead.
   - type: input
     id: version
     attributes:

@@ -586,6 +586,23 @@ not decrypted.
 
 Whether Desktop's own model calls come out decrypted verbatim is not claimed here.
 
+## Let your agent debug trocar
+
+trocar ships the skills an agent needs to check it, fix it and send the fix. They are plain text, and nothing is installed:
+
+```sh
+trocar skill                 # lists them
+trocar skill trocar-debug    # prints one, for your agent to read
+```
+
+- `trocar-debug`: when something in trocar looks wrong, checks each part against its contract and reports.
+- `trocar-fix`: turns a confirmed defect into a tested change, reproduced on synthetic data only.
+- `trocar-pr`: reviews the change and opens the pull request, only after you agree.
+- `trocar-ux`: the standard of detail for building or reviewing a board screen.
+- `trocar-audit`: what an agent really sends, where, and what it costs.
+
+Your real session content stays on your machine. Tests use synthetic data, and `scripts/pr-check.mjs` refuses to pass a change that carries your captured text, paths or credentials. See [docs/reproduce.md](docs/reproduce.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Limits
 
 - **Long sessions are tail-bounded.** One assembled view is capped at 6 MB of source bytes, so a
