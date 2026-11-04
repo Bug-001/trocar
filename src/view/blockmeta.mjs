@@ -282,7 +282,6 @@ export function slimBlock(b, textRef, why = null) {
   // NOT addressable → keep the body exactly as it was, so the row renders as it always did, and say
   // why it was inlined. Stripping HEAVY here is what produced an unreadable, unfetchable row.
   // `why`: the caller's specific reason, when it knows one (e.g. a block rebuilt from a streamed reply).
-  out.unaddressable = `${why || 'no verbatim byte span for this block (re-serialized / v0-converted source)'} — `
-    + 'body inlined as-is, NOT resolved from the raw capture';
+  out.unaddressable = why || 'the capture holds this block only as parsed JSON, so no byte range names it';
   return out;
 }

@@ -9,7 +9,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { createHash } from 'node:crypto';
-import { extract, createExtractContext, materialize, materializeAttrs, anthropicFlat, replyBlocks } from '../../src/view/extract.mjs';
+import { extract, createExtractContext, materialize, materializeAttrs, anthropicFlat, replyBlocks, definition } from '../../src/view/extract.mjs';
+import { RESPONSES, CHAT } from '../../src/dissect/openai.mjs';
 import { parseTextRef } from '../../src/raw/refs.mjs';
 import { fieldTextOf } from '../../src/dissect/record-fields.mjs';
 import { shapeResponse } from '../../src/collector/core/record/body.mjs';
@@ -88,13 +89,51 @@ test('(a) every definition resolves to the bytes its bid hashes; a block with no
       assert.equal(d.bid, expectedBid(byId, d), `${name} ${d.sec}/${d.role}/${d.kind} ${d.ref}`);
       if (!d.ref) assert.ok(d.ff.unaddressable, 'a block with no span says why and carries its body');
     }
-    // a streamed reply's blocks are addressed in resp.raw; a JSON reply's are not
-    const replies = [...defs.values()].filter((d) => d.ref && parseTextRef(d.ref).field === 'resp.raw');
-    assert.equal(replies.length > 0, recs.some((r) => r.resp && r.resp.kind === 'sse'), name);
+    // a reply's blocks are addressed in resp.raw, streamed or JSON
+    assert.ok([...defs.values()].some((d) => d.ref && parseTextRef(d.ref).field === 'resp.raw'), name);
   }
 });
 
 // ── (b): one axis at a time ────────────────────────────────────────────────────────────────────────────────────────────────────
+// 3.1 回复块也回源 · 普通 JSON 回复: each block's span is its own JSON node of the wire text, however the wire spaced or escaped it. `nodes`
+// are those nodes by the spec's paths: Anthropic content[i]; Responses a message's parts, an item with no parts whole; Chat a choice's fields.
+const JSON_WIRES = {
+  anthropic: { wire: { format: 'anthropic' }, body: { id: 'm', content: [{ type: 'thinking', thinking: '想 "q"', signature: 's' }, { type: 'text', text: '你好\n' }, { type: 'tool_use', id: 't', name: 'Read', input: { p: 1 } }] },
+    nodes: (b) => b.content },
+  responses: { wire: { d: RESPONSES, format: RESPONSES.id }, body: { id: 'r', output: [{ type: 'reasoning', id: 'a', summary: [{ type: 'summary_text', text: '想' }] },
+    { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '你好' }, { type: 'output_text', text: 'two' }] }, { type: 'function_call', call_id: 'c', name: 'shell', arguments: '{"cmd":"ls"}' }] },
+    nodes: (b) => [b.output[0], ...b.output[1].content, b.output[2]] },
+  chat: { wire: { d: CHAT, format: CHAT.id }, body: { id: 'c', choices: [
+    { index: 0, message: { role: 'assistant', reasoning_content: '想', content: '你好', tool_calls: [{ id: 'k', type: 'function', function: { name: 'shell', arguments: '{}' } }] } },
+    { index: 1, message: { role: 'assistant', content: [{ type: 'text', text: 'part' }], refusal: 'no' } }] },
+    nodes: (b) => { const [m, n] = b.choices.map((c) => c.message); return [m.reasoning_content, m.content, m.tool_calls[0], n.content[0], n.refusal]; } },
+};
+const WIRE_TEXTS = {
+  compact: (v) => JSON.stringify(v),
+  'spaced, ending in a newline': (v) => `${JSON.stringify(v, null, 2)}\n`,
+  'escaped non-ASCII': (v) => JSON.stringify(v).replace(/[^\x00-\x7f]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`),
+};
+test('3.1: a JSON reply\'s blocks each have a resp.raw ref, and the bytes it names parse to that block\'s node', () => {
+  for (const [name, { wire, body, nodes }] of Object.entries(JSON_WIRES)) for (const [how, write] of Object.entries(WIRE_TEXTS)) {
+    const text = write(body), rec = stamp({ id: 'j', body_wire_bytes: { resp: Buffer.byteLength(text) },
+      resp: shapeResponse({ status: 200, headers: [['content-type', 'application/json']], body: Buffer.from(text) }) });
+    const got = replyBlocks(rec, wire), want = nodes(body);
+    assert.equal(got.length, want.length, `${name}, ${how}`);
+    got.forEach((x, i) => {
+      assert.equal(parseTextRef(x.ref).field, 'resp.raw', `${name}, ${how} #${i}`);
+      assert.deepEqual(JSON.parse(resolve(rec, x.ref)), want[i], `${name}, ${how} #${i}`);
+      if (name === 'anthropic') assert.deepEqual(x.b.block, want[i], `#${i}: the node is the block`);
+    });
+  }
+});
+
+// 2.3 §没有自己字节区间的块: the reason is shown after the sentence the board writes, so it is the reason and nothing after it
+test('a block with no span stores its reason alone', () => {
+  const b = { sec: 'messages', role: 'assistant', kind: 'text', block: { type: 'text', text: 'x' } };
+  assert.equal(definition(b, null, null, 'because').def.ff.unaddressable, 'because');
+  assert.ok(!definition(b, null, null).def.ff.unaddressable.includes(' — '));
+});
+
 const cc = (id, messages, headers = {}) => stamp({ id, ts_request: `2026-10-20T16:00:00Z`, is_llm_call: true, endpoint: '/v1/messages',
   req_headers: { 'x-claude-code-session-id': 'S', 'user-agent': 'claude-cli/2.1 (external, cli)', ...headers },
   req_body: JSON.stringify({ model: 'claude-opus-x', system: [{ type: 'text', text: 'You are a coding assistant.' }],

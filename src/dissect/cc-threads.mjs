@@ -55,7 +55,7 @@ const replyItem = (r) => ({ role: 'assistant', content: replyContent(r) });
 function replySegs(rec) {
   if (!replyContent(rec)) return [];
   return [{ src: sourceOf(rec), field: null, path: null, node: null, of: replyItem,
-    why: `the assistant reply of record ${rec.id ?? '(no id)'}, rebuilt from its streamed response (resp.raw), not one byte span` }];
+    why: `the assistant reply of record ${rec.id ?? '(no id)'}, rebuilt from its streamed response, not one byte span` }];
 }
 
 // A call's own system, tools and messages, located in its req_body. System and tools keep their items (a continuation inherits

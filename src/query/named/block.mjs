@@ -14,7 +14,7 @@ import { normalizeRecord } from '../../raw/ingest.mjs';
 import { requestEncodingOf } from '../../dissect/request-body.mjs';
 import { reqIncompleteOf } from '../../dissect/capture-labels.mjs';
 import { classifyFidelity } from '../source.mjs';
-import { readRecord, stampRecord } from '../records.mjs';
+import { recordReader, stampRecord } from '../records.mjs';
 import { blockAt } from '../../view/extract.mjs';
 import { viewOf } from '../../view/render-kind.mjs';
 import { QueryArgError } from './index.mjs';
@@ -26,7 +26,7 @@ export const lists = Object.freeze(['ref']);
 // What a reader must be told about bytes that are not the wire's own (src/query/source.mjs classifyFidelity).
 const NOTE = {
   decoded: 'the wire carried this body compressed; these are its exact decompressed bytes',
-  reserialized: 'the capture stored the request as parsed JSON: these bytes were re-serialized from it, not taken off the wire',
+  reserialized: 'the capture stored this as parsed JSON: these bytes were re-serialized from it, not taken off the wire',
 };
 
 export async function run({ home, fs, params: p, errors, progress = null }) {
@@ -39,8 +39,8 @@ export async function run({ home, fs, params: p, errors, progress = null }) {
     if (!byRecord.has(item.recordId)) byRecord.set(item.recordId, []);
     byRecord.get(item.recordId).push(item);
   });
-  const blocks = new Array(refs.length);
-  for (const group of byRecord.values()) await readGroup({ home, fs, errors, progress }, group, blocks);
+  const blocks = new Array(refs.length), read = recordReader({ home, fs, progress });
+  for (const group of byRecord.values()) await readGroup({ read, errors, progress }, group, blocks);
   return { blocks };
 }
 
@@ -53,11 +53,11 @@ function parsed1(ref) {
 }
 
 // The items of one record's refs, into `blocks` at their places.
-async function readGroup({ home, fs, errors, progress }, group, blocks) {
+async function readGroup({ read, errors, progress }, group, blocks) {
   const { recordId, at } = group[0];
   let raw = null, unread = null;
   try {
-    raw = await readRecord({ home, fs, ...at, progress });
+    raw = await read(at);
     if (!raw) unread = ['record-missing', `no record ${recordId} in this home's raw segments`];
   } catch (e) { unread = ['record-unreadable', `record ${recordId} could not be read back: ${String((e && e.message) || e)}`]; }
   const rec = raw && stampRecord(raw, { ...at, stream: raw._stream });
@@ -74,9 +74,9 @@ function miss(errors, where, code, reason, truncated = null) {
 }
 
 function one(errors, raw, rec, { ref, recordId, field, start, end }) {
-  // A field of a record is the stored decoded text itself (4.6 §记录), so it is verbatim as it stands.
+  // A field of a record is the stored decoded text itself (4.6 §记录), so it is verbatim as it stands, unless the field says otherwise.
   const got = field ? fieldTextOf(raw, field) : { text: normalizeRecord(raw).req_body };
-  const fidelity = field ? 'verbatim' : classifyFidelity(raw);
+  const fidelity = !field ? classifyFidelity(raw) : got.reserialized ? 'reserialized' : 'verbatim';
   const truncated = reqIncompleteOf(raw);
   if (typeof got.text !== 'string') return miss(errors, ref, 'field-missing', `record ${recordId} ${got.missing || 'carries no request body'}`, truncated);
   const bytes = start == null || end == null ? got.text : got.text.slice(start, end);
