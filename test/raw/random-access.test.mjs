@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
+import { createHook } from 'node:async_hooks';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { sealSegment } from '../../src/raw/seal.mjs';
@@ -124,9 +125,9 @@ test('decodes in flight stay within the limit across readers, and do run in para
   const files = [V1, await sealedV2()];
   const real = zlib.brotliDecompress;
   let now = 0, most = 0;
-  t.mock.method(zlib, 'brotliDecompress', (buf, cb) => {
+  t.mock.method(zlib, 'brotliDecompress', (buf, opts, cb) => {
     most = Math.max(most, ++now);
-    real(buf, (e, out) => { now--; cb(e, out); });
+    real(buf, opts, (e, out) => { now--; cb(e, out); });
   });
   const readers = [...files, ...files].map((f) => openSealed(f));
   await Promise.all(readers.flatMap((sf) => Array.from({ length: sf.count }, (_, i) => sf.warm(i))));
@@ -134,6 +135,51 @@ test('decodes in flight stay within the limit across readers, and do run in para
   assert.ok(most > 1, 'the decodes ran one at a time');
   for (const sf of readers) sf.close();
 });
+
+// The decode was moved off the thread: what comes back to it per frame is a fixed few callbacks, not one per 16 KiB of output.
+test('a frame comes back from the pool in a few trips, however long it is', async () => {
+  const b = sealedBox();
+  const { sealed } = await sealSegment(b.file, { lockFile: b.lock, journal: null, frameBytes: 64 * 1024 });
+  const frameCache = createFrameCache();
+  const sf = openSealed(sealed, { frameCache });
+  const decoders = new Set();
+  let trips = 0;
+  const hook = createHook({ init(id, type) { if (type === 'ZLIB') decoders.add(id); }, before(id) { if (decoders.has(id)) trips++; } }).enable();
+  await sf.warm(sf.count - 1);
+  hook.disable();
+  const { decodes } = frameCache.stats;
+  assert.ok(sf.frames.some((f) => f[2] >= 64 * 1024), 'no frame is long enough to tell');
+  assert.ok(decodes > 1 && trips > 0, `${trips} trips for ${decodes} frames`);
+  assert.ok(trips <= 3 * decodes, `${trips} trips for ${decodes} frames`);
+  assert.ok(sf.lineAt(sf.count - 1).equals(outcome(sealed, sf.count - 1)));
+  sf.close();
+});
+
+test('a frame of a few bytes decodes off the thread like any other', async (t) => {
+  const b = sealedBox();
+  writeShard(b.file, b.lines.slice(0, 1));
+  const { sealed } = await sealSegment(b.file, { lockFile: b.lock, journal: null });
+  const sync = t.mock.method(zlib, 'brotliDecompressSync');
+  const sf = openSealed(sealed);
+  assert.ok(sf.frames.some((f) => f[2] < 32), 'no frame is short enough to tell');
+  await sf.warm(0);
+  sf.lineAt(0);
+  assert.equal(sync.mock.callCount(), 0);
+  sf.close();
+});
+
+// The table's sha256 only says the file is what its writer wrote; another encoder's numbers still reach the decode.
+for (const claimed of [2 ** 40, 2 ** 53]) {
+  test(`a frame table claiming ${claimed} decoded bytes: warm settles without caching it, and lineAt says so`, async () => {
+    const { sf, stored } = watched(V1);
+    const f = sf.records[0][R.frame];
+    sf.frames[f][2] = claimed;
+    await sf.warm(0);
+    assert.ok(!stored.has(f));
+    assert.throws(() => sf.lineAt(0), /index says/);
+    sf.close();
+  });
+}
 
 // A reader whose frame cache says which frames went in.
 function watched(file) {
@@ -178,7 +224,7 @@ for (const [where, make, pick] of [
 
 test('a frame that decodes to the wrong length stays out of the cache, and lineAt still gives the right bytes', async (t) => {
   const real = zlib.brotliDecompress;
-  t.mock.method(zlib, 'brotliDecompress', (buf, cb) => real(buf, (e, out) => cb(e, out.subarray(1))));
+  t.mock.method(zlib, 'brotliDecompress', (buf, opts, cb) => real(buf, opts, (e, out) => cb(e, out.subarray(1))));
   const { sf, stored } = watched(V1);
   await sf.warm(0);
   assert.equal(stored.size, 0);
