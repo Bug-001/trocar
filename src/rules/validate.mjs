@@ -25,28 +25,28 @@ const at = (base, key) => {
   return base ? `${base}.${seg}` : seg
 }
 
-// Where a thing may stand: the columns of 5.1's two tables. `response-whole` is `on: response` with `whole`.
+// Where a thing may stand: the columns of 5.1's two tables, the manual's among them. `response-whole` is `on: response` with `whole`.
 const positionOf = (rule) => {
   const on = has(rule, 'on') ? rule.on : 'request'
   if (!POSITIONS.includes(on)) return null
   return on === 'response' && rule.whole === true ? 'response-whole' : on
 }
-const EVERYWHERE = ['request', 'response-whole', 'response', 'ws-client', 'ws-server']
+export const PLACES = ['request', 'response-whole', 'response', 'ws-client', 'ws-server']
 const RESPONSES = ['response-whole', 'response']
-const ACTION_PLACES = {
-  replace: EVERYWHERE,
+export const ACTION_POSITIONS = {
+  replace: PLACES,
   header: ['request', ...RESPONSES],
-  json: EVERYWHERE,
+  json: PLACES,
   blocks: ['request', 'ws-client'],
-  script: EVERYWHERE,
+  script: PLACES,
   hold: ['request', 'response-whole', 'ws-client', 'ws-server'],
-  drop: EVERYWHERE,
-  delay: EVERYWHERE,
+  drop: PLACES,
+  delay: PLACES,
   reply: ['request'],
   inject: ['response', 'ws-server'],
 }
 const MATCH_PLACES = {
-  harness: EVERYWHERE, pid: EVERYWHERE, host: EVERYWHERE, path: EVERYWHERE, method: EVERYWHERE, class: EVERYWHERE, header: EVERYWHERE, body: EVERYWHERE,
+  harness: PLACES, pid: PLACES, host: PLACES, path: PLACES, method: PLACES, class: PLACES, header: PLACES, body: PLACES,
   req_header: RESPONSES,
   blocks: ['request', 'ws-client'],
   status: RESPONSES,
@@ -194,7 +194,7 @@ function checkDo(actions, position, bad) {
     if (!kind) return bad(base, 'not an action')
     checkForm(action, kind, base, bad)
     const row = kind === 'replace' && has(action, 'blocks') ? 'blocks' : kind
-    if (position && !ACTION_PLACES[row].includes(position)) bad(base, 'not an action at this position')
+    if (position && !ACTION_POSITIONS[row].includes(position)) bad(base, 'not an action at this position')
     if ((kind === 'hold' || kind === 'drop' || kind === 'reply') && i !== actions.length - 1) bad(base, `${kind} ends the list`)
     if (has(action, 'blocks')) checkSelector(action.blocks, at(base, 'blocks'), bad)
     if (kind === 'reply' && isObject(action.reply)) checkReply(action.reply, at(base, 'reply'), bad)

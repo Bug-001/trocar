@@ -650,6 +650,7 @@ trocar rules add <file|-> [--replace] [--dry-run] [--json]   # a rule is added s
 trocar rules enable|disable|rm <name>... [--json]
 trocar rules off [--json]     # stops every rule, from any terminal
 trocar rules max-delay [<ms>] [--json]
+trocar help rules             # the manual: every field, condition and action, with examples
 
 # maintenance
 trocar update [--yes] [--dry-run] [--json]   # the newest code, and the machine as it was (D67)

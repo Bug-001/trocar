@@ -39,11 +39,15 @@ test('§1.5: exactly the commands that change your own state refuse root, and se
 
 test('D58: every word of help is English ASCII — no section number, decision number, source path or internal code name', () => {
   const texts = [helpText(), ...COMMANDS.map((c) => helpText(c.name))]
+  // what a manual's reader types is not source: a script's file name, a JSON null
+  const typed = COMMANDS.flatMap((c) => (c.details ? [c.details()] : []))
   for (const text of texts) {
     assert.ok(/^[\x20-\x7e\n]*$/.test(text), `only printable ASCII: ${text.split('\n').find((l) => !/^[\x20-\x7e]*$/.test(l))}`)
-    for (const bad of [/§/, /\bD\d\d\b/, /\bR\d+\b/, /src\/[a-z]/, /\.mjs\b/, /desired-off|left-unparsable|negative-cache/, /undefined|null|NaN/]) {
+    for (const bad of [/§/, /\bD\d\d\b/, /\bR\d+\b/, /src\/[a-z]/, /desired-off|left-unparsable|negative-cache/]) {
       assert.ok(!bad.test(text), `${bad} is in:\n${text}`)
     }
+    const own = typed.reduce((t, manual) => t.replace(manual, ''), text)
+    for (const bad of [/\.mjs\b/, /undefined|null|NaN/]) assert.ok(!bad.test(own), `${bad} is in:\n${own}`)
   }
 })
 

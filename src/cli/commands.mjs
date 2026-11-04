@@ -14,10 +14,12 @@
 //     hidden      not in help or the README: `place`, which only the install scripts and `trocar update` run (§2).
 //     run         gets the argv after the name and the context of runCli: { io, env, home, platform, uid, args: { positionals, flags }, deps }.
 //   helpText    the help, made from the table: the four sections, or one command when named.
+import { createRequire } from 'node:module'
 import { optionsOf } from './args.mjs'
 import { wrap, WIDTH } from './text.mjs'
 
 export const GROUPS = Object.freeze(['Capture', 'Data', 'Intervene', 'Maintenance'])
+const require = createRequire(import.meta.url) // help is synchronous, and a manual is only read when asked for
 const via = (file, fn) => async (argv, c) => (await import(file))[fn](argv, c)
 const HARNESS = '[<harness>...]'
 const JSON_OPT = ['--json', 'print one JSON document instead of text, and nothing on stderr']
@@ -94,6 +96,7 @@ export const COMMANDS = Object.freeze([
     usage: 'trocar rules [<name>] [--json]\ntrocar rules add <file|-> [--replace] [--dry-run] [--json]\ntrocar rules enable|disable|rm <name>... [--json]\ntrocar rules off [--json]\ntrocar rules max-delay [<ms>] [--json]',
     summary: 'Shows and edits your rules: what trocar changes in the traffic it sees, and only what you wrote down. A rule is added switched off. trocar rules off stops them all at any time, from any terminal.',
     options: [['--replace', 'with add: change the rule of that name, which switches it off'], ['--dry-run', 'with add: check the rule and print what would happen, writing nothing'], JSON_OPT],
+    details: () => require('./rules-manual.mjs').rulesManual(),
     exits: [[0, 'done, or shown'], [1, 'it could not be done, or the collector did not answer `rules off`; it says what is still true'], [2, 'nothing ran: a usage error, a rule that is not valid, an unknown rule, or root']] },
 
   { name: 'update',
