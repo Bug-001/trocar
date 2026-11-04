@@ -46,6 +46,8 @@ const LONG_RUN = /[A-Za-z0-9+=_-]{40,}/g // no slash: a URL or file path is not 
 const isMixed = (run) => /[a-z]/.test(run) && /[A-Z]/.test(run) && /[0-9]/.test(run)
 const SEP = String.raw`(?:\\+/?|/)` // a slash, a run of backslashes, an escaped slash
 const HOME_PATH = new RegExp(`${SEP}(?:users|home)${SEP}([^\\s\\\\/"'$<>{}*]+)${SEP}`, 'gi')
+const DATA_IMAGE = new RegExp(`data:image${SEP}[^\\s"'\`<>()]*`, 'gi') // to the URI's end, so that only the same image counts as already public
+const POSTED_IMAGE = /!\[[^\]]*\](?:\([^)]*\)|\[[^\]]*\])?|<img\b[^>]*>?/gi
 const NEUTRAL = new Set(['me', 'you', 'user', 'alice', 'bob', 'test', 'runner', 'someone'])
 const NOREPLY = /(?:@users\.noreply\.github\.com|^noreply@github\.com)$/i
 const CONTROL = /[\x00-\x08]/g
@@ -57,6 +59,7 @@ const HASH_ROW = /^- Written by an agent: the `hash` from `node scripts\/pr-chec
 
 const WHY = {
   files: 'This file type does not leave the machine: images, video, PDF, archives, capture formats and binaries.',
+  image: 'This holds an image in its text: a data URI anywhere, or a Markdown image or img tag in a title, a body or a comment.',
   build: 'The built board does not match a rebuild: npm run test:build failed.',
   foreign: 'The built board changed in a clone that is not this script\'s, and nothing from another clone is run here: rebuild it in isolation.',
   secrets: 'This has the shape of a credential.',
@@ -210,6 +213,25 @@ function blobOf(cwd, commit, path) {
   return spawnSync('git', ['rev-parse', '--verify', '--quiet', `${commit}:${path}`], { cwd, stdio: ['ignore', 'pipe', 'ignore'] }).stdout.toString().trim()
 }
 
+/** A source's text as it stands and, when it differs, with its \uXXXX undone. */
+function spelled(source) {
+  const raw = source.bytes.toString()
+  const decoded = raw.replace(/\\+u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+  return raw === decoded ? [raw] : [raw, decoded]
+}
+
+/** An image riding in text. A Markdown image in a committed file points into the repository; in a pull request's text it loads from anywhere. */
+function checkImages(sources, hold) {
+  for (const source of sources) {
+    const patterns = source.kind === 'title' || source.kind === 'body' ? [DATA_IMAGE, POSTED_IMAGE] : [DATA_IMAGE]
+    for (const text of spelled(source)) {
+      for (const pattern of patterns) {
+        for (const match of text.matchAll(pattern)) hold(Buffer.from(match[0]), 'files', placeOf(source, text, match.index), { exact: true, why: WHY.image })
+      }
+    }
+  }
+}
+
 function checkFiles(commits, cwd, add) {
   let board = null
   for (const commit of commits) {
@@ -266,9 +288,7 @@ function checkIdentity(out, cwd, hold, add) {
     }
   }
   for (const source of out.sources) {
-    const raw = source.bytes.toString()
-    const decoded = raw.replace(/\\+u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
-    for (const text of raw === decoded ? [raw] : [raw, decoded]) {
+    for (const text of spelled(source)) {
       for (const match of text.matchAll(HOME_PATH)) {
         if (!NEUTRAL.has(match[1].toLowerCase())) hold(wordOf(match[0]), 'identity', placeOf(source, text, match.index))
       }
@@ -324,7 +344,8 @@ function checkFacts(cli, segments, sources, add, hold) {
   }
 }
 
-/** §6.3: what `base` already tracks is public. One pass over its blobs takes their windows out of `table` and their words out of `held`. */
+/** §6.3: what `base` already tracks is public. One pass over its blobs takes their windows out of `table` and their words out of `held`:
+ *  a word kept `exact` is looked for in the blob's own bytes, the rest in its normalized form. */
 function subtractBase(cwd, base, table, held) {
   const ids = git(cwd, 'ls-tree', '-r', '-z', base).toString().split('\0').filter((e) => e.split(' ')[1] === 'blob').map((e) => e.split(' ')[2].split('\t')[0])
   const r = spawnSync('git', ['cat-file', '--batch'], { cwd, input: ids.map((id) => `${id}\n`).join(''), maxBuffer: Infinity, stdio: ['pipe', 'pipe', 'ignore'] })
@@ -337,7 +358,7 @@ function subtractBase(cwd, base, table, held) {
     table.scan(blob, (slot) => table.drop(slot))
     if (held.size === 0) continue
     const text = normalized(blob)
-    for (const [key, entry] of held) if (text.includes(entry.word)) held.delete(key)
+    for (const [key, entry] of held) if ((entry.exact ? blob : text).includes(entry.word)) held.delete(key)
   }
 }
 
@@ -408,10 +429,10 @@ async function main() {
   const found = new Map()
   const add = (rule, where, why = WHY[rule]) => found.set(`${rule}\0${where}\0${why}`, { rule, where, why })
   const held = new Map() // word → the hits that wait for §6.3: a word `base` already holds is public
-  const hold = (word, rule, where) => {
-    const key = word.toString('latin1')
-    if (!held.has(key)) held.set(key, { word, hits: [] })
-    held.get(key).hits.push({ rule, where })
+  const hold = (word, rule, where, { exact = false, why } = {}) => {
+    const key = `${exact}\0${word.toString('latin1')}`
+    if (!held.has(key)) held.set(key, { word, exact, hits: [] })
+    held.get(key).hits.push({ rule, where, why })
   }
   const out = { sources: [], commits: [], leaving: { files: [], commits: [], identity: [], branch: null } }
   let base = null // one commit from here on: a ref could move between reads
@@ -430,6 +451,7 @@ async function main() {
   for (const source of out.sources) source.norm ??= normalized(source.bytes)
 
   checkFiles(out.commits, cwd, add)
+  checkImages(out.sources, hold)
   checkShape(out.commits, out.sources, add)
   checkSecrets(out.sources, add)
   checkIdentity(out, cwd, hold, add)
@@ -443,7 +465,7 @@ async function main() {
   if (base) {
     try { subtractBase(cwd, base, table, held) } catch { add('unreadable', 'git', WHY.git) }
   }
-  for (const { hits } of held.values()) for (const hit of hits) add(hit.rule, hit.where)
+  for (const { hits } of held.values()) for (const hit of hits) add(hit.rule, hit.where, hit.why)
   const coverage = await compareCapture(segments, options, table, add)
 
   const accepting = options['accept-partial'] === true
