@@ -164,6 +164,7 @@ const heard = new Set() // who hears a mode change: the React cells and each wir
 export const onModeChange = (fn) => { heard.add(fn); return () => { heard.delete(fn) } }
 const modeChanged = () => { for (const fn of [...heard]) try { fn() } catch { /* one listener never stops the others */ } }
 const overrides = new Map() // scope + bid -> mode; Map order = least recently set first
+const opened = new Map() // scope + bid -> Map('path|span' -> open): what the reader opened or closed inside a cell, same order
 // the overrides are the shown desk's: each cached desk (session-cache.mjs) keeps its own under its session key (2.3 §逐格覆盖)
 let scope = ''
 export const overrideScope = (key) => { scope = String(key) + '\n' }
@@ -179,15 +180,19 @@ export function setDeskMode(m, { storage = local() } = {}) {
   modeChanged()
 }
 // a desk that leaves the cache drops its overrides
-export const clearOverrides = (key) => { for (const k of [...overrides.keys()]) if (k.startsWith(String(key) + '\n')) overrides.delete(k); modeChanged() }
+export const clearOverrides = (key) => { for (const m of [overrides, opened]) for (const k of [...m.keys()]) if (k.startsWith(String(key) + '\n')) m.delete(k); modeChanged() }
+// the cap is per desk: another cached desk's entries are not this desk's to evict (2.3 §逐格覆盖)
+function capped(m) {
+  let n = 0
+  for (const k of m.keys()) if (k.startsWith(scope)) n++
+  if (n > OVERRIDES) for (const k of m.keys()) if (k.startsWith(scope)) { m.delete(k); break }
+}
 export const modeOf = (bid, opt) => overrides.get(scope + bid) ?? deskMode(opt)
 // set one cell's mode; back to the desk default drops its override
 export function setMode(bid, m, opt) {
   overrides.delete(scope + bid)
   if (MODES.has(m) && m !== deskMode(opt)) overrides.set(scope + bid, m)
-  let n = 0 // the cap is per desk: another cached desk's overrides are not this desk's to evict (2.3 §逐格覆盖)
-  for (const k of overrides.keys()) if (k.startsWith(scope)) n++
-  if (n > OVERRIDES) for (const k of overrides.keys()) if (k.startsWith(scope)) { overrides.delete(k); break }
+  capped(overrides)
   modeChanged()
 }
 
@@ -309,12 +314,36 @@ export function blobFor(cell, view, el) {
   try { return blobOf(cell, view, JSON.parse(el.dataset.media), el.dataset.mime) } catch { return null }
 }
 const blobAt = (el) => { const x = held(el.closest('.cell')); return x && blobFor(x.cell, viewIn(x.cell, x.got), el) }
+// ── what the reader opened inside a cell ──────────────────────────────────────────────────────────────────────────────
+const spot = (d) => `${d.dataset.path}|${d.dataset.span ?? ''}`
+// the reader's click on a summary: the browser toggles it right after this. A `toggle` event is no reader: painting an open
+// <details> fires one too.
+export function noteOpened(bid, target) {
+  const d = target.closest?.('summary')?.parentElement
+  if (d?.tagName !== 'DETAILS' || d.dataset.path == null) return
+  const k = scope + bid, m = opened.get(k) ?? new Map()
+  opened.delete(k); opened.set(k, m); m.set(spot(d), !d.open)
+  capped(opened)
+}
 // a json node open for the first time draws its children; a toggle arriving after they are there changes nothing
 export function fillNode(d, view) {
   if (!view || !d.open || d.dataset.path == null || d.children.length > 1) return
   let path
   try { path = JSON.parse(d.dataset.path) } catch { return }
   d.insertAdjacentHTML('beforeend', jsonNodeHtml(view.body, path, d.dataset.span ? d.dataset.span.split(',').map(Number) : undefined, { q: d.dataset.q != null, budget: DISPLAY_CLIP }))
+}
+// put what the reader opened back in freshly drawn markup, synchronously and outermost first: a node's children exist only once it
+// is filled, so each pass reaches one level further
+export function reopen(el, cell, view) {
+  const left = new Map(opened.get(scope + cell.bid))
+  for (let again = left.size > 0; again;) {
+    again = false
+    for (const d of el.querySelectorAll('details[data-path]')) {
+      const k = spot(d)
+      if (!left.has(k)) continue
+      d.open = left.get(k); left.delete(k); fillNode(d, view); again = true
+    }
+  }
 }
 let live = null // the one polite live region every cell speaks through
 export function say(msg) {
@@ -429,6 +458,7 @@ export function wireCells(roots, s = {}) {
     if (e.shown !== shown) { redraw(el, opt); return } // another copy of this cell grew further: draw it whole
     const { html, entry } = grow(x.cell, mode, e, x.got), leaf = el.querySelector(mode === 'raw' ? ':scope > .cellraw' : ':scope > .cellread')
     leaf?.insertAdjacentHTML('beforeend', html)
+    if (leaf && mode === 'read') reopen(leaf, x.cell, viewIn(x.cell, x.got))
     el.dataset.shown = String(entry.shown)
     const line = clipLine(entry.shown, entry.total), clip = el.querySelector('.cellclip')
     if (line && clip) clip.textContent = line; else if (!line && clip) clip.remove()
@@ -439,12 +469,15 @@ export function wireCells(roots, s = {}) {
   })
   const hook = (n) => {
     if (n.nodeType !== 1) return
-    for (const el of [n, ...n.querySelectorAll('.cellmore, img[data-media]:not([src])')]) {
+    for (const el of [n, ...n.querySelectorAll('.cell[data-mode="read"], .cellmore, img[data-media]:not([src])')]) {
       if (el.matches('.cellmore')) io.observe(el)
+      else if (el.matches('.cell[data-mode="read"]')) { const x = held(el); if (x) reopen(el, x.cell, viewIn(x.cell, x.got)) }
       else if (el.matches('img[data-media]:not([src])') && el.dataset.media) { const u = blobAt(el); if (u) el.src = u }
     }
   }
   const onClick = (e) => {
+    const c = e.target.closest?.('.cell')
+    if (c) noteOpened(c.dataset.bid, e.target)
     const b = e.target.closest && e.target.closest('[data-cellmode],[data-cellcopy],[data-cellsave]')
     const el = b && b.closest('.cell')
     if (!el) return
