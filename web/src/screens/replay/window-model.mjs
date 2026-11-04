@@ -250,17 +250,25 @@ export function landingTarget(s) {
   }
   return null
 }
-/** The landing due on this step: once per rid, the first time its lane is held (`s.landedFor` records it). → {t, fi, turn}:
- * the target, its list position, and the anchor of the folded turn holding it (the caller opens that turn for this display
- * only: s.turnLanded) — or null when nothing is due. No side effect: the caller sets s.landedFor and s.turnLanded. */
-export function landingFor(s) {
+/** The landing due on this step: once per rid, the first time its lane is held (`s.landedFor` records it). → {t, fi, turn, wait}:
+ * the target, its list position, the anchor of the folded turn holding it (the caller opens that turn for this display only:
+ * s.turnLanded), and `wait`: the 内容对比步's lane is not held, so its 「新」 are not known and the landing is due again when it is
+ * — unless the reader moved the box meanwhile (`top()`: the box's scroll position; s.landWait: what it was). null when nothing is
+ * due. No side effect: the caller calls landed() and sets s.turnLanded. */
+export function landingFor(s, top) {
   const call = callOf(s)
   if (!call || s.landedFor === call.rid || !call.rec || call.unparsed || !s.desk) return null
   const st = stepOf(s.desk, call.rid)
   if (!st.held) return null
-  const t = landingTarget(s), flat = st.flat
-  if (!t) return { t, fi: null, turn: null }
-  if (t.reply) return { t, fi: flat.length - 1, turn: null }
+  const moved = s.landWait?.rid === call.rid && s.landWait.top !== top()
+  const t = moved ? null : landingTarget(s), flat = st.flat
+  if (!t) { const ref = moved ? null : contentRefOf(s); return { t, fi: null, turn: null, wait: !!ref && !stepOf(s.desk, ref.rid).held } }
+  if (t.reply) return { t, fi: flat.length - 1, turn: null, wait: false }
   const fi = t.anchor ? t.idx : t.bi, T = turnsOf(flat), ti = T.at[fi] ?? -1
-  return { t, fi, turn: ti >= 0 && !turnOpen(s, flat, T, ti) ? turnAnchorKey(flat, T.list[ti]) : null }
+  return { t, fi, turn: ti >= 0 && !turnOpen(s, flat, T, ti) ? turnAnchorKey(flat, T.list[ti]) : null, wait: false }
+}
+/** The landing `due` (landingFor) ran: the step has landed, or waits with the box at `top()`. */
+export function landed(s, due, top) {
+  const { rid } = callOf(s)
+  if (due.wait) s.landWait = { rid, top: top() }; else s.landedFor = rid
 }

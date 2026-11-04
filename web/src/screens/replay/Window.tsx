@@ -5,7 +5,8 @@
 //     item holding focus, the item holding the selection, a reveal's target until it is in the box, and — in the commit
 //     that changes the step and has a landing target — the landing band, so the landed items are drawn before any scroll event.
 //   · The landing (1.4 §打开一步时落在哪) is computed in render (landingFor, pure; a target inside a folded turn opens it for this display,
-//     s.turnLanded) and scrolled in the layout effect of that commit: once per rid, never on a repaint of the same step.
+//     s.turnLanded) and scrolled in the layout effect of that commit: once per rid, never on a repaint of the same step (but for
+//     the repaint that brings a late 内容对比步, the reader not having moved).
 //   · The window asks for bodies, never the cell (2.3 §快速拖动): a row the reader opens, a reveal opens, or an open row whose bytes
 //     left the bounded cache, on a repaint of the step it stays on. A step painted with a row already open shows the pending cell
 //     until the step's own read paints the window again (view.window()).
@@ -27,7 +28,7 @@ import { tagWord } from '../../../legacy/replay/blocks.mjs'
 import { TechDetails, type TechValue } from '../../ui/TechDetails'
 import { Svg } from '../../ui/Svg'
 import { Cell } from './Cell'
-import { faithOf, windowItems, landingFor, turnsOf, turnOpen } from './window-model.mjs'
+import { faithOf, windowItems, landed, landingFor, turnsOf, turnOpen } from './window-model.mjs'
 import { useDeskVersion } from './useDesk'
 import type { DeskState, DeskView, Reveal } from './view'
 
@@ -262,12 +263,13 @@ export function Window({ desk }: { desk: DeskView }) {
   const revealKey = useRef<string | null>(null)
   const prev = useRef<Item[] | null>(null)
 
+  const boxTop = () => ref.current?.scrollTop ?? 0
   // the model of this render: the step's items, its landing (pure; a folded turn holding the target opens for this display)
   const w = s.win || { kind: 'empty', msg: '' }
   let items: Item[] | null = null, land: any = null
   if (w.kind === 'step') {
     resetReplyFlips(s)
-    land = landingFor(s)
+    land = landingFor(s, boxTop)
     if (land && land.turn != null) s.turnLanded.add(land.turn)
     const m = windowItems(s)
     // a step whose lane is not held keeps the rows drawn until the desk's 150 ms decision (busy) says to draw its frames
@@ -310,7 +312,8 @@ export function Window({ desk }: { desk: DeskView }) {
   // the landing: once per rid, in the commit that drew the step's items (the band holds them before any scroll event)
   useLayoutEffect(() => {
     if (!land) return
-    s.landedFor = s.anchor.calls[s.playhead].rid
+    landed(s, land, boxTop)
+    if (land.wait) return
     revealKey.current = null
     if (landIdx >= 0) virt.scrollToIndex(landIdx, { align: 'start' })
   })

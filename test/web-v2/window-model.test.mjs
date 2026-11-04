@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 import { buildLanes, anchorLane } from '../../web/legacy/replay/lanes.mjs'
 import { stepOf } from '../../web/legacy/replay/model.mjs'
 import { setDeskMode, loadBodies } from '../../web/legacy/replay/cell.mjs'
-import { windowItems, landingFor } from '../../web/src/screens/replay/window-model.mjs'
+import { windowItems, landed, landingFor } from '../../web/src/screens/replay/window-model.mjs'
 import { deskOf, world, deskFrom } from './desk-world.mjs'
 
 let rn = 0
@@ -113,6 +113,25 @@ test('1.4 #10: landingFor names the reply on a follow-landed step, else the chan
   const folded = at(1, { turnFold: new Map([['x', false]]) })
   assert.equal(folded.turn, 'x')
   assert.equal(at(1, { landedFor: 'R0-1' }), null)
+})
+
+test('1.4 #10: a landing waits for the 内容对比步\'s list, lands when it is there, and not once the reader moved the box', () => {
+  const ref = [sys({ key: 's' }), blk({ key: 'x' })], cur = [...ref, say({ key: 'z' })]
+  const waiting = desk1([ref, cur]), h = waiting.held.get('R0-0')
+  h.steps.delete('R0-0'); h.kf.clear(); h.byI = null // the reference step's pack is still on its way
+  let top = 120
+  const box = () => top, s = stateOf(waiting, 1), due = landingFor(s, box)
+  assert.equal(due.t, null); assert.equal(due.wait, true)
+  landed(s, due, box)
+  assert.equal(s.landedFor, undefined, 'the landing is still due')
+  assert.equal(landingFor(s, box).wait, true)
+  const there = stateOf(desk1([ref, cur]), 1, { landWait: s.landWait })
+  assert.equal(landingFor(there, box).fi, 2)
+  top = 300 // the reader scrolled while it was on its way
+  const moved = landingFor(there, box)
+  assert.deepEqual([moved.t, moved.wait], [null, false])
+  landed(there, moved, box)
+  assert.equal(there.landedFor, 'R0-1')
 })
 
 test('2.3 #2: an open row whose body comes back unproven gets a non-verbatim mark and its section stops claiming 以下逐字 on the next call over the same list', async () => {

@@ -18,7 +18,7 @@ import { READABLE_VIEW } from '../labels/cells.mjs'
 import { setFold, turnAnchorKey } from './fold.mjs'
 import { ctxBlockHtml, blockRowHtml, fillBody, showBody, faithOf, ffBadgeHtml, tagWord, bodyFor } from './blocks.mjs'
 import { stepOf } from './model.mjs'
-import { windowItems, landingFor, rowKeys, turnsOf, turnOpen } from '../../src/screens/replay/window-model.mjs' // the window's rules (both desks)
+import { windowItems, landed, landingFor, rowKeys, turnsOf, turnOpen } from '../../src/screens/replay/window-model.mjs' // the window's rules (both desks)
 
 export { blockBodyHtml } from './blocks.mjs'
 export { landingTarget, rowKeys } from '../../src/screens/replay/window-model.mjs'
@@ -168,7 +168,7 @@ function replyUnit({ failed, empty, stop, rows }) {
 // `focus`: a list position whose group is drawn now (a jump); otherwise the landing target, else the row at the window's top.
 export function renderContextWindow(el, s, { busy = false, focus = null } = {}) {
   el.__gen = (el.__gen || 0) + 1
-  const t = landingDue(s)
+  const t = landingDue(el, s)
   const units = ctxWindowUnits(s, { focus: focus ?? (t ? t.fi : null) ?? topRow(el, s) ?? 0 })
   if (!busy && el.__units && units.some((u) => u.key === 'frames')) return
   paint(el, units)
@@ -244,13 +244,14 @@ function hydrate(el, s) {
 // held; later repaints of the same step never scroll again. It is decided before the units are built, so the target's group is
 // drawn in the same paint. A target inside a folded turn opens that turn for this display only (s.turnLanded) — the D12 memory
 // records the reader's own folds.
-function landingDue(s) {
-  const t = landingFor(s)
+function landingDue(el, s) {
+  const t = landingFor(s, () => el.scrollTop)
   if (t && t.turn != null) s.turnLanded.add(t.turn)
   return t
 }
-function land(el, s, { t }) {
-  s.landedFor = s.anchor.calls[s.playhead].rid
+function land(el, s, due) {
+  landed(s, due, () => el.scrollTop)
+  const { t } = due
   const node = !t || !el.querySelector ? null : t.reply ? el.querySelector('.cwreply') : t.anchor ? el.querySelector('#cachebrk') : el.querySelector(`.cblk[data-bi="${t.bi}"]`)
   if (!node || typeof node.scrollIntoView !== 'function') return
   unreal(s)
