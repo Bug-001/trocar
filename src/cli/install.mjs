@@ -18,11 +18,10 @@ import { EVENT } from '../collector/core/codes.mjs'
 import { codeId, packageRoot, channelOf, setupHelperCommand } from '../version.mjs'
 import { CUT, daemonCode, replaceDaemon } from './replace-daemon.mjs'
 
-const pick = (o, keys) => Object.fromEntries(keys.filter((k) => o[k] != null).map((k) => [k, o[k]]))
 const NEEDS_YES = 'Nothing was changed. Read the plan above, then run it again with --yes'
 // R5 / R6: no terminal and no --yes — the plan was printed, nothing written, exit 2; with --json stdout is the one receipt, with the plan in `planned`
-function needsYes(io, json, planned = []) {
-  if (json) io.out(JSON.stringify({ ...newReceipt('install'), ok: false, planned, needs_yes: true, notes: [NEEDS_YES] }, null, 2)); else io.err(NEEDS_YES)
+function needsYes(io, json, planned = [], left = []) {
+  if (json) io.out(JSON.stringify({ ...newReceipt('install'), ok: false, planned, ...(left.length ? { left } : {}), needs_yes: true, notes: [NEEDS_YES] }, null, 2)); else io.err(NEEDS_YES)
   return EXIT.usage
 }
 const USAGE = 'usage: trocar install [--dry-run] [--yes] [--json]'
@@ -130,10 +129,9 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
         : `path not known yet: the place of its ${r.carrier} could not be resolved on this machine`)
     // one line per (agent, place): the same file reached by three forms of one agent is one line, with the forms named (D46)
     const byPlace = (rs) => [...rs.reduce((by, r) => by.set(`${r.harness}|${carrierOf(r)}`, [...(by.get(`${r.harness}|${carrierOf(r)}`) || []), r]), new Map()).values()]
-      .map((group) => ({ harness: group[0].harness, forms: group.map((r) => r.form), carrier: group[0].carrier, paths: group[0].paths, keys: group[0].keys, ...pick(group[0], ['state', 'code', 'why']), what: group[0].harness, detail: carrierOf(group[0]) }))
+      .map((group) => ({ harness: group[0].harness, forms: group.map((r) => r.form), carrier: group[0].carrier, paths: group[0].paths, keys: group[0].keys, state: group[0].state, code: group[0].code, why: group[0].why, what: group[0].harness, detail: carrierOf(group[0]) }))
     const changes = [
       ...(only && !need.root ? [] : [{ what: 'root', detail: "this machine's own root certificate, trusted for your user (the system asks you once; the key cannot be exported)" }]),
-      // one line per (agent, place): the same file reached by three forms of one agent is one line, with the forms named (D46)
       ...byPlace(rows.filter((r) => !r.state)),
       // V85: trocar's own tree is ONE line (uninstall takes all of it back); every file of yours outside it is its own line, above
       ...(only ? [] : [{ what: 'trocar', detail: `${asDir(tilde(path.join(home, '.trocar'), home), platform)}: trocar's own files (its root certificate and key, the install record, and ${standaloneFiles(home, platform).map((f) => tilde(f, home)).join(' and ')}, ${UNDO_WORDS})` }]),
@@ -142,17 +140,18 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
       ...(pathItem ? [pathItem] : []),
       ...(unit && !only ? [{ what: 'autostart', detail: `${platform === 'win32' ? 'the scheduled task \\trocar\\collector' : tilde(unit.path, home)}: a collector daemon starts at every login from now on, and is started now (trocar uninstall takes it out again)` }] : []),
     ]
-    // 1.6 §3.2 / V85: what install records and changes nothing at (a key that stays yours, a file that is not yours) is in the plan too, apart from the count
+    // 1.6 §3.2 / V85: what install records and changes nothing at (a key that stays yours, a file that is not yours) is said too, apart from the
+    // changes: `planned` is only what the run changes (the board's Set up confirms exactly that list, 4.4 #13), `left` the rest
     const left = byPlace(rows.filter((r) => r.state))
-    const planned = [...changes, ...left]
+    const planned = changes
     say(fit([`trocar install will change ${changes.length} thing${changes.length === 1 ? '' : 's'}:`,
       ...pairs(changes.map((p) => [p.what, p.detail]), { home }),
       ...(left.length ? ['Left as they are:', ...pairs(left.map((p) => [p.what, p.detail]), { home })] : []),
-      ...(only ? (changes.length ? [] : [`${only} has every certificate carrier it needs: there is nothing to set up.`]) : rows.length ? [] : ['No agent was found on this machine: only the root is installed.']),
+      ...(only ? (changes.length ? [] : [left.length ? `There is nothing that install can set up for ${only}.` : `${only} has every certificate carrier it needs: there is nothing to set up.`]) : rows.length ? [] : ['No agent was found on this machine: only the root is installed.']),
       ...wrap(COST), ...wrap(RISK), ...(stale ? wrap(CUT) : [])], { home }).join('\n'))
-    if (flags.has('--dry-run')) { if (json) io.out(JSON.stringify({ ...newReceipt('install'), dry_run: true, planned, ...(only && !changes.length ? { notes: [`${only}: nothing to set up`] } : {}) }, null, 2)); return EXIT.ok }
+    if (flags.has('--dry-run')) { if (json) io.out(JSON.stringify({ ...newReceipt('install'), dry_run: true, planned, ...(left.length ? { left } : {}), ...(only && !changes.length ? { notes: [`${only}: nothing to set up`] } : {}) }, null, 2)); return EXIT.ok }
     if (!flags.has('--yes')) {
-      if (json || !isInteractive(io)) return needsYes(io, json, planned)
+      if (json || !isInteractive(io)) return needsYes(io, json, planned, left)
       if (!(await confirm({ ...io, prompt: io.stdout }, 'Proceed?'))) { io.err('You said no: nothing was changed'); return EXIT.incomplete }
     }
     const r = await locked(async () => {
@@ -179,7 +178,7 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
     const receipt = { ...newReceipt('install'), ok: r.exit === 0, undo: UNDO_LINE.install, fp256: r.fp256, items: r.items, carriers: r.carriers, pending: only ? r.pending.map((p) => ({ ...p, command: 'trocar install' })) : r.pending, problems: r.problems, notes: [...r.notes, ...dmnNotes], standalone: standalonePath(home), residual_risk: RISK, daemon: daemonRow(dmn, rep), ...(unit && !only ? { autostart: { entry: platform === 'win32' ? '\\trocar\\collector' : unit.path, enabled: !dmn.unitFailed } } : {}),
       ...(refusal ? { error: { code: refusal.code, message: refusal.reason } } : {}),
       ...(r.path && r.path.rec ? { path_item: r.path.rec } : {}),
-      planned, commands: ['trocar on', 'trocar off', 'trocar status', 'trocar uninstall'] }
+      planned, ...(left.length ? { left } : {}), commands: ['trocar on', 'trocar off', 'trocar status', 'trocar uninstall'] }
     try { appendEvent(dir, { event: EVENT.installNote, where: 'install', kind: 'result', outcome: receipt.ok ? 'installed' : 'partial', reason: `install: root ${r.fp256 || 'not made'}; ${r.carriers.length} carrier row(s); ${r.pending.length} pending` }) } catch (e) { r.problems.push(`the install-note could not be written (${e.message})`) }
     // §1.1: no two rows of a receipt are the same line. One carrier reached through five forms of one agent was five identical rows (a Windows test machine
     // 2026-10-18: `codex root` five times): the rows are the DISTINCT (agent, carrier, state, file) facts, and when the forms of an
@@ -252,7 +251,7 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
   const done = await locked(async () => {
     let stdl
     try { stdl = writeStandalone({ home, version: OFF_VERSION, fs }) } catch (e) {
-      const reason = `${stdPath}, the undo that works without the source tree, could not be written (${String((e && e.message) || e)}); no file of the agents' was changed. Put that right, then run trocar install again`
+      const reason = `${stdPath}, ${UNDO_WORDS}, could not be written (${String((e && e.message) || e)}); no file of the agents' was changed. Put that right, then run trocar install again`
       try { appendEvent(path.join(home, '.trocar', 'collector'), { event: EVENT.failure, where: 'install', code: (e && e.code) || 'install-error', reason }) } catch {}
       return { failed: reason }
     }
@@ -298,12 +297,16 @@ const breakGlass = (home, platform) => ['If trocar itself breaks, run:', command
 // Without `only`, every row → { row, root }
 async function missingOf(only, { platform, harnesses, ctx, home, rootStore, fs }) {
   if (!only) return { row: () => true, root: true }
-  const [{ setupOf, intactOf }, { readManifest }, { rootOf }, { itemsOfPhase }] = await Promise.all([import('../collector/core/proxymode/status-facts.mjs'), import('../collector/core/trust/journal.mjs'), import('../collector/model-on.mjs'), import('../off/manifest.mjs')])
+  const [{ setupOf, intactOf }, { readManifest }, { rootOf }, { itemsOfPhase }, { pemBody, holdsRoot }, { caPaths }] = await Promise.all([import('../collector/core/proxymode/status-facts.mjs'),
+    import('../collector/core/trust/journal.mjs'), import('../collector/model-on.mjs'), import('../off/manifest.mjs'), import('../collector/model-install.mjs'), import('../collector/core/tls/ca-store.mjs')])
   const dir = path.join(home, '.trocar', 'collector'), manifest = readManifest(dir, fs)
   const root = manifest && manifest.install ? await rootOf({ dir, m: manifest, rootStore, fs }) : null
   const missing = setupOf(harnesses.find((d) => d.name === only), { os: platform, manifest, ctx, root, fs }).missing
   const forms = new Set(missing.map((x) => x.form))
-  const intact = (file) => itemsOfPhase(manifest, 'install').some((i) => i.kind === 'text' && i.path === file && intactOf(manifest, i, fs))
+  // intact AND of the root of now: a block of an older root is replaced by the run (㉒), so it is a change the plan names (V85)
+  let body = null
+  try { body = pemBody(fs.readFileSync(caPaths(path.join(dir, 'ca')).pem, 'utf8')) } catch { /* no root file: the run makes one, and every block is new */ }
+  const intact = (file) => !!body && itemsOfPhase(manifest, 'install').some((i) => i.kind === 'text' && i.path === file && holdsRoot(i, body) && intactOf(manifest, i, fs))
   return { row: (r) => r.harness === only && (r.form != null ? forms.has(r.form) : r.state ? forms.size > 0 : !intact(r.paths[0])), root: missing.some((x) => x.what === 'root-missing') }
 }
 

@@ -133,7 +133,7 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
   }
   if (!rootDer) return finish()
   const rootPem = certPem(rootDer)
-  const rootBody = rootPem.replace(/-----[A-Z ]+-----|\s/g, '') // the base64 of the root: how a pem-block of this root is told from one of an older root
+  const rootBody = pemBody(rootPem)
   const id = rootIdOf(rootDer)
   m.dirs.push(...missingDirs(ca.dir, fs).filter((d) => !m.dirs.includes(d))) // CM32: uninstall takes ca/ away once its files are gone
   owned(ca.pem, 'ca-cert', null, rootPem, 0o644)
@@ -284,7 +284,7 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
     try {
       // ㉒: a block this manifest placed for an older root comes out by its marks (the user's bytes outside them stay, read and written as bytes),
       // and its record with it; the block for this root is then placed as new (a fresh installed_at)
-      const older = m.entries.find((e) => e.kind === 'text' && e.format === 'pem-block' && e.harness === desc.name && e.path === file && !(e.ops || []).some((o) => o.pem && o.inserted.replace(/\s/g, '').includes(rootBody)))
+      const older = m.entries.find((e) => e.kind === 'text' && e.format === 'pem-block' && e.harness === desc.name && e.path === file && !holdsRoot(e, rootBody))
       if (older) {
         const out = removeTrocarText(fs.readFileSync(file, 'latin1'), older.ops)
         if (out.found) fs.writeFileSync(file, out.text, 'latin1')
@@ -292,13 +292,17 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
       }
       // two harnesses whose settings name one file (Claude Code and Kimi Code both read NODE_EXTRA_CA_CERTS; Codex and Hermes SSL_CERT_FILE) share
       // one block: the first places it and its entry is the file's one record, undone once; the next finds this root's block there (a Windows test machine 2026-10-17)
-      const shared = m.entries.find((x) => x.kind === 'text' && x.format === 'pem-block' && x.harness !== desc.name && x.path === file && (x.ops || []).some((o) => o.pem && o.inserted.replace(/\s/g, '').includes(rootBody)))
+      const shared = m.entries.find((x) => x.kind === 'text' && x.format === 'pem-block' && x.harness !== desc.name && x.path === file && holdsRoot(x, rootBody))
       if (shared) { carriers.push({ harness: desc.name, carrier: 'pem-block', path: file, state: 'intact', shared_with: shared.harness }); return }
       const e = applyTextEntry({ dir, manifest: m, harness: desc.name, phase: 'install', file, edit: { format: 'pem-block', pem: rootPem }, home, now: now(), fs })
       carriers.push({ harness: desc.name, carrier: 'pem-block', path: file, state: e ? 'placed' : 'intact' })
     } catch (e) { carriers.push({ harness: desc.name, carrier: 'pem-block', path: file, state: 'skipped', code: e.code || NOT_USERS, why: errText(e) }) }
   }
 }
+
+// the base64 of a root, and whether a pem-block record holds it: how a block of this root is told from one of an older root (㉒; the Set up plan, too)
+export const pemBody = (pem) => pem.replace(/-----[A-Z ]+-----|\s/g, '')
+export const holdsRoot = (e, body) => (e.ops || []).some((o) => o.pem && o.inserted.replace(/\s/g, '').includes(body))
 
 // a path inside trocar's own tree (~/.trocar): a setting that names one was set by install (trocar's bundle or root), never the user's own file.
 // Compared as the OS compares paths (pathKey: no case on Windows and macOS), so another spelling of trocar's own file is still trocar's (4.11 rule U)
