@@ -292,6 +292,7 @@ async function readRows() {
     await indexRows({ home, fs: nodeFs, errors: [], progress, ease })
   } catch (e) { say(e) }
   rowsRead = true
+  if (process.connected) process.send({ rows: true }) // the daemon's word for a warm worker (4.4 刷新)
   kick() // the first idle period: the sweep
 }
 readRows()
