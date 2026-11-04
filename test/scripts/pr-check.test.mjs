@@ -303,14 +303,22 @@ test('AN16: src/web/board/** in a clone that is not the check\'s own: nothing of
 
 // ── AN17
 const MIXED = 'aB3dE5gH7j'.repeat(5)
-const tokens = (mark) => ({
-  anthropic: `sk-ant-api03-${mark}${MIXED}`, plain: `sk-${mark}${MIXED}`, ghp: `ghp_${mark}${MIXED}`, gho: `gho_${mark}${MIXED}`, ghs: `ghs_${mark}${MIXED}`,
-  slack: `xoxb-${mark}1234567890-abcdef`, aws: `AKIA${(mark + 'ABCD2345EFGH6789').slice(0, 16)}`,
-  jwt: `eyJ${mark}hbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcDEF123456${mark}`,
-  pem: `-----BEGIN ${mark ? `${mark} ` : ''}RSA PRIVATE KEY-----`,
-  authorization: `Authorization: Bearer ${mark}abcdef123456`, escaped: `\\"authorization\\":\\"${mark}abcdef123456\\"`, apikey: `x-api-key: ${mark}abcdef123456`,
-  entropy: `${MIXED.slice(0, 40 - mark.length)}${mark}`,
-})
+/** Every shape, `mark` standing alone in it; an AWS key has no separator to stand behind, so it never carries one. */
+const tokens = (mark) => {
+  const dash = mark && `${mark}-`, under = mark && `${mark}_`
+  return {
+    anthropic: `sk-ant-api03-${dash}${MIXED}`, plain: `sk-${dash}${MIXED}`, live: `sk_live_${under}${MIXED}`, restricted: `rk_live_${under}${MIXED}`,
+    ghp: `ghp_${under}${MIXED}`, gho: `gho_${under}${MIXED}`, ghs: `ghs_${under}${MIXED}`, ghu: `ghu_${under}${MIXED}`, ghr: `ghr_${under}${MIXED}`, pat: `github_pat_${under}${MIXED}`,
+    gitlab: `glpat-${dash}${MIXED}`, google: `AIza${mark && `-${dash}`}${MIXED}`, huggingface: `hf_${under}${MIXED}`, npm: `npm_${under}${MIXED}`,
+    slack: `xoxb-${dash}1234567890-abcdef`, ...(mark ? {} : { aws: ['AKIA', 'ABCD2345EFGH6789'].join('') }),
+    jwt: ['eyJhbGciOiJIUzI1NiJ9', 'eyJzdWIiOiIxMjM0NTY3ODkwIn0', `${dash}abcDEF123456`].join('.'),
+    pem: `-----BEGIN ${mark ? `${mark} ` : ''}RSA PRIVATE KEY-----`, pgp: `-----BEGIN ${mark ? `${mark} ` : ''}PGP PRIVATE KEY BLOCK-----`,
+    authorization: `Authorization: Bearer ${dash}abcdef123456`, escaped: `\\"authorization\\":\\"${dash}abcdef123456\\"`, apikey: `x-api-key: ${dash}abcdef123456`, google_header: `x-goog-api-key: ${dash}abcdef123456`,
+    bearer: `curl -H "Bearer ${dash}abcdef123456"`, cookie: `Cookie: session=${dash}abcdef123456`, set_cookie: `Set-Cookie: id=${dash}abcdef123456; Path=/`,
+    api_key: `api_key=${dash}abcdef123456`, api_key_dash: `API-KEY: ${dash}abcdef123456`, password: `password = "${dash}abcdef123456"`,
+    entropy: `${dash}${MIXED.slice(0, 40)}`,
+  }
+}
 const files = (o) => Object.fromEntries(Object.entries(o).map(([k, v]) => [`s/${k}.txt`, `${v}\n`]))
 
 test('AN17: each credential shape is refused, in a file and in the body; carrying FAKE it passes', () => {
@@ -328,9 +336,25 @@ test('AN17: each credential shape is refused, in a file and in the body; carryin
   assert.deepEqual(of(v.check().doc, 'secrets'), [])
 })
 
+test('AN17: FAKE counts standing alone; run into a token, it is part of the token', () => {
+  const stuck = { end: `ghp_${MIXED}FAKE`, start: `ghp_FAKE${MIXED}`, middle: `sk-ant-${MIXED}FAKE${MIXED}`, entropy: `${MIXED}FAKE`, key: `Authorization: Bearer ${'FAKE'}abcdef123456` }
+  const w = workspace()
+  w.commit(files(stuck))
+  assert.deepEqual(named(w.check().doc, 'secrets'), sorted(files(stuck)))
+})
+
+test('AN17: a credential is read through the same spellings as everything else, and across a line break', () => {
+  const token = `ghp_${MIXED}`
+  const written = { unicode: `ghp\\u005f${MIXED}`, header: `\\u0041uthorization: Bearer ${'abcdef'}123456`, reference: `&#65;uthorization: Bearer ${'abcdef'}123456`, split: `${token.slice(0, 25)}\n${token.slice(25)}`, indented: `${token.slice(0, 25)}\n    ${token.slice(25)}` }
+  const w = workspace()
+  w.commit(files(written))
+  assert.deepEqual(named(w.check().doc, 'secrets'), sorted(files(written)))
+})
+
 test('AN17: what only looks like a credential passes', () => {
   const w = workspace()
   w.commit(files({ variable: 'Authorization: Bearer $TOKEN', placeholder: 'Authorization: <token>', template: 'x-api-key: {key}', masked: 'x-api-key: ***', short: 'x-api-key: abc123',
+    prose: 'The bearer authentication scheme is covered above.', code: 'password: config.userPassword', environment: 'api_key=os.environ.get', browser: 'cookie: document.cookie',
     just_under: MIXED.slice(0, 39), hex: 'a1b2c3d4e5'.repeat(6), url: 'https://github.com/Bug-001/trocar/releases/latest/download/install', words: 'Not a secret at all.' }))
   assert.deepEqual(of(w.check().doc, 'secrets'), [])
 })

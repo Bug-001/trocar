@@ -42,10 +42,17 @@ const BLOCKED = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.ico
   '.mp4', '.mov', '.m4v', '.webm', '.mkv', '.avi', '.pdf', '.zip', '.gz', '.tgz', '.tar', '.bz2', '.xz', '.zst', '.7z', '.rar',
   '.ndjson', SEALED_EXT, '.har', '.pcap', '.pcapng'])
 const TOKEN = new RegExp([
-  /\bsk-[A-Za-z0-9_-]{20,}/, /\bgh[pos]_[A-Za-z0-9_]{20,}/, /\bxox[a-z]-[A-Za-z0-9-]{10,}/, /\bAKIA[0-9A-Z]{16}\b/,
-  /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/, /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
+  /\bsk-[A-Za-z0-9_-]{20,}/, /\b[sr]k_live_[A-Za-z0-9_]{16,}/, /\bgh[oprsu]_[A-Za-z0-9_]{20,}/, /\bgithub_pat_[A-Za-z0-9_]{30,}/, /\bglpat-[A-Za-z0-9_-]{20,}/,
+  /\bAIza[A-Za-z0-9_-]{35,}/, /\bhf_[A-Za-z0-9_]{30,}/, /\bnpm_[A-Za-z0-9_]{30,}/, /\bxox[a-z]-[A-Za-z0-9-]{10,}/, /\bAKIA[0-9A-Z]{16}\b/,
+  /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/, /-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----/,
 ].map((r) => r.source).join('|'), 'g')
-const CREDENTIAL = /(?:authorization|x-api-key)\\*["']?\s*[:=]\s*\\*["']?(?:(?:bearer|basic|token)\s+)?[A-Za-z0-9._~+/=-]{12,}/gi
+const VALUE = '[A-Za-z0-9._~+/=-]{12,}'
+const ASSIGNED = String.raw`\\*["']?\s*[:=]\s*\\*["']?`
+const CREDENTIAL = new RegExp(`(?:authorization|x-api-key|x-goog-api-key)${ASSIGNED}(?:(?:bearer|basic|token)\\s+)?${VALUE}`, 'gi')
+// these names sit next to code and prose as well, and a digit in the value is what tells `password: config.userPassword` from a password
+const VALUED = new RegExp(`(?:(?:(?:set-)?cookie|api[_-]?key|password)${ASSIGNED}|\\bbearer\\s+)(?=[^\\s"']*\\d)${VALUE}`, 'gi')
+const LINE_BREAK = /[ \t]*\r?\n[ \t]*/g
+const isFake = (value) => /(?:^|[^A-Za-z0-9])FAKE(?:[^A-Za-z0-9]|$)/.test(value) // standing alone: run into a token it is part of the token
 // what makes an SVG more than vector: anything of another kind inside it, or a reference to anything but itself
 const SVG_EMBED = /data:|<(?:[\w-]+:)?(?:image|feimage|img)\b|\bsrc\s*=|url\(\s*(?!["']?#)|href\s*=\s*["'](?!#)/i
 // a pointer passes as text, and what `git lfs push` sends with it is never read here
@@ -336,11 +343,13 @@ function runnable(source) {
 
 function checkSecrets(sources, add) {
   for (const source of sources) {
-    const text = source.bytes.toString()
-    const hit = (match) => { if (!match[0].includes('FAKE')) add('secrets', placeOf(source, text, match.index)) }
-    for (const match of text.matchAll(TOKEN)) hit(match)
-    for (const match of text.matchAll(CREDENTIAL)) hit(match)
-    for (const match of runnable(source)?.matchAll(LONG_RUN) ?? []) if (isMixed(match[0])) hit(match)
+    for (const text of spelled(source)) {
+      const hit = (match) => { if (!isFake(match[0])) add('secrets', placeOf(source, text, match.index)) }
+      for (const pattern of [TOKEN, CREDENTIAL, VALUED]) for (const match of text.matchAll(pattern)) hit(match)
+      for (const match of text.replace(LINE_BREAK, '').matchAll(TOKEN)) if (!isFake(match[0])) add('secrets', source.where)
+    }
+    const text = runnable(source)
+    for (const match of text?.matchAll(LONG_RUN) ?? []) if (isMixed(match[0]) && !isFake(match[0])) add('secrets', placeOf(source, text, match.index))
   }
 }
 
@@ -357,7 +366,7 @@ function openEncoded(sources, add) {
     }
     longRuns(text).forEach(open)
     for (const { index, run } of foldedRuns(text)) {
-      if (!open(run) && !isHex(run) && !run.includes('FAKE')) add('secrets', placeOf(source, text, index))
+      if (!open(run) && !isHex(run) && !isFake(run)) add('secrets', placeOf(source, text, index))
     }
   }
 }
