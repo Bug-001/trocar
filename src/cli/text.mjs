@@ -7,6 +7,7 @@
 //   tilde / size / ago / unknown   the conventions of §1.1⑤: `~` for the home directory, 1000-based KB/MB/GB, relative time, and the one wording
 //                    for a value that could not be read.
 import { styleText } from 'node:util'
+import { foldHang } from '../off/receipt.mjs'
 
 /** The column count the manual's samples are laid out for (§1.1⑥). */
 export const WIDTH = 80
@@ -40,23 +41,31 @@ export function columns(rows, { gap = 2, width = Infinity } = {}) {
 }
 
 /** `[[label, value], …]` → an indented two-column block; a value too long for `width` is folded under its own column, so the row still reads as one
- *  row (a Windows test machine 2026-10-18: it used to drop to a second line at indent 2, and `fit` then folded that to column 0). A word longer than the room
- *  left beside the label (a path, a command) keeps its own line unbroken, with the label alone above it (§1.1⑥). */
-export function pairs(rows, { indent = 2, gap = 2, width = WIDTH } = {}) {
-  const pad = ' '.repeat(indent)
-  const label = Math.max(0, ...rows.map(([l]) => String(l).length))
-  const col = indent + label + gap
-  return rows.flatMap(([l, v]) => {
-    const value = String(v ?? '')
-    const head = `${pad}${String(l).padEnd(label)}${' '.repeat(gap)}`
+ *  row (a Windows test machine 2026-10-18: it used to drop to a second line at indent 2, and `fit` then folded that to column 0). A word too long for
+ *  the value column (a path, a command) — the first as much as a later one — is a line of its own at the fold column (foldHang), or at the indent when
+ *  even that is too narrow, never broken; when it is the first, the label is alone above it (§1.1⑥). `home`: HOME paths are shortened to `~/…`
+ *  (tildeText) BEFORE anything is measured, so a word is laid out at the width it is printed with (§1.1⑤⑥). */
+export function pairs(rows, { indent = 2, gap = 2, width = WIDTH, label: least = 0, home = null } = {}) { // `label`: the least label width, so blocks printed apart line up
+  const pad = ' '.repeat(indent), hang = foldHang(pad)
+  const shown = rows.map(([l, v]) => [tildeText(String(l), home), tildeText(String(v ?? ''), home)])
+  const label = Math.max(least, ...shown.map(([l]) => l.length))
+  const col = indent + label + gap, room = width - col
+  return shown.flatMap(([l, value]) => {
+    const head = `${pad}${l.padEnd(label)}${' '.repeat(gap)}`
     if (col + value.length <= width) return [`${head}${value}`.trimEnd()]
-    const first = value.split(/\s+/)[0]
-    // a word that does not even fit beside the label (a path, a command) keeps its own line unbroken, under the label (§1.1⑥)
-    if (col + first.length > width) return [`${pad}${l}`, ...wrap(value, width - indent, pad).map((line, i) => (i ? line : pad + line))]
-    const [head1, ...more] = wrap(value, width - col, ' '.repeat(col))
-    return [`${head}${head1}`, ...more]
+    // every line of the value has the same room: wrap's hang would count against a line it is not in front of (the first)
+    return wrap(value, room).flatMap((line, i) => {
+      const fits = line.length <= room, at = fits ? ' '.repeat(col) : hang.length + line.length <= width ? hang : pad
+      return !i ? (fits ? [head + line] : [`${pad}${l}`, at + line]) : [at + line]
+    })
   })
 }
+
+export const escRe = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+/** §1.1⑤: every path under HOME in a line of text as `~/…` — the one display rule for HOME paths of every receipt (receipt.mjs fit applies it to each
+ *  line, pairs to each cell before it measures). A path is HOME where it starts a word (after a blank, a quote, a bracket, `=` or `:`) and HOME ends at a
+ *  separator or the word's end; `/home/al` is not in `/home/alice`. */
+export const tildeText = (s, home) => (home ? s.replace(new RegExp(`(^|[\\s"'(\\[=:])${escRe(home)}(?=[\\\\/]|$|[\\s"'),;\\]])`, 'g'), '$1~') : s)
 
 /** A path under the home directory printed with `~` (§1.1⑤); anything else, and anything that is not a path, as it is. */
 export function tilde(p, home) {
@@ -91,10 +100,37 @@ export function ago(at, now = Date.now()) {
   return 'just now' // under a minute either way: a clock a little ahead is not a negative age
 }
 
-/** `text` broken into lines of at most `width` columns, on spaces (§1.1⑥); a word longer than the line keeps its own line, unbroken. */
+// §1.1⑥: a command named in a sentence is one word to the wrapper — a backquoted span, or `trocar <command>` with the options after it — so a
+// line never ends between `trocar` and `install.` (a 116-column macOS Terminal did). No list of command names: any lowercase word after `trocar`
+// glues, and gluing a word that is not a command only keeps two words together.
+const CLOSES = /`[.,;:)]*$/
+// §1.1⑤⑥: a size (`size()`: a number, then B / KB / MB / GB) is one word, and a bracketed size goes with the word before it — the thing it is the size
+// of (`~/.trocar/raw/ (1.3 GB)`), so a fold never leaves `(3.2 KB)` alone on a line, nor `3.2` at the end of one and `KB` at the start of the next
+const NUMBER = /^\(?\d[\d.,]*$/, UNIT = /^[KMG]?B\)?[.,;:]?$/
+function words(text) {
+  const ws = String(text).split(/\s+/).filter(Boolean), out = []
+  for (let i = 0; i < ws.length; i++) {
+    let w = ws[i]
+    const end = w.startsWith('`') && !(w.length > 1 && CLOSES.test(w)) ? ws.findIndex((x, j) => j > i && CLOSES.test(x)) : -1
+    if (end > 0) { w = ws.slice(i, end + 1).join(' '); i = end } // an unclosed backquote glues nothing
+    else if (w === 'trocar' && /^[a-z][a-z-]*[.,;:)]?$/.test(ws[i + 1] || '')) {
+      w += ` ${ws[++i]}`
+      while (/[a-z-]$/.test(w) && /^--?[a-z]/.test(ws[i + 1] || '')) w += ` ${ws[++i]}`
+    }
+    else if (NUMBER.test(w) && UNIT.test(ws[i + 1] || '')) {
+      w += ` ${ws[++i]}`
+      if (w.startsWith('(') && out.length) { out[out.length - 1] += ` ${w}`; continue }
+    }
+    out.push(w)
+  }
+  return out
+}
+
+/** `text` broken into lines of at most `width` columns, on spaces (§1.1⑥); a word longer than the line keeps its own line, unbroken; a command
+ *  named in the text (`words`) is one word. */
 export function wrap(text, width = WIDTH, hang = '') {
   const out = []
-  for (const word of String(text).split(/\s+/).filter(Boolean)) {
+  for (const word of words(text)) {
     if (out.length && out[out.length - 1].length + 1 + word.length <= width) out[out.length - 1] += ` ${word}`
     else out.push((out.length ? hang : '') + word)
   }

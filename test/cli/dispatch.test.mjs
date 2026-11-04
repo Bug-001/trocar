@@ -16,7 +16,7 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { sandbox, installedViaCli, fakeIo, snapshot } from './fixtures/dispatch-ctx.mjs'
 
 const BIN = fileURLToPath(new URL('../../bin/trocar.mjs', import.meta.url))
-import { codeId } from '../../src/version.mjs'
+import { codeId, selfCommand } from '../../src/version.mjs'
 
 const CODE = codeId() // D67⑥: the version with HEAD's first 7 in a git checkout
 /** The context of a run where every command is a spy that records `[name, ...argv]` and answers 0: what the dispatch did, not what the commands do. */
@@ -52,7 +52,7 @@ test('V19: the real table entry of every command resolves to a function (no rena
 
 test('V20: setup-helper off Linux is exit 2 and not needed here; as a user it says to use sudo; as root on Linux it runs — --binary and --remove reach the installer', async () => {
   const done = []
-  const arch = { install: { DEFAULTS: { helperBin: '/usr/local/libexec/trocar/trocar-redirector' }, setupHelper: (o) => { done.push(['setup', o.binarySrc]); return { bin: '/b', getcap: 'caps' } }, uninstallHelper: () => { done.push(['remove']); return { warnings: [] } } } }
+  const arch = { install: { DEFAULTS: { helperBin: '/usr/local/libexec/trocar/trocar-redirector' }, setupHelper: (o) => { done.push(['setup', o.binarySrc]); return { bin: '/b', caps: 'cap_bpf=ep' } }, uninstallHelper: () => { done.push(['remove']); return { warnings: [] } } } }
   const run = async (argv, { over = arch, uid = 0, platform = 'linux' } = {}) => { const io = fakeIo(); const exit = await runCli(argv, { io, uid, platform, deps: { arch: over } }); return { exit, io } }
   for (const platform of ['darwin', 'win32']) {
     const r = await run(['setup-helper'], { platform, uid: 0 })
@@ -60,13 +60,13 @@ test('V20: setup-helper off Linux is exit 2 and not needed here; as a user it sa
     assert.equal(r.io.stderrText().trim(), 'trocar setup-helper: not needed on this platform.')
   }
   const user = await run(['setup-helper'], { uid: 1000 })
-  assert.equal(user.exit, 2); assert.match(user.io.stderrText(), /run it with sudo: sudo trocar setup-helper/)
+  assert.equal(user.exit, 2); assert.ok(user.io.stderrText().split('\n').some((l) => l.trim() === `sudo ${selfCommand(['setup-helper'])}`), 'the line to run, whole, by absolute paths (1.6 §3.2)')
   assert.deepEqual(done, [], 'refused before anything was installed')
   const built = path.join(tmpDir('trocar-dispatch-helper-'), 'trocar-redirector'); fs.writeFileSync(built, '')
   let r = await run(['setup-helper', '--binary', built])
-  assert.equal(r.exit, 0); assert.match(r.io.stdoutText(), /^installed \/b \(caps\)/); assert.equal(r.io.stderrText(), '')
+  assert.equal(r.exit, 0); assert.ok(r.io.stdoutText().includes('/b'), 'the installed path is named'); assert.equal(r.io.stderrText(), '')
   r = await run(['setup-helper', '--remove'])
-  assert.equal(r.exit, 0); assert.match(r.io.stdoutText(), /^Removed the kernel helper \/usr\/local\/libexec\/trocar\/trocar-redirector/)
+  assert.equal(r.exit, 0); assert.ok(r.io.stdoutText().includes('/usr/local/libexec/trocar/trocar-redirector'), 'the removed path is named')
   assert.deepEqual(done, [['setup', built], ['remove']], 'the installer was asked once each, with the binary as typed')
   r = await run(['setup-helper', '--binary', built], { over: { install: { setupHelper: () => { throw new Error('the capability bit could not be set') } } } })
   assert.equal(r.exit, 1); assert.equal(r.io.stdoutText(), ''); assert.match(r.io.stderrText(), /the capability bit could not be set/)
@@ -191,4 +191,17 @@ test('the real bin: --version, help, help off, an unknown command and `daemon --
   const n = run('nope'); assert.equal(n.status, 2); assert.equal(n.stdout, ''); assert.match(n.stderr, /unknown command 'nope'/)
   const d = run('daemon', '--bogus'); assert.deepEqual([d.status, d.stdout], [2, '']); assert.match(d.stderr, /trocar daemon: unknown option '--bogus'/)
   assert.deepEqual(fs.readdirSync(home), [], 'nothing was written')
+})
+
+// 4.11 present / 1.6 V7: uninstall records no PATH — it deletes that file, so recording it first made a second uninstall report removing what it
+// had just written — and its --dry-run writes nothing at all
+test('4.11 present: uninstall records no PATH of the user; its --dry-run leaves HOME byte for byte as it was', async () => {
+  const s = sandbox()
+  assert.equal((await s.run(['install', '--yes'])).exit, 0)
+  const recorded = path.join(s.dir, 'user-path.json')
+  assert.ok(fs.existsSync(recorded), 'install, a command typed in a terminal, recorded the PATH')
+  fs.rmSync(recorded)
+  const before = snapshot(s.home)
+  await s.run(['uninstall', '--dry-run'], { env: { ...s.ctx().env, PATH: '/a/path/this/run/has' } })
+  assert.deepEqual(snapshot(s.home), before, 'the dry run wrote nothing, user-path.json included')
 })

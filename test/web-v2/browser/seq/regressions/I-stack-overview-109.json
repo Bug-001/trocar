@@ -14,5 +14,5 @@
   "status": "fixed",
   "detail": "a 500 `pricing` read on the overview prints the server's whole reason (a V8 native stack, FATAL ERROR) in the price-table line, not under Technical details; another failure line than I-stack-overview-3 (`overview`), found when the fingerprint split them; it stood in front of I-stack-settings-109's replay",
   "owner": "shell/overview/library/capture/settings/traffic",
-  "suspect": "src/web/v2/overview/overview.mjs:300"
+  "suspect": "web/legacy/overview/overview.mjs:300"
 }

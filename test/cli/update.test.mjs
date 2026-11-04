@@ -9,7 +9,7 @@ import http from 'node:http'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { runUpdateCli } from '../../src/cli/update.mjs'
+import { HANDED_OVER, runUpdateCli } from '../../src/cli/update.mjs'
 import { EXIT } from '../../src/cli/schema.mjs'
 import { validateReceipt, newReceipt } from '../../src/cli/schema.mjs'
 import { codeId, codeIdOf } from '../../src/version.mjs'
@@ -68,11 +68,11 @@ function ctx(s, over = {}) {
     off: async (argv) => { calls.off.push(argv); return over.offExit ?? EXIT.ok },
     on: async (argv) => { calls.on.push(argv); return over.onExit ?? EXIT.ok },
     install: async (argv) => { calls.install.push(argv); return over.installExit ?? EXIT.ok },
-    child: async (file, args) => { calls.child.push([file, ...args]); return over.childExit ?? EXIT.ok },
+    child: async (file, args, env) => { calls.child.push([file, ...args]); calls.childEnv = env; return over.childExit ?? EXIT.ok },
     daemonCode: over.daemonCode || (() => codeId(s.root)),
     ...(over.deps || {}),
   }
-  return { calls, io, c: { io, home: s.home, platform: over.platform || 'linux', env: { PATH: process.env.PATH, HOME: s.home }, deps } }
+  return { calls, io, c: { io, home: s.home, platform: over.platform || 'linux', env: { PATH: process.env.PATH, HOME: s.home, ...over.env }, deps } }
 }
 
 // ── V93 · the checks and the refusals ───────────────────────────────────────────────────────────────────────────────────────────────
@@ -317,6 +317,23 @@ test('V95: a finishing process killed by a signal is exit 1 with a reason and a 
   assert.deepEqual([receipt.ok, receipt.error.code], [false, 'child-crashed'])
   assert.match(receipt.error.message, /SIGKILL/)
   assert.deepEqual(s.handover(), { from: before, on: ['codex'] }, 'the file stays: the next run finishes the update')
+})
+
+test('one plan per update: the process that finishes a handover does not print the plan its parent printed and was answered on', async () => {
+  const s = sandbox({ on: ['codex'] })
+  s.ahead('one-plan.md')
+  const parent = ctx(s)
+  assert.equal(await runUpdateCli(['--yes'], parent.c), EXIT.ok, parent.io.text())
+  assert.match(parent.io.text(), /^Plan$/m, 'the parent prints the plan')
+  assert.equal(parent.calls.childEnv[HANDED_OVER], '1', 'and tells the process it starts that it did')
+
+  const child = ctx(s, { env: parent.calls.childEnv })
+  assert.equal(await runUpdateCli(['--yes'], child.c), EXIT.ok, child.io.text())
+  assert.doesNotMatch(child.io.text(), /^Plan$/m, 'the finish it hands over to prints no second one')
+  const rerun = ctx(s)
+  fs.writeFileSync(path.join(s.dir, 'update.json'), JSON.stringify({ from: '0.1.0+0000000', on: ['codex'] }) + '\n')
+  assert.equal(await runUpdateCli(['--yes'], rerun.c), EXIT.ok, rerun.io.text())
+  assert.match(rerun.io.text(), /^Plan$/m, 'an operator who runs update again to finish one is shown the plan')
 })
 
 // ── V96 · the finish ────────────────────────────────────────────────────────────────────────────────────────────────────────────────

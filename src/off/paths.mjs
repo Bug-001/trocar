@@ -19,8 +19,20 @@ export const collectorIn = (home) => path.join(home, 'collector')
 export const backupDir = (home = os.homedir()) => path.join(trocarHome(home), 'backup')
 /** ~/.trocar/bin/trocar-off: the single-file copy of src/off that runs without the repo (1.6 R3). */
 export const standalonePath = (home = os.homedir()) => path.join(trocarHome(home), 'bin', 'trocar-off')
-/** The command that runs that copy, the one place it is worded: Windows ignores the shebang, so there it is `node "<path>"`; elsewhere the path runs itself. */
-export const standaloneCommand = (p, platform = process.platform) => (platform === 'win32' ? `node "${p}"` : p)
+/** ~/.trocar/app: what the install script places (4.5 §A, D74): `<version>/`, `node/<id>/`, the pointer `current`. The one resolver of it. */
+export const appDir = (home = os.homedir()) => path.join(trocarHome(home), 'app')
+/** ~/.trocar/bin/trocar (Windows trocar.cmd): the launcher that reads `app/current` and runs the version it names. */
+export const launcherPath = (home = os.homedir(), platform = process.platform) => path.join(trocarHome(home), 'bin', platform === 'win32' ? 'trocar.cmd' : 'trocar')
+const cmdBeside = (p) => `${p}.cmd`
+/** The files of that copy, one list that is written, checked, listed and removed as one (1.6 §3.2 step 1): trocar-off, and on Windows, which ignores the
+ *  shebang, trocar-off.cmd beside it, which starts it with the Node the launcher would (`..\app\current`'s node.exe, else `node`). */
+export const standaloneFiles = (home = os.homedir(), platform = process.platform) => [standalonePath(home), ...(platform === 'win32' ? [cmdBeside(standalonePath(home))] : [])]
+/** The command that runs that copy, the one place it is worded: elsewhere the path runs itself (its sh prologue finds a Node); on Windows the .cmd of
+ *  standaloneFiles, as `cmd --% /c @"<path>.cmd"` — one line that PowerShell and cmd both run unchanged (1.6 §1.1⑤): PowerShell hands everything after
+ *  `--%` to cmd as it is, cmd skips that word, and the `@` keeps `/c` from stripping the quotes, so spaces, `&`, `(`, `^` in the path stay. */
+export function standaloneCommand(p, platform = process.platform) {
+  return platform === 'win32' ? `cmd --% /c @"${cmdBeside(p)}"` : p
+}
 /** ~/.trocar/legacy-manifest.json: the ledger of what `on` changed through the old capture. */
 export const legacyManifestPath = (home = os.homedir()) => path.join(trocarHome(home), 'legacy-manifest.json')
 /** ~/.trocar/legacy-op.lock: the lock of the one `on` / `off` / `uninstall` that changes the old capture at a time (1.6 R12; the old capture has no ~/.trocar/collector/). */
