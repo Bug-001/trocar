@@ -28,7 +28,7 @@ function sessionDoc(base) {
     session_synthesized: !!base.session_synthesized,
     provider: base.provider ?? null,
     title,
-    title_source: title != null ? 'wire' : base.title_pending ? 'pending' : null, // pending: not known yet (4.4 §人类标题的来源)
+    title_source: title != null ? 'wire' : null,
     calls: base.calls || 0,
     logged: base.logged || 0, // D40: inference calls kept as a log line only (a meta.json written before D40 has none)
     probes: base.probes || 0,
@@ -38,7 +38,7 @@ function sessionDoc(base) {
   };
 }
 
-/** One session meta from facts counted elsewhere (the segment index; `title` from the usage sidecar), in the one document shape. */
+/** One session meta from facts counted elsewhere (the segment index; `title` from the title table or the session's own fold), in the one document shape. */
 export const sessionMetaOfFacts = (facts) => sessionDoc(facts);
 
 // D40: the calls of a session that were kept as a log line only — how many, which setting did it, and the newest few with what is still
