@@ -44,6 +44,7 @@ function byteLru(maxBytes, counted, keepNewest) {
     clear() { m.clear(); held = 0; },
     get size() { return m.size; },
     get bytes() { return held; },
+    max: maxBytes,
     stats,
   };
 }
@@ -275,6 +276,10 @@ function makeReader({ fs, fd, file, st, tables, indexOffset, version, frameCache
         for (let j = i; j >= 0 && !lineCache.get(key + ':' + j); j = predOf(records[j])) need.add(records[j][R.frame]);
       }
     } catch { return; }
+    // more than the cache holds: the last frames would push out the first before lineAt reads them, and it would decode them all again
+    let bytes = 0;
+    for (const f of need) bytes += frames[f][2];
+    if (bytes > frameCache.max) return;
     await Promise.all([...need].map(frameAsync));
   }
 

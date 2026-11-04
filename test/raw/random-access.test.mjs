@@ -95,6 +95,18 @@ for (const [version, make] of FILES) {
     }
   });
 
+  test(`${version}: a record past the frame cache is left to lineAt, which still gives its bytes`, async (t) => {
+    const file = await make();
+    const i = lastRecord(file), want = outcome(file, i);
+    const calls = t.mock.method(zlib, 'brotliDecompress');
+    const sf = openSealed(file, { frameCache: createFrameCache({ bytes: 1 }) });
+    await sf.warm(i);
+    if (version === 'version 1') assert.equal(calls.mock.callCount(), 0);
+    else assert.ok(calls.mock.callCount() <= 1, 'version 2 reads its splice frame to learn what it needs, and stops there');
+    assert.ok(sf.lineAt(i).equals(want));
+    sf.close();
+  });
+
   test(`${version}: one frame wanted twice at once decodes once`, async (t) => {
     const file = await make();
     const i = lastRecord(file);

@@ -175,7 +175,7 @@ const fsId = (fs) => { let n = fsIds.get(fs); if (n === undefined) fsIds.set(fs,
 // the reader keys its entries by its open (`<seq>:<dev>:<ino>:<n>`); the shared caches key them by the file's bytes
 const byIdentity = (cache, id) => {
   const k = (ck) => id + ck.slice(ck.lastIndexOf(':'));
-  return { get: (ck) => cache.get(k(ck)), set: (ck, v) => cache.set(k(ck), v) };
+  return { get: (ck) => cache.get(k(ck)), set: (ck, v) => cache.set(k(ck), v), max: cache.max };
 };
 
 function sharedSealed(file, fs) {
