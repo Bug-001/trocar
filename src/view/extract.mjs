@@ -552,7 +552,8 @@ export function extractSeed(store) {
  * "谁执行它"; 4.3 §3). `members`: the session's index rows in write order (src/query/rows.mjs: segments in segmentCmp order,
  * lines in order); `from`: a cursor, the place of a member such that every member before it has a row (0, or the `done` of a call
  * over a list this one extends). `recordsAt(rows)` → their records (one that does not read back is left out). Extracts the members
- * from the cursor on that the store has no row for, in write order, until `budgetMs` of `clock` is spent, appending
+ * from the cursor on that the store has no row for, in write order: the first of them whatever the budget (a member is the
+ * unit, so a budget spent before it still moves the frontier: 3.5 后台抽取与归约), then until `budgetMs` of `clock` is spent, appending
  * each chunk's definitions and rows; `errors`: the answering request's (where a store note goes). A member that fails to extract gets
  * a row { x: { unparsed: reason } } appended as held (a `t` line the next open cuts off), so the next open tries it again (4.3 §3); so
  * are the rows extracted after it (one that continues it, or is written against it, would otherwise be stored without it), so what
@@ -566,7 +567,7 @@ export function extractMembers({ store, members, recordsAt, sessionId = null, bu
   let at = from;
   const settle = () => { while (at < members.length && has(at)) at++; };
   settle();
-  for (let i = at; i < members.length && !spent();) {
+  for (let i = at, first = true; i < members.length && (first || !spent()); first = false) {
     const part = []; // the next members with no row: at most CHUNK, their stored bytes at most CHUNK_STORED (the first whatever its size)
     for (let sum = 0; i < members.length && part.length < CHUNK; i++) {
       if (has(i)) continue;

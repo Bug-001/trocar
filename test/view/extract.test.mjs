@@ -228,8 +228,9 @@ test('(d) frontier: the largest rid with every member up to it extracted; done: 
   const store = opened(tmpDir('trocar-extract-'));
   // some later members first: the frontier stops at the first gap
   extractMembers({ store, members: members.filter((_, i) => i < 3 || (i >= 6 && i < 9)), recordsAt });
+  // a budget spent before the first member still extracts one, the unit (3.5 后台抽取与归约: every slice moves the frontier)
   let r = extractMembers({ store, members, recordsAt, budgetMs: 0 });
-  assert.deepEqual(r, { frontier: recs[2].id, done: 3, total: recs.length });
+  assert.deepEqual(r, { frontier: recs[3].id, done: 4, total: recs.length });
   // a budget that runs out midway: what it extracted is the next members in write order, and the frontier says how far
   for (const budget of [3, 6]) {
     let now = 0;
