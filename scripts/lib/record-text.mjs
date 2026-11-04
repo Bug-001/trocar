@@ -54,6 +54,7 @@ export function textsBehind(rec) {
       const stream = kept ?? part.raw
       const view = { ...rec, resp: part.raw_sse || stream == null ? part : { ...part, ...rebuilt(stream) } }
       const format = wireFormatOf(view)
+      // the read side has no one entry for this: Anthropic's normResp is its own, the other wires' sit on their dissectors
       const norm = format === 'anthropic' ? normResp(view) : boardDissectorOf(format)?.normResp(view)
       if (norm) texts.push(...[norm.text, norm.thinking, JSON.stringify(norm.tools)].filter(Boolean).map((text) => Buffer.from(text)))
       else if (holdsMessages(view.resp)) opaque = true
