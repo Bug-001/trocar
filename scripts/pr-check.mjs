@@ -29,6 +29,7 @@ const PAGE = ['--limit', '500'] // 1.6 §4.1: the largest page of a list query
 const SHORT_SHA = 10
 const MAX_LINES = 400
 const MIN_FACT = 4
+const GIT_BINARY_PEEK = 8000 // how far git looks for a NUL to call a file binary
 const MAX_WORK_MS = 7 * 86_400_000 // a --before further back than this leaves the recent capture out, whatever the reason
 const BOARD = 'src/web/board/'
 const LOCK = /(?:^|\/)package-lock\.json$/
@@ -55,6 +56,8 @@ const CONTROL = /[\x00-\x08]/g
 const RECORD_TS = /^\{"ts":"([^"]+)"/
 const DIFF_HEADER = 'diff --git '
 const NEWLINE = Buffer.from('\n')
+const ALNUM = String.raw`[\p{L}\p{N}]`
+const isAlnum = (char) => char !== undefined && new RegExp(ALNUM, 'u').test(char)
 // the row of .github/pull_request_template.md the hash is written on: it cannot hold its own hash, and holds nothing else or it counts
 const HASH_ROW = /^- Written by an agent: the `hash` from `node scripts\/pr-check\.mjs`:[ \t]*(?:(`?)[0-9a-f]{64}\1[ \t]*)?\r?$/gm
 
@@ -158,6 +161,21 @@ function brought(cwd, ...revs) {
   return { stats, diffs }
 }
 
+/** Whether a text of the base holds `word` as a word: its pieces in order, punctuation between them, nothing alphanumeric touching it. */
+function asWord(word) {
+  const pieces = word.match(new RegExp(`${ALNUM}+`, 'gu')).map((piece) => piece.replace(/[\\^$.*+?()[\]{}|/]/g, '\\$&'))
+  const pattern = new RegExp(`(?<!${ALNUM})${pieces.join(`[^\\p{L}\\p{N}]*`)}(?!${ALNUM})`, 'iu')
+  return (text) => pattern.test(text)
+}
+
+/** Whether a text of the base holds these very bytes, and no longer run of the same letters. */
+const asIs = (bytes) => (text) => {
+  for (let at = text.indexOf(bytes); at >= 0; at = text.indexOf(bytes, at + 1)) {
+    if (!isAlnum(text[at + bytes.length])) return true
+  }
+  return false
+}
+
 const addedOf = (diff) => Buffer.concat(diff.added.flatMap((row) => [row, NEWLINE]))
 
 /** Everything `base..HEAD` takes out, into `out`. */
@@ -242,7 +260,7 @@ function checkImages(sources, hold) {
     const patterns = source.kind === 'title' || source.kind === 'body' ? [DATA_IMAGE, POSTED_IMAGE] : [DATA_IMAGE]
     for (const text of spelled(source)) {
       for (const pattern of patterns) {
-        for (const match of text.matchAll(pattern)) hold(Buffer.from(match[0]), 'files', placeOf(source, text, match.index), { exact: true, why: WHY.image })
+        for (const match of text.matchAll(pattern)) hold(match[0], 'files', placeOf(source, text, match.index), { exact: true, why: WHY.image })
       }
     }
   }
@@ -296,17 +314,18 @@ function checkIdentity(out, cwd, hold, add) {
   const names = [os.userInfo().username, host, host.split('.')[0], process.env.USER, process.env.LOGNAME, process.env.USERNAME, process.env.COMPUTERNAME]
   const gitName = spawnSync('git', ['config', '--get', 'user.name'], { cwd, stdio: ['ignore', 'pipe', 'ignore'] }).stdout?.toString().trim()
   const own = wordOf(gitName || '')
-  for (const word of [...names.filter(Boolean).map(wordOf), own]) {
+  for (const name of [...names, gitName].filter(Boolean)) {
+    const word = wordOf(name)
     if (word.length === 0) continue
     for (const source of out.sources) {
       if (source.kind === 'author' && word.equals(own)) continue
-      if (source.norm.includes(word)) hold(word, 'identity', source.where)
+      if (source.norm.includes(word)) hold(name, 'identity', source.where)
     }
   }
   for (const source of out.sources) {
     for (const text of spelled(source)) {
       for (const match of text.matchAll(HOME_PATH)) {
-        if (!NEUTRAL.has(match[1].toLowerCase())) hold(wordOf(match[0]), 'identity', placeOf(source, text, match.index))
+        if (!NEUTRAL.has(match[1].toLowerCase())) hold(match[0], 'identity', placeOf(source, text, match.index))
       }
     }
   }
@@ -353,15 +372,15 @@ function checkFacts(cli, segments, sources, add, hold) {
   for (const fact of facts) {
     if (typeof fact !== 'string') continue
     const word = wordOf(fact)
-    if (word.toString().length >= MIN_FACT) words.set(word.toString('latin1'), word)
+    if (word.toString().length >= MIN_FACT) words.set(word.toString('latin1'), { word, fact })
   }
-  for (const word of words.values()) {
-    for (const source of sources) if (source.norm.includes(word)) hold(word, 'captured-facts', source.where)
+  for (const { word, fact } of words.values()) {
+    for (const source of sources) if (source.norm.includes(word)) hold(fact, 'captured-facts', source.where)
   }
 }
 
-/** §6.3: what `base` already tracks is public. One pass over its blobs takes their windows out of `table` and their words out of `held`:
- *  a word kept `exact` is looked for in the blob's own bytes, the rest in its normalized form. */
+/** §6.3: what `base` already tracks is public. One pass over its blobs takes their windows out of `table` and their words out of `held`.
+ *  A word is judged on a text blob's own bytes: normalized, a short name is in everything, and letters in a binary mean nothing. */
 function subtractBase(cwd, base, table, held) {
   const ids = git(cwd, 'ls-tree', '-r', '-z', base).toString().split('\0').filter((e) => e.split(' ')[1] === 'blob').map((e) => e.split(' ')[2].split('\t')[0])
   const r = spawnSync('git', ['cat-file', '--batch'], { cwd, input: ids.map((id) => `${id}\n`).join(''), maxBuffer: Infinity, stdio: ['pipe', 'pipe', 'ignore'] })
@@ -372,9 +391,9 @@ function subtractBase(cwd, base, table, held) {
     const blob = r.stdout.subarray(nl + 1, nl + 1 + size)
     at = nl + size + 2
     table.scan(blob, (slot) => table.drop(slot))
-    if (held.size === 0) continue
-    const text = normalized(blob)
-    for (const [key, entry] of held) if ((entry.exact ? blob : text).includes(entry.word)) held.delete(key)
+    if (held.size === 0 || blob.subarray(0, GIT_BINARY_PEEK).includes(0)) continue
+    const text = blob.toString()
+    for (const [key, entry] of held) if (entry.isIn(text)) held.delete(key)
   }
 }
 
@@ -451,9 +470,9 @@ async function main() {
   const found = new Map()
   const add = (rule, where, why = WHY[rule]) => found.set(`${rule}\0${where}\0${why}`, { rule, where, why })
   const held = new Map() // word → the hits that wait for §6.3: a word `base` already holds is public
-  const hold = (word, rule, where, { exact = false, why } = {}) => {
-    const key = `${exact}\0${word.toString('latin1')}`
-    if (!held.has(key)) held.set(key, { word, exact, hits: [] })
+  const hold = (text, rule, where, { exact = false, why } = {}) => {
+    const key = `${exact}\0${text}`
+    if (!held.has(key)) held.set(key, { isIn: exact ? asIs(text) : asWord(text), hits: [] })
     held.get(key).hits.push({ rule, where, why })
   }
   const out = { sources: [], commits: [], leaving: { files: [], commits: [], identity: [], branch: null } }

@@ -752,6 +752,28 @@ test('AN22: text and words the base already tracks pass; the same ones outside i
   assert.deepEqual(report.leaving, { files: [], commits: [], identity: [], branch: null }, 'a comment takes nothing from git')
 })
 
+test('AN22: a word is public as a whole word of a text in the base, not as letters that happen to touch', () => {
+  const judged = (base, user = 'zorgon7') => {
+    const w = workspace(base)
+    w.commit({ 'a.txt': 'clean\n' })
+    return of(w.check({ env: { USER: user }, body: `owned by ${user}` }).doc, 'identity').length
+  }
+  assert.equal(judged({ 'lib.js': 'const a="zorg-on7";\n' }), 1, 'across punctuation')
+  assert.equal(judged({ 'lib.js': 'zorgon7x and xzorgon7\n' }), 1, 'inside longer words')
+  assert.equal(judged({ 'lib.bin': Buffer.from('zorgon7 \0 binary\n') }), 1, 'in a binary blob')
+  assert.equal(judged({ 'lib.js': 'format\n' }, 'ma'), 1, 'a short name is in everything')
+  assert.equal(judged({ 'lib.js': 'by ZORGON7, once\n' }), 0, 'a whole word, in any case')
+
+  const fact = (base) => {
+    const w = workspace(base)
+    w.commit({ 'a.txt': 'clean\n' })
+    capture(w, SEGMENT, [{ ts: NOW_THEN, host: 'vault7.example.net' }])
+    return of(w.check({ body: 'see vault7.example.net' }).doc, 'captured-facts').length
+  }
+  assert.equal(fact({ 'a.md': 'avault7.example.network\n' }), 1)
+  assert.equal(fact({ 'a.md': 'see "vault7.example.net".\n' }), 0)
+})
+
 // ── AN23
 test('AN23: findings hold none of the values, not even one that sits in a path', () => {
   const w = workspace()
