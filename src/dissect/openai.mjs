@@ -143,10 +143,11 @@ function imageSource(url) {
   return head ? { type: 'base64', media_type: head[1], data: url.slice(comma + 1) } : { type: 'url', url };
 }
 // one content part → its block, on either OpenAI wire and in a tool's result alike. A part of no known kind, or an image with no
-// URL, is shown as the JSON it is, so nothing it carried is lost.
+// URL, is shown as the JSON it is, so nothing it carried is lost. A text part's annotations are its citations and stay with it, as an
+// Anthropic text block's `citations` do; most text parts carry an empty list, which says nothing.
 function partBlock(c) {
   if (!c || typeof c !== 'object') return { type: 'text', text: String(c ?? '') };
-  if (TEXT_PARTS.has(c.type) || (c.type == null && c.text != null)) return { type: 'text', text: c.text || '' };
+  if (TEXT_PARTS.has(c.type) || (c.type == null && c.text != null)) return { type: 'text', text: c.text || '', ...(c.annotations && c.annotations.length ? { annotations: c.annotations } : null) };
   if (c.type === 'refusal') return { type: 'text', text: c.refusal || '' };
   const url = IMAGE_PARTS.has(c.type) ? (c.image_url && c.image_url.url) || c.image_url : null;
   return typeof url === 'string' && url ? { type: 'image', source: imageSource(url) } : { type: 'text', text: JSON.stringify(c) };
