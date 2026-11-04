@@ -154,7 +154,7 @@ function writtenOf({ raw, quotes }) {
 // stdout into a file: `>`, `>>`, `1>`, `&>`. A descriptor target (`>&2`) is no file.
 const isWrite = ({ fd, op, w }) => op[0] === '&' || (op[0] === '>' && (!fd || fd === '1') && !(op === '>&' && /^(\d+|-)$/.test(w.raw)));
 
-export function parseBashReads(command, ctx = {}) {
+export function parseBashReads(command, { home = null } = {}) {
   if (!command || typeof command !== 'string') return [];
   const items = lex(command);
   const out = [];
@@ -165,20 +165,11 @@ export function parseBashReads(command, ctx = {}) {
   let lost = null; // the runtime code once a `cd` went somewhere unknown
   let steps = 0;
   let nesting = 0;
-  let stated;
-  const home = ctx.home ?? null;
-  const workdir = () => {
-    if (stated === undefined) stated = ctx.cwd || null; // a getter may scan text: read here, only for a relative path
-    return stated;
-  };
-
-  // a relative value on the in-command directory, else on the stated cwd
+  // a relative value on the in-command directory: known once that directory is absolute
   const against = (rel) => {
     if (lost) return { why: lost };
     const full = [dir, rel].filter(Boolean).join('/');
-    if (ROOTED.test(full)) return { v: full };
-    const base = workdir();
-    return base ? { v: [base, full].filter(Boolean).join('/') } : { why: 'cwd', rel: full };
+    return ROOTED.test(full) ? { v: full } : { why: 'cwd', rel: full };
   };
 
   // { v } when the command settles the word, { why } when the run does

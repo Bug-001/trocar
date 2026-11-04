@@ -71,36 +71,27 @@ test('~ and $HOME are one spelling: the home when known, ~/rest when not', () =>
     for (const cmd of HOME_SPELLINGS(d, b)) {
       for (const [ctx, want] of [
         [{ home: '/Users/u' }, `/Users/u/${d}/${b}`],
-        [{ home: '/home/u', cwd: '/elsewhere' }, `/home/u/${d}/${b}`],
+        [{ home: '/home/u' }, `/home/u/${d}/${b}`],
         [{}, `~/${d}/${b}`],
-        [{ cwd: '/elsewhere' }, `~/${d}/${b}`],
       ]) {
         assert.deepEqual(parseBashReads(cmd, ctx), [{ path: want, range: 'full file' }], cmd);
       }
     }
   }
-  assert.deepEqual(paths('cat ~other/a.txt', { home: '/Users/u', cwd: '/w' }), ['~other/a.txt']);
+  assert.deepEqual(paths('cat ~other/a.txt', { home: '/Users/u' }), ['~other/a.txt']);
   assert.deepEqual(paths('cat ~/a/b.txt', { home: 'C:\\Users\\u' }), ['C:\\Users\\u/a/b.txt']);
   assert.deepEqual(paths('cat ~/../v/b.txt', { home: '/Users/u' }), ['/Users/v/b.txt']);
 });
 
-test('a relative path joins the in-command directory, else the stated cwd, else stays with cwd', () => {
-  const cases = [['cat a/b.txt', 'a/b.txt'], ['cat ./b.txt', 'b.txt'], ['P=a/b.txt; cat $P', 'a/b.txt']];
-  for (const [cmd, tail] of cases) {
-    assert.deepEqual(paths(cmd, { cwd: '/w' }), [`/w/${tail}`], cmd);
-    assert.deepEqual(paths(`cd /c; ${cmd}`, { cwd: '/w' }), [`/c/${tail}`], cmd);
-    const [got] = parseBashReads(cmd);
-    assert.equal(got.runtime, 'cwd', cmd);
-    assert.equal(got.path, cmd.startsWith('P=') ? 'a/b.txt' : cmd.slice(4), cmd);
+test('a relative path stays as written with cwd, unless the command cds to an absolute directory', () => {
+  for (const [cmd, word, tail] of [['cat a/b.txt', 'a/b.txt', 'a/b.txt'], ['cat ./b.txt', './b.txt', 'b.txt'], ['P=a/b.txt; cat $P', 'a/b.txt', 'a/b.txt']]) {
+    assert.deepEqual(parseBashReads(cmd), [{ path: word, range: 'full file', runtime: 'cwd' }], cmd);
+    assert.deepEqual(parseBashReads(`cd /c; ${cmd}`), [{ path: `/c/${tail}`, range: 'full file' }], cmd);
   }
-  assert.deepEqual(paths('cd sub && cat ../b.txt', { cwd: '/w' }), ['/w/b.txt']);
-  assert.deepEqual(parseBashReads('cd sub && cat b.txt').map((r) => r.runtime), ['cwd']);
-  assert.deepEqual(paths('cat $PWD/b.txt', { cwd: '/w' }), ['/w/b.txt']);
-
-  let asked = 0;
-  const ctx = { get cwd() { asked += 1; return '/w'; } };
-  assert.deepEqual(paths('cat /a/b.txt; cat ~/c.txt; cd /d && cat e.txt', ctx), ['/a/b.txt', '~/c.txt', '/d/e.txt']);
-  assert.equal(asked, 0, 'a getter is read only when a relative path needs it');
+  assert.deepEqual(parseBashReads('cd sub && cat ../b.txt').map((r) => r.runtime), ['cwd']);
+  assert.deepEqual(parseBashReads('cd sub && cat b.txt').map((r) => [r.path, r.runtime]), [['sub/b.txt', 'cwd']]);
+  // a caller's stated directory is no input: the same answer with one offered
+  assert.deepEqual(parseBashReads('cat a/b.txt', { cwd: '/w' }).map((r) => [r.path, r.runtime]), [['a/b.txt', 'cwd']]);
 });
 
 // [the command, the word as it stands in the command with outer quotes off, the code]
@@ -139,7 +130,7 @@ const RUN_TIME = (r) => [
 test('a run-time form keeps its word byte for byte, with the expected code, whatever the context', () => {
   for (const r of ['cat', 'tail -n 3', 'head -3', "sed -n '1,2p'"]) {
     for (const [cmd, word, code] of RUN_TIME(r)) {
-      for (const ctx of [{}, { home: '/Users/u' }, { home: '/Users/u', cwd: '/w' }]) {
+      for (const ctx of [{}, { home: '/Users/u' }]) {
         const got = parseBashReads(cmd, ctx);
         assert.deepEqual(got.map((x) => [x.path, x.runtime]), [[word, code]], cmd);
         assert.ok(RUNTIME.has(got[0].runtime));
@@ -158,7 +149,7 @@ test('an unknown directory leaves absolute paths alone, and a known cd takes ove
 
 test('bounds: scope and order of the command decide, and what is not a read stays out', () => {
   // a subshell's cd and variables end at its close paren
-  assert.deepEqual(paths('(cd /a && cat x.txt); cat y.txt', { cwd: '/w' }), ['/a/x.txt', '/w/y.txt']);
+  assert.deepEqual(paths('(cd /a && cat x.txt); cat y.txt'), ['/a/x.txt', 'y.txt']);
   assert.deepEqual(paths('cd /b; (cd /a; (cd /c); cat x.txt); cat y.txt'), ['/a/x.txt', '/b/y.txt']);
   assert.deepEqual(parseBashReads('(P=/a); cat $P/x.txt').map((r) => r.runtime), ['earlier']);
   // a later reassignment wins, also for the same word read twice
