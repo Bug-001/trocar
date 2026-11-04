@@ -44,7 +44,17 @@ import { columns, dumpColumns, loadColumns, sync, viewOf, pageOf, deltaOf, limit
 import { titleOf } from '../titles.mjs';
 import { clearReread, endReread, setMtimes, filesAt, filesParts, filesReach, forget, hasHead, hasReread, headDoc, markReread, packsOf, pendingHead, readHead, tailsReach, tier0Doc, writeFiles, writeHead, memoBytes, CTX_V, PACK_MEMBERS } from '../ctx-files.mjs';
 
-export const params = Object.freeze(['id', 'since', 'before', 'limit', 'head']);
+export const about = Object.freeze({
+  summary: "One session's outline: its calls in step order, its lanes, events, member records and totals.",
+  params: Object.freeze({
+    id: 'The session: a session id, as the sessions query lists them. Required.',
+    since: 'The mark field of an earlier answer, passed back as it came (not a time): gives only what changed since that answer. Not with --before.',
+    before: 'A record id, a call of this session: gives the page of earlier rows. Not with --since.',
+    limit: 'The most rows on one page: a whole number from 1. Without it, the largest page there is.',
+    head: 'Takes no value. Gives what the first screen of the board needs, in one compact answer. Not with --since, --before or --limit.',
+  }),
+});
+export const params = Object.freeze(Object.keys(about.params));
 
 /** What a session read keeps in the heap per call (the reduction's columns and its lanes' shares, the projection's row and shared
  *  value index, the plan's entry, the kept mark's digest), until a reduction of THIS session measured it (HeapBound below).

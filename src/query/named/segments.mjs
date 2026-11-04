@@ -6,8 +6,15 @@
 // their own record refs and show up in `query classes`'s disk totals, not as segments here.
 import { allSegments, problemEntry } from '../index-build.mjs';
 import { parseTime } from './index.mjs';
+import { WINDOW } from './about.mjs';
 
-export const params = Object.freeze(['since', 'until']);
+export const about = Object.freeze({
+  summary: 'The segments of the raw capture: name, state, records, size before and after sealing, time range and sealing problems.',
+  params: Object.freeze({
+    ...WINDOW,
+  }),
+});
+export const params = Object.freeze(Object.keys(about.params));
 
 export async function run({ home, fs, now, params: p, errors, progress = null }) {
   const since = p.since == null ? null : parseTime(p.since, { name: 'since', now: now() });

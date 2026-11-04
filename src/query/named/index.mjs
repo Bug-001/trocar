@@ -1,6 +1,6 @@
 // src/query/named/index.mjs — the named queries (RFC 1.6 §4.1, 附录 C.5; D59).
 //
-// ONE table: every name, its parameters and its run function. `trocar query`, the board's
+// ONE table: every name, its description, its parameters and its run function. `trocar query`, the board's
 // `GET /api/<name>` and `--json` all come through runQuery, so there is one answer per name and no
 // second read path. Every document carries `schema` · `command` · `ok` · `errors` (C.5); what a
 // query could not read goes into `errors` and the document is still produced (D38).
@@ -17,6 +17,7 @@ import * as block from './block.mjs';
 import * as pricing from './pricing.mjs';
 import * as traffic from './traffic.mjs';
 import * as overview from './overview.mjs';
+import { LIMIT_DEFAULT, LIMIT_MAX } from './about.mjs';
 import { createHash } from 'node:crypto';
 import * as src from '../stamp.mjs';
 
@@ -26,21 +27,31 @@ export class QueryArgError extends Error { constructor(m) { super(m); this.name 
 // `times`: the parameters a name reads as times (stampOf's clock tick); `session --since` is a record id, not a time.
 // `rowFree`: the name's answer reads no row list.
 const TIMES = Object.freeze(['since', 'until']);
+// `--harness` here takes the agents' CLI names (it goes through resolveHarnesses), not a value of the answer's harness field.
+const CLI_HARNESS = 'The agents to report on: comma-separated names, such as claude-code,codex. Without it, every agent.';
+const STATUS_ABOUT = Object.freeze({
+  summary: 'The capture state of each agent: its state and why, certificate, route, connections and problems.',
+  params: Object.freeze({ harness: CLI_HARNESS }),
+});
+const DOCTOR_ABOUT = Object.freeze({
+  summary: 'What a check of this machine found, and the verdict.',
+  params: Object.freeze({ harness: CLI_HARNESS }),
+});
 export const QUERIES = Object.freeze({
   // `status` and `doctor` are the same documents the two commands print: the query IS that document
   // (src/cli/status.mjs statusDoc / doctor.mjs doctorDoc), so the two can never disagree.
-  status: { params: Object.freeze(['harness']), run: (c) => verdict('status', c), stamp: () => null, rowFree: true },
-  doctor: { params: Object.freeze(['harness']), run: (c) => verdict('doctor', c), stamp: () => null, rowFree: true },
-  sessions: { params: sessions.params, run: sessions.run, stored: sessions.stored, stamp: src.titles, times: TIMES }, // its titles come from the title table (4.4 §人类标题的来源)
-  session: { params: session.params, run: session.run, version: session.version, stamp: src.corpus },
-  lane: { params: lane.params, run: lane.run, version: lane.version, stamp: src.corpus },
-  calls: { params: calls.params, run: calls.run, stamp: src.corpus, times: TIMES },
-  traffic: { params: traffic.params, run: traffic.run, stamp: src.corpus, times: TIMES },
-  overview: { params: overview.params, run: overview.run, stamp: src.usage, times: TIMES },
-  block: { params: block.params, lists: block.lists, run: block.run, stamp: src.corpus, rowFree: true },
-  classes: { params: classes.params, run: classes.run, stamp: src.classes, clock: true },
-  segments: { params: segments.params, run: segments.run, stamp: src.corpus, times: TIMES },
-  pricing: { params: pricing.params, run: pricing.run, stamp: src.pricing, rowFree: true },
+  status: { about: STATUS_ABOUT, params: Object.freeze(Object.keys(STATUS_ABOUT.params)), run: (c) => verdict('status', c), stamp: () => null, rowFree: true },
+  doctor: { about: DOCTOR_ABOUT, params: Object.freeze(Object.keys(DOCTOR_ABOUT.params)), run: (c) => verdict('doctor', c), stamp: () => null, rowFree: true },
+  sessions: { about: sessions.about, params: sessions.params, run: sessions.run, stored: sessions.stored, stamp: src.titles, times: TIMES }, // its titles come from the title table (4.4 §人类标题的来源)
+  session: { about: session.about, params: session.params, run: session.run, version: session.version, stamp: src.corpus },
+  lane: { about: lane.about, params: lane.params, run: lane.run, version: lane.version, stamp: src.corpus },
+  calls: { about: calls.about, params: calls.params, run: calls.run, stamp: src.corpus, times: TIMES },
+  traffic: { about: traffic.about, params: traffic.params, run: traffic.run, stamp: src.corpus, times: TIMES },
+  overview: { about: overview.about, params: overview.params, run: overview.run, stamp: src.usage, times: TIMES },
+  block: { about: block.about, params: block.params, lists: block.lists, run: block.run, stamp: src.corpus, rowFree: true },
+  classes: { about: classes.about, params: classes.params, run: classes.run, stamp: src.classes, clock: true },
+  segments: { about: segments.about, params: segments.params, run: segments.run, stamp: src.corpus, times: TIMES },
+  pricing: { about: pricing.about, params: pricing.params, run: pricing.run, stamp: src.pricing, rowFree: true },
 });
 
 /**
@@ -59,7 +70,7 @@ async function verdict(name, { params, errors, userHome, env, platform, deps }) 
 }
 
 // ── parameters every list query shares (§4.1 参数) ────────────────────────────
-export const LIMIT_DEFAULT = 50, LIMIT_MAX = 500;
+export { LIMIT_DEFAULT, LIMIT_MAX };
 /** What `overview` may compute for its `usage` beyond the usage sidecars (3.5 §访问模式: bounded by a byte budget, never
  *  O(corpus)): stored bytes of the in-window model calls no sidecar covers yet, newest session first. Sized by wall time, not
  *  bytes: the facts are the session's extraction and reduction, which cost about 1.6x the old META fold per byte (3.5 依据). */
@@ -142,9 +153,14 @@ export async function versionOf(name, params = {}, ctx = {}) {
   return q.version({ ...ctx, home, fs, params });
 }
 
+/** The query called `name`. Throws QueryArgError when there is none. */
+export function queryNamed(name) {
+  if (!Object.hasOwn(QUERIES, name)) throw new QueryArgError(`trocar query: no query called ${JSON.stringify(name)} (names: ${Object.keys(QUERIES).join(', ')})`);
+  return QUERIES[name];
+}
+
 function checked(name, params) {
-  const q = Object.hasOwn(QUERIES, name) ? QUERIES[name] : null;
-  if (!q) throw new QueryArgError(`trocar query: no query called ${JSON.stringify(name)} (names: ${Object.keys(QUERIES).join(', ')})`);
+  const q = queryNamed(name);
   for (const k of Object.keys(params)) {
     if (!q.params.includes(k)) throw new QueryArgError(`trocar query ${name}: no parameter --${k} (its parameters: ${q.params.length ? q.params.map((p) => '--' + p).join(' ') : 'none'})`);
     // A parameter given more than once is a list; only the entry's `lists` take one (1.6 §4.1 参数).

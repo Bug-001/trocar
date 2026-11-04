@@ -1,6 +1,6 @@
 # trocar
 
-**See the exact bytes your agent sends the LLM — without touching your agent.**
+**See the exact bytes your agent sends the LLM — without changing its code or wrapping its SDK.**
 
 Other LLM-observability tools ask you to wrap your client or import an SDK, and then show you what
 *your code* thinks it sent. trocar sits on the wire instead: it captures the real HTTPS traffic,
@@ -125,7 +125,7 @@ last line is the `sudo` line to run. The code is under `~/.trocar/app/<version>`
 The same five commands on every OS, in this order: `trocar install` (once) → `trocar on` → `trocar off` →
 `trocar status` (any time) → `trocar uninstall`. `install` lists every file it will touch and writes them after you
 confirm; until it has run, `trocar on` refuses (`error.code` `cert-not-installed`). `on` starts capture, `status` shows state,
-`off` takes every trace of trocar off your agents' path, and the certificates stay until `trocar uninstall`. When a TLS failure with a host (a
+`off` stops routing and capture for your agents; the certificates, and the wrappers and plugins that carry them, stay until `trocar uninstall`. When a TLS failure with a host (a
 sign-in page that intercepts TLS, for instance) made trocar pass that host's traffic on unread, `trocar on <agent>` again
 makes trocar try decrypting it now; otherwise trocar tries again by itself later. Running
 `trocar install` from another copy of trocar restarts the collector on that copy's code: the agents being captured
@@ -353,14 +353,15 @@ calls to one host, newest first, and `--ref <segment>:<line>` opens one call. Do
 
 ## What it touches, and what lands on disk
 
-Everything trocar writes lives under `~/.trocar/`, and every record under `~/.trocar/raw/`. Nothing an
+Every record lives under `~/.trocar/raw/`, and trocar's own files under `~/.trocar/`. What it changes outside that
+folder (your agents' configs, your user trust store, an autostart entry) is in the table further down. Nothing an
 earlier build left — its home under the old name, the v0 `~/.atrace` — is read, moved or touched. If you still want
 what is in them, keep a copy yourself.
 
 `trocar on` arranges a local, observe-only tap **on your user account only**. It never changes your
 system proxy, never adds machine-wide trust, never needs root (Linux's one-time `setup-helper` is the
 only `sudo`, and it only sets capability bits on one root-owned file). What it changes, file by file,
-is in the table further down; `off` takes every entry back out.
+and what undoes each change, is in the table further down.
 
 `trocar doctor` answers four questions: am I capturing, is it correct, did credentials leak, is machine
 TLS intact (the CA is user-level only, with zero machine-wide trust).
@@ -419,8 +420,9 @@ agent group, loopback only, no TUN, never the system proxy, nothing written into
   the certificate goes into what the agent itself reads: Z-Code's `network.caCertFile` (a bundle of Node's roots, the
   CAs you added through `NODE_EXTRA_CA_CERTS`, `ZCODE_AGENT_CA_CERT` or the desktop CA setting, and trocar's), a wrapper in Kimi's install directory, DeepSeek `dsh`'s plugin, pi's extension, and Claude Code's settings
   only if you set `CLAUDE_CODE_CERT_STORE=bundled`. When you already point a setting at a certificate file of your own, trocar appends a
-  marked block to that file and leaves the setting alone. Nothing goes into your login environment, nothing needs
-  administrator rights, no launcher is added and your `PATH` is not changed. Each harness's carrier is in its
+  marked block to that file and leaves the setting alone. Nothing needs administrator rights and no launcher is added.
+  The one thing that reaches your login environment is the `PATH` item a copy from the install script adds (see
+  [Install](#install)); a copy from npm or git adds nothing there. Each harness's carrier is in its
   descriptor (`proxyMode` in `src/collector/harness/<harness>.mjs`), one entry per form.
 - `on` asks the daemon to open the doors, then writes only proxy entries: a proxy key in the agent's own config
   (Claude Code's `settings.json`, Codex's and Hermes's `.env`, Z-Code's CLI config, an OpenCode plugin, Kimi VS Code's
@@ -453,6 +455,7 @@ The cost of `all`, honestly: a child process of an agent that does not trust the
 | certificate carriers (`install`) | Linux: each agent's trust entry, written by `install` (Claude Code `env.NODE_EXTRA_CA_CERTS`, OpenCode / dsh plugins, pi's extension, Codex / Hermes `.env` blocks, Z-Code `network.caCertFile`, combined bundles `combined-<agent>.pem`) · macOS / Windows: the carriers above | `trocar uninstall` |
 | proxy entries (`on`) | macOS / Windows: the proxy keys and switch files above; Linux: none (the helper steers) | `trocar off` |
 | autostart unit (per user) | Linux: `~/.config/systemd/user/trocar-collector.service` · macOS: `~/Library/LaunchAgents/com.trocar.collector.plist` · Windows: the scheduled task `\trocar\collector`; each runs `trocar daemon` | registered and enabled by `trocar install` (it exits 1 when it cannot, e.g. with no systemd --user on Linux, and `on` then refuses); `on` and `off` never touch it (D61), `trocar uninstall` removes it |
+| `PATH` item (install script only) | one marked line at the end of your shell's start file; Windows: one element of your user `Path` | `trocar uninstall` |
 | install manifest | `~/.trocar/collector/install-manifest.json` — every file and key it changed, never a copy of your file | removed last by `trocar uninstall` |
 | backups of your files | `~/.trocar/backup/` (0700, files 0600): the file as it was before trocar changed it — API keys included | `off` leaves them; `uninstall` deletes them all |
 | the standalone undo | `~/.trocar/bin/trocar-off`, written by `install`; `trocar doctor` checks it is current | `trocar uninstall` |
@@ -463,7 +466,7 @@ make -C "$(npm root -g)/trocar-cli/src/collector/arch/linux" && sudo "$(command 
 trocar install                # once, per user: the certificates; lists every file it will change and asks (not in a terminal: add --yes)
 trocar on                     # refuses until install has run; starts the daemon (systemd --user · LaunchAgent · scheduled task); then restart your agents
 trocar status                 # each agent and why it is (not) captured, its proxy chain, the certificates, the recent failures
-trocar off                    # every trace of it is off your agents' path (off claude-code: only that one)
+trocar off                    # stops routing and capture (off claude-code: only that one)
 trocar board                  # opens the board in your browser; the captures appear there
 ```
 
@@ -624,7 +627,8 @@ Whether Desktop's own model calls come out decrypted verbatim is not claimed her
 
 ## Commands
 
-`trocar help` prints the same, in three sections; `trocar help <command>` says one command.
+`trocar help` prints the same, in three sections; `trocar help <command>` says one command, and
+`trocar query <name> --help` one query. `trocar help --json` gives all of it as one document.
 
 ```sh
 # common
@@ -636,13 +640,13 @@ trocar uninstall [--purge-data] [--yes] [--dry-run] [--json]
 trocar doctor [<harness>...] [--json]
 
 # data
-trocar query <name> [--<param> <value>...]   # the one way to read the records; the board is its HTTP shell (D59)
+trocar query <name> [--<param> <value>...] [--json]   # the one way to read the records; the board is its HTTP shell (D59)
 trocar classes [<class>] [--json]
 trocar classes set <class> full|log
 trocar classes add <class> <host-regex> [<path-regex>] [--harness <harness>]
 trocar classes rm <class> [<rule>]
 trocar classes reset
-trocar board                  # prints the board's address with your key and opens it; exit 1 when the board is not there
+trocar board [--json]         # prints the board's address with your key and opens it; exit 1 when the board is not there
 
 # maintenance
 trocar update [--yes] [--dry-run] [--json]   # the newest code, and the machine as it was (D67)
@@ -651,11 +655,11 @@ sudo trocar setup-helper [--remove] [--binary <path>]   # Linux, once per machin
 trocar daemon [--supervise]   # the daemon in the foreground; the autostart unit runs it (Windows's task with --supervise)
                               # another daemon already answering: exits 0, nothing to do. The control endpoint held by
                               # something silent: records `control-endpoint-held` and exits 1.
-trocar help [<command>]   # also --help · -h · --version · -v
+trocar help [<command>] [--json]   # also --help · -h · --version
 ```
 
 Exit codes: 0 done · 1 not done, or a problem was found · 2 a usage error (nothing was touched) · 3 `status` /
-`doctor` could not judge · 70 the daemon crashed. `--version` (or `-v`) prints the version.
+`doctor` could not judge · 70 the daemon crashed. `--version` prints the version.
 
 Design authority: [`spec/01-trocar-rfc/`](spec/01-trocar-rfc/) (entry `0.0-overview.md`). This README is
 the operator's quickstart, not the spec. `npm test` runs the test suite.
@@ -667,7 +671,14 @@ trocar is licensed under the [Functional Source License, version 1.1, with Apach
 it available to others in a commercial product or service that competes with it. Each released version becomes
 Apache-2.0 two years after its release. One part is licensed differently: the kernel-side eBPF program in
 `src/collector/arch/linux/bpf/` is GPL-2.0-only OR MIT, as its license string declares, because the Linux kernel lets
-only a program under a GPL-compatible license use the kernel helpers it needs. Every other file is FSL-1.1-ALv2.
+only a program under a GPL-compatible license use the kernel helpers it needs. The rest of trocar's own code is
+FSL-1.1-ALv2.
+
+This license does not cover what trocar does not own. The agents' names and icons in `src/off/harness-icons/` and
+`src/web/board/assets/harness/` belong to their owners and only identify those agents (see
+[SOURCES.md](src/off/harness-icons/SOURCES.md)); trocar is not affiliated with or endorsed by any of them. The packages
+bundled into `src/web/board/assets/` keep their own licenses, listed in
+[licenses.md](src/web/board/assets/licenses.md).
 
 Report a vulnerability privately as [SECURITY.md](SECURITY.md) says. How to contribute is in
 [CONTRIBUTING.md](CONTRIBUTING.md); what changed in each release is in [CHANGELOG.md](CHANGELOG.md).

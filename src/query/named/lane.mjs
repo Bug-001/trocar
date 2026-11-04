@@ -22,7 +22,19 @@ import nodeFs from 'node:fs';
 import { renderSpan, sealedOf, tailFile } from '../ctx-files.mjs';
 import { trocarHome } from '../../paths.mjs';
 
-export const params = Object.freeze(['id', 'lane', 'from', 'to', 'ledger', 'pack', 'tail']);
+export const about = Object.freeze({
+  summary: "One page of one lane of a session: its steps, the blocks they bring in, its resources, the paths it read and its events. With --pack or --tail, the session's steps as NDJSON lines instead.",
+  params: Object.freeze({
+    id: 'The session: a session id, as the sessions query lists them. Required.',
+    lane: 'The lane: a lane key from the session answer. Required unless --pack or --tail is given.',
+    from: "A record id: gives the steps after it. Without --from, --to or --ledger the page is the lane's last. Give at most one of the three.",
+    to: 'A record id: gives the page that ends just before it. Give at most one of --from, --to and --ledger.',
+    ledger: 'The next part of a list that did not fit: the ledger_next field of the previous answer. Gives no steps. Give at most one of --from, --to and --ledger.',
+    pack: 'One finished pack: its number, a dot, then main or rest, such as 0.main. Goes with --id only, and not with --tail.',
+    tail: 'The steps after the last finished pack: main or rest. Goes with --id only, and not with --pack.',
+  }),
+});
+export const params = Object.freeze(Object.keys(about.params));
 
 const one = (v) => (v == null || v === '' ? null : String(v));
 const pick = (o, keys) => { const out = {}; if (o) for (const k of keys) if (o[k] !== undefined) out[k] = o[k]; return out; };

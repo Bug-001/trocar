@@ -822,7 +822,7 @@ test('uninstall on Linux: an OS bundle that is there but unreadable ahead of a g
   assert.equal(certBlocks(fs.readFileSync(bundle, 'utf8')).some((c) => c.fp === certBlocks(later.certPem)[0].fp), false, 'not built from the later file')
 })
 
-// an off of an older build over a manifest a newer build wrote. The 10-12 main-Mac off half-failed (bootout EIO, then unknown-kind at the launcher):
+// an off of an older build over a manifest a newer build wrote. The 10-12 off half-failed (bootout EIO, then unknown-kind at the launcher):
 // a kind this build does not know refuses the WHOLE off before step 2 / 3 — exit 1, the receipt names the kind and says a newer trocar-off must undo it —
 // with no routing change, no daemon asked, no OS tool run (no bootout), no file of the agents' touched, state.json as it was.
 // D57 (4.11 ⑱): the Windows opt-in kinds (optin-*) are no longer known either; one in a v3 manifest is refused like any other unknown kind (V35).
