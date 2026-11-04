@@ -26,6 +26,7 @@ import { tagWord } from '../../../legacy/replay/blocks.mjs'
 import { TechDetails, type TechValue } from '../../ui/TechDetails'
 import { Svg } from '../../ui/Svg'
 import { Cell } from './Cell'
+import { Details, Impact } from './CallDetails'
 import { faithOf, windowItems, landingFor, turnsOf, turnOpen } from './window-model.mjs'
 import { useDeskVersion } from './useDesk'
 import type { DeskState, DeskView, Reveal } from './view'
@@ -184,6 +185,8 @@ function ItemView({ it, acts, hl, bv }: { it: Item, acts: Acts, hl: boolean, bv:
     case 'chline': return <Chline it={it} />
     case 'removed': return <Removed it={it} acts={acts} />
     case 'reply': return <Reply it={it} acts={acts} bv={bv} />
+    case 'impact': return <Impact it={it} />
+    case 'details': return <Details it={it} acts={acts} />
     case 'fid': return <Fid it={it} />
     case 'win': return <Win it={it} />
     case 'foldall': return <FoldAll acts={acts} />
@@ -210,6 +213,7 @@ function makeActs(s: DeskState, bump: () => void) {
     fail: (b: any) => (s.bodyFail && b.text_ref && s.bodyFail.get(b.text_ref)) || null,
     row(it: Item) { flipKey(it.key); if (!it.open) ask(it.b); bump() },
     reply(r: any) { flipKey(r.key); if (!r.open) ask(r.b); bump() },
+    details(key: string) { flipKey(key); bump() },
     turn(it: Item) { setFold(s.turnFold, it.anchor, !it.open); s.persistFold(); bump() },
     foldAll(open: boolean) { for (const t of turnsOf(s.curFlat).list) setFold(s.turnFold, turnAnchorKey(s.curFlat, t), open); s.persistFold(); bump() },
     removed() { if (s.navOpen.has('cwremoved')) s.navOpen.delete('cwremoved'); else s.navOpen.add('cwremoved'); bump() },

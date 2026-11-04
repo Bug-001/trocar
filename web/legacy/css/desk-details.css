@@ -1,1 +1,8 @@
 /* web/legacy/css/desk-details.css — Call details in the window (2.6 §A). Only under .desk.next. Tokens only. */
+.desk.next #ctxwin .cwimpact{margin:8px 0 0;padding:5px 9px;font-size:var(--fs-cap);line-height:1.5;color:var(--ink-2);}
+.desk.next #ctxwin .cwdetails{margin:8px 0 4px;border-bottom:0;}
+.desk.next #ctxwin .cwdetails > .disc-b{padding:0 0 4px;}
+.desk.next #ctxwin .cdgrp{margin:8px 0 4px;font-size:var(--fs-cap);font-weight:var(--fw-strong);color:var(--ink-2);}
+.desk.next #ctxwin .cdnote{margin:4px 0;padding:0 9px;font-size:var(--fs-cap);color:var(--ink-2);}
+.desk.next #ctxwin .cdline{display:flex;align-items:center;gap:10px;margin-bottom:4px;padding:4px 9px;font-size:var(--fs-cap);}
+.desk.next #ctxwin .cdval{margin-left:auto;min-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--ink-2);}

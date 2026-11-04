@@ -91,8 +91,9 @@ function longDesk(len = 160, split = 90, brk = 60) {
   return { flat, brk: brk + 2, desk: deskN([flat.slice(0, 3), flat], [{}, { cacheBreak: { cause: 'content-changed', idx: brk + 2, firstCall: false, refRid: 'R0-0' } }]) }
 }
 
-// 1.4 ①–⑨ by the item root's class; ⑥–⑧ stand in for ③④⑨
-const SLOT: Array<[string, number]> = [['cwfline', 1], ['cwwin', 2], ['cwsec', 3], ['cwfoldall', 3], ['cblk', 3], ['cwturn', 3], ['chline', 3], ['cwremoved', 3], ['cwunparsed', 6], ['cwnoreq', 7], ['cwbusy', 8], ['cwreply', 9]]
+// 1.4 ①–⑪ by the item root's class; ⑥–⑧ stand in for ③④⑨
+const SLOT: Array<[string, number]> = [['cwfline', 1], ['cwwin', 2], ['cwsec', 3], ['cwfoldall', 3], ['cblk', 3], ['cwturn', 3], ['chline', 3], ['cwremoved', 3], ['cwunparsed', 6], ['cwnoreq', 7], ['cwbusy', 8], ['cwreply', 9], ['cwimpact', 10], ['cwdetails', 11]]
+const drawnRoots = (win: HTMLElement) => [...win.querySelectorAll<HTMLElement>('.cwit')].flatMap((w) => [...w.firstElementChild!.classList])
 const slotOf = (el: Element) => SLOT.find(([c]) => el.classList.contains(c))?.[1]
 
 test('1.4 #8: the drawn items are the model\'s, in its order, their roots in whitelist order; a stand-in step has no section, line or reply', async () => {
@@ -116,6 +117,19 @@ test('1.4 #8: the drawn items are the model\'s, in its order, their roots in whi
     if (slots.some((x) => x! >= 6 && x! <= 8)) expect(win.querySelector('.cwsec, .chline, .cwreply')).toBeNull()
     cleanup()
   }
+})
+
+test('1.4 #8: the items after the reply run reply, impact, details; a no-request or not-held step has neither; an unparsed step has them after its stand-in', () => {
+  const detail = { respRefs: [], nonBlockKeys: [], extraMessages: [], wire: { observerEffect: [{ id: 'x', what: 'w' }] } }
+  const rows = [{}, { unparsed: true, errMsg: 'E' }, { rec: null }]
+  const types = (s: B, ...of: string[]) => [...drawnRoots(mount(s).win)].filter((c) => of.includes(c))
+  const d = deskN(rows.map(() => [sys()]), rows, { details: rows.map(() => detail) })
+  const tail = ['cwreply', 'cwunparsed', 'cwnoreq', 'cwimpact', 'cwdetails']
+  expect(types(stateOf(d, 0, { rawPanelGone: true }), ...tail)).toEqual(['cwreply', 'cwimpact', 'cwdetails'])
+  expect(types(stateOf(d, 1, { rawPanelGone: true }), ...tail)).toEqual(['cwunparsed', 'cwimpact', 'cwdetails'])
+  expect(types(stateOf(d, 2, { rawPanelGone: true }), ...tail)).toEqual(['cwnoreq'])
+  const frames = deskN([[sys()]], [{}], { held: false, details: [detail] })
+  expect(types(stateOf(frames, 0, { rawPanelGone: true }), ...tail)).toEqual([])
 })
 
 test('D75④: a row inserted before keeps every unchanged row\'s DOM node (an index-keyed copy of the list does not)', () => {
@@ -237,6 +251,25 @@ test('1.2 格的键 · 2.3 #19: v, Shift+V and c act only from inside a row; f, 
   seen.length = 0
   for (const k of pass) fireEvent.keyDown(tog, { key: k })
   expect(seen).toEqual(pass)
+})
+
+test('2.6 #17: an opened Call details row reads its bytes once into a cell, v flips that cell, and the open keys outlive the step', async () => {
+  const ref = 's/m#R::2-7', detail = { respRefs: [], nonBlockKeys: [{ key: 'metadata', chars: 5, ref }], extraMessages: [], wire: null }
+  const s = stateOf(deskN([[sys()], [sys()]], [{}, {}], { details: [detail, detail] }), 0, { rawPanelGone: true })
+  s.ctx.api.get.mockImplementation(async () => ({ ok: true, status: 200, data: { blocks: [{ ref, bytes: '{"a":1}', fidelity: { verbatim: true } }] } }))
+  const { win, paint } = mount(s)
+  expect(win.querySelector('.cwdetails .cblk')).toBeNull()
+  act(() => { fireEvent.click(win.querySelector<HTMLElement>('.cwdetails .disc-t')!) })
+  const row = () => win.querySelector<HTMLElement>('.cwdetails .cblk')!
+  await act(async () => { fireEvent.click(row().querySelector<HTMLElement>('.cbtog')!); await Promise.resolve() })
+  await vi.waitFor(() => expect(row().querySelector('.cell')).not.toBeNull())
+  expect(blockReads(s.ctx.api)).toBe(1)
+  const mode = () => row().querySelector<HTMLElement>('.cell')!.dataset.mode, m0 = mode()
+  act(() => { fireEvent.keyDown(row().querySelector<HTMLElement>('.cbtog')!, { key: 'v' }) })
+  expect(mode()).not.toBe(m0)
+  s.playhead = 1
+  paint()
+  expect(row().querySelector('.cell')).not.toBeNull()
 })
 
 test('2.3 #28: reveal into a folded turn opens it into the D12 memory; reveal of a row not drawn returns it drawn and open', () => {

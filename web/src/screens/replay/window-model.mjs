@@ -7,6 +7,7 @@ import { turnAnchorKey, turnIsOpen } from '../../../legacy/replay/fold.mjs'
 import { stepOf } from '../../../legacy/replay/model.mjs'
 import { stepRef } from '../../../legacy/replay/lanes.mjs'
 import { contentRefOf, contentRefKOf } from '../../../legacy/replay/stepbar.mjs'
+import { callDetailItems } from './call-details.mjs'
 
 // ── the proof rule (2.3): what a block's fidelity IS, and what it may claim ──────────────────────────────────────────
 const KNOWN_FF = new Set(['metadata', 'opaque', 'summarized', 'omitted', 'truncated'])
@@ -129,7 +130,8 @@ const MEMO = new WeakMap()
 const sigOf = (x) => (x instanceof Set ? [...x].join('\n') : x instanceof Map ? [...x].map(([k, v]) => k + '\t' + JSON.stringify(v)).join('\n') : null)
 
 /** The window of the playhead's step as keyed items, in 1.4's order ① fid · ② win · ③ sec / foldall / row / turn with ④ chline
- * and its removed list before row `cacheBreak.idx` · ⑨ reply; ⑥–⑧ (unparsed · noreq · frames) stand in for ③④⑨. The rows of
+ * and its removed list before row `cacheBreak.idx` · ⑨ reply · ⑩⑪ Call details (s.rawPanelGone only: the legacy desk draws no such kind);
+ * ⑥–⑧ (unparsed · noreq · frames) stand in for ③④⑨, and ⑩⑪ follow ⑥ once the lane is held. The rows of
  * an open turn follow its turn item; a folded turn has its head only. Pure but for the desk's scratch it sets: s.curFlat,
  * s.curKeys, s.curReply (when the reply has parts), s.curRemoved.
  * @returns {WindowItems} */
@@ -139,8 +141,8 @@ export function windowItems(s) {
   const { facts, tech } = callFacts(call) // ① — its fields are on the skeleton row, so it shows whether the lane is held or not
   const fid = facts.length ? [{ key: 'fid', type: 'fid', facts, tech }] : []
   if (!call.rec) return { state: 'noreq', items: [...fid, { key: 'noreq', type: 'noreq' }] }
-  if (call.unparsed) return { state: 'unparsed', items: [...fid, { key: 'unparsed', type: 'unparsed', errMsg: call.errMsg }] }
   const st = s.desk ? stepOf(s.desk, call.rid) : null
+  if (call.unparsed) return { state: 'unparsed', items: [...fid, { key: 'unparsed', type: 'unparsed', errMsg: call.errMsg }, ...detailsOf(s, call, st)] }
   if (!st || !st.held) return { state: 'frames', items: [...fid, { key: 'frames', type: 'frames', frames: framesOf(call) }] }
   const flat = st.flat
   const ref = contentRefOf(s) // the 内容对比步: the pinned step, else the 缓存对比步
@@ -155,6 +157,7 @@ export function windowItems(s) {
   if (memo) MEMO.set(flat, { key: memo, out })
   return scratch(s, out)
 }
+const detailsOf = (s, call, st) => (s.rawPanelGone && st && st.held ? callDetailItems(call, st, s) : [])
 function scratch(s, out) {
   s.curFlat = out.flat; s.curKeys = out.keys; s.curRemoved = out.removed
   if (out.reply) s.curReply = out.reply
@@ -208,6 +211,7 @@ function build(s, call, st, refFlat, fid) {
   })
   const reply = replyItem(s, st, call) // ⑨
   if (reply.item) items.push(reply.item)
+  items.push(...detailsOf(s, call, st)) // ⑩⑪
   return { flat, keys, removed, reply: reply.map, result: { state: 'items', items } }
 }
 // ⑨ this step's reply (2.3 §这一步的回复): one row per reply definition; default open = the rows of the first present kind
