@@ -87,7 +87,7 @@ test('the drawer: a row whose fetch failed asks again when it is reopened', asyn
     const body = fakeBody(), cls = new Set() // a drawer row starts folded
     const row = { dataset: { di: '0' }, classList: { contains: (c) => cls.has(c), toggle: (c) => (cls.has(c) ? cls.delete(c) : cls.add(c)) }, querySelector: (sel) => (sel === '.dbbody' ? body : null) }
     let onClick; const el = { addEventListener: (t, f) => { onClick = f }, removeEventListener: () => {} }
-    const off = wireDetail(el, { drawerFlat: [blockB], ctx: { api } })
+    const off = wireDetail(el, { drawerFlat: [blockB], ctx: { api }, cellRoots: () => [] })
     const head = { closest: (sel) => (sel === '.dblk' ? row : null) }
     const click = async () => { onClick({ target: { closest: (sel) => (sel === '.dbh' ? head : null) } }); await new Promise((r) => setImmediate(r)) }
     await click(); await click(); await click() // open, fold, reopen

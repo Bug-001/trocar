@@ -4,6 +4,7 @@
 // is guarded by the test of that name below.
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { revealIn } from '../../web/legacy/replay/replay.mjs'
 import { outlineHtml, outlineEntries, queryStepLabels, wireOutline, jumpToAnchor, jumpToBlockIndex } from '../../web/legacy/replay/outline.mjs'
 import { resourcesHtml } from '../../web/legacy/replay/resources.mjs'
 import { humanTurns, messageTurns } from '../../web/legacy/replay/analysis.mjs'
@@ -90,6 +91,7 @@ test('2.3 #28: a jump into a folded card or an undrawn group draws the row, open
     const s = stateOf(flat, { openBlocks: new Set(), turnFold: new Map(), turnLanded: new Set(), persistFold: () => persisted++, ctx: { api: null } })
     const win = winOf()
     s.root = { querySelector: (q) => (q === '#ctxwin' ? win : null) }
+    s.reveal = (t) => revealIn(s.root, s, t) // the legacy view's reveal
     renderContextWindow(win, s)
     assert.equal(rowAt(win._h, fi), null, `fi ${fi}: not drawn before the jump (the case this test is about)`)
     jumpToBlockIndex(s, fi)
@@ -193,6 +195,7 @@ test('an outline jump honours prefers-reduced-motion', () => {
       let arg = null
       const target = { scrollIntoView: (o) => { arg = o }, classList: { add() {}, remove() {} } }
       const s = { root: { querySelector: (sel) => (sel === '#x1' ? target : null) } }
+      s.reveal = (t) => revealIn(s.root, s, t) // the legacy view's reveal
       jumpToAnchor(s, 'x1')
       assert.equal(arg && arg.behavior, reduce ? 'auto' : 'smooth')
     }

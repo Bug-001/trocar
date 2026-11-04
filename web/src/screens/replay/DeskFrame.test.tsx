@@ -5,17 +5,18 @@
 import { afterEach, expect, test } from 'vitest'
 import { act, cleanup, render } from '@testing-library/react'
 import { DeskFrame } from './DeskFrame'
-import { reactView } from './view'
+import { reactView, type Els } from './view'
 
 afterEach(() => { cleanup(); document.body.replaceChildren() })
 
 function frame(state: object = {}) {
   const s = { project: 'p', id: 'i', view: { lo: 0, hi: 0 }, railsFolded: false, rpOpen: false, ...state }
-  const desk = reactView(s, () => {}, () => {})
+  const handed: Els[] = []
+  const desk = reactView(s, (E) => { handed.push(E) }, () => {})
   document.body.append(desk.root)
   render(<DeskFrame desk={desk} />, { container: desk.root })
   const $ = (sel: string) => desk.root.querySelector<HTMLElement>(sel)
-  return { s, desk, $ }
+  return { s, desk, $, handed }
 }
 
 test('1.2 #1: the left page holds the scope, the rails and the context window; the right page the resources and the raw panel; the outline holds no resource', () => {
@@ -27,9 +28,11 @@ test('1.2 #1: the left page holds the scope, the rails and the context window; t
   expect($('#ctxnav')!.querySelector('#resexp, [data-res], .res')).toBeNull()
 })
 
-test('1.4 #8: the middle column\'s children are exactly the step head and #ctxwin', () => {
-  const { $ } = frame()
+test('1.4 #8: the middle column\'s children are exactly the step head and #ctxwin, and the window is not handed to the controller', () => {
+  const { $, handed } = frame()
   expect([...$('#ctxwin')!.parentElement!.children].map((c) => c.id)).toEqual(['stepbar', 'ctxwin'])
+  expect(handed).toHaveLength(1)
+  expect(Object.keys(handed[0])).not.toContain('ctxwin')
 })
 
 test('decision 12: #leftpage has railopen iff the rails are not folded, kept across a paint of another area', () => {

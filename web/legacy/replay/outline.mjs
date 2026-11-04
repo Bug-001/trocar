@@ -6,7 +6,6 @@ import { esc, kf } from '../core/fmt.mjs'
 import { KIDS, serialize, keyed, patchInto } from '../core/units.mjs'
 import { humanTurns, hasChangeLine, foldWs, QUIET_CAUSES } from './analysis.mjs'
 import { stepOf, laneEvents } from './model.mjs'
-import { toggleCtxBlock, ensureRow } from './ctxwin.mjs'
 import { anchorJump, blockJump } from './jump.mjs'
 import { stepRef } from './lanes.mjs'
 import * as W from '../labels/replay.mjs'
@@ -115,23 +114,9 @@ const BUSY_ROW = '<div class="navsub busy" aria-busy="true"></div>'
 export function renderOutline(el, s) { patchInto(el, outlineUnits(s)) }
 
 // ── jumps ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
-// a jump scrolls instantly when the viewer asked the system for less motion (1.5)
-const motion = () => (typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth')
-const flash = (el, ms) => { el.classList.add('hl'); setTimeout(() => el.classList.remove('hl'), ms) }
-export function jumpToAnchor(s, id) {
-  let el = s.root.querySelector('#' + id)
-  // the 变化线 goes with its row: in a folded turn or a group not drawn yet, draw that row first (2.3 §读与画「长对话的窗口」)
-  const call = !el && id === 'cachebrk' && s.anchor && s.anchor.calls[s.playhead], win = call && s.root.querySelector('#ctxwin')
-  if (win && call.cacheBreak) { ensureRow(win, s, call.cacheBreak.idx); el = s.root.querySelector('#' + id) }
-  if (!el) return
-  el.scrollIntoView({ block: 'start', behavior: motion() }); flash(el, 1600)
-}
-export function jumpToBlockIndex(s, fi) {
-  const blk = ensureRow(s.root.querySelector('#ctxwin'), s, fi) // a folded turn opened, its group drawn
-  if (!blk) return
-  if (blk.classList.contains('collapsed')) toggleCtxBlock(s, blk)
-  blk.scrollIntoView({ block: 'center', behavior: motion() }); flash(blk, 2000)
-}
+// through the desk's view (s.reveal, replay.mjs): the element drawn, opened and brought into view, then flashed
+export const jumpToAnchor = (s, id) => { s.reveal({ anchor: id, flash: 1600 }) }
+export const jumpToBlockIndex = (s, fi) => { s.reveal({ fi, open: true, flash: 2000 }) }
 // open and highlight the block that carries a resource, in the step the playhead is on. Found in the step's list, not the DOM:
 // its row may sit in a folded turn or a group not drawn yet, which the jump draws first.
 export function jumpToResourceBlock(s, resKey) {
