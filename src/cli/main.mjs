@@ -15,7 +15,7 @@ import { commandNamed, printHelp } from './commands.mjs'
 import { parseArgs } from './args.mjs'
 import { wrap, WIDTH } from './text.mjs'
 import { printJson, errorDoc } from './json.mjs'
-import { EXIT, SCHEMA_VERSION } from './schema.mjs'
+import { COMMAND_KEYS, EXIT, SCHEMA_VERSION } from './schema.mjs'
 import { codeId, selfCommand } from '../version.mjs'
 import { recordUserPath } from '../off/user-path.mjs'
 import { COMMAND_INDENT } from '../off/receipt.mjs'
@@ -55,7 +55,10 @@ export async function runCli(argv, { io = makeIo({ stdin: process.stdin, stdout:
   // §1.2 不印凭据: a command that changes state prints no URL's userinfo (a door's password among them); one that reads data prints its bytes as they are
   const cio = mutates ? hidingIo(io) : io
   if (mutates && uid === 0) return refuse(cmd.name, 'usage', `trocar ${cmd.name}: run this as your own user, not as root.`)
-  if (args.error) return refuse(cmd.name, args.error.code, args.error.message, { usage: args.error.usage })
+  if (args.error) {
+    const verb = `${cmd.name} ${rest.find((a) => !a.startsWith('-'))}` // C.1: a `rules` or `held` document's command carries its verb, and the parser stopped before it could say which
+    return refuse(Object.hasOwn(COMMAND_KEYS, verb) ? verb : cmd.name, args.error.code, args.error.message, { usage: args.error.usage })
+  }
   const run = (deps.commands && deps.commands[cmd.name]) || cmd.run
   // 4.11 `present`: a command typed in a terminal records the user's PATH while trocar is installed (before the run, for what it reads; after it, for
   // what `install` just installed), so every asker resolves a form's command alike — but not one whose table row says `recordsPath: false` (`daemon`:

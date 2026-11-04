@@ -6,6 +6,7 @@ import { assertEnglish } from '../helpers/english.mjs'
 import { GROUPS, commandNamed, helpText } from '../../src/cli/commands.mjs'
 import { QUERY_NAMES } from '../../src/query/client.mjs'
 import { rulesManual } from '../../src/cli/rules-manual.mjs'
+import { HARNESS_IDS, NAME_ALIASES } from '../../src/off/harness-names.mjs'
 import { actionKind, checkFile, checkRule, normalizeRule, ACTION_POSITIONS, PLACES } from '../../src/rules/validate.mjs'
 
 const manual = rulesManual()
@@ -72,4 +73,8 @@ test('1.6 §5.4: help rules and rules --help print the manual, the overview does
   assert.ok(!overview.includes(manual.split('\n')[0]))
   const heads = overview.split('\n').filter((line) => GROUPS.includes(line))
   assert.deepEqual(heads, ['Capture', 'Data', 'Intervene', 'Maintenance'])
+})
+
+test('1.6 §4.4: every name a rule can give a harness is in the manual', () => {
+  for (const name of [...HARNESS_IDS, ...Object.keys(NAME_ALIASES)]) assert.match(manual, new RegExp(`\\b${name}\\b`), name)
 })
