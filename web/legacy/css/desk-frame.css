@@ -32,3 +32,22 @@
 .desk.next .sidefold[data-focus-visible]{outline:2px solid var(--accent);outline-offset:2px;}
 .desk.next .sidepanel{flex:1;min-height:0;display:flex;flex-direction:column;outline:none;}
 .desk.next .sidepane{flex:1;min-height:0;display:flex;flex-direction:column;}
+
+/* the narrow desk (1.2 §窄屏, the breakpoints' only table). The bottom row stays in the flow, so the Group's column ends above it; the panel
+   rises over the desk and moves nothing. The legacy #rightpage and #rpbar rules do not reach this desk: it has neither. */
+.desk.next{position:relative;--siderow:36px;}
+.desk.next .deskside.bottom{flex:none;height:auto;}
+.desk.next .deskside.bottom .sidehead{box-sizing:border-box;height:var(--siderow);padding:0 6px 0 10px;border-top:1px solid var(--rule);border-bottom:0;}
+.desk.next .deskside.bottom .sidetab{margin:0;border-bottom:0;border-top:2px solid transparent;}
+.desk.next .deskside.bottom .sidetab[data-selected]{border-top-color:var(--action);}
+.desk.next .deskside.bottom .sidefold svg{transform:none;}
+.desk.next .deskside.bottom .sidefold[aria-expanded=false] svg{transform:rotate(180deg);}
+.desk.next .deskside.bottom .sidepanel{position:absolute;left:0;right:0;bottom:var(--siderow);height:50%;z-index:8;background:var(--raised);border-top:1px solid var(--rule);}
+@media (max-width:899.98px){
+  .desk.next #saw,.desk.next #rails{--gut:0px;} /* px: scope.css adds it to a length in calc() */
+  .desk.next .tgut{display:none;}
+  .desk.next .tkrow > *,.desk.next .chaprow > *{grid-column:2;} /* the lanes keep their column with the name cell gone */
+}
+@media (max-width:599.98px){
+  .desk.next #saw .sawlegend,.desk.next #saw .sdetail,.desk.next .deskside.bottom{display:none;}
+}

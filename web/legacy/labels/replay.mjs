@@ -457,6 +457,8 @@ export const TAB_OVERVIEW = 'Overview'
 export const TAB_RESOURCES = 'Resources'
 export const COLLAPSE_SIDE = 'Collapse the sidebar'
 export const EXPAND_SIDE = 'Expand the sidebar'
+export const RAISE_PANEL = 'Raise the panel'
+export const LOWER_PANEL = 'Lower the panel'
 // 2.5: a chapter's name (k: compactions before it), a group, a row's step and calls
 export const partName = (k, inferred) => `${k === 0 ? 'Before the first compaction' : `Since compaction ${k}`}${inferred ? ' (inferred)' : ''}`
 export const GRP_AGENTS = 'Sub-agents'

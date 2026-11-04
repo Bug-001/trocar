@@ -1,13 +1,13 @@
 // web/src/screens/replay/DeskFrame.test.tsx — the new desk's frame (1.2 §回放台布局 #1, 1.4 #8): the main area holds its areas, the sidebar
 // sits beside it, the middle column holds only the step head and the context window. The desk is a React view over a plain state with
 // no lane: the legacy renderers the wrappers call draw nothing without one.
-import { afterEach, beforeAll, expect, test } from 'vitest'
-import { cleanup, render } from '@testing-library/react'
+import { afterEach, beforeAll, expect, test, vi } from 'vitest'
+import { act, cleanup, render } from '@testing-library/react'
 import { DeskFrame } from './DeskFrame'
 import { reactView, type Els } from './view'
 
 beforeAll(() => { globalThis.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver })
-afterEach(() => { cleanup(); document.body.replaceChildren() })
+afterEach(() => { cleanup(); document.body.replaceChildren(); vi.unstubAllGlobals() })
 
 function frame(state: object = {}) {
   const s = { project: 'p', id: 'i', view: { lo: 0, hi: 0 }, ...state }
@@ -32,4 +32,24 @@ test('1.4 #8: the middle column\'s children are exactly the step head and #ctxwi
   expect([...$('#ctxwin')!.parentElement!.children].map((c) => c.id)).toEqual(['stepbar', 'ctxwin'])
   expect(handed).toHaveLength(1)
   expect(Object.keys(handed[0])).not.toContain('ctxwin')
+})
+
+test('1.2 #8: crossing 1200 px swaps the sidebar for the bottom row and back; the scope and the window stay the same nodes', () => {
+  let narrow = false
+  const heard = new Set<() => void>()
+  vi.stubGlobal('matchMedia', () => ({ get matches() { return narrow }, addEventListener: (_: string, f: () => void) => heard.add(f), removeEventListener: (_: string, f: () => void) => heard.delete(f) }))
+  const set = (n: boolean) => act(() => { narrow = n; for (const f of heard) f() })
+  const { $ } = frame()
+  const saw = $('#saw'), win = $('#ctxwin')
+  expect($('[data-testid=desk-side]')).not.toBeNull()
+  expect($('.deskside.bottom')).toBeNull()
+  set(true)
+  expect($('[data-testid=desk-side]')).toBeNull()
+  expect($('.deskside.bottom')).not.toBeNull()
+  expect($('#saw')).toBe(saw)
+  expect($('#ctxwin')).toBe(win)
+  set(false)
+  expect($('[data-testid=desk-side]')).not.toBeNull()
+  expect($('.deskside.bottom')).toBeNull()
+  expect($('#ctxwin')).toBe(win)
 })
