@@ -151,6 +151,58 @@ test('AN16: an SVG whose new lines embed an image is refused as one; a plain SVG
   assert.deepEqual(named(doc, 'files'), sorted(embedding))
 })
 
+const DATA_URI = ['data', 'image/png;base64,AAAA'].join(':')
+const IMAGES = { 'a data URI': DATA_URI, 'a Markdown image': '![x](u)', 'a Markdown image by reference': '![x][r]', 'an img tag': '<img src=u>', 'an IMG tag': '<IMG SRC=u>' }
+
+test('AN16: a data URI of an image is refused in any committed text, in every spelling', () => {
+  const w = workspace()
+  const spelled = Object.fromEntries(Object.entries(spellings(DATA_URI)).filter(([how]) => how !== 'split').map(([how, text]) => [`spelled/${how}.txt`, `${text}\n`]))
+  const files = { 'a.md': `before ${DATA_URI} after\n`, 'a.html': `<a href="${DATA_URI}">x</a>\n`, ...spelled }
+  w.commit({ ...files, 'plain.md': 'dataImage and data:text/plain are not images\n' }, `subject\n\nHolds ${DATA_URI} in its body.\n`)
+  const { code, doc } = w.check()
+  assert.equal(code, 1)
+  assert.deepEqual(named(doc, 'files'), sorted(files))
+  assert.equal(of(doc, 'files').filter((f) => f.where.endsWith(':message')).length, 1)
+  shapely(doc)
+})
+
+for (const [name, text] of Object.entries(IMAGES)) {
+  test(`AN16: ${name} in a title, a body and a comment is refused, and the same text is public once the base holds it`, () => {
+    const w = workspace()
+    w.commit({ 'a.txt': 'nothing here\n' })
+    const wheres = (r) => { assert.equal(r.code, 1); return of(r.doc, 'files').map((f) => f.where) }
+    assert.deepEqual(wheres(w.check({ body: `see ${text} here` })), ['body'])
+    assert.deepEqual(wheres(w.check({ title: text })), ['title'])
+    assert.deepEqual(wheres(w.check({ body: text, args: ['--issue'] })), ['body'])
+
+    const known = workspace({ 'docs/old.md': `an old line with ${text} in it\n` })
+    known.commit({ 'docs/new.md': `${text}\n` })
+    const r = known.check({ title: text, body: `see ${text} here` })
+    assert.equal(r.code, 0, JSON.stringify(r.doc.findings))
+    assert.equal(known.check({ body: text, args: ['--issue'] }).code, 0)
+  })
+}
+
+test('AN16: a Markdown image or an img tag inside a commit passes', () => {
+  const w = workspace()
+  w.commit({ 'docs/a.md': '![x](icon.svg)\n<img src=icon.svg>\n' }, 'subject\n\nDraws ![x](icon.svg) and <img src=icon.svg>.\n')
+  const { code, doc } = w.check()
+  assert.equal(code, 0, JSON.stringify(doc.findings))
+})
+
+test('AN16: an image is public only as the same bytes: other words after the same start, or the same letters, do not pass', () => {
+  const w = workspace({ 'old.md': `![x](u) <img src=u> ${DATA_URI} xu dataimagepngbase64bbbb\n` })
+  w.commit({ 'a.txt': 'nothing here\n' })
+  for (const text of ['![x](elsewhere)', '<img src=elsewhere>', `${DATA_URI}BBBB`, '![X](U)', ['data', 'image/png;base64,BBBB'].join(':')]) {
+    const r = w.check({ body: text })
+    assert.equal(r.code, 1, text)
+    assert.deepEqual(of(r.doc, 'files').map((f) => f.where), ['body'], text)
+  }
+  const short = workspace({ 'old.md': 'xu\n' })
+  short.commit({ 'a.txt': 'nothing here\n' })
+  assert.equal(short.check({ body: '![x](u)' }).code, 1, 'two letters in the base do not make the image public')
+})
+
 test('AN16: src/web/board/** in a clone that is not the check\'s own: nothing of that clone is run, and it is refused', () => {
   const w = workspace({ 'package.json': JSON.stringify({ scripts: { 'test:build': 'node -e "require(\'fs\').writeFileSync(\'ran\',\'\')"' } }) })
   w.commit({ 'src/web/board/logo.png': 'x\n' })

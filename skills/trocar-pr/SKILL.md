@@ -62,7 +62,7 @@ node scripts/pr-check.mjs --before <start-time> --title <title-file> --body <bod
 
 It judges every commit on the branch (paths, added lines, messages, author and committer), the branch name, the title and the body. It refuses, with the place and the rule but never the value:
 
-- images, video, PDF, archives, capture formats and other binary files; an SVG that embeds data or an image; a change to the built board that a rebuild does not reproduce;
+- images, video, PDF, archives, capture formats and other binary files; an SVG that embeds data or an image; a `data:` URI of an image in any text, and a Markdown image or `<img` tag in a title, body or comment (inside a committed file those two are fine); a change to the built board that a rebuild does not reproduce;
 - credentials and key material;
 - your user name, host name, real name, home paths in any OS's spelling, and a commit email that is not a GitHub noreply address;
 - project paths, session ids, session titles, hosts, segment names and record ids from your captures;
