@@ -3,7 +3,7 @@
 //   grow   the history gets longer            mark   the harness's compaction request: the history as it was, and the wire's header
 //   ask    the person asks something new
 //   drop   a sharp drop: a summary and the last half   small  a small drop with Claude Code's preamble first (Anthropic only)
-//   dropask  the same drop, and the person asks something new behind it
+//   dropask  the same drop, and the person asks something new behind it   dropremind  the same, with a reminder-only message after the question
 //   junk   a body that does not parse (no observed context)
 //   failmark / failgrow / faildrop   the same call answered with a failure; a failed drop's history is not kept: the retry sends what it had
 // What the steps mean by 3.4 — `fateOf` — is the expectation, from the rule and never from the code under test.
@@ -11,7 +11,7 @@ export const SID = 'S'
 const T = Date.parse('2026-10-21T08:00:00Z')
 const stamp = (i) => new Date(T + i * 1000).toISOString()
 const text = (role, t) => ({ role, content: [{ type: 'text', text: t }] })
-const DROPS = new Set(['drop', 'dropask'])
+const DROPS = new Set(['drop', 'dropask', 'dropremind'])
 
 const WIRES = {
   anthropic: {
@@ -53,7 +53,8 @@ export function laneOf(wire, steps, { agent = null } = {}) {
     if (op === 'ask') history = [...history, text('assistant', `answer ${i}`), text('user', `Question ${i}`)]
     if (op === 'mark') headers = { ...headers, [w.compact]: '1' }
     if (DROPS.has(op)) history = [text('user', `Summary ${i} of the conversation so far`), ...history.slice(-2 * Math.floor(history.length / 4))]
-    if (op === 'dropask') history = [...history, text('assistant', `answer ${i}`), text('user', `Question ${i}`)]
+    if (op === 'dropask' || op === 'dropremind') history = [...history, text('assistant', `answer ${i}`), text('user', `Question ${i}`)]
+    if (op === 'dropremind') history = [...history, text('user', '<system-reminder>Keep the plan up to date.</system-reminder>')]
     if (op === 'small') history = [text('user', `This session is being continued from a previous conversation. Summary ${i}.`), ...history.slice(2, -1)]
     const body = op === 'junk' ? '{"model":"claude-opus-4-8","messages":[{"role"' : JSON.stringify(w.body(history))
     if (step === 'faildrop') history = before
@@ -84,7 +85,7 @@ export function fateOf(steps) {
 }
 
 /** askedOf(steps) → the steps where someone asks: the first, and each that says so. The history a compaction sends again asks nothing. */
-export const askedOf = (steps) => steps.flatMap((op, i) => (i === 0 || op === 'ask' || op === 'dropask' ? [i] : []))
+export const askedOf = (steps) => steps.flatMap((op, i) => (i === 0 || op === 'ask' || op === 'dropask' || op === 'dropremind' ? [i] : []))
 
 /** sent(record) → the messages its body holds, read from the bytes. */
 export const sent = (rec) => JSON.parse(rec.req_body).messages.length

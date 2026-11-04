@@ -329,7 +329,7 @@ const askKey = (e) => `${e.chars}:${e.preview}`
 // prompt the lane has had (`said`, its askKey). Words of the person inside the message the summary opens are the summary's (3.4).
 function askOfRewrite(msgs, said) {
   const texts = msgs.filter((m) => m.role === 'user' && userEventOf(m.blocks)), m = texts.at(-1)
-  return texts.length > 1 && m === msgs.at(-1) && askKey(userEventOf(m.blocks)) !== said ? [m] : []
+  return texts.length > 1 && msgs.lastIndexOf(m) > msgs.findLastIndex((x) => x.role !== 'user') && askKey(userEventOf(m.blocks)) !== said ? [m] : []
 }
 
 function textOfResult(b) {

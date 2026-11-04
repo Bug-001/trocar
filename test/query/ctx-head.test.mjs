@@ -108,7 +108,7 @@ const opensOf = (fate) => fate.flatMap((x, i) => (i > 0 && (fate[i - 1] === 'mar
 const answers = async (home, id) => { const [doc, full] = await Promise.all([query(home, 'session', { id, head: true }), query(home, 'session', { id })]); return JSON.parse(JSON.stringify({ doc, full })) }
 
 test('1.3 #18, 3.5 `chapters[].prompts` and 车道头 `parts`: over generated lanes, failed calls among them, chapters tile the steps, a marked compaction is its chapter\'s last step, an inferred one its first, `inferred` and `prompts` per chapter, and the axis lane\'s `parts` is the chapter count', async () => {
-  for (const wire of ['anthropic', 'flat']) for (const steps of [...lanes(wire).flatMap((body) => [body, [...body, 'mark']]), ...failLanes(), ...['grow', 'ask', 'mark', 'drop'].map((a) => ['grow', a, 'dropask', 'grow', 'ask'])]) {
+  for (const wire of ['anthropic', 'flat']) for (const steps of [...lanes(wire).flatMap((body) => [body, [...body, 'mark']]), ...failLanes(), ...['grow', 'ask', 'mark', 'drop'].flatMap((a) => ['dropask', 'dropremind'].map((d) => ['grow', a, d, 'grow', 'ask']))]) {
     const fate = fateOf(steps), why = steps.join(' ')
     const { doc, full } = await answers(homeWith(laneOf(wire, steps)), SID)
     const asked = wire === 'anthropic' ? askedOf(steps) : [] // 1.3: the chat wire has no prompt events
