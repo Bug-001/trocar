@@ -42,3 +42,20 @@
 .desk.next #saw .ctrace .none{stroke:var(--dimmer);stroke-dasharray:3 3;}
 .desk.next #saw .ctrace .unk{stroke:var(--purple);stroke-dasharray:1 2;}
 .desk.next #saw .cacherow .cbar{background:none;opacity:1;border:0;height:100%;}
+/* the whole-session strip (Strip.tsx): a block per part on the bare scope, the window's lit; the box and the mark stand a little past the
+   blocks; the grips hit outward, so a box a pixel wide keeps both; the label stays inside the strip at either end (--f = the pointer's place) */
+.desk.next #saw .ovstrip{border:0;border-radius:2px;background:none;overflow:visible;cursor:pointer;}
+.desk.next #saw .ovstrip.drag,.desk.next #saw .ovstrip.drag *{cursor:grabbing;}
+.desk.next #saw .ovstrip:focus-visible{outline:1.5px solid var(--scope-action);outline-offset:3px;}
+.desk.next #saw .ovpart{position:absolute;top:0;bottom:0;border-radius:2px;background:var(--scope-fill);}
+.desk.next #saw .ovpart.lit{background:var(--scope-fill-2);}
+.desk.next #saw .ovsvg{inset:0;width:100%;height:100%;pointer-events:none;}
+.desk.next #saw .ovsvg rect{fill:var(--dim);opacity:.5;}
+.desk.next #saw .ovsvg rect.err{fill:var(--bad-lamp);opacity:.6;}
+.desk.next #saw .ovbrush{top:-2px;bottom:-2px;min-width:2px;border:1.5px solid var(--scope-action);border-radius:3px;background:color-mix(in srgb,var(--scope-action) 20%,transparent);}
+.desk.next #saw .ovbrush .ovh{top:0;bottom:0;width:8px;background:none;}
+.desk.next #saw .ovbrush .ovh-l{left:-6px;}
+.desk.next #saw .ovbrush .ovh-r{right:-6px;}
+.desk.next #saw .ovpin{top:-2px;bottom:-2px;width:2px;margin-left:-1px;opacity:1;z-index:1;}
+.desk.next #saw .ovlabel{position:absolute;bottom:calc(100% + 6px);transform:translateX(calc(var(--f) * -100%));padding:2px 8px;border-radius:6px;background:var(--tag);color:var(--tag-ink);
+  font-size:var(--fs-chart);line-height:1.4;white-space:nowrap;pointer-events:none;z-index:6;}

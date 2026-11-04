@@ -1,42 +1,43 @@
 // web/src/screens/replay/Scope.tsx — the scope (1.3) in the new desk, drawn from models.mjs : scopeModel(s, K). Top to bottom (1.3 §排布):
 // the legend row · the chapter row (a header on the bars' grid, not a track: replay.css .chaprow) · the axis with the playhead's step tag · the problem lane · the main track · the cache trace · the
-// prompts lane · #rails (rails.mjs draws it; React renders it empty and never touches what is inside) · the whole-session overview and its
-// brush. Every track is a .tkrow (.tgut + .tlane) on one --gut; one --cursor line runs through the detail rows.
+// prompts lane · #rails (rails.mjs draws it; React renders it empty and never touches what is inside) · the whole-session strip (Strip.tsx).
+// Every track is a .tkrow (.tgut + .tlane) on one --gut; one --cursor line runs through the detail rows.
 // What changes on a step move is only what the playhead touches: bars, trace cells and problem marks are memoized and keyed by the row's
 // rid (D75④), so a move re-renders the two bars whose .cur flips and the cursor. The bars row's grid column reports the lane's capacity
-// (view.setCapacity); the rough page reports itself drawn (view.roughDrawn). The brush is a port of timeline.mjs : wireTimeline.
-import { memo, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type MouseEvent, type PointerEvent } from 'react'
+// (view.setCapacity); the rough page reports itself drawn (view.roughDrawn).
+import { memo, useLayoutEffect, useMemo, useRef, useSyncExternalStore, type CSSProperties, type MouseEvent } from 'react'
 import { SKELETON, laneCapacity } from '../../../legacy/replay/replay.mjs'
 import { BAR_KEYS, problemJump } from '../../../legacy/replay/timeline.mjs'
 import { L } from '../../../legacy/core/labels.mjs'
 import * as W from '../../../legacy/labels/replay.mjs'
-import { scopeModel } from './models.mjs'
+import { overviewModel, scopeModel } from './models.mjs'
+import { stepCount } from './strip.mjs'
+import { Strip } from './Strip.tsx' // with its extension: on a case-insensitive disk the bare name finds strip.mjs
 import { useDeskVersion } from './useDesk'
 import type { Area, DeskState, DeskView } from './view'
 
 type Bar = { rid?: string, i?: number, g: number, col: number, h: number, segs: Array<[string, number]> | null, hatched: boolean, fail: boolean, compact: boolean, cur: boolean, reviewed: boolean, tip: string }
 type Cell = { rid?: string, col: number, state: string, tip: string }
 type Item = { rid: string, i: number, col: number, kind: 'flag' | 'x' | 'compact', h: number | null, tip: string, aria: string }
-type Mark = { x: number, v: number, failed: boolean }
 
 // the tallest bar is --barh (scope.css: the main track yields to #ctxwin on a short viewport, 1.3 §排布); BAR_PX is its full height,
 // used only to drop a segment too thin to draw. FLAG_PX: the tallest flag (h ∝ √ ≈ extra cost)
 const BAR_PX = 80, FLAG_PX = 14
 const barH = (f: number) => `calc(var(--barh) * ${f.toFixed(4)})`
 const READS: Area[] = ['saw', 'overview', 'cur', 'problems', 'review', 'rough', 'empty'] // the areas the scope draws
-const BACKDROP: Area[] = ['overview', 'rough', 'empty'] // the paints that rebuild the overview's backdrop (the brush moves on any)
+const BACKDROP: Area[] = ['overview', 'rough', 'empty'] // the paints that read the strip's data anew; a step more does too
 // the controller's state is plain JS the renderers share: the view switch writes through here, not on a value React tracks
 const put = (s: DeskState, k: string, v: unknown) => { s[k] = v }
 const pct = (f: number) => `${(f * 100).toFixed(3)}%`
 
 // the row names the legacy skeleton carries and the labels do not (one source until the legacy desk retires)
-let words: { ctx: string, ovw: string, ovwTip: string, cacheTip: string } | null = null
+let words: { ctx: string, ovw: string, cacheTip: string } | null = null
 function skel() {
   if (words) return words
   const t = document.createElement('template')
   t.innerHTML = SKELETON
   const g = t.content.querySelector('.tkrow-ovw .tgut')!, c = t.content.querySelector('.cachelegend')!
-  return (words = { ctx: t.content.querySelector('#sawgut')!.textContent!, ovw: g.textContent!, ovwTip: g.getAttribute('title') || '', cacheTip: c.getAttribute('title') || '' })
+  return (words = { ctx: t.content.querySelector('#sawgut')!.textContent!, ovw: g.textContent!, cacheTip: c.getAttribute('title') || '' })
 }
 
 // the playhead's step tag on the axis: the step's own global number (1.2 §编号)
@@ -47,13 +48,14 @@ function tagOf(m: any) {
 
 function useScope(desk: DeskView) {
   const key = useSyncExternalStore(desk.subscribe, () => READS.map((a) => desk.version(a)).join('.'))
-  const ov = useSyncExternalStore(desk.subscribe, () => BACKDROP.map((a) => desk.version(a)).join('.'))
+  const ovKey = useSyncExternalStore(desk.subscribe, () => `${BACKDROP.map((a) => desk.version(a)).join('.')}.${stepCount(desk.s)}`)
   const K = desk.capacity()
   const m = useMemo(() => {
     void key // the paint the model is computed for
     const m: any = scopeModel(desk.s, K) // the model's JSDoc shapes; the fields read below are its own
     return m && { ...m, tag: tagOf(m) }
   }, [desk, key, K])
+  const ov = useMemo(() => { void ovKey; return overviewModel(desk.s) }, [desk, ovKey])
   return { m, ov }
 }
 
@@ -95,21 +97,11 @@ const ProblemMark = memo(function ProblemMark({ p }: { p: Item }) {
   return <button type="button" className="pflag" data-i={p.i} style={{ height: `${Math.max(4, Math.round((p.h ?? 0) * FLAG_PX))}px` }} title={p.tip} aria-label={p.aria} />
 }, (p, n) => p.p.i === n.p.i && p.p.kind === n.p.kind && p.p.h === n.p.h && p.p.tip === n.p.tip)
 
-// rebuilt only when `k` changes: on the paints in BACKDROP, never during a drag (k = '' then)
-const Backdrop = memo(function Backdrop({ ov }: { ov: { mode: string, marks: Mark[] }, k: string }) {
-  if (ov.mode === 'bars') return <div className="ovbars">{ov.marks.map((k, i) => <div key={i} className={`ovbar${k.failed ? ' err' : ''}`} style={{ height: `${Math.max(1, Math.round(k.v * 20))}px` }} />)}</div>
-  return <svg className="ovsvg" viewBox="0 0 100 22" preserveAspectRatio="none" aria-hidden="true">
-    <polyline points={ov.marks.map((k) => `${(k.x * 100).toFixed(2)},${(22 - Math.max(0.5, k.v * 20)).toFixed(2)}`).join(' ')} />
-  </svg>
-}, (p, n) => p.k === n.k)
-
 export function Scope({ desk }: { desk: DeskView }) {
   const el = useRef<HTMLDivElement>(null)
   const { m, ov } = useScope(desk)
   const s = desk.s
   const vRough = useDeskVersion(desk, 'rough')
-  const [drag, setDrag] = useState(false)
-  const g = useRef({ mode: '', x: 0, lo: 0, hi: 0, N: 1, c0: 0, c1: 1 })
 
   // the lane's capacity: measured on the bars row's grid column, on mount and on every resize
   useLayoutEffect(() => {
@@ -134,26 +126,6 @@ export function Scope({ desk }: { desk: DeskView }) {
   const keyAt = (col: number) => bars[col]?.rid ?? `s${bars[col]?.g}`
   const f = m && m.cursor.col != null ? (m.cursor.col + 0.5) / n : null
 
-  // the brush (1.3 §overview+detail), in global steps: drag the body = pan inside the window's part, drag a grip = zoom, double-click = all
-  const down = (e: PointerEvent<HTMLDivElement>) => {
-    const t = e.target as Element, mode = t.classList.contains('ovh-l') ? 'l' : t.classList.contains('ovh-r') ? 'r' : t.closest('.ovbrush') ? 'pan' : ''
-    if (!mode || !m) return
-    g.current = { mode, x: e.clientX, lo: m.view.lo, hi: m.view.hi, N: m.view.N, c0: m.chapters.a - 1, c1: m.chapters.b }
-    setDrag(true)
-    try { t.setPointerCapture(e.pointerId) } catch { /* no capture: the drag still works while the pointer stays over the strip */ }
-    e.stopPropagation(); e.preventDefault()
-  }
-  const move = (e: PointerEvent<HTMLDivElement>) => {
-    const { mode, x, lo, hi, N, c0, c1 } = g.current
-    if (!mode) return
-    const d = Math.round(((e.clientX - x) / Math.max(1, e.currentTarget.getBoundingClientRect().width)) * N)
-    if (mode === 'pan') { const dd = Math.max(c0 - lo, Math.min(c1 - hi, d)); s.brushTo(lo + dd, hi + dd) } // never across a chapter's edge
-    else if (mode === 'l') s.brushTo(Math.max(c0, Math.min(hi - 1, lo + d)), hi)
-    else s.brushTo(lo, Math.min(c1, Math.max(lo + 1, hi + d)))
-  }
-  const up = () => { if (!g.current.mode) return; g.current.mode = ''; setDrag(false) }
-  const all = (e: MouseEvent) => { if ((e.target as Element).closest('.ovbrush') && m) { e.preventDefault(); s.brushTo(m.chapters.a - 1, m.chapters.b) } }
-
   // a bar, a flag, a × or a compaction mark moves the playhead to its step; a bar without its row names the step (s.chapterGo)
   const pick = (e: MouseEvent) => {
     const t = (e.target as Element).closest('#sawrow [data-i], #sawrow [data-step], #probrow [data-i]') as HTMLElement | null
@@ -168,7 +140,7 @@ export function Scope({ desk }: { desk: DeskView }) {
   }
   const setView = (v: 'ctx' | 'cost') => { if (s.sawView !== v) { put(s, 'sawView', v); desk.saw() } }
 
-  const w = skel(), lg = m?.legend, ch = m?.chapters, pr = m?.problems, ovm = m?.overview, items = new Map<number, Item>((pr?.items || []).map((p: Item) => [p.col, p]))
+  const w = skel(), lg = m?.legend, ch = m?.chapters, pr = m?.problems, items = new Map<number, Item>((pr?.items || []).map((p: Item) => [p.col, p]))
   const ticks = new Map<number, any>((m?.asks?.ticks || []).map((t: any) => [t.col, t]))
   const paths = tracePaths(m ? m.trace : [])
   const gutName = cost ? W.VIEW_COST : !m || rough || s.anchor?.kind === 'main' ? w.ctx : W.laneWord(s.anchor.kind)
@@ -216,15 +188,6 @@ export function Scope({ desk }: { desk: DeskView }) {
       <div id="rails" />
       {f != null ? <div className="scur" aria-hidden="true" style={{ '--f': f } as CSSProperties} /> : null}
     </div>
-    <div className="tkrow tkrow-ovw"><div className="tgut" title={w.ovwTip}>{w.ovw}</div><div className="tlane">
-      <div className="ovstrip" id="ovstrip" onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up} onDoubleClick={all}>
-        {ovm ? <>
-          <Backdrop ov={ovm} k={drag ? '' : ov} />
-          {ovm.chapterTicks.map((c: { left: number }, i: number) => <span key={i} className="ovchap" aria-hidden="true" style={{ left: pct(c.left) }} />)}
-          {ovm.pin != null ? <div className="ovpin" id="ovpin" style={{ left: pct(ovm.pin) }} /> : null}
-          {ovm.brush ? <div className="ovbrush" id="ovbrush" tabIndex={0} aria-label={W.BRUSH_LABEL} title={W.BRUSH_LABEL} style={{ left: pct(ovm.brush.left), width: pct(ovm.brush.width) }}>
-            <span className="ovh ovh-l" /><span className="ovh ovh-r" /></div> : null}
-        </> : null}
-      </div></div></div>
+    <div className="tkrow tkrow-ovw"><div className="tgut" title={W.STRIP_TIP}>{w.ovw}</div><div className="tlane"><Strip desk={desk} m={m} ov={ov} /></div></div>
   </div>
 }

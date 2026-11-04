@@ -77,12 +77,12 @@ test('1.2 §键盘: Tab reaches the step bar and the brush, and each shows an ou
       await b.page.keyboard.press('Tab')
       const hit = await b.page.evaluate(() => {
         const a = document.activeElement
-        const where = a && a.closest('#stepbar') ? 'stepbar' : a && a.id === 'ovbrush' ? 'brush' : null
+        const where = a && a.closest('#stepbar') ? 'stepbar' : a && a.id === 'ovstrip' ? 'strip' : null
         return where && { where, outline: getComputedStyle(a).outlineStyle }
       })
       if (hit && !seen.has(hit.where)) { assert.notEqual(hit.outline, 'none', `${hit.where} has a focus ring`); seen.add(hit.where) }
     }
-    assert.deepEqual([...seen].sort(), ['brush', 'stepbar'])
+    assert.deepEqual([...seen].sort(), ['stepbar', 'strip'])
   } finally { await b.stop() }
 })
 

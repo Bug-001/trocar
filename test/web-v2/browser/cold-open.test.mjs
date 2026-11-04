@@ -28,7 +28,7 @@ function atMark() {
     const n = (sel) => document.querySelectorAll(sel).length, row = document.querySelector('#sawrow')
     const cols = row ? getComputedStyle(row.closest('.tkrow')).gridTemplateColumns.split(' ') : []
     const label = document.querySelector('#stepbar [data-n]'), cw = document.querySelector('#ctxwin')
-    window.__rough = { t: r.startTime, overview: n('#ovstrip .ovbar') + n('#ovstrip polyline'), brush: n('#ovstrip #ovbrush'), bars: n('#sawrow .bar'),
+    window.__rough = { t: r.startTime, overview: n('#ovstrip rect') + n('#ovstrip polyline'), mark: n('#ovstrip #ovpin'), bars: n('#sawrow .bar'),
       width: parseFloat(cols[cols.length - 1]) || 0, label: label ? Number(label.dataset.n) : null, rails: n('#rails .railname'),
       busy: n('#ctxwin [aria-busy="true"]'), ctxText: cw ? cw.textContent.trim() : null, ctxControls: n('#ctxwin button, #ctxwin a, #ctxwin input, #ctxwin [role="button"]') }
     return r
@@ -86,7 +86,7 @@ test('2.3 §大致页面: a cold open paints the rough page from the head within
       await c.page.goto(`${w.b.url}/#/replay/${encodeURIComponent(w.project)}/${encodeURIComponent(w.id)}`)
       const r = await rough(c.page)
       ms.push(r.t)
-      assert.ok(r.overview > 0 && r.brush === 1, 'the whole-session overview and its brush')
+      assert.ok(r.overview > 0 && r.mark === 1, 'the whole-session strip and its playhead mark')
       assert.equal(r.bars, Math.min(ch.s1 - ch.s0, barsThatFit(r.width)), 'the bars of the fitted window inside the playhead\'s chapter')
       assert.equal(r.label, head.steps, 'the step label names the playhead (following: the newest step)')
       assert.ok(r.rails > 0, 'the lane names')

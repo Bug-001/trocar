@@ -298,6 +298,11 @@ export const VIEW_CTX = 'Context size'
 export const VIEW_COST = 'Cost'
 export const COMP_LEGEND = 'colour = content type (estimated from content size)'
 export const COST_LEGEND = 'bar height = estimated cost of the step (usage × unit price) · hatched = cannot be computed'
+// a part by the compaction before it (k = its index); the strip's label says where the pointer is on it
+export const partWord = (k) => (k ? `Since compaction ${k}` : 'Before the first compaction')
+export const stripAt = (part, n) => (part ? `${part} · step ${n}` : `step ${n}`)
+export const STRIP_LABEL = 'Step being read, in the whole session (the arrow keys move it)'
+export const STRIP_TIP = 'The whole session: drag to show another stretch of steps, click to go to a step, drag the box\'s edges to zoom, double-click the box to widen it'
 export const showSteps = (a, b) => (a === b ? `Showing step ${a}` : `Showing steps ${a}–${b}`)
 export const noMainLane = (laneW) => `This session has no main thread; the timeline follows the ${laneW} calls`
 export const ONLY_MAIN = 'This session has only the main thread'

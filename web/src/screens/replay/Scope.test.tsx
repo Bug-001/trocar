@@ -1,4 +1,4 @@
-// web/src/screens/replay/Scope.test.tsx — the scope as React renders scopeModel() (1.3 #1 #8 #18 #19, 2.1 #5, D75④) over hand-made desks
+// web/src/screens/replay/Scope.test.tsx — the scope as React renders scopeModel() (1.3 #1 #18 #19, 2.1 #5, D75④) over hand-made desks
 // (test/web-v2/desk-world.mjs deskOf). Expected values are the model's own fields or the rows', never the component's output.
 import { afterEach, expect, test, vi } from 'vitest'
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
@@ -73,35 +73,17 @@ test('1.3 #19: the legend is the first row; #rails comes after the prompts row a
   }
 })
 
-test('1.3 #8 gestures: dragging the brush body pans, a grip zooms, a double-click shows all', () => {
-  const span = { lo: 2, hi: 5 }, { s, $ } = world({ at: 3, span }), N = ROWS.length, W = 800
-  const strip = $('#ovstrip')!
-  strip.getBoundingClientRect = () => ({ width: W, left: 0, right: W, top: 0, bottom: 20, height: 20, x: 0, y: 0, toJSON() {} }) as DOMRect
-  const drag = (sel: string, steps: number) => {
-    fireEvent.pointerDown($(sel)!, { clientX: 100, pointerId: 1 })
-    fireEvent.pointerMove(strip, { clientX: 100 + (steps * W) / N, pointerId: 1 })
-    fireEvent.pointerUp(strip, { pointerId: 1 })
-  }
-  drag('#ovbrush', 1); expect(s.brushTo).toHaveBeenLastCalledWith(span.lo + 1, span.hi + 1)
-  drag('.ovh-l', -1); expect(s.brushTo).toHaveBeenLastCalledWith(span.lo - 1, span.hi)
-  drag('.ovh-r', 2); expect(s.brushTo).toHaveBeenLastCalledWith(span.lo, span.hi + 2)
-  fireEvent.doubleClick($('#ovbrush')!); expect(s.brushTo).toHaveBeenLastCalledWith(0, N)
-})
-
-test('1.3 #18 render: label k / n, a–b and inferred; ‹ › disabled at the ends; one overview tick per chapter start', () => {
+test('1.3 #18 render: label k / n, a–b and inferred; ‹ › disabled at the ends', () => {
   const N = ROWS.length, starts = [0, 3, 6]
   for (const at of [0, 4, 7]) {
     const desk = deskOf([{ kind: 'main', rows: ROWS }], { events: EVENTS })
     desk.head = { tier: 1, axis: 'R0-0', steps: N, peak: 1000, bucket: 1, chapters: starts.map((s0, k) => ({ k, s0, s1: starts[k + 1] ?? N, ts0: null, inferred: s0 === 6 })) }
-    const { $, $$, model } = mount(stateOf(desk, { at }))
+    const { $, model } = mount(stateOf(desk, { at }))
     const c = model().chapters, lab = $('#chapnav .chaplabel')!
     expect([lab.dataset.part, lab.dataset.of, lab.dataset.s0, lab.dataset.s1, lab.dataset.inferred]).toEqual([c.k, c.n, c.a - 1, c.b, c.inferred].map(String))
     expect(lab.textContent).toBe(c.label)
     expect(($('#chapPrev') as HTMLButtonElement).disabled).toBe(c.prev == null)
     expect(($('#chapNext') as HTMLButtonElement).disabled).toBe(c.next == null)
-    const ticks = model().overview.chapterTicks
-    expect($$('#ovstrip .ovchap')).toHaveLength(c.n)
-    $$('#ovstrip .ovchap').forEach((t, j) => expect(parseFloat(t.style.left)).toBeCloseTo(ticks[j].left * 100, 2))
     cleanup(); document.body.replaceChildren()
   }
 })

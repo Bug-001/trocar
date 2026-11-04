@@ -2,7 +2,7 @@
 // parts' spans and the step <-> x maps out, framework-free. Blocks when every chapter can show one; otherwise ticks, x linear in steps.
 // The bars' one window lives here too (1.3 acceptance 23): s.span in global steps, in any part, rows held or not; s.view is its image in
 // the anchor lane, which only the rails read.
-import { chapterAt, placeView } from '../../../legacy/replay/timeline.mjs'
+import { chapterAt, fitWindow, placeView } from '../../../legacy/replay/timeline.mjs'
 import { ridAt } from '../../../legacy/replay/model.mjs'
 
 export const PART_MIN = 3, PART_GAP = 1, PART_HIT = 8
@@ -95,6 +95,13 @@ export function placeSpan(prev, g, parts, K, prevEnd) {
   const c = parts[chapterAt(parts, g)]
   const from = !prev ? { lo: 0, hi: 0 } : prev.hi === prevEnd ? { lo: prev.lo, hi: Math.max(prev.hi, c.s1) } : prev
   return placeView(from, g, c.s0, c.s1, K)
+}
+// the window a drag leaves with its centre at step g of part `c`: the same width inside the part it is in; in another part that part's
+// window, at most K bars around g (1.3 §概览条)
+export function panSpan(prev, c, g, K) {
+  if (prev.lo < c.s0 || prev.hi > c.s1) return fitWindow({ lo: c.s0, hi: c.s1, K, playhead: g })
+  const w = prev.hi - prev.lo, lo = Math.max(c.s0, Math.min(c.s1 - w, Math.round(g - w / 2)))
+  return { lo, hi: lo + w }
 }
 // the span in the anchor lane's local indexes; `none` while a step of it is not held or the rows are not contiguous there
 export function anchorSpan(s, { lo, hi }) {

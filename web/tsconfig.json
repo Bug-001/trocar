@@ -7,6 +7,7 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "jsx": "react-jsx",
+    "allowImportingTsExtensions": true,
     "allowJs": true,
     "checkJs": false,
     "skipLibCheck": true,
