@@ -4,13 +4,15 @@
 // bottom. Shots: the replay, the bottom sheet open at 1024, the cost view. Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard, shoot, layoutFaults } from './harness.mjs'
+import { probe, withBoard, shoot, layoutFaults, DESK_NEXT } from './harness.mjs'
 import { typeFaults } from './type-inventory.mjs'
 import { CACHE_POPOVER_LABEL } from '../../../web/legacy/labels/replay.mjs'
 import { CT_ORDER } from '../../../web/legacy/replay/analysis.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
+const legacyOnly = skip || (DESK_NEXT ? "the legacy desk's left panel (2.5)" : false)
+const nextOnly = skip || (DESK_NEXT ? false : "the new desk's narrow frame (1.2 §窄屏)")
 const BYTES = 5e6
 
 // open session row `r` and wait for its step bar and window
@@ -66,7 +68,7 @@ const layout = (page) => page.evaluate(() => {
   return {
     clipped, untitled,
     ctxwin: h('#ctxwin'),
-    avail: innerHeight - h('#deskhead') - h('#rpbar'), // the head + its fidelity row; the bottom row only where it is drawn
+    avail: innerHeight - h('#deskhead') - h('#rpbar') - h('.deskside.bottom'), // the head + its fidelity row; the bottom row only where it is drawn
     hscroll: document.documentElement.scrollWidth > innerWidth || document.body.scrollWidth > innerWidth,
     rawGap: raw && raw.getClientRects().length && rp.getClientRects().length ? rp.getBoundingClientRect().bottom - raw.getBoundingClientRect().bottom : null,
   }
@@ -103,7 +105,7 @@ for (const width of [1440, 1280, 1024, 800]) {
           await page.keyboard.press('Escape')
           assert.deepEqual(type, [], 'replay: type')
         }
-        if (width < 1200) { // the right page is the bottom row here: open it
+        if (width < 1200 && !DESK_NEXT) { // the legacy desk's right page is the bottom row here: open it
           await b.page.click('#rpbar')
           await b.page.waitForSelector('#rightpage.open #rawpanel .rphd')
           const S = await layout(b.page)
@@ -225,6 +227,7 @@ test('Files read: a long path and a long life sentence are never cut — the lif
       j.resources = [...(j.resources || []), ...Array.from({ length: 6 }, (_, i) => ({ kind: 'file', label: `/private/tmp/a/rather/long/working/directory/for/the/project/src/web/module-${i}/server-side-file-${i}.mjs`, segments: [{ enter: rids[0], evict: rids[rids.length - 2] }], loads: [] }))]
     })
     await openBusiest(b)
+    if (DESK_NEXT) await b.page.locator('.deskside [role=tab]').nth(1).click() // the list is the sidebar's Resources tab (1.2 §回放台布局)
     await b.page.waitForSelector('.navsub.dead .navlife', { timeout: 15000 })
     const F = await layoutFaults(b.page)
     assert.deepEqual({ overlap: F.overlap, cut: F.cut, untitled: F.untitled }, { overlap: [], cut: [], untitled: [] })
@@ -235,7 +238,7 @@ test('Files read: a long path and a long life sentence are never cut — the lif
 
 // 2.4 · 1.5: the System prompt row of a block that changes every call (Claude Code's billing header) carries a pill longer than the
 // left panel is wide; it wraps inside its row and is never drawn past the panel's edge. The real answers, with the system blocks so marked.
-test('System prompt: the "changes every call" pill stays inside the left panel', { skip, timeout: 120_000 }, async () => {
+test('System prompt: the "changes every call" pill stays inside the left panel', { skip: legacyOnly, timeout: 120_000 }, async () => {
   const b = await withBoard({ bytes: BYTES, width: 1440, chromium: gate.chromium })
   try {
     // every pack and tail file marks the system blocks its steps' add ops bring in volatile (3.5 §会话读: the position `attrs` of add
@@ -289,6 +292,75 @@ test('a session whose first read failed: one sentence and Retry; the reason only
     const before = reads
     await Promise.all([b.page.waitForResponse((r) => new URL(r.url()).pathname === '/api/d/head'), b.page.click('#ctxwin [data-retry]')])
     assert.ok(reads > before, 'Retry reads the session\'s head again')
+    assert.deepEqual(b.errors, [])
+  } finally { await b.stop() }
+})
+
+// 1.2 #8 §窄屏 on one open desk, resized in place: at each width the sidebar or the bottom row is there, what the narrower widths take
+// away is gone, #ctxwin holds half the available height, and nothing scrolls sideways. A tab raises the panel, Escape lowers it, and
+// crossing 1200 px and back leaves the side boundary's stored layout as the reader left it.
+test('1.2 #8: the narrow table holds at every width, the bottom panel rises and falls, and the side boundary survives the crossing', { skip: nextOnly, timeout: 120_000 }, async () => {
+  const b = await withBoard({ bytes: BYTES, width: 1440, height: 900, chromium: gate.chromium })
+  const { page } = b
+  const resize = async (width, height) => {
+    await page.setViewportSize({ width, height })
+    await page.evaluate(() => new Promise((ok) => { // the scope refits through ResizeObservers: settled = ten frames with the window's height unchanged
+      let was = -1, same = 0
+      const tick = () => {
+        const h = document.querySelector('#ctxwin').getBoundingClientRect().height
+        same = h === was ? same + 1 : 0; was = h
+        if (same < 10) requestAnimationFrame(tick); else ok()
+      }
+      tick()
+    }))
+  }
+  const facts = () => page.evaluate(() => {
+    const shown = (s) => [...document.querySelectorAll(s)].some((e) => e.getClientRects().length > 0)
+    const el = document.documentElement
+    return { sideways: el.scrollWidth - el.clientWidth, side: shown('[data-testid=desk-side]'), row: shown('.deskside.bottom'), panel: shown('.deskside.bottom .sidepanel'),
+      gut: shown('#saw .tgut, #rails .tgut'), detail: shown('#saw .sdetail'), legend: shown('#saw .sawlegend'), whole: shown('#saw .tkrow-ovw') }
+  })
+  const current = () => page.evaluate(() => { const a = document.activeElement; return a.getAttribute('role') === 'tab' && a.getAttribute('aria-selected') === 'true' })
+  const tabs = page.locator('.deskside.bottom [role=tab]')
+  try {
+    await openBusiest(b)
+    for (const [width, height] of [[1440, 900], [1280, 900], [1024, 900], [800, 900], [500, 900], [1280, 800]]) {
+      await resize(width, height)
+      const at = `${width} × ${height}`, L = await layout(page), F = await facts()
+      assert.ok(L.ctxwin >= 0.5 * L.avail, `${at}: #ctxwin ${L.ctxwin}px < half of the available ${L.avail}px`)
+      assert.ok(F.sideways <= 0, `${at}: ${F.sideways}px sideways`)
+      assert.equal(F.side, width >= 1200, `${at}: the sidebar`)
+      assert.equal(F.row, width < 1200 && width >= 600, `${at}: the bottom row`)
+      assert.equal(F.gut, width >= 900, `${at}: the lane names`)
+      assert.equal(F.detail, width >= 600, `${at}: the detail rows`)
+      assert.equal(F.legend, width >= 600, `${at}: the legend`)
+      assert.equal(F.whole, true, `${at}: the whole-session row`)
+      await shoot(page, 'replay-narrow', { width, theme: 'light' })
+      if (!F.row) continue
+      await tabs.nth(1).click()
+      assert.equal((await facts()).panel, true, `${at}: a tab raises its panel`)
+      assert.equal(await tabs.nth(1).getAttribute('aria-selected'), 'true', `${at}: and selects itself`)
+      const half = await page.evaluate(() => document.querySelector('.deskside.bottom .sidepanel').offsetHeight / document.querySelector('.desk.next').offsetHeight)
+      assert.ok(Math.abs(half - 0.5) < 0.01, `${at}: the panel is ${half} of the desk`)
+      assert.ok((await facts()).sideways <= 0, `${at}: the raised panel scrolls sideways`)
+      await shoot(page, 'replay-sheet', { width, theme: 'light' })
+      await tabs.nth(0).click()
+      assert.equal((await facts()).panel, true, `${at}: another tab keeps the panel up`)
+      await tabs.nth(0).click()
+      assert.equal((await facts()).panel, false, `${at}: the current tab lowers it`)
+      await tabs.nth(1).click()
+      await page.keyboard.press('Escape')
+      assert.equal((await facts()).panel, false, `${at}: Escape lowers it`)
+      assert.ok(await current(), `${at}: the focus is back on the current tab`)
+    }
+    await resize(1440, 900)
+    await page.locator('.deskpanes > [data-separator]').focus()
+    await page.keyboard.press('ArrowLeft')
+    const kept = await page.evaluate(() => [localStorage.getItem('trocar.v2.split.side'), document.querySelector('#desk-side').getBoundingClientRect().width])
+    assert.ok(kept[0], 'the keyboard move stored the layout')
+    await resize(1000, 900)
+    await resize(1440, 900)
+    assert.deepEqual(await page.evaluate(() => [localStorage.getItem('trocar.v2.split.side'), document.querySelector('#desk-side').getBoundingClientRect().width]), kept)
     assert.deepEqual(b.errors, [])
   } finally { await b.stop() }
 })
