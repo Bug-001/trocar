@@ -62,18 +62,22 @@ const GITATTRIBUTES = /(?:^|\/)\.gitattributes$/
 const LONG_RUN = /[A-Za-z0-9+=_-]{40,}/g // no slash: a URL or file path is not one run, and base64 holds runs this long between its slashes
 const isMixed = (run) => /[a-z]/.test(run) && /[A-Z]/.test(run) && /[0-9]/.test(run)
 const SEP = String.raw`(?:\\+/?|/)` // a slash, a run of backslashes, an escaped slash
-const HOME_PATH = new RegExp(`${SEP}(?:users|home)${SEP}([^\\s\\\\/"'$<>{}*]+)${SEP}`, 'gi')
+const HOME_NAME = String.raw`[^\s\\/"'$<>{}*]+`
+// only a separator closes a name with a space in it: anywhere else the space is the sentence going on
+const HOME_PATH = new RegExp(`${SEP}(?:users|home)${SEP}(${HOME_NAME}(?: ${HOME_NAME})?(?=${SEP})|${HOME_NAME}(?=$|[\\s"']))`, 'gi')
 const GAP = '[\\t\\r\\n ]*' // a URL parser drops tabs and newlines, and a data: URI survives the rest
+const spaced = (word) => [...word].join(GAP)
 // from the scheme to the line's end, so that only the same image counts as already public: < and spaces are part of an SVG's URI
-const DATA_IMAGE = new RegExp(`${[...'data:image'].join(GAP)}${GAP}${SEP}[^\\r\\n]*`, 'gi')
+const DATA_IMAGE = new RegExp(`${spaced('data:')}${GAP}(?:${spaced('image')}${GAP}${SEP}|;${GAP}[^,\\r\\n]*?${spaced('base64')})[^\\r\\n]*`, 'gi')
 const HAS_PAYLOAD = /,[ \t]*\S/ // past the comma: without it this is only how a URI starts, and that is public everywhere
 const ENTITY = /&(?:#(\d+)|#x([0-9a-f]+)|(colon|sol|tab|newline));?/gi
 const NAMED = { colon: ':', sol: '/', tab: '\t', newline: '\n' }
-const POSTED_IMAGE = /!\[[^\]]*\](?:\([^)]*\)|\[[^\]]*\])?|<img\b[^>]*>?/gi
+const POSTED_IMAGE = /!\[[^\]]*\](?:\([^)]*\)|\[[^\]]*\])?|<(?:img|video)\b[^>]*>?|github\.com\/user-attachments\/\S*/gi
 const NEUTRAL = new Set(['me', 'you', 'user', 'alice', 'bob', 'test', 'runner', 'someone'])
-const NOREPLY = /(?:@users\.noreply\.github\.com|^noreply@github\.com)$/i
+const NOREPLY = /^(?:\d+\+)?[a-z0-9-]+@users\.noreply\.github\.com$/i
 const CONTROL = /[\x00-\x08]/g
 const TEXT_KINDS = new Set(['added', 'message', 'header', 'title', 'body'])
+const CONTROL_KINDS = new Set(['added', 'message', 'path', 'title', 'body'])
 const RECORD_TS = /^\{"ts":"([^"]+)"/
 const DIFF_HEADER = 'diff --git '
 const NEWLINE = Buffer.from('\n')
@@ -82,12 +86,13 @@ const SIGNATURE = /^gpgsig(?:-sha256)? .*\n(?: .*\n)*/gm
 const PERSON = (role) => new RegExp(`^${role} (.*) <(.*)> \\d+ [+-]\\d+$`, 'm')
 const ALNUM = String.raw`[\p{L}\p{N}]`
 const isAlnum = (char) => char !== undefined && new RegExp(ALNUM, 'u').test(char)
-// the row of .github/pull_request_template.md the hash is written on: it cannot hold its own hash, and holds nothing else or it counts
-const HASH_ROW = /^- Written by an agent: the `hash` from `node scripts\/pr-check\.mjs`:[ \t]*(?:(`?)[0-9a-f]{64}\1[ \t]*)?\r?$/gm
+// the row of .github/pull_request_template.md the hash is written on: it cannot hold its own hash, and holds nothing else or it counts.
+// What it holds is left out of the hash, so main refuses any value but the hash: it is no way out for 32 unjudged bytes, and no mistaken paste.
+const HASH_ROW = /^- Written by an agent: the `hash` from `node scripts\/pr-check\.mjs`:[ \t]*(?:(`?)([0-9a-f]{64})\1[ \t]*)?\r?$/gm
 
 const WHY = {
   files: 'This file type does not leave the machine: images, video, PDF, archives, capture formats and binaries.',
-  image: 'This holds an image in its text: a data URI anywhere, or a Markdown image or img tag in a title, a body or a comment.',
+  image: 'This holds an image in its text: a data URI anywhere, or a Markdown image, an img or video tag or an uploaded attachment in a title, a body or a comment.',
   build: 'The built board does not match a rebuild: web/ or src/web/board/ differs from HEAD in the working tree, or npm run test:build failed.',
   foreign: 'The built board changed in a clone that is not this script\'s, and nothing from another clone is run here: rebuild it in isolation.',
   secrets: 'This has the shape of a credential.',
@@ -98,6 +103,7 @@ const WHY = {
   lines: `This commit changes more than ${MAX_LINES} lines.`,
   body: 'This commit message has no body.',
   control: 'This holds control bytes.',
+  hash: 'The hash line holds a value this run did not print: leave it empty, or write the hash this run printed.',
   encoding: 'This is not valid UTF-8, so it cannot be compared: write it as UTF-8.',
   merge: 'This is a merge commit, and a branch goes out without them: rebase it onto the base.',
   git: 'git could not be read, so what is leaving is not known.',
@@ -235,8 +241,9 @@ function readGit(cwd, base, out) {
     out.sources.push({ where: `${short}:message`, kind: 'message', bytes })
     if (extra) out.sources.push({ where: `${short}:message`, kind: 'header', bytes: Buffer.from(extra) })
     if (signature) out.sources.push({ where: `${short}:message`, kind: 'signature', bytes: Buffer.from(signature) })
-    // the noreply address is a public login, judged by the email rule; the names are what the identity words read
-    out.sources.push({ where: `${short}:author`, kind: 'author', bytes: Buffer.from(people.join('\n')), norm: wordOf(`${author.name}\n${committer.name}`) })
+    // the noreply address is a public login, judged by the email rule, so the identity words read only the names; a captured fact in it still leaks
+    const names = `${author.name}\n${committer.name}`, locals = [author, committer].map(({ email }) => email.split('@')[0]).join('\n')
+    out.sources.push({ where: `${short}:author`, kind: 'author', bytes: Buffer.from(people.join('\n')), names: wordOf(names), norm: wordOf(`${names}\n${locals}`) })
     const commit = { sha, short, message, merge, emails: [author.email, committer.email], lines: 0, changed: [] }
     out.commits.push(commit)
     if (commit.merge) continue // the shape rule refuses it whole, so its diff is not read
@@ -296,11 +303,18 @@ const undoEntities = (text) => text.replace(ENTITY, (all, decimal, hex, name) =>
   return cp <= 0x10ffff ? String.fromCodePoint(cp) : all
 })
 
-/** A source's text as it stands and, when they differ, with its \uXXXX undone and then its HTML entities. */
+/** %HH runs, as §6.2 reads them: bytes that are not UTF-8 are no escape. */
+const undoPercent = (text) => text.replace(/(?:%[0-9a-f]{2})+/gi, (run) => {
+  const bytes = Buffer.from(run.replaceAll('%', ''), 'hex')
+  return isUtf8(bytes) ? bytes.toString() : run
+})
+
+/** A source's text as it stands and, when they differ, with its \uXXXX undone, then its HTML entities, then its percent escapes. */
 function spelled(source) {
   const raw = source.bytes.toString()
   const decoded = raw.replace(/\\+u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
-  return [...new Set([raw, decoded, undoEntities(decoded)])]
+  const unescaped = undoEntities(decoded)
+  return [...new Set([raw, decoded, unescaped, undoPercent(unescaped)])]
 }
 
 /** An image riding in text. A Markdown image in a committed file points into the repository; in a pull request's text it loads from anywhere. */
@@ -347,7 +361,7 @@ function checkShape(commits, sources, add) {
   }
   for (const source of sources) {
     if (TEXT_KINDS.has(source.kind) && !isUtf8(source.bytes)) add('shape', source.where, WHY.encoding)
-    if (source.kind !== 'added' && source.kind !== 'message') continue
+    if (!CONTROL_KINDS.has(source.kind)) continue
     const text = source.bytes.toString()
     for (const match of text.matchAll(CONTROL)) add('shape', placeOf(source, text, match.index), WHY.control)
   }
@@ -393,14 +407,15 @@ function openEncoded(sources, add) {
 function checkIdentity(out, cwd, hold, add) {
   const host = os.hostname()
   const names = [os.userInfo().username, host, host.split('.')[0], process.env.USER, process.env.LOGNAME, process.env.USERNAME, process.env.COMPUTERNAME]
-  const gitName = spawnSync('git', ['config', '--get', 'user.name'], { cwd, stdio: ['ignore', 'pipe', 'ignore'] }).stdout?.toString().trim()
+  const gitConfig = (key) => spawnSync('git', ['config', '--get', key], { cwd, stdio: ['ignore', 'pipe', 'ignore'] }).stdout?.toString().trim()
+  const gitName = gitConfig('user.name')
   const own = wordOf(gitName || '')
-  for (const name of [...names, gitName].filter(Boolean)) {
+  for (const name of [...names, gitName, gitConfig('user.email')].filter(Boolean)) {
     const word = wordOf(name)
     if (word.length === 0) continue
     for (const source of out.sources) {
       if (source.kind === 'author' && word.equals(own)) continue
-      if (source.norm.includes(word)) hold(name, 'identity', source.where)
+      if ((source.names ?? source.norm).includes(word)) hold(name, 'identity', source.where)
     }
   }
   for (const source of out.sources) {
@@ -598,9 +613,11 @@ async function main() {
 
   const accepting = options['accept-partial'] === true
   const isAccepted = (f) => accepting && f.rule === 'partial'
-  const findings = [...found.values()].filter((f) => !isAccepted(f))
   const accepted = [...found.values()].filter(isAccepted)
-  const doc = { ok: findings.length === 0, hash: hashOf(out.sources, { base, before: options.before, accepting, accepted, coverage }), findings, accepted, coverage, leaving: out.leaving }
+  const hash = hashOf(out.sources, { base, before: options.before, accepting, accepted, coverage })
+  for (const row of options.body.toString('latin1').matchAll(HASH_ROW)) if (row[2] && row[2] !== hash) add('shape', 'body', WHY.hash)
+  const findings = [...found.values()].filter((f) => !isAccepted(f))
+  const doc = { ok: findings.length === 0, hash, findings, accepted, coverage, leaving: out.leaving }
   if (options.json) process.stdout.write(`${JSON.stringify(doc)}\n`)
   else print(doc)
   process.exitCode = doc.ok ? 0 : 1
