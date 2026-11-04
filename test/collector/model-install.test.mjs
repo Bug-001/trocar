@@ -312,3 +312,30 @@ for (const os of ['win32', 'darwin']) {
     assert.deepEqual(named, [])
   })
 }
+
+// 1.6 §3.2 / V85: plan and act come from one list — every carrier install records for a form or a file (a key that stays the user's, a rule U file
+// it leaves alone, as well as what it places) has its row in the plan, with the same state when it changes nothing
+for (const shape of ['the key is the user\'s', 'the file is not this user\'s']) {
+  test(`V85: every carrier install records is a row of its plan (${shape})`, async () => {
+    let w, owns
+    if (shape === 'the key is the user\'s') {
+      w = await everything()
+      const mine = path.join(w.home, 'certs', 'z.pem'); put(mine, USER_PEM)
+      put(path.join(w.home, '.zcode', 'cli', 'config.json'), JSON.stringify({ network: { caCertFile: mine } }))
+      owns = w.owns
+    } else {
+      w = await sharedCertFileWorld({ userPem: USER_PEM })
+      const real = fs.realpathSync(w.file)
+      owns = (p) => (p === real ? false : w.owns(p))
+    }
+    const rows = planInstall({ os: 'darwin', harnesses: w.harnesses, ctx: w.ctx, home: w.home, owns })
+    const r = await w.install({ wrapperKit: { renderWrapper }, owns })
+    const acted = r.carriers.filter((c) => c.carrier !== 'root' && (c.state === 'rule-u' || c.code === 'not-users-file'))
+    assert.ok(acted.length > 0, JSON.stringify(r.carriers))
+    for (const c of r.carriers.filter((x) => x.carrier !== 'root')) {
+      const row = rows.find((x) => x.harness === c.harness && (c.form ? x.form === c.form : x.paths.includes(c.path)))
+      assert.ok(row, `${c.harness} ${c.form || c.path} (${c.state}) is in the plan: ${JSON.stringify(rows)}`)
+      if (c.state === 'rule-u' || c.code === 'not-users-file') assert.equal(row.state, c.state, `${c.harness}: the plan says it changes nothing, as the act does`)
+    }
+  })
+}

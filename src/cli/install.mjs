@@ -18,6 +18,7 @@ import { EVENT } from '../collector/core/codes.mjs'
 import { codeId, packageRoot, channelOf, setupHelperCommand } from '../version.mjs'
 import { CUT, daemonCode, replaceDaemon } from './replace-daemon.mjs'
 
+const pick = (o, keys) => Object.fromEntries(keys.filter((k) => o[k] != null).map((k) => [k, o[k]]))
 const NEEDS_YES = 'Nothing was changed. Read the plan above, then run it again with --yes'
 // R5 / R6: no terminal and no --yes — the plan was printed, nothing written, exit 2; with --json stdout is the one receipt, with the plan in `planned`
 function needsYes(io, json, planned = []) {
@@ -127,11 +128,13 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
       : r.paths && r.paths.length
         ? `${r.paths.map((p) => tilde(p, home)).join(', ')}: ${planWords(r)}` // 1.6 §3.2: what changes there
         : `path not known yet: the place of its ${r.carrier} could not be resolved on this machine`)
-    const planned = [
+    // one line per (agent, place): the same file reached by three forms of one agent is one line, with the forms named (D46)
+    const byPlace = (rs) => [...rs.reduce((by, r) => by.set(`${r.harness}|${carrierOf(r)}`, [...(by.get(`${r.harness}|${carrierOf(r)}`) || []), r]), new Map()).values()]
+      .map((group) => ({ harness: group[0].harness, forms: group.map((r) => r.form), carrier: group[0].carrier, paths: group[0].paths, keys: group[0].keys, ...pick(group[0], ['state', 'code', 'why']), what: group[0].harness, detail: carrierOf(group[0]) }))
+    const changes = [
       ...(only && !need.root ? [] : [{ what: 'root', detail: "this machine's own root certificate, trusted for your user (the system asks you once; the key cannot be exported)" }]),
       // one line per (agent, place): the same file reached by three forms of one agent is one line, with the forms named (D46)
-      ...[...rows.reduce((by, r) => by.set(`${r.harness}|${carrierOf(r)}`, [...(by.get(`${r.harness}|${carrierOf(r)}`) || []), r]), new Map()).values()]
-        .map((group) => ({ harness: group[0].harness, forms: group.map((r) => r.form), carrier: group[0].carrier, paths: group[0].paths, keys: group[0].keys, what: group[0].harness, detail: carrierOf(group[0]) })),
+      ...byPlace(rows.filter((r) => !r.state)),
       // V85: trocar's own tree is ONE line (uninstall takes all of it back); every file of yours outside it is its own line, above
       ...(only ? [] : [{ what: 'trocar', detail: `${tilde(path.join(home, '.trocar'), home)}${platform === 'win32' ? '\\' : '/'}: trocar's own files (its root certificate and key, the install record, and ${tilde(standalonePath(home), home)}, the undo that works without this source tree)` }]),
       // D61 (1.6 §3.2 step 5, 4.11 §1 install 7): the login entry is a file of YOURS outside trocar's tree, so it is its own line (V85), and the plan says a daemon runs from now on
@@ -139,11 +142,15 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
       ...(pathItem ? [pathItem] : []),
       ...(unit && !only ? [{ what: 'autostart', detail: `${platform === 'win32' ? 'the scheduled task \\trocar\\collector' : tilde(unit.path, home)}: a collector daemon starts at every login from now on, and is started now (trocar uninstall takes it out again)` }] : []),
     ]
-    say(fit([`trocar install will change ${planned.length} thing${planned.length === 1 ? '' : 's'}:`,
-      ...pairs(planned.map((p) => [p.what, p.detail]), { home }),
-      ...(only ? (planned.length ? [] : [`${only} has every certificate carrier it needs: there is nothing to set up.`]) : rows.length ? [] : ['No agent was found on this machine: only the root is installed.']),
+    // 1.6 §3.2 / V85: what install records and changes nothing at (a key that stays yours, a file that is not yours) is in the plan too, apart from the count
+    const left = byPlace(rows.filter((r) => r.state))
+    const planned = [...changes, ...left]
+    say(fit([`trocar install will change ${changes.length} thing${changes.length === 1 ? '' : 's'}:`,
+      ...pairs(changes.map((p) => [p.what, p.detail]), { home }),
+      ...(left.length ? ['Left as they are:', ...pairs(left.map((p) => [p.what, p.detail]), { home })] : []),
+      ...(only ? (changes.length ? [] : [`${only} has every certificate carrier it needs: there is nothing to set up.`]) : rows.length ? [] : ['No agent was found on this machine: only the root is installed.']),
       ...wrap(COST), ...wrap(RISK), ...(stale ? wrap(CUT) : [])], { home }).join('\n'))
-    if (flags.has('--dry-run')) { if (json) io.out(JSON.stringify({ ...newReceipt('install'), dry_run: true, planned, ...(only && !planned.length ? { notes: [`${only}: nothing to set up`] } : {}) }, null, 2)); return EXIT.ok }
+    if (flags.has('--dry-run')) { if (json) io.out(JSON.stringify({ ...newReceipt('install'), dry_run: true, planned, ...(only && !changes.length ? { notes: [`${only}: nothing to set up`] } : {}) }, null, 2)); return EXIT.ok }
     if (!flags.has('--yes')) {
       if (json || !isInteractive(io)) return needsYes(io, json, planned)
       if (!(await confirm({ ...io, prompt: io.stdout }, 'Proceed?'))) { io.err('You said no: nothing was changed'); return EXIT.incomplete }

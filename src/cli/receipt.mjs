@@ -36,8 +36,10 @@ export const carrierWords = (kind) => CARRIER_WORDS[kind] || String(kind ?? '').
 const ROUTE_WORDS = Object.freeze({ 'json-key': 'its proxy setting', 'dotenv-block': "trocar's proxy block", 'plugin-file': "trocar's routing plug-in", 'switch-file': "trocar's switch file" })
 export const routeWords = (p) => ROUTE_WORDS[p.kind] || String(p.kind ?? '').replace(/-/g, ' ')
 /** 1.6 §3.2: what an install plan row (planInstall's) says changes in its file — a config key by its key, a plug-in loaded from that file by the line
- *  that loads it, any other carrier in carrierWords' words. */
-export const planWords = (r) => (r.carrier === 'config-key' && r.keys ? `its certificate setting ${r.keys.join('.')}` : `${r.loader ? 'the line that loads ' : ''}${carrierWords(r.carrier)}`)
+ *  that loads it, any other carrier in carrierWords' words; a row install changes nothing at (`state`) says why it is left as it is. */
+export const planWords = (r) => (r.state === 'rule-u' ? 'left as it is: this agent already names a certificate file of your own'
+  : r.state ? `left as it is: ${r.why || r.code}`
+    : r.carrier === 'config-key' && r.keys ? `its certificate setting ${r.keys.join('.')}` : `${r.loader ? 'the line that loads ' : ''}${carrierWords(r.carrier)}`)
 
 const BARE = /\u001b\[\d+m/g
 

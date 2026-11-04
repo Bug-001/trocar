@@ -328,7 +328,8 @@ export function ruleUFiles(desc, ctx, { home, owns, fs = nodeFs }) {
 
 const pick = (o, keys) => Object.fromEntries(keys.filter((k) => o && o[k] != null).map((k) => [k, o[k]]))
 
-/** What install would place, read only (the plan 1.6 §1.6 prints before it asks): one row per present form → { harness, form, carrier }. */
+/** What install would place, read only (the plan 1.6 §1.6 prints before it asks): one row per present form → { harness, form, carrier, paths, keys, state? }.
+ *  `state` marks a row install changes nothing at: 'rule-u' (the key is the user's own) or 'skipped' with `code` / `why` (rule U's file is not this user's). */
 // The certificate carrier of one form, as a path and a key: whatever shape the descriptor uses for it (a config file and its keys, a plugin's
 // directory and its loader, a wrapper's bin directory) resolved the way `on` and `install` resolve it — so the plan names the file it will change
 // (1.6 §1.4「计划写全」) instead of a kind alone. A carrier whose place cannot be resolved on this machine says so, and why.
@@ -343,14 +344,17 @@ export function planInstall({ os, harnesses, ctx, home, owns, fs = nodeFs }) {
       const c = f.cert === 'root' ? null : desc.proxyMode.certs[f.cert]
       const when = c && c.when ? holds(c.when, ctx) : true
       const carrier = !c || when === false ? 'root' : c.kind
-      if (carrier === 'config-key' && keyIsUsers(c, ctx, home)) continue // the key stays the user's: rule U's file below is what changes
+      // the key stays the user's: a row that says so (install records the form as rule-u), and rule U's file below is what changes
+      if (carrier === 'config-key' && keyIsUsers(c, ctx, home)) { rows.push({ harness: desc.name, form: f.id, carrier, paths: resolveLoc(c.file, ctx), keys: c.keys, state: 'rule-u' }); continue }
       // a plug-in is two places when a file loads it: its folder (the plug-in file goes there) and the loader file (a line that loads it)
       const places = carrier === 'root' ? [{ loc: null }] : c.kind === 'plugin' && c.loader ? [{ loc: c.dir }, { loc: c.loader.file, keys: c.loader.keys, loader: true }] : [{ loc: carrierLoc(c), keys: carrierKeys(c) }]
       for (const { loc, keys = null, loader } of places) rows.push({ harness: desc.name, form: f.id, carrier, paths: loc ? resolveLoc(loc, ctx) : [], keys: keys || null, ...(loader ? { loader } : {}) })
     }
-    // rule U, as install runs it: one block per file, placed by the first harness whose settings name it (the next finds it there)
+    // rule U, as install runs it: one block per file, placed by the first harness whose settings name it (the next finds it there); a file that is
+    // not this user's is a row too, with its why, as install records it skipped
     if (forms.length) for (const { file, why } of ruleUFiles(desc, ctx, { home, owns, fs })) {
-      if (!why && !rows.some((r) => r.carrier === 'pem-block' && r.paths[0] === file)) rows.push({ harness: desc.name, form: null, carrier: 'pem-block', paths: [file], keys: null })
+      if (why) rows.push({ harness: desc.name, form: null, carrier: 'pem-block', paths: [file], keys: null, state: 'skipped', code: NOT_USERS, why })
+      else if (!rows.some((r) => r.carrier === 'pem-block' && !r.state && r.paths[0] === file)) rows.push({ harness: desc.name, form: null, carrier: 'pem-block', paths: [file], keys: null })
     }
   }
   return rows
