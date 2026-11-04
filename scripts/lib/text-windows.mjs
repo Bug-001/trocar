@@ -5,6 +5,16 @@
 export const WINDOW = 60
 
 const BACKSLASH = 0x5c
+const PERCENT = 0x25
+const AMPERSAND = 0x26
+const HASH = 0x23
+const SEMICOLON = 0x3b
+const OPEN_BRACE = 0x7b
+const CLOSE_BRACE = 0x7d
+const LOWER_U = 0x75
+const LOWER_X = 0x78
+const MAX_CP = 0x10ffff
+const MAX_ENTITY_NAME = 8
 // Slots per window. The scan probes once per byte, and at 8 an empty slot answers nearly all of them without a
 // mispredicted branch: measured about 3x the throughput of 2.
 const SPARSITY = 8
@@ -14,7 +24,9 @@ const HASH_MIX = 0x9e3779b1
 let hashTop = 1
 for (let i = 1; i < WINDOW; i++) hashTop = Math.imul(hashTop, HASH_BASE)
 
-// Code point → first code point of its lowercase, 0 for anything that is not a letter or a number.
+// Code point → the first letter or number of its compatibility decomposition, lowercased; 0 for anything that is not a letter or a number.
+// So a full-width letter is the letter, and a precomposed accent and a combining one are the same text. A Hangul syllable decomposes to
+// its leading jamo, so the vowels and tails of a decomposed one go the way combining marks do.
 let foldTable = null
 function folds() {
   if (foldTable) return foldTable
@@ -22,20 +34,75 @@ function folds() {
   const kept = /[\p{L}\p{N}]/u
   for (let cp = 1; cp < 0x110000; cp++) {
     const char = String.fromCodePoint(cp)
-    if (kept.test(char)) foldTable[cp] = char.toLowerCase().codePointAt(0)
+    if (!kept.test(char) || (cp >= 0x1160 && cp <= 0x11ff)) continue
+    const first = [...char.normalize('NFKD')].find((part) => kept.test(part))
+    if (first) foldTable[cp] = first.toLowerCase().codePointAt(0)
   }
   return foldTable
 }
 
-function hex4(src, at) {
-  if (at + 4 > src.length) return -1
+const digitOf = (c) => (c >= 0x30 && c <= 0x39 ? c - 0x30 : (c | 0x20) >= 0x61 && (c | 0x20) <= 0x66 ? (c | 0x20) - 0x57 : 16)
+
+function hexAt(src, at, count) {
+  if (at + count > src.length) return -1
   let value = 0
-  for (let i = at; i < at + 4; i++) {
-    const c = src[i]
-    const digit = c >= 0x30 && c <= 0x39 ? c - 0x30 : (c | 0x20) >= 0x61 && (c | 0x20) <= 0x66 ? (c | 0x20) - 0x57 : -1
-    if (digit < 0) return -1
+  for (let i = at; i < at + count; i++) {
+    const digit = digitOf(src[i])
+    if (digit === 16) return -1
     value = value * 16 + digit
   }
+  return value
+}
+
+// The decoders below answer a code point, or -1 for "not an escape after all", and leave what they read in `taken`.
+let taken = 0
+
+// \u{…}, at the brace.
+function bracedAt(src, at) {
+  let value = 0
+  let i = at + 1
+  for (; i < src.length && digitOf(src[i]) < 16 && value <= MAX_CP; i++) value = value * 16 + digitOf(src[i])
+  if (i === at + 1 || src[i] !== CLOSE_BRACE || value > MAX_CP) return -1
+  taken = i + 1 - at
+  return value
+}
+
+const sequence = new Uint8Array(4)
+
+// %HH, one byte or the bytes of one UTF-8 sequence. Bytes that are not UTF-8 are no escape: the % is punctuation, and the letters stay.
+function percentAt(src, at) {
+  const first = hexAt(src, at + 1, 2)
+  if (first < 0x80) {
+    taken = 3
+    return first
+  }
+  const size = first < 0xc2 ? 0 : first < 0xe0 ? 2 : first < 0xf0 ? 3 : first < 0xf5 ? 4 : 0
+  for (let k = 0; k < size; k++) {
+    const byte = src[at + 3 * k] === PERCENT ? hexAt(src, at + 3 * k + 1, 2) : -1
+    if (byte < 0) return -1
+    sequence[k] = byte
+  }
+  taken = 3 * size
+  return size === 0 ? -1 : decodeUtf8(sequence, 0)
+}
+
+// &#NN; or &#xHH;, the semicolon optional as a browser has it, or &name;, which is punctuation here: letters behind a name are not worth a table.
+function referenceAt(src, at) {
+  if (src[at + 1] !== HASH) {
+    let i = at + 1
+    while (i < src.length && i <= at + MAX_ENTITY_NAME && ((src[i] | 0x20) >= 0x61 && (src[i] | 0x20) <= 0x7a)) i++
+    if (i < at + 3 || src[i] !== SEMICOLON) return -1
+    taken = i + 1 - at
+    return 0x20
+  }
+  const hex = (src[at + 2] | 0x20) === LOWER_X
+  const base = hex ? 16 : 10
+  const start = at + (hex ? 3 : 2)
+  let value = 0
+  let i = start
+  for (; i < src.length && digitOf(src[i]) < base && value <= MAX_CP; i++) value = value * base + digitOf(src[i])
+  if (i === start || value > MAX_CP || (value >= 0xd800 && value < 0xe000)) return -1
+  taken = i + (src[i] === SEMICOLON ? 1 : 0) - at
   return value
 }
 
@@ -54,8 +121,8 @@ function decodeUtf8(src, at) {
   return shortest && cp <= 0x10ffff && (cp < 0xd800 || cp > 0xdfff) ? cp : -1
 }
 
-// Normalizes src into out (capacity(src) bytes hold any input) and returns the length written. Lowercasing grows a
-// character's UTF-8 by 1.5x at most, and an escape only shrinks. `run` is the backslash state: 1 after a run of
+// Normalizes src into out (capacity(src) bytes hold any input) and returns the length written. Folding grows a
+// character's UTF-8 by 2x at most, and an escape only shrinks. `run` is the backslash state: 1 after a run of
 // literal backslashes, 2 when the run holds an escaped backslash, which makes the next decoded character count as
 // escaped as well.
 function normalizeInto(src, out) {
@@ -67,18 +134,12 @@ function normalizeInto(src, out) {
   let high = 0
   while (i < n) {
     let cp = src[i]
-    if (cp < 0x80) {
+    if (cp === PERCENT || cp === AMPERSAND) {
+      const value = cp === PERCENT ? percentAt(src, i) : referenceAt(src, i)
+      if (value >= 0) cp = value
+      i += value >= 0 ? taken : 1
+    } else if (cp < 0x80) {
       i++
-      if (cp === BACKSLASH) {
-        if (run === 0) run = 1
-        continue
-      }
-      if (run === 0) {
-        high = 0
-        const folded = fold[cp]
-        if (folded !== 0) out[o++] = folded
-        continue
-      }
     } else {
       cp = decodeUtf8(src, i)
       if (cp < 0) {
@@ -87,13 +148,24 @@ function normalizeInto(src, out) {
       }
       i += cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4
     }
+    if (cp === BACKSLASH) {
+      if (run === 0) run = 1
+      continue
+    }
+    if (cp < 0x80 && run === 0) {
+      high = 0
+      const folded = fold[cp]
+      if (folded !== 0) out[o++] = folded
+      continue
+    }
     const wasRun = run
     run = 0
     let escaped = wasRun !== 0
-    if (cp === 0x75 && wasRun !== 0) {
-      const unit = hex4(src, i)
+    if ((cp === LOWER_U || cp === LOWER_X) && wasRun !== 0) {
+      taken = cp === LOWER_X ? 2 : 4
+      const unit = cp === LOWER_X ? hexAt(src, i, 2) : src[i] === OPEN_BRACE ? bracedAt(src, i) : hexAt(src, i, 4)
       if (unit >= 0) {
-        i += 4
+        i += taken
         cp = unit
         escaped = wasRun === 2
         if (cp === BACKSLASH) {

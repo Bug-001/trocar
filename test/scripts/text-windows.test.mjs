@@ -11,8 +11,9 @@ const norm = (input) => Buffer.from(normalize(typeof input === 'string' ? utf8(i
 const SAMPLES = [
   ['english', 'The quick brown fox, jumps over 13 lazy dogs!', 'thequickbrownfoxjumpsover13lazydogs'],
   ['chinese', '透明示波器：把每一比特按步回放，逐层拆解。', '透明示波器把每一比特按步回放逐层拆解'],
-  ['mixed', 'Café 上下文 v2 / 缓存 ENGINEERING', 'café上下文v2缓存engineering'],
+  ['mixed', 'Café 上下文 v2 / 缓存 ENGINEERING', 'cafe上下文v2缓存engineering'],
   ['emoji', 'ship it 😀 𠮷野家 🚀 done', 'shipit𠮷野家done'],
+  ['accents', 'Résumé naïve Ångström déjà vu', 'resumenaiveangstromdejavu'],
 ]
 
 const fullEscape = (s) => [...Array(s.length).keys()]
@@ -28,9 +29,21 @@ const SURFACE = {
   crlf: (s) => between(s, '\r\n', 5),
   tabs: (s) => between(s, '\t', 3),
   punctuation: (s) => between(s, '.,;:!?"\'/()[]{}-_ '),
+  fullwidth: (s) => s.replace(/[!-~]/g, (c) => String.fromCodePoint(c.charCodeAt(0) + 0xfee0)),
+  nfc: (s) => s.normalize('NFC'),
+  nfd: (s) => s.normalize('NFD'),
 }
+const codePoints = (s, each) => [...s].map((c) => each(c.codePointAt(0))).join('')
 const ENCODING = {
   raw: (s) => s,
+  percent: (s) => encodeURIComponent(s),
+  'percent, every byte': (s) => [...utf8(s)].map((b) => `%${b.toString(16).padStart(2, '0')}`).join(''),
+  'percent, then json': (s) => json(encodeURIComponent(s)),
+  'decimal references': (s) => codePoints(s, (cp) => `&#${cp};`),
+  'hex references': (s) => codePoints(s, (cp) => `&#x${cp.toString(16)};`),
+  'bare references': (s) => codePoints(s, (cp) => `&#${cp} `),
+  '\\u{}': (s) => codePoints(s, (cp) => `\\u{${cp.toString(16)}}`),
+  '\\x where it fits': (s) => codePoints(s, (cp) => (cp < 0x100 ? `\\x${cp.toString(16).padStart(2, '0')}` : String.fromCodePoint(cp))),
   'json once': json,
   'json twice': (s) => json(json(s)),
   'full \\u': fullEscape,
@@ -68,6 +81,31 @@ test('AN14: backslash rules on hand-computed samples', () => {
   for (const [input, expected] of cases) assert.equal(norm(input), expected, input)
 })
 
+test('AN14: what looks like an escape and is not stays as it is', () => {
+  const cases = [
+    ['100%ab', '100ab'],
+    ['%E4%B8%AD文', '中文'],
+    ['%e4%b8', 'e4b8'],
+    ['%E4%B8x', 'e4b8x'],
+    ['50%zz', '50zz'],
+    ['tail%', 'tail'],
+    ['tail%4', 'tail4'],
+    ['a%5Cnb', 'ab'],
+    ['a&nbsp;b&amp;c&#32;d&#x20;e', 'abcde'],
+    ['a&b;c', 'abc'],
+    ['AT&T and R&D', 'attandrd'],
+    ['&#xZZ;', 'xzz'],
+    ['&#;', ''],
+    ['&#1114112;', '1114112'],
+    ['\\x4', 'x4'],
+    ['\\xZZ', 'xzz'],
+    ['\\u{}', 'u'],
+    ['\\u{110000}', 'u110000'],
+    ['\\x5cnb', 'b'],
+  ]
+  for (const [input, expected] of cases) assert.equal(norm(input), expected, input)
+})
+
 test('AN14: surrogate pairs join into one code point, lone halves vanish', () => {
   const cases = [
     ['\\ud842\\udfb7', '𠮷'],
@@ -83,7 +121,10 @@ test('AN14: surrogate pairs join into one code point, lone halves vanish', () =>
 
 test('AN14: lowercase keeps the first code point, other scripts stay letters', () => {
   assert.equal(norm('\u0130'), 'i')
-  assert.equal(norm('ÀÉ ΑΣ Я Ⱥ'), 'àéασяⱥ')
+  assert.equal(norm('ÀÉ ΑΣ Я Ⱥ'), 'aeασяⱥ')
+  assert.equal(norm('Ｆｕｌｌ１２'), 'full12')
+  assert.equal(norm('Å K'), 'ak', 'the Angstrom and Kelvin signs')
+  assert.equal(norm('한글'.normalize('NFD')), norm('한글'.normalize('NFC')))
   assert.equal(norm('٣४'), '٣४')
 })
 

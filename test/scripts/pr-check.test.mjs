@@ -422,6 +422,16 @@ test('AN21: control bytes in a file or a message are refused; tab, newline and e
   assert.ok(of(doc, 'shape').some((f) => f.where.endsWith(':message')))
 })
 
+test('AN21: text that is not UTF-8 is refused, in a file, a title and a body', () => {
+  const gb18030 = Buffer.from('c4e3bac3cac0bde7', 'hex')
+  const w = workspace()
+  w.commit({ 'a.txt': Buffer.concat([gb18030, Buffer.from('\n')]), 'b.txt': '你好世界\n' })
+  const { code, doc } = w.check({ title: gb18030, body: gb18030 })
+  assert.equal(code, 1)
+  assert.deepEqual(named(doc, 'shape'), ['a.txt'])
+  assert.deepEqual(of(doc, 'shape').filter((f) => !f.where.includes(':')).map((f) => f.where).sort(), ['body', 'title'])
+})
+
 test('a rename, a mode change and an awkward name are read as themselves', () => {
   const w = workspace({ 'old.txt': lines(500), 'run.sh': 'x\n' })
   w.git(['mv', 'old.txt', 'new.txt'])
@@ -715,6 +725,21 @@ test('AN20: what two commits each bring half of is judged by the tree they leave
 const kept = (o, bytes, coding) => JSON.stringify({ ...JSON.parse(envLine({ ts: NOW_THEN, ...o })), req_body: null, req_body_b64: bytes.toString('base64'), ...(coding ? { req_content_encoding: coding } : {}) })
 const prompt = (text) => Buffer.from(JSON.stringify({ prompt: text }))
 const CODINGS = { gzip: zlib.gzipSync, deflate: zlib.deflateSync, br: zlib.brotliCompressSync, zstd: zlib.zstdCompressSync, 'gzip, br': (b) => zlib.brotliCompressSync(zlib.gzipSync(b)) }
+const shared = ascii(60, 1)
+const SHARED_SPELLINGS = { 'percent-encoded': encodeURIComponent(shared), 'full width': shared.replace(/[!-~]/g, (c) => String.fromCodePoint(c.charCodeAt(0) + 0xfee0)), 'HTML references': shared.replaceAll(' ', '&nbsp;') }
+for (const [name, written] of Object.entries(SHARED_SPELLINGS)) {
+  test(`AN20: 60 bytes ${name} on either side match the plain text`, () => {
+    const outbound = workspace()
+    outbound.commit({ 'a.txt': `${written}\n` })
+    capture(outbound, SEGMENT, [line(NOW_THEN, shared)])
+    assert.deepEqual(named(outbound.check().doc, 'captured-text'), ['a.txt'])
+    const captured = workspace()
+    captured.commit({ 'a.txt': `${shared}\n` })
+    capture(captured, SEGMENT, [line(NOW_THEN, written)])
+    assert.deepEqual(named(captured.check().doc, 'captured-text'), ['a.txt'])
+  })
+}
+
 test('AN20: a body kept as base64 is compared by what is behind it, whatever hides it, and the coverage counts the record', () => {
   const w = workspace()
   const texts = Object.keys(CODINGS).map((coding, i) => [`t/${i}.txt`, ascii(60, i + 1)])
