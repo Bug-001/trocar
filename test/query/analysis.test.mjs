@@ -269,6 +269,17 @@ test('3.5 §会话读 closed sets: the top level and totals have only the listed
   for (const b of ['main', 'sub', 'bg', 'total']) assert.deepEqual(Object.keys(sample.totals.cost[b]).sort(), Object.keys(doc.totals.cost[b]).sort())
 })
 
+test('3.5 #52 slices: past the slice size an answer gives way and says progress, and the document is the same', async () => {
+  const home = homeOf(), env = envOf({ 'claude-opus-4-8': [1, 2, 3, 4] })
+  const s = bigSession({ home, growth: 200, subEvery: 7, compactAt: 8_000 })
+  s.append(2_600)
+  const doc = await analysis(home, env, {}, s.id)
+  let eased = false, said = false
+  const got = await analysis(home, env, { ease: async () => { eased = true }, progress: () => { said = true } }, s.id)
+  assert.deepEqual(got, doc)
+  assert.ok(eased && said)
+})
+
 test('3.5 §会话读: a session nobody captured is said in errors with an empty document; no --id is refused', async () => {
   const home = homeOf()
   fs.mkdirSync(path.join(home, 'raw'), { recursive: true })

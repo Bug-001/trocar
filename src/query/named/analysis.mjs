@@ -17,13 +17,16 @@ export const about = Object.freeze({
 });
 export const params = Object.freeze(Object.keys(about.params));
 
+const EASE_ROWS = 2000; // the rows summed between two turns of the event loop
+
 const sums = () => ({ usd: 0, priced: 0, unpriced: 0, failed: 0, approx: 0, keys: new Set() });
 const bucket = ({ keys, ...s }) => ({ ...s, usd: s.priced ? s.usd : null, approxKeys: [...keys].sort() });
 const added = (list) => list.reduce((a, b) => ({ usd: a.usd + b.usd, priced: a.priced + b.priced, unpriced: a.unpriced + b.unpriced, failed: a.failed + b.failed,
   approx: a.approx + b.approx, keys: new Set([...a.keys, ...b.keys]) }), sums());
 
-// the columns of V priced by `table` → the document's pricing.models, totals and usd
-function totalsOf({ cols, log, lanes }, table) {
+// The one rule for what a step costs, for the totals and the windows: step(rid) → the step's facts, its `usd` (microdollars or null)
+// and its `brk`, the break on the main lane or null. `prices`: every model asked of it so far → its match.
+function pricer({ cols, log, lanes }, table) {
   const kinds = new Map(lanes.map((l) => [cols.keys.get(l.lane), l.kind])), prices = new Map();
   const priceOf = (m) => { if (!prices.has(m)) prices.set(m, priceMatch(table, m)); return prices.get(m); };
   // a break's line says its comparison step, the one thing the columns do not hold
@@ -32,31 +35,44 @@ function totalsOf({ cols, log, lanes }, table) {
     if (why) return { rid, usd: null, why };
     return p ? { rid, usd: breakUsd(usageAt(cols, k), missed, p.row), why: null } : { rid, usd: null, why: 'no-price' };
   };
-  const cost = { main: sums(), sub: sums(), bg: sums() }, usd = {}, breaks = [], failedIn = new Map();
-  let read = 0, tot = 0, hitSteps = 0, cacheUnknown = false;
-  for (const rid of cols.order) {
+  const step = (rid) => {
     const k = cols.slotOf(rid), lane = cols.ln[k], kind = kinds.get(lane), model = modelAt(cols, k), p = priceOf(model), u = usageAt(cols, k);
     const failed = (cols.fl[k] & FLAG.failed) !== 0, b = cols.ca[k] & CA.PROBE ? null : bucketOf(kind);
-    usd[rid] = null;
-    if (kind === 'main') {
+    const cost = b == null || failed ? null : costOf(p && p.row, u);
+    const brk = kind === 'main' && BREAK_STATES.has(stateAt(cols, k)) ? breakOf(rid, k) : null;
+    return { rid, k, lane, kind, model, p, u, failed, b, cost, usd: cost == null ? null : Math.round(cost * 1e6), brk };
+  };
+  return { step, prices };
+}
+const modelsOf = (prices) => [...prices].filter(([m]) => m != null).sort(([a], [b]) => (a < b ? -1 : 1)).map(([model, p]) => ({ model, key: p ? p.key : null, exact: !!p && p.exact }));
+
+// the whole session priced → the document's pricing.models, totals and usd. A slice gives way every EASE_ROWS rows; a background
+// slice in flight may sync the columns meanwhile, so the walk is over the step order as it stands now.
+async function totalsOf(ctx, { cols, lanes }, { step, prices }) {
+  const cost = { main: sums(), sub: sums(), bg: sums() }, usd = {}, breaks = [], failedIn = new Map(), order = cols.order.slice();
+  let read = 0, tot = 0, hitSteps = 0, cacheUnknown = false;
+  for (let i = 0; i < order.length; i++) {
+    if (i > 0 && i % EASE_ROWS === 0) { await ctx.ease?.(); ctx.progress?.(); }
+    const s = step(order[i]), { rid, k, b, u } = s;
+    usd[rid] = s.usd;
+    if (s.kind === 'main') {
       if (cols.ca[k] & CA.UNKNOWN) cacheUnknown = true;
-      const t = failed || !u ? 0 : (u.read || 0) + (u.create || 0) + (u.fresh || 0);
+      const t = s.failed || !u ? 0 : (u.read || 0) + (u.create || 0) + (u.fresh || 0);
       if (t > 0) { read += u.read || 0; tot += t; hitSteps++; }
-      if (BREAK_STATES.has(stateAt(cols, k))) breaks.push(breakOf(rid, k));
+      if (s.brk) breaks.push(s.brk);
     }
     if (b == null) continue;
-    if (failed) { cost[b].failed++; if (!failedIn.has(lane)) failedIn.set(lane, rid); continue; }
-    const c = costOf(p && p.row, u);
-    if (c == null) { cost[b].unpriced++; continue; }
-    cost[b].usd += c; cost[b].priced++; usd[rid] = Math.round(c * 1e6);
-    if (!p.exact) { cost[b].approx++; cost[b].keys.add(p.key); }
+    if (s.failed) { cost[b].failed++; if (!failedIn.has(s.lane)) failedIn.set(s.lane, rid); continue; }
+    if (s.cost == null) { cost[b].unpriced++; continue; }
+    cost[b].usd += s.cost; cost[b].priced++;
+    if (!s.p.exact) { cost[b].approx++; cost[b].keys.add(s.p.key); }
   }
   const total = bucket(added([cost.main, cost.sub, cost.bg]));
   const counted = breaks.filter((x) => x.usd != null);
   const worst = counted.reduce((w, { rid, usd: v }) => (!w || v > w.usd ? { rid, usd: v } : w), null);
   const at = lanes.find((l) => failedIn.has(cols.keys.get(l.lane)));
   return {
-    models: [...prices].filter(([m]) => m != null).sort(([a], [b]) => (a < b ? -1 : 1)).map(([model, p]) => ({ model, key: p ? p.key : null, exact: !!p && p.exact })),
+    models: modelsOf(prices),
     totals: {
       cost: { main: bucket(cost.main), sub: bucket(cost.sub), bg: bucket(cost.bg), total },
       hit: tot > 0 ? read / tot : null, hitSteps, cacheUnknown, breaks,
@@ -78,7 +94,7 @@ export async function run(ctx) {
     return { mark: null, truncated: null, pricing: { source, models: [] }, totals: null, usd: {} };
   }
   errors.push(...st.errors, ...st.failed.map((f) => ({ where: f.id, code: f.code, reason: f.reason })));
-  const { models, totals, usd } = totalsOf(st.V, table);
+  const { models, totals, usd } = await totalsOf(ctx, st.V, pricer(st.V, table));
   return { mark: markOn(st.plan, st.mark), ...(st.pending ? { pending: st.pending } : null), truncated: st.truncated, pricing: { source, models }, totals, usd };
 }
 

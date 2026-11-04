@@ -105,7 +105,7 @@ async function serve(line) {
       // query core's own, so the caller can raise the very error its local path would have raised.
       const deps = await depsP;
       ({ status, bytes, enc, tag } = await answer({ name, params: params || {}, indent, gzip: wants === true, etag: typeof etag === 'string' ? etag : null },
-        { home, fs: nodeFs, writer: true, persist, progress, later: (fn) => after.push(fn), userHome: path.dirname(home), env: deps.env || process.env, platform: deps.platform || process.platform, deps }))
+        { home, fs: nodeFs, writer: true, persist, progress, ease, later: (fn) => after.push(fn), userHome: path.dirname(home), env: deps.env || process.env, platform: deps.platform || process.platform, deps }))
     }
   } catch (e) { // a line that is not a request
     status = 500
