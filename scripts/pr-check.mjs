@@ -72,7 +72,7 @@ const WHY = {
   control: 'This holds control bytes.',
   merge: 'This is a merge commit, and a branch goes out without them: rebase it onto the base.',
   git: 'git could not be read, so what is leaving is not known.',
-  base: 'The base is not behind this branch: --base must name an ancestor of HEAD other than HEAD itself.',
+  base: 'This branch does not stand on a commit origin/main already holds: rebase it onto origin/main.',
   query: 'trocar query could not read the capture, so it was not compared.',
   title: 'A session title could not be read yet, so it was not compared.',
   raw: 'A segment of the capture could not be read to its end, so the rest of it was not compared.',
@@ -210,10 +210,9 @@ function isBlocked(file) {
   return file.binary || BLOCKED.has(ext) || (ext === '.svg' && SVG_EMBED.test(file.added.toString()))
 }
 
-/** The blob `path` has in `commit`, empty when it has none. */
-function blobOf(cwd, commit, path) {
-  return spawnSync('git', ['rev-parse', '--verify', '--quiet', `${commit}:${path}`], { cwd, stdio: ['ignore', 'pipe', 'ignore'] }).stdout.toString().trim()
-}
+/** The object `rev` names, empty when it names none. */
+const revOf = (cwd, rev) => spawnSync('git', ['rev-parse', '--verify', '--quiet', rev], { cwd, stdio: ['ignore', 'pipe', 'ignore'] }).stdout.toString().trim()
+const isAncestor = (cwd, older, newer) => spawnSync('git', ['merge-base', '--is-ancestor', older, newer], { cwd, stdio: 'ignore' }).status === 0
 
 /** A source's text as it stands and, when it differs, with its \uXXXX undone. */
 function spelled(source) {
@@ -241,7 +240,7 @@ function checkFiles(commits, cwd, add) {
       const inBoard = file.path.startsWith(BOARD)
       if (inBoard) board ??= file.where
       // what HEAD holds of the board is the build, judged below; what only an earlier commit holds would ride along in the history
-      if (isBlocked(file) && !(inBoard && blobOf(cwd, commit.sha, file.path) === blobOf(cwd, 'HEAD', file.path))) add('files', file.where)
+      if (isBlocked(file) && !(inBoard && revOf(cwd, `${commit.sha}:${file.path}`) === revOf(cwd, `HEAD:${file.path}`))) add('files', file.where)
     }
   }
   if (!board) return
@@ -438,15 +437,16 @@ async function main() {
     held.get(key).hits.push({ rule, where, why })
   }
   const out = { sources: [], commits: [], leaving: { files: [], commits: [], identity: [], branch: null } }
-  let base = null // one commit from here on: a ref could move between reads
-  try { base = git(cwd, 'rev-parse', '--verify', '--quiet', `${options.base}^{commit}`).toString().trim() } catch { /* no base: below */ }
+  const base = revOf(cwd, `${options.base}^{commit}`) // one commit from here on: a ref could move between reads
+  const published = revOf(cwd, 'refs/remotes/origin/main^{commit}')
+  // what comes before the base is not judged and its tree exempts what comes after, so it has to be out already
+  const isPublic = base && (!published || isAncestor(cwd, base, published))
   if (!options.issue) {
     try {
       if (!base) throw new Error('git')
       readGit(cwd, base, out)
       // nothing past an ancestor means it is HEAD
-      const behind = spawnSync('git', ['merge-base', '--is-ancestor', base, 'HEAD'], { cwd, stdio: 'ignore' }).status === 0
-      if (!behind || out.commits.length === 0) add('base', 'git', WHY.base)
+      if (!isAncestor(cwd, base, 'HEAD') || out.commits.length === 0 || !isPublic) add('base', 'git', WHY.base)
     } catch { add('unreadable', 'git', WHY.git) }
   }
   if (options.title) out.sources.push({ where: 'title', kind: 'title', bytes: options.title })
@@ -465,7 +465,7 @@ async function main() {
   } catch { add('partial', 'capture', WHY.query) }
 
   const table = new WindowTable(out.sources)
-  if (base) {
+  if (isPublic) {
     try { subtractBase(cwd, base, table, held) } catch { add('unreadable', 'git', WHY.git) }
   }
   for (const { hits } of held.values()) for (const hit of hits) add(hit.rule, hit.where, hit.why)
