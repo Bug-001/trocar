@@ -147,15 +147,16 @@ test('1.2 #9: a stored value that is no table of numbers reads as the default; t
     }
     await page.evaluate((k) => { localStorage.removeItem(k.side); localStorage.removeItem(k.scope) }, NEXT)
     await reload()
-    const fold = page.locator('.sidefold')
-    await fold.click()
+    await page.locator('.sidefold').click()
     near((await page.evaluate(sizes)).side, 40, 'collapsed')
-    assert.equal(await page.locator('.deskside [role=tab]').count(), 0, 'the strip holds no tab')
+    const tab = page.locator('.deskside [role=tab]').first()
+    await tab.waitFor({ state: 'detached', timeout: 5000 }) // the strip holds no tab
     await reload()
     near((await page.evaluate(sizes)).side, 40, 'still collapsed after a reload')
+    await tab.waitFor({ state: 'detached', timeout: 5000 })
     await page.locator('.sidefold').click()
     near((await page.evaluate(sizes)).side, SIDE_PX, 'expanded')
-    await page.locator('.deskside [role=tab]').first().waitFor({ timeout: 5000 }) // the tabs are back
+    await tab.waitFor({ timeout: 5000 }) // the tabs are back
   })
 })
 
