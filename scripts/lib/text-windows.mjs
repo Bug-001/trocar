@@ -15,7 +15,7 @@ const LOWER_U = 0x75
 const LOWER_X = 0x78
 const MAX_CP = 0x10ffff
 const MAX_ENTITY_NAME = 8
-// Slots per window. The scan probes once per byte, and at 8 an empty slot answers nearly all of them without a
+// Slots per normalized byte, each the start of at most one window. The scan probes once per byte, and at 8 an empty slot answers nearly all of them without a
 // mispredicted branch: measured about 3x the throughput of 2.
 const SPARSITY = 8
 const HASH_BASE = 0x01000193
@@ -24,8 +24,8 @@ const HASH_MIX = 0x9e3779b1
 let hashTop = 1
 for (let i = 1; i < WINDOW; i++) hashTop = Math.imul(hashTop, HASH_BASE)
 
-// Code point → the first letter or number of its compatibility decomposition, lowercased; 0 for anything that is not a letter or a number.
-// So a full-width letter is the letter, and a precomposed accent and a combining one are the same text. A Hangul syllable decomposes to
+// Code point → the UTF-8 of the first letter or number of its compatibility decomposition, lowercased, low byte first in one int; 0 for
+// anything that is not a letter or a number. So a full-width letter is the letter, and a precomposed accent and a combining one are the same text. A Hangul syllable decomposes to
 // its leading jamo, so the vowels and tails of a decomposed one go the way combining marks do.
 let foldTable = null
 function folds() {
@@ -36,11 +36,12 @@ function folds() {
     const char = String.fromCodePoint(cp)
     if (!kept.test(char) || (cp >= 0x1160 && cp <= 0x11ff)) continue
     const first = [...char.normalize('NFKD')].find((part) => kept.test(part))
-    if (first) foldTable[cp] = first.toLowerCase().codePointAt(0)
+    if (first) foldTable[cp] = Buffer.from(String.fromCodePoint(first.toLowerCase().codePointAt(0))).reduceRight((packed, byte) => packed * 256 + byte, 0)
   }
   return foldTable
 }
 
+const utf8Size = (lead) => (lead < 0xc2 ? 0 : lead < 0xe0 ? 2 : lead < 0xf0 ? 3 : lead < 0xf5 ? 4 : 0)
 const digitOf = (c) => (c >= 0x30 && c <= 0x39 ? c - 0x30 : (c | 0x20) >= 0x61 && (c | 0x20) <= 0x66 ? (c | 0x20) - 0x57 : 16)
 
 function hexAt(src, at, count) {
@@ -61,7 +62,7 @@ let taken = 0
 function bracedAt(src, at) {
   let value = 0
   let i = at + 1
-  for (; i < src.length && digitOf(src[i]) < 16 && value <= MAX_CP; i++) value = value * 16 + digitOf(src[i])
+  for (; i < src.length && digitOf(src[i]) < 16; i++) value = value * 16 + digitOf(src[i])
   if (i === at + 1 || src[i] !== CLOSE_BRACE || value > MAX_CP) return -1
   taken = i + 1 - at
   return value
@@ -76,7 +77,7 @@ function percentAt(src, at) {
     taken = 3
     return first
   }
-  const size = first < 0xc2 ? 0 : first < 0xe0 ? 2 : first < 0xf0 ? 3 : first < 0xf5 ? 4 : 0
+  const size = utf8Size(first)
   for (let k = 0; k < size; k++) {
     const byte = src[at + 3 * k] === PERCENT ? hexAt(src, at + 3 * k + 1, 2) : -1
     if (byte < 0) return -1
@@ -100,7 +101,7 @@ function referenceAt(src, at) {
   const start = at + (hex ? 3 : 2)
   let value = 0
   let i = start
-  for (; i < src.length && digitOf(src[i]) < base && value <= MAX_CP; i++) value = value * base + digitOf(src[i])
+  for (; i < src.length && digitOf(src[i]) < base; i++) value = value * base + digitOf(src[i])
   if (i === start || value > MAX_CP || (value >= 0xd800 && value < 0xe000)) return -1
   taken = i + (src[i] === SEMICOLON ? 1 : 0) - at
   return value
@@ -110,7 +111,7 @@ function referenceAt(src, at) {
 // The sequence's length follows from the value, so the caller needs nothing else.
 function decodeUtf8(src, at) {
   const lead = src[at]
-  const size = lead < 0xc2 ? 0 : lead < 0xe0 ? 2 : lead < 0xf0 ? 3 : lead < 0xf5 ? 4 : 0
+  const size = utf8Size(lead)
   if (size === 0 || at + size > src.length) return -1
   let cp = lead & (0xff >> (size + 1))
   for (let i = at + 1; i < at + size; i++) {
@@ -152,16 +153,10 @@ function normalizeInto(src, out) {
       if (run === 0) run = 1
       continue
     }
-    if (cp < 0x80 && run === 0) {
-      high = 0
-      const folded = fold[cp]
-      if (folded !== 0) out[o++] = folded
-      continue
-    }
     const wasRun = run
     run = 0
     let escaped = wasRun !== 0
-    if ((cp === LOWER_U || cp === LOWER_X) && wasRun !== 0) {
+    if (escaped && (cp === LOWER_U || cp === LOWER_X)) {
       taken = cp === LOWER_X ? 2 : 4
       const unit = cp === LOWER_X ? hexAt(src, i, 2) : src[i] === OPEN_BRACE ? bracedAt(src, i) : hexAt(src, i, 4)
       if (unit >= 0) {
@@ -184,22 +179,7 @@ function normalizeInto(src, out) {
     }
     high = 0
     if (escaped && (cp === 0x6e || cp === 0x74 || cp === 0x72)) continue
-    const folded = fold[cp]
-    if (folded < 0x80) {
-      if (folded !== 0) out[o++] = folded
-    } else if (folded < 0x800) {
-      out[o++] = 0xc0 | (folded >> 6)
-      out[o++] = 0x80 | (folded & 0x3f)
-    } else if (folded < 0x10000) {
-      out[o++] = 0xe0 | (folded >> 12)
-      out[o++] = 0x80 | ((folded >> 6) & 0x3f)
-      out[o++] = 0x80 | (folded & 0x3f)
-    } else {
-      out[o++] = 0xf0 | (folded >> 18)
-      out[o++] = 0x80 | ((folded >> 12) & 0x3f)
-      out[o++] = 0x80 | ((folded >> 6) & 0x3f)
-      out[o++] = 0x80 | (folded & 0x3f)
-    }
+    for (let bytes = fold[cp]; bytes !== 0; bytes >>>= 8) out[o++] = bytes & 0xff
   }
   return o
 }
@@ -224,7 +204,7 @@ const nextHash = (hash, leaving, entering) => (Math.imul(hash - Math.imul(leavin
 // probe chains keep working and whereOf still answers for it.
 export class WindowTable {
   #text
-  #wheres = []
+  #wheres
   #starts = []
   #offsets
   #hashes
@@ -236,42 +216,30 @@ export class WindowTable {
 
   constructor(sources) {
     const parts = sources.map((source) => normalize(source.bytes))
-    this.#text = new Uint8Array(parts.reduce((total, part) => total + part.length, 0))
-    let room = 2
-    let bits = 1
-    const windows = parts.reduce((total, part) => total + Math.max(0, part.length - WINDOW + 1), 0)
-    while (room < SPARSITY * windows) {
-      room *= 2
-      bits++
-    }
-    this.#offsets = new Uint32Array(room)
-    this.#hashes = new Int32Array(room)
-    this.#dropped = new Uint8Array(room)
+    const text = this.#text = Buffer.concat(parts)
+    const bits = 32 - Math.clz32(Math.max(2, SPARSITY * text.length) - 1)
+    this.#offsets = new Uint32Array(2 ** bits)
+    this.#hashes = new Int32Array(2 ** bits)
+    this.#dropped = new Uint8Array(2 ** bits)
     this.#shift = 32 - bits
-    this.#mask = room - 1
+    this.#mask = 2 ** bits - 1
 
     let start = 0
-    for (let p = 0; p < parts.length; p++) {
-      const part = parts[p]
-      this.#text.set(part, start)
+    for (const part of parts) {
       this.#starts.push(start)
-      this.#wheres.push(sources[p].where)
-      if (part.length >= WINDOW) {
-        let hash = hashOf(part, 0)
-        for (let at = 0; ; at++) {
-          const found = this.#find(hash, this.#text, start + at)
-          if (found < 0) {
-            const slot = ~found
-            this.#offsets[slot] = start + at + 1
-            this.#hashes[slot] = hash
-            this.#size++
-          }
-          if (at + WINDOW >= part.length) break
-          hash = nextHash(hash, part[at], part[at + WINDOW])
+      const end = start + part.length
+      for (let at = start, hash = hashOf(text, at); at + WINDOW <= end; at++) {
+        const found = this.#find(hash, text, at)
+        if (found < 0) {
+          this.#offsets[~found] = at + 1
+          this.#hashes[~found] = hash
+          this.#size++
         }
+        hash = nextHash(hash, text[at], text[at + WINDOW])
       }
-      start += part.length
+      start = end
     }
+    this.#wheres = sources.map((source) => source.where)
   }
 
   // The slot holding the window at bytes[at], or ~(the empty slot it would take).
@@ -308,10 +276,7 @@ export class WindowTable {
       // Almost every position lands on an empty slot: that check stays here, off the call path.
       if (offsets[Math.imul(hash, HASH_MIX) >>> shift] !== 0) {
         const slot = this.#find(hash, text, at)
-        if (slot >= 0 && dropped[slot] === 0) {
-          onHit(slot)
-          if (this.#size === 0) return
-        }
+        if (slot >= 0 && dropped[slot] === 0) onHit(slot)
       }
       if (at + WINDOW >= length) return
       hash = nextHash(hash, text[at], text[at + WINDOW])
@@ -319,21 +284,13 @@ export class WindowTable {
   }
 
   drop(slot) {
-    if (this.#dropped[slot] !== 0) return
     this.#dropped[slot] = 1
     this.#size--
   }
 
   whereOf(slot) {
     const offset = this.#offsets[slot] - 1
-    let low = 0
-    let high = this.#starts.length - 1
-    while (low < high) {
-      const middle = (low + high + 1) >> 1
-      if (this.#starts[middle] <= offset) low = middle
-      else high = middle - 1
-    }
-    return this.#wheres[low]
+    return this.#wheres[this.#starts.findLastIndex((start) => start <= offset)]
   }
 
   get size() {
