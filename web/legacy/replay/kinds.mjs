@@ -27,7 +27,7 @@ const DMAX = 256, NMAX = 2000 // diff: an edit pair gets a line diff up to D edi
 
 export const valueOf = (text) => { try { return JSON.parse(text) } catch { return text } }
 
-const get = (v, path) => {
+export const get = (v, path) => {
   if (path == null) return v
   if (!Array.isArray(path)) return undefined
   for (const k of path) {

@@ -10,7 +10,7 @@
 import { esc, kf } from '../core/fmt.mjs'
 import * as W from '../labels/replay.mjs'
 import { HALF } from '../core/icons.mjs'
-import { DISPLAY_CLIP, cellOf, cellBodyHtml, modeOf, bodyCache, hasInline, isAddressed, inlineText, loadBody, isRetryable } from './cell.mjs'
+import { DISPLAY_CLIP, cellOf, cellBodyHtml, modeOf, bodyCache, hasInline, isAddressed, loadBody, isRetryable } from './cell.mjs'
 import { openedFf, rowMarks } from '../../src/screens/replay/window-model.mjs'
 export { DISPLAY_CLIP, preEsc, rawContentText, inlineText, hasInline, isAddressed, blockGot, loadBody, isRetryable, bodyCache } from './cell.mjs'
 
@@ -53,9 +53,8 @@ export function blockBodyHtml(got, b) {
     // a tools block always has its metadata row (name · params · descChars) to show, HEAVY-dropped or old-trace
     const inline = hasInline(b) || (b.sec === 'tools' && (b.name != null || b.descChars != null || (b.props && b.props.length)))
     if (!inline) return `<div class="cbsrc warn">${HALF + ' ' + esc(W.NO_BODY)}</div>`
-    const note = b.unaddressable ? `<div class="cbsrc warn" title="${esc(b.unaddressable)}">${esc(W.INLINE_NOTE)}</div>` : ''
-    const cell = cellOf({ ...b, text_ref: undefined, inline: String(inlineText(b) ?? '') })
-    return note + cellBodyHtml(cell, modeOf(cell.bid))
+    const cell = cellOf(b)
+    return cellBodyHtml(cell, modeOf(cell.bid))
   }
   if (got.status !== 'ok') {
     const why = got.error || got.reason || 'the capture could not be read'
@@ -64,7 +63,7 @@ export function blockBodyHtml(got, b) {
   // the cached answer is read by ref (the cell LRU then holds refs, not bodies, and the blob of a media cell is keyed r:<ref>);
   // only an answer the cache does not hold rides inline
   const cell = cellOf(b)
-  return cellBodyHtml(cell.ref != null && bodyCache.get(cell.ref) === got ? cell : { ...cell, inline: String(got.text ?? '') }, modeOf(cell.bid))
+  return cellBodyHtml(cell.ref != null && bodyCache.get(cell.ref) === got ? cell : { ...cell, inline: String(got.text ?? ''), view: got.view ?? cell.view }, modeOf(cell.bid))
 }
 // the body of an opened row right now: inline, from the cache, or the pending state (the caller then loads it)
 export function bodyFor(b) {

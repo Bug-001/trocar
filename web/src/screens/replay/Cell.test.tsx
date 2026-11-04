@@ -1,17 +1,18 @@
 // web/src/screens/replay/Cell.test.tsx — the React cell of the context window (spec 2.3 §两种模式, 1.4 #7): Raw shows the bytes (the
-// leaf's text without its .lay spans is the source), Readable is renderKind's markup unchanged, the first slice is a prefix with its own
-// clip status, the view mode is cell.mjs's state on either side, a pending or failed body has no control, the cell never reads a body
-// itself, and a grown leaf survives a re-render. Bodies are constructed here and from the generated desk world (desk-world.mjs).
+// leaf's text without its .lay spans is the source), Readable is renderKind's markup over the view unchanged, the first slice is a
+// prefix with its own clip status, the view mode is cell.mjs's state on either side, a cell with one mode has no switch, a pending or
+// failed body has no control, the cell never reads a body itself, what the reader opened comes back, and a grown leaf survives a
+// re-render. Bodies are constructed here and from the generated desk world (desk-world.mjs).
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from 'vitest'
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { useState } from 'react'
 import { DISPLAY_CLIP, bodyCache, cellBodyHtml, cellOf, modeOf, overrideScope, setDeskMode, setMode, wireCells } from '../../../legacy/replay/cell.mjs'
-import { renderKind, valueOf } from '../../../legacy/replay/kinds.mjs'
+import { renderKind } from '../../../legacy/replay/kinds.mjs'
 import { stepOf } from '../../../legacy/replay/model.mjs'
 import { deskFrom, world } from '../../../../test/web-v2/desk-world.mjs'
 import { Cell } from './Cell'
 
-const KEY = 'trocar.v2.cellView'
+const KEY = 'trocar.v2.cellMode'
 type Seen = { cb: IntersectionObserverCallback, els: Set<Element> }
 const observers: Seen[] = [] // the cell's sentinel observer lives as long as the module
 beforeAll(() => {
@@ -29,7 +30,9 @@ afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
 const noApi = { get: vi.fn() }
 const bytesOf = (pre: Element) => { const c = pre.cloneNode(true) as Element; for (const l of c.querySelectorAll('.lay')) l.remove(); return c.textContent }
-const inline = (text: string, r: object = { as: 'text' }, bid?: string) => cellOf({ inline: text, r, ...(bid ? { bid } : {}) })
+const valueOf = (t: string) => { try { return JSON.parse(t) } catch { return t } }
+// a body the caller holds, with the view the server would send for it
+const inline = (text: string, r: object = { as: 'text' }, bid?: string) => cellOf({ inline: text, view: { r: { f: { body: [] }, ...r }, body: valueOf(text) }, ...(bid ? { bid } : {}) })
 const leafOf = (c: HTMLElement) => c.querySelector('.cell > .cellraw, .cell > .cellread') as HTMLElement
 // enter every watched sentinel and let the idle callback run
 async function enter() {
@@ -40,12 +43,11 @@ async function enter() {
 }
 
 // the first case: the desk mode this page set is still unset (cell.mjs keeps the last one in memory when storage cannot)
-test('2.3 #14: storage that throws on every access draws the cell in Raw', () => {
-  localStorage.setItem(KEY, 'read')
+test('2.3 #14: storage that throws on every access draws the cell in Readable', () => {
   vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('denied') })
   vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('denied') })
   const { container } = render(<Cell cell={inline('{"a":1}', { as: 'json' })} api={noApi} />)
-  expect((container.querySelector('.cell') as HTMLElement).dataset.mode).toBe('raw')
+  expect((container.querySelector('.cell') as HTMLElement).dataset.mode).toBe('read')
 })
 
 test('2.3 #1 · 1.4 #7 · AC-1: the Raw leaf without its .lay spans is the bytes', async () => {
@@ -121,8 +123,8 @@ test('2.3 #17: the Readable leaf is renderKind\'s markup unchanged', () => {
     const cell = inline(text, r), { container, unmount } = render(<Cell cell={cell} api={noApi} />)
     fireEvent.click(container.querySelector('[data-cellmode="read"]')!)
     const want = document.createElement('div')
-    const opt = { budget: DISPLAY_CLIP, bid: cell.bid } // as cell.mjs draws a first slice
-    want.innerHTML = renderKind(cell.r, valueOf(text), opt).html
+    const opt = { budget: DISPLAY_CLIP } // as cell.mjs draws a first slice
+    want.innerHTML = renderKind(cell.view.r, cell.view.body, opt).html
     expect(container.querySelector('.cell > .cellread')!.innerHTML).toBe(want.innerHTML)
     unmount()
   }

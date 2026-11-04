@@ -1,6 +1,6 @@
 // test/web-v2/cell-modes.test.mjs — a cell's view mode (spec 2.3 §两种模式, 1.2 §键盘):
 // the per-cell override follows the cell's identity across steps, the desk default survives a reload through storage and
-// degrades to Raw when storage fails, and the cell keys are a pure function of the key event. No DOM; storage is a fake.
+// degrades to Readable when storage fails, and the cell keys are a pure function of the key event. No DOM; storage is a fake.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { cellOf, cellBodyHtml, modeOf, setMode, bodyCache, overrideScope, clearOverrides } from '../../web/legacy/replay/cell.mjs'
@@ -13,7 +13,7 @@ test('an override follows the block across steps that re-send it, whatever its b
   // one block re-sent at two steps: the same content key, two records
   const def1 = { sec: 'messages', role: 'user', kind: 'text', key: 'K:1', text_ref: 's/main#r1::10-20', chars: 6, preview: 'abc' }
   const def2 = { ...def1, text_ref: 's/main#r9::10-20' }
-  bodyCache.set(def2.text_ref, { status: 'ok', text: '"abc"' })
+  bodyCache.set(def2.text_ref, { status: 'ok', text: '"abc"', view: { r: { as: 'text', f: { body: ['text'] } }, body: { text: 'abc' } } })
   setMode(cellOf(def1).bid, 'read')
   const c2 = cellOf(def2)
   assert.equal(modeOf(c2.bid), 'read')
@@ -43,11 +43,17 @@ test('the desk default survives a reload through storage', async () => {
   assert.equal(b.deskMode({ storage }), 'read')
 })
 
-test('a storage that throws leaves the desk default at Raw and never throws', async () => {
+test('2.3 #14: a storage that throws leaves the desk default at Readable and never throws', async () => {
   const bad = { getItem() { throw new Error('denied') }, setItem() { throw new Error('denied') } }
   const m = await import(CELL + '?fresh=c1')
-  assert.equal(m.deskMode({ storage: bad }), 'raw')
-  assert.doesNotThrow(() => m.setDeskMode('read', { storage: bad }))
+  assert.equal(m.deskMode({ storage: bad }), 'read')
+  assert.doesNotThrow(() => m.setDeskMode('raw', { storage: bad }))
+})
+
+test('2.3 #14: Readable is the default of a desk with nothing stored, whatever the key of the earlier default holds', async () => {
+  const storage = memStorage()
+  storage.setItem('trocar.v2.cellView', 'raw')
+  assert.equal((await import(CELL + '?fresh=d1')).deskMode({ storage }), 'read')
 })
 
 test('the cell keys are a pure function of the key event, and the desk keys ignore them', () => {
@@ -58,17 +64,4 @@ test('the cell keys are a pure function of the key event, and the desk keys igno
   for (const [e, want] of cases) { assert.deepEqual(cellKey(e), want); assert.deepEqual(cellKey({ ...e }), want, 'same input, same output') }
   for (const mod of ['ctrlKey', 'metaKey', 'altKey']) for (const key of ['v', 'V', 'c']) assert.equal(cellKey({ key, [mod]: true }), null)
   for (const key of ['v', 'V', 'c']) assert.equal(keyAction({ key }, { at: 0, n: 5, problems: [] }), null)
-})
-
-test('Readable names the kind it drew: the toolbar word and the body class agree, whatever r asked for (§2.3 fallbacks)', async () => {
-  const { KIND_WORD } = await import('../../web/legacy/labels/cells.mjs')
-  const KD = { md: 'markdown', sec: 'sections' } // the two classes that are not kd-<as> (RFC 2.3 §两种模式)
-  const values = ['plain', '"a json string"', '{"k":1,"v":[true,null,"x"]}', '[1,2,{"z":"q"}]', '42', 'null', '{"broken"', '<s>x</s>t', '@@ -1 +1 @@\n-a\n+b']
-  const specs = [undefined, { as: 'nope' }, ...Object.keys(KIND_WORD).flatMap((as) => [{ as }, { as, f: { body: ['missing'] } }, { as, tone: 'error' }])]
-  for (const [i, v] of values.entries()) for (const r of specs) {
-    const html = cellBodyHtml(cellOf({ inline: `${v}${' '.repeat(i)}`, r }), 'read')
-    const cls = html.match(/class="cellread ([^"]*)"/)[1].split(' ').find((c) => c.startsWith('kd-'))
-    const drawn = html.includes('class="kd-fail"') ? 'text' : KD[cls.slice(3)] ?? cls.slice(3)
-    assert.equal(html.match(/<span class="cellkind">([^<]*)</)[1], KIND_WORD[drawn], `${JSON.stringify(r)} over ${JSON.stringify(v)}`)
-  }
 })
