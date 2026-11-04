@@ -988,12 +988,12 @@ export function linearContext(request, keyMemo = null, ctx = {}) {
   // JSON is never silently passed off as content. Scoped to `file::` on purpose: skill/mcp/scaffold
   // resources already resolve to their own verbatim body block, and stealing that is a regression.
   const spine = dissectBlocks(request, ctx)
-  const fileKeyByUseId = new Map()  // tool_use_id → 'file::<path>'
+  const fileUseById = new Map()     // tool_use_id → its spine entry, whose key is 'file::<path>'
   const answered = new Set()        // tool_use_ids that have a result IN THIS request
   for (const e of spine) {
     const b = e.parsed
     if (!b || typeof b !== 'object') continue
-    if (b.type === 'tool_use' && b.id && String(e.resourceRef || '').startsWith('file::')) fileKeyByUseId.set(b.id, e.resourceRef)
+    if (b.type === 'tool_use' && b.id && String(e.resourceRef || '').startsWith('file::')) fileUseById.set(b.id, e)
     else if (b.type === 'tool_result' && b.tool_use_id) answered.add(b.tool_use_id)
   }
   for (const e of spine) {
@@ -1026,6 +1026,7 @@ export function linearContext(request, keyMemo = null, ctx = {}) {
         cc: (b && b.cache_control) || null,
         resKey: e.resourceRef, key: blkKey('M:' + e.role + ':' + type + ':', b, keyMemo),
       }
+      if (e.resourceRefs) d.resKeys = e.resourceRefs
       // `key` above is UNCHANGED — the cache-prefix chain diffs on it, so the linking below only
       // ever ADDS descriptive fields.
       if (type === 'tool_use' && d.resKey && d.resKey.startsWith('file::')) {
@@ -1034,8 +1035,10 @@ export function linearContext(request, keyMemo = null, ctx = {}) {
         // the NEXT one. The honest render is "result not in this call's context yet" — showing the
         // arguments as though they were the file is the bug this flag exists to prevent.
         d.resPending = !answered.has(b.id)
-      } else if (type === 'tool_result' && b && b.tool_use_id && fileKeyByUseId.has(b.tool_use_id)) {
-        d.resKey = fileKeyByUseId.get(b.tool_use_id)
+      } else if (type === 'tool_result' && b && b.tool_use_id && fileUseById.has(b.tool_use_id)) {
+        const use = fileUseById.get(b.tool_use_id)
+        d.resKey = use.resourceRef
+        if (use.resourceRefs) d.resKeys = use.resourceRefs
         d.resRole = 'result'
         // An error result IS what entered the context — link it, but flag it so the panel says
         // "the tool failed" instead of presenting the error text as the file's contents.

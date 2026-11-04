@@ -31,38 +31,42 @@ export function isVolatile(section, block) {
   return /^x-anthropic-billing-header/.test(text);
 }
 
-// Link a message block to a resource-ledger id (file / skill / mcp / scaffold), or '' when none.
+// Link a message block to its resource-ledger ids (file / skill / mcp / scaffold): resourceRefs all of them, resourceRef the first or ''.
 // The board uses '' inline; the ETL maps '' → null. Labels MUST match extractResources'/addRes' keys
 // so the ledger join works. (Unifies the twin msgResKey [board] / resourceRefOf [ETL].)
 // `ctx`: what a shell read's path resolves against (harnesses.mjs pathContext); the key and the ledger label come from the one parse.
 // Memo by the parsed block: a stitched context hands the same block to every call of its chain (parsed bodies are read-only).
 const refMemo = new WeakMap();
-export function resourceRef(b, ctx = {}) {
-  if (!b || typeof b !== 'object') return '';
+export function resourceRefs(b, ctx = {}) {
+  if (!b || typeof b !== 'object') return [];
   let r = refMemo.get(b);
   if (r === undefined) refMemo.set(b, (r = resourceRefOf(b, ctx)));
   return r;
 }
+export const resourceRef = (b, ctx) => resourceRefs(b, ctx)[0] || '';
+// a spine entry's keys: `resourceRefs` only when a block has more than one (a shell read of several files)
+const refsOf = (b, ctx) => { const r = resourceRefs(b, ctx); return r.length > 1 ? { resourceRef: r[0], resourceRefs: r } : { resourceRef: r[0] || '' }; };
 function resourceRefOf(b, ctx) {
   if (b.type === 'text' && typeof b.text === 'string') {
     // the resident SKILL.md body block → link to its skill (basename of "Base directory" === skill)
     const sk = b.text.match(/^Base directory for this skill: (\S+)/);
-    if (sk) return 'skill::' + sk[1].split('/').pop();
+    if (sk) return ['skill::' + sk[1].split('/').pop()];
     // scaffold (auto-loaded context) → link the verbatim system-reminder block to its ledger resource
     if (/<system-reminder>/.test(b.text)) {
-      if (/CLAUDE\.md/i.test(b.text)) return 'scaffold::CLAUDE.md';
-      if (/\bMEMORY\.md\b|auto-memory|persists across conversations/i.test(b.text)) return 'scaffold::memory (MEMORY.md)';
+      if (/CLAUDE\.md/i.test(b.text)) return ['scaffold::CLAUDE.md'];
+      if (/\bMEMORY\.md\b|auto-memory|persists across conversations/i.test(b.text)) return ['scaffold::memory (MEMORY.md)'];
     }
-    return '';
+    return [];
   }
-  if (b.type !== 'tool_use') return '';
+  if (b.type !== 'tool_use') return [];
+  if (Array.isArray(b.resKeys)) return b.resKeys; // a tool_use of an earlier record, standing in for its keys (extract.mjs linkStub)
   const p = b.input?.file_path || b.input?.path || b.input?.notebook_path;
-  if (p) return 'file::' + p;
-  // a Bash read (cat/head/…) makes its first dumped file resident — key the block to that file
-  if (b.name === 'Bash' && b.input?.command) { const rd = parseBashReads(b.input.command, ctx); if (rd.length) return 'file::' + rd[0].path; }
-  if (b.name === 'Skill') return 'skill::' + (b.input?.skill || b.input?.command || '');
-  if ((b.name || '').startsWith('mcp__')) return 'mcp::' + (String(b.name).split('__')[1] || '');
-  return '';
+  if (p) return ['file::' + p];
+  // a Bash read (cat/head/…) makes the files it dumps resident: every one, in command order, once each
+  if (b.name === 'Bash' && b.input?.command) { const rd = parseBashReads(b.input.command, ctx); if (rd.length) return [...new Set(rd.map((r) => 'file::' + r.path))]; }
+  if (b.name === 'Skill') return ['skill::' + (b.input?.skill || b.input?.command || '')];
+  if ((b.name || '').startsWith('mcp__')) return ['mcp::' + (String(b.name).split('__')[1] || '')];
+  return [];
 }
 
 // Short structural label for a system block (Claude Code stacks several). Anchored on the opening
@@ -106,12 +110,12 @@ export function dissectBlocks(req, ctx = {}) {
     if (Array.isArray(m.content)) {
       for (let bi = 0; bi < m.content.length; bi++) {
         const b = m.content[bi]; // raw element (usually an object, rarely a bare string)
-        spine.push({ section: 'messages', seq: seq++, role: m.role, parsed: b, path: { mi, bi, arrayContent: true }, volatile: false, resourceRef: resourceRef(b, ctx) });
+        spine.push({ section: 'messages', seq: seq++, role: m.role, parsed: b, path: { mi, bi, arrayContent: true }, volatile: false, ...refsOf(b, ctx) });
       }
     } else {
       // whole content is a string (or missing) → ONE synthesized text block (matches both parsers)
       const parsed = { type: 'text', text: m.content };
-      spine.push({ section: 'messages', seq: seq++, role: m.role, parsed, path: { mi, bi: 0, arrayContent: false }, volatile: false, resourceRef: resourceRef(parsed, ctx) });
+      spine.push({ section: 'messages', seq: seq++, role: m.role, parsed, path: { mi, bi: 0, arrayContent: false }, volatile: false, ...refsOf(parsed, ctx) });
     }
   }
   return spine;

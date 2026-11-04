@@ -33,7 +33,7 @@ async function read(recs) {
   const home = homeWith(recs), { lanes } = await query(home, 'session', { id: 'S' })
   const doc = await query(home, 'lane', { id: 'S', lane: lanes.find((l) => l.kind === 'main').lane })
   const uses = doc.defs.filter((d) => d.kind === 'tool_use')
-  return { files: doc.resources.filter((r) => r.kind === 'file'), uses }
+  return { files: doc.resources.filter((r) => r.kind === 'file'), uses, doc }
 }
 const keyOf = (r) => `${r.kind}::${r.label}`
 const keysOf = (uses) => [...new Set(uses.map((d) => d.resKey))] // a tool use is a block of the reply and of the next request
@@ -80,4 +80,49 @@ for (const [command, word, runtime] of [
     const { files, uses } = await read(lane([bash('t0', command)]))
     assert.deepEqual(files.map((r) => [r.label, r.runtime]), [[word, runtime]])
     assert.deepEqual(keysOf(uses), [`file::${word}`])
+  })
+
+// 2.4 #11, several files in one block. The names are out of order on purpose: the ledger sorts by key, a block keeps the command's order.
+const FILES = ['/w/p/z.txt', '/w/p/a.txt', '/w/p/m.txt', '/w/p/c.txt']
+const READS = {
+  cat: (f) => `cat ${f.join(' ')}`,
+  head: (f) => `head -n 3 ${f.join(' ')}`,
+  'a cat each': (f) => f.map((x) => `cat ${x}`).join('; '),
+  for: (f) => `for f in ${f.join(' ')}; do cat $f; done`,
+  grep: (f) => `grep x ${f.join(' ')}`,
+}
+// every position's attributes with the block there, the lists rebuilt from the steps' ops (3.5 §会话读)
+function placed(doc) {
+  const out = []
+  let list = []
+  for (const s of doc.steps) {
+    list = s.ops.flatMap((o) => (o[0] === 0 ? list.slice(o[1], o[1] + o[2]) : o.slice(1)))
+    for (const [at, a] of Object.entries(s.attrs)) out.push([list[at], a])
+  }
+  return out
+}
+for (const [how, spell] of Object.entries(READS))
+  for (const n of [2, 3, 4])
+    test(`a block reading ${n} files by ${how} carries every key, the size stays one total`, async () => {
+      const files = FILES.slice(0, n), keys = files.map((f) => `file::${f}`)
+      const { files: entries, uses, doc } = await read(lane([bash('t0', spell(files))]))
+      assert.deepEqual(entries.map(keyOf).sort(), [...keys].sort())
+      for (const d of uses) {
+        assert.deepEqual(d.resKeys, keys)
+        assert.equal(d.resKey, keys[0])
+      }
+      const [result, ...others] = doc.defs.filter((d) => d.kind === 'tool_result')
+      assert.equal(others.length, 0)
+      assert.equal(typeof result.chars, 'number')
+      assert.equal(typeof result.bytes, 'number')
+      assert.ok(!('resKey' in result) && !('resKeys' in result))
+      assert.deepEqual(placed(doc).filter(([bid]) => bid === result.bid).map(([, a]) => a.resKeys), [keys])
+    })
+
+for (const command of ['cat /w/p/a.txt', 'head -n 3 /w/p/a.txt', 'cat /w/p/a.txt /w/p/a.txt', 'cat /w/p/a.txt; cat /w/p/a.txt', 'P=/w/p/a.txt; cat $P /w/p/a.txt'])
+  test(`one file read by ${command} has one key and no resKeys`, async () => {
+    const { uses, doc } = await read(lane([bash('t0', command)]))
+    assert.deepEqual(keysOf(uses), ['file::/w/p/a.txt'])
+    assert.ok(!doc.defs.some((d) => 'resKeys' in d))
+    assert.ok(!placed(doc).some(([, a]) => 'resKeys' in a))
   })

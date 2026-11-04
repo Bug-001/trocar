@@ -32,7 +32,7 @@ const OPTIONAL = ['label', 'name', 'mcp', 'cc'];
 const BODY = ['text', 'block', 'desc', 'schema'];
 const fhWire = (hex) => (typeof hex === 'string' && /^[0-9a-f]{32}/.test(hex) ? Buffer.from(hex.slice(0, 32), 'hex').toString('base64url') : null);
 // a position's attributes on the wire, and the key a copy is matched by (a block id with the attributes it carries there)
-const attrOf = (a) => { const o = pick(a, ['query', 'volatile']); return Object.keys(o).length ? o : null; };
+const attrOf = (a) => { const o = pick(a, ['query', 'volatile', 'resKeys']); return Object.keys(o).length ? o : null; };
 // The ledger's wire order (3.5 `resources` 与 `seen`): resources by `kind::label`, then seen by `path`, code-unit order. A cursor =
 // base64url of JSON [list, the last key shipped] ('' before the first); `--ledger C` answers the entries after it, its key gone or not.
 const LISTS = ['resources', 'seen'];
@@ -138,7 +138,7 @@ export function laneStepper(st, key, uses = lru(DEF_BYTES)) {
       // a tool definition an older capture kept only as metadata (the projection's `verbatim: false`, analyze.mjs) says so on the wire
       const ff = d.verbatim === false && !(d.ff && d.ff.faithfulness) ? { ...d.ff, faithfulness: 'metadata' } : d.ff || {};
       w = { bid, fh: fhWire(d.fh), ref: d.ref ?? null, sec: d.sec, role: d.role, kind: d.kind, ...pick(d, OPTIONAL), ...(d.toolName ? { name: d.toolName } : null), ff, head: d.head,
-        preview: d.preview, chars: d.chars, bytes: d.bytes, ...(d.resKey ? { resKey: d.resKey } : null), r: pick(renderIn(d, list), ['as', 'tone', 'title', 'f']) };
+        preview: d.preview, chars: d.chars, bytes: d.bytes, ...(d.resKey ? { resKey: d.resKey } : null), ...(d.resKeys ? { resKeys: d.resKeys } : null), r: pick(renderIn(d, list), ['as', 'tone', 'title', 'f']) };
       if (ff.unaddressable) Object.assign(w, { ref: null, unaddressable: ff.unaddressable, inline: pick(d, BODY) });
     }
     wires.set(bid, w);
