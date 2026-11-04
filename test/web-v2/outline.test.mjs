@@ -4,14 +4,14 @@
 // is guarded by the test of that name below.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { outlineHtml, outlineEntries, queryStepLabels, wireOutline, jumpToAnchor, jumpToBlockIndex } from '../../src/web/v2/replay/outline.mjs'
-import { resourcesHtml } from '../../src/web/v2/replay/resources.mjs'
-import { humanTurns, messageTurns } from '../../src/web/v2/replay/analysis.mjs'
-import { openTurnFor, renderContextWindow } from '../../src/web/v2/replay/ctxwin.mjs'
-import { turnIsOpen } from '../../src/web/v2/replay/fold.mjs'
-import { buildLanes, anchorLane } from '../../src/web/v2/replay/lanes.mjs'
-import { stepOf, createDesk, applySession } from '../../src/web/v2/replay/model.mjs'
-import { createJumpQueue, anchorJump } from '../../src/web/v2/replay/jump.mjs'
+import { outlineHtml, outlineEntries, queryStepLabels, wireOutline, jumpToAnchor, jumpToBlockIndex } from '../../web/legacy/replay/outline.mjs'
+import { resourcesHtml } from '../../web/legacy/replay/resources.mjs'
+import { humanTurns, messageTurns } from '../../web/legacy/replay/analysis.mjs'
+import { openTurnFor, renderContextWindow } from '../../web/legacy/replay/ctxwin.mjs'
+import { turnIsOpen } from '../../web/legacy/replay/fold.mjs'
+import { buildLanes, anchorLane } from '../../web/legacy/replay/lanes.mjs'
+import { stepOf, createDesk, applySession } from '../../web/legacy/replay/model.mjs'
+import { createJumpQueue, anchorJump } from '../../web/legacy/replay/jump.mjs'
 import { deskOf, world, readLane } from './desk-world.mjs'
 
 const ts = (i) => new Date(Date.UTC(2026, 9, 7, 0, 0, i * 5)).toISOString()

@@ -4,7 +4,7 @@
 // PENDING ids are measured and reported, never failed. Selectors are the board's ids / classes / data attributes, never wording.
 // Exports only; nothing runs at import.
 import { snap as probeSnap } from './probe.mjs'
-import { WRITE_GAP_MS } from '../../../../src/web/v2/core/router.mjs'
+import { WRITE_GAP_MS } from '../../../../web/legacy/core/router.mjs'
 import { BOARD_LINES } from '../../perf-lines.mjs'
 
 export const IDS = Object.freeze(['I-pageerror', 'I-console', 'I-blank', 'I-keep', 'I-stack', 'I-hscroll', 'I-rate', 'I-write', 'I-leak',
@@ -119,14 +119,17 @@ const rateKey = (url) => {
 function rateFaults(log, { actions = [], hidden = [] } = {}) {
   const out = []
   const [lo, hi] = LIMITS.actionWindowMs
-  const byReader = (t) => actions.some((a) => t >= a.t + lo && t <= a.t + hi)
+  // a page load is no reader action (a goto, a background tab's open): its reads are judged as the load's opening below
+  const byReader = (t) => actions.some((a) => a.a !== 'load' && t >= a.t + lo && t <= a.t + hi)
   const hiddenAt = (t) => hidden.some((h) => t > h.from && (h.to == null || t < h.to))
   const sorted = [...log].filter((x) => x.method === 'GET').sort((a, b) => a.start - b.start)
-  // the first read of each key in a window is the screen's own: on becoming visible again (4.4:49-51) and on opening (4.4 「打开时」)
-  const exempt = new Set()
-  const firstIn = (from, to) => { const seen = new Set(); for (const e of sorted) if (e.start >= from && e.start <= to && !seen.has(rateKey(e.url))) { seen.add(rateKey(e.url)); exempt.add(e) } }
+  // the first read of each key in a window is the screen's own: on becoming visible again (4.4:49-51) and on opening (4.4 「打开时」: a load,
+  // a hashchange, a popstate). A load's are kept apart: a page can load in a hidden tab, so its opening reads are judged hidden below
+  const exempt = new Set(), loadExempt = new Set()
+  const firstIn = (from, to, set = exempt) => { const seen = new Set(); for (const e of sorted) if (e.start >= from && e.start <= to && !seen.has(rateKey(e.url))) { seen.add(rateKey(e.url)); set.add(e) } }
   for (const h of hidden) if (h.to != null) firstIn(h.to, h.to + LIMITS.returnReadMs)
   for (const a of actions) if (a.a === 'hashchange' || a.a === 'popstate') firstIn(a.t + lo, a.t + LIMITS.openReadMs)
+  for (const a of actions) if (a.a === 'load') firstIn(a.t + lo, a.t + LIMITS.openReadMs, loadExempt)
   const last = new Map() // key → {start, dur, fails, pending, recovered}
   let sessionAt = -Infinity // the start of the latest poll round (its head read, or a `session` read), whatever caused it
   for (const e of sorted) {
@@ -134,12 +137,17 @@ function rateFaults(log, { actions = [], hidden = [] } = {}) {
     const since = sessionAt, failed = failedRead(e)
     if (name === 'session' || name === 'd/head') sessionAt = e.start
     if (key == null) continue
-    if (byReader(e.start) || exempt.has(e)) { last.delete(key); continue } // the reader's read starts the timer's chain over
+    // the reader's read (and a screen it opened) starts the timer's chain over. Input reaching a hidden page is the harness's emulation:
+    // such reads are the reader's, not the hidden tab's
+    if (byReader(e.start) || exempt.has(e)) { last.delete(key); continue }
+    // a hidden tab reads nothing by itself (1.7 「页面不可见时全部停」), a load's opening reads included. A read on becoming visible again
+    // starts at or after the return: not hidden
+    if (hiddenAt(e.start)) out.push(`${name} read at ${e.start} while hidden`)
+    if (loadExempt.has(e)) { last.delete(key); continue }
     // an open tail read again in its own poll round (no head read since) is the round's whole read after a Range answer that was not
     // the file's lines or a 416 (4.4 §答案文件, replay.mjs readTail): once per round
     if (p && /^d\/open/.test(name) && since <= p.start && !p.chained) { last.set(key, { ...p, chained: true }); continue }
     last.set(key, { start: e.start, dur: (e.end ?? e.start) - e.start, fails: failed ? (p ? p.fails : 0) + 1 : 0, pending: !!e.pending, recovered: !failed && !!p && p.fails > 0 })
-    if (hiddenAt(e.start)) out.push(`${name} read at ${e.start} while hidden`)
     if (!p) continue
     const base = DELTA_PACED.has(name) ? LIMITS.interval.session : LIMITS.interval[name] || LIMITS.intervalOther
     if (DELTA_PACED.has(name) && !p.fails) {

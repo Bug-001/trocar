@@ -1,0 +1,1 @@
+import{dt as e,ft as t,i as n,ut as r}from"./router.js";var i=location.hash||``,a=n(i);a.screen===`replay`&&!i.startsWith(`#t=`)&&(e({token:r()}),t(`/api/d/head`,{id:a.id},{hold:!1}));

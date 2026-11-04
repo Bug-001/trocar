@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { kf, bytes, enc, esc, usd, clip, preview, fmtDur, base, fmtTime, fmtWhen, fmtStamp, has } from '../../src/web/v2/core/fmt.mjs'
+import { kf, bytes, enc, esc, usd, clip, preview, fmtDur, base, fmtTime, fmtWhen, fmtStamp, has } from '../../web/legacy/core/fmt.mjs'
 
 test('kf', () => { assert.equal(kf(null), '?'); assert.equal(kf(950), '950'); assert.equal(kf(1234), '1.2k'); assert.equal(kf(12345), '12k') })
 test('bytes keeps null as unknown', () => { assert.equal(bytes(null), '—'); assert.equal(bytes(0), '0 B'); assert.equal(bytes(1536), '1.5 KB'); assert.equal(bytes(5 * 1048576), '5.0 MB') })

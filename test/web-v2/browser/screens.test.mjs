@@ -5,7 +5,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { probe, withBoard, stats, shoot, layoutFaults, timed, timerReads } from './harness.mjs'
 import { BOARD_LINES } from '../perf-lines.mjs'
-import { COMMANDS } from '../../../src/web/v2/labels/capture.mjs'
+import { COMMANDS } from '../../../web/legacy/labels/capture.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
@@ -127,7 +127,7 @@ test('a screen change aborts the old screen\'s reads and the content is never bl
         held.add(route.request())
         await new Promise(() => {}) // never answered: only an abort from the page ends it
       })
-      await page.route(/\/library\/library\.mjs/, async (route) => { await libHeld; route.continue().catch(() => {}) })
+      await page.route(/\/assets\/library\.js$/, async (route) => { await libHeld; route.continue().catch(() => {}) })
     },
   })
   try {

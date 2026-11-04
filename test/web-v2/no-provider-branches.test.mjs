@@ -9,13 +9,13 @@ import { fileURLToPath } from 'node:url'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { HARNESSES, LEGACY_HARNESS_IDS } from '../../src/dissect/harnesses.mjs'
 
-const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'src', 'web', 'v2')
+const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'web', 'legacy')
 // every .mjs / .html / .css under `dir`, except assets/ (the harness icons and their SOURCES.md are data rows of the
 // chip table, not front-end code). The mock is gone; so is its exemption.
 export const files = (dir, root = dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((d) => {
   const p = path.join(dir, d.name)
   if (d.isDirectory()) return dir === root && d.name === 'assets' ? [] : files(p, root)
-  return /\.(mjs|html|css)$/.test(d.name) ? [p] : []
+  return /(?<!\.test)\.(mjs|ts|tsx|html|css)$/.test(d.name) ? [p] : []
 })
 const WIRE = ['x-claude-code', 'x-codex-', 'x-opencode-', 'x-deepseek-harness-', 'x-zcode-', 'anthropic-version',
   'cache_read_input_tokens', 'cache_creation_input_tokens', 'cached_tokens', 'input_tokens_details', 'prompt_tokens',
@@ -107,7 +107,7 @@ test('model families and vendors are caught, in any case, as words; harness disp
     assert.ok(violations('x.mjs', `const m = '${w}'`).length >= 1, w)
   assert.ok(violations('x.mjs', '// the opus tier costs more').length >= 1, 'a comment too: the words are not wanted in front-end text at all')
   for (const ok of ['const sonnetry = 1', 'const glmx = 2', 'const topus = 3', 'const geminis = 4']) assert.deepEqual(violations('x.mjs', ok), [], ok)
-  const chips = path.join('src', 'web', 'v2', 'core', 'chips.mjs')
+  const chips = path.join('web', 'legacy', 'core', 'chips.mjs')
   assert.deepEqual(violations(chips, "const n = 'DeepSeek dsh', k = 'Kimi Code'"), [])
   assert.equal(violations(chips, "const m = 'opus'").length, 1); assert.equal(violations(chips, "const m = 'moonshot'").length, 1)
 })
@@ -123,12 +123,12 @@ test('a harness id is caught inside a regex literal and inside a longer string o
   for (const ok of ['const a = b / cc / d', 'const t = x.cc / 2', 'a = b.cc // codex in a comment', '/* /hermes/ in a block comment */ x = 1', 'const s = "accord"', 'const re = /acct|xcc/', "const u = 'a.cc'", 'const q = `${cc}`'])
     assert.deepEqual(violations('x.mjs', ok), [], ok)
   assert.deepEqual(regexLiterals('a = /x\\/y/g; b = c / d / e; // /no/\nf = /[/]z/'), ['x\\/y', '[/]z'])
-  const chips = path.join('src', 'web', 'v2', 'core', 'chips.mjs')
+  const chips = path.join('web', 'legacy', 'core', 'chips.mjs')
   assert.deepEqual(violations(chips, "const re = /^(cc|codex)$/, k = 'x:kimi:y'"), []) // the chip table is the one place that names them
   assert.equal(violations(path.join('other', 'chips.mjs'), "const re = /codex/").length, 1)
 })
 test('core/chips.mjs is exempt from harness ids and from "claude-", nothing else', () => {
-  const chips = path.join('src', 'web', 'v2', 'core', 'chips.mjs')
+  const chips = path.join('web', 'legacy', 'core', 'chips.mjs')
   assert.deepEqual(violations(chips, "const t = { cc: 1, 'claude-code': 2, codex: 3, \"kimi\": 4, `zcode`: 5 }"), [])
   assert.equal(violations(chips, "x = 'prompt_tokens'").length, 1) // wire vocabulary still counts there
   assert.equal(violations(chips, "x = 'Bash'").length, 1)
@@ -154,8 +154,8 @@ test('files() skips only the top-level assets/ directory', () => {
   assert.deepEqual(rel, ['core/assets/real.mjs', 'core/x.css', 'main.mjs'].map((p) => p.split('/').join(path.sep)).sort())
 })
 
-test('src/web/v2 carries no provider, tool, harness-id or host literal', () => {
-  const list = files(ROOT)
+test('web/legacy carries no provider, tool, harness-id or host literal', () => {
+  const list = files(path.join(ROOT, '..')) // all of web/: the legacy tree, the React shell (web/src) and index.html
   assert.ok(list.length >= 10, `expected the v2 front end to exist, found ${list.length} files`)
   const bad = list.flatMap((f) => violations(path.relative(ROOT, f), fs.readFileSync(f, 'utf8')))
   assert.deepEqual(bad, [])

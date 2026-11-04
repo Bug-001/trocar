@@ -3,11 +3,11 @@
 // through as-is. String level over constructed lanes.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { detailHtml, openDetail, closeDetail } from '../../src/web/v2/replay/detail.mjs'
-import { reviewing } from '../../src/web/v2/replay/rails.mjs'
-import { buildLanes } from '../../src/web/v2/replay/lanes.mjs'
-import { bodyCache } from '../../src/web/v2/replay/cell.mjs'
-import * as W from '../../src/web/v2/labels/replay.mjs'
+import { detailHtml, openDetail, closeDetail } from '../../web/legacy/replay/detail.mjs'
+import { reviewing } from '../../web/legacy/replay/rails.mjs'
+import { buildLanes } from '../../web/legacy/replay/lanes.mjs'
+import { bodyCache } from '../../web/legacy/replay/cell.mjs'
+import * as W from '../../web/legacy/labels/replay.mjs'
 import { deskOf } from './desk-world.mjs'
 
 const ts = (i) => new Date(Date.UTC(2026, 9, 7, 0, 0, i * 5)).toISOString()

@@ -4,10 +4,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import { pageLogHtml } from '../../src/web/v2/capture/capture-log.mjs'
-import { failureSentence } from '../../src/web/v2/core/capture-verdict.mjs'
-import { fmtWhen } from '../../src/web/v2/core/fmt.mjs'
-import { LOG } from '../../src/web/v2/labels/capture.mjs'
+import { pageLogHtml } from '../../web/legacy/capture/capture-log.mjs'
+import { failureSentence } from '../../web/legacy/core/capture-verdict.mjs'
+import { fmtWhen } from '../../web/legacy/core/fmt.mjs'
+import { LOG } from '../../web/legacy/labels/capture.mjs'
 
 const SPEC = fs.readFileSync(new URL('../../spec/01-trocar-rfc/1.6-cli.md', import.meta.url), 'utf8')
 const C3 = SPEC.slice(SPEC.indexOf('### C.3'))

@@ -5,8 +5,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { probe, withBoard, shoot } from './harness.mjs'
-import { INTERVAL } from '../../../src/web/v2/core/poll.mjs'
-import { UNTITLED, TITLE_PENDING } from '../../../src/web/v2/labels/common.mjs'
+import { INTERVAL } from '../../../web/legacy/core/poll.mjs'
+import { UNTITLED, TITLE_PENDING } from '../../../web/legacy/labels/common.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason

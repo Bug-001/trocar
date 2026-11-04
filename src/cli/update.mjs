@@ -257,7 +257,7 @@ async function update({ io, env, home, platform, deps, flags }) {
     return no('merge-failed', `the new code could not be merged in (${merged.err || `git exit ${merged.code}`}); the agents that were being captured are being captured again`)
   }
   if (touchesDeps) {
-    const npm = execTool('npm', ['install', '--no-audit', '--no-fund'], { run: deps.exec || null, env, timeoutMs: 600_000 })
+    const npm = execTool('npm', ['install', '--omit=dev', '--no-audit', '--no-fund'], { run: deps.exec || null, env, cwd: root, timeoutMs: 600_000 })
     // the code IS replaced: the handover file stays, so the next run goes on from step 4 (§5.5)
     if (npm.code !== 0) return no('npm-failed', `the code is now ${r.to}, but what it needs could not be installed (${npm.err || `npm exit ${npm.code}`}). ${AGAIN}`)
   }

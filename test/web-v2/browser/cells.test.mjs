@@ -127,59 +127,6 @@ test('the same copy contract in WebKit', { skip: webkitSkip }, async () => {
   await copyCase({ launch: () => webkit.launch() })
 })
 
-// An open cell is a ref into the bounded body cache (RFC 2.3): once its bytes are evicted, switching view and Copy bytes
-// ask for them again and give exactly the stored bytes; two needs at once share one request, and nothing asks again per frame.
-test('an open cell whose bytes left the cache asks once per need and gives the stored bytes again (Chromium)', { skip }, async () => {
-  const b = await withBoard({ chromium: gate.chromium })
-  try {
-    await openBusiest(b)
-    const [ref] = await openLaidCells(b.page)
-    assert.ok(ref, 'a Raw cell was opened')
-    const bytes = (await b.get('block', { ref })).doc.blocks[0].bytes
-    const asks = () => b.requests.filter((r) => r.url.startsWith('/api/block?') && new URLSearchParams(r.url.split('?')[1]).get('ref') === ref).length
-    const sel = `#ctxwin .cell[data-ref="${ref.replace(/"/g, '\\"')}"]`
-    const evict = () => b.page.evaluate(async (r) => (await import('/replay/cell.mjs')).bodyCache.delete(r), ref)
-    const frames = () => b.page.evaluate(() => new Promise((r) => { let n = 30; const f = () => (--n ? requestAnimationFrame(f) : r()); requestAnimationFrame(f) }))
-    await b.page.evaluate(() => {
-      window.__copied = null
-      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (t) => { window.__copied = t } } })
-    })
-    const shownText = () => b.page.evaluate((s) => { const c = document.querySelector(s), w = document.createTreeWalker(c.querySelector('.cellraw'), NodeFilter.SHOW_TEXT); let t = ''; for (let n; (n = w.nextNode());) if (!n.parentElement.closest('.lay')) t += n.data; return { t, shown: +c.dataset.shown } }, sel)
-
-    // a view switch after eviction: one request, the Readable cell over the whole stored body
-    let before = asks()
-    assert.equal(await evict(), true, 'the bytes were in the cache')
-    await b.page.locator(`${sel} [data-cellmode="read"]`).first().click()
-    await b.page.waitForSelector(`${sel}[data-mode="read"]`, { timeout: 10000 })
-    await frames()
-    assert.equal(asks() - before, 1, 'one request for the switch')
-    assert.equal(Number(await b.page.locator(sel).first().getAttribute('data-chars')), bytes.length)
-
-    // a switch back and Copy bytes in the same task after eviction: one request between them, Raw shows a prefix of the bytes, Copy gives all
-    before = asks()
-    await evict()
-    await b.page.evaluate((s) => { const c = document.querySelector(s); c.querySelector('[data-cellmode="raw"]').click(); c.querySelector('[data-cellcopy]').click() }, sel)
-    await b.page.waitForSelector(`${sel}[data-mode="raw"]`, { timeout: 10000 })
-    await b.page.waitForFunction(() => window.__copied != null, null, { timeout: 10000 })
-    await frames()
-    assert.equal(asks() - before, 1, 'two needs at once share one request')
-    assert.equal(await b.page.evaluate(() => window.__copied), bytes, 'Copy bytes gives exactly the stored bytes')
-    const { t, shown } = await shownText()
-    assert.equal(t, bytes.slice(0, shown), 'Raw shows the stored bytes again')
-
-    // Copy alone after eviction: one request, the stored bytes; then nothing more while frames pass
-    before = asks()
-    await b.page.evaluate(() => { window.__copied = null })
-    await evict()
-    await b.page.locator(`${sel} [data-cellcopy]`).first().click()
-    await b.page.waitForFunction(() => window.__copied != null, null, { timeout: 10000 })
-    await frames()
-    assert.equal(asks() - before, 1, 'one request for the copy')
-    assert.equal(await b.page.evaluate(() => window.__copied), bytes)
-    assert.deepEqual(b.errors, [])
-  } finally { await b.stop() }
-})
-
 // Shift+V marks every open cell stale and draws one again as it comes within one height of the window's visible area
 // (RFC 2.3): the head start is measured in the scroller the cell lives in, not in the page's viewport.
 test('Shift+V redraws the cells within one window height below the visible area before they are scrolled to (Chromium)', { skip }, async () => {

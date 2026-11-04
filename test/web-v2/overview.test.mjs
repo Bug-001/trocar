@@ -7,17 +7,17 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import {
   overviewItems, capCardHtml, itemsCardHtml, statsCardHtml, renderBody, recentRows, recentCardHtml, mount, SKELETON, headHtml,
-} from '../../src/web/v2/overview/overview.mjs'
-import { capHealthPatch } from '../../src/web/v2/core/capture-verdict.mjs'
-import { backoffMs, INTERVAL } from '../../src/web/v2/core/poll.mjs'
+} from '../../web/legacy/overview/overview.mjs'
+import { capHealthPatch } from '../../web/legacy/core/capture-verdict.mjs'
+import { backoffMs, INTERVAL } from '../../web/legacy/core/poll.mjs'
 import { within } from '../helpers/bounded.mjs'
-import { ALIASES, HARNESS_ORDER, UNIDENTIFIED, UNKNOWN_ICON, harnessKey, harnessName } from '../../src/web/v2/core/chips.mjs'
-import { TITLE_FROM_WIRE } from '../../src/web/v2/labels/replay.mjs'
-import { FILES_NOT_READ } from '../../src/web/v2/labels/overview.mjs'
-import * as W from '../../src/web/v2/labels/overview.mjs'
-import { ERR_WHERE, SWITCH_WORD } from '../../src/web/v2/labels/capture.mjs'
-import { esc, fmtWhen } from '../../src/web/v2/core/fmt.mjs'
-import { TITLE_PENDING, TITLE_PENDING_TIP } from '../../src/web/v2/labels/common.mjs'
+import { ALIASES, HARNESS_ORDER, UNIDENTIFIED, UNKNOWN_ICON, harnessKey, harnessName } from '../../web/legacy/core/chips.mjs'
+import { TITLE_FROM_WIRE } from '../../web/legacy/labels/replay.mjs'
+import { FILES_NOT_READ } from '../../web/legacy/labels/overview.mjs'
+import * as W from '../../web/legacy/labels/overview.mjs'
+import { ERR_WHERE, SWITCH_WORD } from '../../web/legacy/labels/capture.mjs'
+import { esc, fmtWhen } from '../../web/legacy/core/fmt.mjs'
+import { TITLE_PENDING, TITLE_PENDING_TIP } from '../../web/legacy/labels/common.mjs'
 
 const SPEC = fs.readFileSync(new URL('../../spec/01-trocar-rfc/1.6-cli.md', import.meta.url), 'utf8')
 const C3 = SPEC.slice(SPEC.indexOf('### C.3'))
@@ -123,7 +123,7 @@ test('#2 each item class appears iff its trigger holds, and links to the page of
 // 1.7 §事项目录 · 1.5 一件事只说一处: the chip is the item's subject — the sentence after it never starts with the agent's name again; an
 // O1 item's sentence is the capture page row's own (agentVerdicts), word for word
 test('an item with an agent chip does not name the agent again: O1 is the capture row\'s sentence itself, O9 starts with the host', async () => {
-  const { agentVerdicts } = await import('../../src/web/v2/core/capture-verdict.mjs')
+  const { agentVerdicts } = await import('../../web/legacy/core/capture-verdict.mjs')
   const s = stateOf(quiet())
   const [id] = Object.keys(s.caph.data.harnesses)
   Object.assign(s.caph.data.harnesses[id], { captured: false, reason: 'config-after-start' })
@@ -173,7 +173,7 @@ test('#3 no false 「nothing to handle」: a failed source draws the partial not
 
 // a mounted overview on a fake element and a fake api that logs every call
 // hold(name, params, opts) → a promise to wait on before answering (the test decides when a read answers), or null to answer at once
-function fakeMount({ status = quiet(), sessions = { sessions: [session(1)], errors: [], next: null }, window = '24h', control = {}, answer = { ok: true }, hold = null } = {}) {
+function fakeMount({ status = quiet(), sessions = { sessions: [session(1)], errors: [], next: null }, window = '24h', control = {}, answer = { ok: true }, hold = null, doc = null } = {}) {
   const log = [], on = {}
   const docs = { status, sessions, classes: { disk: { trocar_bytes: 1 } }, pricing: { models: [] }, traffic: { hosts: [], harness_since: {} }, segments: { segments: [] } }
   const api = {
@@ -192,7 +192,7 @@ function fakeMount({ status = quiet(), sessions = { sessions: [session(1)], erro
   const el = {
     set innerHTML(v) { for (const id of v.match(/id="([^"]+)"/g).map((x) => x.slice(4, -1))) zones[id] = { innerHTML: '', classList: { toggle() {} } } },
     querySelector: (sel) => zones[sel.slice(1)],
-    addEventListener(type, fn) { on[type] = fn }, removeEventListener() {}, replaceChildren() {},
+    addEventListener(type, fn) { on[type] = fn }, removeEventListener() {}, replaceChildren() {}, ownerDocument: doc,
   }
   const router = { current: () => ({ params: { window } }) }
   const inst = mount(el, { api, router, store: {}, toast: () => {} })
@@ -213,6 +213,22 @@ test('a stored sessions answer is not shown: the overview reads the list again a
     await within((async () => { while (!html().includes('fresh-title')) await new Promise((d) => setTimeout(d, 50)) })(), 10_000, 'the fresh list')
     assert.ok(!html().includes('stored-title'))
     assert.ok(reads >= 2, `read again (${reads})`)
+  } finally { inst.unmount() }
+})
+
+// 1.7 §读取与刷新: the slow reads share two sockets, and 「页面不可见时全部停」 — a read still queued when the page is hidden is not sent
+test('a slow read whose socket comes free while the page is hidden is not sent', async () => {
+  const doc = { hidden: false }, held = []
+  const { inst, log } = fakeMount({ doc, hold: (name) => (name === 'classes' || name === 'pricing' ? new Promise((res) => held.push(() => res({ ok: true, status: 200, data: name === 'classes' ? { disk: { trocar_bytes: 1 } } : { models: [] } }))) : null) })
+  const slow = () => log.filter((x) => ['overview', 'segments', 'traffic'].includes(x.name)).length
+  try {
+    await settle()
+    assert.equal(held.length, 2, 'classes and pricing hold both sockets')
+    assert.equal(slow(), 0, 'the other slow reads wait for a socket')
+    doc.hidden = true
+    for (const f of held) f()
+    await settle()
+    assert.equal(slow(), 0, JSON.stringify(log.map((x) => x.name)))
   } finally { inst.unmount() }
 })
 

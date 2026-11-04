@@ -1,0 +1,418 @@
+// replay/timeline.mjs — the trace's own rows (1.3): the 问题道 above the main track (a flag per cache break, × per failed
+// call, 「压缩」 per compaction — its row name is the 「问题 k/n」 pager), the main track itself (context bars, or cost bars
+// behind the 上下文大小 / 花费 switch), the cache band (cacheState's four shapes, one cell per bar), the 提问刻度 (one tick
+// per user event, only where the server ships them), the whole-session overview strip with its brush, the axis captions and
+// the legend row. Every row is the same grid (.tkrow: one gutter, one plotting lane) so the columns cannot drift.
+//   renderSaw(el, s)       all rows for the brush window — rebuilt when the window or the data changes
+//   markCurrent(el, s)     scrubbing: only the .cur marks, the pager's k and the position label move
+//   renderOverview(el, s)  the whole-session strip and its brush
+//   renderRough(el, s, at, K)  the rough page's rows from the session head alone (2.3 §大致页面), before a row of the axis lane is drawn,
+//                          and the rows of a named step (a chapter jump, Home) while its pack is on its way
+//   chapterNavHtml / chapterTicksHtml / chapterHere   the chapter row (1.3 §章: ‹, 「Part k of n · steps a–b」, ›) and the overview's ticks
+// `el` is #saw; `s` is the replay desk's state object (replay.mjs owns it).
+import { esc, kf, usd, fmtTime } from '../core/fmt.mjs'
+import { L } from '../core/labels.mjs'
+import { cacheState, isBreak, breakCost, usageOf, priceMatch, costOf, isFailed } from '../core/metrics.mjs'
+import { CT_ORDER, callComp, hitTier, refRowOf } from './analysis.mjs'
+import { anchorJump } from './jump.mjs'
+import { laneEvents, ridAt } from './model.mjs'
+import { stepRef } from './lanes.mjs'
+import { laneWord } from '../labels/replay.mjs'
+import * as W from '../labels/replay.mjs'
+import { FLAG, cellsOf } from '../../../src/view/head-cols.mjs'
+// the composition colours' keys, in the bars' stacking order: [class suffix, word]
+const BAR_KEYS = [['tools', 'tools'], ['system', 'system'], ['user', 'messages'], ['assistant', 'reply'], ['thinking', 'thinking'], ['tool_use', 'tool call'], ['tool_result', 'tool result']]
+
+export const OVW_BARCAP = 60
+const q = (el, sel) => el.querySelector(sel)
+const modelOf = (c) => (c && c.rec && c.rec.request && c.rec.request.model) || ''
+
+// ── how many steps the saw row can draw ─────────────────────────────────────────────────────────────────────────────
+export const SAW_BAR_PX = 3
+export const barsThatFit = (width) => Math.max(1, Math.floor(width / SAW_BAR_PX))
+export function fitWindow({ lo, hi, K, playhead }) {
+  if (hi - lo <= K) return { lo, hi }
+  if (playhead >= hi - K) return { lo: hi - K, hi }
+  const start = Math.max(lo, Math.min(hi - K, playhead - Math.floor(K / 2)))
+  return { lo: start, hi: start + K }
+}
+export function capWindow({ lo, hi, prev, K, playhead }) {
+  if (hi - lo <= K) return { lo, hi }
+  if (hi === prev.hi && lo !== prev.lo) return { lo: hi - K, hi }
+  if (lo === prev.lo && hi !== prev.hi) return { lo, hi: lo + K }
+  return fitWindow({ lo, hi, K, playhead })
+}
+
+// ── chapters (1.3 §章): the axis between compactions, from the head's `chapters` ─────────────────────────────────────────
+// a chapter table is the head's ([{s0, s1, ts0, inferred}], global step numbers, s1 exclusive); the last chapter also holds the steps
+// that came after the head was written. chapterAt → the index of the chapter holding step g (0 before the first).
+export function chapterAt(chs, g) {
+  let lo = 0, hi = chs.length - 1
+  while (lo < hi) { const m = (lo + hi + 1) >> 1; if (chs[m].s0 <= g) lo = m; else hi = m - 1 }
+  return lo
+}
+// where ‹ (dir < 0) / › (dir > 0) land from step g: the previous chapter's last step / the next chapter's first (that compaction); null at the ends
+export function chapterJump(chs, g, dir) {
+  const k = chapterAt(chs, g), c = chs[k + (dir < 0 ? -1 : 1)]
+  return c ? (dir < 0 ? c.s1 - 1 : c.s0) : null
+}
+// the window for playhead `at` inside the chapter span [c0, c1) (local indexes): a window from elsewhere becomes the chapter's; one in it
+// pans to hold the playhead, keeping its width; then at most K bars around the playhead
+export function placeView({ lo, hi }, at, c0, c1, K) {
+  if (lo < c0 || hi > c1 || hi <= lo) { lo = c0; hi = c1 } else if (at < lo || at >= hi) { const w = hi - lo; lo = Math.min(Math.max(c0, at - (w >> 1)), c1 - w); hi = lo + w }
+  return fitWindow({ lo, hi, K, playhead: at })
+}
+const tipOf = (word, c) => (c ? `${word} · step ${c.s0 + 1}${c.ts0 ? ' · ' + fmtTime(c.ts0) : ''}` : word)
+// the chapter row: ‹, the label (data-part / data-of / data-s0 / data-s1 / data-inferred, global steps), ›. `end` = the steps there are now.
+// The first chapter's ‹ and the last one's › are disabled, never hidden or moved (1.3 §章); each hover names the compaction it crosses.
+export function chapterNavHtml(chs, g, end) {
+  const k = chapterAt(chs, g), c = chs[k], last = k === chs.length - 1, s1 = last ? Math.max(c.s1, end) : c.s1
+  const btn = (id, ch, to, tip, sym) => `<button type="button" class="pgbtn chapbtn" id="${id}"${to == null ? ' disabled' : ` data-to="${to}"`} aria-label="${esc(tip)}" title="${esc(tip)}">${sym}</button>`
+  return btn('chapPrev', c, k ? c.s0 - 1 : null, k ? tipOf(W.CHAPTER_PREV, c) : W.CHAPTER_PREV, '‹') +
+    `<span class="chaplabel" data-part="${k + 1}" data-of="${chs.length}" data-s0="${c.s0}" data-s1="${s1}" data-inferred="${!!c.inferred}">${esc(W.chapterLabel(k + 1, chs.length, c.s0 + 1, s1, !!c.inferred))}</span>` +
+    btn('chapNext', chs[k + 1], last ? null : chs[k + 1].s0, last ? W.CHAPTER_NEXT : tipOf(W.CHAPTER_NEXT, chs[k + 1]), '›')
+}
+// a tick on the overview at each chapter's start; `pos(g)` places step g on the strip's N
+export const chapterTicksHtml = (chs, pos, N) => chs.map((c) => `<span class="ovchap" aria-hidden="true" style="left:${((pos(c.s0) / N) * 100).toFixed(3)}%"></span>`).join('')
+// the first local index whose global step is ≥ g (the anchor lane may hold gaps while its packs are read)
+function firstAt(no, N, g) { let lo = 0, hi = N; while (lo < hi) { const m = (lo + hi) >> 1; if (no(m) < g) lo = m + 1; else hi = m } return lo }
+// the desk's chapters around its playhead: the head's table when the anchor is the head's axis lane, else one chapter; `c0` / `c1` are
+// the playhead chapter's span in the anchor's local indexes, `pos` maps a global step onto them
+export function chapterHere(s) {
+  const a = s.anchor, N = a ? a.calls.length : 0, head = s.desk && s.desk.head, no = a && a.no ? (i) => a.no(i) : (i) => i
+  const end = N ? no(N - 1) + 1 : 0
+  const chs = head && head.chapters && head.chapters.length && a && a.id === head.axis ? head.chapters : [{ s0: 0, s1: end, ts0: null, inferred: false }]
+  const g = N ? no(s.playhead) : 0, k = chapterAt(chs, g), pos = (x) => firstAt(no, N, x)
+  if (!N) return { chs, g, end, pos, c0: 0, c1: 0 }
+  const at = Math.max(0, Math.min(N - 1, s.playhead)) // the span always holds the playhead, even where the lane's numbers are not in order
+  const c0 = Math.min(at, pos(chs[k].s0)), c1 = Math.max(at + 1, k === chs.length - 1 ? N : pos(chs[k].s1))
+  return { chs, g, end, pos, c0, c1 }
+}
+
+export const windowOf = (s) => {
+  const N = s.anchor ? s.anchor.calls.length : 0
+  const lo = Math.max(0, Math.min(Math.max(0, N - 1), s.view.lo | 0))
+  return { lo, hi: Math.max(lo + 1, Math.min(N, s.view.hi || N)), N }
+}
+
+// the 缓存对比步 of calls[i]: the row the server named (cacheBreak.refRid), else the same walk the predicate uses
+const refCallOf = (s, i) => refRowOf(s.anchor, i)
+const priceRowOf = (s, c) => (s.pricing ? priceMatch(s.pricing, modelOf(c)) : null)
+
+// the problem steps of the whole main lane (window-independent): every cache break and every failed call, in order.
+// A compaction step is NOT one (1.3): it draws the neutral 「压缩」 word — a rewrite is not a problem, and it never counts in n.
+export function problemSteps(lane) {
+  const out = []
+  ;((lane && lane.calls) || []).forEach((c, i) => { if (isFailed(c) || (isBreak(c, refRowOf(lane, i)) && !c.compaction)) out.push(i) })
+  return out
+}
+
+// composition of one call as stacked segments from the skeleton row's `comp` (every row carries it, held lane or not);
+// hatched = not computed.
+export function barSegsHtml(c, h) {
+  const comp = callComp(c)
+  if (!comp) return `<span class="ct-unloaded" title="The breakdown has not been computed yet" style="height:${h}px"></span>`
+  const tot = CT_ORDER.reduce((a, k) => a + (comp[k] || 0), 0) || 1
+  return CT_ORDER.map((k) => { const sh = ((comp[k] || 0) / tot) * h; return sh < 0.4 ? '' : `<span class="ct-${k}" style="height:${sh.toFixed(2)}px"></span>` }).join('')
+}
+
+// ── the 问题道 ──────────────────────────────────────────────────────────────────────────────────────────────────────
+// A flag per break (height ∝ √(≈ 多花), fixed when it cannot be computed), × per failed call, 「压缩」 per compaction step
+// (neutral — not a flag, not counted in n). The row name is the pager 「问题 k/n」: k is the problem the playhead is on.
+// One cell per windowed step — an empty .pcell where the step has nothing to say — on the SAME 1/(hi−lo) flex axis as the
+// bars (1.3 §/N 收敛): k marks must never split the row into k equal shares, each lands on its own step's column.
+const FLAG_H = 14
+function problemRowHtml(s, { lo, hi }) {
+  const cells = new Array(hi - lo).fill('')
+  const breaks = [] // flag heights scale against the window's max ≈ 多花, known only after the pass
+  for (let i = lo; i < hi; i++) {
+    const c = s.anchor.calls[i]
+    const n = i + 1
+    if (isFailed(c)) {
+      const msg = typeof c.error === 'string' ? c.error : (c.errMsg || (c.error && c.error.message) || '')
+      cells[i - lo] = `<span class="pxmark" data-i="${i}" role="button" tabindex="0" title="${esc(W.failTip(n, msg))}">×</span>`
+      continue
+    }
+    // neutral, not a flag: a small mark with no text of its own; the word rides the hover and the screen-reader name
+    if (c.compaction) { const tip = `${W.COMPACT_WORD}${c.compactionInferred ? ' · ' + W.GUESS : ''} — ${W.compactTip(n, c.compactionInferred)}`; cells[i - lo] = `<span class="pcompact${c.compactionInferred ? ' inf' : ''}" data-i="${i}" role="button" tabindex="0" title="${esc(tip)}" aria-label="${esc(tip)}"></span>`; continue }
+    const st = cacheState(c, refCallOf(s, i))
+    if (st.isBreak) breaks.push({ i, n, usd: breakCost(c, refCallOf(s, i), priceRowOf(s, c)).usd, struct: st.state === 'changed' })
+  }
+  let maxUsd = 0
+  for (const b of breaks) if (b.usd != null && b.usd > maxUsd) maxUsd = b.usd
+  for (const b of breaks) {
+    const h = b.usd == null ? Math.round(FLAG_H * 0.55) : Math.max(4, Math.round(Math.sqrt(b.usd / Math.max(1e-9, maxUsd)) * FLAG_H))
+    const costW = b.usd == null ? W.BREAK_COST_NONE : `≈ extra cost ${usd(b.usd)}`
+    cells[b.i - lo] = `<span class="pflag" data-i="${b.i}" role="button" tabindex="0" style="height:${h}px" title="${esc(W.breakFlagTip(b.n, costW, b.struct))}" aria-label="${esc(W.breakFlagTip(b.n, costW, b.struct))}"></span>`
+  }
+  return cells.map((c) => c || '<span class="pcell"></span>').join('')
+}
+// the pager's own row: 「问题 k/n」 + ‹ › (only when there is anything to page to); off a problem step it reads 「N 个问题」
+export function renderProblemNav(el, s) {
+  const nav = q(el, '#probnav')
+  if (!nav) return
+  const probs = s.problems || []
+  const n = probs.length
+  const k = probs.includes(s.playhead) ? String(probs.indexOf(s.playhead) + 1) : null
+  nav.innerHTML = n ? `${esc(W.problemPager(k, n))} <button type="button" class="pgbtn" id="probPrev" aria-label="${esc(W.PROBLEM_PREV)}" title="${esc(W.PROBLEM_PREV)}">‹</button><button type="button" class="pgbtn" id="probNext" aria-label="${esc(W.PROBLEM_NEXT)}" title="${esc(W.PROBLEM_NEXT)}">›</button>` : esc(W.problemPager(null, 0))
+}
+// the next / previous problem step from the playhead (dir > 0 / < 0); null at the ends
+export const problemTarget = (probs, playhead, dir) => {
+  if (dir > 0) { const n = probs.find((b) => b > playhead); return n === undefined ? null : n }
+  for (let i = probs.length - 1; i >= 0; i--) if (probs[i] < playhead) return probs[i]
+  return null
+}
+// where ‹ › land (1.3 §问题道 · 翻页): the next/previous problem step, and the landing per 1.4 — a break step opens on
+// its 变化线, a failed step just moves the playhead. null at the ends. Pure, so the pager's decision is testable.
+export function problemJump(calls, probs, playhead, dir) {
+  const t = problemTarget(probs, playhead, dir)
+  if (t == null || !calls || !calls[t]) return null
+  return { t, jump: isFailed(calls[t]) ? null : anchorJump('cachebrk') }
+}
+
+// ── the cache band: one cell per bar, drawn by cacheState's own order ───────────────────────────────────────────────
+function cacheCell(c, i, s) {
+  const st = cacheState(c, refCallOf(s, i))
+  const n = i + 1
+  if (st.state === 'failed') return `<div class="cbar failed" data-i="${i}" title="${esc(W.CACHE_CELL_FAILED)}"></div>` // no tier: failed is not "missed"
+  if (st.state === 'no-usage') return `<div class="cbar na" data-i="${i}" title="${esc(W.CACHE_CELL_NONE + ' · ' + W.CACHE_CELL_NONE_TIP)}"></div>`
+  const pct = st.hit != null ? Math.round(st.hit * 100) : null
+  const unk = c.wire && c.wire.cacheSemanticsKnown === false
+  if (unk) return `<div class="cbar unk" data-i="${i}" title="${esc(W.cacheCellUnknown(pct) + ' · ' + W.CACHE_SEMANTICS_UNKNOWN)}"></div>`
+  const cls = pct == null ? 'na' : hitTier(pct / 100)
+  return `<div class="cbar ${cls}" data-i="${i}" title="${esc(W.cacheCellPct(pct))}"></div>`
+}
+
+// one bar of the 上下文大小 view: height ∝ the step's context against `pk`; a failed step is a fixed red bar (never a cache miss)
+const ctxBarHtml = (c, n, attr, cur, pk) => {
+  const f = isFailed(c), h = f ? 20 : Math.max(3, Math.round(((c.ctx || 0) / pk) * 72))
+  return `<div class="bar ${f ? 'err' : ''} ${c.compaction ? 'compact' : ''} ${cur ? 'cur' : ''}" ${attr} style="height:${h}px" title="step ${n} · ${f ? 'call failed' : kf(c.ctx) + ' tok'}">${f ? '' : barSegsHtml(c, h)}</div>`
+}
+
+// ── the main track ────────────────────────────────────────────────────────────────────────────────────────────────
+// one bar of the 花费 view: height ∝ the step's ≈ estimate; uncomputable steps are hatched, never $0-tall
+function costBarHtml(c, i, s, maxCost) {
+  if (isFailed(c)) return { h: 20, html: '', tip: W.failTip(i + 1, typeof c.error === 'string' ? c.error : (c.errMsg || '')) }
+  const u = usageOf(c), m = u ? priceRowOf(s, c) : null
+  if (!u) return { h: 0, html: `<span class="ct-unloaded" style="height:6px"></span>`, tip: W.CACHE_CELL_NONE_TIP }
+  if (!m) return { h: 0, html: `<span class="ct-unloaded" style="height:6px"></span>`, tip: W.COST_WHY['no-price'] }
+  const v = costOf(m.row, u)
+  return { h: Math.max(3, Math.round((v / Math.max(1e-9, maxCost)) * 72)), html: '', tip: `≈ ${usd(v)}` + (m.exact ? '' : ` · ${W.PRICE_BY_KEY(m.key)}`) }
+}
+
+const BRACKET = () => '<div id="reviewbracket"><span class="rbend" aria-hidden="true">' + esc(W.GUESS) + '</span></div>'
+export function renderSaw(el, s) {
+  if (!s.anchor) return
+  const { lo, hi, N } = windowOf(s)
+  const isMain = s.anchor.kind === 'main'
+  const win = []
+  for (let i = lo; i < hi; i++) win.push([s.anchor.calls[i], i])
+  // 1.3 §窗内步少时收窄: the detail rows' lanes cap their width at this many bars (css/replay.css), together, left-aligned
+  const page = el.closest ? el.closest('#leftpage') : null
+  if (page) page.style.setProperty('--nbars', String(hi - lo))
+  // the problem lane
+  q(el, '#probrow').innerHTML = problemRowHtml(s, { lo, hi })
+  // the main track: 上下文大小 (default) or 花费
+  const costView = s.sawView === 'cost'
+  let peak = '', peakTip = ''
+  if (costView) {
+    let maxCost = 0, any = false
+    for (const [c] of win) { const u = usageOf(c), m = u ? priceRowOf(s, c) : null; const v = m ? costOf(m.row, u) : null; if (v != null) { any = true; if (v > maxCost) maxCost = v } }
+    peak = any ? `≈ ${usd(maxCost)}` : '≈ —'
+    q(el, '#sawrow').innerHTML = BRACKET() + win.map(([c, i]) => {
+      const b = costBarHtml(c, i, s, maxCost)
+      return `<div class="bar cost ${isFailed(c) ? 'err' : ''} ${i === s.playhead ? 'cur' : ''}" data-i="${i}" style="height:${b.h}px" title="step ${i + 1} · ${esc(b.tip)}">${b.html}</div>`
+    }).join('')
+  } else {
+    const pk = Math.max(1, s.anchor.peakCtx)
+    peak = `${kf(pk)} tok`
+    peakTip = 'The largest real input total of a main thread step (input + cache read + cache write)'
+    q(el, '#sawrow').innerHTML = BRACKET() + win.map(([c, i]) => ctxBarHtml(c, i + 1, `data-i="${i}"`, i === s.playhead, pk)).join('')
+  }
+  // the cache band
+  q(el, '#cacherow').innerHTML = win.map(([c, i]) => cacheCell(c, i, s)).join('')
+  // the 提问刻度 (1.3 §提问刻度): the ticks from the main lane's skeleton user events (the `session` answer's, on the lane
+  // object); an event names its call by rid → ridLocal. The hover's K and opening come from the held lane's event with that
+  // rid (`lane` answer, `k` · `preview`); while that page is not held the hover names only the step (no K, no guess)
+  const held = isMain && s.desk ? new Map(laneEvents(s.desk, s.anchor.id).filter((e) => e.type === 'user').map((e) => [e.rid, e])) : new Map()
+  const asks = (isMain ? s.anchor.events || [] : []).filter((e) => e && e.type === 'user' && e.rid != null)
+    .map((e) => ({ i: s.anchor.ridLocal ? s.anchor.ridLocal.get(e.rid) : null, rid: e.rid, ev: held.get(e.rid) || null }))
+    .filter((a) => a.i != null && a.i >= lo && a.i < hi)
+  const askrow = q(el, '#askrow')
+  if (askrow) {
+    askrow.style.display = asks.length ? '' : 'none'
+    // one cell per windowed step (an empty .acell where no ask begins) on the bars' own /N axis: a tick lands on ITS
+    // step's column, never on k equal shares of the row. Two events on one step share the column; their tips join.
+    const byStep = new Map()
+    for (const a of asks) { if (!byStep.has(a.i)) byStep.set(a.i, []); byStep.get(a.i).push(a) }
+    let h = ''
+    for (let i = lo; i < hi; i++) {
+      const arr = byStep.get(i)
+      const ks = arr ? arr.filter((a) => a.ev && a.ev.k != null).map((a) => a.ev.k) : []
+      const tip = arr ? [...new Set(arr.map((a) => (a.ev && a.ev.k != null ? W.askScaleTip(a.ev.k, a.ev.preview || '') : W.askScaleStepTip(stepRef(s.lanes, a.rid)))))].join('\n') : ''
+      h += arr ? `<span class="atick" data-i="${i}"${ks.length ? ` data-k="${ks.join(' ')}"` : ''} title="${esc(tip)}"></span>` : '<span class="acell"></span>'
+    }
+    q(el, '#askscale').innerHTML = h
+  }
+  // the axis: step numbers (call counts when the anchor is not the main lane) — the steps' own, global numbers (D13)
+  const unit = (v) => (isMain ? `step ${v}` : `call ${v}`), no = (i) => (s.anchor.no ? s.anchor.no(i) : i) + 1
+  q(el, '#sawstart').textContent = unit(no(lo))
+  q(el, '#sawend').textContent = unit(no(hi - 1)) // the total is the step bar's (one fact, one place)
+  // the main track's own corner: the view word + this session's peak
+  q(el, '#sawgut').innerHTML = `${esc(costView ? W.VIEW_COST : (isMain ? 'Context' : laneWord(s.anchor.kind)))} <b title="${esc(peakTip)}">${esc(peak)}</b>`
+  // the legend row
+  q(el, '#viewswitch').innerHTML = `<button type="button" class="segbtn${costView ? '' : ' on'}" data-view="ctx" aria-pressed="${!costView}">${esc(W.VIEW_CTX)}</button><button type="button" class="segbtn${costView ? ' on' : ''}" data-view="cost" aria-pressed="${costView}">${esc(W.VIEW_COST)}</button>`
+  q(el, '#complegend').title = costView ? W.COST_LEGEND : W.COMP_LEGEND // the legend row stays one line; a cut part keeps its words here
+  q(el, '#complegend').innerHTML = costView ? `<span>${esc(W.COST_LEGEND)}</span>` :
+    `<span>${esc(W.COMP_LEGEND)}</span><span class="barlegend" title="${esc(BAR_KEYS.map((k) => k[1]).join(' · '))}">${BAR_KEYS.map(([c, w]) => `<i class="ct-${c}"></i>${esc(w)}`).join('')}</span>`
+  q(el, '#viewrange').textContent = W.showSteps(no(lo), no(hi - 1))
+  const ch = chapterHere(s), nav = q(el, '#chapnav')
+  if (nav) nav.innerHTML = chapterNavHtml(ch.chs, ch.g, ch.end)
+  q(el, '#nomain').style.display = isMain ? 'none' : ''
+  if (!isMain) q(el, '#nomain').textContent = q(el, '#nomain').title = W.noMainLane(laneWord(s.anchor.kind))
+  markCurrent(el, s)
+}
+
+// scrubbing touches only the current marks and the pager's k; the bars themselves are not rebuilt
+export function markCurrent(el, s) {
+  if (!s.anchor) return
+  const N = s.anchor.calls.length
+  for (const b of el.querySelectorAll('#sawrow .bar')) b.classList.toggle('cur', +b.dataset.i === s.playhead)
+  for (const b of el.querySelectorAll('#cacherow .cbar')) b.classList.toggle('cur', +b.dataset.i === s.playhead)
+  const pin = q(el, '#ovpin'); if (pin) pin.style.left = (((s.playhead + 0.5) / N) * 100).toFixed(3) + '%'
+  renderProblemNav(el, s) // which problem the playhead is on — and whether ‹ › have anywhere to go
+}
+
+// ── overview strip + brush ─────────────────────────────────────────────────────────────────────────────────────────
+export function renderOverview(el, s) {
+  const strip = q(el, '#ovstrip')
+  if (!strip) return
+  const N = s.anchor ? s.anchor.calls.length : 0
+  if (!N) { strip.innerHTML = ''; return }
+  // do not destroy the brush (and its pointer capture) mid-drag: just reposition; rebuild when the drag ends
+  if (s.brushDragging) { repositionBrush(el, s); return }
+  const peak = Math.max(1, s.anchor.peakCtx), calls = s.anchor.calls, ch = chapterHere(s)
+  strip.innerHTML = stripHtml(N, (i) => (calls[i].ctx || 0) / peak, (i) => isFailed(calls[i])) + chapterTicksHtml(ch.chs, ch.pos, N) + BRUSH()
+  repositionBrush(el, s)
+}
+const BRUSH = () => '<div class="ovpin" id="ovpin"></div>' +
+  `<div class="ovbrush" id="ovbrush" tabindex="0" aria-label="${esc(W.BRUSH_LABEL)}" title="Drag = pan · drag an edge = zoom · double-click = the whole part between two compactions (when it does not fit the row above, the largest range that fits)"><span class="ovh ovh-l"></span><span class="ovh ovh-r"></span></div>`
+// the strip's backdrop over N points: `val(i)` its height (0–1), `failed(i)`; `sampled` says a point is not one step even when N ≤ 240
+function stripHtml(N, val, failed, sampled = false) {
+  let bg
+  if (N <= OVW_BARCAP && !sampled) {
+    bg = '<div class="ovbars">'
+    for (let i = 0; i < N; i++) bg += `<div class="ovbar ${failed(i) ? 'err' : ''}" style="height:${Math.max(1, Math.round(val(i) * 20))}px" title="step ${i + 1}"></div>`
+    bg += '</div>'
+  } else {
+    // many steps: one point per bucket on the SAME /N axis as the brush and the pin. Only labelled "sampled" when buckets
+    // really merge steps (N > 240); for 60 < N <= 240 it is per step and a label would be false.
+    const B = Math.min(N, 240); sampled ||= N > B
+    const pts = []
+    for (let k = 0; k < B; k++) {
+      const a = Math.floor((k * N) / B), b = Math.max(a + 1, Math.floor(((k + 1) * N) / B))
+      let mx = 0
+      for (let j = a; j < b && j < N; j++) { const v = val(j); if (v > mx) mx = v }
+      pts.push((((a + b) / 2 / N) * 100).toFixed(2) + ',' + (22 - Math.max(0.5, mx * 20)).toFixed(2))
+    }
+    bg = `<svg class="ovsvg" viewBox="0 0 100 22" preserveAspectRatio="none"><polyline points="${pts.join(' ')}"/></svg>`
+  }
+  return bg + (sampled ? `<span class="ovsample" title="Sampled: one point per bucket, not one per step (the strip is a map, not verbatim data)">${esc(L.SAMPLED)}</span>` : '')
+}
+function placeBrush(el, N, lo, hi, at) {
+  const b = q(el, '#ovbrush')
+  if (b) { b.style.left = ((lo / N) * 100).toFixed(3) + '%'; b.style.width = (((hi - lo) / N) * 100).toFixed(3) + '%' }
+  const p = q(el, '#ovpin'); if (p) p.style.left = (((at + 0.5) / N) * 100).toFixed(3) + '%'
+}
+export const repositionBrush = (el, s) => placeBrush(el, s.anchor ? s.anchor.calls.length : 1, s.view.lo, s.view.hi, s.playhead)
+
+// ── the rough page (2.3 §大致页面, 1.3 §章): the session head alone ─────────────────────────────────────────────────────
+// roughWindow(head, at, K) → {lo, hi}: the window of at most K bars around step `at` inside the chapter that holds it (the whole axis
+// when the head names no chapter)
+export function roughWindow(head, at, K) {
+  const chs = head.chapters && head.chapters.length ? head.chapters : [{ s0: 0, s1: head.steps }], k = chapterAt(chs, at)
+  return fitWindow({ lo: chs[k].s0, hi: k === chs.length - 1 ? Math.max(chs[k].s1, at + 1) : chs[k].s1, K, playhead: at })
+}
+// The overview from the head's `cols` and, with one cell a step, the window's bars: the axis lane's row when it is here, else its cols
+// bar (height, largest composition bucket, failed and compaction from the flags). Tier 0 (1.5 K-31): the calls by time, marked sampled,
+// no bars. Nothing here is a control: the rough bars carry no data-i.
+export function renderRough(el, s, at, K) {
+  const head = s.desk.head, N = head.steps, rows = q(el, '#sawrow'), nav = q(el, '#chapnav')
+  for (const id of ['#probrow', '#cacherow', '#askscale']) { const r = q(el, id); if (r) r.innerHTML = '' } // rows of a step drawn before stay off
+  if (!head.tier) {
+    if (nav) nav.innerHTML = ''
+    const bs = head.buckets || [], mx = Math.max(1, ...bs.map((b) => b.calls))
+    q(el, '#ovstrip').innerHTML = bs.length ? stripHtml(bs.length, (i) => bs[i].calls / mx, () => false, true) : ''
+    rows.innerHTML = BRACKET()
+    return
+  }
+  const cells = cellsOf(head.cols), per = head.bucket || 1, pk = Math.max(1, head.peak), at3 = (i) => 3 * Math.floor(i / per)
+  const chs = head.chapters && head.chapters.length ? head.chapters : [{ s0: 0, s1: N, ts0: null, inferred: false }]
+  q(el, '#ovstrip').innerHTML = stripHtml(N, (i) => cells[at3(i)] / 255, (i) => !!(cells[at3(i) + 2] & FLAG.failed)) + chapterTicksHtml(chs, (g) => g, N) + BRUSH()
+  if (nav) nav.innerHTML = chapterNavHtml(chs, at, N)
+  const { lo, hi } = roughWindow(head, at, K)
+  placeBrush(el, N, lo, hi, at)
+  let bars = ''
+  for (let i = lo; per === 1 && i < hi; i++) {
+    const rid = ridAt(s.desk, head.axis, i), row = rid != null ? s.desk.rows.get(rid) : null
+    if (row) { bars += ctxBarHtml(row, i + 1, `data-step="${i}"`, i === at, pk); continue }
+    const f = cells[3 * i + 2], failed = !!(f & FLAG.failed), h = failed ? 20 : Math.max(3, Math.round((cells[3 * i] / 255) * 72))
+    bars += `<div class="bar ${failed ? 'err' : ''} ${f & FLAG.compaction ? 'compact' : ''} ${i === at ? 'cur' : ''}" data-step="${i}" style="height:${h}px" title="step ${i + 1}">` +
+      (failed ? '' : `<span class="ct-${CT_ORDER[cells[3 * i + 1] >> 4] || 'other'}" style="height:${h}px"></span>`) + '</div>'
+  }
+  rows.innerHTML = BRACKET() + bars
+  const page = el.closest ? el.closest('#leftpage') : null
+  if (page) page.style.setProperty('--nbars', String(Math.max(1, hi - lo)))
+  q(el, '#sawstart').textContent = `step ${lo + 1}`
+  q(el, '#sawend').textContent = `step ${hi}`
+  q(el, '#sawgut').innerHTML = `Context <b>${esc(kf(head.peak) + ' tok')}</b>`
+  q(el, '#viewrange').textContent = W.showSteps(lo + 1, hi)
+}
+
+// One set of listeners for the life of the screen. The brush is rebuilt on redraw, so its pointer events are delegated from the
+// strip: a captured pointer keeps targeting the captured element, and its events bubble up to the strip.
+export function wireTimeline(el, s) {
+  const strip = q(el, '#ovstrip')
+  const N = () => (s.anchor ? s.anchor.calls.length : 1)
+  const stripW = () => Math.max(1, strip.getBoundingClientRect().width)
+  let mode = null, startX = 0, startLo = 0, startHi = 0
+  const down = (e, m) => {
+    mode = m; s.brushDragging = true; startX = e.clientX; startLo = s.view.lo; startHi = s.view.hi
+    try { e.target.setPointerCapture(e.pointerId) } catch { /* no capture: the drag still works while the pointer stays over the strip */ }
+    e.stopPropagation(); e.preventDefault()
+  }
+  const move = (e) => {
+    if (!mode) return
+    const n = N(), d = Math.round(((e.clientX - startX) / stripW()) * n)
+    if (mode === 'pan') { const { c0, c1 } = chapterHere(s), dd = Math.max(c0 - startLo, Math.min(c1 - startHi, d)); s.setView(startLo + dd, startHi + dd, false) } // never across a chapter's edge
+    else if (mode === 'l') s.setView(Math.min(startHi - 1, startLo + d), startHi, false)
+    else s.setView(startLo, Math.max(startLo + 1, startHi + d), false)
+  }
+  const up = () => { if (!mode) return; mode = null; s.brushDragging = false; renderOverview(el, s) } // the backdrop may be stale from a poll during the drag
+  strip.addEventListener('pointerdown', (e) => {
+    const t = e.target
+    if (t.classList.contains('ovh-l')) down(e, 'l')
+    else if (t.classList.contains('ovh-r')) down(e, 'r')
+    else if (t.closest('.ovbrush')) down(e, 'pan')
+  })
+  strip.addEventListener('pointermove', move)
+  strip.addEventListener('pointerup', up)
+  strip.addEventListener('pointercancel', up)
+  strip.addEventListener('dblclick', (e) => { if (e.target.closest('.ovbrush')) { e.preventDefault(); s.setView(0, N(), true) } })
+
+  const onClick = (e) => {
+    const vs = e.target.closest('[data-view]')
+    if (vs && vs.closest('#viewswitch')) { s.sawView = vs.dataset.view === 'cost' ? 'cost' : 'ctx'; renderSaw(el, s); return }
+    const bar = e.target.closest('#sawrow .bar')
+    if (bar) { s.setPlayhead(+bar.dataset.i, true); return }
+    const btn = e.target.closest('button')
+    if (btn && (btn.id === 'chapPrev' || btn.id === 'chapNext')) { if (btn.dataset.to != null) s.chapterGo(+btn.dataset.to); return } // works on the rough page too
+    if (!btn || !s.anchor) return
+    if (btn.id === 'probPrev' || btn.id === 'probNext') {
+      const j = problemJump(s.anchor.calls, s.problems || [], s.playhead, btn.id === 'probNext' ? 1 : -1)
+      if (j) s.jumpTo(j.t, j.jump) // lands on the 变化线 when that problem step has one; a failed step just moves the playhead
+    }
+  }
+  el.addEventListener('click', onClick)
+  return () => el.removeEventListener('click', onClick)
+}

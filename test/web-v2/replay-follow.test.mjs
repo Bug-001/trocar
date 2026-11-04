@@ -4,10 +4,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import { createStepReads } from '../../src/web/v2/replay/follow.mjs'
-import { loadBodies, bodyCache } from '../../src/web/v2/replay/cell.mjs'
-import { createLoader } from '../../src/web/v2/replay/loader.mjs'
-import { createDesk, applySession, applyLane, stepOf, indexOf } from '../../src/web/v2/replay/model.mjs'
+import { createStepReads } from '../../web/legacy/replay/follow.mjs'
+import { loadBodies, bodyCache } from '../../web/legacy/replay/cell.mjs'
+import { createLoader } from '../../web/legacy/replay/loader.mjs'
+import { createDesk, applySession, applyLane, stepOf, indexOf } from '../../web/legacy/replay/model.mjs'
 import { world, readLane } from './desk-world.mjs'
 
 const SEEDS = Array.from({ length: 30 }, (_, i) => i + 1)

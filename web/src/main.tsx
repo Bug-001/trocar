@@ -1,0 +1,115 @@
+// web/src/main.tsx — boot (1.2 §路由, D75①②): the token leaves the address, the first hash becomes canonical, the page-wide handlers are
+// installed once, then React renders the shell: the sidebar and #screen, where LegacyScreen mounts one screen at a time. Screens are
+// loaded on demand. There is no site-wide banner: a screen says what is wrong with itself.
+import { createContext, useContext, useLayoutEffect, useRef, useState } from 'react'
+import { createRoot } from 'react-dom/client'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { RouterProvider } from 'react-router/dom'
+import { configure, bootToken, onForbidden } from '../legacy/core/http.mjs'
+import { api } from '../legacy/core/api.mjs'
+import { store } from '../legacy/core/store.mjs'
+import { formatHash, parseHash, documentTitle } from '../legacy/core/router.mjs'
+import { initKeys } from '../legacy/core/keys.mjs'
+import { installCopy, copyBtn } from '../legacy/core/dom.mjs'
+import { esc } from '../legacy/core/fmt.mjs'
+import { watchHarnessIcons } from '../legacy/core/chips.mjs'
+import { toast, installUi } from '../legacy/core/ui.mjs'
+import { BRAND } from '../legacy/core/icons.mjs'
+import { UNKNOWN_ROUTE, FORBIDDEN } from '../legacy/labels/shell.mjs'
+import { COMMANDS } from '../legacy/labels/capture.mjs'
+import { createBoardRouter } from './router'
+import { LegacyScreen, type Route } from './LegacyScreen'
+import { Sidebar } from './shell/Sidebar'
+
+// every screen of every route (core/router.mjs)
+const SCREENS = {
+  overview: () => import('../legacy/overview/overview.mjs'),
+  library: () => import('../legacy/library/library.mjs'),
+  replay: () => import('../legacy/replay/replay.mjs'),
+  'session-link': () => import('../legacy/replay/session-link.mjs'),
+  capture: () => import('../legacy/capture/capture.mjs'),
+  'capture-log': () => import('../legacy/capture/capture-log.mjs'),
+  traffic: () => import('../legacy/traffic/traffic.mjs'),
+  'traffic-host': () => import('../legacy/traffic/host.mjs'),
+  'settings-storage': () => import('../legacy/settings/storage.mjs'),
+  'settings-prices': () => import('../legacy/settings/prices.mjs'),
+  'settings-appearance': () => import('../legacy/settings/appearance.mjs'),
+}
+
+// the token leaves the address (#t=…) before the router reads the hash (4.4 §每用户口令)
+configure({ token: bootToken() })
+// the first route: write the canonical hash quietly (an empty hash becomes #/overview). An unknown route is handled by the shell.
+const first = parseHash(location.hash)
+if (!first.unknown) {
+  try { history.replaceState(null, '', formatHash(first)) } catch (e) { console.warn('could not write the canonical hash', e) } // a blocked history API leaves the URL as typed; the board still mounts
+}
+
+initKeys()
+installUi(document) // the popover / disclosure contract, once for the whole board
+installCopy(document.body)
+// Esc closes the bottom drawer (the screens fill #detail and toggle .open)
+document.addEventListener('v2:escape', () => { document.getElementById('detail')?.classList.remove('open') })
+watchHarnessIcons(document.body) // every agent icon box any screen, menu or drawer draws is filled here, once it is in the page
+
+// the tab icon: the brand mark (core/icons.mjs BRAND) in the theme's own colours — an icon file cannot read CSS variables, so the
+// tokens are resolved here and the mark is serialized into the <link rel="icon"> index.html holds (no icon file, no colour literal)
+;(() => {
+  const link = document.querySelector<HTMLLinkElement>('link[rel="icon"]'), t = document.createElement('template')
+  if (!link || typeof XMLSerializer === 'undefined') return
+  t.innerHTML = BRAND
+  const svg = t.content.firstElementChild!, cs = getComputedStyle(document.documentElement)
+  for (const el of [svg, ...svg.querySelectorAll('*')]) for (const a of ['fill', 'stroke']) {
+    const m = /^var\((--[\w-]+)\)$/.exec(el.getAttribute(a) || '')
+    if (m) el.setAttribute(a, cs.getPropertyValue(m[1]).trim())
+  }
+  link.href = 'data:image/svg+xml,' + encodeURIComponent(new XMLSerializer().serializeToString(svg))
+})()
+
+type Facade = ReturnType<typeof createBoardRouter>['legacy']
+const FacadeContext = createContext<Facade | null>(null)
+const OVERVIEW = { area: 'overview', screen: 'overview', params: {} } as Route
+const sameRoute = (a: Route, b: Route) => !!a.unknown === !!b.unknown && formatHash(a) === formatHash(b)
+
+// the splat route's element: the route is the facade's current(), refreshed on every change it announces
+function Shell() {
+  const router = useContext(FacadeContext)!
+  const [route, setRoute] = useState<Route>(router.current)
+  const [ctx] = useState(() => ({ api, store, router, toast }))
+  const screenEl = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const on = (r: Route) => {
+      // an unknown route is 总览: say so in a toast, and rewrite the address to where the reader really is
+      if (r.unknown) { toast(UNKNOWN_ROUTE); router.go(OVERVIEW, { replace: true }); return }
+      document.title = documentTitle(r)
+      // the library's hash is kept current on EVERY library route (typing a filter included), so the 会话 item from another screen
+      // restores exactly what was on screen; set() is silent when nothing changed
+      if (r.screen === 'library') store.set({ libraryHash: formatHash(r) })
+      setRoute((prev: Route) => (sameRoute(prev, r) ? prev : r))
+    }
+    const off = router.onRoute(on)
+    on(router.current())
+    return off
+  }, [router])
+  return <>
+    <aside id="sidebar"><Sidebar route={route} router={router} store={store} /></aside>
+    <div id="content"><div id="screen" ref={screenEl} /></div>
+    <LegacyScreen el={screenEl} router={router} ctx={ctx} screens={SCREENS} />
+  </>
+}
+
+const board = createBoardRouter(<Shell />)
+const root = createRoot(document.getElementById('app')!)
+// no StrictMode: a legacy mount() is not idempotent
+root.render(
+  <QueryClientProvider client={new QueryClient()}>
+    <FacadeContext.Provider value={board.legacy}><RouterProvider router={board.router} /></FacadeContext.Provider>
+  </QueryClientProvider>,
+)
+
+// K-30 (1.5): a 403 replaces the whole page (sidebar included) with one sentence and the copyable command; nothing else is drawn
+// and nothing polls (core/http.mjs answers every later read without a request)
+onForbidden(() => {
+  root.unmount() // the screen unmounts with it, and a screen still loading is dropped
+  board.dispose()
+  document.body.innerHTML = `<main class="forbidden"><p>${esc(FORBIDDEN)}</p><p><code>${esc(COMMANDS.board)}</code> ${copyBtn(COMMANDS.board)}</p></main>`
+})

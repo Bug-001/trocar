@@ -1,15 +1,15 @@
 // The small pure modules other screens import by name: chips, labels, classes, store.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { CHIP, HARNESS_ORDER, harnessKey, harnessName, harnessIcon, harnessRaw, chipFor, UNIDENTIFIED, UNKNOWN_ICON, sanitizeHarnessSvg } from '../../src/web/v2/core/chips.mjs'
-import { L } from '../../src/web/v2/core/labels.mjs'
-import * as labelsAgg from '../../src/web/v2/core/labels.mjs'
-import * as labelsCommon from '../../src/web/v2/labels/common.mjs'
-import { CLASS_IDS, CLASS_NAME } from '../../src/web/v2/core/classes.mjs'
-import { createStore, store } from '../../src/web/v2/core/store.mjs'
-import { parseHash, formatHash } from '../../src/web/v2/core/router.mjs'
-import * as domMod from '../../src/web/v2/core/dom.mjs'
-import * as safeMountMod from '../../src/web/v2/shell/safemount.mjs'
+import { CHIP, HARNESS_ORDER, harnessKey, harnessName, harnessIcon, harnessRaw, chipFor, UNIDENTIFIED, UNKNOWN_ICON, sanitizeHarnessSvg } from '../../web/legacy/core/chips.mjs'
+import { L } from '../../web/legacy/core/labels.mjs'
+import * as labelsAgg from '../../web/legacy/core/labels.mjs'
+import * as labelsCommon from '../../web/legacy/labels/common.mjs'
+import { CLASS_IDS, CLASS_NAME } from '../../web/legacy/core/classes.mjs'
+import { createStore, store } from '../../web/legacy/core/store.mjs'
+import { parseHash, formatHash } from '../../web/legacy/core/router.mjs'
+import * as domMod from '../../web/legacy/core/dom.mjs'
+import * as safeMountMod from '../../web/legacy/shell/safemount.mjs'
 
 test('chips: each read-side id (test/web-v2/harness-seam.test.mjs holds them to the server table) has its icon file, aliases folded onto them', () => {
   for (const id of HARNESS_ORDER) { assert.ok(CHIP[id], `CHIP.${id}`); assert.match(CHIP[id].icon, /^[\w-]+\.svg$/) }
@@ -123,7 +123,7 @@ test('trapTab: focus that is outside the dialog is pulled back in', () => {
 
 // 1.2 #12: arrows typed into a control or inside a list box / menu never reach the screen; Escape always does (fake targets)
 test('keys: isTyping holds for form controls, editable content and a target inside role=listbox / role=menu; Escape still passes', async () => {
-  const { isTyping } = await import('../../src/web/v2/core/keys.mjs')
+  const { isTyping } = await import('../../web/legacy/core/keys.mjs')
   const inRole = (role) => ({ tagName: 'LI', closest: (sel) => (sel.includes(`role=${role}`) || sel.includes(`role="${role}"`) ? {} : null) })
   const plain = { tagName: 'DIV', closest: () => null }
   const typing = [{ tagName: 'INPUT' }, { tagName: 'TEXTAREA' }, { tagName: 'SELECT' }, { tagName: 'DIV', isContentEditable: true }, inRole('listbox'), inRole('menu')]
@@ -135,7 +135,7 @@ test('keys: isTyping holds for form controls, editable content and a target insi
 })
 
 test('techDetailsHtml: every pair is exactly one key cell and one value cell, values escaped in text mode, copy lines never start with a bare separator', async () => {
-  const { techDetailsHtml } = await import('../../src/web/v2/core/ui.mjs')
+  const { techDetailsHtml } = await import('../../web/legacy/core/ui.mjs')
   const pairs = [['pid', 4242], ['', 'continuation'], [null, 'more'], ['body', '<b>x</b>'], ['path', '/a/'.repeat(4000)]]
   const unesc = (s) => s.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
   for (const html of [false, true]) {
@@ -155,7 +155,7 @@ test('techDetailsHtml: every pair is exactly one key cell and one value cell, va
 // 1.2 §键盘「层随屏走」: a popover or menu pinned open on a screen closes when that screen's signal aborts (main.mjs aborts it on unmount);
 // a document stand-in carries the listeners installUi adds and one trigger + layer pair per kind
 test('1.2 layers go with their screen: a pinned popover and a pinned menu close when their screen\'s signal aborts', async () => {
-  const { installUi } = await import('../../src/web/v2/core/ui.mjs')
+  const { installUi } = await import('../../web/legacy/core/ui.mjs')
   const on = {}
   const layers = {}
   const doc = { addEventListener(t, f) { (on[t] ||= []).push(f) }, getElementById: (id) => layers[id] || null, getSelection: () => null }

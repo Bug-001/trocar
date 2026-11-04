@@ -9,7 +9,7 @@ import { FAILURE_WORDS, briefText, failureBrief, failureWord } from '../../src/c
 import * as C from '../../src/health/codes.mjs'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
-const LABELS = path.join(ROOT, 'src', 'web', 'v2', 'labels')
+const LABELS = path.join(ROOT, 'web', 'legacy', 'labels')
 const PART_WHERE = { trust: 'tracker' } // a trust reason is the code of an agent-untrusted line the tracker writes
 
 // every (where, code) a writer can produce, from the closed sets (test/health/codes.test.mjs holds the writers to them)

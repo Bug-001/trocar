@@ -2,7 +2,7 @@
 // list; asserts the clamp, the step each key lands on, and the two toggles.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { keyAction } from '../../src/web/v2/replay/keymap.mjs'
+import { keyAction } from '../../web/legacy/replay/keymap.mjs'
 
 const KEYS = ['ArrowLeft', 'ArrowRight', 'Home', 'End', 'n', 'p']
 const problemSets = (n) => [[], [0], [...new Set([0, 1, Math.floor(n / 2), n - 1])].filter((i) => i < n).sort((a, b) => a - b), Array.from({ length: n }, (_, i) => i).filter((i) => i % 3 === 1)]

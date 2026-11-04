@@ -10,7 +10,7 @@ import { boardHome, serveBoard } from '../real-face.mjs'
 import { tmpDir, removeTmp } from '../../helpers/tmp.mjs'
 import rm from '../../helpers/rm-tree.cjs'
 import { CONTROL_TOKEN_HEADER } from '../../../src/off/token-header.mjs'
-import { INTERVAL, TIMER_ROUND } from '../../../src/web/v2/core/poll.mjs'
+import { INTERVAL, TIMER_ROUND } from '../../../web/legacy/core/poll.mjs'
 
 const SHOTS = fileURLToPath(new URL('./shots/', import.meta.url))
 const CHANNEL = { channel: 'chrome' }

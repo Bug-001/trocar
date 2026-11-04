@@ -6,10 +6,10 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { CHIP, HARNESS_ORDER, sanitizeHarnessSvg, UNKNOWN_ICON } from '../../src/web/v2/core/chips.mjs'
+import { CHIP, HARNESS_ORDER, sanitizeHarnessSvg, UNKNOWN_ICON } from '../../web/legacy/core/chips.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
-const ICONS = path.join(HERE, '..', '..', 'src', 'web', 'v2', 'assets', 'harness')
+const ICONS = path.join(HERE, '..', '..', 'web', 'public', 'assets', 'harness')
 const fileOf = (id) => path.join(ICONS, CHIP[id].icon)
 
 test('every chip row has its icon file, a 16×16 view box, and a title naming the harness', () => {
@@ -41,7 +41,7 @@ test('the files are pairwise different, and none equals the unknown glyph', () =
 })
 
 // ── contrast: the declared fills against the four surfaces they can sit on, both themes ───────────────────────────────
-const css = fs.readFileSync(path.join(HERE, '..', '..', 'src', 'web', 'v2', 'css', 'base.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+const css = fs.readFileSync(path.join(HERE, '..', '..', 'web', 'legacy', 'css', 'base.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
 function decls(text) { return Object.fromEntries([...text.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)].map((x) => [x[1], x[2].trim()])) }
 function blockOf(text, sel) { const m = [...text.matchAll(/([^{}]+)\{([^{}]*)\}/g)].find((x) => x[1].trim() === sel); return m ? m[2] : '' }
 // light = the defaults of :root; dark = the block inside the OS media query (balanced braces)
