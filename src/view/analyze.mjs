@@ -84,14 +84,24 @@ export function normResp(r) {
     thinking: rs.thinking, tools: rs.tool_calls || [], stop_reason: rs.stop_reason,
   }
 }
-// The reply's blocks as addressable parts (sse-spans.mjs): the wire key is content_block_*'s `index`; the block is the
-// collector's own reconstruction (content_blocks: one per started index, in index order), a JSON reply's content as given.
+// The reply's blocks as addressable parts (sse-spans.mjs): the wire key is content_block_*'s `index`; the block is the block
+// its start event carried under the collector's own reconstruction (content_blocks: one per started index, in index order),
+// which keeps only some types' fields, plus what only this key's deltas hold: citations, and streamed input of any block type
+// (the reconstruction spoils it for a type it does not know). A JSON reply's content is as given.
+const parsedInput = (json) => { try { return json ? JSON.parse(json) : {} } catch { return { _unparsed: json } } }
 const ANTHROPIC_REPLY = {
   keysOf: (e) => (/^content_block_/.test(e.type || '') && Number.isInteger(e.index) ? [String(e.index)] : []),
   build: (k, evts, all, part) => {
     const started = [...new Set(all.filter((e) => e && e.type === 'content_block_start' && Number.isInteger(e.index)).map((e) => e.index))].sort((a, b) => a - b)
     const b = Array.isArray(part.content_blocks) ? part.content_blocks[started.indexOf(Number(k))] : undefined
-    return b ? [b] : 'the stream has no start event for this block, so the collector did not rebuild it'
+    if (!b) return 'the stream has no start event for this block, so the collector did not rebuild it'
+    const out = { ...evts.find((e) => e.type === 'content_block_start').content_block, ...b }
+    const deltas = evts.flatMap((e) => (e.type === 'content_block_delta' && e.delta ? [e.delta] : []))
+    const cited = deltas.filter((d) => d.type === 'citations_delta').map((d) => d.citation)
+    if (cited.length) out.citations = [...(out.citations || []), ...cited]
+    const json = deltas.filter((d) => d.type === 'input_json_delta')
+    if (json.length) out.input = parsedInput(json.map((d) => d.partial_json || '').join(''))
+    return [out]
   },
   jsonBlocks: (body) => (Array.isArray(body.content) ? body.content : []),
 }

@@ -34,7 +34,12 @@ const anth = {
 };
 const anthStream = (groups) => [{ type: 'message_start', message: { id: 'm', role: 'assistant', content: [], usage: { input_tokens: 1 } } },
   ...groups.flat(), { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 2 } }, { type: 'message_stop' }];
-const anthRecon = (text) => { const r = makeSseReconstructor(); r.push(Buffer.from(text)); return r.finish().content_blocks; };
+// a block's start event is its base: what the collector rebuilt lies over it (RFC 3.1)
+const anthRecon = (text) => {
+  const r = makeSseReconstructor(); r.push(Buffer.from(text));
+  const starts = sliceEvents(text).filter((e) => e.type === 'content_block_start');
+  return r.finish().content_blocks.map((b, i) => ({ ...starts[i].content_block, ...b }));
+};
 
 const respItems = (t) => [
   { type: 'reasoning', id: 'rs', summary: [{ type: 'summary_text', text: t }], encrypted_content: 'enc' },
@@ -93,7 +98,7 @@ test('every reply span, resolved, reassembles to the normalised reply block (Ant
       // Anthropic: text, thinking, tool_use, server_tool_use, a *_tool_result
       const ab = [anth.thinking(0, t), anth.text(1, t), anth.tool('tool_use')(2, t), anth.tool('server_tool_use')(3, t), anth.result(4)];
       const ar = rec(stored(sseOf(anthStream(ab), eol)));
-      assertParts(ar, replyPartsAnthropic(ar), ar.resp.content_blocks, anthRecon);
+      assertParts(ar, replyPartsAnthropic(ar), anthRecon(fieldTextOf(ar, 'resp.raw').text), anthRecon);
       assert.ok(ar.resp.content_blocks.length === ab.length);
       // Chat SSE
       const cr = rec(stored(chatSse(chatGroups(t).flat(), eol)));
@@ -114,6 +119,60 @@ test('a reply block whose events interleave with another block has no event-rang
       assert.ok(p.block && p.block.type);
     }
   }
+});
+
+// RFC 3.1: a rebuilt reply block keeps what the wire carried. Sentinels go into the bytes; each must be in the part's block and
+// in the bytes its span cuts, whether the stream is read from resp.raw or from raw_sse, and in the same block a JSON reply gives.
+test('a streamed Anthropic block keeps its start block, its citations and any streamed input', () => {
+  const start = (index, content_block) => ({ type: 'content_block_start', index, content_block });
+  const delta = (index, d) => ({ type: 'content_block_delta', index, delta: d });
+  const stop = (index) => ({ type: 'content_block_stop', index });
+  const groups = [
+    [start(0, { type: 'text', text: '' }), delta(0, { type: 'text_delta', text: 'S_text' }), delta(0, { type: 'citations_delta', citation: { type: 'web_search_result_location', cited_text: 'S_cite_1' } }),
+      delta(0, { type: 'citations_delta', citation: { type: 'web_search_result_location', cited_text: 'S_cite_2' } }), stop(0)],
+    [start(1, { type: 'web_search_tool_result', tool_use_id: 's1', content: [{ type: 'web_search_result', title: 'S_srv_title', encrypted_content: 'S_srv_enc' }] }), stop(1)],
+    [start(2, { type: 'mcp_tool_use', id: 'm1', name: 'S_mcp_name', server_name: 'S_mcp_server', input: { a: 'S_mcp_start_input' } }), stop(2)],
+    [start(3, { type: 'mcp_tool_use', id: 'm2', name: 'S_mcp_name', server_name: 'x', input: {} }), ...['{"a":', '"S_mcp_streamed"}'].map((partial_json) => delta(3, { type: 'input_json_delta', partial_json })), stop(3)],
+    [start(4, { type: 'mcp_tool_use', id: 'm3', name: 'n', server_name: 'x', input: {} }), delta(4, { type: 'input_json_delta', partial_json: '{"a":"S_mcp_cut' }), stop(4)],
+    [start(5, { type: 'tool_use', id: 't1', name: 'Bash', input: {} }), delta(5, { type: 'input_json_delta', partial_json: '{"command":"S_tool_input"}' }), stop(5)],
+  ];
+  const want = [
+    { type: 'text', text: 'S_text', citations: [{ type: 'web_search_result_location', cited_text: 'S_cite_1' }, { type: 'web_search_result_location', cited_text: 'S_cite_2' }] },
+    groups[1][0].content_block,
+    groups[2][0].content_block,
+    { ...groups[3][0].content_block, input: { a: 'S_mcp_streamed' } },
+    { ...groups[4][0].content_block, input: { _unparsed: '{"a":"S_mcp_cut' } },
+    { ...groups[5][0].content_block, input: { command: 'S_tool_input' } },
+  ];
+  for (const eol of EOLS) {
+    const r = rec(stored(sseOf(anthStream(groups), eol)));
+    const parts = replyPartsAnthropic(r);
+    assert.deepEqual(parts.map((p) => p.block), want);
+    parts.forEach((p, i) => {
+      assert.ok(p.span, `${p.kind} has a span`);
+      const bytes = fieldTextOf(r, p.field).text.slice(p.span[0], p.span[1]);
+      for (const [s] of JSON.stringify(p.block).matchAll(/S_[a-z_0-9]+/g)) assert.ok(bytes.includes(s), `block ${i}: ${s} is in its span`);
+    });
+    // the same reply kept as raw_sse, without resp.raw: the events are still this key's own
+    const kept = makeSseReconstructor(true); kept.push(Buffer.from(sseOf(anthStream(groups), eol)));
+    assert.deepEqual(replyPartsAnthropic(rec({ kind: 'sse', status: 200, ...kept.finish() })).map((p) => p.block), want);
+  }
+});
+
+const chatJson = (message) => shapeResponse({ status: 200, headers: [['content-type', 'application/json']], body: Buffer.from(JSON.stringify({ id: 'c', object: 'chat.completion', choices: [{ index: 0, message }] })) });
+test('a Chat reply that only refuses is one text block holding the refusal, in JSON and in SSE', () => {
+  const only = CHAT.replyParts(rec(chatJson({ role: 'assistant', content: null, refusal: 'S_refusal' })));
+  assert.deepEqual(only.map((p) => p.block), [{ type: 'text', text: 'S_refusal' }]);
+  for (const eol of EOLS) {
+    const r = rec(stored(chatSse(halves('S_refusal').map((refusal) => chatChunk({ refusal })), eol)));
+    const parts = CHAT.replyParts(r);
+    assert.deepEqual(parts.map((p) => p.block), [{ type: 'text', text: 'S_refusal' }]);
+    const bytes = fieldTextOf(r, parts[0].field).text.slice(parts[0].span[0], parts[0].span[1]);
+    assert.equal(sliceEvents(bytes).map((e) => e.choices[0].delta.refusal).join(''), 'S_refusal');
+  }
+  // beside text, it stays its own block with its own span
+  const r = rec(stored(chatSse([chatChunk({ content: 'S_text' }), chatChunk({ refusal: 'S_refusal' })], '\n')));
+  assert.deepEqual(CHAT.replyParts(r).map((p) => [p.block.text, !!p.span]), [['S_text', true], ['S_refusal', true]]);
 });
 
 // Responses, WebSocket and HTTP SSE: the message or event that closes an output item carries it whole as one JSON value, so a

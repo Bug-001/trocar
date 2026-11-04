@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { boardFlat, normResp, detect, itemToBlocks, OPENAI_SECTIONS } from '../../src/dissect/openai.mjs';
+import { boardFlat, boardFlatChat, chatMessageToBlocks, normResp, detect, itemToBlocks, OPENAI_SECTIONS } from '../../src/dissect/openai.mjs';
 
 // D25 · Phase 4 — the OpenAI/Codex dissector maps the Responses API into the ONE cross-provider block
 // vocabulary (tools/system/messages + text/tool_use/tool_result/thinking) so the board renders Codex
@@ -112,4 +112,51 @@ test('a reasoning item is one assistant thinking block with its summary and cont
     for (let i = 1; i < texts.length; i++) assert.ok(!b.block.thinking.includes(texts[i - 1] + texts[i]), `${at}: parts ${i - 1} and ${i} stay apart`);
     assert.equal(b.faithfulness, texts.length ? 'verbatim' : 'opaque', at);
   }
+});
+
+// 3.1: a content part keeps what it carried, on both OpenAI wires and inside a tool's result. The wire's image shapes on one axis,
+// the place the part stands in on the other; a data URL is its data, any other URL stays a URL, media_type never holds a URL.
+const IMAGES = [
+  ['data:image/png;base64,S_data', { type: 'base64', media_type: 'image/png', data: 'S_data' }],
+  ['data:image/jpeg;name=a.jpg;base64,S_data', { type: 'base64', media_type: 'image/jpeg', data: 'S_data' }],
+  ['https://x.test/S_url.png?a=1,2', { type: 'url', url: 'https://x.test/S_url.png?a=1,2' }],
+  ['data:text/plain,S_not_base64', { type: 'url', url: 'data:text/plain,S_not_base64' }],
+];
+const chatPart = (url) => ({ type: 'image_url', image_url: { url, detail: 'high' } });
+const respPart = (url) => ({ type: 'input_image', image_url: url });
+const blocksOf = (rows) => rows.map((x) => x.block);
+test('an image part is split into its data or kept as its URL, wherever the part stands', () => {
+  for (const [url, source] of IMAGES) {
+    const image = { type: 'image', source }, text = { type: 'text', text: 'S_text' };
+    assert.deepEqual(blocksOf(chatMessageToBlocks({ role: 'user', content: [chatPart(url)] })), [image]);
+    assert.deepEqual(blocksOf(itemToBlocks({ type: 'message', role: 'user', content: [respPart(url)] })), [image]);
+    assert.deepEqual(blocksOf(chatMessageToBlocks({ role: 'tool', tool_call_id: 'c', content: [{ type: 'text', text: 'S_text' }, chatPart(url)] })),
+      [{ type: 'tool_result', tool_use_id: 'c', content: [text, image] }]);
+    for (const type of ['function_call_output', 'custom_tool_call_output']) {
+      assert.deepEqual(blocksOf(itemToBlocks({ type, call_id: 'c', output: [{ type: 'input_text', text: 'S_text' }, respPart(url)] })),
+        [{ type: 'tool_result', tool_use_id: 'c', content: [text, image] }]);
+    }
+  }
+});
+
+test('a part with no image URL and a part of no known kind stay in the block as the JSON they are', () => {
+  for (const part of [{ type: 'input_image', file_id: 'S_file' }, { type: 'input_file', filename: 'S_name', file_data: 'S_data' }]) {
+    assert.deepEqual(blocksOf(itemToBlocks({ type: 'message', role: 'user', content: [part] })), [{ type: 'text', text: JSON.stringify(part) }]);
+    assert.deepEqual(blocksOf(chatMessageToBlocks({ role: 'user', content: [part] })), [{ type: 'text', text: JSON.stringify(part) }]);
+  }
+});
+
+test('two different images have different block keys, one image sent twice has one key (Chat and Responses)', () => {
+  const key = (url) => boardFlat({ input: [{ type: 'message', role: 'user', content: [respPart(url)] }] }).find((b) => b.kind === 'image').key;
+  const chatKey = (url) => boardFlatChat({ messages: [{ role: 'user', content: [chatPart(url)] }] }).find((b) => b.kind === 'image').key;
+  for (const k of [key, chatKey]) {
+    assert.equal(k(IMAGES[0][0]), k(IMAGES[0][0]));
+    assert.notEqual(k('data:image/png;base64,AAAA'), k('data:image/png;base64,BBBB'));
+    assert.notEqual(k('https://x.test/a.png'), k('https://x.test/b.png'));
+  }
+});
+
+test('an assistant refusal in a request is its own text block at its own path', () => {
+  const flat = boardFlatChat({ messages: [{ role: 'assistant', content: 'S_text', refusal: 'S_refusal' }, { role: 'assistant', content: null, refusal: 'S_only' }] });
+  assert.deepEqual(flat.map((b) => [b.block.text, b.path]), [['S_text', ['messages', 0, 'content']], ['S_refusal', ['messages', 0, 'refusal']], ['S_only', ['messages', 1, 'refusal']]]);
 });
