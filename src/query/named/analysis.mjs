@@ -6,7 +6,7 @@
 // prices give the same bytes. The default document stays the same size however long the session is; what grows with it is in windows.
 // In the worker it is summed at most every ANALYSIS_EVERY_MS while the session moves; its `mark` says how old the sums are.
 import { QueryArgError } from './index.mjs';
-import { markOn, sessionState, sinceAt, version as sessionVersion } from './session.mjs';
+import { markOn, sayUnknown, sessionState, sinceAt, version as sessionVersion } from './session.mjs';
 import { priceTable, pricingId } from './pricing.mjs';
 import { CA, FLAG, modelAt, stateAt, usageAt, wireRow } from '../session-doc.mjs';
 import { BREAK_STATES, breakUsd, bucketOf, costOf, priceMatch } from '../../view/metrics.mjs';
@@ -57,7 +57,7 @@ function pricer({ cols, log, lanes }, table) {
 }
 const modelsOf = (prices) => [...prices].filter(([m]) => m != null).sort(([a], [b]) => (a < b ? -1 : 1)).map(([model, p]) => ({ model, key: p ? p.key : null, exact: !!p && p.exact }));
 
-// the whole session priced → the default document's pricing.models and totals. A slice gives way every EASE_ROWS rows; a background
+// the whole session priced → the default document's pricing.models and totals. Every EASE_ROWS rows it yields the event loop and says progress; a background
 // slice in flight may sync the columns meanwhile, so the walk is over the step order as it stands now.
 async function totalsOf(ctx, { cols, lanes }, { step, prices }) {
   const cost = { main: sums(), sub: sums(), bg: sums() }, breaks = [], failedIn = new Map(), order = cols.order.slice();
@@ -152,7 +152,7 @@ export async function run(ctx) {
   if (problem) errors.push(problem);
   const st = await sessionState(ctx, id);
   if (!st) {
-    errors.push({ where: `session/${id}`, code: 'session-unknown', reason: 'no session with this id among the captured records' });
+    await sayUnknown(ctx, id);
     const pricing = { source, models: [] };
     return windows ? { base: null, mark: null, truncated: null, pricing, usd: {}, breaks: [], prev: null, next: null } : { mark: null, truncated: null, pricing, totals: null };
   }
