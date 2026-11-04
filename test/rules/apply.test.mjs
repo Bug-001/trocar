@@ -149,8 +149,13 @@ test('5.1 §条件的写法: only a real escape takes a hit away: what follows a
     ['0041', '{"a":"\\u0041"}', false],
     ['u004', '{"a":"\\\\u004"}', true],
     ['ABC', '{"a":"\\u0041BC"}', true], // the decoded text has it
+    [{ re: 'ALPHA' }, '{"\\nALPHA":1}', true],
+    [{ re: 'n.LPHA' }, '{"\\nALPHA":1}', false],
+    [{ re: '(?=n)' }, '{"\\nALPHA":1}', false],
+    [{ re: 'n|ALPHA' }, '{"\\nALPHA":1}', true],
+    [{ re: '😀.?' }, '{"\\n😀":1,"\\n😀😀":1}', true],
   ];
-  for (const [literal, body, want] of cases) assert.equal(await hit(literal, body), want, `${literal} in ${body}`);
+  for (const [literal, body, want] of cases) assert.equal(await hit(literal, body), want, `${JSON.stringify(literal)} in ${body}`);
 });
 
 test('5.1 §怎么算改动: a body that is not JSON and holds a \\u cannot be read through, so on_error decides, on both tiers', async () => {

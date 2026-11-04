@@ -179,10 +179,10 @@ function actReplace(action, state, env) {
   const edit = (value) => splice(value, hits(value, action))
   if (action.blocks) return commit(state, rewrite(chosenTextNodes(state, env, action.blocks), edit))
   const windows = windowsOf(text, env.unit.sse) // `in: body` reads none, but an event of many data lines is left alone all the same
-  if (action.literal && action.with === action.replace) return undefined
+  if (action.literal && action.with === action.replace) return
   if (action.in === 'body') return commit(state, hits(text, action))
-  if (action.literal && plainlyAbsent(action.replace, text)) return undefined
-  return commit(state, windows.flatMap(([from, to]) => {
+  if (action.literal && plainlyAbsent(action.replace, text)) return
+  commit(state, windows.flatMap(([from, to]) => {
     const window = text.slice(from, to), json = scan(window)
     if (!json && window.includes('\\u')) throw fault('not-json')
     return shifted(json ? rewrite(json.strings, edit) : hits(window, action), from)
@@ -334,12 +334,12 @@ function escapesOf(text) {
   return out
 }
 
-// What a body condition reads: the text as it stands and where its escapes are. An event of many data lines is refused here, before anything hits.
+// What a body condition reads: the text as it stands, and where its escapes are once a hit asks. An event of many data lines is refused here, before anything hits.
 const readings = new WeakMap()
 function readingOf(decoded, unit) {
   if (!readings.has(decoded)) {
     const text = needText(decoded.text)
-    readings.set(decoded, { text, windows: windowsOf(text, unit.sse), escapes: escapesOf(text), strings: null, unsure: false })
+    readings.set(decoded, { text, windows: windowsOf(text, unit.sse), escapes: null, strings: null, unsure: false })
   }
   return readings.get(decoded)
 }
@@ -360,18 +360,20 @@ function stringsOf(reading) {
   return strings
 }
 
-// Hit in the bytes as they stand, clear of any real escape: this is how a key or a number hits. A hit that touches an escape read it as text, so the search goes on one character
-// later, and hits may overlap. What the bytes leave open the decoded strings say; null when no one can, because a `\u` in what is not JSON could spell anything.
+// Hit in the bytes as they stand, clear of any real escape: this is how a key or a number hits. A hit that touches an escape read it as text, so the search goes on: a literal's
+// from the next character, because tier 1's hits overlap, a regex's from where it ended, or `a.*b` would start over at every `a`. What the bytes leave open the decoded strings say;
+// null when no one can, because a `\u` in what is not JSON could spell anything.
 function bodyHit(node, reading) {
-  const { text, escapes } = reading, source = node.t === 're' ? node.v : escaped(node.v)
+  const { text } = reading, source = node.t === 're' ? node.v : escaped(node.v)
   const search = regex(source, 'gu')
   for (let m = search.exec(text), e = 0; m; m = search.exec(text)) {
+    const escapes = (reading.escapes ??= escapesOf(text))
     while (e < escapes.length && escapes[e + 1] <= m.index) e += 2
     if (e === escapes.length || escapes[e] >= m.index + m[0].length) {
       search.lastIndex = 0 // the regex is shared, and it is left the way it came
       return true
     }
-    search.lastIndex = m.index + (text.codePointAt(m.index) > 0xffff ? 2 : 1)
+    search.lastIndex = m.index + (node.t === 're' && m[0] ? m[0].length : text.codePointAt(m.index) > 0xffff ? 2 : 1)
   }
   if (node.t !== 're' && plainlyAbsent(node.v, text)) return false
   const re = regex(source, 'u')
