@@ -14,6 +14,7 @@
 import { createAnalyzer, stepOrder, OrderBound, breakOf, blockDiff, compactionMeta, unparsedErrMsg, laneMeta, replayLedger } from './analyze.mjs';
 import { callRow, itemsView } from './board.mjs';
 import { compareStep } from './step-order.mjs';
+import { FLAG, opensPart } from './head-cols.mjs';
 import { compactionVerdict, compactionBaseline } from '../identity/session-identity.mjs';
 import { boardDissectorOf } from '../dissect/registry.mjs';
 import { COMP_KEYS, sharedLines, taskOf, HEAD } from './blockmeta.mjs';
@@ -289,8 +290,9 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
   // the latest line of a call, changed by `edit` (false: unchanged), written again
   const rewrite = (k, edit) => { flush(); const at = log.latest(ridAt(k)); if (!at) return; const { p, ...o } = log.read(...at); const line = structuredClone(o); if (edit(line) !== false) put(k, line); };
 
-  // a lane's sums for the stats and its header (its calls' peak context, compactions, tokens in and out, monitor flags)
-  const sums = () => ({ peak: 0, cmp: 0, tin: 0, tout: 0, flags: 0 });
+  // a lane's sums for the stats and its header (its calls' peak context, compactions, tokens in and out, monitor flags, the steps that
+  // opened a chapter, the last step's compaction bits)
+  const sums = () => ({ peak: 0, cmp: 0, tin: 0, tout: 0, flags: 0, opens: 0, lastF: 0 });
   // ── one pass of the fold: its lanes, from scratch on again()
   const fold = () => ({ subs: new Map(), flat: new Map(), dls: new Map(), an: null, spawns: [], links: new Map(), uid: 0, relink: false, fresh: [], subsNew: [], inc: marks() });
   // what settle() redoes after an add: the doc lanes an add touched (`dirty`), or every lane (`all`: a fold begun or resumed, a lane
@@ -321,6 +323,9 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
   // a call folded: its columns, its place in its lane, its line
   function emit(k, S, call, ev, ld, usage) {
     S.peak = Math.max(S.peak, call.ctx || 0); S.cmp += call.compaction ? 1 : 0; S.tin += usage.input_tokens || 0; S.tout += usage.output_tokens || 0;
+    const f = (call.compaction ? FLAG.compaction : 0) | (call.compactionInferred ? FLAG.inferred : 0);
+    if (S.rids.length && opensPart(S.lastF, f)) S.opens++;
+    S.lastF = f;
     S.rids.push(k);
     count(S, call, usage);
     const d = F.dls.get(S.dl);
@@ -397,7 +402,7 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
     return brk;
   }
   // a lane's own state, as a take leaves it (its calls but their number, F.inc.cps)
-  const laneState = (S) => ({ base: S.base, last: S.last, comp: S.comp, ask: S.ask, info: S.info, peak: S.peak, cmp: S.cmp, tin: S.tin, tout: S.tout, flags: S.flags });
+  const laneState = (S) => ({ base: S.base, last: S.last, comp: S.comp, ask: S.ask, info: S.info, peak: S.peak, cmp: S.cmp, tin: S.tin, tout: S.tout, flags: S.flags, opens: S.opens, lastF: S.lastF });
   // a fold's push: a call that sorts before its lane's last call puts the lane in again from the first call it sorts before, its rows
   // in step order with this one in place: from the state the lane had just before that call when one of the last CPS takes left it
   // (the takes after it undone: `back`, the fold's own part of a lane), else from the lane's start. `mark()`: the fold's own part
@@ -582,9 +587,9 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
     const head = (d) => {
       const parts = [...d.parts].filter((S) => S.rids.length);
       if (!parts.length) return null;
-      let count = 0, lastK = -1, peak = 1, flagged = 0;
+      let count = 0, lastK = -1, peak = 1, flagged = 0, chapters = 1;
       for (const S of parts) {
-        count += S.rids.length; flagged += S.flags; peak = Math.max(peak, S.peak);
+        count += S.rids.length; flagged += S.flags; peak = Math.max(peak, S.peak); chapters += S.opens;
         const l = S.rids[S.rids.length - 1];
         if (lastK < 0 || before(l, lastK) > 0) lastK = l;
       }
@@ -593,7 +598,7 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
       const sp = lead.fmt === 'anthropic' && lead.kind === 'subagent' ? best.get(lead) : null;
       const h = { lane: ridAt(d.first), kind: meta.kind, icon: meta.icon, label: meta.label, task: meta.kind === 'subagent' ? null : taskOf(firstS.ask),
         ...(meta.note ? { note: meta.note } : null), count, first: ridAt(d.first), last: ridAt(lastK), peakCtx: peak,
-        spawnRid: sp ? ridAt(sp.k) : null, parent: sp ? keyOf(sp.S) : null, flagged };
+        spawnRid: sp ? ridAt(sp.k) : null, parent: sp ? keyOf(sp.S) : null, flagged, parts: chapters };
       if (meta.kind === 'subagent') h[HEAD] = { text: (firstS.stream ? F.firstText(firstS) : firstS.ask) || '', arg: sp && sp.arg };
       return h;
     };

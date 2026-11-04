@@ -149,7 +149,7 @@ export function world(seed, { calls: count, cut: cuts = false, page: pageSize, s
       laneCalls.set(key, cs)
       lanes.set(key, { lane: key, kind: l ? 'subagent' : 'main', icon: l ? 'agent' : 'main', label: l ? `Agent ${l}` : 'Main', task: '', count: cs.length,
         first: cs[0].rid, last: cs.at(-1).rid, peakCtx: Math.max(...cs.map((c) => rows.get(c.rid).ctx)), spawnRid: null,
-        parent: l && mainKey !== key ? mainKey : null, flagged: false })
+        parent: l && mainKey !== key ? mainKey : null, flagged: false, parts: 1 })
     }
     return { mark: M, rows, events, lanes, laneCalls }
   }
@@ -299,7 +299,7 @@ export function world(seed, { calls: count, cut: cuts = false, page: pageSize, s
     const head = { schema: 2, command: 'session', ok: true, errors: [], v: 1, id: 'S', tier: 1, mark: at, markTs: byRid.get(at).ts, pending: null, truncated: null, failed: 0,
       meta: { session_id: 'S', harness: 'claude-code', title: 'World' }, stats: { calls: d.rows.size, lanes: d.lanes.size }, logged: 0, probes: 0,
       ...(unknownAt(at) ? { unknown: unknownAt(at) } : null), axis, steps: mainCs.length, peak: Math.max(0, ...mainCs.map((c) => d.rows.get(c.rid).ctx)), cols: '', bucket: 1,
-      chapters: ends.slice(1).map((s1, j) => ({ k: j, s0: ends[j], s1, rid0: mainCs[ends[j]]?.rid ?? null, ts0: mainCs[ends[j]]?.ts ?? null, ts1: mainCs[s1 - 1]?.ts ?? null, inferred: false, peakCtx: 0 })).filter((c) => c.s1 > c.s0),
+      chapters: ends.slice(1).map((s1, j) => ({ k: j, s0: ends[j], s1, rid0: mainCs[ends[j]]?.rid ?? null, ts0: mainCs[ends[j]]?.ts ?? null, ts1: mainCs[s1 - 1]?.ts ?? null, inferred: false, peakCtx: 0, prompts: 0 })).filter((c) => c.s1 > c.s0),
       packs, open: { n: sealed, s0: openS0 }, lanes: [...d.lanes.values()], lanesMore: 0, last: mainCs.length ? { rid: mainCs.at(-1).rid, n: mainCs.at(-1).list.length } : null }
     return { head, docHead,
       pack: (n, part) => (n < sealed ? text(docHead({ pack: { n, part, s0: packs[n].s0, s1: packs[n].s1 } }), fileOf.get(`${n}.${part}`) || { rids: [], heads: [] }) : null),
@@ -358,7 +358,7 @@ export function deskOf(lanes, { events = [], ...answer } = {}) {
     const rids = l.rows.map((_, i) => `R${li}-${i}`), key = rids[0]
     const rows = l.rows.map((r, i) => ({ rid: rids[i], lane: key, ts: new Date(T0 + (t++) * 5000).toISOString(), ctx: 100, tools: 0, status: 200, rec: { request: { model: 'm' } }, ...r }))
     calls.push(...rows)
-    heads.push({ lane: key, kind: l.kind, icon: '', label: l.kind, task: '', count: rows.length, first: key, last: rids.at(-1), peakCtx: 100, spawnRid: null, parent: null, flagged: false, ...l.head })
+    heads.push({ lane: key, kind: l.kind, icon: '', label: l.kind, task: '', count: rows.length, first: key, last: rids.at(-1), peakCtx: 100, spawnRid: null, parent: null, flagged: false, parts: 1, ...l.head })
     if (!l.blocks) return
     const defs = [], steps = l.blocks.map((bs, i) => {
       const ids = [], attrs = {}
