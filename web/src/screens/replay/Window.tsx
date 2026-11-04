@@ -18,7 +18,7 @@ import { isTyping } from '../../../legacy/core/keys.mjs'
 import * as W from '../../../legacy/labels/replay.mjs'
 import { SESSION_NOT_LISTED, BACK_TO_SESSIONS } from '../../../legacy/labels/shell.mjs'
 import * as C from '../../../legacy/labels/cells.mjs'
-import { bodyVersion, cellOf, deskMode, gotOf, hasInline, inlineText, isAddressed, isRetryable, loadBody, onModeChange, say, setDeskMode } from '../../../legacy/replay/cell.mjs'
+import { bodyVersion, cellOf, deskMode, gotOf, hasInline, isAddressed, isRetryable, loadBody, onModeChange, say, setDeskMode } from '../../../legacy/replay/cell.mjs'
 import { cellKey } from '../../../legacy/replay/keymap.mjs'
 import { setFold, turnAnchorKey } from '../../../legacy/replay/fold.mjs'
 import { stepOf } from '../../../legacy/replay/model.mjs'
@@ -61,10 +61,7 @@ function Body({ b, fail, api }: { b: any, fail: any, api: any }) {
   if (isAddressed(b)) return <Cell cell={cellOf(b)} fail={fail} api={api} />
   const inline = hasInline(b) || (b.sec === 'tools' && (b.name != null || b.descChars != null || (b.props && b.props.length)))
   if (!inline) return <div className="cbsrc warn"><Svg html={HALF} />{' ' + W.NO_BODY}</div>
-  return <>
-    {b.unaddressable ? <div className="cbsrc warn" title={b.unaddressable}>{W.INLINE_NOTE}</div> : null}
-    <Cell cell={cellOf({ ...b, text_ref: undefined, inline: String(inlineText(b) ?? '') })} api={api} />
-  </>
+  return <Cell cell={cellOf(b)} api={api} />
 }
 const FfBadge = ({ f, tech = '' }: { f: string, tech?: string }) => (f == null || f === 'verbatim' ? null
   : <span className={`ffbadge ff-${f}`} data-ff={f} title={tech || W.FF_WORD[f as keyof typeof W.FF_WORD] || W.FF_WORD.unknown}><Svg html={HALF} />{' ' + (W.FF_WORD[f as keyof typeof W.FF_WORD] || W.FF_WORD.unknown)}</span>)

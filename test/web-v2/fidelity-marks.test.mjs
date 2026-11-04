@@ -15,9 +15,10 @@ import { stepBarHtml } from '../../web/legacy/replay/stepbar.mjs'
 import { rawPanelUnits } from '../../web/legacy/replay/rawpanel.mjs'
 import { serialize } from '../../web/legacy/core/units.mjs'
 import { bodyCache, showBody } from '../../web/legacy/replay/blocks.mjs'
-import { loadBodies } from '../../web/legacy/replay/cell.mjs'
+import { loadBodies, setDeskMode } from '../../web/legacy/replay/cell.mjs'
 import { stepOf } from '../../web/legacy/replay/model.mjs'
 import * as W from '../../web/legacy/labels/replay.mjs'
+import * as C from '../../web/legacy/labels/cells.mjs'
 import { esc } from '../../web/legacy/core/fmt.mjs'
 import { HALF } from '../../web/legacy/core/icons.mjs'
 import { deskOf, deskFrom } from './desk-world.mjs'
@@ -25,6 +26,8 @@ import { boardHome, serveBoard } from './real-face.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { writeSegment } from '../query/raw-home.mjs'
 import { bigSession } from '../query/big-session.mjs'
+
+setDeskMode('raw', { storage: null }) // 以下逐字 is a claim of the Raw desk
 
 // 3.2's closed set of a block's faithfulness besides verbatim; a value outside it is one the board does not know
 const KNOWN = ['metadata', 'opaque', 'summarized', 'omitted', 'truncated']
@@ -152,8 +155,8 @@ test('2.3 #2 · 1.4 #4: each ff value with and without a ref, in each section, g
       for (const r of rows) {
         const d = flat[r.bi]
         if (d.ref) assert.ok(r.body.includes(esc(`BYTES of ${d.ref}`)), `${why} row ${r.bi}: the opened body is the bytes`)
-        else { // 2.3 §没有 def.ref: the body the definition brings, under the line saying it came inline
-          assert.ok(visible(r.body).includes(w(W.INLINE_NOTE)), `${why} row ${r.bi}: the inline note`)
+        else { // 2.3 §没有 def.ref: the body the definition brings, under the line saying the capture holds no bytes for it
+          assert.ok(visible(r.body).includes(w(C.READ_ONLY_NOTE)), `${why} row ${r.bi}: the note of a block with no bytes`)
           if (d.sec === 'tools' && want(d) === 'metadata') assert.ok(visible(r.body).includes(w(W.TOOL_METADATA_ONLY)) && r.body.includes(d.name), `${why} row ${r.bi}: the metadata-only body`)
           else assert.ok(r.body.includes(`BODY-${d.bid.slice(1)}-q`), `${why} row ${r.bi}: the inline body`)
         }
@@ -221,15 +224,18 @@ test('2.3 #2: a new trace\'s tool definition is proven and opens on its full sch
   bodyCache.clear()
 })
 
-test('2.3 #2: an opaque block opens on a placeholder, never on empty text', () => {
+test('2.3 #2: an opaque block opens on a placeholder, never on empty text, in the spec the wire brings and in the older one', () => {
   const block = { type: 'thinking', thinking: '', signature: 'SIG-q' }
-  const x = def('messages', { faithfulness: 'opaque' }, false, { role: 'assistant', kind: 'thinking', head: { role: 'assistant', tag: 'thinking', label: 'thinking' }, inline: { block } })
-  const flat = [def('system', undefined, true), x], s = stateOf(deskOfSteps([flat]))
-  s.openBlocks.add(`${x.bid}#0`)
-  const [r] = rowsOf(ctxWindowHtml(s)).filter((y) => flat[y.bi] === x)
-  assertMark(r, 'opaque', 'opaque')
-  const cell = /<pre class="cellraw"[^>]*>([\s\S]*?)<\/pre>/.exec(r.body)
-  assert.ok(cell && cell[1].replace(/<[^>]*>/g, '').trim().length > 0, 'the body is a placeholder, not blank')
+  for (const r of [{ as: 'opaque', f: { body: ['block'] } }, { as: 'text' }]) {
+    const x = def('messages', { faithfulness: 'opaque' }, false, { r, role: 'assistant', kind: 'thinking', head: { role: 'assistant', tag: 'thinking', label: 'thinking' }, inline: { block } })
+    const flat = [def('system', undefined, true), x], s = stateOf(deskOfSteps([flat]))
+    s.openBlocks.add(`${x.bid}#0`)
+    const [row] = rowsOf(ctxWindowHtml(s)).filter((y) => flat[y.bi] === x)
+    assertMark(row, 'opaque', 'opaque')
+    const cell = /<div class="cellread [^"]*">([\s\S]*?)<\/div><\/div>/.exec(row.body)
+    assert.ok(cell && cell[1].replace(/<[^>]*>/g, '').trim().length > 0, `the Readable body is a placeholder, not blank: ${JSON.stringify(r)}`)
+    assert.ok(!row.body.includes('cellraw'), 'no bytes, so no Raw')
+  }
 })
 
 test('2.3 #9: no block with a ref draws the window line, ◐ on each header, 不能回源 not repeated; one ref draws none', () => {

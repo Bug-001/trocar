@@ -7,6 +7,9 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { blockBodyHtml } from '../../web/legacy/replay/ctxwin.mjs'
 import { DISPLAY_CLIP, bodyFor, clipText } from '../../web/legacy/replay/blocks.mjs'
+import { setDeskMode } from '../../web/legacy/replay/cell.mjs'
+
+setDeskMode('raw', { storage: null }) // these are the claims of the Raw view
 
 const entities = { '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'", '&#13;': '\r', '&amp;': '&' }
 const unesc = (s) => s.replace(/&(lt|gt|quot|#39|#13|amp);/g, (m) => entities[m])
@@ -29,14 +32,17 @@ test('hostile text survives the display unchanged: markup, entities, quotes, CRL
 test('a text over DISPLAY_CLIP chars is clipped to a prefix of the source and says the full length', () => {
   assert.equal(DISPLAY_CLIP, 20000) // 1.5 #3 / 2.3: the display clip is 20 000 chars
   const letters = (n) => Array.from({ length: n }, (_, i) => (i % 100 === 99 ? '\n' : String.fromCharCode(97 + (i % 26)))).join('')
-  // the axis: plain lines, one JSON value; every display path: a resolved body, an inline body as an opened row paints it
+  // the axis: plain lines, one JSON value; every display path: a resolved body, and an inline body as an opened row paints it, which
+  // has no bytes and so no Raw: its text is drawn, cut at a line end when there is one
   for (const src of [letters(30000), JSON.stringify({ a: letters(30000) })]) {
-    for (const html of [blockBodyHtml(ok(src), { text_ref: 'r' }), bodyFor({ sec: 'system', text: src })]) {
-      const cut = cellAttr(html, 'shown')
-      assert.equal(cellAttr(html, 'chars'), src.length, 'the full length N rides on the cell')
-      assert.ok(cut >= DISPLAY_CLIP && cut < src.length, `clipped at the display budget: ${cut}`)
-      assert.equal(shown(html), src.slice(0, cut), 'the first slice is a prefix of the source')
-    }
+    const html = blockBodyHtml(ok(src), { text_ref: 'r' }), cut = cellAttr(html, 'shown')
+    assert.equal(cellAttr(html, 'chars'), src.length, 'the full length N rides on the cell')
+    assert.ok(cut >= DISPLAY_CLIP && cut < src.length, `clipped at the display budget: ${cut}`)
+    assert.equal(shown(html), src.slice(0, cut), 'the first slice is a prefix of the source')
+    const inl = bodyFor({ sec: 'system', text: src }), at = cellAttr(inl, 'shown')
+    assert.equal(cellAttr(inl, 'chars'), src.length, 'an inline body: the full length N rides on the cell')
+    assert.ok(at > 0 && at <= DISPLAY_CLIP, `an inline body is clipped at the display budget: ${at}`)
+    assert.equal(unesc(/<div class="cellread [^"]*">([\s\S]*?)<\/div>/.exec(inl)[1]), src.slice(0, at), 'an inline body: the first slice is a prefix of its text')
   }
   // the raw clip of the raw panel and the pinned view
   const src = letters(30000)

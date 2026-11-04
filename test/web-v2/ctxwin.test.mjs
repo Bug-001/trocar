@@ -285,7 +285,7 @@ test('the real face: an opened reply row with no source location shows the text 
       for (const d of st.reply) if (d.ref == null) s.openBlocks.add('rp:' + d.bid) // a flip opens the rows that are closed by default…
       const open = seg(ctxWindowHtml(s))
       for (const d of st.reply) if (d.ref == null) s.openBlocks.delete('rp:' + d.bid) // …and closes the one open by default; both views are read
-      const h = open + seg(ctxWindowHtml(s)), bodies = [...h.matchAll(/<pre class="cellraw">([\s\S]*?)<\/pre>/g)].map((m) => m[1]).join('\n')
+      const h = open + seg(ctxWindowHtml(s)), bodies = [...h.matchAll(/<div class="cellread [^"]*">([\s\S]*?)<\/div>/g)].map((m) => m[1]).join('\n') // no ref: no bytes, Readable only
       for (const d of st.reply.filter((x) => x.ref == null)) {
         seen++
         assert.ok(d.inline && typeof d.inline === 'object', `step ${p + 1} ${d.bid}: the definition carries its body (3.5 §会话读)`)

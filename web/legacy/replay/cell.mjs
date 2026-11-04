@@ -1,14 +1,15 @@
 // replay/cell.mjs — one block body, drawn the same everywhere (spec 2.3 §两种模式, D70):
 // the request's blocks, the reply's parts, the raw panel's non-block keys and the drawer. A cell is
-// {bid, ref?, inline?, r, ff, chars, preview}. Two modes: Raw (the bytes, laid out by jsonlay; the default) and Readable (drawn
-// from the render spec r by kinds.mjs). The bytes are fetched, cached and copied by `ref` only (a content key is not an
+// {bid, ref?, inline?, r, ff, chars, preview, view?, reads?, block}. Two modes: Readable (the default: the `view` the `block` answer
+// or the definition brings, drawn by kinds.mjs) and Raw (the bytes, laid out by jsonlay). A cell has both, only Raw (no view), or only
+// Readable (a block the capture holds no bytes for). The bytes are fetched, cached and copied by `ref` only (a content key is not an
 // exact-byte id); `bid` keys only view state. DOM-free above wireCells, so the strings can be tested in Node.
 import { esc, kf } from '../core/fmt.mjs'
 import * as W from '../labels/replay.mjs'
 import { HALF } from '../core/icons.mjs'
 import * as C from '../labels/cells.mjs'
 import { layout } from './jsonlay.mjs'
-import { renderKind, valueOf, jsonNodeHtml } from './kinds.mjs'
+import { renderKind, jsonNodeHtml, get } from './kinds.mjs'
 import { cellKey } from './keymap.mjs'
 import { isTyping } from '../core/keys.mjs'
 
@@ -125,22 +126,37 @@ export function inlineText(b) {
 // ── the cell object ───────────────────────────────────────────────────────────────────────────────────────────────────
 const fnv = (s) => { let h = 0x811c9dc5; for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 0x01000193); return (h >>> 0).toString(36) }
 const synth = (text) => `i:${text.length}:${fnv(text)}` // an identity derived from the inline bytes themselves
-// a flat definition ({sec, …}), a non-block key ({key, ref, chars}) or a body the caller holds ({inline, r}) as a cell. `x.inline`
-// is that body: the text the cell shows and copies, never an envelope made up around it (a parsed reply part is its own text).
+const PLAIN = Object.freeze({ as: 'text', f: Object.freeze({ body: Object.freeze([]) }) })
+// a flat definition ({sec, …}), a non-block key ({key, ref, chars}) or a body the caller holds ({inline, view?}) as a cell. A string
+// `x.inline` is that body: the text the cell shows and copies, never an envelope made up around it (a parsed reply part is its own
+// text). A block with no ref has no bytes: its `inline` is only its identity, and what it shows is its view, the definition's own
+// render spec over its own body, or its text as plain text when the definition has no such spec.
 export function cellOf(x) {
-  const held = typeof x.inline === 'string' ? x.inline : undefined
-  if (x.sec == null && x.ref) return { bid: 'nbk:' + x.ref, ref: x.ref, inline: held, r: x.r || { as: 'text' }, ff: x.ff ?? null, chars: x.chars ?? held?.length ?? 0, preview: x.preview ?? '' }
+  const held = typeof x.inline === 'string' ? x.inline : undefined, block = x.sec != null
+  const tail = { r: x.r || { as: 'text' }, ff: x.ff ?? null, preview: x.preview ?? '', reads: x.reads, block }
+  if (!block && x.ref) return { ...tail, bid: 'nbk:' + x.ref, ref: x.ref, inline: held, view: x.view, chars: x.chars ?? held?.length ?? 0 }
   const ref = isAddressed(x) ? x.text_ref : undefined
   const inline = held ?? (ref ? undefined : String(inlineText(x) ?? ''))
-  return { bid: x.bid || x.key || x.text_ref || synth(inline ?? ''), ref, inline, r: x.r || { as: 'text' }, ff: x.ff ?? null, chars: x.chars ?? inline?.length ?? 0, preview: x.preview ?? '' }
+  const view = x.view ?? (ref || !block ? undefined : hasInline(x) && Array.isArray(x.r?.f?.body) ? { r: x.r, body: ownBody(x) } : { r: PLAIN, body: inline })
+  return { ...tail, bid: x.bid || x.key || x.text_ref || synth(inline ?? ''), ref, inline, view, chars: x.chars ?? inline?.length ?? 0 }
 }
 // the byte identity of a cell's body: its ref, or the inline text's own digest
 export const byteKey = (cell) => cell.ref != null && cell.inline === undefined ? 'r:' + cell.ref : synth(cell.inline ?? '')
 // the body a cell holds right now: {status:'ok', text} | a failed answer | null (not here yet)
 export const gotOf = (cell) => cell.inline !== undefined ? { status: 'ok', text: cell.inline } : cell.ref != null ? bodyCache.get(cell.ref) ?? null : null
+// what Readable draws: the answer's view, else the one the cell came with
+export const viewIn = (cell, got) => got?.view ?? cell.view ?? null
+export const readable = (cell, got) => !!viewIn(cell, got)
+// the render spec to draw: a guess gives way to what the tool call behind this result says it reads
+export function rOf(cell, view) {
+  const { r } = view
+  return r.guess && cell.reads ? { ...r, as: cell.reads, f: { ...r.f, ...(cell.reads === 'code' ? { wrap: true } : { file: true }) } } : r
+}
+// the one mode a cell has, or null when it has both: a block with no bytes is Readable only, a body with no view Raw only
+export const onlyMode = (cell, got) => (cell.block && cell.ref == null ? 'read' : readable(cell, got) ? null : 'raw')
 
 // ── mode state ────────────────────────────────────────────────────────────────────────────────────────────────────────
-const DESK_KEY = 'trocar.v2.cellView'
+const DESK_KEY = 'trocar.v2.cellMode'
 const MODES = new Set(['raw', 'read'])
 const local = () => { try { return globalThis.localStorage ?? null } catch { return null } }
 let desk = null // the last desk mode set here, for when storage cannot hold it
@@ -153,11 +169,11 @@ let scope = ''
 export const overrideScope = (key) => { scope = String(key) + '\n' }
 
 export function deskMode({ storage = local() } = {}) {
-  try { const v = storage && storage.getItem(DESK_KEY); if (MODES.has(v)) return v } catch { /* storage denied: memory, then Raw */ }
-  return desk ?? 'raw'
+  try { const v = storage && storage.getItem(DESK_KEY); if (MODES.has(v)) return v } catch { /* storage denied: memory, then Readable */ }
+  return desk ?? 'read'
 }
 export function setDeskMode(m, { storage = local() } = {}) {
-  desk = MODES.has(m) ? m : 'raw'
+  desk = MODES.has(m) ? m : 'read'
   overrides.clear()
   try { storage && storage.setItem(DESK_KEY, desk) } catch { /* full or denied: the choice holds for this page only */ }
   modeChanged()
@@ -176,8 +192,8 @@ export function setMode(bid, m, opt) {
 }
 
 // ── drawing ───────────────────────────────────────────────────────────────────────────────────────────────────────────
-// A drawn cell is an entry {body, next, state, shown}: the body markup so far, where the next slice starts (null when all is
-// shown) and jsonlay's carried state. Entries live in an LRU keyed by bid and mode, bounded by markup characters,
+// A drawn cell is an entry {body, next, state, shown, total}: the body markup so far, where the next slice starts (null when all is
+// shown), jsonlay's carried state and the characters of what this mode draws. Entries live in an LRU keyed by bid and mode, bounded by markup characters,
 // and are replaced as a cell grows.
 const drawn = new Map()
 let drawnChars = 0
@@ -191,64 +207,81 @@ const cells = new Map() // bid -> the last cell drawn with it, for the DOM wirin
 function remember(k, cell) { cells.delete(k); cells.set(k, cell); if (cells.size > CELLS) { const [[, o]] = cells; cells.delete(o.bid); cellGone(byteKey(o)) } }
 let cellGone = () => {}
 
-function first(cell, mode, text) {
+function first(cell, mode, got) {
   if (mode === 'raw') {
-    const o = layout(text, 0, DISPLAY_CLIP)
-    return { body: (o.html.startsWith('\n') ? '\n' : '') + o.html, next: o.next, state: o.state, shown: o.next ?? text.length, cls: '' }
+    const text = String(got.text ?? ''), o = layout(text, 0, DISPLAY_CLIP)
+    return { body: (o.html.startsWith('\n') ? '\n' : '') + o.html, next: o.next, state: o.state, shown: o.next ?? text.length, total: text.length, cls: '' }
   }
-  const o = renderKind(cell.r, valueOf(text), { budget: DISPLAY_CLIP, bid: cell.bid })
-  return { body: o.html, next: o.more, state: null, shown: o.more ?? o.shown ?? text.length, cls: o.cls, as: o.as }
+  const view = viewIn(cell, got), o = renderKind(rOf(cell, view), view.body, { budget: DISPLAY_CLIP })
+  return { body: o.html, next: o.more, state: null, shown: o.more ?? o.shown ?? o.total, total: o.total, cls: o.cls }
 }
 // the next slice of a drawn entry → {html, entry} (a new entry; the old one is left as it was)
-export function grow(cell, mode, entry, text) {
+export function grow(cell, mode, entry, got) {
   if (entry.next == null || entry.shown >= CELL_CAP) return { html: '', entry }
-  const o = mode === 'raw' ? layout(text, entry.next, DISPLAY_CLIP, entry.state) : renderKind(cell.r, valueOf(text), { from: entry.next, budget: DISPLAY_CLIP, bid: cell.bid })
-  const next = mode === 'raw' ? o.next : o.more
-  const e = { ...entry, body: entry.body + o.html, next, state: mode === 'raw' ? o.state : null, shown: next ?? text.length }
+  const view = mode === 'raw' ? null : viewIn(cell, got)
+  const o = view ? renderKind(rOf(cell, view), view.body, { from: entry.next, budget: DISPLAY_CLIP }) : layout(String(got.text ?? ''), entry.next, DISPLAY_CLIP, entry.state)
+  const next = view ? o.more : o.next
+  const e = { ...entry, body: entry.body + o.html, next, state: view ? null : o.state, shown: next ?? entry.total }
   keep(cell.bid + '|' + mode, e)
   return { html: o.html, entry: e }
 }
 // the drawn entry of a cell in a mode, rebuilt up to `upto` shown characters when the LRU let it go
-export function entryOf(cell, mode, text, upto = 0) {
+export function entryOf(cell, mode, got, upto = 0) {
   const k = cell.bid + '|' + mode, src = byteKey(cell)
   let e = drawn.get(k)
-  if (!e || e.src !== src) { e = { ...first(cell, mode, text), src }; keep(k, e) } // a bid drawn from other bytes is drawn again
-  while (e.shown < upto && e.next != null && e.shown < CELL_CAP) e = grow(cell, mode, e, text).entry
+  if (!e || e.src !== src) { e = { ...first(cell, mode, got), src }; keep(k, e) } // a bid drawn from other bytes is drawn again
+  while (e.shown < upto && e.next != null && e.shown < CELL_CAP) e = grow(cell, mode, e, got).entry
   return e
 }
 export const clipLine = (shown, total) => shown >= total ? '' : shown >= CELL_CAP ? C.atCap(shown, total) : C.showing(shown, total)
 const lines = (chars) => Math.max(1, Math.min(20, Math.ceil((Number(chars) || 0) / 100)))
+// the Raw button's title: what the line breaks are, and how many stream events the part was assembled from when it was
+export const rawTip = (view) => (view?.events ? `${C.RAW_TIP} ${C.rawEvents(view.events)}` : C.RAW_TIP)
+// the line a Readable cell says above its body: why it has no Raw, or what a shell command says it does
+export function headNote(cell, got, mode = modeOf(cell.bid)) {
+  const only = onlyMode(cell, got), view = viewIn(cell, got)
+  if (only === 'read') return C.READ_ONLY_NOTE
+  if (only || mode !== 'read') return null
+  const r = rOf(cell, view), note = r.as === 'shell' ? get(view.body, r.f?.note) : null
+  return typeof note === 'string' && note ? note : null
+}
 
-// the whole body of a cell: toolbar + Raw or Readable + the sentinel; the sized pending box; or the reason the bytes are missing
+// the whole body of a cell: toolbar + what it says + Raw or Readable + the sentinel; the sized pending box; or the reason the bytes are missing
 export function cellBodyHtml(cell, mode) {
   const got = gotOf(cell)
   if (!got) return `<pre class="cellpend" data-ref="${esc(cell.ref ?? '')}" style="--cl:${lines(cell.chars)}">${preEsc(String(cell.preview ?? ''))}</pre>`
   if (got.status !== 'ok') return `<div class="cbsrc warn" title="locator: ${esc(cell.ref ?? '—')}">${HALF + ' ' + esc(W.FF_WORD.notfetched + ' — ' + (got.error || got.reason || 'the capture could not be read'))}</div>`
-  const m = mode === 'read' ? 'read' : 'raw', text = String(got.text ?? ''), k = cell.bid
+  const only = onlyMode(cell, got), m = only ?? (mode === 'read' ? 'read' : 'raw'), k = cell.bid
   remember(k, cell)
-  const e = entryOf(cell, m, text)
-  const btn = (v, word) => `<button type="button" data-cellmode="${v}" aria-pressed="${m === v}">${esc(word)}</button>`
-  const clip = clipLine(e.shown, text.length)
-  const bar = `<div class="cellbar"><span class="cellview" role="group" aria-label="${esc(C.VIEW_GROUP)}">${btn('raw', C.RAW)}${btn('read', C.READABLE)}</span>` +
-    `<button type="button" class="cellcopy" data-cellcopy>${esc(C.COPY)}</button>` +
-    (m === 'read' ? `<span class="cellkind">${esc(C.KIND_WORD[e.as] || C.KIND_WORD.text)}</span><span class="cellstate">${esc(C.READ_STATE)}</span>` : `<span class="cellstate" title="${esc(C.RAW_TIP)}">${esc(C.RAW_STATE)}</span>`) +
-    (clip ? `<span class="cellclip">${esc(clip)}</span>` : '') + '</div>'
+  const e = entryOf(cell, m, got)
+  const btn = (v, word, tip) => `<button type="button" data-cellmode="${v}" aria-pressed="${m === v}" title="${esc(tip)}">${esc(word)}</button>`
+  const clip = clipLine(e.shown, e.total), note = headNote(cell, got, m)
+  const tools = (only ? '' : `<span class="cellview" role="group" aria-label="${esc(C.VIEW_GROUP)}">${btn('read', C.READABLE, C.READ_TIP)}${btn('raw', C.RAW, rawTip(viewIn(cell, got)))}</span>`) +
+    (only === 'read' ? '' : `<button type="button" class="cellcopy" data-cellcopy>${esc(C.COPY)}</button>`) +
+    (m === 'raw' ? `<span class="cellstate" title="${esc(C.RAW_TIP)}">${esc(C.RAW_STATE)}</span>` : '') +
+    (clip ? `<span class="cellclip">${esc(clip)}</span>` : '')
+  const bar = (tools ? `<div class="cellbar">${tools}</div>` : '') + (note ? `<div class="cellnote">${esc(note)}</div>` : '') +
+    (only === 'raw' && cell.block ? `<div class="cellnote" data-noread>${esc(C.NO_READABLE)}</div>` : '')
   const body = m === 'raw' ? `<pre class="cellraw">${e.body}</pre>` : `<div class="cellread ${esc(e.cls)}">${e.body}</div>`
   const more = e.next != null && e.shown < CELL_CAP ? `<span class="cellmore" data-at="${e.next}"></span>` : ''
-  return `<div class="cell" data-bid="${esc(cell.bid)}" data-ck="${esc(k)}" data-mode="${m}" data-chars="${text.length}" data-shown="${e.shown}"${cell.ref != null ? ` data-ref="${esc(cell.ref)}"` : ''}>${bar}${body}${more}</div>`
+  return `<div class="cell" data-bid="${esc(cell.bid)}" data-ck="${esc(k)}" data-mode="${m}"${only ? ` data-only="${only}"` : ''} data-chars="${e.total}" data-shown="${e.shown}"${cell.ref != null ? ` data-ref="${esc(cell.ref)}"` : ''}>${bar}${body}${more}</div>`
 }
 
 // ── DOM wiring ────────────────────────────────────────────────────────────────────────────────────────────────────────
-const at = (v, p) => { for (const k of p) { if (v == null || typeof v !== 'object' || !Object.hasOwn(v, k)) return undefined; v = v[k] } return v }
-const blobs = new Map() // byte key -> the blob: URL made from a media cell's bytes; revoked when those bytes leave the caches
-function revoke(k) { const u = blobs.get(k); if (u) { blobs.delete(k); try { URL.revokeObjectURL(u) } catch { /* already gone */ } } }
+const blobs = new Map() // byte key -> Map(path -> the blob: URL made from the data at that path); revoked when those bytes leave the caches
+function revoke(k) {
+  const m = blobs.get(k)
+  if (!m) return
+  blobs.delete(k)
+  for (const u of m.values()) try { URL.revokeObjectURL(u) } catch { /* already gone */ }
+}
 bodyCache.onEvict = (ref) => revoke('r:' + ref)
 cellGone = revoke
 
 // the cell behind a .cell element and the bytes it shows, or null
 function held(el) {
   const cell = el && cells.get(el.dataset.ck), got = cell && gotOf(cell)
-  return got && got.status === 'ok' ? { cell, text: String(got.text ?? '') } : null
+  return got && got.status === 'ok' ? { cell, got, text: String(got.text ?? '') } : null
 }
 // the same, asking for the bytes again when they left bodyCache while the cell stayed open (the cache is bounded; a cell is a ref)
 let api = null
@@ -258,21 +291,31 @@ async function hold(el) {
   await loadBody(api, cell.ref)
   return held(el)
 }
-// the blob: URL of a media cell's bytes, one per byte key; null when the cell is not media or its data does not decode
-export function blobOf(cell, text) {
-  const f = (cell.r && cell.r.f) || {}
-  if (!Array.isArray(f.data)) return null
-  const k = byteKey(cell)
-  if (blobs.has(k)) return blobs.get(k)
-  const v = valueOf(text), data = at(v, f.data), mime = Array.isArray(f.mime) ? String(at(v, f.mime) ?? '') : ''
+// the blob: URL of the data at `path` in a view, one per byte key and path; null when there is no such data or it does not decode
+export function blobOf(cell, view, path, mime) {
+  const k = byteKey(cell), p = JSON.stringify(path), had = blobs.get(k)?.get(p)
+  if (had) return had
+  const data = view ? get(view.body, path) : undefined
   if (typeof data !== 'string') return null
   try {
-    const bin = atob(data), url = URL.createObjectURL(new Blob([Uint8Array.from(bin, (c) => c.charCodeAt(0))], { type: mime }))
-    blobs.set(k, url)
+    const bin = atob(data), url = URL.createObjectURL(new Blob([Uint8Array.from(bin, (c) => c.charCodeAt(0))], { type: mime ?? '' }))
+    if (!blobs.has(k)) blobs.set(k, new Map())
+    blobs.get(k).set(p, url)
     return url
   } catch { return null }
 }
-const blobAt = (el) => { const x = held(el); return x && blobOf(x.cell, x.text) }
+// the same for an element carrying data-media and data-mime (kinds.mjs)
+export function blobFor(cell, view, el) {
+  try { return blobOf(cell, view, JSON.parse(el.dataset.media), el.dataset.mime) } catch { return null }
+}
+const blobAt = (el) => { const x = held(el.closest('.cell')); return x && blobFor(x.cell, viewIn(x.cell, x.got), el) }
+// a json node open for the first time draws its children; a toggle arriving after they are there changes nothing
+export function fillNode(d, view) {
+  if (!view || !d.open || d.dataset.path == null || d.children.length > 1) return
+  let path
+  try { path = JSON.parse(d.dataset.path) } catch { return }
+  d.insertAdjacentHTML('beforeend', jsonNodeHtml(view.body, path, d.dataset.span ? d.dataset.span.split(',').map(Number) : undefined, { q: d.dataset.q != null, budget: DISPLAY_CLIP }))
+}
 let live = null // the one polite live region every cell speaks through
 export function say(msg) {
   if (!live || !live.isConnected) {
@@ -294,6 +337,7 @@ function redraw(el, opt) {
   if (inside && neu) (neu.querySelector(which === 'copy' ? '[data-cellcopy]' : `[data-cellmode="${which}"]`) || neu).focus?.()
 }
 async function copyBytes(el) {
+  if (el.dataset.only === 'read') { say(C.READ_ONLY); return }
   const x = held(el) ?? await hold(el)
   if (!x) { say(C.COPY_FAILED); return }
   return copyText(x.text)
@@ -344,6 +388,7 @@ export function wireCells(roots, s = {}) {
   const sameBid = (bid, fn) => each('.cell', (el) => { if (el.dataset.bid === bid) fn(el) })
   function flip(el, m) {
     const bid = el.dataset.bid
+    if (el.dataset.only) { say(el.dataset.only === 'raw' ? C.RAW_ONLY : C.READ_ONLY); return }
     setMode(bid, m ?? (modeOf(bid, opt) === 'raw' ? 'read' : 'raw'), opt)
     const now = modeOf(bid, opt)
     sameBid(bid, (c) => redraw(c, opt))
@@ -369,7 +414,7 @@ export function wireCells(roots, s = {}) {
   // any mode change, made here or by a React cell: a cell drawn in another mode than its own now is stale
   const restale = () => {
     stale.disconnect(); q.length = 0 // a cell from an earlier flip is stale again (or gone)
-    each('.cell', (el) => { if (el.dataset.mode !== modeOf(el.dataset.bid, opt)) stale.observe(el) })
+    each('.cell', (el) => { if (!el.dataset.only && el.dataset.mode !== modeOf(el.dataset.bid, opt)) stale.observe(el) })
   }
   const unheard = onModeChange(restale)
   function flipDesk() {
@@ -380,12 +425,12 @@ export function wireCells(roots, s = {}) {
     const el = sent.isConnected && sent.closest('.cell'), x = held(el) ?? await hold(el)
     if (!x) return
     const mode = el.dataset.mode, shown = Number(el.dataset.shown) || 0
-    const e = entryOf(x.cell, mode, x.text, shown)
+    const e = entryOf(x.cell, mode, x.got, shown)
     if (e.shown !== shown) { redraw(el, opt); return } // another copy of this cell grew further: draw it whole
-    const { html, entry } = grow(x.cell, mode, e, x.text)
-    el.querySelector(mode === 'raw' ? ':scope > .cellraw' : ':scope > .cellread')?.insertAdjacentHTML('beforeend', html)
+    const { html, entry } = grow(x.cell, mode, e, x.got), leaf = el.querySelector(mode === 'raw' ? ':scope > .cellraw' : ':scope > .cellread')
+    leaf?.insertAdjacentHTML('beforeend', html)
     el.dataset.shown = String(entry.shown)
-    const line = clipLine(entry.shown, x.text.length), clip = el.querySelector('.cellclip')
+    const line = clipLine(entry.shown, entry.total), clip = el.querySelector('.cellclip')
     if (line && clip) clip.textContent = line; else if (!line && clip) clip.remove()
     if (entry.next != null && entry.shown < CELL_CAP) { sent.dataset.at = String(entry.next); io.observe(sent) } else sent.remove()
   }
@@ -396,7 +441,7 @@ export function wireCells(roots, s = {}) {
     if (n.nodeType !== 1) return
     for (const el of [n, ...n.querySelectorAll('.cellmore, img[data-media]:not([src])')]) {
       if (el.matches('.cellmore')) io.observe(el)
-      else if (el.matches('img[data-media]:not([src])') && el.dataset.media) { const u = blobAt(el.closest('.cell')); if (u) el.src = u }
+      else if (el.matches('img[data-media]:not([src])') && el.dataset.media) { const u = blobAt(el); if (u) el.src = u }
     }
   }
   const onClick = (e) => {
@@ -405,7 +450,7 @@ export function wireCells(roots, s = {}) {
     if (!el) return
     if (b.dataset.cellmode != null) flip(el, b.dataset.cellmode)
     else if (b.dataset.cellcopy != null) copyBytes(el)
-    else { const u = blobAt(el); if (u) { const a = document.createElement('a'); a.href = u; a.download = ''; a.click() } }
+    else { const u = blobAt(b); if (u) { const a = document.createElement('a'); a.href = u; a.download = ''; a.click() } }
   }
   const onKey = (e) => {
     const a = isTyping(e) ? null : cellKey(e), row = a && e.target.closest && e.target.closest('.cblk, .dblk')
@@ -428,11 +473,7 @@ export function wireCells(roots, s = {}) {
     const d = e.target
     if (!d || d.tagName !== 'DETAILS' || !d.open || d.dataset.path == null || d.children.length > 1) return
     const el = d.closest('.cell'), x = held(el) ?? await hold(el)
-    if (!x) return
-    let path
-    try { path = JSON.parse(d.dataset.path) } catch { return }
-    const v = valueOf(x.text), body = Array.isArray(x.cell.r?.f?.body) ? at(v, x.cell.r.f.body) : v
-    d.insertAdjacentHTML('beforeend', jsonNodeHtml(body, path, d.dataset.span ? d.dataset.span.split(',').map(Number) : undefined, { q: d.dataset.q != null, budget: DISPLAY_CLIP }))
+    if (x) fillNode(d, viewIn(x.cell, x.got))
   }
   const mos = rs.map((r) => {
     const mo = new MutationObserver((recs) => { for (const rec of recs) for (const n of rec.addedNodes) hook(n) })
