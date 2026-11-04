@@ -21,33 +21,31 @@ export const backoffMs = (n, base) => Math.min(base * 2 ** n, BACKOFF_MAX_MS)
 // {pending:…} when extraction has not caught up (4.4 live-poll, 3.5 §抽取前沿), anything else on success.
 //   · a timer tick (byReader false) does nothing while idle() holds (a hidden tab, a session that is not listed), nor before the
 //     next read is due; a reader's own action (byReader true) always reads
-//   · due (4.4 live-poll): after a failure, the back-off; after a success that answered `pending` or ended a back-off, at
-//     once (the timer's own interval is the gap); after any other success that took D ms, 3·D from its start when 3·D > base
-//     (a slow worker gets at most a third of the time from the timer), else at once
-//   · a call while a read is in flight asks for one more read after it; after a success that read runs when a reader asked or it
-//     is due, after a failure only a reader's request does — a failure never re-reads by itself, so one failing read cannot loop
+//   · due (4.4 live-poll): after a failure, the back-off; after a success that answered `pending` or ended a back-off, the
+//     next timer tick (the timer's own interval is the gap); after any other success that took D ms, 3·D from its start when
+//     3·D > base (a slow worker gets at most a third of the time from the timer), else the next timer tick
+//   · a reader's call while a read is in flight asks for one more read after it; a timer tick then does nothing: queued behind the read,
+//     its round would start off the timer's beat, less than a period before the next tick's (4.4 每 1.5 s 一轮); a failure never re-reads
+//     by itself, so one failing read cannot loop
 export function createPoller({ run, now = Date.now, base, alive = () => true, idle = () => false }) {
-  let busy = false, again = false, readerAgain = false, fails = 0, nextAt = 0
+  let busy = false, readerAgain = false, fails = 0, nextAt = 0
   async function poll(byReader = false) {
     if (!alive()) return
     if (!byReader && (idle() || now() < nextAt)) return
-    if (busy) { again = true; readerAgain = readerAgain || byReader; return }
+    if (busy) { readerAgain = readerAgain || byReader; return }
     busy = true
     try {
-      let go = true, reader = byReader
-      while (go && alive()) {
-        if (!reader) markTimerRound(base)
-        again = false; readerAgain = false
+      if (!byReader) markTimerRound(base)
+      do {
+        readerAgain = false
         const t0 = now()
         const r = await run()
-        reader = readerAgain
-        if (r && r.ok === false) { fails++; nextAt = now() + backoffMs(fails, base); go = readerAgain }
+        if (r && r.ok === false) { fails++; nextAt = now() + backoffMs(fails, base) }
         else {
           const d = now() - t0, plain = !fails && !(r && r.pending)
           fails = 0; nextAt = plain && 3 * d > base ? t0 + 3 * d : 0
-          go = readerAgain || (again && !idle() && now() >= nextAt)
         }
-      }
+      } while (readerAgain && alive())
     } finally { busy = false }
   }
   return { poll }
