@@ -292,6 +292,21 @@ test('AN16: the start of a data URI in the base makes nothing after it public', 
   }
 })
 
+test('AN16: a URI built at run time holds no image, and everything else on its line is still read', () => {
+  const svg = ['data', 'image/svg+xml,'].join(':'), png = ['data', 'image/png;base64,'].join(':')
+  const built = [`url("${svg}\${encodeURIComponent(e)}")`, `a.href = '${svg}' + encodeURIComponent(s)`, `e.href=\`${svg}\`+encodeURIComponent(s)`, `"${svg}" +\n  s`]
+  const clean = workspace()
+  clean.commit(Object.fromEntries(built.map((text, i) => [`built${i}.js`, `${text}\n`])))
+  for (const text of built) assert.deepEqual(of(clean.check({ body: text }).doc, 'files'), [], text)
+  const refused = [`${svg}%3Csvg%3E`, `'${svg}' + '%3Csvg%3E'`, `\`${svg}\${'%3Csvg%3E'}\``, `${svg}%24%7Bs%7D`, `'${['data', 'image/svg+xml;base64,'].join(':')}' + s`, `'${['data', 'image/svg+xml;utf8,'].join(':')}' + s`,
+    `'${png}' + s`, `\`${svg}\${s}\` ${DATA_URI}`, `'${svg}' + s + '${DATA_URI}'`, `\`${svg}\${s}%3Cimage href='${DATA_URI.replace(':', '%3A')}'/%3E\``]
+  for (const text of refused) {
+    const w = workspace()
+    w.commit({ 'a.txt': `${text}\n` })
+    assert.deepEqual(named(w.check().doc, 'files'), ['a.txt'], text)
+  }
+})
+
 test('AN16: a Markdown image or an img tag inside a commit passes', () => {
   const w = workspace()
   w.commit({ 'docs/a.md': `![x](icon.svg)\n<img src=icon.svg>\n<video src=a>\n${ATTACHMENT}\n` }, `subject\n\nDraws ![x](icon.svg), <img src=icon.svg>, <video src=a> and ${ATTACHMENT}.\n`)
