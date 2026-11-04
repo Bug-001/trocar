@@ -8,7 +8,7 @@
 // `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard, serveWorld, timed, stats, DESK_NEXT } from './harness.mjs'
+import { probe, withBoard, serveWorld, timed, stats } from './harness.mjs'
 import { world } from '../desk-world.mjs'
 import { BOARD_LINES } from '../perf-lines.mjs'
 import { LIMITS } from './seq/invariants.mjs'
@@ -81,8 +81,7 @@ async function aimOlder(d, j) {
   return pt
 }
 
-let growing = null // the first case's step samples, for the line's own case
-test('2.3 归约前沿 · D64②: a session growing by 1,000 members an answer — following, scrubbing and lane jumps move the step and run no long task', { skip }, async () => {
+test('2.3 归约前沿 · D64②: a session growing by 1,000 members an answer — following, scrubbing and lane jumps move the step and run no long task; step p95 within the line', { skip }, async () => {
   const w = world(12, { calls: 30000, page: 1500, files: 600, compact: 0.02 }) // wide chapters: the window after End holds many steps
   await growingDesk(w, async (d) => {
     const { page, growth, grant, drawn, stepN } = d, longTasks = () => page.evaluate(() => window.__lt.splice(0))
@@ -117,21 +116,13 @@ test('2.3 归约前沿 · D64②: a session growing by 1,000 members an answer �
     await drawn()
     seen.lanes = await longTasks()
 
-    growing = stats(samples)
-    console.log(`# pending growth: ${growth.left()} members still to come; long tasks follow [${seen.follow.map(Math.round)}] scrub [${seen.scrub.map(Math.round)}] lanes [${seen.lanes.map(Math.round)}]; step n=${samples.length} p50=${growing.p50.toFixed(1)} ms p95=${growing.p95.toFixed(1)} ms line=${BOARD_LINES.stepClick} ms`)
+    const { p50, p95 } = stats(samples)
+    console.log(`# pending growth: ${growth.left()} members still to come; long tasks follow [${seen.follow.map(Math.round)}] scrub [${seen.scrub.map(Math.round)}] lanes [${seen.lanes.map(Math.round)}]; step n=${samples.length} p50=${p50.toFixed(1)} ms p95=${p95.toFixed(1)} ms line=${BOARD_LINES.stepClick} ms`)
     assert.equal(growth.left(), left0 - 23 * 1000, 'the growth moved by the answers asked, no more')
     assert.ok(growth.left() > 0, 'the session was still pending through every phase')
     for (const [phase, ms] of Object.entries(seen)) assert.ok(Math.max(0, ...ms) <= LIMITS.longtaskMs, `${phase}: a long task of ${Math.round(Math.max(...ms))} ms`)
+    assert.ok(p95 <= BOARD_LINES.stepClick, `step change p95 ${p95.toFixed(1)} ms over the ${BOARD_LINES.stepClick} ms line`)
   })
-})
-
-// the line, on the samples above. A known board shortfall per build, reported and not red (the way an `open` sequence regression is a
-// todo). The line stays as it is (D64⑥); a build's case turns green when that build meets it. What a run measured is in its log line
-// and the PR, not here.
-const SHORT = `${DESK_NEXT ? 'desk-next' : 'the default build'} misses this line while it grows: step p95 over BOARD_LINES.stepClick`
-test('2.3 归约前沿 · D64②: step p95 within the line while the session grows', { skip, todo: SHORT }, () => {
-  assert.ok(growing, 'the growing case ran')
-  assert.ok(growing.p95 <= BOARD_LINES.stepClick, `step change p95 ${growing.p95.toFixed(1)} ms over the ${BOARD_LINES.stepClick} ms line`)
 })
 
 // 2.3 读者优先: a redraw between a press and its release takes the pressed node away, and the browser then sends no click. A tick held
