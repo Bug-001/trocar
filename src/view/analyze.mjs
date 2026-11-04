@@ -1006,10 +1006,11 @@ export function linearContext(request, keyMemo = null) {
       const mcp = /^mcp__/.test(t.name || '')
       // D15: capture stores tools VERBATIM (full description + input_schema). Derive display metadata
       // here. Back-compat: old v0 traces only have description_chars / input_schema_props — fall back
-      // and mark the block non-verbatim so the UI keeps the honest "metadata only" badge for them.
+      // and mark the block non-verbatim so the UI keeps the honest "metadata only" badge for them. A server
+      // tool carries only its name, type and own fields: that is the whole definition, kept verbatim.
       const hasSchema = t.input_schema !== undefined && t.input_schema !== null
       const hasDesc = typeof t.description === 'string'
-      const verbatim = hasSchema || hasDesc
+      const verbatim = t.description_chars === undefined && t.input_schema_props === undefined
       const props = hasSchema ? (t.input_schema?.properties ? Object.keys(t.input_schema.properties) : []) : (t.input_schema_props || [])
       const descChars = hasDesc ? t.description.length : (t.description_chars || 0)
       flat.push(withSrc({

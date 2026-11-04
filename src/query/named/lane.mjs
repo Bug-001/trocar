@@ -14,7 +14,7 @@
 import { sessionState, markOn, files, version as sessionVersion } from './session.mjs';
 import { listOf, laneLedger, ledgerWeight, LEDGER_BYTES } from '../../view/reduce.mjs';
 import { lru } from '../projection.mjs';
-import { inheritedRender } from '../../view/render-kind.mjs';
+import { BODY, renderOf } from '../../view/render-kind.mjs';
 import { PAGE_BYTES, laneOf, placeIn } from '../session-doc.mjs';
 import { compareStep } from '../../view/step-order.mjs';
 import { QueryArgError } from './index.mjs';
@@ -29,7 +29,6 @@ const pick = (o, keys) => { const out = {}; if (o) for (const k of keys) if (o[k
 // A definition on the wire (3.5 §会话读 定义 closed set): `fh` as 22 base64url characters (the first 128 bits of the stored digest).
 // `name`: a tool definition's, or a tool call's tool (the projection keeps a call's as `toolName`, the flat entry's own word).
 const OPTIONAL = ['label', 'name', 'mcp', 'cc'];
-const BODY = ['text', 'block', 'desc', 'schema'];
 const fhWire = (hex) => (typeof hex === 'string' && /^[0-9a-f]{32}/.test(hex) ? Buffer.from(hex.slice(0, 32), 'hex').toString('base64url') : null);
 // a position's attributes on the wire, and the key a copy is matched by (a block id with the attributes it carries there)
 const attrOf = (a) => { const o = pick(a, ['query', 'volatile']); return Object.keys(o).length ? o : null; };
@@ -86,9 +85,9 @@ function keptOf(cols, log, lane, e) {
 export const weigh = (v) => 96 + (v ? 2 * JSON.stringify(v).length : 0);
 /** laneStepper(st, key, uses) → the steps of the lane `key` of a session state (sessionState): {L, n, rids, lines, lineAt(i), eventsAt(i),
  *  listAt(i), replyAt(i), step(i, prev), defOf(bid, list), release(keep)}. step(i, prev) = step i with its ops against step `prev`'s list (−1: a
- *  keyframe, every position added), parent = step `prev`'s rid (null for −1); defOf = a definition on the wire, its render joined with
+ *  keyframe, every position added), parent = step `prev`'s rid (null for −1); defOf = a definition on the wire, its `reads` joined from
  *  the tool_use of the list `list` (a listAt(i); the first it is asked with: cached by bid). Lists, lines and definitions are read once each; `uses`
- *  (an lru by bid: a block's tool_use id and the render a tool_result inherits from it, 0 for a block that is no tool_use; a function
+ *  (an lru by bid: a block's tool_use id and the `reads` it extracted, 0 for a block that is no tool_use; a function
  *  of its bid) may be one kept across steppers (ctx-files.mjs, the writer's memo), so a list's blocks are not read again at every
  *  slice, and what it keeps is these few fields, never the definitions. */
 export function laneStepper(st, key, uses = lru(DEF_BYTES)) {
@@ -116,19 +115,22 @@ export function laneStepper(st, key, uses = lru(DEF_BYTES)) {
     defs.set(bid, d, 128 + (d ? 2 * ((d.preview || '').length + (d.toolName || '').length + (d.label || '').length + (d.ref || '').length) : 0));
     return d;
   };
-  // a tool_result whose own sniff is plain text takes its render from its tool_use's (render-kind.mjs inheritedRender): the tool_use
-  // of the same id in the list it is first seen in (`list` a listAt(i): a tool_use is a block of the messages, from its first start m0)
+  // a tool_result reads as its tool_use says (render-kind.mjs readsOf): the tool_use of the same id in the list it is first seen in
+  // (`list` a listAt(i): a tool_use is a block of the messages, from its first start m0). One walk per list answers all its results.
   function useOf(b) {
     if (uses.has(b)) return uses.get(b);
-    const u = defOf(b), v = u && u.f && u.f.type === 'tool_use' ? [u.f.id, inheritedRender(u.r) || null] : 0;
+    const u = defOf(b), v = u && u.f && u.f.type === 'tool_use' ? [u.f.id, u.f.reads] : 0;
     uses.set(b, v, weigh(v));
     return v;
   }
-  function renderIn(d, list) {
-    const own = d.r || { as: 'text' }, useId = d.f && d.f.tool_use_id;
-    if (own.as !== 'text' || useId == null) return own;
-    for (let j = list.m0; j < list.bids.length; j++) { const u = useOf(list.bids[j]); if (u && u[0] === useId) return u[1] || own; }
-    return own;
+  function readsIn(d, list) {
+    const useId = d.f && d.f.tool_use_id;
+    if (useId == null) return undefined;
+    if (!list.reads) {
+      list.reads = new Map();
+      for (let j = list.m0; j < list.bids.length; j++) { const u = useOf(list.bids[j]); if (u && !list.reads.has(u[0])) list.reads.set(u[0], u[1]); }
+    }
+    return list.reads.get(useId);
   }
   function wireDef(bid, list) {
     if (wires.has(bid)) return wires.get(bid);
@@ -137,9 +139,11 @@ export function laneStepper(st, key, uses = lru(DEF_BYTES)) {
     if (d) {
       // a tool definition an older capture kept only as metadata (the projection's `verbatim: false`, analyze.mjs) says so on the wire
       const ff = d.verbatim === false && !(d.ff && d.ff.faithfulness) ? { ...d.ff, faithfulness: 'metadata' } : d.ff || {};
+      const reads = readsIn(d, list);
       w = { bid, fh: fhWire(d.fh), ref: d.ref ?? null, sec: d.sec, role: d.role, kind: d.kind, ...pick(d, OPTIONAL), ...(d.toolName ? { name: d.toolName } : null), ff, head: d.head,
-        preview: d.preview, chars: d.chars, bytes: d.bytes, ...(d.resKey ? { resKey: d.resKey } : null), r: pick(renderIn(d, list), ['as', 'tone', 'title', 'f']) };
-      if (ff.unaddressable) Object.assign(w, { ref: null, unaddressable: ff.unaddressable, inline: pick(d, BODY) });
+        preview: d.preview, chars: d.chars, bytes: d.bytes, ...(d.resKey ? { resKey: d.resKey } : null), ...(reads ? { reads } : null) };
+      // a block with no ref is read from here, not from `block`: its render spec goes with it
+      if (ff.unaddressable) Object.assign(w, { ref: null, unaddressable: ff.unaddressable, inline: pick(d, BODY), r: renderOf({ ...d, faithfulness: ff.faithfulness }) });
     }
     wires.set(bid, w);
     return w;

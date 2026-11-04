@@ -12,7 +12,7 @@
 import { createHash } from 'node:crypto';
 import { admitted, flatBlockText, blockFacts, callFacts, normResp, replyPartsAnthropic, linearContext } from './analyze.mjs';
 import { slimBlock, compBucket, firstHuman, blockQuery } from './blockmeta.mjs';
-import { renderOf } from './render-kind.mjs';
+import { BODY, readsOf } from './render-kind.mjs';
 import { blockSpans } from '../dissect/cc-spans.mjs';
 import { resourceRef as ccResourceRef } from '../dissect/cc.mjs';
 import { resourceRef as oaResourceRef, faithfulness as oaFaithfulness } from '../dissect/openai.mjs';
@@ -71,7 +71,6 @@ const contentOf = (b) => (b.sec === 'messages' ? b.block ?? null : b.sec === 'sy
   : b.src ?? { name: b.name, ttype: b.ttype, desc: b.desc, schema: b.schema, descChars: b.descChars, props: b.props });
 // a definition's byte-derived metadata (the rest of a flat entry is its place in the call, or its body)
 const META = ['name', 'ttype', 'toolName', 'cc', 'mcp', 'label', 'descChars', 'props', 'verbatim'];
-const BODY = ['text', 'block', 'desc', 'schema'];
 // a definition and a row are JSON documents: undefined members dropped, and every string a copy of its own. A string cut out of a
 // record (a regex match, a slice) keeps the whole text it was cut from alive, and a row is held for the life of the session's
 // extraction: on a real 6.6k-call session that was ~200 KB of heap per row, against ~19 KB for the same row read from disk.
@@ -80,8 +79,9 @@ function factsOf(b) {
   if (b.sec === 'tools') return { type: 'tool', name: b.name || '', mcp: !!b.mcp, bucket: 'tools' };
   if (b.sec === 'system') return { type: 'system', bucket: 'system' };
   const bl = b.block && typeof b.block === 'object' ? b.block : { type: 'text', text: String(b.block ?? '') };
-  // `human`: a user text's human prompt (blockmeta firstHuman), what names a lane whose first call this block opens
-  return { ...blockFacts(bl), bucket: compBucket(b), human: firstHuman([b]) ?? undefined };
+  // `human`: a user text's human prompt (blockmeta firstHuman), what names a lane whose first call this block opens;
+  // `reads`: how a tool call's result reads (a call and its result often sit in different records: the lane joins them)
+  return { ...blockFacts(bl), bucket: compBucket(b), human: firstHuman([b]) ?? undefined, reads: readsOf(bl) };
 }
 
 /** definition(b, ref, exact, why, bid) → { bid, def }: `exact` the text the ref names (null: no span, `why` says why); `bid` the
@@ -95,7 +95,7 @@ export function definition(b, ref, exact, why = null, bid = bidFor(b, ref, exact
   // is the wire's bytes, so it keeps its vh (on a measured live Claude Code session 9,092 of 10,308 calls carry one in their prefix).
   const verbatim = ref != null && exact != null && (b.faithfulness == null || b.faithfulness === 'verbatim' || b.faithfulness === 'opaque');
   const def = { bid, fh: fhOf(b), vh: verbatim ? vhOf(exact) : null, ref: s.text_ref ?? null, sec: b.sec, role: b.role, kind: b.kind, head: s.head, preview: s.preview,
-    chars: s.chars, bytes: s.bytes, ff: jsonClean({ faithfulness: b.faithfulness, unaddressable: s.unaddressable }), r: renderOf(b), f: factsOf(b) };
+    chars: s.chars, bytes: s.bytes, ff: jsonClean({ faithfulness: b.faithfulness, unaddressable: s.unaddressable }), f: factsOf(b) };
   for (const k of META) if (b[k] !== undefined) def[k] = b[k];
   // the block's own resource key: a tool_result's mirrored file key is its place in the call (attrs), never its own
   def.resKey = b.resRole === 'result' ? '' : (b.resKey ?? '');
