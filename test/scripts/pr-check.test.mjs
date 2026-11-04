@@ -281,10 +281,11 @@ test('AN16: a data URI of a type that is no image passes, typed or not', () => {
   assert.deepEqual(w.check().doc.findings, [])
 })
 
+const SVG_URI = ['data', 'image/svg+xml,'].join(':')
 test('AN16: the start of a data URI in the base makes nothing after it public', () => {
-  const svg = ['data', 'image/svg+xml,'].join(':'), png = ['data', 'image/png;base64,'].join(':')
-  const known = { 'old.js': `const a = \`${svg}\${x}\`\nconst b = '${png}'\n${svg}\n${png}\n` }
-  for (const text of [`// ${svg}<svg xmlns="x"><circle r="1"/></svg>`, `${png} AAAA`, svg, png]) {
+  const png = ['data', 'image/png;base64,'].join(':'), encoded = ['data', 'image/svg+xml;base64,'].join(':')
+  const known = { 'old.js': `const b = '${png}'\n${png}\n${encoded}\n` }
+  for (const text of [`${png} AAAA`, png, encoded]) {
     const w = workspace(known)
     w.commit({ 'a.txt': `${text}\n` })
     assert.deepEqual(named(w.check().doc, 'files'), ['a.txt'], text)
@@ -292,18 +293,35 @@ test('AN16: the start of a data URI in the base makes nothing after it public', 
   }
 })
 
-test('AN16: a URI built at run time holds no image, and everything else on its line is still read', () => {
-  const svg = ['data', 'image/svg+xml,'].join(':'), png = ['data', 'image/png;base64,'].join(':')
-  const built = [`url("${svg}\${encodeURIComponent(e)}")`, `a.href = '${svg}' + encodeURIComponent(s)`, `e.href=\`${svg}\`+encodeURIComponent(s)`, `"${svg}" +\n  s`]
-  const clean = workspace()
-  clean.commit(Object.fromEntries(built.map((text, i) => [`built${i}.js`, `${text}\n`])))
-  for (const text of built) assert.deepEqual(of(clean.check({ body: text }).doc, 'files'), [], text)
-  const refused = [`${svg}%3Csvg%3E`, `'${svg}' + '%3Csvg%3E'`, `\`${svg}\${'%3Csvg%3E'}\``, `${svg}%24%7Bs%7D`, `'${['data', 'image/svg+xml;base64,'].join(':')}' + s`, `'${['data', 'image/svg+xml;utf8,'].join(':')}' + s`,
-    `'${png}' + s`, `\`${svg}\${s}\` ${DATA_URI}`, `'${svg}' + s + '${DATA_URI}'`, `\`${svg}\${s}%3Cimage href='${DATA_URI.replace(':', '%3A')}'/%3E\``]
-  for (const text of refused) {
+test('AN16: a data URI of SVG text is no image address, however it is written', () => {
+  const texts = [`url("${SVG_URI}\${encodeURIComponent(e)}")`, `a.href = '${SVG_URI}' + encodeURIComponent(s)`, `e.href=\`${SVG_URI}\`+encodeURIComponent(s)`, `"${SVG_URI}" +\n  s`, SVG_URI, SVG_URI.slice(0, -1), `${SVG_URI}%3Csvg%3E`,
+    `${SVG_URI}<svg xmlns="x"><circle r="1"/></svg>`, `'${SVG_URI}' + '%3Csvg%3E'`, `${SVG_URI.slice(0, -1)};charset=utf-8,%3Csvg%3E`, `${SVG_URI.slice(0, -1).toUpperCase()},x`, SVG_URI.replace('/', '\\/'), SVG_URI.replace('/', '/\n')]
+  const w = workspace()
+  w.commit(Object.fromEntries(texts.map((text, i) => [`s${i}.js`, `${text}\n`])))
+  assert.deepEqual(of(w.check().doc, 'files'), [])
+  for (const text of texts) assert.deepEqual(of(w.check({ body: text }).doc, 'files'), [], text)
+})
+
+test('AN16: what a data URI of SVG text holds is read as text: a bitmap in it is refused, and so are the other rules\' shapes', () => {
+  const images = [`${SVG_URI.slice(0, -1)};base64,AAAA`, `${SVG_URI.slice(0, -1)};charset=utf-8;base64,AAAA`, `${SVG_URI}${DATA_URI}`, `\`${SVG_URI}\${s}\` ${DATA_URI}`, `'${SVG_URI}' + s + '${DATA_URI}'`,
+    `\`${SVG_URI}\${s}%3Cimage href='${DATA_URI.replace(':', '%3A')}'/%3E\``, `${SVG_URI}%3Cimage href=%22${DATA_URI.replace(':', '%3A').replace('/', '%2F')}%22/%3E`]
+  for (const text of images) {
     const w = workspace()
     w.commit({ 'a.txt': `${text}\n` })
     assert.deepEqual(named(w.check().doc, 'files'), ['a.txt'], text)
+  }
+  const w = workspace()
+  w.commit({ 'a.txt': `${SVG_URI}<svg><text>${['', 'home', 'zorgon7', ''].join('/')}</text></svg>\n`, 'b.txt': `${SVG_URI}<svg><text>${tokens('').ghp}</text></svg>\n` })
+  const { doc } = w.check()
+  assert.deepEqual(named(doc, 'identity'), ['a.txt'])
+  assert.deepEqual(named(doc, 'secrets'), ['b.txt'])
+})
+
+test('AN16: an image the base holds stays public whatever follows it on its line', () => {
+  for (const [old, now] of [[`const a = "${DATA_URI}", b = 1`, `const a = "${DATA_URI}", b = 2`], [`url(${DATA_URI}) 1`, `url(${DATA_URI}) 2`], [`'${DATA_URI}' + a`, `'${DATA_URI}' + b`], [`<a href=${DATA_URI}>a`, `<a href=${DATA_URI}>b`]]) {
+    const w = workspace({ 'a.js': `${old}\n` })
+    w.commit({ 'a.js': `${now}\n` })
+    assert.deepEqual(of(w.check().doc, 'files'), [], now)
   }
 })
 
