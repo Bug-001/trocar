@@ -48,7 +48,12 @@ const LONG_RUN = /[A-Za-z0-9+=_-]{40,}/g // no slash: a URL or file path is not 
 const isMixed = (run) => /[a-z]/.test(run) && /[A-Z]/.test(run) && /[0-9]/.test(run)
 const SEP = String.raw`(?:\\+/?|/)` // a slash, a run of backslashes, an escaped slash
 const HOME_PATH = new RegExp(`${SEP}(?:users|home)${SEP}([^\\s\\\\/"'$<>{}*]+)${SEP}`, 'gi')
-const DATA_IMAGE = new RegExp(`data:image${SEP}[^\\s"'\`<>()]*`, 'gi') // to the URI's end, so that only the same image counts as already public
+const GAP = '[\\t\\r\\n ]*' // a URL parser drops tabs and newlines, and a data: URI survives the rest
+// from the scheme to the line's end, so that only the same image counts as already public: < and spaces are part of an SVG's URI
+const DATA_IMAGE = new RegExp(`${[...'data:image'].join(GAP)}${GAP}${SEP}[^\\r\\n]*`, 'gi')
+const HAS_PAYLOAD = /,[ \t]*\S/ // past the comma: without it this is only how a URI starts, and that is public everywhere
+const ENTITY = /&(?:#(\d+)|#x([0-9a-f]+)|(colon|sol|tab|newline));?/gi
+const NAMED = { colon: ':', sol: '/', tab: '\t', newline: '\n' }
 const POSTED_IMAGE = /!\[[^\]]*\](?:\([^)]*\)|\[[^\]]*\])?|<img\b[^>]*>?/gi
 const NEUTRAL = new Set(['me', 'you', 'user', 'alice', 'bob', 'test', 'runner', 'someone'])
 const NOREPLY = /(?:@users\.noreply\.github\.com|^noreply@github\.com)$/i
@@ -247,21 +252,30 @@ function isBlocked(file) {
 const revOf = (cwd, rev) => spawnSync('git', ['rev-parse', '--verify', '--quiet', rev], { cwd, stdio: ['ignore', 'pipe', 'ignore'] }).stdout.toString().trim()
 const isAncestor = (cwd, older, newer) => spawnSync('git', ['merge-base', '--is-ancestor', older, newer], { cwd, stdio: 'ignore' }).status === 0
 
-/** A source's text as it stands and, when it differs, with its \uXXXX undone. */
+const undoEntities = (text) => text.replace(ENTITY, (all, decimal, hex, name) => {
+  if (name) return NAMED[name.toLowerCase()]
+  const cp = decimal ? Number(decimal) : parseInt(hex, 16)
+  return cp <= 0x10ffff ? String.fromCodePoint(cp) : all
+})
+
+/** A source's text as it stands and, when they differ, with its \uXXXX undone and then its HTML entities. */
 function spelled(source) {
   const raw = source.bytes.toString()
   const decoded = raw.replace(/\\+u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
-  return raw === decoded ? [raw] : [raw, decoded]
+  return [...new Set([raw, decoded, undoEntities(decoded)])]
 }
 
 /** An image riding in text. A Markdown image in a committed file points into the repository; in a pull request's text it loads from anywhere. */
-function checkImages(sources, hold) {
+function checkImages(sources, hold, add) {
   for (const source of sources) {
-    const patterns = source.kind === 'title' || source.kind === 'body' ? [DATA_IMAGE, POSTED_IMAGE] : [DATA_IMAGE]
+    const posted = source.kind === 'title' || source.kind === 'body'
     for (const text of spelled(source)) {
-      for (const pattern of patterns) {
-        for (const match of text.matchAll(pattern)) hold(match[0], 'files', placeOf(source, text, match.index), { exact: true, why: WHY.image })
+      const keep = (match) => hold(match[0], 'files', placeOf(source, text, match.index), { exact: true, why: WHY.image })
+      for (const match of text.matchAll(DATA_IMAGE)) {
+        if (HAS_PAYLOAD.test(match[0])) keep(match)
+        else add('files', placeOf(source, text, match.index), WHY.image)
       }
+      if (posted) for (const match of text.matchAll(POSTED_IMAGE)) keep(match)
     }
   }
 }
@@ -493,7 +507,7 @@ async function main() {
   for (const source of out.sources) source.norm ??= normalized(source.bytes)
 
   checkFiles(out.commits, cwd, add)
-  checkImages(out.sources, hold)
+  checkImages(out.sources, hold, add)
   checkShape(out.commits, out.sources, add)
   checkSecrets(out.sources, add)
   checkIdentity(out, cwd, hold, add)

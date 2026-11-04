@@ -172,17 +172,45 @@ for (const [name, text] of Object.entries(IMAGES)) {
     const w = workspace()
     w.commit({ 'a.txt': 'nothing here\n' })
     const wheres = (r) => { assert.equal(r.code, 1); return of(r.doc, 'files').map((f) => f.where) }
-    assert.deepEqual(wheres(w.check({ body: `see ${text} here` })), ['body'])
+    assert.deepEqual(wheres(w.check({ body: `see ${text}\nhere` })), ['body'])
     assert.deepEqual(wheres(w.check({ title: text })), ['title'])
     assert.deepEqual(wheres(w.check({ body: text, args: ['--issue'] })), ['body'])
 
-    const known = workspace({ 'docs/old.md': `an old line with ${text} in it\n` })
+    const known = workspace({ 'docs/old.md': `an old line with ${text}\nand more\n` })
     known.commit({ 'docs/new.md': `${text}\n` })
-    const r = known.check({ title: text, body: `see ${text} here` })
+    const r = known.check({ title: text, body: `see ${text}\nhere` })
     assert.equal(r.code, 0, JSON.stringify(r.doc.findings))
     assert.equal(known.check({ body: text, args: ['--issue'] }).code, 0)
   })
 }
+
+const uri = ({ d = 'data', colon = ':', i = 'image', slash = '/' } = {}) => [d, colon, i, slash, 'png;base64,AAAA'].join('')
+const URI_SPELLINGS = {
+  'a decimal colon': { colon: '&#58;' }, 'a hex colon': { colon: '&#x3a;' }, 'a bare decimal colon': { colon: '&#58' }, 'a named colon': { colon: '&colon;' },
+  'a decimal slash': { slash: '&#47;' }, 'a named slash': { slash: '&sol;' }, 'an entity letter in data': { d: '&#100;ata' }, 'an entity letter in image': { i: '&#105;mage' },
+  'a newline in the scheme': { d: 'da\nta' }, 'a tab entity in the scheme': { d: 'da&Tab;ta' }, 'a newline after the colon': { colon: ':\n' }, 'a space after the colon': { colon: ': ' }, 'a newline after the slash': { slash: '/\n' },
+}
+for (const [name, parts] of Object.entries(URI_SPELLINGS)) {
+  test(`AN16: a data URI with ${name} is refused in a file and in a body`, () => {
+    const w = workspace()
+    w.commit({ 'a.html': `<a href="${uri(parts)}">x</a>\n` })
+    const r = w.check({ body: `see ${uri(parts)}` })
+    assert.equal(r.code, 1)
+    assert.deepEqual(named(r.doc, 'files'), ['a.html'])
+    assert.ok(of(r.doc, 'files').some((f) => f.where === 'body'))
+  })
+}
+
+test('AN16: the start of a data URI in the base makes nothing after it public', () => {
+  const svg = ['data', 'image/svg+xml,'].join(':'), png = ['data', 'image/png;base64,'].join(':')
+  const known = { 'old.js': `const a = \`${svg}\${x}\`\nconst b = '${png}'\n${svg}\n${png}\n` }
+  for (const text of [`// ${svg}<svg xmlns="x"><circle r="1"/></svg>`, `${png} AAAA`, svg, png]) {
+    const w = workspace(known)
+    w.commit({ 'a.txt': `${text}\n` })
+    assert.deepEqual(named(w.check().doc, 'files'), ['a.txt'], text)
+    assert.equal(of(w.check({ body: text }).doc, 'files').filter((f) => f.where === 'body').length, 1, text)
+  }
+})
 
 test('AN16: a Markdown image or an img tag inside a commit passes', () => {
   const w = workspace()
