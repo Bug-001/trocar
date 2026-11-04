@@ -167,7 +167,18 @@ async function expectAborted(page, aborted, reads) {
 }
 
 test('K-30: with no token the page names `trocar board`, draws no navigation and sends nothing after the first 403', { skip }, async () => {
-  const b = await withBoard({ bytes: 0, token: false, chromium: gate.chromium })
+  // the page's own sends, each marked with whether a 403 had reached the page before it (this wrapper's then runs before core/http.mjs sees
+  // the answer). The network's request stamps cannot say this: reads asked in one task before any answer were once stamped after the
+  // test process logged a 403 under load, though the page could not yet have known it.
+  const setup = (page) => page.addInitScript(() => {
+    const sent = globalThis.__sent = [], real = globalThis.fetch
+    let denied = false
+    globalThis.fetch = function (url, init) {
+      sent.push({ url: String(url), denied })
+      return real.call(this, url, init).then((r) => { if (r.status === 403) denied = true; return r })
+    }
+  })
+  const b = await withBoard({ bytes: 0, token: false, chromium: gate.chromium, setup })
   try {
     await b.page.waitForSelector('main.forbidden')
     await b.page.waitForTimeout(4000) // longer than two of the shortest poll (`session`, 1.5 s): a poll that survived the 403 would show here
@@ -175,10 +186,10 @@ test('K-30: with no token the page names `trocar board`, draws no navigation and
     const code = b.page.locator('main.forbidden code') // the command reads as one line (a desk-only grid rule once squeezed it to 6 px)
     assert.equal(await code.evaluate((e) => e.getClientRects().length), 1)
     assert.equal(await b.page.locator('#sidebar a, #sidebar nav').count(), 0)
-    const denied = b.requests.filter((r) => r.status === 403)
-    assert.ok(denied.length > 0)
-    const first403 = Math.min(...denied.map((r) => r.t))
-    assert.deepEqual(b.requests.filter((r) => r.start > first403).map((r) => r.url), [])
+    assert.ok(b.requests.some((r) => r.status === 403))
+    const sent = await b.page.evaluate(() => globalThis.__sent)
+    assert.ok(sent.length > 0)
+    assert.deepEqual(sent.filter((s) => s.denied).map((s) => s.url), [])
     assert.deepEqual(b.errors, [])
     await shoot(b.page, 'forbidden', { width: 1280, theme: 'light' })
   } finally { await b.stop() }

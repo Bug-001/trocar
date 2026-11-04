@@ -5,8 +5,9 @@
 //
 // post(path, body) is the one write: a JSON body to /control/<verb> (4.4 §控制面), its parsed answer kept for every status (a 409 carries the plan).
 //
-// K-30 (1.5): the first /api or /control answer with status 403 (no token, or a wrong one) latches the board shut — every later get() or post()
-// answers {ok:false, status:403} without a request, and the onForbidden callbacks run once. Keyed on the status, never the body.
+// K-30 (1.5): the first /api or /control answer with status 403 (no token, or a wrong one) latches the board shut — every later get(), getText()
+// or post() answers {ok:false, status:403} without a request, and the onForbidden callbacks run once. Keyed on the status, never the body:
+// the latch closes the moment the 403's head arrives, so nothing the page asks while that body is on its way (or after it broke off) is sent.
 import { CONTROL_TOKEN_HEADER } from '../../../src/off/token-header.mjs' // a src/ module the build bundles (4.4 静态面)
 const TOKEN_KEY = 'trocar.token' // the localStorage slot of the per-user token (4.4 §每用户口令: read from #t=, kept for the board's origin)
 const HELD_MAX = 100 // conditional-GET entries kept, oldest dropped first
@@ -56,12 +57,16 @@ async function readBody(r) {
   try { return { json: JSON.parse(t), len: b.byteLength } } catch { return { bad: true } }
 }
 
-function latch(status) {
-  if (status !== 403 || forbidden) return
+// → true when r is a 403, which closes the latch (once)
+function latched(r) {
+  if (r.status !== 403) return false
+  if (r.body) r.body.cancel().catch(() => {}) // its body is never read: let the connection go
+  if (forbidden) return true
   forbidden = true
   // the token this page sent is wrong: drop the kept copy, unless another tab has since kept a newer one (4.4 §每用户口令)
   try { if (token != null && kept && kept.getItem(TOKEN_KEY) === token) kept.removeItem(TOKEN_KEY) } catch { /* storage blocked: nothing kept */ }
   for (const fn of onForbid) try { fn() } catch (e) { console.error('onForbidden failed', e) }
+  return true
 }
 
 // early(path, params): a read sent before the screen that wants it exists (core/first.mjs, 1.2 #24). Its answer is kept by full URL and
@@ -95,6 +100,7 @@ export async function get(path, params, { signal, hold = true, cond = true } = {
   let r, b
   try {
     try { r = await fetch(url, { cache: 'no-store', headers, signal: ac.signal }) } catch (e) { return ended({ ok: false, status: 0, error: String((e && e.message) || e) }) }
+    if (latched(r)) return FORBIDDEN
     if (r.status === 304) return !was ? { ok: false, status: 304, error: 'HTTP 304' } : hold ? { ok: true, data: was.data } : { ok: true, status: 304, data: null, ...tipOf(r) }
     b = await readBody(r) // inside the deadline: a body that stalls is aborted and lands in readBody's catch
   } finally {
@@ -103,7 +109,6 @@ export async function get(path, params, { signal, hold = true, cond = true } = {
   }
   if (b.cut) return ended(CUT)
   const body = 'json' in b ? b.json : null
-  latch(r.status)
   if (!r.ok) return { ok: false, status: r.status, error: (body && body.error) || 'HTTP ' + r.status }
   if (b.bad) return { ok: false, status: r.status, error: 'not JSON' }
   const etag = r.headers.get('etag')
@@ -130,12 +135,12 @@ export async function getText(path, params, { range = null, tag = null, signal }
   let r, text
   try {
     try { r = await fetch(path + qs(params), { cache: 'no-store', headers, signal: ac.signal }) } catch (e) { return ended({ ok: false, status: 0, error: String((e && e.message) || e) }) }
+    if (latched(r)) return FORBIDDEN
     try { text = await r.text() } catch { return ended(CUT) }
   } finally {
     clearTimeout(timer)
     if (signal) signal.removeEventListener('abort', cancel)
   }
-  latch(r.status)
   const out = { status: r.status, range: r.headers.get('content-range'), etag: r.headers.get('etag'), tip: r.headers.get('x-trocar-tip') }
   if (r.ok || r.status === 416) return { ok: true, text, ...out }
   let error = 'HTTP ' + r.status
@@ -150,10 +155,10 @@ export async function post(path, body) {
   if (token) headers[CONTROL_TOKEN_HEADER] = token
   let r
   try { r = await fetch(path, { method: 'POST', cache: 'no-store', headers, body: JSON.stringify(body) }) } catch (e) { return { ok: false, status: 0, data: null, error: String((e && e.message) || e) } }
+  if (latched(r)) return { ...FORBIDDEN, data: null }
   const b = await readBody(r)
   if (b.cut) return { ...CUT, data: null }
   const data = 'json' in b ? b.json : null
-  latch(r.status)
   const error = r.ok ? (b.bad ? 'not JSON' : null) : (data && data.error) || 'HTTP ' + r.status
   return { ok: r.ok && !b.bad, status: r.status, data, error }
 }
