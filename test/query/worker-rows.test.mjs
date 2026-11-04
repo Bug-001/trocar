@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url'
 import { createQueryService } from '../../src/query/service.mjs'
 import { indexDir } from '../../src/query/index-build.mjs'
 import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
-import { readHead, tier0Doc, writeHead } from '../../src/query/ctx-files.mjs'
+import { hasHead, readHead, tier0Doc, writeHead } from '../../src/query/ctx-files.mjs'
 import { titlesFile } from '../../src/query/titles.mjs'
 import { workerFork, workerForkIn } from '../helpers/worker-fork.mjs'
 import { within } from '../helpers/bounded.mjs'
@@ -17,6 +17,7 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
 
 const DEPS = fileURLToPath(new URL('./worker-rows-deps.mjs', import.meta.url))
+const HOLD_MS = 2_000 // the row pass held shut this long with a kick waiting: a slice that ran anyway has written by then; too short only lets a fault pass
 const A = 'rows-aaaa-4a1b-9c2d-000000000001', B = 'rows-bbbb-4a1b-9c2d-000000000002', C = 'rows-cccc-4a1b-9c2d-000000000003'
 
 const recorder = () => {
@@ -74,7 +75,10 @@ test('3.5 §行表先读: a session asked and a kick given before the rows are r
     const asked = pending(ask(svc, 'session', { id: A }))
     svc.kick([String(members.get(B).at(-1).id)])
     assert.equal((await ask(svc, 'status')).status, 200)
+    await new Promise((r) => setTimeout(r, HOLD_MS))
     assert.equal(asked.settled, false, 'session waits for the rows')
+    assert.equal(B in titles(home), false, 'the kick waits for the rows: no title')
+    assert.equal(hasHead(home, B), false, 'the kick waits for the rows: no slice')
     open()
     assert.equal((await asked.answer).status, 200)
     await until(() => { const h = readHead(home, B); return h && h.tier === 1 && h.pending === null }, 'the kicked session folded')
