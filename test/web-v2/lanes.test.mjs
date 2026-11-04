@@ -5,6 +5,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { stepPos, windowCalls } from '../../web/legacy/replay/lanes.mjs'
+import { LANE_KIND } from '../../web/legacy/labels/replay.mjs'
+import { laneMeta, eventOnly } from '../../src/view/analyze.mjs'
+import { HARNESSES } from '../../src/dissect/harnesses.mjs'
 
 function rng(seed) {
   let a = seed >>> 0 || 1
@@ -42,4 +45,15 @@ test('stepPos is the walked step position, and windowCalls is exactly the calls 
       assert.deepEqual(windowCalls(lane, anchorTs, { lo, hi }).map((x) => x.i), want.map((x) => x.i), `seed ${seed} window [${lo}, ${hi})`)
     }
   }
+})
+
+test('2.1 #11 · the lane kind table covers the server\'s kinds: every harness aux kind is event-only and named; token-count alone is no lane; no word holds an emoji', () => {
+  const { 'token-count': tc, ...lanes } = LANE_KIND
+  assert.ok(tc && !laneMeta('token-count'))
+  for (const kind of Object.keys(lanes)) assert.ok(laneMeta(kind), kind)
+  for (const kind of new Set(['aux', ...HARNESSES.flatMap((h) => h.aux.map((e) => e.kind))])) {
+    assert.ok(LANE_KIND[kind] && laneMeta(kind), kind)
+    assert.ok(eventOnly(kind), kind)
+  }
+  for (const { word } of Object.values(LANE_KIND)) assert.doesNotMatch(word, /\p{Extended_Pictographic}/u)
 })
