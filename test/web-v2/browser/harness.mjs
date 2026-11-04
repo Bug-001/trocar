@@ -160,8 +160,8 @@ export const measure = (page, name, startMark) => page.evaluate(([n, s]) => perf
 /** In the page (no closure; also sent as source): the largest stretch (px) of #ctxwin's visible box that no drawn item covers, from the
  *  box's top to the nearer of its bottom and the last item's bottom (empty space below a short window is no gap), and one
  *  --cblk-pitch in px: { gap, pitch }. Drawn items are the window's units (2.3 §读与画, 1.4 白名单) and the legacy desk's group
- *  placeholder (rule 4 旧台, a drawn stand-in). A gap is a stretch taller than one pitch (row margins are smaller). No #ctxwin: an
- *  infinite gap. */
+ *  placeholder (rule 4 旧台, a drawn stand-in). A gap is a stretch taller than one pitch (row margins are smaller). No drawn item in
+ *  the box: the whole box is the gap. No #ctxwin: an infinite gap. */
 export function gapInPage() {
   const W = document.querySelector('#ctxwin')
   const probe = document.body.appendChild(document.createElement('div'))
@@ -173,9 +173,11 @@ export function gapInPage() {
   const sel = ['.cwfline', '.cwwin', '.cwsec', '.cwfoldall', '.chline', '.cwremoved', '.cwturn > .cwturnhd', '.cblk', '.cwreply', '.cwbusy',
     '.cwframe', '.cwnoreq', '.cwunparsed', '.empty', '.cwgroup[aria-busy]'].join(', ')
   const rs = [...W.querySelectorAll(sel)].map((e) => e.getBoundingClientRect()).filter((r) => r.height > 0)
-  const end = Math.min(bottom, Math.max(top, ...rs.map((r) => r.bottom)))
+  const end = Math.min(bottom, Math.max(...rs.map((r) => r.bottom)))
+  const seen = rs.filter((r) => r.bottom > top && r.top < end).sort((a, b) => a.top - b.top)
+  if (!seen.length) return { gap: W.clientHeight, pitch } // nothing drawn in the box: all of it is a gap
   let at = top, gap = 0
-  for (const r of rs.filter((r) => r.bottom > top && r.top < end).sort((a, b) => a.top - b.top)) {
+  for (const r of seen) {
     if (r.top > at) gap = Math.max(gap, r.top - at)
     at = Math.max(at, r.bottom)
   }
@@ -207,7 +209,7 @@ export async function timed(page, cond, arg, act) {
     const t0 = performance.now()
     const tick = () => {
       if (performance.getEntriesByName('in').length && holds()) return setTimeout(() => resolve(performance.measure('m', 'in').duration), 0)
-      if (performance.now() - t0 > 10000) return reject(new Error(`not drawn in 10 s: ${cond} ${a ?? ''} (input seen: ${performance.getEntriesByName('in').length > 0})`))
+      if (performance.now() - t0 > 10000) return reject(new Error(`not drawn in 10 s: ${cond} ${a ?? ''} (input seen: ${performance.getEntriesByName('in').length > 0}, step head ${q('#stepbar .sb-no')?.dataset.n}, window ${JSON.stringify(gapOf())})`))
       requestAnimationFrame(tick)
     }
     tick()
