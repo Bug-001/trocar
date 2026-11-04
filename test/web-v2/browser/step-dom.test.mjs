@@ -3,7 +3,8 @@
 // list 1,000–1,400 blocks), for 30 seeded adjacent pairs (→ and ←, and one with a turn card the reader opened) plus a
 // step across a compaction (a generated world whose main lane compacts), a MutationObserver on #ctxwin (subtree, childList) counts the nodes added and removed from the key press
 // until two animation frames after the step is drawn; Δ = the list positions whose key (bid#occurrence) differs between the two
-// steps' lists, as the reference server hands them to the page. Every pair: count ≤ 4Δ + 64. Runs only under `npm run test:browser`.
+// steps' lists, as the reference server hands them to the page, and on the new desk also the top-level nodes written into the two
+// steps' open reply rows (a reply is open by default, 2.3 #34). Every pair: count ≤ 4Δ + 64. Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { probe, withBoard, serveWorld, DESK_NEXT, gapInPage, windowGap } from './harness.mjs'
@@ -39,6 +40,8 @@ async function onBoard(w, fn) {
     const count = async (key) => {
       const was = await page.evaluate((re) => new RegExp(re).exec(document.querySelector('#stepbar .sb-no')?.textContent || '')?.[1] ?? null, NO.source)
       await page.evaluate(() => {
+        window.__written = () => [...document.querySelectorAll('#ctxwin [data-rp] .cellread, #ctxwin [data-rp] .cellraw')].reduce((n, leaf) => n + leaf.childNodes.length, 0)
+        window.__wrote = window.__written()
         window.__mut = 0
         window.__mo = new MutationObserver((rs) => { for (const r of rs) window.__mut += r.addedNodes.length + r.removedNodes.length })
         window.__mo.observe(document.querySelector('#ctxwin'), { subtree: true, childList: true })
@@ -52,7 +55,7 @@ async function onBoard(w, fn) {
             await raf(); await raf()
             for (const r of window.__mo.takeRecords()) window.__mut += r.addedNodes.length + r.removedNodes.length
             window.__mo.disconnect()
-            return resolve({ n: window.__mut, from: +was, to: +x[1] })
+            return resolve({ n: window.__mut, from: +was, to: +x[1], written: window.__wrote + window.__written() })
           }
           if (performance.now() - t0 > 10000) return reject(new Error(`step not drawn in 10 s after ${was}`))
           requestAnimationFrame(tick)
@@ -69,8 +72,8 @@ const mainRids = (w) => w.laneRidsAt().get(w.full().lanes.find((l) => l.kind ===
 test('2.3 #34 · D71②: a ±1 step adds and removes at most 4Δ + 64 nodes in #ctxwin', { skip }, async () => {
   const out = []
   const check = async (label, w, rids, step) => {
-    const { n, from, to } = await step()
-    const d = delta(w.list(rids[from - 1]), w.list(rids[to - 1]))
+    const { n, from, to, written } = await step()
+    const d = delta(w.list(rids[from - 1]), w.list(rids[to - 1])) + (DESK_NEXT ? written : 0)
     out.push({ label, from, to, n, d, line: 4 * d + 64 })
   }
   // the long conversation: 30 seeded pairs, then a folded turn card the reader opened and a step each way
