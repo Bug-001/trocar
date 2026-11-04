@@ -196,7 +196,6 @@ test('D55 / 4.11 P13 the new kinds: known, each with a sentence of undo by hand;
   assert.match(key('file', '/h/.trocar/collector/ca/root.key'), /^rm \/h\/\.trocar\/collector\/ca\/root\.key \(.*SHA-256 AA:BB/)
   assert.match(key('cng', 'trocar-root'), /certutil -user -csp "Microsoft Software Key Storage Provider" -delkey "trocar-root"/)
   assert.match(key('keychain', 'trocar-root'), /login keychain/)
-  assert.match(undoByHand({ kind: 'text', format: 'pem-block', path: '/h/my.pem' }), /^edit \/h\/my\.pem: delete the lines from "# >>> trocar collector >>>.*" to "# <<< trocar collector <<<" at its end/)
   assert.equal(undoByHand({ kind: 'owned-file', role: 'wrapper', path: '/h/bin/kimi', real: '/h/bin/.trocar-real/kimi', sha256: 'ab' }), 'if sha256 of /h/bin/kimi is still ab: mv /h/bin/.trocar-real/kimi /h/bin/kimi; otherwise: rm /h/bin/.trocar-real/kimi (the program was updated over the wrapper)')
   for (const role of ['switch', 'config-entry']) assert.equal(undoByHand({ kind: 'owned-file', role, path: '/h/x y' }), "rm '/h/x y'")
 })

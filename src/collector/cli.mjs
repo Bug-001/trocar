@@ -3,7 +3,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { shellArg } from '../cli/text.mjs'
+import { shellArg, wrap } from '../cli/text.mjs'
+import { COMMAND_INDENT } from '../off/receipt.mjs'
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 
@@ -12,24 +13,27 @@ const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 
 export { formatPlan } from '../cli/receipt.mjs'
 
 const loadDaemon = () => import('./daemon.mjs')
+/** The staged copies an interrupted setup-helper left and this run removed, either way: a label sentence in 80 columns, then each path alone on its line, two in
+ *  — a path never broken, never a second path on one line (1.6 §1.1⑥). */
+const sweptLines = (swept = []) => (swept.length ? [...wrap(`Also removed ${swept.length === 1 ? 'a staged copy' : `${swept.length} staged copies`} an interrupted setup-helper left:`), ...swept.map((p) => `  ${p}`)] : [])
 
 export async function runSetupHelper(argv, { arch = null, out = (s) => console.log(s), err = (s) => console.error(s), packageRoot = PACKAGE_ROOT } = {}) {
   try {
     const A = arch || (await (await loadDaemon()).loadArch())
     if (argv.includes('--remove')) {
       const r = A.install.uninstallHelper()
-      out(`Removed the kernel helper ${A.install.DEFAULTS.helperBin}.${r.warnings.length ? `\nWarning: ${r.warnings.join('; ')}` : ''}`)
+      out([...wrap(`Removed the capability helper ${A.install.DEFAULTS.helperBin}.`), ...sweptLines(r.swept), ...(r.warnings || []).flatMap((w) => wrap(`Warning: ${w}`))].join('\n'))
       return 0
     }
     const i = argv.indexOf('--binary'), dir = path.join(packageRoot, 'src', 'collector', 'arch', 'linux')
     const binarySrc = i >= 0 ? argv[i + 1] : path.join(dir, 'trocar-redirector')
     if (!binarySrc || !fs.existsSync(binarySrc)) { // a fresh checkout: the helper is built from source first (README · Install)
       err(i >= 0 ? `trocar setup-helper: --binary ${binarySrc ? `${binarySrc} is not a file` : 'needs the path of a helper you built'}.`
-        : `trocar setup-helper: the helper is not built yet. Build it as yourself first:\n  make -C ${shellArg(dir)}`)
+        : `trocar setup-helper: the helper is not built yet. Build it as yourself first:\n${COMMAND_INDENT}make -C ${shellArg(dir)}`)
       return 1
     }
     const r = A.install.setupHelper({ binarySrc })
-    out(`installed ${r.bin} (${r.getcap})${r.swept && r.swept.length ? `\nremoved ${r.swept.length} copy(ies) an interrupted setup-helper had staged: ${r.swept.join(', ')}` : ''}`)
+    out([...wrap(`Installed the capability helper ${r.bin} with the capabilities ${r.caps}.`), ...sweptLines(r.swept)].join('\n'))
     return 0
   } catch (e) { err(`trocar setup-helper: ${(e && e.message) || e}`); return 1 }
 }

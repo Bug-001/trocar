@@ -66,9 +66,9 @@ export function backupsOf({ home, file, fs = nodeFs }) {
   return listBackups(home, fs).filter((p) => path.basename(p).startsWith(prefix))
 }
 
-/** The backups no manifest entry and no `kept_backups` row names; all of them when there is no manifest. `off` and `doctor` list them. */
+/** The backups no manifest entry, no `kept_backups` row and not the `path_item` names; all of them when there is no manifest. `off` and `doctor` list them. */
 export function orphanBackups({ home, manifest, fs = nodeFs }) {
   const named = new Set()
-  for (const row of [...((manifest && manifest.entries) || []), ...((manifest && manifest.kept_backups) || [])]) if (row && typeof row.backup === 'string') named.add(path.resolve(row.backup))
+  for (const row of [...((manifest && manifest.entries) || []), ...((manifest && manifest.kept_backups) || []), manifest && manifest.path_item]) if (row && typeof row.backup === 'string') named.add(path.resolve(row.backup))
   return listBackups(home, fs).filter((p) => !named.has(path.resolve(p)))
 }

@@ -116,7 +116,7 @@ const ranBesides = (s, from = 0) => s.sys.exec.calls.slice(from).filter((c) => !
 // 「could not judge」 with its own reason and no internal label.
 for (const platform of ['darwin', 'win32']) {
   test(`P7 · ${platform}: doctor judges the trust store by the one check status uses — a store that cannot be read is exit 3 with an English reason, never an internal label`, async () => {
-    const w = await modelWorld()
+    const w = await modelWorld({ os: platform })
     await w.install()
     const src = path.join(w.home, 'src'); capture(src)
     const run = (rootStore) => doctor({ home: w.home, sh: { env: w.env }, sys: { exec: recordingExec() } }, [], { platform, source: src, deps: { rootStore, netFactsDeps: async () => ({ harnesses: w.harnesses, archFacts: null }) } })

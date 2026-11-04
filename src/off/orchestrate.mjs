@@ -41,6 +41,7 @@ import { describeEntry } from './journal.mjs'
 import { orphanBackups } from './backup.mjs'
 import { osRootsFor } from './os-roots.mjs'
 import { WHERE_OFF, EVENT_OFF_NOTE, CODE_OFF } from './names.mjs'
+import { textLines, labelLines } from './receipt.mjs'
 
 export const OFF_LOCK_WAIT_MS = 10_000 // 1.6 R12: the lock is waited for at most this long
 const OFF_ASK_MS = 5000 // a daemon that does not answer this fast is stuck (1.6 §1.4 第 2 步)
@@ -228,6 +229,10 @@ const MARKER_TEXT = { block: "trocar's block removed", line: 'the line trocar ad
 const SKIP_REASON = { 'already-restored': 'already as it was before install', missing: 'the file is gone; nothing of trocar is in it', 'left-user-value': 'this key now holds a value you set, so it was left as it is', 'already-removed': "trocar's text is no longer in this file" }
 const SKIP_CODE = { 'already-restored': 'already-restored', missing: 'missing', 'left-user-value': 'left-user-value' } // the results that are in the closed set of codes (src/health/codes.mjs)
 const withHarness = (h) => (typeof h === 'string' ? { harness: h } : {})
+/** What a marker-only off asks about (R3), as the off receipt lays text out (1.6 §1.1②⑥): a sentence, then each file an item, its harness the label and the path
+ *  with what would be done to it the value (labelLines: one value column, folds in it, past the command column), HOME as ~. */
+export const markerListing = (plan, home) => [...textLines("There is no install record to go by. By trocar's own marks, these would be undone:", home),
+  ...labelLines(plan.map((p) => [p.harness, `${p.path}: ${MARKER_TEXT[p.how]}`]), home)].join('\n')
 // The roots a gone bundle is rebuilt from (4.6 撤销顺序 第 2 步): Node's and this platform's OS roots, read by the reader the collector composes the bundles with
 // (os-roots.mjs osRootsFor — darwin: Node's set, the keychain's anchors and Apple's export, never /etc/ssl/cert.pem, 4.9 §6.2; win32: the system store, with no helper
 // here, 4.8 §6.2; Linux: the first OS PEM bundle of the one list). undo.mjs asks only for a bundle it rebuilds, once. None read → `missing`, a source that could not be read →
@@ -379,7 +384,7 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
   if (!plan.length) { u.mode = manifestError ? 'marker' : 'none'; return u }
   u.mode = 'marker'
   const items = plan.map((p) => ({ path: p.path, how: p.how, change: MARKER_TEXT[p.how], ...withHarness(p.harness) }))
-  const listing = ["There is no install record to go by. By trocar's own marks, these would be undone:", ...plan.map((p) => `  ${p.harness}  ${p.path}`), ...[...new Set(plan.map((p) => `    ${MARKER_TEXT[p.how]}`))]].join('\n')
+  const listing = markerListing(plan, w.home)
   let go = yes
   if (!go && interactive && io) { (say || io.out)(listing); go = await confirm(io, 'Proceed?') }
   if (!go) {

@@ -227,7 +227,7 @@ test('W24 `on` refuses a Node below the minimum with a doctor line that says wha
 const ME = 'DESKTOP-7Q\\ada'
 const NODE = 'C:\\Program Files\\nodejs\\node.exe'
 const SCRIPT = 'C:\\Users\\ada\\AppData\\Roaming\\npm\\node_modules\\trocar\\bin\\trocar.mjs'
-const xml = () => taskXml({ user: ME, node: NODE, trocar: SCRIPT, conhost: 'conhost.exe' })
+const xml = () => taskXml({ user: ME, program: [NODE, SCRIPT], conhost: 'conhost.exe' })
 const inner = (x, tag) => { const m = new RegExp(`<${tag}(?: [^>]*)?>([\\s\\S]*?)</${tag}>`).exec(x); return m ? m[1] : null }
 /** Is it well formed in the one sense that matters here: every element opened is closed, in order? (There is no XML parser in Node; a typo in a tag name is what this catches.) */
 function balanced(x) {
@@ -260,17 +260,17 @@ test('W24 the task XML has the fields of 4.8 §7: a login trigger of this user, 
   assert.equal(inner(x, 'Command'), 'conhost.exe')
   assert.equal(inner(x, 'Arguments'), `--headless "${NODE}" "${SCRIPT}" daemon --supervise`, 'conhost --headless (no window) runs node on trocar with the supervisor flag')
   assert.doesNotMatch(x, /--use-system-ca/, 'that option needs Node 22.15 and would make an older daemon exit at every login')
-  assert.equal(taskXml({ user: ME, node: NODE, trocar: SCRIPT }), x, 'conhost.exe is the default command')
+  assert.equal(taskXml({ user: ME, program: [NODE, SCRIPT] }), x, 'conhost.exe is the default command')
 })
 
 test('W24 what goes into the XML is escaped or refused: & < > are escaped, a quote or a control character in a path is a bug of the caller (it would end the quoted argument, or the element)', () => {
-  const x = taskXml({ user: 'A&B\\ada<x>', node: 'C:\\R&D\\node.exe', trocar: 'C:\\a>b\\trocar.mjs' })
+  const x = taskXml({ user: 'A&B\\ada<x>', program: ['C:\\R&D\\node.exe', 'C:\\a>b\\trocar.mjs'] })
   assert.ok(balanced(x))
   assert.equal(inner(inner(x, 'LogonTrigger'), 'UserId'), 'A&amp;B\\ada&lt;x&gt;')
   assert.equal(inner(x, 'Arguments'), '--headless "C:\\R&amp;D\\node.exe" "C:\\a&gt;b\\trocar.mjs" daemon --supervise')
-  assert.match(taskXml({ user: '张三\\ada', node: NODE, trocar: 'C:\\用户\\trocar.mjs' }), /用户/, 'a profile path in Chinese is carried as it is: UTF-16 holds it')
-  for (const bad of [{ node: 'C:\\no"de.exe' }, { trocar: 'C:\\a"b.mjs' }, { node: 'C:\\node\u0007.exe' }, { user: 'ada\u0000' }, { trocar: '' }, { node: undefined }, { conhost: 'con"host.exe' }]) {
-    assert.throws(() => taskXml({ user: ME, node: NODE, trocar: SCRIPT, ...bad }), TypeError, JSON.stringify(bad))
+  assert.match(taskXml({ user: '张三\\ada', program: [NODE, 'C:\\用户\\trocar.mjs'] }), /用户/, 'a profile path in Chinese is carried as it is: UTF-16 holds it')
+  for (const bad of [{ program: ['C:\\no"de.exe', SCRIPT] }, { program: [NODE, 'C:\\a"b.mjs'] }, { program: ['C:\\node\u0007.exe', SCRIPT] }, { user: 'ada\u0000' }, { program: [NODE, ''] }, { program: [] }, { conhost: 'con"host.exe' }]) {
+    assert.throws(() => taskXml({ user: ME, program: [NODE, SCRIPT], ...bad }), TypeError, JSON.stringify(bad))
   }
 })
 
@@ -775,9 +775,9 @@ test('W24 which Run value is trocar\'s is decided by its tail: the supervised da
 })
 
 test('W24 daemonCommandLine is the task\'s action as one line, and removeRunValue is the same undo the unit uses', () => {
-  assert.equal(daemonCommandLine({ node: NODE, trocar: SCRIPT }), COMMAND)
-  assert.equal(daemonCommandLine({ node: NODE, trocar: SCRIPT, conhost: 'C:\\Windows\\System32\\conhost.exe' }), `C:\\Windows\\System32\\conhost.exe --headless "${NODE}" "${SCRIPT}" daemon --supervise`)
-  assert.throws(() => daemonCommandLine({ node: 'C:\\no"de.exe', trocar: SCRIPT }), TypeError)
+  assert.equal(daemonCommandLine({ program: [NODE, SCRIPT] }), COMMAND)
+  assert.equal(daemonCommandLine({ program: [NODE, SCRIPT], conhost: 'C:\\Windows\\System32\\conhost.exe' }), `C:\\Windows\\System32\\conhost.exe --headless "${NODE}" "${SCRIPT}" daemon --supervise`)
+  assert.throws(() => daemonCommandLine({ program: ['C:\\no"de.exe', SCRIPT] }), TypeError)
   const r = fakeRegistry({ kind: 'REG_SZ', value: COMMAND })
   assert.equal(removeRunValue({ run: r }).runKey, 'removed')
   assert.equal(runKeyFallback({ command: COMMAND, run: fakeRegistry() }).ok, true, 'and the fallback writes it through the same reader')
