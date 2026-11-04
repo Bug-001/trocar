@@ -5,22 +5,17 @@
 // Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
-import { probe, withBoard } from './harness.mjs'
+import { probe, withBoard, webkitGate } from './harness.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
 const PER_CELL = 60
 const CELLS = 6
 
-let webkitSkip = skip
-if (!skip) {
-  try {
-    const { webkit } = await import('playwright-core')
-    const exe = webkit.executablePath()
-    if (!exe || !fs.existsSync(exe)) webkitSkip = 'the WebKit executable is not installed (not downloaded here)'
-  } catch (e) { webkitSkip = `WebKit unavailable: ${String(e?.message || e).split('\n')[0]}` }
-}
+const webkitSkip = await webkitGate(skip)
+
+// this file is about the Raw cell: the desk's stored default before the first page, as the reader's own choice is kept
+const pinRaw = (page) => page.addInitScript(() => localStorage.setItem('trocar.v2.cellMode', 'raw'))
 
 async function openBusiest(b) {
   const rows = (await b.get('sessions')).doc.sessions.filter((x) => x.calls > 0)
@@ -30,11 +25,10 @@ async function openBusiest(b) {
   await b.page.waitForLoadState('networkidle')
 }
 
-// open request rows until CELLS Raw cells with .lay spans are drawn; returns their refs
-async function openLaidCells(page) {
-  const laid = () => page.evaluate(() => [...document.querySelectorAll('#ctxwin .cell[data-mode="raw"][data-ref]')].filter((c) => c.querySelector('.cellraw .lay')).length)
+// open request rows until `enough()` holds
+async function openRows(page, enough) {
   const tried = new Set()
-  for (let k = 0; k < 60 && (await laid()) < CELLS; k++) {
+  for (let k = 0; k < 60 && !(await enough()); k++) {
     const bi = await page.evaluate((t) => [...document.querySelectorAll('#ctxwin .cblk.collapsed[data-bi]')].find((e) => e.getClientRects().length && !t.includes(e.dataset.bi))?.dataset.bi, [...tried])
     if (bi == null) break
     tried.add(bi)
@@ -42,6 +36,11 @@ async function openLaidCells(page) {
     await head.click()
     await page.waitForFunction((i) => !document.querySelector(`#ctxwin .cblk[data-bi="${i}"] .cellpend`), bi, { timeout: 10000 })
   }
+}
+// open request rows until CELLS Raw cells with .lay spans are drawn; returns their refs
+async function openLaidCells(page) {
+  const laid = () => page.evaluate(() => [...document.querySelectorAll('#ctxwin .cell[data-mode="raw"][data-ref]')].filter((c) => c.querySelector('.cellraw .lay')).length)
+  await openRows(page, async () => (await laid()) >= CELLS)
   return page.evaluate((k) => [...document.querySelectorAll('#ctxwin .cell[data-mode="raw"][data-ref]')].filter((c) => c.querySelector('.cellraw .lay')).slice(0, k).map((c) => c.dataset.ref), CELLS)
 }
 
@@ -89,7 +88,7 @@ const randomCopies = (page, ref, n) => page.evaluate(([ref, n]) => {
 }, [ref, n])
 
 async function copyCase(chromium) {
-  const b = await withBoard({ chromium })
+  const b = await withBoard({ chromium, setup: pinRaw })
   try {
     await openBusiest(b)
     const refs = await openLaidCells(b.page)
@@ -109,8 +108,8 @@ async function copyCase(chromium) {
         window.__copied = null
         Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (t) => { window.__copied = t } } })
       })
-      const cell = b.page.locator(`#ctxwin .cell[data-ref="${ref.replace(/"/g, '\\"')}"]`).first()
-      await cell.locator('[data-cellcopy]').click()
+      // the row's: the new desk holds the controls in the row head, outside the cell
+      await b.page.locator(`#ctxwin .cblk:has(.cell[data-ref="${ref.replace(/"/g, '\\"')}"]) [data-cellcopy]`).first().click()
       await b.page.waitForFunction(() => window.__copied != null, null, { timeout: 5000 })
       assert.equal(await b.page.evaluate(() => window.__copied), bytes, `Copy bytes copies the whole body of ${ref}`)
     }
@@ -133,7 +132,7 @@ test('Shift+V redraws the cells within one window height below the visible area 
   const b = await withBoard({ chromium: gate.chromium, height: 520 })
   try {
     await openBusiest(b)
-    await openLaidCells(b.page)
+    await openRows(b.page, () => b.page.evaluate((n) => document.querySelectorAll('#ctxwin .cell').length >= n, 2 * CELLS))
     // scroll the window so an open cell starts half a window height below its visible bottom
     const h = await b.page.evaluate(() => {
       const sc = document.querySelector('#ctxwin'), h = sc.clientHeight
@@ -144,24 +143,24 @@ test('Shift+V redraws the cells within one window height below the visible area 
       return h
     })
     assert.ok(h, 'an open cell far enough down to start below the visible area')
+    await b.page.waitForFunction(() => { const R = document.querySelector('#ctxwin').getBoundingClientRect(); return [...document.querySelectorAll('#ctxwin .cblk')].some((x) => { const r = x.getBoundingClientRect(); return r.bottom > R.top && r.top < R.bottom }) })
     const cellsBelow = () => b.page.evaluate((h) => {
       const R = document.querySelector('#ctxwin').getBoundingClientRect()
-      return [...document.querySelectorAll('#ctxwin .cell')].map((c) => ({ ck: c.dataset.ck, mode: c.dataset.mode, below: c.getBoundingClientRect().top - R.bottom })).filter((x) => x.below > 0 && x.below < h)
+      return [...document.querySelectorAll('#ctxwin .cell')].map((c) => ({ bid: c.dataset.bid, mode: c.dataset.mode, only: c.dataset.only, below: c.getBoundingClientRect().top - R.bottom })).filter((x) => !x.only && x.below > 0 && x.below < h)
     }, h)
-    // the same cells afterwards, by their data-ck (a cell drawn shorter in the other mode moves the ones below it up)
-    const modesOf = (cks) => b.page.evaluate((cks) => cks.map((ck) => document.querySelector(`#ctxwin .cell[data-ck="${CSS.escape(ck)}"]`)?.dataset.mode ?? null), cks)
+    // the same cells afterwards, by their data-bid (a cell drawn shorter in the other mode moves the ones below it up)
+    const modesOf = (bids) => b.page.evaluate((bids) => bids.map((bid) => document.querySelector(`#ctxwin .cell[data-bid="${CSS.escape(bid)}"]`)?.dataset.mode ?? null), bids)
     const before = await cellsBelow()
-    assert.ok(before.length > 0 && before.every((c) => c.mode === before[0].mode), 'open cells below the visible area, one mode')
-    const want = before[0].mode === 'raw' ? 'read' : 'raw'
+    assert.ok(before.length > 0 && before.every((c) => c.mode === 'read'), 'open cells below the visible area, in the Readable default')
     await b.page.evaluate(() => {
       const R = document.querySelector('#ctxwin').getBoundingClientRect()
       // the key goes to a visible part of a row: its head, or — when an open cell fills the visible area — that cell's body
-      const head = [...document.querySelectorAll('#ctxwin .cblk > .cbh, #ctxwin .cblk .cellraw')].find((x) => { const r = x.getBoundingClientRect(); return r.bottom > R.top && r.top < R.bottom })
+      const head = [...document.querySelectorAll('#ctxwin .cblk > .cbh, #ctxwin .cblk .cell')].find((x) => { const r = x.getBoundingClientRect(); return r.bottom > R.top && r.top < R.bottom })
       head.focus({ preventScroll: true })
       head.dispatchEvent(new KeyboardEvent('keydown', { key: 'V', shiftKey: true, bubbles: true, cancelable: true }))
     })
     await b.page.evaluate(() => new Promise((r) => { let n = 60; const f = () => (--n ? requestAnimationFrame(f) : r()); requestAnimationFrame(f) }))
-    assert.deepEqual(await modesOf(before.map((c) => c.ck)), before.map(() => want), 'every cell within one height below the visible area is redrawn')
+    assert.deepEqual(await modesOf(before.map((c) => c.bid)), before.map(() => 'raw'), 'every cell within one height below the visible area is redrawn')
     assert.deepEqual(b.errors, [])
   } finally { await b.stop() }
 })

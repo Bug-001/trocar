@@ -268,7 +268,7 @@ export async function serveWorld(page, w, { from = w.marks.length - 1, grow = 0,
   // 3.5 §会话读 `block`: one item per asked ref, its bytes made from the ref (the shape of session-read-contract.json `block_multi`)
   await answer('**/api/block?**', (req) => {
     const refs = new URL(req.url()).searchParams.getAll('ref')
-    return json({ schema: 2, command: 'block', ok: true, errors: [], blocks: refs.map((ref) => ({ ref, bytes: blockBytes(ref), encoding: 'utf8', fidelity: 'verbatim', truncated: false })) })
+    return json({ schema: 2, command: 'block', ok: true, errors: [], blocks: refs.map((ref) => ({ ref, bytes: blockBytes(ref), view: blockView(ref, w.replyRefs.has(ref)), encoding: 'utf8', fidelity: 'verbatim', truncated: false })) })
   })
   return { left: () => last - k, more: (n = 1) => { granted += n } }
 }
@@ -290,8 +290,21 @@ export const stampFetches = (page) => page.addInitScript(() => {
   }
 })
 
+/** `skip` (the suite's own reason, or false), else why WebKit cannot run: only an executable already installed, never downloaded. */
+export async function webkitGate(skip) {
+  if (skip) return skip
+  try {
+    const { webkit } = await import('playwright-core')
+    const exe = webkit.executablePath()
+    return exe && fs.existsSync(exe) ? false : 'the WebKit executable is not installed (not downloaded here)'
+  } catch (e) { return `WebKit unavailable: ${String(e?.message || e).split('\n')[0]}` }
+}
+
 /** The bytes serveWorld answers for a `block` ref. */
 export const blockBytes = (ref) => `body of ${ref}`
+/** The `view` serveWorld answers with them (3.5 §会话读 `block`): markdown holding those bytes, several top-level blocks for a reply. */
+const blockView = (ref, reply) => ({ r: { as: 'markdown', f: { body: ['text'] } },
+  body: { text: reply ? `## Result\n\n${blockBytes(ref)}\n\n- first\n- second\n\nThe last paragraph.\n` : blockBytes(ref) } })
 
 /** Nearest-rank p50 / p95 of a list of ms. */
 export function stats(samples) {
