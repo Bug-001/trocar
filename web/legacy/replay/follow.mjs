@@ -32,8 +32,10 @@ export function packOrder(head, at, held = () => false) {
 // createStepReads({get, setTimer, clearTimer, need, onLane, onBodies, restMs, loader}) → {target(rid), prefetch(key), laneSlot(fn),
 // pause(), resume()}. Injected, no DOM.
 //   · with a `loader` (loader.mjs) every read goes through it: a `block` read at pri 0, a `lane` read at pri 1
-//   · target(rid): the playhead's call. Once it has rested `restMs` with no newer target, need(rid) → {lane: {lane, from?, to?} |
-//     null, refs: string[]} says what that step still lacks; at most one `lane` and one `block` read are in flight at a time
+//   · target(rid): the playhead's call. Once it has rested `restMs` with no newer target, need(rid, tried) → {lane: {lane, from?, to?} |
+//     null, refs: string[]} says what that step still lacks; at most one `lane` and one `block` read are in flight at a time.
+//     `tried` holds the refs this target has already read, answered or failed: none goes out twice, so a failed one never loops
+//   · an answered `block` read asks the step again: need can name its own refs first and what follows them (the ±8 prefetch) after
 //   · a newer target aborts at once the reads asked for any other step (a prefetch too); an aborted read is not a failure and
 //     calls back nothing
 //   · onLane(rid, answer, query) hears a lane read's envelope (rid null for a prefetch); after a successful one the step is asked
@@ -45,7 +47,7 @@ export function packOrder(head, at, held = () => false) {
 //   · pause() (a left desk, 1.2 §路由「离开再回来」): no read starts until resume() — the rest timer stops, and an answer or a freed
 //     slot that would ask again only notes it; the reads in flight finish, a read still queued in the loader is not sent. resume() lets a target so stopped rest `restMs` again, then asks
 export function createStepReads({ get: get0, setTimer = setTimeout, clearTimer = clearTimeout, need, onLane, onBodies, restMs = 100, loader = null }) {
-  let want = null, timer = null, lastLane = null, slot = null, waited = false, paused = false, owed = false
+  let want = null, timer = null, lastLane = null, slot = null, waited = false, paused = false, owed = false, tried = new Set()
   const out = { lane: null, block: null } // the read in flight of each kind: {rid, ac, p}
   const join = (a, b) => (a && b ? AbortSignal.any([a, b]) : a || b)
   // a read still queued in the loader when the desk leaves is held back when its slot frees: it is not sent and asks again on resume
@@ -62,24 +64,29 @@ export function createStepReads({ get: get0, setTimer = setTimeout, clearTimer =
       out[kind] = null
       if (f.held && kind === 'lane') lastLane = null // never sent: the same lane query may go again
       if (ac.signal.aborted || f.held) { if (timer == null && want != null) go(); return }
-      if (kind === 'block') { onBodies(rid, r, what); return }
+      if (kind === 'block') {
+        if (rid === want) for (const ref of what) tried.add(ref)
+        onBodies(rid, r, what)
+        if (rid === want && timer == null) go()
+        return
+      }
       onLane(rid, r, what)
       if (r && r.ok && rid != null && rid === want) go()
     })
   }
   function go() {
     if (paused) { owed = true; return }
-    const rid = want, n = need(rid) || {}
+    const rid = want, n = need(rid, tried) || {}, refs = (n.refs || []).filter((r) => !tried.has(r))
     if (n.lane && slot) waited = true
     else if (n.lane && !out.lane) {
       const k = JSON.stringify(n.lane)
       if (k !== lastLane) { lastLane = k; start('lane', rid, n.lane) }
     }
-    if (n.refs && n.refs.length && !out.block) start('block', rid, n.refs)
+    if (refs.length && !out.block) start('block', rid, refs)
   }
   return {
     target(rid) {
-      want = rid; lastLane = null; owed = false // a new target rests its own 100 ms, paused or not
+      want = rid; lastLane = null; owed = false; tried = new Set() // a new target rests its own 100 ms, paused or not
       for (const f of Object.values(out)) if (f && f.rid !== rid) f.ac.abort()
       if (timer != null) clearTimer(timer)
       timer = setTimer(() => { timer = null; go() }, restMs)

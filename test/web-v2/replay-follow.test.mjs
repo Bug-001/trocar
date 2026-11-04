@@ -105,6 +105,27 @@ test('2.3 #25: scrubbing keeps ≤ 1 lane and ≤ 1 block read in flight, asks o
   for (const [k, v] of Object.entries(seen)) assert.ok(v > 0, `the scrubs include ${k} reads`)
 })
 
+// 2.3 #32 at the level of the read policy: the step's own refs go alone, the ±8 read follows their answer whether they came back or
+// not, and a ref whose read failed is not lacking any more: nothing asks twice for one target.
+test('2.3 #32: a step\'s own bodies read first, the near ones after them, and a failed read never loops', async () => {
+  for (const fails of [[], ['own'], ['near1'], ['own', 'near1', 'near2']]) {
+    bodyCache.clear()
+    const clk = clock(), reads = []
+    const get = (name, p) => {
+      reads.push(p.ref)
+      const ok = p.ref.filter((ref) => !fails.includes(ref))
+      return new Promise((res) => clk.setTimer(() => res({ ok: true, data: { blocks: ok.map((ref) => ({ ref, bytes: 'b', encoding: 'utf8' })), errors: [] } }), 10))
+    }
+    const lacks = (tried) => (ref) => !bodyCache.has(ref) && !tried.has(ref)
+    const need = (rid, tried) => { const own = ['own'].filter(lacks(tried)); return { lane: null, refs: own.length ? own : ['near1', 'near2'].filter(lacks(tried)) } }
+    const sr = createStepReads({ get, setTimer: clk.setTimer, clearTimer: clk.clearTimer, need, onLane: () => {}, onBodies: () => {} })
+    sr.target('s1')
+    await clk.advance(5000)
+    assert.deepEqual(reads, [['own'], ['near1', 'near2']], `failing ${fails}`)
+  }
+  bodyCache.clear()
+})
+
 // 1.2 §路由「离开再回来」: a left desk sends no new read. Pause at every point of a step's reads (resting, its lane read out, its block read
 // out, a read queued behind a loader slot another job holds); while paused nothing starts, the reads out finish; resumed, the step
 // rests 100 ms again and then gets what it lacks.

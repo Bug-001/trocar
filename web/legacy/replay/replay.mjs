@@ -608,8 +608,14 @@ function openDesk(ctx, route0, makeView = legacyView) {
       return st.held ? st.reply.map((d) => d.ref).filter((r) => r && !bodyCache.has(r)) : []
     })
   }
-  // what a resting playhead still lacks: its open bodies (a step's row and its step come in one file: there is no lane to read)
-  const need = (rid) => (s.desk.rows.has(rid) ? { lane: null, refs: [...new Set([...openRefs(rid), ...nearRefs(rid)])] } : null)
+  // what a resting playhead still lacks: its open bodies first, alone, so this step's reply never waits for the ±NEAR read that comes
+  // after them (2.3 §正文预取); a body already asked for this target is not lacked again (a step's row and its step come in one file:
+  // there is no lane to read)
+  function need(rid, tried) {
+    if (!s.desk.rows.has(rid)) return null
+    const own = openRefs(rid).filter((r) => !tried.has(r))
+    return { lane: null, refs: own.length ? own : [...new Set(nearRefs(rid))] }
+  }
   let targeted = null
   function makeStepReads() {
     const key = sessionKey(), mine = () => !s.dead && key === sessionKey()
