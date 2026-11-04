@@ -2,7 +2,8 @@
 // A screen module exports mount(el, ctx) → {update(route), unmount()}. mount() is not handed the route: the screen reads its starting
 // state from ctx.router.current(). update(route) is called when the route changes WITHIN the mounted screen (new params, another
 // session, the screen's own URL writes); a different screen is a fresh mount. `el` is a stable element React renders with no children:
-// only this host writes into it.
+// only this host writes into it. A route whose screen has no loader here belongs to another owner (a React screen beside this host): the
+// current screen unmounts and the element stays empty.
 import { useLayoutEffect, type RefObject } from 'react'
 import { api, scoped } from '../legacy/core/api.mjs'
 import { setScreenKeys } from '../legacy/core/keys.mjs'
@@ -16,20 +17,23 @@ export type Route = ReturnType<typeof parseHash>
 type Instance = { update(route: Route): void, unmount(): void }
 export type Screens = Record<string, () => Promise<unknown>>
 
-// createScreenHost(el, ctx, screens) → { show(route), dispose() }: the legacy boot's show(), with no window state of its own
-export function createScreenHost(el: HTMLElement, ctx: object, screens: Screens) {
+// createScreenHost(el, ctx, screens, preloads) → { show(route), dispose() }: the legacy boot's show(), with no window state of its own.
+// `preloads` = every module loader the idle preload fetches (default: these screens').
+export function createScreenHost(el: HTMLElement, ctx: object, screens: Screens, preloads: Array<() => Promise<unknown>> = Object.values(screens)) {
   let cur: { screen: string, inst: Instance | null, ac: AbortController } | null = null // inst is null while its mount() runs
   let seq = 0 // a screen loads asynchronously; a newer route (or dispose) cancels an older load
   let shut = false
   let preloaded = false
 
+  // also with no screen mounted: a module still loading has its 「Reading…」 page (or its load error) in `el`
   function unmountCurrent() {
-    if (!cur) return
-    try { if (cur.inst) cur.inst.unmount() } catch (e) { console.error('unmount failed', e) }
-    cur.ac.abort() // after unmount(): the screen's pollers are stopped, so an aborted answer writes nothing (1.2 #22); its layers close (1.2 §键盘)
-    cur = null
-    setScreenSignal(null)
-    setScreenKeys(null)
+    if (cur) {
+      try { if (cur.inst) cur.inst.unmount() } catch (e) { console.error('unmount failed', e) }
+      cur.ac.abort() // after unmount(): the screen's pollers are stopped, so an aborted answer writes nothing (1.2 #22); its layers close (1.2 §键盘)
+      cur = null
+      setScreenSignal(null)
+      setScreenKeys(null)
+    }
     el.replaceChildren()
   }
   // after the first screen settles, load every other screen module once, so a later screen change does not wait on the network
@@ -37,7 +41,7 @@ export function createScreenHost(el: HTMLElement, ctx: object, screens: Screens)
     if (preloaded) return
     preloaded = true
     const idle = globalThis.requestIdleCallback || ((f: () => void) => setTimeout(f, 1500))
-    idle(() => { for (const load of Object.values(screens)) load().catch(() => {}) })
+    idle(() => { for (const load of preloads) load().catch(() => {}) })
   }
 
   async function show(route: Route) {
@@ -48,6 +52,7 @@ export function createScreenHost(el: HTMLElement, ctx: object, screens: Screens)
       return
     }
     unmountCurrent()
+    if (!Object.hasOwn(screens, route.screen)) { preload(); return } // another owner draws it
     el.innerHTML = `<div class="page"><p class="screenwait">${esc(READING)}</p></div>` // never a blank area while the module loads
     let mod
     try { mod = await screens[route.screen]() } catch (e) {
@@ -78,13 +83,14 @@ export function createScreenHost(el: HTMLElement, ctx: object, screens: Screens)
 // is never handed over late, after a newer one is already current (a deferred, stale route turns a desk's follow back on). An
 // unknown route is skipped: the shell turns it into 总览 first.
 type Facade = { current(): Route, onRoute(fn: (r: Route) => void): () => void }
-export function LegacyScreen({ el, router, ctx, screens }: { el: RefObject<HTMLDivElement | null>, router: Facade, ctx: object, screens: Screens }) {
+export function LegacyScreen({ el, router, ctx, screens, preloads }:
+  { el: RefObject<HTMLDivElement | null>, router: Facade, ctx: object, screens: Screens, preloads?: Array<() => Promise<unknown>> }) {
   useLayoutEffect(() => {
-    const h = createScreenHost(el.current!, ctx, screens)
+    const h = createScreenHost(el.current!, ctx, screens, preloads)
     const show = (r: Route) => { if (!r.unknown) h.show(r) }
     const off = router.onRoute(show)
     show(router.current())
     return () => { off(); h.dispose() }
-  }, [el, router, ctx, screens])
+  }, [el, router, ctx, screens, preloads])
   return null
 }

@@ -80,6 +80,15 @@ function loadIcon(k) {
   }).catch(() => null)
 }
 
+// harnessIconSvg(id) → Promise<the icon's svg markup | null>: a known harness's icon, loaded once per id (a failed load stays null);
+// null for an id that names no known harness. ensureHarnessIcons and web/src/ui/HarnessIcon.tsx both read it.
+export function harnessIconSvg(id) {
+  const k = harnessKey(id)
+  if (!has(CHIP, k)) return Promise.resolve(null)
+  if (!ICON_CACHE.has(k)) ICON_CACHE.set(k, loadIcon(k))
+  return ICON_CACHE.get(k)
+}
+
 // the one place the boxes get filled: every [data-hicon] box drawn anywhere under `root` (web/src/main.tsx: the body) is filled once it is in
 // the document — a screen that repaints after a late read never leaves an empty box (the traffic table once did), and no screen calls
 // the loader itself. Mutations are batched to one pass per microtask.
@@ -100,10 +109,8 @@ export async function ensureHarnessIcons(scope) {
   await Promise.all(els.map(async (el) => {
     const id = el.getAttribute('data-hicon')
     if (id === '?') { el.innerHTML = UNKNOWN_ICON; return }
-    const k = harnessKey(id)
-    if (!has(CHIP, k) || el.querySelector('svg')) return
-    if (!ICON_CACHE.has(k)) ICON_CACHE.set(k, loadIcon(k))
-    const svg = await ICON_CACHE.get(k)
+    if (!has(CHIP, harnessKey(id)) || el.querySelector('svg')) return
+    const svg = await harnessIconSvg(id)
     if (svg) el.innerHTML = svg
   }))
 }
