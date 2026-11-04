@@ -6,17 +6,19 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
+import { fileURLToPath } from 'node:url'
 import { gunzipSync, gzipSync } from 'node:zlib'
 import { createQueryService } from '../../src/query/service.mjs'
 import { projectionFile, projectionStale, sessionDir, PROJ_V } from '../../src/query/projection.mjs'
 import { foldLogFile, foldStale, FOLD_V } from '../../src/query/fold-log.mjs'
 import { lineFile } from '../../src/query/line-file.mjs'
-import { headFile, readHead, rereadFile } from '../../src/query/ctx-files.mjs'
-import { workerFork } from '../helpers/worker-fork.mjs'
+import { headFile, readHead, rereadFile, PACK_MEMBERS } from '../../src/query/ctx-files.mjs'
+import { workerFork, workerForkIn } from '../helpers/worker-fork.mjs'
 import { within, whileMoving, reporting } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
 
+const SCAN_DEPS = fileURLToPath(new URL('./worker-scan-deps.mjs', import.meta.url))
 const CALLS = 1300 // past two packs, far past a slice
 const homeOf = () => { const home = path.join(tmpDir('trocar-reread-'), '.trocar'); fs.mkdirSync(path.join(home, 'raw'), { recursive: true, mode: 0o700 }); return home }
 const sessionIn = (home, n = 1) => {
@@ -88,6 +90,7 @@ for (const [axis, stale] of Object.entries(AXES)) {
       assert.ok(rereads(home, id), 'reread is there')
       let mid = 0
       await whileMoving(async () => {
+        await ask(svc, 'session', { id, head: '' }) // the document of `--head` is an answer too: it writes nothing
         const now = filesOf(home, id), a = await ask(svc, 'session', { id }) // pending after the read: the fold was not at its end at it
         if (a.pending) { mid++; assert.deepEqual(now, old, 'the files are the old ones, with no new member the head too') }
         return !rereads(home, id)
@@ -99,20 +102,22 @@ for (const [axis, stale] of Object.entries(AXES)) {
   })
 }
 
-test('a new member during the re-read: the head says done at the old mark, total, seen, the rest of it as it was (#43)', async () => {
+test('a new member past the last multiple of a pack: the head says done at the old mark, total, seen at once, the rest of it as it was (#43)', async () => {
   const home = homeOf(), s = sessionIn(home), { id } = s
+  s.append(200) // a wide last span: the frontier is in it when the member comes
   await foldAll(home, [id])
   lastVersion(home, id)
   const was = readHead(home, id), packs = packsOf(home, id)
   AXES['PROJ_V changed'](home, id)
   const { r, svc } = serviceOf(home)
   try {
-    const { total } = (await ask(svc, 'session', { id })).pending
+    const { total } = (await ask(svc, 'session', { id })).pending, past = Math.floor(total / PACK_MEMBERS) * PACK_MEMBERS
+    assert.ok(total - past > 300, 'the last span is wide')
+    await whileMoving(async () => (await ask(svc, 'session', { id })).pending.done > past, () => r.n, 'the frontier passed the last multiple')
     s.append(3)
     await ask(svc, 'session', { id })
-    await whileMoving(() => readHead(home, id)?.pending != null, () => r.n, 'the head says the new members')
-    const d = readHead(home, id)
-    assert.ok(rereads(home, id), 'still re-reading')
+    let d
+    await whileMoving(() => { d = readHead(home, id); return d?.pending != null || !rereads(home, id) }, () => r.n, 'the head says the new members')
     assert.deepEqual(d.pending, { done: total, total: total + 3, seen: true })
     assert.deepEqual({ ...d, pending: null }, was, 'nothing else of the head moved')
     assert.deepEqual(packsOf(home, id), packs, 'nor any pack')
@@ -194,6 +199,46 @@ test('a session asked for in the middle of the queue is folded next, ahead of th
     await ask(svc, 'session', { id: c })
     await whileMoving(() => !staleNow(home, c) && !rereads(home, c) && isDone(home, c), () => r.n, 'the one asked for ended')
     assert.ok(staleNow(home, b), 'the one behind it is still stale')
+  } finally { svc.stop() }
+})
+
+test('a followed session goes before the queue built while it was followed (#44)', async () => {
+  const home = homeOf(), [older, newer] = [sessionIn(home, 1).id, sessionIn(home, 2).id], gate = path.join(home, 'scan') // the scan looks at the older one first, so it does not see the follow
+  await foldAll(home, [newer, older])
+  for (const id of [newer, older]) AXES['PROJ_V changed'](home, id)
+  aged(home, newer, 60); aged(home, older, 3600)
+  const fork = workerForkIn({ TROCAR_TEST_SCAN_GATE: gate, TROCAR_TEST_SCAN_AT: path.basename(sessionDir(home, newer)) }), r = reporting((h) => fork(h, SCAN_DEPS)), svc = createQueryService({ home, fork: r.fork })
+  try {
+    svc.sweep()
+    await whileMoving(() => fs.existsSync(`${gate}.held`), () => r.n, 'the scan began')
+    r.kids[0].send({ follow: older })
+    fs.writeFileSync(gate, '')
+    await whileMoving(() => {
+      if (!staleNow(home, newer)) assert.ok(!rereads(home, older) && !staleNow(home, older), 'the followed one ended before the queue began')
+      return !staleNow(home, newer) && !rereads(home, newer) && isDone(home, newer)
+    }, () => r.n, 'both ended')
+  } finally { svc.stop() }
+})
+
+test('an answer that cannot be written ends that session\'s turn: reread stays, the queue goes on, and the next request finishes it (#43)', async () => {
+  const home = homeOf(), [broken, next] = [sessionIn(home, 1).id, sessionIn(home, 2).id]
+  await foldAll(home, [broken, next])
+  const freshHead = readHead(home, broken), tail = path.join(sessionDir(home, broken), 'open.main.ndjson')
+  for (const id of [broken, next]) AXES['PROJ_V changed'](home, id)
+  aged(home, broken, 60); aged(home, next, 3600)
+  fs.rmSync(tail)
+  fs.mkdirSync(path.join(tail, 'in-the-way'), { recursive: true })
+  // what the two folds have written: the worker's reports would go on through a loop on the failed write, this stops
+  const folded = () => [broken, next].flatMap((id) => { const d = sessionDir(home, id); return fs.readdirSync(d).filter((n) => /^(extract|fold)\./.test(n)).map((n) => fs.statSync(path.join(d, n)).size) }).reduce((a, b) => a + b, 0)
+  const { r, svc } = serviceOf(home)
+  try {
+    svc.sweep()
+    await whileMoving(() => !staleNow(home, next) && !rereads(home, next) && isDone(home, next), folded, 'the session behind it ended')
+    assert.ok(rereads(home, broken), 'reread stays')
+    fs.rmSync(tail, { recursive: true })
+    await ask(svc, 'session', { id: broken })
+    await whileMoving(() => !rereads(home, broken), () => r.n, 'the request finished it')
+    assert.deepEqual(readHead(home, broken), freshHead)
   } finally { svc.stop() }
 })
 

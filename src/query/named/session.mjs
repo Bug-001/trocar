@@ -554,9 +554,10 @@ export async function extendSession(ctx, id, budgetMs) {
   if (rereading(ctx, s.id)) {
     stops.delete(s.id);
     heads.delete(s.id); // what this worker wrote at this mark may be from before the rebuild
-    if ((s.mark != null && !s.files) || !putHead(ctx, s)) return true; // the marker goes only behind a whole answer: the next slice tries again
-    rereads.delete(s.id); oldDone.delete(s.id);
-    try { clearReread(ctx.home ?? trocarHome(), s.id, ctx.fs || nodeFs); } catch { /* the next worker reads it once more */ }
+    if ((s.mark == null || s.files) && putHead(ctx, s)) { // the marker goes only behind a whole answer; a write that failed ends this turn, and the next request, follow, sweep or worker tries again
+      rereads.delete(s.id); oldDone.delete(s.id);
+      try { clearReread(ctx.home ?? trocarHome(), s.id, ctx.fs || nodeFs); } catch { /* the next worker reads it once more */ }
+    }
   } else if (stops.delete(s.id)) putHead(ctx, s); else headAt(ctx, s); // a stop is cleared at once
   releaseParts(); // folded to its frontier: between calls the worker holds no decoded part (3.5:40 ⑤)
   return false;

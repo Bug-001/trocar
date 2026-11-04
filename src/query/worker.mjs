@@ -234,6 +234,7 @@ async function background() {
   if (upgrade == null) {
     sweeping = true
     try { upgrade = await upgradeQueue(ctx) } finally { sweeping = false }
+    return kick() // what came during the scan goes first, as after the sweep
   }
   if (upgrade.length) {
     if (busy || notIdle()) return
