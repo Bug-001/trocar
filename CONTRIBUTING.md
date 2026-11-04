@@ -69,7 +69,7 @@ An agent can do this work, and the skills that ship with trocar tell it how. `tr
 
 `trocar-ux` is the standard for building or reviewing a board screen. `trocar-audit` is for asking what an agent really sent, which is a question about the agent, not about trocar.
 
-Before anything leaves your machine, the whole branch gets one review by an agent in a fresh context, and [`scripts/pr-check.mjs`](scripts/pr-check.mjs) passes. The pull request carries the `hash` it printed.
+Before anything leaves your machine, the whole branch gets one review by an agent in a fresh context, and [`scripts/pr-check.mjs`](scripts/pr-check.mjs) passes. Without trocar installed, run it with `--cli bin/trocar.mjs`. The pull request carries the `hash` it printed.
 
 ## Commits and pull requests
 
