@@ -88,15 +88,15 @@ function hitOfRows(rows) {
   return { ratio: hitRatio(u), uncertain: main.some((r) => !r.cache_known || r.cache_write == null), main_rows: main.length };
 }
 
-// `sessions` = the most any one row of the model names: a session can sit in several rows, so the sum would count it twice.
-function unpricedOf(rows) {
+// `rows`: before their session sets become counts, for a session can sit in several rows of a model.
+function unpricedOf(rows, table) {
   const by = new Map();
   for (const r of rows) {
-    if (r.price || metered(r) <= 0) continue;
+    if (priceMatch(table, r.model) || metered(r) <= 0) continue;
     const model = r.model || null;
-    by.set(model, Math.max(by.get(model) ?? 0, r.sessions));
+    by.set(model, new Set([...(by.get(model) ?? []), ...r.sessions]));
   }
-  return [...by].map(([model, sessions]) => ({ model, sessions }));
+  return [...by].map(([model, sessions]) => ({ model, sessions: sessions.size }));
 }
 
 function usageOf({ home, fs, env, inWindow, errors, later }) {
@@ -155,8 +155,8 @@ function usageOf({ home, fs, env, inWindow, errors, later }) {
   if (later && toFill.size) later(() => fillUsage({ home, fs, segments: [...toFill] }));
   const cmp = (a, b) => (a === b ? 0 : a == null ? 1 : b == null ? -1 : String(a) < String(b) ? -1 : 1);
   const { table, source } = priceTable({ home, env });
-  const sorted = [...rows.values()].map((r) => priced({ ...r, sessions: r.sessions.size }, table))
-    .sort((a, b) => cmp(a.harness, b.harness) || cmp(a.model, b.model) || cmp(a.lane, b.lane));
+  const ordered = [...rows.values()].sort((a, b) => cmp(a.harness, b.harness) || cmp(a.model, b.model) || cmp(a.lane, b.lane));
+  const sorted = ordered.map((r) => priced({ ...r, sessions: r.sessions.size }, table));
   const partial = callsRead < callsIn, groups = Map.groupBy(sorted, (r) => r.harness);
   return {
     coverage: { sessions_read: read, sessions_in_window: inWindow.length, calls_read: callsRead, calls_in_window: callsIn,
@@ -165,7 +165,7 @@ function usageOf({ home, fs, env, inWindow, errors, later }) {
     cost: costOfRows(sorted, partial),
     hit: hitOfRows(sorted),
     harnesses: [...groups].map(([harness, own]) => ({ harness, cost: costOfRows(own, partial), hit: hitOfRows(own) })),
-    unpriced: unpricedOf(sorted),
+    unpriced: unpricedOf(ordered, table),
     pricing: { source },
   };
 }

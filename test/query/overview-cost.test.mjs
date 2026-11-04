@@ -90,6 +90,17 @@ test('3.5 #47 unknown: rows with no price → usd null, never 0, and the models 
   assert.deepEqual(usage.unpriced, [{ model: NOBODY, sessions: 2 }, { model: null, sessions: 1 }])
 })
 
+test('3.5 #47 unknown: a model\'s sessions are counted across its rows, each session once', async () => {
+  const home = await homeWith([
+    call('s1', NOBODY, 'main', [1000, 0, 0, 0], { harness: 'claude-code' }),
+    call('s2', NOBODY, 'main', [1000, 0, 0, 0], { harness: 'opencode' }),
+    call('s3', NOBODY, 'main', [1000, 0, 0, 0], { harness: 'opencode' }),
+    call('s3', NOBODY, 'subagent', [1000, 0, 0, 0], { harness: 'opencode' }),
+    call('s4', NOBODY, 'subagent', [1000, 0, 0, 0], { harness: 'opencode' }),
+  ])
+  assert.deepEqual((await overview(home)).usage.unpriced, [{ model: NOBODY, sessions: 4 }])
+})
+
 test('3.5 #47 unknown: only failed calls → usd null and not a floor, whether or not the model has a price', async () => {
   const home = await homeWith([call('s', 'm-a', 'main', null, { failed: true }), call('s', NOBODY, 'main', null, { failed: true })])
   const { usage } = await overview(home)
