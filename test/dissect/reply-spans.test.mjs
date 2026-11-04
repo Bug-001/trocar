@@ -237,3 +237,19 @@ test('a Responses reply block\'s span is exactly its own JSON node, one per cont
     }
   }
 });
+
+// spec 3.1 #9 (events): a part cut from a stream says how many events it was put together from; a ping belongs to no block, and a
+// block read as a JSON node has no event range to count.
+test('spec 3.1 #9: an Anthropic block counts its own content_block_* events, the pings between them not', () => {
+  const ping = { type: 'ping' }
+  const groups = [anth.text(0, 'first'), anth.tool('tool_use')(1, 'second')].map((g) => g.flatMap((e) => [e, ping]))
+  const parts = replyPartsAnthropic(rec(stored(sseOf(anthStream(groups), '\n'))))
+  assert.deepEqual(parts.map((p) => p.events), groups.map((g) => g.filter((e) => e !== ping).length))
+})
+test('spec 3.1 #9: a Responses block held whole in one event is a JSON node, with no events', () => {
+  const items = respItems('text')
+  const text = sseOf([...items.flatMap((it, k) => respEvents(it, k)), completed(items)], '\n')
+  const parts = RESPONSES.replyParts(rec(stored(text))).filter((p) => p.block)
+  assert.ok(parts.length)
+  for (const p of parts) { assert.ok(p.span, `${p.kind}: located as a node`); assert.ok(!('events' in p), p.kind) }
+})

@@ -152,9 +152,9 @@ export function replyBlocks(rec, { d, format }) {
   for (const p of parts) {
     const bl = p.block;
     if (!bl || typeof bl !== 'object') continue;
-    const tool = bl.type === 'tool_use' || bl.type === 'server_tool_use';
+    const tool = /(^|_)tool_use$/.test(bl.type);
     const b = { sec: 'messages', kind: bl.type, role: 'assistant', block: bl, toolName: tool ? bl.name || '' : '', cc: bl.cache_control || null,
-      resKey: rules.resourceRef(bl) || '', faithfulness: rules.faith(bl) };
+      resKey: rules.resourceRef(bl) || '', faithfulness: rules.faith(bl), events: p.events };
     const text = p.field ? fieldTextOf(rec, p.field).text ?? null : null;
     const at = p.span ? locate(base, text, p.span, p.field) : { ref: null, exact: null, why: p.why || null };
     out.push({ b, ...at, unit: p.unit ?? 0 });
@@ -167,25 +167,30 @@ export function replyBlocks(rec, { d, format }) {
  *  says which file the record was read from, which a seal renames. */
 const spanOf = (ref) => { const i = ref.indexOf('::'); return i < 0 ? ref : ref.slice(i); };
 // A record's block tables, built once per record object (a cache-break detail reads two blocks of one record, the next break of the
-// lane one more): the request's span → flat entry, the reply's built when a ref is not the request's.
+// lane one more), each when a ref first needs it: span → flat entry. A reply ref never builds the request's, so it reads whatever the
+// request's bytes hold; any other ref is the request's first, the reply's when the request has no such span.
 const tables = new WeakMap();
+const firstBySpan = (rows, flatOf) => {
+  const out = new Map();
+  rows.forEach((x, i) => { if (x.ref != null && !out.has(spanOf(x.ref))) out.set(spanOf(x.ref), flatOf(x, i)); });
+  return out;
+};
+const requestTable = (rec, t) => {
+  if (!t.req) { const { flat, at } = requestBlocks(rec, t.wire); t.req = firstBySpan(at, (_, i) => flat[i]); }
+  return t.req;
+};
+const replyTable = (rec, t) => (t.reply ??= firstBySpan(replyBlocks(rec, t.wire), (x) => x.b));
 export function blockAt(rec, ref) {
   if (ref == null) return null;
   let t = tables.get(rec);
   if (!t) {
     const wire = callWireOf(rec);
     if (!wire) return null;
-    const { flat, at } = requestBlocks(rec, wire), req = new Map();
-    at.forEach((a, i) => { if (a.ref != null && !req.has(spanOf(a.ref))) req.set(spanOf(a.ref), flat[i]); });
-    tables.set(rec, (t = { wire, req, reply: null }));
+    tables.set(rec, (t = { wire, req: null, reply: null }));
   }
   const want = spanOf(ref);
-  if (t.req.has(want)) return t.req.get(want);
-  if (!t.reply) {
-    t.reply = new Map();
-    for (const x of replyBlocks(rec, t.wire)) if (x.ref != null && !t.reply.has(spanOf(x.ref))) t.reply.set(spanOf(x.ref), x.b);
-  }
-  return t.reply.get(want) ?? null;
+  if (!want.startsWith('::resp.') && requestTable(rec, t).has(want)) return t.req.get(want);
+  return replyTable(rec, t).get(want) ?? null;
 }
 
 // ── the call row ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
