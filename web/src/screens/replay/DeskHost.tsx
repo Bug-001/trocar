@@ -15,7 +15,7 @@ import { deskRoutes, keyOf } from '../../../legacy/replay/replay.mjs'
 import { setScreenSignal, releaseScreenSignal } from '../../../legacy/core/dom.mjs'
 import type { Route } from '../../LegacyScreen'
 import { DeskFrame } from './DeskFrame'
-import { reactView, type DeskState, type DeskView, type Els } from './view'
+import { reactView, during, type DeskState, type DeskView, type Els } from './view'
 
 type Facade = { current(): Route, onRoute(fn: (r: Route) => void): () => void }
 type Opts = NonNullable<Parameters<typeof deskRoutes>[2]>
@@ -56,9 +56,9 @@ export default function DeskHost({ router, ctx, host, isDesk, cache, open }: Des
       publish(crossing)
     }
     const off = router.onRoute(on)
-    on(router.current())
+    during(() => on(router.current())) // the controller's paints inside this effect are not flushed (view.ts)
     live = true
-    return () => { off(); if (shown) leave() }
+    return () => { off(); if (shown) during(leave) }
   }, [router, ctx, host, isDesk, cache, open])
   return <>
     {st.desks.map((d) => (

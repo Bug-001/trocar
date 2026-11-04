@@ -123,6 +123,6 @@ export function wireDetail(el, s) {
     if (row.classList.contains('open') && b && body && !body.dataset.filled) fillBody(s.ctx.api, body, b)
   }
   el.addEventListener('click', onClick)
-  const cells = wireCells([s.root, el].filter(Boolean), s) // every body in the desk and the drawer is a cell
+  const cells = wireCells([...s.cellRoots(), el].filter(Boolean), s) // every body in the desk (the view's cell roots) and the drawer is a cell
   return () => { el.removeEventListener('click', onClick); cells() }
 }
