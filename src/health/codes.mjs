@@ -18,6 +18,8 @@ export const SEGMENT_PROBLEMS = Object.freeze(['record-unparseable', 'record-unr
 export const PROJECTION_NOTES = Object.freeze(['projection-rebuilt', 'projection-write-failed'])
 /** The codes of an unreadable ref in a `block` read's errors (src/query/named/block.mjs; 3.5 §会话读, 1.6 C.5). */
 export const BLOCK_PROBLEMS = Object.freeze(['record-missing', 'record-unreadable', 'field-missing'])
+/** The code of a price file that did not read, in the errors of `pricing`, `analysis` and `overview` (src/query/named/pricing.mjs; 3.5 §访问模式). */
+export const PRICING_PROBLEMS = Object.freeze(['pricing-unreadable'])
 
 /** The codes of a `session` read's own errors (src/query/named/session.mjs; 3.5 §会话读): no such session, a member that did not read back or extract. */
 export const SESSION_PROBLEMS = Object.freeze(['session-unknown', 'record-unreadable', 'record-unparseable',

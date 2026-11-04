@@ -70,7 +70,9 @@ function totalsOf({ cols, log, lanes }, table) {
 export async function run(ctx) {
   const { params: p, errors } = ctx, id = p.id == null || p.id === '' ? null : String(p.id);
   if (id == null) throw new QueryArgError('trocar query analysis: --id is required (a session id; `trocar query sessions` lists them)');
-  const { table, source } = priceTable(ctx), st = await sessionState(ctx, id);
+  const { table, source, problem } = priceTable(ctx);
+  if (problem) errors.push(problem);
+  const st = await sessionState(ctx, id);
   if (!st) {
     errors.push({ where: `session/${id}`, code: 'session-unknown', reason: 'no session with this id among the captured records' });
     return { mark: null, truncated: null, pricing: { source, models: [] }, totals: null, usd: {} };
