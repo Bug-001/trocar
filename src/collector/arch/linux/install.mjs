@@ -74,11 +74,12 @@ export function helperState({ cfg = DEFAULTS, run = null, fsys = fs } = {}) {
 // A setup-helper killed between its copy and its rename leaves the staged copy behind — possibly already capped.
 // Only setup-helper ever writes these names, so the next setup-helper and setup-helper --remove delete them and say so.
 const STAGED = /^\.trocar-redirector\.new\.\d+$/
+/** → the paths it removed (in `dir`), the ones every caller reports. */
 export function sweepStaged(dir, keep = null) {
   let names
   try { names = fs.readdirSync(dir) } catch (e) { if (e.code === 'ENOENT') return []; throw e }
-  const gone = names.filter((n) => STAGED.test(n) && n !== keep)
-  for (const n of gone) fs.rmSync(path.join(dir, n), { force: true })
+  const gone = names.filter((n) => STAGED.test(n) && n !== keep).map((n) => path.join(dir, n))
+  for (const p of gone) fs.rmSync(p, { force: true })
   return gone
 }
 export function setupHelper(opts = {}) {
@@ -119,29 +120,29 @@ export function setupHelper(opts = {}) {
     const m = capPart.match(/^([a-z0-9_,]+)=([a-z]+)$/)
     const gotCaps = m ? m[1].split(',').sort() : []
     const gotFlags = m ? m[2].split('').sort().join('') : ''
-    const wantCaps = ['cap_bpf', 'cap_net_admin', 'cap_perfmon'].sort()
-    if (JSON.stringify(gotCaps) !== JSON.stringify(wantCaps) || gotFlags !== 'ep') {
-      throw new Error(`unexpected caps ${JSON.stringify(capPart)} (want exactly cap_bpf,cap_net_admin,cap_perfmon=ep)`)
+    const [wantNames, wantFlags] = cfg.caps.split('+') // the one spelling of the set: what setcap was given is what getcap must read back
+    if (JSON.stringify(gotCaps) !== JSON.stringify(wantNames.split(',').sort()) || gotFlags !== wantFlags.split('').sort().join('')) {
+      throw new Error(`unexpected caps ${JSON.stringify(capPart)} (want exactly ${cfg.caps})`)
     }
     fs.renameSync(tmp, cfg.helperBin) // atomic swap over any running loader
   } catch (e) {
     try { fs.rmSync(tmp, { force: true }) } catch {}
     throw e
   }
-  return { ok: true, bin: cfg.helperBin, caps: 'cap_net_admin,cap_perfmon,cap_bpf=ep', getcap: run('getcap', [cfg.helperBin]).out, swept }
+  return { ok: true, bin: cfg.helperBin, caps: cfg.caps, swept }
 }
 
-export function uninstallHelper(opts = {}) {
-  requireRoot()
+// `root` / `exec`: the root check and the tool runner, for a test that runs the real function over a temp dir (0.1 §6 #13: its return is what the CLI reads)
+export function uninstallHelper({ root = requireRoot, exec = run, ...opts } = {}) {
+  root()
   const cfg = { ...DEFAULTS, ...opts }
   // Warn (do not fail) if any loader is still running: it keeps working until it exits; later
   // starts fail open and `doctor` reports the missing helper.
-  const running = run('pgrep', ['-f', cfg.helperBin])
+  const running = exec('pgrep', ['-f', cfg.helperBin])
   const warnings = []
-  if (running.code === 0 && running.out) warnings.push('a redirector is still running; it will keep working until it exits')
+  if (running.code === 0 && running.out) warnings.push('a capability helper is still running; it will keep working until it exits')
   fs.rmSync(cfg.helperBin, { force: true })
-  const swept = sweepStaged(cfg.helperDir)
-  if (swept.length) warnings.push(`removed ${swept.length} copy(ies) an interrupted setup-helper had staged: ${swept.join(', ')}`)
+  const swept = sweepStaged(cfg.helperDir) // returned apart from the warnings: the CLI lists each path on a line of its own (1.6 §1.1⑥)
   try { fs.rmdirSync(cfg.helperDir) } catch (e) { // gone already is fine; anything else is said, never swallowed
     if (e.code !== 'ENOENT') warnings.push(`${cfg.helperDir} was left in place (${e.code}): ${(() => { try { return fs.readdirSync(cfg.helperDir).join(', ') } catch { return '?' } })()}`)
   }

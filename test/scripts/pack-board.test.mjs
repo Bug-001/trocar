@@ -1,4 +1,4 @@
-// test/scripts/pack-board.test.mjs — 4.5 #6 (D75②③): the npm package carries the board's build and not its sources. Asks npm itself
+// test/scripts/pack-board.test.mjs — 4.5 #11 (D75②③): the npm package carries the board's build and not its sources. Asks npm itself
 // (`npm pack --dry-run --json`, the npm that runs `npm test`) what it would pack: every file under src/web/board/ is in it, nothing
 // under web/, node_modules/ or test/ is.
 import { test } from 'node:test'
@@ -14,7 +14,7 @@ const BUILT = path.join(ROOT, 'src', 'web', 'board')
 const npm = process.env.npm_execpath
 const skip = npm && /\.[cm]?js$/.test(npm) ? false : 'asks the npm that runs it (npm test sets npm_execpath)'
 
-test('4.5 #6: the package has every built board file and no board source', { skip, timeout: 60_000 }, () => {
+test('4.5 #11: the package has every built board file and no board source', { skip, timeout: 60_000 }, () => {
   const r = spawnSync(process.execPath, [npm, 'pack', '--dry-run', '--json', '--ignore-scripts'],
     { cwd: ROOT, encoding: 'utf8', env: { ...process.env, npm_config_cache: tmpDir('trocar-npmcache-'), NODE_DISABLE_COMPILE_CACHE: '1' } }) // npm's cli turns on Node's compile cache in the temp dir
   assert.equal(r.status, 0, r.stderr)

@@ -39,5 +39,5 @@
   "status": "fixed",
   "detail": "a poll moved and drew the playhead, then returned early (stale after loadBodies, or a 304) before pollOnce's URL write; the write now runs in paintPlayhead, so every drawn step reaches it (1.2 §路由)",
   "owner": "desk",
-  "suspect": "src/web/v2/replay/replay.mjs : pollOnce"
+  "suspect": "web/legacy/replay/replay.mjs : pollOnce"
 }

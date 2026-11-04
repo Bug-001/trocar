@@ -40,6 +40,7 @@ import { spawn as defaultSpawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import readline from 'node:readline'
 import net from 'node:net'
+import { setupHelperCommand } from '../../../version.mjs'
 
 /** @typedef {{address:string,port:number,family:4|6}} Dst */
 /** @typedef {{dst:Dst,pid:number|null,agent:string|null,decrypt:boolean}} FlowMeta */
@@ -89,7 +90,7 @@ export function createRedirectorClient({
 
   function send(op, extra = {}) {
     if (down || !child || child.exitCode != null || child.signalCode != null) {
-      return Promise.reject(Object.assign(new Error('redirector loader is not running'), { code: 'loader-down' }))
+      return Promise.reject(Object.assign(new Error('the capability helper is not running'), { code: 'loader-down' }))
     }
     const id = nextId++
     const line = JSON.stringify({ id, op, ...extra }) + '\n'
@@ -153,13 +154,14 @@ export function createRedirectorClient({
     }
   }
 
-  function fail(reason, extra = {}, { quiet = false } = {}) {
+  // `code`: what start() rejects with — ENOENT when there is no helper at its path (the daemon then runs without one, 4.6 「助手还没装」)
+  function fail(reason, extra = {}, { quiet = false, code = 'loader-down' } = {}) {
     if (down) return
     down = true
     stopHeartbeat()
-    for (const { reject } of pending.values()) reject(Object.assign(new Error('redirector loader down: ' + reason), { code: 'loader-down' }))
+    for (const { reject } of pending.values()) reject(Object.assign(new Error('the capability helper stopped: ' + reason), { code: 'loader-down' }))
     pending.clear()
-    if (readyReject) { readyReject(new Error('redirector loader down: ' + reason)); readyResolve = readyReject = null }
+    if (readyReject) { readyReject(Object.assign(new Error('the capability helper stopped: ' + reason), { code })); readyResolve = readyReject = null }
     if (quiet) return // an orderly close: no `down`, so no helper-down failure (the daemon's own daemon-stop records the stop)
     emitter.emit('down', { reason, ...extra, ...(stderrTail.length ? { stderr: [...stderrTail] } : {}) })
   }
@@ -215,7 +217,7 @@ export function createRedirectorClient({
     })
     child.on('error', (err) => {
       if (err && err.code === 'ENOENT') {
-        fail(`redirector helper not found at ${resolvedBinary}; install it once per machine with "sudo trocar setup-helper"`)
+        fail(`capability helper not found at ${resolvedBinary}; install it once per machine with \`${setupHelperCommand()}\``, {}, { code: 'ENOENT' })
       } else {
         fail('spawn error: ' + (err && err.message ? err.message : String(err)))
       }

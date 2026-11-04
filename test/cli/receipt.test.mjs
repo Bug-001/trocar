@@ -22,8 +22,11 @@ import { fakeIo, onCtx, snapshot, changedFiles, seedClaude, fakeSystem, fakeDaem
 import { assertEnglish } from '../helpers/english.mjs'
 import { installedHome, flowEvents } from '../off/fixtures/off-ctx.mjs'
 import { runStatus, down, reply, asDaemon } from './fixtures/status-ctx.mjs'
+import { selfCommand } from '../../src/version.mjs'
 
 const settingsOf = (home) => path.join(home, '.claude', 'settings.json')
+// 1.6 §3.2 sample: the line after `If trocar itself breaks, run:` is the standalone trocar-off, HOME shown as ~
+const breakGlassLine = (text) => { const ls = text.split('\n'); const i = ls.findIndex((l) => l.trim() === 'If trocar itself breaks, run:'); return i < 0 ? undefined : ls[i + 1]?.trim() }
 
 // D55, override #15: the first-run plan and its confirmation are install's now (it writes the user files); on, after install, has no user file left to
 // confirm. The plan names every file, without a terminal and --yes nothing is written (exit 2), the dry run writes nothing, --yes writes.
@@ -80,7 +83,7 @@ test('V7: install in a terminal asks once, only the first time; "n" writes nothi
   assert.equal(yes.asked.length, 1)
   // §1.1③ gives one or two next steps, so the text names the next command and the undo; the four commands live in `--json`'s `commands` (appendix C install)
   assert.match(yes.stdoutText(), /Next: trocar on/, 'the receipt names the next step (R1, 1.6 §3.2)')
-  assert.match(yes.stdoutText(), /If trocar itself breaks: /, 'and the undo that works without this source tree')
+  assert.equal(breakGlassLine(yes.stdoutText()), '~/.trocar/bin/trocar-off', 'and the undo that works without this source tree (1.6 §3.2)')
   assertEnglish(yes.stdoutText(), 'the install receipt')
   const asJson = fakeIo({ tty: false })
   assert.equal(await runInstallCli(['--json'], onCtx(home, asJson)), 0)
@@ -156,7 +159,7 @@ test('on: refused as root (R7), with the helper missing it writes nothing and sa
   let io = fakeIo(); assert.equal(await runOnCli(['--yes'], onCtx(home, io, { deps: { getuid: () => 0 } })), 2, 'root: §1.4 — nothing read or written, exit 2')
   assert.match(io.text(), /^trocar on: run this as your own user, not as root\.$/m)
   io = fakeIo(); assert.equal(await runOnCli(['--yes'], onCtx(home, io, { deps: { helperState: () => ({ ok: false, reason: 'no helper at /usr/local/libexec/trocar/trocar-redirector' }) } })), 1)
-  assert.match(io.text(), /sudo trocar setup-helper/)
+  assert.ok(io.text().replace(/\s+/g, ' ').includes(`sudo ${selfCommand(['setup-helper'])}`), io.text())
   assert.deepEqual(snapshot(home), before, 'nothing written, not even the manifest')
   // D39⑥ executed 2026-10-11: the legacy-on hook went with the old capture — every platform runs the NEW on: its plan (a dry run touches nothing)
   for (const platform of ['win32', 'darwin', 'freebsd']) {
@@ -323,7 +326,7 @@ test('V3 (uninstall — the certificate entries are its, D55① — the install 
   assert.ok(!fs.existsSync(path.join(b.s.dir, 'install-manifest.json')) || readManifest(b.s.dir).entries.length === 0)
 })
 
-test('V29: the on receipt after install, in the text and in --json, carries the four commands and the absolute path of trocar-off; every item of the manifest has a kind and an undo_by_hand; flows/ has the install-note and the off-note runs, each ending in a result line', async () => {
+test('V29: the on receipt after install, in the text and in --json, carries the four commands and trocar-off (the text shows it with HOME as ~, --json `standalone` is absolute); every item of the manifest has a kind and an undo_by_hand; flows/ has the install-note and the off-note runs, each ending in a result line', async () => {
   const home = tmpDir('trocar-on-v29-'); seedClaude(home); await installFirst(home)
   const io = fakeIo()
   assert.equal(await runOnCli(['--yes', '--json'], onCtx(home, io)), 0)
@@ -336,7 +339,8 @@ test('V29: the on receipt after install, in the text and in --json, carries the 
   assert.ok(fs.statSync(r.standalone).isFile() && (fs.statSync(r.standalone).mode & 0o100), 'and the path is a file trocar wrote, executable (install wrote it; test/off/standalone.test.mjs runs it)')
   const io2 = fakeIo(); const home2 = tmpDir('trocar-on-v29b-'); seedClaude(home2); await installFirst(home2)
   assert.equal(await runOnCli(['--yes'], onCtx(home2, io2)), 0)
-  for (const c of ['trocar on', 'trocar off', 'trocar status', 'trocar uninstall', standalonePath(home2)]) assert.ok(io2.stdoutText().includes(c), `the text carries ${c}`)
+  for (const c of ['trocar on', 'trocar off', 'trocar status', 'trocar uninstall']) assert.ok(io2.stdoutText().includes(c), `the text carries ${c}`)
+  assert.equal(breakGlassLine(io2.stdoutText()), '~/.trocar/bin/trocar-off', 'the text carries trocar-off, HOME as ~ (1.6 §3.2)')
   const m = readManifest(path.join(home, '.trocar', 'collector'))
   const items = [...m.entries, ...m.files]
   assert.ok(items.length >= 3)
@@ -392,13 +396,31 @@ test('on prints no network-environment line and its --json receipt has no netenv
   assert.ok(!/本机网络环境/.test(dry.stdoutText())); assert.deepEqual(changedFiles(before, snapshot(home4)), [], '--dry-run writes nothing')
 })
 
-// Windows ignores the shebang, so the bare path of trocar-off runs nothing there; every place that prints it as a command says `node "<path>"` on win32.
-test('the standalone trocar-off is printed as a runnable command: node "<path>" on win32, the path elsewhere', async () => {
-  const { standaloneCommand } = await import('../../src/off/paths.mjs')
-  const win = 'C:\\Users\\a\\.trocar\\bin\\trocar-off', posix = '/home/a/.trocar/bin/trocar-off'
-  assert.equal(standaloneCommand(win, 'win32'), `node "${win}"`)
+// Windows ignores the shebang, so the bare path of trocar-off runs nothing there: the line runs the .cmd standaloneFiles puts beside it, and it never starts
+// with a quoted string — PowerShell, where the script channel installs (D74), reads `"<a>" "<b>"` as an expression and refuses it (1.6 §1.1⑤ · §3.2 step 1).
+test('the standalone trocar-off is printed as a runnable command: on win32 the .cmd beside it, whole in quotes and not first on the line; the path elsewhere', async () => {
+  const { standaloneCommand, standaloneFiles, standalonePath } = await import('../../src/off/paths.mjs')
+  for (const home of ['C:\\Users\\a', 'C:\\Users\\a b&(c)^d']) {
+    const win = path.win32.join(home, '.trocar', 'bin', 'trocar-off'), cmd = `${win}.cmd`
+    const line = standaloneCommand(win, 'win32')
+    assert.ok(line.includes(`"${cmd}"`), `the .cmd path, quoted whole: ${line}`)
+    assert.notEqual(line[0], '"', 'PowerShell refuses a line that starts with a quoted string and goes on')
+    assert.ok(!line.includes('node'), 'no Node path in the line: the .cmd finds it, so switching Node never makes the line wrong')
+    const r = { ...newReceipt('on'), ok: true, standalone: win }
+    assert.ok(formatOnReceipt(r, { platform: 'win32' }).split('\n').some((l) => l.trim() === line), 'the receipt prints that line whole, on its own')
+  }
+  const home = '/home/a', posix = standalonePath(home)
+  assert.deepEqual([standaloneFiles(home, 'win32').map((f) => path.basename(f)), standaloneFiles(home, 'linux'), standaloneFiles(home, 'darwin')], [['trocar-off', 'trocar-off.cmd'], [posix], [posix]])
   for (const p of ['darwin', 'linux']) assert.equal(standaloneCommand(posix, p), posix)
-  const r = { ...newReceipt('on'), ok: true, standalone: win }
-  assert.ok(formatOnReceipt(r, { platform: 'win32' }).includes(`node "${win}"`), 'the receipt line runs on Windows')
-  assert.ok(!formatOnReceipt({ ...r, standalone: posix }, { platform: 'darwin' }).includes('node "'))
+  assert.ok(!formatOnReceipt({ ...newReceipt('on'), ok: true, standalone: posix }, { platform: 'darwin' }).includes('.cmd'))
+})
+
+// D58: the plan says a copy of your files goes to the backups only when it changes a file of yours (an entry); trocar's own files have none to keep
+test('formatPlan: the backup line only when the plan changes a file of yours', async () => {
+  const { formatPlan } = await import('../../src/cli/receipt.mjs')
+  const home = '/home/a'
+  const own = { owned: [{ harness: 'dsh', path: '/home/a/.trocar/collector/plugins/dsh/index.js', role: 'plugin' }] }
+  const edits = { ...own, entries: [{ harness: 'claude-code', path: '/home/a/.claude/settings.json', keys: ['env', 'NODE_EXTRA_CA_CERTS'] }] }
+  assert.doesNotMatch(formatPlan(own, { home }), /\.trocar\/backup/)
+  assert.match(formatPlan(edits, { home }), /\.trocar\/backup/)
 })

@@ -13,9 +13,9 @@ import path from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { tmpDir } from '../helpers/tmp.mjs'
-import { buildStandalone, writeStandalone, checkStandalone, STANDALONE_ENTRY } from '../../src/off/standalone.mjs'
+import { buildStandalone, writeStandalone, checkStandalone, STANDALONE_ENTRY, STANDALONE_CMD } from '../../src/off/standalone.mjs'
 import { OFF_VERSION, MANIFEST_VERSION, readManifest, saveManifest, manifestPath, KNOWN_KINDS, FILE_ENTRY_KINDS } from '../../src/off/manifest.mjs'
-import { standalonePath } from '../../src/off/paths.mjs'
+import { standalonePath, standaloneFiles } from '../../src/off/paths.mjs'
 import { sha256 } from '../../src/off/fsutil.mjs'
 import { runOffCli } from '../../src/off/main.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
@@ -155,7 +155,7 @@ test('V2: a daemon that answers is told to switch off by the copy, over the cont
 
 test('V11: what is generated imports node:* and nothing else — no import or export statement, no require, no dynamic import; every built-in comes in through the one loader, by a literal name', () => {
   const text = buildStandalone({ version: 'test' })
-  assert.match(text, /^#!\/usr\/bin\/env node\n\/\/ trocar-off test — generated from src\/off by trocar on; do not edit\n/, 'the shebang and the version line, first')
+  assert.match(text.split('\n', 3).join('\n'), /^\/\/ trocar-off test — generated from src\/off by trocar on; do not edit$/m, 'the version line is in the first three lines')
   assert.equal(buildStandalone({ version: 'test' }), text, 'the same text every time: `on` compares it with what is on disk')
   const calls = [...text.matchAll(/__trocarLoad\(/g)].length
   const specs = [...text.matchAll(/__trocarLoad\(\s*(['"])([^'"]+)\1\s*\)/g)].map((m) => m[2])
@@ -232,7 +232,7 @@ test('src/off carries OFF_VERSION as an integer, and the unique-name rule the ge
 
 // The kinds the copy undoes, and how (the file rule's kinds), pinned to the OFF_VERSION that ships them: a change to either list
 // without a bump (and a row here) is red, so doctor's version line tells an old copy from one that knows the new rules.
-const KINDS_AT = { 16: 'e3c392509cb0c538', 17: 'e3c392509cb0c538', 18: 'e3c392509cb0c538', 19: 'e3c392509cb0c538', 20: 'e3c392509cb0c538', 21: 'e3c392509cb0c538', 22: 'e3c392509cb0c538', 23: 'e3c392509cb0c538', 24: 'e3c392509cb0c538' } // 17-24 ship the same kinds: those bumps are D61 (no autostart disable), D62 ⑥ (no exit asked of a proxy-mode daemon), D62 (the switch asks the daemon's warm helper for the process table) and a new harness's marker place, their reason lines are in src/off/manifest.mjs
+const KINDS_AT = { 16: 'e3c392509cb0c538', 17: 'e3c392509cb0c538', 18: 'e3c392509cb0c538', 19: 'e3c392509cb0c538', 20: 'e3c392509cb0c538', 21: 'e3c392509cb0c538', 22: 'e3c392509cb0c538', 23: 'e3c392509cb0c538', 24: 'e3c392509cb0c538', 25: 'e3c392509cb0c538' } // 17-25 ship the same kinds: those bumps are D61 (no autostart disable), D62 ⑥ (no exit asked of a proxy-mode daemon), D62 (the switch asks the daemon's warm helper for the process table), a new harness's marker place and markers known by their fixed part, their reason lines are in src/off/manifest.mjs
 test('OFF_VERSION moves with the undo rules: the known kinds and the file-rule kinds are the ones this version ships', () => {
   const fp = sha256(Buffer.from(JSON.stringify([KNOWN_KINDS, FILE_ENTRY_KINDS]))).slice(0, 16)
   assert.equal(KINDS_AT[OFF_VERSION], fp, `KNOWN_KINDS / FILE_ENTRY_KINDS changed: bump OFF_VERSION with its reason line (src/off/manifest.mjs) and add { ${OFF_VERSION + 1}: '${fp}' } here`)
@@ -288,7 +288,7 @@ test('V35: a manifest newer than the copy knows is left alone — ok:false, exit
 
 test('the execute bit is only a POSIX fact: on win32 a copy without it is current, on linux it is not (Windows test machine run 2, 2026-10-18 Q4)', () => {
   const home = tmpDir('trocar-chk-win-')
-  writeStandalone({ home, version: OFF_VERSION })
+  writeStandalone({ home, version: OFF_VERSION, platform: 'win32' })
   fs.chmodSync(standalonePath(home), 0o600) // what Windows reports for a file install just wrote
   assert.equal(checkStandalone({ home, version: OFF_VERSION, platform: 'win32' }).ok, true, 'win32: nothing carries an execute bit, so it says nothing')
   const posix = checkStandalone({ home, version: OFF_VERSION, platform: 'linux' })
@@ -326,6 +326,32 @@ test('V35: the check reports a copy that is stale, missing or not what src/off g
   fs.rmSync(file); fs.mkdirSync(file)
   const dir = checkStandalone({ home })
   assert.deepEqual([dir.ok, dir.found], [false, null]); assert.match(dir.reason, /EISDIR|cannot be read/)
+})
+
+test('1.6 §3.2 step 1: on win32 trocar-off.cmd is written, checked and rewritten with trocar-off as one list; its bytes hold no Node path; elsewhere it is not written', () => {
+  const home = tmpDir('trocar-chk-cmd-')
+  const [file, cmd] = standaloneFiles(home, 'win32')
+  assert.deepEqual([cmd && path.dirname(cmd), standaloneFiles(home, 'linux'), standaloneFiles(home, 'darwin')], [path.dirname(file), [file], [file]])
+  assert.equal(writeStandalone({ home, version: OFF_VERSION, platform: 'win32' }).written, true)
+  const text = fs.readFileSync(cmd, 'utf8')
+  assert.equal(text, STANDALONE_CMD)
+  assert.ok([...text].every((c) => c.codePointAt(0) < 128) && !/[^\r]\n/.test(text), 'ASCII with CRLF: cmd reads it in every code page')
+  assert.ok(!/[A-Za-z]:\\/.test(text) && !text.includes(process.execPath), 'no absolute path in its bytes: switching Node never makes it stale')
+  assert.match(text, /trocar-off" %\*/, 'it runs the trocar-off beside it with every argument')
+  for (const f of [file, cmd]) fs.chmodSync(f, 0o600) // what Windows reports for every file: no execute bit (D54: a second install / on writes nothing)
+  assert.deepEqual([checkStandalone({ home, version: OFF_VERSION, platform: 'win32' }).ok, writeStandalone({ home, version: OFF_VERSION, platform: 'win32' })], [true, { path: file, written: false, files: [] }])
+  fs.rmSync(cmd)
+  assert.deepEqual([checkStandalone({ home, version: OFF_VERSION, platform: 'win32' }).missing, writeStandalone({ home, version: OFF_VERSION, platform: 'win32' }).files], [true, [cmd]], 'a missing .cmd is said as missing, and the write returns the one file it wrote')
+  for (const spoil of [() => fs.rmSync(cmd), () => fs.writeFileSync(cmd, text.replace('node', 'nodes'))]) {
+    spoil()
+    const c = checkStandalone({ home, version: OFF_VERSION, platform: 'win32' })
+    assert.deepEqual([c.ok, c.path, c.found], [false, cmd, String(OFF_VERSION)], 'the finding names the .cmd')
+    assert.equal(writeStandalone({ home, version: OFF_VERSION, platform: 'win32' }).written, true)
+    assert.equal(fs.readFileSync(cmd, 'utf8'), STANDALONE_CMD, 'written again')
+  }
+  const posix = tmpDir('trocar-chk-nocmd-')
+  writeStandalone({ home: posix, version: OFF_VERSION, platform: 'linux' })
+  assert.deepEqual(fs.readdirSync(path.dirname(standalonePath(posix))), ['trocar-off'])
 })
 
 test('V35: `trocar doctor` says nothing of a copy that is current, and makes a finding that says what is wrong when it is not — and writes nothing', async () => {
@@ -404,3 +430,14 @@ test('a copy that cannot be written stops the install before one file of the age
 // The pre-D39⑥ shape went with the old capture (executed 2026-10-11): the standalone copy no longer carries undoLegacy /
 // legacyOffCli — it is the NEW off only, on every platform, and what the old capture left on a machine is cleaned by hand (README).
 // The copy's own behavior (the new off, no repository needed) is the cells above and below.
+
+test('D74: the copy runs with no node on PATH: sh starts the Node that ../app/current names', { skip: process.platform === 'win32' && 'on Windows trocar-off.cmd starts it (1.6 §3.2 step 1)' }, () => {
+  const text = buildStandalone({ version: 'test' }).replace(STANDALONE_ENTRY, "(process.stdout.write('ran ' + process.argv.slice(2).join(' ')), 0)")
+  const t = tmpDir('trocar-polyglot-'), file = path.join(t, 'bin', 'trocar-off'), node = path.join(t, 'app', 'node', 'n1', 'bin', 'node')
+  fs.mkdirSync(path.dirname(file), { recursive: true }); fs.mkdirSync(path.dirname(node), { recursive: true })
+  fs.writeFileSync(path.join(t, 'app', 'current'), '9.9.9 n1\n'); fs.symlinkSync(process.execPath, node)
+  fs.writeFileSync(file, text, { mode: 0o700 })
+  const r = spawnSync('/bin/sh', [file, 'a b', 'c'], { encoding: 'utf8', env: { PATH: path.join(path.dirname(file), 'no-such-dir') } })
+  assert.equal(r.status, 0, r.stderr)
+  assert.equal(r.stdout, 'ran a b c')
+})

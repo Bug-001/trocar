@@ -9,7 +9,7 @@
 // and every piece runs on any OS against a temp directory. Node built-ins and src/off/exec.mjs only (this file never imports a harness, 4.6 §结构).
 import nodeFs from 'node:fs'
 import { directStartEnv, startDaemonDirect } from '../direct-start.mjs'
-import { autostartNode } from '../autostart-node.mjs'
+import { autostartProgram } from '../autostart-node.mjs'
 import path from 'node:path'
 import { spawn as nodeSpawn } from 'node:child_process'
 import { execTool } from '../../../off/exec.mjs'
@@ -65,7 +65,7 @@ const plain = (name, v) => {
 const xmlText = (v) => v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
 /**
- * The LaunchAgent plist (4.9 §4). Label com.trocar.collector; ProgramArguments = `node <trocar> daemon` and nothing more — no `--supervise`, that flag went with the supervisor parent;
+ * The LaunchAgent plist (4.9 §4). Label com.trocar.collector; ProgramArguments = `<program…> daemon` (autostartProgram: `node <trocar>`, or the script channel's launcher) and nothing more — no `--supervise`, that flag went with the supervisor parent;
  * RunAtLoad true and KeepAlive {SuccessfulExit: false} (a crash is relaunched, a drained daemon's exit 0 is not), and KeepAlive is the reason there is no supervisor (launchd brings a killed daemon back) and the reason `off` boots the agent out BEFORE it stops the
  * daemon. `env` is the daemon's own environment (install's daemonEnv: NODE_EXTRA_CA_CERTS of the install shell, an absolute path), written as EnvironmentVariables — a launchd job starts
  * with none of the shell's exports, so what install wants the daemon to have must be in the plist (the linux unit's `Environment=`, 4.6 §引擎 5; a Windows task cannot carry any, 4.8 §7).
@@ -73,9 +73,9 @@ const xmlText = (v) => v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>
  * without them a daemon that dies at every login does so with an error nobody sees. A quote in a path is harmless here (plist element content, not a command line): only & < > are escaped,
  * and a control character or a non-string is a bug of the caller.
  */
-export function plistXml({ node, trocar, env = {}, logs = null } = {}) {
-  const n = plain('node', node)
-  const a = plain('trocar', trocar)
+export function plistXml({ program, env = {}, logs = null } = {}) {
+  if (!Array.isArray(program) || !program.length) throw new TypeError(`plist: program is a non-empty array, got ${JSON.stringify(program)}`)
+  const argv = program.map((v, i) => plain(`program[${i}]`, v))
   if (!env || typeof env !== 'object' || Array.isArray(env)) throw new TypeError(`plist: env is an object of variable names to strings, got ${JSON.stringify(env)}`)
   const vars = Object.entries(env)
   for (const [k, v] of vars) {
@@ -92,8 +92,7 @@ export function plistXml({ node, trocar, env = {}, logs = null } = {}) {
     `  <string>${xmlText(AGENT_LABEL)}</string>`,
     '  <key>ProgramArguments</key>',
     '  <array>',
-    `    <string>${xmlText(n)}</string>`,
-    `    <string>${xmlText(a)}</string>`,
+    ...argv.map((v) => `    <string>${xmlText(v)}</string>`),
     '    <string>daemon</string>',
     '  </array>',
     ...(vars.length ? ['  <key>EnvironmentVariables</key>', '  <dict>', ...vars.map(([k, v]) => `    <key>${xmlText(k)}</key>\n    <string>${xmlText(v)}</string>`), '  </dict>'] : []),
@@ -172,11 +171,11 @@ const settle = (agent, plist) => ({ code: (agent.code !== 0 ? agent.code : plist
  *                    guess — the plist is a separate part of the undo and still goes.
  */
 export function userUnit({ home, node, script, run = null, env = process.env, fs = nodeFs, spawn = nodeSpawn, uid = null } = {}) {
-  node = autostartNode({ env, execPath: node, fs }) // D61: a node the plist can still name after a node upgrade (one rule, all three OSes)
+  const program = autostartProgram({ home, node, script, env, fs, platform: 'darwin' }) // D61 · D74: what the plist names survives a node upgrade and a `place` (one rule, all three OSes)
   const file = plistPath(home)
   const tools = { run, env, uid: uid ?? processUid() }
   // the daemon this run starts itself: the LaunchAgent's own environment and the LaunchAgent's own log files (direct-start.mjs)
-  const startDirect = (carry) => ({ ...ok, ...startDaemonDirect({ home, env, carry, command: node, argv: [script, 'daemon'], spawn, fs }) })
+  const startDirect = (carry) => ({ ...ok, ...startDaemonDirect({ home, env, carry, command: program[0], argv: [...program.slice(1), 'daemon'], spawn, fs }) })
   // the agent is booted out of the session and the plist out of LaunchAgents, in that order (see the userUnit header); each half says what it did
   const undo = () => {
     const q = agentState(tools)
@@ -192,7 +191,7 @@ export function userUnit({ home, node, script, run = null, env = process.env, fs
   }
   return {
     name: AGENT_LABEL, path: file, links: [],
-    text: (e = {}) => plistXml({ node, trocar: script, env: e, logs: daemonLogPaths(home) }),
+    text: (e = {}) => plistXml({ program, env: e, logs: daemonLogPaths(home) }),
     // D46: the daemon's log files, made at unit-write time and listed in the manifest (install calls these); never rewritten by a later on
     logFiles: () => { const { out, err } = daemonLogPaths(home); return [{ path: out }, { path: err }] },
     ensureLogs: () => ensureDaemonLogs(home, { fs }),

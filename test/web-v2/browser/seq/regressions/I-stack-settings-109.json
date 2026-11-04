@@ -15,5 +15,5 @@
   "status": "fixed",
   "detail": "a 500 `pricing` read on Settings › Prices prints the server's whole reason (a V8 native stack, FATAL ERROR) in the visible error line, not under Technical details; storage.mjs:205 draws `classes` failures the same way",
   "owner": "shell/overview/library/capture/settings/traffic",
-  "suspect": "src/web/v2/settings/prices.mjs:81"
+  "suspect": "web/legacy/settings/prices.mjs:81"
 }

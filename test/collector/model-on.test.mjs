@@ -44,6 +44,21 @@ async function daemon(w) {
 }
 const on = (w, over = {}) => turnOnModel({ os: 'darwin', home: w.home, env: w.env, harnesses: w.harnesses, ctx: w.ctx, isFree: async () => true, renderHook, ...over })
 
+// V85 (on): the files `on` writes outside ~/.trocar are the ones its plan names — a plug-in route's own file included
+test('V85: on writes outside ~/.trocar only the paths its plan names', async () => {
+  const w = await modelWorld({ commands: ['codex', 'opencode'] })
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  const paths = (await on(w, { dryRun: true })).planned.flatMap((p) => p.paths)
+  const mine = () => { const out = {}; const walk = (d) => { for (const n of fs.readdirSync(d)) { const p = path.join(d, n); const st = fs.lstatSync(p); if (st.isDirectory()) walk(p); else if (st.isFile()) out[p] = fs.readFileSync(p, 'base64') } }; walk(w.home); return Object.fromEntries(Object.entries(out).filter(([k]) => !k.startsWith(path.join(w.home, '.trocar') + path.sep))) }
+  const before = mine()
+  const d = await daemon(w)
+  try { assert.equal((await on(w)).exit, 0) } finally { await d.close() }
+  const after = mine()
+  const written = [...new Set([...Object.keys(before), ...Object.keys(after)])].filter((k) => before[k] !== after[k])
+  assert.ok(written.length >= 2, JSON.stringify(written))
+  assert.deepEqual(written.filter((f) => !paths.some((p) => f === p || f.startsWith(p + path.sep))), [], 'written but not in the plan')
+})
+
 test('1.6 §1.1: on without an install record refuses with cert-not-installed, exit 1, and writes nothing', async () => {
   const w = await modelWorld({ commands: ['codex'] })
   const r = await on(w)

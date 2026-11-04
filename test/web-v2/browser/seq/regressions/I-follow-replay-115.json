@@ -34,5 +34,5 @@
   "status": "fixed",
   "detail": "following, the session grows while `sessions` answers slowly (10 s): the desk's tail read waits behind the listing (pollOnce awaits loadSessions first), so the step counter stays one call behind the server for over 15 s",
   "owner": "desk",
-  "suspect": "src/web/v2/replay/replay.mjs:334"
+  "suspect": "web/legacy/replay/replay.mjs:334"
 }

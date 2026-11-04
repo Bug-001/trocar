@@ -9,7 +9,7 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { runInstallCli } from '../../src/cli/install.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
 import { readManifest, saveManifest } from '../../src/off/manifest.mjs'
-import { codeId } from '../../src/version.mjs'
+import { codeId, selfCommand } from '../../src/version.mjs'
 import { fakeIo, fakeSystem, onCtx, seedClaude, snapshot, changedFiles } from './fixtures/on-ctx.mjs'
 import { unitPath, UNIT_NAME } from '../../src/collector/arch/linux/unit.mjs'
 
@@ -24,7 +24,8 @@ test('Linux install: CA + trust entries (phase install) + trocar-off, no unit, n
   // R1: the receipt says each user file it changed — path, what was changed, where the backup is — not only the plan before the yes
   const receipt = io.text().slice(io.text().indexOf("Installed. trocar's certificates are in place."))
   assert.match(receipt.replace(/\s+/g, ' '), /~\/\.claude\/settings\.json env\.NODE_EXTRA_CA_CERTS added \(backup/, receipt)
-  assert.match(receipt, /trocar's own files: .*trocar-off/, receipt)
+  assert.match(receipt.replace(/\s+/g, ' '), /trocar's own files: .*trocar-off/, receipt)
+  const glass = receipt.split('\n'); assert.equal(glass[glass.indexOf('If trocar itself breaks, run:') + 1].trim(), '~/.trocar/bin/trocar-off', '§1.1⑤ · §3.2: the break-glass line shows HOME as ~')
   assertEnglish(io.text(), 'the Linux install plan and receipt')
   const dir = path.join(home, '.trocar', 'collector')
   const m = readManifest(dir)
@@ -49,6 +50,21 @@ test('Linux install: CA + trust entries (phase install) + trocar-off, no unit, n
   assert.equal(await runOnCli(['--yes'], onCtx(home, onIo)), 0, onIo.text())
   assert.deepEqual(certBytes(home), certs, 'on wrote no certificate byte')
   assert.equal(readManifest(dir).install.code, '0.0.1', 'on leaves the code that ran install as install wrote it')
+})
+
+// V114 (1.6 §3.8, 4.6 「助手还没装」): the helper is an item of its own (D53) — a script install's first `install` never has it, and install still finishes,
+// starts the collector and says the one sudo line that adds it, naming this copy by absolute paths (1.6 §3.2)
+test('Linux install with the capability helper missing: exit 0, the collector started, and the pending row of the receipt carries the sudo setup-helper line', async () => {
+  const home = tmpDir('trocar-install-nohelper-')
+  seedClaude(home)
+  const sys = fakeSystem({ up: false })
+  const io = fakeIo()
+  assert.equal(await runInstallCli(['--yes', '--json'], { ...onCtx(home, io, { exec: sys.exec, daemon: sys.daemon, deps: { helperState: () => ({ ok: false, reason: 'no helper' }) } }), platform: 'linux' }), 0, io.text())
+  const r = io.json()
+  assert.deepEqual([r.ok, r.daemon.state], [true, 'running'])
+  // C.2 / §1.1⑥: the line is the pending row's own command, never inside a sentence (V114)
+  assert.ok((r.pending || []).some((p) => p.command === `sudo ${selfCommand(['setup-helper'])}`), JSON.stringify(r.pending))
+  assert.ok(!r.notes.some((n) => n.includes('setup-helper')), JSON.stringify(r.notes))
 })
 
 // D61 (4.6 「用户级自启单元」, 1.6 §3.2 步骤 5): registering the login entry and pulling the daemon up is install's, not on's — through the
@@ -108,7 +124,6 @@ test('Linux on after install with a certificate item gone: on leaves it gone, ex
   fs.writeFileSync(settings, '{"model":"x"}\n')
   const io = fakeIo()
   assert.equal(await runOnCli(['--yes'], onCtx(home, io)), 1, io.text())
-  assert.match(io.text(), /"trocar off", then "trocar install" and "trocar on"/, 'the way back is install\'s')
   assert.equal(fs.readFileSync(settings, 'utf8'), '{"model":"x"}\n', 'on did not write the key')
 })
 

@@ -45,6 +45,35 @@ test('pairs: a label/value block aligned on the label, indented; a value longer 
   assert.deepEqual(pairs([['path', long]]), ['  path', `  ${long}`], 'the long value is whole, on its own line')
 })
 
+test('pairs: every folded line fills up to the width, the lines under a label as much as the first (§1.1⑥)', () => {
+  for (const width of [30, 47, 80]) {
+    for (const words of [12, 40]) {
+      const value = Array.from({ length: words }, (_, i) => 'w'.repeat(1 + ((i * 7) % 9))).join(' ')
+      const out = pairs([['autostart', value], ['a', 'b']], { width })
+      const col = out.at(-1).indexOf('b')
+      const rows = out.slice(0, -1).map((l) => l.slice(col).split(' '))
+      for (const [i, line] of out.slice(0, -1).entries()) {
+        assert.ok(line.length <= width, `width ${width}: ${JSON.stringify(line)} is past the width`)
+        if (i < rows.length - 1) assert.ok(line.length + 1 + rows[i + 1][0].length > width, `width ${width}: line ${i} stops short: the next word fits on it`)
+      }
+      assert.deepEqual(rows.flat(), value.split(' '), 'every word, in order, in the value column')
+    }
+  }
+})
+
+test('pairs: a later word too long for the value column takes its own line at the fold column, never past the width (§1.1⑥)', () => {
+  for (const len of [30, 60, 70]) {
+    const word = 'p'.repeat(len)
+    const value = `key -> trocar (backup ${word}) tail`
+    const out = pairs([['~/.claude/settings.json', value]])
+    for (const line of out) assert.ok(line.length <= WIDTH, `word of ${len}: ${JSON.stringify(line)} is past the width`)
+    assert.deepEqual(out.join(' ').split(/\s+/).filter(Boolean), ['~/.claude/settings.json', ...value.split(' ')], 'every word, once, in order')
+  }
+  const huge = 'q'.repeat(WIDTH)
+  const out = pairs([['label', `a ${huge} b`]])
+  assert.ok(out.some((l) => l.trim() === huge), 'a word longer than any column is whole, alone on its line')
+})
+
 test('tilde: the home directory becomes ~, and only at the start of a path', () => {
   assert.equal(tilde('/home/u/.trocar/raw', '/home/u'), '~/.trocar/raw')
   assert.equal(tilde('/home/u', '/home/u'), '~')
@@ -91,4 +120,47 @@ test('wrap: lines of at most 80 columns, broken on spaces; a word longer than th
   assert.deepEqual(wrap('  a   b  ', 80), ['a b'], 'runs of whitespace are one space')
   assert.deepEqual(wrap('', 80), [])
   for (const l of wrap('word '.repeat(60))) assert.ok(l.length <= WIDTH, l)
+})
+
+// §1.1⑥: a command named in a sentence never splits across lines — at every width, each command in the text is whole on one line
+test('wrap: a `trocar <command>` with its options, and a backquoted command, stay on one line at every width', () => {
+  const cmds = ['trocar uninstall', 'trocar install.', 'trocar uninstall --purge-data', '`sudo /opt/node/bin/node /opt/trocar/bin/trocar.mjs setup-helper`']
+  const text = `If you suspect misuse: ${cmds[0]}, then ${cmds[1]} To delete what was kept, run ${cmds[2]} or install the helper with ${cmds[3]}; then run trocar on.`
+  for (let width = 10; width <= 130; width++) {
+    const lines = wrap(text, width)
+    assert.equal(lines.join(' '), text.replace(/\s+/g, ' '), `${width}: no word lost`)
+    for (const c of cmds) assert.ok(lines.some((l) => l.includes(c)), `${width}: ${c} whole on one line:\n${lines.join('\n')}`)
+  }
+})
+
+test('pairs: a first word too long for the value column takes the fold column like a later one, the label alone above it (§1.1⑥)', () => {
+  for (const len of [66, 72]) {
+    const word = `${'p'.repeat(len - 1)}:`
+    const out = pairs([['autostart', `${word} the link that enables it`], ['certificate', 'x']])
+    const col = out.at(-1).indexOf('x'), at = out.findIndex((l) => l.trim() === word)
+    assert.ok(at > 0 && out[at - 1].trim() === 'autostart', `the label is alone above the word\n${out.join('\n')}`)
+    assert.equal(out[at].indexOf(word), Math.min(col, 6), `word of ${len}: at the fold column (6)\n${out.join('\n')}`)
+    assert.ok(out.slice(at + 1, -1).every((l) => l.length - l.trimStart().length === col), `the words after it are in the value column\n${out.join('\n')}`)
+  }
+})
+
+test('pairs: widths are measured on the printed text, a HOME path as ~ (§1.1⑤⑥)', () => {
+  for (const home of ['/home/alice', '/Users/a-rather-long-account-name-on-this-mac']) {
+    const value = `one line added (- insert: [{ name: "${home}/.trocar/collector/plugins/dsh/index.js" }])`
+    const out = pairs([[`${home}/.dsh/cordis.patch.yml`, value]], { home })
+    const col = out[0].indexOf('one')
+    assert.ok(out.every((l) => !l.includes(home)), out.join('\n'))
+    assert.ok(out.slice(1).every((l) => l.length - l.trimStart().length === col), `every word fits the value column once shortened, so every line starts there\n${out.join('\n')}`)
+    assert.deepEqual(out.join(' ').split(/\s+/).filter(Boolean), ['~/.dsh/cordis.patch.yml', ...value.replaceAll(home, '~').split(' ')], 'every word, once, in order')
+  }
+})
+
+test('wrap: a size stays with its number and unit, and a bracketed size with the word it is the size of (§1.1⑤⑥)', () => {
+  for (let n = 0; n < 40; n++) {
+    const path = '~/.trocar/collector/flows/', text = `w${'w'.repeat(n)} trocar's record of what it did and what failed, in ${path} (3.2 KB) and 12.5 MB more`
+    const out = wrap(text, WIDTH)
+    assert.ok(out.some((l) => l.includes(`${path} (3.2 KB)`)), `the size is on its path's line\n${out.join('\n')}`)
+    assert.ok(out.some((l) => l.includes('12.5 MB')), `a number and its unit are never split\n${out.join('\n')}`)
+    assert.deepEqual(out.join(' ').split(' '), text.split(' '), 'every word, once, in order')
+  }
 })
