@@ -33,7 +33,9 @@
 .kd-text{white-space:pre-wrap;overflow-wrap:anywhere;}
 .kd-code,.kd-shell,.kd-json,.kd-diff,.kd-kv dt,.kd-opaque,.sec-tag{font-family:var(--mono);font-size:var(--fs-body);line-height:1.6;}
 .kd-code,.kd-diff{white-space:pre;overflow-x:auto;max-width:100%;overflow-wrap:normal;padding:var(--s2);background:var(--sunk);border-radius:var(--r-1);}
-.kd-esc{color:var(--ink-3);} /* code's ESC byte, named in words (kinds.mjs) */
+/* code's ESC byte (kinds.mjs): the byte stays in the text for copy and is hidden; the box and the word say what it is, not a colour */
+.kd-esc{color:transparent;}
+.kd-esc::before{content:'ESC';color:var(--ink-3);border:1px solid var(--rule-2);border-radius:var(--r-1);padding:0 2px;}
 .kd-title{font-family:var(--sans);font-size:var(--fs-cap);font-weight:var(--fw-strong);color:var(--ink-2);margin-bottom:var(--s1);white-space:normal;}
 .gut{display:inline-block;min-width:3ch;padding-right:var(--s2);text-align:right;color:var(--ink-3);user-select:none;-webkit-user-select:none;}
 .kd-shell{white-space:pre-wrap;overflow-wrap:anywhere;}
