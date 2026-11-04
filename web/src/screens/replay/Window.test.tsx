@@ -390,6 +390,35 @@ test('2.3 #38 · 1.2 §点击与选中文字②: an open row holds the controls 
   for (const r of rows) expect(r.querySelector(':scope > .cbh .cellbar')).toBeNull()
 })
 
+// a redraw that puts the window back as it first opened is what a reader loses their place to
+test('2.3 #14: flipping one cell on the new desk leaves the window as the reader had it: its scroll, the focus, the other rows and what is open inside them', () => {
+  const tree = { top: { mid: { deep: { leaf: 'the words at the bottom' } } } }
+  const s = stateOf(deskN([[sys(), blk({ query: 'q' }), say(), say(), say()]]))
+  const rowOf = (bi: number) => itemsOf(s).find((it) => it.type === 'row' && it.bi === bi)!
+  for (const bi of [1, 2, 3]) { s.openBlocks.add(rowOf(bi).key); bodyCache.set(flatOf(s)[bi].text_ref, viewed()) }
+  bodyCache.set(flatOf(s)[2].text_ref, { status: 'ok', text: JSON.stringify(tree), view: { r: { as: 'json', f: { body: [] } }, body: tree } })
+  setDeskMode('read')
+  const { win } = mount(s)
+  const row = (bi: number) => win.querySelector<HTMLElement>(`.cblk[data-bi="${bi}"]`)!
+  const mode = (bi: number) => row(bi).querySelector<HTMLElement>('.cell')!.dataset.mode
+  const node = () => row(2).querySelector<HTMLDetailsElement>(`details[data-path='${JSON.stringify(['top', 'mid'])}']`)!
+  fireEvent.click(node().querySelector('summary')!)
+  act(() => { node().open = true; node().dispatchEvent(new Event('toggle')) })
+  act(() => { win.scrollTop = 40; win.dispatchEvent(new Event('scroll')) })
+  const open = () => [1, 2, 3, 4].map((bi) => row(bi).classList.contains('collapsed'))
+  const [was, cell2, cell3, btn] = [open(), row(2).querySelector('.cell'), row(3).querySelector('.cell'), row(1).querySelector<HTMLElement>('[data-cellmode="raw"]')!]
+  btn.focus()
+  act(() => { fireEvent.click(btn) })
+  expect(mode(1)).toBe('raw')
+  expect([mode(2), mode(3)]).toEqual(['read', 'read'])
+  expect(win.scrollTop).toBe(40)
+  expect(document.activeElement).toBe(btn)
+  expect(open()).toEqual(was)
+  expect(node().open).toBe(true)
+  expect(row(2).querySelector('.cell')).toBe(cell2)
+  expect(row(3).querySelector('.cell')).toBe(cell3)
+})
+
 test('2.3 #38: an open shell row puts its description at the label\'s place while Readable', () => {
   const s = stateOf(deskN([[sys(), blk({ query: 'q' }), say({ head: { role: 'assistant', tag: 'action · Bash', label: 'own label' } })]]))
   s.openBlocks.add(itemsOf(s).find((it) => it.type === 'row' && it.bi === 2)!.key)
