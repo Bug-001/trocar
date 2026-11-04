@@ -11,7 +11,7 @@
 //   The command gets `(argv, ctx)`; `ctx.args` is the parsed form of argv ({ positionals, flags }) and `ctx.json` whether `--json` was asked.
 import os from 'node:os'
 import { makeIo, hidingIo, asOneDocument } from '../off/io.mjs'
-import { commandNamed, helpText, usageLine } from './commands.mjs'
+import { commandNamed, printHelp } from './commands.mjs'
 import { parseArgs } from './args.mjs'
 import { wrap, WIDTH } from './text.mjs'
 import { printJson, errorDoc } from './json.mjs'
@@ -21,6 +21,7 @@ import { recordUserPath } from '../off/user-path.mjs'
 import { COMMAND_INDENT } from '../off/receipt.mjs'
 
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
+const helpWord = (a) => a === '--help' || a === '-h'
 const REPORT = 'Please report it with what you ran: https://github.com/Bug-001/trocar/issues'
 
 export async function runCli(argv, { io = makeIo({ stdin: process.stdin, stdout: process.stdout, stderr: process.stderr }), env = process.env, home = os.homedir(), platform = process.platform, uid = processUid(), deps = {} } = {}) {
@@ -32,11 +33,15 @@ export async function runCli(argv, { io = makeIo({ stdin: process.stdin, stdout:
     return exit
   }
   const [first, ...rest] = argv
-  if (first === undefined || first === '--help' || first === '-h') { io.out(helpText()); return EXIT.ok } // `trocar` with nothing = `trocar help` (§2)
+  if (first === undefined || helpWord(first)) return printHelp({ io, json }) // `trocar` with nothing = `trocar help` (§2)
   if (first === '--version') { io.out(`trocar ${codeId()}`); return EXIT.ok } // §2, D67⑤: the version, with HEAD's first 7 in a git checkout
   const cmd = commandNamed(first)
   if (!cmd) return refuse(first, 'usage', `trocar: unknown command '${first}'. Run: trocar help`)
-  if (rest.includes('--help') || rest.includes('-h')) { io.out(helpText(cmd.name)); return EXIT.ok }
+  if (rest.some(helpWord)) {
+    // the word comes out before parsing: an open option would otherwise take what follows it as its value (`query --help status`)
+    const left = rest.filter((a) => !helpWord(a)), args = parseArgs(cmd, left)
+    return cmd.topics && args.positionals.length ? cmd.topics(left, { io, json, args }) : printHelp({ io, json }, cmd.name)
+  }
   // §1.5: the commands that change your own state refuse root, and the one that needs root refuses everyone else — before anything is read or written.
   if (cmd.needsRoot && platform !== 'linux') return refuse(cmd.name, 'usage', `trocar ${cmd.name}: not needed on this platform.`)
   if (cmd.needsRoot && uid !== 0) return refuse(cmd.name, 'usage', `trocar ${cmd.name}: run it with sudo:\n${COMMAND_INDENT}sudo ${selfCommand([cmd.name, ...rest])}`)

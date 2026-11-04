@@ -624,7 +624,8 @@ Whether Desktop's own model calls come out decrypted verbatim is not claimed her
 
 ## Commands
 
-`trocar help` prints the same, in three sections; `trocar help <command>` says one command.
+`trocar help` prints the same, in three sections; `trocar help <command>` says one command, and
+`trocar query <name> --help` one query. `trocar help --json` gives all of it as one document.
 
 ```sh
 # common
@@ -636,7 +637,7 @@ trocar uninstall [--purge-data] [--yes] [--dry-run] [--json]
 trocar doctor [<harness>...] [--json]
 
 # data
-trocar query <name> [--<param> <value>...]   # the one way to read the records; the board is its HTTP shell (D59)
+trocar query <name> [--<param> <value>...] [--json]   # the one way to read the records; the board is its HTTP shell (D59)
 trocar classes [<class>] [--json]
 trocar classes set <class> full|log
 trocar classes add <class> <host-regex> [<path-regex>] [--harness <harness>]
@@ -651,11 +652,11 @@ sudo trocar setup-helper [--remove] [--binary <path>]   # Linux, once per machin
 trocar daemon [--supervise]   # the daemon in the foreground; the autostart unit runs it (Windows's task with --supervise)
                               # another daemon already answering: exits 0, nothing to do. The control endpoint held by
                               # something silent: records `control-endpoint-held` and exits 1.
-trocar help [<command>]   # also --help · -h · --version · -v
+trocar help [<command>] [--json]   # also --help · -h · --version
 ```
 
 Exit codes: 0 done · 1 not done, or a problem was found · 2 a usage error (nothing was touched) · 3 `status` /
-`doctor` could not judge · 70 the daemon crashed. `--version` (or `-v`) prints the version.
+`doctor` could not judge · 70 the daemon crashed. `--version` prints the version.
 
 Design authority: [`spec/01-trocar-rfc/`](spec/01-trocar-rfc/) (entry `0.0-overview.md`). This README is
 the operator's quickstart, not the spec. `npm test` runs the test suite.

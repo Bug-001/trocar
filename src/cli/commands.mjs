@@ -11,9 +11,14 @@
 //                 (`classes set|add|rm|reset` refuse root; `classes` shown does not). needsRoot: setup-helper, the one command that must be root.
 //     hidden      not in help or the README: `place`, which only the install scripts and `trocar update` run (§2).
 //     run         gets the argv after the name and the context of runCli: { io, env, home, platform, uid, args: { positionals, flags }, deps }.
+//     topics      pages of its own below the command: `--help` with a positional goes here, with the context { io, json, args } (`query <name> --help`, §4.1).
 //   helpText    the help, made from the table: the three sections, or one command when named.
+//   printHelp   that help, or under `--json` the same rows as one document (C.6).
+//   page        the layout of one page of help, the command's or a query's.
 import { optionsOf } from './args.mjs'
 import { wrap, WIDTH } from './text.mjs'
+import { printJson } from './json.mjs'
+import { SCHEMA_VERSION, EXIT } from './schema.mjs'
 
 export const GROUPS = Object.freeze(['Capture', 'Data', 'Maintenance'])
 const via = (file, fn) => async (argv, c) => (await import(file))[fn](argv, c)
@@ -21,13 +26,14 @@ const HARNESS = '[<harness>...]'
 const JSON_OPT = ['--json', 'print one JSON document instead of text, and nothing on stderr']
 const YES = ['--yes', 'answer the confirmation, for a run that is not in a terminal']
 const DRY = ['--dry-run', 'print what it would do and write nothing']
+const queriesDoc = via('./query.mjs', 'queriesDoc') // imported when asked: the query core must not load for `trocar on`
 
-async function help(argv, c) {
-  const [topic, ...rest] = argv
+// A refusal is said on stderr; under --json main.mjs makes it the `usage` document.
+async function help(_argv, c) {
+  const [topic, ...rest] = c.args.positionals
   if (rest.length) { c.io.err('trocar help: one command at a time. Run: trocar help'); return 2 }
   if (topic !== undefined && !commandNamed(topic)) { c.io.err(`trocar help: unknown command '${topic}'. Run: trocar help`); return 2 }
-  c.io.out(helpText(topic))
-  return 0
+  return printHelp(c, topic)
 }
 
 export const COMMANDS = Object.freeze([
@@ -69,10 +75,10 @@ export const COMMANDS = Object.freeze([
     exits: [[0, 'nothing is wrong'], [1, 'something is wrong, and it says what'], [2, 'a usage error, or an unknown agent'], [3, 'it could not judge; it says what it could not read']] },
 
   { name: 'query',
-    group: 'Data', mutates: false, openOptions: true, run: via('./query.mjs', 'run'),
-    usage: 'trocar query <name> [--<param> <value>...]',
-    summary: 'The one way to read what was captured. Each query has a name and its own parameters; the board asks the same queries over HTTP. Run it with no name to list them.',
-    options: [],
+    group: 'Data', mutates: false, openOptions: true, run: via('./query.mjs', 'run'), topics: via('./query.mjs', 'topicHelp'),
+    usage: 'trocar query <name> [--<param> <value>...] [--json]',
+    summary: 'The one way to read what was captured. Each query has a name and its own parameters; the board asks the same queries over HTTP. Run it with no name to list them; trocar query <name> --help describes one.',
+    options: [['--json', 'errors come as a JSON document too; the answer always is one']],
     exits: [[0, 'the answer is on stdout'], [1, 'no document could be produced'], [2, 'nothing ran: the query name or one of its parameters is not known']] },
   { name: 'classes',
     group: 'Data', mutates: (args) => ['set', 'add', 'rm', 'reset'].includes(args.positionals[0]), run: via('./classes.mjs', 'run'),
@@ -121,9 +127,9 @@ export const COMMANDS = Object.freeze([
   // `help` is the trailer of the first screen, not an entry of a section (§2).
   { name: 'help',
     group: null, mutates: false, run: help,
-    usage: 'trocar help [<command>]',
-    summary: 'The list of commands, or one command: its usage, what it does, its options and its exit codes. `trocar <command> --help` prints the same page.',
-    options: [],
+    usage: 'trocar help [<command>] [--json]',
+    summary: 'The list of commands, or one command: its usage, what it does, its options and its exit codes. `trocar <command> --help` prints the same page. With --json it is the same thing as one document.',
+    options: [JSON_OPT],
     exits: [[0, 'printed'], [2, 'there is no such command']] },
 ])
 
@@ -161,20 +167,43 @@ const block = (rows) => {
   })
 }
 
+/** One page of help (§5.4): the usage, what it does, the rows under `title`, and the exit codes. */
+export function page({ usage, summary, title, rows, exits }) {
+  const out = [...usage.split('\n').flatMap((l) => wrap(l, WIDTH, '  ')), '', ...wrap(summary)]
+  if (rows.length) out.push('', title, ...block(rows))
+  out.push('', 'Exit codes', ...block(exits.map(([c, what]) => [String(c), what])))
+  return out.join('\n')
+}
+
 /** The help (§2, §5.4): the three sections, or `helpText('on')` for one command. A name that is no command throws. */
 export function helpText(name) {
   if (name !== undefined) {
     const cmd = commandNamed(name)
     if (!cmd) throw new RangeError(`no command named ${name}`)
-    const out = [...cmd.usage.split('\n').flatMap((l) => wrap(l, WIDTH, '  ')), '', ...wrap(cmd.summary)]
-    const options = [...optionsOf(cmd).values()]
-    if (options.length) out.push('', 'Options', ...block(options.map((o) => [o.value ? `${o.name} <${o.value}>` : o.name, o.help])))
-    out.push('', 'Exit codes', ...block(cmd.exits.map(([c, what]) => [String(c), what])))
-    return out.join('\n')
+    const rows = [...optionsOf(cmd).values()].map((o) => [o.value ? `${o.name} <${o.value}>` : o.name, o.help])
+    return page({ usage: cmd.usage, summary: cmd.summary, title: 'Options', rows, exits: cmd.exits })
   }
   const out = [...wrap('trocar - see every byte your agents really send to a model: captured as it is, replayed and taken apart'), '']
   const lines = listing()
   for (const group of GROUPS) out.push(group, ...lines(group), '')
-  out.push('trocar help [<command>]   trocar <command> --help   trocar --version')
+  out.push(`${usageLine(commandNamed('help'))}   trocar <command> --help   trocar --version`)
   return out.join('\n')
+}
+
+/** A row of the table as C.6 gives it: every data field as it stands, so a new one arrives with no change here, and no code. */
+const rowDoc = (cmd) => ({
+  ...Object.fromEntries(Object.entries(cmd).filter(([, value]) => typeof value !== 'function')),
+  options: [...optionsOf(cmd).values()],
+  exits: cmd.exits.map(([code, means]) => ({ code, means })),
+  mutates: typeof cmd.mutates === 'function' ? 'depends' : cmd.mutates,
+})
+
+/** The help on stdout (§5.4), one command's when `topic` names one; under `json` the C.6 document. → the exit code. */
+export async function printHelp({ io, json }, topic) {
+  if (!json) { io.out(helpText(topic)); return EXIT.ok }
+  const described = topic === undefined
+    ? { commands: COMMANDS.filter((c) => !c.hidden).map(rowDoc), queries: await queriesDoc() }
+    : { commands: [rowDoc(commandNamed(topic))] }
+  printJson(io, { schema: SCHEMA_VERSION, command: 'help', ok: true, ...described })
+  return EXIT.ok
 }
