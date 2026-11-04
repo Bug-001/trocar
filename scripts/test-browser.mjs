@@ -21,7 +21,7 @@ try {
     const build = ['run', 'build:board', '--', '--mode', 'desk-next', '--outDir', out, '--emptyOutDir', '--logLevel', 'warn'], npm = process.env.npm_execpath
     const b = npm ? spawnSync(process.execPath, [npm, ...build], { stdio: 'inherit' }) : spawnSync('npm', build, { stdio: 'inherit', shell: process.platform === 'win32' })
     if (b.status !== 0) throw new Error('the desk-next build failed')
-    env.TROCAR_BOARD_DIR = out
+    env.TROCAR_BOARD_DIR = out; env.TROCAR_DESK_NEXT = '1' // the test files read the mode (harness.mjs DESK_NEXT)
   }
   const r = spawnSync(process.execPath, ['--test', '--test-concurrency=1', ...preloads, ...(files.length ? files : suite)], { stdio: 'inherit', env })
   status = r.status ?? 1
