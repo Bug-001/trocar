@@ -149,16 +149,6 @@ test('V3: a drag-select inside a row opens nothing, and the selection outlives a
   expect(p.gos).toEqual([])
 })
 
-// 1.8 §标题规则 2: a title not read yet is drawn muted as not read yet, never 「未命名会话」; the refill's answer puts the title in
-test('a pending title reads as not read yet with its own hover, and the next answer that carries the title replaces it', async () => {
-  lists = [() => [sess('a', 5, 1, { title: null, title_source: 'pending' })], () => [sess('a', 5, 1)]]
-  const p = await mount()
-  const cell = () => p.row(key(sess('a', 0, 0)))!.querySelector('.lt')!
-  expect([cell().className, cell().textContent, cell().getAttribute('title')]).toEqual(['lt pend', W.TITLE_PENDING, W.titlePending('a')])
-  await poll()
-  expect([cell().className, cell().textContent, cell().getAttribute('title')]).toEqual(['lt', 'title a', W.titleFromWire('a')])
-})
-
 test('V3b: while a selection holds the rows, the head\'s read-at time stays with them; once it is gone, the next poll moves it', async () => {
   lists = [(n) => [sess('a', 5 + n, 1)]]
   const p = await mount()

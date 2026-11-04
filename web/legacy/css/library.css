@@ -47,7 +47,6 @@
 .lhn{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .lmain{min-width:0;display:flex;flex-direction:column;gap:2px;}
 .lt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink);font-size:var(--fs-body);font-weight:var(--fw-strong);}
-.lt.pend{color:var(--ink-3);}
 /* the marks never wrap (a row has one line or two): they end in … and the line's title holds the full text */
 .lsub{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-3);font-size:var(--fs-cap);}
 .lsub:empty{display:none;}

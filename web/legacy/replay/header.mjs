@@ -22,7 +22,7 @@ function spanOf(lanes) {
 }
 
 // ── the title: the fallback chain and where each title came from (1.2) ───────────────────────────────────────────────
-// meta.title (its source = meta.title_source) → 「未命名会话」 + the first step's time. The tip names the source and carries
+// meta.title (its source = meta.title_source) → 「没有采到提问」 + the first step's time. The tip names the source and carries
 // the session id; a title is never invented from the id.
 function titleHtml(meta, lanes) {
   const id = (meta && meta.session_id) || ''

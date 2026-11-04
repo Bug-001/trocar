@@ -32,7 +32,6 @@
 .ovitem { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: var(--r-2); text-decoration: none; color: var(--ink); min-width: 0; }
 .ovitem:hover { background: var(--hover); }
 .ovitem .ovtx { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-body); }
-.ovitem .ovtx.pend { color: var(--ink-3); }
 .ovitem .ovnm { flex: none; font-size: var(--fs-body); }
 .ovitem .ovnum, .ovitem .ovwhen { flex: none; font-size: var(--fs-cap); color: var(--ink-2); }
 .ovitem .go { flex: none; color: var(--ink-2); }
