@@ -430,6 +430,7 @@ main.forbidden p:last-child{margin:0;}
 .lhn{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .lmain{min-width:0;display:flex;flex-direction:column;gap:2px;}
 .lt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink);font-size:var(--fs-body);font-weight:var(--fw-strong);}
+.lt.pend{color:var(--ink-3);}
 /* the marks never wrap (a row has one line or two): they end in … and the line's title holds the full text */
 .lsub{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-3);font-size:var(--fs-cap);}
 .lsub:empty{display:none;}
@@ -497,6 +498,7 @@ main.forbidden p:last-child{margin:0;}
 .ovitem { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: var(--r-2); text-decoration: none; color: var(--ink); min-width: 0; }
 .ovitem:hover { background: var(--hover); }
 .ovitem .ovtx { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-body); }
+.ovitem .ovtx.pend { color: var(--ink-3); }
 .ovitem .ovnm { flex: none; font-size: var(--fs-body); }
 .ovitem .ovnum, .ovitem .ovwhen { flex: none; font-size: var(--fs-cap); color: var(--ink-2); }
 .ovitem .go { flex: none; color: var(--ink-2); }
@@ -1093,7 +1095,9 @@ a.ovtr:hover { background: var(--hover); }
 .kd-text{white-space:pre-wrap;overflow-wrap:anywhere;}
 .kd-code,.kd-shell,.kd-json,.kd-diff,.kd-kv dt,.kd-opaque,.sec-tag{font-family:var(--mono);font-size:var(--fs-body);line-height:1.6;}
 .kd-code,.kd-diff{white-space:pre;overflow-x:auto;max-width:100%;overflow-wrap:normal;padding:var(--s2);background:var(--sunk);border-radius:var(--r-1);}
-.kd-esc{color:var(--ink-3);} /* code's ESC byte, named in words (kinds.mjs) */
+/* code's ESC byte (kinds.mjs): the byte stays in the text for copy and is hidden; the box and the word say what it is, not a colour */
+.kd-esc{color:transparent;}
+.kd-esc::before{content:'ESC';color:var(--ink-3);border:1px solid var(--rule-2);border-radius:var(--r-1);padding:0 2px;}
 .kd-title{font-family:var(--sans);font-size:var(--fs-cap);font-weight:var(--fw-strong);color:var(--ink-2);margin-bottom:var(--s1);white-space:normal;}
 .gut{display:inline-block;min-width:3ch;padding-right:var(--s2);text-align:right;color:var(--ink-3);user-select:none;-webkit-user-select:none;}
 .kd-shell{white-space:pre-wrap;overflow-wrap:anywhere;}
@@ -1410,7 +1414,8 @@ a.trow.hi{background:var(--hover);}
 .thost.drawer .tbody{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) auto;}
 .tlist{min-width:0;overflow:auto;padding-bottom:40px;}
 /* the endpoint takes the width the fixed columns leave: no empty lined track at the end of a wide row */
-.hhead,.hrow{display:grid;grid-template-columns:140px minmax(200px,1fr) 84px 76px 76px minmax(96px,130px);column-gap:10px;align-items:center;}
+/* the start padding holds the selected row's 2px accent (inset shadow) off the time text; the head keeps the same start */
+.hhead,.hrow{display:grid;grid-template-columns:140px minmax(200px,1fr) 84px 76px 76px minmax(96px,130px);column-gap:10px;align-items:center;padding-inline-start:var(--s2);}
 .hhead{min-height:28px;border-bottom:1px solid var(--rule);}
 .hrow{min-height:34px;font-size:var(--fs-body);color:var(--ink);text-decoration:none;border-bottom:1px solid var(--rule);}
 /* the row is a div: its main link spans the five cells (display:contents keeps them grid items), the marks are siblings */
@@ -1466,11 +1471,13 @@ a.rmark{color:var(--action);}
 /* the small screens: the class folds under the endpoint; 收回 moves into the detail only (1.10 §窄屏) */
 @media (max-width:899px){
   .thost{padding:12px 14px 0;}
-  /* three tracks that shrink with the screen: time · endpoint over class · marks; nothing sticks out of the row */
+  /* three tracks that shrink with the screen: line 1 time · endpoint · sent, line 2 class · marks. Sent is the last track, so it
+     lines up under its header in every row; the marks sit under it and never take width from the endpoint (1.10 端点任何宽度都不隐藏) */
   .hhead,.hrow{grid-template-columns:minmax(0,132px) minmax(0,1fr) auto;}
-  .hhead .cell.num,.hrow .cell.num{display:none;}
+  .hhead .cell.marks,.hrow .cell.marks{grid-column:3;grid-row:2;justify-content:flex-end;}
+  .hhead .cell.recv,.hrow .cell.recv{display:none;}
   .hhead .cell.class{grid-column:2;grid-row:2;}
   /* the two lines fill the row's fixed-height slot (1.10 行高固定; the slot is the list's .vrow) */
-  .hrow{min-height:0;height:100%;padding:0;grid-template-rows:auto auto;align-content:center;line-height:18px;}
+  .hrow{min-height:0;height:100%;grid-template-rows:auto auto;align-content:center;line-height:18px;}
   .hrow .cell.class{grid-column:2;grid-row:2;line-height:14px;}
 }
