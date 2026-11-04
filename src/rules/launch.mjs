@@ -7,7 +7,7 @@ import path from 'node:path'
 import { LIMITS, SKIP_WHY } from './closed.mjs'
 import { checkHeaderSet, headerChanges } from './headers.mjs'
 import { normalizeRule } from './validate.mjs'
-import { ANSWER_BYTES, encodeFrame, frameReader, HEAD_BYTES, NO_RULE, readProgress } from './slot.mjs'
+import { ANSWER_BYTES, encodeFrame, frameReader, HEAD_BYTES, NO_RULE, readProgress, segmentHolds } from './slot.mjs'
 
 const MIB = 1024 * 1024
 const GIB = 1024 * MIB
@@ -15,8 +15,7 @@ const APP = new URL('../..', import.meta.url) // no trailing slash: test/ci/reac
 const RUNNER = new URL('./runner.mjs', import.meta.url)
 // The watchdog gets there first. This one is for a process frozen whole, watchdog included.
 const FROZEN_MS = 100
-// runner.mjs exits with this before it loads anything. After the load the same number is a script's process.exit(78).
-const SELF_CHECK_FAILED = 78
+const VERDICTS = Object.freeze(['forward', 'drop', 'reply', 'hold'])
 // V8's, so `allowed` does not list it. On the command line and not from v8.setFlagsFromString: flipped in a running process, about one start in three hundred under load died of
 // SIGBUS on entering a regex's code. From the command line none in the same run did.
 const REGEX_FLAG = '--no-regexp-tier-up'
@@ -29,19 +28,19 @@ export function runnerArgs({ script, slot, app = APP, capBytes, allowed = proces
   if (!allowed.has('--permission')) return null
   const real = fs.realpathSync, target = script ? real(script) : null, slotPath = real(slot)
   const flags = [
-    '--permission', '--allow-worker', ...(target ? ['--allow-net'] : []),
+    '--permission', '--allow-worker', ...(target ? ['--allow-net', '--frozen-intrinsics'] : []),
     `--allow-fs-read=${path.join(real(app), '*')}`, ...(target ? [`--allow-fs-read=${path.join(path.dirname(target), '*')}`] : []),
     `--allow-fs-read=${slotPath}`, `--allow-fs-write=${slotPath}`, `--max-old-space-size=${Math.ceil(capBytes / MIB)}`,
   ]
-  return [REGEX_FLAG, ...flags.filter((flag) => allowed.has(flag.split('=')[0])), real(RUNNER), slotPath, ...(target ? [target] : [])]
+  return [REGEX_FLAG, ...flags.filter((flag) => allowed.has(flag.split('=')[0])), real(RUNNER), slotPath, String(process.pid), ...(target ? [target] : [])]
 }
 
 // One process and its one question at a time. An answer nobody asked for is the process breaking the rule, so it goes. `ask` resolves to `{frame}` or to `{died, code}`:
 // a process says what it answers, never how it ended.
 function talkTo(args, slot) {
   const { XDG_RUNTIME_DIR } = process.env
-  const child = spawn(process.execPath, args, { stdio: ['ignore', 'ignore', 'ignore', 'pipe'], env: XDG_RUNTIME_DIR ? { XDG_RUNTIME_DIR } : {} })
-  const pipe = child.stdio[3]
+  const child = spawn(process.execPath, args, { stdio: ['pipe', 'ignore', 'ignore', 'pipe'], env: XDG_RUNTIME_DIR ? { XDG_RUNTIME_DIR } : {} })
+  const [pipeIn, , , pipe] = child.stdio ?? [] // none at all when no fd was left to make them: 'error' below says so
   let asked = null, killed = null
   const kill = (why) => {
     killed ??= why
@@ -55,14 +54,14 @@ function talkTo(args, slot) {
     resolve(value)
   }
   pipe?.on('data', frameReader((frame) => (asked && frame.id === asked.id ? settle({ frame }) : kill('bad-result')), () => kill('bad-result'), ANSWER_BYTES))
-  pipe?.on('error', () => {}) // the write to a dead process: 'close' below says what happened
+  for (const end of [pipeIn, pipe]) end?.on('error', () => {}) // the write to a dead process: 'close' below says what happened
   const link = {
     dead: false,
     get killed() { return killed }, // set before `dead`: until 'close' the process is going, and hears nothing more
     kill,
     ask: (message, ms) => new Promise((resolve) => {
       asked = { id: message.id, resolve, timer: setTimeout(() => kill('timeout'), ms) }
-      pipe.write(encodeFrame(message))
+      pipeIn?.write(encodeFrame(message))
     }),
   }
   link.gone = new Promise((resolve) => {
@@ -94,18 +93,22 @@ export function openOneShot({ script, rules, maxTaskMs = 2000, tmp = os.tmpdir()
     if (frame?.ready) return null
     runner.kill('load-failed')
     await runner.gone
-    return { died: code === SELF_CHECK_FAILED ? 'runner-down' : 'load-failed', reason: frame?.reason ?? died }
+    return { died: !frame && !fs.fstatSync(slot).size ? 'runner-down' : 'load-failed', reason: frame?.reason ?? died } // an empty slot: this Node never reached the rule process's code
   }
 
   const slice = ({ at, bytes }) => {
+    if (at < HEAD_BYTES || bytes > LIMITS.bodyBytes) throw new RangeError('not a place in the slot')
     const out = Buffer.alloc(bytes)
     if (fs.readSync(slot, out, 0, bytes, at) !== bytes) throw new RangeError('short slot')
     return out
   }
 
   // A script can write on the channel too, so what makes an answer safe to use is checked here, not only where the answer was made.
-  function trusted({ why, skipped = [], headers }, unit) {
-    const inClosedSet = [{ why }, ...skipped].every((skip) => skip.why === undefined || SKIP_WHY.includes(skip.why))
+  function trusted({ why, skipped = [], hits = [], would = [], rule_ms: ms = {}, console: said = '', verdict, headers }, unit) {
+    const shaped = [skipped, hits, would].every(Array.isArray) && Object(ms) === ms && typeof said === 'string' && (why !== undefined || VERDICTS.includes(verdict))
+    if (!shaped) return false
+    const closed = (reason) => SKIP_WHY.includes(reason)
+    const inClosedSet = (why === undefined || closed(why)) && skipped.every((skip) => closed(skip?.why))
     const changes = headers === null || headers === undefined ? [] : headerChanges(unit.headers ?? [], headers)
     return inClosedSet && checkHeaderSet(changes, { before: unit.headers ?? [] }).length === 0
   }
@@ -121,7 +124,9 @@ export function openOneShot({ script, rules, maxTaskMs = 2000, tmp = os.tmpdir()
     try {
       if ('died' in answer || !trusted(answer, unit)) throw new RangeError('an answer the rules could not have given')
       const reply = answer.reply_at ? effectAt(answer.reply_at, 'reply') : null, inject = (answer.inject_at ?? []).map((at) => effectAt(at, 'inject'))
-      return { ...answer, reply, inject, bytes: body ? slice(body) : null, edits: edits ? JSON.parse(`[${slice(edits)}]`) : [] }
+      const segment = edits ? slice(edits) : Buffer.alloc(0)
+      if (!segmentHolds(segment)) throw new RangeError('not an edits segment')
+      return { ...answer, reply, inject, bytes: body ? slice(body) : null, edits: JSON.parse(`[${segment}]`) }
     } catch {
       runner.kill('bad-result')
       return { died: 'bad-result' }

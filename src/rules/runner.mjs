@@ -1,13 +1,13 @@
-// runner.mjs (src/rules) — a rule process (RFC 5.1 §规则进程): the only place a rule's regex, JSON edit or script runs. `node --permission … runner.mjs <slot> [<script>]`, see
-// launch.mjs. Channel on fd 3. First frame `{load: {rules, max_delay_ms}}` → `{ready: true}`; each task `{id, unit, body_bytes}` with the body in the slot → one answer.
+// runner.mjs (src/rules) — a rule process (RFC 5.1 §规则进程): the only place a rule's regex, JSON edit or script runs. `node --permission … runner.mjs <slot> <parent pid> [<script>]`, see
+// launch.mjs. Frames come in on stdin and go out on fd 3. First frame `{load: {rules, max_delay_ms}}` → `{ready: true}`; each task `{id, unit, body_bytes}` with the body in the slot → one answer.
 const { fileURLToPath } = await import('node:url')
 const capMiB = process.execArgv.map((arg) => /^--max-old-space-size=(\d+)$/.exec(arg)?.[1]).find(Boolean)
 const { permission } = process
 // A Node that would quietly give more than the flags asked for gets no rules at all.
 if (!permission || permission.has('child') || permission.has('fs.write', fileURLToPath(new URL('../..', import.meta.url))) || !capMiB) process.exit(78)
 
-const [{ Buffer }, { once }, fs, net, { pathToFileURL }, util, threads, modules, os, { full, RuleFault }, { applyRules }, { byteBudget }, { LIMITS }, { compileRules }, slots] = await Promise.all([
-  import('node:buffer'), import('node:events'), import('node:fs'), import('node:net'), import('node:url'), import('node:util'), import('node:worker_threads'), import('node:module'), import('node:os'),
+const [{ Buffer }, { once }, fs, { pathToFileURL }, util, threads, modules, { full, RuleFault }, { applyRules }, { byteBudget }, { LIMITS }, { compileRules }, slots] = await Promise.all([
+  import('node:buffer'), import('node:events'), import('node:fs'), import('node:url'), import('node:util'), import('node:worker_threads'), import('node:module'),
   import('./actions.mjs'), import('./apply.mjs'), import('./budget.mjs'), import('./closed.mjs'), import('./compile.mjs'), import('./slot.mjs'),
 ])
 const { ANSWER_BYTES, editsSegment, encodeFrame, frameReader, HEAD_BYTES, NO_RULE, writeProgress } = slots
@@ -18,7 +18,7 @@ const CONSOLE_BYTES = 16 * 1024
 const LOAD_REASON_CHARS = 1024
 const SCRIPT_RESULT_KEYS = new Set(['body', 'headers'])
 
-const [slotPath, scriptPath] = process.argv.slice(2)
+const [slotPath, parentPid, scriptPath] = process.argv.slice(2)
 const capBytes = Number(capMiB) * MIB
 const slot = fs.openSync(slotPath, 'r+')
 
@@ -33,18 +33,20 @@ const setClock = (at) => {
 }
 const arm = (ms) => setClock(process.hrtime.bigint() + BigInt(Math.max(0, Math.ceil(ms))) * NS_PER_MS)
 
-const watchdog = new threads.Worker(new URL('./watchdog.mjs', import.meta.url), { workerData: { shared, fd: slot, capBytes, ppid: process.ppid } })
+const watchdog = new threads.Worker(new URL('./watchdog.mjs', import.meta.url), { workerData: { shared, fd: slot, capBytes, ppid: Number(parentPid) } })
 watchdog.once('exit', () => process.exit(1)) // no rule runs unwatched
 await once(watchdog, 'online')
 
 // The permission model has no say over signals, and a thread has a `process` of its own. Only the watchdog needs either and it is up, so the door closes behind it, before any rule or
 // script loads (5.1 §隔离). syncBuiltinESMExports carries the change to what `import` hands out. A hooks thread is a thread too, and renicing the daemon is a signal by another name.
-const refused = (what) => function refuse() { throw new Error(`a rule process has no ${what}`) }
+// sqlite and trace events open their files below the permission model, so they go with them.
 for (const name of ['kill', '_kill', '_debugProcess', '_debugEnd']) delete process[name]
-threads.default.Worker = refused('threads')
-modules.default.register = refused('threads')
-os.default.setPriority = refused('say over other processes')
+const SEALED = [['node:worker_threads', 'Worker'], ['node:module', 'register'], ['node:os', 'setPriority'], ['node:sqlite', 'DatabaseSync'], ['node:trace_events', 'createTracing']]
+for (const [id, name] of SEALED) process.getBuiltinModule(id)[name] = function refused() { throw new Error(`a rule process has no ${name}`) }
 modules.syncBuiltinESMExports()
+// The flag freezes what the language brings. Buffer is Node's, and this code reports through it.
+Object.freeze(Buffer.prototype)
+Object.freeze(Buffer)
 
 // RSS misses pages macOS compressed and Windows trimmed. A stuck main thread stops this one, but then what it allocates is in the RSS.
 setInterval(() => {
@@ -58,7 +60,7 @@ setInterval(() => {
 
 let printed = ''
 const print = (...args) => { printed = `${printed}${util.format(...args)}\n`.slice(0, CONSOLE_BYTES) }
-for (const name of ['log', 'info', 'warn', 'error', 'debug']) console[name] = print
+globalThis.console = { ...console, log: print, info: print, warn: print, error: print, debug: print }
 
 // Counted as the frame carries it: 16 KiB of control characters is 96 KiB of escapes.
 function consoleText() {
@@ -68,6 +70,7 @@ function consoleText() {
 }
 
 let progress = { task: 0, rule: NO_RULE, slowest: NO_RULE, done: false }
+writeProgress(slot, progress) // the parent's sign that this Node got as far as here
 let spent = new Map(), since = 0
 
 function enter(rule) {
@@ -106,7 +109,8 @@ const asBuffer = (bytes) => Buffer.from(bytes.buffer, bytes.byteOffset, bytes.by
 function scriptResult(result) {
   if (result === null || result === undefined || typeof result === 'string') return result
   if (isBytes(result)) return asBuffer(result)
-  if (typeof result !== 'object' || Object.keys(result).some((key) => !SCRIPT_RESULT_KEYS.has(key))) throw new RuleFault('bad-result')
+  const plain = typeof result === 'object' && [Object.prototype, null].includes(Object.getPrototypeOf(result))
+  if (!plain || Object.keys(result).some((key) => !SCRIPT_RESULT_KEYS.has(key))) throw new RuleFault('bad-result') // an ArrayBuffer or a Map is not a change that came to nothing
   const { body, headers } = result
   return {
     body: isBytes(body) ? asBuffer(body) : body,
@@ -204,13 +208,15 @@ async function runTask(task) {
   return frame
 }
 
-const channel = new net.Socket({ fd: 3, readable: true, writable: true })
+// Not a net.Socket on a file descriptor: a newer permission model counts that as network, and the built-in process has none. Not fs streams either: a read parked on the thread pool
+// holds process.exit back.
+const send = (frame) => { for (let at = 0; at < frame.length;) at += fs.writeSync(3, frame, at) }
 const quit = () => process.exit(0)
 let last = Promise.resolve()
-channel.on('data', frameReader((message) => {
+process.stdin.on('data', frameReader((message) => {
   last = last.then(async () => {
-    channel.write(message.load ? encodeFrame(await load(message.load)) : await runTask(message))
+    send(message.load ? encodeFrame(await load(message.load)) : await runTask(message))
   })
 }, quit))
-channel.once('close', quit)
-channel.once('error', quit)
+process.stdin.once('close', quit)
+process.stdin.once('error', quit)

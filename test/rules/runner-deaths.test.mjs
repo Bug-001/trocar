@@ -48,6 +48,7 @@ const ROWS = [
   { name: 'a header over the growth limit', why: 'rule-error', body: 'return { headers: { "x-a": "v".repeat(16384) } }' },
   { name: 'a header trocar owns', why: 'rule-error', body: 'return { headers: { "Content-Length": "1" } }' },
   { name: 'a body past 64 MiB', why: 'too-big', body: 'return "x".repeat(65 * 1024 * 1024)' },
+  ...['new ArrayBuffer(4)', 'new Map([["body", "x"]])', 'new Date()', '[]'].map((value) => ({ name: `a result that says nothing: ${value}`, why: 'bad-result', body: `return ${value}` })),
   { name: 'a cycle', why: 'bad-result', body: 'const o = {}; o.self = o; return o' },
   { name: 'a cycle in the body key', why: 'bad-result', body: 'const o = {}; o.body = o; return o' },
   { name: 'memory past the limit', why: 'memory', body: 'const keep = []; for (;;) keep.push(Buffer.alloc(8 << 20, 1))', capBytes: 192 * MIB, maxTaskMs: 30000 },
@@ -199,11 +200,11 @@ test('the watchdog kills a task at its limit by itself, and the slot says why an
   const dir = tmpDir('trocar-watchdog-'), script = path.join(dir, 'script.mjs'), slot = path.join(dir, 'slot');
   fs.writeFileSync(script, 'export default () => { for (;;); }');
   fs.writeFileSync(slot, '');
-  const child = spawn(process.execPath, runnerArgs({ script, slot, capBytes: memoryCap() }), { stdio: ['ignore', 'ignore', 'ignore', 'pipe'], env: {} });
+  const child = spawn(process.execPath, runnerArgs({ script, slot, capBytes: memoryCap() }), { stdio: ['pipe', 'ignore', 'ignore', 'pipe'], env: {} });
   t.after(() => child.kill('SIGKILL'));
   child.stdio[3].on('error', () => {});
-  child.stdio[3].write(encodeFrame({ load: { rules: [{ name: 's', on_error: 'forward', match: { harness: 'any' }, do: [{ script }] }], max_delay_ms: 200 } }));
-  child.stdio[3].once('data', () => child.stdio[3].write(encodeFrame({ id: 7, unit: unit(), body_bytes: null })));
+  child.stdin.write(encodeFrame({ load: { rules: [{ name: 's', on_error: 'forward', match: { harness: 'any' }, do: [{ script }] }], max_delay_ms: 200 } }));
+  child.stdio[3].once('data', () => child.stdin.write(encodeFrame({ id: 7, unit: unit(), body_bytes: null })));
   const signal = await new Promise((resolve) => { child.once('close', (_, killedBy) => resolve(killedBy)); });
   const fd = fs.openSync(slot, 'r');
   t.after(() => fs.closeSync(fd));
@@ -245,3 +246,25 @@ for (const [name, source] of [
     assert.ok(await until(() => isGone(pid), 2000), 'the rule process outlived its parent');
   });
 }
+
+test('a script\'s process.exit(78) at the top is a failed load, not a Node that fails the check', async () => {
+  const dir = tmpDir('trocar-78-'), script = path.join(dir, 'script.mjs');
+  fs.writeFileSync(script, 'process.exit(78)');
+  const runner = openOneShot({ script, rules: [{ name: 'script', on_error: 'forward', match: { harness: 'any' }, do: [{ script }] }] });
+  try { assert.equal((await runner.run(unit())).died, 'load-failed'); } finally { await runner.close(); }
+});
+
+test('40: no file descriptor left for a rule process is a failed load, and the caller lives', { skip: WIN && 'no fd limit to reach this way' }, async () => {
+  const held = [];
+  const dir = tmpDir('trocar-fds-'), file = path.join(dir, 'x');
+  fs.writeFileSync(file, '');
+  const runner = openOneShot({ rules: [{ name: 'r', on_error: 'forward', match: { harness: 'any' }, do: [{ replace: 'a', with: 'b' }] }] });
+  try {
+    try { for (;;) held.push(fs.openSync(file, 'r')); } catch (e) { assert.equal(e.code, 'EMFILE'); }
+    const answer = await runner.run(unit()).catch((e) => ({ threw: e.code ?? e.message }));
+    assert.ok(answer.died || answer.threw, JSON.stringify(answer));
+  } finally {
+    for (const fd of held) fs.closeSync(fd);
+    await runner.close();
+  }
+});

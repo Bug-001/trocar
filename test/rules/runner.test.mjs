@@ -42,17 +42,18 @@ test('57: the flags a Node knows, and nothing else; no --permission means no pro
   fs.writeFileSync(script, '');
   fs.symlinkSync(dir, link);
   const known = (flags) => new Set(flags);
-  const all = ['--permission', '--allow-worker', '--allow-net', '--allow-fs-read', '--allow-fs-write', '--max-old-space-size'];
+  const all = ['--permission', '--allow-worker', '--allow-net', '--frozen-intrinsics', '--allow-fs-read', '--allow-fs-write', '--max-old-space-size'];
   const args = (more) => runnerArgs({ slot, capBytes: 512 * MIB, allowed: known(all), ...more });
 
   assert.equal(args({ allowed: known(all.filter((f) => f !== '--permission')) }), null);
   assert.ok(args({ script }).includes('--allow-net'));
+  assert.ok(args({ script }).includes('--frozen-intrinsics'), 'what a script does to the intrinsics must not make a report false');
   assert.ok(!args({}).includes('--allow-net'), 'the built-in process does not reach the network');
   assert.ok(!args({ script, allowed: known(all.filter((f) => f !== '--allow-net')) }).includes('--allow-net'));
   assert.ok(args({}).includes('--max-old-space-size=512'));
   assert.ok(args({}).includes('--no-regexp-tier-up'), 'set before Node compiles a regex: a running process that flips it crashes now and then');
   assert.ok(args({ script: path.join(link, 'a.mjs'), slot: path.join(link, 'slot') }).every((a) => !a.includes(link)), 'a symlinked path in the allow list stops the process starting');
-  assert.deepEqual(args({ script }).slice(-3).slice(1), [slot, script]);
+  assert.deepEqual(args({ script }).slice(-3), [slot, String(process.pid), script], 'the parent is named, not read from process.ppid: it may be gone by then');
 });
 
 test('57: the rule process\'s memory limit is 1 GiB or a sixteenth of the machine', () => {
@@ -115,7 +116,7 @@ for (const [name, flags] of [
     const dir = tmpDir('trocar-selfcheck-'), marker = path.join(dir, 'loaded'), slot = path.join(dir, 'slot');
     fs.writeFileSync(slot, '');
     const script = scriptFile(`import fs from 'node:fs'\nfs.writeFileSync(${JSON.stringify(marker)}, 'x')\nexport default () => {}`);
-    const { status } = spawnSync(process.execPath, [...flags, RUNNER, slot, script], { stdio: ['ignore', 'ignore', 'ignore', 'pipe'] });
+    const { status } = spawnSync(process.execPath, [...flags, RUNNER, slot, String(process.pid), script], { stdio: ['ignore', 'ignore', 'ignore', 'pipe'] });
     assert.equal(status, 78);
     assert.ok(!fs.existsSync(marker));
   });
@@ -270,20 +271,6 @@ test('60: an edits segment that does not parse is bad-result before it reaches t
   assert.deepEqual(JSON.parse(`[${editsSegment([{ at: 1, del: 2, ins: 'x\n' }, { at: 9, del: 0, ins: '"' }])}]`), [{ at: 1, del: 2, ins: 'x\n' }, { at: 9, del: 0, ins: '"' }]);
   assert.throws(() => editsSegment([undefined, undefined]), { why: 'bad-result' });
 });
-
-// A script that swaps JSON.stringify reaches the rule process's own serializing with no test-only door. Its answer is a why, not a death: the process caught it itself.
-for (const [name, swap, why] of [
-  ['60: an edits segment that does not parse never reaches the slot', `if (v?.del !== undefined) return '{'`, 'bad-result'],
-  ['an answer that cannot be serialized is rule-error', `if (v?.console !== undefined) throw new TypeError('no')`, 'rule-error'],
-]) {
-  test(name, () => withRunner(`
-    const real = JSON.stringify
-    JSON.stringify = (v, ...rest) => { ${swap}; return real(v, ...rest) }
-    export default () => 'new'`, async (runner) => {
-    const answer = await runner.run(unitOf('{}'));
-    assert.deepEqual([answer.died, answer.why], [undefined, why]);
-  }));
-}
 
 test('a load that fails says why', async () => {
   const script = scriptFile('throw new Error("broken at load");');

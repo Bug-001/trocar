@@ -8,6 +8,7 @@ import { tmpDir } from '../helpers/tmp.mjs';
 import { openOneShot } from '../../src/rules/launch.mjs';
 
 const WIN = process.platform === 'win32';
+const OUTSIDE = tmpDir('trocar-outside-');
 const SIGNAL = WIN ? 0 : 'SIGUSR2';
 const say = JSON.stringify(SIGNAL);
 const THREAD = `require('node:process').kill(require('node:process').ppid, ${say})`;
@@ -32,6 +33,9 @@ const ROWS = {
   'renicing the parent': "(await import('node:os')).setPriority(process.ppid, 19)",
   'vm in this context': `(await import('node:vm')).runInThisContext('process.kill')(process.ppid, ${say})`,
   'a cluster worker': "(await import('node:cluster')).default.fork()",
+  'a database outside the slot': `const { DatabaseSync } = await import('node:sqlite'); new DatabaseSync(${JSON.stringify(path.join(OUTSIDE, 'made.db'))}).close()`,
+  'a trace file in the working directory': "(await import('node:trace_events')).createTracing({ categories: ['node'] }).enable()",
+  'a heap snapshot near the limit': "(await import('node:v8')).default.writeHeapSnapshot('/tmp/trocar-sealed.heapsnapshot')",
   'the inspector': "(await import('node:inspector')).default.open(0)",
   'a linked binding': "process._linkedBinding('spawn_sync')",
   'process.execve': "if (!process.execve) throw new Error('this Node has none'); process.execve(process.execPath, [process.execPath, '-e', '0'])",
@@ -59,6 +63,7 @@ for (const [name, code] of Object.entries(ROWS)) {
     const answer = await outcome(code);
     assert.equal(delivered, before, 'the parent got a signal');
     assert.match(answer.console ?? '', /^refused/, `the script got through: ${JSON.stringify(answer)}`);
+    assert.deepEqual(fs.readdirSync(OUTSIDE), [], 'a file appeared outside the slot');
   });
 }
 
@@ -66,3 +71,11 @@ test('12e: a script still runs, and the row above it proves nothing by accident'
   const answer = await outcome("process.memoryUsage()");
   assert.match(answer.console ?? '', /^reached/);
 });
+
+// A script shares its realm with the code that reports on it, so what it does to the intrinsics must not make a report false (5.1 §隔离).
+for (const patch of ['Array.prototype.push = () => 0', 'Array.prototype.map = () => []', 'Object.assign = (a) => a', 'Map.prototype.get = () => undefined', 'Object.prototype.toJSON = () => ({})', 'Buffer.prototype.equals = () => true']) {
+  test(`12e: ${patch} fails in the script and changes no report`, async () => {
+    const answer = await outcome(patch);
+    assert.match(answer.console ?? '', /^refused/, JSON.stringify(answer));
+  });
+}
