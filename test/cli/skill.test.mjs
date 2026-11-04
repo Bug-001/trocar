@@ -1,4 +1,4 @@
-// test/cli/skill.test.mjs — `trocar skill` (RFC 1.6 §5.6, 1.12 AN1-AN4, D80): the skills that ship with trocar, listed and printed byte for byte.
+// test/cli/skill.test.mjs — `trocar skill` (RFC 1.6 §5.6, 1.12 AN1-AN4, D81①): the skills that ship with trocar, listed and printed byte for byte.
 // Every run is the real command in a real process under a sandbox HOME; the expected values are the files under skills/ themselves.
 import test from 'node:test'
 import assert from 'node:assert/strict'
