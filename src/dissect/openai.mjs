@@ -131,16 +131,16 @@ export function sysLabel(text) {
 }
 
 // ── input[] item → canonical (Anthropic-shaped) blocks ─────────────────────────────────────────
-function summaryText(item) {
-  const s = item.summary;
-  if (Array.isArray(s)) return s.map((x) => (x && (x.text || x.summary_text)) || '').join('');
-  return typeof s === 'string' ? s : '';
-}
+const partsText = (s) => (Array.isArray(s) ? s.map((x) => (x && (x.text || x.summary_text)) || '').join('') : typeof s === 'string' ? s : '');
+// a reasoning item's readable text: its summary, then its content (reasoning_text parts); '' when only ciphertext came
+const reasoningText = (item) => [partsText(item.summary), partsText(item.content)].filter(Boolean).join('\n\n');
 // returns [{ role, block, sub }] — one per rendered block (a message may fan out to several content blocks, none without content).
 // `sub` = the JSON path of the block's bytes WITHIN the item (the board's text_ref locator, 4.2:40).
 export function itemToBlocks(item) {
   if (!item || typeof item !== 'object') return [{ role: 'user', block: { type: 'text', text: String(item ?? '') }, sub: [] }];
   const t = item.type;
+  // a reasoning item is reasoning whatever keys it carries (a `content` key does not make it a message; RFC 3.1)
+  if (t === 'reasoning') return [{ role: 'assistant', block: { type: 'thinking', thinking: reasoningText(item), signature: item.encrypted_content ? 'encrypted' : '' }, sub: [] }];
   if (t === 'message' || (item.content && !/_call(_output)?$/.test(t || ''))) {
     const role = item.role || 'user';
     const arr = Array.isArray(item.content);
@@ -155,7 +155,6 @@ export function itemToBlocks(item) {
       return { role, block: { type: 'text', text: JSON.stringify(c) }, sub };
     });
   }
-  if (t === 'reasoning') return [{ role: 'assistant', block: { type: 'thinking', thinking: summaryText(item), signature: item.encrypted_content ? 'encrypted' : '' }, sub: [] }];
   // tools, by the wire's own naming (no tool names): `*_call_output` is a call's result; `*_call` with a call_id is a call the
   // client runs, without one a call the server ran. Anything else is shown as the JSON it is, never as assistant text.
   const ty = typeof t === 'string' ? t : '';

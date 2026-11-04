@@ -28,6 +28,13 @@ for (const cid of [true, false]) for (const suf of Object.keys(SUFFIX)) for (con
   cases.push({ item, want });
 }
 cases.push({ item: { type: 'x_note', role: 'user', note: 'n' }, want: ['json', 'user'] });
+// a reasoning item is one assistant thinking block whose bytes are the whole item, whatever keys it carries (3.1 Responses)
+const REASONING = [];
+for (const content of ['absent', 'empty', 'text']) for (const summary of [[], [{ type: 'summary_text', text: 'weighing the plan' }]]) for (const enc of [true, false]) {
+  REASONING.push({ type: 'reasoning', id: 'rs_1', summary, ...(content === 'absent' ? {} : { content: content === 'empty' ? [] : [{ type: 'reasoning_text', text: 'step one, then step two' }] }),
+    ...(enc ? { encrypted_content: 'gAAAAB-ciphertext' } : {}) });
+}
+for (const item of REASONING) cases.push({ item, want: ['thinking', 'assistant'] });
 
 test('Responses items: kind / role by the type suffix and call_id, each block a verbatim sub-value of req_body', async () => {
   for (const { item, want } of cases) {

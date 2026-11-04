@@ -127,7 +127,10 @@ const sseSplit = (events, eol) => events.map((e) => { // a closing event's data 
 test('a Responses reply block\'s span is exactly its own JSON node, one per content part (WebSocket and HTTP SSE)', () => {
   for (const t of TEXTS) {
     const items = [...respItems(t), { type: 'message', id: 'm2', role: 'assistant', content: [{ type: 'output_text', text: t }, { type: 'refusal', refusal: `no ${t}` }, { type: 'output_text', text: 'tail' }] },
-      { type: 'message', id: 'm3', role: 'assistant' }, { type: 'message', id: 'm4', role: 'assistant', content: null }]; // no content: no block
+      { type: 'message', id: 'm3', role: 'assistant' }, { type: 'message', id: 'm4', role: 'assistant', content: null }, // no content: no block
+      // a reasoning item is one thinking block, its node the whole item, whatever keys it carries
+      { type: 'reasoning', id: 'rs2', summary: [{ type: 'summary_text', text: t }], content: [{ type: 'reasoning_text', text: t }, { type: 'reasoning_text', text: 'more' }], encrypted_content: 'enc' },
+      { type: 'reasoning', id: 'rs3', summary: [], content: [] }];
     const nodesOf = (it) => (it.type === 'message' ? it.content || [] : [it]);
     const nodes = items.flatMap(nodesOf);
     const units = items.flatMap((it, u) => nodesOf(it).map(() => u));
@@ -150,6 +153,7 @@ test('a Responses reply block\'s span is exactly its own JSON node, one per cont
         assert.deepEqual(parts.map((p) => p.block), respBlocks(items), at);
         assert.equal(parts.length, nodes.length, at);
         if (d === RESPONSES_WS) assert.deepEqual(parts.map((p) => p.unit), units, `${at}: unit = the output item`);
+        parts.forEach((p, k) => { if (items[units[k]].type === 'reasoning') assert.deepEqual([p.kind, p.role], ['thinking', 'assistant'], `${at} #${k}`); });
         parts.forEach((p, k) => {
           if (nodal) {
             assert.ok(p.span, `${at} #${k} ${p.kind} has a span (${p.why})`);
