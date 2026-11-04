@@ -14,64 +14,42 @@ import { KIDS, serialize, patchInto } from '../core/units.mjs'
 import { techDetailsHtml } from '../core/ui.mjs'
 import { HALF, discChev } from '../core/icons.mjs'
 import * as W from '../labels/replay.mjs'
-import { messageTurns, keyDiff, refRowOf, hasChangeLine, callFacts } from './analysis.mjs'
-import { contentRefOf, contentRefKOf } from './stepbar.mjs'
-import { stepRef } from './lanes.mjs'
+import { READABLE_VIEW } from '../labels/cells.mjs'
+import { setFold, turnAnchorKey } from './fold.mjs'
+import { ctxBlockHtml, blockRowHtml, fillBody, showBody, faithOf, ffBadgeHtml, tagWord, bodyFor } from './blocks.mjs'
 import { stepOf } from './model.mjs'
-import { setFold, turnAnchorKey, turnIsOpen } from './fold.mjs'
-import { ctxBlockHtml, blockRowHtml, fillBody, showBody, faithOf, faithNow, ffBadgeHtml, tagWord, bodyFor, openedFf, bodyCache } from './blocks.mjs'
-import { replyOf, partMark } from './rawpanel.mjs' // one reply rule, two drawings (2.3 §这一步的回复 · 2.6 §A)
+import { windowItems, landingFor, rowKeys, turnsOf, turnOpen } from '../../src/screens/replay/window-model.mjs' // the window's rules (both desks)
 
 export { blockBodyHtml } from './blocks.mjs'
+export { landingTarget, rowKeys } from '../../src/screens/replay/window-model.mjs'
 
-// ── ① the 调用保真行: one call's fidelity facts, said once, visibly (2.3 §调用保真行; 必拒隐瞒) ─────────────────────
-export function callFidelityHtml(call) {
-  const { facts, tech } = callFacts(call)
-  if (!facts.length) return ''
-  return `<div class="cwfline"><span class="cwhalf" aria-hidden="true">${HALF}</span> <span class="cwffacts">${facts.map((f) => esc(f)).join(' · ')}</span>${tech.length ? techDetailsHtml(tech, { id: 'cwf-tech' }) : ''}</div>`
-}
-
-// ── ② the 窗口行: no block of this step can return to the raw bytes ──────────────────────────────────────────────────
-export function windowLineHtml(flat) {
-  if (!flat || !flat.length || flat.some((b) => b.text_ref)) return ''
-  const reasons = [...new Set(flat.map((b) => b.unaddressable).filter(Boolean))]
-  return `<div class="cwwin"><span class="cwhalf" aria-hidden="true">${HALF}</span> ${esc(W.WINDOW_LINE)}${reasons.length ? techDetailsHtml(reasons.map((r, i) => ['reason ' + (i + 1), r]), { id: 'cwwin-tech' }) : ''}</div>`
-}
-
-// ── ③ the section header: name · block count · size · 以下逐字 (or just ◐ when the window line is up) ────────────────
-export function sectionHeaderHtml(sec, blocks, { windowLine = false } = {}) {
+// ── each item's html (the item is the window model's: web/src/screens/replay/window-model.mjs) ──────────────────────────
+// ① the 调用保真行: one call's fidelity facts, said once, visibly (2.3 §调用保真行; 必拒隐瞒)
+const fidHtml = ({ facts, tech }) => `<div class="cwfline"><span class="cwhalf" aria-hidden="true">${HALF}</span> <span class="cwffacts">${facts.map((f) => esc(f)).join(' · ')}</span>${tech.length ? techDetailsHtml(tech, { id: 'cwf-tech' }) : ''}</div>`
+// ② the 窗口行: no block of this step can return to the raw bytes
+const winHtml = ({ reasons }) => `<div class="cwwin"><span class="cwhalf" aria-hidden="true">${HALF}</span> ${esc(W.WINDOW_LINE)}${reasons.length ? techDetailsHtml(reasons.map((r, i) => ['reason ' + (i + 1), r]), { id: 'cwwin-tech' }) : ''}</div>`
+// ③ the section header: name · block count · size · its claim (以下逐字 · Readable view · just ◐ when the window line is up)
+const CLAIM = { half: `<span class="cwsecff" title="${esc(W.WINDOW_LINE)}">${HALF}</span>`, verbatim: `<span class="cwsecff v">${esc(W.SECTION_VERBATIM)}</span>`, readable: `<span class="cwsecff">${esc(READABLE_VIEW)}</span>` }
+function secHtml({ sec, n, size, est, claim }) {
   const name = W.SECTION_NAME[sec] || sec // an unknown section's name is data: escaped where it is printed
-  const n = (blocks || []).length
-  const size = (blocks || []).reduce((a, b) => a + (typeof b.bytes === 'number' ? b.bytes : 0), 0)
-  const est = sec === 'tools' && (blocks || []).some((b) => faithOf(b) === 'metadata') // the size of a metadata-only definition is an estimate
-  const ff = windowLine ? `<span class="cwsecff" title="${esc(W.WINDOW_LINE)}">${HALF}</span>`
-    : (blocks || []).length && (blocks || []).every((b) => faithNow(b) === 'verbatim') ? `<span class="cwsecff v">${esc(W.SECTION_VERBATIM)}</span>` : ''
   return `<div class="cwsec" id="sec-${esc(sec)}"><b>${esc(name)}</b><span class="cwsecn">${esc(String(n))} blocks</span>` +
-    `<span class="cwsecsz"${est ? ` title="${esc(W.SECTION_SIZE_EST_TIP)}"` : ` title="${esc(W.SECTION_SIZE_TIP)}"`}>${est ? W.SECTION_SIZE_EST : ''} ${esc(bytes(size))}</span>${ff}</div>`
+    `<span class="cwsecsz"${est ? ` title="${esc(W.SECTION_SIZE_EST_TIP)}"` : ` title="${esc(W.SECTION_SIZE_TIP)}"`}>${est ? W.SECTION_SIZE_EST : ''} ${esc(bytes(size))}</span>${(claim && CLAIM[claim]) || ''}</div>`
 }
-
-// ── ④ the 变化线: drawn only when the prefix actually changed (cause ∉ QUIET_CAUSES), before flat[cacheBreak.idx] ────
-// No cache states, no byte offsets (D17①), no attribution. K is the 缓存对比步 (cacheBreak.refRid, else the walk: refRowOf).
-export const changeHeadWord = (b) => {
+// ④ the 变化线: no cache states, no byte offsets (D17①), no attribution. K is the 缓存对比步 (cacheBreak.refRid, else the walk)
+const changeHeadWord = (b) => {
   const h = b.head || { role: b.role || '', tag: b.kind || '', label: '' }
   const t = tagWord(h.tag)
   return [h.role, t || h.tag, h.label || b.preview || ''].filter(Boolean).join(' · ')
 }
-export function changeLineHtml(call, k, flat) {
-  const brk = call.cacheBreak
-  const causeW = brk.cause === 'compaction'
-    ? W.CHANGE_COMPACT + (call.compactionInferred ? `(${W.CHANGE_COMPACT_INFERRED})` : '')
-    : (W.causeWord(brk.cause))
-  const auto = !flat.some((b) => b.cc) // no declared cache position: a structural reference only, not a real boundary
-  const tip = W.changeFirstTip(changeHeadWord(flat[brk.idx] || {}))
+function chlineHtml({ k, cause, compaction, inferred, auto, first }) {
+  const causeW = compaction ? W.CHANGE_COMPACT + (inferred ? `(${W.CHANGE_COMPACT_INFERRED})` : '') : (W.causeWord(cause))
+  const tip = W.changeFirstTip(changeHeadWord(first))
   return `<div class="chline" id="cachebrk" title="${esc(tip)}"><span class="chbar" aria-hidden="true"></span>` +
     `<span class="cht">${esc(W.changeLine(k, causeW))} · <i class="chest" title="${esc(W.STRUCT_TIP)}">${esc(W.STRUCT_EST_WORD)}</i>` +
     `${auto ? ` · <i class="chest" title="${esc(W.STRUCT_TIP)}">${esc(W.CHANGE_REF_HINT)}</i>` : ''}</span></div>`
 }
-
-// ── the removed list of the 内容对比步 (2.3; the control itself is the step bar's 对比 menu) ──────────────────────────
-export function removedSectionHtml(removed, refK, open) {
-  if (!removed || !removed.length) return ''
+// the removed list of the 内容对比步 (2.3; the control itself is the step bar's 对比 menu)
+function removedHtml({ blocks: removed, refK, open }) {
   const rows = removed.map((b, j) => {
     const h = b.head || { role: b.role || '', tag: b.kind || '', label: '' }
     const label = h.label || b.preview || ''
@@ -79,59 +57,30 @@ export function removedSectionHtml(removed, refK, open) {
   }).join('')
   return `<div class="cwremoved ${open ? 'open' : ''}"><div class="cwremhd" data-navtoggle-rem="1" role="button" tabindex="0">${discChev(open)} ${esc(W.removedList(removed.length, refK ?? '?'))}</div>${open ? `<div class="cwrembody">${rows}</div>` : ''}</div>`
 }
-
-// ── ⑥ ⑦ ⑧ the stand-in states, and the frames of a step whose lane is not held ─────────────────────────────────────
-const unparsedHtml = (call) => `<div class="cwunparsed"><div class="cwuhd">${esc(W.UNPARSED_TITLE)}</div><div class="cwub">${esc(W.UNPARSED_KEEP)}</div>` +
-  (call.errMsg ? techDetailsHtml([['errMsg', call.errMsg]], { id: 'cwu-tech' }) : '') + `</div>`
+const FOLDALL_HTML = `<div class="cwfoldall"><button type="button" class="foldallbtn" data-foldall="open" title="${esc(W.FOLD_ALL_OPEN_TIP)}">${esc(W.FOLD_ALL_OPEN)}</button><button type="button" class="foldallbtn" data-foldall="close" title="${esc(W.FOLD_ALL_CLOSE_TIP)}">${esc(W.FOLD_ALL_CLOSE)}</button></div>`
+const turnHtml = ({ anchor, label, query, acts, n, open }) => `<div class="cwturn ${open ? '' : 'collapsed'}" data-anchor="${esc(anchor)}">` +
+  `<div class="cwturnhd"><span class="cwturnq" title="${esc(label)}">${query ? '<span class="qlabel">prompt</span>' : ''}${esc(label)}${acts ? `<span class="qk">${esc(acts)}</span>` : ''}</span><span class="cwturnn">${n} blocks</span></div>` +
+  `<div class="cwturnbody" data-kids>${KIDS}</div></div>`
+// ⑥ ⑦ ⑧ the stand-in states, and the frames of a step whose lane is not held (2.3 §车道未到手): no text, aria-busy; the
+// lane's arrival replaces them
+const unparsedHtml = ({ errMsg }) => `<div class="cwunparsed"><div class="cwuhd">${esc(W.UNPARSED_TITLE)}</div><div class="cwub">${esc(W.UNPARSED_KEEP)}</div>` +
+  (errMsg ? techDetailsHtml([['errMsg', errMsg]], { id: 'cwu-tech' }) : '') + `</div>`
 const noRequestHtml = () => `<div class="cwnoreq">${esc(W.NO_REQUEST)}</div>`
 // ⑧: no text, no control — an empty frame the skeleton replaces (1.4 ⑧); `n` > 0 sizes it for that many rows (2.3 §大致页面: head.last.n)
 export const emptyFrameHtml = (n = 0) => `<div class="cwbusy" aria-busy="true"${n > 0 ? ` style="--n:${n}"` : ''}></div>`
-// the section frames of a step whose lane is not held (2.3 §车道未到手): one per section the row's composition names, sized
-// from its bytes (a unit of --cblk-pitch per 2,000), no text, aria-busy; the lane's arrival replaces them
-const FRAME_SECS = [['tools', ['tools']], ['system', ['system']], ['messages', null]]
-export function busyFramesHtml(s, row) {
-  const comp = (row && row.comp) || {}, named = new Set(FRAME_SECS.flatMap(([, ks]) => ks || []))
-  const size = (ks) => Object.entries(comp).filter(([k]) => (ks ? ks.includes(k) : !named.has(k))).reduce((a, [, v]) => a + (Number(v) || 0), 0)
-  const frames = FRAME_SECS.map(([sec, ks]) => [sec, size(ks)]).filter(([, n]) => n > 0)
-    .map(([sec, n]) => `<div class="cwframe" data-sec="${sec}" style="--fr:${Math.max(1, Math.min(12, Math.ceil(n / 2000)))}"></div>`).join('')
-  return `<div class="cwbusy" aria-busy="true">${frames}</div>`
-}
-
-// the request rows' keys: bid + '#' + its occurrence in the list (the same bid may stand twice)
-export function rowKeys(flat) {
-  const seen = new Map()
-  return flat.map((b) => { const n = seen.get(b.bid) || 0; seen.set(b.bid, n + 1); return `${b.bid}#${n}` })
-}
-// the turns of a list, each run of consecutive message blocks grouped on its own (indices into the whole list), with `at[i]` =
-// the turn holding list position i (-1 outside messages). Memoised per list: stepOf hands out one list per step per desk change.
-const TURNS = new WeakMap()
-function turnsOf(flat) {
-  let T = TURNS.get(flat)
-  if (T) return T
-  const list = [], at = new Int32Array(flat.length).fill(-1)
-  for (let i = 0; i < flat.length;) {
-    if (flat[i].sec !== 'messages') { i++; continue }
-    let j = i
-    while (j < flat.length && flat[j].sec === 'messages') j++
-    for (const t of messageTurns(flat.slice(i, j))) { const items = t.items.map((k) => k + i); for (const k of items) at[k] = list.length; list.push({ ...t, items }) }
-    i = j
-  }
-  TURNS.set(flat, T = { list, at })
-  return T
-}
-const turnOpen = (s, flat, T, ti) => turnIsOpen(s.turnFold, flat, T.list[ti], ti, T.list.length - 1, s.turnLanded)
-const refNo = (s, row) => { const r = row && stepRef(s.lanes, row.rid); return r ? (r.step ? r.n : r.k) : null }
+const framesHtml = ({ frames }) => `<div class="cwbusy" aria-busy="true">${frames.map(({ sec, fr }) => `<div class="cwframe" data-sec="${sec}" style="--fr:${fr}"></div>`).join('')}</div>`
+const ONE = { fid: fidHtml, win: winHtml, sec: secHtml, foldall: () => FOLDALL_HTML, chline: chlineHtml, removed: removedHtml, noreq: noRequestHtml, unparsed: unparsedHtml, frames: framesHtml }
 
 // a closed request row's html is a function of its definition (content-addressed by bid) and three marks: kept per definition
 const ROWS = new WeakMap()
-function rowHtml(s, b, prevKeys, open, windowLine) {
+function rowHtml(s, { b, open, marks }, windowLine) {
   const d = !open && s.desk && s.desk.defs && s.desk.defs.get(b.bid)
-  if (!d) return ctxBlockHtml(b, { prevKeys, open, windowLine })
-  const k = (b.volatile ? 1 : 0) | (prevKeys && !b.volatile && !prevKeys.has(b.key) ? 2 : 0) | (windowLine ? 4 : 0)
+  if (!d) return ctxBlockHtml(b, { open, marks })
+  const k = (marks.volatile ? 1 : 0) | (marks.isNew ? 2 : 0) | (windowLine ? 4 : 0)
   let m = ROWS.get(d)
   if (!m) ROWS.set(d, m = new Map())
   let h = m.get(k)
-  if (h == null) m.set(k, h = ctxBlockHtml(b, { prevKeys, open, windowLine }))
+  if (h == null) m.set(k, h = ctxBlockHtml(b, { open, marks }))
   return h
 }
 
@@ -143,73 +92,38 @@ const hash = (str) => { let h = 2166136261; for (let i = 0; i < str.length; i++)
 const GROUP_HTML = `<div class="cwgroup" data-kids>${KIDS}</div>`
 const holderHtml = (n) => `<div class="cwgroup" aria-busy="true" style="--n:${n}"></div>`
 
-/** The window as keyed units (pure but for the desk's scratch: s.curFlat / s.curKeys / s.curReply / s.curRemoved / s.drawn,
- * and s.later: each placeholder's rows, built, by group key — what swapGroup draws in its place).
- * `all`: every group drawn (the full draw). Otherwise the groups drawn are s.drawn's, those holding an open row or the change
- * line, and — given `focus` (a list position) — the focus's group and its nearest neighbours up to ROW_BUDGET rows. */
+/** The window as keyed units: the model's items (windowItems), an open turn's rows (with the change line among them) as its
+ * kids in groups. Pure but for the desk's scratch: the model's, s.drawn, and s.later: each placeholder's rows, built, by group
+ * key — what swapGroup draws in its place. `all`: every group drawn (the full draw). Otherwise the groups drawn are s.drawn's,
+ * those holding an open row or the change line, and — given `focus` (a list position) — the focus's group and its nearest
+ * neighbours up to ROW_BUDGET rows. */
 export function ctxWindowUnits(s, { all = false, focus = null } = {}) {
-  const call = s.anchor && s.anchor.calls[s.playhead]
-  if (!call) return [{ key: 'busy', html: emptyFrameHtml() }] // ⑧ the session has not been drawn yet
-  const fid = callFidelityHtml(call) // ① — its fields are on the skeleton row, so it shows whether the lane is held or not
-  const out = fid ? [{ key: 'fid', html: fid }] : []
-  if (!call.rec) return [...out, { key: 'noreq', html: noRequestHtml() }] // ⑦
-  if (call.unparsed) return [...out, { key: 'unparsed', html: unparsedHtml(call) }] // ⑥
-  const st = s.desk ? stepOf(s.desk, call.rid) : null
-  if (!st || !st.held) return [...out, { key: 'frames', html: busyFramesHtml(s, call) }]
-  const flat = st.flat, keys = rowKeys(flat)
-  s.curFlat = flat; s.curKeys = keys
-  const winLine = windowLineHtml(flat) // ②
-  if (winLine) out.push({ key: 'win', html: winLine })
-  const ref = contentRefOf(s) // the 内容对比步: the pinned step, else the 缓存对比步
-  const refFlat = ref && s.desk ? stepOf(s.desk, ref.rid).flat : null // its lane not held: no 「新」, no removed list
-  const diff = refFlat ? keyDiff(refFlat, flat) : null
-  const brk = call.cacheBreak
-  const line = hasChangeLine(call, flat) ? changeLineHtml(call, refNo(s, refRowOf(s.anchor, s.playhead)), flat) : ''
-  s.curRemoved = (line && diff && diff.removedBlocks.length) ? diff.removedBlocks : []
-  const removed = s.curRemoved.length ? removedSectionHtml(s.curRemoved, contentRefKOf(s), s.navOpen.has('cwremoved')) : ''
-  const mark = (i) => (line && i === brk.idx ? [{ key: 'chline', html: line }, ...(removed ? [{ key: 'removed', html: removed }] : [])] : [])
-  const prevKeys = diff ? diff.refKeys : null
-  const row = (b, i) => ({ key: keys[i], set: { 'data-bi': i }, html: rowHtml(s, b, prevKeys, s.openBlocks.has(keys[i]), !!winLine) })
-  // ③ the sections, in list order: a header where the section changes, message blocks grouped into turns (a run of messages
-  // is grouped on its own, so a block of another section between messages is drawn in its place, never dropped)
-  const T = turnsOf(flat), tk = new Map(), hk = new Map(), bySec = new Map(), groups = []
-  // a header reads its rows as drawn: an open row's body that came back unproven takes back 以下逐字 on every repaint (2.3 §保真标)
-  flat.forEach((b, i) => { if (!bySec.has(b.sec)) bySec.set(b.sec, []); bySec.get(b.sec).push(s.openBlocks.has(keys[i]) ? { ...b, _open: true } : b) })
-  const head = (sec) => { const n = hk.get(sec) || 0; hk.set(sec, n + 1); out.push({ key: `sec:${sec}#${n}`, html: sectionHeaderHtml(sec, bySec.get(sec), { windowLine: !!winLine }) }) }
-  let lastSec = null
-  flat.forEach((b, i) => {
-    if (b.sec !== lastSec) {
-      head(b.sec)
-      if (b.sec === 'messages' && hk.get('messages') === 1) out.push({ key: 'foldall', html: `<div class="cwfoldall"><button type="button" class="foldallbtn" data-foldall="open" title="${esc(W.FOLD_ALL_OPEN_TIP)}">${esc(W.FOLD_ALL_OPEN)}</button><button type="button" class="foldallbtn" data-foldall="close" title="${esc(W.FOLD_ALL_CLOSE_TIP)}">${esc(W.FOLD_ALL_CLOSE)}</button></div>` })
-      lastSec = b.sec
+  resetReplyFlips(s)
+  const { state, items } = windowItems(s)
+  if (state === 'none') return [{ key: 'busy', html: emptyFrameHtml() }] // ⑧ the session has not been drawn yet
+  const winLine = items.some((it) => it.type === 'win'), out = [], groups = []
+  let turn = null, g = null, pend = [] // the open turn's kids; its current group; the change line waiting for its row
+  for (const it of items) {
+    if (it.type === 'turn') {
+      turn = it.open ? [] : null; g = null
+      out.push({ key: it.key, set: { 'data-turn': it.ti }, html: turnHtml(it), kids: turn || [] })
+      continue
     }
-    if (b.sec !== 'messages') { out.push(...mark(i), row(b, i)); return }
-    const ti = T.at[i], t = T.list[ti]
-    if (t.items[0] !== i) return // a later item of a turn already drawn
-    const open = turnOpen(s, flat, T, ti), anchor = turnAnchorKey(flat, t)
-    const n = tk.get(anchor) || 0; tk.set(anchor, n + 1)
-    const kids = []
-    if (open) { // a folded turn draws its head only (rule 2); an open one its rows, in groups
-      let g = null
-      for (const j of t.items) {
-        if (!g || g.rows.length >= GROUP_CAP || hash(keys[j]) % GROUP_MOD === 0) { g = { key: 'g:' + keys[j], at: j, rows: [], must: false }; groups.push(g); kids.push(g) }
-        const m = mark(j)
-        g.rows.push(...m, row(flat[j], j)); g.n = (g.n || 0) + 1
-        if (m.length || s.openBlocks.has(keys[j]) || (s.drawn && s.drawn.has(g.key))) g.must = true
-      }
-    }
-    out.push({ key: `q:${anchor}#${n}`, set: { 'data-turn': ti },
-      html: `<div class="cwturn ${open ? '' : 'collapsed'}" data-anchor="${esc(anchor)}">` +
-        `<div class="cwturnhd"><span class="cwturnq" title="${esc(t.label)}">${t.query ? '<span class="qlabel">prompt</span>' : ''}${esc(t.label)}${t.acts ? `<span class="qk">${esc(t.acts)}</span>` : ''}</span><span class="cwturnn">${t.items.length} blocks</span></div>` +
-        `<div class="cwturnbody" data-kids>${KIDS}</div></div>`,
-      kids })
-  })
+    const u = it.type === 'row' ? { key: it.key, set: { 'data-bi': it.bi }, html: rowHtml(s, it, winLine) }
+      : it.type === 'reply' ? replyUnit(it) : { key: it.key, html: ONE[it.type](it) }
+    if (it.type === 'sec' || it.type === 'reply') turn = null
+    if (!turn) { out.push(u); continue }
+    if (it.type !== 'row') { pend.push(u); continue } // the change line and its removed list go in their row's group
+    if (!g || g.rows.length >= GROUP_CAP || hash(it.key) % GROUP_MOD === 0) { g = { key: 'g:' + it.key, at: it.bi, rows: [], n: 0, must: false }; groups.push(g); turn.push(g) }
+    g.rows.push(...pend, u); g.n++
+    if (pend.length || it.open || (s.drawn && s.drawn.has(g.key))) g.must = true
+    pend = []
+  }
   drawPlan(groups, all, focus)
   s.drawn = new Set(groups.filter((g) => g.drawn).map((g) => g.key))
   s.later = new Map(groups.filter((g) => !g.drawn).map((g) => [g.key, g.rows]))
   for (const g of groups) { g.html = g.drawn ? GROUP_HTML : holderHtml(g.n); if (g.drawn) g.kids = g.rows; delete g.rows; delete g.at; delete g.n; delete g.must; delete g.drawn }
-  const reply = replyUnit(s, st, call) // ⑨
-  return reply ? [...out, reply] : out
+  return out
 }
 // which groups are drawn: every one under `all`; else the ones that must be, the focus's group, then its nearest neighbours
 // (alternating after / before) until ROW_BUDGET rows are drawn
@@ -227,39 +141,28 @@ function drawPlan(groups, all, focus) {
 /** The full draw: every open turn's rows (what the window holds once a fill has run to the end). */
 export const ctxWindowHtml = (s) => serialize(ctxWindowUnits(s, { all: true }))
 
-// ── ⑨ this step's reply (2.3 §这一步的回复): one block row per reply definition through the request's row component, in the
-// request rows' form — no head; each row its own fidelity mark (partMark, proven rows as a request's: data-ff + screen-reader
-// word), the stop reason on the last row's head, the rows a group a screen reader names. A reply row is not a request block:
-// no data-bi / data-rk / data-sec, no 新 / cache / volatile marks. Default open = the rows of the first present
-// kind among text → tool call → thinking; a reader's flip is `rp:<bid>` in s.openBlocks, kept while the step stays, reset on
-// a step change (2.3:195).
-const REPLY_OPEN_ORDER = ['text', 'tool_use', 'thinking']
-const replyTag = (d) => (d.kind === 'tool_use' ? 'action · ' + (d.name || '') : d.kind === 'thinking' ? 'thinking' : 'say')
-export const replyDef = (d) => ({ ...d, text_ref: d.ref })
-function replyUnit(s, st, call) {
-  if (s.replyFor !== call.rid) { for (const k of [...s.openBlocks]) if (String(k).startsWith('rp:')) s.openBlocks.delete(k); s.replyFor = call.rid }
-  const r = replyOf({ row: call, reply: st.reply, detail: st.detail })
-  const group = (inner) => ({ key: 'reply', html: `<div class="cwreply" role="group" aria-label="${esc(W.REPLY_WORD)}">${inner}</div>` })
-  if (r.failed) return group(`<div class="cwrline">${esc(W.FAILED_NO_REPLY)}${r.failed.reason ? techDetailsHtml([['reason', r.failed.reason]], { id: 'cwfail' }) : ''}</div>`)
-  const stop = r.stop ? `<span class="cbstop">${W.stopReasonRow(`<span class="mono">${esc(r.stop)}</span>`)}</span>` : ''
-  // no part: empty only when the bytes are whole; otherwise nothing is claimed about the content (the call line says why)
-  if (!r.parts.length) return group(`<div class="cwrline">${esc(r.mark === 'partial' ? W.UNREAD_REPLY : W.EMPTY_REPLY)}${stop}</div>`)
-  const first = REPLY_OPEN_ORDER.find((k) => r.parts.some((d) => d.kind === k))
-  s.curReply = new Map()
-  const seen = new Map()
-  const kids = r.parts.map((d, i) => {
-    const n = seen.get(d.bid) || 0; seen.set(d.bid, n + 1)
-    const key = 'rp:' + d.bid + (n ? '#' + n : ''), b = replyDef(d)
-    s.curReply.set(key, b)
-    // an opened body that came back unproven outranks the span's proof, on every repaint (2.3 §保真标, as faithNow for a request row)
-    const open = (d.kind === first) !== s.openBlocks.has(key), f = (open && openedFf(bodyCache.get(b.text_ref))) || partMark(d) || 'verbatim'
-    const mark = f === 'verbatim' ? `<span class="sr-only">,${esc(W.FF_WORD.verbatim)}</span>` : ffBadgeHtml(f)
-    return { key, html: blockRowHtml({ role: 'assistant', tag: replyTag(d), label: d.preview || '' }, {
-      cls: `r-assistant k-${esc(d.kind)}`, attrs: ` data-rp="${esc(key)}" data-ff="${f}"`, badges: mark + (i === r.parts.length - 1 ? stop : ''),
-      chars: typeof d.chars === 'number' ? d.chars : null, open, body: open ? bodyFor(b) : '' }) }
-  })
-  return { ...group(`<div class="cwrrows" data-kids>${KIDS}</div>`), kids }
+// ── ⑨ this step's reply (2.3 §这一步的回复): its rows through the request's row component, in the request rows' form — no head;
+// each row its own fidelity mark (proven rows as a request's: data-ff + screen-reader word), the stop reason on the last row's
+// head, the rows a group a screen reader names. A reply row is not a request block: no data-bi / data-rk / data-sec, no 新 /
+// cache / volatile marks. A reader's flip is `rp:<bid>` in s.openBlocks, kept while the step stays, reset on a step change (2.3:195).
+function resetReplyFlips(s) {
+  const call = s.anchor && s.anchor.calls[s.playhead]
+  if (!call || !call.rec || call.unparsed || !s.desk || s.replyFor === call.rid || !stepOf(s.desk, call.rid).held) return
+  for (const k of [...s.openBlocks]) if (String(k).startsWith('rp:')) s.openBlocks.delete(k)
+  s.replyFor = call.rid
 }
+const replyGroup = (inner) => ({ key: 'reply', html: `<div class="cwreply" role="group" aria-label="${esc(W.REPLY_WORD)}">${inner}</div>` })
+function replyUnit({ failed, empty, stop, rows }) {
+  if (failed) return replyGroup(`<div class="cwrline">${esc(W.FAILED_NO_REPLY)}${failed.reason ? techDetailsHtml([['reason', failed.reason]], { id: 'cwfail' }) : ''}</div>`)
+  const st = stop ? `<span class="cbstop">${W.stopReasonRow(`<span class="mono">${esc(stop)}</span>`)}</span>` : ''
+  if (empty) return replyGroup(`<div class="cwrline">${esc(empty === 'unread' ? W.UNREAD_REPLY : W.EMPTY_REPLY)}${st}</div>`)
+  const kids = rows.map(({ key, b, tag, mark, open, last }) => ({ key, html: blockRowHtml({ role: 'assistant', tag, label: b.preview || '' }, {
+    cls: `r-assistant k-${esc(b.kind)}`, attrs: ` data-rp="${esc(key)}" data-ff="${mark}"`,
+    badges: (mark === 'verbatim' ? `<span class="sr-only">,${esc(W.FF_WORD.verbatim)}</span>` : ffBadgeHtml(mark)) + (last ? st : ''),
+    chars: typeof b.chars === 'number' ? b.chars : null, open, body: open ? bodyFor(b) : '' }) }))
+  return { ...replyGroup(`<div class="cwrrows" data-kids>${KIDS}</div>`), kids }
+}
+
 // ── repaint: patch to the units, fill open bodies, land once per step, then fill the placeholders ──────────────────────
 // A step whose lane is not held keeps the rows already drawn unless `busy` (the desk's 150 ms decision, 2.3 §车道未到手).
 // `focus`: a list position whose group is drawn now (a jump); otherwise the landing target, else the row at the window's top.
@@ -337,40 +240,14 @@ function hydrate(el, s) {
   }
 }
 
-// ── the landing rule (1.4 §打开一步时落在哪): a step 跟随最新 brought in → the reply ⑨; else the 变化线, else the first 「新」
-// block, else the top. Pure: it names the target only; it never reorders blocks.
-export function landingTarget(s) {
-  const call = s.anchor && s.anchor.calls[s.playhead]
-  if (!call || !call.rec || call.unparsed) return null
-  const st = s.desk ? stepOf(s.desk, call.rid) : null
-  if (!st || !st.held) return null
-  if (s.followLanding) return { reply: true } // 跟随最新 brought this step in: the reader watches the model's newest answer
-  const flat = st.flat
-  const brk = call.cacheBreak
-  if (hasChangeLine(call, flat)) return { anchor: 'cachebrk', idx: brk.idx }
-  const ref = contentRefOf(s)
-  const refFlat = ref ? stepOf(s.desk, ref.rid).flat : null
-  if (refFlat) {
-    const refKeys = new Set(refFlat.map((b) => b.key))
-    const i = flat.findIndex((b) => !b.volatile && !refKeys.has(b.key))
-    if (i >= 0) return { bi: i }
-  }
-  return null
-}
-// the landing runs ONCE per rid, the first time its lane is held; later repaints of the same step never scroll again. It is
-// decided before the units are built, so the target's group is drawn in the same paint. A target inside a folded turn opens
-// that turn for this display only (s.turnLanded) — the D12 memory records the reader's own folds.
+// ── the landing (1.4 §打开一步时落在哪; the rule is the model's landingTarget): it runs ONCE per rid, the first time its lane is
+// held; later repaints of the same step never scroll again. It is decided before the units are built, so the target's group is
+// drawn in the same paint. A target inside a folded turn opens that turn for this display only (s.turnLanded) — the D12 memory
+// records the reader's own folds.
 function landingDue(s) {
-  const call = s.anchor && s.anchor.calls[s.playhead]
-  if (!call || s.landedFor === call.rid || !call.rec || call.unparsed || !s.desk) return null
-  const st = stepOf(s.desk, call.rid)
-  if (!st.held) return null
-  const t = landingTarget(s), flat = st.flat
-  if (!t) return { t, fi: null }
-  if (t.reply) return { t, fi: flat.length - 1 }
-  const fi = t.anchor ? t.idx : t.bi, T = turnsOf(flat), ti = T.at[fi] ?? -1
-  if (ti >= 0 && !turnOpen(s, flat, T, ti)) s.turnLanded.add(turnAnchorKey(flat, T.list[ti]))
-  return { t, fi }
+  const t = landingFor(s)
+  if (t && t.turn != null) s.turnLanded.add(t.turn)
+  return t
 }
 function land(el, s, { t }) {
   s.landedFor = s.anchor.calls[s.playhead].rid

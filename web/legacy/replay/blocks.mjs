@@ -11,6 +11,7 @@ import { esc, kf } from '../core/fmt.mjs'
 import * as W from '../labels/replay.mjs'
 import { HALF } from '../core/icons.mjs'
 import { DISPLAY_CLIP, cellOf, cellBodyHtml, modeOf, bodyCache, hasInline, isAddressed, inlineText, loadBody, isRetryable } from './cell.mjs'
+import { openedFf, rowMarks } from '../../src/screens/replay/window-model.mjs'
 export { DISPLAY_CLIP, preEsc, rawContentText, inlineText, hasInline, isAddressed, blockGot, loadBody, isRetryable, bodyCache } from './cell.mjs'
 
 // the DISPLAY clip: what exceeds 20 000 characters is folded with the full count said — the full text stays reachable in the
@@ -27,27 +28,8 @@ export function clipText(t) {
   return t.slice(0, clipCut(t)) + '\n' + W.clipNote(t.length)
 }
 
-// ── the proof rule (2.3): what a block's fidelity IS, and what it may claim ──────────────────────────────────────────
-const KNOWN_FF = new Set(['metadata', 'opaque', 'summarized', 'omitted', 'truncated'])
-// → one of: verbatim (proven — no visible word) · a known 3.2 value · unknown · unaddressable
-// a tools block by the same rule (2.3): an older capture's tool definitions say `metadata`
-export function faithOf(b) {
-  if (b.text_ref && (b.faithfulness == null || b.faithfulness === 'verbatim')) return 'verbatim'
-  if (b.faithfulness === 'verbatim') return 'unaddressable' // claims verbatim but has nothing to resolve it from
-  if (b.faithfulness != null && KNOWN_FF.has(b.faithfulness)) return b.faithfulness
-  if (b.faithfulness != null && b.faithfulness !== '') return 'unknown'
-  return 'unaddressable'
-}
-// what an OPENED body proved: `decoded` is exact decompressed text the 调用保真行 already named once — nothing to add;
-// verbatim proves the row again; anything else upgrades the row's mark on the spot
-export function openedFf(got) {
-  if (!got) return null
-  if (got.status !== 'ok') return 'notfetched'
-  if (got.fidelity == null || got.fidelity === '') return 'unknown'
-  if (got.fidelity === 'verbatim' || got.fidelity === 'decoded') return null
-  if (got.fidelity === 'reserialized') return 'reserialized'
-  return 'unknown'
-}
+// ── the proof rule (2.3 §保真标): faithOf · openedFf · faithNow, and a request row's marks, live in the window model ────
+export { faithOf, openedFf, faithNow } from '../../src/screens/replay/window-model.mjs'
 // the visible word of a mark (one per block; 2.3 逐值)
 export const ffWord = (f) => W.FF_WORD[f] || W.FF_WORD.unknown
 // one visible badge for an unproven block. A PROVEN block gets no visible word anywhere — its row carries data-ff and the
@@ -90,15 +72,6 @@ export function bodyFor(b) {
   const got = bodyCache.get(b.text_ref)
   return got ? blockBodyHtml(got, b) : pendingBodyHtml(b)
 }
-// a block's faithfulness as it stands NOW: an opened body that came back unproven beats the metadata's claim
-export function faithNow(b) {
-  if (isAddressed(b) && b._open) {
-    const f = openedFf(bodyCache.get(b.text_ref))
-    if (f) return f
-  }
-  return faithOf(b)
-}
-
 // what a resolved body just proved about its ROW: upgrade the row's mark and withdraw the section's 「以下逐字」 at once —
 // not at the next repaint (2.3 MUST). `blk` is the .cblk element; DOM-guarded so string tests can pass a stub.
 export function noteBodyFidelity(blk, got) {
@@ -154,22 +127,20 @@ export function blockRowHtml(head, { cls = '', attrs = '', badges = '', chars = 
     `<div class="cbh" role="button" tabindex="0" aria-expanded="${open}"><span class="cbrole">${esc(head.role)}</span><span class="cbtag" title="${esc(tag || String(head.tag || ''))}">${esc(tag || W.TAG_UNKNOWN)}</span>${label ? `<span class="cblabel" title="${esc(label)}">${esc(label)}</span>` : ''}${badges}${n}` +
     `</div><div class="cbc"${open ? ' data-filled="1"' : ''}>${open ? body : ''}</div></div>`
 }
-// a request row as its unit html: no position on it (the window writes data-bi on placement, 2.3 §读与画)
-export function ctxBlockHtml(b, { prevKeys, open, windowLine = false } = {}) {
+// a request row as its unit html: no position on it (the window writes data-bi on placement, 2.3 §读与画); its marks are the
+// window model's rowMarks (computed here when the caller has none)
+export function ctxBlockHtml(b, { prevKeys, open, windowLine = false, marks = rowMarks(b, { prevKeys, open, windowLine }) } = {}) {
   const h = b.head || { role: b.role || '', tag: b.kind || '', label: '' }
-  const f = open ? faithNow({ ...b, _open: true }) : faithOf(b)
-  const isNew = prevKeys && !b.volatile && !prevKeys.has(b.key)
-  const bp = b.cc ? `<span class="bpbadge" title="${esc(W.CACHE_MARK_TIP)} · declared value: ${esc(JSON.stringify(b.cc))}">${esc(W.CACHE_MARK)}</span>` : ''
-  const vol = b.volatile ? `<span class="volbadge" title="${esc(W.VOLATILE_MARK_TIP)}">${esc(W.VOLATILE_MARK)}</span>` : ''
-  const nw = isNew ? `<span class="newmark" title="${esc(W.NEW_MARK_TIP)}">${esc(W.NEW_MARK)}</span>` : ''
-  const tech = f === 'unknown' ? String(b.faithfulness) : f === 'unaddressable' ? (b.unaddressable || '') : ''
+  const f = marks.ff
+  const bp = marks.cc ? `<span class="bpbadge" title="${esc(W.CACHE_MARK_TIP)} · declared value: ${esc(JSON.stringify(marks.cc))}">${esc(W.CACHE_MARK)}</span>` : ''
+  const vol = marks.volatile ? `<span class="volbadge" title="${esc(W.VOLATILE_MARK_TIP)}">${esc(W.VOLATILE_MARK)}</span>` : ''
+  const nw = marks.isNew ? `<span class="newmark" title="${esc(W.NEW_MARK_TIP)}">${esc(W.NEW_MARK)}</span>` : ''
   // the window line already said "nothing here resolves": the per-block 不能回源 is not repeated, its screen-reader word is (2.3 §窗口行)
-  const quiet = f === 'unaddressable' && windowLine
-  const badge = quiet ? '' : ffBadgeHtml(f, { tech })
-  const sr = f === 'verbatim' || quiet ? `<span class="sr-only">,${esc(W.FF_WORD[f])}</span>` : ''
+  const badge = marks.badge ? ffBadgeHtml(f, { tech: marks.tech }) : ''
+  const sr = marks.sr ? `<span class="sr-only">,${esc(W.FF_WORD[f])}</span>` : ''
   const rk = b.resKey ? ` data-rk="${esc(b.resKey)}"` : ''
   return blockRowHtml({ role: h.role, tag: h.tag, label: h.label || b.preview || '' }, {
-    cls: `${isNew ? 'is-new' : ''} s-${esc(b.sec)} r-${esc(b.role)} k-${esc(b.kind)}`,
+    cls: `${marks.isNew ? 'is-new' : ''} s-${esc(b.sec)} r-${esc(b.role)} k-${esc(b.kind)}`,
     attrs: ` data-sec="${esc(b.sec)}" data-ff="${esc(f)}"${rk}`,
     badges: bp + vol + nw + badge + sr,
     chars: typeof b.chars === 'number' ? b.chars : null, open, body: open ? bodyFor(b) : '',
