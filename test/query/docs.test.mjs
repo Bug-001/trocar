@@ -44,10 +44,14 @@ const specNames = () => {
   return table.split('\n').map((l) => /^\| `([a-z]+)` \|/.exec(l)).filter(Boolean).map((m) => m[1])
 }
 
-test('QUERIES 的键集合 == §4.1 表的名字', () => {
+// §4.1 已写、代码还没有的名字。这三个读审计流与信封里的干预记录,而写它们的引擎还没进来;名单只减不增,做完一个就删一个。
+const NOT_BUILT = Object.freeze(['held', 'interventions', 'replays'])
+
+test('QUERIES 的键集合 == §4.1 表的名字减去待实现名单', () => {
   const names = specNames()
+  for (const name of NOT_BUILT) assert.ok(names.includes(name) && !Object.hasOwn(QUERIES, name), `${name}: 名单只放 §4.1 有、代码没有的名字`)
   // `status` / `doctor` 的文档就是那两个命令印的(src/cli/{status,doctor}.mjs),也在表里:一个都不许缺、不许多。
-  assert.deepEqual(Object.keys(QUERIES).sort(), [...names].sort())
+  assert.deepEqual(Object.keys(QUERIES).sort(), names.filter((n) => !NOT_BUILT.includes(n)).sort())
 })
 
 test('sessions / session / block / pricing 的顶层键照 C.5', async () => {
