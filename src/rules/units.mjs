@@ -46,12 +46,14 @@ function responseUnits(rec, unit, rule) {
   const { r, part } = storedReply(rec)
   if (!r) return { cannot: 'no-response' }
   if (part.truncated === true) return { cannot: 'truncated' }
+  if (r.kind === 'error') return { cannot: part === r ? 'no-response' : 'partial' }
   const sse = part.kind === 'sse', head = { ...unit, sse, status: r.status ?? null, headers: pairsOf(r.headers) }
   if (sse && !rule.whole && typeof part.raw === 'string') {
     return { units: eventsOf(part.raw).map((text, i) => ({ ...head, event_index: i, body: Buffer.from(text, 'utf8') })) }
   }
   const text = part.raw ?? (part.body === undefined ? null : JSON.stringify(part.body))
   const body = typeof part.raw_b64 === 'string' ? fromB64(part.raw_b64) : text === null ? null : Buffer.from(text, 'utf8')
+  if (body === null && part.kind !== 'empty') return { cannot: 'body-not-kept' }
   return { units: [{ ...head, body }] }
 }
 
@@ -67,12 +69,12 @@ function messageUnits(rec, unit, on) {
   const messages = on === 'ws-client' ? [...(first == null ? [] : [first]), ...(rec.req_extra_messages ?? [])] : storedReply(rec).part?.messages ?? []
   const bodies = messages.map(messageBytes)
   if (bodies.includes(null)) return { cannot: 'message-not-kept' }
-  return { units: bodies.map((body) => ({ ...unit, body })) }
+  return { units: bodies.map((body, i) => ({ ...unit, event_index: i, body })) }
 }
 
 /**
  * `rule` is read for `on` and `whole`, `asSent` takes the wire's request over the agent's → `{units}` in applyRules's shape, none when the record is not of the rule's transport, or
- * `{cannot}` with why it cannot be tested: log-only, truncated, partial, no-response, not-restorable, message-not-kept. Head values are as stored, credentials included.
+ * `{cannot}` with why it cannot be tested: log-only, truncated, partial, no-response, body-not-kept, not-restorable, message-not-kept. Head values are as stored, credentials included.
  */
 export function unitsOf(rec, rule, { asSent = false } = {}) {
   if (isLogOnly(rec)) return { cannot: 'log-only' }

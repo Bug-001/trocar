@@ -57,14 +57,28 @@ test('a response keeps its bytes however it is stored', () => {
   const body = { a: 1 }, bytes = Buffer.from([0xff, 0x00, 0x41])
   assert.deepEqual(unitsOf(record({ resp: { status: 200, kind: 'json', body } }), resp).units[0].body, Buffer.from(JSON.stringify(body)))
   assert.deepEqual(unitsOf(record({ resp: { status: 200, kind: 'text', raw_b64: bytes.toString('base64') } }), resp).units[0].body, bytes)
-  assert.deepEqual(unitsOf(record({ resp: { status: 502, kind: 'error', partial: { kind: 'sse', raw: 'data: 1\n\n' } } }), resp).units.map((u) => String(u.body)), ['data: 1\n\n'])
   assert.equal(unitsOf(record({ resp: { status: 204, kind: 'empty' } }), resp).units[0].body, null)
+})
+
+test('a reply that did not arrive whole, or whose text was not kept, cannot be tested', () => {
+  const cases = [
+    ['partial', { status: 502, kind: 'error', partial: { kind: 'sse', raw: 'data: 1\n\n' } }],
+    ['partial', { status: 502, kind: 'error', partial: { kind: 'json', body: { a: 1 } } }],
+    ['no-response', { status: 502, kind: 'error' }],
+    ['body-not-kept', { status: 200, kind: 'sse', raw_sse: [{ data: '1' }] }],
+    ['body-not-kept', { status: 200, kind: 'text' }],
+  ]
+  for (const [cannot, r] of cases) {
+    for (const rule of [resp, { on: 'response', whole: true }]) assert.deepEqual(unitsOf(record({ resp: r }), rule), { cannot }, JSON.stringify(r))
+  }
 })
 
 test('WebSocket: each message of the side is a unit, in order', () => {
   const ws = record({ transport: 'ws', req_body: 'one', req_extra_messages: ['two', { b64: Buffer.from('three').toString('base64') }], resp: { messages: ['a', 'b'] } })
   assert.deepEqual(unitsOf(ws, { on: 'ws-client' }).units.map((u) => String(u.body)), ['one', 'two', 'three'])
   assert.deepEqual(unitsOf(ws, { on: 'ws-server' }).units.map((u) => [String(u.body), u.on]), [['a', 'ws-server'], ['b', 'ws-server']])
+  assert.deepEqual(unitsOf(ws, { on: 'ws-client' }).units.map((u) => u.event_index), [0, 1, 2], '5.1: which message on the connection, from 0')
+  assert.deepEqual(unitsOf(ws, { on: 'ws-server' }).units.map((u) => u.event_index), [0, 1])
   assert.deepEqual(unitsOf(ws, req).units, [], 'an HTTP rule has nothing to act on here')
   assert.deepEqual(unitsOf(record(), { on: 'ws-client' }).units, [])
 })

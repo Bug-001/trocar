@@ -25,7 +25,7 @@ const RECORD_MS = 2000
 const COMMAND = 'rules test'
 const RESULT_WORDS = Object.freeze({ change: 'change', 'no-match': 'no match', 'cannot-test': 'cannot test', untested: 'untested', error: 'error' })
 const CANNOT_WORDS = Object.freeze({
-  'log-only': 'kept as log only', truncated: 'cut at the capture cap', partial: 'never received whole', 'no-response': 'no response was recorded',
+  'log-only': 'kept as log only', truncated: 'cut at the capture cap', partial: 'never received whole', 'no-response': 'no response was recorded', 'body-not-kept': 'the reply\'s text was not kept',
   'not-restorable': 'the agent\'s bytes do not check out', 'message-not-kept': 'a message was not kept', 'no-record': 'no such record',
 })
 
