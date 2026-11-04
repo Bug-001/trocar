@@ -17,7 +17,7 @@ export const BUFFERS = list('none', 'request', 'stream', 'message', 'response')
 /** `skipped.why` (5.1 §记录与标注 and the two tables of §其余规定). */
 export const SKIP_WHY = list(
   'timeout', 'peer-timeout', 'queued', 'crashed', 'cooling',
-  'expect-continue', 'encoding', 'not-utf8', 'too-big', 'event-too-big', 'multi-line-event', 'streaming', 'http10', 'edits-full', 'bad-result',
+  'expect-continue', 'encoding', 'not-utf8', 'too-big', 'event-too-big', 'multi-line-event', 'not-json', 'no-blocks', 'streaming', 'http10', 'edits-full', 'bad-result',
   'multi-script', 'rule-error', 'load-failed', 'audit-failed', 'no-progress', 'no-terminal',
   'pipelined', 'no-recorder', 'credentialed-hop', 'head-too-big', 'head-timeout', 'not-http', 'blind', 'ws-compressed', 'passthrough', 'gate-full',
   'gate-error', 'no-runner')
@@ -29,6 +29,7 @@ export const DEFAULT_MAX_DELAY_MS = 200
 /** Every bound a rule file is held to (5.1 §规则长什么样, §最长延迟, §隔离). */
 export const LIMITS = Object.freeze({
   fileBytes: 1 << 20,
+  nameBytes: 128,
   jsonDepth: 32,
   rules: 1000,
   list: 64,
