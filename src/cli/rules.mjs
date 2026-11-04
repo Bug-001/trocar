@@ -4,17 +4,18 @@
 import nodeFs from 'node:fs'
 import { EXIT, newReceipt } from './schema.mjs'
 import { printJson, errorDoc } from './json.mjs'
-import { colors, columns, ago, pairs, size, tilde, wrap } from './text.mjs'
+import { colors, columns, ago, pairs, size, tilde, visible, wrap } from './text.mjs'
 import { commandNamed } from './commands.mjs'
 import { testRule } from './rules-test.mjs'
 import { controlEndpointFor } from '../off/control-client.mjs'
+import { readBounded } from '../off/fsutil.mjs'
 import { trocarHome } from '../off/paths.mjs'
 import { collectorHome, rulesFile, rulesLog } from '../paths.mjs'
 import { runQuery, QueryArgError } from '../query/named/index.mjs'
 import { ENGINE_ACTIONS, LIMITS } from '../rules/closed.mjs'
 import { parseCondition, patterns } from '../rules/conditions.mjs'
 import { buffersOf } from '../rules/describe.mjs'
-import { edit, readBounded, readRules, RuleRefused } from '../rules/file.mjs'
+import { edit, readRules, RuleRefused } from '../rules/file.mjs'
 import { isArmed, readRuleFacts, ruleState } from '../rules/state.mjs'
 import { actionKind, checkRule, conditionsOf, normalizeRule, parseRulesBytes } from '../rules/validate.mjs'
 
@@ -28,20 +29,30 @@ const NO_HELD = Object.freeze({ released: 0, cut: 0 })
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`
 const exitOf = (code) => (['usage', 'rule-invalid', 'rule-unknown'].includes(code) ? EXIT.usage : EXIT.incomplete)
 const refused = (command, { code, message }) => ({ doc: errorDoc(command, code, `trocar ${command}: ${message}`) })
-const failureOf = (e) => e.error ?? { code: 'rule-invalid', message: `${e.invalid[0].path}: ${e.invalid[0].reason}` }
+const failureOf = (e) => e.error ?? { code: 'rule-invalid', message: `${e.invalid[0].path ? `${e.invalid[0].path}: ` : ''}${e.invalid[0].reason}` }
 const disarm = ({ armed: _armed, armed_at: _at, script_entry_sha256: _script, ...rule }) => rule
 
-/** POST to the daemon → 'absent' when nobody is there or it has no such route yet, 'no-answer' when it is there and did not answer, or `{answer}`. */
+/** POST to the daemon → 'absent' when nobody is there or it has no such route yet, 'no-answer' when it is there and did not answer, or `{answer}`. A reply that is no JSON object says
+ *  nothing about what the daemon did, so it is no answer; what the daemon says is read here, because `rules off` has to go on within the bound whatever it sends. */
 async function notifyDaemon(c, route) {
   const { socketPath, request } = controlEndpointFor({ platform: c.platform, dir: collectorHome(c.home), env: c.env })
   if (!socketPath) return 'absent'
-  try { return { answer: await request({ socketPath, method: 'POST', path: route, timeoutMs: DAEMON_TIMEOUT_MS }) } } catch (e) {
+  try {
+    const answer = JSON.parse(await request({ socketPath, method: 'POST', path: route, totalMs: DAEMON_TIMEOUT_MS, raw: true }))
+    return answer !== null && typeof answer === 'object' && !Array.isArray(answer) ? { answer } : 'no-answer'
+  } catch (e) {
     return e.status === 404 || e.code === 'ENOENT' || e.code === 'ECONNREFUSED' ? 'absent' : 'no-answer'
   }
 }
 
+const isCount = (n) => Number.isSafeInteger(n) && n >= 0
+
 /** What a daemon's reply says it did with the held units: nothing when there is no daemon, not known when it did not say. */
-const heldOf = (said) => (said === 'absent' ? { ...NO_HELD } : said.answer?.held ?? 'unknown')
+function heldOf(said) {
+  if (said === 'absent') return { ...NO_HELD }
+  const held = said.answer?.held
+  return isCount(held?.released) && isCount(held?.cut) ? held : 'unknown'
+}
 
 function heldLines(held) {
   if (held === 'unknown') return ['What happened to held requests is not known.']
@@ -129,7 +140,7 @@ async function add(c, [source]) {
   if (!e.ok) return refused(command, failureOf(e))
 
   const notes = [...notesOf(rule), ...(gone && isArmed(gone) ? [`${rule.name} was on and is off now. Run trocar rules enable ${rule.name} to turn it back on.`] : [])]
-  const base = { ...newReceipt(command), rules: [{ name: rule.name, state: 'disabled' }], notes, undo: gone ? null : `trocar rules rm ${rule.name}` }
+  const base = { ...newReceipt(command), rules: [{ name: rule.name, state: 'disabled' }], notes, undo: gone || dryRun ? null : `trocar rules rm ${rule.name}` }
   const change = gone ? 'replace' : 'add'
   const head = `${rule.name}: ${gone ? 'replaced' : 'added'}. It stays off until trocar rules enable ${rule.name}.`
   const told = notes.flatMap((n) => wrap(n))
@@ -207,8 +218,9 @@ async function off(c) {
 
 function shownDelay(c) {
   const read = readRules({ home: c.home })
+  if (read.state === 'bad') return refused('rules max-delay', { code: 'rules-unreadable', message: `${rulesFile(c.home)} cannot be used: ${read.problem.reason}.` })
   const doc = { ...newReceipt('rules max-delay'), max_delay_ms: read.doc.max_delay_ms, loaded: null }
-  return { doc: withProblems(doc, read.problem ? [`${rulesFile(c.home)} cannot be used: ${read.problem.reason}.`] : []), lines: [`Max delay: ${doc.max_delay_ms} ms.`] }
+  return { doc, lines: [`Max delay: ${doc.max_delay_ms} ms.`] }
 }
 
 async function maxDelay(c, [value]) {
@@ -247,13 +259,13 @@ function listLines(doc, { now, c }) {
 function detailLines(doc, { now, c }) {
   const [r] = doc.rules
   const { limit } = r
-  return [`${c.bold(r.name)}: ${WORDS[r.state]}`, ...wrap(r.summary), '', ...pairs([
-    ...(r.note === null ? [] : [['Note', r.note]]),
+  return [`${c.bold(r.name)}: ${WORDS[r.state]}`, ...wrap(visible(r.summary)), '', ...pairs([
+    ...(r.note === null ? [] : [['Note', visible(r.note)]]),
     ['Reads', READS[r.tier]],
     ['Gathers', GATHERS[r.buffers]],
     ['On error', r.on_error === 'drop' ? 'cut the connection' : 'pass it unchanged'],
     ...(limit.times === null ? [] : [['Limit', `${limit.used} of ${limit.times} changes`]]),
-    ...(limit.until === null ? [] : [['Until', limit.until]]),
+    ...(limit.until === null ? [] : [['Until', visible(limit.until)]]),
     ...(r.stopped_on.length ? [['Stopped on', r.stopped_on.join(', ')]] : []),
     ['Changes', `${r.changes}, last ${lastChange(r, now)}`],
     ['Not applied', String(r.not_applied)],
@@ -296,10 +308,10 @@ export async function run(argv, { io, json, args, home, env, platform, deps = {}
   if (json) printJson(io, doc)
   else {
     for (const line of lines) io.out(line)
-    for (const line of errors) io.err(line)
-    if (doc.error) for (const line of wrap(doc.error.message)) io.err(line)
-    for (const problem of doc.problems ?? []) for (const line of wrap(problem)) io.err(line)
-    if (misused) io.err(commandNamed('rules').usage.split('\n').find((l) => l.includes(` ${verb}`)) ?? commandNamed('rules').usage.split('\n')[0])
+    for (const line of errors) io.err(visible(line))
+    if (doc.error) for (const line of wrap(visible(doc.error.message))) io.err(line)
+    for (const problem of doc.problems ?? []) for (const line of wrap(visible(problem))) io.err(line)
+    if (misused) io.err(commandNamed('rules').usage.split('\n').find((l) => l.split(/[ |]/).includes(verb)) ?? commandNamed('rules').usage.split('\n')[0])
   }
   return out.exit ?? (doc.ok ? EXIT.ok : exitOf(doc.error.code))
 }

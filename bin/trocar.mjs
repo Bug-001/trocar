@@ -14,4 +14,8 @@ if (!(major > needMajor || (major === needMajor && minor >= needMinor))) {
 }
 const { runCli } = await import('../src/cli/main.mjs');
 
+// A reader that left (`trocar rules | head -1`) breaks no command: what it was doing finishes unprinted and leaves with its own code, so a switch is never cut in half by a pager.
+// A write to the closed pipe fails on the stream, and with no listener there that is an uncaught exception and a stack on the screen.
+for (const stream of [process.stdout, process.stderr]) stream.on('error', (e) => { if (e.code !== 'EPIPE') throw e; });
+
 runCli(process.argv.slice(2)).then((code) => { process.exitCode = code; }, (e) => { console.error(e); process.exit(1); });

@@ -38,6 +38,17 @@ test('controlEndpointOf reads the endpoint out of control.json: the pipe name an
   for (const bad of ['not json', '[]', '{}', JSON.stringify({ path: '\\\\.\\pipe\\trocar-0011223344556677' }), JSON.stringify({ token: 'c'.repeat(64) }), JSON.stringify({ path: 7, token: 'c'.repeat(64) })]) assert.ok(at(bad).error, `${bad.slice(0, 30)} is not an endpoint`)
 })
 
+test('controlEndpointOf: a control.json that is no regular file or over any size it reaches is an error, which the caller goes on from', () => {
+  const dir = tmpDir('trocar-w32-endpoint-'), file = path.join(dir, 'control.json')
+  nodeFs.mkdirSync(file)
+  assert.ok(controlEndpointOf({ dir }).error)
+  assert.equal(controlEndpointFor({ platform: 'darwin', dir }).socketPath, null)
+  nodeFs.rmdirSync(file)
+  nodeFs.closeSync(nodeFs.openSync(file, 'w'))
+  nodeFs.truncateSync(file, 2 ** 30)
+  assert.ok(controlEndpointOf({ dir }).error)
+})
+
 // The real shape on a Mac: POSIX file names may hold backslashes and Node resolves a relative unix-socket path against the cwd, so after a chdir into a
 // temp directory the literal `\\.\pipe\trocar-<hex>` of a real control.json is a listenable path — the data keeps the shape a Windows daemon writes
 // and the request path is the real one (no injected `request` / `socketPath`). Restores the cwd after (each test file is its own process).

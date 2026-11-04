@@ -52,8 +52,8 @@ test('readStateFile throws what it cannot read: the errno of a file it could not
   for (const text of ['{not json', '[]', 'null', '"on"']) { put(f, text); assert.throws(() => readStateFile(f), { code: 'state-unparsable' }, text) }
   put(f, { version: 3, harnesses: {} })
   assert.throws(() => readStateFile(f), (e) => e.code === 'state-unparsable' && /version 3/.test(e.message))
-  fs.rmSync(f); fs.mkdirSync(f) // a directory where the file belongs
-  assert.throws(() => readStateFile(f), { code: 'EISDIR' })
+  fs.chmodSync(f, 0)
+  assert.throws(() => readStateFile(f), { code: 'EACCES' })
 })
 
 test('setDesired: a new object with the harnesses named stamped (and the top level); policy and extra_hosts kept; the old state untouched', () => {
@@ -112,4 +112,13 @@ test('writeStateAtomic: a directory that cannot fsync (EINVAL) is not a failed w
   assert.equal(readStateFile(f).from, 2)
   fs.chmodSync(path.dirname(f), 0o500)
   try { assert.throws(() => writeStateAtomic(f, emptyState()), { code: 'EACCES' }) } finally { fs.chmodSync(path.dirname(f), 0o700) }
+})
+
+test('a state path that is no regular file or is over any size a state reaches is thrown, as a file that could not be read', () => {
+  const dir = tmpDir('trocar-state-')
+  assert.throws(() => readStateFile(dir), { code: 'not-regular' })
+  const huge = path.join(dir, 'state.json')
+  fs.closeSync(fs.openSync(huge, 'w'))
+  fs.truncateSync(huge, 2 ** 30)
+  assert.throws(() => readStateFile(huge), { code: 'too-big' })
 })

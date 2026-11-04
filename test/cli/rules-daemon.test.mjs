@@ -5,11 +5,14 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
+import { spawn } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 import { runCli } from '../../src/cli/main.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
 import { CONTROL_TOKEN_HEADER } from '../../src/off/token-header.mjs'
 import { rulesState } from '../../src/paths.mjs'
 import { fakeIo } from './fixtures/on-ctx.mjs'
+import { within } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 
 const TOKEN = 'e'.repeat(64)
@@ -43,7 +46,7 @@ async function world(platform, reply) {
   fs.mkdirSync(trocar, { recursive: true })
   const file = path.join(trocar, 'rules.json')
   return {
-    home, trocar, file, asked, token,
+    home, trocar, file, asked, token, env,
     seed: (rules) => fs.writeFileSync(file, JSON.stringify({ max_delay_ms: 200, rules }, null, 2) + '\n'),
     rules: async (argv) => {
       const io = fakeIo()
@@ -125,7 +128,7 @@ test('5.1: rules off does not wait on the lock to stop the rules: with rules.loc
   const w = await world('darwin', json(200, STOPPED))
   try {
     w.seed([rule(armed)])
-    const bytes = fs.readFileSync(w.file), lock = path.join(w.trocar, 'rules.lock'), later = new Date(Date.now() + 60_000)
+    const bytes = fs.readFileSync(w.file), lock = path.join(w.trocar, 'rules.lock'), later = new Date(Date.now() + 1000)
     fs.writeFileSync(lock, 'someone')
     fs.utimesSync(lock, later, later)
     const { exit, doc } = await w.rules(['off'])
@@ -220,4 +223,53 @@ test('a socket that is gone is no daemon', async () => {
   const { exit, doc } = await w.rules(['off'])
   assert.equal(exit, 0)
   assert.equal(doc.memory, 'no-daemon')
+})
+
+const BIN = fileURLToPath(new URL('../../bin/trocar.mjs', import.meta.url))
+// A real process: a socket left hanging shows in whether it can leave.
+function offProcess(w, env) {
+  const child = spawn(process.execPath, [BIN, 'rules', 'off', '--json'], { stdio: ['ignore', 'pipe', 'inherit'], env })
+  let out = ''
+  child.stdout.on('data', (d) => { out += d })
+  const done = new Promise((resolve) => { child.on('close', (exit) => resolve({ exit, doc: JSON.parse(out) })) })
+  return within(done, 20_000, 'rules off', () => child.kill('SIGKILL'))
+}
+
+test('§4.4: a daemon that keeps dripping bytes counts as not answering: rules off goes on, writes the file, exits 1 and leaves', async () => {
+  const drip = (req, res) => {
+    res.writeHead(200)
+    const timer = setInterval(() => res.write(' '), 100)
+    res.on('close', () => clearInterval(timer))
+  }
+  const w = await world(process.platform === 'linux' ? 'linux' : 'darwin', drip)
+  try {
+    w.seed([rule(armed)])
+    const { exit, doc } = await offProcess(w, w.env)
+    assert.deepEqual([exit, doc.memory, doc.error.code, doc.file.written], [1, 'no-answer', 'rules-no-answer', true])
+    assert.equal(Object.hasOwn(JSON.parse(fs.readFileSync(w.file, 'utf8')).rules[0], 'armed'), false)
+  } finally { await w.close() }
+})
+
+for (const body of ['null', '[]', '5', '"stopped"', '<html>', '']) {
+  test(`a 200 with ${JSON.stringify(body)} says nothing was stopped: no-answer, the file written, exit 1`, async () => {
+    const w = await world('darwin', (req, res) => { res.writeHead(200); res.end(body) })
+    try {
+      w.seed([rule(armed)])
+      const { exit, doc } = await w.rules(['off'])
+      valid(doc)
+      assert.deepEqual([exit, doc.memory, doc.file.written], [1, 'no-answer', true])
+    } finally { await w.close() }
+  })
+}
+
+test('C.2: held counts that are not counts are not passed on: what happened to held requests is not known', async () => {
+  for (const held of [{ released: 'x' }, { released: 1 }, { released: 1, cut: -1 }, 5, []]) {
+    const w = await world('darwin', json(200, { held, seq: { written: true, reason: null } }))
+    try {
+      w.seed([rule(armed)])
+      const { doc } = await w.rules(['off'])
+      valid(doc)
+      assert.equal(doc.held, 'unknown', JSON.stringify(held))
+    } finally { await w.close() }
+  }
 })

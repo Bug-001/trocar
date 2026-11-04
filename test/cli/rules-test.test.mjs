@@ -124,7 +124,7 @@ test('V115: --run-script runs the file on disk now, whatever the rule recorded w
   assert.match(second.doc.records[0].console, /the new one/)
 })
 
-test('5.1 验收 9: built-in actions give the bytes the process-local applyRules gives, and edits lead back to the agent\'s', async () => {
+test('5.1 验收 9: built-in actions give the bytes the process-local applyRules gives, and edits run from what the rule saw to that result', async () => {
   const stream = 'data: {"t":"ALPHA 中"}\n\ndata: {"t":"none"}\n\ndata: {"t":"ALPHA ALPHA"}\n\n'
   const cases = [
     [rule(), record({ req_body: '{"prompt":"中文 ALPHA 😀 ALPHA"}' }), ['{"prompt":"中文 ALPHA 😀 ALPHA"}']],
@@ -138,9 +138,7 @@ test('5.1 验收 9: built-in actions give the bytes the process-local applyRules
     const unit = { on: written.on ?? 'request', harness: 'claude-code', class: 'llm', host: rec.host, headers: [], req_headers: [], sse: written.on === 'response', encoding: null, status: null, event_index: null }
     const local = await Promise.all(parts.map((part) => applyRules({ ...unit, body: Buffer.from(part) }, compiled, { tier: 2, full })))
     const agent = Buffer.from(parts.join('')), result = Buffer.concat(local.map((one, i) => one.bytes ?? Buffer.from(parts[i])))
-    // Edits run from the wire to the agent: a request's start at the result, a response's at what came from upstream.
-    const [from, to] = written.on === 'response' ? [agent, result] : [result, agent]
-    assert.ok(applyEdits(from, doc.records[0].edits).equals(to))
+    assert.ok(applyEdits(agent, doc.records[0].edits).equals(result))
   }
 })
 
@@ -273,4 +271,129 @@ test('passthrough_hosts: the hosts of the last day\'s uncaptured connections tha
   const said = await rulesTest(broken, 'swap', '--ref', refOf(1))
   assert.deepEqual(said.doc.passthrough_hosts, [])
   assert.ok(said.doc.notes.length > 0)
+})
+
+const ws = (over = {}) => record({ transport: 'ws', req_body: 'say ALPHA', resp: { status: 101, kind: 'ws', headers: {}, messages: ['say ALPHA too'] }, ...over })
+const wsRule = (on) => rule({ on, match: { harness: 'any', class: 'llm' } })
+
+test('1.6 §4.4: what no rule could have read is cannot-test and counts as such, never no-match', async () => {
+  const cases = [
+    [rule(), record({ req_body: { verbatim: false, raw_chars: 5000 } }), 'body-not-kept'],
+    [rule(), record({ req_body: null, req_encoding_error: 'zstd' }), 'body-not-kept'],
+    [wsRule('ws-client'), ws({ req_body: null }), 'message-not-kept'],
+    [wsRule('ws-server'), ws({ resp: undefined }), 'message-not-kept'],
+    [wsRule('ws-server'), ws({ resp: { status: 101, kind: 'ws', headers: {} } }), 'message-not-kept'],
+  ]
+  for (const [written, rec, why] of cases) {
+    const s = sandbox([written], [rec])
+    const { exit, doc } = await rulesTest(s, 'swap', '--ref', refOf(1))
+    assert.deepEqual([doc.records[0].result, doc.records[0].why, doc.counts.no_match, doc.counts.cannot_test, exit], ['cannot-test', why, 0, 1, 1], why)
+  }
+})
+
+const BAD_RECORDS = [
+  [{ on: 'response' }, { resp: { status: 200, kind: 'json', headers: {}, raw: 5 } }],
+  [{ on: 'response' }, { resp: { status: 200, kind: 'json', headers: {}, raw: { a: 1 } } }],
+  [{ on: 'ws-client' }, { transport: 'ws', req_extra_messages: 5 }],
+  [{ on: 'ws-server' }, { transport: 'ws', resp: { status: 101, kind: 'ws', headers: {}, messages: 5 } }],
+]
+for (const [where, over] of BAD_RECORDS) {
+  test(`a record of the wrong shape (${JSON.stringify(over).slice(0, 60)}) is bad-record and the rest still run`, async () => {
+    const good = where.on === 'response' ? record({ resp: { status: 200, kind: 'json', headers: {}, raw: '{"a":"ALPHA"}' } }) : ws()
+    const records = [good, record({ ...(where.on.startsWith('ws') ? ws() : {}), ...over }), good]
+    const s = sandbox([rule(where)], records)
+    const { exit, doc } = await rulesTest(s, 'swap', ...allRefs(records))
+    assert.deepEqual(results(doc), ['change', 'cannot-test', 'change'])
+    assert.equal(doc.records[1].why, 'bad-record')
+    assert.equal(exit, 0)
+  })
+}
+
+test('--ref on a line that is not JSON is bad-record; on a line that is not there no-record', async () => {
+  const s = sandbox([rule()], [record()])
+  fs.appendFileSync(path.join(s.trocar, 'raw', `${SEG}.ndjson`), '{broken\n')
+  const { doc } = await rulesTest(s, 'swap', '--ref', refOf(2), '--ref', refOf(9))
+  assert.deepEqual(doc.records.map((r) => r.why), ['bad-record', 'no-record'])
+})
+
+test('1.6 §4.4: rules.json that cannot be read is rules-unreadable, exit 1', async () => {
+  const s = sandbox([rule()], [record()])
+  fs.writeFileSync(s.file, '{oops')
+  const { exit, doc } = await rulesTest(s, 'swap')
+  assert.deepEqual([exit, doc.error.code], [1, 'rules-unreadable'])
+})
+
+test('1.6 §4.4: a load that failed is reported on every record, and notes say why', async () => {
+  const script = path.join(tmpDir('trocar-rules-script-'), 'gone.mjs')
+  const records = [record(), record()]
+  const s = sandbox([rule({ do: [{ script }], match: { harness: 'any', class: 'llm' } })], records)
+  const { exit, doc } = await rulesTest(s, 'swap', '--run-script', ...allRefs(records))
+  assert.deepEqual(doc.records.map((r) => [r.result, r.why]), [['error', 'load-failed'], ['error', 'load-failed']])
+  assert.ok(doc.notes.some((note) => note.includes(script)), doc.notes.join('|'))
+  assert.equal(exit, 1)
+})
+
+// Every position the bytes can be changed at, and rules chained: what comes out of records[].edits applied to what the rule saw is the result.
+const BODY = '{"prompt":"中文 ALPHA 😀 ALPHA","n":"ALPHA"}'
+const swaps = [[{ replace: 'ALPHA', with: 'BRAVO', literal: true }], [{ replace: 'ALPHA', with: 'BRAVO BRAVO 中', literal: true }, { replace: 'BRAVO', with: 'C' , literal: true }], [{ replace: 'ALPHA', with: '', literal: true }]]
+const seen = {
+  request: [{}, record({ req_body: BODY }), BODY],
+  response: [{ on: 'response', whole: true }, record({ resp: { status: 200, kind: 'text', headers: {}, raw: BODY } }), BODY],
+  'ws-client': [{ on: 'ws-client' }, ws({ req_body: BODY }), BODY],
+  'ws-server': [{ on: 'ws-server' }, ws({ resp: { status: 101, kind: 'ws', headers: {}, messages: [BODY] } }), BODY],
+}
+for (const [on, [where, rec, body]] of Object.entries(seen)) {
+  for (const [i, actions] of swaps.entries()) {
+    test(`records[].edits on ${on}, actions ${i}: from the bytes the rule saw to its result`, async () => {
+      const written = rule({ ...where, do: actions })
+      const s = sandbox([written], [rec])
+      const { doc } = await rulesTest(s, 'swap', '--ref', refOf(1))
+      const unit = { on: where.on ?? 'request', harness: 'claude-code', class: 'llm', host: rec.host, headers: [], req_headers: [], sse: false, encoding: null, status: null, event_index: null, body: Buffer.from(body) }
+      const local = await applyRules(unit, compileRules({ rules: [written] }).rules, { tier: 2, full })
+      assert.equal(String(applyEdits(Buffer.from(body), doc.records[0].edits)), String(local.bytes))
+    })
+  }
+}
+
+test('C.2: a rule that changes headers says which, in records[].headers and in the WOULD column, and a credential\'s value stays hidden', async () => {
+  const actions = [{ header: 'x-a', set: 'b' }, { header: 'content-type', remove: true }, { header: 'authorization', set: 'Bearer rule-value' }]
+  const s = sandbox([rule({ do: actions })], [record()])
+  const { doc } = await rulesTest(s, 'swap', '--ref', refOf(1))
+  assert.equal(doc.records[0].result, 'change')
+  assert.deepEqual(Object.fromEntries(doc.records[0].headers), { 'x-a': 'b', 'content-type': null, authorization: '' })
+  const io = fakeIo()
+  await runCli(['rules', 'test', 'swap', '--ref', refOf(1)], { io, home: s.home, env: { HOME: s.home }, platform: 'darwin', uid: 1000 })
+  for (const [word, name] of [['set', 'x-a'], ['remove', 'content-type']]) assert.ok(io.stdoutText().includes(`${word} ${name}`), io.stdoutText())
+  assert.equal(io.stdoutText().includes('rule-value'), false)
+})
+
+test('C.2: nothing tested says why, in notes and to a person', async () => {
+  const none = sandbox([rule({ match: { harness: 'any', host: 'nowhere.test' } })], [record()])
+  const stuck = sandbox([rule()], [record({ body_retention: 'log' })])
+  for (const [s, flags] of [[none, []], [stuck, ['--ref', refOf(1)]]]) {
+    const { exit, doc } = await rulesTest(s, 'swap', ...flags)
+    assert.deepEqual([exit, doc.counts.tested], [1, 0])
+    assert.ok(doc.notes.length)
+    const io = fakeIo()
+    await runCli(['rules', 'test', 'swap', ...flags], { io, home: s.home, env: { HOME: s.home }, platform: 'darwin', uid: 1000 })
+    assert.ok(doc.notes.every((note) => io.stdoutText().replace(/\s+/g, ' ').includes(note)))
+  }
+})
+
+test('a script\'s console and a load\'s reason reach a person written out', async () => {
+  const script = scriptFile('export default () => { console.log("\\u001b[31mred\\nnext"); }')
+  const s = sandbox([rule({ do: [{ script }], match: { harness: 'any', class: 'llm' } })], [record()])
+  const io = fakeIo()
+  await runCli(['rules', 'test', 'swap', '--run-script', '--ref', refOf(1)], { io, home: s.home, env: { HOME: s.home }, platform: 'darwin', uid: 1000 })
+  assert.equal(io.stdoutText().includes('\u001b'), false)
+  assert.ok(io.stdoutText().includes('next'))
+})
+
+test('validateReceipt holds records[] to C.2', () => {
+  const doc = { schema: 2, command: 'rules test', ok: true, changed: [], created: [], removed: [], skipped: [], restart: [], relayed: { closing: 0, waiting: 0, cut: 0 }, undo: null, problems: [], log: null }
+  const row = { ref: 'a:1', result: 'change', ms: 1 }
+  const seenBase = validateReceipt({ ...doc, records: [row] })
+  assert.deepEqual(validateReceipt({ ...doc, records: [{ ...row, edits: [], headers: [['a', 'b'], ['c', null]], would: 'x', console: 'y', why: 'z' }] }), seenBase)
+  assert.ok(validateReceipt({ ...doc, records: [{ ...row, stray: 1 }] }).length > seenBase.length)
+  assert.ok(validateReceipt({ ...doc, records: [{ ...row, headers: [['a']] }] }).length > seenBase.length)
 })

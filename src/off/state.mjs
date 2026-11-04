@@ -12,7 +12,7 @@
 // a reader never sees half a file and a crash leaves the old one or the new one.
 import nodeFs from 'node:fs'
 import path from 'node:path'
-import { fsyncDir } from './fsutil.mjs'
+import { fsyncDir, readSmall } from './fsutil.mjs'
 
 export const STATE_VERSION = 2
 
@@ -50,10 +50,10 @@ export function migrateV1(v1, installedIds, now = new Date()) {
 
 /** Reads `file` → `{ state, from }`: `from` is the version the file had (1, 2) or null when there is no file (then `state` is
  *  `emptyState()`). A version 1 file comes back migrated for `installed` (default: no harness, so nothing is on). Throws what could
- *  not be read (its errno), or `state-unparsable` for a file that is not a state or has a version this build does not know. */
+ *  not be read (its errno, `not-regular` or `too-big`), or `state-unparsable` for a file that is not a state or has a version this build does not know. */
 export function readStateFile(file, { fs = nodeFs, installed = [], now = new Date() } = {}) {
   let text
-  try { text = fs.readFileSync(file, 'utf8') } catch (e) { if (e && e.code === 'ENOENT') return { state: emptyState(), from: null }; throw e }
+  try { text = readSmall(fs, file) } catch (e) { if (e && e.code === 'ENOENT') return { state: emptyState(), from: null }; throw e }
   let v
   try { v = JSON.parse(text) } catch (e) { throw unparsable(file, `does not parse (${e.message})`) }
   if (!isPlain(v)) throw unparsable(file, 'is not a JSON object')

@@ -150,7 +150,7 @@ for (const [name, gap] of [['at once', ''], ['a moment apart', 'await new Promis
   });
 }
 
-describe('a load that fails is load-failed, and the next run tries again', { concurrency: 4 }, () => {
+describe('a load that fails is load-failed, and every run after it gets the same answer from no new process', { concurrency: 4 }, () => {
   const scripts = [
     ['a throw at the top of the script', 'throw new Error("boom")'],
     ['a script with no default export', 'export const x = 1'],
@@ -167,9 +167,10 @@ describe('a load that fails is load-failed, and the next run tries again', { con
       fs.writeFileSync(script, source);
       const runner = openOneShot({ script, rules: [{ name: 'script', on_error: 'forward', match: { harness: 'any' }, do: [{ script }] }] });
       try {
-        assert.equal((await runner.run(unit())).died, 'load-failed');
-        fs.writeFileSync(script, 'export default () => "ok"');
-        assert.equal(String((await runner.run(unit())).bytes), 'ok');
+        const failed = await runner.run(unit());
+        assert.equal(failed.died, 'load-failed');
+        fs.writeFileSync(script, 'export default () => "ok"'); // a new process would load this
+        assert.deepEqual(await runner.run(unit()), failed);
       } finally { await runner.close(); }
     });
   }

@@ -1,6 +1,7 @@
 // rules-manual.mjs — `trocar help rules`, the one text a person or an agent needs to write, try, list and remove a rule (RFC 1.6 §4.4, 5.1). Loaded only
 // when that help is asked for. The table of actions and positions and every limit come from the rule system itself, so they cannot drift from what `rules add` does.
 import { ACTION_POSITIONS, PLACES, LIMITS, DEFAULT_MAX_DELAY_MS } from '../rules/validate.mjs'
+import { HARNESS_IDS, NAME_ALIASES } from '../off/harness-names.mjs'
 import { COMMAND_INDENT } from '../off/receipt.mjs'
 import { WIDTH, wrap, size } from './text.mjs'
 
@@ -83,6 +84,8 @@ const EXAMPLES = [
 }`],
 ]
 
+const harnessNames = () => HARNESS_IDS.map((id) => [id, ...Object.keys(NAME_ALIASES).filter((alias) => NAME_ALIASES[alias] === id)].join(' or ')).join(', ')
+
 const indented = (text) => text.split('\n').map((line) => COMMAND_INDENT + line)
 
 const SCRIPT = `export default async function (message) {
@@ -119,27 +122,29 @@ export function rulesManual() {
         ['--as-sent', 'a request rule reads the bytes as they went on the wire, not what the agent sent'],
         ['--run-script', 'runs a script rule. Without it the record is marked untested, because a script can reach the network'],
       ]),
-      wrap(`Each record has ${seconds(2000)} at most, and the output says how long each rule took. A rule over the max delay will time out once it is on. It exits 1 when no record could be tried or a record ended in an error, so trocar rules test x && trocar rules enable x stops there.`)),
+      wrap(`Each record has ${seconds(2000)} at most, and the output says how long each rule took. A rule over the max delay will time out once it is on. It exits 1 when no record could be tried or a record ended in an error, so trocar rules test x && trocar rules enable x stops there.`),
+      '',
+      wrap('With --json, each record\'s edits run from the bytes the rule saw to its result: at and del count bytes, ins is what goes in. headers lists the headers it sets and removes.')),
     ...section('A rule',
       wrap('A rule file holds one JSON object with these keys.'),
       table([9], [
-        ['name', 'Its id: lowercase letters, digits and -. add, test, enable, disable, rm, off and max-delay are taken.'],
+        ['name', `Its id: lowercase letters, digits and -, starting with a letter or digit, at most ${LIMITS.nameBytes} bytes. add, test, enable, disable, rm, off and max-delay are taken.`],
         ['note', 'Optional, for your later self.'],
         ['on', 'Where it acts: request (the default), response, ws-client (a WebSocket message from the agent) or ws-server (one to the agent).'],
         ['whole', 'Only on response: wait for the whole response, then act. Without it an SSE response goes event by event, and any other waits for the max delay at most.'],
         ['match', 'When it acts: every condition has to hold.'],
         ['do', `What it does: 1 to ${LIMITS.list} actions, in order.`],
         ['on_error', 'Required. What happens when it cannot do its work or runs out of time: forward sends the bytes on, drop cuts the connection. Both leave a record.'],
-        ['limit', 'Optional. times stops it after that many changes, until stops it at that time (like 2026-11-05T12:00:00Z). Both count from the last rules enable. A request, a response or a WebSocket message is one change, however many places it touches.'],
+        ['limit', 'Optional. times stops it after that many changes, until stops it at that time, in ISO 8601 with its zone (like 2026-11-05T12:00:00Z). Both count from the last rules enable. A request, a response or a WebSocket message is one change, however many places it touches.'],
       ])),
     ...section('Conditions',
       wrap('Every key is a plain HTTP field, so a rule can reach model calls, telemetry, session sync, uploads and account requests alike. On a response, host, path, method and class are those of its request; on WebSocket, those of the handshake.'),
       table([11], [
-        ['harness', `A harness name, a list of at most ${LIMITS.list}, or "any".`],
+        ['harness', `A harness name, a list of at most ${LIMITS.list}, or "any". The names are ${harnessNames()}.`],
         ['pid', 'Only this process. If it goes away the rule stops and says why, so a reused pid never reaches another agent.'],
         ['host', 'The host.'],
         ['path', 'The path.'],
-        ['method', 'The method.'],
+        ['method', 'The method, in upper case. rules add refuses a lower-case one, which could never match.'],
         ['class', 'The kind of traffic: llm, token-count, session-sync, telemetry, files, account, other, or one you added with trocar classes.'],
         ['header', 'An object of header names and conditions: the request\'s, the response\'s on a response rule, the handshake\'s on WebSocket.'],
         ['req_header', 'The same over the headers of the request. On a response rule only.'],
@@ -182,6 +187,7 @@ export function rulesManual() {
         'a rule that reads the body also has host, path or class. Reading the body means a body or blocks condition, or a replace, json, blocks or script action.',
         'a rule with on_error drop has host. To reach every host write "*".',
         `a script rule matches without reading the body: no body, no blocks, no regex, no literal over ${LIMITS.literalBytes} bytes. The script decides that and returns nothing to change nothing.`,
+        'every regex parses, in a condition, a block selector or a replace.',
       )),
     ...section('Actions',
       wrap('Ten of them. hold, drop and reply come last in do, and do has one script at most.'),
@@ -264,7 +270,12 @@ export function rulesManual() {
       )),
     ...section('Before you rely on a rule',
       bullets(
-        'replace reaches every string value of the body, the model name and signature fields included. Narrow it with blocks. It leaves object keys alone unless it says in: body.',
+        'replace reaches every string value of the body, the model name and signature fields included. Narrow it with blocks.',
+        'in: text leaves object keys and numbers alone. To change those, write in: body.',
+        'in: text decodes a JSON string once. A string that holds JSON of its own, like the arguments of a tool call, keeps whatever is escaped inside it.',
+        'On SSE, in: text reads the data: lines only. To change an event: or id: line, write in: body.',
+        'A body that is not JSON and has \\u in it cannot be read for sure, so in: text does not guess: it records not-json and goes by on_error.',
+        'The text of a block selector reads only blocks that have a text path. tool_use.input and the like are not among them, so use a replace without blocks to reach them.',
         'A text rule on the OpenAI Responses API has to write whole. Without it the deltas stay as they were and the final text changes, so what the agent shows and what it stores differ.',
         'A compressed request body is sent as plain text after a change, without its content-encoding. Our tests cannot confirm that an upstream takes plain text in place of zstd.',
         'How long a hold can really wait also depends on the agent\'s own client timeout.',

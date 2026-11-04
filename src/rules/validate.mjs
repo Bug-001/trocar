@@ -20,8 +20,11 @@ const isAny = () => true
 const inRange = (lo, hi) => (v) => Number.isSafeInteger(v) && v >= lo && v <= hi
 const isCount = inRange(0, Number.MAX_SAFE_INTEGER)
 const isPositive = inRange(1, Number.MAX_SAFE_INTEGER)
+// A key may be as long as the file: a problem quotes the start of it.
+const QUOTED_CHARS = 200
 const at = (base, key) => {
-  const seg = /^[\w-]+$/.test(key) ? key : JSON.stringify(key)
+  const written = /^[\w-]+$/.test(key) ? key : JSON.stringify(key)
+  const seg = written.length > QUOTED_CHARS ? `${written.slice(0, QUOTED_CHARS)}...` : written
   return base ? `${base}.${seg}` : seg
 }
 
@@ -56,6 +59,13 @@ const MATCH_PLACES = {
 const RULE_KEYS = new Set(['name', 'note', 'on', 'whole', 'match', 'do', 'on_error', 'limit'])
 const ENABLE_KEYS = ['armed', 'armed_at', 'script_entry_sha256']
 const RESERVED_NAMES = new Set(['add', 'test', 'enable', 'disable', 'rm', 'off', 'max-delay'])
+const isName = (v) => isString(v) && v.length <= LIMITS.nameBytes && /^[a-z0-9][a-z0-9-]*$/.test(v) && !RESERVED_NAMES.has(v)
+// Date.parse alone takes "Jan 1", and carries the 31st of February over into March.
+const ZONED_TIME = /^(\d{4})-(\d{2})-(\d{2})T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/
+function isZonedTime(v) {
+  const [, year, month, day] = (isString(v) && ZONED_TIME.exec(v)) || []
+  return day !== undefined && Number.isFinite(Date.parse(v)) && new Date(Date.UTC(year, month - 1, day)).getUTCMonth() === month - 1
+}
 
 // An action's form: `need` every key, `one` exactly one of them, `may` any of them, nothing else. The key that names the kind comes first in `need`.
 const SELECTOR_KEYS = { section: isString, kind: isString, role: isString, name: isString, text: isString, min_bytes: isCount, max_bytes: isCount, newest: isCount, skip_newest: isCount }
@@ -158,6 +168,7 @@ function checkMatch(match, position, script, bad) {
       const bytesOk = (v) => Buffer.byteLength(v) <= LIMITS.headerGrowthBytes
       if (!literals(node).every((v) => bytesOk(v) && !checkHeaderValue(v).length)) bad(where, 'not a header value')
     }
+    if (key === 'method' && literals(node).some((v) => v !== v.toUpperCase())) bad(where, 'a method is upper case: the lower case never matches')
     if (script && tierOf(node, { key }) === 2) bad(where, 'a script rule decides this in the script')
   }
   if (script) for (const key of ['body', 'blocks']) if (has(match, key)) bad(`match.${key}`, 'a script rule reads the body in the script')
@@ -224,7 +235,7 @@ export function checkRule(rule, { input = false } = {}) {
   for (const key of Object.keys(rule)) if (!RULE_KEYS.has(key) && !ENABLE_KEYS.includes(key)) bad(at('', key), 'unknown key')
   checkEnableKeys(rule, input, bad)
 
-  if (!isString(rule.name) || !/^[a-z0-9-]+$/.test(rule.name) || RESERVED_NAMES.has(rule.name)) bad('name', 'lowercase letters, digits and -, not a reserved word')
+  if (!isName(rule.name)) bad('name', `lowercase letters, digits and -, starting with a letter or digit, at most ${LIMITS.nameBytes} bytes, not a reserved word`)
   if (has(rule, 'note') && !isString(rule.note)) bad('note', 'a string')
   const position = positionOf(rule)
   if (!position) bad('on', `one of: ${POSITIONS.join(' ')}`)
@@ -235,7 +246,7 @@ export function checkRule(rule, { input = false } = {}) {
     else {
       checkKeys(rule.limit, { times: 1, until: 1 }, 'limit', bad)
       if (has(rule.limit, 'times') && !isPositive(rule.limit.times)) bad('limit.times', 'a whole number of changes')
-      if (has(rule.limit, 'until') && !(isString(rule.limit.until) && Number.isFinite(Date.parse(rule.limit.until)))) bad('limit.until', 'a time')
+      if (has(rule.limit, 'until') && !isZonedTime(rule.limit.until)) bad('limit.until', 'an ISO 8601 time with its zone, like 2026-11-05T12:00:00Z')
     }
   }
 
@@ -257,7 +268,7 @@ function reachOf(rule) {
   const hostNode = has(match, 'host') ? parseCondition(match.host, { key: 'host' }) : null
   const exact = hostNode && exactValues(hostNode)
   const hosts = exact ? [...new Set(exact.map((h) => h.toLowerCase()))] : null
-  let conditions = 0
+  let conditions = has(match, 'pid') ? 1 : 0
   for (const { key, value } of conditionsOf(match)) {
     const node = parseCondition(value, { key })
     if (node && !(key === 'host' && hosts) && tierOf(node, { key }) === 1) conditions += leaves(node)

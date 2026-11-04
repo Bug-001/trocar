@@ -18,6 +18,12 @@ function wireRequest(rec) {
   return typeof rec.req_body === 'string' ? Buffer.from(rec.req_body, 'utf8') : null
 }
 
+// Nothing is stored for a request. A bodyless one stores '' now and a size of 0 before that; a GET or a HEAD with nothing stored had nothing to store.
+function bodyLost({ req_body: stored, req_encoding_error: failed, method }) {
+  if (stored !== null && typeof stored === 'object') return stored.raw_chars !== 0
+  return Boolean(failed) || !['GET', 'HEAD'].includes(method)
+}
+
 /** What the agent sent, from what went out and the record's `agent_request`; null when that does not check out. */
 function agentRequest(wire, { recover, edits, body_b64: inline, base_sha256: base, result_sha256: result }) {
   const start = wire ?? Buffer.alloc(0)
@@ -28,10 +34,11 @@ function agentRequest(wire, { recover, edits, body_b64: inline, base_sha256: bas
 }
 
 function requestUnits(rec, unit, asSent) {
-  const wire = wireRequest(rec), recover = rec.intervention?.agent_request
-  const body = recover && !asSent ? agentRequest(wire, recover) : wire
-  if (recover && !asSent && !body) return { cannot: 'not-restorable' }
-  return { units: [{ ...unit, encoding: (recover && !asSent ? recover.encoding : rec.req_content_encoding) ?? null, body }] }
+  const wire = wireRequest(rec), recover = asSent ? null : rec.intervention?.agent_request
+  const body = recover ? agentRequest(wire, recover) : wire
+  if (recover && !body) return { cannot: 'not-restorable' }
+  if (!recover && !body && bodyLost(rec)) return { cannot: 'body-not-kept' }
+  return { units: [{ ...unit, encoding: (recover ? recover.encoding : rec.req_content_encoding) ?? null, body }] }
 }
 
 // Each event's cut runs to the next one's, so that what lies between events stays with one of them and the cuts add up to the text. A text without events is one unit.
@@ -66,17 +73,19 @@ function messageBytes(message) {
 function messageUnits(rec, unit, on) {
   if (rec.ws_truncated === true) return { cannot: 'truncated' }
   const first = typeof rec.req_body_b64 === 'string' ? { b64: rec.req_body_b64 } : rec.req_body
-  const messages = on === 'ws-client' ? [...(first == null ? [] : [first]), ...(rec.req_extra_messages ?? [])] : storedReply(rec).part?.messages ?? []
-  const bodies = messages.map(messageBytes)
-  if (bodies.includes(null)) return { cannot: 'message-not-kept' }
+  const messages = on === 'ws-client' ? [first, ...(rec.req_extra_messages ?? [])] : storedReply(rec).part?.messages
+  const bodies = messages?.map(messageBytes)
+  if (!bodies || bodies.includes(null)) return { cannot: 'message-not-kept' }
   return { units: bodies.map((body, i) => ({ ...unit, event_index: i, body })) }
 }
 
 /**
  * `rule` is read for `on` and `whole`, `asSent` takes the wire's request over the agent's → `{units}` in applyRules's shape, none when the record is not of the rule's transport, or
- * `{cannot}` with why it cannot be tested: log-only, truncated, partial, no-response, body-not-kept, not-restorable, message-not-kept. Head values are as stored, credentials included.
+ * `{cannot}` with why it cannot be tested: log-only, truncated, partial, no-response, body-not-kept, not-restorable, message-not-kept, bad-record. Head values are as stored, credentials
+ * included. A record of the wrong shape further in can throw: that is a bad record too, and the caller's to say.
  */
 export function unitsOf(rec, rule, { asSent = false } = {}) {
+  if (rec === null || typeof rec !== 'object' || Array.isArray(rec)) return { cannot: 'bad-record' }
   if (isLogOnly(rec)) return { cannot: 'log-only' }
   const incomplete = reqIncompleteOf(rec)
   if (incomplete) return { cannot: incomplete.truncated ? 'truncated' : 'partial' }

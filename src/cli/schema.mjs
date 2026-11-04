@@ -67,6 +67,14 @@ function checkHarnessIds(v, at, bad, seen) {
 }
 
 /** Problems with a receipt object against R5 (`[]` = valid). Extra keys are allowed: R5 lists the least a receipt has. */
+// C.2: one row of `rules test`; `headers` are `[name, value or null]`.
+const TEST_ROW_KEYS = new Set(['ref', 'result', 'why', 'would', 'edits', 'headers', 'ms', 'console'])
+function checkTestRow(row, at, bad) {
+  if (!isObject(row)) { bad.push(`${at}: not an object`); return }
+  for (const k of Object.keys(row)) if (!TEST_ROW_KEYS.has(k)) bad.push(`${at}.${k}: not a key 附录 C names for rules test`)
+  for (const [i, pair] of (row.headers ?? []).entries()) if (!(Array.isArray(pair) && pair.length === 2 && isString(pair[0]) && (pair[1] === null || isString(pair[1])))) bad.push(`${at}.headers[${i}]: not [name, value or null]`)
+}
+
 export function validateReceipt(r) {
   if (!isObject(r)) return ['receipt: not an object']
   const bad = []
@@ -104,6 +112,7 @@ export function validateReceipt(r) {
   if (r.command in UNDO_LINE && r.undo !== null && r.undo !== UNDO_LINE[r.command]) bad.push(`undo: ${JSON.stringify(r.undo)}, expected ${JSON.stringify(UNDO_LINE[r.command])}`)
   // C.1: a problem is an English sentence, so a reader needs no code table to print it
   listOf(r, 'problems', bad, (p, at) => { if (!(isString(p) && p.trim() !== '')) bad.push(`${at}: not a sentence`) })
+  if (r.command === 'rules test') listOf(r, 'records', bad, (row, at) => checkTestRow(row, at, bad))
   const named = COMMAND_KEYS[r.command]
   if (named) {
     const allowed = new Set([...RECEIPT_KEYS, ...COMMON_OPTIONAL, ...named])

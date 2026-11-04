@@ -132,3 +132,26 @@ test('a state.json that cannot be read says so and records nothing', () => {
   assert.equal(errors.length, 1)
   assert.deepEqual([...f.recording], [])
 })
+
+// `1e400` parses to Infinity, so it has to be written as text.
+const NOT_A_COUNT = ['"9"', '-1', '1.5', '1e400', '9007199254740992', 'null', 'true', '[9]', '{}']
+for (const key of ['rules_off_seq', 'unclean_stops']) {
+  for (const value of NOT_A_COUNT) {
+    test(`rules-state.json with ${key} ${value} cannot be read: every rule enabled before now is off, and it says so`, () => {
+      const home = tmpDir('trocar-rstate-')
+      fs.mkdirSync(path.dirname(rulesState(home)), { recursive: true })
+      fs.writeFileSync(rulesState(home), `{"${key}": ${value}}`)
+      const { facts, errors } = readRuleFacts({ home })
+      assert.deepEqual(errors.map((e) => e.where), ['rules-state.json'])
+      assert.equal(ruleState(armed(), { ...facts, recording: new Set(['claude-code']), offSeq: { 'claude-code': 5 } }), 'disabled')
+    })
+  }
+}
+
+test('rules-state.json without a key reads it as 0, and a count as it is', () => {
+  const home = tmpDir('trocar-rstate-')
+  fs.mkdirSync(path.dirname(rulesState(home)), { recursive: true })
+  fs.writeFileSync(rulesState(home), '{"rules_off_seq": 3}')
+  const { facts, errors } = readRuleFacts({ home })
+  assert.deepEqual([facts.rulesOffSeq, facts.tripped, errors], [3, false, []])
+})

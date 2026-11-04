@@ -222,7 +222,7 @@ test('header injection is refused wherever a header is written, by `rules add` a
 })
 
 test('lists are capped wherever they are written', () => {
-  const list = (n, f = (i) => `v${i}`) => Array.from({ length: n }, (_, i) => f(i))
+  const list = (n, f = (i) => `V${i}`) => Array.from({ length: n }, (_, i) => f(i))
   const n = LIMITS.list
   for (const key of ['host', 'path', 'method', 'class', 'status', 'body']) {
     passes(withMatch({ [key]: list(n) }, key === 'status' ? { on: 'response' } : {}))
@@ -398,4 +398,34 @@ test('where the rule files live (1.6 §1.7)', () => {
   assert.equal(rulesLog(home), path.join(home, 'logs', 'rules.ndjson'))
   assert.equal(rulesStats(home), path.join(home, 'collector', 'rules-stats.json'))
   assert.equal(rulesState(home), path.join(home, 'collector', 'rules-state.json'))
+})
+
+test('5.1: a name starts with a letter or digit and is at most nameBytes long, in `rules add` and in a file alike', () => {
+  for (const name of ['a', '0', 'a-b', 'a-', '9-9', 'a'.repeat(LIMITS.nameBytes)]) passes(rule({ name }), name)
+  for (const name of ['', '-a', '--json', '-', 'A', 'a_b', 'a b', 'a\n', 'é', 'a'.repeat(LIMITS.nameBytes + 1), 'add', 'max-delay']) refusedBothWays(rule({ name }), 'name')
+})
+
+test('5.1: limit.until is an ISO 8601 time with its zone', () => {
+  for (const until of ['2026-11-05T12:00:00Z', '2026-11-05T12:00Z', '2026-11-05T12:00:00.123Z', '2026-11-05T12:00:00+08:00', '2026-11-05T12:00:00-05:30', '2028-02-29T00:00:00Z']) passes(rule({ limit: { until } }), until)
+  for (const until of ['Jan 1', '2030-01-01', '2026-11-05T12:00:00', '2026-11-05 12:00:00Z', '2030-01-01 (anything)', '2026-02-31T00:00:00Z', '2026-13-01T00:00:00Z', '2026-11-05T25:00:00Z', '1793836800', 'x', '', 5]) refusedBothWays(rule({ limit: { until } }), 'limit.until')
+})
+
+test('5.1: a method is upper case wherever a literal says it, and a regex is left to itself', () => {
+  for (const method of ['POST', 'P*', ['GET', 'POST'], { not: 'GET' }, { re: 'get' }]) passes(withMatch({ method }), JSON.stringify(method))
+  for (const method of ['post', 'Post', 'p*', ['GET', 'post'], { not: 'get' }]) refusedBothWays(withMatch({ method }), 'match.method')
+})
+
+test('5.1: a pid is one of the conditions a connection reaches', () => {
+  const line = (n, match) => rule({ name: `r${n}`, match: { harness: 'any', ...match } })
+  const paths = Array.from({ length: LIMITS.tier1Conditions / LIMITS.list }, (_, i) => line(i, { path: Array.from({ length: LIMITS.list }, (_, j) => `/${i}/${j}`) }))
+  assert.deepEqual(checkFile({ rules: paths }), [])
+  assert.deepEqual(checkFile({ rules: [...paths, line('pid', { pid: 5 })] }).map((p) => p.path), ['rules'])
+})
+
+test('what a problem quotes of a key is cut, so a key as long as the file does not come back whole', () => {
+  const key = '"'.repeat(100_000)
+  for (const r of [rule({ [key]: 1 }), rule({ match: { harness: 'codex', host: 'a.test', [key]: 1 } }), rule({ do: [{ delay_ms: 1, [key]: 1 }] })]) {
+    const [problem] = checkRule(r, { input: true })
+    assert.ok(problem.path.length < 300, `${problem.path.length} characters`)
+  }
 })
