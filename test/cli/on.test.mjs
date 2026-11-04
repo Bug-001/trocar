@@ -17,6 +17,7 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { sevenHomes } from '../off/fixtures/seven-homes.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
 import { snapshot, fakeSystem, recordingExec, fakeDaemon, fakeIo, onCtx, seedClaude, ROOTS } from './fixtures/on-ctx.mjs'
+import { selfCommand } from '../../src/version.mjs'
 
 // a JSON key; the three that replace the system roots and so name a combined bundle (codex and hermes by a dotenv block, z-code by a JSON key); a plugin
 // directory and a YAML row
@@ -345,7 +346,7 @@ test('on: root is refused by the library too (R7), and a missing helper stops it
   const s = await sandbox(); const before = snapshot(s.home)
   await assert.rejects(s.run({ getuid: () => 0 }), /not as root/)
   const r = await s.run({ helperState: () => ({ ok: false, reason: 'no helper' }) })
-  assert.deepEqual([r.exit, r.receipt.ok], [1, false]); assert.match(r.receipt.notes.join(' '), /sudo trocar setup-helper/)
+  assert.deepEqual([r.exit, r.receipt.ok], [1, false]); assert.equal(r.receipt.blocked[0].command, `sudo ${selfCommand(['setup-helper'])}`, '1.6 §3.2: the command names this copy by absolute paths; C.1 blocked[].command')
   assert.deepEqual(snapshot(s.home), before)
 })
 
@@ -382,10 +383,12 @@ test('R6 / V7: `on --dry-run` with the helper missing still prints the plan and 
   assert.deepEqual([dry.exit, dry.receipt.ok, dry.receipt.dry_run], [0, true, true])
   assert.deepEqual([dry.receipt.changed, dry.receipt.created], [ok.receipt.changed, ok.receipt.created], 'the plan is the one a user with a helper would get')
   assert.ok(dry.receipt.created.length > 0, 'and it is a real plan (the unit; every certificate item is install\'s)')
-  assert.deepEqual(dry.receipt.blocked.map((b) => b.what), ['trocar on']) // 附录 C.1: blocked:[{what, reason}]
-  assert.match(dry.receipt.blocked[0].reason, /capability helper is missing.*sudo trocar setup-helper/)
-  assert.match(dry.receipt.notes.join('\n'), /sudo trocar setup-helper.*a real trocar on stops there/)
+  assert.deepEqual(dry.receipt.blocked.map((b) => [b.what, b.command]), [['trocar on', `sudo ${selfCommand(['setup-helper'])}`]]) // 附录 C.1: blocked:[{what, reason, command?}]
   assert.deepEqual(validateReceipt(dry.receipt), [])
+  // C.2: every stop a real run would meet is its own blocked item — the login entry missing too, neither overwriting the other
+  const both = await s.run({ dryRun: true, helperState: () => ({ ok: false, reason: 'no helper' }), unit: { path: path.join(s.home, 'trocar.service'), registered: () => ({ state: 'absent' }) } })
+  assert.equal(both.receipt.blocked.length, 2, JSON.stringify(both.receipt.blocked))
+  assert.ok(both.receipt.blocked.some((b) => b.command === `sudo ${selfCommand(['setup-helper'])}`) && both.receipt.blocked.some((b) => !b.command), JSON.stringify(both.receipt.blocked))
   assert.deepEqual(snapshot(s.home), before, 'a dry run writes nothing')
   assert.equal((await s.run({ helperState: () => ({ ok: false, reason: 'no helper' }) })).exit, 1)
 })

@@ -48,7 +48,8 @@ const run = async (argv, home, over = {}) => {
 test('V80: `trocar status --json` and `trocar doctor --json` print exactly the documents `trocar query status` / `query doctor` print', async () => {
   const s = sandbox()
   for (const name of ['status', 'doctor']) {
-    const c = s.ctx()
+    const at = Date.now() // one moment for both: a document's times (failures.since = 24 h before it was made) follow its clock
+    const c = s.ctx({ deps: { ms: () => at } })
     const exit = await runCli([name, '--json'], c)
     const printed = JSON.parse(c.io.stdoutText())
     const asked = await runQuery(name, {}, { home: path.join(s.home, '.trocar'), userHome: s.home, env: c.env, platform: c.platform, deps: c.deps })

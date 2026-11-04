@@ -16,8 +16,9 @@ import { parseArgs } from './args.mjs'
 import { wrap, WIDTH } from './text.mjs'
 import { printJson, errorDoc } from './json.mjs'
 import { EXIT } from './schema.mjs'
-import { codeId } from '../version.mjs'
+import { codeId, selfCommand } from '../version.mjs'
 import { recordUserPath } from '../off/user-path.mjs'
+import { COMMAND_INDENT } from '../off/receipt.mjs'
 
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
 const REPORT = 'Please report it with what you ran: https://github.com/Bug-001/trocar/issues'
@@ -38,7 +39,7 @@ export async function runCli(argv, { io = makeIo({ stdin: process.stdin, stdout:
   if (rest.includes('--help') || rest.includes('-h')) { io.out(helpText(cmd.name)); return EXIT.ok }
   // §1.5: the commands that change your own state refuse root, and the one that needs root refuses everyone else — before anything is read or written.
   if (cmd.needsRoot && platform !== 'linux') return refuse(cmd.name, 'usage', `trocar ${cmd.name}: not needed on this platform.`)
-  if (cmd.needsRoot && uid !== 0) return refuse(cmd.name, 'usage', `trocar ${cmd.name}: run it with sudo: sudo trocar ${cmd.name}`)
+  if (cmd.needsRoot && uid !== 0) return refuse(cmd.name, 'usage', `trocar ${cmd.name}: run it with sudo:\n${COMMAND_INDENT}sudo ${selfCommand([cmd.name, ...rest])}`)
   // `mutates` may be a function of the parsed args: `classes set` and `raw seal` change state, `classes` shown and `raw cat` do not. Parsing reads and writes nothing, so it comes first.
   const args = parseArgs(cmd, rest)
   const mutates = typeof cmd.mutates === 'function' ? cmd.mutates(args) : cmd.mutates
@@ -48,9 +49,10 @@ export async function runCli(argv, { io = makeIo({ stdin: process.stdin, stdout:
   if (args.error) return refuse(cmd.name, args.error.code, args.error.message, { usage: args.error.usage })
   const run = (deps.commands && deps.commands[cmd.name]) || cmd.run
   // 4.11 `present`: a command typed in a terminal records the user's PATH while trocar is installed (before the run, for what it reads; after it, for
-  // what `install` just installed), so every asker resolves a form's command alike. `daemon` is the login service's start: its PATH is not the user's.
-  // A command `deps.commands` replaces does nothing of its own, so it records nothing either. A failure to record never changes the answer.
-  const remember = () => { if (mutates && cmd.name !== 'daemon' && run === cmd.run) try { recordUserPath({ home, env, ...(deps.fs ? { fs: deps.fs } : {}) }) } catch { /* the next command records it */ } }
+  // what `install` just installed), so every asker resolves a form's command alike — but not one whose table row says `recordsPath: false` (`daemon`:
+  // the login service's PATH is not the user's; `uninstall`: it deletes that file). A command `deps.commands` replaces does nothing of its own, so it
+  // records nothing either. A failure to record never changes the answer.
+  const remember = () => { if (mutates && cmd.recordsPath !== false && run === cmd.run) try { recordUserPath({ home, env, ...(deps.fs ? { fs: deps.fs } : {}) }) } catch { /* the next command records it */ } }
   remember()
   try {
     return await run(rest, { io: cio, env, home, platform, uid, json, args, deps: { getuid: () => uid, ...deps } })

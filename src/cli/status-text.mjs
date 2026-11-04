@@ -3,7 +3,7 @@
 // Everything here renders from the status document (附录 C.3) and the facts it was built from; nothing is computed twice and nothing is written.
 import { columns, pairs, wrap, unknown, ago, noColor, WIDTH } from './text.mjs'
 import { renderRoutes, routeNotes } from '../netenv/topology-text.mjs'
-import { briefText, failureBrief, failureWord, statusNote } from './words.mjs'
+import { briefText, failureBrief, failureWord, squashed, statusNote } from './words.mjs'
 import { carrierWords } from './receipt.mjs'
 
 // ── the summary (§3.5) ────────────────────────────────────────────────────────────────────────────────────────────
@@ -132,8 +132,32 @@ export function statusDetail(doc, h, { finding = null, now = Date.now(), colors:
 export const portOf = (url) => { const m = /^(?:\w+:\/\/)?(?:[^@/]*@)?(?:127\.0\.0\.1|\[?::1\]?|localhost):(\d+)/.exec(String(url || '')); return m ? `:${m[1]}` : String(url || unknown('no address recorded')) }
 
 // ── `--failures` (§3.5: one line per kind of problem, then Expected) ──────────────────────────────────────────────
-/** One group's line: its harness when the group names one (D38: for whom), the shared sentence, then (when the sentence stands for a known code) the record's own reason — the CLI has no technical details to fold it into. */
-const failureLine = (g) => { const r = failureWord(g.where, g.code, g.harness || '') && briefText(g.reason || ''); const s = r ? `${failureBrief(g)}: ${r}` : failureBrief(g); return g.harness ? `${g.harness}: ${s}` : s } // no nested brackets (§1.1②): a reason has its own
+/** One group's line: its harness when the group names one (D38: for whom), the shared sentence, then (when the sentence stands for a known code) the
+ *  record's own reason — the CLI has no technical details to fold it into. §3.5 · §1.1⑥: a backquoted span of a reason is a command to copy (the
+ *  helper's `sudo … setup-helper`, §3.2): the line briefs the whole reason with each span said as the pointer (`the line below`, `the lines below`
+ *  for two or more); when it does not fit, the clause holding the last pointer stays whole and the words before it are cut (only a clause too long by
+ *  itself is cut, the pointer then put back at the end), and each command follows whole on its own line; a reason with no span is briefed as it is. */
+const COMMAND = /`([^`]+)`/g
+const commandsOf = (reason) => [...String(reason || '').matchAll(COMMAND)].map((m) => squashed(m[1]))
+// §3.5 / §1.1⑥: a brief never cuts a path (a word with `/` or `\\`) out of a reason: when the cut would drop one, the reason stays whole and the 80-column fold
+// gives the path a line of its own (R11: the reason is moved, never lost)
+const reasonOf = (reason, max = 100) => {
+  const n = commandsOf(reason).length, pointer = n > 1 ? 'the lines below' : 'the line below'
+  const whole = squashed(String(reason || '').replace(COMMAND, pointer)), cut = briefOf(whole, n, pointer, max), kept = new Set(cut.split(' '))
+  return whole.split(' ').some((w) => /[\\/]/.test(w) && !kept.has(w)) ? whole : cut
+}
+const briefOf = (whole, n, pointer, max) => {
+  const head = briefText(whole, max)
+  if (!n || head === whole) return head
+  // the clause that holds the last pointer says what the command is for: it stays whole, the words before it are cut (§3.5); a boundary whose
+  // clause would be the pointer alone (`…, run: <pointer>`) is skipped, so the verb stays with it
+  const at = whole.lastIndexOf(pointer), start = Math.max(0, ...[...whole.slice(0, at).matchAll(/[;:.]\s/g)].map((m) => m.index + m[0].length).filter((b) => !whole.slice(b).trim().startsWith(pointer)))
+  const clause = whole.slice(start), room = max - clause.length - 1
+  const lead = whole.slice(0, start).trimEnd(), cut = lead.slice(0, room - 2).lastIndexOf(' ') // at a word boundary, or no word at all (§1.1⑦)
+  if (start > 0 && room >= 3) return `${cut > 0 ? lead.slice(0, cut).replace(/[\s,;:]+$/, '') : ''}... ${clause}`
+  return head.slice(0, -3).includes(pointer) ? head : `${briefText(whole, max - pointer.length - 1)} ${pointer}`
+}
+const failureLine = (g0) => { const g = { ...g0, reason: reasonOf(g0.reason) }; const r = failureWord(g.where, g.code, g.harness || '') && g.reason; const s = r ? `${failureBrief(g)}: ${r}` : failureBrief(g, { max: Infinity }); return g.harness ? `${g.harness}: ${s}` : s } // no nested brackets (§1.1②): a reason has its own
 
 /** The whole wall of the last 24 hours: one line per `level:'problem'` group of the document's `failures` (C.3, the board's capture log reads the same
  *  groups and words), then the `Expected` section (what is not a problem by design). */
@@ -143,7 +167,7 @@ export function failuresBlock(failures, health, { now = Date.now() } = {}) {
   const lines = [groups.length ? `Problems in the last 24 hours: ${groups.reduce((n, g) => n + g.count, 0)} in ${groups.length} kind${groups.length === 1 ? '' : 's'}` : 'No problems in the last 24 hours.']
   if (groups.length) { // §1.1⑥: each row folds inside 80 columns, under its own text
     const heads = columns(groups.map((g) => [ago(g.last_ts, now), `x${g.count}`, ''])).map((h) => `  ${h}  `), col = Math.max(...heads.map((h) => h.length))
-    groups.forEach((g, i) => lines.push(...wrap(failureLine(g), WIDTH - col).map((t, j) => (j ? ' '.repeat(col) : heads[i].padEnd(col)) + t)))
+    groups.forEach((g, i) => lines.push(...wrap(failureLine(g), WIDTH - col).map((t, j) => (j ? ' '.repeat(col) : heads[i].padEnd(col)) + t), ...commandsOf(g.reason).map((x) => ' '.repeat(col + 2) + x))) // a command sits two deeper than the reason's folds (§3.5, §1.1⑥)
   }
   const exp = Object.entries((health.collector && health.collector.expected) || {})
   lines.push('', 'Expected')
@@ -200,7 +224,8 @@ export function formatHealth(h, { daemonLine = true } = {}) {
   if (daemonLine) lines.push(daemonText(h))
   lines.push(`capture health: ${(SUMMARY[h.summary.state] || ((x) => String(x.state)))(h.summary)}${h.summary.read_errors ? ' - some files could not be read (below)' : ''}`)
   if (c.conditions && c.conditions.length) lines.push(c.conditions_as_of ? `conditions as of ${c.conditions_as_of}:` : 'conditions now:', ...c.conditions.map(condLine))
-  if (c.failures && c.failures.length) lines.push(`problems in the last 24 hours (${c.failures.length} kind(s)):`, ...c.failures.map(groupLine))
+  const open = (c.failures || []).filter((g) => !g.resolved) // a resolved group is in --failures and --json as a note (C.3)
+  if (open.length) lines.push(`problems in the last 24 hours (${open.length} kind(s)):`, ...open.map(groupLine))
   const exp = Object.entries(c.expected || {})
   if (exp.length) lines.push(`not captured by design (last 24 hours): ${exp.map(([k, n]) => `${k} ${n}`).join(', ')}`)
   for (const p of (h.raw && h.raw.problems) || []) lines.push(`raw layer: ${p.op} ${p.outcome} ${p.file || p.target || ''}: ${p.reason || ''}`)

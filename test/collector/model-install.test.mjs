@@ -6,7 +6,8 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import tls from 'node:tls'
-import { modelWorld } from '../helpers/model-world.mjs'
+import { modelWorld, sharedCertFileWorld } from '../helpers/model-world.mjs'
+import { planInstall } from '../../src/collector/model-install.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { readManifest } from '../../src/off/manifest.mjs'
 import { codeId } from '../../src/version.mjs'
@@ -28,6 +29,23 @@ async function everything(env = {}) {
   fs.mkdirSync(path.join(w.home, '.zcode'), { recursive: true })
   fs.mkdirSync(path.join(w.home, '.dsh'), { recursive: true })
   return w
+}
+
+// V85 (install): every file install changes outside ~/.trocar is named by its plan — rule U's block in the file the user's NODE_EXTRA_CA_CERTS names
+// included (a Windows test machine 2026-11-04: the plan said only "reads your user trust store" for the two harnesses that read it)
+for (const shape of ['shared file', 'every harness']) {
+  test(`V85: the install plan names every file install then changes outside ~/.trocar (${shape})`, async () => {
+    const w = shape === 'shared file' ? await sharedCertFileWorld({ userPem: USER_PEM }) : await everything()
+    const rows = planInstall({ os: 'darwin', harnesses: w.harnesses, ctx: w.ctx, home: w.home, owns: w.owns })
+    const paths = rows.flatMap((r) => r.paths)
+    const mine = () => Object.fromEntries(Object.entries(snapshot(w.home)).filter(([k]) => !k.startsWith(path.join(w.home, '.trocar') + path.sep)).map(([k, v]) => [k, v.split(':').at(-1)]))
+    const before = mine()
+    await w.install({ wrapperKit: { renderWrapper } })
+    const after = mine()
+    const changed = [...new Set([...Object.keys(before), ...Object.keys(after)])].filter((k) => before[k] !== after[k])
+    assert.ok(changed.length > 0)
+    assert.deepEqual(changed.filter((f) => !paths.some((p) => f === p || f.startsWith(p + path.sep))), [], `changed but not in the plan: ${JSON.stringify(rows)}`)
+  })
 }
 
 test('CM9: Z-Code\'s caCertFile → a bundle of Node\'s own roots plus the trocar root, no system roots — written only while the key is unset; set, the user\'s file gets the block', async () => {

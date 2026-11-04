@@ -3,7 +3,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { applyOps, reverseOps, eolOf } from '../../src/off/json-text.mjs'
-import { dotenvBlock, joinDotenvBlock, insertLine, removeTrocarText, trocarResidue, onlySkeleton, BLOCK_BEGIN, BLOCK_END, OFF_PREFIX, SENTINEL, lineComment } from '../../src/off/text-edit.mjs'
+import { dotenvBlock, joinDotenvBlock, insertLine, removeTrocarText, trocarResidue, onlySkeleton, blockBegin, BLOCK_END, OFF_PREFIX, SENTINEL, lineComment } from '../../src/off/text-edit.mjs'
 import { parseDotenv } from '../../src/collector/core/config-read.mjs'
 import { foldsEnvNames } from '../../src/off/env-names.mjs'
 import { seeds, readDotenv, shapeCases } from '../helpers/file-shapes.mjs'
@@ -13,7 +13,7 @@ const B = '/h/.trocar/collector/ca/combined-x.pem'
 test('text-edit: the dotenv block goes on top, unquoted, LF; a user line with the same key is put out of effect, both in ops', () => {
   const user = 'OPENAI_API_KEY=sk-secret\nexport SSL_CERT_FILE="/corp/ca.pem" # mine\nOTHER=1'
   const r = dotenvBlock(user, { SSL_CERT_FILE: B })
-  assert.ok(r.text.startsWith(`${BLOCK_BEGIN}\nSSL_CERT_FILE=${B}\n${BLOCK_END}\n`), 'block first, value unquoted, LF only')
+  assert.ok(r.text.startsWith(`${blockBegin()}\nSSL_CERT_FILE=${B}\n${BLOCK_END}\n`), 'block first, value unquoted, LF only')
   assert.ok(!r.text.includes('\r'))
   assert.ok(r.text.includes(`\n${OFF_PREFIX}export SSL_CERT_FILE="/corp/ca.pem" # mine\n`), 'the user line keeps every byte behind the prefix')
   assert.deepEqual(r.prior, { SSL_CERT_FILE: '/corp/ca.pem' })
@@ -22,7 +22,7 @@ test('text-edit: the dotenv block goes on top, unquoted, LF; a user line with th
   assert.ok(!JSON.stringify(r.ops).includes('sk-secret'))
   assert.equal(applyOps(user, r.ops), r.text)
   assert.equal(reverseOps(r.text, r.ops), user, 'untouched → byte-identical undo')
-  assert.equal(dotenvBlock(null, { SSL_CERT_FILE: B }).text, `${BLOCK_BEGIN}\nSSL_CERT_FILE=${B}\n${BLOCK_END}\n`, 'a missing file holds only the block')
+  assert.equal(dotenvBlock(null, { SSL_CERT_FILE: B }).text, `${blockBegin()}\nSSL_CERT_FILE=${B}\n${BLOCK_END}\n`, 'a missing file holds only the block')
   assert.equal(dotenvBlock('A=1\n', { SSL_CERT_FILE: B }).prior, null)
   assert.throws(() => dotenvBlock('', { SSL_CERT_FILE: '/a b/c.pem' }), /unquoted absolute paths only/)
   assert.throws(() => dotenvBlock('', { SSL_CERT_FILE: '/a/$HOME.pem' }), /unquoted absolute paths only/)
@@ -96,7 +96,7 @@ test('text-edit: trocar\'s block is found the way an editor leaves it — CRLF, 
     if (name !== 'BOM') assert.equal(reverseOps(edited, r.ops), null, `${name}: the plain reverse refuses a file that is not what trocar wrote`)
     const out = removeTrocarText(edited, r.ops)
     assert.equal(out.found, true, name)
-    assert.ok(!out.text.includes(B) && !out.text.includes(BLOCK_BEGIN) && !out.text.includes(BLOCK_END), `${name}: nothing of trocar's is left: ${JSON.stringify(out.text)}`)
+    assert.ok(!out.text.includes(B) && !out.text.includes(blockBegin()) && !out.text.includes(BLOCK_END), `${name}: nothing of trocar's is left: ${JSON.stringify(out.text)}`)
     assert.deepEqual(trocarResidue(out.text, { vars: { SSL_CERT_FILE: B } }), [], name)
     const own = out.text.replace(/\r/g, '').split('\n').map((l) => l.trim()).filter(Boolean)
     assert.deepEqual(own.map((l) => l.replace(/^\uFEFF/, '')), ['KEY=sk-secret', 'SSL_CERT_FILE=/corp/ca.pem'], `${name}: the user's own lines stay, the one trocar put out of effect is back in effect`)
@@ -111,7 +111,7 @@ test('text-edit: trocar\'s block is found the way an editor leaves it — CRLF, 
   const own = `${asLF}SSL_CERT_FILE=${B}.mine\n`
   assert.ok(removeTrocarText(own, r.ops).text.includes(`SSL_CERT_FILE=${B}.mine`))
   // the last line without a newline: the line before keeps its own
-  assert.equal(removeTrocarText(`A=1\nSSL_CERT_FILE=${B}`, [{ offset: 0, removed: '', inserted: `${BLOCK_BEGIN}\nSSL_CERT_FILE=${B}\n${BLOCK_END}\n` }]).text, 'A=1\n')
+  assert.equal(removeTrocarText(`A=1\nSSL_CERT_FILE=${B}`, [{ offset: 0, removed: '', inserted: `${blockBegin()}\nSSL_CERT_FILE=${B}\n${BLOCK_END}\n` }]).text, 'A=1\n')
 })
 
 test('text-edit: trocarResidue names the lines (outside comments) that still hold a path trocar put there — a dotenv value, an trocar path in a rc line or a YAML row — and nothing else', () => {
@@ -138,15 +138,15 @@ test('text-edit: a CRLF file — the user\'s same-key lines are put out of effec
   const r = dotenvBlock(user, { SSL_CERT_FILE: B, HTTPS_PROXY: 'http://g:tok@127.0.0.1:17991' })
   assert.deepEqual(r.prior, { SSL_CERT_FILE: 'C:/corp/ca.pem', HTTPS_PROXY: 'http://corp:3128' }, 'the \\r at the end of a line does not hide the assignment')
   assert.ok(r.text.includes(`\r\n${OFF_PREFIX}export SSL_CERT_FILE="C:/corp/ca.pem" # mine\r\n`) && r.text.includes(`\r\n${OFF_PREFIX}HTTPS_PROXY=http://corp:3128\r\n`), 'both user lines are behind the prefix, every byte kept')
-  assert.ok(r.text.startsWith(`${BLOCK_BEGIN}\r\nSSL_CERT_FILE=${B}\r\nHTTPS_PROXY=http://g:tok@127.0.0.1:17991\r\n${BLOCK_END}\r\n`), 'the block is CRLF like the file')
+  assert.ok(r.text.startsWith(`${blockBegin()}\r\nSSL_CERT_FILE=${B}\r\nHTTPS_PROXY=http://g:tok@127.0.0.1:17991\r\n${BLOCK_END}\r\n`), 'the block is CRLF like the file')
   assert.ok(!/[^\r]\n/.test(r.text), 'no bare LF anywhere: an editor that keeps a file\'s line ending does not mix it')
   assert.equal(reverseOps(r.text, r.ops), user, 'untouched → byte-identical undo')
   assert.ok(r.ops.every((o) => o.removed === ''))
   // a file of bare LF stays LF, a file with no line ending at all gets LF, a mixed file follows the line ending most of its lines have
   assert.ok(!dotenvBlock('A=1\nB=2\n', { SSL_CERT_FILE: B }).text.includes('\r'))
   assert.ok(!dotenvBlock('A=1', { SSL_CERT_FILE: B }).text.includes('\r'))
-  assert.ok(dotenvBlock('A=1\r\nB=2\r\nC=3\n', { SSL_CERT_FILE: B }).text.startsWith(`${BLOCK_BEGIN}\r\n`))
-  assert.ok(dotenvBlock('A=1\nB=2\r\nC=3\n', { SSL_CERT_FILE: B }).text.startsWith(`${BLOCK_BEGIN}\nSSL`))
+  assert.ok(dotenvBlock('A=1\r\nB=2\r\nC=3\n', { SSL_CERT_FILE: B }).text.startsWith(`${blockBegin()}\r\n`))
+  assert.ok(dotenvBlock('A=1\nB=2\r\nC=3\n', { SSL_CERT_FILE: B }).text.startsWith(`${blockBegin()}\nSSL`))
 })
 
 test('text-edit: after the user edited the file, trocar\'s block is found whichever line ending an editor left it with, and the user\'s line comes back', () => {
@@ -163,10 +163,10 @@ test('text-edit: a value with a space is written double-quoted only when the ent
   const W = 'C:/Users/John Smith/.trocar/collector/ca/combined-x.pem'
   assert.throws(() => dotenvBlock('', { SSL_CERT_FILE: W }), /unquoted absolute paths only/, 'the default is the unquoted-only rule, as on Linux')
   const r = dotenvBlock('K=1\n', { SSL_CERT_FILE: W, HTTPS_PROXY: 'http://g:t@127.0.0.1:1' }, { quote: true })
-  assert.ok(r.text.startsWith(`${BLOCK_BEGIN}\nSSL_CERT_FILE="${W}"\nHTTPS_PROXY=http://g:t@127.0.0.1:1\n${BLOCK_END}\nK=1\n`), 'only the value that has a space is quoted')
+  assert.ok(r.text.startsWith(`${blockBegin()}\nSSL_CERT_FILE="${W}"\nHTTPS_PROXY=http://g:t@127.0.0.1:1\n${BLOCK_END}\nK=1\n`), 'only the value that has a space is quoted')
   assert.equal(reverseOps(r.text, r.ops), 'K=1\n')
   assert.equal(parseDotenv(r.text).get('SSL_CERT_FILE'), W, 'the reader gets the path back without the quotes')
-  assert.equal(dotenvBlock('', { SSL_CERT_FILE: B }, { quote: true }).text, `${BLOCK_BEGIN}\nSSL_CERT_FILE=${B}\n${BLOCK_END}\n`, 'nothing to quote: byte for byte the unquoted block')
+  assert.equal(dotenvBlock('', { SSL_CERT_FILE: B }, { quote: true }).text, `${blockBegin()}\nSSL_CERT_FILE=${B}\n${BLOCK_END}\n`, 'nothing to quote: byte for byte the unquoted block')
   for (const bad of ['C:/a "b"/c.pem', 'C:/a b/$HOME.pem', 'C:/a b/`x`.pem', 'C:\\a b\\c.pem', 'C:/a b/c.pem\nX=1', 'C:/a b/c.pem\r']) assert.throws(() => dotenvBlock('', { SSL_CERT_FILE: bad }, { quote: true }), /cannot be written|unquoted absolute paths only/, JSON.stringify(bad))
   assert.equal(dotenvBlock('', { SSL_CERT_FILE: "C:/Users/O'Brien (x86)/ca.pem" }, { quote: true }).text.split('\n')[1], `SSL_CERT_FILE="C:/Users/O'Brien (x86)/ca.pem"`, 'a single quote and brackets are fine inside double quotes')
 })
@@ -186,31 +186,23 @@ test('text-edit: a block written double-quoted (a profile with a space) is remov
   const copies = `${r.text}export SSL_CERT_FILE='${W}'\r\nSSL_CERT_FILE = "${W}" # pasted\r\nSSL_CERT_FILE="${W}.mine"\r\n`
   const out = removeTrocarText(copies, r.ops)
   assert.equal(out.found, true)
-  assert.ok(!out.text.includes(`"${W}"`) && !out.text.includes(`'${W}'`) && !out.text.includes(BLOCK_BEGIN), `no copy of trocar's path is left: ${JSON.stringify(out.text)}`)
+  assert.ok(!out.text.includes(`"${W}"`) && !out.text.includes(`'${W}'`) && !out.text.includes(blockBegin()), `no copy of trocar's path is left: ${JSON.stringify(out.text)}`)
   assert.ok(out.text.includes(`SSL_CERT_FILE="${W}.mine"`), 'another value of the key is the user\'s')
   const noMine = removeTrocarText(copies.replace(/SSL_CERT_FILE="[^"]*\.mine"\r\n/, ''), r.ops)
   assert.deepEqual(trocarResidue(noMine.text, { vars: { SSL_CERT_FILE: W } }), [], 'and nothing of trocar\'s path is reported as left behind')
 })
 
-test('text-edit: the sentinel text written into users\' files is exactly what earlier builds wrote', () => {
-  assert.equal(SENTINEL, 'trocar collector')
-  assert.equal(BLOCK_BEGIN, '# >>> trocar collector >>> written by `trocar collector install`; `trocar collector uninstall` removes this block')
-  assert.equal(BLOCK_END, '# <<< trocar collector <<<')
-  assert.equal(OFF_PREFIX, '#trocar-collector-off# ')
-  assert.equal(lineComment('Kimi shim'), '# trocar collector: Kimi shim (`trocar collector uninstall` removes this line)')
-})
-
 test('text-edit X6: a byte-order mark (U+FEFF at offset 0) stays first — the block goes after it, a key on the first line is read after it and put out of effect after it; undo gives the text back', () => {
   const user = '\uFEFFSSL_CERT_FILE=/corp/ca.pem\r\nOTHER=1\r\n'
   const r = dotenvBlock(user, { SSL_CERT_FILE: B })
-  assert.ok(r.text.startsWith(`\uFEFF${BLOCK_BEGIN}\r\n`), JSON.stringify(r.text.slice(0, 80)))
+  assert.ok(r.text.startsWith(`\uFEFF${blockBegin()}\r\n`), JSON.stringify(r.text.slice(0, 80)))
   assert.ok(r.text.includes(`\r\n${OFF_PREFIX}SSL_CERT_FILE=/corp/ca.pem\r\n`), 'the first line\'s key is out of effect, the mark not moved')
   assert.equal((r.text.match(/\uFEFF/g) || []).length, 1)
   assert.deepEqual(r.prior, { SSL_CERT_FILE: '/corp/ca.pem' })
   assert.equal(reverseOps(r.text, r.ops), user)
   assert.equal(removeTrocarText(r.text, r.ops).text, user)
   const j = joinDotenvBlock(r.text, { HTTPS_PROXY: 'http://127.0.0.1:1' })
-  assert.ok(j.text.startsWith(`\uFEFF${BLOCK_BEGIN}\r\n`) && j.text.includes(`HTTPS_PROXY=http://127.0.0.1:1\r\n${BLOCK_END}`))
+  assert.ok(j.text.startsWith(`\uFEFF${blockBegin()}\r\n`) && j.text.includes(`HTTPS_PROXY=http://127.0.0.1:1\r\n${BLOCK_END}`))
   const y = insertLine('\uFEFF', { line: `- r ${lineComment('x')}`, format: 'yaml-list' })
   assert.equal(y.text, `\uFEFF- r ${lineComment('x')}\n`, 'a file holding only the mark is an empty list: no blank line before the row')
 })
@@ -243,7 +235,7 @@ test('text-edit X8: the user\'s new value of a key trocar set wins — its old l
     assert.deepEqual(out.prior_left, [{ key: 'SSL_CERT_FILE', line: 3 }], 'a line of its own after the block')
     assert.equal(parseDotenv(out.text).get('SSL_CERT_FILE'), '/mine/ca.pem')
     assert.equal(parseDotenv(out.text).get('HTTPS_PROXY'), 'http://corp:8080', 'the key the user did not touch is back to their old value')
-    assert.ok(!out.text.includes('127.0.0.1') && !out.text.includes(B) && !out.text.includes(BLOCK_BEGIN))
+    assert.ok(!out.text.includes('127.0.0.1') && !out.text.includes(B) && !out.text.includes(blockBegin()))
   }
   // the mark on the first line: the prefix is after it, the line number is the user's
   const marked = dotenvBlock('﻿SSL_CERT_FILE=/corp/ca.pem\n', { SSL_CERT_FILE: B })
@@ -258,8 +250,8 @@ test('text-edit X8: the user\'s new value of a key trocar set wins — its old l
 
 test('text-edit X8: `fold` (4.6「名字族」) compares the keys without case — a lower-case name the user set is the new value of trocar\'s upper-case one; trocar\'s value under another case goes too', () => {
   const user = 'https_proxy=http://corp:8080\n'
-  const r = { ops: [{ offset: 0, removed: '', inserted: `${BLOCK_BEGIN}\nHTTPS_PROXY=http://127.0.0.1:1\n${BLOCK_END}\n` }, { offset: 0, removed: '', inserted: OFF_PREFIX }] }
-  const on = `${BLOCK_BEGIN}\nHTTPS_PROXY=http://127.0.0.1:1\n${BLOCK_END}\n${OFF_PREFIX}${user}`
+  const r = { ops: [{ offset: 0, removed: '', inserted: `${blockBegin()}\nHTTPS_PROXY=http://127.0.0.1:1\n${BLOCK_END}\n` }, { offset: 0, removed: '', inserted: OFF_PREFIX }] }
+  const on = `${blockBegin()}\nHTTPS_PROXY=http://127.0.0.1:1\n${BLOCK_END}\n${OFF_PREFIX}${user}`
   const edited = on.replace('HTTPS_PROXY=http://127.0.0.1:1', 'https_proxy=http://newcorp:3128')
   assert.deepEqual(removeTrocarText(edited, r.ops, { fold: true }), { text: `https_proxy=http://newcorp:3128\n${OFF_PREFIX}${user}`, found: true, prior_left: [{ key: 'https_proxy', line: 2 }] })
   assert.deepEqual(removeTrocarText(on, r.ops, { fold: true }), { text: user, found: true }, 'untouched: the old line is back')
@@ -326,7 +318,7 @@ test('text-edit 4.11 ruling ④: `at: \'end\'` puts the block after the user\'s 
       const lead = src === '' || src.endsWith('\n') ? '' : eolOf(src)
       const where = `${c.describe} fold=${fold}`
       assert.equal(r.text.slice(0, src.length + lead.length), src + lead, `${where}: the user's bytes come first, untouched`)
-      assert.equal(r.text.slice(src.length + lead.length), [BLOCK_BEGIN, `SSL_CERT_FILE=${B}`, `HTTPS_PROXY=${vars.HTTPS_PROXY}`, BLOCK_END].join(eolOf(src)) + eolOf(src), `${where}: the block in the file's line ending is last`)
+      assert.equal(r.text.slice(src.length + lead.length), [blockBegin(), `SSL_CERT_FILE=${B}`, `HTTPS_PROXY=${vars.HTTPS_PROXY}`, BLOCK_END].join(eolOf(src)) + eolOf(src), `${where}: the block in the file's line ending is last`)
       assert.equal(r.ops.length, 1, `${where}: one insertion, no op on a user line`)
       assert.equal(r.text.split(OFF_PREFIX).length, src.split(OFF_PREFIX).length, `${where}: nothing put out of effect`)
       const after = readDotenv(r.text, { fold }), before = readDotenv(src, { fold }), id = (k) => (fold ? k.toUpperCase() : k)

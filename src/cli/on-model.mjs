@@ -12,14 +12,14 @@ import { primeProcQuestions } from '../off/proc.mjs'
 import { opLockFile } from '../off/paths.mjs'
 import { readManifest, saveManifest } from '../collector/core/trust/journal.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
-import { fit, tilde, formWords } from './receipt.mjs'
+import { fit, tilde, formWords, routeWords } from './receipt.mjs'
 import { pairs } from './text.mjs'
 
 const errText = (e) => String((e && e.message) || e)
 const NEEDS_YES = 'Nothing was changed. Read the plan above, then run it again with --yes'
 
 // §1.4「计划写全」: every planned route by the full path (and key) it will write; a route that writes no file of yours says why instead
-const planLine = (p, home) => [p.harness, `${p.paths.length ? p.paths.map((x) => tilde(x, home)).join(', ') : `no file of yours: trocar hands ${p.harness} the setting as it starts`}${p.keys && p.keys.length ? `: ${p.keys.join('.')}` : ''}`]
+const planLine = (p, home) => [p.harness, p.paths.length ? `${p.paths.map((x) => tilde(x, home)).join(', ')}: ${routeWords(p)}` : `no file of yours: trocar hands ${p.harness} the setting as it starts`] // 1.6 §3.3: path: what changes there
 const noteLine = (n) => (n.code === 'install-pending' ? `Not done yet: ${n.item} is ${n.state} (${n.why}). Run again: ${n.command}` : `Note: ${n.harness ? `${n.harness}: ` : ''}${n.text || n.why || n.code}${n.paths && n.paths.length ? ` (${n.paths.join(', ')})` : ''}`)
 // 1.6 §3.3: a harness that needs setup — the fix is two commands, never the code (§1.1)
 const refusedLine = (r) => `${r.harness} was not turned on: ${r.why}. Run: ${r.command}, then: trocar on ${r.harness}`
@@ -49,8 +49,8 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
       ...pairs([...new Map((receipt.routes || []).map((r) => {
         const where = r.at ? tilde(r.at, home) : r.route ? formWords(`.${r.route}`) : ''
         return [`${r.harness}|${where}|${r.ok}|${r.reason || ''}`, [r.harness, `${where ? `${where}: ` : ''}${r.ok ? 'the setting is in place' : `not written (${r.reason})`}`]]
-      })).values()]),
-      ...receipt.notes.map(noteLine), ...receipt.problems.map((p) => `Problem: ${p}`)]).join('\n'))
+      })).values()], { home }),
+      ...receipt.notes.map(noteLine), ...receipt.problems.map((p) => `Problem: ${p}`)], { home }).join('\n'))
     return exit
   }
   /** 1.6 §1: a real run leaves its receipt in flows/ — its notes, then one `kind:'result'` line with the harnesses it turned on (`on`: turnOnModel's
@@ -88,9 +88,10 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
   const m = readManifest(dir, fs)
   const seen = new Set(m.confirmed_paths || [])
   const fresh = [...new Set(plan.planned.flatMap((p) => p.paths))].filter((p) => !seen.has(p))
+  // 1.6 §3.3: each setting is one row; a row new since an earlier yes says so on itself — with no earlier yes there is no "last" to speak of
+  const isNew = (p) => seen.size > 0 && p.paths.some((x) => fresh.includes(x))
   say(fit([`trocar on will change ${plan.planned.length} setting${plan.planned.length === 1 ? '' : 's'}:`,
-    ...pairs(plan.planned.map((p) => planLine(p, home))),
-    ...(fresh.length ? [`New since you last said yes: ${fresh.map((x) => tilde(x, home)).join(', ')}`] : [])]).join('\n'))
+    ...pairs(plan.planned.map((p) => { const [h, v] = planLine(p, home); return [h, isNew(p) ? `${v} (new since you last said yes)` : v] }), { home })], { home }).join('\n'))
   const blockedSetup = setupBlocked(plan)
   if (flags.has('--dry-run')) return out(receiptOf({ ...plan, exit: 0 }, { dry_run: true, planned: plan.planned, ...(blockedSetup.length ? { blocked: blockedSetup } : {}) }), EXIT.ok)
   if (!plan.on.length && blockedSetup.length) return done(receiptOf(plan, { blocked: blockedSetup, error: setupError(blockedSetup) }), EXIT.incomplete) // nothing to turn on: no daemon started
