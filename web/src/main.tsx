@@ -28,7 +28,7 @@ import { Sidebar } from './shell/Sidebar'
 const DESK_NEXT = import.meta.env.MODE === 'desk-next'
 // every screen of every route (core/router.mjs): the legacy ones here, the React ones in REACT_SCREENS, the new desk in DESK
 const SCREENS: Record<string, () => Promise<unknown>> = {
-  ...(DESK_NEXT ? {} : { replay: () => import('../legacy/replay/replay.mjs') }),
+  ...(DESK_NEXT ? {} : { replay: () => import('./screens/replay/markdown.mjs').then(() => import('../legacy/replay/replay.mjs')) }),
   'session-link': () => import('../legacy/replay/session-link.mjs'),
 }
 const REACT_SCREENS: Record<string, LazyScreen> = {

@@ -16,6 +16,7 @@ import { setScreenSignal, releaseScreenSignal } from '../../../legacy/core/dom.m
 import type { Route } from '../../LegacyScreen'
 import { DeskFrame } from './DeskFrame'
 import { reactView, during, type DeskState, type DeskView, type Els } from './view'
+import './markdown.mjs'
 
 type Facade = { current(): Route, onRoute(fn: (r: Route) => void): () => void }
 type Opts = NonNullable<Parameters<typeof deskRoutes>[2]>
