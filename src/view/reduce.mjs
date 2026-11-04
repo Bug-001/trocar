@@ -71,7 +71,7 @@ const KEYFRAME = 32; // a materialised list kept every KEYFRAME links of a base 
 // its figure (src/query/projection.mjs lru)
 const LIST_BYTES = 2 << 20, FACTS_BYTES = 2 << 20;
 /** The shape of reduction().snapshot(): one more whenever what it holds changes. */
-export const REDUCE_V = 3;
+export const REDUCE_V = 2;
 /** What a store's reduction caches hold at most beside its block columns (src/query/named/session.mjs counts it with the store's). */
 export const REDUCE_HEAP = 2 * (LIST_BYTES + FACTS_BYTES);
 
