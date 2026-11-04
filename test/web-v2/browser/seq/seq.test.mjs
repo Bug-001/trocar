@@ -24,6 +24,7 @@ const report = (label, r) => {
   const by = Map.groupBy(r.seen, keyOf)
   for (const [sig, vs] of by) console.log(`known ${sig} at ${vs.length} step(s), first ${vs[0].step} (${label})`)
   for (const e of r.serverErrors) console.log(`SERVER ${e} (${label})`)
+  for (const n of r.notes) console.log(`NOTE ${n} (${label})`)
   console.log(`${label}: ${r.ms} ms, ${r.step + 1} step(s), max long task ${r.maxLongTask} ms`)
 }
 

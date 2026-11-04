@@ -399,8 +399,8 @@ export function ctxTokens(norm) {
 // are the request's top-level keys that become context blocks (everything else is a non-block key).
 // `messageCount` — the message count compaction compares (3.4).
 // ── reply parts (sse-spans.mjs): each reply block addressed as a span of resp.raw. Responses keys an event by its
-// `output_index` and takes the item the wire closes it with: output_item.done holds it whole, so each block is its own node in
-// that event's data; else the terminal's output, the blocks spanned by the item's events. Chat keys
+// `output_index` and takes the event that delivers the item whole: its output_item.done, else the terminal's output, so each
+// block is its own node in that event's data. Chat keys
 // a chunk by choice index and what its delta carries (reasoning, text, or tool call `index`).
 const replyBlocksOf = (items) => items.flatMap((it) => itemToBlocks(it)).map((x) => x.block);
 // an output item's blocks as JSON nodes, the item standing at `path` (RFC 3.1 回复块也回源: the request side's rule for the same item)
@@ -412,7 +412,7 @@ const RESPONSES_REPLY = {
     if (done) return { evt: done, nodes: itemNodes(done.item, ['item']) };
     const term = all.find((e) => e && /^response\.(completed|incomplete|failed)$/.test(e.type) && e.response);
     const item = term && Array.isArray(term.response.output) ? term.response.output[Number(k)] : null;
-    return item ? replyBlocksOf([item]) : 'this output item did not finish before the stream ended';
+    return item ? { evt: term, nodes: itemNodes(item, ['response', 'output', Number(k)]) } : 'this output item did not finish before the stream ended';
   },
   jsonBlocks: (body) => replyBlocksOf(Array.isArray(body.output) ? body.output : []),
 };

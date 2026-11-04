@@ -51,7 +51,7 @@ const FOLDS = '[aria-expanded], details, .cblk, .cwturn, .dblk, .navrow.head, .c
  *  its width. Sets ctx.lastDrag = {made: the drag made a new selection, changed: the folds whose state the drag changed}. */
 async function selectDrag(ctx, p) {
   const { page } = ctx
-  const at = await page.evaluate(([sel, folds, f, span, deny]) => {
+  const at = await page.evaluate(([sel, f, span, deny]) => {
     const runs = []
     for (const root of document.querySelectorAll(sel)) {
       const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
@@ -69,15 +69,20 @@ async function selectDrag(ctx, p) {
     const b = r.getBoundingClientRect(), y = b.top + b.height / 2
     const hit = document.elementFromPoint(b.left + 1, y)
     if (!hit || !hit.contains(pickd[0].parentElement) && !pickd[0].parentElement.contains(hit)) return null
+    return { x0: b.left + 1, x1: b.left + Math.max(8, span * (b.width - 2)), y }
+  }, [SELECT_IN[p.where], p.f, p.span, DENY])
+  if (!at) return SKIP
+  // the fold states are read with the pointer already at the drag's start: getting there may close a hover-opened layer (1.2
+  // §弹出层: the pointer left it), which is the pointer moving, not the drag
+  await page.mouse.move(at.x0, at.y)
+  await page.evaluate((folds) => new Promise((done) => requestAnimationFrame(() => {
     const state = (e) => [e.getAttribute('aria-expanded'), e.open, e.classList.contains('collapsed'), e.classList.contains('open')].join()
     const s = document.getSelection()
     window.__seqFolds = new Map([...document.querySelectorAll(folds)].map((e) => [e, state(e)]))
     window.__seqSelKey = s.isCollapsed ? '' : [s.anchorOffset, s.focusOffset, String(s)].join()
     window.__seqFoldState = state
-    return { x0: b.left + 1, x1: b.left + Math.max(8, span * (b.width - 2)), y }
-  }, [SELECT_IN[p.where], FOLDS, p.f, p.span, DENY])
-  if (!at) return SKIP
-  await page.mouse.move(at.x0, at.y)
+    done()
+  })), FOLDS)
   await page.mouse.down()
   await page.mouse.move(at.x1, at.y, { steps: 5 })
   await page.mouse.up()
@@ -193,8 +198,14 @@ export const ACTIONS = [
     if (rows.length < 2) return SKIP
     const A = rowAt(rows, p.a), B = rows[(rows.indexOf(A) + 1 + Math.floor(p.b * (rows.length - 1))) % rows.length]
     ctx.faults.arm({ kind: 'latency', name: 'd/head', n: 1, ms: p.ms })
+    // B is opened once A's head is on its way, so the held head is A's (the switch happens with A's read in flight), not a race
+    // between the two hash writes and A's screen load
+    const sent = ctx.page.waitForRequest((q) => /\/api\/d\/head\b/.test(q.url()) && new URL(q.url()).searchParams.get('id') === A.session_id, { timeout: 5000 }).then(() => true, () => false)
     await go(ctx.page, deskHash(A))
+    const left = await sent
     await go(ctx.page, deskHash(B))
+    // the step still ran, but as the race the wait is there to avoid: said in the run's notes, not passed off as the in-flight switch
+    if (!left) return { note: `switchInFlight: A's head (${A.session_id}) did not leave within 5 s; B was opened without A's read in flight` }
   }),
   world('grow', 8, (r) => ({ k: int(r, 1, 3) }), (ctx, p) => { ctx.lastGrow = ctx.world.grow(p.k); ctx.grownAt = Date.now() }),
   world('late', 4, (r) => ({ k: int(r, 1, 3) }), (ctx, p) => { ctx.lastGrow = ctx.world.late(p.k); ctx.grownAt = Date.now() }),
@@ -239,11 +250,11 @@ async function act(ctx, step) {
   return out
 }
 
-/** Run one step, let the page paint, and keep ctx.follow equal to the follow chip's aria-pressed (false off the desk). → {skipped?} */
+/** Run one step, let the page paint, and keep ctx.follow equal to the follow chip's aria-pressed (false off the desk). → {skipped?, note?} */
 export async function runStep(ctx, step) {
   const out = await act(ctx, step)
   await ctx.page.waitForTimeout(120)
   await ctx.page.evaluate(() => new Promise((ok) => requestAnimationFrame(() => requestAnimationFrame(ok))))
   ctx.follow = await ctx.page.evaluate(() => document.querySelector('[data-follow]')?.getAttribute('aria-pressed') === 'true')
-  return out.skipped ? { skipped: true } : {}
+  return out.skipped ? { skipped: true } : out.note ? { note: out.note } : {}
 }

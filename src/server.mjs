@@ -19,18 +19,14 @@ import { HEAD_FILES, ctxKey } from './query/ctx-key.mjs';
 import { storedFile } from './query/stored.mjs';
 import { keep } from './query/service.mjs';
 
-const SRC = path.dirname(fileURLToPath(import.meta.url));
-// The one board (1.2 §托管与打开): src/web/v2/ is the static plane, served at `/`. Named as new URL('./web/v2/', import.meta.url)
-// so test/ci/reachable.test.mjs follows it into every board module.
-const WEB_DIR = path.resolve(fileURLToPath(new URL('./web/v2/', import.meta.url)));
-/** The shared-module allowlist (4.4 静态面): pure, import-closed modules the page and the CLI must agree on, served at
- *  `/<entry>` from `src/<entry>`. Data, not routes: add a line here. */
-export const SHARED = Object.freeze(['cli/words.mjs', 'off/token-header.mjs', 'off/userinfo.mjs', 'view/step-order.mjs', 'view/head-cols.mjs']);
+// The one board (1.2 §托管与打开): the build in src/web/board/ (web/ through Vite, committed, D75③) is the static plane, served at `/`.
+// Named as new URL('./web/board/', import.meta.url) so test/ci/reachable.test.mjs follows it into the built board.
+const WEB_DIR = path.resolve(fileURLToPath(new URL('./web/board/', import.meta.url)));
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
   '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
-  '.json': 'application/json; charset=utf-8', '.svg': 'image/svg+xml', '.ico': 'image/x-icon',
-  '.woff2': 'font/woff2', '.map': 'application/json; charset=utf-8',
+  '.json': 'application/json; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon',
+  '.woff2': 'font/woff2', '.map': 'application/json; charset=utf-8', '.md': 'text/markdown; charset=utf-8',
 };
 const JSON_HEAD = { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' };
 
@@ -53,9 +49,9 @@ export function guard(req) {
   try { return LOOPBACK.has(new URL(o).hostname) ? null : 'forbidden: cross-origin request'; } catch { return 'forbidden: cross-origin request'; }
 }
 
-/** Every file of the static plane, read once: `/<path under src/web/v2>` and `/<SHARED entry>`. A lookup in this map is
+/** Every file of the static plane, read once: `/<path under webDir>` (the committed src/web/board/ unless a test serves another build). A lookup in this map is
  *  the whole path-safety story: `..`, encoded or not, names nothing in it. */
-function loadStatic() {
+function loadStatic(webDir) {
   const files = new Map();
   const walk = (dir, url) => {
     for (const e of nodeFs.readdirSync(dir, { withFileTypes: true })) {
@@ -64,8 +60,7 @@ function loadStatic() {
       else if (e.isFile()) files.set(`${url}${e.name}`, nodeFs.readFileSync(abs));
     }
   };
-  walk(WEB_DIR, '/');
-  for (const s of SHARED) files.set(`/${s}`, nodeFs.readFileSync(path.join(SRC, s)));
+  walk(webDir, '/');
   return files;
 }
 
@@ -112,8 +107,8 @@ export function tipTable() {
 
 let named = null; // the query core, imported on the first /api request (it is most of a cold start)
 
-export function createServer({ home, token, query, tips, uid = process.getuid?.(), platform = process.platform, fs, now, env } = {}) {
-  const files = loadStatic();
+export function createServer({ home, token, query, tips, uid = process.getuid?.(), platform = process.platform, fs, now, env, webDir = WEB_DIR } = {}) {
+  const files = loadStatic(webDir);
   const want = Buffer.from(String(token ?? ''));
   const tokenOk = (got) => {
     if (!want.length || typeof got !== 'string') return false; // no token configured → nothing passes

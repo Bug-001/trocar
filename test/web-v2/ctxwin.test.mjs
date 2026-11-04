@@ -4,13 +4,13 @@
 // the labels' own functions. Inputs are desks (desk-world.mjs : deskOf / world); the real face goes through deskFrom.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { buildLanes, anchorLane } from '../../src/web/v2/replay/lanes.mjs'
-import { ctxWindowHtml, ctxWindowUnits, landingTarget, renderContextWindow } from '../../src/web/v2/replay/ctxwin.mjs'
-import { QUIET_CAUSES } from '../../src/web/v2/replay/analysis.mjs'
-import { stepOf, boardDef } from '../../src/web/v2/replay/model.mjs'
-import * as W from '../../src/web/v2/labels/replay.mjs'
-import { esc } from '../../src/web/v2/core/fmt.mjs'
-import { bodyFor, bodyCache } from '../../src/web/v2/replay/blocks.mjs'
+import { buildLanes, anchorLane } from '../../web/legacy/replay/lanes.mjs'
+import { ctxWindowHtml, ctxWindowUnits, landingTarget, renderContextWindow } from '../../web/legacy/replay/ctxwin.mjs'
+import { QUIET_CAUSES } from '../../web/legacy/replay/analysis.mjs'
+import { stepOf, boardDef } from '../../web/legacy/replay/model.mjs'
+import * as W from '../../web/legacy/labels/replay.mjs'
+import { esc } from '../../web/legacy/core/fmt.mjs'
+import { bodyFor, bodyCache } from '../../web/legacy/replay/blocks.mjs'
 import { deskOf, world, deskFrom } from './desk-world.mjs'
 import { boardHome, serveBoard } from './real-face.mjs'
 
@@ -122,6 +122,7 @@ test('2.3 #6: 「新」 = fh not in the reference list; the removed list = the r
   const ref = [sys({ key: 's' }), blk({ key: 'x' }), blk({ key: 'gone' })], cur = [sys({ key: 's' }), blk({ key: 'x' }), blk({ key: 'added' })]
   const h = ctxWindowHtml(stateOf(pair(ref, cur, 'content-changed', 2), 1))
   assert.deepEqual(newKeys(h), [2]); assert.equal(removedN(h), 1)
+  assert.match(h, /class="cwremhd"[^>]*><svg[^>]*\bchev\b/, '1.5 #5: the removed list is expandable, its chevron goes before the words')
   // a step that is not the previous one, pinned: the marks follow it
   const d3 = desk1([[blk({ key: 'only0' })], ref, cur], [{}, {}, { cacheBreak: { cause: 'content-changed', idx: 0, firstCall: false, refRid: 'R0-1' } }])
   assert.deepEqual(newKeys(ctxWindowHtml(stateOf(d3, 2, { diffRef: 0 }))), [0, 1, 2])

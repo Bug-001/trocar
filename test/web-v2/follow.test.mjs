@@ -3,7 +3,7 @@
 // desk follows. The controller (replay.mjs) is covered in the browser (desk-url.test.mjs); this is its pure part.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { landPlayhead, packOrder } from '../../src/web/v2/replay/follow.mjs'
+import { landPlayhead, packOrder } from '../../web/legacy/replay/follow.mjs'
 
 const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x))
 

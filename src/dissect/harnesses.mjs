@@ -1,14 +1,15 @@
 // src/dissect/harnesses.mjs — the read-side harness table (D37 ①⑤, RFC 3.4 table, 3.1): per v1 harness,
 // how a record names it, which key groups its calls into a session, which headers / body fields hint at
 // lanes, parents and compaction, and what trocar's trust injection changes (observer effects). Board,
-// ETL and sharder all read THIS table: adding a harness = one row here + one chip row in src/web/v2/core/chips.mjs.
+// ETL and sharder all read THIS table: adding a harness = a registry row in src/off/harness-names.mjs (+ its icon) + a row here for its session keys.
 //   • harness = proc.agent (D31). A record WITH proc is never re-identified from its UA, even when the
 //     agent is unknown (id null). Only legacy records without proc use the UA, flagged inferred:true.
 //   • never splits or joins a session by pid or connection (3.4 关键区分): proc.pid / flow_id / dst unread.
-//   • proc.agent spellings: the 3.2 ids and Plan 3a's descriptor names are both accepted (gate G2).
-// Leaf module (0.1 §2): imports only the endpoint table and the stored-request-body parser.
+//   • proc.agent spellings: a row's `agents` = its registry row's read id, then its code id (the descriptor name), deduped (gate G2).
+// Leaf module (0.1 §2): imports only its siblings and the harness registry (which imports nothing).
 import { endpointOf } from './endpoints.mjs';
 import { storedRequestBody } from './request-body.mjs';
+import { HARNESS_REGISTRY, readIdOf } from '../off/harness-names.mjs';
 
 const H = (name, confidence = 'high') => ({ from: 'header', name, confidence });
 const B = (path, confidence = 'medium') => ({ from: 'body', name: path.join('.'), path, confidence });
@@ -30,8 +31,8 @@ const T = (host, cls, pathSource) => ({ host, class: cls, ...(pathSource ? { pat
 const BOTH = ['transparent', 'proxy'], LINUX = ['transparent'], DOOR = ['proxy']
 const effect = (id, cause, what, captures = BOTH) => ({ id, captures, cause, what });
 
-export const HARNESSES = Object.freeze([
-  { ...ROW, id: 'cc', agents: ['cc', 'claude-code'], ua: /claude-cli|claude-code/,
+const ROWS = [
+  { ...ROW, id: 'cc', ua: /claude-cli|claude-code/,
     sessionKeys: [H('x-claude-code-session-id')], // gate G3: body metadata.user_id not added until verified
     // a background call (progress summary, suggestion) is aux even when it carries its subagent's agent-id (3.4)
     lane: [{ header: 'x-claude-code-request-class', equals: 'auxiliary', lane: 'aux' }, { header: 'x-claude-code-agent-id', lane: 'subagent', key: true }],
@@ -50,14 +51,14 @@ export const HARNESSES = Object.freeze([
       T('claude.ai', 'account'),
       T('downloads.claude.ai', 'files'),
     ] },
-  { ...ROW, id: 'codex', agents: ['codex'], ua: /codex/,
+  { ...ROW, id: 'codex', ua: /codex/,
     sessionKeys: [H('session-id'), H('thread-id')], // over WebSocket these come from the upgrade request (4.6)
     parentKeys: [H('x-codex-parent-thread-id')],    // a THREAD id; resolved through aliases later (gate G4)
     lane: [{ header: 'x-openai-subagent', lane: 'subagent' }],
     requestKind: { header: 'x-codex-turn-metadata', jsonKey: 'request_kind', lanes: { prewarm: 'probe' }, compaction: ['compaction'] },
     observerEffects: [effect('codex-rustls-h2', 'SSL_CERT_FILE in $CODEX_HOME/.env',
       'model HTTP switched from native-tls to rustls; ALPN offers [h2, http/1.1]', LINUX)] }, // macOS / Windows trust the root in the store: no .env (4.11 codex forms)
-  { ...ROW, id: 'opencode', agents: ['opencode'], ua: /opencode/,
+  { ...ROW, id: 'opencode', ua: /opencode/,
     sessionKeys: [H('x-opencode-session-id'), H('session-id'), H('x-session-affinity'), H('x-session-id')],
     parentKeys: [H('x-opencode-parent-session-id')],
     observerEffects: [
@@ -65,26 +66,26 @@ export const HARNESSES = Object.freeze([
         'trocar code runs inside the agent process; the first run adds one npm registry fetch of @opencode-ai/plugin', LINUX),
       effect('opencode-route-plugin', 'trocar route plugin',
         'trocar code runs inside the agent process; OpenCode 1.x\'s first run with a plugin adds one npm registry fetch of @opencode-ai/plugin', DOOR)] },
-  { ...ROW, id: 'kimi', agents: ['kimi', 'kimi-code'],
+  { ...ROW, id: 'kimi',
     sessionKeys: [B(['prompt_cache_key']), B(['metadata', 'user_id'])],
     synth: true }, // without a body key → a synthesized key (src/dissect/synth-key.mjs, gate G11)
-  { ...ROW, id: 'dsh', agents: ['dsh', 'deepseek-dsh'],
+  { ...ROW, id: 'dsh',
     sessionKeys: [H('x-deepseek-harness-session-id')],
     parentKeys: [B(['dsh_session_log', 'session', 'parentSession'], 'high')],
     lane: [{ body: ['dsh_session_log', 'session', 'origin'], equals: 'subagent', lane: 'subagent' }],
     compaction: [{ header: 'x-deepseek-harness-compact', equals: '1' }],
     observerEffects: [effect('dsh-plugin', 'trocar trust plugin', 'trocar code runs inside the agent process')] },
-  { ...ROW, id: 'hermes', agents: ['hermes'],
+  { ...ROW, id: 'hermes',
     sessionKeys: [B(['session_id']), B(['prompt_cache_key'])], // custom endpoints carry neither → synthesized
     synth: true, // (src/dissect/synth-key.mjs, gate G11)
     // a text marker (medium). Hermes is Python, so the em dash may arrive JSON-escaped.
     compaction: [{ marker: /\[CONTEXT COMPACTION (?:—|\\u2014) REFERENCE ONLY\]/ }] },
-  { ...ROW, id: 'zcode', agents: ['zcode', 'z-code'],
+  { ...ROW, id: 'zcode',
     sessionKeys: [H('x-session-id')],
     lane: [{ header: 'x-zcode-session-type', equals: 'subagent', lane: 'subagent' }], // values not yet seen live
     observerEffects: [effect('zcode-node-https', 'network.caCertFile in ~/.zcode/cli/config.json',
       'HTTP client switched from undici to node:https: a new Agent per request, no ALPN (inferred, lab check pending)')] },
-  { ...ROW, id: 'pi', agents: ['pi'],
+  { ...ROW, id: 'pi',
     // measured (pi 1.4.0, default configuration): openai-responses sends header session_id, Codex (WebSocket upgrade and SSE) header
     // session-id, both with body prompt_cache_key, all three = pi's session id; anthropic-messages (API key or OAuth) and chat-completions
     // send none → synthesized (src/dissect/synth-key.mjs, gate G11)
@@ -99,7 +100,10 @@ export const HARNESSES = Object.freeze([
     // pi.dev: the install report (its version check is other, kept in full); github.com and its release assets: the fd / rg downloads of
     // pi's first interactive start (none in print or rpc mode)
     traffic: [T('pi.dev', 'telemetry', '^/api/report-install'), T('github.com', 'files'), T('release-assets.githubusercontent.com', 'files')] },
-]);
+];
+// agents: the proc.agent spellings that name a row — its registry row's read id, then its code id (the last; one when equal); no registry row → none
+const agentsOf = (id) => { const r = HARNESS_REGISTRY.find((x) => !x.legacy && readIdOf(x) === id); return r ? [...new Set([readIdOf(r), r.id])] : []; };
+export const HARNESSES = Object.freeze(ROWS.map((row) => ({ ...row, agents: agentsOf(row.id) })));
 
 // Legacy-only row: the pre-D37 DeepSeek CLI. Reachable by UA inference only, never by proc.agent.
 const LEGACY_DEEPSEEK_CLI = { id: 'deepseek-cli', ua: /deepseek/, legacy: true };

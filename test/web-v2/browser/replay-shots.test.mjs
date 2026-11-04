@@ -5,6 +5,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { probe, withBoard, shoot, layoutFaults } from './harness.mjs'
+import { typeFaults } from './type-inventory.mjs'
+import { CACHE_POPOVER_LABEL } from '../../../web/legacy/labels/replay.mjs'
+import { CT_ORDER } from '../../../web/legacy/replay/analysis.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
@@ -45,10 +48,14 @@ const editFiles = (b, edit) => b.page.route((u) => /^\/api\/d\/(p\d+|open)\./.te
   await r.fulfill({ status: 200, contentType: 'application/x-ndjson', body: lines.map((l) => JSON.stringify(l) + '\n').join('') })
 })
 
+// every step's composition carries every content type at an equal share (1.3 §排布: the gutter lists each, two-digit shares, the
+// most it can ever be asked to hold); the rows are the `c` lines of the pack and tail files
+const everyType = (b) => editFiles(b, (line) => { if (line.c && line.c.comp) for (const k of CT_ORDER) line.c.comp[k] = 1 })
+
 // every measured fact in one page pass
 const layout = (page) => page.evaluate(() => {
   const q = (s) => document.querySelector(s)
-  const kids = (sel) => [...document.querySelectorAll(`${sel} > *, ${sel} > * > *`)].filter((e) => e.getClientRects().length)
+  const kids = (sel) => [...document.querySelectorAll(`${sel} *`)].filter((e) => e.getClientRects().length && !e.closest('.pop'))
   // an ellipsis with its full text on hover is the designed give-way (1.2 §让位次序, 2.2 §步头放不下: the model name first), not a clip
   const clipped = [...kids('#deskhead'), ...kids('#stepbar')].filter((e) => e.scrollWidth > e.clientWidth + 0.5 && getComputedStyle(e).display !== 'inline' && !(getComputedStyle(e).textOverflow === 'ellipsis' && e.closest('[title]')))
     .map((e) => `${e.tagName}.${e.className} ${e.scrollWidth}>${e.clientWidth}`)
@@ -65,11 +72,12 @@ const layout = (page) => page.evaluate(() => {
   }
 })
 
-for (const width of [1280, 1024, 800]) {
+for (const width of [1440, 1280, 1024, 800]) {
   for (const theme of ['light', 'dark']) {
     test(`the replay desk fits at ${width} in ${theme}: nothing clipped, the window holds half the height, no side scroll`, { skip }, async () => {
       const b = await withBoard({ bytes: BYTES, width, theme, chromium: gate.chromium })
       try {
+        await everyType(b)
         await openBusiest(b)
         const L = await layout(b.page)
         const F = await layoutFaults(b.page) // the side panel's rows included: a resource's life text wraps, never cut (1.5)
@@ -82,6 +90,19 @@ for (const width of [1280, 1024, 800]) {
           ...(L.rawGap == null || L.rawGap <= 8 ? [] : [`the raw panel stops ${L.rawGap}px above the right page's bottom`]),
         ]
         await shoot(b.page, 'replay-desk', { width, theme })
+        if (width === 1280 && theme === 'light') { // 1.5 #16 on the desk: a block row opened, then the cache popover, then the session info
+          const { page } = b
+          await page.locator('#ctxwin .cblk.collapsed[data-bi] > .cbh').first().click()
+          await page.waitForSelector('#ctxwin .cblk[data-bi]:not(.collapsed) > .cbc')
+          const type = []
+          for (const btn of [`#stepbar .popbtn[aria-label="${CACHE_POPOVER_LABEL}"]`, '#deskhead .sh-info .popbtn']) {
+            await page.click(btn)
+            await page.waitForSelector(`${btn}[aria-expanded="true"]`)
+            type.push(...(await typeFaults(page)).faults)
+          }
+          await page.keyboard.press('Escape')
+          assert.deepEqual(type, [], 'replay: type')
+        }
         if (width < 1200) { // the right page is the bottom row here: open it
           await b.page.click('#rpbar')
           await b.page.waitForSelector('#rightpage.open #rawpanel .rphd')
@@ -101,14 +122,19 @@ for (const width of [1280, 1024, 800]) {
   }
 }
 
-// 1.2 §上下文窗的高度 at a short 1280 × 800 viewport: the step bar stays one row (2.2 §步头放不下: at 1280 the
-// model name shrinks, nothing wraps) and #ctxwin keeps half the available height. 1.3 §窗内步少时收窄: in the session with the
+// 1.2 §上下文窗的高度 at a short 1280 × 800 viewport, every step carrying every content type: the step bar stays one row
+// (2.2 §步头放不下: at 1280 the model name shrinks, nothing wraps) and #ctxwin keeps half the available height. 1.3 §窗内步少时收窄: in the session with the
 // fewest steps every detail lane is at most (bars in the window) × the bar cap wide; the whole-session strip keeps the full width.
 test('at 1280 × 800 the step bar is one row, the window holds half the height, and a few-step session narrows its lanes', { skip, timeout: 120_000 }, async () => {
   const b = await withBoard({ bytes: BYTES, width: 1280, height: 800, chromium: gate.chromium })
   try {
+    await everyType(b)
     await openBusiest(b)
     const L = await layout(b.page)
+    // 1.3 §排布: a step with every content type keeps the main track's row; no gutter glyph is cut (the new desk lists each share)
+    const shares = await b.page.evaluate(() => document.querySelectorAll('#sawgut .gshare').length)
+    assert.ok(shares === 0 || shares === CT_ORDER.length, `${shares} shares in the gutter`)
+    assert.deepEqual((await layoutFaults(b.page, '#saw')).cut, [])
     // one row: every drawn part's middle lies inside the arrows' box (center-aligned parts of different heights share a row)
     const off = await b.page.evaluate(() => {
       const nav = document.querySelector('#stepbar .sb-nav').getBoundingClientRect()
@@ -119,8 +145,8 @@ test('at 1280 × 800 the step bar is one row, the window holds half the height, 
     assert.ok(L.ctxwin >= 0.5 * L.avail, `#ctxwin ${L.ctxwin}px < half of the available ${L.avail}px`)
     await openBusiest(b, true)
     const lanes = await b.page.evaluate(() => {
-      const page = document.querySelector('#leftpage'), cs = getComputedStyle(document.querySelector('#saw'))
-      const cap = parseFloat(cs.getPropertyValue('--barcap')), n = +getComputedStyle(page).getPropertyValue('--nbars')
+      const cs = getComputedStyle(document.querySelector('#saw'))
+      const cap = parseFloat(cs.getPropertyValue('--barcap')), n = +cs.getPropertyValue('--nbars')
       const w = (e) => e.getBoundingClientRect().width
       return { cap, n, detail: [...document.querySelectorAll('#saw .tkrow:not(.tkrow-ovw) > .tlane, #rails .tlane')].filter((e) => e.getClientRects().length).map(w),
         whole: w(document.querySelector('#saw .tkrow-ovw > .tlane')) }
@@ -144,7 +170,7 @@ test('turning follow latest on from an earlier step lands the window on the newe
     await b.page.waitForFunction(() => !document.querySelector('#ctxwin .cwload') && !!document.querySelector('#ctxwin .cwreply'))
     await b.page.click('#ctxwin') // the keys go to the page, not to a control
     await b.page.keyboard.press('f')
-    await b.page.waitForFunction(() => /Step (\d+) \/ \1\b/.test(document.querySelector('#stepbar .sb-no').textContent))
+    await b.page.waitForFunction(() => /(\d+) \/ \1\b/.test(document.querySelector('#stepbar .sb-no').textContent))
     const at = await b.page.evaluate(() => new Promise((ok) => requestAnimationFrame(() => {
       const w = document.querySelector('#ctxwin'), r = document.querySelector('#ctxwin .cwreply').getBoundingClientRect(), wr = w.getBoundingClientRect()
       const sb = document.querySelector('#stepbar'), top = wr.top + (sb && w.contains(sb) ? sb.getBoundingClientRect().height : 0)

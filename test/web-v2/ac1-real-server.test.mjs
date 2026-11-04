@@ -9,8 +9,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { boardHome, serveBoard } from './real-face.mjs'
 import { parseTextRef } from '../../src/raw/refs.mjs'
-import { blockBodyHtml } from '../../src/web/v2/replay/blocks.mjs'
-import { stepOf } from '../../src/web/v2/replay/model.mjs'
+import { blockBodyHtml } from '../../web/legacy/replay/blocks.mjs'
+import { stepOf } from '../../web/legacy/replay/model.mjs'
 import { deskFrom } from './desk-world.mjs'
 
 const entities = { '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'", '&#13;': '\r', '&amp;': '&' }

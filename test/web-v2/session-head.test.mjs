@@ -7,13 +7,13 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { boardHome, serveBoard } from './real-face.mjs'
 import { world, deskFrom } from './desk-world.mjs'
-import { buildLanes, anchorLane, stepRef } from '../../src/web/v2/replay/lanes.mjs'
-import { createDesk, applySession } from '../../src/web/v2/replay/model.mjs'
-import { sessionHeadHtml, readStateHtml } from '../../src/web/v2/replay/header.mjs'
+import { buildLanes, anchorLane, stepRef } from '../../web/legacy/replay/lanes.mjs'
+import { createDesk, applySession } from '../../web/legacy/replay/model.mjs'
+import { sessionHeadHtml, readStateHtml } from '../../web/legacy/replay/header.mjs'
 import { FOLD_STOPS } from '../../src/health/codes.mjs'
-import { stepBarHtml } from '../../src/web/v2/replay/stepbar.mjs'
-import { SKELETON } from '../../src/web/v2/replay/replay.mjs'
-import * as W from '../../src/web/v2/labels/replay.mjs'
+import { stepBarHtml } from '../../web/legacy/replay/stepbar.mjs'
+import { SKELETON } from '../../web/legacy/replay/replay.mjs'
+import * as W from '../../web/legacy/labels/replay.mjs'
 
 const SEEDS = [1, 7, 19, 42]
 const worldDesk = (seed) => { const w = world(seed); return deskFrom(w.get(), 'S').then((desk) => ({ w, desk })) }
@@ -131,7 +131,7 @@ test('a stopped fold: the read-state line is the stopped one, its code in the te
 
 // 1.5 K-29: after a failed read of a drawn session, one quiet stale line sits under the head with a Retry that reads at once
 // (s.poll — the reader's path, not the timer's); a good answer drops it
-import { renderSessionHead, wireSessionHead, staleLineHtml, fidelityFacts } from '../../src/web/v2/replay/header.mjs'
+import { renderSessionHead, wireSessionHead, staleLineHtml, fidelityFacts } from '../../web/legacy/replay/header.mjs'
 import { hidesReason, reasonsWith, visibleOf, outsideCollapsed } from './visible.mjs'
 test('K-29: a stale session draws a Retry outside the head that reads again; no stale state, no line', () => {
   const meta = { session_id: 's1', harness: 'cc', project_slug: 'p', project_path: '/w/p' }
@@ -193,7 +193,7 @@ test('only non-note read errors make the files fact; all of them reach the tech 
 
 // 1.5 K-20 / 1.2 §会话保真行: the fact is there iff `unknown.records > 0`; the reason and the endpoints only in 技术细节
 test('K-20: the unreadable-records fact appears iff unknown.records > 0; reason and endpoints only in the tech details', async () => {
-  const { fidelityLineHtml } = await import('../../src/web/v2/replay/header.mjs')
+  const { fidelityLineHtml } = await import('../../web/legacy/replay/header.mjs')
   const reason = 'REASON_' + Math.random().toString(36).slice(2), ep = 'EP_' + Math.random().toString(36).slice(2)
   for (const unknown of [null, undefined, { records: 0 }, { records: 0, reason, endpoints: [ep] }, { records: 1, reason, endpoints: [ep] }, { records: 37, reason, endpoints: [ep, ep + 'b'] }, { records: 2 }]) {
     const on = !!unknown && unknown.records > 0
@@ -221,4 +221,84 @@ test('the session-info popover is filled when it opens, from the lanes held then
   handlers['v2:popopen']()
   assert.ok(body.innerHTML.length > 0, 'the popover body is drawn on open')
   assert.ok(s.totals && s.totals.cost, 'the totals are worked out on open')
+})
+
+// ── the new desk's session head as data (web/src/screens/replay/models.mjs : sessionHeadModel) ─────────────────────────
+import { sessionHeadModel } from '../../web/src/screens/replay/models.mjs'
+import { deskOf } from './desk-world.mjs'
+import { sessionTotals, priceMatch } from '../../web/legacy/core/metrics.mjs'
+import { L } from '../../web/legacy/core/labels.mjs'
+
+const PRICES = { m: [3, 15, 3.75, 0.3] }
+const U = (read, create, fresh, out = 10) => ({ read, create, fresh, out })
+// a desk of hand-made lanes and its state object as the controller holds it
+const headState = (lanes, answer = {}, extra = {}) => {
+  const desk = deskOf(lanes, answer)
+  return { desk, meta: desk.meta, lanes: buildLanes(desk, desk.probes), pricing: PRICES, follow: false, ...extra }
+}
+const mainRows = () => [{ usage: U(0, 100, 10), cacheBreak: { firstCall: true } }, { usage: U(0, 120, 10), cacheBreak: { cause: 'content-changed' } }, { error: 'boom', usage: null }, { usage: U(100, 30, 5), cacheBreak: { cause: 'append' } }]
+const HEAD_PARTS = ['back', 'title', 'chip', 'entry', 'project', 'start', 'follow', 'read', 'stale', 'facts', 'info'] // 1.2 §会话头's table + the 保真行 + ⓘ
+const INFO_KEYS = new Set(['truncated', 'cost', 'hit', 'breaks', 'failed', 'compactions', 'counts', 'duration', 'id', 'project', 'calls']) // 1.2 §信息弹出层
+
+test('1.2 #17 · model: the title falls back to 未命名会话 only; the start is chapters[0].ts0 and absent at tier 0; a title always comes from the wire (4.4 §人类标题的来源)', () => {
+  const chapters = [{ k: 0, s0: 0, s1: 4, ts0: '2026-10-07T00:00:00.000Z', inferred: false }]
+  for (const [meta, tier, want] of [[{ session_id: 'S-1' }, 1, W.TITLE_UNTITLED_NEXT_TIP], [{ session_id: 'S-1', title: 'T', title_source: 'wire' }, 1, W.TITLE_FROM_WIRE], [{ session_id: 'S-1', title: 'T', title_source: null }, 0, W.TITLE_FROM_WIRE]]) {
+    const s = headState([{ kind: 'main', rows: mainRows() }], { meta })
+    s.desk.head = { tier, steps: 4, chapters: tier ? chapters : [] }
+    const m = sessionHeadModel(s)
+    assert.equal(m.title.text, meta.title ?? null)
+    assert.equal(m.title.fallback, meta.title == null ? W.UNTITLED : null, 'the fallback is the fixed word alone')
+    assert.ok(!String(m.title.text ?? m.title.fallback).includes(meta.session_id), 'no title is made from the id')
+    assert.equal(m.title.sourceTip, want)
+    assert.equal(m.start ? m.start.ts : null, tier ? chapters[0].ts0 : null, tier ? 'the start is the first chapter\'s ts0' : 'no start at tier 0')
+  }
+})
+
+test('1.2 #15 · model: 多个 agent iff the sessions multi-harness field has more than one entry; provider mixed never says it', () => {
+  for (const hs of [undefined, [], [{ harness: 'claude-code' }], [{ harness: 'claude-code' }, { harness: 'codex', inferred: true }]]) {
+    const s = headState([{ kind: 'main', rows: mainRows() }], { meta: { session_id: 'S', harness: 'claude-code', provider: 'mixed', ...(hs ? { harnesses: hs } : {}) } })
+    const m = sessionHeadModel(s)
+    assert.equal(!!m.chip.multi, !!hs && hs.length > 1, JSON.stringify(hs))
+    if (m.chip.multi) assert.equal(m.chip.multi.text, W.MULTIPLE_AGENTS)
+  }
+})
+
+test('1.2 #3 · model: two sessions with one title carry no same-name word; the head is only its parts; a sub-agent is only a count', () => {
+  for (const id of ['S-a', 'S-b']) {
+    const s = headState([{ kind: 'main', rows: mainRows() }, { kind: 'subagent', rows: [{ usage: U(0, 50, 5) }] }], { meta: { session_id: id, title: 'Same title', title_source: 'wire' } })
+    const m = sessionHeadModel(s)
+    assert.deepEqual(Object.keys(m), HEAD_PARTS)
+    const rows = m.info()
+    for (const r of rows) assert.ok(INFO_KEYS.has(r.key), r.key)
+    assert.equal(rows.find((r) => r.key === 'counts').sub, 1, 'the sub-agent is counted, not named')
+  }
+})
+
+test('1.2 #7 · model: every info number is core/metrics.mjs\'s on the same answer; estimates carry ≈; no field name in any word', () => {
+  const s = headState([{ kind: 'main', rows: mainRows() }, { kind: 'monitor', rows: [{ usage: U(0, 20, 5) }, { error: 'x', usage: null }] }], { meta: { session_id: 'S', calls: 6 }, truncated: { shown: 6, total: 9, file_mb: 1 } })
+  const t = sessionTotals(s.lanes, (m) => priceMatch(PRICES, m)), rows = sessionHeadModel(s).info()
+  const by = Object.fromEntries(rows.map((r) => [r.key, r]))
+  assert.equal(rows[0].key, 'truncated', 'a truncated view says so first')
+  assert.equal(by.cost.usd, t.cost.total.usd)
+  assert.deepEqual(by.cost.buckets.map((b) => b.usd), ['main', 'sub', 'bg'].map((k) => (t.cost[k].priced ? t.cost[k].usd : null)))
+  assert.equal(by.hit.pct, Math.round(t.hit * 100))
+  assert.equal(by.breaks.n, t.breaks.length)
+  assert.equal(by.breaks.usd, t.breakCost.counted ? t.breakCost.usd : null)
+  assert.equal(by.failed.n, t.failed)
+  for (const k of ['cost', 'breaks']) assert.ok(by[k].approx && by[k].text.includes('≈') || by[k].notes.some((x) => x.includes('≈')), `${k} carries ≈`)
+  assert.ok(by.breaks.text.includes(L.STRUCT_EST), 'a break count carries its structural mark')
+  const words = JSON.stringify(rows.map((r) => [r.text, r.notes || []]))
+  assert.doesNotMatch(words, /\b(usage|cacheBreak|session_id|title_source|harness|ctx|cache_read|rid)\b/)
+})
+
+test('1.2 #18 · model: background calls = the server lanes outside main and sub-agents; token counts = probes.count, never a background call', () => {
+  const probes = { count: 7, series: [{ ts: '2026-10-07T00:00:01.000Z', tokens: 10 }, { ts: '2026-10-07T00:00:02.000Z', tokens: 12 }] }
+  const lanes = [{ kind: 'main', rows: mainRows() }, { kind: 'monitor', rows: [{}, {}], head: { count: 5 } }, { kind: 'probe', rows: [{}] }, { kind: 'subagent', rows: [{}] }]
+  const s = headState(lanes, { meta: { session_id: 'S' }, probes })
+  s.lanes = buildLanes(s.desk, probes)
+  assert.ok(s.lanes.some((l) => l.kind === 'token-count'), 'the front end built its token-count lane')
+  const c = sessionHeadModel(s).info().find((r) => r.key === 'counts')
+  assert.equal(c.bg, 5 + 1, 'the server lanes\' full counts')
+  assert.equal(c.probe, probes.count)
+  assert.equal(c.sub, 1)
 })

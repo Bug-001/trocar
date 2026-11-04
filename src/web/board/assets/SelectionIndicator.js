@@ -1,0 +1,1 @@
+import{ft as e,lt as t,ut as n}from"./useButton.js";t();var r=e(n(),1),i=(0,r.createContext)(null);function a(e){let t=(0,r.useRef)({});return r.createElement(i.Provider,{value:t},e.children)}var o=(0,r.createContext)({isSelected:!1});export{a as n,o as t};

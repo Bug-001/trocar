@@ -24,7 +24,8 @@ export async function serveFace({ home, query, deps, failure, ...opts }) {
 
 export const request = (port, p, { method = 'GET', headers = {}, body } = {}) => new Promise((resolve, reject) => {
   const r = http.request({ host: '127.0.0.1', port, method, path: p, headers, agent: false }, (res) => {
-    let b = ''; res.on('data', (c) => (b += c)); res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: b }))
+    // whole bytes first, then text: a chunk edge can fall inside a multi-byte UTF-8 character
+    const cs = []; res.on('data', (c) => cs.push(c)); res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(cs).toString('utf8') }))
   })
   r.on('error', reject); r.end(body)
 })

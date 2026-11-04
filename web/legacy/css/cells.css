@@ -1,0 +1,87 @@
+/* css/cells.css — the two-mode block cell (Raw / Readable) inside a row of the context window, the reply and the drawer.
+   Styles exactly the cell class vocabulary (RFC 2.3 §两种模式); colours only through tokens (base.css, §2.5). The cell grows in
+   the page flow: no max-height and no inner scroller on the body; only code, diff and tables scroll sideways inside the cell. */
+.cell{margin:2px 0 7px;min-width:0;max-width:100%;}
+
+/* toolbar: view group, Copy bytes, kind, state, clip — wraps on a narrow screen */
+.cellbar{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s1) var(--s2);margin:0 0 var(--s1);
+  font-family:var(--sans);font-size:var(--fs-cap);color:var(--ink-2);}
+.cellview{display:inline-flex;}
+.cellbar button{min-height:32px;padding:0 var(--s3);font:inherit;color:var(--ink);background:var(--raised);
+  border:1px solid var(--control-edge);border-radius:var(--r-1);cursor:pointer;}
+.cellview button + button{margin-left:-1px;}
+.cellview button:first-child{border-radius:var(--r-1) 0 0 var(--r-1);}
+.cellview button:last-child{border-radius:0 var(--r-1) var(--r-1) 0;}
+.cellbar button:hover{background:var(--panel);}
+.cellbar button[aria-pressed="true"]{position:relative;color:var(--action);background:var(--action-wash);border-color:var(--action);font-weight:var(--fw-strong);}
+.cellbar button:focus-visible{outline:2px solid var(--action);outline-offset:1px;position:relative;}
+@media (pointer: coarse){.cellbar button{min-height:44px;}}
+.cellkind{color:var(--ink-2);}
+.cellstate,.cellclip{color:var(--ink-3);min-width:0;overflow-wrap:anywhere;}
+
+/* Raw: the bytes, laid out for reading; the inserted breaks and indents (.lay) are not selectable and not read out */
+.cellraw,.cellpend{margin:0;padding:var(--s2);background:var(--sunk);border-radius:var(--r-1);color:var(--ink);
+  font-family:var(--mono);font-size:var(--fs-body);line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere;}
+.lay{user-select:none;-webkit-user-select:none;color:var(--ink-3);}
+/* body in flight: the server preview in a box sized ahead of time, replaced in place by the bytes */
+.cellpend{color:var(--ink-3);overflow:hidden;min-height:min(340px, calc(var(--cl, 1) * 1.6em));}
+.cellmore{display:block;height:1px;}
+
+/* Readable: reading text in sans, machine bytes in mono */
+.cellread{min-width:0;color:var(--ink);overflow-wrap:anywhere;}
+.kd-text,.kd-md{font-family:var(--sans);font-size:var(--fs-body);line-height:1.6;max-width:42em;}
+.kd-text{white-space:pre-wrap;overflow-wrap:anywhere;}
+.kd-code,.kd-shell,.kd-json,.kd-diff,.kd-kv dt,.kd-opaque,.sec-tag{font-family:var(--mono);font-size:var(--fs-body);line-height:1.6;}
+.kd-code,.kd-diff{white-space:pre;overflow-x:auto;max-width:100%;overflow-wrap:normal;padding:var(--s2);background:var(--sunk);border-radius:var(--r-1);}
+/* code's ESC byte (kinds.mjs): the byte stays in the text for copy and is hidden; the box and the word say what it is, not a colour */
+.kd-esc{color:transparent;}
+.kd-esc::before{content:'ESC';color:var(--ink-3);border:1px solid var(--rule-2);border-radius:var(--r-1);padding:0 2px;}
+.kd-title{font-family:var(--sans);font-size:var(--fs-cap);font-weight:var(--fw-strong);color:var(--ink-2);margin-bottom:var(--s1);white-space:normal;}
+.gut{display:inline-block;min-width:3ch;padding-right:var(--s2);text-align:right;color:var(--ink-3);user-select:none;-webkit-user-select:none;}
+.kd-shell{white-space:pre-wrap;overflow-wrap:anywhere;}
+.sh-ps{color:var(--ink-3);user-select:none;-webkit-user-select:none;}
+.kd-note{color:var(--ink-2);font-family:var(--sans);font-size:var(--fs-cap);margin-top:var(--s1);}
+
+/* markdown */
+.md-h1,.md-h2,.md-h3,.md-h4,.md-h5,.md-h6{font-weight:var(--fw-strong);margin:var(--s2) 0 var(--s1);line-height:1.35;}
+.md-h1{font-size:var(--fs-title);} .md-h2{font-size:var(--fs-head);} .md-h3,.md-h4,.md-h5,.md-h6{font-size:var(--fs-body);}
+.md-li{padding-left:1.2em;}
+.md-q{border-left:3px solid var(--rule-2);padding-left:var(--s3);color:var(--ink-2);}
+.md-em{font-style:normal;} .md-b{font-weight:var(--fw-strong);}
+.md-table{display:block;max-width:100%;overflow-x:auto;border-collapse:collapse;font-size:var(--fs-body);margin:var(--s2) 0;}
+.md-table th,.md-table td{border:1px solid var(--rule);padding:2px var(--s2);text-align:left;vertical-align:top;}
+
+/* diff: signs are text; tints carry no meaning alone */
+.d-add{background:var(--diff-add-bg);} .d-del{background:var(--diff-del-bg);}
+.d-hunk{color:var(--diff-hunk);} .d-ctx{color:var(--ink-2);}
+.d-pane{display:grid;gap:var(--s2);}
+.d-panel{min-width:0;font-family:var(--sans);font-size:var(--fs-cap);color:var(--ink-2);white-space:normal;}
+
+/* JSON tree: native disclosures, 16px per level (10px on a phone) */
+.kd-json{white-space:pre-wrap;overflow-wrap:anywhere;}
+.kd-json details > :not(summary){padding-left:16px;}
+.kd-json summary{cursor:pointer;}
+.j-key{color:var(--j-key);} .j-str{color:var(--j-str);} .j-num{color:var(--j-num);} .j-lit{color:var(--j-lit);}
+
+/* fields: a dt/dd grid that stacks on a phone */
+.kd-kv{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:2px var(--s3);margin:0;}
+.kd-kv dt{color:var(--ink-2);}
+.kd-kv dd{margin:0;min-width:0;}
+
+/* sections, parts, media, opaque, the fallback line */
+.kd-sec > div + div,.kd-parts > * + *{margin-top:var(--s2);}
+.sec-tag{display:inline-block;margin-right:var(--s2);padding:0 var(--s1);border:1px solid var(--rule-2);border-radius:var(--r-1);color:var(--ink-2);}
+.kd-media img[data-media]{display:block;max-width:100%;height:auto;}
+.kd-file{color:var(--ink-2);}
+.kd-opaque{color:var(--ink-3);}
+.kd-fail{font-family:var(--sans);font-size:var(--fs-cap);color:var(--ink-3);margin-bottom:var(--s1);}
+
+/* tones: error is bordered and tinted; quiet (thinking) is dimmed */
+.tone-error{border:1px solid var(--bad);background:var(--err-bg);color:var(--bad);border-radius:var(--r-1);padding:var(--s2);}
+.tone-quiet{color:var(--ink-2);}
+
+@media (max-width: 480px){
+  .kd-kv{grid-template-columns:minmax(0,1fr);}
+  .kd-kv dd{padding-left:var(--s3);margin-bottom:var(--s1);}
+  .kd-json details > :not(summary){padding-left:10px;}
+}

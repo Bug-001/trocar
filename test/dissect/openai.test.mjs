@@ -45,6 +45,12 @@ test('boardFlat maps Responses request into the cross-provider block vocabulary'
     ['text', 'text', 'thinking', 'tool_use', 'tool_result', 'text']);
 });
 
+test('a message with no content (absent or null) is no block, as content: [] is; the next item keeps its own index (RFC 3.1)', () => {
+  const q = { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'q' }] };
+  const flat = boardFlat({ input: [{ type: 'message', role: 'assistant' }, { type: 'message', role: 'assistant', content: null }, q] });
+  assert.deepEqual(flat.filter((b) => b.sec === 'messages').map((b) => [b.mi, b.path, b.block]), [[2, ['input', 2, 'content', 0], { type: 'text', text: 'q' }]]);
+});
+
 test('encrypted reasoning → opaque (invariant 4); file tool_use → resource ref', () => {
   const flat = boardFlat(REQ);
   const think = flat.find((b) => b.kind === 'thinking');

@@ -4,8 +4,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { probe, withBoard, stats, shoot, layoutFaults, timed, timerReads } from './harness.mjs'
+import { typeFaults } from './type-inventory.mjs'
 import { BOARD_LINES } from '../perf-lines.mjs'
-import { COMMANDS } from '../../../src/web/v2/labels/capture.mjs'
+import { COMMANDS } from '../../../web/legacy/labels/capture.mjs'
+import { THEME_DARK, THEME_LIGHT } from '../../../web/legacy/labels/settings.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
@@ -44,13 +46,14 @@ async function driveEveryScreen(b, { width, theme }) {
     assert.deepEqual(await layoutFaults(page), { overlap: [], cut: [], untitled: [], emptyIcons: [] }, `${name}: layout`)
     await fitsWindow(page, name)
     assert.ok(await page.locator(sel).count() > 0, `${name}: ${sel} at ${await page.evaluate(() => location.hash)} after ${ms} ms`)
+    if (width === 1280 && theme === 'light') { const T = await typeFaults(page); console.log(`# type inventory (${name}): ${JSON.stringify(T.inventory)}`); assert.deepEqual(T.faults, [], name) } // 1.5 #16: two families, five sizes, two weights
     await shoot(page, name, { width, theme })
   }
   await page.waitForSelector('#sidebar a')
   await nav(page, '#/sessions'); await page.waitForSelector('.lrow')
   await first('overview', '.ovcard .ovitem, .ovcard .ovempty', () => nav(page, '#/overview'))
   await first('library', '.lrow', () => nav(page, '#/sessions'))
-  await page.locator('.pagehead a', { hasText: 'All' }).first().click()
+  await page.locator('#libhead').getByRole('radio', { name: 'All' }).click()
   await page.waitForSelector('.lrow')
 
   // session open: click a row → its step head and context window drawn (D64①); five different rows
@@ -89,14 +92,14 @@ async function driveEveryScreen(b, { width, theme }) {
   await first('capture', '#caphead .readat', () => nav(page, '#/capture'))
   await first('capture-log', '.crows .lr, .crows .caplog-none', () => nav(page, '#/capture/log'))
   await nav(page, '#/traffic')
-  await first('traffic', 'a.trow', () => page.locator('.pagehead a', { hasText: /^all$/i }).first().click())
-  await first('host', '.hrow', () => page.locator('a.trow').first().click())
-  await first('request', '.rqd', () => page.locator('.hrow').first().click())
-  await first('storage', '#smain .scard', () => nav(page, '#/settings/storage'))
-  await first('prices', '.ptable tbody tr', () => nav(page, '#/settings/prices'))
-  await first('appearance', '[data-theme-choice]', () => nav(page, '#/settings/appearance'))
+  await first('traffic', '.traf a[href^="#/traffic/host/"]', () => page.locator('.pagehead').getByRole('link', { name: /^all$/i }).first().click())
+  await first('host', '#hlist [role="listitem"] a', () => page.locator('.traf').getByRole('link').and(page.locator('[href^="#/traffic/host/"]')).first().click())
+  await first('request', '#hdetail .rqd', () => page.getByRole('list', { name: 'Requests' }).getByRole('link').first().click())
+  await first('storage', '#screen [role="radiogroup"]', () => nav(page, '#/settings/storage'))
+  await first('prices', '#screen .ptable tbody tr', () => nav(page, '#/settings/prices'))
+  await first('appearance', '[role="radio"][data-theme-choice]', () => nav(page, '#/settings/appearance'))
   const other = theme === 'dark' ? 'light' : 'dark'
-  samples.button.push(await timed(page, 'sel', `html[data-theme="${other}"]`, () => page.click(`[data-theme-choice="${other}"]`)))
+  samples.button.push(await timed(page, 'sel', `html[data-theme="${other}"]`, () => page.getByRole('radio', { name: other === 'dark' ? THEME_DARK : THEME_LIGHT }).click()))
   await shoot(page, 'appearance-switched', { width, theme })
 }
 
@@ -127,7 +130,7 @@ test('a screen change aborts the old screen\'s reads and the content is never bl
         held.add(route.request())
         await new Promise(() => {}) // never answered: only an abort from the page ends it
       })
-      await page.route(/\/library\/library\.mjs/, async (route) => { await libHeld; route.continue().catch(() => {}) })
+      await page.route(/\/assets\/LibraryScreen\.js$/, async (route) => { await libHeld; route.continue().catch(() => {}) })
     },
   })
   try {

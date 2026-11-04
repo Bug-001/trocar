@@ -281,6 +281,16 @@ test('V95: the harnesses that are on go off into the handover file, HEAD fast-fo
   }
 })
 
+test('§5.5 step 2: a merge that changes the lockfile runs npm install without devDependencies in the checkout', async () => {
+  const s = sandbox()
+  s.ahead('package-lock.json')
+  const npm = []
+  const exec = (file, args, opts) => (file === 'npm' ? (npm.push([opts.cwd, ...args]), { status: 0, stdout: '', stderr: '' }) : spawnSync(file, args, opts))
+  const t = ctx(s, { deps: { exec } })
+  assert.equal(await runUpdateCli(['--yes'], t.c), EXIT.ok, t.io.text())
+  assert.deepEqual(npm, [[s.root, 'install', '--omit=dev', '--no-audit', '--no-fund']])
+})
+
 test('V95: a merge that fails leaves the harnesses captured again, no handover file and HEAD where it was, exit 1', async () => {
   const s = sandbox({ on: ['codex', 'opencode'] })
   s.ahead('merge-fails.md')

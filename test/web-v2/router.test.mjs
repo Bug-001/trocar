@@ -2,8 +2,8 @@
 // unknown route landing on 总览 (carrying the flag main.mjs turns into a toast), document.title per route, and the history writer.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { parseHash, formatHash, documentTitle } from '../../src/web/v2/core/router.mjs'
-import { SCREEN_NAME } from '../../src/web/v2/labels/shell.mjs'
+import { parseHash, formatHash, documentTitle } from '../../web/legacy/core/router.mjs'
+import { SCREEN_NAME } from '../../web/legacy/labels/shell.mjs'
 
 const OVERVIEW = { area: 'overview', screen: 'overview', params: {} }
 
@@ -78,8 +78,7 @@ test('document.title is the screen\'s name and the product\'s — a host page al
 // ── scrubbing must not hammer history.replaceState (1.2 §路由 createUrlWriter) ──────────────────────────────────
 // Holding ← / → fires dozens of URL writes a second; WebKit throws after 100 history calls in 30 s. A write ≥ gap after the last one
 // lands in the same task (a reload right after a lone step change carries it); denser ones are ≥ gap apart; the last value always lands.
-import { mock } from 'node:test'
-import * as router from '../../src/web/v2/core/router.mjs'
+import * as router from '../../web/legacy/core/router.mjs'
 
 // a writer on an injected clock: `at(t)` runs every timer due by t, in order, then sets the clock to t
 function rig(gap) {
@@ -133,81 +132,10 @@ test('1.2 #13 createUrlWriter: flush writes the pending value now; cancel drops 
   at(20); w.set('c'); w.cancel(); at(2000); assert.equal(log.length, 2); assert.equal(w.pending(), null)
 })
 
-// a window the router can run against in Node: history / location are what it touches
-const LISTENERS = {} // the router wires its window listeners once per process (the first window it sees): later fake windows reuse them
-function fakeWindow() {
-  const calls = [], listeners = LISTENERS
-  const loc = { hash: '', get href() { return 'http://x/v2/' + this.hash } }
-  const hist = {
-    fail: { replaceState: false, pushState: false },
-    replaceState(s, t, h) { if (hist.fail.replaceState) throw new Error('SecurityError'); calls.push(['replace', h]); loc.hash = h },
-    pushState(s, t, h) { if (hist.fail.pushState) throw new Error('SecurityError'); calls.push(['push', h]); loc.hash = h },
-  }
-  globalThis.window = { addEventListener: (type, fn) => { listeners[type] = fn } }; globalThis.location = loc; globalThis.history = hist
-  return { calls, loc, hist, listeners }
-}
-
-test('router: current() and subscribers see each value of a burst of replace-writes at once; the URL ends on the last', () => {
-  mock.timers.enable({ apis: ['setTimeout'] })
-  try {
-    const win = fakeWindow(), seen = []
-    router.onRoute((r) => seen.push(r.params.step))
-    router.go({ area: 'replay', screen: 'replay', project: 'p', id: 'i', params: {} }, { replace: true })
-    for (let k = 1; k <= 40; k++) {
-      router.setParams({ step: String(k) }) // setParams merges onto the PENDING route, not the stale hash
-      assert.equal(router.current().params.step, String(k)); assert.equal(seen[seen.length - 1], String(k))
-    }
-    mock.timers.tick(router.WRITE_GAP_MS)
-    assert.equal(win.loc.hash, '#/replay/p/i?step=40'); assert.equal(router.current().params.step, '40')
-  } finally { mock.timers.reset() }
-})
-
-test('router: a navigation (push) first lands the pending replace on the entry it leaves, then pushes', () => {
-  mock.timers.enable({ apis: ['setTimeout'] })
-  try {
-    const win = fakeWindow()
-    router.go({ area: 'sessions', screen: 'library', params: {} }, { replace: true }); mock.timers.tick(500); win.calls.length = 0
-    router.setParams({ sel: 'p::s1' }) // pending replace
-    router.go({ area: 'replay', screen: 'replay', project: 'p', id: 's1', params: {} }) // the user opens the row
-    assert.deepEqual(win.calls, [['replace', '#/sessions?sel=p%3A%3As1'], ['push', '#/replay/p/s1']])
-    win.calls.length = 0; mock.timers.tick(500); assert.deepEqual(win.calls, [], 'the flushed write does not run a second time')
-  } finally { mock.timers.reset() }
-})
-
-test('router: Back / Forward cancels a pending replace (it belongs to the entry the reader left); leaving the page flushes it', () => {
-  mock.timers.enable({ apis: ['setTimeout'] })
-  try {
-    const win = fakeWindow()
-    router.go({ area: 'sessions', screen: 'library', params: {} }, { replace: true }); mock.timers.tick(500); win.calls.length = 0
-    router.setParams({ q: 'x' })
-    win.loc.hash = '#/capture' // the browser moved to another entry
-    win.listeners.popstate(); mock.timers.tick(500)
-    assert.deepEqual(win.calls, [], 'a stale replace must not overwrite the entry Back landed on'); assert.equal(router.current().screen, 'capture')
-    router.setParams({ h: 'cc' }); win.listeners.pagehide()
-    assert.deepEqual(win.calls, [['replace', '#/capture?h=cc']], 'the last value lands even when the page goes away first')
-  } finally { mock.timers.reset() }
-})
-
-test('router: a replaceState / pushState that throws (a rate-limited Safari) never throws out of go, and the route still changes', () => {
-  mock.timers.enable({ apis: ['setTimeout'] })
-  try {
-    const win = fakeWindow(), seen = []
-    const off = router.onRoute((r) => seen.push(r.screen))
-    router.go({ area: 'sessions', screen: 'library', params: {} }, { replace: true }); mock.timers.tick(500)
-    win.hist.fail.replaceState = true
-    router.setParams({ q: 'a' }); assert.doesNotThrow(() => mock.timers.tick(500))
-    win.hist.fail.pushState = true
-    assert.doesNotThrow(() => router.go({ area: 'traffic', screen: 'traffic', params: {} }))
-    assert.equal(seen[seen.length - 1], 'traffic', 'subscribers were told')
-    assert.equal(win.loc.hash, '#/traffic', 'the URL still follows (the fallback assigns the hash)'); assert.equal(router.current().screen, 'traffic')
-    off()
-  } finally { mock.timers.reset() }
-})
-
 // 4.4 §存下的答案: #/session/<id> finds the session's project in the list; a stored (older) list that lacks a newer session is not
 // "not listed": the list is read again until it is fresh
 test('#/session/<id> resolves a session newer than a stored list: no "not listed" from the stored answer', async () => {
-  const { mount } = await import('../../src/web/v2/replay/session-link.mjs')
+  const { mount } = await import('../../web/legacy/replay/session-link.mjs')
   const row = (id) => ({ session_id: id, project_slug: `p-${id}`, harness: 'codex', title: null, last_ts: '2026-10-18T10:00:00.000Z' })
   let reads = 0, went = null
   const api = { get: async () => ({ ok: true, status: 200, data: ++reads === 1

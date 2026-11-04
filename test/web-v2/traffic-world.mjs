@@ -3,10 +3,10 @@
 // rewrite an answer (`tamper`) to construct a document shape the generated store does not hold. The element is a stand-in that
 // keeps innerHTML and the delegated listeners, the media query keeps its 'change' listeners (`media(matches)` fires them); the router is a stand-in over the real parseHash. Exports only.
 import { boardHome, serveBoard } from './real-face.mjs'
-import { api } from '../../src/web/v2/core/api.mjs'
-import { configure } from '../../src/web/v2/core/http.mjs'
-import { initKeys } from '../../src/web/v2/core/keys.mjs'
-import { parseHash } from '../../src/web/v2/core/router.mjs'
+import { api } from '../../web/legacy/core/api.mjs'
+import { configure } from '../../web/legacy/core/http.mjs'
+import { initKeys } from '../../web/legacy/core/keys.mjs'
+import { parseHash } from '../../web/legacy/core/router.mjs'
 
 let keydown = null
 const win = { matchMedia: null, addEventListener(t, fn) { if (t === 'keydown') keydown = fn }, removeEventListener() {} }

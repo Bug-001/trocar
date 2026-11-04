@@ -1,5 +1,5 @@
 // test/web-v2/no-bare-colors.test.mjs — every colour on the v2 board is a token (var(--x)) or a color-mix() of tokens. Outside the
-// :root token blocks of css/base.css there is no #rgb / #rrggbb, no rgb( / rgba( / hsl( / hsla( anywhere under src/web/v2 — in
+// :root token blocks of css/base.css there is no #rgb / #rrggbb, no rgb( / rgba( / hsl( / hsla( anywhere under web/legacy — in
 // stylesheets, scripts or the page. (The first board had hard-coded hex in its banners and a hex fallback inside var().)
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -7,10 +7,10 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'src', 'web', 'v2')
+const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'web', 'legacy')
 const walk = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((d) => {
   const p = path.join(dir, d.name)
-  return d.isDirectory() ? walk(p) : /\.(mjs|css|html)$/.test(d.name) ? [p] : []
+  return d.isDirectory() ? walk(p) : /(?<!\.test)\.(mjs|ts|tsx|css|html)$/.test(d.name) ? [p] : []
 })
 // 3, 4, 6 and 8 digits (#rgb #rgba #rrggbb #rrggbbaa), not the tail of a longer word, an entity (&#39;), a fragment (…/#x) or an id (a#b).
 const HEX = /(?<![&\w#/])#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{4}|[0-9a-fA-F]{3})(?![\w-])/g
@@ -35,7 +35,7 @@ const literals = (text) => [
   ...[...text.matchAll(FN)].map((m) => m[0]),
 ]
 
-// `rel` is the path relative to src/web/v2. Only css/base.css may define colours, and only in :root token blocks.
+// `rel` is the path relative to web/legacy. Only css/base.css may define colours, and only in :root token blocks.
 export function colorViolations(rel, text) {
   if (!rel.endsWith('.css')) return literals(text).map((l) => `${rel}: ${l}`)
   const css = text.replace(/\/\*[\s\S]*?\*\//g, '')
@@ -87,8 +87,8 @@ test('the scanner catches planted violations and spares the token blocks (it is 
   assert.equal(colorViolations('css/replay.css', ':root{--bg:#fff}').length, 1)
 })
 
-test('src/web/v2 has no bare colour outside the :root tokens of css/base.css', () => {
-  const files = walk(ROOT)
+test('web/legacy has no bare colour outside the :root tokens of css/base.css', () => {
+  const files = walk(path.join(ROOT, '..')) // all of web/: the legacy tree, the React shell (web/src) and index.html
   assert.ok(files.length >= 15, `expected the v2 front end to exist, found ${files.length} files`)
   assert.ok(files.some((f) => f.endsWith(path.join('css', 'base.css'))))
   const bad = files.flatMap((f) => colorViolations(path.relative(ROOT, f).split(path.sep).join('/'), fs.readFileSync(f, 'utf8')))

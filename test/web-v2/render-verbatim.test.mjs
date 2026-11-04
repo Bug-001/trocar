@@ -5,8 +5,8 @@
 // query layer.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { blockBodyHtml } from '../../src/web/v2/replay/ctxwin.mjs'
-import { DISPLAY_CLIP, bodyFor, clipText } from '../../src/web/v2/replay/blocks.mjs'
+import { blockBodyHtml } from '../../web/legacy/replay/ctxwin.mjs'
+import { DISPLAY_CLIP, bodyFor, clipText } from '../../web/legacy/replay/blocks.mjs'
 
 const entities = { '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'", '&#13;': '\r', '&amp;': '&' }
 const unesc = (s) => s.replace(/&(lt|gt|quot|#39|#13|amp);/g, (m) => entities[m])

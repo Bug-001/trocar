@@ -63,8 +63,10 @@ function childMarker(pid, command) {
   return `${CHILD}${pid}-${command.slice(0, 40).replace(/[^A-Za-z0-9._-]+/g, '_')}`
 }
 
-// the runner is the process that was started with --test; a test file's process has NODE_TEST_CONTEXT, and a plain `node file` has neither
-if (process.execArgv.includes('--test') && !process.env.NODE_TEST_CONTEXT) {
+/** The runner's side: this run's private TMPDIR, swept of dead runs; at exit, leftovers and blamed children fail it. Once per process. */
+function guardRun() {
+  if (guardRun.on) return
+  guardRun.on = true
   const root = process.cwd()
   const before = new Set(names(root))
   const runDir = fs.mkdtempSync(path.join(os.tmpdir(), RUN))
@@ -145,7 +147,10 @@ function zombies(pids) {
   return new Set(String(r.stdout ?? '').split('\n').map((l) => l.trim().split(/\s+/)).filter(([, stat]) => stat?.startsWith('Z')).map(([pid]) => Number(pid)))
 }
 
-if (process.env.NODE_TEST_CONTEXT) {
+/** A test file's side: every child it starts and leaves running is killed at exit, and one that would have lived on leaves a marker
+ *  for the runner. Once per process; returns that end-of-file check, for a runner whose workers do not reach 'exit' (Vitest). */
+function guardChildren() {
+  if (guardChildren.end) return guardChildren.end
   const { ChildProcess } = require('node:child_process')
   const runDir = os.tmpdir() // now, before a test points TMPDIR somewhere else
   const running = new Map() // child → it was started with an IPC channel
@@ -158,18 +163,28 @@ if (process.env.NODE_TEST_CONTEXT) {
     }
     return result
   }
-  process.on('exit', () => {
+  const end = (file = process.argv[1]) => {
     const left = [...running.keys()].filter((child) => child.exitCode === null && child.signalCode === null)
     const dead = zombies(left.map((child) => child.pid))
     for (const child of left) {
+      const ipc = running.get(child)
+      running.delete(child) // a second call (Vitest's afterAll, then 'exit') looks at it once
       try { process.kill(child.pid, 'SIGKILL') } catch { continue } // gone already
       // blamed: a child that would have lived on. Not one that has exited already, one the test signalled, or one with an IPC
       // channel (fork's children here exit when the channel closes: src/collector/seal-worker.mjs, src/query/worker.mjs)
-      if (dead.has(child.pid) || child.killed || running.get(child)) continue
+      if (dead.has(child.pid) || child.killed || ipc) continue
       const command = child.spawnargs.join(' ')
-      try { fs.writeFileSync(path.join(runDir, childMarker(child.pid, command)), JSON.stringify({ pid: child.pid, file: process.argv[1], command })) } catch { /* the run's directory is gone */ }
+      try { fs.writeFileSync(path.join(runDir, childMarker(child.pid, command)), JSON.stringify({ pid: child.pid, file, command })) } catch { /* the run's directory is gone */ }
     }
-  })
+  }
+  process.on('exit', () => end())
+  guardChildren.end = end
+  return end
 }
 
-module.exports = { leaked }
+// `npm test`: the runner is the process started with --test; a test file's process has NODE_TEST_CONTEXT, a plain `node file` neither.
+// Vitest (`npm run test:web`) calls the two itself: web/vitest.config.mjs in its main process, web/vitest.setup.mjs in each worker.
+if (process.execArgv.includes('--test') && !process.env.NODE_TEST_CONTEXT) guardRun()
+if (process.env.NODE_TEST_CONTEXT) guardChildren()
+
+module.exports = { leaked, guardRun, guardChildren }
