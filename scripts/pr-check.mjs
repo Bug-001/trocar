@@ -19,6 +19,7 @@ import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import { parseTime } from '../src/query/named/index.mjs'
 import { SEALED_EXT } from '../src/raw/seal.mjs'
+import { foldedRuns, isHex, longRuns, opened } from './lib/encoded-text.mjs'
 import { textsBehind } from './lib/record-text.mjs'
 import { normalize, WindowTable } from './lib/text-windows.mjs'
 import { callOf, findCli } from './lib/trocar-cli.mjs'
@@ -326,15 +327,38 @@ function checkShape(commits, sources, add) {
   }
 }
 
+/** A source's text for the rules on long runs, none for the built board, and the lock's integrity lines are hashes and nothing else. */
+function runnable(source) {
+  if (source.path?.startsWith(BOARD)) return null
+  const text = source.bytes.toString()
+  return source.path && LOCK.test(source.path) ? text.replace(INTEGRITY, '') : text
+}
+
 function checkSecrets(sources, add) {
   for (const source of sources) {
     const text = source.bytes.toString()
     const hit = (match) => { if (!match[0].includes('FAKE')) add('secrets', placeOf(source, text, match.index)) }
     for (const match of text.matchAll(TOKEN)) hit(match)
     for (const match of text.matchAll(CREDENTIAL)) hit(match)
-    if (source.path?.startsWith(BOARD)) continue
-    const runs = source.path && LOCK.test(source.path) ? text.replace(INTEGRITY, '') : text
-    for (const match of runs.matchAll(LONG_RUN)) if (isMixed(match[0])) hit(match)
+    for (const match of runnable(source)?.matchAll(LONG_RUN) ?? []) if (isMixed(match[0])) hit(match)
+  }
+}
+
+/** What a source says in another alphabet joins the sources, to be compared by what it says. A folded block that says nothing readable is
+ *  what a file looks like when it is carried as text, and hex is left out of that: a list of hashes opens to noise too. */
+function openEncoded(sources, add) {
+  for (const source of [...sources]) {
+    const text = TEXT_KINDS.has(source.kind) ? runnable(source) : null
+    if (text === null) continue
+    const open = (run) => {
+      const bytes = opened(run)
+      if (bytes) sources.push({ where: source.where, kind: 'decoded', bytes })
+      return bytes
+    }
+    longRuns(text).forEach(open)
+    for (const { index, run } of foldedRuns(text)) {
+      if (!open(run) && !isHex(run) && !run.includes('FAKE')) add('secrets', placeOf(source, text, index))
+    }
   }
 }
 
@@ -433,7 +457,9 @@ async function compareCapture(segments, { before, cli }, table, add) {
   const bytesOf = (list) => list.reduce((n, s) => n + s.bytes, 0)
   const coverage = { scanned_bytes: 0, opaque_bytes: 0, after_bytes: bytesOf(segments) - bytesOf(wanted), total_bytes: bytesOf(wanted), from: null, to: null }
   const hit = (slot) => { add('captured-text', table.whereOf(slot)); table.drop(slot) }
+  let read = 0
   const take = (line, ending) => {
+    read += line.length + 1 // a half line too: a sealed segment's size counts a newline per record
     const ts = RECORD_TS.exec(line.subarray(0, 64).toString('latin1'))?.[1]
     const time = Date.parse(ts)
     if (time >= before) {
@@ -451,6 +477,7 @@ async function compareCapture(segments, { before, cli }, table, add) {
     if (coverage.to === null || time > Date.parse(coverage.to)) coverage.to = ts
   }
   for (const segment of wanted) {
+    read = 0
     let call
     try { call = callOf(cli, ['raw', segment.segment]) } catch { add('partial', 'capture', WHY.raw); continue }
     const kid = spawn(call[0], call[1], { ...call[2], stdio: ['ignore', 'pipe', 'ignore'] })
@@ -467,7 +494,7 @@ async function compareCapture(segments, { before, cli }, table, add) {
       if (at < chunk.length) parts.push(chunk.subarray(at))
     }
     if (parts.length > 0) take(Buffer.concat(parts), 0)
-    if (await exit !== 0) add('partial', 'capture', WHY.raw)
+    if (await exit !== 0 || (segment.state !== 'writing' && read < segment.bytes)) add('partial', 'capture', WHY.raw)
   }
   if (coverage.opaque_bytes > 0) add('partial', 'capture', WHY.opaque)
   if (coverage.scanned_bytes + coverage.opaque_bytes === 0 && segments.some((s) => s.records > 0)) add('partial', 'capture', WHY.nothing)
@@ -519,6 +546,7 @@ async function main() {
   }
   if (options.title) out.sources.push({ where: 'title', kind: 'title', bytes: options.title })
   out.sources.push({ where: 'body', kind: 'body', bytes: options.body })
+  openEncoded(out.sources, add)
   for (const source of out.sources) source.norm ??= normalized(source.bytes)
 
   checkFiles(out.commits, cwd, add)

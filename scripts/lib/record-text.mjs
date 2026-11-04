@@ -1,5 +1,6 @@
 // scripts/lib/record-text.mjs — what a capture record holds that its own line does not show (spec 1.12 §6.1 captured-text): bodies kept
-// as base64, compressed or not, and a streamed reply whose text is cut into deltas, so that no stretch of the line carries it whole.
+// as base64, compressed or not, a text attached as base64 inside a request, and a streamed reply whose text is cut into deltas, so that no
+// stretch of the line carries it whole.
 // Everything here calls the readers' own functions; which wire a record speaks and how its deltas join is theirs to know, not this file's.
 import { decodeContent, utf8Strict } from '../../src/capture/request-body.mjs'
 import { makeSseReconstructor } from '../../src/capture/sse-reconstruct.mjs'
@@ -8,6 +9,9 @@ import { boardDissectorOf, wireFormatOf } from '../../src/dissect/registry.mjs'
 import { MAX_DECODED_BYTES, requestEncodingOf } from '../../src/dissect/request-body.mjs'
 import { storedReply } from '../../src/dissect/sse-spans.mjs'
 import { normResp } from '../../src/view/analyze.mjs'
+import { longRuns, opened } from './encoded-text.mjs'
+
+const STREAMED = /ndjson|jsonl|(?<!octet-)stream/i // a stream that is not SSE: its deltas have no reader to join them
 
 /** A stored stream's events and reconstruction, as the collector makes them from the same bytes. The newline ends a stream that was cut. */
 function rebuilt(stream) {
@@ -58,6 +62,14 @@ export function textsBehind(rec) {
       const norm = format === 'anthropic' ? normResp(view) : boardDissectorOf(format)?.normResp(view)
       if (norm) texts.push(...[norm.text, norm.thinking, JSON.stringify(norm.tools)].filter(Boolean).map((text) => Buffer.from(text)))
       else if (holdsMessages(view.resp)) opaque = true
+    } else if (part && rec.body_retention !== 'log' && (part.kind === 'text' || part.kind === 'json') && STREAMED.test((part.headers || r.headers || {})['content-type'])) {
+      opaque = true
+    }
+    if (typeof rec.req_body === 'string') {
+      for (const run of longRuns(rec.req_body)) { // a document attached as base64; an image opens to nothing, there being no text in it
+        const text = opened(run)
+        if (text) texts.push(text)
+      }
     }
   } catch {
     opaque = true
