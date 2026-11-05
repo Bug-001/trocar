@@ -111,6 +111,8 @@ const ROWS = [
     'a why outside the closed set': '{ why: "made-up" }',
     'a skip outside the closed set': '{ skipped: [{ rule: "x", why: "made-up" }] }',
     'a death of its own': '{ died: "made-up" }',
+    'a would that says nothing': '{ verdict: "forward", would: [null] }',
+    'a rule time that is no number': '{ verdict: "forward", rule_ms: { script: "x" } }',
   }).map(([what, fields]) => ({ name: `a frame with its task's id and ${what}`, why: 'bad-result', body: `say({ id: taskId(), ...${fields} }); ${HOLD}` })),
 ];
 
@@ -625,6 +627,13 @@ test('close twice is one close, and a run after it touches nothing', async () =>
   await runner.close();
   await runner.close();
   assert.equal((await runner.run(unit())).died, 'closed');
+});
+
+test('a close while the process loads is closed, not a load that failed', async () => {
+  const runner = openOneShot({ rules: [{ name: 'r', on_error: 'forward', match: { harness: 'any' }, do: [{ replace: 'a', with: 'b' }] }] });
+  const running = runner.run(unit());
+  await runner.close();
+  assert.equal((await running).died, 'closed');
 });
 
 test('a parent too busy to read is no reason to kill a task that finished', async () => {
