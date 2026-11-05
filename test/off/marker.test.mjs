@@ -126,6 +126,17 @@ test('a block whose close line the user deleted still goes (its variables under 
   assert.ok(MARKER_PATHS['deepseek-dsh'].some((p) => p.exact === ANONYMOUS_MODULE_MANIFEST))
 })
 
+test('on Linux, install\'s certificate block in a CODEX_HOME other than ~/.codex: uninstall (install and on) finds it there, off (on) does not', () => {
+  const home = tmpDir('trocar-marker-codexhome-')
+  const ch = path.join(home, 'elsewhere', 'codex')
+  fs.mkdirSync(ch, { recursive: true })
+  const file = path.join(ch, '.env')
+  fs.writeFileSync(file, `# >>> trocar collector >>>\nSSL_CERT_FILE=${path.join(home, '.trocar', 'collector', 'ca', 'combined-codex.pem')}\n# <<< trocar collector <<<\nOPENAI_API_KEY=sk-x\n`)
+  const env = { HOME: home, CODEX_HOME: ch }
+  assert.deepEqual(planByMarker({ home, ids: ['codex'], env, ...UNINSTALL }).map((p) => [p.path, p.how]), [[file, 'block']])
+  assert.deepEqual(planByMarker({ home, ids: ['codex'], env, platform: 'linux', phases: ['on'] }), [])
+})
+
 test('D48② with no manifest: a key the user set while on keeps the user\'s value — its old line stays out of effect and is reported (prior_left); a key the user did not set comes back, also on line 1 after a mark and when an editor indented the prefix', async () => {
   const { OFF_PREFIX, blockBegin, BLOCK_END } = await import('../../src/off/text-edit.mjs')
   const home = tmpDir('trocar-marker-d48-')

@@ -61,10 +61,10 @@ const doorAt = (h) => Object.values(DOOR_ROUTES[h]).map((route) => ({ how: 'json
  *  certificate key's value, a trust plugin and its loader row): it is `install`'s (D55①), so only a run that undoes install's items (`uninstall`) looks at it,
  *  never `off` (4.6 §安装清单与卸载). The plan of 1.6 / 4.6 §身份与信任 is the authority; a harness not listed here has no marker undo. */
 const INSTALLS = { phase: 'install' }
-const ROUTED = ['darwin', 'win32'] // where `on` writes class-1 routes (on Linux a block in the same file is install's certificate block)
+const ROUTED = ['darwin', 'win32'] // where `on` writes class-1 routes (on Linux a block in the same file is install's certificate block, at every CODEX_HOME in use)
 export const MARKER_PATHS = Object.freeze({
   'claude-code': [{ how: 'json-value', file: '.claude/settings.json', keys: ['env', 'NODE_EXTRA_CA_CERTS'], ...INSTALLS }, ...doorAt('claude-code')],
-  codex: [{ how: 'block', file: '.codex/.env', ...INSTALLS }, { how: 'block', route: ROUTE_PLACES.codex, os: ROUTED }],
+  codex: [{ how: 'block', file: '.codex/.env', ...INSTALLS }, { how: 'block', route: ROUTE_PLACES.codex, os: ['linux'], ...INSTALLS }, { how: 'block', route: ROUTE_PLACES.codex, os: ROUTED }],
   hermes: [{ how: 'block', file: '.hermes/.env', ...INSTALLS }, { how: 'block', route: ROUTE_PLACES.hermes, os: ROUTED }, { how: 'block', eachDir: '.hermes/profiles', file: '.env', ...INSTALLS }],
   opencode: [{ how: 'owned-file', file: '.config/opencode/plugins/trocar-ca.js', ...INSTALLS }, { how: 'owned-file', route: ROUTE_PLACES.opencode }],
   'deepseek-dsh': [{ how: 'line', file: '.dsh/cordis.patch.yml', yaml: true, ...INSTALLS }, { how: 'owned-file', file: '.trocar/collector/plugins/dsh/index.js', ...INSTALLS }, { how: 'owned-file', file: '.trocar/collector/plugins/dsh/package.json', exact: PLUGIN_MANIFEST, ...INSTALLS }],
