@@ -1,7 +1,7 @@
 // test/collector/model-replace-drain-e2e.test.mjs — MA21 (RFC 1.6 §5.2, D82, invariant 5): a daemon swap's drain is no off. The daemon is a REAL child
 // process at its real control endpoint, as in model-stop-barrier-e2e. With a WebSocket held open, `POST /off {exit, by:'install'}` starts the drain: a new
-// connection through the real door is still decrypted and recorded, GET /status counts what is left to drain, and the `now` that follows cuts both
-// connections and stops the daemon with exit 0. state.json is the same bytes throughout. One run per platform value.
+// connection through the real door is still decrypted and recorded, GET /status counts its response in flight, which outlives the WebSocket's end uncut, and the
+// `now` that follows cuts what is still in flight and stops the daemon with exit 0. state.json is the same bytes throughout. One run per platform value.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import crypto from 'node:crypto'
@@ -39,9 +39,10 @@ for (const platform of ['darwin', 'win32']) {
     const upCa = createCa({ commonName: 'e2e upstream CA' }), upIssuer = createLeafIssuer(loadCa(upCa))
     const upstream = [] // the upstream side of every connection: they stay open until the test ends
     let turns = 0 // what the agent sent over the WebSocket after the upgrade
+    let slow = null // while set to true, a response stops short of its end and this becomes the upstream socket that owes the rest
     const mock = tls.createServer({ SNICallback: (s, cb) => cb(null, upIssuer.secureContextFor(s)) }, (s) => {
       s.on('error', () => {}); upstream.push(s); let b = '', upgraded = false
-      s.on('data', (d) => { if (upgraded) { turns++; return } b += d.toString('latin1'); if (b.includes('Upgrade: websocket') && b.includes('\r\n\r\n')) { upgraded = true; s.write(SWITCH) } else if (b.includes(BODY)) s.write(REPLY) })
+      s.on('data', (d) => { if (upgraded) { turns++; return } b += d.toString('latin1'); if (b.includes('Upgrade: websocket') && b.includes('\r\n\r\n')) { upgraded = true; s.write(SWITCH) } else if (b.includes(BODY)) { if (slow) { s.write(REPLY.slice(0, -2)); slow = s } else s.write(REPLY) } })
     })
     const target = `localhost:${await listenLocalhost(mock)}`
     const bundle = path.join(w.home, 'codex-ca.pem')
@@ -88,10 +89,26 @@ for (const platform of ['darwin', 'win32']) {
         const during = await connect(REQ)
         assert.equal(during.reply, REPLY, 'the agent got the upstream\'s reply')
         assert.ok(new crypto.X509Certificate(during.peer.issuerCertificate.raw).checkIssued(new crypto.X509Certificate(rootPem)), 'decrypted under the trocar root')
-        const { relayed } = await ask('GET', '/status')
-        assert.ok(relayed.closing + relayed.waiting >= 1, `the drain's wait sees the held WebSocket: ${JSON.stringify(relayed)}`)
-        assert.equal(relayed.scope, 'memory')
+        const counted = async () => { const { relayed } = await ask('GET', '/status'); assert.equal(relayed.scope, 'memory'); return relayed.closing }
+        assert.equal(await counted(), 1, 'the held WebSocket; the new connection is idle, so nothing of it is waited for')
 
+        // a response on the new connection, in flight: the drain's wait counts it, and it is still there when the connection the drain found has gone
+        const agent = open.at(-1), ws = open.at(-3) // through() pushes the raw socket, then its TLS
+        let got = ''
+        agent.on('data', (d) => { got += d.toString('latin1') })
+        const inFlight = async () => { slow = true; agent.write(REQ); await until(() => slow !== true, 5000, 'the upstream started the response'); return slow }
+        const owing = await inFlight()
+        assert.equal(await counted(), 2, 'the WebSocket and the response in flight')
+        ws.destroy()
+        await until(() => !upstream[0].writable, 5000, 'the WebSocket ended at the upstream')
+        assert.equal(await counted(), 1, 'the wait goes on for the response in flight')
+        owing.write(REPLY.slice(-2))
+        await until(() => got.endsWith(REPLY.slice(-4)) && got.length === REPLY.length, 5000, 'the whole response reached the agent')
+        assert.equal(got, REPLY)
+        for (let i = 0; i < 40 && await counted(); i++) await new Promise((r) => setTimeout(r, 25))
+        assert.equal(await counted(), 0, 'the response ended: nothing is left to wait for')
+
+        await inFlight() // this one is in flight when the drain time is up
         await ask('POST', '/off', { exit: true, now: true, by: 'install' })
         const end = await within(exited, 15_000, 'the daemon exit')
         assert.deepEqual([end.code, end.signal], [0, null], `exit 0 by itself (err=${err})`)
@@ -100,7 +117,7 @@ for (const platform of ['darwin', 'win32']) {
         assert.deepEqual(flows.filter((x) => x.reason === 'group-off'), [], 'no connection was forwarded for being off')
         assert.ok(rows.length >= 2 && rows.every((x) => x.decision === 'decrypt'), JSON.stringify(rows))
         assert.ok(rows.filter((x) => x.error && x.error.type === 'cut-by-stop').length >= 1, JSON.stringify(rows))
-        assert.ok(envelopesOf(w.dir).some((r) => r.req_body === BODY), 'the new connection\'s exchange is in raw')
+        assert.equal(envelopesOf(w.dir).filter((r) => r.req_body === BODY && !r.error && JSON.stringify(r.resp).includes('pong')).length, 2, 'both of the new connection\'s finished exchanges are whole in raw')
         assert.deepEqual(fs.readFileSync(stateFile), stateBefore, 'state.json is untouched')
       } finally {
         for (const s of open) s.destroy()

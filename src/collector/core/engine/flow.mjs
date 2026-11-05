@@ -262,6 +262,7 @@ export function handleFlow(client, meta, ctx) {
       return 'closing'
     },
     state: () => (finished ? 'done' : gate ? gate.state() : drainAsked ? 'closing' : 'open'),
+    peek: () => (gate ? gate.peek() : 'open'), // a connection nobody asked to close: what it is carrying (drain.mjs)
   })
   upstream.once('error', (err) => preTeardown(went('upstream', err)))
   upstream.on('close', () => preTeardown(went('upstream')))

@@ -44,7 +44,7 @@ import { runAsync } from '../off/exec.mjs'
 import { driftCheck, newDriftState } from '../netenv/adopt.mjs'
 import { classesHook, wsTerminalHook } from './engine-data.mjs'
 import { isModelOs, backendsFor, doorPartsFor, sourcesCtx } from './arch/model-backends.mjs'
-import { createModelCollector } from './core/proxymode/collector.mjs'
+import { createModelCollector, replacesDaemon } from './core/proxymode/collector.mjs'
 import { TEMPLATES } from './harness/templates/index.mjs'
 import { readStateFile } from '../off/state.mjs'
 
@@ -201,6 +201,10 @@ function stopByOf(b) {
   return b.by
 }
 const drainBy = (by) => (by ? { by: 'stop', who: by } : {}) // engine.drain's: the stop's own label, with the command that asked
+// GET /status's connection counts (1.6 §1.3, §5.2): the connections of the harnesses off in THIS daemon's memory, not state.json's (`scope: 'memory'` says so, and
+// only such a count may end the drain's wait: an older daemon's status lacks it). A daemon being replaced keeps its harnesses on, so the off set would read 0, the
+// wait would end at once and the cut that follows would be the whole drain: it counts every connection still carrying something, the ones opened since included.
+const relayedOf = (engine, off, leaving) => ({ ...engine.relayed(leaving ? { agents: null, unasked: true } : { agents: off }), scope: 'memory' })
 // `trocar on` naming harnesses that are already on is also "decrypt again now" (4.6 §引擎 5, D54②): the engine forgets every negative-cache key of
 // those harnesses (null = every harness), each clearing is recorded as process exits are (4.8 §5.5), and POST /on answers what was retried.
 function retryNow(engine, failure, names) {
@@ -686,6 +690,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     const checkTimer = setInterval(() => { check().catch((e) => failure('daemon', coded(e, 'check-error'))) }, checkMs)
     checkTimer.unref()
 
+    let leaving = false // a stop that replaces this daemon is draining (replacesDaemon); /on cancels it
     async function status() {
       // every running-but-untrusted agent says why and what to do (4.6 §确认信任, R4); hosts it never decrypts say why too
       const agents = await Promise.all(tracker.agents().map(async (r) => {
@@ -702,9 +707,9 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
         ...(await sw.report()),
         engine: { port, v6: v6Error ? null : port, v6_error: v6Error, ...engine.stats() },
         negatives: engine.negatives(), // (pid, host) pairs no longer decrypted until the process exits (D-12)
-        // connections of the harnesses that are off and still relayed (1.6 §1.3): closing = on their way out at the response / turn
+        // connections still relayed (relayedOf; 1.6 §1.3): closing = on their way out at the response / turn
         // end, waiting = a spliced one or a WebSocket whose turn end is not seen, which close by themselves (`off --now` cuts them)
-        relayed: engine.relayed({ agents: new Set(Object.entries(sw.state().harnesses).filter(([, h]) => h.desired === 'off').map(([id]) => id)) }),
+        relayed: relayedOf(engine, new Set(Object.entries(sw.state().harnesses).filter(([, h]) => h.desired === 'off').map(([id]) => id)), leaving),
         ca: caState, // {ok, not_after} or {ok:false, which, file, reason}: "CA unusable", never "not installed" (D-4)
         unmatched: tracker.unmatched(), // processes two descriptors claim (D-19)
         helper: { pid, proto, build, expected_proto: redirector.expectedProto, ok: proto === redirector.expectedProto, down: helperDown, unparsable_lines: unparsable, timeouts },
@@ -733,23 +738,28 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       // capture on again cancels a pending `off {exit}` (exitWhenDrained): the daemon that was going away is the one now serving it
       // The manifest is read again first (1.6 §1.1, R9): `trocar on` writes the entries, and their `installed_at`, before it asks, so a harness turned on
       // again after `off` is judged against when trocar wrote the entry NOW — a process that started while it was off is config-after-start, and says so
-      on: async ({ body }) => { reloadManifest(); const r = await sw.on({ ...(body && typeof body === 'object' ? body : {}), harnesses: namesOf(body) }); exitAsked++; syncTracker(); return { ...(await status()), ...(r.noop ? { noop: true } : {}), retried: retryNow(engine, failure, namesOf(body)) } },
+      on: async ({ body }) => { reloadManifest(); leaving = false; const r = await sw.on({ ...(body && typeof body === 'object' ? body : {}), harnesses: namesOf(body) }); exitAsked++; syncTracker(); return { ...(await status()), ...(r.noop ? { noop: true } : {}), retried: retryNow(engine, failure, namesOf(body)) } },
       // → {…status, unwatched: [pid], confirmed, relayed: {closing, waiting, cut}, pid}: the pids taken out of the kernel watch table, and whether the kernel
       // confirms the state asked for (every unwatch answered; with no harness left on, the links gone). With the helper dead its table is gone with it: every pid
       // counts as taken out and `confirmed` does not wait on an unwatch nobody can answer. After the switch the engine closes the connections of those harnesses
       // that are still relayed (1.6 §1.3; `now`: cuts them instead) and `relayed` says how many are left closing / waiting / were cut. `exit` (no names: the
       // whole daemon is going, 1.6 §1.4 5) stops the daemon once nothing is relayed any more, or at once with `now`; the request never waits for it.
+      // A stop that replaces the daemon is no off (replacesDaemon): state.json, the watch table and the links stay, so connections are still redirected and
+      // recorded for the whole drain, and the new daemon goes on from the same file. The links go with the helper at the stop, as at any stop; `actual` answers
+      // for that stop, which is what the CLI reads back.
       off: async ({ body }) => {
         const b = body && typeof body === 'object' ? body : {}
         for (const k of ['now', 'exit']) if (b[k] !== undefined && typeof b[k] !== 'boolean') throw Object.assign(new Error(`"${k}" must be true or false`), { status: 400 })
         const names = namesOf(body)
         if (b.exit === true && names) throw Object.assign(new Error('"exit" stops the whole daemon: it takes no harness names (leave them out)'), { status: 400 })
         const by = stopByOf(b)
-        const r = await sw.off({ harnesses: names })
+        const swap = replacesDaemon({ exit: b.exit === true, by })
+        if (swap) leaving = true
+        const r = swap ? { unwatched: [], unwatch_failed: [] } : await sw.off({ harnesses: names })
         const relayed = engine.drain({ agents: names ? new Set(names) : null, now: b.now === true, ...drainBy(by) })
         const st = await status()
         if (b.exit === true) exitWhenDrained(b.now === true, by)
-        return { ...st, ...(r.noop ? { noop: true } : {}), unwatched: r.unwatched, confirmed: r.unwatch_failed.length === 0 && (sw.anyOn() || st.actual === 'off'), relayed, pid: process.pid }
+        return { ...st, ...(swap ? { actual: 'off' } : {}), ...(r.noop ? { noop: true } : {}), unwatched: r.unwatched, confirmed: r.unwatch_failed.length === 0 && (swap || sw.anyOn() || st.actual === 'off'), relayed, pid: process.pid }
       },
     })
     markReady()
@@ -774,7 +784,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       const mine = ++exitAsked
       const left = engine.drained({ agents: null })
       const ready = now ? Promise.race([left, new Promise((r) => setTimeout(r, 500))]) : left
-      ready.then(() => new Promise((r) => setTimeout(r, 50))).then(() => { if (mine === exitAsked && !sw.anyOn()) return stop({ reason: by || 'off', who: by }) }).catch((e) => failure('daemon', coded(e, 'stop-failed')))
+      ready.then(() => new Promise((r) => setTimeout(r, 50))).then(() => { if (mine === exitAsked && (leaving || !sw.anyOn())) return stop({ reason: by || 'off', who: by }) }).catch((e) => failure('daemon', coded(e, 'stop-failed')))
     }
     async function doStop({ signal = null, reason = null, who = null } = {}) {
       seal.stop() // the segment store.close() closes below is sealed by the next start's scan, not by a worker this stop cuts off
@@ -848,11 +858,8 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
     // the connections of the harnesses that are off and still relayed (1.6 §1.3), as runDaemon reports them: the engine counts
     // what it holds in memory, so this costs nothing. Without it `status` said "Connections unknown (the daemon's reply does not
     // carry the connection counts)" on every model-mode machine — a reason about trocar's own IPC (a macOS test machine 2026-10-18).
-    // off in THIS daemon's memory, not state.json's desired: an update's exit drain leaves the file saying on (1.6 §5.2), and the wait reads this;
-    // `scope: 'memory'` says so, and only such a count may end that wait (an older daemon's status lacks it). A daemon being replaced keeps its harnesses on,
-    // so it counts every connection: the off set would read 0 and end the wait at once, and the cut that follows would be the whole drain
     const off = new Set(list.filter((x) => !collector.isOn(x.name)).map((x) => x.name))
-    return { code, pid: process.pid, doors: collector.doors(), upstreams: collector.upstreams(), harnesses: hs, holders: collector.polledHolders(), agents: collector.verdicts(), negatives: engine.negatives(), relayed: { ...engine.relayed({ agents: collector.leaving() ? null : off }), scope: 'memory' }, cert: { key: st === 'key-missing' ? 'missing' : st === 'unavailable' ? 'unknown' : 'present', intermediate: st, expires: collector.issuer.expires() }, engine: engine.stats() }
+    return { code, pid: process.pid, doors: collector.doors(), upstreams: collector.upstreams(), harnesses: hs, holders: collector.polledHolders(), agents: collector.verdicts(), negatives: engine.negatives(), relayed: relayedOf(engine, off, collector.leaving()), cert: { key: st === 'key-missing' ? 'missing' : st === 'unavailable' ? 'unknown' : 'present', intermediate: st, expires: collector.issuer.expires() }, engine: engine.stats() }
   }
   const body = (q) => (q && q.body && typeof q.body === 'object' ? q.body : {})
   // the daemon's own identity, as it writes it into its lock (below): the read route hands it back, and an answer on the token-checked channel is

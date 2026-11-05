@@ -66,6 +66,10 @@ function envNamesOf(desc) {
  *              acceptance reset its strike) leaves the sweep, so the process table is read only while something is held (4.8 §5.5)
  * → { bindDoors, start, restore, on, off, lookupIngress, servePac, issuer, holders, mayExit, doors, attached }
  */
+/** A stop that replaces the daemon (1.6 §5.2, D82): `exit` with a `by` that is not `uninstall`, by that rule and no list, since the daemon does not know the names
+ *  of newer commands. Capture stays on for the whole drain, in both modes; the state file and the routing are the new daemon's to carry on from. */
+export const replacesDaemon = ({ exit, by }) => !!(exit && by && by !== 'uninstall')
+
 export function createModelCollector({ harnesses, dir, identify, ownerOf = null, factsOf = null, proc = {}, ctx, systemProxy = () => null, custody = null, rootPem = null,
   procTable = async () => [], record = () => {}, event = () => {}, clock = Date.now, timers = globalThis, readState = null, readIngress = null, readManifest = null,
   proxyOf, templates = {}, hostsOf = () => null, ownUid = process.getuid?.() ?? null, ownSid = null, agentList = () => null, openConns = () => 0, drain = null, pid = process.pid, fs = nodeFs, upstreamRoots = null, forget = () => {}, holds = () => true, doorHangMs = DOOR_HANG_MS } = {}) {
@@ -288,8 +292,8 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
   /** The off time the daemon knows (§3 ②): `off` reaches the daemon before the CLI writes the manifest's `off_at` (orchestrate's step 3 before
    *  undo), so a harness turned off here whose liveness has `on_at` and no `off_at` yet is judged with this time; once the CLI's own lands it rules. */
   const offAt = new Map()
-  /** A stop that replaces the daemon (1.6 §5.2, D82): `by` is present and is not `uninstall`, by that rule and no list, since the daemon does not know the
-   *  names of newer commands. The harnesses stay in onSet, so the door still decrypts and records, while the daemon reads as off to those who ask whether it may go. */
+  /** A stop that replaces the daemon (replacesDaemon): the harnesses stay in onSet, so the door still decrypts and records, while the daemon reads as off to
+   *  those who ask whether it may go. */
   let leaving = false
   const withOffAt = (m) => {
     if (!m || !m.liveness || !offAt.size) return m
@@ -393,7 +397,7 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     /** off (§3 ②): the harnesses leave the on set; a door with a holder stays forward-only, the others close; the poll watches what is kept.
      *  A stop that replaces the daemon is no off (`leaving`): only its connections are drained. */
     async off({ harnesses: hs = null, now = false, exit = false, by = null } = {}) {
-      const swap = exit && by && by !== 'uninstall'
+      const swap = replacesDaemon({ exit, by })
       if (swap) leaving = true
       const ids = swap ? [] : exit || !hs || !hs.length ? [...onSet] : hs
       for (const h of ids) { if (onSet.delete(h)) offAt.set(h, clock()) }
@@ -416,7 +420,7 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     },
     /** Is `h` on in this daemon? The one switch both decryption (lookupIngress) and recording (the engine's isRecording) read (4.6 §开关). */
     isOn: (h) => onSet.has(h),
-    /** Is this daemon draining to be replaced? Its harnesses read on, and `relayed` counts every connection. */
+    /** Is this daemon draining to be replaced? Its harnesses read on, and `relayed` counts every connection still carrying something. */
     leaving: () => leaving,
     /** The engine's onHeld: its negative cache holds a strike or an entry under `negKey`, to clear when its process or door is gone (4.8 §5.5). */
     noteHeld(negKey) { if (negKey != null) { held.add(String(negKey)); arm() } },

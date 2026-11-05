@@ -167,7 +167,7 @@ as it has), then the old collector cuts the rest (a call left open, such as a We
 new one does not report that the previous one ended without a clean stop. The rows of what it cut, and its stop record,
 say that `update` (or `uninstall`) stopped it. An agent that is on while the collector is replaced (an update with only the
 collector to replace, or `trocar install` from another copy) stays captured: its new connections during those 30 s are
-decrypted and recorded as usual. An update that stops half way leaves a note
+decrypted and recorded as usual, and a response on one of them is waited for like any other. An update that stops half way leaves a note
 behind: run `trocar update` again and it goes on from where it stopped.
 
 A copy installed with the script updates with the same `trocar update`, or by running the install line again: it
