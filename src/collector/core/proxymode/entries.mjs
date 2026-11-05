@@ -13,6 +13,7 @@ import { randomUUID } from 'node:crypto'
 import { applyJsonKey, applyJsonKeys, applyTextEntry, writeOwnedFile, judgeOwned, saveManifest, undoEntry, removeOwnedFile, sha256 } from '../trust/journal.mjs'
 import { parseJsonText, getPath } from '../../../off/json-text.mjs'
 import { decodeText } from '../../../off/text-codec.mjs'
+import { switchFileIn } from '../../../off/paths.mjs'
 import { parseDotenv } from '../config-read.mjs'
 import { resolveLoc, readSrc, holds, isPresent } from './sources.mjs'
 import { entryGate } from '../entry-forms.mjs'
@@ -117,7 +118,7 @@ const KINDS = {
     if (!dir) return notRouted('no-path')
     return writeOwned(ctx, (ctx.join || path.join)(dir, ctx.route.name), 'plugin', ctx.render(ctx.route.template, { door, harness: ctx.harness }))
   },
-  'switch-file': (ctx, door) => writeOwned(ctx, (ctx.join || path.join)(ctx.dir, 'switch', ctx.harness), 'switch', door),
+  'switch-file': (ctx, door) => writeOwned(ctx, switchFileIn(ctx.dir, ctx.harness, ctx.join || path.join), 'switch', door),
 }
 
 /** The records of one route this harness's `on` wrote (phase 'on'), entries then owned files, in the order they were written. */

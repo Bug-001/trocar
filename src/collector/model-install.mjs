@@ -15,7 +15,7 @@ import { readManifest, saveManifest, newManifest, applyJsonKey, applyTextEntry, 
 import { codeId } from '../version.mjs'
 import { installComplete, itemsOfPhase, undoByHand, OFF_VERSION } from '../off/manifest.mjs'
 import { writeStandalone } from '../off/standalone.mjs'
-import { standaloneFiles } from '../off/paths.mjs'
+import { standaloneFiles, switchFileIn } from '../off/paths.mjs'
 import { missingDirs, pathKey } from '../off/fsutil.mjs'
 import { resolveLoc, readSrc, holds, isPresent } from './core/proxymode/sources.mjs'
 import { noProxyNames } from './core/proxymode/entries.mjs'
@@ -241,7 +241,7 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
       }
       if (c.kind === 'wrapper') {
         if (!wrapperKit) return { state: 'skipped', code: NOT_USERS, why: `this build has no wrapper for ${os}` }
-        const wctx = { ...ctx, fs, owns, facts, dir, manifest: m, harness: desc.name, switchFile: path.join(dir, 'switch', desc.name), caFile: ca.pem, proxyEnv: (desc.proxy && desc.proxy.env) || [], proxyNames: (desc.proxy && desc.proxy.env) || [], now }
+        const wctx = { ...ctx, fs, owns, facts, dir, manifest: m, harness: desc.name, switchFile: switchFileIn(dir, desc.name), caFile: ca.pem, proxyEnv: (desc.proxy && desc.proxy.env) || [], proxyNames: (desc.proxy && desc.proxy.env) || [], now }
         const r = placeWrapper(wctx, c, wrapperKit)
         return r.ok ? { state: r.result } : { state: 'skipped', code: r.code, why: r.why }
       }
@@ -250,7 +250,7 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
         if (!pdir || (c.loader && !loader)) return { state: 'skipped', code: 'not-routed', why: 'the plugin folder or its loader does not resolve here' }
         if (!renderHook) return { state: 'skipped', code: 'not-routed', why: 'this build was given no hook renderer' }
         const names = (desc.proxy && desc.proxy.env) || []
-        const hook = renderHook(c.template, { CA_FILE: ca.pem, SWITCH: path.join(dir, 'switch', desc.name), PROXY_ENV: names, PROXY_NAMES: names, NO_PROXY_ENV: noProxyNames(desc) })
+        const hook = renderHook(c.template, { CA_FILE: ca.pem, SWITCH: switchFileIn(dir, desc.name), PROXY_ENV: names, PROXY_NAMES: names, NO_PROXY_ENV: noProxyNames(desc) })
         const file = path.join(pdir, hook.name), text = hook.text
         owned(file, 'plugin', desc.name, text, 0o644)
         if (!c.loader) return { state: 'placed' }
