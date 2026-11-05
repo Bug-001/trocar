@@ -86,6 +86,8 @@ export const FAILURE_WORDS = Object.freeze({
   'prior-proxy-unknown': 'the proxy in use before trocar could not be told',
   'pac-peer-refused': "a program not shown to be yours asked for trocar's proxy settings file (PAC) and was refused",
   'pac-owner-unread': "trocar's proxy settings file (PAC) could not tell whose program asked, so it answered without routing through trocar",
+  'client-left-held': 'a program gave up on a connection while trocar was slow to judge it',
+  'client-left-queued': 'a program dropped a connection before trocar picked it up',
   'upstream-header-ignored': 'a routing header from a program that should not send one was ignored',
   untrusted: 'a connection from a program that does not trust trocar yet; passed on unread',
   untracked: 'a connection from a program trocar does not follow; passed on unread',

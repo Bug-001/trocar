@@ -68,6 +68,7 @@ function ingressFields(meta) {
   const u = meta.upstream || {}
   return {
     ingress: { route: meta.ingress.route, group: meta.ingress.group }, pid_source: meta.pid_source ?? null, pid_ms: meta.pid_ms ?? null,
+    ...(meta.held_ms != null ? { held_ms: meta.held_ms } : {}), ...(meta.facts_ms != null ? { facts_ms: meta.facts_ms } : {}), ...(meta.skip && meta.skip.unread ? { unread: String(meta.skip.unread).slice(0, 200) } : {}),
     upstream: { kind: u.kind || 'direct', ...(u.host ? { host: u.host } : {}), ...(u.port != null ? { port: u.port } : {}), ...(u.reply != null ? { reply: u.reply } : {}) },
   }
 }

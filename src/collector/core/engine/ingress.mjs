@@ -9,7 +9,7 @@
 //      GET is the PAC's on an open door; anything else is closed, `ingress-unknown`;
 //   2. check the token, in constant time — 407 / SOCKS auth failure and `ingress-auth-failed`, zero upstream connections;
 //   3. lookupIngress({peer, user, target}) → the flow's meta, or {health:true, group}, or {refuse:{code, reason, unread?}} (the door refused this process:
-//      one record, closed unanswered — unless its owner could not be read (`unread`) and the client had already left, which refused nothing: counted `left`, no record), or null (an unknown
+//      one record, closed unanswered — unless its owner could not be read (`unread`) and the client had already left, which refused nothing: counted `left`, no refusal), or null (an unknown
 //      user: also an auth failure);
 //   4. a health probe (the target is the group's re-entry point itself): 200, then 204 to every `HEAD`/`GET /trocar-health/<g>`
 //      on the kept-alive tunnel; no upstream, no flows/ row, no envelope. It never leaves the machine (invariant 1);
@@ -23,7 +23,7 @@ import crypto from 'node:crypto'
 import net from 'node:net'
 import { STATUS_CODES } from 'node:http'
 import { parseHead } from './sniff.mjs'
-import { wentBy } from './flow.mjs'
+import { SLOW_ENGINE_MS, wentBy } from './flow.mjs'
 import { socks5Greeting, socks5Request } from './socks.mjs'
 import { HOOK_HEADER as UPSTREAM_HEADER } from '../proxymode/chain.mjs'
 import { absTarget, forwardHttp, withCredential } from './forward.mjs'
@@ -66,12 +66,19 @@ function reader(sock, { onTooMuch = null, holdMax = HOLD_MAX } = {}) {
     /** fn() runs once if the peer goes before detach() */
     whenGone(fn) { if (gone) fn(); else watchers.push(fn) },
     async take(parser, deadline = Infinity) {
+      let turned = false
       for (;;) {
         const m = parser(buf)
         if (m) { if (m.invalid) return m; const raw = buf.subarray(0, m.length); buf = buf.subarray(m.length); if (buf.length <= holdMax) unhold(); return { ...m, raw } }
         if (gone) return { gone: gone.why }
         const left = deadline - Date.now()
-        if (left <= 0) return { timeout: true }
+        if (left <= 0) {
+          if (turned) return { timeout: true }
+          // a loop that came late reaches this timer before the socket: the poll before the check phase reads what is already in the kernel (4.9 MA15)
+          turned = true
+          await new Promise((res) => setImmediate(res))
+          continue
+        }
         await new Promise((res) => {
           let t = null
           wake = () => { if (t) clearTimeout(t); res() }
@@ -255,9 +262,15 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
   // Did the client leave while it was being judged (4.8 §5.1, 4.11 P10)? Asked one event-loop turn later: a peer whose end had no holder when its owner
   // was read had closed before that read, so its FIN (or reset) was in this socket's queue before the lookup answered, and the poll before the turn
   // delivers it even when the answer and the FIN came in one batch. A client that left is refused nothing and is no failure (it sent only its opener,
-  // nothing of the agent's was lost, D38): it is counted, never recorded. Left = closed or half-closed (its FIN reads as 'end' before any 'close'); asked
+  // nothing of the agent's was lost, D38): it is counted, and recorded only when trocar held it long enough to be why it left (leftAfter). Left = closed or half-closed (its FIN reads as 'end' before any 'close'); asked
   // only of a refusal whose owner could not be read, and a live process that half-closes still holds its end, so its owner is read and it is not asked.
-  const leftWhileJudged = async (r) => { await new Promise((res) => setImmediate(res)); if (!r.isGone()) return false; counters.left++; return true }
+  const leftWhileJudged = async (r, peer, at) => { await new Promise((res) => setImmediate(res)); if (!r.isGone()) return false; leftAfter(peer, at); return true }
+  // a client that left while it was judged, `at` when its wait began: one that waited SLOW_ENGINE_MS may have left because of that wait (4.8 §5.1), so it leaves a record
+  const leftAfter = (peer, at) => {
+    counters.left++
+    const waited = Date.now() - at
+    if (waited >= (timing.slowEngineMs ?? SLOW_ENGINE_MS)) failure({ event: 'client-left-held', where: 'ingress', code: 'client-left-held', peer, waited_ms: waited, reason: `a client left after waiting ${waited} ms at the door` })
+  }
   const now = timing.now || Date.now, lastUnreachable = new Map() // door group → when its upstream-unreachable event was written (1.6 §9.7: at most one per form per 60 s)
   const idle = new Set() // sockets that are not a flow: still in the handshake, or a health tunnel (closeIdle ends them; flows finish on their own)
 
@@ -267,6 +280,12 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
     idle.add(socket); socket.once('close', () => idle.delete(socket))
     socket.on('error', () => {}) // ours from accept: a reset while we answer is this connection's end, never an uncaught exception (handleFlow adds its own once it owns the socket)
     const peer = { address: socket.remoteAddress, port: socket.remotePort }
+    // a client reset in the accept queue: no end left to ask about, and a live connection never gets here (a FIN keeps the port). Its only trace (4.8 §5.1)
+    if (!Number.isInteger(peer.port)) {
+      counters.left++
+      failure({ event: 'client-left-queued', where: 'ingress', code: 'client-left-queued', reason: 'a client reset its connection before the door accepted it' })
+      return void socket.destroy()
+    }
     // the opener's sender, asked while its end is still open (the answer, a close, waits for it: nothing else does), and of a plain-HTTP opener its
     // method and host from the bytes held (`held`): never a path, a query or another header (4.8 §5.1)
     const unknown = async (reason, held = null) => {
@@ -307,7 +326,7 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
       if (m.timeout || m.invalid) return shut(m.invalid || `no complete request head within ${openerMs} ms`)
       const target = absTarget(m.head.startLine)
       if (!target) {
-        if (door && door.open && typeof servePac === 'function' && m.head.startLine.startsWith('GET ')) return servePacGet(socket, r, peer, say, unknown, door, m)
+        if (door && door.open && typeof servePac === 'function' && m.head.startLine.startsWith('GET ')) return servePacGet(socket, r, peer, say, unknown, door, m, acceptedAt)
         return shut(`a plain HTTP request that is not an http:// absolute-form request (${printable(m.head.startLine.split(' ')[0], 10)}): the door takes CONNECT, SOCKS5 and those`, 'destroy', m.raw)
       }
       r.holdBack() // a request body may be large and arrive while the flow is looked up: the client waits, it is not cut (§5.1)
@@ -372,7 +391,7 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
         const at = first ? acceptedAt : Date.now(); first = false
         if (!socket.destroyed) idle.add(socket) // while it is judged and dialled, closeIdle cuts it; a flow then finishes on its own
         const hh = m.head.headers.find(([k]) => k.toLowerCase() === UPSTREAM_HEADER)
-        const a = await admit({ ...o, target, raw: m.raw, ...(hh ? { header: hh[1] } : {}) }, side)
+        const a = await admit({ ...o, target, raw: m.raw, ...(hh ? { header: hh[1] } : {}) }, side, at)
         if (!a) return false
         idle.delete(socket)
         flow(side.sock, target, a, at, { up: 0, down: 0 }, side) // the stand-in counts the forwarded requests and the answers only
@@ -401,16 +420,16 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
         if (x.rest.length) x.sock.unshift(x.rest)
         return x.sock
       }
-      handleFlow(sock, { ...base, acceptedAt: at, upstream: { ...shown, ...(d.reply != null ? { reply: d.reply } : {}), credentialed }, wire, ...(side ? { trocarRemoved: side.removed } : {}) }, { upstream: d.sock, redial })
+      handleFlow(sock, { ...base, acceptedAt: at, held_ms: Date.now() - at, upstream: { ...shown, ...(d.reply != null ? { reply: d.reply } : {}), credentialed }, wire, ...(side ? { trocarRemoved: side.removed } : {}) }, { upstream: d.sock, redial })
     }
 
     // steps 3–5 for one target: the lookup, its refusals, the health probe, the upstream dial and its refusal rows. → {base, shown, d} with the upstream
     // up, or undefined (the client has been answered and the connection ended). CONNECT, SOCKS5 and every forwarded authority (`side`, its stand-in) come through here.
-    async function admit(o, side = null) {
+    async function admit(o, side = null, at = acceptedAt) {
       // 3. who is this
       const dst = { address: o.target.host, port: o.target.port, ...(net.isIP(o.target.host) ? { family: net.isIP(o.target.host) } : {}) }
       let meta
-      try { meta = await lookupIngress({ peer, user: who, target: dst, ...(o.header !== undefined ? { header: o.header } : {}) }) } catch (e) {
+      try { meta = await lookupIngress({ peer, user: who, target: dst, acceptedAt: at, ...(o.header !== undefined ? { header: o.header } : {}) }) } catch (e) {
         if (e && e.code === 'upstream-unavailable') { // the redirector would not hand over a connection it cannot dial (no login for the upstream, none to dial): trocar's own code and the ingress's own part, not a lookup that failed (4.8 §12)
           failure({ where: 'ingress', code: 'upstream-unavailable', peer, ...(typeof e.why === 'string' ? { why: e.why } : {}), reason: `the upstream of the connection of ${shownUser(o.user)} to ${o.target.host}:${o.target.port} cannot be dialled (${msgOf(e)}); it was refused with a 502` })
         } else {
@@ -424,11 +443,11 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
       // for credentials the door never takes (and Chromium does not fall over to the PAC's next entry on one). A refusal for an owner that could not be
       // read (`unread`) of a client that had left is no refusal: a client that closed has no holder, hence the unread owner; it is counted `left`
       if (meta.refuse) {
-        if (!(meta.refuse.unread && await leftWhileJudged(r))) failure({ where: 'ingress', code: meta.refuse.code, peer, reason: meta.refuse.reason })
+        if (!(meta.refuse.unread && await leftWhileJudged(r, peer, at))) failure({ where: 'ingress', code: meta.refuse.code, peer, reason: meta.refuse.reason })
         r.detach(); return void socket.destroy()
       }
       // the client left while the lookup ran: nobody is waiting for a dial, and the user's proxy must not get its credentials for one (§5.1, §5.2)
-      if (r.isGone()) { counters.left++; return void r.detach() }
+      if (r.isGone()) { leftAfter(peer, at); return void r.detach() }
 
       // 4. a health probe: answered here, nothing leaves the machine
       if (meta.health) { await (o.forward ? shut('a plain HTTP request for the door\'s own health target', 'destroy', o.raw) : healthTunnel(socket, r, o, meta.group, unknown)); return }
@@ -506,12 +525,12 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
   // an origin-form GET (4.11 P10) on an auth:false door with a PAC server (serve routes only those here; on any other door it is closed and
   // `ingress-unknown`), its head `m` already read: answered by `servePac({ peer, user, path, left })` → { status, headers, body } | null (not the
   // PAC: closed); `left()` → Promise<boolean>: whether the requester left while it was judged (then counted `left`).
-  async function servePacGet(socket, r, peer, say, unknown, door, m) {
+  async function servePacGet(socket, r, peer, say, unknown, door, m, acceptedAt) {
     const bad = async (why) => { const held = r.detach(); await unknown(why, Buffer.concat([m.raw, held])); socket.destroy() }
     const line = /^GET (\/\S*) HTTP\/1\.[01]$/.exec(m.head.startLine)
     if (!line) return bad('a GET that is not origin-form')
     let res
-    try { res = await servePac({ peer, user: door.user, path: line[1], left: () => leftWhileJudged(r) }) } catch (e) { return bad(`the PAC could not be served: ${msgOf(e)}`) }
+    try { res = await servePac({ peer, user: door.user, path: line[1], left: () => leftWhileJudged(r, peer, acceptedAt) }) } catch (e) { return bad(`the PAC could not be served: ${msgOf(e)}`) }
     r.detach()
     if (!res) return socket.destroy()
     const body = Buffer.from(res.body || '')

@@ -9,13 +9,14 @@ import path from 'node:path'
 import tls from 'node:tls'
 import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
+import { Worker } from 'node:worker_threads'
 import { createEngine } from '../../../src/collector/core/engine/engine.mjs'
 import { createStaticRedirector } from '../../../src/collector/core/redirector.mjs'
-import { parseAuthority } from '../../../src/collector/core/engine/ingress.mjs'
+import { createIngress, parseAuthority } from '../../../src/collector/core/engine/ingress.mjs'
 import { startMockProxy } from '../../lab/mock-upstream/proxy.mjs'
 import { createCa, loadCa } from '../../../src/collector/core/tls/ca.mjs'
 import { createLeafIssuer } from '../../../src/collector/core/tls/leaf.mjs'
-import { checkRecord } from '../../../src/health/codes.mjs'
+import { checkRecord, isFailure } from '../../../src/health/codes.mjs'
 import { within, closeWithin } from '../../helpers/bounded.mjs'
 
 const T = { timeout: 20_000 }
@@ -82,6 +83,7 @@ test('W13 CONNECT with the right credentials: the upstream is dialled, then 200;
   assert.deepEqual([row.pid, row.agent, row.dst, row.decision, row.not_captured], [4242, 'claude-code', { address: '127.0.0.1', port: L.echoPort, family: 4 }, 'splice', 'unknown-protocol'])
   assert.deepEqual(row.ingress, { route: 'of', group: 'spike' })
   assert.deepEqual([row.pid_source, row.pid_ms, row.upstream], ['socket-table', 7, { kind: 'direct' }])
+  assert.equal(typeof row.held_ms, 'number', 'accept to the hand-over to the flow (4.6 §经代理入口的连接行)')
   assert.equal('prelude' in row, false, 'the CONNECT is mihomo\'s, with trocar\'s token: it is not recorded as the agent\'s prelude (invariant 4)')
   assert.deepEqual([row.bytes_up, row.bytes_down], [5, 5], 'the agent\'s own bytes: the opener and trocar\'s 200 are not counted')
   assert.deepEqual(L.failures, [])
@@ -1081,4 +1083,50 @@ test('1.6 §1.3 off, off --now and engine.close() each close a forwarded keep-al
     await c.closed(); await L.settled(1)
     assert.equal(L.flows.length, 1)
   }
+})
+
+// ── 4.9 MA15 · MA18 · MA19: the door under a loop that is late ──────────────────────────────────────────────────────
+// a door with nothing behind it, for what happens before any lookup answers; `onAccept` runs in the accept callback, after the ingress took the socket
+async function bareDoor(t, { timing = {}, onAccept = () => {} } = {}) {
+  const records = [], asked = [], ports = []
+  const ing = createIngress({ token: TOKEN, timing, failure: (r) => records.push(r), handleFlow: () => {}, connectUpstream: () => { throw new Error('no upstream in this test') }, lookupIngress: async (q) => { asked.push(q); return null } })
+  const srv = net.createServer((s) => { ports.push(s.remotePort); ing.connection(s, null); onAccept() })
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r))
+  t.after(() => new Promise((r) => srv.close(r)))
+  return { port: srv.address().port, records, asked, ports, stats: ing.stats }
+}
+
+test('MA15 an opener already in the kernel when its limit passes is read, not timed out: a loop stuck past the limit right after accept costs the client nothing', T, async (t) => {
+  const d = await bareDoor(t, { timing: { ingressOpenerMs: 300 }, onAccept: () => { const end = Date.now() + 600; while (Date.now() < end); } })
+  const c = client(d.port); t.after(() => c.sock.destroy())
+  c.write(connectHead('example.test:443', { auth: false }))
+  assert.match(await c.head(), /^HTTP\/1\.1 407 /)
+  assert.deepEqual(d.records.filter((r) => r.code === 'ingress-unknown'), [])
+})
+
+test('MA19 a client reset in the accept queue leaves a peer with no port: counted `left`, one client-left-queued, no failure, nobody asked who it was', T, async (t) => {
+  const d = await bareDoor(t)
+  // the client runs on its own thread, so the door's loop can stay held until the reset is done: the connection is accepted only after that
+  const gate = new Int32Array(new SharedArrayBuffer(4))
+  const client = new Worker(`const { workerData: { port, gate } } = require('node:worker_threads'), net = require('node:net')
+    const c = net.connect(port, '127.0.0.1', () => { c.write('CONNECT example.test:443 HTTP/1.1\\r\\n\\r\\n'); setTimeout(() => { c.resetAndDestroy(); setTimeout(() => { Atomics.store(gate, 0, 1); Atomics.notify(gate, 0) }, 20) }, 30) })
+    c.on('error', () => {})`, { eval: true, workerData: { port: d.port, gate } })
+  t.after(() => client.terminate())
+  Atomics.wait(gate, 0, 0, 3000)
+  for (let i = 0; i < 100 && !d.ports.length; i++) await sleep(10)
+  if (!d.ports.length || Number.isInteger(d.ports[0])) return t.skip(`on this platform accept ${d.ports.length ? 'still reads the port' : 'never hands over'} a connection reset in its queue: no port-less peer to judge`)
+  assert.equal(d.stats().left, 1)
+  assert.deepEqual(d.records.map((r) => r.code), ['client-left-queued'])
+  assert.deepEqual(checkRecord(d.records[0]), []); assert.equal(isFailure(d.records[0]), false)
+  assert.deepEqual(d.asked, [])
+})
+
+test('MA18 what the door learned is on the row: facts_ms and unread on a flow\'s row and on a row that never became a flow', T, async (t) => {
+  const said = { facts_ms: 12, skip: { not_captured: 'untracked', reason: 'facts-unavailable', unread: 'ps: no answer in 10000 ms' } }
+  const L = await lab(t, { meta: said })
+  const c = L.client(); c.write(connectHead(`127.0.0.1:${L.echoPort}`)); await c.head(); c.sock.end(); await L.settled(1)
+  const refusing = await startMockProxy({ kind: 'connect', target: { port: 9 }, refuse: true }); t.after(() => refusing.close())
+  const R = await lab(t, { meta: { ...said, upstream: { kind: 'http', host: '127.0.0.1', port: refusing.port } } })
+  const r = R.client(); r.write(connectHead('upstream.test:443')); await r.head(); await r.closed(); await R.settled(1)
+  for (const row of [L.flows[0], R.flows[0]]) assert.deepEqual([row.facts_ms, row.unread], [said.facts_ms, said.skip.unread])
 })

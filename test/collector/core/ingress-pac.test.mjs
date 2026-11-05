@@ -5,11 +5,12 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import net from 'node:net'
 import { createIngress } from '../../../src/collector/core/engine/ingress.mjs'
+import { checkRecord, isFailure } from '../../../src/health/codes.mjs'
 
 const T = { timeout: 10_000 }
-async function door(t, { open, servePac = null, lookupIngress = async () => null }) {
+async function door(t, { open, servePac = null, lookupIngress = async () => null, timing = {} }) {
   const failures = [], asked = []
-  const ing = createIngress({ token: 'f'.repeat(32), failure: (f) => failures.push(f), handleFlow: () => {}, connectUpstream: () => { throw new Error('no upstream in this test') }, servePac, lookupIngress: async (q) => { asked.push(q); return lookupIngress(q) } })
+  const ing = createIngress({ token: 'f'.repeat(32), timing, failure: (f) => failures.push(f), handleFlow: () => {}, connectUpstream: () => { throw new Error('no upstream in this test') }, servePac, lookupIngress: async (q) => { asked.push(q); return lookupIngress(q) } })
   const srv = net.createServer((s) => ing.connection(s, { user: 'h:pac', token: open ? null : 'a'.repeat(32), open }))
   await new Promise((r) => srv.listen(0, '127.0.0.1', r))
   t.after(() => new Promise((r) => srv.close(r)))
@@ -117,3 +118,24 @@ test('CM33 · null from the lookup keeps its one meaning on any door: unknown us
   assert.match(await d.send('CONNECT api.example:443 HTTP/1.1\r\nHost: api.example:443\r\n\r\n'), /^HTTP\/1\.1 407 /)
   assert.equal(d.failures.filter((f) => f.code === 'ingress-auth-failed').length, 1)
 })
+
+// 4.8 §5.1, 4.9 MA19: the three ways a client leaves while it is judged. `wait` is the judging: the client leaves, the answer comes later.
+const CONNECT = 'CONNECT example.test:443 HTTP/1.1\r\nHost: example.test:443\r\n\r\n'
+const LEAVES = [
+  ['the lookup answered a flow', CONNECT, (wait) => ({ lookupIngress: async () => { await wait(); return { upstream: { kind: 'direct' } } } })],
+  ['the lookup refused an owner it could not read', CONNECT, (wait) => ({ lookupIngress: async () => { await wait(); return { refuse: { code: 'pac-peer-refused', unread: 'no holder', reason: 'not this user' } } } })],
+  ['the PAC asked left()', 'GET /trocar.pac HTTP/1.1\r\n\r\n', (wait) => ({ servePac: async ({ left }) => { await wait(); await left(); return null } })],
+]
+for (const [path, opener, ways] of LEAVES) {
+  for (const [slowEngineMs, held] of [[50, 1], [60_000, 0]]) {
+    test(`MA19 · ${path}, the client gone, the limit ${slowEngineMs} ms and 80 ms waited: counted left, ${held} client-left-held, no failure`, T, async (t) => {
+      let client
+      const d = await door(t, { open: true, timing: { slowEngineMs }, ...ways(async () => { await client.leave(); await new Promise((r) => setTimeout(r, 80)) }) })
+      client = d.stay(opener)
+      while (!d.stats().left) await new Promise((r) => setTimeout(r, 5))
+      assert.equal(d.stats().left, 1)
+      assert.deepEqual(d.failures.map((f) => f.code), Array(held).fill('client-left-held'))
+      for (const f of d.failures) { assert.equal(typeof f.waited_ms, 'number'); assert.deepEqual(checkRecord(f), []); assert.equal(isFailure(f), false) }
+    })
+  }
+}
