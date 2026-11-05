@@ -147,6 +147,7 @@ test('#39: the slice whose write went with the state when the cut moved does som
   const s = homeWith(300)
   await whole(s)
   s.a.append(600)
+  await sessionState(s.ctx, s.id) // no other session is being read: its fold is cut, not stopped
   await past(() => extendSession(s.ctx, s.id, Infinity))
   await whole(s)
   s.a.append(600)

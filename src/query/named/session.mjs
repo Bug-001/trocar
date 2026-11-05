@@ -267,6 +267,9 @@ function storeOf(ctx, id, k) {
 }
 
 const states = warmCache({ cost: (v) => v.cost, drop: letGoState });
+/** How long after a request a session counts as being read (3.5 §内存有界): the worker's idle branch waits as long, so its slices find no reader. */
+export const READING_MS = 2000;
+let reading = { k: null, at: -Infinity }; // the session of the last request's read
 // The ledger let `st` go (3.5 §内存有界): the references that would keep it in the heap go, the ones keyed by something else than this
 // state compared first. Never closed: a request may be answering from it; its descriptor goes when it is collected (line-file.mjs).
 function letGoState(st) {
@@ -409,8 +412,17 @@ function thaw(buf) {
   d.readHeader();
   return d.readValue();
 }
+// A thaw is one call that bounded() cannot stop: past the heap's limit the process dies inside it, so its room is looked at first. A
+// thawed state takes in the heap what it takes serialized (measured 1.0 on generated sessions, 2026-11-05: 113 MB, against 69 MB folded,
+// whose strings were shared). Without the room it is not thawed: the rebuild's fold is measured at every look.
+function thawFits(bytes) {
+  const fits = () => liveHeap() + bytes <= heapCeiling();
+  if (fits()) return true;
+  yieldCaches();
+  return fits();
+}
 // A cold state's reduction resumed from the state its log's sidecar holds (4.3 §4 旁索引) when it was folded under this cut and
-// REDUCE_V: it covers the log's last frontier → over the log as it is; it covers less (a worker killed after a save) and this is the
+// REDUCE_V and the heap has room for it: it covers the log's last frontier → over the log as it is; it covers less (a worker killed after a save) and this is the
 // worker → over the log opened again cut back to what it covers. The members it folded are `R.has`, so the fold cursor walks past
 // them. Else false (the local path's log past it, a mismatch, a state that does not read back or is not of this store): the caller
 // rebuilds up to the log's frontier (`target`), as without one.
@@ -422,6 +434,7 @@ function resumed(s) {
   try {
     const m = JSON.parse(meta[0]);
     if (m.rv !== REDUCE_V || m.cut !== s.cut) return false;
+    if (!thawFits(state.byteLength)) return false;
     from = thaw(state);
   } catch { return false; }
   if (!(sv.bytes > s.log.frontier)) {
@@ -549,6 +562,9 @@ async function advance(ctx, id, { budgetMs, request, said = [] }) {
     const plan = planOf(members, k, store, id);
     lagging.delete(String(id)); // its state holds the old one: let go before this one grows (headAt keeps the new one)
     const box = { old: states.take(k) };
+    if (request) reading = { k, at: performance.now() };
+    // a background fold gives way to the session being read: the ledger keeps its state, and this fold stops where it would be cut
+    const beside = states.pin(!request && reading.k !== k && performance.now() - reading.at < READING_MS ? reading.k : null);
     const release = hold(plan.work);
     let st;
     try {
@@ -561,7 +577,7 @@ async function advance(ctx, id, { budgetMs, request, said = [] }) {
       // the measured bound: the rows the stopped fold got through are the rows that fit, never fewer than half those asked for,
       // rounded down to a quarter power of two (3.5 §内存有界); the stopped state is closed and garbage by now
       const got = Math.max(e.rows, Math.floor(plan.read.length / 2)) - 1, fit = got < 1 ? 0 : Math.floor(2 ** (Math.floor(Math.log2(got) * 4) / 4));
-      if (fit < 1) throw Object.assign(new Error(`the heap holds no room for this session (${mb(heapBudget())} MB budget)`), { code: 'heap-no-room' });
+      if (fit < 1 || beside) throw Object.assign(new Error(`the heap holds no room for this session${beside ? ' beside the one being read' : ''} (${mb(heapBudget())} MB budget)`), { code: 'heap-no-room' });
       fits.delete(k);
       fits.set(k, fit);
       if (fits.size > FITS_KEPT) fits.delete(fits.keys().next().value);

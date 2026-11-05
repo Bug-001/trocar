@@ -66,6 +66,7 @@ export const HEAP_PER_STORED = 2
 // recency order across all caches (a hit moves it to the end); `held` is what queries in flight have reserved with hold().
 const lru = new Set()
 let total = 0, held = 0, steady = 0
+let reader = null // the entry a reader is on (pin): the ledger lets every other go first, and this one never
 let limit = null
 const heapLimit = () => (limit == null ? (limit = Math.min(v8.getHeapStatistics().heap_size_limit, WORKER_MEMORY_MB * 1048576)) : limit)
 
@@ -93,14 +94,14 @@ export function liveHeap() {
 /** The heap allocated, garbage included: cheap, an upper bound of liveHeap(). */
 export const usedHeap = () => v8.getHeapStatistics().used_heap_size
 
-const forget = (e) => { if (lru.delete(e)) { e.cache.delete(e.id); total -= e.size; if (e.steady) steady -= e.size } }
+const forget = (e) => { if (e === reader) reader = null; if (lru.delete(e)) { e.cache.delete(e.id); total -= e.size; if (e.steady) steady -= e.size } }
 // the ledger's own letting go: the only way a kept entry leaves without its cache's caller asking, so its `drop` is told
 const evict = (e) => { forget(e); if (e.drop) e.drop(e.value) }
 /** Make room for `need` more bytes: the least recently used entries of ANY cache go first; `keep` never. */
 function room(need, keep = null) {
   for (const e of lru) {
     if (total + need <= heapBudget()) return
-    if (e !== keep) evict(e)
+    if (e !== keep && e !== reader) evict(e)
   }
 }
 
@@ -116,7 +117,7 @@ export function hold(bytes) {
 /** Every kept entry but the steady ones let go (src/query/named/session.mjs: a fold about to be stopped by the measured bound, 3.5
  *  §内存有界). A steady entry is never let go here: the plan of every session read holds the rows it is made of, so letting it go
  *  frees nothing and the next read builds the rows a second time beside the ones the plan holds. */
-export function yieldCaches() { for (const e of lru) if (!e.steady) evict(e) }
+export function yieldCaches() { for (const e of lru) if (!e.steady && e !== reader) evict(e) }
 
 /**
  * warmCache({max, cost}) → { get(id, stamp, compute, estimate), peek(id, stamp) }: `compute(previous)` runs when this `id` was never
@@ -125,7 +126,8 @@ export function yieldCaches() { for (const e of lru) if (!e.steady) evict(e) }
  * the room is made first and the peak never passes the budget. A value whose cost is past the whole budget is returned but never
  * kept. `max` bounds this cache's entries. `steady`: every query reads these entries again (steadyBytes). `drop(value)`: the ledger let
  * this entry go (making room, yieldCaches, past `max`), and whatever else holds the value must let it go too; never for take(), for a
- * stale entry `get` replaces, or for a value that was never kept: their caller has the value in hand.
+ * stale entry `get` replaces, or for a value that was never kept: their caller has the value in hand. `pin(id)`: the one entry the ledger
+ * does not let go until the next pin, of any cache (null: none) → whether there is such an entry.
  */
 export function warmCache({ max = Infinity, cost = () => 0, steady: isSteady = false, drop = null } = {}) {
   const m = new Map()
@@ -162,6 +164,7 @@ export function warmCache({ max = Infinity, cost = () => 0, steady: isSteady = f
      *  when it is absent (src/query/named/session.mjs renders the window only), and the caller that decides AFTER computing whether
      *  the answer may be remembered (src/query/records.mjs: never a failed read). */
     peek: (id, stamp) => { const hit = fresh(id, stamp); return hit ? touch(hit) : undefined },
+    pin(id) { reader = m.get(id) ?? null; return !!reader },
     /** The value this `id` holds, whatever its stamp, taken out of the cache and the ledger: a caller that grows it — or lets it go
      *  BEFORE building another — holds the only reference (src/query/named/session.mjs: never two spines in the heap at once). */
     take(id) {

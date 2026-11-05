@@ -46,7 +46,7 @@ import { LOCAL_ENV } from './client.mjs'
 import { QUERIES } from './named/index.mjs'
 import { answer } from './answers.mjs'
 import { lowerPriority } from '../low-priority.mjs'
-import { extendSession, heapHasRoom, indexed, openSessions, rereadingNow, saveIndexes, sealParts } from './named/session.mjs'
+import { READING_MS, extendSession, heapHasRoom, indexed, openSessions, rereadingNow, saveIndexes, sealParts } from './named/session.mjs'
 import { indexRows, sessionGroups } from './rows.mjs'
 import { dirUse, gcProjections, posCmp, projectionStale, sessionDir } from './projection.mjs'
 import { foldStale } from './fold-log.mjs'
@@ -119,7 +119,7 @@ async function serve(line) {
   return asked
 }
 
-const SLICE_MS = 50, IDLE_SLICE_MS = 2000
+const SLICE_MS = 50, IDLE_SLICE_MS = READING_MS
 const ease = () => new Promise((r) => setImmediate(r))
 const say = (e) => process.stderr.write(`trocar query worker: background work failed: ${(e && e.stack) || e}\n`) // the daemon keeps stderr (D38)
 // newestDone starts true: only a request opens the newest-session scan, never a kick (a worker forked for a kick has none to follow).
