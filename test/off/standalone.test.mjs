@@ -161,7 +161,7 @@ test('V2: a daemon that answers is told to switch off by the copy, over the cont
     assert.equal(r.status, viaCli, r.stderr)
     assert.deepEqual(normalize(JSON.parse(r.stdout), b.home), normalize(io.json(), a.home))
     assert.deepEqual(b.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), a.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), 'the copy posted the same off request')
-    assert.ok(b.sys.daemon.calls.some((c) => c.startsWith('POST /off') && c.includes('"exit":true')), 'no names: the daemon was asked to go once drained')
+    assert.ok(b.sys.daemon.calls.some((c) => c === 'POST /off {}'), 'no names: the daemon was asked to switch off, not to exit (D62 ⑥)')
   } finally { await ctl.close() }
 })
 
