@@ -321,10 +321,12 @@ test('1.2 格的键 · 2.3 #19: v, Shift+V and c act only from inside a row; f, 
   expect(seen).toEqual(pass)
 })
 
-test('2.6 #17: an opened Call details row reads its bytes once into a cell, v flips that cell, and the open keys outlive the step', async () => {
-  const ref = 's/m#R::2-7', detail = { respRefs: [], nonBlockKeys: [{ key: 'metadata', chars: 5, ref }], extraMessages: [], wire: null }
+test('2.6 #17: an opened Call details row reads its bytes once into a Raw cell whose text minus .lay is the bytes, Copy bytes gives them all, v flips that cell, and the open keys outlive the step', async () => {
+  const ref = 's/m#R::2-7', bytes = '{"a":1,\n  "b":[2, "x\\ty"]}', detail = { respRefs: [], nonBlockKeys: [{ key: 'metadata', chars: bytes.length, ref }], extraMessages: [], wire: null }
   const s = stateOf(deskN([[sys()], [sys()]], [{}, {}], { details: [detail, detail] }), 0, { rawPanelGone: true })
-  s.ctx.api.get.mockImplementation(async () => ({ ok: true, status: 200, data: { blocks: [{ ref, bytes: '{"a":1}', fidelity: { verbatim: true } }] } }))
+  s.ctx.api.get.mockImplementation(async () => ({ ok: true, status: 200, data: { blocks: [{ ref, bytes, fidelity: { verbatim: true } }] } }))
+  const writes: string[] = []
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (t: string) => { writes.push(t) } } })
   const { win, paint } = mount(s)
   expect(win.querySelector('.cwdetails .cblk')).toBeNull()
   act(() => { fireEvent.click(win.querySelector<HTMLElement>('.cwdetails .disc-t')!) })
@@ -333,6 +335,12 @@ test('2.6 #17: an opened Call details row reads its bytes once into a cell, v fl
   await vi.waitFor(() => expect(row().querySelector('.cell')).not.toBeNull())
   expect(blockReads(s.ctx.api)).toBe(1)
   const mode = () => row().querySelector<HTMLElement>('.cell')!.dataset.mode, m0 = mode()
+  expect(m0).toBe('raw')
+  const pre = row().querySelector('.cell pre')!.cloneNode(true) as Element
+  for (const l of pre.querySelectorAll('.lay')) l.remove()
+  expect(pre.textContent).toBe(bytes)
+  await act(async () => { fireEvent.click(row().querySelector<HTMLElement>('[data-cellcopy]')!); await Promise.resolve() })
+  await vi.waitFor(() => expect(writes).toEqual([bytes]))
   act(() => { fireEvent.keyDown(row().querySelector<HTMLElement>('.cbtog')!, { key: 'v' }) })
   expect(mode()).not.toBe(m0)
   s.playhead = 1
