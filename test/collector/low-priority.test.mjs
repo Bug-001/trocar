@@ -10,7 +10,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fork } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { NICE, lowerPriority } from '../../src/low-priority.mjs'
+import { NICE, lowerPriority, lowFork } from '../../src/low-priority.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 
 const src = (p) => fileURLToPath(new URL(`../../src/${p}`, import.meta.url))
@@ -56,4 +56,9 @@ test('a real forked child runs at the nice it asked for', async (t) => {
   await new Promise((done, fail) => { child.stdout.once('data', done); child.once('exit', (c) => fail(new Error(`the worker exited with ${c}`))) })
   assert.ok(os.getPriority(child.pid) >= os.constants.priority.PRIORITY_BELOW_NORMAL,
     `the child is at nice ${os.getPriority(child.pid)}, which is not at or below ${os.constants.priority.PRIORITY_BELOW_NORMAL} ("below normal" on this OS)`)
+})
+
+test('MA14 on macOS a low child is started through taskpolicy in the utility class; elsewhere the fork carries only its own arguments', () => {
+  assert.deepEqual(lowFork(['--x'], { platform: 'darwin', execPath: '/n' }), { execPath: '/usr/sbin/taskpolicy', execArgv: ['-c', 'utility', '/n', '--x'] })
+  for (const platform of ['linux', 'win32']) assert.deepEqual(lowFork(['--x'], { platform, execPath: '/n' }), { execArgv: ['--x'] }, platform)
 })
