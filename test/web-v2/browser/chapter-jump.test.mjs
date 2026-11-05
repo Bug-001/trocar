@@ -155,7 +155,7 @@ test('1.3 · 22: a drag on the strip moves the bars to another part and stops fo
     await open(w, c)
     await c.page.waitForSelector(`#stepbar .sb-no[data-n="${N}"]`, { timeout: 30_000 })
     await allPacks(w, c)
-    assert.equal(await c.page.$eval('[data-follow]', (b) => b.getAttribute('aria-pressed')), 'true', 'a session opened on its end follows')
+    assert.equal(await c.page.$eval('.sh-follow', (b) => b.getAttribute('aria-pressed')), 'true', 'a session opened on its end follows')
     const box = await c.page.$eval('#ovstrip', (e) => { const r = e.getBoundingClientRect(); return { x: r.left, y: r.top + r.height / 2, w: r.width } })
     const l = stripLayout(chs, box.w), at = (g) => box.x + l.xOf(g + 0.5)
     const label = () => c.page.$eval('#chapnav .chaplabel', (e) => +e.dataset.s0)
@@ -163,7 +163,7 @@ test('1.3 · 22: a drag on the strip moves the bars to another part and stops fo
     await c.page.mouse.move(at(N - 2), box.y); await c.page.mouse.down()
     await c.page.mouse.move(at((chs[1].s0 + chs[1].s1) >> 1), box.y, { steps: 8 }); await c.page.mouse.up()
     assert.equal(await label(), chs[1].s0, 'the bars are in the part the drag ended in')
-    assert.equal(await c.page.$eval('[data-follow]', (b) => b.getAttribute('aria-pressed')), 'false', 'a drag stops following')
+    assert.equal(await c.page.$eval('.sh-follow', (b) => b.getAttribute('aria-pressed')), 'false', 'a drag stops following')
     assert.ok(await c.page.$(`#stepbar .sb-no[data-n="${N}"]`), 'the step being read is the same')
     assert.equal(await c.page.$eval('.chapback', (e) => +e.dataset.step), N - 1, 'go back names the step being read')
     await new Promise((ok) => setTimeout(ok, 3_000)) // a poll or two: the window the reader dragged stays
