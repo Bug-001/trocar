@@ -14,7 +14,7 @@ import { stepOf } from '../../../legacy/replay/model.mjs'
 import { deskFrom, world } from '../../../../test/web-v2/desk-world.mjs'
 import { Cell, CellBar } from './Cell'
 
-const KEY = 'trocar.v2.cellMode'
+const KEY = 'trocar.v2.cellView'
 type Seen = { cb: IntersectionObserverCallback, els: Set<Element> }
 const observers: Seen[] = [] // the cell's sentinel observer lives as long as the module
 beforeAll(() => {
@@ -46,11 +46,11 @@ async function enter() {
 }
 
 // the first case: the desk mode this page set is still unset (cell.mjs keeps the last one in memory when storage cannot)
-test('2.3 #14: storage that throws on every access draws the cell in Readable', () => {
+test('2.3 #14: storage that throws on every access draws the cell in Raw', () => {
   vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('denied') })
   vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('denied') })
   const { container } = render(<Cell cell={inline('{"a":1}', { as: 'json' })} api={noApi} />)
-  expect((container.querySelector('.cell') as HTMLElement).dataset.mode).toBe('read')
+  expect((container.querySelector('.cell') as HTMLElement).dataset.mode).toBe('raw')
 })
 
 test('2.3 #1 · 1.4 #7 · AC-1: the Raw leaf without its .lay spans is the bytes', async () => {
@@ -373,12 +373,12 @@ test('2.3 §两种模式: the images of one tool result each take their own data
   expect(srcs.every(Boolean)).toBe(true)
 })
 
-test('2.3 §两种模式: Readable comes first, bar={false} leaves the controls to a CellBar, whose clicks stay out of the row, and it has none before the body', () => {
+test('2.3 §两种模式: Raw comes first, bar={false} leaves the controls to a CellBar, whose clicks stay out of the row, and it has none before the body', () => {
   const cell = inline('{"a":1}', { as: 'json' }, 'BAR'), row = vi.fn()
   setDeskMode('read')
   const { container } = render(<div onClick={row}><CellBar cell={cell} api={noApi} /><Cell cell={cell} bar={false} api={noApi} /></div>)
   expect(container.querySelector('.cell .cellbar')).toBeNull()
-  expect([...container.querySelectorAll<HTMLElement>('.cellbar [data-cellmode]')].map((b) => b.dataset.cellmode)).toEqual(['read', 'raw'])
+  expect([...container.querySelectorAll<HTMLElement>('.cellbar [data-cellmode]')].map((b) => b.dataset.cellmode)).toEqual(['raw', 'read'])
   fireEvent.click(container.querySelector('.cellbar [data-cellmode="raw"]')!)
   expect((container.querySelector('.cell') as HTMLElement).dataset.mode).toBe('raw')
   expect(row).not.toHaveBeenCalled()

@@ -56,7 +56,7 @@ export function CellBar({ cell, api }: { cell: CellModel, api?: Api }) {
   const btn = (v: Mode, word: string, tip: string, label?: string) => <button type="button" data-cellmode={v} aria-pressed={mode === v} title={tip} aria-label={label} onClick={() => flip(v)}>{word}</button>
   return (
     <div className="cellbar" onClick={(ev) => ev.stopPropagation()}>
-      {only ? null : <span className="cellview" role="group" aria-label={C.VIEW_GROUP}>{btn('read', C.READABLE, C.READ_TIP, C.READ_TIP)}{btn('raw', C.RAW, rawTip(cell, viewIn(cell, got)))}</span>}
+      {only ? null : <span className="cellview" role="group" aria-label={C.VIEW_GROUP}>{btn('raw', C.RAW, rawTip(cell, viewIn(cell, got)))}{btn('read', C.READABLE, C.READ_TIP, C.READ_TIP)}</span>}
       <button type="button" className="cellcopy" data-cellcopy="" onClick={() => copyCell(cell, mode, api)}>{copyWord(cell, mode)}</button>
       {mode === 'raw' ? <span className="cellstate" title={rawTip(cell)}>{C.RAW_STATE}</span> : null}
     </div>

@@ -45,7 +45,7 @@ async function headCase(chromium) {
     const row = `#ctxwin .cblk[data-bi="${bi}"]`
     assert.deepEqual(await page.locator(`${row} > .cbh [data-cellmode]`).evaluateAll((x) => x.map((e) => e.dataset.cellmode).sort()), ['raw', 'read'], 'the open head holds the switch')
     const first = await page.evaluate((row) => {
-      const r = document.createRange(); r.selectNodeContents(document.querySelector(`${row} .cellread`))
+      const r = document.createRange(); r.selectNodeContents(document.querySelector(`${row} .cellraw`))
       return { text: r.getClientRects()[0].top, head: document.querySelector(`${row} > .cbh`).getBoundingClientRect().bottom }
     }, row)
     assert.ok(first.text >= first.head, `the body starts below the head: ${first.text} / ${first.head}`)
@@ -72,8 +72,8 @@ async function headCase(chromium) {
     assert.ok(mid.onTop, 'the controls are on top of the body')
     assert.doesNotMatch(mid.background, /transparent|rgba\([^)]*, 0(\.\d+)?\)/, 'the head is opaque')
 
-    await page.click(`${row} > .cbh [data-cellmode="raw"]`)
-    await page.waitForSelector(`${row} .cell[data-mode="raw"]`)
+    await page.click(`${row} > .cbh [data-cellmode="read"]`)
+    await page.waitForSelector(`${row} .cell[data-mode="read"]`)
     assert.equal(await page.locator(`${row}.collapsed`).count(), 0, 'the row stays open')
 
     // a cell with only Raw

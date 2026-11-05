@@ -1,8 +1,8 @@
 // replay/cell.mjs — one block body, drawn the same everywhere (spec 2.3 §两种模式, D70):
 // the request's blocks, the reply's parts, the raw panel's non-block keys and the drawer. A cell is
-// {bid, ref?, inline?, r, ff, chars, preview, view?, reads?, block, noRange?, sides?}. Two modes: Readable (the default: the `view` the `block`
-// answer or the definition brings, drawn by kinds.mjs) and Raw (the bytes, laid out by jsonlay; a block with no byte range of its own
-// has its stored parse there). A cell has both, or only Raw (no view). The bytes are fetched, cached and copied by `ref` only (a
+// {bid, ref?, inline?, r, ff, chars, preview, view?, reads?, block, noRange?, sides?}. Two modes: Raw (the default: the bytes, laid out by jsonlay; a block with no byte range of its own
+// has its stored parse there) and Readable (the `view` the `block`
+// answer or the definition brings, drawn by kinds.mjs). A cell has both, or only Raw (no view). The bytes are fetched, cached and copied by `ref` only (a
 // content key is not an exact-byte id); `bid` keys only view state. DOM-free above wireCells, so the strings can be tested in Node.
 import { esc, kf } from '../core/fmt.mjs'
 import * as W from '../labels/replay.mjs'
@@ -167,7 +167,7 @@ export function rOf(cell, view) {
 export const onlyMode = (cell, got) => (readable(cell, got) ? null : 'raw')
 
 // ── mode state ────────────────────────────────────────────────────────────────────────────────────────────────────────
-const DESK_KEY = 'trocar.v2.cellMode'
+const DESK_KEY = 'trocar.v2.cellView'
 const MODES = new Set(['raw', 'read'])
 const local = () => { try { return globalThis.localStorage ?? null } catch { return null } }
 let desk = null // the last desk mode set here, for when storage cannot hold it
@@ -183,11 +183,11 @@ let scope = ''
 export const overrideScope = (key) => { scope = String(key) + '\n' }
 
 export function deskMode({ storage = local() } = {}) {
-  try { const v = storage && storage.getItem(DESK_KEY); if (MODES.has(v)) return v } catch { /* storage denied: memory, then Readable */ }
-  return desk ?? 'read'
+  try { const v = storage && storage.getItem(DESK_KEY); if (MODES.has(v)) return v } catch { /* storage denied: memory, then Raw */ }
+  return desk ?? 'raw'
 }
 export function setDeskMode(m, { storage = local() } = {}) {
-  desk = MODES.has(m) ? m : 'read'
+  desk = MODES.has(m) ? m : 'raw'
   overrides.clear(); opened.clear()
   try { storage && storage.setItem(DESK_KEY, desk) } catch { /* full or denied: the choice holds for this page only */ }
   modeChanged()
@@ -282,7 +282,7 @@ export function cellBodyHtml(cell, mode) {
   const e = entryOf(cell, m, got)
   const btn = (v, word, tip, label) => `<button type="button" data-cellmode="${v}" aria-pressed="${m === v}" title="${esc(tip)}"${label ? ` aria-label="${esc(label)}"` : ''}>${esc(word)}</button>`
   const copy = copyWord(cell, m), clip = clipLine(e.shown, e.total, copy), note = headNote(cell, got, m)
-  const tools = (only ? '' : `<span class="cellview" role="group" aria-label="${esc(C.VIEW_GROUP)}">${btn('read', C.READABLE, C.READ_TIP, C.READ_TIP)}${btn('raw', C.RAW, rawTip(cell, viewIn(cell, got)))}</span>`) +
+  const tools = (only ? '' : `<span class="cellview" role="group" aria-label="${esc(C.VIEW_GROUP)}">${btn('raw', C.RAW, rawTip(cell, viewIn(cell, got)))}${btn('read', C.READABLE, C.READ_TIP, C.READ_TIP)}</span>`) +
     `<button type="button" class="cellcopy" data-cellcopy>${esc(copy)}</button>` +
     (m === 'raw' ? `<span class="cellstate" title="${esc(rawTip(cell))}">${esc(C.RAW_STATE)}</span>` : '') +
     (clip ? `<span class="cellclip">${esc(clip)}</span>` : '')

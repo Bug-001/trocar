@@ -14,8 +14,6 @@ const CELLS = 6
 
 const webkitSkip = await webkitGate(skip)
 
-// this file is about the Raw cell: the desk's stored default before the first page, as the reader's own choice is kept
-const pinRaw = (page) => page.addInitScript(() => localStorage.setItem('trocar.v2.cellMode', 'raw'))
 
 async function openBusiest(b) {
   const rows = (await b.get('sessions')).doc.sessions.filter((x) => x.calls > 0)
@@ -88,7 +86,7 @@ const randomCopies = (page, ref, n) => page.evaluate(([ref, n]) => {
 }, [ref, n])
 
 async function copyCase(chromium) {
-  const b = await withBoard({ chromium, setup: pinRaw })
+  const b = await withBoard({ chromium })
   try {
     await openBusiest(b)
     const refs = await openLaidCells(b.page)
@@ -152,7 +150,7 @@ test('Shift+V redraws the cells within one window height below the visible area 
     // the same cells afterwards, by their data-bid (a cell drawn shorter in the other mode moves the ones below it up)
     const modesOf = (bids) => b.page.evaluate((bids) => bids.map((bid) => document.querySelector(`#ctxwin .cell[data-bid="${CSS.escape(bid)}"]`)?.dataset.mode ?? null), bids)
     const before = await cellsBelow()
-    assert.ok(before.length > 0 && before.every((c) => c.mode === 'read'), 'open cells below the visible area, in the Readable default')
+    assert.ok(before.length > 0 && before.every((c) => c.mode === 'raw'), 'open cells below the visible area, in the Raw default')
     await b.page.evaluate(() => {
       const R = document.querySelector('#ctxwin').getBoundingClientRect()
       // the key goes to a visible part of a row: its head, or — when an open cell fills the visible area — that cell's body
@@ -161,7 +159,7 @@ test('Shift+V redraws the cells within one window height below the visible area 
       head.dispatchEvent(new KeyboardEvent('keydown', { key: 'V', shiftKey: true, bubbles: true, cancelable: true }))
     })
     await b.page.evaluate(() => new Promise((r) => { let n = 60; const f = () => (--n ? requestAnimationFrame(f) : r()); requestAnimationFrame(f) }))
-    assert.deepEqual(await modesOf(before.map((c) => c.bid)), before.map(() => 'raw'), 'every cell within one height below the visible area is redrawn')
+    assert.deepEqual(await modesOf(before.map((c) => c.bid)), before.map(() => 'read'), 'every cell within one height below the visible area is redrawn')
     assert.deepEqual(b.errors, [])
   } finally { await b.stop() }
 })
