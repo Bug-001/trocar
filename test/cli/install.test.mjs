@@ -35,11 +35,17 @@ async function cli(argv, { tty = false, over = {}, setup = null } = {}) {
   const endpoint = () => controlEndpoint({ dir: w.dir }) // called below only when this run gets as far as writing: as root nothing may appear under ~/.trocar
   // nothing answers until the registration started it: the first probe is ENOENT, the ones after it answer (D61: install registers AND starts)
   let probes = 0
-  const deps = { getuid: () => 501, exec: launchctl.run, request: async () => { if (probes++ === 0) throw Object.assign(new Error('nothing answers yet'), { code: 'ENOENT' }); return {} }, sleep: async () => {}, launchctl, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, ...over }
+  const deps = { getuid: () => 501, exec: launchctl.run, request: async () => { if (probes++ === 0) throw Object.assign(new Error('nothing answers yet'), { code: 'ENOENT' }); return {} }, sleep: async () => {}, launchctl, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, ...over }
   if ((over.getuid ? over.getuid() : 501) !== 0) endpoint()
   const exit = await runInstallCli(argv, { io, env: w.env, home: w.home, platform: 'darwin', deps })
   return { w, io, exit, launchctl: deps.launchctl || launchctl }
 }
+
+test('0.1 §3: what is installed is asked of the world the test gives, never of the machine under the test', async () => {
+  const app = '/Applications/Kimi Code.app'
+  const { io } = await cli(['--dry-run', '--json'], { setup: (w) => { const { exists } = w.ctx; w.ctx.exists = (p) => p === app || exists(p) } })
+  assert.ok(io.json().planned.some((r) => r.harness === 'kimi-code'))
+})
 
 test('install is a command of its own (and the hidden `collector install` alias is gone, 1.6 §2: one feature, one name)', () => {
   assert.ok(commandNamed('install'))
@@ -94,7 +100,7 @@ test('install --yes --json: the receipt (fingerprint, carriers, residual risk, c
   const again = await cli(['--yes'])
   again.w.store.answer = 'declined'
   const io2 = fakeIo()
-  assert.equal(await runInstallCli(['--yes'], { io: io2, env: again.w.env, home: tmpHomeOf(again.w), platform: 'darwin', deps: { getuid: () => 501, unit: null, backends: { custody: again.w.custody, rootStore: again.w.store, dirs: again.w.ctx.dirs }, harnesses: [], owns: again.w.owns } }), 1)
+  assert.equal(await runInstallCli(['--yes'], { io: io2, env: again.w.env, home: tmpHomeOf(again.w), platform: 'darwin', deps: { getuid: () => 501, unit: null, backends: { custody: again.w.custody, rootStore: again.w.store, dirs: again.w.ctx.dirs }, ctx: again.w.ctx, harnesses: [], owns: again.w.owns } }), 1)
 })
 const tmpHomeOf = () => tmpDir('trocar-model-2-') // a second HOME, made where the leak guard sweeps
 
@@ -119,7 +125,7 @@ for (const platform of ['darwin', 'win32']) {
     const { liveUnit, withScratchCwd } = await import('../helpers/model-daemon.mjs')
     const w = await modelWorld({ os: platform, commands: ['codex'] })
     const box = await liveUnit({ w, platform })
-    const deps = { getuid: () => 501, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, unit: box.unit }
+    const deps = { getuid: () => 501, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, unit: box.unit }
     await withScratchCwd(platform, async () => { // install already starts the daemon (enable --now), so it runs in the scratch cwd too
       try {
         const io = fakeIo()
@@ -146,7 +152,7 @@ for (const platform of ['darwin', 'win32']) {
   test(`${platform}: a key custody that cannot be used is a refusal — exit 1, error.code, and what to do; never a stack`, async () => {
     const w = await modelWorld({ os: platform, commands: ['codex'] })
     w.custody.switches.failed = true
-    const deps = { getuid: () => 501, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, unit: null }
+    const deps = { getuid: () => 501, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, unit: null }
     const io = fakeIo()
     const exit = await runInstallCli(['--yes'], { io, env: w.env, home: w.home, platform, deps })
     assert.equal(exit, 1, io.text())
@@ -167,7 +173,7 @@ for (const platform of ['darwin', 'win32']) {
 test('the install receipt prints each (agent, carrier, file) fact once, in words — never one row per form, never a form or carrier id', async () => {
   const w = await modelWorld({ os: 'darwin', commands: ['claude', 'codex', 'dsh', 'kimi', 'opencode', 'hermes'] })
   const io = fakeIo()
-  const deps = { getuid: () => 501, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, unit: null }
+  const deps = { getuid: () => 501, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, unit: null }
   assert.equal(await runInstallCli(['--yes'], { io, env: w.env, home: w.home, platform: 'darwin', deps }), 0, io.text())
   const text = io.text().slice(io.text().indexOf('Installed.')) // the receipt alone: the plan above it is a screen of its own, printed before anything was written
   const rows = text.split('\n').filter((l) => /^ {2}\S/.test(l))
@@ -203,7 +209,7 @@ test('4.4 §Plan 「端口」 · V67: install records the board\'s port in ingre
   assert.ok(boardPort >= BOARD_RANGE[0] && boardPort <= BOARD_RANGE[1], String(boardPort))
   await new Promise((r) => setTimeout(r, 20))
   const io2 = fakeIo()
-  assert.equal(await runInstallCli(['--yes'], { io: io2, env: w.env, home: w.home, platform: 'darwin', deps: { getuid: () => 501, unit: null, backends: { custody: w.custody, rootStore: w.store, dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns } }), 0, io2.text())
+  assert.equal(await runInstallCli(['--yes'], { io: io2, env: w.env, home: w.home, platform: 'darwin', deps: { getuid: () => 501, unit: null, backends: { custody: w.custody, rootStore: w.store, dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns } }), 0, io2.text())
   assert.deepEqual([fs.readFileSync(file), fs.statSync(file).mtimeMs], [bytes, mtime])
 })
 
@@ -258,7 +264,7 @@ async function setUpKimi({ owns = null, after = () => {} } = {}) {
   fs.writeFileSync(wrapper.path, Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 9, 9, 9, 9])) // the agent's update put its own program back over trocar's launch command
   await after(w)
   const io = fakeIo()
-  const deps = { getuid: () => 501, unit: null, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, harnesses: w.harnesses.filter((d) => d.name === 'kimi-code'), which: w.ctx.which, owns: own } // kimi-code alone: this machine's own agents name no file of this world
+  const deps = { getuid: () => 501, unit: null, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses.filter((d) => d.name === 'kimi-code'), which: w.ctx.which, owns: own } // kimi-code alone: this machine's own agents name no file of this world
   assert.equal(await install({ io, env: w.env, home: w.home, platform: 'darwin', deps, flags: new Set(['--dry-run', '--json']), only: 'kimi-code' }), 0, io.text())
   assert.deepEqual(validateReceipt(io.json()), [], io.text())
   return { w, planned: io.json().planned, left: io.json().left || [] }
@@ -302,7 +308,7 @@ for (const platform of ['darwin', 'win32']) {
     const { tilde } = await import('../../src/cli/receipt.mjs')
     const w = await modelWorld({ os: platform })
     const io = fakeIo()
-    const deps = { getuid: () => 501, unit: null, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, harnesses: [], which: w.ctx.which, owns: w.owns }
+    const deps = { getuid: () => 501, unit: null, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: [], which: w.ctx.which, owns: w.owns }
     assert.equal(await install({ io, env: w.env, home: w.home, platform, deps, flags: new Set(['--dry-run', '--json']) }), 0, io.text())
     const words = io.json().planned.map((p) => p.detail).join('\n')
     for (const f of standaloneFiles(w.home, platform)) assert.ok(words.includes(tilde(f, w.home)), `${f} is named: ${words}`)

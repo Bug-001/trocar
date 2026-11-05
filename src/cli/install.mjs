@@ -2,7 +2,7 @@
 // before anything is read; refuse a version 1 / 2 manifest before any write (4.11 ⑰); hold op.lock; print the plan and wait for a yes (not a terminal
 // and no --yes: the plan only, exit 2); run the install; print the receipt and record it as an `install-note` (R1, D38). Exit 0 all placed · 1 part of
 // it, or a refusal · 2 usage, or no terminal without --yes. macOS / Windows run the collector model (src/collector/model-install.mjs); Linux keeps
-// its own install. The world is `deps` (0.1 §3): getuid, fs, exec, backends, harnesses, which, now, lockWaitMs.
+// its own install. The world is `deps` (0.1 §3): getuid, fs, exec, backends, ctx, harnesses, which, now, lockWaitMs.
 import nodeOs from 'node:os'
 import nodeFs from 'node:fs'
 import path from 'node:path'
@@ -116,7 +116,7 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
     const { renderHook } = await import('../collector/harness/templates/index.mjs')
     const b = deps.backends || await backendsFor({ os: platform, home, run: deps.exec || null, env, fs })
     const harnesses = deps.harnesses || await (await import('../collector/harness/index.mjs')).loadHarnesses()
-    const ctx = sourcesCtx({ os: platform, home, env, dirs: b.dirs, policy: b.policy, which: deps.which || null, fs })
+    const ctx = deps.ctx || sourcesCtx({ os: platform, home, env, dirs: b.dirs, policy: b.policy, which: deps.which || null, fs })
     const need = await missingOf(only, { platform, harnesses, ctx, home, rootStore: b.rootStore, fs })
     const rows = planInstall({ os: platform, harnesses, ctx, home, owns: deps.owns || ownsBy({ os: platform, home, fs }), fs }).filter(need.row)
     // the login entry is install's (D61: registered AND started here, 4.11 §1 install 7; 4.9 §4, 4.8 §7): the arch's unit, or the test's `deps.unit`
