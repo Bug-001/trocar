@@ -3,7 +3,7 @@
 //   node scripts/perf-cli.mjs --home <HOME> [--runs 7] [--only sessions,status] [--json out.json]
 //   node scripts/perf-cli.mjs --idle <pid> [--seconds 60]        ← the resource line of §3.1 (D62④) on a running daemon
 //   node scripts/perf-cli.mjs --write-amp <HOME> [--records 200]  ← the write-amplification line of §3.1, both halves
-//   node scripts/perf-cli.mjs --reply-reads <HOME> --lane-doc a.json[,b.json]  ← 2.3 #42: each step's reply, `block` in one process
+//   node scripts/perf-cli.mjs --reply-reads <HOME> --lane-doc a.json[,b.json] [--order walk|jump] [--at i --count n]  ← 2.3 #42 · §正文预取: `block` reads, one process
 //
 // It reports, per command: the COLD wall clock (the index deleted first), the WARM p50/p95 wall clock, the
 // command's own CPU time and peak RSS, and — separately — the CORE time, which is runQuery inside an already
@@ -303,30 +303,49 @@ function printAmp(o) {
 // reply refs, in one process, step after step. `--lane-doc` is what `trocar query lane --json` answered (the steps and the definitions
 // their reply ids name), so the walk costs no fold and the dataset needs no projection of this build. Sealed and live are apart: the
 // two read a record differently (a frame decoded, a line at its offset), and a live segment's index is still growing.
-const REPLY_LINE_MS = 50
-async function replyReads({ home, docs }) {
+// Beside the reply (2.3 §正文预取): `ahead`, the one multi-ref `block` of the replies of the ±8 steps around, read after it; `open`, one
+// request block opened by itself (the step's newest added block), a nearby query of D62③. Every kind is held to the same 50 ms.
+// `order`: 'walk' rests on every step in turn (the shared frame and line caches warm from the step before); 'jump' lands on the
+// pooled steps at a stride past ±8, the way a click on the timeline lands. `at` / `count` take a slice of that order: one step in
+// a fresh process is the read with every cache cold.
+const REPLY_LINE_MS = 50, AHEAD = 8, STRIDE = 37
+async function replyReads({ home, docs, order = 'walk', at = 0, count = Infinity }) {
   const { runQuery } = await import('../src/query/named/index.mjs')
   const h = path.join(home, '.trocar')
   const ctx = { home: h, userHome: home, env: { ...process.env, HOME: home, USERPROFILE: home }, platform: process.platform }
   await runQuery('segments', {}, ctx) // the desk is open: every segment's rows are already in memory
-  const ms = { sealed: [], live: [] }
+  const ms = {}
   let errors = 0
-  for (const doc of docs) for (const step of doc.steps) {
-    const ref = (step.reply || []).map((bid) => doc.defs.find((d) => d.bid === bid)?.ref).filter(Boolean)
-    if (!ref.length) continue
+  const live = (ref) => fs.existsSync(path.join(h, 'raw', `${ref.split('#').pop().split(':')[0]}.ndjson`))
+  const time = async (kind, at, ref) => {
+    if (!ref.length) return
     const t = process.hrtime.bigint()
     const got = await runQuery('block', { ref }, ctx)
-    ms[fs.existsSync(path.join(h, 'raw', `${step.rid.split(':')[0]}.ndjson`)) ? 'live' : 'sealed'].push(Number(process.hrtime.bigint() - t) / 1e6)
+    ;(ms[`${kind} ${live(at) ? 'live' : 'sealed'}`] ??= []).push(Number(process.hrtime.bigint() - t) / 1e6)
     errors += got.errors.length
   }
-  const row = (v) => (v.length ? { n: v.length, p50_ms: +pct(v, 50).toFixed(1), p95_ms: +pct(v, 95).toFixed(1), max_ms: +Math.max(...v).toFixed(1) } : { n: 0 })
-  return { line_ms: REPLY_LINE_MS, sealed: row(ms.sealed), live: row(ms.live), errors }
+  const all = docs.flatMap((doc) => {
+    const refOf = new Map(doc.defs.map((d) => [d.bid, d.ref]))
+    const replies = doc.steps.map((st) => (st.reply || []).map((b) => refOf.get(b)).filter(Boolean))
+    return doc.steps.map((step, i) => ({ step, reply: replies[i],
+      ahead: replies.slice(Math.max(0, i - AHEAD), i + AHEAD + 1).filter((_, k) => k !== Math.min(i, AHEAD)).flat(),
+      open: step.ops.filter((op) => op[0] === 1).flatMap((op) => op.slice(1)).map((b) => refOf.get(b)).filter(Boolean).pop() }))
+  })
+  let stride = order === 'jump' ? STRIDE : 1
+  while (all.length % stride === 0 && stride > 1) stride++ // coprime with the count: every step once
+  for (let j = at; j < Math.min(all.length, at + count); j++) {
+    const s = all[(j * stride) % all.length]
+    await time('reply', s.step.rid, s.reply)
+    await time('ahead', s.step.rid, s.ahead)
+    if (s.open) await time('open', s.open, [s.open])
+  }
+  const row = (v) => ({ n: v.length, p50_ms: +pct(v, 50).toFixed(1), p95_ms: +pct(v, 95).toFixed(1), max_ms: +Math.max(...v).toFixed(1) })
+  return { line_ms: REPLY_LINE_MS, ...Object.fromEntries(Object.entries(ms).sort().map(([k, v]) => [k, row(v)])), errors }
 }
 
 function printReplies(o) {
-  for (const k of ['sealed', 'live']) {
-    const r = o[k]
-    console.log(`${k.padEnd(7)} n ${String(r.n).padStart(4)}${r.n ? `  p50 ${r.p50_ms} ms  p95 ${r.p95_ms} ms  max ${r.max_ms} ms  line ${o.line_ms} ms  ${r.p95_ms <= o.line_ms ? 'within' : 'OVER'}` : ''}`)
+  for (const [k, r] of Object.entries(o)) {
+    if (r && r.n) console.log(`${k.padEnd(13)} n ${String(r.n).padStart(4)}  p50 ${r.p50_ms} ms  p95 ${r.p95_ms} ms  max ${r.max_ms} ms  line ${o.line_ms} ms  ${r.p95_ms <= o.line_ms ? 'within' : 'OVER'}`)
   }
   console.log(`errors  ${o.errors}`)
 }
@@ -359,7 +378,7 @@ async function main(argv) {
   }
   if (args['reply-reads']) {
     const docs = String(args['lane-doc']).split(',').map((f) => JSON.parse(fs.readFileSync(f, 'utf8')))
-    const o = await replyReads({ home: args['reply-reads'], docs })
+    const o = await replyReads({ home: args['reply-reads'], docs, order: args.order, at: Number(args.at || 0), count: args.count ? Number(args.count) : Infinity })
     printReplies(o)
     if (args.json) fs.writeFileSync(args.json, JSON.stringify(o, null, 2))
     return
