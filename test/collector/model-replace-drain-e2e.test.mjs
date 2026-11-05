@@ -103,7 +103,7 @@ for (const platform of ['darwin', 'win32']) {
         await until(() => !upstream[0].writable, 5000, 'the WebSocket ended at the upstream')
         assert.equal(await counted(), 1, 'the wait goes on for the response in flight')
         owing.write(REPLY.slice(-2))
-        await until(() => got.endsWith(REPLY.slice(-4)) && got.length === REPLY.length, 5000, 'the whole response reached the agent')
+        await until(() => got === REPLY, 5000, 'the whole response reached the agent')
         assert.equal(got, REPLY)
         for (let i = 0; i < 40 && await counted(); i++) await new Promise((r) => setTimeout(r, 25))
         assert.equal(await counted(), 0, 'the response ended: nothing is left to wait for')
