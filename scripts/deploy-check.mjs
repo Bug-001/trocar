@@ -28,6 +28,7 @@ const LINES = Object.freeze({
   headMs: 200, // the biggest session's head file (D71①)
   roughMs: 1000, // the biggest session's first useful page on screen (the desk's own `desk-rough` mark)
   statusP95: 500, // `status`, while the re-read runs
+  statusMax: 500, // the slowest `status`, while the re-read runs: the light worker answers it, so one big answer of the main worker does not hold it up (3.5 §谁执行它)
   sessionsP95: 500, // `sessions`, while the re-read runs
   smallP95: 500, // a small session's head, while the re-read runs
   fullMs: 30 * 60_000, // --full: the whole re-read, nothing left over any session
@@ -35,6 +36,8 @@ const LINES = Object.freeze({
   indexP95: { idle: 'indexIdleP95', times: 1.5, plusMs: 10 }, // from that reply to its segment's index growing, the same
 })
 const AGENT_PATH = Object.freeze({ windowMs: 20_000, pairs: 3, probeMs: 3000 }) // windows under the re-read and idle, in turn (deploy-check-daemon.mjs)
+// Reported, no line: lightRssMb and lightHeapPeakMb (the light worker's resident size and the highest used heap it reported: LIGHT_MEMORY_MB is set from this one),
+// statusBehindBlockMs (a `block` of a ref in each sealed segment, `status` right behind it, the slowest of those).
 // and: no answer of 500 or more, no worker lost, no "not read yet" on screen, no first-read state on the biggest session (`updating` is what a
 // re-read says), never "no sessions" while the list loads, and no title source outside {wire, unread, null}.
 import fs from 'node:fs'
@@ -42,7 +45,7 @@ import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import zlib from 'node:zlib'
-import { fork } from 'node:child_process'
+import { execFileSync, fork } from 'node:child_process'
 import { parseArgs } from 'node:util'
 
 const { values: o } = parseArgs({ options: { home: { type: 'string' }, out: { type: 'string' }, 'no-bump': { type: 'boolean' }, seconds: { type: 'string' }, full: { type: 'boolean' }, keep: { type: 'boolean' } } })
@@ -163,8 +166,19 @@ async function theBoard() {
     await Promise.all([poll('status', () => '/api/status', 1000), poll('sessions', () => '/api/sessions?limit=500', 1000),
       small.length ? poll('small', () => `/api/d/head?id=${enc(small[i++ % small.length].session_id)}`, 500) : null])
     took('statusP95', p95(lat.status))
+    took('statusMax', Math.max(...lat.status))
     took('sessionsP95', p95(lat.sessions))
     if (small.length) took('smallP95', p95(lat.small)); else delete lines.smallP95
+    let behind = 0
+    for (const { name } of rawBefore.filter((f) => f.name.endsWith('.sealed'))) {
+      const block = get(`/api/block?ref=${enc(`${name.replace(/\.sealed$/, '')}:1`)}`)
+      behind = Math.max(behind, seen('status', await get('/api/status')).ms)
+      seen('block', await block)
+    }
+    took('statusBehindBlockMs', behind)
+    const [light] = b.face.workers('light')
+    report.light = { rssMb: light ? Math.round(Number(execFileSync('ps', ['-o', 'rss=', '-p', String(light)], { encoding: 'utf8' })) / 1024) : null, heapPeakMb: b.face.lightHeapPeakMb() }
+    console.log(`lightRssMb     ${report.light.rssMb} MB\nlightHeapPeakMb ${report.light.heapPeakMb} MB`)
     await b.page.evaluate(() => { location.hash = '#/sessions' })
     await b.page.waitForTimeout(1000)
     await b.page.screenshot({ path: path.join(out, 'list-after.png') })
