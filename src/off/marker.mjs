@@ -47,7 +47,7 @@ const CC_SETTINGS = { base: 'home', dir: '.claude', env: 'CLAUDE_CONFIG_DIR', pa
 const CLAUDE_3P = (base) => ({ base, path: 'Claude-3p/configLibrary' })
 export const DOOR_ROUTES = Object.freeze({
   'claude-code': Object.freeze({
-    settings: Object.freeze({ file: CC_SETTINGS, proxyKeys: [['env', 'HTTPS_PROXY'], ['env', 'https_proxy']] }),
+    settings: Object.freeze({ file: CC_SETTINGS, proxyKeys: [['env', 'HTTPS_PROXY'], ['env', 'https_proxy'], ['env', 'HTTP_PROXY'], ['env', 'http_proxy']] }), // every proxy variable it reads: its children inherit this env, and their plain http goes to the door too (4.8 §5.1)
     library: Object.freeze({ select: { dir: { perOs: { darwin: CLAUDE_3P('appSupport'), win32: CLAUDE_3P('localAppData') } }, meta: '_meta.json', idKey: 'appliedId', createIfNone: true }, proxyKeys: [['egressProxyPacUrl']] }),
   }),
   'kimi-code': Object.freeze({ vscode: Object.freeze({ file: { base: 'appSupport', path: 'Code/User/settings.json' }, proxyKeys: [['http.proxy']] }) }),
