@@ -268,11 +268,14 @@ const unreal = (s) => { for (const x of s.landReal || []) x.classList.remove('cw
 // screen with the target are made real (.cwreal) first: within one window height of its top, which holds as each is never shorter than
 // its preset. Card by card from the outside in (a card's rows count once the card is real), reading the rects of one level per layout.
 function realBand(el, node) {
-  const H = el.clientHeight, kids = new Map(), real = []
+  const H = el.clientHeight, kids = new Map()
   for (const x of el.querySelectorAll('.cblk, .cwturn')) {
     const up = x.parentElement.closest('.cwturn'), k = up && el.contains(up) ? up : null
     kids.has(k) ? kids.get(k).push(x) : kids.set(k, [x])
   }
+  // the target's own turns first: skipped at their preset height, the rects around them say the target lies below the whole list
+  const real = []
+  for (let x = node; (x = x.parentElement.closest('.cwturn')) && el.contains(x);) { x.classList.add('cwreal'); real.push(x) }
   let level = kids.get(null) || []
   while (level.length) {
     const y = node.getBoundingClientRect().top, lo = y - H, hi = y + H, box = (i) => level[i].getBoundingClientRect()

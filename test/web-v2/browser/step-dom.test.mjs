@@ -157,7 +157,8 @@ test('1.4: a late 内容对比步 lands the step on its first 「新」 row; a r
         return { top: el.scrollTop, h: el.clientHeight, at: t ? Math.round(t.getBoundingClientRect().top - box.top) : null }
       })
       if (scrolled) assert.equal(x.top, top, 'the reader\'s place is kept')
-      else assert.ok(x.at != null && x.at >= -2 && x.at < x.h, JSON.stringify(x))
+      // at the box's top, within its scroll margin of 8 px: the rows below it were real when it landed, so the list's end does not cut it short
+      else assert.ok(x.at != null && x.at >= -2 && x.at <= 10, JSON.stringify(x))
     })
   }
 })
