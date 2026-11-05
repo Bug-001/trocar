@@ -217,7 +217,7 @@ test('a switch file that is a link: the link goes, the file it names stays byte 
 const PORT = 18001
 const putIngress = (dir, port) => fs.writeFileSync(path.join(dir, 'ingress.json'), JSON.stringify({ enginePort: 17990, groupPorts: { a: port }, ingressToken: 'a'.repeat(32), listenerToken: 'b'.repeat(32) }))
 const { parseJsonText, getPath: valueAt, removeKey: dropKey } = await import('../../src/off/json-text.mjs')
-const without = (t, keys) => keys.reduce((s, k) => dropKey(s, k).text, t)
+const without = (t, keys) => keys.reduce((s, k) => (dropKey(s, k) || { text: s }).text, t) // null: no such key
 for (const { h, id, r } of (await loadHarnesses()).flatMap((d) => Object.entries((d.proxyMode && d.proxyMode.routes) || {}).map(([id, r]) => ({ h: d, id, r }))).filter((x) => x.r.kind === 'json-key' && ['door-url', 'pac-url'].includes(x.r.value))) {
   for (const os of ['darwin', 'win32']) {
     // the user's file before `on`: content of theirs and, where `on` writes over one (not a PAC route: it is not written over an own egress), a proxy of theirs

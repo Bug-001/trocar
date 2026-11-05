@@ -4,8 +4,10 @@
 //   block        a sentinel block `# >>> trocar collector >>> … # <<< trocar collector <<<` in a dotenv file; the user's lines trocar put out of effect
 //                with `#trocar-collector-off# ` come back key by key, as the journal's undo does (D48②: a key the user set while on keeps their value)
 //   line         a line with the sentinel comment `# trocar collector: …` that points under ~/.trocar (the Kimi PATH line, the dsh patch row)
-//   json-value   a JSON string that points under ~/.trocar (a CC / Z-Code trust key): the value trocar replaced comes back from the NEWEST backup of that
-//                file (R2), one key at a time — never the whole file (1.6 R2); no value in the backup, the key goes
+//   json-value   a JSON string that points under ~/.trocar (a CC / Z-Code trust key), or, at a proxy key `on` writes on macOS / Windows (DOOR_ROUTES),
+//                one of trocar's doors (door-value.mjs: a loopback URL on a door port ingress.json records; that record unreadable, none is judged a
+//                door and a note says so): the value trocar replaced comes back from the NEWEST backup of that file (R2), one key at a time — never the
+//                whole file (1.6 R2); no value in the backup, the key goes
 //   owned-file   a plugin or shim trocar wrote (its sentinel in it, or exactly trocar's own plugin manifest), or a switch file `on` wrote for a harness
 //                (paths.mjs switchFileIn: in trocar's own tree, so trocar's by where it is, whatever it holds; a link there goes, never what it points at)
 // Nothing else is touched, and no byte of a file outside those marks changes. The result says `undone-by-marker` (the code `off` records and the
@@ -23,6 +25,7 @@ import { trocarHome, collectorIn, switchFileIn } from './paths.mjs'
 import { CODE_OFF } from './names.mjs'
 import { decodeText, encodeText, CHARSETS, WHY_TEXT } from './text-codec.mjs'
 import { resolveLoc, dirsFor } from './loc.mjs'
+import { doorPorts, isDoorValue, loopbackUrl } from './door-value.mjs'
 
 const RC_FILES = ['.bashrc', '.bash_profile', '.bash_login', '.profile', '.zshrc', '.zshenv', '.zprofile', '.zlogin'] // where the Kimi installer's PATH line, and so trocar's, can be
 const PLUGIN_MANIFEST = '{"type":"module"}\n' // the anonymous package.json of trocar's dsh plugin directory (collector/harness/_plugins.mjs: ANONYMOUS_MODULE_MANIFEST)
@@ -36,17 +39,31 @@ export const ROUTE_PLACES = Object.freeze({
   codex: Object.freeze({ file: Object.freeze({ base: 'home', dir: '.codex', env: 'CODEX_HOME', path: '.env' }) }),
   hermes: Object.freeze({ file: Object.freeze(HERMES_ENV) }),
 })
+/** The json-key routes `on` writes a door into on macOS / Windows (4.11 §2.3): the file (`file`, a <loc>; or `select`: the entry a meta file's `idKey`
+ *  names in the directory `dir`) and the keys that hold the door (`proxyKeys`). The descriptor's route takes these from here, so the marker undo looks
+ *  where `on` wrote, at the keys it wrote — one copy of each. */
+const CC_SETTINGS = { base: 'home', dir: '.claude', env: 'CLAUDE_CONFIG_DIR', path: 'settings.json' }
+const CLAUDE_3P = (base) => ({ base, path: 'Claude-3p/configLibrary' })
+export const DOOR_ROUTES = Object.freeze({
+  'claude-code': Object.freeze({
+    settings: Object.freeze({ file: CC_SETTINGS, proxyKeys: [['env', 'HTTPS_PROXY'], ['env', 'https_proxy']] }),
+    library: Object.freeze({ select: { dir: { perOs: { darwin: CLAUDE_3P('appSupport'), win32: CLAUDE_3P('localAppData') } }, meta: '_meta.json', idKey: 'appliedId', createIfNone: true }, proxyKeys: [['egressProxyPacUrl']] }),
+  }),
+  'kimi-code': Object.freeze({ vscode: Object.freeze({ file: { base: 'appSupport', path: 'Code/User/settings.json' }, proxyKeys: [['http.proxy']] }) }),
+  'z-code': Object.freeze({ 'cli-config': Object.freeze({ file: { base: 'home', path: '.zcode/cli/config.json' }, proxyKeys: [['network', 'httpProxy']] }) }),
+})
+const doorAt = (h) => Object.values(DOOR_ROUTES[h]).map((route) => ({ how: 'json-value', route, door: true, os: ['darwin', 'win32'] }))
 
 /** Where each harness's entries are, relative to HOME (`route`: a ROUTE_PLACES place, resolved against the environment and per-user folders off runs in). `how` says what trocar's mark looks like there (see the header); `eachDir` + `file`: the file in
  *  every subdirectory of a directory (Hermes profiles). The plan of 1.6 / 4.6 §身份与信任 is the authority; a harness not listed here has no marker undo. */
 export const MARKER_PATHS = Object.freeze({
-  'claude-code': [{ how: 'json-value', file: '.claude/settings.json', keys: ['env', 'NODE_EXTRA_CA_CERTS'] }],
+  'claude-code': [{ how: 'json-value', file: '.claude/settings.json', keys: ['env', 'NODE_EXTRA_CA_CERTS'] }, ...doorAt('claude-code')],
   codex: [{ how: 'block', file: '.codex/.env' }, { how: 'block', route: ROUTE_PLACES.codex }],
   hermes: [{ how: 'block', file: '.hermes/.env' }, { how: 'block', route: ROUTE_PLACES.hermes }, { how: 'block', eachDir: '.hermes/profiles', file: '.env' }],
   opencode: [{ how: 'owned-file', file: '.config/opencode/plugins/trocar-ca.js' }, { how: 'owned-file', route: ROUTE_PLACES.opencode }],
   'deepseek-dsh': [{ how: 'line', file: '.dsh/cordis.patch.yml', yaml: true }, { how: 'owned-file', file: '.trocar/collector/plugins/dsh/index.js' }, { how: 'owned-file', file: '.trocar/collector/plugins/dsh/package.json', exact: PLUGIN_MANIFEST }],
-  'kimi-code': [...RC_FILES.map((f) => ({ how: 'line', file: f })), { how: 'owned-file', file: '.trocar/collector/bin/kimi' }],
-  'z-code': [{ how: 'json-value', file: '.zcode/cli/config.json', keys: ['network', 'caCertFile'] }],
+  'kimi-code': [...RC_FILES.map((f) => ({ how: 'line', file: f })), { how: 'owned-file', file: '.trocar/collector/bin/kimi' }, ...doorAt('kimi-code')],
+  'z-code': [{ how: 'json-value', file: '.zcode/cli/config.json', keys: ['network', 'caCertFile'] }, ...doorAt('z-code')],
   pi: [{ how: 'owned-file', file: '.pi/agent/extensions/trocar-ca.js' }],
 })
 
@@ -80,13 +97,24 @@ function blocksIn(t, root) {
 }
 const lineHits = (t, root) => linesOf(t).filter((l) => l.line.includes(LINE_MARK) && l.line.includes(root + path.sep))
 
-// the candidate files of a spec for this home, each file once (a route place and a fixed path can name the same one): [{ file, spec }]
+// the entry a select route names: <dir>/<id>.json, id = the meta file's idKey (one plain file name, nothing outside the directory); none → []
+function selected(sel, ctx, fs) {
+  const dir = resolveLoc(sel.dir, ctx)[0]
+  if (!dir) return []
+  let id
+  try { const r = readText(readOrNull(fs, path.join(dir, sel.meta))); id = (parseJsonText(r.text) || {})[sel.idKey] } catch { return [] }
+  return typeof id === 'string' && id !== '' && !/^\.+$/.test(id) && path.basename(id) === id && !/[\\/]/.test(id) ? [path.join(dir, `${id}.json`)] : []
+}
+
+// the candidate files of a spec for this home, each file once per kind of mark (a route place and a fixed path can name the same one; a door key
+// and a trust key can share a file): [{ file, spec }]
 function candidates(home, harness, fs, env, platform) {
   const out = [], seen = new Set()
   const ctx = { os: platform, home, env, dirs: dirsFor(platform, home, env) }
-  const push = (file, spec) => { if (!seen.has(file)) { seen.add(file); out.push({ file, spec }) } }
+  const push = (file, spec) => { const k = `${spec.door ? 'door' : ''}\0${file}`; if (!seen.has(k)) { seen.add(k); out.push({ file, spec }) } }
   for (const spec of MARKER_PATHS[harness]) {
-    if (spec.route) for (const at of spec.route.dir ? resolveLoc(spec.route.dir, ctx).map((d) => path.join(d, spec.route.name)) : resolveLoc(spec.route.file, ctx)) push(at, spec)
+    if (spec.os && !spec.os.includes(platform)) continue
+    if (spec.route) for (const at of spec.route.select ? selected(spec.route.select, ctx, fs) : spec.route.dir ? resolveLoc(spec.route.dir, ctx).map((d) => path.join(d, spec.route.name)) : resolveLoc(spec.route.file, ctx)) push(at, spec)
     else if (spec.eachDir) {
       let names = []
       try { names = fs.readdirSync(path.join(home, spec.eachDir)).sort() } catch { /* no such directory */ }
@@ -98,10 +126,12 @@ function candidates(home, harness, fs, env, platform) {
 }
 
 /** What trocar's own marks say it changed for these harnesses (`ids` null: all), without a manifest: `[{ harness, path, how, detail }]`, in the order to
- *  undo them (values and blocks, then lines, then plugins and shims). Reads only; a file it cannot read or parse is planned only if a mark is in it. */
-export function planByMarker({ home, ids = null, fs = nodeFs, env = process.env, platform = process.platform }) {
+ *  undo them (values and blocks, then lines, then plugins and shims). Reads only; a file it cannot read or parse is planned only if a mark is in it.
+ *  `notes` gets a sentence for each loopback proxy value it could not judge (ingress.json unreadable): left, and said. */
+export function planByMarker({ home, ids = null, fs = nodeFs, env = process.env, platform = process.platform, notes = [] }) {
   const root = trocarHome(home)
   const plan = []
+  let ports // the door ports, read once when a door key is looked at
   for (const harness of Object.keys(MARKER_PATHS)) {
     if (ids && !ids.includes(harness)) continue
     for (const { file, spec } of candidates(home, harness, fs, env, platform)) {
@@ -121,9 +151,15 @@ export function planByMarker({ home, ids = null, fs = nodeFs, env = process.env,
         const hits = lineHits(t, root)
         if (hits.length) add({ lines: hits.map((h) => h.line), yaml: !!spec.yaml })
       } else if (spec.how === 'json-value') {
-        let v
-        try { v = getPath(parseJsonText(t), spec.keys) } catch { continue }
-        if (under(v, root)) add({ keys: spec.keys, value: v })
+        let doc
+        try { doc = parseJsonText(t) } catch { continue }
+        if (!spec.door) { const v = getPath(doc, spec.keys); if (under(v, root)) add({ keys: spec.keys, value: v }); continue }
+        ports = ports || doorPorts(collectorIn(root), fs)
+        for (const keys of spec.route.proxyKeys) {
+          const v = getPath(doc, keys)
+          if (ports.ports && isDoorValue(v, ports.ports)) add({ keys, door: true }) // the value itself is not kept: a door URL holds its token
+          else if (ports.why && loopbackUrl(v)) notes.push(`${file}: ${keys.join('.')} names a loopback proxy, and trocar cannot tell whether it is one of its doors (${ports.why}); it was left as it is`)
+        }
       } else if (spec.how === 'owned-file' && (spec.ours || (spec.exact ? t === spec.exact : t.includes(SENTINEL)))) add(spec.ours ? { ours: true } : spec.exact ? { exact: spec.exact } : {})
     }
   }
@@ -179,12 +215,21 @@ function undoOne(item, home, fs) {
   }
   // json-value: the value trocar replaced comes back from the newest backup of this file, this key only; none there → the key goes
   const keys = item.detail.keys
+  let ours = (v) => under(v, root)
+  if (item.detail.door) { const p = doorPorts(collectorIn(root), fs); if (!p.ports) return { result: 'error', reason: `${item.path}: ${keys.join('.')} was not undone: ${p.why}` }; ours = (v) => isDoorValue(v, p.ports) }
   let doc
   try { doc = parseJsonText(t) } catch (e) { return { result: 'left-unparsable', reason: unreadableJson(item.path, t, e, `trocar's value under ${keys.join('.')}`) } }
-  if (!under(getPath(doc, keys), root)) return { result: 'already-clean' }
-  const saved = backupsOf({ home, file: item.path, fs }).at(-1) || null
-  let prior = null
-  if (saved) { try { const s = readText(readOrNull(fs, saved)); const v = s.why ? undefined : getPath(parseJsonText(s.text), keys); if (typeof v === 'string' && !under(v, root)) prior = v } catch { /* a backup that is not JSON holds no value */ } }
+  if (!ours(getPath(doc, keys))) return { result: 'already-clean' }
+  // the newest backup whose value here is not trocar's own (`on` saves the file before each key it writes, so a newer one can hold trocar's first key)
+  let saved = null, prior = null
+  for (const b of backupsOf({ home, file: item.path, fs }).reverse()) {
+    let v
+    try { const s = readText(readOrNull(fs, b)); v = s.why ? undefined : getPath(parseJsonText(s.text), keys) } catch { /* a backup that is not JSON holds no value */ }
+    if (typeof v === 'string' && ours(v)) continue
+    saved = b
+    if (typeof v === 'string') prior = v
+    break
+  }
   put(prior != null ? setKey(t, keys, prior).text : removeKey(t, keys).text)
   return done(prior != null ? { restored_from: saved, value: prior } : { removed: true, ...(saved ? { backup: saved } : {}) })
 }
