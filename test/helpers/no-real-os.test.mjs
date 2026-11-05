@@ -191,12 +191,15 @@ test('no-real-os: no test process writes under the machine\'s own folders or the
   }
 })
 
-test('no-real-os: a write in the temp dir or the checkout, and a read anywhere, are nobody\'s business', () => {
+test('no-real-os: a write in the temp dir or the checkout, and a read anywhere, are nobody\'s business', async () => {
   const t = tmpDir('nro-')
   fs.writeFileSync(path.join(t, 'a'), 'x')
   fs.renameSync(path.join(t, 'a'), path.join(t, 'b'))
   fs.closeSync(fs.openSync(path.join(process.cwd(), 'package.json'), 'r'))
-  fs.closeSync(fs.openSync(process.platform === 'win32' ? process.execPath : '/etc/hosts', 'r'))
+  const readable = process.platform === 'win32' ? process.execPath : '/etc/hosts'
+  fs.closeSync(fs.openSync(readable, 'r'))
+  fs.closeSync(fs.openSync(readable))
+  await new Promise((resolve, reject) => fs.open(readable, (e, fd) => (e ? reject(e) : fs.close(fd, resolve)))) // no flags: the callback sits where flags go
   assert.deepEqual(takeRefusals(), [])
 })
 
