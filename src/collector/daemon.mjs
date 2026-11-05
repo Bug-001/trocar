@@ -627,6 +627,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       if (!helperLive() || sw.anyOn()) return
       helperUp = false
       await redirector.close()
+      tracker.clear('off') // what the table would say from here on nobody tells it: the next `on`'s rescan rebuilds it
       if (lock) lock.name({ helper_pid: null })
     })
     // with nothing on at start no helper is spawned: the first `on` does it (4.6 「助手还没装」, D61)
@@ -652,7 +653,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       upstream_ca: env.NODE_EXTRA_CA_CERTS || null, linger: typeof redirector.linger === 'function' ? redirector.linger() : null })
     syncTracker() // before the first rescan: a harness that is off at start is never judged
     tracker.start()
-    await tracker.rescan()
+    if (sw.anyOn()) await tracker.rescan() // with nothing on no helper follows exec / exit, so a table built now could not be kept true; the first `on` scans
     await sw.restore()
 
     // The 5 s check (D-26, 4.6 §开关语义): nobody has to run status for these to reach flows/ —

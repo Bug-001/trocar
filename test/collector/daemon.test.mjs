@@ -1734,6 +1734,17 @@ test('daemon: /off with a splice open keeps the helper until the splice closes, 
     await until(() => helperExited(clients[0]))
   })
 })
+// the helper gone, no exit of the agent reaches the daemon: status does not keep listing a pid it can no longer follow (D38); the next on rescans
+test('daemon: once the helper exits after off, status lists none of the agents it followed, and the next /on finds the live ones again (4.6 S20)', async () => {
+  await withSplice(async ({ s, raw, clients }) => {
+    await req(s.sock, 'POST', '/off', {})
+    raw.destroy()
+    await until(() => helperExited(clients[0]))
+    await until(async () => !(await req(s.sock, 'GET', '/status')).agents.some((a) => a.pid === 4242))
+    await req(s.sock, 'POST', '/on', {})
+    await until(async () => (await req(s.sock, 'GET', '/status')).agents.find((a) => a.pid === 4242 && !a.off))
+  })
+})
 test('daemon: /on before the splice closes keeps the helper it has: no second one, still on (4.6 S20)', async () => {
   await withSplice(async ({ s, raw, clients }) => {
     await req(s.sock, 'POST', '/off', {})

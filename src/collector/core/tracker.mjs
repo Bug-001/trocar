@@ -301,6 +301,9 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
       }
     },
     agents: () => [...table.values()].sort((a, b) => a.pid - b.pid).map((r) => ({ ...r, hosts: [...r.hosts], bypass: r.bypass.map((b) => ({ ...b })), unreachable: (r.unreachable || []).map((u) => ({ ...u })), proxies: r.proxies.map((p) => ({ ...p })), readErrors: [...r.readErrors], parseErrors: [...r.parseErrors] })),
+    // The helper stopped with nothing on (4.6 §开关语义): no exec or exit reaches the table any more, so none of its rows can be kept true (a pid
+    // exits or is reused unseen). Every row leaves (onGone with `via`), and the next `on`'s rescan builds the table again.
+    clear(via) { for (const [pid, row] of [...table]) { forget(pid); gone(row, via) } ambiguous.clear() },
     unmatched: () => [...ambiguous.values()].sort((a, b) => a.pid - b.pid),
     describe: (pid) => (table.has(pid) ? { ...table.get(pid) } : null),
     // FlowExtras for the engine's describe (4.6 §引擎 3): the harness's WebSocket terminators and this process's own proxies
