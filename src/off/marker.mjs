@@ -6,7 +6,8 @@
 //   line         a line with the sentinel comment `# trocar collector: …` that points under ~/.trocar (the Kimi PATH line, the dsh patch row)
 //   json-value   a JSON string that points under ~/.trocar (a CC / Z-Code trust key): the value trocar replaced comes back from the NEWEST backup of that
 //                file (R2), one key at a time — never the whole file (1.6 R2); no value in the backup, the key goes
-//   owned-file   a plugin or shim trocar wrote (its sentinel in it, or exactly trocar's own plugin manifest)
+//   owned-file   a plugin or shim trocar wrote (its sentinel in it, or exactly trocar's own plugin manifest), or a switch file `on` wrote for a harness
+//                (<collector>/switch/<harness>, SWITCH_DIR: in trocar's own tree, so trocar's by where it is, whatever it holds)
 // Nothing else is touched, and no byte of a file outside those marks changes. The result says `undone-by-marker` (the code `off` records and the
 // receipt shows, 1.6 R3). Not done here, said in the docs: a combined bundle (no manifest, so nobody can say who holds it — `uninstall` removes it with the
 // CA), and an install-phase entry at a home the default places do not name. A `route` place (what `on` writes on macOS / Windows) is resolved as `on`
@@ -24,6 +25,7 @@ import { decodeText, encodeText, CHARSETS, WHY_TEXT } from './text-codec.mjs'
 import { resolveLoc, dirsFor } from './loc.mjs'
 
 const RC_FILES = ['.bashrc', '.bash_profile', '.bash_login', '.profile', '.zshrc', '.zshenv', '.zprofile', '.zlogin'] // where the Kimi installer's PATH line, and so trocar's, can be
+const SWITCH_DIR = '.trocar/collector/switch' // where `on` writes a harness's class-2 switch file (collector/core/proxymode/entries.mjs switch-file; marker.test.mjs writes through it)
 const PLUGIN_MANIFEST = '{"type":"module"}\n' // the anonymous package.json of trocar's dsh plugin directory (collector/harness/_plugins.mjs: ANONYMOUS_MODULE_MANIFEST)
 
 /** The class-1 routes `on` writes on macOS / Windows whose bytes carry trocar's sentinel (4.11 P5): a plugin-file route's folder (`dir`, a <loc>, loc.mjs)
@@ -92,6 +94,7 @@ function candidates(home, harness, fs, env, platform) {
       for (const n of names) push(path.join(home, spec.eachDir, n, spec.file), spec)
     } else push(path.join(home, spec.file), spec)
   }
+  push(path.join(home, SWITCH_DIR, harness), { how: 'owned-file', ours: true }) // every harness: only one on a switch-file route ever has one
   return out
 }
 
@@ -122,7 +125,7 @@ export function planByMarker({ home, ids = null, fs = nodeFs, env = process.env,
         let v
         try { v = getPath(parseJsonText(t), spec.keys) } catch { continue }
         if (under(v, root)) add({ keys: spec.keys, value: v })
-      } else if (spec.how === 'owned-file' && (spec.exact ? t === spec.exact : t.includes(SENTINEL))) add(spec.exact ? { exact: spec.exact } : {})
+      } else if (spec.how === 'owned-file' && (spec.ours || (spec.exact ? t === spec.exact : t.includes(SENTINEL)))) add(spec.ours ? { ours: true } : spec.exact ? { exact: spec.exact } : {})
     }
   }
   const rank = { 'json-value': 0, block: 0, line: 1, 'owned-file': 2 }
@@ -142,7 +145,8 @@ function undoOne(item, home, fs) {
   const t = read.text, mode = fs.statSync(file).mode & 0o777
   const put = (out) => writeDurable(file, encodeText(out, read.charset), mode, fs) // in the form the file has
   if (item.how === 'owned-file') {
-    if (!((item.detail || {}).exact ? t === item.detail.exact : t.includes(SENTINEL))) return { result: 'already-clean' } // not trocar's (any more): a plan is never trusted over the file
+    const d = item.detail || {}
+    if (!(d.ours ? under(item.path, path.join(root, 'collector', 'switch')) : d.exact ? t === d.exact : t.includes(SENTINEL))) return { result: 'already-clean' } // not trocar's (any more): a plan is never trusted over the file
     fs.rmSync(file, { force: true })
     const dirs = [path.dirname(item.path)] // the directory it was in, and, inside trocar's collector dir, the ones above it that are empty now (outermost first)
     for (let d = path.dirname(dirs[0]); under(d, path.join(root, 'collector')); d = path.dirname(d)) dirs.unshift(d)
