@@ -210,3 +210,71 @@ test('a switch file that is a link: the link goes, the file it names stays byte 
   assert.throws(() => fs.lstatSync(link), { code: 'ENOENT' })
   assert.equal(read(mine), 'the user\'s own bytes\n')
 })
+
+// macOS / Windows: a json-key route's value carries no sentinel; it is trocar's when it points at one of trocar's doors — a loopback URL on a door port
+// ingress.json records (1.6 R3 「指向 trocar 的值」). The value it replaced comes back from the newest backup, key by key; no such key there, the key goes.
+// A loopback proxy of the user's own (a port that is no door) stays; with ingress.json unreadable nothing is guessed, and the receipt says so.
+const PORT = 18001
+const putIngress = (dir, port) => fs.writeFileSync(path.join(dir, 'ingress.json'), JSON.stringify({ enginePort: 17990, groupPorts: { a: port }, ingressToken: 'a'.repeat(32), listenerToken: 'b'.repeat(32) }))
+const { parseJsonText, getPath: valueAt, removeKey: dropKey } = await import('../../src/off/json-text.mjs')
+const without = (t, keys) => keys.reduce((s, k) => dropKey(s, k).text, t)
+for (const { h, id, r } of (await loadHarnesses()).flatMap((d) => Object.entries((d.proxyMode && d.proxyMode.routes) || {}).map(([id, r]) => ({ h: d, id, r }))).filter((x) => x.r.kind === 'json-key' && ['door-url', 'pac-url'].includes(x.r.value))) {
+  for (const os of ['darwin', 'win32']) {
+    // the user's file before `on`: content of theirs and, where `on` writes over one (not a PAC route: it is not written over an own egress), a proxy of theirs
+    const setup = (userProxy) => {
+      const w = world({ os })
+      if (os === 'win32') Object.assign(w.ctx.env, { APPDATA: path.join(w.root, 'roaming'), LOCALAPPDATA: path.join(w.root, 'local') })
+      w.ctx.dirs = dirsFor(os, w.home, w.ctx.env)
+      const ctx = { ...w.ctx, harness: h.name, routeId: id, route: r }
+      let file
+      if (r.select) {
+        const dir = resolveLoc(r.select.dir, ctx)[0]
+        if (!dir) return null
+        fs.mkdirSync(dir, { recursive: true })
+        fs.writeFileSync(path.join(dir, r.select.meta), JSON.stringify({ [r.select.idKey]: 'mine' }))
+        file = path.join(dir, 'mine.json')
+      } else { file = resolveLoc(r.file, ctx)[0]; if (!file) return null }
+      fs.mkdirSync(path.dirname(file), { recursive: true })
+      const doc = { keep: 1 }
+      if (userProxy) { let at = doc; r.proxyKeys[0].slice(0, -1).forEach((k) => { at = at[k] = {} }); at[r.proxyKeys[0].at(-1)] = userProxy }
+      fs.writeFileSync(file, `${JSON.stringify(doc, null, 2)}\n`)
+      return { w, ctx, file }
+    }
+    const own = r.value === 'pac-url' ? null : 'http://corp.example:8080'
+    test(`${h.name} · ${id} (json-key) · ${os}: the door value \`on\` wrote goes with the manifest gone, the replaced value back from the backup, every other byte as it was`, () => {
+      const s = setup(own)
+      if (!s) return
+      putIngress(s.w.dir, PORT)
+      const res = routeEntry('json-key').write(s.ctx, door(PORT))
+      assert.ok(res.ok, JSON.stringify(res))
+      const on = read(s.file)
+      const plan = planByMarker({ home: s.w.home, env: s.w.ctx.env, platform: os, ids: [h.name] }).filter((x) => x.path === s.file)
+      assert.equal(plan.length, r.proxyKeys.length, 'each door key of the file is found')
+      assert.deepEqual(undoByMarker(plan, { home: s.w.home }).map((x) => x.result), plan.map(() => 'undone-by-marker'))
+      const out = read(s.file), doc = parseJsonText(out)
+      r.proxyKeys.forEach((k, i) => assert.equal(valueAt(doc, k), i === 0 && own ? own : undefined, k.join('.')))
+      assert.equal(without(out, r.proxyKeys), without(on, r.proxyKeys), 'only the door keys changed')
+    })
+    test(`${h.name} · ${id} (json-key) · ${os}: a loopback proxy of the user's own (no door port) stays, and with ingress.json unreadable no value is guessed a door`, () => {
+      const s = setup(null)
+      if (!s) return
+      putIngress(s.w.dir, PORT)
+      const mine = setup('http://127.0.0.1:7890')
+      putIngress(mine.w.dir, PORT)
+      const before = read(mine.file)
+      const plan = planByMarker({ home: mine.w.home, env: mine.w.ctx.env, platform: os, ids: [h.name] })
+      assert.deepEqual(plan.filter((x) => x.path === mine.file), [])
+      undoByMarker(plan, { home: mine.w.home })
+      assert.equal(read(mine.file), before)
+      // the door written, then ingress.json gone: not undone, and said
+      assert.ok(routeEntry('json-key').write(s.ctx, door(PORT)).ok)
+      fs.rmSync(path.join(s.w.dir, 'ingress.json'))
+      const on = read(s.file), notes = []
+      const plan2 = planByMarker({ home: s.w.home, env: s.w.ctx.env, platform: os, ids: [h.name], notes })
+      assert.deepEqual(plan2.filter((x) => x.path === s.file), [])
+      undoByMarker(plan2, { home: s.w.home })
+      assert.equal(read(s.file), on)
+      assert.ok(notes.some((n) => n.includes(s.file)), JSON.stringify(notes))
+    })
+  }
+}
