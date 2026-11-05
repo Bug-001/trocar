@@ -680,20 +680,56 @@ test('W4 a peer that is not an IPv4 literal is answered null at once, with no ta
   assert.equal(h.calls.length, 0, 'the doors bind 127.0.0.1 only: an IPv6 peer cannot be one of the agents\' sockets')
 })
 
-test('W4 a table that answers after 250 ms is null with ms >= 250, and not a failure', async () => {
+test('W4 slowness is no verdict: a table that takes 300 ms answers its pid', async () => {
   const failures = []
-  const r = await ownerOfSocket({ helper: tableHelper([trow(10, 5010)], { delayMs: 1500 }), peer: PEER, onFailure: (f) => failures.push(f) })
-  assert.deepEqual({ pid: r.pid, source: r.source }, { pid: null, source: null })
-  assert.ok(r.ms >= 250, `ms ${r.ms}`)
-  assert.ok(r.ms < 1200, `it did not wait for the late answer: ${r.ms}`)
+  const r = await ownerOfSocket({ helper: tableHelper([trow(10, 5010)], { delayMs: 300 }), peer: PEER, onFailure: (f) => failures.push(f) })
+  assert.deepEqual([r.pid, r.source], [10, 'socket-table'])
   assert.deepEqual(failures, [])
-  const h = tableHelper([trow(10, 5010)])
-  await ownerOfSocket({ helper: h, peer: PEER, budgetMs: 80 })
-  assert.equal(h.calls[0].opts.timeoutMs, 80)
-  const slow = Object.assign(new Error('helper tcp-table timed out after 80 ms'), { code: 'helper-timeout' })
-  const t = await ownerOfSocket({ helper: tableHelper([], { error: slow }), peer: PEER, budgetMs: 80, onFailure: (f) => failures.push(f) })
-  assert.ok(t.pid === null && t.ms >= 80)
-  assert.deepEqual(failures, [], 'a helper-side timeout is over budget too: slow, not unavailable')
+})
+
+test('W4 the limit is a hang however it is reached: null, why unreadable and one socktable-unavailable', async (t) => {
+  const onItsRead = started(t, { verbs: { 'tcp-table': { hang: true } } })
+  const behindAPs = started(t, { verbs: { ps: { hang: true } } })
+  await behindAPs.ready
+  behindAPs.call('ps', {}, { timeoutMs: 60_000 }).catch(() => {})
+  const silent = { call: () => new Promise(() => {}) } // a client that never rejects either: the lookup's own limit
+  for (const helper of [onItsRead, behindAPs, silent]) {
+    const failures = []
+    const r = await ownerOfSocket({ helper, peer: PEER, budgetMs: 80, waitMs: 60, onFailure: (f) => failures.push(f) })
+    assert.deepEqual([r.pid, r.source, r.why], [null, null, 'unreadable'])
+    assert.deepEqual(failures.map((f) => [f.where, f.code]), [['helper', 'socktable-unavailable']])
+    assert.deepEqual(checkRecord(failures[0]), [])
+  }
+})
+
+test('W4 an answer already in the pipe when the loop comes back past the limit is the answer, not a timeout', async (t) => {
+  const h = started(t, { verbs: { 'tcp-table': { delayMs: 100, data: { rows: [trow(10, 5010)] } } } })
+  await h.ready
+  // blocked from an I/O callback, so the timers run before the next read of the pipe: the order a loop stalled by real work comes back in
+  const stall = async () => { await new Promise((r) => setTimeout(r, 30)); await fs.promises.stat('.'); const end = Date.now() + 600; while (Date.now() < end); }
+  for (let i = 0; i < 3; i++) {
+    const asked = h.call('tcp-table', { localPort: 5010 }, { timeoutMs: 300 }).then((d) => d.rows.length, (e) => e.code)
+    await stall()
+    assert.equal(await asked, 1)
+  }
+  const owner = ownerOfSocket({ helper: h, peer: PEER, budgetMs: 300 })
+  await stall()
+  assert.equal((await owner).pid, 10)
+})
+
+test('W4 a call queued behind a slow one is written when the loop comes back past its wait, not dropped as busy (4.8 §5.3: slowness is no verdict)', async (t) => {
+  const h = started(t, { verbs: { ps: { delayMs: 100, data: { rows: [] } }, 'tcp-table': { data: { rows: [trow(10, 5010)] } } } })
+  await h.ready
+  const stall = async () => { await new Promise((r) => setTimeout(r, 30)); await fs.promises.stat('.'); const end = Date.now() + 600; while (Date.now() < end); }
+  for (let i = 0; i < 3; i++) {
+    const failures = []
+    const first = h.call('ps', {})
+    const owner = ownerOfSocket({ helper: h, peer: PEER, waitMs: 300, onFailure: (f) => failures.push(f) })
+    await stall()
+    await first
+    assert.equal((await owner).pid, 10)
+    assert.deepEqual(failures, [])
+  }
 })
 
 test('W4 a table that cannot be read is null and one socktable-unavailable (a record the closed set knows)', async () => {

@@ -86,7 +86,7 @@ export function taskXml({ user, program, conhost = 'conhost.exe' } = {}) {
     `  <Principals><Principal id="Author"><UserId>${u}</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>`,
     '  <Settings>',
     '    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>',
-    '    <AllowHardTerminate>true</AllowHardTerminate><StartWhenAvailable>true</StartWhenAvailable><ExecutionTimeLimit>PT0S</ExecutionTimeLimit>',
+    '    <AllowHardTerminate>true</AllowHardTerminate><StartWhenAvailable>true</StartWhenAvailable><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><Priority>4</Priority>',
     '    <RestartOnFailure><Interval>PT1M</Interval><Count>999</Count></RestartOnFailure>',
     '  </Settings>',
     `  <Actions Context="Author"><Exec><Command>${xmlText(plain('conhost', conhost, { quoted: true }))}</Command><Arguments>${xmlText(args)}</Arguments></Exec></Actions>`,

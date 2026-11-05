@@ -144,12 +144,13 @@ test('Shift+V redraws the cells within one window height below the visible area 
       return h
     })
     assert.ok(h, 'an open cell far enough down to start below the visible area')
+    await b.page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))) // the window draws for the scroll in its own frame
     const cellsBelow = () => b.page.evaluate((h) => {
       const R = document.querySelector('#ctxwin').getBoundingClientRect()
-      return [...document.querySelectorAll('#ctxwin .cell')].map((c) => ({ ck: c.dataset.ck, mode: c.dataset.mode, below: c.getBoundingClientRect().top - R.bottom })).filter((x) => x.below > 0 && x.below < h)
+      return [...document.querySelectorAll('#ctxwin .cell')].map((c) => ({ bid: c.dataset.bid, mode: c.dataset.mode, below: c.getBoundingClientRect().top - R.bottom })).filter((x) => x.below > 0 && x.below < h)
     }, h)
-    // the same cells afterwards, by their data-ck (a cell drawn shorter in the other mode moves the ones below it up)
-    const modesOf = (cks) => b.page.evaluate((cks) => cks.map((ck) => document.querySelector(`#ctxwin .cell[data-ck="${CSS.escape(ck)}"]`)?.dataset.mode ?? null), cks)
+    // the same cells afterwards, by their bid (a cell drawn shorter in the other mode moves the ones below it up)
+    const modesOf = (bids) => b.page.evaluate((bids) => bids.map((bid) => document.querySelector(`#ctxwin .cell[data-bid="${CSS.escape(bid)}"]`)?.dataset.mode ?? null), bids)
     const before = await cellsBelow()
     assert.ok(before.length > 0 && before.every((c) => c.mode === before[0].mode), 'open cells below the visible area, one mode')
     const want = before[0].mode === 'raw' ? 'read' : 'raw'
@@ -161,7 +162,7 @@ test('Shift+V redraws the cells within one window height below the visible area 
       head.dispatchEvent(new KeyboardEvent('keydown', { key: 'V', shiftKey: true, bubbles: true, cancelable: true }))
     })
     await b.page.evaluate(() => new Promise((r) => { let n = 60; const f = () => (--n ? requestAnimationFrame(f) : r()); requestAnimationFrame(f) }))
-    assert.deepEqual(await modesOf(before.map((c) => c.ck)), before.map(() => want), 'every cell within one height below the visible area is redrawn')
+    assert.deepEqual(await modesOf(before.map((c) => c.bid)), before.map(() => want), 'every cell within one height below the visible area is redrawn')
     assert.deepEqual(b.errors, [])
   } finally { await b.stop() }
 })

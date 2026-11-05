@@ -19,7 +19,8 @@
 // burst races the children it spawns), so they are read again, bounded, and the one holder left is the answer. A table that cannot be read — the helper failed, or hung past `timeoutMs` and was killed — gives
 // null and ONE `socktable-unavailable` record (4.8 §12) to `onFailure`, which the recorder folds. Questions asked at once share reads
 // (`createTableReader`, 4.9 MA13): one exec per connection, unbounded, took 5-18 s per question under a burst on a loaded macOS machine and agents
-// timed out. Imports nothing of trocar but native.mjs.
+// timed out. Imports nothing of trocar but native.mjs and the hang limit of off/exec.mjs.
+import { ASK_HANG_MS } from '../../../off/exec.mjs'
 import { NATIVE, nativePath } from './native.mjs'
 
 /** createTableReader(exec) → exec's shape `(file, args, opts) → Promise<{ code, out, err }>`, with at most one read running at a time. A call while
@@ -40,8 +41,6 @@ export function createTableReader(exec) {
   }
 }
 
-/** How long a hung helper may hold the connection before it is killed and the table counts as unreadable: a hang guard, never a verdict. */
-const TABLE_HANG_MS = 10_000
 /** Several holders on the peer's end: up to this many more reads, this far apart (4.9 §5.3 step 1; a fork-window co-holder is gone within ms). */
 const REREADS = 4, REREAD_MS = 10
 
@@ -60,13 +59,13 @@ export function parseSockTable(text) {
  *  `peer` is the accepted socket's remote end as the engine sees it ({address, port} — `socket.remoteAddress` / `remotePort`): the AGENT's
  *  socket local end. `exec` is the injected runner of the OS's read-only CLIs (`execTool`'s shape on an async runner, so the event loop stays
  *  free while the table is read), asked as `exec(socktablePath, [], { timeoutMs })` → Promise<{ code, out, err }>: `code: 0`
- *  with the table in `out`, `code: null` when the runner killed it at `timeoutMs`, anything else a failure, and a rejection when the tool could
+ *  with the table in `out`, `code: null` when the runner killed it at `timeoutMs` (the door's hang guard, never a verdict) or it never started, `err` then saying which, anything else a failure, and a rejection when the tool could
  *  not be asked at all (or the runner's own exec-closed, which is an operator's close and not a failure). source = 'socket-table' when a pid is
  *  answered, null with the pid. `ms` is what the question cost. A null pid says `why` ('no-row' · 'shared' · 'unreadable'). An answered pid and
  *  'shared' also say `sameUser: true`: the helper lists only this user's processes, so every holder it names is this user's (4.11 P10) — a
  *  proof that stands when the pid's own `ps` cannot answer (a few-second DarkWake). A peer address that is not an IPv4 literal is answered null at once (the
  *  engine's doors bind 127.0.0.1 only, D47: an IPv6 peer cannot be one of the agents' entries). */
-export async function ownerOfSocket({ exec, peer, socktablePath = nativePath(NATIVE.socktable), timeoutMs = TABLE_HANG_MS, now = Date.now, onFailure = () => {} }) {
+export async function ownerOfSocket({ exec, peer, socktablePath = nativePath(NATIVE.socktable), timeoutMs = ASK_HANG_MS, now = Date.now, onFailure = () => {} }) {
   if (!exec || typeof exec !== 'function') throw new TypeError('ownerOfSocket needs the injected exec runner (execTool\'s shape, async)')
   if (!peer || !Number.isInteger(peer.port)) throw new TypeError('ownerOfSocket: peer.port is required')
   const t0 = now()
@@ -83,7 +82,7 @@ export async function ownerOfSocket({ exec, peer, socktablePath = nativePath(NAT
       return unavailable(e && e.message ? e.message : String(e))
     }
     if (answer == null || typeof answer !== 'object') return unavailable('the runner answered nothing')
-    if (answer.code === null) return unavailable(`socktable did not answer within ${timeoutMs} ms and was killed`)
+    if (answer.code === null) return unavailable(answer.err || `socktable did not answer within ${timeoutMs} ms and was killed`)
     if (answer.code !== 0) return unavailable(`socktable exited with ${answer.code}${answer.err ? `: ${answer.err}` : ''}`)
     const holders = new Set()
     for (const r of parseSockTable(answer.out)) if (r.laddr === addr && r.lport === peer.port && r.pid > 0 && r.pid !== process.pid) holders.add(r.pid) // the engine's accepted socket names the peer as its FOREIGN end and is never a holder; the pid exclusion is belt and braces
