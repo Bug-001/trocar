@@ -165,7 +165,9 @@ While it runs those agents are not captured (their connections still work), and 
 replaced the way `uninstall` stops it: a response still on its way gets up to 30 s to finish (the update goes on as soon
 as it has), then the old collector cuts the rest (a call left open, such as a WebSocket) and stops itself cleanly, so the
 new one does not report that the previous one ended without a clean stop. The rows of what it cut, and its stop record,
-say that `update` (or `uninstall`) stopped it. An update that stops half way leaves a note
+say that `update` (or `uninstall`) stopped it. An agent that is on while the collector is replaced (an update with only the
+collector to replace, or `trocar install` from another copy) stays captured: its new connections during those 30 s are
+decrypted and recorded as usual. An update that stops half way leaves a note
 behind: run `trocar update` again and it goes on from where it stopped.
 
 A copy installed with the script updates with the same `trocar update`, or by running the install line again: it
@@ -435,7 +437,7 @@ agent group, loopback only, no TUN, never the system proxy, nothing written into
   itself stays up with its doors closed — the same idle state as right after a login, so the next `on` is a door
   opening (about 0.2 s) and not a daemon start. On Linux `off` drains what it was relaying and the daemon exits.
 - *macOS*: the autostart unit is the LaunchAgent `com.trocar.collector` in `~/Library/LaunchAgents` (`RunAtLoad` +
-  `KeepAlive` — logout stops it). *Windows*: a scheduled task run by a supervisor that re-pulls the daemon. `install`
+  `KeepAlive` — logout stops it — and `ProcessType` `Interactive`, because agent connections wait on it). *Windows*: a scheduled task run by a supervisor that re-pulls the daemon. `install`
   registers the entry and `uninstall` removes it; `on` and `off` leave it alone, so on and off both survive a reboot.
 
 What it keeps (D40): for a trusted agent it decrypts **every** host it talks to by default (policy `all`), not just the
