@@ -337,11 +337,10 @@ test('off on darwin with the manifest gone: --yes takes the door value out (undo
 
 // D55① with the manifest gone: the certificate carriers are `install`'s, so `off --yes` undoing by trocar's marks leaves every one of them byte for
 // byte (4.6 §安装清单与卸载: 证书块、合并包、信任插件与 CA 按标记撤销也不碰), while what `on` wrote still goes. The carriers are every install-phase item
-// the real install recorded, on Linux (installCollector) and on macOS (runInstall, every harness present) — except the Kimi shim and its rc line,
-// which 4.6's Kimi row and its uninstall step 4 put with `on`.
+// the real install recorded, on Linux (installCollector) and on macOS (runInstall, every harness present), the Kimi shim and its rc line among them.
 const { itemsOfPhase, readManifest } = await import('../../src/off/manifest.mjs')
 const quietDeps = (platform) => ({ platform, exec: () => ({ status: 1, stdout: '', stderr: 'no tool here' }), procs: async () => [], sleep: async () => {} })
-const carriersOf = (dir) => [...new Set(itemsOfPhase(readManifest(dir), 'install').filter((x) => x.harness && x.role !== 'shim' && x.format !== 'line').map((x) => x.path))]
+const carriersOf = (dir) => [...new Set(itemsOfPhase(readManifest(dir), 'install').filter((x) => x.harness).map((x) => x.path))]
 const bytesOf = (files) => Object.fromEntries(files.map((f) => [f, fs.existsSync(f) ? fs.readFileSync(f, 'latin1') : null]))
 for (const os of ['linux', 'darwin']) {
   test(`${os}: off --yes with the manifest gone leaves every install-phase certificate carrier byte for byte; what on wrote goes`, async () => {
@@ -373,7 +372,6 @@ for (const os of ['linux', 'darwin']) {
     const but = (f, t) => (f === onFile && t != null ? without(t, onKeys) : t) // the file that also holds on's door: every byte but its keys
     assert.deepEqual(carriers.filter((f) => but(f, after[f]) !== but(f, before[f])), [], 'changed by off')
     if (onFile) onKeys.forEach((k) => assert.equal(valueAt(parseJsonText(read(onFile)), k), undefined, `${k.join('.')} (on's) is undone`))
-    else assert.ok(!fs.existsSync(path.join(home, '.trocar', 'collector', 'bin', 'kimi')), 'the Kimi shim (4.6: on\'s) goes')
   })
 }
 // lostManifest, the manifest kept for the caller to read first
@@ -382,4 +380,31 @@ async function lostManifestKeep() {
   const sh = sevenHomes(home)
   await installCollector({ home, env: { HOME: home }, osName: 'linux', harnesses: await loadHarnesses(), freePort: async () => 47011, scan: async () => [], roots })
   return { home, sh, dir: path.join(home, '.trocar', 'collector') }
+}
+
+// Linux, the record lost: the Kimi launch shim and its rc PATH line are install's (4.6 Kimi row, D55①), in whichever rc file holds the installer's line.
+// `off --yes` leaves both byte for byte; `uninstall`'s marker undo (both phases) takes them, and the rc file is as it was before install.
+for (const rcName of MARKER_PATHS['kimi-code'].filter((x) => x.how === 'line').map((x) => x.file)) {
+  test(`linux, ${rcName}: off by marker leaves the Kimi shim and rc line byte for byte; uninstall by marker takes them`, async () => {
+    const { runOff } = await import('../../src/off/orchestrate.mjs')
+    const home = tmpDir('trocar-marker-kimi-')
+    sevenHomes(home)
+    fs.rmSync(path.join(home, '.bashrc'))
+    const rc = path.join(home, rcName), shim = path.join(home, '.trocar', 'collector', 'bin', 'kimi')
+    const original = '# kimi-code\nexport PATH="$HOME/.kimi-code/bin:$PATH"\n'
+    fs.writeFileSync(rc, original)
+    await installCollector({ home, env: { HOME: home }, osName: 'linux', harnesses: (await loadHarnesses()).filter((d) => d.name === 'kimi-code'), freePort: async () => 47011, scan: async () => [], roots })
+    const dir = path.join(home, '.trocar', 'collector')
+    const before = bytesOf([rc, shim])
+    assert.ok(before[shim] != null && before[rc] !== original, 'install wrote the shim and the rc line')
+    fs.rmSync(manifestPath(dir))
+    assert.deepEqual(planByMarker({ home, env: { HOME: home }, platform: 'linux', ids: ['kimi-code'] }), [], 'off plans nothing for Kimi')
+    const { exit } = await runOff({ home, env: { HOME: home }, yes: true, deps: quietDeps('linux') })
+    assert.equal(exit, 0)
+    assert.deepEqual(bytesOf([rc, shim]), before, 'off left both')
+    const plan = planByMarker({ home, env: { HOME: home }, ids: ['kimi-code'], ...UNINSTALL })
+    assert.deepEqual(plan.map((p) => [p.path, p.how]), [[rc, 'line'], [shim, 'owned-file']])
+    assert.deepEqual(undoByMarker(plan, { home }).map((r) => r.result), ['undone-by-marker', 'undone-by-marker'])
+    assert.deepEqual([read(rc), fs.existsSync(shim)], [original, false])
+  })
 }
