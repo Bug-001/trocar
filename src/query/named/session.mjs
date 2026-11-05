@@ -504,8 +504,8 @@ async function advance(ctx, id, { budgetMs, request }) {
   store.work += store.rows.size - had;
   persisted(ctx, exErrors, id);
   errors.push(...exErrors);
-  // a background slice: extraction has half of it, the fold at least the other half, so the frontier moves from the first slice
-  const foldMs = held ? 0 : request ? budgetMs : Math.max(budgetMs / 2, budgetMs - (performance.now() - t0));
+  // a background slice: extraction has half of it, the fold at least the other half, so the frontier moves from the first slice, whatever the budget
+  const foldMs = held ? 0 : request ? budgetMs : Math.max(1, budgetMs / 2, budgetMs - (performance.now() - t0));
   // a block's text read back for a cache-break detail, or BlockUnread with a BLOCK_PROBLEMS code; a definition's ref names a record
   // this store extracted (a stitched block's too: extraction stitches from the store's own rows), so a member's
   // within the slice the records read back stay by id, their stored bytes at most CHUNK_STORED, the least recently used first out
@@ -589,7 +589,7 @@ export async function extendSession(ctx, id, budgetMs) {
     else if (stops.delete(s.id)) putHead(ctx, s); else headAt(ctx, s); // a stop is cleared at once
   }
   releaseParts(); // folded to its frontier: between calls the worker holds no decoded part (3.5:40 ⑤)
-  return writing && !!s.pending; // what came during the write is folded next
+  return writing && !!s.files && !!s.pending; // what came during the write is folded next; a write that failed ends the turn
 }
 
 // The head file (3.5 §谁执行它「答案文件」): the worker writes it at the end of a request or background slice of the session when the
