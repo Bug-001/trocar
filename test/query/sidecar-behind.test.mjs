@@ -46,9 +46,9 @@ function saying(home, id, members) {
   const d = readHead(home, id), rid = String(d.mark).replace(/@.*$/, '')
   const calls = new Set()
   for (const n of answerNames(home, id)) for (const l of textOf(home, id, n).split('\n')) if (l.startsWith('{"c":')) calls.add(JSON.parse(l).c.rid)
-  return { mark: members.findIndex((r) => String(r.id) === rid) + 1, steps: d.steps, packs: d.packs.length, calls: calls.size, tier: d.tier, statCalls: d.stats.calls, done: d.pending ? d.pending.done : null }
+  return { mark: members.findIndex((r) => String(r.id) === rid) + 1, steps: d.steps, packs: d.packs.length, calls: calls.size, tier: d.tier, statCalls: d.stats.calls, done: d.pending ? d.pending.done : members.findIndex((r) => String(r.id) === rid) + 1 }
 }
-const atLeast = (now, was, where) => { for (const k of ['tier', 'mark', 'steps', 'packs', 'calls', 'statCalls']) assert.ok(now[k] >= was[k], `${where}: ${k} fell from ${was[k]} to ${now[k]}`) }
+const atLeast = (now, was, where) => { for (const k of ['tier', 'mark', 'steps', 'packs', 'calls', 'statCalls', 'done']) assert.ok(now[k] >= was[k], `${where}: ${k} fell from ${was[k]} to ${now[k]}`) }
 
 const SIDECARS = ['extract.idx', 'fold.idx']
 const sidecarsOf = (home, id) => SIDECARS.map((n) => [n, fs.readFileSync(path.join(sessionDir(home, id), n))])
@@ -71,13 +71,20 @@ for (const [axis, asks] of [['background slices alone', false], ['a request betw
     const check = (where) => atLeast(saying(home, id, members), was, where)
     const f = Object.assign(Object.create(fs), { renameSync: (a, b) => { fs.renameSync(a, b); if (/head|\.gz$|open\./.test(path.basename(b))) check(`after ${path.basename(b)}`) } })
     const ctx = { home, fs: f, writer: true }
-    let slices = 0
+    let slices = 0, held = 0
     for (;;) {
       const more = await extendSession(ctx, id, 20)
       check(`slice ${++slices}`)
       if (!more) break
-      if (asks) { await runQuery('session', { id }, ctx); check(`the request after slice ${slices}`) }
+      if (!asks) continue
+      const { mark } = await runQuery('session', { id }, ctx)
+      check(`the request after slice ${slices}`)
+      if (members.findIndex((r) => String(r.id) === String(mark)) + 1 >= was.mark) continue
+      held++ // the fold is behind the files: they are the answer
+      assert.equal((await runQuery('lane', { id, pack: '0.main' }, ctx)).$text, textOf(home, id, 'p0.main.ndjson.gz'), 'lane --pack is the file on disk')
+      assert.equal((await runQuery('lane', { id, tail: 'main' }, ctx)).$text, textOf(home, id, 'open.main.ndjson'), 'lane --tail is the file on disk')
     }
+    assert.equal(held > 0, asks, 'a request came while the fold was behind')
     saveIndexes() // the head a mark alone did not make due (3.5 答案文件): `fold` below ends on the same save
     const other = homeOf()
     fs.cpSync(path.join(home, 'raw'), path.join(other, 'raw'), { recursive: true })

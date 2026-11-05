@@ -95,9 +95,9 @@ export function tier0Doc(id, members, errors, title = null) {
   });
 }
 
-/** seenOf(d) → what a `pending` built on head `d` says of it (3.5 `seen`): `{seen: true}` on a whole answer, a tier-1 head of this CTX_V with
- *  no `pending` or with one that has `seen`; else null. Every `pending` a head or answer carries asks here. */
-export const seenOf = (d) => (d && d.v === CTX_V && d.tier === 1 && (!d.pending || d.pending.seen) ? { seen: true } : null);
+/** seenOf(d, reading) → what a `pending` built on head `d` says of it (3.5 `seen`): `{seen: true}` on a whole answer, a tier-1 head of this
+ *  CTX_V with no `pending`, with one that has `seen`, or being re-read (`reading`); else null. Every `pending` a head or answer carries asks here. */
+export const seenOf = (d, reading = false) => (d && d.v === CTX_V && d.tier === 1 && (reading || !d.pending || d.pending.seen) ? { seen: true } : null);
 /** markDone(d, members) → the members at or below the mark of head `d`. */
 export function markDone(d, members) {
   const rid = d.mark == null ? null : String(d.mark).replace(/@.*$/, ''); // a cut's mark is `rid@cut` (named/session.mjs markOn)

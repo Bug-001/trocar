@@ -146,8 +146,19 @@ test('3.5 重读 ①: with its head gone a `--since` and a `--head` answer at th
   stale(home, id)
   await extendSession(ctx, id, 1)
   for (const n of [headFile(home, id), headFile(home, id, true)]) fs.rmSync(n, { force: true })
-  assert.notEqual((await runQuery('session', { id, since: M }, ctx)).mark, M)
+  const a = await runQuery('session', { id, since: M }, ctx)
+  assert.notEqual(a.mark, M)
+  assert.ok(a.pending && !('seen' in a.pending), 'a deleted head is a first read')
   assert.equal((await runQuery('session', { id, head: '' }, ctx)).tier, 1)
+})
+
+test('3.5 `stopped`: a stop in a re-read keeps its `seen` and its `read`', async () => {
+  const home = homeOf(), { id } = sessionIn(home), ctx = await inReread(home, id), { read } = readHead(home, id).pending
+  let fail = true
+  const failing = { ...fs, openSync: (f, ...a) => { if (fail && String(f).includes(`${path.sep}ctx${path.sep}`)) { fail = false; throw new Error('injected: the projection could not be read') } return fs.openSync(f, ...a) } }
+  await assert.rejects(extendSession({ ...ctx, fs: failing }, id, 1))
+  const p = readHead(home, id).pending
+  assert.deepEqual([p.stopped?.code, p.seen, p.read], ['fold-failed', true, read])
 })
 
 test('#43: a re-read of a head that had pending says done at the old head\'s mark, not the old pending\'s done', async () => {

@@ -32,21 +32,21 @@ const STALL = 60_000
 // members past the frontier, no write in flight (which holds the fold, 3.5 后台抽取与归约), and did not move it.
 const DRIVER = `
 await import(${at('../../src/query/named/index.mjs')})
-const { extendSession, saveIndexes, version } = await import(${at('../../src/query/named/session.mjs')})
+const { extendSession, saveIndexes, sessionState, version } = await import(${at('../../src/query/named/session.mjs')})
 const { bigSession } = await import(${at('./big-session.mjs')})
 const { indexRows, sessionGroups } = await import(${at('../../src/query/rows.mjs')})
-const { readHead } = await import(${at('../../src/query/ctx-files.mjs')})
+const { readHead, writeInFlight } = await import(${at('../../src/query/ctx-files.mjs')})
 const [home, id, ms, late, drips, gap] = [process.argv[1], process.argv[2], ...process.argv.slice(3).map(Number)]
 const s = late > 0 ? bigSession({ home, wire: 'http', ...${JSON.stringify(SHAPE)} }) : null
 if (s) s.append(${CALLS} - late)
-const key = async () => JSON.parse((await version({ home, writer: true, params: { id } })).key)
-const frontier = async () => (await key())[1]
+const frontier = async () => JSON.parse((await version({ home, writer: true, params: { id } })).key)[1]
+const log = s && (await sessionState({ home, writer: true }, id)).st.log
 const last = async () => String(sessionGroups(await indexRows({ home, errors: [] })).get(id).at(-1).id)
 const head = () => readHead(home, id)
 let t = 0, added = 0, since = 0
 const progress = () => { const n = Date.now(); if (n - t > 200) { t = n; process.stdout.write('.\\n') } }
 for (let more = true; more;) {
-  const was = s && await frontier(), left = s && was !== await last() && !(await key())[4]
+  const was = s && await frontier(), left = s && was !== await last() && !writeInFlight(log)
   more = await extendSession({ home, writer: true, progress }, id, ms)
   process.stdout.write(more ? '1\\n' : '0\\n')
   const h = head()

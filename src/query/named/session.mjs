@@ -585,7 +585,8 @@ export async function extendSession(ctx, id, budgetMs) {
     }
   } else {
     if (s.files) writeFails.delete(s.id);
-    if (stops.delete(s.id)) putHead(ctx, s); else headAt(ctx, s); // a stop is cleared at once
+    if (s.mark != null && !s.files) backlog(ctx, s.id, r); // a write that failed: no head lists what is not on disk, only `pending` moves
+    else if (stops.delete(s.id)) putHead(ctx, s); else headAt(ctx, s); // a stop is cleared at once
   }
   releaseParts(); // folded to its frontier: between calls the worker holds no decoded part (3.5:40 ⑤)
   return writing && !!s.pending; // what came during the write is folded next
@@ -641,7 +642,7 @@ function backlog(ctx, id, { st, plan, members, indexErrors }) {
   if (!re && behind(ctx, id, read, st.log, members)) return; // a stop stands with it, until the fold is past it
   const was = shown.get(id), cleared = stops.delete(id), total = members.length, calls = callsPast(plan, reachOf(ctx, id, st.log, members));
   if (!cleared && was && was.called === calls > 0 && Math.floor(was.read / PACK_MEMBERS) === Math.floor(read / PACK_MEMBERS) && hasHead(home, id, fs)) return;
-  const pending = (d) => (re && d.tier === 1 ? { done: markDone(d, members), total, seen: true, calls, read } : { done: read, total, ...seenOf(d), calls });
+  const pending = (d) => (re && d.tier === 1 ? { done: markDone(d, members), total, ...seenOf(d, true), calls, read } : { done: read, total, ...seenOf(d), calls });
   try { writeHead(home, id, pendingHead(home, id, members, indexErrors, pending, fs, titleOf({ home, fs, id, members })), fs); } catch { if (cleared) stops.add(id); return; } // tried again next slice
   shown.set(id, { read, called: calls > 0 });
   heads.set(id, { sig: JSON.stringify(['pending', read]), shape: null });
@@ -658,17 +659,17 @@ function headAt(ctx, s) {
 const behind = (ctx, id, read, log, members) => read < reachOf(ctx, id, log, members) && readHead(ctx.home ?? trocarHome(), id, ctx.fs || nodeFs)?.tier === 1;
 /** stands(ctx, s) → whether the answer on disk stands, whatever the state `s`: while the session is re-read, and while its fold is behind the files. */
 export const stands = (ctx, s) => rereading(ctx, s.id) || (ctx.writer === true && behind(ctx, s.id, s.mark == null ? 0 : s.pos(s.mark) + 1, s.V.log, s.rows));
-/** files(ctx, s) → a request's turn at the answer files, one slice (ctx.filesMs in a test; what is left goes on in the background): whether
- *  they stand at the state `s`, so a head of it may be written. */
+/** files(ctx, s) → a request's turn at the answer files: toState(), or nothing while the answer on disk stands; whether they are at the
+ *  state `s`, so a head of it may be written. */
 export function files(ctx, s) {
   if (stands(ctx, s)) return false;
-  toState(ctx, s, performance.now() + (ctx.filesMs ?? SLICE_MS));
+  toState(ctx, s);
   return ctx.writer !== true || s.mark == null || !!s.files;
 }
 // false while the session's pack and tail files are short of the state `s` at `deadline` (the next slice goes on: ctx-files.mjs
 // writeFiles), else true: brought to it (the worker only), their `packs` / `open` kept on `s` for its head; a write that failed, or a render
 // that threw, is writeFailed's and is done afresh at the session's next turn.
-function toState(ctx, s, deadline) {
+function toState(ctx, s, deadline = Infinity) {
   if (ctx.writer !== true || s.mark == null) return true;
   try { s.files = writeFiles({ home: ctx.home ?? trocarHome(), fs: ctx.fs || nodeFs }, s, deadline); } catch (e) { forget(s.V.log); writeFailed(ctx, s.id, e); return true; }
   if (s.files && s.pending) s.pending.calls = callsPast(s.plan, reachOf(ctx, s.id, s.V.log, s.rows)); // they reach further now
@@ -744,7 +745,7 @@ function stateAt(ctx, r, id, reading = false) {
   for (let i = done; !above && i < members.length; i++) above = inCut(plan, members[i]);
   const home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs, said = titleOf({ home, fs, id, members, errors });
   V.meta = { ...V.meta, ...said };
-  const pending = above || reading ? { done, total: members.length, work: st.store.work, ...(reading ? { seen: true } : seenOf(readHead(home, id, fs))), calls: callsPast(plan, reachOf(ctx, id, st.log, members)), ...(reading ? { read: done } : null) } : null;
+  const pending = above || reading ? { done, total: members.length, work: st.store.work, ...seenOf(readHead(home, id, fs), reading), calls: callsPast(plan, reachOf(ctx, id, st.log, members)), ...(reading ? { read: done } : null) } : null;
   return { id, rows: members, store: st.store, mark, pending,
     title: headTitle(ctx, id, said), truncated: plan.bound, V, failed: V.failed, errors, indexErrors, st, plan, pos: (rid) => posOf(plan, rid), cut: (row) => inCut(plan, row) };
 }
@@ -758,8 +759,8 @@ export async function version(ctx) {
   const members = sessionGroups(rows).get(String(p.id));
   if (!members) return null;
   const k = keyOf(ctx, p.id), store = storeOf(ctx, String(p.id), k), plan = planOf(members, k, store, p.id);
-  // a re-read and a write in flight answer off the disk at one frontier: neither's answer may be kept past it
-  return { key: JSON.stringify([plan.key, frontiers.get(k) ?? null, plan.bound, rereading(ctx, String(p.id)), writeInFlight(fileLogs.get(store)?.log)]), errors };
+  // a re-read answers off the disk at one frontier: its answer may not be kept past the switch
+  return { key: JSON.stringify([plan.key, frontiers.get(k) ?? null, plan.bound, rereading(ctx, String(p.id))]), errors };
 }
 
 const one = (v) => (v == null || v === '' ? null : String(v));
@@ -779,7 +780,7 @@ function thenOf(s, M) {
 }
 
 const headKept = (ctx, id) => readHead(ctx.home ?? trocarHome(), id, ctx.fs || nodeFs);
-// the head a request answers while the disk's stands or the files are short of the state: the file, else the tier-0 head (never a head that lists what is not on disk)
+// the head a request answers while the disk's stands or a write failed: the file, else the tier-0 head (never a head that lists what is not on disk)
 const headStanding = (ctx, s) => pendingHead(ctx.home ?? trocarHome(), s.id, s.rows, s.indexErrors, (d) => d.pending, ctx.fs || nodeFs, s.title);
 export async function run(ctx) {
   const { params: p, errors } = ctx;

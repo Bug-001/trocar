@@ -132,30 +132,45 @@ function listedThere(home, id, where) {
 }
 const REQUESTS = { 'session --head': (c, id) => runQuery('session', { id, head: '' }, c), session: (c, id) => runQuery('session', { id }, c), 'lane --tail': (c, id) => runQuery('lane', { id, tail: 'main' }, c) }
 
+// A write that fails for real: the rename of the last pack's file, which the rest of the head's list leads up to.
+const noRoom = { ...fs, renameSync: (a, b) => { if (path.basename(b) === 'p1.main.ndjson.gz') throw Object.assign(new Error('no space left'), { code: 'ENOSPC' }); fs.renameSync(a, b) } }
+
+test('3.5 答案文件: a write that fails in a background slice leaves a head that lists only what is on disk, clears a stop, and the next turn ends on the bytes of a run it never failed', async () => {
+  const hit = homeWith(1100), whole = homeWith(1100), { home, id, ctx } = hit
+  let fail = true
+  const unread = { ...fs, openSync: (f, ...a) => { if (fail && String(f).includes(`${path.sep}ctx${path.sep}`)) { fail = false; throw new Error('injected: the projection could not be read') } return fs.openSync(f, ...a) } }
+  await assert.rejects(extendSession({ ...ctx, fs: unread }, id, 1))
+  assert.ok(readHead(home, id).pending.stopped, 'stopped')
+  assert.equal(await extendSession({ ...ctx, fs: noRoom }, id, Infinity), false)
+  assert.ok(!fs.existsSync(packFile(home, id, 1, 'main')), 'the write failed')
+  listedThere(home, id, 'after the failed write')
+  const d = readHead(home, id)
+  assert.ok(d.pending && !d.pending.stopped, 'a pending head, the stop gone')
+  await toTheEnd(ctx, id)
+  await toTheEnd(whole.ctx, whole.id)
+  listedThere(home, id, 'after the next turn')
+  assert.equal(readHead(home, id).pending, null)
+  sameFiles(hit, whole, 'after a failed write')
+})
+
 for (const [name, ask] of Object.entries(REQUESTS)) {
-  test(`3.5 后台抽取与归约: \`${name}\` with its deadline already passed writes what a slice covers, the head never lists what is not on disk, and the background ends on the bytes of an uncut run`, async () => {
-    const cuts = homeWith(1100), whole = homeWith(1100), late = { ...cuts.ctx, filesMs: 0 }
-    await folded(cuts.ctx, cuts.id)
-    await ask(late, cuts.id)
-    assert.ok(!fs.existsSync(packFile(cuts.home, cuts.id, 1, 'rest')), 'the request stopped short of the last pack')
-    for (let i = 1, more = true; more; i++) {
-      await ask(late, cuts.id)
-      listedThere(cuts.home, cuts.id, `after request ${i}`)
-      more = await extendSession(cuts.ctx, cuts.id, 2)
-      listedThere(cuts.home, cuts.id, `after slice ${i}`)
-    }
-    await toTheEnd(whole.ctx, whole.id)
-    sameFiles(cuts, whole, 'cut requests')
-    assert.deepEqual(textsOf(cuts, (n) => !n.startsWith('open.')), textsOf(whole, (n) => !n.startsWith('open.')))
+  test(`3.5 答案文件: a write that fails in \`${name}\` leaves a head that lists only what is on disk`, async () => {
+    const { home, id, ctx } = homeWith(1100)
+    await folded(ctx, id)
+    await ask({ ...ctx, fs: noRoom }, id)
+    assert.ok(!fs.existsSync(packFile(home, id, 1, 'main')), 'the write failed')
+    listedThere(home, id, 'after the failed write')
   })
 }
 
-test('3.5 后台抽取与归约: the files cut short, `lane --tail` gives the document the file holds once written', async () => {
-  const { id, ctx } = homeWith(700), late = { ...ctx, filesMs: 0 }
-  await folded(ctx, id)
-  const cut = (await runQuery('lane', { id, tail: 'main' }, late)).$text
+test('3.5 归约前沿: the head a write ends with counts in `calls` what lies past the tails it wrote, not past those before it', async () => {
+  const { home, id, a, ctx } = homeWith(300, { growth: 120 }) // every call in order: `late` holds some back
   await toTheEnd(ctx, id)
-  assert.equal(cut, (await runQuery('lane', { id, tail: 'main' }, ctx)).$text)
+  a.append(40)
+  cut(ctx, await folded(ctx, id), 1)
+  a.append(2)
+  await extendSession(ctx, id, Infinity)
+  assert.equal(readHead(home, id).pending.calls, 2)
 })
 
 // The columns as they read: a lane by its key (its int is only the order it was met in), slots with no row left out, the live lanes as a set.
