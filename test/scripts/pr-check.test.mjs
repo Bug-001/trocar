@@ -1256,7 +1256,8 @@ const OPAQUE = {
   'bytes that do not decode': () => kept({}, prompt('x'), 'zstd'),
   'a kept reply whose coding was not recorded': () => reply(CHAT, unnamed),
   'a WebSocket message that did not decompress': () => wsCall([{ b64: 'AAAA', decode_error: 'no' }]),
-  'a stream no wire claims': () => wireless(stored(events([{ x: 1 }]))),
+  'a stream no wire claims, cut into events': () => wireless(stored(events([{ x: 1 }, { x: 2 }]))),
+  'one event of a stream no wire claims, its data cut over lines': () => wireless(stored('data: one\ndata: two\n\n')),
   'a line that is not JSON': () => `{"ts":"${NOW_THEN}","cut`,
   'a reply streamed as NDJSON deltas': () => reply(CHAT, shapeResponse({ status: 200, headers: [['content-type', 'application/x-ndjson']], body: Buffer.from('{"delta":"a"}\n{"delta":"b"}\n') })),
   'a reply streamed as JSON lines of another name': () => reply(CHAT, shapeResponse({ status: 200, headers: [['content-type', 'application/stream+json']], body: Buffer.from('{"delta":"a"}\n{"delta":"b"}\n') })),
@@ -1288,6 +1289,21 @@ test('AN30: a reply that is no stream is not opaque, whatever else it is', () =>
   const { code, doc } = w.check()
   assert.equal(code, 0, JSON.stringify(doc.findings))
   assert.equal(doc.coverage.opaque_bytes, 0)
+})
+
+test('AN30: a stream no wire claims in one event has all of it on the line: it is compared there, and it is not opaque', () => {
+  const whole = (text) => wireless(stored(`event: message\n${events([{ jsonrpc: '2.0', id: 1, result: { content: [{ type: 'text', text }] } }])}`))
+  const w = workspace()
+  w.commit({ 'a.txt': `${ascii(59, 1)}\n` })
+  const file = capture(w, SEGMENT, [whole(ascii(59, 1))])
+  const { code, doc } = w.check()
+  assert.equal(code, 0, JSON.stringify(doc.findings))
+  assert.equal(doc.coverage.scanned_bytes, fs.statSync(file).size)
+
+  const shared = workspace()
+  shared.commit({ 'a.txt': `${ascii(60, 1)}\n` })
+  capture(shared, SEGMENT, [whole(ascii(60, 1))])
+  assert.deepEqual(shared.check().doc.findings.map((f) => f.rule), ['captured-text'])
 })
 
 const attached = (bytes) => JSON.stringify({ ...JSON.parse(envLine({ ts: NOW_THEN })), req_body: JSON.stringify({ messages: [{ content: [{ source: { type: 'base64', data: bytes.toString('base64') } }] }] }) })
