@@ -7,6 +7,7 @@ import { probe, withBoard, serveWorld, stats, timed, timerReads, DESK_NEXT } fro
 import { world } from '../desk-world.mjs'
 import { INTERVAL } from '../../../web/legacy/core/poll.mjs'
 import { BOARD_LINES } from '../perf-lines.mjs'
+import { DESK_KEY } from '../../../web/legacy/replay/cell.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
@@ -130,7 +131,8 @@ test('2.3 #43 · D64②: ←/→ onto a step whose reply is 20,000 characters of
   })
   assert.ok(word.size >= 8, 'the world has steps with a reply')
   for (const t of text.values()) assert.ok(t.length > 19500 && t.length <= 20000, `the reply is ${t.length} characters`)
-  const b = await withBoard({ bytes: 1e5, chromium: gate.chromium })
+  // the line is for Readable's markdown: the desk opens in it (the stored desk mode; Raw is the default, D70)
+  const b = await withBoard({ bytes: 1e5, chromium: gate.chromium, setup: (page) => page.addInitScript((k) => { localStorage.setItem(k, 'read') }, DESK_KEY) })
   try {
     const { page } = b
     await serveWorld(page, w)

@@ -72,7 +72,7 @@ export function replyOf({ row, reply, detail } = {}) {
 // what a proven row reads out: Readable shows no bytes, so it is no 逐字; a body back with no view is Raw (2.3 §保真标)
 function provenWord(b) {
   const got = b.text_ref ? bodyCache.get(b.text_ref) : null
-  return modeOf(b.bid) === 'raw' || (got?.status === 'ok' && !viewIn(b, got)) ? 'verbatim' : 'reading'
+  return modeOf(b.bid) === 'raw' || (got?.status === 'ok' && !viewIn(cellOf(b), got)) ? 'verbatim' : 'reading'
 }
 /** What a request row says about itself. `sr` is the FF_WORD key only a screen reader hears, or null. `open`: the row is open (an opened body that came back unproven outranks the
  * metadata's claim); `prevKeys`: the 内容对比步's content keys (null: no 「新」); `windowLine`: the window line is up.

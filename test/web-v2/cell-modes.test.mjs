@@ -3,7 +3,7 @@
 // degrades to Readable when storage fails, and the cell keys are a pure function of the key event. No DOM; storage is a fake.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { cellOf, cellBodyHtml, modeOf, setMode, bodyCache, overrideScope, clearOverrides } from '../../web/legacy/replay/cell.mjs'
+import { cellOf, cellBodyHtml, modeOf, setMode, bodyCache, overrideScope, clearOverrides, onlyMode, wireCells } from '../../web/legacy/replay/cell.mjs'
 import { cellKey, keyAction } from '../../web/legacy/replay/keymap.mjs'
 
 const CELL = new URL('../../web/legacy/replay/cell.mjs', import.meta.url).href
@@ -67,4 +67,31 @@ test('the cell keys are a pure function of the key event, and the desk keys igno
   for (const [e, want] of cases) { assert.deepEqual(cellKey(e), want); assert.deepEqual(cellKey({ ...e }), want, 'same input, same output') }
   for (const mod of ['ctrlKey', 'metaKey', 'altKey']) for (const key of ['v', 'V', 'c']) assert.equal(cellKey({ key, [mod]: true }), null)
   for (const key of ['v', 'V', 'c']) assert.equal(keyAction({ key }, { at: 0, n: 5, problems: [] }), null)
+})
+
+test('2.3 §两种模式: a non-block cell is Raw only, whatever view its answer carries; a block with one has both', () => {
+  const view = { r: { as: 'text', f: { body: ['text'] } }, body: { text: 'abc' } }
+  const key = cellOf({ key: 'req', ref: 'r1::req.raw::0-5', chars: 5 }), def = cellOf({ sec: 'messages', role: 'user', kind: 'text', text_ref: 'r1::req.raw::5-8', chars: 3 })
+  assert.equal(onlyMode(key, { status: 'ok', text: '"abc"', view }), 'raw')
+  assert.equal(onlyMode(def, { status: 'ok', text: '"abc"', view }), null)
+})
+
+// jsdom is a devDependency and plain `npm test` needs none (D75③, 0.1 §3): without it the test skips and says why
+const jsdom = await import('jsdom').catch(() => null)
+test('2.3 #19: `v` on a Raw-only cell leaves its mode as it is', { skip: jsdom ? false : 'jsdom is not installed (a devDependency: npm ci installs it)' }, (t) => {
+  const { window } = new jsdom.JSDOM('<!doctype html><body></body>')
+  t.after(() => window.close())
+  Object.assign(globalThis, { document: window.document, NodeFilter: window.NodeFilter, MutationObserver: window.MutationObserver, getComputedStyle: (el) => window.getComputedStyle(el) })
+  globalThis.IntersectionObserver = class { observe() {} unobserve() {} disconnect() {} }
+  const ref = 's/main#r5::0-5'
+  bodyCache.set(ref, { status: 'ok', text: 'bytes' }) // the answer has no view: Raw only
+  const cell = cellOf({ sec: 'messages', role: 'user', kind: 'text', text_ref: ref, chars: 5 }), before = modeOf(cell.bid)
+  const root = document.createElement('div')
+  document.body.append(root)
+  root.innerHTML = `<div class="cblk" tabindex="0">${cellBodyHtml(cell, 'raw')}</div>`
+  t.after(wireCells(root, { storage: memStorage() }))
+  assert.ok(root.querySelector('.cell[data-only]'), 'the cell is drawn Raw only')
+  root.querySelector('.cblk').dispatchEvent(new window.KeyboardEvent('keydown', { key: 'v', bubbles: true }))
+  assert.equal(modeOf(cell.bid), before)
+  assert.equal(root.querySelector('.cell').dataset.mode, 'raw')
 })

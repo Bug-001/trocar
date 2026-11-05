@@ -12,6 +12,7 @@ import { layout } from './jsonlay.mjs'
 import { renderKind, jsonNodeHtml, get, textOf, noteOf } from './kinds.mjs'
 import { cellKey } from './keymap.mjs'
 import { isTyping } from '../core/keys.mjs'
+import { BODY } from '../../../src/view/render-kind.mjs'
 
 export const DISPLAY_CLIP = 20000
 export const CELL_CAP = 2000000 // characters a cell shows at most; the copy button still copies all
@@ -95,7 +96,7 @@ export const isRetryable = (got) => !!got && got.status === 'error'
 // the body a definition carries itself: a block the capture cannot point into brings it as `def.inline` (3.5 §会话读 · 2.3 §没有
 // def.ref, e.g. each part of a plain-JSON reply); a block built in the browser holds the same keys on itself
 const ownBody = (b) => (b.inline && typeof b.inline === 'object' ? b.inline : b)
-export const hasInline = (b) => { const x = ownBody(b); return x.text !== undefined || x.block !== undefined || x.desc !== undefined || x.schema !== undefined }
+export const hasInline = (b) => { const x = ownBody(b); return BODY.some((k) => x[k] !== undefined) }
 export const isAddressed = (b) => !!b.text_ref && !hasInline(b)
 
 // the text of an inline message block (the block vocabulary: text · thinking · tool_use · tool_result · image · document)
@@ -156,8 +157,8 @@ export function cellOf(x) {
 export const byteKey = (cell) => cell.ref != null && cell.inline === undefined ? 'r:' + cell.ref : synth(cell.inline ?? '')
 // the body a cell holds right now: {status:'ok', text} | a failed answer | null (not here yet)
 export const gotOf = (cell) => cell.inline !== undefined ? { status: 'ok', text: cell.inline } : cell.ref != null ? bodyCache.get(cell.ref) ?? null : null
-// what Readable draws: the answer's view, else the one the cell came with
-export const viewIn = (cell, got) => got?.view ?? cell.view ?? null
+// what Readable draws: the answer's view, else the one the cell came with; a non-block cell (Call details) reads no answer's view
+export const viewIn = (cell, got) => (cell.block ? got?.view : null) ?? cell.view ?? null
 export const readable = (cell, got) => !!viewIn(cell, got)
 // the render spec to draw: a guess gives way to what the tool call behind this result says it reads
 export function rOf(cell, view) {
@@ -168,7 +169,7 @@ export function rOf(cell, view) {
 export const onlyMode = (cell, got) => (readable(cell, got) ? null : 'raw')
 
 // ── mode state ────────────────────────────────────────────────────────────────────────────────────────────────────────
-const DESK_KEY = 'trocar.v2.cellView'
+export const DESK_KEY = 'trocar.v2.cellView'
 const MODES = new Set(['raw', 'read'])
 const local = () => { try { return globalThis.localStorage ?? null } catch { return null } }
 let desk = null // the last desk mode set here, for when storage cannot hold it

@@ -6,7 +6,7 @@
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from 'vitest'
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { Activity, useState } from 'react'
-import { DISPLAY_CLIP, blockGot, bodyCache, cellBodyHtml, cellOf, clearOverrides, modeOf, overrideScope, setDeskMode, setMode, wireCells } from '../../../legacy/replay/cell.mjs'
+import { DESK_KEY, DISPLAY_CLIP, blockGot, bodyCache, cellBodyHtml, cellOf, clearOverrides, modeOf, overrideScope, setDeskMode, setMode, wireCells } from '../../../legacy/replay/cell.mjs'
 import { renderKind } from '../../../legacy/replay/kinds.mjs'
 import * as C from '../../../legacy/labels/cells.mjs'
 import * as W from '../../../legacy/labels/replay.mjs'
@@ -14,7 +14,6 @@ import { stepOf } from '../../../legacy/replay/model.mjs'
 import { deskFrom, world } from '../../../../test/web-v2/desk-world.mjs'
 import { Cell, CellBar } from './Cell'
 
-const KEY = 'trocar.v2.cellView'
 type Seen = { cb: IntersectionObserverCallback, els: Set<Element> }
 const observers: Seen[] = [] // the cell's sentinel observer lives as long as the module
 beforeAll(() => {
@@ -27,7 +26,7 @@ beforeAll(() => {
   } as unknown as typeof IntersectionObserver
 })
 let n = 0
-beforeEach(() => { bodyCache.clear(); overrideScope(`case ${n++}`); try { localStorage.setItem(KEY, 'raw') } catch { /* the throwing case */ } })
+beforeEach(() => { bodyCache.clear(); overrideScope(`case ${n++}`); try { localStorage.setItem(DESK_KEY, 'raw') } catch { /* the throwing case */ } })
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
 const noApi = { get: vi.fn() }
