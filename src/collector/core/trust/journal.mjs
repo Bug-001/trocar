@@ -186,18 +186,18 @@ function commit({ dir, manifest, fresh, resumed, before, res, backup, real, char
 // the key's own name compared without case when `fold`, gets the value too — each one its own plain json-key entry, keyed by the member's own
 // spelling, with its own prior_value (an older build undoes it as any json-key). A member is only ever given the value: never removed, moved or
 // added. `fold` is recorded on every entry it makes (`fold: true`).
-export function applyJsonKey({ dir, manifest, harness, phase, file, keys, value, home, alsoSet = [], fold = false, now = new Date(), fs = nodeFs }) {
-  const main = setOneKey({ dir, manifest, harness, phase, file, keys, value, home, fold, now, fs })
+export function applyJsonKey({ dir, manifest, harness, phase, file, keys, value, home, alsoSet = [], fold = false, door = null, now = new Date(), fs = nodeFs }) {
+  const main = setOneKey({ dir, manifest, harness, phase, file, keys, value, home, fold, door, now, fs })
   const leaf = keys[keys.length - 1]
   const named = (m) => isAlsoSetMember(m, leaf, alsoSet, fold)
   if (!alsoSet.length && !fold) return main
   let parent
   try { parent = getPath(parseJsonText(readUserText(file, readOrNull(fs, editTarget(file, fs))).text), keys.slice(0, -1)) } catch { return main }
   if (!parent || typeof parent !== 'object' || Array.isArray(parent)) return main
-  for (const m of Object.keys(parent).filter(named)) setOneKey({ dir, manifest, harness, phase, file, keys: [...keys.slice(0, -1), m], value, home, fold, now, fs })
+  for (const m of Object.keys(parent).filter(named)) setOneKey({ dir, manifest, harness, phase, file, keys: [...keys.slice(0, -1), m], value, home, fold, door, now, fs })
   return main
 }
-function setOneKey({ dir, manifest, harness, phase, file, keys, value, home, fold, now, fs }) {
+function setOneKey({ dir, manifest, harness, phase, file, keys, value, home, fold, door, now, fs }) {
   needHome('applyJsonKey', home)
   needPhase('applyJsonKey', phase)
   const j = judgeEntry({ manifest, planned: { harness, kind: 'json-key', path: file, keys }, fs })
@@ -214,7 +214,7 @@ function setOneKey({ dir, manifest, harness, phase, file, keys, value, home, fol
     kind: 'json-key', harness, phase, path: file, ...(real !== file ? { real_path: real } : {}), keys, value,
     existed_before: before != null, mode: before != null ? fs.statSync(real).mode & 0o777 : 0o600,
     pre_sha256: sha256(before), post_sha256: null, ops: res.ops, prior_value: res.prior,
-    existing_depth: res.existingDepth, created_dirs: missingDirs(path.dirname(file), fs), installed_at: now.toISOString(), ...(fold ? { fold: true } : {}),
+    existing_depth: res.existingDepth, created_dirs: missingDirs(path.dirname(file), fs), installed_at: now.toISOString(), ...(fold ? { fold: true } : {}), ...(door ? { door } : {}),
   }
   return commit({ dir, manifest, fresh, resumed, before, res, real, charset: read.charset, now, fs, backup: () => backupFirst({ home, file, before, now, fs }) }) // keyed by the path the user knows (the link, for a symlinked file), holding the target's bytes
 }
@@ -222,7 +222,7 @@ function setOneKey({ dir, manifest, harness, phase, file, keys, value, home, fol
 // One element trocar appends to a JSON array (4.11 P5 `arrayItems`, kind `json-array-item`; undone by src/off/journal.mjs undoEntry: only that element goes,
 // and the array too when trocar created it and it is empty again). Judged and committed as a json-key is; an array that already holds the element is
 // left as it is (null: nothing trocar added, nothing to undo).
-export function applyJsonArrayItem({ dir, manifest, harness, phase, file, keys, item, home, now = new Date(), fs = nodeFs }) {
+export function applyJsonArrayItem({ dir, manifest, harness, phase, file, keys, item, home, door = null, now = new Date(), fs = nodeFs }) {
   needHome('applyJsonArrayItem', home)
   needPhase('applyJsonArrayItem', phase)
   const j = judgeEntry({ manifest, planned: { harness, kind: 'json-array-item', path: file, keys, item }, fs })
@@ -242,7 +242,7 @@ export function applyJsonArrayItem({ dir, manifest, harness, phase, file, keys, 
     kind: 'json-array-item', harness, phase, path: file, ...(real !== file ? { real_path: real } : {}), keys, item, created_array: res.createdArray,
     existed_before: before != null, mode: before != null ? fs.statSync(real).mode & 0o777 : 0o600,
     pre_sha256: sha256(before), post_sha256: null, ops: res.ops, prior_value: null,
-    existing_depth: res.existingDepth, created_dirs: missingDirs(path.dirname(file), fs), installed_at: now.toISOString(),
+    existing_depth: res.existingDepth, created_dirs: missingDirs(path.dirname(file), fs), installed_at: now.toISOString(), ...(door ? { door } : {}),
   }
   return commit({ dir, manifest, fresh, resumed: j.action === 'resume' ? j.entry : null, before, res, real, charset: read.charset, now, fs, backup: () => backupFirst({ home, file, before, now, fs }) })
 }
@@ -276,7 +276,7 @@ export function previewTextEntry({ file, edit, fs = nodeFs }) {
   const res = editText(file, readUserText(file, readOrNull(fs, real)).text, edit)
   return { path: file, ...(real !== file ? { real_path: real } : {}), changes: true, prior: res.prior ?? null }
 }
-export function applyTextEntry({ dir, manifest, harness, phase, file, edit, home, now = new Date(), fs = nodeFs }) {
+export function applyTextEntry({ dir, manifest, harness, phase, file, edit, home, door = null, now = new Date(), fs = nodeFs }) {
   needHome('applyTextEntry', home)
   needPhase('applyTextEntry', phase)
   const j = judgeEntry({ manifest, planned: { harness, kind: 'text', path: file, format: edit.format, ...(edit.vars ? { vars: edit.vars } : { line: edit.line }) }, fs })
@@ -298,7 +298,7 @@ export function applyTextEntry({ dir, manifest, harness, phase, file, edit, home
     ...(edit.neutralize && edit.neutralize.length ? { neutralize: edit.neutralize } : {}), ...(edit.fold === true ? { fold: true } : {}),
     existed_before: before != null, mode: before != null ? fs.statSync(real).mode & 0o777 : (edit.mode || 0o600),
     pre_sha256: sha256(before), post_sha256: null, ops: res.ops, prior_value: res.prior,
-    created_dirs: missingDirs(path.dirname(file), fs), installed_at: now.toISOString(),
+    created_dirs: missingDirs(path.dirname(file), fs), installed_at: now.toISOString(), ...(door ? { door } : {}),
   }
   return commit({ dir, manifest, fresh, resumed, before, res, real, charset: read.charset, now, fs, backup: () => backupFirst({ home, file, before, now, fs }) })
 }
