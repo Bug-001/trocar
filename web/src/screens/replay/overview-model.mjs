@@ -1,4 +1,5 @@
 // web/src/screens/replay/overview-model.mjs — the sidebar Overview's model (2.5): one part per chapter, and for an open part what it holds.
+// `compaction` is {from, to} of the landing step's compaction-landed event, absent while there is none (2.5: the real numbers only).
 // `at` is the step a part reads: the playhead in the current part, the first step in another, null while that step is not in the lane.
 // A group's `kids` is null while the rows cannot be known yet; `partial` says the rows are there but their count is not final.
 import { outlineEntries } from '../../../legacy/replay/outline.mjs'
@@ -63,14 +64,17 @@ export function overviewModel(s) {
   const a = s.anchor
   if (!a || !a.calls.length) return { single: true, parts: [] }
   const { chs, g, pos } = chapterHere(s), now = chapterAt(chs, g), single = chs.length === 1
-  const users = laneEvents(s.desk, a.id).flatMap((e) => {
-    const i = e.type === 'user' ? a.ridLocal.get(e.rid) : null
+  const evs = laneEvents(s.desk, a.id).flatMap((e) => {
+    const i = e.type === 'user' || e.type === 'compaction-landed' ? a.ridLocal.get(e.rid) : null
     return i == null ? [] : [{ e, i, g: a.no(i) }]
   })
+  const users = evs.filter((u) => u.e.type === 'user'), lands = evs.filter((u) => u.e.type === 'compaction-landed')
   const x = { s, pos, users, agents: agentsOf(s, chs) }
   return { single, parts: chs.map((c, j) => {
     const k = c.k ?? j, current = j === now, open = single || current !== !!s.partFlips?.has(k), at = current ? s.playhead : a.ridLocal.get(c.rid0) ?? null
     const part = { k, name: W.partName(k, c.inferred), a: c.s0, b: c.s1, ts0: c.ts0, inferred: c.inferred, current, open, at }
+    const land = lands.find((u) => u.g >= c.s0 && u.g < c.s1)
+    if (land) part.compaction = { from: land.e.from, to: land.e.to }
     return open ? { ...part, ...partItems(x, c, j, at, current) } : part
   }) }
 }

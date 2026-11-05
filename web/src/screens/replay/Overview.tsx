@@ -2,7 +2,7 @@
 // prompt, prompts and sub-agents, each row a jump. Only the versions are read in the step move's commit: the model runs after
 // useDeferredValue, in a memo on the deferred versions. The chapter and group state lives on the desk (s.partFlips, s.navOpen); a toggle
 // redraws this tree alone. The rows are drawn from overview-model.mjs and carry data-ovjump: `<step>:<block | prompt | change>`, `agent:<lane>`.
-import { memo, useDeferredValue, useEffect, useReducer, useRef, type PointerEvent, type ReactNode, type Ref } from 'react'
+import { memo, useDeferredValue, useEffect, useLayoutEffect, useReducer, useRef, type PointerEvent, type ReactNode, type Ref } from 'react'
 import { Button, Disclosure, DisclosurePanel } from 'react-aria-components'
 import { fmtWhen, kf } from '../../../legacy/core/fmt.mjs'
 import { icon } from '../../../legacy/core/icons.mjs'
@@ -21,10 +21,12 @@ type Part = ReturnType<typeof overviewModel>['parts'][number] & Record<string, a
 type Ctx = { s: DeskState, redraw: () => void }
 
 function toggle(set: Set<unknown>, k: unknown) { if (!set.delete(k)) set.add(k) }
-// a label's title exists only while the label is cut off (2.5 §只做导航)
+// a label's title exists only while the label is cut off (2.5 §只做导航): set after each drawing, so a keyboard reader has it too, and
+// again on pointer-over, since dragging the sidebar wider or narrower cuts labels without a drawing
+const tip = (t: HTMLElement) => { t.title = t.scrollWidth > t.clientWidth ? t.textContent! : '' }
 function tipIfCut(e: PointerEvent) {
   const t = (e.target as HTMLElement).closest<HTMLElement>('.ovlbl')
-  if (t) t.title = t.scrollWidth > t.clientWidth ? t.textContent! : ''
+  if (t) tip(t)
 }
 
 const Row = ({ jump, go, label, current, children }: { jump: string, go: () => void, label: string, current?: boolean, children?: ReactNode }) =>
@@ -50,7 +52,12 @@ function Items({ c, p }: { c: Ctx, p: Part }) {
   const into = (step: number, jump: object) => { s.partFlips?.delete(p.k); s.jumpTo(step, jump) }
   const block = (fi: number) => (p.current ? jumpToBlockIndex(s, fi) : into(p.at, fiJump(fi)))
   const change = () => (p.current ? s.queueJump(anchorJump('cachebrk')) : into(p.at, anchorJump('cachebrk')))
-  const agent = (id: string) => { if (!p.current) s.partFlips?.delete(p.k); selectTick(s, s.lanes.find((l: { id: string }) => l.id === id), 0) }
+  const agent = (id: string) => {
+    const lane = s.lanes.find((l: { id: string }) => l.id === id)
+    if (!lane) return // a poll took the lane away since this row was drawn
+    if (!p.current) s.partFlips?.delete(p.k)
+    selectTick(s, lane, 0)
+  }
   const { prompts, agents } = p
   return <>
     {p.off ? <div className="ovnone">{p.off.why}</div> : <>
@@ -82,6 +89,7 @@ function PartRow({ c, p, here }: { c: Ctx, p: Part, here: Ref<HTMLButtonElement>
   return <Disclosure className="ovpart" isExpanded={p.open} onExpandedChange={flip}>
     <Button slot="trigger" ref={here} className="ovph" aria-current={p.current ? 'true' : undefined}>
       <Chev /><span className="ovlbl">{p.name}</span><span className="ovx">{`${p.a + 1 === p.b ? p.b : `${p.a + 1}–${p.b}`}${p.ts0 ? ` · ${fmtWhen(p.ts0)}` : ''}`}</span>
+      {p.compaction ? <span className="ovx" data-compaction="">{W.partCompaction(p.compaction.from, p.compaction.to)}</span> : null}
     </Button>
     <DisclosurePanel className="ovbody">{p.open ? <Items c={c} p={p} /> : null}</DisclosurePanel>
   </Disclosure>
@@ -92,9 +100,10 @@ const Tree = memo(function Tree({ desk }: { desk: DeskView, nav: number, step: n
   const [, redraw] = useReducer((n: number) => n + 1, 0)
   const here = useRef<HTMLButtonElement>(null)
   const { single, parts } = overviewModel(desk.s), c = { s: desk.s, redraw }
-  const current = parts.find((p: Part) => p.current)?.k
+  const current = parts.find((p: Part) => p.current)?.k, root = useRef<HTMLDivElement>(null)
   useEffect(() => { here.current?.scrollIntoView({ block: 'nearest' }) }, [current])
-  return <div className="ovw" onPointerOver={tipIfCut}>
+  useLayoutEffect(() => { root.current!.querySelectorAll<HTMLElement>('.ovlbl').forEach(tip) })
+  return <div ref={root} className="ovw" onPointerOver={tipIfCut}>
     {single ? (parts[0] ? <Items c={c} p={parts[0]} /> : null) : parts.map((p: Part) => <PartRow key={p.k} c={c} p={p} here={p.current ? here : undefined} />)}
   </div>
 })

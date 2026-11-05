@@ -469,3 +469,5 @@ export const NO_PROMPTS_HERE = 'No prompts in these steps'
 // 2.6 §A: the folded row after the reply
 export const CALL_DETAILS = 'Call details'
 export const CD_EXTRA_MSGS = (n) => `Messages the client sent later in this call · ${n}`
+// 2.5: a chapter head's compaction numbers (the landing step's compaction-landed event); an empty side reads —
+export const partCompaction = (from, to) => `${from ?? '—'} → ${to ?? '—'} messages`

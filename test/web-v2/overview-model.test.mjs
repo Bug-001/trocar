@@ -1,4 +1,4 @@
-// test/web-v2/overview-model.test.mjs — RFC 2.5 验收 #1-#4: the sidebar Overview's model over generated sessions, read through the
+// test/web-v2/overview-model.test.mjs — RFC 2.5 验收 #1-#4 and #7: the sidebar Overview's model over generated sessions, read through the
 // reference server's answers. Expected values come from the world (its head's chapter table, its lanes, its events) and the step's
 // own block list; no words are asserted.
 import test from 'node:test'
@@ -57,6 +57,26 @@ test('2.5 #1: one part per chapter with its span; the part holding the playhead 
   assert.equal(m.single, true)
   assert.equal(m.parts.length, 1)
   assert.ok(m.parts[0].open)
+})
+
+test('2.5 #7: a part opened by a harness-marked compaction carries the landing step\'s compaction-landed numbers; with no such event there are none', async () => {
+  let shown = 0
+  for (const seed of SEEDS) {
+    const { head } = world(seed, OPTS).files(), axis = head.axis
+    // the landing event on the first step of each part a harness-marked compaction opens, with numbers no other fact has
+    const lands = head.chapters.flatMap((c, j) => (j && !c.inferred ? [{ type: 'compaction-landed', rid: c.rid0, from: 1000 + j, to: j }] : []))
+    const edit = (name, a) => (name === 'lane' && a.steps ? { ...a, events: [...a.events, ...lands.filter((e) => a.steps.some((st) => st.rid === e.rid))] } : a)
+    for (const [o, want] of [[{ edit }, lands], [{}, []]]) {
+      const { s, head: h } = await session(seed, o)
+      if (h.chapters.length < 2 || h.axis !== axis) continue
+      for (const p of overviewModel(s).parts) {
+        const e = want.find((x) => x.rid === h.chapters.find((c) => c.k === p.k).rid0)
+        assert.deepEqual(p.compaction, e && { from: e.from, to: e.to })
+        if (e) shown++
+      }
+    }
+  }
+  assert.ok(shown > 0, 'the seeds reach parts a harness-marked compaction opens')
 })
 
 test('2.5 #2: tools and system rows are the read step\'s, the current part reads the playhead and another its first step, and every jump is a block of that step', async () => {
