@@ -72,6 +72,7 @@ test('a peer that is not an IPv4 literal is answered null at once, no ask: the d
 test('a table that cannot be read — the helper failed, or hung past its guard and was killed — is ONE socktable-unavailable record and null; an exec-closed rejection is an operator\'s close and records nothing', async () => {
   const cases = [
     [async () => ({ code: null, out: '', err: '' }), /did not answer within 10000 ms/],
+    [async () => ({ code: null, out: '', err: 'spawn socktable ENOENT' }), /ENOENT/],
     [async () => ({ code: 1, out: '', err: 'socktable: proc_listpids: Operation not permitted' }), /exited with 1: socktable: proc_listpids/],
     [async () => { throw new Error('no runner') }, /no runner/],
   ]

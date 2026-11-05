@@ -12,7 +12,7 @@ import { navGroup, jumpToStepAndBlock, jumpToBlockIndex } from './outline.mjs'
 import { blockJump } from './jump.mjs'
 import { KIDS, serialize, keyed, patchInto } from '../core/units.mjs'
 import * as W from '../labels/replay.mjs'
-import { resKeyOf, laneEvents, seenFiles, ledgerDone, stepOf } from './model.mjs'
+import { resKeyOf, laneEvents, seenFiles, ledgerDone, compactionNumbers, stepOf } from './model.mjs'
 
 const SEEN_CAP = 40
 // a resource is datable (has a lifecycle to speak of) only with a usable segment list; the six display groups and the
@@ -54,6 +54,7 @@ export function resourceUnits(s) {
   const L = (rid) => { const v = a.ridLocal.get(rid); return v == null ? N : v }
   const withSeg = res.filter(hasSeg)
   const of = (k) => withSeg.filter((r) => r.kind === k)
+  const guessed = new Set(events.filter((x) => x.type === 'compaction' && x.inferred).map((x) => x.rid)) // read per row: a row must not walk the events
   const view = (r, enter) => `data-view="${esc(resKeyOf(r))}" data-viewstep="${enter}" data-viewlabel="${esc(r.label)}"`
   // the lifecycle sentence's state at the playhead + the enter/evict locals (N from the FIRST segment, M from the LAST)
   const life = (r) => {
@@ -68,7 +69,7 @@ export function resourceUnits(s) {
     else if (st === 'live') word = `${W.lifeIn(at(enter))} · ${W.LIFE_IN_CTX}`
     else word = evAt != null ? `${W.lifeIn(at(enter))} · ${W.lifeEvicted(at(evAt))}` : W.lifeIn(at(enter))
     // the evicting compaction was itself inferred → the eviction step is a guess too
-    if (st === 'evicted' && evAt != null) { const ev = events.find((x) => x.type === 'compaction' && x.rid === last.evict); if (ev && ev.inferred) word += ` · ${W.GUESS}` }
+    if (st === 'evicted' && evAt != null && guessed.has(last.evict)) word += ` · ${W.GUESS}`
     return { enter, word, cls: st === 'pend' ? 'pend' : st === 'evicted' ? 'dead' : '' }
   }
   const out = []
@@ -103,10 +104,11 @@ export function resourceUnits(s) {
   const dlRow = (r) => { const l = life(r)
     return `<div class="navsub" data-navstep="${l.enter}"><span class="nsl" title="${esc(r.label)}">${esc(r.kind === 'dir' ? W.DIR_WORD : W.LINK_WORD)} ${rp(r.label)}</span><button type="button" class="navlife" data-navstep="${l.enter}" aria-label="${esc(W.jumpStepTip(at(l.enter)))}">${esc(W.lifeSeen(at(l.enter)))}</button></div>` }
   const dl = [...of('dir'), ...of('link')]
+  const numbers = compactionNumbers(events, (e) => L(e.rid))
   const compRow = (e) => {
-    const atStep = L(e.rid)
+    const atStep = L(e.rid), n = numbers.get(e)
     const word = e.type === 'compaction'
-      ? W.compactRow(at(atStep), e.from != null ? String(e.from) : '—', e.to != null ? String(e.to) : '—') + (e.inferred ? ` · ${W.GUESS}` : '')
+      ? W.compactRow(at(atStep), n.from != null ? String(n.from) : '—', n.to != null ? String(n.to) : '—') + (e.inferred ? ` · ${W.GUESS}` : '')
       : W.summarizeRow(at(atStep), e.out != null ? kf(e.out) : '—')
     return `<div class="navsub" data-navstep="${atStep}"><span class="nsl" title="${esc(word)}">${esc(word)}</span></div>` }
   const comps = events.filter((e) => e && (e.type === 'compaction' || e.type === 'summarize'))

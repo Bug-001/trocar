@@ -10,6 +10,8 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { HANDED_OVER, runUpdateCli } from '../../src/cli/update.mjs'
+import { entryStartsThisCopy } from '../../src/cli/replace-daemon.mjs'
+import { loadArch } from '../../src/collector/daemon.mjs'
 import { EXIT } from '../../src/cli/schema.mjs'
 import { validateReceipt, newReceipt } from '../../src/cli/schema.mjs'
 import { codeId, codeIdOf } from '../../src/version.mjs'
@@ -456,6 +458,117 @@ test('V96: a collector that refuses the off request is not named by a null pid',
   const out = t.io.text()
   assert.match(out, /could not be stopped/)
   assert.doesNotMatch(out, /pid null/, 'D58②: a number the user can act on, or none — never a placeholder')
+})
+
+// ── V124 · the login entry is written before the collector is replaced ─────────────────────────────────────────────────────────────
+/** The world of a finish whose daemon may run another code, on a REAL entry file: `disk` is what the file holds now (default: this copy's
+ *  program line under the older text), the entry this code renders has one line more, and `install` writes that text when it runs. The login
+ *  entry's start records the bytes launchd would read at that moment. */
+function entryFinish(s, { disk = null, daemon = '0.1.0+0000000', comesBackOn = codeId(s.root), installExit = () => EXIT.ok, installDoc = {}, on = [], ...over } = {}) {
+  const script = path.join(s.root, 'bin', 'trocar.mjs')
+  const entry = (extra) => `<key>ProgramArguments</key>\n<array>\n  <string>${script}</string>\n  <string>daemon</string>\n</array>\n${extra}`
+  const file = path.join(s.base, 'login-entry'), rendered = entry('<key>ProcessType</key>\n<string>Interactive</string>\n')
+  fs.writeFileSync(file, disk ?? entry(''))
+  fs.writeFileSync(path.join(s.dir, 'update.json'), JSON.stringify({ from: '0.1.0+0000000', on }) + '\n')
+  const seen = { started: [], stopped: [], installed: [] }
+  const unit = { path: file, text: () => rendered, registered: () => ({ state: 'present' }), enable: () => { seen.started.push(fs.readFileSync(file, 'utf8')); daemon = comesBackOn; return { code: 0 } } }
+  const t = ctx(s, {
+    ...over,
+    daemonCode: () => daemon,
+    deps: {
+      unit, script, socketPath: path.join(s.base, 'control.sock'),
+      request: async ({ method }) => (method === 'POST' ? { actual: 'off', confirmed: true, pid: 4242, relayed: { closing: 0, waiting: 0, cut: 0 } } : { code: daemon }),
+      stopDaemon: async () => { seen.stopped.push(daemon); return { stopped: true, pid: 4242, signals: ['SIGTERM'] } },
+      install: async (argv, c) => {
+        seen.installed.push(argv)
+        const exit = installExit(daemon)
+        fs.writeFileSync(file, rendered) // the entry goes first: what fails in install is the daemon step after it
+        if (installDoc.daemon && installDoc.daemon.started) daemon = comesBackOn
+        c.io.out(JSON.stringify({ ...newReceipt('install'), ok: exit === EXIT.ok, problems: [], notes: [], ...installDoc }))
+        return exit
+      },
+    },
+  })
+  return { ...t, seen, rendered, entry }
+}
+
+test('V124: when the login entry starts this code, the collector is pulled up from the entry bytes this code renders', async () => {
+  const s = sandbox()
+  const t = entryFinish(s)
+  assert.equal(await runUpdateCli(['--yes', '--json'], t.c), EXIT.ok, t.io.text())
+  assert.deepEqual(t.seen.started, [t.rendered], 'what the login entry read when it started the new collector')
+  assert.equal(t.io.json().restarted, true)
+  assert.equal(t.seen.installed.length, 1, 'install ran once')
+  assert.equal(s.handover(), null)
+})
+
+test('V124: a collector that was not running and came up under install on this code counts as restarted', async () => {
+  const s = sandbox()
+  const t = entryFinish(s, { daemon: null, installDoc: { daemon: { state: 'running', started: true, replaced: false } } })
+  assert.equal(await runUpdateCli(['--yes', '--json'], t.c), EXIT.ok, t.io.text())
+  assert.deepEqual([t.io.json().restarted, t.seen.stopped], [true, []])
+})
+
+test('V124: an entry whose program line is another copy\'s is not rewritten: no install, daemon-not-replaced, the update stays written down', async () => {
+  const s = sandbox()
+  const t = entryFinish(s, { disk: '<key>ProgramArguments</key>\n<array>\n  <string>/elsewhere/bin/trocar.mjs</string>\n  <string>daemon</string>\n</array>\n', comesBackOn: '0.3.0' })
+  assert.equal(await runUpdateCli(['--yes', '--json'], t.c), EXIT.incomplete, t.io.text())
+  assert.deepEqual([t.seen.installed, t.io.json().error.code], [[], 'daemon-not-replaced'])
+  assert.deepEqual(s.handover(), { from: '0.1.0+0000000', on: [] })
+})
+
+test('V124: an entry this code renders nothing of is no evidence: the collector goes first, and install after it', async () => {
+  const s = sandbox()
+  const t = entryFinish(s)
+  t.c.deps.unit.text = () => ''
+  assert.equal(await runUpdateCli(['--yes', '--json'], t.c), EXIT.ok, t.io.text())
+  assert.deepEqual(t.seen.started, [t.entry('')], 'the bytes on disk were never touched before the start')
+})
+
+test('V124: an install that fails leaves the collector replaced all the same: not-finished, and the update stays written down', async () => {
+  const s = sandbox()
+  const t = entryFinish(s, { installExit: () => EXIT.incomplete })
+  assert.equal(await runUpdateCli(['--yes', '--json'], t.c), EXIT.incomplete, t.io.text())
+  assert.equal(t.io.json().error.code, 'not-finished')
+  assert.equal(t.seen.stopped.length, 1)
+  assert.deepEqual(s.handover(), { from: '0.1.0+0000000', on: [] })
+})
+
+test('V124: an install the old collector failed is run again on the new one, and the update closes in one go', async () => {
+  const s = sandbox()
+  const t = entryFinish(s, { on: ['codex'], installExit: (daemon) => (daemon === codeId(s.root) ? EXIT.ok : EXIT.incomplete) }) // a hung daemon: install cannot pass beside it
+  assert.equal(await runUpdateCli(['--yes', '--json'], t.c), EXIT.ok, t.io.text())
+  assert.deepEqual(t.seen.started, [t.rendered], 'the new collector came up from the new entry')
+  assert.deepEqual(t.calls.on.map((a) => a.filter((x) => !x.startsWith('--'))), [['codex']])
+  assert.equal(s.handover(), null)
+})
+
+// the question runs on each OS's own renderer: what install wrote (with the daemon's environment), and an older entry that lacks every line not naming
+// the program, are this copy's; the same entry naming another script is not
+for (const platform of ['darwin', 'linux', 'win32']) test(`V124 ${platform}: the entry the renderer wrote is told from one naming another copy`, async () => {
+  const s = sandbox()
+  const script = path.join(s.root, 'bin', 'trocar.mjs')
+  const a = { home: s.home, env: { PATH: process.env.PATH, HOME: s.home, USERNAME: 'someone' }, platform, fs, deps: { script, exec: spawnSync } }
+  const unit = (await loadArch(platform)).unit.userUnit({ home: s.home, node: process.execPath, script, run: spawnSync, env: a.env })
+  const written = unit.text({ NODE_EXTRA_CA_CERTS: '/ca.pem' })
+  const answers = {}
+  for (const [label, bytes] of Object.entries({
+    written, older: written.split('\n').filter((l) => l.includes('trocar.mjs')).join('\n'), crlf: written.replaceAll('\n', '\r\n'), elsewhere: written.replaceAll(script, '/elsewhere/bin/trocar.mjs'),
+  })) {
+    fs.mkdirSync(path.dirname(unit.path), { recursive: true }); fs.writeFileSync(unit.path, bytes)
+    answers[label] = await entryStartsThisCopy(a)
+  }
+  assert.deepEqual(answers, { written: true, older: true, crlf: true, elsewhere: false })
+  fs.rmSync(unit.path)
+  assert.equal(await entryStartsThisCopy(a), false, 'no entry on disk')
+})
+
+test('§5.5: the daemon-only step runs no install, whatever the login entry starts', async () => {
+  const s = sandbox()
+  const t = entryFinish(s)
+  fs.rmSync(path.join(s.dir, 'update.json'))
+  assert.equal(await runUpdateCli(['--yes', '--json'], t.c), EXIT.ok, t.io.text())
+  assert.deepEqual([t.seen.installed, t.io.json().restarted], [[], true])
 })
 
 // ── V97 · the version, and the code the collector reports ────────────────────────────────────────────────────────────────────────────

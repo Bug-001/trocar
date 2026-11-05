@@ -46,7 +46,7 @@ const headOf = (o) => { if (!o || o.l == null) return null; const { l, p, ...h }
 export const recOf = (r) => ({ id: String(r.id), ts_request: r.ts ?? null, is_llm_call: !!r.is_llm, response: { status: r.status ?? null } });
 
 /** columns(slotOf) → the step-order columns of a fold log's calls, by each call's slot in the projection (`slotOf`): its row's ts, its
- *  lane (`ln`, the lane keys interned in `keys`), how many `user` events it has (`uc`) and whether it has a compaction or summarize
+ *  lane (`ln`, the lane keys interned in `keys`), how many `user` events it has (`uc`) and whether it has a compaction, landing or summarize
  *  event (`cs`), its context bytes (`cx`), its largest composition bucket and share (`cb`) and its flag bits (`fl`, flagsOf); the rids in step order, and each lane's rids and slots in step order (`by`, by lane int); the live lane keys. sync()
  *  brings them to the log's frontier from the lines past the last sync (and keeps the lane headers it reads: `heads`), each moved row taken out and put back by binary search: a
  *  warm state and a cold open build the same columns. */
@@ -139,7 +139,7 @@ export function sync(cols, log) {
       const l = byLane(cols, cols.ln[k]), j = placeOf(cols, cols.ts[k], rid, l.rids);
       l.rids.splice(j, 0, rid); l.slots.splice(j, 0, k);
       cols.uc[k] = o.e.filter((e) => e.type === 'user').length;
-      cols.cs[k] = o.e.some((e) => e.type === 'compaction' || e.type === 'summarize') ? 1 : 0;
+      cols.cs[k] = o.e.some((e) => e.type === 'compaction' || e.type === 'compaction-landed' || e.type === 'summarize') ? 1 : 0;
       cols.cx[k] = r.ctx || 0; cols.cb[k] = compByte(r.comp); cols.fl[k] = flagsOf(r, o.e);
     } else { cols.ts[k] = undefined; cols.ln[k] = -1; cols.uc[k] = 0; cols.cs[k] = 0; cols.cx[k] = 0; cols.cb[k] = 0; cols.fl[k] = 0; }
   }

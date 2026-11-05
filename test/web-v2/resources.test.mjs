@@ -103,6 +103,13 @@ test('#7 the compaction group still draws with an empty ledger', () => {
   assert.equal(grpCount(empty, W.RES_GRP.file), null, 'no empty groups are drawn')
 })
 
+test('2.4 压缩行: a marked compaction shows its landing\'s numbers, and the landing is no row of its own', () => {
+  const events = [{ type: 'compaction', rid: R(2), from: 10, to: 11, inferred: false }, { type: 'compaction-landed', rid: R(4), from: 12, to: 3 }]
+  const h = resourcesHtml(stateOf(anchorOf({ events })))
+  assert.equal(grpCount(h, W.RES_GRP.comp), 1)
+  assert.ok(h.includes(W.compactRow('', 12, 3)))
+})
+
 // 2.4 element table: a long path is cut in the middle — the base name stays whole, the length fits unless the base
 // name alone is longer
 test('midClip keeps the base name whole and fits max unless the base name alone is longer', async () => {

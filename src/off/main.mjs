@@ -8,7 +8,7 @@ import nodeOs from 'node:os'
 import { runOff } from './orchestrate.mjs'
 import { formatOffReceipt } from './receipt.mjs'
 import { EXIT, newReceipt } from './schema.mjs'
-import { isInteractive, makeIo, hidingIo } from './io.mjs'
+import { isInteractive, makeIo, hidingIo, printJson, asOneDocument } from './io.mjs'
 import { NAME_ALIASES, resolveHarnesses } from './harness-names.mjs'
 
 const OFF_USAGE = 'usage: trocar off [<harness>...] [--now] [--yes] [--dry-run] [--json]'
@@ -17,8 +17,13 @@ const OFF_FLAGS = new Set(['--now', '--dry-run', '--yes', '--json'])
 /** → the exit code. `argv` is what follows `off`. `io` = { out, err, stdin, stdout, stderr } (src/off/io.mjs makeIo; the process's own streams when none is given, which is how the
  *  standalone `trocar-off` calls it). `standalone`: this is the single-file copy (src/off/standalone.mjs ends in a call with it): the only difference is the words of what it
  *  cannot undo — a manifest or an item of a kind it does not know is left alone and the person is sent to `trocar off` (R3, V35); the receipt is otherwise the same one. */
-export async function runOffCli(argv, { io = makeIo({ stdin: process.stdin, stdout: process.stdout, stderr: process.stderr }), env = process.env, home = nodeOs.homedir(), platform = process.platform, deps = {}, standalone = false } = {}) {
-  if (standalone) io = hidingIo(io) // the copy is not run through runCli, which does this for every command that changes state (1.6 §1.2)
+export async function runOffCli(argv, { io = makeIo({ stdin: process.stdin, stdout: process.stdout, stderr: process.stderr }), ...opts } = {}) {
+  if (!opts.standalone) return offCli(argv, { ...opts, io })
+  const shown = hidingIo(io) // the copy is not run through runCli, which hides userinfo and keeps a `--json` run to one document for every command (1.6 §1.2)
+  return argv.includes('--json') ? asOneDocument(shown, 'off', (quiet) => offCli(argv, { ...opts, io: quiet })) : offCli(argv, { ...opts, io: shown })
+}
+
+async function offCli(argv, { io, env = process.env, home = nodeOs.homedir(), platform = process.platform, deps = {}, standalone = false }) {
   const flags = new Set(), names = []
   for (const a of argv) {
     if (a.startsWith('-')) {
@@ -35,11 +40,11 @@ export async function runOffCli(argv, { io = makeIo({ stdin: process.stdin, stdo
   if ((deps.getuid || (typeof process.getuid === 'function' ? () => process.getuid() : () => -1))() === 0) { io.err('trocar off: run this as your own user, not as root.'); return EXIT.usage } // §1.5: it refuses before it reads or writes anything
   try {
     const { receipt, exit } = await runOff({ home, env, ids: named.ids, now: flags.has('--now'), yes: flags.has('--yes'), dryRun: flags.has('--dry-run'), interactive: !json && isInteractive(io), io: { ...io, prompt: io.stdout }, say, deps: { platform, ...deps, ...(standalone ? { standalone: true } : {}) } }) // the CLI's platform is offWorld's default (deps.platform of a test's still wins): before the darwin flip a linux sandbox on a Mac host silently ran the darwin arms
-    io.out(json ? JSON.stringify(receipt, null, 2) : formatOffReceipt(receipt, { home }))
+    if (json) printJson(io, receipt); else io.out(formatOffReceipt(receipt, { home }))
     return exit
   } catch (e) {
     const message = String((e && e.message) || e)
-    if (json) io.out(JSON.stringify({ ...newReceipt('off'), ok: false, notes: [message] }, null, 2)); else io.err(`trocar off: ${message}`)
+    if (json) printJson(io, { ...newReceipt('off'), ok: false, notes: [message] }); else io.err(`trocar off: ${message}`)
     return EXIT.incomplete
   }
 }

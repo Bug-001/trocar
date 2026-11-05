@@ -22,7 +22,7 @@ import { auxKindOf, hintsOf, pathContext } from '../dissect/harnesses.mjs'
 import { sharesBody } from '../dissect/request-body.mjs'
 import { failedOf } from '../dissect/endpoints.mjs'
 import { compareStep } from './step-order.mjs'
-import { compactionVerdict, hasCompactionPreamble } from '../identity/session-identity.mjs'
+import { compactionVerdict, compactionBaseline, hasCompactionPreamble } from '../identity/session-identity.mjs'
 // Envelope drift guard (R1): the D10 envelope stores the response under `resp`, demo v0 under
 // `response`. Reading `.response` directly is the bug class that silently killed every HTTP status
 // on real captures — so go through the shared helper, never the raw key.
@@ -324,6 +324,13 @@ function userEventOf(blocks) {
   }
   return { preview: preview.slice(0, PREVIEW_CHARS), chars }
 }
+const askKey = (e) => `${e.chars}:${e.preview}`
+// A rewrite sends the history again, so of its messages only the last can be someone asking: not the summary that opens them, not the
+// prompt the lane has had (`said`, its askKey). Words of the person inside the message the summary opens are the summary's (3.4).
+function askOfRewrite(msgs, said) {
+  const texts = msgs.filter((m) => m.role === 'user' && userEventOf(m.blocks)), m = texts.at(-1)
+  return texts.length > 1 && msgs.lastIndexOf(m) > msgs.findLastIndex((x) => x.role !== 'user') && askKey(userEventOf(m.blocks)) !== said ? [m] : []
+}
 
 function textOfResult(b) {
   const c = b.content
@@ -411,10 +418,10 @@ const viewOf = (r) => {
 
 // What a compaction verdict says about itself on the board (1.5:38 / 1.5:79: the UI tells confirmed from inferred).
 // A harness header hint is the harness's own word (high, not inferred); a text marker and a count drop are inferred
-// (medium, 3.4). `preamble` only refines the wording of a drop. A verdict that `lands` a harness's request says only that: the
-// context was rewritten here, and nothing is counted or inferred.
+// (medium, 3.4). `preamble` only refines the wording of a drop. A verdict that `lands` a harness's request says the context was
+// rewritten here, from and to the real message counts, and nothing is counted or inferred.
 export function compactionMeta(v, preamble = false) {
-  if (v && v.lands) return { compaction: false, lands: true }
+  if (v && v.lands) return { compaction: false, lands: true, evictedFrom: v.compaction_from, evictedTo: v.compaction_to }
   if (!v || !v.compaction) return { compaction: false }
   const byHint = v.basis === 'hint'
   return { compaction: true, compactionInferred: !byHint, compactionConfidence: byHint ? 'high' : 'medium',
@@ -517,7 +524,7 @@ export function createAnalyzer({ keep = true, from = null } = {}) {
   const laneOfStep = new WeakMap() // step → its stream
   const usageOf = new WeakMap() // step → its call's usage (callFacts)
   let n = o.n ?? 0, top = o.top ?? null, late = o.late ?? false, byOrder = o.byOrder ?? false
-  const state = o.state || new Map() // stream → { resMap, seenMap, prevCount, prevCtx, prevInfo, firstText, ask, tools }
+  const state = o.state || new Map() // stream → { resMap, seenMap, prevCount, prevCtx, prevInfo, said, firstText, ask, tools }
   // a fold that keeps nothing keeps a lane's tool names (tool use id → name) in one table of numbers for all its lanes, keyed by the
   // lane state's generation `g` and the id (num52: two ids of one number would share a name, odds about n² / 2⁵³), a name as an index
   let toolT = null, toolGen = o.toolGen ?? 0
@@ -537,7 +544,7 @@ export function createAnalyzer({ keep = true, from = null } = {}) {
   // an index whose name is none: a tool name a rewind takes back
   const none = () => { let i = toolIx.get(undefined); if (i === undefined) { i = toolNames.length; toolNames.push(undefined); toolIx.set(undefined, i) } return i }
   const getTool = (t, id) => { if (keep) return t.get(id); const i = toolT ? toolT.get(num52(t.g + id)) : undefined; return i === undefined ? undefined : toolNames[i] }
-  const fresh = () => ({ resMap: new Map(), seenMap: new Map(), prevCount: 0, prevCtx: 0, prevInfo: null, firstText: '', ask: null, tools: toolsOf() })
+  const fresh = () => ({ resMap: new Map(), seenMap: new Map(), prevCount: 0, prevCtx: 0, prevInfo: null, said: null, firstText: '', ask: null, tools: toolsOf() })
   function mkStream(kind) {
     const s = { id: 's' + streams.length, kind, calls: [], events: [], n: 0 }
     streams.push(s)
@@ -705,10 +712,10 @@ export function createAnalyzer({ keep = true, from = null } = {}) {
     // 3.4: a request stored in part (the collector's req_* labels, the ETL's context_state 'partial') shows what arrived,
     // not the context the model saw: its message count is no observation, so no verdict and no new baseline
     const blindCount = step.reqIncomplete || step.ctxPartial
-    const verdict = blindCount ? { compaction: false }
-      : compactionVerdict(st.prevInfo, { hint: h.compaction === true, marker, msgCount: msgs.length, preamble: hasPreamble })
-    if (!blindCount) st.prevInfo = { msgCount: msgs.length, marker, preamble: hasPreamble, hinted: verdict.basis === 'hint' }
-    let newMsgs
+    const cur = { hint: h.compaction === true, marker, msgCount: msgs.length, preamble: hasPreamble, failed: step.error }
+    const verdict = blindCount ? { compaction: false } : compactionVerdict(st.prevInfo, cur)
+    if (!blindCount) st.prevInfo = compactionBaseline(st.prevInfo, cur, verdict)
+    let newMsgs, asked = null
     if (verdict.compaction || verdict.lands) {
       Object.assign(step, compactionMeta(verdict, preambleNew))
       if (D) D.push(['x'])
@@ -717,6 +724,7 @@ export function createAnalyzer({ keep = true, from = null } = {}) {
         if (last.evict == null) last.evict = step.at
       }
       newMsgs = msgs
+      asked = verdict.basis === 'hint' ? [] : askOfRewrite(msgs, st.said) // a harness's request is the harness talking
     } else if (drop) {
       newMsgs = []
     } else {
@@ -730,6 +738,7 @@ export function createAnalyzer({ keep = true, from = null } = {}) {
         // the event travels to the UI on its own — it MUST carry the inference marker with it,
         // otherwise the timeline re-asserts as fact what the step knows is a guess (invariant 4).
         inferred: step.compactionInferred, confidence: step.compactionConfidence, basis: step.compactionBasis })
+    if (step.lands) E.push({ type: 'compaction-landed', step: step.at, streamId: s.id, from: step.evictedFrom, to: step.evictedTo })
     if (isSummarize) {
       step.summarizing = true
       E.push({ type: 'summarize', step: step.at, streamId: s.id, out: f.usage?.output_tokens })
@@ -738,10 +747,10 @@ export function createAnalyzer({ keep = true, from = null } = {}) {
     // seen-but-not-opened filenames: tool-result text (bigger cap) + prose (smaller)
     for (const m of newMsgs) for (const b of m.blocks) see(b.seen, b.type === 'tool_result' ? 80 : 40)
     see(reply.seen, 40)
-    for (const m of newMsgs) {
+    for (const m of asked ?? newMsgs) {
       if (m.role !== 'user') continue
       const e = userEventOf(m.blocks)
-      if (e) E.push({ type: 'user', step: step.at, streamId: s.id, ...shown(e) })
+      if (e) { E.push({ type: 'user', step: step.at, streamId: s.id, ...shown(e) }); st.said = askKey(e) }
     }
     for (const m of newMsgs) {
       if (m.role !== 'user') continue
@@ -763,7 +772,8 @@ export function createAnalyzer({ keep = true, from = null } = {}) {
         E.push(e)
       }
     }
-    st.prevCount = msgs.length
+    // a failed call is no baseline (3.4): it only raises the count, so neither the history a retry sends again nor what it brought itself is new twice
+    st.prevCount = step.error ? Math.max(st.prevCount, msgs.length) : msgs.length
   }
 
   function finish() {
@@ -852,7 +862,7 @@ export function createAnalyzer({ keep = true, from = null } = {}) {
   }
   // save(lane) → the lane's state as a push left it (its first text is set by its first push and stays: a rewind keeps that push);
   // rewind(lane, saved, undos): back to it, `undos` the steps' `undo` of every push of the lane after it, oldest first
-  const save = (s) => { const st = state.get(s); return { n: s.n, last: s._lastMsg, prevInfo: st.prevInfo, prevCount: st.prevCount, prevCtx: st.prevCtx } }
+  const save = (s) => { const st = state.get(s); return { n: s.n, last: s._lastMsg, prevInfo: st.prevInfo, prevCount: st.prevCount, prevCtx: st.prevCtx, said: st.said } }
   function rewind(s, saved, undos) {
     for (let u = undos.length - 1; u >= 0; u--) for (let i = undos[u].length - 2; i >= 0; i -= 2) toolT.set(undos[u][i], undos[u][i + 1] ?? none())
     const { n, last, ...st } = saved
@@ -987,12 +997,12 @@ export function linearContext(request, keyMemo = null, ctx = {}) {
   // JSON is never silently passed off as content. Scoped to `file::` on purpose: skill/mcp/scaffold
   // resources already resolve to their own verbatim body block, and stealing that is a regression.
   const spine = dissectBlocks(request, ctx)
-  const fileKeyByUseId = new Map()  // tool_use_id → 'file::<path>'
+  const fileUseById = new Map()     // tool_use_id → its spine entry, whose key is 'file::<path>'
   const answered = new Set()        // tool_use_ids that have a result IN THIS request
   for (const e of spine) {
     const b = e.parsed
     if (!b || typeof b !== 'object') continue
-    if (b.type === 'tool_use' && b.id && String(e.resourceRef || '').startsWith('file::')) fileKeyByUseId.set(b.id, e.resourceRef)
+    if (b.type === 'tool_use' && b.id && String(e.resourceRef || '').startsWith('file::')) fileUseById.set(b.id, e)
     else if (b.type === 'tool_result' && b.tool_use_id) answered.add(b.tool_use_id)
   }
   for (const e of spine) {
@@ -1025,6 +1035,7 @@ export function linearContext(request, keyMemo = null, ctx = {}) {
         cc: (b && b.cache_control) || null,
         resKey: e.resourceRef, key: blkKey('M:' + e.role + ':' + type + ':', b, keyMemo),
       }
+      if (e.resourceRefs) d.resKeys = e.resourceRefs
       // `key` above is UNCHANGED — the cache-prefix chain diffs on it, so the linking below only
       // ever ADDS descriptive fields.
       if (type === 'tool_use' && d.resKey && d.resKey.startsWith('file::')) {
@@ -1033,8 +1044,10 @@ export function linearContext(request, keyMemo = null, ctx = {}) {
         // the NEXT one. The honest render is "result not in this call's context yet" — showing the
         // arguments as though they were the file is the bug this flag exists to prevent.
         d.resPending = !answered.has(b.id)
-      } else if (type === 'tool_result' && b && b.tool_use_id && fileKeyByUseId.has(b.tool_use_id)) {
-        d.resKey = fileKeyByUseId.get(b.tool_use_id)
+      } else if (type === 'tool_result' && b && b.tool_use_id && fileUseById.has(b.tool_use_id)) {
+        const use = fileUseById.get(b.tool_use_id)
+        d.resKey = use.resourceRef
+        if (use.resourceRefs) d.resKeys = use.resourceRefs
         d.resRole = 'result'
         // An error result IS what entered the context — link it, but flag it so the panel says
         // "the tool failed" instead of presenting the error text as the file's contents.

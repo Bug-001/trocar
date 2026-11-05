@@ -14,7 +14,7 @@ import { admitted, flatBlockText, blockFacts, callFacts, normResp, replyPartsAnt
 import { slimBlock, compBucket, firstHuman, blockQuery } from './blockmeta.mjs';
 import { renderOf } from './render-kind.mjs';
 import { blockSpans } from '../dissect/cc-spans.mjs';
-import { resourceRef as ccResourceRef } from '../dissect/cc.mjs';
+import { resourceRef as ccResourceRef, resourceRefs as ccResourceRefs } from '../dissect/cc.mjs';
 import { resourceRef as oaResourceRef, faithfulness as oaFaithfulness } from '../dissect/openai.mjs';
 import { scanJson, spanAt } from '../dissect/json-scan.mjs';
 import { scannedRequestBody, sharesBody, parsedRequestBody, storedRequestBody, requestEncodingOf } from '../dissect/request-body.mjs';
@@ -99,6 +99,7 @@ export function definition(b, ref, exact, why = null, bid = bidFor(b, ref, exact
   for (const k of META) if (b[k] !== undefined) def[k] = b[k];
   // the block's own resource key: a tool_result's mirrored file key is its place in the call (attrs), never its own
   def.resKey = b.resRole === 'result' ? '' : (b.resKey ?? '');
+  if (b.resKeys && b.resRole !== 'result') def.resKeys = b.resKeys;
   if (s.unaddressable) for (const k of BODY) if (b[k] !== undefined) def[k] = b[k];
   return { bid, def: jsonClean(def), query: s.query };
 }
@@ -141,7 +142,7 @@ const locate = (base, text, span, field = null) => {
 
 // a reply part as a flat entry of the same vocabulary (section messages, role assistant)
 const WIRE_RULES = {
-  anthropic: { links: true, resourceRef: ccResourceRef, faith: (bl) => ((bl.type === 'thinking' || bl.type === 'redacted_thinking') && bl.signature && !(bl.thinking || bl.text) ? 'opaque' : undefined) },
+  anthropic: { links: true, resourceRef: ccResourceRef, resourceRefs: ccResourceRefs, faith: (bl) => ((bl.type === 'thinking' || bl.type === 'redacted_thinking') && bl.signature && !(bl.thinking || bl.text) ? 'opaque' : undefined) },
   openai: { resourceRef: oaResourceRef, faith: (bl) => (bl.type === 'thinking' ? oaFaithfulness(bl) : undefined) },
 };
 /** replyBlocks(rec, wire) → [{ b, ref, exact, why }] in reply order: the call's own reply blocks (a part with no block has none). */
@@ -155,6 +156,8 @@ export function replyBlocks(rec, { d, format }, paths = pathContext(rec)) {
     const tool = bl.type === 'tool_use' || bl.type === 'server_tool_use';
     const b = { sec: 'messages', kind: bl.type, role: 'assistant', block: bl, toolName: tool ? bl.name || '' : '', cc: bl.cache_control || null,
       resKey: rules.resourceRef(bl, paths) || '', faithfulness: rules.faith(bl) };
+    const keys = rules.resourceRefs ? rules.resourceRefs(bl, paths) : [];
+    if (keys.length > 1) b.resKeys = keys;
     const text = p.field ? fieldTextOf(rec, p.field).text ?? null : null;
     const at = p.span ? locate(base, text, p.span, p.field) : { ref: null, exact: null, why: p.why || null };
     out.push({ b, ...at, unit: p.unit ?? 0 });
@@ -347,7 +350,7 @@ const laneHintOf = (rec, format, lane) => { const h = hintsOf(rec); return h.lan
 const attrsOf = (b, query) => {
   const a = {};
   for (const k of ATTR) if (b[k]) a[k] = b[k];
-  if (b.resRole === 'result') a.resKey = b.resKey;
+  if (b.resRole === 'result') { a.resKey = b.resKey; if (b.resKeys) a.resKeys = b.resKeys; }
   if (query) a.query = query;
   return Object.keys(a).length ? a : null;
 };
@@ -355,7 +358,9 @@ const attrsOf = (b, query) => {
 // records, as linearContext links only file results to their tool_use.
 const FILE_KEY = 'file::';
 // A pending file tool_use of an earlier record, as a block linearContext links a result to: the same id, the same file.
-const linkStub = (id, key) => ({ type: 'tool_use', id, name: '', input: { file_path: key.slice(FILE_KEY.length) } });
+const linkStub = (id, key, keys) => ({ type: 'tool_use', id, name: '', input: { file_path: key.slice(FILE_KEY.length) }, ...(keys ? { resKeys: keys } : null) });
+// x.open's entry of a tool_use at `at`: [id, [at, its key, all its keys when it has several]]
+const pendingUse = (id, at, b) => [id, b.resKeys ? [at, b.resKey, b.resKeys] : [at, b.resKey]];
 const counts = (x) => x.facts || x; // where a call's msgCount is (the Anthropic wire's facts, a flat lane's x)
 /** TAIL_HEAP: the byte cap of the lane tails (K, 3.5 §内存有界): per store and lane hint, the previous request's body and, for each of
  *  its request blocks that has a span, [sec, role, from, to, bid]. A request block at the same place, of the same section and role,
@@ -444,10 +449,10 @@ export function extract(rec, ctx) {
   let open = predX && predX.open ? Object.entries(predX.open) : [];
   if (rules.links && open.length) {
     const msgs = (read.h.request && read.h.request.messages) || [];
-    const linked = linearContext({ system: [], tools: [], messages: [{ role: 'assistant', content: open.map(([id, [, key]]) => linkStub(id, key)) }, ...msgs] });
+    const linked = linearContext({ system: [], tools: [], messages: [{ role: 'assistant', content: open.map(([id, [, key, keys]]) => linkStub(id, key, keys)) }, ...msgs] });
     const stubs = linked.filter((b) => b.mi === 0), lmsg = linked.filter((b) => b.mi !== 0);
     mine = mine.map((e, k) => ({ ...e, a: attrsOf(lmsg[k] || e.b, e.a && e.a.query) }));
-    open = open.map(([id, [rel, key]], k) => [id, [rel, key], !stubs[k] || stubs[k].resPending]);
+    open = open.map(([id, use], k) => [id, use, !stubs[k] || stubs[k].resPending]);
     for (const [, [rel], pending] of open) if (rel < inh.bids.length) {
       const a = { ...(inh.attrs[rel] || {}), resRole: 'request' };
       if (pending) a.resPending = true; else delete a.resPending;
@@ -467,8 +472,8 @@ export function extract(rec, ctx) {
       lineage: !st.cont ? st.link || rid : predX ? predX.lineage : st.prev || rid });
     if (rules.links) {
       const off = I;
-      mine.forEach((e, k) => { if (e.a && e.a.resRole === 'request' && e.a.resPending) open.push([e.b.block.id, [off + k, e.b.resKey]]); });
-      rp.forEach((p, j) => { if (p.b.kind === 'tool_use' && String(p.b.resKey).startsWith(FILE_KEY)) open.push([p.b.block.id, [I + mine.length + j, p.b.resKey]]); });
+      mine.forEach((e, k) => { if (e.a && e.a.resRole === 'request' && e.a.resPending) open.push(pendingUse(e.b.block.id, off + k, e.b)); });
+      rp.forEach((p, j) => { if (p.b.kind === 'tool_use' && String(p.b.resKey).startsWith(FILE_KEY)) open.push(pendingUse(p.b.block.id, I + mine.length + j, p.b)); });
       x.open = Object.fromEntries(open);
       x.toolAdj = (predX ? predX.toolAdj || 0 : 0) + ownFlat.reduce((n, b) => n + (b.kind === 'tool_addition') - (b.kind === 'tool_removal'), 0);
     }
