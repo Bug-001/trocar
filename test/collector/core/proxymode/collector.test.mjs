@@ -594,10 +594,13 @@ test('4.11 ① · on / off / restore / lookup write none of state, ingress or th
   await loadIngressConfig({ dir, groups: [g], isFree: async () => true })
   writeStateAtomic(path.join(dir, 'state.json'), setDesired(emptyState(), [d.name], 'on'))
   saveManifest(dir, manifestOf(d.name))
+  // a flag string other than 'r', or flag bits that write: a bounded read opens O_RDONLY | O_NONBLOCK, which writes nothing
+  const { O_WRONLY, O_RDWR, O_CREAT, O_TRUNC, O_APPEND } = fs.constants
+  const opensForWrite = (fl) => (typeof fl === 'number' ? (fl & (O_WRONLY | O_RDWR | O_CREAT | O_TRUNC | O_APPEND)) !== 0 : fl !== 'r')
   const writes = [], fds = new Map() // the path each write touches (an fd call: the path it was opened for writing)
   const rec = new Proxy(fs, { get: (t, k) => {
     const fn = t[k]
-    if (k === 'openSync') return (p, fl = 'r', ...r) => { const fd = fn.call(t, p, fl, ...r); if (fl !== 'r') { fds.set(fd, String(p)); writes.push(String(p)) } return fd }
+    if (k === 'openSync') return (p, fl = 'r', ...r) => { const fd = fn.call(t, p, fl, ...r); if (opensForWrite(fl)) { fds.set(fd, String(p)); writes.push(String(p)) } return fd }
     if (typeof fn !== 'function' || !/write|rename|mkdir|unlink|rm|copy|chmod|append|truncate|symlink|utimes/i.test(String(k))) return fn
     return (...a) => { writes.push(typeof a[0] === 'string' ? a[0] : fds.get(a[0]) ?? `fd ${a[0]}`); return fn.apply(t, a) }
   } })

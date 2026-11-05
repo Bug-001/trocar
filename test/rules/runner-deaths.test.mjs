@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpDir } from '../helpers/tmp.mjs';
+import { WITH_PARENT, watchEnv } from '../helpers/standin.mjs';
 import { LIMITS, SKIP_WHY } from '../../src/rules/closed.mjs';
 import { memoryCap, openOneShot, runnerArgs } from '../../src/rules/launch.mjs';
 import { DEATHS, encodeFrame, HEAD_BYTES, readProgress } from '../../src/rules/slot.mjs';
@@ -275,8 +276,9 @@ async function stuckUnderParent(t, source, fds) {
     process.stdout.write(String((await runner.run(unit('pid'))).bytes) + '\\n')
     runner.run(unit('stick'))
     setInterval(() => {}, 1000)`);
-  const io = { stdio: ['ignore', 'pipe', 'inherit'] };
-  const middle = fds ? spawn('/bin/sh', ['-c', `ulimit -n ${fds}; exec "$0" "$@"`, process.execPath, parent], io) : spawn(process.execPath, [parent], io);
+  // the parent ends by itself if this run is killed outright: its rule process is the test's business, the parent's own life is not
+  const io = { stdio: ['ignore', 'pipe', 'inherit'], env: watchEnv() };
+  const middle = fds ? spawn('/bin/sh', ['-c', `ulimit -n ${fds}; exec "$0" "$@"`, process.execPath, ...WITH_PARENT, parent], io) : spawn(process.execPath, [...WITH_PARENT, parent], io);
   t.after(() => middle.kill('SIGKILL'));
   const pid = await new Promise((resolve) => { middle.stdout.once('data', (d) => resolve(Number(d))); });
   assert.ok(pid > 0);
