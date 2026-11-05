@@ -359,6 +359,17 @@ test('I-review: a bracket without reviewed bars, reviewed bars without a bracket
   }
 })
 
+// the window's request rows as [data-bi, top px] in DOM order, each row absolutely placed (a virtual list's items)
+const orderPage = (rows) => `<div id="ctxwin" style="position:relative;height:400px">${rows.map(([bi, y]) =>
+  `<div class="cblk" data-bi="${bi}" style="position:absolute;top:${y}px;height:20px">r</div>`).join('')}</div><script>window.__planted = true</script>`
+
+test('I-order: rows out of list order in the DOM, or placed out of order on screen, are a violation; rows in order are none', { skip }, async () => {
+  for (const [rows, red] of [[[[0, 0], [1, 20], [5, 40]], false], [[[0, 0], [5, 20], [1, 40]], true], [[[0, 0], [1, 40], [5, 20]], true], [[[0, 0], [1, 0]], true]]) {
+    const pg = await plantedPage(orderPage(rows), '#/replay/p/x')
+    try { assert.equal(ids(await check({ page: pg })).includes('I-order'), red, JSON.stringify(rows)) } finally { await pg.close() }
+  }
+})
+
 // the head names pack 0 at tag `a`; then the page reads `reads` (a list of /api/d/... paths, all at once)
 const packPage = (reads) => `<script>(async () => {
   await (await fetch('/api/d/head?id=x')).json()
