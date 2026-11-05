@@ -9,7 +9,8 @@ import crypto from 'node:crypto'
 import path from 'node:path'
 import { collectorHome } from '../paths.mjs'
 import { readManifest, saveManifest } from './core/trust/journal.mjs'
-import { installUsable } from '../off/manifest.mjs'
+import { installUsable, OFF_VERSION } from '../off/manifest.mjs'
+import { writeStandalone } from '../off/standalone.mjs'
 import { readStateFile, setDesired, writeStateAtomic } from '../off/state.mjs'
 import { WINDOWS_MAX } from '../off/holders.mjs'
 import { setupOf } from './core/proxymode/status-facts.mjs'
@@ -69,6 +70,8 @@ export async function turnOnModel({ os, home, env = process.env, ids = null, har
   // --dry-run (1.6 §1.1): what would be written — each planned route with the files it resolves to — and nothing written
   out.planned = planned.flatMap(({ h, plan }) => plan.routes.map((r) => ({ harness: h, route: r.id, kind: r.route.kind, forms: r.forms, paths: routePaths(r.route, wctx), ...(r.route.proxyKeys ? { keys: r.route.proxyKeys.map((k) => [].concat(k).join('.')) } : {}) })))
   if (dryRun) return { ...out, exit: refused.length || pending.length ? 1 : 0 }
+  // the way back first (1.6 §3.3, R3): the copy that reads what this on writes, before any write — a copy that cannot be written stops on here
+  try { writeStandalone({ home, version: OFF_VERSION, platform: os, fs }) } catch (e) { out.problems.push(`trocar could not write its undo copy, so nothing was turned on (${errText(e)}); fix that, then run trocar on again`); return { ...out, on: [], turnedOn: [] } }
   // desired on first (R9), then the liveness window opens: the holder judge (P12) counts from here
   const stateF = path.join(dir, 'state.json')
   let st

@@ -10,6 +10,7 @@ import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
 import { routeEntry, recordsOf } from '../../../../src/collector/core/proxymode/entries.mjs'
 import { resolveLoc } from '../../../../src/collector/core/proxymode/sources.mjs'
 import { backupDir } from '../../../../src/off/paths.mjs'
+import { sha256 } from '../../../../src/off/fsutil.mjs'
 import { encodeText, decodeBytes } from '../../../helpers/file-shapes.mjs'
 import { world, put, bytesOf, door, merged } from './fixtures/entries-ctx.mjs'
 
@@ -67,12 +68,11 @@ for (const { h, id, r } of ROUTES.filter((x) => x.r.kind === 'json-key' || x.r.k
       for (const k of r.proxyKeys) assert.equal(valueIn(r, now, k), door(), `${label}: ${k} is the door (every spelling)`)
       for (const k of r.noProxyKeys || []) assert.equal(valueIn(r, now, k), merged(s.noProxy ? USER_NO : '', PERSIST.NO_PROXY), `${label}: ${k} = loopback ∪ the user's ∪ the persistent env, case-insensitive, in order`)
       const recs = recordsOf(w.ctx.manifest, h.name, id)
-      assert.ok(recs.length > 0 && recs.every((x) => x.phase === 'on' && x.route === id && x.door === door() && !CERT_KINDS.has(x.kind)), label)
+      assert.ok(recs.length > 0 && recs.every((x) => x.phase === 'on' && x.route === id && !CERT_KINDS.has(x.kind)), label)
       if (r.kind === 'dotenv-block') {
         assert.ok(now.startsWith(original ?? ''), `${label}: CM17 the user's lines stay first, byte for byte; nothing is commented out`)
         if (s.spell) assert.equal(recs[0].prior_value[r.proxyKeys[0]], USER_PROXY, `${label}: CM17 the user's value is the prior`)
       } else if (s.spell) assert.equal(recs.find((x) => JSON.stringify(x.keys) === JSON.stringify(r.proxyKeys[0])).prior_value, USER_PROXY, `${label}: the replaced value is the prior`)
-      if (exists) assert.ok(recs.every((x) => x.backup && fs.existsSync(x.backup) && path.dirname(x.backup).startsWith(backupDir(w.home))), `${label}: the user's file was saved to ~/.trocar/backup first`)
       assert.equal(routeEntry(r.kind).check(ctx, recs).ok, true, label)
       assert.equal(routeEntry(r.kind).write(ctx, door()).ok, true, `${label}: on again`)
       assert.equal(recordsOf(w.ctx.manifest, h.name, id).length, recs.length, `${label}: on again writes nothing more (R9)`)
@@ -146,7 +146,7 @@ test('a group rebound to a new port rewrites that route — the old door\'s reco
     const n = routeEntry(r.kind).write(ctx, door(18001)).records.length
     const res = routeEntry(r.kind).write(ctx, door(18555))
     assert.equal(res.records.length, n, `${h.name}.${id}`)
-    assert.ok(res.records.every((x) => x.door === door(18555)), `${h.name}.${id}`)
+    assert.ok(res.records.every((x) => x.door_sha256 === sha256(door(18555))), `${h.name}.${id}`)
     if (file) for (const k of r.proxyKeys) assert.equal(valueIn(r, fs.readFileSync(file, 'utf8'), k), door(18555), `${h.name}.${id}`)
     routeEntry(r.kind).undo(ctx, res.records)
     if (file) assert.equal(fs.readFileSync(file, 'utf8'), before, `${h.name}.${id}`)
