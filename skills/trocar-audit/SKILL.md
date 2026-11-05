@@ -65,11 +65,11 @@ A credential in a request body means the agent put it in the prompt or read it f
 ```bash
 trocar query overview --since 7d
 trocar query sessions --since 7d --limit 500
-trocar query session --id <id> --head
-trocar query analysis --id <session>
+trocar query session --id <id>
+trocar query pricing
 ```
 
-Read a session's spend from `totals.cost` in `query analysis`. While the answer carries `pending`, `totals` is the partial sum so far: wait until `pending` is gone before using it.
+A session's spend is each call's `usage` at the prices in `query pricing`. With `pending` or `more` in the answer the sum is partial: wait for `pending` to go, page `more` with `--before`.
 
 Take the sessions that cost the most. Look for: a low cache hit rate that lasts, a repeated cache break with the same cause, full context resent where only the new turn should go, sub-agents or background calls that outweigh the main thread, and retries in bursts.
 

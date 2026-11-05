@@ -40,7 +40,7 @@ A test asserts contracts and invariants: exit codes, JSON fields and codes, byte
 - Provider knowledge stays in the dissectors. The board has no provider branches.
 - A number or a judgement the board shows comes from a query document; the board only lays it out. Add a field to the query, never arithmetic to `web/`. The CLI then has it for free.
 - Keep it short. Among correct designs, take the one with less code.
-- A value that is stored reaches old sessions only through a version bump (`PROJ_V`, `USAGE_V`): spec 3.5, test shape in test/query/reread.test.mjs.
+- A value that is stored reaches old sessions only through a version bump (`PROJ_V`, `USAGE_V`): spec 4.2, 4.3, test shape in `test/query/projection.test.mjs`.
 
 ### 4. Verify
 
