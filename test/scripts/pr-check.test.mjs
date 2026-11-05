@@ -772,6 +772,14 @@ test('AN24: changing any outbound byte moves the hash, and a re-run does not', (
 })
 
 const VALUE_A = 'a'.repeat(64), VALUE_B = 'b'.repeat(64)
+test('AN24: the newlines a title file ends in reach no title: gh gets none, so the hash does not move', () => {
+  const w = workspace()
+  w.commit({ 'a.txt': 'one\n' })
+  const { hash } = w.check({ title: 'A title' }).doc
+  for (const title of ['A title\n', 'A title\n\n']) assert.equal(w.check({ title }).doc.hash, hash, title)
+  for (const title of ['A title\nmore', '\nA title', 'A title ']) assert.notEqual(w.check({ title }).doc.hash, hash, title)
+})
+
 test('AN24: the line the PR template leaves for the hash does not move it, and anything else on that line does', () => {
   const w = workspace()
   w.commit({ 'a.txt': 'one\n' })
