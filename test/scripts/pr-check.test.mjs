@@ -1120,6 +1120,39 @@ test('AN20: a reply the collector left compressed is compared by what is behind 
   assert.equal(doc.coverage.opaque_bytes, 0)
 })
 
+test('AN20: what HEAD holds of the built board is a rebuild, and is not compared; what only an earlier commit or web/ holds is', () => {
+  const text = ascii(60, 1), bundle = 'src/web/board/assets/index.js'
+  const board = (script = 'node -e 0') => {
+    const w = workspace({ 'package.json': JSON.stringify({ scripts: { 'test:build': script } }) })
+    capture(w, SEGMENT, [line(NOW_THEN, text)])
+    return { ...w, own: adopt(w) }
+  }
+  const one = board()
+  one.commit({ [bundle]: `${text}\n` })
+  const passed = one.check({ script: one.own })
+  assert.equal(passed.code, 0, JSON.stringify(passed.doc.findings))
+  assert.deepEqual(named(one.check({ script: one.own, env: { USER: text.slice(0, 6) } }).doc, 'identity'), [bundle], 'only the windows leave it')
+
+  const last = board()
+  last.commit({ [bundle]: 'first\n' })
+  last.commit({ [bundle]: `${text}\n` })
+  assert.equal(last.check({ script: last.own }).code, 0, 'what the branch brings in all is the same file')
+
+  const earlier = board()
+  earlier.commit({ [bundle]: `${text}\n` })
+  earlier.commit({ [bundle]: 'second\n' })
+  const history = earlier.check({ script: earlier.own }).doc
+  assert.deepEqual(of(history, 'captured-text').map((f) => f.where), [`${history.leaving.commits[0].sha}:file#0`])
+
+  const source = board()
+  source.commit({ [bundle]: `${text}\n`, 'web/src/app.ts': `${text}\n` })
+  assert.deepEqual(named(source.check({ script: source.own }).doc, 'captured-text'), ['web/src/app.ts'])
+
+  const stale = board('node -e process.exit(1)')
+  stale.commit({ [bundle]: `${text}\n` })
+  assert.deepEqual(named(stale.check({ script: stale.own }).doc, 'files'), [bundle])
+})
+
 test('AN20: a record at or after --before and a segment wholly after it are not compared', () => {
   const w = workspace()
   w.commit({ 'a.txt': `${ascii(60, 1)}\n`, 'b.txt': `${ascii(60, 2)}\n`, 'c.txt': `${ascii(60, 3)}\n`, 'd.txt': `${ascii(60, 4)}\n` })
