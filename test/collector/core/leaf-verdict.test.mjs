@@ -32,7 +32,7 @@ async function rig(t, { delayMs = 0, timing = {} } = {}) {
   redirector.setIngress(USER, async () => { await sleep(delayMs); return { ...meta, dst: undefined, capture: 'proxy', upstream: { kind: 'direct' } } })
   const fails = [], flows = []
   const engine = createEngine({ redirector, issuer: createLeafIssuer(loadCa(trocarCa)), upstreamCa: upCa.certPem, systemCa: { certs: [], sources: ['test'], errors: [] },
-    store: { envelope() {}, flow: (f) => flows.push(structuredClone(f)) }, onFailure: (f) => fails.push(f), timing, ingressToken: TOKEN })
+    store: { envelope() {}, flow: (f) => flows.push(structuredClone(f)) }, onFailure: (f) => fails.push(f), timing, ingressToken: TOKEN, alive: () => true }) // the client process keeps running
   const { port, ingressPort } = await engine.listen({ ingress: { port: 0 } })
   t.after(async () => { await closeWithin(engine); up.close() })
   const settled = async (n) => { for (let i = 0; i < 800 && flows.length < n; i++) await sleep(10); assert.ok(flows.length >= n, `${n} rows`) }
