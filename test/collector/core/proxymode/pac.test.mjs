@@ -1,4 +1,4 @@
-// test/collector/core/proxymode/pac.test.mjs — CM19 (4.11 P10): the PAC text, generated over bypass rows (each kind; verdict = bypassHit's: door then direct) × own leg (set / none / credentialed) × scheme (plain http: the app's own way) ×
+// test/collector/core/proxymode/pac.test.mjs — CM19 (4.11 P10): the PAC text, generated over bypass rows (each kind; verdict = bypassHit's: door then direct) × own leg (set / none / credentialed) × scheme (plain http, https, ws: one answer) ×
 // on vs after off, evaluated in a sandbox with the PAC builtins it uses; loopback = the door's own predicate (chain.mjs isLoopbackHost); and CM33: peerAllowed over same / other uid and SID.
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -35,8 +35,8 @@ for (const bypass of BYPASS) for (const [legName, ownLeg, legWord] of LEGS) for 
     const want = door ? `PROXY ${door}; ${legWord}` : legWord
     // a bypass-list host still goes through the door, which dials it direct (bypassHit): a DIRECT there was a turn never seen (mac Claude Desktop, 2026-10-17)
     for (const h of [...HOSTS, ...NEAR]) assert.equal(run(text, h), bypassHit(bypass, h) ? (door ? `PROXY ${door}; DIRECT` : 'DIRECT') : want, `${h}: the PAC says what the door's own matcher (bypassHit) says`)
-    // plain http takes the app's own way, on and after off (P10: the PAC does not hand plain http to the door)
-    for (const h of [...HOSTS, ...NEAR]) assert.equal(run(text, h, 'http'), bypassHit(bypass, h) ? 'DIRECT' : legWord, `http://${h}: the app's own way`)
+    // plain http gets the answer https gets: the door takes absolute-form plain http (4.8 §5.1), so it goes there too
+    for (const h of [...HOSTS, ...NEAR]) for (const scheme of ['http', 'HTTP']) assert.equal(run(text, h, scheme), run(text, h), `${scheme}://${h}: same as https`)
     for (const h of LOOP) assert.equal(run(text, h, 'HTTP'), 'DIRECT')
     if (!bypassHit(bypass, 'api.anthropic.com')) for (const scheme of ['wss', 'ws']) assert.equal(run(text, 'api.anthropic.com', scheme), want, `${scheme}: a WebSocket is CONNECTed, so it goes to the door`)
     if (door == null) assert.ok(!text.includes('47001'), 'after off the door is gone from the PAC')
