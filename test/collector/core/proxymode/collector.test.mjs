@@ -798,14 +798,14 @@ const QUESTIONS = [ // each one asked by a connection of a known agent at anothe
   ['parentOf, second step', (q, p) => q === 'parentOf' && p === 9002],
   ['cwdOf in the verdict', (q, p, nth) => q === 'cwdOf' && p === 9001 && nth === 2],
 ]
-async function deadlineRig() {
+async function deadlineRig({ limit = HANG_MS, on = (d, other) => [d.name, other.name], facts = (d) => ({ agent: d.name, uid: 501, startedAt: INSTALLED + 1 }), factsWhy } = {}) {
   const { d, f, os } = rootForm
   const other = descs.find((x) => x !== d && x.proxy.env.length && x.proxyMode.forms.some((y) => y.os.includes(os) && !y.hostTree && (x.proxyMode.routes[y.route] || {}).auth !== false))
   const g = `${other.name}:${other.proxyMode.forms.find((y) => y.os.includes(os) && !y.hostTree && (other.proxyMode.routes[y.route] || {}).auth !== false).route}`
-  const r = await rig({ desc: { ...d, proxyMode: { ...d.proxyMode, forms: [f] } }, others: [other], os, doorHangMs: HANG_MS, w: { pid: 9001, facts: { agent: d.name, uid: 501, startedAt: INSTALLED + 1 }, cwd: '/',
+  const r = await rig({ desc: { ...d, proxyMode: { ...d.proxyMode, forms: [f] } }, others: [other], os, doorHangMs: limit, w: { pid: 9001, facts: facts(d), factsWhy, cwd: '/',
     env: { [other.proxy.env[0]]: 'http://127.0.0.1:18107' }, parent: (q) => (q === 9001 ? { ppid: 9002, startedAt: INSTALLED } : null) } }) // the door in its env: the walk goes up (P7 step 3)
-  await r.c.on({ harnesses: [d.name, other.name], groups: { [g]: 18107 } })
-  return { ...r, connect: () => r.c.lookupIngress({ peer: PEER, user: g, target: { address: d.hosts[0], port: 443 } }) }
+  await r.c.on({ harnesses: on(d, other), groups: { [g]: 18107 } })
+  return { ...r, connect: (q) => r.c.lookupIngress({ peer: PEER, user: g, target: { address: d.hosts[0], port: 443 }, ...q }) }
 }
 for (const [name, held] of QUESTIONS) {
   test(`MA17 · ${name} hung: the connection is forwarded at the limit, door-deadline, never decrypted, and says where it stuck`, async () => {
@@ -836,6 +836,39 @@ for (const [name, held] of QUESTIONS) {
   })
 }
 
+// every process the door forwards without a verdict still has its env read first (P7 step 1): a limit that stopped that read is the row's reason, not the process's class
+const UNJUDGED = [
+  ['a process no harness names', 'not-an-agent', { facts: () => ({ uid: 501, startedAt: INSTALLED + 1 }) }],
+  ['a process whose facts failed', 'facts-unavailable', { facts: () => null, factsWhy: 'ps could not start' }],
+  ['an agent whose harness is off', 'harness-off', { on: (d, other) => [other.name] }],
+  ['an agent at a door whose harness is off', 'group-off', { on: (d) => [d.name] }],
+]
+for (const [name, reason, world] of UNJUDGED) {
+  test(`MA17 · ${name}: ${reason} when its env answers, door-deadline with the question when that read hangs`, async () => {
+    const answered = await deadlineRig(world)
+    assert.equal((await answered.connect()).skip.reason, reason)
+    answered.c.close()
+    const { c, w, connect } = await deadlineRig(world) // a process's env is read once: the hang needs a process not yet read
+    w.wait = (q) => (q === 'envOf' ? NEVER : undefined)
+    const meta = await connect()
+    assert.deepEqual([meta.decrypt, meta.skip.not_captured, meta.skip.reason], [false, 'untracked', 'door-deadline'])
+    assert.equal(typeof meta.skip.unread, 'string'); assert.ok(meta.skip.unread.length > 0)
+    c.close()
+  })
+}
+
+for (const spent of [0.9, 1, 2]) { // of the limit, gone before the door was asked: a slow opener's time is the connection's own (D82③)
+  test(`MA17 · the limit runs from the accept: ${spent} of it spent before the lookup leaves the rest of it, not a new limit`, async () => {
+    const limit = 2000, { c, w, connect } = await deadlineRig({ limit })
+    w.wait = (q) => (q === 'factsOf' ? NEVER : undefined)
+    const t0 = performance.now()
+    const meta = await connect({ acceptedAt: INSTALLED + 5 - limit * spent })
+    assert.ok(performance.now() - t0 < limit / 2, 'the time left, not the whole limit')
+    assert.equal(meta.skip.reason, 'door-deadline')
+    c.close()
+  })
+}
+
 test('MA17 · the PAC door: an owner that hangs is refused as unread; an owner proven this user\'s whose facts hang is forwarded door-deadline', async () => {
   const { c, w } = await rig({ desc: pacDesc, doorHangMs: HANG_MS, w: { pid: 77, facts: { uid: 501, startedAt: INSTALLED + 1 } } })
   await c.on({ harnesses: [pacDesc.name], groups: { [pacG]: 18108 } })
@@ -860,6 +893,17 @@ test('MA17 · the PAC file: an owner or facts question that hangs takes the pac-
     assert.deepEqual(records.filter((r) => r.code === 'pac-owner-unread').map((r) => r.peer), [PEER], q)
     c.close()
   }
+})
+
+test('MA17 · the PAC file: its limit runs from the accept too', async () => {
+  const limit = 2000, { c, w, records } = await rig({ desc: pacDesc, doorHangMs: limit, w: { pid: 77, facts: { uid: 501, startedAt: INSTALLED + 1 } } })
+  await c.on({ harnesses: [pacDesc.name], groups: { [pacG]: 18111 } })
+  w.wait = (x) => (x === 'ownerOf' ? NEVER : undefined)
+  const t0 = performance.now()
+  await c.servePac({ peer: PEER, user: pacG, path: '/trocar.pac', acceptedAt: INSTALLED + 5 - limit * 0.9 })
+  assert.ok(performance.now() - t0 < limit / 2, 'the time left, not the whole limit')
+  assert.equal(records.filter((r) => r.code === 'pac-owner-unread').length, 1)
+  c.close()
 })
 
 test('MA18 · the row carries the reader\'s own words: facts-unavailable says why the facts failed, pid-unresolved why the owner did; facts_ms is what the facts question took', async () => {

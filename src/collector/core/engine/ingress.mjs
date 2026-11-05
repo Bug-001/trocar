@@ -530,7 +530,7 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
     const line = /^GET (\/\S*) HTTP\/1\.[01]$/.exec(m.head.startLine)
     if (!line) return bad('a GET that is not origin-form')
     let res
-    try { res = await servePac({ peer, user: door.user, path: line[1], left: () => leftWhileJudged(r, peer, acceptedAt) }) } catch (e) { return bad(`the PAC could not be served: ${msgOf(e)}`) }
+    try { res = await servePac({ peer, user: door.user, path: line[1], acceptedAt, left: () => leftWhileJudged(r, peer, acceptedAt) }) } catch (e) { return bad(`the PAC could not be served: ${msgOf(e)}`) }
     r.detach()
     if (!res) return socket.destroy()
     const body = Buffer.from(res.body || '')

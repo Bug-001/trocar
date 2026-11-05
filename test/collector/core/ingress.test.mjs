@@ -882,6 +882,16 @@ test('W13 engine.close() leaves an agent flow that is in flight alone: it keeps 
   assert.deepEqual([L.flows.length, L.flows[0].pid, L.flows[0].bytes_up, L.flows[0].bytes_down], [1, 4242, 6, 6], 'the flow\'s row was written')
 })
 
+test('4.9 MA17 the door\'s limit is counted from the accept: a client whose opener came late hands the lookup the time of its connect, not the time of its head', T, async (t) => {
+  const L = await lab(t), asked = [], real = L.redirector.lookupIngress.bind(L.redirector)
+  L.redirector.lookupIngress = async (q) => { asked.push(q); return real(q) }
+  const c = L.client(); await new Promise((r) => c.sock.once('connect', r))
+  await sleep(80); const headAt = Date.now()
+  c.write(connectHead(`127.0.0.1:${L.echoPort}`))
+  assert.match(await c.head(), /^HTTP\/1\.1 200 /)
+  assert.ok(asked[0].acceptedAt <= headAt - 50, `accepted at ${asked[0].acceptedAt}, head at ${headAt}`)
+})
+
 test('W13 a client that resets after the ingress has answered, or while it looks up or dials, ends that connection only: never an uncaught exception', T, async (t) => {
   const crashes = noCrash(t)
   const L = await lab(t, { connectUpstream: (d) => (d.port === 1 ? hungSocket() : net.connect(d.port, d.address)) })

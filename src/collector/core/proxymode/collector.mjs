@@ -229,6 +229,7 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
       if (!dial) throw Object.assign(new Error(`the upstream of ${d.g} is not a proxy address trocar can dial`), { code: 'upstream-unavailable', why: 'upstream-unparseable' })
     }
     const base = { pid: id.pid, agent: known ? id.agent : d.harness, decrypt: false, capture: 'proxy', door: d.g, exe: id.exe, upstream: dial, pid_source: id.source, pid_ms: id.ms, facts_ms: id.facts_ms, negKey: id.pid != null ? (id.facts && id.facts.startedAt != null ? `${id.pid}@${id.facts.startedAt}` : String(id.pid)) : d.g } // per process life: a reused pid inherits nothing (4.8 §5.5)
+    if (late() && asking) return { ...base, skip: untracked('door-deadline', asking) } // the limit stopped a question of this connection: its class is the limit's, whatever the process turned out to be
     if (!known) return { ...base, skip: untracked(id.why || 'not-an-agent', id.unresolved) }
     if (!onSet.has(d.harness)) return { ...base, skip: untracked('group-off') } // a door kept for its holders: forward only
     if (!onSet.has(id.agent)) return { ...base, skip: untracked('harness-off') }

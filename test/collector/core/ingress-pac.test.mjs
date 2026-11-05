@@ -33,12 +33,14 @@ const busy = (ms) => { const end = Date.now() + ms; while (Date.now() < end); }
 test('CM19 · GET /trocar.pac on an auth:false door is answered by servePac with the peer and the door group', T, async (t) => {
   const calls = []
   const d = await door(t, { open: true, servePac: async (q) => { calls.push(q); return { status: 200, headers: { 'content-type': 'application/x-ns-proxy-autoconfig' }, body: 'function FindProxyForURL(){return "DIRECT"}' } } })
+  const before = Date.now()
   const got = await d.send('GET /trocar.pac HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n')
   assert.match(got, /^HTTP\/1\.1 200 OK\r\n/)
   assert.match(got, /content-type: application\/x-ns-proxy-autoconfig/)
   assert.match(got, /FindProxyForURL/)
   assert.equal(calls.length, 1)
   assert.equal(calls[0].user, 'h:pac'); assert.equal(calls[0].path, '/trocar.pac'); assert.equal(calls[0].peer.address, '127.0.0.1')
+  assert.ok(calls[0].acceptedAt >= before && calls[0].acceptedAt <= Date.now(), 'the door\'s limit counts from the accept (4.9 MA17)')
   assert.deepEqual(d.asked, [], 'a GET is not a lookup')
 })
 
