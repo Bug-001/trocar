@@ -153,6 +153,24 @@ test('(17) freshSessions: an answer that carries stored is read again 1.5 s late
   assert.equal(gone.data.stored, old.stored.at)
 })
 
+test('(18) until a whole list came back every page asks for the long deadline, a failed read changes nothing, afterwards none does', async () => {
+  const { loadSessions: load, FIRST_LIST_DEADLINE_MS } = await import('../../web/legacy/library/logic.mjs?first-list') // `listed` is the module's: a fresh copy
+  const pages = [{ sessions: [S({ session_id: 'a' })], errors: [], next: '1' }, { sessions: [S({ session_id: 'b' })], errors: [], next: null }]
+  let asked = [], secondFails = true
+  const api = { get: async (name, { after }, opts) => {
+    asked.push(opts?.deadlineMs)
+    return after != null && secondFails ? { ok: false, status: 0, error: 'cut' } : { ok: true, status: 200, data: pages[after == null ? 0 : 1] }
+  } }
+  assert.equal((await load(api)).ok, false)
+  assert.deepEqual(asked, [FIRST_LIST_DEADLINE_MS, FIRST_LIST_DEADLINE_MS])
+  secondFails = false; asked = []
+  assert.equal((await load(api)).ok, true)
+  assert.deepEqual(asked, [FIRST_LIST_DEADLINE_MS, FIRST_LIST_DEADLINE_MS])
+  asked = []
+  await load(api)
+  assert.deepEqual(asked, [undefined, undefined])
+})
+
 test('(17) loadSessions: a list with a stored page carries the oldest stored at; a session on two pages is listed once', async () => {
   const t1 = new Date(NOW - 120e3).toISOString(), t2 = new Date(NOW - 60e3).toISOString()
   const a = S({ session_id: 'a' }), b = S({ session_id: 'b' }), c = S({ session_id: 'c' })

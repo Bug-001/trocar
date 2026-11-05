@@ -7,6 +7,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { api } from '../../../legacy/core/api.mjs'
+import { LIST_WAIT_MS } from '../../../legacy/library/logic.mjs'
 import { INTERVAL, backoffMs } from '../../../legacy/core/poll.mjs'
 import { TIP_MS } from '../../../legacy/core/ui.mjs'
 import { HEALTH_READ } from '../../../legacy/labels/common.mjs'
@@ -319,6 +320,20 @@ test('O7b: opened in a hidden tab, the slow reads wait until the tab is visible,
   setVisible(true); await settle()
   for (let t = 0; t < 5e3; t += 500) await tick(500)
   for (const name of SLOW) expect(asked(name).length, name).toBeGreaterThan(0)
+})
+
+test('1.8 #18: the recent card says what is going on from 3 s of a read still out until the rows come', async () => {
+  let out: (a: Ans) => void = () => {}
+  answer.sessions = () => new Promise((res) => { out = res })
+  const p = mount(); await settle() // settle() has run 3 ms of the wait
+  const wait = () => p.region(W.CARD.recent)!.querySelector('[data-list-wait]')
+  await tick(LIST_WAIT_MS - 103)
+  expect(wait()).toBeNull()
+  await tick(100)
+  expect(wait()).not.toBeNull()
+  out(ok({ sessions: [sess('a', 60)] })); await settle()
+  expect(wait()).toBeNull()
+  expect(p.link(replay('a'))).not.toBeNull()
 })
 
 test('O8: a sessions answer that carries `stored` is never shown; the fresh one after it is, on the same rows', async () => {
