@@ -337,7 +337,7 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
   /** `j` waited out its bound: a caller gets 503 (a CLI then reads locally, and the board never takes it for an empty list), a job with none just ends. */
   function unread(j) {
     if (j.res && !j.gone()) {
-      const reason = `the query worker did not finish reading its rows within ${Math.round((now() - j.since) / 1000)} s`
+      const reason = `the query worker was still reading the index rows or this page's titles after ${Math.round((now() - j.since) / 1000)} s`
       const body = Buffer.from(JSON.stringify({ schema: SCHEMA_VERSION, command: j.name, ok: false, errors: [{ where: 'daemon', code: QUERY_WAIT_PROBLEMS[0], reason }], error: reason }))
       j.res.writeHead(503, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'content-length': body.length })
       j.res.write(body)
