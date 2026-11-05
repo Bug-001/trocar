@@ -10,25 +10,25 @@
 // owner, it is the end of a connection and no process is connecting).
 //
 // A wrong pid must never happen (4.8 W4): it would make the engine decrypt a process that does not trust trocar's CA and break it, so no row, several rows
-// (the pid was reused mid-query, or a twin of the socket), a slow table or an unreadable one all give null, and the connection is judged untracked and
-// spliced. There is no candidates set, no `known` table, no debounce and no demand poll (that machinery went with the kernel): the peer process is alive
-// by definition — it just connected — so one query per connection is the whole cost. `budgetMs` stays generous (250 ms): a table that is not back inside
-// it is SLOW, not unavailable — null with the cost said, and no failure record; a table that cannot be read at all gives null and ONE
-// `socktable-unavailable` record (4.8 §12) to `onFailure`, which the recorder folds. A helper the daemon closed itself (`helper-closed`: a lookup in
-// flight when `off` or a stop closed it) is null and no record: an operator's close is not a failure.
-// The budget is the TABLE's: it counts from the moment the single-threaded helper is on this read (helper.mjs `onStart`), not from the ask. A read
-// queued behind a `ps` the helper is still working on waits for it (at most `waitMs`, then `helper-busy`: null, no record) instead of being spliced
-// for a slowness that is not its own (a burst of connections after a cold ps was spliced one by one).
+// (the pid was reused mid-query, or a twin of the socket) or an unreadable table all give null, and the connection is judged untracked and spliced. There
+// is no candidates set, no `known` table, no debounce and no demand poll (that machinery went with the kernel): the peer process is alive by definition —
+// it just connected — so one query per connection is the whole cost. Slowness is no verdict (D82): the peer is waiting and its socket is in the table, so
+// the read is waited for. `budgetMs` is only the hang guard: a table not back by then is hung, and a hung table and one that cannot be read at all both give
+// null with `why: 'unreadable'` and ONE `socktable-unavailable` record (4.8 §12) to `onFailure`, which the recorder folds. A helper the daemon closed itself
+// (`helper-closed`: a lookup in flight when `off` or a stop closed it) is null and no record: an operator's close is not a failure.
+// The guard is the TABLE's: it counts from the moment the single-threaded helper is on this read (helper.mjs `onStart`), not from the ask. A read queued
+// behind a `ps` the helper is still working on waits for it, at most `waitMs`; a helper still not free then (`helper-busy`) is hung too.
+import { ASK_HANG_MS } from '../../../off/exec.mjs'
 import { HELPER_WAIT_MS } from './helper.mjs'
 
-const OVER = Symbol('over budget')
+const OVER = Symbol('over the limit')
 
-/** ownerOfSocket({ helper, peer: {address, port}, budgetMs = 250, waitMs, now, onFailure }) → { pid, source, ms }
+/** ownerOfSocket({ helper, peer: {address, port}, budgetMs = ASK_HANG_MS, waitMs, now, onFailure }) → { pid, source, ms, why? }
  *  `peer` is the accepted socket's remote end as the engine sees it ({address, port} — `socket.remoteAddress` / `remotePort`): the AGENT's socket local
  *  end. `helper` is the resident read-only helper's client (helper.mjs), whose `tcp-table` verb is the GetExtendedTcpTable read above. source =
- *  'socket-table' when a pid is answered, null with the pid. `ms` is what the question cost. A peer address that is not an IPv4 literal is answered null
+ *  'socket-table' when a pid is answered, null with the pid. `ms` is what the question cost. `why: 'unreadable'`: the table did not answer. A peer address that is not an IPv4 literal is answered null
  *  at once (the engine's doors bind 127.0.0.1 only, D47: an IPv6 peer cannot be one of the agents' entries — a fail-safe null, never a guess). */
-export async function ownerOfSocket({ helper, peer, budgetMs = 250, waitMs = HELPER_WAIT_MS, now = Date.now, onFailure = () => {} }) {
+export async function ownerOfSocket({ helper, peer, budgetMs = ASK_HANG_MS, waitMs = HELPER_WAIT_MS, now = Date.now, onFailure = () => {} }) {
   if (!helper || typeof helper.call !== 'function') throw new TypeError('ownerOfSocket needs the helper client (helper.mjs)')
   if (!peer || !Number.isInteger(peer.port)) throw new TypeError('ownerOfSocket: peer.port is required')
   const t0 = now()
@@ -38,17 +38,16 @@ export async function ownerOfSocket({ helper, peer, budgetMs = 250, waitMs = HEL
 
   let timer, overNow
   const over = new Promise((resolve) => { overNow = () => resolve(OVER) })
-  const arm = (ms) => { clearTimeout(timer); timer = setTimeout(overNow, ms); if (timer.unref) timer.unref() }
+  const arm = (ms) => { clearTimeout(timer); timer = setTimeout(() => setImmediate(overNow), ms); if (timer.unref) timer.unref() }
   arm(waitMs + budgetMs) // until the helper says it is on this read; a helper that never says so gets the whole wait at most
   const asked = helper.call('tcp-table', { localPort: peer.port, states: ['established'] }, { timeoutMs: budgetMs, waitMs, onStart: () => arm(budgetMs) })
-  asked.catch(() => {}) // when the budget wins, the table's own failure or late answer is nobody's to handle
+  asked.catch(() => {}) // when the limit wins, the table's own failure or late answer is nobody's to handle
   let answer
   try { answer = await Promise.race([asked, over]) } catch (e) {
-    if (e && (e.code === 'helper-timeout' || e.code === 'helper-busy')) answer = OVER // slow (its own read, or the helper busy before it): not unavailable
-    else if (e && e.code === 'helper-closed') return none() // the daemon stopped its own helper (off, stop): not an unreadable table, nothing to record
-    else return unavailable(e && e.message ? e.message : String(e))
+    if (e && e.code === 'helper-closed') return none() // the daemon stopped its own helper (off, stop): not an unreadable table, nothing to record
+    return unavailable(e && e.message ? e.message : String(e))
   } finally { clearTimeout(timer) }
-  if (answer === OVER) return none(Math.max(budgetMs, now() - t0))
+  if (answer === OVER) return unavailable(`no answer within ${budgetMs} ms`)
   if (!answer || !Array.isArray(answer.rows)) return unavailable('the helper\'s answer has no rows')
 
   const holders = new Set()
@@ -60,6 +59,6 @@ export async function ownerOfSocket({ helper, peer, budgetMs = 250, waitMs = HEL
 
   function unavailable(why) {
     onFailure({ event: 'failure', where: 'helper', code: 'socktable-unavailable', reason: `the TCP owner table could not be read (${why}); the connection's owner is not worked out, it is spliced untracked` })
-    return none()
+    return { ...none(), why: 'unreadable' }
   }
 }

@@ -9,6 +9,7 @@ import path from 'node:path'
 import { fork } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { parseSegment } from './core/record/segments.mjs'
+import { lowFork } from '../low-priority.mjs'
 
 const WORKER = fileURLToPath(new URL('./seal-worker.mjs', import.meta.url))
 const TEMP = /^\..*\.tmp$/ // a temp an interrupted seal left in raw/ (seal.mjs names them `.<segment>.<pid>-<hex>.tmp`)
@@ -21,7 +22,7 @@ export const BEFORE_SEAL_MS = 5_000
 
 /** Seal `file` in a child process → { code, reason }. The child exits as soon as this parent disconnects. */
 const forkWorker = (file, { lockFile, journal }) => new Promise((resolve) => {
-  const child = fork(WORKER, [file, lockFile, ...(journal ? [journal] : [])], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] })
+  const child = fork(WORKER, [file, lockFile, ...(journal ? [journal] : [])], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'], ...lowFork(process.execArgv) })
   let reason = ''
   child.stderr.on('data', (d) => { reason += d })
   child.on('error', (e) => resolve({ code: -1, reason: e.message }))

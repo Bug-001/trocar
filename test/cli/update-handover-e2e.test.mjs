@@ -29,6 +29,7 @@ import { runUpdateCli } from '../../src/cli/update.mjs'
 import { EXIT } from '../../src/cli/schema.mjs'
 import { agentOf, flowsOf, freePort, reqOf, startAfterNow, through, win32Io } from '../helpers/model-io.mjs'
 import { controlEndpointFor } from '../../src/off/control-client.mjs'
+import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { fakeIo } from './fixtures/on-ctx.mjs'
 import { codeId } from '../../src/version.mjs'
 import { listenLocalhost } from '../helpers/localhost.mjs'
@@ -58,7 +59,7 @@ function checkout() {
 
 const HEAD = 'HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: 8\r\n\r\npong' // the reply's first half; the second 'pong' ends it
 const TITLE = {
-  ws: 'a decrypted WebSocket mid-turn — the old one cuts it (cut-by-stop, naming update), stops itself and exits 0 unkilled, the new start reads a clean stop',
+  ws: 'a decrypted WebSocket mid-turn, install first because the login entry starts this code (V124) — the old one cuts it (cut-by-stop, naming update), stops itself and exits 0 unkilled, the new start reads the new entry and a clean stop',
   http: 'a decrypted response that ends 1 s after the exit request — the drain wait sees it end (status relayed.closing 1, then the daemon goes) within 5 s, and nothing is cut',
 }
 for (const platform of ['darwin', 'win32']) for (const kind of ['ws', 'http']) {
@@ -108,6 +109,14 @@ test(`${platform}: update replaces a daemon holding ${TITLE[kind]}`, { skip: awa
     fs.mkdirSync(path.dirname(plistFilePath(w.home)), { recursive: true }); fs.writeFileSync(plistFilePath(w.home), '<plist/>')
     const root = checkout() // the new code: what the login entry starts once the old daemon is gone, so the new daemon says it runs this
     box = await liveUnit({ w, platform, daemon: { code: codeId(root) } })
+    // ws: an update waiting to finish, under a login entry that starts this code: the real install rewrites the entry beside the old daemon, and leaves that daemon to the update (V124)
+    const script = path.join(root, 'bin', 'trocar.mjs'), rendered = `${script}\nnew line\n`, pulledFrom = []
+    if (kind === 'ws') {
+      fs.writeFileSync(path.join(w.dir, 'update.json'), JSON.stringify({ from: '0.1.0+0000000', on: [] }) + '\n')
+      fs.writeFileSync(box.unit.path, `${script}\n`)
+      const enable = box.unit.enable
+      Object.assign(box.unit, { text: () => rendered, enable: (o) => { if (o && o.now) pulledFrom.push(fs.readFileSync(box.unit.path, 'utf8')); return enable(o) } })
+    }
     const signalled = [], reached = [] // what stopDaemon sent, and which manager stops found the old daemon still running
     const childUp = () => child.exitCode === null && child.signalCode === null
     const manager = (what, signal) => { if (childUp()) { reached.push(what); child.kill(signal) } return { status: 0, stdout: '', stderr: '' } }
@@ -119,7 +128,8 @@ test(`${platform}: update replaces a daemon holding ${TITLE[kind]}`, { skip: awa
       return win ? win.io.exec(file, args, opts) : { status: 1, stdout: '', stderr: `not faked: ${file}` }
     }
     const deps = {
-      root, exec, getuid: () => 501, unit: box.unit, drainMs: kind === 'ws' ? 1000 : 20_000, // http: a wait that cannot see the end would run 20 s, then cut
+      root, exec, script, getuid: () => 501, unit: box.unit, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs },
+      harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, drainMs: kind === 'ws' ? 1000 : 20_000, // http: a wait that cannot see the end would run 20 s, then cut
       identity: (pid) => ((pid === child.pid && childUp()) || pid === process.pid ? { start_time: '111', boot_id: 'boot-1' } : null), // what the daemons' lock stub wrote
       kill: (pid, signal) => { signalled.push(signal); if (pid !== child.pid) throw Object.assign(new Error('not the old daemon'), { code: 'ESRCH' }); process.kill(pid, signal) },
     }
@@ -137,6 +147,7 @@ test(`${platform}: update replaces a daemon holding ${TITLE[kind]}`, { skip: awa
     const exit = await within(updating, 60_000, 'trocar update')
     assert.equal(exit, EXIT.ok, io.text())
     assert.equal(io.json().restarted, true, 'the daemon was replaced')
+    if (kind === 'ws') assert.deepEqual([pulledFrom, fs.existsSync(path.join(w.dir, 'update.json'))], [[rendered], false], 'pulled up from the new entry, and the update closed')
 
     const r = await within(exited, 5000, 'the old daemon exit')
     if (kind === 'http') assert.ok(goneAt - closingAt < 5000, `the drain ended ${goneAt - closingAt} ms after the response was closing (it ends at 1000 ms)`)

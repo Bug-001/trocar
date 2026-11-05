@@ -247,6 +247,10 @@ test('W24 the plist has the fields of 4.9 §4: Label com.trocar.collector, Progr
   assert.equal(AGENT_LABEL, 'com.trocar.collector')
 })
 
+test('MA14 the plist schedules the daemon as Interactive: the agent\'s CONNECT waits on this process', () => {
+  assert.equal(plist().match(/<key>ProcessType<\/key>\s*<string>([^<]*)<\/string>/)?.[1], 'Interactive')
+})
+
 test('W24 what goes into the plist is escaped or refused: & < > are escaped, a control character, a non-string or a bad env key is a bug of the caller (a quote in a path is harmless plist element content, unlike the Windows command line)', () => {
   const x = plistXml({ program: ['/opt/R&D/bin/node', '/Users/ada/a>b/trocar.mjs'] })
   assert.ok(balanced(x))

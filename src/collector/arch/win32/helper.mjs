@@ -17,6 +17,7 @@
 import { spawn as nodeSpawn } from 'node:child_process'
 import readline from 'node:readline'
 import { fileURLToPath } from 'node:url'
+import { ASK_HANG_MS } from '../../../off/exec.mjs'
 
 export const HELPER_PROTO = 1
 export const HELPER_PS1 = fileURLToPath(new URL('./helper.ps1', import.meta.url))
@@ -59,8 +60,8 @@ export function regKindsOf(data) {
 /** The verbs that may hold the single-threaded helper for long (`ps`: a CIM query, up to its 8 s operation timeout). A queued call of any other verb
  *  is written before them, so a socket-table read is never stuck behind a ps that was merely asked first. */
 const SLOW_VERBS = new Set(['ps'])
-/** How long a call may wait for the helper to be free before it is written: the longest a verb may hold it (procinfo's ps timeout). */
-export const HELPER_WAIT_MS = 10000
+/** How long a call may wait for the helper to be free before it is written: the longest a verb may hold it. */
+export const HELPER_WAIT_MS = ASK_HANG_MS
 const ABANDONED_CAP = 256
 const STDERR_TAIL = 20 // the last lines of its stderr that helper-down carries (4.6 §记录: 20, as the Linux client's)
 const normKey = (k) => trimKey(k).toLowerCase()
@@ -76,7 +77,7 @@ export function regReadAllowed(args) {
 
 const err = (message, code, extra = {}) => Object.assign(new Error(message), { code }, extra)
 
-/** startHelper({ spawn, exe, args, env, onExit, onFailure, readyTimeoutMs }) → { call(verb, args, { timeoutMs = 2000 }), abandoned(verb), close(), pid, ready }
+/** startHelper({ spawn, exe, args, env, onExit, onFailure, readyTimeoutMs }) → { call(verb, args, { timeoutMs = ASK_HANG_MS }), abandoned(verb), close(), pid, ready }
  *  `ready` resolves with the helper's ready line, or rejects when it never starts. `onExit({ reason, exit?, stderr?, ready, closed })` is
  *  told once when the helper is gone, however it went. */
 export function startHelper({ spawn = nodeSpawn, exe = 'powershell.exe', args = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', HELPER_PS1], env = process.env, onExit = () => {}, onFailure = () => {}, readyTimeoutMs = 15000 } = {}) {
@@ -167,12 +168,13 @@ export function startHelper({ spawn = nodeSpawn, exe = 'powershell.exe', args = 
     const q = queue.splice(i, 1)[0]
     clearTimeout(q.waitTimer)
     busy = true
-    q.timer = setTimeout(() => {
+    q.timer = setTimeout(() => setImmediate(() => { // one turn first: a loop that came back late runs this timer before it reads the answer already in the pipe
+      if (!pending.has(q.id)) return
       pending.delete(q.id)
       abandoned.set(q.id, q.verb)
       if (abandoned.size > ABANDONED_CAP) abandoned.delete(abandoned.keys().next().value)
       q.reject(err(`helper ${q.verb} timed out after ${q.timeoutMs} ms`, 'helper-timeout', { verb: q.verb }))
-    }, q.timeoutMs)
+    }), q.timeoutMs)
     q.timer.unref?.()
     pending.set(q.id, q)
     child.stdin.write(JSON.stringify({ id: q.id, verb: q.verb, args: q.args }) + '\n')
@@ -184,7 +186,7 @@ export function startHelper({ spawn = nodeSpawn, exe = 'powershell.exe', args = 
    *  written, `behind` names the verb it is working on) · helper-timeout · helper-verb-error (the helper answered ok:false). The helper is
    *  single-threaded and answers in order, so a call is written only when the one before it is answered: `timeoutMs` counts from
    *  that write — the time the helper spends on THIS call — and `onStart()` is told when it happens. */
-  async function call(verb, callArgs = {}, { timeoutMs = 2000, waitMs = HELPER_WAIT_MS, onStart } = {}) {
+  async function call(verb, callArgs = {}, { timeoutMs = ASK_HANG_MS, waitMs = HELPER_WAIT_MS, onStart } = {}) {
     if (typeof verb !== 'string' || !HELPER_VERBS.includes(verb)) throw err(`not a helper verb: ${JSON.stringify(verb)}`, 'helper-unknown-verb')
     if (verb === 'reg-read' && !regReadAllowed(callArgs)) throw err(`reg-read outside the allow-list: ${JSON.stringify(callArgs)}`, 'helper-forbidden-key')
     if (closing) throw err('the helper was closed', 'helper-closed')
@@ -194,13 +196,13 @@ export function startHelper({ spawn = nodeSpawn, exe = 'powershell.exe', args = 
     if (down) throw err(`helper is down: ${down.reason}`, down.code)
     return new Promise((resolve, reject) => {
       const q = { id: ++seq, verb, args: callArgs, timeoutMs, onStart, resolve, reject, timer: null, waitTimer: null }
-      q.waitTimer = setTimeout(() => {
+      q.waitTimer = setTimeout(() => setImmediate(() => { // the same turn as q.timer: the answer that frees the helper may be in the pipe already
         const i = queue.indexOf(q)
         if (i < 0) return
         queue.splice(i, 1)
         const behind = [...pending.values()][0]?.verb ?? [...abandoned.values()].at(-1) ?? null
         reject(err(`the helper was busy${behind ? ` with ${behind}` : ''} for ${waitMs} ms: ${verb} was not sent`, 'helper-busy', { verb, behind }))
-      }, waitMs)
+      }), waitMs)
       q.waitTimer.unref?.()
       queue.push(q)
       pump()

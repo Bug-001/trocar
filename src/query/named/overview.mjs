@@ -14,8 +14,15 @@ import { readUsage, fillUsage, usageFacts, takeFillProblem } from '../usage.mjs'
 import { asOf, indexRows, isModelCall, sessionFactsOf, sessionGroups } from '../rows.mjs';
 import { rowsKey } from '../warm.mjs';
 import { OVERVIEW_USAGE_BYTES, tsFilter } from './index.mjs';
+import { WINDOW } from './about.mjs';
 
-export const params = Object.freeze(['since', 'until']);
+export const about = Object.freeze({
+  summary: 'The numbers of a time window: sessions, calls, bytes on the wire and stored, the same per agent, and token usage per agent, model and lane, saying how much of it was read.',
+  params: Object.freeze({
+    ...WINDOW,
+  }),
+});
+export const params = Object.freeze(Object.keys(about.params));
 
 const add = (sum, v) => (v == null ? sum : (sum ?? 0) + v);
 
