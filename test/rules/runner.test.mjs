@@ -216,6 +216,17 @@ test('the parent\'s check on an answer lets through what rules may do: the agent
   } finally { await runner.close(); }
 });
 
+test('everything a script says on the console reaches the answer, whichever method it used', async () => {
+  const dir = tmpDir('trocar-console-'), script = path.join(dir, 'script.mjs');
+  fs.writeFileSync(script, 'export default () => { console.group("grouped"); console.table([7]); console.dir("seen"); console.groupEnd(); return "x" }');
+  const runner = openOneShot({ script, rules: [{ name: 'script', on_error: 'forward', match: { harness: 'any' }, do: [{ script }] }] });
+  try {
+    const { console: said, bytes } = await runner.run(unit());
+    assert.equal(String(bytes), 'x');
+    for (const word of ['grouped', '7', 'seen']) assert.ok(said.includes(word), said);
+  } finally { await runner.close(); }
+});
+
 test('42: what a reply and an injected event say stays out of the answer, however long, and comes back from the rules', async () => {
   const words = 'x'.repeat(100 * 1000);
   const of = (name, on, action) => ({ name, on, on_error: 'forward', match: { harness: 'any' }, do: [{ delay_ms: 1 }, action] });

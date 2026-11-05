@@ -14,6 +14,7 @@ const { ANSWER_BYTES, DEATHS, editsSegment, encodeFrame, frameReader, HEAD_BYTES
 
 const MIB = 1024 * 1024
 const NS_PER_MS = 1_000_000n
+const NS_PER_S = 1e9
 const CONSOLE_BYTES = 16 * 1024
 const LOAD_REASON_CHARS = 1024
 const SCRIPT_RESULT_KEYS = new Set(['body', 'headers'])
@@ -34,10 +35,11 @@ const setClock = (at) => {
   Atomics.notify(wake, 0)
 }
 // Kept here: `process` is not frozen, and a script that swaps these must not stop the clock or the memory check.
-const { _fatalException: fatal, _kill: kill, getActiveResourcesInfo, memoryUsage, pid } = process, { bigint: clockNow } = process.hrtime
+const { _kill: kill, getActiveResourcesInfo, memoryUsage, pid } = process, { bigint: clockNow } = process.hrtime
 const arm = (ms) => setClock(clockNow() + BigInt(Math.max(0, Math.ceil(ms))) * NS_PER_MS)
-// Node's own way out stops the watchdog and then waits for the thread pool, which a script can keep busy for hours. So this is the only way out.
-const end = () => kill(pid, 9)
+// Node's own way out stops the watchdog and then waits for the thread pool, which a script can keep busy for hours. So this is the only way out. Native: a JS function overflows on entry
+// with the stack nearly full, and C++ takes Node's way out after all.
+const end = kill.bind(null, pid, 9)
 const fixed = (on, name, value) => Object.defineProperty(on, name, { value, writable: false, configurable: false })
 
 const watchdog = new threads.Worker(new URL('./watchdog.mjs', import.meta.url), { workerData: { shared, fd: slot, slotPath, capBytes, ppid: Number(parentPid) } })
@@ -57,9 +59,10 @@ modules.registerHooks({
     return loaded
   },
 })
-for (const name of ['kill', '_kill', '_debugProcess', '_debugEnd', 'getBuiltinModule']) delete process[name]
+for (const name of ['kill', '_kill', '_debugProcess', '_debugEnd', '_tickCallback', 'getBuiltinModule']) delete process[name]
 fixed(process, 'reallyExit', end)
-fixed(process, '_fatalException', (...args) => { try { return fatal(...args) || end() } catch { end() } })
+fixed(process, '_fatalException', end)
+delete net.default._createServerHandle
 // Windows hands every child PATH, USERNAME and the like whatever env it was given. SYSTEMROOT stays: sockets do not load without it.
 for (const name of Object.keys(process.env)) if (!KEPT_ENV.includes(name.toUpperCase())) delete process.env[name]
 os.default.setPriority = function refused() { throw new Error('a rule process has no say over other processes') }
@@ -69,30 +72,38 @@ Object.freeze(Buffer.prototype)
 Object.freeze(Buffer)
 
 // RSS misses pages macOS compressed and Windows trimmed, and a leak of sockets is ports nobody else on the machine can have. A stuck main thread stops this tick, and the beat says so.
-// A socket that is closed holds its port for a while yet, and one that is unref'd is not in the count, so connections are counted where they all pass.
+// A socket that is closed holds its port for a while yet, and one that is unref'd is not in the count, so connections and binds are counted where they all pass, against the clock: a script
+// can reach the tick. A bind to a path is a file the permission model never sees, on a name trocar may be about to need.
 const tell = (why) => {
   Atomics.store(over, 0, DEATHS.indexOf(why) + 1) // the watchdog kills: this thread no longer can
   Atomics.add(wake, 0, 1)
   Atomics.notify(wake, 0)
 }
-let connects = 0
-const { connect } = net.Socket.prototype
-net.Socket.prototype.connect = function counted(...args) {
-  if (++connects > LIMITS.scriptConnects) tell('handles')
-  return connect.apply(this, args)
+let opened = 0, openedAt = clockNow()
+const open = () => {
+  const now = clockNow()
+  opened = Math.max(0, opened - Number(now - openedAt) / NS_PER_S * LIMITS.scriptConnectsPerSecond) + 1
+  openedAt = now
+  if (opened > LIMITS.scriptConnects) tell('handles')
 }
-net.Socket.prototype.unref = function counts() { return this }
+const { Server, Socket } = net, { connect } = Socket.prototype, { _listen2: bind } = Server.prototype
+Socket.prototype.connect = function counted(...args) { open(); return connect.apply(this, args) }
+Server.prototype._listen2 = function counted(address, port, addressType, ...rest) {
+  if (port === -1 && addressType === -1) throw new Error('a rule process binds no path')
+  open()
+  return bind.call(this, address, port, addressType, ...rest)
+}
+Socket.prototype.unref = Server.prototype.unref = function counts() { return this }
 setInterval(() => {
   Atomics.add(beat, 0, 1)
-  connects = Math.max(0, connects - LIMITS.scriptConnectsPerSecond)
   const { heapUsed, external, arrayBuffers } = memoryUsage()
-  if (heapUsed + external + arrayBuffers > capBytes) tell('memory')
+  if (heapUsed + Math.max(external, arrayBuffers) > capBytes) tell('memory') // a Buffer is in both
   if (getActiveResourcesInfo().length > LIMITS.scriptHandles) tell('handles')
 }, 1000).unref()
 
 let printed = ''
 const print = (...args) => { printed = `${printed}${util.format(...args)}\n`.slice(0, CONSOLE_BYTES) }
-globalThis.console = { ...console, log: print, info: print, warn: print, error: print, debug: print }
+globalThis.console = Object.fromEntries(Object.keys(console).map((name) => [name, print]))
 // The flag freezes objects, not the names they go by, and not Atomics. The clock and the beat look these names up on each call, so a new Math is a limit thirty years off.
 Object.freeze(Atomics)
 for (const [name, held] of Object.entries(Object.getOwnPropertyDescriptors(globalThis))) if ('value' in held) fixed(globalThis, name, held.value)
@@ -205,6 +216,7 @@ function answerOf(id, { escalate, survivors, bytes, edits, recover, reply, injec
     end += bytes.length
   }
   const segment = editsSegment(edits)
+  if (segment.length > LIMITS.editsBytes) throw new RuleFault('edits-full')
   if (segment.length) {
     fs.writeSync(slot, segment, 0, segment.length, end)
     answer.edits = { at: end, bytes: segment.length }

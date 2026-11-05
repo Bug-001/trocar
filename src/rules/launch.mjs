@@ -141,7 +141,9 @@ export function openOneShot({ script, rules, maxTaskMs = 2000, tmp = os.tmpdir()
     try {
       if ('died' in answer || !trusted(answer, unit) || !couldSay(answer)) throw new RangeError('an answer the rules could not have given')
       const { hits = [] } = answer
-      const reply = answer.reply_at ? effectAt(answer.reply_at, 'reply', hits) : null, inject = (answer.inject_at ?? []).map((at) => effectAt(at, 'inject', hits))
+      const places = answer.inject_at ?? []
+      if (new Set(places.map(String)).size !== places.length || edits?.bytes > LIMITS.editsBytes) throw new RangeError('more than the rules could have made')
+      const reply = answer.reply_at ? effectAt(answer.reply_at, 'reply', hits) : null, inject = places.map((at) => effectAt(at, 'inject', hits))
       const segment = edits ? slice(edits) : Buffer.alloc(0)
       if (!segmentHolds(segment)) throw new RangeError('not an edits segment')
       return { ...answer, reply, inject, bytes: body ? slice(body) : null, edits: JSON.parse(`[${segment}]`) }

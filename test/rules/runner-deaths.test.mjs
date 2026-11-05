@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { tmpDir } from '../helpers/tmp.mjs';
 import { LIMITS, SKIP_WHY } from '../../src/rules/closed.mjs';
 import { memoryCap, openOneShot, runnerArgs } from '../../src/rules/launch.mjs';
-import { DEATHS, encodeFrame, readProgress } from '../../src/rules/slot.mjs';
+import { DEATHS, encodeFrame, HEAD_BYTES, readProgress } from '../../src/rules/slot.mjs';
 
 const MIB = 1024 * 1024;
 const WIN = process.platform === 'win32';
@@ -52,6 +52,17 @@ const ROWS = [
       for (let i = 0; i < ${LIMITS.scriptHandles + 100}; i++) await once(net.connect(server.address().port, "127.0.0.1").unref(), "connect"); // one at a time: a burst overruns the backlog
       await new Promise(() => {})`,
   },
+  {
+    name: 'a leak of listeners that says they do not count', why: 'handles', maxTaskMs: 8000, top: 'import net from "node:net"; import { once } from "node:events"',
+    body: `for (let i = 0; i < ${LIMITS.scriptHandles + 100}; i++) await once(net.createServer().listen(0, "127.0.0.1").unref(), "listening"); await new Promise(() => {})`,
+  },
+  {
+    name: 'an edits segment too big to parse', why: 'bad-result',
+    body: `const bytes = ${Math.ceil(LIMITS.editsBytes / 3) * 3 + 2}, slot = fs.openSync(process.argv[2], 'r+')
+      fs.writeSync(slot, Buffer.alloc(bytes, '{},'), 0, bytes, ${HEAD_BYTES})
+      say({ id: taskId(), verdict: 'forward', edits: { at: ${HEAD_BYTES}, bytes } }); ${HOLD}`,
+  },
+  { name: 'a leak of file descriptors', why: 'handles', maxTaskMs: 8000, body: `for (let i = 0; i <= ${LIMITS.scriptFds}; i++) fs.openSync(process.argv[2], "r"); await new Promise(() => {})` },
   {
     name: 'connections opened and closed faster than ports come back', why: 'handles', maxTaskMs: 8000, top: 'import net from "node:net"',
     body: `for (let i = 0; i <= ${LIMITS.scriptConnects}; i++) net.connect(1, "127.0.0.1").on("error", () => {}).destroy(); await new Promise(() => {})`,
@@ -342,7 +353,67 @@ for (const [name, after] of [['unlinked', ''], ['unlinked and made again', 'fs.c
   });
 }
 
-describe('CPU with no task on it', { concurrency: 3 }, () => {
+test('a script binds no path, however it asks', { skip: WIN && 'a named pipe is no file on disk' }, async () => {
+  const dir = tmpDir('trocar-bind-'), script = path.join(dir, 'script.mjs'), bound = (n) => path.join(dir, `bound${n}`);
+  fs.writeFileSync(script, `
+    import http from 'node:http'
+    import net from 'node:net'
+    const quietly = (open) => { try { open().on('error', () => {}) } catch {} }
+    export default async () => {
+      quietly(() => net.createServer().listen(${JSON.stringify(bound(1))}))
+      quietly(() => net.createServer().listen({ path: ${JSON.stringify(bound(2))} }))
+      quietly(() => http.createServer().listen(${JSON.stringify(bound(3))}))
+      try { net._createServerHandle(${JSON.stringify(bound(4))}, -1, -1) } catch {}
+      await new Promise((r) => setTimeout(r, 100))
+      return 'tried'
+    }`);
+  const runner = openOneShot({ script, rules: [{ name: 'script', on_error: 'forward', match: { harness: 'any' }, do: [{ script }] }] });
+  try { assert.equal(String((await runner.run(unit())).bytes), 'tried'); } finally { await runner.close(); }
+  assert.deepEqual([1, 2, 3, 4].filter((n) => fs.existsSync(bound(n))), []);
+});
+
+for (const [name, places, check] of [
+  ['once', '[[1, 0]]', (answer) => assert.deepEqual(answer.inject, ['data: x\n\n'])],
+  ['twice', '[[1, 0], [1, 0]]', (answer) => assert.equal(answer.died, 'bad-result')],
+]) {
+  test(`what a frame says of an injected event, ${name}`, async () => {
+    const dir = tmpDir('trocar-inject-'), script = path.join(dir, 'script.mjs');
+    fs.writeFileSync(script, moduleOf({ body: `say({ id: taskId(), verdict: 'forward', hits: ['two'], inject_at: ${places} }); ${HOLD}` }, dir));
+    const rule = (name, action) => ({ name, on_error: 'forward', match: { harness: 'any', on: 'response' }, do: [action] });
+    const runner = openOneShot({ script, rules: [rule('one', { script }), rule('two', { inject: 'data: x\n\n' })] });
+    const on = { ...unit(), on: 'response' };
+    try {
+      await runner.run(on);
+      fs.writeFileSync(path.join(dir, 'die'), '');
+      check(await runner.run(on));
+    } finally { await runner.close(); }
+  });
+}
+
+test('a script finds no way to run microtasks with its stack nearly full', async () => {
+  const dir = tmpDir('trocar-tick-'), script = path.join(dir, 'script.mjs');
+  fs.writeFileSync(script, 'export default () => typeof process._tickCallback');
+  const runner = openOneShot({ script, rules: [{ name: 'script', on_error: 'forward', match: { harness: 'any' }, do: [{ script }] }] });
+  try { assert.equal(String((await runner.run(unit())).bytes), 'undefined'); } finally { await runner.close(); }
+});
+
+test('Buffers within the cap are within it, counted once', async () => {
+  const dir = tmpDir('trocar-buffers-'), script = path.join(dir, 'script.mjs');
+  fs.writeFileSync(script, `let held\nexport default () => { held ??= Buffer.alloc(${150 * MIB}, 1); return String(process.pid) }`);
+  const runner = openOneShot({ script, capBytes: 256 * MIB, rules: [{ name: 'script', on_error: 'forward', match: { harness: 'any' }, do: [{ script }] }] });
+  try {
+    const pid = Number((await runner.run(unit())).bytes);
+    await new Promise((r) => setTimeout(r, 2500));
+    assert.equal(Number((await runner.run(unit())).bytes), pid);
+  } finally { await runner.close(); }
+});
+
+test('more edits than a record holds is edits-full, not a bad answer', async () => {
+  const runner = openOneShot({ rules: [{ name: 'r', on_error: 'forward', match: { harness: 'any' }, do: [{ replace: 'a', with: 'b' }] }] });
+  try { assert.equal(whyOf(await runner.run({ ...unit(), body: Buffer.alloc(LIMITS.editsBytes / 16, 'a') })), 'edits-full'); } finally { await runner.close(); }
+});
+
+describe('CPU with no task on it', { concurrency: 4 }, () => {
   const started = async (t, start) => {
     const dir = tmpDir('trocar-idle-cpu-'), script = path.join(dir, 'script.mjs');
     fs.writeFileSync(script, `import crypto from 'node:crypto'\nlet on = false\nexport default () => { if (!on) { on = true; ${start} } return String(process.pid) }`);
@@ -353,13 +424,20 @@ describe('CPU with no task on it', { concurrency: 3 }, () => {
   for (const [name, start] of [['a timer that never lets up', 'setInterval(() => { const end = Date.now() + 900; while (Date.now() < end); }, 1)'], ['the thread pool', POOL]]) {
     test(`is ended: ${name}`, async (t) => {
       const { pid } = await started(t, start);
-      assert.ok(await until(() => isGone(pid), 9000), 'nothing ended it');
+      assert.ok(await until(() => isGone(pid), 16000), 'nothing ended it');
     });
   }
   test('a little of it is not', async (t) => {
     const { runner, pid } = await started(t, 'setInterval(() => { const end = Date.now() + 50; while (Date.now() < end); }, 500)');
-    await new Promise((r) => setTimeout(r, 6500));
+    await new Promise((r) => setTimeout(r, 16000));
     assert.equal(Number((await runner.run(unit())).bytes), pid);
+  });
+  test('nor is a stream of short tasks, however fast', async (t) => {
+    const { runner, pid } = await started(t, '');
+    for (const end = Date.now() + 16000; Date.now() < end;) {
+      const answer = await runner.run(unit());
+      assert.equal(Number(answer.bytes), pid, JSON.stringify({ ...answer, bytes: undefined }));
+    }
   });
 });
 

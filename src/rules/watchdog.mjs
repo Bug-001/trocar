@@ -7,9 +7,10 @@ import { DEATHS, die, HEAD_BYTES } from './slot.mjs'
 
 const RUNNING_MS = 20
 const IDLE_MS = 1000
-const STUCK_NS = 5_000_000_000n
-const IDLE_CPU_SHARE = 0.25
-const US_PER_NS = 0.001
+const STUCK_WAITS = 5
+const IDLE_WINDOW_NS = 5_000_000_000n
+const IDLE_CPU_US = 1_250_000 // a quarter of a core over the window
+const IDLE_WINDOWS = 2
 const SLOT_BYTES = HEAD_BYTES + 4 * LIMITS.bodyBytes
 
 const { shared, fd, slotPath, capBytes, ppid } = workerData
@@ -25,25 +26,23 @@ function parentGone() {
 }
 
 const { ino } = fs.statSync(slotPath)
-let lastBeat = 0, beatAt = process.hrtime.bigint()
-let lastCpu = 0, lastNow = beatAt, lastUntil = 1n, idleCpu = 0, idleNs = 0n
+const fdInUse = (n) => { try { fs.fstatSync(n); return true } catch { return false } }
+let lastBeat = 0, quiet = 0, waited = 'ok'
+let windowAt = process.hrtime.bigint(), windowCpu = process.cpuUsage(), windowTick = -1, burning = 0
 parentPort.postMessage('watching')
 try {
   for (;;) {
     const tick = Atomics.load(wake, 0), until = Atomics.load(deadline, 0), now = process.hrtime.bigint(), beats = Atomics.load(beat, 0)
     if (until && now > until) die(fd, 'timeout')
-    if (until || beats !== lastBeat) { lastBeat = beats; beatAt = now }
-    if (now - beatAt > STUCK_NS) die(fd, 'timeout') // no task and no clock: nothing else ends a main thread stuck in a script's timer
-    const { user, system } = process.cpuUsage(), cpu = user + system
-    if (!until && !lastUntil) { // both ends idle: a task that came and went between two looks is not idle time
-      idleCpu += cpu - lastCpu
-      idleNs += now - lastNow
-    }
-    [lastCpu, lastNow, lastUntil] = [cpu, now, until]
-    if (idleNs > STUCK_NS) {
-      if (idleCpu > Number(idleNs) * US_PER_NS * IDLE_CPU_SHARE) die(fd, 'timeout') // a timer of the script's, or the thread pool: the beat goes on and no clock runs
-      idleCpu = 0
-      idleNs = 0n
+    // No task and no clock: nothing else ends a main thread stuck in a script's timer. Quiet waits and not time, because a process stopped from outside or a sleeping machine stops this thread too.
+    if (until || beats !== lastBeat || waited !== 'timed-out') { lastBeat = beats; quiet = 0 } else if (++quiet > STUCK_WAITS) die(fd, 'timeout')
+    if (now - windowAt > IDLE_WINDOW_NS) { // a timer of the script's, or the thread pool: the beat goes on and no clock runs. A window a task touched says nothing.
+      const { user, system } = process.cpuUsage(windowCpu)
+      burning = !until && tick === windowTick && user + system > IDLE_CPU_US ? burning + 1 : 0
+      if (burning >= IDLE_WINDOWS) die(fd, 'timeout')
+      windowAt = now
+      windowCpu = process.cpuUsage()
+      windowTick = tick
     }
     const told = DEATHS[Atomics.load(over, 0) - 1]
     if (told) die(fd, told)
@@ -54,8 +53,9 @@ try {
       fs.truncateSync(slotPath, HEAD_BYTES) // one call fills a disk on NTFS, and the disk is not this process's to keep
       die(fd, 'memory')
     }
+    if (fdInUse(LIMITS.scriptFds)) die(fd, 'handles') // the lowest free number comes first, so a leak gets here
     if (parentGone()) die(fd, 'parent')
-    Atomics.wait(wake, 0, tick, until ? RUNNING_MS : IDLE_MS)
+    waited = Atomics.wait(wake, 0, tick, until ? RUNNING_MS : IDLE_MS)
   }
 } finally {
   process.kill(process.pid, 'SIGKILL') // this thread's `exit` goes to a main thread that may be in a script's loop for good, and then nothing is watching
