@@ -33,7 +33,7 @@ export default async () => {
   try {
     const { file, status } = JSON.parse((await runner.run(unit)).console);
     assert.equal(file, 'ERR_ACCESS_DENIED');
-    assert.notEqual(status, 200);
+    assert.equal(status, 401);
     assert.equal(reached, 0);
   } finally {
     await runner.close();

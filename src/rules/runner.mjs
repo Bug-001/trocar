@@ -6,8 +6,8 @@ const { permission } = process
 // A Node that would quietly give more than the flags asked for gets no rules at all.
 if (!permission || permission.has('child') || permission.has('fs.write', fileURLToPath(new URL('../..', import.meta.url))) || !capMiB) process.exit(78)
 
-const [{ Buffer }, { once }, fs, { pathToFileURL }, util, threads, modules, { full, RuleFault }, { applyRules }, { byteBudget }, { LIMITS }, { compileRules }, slots] = await Promise.all([
-  import('node:buffer'), import('node:events'), import('node:fs'), import('node:url'), import('node:util'), import('node:worker_threads'), import('node:module'),
+const [{ Buffer }, { once }, fs, { pathToFileURL }, util, threads, modules, os, { full, RuleFault }, { applyRules }, { byteBudget }, { LIMITS, SCRIPT_BUILTINS, SCRIPT_FORMATS }, { compileRules }, slots] = await Promise.all([
+  import('node:buffer'), import('node:events'), import('node:fs'), import('node:url'), import('node:util'), import('node:worker_threads'), import('node:module'), import('node:os'),
   import('./actions.mjs'), import('./apply.mjs'), import('./budget.mjs'), import('./closed.mjs'), import('./compile.mjs'), import('./slot.mjs'),
 ])
 const { ANSWER_BYTES, editsSegment, encodeFrame, frameReader, HEAD_BYTES, NO_RULE, writeProgress } = slots
@@ -31,18 +31,29 @@ const setClock = (at) => {
   Atomics.add(wake, 0, 1)
   Atomics.notify(wake, 0)
 }
-const arm = (ms) => setClock(process.hrtime.bigint() + BigInt(Math.max(0, Math.ceil(ms))) * NS_PER_MS)
+// Kept here: `process` is not frozen, and a script that swaps these must not stop the clock or the memory check.
+const { memoryUsage } = process, { bigint: clockNow } = process.hrtime
+const arm = (ms) => setClock(clockNow() + BigInt(Math.max(0, Math.ceil(ms))) * NS_PER_MS)
 
 const watchdog = new threads.Worker(new URL('./watchdog.mjs', import.meta.url), { workerData: { shared, fd: slot, capBytes, ppid: Number(parentPid) } })
 watchdog.once('exit', () => process.exit(1)) // no rule runs unwatched
 await once(watchdog, 'online')
 
-// The permission model has no say over signals, and a thread has a `process` of its own. Only the watchdog needs either and it is up, so the door closes behind it, before any rule or
-// script loads (5.1 §隔离). syncBuiltinESMExports carries the change to what `import` hands out. A hooks thread is a thread too, and renicing the daemon is a signal by another name.
-// sqlite and trace events open their files below the permission model, so they go with them.
-for (const name of ['kill', '_kill', '_debugProcess', '_debugEnd']) delete process[name]
-const SEALED = [['node:worker_threads', 'Worker'], ['node:module', 'register'], ['node:os', 'setPriority'], ['node:sqlite', 'DatabaseSync'], ['node:trace_events', 'createTracing']]
-for (const [id, name] of SEALED) process.getBuiltinModule(id)[name] = function refused() { throw new Error(`a rule process has no ${name}`) }
+// The permission model has no say over signals, threads, or what sqlite, trace events, V8's flags and a child process handle do below it. Only the watchdog needs a thread and it is up,
+// so the door closes behind it, before any rule or script loads (5.1 §隔离). What may be imported is listed, and a CommonJS file is out because `module` in one is all of node:module.
+modules.registerHooks({
+  resolve(specifier, context, next) {
+    if (modules.isBuiltin(specifier) && !SCRIPT_BUILTINS.includes(specifier.replace(/^node:/, ''))) throw new Error(`a rule process has no ${specifier}`)
+    return next(specifier, context)
+  },
+  load(url, context, next) {
+    const loaded = next(url, context)
+    if (!SCRIPT_FORMATS.includes(loaded.format)) throw new Error(`a rule process loads ES modules only, not ${url}`)
+    return loaded
+  },
+})
+for (const name of ['kill', '_kill', '_debugProcess', '_debugEnd', 'getBuiltinModule']) delete process[name]
+os.default.setPriority = function refused() { throw new Error('a rule process has no say over other processes') }
 modules.syncBuiltinESMExports()
 // The flag freezes what the language brings. Buffer is Node's, and this code reports through it.
 Object.freeze(Buffer.prototype)
@@ -50,7 +61,7 @@ Object.freeze(Buffer)
 
 // RSS misses pages macOS compressed and Windows trimmed. A stuck main thread stops this one, but then what it allocates is in the RSS.
 setInterval(() => {
-  const { heapUsed, external, arrayBuffers } = process.memoryUsage()
+  const { heapUsed, external, arrayBuffers } = memoryUsage()
   if (heapUsed + external + arrayBuffers > capBytes) {
     Atomics.store(overMemory, 0, 1) // the watchdog kills: this thread no longer can
     Atomics.add(wake, 0, 1)

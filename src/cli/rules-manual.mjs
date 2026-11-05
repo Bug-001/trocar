@@ -1,6 +1,7 @@
 // rules-manual.mjs — `trocar help rules`, the one text a person or an agent needs to write, try, list and remove a rule (RFC 1.6 §4.4, 5.1). Loaded only
 // when that help is asked for. The table of actions and positions and every limit come from the rule system itself, so they cannot drift from what `rules add` does.
 import { ACTION_POSITIONS, PLACES, LIMITS, DEFAULT_MAX_DELAY_MS } from '../rules/validate.mjs'
+import { SCRIPT_BUILTINS } from '../rules/closed.mjs'
 import { HARNESS_IDS, NAME_ALIASES } from '../off/harness-names.mjs'
 import { COMMAND_INDENT } from '../off/receipt.mjs'
 import { WIDTH, wrap, size } from './text.mjs'
@@ -264,6 +265,7 @@ export function rulesManual() {
       '',
       bullets(
         'It cannot start a process or a thread, send a signal or write a file. To use another program go over HTTP with fetch, to a service you started on this machine. It reads its own folder, so give it a folder of its own, outside your home folder\'s top level and outside ~/.trocar.',
+        `It can import ES modules, JSON and these of Node's own: ${SCRIPT_BUILTINS.join(', ')}. Anything else is refused when the rule loads, so bundle a CommonJS dependency into an ES module first.`,
         'console.log is seen only in rules test.',
         'It can import only files inside its own directory. A node_modules in a parent directory and a link that leaves the directory are refused, and the error does not name the path.',
         'If you change the script file, run rules enable again; until then the rule is not live. Files it imports are not checked for changes.',

@@ -6,7 +6,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { LIMITS, SKIP_WHY } from './closed.mjs'
 import { checkHeaderSet, headerChanges } from './headers.mjs'
-import { normalizeRule } from './validate.mjs'
+import { actionKind, normalizeRule } from './validate.mjs'
 import { ANSWER_BYTES, encodeFrame, frameReader, HEAD_BYTES, NO_RULE, readProgress, segmentHolds } from './slot.mjs'
 
 const MIB = 1024 * 1024
@@ -39,7 +39,7 @@ export function runnerArgs({ script, slot, app = APP, capBytes, allowed = proces
 // a process says what it answers, never how it ended.
 function talkTo(args, slot) {
   const { XDG_RUNTIME_DIR } = process.env
-  const child = spawn(process.execPath, args, { stdio: ['pipe', 'ignore', 'ignore', 'pipe'], env: XDG_RUNTIME_DIR ? { XDG_RUNTIME_DIR } : {} })
+  const child = spawn(process.execPath, args, { stdio: ['pipe', 'ignore', 'ignore', 'pipe'], windowsHide: true, env: XDG_RUNTIME_DIR ? { XDG_RUNTIME_DIR } : {} })
   const [pipeIn, , , pipe] = child.stdio ?? [] // none at all when no fd was left to make them: 'error' below says so
   let asked = null, killed = null
   const kill = (why) => {
@@ -59,9 +59,17 @@ function talkTo(args, slot) {
     dead: false,
     get killed() { return killed }, // set before `dead`: until 'close' the process is going, and hears nothing more
     kill,
-    ask: (message, ms) => new Promise((resolve) => {
-      asked = { id: message.id, resolve, timer: setTimeout(() => kill('timeout'), ms) }
-      pipeIn?.write(encodeFrame(message))
+    ask: (message, ms) => new Promise((resolve, reject) => {
+      if (asked) return reject(new Error('one question at a time'))
+      if (link.dead) return resolve({ died: killed ?? 'crashed' })
+      // This loop may have been the slow one: an answer already made gets one turn of the loop to arrive.
+      const due = () => {
+        const { task, done } = readProgress(slot)
+        if (task !== message.id || !done) return kill('timeout')
+        setImmediate(() => { if (asked?.id === message.id) kill('timeout') })
+      }
+      asked = { id: message.id, resolve, timer: setTimeout(due, ms) }
+      pipeIn?.write(encodeFrame(message), () => {})
     }),
   }
   link.gone = new Promise((resolve) => {
@@ -71,7 +79,7 @@ function talkTo(args, slot) {
       resolve()
     }
     child.once('close', end)
-    child.once('error', () => end(null))
+    child.on('error', () => end(null))
   })
   return link
 }
@@ -82,7 +90,7 @@ export function openOneShot({ script, rules, maxTaskMs = 2000, tmp = os.tmpdir()
   const dir = fs.mkdtempSync(path.join(fs.realpathSync(tmp), 'trocar-slot-'))
   const file = path.join(dir, 'slot.bin')
   const slot = fs.openSync(file, 'wx+', 0o600)
-  let runner = null, task = 0, unloaded = null
+  let runner = null, task = 0, unloaded = null, closed = false
 
   async function start() {
     fs.ftruncateSync(slot, 0)
@@ -93,7 +101,7 @@ export function openOneShot({ script, rules, maxTaskMs = 2000, tmp = os.tmpdir()
     if (frame?.ready) return null
     runner.kill('load-failed')
     await runner.gone
-    return { died: !frame && !fs.fstatSync(slot).size ? 'runner-down' : 'load-failed', reason: frame?.reason ?? died } // an empty slot: this Node never reached the rule process's code
+    return { died: !frame && !fs.fstatSync(slot).size ? 'runner-down' : 'load-failed', reason: typeof frame?.reason === 'string' ? frame.reason : died } // an empty slot: this Node never reached the rule process's code
   }
 
   const slice = ({ at, bytes }) => {
@@ -107,23 +115,33 @@ export function openOneShot({ script, rules, maxTaskMs = 2000, tmp = os.tmpdir()
   function trusted({ why, skipped = [], hits = [], would = [], rule_ms: ms = {}, console: said = '', verdict, headers }, unit) {
     const shaped = [skipped, hits, would].every(Array.isArray) && Object(ms) === ms && typeof said === 'string' && (why !== undefined || VERDICTS.includes(verdict))
     if (!shaped) return false
-    const closed = (reason) => SKIP_WHY.includes(reason)
-    const inClosedSet = (why === undefined || closed(why)) && skipped.every((skip) => closed(skip?.why))
+    const known = (reason) => SKIP_WHY.includes(reason)
+    const inClosedSet = (why === undefined || known(why)) && skipped.every((skip) => known(skip?.why))
     const changes = headers === null || headers === undefined ? [] : headerChanges(unit.headers ?? [], headers)
     return inClosedSet && checkHeaderSet(changes, { before: unit.headers ?? [] }).length === 0
   }
 
   // What the action at `[rule, at]` says under `key`. A place that holds no such thing throws, which is a bad answer like any other.
-  function effectAt([rule, at], key) {
-    const value = normalizeRule(rules[rule]).do[at][key]
+  function effectAt([rule, at], key, hits) {
+    const value = hits.includes(rules[rule].name) ? normalizeRule(rules[rule]).do[at][key] : undefined
     if (value === undefined) throw new RangeError(`no ${key} there`)
     return value
   }
 
+  // What is not `forward` has to be something a rule that hit wrote, or an `on_error: drop` that was skipped. A script's own frame can say anything.
+  function couldSay({ verdict, hits = [], skipped = [], reply_at: replyAt }) {
+    const kinds = rules.filter((rule) => hits.includes(rule.name)).flatMap((rule) => normalizeRule(rule).do.map(actionKind))
+    if (verdict === 'reply') return Boolean(replyAt)
+    if (verdict === 'hold') return kinds.includes('hold')
+    if (verdict === 'drop') return kinds.includes('drop') || skipped.some(({ rule }) => rules.find((r) => r.name === rule)?.on_error === 'drop')
+    return true
+  }
+
   function take({ body, edits, ...answer }, unit) {
     try {
-      if ('died' in answer || !trusted(answer, unit)) throw new RangeError('an answer the rules could not have given')
-      const reply = answer.reply_at ? effectAt(answer.reply_at, 'reply') : null, inject = (answer.inject_at ?? []).map((at) => effectAt(at, 'inject'))
+      if ('died' in answer || !trusted(answer, unit) || !couldSay(answer)) throw new RangeError('an answer the rules could not have given')
+      const { hits = [] } = answer
+      const reply = answer.reply_at ? effectAt(answer.reply_at, 'reply', hits) : null, inject = (answer.inject_at ?? []).map((at) => effectAt(at, 'inject', hits))
       const segment = edits ? slice(edits) : Buffer.alloc(0)
       if (!segmentHolds(segment)) throw new RangeError('not an edits segment')
       return { ...answer, reply, inject, bytes: body ? slice(body) : null, edits: JSON.parse(`[${segment}]`) }
@@ -134,6 +152,7 @@ export function openOneShot({ script, rules, maxTaskMs = 2000, tmp = os.tmpdir()
   }
 
   async function run({ body, ...unit }) {
+    if (closed) return { died: 'closed' }
     if (unloaded) return unloaded
     if (runner?.killed) await runner.gone
     if (!runner || runner.dead) {
@@ -143,6 +162,7 @@ export function openOneShot({ script, rules, maxTaskMs = 2000, tmp = os.tmpdir()
     const id = ++task
     if (body) fs.writeSync(slot, body, 0, body.length, HEAD_BYTES)
     const { frame, died } = await runner.ask({ id, unit, body_bytes: body ? body.length : null }, maxTaskMs + FROZEN_MS)
+    if (closed) return { died: 'closed' }
     const { task: ran, rule } = readProgress(slot)
     const fate = died ?? runner.killed // a second answer in the same read as the first
     const answer = fate ? { died: fate, rule: ran === id && rule !== NO_RULE ? rule : null } : take(frame, unit)
@@ -151,6 +171,8 @@ export function openOneShot({ script, rules, maxTaskMs = 2000, tmp = os.tmpdir()
   }
 
   async function close() {
+    if (closed) return
+    closed = true
     if (runner && !runner.dead) {
       runner.kill('closed')
       await runner.gone

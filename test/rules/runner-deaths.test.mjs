@@ -25,8 +25,7 @@ const unit = (text = '{}') => ({ on: 'request', harness: 'codex', pid: 42, metho
 const whyOf = (answer) => answer.died ?? answer.why ?? answer.skipped?.[0]?.why;
 
 const HOLD = 'await new Promise((r) => setTimeout(r, 1000))';
-// `body` runs inside the script once the file `die` exists; `top` at the top of the module. `$MARK` is a file only a process the script started could write.
-const sh = (mark) => (WIN ? `cmd /c echo x> ${mark}` : `echo x > ${mark}`);
+// `body` runs inside the script once the file `die` exists; `top` at the top of the module.
 const ROWS = [
   { name: 'an endless loop', why: 'timeout', body: 'for (;;);', maxTaskMs: 300 },
   { name: 'a task that never settles', why: 'timeout', body: 'await new Promise(() => {})', maxTaskMs: 300 },
@@ -39,16 +38,14 @@ const ROWS = [
   { name: 'frozen from outside, watchdog and all', why: 'timeout', body: 'return "late"', freeze: true, maxTaskMs: 300, posix: 'Windows has no SIGSTOP' },
   { name: 'abort in a top-level setTimeout', why: 'crashed', top: 'const tick = () => (armed() ? process.abort() : setTimeout(tick, 10)); setTimeout(tick, 10)', body: 'await new Promise((r) => setTimeout(r, 1500))' },
   { name: 'a throw in a setInterval', why: 'crashed', top: 'setInterval(() => { if (armed()) throw new Error("boom") }, 10)', body: 'await new Promise((r) => setTimeout(r, 1500))' },
-  { name: 'spawn', why: 'rule-error', body: 'cp.spawn(process.execPath, ["-e", WRITE_MARK], { stdio: "ignore" }); await new Promise((r) => setTimeout(r, 200))' },
-  { name: 'execSync', why: 'rule-error', body: 'cp.execSync(SHELL_MARK)' },
-  { name: 'fork', why: 'rule-error', body: 'cp.fork(fileURLToPath(import.meta.url), { stdio: "ignore" })' },
-  { name: 'process.binding', why: 'rule-error', body: 'process.binding("spawn_sync").spawn({ file: process.execPath, args: [process.execPath, "-e", WRITE_MARK], stdio: [] })' },
   { name: 'process.dlopen', why: 'rule-error', body: 'try { process.dlopen({ exports: {} }, fileURLToPath(new URL("./addon.node", import.meta.url))) } catch (e) { if (e.code === "ERR_DLOPEN_FAILED") return "the loader was reached"; throw e }' },
   { name: 'a CRLF in a header', why: 'rule-error', body: 'return { headers: { "x-a": "1\\r\\nx-b: 2" } }' },
   { name: 'a header over the growth limit', why: 'rule-error', body: 'return { headers: { "x-a": "v".repeat(16384) } }' },
   { name: 'a header trocar owns', why: 'rule-error', body: 'return { headers: { "Content-Length": "1" } }' },
   { name: 'a body past 64 MiB', why: 'too-big', body: 'return "x".repeat(65 * 1024 * 1024)' },
   ...['new ArrayBuffer(4)', 'new Map([["body", "x"]])', 'new Date()', '[]'].map((value) => ({ name: `a result that says nothing: ${value}`, why: 'bad-result', body: `return ${value}` })),
+  { name: 'an endless loop behind a stopped clock', why: 'timeout', top: 'process.hrtime.bigint = () => 1n << 61n', body: 'for (;;);', maxTaskMs: 300 },
+  { name: 'memory behind a stopped gauge', why: 'memory', top: 'process.memoryUsage = () => ({ heapUsed: 0, external: 0, arrayBuffers: 0 })', body: 'const keep = []; for (;;) { keep.push(Buffer.allocUnsafeSlow(32 << 20)); await new Promise((r) => setTimeout(r, 20)) }', capBytes: 192 * MIB, maxTaskMs: 30000 },
   { name: 'a cycle', why: 'bad-result', body: 'const o = {}; o.self = o; return o' },
   { name: 'a cycle in the body key', why: 'bad-result', body: 'const o = {}; o.body = o; return o' },
   { name: 'memory past the limit', why: 'memory', body: 'const keep = []; for (;;) keep.push(Buffer.alloc(8 << 20, 1))', capBytes: 192 * MIB, maxTaskMs: 30000 },
@@ -70,6 +67,9 @@ const ROWS = [
     'headers past the growth limit': '{ headers: [["content-length", "2"], ["x-a", "v".repeat(9000)]] }',
     'a reply from an action that has none': '{ reply_at: [0, 0] }',
     'a reply from a place that is no rule': '{ reply_at: [9, 9] }',
+    'a drop no rule wrote': '{ verdict: "drop", hits: ["script"] }',
+    'a hold no rule wrote': '{ verdict: "hold", hits: ["script"] }',
+    'a reply with nothing to say': '{ verdict: "reply", hits: ["script"] }',
     'an injected event from an action that has none': '{ inject_at: [[0, 0]] }',
     'a why outside the closed set': '{ why: "made-up" }',
     'a skip outside the closed set': '{ skipped: [{ rule: "x", why: "made-up" }] }',
@@ -78,13 +78,9 @@ const ROWS = [
 ];
 
 function moduleOf({ top = '', body }, dir) {
-  const mark = path.join(dir, 'started');
   return `
-    import cp from 'node:child_process'
     import fs from 'node:fs'
     import { fileURLToPath } from 'node:url'
-    const WRITE_MARK = ${JSON.stringify(`require('fs').writeFileSync(${JSON.stringify(mark)}, 'x')`)}
-    const SHELL_MARK = ${JSON.stringify(sh(mark))}
     const armed = () => fs.existsSync(new URL('./die', import.meta.url))
     const say = (message) => {
       const body = Buffer.from(JSON.stringify(message)), head = Buffer.alloc(4)
@@ -120,7 +116,6 @@ describe('12e: what a script does to its process', { concurrency: 8 }, () => {
         const answer = await runner.run(unit());
         assert.equal(whyOf(answer), row.why);
         assert.ok(CLOSED.has(whyOf(answer)));
-        assert.ok(!fs.existsSync(path.join(dir, 'started')), 'nothing a script started ran');
 
         // At once: a process on its way out must not take the next unit with it.
         fs.rmSync(path.join(dir, 'die'));
@@ -254,17 +249,75 @@ test('a script\'s process.exit(78) at the top is a failed load, not a Node that 
   try { assert.equal((await runner.run(unit())).died, 'load-failed'); } finally { await runner.close(); }
 });
 
-test('40: no file descriptor left for a rule process is a failed load, and the caller lives', { skip: WIN && 'no fd limit to reach this way' }, async () => {
+test('40: no file descriptor left for a rule process is runner-down, and the caller lives', { skip: WIN && 'no fd limit to reach this way' }, async () => {
   const held = [];
   const dir = tmpDir('trocar-fds-'), file = path.join(dir, 'x');
   fs.writeFileSync(file, '');
   const runner = openOneShot({ rules: [{ name: 'r', on_error: 'forward', match: { harness: 'any' }, do: [{ replace: 'a', with: 'b' }] }] });
   try {
     try { for (;;) held.push(fs.openSync(file, 'r')); } catch (e) { assert.equal(e.code, 'EMFILE'); }
-    const answer = await runner.run(unit()).catch((e) => ({ threw: e.code ?? e.message }));
-    assert.ok(answer.died || answer.threw, JSON.stringify(answer));
+    assert.equal((await runner.run(unit())).died, 'runner-down');
   } finally {
     for (const fd of held) fs.closeSync(fd);
     await runner.close();
   }
+});
+
+test('after a task the clock is off: an idle process outlives the max delay and answers again', async () => {
+  const dir = tmpDir('trocar-idle-'), script = path.join(dir, 'script.mjs');
+  fs.writeFileSync(script, 'export default () => String(process.pid)');
+  const runner = openOneShot({ script, rules: [{ name: 'script', on_error: 'forward', match: { harness: 'any' }, do: [{ script }] }], maxTaskMs: 200 });
+  try {
+    const first = String((await runner.run(unit())).bytes);
+    await new Promise((r) => setTimeout(r, 500));
+    assert.equal(String((await runner.run(unit())).bytes), first);
+  } finally { await runner.close(); }
+});
+
+test('a Node that cannot start the process at all is runner-down', async () => {
+  const real = process.execPath;
+  const runner = openOneShot({ rules: [{ name: 'r', on_error: 'forward', match: { harness: 'any' }, do: [{ replace: 'a', with: 'b' }] }] });
+  process.execPath = path.join(tmpDir('trocar-nonode-'), 'node');
+  try { assert.equal((await runner.run(unit())).died, 'runner-down'); } finally { process.execPath = real; await runner.close(); }
+});
+
+test('the channel closed is the end of the process, and a wrong parent is too', async () => {
+  const dir = tmpDir('trocar-eof-'), slot = path.join(dir, 'slot');
+  fs.writeFileSync(slot, '');
+  const args = (parent) => { const list = runnerArgs({ slot, capBytes: memoryCap() }); list[list.length - 1] = String(parent); return list; };
+  const exited = (child) => new Promise((resolve) => child.once('close', (code, signal) => resolve({ code, signal })));
+  const eof = spawn(process.execPath, args(process.pid), { stdio: ['pipe', 'ignore', 'ignore', 'pipe'] });
+  eof.stdin.end();
+  assert.equal((await exited(eof)).code, 0);
+  const orphan = spawn(process.execPath, args(1), { stdio: ['pipe', 'ignore', 'ignore', 'pipe'] });
+  const { signal } = await exited(orphan);
+  assert.equal(signal, WIN ? null : 'SIGKILL');
+  assert.equal(readProgress(fs.openSync(slot, 'r')).death, 'parent');
+});
+
+test('close twice is one close, and a run after it touches nothing', async () => {
+  const runner = openOneShot({ rules: [{ name: 'r', on_error: 'forward', match: { harness: 'any' }, do: [{ replace: 'a', with: 'b' }] }] });
+  await runner.run(unit());
+  await runner.close();
+  await runner.close();
+  assert.equal((await runner.run(unit())).died, 'closed');
+});
+
+test('a parent too busy to read is no reason to kill a task that finished', async () => {
+  const dir = tmpDir('trocar-busy-'), script = path.join(dir, 'script.mjs');
+  fs.writeFileSync(script, 'export default () => "done"');
+  const runner = openOneShot({ script, rules: [{ name: 'script', on_error: 'forward', match: { harness: 'any' }, do: [{ script }] }], maxTaskMs: 1000 });
+  try {
+    await runner.run(unit());
+    const pending = runner.run(unit());
+    for (const until = Date.now() + 2500; Date.now() < until;); // the timer comes due with the answer already in the pipe
+    assert.equal(String((await pending).bytes), 'done');
+  } finally { await runner.close(); }
+});
+
+test('two questions at once are refused, not left hanging', async () => {
+  const runner = openOneShot({ rules: [{ name: 'r', on_error: 'forward', match: { harness: 'any' }, do: [{ replace: 'a', with: 'b' }] }] });
+  await runner.run(unit());
+  await assert.rejects(Promise.all([runner.run(unit()), runner.run(unit())]));
+  await runner.close();
 });
