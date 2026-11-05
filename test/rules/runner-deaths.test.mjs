@@ -208,8 +208,33 @@ for (const [how, top] of [['by itself', ''], ['with the clock swapped under it',
   assert.deepEqual([readProgress(fd).task, readProgress(fd).rule, readProgress(fd).done, readProgress(fd).death], [7, 0, false, 'timeout']);
 });
 
+const STUCK = 'export default (m) => { if (m.text === "pid") return String(process.pid); for (;;); }';
+
+/** A rule process stuck on a task, under a parent of its own to kill. Nothing else ends the process if a row is red: it is no child of this one, and it would spin on after the run. */
+async function stuckUnderParent(t, source, fds) {
+  const dir = tmpDir('trocar-orphan-'), script = path.join(dir, 'script.mjs'), parent = path.join(dir, 'parent.mjs');
+  const launch = new URL('../../src/rules/launch.mjs', import.meta.url).href;
+  fs.writeFileSync(script, source);
+  fs.writeFileSync(parent, `
+    import { openOneShot } from ${JSON.stringify(launch)}
+    const script = ${JSON.stringify(script)}
+    const unit = (text) => ({ on: 'request', harness: 'codex', method: 'POST', host: 'h', path: '/', headers: [], req_headers: [], body: Buffer.from(text) })
+    const runner = openOneShot({ script, tmp: ${JSON.stringify(dir)}, rules: [{ name: 's', on_error: 'forward', match: { harness: 'any' }, do: [{ script }] }], maxTaskMs: 60000 })
+    process.stdout.write(String((await runner.run(unit('pid'))).bytes) + '\\n')
+    runner.run(unit('stick'))
+    setInterval(() => {}, 1000)`);
+  const io = { stdio: ['ignore', 'pipe', 'inherit'] };
+  const middle = fds ? spawn('/bin/sh', ['-c', `ulimit -n ${fds}; exec "$0" "$@"`, process.execPath, parent], io) : spawn(process.execPath, [parent], io);
+  t.after(() => middle.kill('SIGKILL'));
+  const pid = await new Promise((resolve) => { middle.stdout.once('data', (d) => resolve(Number(d))); });
+  assert.ok(pid > 0);
+  t.after(() => { if (!isGone(pid)) process.kill(pid, 'SIGKILL'); });
+  await new Promise((r) => setTimeout(r, 100));
+  return { dir, middle, pid };
+}
+
 for (const [name, source] of [
-  ['stuck in a loop', 'export default (m) => { if (m.text === "pid") return String(process.pid); for (;;); }'],
+  ['stuck in a loop', STUCK],
   ['idle', 'export default (m) => (m.text === "pid" ? String(process.pid) : undefined)'],
   ['stuck in a loop with its slot closed', `
     import fs from 'node:fs'
@@ -221,27 +246,36 @@ for (const [name, source] of [
     }`],
 ]) {
   test(`a parent killed outright takes the rule process with it within two seconds, ${name}`, async (t) => {
-    const dir = tmpDir('trocar-orphan-'), script = path.join(dir, 'script.mjs'), parent = path.join(dir, 'parent.mjs');
-    const launch = new URL('../../src/rules/launch.mjs', import.meta.url).href;
-    fs.writeFileSync(script, source);
-    fs.writeFileSync(parent, `
-      import { openOneShot } from ${JSON.stringify(launch)}
-      const script = ${JSON.stringify(script)}
-      const unit = (text) => ({ on: 'request', harness: 'codex', method: 'POST', host: 'h', path: '/', headers: [], req_headers: [], body: Buffer.from(text) })
-      const runner = openOneShot({ script, tmp: ${JSON.stringify(dir)}, rules: [{ name: 's', on_error: 'forward', match: { harness: 'any' }, do: [{ script }] }], maxTaskMs: 60000 })
-      process.stdout.write(String((await runner.run(unit('pid'))).bytes) + '\\n')
-      runner.run(unit('stick'))
-      setInterval(() => {}, 1000)`);
-    const middle = spawn(process.execPath, [parent], { stdio: ['ignore', 'pipe', 'inherit'] });
-    t.after(() => middle.kill('SIGKILL'));
-    const pid = await new Promise((resolve) => { middle.stdout.once('data', (d) => resolve(Number(d))); });
-    assert.ok(pid > 0);
-    await new Promise((r) => setTimeout(r, 100));
+    const { middle, pid } = await stuckUnderParent(t, source);
     assert.ok(!isGone(pid));
     middle.kill('SIGKILL');
     assert.ok(await until(() => isGone(pid), 2000), 'the rule process outlived its parent');
   });
 }
+
+// Nobody takes over from a watchdog thread that ends, and the main thread that would hear of it is in the script's loop. Which road the process goes by differs per platform, so the rows ask only that it goes.
+const FILL_FDS = `
+  import fs from 'node:fs'
+  export default (m) => {
+    if (m.text === "pid") return String(process.pid)
+    try { for (;;) fs.openSync(process.argv[2], 'r') } catch {}
+    for (;;);
+  }`;
+test('a rule process does not outlive a watchdog that cannot read its slot', { skip: WIN && 'a directory has no mode to take away' }, async (t) => {
+  const { dir, middle, pid } = await stuckUnderParent(t, STUCK);
+  const slots = path.join(dir, fs.readdirSync(dir).find((name) => name.startsWith('trocar-slot-')));
+  fs.chmodSync(slots, 0);
+  t.after(() => fs.chmodSync(slots, 0o700));
+  await new Promise((r) => setTimeout(r, 100));
+  middle.kill('SIGKILL');
+  assert.ok(await until(() => isGone(pid), 2000), 'the rule process outlived its watchdog');
+});
+
+test('a rule process does not outlive a script that takes every file descriptor, which Linux reads the RSS through', { skip: WIN && 'no fd limit to reach this way' }, async (t) => {
+  const { middle, pid } = await stuckUnderParent(t, FILL_FDS, 256);
+  middle.kill('SIGKILL');
+  assert.ok(await until(() => isGone(pid), 2000), 'the rule process outlived its watchdog');
+});
 
 test('a script\'s process.exit(78) at the top is a failed load, not a Node that fails the check', async () => {
   const dir = tmpDir('trocar-78-'), script = path.join(dir, 'script.mjs');

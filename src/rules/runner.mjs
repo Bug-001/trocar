@@ -38,8 +38,8 @@ const { getActiveResourcesInfo, memoryUsage } = process, { bigint: clockNow } = 
 const arm = (ms) => setClock(clockNow() + BigInt(Math.max(0, Math.ceil(ms))) * NS_PER_MS)
 
 const watchdog = new threads.Worker(new URL('./watchdog.mjs', import.meta.url), { workerData: { shared, fd: slot, slotPath, capBytes, ppid: Number(parentPid) } })
-watchdog.once('exit', () => process.exit(1)) // no rule runs unwatched
-await once(watchdog, 'online')
+watchdog.once('exit', () => process.exit(1))
+await once(watchdog, 'message') // in its loop, not just started: no rule runs unwatched, and a script that takes every fd stops a thread still loading its modules
 
 // The permission model has no say over signals, threads, or what sqlite, trace events, V8's flags and a child process handle do below it. Only the watchdog needs a thread and it is up,
 // so the door closes behind it, before any rule or script loads (5.1 §隔离). What may be imported is listed, and a CommonJS file is out because `module` in one is all of node:module.

@@ -1,7 +1,7 @@
 // watchdog.mjs (src/rules) — the thread that kills its rule process (RFC 5.1 §规则进程「看门狗」). It reads nothing from the main thread but one shared deadline, so a main
 // thread stuck in a regex, a loop or an allocation does not stop it. The parent's event loop is not involved either.
 import fs from 'node:fs'
-import { workerData } from 'node:worker_threads'
+import { parentPort, workerData } from 'node:worker_threads'
 import { LIMITS } from './closed.mjs'
 import { DEATHS, die, HEAD_BYTES } from './slot.mjs'
 
@@ -23,18 +23,23 @@ function parentGone() {
 }
 
 let lastBeat = 0, beatAt = process.hrtime.bigint()
-for (;;) {
-  const tick = Atomics.load(wake, 0), until = Atomics.load(deadline, 0), now = process.hrtime.bigint(), beats = Atomics.load(beat, 0)
-  if (until && now > until) die(fd, 'timeout')
-  if (until || beats !== lastBeat) { lastBeat = beats; beatAt = now }
-  if (now - beatAt > STUCK_NS) die(fd, 'timeout') // no task and no clock: nothing else ends a main thread stuck in a script's timer
-  const told = DEATHS[Atomics.load(over, 0) - 1]
-  if (told) die(fd, told)
-  if (process.memoryUsage.rss() > capBytes) die(fd, 'memory')
-  if (fs.statSync(slotPath, { throwIfNoEntry: false })?.size > SLOT_BYTES) { // by path: a script can close the fd
-    fs.truncateSync(slotPath, HEAD_BYTES) // one call fills a disk on NTFS, and the disk is not this process's to keep
-    die(fd, 'memory')
+parentPort.postMessage('watching')
+try {
+  for (;;) {
+    const tick = Atomics.load(wake, 0), until = Atomics.load(deadline, 0), now = process.hrtime.bigint(), beats = Atomics.load(beat, 0)
+    if (until && now > until) die(fd, 'timeout')
+    if (until || beats !== lastBeat) { lastBeat = beats; beatAt = now }
+    if (now - beatAt > STUCK_NS) die(fd, 'timeout') // no task and no clock: nothing else ends a main thread stuck in a script's timer
+    const told = DEATHS[Atomics.load(over, 0) - 1]
+    if (told) die(fd, told)
+    if (process.memoryUsage.rss() > capBytes) die(fd, 'memory')
+    if (fs.statSync(slotPath, { throwIfNoEntry: false })?.size > SLOT_BYTES) { // by path: a script can close the fd
+      fs.truncateSync(slotPath, HEAD_BYTES) // one call fills a disk on NTFS, and the disk is not this process's to keep
+      die(fd, 'memory')
+    }
+    if (parentGone()) die(fd, 'parent')
+    Atomics.wait(wake, 0, tick, until ? RUNNING_MS : IDLE_MS)
   }
-  if (parentGone()) die(fd, 'parent')
-  Atomics.wait(wake, 0, tick, until ? RUNNING_MS : IDLE_MS)
+} finally {
+  process.kill(process.pid, 'SIGKILL') // this thread's `exit` goes to a main thread that may be in a script's loop for good, and then nothing is watching
 }
