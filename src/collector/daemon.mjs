@@ -35,6 +35,7 @@ import { bundleRoots, rootsLeftOut } from './core/tls/roots.mjs'
 import { createRecordStore } from './core/record/store.mjs'
 import { createEngine } from './core/engine/engine.mjs'
 import { appendEvent, createFailureRecorder } from './core/events.mjs'
+import { createLoopWatch } from './core/loop-late.mjs'
 import { EVENT, CODE, trustReasonText } from './core/codes.mjs'
 import { procIdentity, captureHealth } from '../health/read.mjs'
 import { identityFor } from '../off/proc.mjs'
@@ -621,7 +622,8 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     // A lock that cannot be written is said (D38) and the capture goes on.
     const bumpLock = () => { try { refreshLock() } catch (e) { failure('daemon', coded(new Error(`the lock ${P.lock} could not be refreshed (${errText(e)}); readers will judge this daemon unresponsive`), e && e.code ? e.code : 'record-error')) } }
     store.onSegmentChange(bumpLock)
-    const lockTimer = setInterval(bumpLock, lockRefreshMs)
+    const loopWatch = createLoopWatch({ everyMs: lockRefreshMs, write: failure.event }) // failure.event for its fold; the record's own event wins, so it stays a state event
+    const lockTimer = setInterval(() => { loopWatch.tick(); bumpLock() }, lockRefreshMs)
     lockTimer.unref()
     // lifecycle (D-24): readers fold conditions from the last daemon-start; upstream_ca = the daemon's own
     // NODE_EXTRA_CA_CERTS (W-4: relays with a private CA rely on it), linger = whether logout ends this daemon
@@ -909,7 +911,8 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
     refreshLock()
     const bumpLock = () => { try { refreshLock() } catch (e) { failure('daemon', coded(e, 'record-error')) } }
     store.onSegmentChange(bumpLock) // before the new segment's file exists and before a closed one is sealed (D60, invariant 2); see runDaemon's copy
-    const lockTimer = setInterval(bumpLock, lockRefreshMs); lockTimer.unref()
+    const loopWatch = createLoopWatch({ everyMs: lockRefreshMs, write: failure.event }) // see runDaemon's copy
+    const lockTimer = setInterval(() => { loopWatch.tick(); bumpLock() }, lockRefreshMs); lockTimer.unref()
     const listTimer = setInterval(() => { const l = nextAgentList(); if (l) { agents = l.entries; registry.replaceAgentList(agents) } }, 5000); listTimer.unref()
     failure.write({ event: 'daemon-start', pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, version: code, foreground: !!foreground, upstream_ca: env.NODE_EXTRA_CA_CERTS || null, linger: null })
     let stopping = null, markExited

@@ -28,7 +28,7 @@ export const FOLD_STOPS = Object.freeze(['heap-no-room', 'fold-failed'])
 
 /** Event lines that are failures. Every other event is a state change the reader folds conditions with. */
 export const FAILURE_EVENTS = Object.freeze(['failure', 'agent-untrusted', 'helper-down', 'helper-version-mismatch', 'attach-failed', 'detach-failed', 'log-gap'])
-export const STATE_EVENTS = Object.freeze(['switch', 'daemon-start', 'daemon-stop', 'agent-exit', 'agent-trusted', 'negative-cache-cleared', 'bundles-rebuilt', 'agent-transport', 'ca-ok', 'helper-ok', 'install-note', 'uninstall-note', 'mitm-start', 'mitm-stop', 'retention-ok', 'retention-set',
+export const STATE_EVENTS = Object.freeze(['switch', 'daemon-start', 'daemon-stop', 'agent-exit', 'agent-trusted', 'negative-cache-cleared', 'bundles-rebuilt', 'agent-transport', 'ca-ok', 'helper-ok', 'loop-late', 'install-note', 'uninstall-note', 'mitm-start', 'mitm-stop', 'retention-ok', 'retention-set',
   'classes-ok', // ~/.trocar/classes.json reads cleanly again: ends the condition its problem opened (D60③, 4.6 §记录「保存级别」)
   'agent-list-ok', // ~/.trocar/agents.json reads cleanly again, or is gone: ends the agent-list-invalid condition (D51③, 4.6 R6)
   'process-unknown']) // a process no list item claims used a door (where 'engine'; harness, door, name, wide, named = listed only with args it missed, pid; never its command line): once per (door group, name) per daemon life (D51⑥)
@@ -76,10 +76,11 @@ export const RESTART_REASONS = Object.freeze(['config-after-start', 'env-frozen'
 /** Codes trocar names itself, by part (the grouping is documentation; the set is flat). */
 export const CODES_BY_PART = Object.freeze({
   daemon: ['not-installed', 'manifest-unreadable', 'root-refused', 'start-failed', 'control-endpoint-held', 'unclean-stop', 'crash', 'stop-failed', 'control-error', 'check-error',
-    'query-failed', 'projection-write-failed', 'segment-unreadable'], // control-endpoint-held: the control socket / pipe accepts a connection but answers nothing, so this daemon cannot serve and did not start (D62 ⑥, D38)
+    'query-failed', 'projection-write-failed', 'segment-unreadable', 'loop-late'], // control-endpoint-held: the control socket / pipe accepts a connection but answers nothing, so this daemon cannot serve and did not start (D62 ⑥, D38)
     // query-failed — D63 (4.6 §事件与码): the query worker crashed, exited non-zero or did not answer in time; that query is still answered (a re-fork, or the caller's local path)
     // projection-write-failed — 4.3 §4 盘满: the query worker could not write a context projection; answers are unchanged, one record per episode
     // segment-unreadable — 4.3 §4 回收: the query worker could not list raw/, so its projection GC deleted nothing that time
+    // loop-late — 4.6 §记录: the code of the state event of that name; the event loop ran ≥ 1 s late, no failure
   record: ['record-error', 'file-replaced', 'late-write'], // late-write: a write that reached the record store after the stop made it final (1.6 §5.2); not written, said once per kind
   raw: ['seal-failed', 'index-failed'], // index-failed: the daemon could not keep a segment's index current (D62); the records are on disk and the next query indexes them itself, and says so (`index-cold`)
   tracker: ['judge-error', 'unwatch-error', 'ambiguous', 'exe-unreadable', 'watch-failed', 'config-error', 'settings-unparsable', 'settings-unreadable', 'environ-unreadable'],

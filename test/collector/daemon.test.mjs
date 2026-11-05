@@ -1072,6 +1072,20 @@ test('daemon: the lock carries pid, start time and boot id and is refreshed whil
   s.done()
 })
 
+// MA20 (4.6 §记录): the driver daemon's lock timer is the loop watch as well (the model daemon's: test/collector/core/loop-late.test.mjs).
+test('daemon: a loop held past the line leaves loop-late with late_ms in flows/ (MA20)', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  const { arch } = fakeArch(p)
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], identity: (pid) => ({ start_time: `t${pid}`, boot_id: 'boot-1' }), lockRefreshMs: 30 })
+  try {
+    const held = performance.now() + 1300
+    while (performance.now() < held); // the daemon runs on this very loop
+    await until(() => flowsOf(s).some((l) => l.event === 'loop-late'), 5000)
+    assert.ok(flowsOf(s).find((l) => l.event === 'loop-late').late_ms >= 1000)
+  } finally { await d.stop(); p.done(); s.done() }
+})
+
 // D-24 / D-27 / W-4 / D-22: the daemon's own lifecycle is on disk — what started (with its identity, version, whether
 // it runs in a terminal, its own NODE_EXTRA_CA_CERTS, linger) and what stopped it (SIGHUP = the terminal closed).
 test('daemon: daemon-start carries its identity, version, foreground, upstream_ca and linger; daemon-stop the signal; the next start sees a clean stop (D-24, D-27)', async () => {

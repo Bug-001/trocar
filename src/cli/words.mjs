@@ -21,6 +21,7 @@ export const FAILURE_WORDS = Object.freeze({
   'not-installed': 'trocar is not installed',
   'manifest-unreadable': 'the install record could not be read',
   'control-endpoint-held': "another process holds trocar's control channel, so the background process did not start",
+  'loop-late': 'the background process was held up for a moment',
   'query-failed': 'a query worker failed; the query was answered another way',
   'projection-write-failed': 'a session could not be saved to disk for faster reading; its answers are unchanged',
   'root-refused': 'refused: it was run as root',
