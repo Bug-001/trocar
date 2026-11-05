@@ -5,7 +5,7 @@
 // total_bytes, from, to}, leaving: {files, commits, identity, branch}}. Exit 0 passed, 1 refused, 2 usage error. A finding names a place and a rule, never a value: `where` points into
 // `leaving.files` by index, because a path is outbound text too, and `why` is one constant sentence per rule. Captured bytes pass through
 // this process to be compared, and nothing of them is printed. What cannot be read is a refusal, not an empty result. For the capture that
-// is a `partial` finding, the one rule --accept-partial moves to `accepted`, and the hash holds what it let through. The capture is read
+// is a `partial` finding, the one rule --accept-partial moves to `accepted`, and the hash holds what it let through, as it does for a host --public-host lets through. The capture is read
 // through the installed trocar, or the one --cli names: its reads go by the daemon and may write the derived layer, never the raw records.
 import { isUtf8 } from 'node:buffer'
 import { spawn, spawnSync } from 'node:child_process'
@@ -21,8 +21,9 @@ import { textsBehind } from './lib/record-text.mjs'
 import { normalize, standsIn, WindowTable } from './lib/text-windows.mjs'
 import { callOf, findCli } from './lib/trocar-cli.mjs'
 
-const USAGE = `usage: node scripts/pr-check.mjs --before <time> --title <file> --body <file> [--base <ref>] [--accept-partial] [--cli <path>] [--json]
-       node scripts/pr-check.mjs --issue --before <time> [--title <file>] --body <file> [--base <ref>] [--accept-partial] [--cli <path>] [--json]`
+const USAGE = `usage: node scripts/pr-check.mjs --before <time> --title <file> --body <file> [--base <ref>] [--accept-partial] [--public-host <host>]... [--cli <path>] [--json]
+       node scripts/pr-check.mjs --issue --before <time> [--title <file>] --body <file> [--base <ref>] [--accept-partial] [--public-host <host>]... [--cli <path>] [--json]
+--public-host: only when the user has said in the conversation that this host is a public service. An agent never decides that itself.`
 const CLONE = fileURLToPath(new URL('..', import.meta.url))
 const PAGE = ['--limit', '500'] // 1.6 §4.1: the largest page of a list query
 const SHORT_SHA = 10
@@ -93,6 +94,7 @@ const WHY = {
   identity: 'This names this machine, its user or a home directory.',
   email: 'The commit email is not a GitHub noreply address. Run git config user.email with your noreply address, then git rebase --exec "git commit --amend --no-edit --reset-author" onto the base.',
   'captured-facts': 'This matches a project, session, title, host or segment in your capture.',
+  'public-host': 'The user called this host in your capture a public service.',
   'captured-text': 'At least 60 normalized bytes of this also occur in your capture.',
   lines: `This commit changes more than ${MAX_LINES} lines.`,
   body: 'This commit message has no body.',
@@ -114,7 +116,7 @@ function parse(argv) {
   let values
   try {
     ({ values } = parseArgs({ args: argv, options: { before: { type: 'string' }, title: { type: 'string' }, body: { type: 'string' }, base: { type: 'string', default: 'origin/main' },
-      'accept-partial': { type: 'boolean' }, cli: { type: 'string' }, issue: { type: 'boolean' }, json: { type: 'boolean' } } }))
+      'accept-partial': { type: 'boolean' }, 'public-host': { type: 'string', multiple: true, default: [] }, cli: { type: 'string' }, issue: { type: 'boolean' }, json: { type: 'boolean' } } }))
     if (!values.before || !values.body || !(values.title || values.issue)) return null
     const cli = findCli(values.cli)
     if (!cli) return null
@@ -431,18 +433,23 @@ function titleOf(cli, add, row) {
 }
 
 /** The capture's facts as words; a segment's name also covers every `<segment>:<n>` record id. */
-function checkFacts(cli, segments, sources, add, hold) {
+function checkFacts(cli, segments, sources, add, hold, publicHosts) {
   const sessions = allPages(cli, add, 'sessions', 'sessions')
   const titles = new Set(sessions.map((s) => titleOf(cli, add, s)))
-  const facts = [...sessions.flatMap((s) => [s.project_path, s.project_slug, s.session_id]), ...titles,
-    ...allPages(cli, add, 'traffic', 'hosts').map((h) => h.host), ...segments.map((s) => s.segment)]
+  const others = [...sessions.flatMap((s) => [s.project_path, s.project_slug, s.session_id]), ...titles, ...segments.map((s) => s.segment)]
   const words = new Map()
-  for (const fact of facts.filter((f) => typeof f === 'string')) {
+  // hosts first: a word that is another fact as well is that fact, and --public-host does not reach it
+  for (const fact of [...allPages(cli, add, 'traffic', 'hosts').map((h) => h.host), ...others].filter((f) => typeof f === 'string')) {
     const word = normalized(fact)
     if (word.toString().length >= MIN_FACT) words.set(word.toString('latin1'), { word, fact })
   }
   for (const { word, fact } of words.values()) {
-    for (const source of sources) if (source.norm.includes(word) && (!titles.has(fact) || standsIn(source.bytes, word))) hold(fact, 'captured-facts', source.where)
+    const isPublic = publicHosts.includes(fact) && !others.includes(fact)
+    for (const source of sources) {
+      if (!source.norm.includes(word) || (titles.has(fact) && !standsIn(source.bytes, word))) continue
+      if (isPublic) hold(fact, 'captured-facts', fact, { why: WHY['public-host'] })
+      else hold(fact, 'captured-facts', source.where)
+    }
   }
 }
 
@@ -572,7 +579,7 @@ async function main() {
   let segments = []
   try {
     segments = ask(options.cli, add, 'segments').segments ?? []
-    checkFacts(options.cli, segments, out.sources, add, hold)
+    checkFacts(options.cli, segments, out.sources, add, hold, options['public-host'])
   } catch { add('partial', 'capture', WHY.query) }
 
   const table = new WindowTable(out.sources.filter((source) => !source.built))
@@ -583,7 +590,7 @@ async function main() {
   const coverage = await compareCapture(segments, options, table, add)
 
   const accepting = options['accept-partial'] === true
-  const isAccepted = (f) => accepting && f.rule === 'partial'
+  const isAccepted = (f) => f.why === WHY['public-host'] || (accepting && f.rule === 'partial')
   const accepted = [...found.values()].filter(isAccepted)
   const hash = hashOf(out.sources, { base, before: options.before, accepting, accepted, coverage })
   for (const row of options.body.toString('latin1').matchAll(HASH_ROW)) if (row[2] && row[2] !== hash) add('shape', 'body', WHY.hash)
