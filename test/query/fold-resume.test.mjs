@@ -23,6 +23,7 @@ import { runQuery } from '../../src/query/named/index.mjs'
 import { extendSession, saveIndexes } from '../../src/query/named/session.mjs'
 import { projectionFile, openProjection } from '../../src/query/projection.mjs'
 import { foldLogFile, openFoldLog } from '../../src/query/fold-log.mjs'
+import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
 import { loadSidecar, saveSidecar, sidecarOf } from '../../src/query/line-file.mjs'
 
 const NO_REAL_OS = fileURLToPath(new URL('../helpers/no-real-os.cjs', import.meta.url))
@@ -30,27 +31,34 @@ const at = (p) => JSON.stringify(new URL(p, import.meta.url).href)
 const SHAPE = { growth: 2_000, compactAt: 20_000, subEvery: 3, subLanes: 3, late: 2 }
 
 // The worker's background in a process of its own: slices of `ms`, an idle period (saveIndexes) after a slice with probability
-// `idle`, an abrupt exit after slice `kill` (0: never; at the end an idle period). Prints {slices, killed}.
+// `idle`, an abrupt exit after slice `kill` (0: never; at the end an idle period). Prints {slices, killed, ticks}: `ticks` = its
+// progress reports: a few per slice, and one per member it extracted and folded. `fail` (`pos:len`): the first read of those fails.
 const WORKER = `
 await import(${at('../../src/query/named/index.mjs')})
 const { extendSession, saveIndexes } = await import(${at('../../src/query/named/session.mjs')})
 const { drain } = await import(${at('../helpers/bounded.mjs')})
 const { rng } = await import(${at('./big-session.mjs')})
-const [home, id, kill, idle, seed] = [process.argv[1], process.argv[2], Number(process.argv[3]), Number(process.argv[4]), Number(process.argv[5])]
+const { default: fs } = await import('node:fs')
+const [home, id, kill, idle, seed, fail, ms] = [process.argv[1], process.argv[2], Number(process.argv[3]), Number(process.argv[4]), Number(process.argv[5]), process.argv[6], Number(process.argv[7])]
 const r = rng(seed)
-let k = 0
+let k = 0, ticks = 0, armed = !!fail
+const failing = { ...fs, readSync(fd, buf, off, len, pos) {
+  if (armed && \`\${pos}:\${len}\` === fail) { armed = false; throw new Error('EIO') }
+  return fs.readSync(fd, buf, off, len, pos)
+} }
+const ctx = { home, ...(fail ? { fs: failing } : null), writer: true, progress: () => { ticks++ } }
 await drain(async () => {
-  if (!(await extendSession({ home, writer: true }, id, 4))) return false
+  if (!(await extendSession(ctx, id, ms))) return false
   if (r() < idle) saveIndexes()
-  if (++k === kill) { process.stdout.write(JSON.stringify({ slices: k, killed: true })); process.exit(0) }
+  if (++k === kill) { process.stdout.write(JSON.stringify({ slices: k, killed: true, ticks })); process.exit(0) }
   await new Promise((ok) => setImmediate(ok))
   return true
 })
 saveIndexes()
-process.stdout.write(JSON.stringify({ slices: k, killed: false }))`
+process.stdout.write(JSON.stringify({ slices: k, killed: false, ticks }))`
 
-async function worker(home, id, { kill = 0, idle = 0.2, seed = 1 } = {}) {
-  const c = spawn(process.execPath, ['--require', NO_REAL_OS, '--input-type=module', '-e', WORKER, home, id, String(kill), String(idle), String(seed)], { stdio: ['ignore', 'pipe', 'pipe'] })
+async function worker(home, id, { kill = 0, idle = 0.2, seed = 1, fail = '', ms = 4 } = {}) {
+  const c = spawn(process.execPath, ['--require', NO_REAL_OS, '--input-type=module', '-e', WORKER, home, id, String(kill), String(idle), String(seed), fail, String(ms)], { stdio: ['ignore', 'pipe', 'pipe'] })
   let out = '', err = ''
   c.stdout.on('data', (b) => { out += b }); c.stderr.on('data', (b) => { err += b })
   const [code] = await within(new Promise((ok) => c.on('close', (...a) => ok(a))), 120_000, 'the worker process', () => c.kill('SIGKILL'))
@@ -183,6 +191,47 @@ test('a reopened worker over a grown session folds only the new members: what it
   assert.ok(b.read <= a.read + b.appended, `projection and fold log bytes read past opening at 300 / 1200 calls (+${M} new): ${JSON.stringify({ a, b })}`)
 })
 
+// A worker that comes back to a session and only reads it (cold: no live reduction) does not cost the session its reduction state
+// (4.3 §4 旁索引): the state stays in the fold log's sidecar, so the next member folds alone instead of rebuilding the session.
+test('a worker that only read an unchanged session leaves the reduction state: the next member folds alone (4.3 §4 旁索引)', { timeout: 120_000 }, async () => {
+  const home = path.join(tmpDir('trocar-idle-'), '.trocar'), s = bigSession({ home, ...SHAPE })
+  const state = () => loadSidecar({ file: foldLogFile(home, s.id) })?.parts['r.s']
+  s.append(300)
+  await worker(home, s.id, { idle: 0 })
+  assert.ok(state(), 'the fold left its state in the sidecar')
+  const side = sidecarOf(foldLogFile(home, s.id)), written = fs.statSync(side).ino
+  await worker(home, s.id, { idle: 0 })
+  assert.ok(state(), 'the state is still there after a worker that only read')
+  assert.equal(fs.statSync(side).ino, written, 'a read that moved nothing wrote no sidecar')
+  s.append(1)
+  const { ticks } = await worker(home, s.id, { idle: 0 })
+  assert.ok(ticks < 100, `the new member alone is folded, not the session: ${ticks} ticks`)
+})
+
+// The same read over a log the state does not reach (a worker killed after a save): the sidecar stays as it was, for the cut back.
+// A sidecar written over the whole log would say the state reaches the last frontier, and no fold would cut back.
+test('a read over a log its state does not reach leaves the sidecar, and the fold after it cuts back to the state (4.3 §4 旁索引)', { timeout: 120_000 }, async () => {
+  const home = path.join(tmpDir('trocar-idle-'), '.trocar'), s = bigSession({ home, ...SHAPE })
+  const side = sidecarOf(foldLogFile(home, s.id))
+  s.append(300)
+  await worker(home, s.id, { idle: 0 })
+  const saved = fs.readFileSync(side)
+  s.append(100)
+  await worker(home, s.id, { idle: 0 })
+  fs.writeFileSync(side, saved) // the sidecar the killed worker left, over the log it went on to write
+  await worker(home, s.id, { idle: 0 })
+  assert.ok(fs.readFileSync(side).equals(saved), 'the read wrote no sidecar')
+  s.append(1)
+  const { ticks } = await worker(home, s.id, { idle: 0 })
+  assert.ok(ticks < 200, `what lies past the state is folded, not the session: ${ticks} ticks`)
+  const ref = path.join(tmpDir('trocar-idle-'), '.trocar')
+  fs.cpSync(path.join(home, 'raw'), path.join(ref, 'raw'), { recursive: true })
+  while (await extendSession({ home: ref, writer: true }, s.id, Infinity));
+  const since = (await runQuery('session', { id: s.id }, { home })).calls[100].rid
+  assert.deepEqual(await answers(home, s.id, since), await answers(ref, s.id, since))
+  assert.deepEqual(differ(keyed(home, s.id), keyed(ref, s.id)), { lines: [], more: 0, last: true })
+})
+
 // A worker that only folds still writes the extraction context into the projection's sidecar (4.3 §4 旁索引). The projection holds
 // every call row but no break detail and the fold log is gone (what a worker killed after its extraction ran ahead of its fold leaves,
 // the sidecars lost too): a fresh worker extracts nothing, its fold writes the break details, so the projection grows and its sidecar
@@ -203,4 +252,52 @@ test('a worker that folds without extracting keeps the extraction seed in the pr
   const sc = loadSidecar({ file }), calls = new Set(linesOf(file).filter((o) => o.c).map((o) => o.c.rid)).size
   assert.ok(sc && sc.parts['e.n'], 'the projection sidecar holds the extraction seed')
   assert.equal(sc.parts['e.n'][0], calls)
+})
+
+// A record whose read fails once (EIO), in a session that had a saved fold: the member gets a held row and so does every member after
+// it, and that worker folds them. The next worker re-extracts them all before its fold log opens (a slice with no limit), so the
+// projection has grown back by then. What it and a reader over the failing worker's files answer is a one-pass build's (4.3 #1).
+const scenes = new Map()
+const failedOnce = (wire) => {
+  if (!scenes.has(wire)) scenes.set(wire, (async () => {
+    const home = path.join(tmpDir('trocar-held-'), '.trocar'), s = bigSession({ home, wire, ...SHAPE })
+    const membersOf = async (at) => sessionGroups(await indexRows({ home: at, fs, errors: [] })).get(s.id)
+    s.append(300)
+    await worker(home, s.id)
+    const had = new Set((await membersOf(home)).map((m) => m.id))
+    s.append(20)
+    const lost = (await membersOf(home)).filter((m) => !had.has(m.id))[1]
+    await worker(home, s.id, { fail: `${lost.offset - 1}:${lost.stored_bytes + 2}` })
+    assert.ok(linesOf(foldLogFile(home, s.id)).some((o) => o.x === String(lost.id) && o.code === 'record-unreadable'), 'the fold wrote the failure')
+    assert.ok(linesOf(projectionFile(home, s.id)).some((o) => o.t), 'the projection holds `t` rows')
+    const mid = path.join(tmpDir('trocar-held-'), '.trocar'), ref = path.join(tmpDir('trocar-held-'), '.trocar')
+    fs.cpSync(home, mid, { recursive: true })
+    fs.cpSync(path.join(home, 'raw'), path.join(ref, 'raw'), { recursive: true })
+    await worker(home, s.id, { ms: Infinity })
+    while (await extendSession({ home: ref, writer: true }, s.id, Infinity));
+    const since = (await runQuery('session', { id: s.id }, { home: ref })).calls[100].rid
+    return { want: await answers(ref, s.id, since), wantLines: keyed(ref, s.id), local: await answers(mid, s.id, since), rebuilt: await answers(home, s.id, since), lines: keyed(home, s.id) }
+  })())
+  return scenes.get(wire)
+}
+// differ over what `keep` keeps of each side
+const differIn = (a, b, keep) => { const cut = ({ last, ...m }) => ({ last, ...Object.fromEntries(Object.entries(m).map(([k, x]) => [k, new Map([...x].filter(([key]) => keep(k, key)))])) }); return differ(cut(a), cut(b)) }
+
+test('a record read that failed once is not reported unreadable once it reads', { timeout: 300_000 }, async () => {
+  for (const wire of ['http', 'threads']) {
+    const { want, wantLines, local, rebuilt, lines } = await failedOnce(wire)
+    assert.equal(local.session, want.session, `${wire}: the local path over the failing worker's files`)
+    assert.equal(rebuilt.session, want.session, `${wire}: the next worker`)
+    assert.deepEqual(differIn(lines, wantLines, (k) => k === 'fold'), { lines: [], more: 0, last: true }, `${wire}: the fold log's keyed lines`)
+  }
+})
+
+test("a block's ref after a failed-once read is its first carrier, as in a one-pass build", { timeout: 300_000 }, async () => {
+  for (const wire of ['http', 'threads']) {
+    const { want, wantLines, local, rebuilt, lines } = await failedOnce(wire)
+    const lanes = Object.keys(want).filter((k) => k.startsWith('lane '))
+    assert.deepEqual(lanes.filter((k) => local[k] !== want[k]), [], `${wire}: the local path's lanes`)
+    assert.deepEqual(lanes.filter((k) => rebuilt[k] !== want[k]), [], `${wire}: the next worker's lanes`)
+    assert.deepEqual(differIn(lines, wantLines, (k, key) => k === 'proj' && key.startsWith('d ')).lines, [], `${wire}: the projection's definitions`)
+  }
 })

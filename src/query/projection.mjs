@@ -410,6 +410,8 @@ export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = 
     },
     /** Whether its sidecar covers every line it holds (saveIndex wrote it, or nothing grew since): none while it holds `t` rows. */
     get indexed() { return lines.settled && !heldRows && lines.bytes > 0 && lines.bytes === savedAt; },
+    /** Whether it holds `t` rows, which the next open cuts off. */
+    get held() { return heldRows; },
     /** What the sidecar this open loaded carried besides the indexes ({name: array}), or null (saveIndex). */
     get saved() { return saved; },
     /** The header's id (taken now when the file is made or rebuilt); `bytes`: the length of the whole lines it holds. */
