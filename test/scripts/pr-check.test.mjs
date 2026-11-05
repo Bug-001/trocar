@@ -276,6 +276,17 @@ for (const [name, text] of Object.entries({ 'parameters': ['data', ';charset=utf
   })
 }
 
+for (const head of ['image/png; base64', 'image/png ;base64', 'image/png;base64 ', 'image/png ', 'image/png;name="a b.png";base64', 'image/png;name=(a);base64', 'image/png;charset="utf-8";base64', 'image/svg+xml; base64']) {
+  test(`AN16: a data URI with ${head} before its comma is refused in a file and in a body`, () => {
+    const text = ['data', `${head},AAAA`].join(':')
+    const w = workspace()
+    w.commit({ 'a.md': `${text}\n` })
+    const r = w.check({ body: `see ${text}` })
+    assert.deepEqual(named(r.doc, 'files'), ['a.md'])
+    assert.ok(of(r.doc, 'files').some((f) => f.where === 'body'))
+  })
+}
+
 test('AN16: a data URI of a type that is no image passes, typed or not', () => {
   const w = workspace()
   w.commit({ 'a.md': `${['data', ',hello'].join(':')}\n${['data', 'text/plain;base64,AAAA'].join(':')}\n` })
