@@ -300,8 +300,9 @@ test('F3 parts: off, a helper death (degraded), a SIGHUP stop and its clean rest
     await req(s.sock, 'POST', '/on', {}); await req(s.sock, 'POST', '/off')
     h = await endpoint(s)
     assert.deepEqual([h.summary.state, typeof h.summary.since], ['off', 'string'], '(g)')
-    // (a, unit) the helper dies → degraded, with how it ended
-    clients[0]._child.kill('SIGKILL')
+    // (a, unit) the helper dies → degraded, with how it ended (it runs only while a harness is on)
+    await req(s.sock, 'POST', '/on', {})
+    clients.at(-1)._child.kill('SIGKILL')
     await until(async () => (await req(s.sock, 'GET', '/status')).degraded)
     h = await endpoint(s)
     assert.deepEqual(cond(h, 'degraded').map((c) => c.exit), ['SIGKILL'], '(a) 降级')
