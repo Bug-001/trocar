@@ -37,7 +37,7 @@ async function withBoard(platform, run) {
   const port = await boardPortOf(w.dir) // tests running side by side never meet on one board (a 403)
   const deps = depsFile(w, platform, state)
   await withScratchCwd(platform, async () => {
-    const box = await liveUnit({ w: { ...w, custody: trust.custody }, platform, parts: { helper: HELPER }, daemon: { fork: (h) => workerFork(h, deps) } })
+    const box = await liveUnit({ w: { ...w, custody: trust.custody }, platform, parts: { helper: HELPER }, daemon: { fork: (h, _, role) => workerFork(h, deps, role) } })
     box.unit.start(); await box.starting
     const token = fs.readFileSync(path.join(w.dir, 'board.token'), 'utf8')
     const post = (body) => request(port, '/control/setup', { method: 'POST', headers: { 'content-type': 'application/json', [CONTROL_TOKEN_HEADER]: token }, body: JSON.stringify(body) })

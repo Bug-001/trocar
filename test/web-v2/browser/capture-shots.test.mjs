@@ -27,7 +27,7 @@ async function withDaemonBoard(run) {
   const port = await boardPortOf(w.dir)
   const deps = depsFile(w, platform)
   await withScratchCwd(platform, async () => {
-    const box = await liveUnit({ w, platform, parts: { helper: HELPER }, daemon: { fork: (h) => workerFork(h, deps) } })
+    const box = await liveUnit({ w, platform, parts: { helper: HELPER }, daemon: { fork: (h, _, role) => workerFork(h, deps, role) } })
     box.unit.start(); await box.starting
     const token = fs.readFileSync(path.join(w.dir, 'board.token'), 'utf8')
     try { await run({ w, base: `http://127.0.0.1:${port}`, token }) } finally { await box.stop() }

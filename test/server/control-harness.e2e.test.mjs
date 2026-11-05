@@ -32,7 +32,7 @@ async function withBoard(platform, run) {
   const port = await boardPortOf(w.dir)
   const deps = depsFile(w, platform)
   await withScratchCwd(platform, async () => {
-    const box = await liveUnit({ w, platform, parts: { helper: HELPER }, daemon: { fork: (h) => workerFork(h, deps) } })
+    const box = await liveUnit({ w, platform, parts: { helper: HELPER }, daemon: { fork: (h, _, role) => workerFork(h, deps, role) } })
     box.unit.start(); await box.starting
     const token = fs.readFileSync(path.join(w.dir, 'board.token'), 'utf8')
     const post = (body, headers = { [CONTROL_TOKEN_HEADER]: token }) => request(port, '/control/harness', { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) })
