@@ -6,8 +6,8 @@ const { permission } = process
 // A Node that would quietly give more than the flags asked for gets no rules at all.
 if (!permission || permission.has('child') || permission.has('fs.write', fileURLToPath(new URL('../..', import.meta.url))) || !capMiB) process.exit(78)
 
-const [{ Buffer }, { once }, fs, { pathToFileURL }, util, threads, modules, os, { full, RuleFault }, { applyRules }, { byteBudget }, { LIMITS, SCRIPT_BUILTINS, SCRIPT_FORMATS }, { compileRules }, slots] = await Promise.all([
-  import('node:buffer'), import('node:events'), import('node:fs'), import('node:url'), import('node:util'), import('node:worker_threads'), import('node:module'), import('node:os'),
+const [{ Buffer }, { once }, fs, net, { pathToFileURL }, util, threads, modules, os, { full, RuleFault }, { applyRules }, { byteBudget }, { LIMITS, SCRIPT_BUILTINS, SCRIPT_FORMATS }, { compileRules }, slots] = await Promise.all([
+  import('node:buffer'), import('node:events'), import('node:fs'), import('node:net'), import('node:url'), import('node:util'), import('node:worker_threads'), import('node:module'), import('node:os'),
   import('./actions.mjs'), import('./apply.mjs'), import('./budget.mjs'), import('./closed.mjs'), import('./compile.mjs'), import('./slot.mjs'),
 ])
 const { ANSWER_BYTES, DEATHS, editsSegment, encodeFrame, frameReader, HEAD_BYTES, NO_RULE, writeProgress } = slots
@@ -34,11 +34,14 @@ const setClock = (at) => {
   Atomics.notify(wake, 0)
 }
 // Kept here: `process` is not frozen, and a script that swaps these must not stop the clock or the memory check.
-const { getActiveResourcesInfo, memoryUsage } = process, { bigint: clockNow } = process.hrtime
+const { _fatalException: fatal, _kill: kill, getActiveResourcesInfo, memoryUsage, pid } = process, { bigint: clockNow } = process.hrtime
 const arm = (ms) => setClock(clockNow() + BigInt(Math.max(0, Math.ceil(ms))) * NS_PER_MS)
+// Node's own way out stops the watchdog and then waits for the thread pool, which a script can keep busy for hours. So this is the only way out.
+const end = () => kill(pid, 9)
+const fixed = (on, name, value) => Object.defineProperty(on, name, { value, writable: false, configurable: false })
 
 const watchdog = new threads.Worker(new URL('./watchdog.mjs', import.meta.url), { workerData: { shared, fd: slot, slotPath, capBytes, ppid: Number(parentPid) } })
-watchdog.once('exit', () => process.exit(1))
+watchdog.once('exit', end)
 await once(watchdog, 'message') // in its loop, not just started: no rule runs unwatched, and a script that takes every fd stops a thread still loading its modules
 
 // The permission model has no say over signals, threads, or what sqlite, trace events, V8's flags and a child process handle do below it. Only the watchdog needs a thread and it is up,
@@ -55,6 +58,8 @@ modules.registerHooks({
   },
 })
 for (const name of ['kill', '_kill', '_debugProcess', '_debugEnd', 'getBuiltinModule']) delete process[name]
+fixed(process, 'reallyExit', end)
+fixed(process, '_fatalException', (...args) => { try { return fatal(...args) || end() } catch { end() } })
 // Windows hands every child PATH, USERNAME and the like whatever env it was given. SYSTEMROOT stays: sockets do not load without it.
 for (const name of Object.keys(process.env)) if (!KEPT_ENV.includes(name.toUpperCase())) delete process.env[name]
 os.default.setPriority = function refused() { throw new Error('a rule process has no say over other processes') }
@@ -64,13 +69,22 @@ Object.freeze(Buffer.prototype)
 Object.freeze(Buffer)
 
 // RSS misses pages macOS compressed and Windows trimmed, and a leak of sockets is ports nobody else on the machine can have. A stuck main thread stops this tick, and the beat says so.
+// A socket that is closed holds its port for a while yet, and one that is unref'd is not in the count, so connections are counted where they all pass.
 const tell = (why) => {
   Atomics.store(over, 0, DEATHS.indexOf(why) + 1) // the watchdog kills: this thread no longer can
   Atomics.add(wake, 0, 1)
   Atomics.notify(wake, 0)
 }
+let connects = 0
+const { connect } = net.Socket.prototype
+net.Socket.prototype.connect = function counted(...args) {
+  if (++connects > LIMITS.scriptConnects) tell('handles')
+  return connect.apply(this, args)
+}
+net.Socket.prototype.unref = function counts() { return this }
 setInterval(() => {
   Atomics.add(beat, 0, 1)
+  connects = Math.max(0, connects - LIMITS.scriptConnectsPerSecond)
   const { heapUsed, external, arrayBuffers } = memoryUsage()
   if (heapUsed + external + arrayBuffers > capBytes) tell('memory')
   if (getActiveResourcesInfo().length > LIMITS.scriptHandles) tell('handles')
@@ -79,6 +93,9 @@ setInterval(() => {
 let printed = ''
 const print = (...args) => { printed = `${printed}${util.format(...args)}\n`.slice(0, CONSOLE_BYTES) }
 globalThis.console = { ...console, log: print, info: print, warn: print, error: print, debug: print }
+// The flag freezes objects, not the names they go by, and not Atomics. The clock and the beat look these names up on each call, so a new Math is a limit thirty years off.
+Object.freeze(Atomics)
+for (const [name, held] of Object.entries(Object.getOwnPropertyDescriptors(globalThis))) if ('value' in held) fixed(globalThis, name, held.value)
 
 // Counted as the frame carries it: 16 KiB of control characters is 96 KiB of escapes.
 function consoleText() {
@@ -229,12 +246,13 @@ async function runTask(task) {
 // Not a net.Socket on a file descriptor: a newer permission model counts that as network, and the built-in process has none. Not fs streams either: a read parked on the thread pool
 // holds process.exit back.
 const send = (frame) => { for (let at = 0; at < frame.length;) at += fs.writeSync(3, frame, at) }
-const quit = () => process.exit(0)
-let last = Promise.resolve()
+let last = Promise.resolve(), loaded = false
 process.stdin.on('data', frameReader((message) => {
   last = last.then(async () => {
+    if (message.load && loaded) return // a script can emit on stdin, and a limit it chose is none
+    loaded ||= Boolean(message.load)
     send(message.load ? encodeFrame(await load(message.load)) : await runTask(message))
   })
-}, quit))
-process.stdin.once('close', quit)
-process.stdin.once('error', quit)
+}, end))
+process.stdin.once('close', end)
+process.stdin.once('error', end)

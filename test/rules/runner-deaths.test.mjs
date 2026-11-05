@@ -46,6 +46,20 @@ const ROWS = [
   ...['new ArrayBuffer(4)', 'new Map([["body", "x"]])', 'new Date()', '[]'].map((value) => ({ name: `a result that says nothing: ${value}`, why: 'bad-result', body: `return ${value}` })),
   { name: 'memory behind a stopped gauge', why: 'memory', top: 'process.memoryUsage = () => ({ heapUsed: 0, external: 0, arrayBuffers: 0 })', body: 'const keep = []; for (;;) { keep.push(Buffer.allocUnsafeSlow(32 << 20)); await new Promise((r) => setTimeout(r, 20)) }', capBytes: 192 * MIB, maxTaskMs: 30000 },
   { name: 'a leak of handles', why: 'handles', body: 'for (let i = 0; i < 2000; i++) setTimeout(() => {}, 600000); await new Promise(() => {})', maxTaskMs: 8000 },
+  {
+    name: 'a leak of sockets that says they do not count', why: 'handles', maxTaskMs: 8000, top: 'import net from "node:net"; import { once } from "node:events"',
+    body: `const server = net.createServer((socket) => socket.on("error", () => {}).unref()).listen(0, "127.0.0.1"); server.unref(); await once(server, "listening");
+      for (let i = 0; i < ${LIMITS.scriptHandles + 100}; i++) await once(net.connect(server.address().port, "127.0.0.1").unref(), "connect"); // one at a time: a burst overruns the backlog
+      await new Promise(() => {})`,
+  },
+  {
+    name: 'connections opened and closed faster than ports come back', why: 'handles', maxTaskMs: 8000, top: 'import net from "node:net"',
+    body: `for (let i = 0; i <= ${LIMITS.scriptConnects}; i++) net.connect(1, "127.0.0.1").on("error", () => {}).destroy(); await new Promise(() => {})`,
+  },
+  {
+    name: 'a load the script wrote itself', why: 'timeout', body: 'for (;;);', maxTaskMs: 300,
+    top: 'const made = Buffer.from(JSON.stringify({ load: { rules: [], max_delay_ms: 9e12 } })), size = Buffer.alloc(4); size.writeUInt32LE(made.length); process.stdin.emit("data", Buffer.concat([size, made]))',
+  },
   { name: 'a slot grown past its limit', why: 'memory', body: 'fs.ftruncateSync(fs.openSync(process.argv[2], "r+"), 2 ** 29); await new Promise(() => {})', maxTaskMs: 8000 },
   { name: 'a cycle', why: 'bad-result', body: 'const o = {}; o.self = o; return o' },
   { name: 'a cycle in the body key', why: 'bad-result', body: 'const o = {}; o.body = o; return o' },
@@ -192,12 +206,26 @@ test('a timeout is the rule the progress names', async () => {
 });
 
 // Straight on the channel: the one-shot client's own timer would hide a watchdog that never fired.
-for (const [how, top] of [['by itself', ''], ['with the clock swapped under it', 'process.hrtime.bigint = () => 1n << 61n\n']]) test(`the watchdog kills a task at its limit ${how}, and the slot says why and who`, { timeout: 10000 }, async (t) => {
+const SPY = `const { store, add, notify } = Atomics
+  let held = null
+  const spy = (a, ...rest) => { if (a instanceof BigInt64Array) held = a; return store(a, ...rest) }
+`;
+const BLIND = 'for (;;) if (held) { store(held, 0, 0n); add(new Int32Array(held.buffer, 16, 1), 0, 1) }';
+for (const [how, top, run = 'for (;;);'] of [
+  ['by itself', ''],
+  ['with the clock swapped under it', 'process.hrtime.bigint = () => 1n << 61n\n'],
+  ['with Math rebound', 'try { globalThis.Math = { max: () => 1e12, ceil: (x) => x, min: (a) => a, floor: (x) => x } } catch {}\n'],
+  ['with BigInt rebound', 'try { globalThis.BigInt = () => 1n << 61n } catch {}\n'],
+  ['with Atomics rebound to get at the shared memory', `${SPY}try { globalThis.Atomics = { store: spy, add, notify } } catch {}\n`, BLIND],
+  ['with Atomics changed in place to get at the shared memory', `${SPY}try { Atomics.store = spy } catch {}\n`, BLIND],
+]) test(`the watchdog kills a task at its limit ${how}, and the slot says why and who`, { timeout: 10000 }, async (t) => {
   const dir = tmpDir('trocar-watchdog-'), script = path.join(dir, 'script.mjs'), slot = path.join(dir, 'slot');
-  fs.writeFileSync(script, `${top}export default () => { for (;;); }`);
+  fs.writeFileSync(script, `${top}export default () => { ${run} }`);
   fs.writeFileSync(slot, '');
   const child = spawn(process.execPath, runnerArgs({ script, slot, capBytes: memoryCap() }), { stdio: ['pipe', 'ignore', 'ignore', 'pipe'], env: {} });
   t.after(() => child.kill('SIGKILL'));
+  const late = setTimeout(() => child.kill('SIGKILL'), 3000); // a red row ends too
+  t.after(() => clearTimeout(late));
   child.stdio[3].on('error', () => {});
   child.stdin.write(encodeFrame({ load: { rules: [{ name: 's', on_error: 'forward', match: { harness: 'any' }, do: [{ script }] }], max_delay_ms: 200 } }));
   child.stdio[3].once('data', () => child.stdin.write(encodeFrame({ id: 7, unit: unit(), body_bytes: null })));
@@ -278,6 +306,63 @@ test('a rule process does not outlive a parent and a script that takes every fil
   assert.ok(await until(() => isGone(pid), 2000), 'the rule process outlived its watchdog');
 });
 
+// Node's exit stops the watchdog first and then waits for the thread pool: hours of CPU with nobody watching, whatever the way out.
+const POOL = 'for (let i = 0; i < 8; i++) crypto.pbkdf2("a", "b", 2 ** 31 - 1, 64, "sha512", () => {})';
+for (const [name, ending] of [
+  ['process.exit()', 'process.exit()'],
+  ['a throw in a timer', 'setTimeout(() => { throw new Error("boom") }, 10)'],
+  ['an unhandled rejection', 'Promise.reject(new Error("boom"))'],
+  ['a handler that throws', 'process.on("uncaughtException", () => { throw new Error("again") }); setTimeout(() => { throw new Error("boom") }, 10)'],
+  ['with no handler for it left', 'try { process._fatalException = 0 } catch {}; setTimeout(() => { throw new Error("boom") }, 10)'],
+]) {
+  test(`a rule process leaves at once with its thread pool busy, ${name}`, async (t) => {
+    const { pid } = await stuckUnderParent(t, `
+      import crypto from 'node:crypto'
+      export default (m) => {
+        if (m.text === "pid") return String(process.pid)
+        ${POOL}
+        ${ending}
+        return new Promise(() => {})
+      }`);
+    assert.ok(await until(() => isGone(pid), 2000), 'the rule process is still there');
+  });
+}
+
+for (const [name, after] of [['unlinked', ''], ['unlinked and made again', 'fs.closeSync(fs.openSync(process.argv[2], "wx"))']]) {
+  test(`a rule process does not outlive its slot, ${name}`, async (t) => {
+    const { pid } = await stuckUnderParent(t, `
+      import fs from 'node:fs'
+      export default (m) => {
+        if (m.text === "pid") return String(process.pid)
+        fs.unlinkSync(process.argv[2])
+        ${after}
+        return new Promise(() => {})
+      }`);
+    assert.ok(await until(() => isGone(pid), 2000), 'the rule process is still there');
+  });
+}
+
+describe('CPU with no task on it', { concurrency: 3 }, () => {
+  const started = async (t, start) => {
+    const dir = tmpDir('trocar-idle-cpu-'), script = path.join(dir, 'script.mjs');
+    fs.writeFileSync(script, `import crypto from 'node:crypto'\nlet on = false\nexport default () => { if (!on) { on = true; ${start} } return String(process.pid) }`);
+    const runner = openOneShot({ script, rules: [{ name: 'script', on_error: 'forward', match: { harness: 'any' }, do: [{ script }] }] });
+    t.after(() => runner.close());
+    return { runner, pid: Number((await runner.run(unit())).bytes) };
+  };
+  for (const [name, start] of [['a timer that never lets up', 'setInterval(() => { const end = Date.now() + 900; while (Date.now() < end); }, 1)'], ['the thread pool', POOL]]) {
+    test(`is ended: ${name}`, async (t) => {
+      const { pid } = await started(t, start);
+      assert.ok(await until(() => isGone(pid), 9000), 'nothing ended it');
+    });
+  }
+  test('a little of it is not', async (t) => {
+    const { runner, pid } = await started(t, 'setInterval(() => { const end = Date.now() + 50; while (Date.now() < end); }, 500)');
+    await new Promise((r) => setTimeout(r, 6500));
+    assert.equal(Number((await runner.run(unit())).bytes), pid);
+  });
+});
+
 test('a script\'s process.exit(78) at the top is a failed load, not a Node that fails the check', async () => {
   const dir = tmpDir('trocar-78-'), script = path.join(dir, 'script.mjs');
   fs.writeFileSync(script, 'process.exit(78)');
@@ -324,7 +409,7 @@ test('the channel closed is the end of the process, and a wrong parent is too', 
   const exited = (child) => new Promise((resolve) => child.once('close', (code, signal) => resolve({ code, signal })));
   const eof = spawn(process.execPath, args(process.pid), { stdio: ['pipe', 'ignore', 'ignore', 'pipe'] });
   eof.stdin.end();
-  assert.equal((await exited(eof)).code, 0);
+  await exited(eof);
   const orphan = spawn(process.execPath, args(1), { stdio: ['pipe', 'ignore', 'ignore', 'pipe'] });
   const { signal } = await exited(orphan);
   assert.equal(signal, WIN ? null : 'SIGKILL');

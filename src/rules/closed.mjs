@@ -52,4 +52,6 @@ export const LIMITS = Object.freeze({
   loadMs: 10_000,
   regexLoadMs: 2_000,
   scriptHandles: 1024,
+  scriptConnects: 2048,
+  scriptConnectsPerSecond: 5,
 })
