@@ -933,3 +933,12 @@ test('the text receipt says a changed file once, as it says a removed file once:
   assert.equal(rows([restored, { ...restored }]), 1)
   assert.equal(rows([restored, { ...restored, result: 'old-command' }]), 2)
 })
+
+test('the text receipt says what it says about files an agent wrote because of trocar\'s plugin once, then lists each of them once', () => {
+  const paths = ['/h/.config/opencode/node_modules', '/h/.config/opencode/package.json']
+  const text = formatOffReceipt({ command: 'off', ok: true, outcome: 'done', changed: [], removed: [], residue: paths.map((p) => ({ harness: 'opencode', path: p, why: 'opencode installs its SDK on first run' })) }, { home: '/h' })
+  const lines = text.split('\n')
+  for (const p of paths) assert.equal(lines.filter((l) => l.includes(p.replace('/h', '~'))).length, 1, p)
+  const bare = lines.map((l) => paths.reduce((s, p) => s.replace(p.replace('/h', '~'), ''), l)).filter((l) => l.trim())
+  assert.deepEqual(bare.filter((l, i) => bare.indexOf(l) !== i), [], 'no sentence is said twice')
+})
