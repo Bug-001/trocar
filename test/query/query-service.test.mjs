@@ -12,6 +12,7 @@ import { createServer } from '../../src/server.mjs'
 import { TOKEN, withToken } from '../server/face.mjs'
 import { isCode, isWhere } from '../../src/health/codes.mjs'
 import { rawHome } from './raw-home.mjs'
+import { handWorld, recorder } from './hand-world.mjs'
 import { workerFork } from '../helpers/worker-fork.mjs'
 import { within } from '../helpers/bounded.mjs'
 import fs from 'node:fs'
@@ -37,18 +38,6 @@ process.stdin.on('data', (d) => { for (const l of String(d).split('\\n').filter(
   const b = Buffer.from(JSON.stringify({ segments: [] })); process.stdout.write(\`200 \${b.length}\\n\`); process.stdout.write(b)
 } })`], { stdio: ['pipe', 'pipe', 'pipe'] })
 const alive = (home) => fork(WORKER, [home], { stdio: ['pipe', 'pipe', 'pipe', 'ipc'] })
-
-/** A response that records what was written to it. */
-const recorder = () => {
-  const r = { status: null, chunks: [], ended: false, headersSent: false }
-  return Object.assign(r, {
-    writeHead: (s) => { r.status = s; r.headersSent = true },
-    write: (b) => { r.chunks.push(b); return true },
-    end: () => { r.ended = true },
-    once: () => {},
-    text: () => Buffer.concat(r.chunks).toString('utf8'),
-  })
-}
 
 /** The service answers a cold caller 503 and warms a worker behind it (D63, the cold path): drive that until a
  *  worker is there, and hand back what the warm-up answered to. */
@@ -549,25 +538,6 @@ test('3.5 102: the line is written again, and the caller gets the real status an
     assert.equal(res.ended, true)
   } finally { svc.stop() }
 })
-
-// What a parked request does is a matter of which frame came when, so here the worker is a stand-in the test feeds by hand: `frame()`
-// is the worker saying that frame, and once `parked()` is through the service has taken it in.
-const handWorld = (opts = {}) => {
-  const got = [], said = []
-  let forks = 0, child = null
-  const svc = createQueryService({ home: rawHome('trocar-qsvc-'), failure: (where, e) => said.push(e.code), ...opts, fork: () => {
-    forks++
-    child = Object.assign(new EventEmitter(), { stdout: Object.assign(new EventEmitter(), { pause() {}, resume() {} }), stderr: new EventEmitter(),
-      stdin: Object.assign(new EventEmitter(), { write: (l) => got.push(JSON.parse(l).params.tag) }), kill() {} })
-    return child
-  } })
-  const frame = (s) => child.stdout.emit('data', Buffer.from(s))
-  const parked = () => { frame('102 0 - 0 -\n'); return new Promise(setImmediate) }
-  const ask = (name, tag, res = recorder()) => svc.relay({ name, params: { tag }, res })
-  /** Until `n` lines were written to the worker. */
-  const sent = (n) => within((async () => { while (got.length < n) await new Promise((d) => setTimeout(d, 2)) })(), 10_000, `line ${n} to the worker`)
-  return { svc, got, said, frame, parked, ask, sent, forks: () => forks }
-}
 
 test('3.5 102: a request queued while another is parked is written in between, whatever their ranks', async () => {
   for (const [parks, passes] of [['sessions', 'status'], ['status', 'sessions']]) {
