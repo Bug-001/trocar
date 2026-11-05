@@ -74,12 +74,14 @@ const toEnd = async ({ page, until }) => {
 // a tick more than a bar left of the playhead; a last chapter too short to hold one is left by [ to the chapter before it (1.3 §章: the
 // window is the playhead's chapter)
 async function aimOlder(d, j) {
-  let pt = await olderTick(d.page, j)
+  // a chapter's ticks come with its packs, and those wait for a reader who has just pressed a key: looked for until the reader's calm has passed
+  const look = async () => { let pt = null; for (let t = Date.now(); !(pt = await olderTick(d.page, j)) && Date.now() - t < 1500;) await d.page.waitForTimeout(100); return pt }
+  let pt = await look()
   for (let k = 0; k < 5 && !pt; k++) {
     const n0 = await d.stepN()
     await d.page.keyboard.press('[')
     await d.until((a) => { const h = window.__head(); return !!h && h.n !== a }, n0, `[ did not move the step from ${n0}`)
-    pt = await olderTick(d.page, j)
+    pt = await look()
   }
   assert.ok(pt, 'the overlay rows draw ticks in the older half of the window')
   return pt
@@ -129,8 +131,10 @@ test('2.3 归约前沿 · D64②: a session growing by 1,000 members an answer �
   })
 })
 
-// the line, on the samples above. Met on a quiet machine, missed under load: a known shortfall, reported and not red (the way an `open`
-// sequence regression is a todo). The line stays as it is (D64⑥). What a run measured is in its log line and the PR, not here.
+// the line, on the samples above: a known shortfall, reported and not red (the way an `open` sequence regression is a todo), the line as it
+// is (D64⑥). Measured interleaved at a 1-min load of 10-94: 39.7-75.0 ms over 6 runs on the build before the pack slot change, 43.8-129.9 ms
+// over 20 runs since, each over the line in all but 1 and 3 runs, the p50 16-25 ms on both. The slow samples are the inputs taken as an
+// answer lands (every 6th of the scrub); neither build holds the line at a load of 10-15.
 const SHORT = 'the board does not hold this line on every run while the session grows: step p95 over BOARD_LINES.stepClick'
 test('2.3 归约前沿 · D64②: step p95 within the line while the session grows', { skip, todo: SHORT }, () => {
   assert.ok(growing, 'the growing case ran')
