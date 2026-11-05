@@ -1,9 +1,6 @@
 #!/usr/bin/env node
 // scripts/pr-check.mjs — what is about to leave this machine, checked against the rules and against the capture (spec 1.12 §6).
 //
-//   node scripts/pr-check.mjs --before <time> --title <file> --body <file> [--base <ref>] [--accept-partial] [--cli <path>] [--json]
-//   node scripts/pr-check.mjs --issue --before <time> [--title <file>] --body <file> [--base <ref>] [--accept-partial] [--cli <path>] [--json]
-//
 // The report is {ok, hash, findings: [{rule, where, why}], accepted: [{rule, where, why}], coverage: {scanned_bytes, opaque_bytes, after_bytes,
 // total_bytes, from, to}, leaving: {files, commits, identity, branch}}. Exit 0 passed, 1 refused, 2 usage error. A finding names a place and a rule, never a value: `where` points into
 // `leaving.files` by index, because a path is outbound text too, and `why` is one constant sentence per rule. Captured bytes pass through
@@ -81,7 +78,7 @@ const RECORD_TS = /^\{"ts":"([^"]+)"/
 const STANDARD_HEADER = /^(?:tree|parent|author|committer|encoding) .*\n/gm
 const SIGNATURE = /^gpgsig(?:-sha256)? .*\n(?: .*\n)*/gm
 const ALNUM = String.raw`[\p{L}\p{N}]`
-const isAlnum = (char) => char !== undefined && new RegExp(ALNUM, 'u').test(char)
+const ALNUM_CHAR = new RegExp(ALNUM, 'u')
 // the row of .github/pull_request_template.md the hash is written on: it cannot hold its own hash, and holds nothing else or it counts.
 // What it holds is left out of the hash, so main refuses any value but the hash: it is no way out for 32 unjudged bytes, and no mistaken paste.
 const HASH_ROW = /^- Written by an agent: the `hash` from `node scripts\/pr-check\.mjs`:[ \t]*(?:(`?)([0-9a-f]{64})\1[ \t]*)?\r?$/gm
@@ -115,12 +112,12 @@ const WHY = {
 function parse(argv) {
   let values
   try {
-    ({ values } = parseArgs({ args: argv, options: { before: { type: 'string' }, title: { type: 'string' }, body: { type: 'string' }, base: { type: 'string' },
+    ({ values } = parseArgs({ args: argv, options: { before: { type: 'string' }, title: { type: 'string' }, body: { type: 'string' }, base: { type: 'string', default: 'origin/main' },
       'accept-partial': { type: 'boolean' }, cli: { type: 'string' }, issue: { type: 'boolean' }, json: { type: 'boolean' } } }))
     if (!values.before || !values.body || !(values.title || values.issue)) return null
     const cli = findCli(values.cli)
     if (!cli) return null
-    return { ...values, cli, before: parseTime(values.before), base: values.base ?? 'origin/main',
+    return { ...values, cli, before: parseTime(values.before),
       title: values.title && fs.readFileSync(values.title), body: fs.readFileSync(values.body) }
   } catch {
     return null
@@ -192,7 +189,7 @@ function asWord(word) {
 /** Whether a text of the base holds these very bytes, and no longer run of the same letters. */
 const asIs = (bytes) => (text) => {
   for (let at = text.indexOf(bytes); at >= 0; at = text.indexOf(bytes, at + 1)) {
-    if (!isAlnum(text[at + bytes.length])) return true
+    if (!ALNUM_CHAR.test(text.charAt(at + bytes.length))) return true
   }
   return false
 }
@@ -307,14 +304,14 @@ function checkImages(sources, hold, add) {
 function checkFiles(commits, cwd, add) {
   let board = null
   for (const commit of commits) {
+    for (const file of commit.changed) {
+      const inBoard = file.path.startsWith(BOARD)
+      if (inBoard) board ??= file.where
       const ext = file.path.slice(file.path.lastIndexOf('.')).toLowerCase()
       const added = file.bytes.toString()
       const object = `${commit.sha}:${file.path}`
       const blocked = file.binary || BLOCKED.has(ext) || LFS_POINTER.test(added) || (GITATTRIBUTES.test(file.path) && LFS_FILTER.test(added))
         || (ext === '.svg' && spelled(git(cwd, 'cat-file', 'blob', object)).some((text) => SVG_EMBED.test(text))) // whole: a rename brings no added lines
-    for (const file of commit.changed) {
-      const inBoard = file.path.startsWith(BOARD)
-      if (inBoard) board ??= file.where
       // what HEAD holds of the board is the build, judged below; what only an earlier commit holds would ride along in the history
       if (blocked && !(inBoard && revOf(cwd, object) === revOf(cwd, `HEAD:${file.path}`))) add('files', file.where)
     }
@@ -366,8 +363,8 @@ function checkSecrets(sources, add) {
 /** What a source says in another alphabet joins the sources, to be compared by what it says. A folded block that says nothing readable is
  *  what a file looks like when it is carried as text, and hex is left out of that: a list of hashes opens to noise too. */
 function openEncoded(sources, add) {
-  for (const source of [...sources]) {
-    const text = TEXT_KINDS.has(source.kind) ? runnable(source) : null
+  for (const source of sources.filter((s) => TEXT_KINDS.has(s.kind))) {
+    const text = runnable(source)
     if (text === null) continue
     const open = (run) => {
       const bytes = opened(run)
@@ -410,9 +407,7 @@ function checkIdentity(out, cwd, hold, add) {
 function ask(cli, add, ...args) {
   const [file, argv, options] = callOf(cli, ['query', ...args])
   const r = spawnSync(file, argv, { ...options, maxBuffer: Infinity, stdio: ['ignore', 'pipe', 'ignore'] })
-  let doc = null
-  try { doc = JSON.parse(r.stdout) } catch { /* no document is the failure below */ }
-  if (doc === null || typeof doc !== 'object') throw new Error('capture')
+  const doc = JSON.parse(r.stdout)
   if (r.status !== 0 || doc.ok !== true) add('partial', 'capture', WHY.query)
   return doc
 }
