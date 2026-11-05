@@ -152,3 +152,25 @@ test('a group rebound to a new port rewrites that route — the old door\'s reco
     if (file) assert.equal(fs.readFileSync(file, 'utf8'), before, `${h.name}.${id}`)
   }
 })
+
+// A route that writes into the env the agent hands to every process it starts (Claude Code's settings `env`): it names a door for every proxy variable
+// the agent reads, so a child's plain http (absolute form, which the door takes: 4.8 §5.1) goes through the door too. The user's own value of any of
+// them is the prior and comes back on off, byte for byte.
+for (const { h, id, r } of ROUTES.filter((x) => x.h.name === 'claude-code' && x.id === 'settings')) {
+  test(`P5 ${h.name}.${id} — every proxy variable the agent reads is the door; the user's HTTP_PROXY is the prior; off restores the bytes`, () => {
+    const leaves = r.proxyKeys.map((k) => k.at(-1))
+    for (const name of h.proxy.env) assert.ok(leaves.includes(name), `${name} is written`)
+    const w = world({ persistent: PERSIST })
+    const ctx = ctxFor(w, h, id)
+    const file = resolveLoc(r.file, ctx)[0]
+    const before = `${JSON.stringify({ env: { HTTP_PROXY: USER_PROXY, KEEP: 'x' }, unrelated: 'keep' }, null, 2)}\n`
+    put(file, before)
+    const recs = routeEntry(r.kind).write(ctx, door()).records
+    const now = JSON.parse(fs.readFileSync(file, 'utf8'))
+    for (const name of h.proxy.env) assert.equal(now.env[name], door(), name)
+    assert.equal(now.env.KEEP, 'x')
+    assert.equal(recs.find((x) => x.keys.join('.') === 'env.HTTP_PROXY').prior_value, USER_PROXY)
+    routeEntry(r.kind).undo(ctx, recs)
+    assert.equal(fs.readFileSync(file, 'utf8'), before)
+  })
+}
