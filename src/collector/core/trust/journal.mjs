@@ -65,6 +65,13 @@ function setUserKey(file, text, keys, value) {
     throw Object.assign(new Error(`${file} was not changed: ${e.message.replace(/^setKey: /, '')}`), { code: CODE_OFF.entryRefused, why: e.why, path: file, ...(e.offset != null ? { offset: e.offset } : {}) })
   }
 }
+// `base` (4.11 P5): the text a command starts from, as a function of the file's text — `on` takes trocar's stale door values out of it. The bytes
+// this returns stand for the file's bytes before the command: the one backup, pre_sha256 and the one write are all of them (4.6「日志」, V106).
+function startFrom(file, bytes, base) {
+  if (bytes == null || !base) return bytes
+  const d = readUserText(file, bytes), t = base(d.text)
+  return t === d.text ? bytes : encodeText(t, d.charset)
+}
 const needHome = (what, home) => { if (!home) throw new TypeError(`${what}: home is required (backups go to <home>/.trocar/backup, 1.6 R2)`) }
 // D55①: every item says which command wrote it — `off` undoes phase 'on', `uninstall` the rest; a writer that forgets fails here, before anything is written
 const needPhase = (what, phase) => { if (!PHASES.includes(phase)) throw new TypeError(`${what}: phase is required (${PHASES.join(' | ')}), got ${JSON.stringify(phase)}`) }
@@ -198,11 +205,11 @@ export function applyJsonKey({ keys, value, alsoSet = [], fold = false, ...rest 
  *  finished first, as a group: still at the first one's pre → planned again (its backup kept); already written → adopted, and the keys this call
  *  plans that they do not cover are written on top (no second backup: the adopted first holds the user's bytes); anything else → refused.
  *  → the records written or adopted. */
-export function applyJsonKeys({ dir, manifest, harness, phase, file, sets = [], items = [], home, door = null, now = new Date(), fs = nodeFs }) {
+export function applyJsonKeys({ dir, manifest, harness, phase, file, sets = [], items = [], base = null, home, door = null, now = new Date(), fs = nodeFs }) {
   needHome('applyJsonKeys', home)
   needPhase('applyJsonKeys', phase)
   const real = editTarget(file, fs)
-  const before = readOrNull(fs, real)
+  const before = startFrom(file, readOrNull(fs, real), base)
   const pending = manifest.entries.filter((x) => x.harness === harness && samePath(x.path, file, fs) && ['json-key', 'json-array-item'].includes(x.kind ?? 'json-key') && x.post_sha256 == null)
   let reuse = null, dirs = [], adopted = []
   if (pending.length) {
@@ -311,7 +318,7 @@ export function previewTextEntry({ file, edit, fs = nodeFs }) {
   const res = editText(file, readUserText(file, readOrNull(fs, real)).text, edit)
   return { path: file, ...(real !== file ? { real_path: real } : {}), changes: true, prior: res.prior ?? null }
 }
-export function applyTextEntry({ dir, manifest, harness, phase, file, edit, home, door = null, now = new Date(), fs = nodeFs }) {
+export function applyTextEntry({ dir, manifest, harness, phase, file, edit, base = null, home, door = null, now = new Date(), fs = nodeFs }) {
   needHome('applyTextEntry', home)
   needPhase('applyTextEntry', phase)
   const j = judgeEntry({ manifest, planned: { harness, kind: 'text', path: file, format: edit.format, ...(edit.vars ? { vars: edit.vars } : { line: edit.line }) }, fs })
@@ -321,7 +328,7 @@ export function applyTextEntry({ dir, manifest, harness, phase, file, edit, home
   // from an install this manifest does not list is still refused, join or no join
   const joined = edit.joinBlock === true && (manifest.entries || []).some((x) => x.harness === harness && samePath(x.path, file, fs) && x.kind === 'text' && x.format === 'dotenv-block')
   const real = editTarget(file, fs)
-  const before = readOrNull(fs, real)
+  const before = startFrom(file, readOrNull(fs, real), base)
   if (j.adopt) { j.entry.post_sha256 = sha256(before); saveManifest(dir, manifest, fs); return j.entry }
   // an intent a crashed run left, whose write never happened: the file is still as it was, so its text is not yet in it
   const read = readUserText(file, before)

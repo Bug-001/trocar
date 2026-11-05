@@ -103,6 +103,13 @@ for (const { h, id, r } of ROUTES.filter((x) => x.r.kind === 'json-key' || x.r.k
       const priors = JSON.stringify(res.records.map((x) => x.prior_value))
       if (isDoor) assert.ok(!priors.includes('127.0.0.1:18001'), `${proxy}: a door is never recorded as the user's prior (${priors})`)
       else assert.ok(priors.includes(proxy), `${proxy}: the user's loopback proxy on another port is the prior`)
+      // 4.6「日志」· V106: one write, one backup, named by the manifest, holding no door password
+      const bk = backupDir(w.home), saved = fs.readdirSync(bk).map((n) => path.join(bk, n))
+      assert.deepEqual(saved, [res.records[0].backup], `${proxy}: one backup of the file, the one the manifest names`)
+      const kept = fs.readFileSync(saved[0])
+      assert.equal(sha256(kept), res.records[0].pre_sha256, `${proxy}: the backup is what the manifest records the file was before its one write`)
+      if (isDoor) assert.ok(!/127\.0\.0\.1:18001|f{32}|0123456789abcdef0123456789abcdef/.test(kept.toString('latin1')), `${proxy}: no door URL or token in the backup`)
+      else assert.deepEqual(kept, before, `${proxy}: the backup is the bytes before on`)
       assert.equal(routeEntry(r.kind).undo(ctx, res.records).ok, true, proxy)
       const after = textOf(file)
       if (isDoor) {
