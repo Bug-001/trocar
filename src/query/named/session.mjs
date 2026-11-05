@@ -745,7 +745,8 @@ function stateAt(ctx, r, id, reading = false) {
   for (let i = done; !above && i < members.length; i++) above = inCut(plan, members[i]);
   const home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs, said = titleOf({ home, fs, id, members, errors });
   V.meta = { ...V.meta, ...said };
-  const pending = above || reading ? { done, total: members.length, work: st.store.work, ...seenOf(readHead(home, id, fs), reading), calls: callsPast(plan, reachOf(ctx, id, st.log, members)), ...(reading ? { read: done } : null) } : null;
+  const seen = above || reading ? seenOf(readHead(home, id, fs), reading) : null; // `read` goes with it: with no head to keep this is a first read
+  const pending = above || reading ? { done, total: members.length, work: st.store.work, ...seen, calls: callsPast(plan, reachOf(ctx, id, st.log, members)), ...(reading && seen ? { read: done } : null) } : null;
   return { id, rows: members, store: st.store, mark, pending,
     title: headTitle(ctx, id, said), truncated: plan.bound, V, failed: V.failed, errors, indexErrors, st, plan, pos: (rid) => posOf(plan, rid), cut: (row) => inCut(plan, row) };
 }

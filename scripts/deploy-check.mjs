@@ -163,6 +163,7 @@ async function theBoard() {
     await Promise.all([poll('status', () => '/api/status', 1000), poll('sessions', () => '/api/sessions?limit=500', 1000),
       small.length ? poll('small', () => `/api/d/head?id=${enc(small[i++ % small.length].session_id)}`, 500) : null])
     took('statusP95', p95(lat.status))
+    report.measured.statusMax = Math.max(...lat.status) // reported: `status` still waits behind an answer in flight
     took('sessionsP95', p95(lat.sessions))
     if (small.length) took('smallP95', p95(lat.small)); else delete lines.smallP95
     await b.page.evaluate(() => { location.hash = '#/sessions' })

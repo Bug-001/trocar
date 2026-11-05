@@ -148,7 +148,7 @@ test('3.5 重读 ①: with its head gone a `--since` and a `--head` answer at th
   for (const n of [headFile(home, id), headFile(home, id, true)]) fs.rmSync(n, { force: true })
   const a = await runQuery('session', { id, since: M }, ctx)
   assert.notEqual(a.mark, M)
-  assert.ok(a.pending && !('seen' in a.pending), 'a deleted head is a first read')
+  assert.ok(a.pending && !('seen' in a.pending) && !('read' in a.pending), 'a deleted head is a first read')
   assert.equal((await runQuery('session', { id, head: '' }, ctx)).tier, 1)
 })
 
