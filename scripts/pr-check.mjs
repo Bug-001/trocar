@@ -3,7 +3,7 @@
 //
 // The report is {ok, hash, findings: [{rule, where, why}], accepted: [{rule, where, why}], coverage: {scanned_bytes, opaque_bytes, after_bytes,
 // total_bytes, from, to}, leaving: {files, commits, identity, branch}}. Exit 0 passed, 1 refused, 2 usage error. A finding names a place and a rule, never a value: `where` points into
-// `leaving.files` by index, because a path is outbound text too, and `why` is one constant sentence per rule. Captured bytes pass through
+// `leaving.files` by index, because a path is outbound text too, and `why` is one constant sentence per rule, or per kind of fact. Captured bytes pass through
 // this process to be compared, and nothing of them is printed. What cannot be read is a refusal, not an empty result. For the capture that
 // is a `partial` finding, the one rule --accept-partial moves to `accepted`, and the hash holds what it let through, as it does for a host --public-host lets through. The capture is read
 // through the installed trocar, or the one --cli names: its reads go by the daemon and may write the derived layer, never the raw records.
@@ -18,7 +18,7 @@ import { parseTime } from '../src/query/named/index.mjs'
 import { SEALED_EXT } from '../src/raw/seal.mjs'
 import { foldedRuns, isHex, longRuns, opened } from './lib/encoded-text.mjs'
 import { textsBehind } from './lib/record-text.mjs'
-import { normalize, standsIn, WindowTable } from './lib/text-windows.mjs'
+import { linesOf, normalize, WindowTable } from './lib/text-windows.mjs'
 import { callOf, findCli } from './lib/trocar-cli.mjs'
 
 const USAGE = `usage: node scripts/pr-check.mjs --before <time> --title <file> --body <file> [--base <ref>] [--accept-partial] [--public-host <host>]... [--cli <path>] [--json]
@@ -93,7 +93,6 @@ const WHY = {
   secrets: 'This has the shape of a credential.',
   identity: 'This names this machine, its user or a home directory.',
   email: 'The commit email is not a GitHub noreply address. Run git config user.email with your noreply address, then git rebase --exec "git commit --amend --no-edit --reset-author" onto the base.',
-  'captured-facts': 'This matches a project, session, title, host or segment in your capture.',
   'public-host': 'The user called this host in your capture a public service.',
   'captured-text': 'At least 60 normalized bytes of this also occur in your capture.',
   lines: `This commit changes more than ${MAX_LINES} lines.`,
@@ -266,11 +265,12 @@ function hashOf(sources, { base, before, accepting, accepted, coverage }) {
   return hash.digest('hex')
 }
 
-/** `where`, narrowed to the line of the new file a match at `index` sits on, when the source knows its lines. */
-function placeOf(source, text, index) {
-  const line = source.lines?.[text.slice(0, index).split('\n').length - 1]
+/** `where`, narrowed to row `row`, from 0, of the source's text: the line of the new file for what a commit adds, the text's own in a body or a message. */
+function placeOn(source, row) {
+  const line = source.kind === 'body' || source.kind === 'message' ? row + 1 : source.lines?.[row]
   return line === undefined ? source.where : `${source.where}:${line}`
 }
+const placeOf = (source, text, index) => (source.lines ? placeOn(source, text.slice(0, index).split('\n').length - 1) : source.where)
 
 /** The object `rev` names, empty when it names none. */
 const answer = (cwd, ...args) => spawnSync('git', args, { cwd, stdio: ['ignore', 'pipe', 'ignore'] }).stdout.toString().trim()
@@ -436,19 +436,24 @@ function titleOf(cli, add, row) {
 function checkFacts(cli, segments, sources, add, hold, publicHosts) {
   const sessions = allPages(cli, add, 'sessions', 'sessions')
   const titles = new Set(sessions.map((s) => titleOf(cli, add, s)))
-  const others = [...sessions.flatMap((s) => [s.project_path, s.project_slug, s.session_id]), ...titles, ...segments.map((s) => s.segment)]
+  const kinds = { host: allPages(cli, add, 'traffic', 'hosts').map((h) => h.host), project: sessions.flatMap((s) => [s.project_path, s.project_slug]),
+    session: sessions.map((s) => s.session_id), title: [...titles], segment: segments.map((s) => s.segment) }
   const words = new Map()
-  // hosts first: a word that is another fact as well is that fact, and --public-host does not reach it
-  for (const fact of [...allPages(cli, add, 'traffic', 'hosts').map((h) => h.host), ...others].filter((f) => typeof f === 'string')) {
-    const word = normalized(fact)
-    if (word.toString().length >= MIN_FACT) words.set(word.toString('latin1'), { word, fact })
+  for (const [kind, facts] of Object.entries(kinds)) {
+    for (const fact of facts.filter((f) => typeof f === 'string')) {
+      const word = normalized(fact), key = word.toString('latin1')
+      if (word.toString().length >= MIN_FACT) words.set(key, { word, fact, kinds: new Set(words.get(key)?.kinds).add(kind) })
+    }
   }
-  for (const { word, fact } of words.values()) {
-    const isPublic = publicHosts.includes(fact) && !others.includes(fact)
+  for (const { word, fact, kinds: [kind, another] } of words.values()) { // a word of two kinds is neither a title nor a host alone: no word breaks, no --public-host
+    const isTitle = kind === 'title' && !another, isPublic = kind === 'host' && !another && publicHosts.includes(fact)
     for (const source of sources) {
-      if (!source.norm.includes(word) || (titles.has(fact) && !standsIn(source.bytes, word))) continue
+      if (!source.norm.includes(word)) continue
+      const rows = linesOf(source.bytes, word, isTitle)
+      if (isTitle && rows.length === 0) continue
       if (isPublic) hold(fact, 'captured-facts', fact, { why: WHY['public-host'] })
-      else hold(fact, 'captured-facts', source.where)
+      // no row for a hit: the author's norm reads its login whole, so the bytes may not spell it the same
+      else for (const where of rows.length > 0 ? rows.map((row) => placeOn(source, row)) : [source.where]) hold(fact, 'captured-facts', where, { why: `This matches a ${kind} in your capture.` })
     }
   }
 }

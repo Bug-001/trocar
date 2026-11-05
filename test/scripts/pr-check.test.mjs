@@ -23,7 +23,7 @@ const SCRIPT = fileURLToPath(new URL('../../scripts/pr-check.mjs', import.meta.u
 const BIN = fileURLToPath(new URL('../../bin/trocar.mjs', import.meta.url))
 const BEFORE = '2026-11-01T00:00:00.000Z'
 const NOREPLY = '1+nobody@users.noreply.github.com'
-const WHERE = /^[0-9a-f]{7,}(:file#\d+(:\d+)?|:message|:author)?$|^tree:file#\d+(:\d+)?$|^(title|body|branch|git|capture)$/
+const WHERE = /^[0-9a-f]{7,}(:file#\d+(:\d+)?|:message(:\d+)?|:author)?$|^tree:file#\d+(:\d+)?$|^(body(:\d+)?|title|branch|git|capture)$/
 const WHY_BODY = 'subject\n\nThe reason for this change.\n'
 
 /** A repo on branch `work`, one commit past tag `base`'s `files`, and a HOME with no capture in it. */
@@ -46,13 +46,13 @@ function workspace(files = {}) {
     git(['add', '-A'])
     git(['commit', '-q', '--allow-empty', '-m', message], extra)
   }
-  const check = ({ title = 'A title', body = 'A body', args = [], env: extra = {}, cwd = dir, base = ['--base', 'base'], before = BEFORE, script = SCRIPT, cli = ['--cli', BIN] } = {}) => {
+  const check = ({ title = 'A title', body = 'A body', args = [], env: extra = {}, cwd = dir, base = ['--base', 'base'], before = BEFORE, script = SCRIPT, cli = ['--cli', BIN], json = ['--json'] } = {}) => {
     const titleFile = path.join(texts, 'title'), bodyFile = path.join(texts, 'body')
     fs.writeFileSync(titleFile, title)
     fs.writeFileSync(bodyFile, body)
-    const r = spawnSync(process.execPath, [script, '--json', '--before', before, '--title', titleFile, '--body', bodyFile, ...base, ...cli, ...args],
+    const r = spawnSync(process.execPath, [script, ...json, '--before', before, '--title', titleFile, '--body', bodyFile, ...base, ...cli, ...args],
       { cwd, env: { ...env, ...extra }, maxBuffer: 2 ** 28 })
-    return { code: r.status, doc: JSON.parse(r.stdout.toString()) }
+    return { code: r.status, out: `${r.stdout}${r.stderr}`, doc: json.length ? JSON.parse(r.stdout.toString()) : null }
   }
   git(['init', '-q', '-b', 'main'])
   commit({ 'README.md': 'A readme.\n', ...files }, 'base\n\nThe base.\n')
@@ -1004,7 +1004,7 @@ test('AN19: a title the list has not read yet is read through the head, and refu
   w.commit({ 'a.txt': 'one\n' })
   const { code, doc } = w.check({ body: `Seen in ${title.toUpperCase()}.` })
   assert.equal(code, 1)
-  assert.deepEqual(doc.findings.map((f) => [f.rule, f.where]), [['captured-facts', 'body']])
+  assert.deepEqual(doc.findings.map((f) => [f.rule, f.where]), [['captured-facts', 'body:1']])
 })
 
 test('AN19: letters that only run together across two words are not the title, one edge on a word break is, and a host stays a substring', () => {
@@ -1017,6 +1017,65 @@ test('AN19: letters that only run together across two words are not the title, o
   for (const body of ['The prefix cites the rule.', 'a suffix circle']) assert.equal(refused(body), false, body)
   for (const body of ['Fix CI', 'fix-ci', 'fixci', 'fi\nx ci', 'a hotfix ci', 'fix cis', '"a\\nfix ci\\nb"', '\\u0066\\u0069\\u0078 ci', 'fix%20ci', 'at C:\\fix ci', '\uff46\uff49\uff58 \uff43\uff49',
     '我们修复登录问题', '修复登录bug', 'myvault7.example.network']) assert.equal(refused(body), true, body)
+})
+
+// one word for each kind of fact, none of them short enough to skip or long enough for captured-text
+const KINDS = { host: 'vault7.example.net', project: 'proj-zorgon-17', session: 'sess-zorgon-41', title: 'quiet harbor notes', segment: NEWER }
+function everyKind(extra = [], files = {}) {
+  const w = workspace(files)
+  capture(w, NEWER, [{ host: KINDS.host }])
+  const rows = [{ session_id: KINDS.session, project_slug: KINDS.project, title: KINDS.title, title_source: 'wire' }, ...extra]
+  return { w, cli: faulty(w, `if (argv[1] === 'sessions') out = JSON.stringify({ ok: true, sessions: ${JSON.stringify(rows)} })`) }
+}
+const facts = (doc) => of(doc, 'captured-facts').map((f) => [f.where, f.why]).sort()
+const says = (kind) => `This matches a ${kind} in your capture.`
+
+test('AN19: a finding says the kind of fact and the line, and no output holds the word', () => {
+  const { w, cli } = everyKind()
+  w.commit({ 'a.txt': 'one\n' })
+  for (const [kind, word] of Object.entries(KINDS)) {
+    const text = { title: 'A title', body: `first\n\n${word.toUpperCase()}\nlast`, cli }
+    const r = w.check(text)
+    assert.equal(r.code, 1, kind)
+    assert.deepEqual(facts(r.doc), [['body:3', says(kind)]], kind)
+    shapely(r.doc)
+    const plain = w.check({ ...text, json: [] })
+    assert.equal(plain.code, 1, kind)
+    assert.match(plain.out, /body:3/, kind)
+    for (const out of [r.out, plain.out]) assert.ok(!out.toLowerCase().includes(word.toLowerCase()), kind)
+  }
+})
+
+test('AN19: the line is the one the word starts on, one finding a line, counted in the file for what a commit adds', () => {
+  const { w, cli } = everyKind()
+  const word = KINDS.host, half = word.length >> 1
+  const lines = (body) => facts(w.check({ body, cli }).doc).map(([where]) => where)
+  w.commit({ 'a.txt': 'one\n' })
+  assert.deepEqual(lines(`x\n${word.slice(0, half)}\n${word.slice(half)}\ny`), ['body:2'], 'across a line break')
+  assert.deepEqual(lines(`${word}\n${word} ${word}\n\n${word}`), ['body:1', 'body:2', 'body:4'])
+  assert.deepEqual(lines(`a\\nb\\u000ac%0ad&#10;e\r\n${word}`), ['body:2'], 'an escaped line break is no line of the text')
+  assert.deepEqual(facts(w.check({ title: `see ${word}`, cli }).doc), [['title', says('host')]])
+
+  const v = everyKind([], { 'keep.txt': 'one\ntwo\nthree\n' })
+  v.w.commit({ 'keep.txt': `one\ntwo\n${word}\nthree\n` }, `subject\n\nThe reason.\nAnd ${word}.\n`)
+  const { doc } = v.w.check({ cli: v.cli })
+  const [{ sha }] = doc.leaving.commits
+  assert.deepEqual(facts(doc).map(([where]) => where), [`${sha}:file#0:3`, `${sha}:message:4`])
+  v.w.commit({ 'other.txt': 'more\n' })
+  const two = v.w.check({ cli: v.cli }).doc
+  assert.ok(facts(two).some(([where]) => where === 'tree:file#0:3'))
+})
+
+test('AN19: a word of several kinds counts as all of them, in one finding of the kind found first', () => {
+  const both = { session_id: 'id0', title: KINDS.host.toUpperCase(), title_source: 'wire' }
+  const { w, cli } = everyKind([both, { session_id: KINDS.title, title: 'other', title_source: 'wire' }])
+  w.commit({ 'a.txt': 'one\n' })
+  assert.deepEqual(facts(w.check({ body: `see ${KINDS.host}`, cli }).doc), [['body:1', says('host')]])
+  assert.deepEqual(facts(w.check({ body: `see ${KINDS.title}`, cli }).doc), [['body:1', says('session')]])
+  const spelled = everyKind([{ session_id: 'id0', title: 'vault7 example', title_source: 'wire' }, { session_id: 'id1', project_slug: 'vault7.example', title_source: 'wire' }])
+  spelled.w.commit({ 'a.txt': 'one\n' })
+  const inside = 'xvault7 examples'
+  assert.deepEqual(facts(spelled.w.check({ body: inside, cli: spelled.cli }).doc), [['body:1', says('project')]], 'a substring, as a title alone would not be')
 })
 
 // ── AN20
@@ -1317,7 +1376,7 @@ for (const [name, rewrite] of Object.entries(HEAD_FAULTS)) {
     const { code, doc } = w.check({ body: `Seen in ${id}.`, cli: faulty(w, `if (argv.includes('--head')) { ${rewrite} }`) })
     assert.equal(code, 1)
     assert.ok(of(doc, 'partial').some((f) => f.where === 'capture'))
-    assert.ok(of(doc, 'captured-facts').some((f) => f.where === 'body'))
+    assert.ok(of(doc, 'captured-facts').some((f) => f.where === 'body:1'))
   })
 }
 
@@ -1490,7 +1549,7 @@ test('AN32: a host named public is no hit: it goes into accepted and the hash, a
   const both = `see ${PUBLIC} and ${OTHER}`
   const one = w.check({ body: both, args: open(PUBLIC) })
   assert.equal(one.code, 1)
-  assert.deepEqual(one.doc.findings.map((f) => [f.rule, f.where]), [['captured-facts', 'body']])
+  assert.deepEqual(one.doc.findings.map((f) => [f.rule, f.where]), [['captured-facts', 'body:1']])
   assert.deepEqual(passed(one.doc), [['captured-facts', PUBLIC]])
   const two = w.check({ body: both, args: open(PUBLIC, OTHER) })
   assert.equal(two.code, 0)

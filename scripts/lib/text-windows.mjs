@@ -13,6 +13,7 @@ const OPEN_BRACE = 0x7b
 const CLOSE_BRACE = 0x7d
 const LOWER_U = 0x75
 const LOWER_X = 0x78
+const NEWLINE = 0x0a
 const MAX_CP = 0x10ffff
 const MAX_ENTITY_NAME = 8
 // Slots per normalized byte, each the start of at most one window. The scan probes once per byte, and at 8 an empty slot answers nearly all of them without a
@@ -125,8 +126,9 @@ function decodeUtf8(src, at) {
 // Normalizes src into out (capacity(src) bytes hold any input) and returns the length written. Folding grows a
 // character's UTF-8 by 2x at most, and an escape only shrinks. `run` is the backslash state: 1 after a run of
 // literal backslashes, 2 when the run holds an escaped backslash, which makes the next decoded character count as
-// escaped as well. `breaks`, when given, collects the places in `out` where something that was no letter went.
-function normalizeInto(src, out, breaks) {
+// escaped as well. `breaks`, when given, collects the places in `out` where something that was no letter went,
+// and `rows` the ones of the line feeds in src: an escaped one is text on its line.
+function normalizeInto(src, out, breaks, rows) {
   const fold = folds()
   const n = src.length
   let i = 0
@@ -184,7 +186,10 @@ function normalizeInto(src, out, breaks) {
       continue
     }
     let bytes = fold[cp]
-    if (bytes === 0) breaks?.add(o)
+    if (bytes === 0 && breaks) {
+      breaks.add(o)
+      if (src[i - 1] === NEWLINE) rows.push(o)
+    }
     for (; bytes !== 0; bytes >>>= 8) out[o++] = bytes & 0xff
   }
   return o
@@ -197,17 +202,19 @@ export function normalize(bytes) {
   return out.slice(0, normalizeInto(bytes, out))
 }
 
-/** Whether normalized `word` is said in `bytes`, not just spelled: a hit with both ends inside words of the text is letters that run together
- *  across them. Only ASCII is read as inside a word: Han has no breaks to read, so there every hit stands. */
-export function standsIn(bytes, word) {
+/** The line, from 0, each hit of normalized `word` in `bytes` starts on. With `said` only hits that say the word, not just spell it: one with both
+ *  ends inside words of the text is letters that run together across them. Only ASCII is read as inside a word: Han has no breaks to read, so there every hit stands. */
+export function linesOf(bytes, word, said) {
   const out = new Uint8Array(capacity(bytes))
-  const breaks = new Set()
-  const text = Buffer.from(out.buffer, 0, normalizeInto(bytes, out, breaks))
+  const breaks = new Set(), rows = [], lines = []
+  const text = Buffer.from(out.buffer, 0, normalizeInto(bytes, out, breaks, rows))
   const inWord = (at) => text[at - 1] < 0x80 && text[at] < 0x80 && !breaks.has(at) // past either end a byte reads undefined
+  let line = 0
   for (let at = text.indexOf(word); at >= 0; at = text.indexOf(word, at + 1)) {
-    if (!inWord(at) || !inWord(at + word.length)) return true
+    while (rows[line] <= at) line++
+    if (!said || !inWord(at) || !inWord(at + word.length)) lines.push(line)
   }
-  return false
+  return lines
 }
 
 function hashOf(bytes, at) {
