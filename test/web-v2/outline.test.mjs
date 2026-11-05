@@ -5,14 +5,14 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { revealIn } from '../../web/legacy/replay/replay.mjs'
-import { outlineHtml, outlineEntries, queryStepLabels, wireOutline, jumpToAnchor, jumpToBlockIndex } from '../../web/legacy/replay/outline.mjs'
+import { outlineHtml, outlineEntries, queryStepLabels, wireOutline, jumpToAnchor, jumpToBlockIndex, jumpToResourceBlock } from '../../web/legacy/replay/outline.mjs'
 import { resourcesHtml } from '../../web/legacy/replay/resources.mjs'
 import { humanTurns, messageTurns } from '../../web/legacy/replay/analysis.mjs'
 import { openTurnFor, renderContextWindow } from '../../web/legacy/replay/ctxwin.mjs'
 import { turnIsOpen } from '../../web/legacy/replay/fold.mjs'
 import { buildLanes, anchorLane } from '../../web/legacy/replay/lanes.mjs'
 import { stepOf, createDesk, applySession } from '../../web/legacy/replay/model.mjs'
-import { createJumpQueue, anchorJump } from '../../web/legacy/replay/jump.mjs'
+import { createJumpQueue, anchorJump, blockJump } from '../../web/legacy/replay/jump.mjs'
 import { deskOf, world, readLane } from './desk-world.mjs'
 
 const ts = (i) => new Date(Date.UTC(2026, 9, 7, 0, 0, i * 5)).toISOString()
@@ -230,6 +230,31 @@ test('jump waits for the target lane: not held → wait; held → run once; a re
   }
 })
 
+test('jump: a block jump its own step can never land is reported; one the reader moved away from is not', () => {
+  for (const [call, dropped] of [[{ unparsed: true, rec: true }, 1], [{ rec: false }, 1], [null, 1]]) {
+    let playhead = 2, heard = 0
+    const q = createJumpQueue({ getPlayhead: () => playhead, getCall: () => call, getHeld: () => false, perform: () => assert.fail('nothing to run'), dropped: () => { heard++ } })
+    q.queue(2, blockJump('r'))
+    assert.equal(heard, dropped)
+    q.queue(3, blockJump('r'))
+    assert.equal(heard, dropped, 'the playhead left its step')
+    playhead = 3
+  }
+})
+
+// ── 2.5: an entry table is read for a named step, the playhead stays where it is
+test('outlineEntries(s, at) reads step `at`, the same table as with the playhead on it', async () => {
+  for (const seed of [3, 11]) {
+    const w = world(seed), get = w.get(), desk = createDesk()
+    applySession(desk, await get('session', { id: 'S' }))
+    const [key, rids] = [...desk.laneRids].find(([, r]) => r.length > 1)
+    await readLane(get, 'S', desk, { lane: key })
+    const calls = rids.map((rid) => desk.rows.get(rid)), anchor = { id: key, kind: 'main', calls, ridLocal: new Map(rids.map((r, i) => [r, i])) }
+    const s = (playhead) => ({ desk, anchor, playhead, lanes: [anchor] })
+    for (const at of [0, rids.length - 1]) assert.deepEqual(outlineEntries(s(rids.length - 1 - at), at), outlineEntries(s(at)), `seed ${seed} step ${at}`)
+  }
+})
+
 // ── 2.5 #9: the outline on a step whose lane is not held, and the same step once held ──────────────────────────────────
 test('an unheld step: the tool count is the row\'s, the other groups are busy rows (no words, no 0, no control); held → its blocks', () => {
   const ALL = new Set(['tools', 'sys', 'msg'])
@@ -246,5 +271,15 @@ test('an unheld step: the tool count is the row\'s, the other groups are busy ro
     const held = outlineHtml(deskState([{ kind: 'main', rows, blocks: [flat, flat] }], { playhead: 1, navOpen: ALL }))
     assert.ok(!/aria-busy/.test(held), 'held: no busy row')
     assert.equal((held.match(/data-jumpfi=/g) || []).length, tools + 2, 'held: every tool, the system block and the query are listed')
+  }
+})
+
+test('2.4 #13: a block reading several files is the landing for any of its resKeys', () => {
+  const keys = ['file::/a', 'file::/b', 'file::/c']
+  const curFlat = [{ resKey: 'file::/z' }, { resKey: keys[0], resKeys: keys }]
+  for (const k of keys) {
+    const hits = []
+    jumpToResourceBlock({ curFlat, reveal: (t) => hits.push(t.fi) }, k)
+    assert.deepEqual(hits, [1], k)
   }
 })

@@ -63,10 +63,9 @@ for (const exe of ['/opt/bin/claude', '/nix/store/x-claude/bin/claude', 'C:\\Pro
     assert.deepEqual(keysOf(uses), [keyOf(files[0])])
   })
 
-test('a Windows home joins ~ and $HOME the same way', async () => {
-  const { files, uses } = await read(lane([bash('t0', 'cat ~/p/a.txt'), bash('t1', 'cat $HOME/p/a.txt')], { exe: 'C:\\Users\\u\\bin\\claude.exe' }))
-  assert.equal(files.length, 1)
-  assert.ok(files[0].label.startsWith('C:\\Users\\u'), files[0].label)
+test('a Windows home joins ~, $HOME and the path spelled out as one entry', async () => {
+  const { files, uses } = await read(lane([bash('t0', 'cat ~/p/a.txt'), bash('t1', 'cat $HOME/p/a.txt'), bash('t2', "cat 'C:\\Users\\u\\p\\a.txt'")], { exe: 'C:\\Users\\u\\bin\\claude.exe' }))
+  assert.deepEqual(files.map((r) => r.label), ['C:\\Users\\u\\p\\a.txt'])
   assert.deepEqual(keysOf(uses), [keyOf(files[0])])
 })
 

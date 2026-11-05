@@ -7,14 +7,16 @@
 // Which words of a command are its files; 2.4 fidelity boundary item 7 is the boundary. takes: short flags followed by a value ·
 // long: long flags and how many words they take · script: the first operand is no file, unless a flag matching `given` carries it ·
 // max: how many operands are files · need / not: a flag that makes it a read / keeps it from being one · ranges: [pattern on the joined line, label] · range: else this.
-const LINES = { takes: 'nc', long: { '--lines': 1, '--bytes': 1 } }, LINE_COUNT = /(?:^| )(?:-n? ?|--lines[= ])(\d+)\b/, BYTE_COUNT = /(?:^| )(?:-c ?|--bytes[= ])(\d+)\b/;
+// a count with its sign (`head -n -5`: all but the last 5 · `tail -n +5`: from line 5); `-5` alone is unsigned
+const count = (flag, sign) => new RegExp(`(?:^| )(?:${flag})${sign}(\\d+)\\b`), LN = '-n ?|--lines[= ]', BY = '-c ?|--bytes[= ]', BARE = /(?:^| )-(\d+)\b/;
+const LINES = { takes: 'nc', long: { '--lines': 1, '--bytes': 1 } };
 const SED_N = '(?:^| )-[a-zA-Z]*n[a-zA-Z]*(?: -[a-zA-Z]+)* ?';
 const READS = {
   cat: {}, tac: {}, more: {}, less: { takes: 'p' },
   nl: { takes: 'bdfhilnpsvw' }, bat: { takes: 'lrHm', long: { '--line-range': 1, '--language': 1, '--style': 1 } },
   xxd: { takes: 'cglos', max: 1 }, od: { takes: 'AjNStw' }, strings: { takes: 'nte' },
-  head: { ...LINES, ranges: [[LINE_COUNT, 'L1–$1'], [BYTE_COUNT, 'first $1 bytes']] },
-  tail: { ...LINES, ranges: [[LINE_COUNT, 'tail $1'], [BYTE_COUNT, 'last $1 bytes']] },
+  head: { ...LINES, ranges: [[count(LN, '-'), 'all but the last $1 lines'], [count(LN, '\\+?'), 'L1–$1'], [count(BY, '-'), 'all but the last $1 bytes'], [count(BY, '\\+?'), 'first $1 bytes'], [BARE, 'L1–$1']] },
+  tail: { ...LINES, ranges: [[count(LN, '\\+'), 'from L$1'], [count(LN, '-?'), 'tail $1'], [count(BY, '\\+'), 'from byte $1'], [count(BY, '-?'), 'last $1 bytes'], [BARE, 'tail $1']] },
   sed: { script: true, given: /^-[a-zA-Z]*[ef]$|^--(expression|file)/, takes: 'efl', long: { '--expression': 1, '--file': 1 }, need: /^-[a-zA-Z]*n|^--(quiet|silent)$/, not: /^-[a-zA-Z]*i|^--in-place/, range: 'matching lines',
     ranges: [[/(?:^| )-[a-zA-Z]*e .* -[a-zA-Z]*e /, 'matching lines'], [new RegExp(`${SED_N}(\\d+),(\\d+)\\s*p(?: |$)`), 'L$1–$2'], [new RegExp(`${SED_N}(\\d+)\\s*p(?: |$)`), 'L$1']] },
   grep: { script: true, given: /^-[a-zA-Z]*[ef]$|^--(regexp|file)/, takes: 'ABCDdefm', long: { '--regexp': 1, '--file': 1, '--context': 1, '--after-context': 1, '--before-context': 1, '--max-count': 1, '--include': 1, '--exclude': 1, '--exclude-dir': 1 },
@@ -221,6 +223,7 @@ export function parseBashReads(command, { home = null } = {}) {
   // normalise under the first segment, which `..` never climbs out of
   const finish = (v) => {
     const full = v[0] === MARK ? (home || '~') + v.slice(1) : v;
+    const sep = v[0] === MARK && home?.includes('\\') ? '\\' : '/'; // a Windows home spells the rest with its own separator
     const cut = full.indexOf('/');
     const root = cut < 0 ? full : full.slice(0, cut);
     const segments = [];
@@ -228,7 +231,7 @@ export function parseBashReads(command, { home = null } = {}) {
       if (part === '..') segments.pop();
       else if (part && part !== '.') segments.push(part);
     }
-    return `${root}/${segments.join('/')}`.replace(/(.)\/$/, '$1');
+    return `${root}/${segments.join('/')}`.replace(/(.)\/$/, '$1').replaceAll('/', sep);
   };
 
   const locate = ({ v, why, text }) => {

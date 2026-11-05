@@ -35,13 +35,14 @@ export function isVolatile(section, block) {
 // The board uses '' inline; the ETL maps '' → null. Labels MUST match extractResources'/addRes' keys
 // so the ledger join works. (Unifies the twin msgResKey [board] / resourceRefOf [ETL].)
 // `ctx`: what a shell read's path resolves against (harnesses.mjs pathContext); the key and the ledger label come from the one parse.
-// Memo by the parsed block: a stitched context hands the same block to every call of its chain (parsed bodies are read-only).
+// Memo by the parsed block and the home it resolved against: a stitched context hands the same block to every call of its chain
+// (parsed bodies are read-only), and the home is the one part of `ctx` a key depends on.
 const refMemo = new WeakMap();
 export function resourceRefs(b, ctx = {}) {
   if (!b || typeof b !== 'object') return [];
-  let r = refMemo.get(b);
-  if (r === undefined) refMemo.set(b, (r = resourceRefOf(b, ctx)));
-  return r;
+  let m = refMemo.get(b);
+  if (!m || m.home !== ctx.home) refMemo.set(b, (m = { home: ctx.home, r: resourceRefOf(b, ctx) }));
+  return m.r;
 }
 export const resourceRef = (b, ctx) => resourceRefs(b, ctx)[0] || '';
 // a spine entry's keys: `resourceRefs` only when a block has more than one (a shell read of several files)

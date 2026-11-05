@@ -79,7 +79,7 @@ test('~ and $HOME are one spelling: the home when known, ~/rest when not', () =>
     }
   }
   assert.deepEqual(paths('cat ~other/a.txt', { home: '/Users/u' }), ['~other/a.txt']);
-  assert.deepEqual(paths('cat ~/a/b.txt', { home: 'C:\\Users\\u' }), ['C:\\Users\\u/a/b.txt']);
+  assert.deepEqual(paths('cat ~/a/b.txt', { home: 'C:\\Users\\u' }), ['C:\\Users\\u\\a\\b.txt']);
   assert.deepEqual(paths('cat ~/../v/b.txt', { home: '/Users/u' }), ['/Users/v/b.txt']);
 });
 
@@ -204,6 +204,7 @@ test('bounds: scope and order of the command decide, and what is not a read stay
 // 2.4 item 7, the table: each way of reading, with the range it names
 const WAYS = [
   ['cat', 'full file'], ['head -n 3', 'L1–3'], ['tail -c 10', 'last 10 bytes'], ['head -c 100', 'first 100 bytes'], ['head --lines=5', 'L1–5'], ['head --lines 5', 'L1–5'], ['tail --lines=5', 'tail 5'], ['less +10', 'full file'],
+  ['head -n -5', 'all but the last 5 lines'], ['head -c -5', 'all but the last 5 bytes'], ['head -n +5', 'L1–5'], ['tail -n +5', 'from L5'], ['tail -c +5', 'from byte 5'], ['tail -n -5', 'tail 5'], ['tail --lines=+5', 'from L5'],
   ['sed -n 5p', 'L5'], ["sed -n '3,9p'", 'L3–9'], ['sed -n -e 5p', 'L5'], ['sed -nE 5p', 'L5'], ['sed -n -E 5p', 'L5'], ['sed -n -e 5p -e 7p', 'matching lines'], ['sed -ne 5p', 'L5'], ["sed -n '/a/p'", 'matching lines'],
   ['grep x', 'matching lines'], [`grep --include '*.js' x`, 'matching lines'], ['grep -n -A 3 x', 'matching lines'], ['grep -A3 x', 'matching lines'], ['grep -e x', 'matching lines'],
   ['grep --regexp=x', 'matching lines'], ['grep --regexp x', 'matching lines'], ['grep -f p.txt', 'matching lines'],
