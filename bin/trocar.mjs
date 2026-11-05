@@ -10,6 +10,8 @@ if (!(Number(process.versions.node.split('.')[0]) >= floor)) {
   console.error(`trocar needs Node ${floor} or newer; this is Node ${process.versions.node}.`);
   process.exit(2);
 }
+// A reader that went away (`trocar skill | head`) is no error: the command runs to its end and leaves with its own code, so `on` is never cut off halfway (RFC 1.6 §1.2).
+for (const stream of [process.stdout, process.stderr]) stream.on('error', (e) => { if (e.code !== 'EPIPE') throw e; });
 const { runCli } = await import('../src/cli/main.mjs');
 
 runCli(process.argv.slice(2)).then((code) => { process.exitCode = code; }, (e) => { console.error(e); process.exit(1); });
