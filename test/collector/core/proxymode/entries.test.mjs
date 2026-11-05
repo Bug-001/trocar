@@ -166,7 +166,9 @@ for (const { h, id, r } of ROUTES.filter((x) => intoProcessEnv(x.r))) {
     const w = world({ persistent: PERSIST })
     const ctx = ctxFor(w, h, id)
     const file = resolveLoc(r.file, ctx)[0]
-    const before = r.kind === 'dotenv-block' ? `KEEP=x\nHTTP_PROXY=${USER_PROXY}\n` : `${JSON.stringify({ env: { HTTP_PROXY: USER_PROXY, KEEP: 'x' }, unrelated: 'keep' }, null, 2)}\n`
+    // the user's own HTTP_PROXY, ALL_PROXY where the agent reads it, and NO_PROXY: theirs survive, off takes out only trocar's
+    const mine = { HTTP_PROXY: USER_PROXY, ...(leaves.includes('ALL_PROXY') ? { ALL_PROXY: 'socks5://user.example:1080' } : {}), NO_PROXY: '.corp.example' }
+    const before = r.kind === 'dotenv-block' ? `KEEP=x\n${Object.entries(mine).map(([k, v]) => `${k}=${v}\n`).join('')}` : `${JSON.stringify({ env: { ...mine, KEEP: 'x' }, unrelated: 'keep' }, null, 2)}\n`
     put(file, before)
     const recs = routeEntry(r.kind).write(ctx, door()).records
     const now = fs.readFileSync(file, 'utf8')
