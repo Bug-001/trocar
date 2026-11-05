@@ -12,6 +12,8 @@ import { routeEntry, recordsOf } from '../../src/collector/core/proxymode/entrie
 import { resolveLoc } from '../../src/collector/core/proxymode/sources.mjs'
 import { judgeEntry } from '../../src/collector/core/trust/journal.mjs'
 import { sealRecord } from '../../src/off/seal.mjs'
+import { writtenOf } from '../../src/collector/core/proxymode/status-facts.mjs'
+import { redactProxyUrl } from '../../src/netenv/redact.mjs'
 import { world, put, bytesOf, door } from '../collector/core/proxymode/fixtures/entries-ctx.mjs'
 
 const harnesses = await loadHarnesses()
@@ -59,6 +61,13 @@ for (const c of CASES) {
       assert.deepEqual(x.prior_value, s.clear[i].prior_value, 'prior_value is the user\'s bytes')
       assert.deepEqual((x.ops || []).map((o) => o.removed), (s.clear[i].ops || []).map((o) => o.removed), 'ops[].removed is the user\'s bytes')
     }
+  })
+
+  test(`V70 ${label} — status shows a sealed record's written door like the clear one's, redacted`, () => {
+    const s = sealedOn(c)
+    const main = s.recs.find((x) => x.door_sha256)
+    assert.equal(redactProxyUrl(writtenOf(main)), redactProxyUrl(door()))
+    assert.ok(!writtenOf(main).includes(PW))
   })
 
   test(`A2 ${label} — a sealed record checks, judges intact and undoes to the bytes before, like a clear one`, () => {
