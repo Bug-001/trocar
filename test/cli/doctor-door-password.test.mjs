@@ -85,3 +85,13 @@ test('D3: doctor writes nothing: every file under the HOME keeps its bytes and m
   await doctor(w)
   assert.deepEqual(stamps(w.home), before)
 })
+
+test('1.6 §3.7: a door file that cannot be read leaves the question open, said; the check is not skipped in silence', async () => {
+  const w = world()
+  writeBackup({ home: w.home, file: path.join(w.home, '.b.json'), data: 'mine' })
+  fs.writeFileSync(path.join(collectorDir(w.home), INGRESS_FILE), 'not json')
+  const { io } = await doctor(w, ['--json'])
+  const f = io.json().findings.filter((x) => x.code === CODE)
+  assert.equal(f.length, 1)
+  assert.equal(f[0].class, 'note')
+})

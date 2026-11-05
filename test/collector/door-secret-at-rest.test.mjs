@@ -103,7 +103,7 @@ test('4.6「日志」· 1.6 V106: the door password is in ingress.json and the s
     scan('on again')
     assert.deepEqual(bytesOf(files), afterOn)
 
-    // 3 a crash inside on's write of the first agent file (its group's port taken, so on rewrites it), then on
+    // 3 a crash while on moves the door of the first agent file (its group's port taken, so it undoes the old entry first), then on; a crash at a write's intent: entries-sealed, entries-once
     const first = readManifest(w.dir).entries.find((e) => e.phase === 'on' && e.path === files[0]) || readManifest(w.dir).files.find((e) => e.phase === 'on' && e.path === files[0])
     const g = `${first.harness}:${first.route}`
     const taken = readIngressConfig({ dir: w.dir }).groupPorts[g]

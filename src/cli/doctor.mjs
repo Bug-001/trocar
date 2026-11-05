@@ -141,6 +141,7 @@ async function doctorDocOf({ names, home, env, platform, deps }) {
   if (orphansError) extra.push({ code: 'backup-unclaimed', class: 'note', what: `Whether any backup belongs to no install record is ${unknown(orphansError)}.`, why: 'The install record could not be read.', commands: [], verify: 'trocar doctor' })
   // an earlier trocar's `on` saved its own intermediate copies of a file, each with the door password in it (1.6 §3.7): the path only, never the password; no door file, no password
   const door = readIngressConfig({ dir: collectorDir(home), fs })
+  if (door.error && c.backups.length) extra.push({ code: 'backup-holds-door-password', class: 'note', what: `Whether a backup holds trocar's local proxy password is ${unknown(door.error)}.`, why: 'The file with the password could not be read.', commands: [], verify: 'trocar doctor' })
   if (door.listenerToken) {
     const secret = Buffer.from(door.listenerToken)
     for (const file of c.backups) {

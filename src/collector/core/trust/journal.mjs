@@ -192,15 +192,6 @@ export function applyJsonKey({ keys, value, alsoSet = [], fold = false, ...rest 
   return applyJsonKeys({ ...rest, sets: [{ keys, value, alsoSet, fold }] }).find((x) => (x.kind ?? 'json-key') === 'json-key' && sameKeys(x.keys, keys)) ?? null
 }
 
-// One element trocar appends to a JSON array (4.11 P5 `arrayItems`, kind `json-array-item`; undone by src/off/journal.mjs undoEntry: only that element goes,
-// and the array too when trocar created it and it is empty again). Judged and committed as a json-key is; an array that already holds the element is
-// left as it is (null: nothing trocar added, nothing to undo).
-export function applyJsonArrayItem({ keys, item, ...rest }) {
-  needHome('applyJsonArrayItem', rest.home)
-  needPhase('applyJsonArrayItem', rest.phase)
-  return applyJsonKeys({ ...rest, items: [{ keys, item }] }).find((x) => x.kind === 'json-array-item' && sameKeys(x.keys, keys) && isDeepStrictEqual(x.item, item)) ?? null
-}
-
 /** Every key (`sets`: {keys, value, alsoSet?, fold?}) and array element (`items`: {keys, item}) one command puts in one JSON file, written once (4.6「日志」):
  *  one record per key or element, edited in memory one after the other, so record k's pre is record k-1's post and undo last-first lands on each in
  *  turn. Only the first carries `backup` (the user's bytes before the command); it is undone last. Intents a crashed run left for this file are
