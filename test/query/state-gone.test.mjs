@@ -104,6 +104,19 @@ test('the descriptors do not grow with the times a state is let go', { skip: pro
   await drain(async () => { liveHeap(); await new Promise(setImmediate); return open() > first }, 'the descriptors of the states let go', 50)
 })
 
+test('a state let go while its head waits in lagging leaves the heap', async () => {
+  const s = homeWith(30)
+  await whole(s)
+  s.a.append(1)
+  await whole(s) // the head is not due: this state waits for the next write of it
+  const ref = new WeakRef((await sessionState(s.ctx, s.id)).st)
+  await whole(s) // sessionState let go of the wait: this puts it back
+  yieldCaches()
+  let rounds = 0 // no deref in here: it would keep the state to the end of the job
+  await drain(async () => { liveHeap(); await new Promise(setImmediate); return ++rounds < 4 }, 'the collections after the state is let go', 10)
+  assert.equal(ref.deref(), undefined)
+})
+
 // what a slice leaves on disk: the bytes of the projection and the fold log, and every pack and tail as it is
 function disk({ home, id }) {
   const d = sessionDir(home, id), o = { extract: 0, fold: 0 }
