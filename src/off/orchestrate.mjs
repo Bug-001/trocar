@@ -111,6 +111,15 @@ export function desiredOff(w, ids, installed) {
   return { wrote: true, ids: flips }
 }
 
+/** The harnesses whose desired state is on, other than `ids` (null: every one): the ones the daemon goes on serving after this off. A state file
+ *  that cannot be read counts as all off (1.6 §1.5), so it names none. */
+export function stillOn(w, ids, installed) {
+  let read
+  try { read = readStateFile(w.stateF, { fs: w.fs, installed, now: w.clock() }) } catch { return [] }
+  if (ids === null) return []
+  return Object.entries(read.state.harnesses).filter(([id, e]) => e && e.desired === 'on' && !ids.includes(id)).map(([id]) => id)
+}
+
 // the daemon's connection counts: POST /off answers {closing, waiting, cut}, GET /status {closing, waiting} (nothing is cut by a status read), so `cut` is optional
 const count = (v) => Number.isInteger(v) && v >= 0
 const counts = (r) => (r && count(r.closing) && count(r.waiting) && (r.cut === undefined || count(r.cut)) ? { closing: r.closing, waiting: r.waiting, cut: r.cut ?? 0 } : null)
@@ -460,7 +469,7 @@ function shapeReceipt(receipt) {
 export async function runOff({ home = nodeOs.homedir(), env = process.env, ids = null, now = false, yes = false, dryRun = false, interactive = false, io = null, say = null, deps = {}, source }  = {}) {
   const w = offWorld({ home, env, deps })
   const run = w.clock().toISOString()
-  const receipt = { ...newReceipt('off'), harnesses: ids || [], all: ids === null, undo: UNDO_LINE.off, log: path.join(w.dir, 'flows'), left: [], kept_bundles: [], still_trusting: [], residue: [], kept_backups: [], orphan_backups: [], pending: [], planned: [], user_processes: [], notes: [], problems: [] }
+  const receipt = { ...newReceipt('off'), harnesses: ids || [], all: ids === null, still_on: [], undo: UNDO_LINE.off, log: path.join(w.dir, 'flows'), left: [], kept_bundles: [], still_trusting: [], residue: [], kept_backups: [], orphan_backups: [], pending: [], planned: [], user_processes: [], notes: [], problems: [] }
   const put = flowWriter(w, run, receipt.notes, { source })
   // 4.11 ⑰: a manifest of version 1 / 2 is refused before any write — no lock, no state, no flows record; the receipt names the tools that undo it
   const old = refuseOldManifest({ home, platform: w.platform, fs: w.fs })
@@ -488,6 +497,7 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
     else if (!manifest) receipt.notes.push(`there is no usable install manifest${manifestError ? ` (${errMessage(manifestError)})` : ''}: ${marks.length ? `${marks.length} file(s) would be undone by trocar's own marks, after a yes` : 'no file holds trocar\'s marks'}`)
     for (const id of ids || []) if (manifest && !installed.includes(id)) receipt.skipped.push({ what: id, reason: 'trocar has nothing on its path (it was never set up, or it is already off)' })
     receipt.daemon = { pid: null, state: ids === null && !isProxyMode(w.platform) ? 'draining' : 'running' } // D62 ⑥: proxy mode's daemon keeps running
+    receipt.still_on = stillOn(w, ids, installed)
     if (!hadAnything && !receipt.changed.length && !receipt.removed.length) { receipt.nothing_installed = true; receipt.log = null } // said as it is; nothing would be written, so there is no log to point at
     return { receipt: shapeReceipt(receipt), exit: EXIT.ok }
   }
@@ -525,6 +535,7 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
     const failed = again.error || (early && early.error && !again.r ? early.error : null)
     if (failed) { receipt.problems.push(`state.json could not be written (${errMessage(failed)}); a daemon that reads it again may switch back on`); put({ event: 'failure', code: (failed && failed.code) || 'state-unparsable', reason: `off could not write ${w.stateF}: ${errMessage(failed)}` }) }
     if (wrote) put({ kind: 'desired-off', harnesses: wrote.ids, reason: `desired state off for ${wrote.ids.join(', ')}${wrote.unreadable ? ` (the state file could not be read: ${wrote.unreadable}; it was written again with everything off)` : ''}` })
+    receipt.still_on = stillOn(w, ids, installed)
     if (w.deps.releaseHeld) await w.deps.releaseHeld(ids) // 5.1: held requests are released unchanged (a seam; 5.1 is not built)
 
     // 3 · the routing
