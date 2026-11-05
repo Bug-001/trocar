@@ -60,12 +60,14 @@ test('D58: off on a machine trocar is not on, and off with the install record lo
   readable('off-nothing', formatOffReceipt(receipt, { home }), { home })
 
   // §1.4: the record is gone, there is no terminal and no --yes — the routing comes off, the files are untouched, the plan is listed, exit 1
-  const s = await installedHome({ names: ['codex'] })
+  const s = await installedHome({ names: ['kimi-code'] })
   fs.rmSync(path.join(s.dir, 'install-manifest.json'))
-  const before = fs.readFileSync(path.join(s.home, '.codex', '.env'))
+  fs.rmSync(path.join(s.dir, 'bin', 'kimi')) // one file left to undo: its PATH line
+  const rc = s.sh.files['kimi-code'][0]
+  const before = fs.readFileSync(rc)
   const io = fakeIo({ tty: false })
   assert.equal(await runOffCli([], { io, home: s.home, env: s.sh.env, platform: 'linux', deps: s.offDeps({ getuid: () => 1000 }) }), 1, io.text())
-  assert.deepEqual(fs.readFileSync(path.join(s.home, '.codex', '.env')), before, 'not a byte of the user\'s file moved')
+  assert.deepEqual(fs.readFileSync(rc), before, 'not a byte of the user\'s file moved')
   readable('off-no-record', io.stdoutText(), { home: s.home })
   assert.match(io.stdoutText(), /Found by trocar's own marks and not undone yet:/)
   assert.match(io.stdoutText(), /Undo it by the marks trocar left in it: trocar off --yes/) // one file: the sentence counts with it

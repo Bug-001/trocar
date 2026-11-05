@@ -66,7 +66,7 @@ function runWritten(s, argv, { extraEnv = {}, stubs = stubBin() } = {}) {
 // two sandboxes in the same state never hold the same paths, times or backup names: what a receipt says is compared with those taken out
 const normalize = (obj, home) => JSON.parse(JSON.stringify(obj).split(home).join('<HOME>').replace(/[0-9a-f]{16}-\d{8}T\d{9}Z(-\d+)?/g, '<BACKUP>').replace(/\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z/g, '<TIME>'))
 const cliCtx = (s, io) => ({ io, home: s.home, env: s.sh.env, platform: 'linux', deps: s.offDeps({ getuid: () => 1000 }) })
-const brokenTrocar = async () => { const s = await installedHome({ names: ['claude-code', 'codex'] }); s.sys.daemon.state.up = false; return s } // on has run; nothing answers any more
+const brokenTrocar = async (names = ['claude-code', 'codex']) => { const s = await installedHome({ names }); s.sys.daemon.state.up = false; return s } // on has run; nothing answers any more
 const preEntries = (s) => readManifest(s.dir).entries.filter((e) => e.pre_sha256).map((e) => ({ path: e.path, pre: e.pre_sha256 }))
 const backToBefore = (list) => list.filter((e) => !fs.existsSync(e.path) || sha256(fs.readFileSync(e.path)) !== e.pre).map((e) => e.path)
 
@@ -112,8 +112,8 @@ test('V2: the text a person reads is the same too, and a per-harness off leaves 
 })
 
 test('V2: with the install manifest lost the copy undoes by trocar\'s own marks, after a yes, and prints what `trocar off --yes` prints', async () => {
-  const a = await brokenTrocar(), b = await brokenTrocar()
-  const before = preEntries(b)
+  const names = ['codex', 'kimi-code']
+  const a = await brokenTrocar(names), b = await brokenTrocar(names)
   for (const s of [a, b]) fs.rmSync(manifestPath(s.dir))
   const io = fakeIo()
   const viaCli = await runOffCli(['--yes', '--json'], cliCtx(a, io))
@@ -123,8 +123,9 @@ test('V2: with the install manifest lost the copy undoes by trocar\'s own marks,
   const out = JSON.parse(r.stdout)
   assert.deepEqual(normalize(out, b.home), normalize(io.json(), a.home))
   assert.equal(out.undone_by_marker, true)
-  for (const e of before) assert.ok(!fs.readFileSync(e.path, 'utf8').includes(path.join(b.home, '.trocar')), `${e.path} no longer points into ~/.trocar (by marks the file is not promised byte for byte: nothing says what was there before)`)
-  const nobody = await runWritten(await brokenTrocar().then((s) => { fs.rmSync(manifestPath(s.dir)); return s }), ['--json'])
+  const inTrocar = (f) => fs.readFileSync(f, 'utf8').includes(path.join(b.home, '.trocar'))
+  assert.deepEqual([b.sh.files['kimi-code'][0], b.sh.files.codex[0]].map(inTrocar), [false, true], 'the PATH line is out; the certificate block is install\'s and stays, as under trocar off')
+  const nobody = await runWritten(await brokenTrocar(names).then((s) => { fs.rmSync(manifestPath(s.dir)); return s }), ['--json'])
   assert.equal(nobody.status, 1, 'not in a terminal and no --yes: it lists, and stops')
   assert.equal(JSON.parse(nobody.stdout).pending.length >= 2, true)
 })

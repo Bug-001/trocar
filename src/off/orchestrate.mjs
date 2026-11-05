@@ -22,7 +22,7 @@ import { newReceipt, EXIT, UNDO_LINE } from './schema.mjs'
 import { collectorDir, stateFile, opLockFile } from './paths.mjs'
 import { readStateFile, setDesired, writeStateAtomic, emptyState } from './state.mjs'
 import { acquireOpLock, LOCK_BUSY } from './lock.mjs'
-import { readManifest, refuseOldManifest, unknownItems, undoByHand, MANIFEST_VERSION, OFF_VERSION } from './manifest.mjs'
+import { readManifest, refuseOldManifest, unknownItems, undoByHand, MANIFEST_VERSION, OFF_VERSION, PHASES } from './manifest.mjs'
 import { undoHarnesses, undoRootKeys } from './undo.mjs'
 import { planByMarker, undoByMarker } from './marker.mjs'
 import { daemonState, stopDaemon, helperGone, isRedirectorHelper, clearStaleSupervisorLock } from './daemon-stop.mjs'
@@ -379,7 +379,7 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
   }
   // no manifest (or one that cannot be read): trocar's own marks, listed first and undone only after a yes (R3)
   if (manifestError) u.notes.push(`the install manifest cannot be read (${errMessage(manifestError)}); trocar's own marks are used instead`)
-  const plan = planByMarker({ home: w.home, ids, fs: w.fs, env: w.env, platform: w.platform, notes: u.notes })
+  const plan = planByMarker({ home: w.home, ids, fs: w.fs, env: w.env, platform: w.platform, phases: phases || (dropCa ? PHASES : ['on']), notes: u.notes }) // off spares install's carriers (D55①), as undoHarnesses does
   u.orphan_backups = orphanBackups({ home: w.home, manifest: null, fs: w.fs })
   if (!plan.length) { u.mode = manifestError ? 'marker' : 'none'; return u }
   u.mode = 'marker'
