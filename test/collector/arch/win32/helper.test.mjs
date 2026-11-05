@@ -717,6 +717,21 @@ test('W4 an answer already in the pipe when the loop comes back past the limit i
   assert.equal((await owner).pid, 10)
 })
 
+test('W4 a call queued behind a slow one is written when the loop comes back past its wait, not dropped as busy (4.8 §5.3: slowness is no verdict)', async (t) => {
+  const h = started(t, { verbs: { ps: { delayMs: 100, data: { rows: [] } }, 'tcp-table': { data: { rows: [trow(10, 5010)] } } } })
+  await h.ready
+  const stall = async () => { await new Promise((r) => setTimeout(r, 30)); await fs.promises.stat('.'); const end = Date.now() + 600; while (Date.now() < end); }
+  for (let i = 0; i < 3; i++) {
+    const failures = []
+    const first = h.call('ps', {})
+    const owner = ownerOfSocket({ helper: h, peer: PEER, waitMs: 300, onFailure: (f) => failures.push(f) })
+    await stall()
+    await first
+    assert.equal((await owner).pid, 10)
+    assert.deepEqual(failures, [])
+  }
+})
+
 test('W4 a table that cannot be read is null and one socktable-unavailable (a record the closed set knows)', async () => {
   for (const error of [Object.assign(new Error('native-unavailable: Add-Type blocked'), { code: 'helper-verb-error' }), Object.assign(new Error('helper is down: killed'), { code: 'helper-down' })]) {
     const failures = []

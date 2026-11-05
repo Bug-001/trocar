@@ -196,13 +196,13 @@ export function startHelper({ spawn = nodeSpawn, exe = 'powershell.exe', args = 
     if (down) throw err(`helper is down: ${down.reason}`, down.code)
     return new Promise((resolve, reject) => {
       const q = { id: ++seq, verb, args: callArgs, timeoutMs, onStart, resolve, reject, timer: null, waitTimer: null }
-      q.waitTimer = setTimeout(() => {
+      q.waitTimer = setTimeout(() => setImmediate(() => { // the same turn as q.timer: the answer that frees the helper may be in the pipe already
         const i = queue.indexOf(q)
         if (i < 0) return
         queue.splice(i, 1)
         const behind = [...pending.values()][0]?.verb ?? [...abandoned.values()].at(-1) ?? null
         reject(err(`the helper was busy${behind ? ` with ${behind}` : ''} for ${waitMs} ms: ${verb} was not sent`, 'helper-busy', { verb, behind }))
-      }, waitMs)
+      }), waitMs)
       q.waitTimer.unref?.()
       queue.push(q)
       pump()
