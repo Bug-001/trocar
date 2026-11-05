@@ -377,10 +377,11 @@ export const RAW_REPLY = 'Raw reply'
 export const rawReplyRow = (chars) => `Raw reply · ${chars} characters ›`
 export const rawReplyNth = (k) => `Raw reply ${k}`
 export const NO_RAW_REPLY = 'The raw reply has no bytes to read back'
+export const NO_BYTES = 'No bytes to read back'
 export const REQ_PARAMS = 'Request parameters'
 export const NO_PARAMS = 'This record has no request parameters to read back'
 export const UNPARSED_PARAMS = 'The request body could not be parsed, so no parameters can be listed'
-export const EXTRA_MSGS = (n) => `Messages the client sent later in this call · ${n} ›`
+export const EXTRA_MSGS = (n) => `Messages the client sent later in this call · ${n}`
 export const TRANSPORT_HTTP = 'Transport HTTP'
 export const TRANSPORT_WS = 'Transport WebSocket'
 export const VENDOR_WORD = 'Vendor'

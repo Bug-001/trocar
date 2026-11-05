@@ -6,9 +6,10 @@
 // Usage and cost are NOT here — they live behind the step bar's buttons (2.2). `el` is #rawpanel; `s` is the desk's state.
 import { esc, kf } from '../core/fmt.mjs'
 import { techDetailsHtml, mark } from '../core/ui.mjs'
-import { relPath, ROUTING_LABELS } from './analysis.mjs'
+import { relPath } from './analysis.mjs'
 import { showBody, bodyFor, faithOf } from './blocks.mjs'
 import { replyOf } from '../../src/screens/replay/window-model.mjs'
+import { refsOf, keysOf, scalarShown, techRows, wireOf } from '../../src/screens/replay/call-details.mjs'
 import { stepOf } from './model.mjs'
 import { stepRef } from './lanes.mjs'
 import { keyed, patchInto } from '../core/units.mjs'
@@ -37,12 +38,6 @@ function replyUnits(r) {
     ...(r.stop ? [{ key: 'stop', html: `<div class="rpk">${W.stopReasonRow(`<span class="mono">${esc(r.stop)}</span>`)}</div>` }] : [])]
 }
 // ── the pieces the capture can still hand over verbatim: reply bytes · non-block request keys · later messages ─────
-// the lane step's lists, as the panel reads them: a bare locator string is that ref; an object form `{key: ref}` is one key each
-const refsOf = (xs) => (xs || []).map((x) => (typeof x === 'string' ? { ref: x } : x))
-function keysOf(ks) {
-  if (Array.isArray(ks)) return ks
-  return Object.entries(ks || {}).map(([key, v]) => (v && typeof v === 'object' ? { key, ...v } : { key, ref: v }))
-}
 // one row item, kept whole on a line (a key never parts from its value); `word` = the label is our words (sans), not a literal key
 const refRow = (x, label, { word = false, value = '' } = {}) => {
   const tag = word ? 'span' : 'code'
@@ -56,8 +51,6 @@ function rawReplyHtml(d, w) {
   const ws = w.transport === 'ws'
   return `<div class="rpk" title="The captured reply bytes — each piece can be read back from the raw record"><b>${esc(W.RAW_REPLY)}</b> · ${rs.map((x, j) => (ws ? refRow(x, W.rawReplyNth(j + 1), { word: true }) : refRow({ ...x, chars: null }, x.chars != null ? `${kf(x.chars)} characters` : '—', { word: true }))).join(' · ')}<div class="nbkbody"></div></div>`
 }
-// the server ships `value` only for a short scalar (2.6 §A: the threshold lives in nonBlockKeysOf); the panel never judges length
-const scalarShown = (v) => typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean'
 function paramsHtml(c, d) {
   const ks = keysOf(d.nonBlockKeys)
   if (c.unparsed) return `<div class="rpk"><b>${esc(W.REQ_PARAMS)}</b> · ${esc(W.UNPARSED_PARAMS)}</div>`
@@ -77,20 +70,7 @@ function extraHtml(d) {
 const wireHtml = (w) => `<div class="rpk"><b>${esc(w.transport === 'ws' ? W.TRANSPORT_WS : W.TRANSPORT_HTTP)}</b></div>`
 // what capturing changed for the client (D37): one visible line each — never hidden in a hover (invariant 4)
 const observerUnits = (w) => keyed((w.observerEffect || []).map((o) => ({ key: 'obs', html: `<div class="rpk rpobs">${esc(o.text || o.what || '')}</div>` })))
-function techHtml(c, d, w, r) {
-  const bits = []
-  if (w.format) bits.push(['format', w.format])
-  bits.push(['vendor', w.vendor != null ? String(w.vendor) : `${W.VENDOR_WORD} not known`])
-  for (const p of r.parts) if (p.kind === 'tool_use' && p.id) bits.push(['tool id', String(p.id)]) // 2.6 §A: the tool call's id
-  if (c.unparsed && c.errMsg) bits.push(['errMsg', String(c.errMsg)]) // an unparsed step's reason is a tech detail (2.6 §A)
-  for (const x of refsOf(d.respRefs)) if (x && (x.label || x.why)) bits.push([W.RAW_REPLY, `${x.label || ''}${x.why ? ' — ' + x.why : ''}`])
-  for (const x of keysOf(d.extraMessages)) if (x && x.note) bits.push([x.key, x.note])
-  for (const o of w.observerEffect || []) bits.push(['observer', `${o.id || ''}${o.cause ? ' · ' + o.cause : ''} — ${o.what || ''}`])
-  for (const l of w.labels || []) if (l && ROUTING_LABELS.has(l.id)) bits.push([l.id, String(l.text || l.label || '')]) // how the call reached trocar (2.3 → 2.6 §A)
-  const id = (c.rec && c.rec.id) || c.rid
-  if (id) bits.push(['id', String(id)])
-  return techDetailsHtml(bits, { id: 'rptech' })
-}
+const techHtml = (c, d, w, r) => techDetailsHtml(techRows(c, d, w, r.parts), { id: 'rptech' })
 // a step whose lane is not held: the rows that need the lane are sized empty frames — no text, no control (2.6 §A)
 const BUSY_ROW = '<div class="rpk rpbusy" aria-busy="true"></div>'
 const busyRowsHtml = () => BUSY_ROW.repeat(3)
@@ -108,7 +88,7 @@ function rawPanel(s) {
   const model = String((call.rec.request || {}).model || '')
   const modelLine = u('model', model ? `<div class="rpk">${esc(model)}</div>` : '')
   const st = s.desk ? stepOf(s.desk, call.rid) : null
-  const d = (st && st.detail) || {}, w = { ...(call.wire || {}), ...(d.wire || {}) }
+  const d = (st && st.detail) || {}, w = wireOf(call, d)
   if (!st || !st.held) return { units: [...head, ...modelLine, ...u('wire', wireHtml(w)), ...[0, 1, 2].map((i) => ({ key: 'busy' + i, html: BUSY_ROW }))], parts: [] }
   const r = replyOf({ row: call, reply: st.reply, detail: d })
   return { parts: r.parts, units: [...head, ...modelLine, ...replyUnits(r), ...u('rawreply', rawReplyHtml(d, w)), ...u('params', paramsHtml(call, d)),
