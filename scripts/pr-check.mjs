@@ -236,7 +236,9 @@ function readGit(cwd, base, out) {
       if (!isUncounted(file.path)) commit.lines += file.count
       if (file.gone) continue
       const where = `${short}:file#${indexOf(file.path)}`
-      const source = { ...file, where, kind: 'added' }
+      // what HEAD holds of the board is the build, judged by checkFiles; what only an earlier commit holds would ride along in the history
+      const built = file.path.startsWith(BOARD) && revOf(cwd, `${sha}:${file.path}`) === revOf(cwd, `HEAD:${file.path}`)
+      const source = { ...file, where, kind: 'added', built }
       commit.changed.push(source)
       out.sources.push({ where, kind: 'path', bytes: Buffer.from(file.path) }, source)
     }
@@ -244,7 +246,7 @@ function readGit(cwd, base, out) {
   if (out.commits.length < 2) return
   // a window does not cross sources, and what two commits each bring half of sits whole in the tree they leave
   for (const file of brought(cwd, base, 'HEAD')) {
-    if (!file.gone) out.sources.push({ ...file, where: `tree:file#${indexOf(file.path)}`, kind: 'added' })
+    if (!file.gone) out.sources.push({ ...file, where: `tree:file#${indexOf(file.path)}`, kind: 'added', built: file.path.startsWith(BOARD) })
   }
 }
 
@@ -305,15 +307,12 @@ function checkFiles(commits, cwd, add) {
   let board = null
   for (const commit of commits) {
     for (const file of commit.changed) {
-      const inBoard = file.path.startsWith(BOARD)
-      if (inBoard) board ??= file.where
+      if (file.path.startsWith(BOARD)) board ??= file.where
       const ext = file.path.slice(file.path.lastIndexOf('.')).toLowerCase()
       const added = file.bytes.toString()
-      const object = `${commit.sha}:${file.path}`
       const blocked = file.binary || BLOCKED.has(ext) || LFS_POINTER.test(added) || (GITATTRIBUTES.test(file.path) && LFS_FILTER.test(added))
-        || (ext === '.svg' && spelled(git(cwd, 'cat-file', 'blob', object)).some((text) => SVG_EMBED.test(text))) // whole: a rename brings no added lines
-      // what HEAD holds of the board is the build, judged below; what only an earlier commit holds would ride along in the history
-      if (blocked && !(inBoard && revOf(cwd, object) === revOf(cwd, `HEAD:${file.path}`))) add('files', file.where)
+        || (ext === '.svg' && spelled(git(cwd, 'cat-file', 'blob', `${commit.sha}:${file.path}`)).some((text) => SVG_EMBED.test(text))) // whole: a rename brings no added lines
+      if (blocked && !file.built) add('files', file.where)
     }
   }
   if (!board) return
@@ -576,7 +575,7 @@ async function main() {
     checkFacts(options.cli, segments, out.sources, add, hold)
   } catch { add('partial', 'capture', WHY.query) }
 
-  const table = new WindowTable(out.sources)
+  const table = new WindowTable(out.sources.filter((source) => !source.built))
   if (isPublic) {
     try { subtractBase(cwd, base, table, held) } catch { add('unreadable', 'git', WHY.git) }
   }
