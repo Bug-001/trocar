@@ -52,6 +52,7 @@ export const DOOR_ROUTES = Object.freeze({
   'kimi-code': Object.freeze({ vscode: Object.freeze({ file: { base: 'appSupport', path: 'Code/User/settings.json' }, proxyKeys: [['http.proxy']] }) }),
   'z-code': Object.freeze({ 'cli-config': Object.freeze({ file: { base: 'home', path: '.zcode/cli/config.json' }, proxyKeys: [['network', 'httpProxy']] }) }),
 })
+const URL_IN_TEXT = /https?:\/\/[^\s"'`,{}[\]\\]+/g // the URLs in a text that does not parse as JSON, each judged as a value would be
 const doorAt = (h) => Object.values(DOOR_ROUTES[h]).map((route) => ({ how: 'json-value', route, door: true, os: ['darwin', 'win32'] }))
 
 /** Where each harness's entries are, relative to HOME (`route`: a ROUTE_PLACES place, resolved against the environment and per-user folders off runs in). `how` says what trocar's mark looks like there (see the header); `eachDir` + `file`: the file in
@@ -152,13 +153,20 @@ export function planByMarker({ home, ids = null, fs = nodeFs, env = process.env,
         if (hits.length) add({ lines: hits.map((h) => h.line), yaml: !!spec.yaml })
       } else if (spec.how === 'json-value') {
         let doc
-        try { doc = parseJsonText(t) } catch { continue }
-        if (!spec.door) { const v = getPath(doc, spec.keys); if (under(v, root)) add({ keys: spec.keys, value: v }); continue }
+        try { doc = parseJsonText(t) } catch { doc = undefined }
+        if (!spec.door) { if (doc !== undefined) { const v = getPath(doc, spec.keys); if (under(v, root)) add({ keys: spec.keys, value: v }) } continue }
         ports = ports || doorPorts(collectorIn(root), fs)
+        const unknown = (where) => notes.push(`${file}: ${where} names a loopback proxy, and trocar cannot tell whether it is one of its doors (${ports.why}); it was left as it is`)
+        if (doc === undefined) { // no longer parses: a door URL anywhere in the text plans it, and the undo leaves it and says so (R3: exit 1)
+          const urls = t.match(URL_IN_TEXT) || []
+          if (ports.ports && urls.some((u) => isDoorValue(u, ports.ports))) add({ keys: null, door: true })
+          else if (ports.why && urls.some(loopbackUrl)) unknown('the file')
+          continue
+        }
         for (const keys of spec.route.proxyKeys) {
           const v = getPath(doc, keys)
           if (ports.ports && isDoorValue(v, ports.ports)) add({ keys, door: true }) // the value itself is not kept: a door URL holds its token
-          else if (ports.why && loopbackUrl(v)) notes.push(`${file}: ${keys.join('.')} names a loopback proxy, and trocar cannot tell whether it is one of its doors (${ports.why}); it was left as it is`)
+          else if (ports.why && loopbackUrl(v)) unknown(keys.join('.'))
         }
       } else if (spec.how === 'owned-file' && (spec.ours || (spec.exact ? t === spec.exact : t.includes(SENTINEL)))) add(spec.ours ? { ours: true } : spec.exact ? { exact: spec.exact } : {})
     }
@@ -214,11 +222,12 @@ function undoOne(item, home, fs) {
     return done({ lines: hits.length })
   }
   // json-value: the value trocar replaced comes back from the newest backup of this file, this key only; none there → the key goes
-  const keys = item.detail.keys
+  const keys = item.detail.keys, at = keys ? keys.join('.') : 'its proxy keys' // null: found in a file that did not parse, key unknown
   let ours = (v) => under(v, root)
-  if (item.detail.door) { const p = doorPorts(collectorIn(root), fs); if (!p.ports) return { result: 'error', reason: `${item.path}: ${keys.join('.')} was not undone: ${p.why}` }; ours = (v) => isDoorValue(v, p.ports) }
+  if (item.detail.door) { const p = doorPorts(collectorIn(root), fs); if (!p.ports) return { result: 'error', reason: `${item.path}: ${at} was not undone: ${p.why}` }; ours = (v) => isDoorValue(v, p.ports) }
   let doc
-  try { doc = parseJsonText(t) } catch (e) { return { result: 'left-unparsable', reason: unreadableJson(item.path, t, e, `trocar's value under ${keys.join('.')}`) } }
+  try { doc = parseJsonText(t) } catch (e) { return { result: 'left-unparsable', reason: unreadableJson(item.path, t, e, `trocar's value under ${at}`) } }
+  if (!keys) return { result: 'error', reason: `${item.path} changed while off read it: run off again` } // planned as not parsing, parses now: judged key by key next time
   if (!ours(getPath(doc, keys))) return { result: 'already-clean' }
   // the newest backup whose value here is not trocar's own (`on` saves the file before each key it writes, so a newer one can hold trocar's first key)
   let saved = null, prior = null

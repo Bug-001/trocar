@@ -259,13 +259,15 @@ for (const { h, id, r } of (await loadHarnesses()).flatMap((d) => Object.entries
       const s = setup(null)
       if (!s) return
       putIngress(s.w.dir, PORT)
-      const mine = setup('http://127.0.0.1:7890')
-      putIngress(mine.w.dir, PORT)
-      const before = read(mine.file)
-      const plan = planByMarker({ home: mine.w.home, env: mine.w.ctx.env, platform: os, ids: [h.name] })
-      assert.deepEqual(plan.filter((x) => x.path === mine.file), [])
-      undoByMarker(plan, { home: mine.w.home })
-      assert.equal(read(mine.file), before)
+      for (const value of ['http://127.0.0.1:7890', `http://corp.example:${PORT}`]) { // a loopback port that is no door; a door port on a host that is not loopback
+        const mine = setup(value)
+        putIngress(mine.w.dir, PORT)
+        const before = read(mine.file)
+        const plan = planByMarker({ home: mine.w.home, env: mine.w.ctx.env, platform: os, ids: [h.name] })
+        assert.deepEqual(plan.filter((x) => x.path === mine.file), [], value)
+        undoByMarker(plan, { home: mine.w.home })
+        assert.equal(read(mine.file), before, value)
+      }
       // the door written, then ingress.json gone: not undone, and said
       assert.ok(routeEntry('json-key').write(s.ctx, door(PORT)).ok)
       fs.rmSync(path.join(s.w.dir, 'ingress.json'))
@@ -274,6 +276,22 @@ for (const { h, id, r } of (await loadHarnesses()).flatMap((d) => Object.entries
       assert.deepEqual(plan2.filter((x) => x.path === s.file), [])
       undoByMarker(plan2, { home: s.w.home })
       assert.equal(read(s.file), on)
+      assert.ok(notes.some((n) => n.includes(s.file)), JSON.stringify(notes))
+    })
+    test(`${h.name} · ${id} (json-key) · ${os}: a file holding a door value that no longer parses is left as it is and said (left-unparsable); with ingress.json unreadable it is said, not guessed`, () => {
+      const s = setup(null)
+      if (!s) return
+      putIngress(s.w.dir, PORT)
+      assert.ok(routeEntry('json-key').write(s.ctx, door(PORT)).ok)
+      fs.appendFileSync(s.file, '{ broken')
+      const broken = read(s.file)
+      const plan = planByMarker({ home: s.w.home, env: s.w.ctx.env, platform: os, ids: [h.name] }).filter((x) => x.path === s.file)
+      assert.equal(plan.length, 1, 'the file is planned: a door is in it')
+      assert.deepEqual(undoByMarker(plan, { home: s.w.home }).map((x) => x.result), ['left-unparsable'])
+      assert.equal(read(s.file), broken)
+      fs.rmSync(path.join(s.w.dir, 'ingress.json'))
+      const notes = []
+      assert.deepEqual(planByMarker({ home: s.w.home, env: s.w.ctx.env, platform: os, ids: [h.name], notes }).filter((x) => x.path === s.file), [])
       assert.ok(notes.some((n) => n.includes(s.file)), JSON.stringify(notes))
     })
   }
