@@ -131,8 +131,8 @@ test('1.4: the landed item is what is on top at its own top edge', { skip: nextO
 })
 
 // 1.4 §打开一步时落在哪: a step whose list arrives before its 内容对比步's has no 「新」 yet. The first step of a pack, its reference in the
-// pack before, which is held back: the landing is due when that pack comes (the row in the box, at its top or the list's end); a reader
-// who moved the box meanwhile stays where they went.
+// pack before, which is held back: the landing is due when that pack comes (the row in the box); a reader who moved the box meanwhile
+// stays where they went.
 test('1.4: a late 内容对比步 lands the step on its first 「新」 row; a reader who moved the box stays', { skip }, async () => {
   const w = world(7, { calls: 2100, page: 2100, talk: { pre: 90, len: 1200, every: 40, tail: 800 } }), rids = mainRids(w)
   const p = w.files(w.marks.at(-1), 32).head.packs.find((x) => x.s0 > 300 && w.list(rids[x.s0]).some((b) => !w.list(rids[x.s0 - 1]).includes(b)))
@@ -140,22 +140,25 @@ test('1.4: a late 内容对比步 lands the step on its first 「新」 row; a r
     await onBoard(w, async ({ page, go }) => {
       await page.setViewportSize({ width: 1440, height: 520 })
       const held = []
-      await page.route(`**/api/d/p${p.n - 1}.*`, (route) => { held.push(route) })
+      let hold = true
+      await page.route(`**/api/d/p${p.n - 1}.*`, (route) => (hold ? held.push(route) : route.fallback()))
       await go(p.s0 + 1)
       await page.waitForSelector('#ctxwin .cblk')
       assert.equal(await page.locator('#ctxwin .cblk.is-new').count(), 0, 'no 「新」 while the reference step is on its way')
       assert.ok(held.length > 0, 'the reference pack was asked for')
       const top = await page.evaluate((d) => { const el = document.querySelector('#ctxwin'); el.scrollTop = d; return el.scrollTop }, scrolled ? 300 : 0)
       await page.waitForTimeout(100)
-      for (const r of held.splice(0)) await r.fallback()
-      await page.waitForFunction((d) => document.querySelector('#ctxwin').scrollTop !== d || !!document.querySelector('#ctxwin .cblk.is-new'), top, { timeout: 10000, polling: 'raf' })
-      await page.waitForTimeout(300)
+      hold = false
+      for (const r of held) await r.fallback()
+      if (!scrolled) await page.waitForSelector('#ctxwin .cblk.is-new', { timeout: 10000 })
+      await page.waitForTimeout(scrolled ? 1000 : 300) // scrolled: the row may lie outside the drawn band, the pack's answer is awaited by time
       const x = await page.evaluate(() => {
         const el = document.querySelector('#ctxwin'), t = el.querySelector('.cblk.is-new'), box = el.getBoundingClientRect()
-        return { top: el.scrollTop, end: el.scrollTop + el.clientHeight >= el.scrollHeight - 2, h: el.clientHeight, at: t ? Math.round(t.getBoundingClientRect().top - box.top) : null }
+        return { top: el.scrollTop, h: el.clientHeight, at: t ? Math.round(t.getBoundingClientRect().top - box.top) : null }
       })
       if (scrolled) assert.equal(x.top, top, 'the reader\'s place is kept')
-      else assert.ok(x.at != null && x.at >= -2 && x.at < x.h && (x.at <= 2 || x.end), JSON.stringify(x))
+      // at the box's top, within its scroll margin of 8 px: the rows below it were real when it landed, so the list's end does not cut it short
+      else assert.ok(x.at != null && x.at >= -2 && x.at <= 10, JSON.stringify(x))
     })
   }
 })
@@ -217,7 +220,8 @@ test('2.3 #28: the rendered window holds only the items within one window height
     // the first frame after each press
     await page.evaluate(`window.__gaps = []; addEventListener('keydown', () => requestAnimationFrame(() => window.__gaps.push((${gapInPage})())), true)`)
     const no = () => page.evaluate(() => document.querySelector('#stepbar .sb-no')?.textContent)
-    for (const key of [...Array(10).fill('ArrowLeft'), ...Array(10).fill('ArrowRight')]) {
+    const presses = [...Array(10).fill('ArrowLeft'), ...Array(10).fill('ArrowRight')]
+    for (const key of presses) {
       const was = await no()
       await page.keyboard.press(key)
       await page.waitForFunction((was) => document.querySelector('#stepbar .sb-no')?.textContent !== was, was, { timeout: 10000, polling: 'raf' })
@@ -229,7 +233,7 @@ test('2.3 #28: the rendered window holds only the items within one window height
     assert.deepEqual(top.out, [])
     assert.deepEqual(mid.out, [])
     assert.ok(top.gap <= top.pitch && mid.gap <= mid.pitch, `a gap in the visible box at rest: ${top.gap} / ${mid.gap} px, pitch ${top.pitch}`)
-    assert.equal(first.length, 20, 'one record per press')
+    assert.equal(first.length, presses.length, 'one record per press')
     assert.deepEqual(first.filter((g) => !(g.gap <= g.pitch)), [], 'a gap in the visible box on the first frame after a step')
   })
 })

@@ -222,6 +222,14 @@ for (const [why, status, asks] of [['refuses the drain', 409, ['install']], ['re
   })
 }
 
+// 1.6 §5.5 step 4: the update that runs install replaces the collector itself, right after it
+test('install under an update that replaces the collector next sends it no exit request and plans no replacement', async () => {
+  const posted = []
+  const { io, exit } = await cli(['--yes', '--json'], { over: { keepDaemon: true, daemonCode: async () => '0.1.0+0000000', request: async ({ method, body }) => { if (method === 'POST') posted.push(body); return {} }, daemonState: async () => ({ state: 'running', socket: 'control.sock', lock: { pid: 4242 } }), drainMs: 0 } })
+  const r = io.json()
+  assert.deepEqual([exit, posted, r.daemon.replaced, r.planned.filter((p) => p.what === 'daemon')], [0, [], false, []], io.text())
+})
+
 // 1.6 §3.2 计划: every row that names a place says what changes there — a carrier with no key (a launch command, a plug-in) in the receipt's words,
 // from the carrier kind (the macOS plan printed `kimi-code  ~/.kimi-code/bin` and nothing else)
 test('1.6 §3.2: every plan row that names a path says what changes there, a carrier with no key included', async () => {

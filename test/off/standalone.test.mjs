@@ -86,6 +86,20 @@ test('V2: with the repository out of reach the copy install wrote does what `tro
   assert.equal(r.stderr, '')
 })
 
+test('V120: the copy, refused under --json, answers with one `usage` document on one line and nothing on stderr', async () => {
+  const r = await runWritten(await brokenTrocar(), ['no-such-name', '--json'])
+  assert.equal(r.status, 2); assert.equal(r.stderr, '')
+  assert.ok(r.stdout.endsWith('\n') && r.stdout.indexOf('\n') === r.stdout.length - 1, r.stdout)
+  assert.equal(JSON.parse(r.stdout).error.code, 'usage')
+})
+
+test('1.6 §1.2: the document the copy makes of a refusal hides a URL password too', async () => {
+  const pw = 'pw-not-a-real-secret-41f9'
+  const r = await runWritten(await brokenTrocar(), [`http://u:${pw}@proxy.example:8080`, '--json'])
+  assert.equal(r.status, 2); assert.equal(r.stderr, '')
+  assert.ok(!r.stdout.includes(pw), r.stdout); assert.match(JSON.parse(r.stdout).error.message, /\*\*\*@proxy\.example/)
+})
+
 test('V2: the text a person reads is the same too, and a per-harness off leaves the other harness alone', async () => {
   const a = await brokenTrocar(), b = await brokenTrocar()
   const io = fakeIo()
@@ -440,4 +454,13 @@ test('D74: the copy runs with no node on PATH: sh starts the Node that ../app/cu
   const r = spawnSync('/bin/sh', [file, 'a b', 'c'], { encoding: 'utf8', env: { PATH: path.join(path.dirname(file), 'no-such-dir') } })
   assert.equal(r.status, 0, r.stderr)
   assert.equal(r.stdout, 'ran a b c')
+})
+
+test('V120: with no ../app/current the copy starts the node on PATH and says nothing on stderr (npm and source installs have no such file)', { skip: process.platform === 'win32' && 'on Windows trocar-off.cmd starts it (1.6 §3.2 step 1)' }, () => {
+  const text = buildStandalone({ version: 'test' }).replace(STANDALONE_ENTRY, "(process.stdout.write('ran'), 0)")
+  const t = tmpDir('trocar-polyglot-'), file = path.join(t, 'bin', 'trocar-off')
+  fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text, { mode: 0o700 })
+  const r = spawnSync('/bin/sh', [file], { encoding: 'utf8', env: { PATH: path.dirname(process.execPath) } })
+  assert.equal(r.status, 0, r.stderr)
+  assert.equal(r.stdout, 'ran'); assert.equal(r.stderr, '')
 })

@@ -16,7 +16,7 @@
 //
 //   createDrain({flowId, tee, client, upstream, timeoutMs, destroy, onClosed, onFailure})
 //     → {start({now}) → 'closing' | 'waiting' | 'closed' | 'cut', beforeUpstream(chunk) → Buffer[], afterUpstream(),
-//        flush() → Buffer[], loseTee() → Buffer[], onTurnEnd(), state()}
+//        flush() → Buffer[], loseTee() → Buffer[], onTurnEnd(), state(), peek()}
 // `tee` is the exchange tee (absent for a spliced connection); client / upstream are the sockets relay() forwards between.
 
 const CRLF2 = Buffer.from('\r\n\r\n')
@@ -140,6 +140,9 @@ export function createDrain({ flowId, tee: teeIn = null, client, upstream, timeo
   return {
     start, beforeUpstream, afterUpstream,
     flush() { const out = held; held = []; heldLen = 0; return out }, // the upstream went away: what was held is still the client's
+    // what start() would find, asking nothing of the connection: 'open' (nothing in flight) | 'closing' | 'waiting'. A connection opened during a daemon
+    // swap's drain is not asked to close (at its handshake it is idle, and start() would close it before its first request): the drain's wait reads this instead
+    peek() { try { const b = tee ? tee.boundary() : null; return blind(b) ? 'waiting' : b.idle ? 'open' : 'closing' } catch { return 'waiting' } },
     onTurnEnd() { turnEnded = true }, // the WebSocket recorder saw the terminal message in the chunk just fed to it
     // the flow stopped recording this connection (its recorder threw): what the tee saw last is no longer true, so the connection waits for its own
     // close, and the gate adds nothing from here on (nobody would record it). → the bytes it held, for the client as they came

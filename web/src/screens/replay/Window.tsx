@@ -101,7 +101,7 @@ const Row = memo(function Row({ it, acts, hl }: { it: Item, acts: Acts, hl: bool
     attrs={{ 'data-bi': it.bi, 'data-sec': b.sec, 'data-ff': m.ff, 'data-rk': b.resKey || undefined, 'data-turn': it.turn ?? undefined }}
     head={{ role: h.role, tag: h.tag, label: h.label || b.preview || '' }} open={open} chars={typeof b.chars === 'number' ? b.chars : null}
     marks={<>
-      {m.cc ? <span className="bpbadge" title={`${W.CACHE_MARK_TIP} · declared value: ${JSON.stringify(m.cc)}`}>{W.CACHE_MARK}</span> : null}
+      {m.cacheMark ? <span className="bpbadge" title={`${W.CACHE_MARK_TIP} · declared value: ${JSON.stringify(m.cacheMark)}`}>{W.CACHE_MARK}</span> : null}
       {m.volatile ? <span className="volbadge" title={W.VOLATILE_MARK_TIP}>{W.VOLATILE_MARK}</span> : null}
       {m.isNew ? <span className="newmark" title={W.NEW_MARK_TIP}>{W.NEW_MARK}</span> : null}
       {m.badge ? <FfBadge f={m.ff} tech={m.tech} /> : null}
@@ -183,7 +183,7 @@ function ItemView({ it, acts, hl, bv }: { it: Item, acts: Acts, hl: boolean, bv:
   switch (it.type) {
     case 'row': return <Row it={it} acts={acts} hl={hl} bv={bv} />
     case 'sec': return <Sec it={it} />
-    case 'turn': return <Turn it={it} acts={acts} />
+    case 'card': return <Turn it={it} acts={acts} />
     case 'chline': return <Chline it={it} />
     case 'removed': return <Removed it={it} acts={acts} />
     case 'reply': return <Reply it={it} acts={acts} bv={bv} />
@@ -233,7 +233,7 @@ const estimate = (it: Item | undefined, P: Pitch) => {
   if (!it) return P.row
   switch (it.type) {
     case 'row': return it.open ? P.row * 6 : P.row
-    case 'turn': return P.turn
+    case 'card': return P.turn
     case 'sec': return P.sec
     case 'reply': return P.line + P.row * Math.max(1, it.rows.length)
     case 'frames': return it.frames.reduce((a: number, f: any) => a + f.fr * P.row, 0) || P.row

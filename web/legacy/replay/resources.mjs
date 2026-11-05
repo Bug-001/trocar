@@ -53,6 +53,7 @@ export function resourceUnits(s) {
   const L = (rid) => { const v = a.ridLocal.get(rid); return v == null ? N : v }
   const withSeg = res.filter(hasSeg)
   const of = (k) => withSeg.filter((r) => r.kind === k)
+  const guessed = new Set(events.filter((x) => x.type === 'compaction' && x.inferred).map((x) => x.rid)) // read per row: a row must not walk the events
   const view = (r, enter) => `data-view="${esc(resKeyOf(r))}" data-viewstep="${enter}" data-viewlabel="${esc(r.label)}"`
   // the lifecycle sentence's state at the playhead + the enter/evict locals (N from the FIRST segment, M from the LAST)
   const life = (r) => {
@@ -67,7 +68,7 @@ export function resourceUnits(s) {
     else if (st === 'live') word = `${W.lifeIn(at(enter))} · ${W.LIFE_IN_CTX}`
     else word = evAt != null ? `${W.lifeIn(at(enter))} · ${W.lifeEvicted(at(evAt))}` : W.lifeIn(at(enter))
     // the evicting compaction was itself inferred → the eviction step is a guess too
-    if (st === 'evicted' && evAt != null) { const ev = events.find((x) => x.type === 'compaction' && x.rid === last.evict); if (ev && ev.inferred) word += ` · ${W.GUESS}` }
+    if (st === 'evicted' && evAt != null && guessed.has(last.evict)) word += ` · ${W.GUESS}`
     return { enter, word, cls: st === 'pend' ? 'pend' : st === 'evicted' ? 'dead' : '' }
   }
   const out = []

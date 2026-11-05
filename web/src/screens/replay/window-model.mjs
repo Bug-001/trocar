@@ -2,7 +2,7 @@
 // playhead step's context window as keyed items in drawing order, drawn by both desks (legacy ctxwin.mjs maps them to units).
 // The proof rule (2.3 §保真标) and the reply rule (2.3 §这一步的回复) live here; blocks.mjs and rawpanel.mjs re-export them.
 import { bodyCache, isAddressed, bodyVersion, deskMode } from '../../../legacy/replay/cell.mjs'
-import { messageTurns, keyDiff, refRowOf, hasChangeLine, callFacts } from '../../../legacy/replay/analysis.mjs'
+import { messageTurns, keyDiff, refPending, refRowOf, hasChangeLine, callFacts } from '../../../legacy/replay/analysis.mjs'
 import { turnAnchorKey, turnIsOpen } from '../../../legacy/replay/fold.mjs'
 import { stepOf } from '../../../legacy/replay/model.mjs'
 import { stepRef } from '../../../legacy/replay/lanes.mjs'
@@ -65,7 +65,7 @@ export function replyOf({ row, reply, detail } = {}) {
 }
 
 // ── one request row's marks (2.3 §block 卡 · §保真标 · §窗口行) ──────────────────────────────────────────────────────────
-/** @typedef {{ ff: string, badge: boolean, quiet: boolean, sr: boolean, tech: string, cc: any, volatile: boolean, isNew: boolean }} RowMarks */
+/** @typedef {{ ff: string, badge: boolean, quiet: boolean, sr: boolean, tech: string, cacheMark: any, volatile: boolean, isNew: boolean }} RowMarks */
 /** What a request row says about itself. `open`: the row is open (an opened body that came back unproven outranks the
  * metadata's claim); `prevKeys`: the 内容对比步's content keys (null: no 「新」); `windowLine`: the window line is up.
  * @returns {RowMarks} */
@@ -76,7 +76,7 @@ export function rowMarks(b, { prevKeys = null, open = false, windowLine = false 
   return {
     ff, quiet, badge: !quiet && ff !== 'verbatim', sr: ff === 'verbatim' || quiet,
     tech: ff === 'unknown' ? String(b.faithfulness) : ff === 'unaddressable' ? (b.unaddressable || '') : '',
-    cc: b.cc || null, volatile: !!b.volatile, isNew: !!(prevKeys && !b.volatile && !prevKeys.has(b.key)),
+    cacheMark: b.cc || null, volatile: !!b.volatile, isNew: !!(prevKeys && !b.volatile && !prevKeys.has(b.key)),
   }
 }
 // ② the reasons of the window line, or null when some block of the step can return to the raw bytes
@@ -128,7 +128,7 @@ const replyTag = (d) => (d.kind === 'tool_use' ? 'action · ' + (d.name || '') :
 const MEMO = new WeakMap()
 const sigOf = (x) => (x instanceof Set ? [...x].join('\n') : x instanceof Map ? [...x].map(([k, v]) => k + '\t' + JSON.stringify(v)).join('\n') : null)
 
-/** The window of the playhead's step as keyed items, in 1.4's order ① fid · ② win · ③ sec / foldall / row / turn with ④ chline
+/** The window of the playhead's step as keyed items, in 1.4's order ① fid · ② win · ③ sec / foldall / row / card with ④ chline
  * and its removed list before row `cacheBreak.idx` · ⑨ reply; ⑥–⑧ (unparsed · noreq · frames) stand in for ③④⑨. The rows of
  * an open turn follow its turn item; a folded turn has its head only. Pure but for the desk's scratch it sets: s.curFlat,
  * s.curKeys, s.curReply (when the reply has parts), s.curRemoved.
@@ -143,8 +143,7 @@ export function windowItems(s) {
   const st = s.desk ? stepOf(s.desk, call.rid) : null
   if (!st || !st.held) return { state: 'frames', items: [...fid, { key: 'frames', type: 'frames', frames: framesOf(call) }] }
   const flat = st.flat
-  const ref = contentRefOf(s) // the 内容对比步: the pinned step, else the 缓存对比步
-  const refFlat = ref && s.desk ? stepOf(s.desk, ref.rid).flat : null // its lane not held: no 「新」, no removed list
+  const refFlat = s.desk ? refList(s).flat : null // its lane not held: no 「新」, no removed list
   const marks = [s.openBlocks, s.turnFold, s.turnLanded, s.bodyFail], sigs = marks.map(sigOf)
   // a store that is not a plain Set / Map (a stand-in) has no signature: no cache then
   const memo = sigs.every((x, i) => x != null || marks[i] == null)
@@ -203,7 +202,7 @@ function build(s, call, st, refFlat, fid) {
     if (t.items[0] !== i) return // a later item of a turn already drawn
     const open = turnOpen(s, flat, T, ti), anchor = turnAnchorKey(flat, t)
     const n = tk.get(anchor) || 0; tk.set(anchor, n + 1)
-    items.push({ key: `q:${anchor}#${n}`, type: 'turn', anchor, ti, label: t.label, query: t.query, acts: t.acts, n: t.items.length, open })
+    items.push({ key: `q:${anchor}#${n}`, type: 'card', anchor, ti, label: t.label, query: t.query, acts: t.acts, n: t.items.length, open })
     if (open) for (const j of t.items) items.push(...mark(j), row(flat[j], j, anchor)) // a folded turn draws its head only (rule 2)
   })
   const reply = replyItem(s, st, call) // ⑨
@@ -230,6 +229,14 @@ function replyItem(s, st, call) {
   return { item: { key: 'reply', type: 'reply', stop: r.stop, rows }, map }
 }
 
+// the 内容对比步's list: the pinned step's, else the 缓存对比步's. `wait`: not here yet (flat null), and this step's 「新」 not known
+function refList(s) {
+  const ref = contentRefOf(s), pinned = !!ref && ref === s.anchor.calls[s.diffRef]
+  const wait = (!pinned && refPending(s.anchor, s.playhead)) || (!!ref && !stepOf(s.desk, ref.rid).held)
+  return { flat: ref && !wait ? stepOf(s.desk, ref.rid).flat : null, wait }
+}
+export const refWaits = (s) => !!s.anchor && !!s.desk && refList(s).wait
+
 // ── the landing rule (1.4 §打开一步时落在哪): a step 跟随最新 brought in → the reply ⑨; else the 变化线, else the first 「新」
 // block, else the top. Pure: it names the target only; it never reorders blocks.
 export function landingTarget(s) {
@@ -241,8 +248,7 @@ export function landingTarget(s) {
   const flat = st.flat
   const brk = call.cacheBreak
   if (hasChangeLine(call, flat)) return { anchor: 'cachebrk', idx: brk.idx }
-  const ref = contentRefOf(s)
-  const refFlat = ref ? stepOf(s.desk, ref.rid).flat : null
+  const refFlat = refList(s).flat
   if (refFlat) {
     const refKeys = new Set(refFlat.map((b) => b.key))
     const i = flat.findIndex((b) => !b.volatile && !refKeys.has(b.key))
@@ -262,7 +268,7 @@ export function landingFor(s, top) {
   if (!st.held) return null
   const moved = s.landWait?.rid === call.rid && s.landWait.top !== top()
   const t = moved ? null : landingTarget(s), flat = st.flat
-  if (!t) { const ref = moved ? null : contentRefOf(s); return { t, fi: null, turn: null, wait: !!ref && !stepOf(s.desk, ref.rid).held } }
+  if (!t) return { t, fi: null, turn: null, wait: !moved && refList(s).wait }
   if (t.reply) return { t, fi: flat.length - 1, turn: null, wait: false }
   const fi = t.anchor ? t.idx : t.bi, T = turnsOf(flat), ti = T.at[fi] ?? -1
   return { t, fi, turn: ti >= 0 && !turnOpen(s, flat, T, ti) ? turnAnchorKey(flat, T.list[ti]) : null, wait: false }
@@ -270,5 +276,8 @@ export function landingFor(s, top) {
 /** The landing `due` (landingFor) ran: the step has landed, or waits with the box at `top()`. */
 export function landed(s, due, top) {
   const { rid } = callOf(s)
-  if (due.wait) s.landWait = { rid, top: top() }; else s.landedFor = rid
+  if (due.wait) s.landWait = { rid, top: top() }; else { s.landedFor = rid; s.landWait = null }
 }
+/** The playhead stands on `rid`: a landing that waited on another step ended with that visit. Coming back is a new arrival, and the box
+ * it finds moved by the steps between, not by the reader. */
+export function arrived(s, rid) { if (s.landWait?.rid !== rid) s.landWait = null }

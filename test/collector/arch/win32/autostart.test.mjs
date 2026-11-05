@@ -239,6 +239,11 @@ function balanced(x) {
   return stack.length === 0
 }
 
+test('W24 the daemon is on the agent\'s critical path: the task runs in the Normal band of the Task Scheduler\'s priorities (4 to 6)', () => {
+  const p = Number(inner(inner(xml(), 'Settings'), 'Priority'))
+  assert.ok(p >= 4 && p <= 6, `Priority ${p}`)
+})
+
 test('W24 the task XML has the fields of 4.8 §7: a login trigger of this user, InteractiveToken at LeastPrivilege, restart on failure 1 minute × 999, no time limit, a conhost --headless action that runs the supervised daemon, and no --use-system-ca', () => {
   const x = xml()
   assert.ok(x.startsWith('<?xml version="1.0" encoding="UTF-16"?>'), 'the form T0 registered: the file is UTF-16 and says so')
