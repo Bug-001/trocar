@@ -1,6 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { markCompaction, compactionVerdict, hasCompactionPreamble } from '../../src/identity/session-identity.mjs'
+import { markCompaction, compactionVerdict, compactionBaseline, hasCompactionPreamble } from '../../src/identity/session-identity.mjs'
+import { query, homeWith } from '../helpers/session-doc.mjs'
+import { laneOf, fateOf, askedOf, lanes, failLanes, sent, landedOf, LANDS_WITHIN, READ, SID } from '../helpers/compaction-lane.mjs'
 
 test('markCompaction: a sharp message-count drop flags compaction with from/to', () => {
   assert.deepEqual(markCompaction(42, 6), { compaction: true, compaction_from: 42, compaction_to: 6 })
@@ -83,4 +85,117 @@ test('compactionVerdict is one rule: the same prev and cur give the same answer 
   assert.deepEqual(compactionVerdict({ msgCount: 55, marker: false }, { msgCount: 4 }), { compaction: true, compaction_from: 55, compaction_to: 4, basis: 'msg-count-drop' })
   assert.equal(compactionVerdict(prev, { hint: true, msgCount: 60 }).basis, 'hint', 'a hint never consults the drop rule')
   assert.equal(compactionVerdict({ msgCount: 4, marker: false }, { marker: true, msgCount: 5 }).basis, 'marker', 'a marker on its rising edge needs no drop')
+})
+
+// 3.4 「一次压缩只算一次」: the evidence each predecessor leaves a call, and what it becomes after a harness's own request.
+test('compactionVerdict: right after a marked request the evidence lands the same compaction; a hint stays a compaction; from / to as ever', () => {
+  const PREV = { none: null, plain: { msgCount: 20, marker: false }, hinted: { msgCount: 20, marker: false, hinted: true }, marker: { msgCount: 20, marker: true } }
+  const CUR = { hint: { hint: true, msgCount: 22 }, rising: { marker: true, msgCount: 21 }, drop: { msgCount: 3 }, small: { msgCount: 18, preamble: true }, nothing: { msgCount: 21 } }
+  const seen = { hint: 'hint', rising: 'marker', drop: 'msg-count-drop', small: 'msg-count-drop', nothing: null }
+  for (const [p, prev] of Object.entries(PREV)) for (const [c, cur] of Object.entries(CUR)) {
+    const fired = c === 'hint' ? 'hint' : p === 'none' || (p === 'marker' && c === 'rising') ? null : seen[c]
+    const lands = p === 'hinted' && fired != null && fired !== 'hint'
+    const v = compactionVerdict(prev, cur), why = `${p} → ${c}`
+    assert.equal(v.basis, fired, why)
+    assert.equal(v.compaction, fired != null && !lands, why)
+    assert.equal(!!v.lands, lands, why)
+    assert.equal(v.compaction_from, fired != null && prev ? prev.msgCount : null, why)
+    assert.equal(v.compaction_to, fired != null ? cur.msgCount : null, why)
+  }
+})
+
+for (const wire of ['anthropic', 'flat']) {
+  test(`${wire}: one compaction is counted once over generated lanes; the landing step rewrites the context and counts nothing`, async () => {
+    for (const steps of lanes(wire)) {
+      const records = laneOf(wire, steps), home = homeWith(records), fate = fateOf(steps), why = steps.join(' ')
+      const doc = await query(home, 'session', { id: SID })
+      assert.equal(doc.calls.length, steps.length, why)
+      const lane = await query(home, 'lane', { id: SID, lane: doc.calls[0].lane })
+      assert.equal(doc.stats.compactions, doc.calls.filter((r) => r.compaction).length, why)
+      const landed = Object.fromEntries(lane.events.filter((e) => e.type === 'compaction-landed').map((e) => [doc.calls.findIndex((r) => r.rid === e.rid), { from: e.from, to: e.to }]))
+      assert.deepEqual(landed, landedOf(steps, records), why)
+      const compacted = new Set(lane.events.filter((e) => e.type === 'compaction').map((e) => e.rid))
+      doc.calls.forEach((r, i) => {
+        const at = `${why} @${i}`
+        assert.equal(!!r.compaction, fate[i] === 'marked' || fate[i] === 'inferred', at)
+        assert.equal(!!r.compactionInferred, fate[i] === 'inferred', at)
+        assert.equal(compacted.has(r.rid), !!r.compaction, at)
+        assert.ok(!('lands' in r), at)
+        if (fate[i] === 'lands') assert.equal(r.cacheBreak.cause, 'compaction', at)
+      })
+      if (wire !== 'anthropic') continue
+      // each context rewrite ends the segments open before it: a landing as a counted compaction does
+      const rewrites = doc.calls.filter((r, i) => fate[i] === 'inferred' || fate[i] === 'marked' || fate[i] === 'lands').map((r) => r.rid)
+      const file = lane.resources.find((r) => r.label === READ)
+      assert.ok(file, why)
+      for (const s of file.segments) if (s.evict != null) assert.ok(rewrites.includes(s.evict), `${why}: evicted at ${s.evict}`)
+      const lands = doc.calls.filter((r, i) => fate[i] === 'lands').map((r) => r.rid)
+      assert.ok(lands.every((rid) => file.segments.some((s) => s.evict === rid)), why)
+    }
+  })
+
+  // 3.4 「失败的 call」: a failed call says nothing and changes nothing, so a failed request and its retry are one compaction and all failing none
+  test(`${wire}: failed calls give no verdict over failed requests, retries and the calls between`, async () => {
+    for (const steps of failLanes()) {
+      const home = homeWith(laneOf(wire, steps)), fate = fateOf(steps), why = steps.join(' ')
+      const doc = await query(home, 'session', { id: SID })
+      const head = JSON.parse(JSON.stringify(await query(home, 'session', { id: SID, head: true })))
+      assert.equal(doc.stats.compactions, fate.filter((x) => x === 'marked' || x === 'inferred').length, why)
+      assert.deepEqual(doc.calls.map((r) => !!r.compaction), fate.map((x) => x === 'marked' || x === 'inferred'), why)
+      assert.ok(head.chapters.every((c) => c.s1 - c.s0 > 1), `${why}: a chapter of one step`)
+      if (wire !== 'anthropic') continue
+      const rewrites = new Set(doc.calls.filter((r, i) => fate[i] != null).map((r) => r.rid))
+      const { resources } = await query(home, 'lane', { id: SID, lane: doc.calls[0].lane })
+      for (const s of resources.find((r) => r.label === READ).segments) if (s.evict != null) assert.ok(rewrites.has(s.evict), `${why}: evicted at ${s.evict}`)
+    }
+  })
+
+  // 3.4 「失败的 call」: nor is it the baseline of what is new, so the history after a failed drop reads as the lane without the failures
+  test(`${wire}: a failed call sends nothing new twice, its lane reads as the one that never failed`, async () => {
+    const read = async (steps) => {
+      const home = homeWith(laneOf(wire, steps)), doc = await query(home, 'session', { id: SID })
+      const { events, resources } = await query(home, 'lane', { id: SID, lane: doc.calls[0].lane })
+      const count = (t) => events.filter((e) => e.type === t).length
+      return { doc, events, user: count('user'), observation: count('observation'), loads: resources.find((r) => r.label === READ)?.loads.length ?? 0 }
+    }
+    for (const lane of failLanes()) {
+      const steps = [lane[0], 'ask', ...lane.slice(1)], why = steps.join(' ')
+      const failed = await read(steps), clean = await read(steps.filter((op) => op !== 'failmark' && op !== 'faildrop').map((op) => op.replace(/^fail/, '')))
+      assert.deepEqual([failed.user, failed.observation, failed.loads], [clean.user, clean.observation, clean.loads], why)
+      if (wire !== 'anthropic') continue
+      assert.deepEqual([...new Set(failed.events.filter((e) => e.type === 'user').map((e) => failed.doc.calls.findIndex((r) => r.rid === e.rid)))], askedOf(steps), why)
+    }
+  })
+}
+
+// 3.4 「一次压缩只算一次」, 「失败的 call」: the verdict and the baseline it leaves, walked along the same lists; the two together are what both readers run.
+const walk = (wire, steps) => {
+  let prev = null
+  return laneOf(wire, steps).map((rec, i) => {
+    const op = steps[i], cur = { hint: op.endsWith('mark'), failed: op.startsWith('fail'), msgCount: sent(rec) }
+    const v = compactionVerdict(prev, cur)
+    prev = compactionBaseline(prev, cur, v)
+    return v
+  })
+}
+const fateIn = (v) => (v.lands ? 'lands' : !v.compaction ? null : v.basis === 'hint' ? 'marked' : 'inferred')
+
+test('compactionVerdict + compactionBaseline: a failed call changes nothing, and the fates of the lanes follow 3.4', () => {
+  for (const steps of [...failLanes(), ...failLanes().map((s) => ['failmark', 'faildrop', ...s.slice(2)])])
+    assert.deepEqual(walk('flat', steps).map(fateIn), fateOf(steps), steps.join(' '))
+  const failed = { failed: true, msgCount: 3, hint: true, marker: true }
+  for (const prev of [null, { msgCount: 40, marker: false, preamble: false, hinted: 2 }]) {
+    const v = compactionVerdict(prev, failed)
+    assert.deepEqual([v.compaction, !!v.lands, v.compaction_from, v.compaction_to, v.basis], [false, false, null, null, null])
+    assert.equal(compactionBaseline(prev, failed, v), prev)
+  }
+})
+
+test('compactionVerdict + compactionBaseline: three calls between a request and the drop still land it, four leave an inferred compaction of its own', () => {
+  for (let between = 0; between <= LANDS_WITHIN + 2; between++) {
+    const steps = ['grow', 'grow', 'mark', ...Array(between).fill('grow'), 'drop', 'grow']
+    const v = walk('flat', steps)[3 + between]
+    assert.equal(!!v.lands, between < LANDS_WITHIN, `${between} between`)
+    assert.equal(v.compaction, between >= LANDS_WITHIN, `${between} between`)
+  }
 })

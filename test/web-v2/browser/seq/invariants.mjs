@@ -8,7 +8,7 @@ import { WRITE_GAP_MS } from '../../../../web/legacy/core/router.mjs'
 import { BOARD_LINES } from '../../perf-lines.mjs'
 
 export const IDS = Object.freeze(['I-pageerror', 'I-console', 'I-blank', 'I-keep', 'I-stack', 'I-hscroll', 'I-rate', 'I-write', 'I-leak',
-  'I-mem', 'I-heap', 'I-follow', 'I-hold', 'I-url', 'I-cjk', 'I-longtask', 'I-loadstep', 'I-chapter', 'I-pack', 'I-memcap', 'I-select', 'I-review', 'I-order'])
+  'I-mem', 'I-heap', 'I-follow', 'I-hold', 'I-url', 'I-cjk', 'I-longtask', 'I-loadstep', 'I-chapter', 'I-pack', 'I-memcap', 'I-select', 'I-review', 'I-order', 'I-jump'])
 
 export const PENDING = new Map([
   ['I-memcap', 'the page heap stays under memCapBytes (80 MB)'],
@@ -200,11 +200,12 @@ function packFaults(log) {
  * check(ctx) → { violations:[{id, sig, fp, detail}], pending:[{id, value, pointer}], view }.
  * ctx: { page, requests, errors, actions:[{t,a}], faults:[{name, kind, from, to}], hidden:[{from,to}], follow, grownAt (ms of the last
  * growth, or null), truth() → the main-lane count, real, prev (the `view` of the previous check), baseline (Map, optional: per-route
- * first-visit counts; default one per page), drag ({made, changed} of a select step just run, else null), stepAt (the step's start on
+ * first-visit counts; default one per page), drag ({made, changed} of a select step just run, else null), jump ({t, jump, landed} of an
+ * Overview row click just run, else null), stepAt (the step's start on
  * the page's clock, performance.timeOrigin + now(); default: judge every long task) }. Call it when the page has settled.
  */
 export async function check(ctx) {
-  const { page, requests = [], errors = [], actions = [], faults = [], hidden = [], follow = false, grownAt = null, truth, real = false, prev = null, drag = null } = ctx
+  const { page, requests = [], errors = [], actions = [], faults = [], hidden = [], follow = false, grownAt = null, truth, real = false, prev = null, drag = null, jump = null } = ctx
   const base = ctx.baseline || baselines.get(page) || (baselines.set(page, new Map()), baselines.get(page))
   let s = await probeSnap(page)
   const v = await viewOf(page)
@@ -212,10 +213,12 @@ export async function check(ctx) {
   const violations = [], pending = []
   const bad = (id, detail) => violations.push({ id, sig: `${id}:${screen}`, fp: fingerprint(detail), detail })
 
+  const armed = (t) => faults.some((f) => t >= f.from && t <= (f.to ?? Infinity) + LIMITS.consoleGraceMs)
   // 1.2 §点击与选中文字: a drag that selected text opened or closed nothing
   if (drag?.made && drag.changed.length) bad('I-select', drag.changed.slice(0, 3).join(' | '))
+  // 2.5 #5: a click on an Overview row lands on the step and block it names; a fault armed around the click may hold the step's read
+  if (jump && !jump.landed && !armed(jump.t)) bad('I-jump', `the row ${jump.jump} did not land`)
   if (errors.length) bad('I-pageerror', errors.slice(0, 3).join(' | '))
-  const armed = (t) => faults.some((f) => t >= f.from && t <= (f.to ?? Infinity) + LIMITS.consoleGraceMs)
   const loose = s.consoleErrors.filter((c) => !armed(c.t))
   if (loose.length) bad('I-console', loose.slice(0, 3).map((c) => c.msg).join(' | '))
   if (s.blank.length) bad('I-blank', `${s.blank.length} blank frame(s), first at ${s.blank[0].hash}`)

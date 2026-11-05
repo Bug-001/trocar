@@ -8,10 +8,11 @@
 import { esc, kf } from '../core/fmt.mjs'
 import { resState } from './lanes.mjs'
 import { relPath, midClip } from './analysis.mjs'
-import { navGroup, jumpToStepAndBlock } from './outline.mjs'
+import { navGroup, jumpToStepAndBlock, jumpToBlockIndex } from './outline.mjs'
+import { blockJump } from './jump.mjs'
 import { KIDS, serialize, keyed, patchInto } from '../core/units.mjs'
 import * as W from '../labels/replay.mjs'
-import { resKeyOf, laneEvents, seenFiles, ledgerDone } from './model.mjs'
+import { resKeyOf, laneEvents, seenFiles, ledgerDone, compactionNumbers, stepOf, carriesRes } from './model.mjs'
 
 const SEEN_CAP = 40
 // a resource is datable (has a lifecycle to speak of) only with a usable segment list; the six display groups and the
@@ -82,7 +83,8 @@ export function resourceUnits(s) {
     return `<div class="navsub ${l.cls}" data-navstep="${l.enter}" data-navres="${esc(resKeyOf(r))}">` +
       `<button type="button" class="nsl viewname" ${view(r, l.enter)} title="${esc(r.label)}" aria-label="${esc(W.viewNameTip(relPath(cwd, r.label)))}">${rp(r.label)}</button>` +
       `<button type="button" class="navlife" data-navstep="${l.enter}" data-navres="${esc(resKeyOf(r))}" aria-label="${esc(W.jumpStepTip(at(l.enter)))}">${esc(l.word)}</button></div>` }
-  const files = of('file')
+  // a path only the run settles (a `runtime` code, 2.4 item 6) stays as the command wrote it: its own group, with the code's reason
+  const files = of('file').filter((r) => !r.runtime), runtime = of('file').filter((r) => r.runtime)
   if (files.length) out.push(...navGroup(s, 'life-file', W.RES_GRP.file, ct(files.length), rowsOf(files, fileRow)))
 
   const loadRow = (r) => { const l = life(r)
@@ -103,10 +105,12 @@ export function resourceUnits(s) {
   const dlRow = (r) => { const l = life(r)
     return `<div class="navsub" data-navstep="${l.enter}"><span class="nsl" title="${esc(r.label)}">${esc(r.kind === 'dir' ? W.DIR_WORD : W.LINK_WORD)} ${rp(r.label)}</span><button type="button" class="navlife" data-navstep="${l.enter}" aria-label="${esc(W.jumpStepTip(at(l.enter)))}">${esc(W.lifeSeen(at(l.enter)))}</button></div>` }
   const dl = [...of('dir'), ...of('link')]
+  const runtimeRow = (r) => { const why = Object.hasOwn(W.RUNTIME_WHY, r.runtime) ? W.RUNTIME_WHY[r.runtime] : r.runtime; return fileRow(r).replace(/<\/div>$/, `<span class="nsx" title="${esc(why)}">${esc(why)}</span></div>`) }
+  const numbers = compactionNumbers(events, (e) => L(e.rid))
   const compRow = (e) => {
-    const atStep = L(e.rid)
+    const atStep = L(e.rid), n = numbers.get(e)
     const word = e.type === 'compaction'
-      ? W.compactRow(at(atStep), e.from != null ? String(e.from) : '—', e.to != null ? String(e.to) : '—') + (e.inferred ? ` · ${W.GUESS}` : '')
+      ? W.compactRow(at(atStep), n.from != null ? String(n.from) : '—', n.to != null ? String(n.to) : '—') + (e.inferred ? ` · ${W.GUESS}` : '')
       : W.summarizeRow(at(atStep), e.out != null ? kf(e.out) : '—')
     return `<div class="navsub" data-navstep="${atStep}"><span class="nsl" title="${esc(word)}">${esc(word)}</span></div>` }
   const comps = events.filter((e) => e && (e.type === 'compaction' || e.type === 'summarize'))
@@ -123,6 +127,7 @@ export function resourceUnits(s) {
     return navGroup(s, 'life-seen', `${W.RES_GRP.seen} · ${W.GUESS}`, ct(seen.length), [{ key: 'chips', html: `<div class="navseen" data-kids>${KIDS}</div>`, kids: chips }, ...more], { hint: W.SEEN_GROUP_TIP })
   })() : []
   const inner = [
+    ...(runtime.length ? navGroup(s, 'life-runtime', W.RES_GRP.runtime, ct(runtime.length), rowsOf(runtime, runtimeRow)) : []),
     ...seenBlock,
     ...(skills.length || caps.length ? navGroup(s, 'life-cap', W.RES_GRP.cap, ct(skills.length + caps.length), rowsOf([...skills, ...caps], capRow)) : []),
     ...(dl.length ? navGroup(s, 'life-dl', W.RES_GRP.dl, ct(dl.length), rowsOf(dl, dlRow)) : []),
@@ -130,7 +135,7 @@ export function resourceUnits(s) {
     ...(others.length ? navGroup(s, 'life-other', W.RES_GRP.other, ct(others.length), rowsOf(others, otherRow)) : []),
   ]
   if (inner.length) {
-    const nOthers = seen.length + skills.length + caps.length + dl.length + comps.length + others.length
+    const nOthers = runtime.length + seen.length + skills.length + caps.length + dl.length + comps.length + others.length
     // a session with nothing above: the groups stand on their own — a lone 「N more」 row would hide the only content.
     // N holds ledger counts: while the chain is unread the row says 「more」 with the busy box in the count's place
     if (!out.length) out.push(...inner)
@@ -152,7 +157,7 @@ export function renderResources(el, s) {
   const bar = s.root && s.root.querySelector && s.root.querySelector('#rpbar')
   if (bar) {
     const h = s.desk && s.desk.held.get(s.anchor.id)
-    const n = h && ledgerDone(s.desk, s.anchor.id) ? [...h.resources.values()].filter((r) => r && r.kind === 'file' && hasSeg(r)).length : 0
+    const n = h && ledgerDone(s.desk, s.anchor.id) ? [...h.resources.values()].filter((r) => r && r.kind === 'file' && !r.runtime && hasSeg(r)).length : 0
     bar.textContent = n > 0 ? `${W.RES_GRP.file} ${n} · ${W.RAW_WORD}` : W.RAW_WORD // the chevron is the bar's own ::after, a --glyph-disc mask that turns when open (replay.css)
   }
 }
@@ -164,12 +169,25 @@ export function viewResource(s, step, resKey, label) {
   s.viewPin = { resKey, label }
   s.renderRaw()
 }
+// the desk with no raw panel (D80): the name reveals the block in the window. In the step at the playhead it does so on the spot, the
+// playhead staying, the content preferred over the call that asked for it; else it moves to the target step and lands there by
+// resKey. The list is the step's own: s.curFlat outlives a step that has none. A target step with no list says so (s.noBlock).
+export function revealResource(s, step, resKey) {
+  const cur = s.anchor && s.anchor.calls[s.playhead]
+  const flat = (cur && cur.rec && !cur.unparsed && s.desk && stepOf(s.desk, cur.rid).flat) || []
+  const content = flat.findIndex((b) => carriesRes(b, resKey) && b.kind !== 'tool_use')
+  const fi = content >= 0 ? content : flat.findIndex((b) => carriesRes(b, resKey))
+  if (fi >= 0) { jumpToBlockIndex(s, fi); return }
+  const target = s.anchor && s.anchor.calls[step]
+  if (!target || !target.rec || target.unparsed) s.noBlock()
+  else s.jumpTo(step, blockJump(resKey))
+}
 export function wireResources(el, s) {
   const onClick = (e) => {
     const tg = e.target.closest('[data-navtoggle]')
     if (tg) { const k = tg.dataset.navtoggle; if (s.navOpen.has(k)) s.navOpen.delete(k); else s.navOpen.add(k); s.renderNav(); return }
     const v = e.target.closest('[data-view]')
-    if (v) { e.stopPropagation(); viewResource(s, +v.dataset.viewstep, v.dataset.view, v.dataset.viewlabel); return }
+    if (v) { e.stopPropagation(); if (s.rawPanelGone) revealResource(s, +v.dataset.viewstep, v.dataset.view); else viewResource(s, +v.dataset.viewstep, v.dataset.view, v.dataset.viewlabel); return }
     if (e.target.closest('[data-navmore]')) { s.navSeenExpanded = !s.navSeenExpanded; s.renderNav(); return }
     const st = e.target.closest('[data-navstep]')
     if (st) jumpToStepAndBlock(s, +st.dataset.navstep, st.dataset.navres || '')

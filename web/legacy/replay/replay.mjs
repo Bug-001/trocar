@@ -27,9 +27,11 @@
 //     `flash` ms; null when there is none. Legacy: revealIn; React: the function the window registered (view.setRevealer)
 //   view.cellRoots() the elements whose cells the desk wires with the drawer's (detail.mjs): legacy [root]
 //   s.reveal(t) = view.reveal(t), s.cellRoots() = view.cellRoots(): the areas' way to them
+//   view.nav()       optional: the view draws its own sidebar, s.renderNav only tells it to (the new desk)
 import { esc } from '../core/fmt.mjs'
 import { api as rootApi, scoped } from '../core/api.mjs'
 import { sessionCache } from './session-cache.mjs'
+import { partsOf, placeWindow, anchorSpan } from '../../src/screens/replay/strip-layout.mjs'
 import { setScreenKeys } from '../core/keys.mjs'
 import { openModal } from '../core/dom.mjs'
 import { keyAction } from './keymap.mjs'
@@ -47,7 +49,7 @@ import { renderSaw, renderOverview, repositionBrush, markCurrent, renderProblemN
 import { renderRails, wireRails, highlightRange, reviewing } from './rails.mjs'
 import { renderContextWindow, wireCtxWin, emptyFrameHtml, rowKeys, ensureRow, toggleCtxBlock } from './ctxwin.mjs'
 import { arrived, refWaits } from '../../src/screens/replay/window-model.mjs'
-import { renderOutline, wireOutline, jumpToAnchor, jumpToResourceBlock } from './outline.mjs'
+import { renderOutline, wireOutline, jumpToAnchor, jumpToResourceBlock, jumpToBlockIndex, jumpToLastPrompt } from './outline.mjs'
 import { createJumpQueue } from './jump.mjs'
 import { createPricingLoader } from './pricing.mjs'
 import { renderResources, wireResources } from './resources.mjs'
@@ -58,8 +60,8 @@ import { renderSessionHead, wireSessionHead, captureGap, behindOf } from './head
 import { stepBarHtml, roughStepHtml, wireStepBar } from './stepbar.mjs'
 import { loadBodies, bodyCache, clearOverrides, deskMode, drawAhead, idle as whenIdle, onModeChange, overrideScope, isRetryable } from './cell.mjs'
 import { SESSION_NOT_LISTED, BACK_TO_SESSIONS } from '../labels/shell.mjs'
-import { CACHE_LEGEND, CACHE_LEGEND_UNK, KEYS_TITLE, KEY_LIST, RETRY, THIS_SESSION, REVIEW_TIP, MAINDIV_TIP, DIVIDER_TIP, RPBAR_TIP, moreLanes } from '../labels/replay.mjs'
-import { readFailure } from '../core/ui.mjs'
+import { CACHE_LEGEND, CACHE_LEGEND_UNK, KEYS_TITLE, KEY_LIST, RETRY, THIS_SESSION, REVIEW_TIP, MAINDIV_TIP, DIVIDER_TIP, RPBAR_TIP, UNPARSED_LINE, NO_REQUEST, RES_NOT_FOUND, moreLanes } from '../labels/replay.mjs'
+import { readFailure, toast } from '../core/ui.mjs'
 
 const POLL_MS = INTERVAL.session
 const BUSY_MS = 150 // 2.3 §车道未到手: how long a step whose lane is not held leaves the desk as it is
@@ -302,7 +304,7 @@ function openDesk(ctx, route0, makeView = legacyView) {
   // ── the state every area renders from ────────────────────────────────────────────────────────────────────────────
   const fresh = () => ({
     desk: createDesk(), meta: null, lanes: [], anchor: null, anchorTs: [], breaks: [], problems: [], playhead: 0, playRid: null, follow: true, sawView: 'ctx',
-    view: { lo: 0, hi: 0 }, viewSig: null, selTick: null, viewPin: null, diffRef: null, curFlat: [], drawerFlat: [], curRemoved: [],
+    view: { lo: 0, hi: 0 }, span: null, brushed: false, spanEnd: null, viewSig: null, selTick: null, viewPin: null, diffRef: null, curFlat: [], drawerFlat: [], curRemoved: [],
     followLanding: false, // the playhead was last moved by 跟随最新, not by the reader: the window lands on the reply (1.4 §打开一步时落在哪)
     landedFor: null, landWait: null, replyFor: null, // the window's landing ran for that rid, or waits ({rid, top}: landingFor); the reply rows' open state belongs to that rid
     navOpen: new Set(['sys', 'life-file', 'life-load']), navSeenExpanded: false, collapsedRails: new Set(), subSeeded: new Set(), subgroupOpen: false, bgOpen: false,
@@ -329,18 +331,27 @@ function openDesk(ctx, route0, makeView = legacyView) {
 
   // ── actions the areas call back into ─────────────────────────────────────────────────────────────────────────────
   s.persistFold = () => saveFold(storage(), s.turnFold)
-  s.renderRaw = () => onEls(() => renderRawPanel(E.rawpanel, s))
-  s.renderNav = () => onEls(() => { renderOutline(E.ctxnav, s); renderResources(E.resexp, s) })
+  // a view with a `nav` slot draws its sidebar itself (the new desk) and has no raw panel (s.rawPanelGone, reactView)
+  s.renderRaw = () => onEls(() => { if (E.rawpanel) renderRawPanel(E.rawpanel, s) })
+  s.renderNav = () => (view.nav ? view.nav() : onEls(() => { renderOutline(E.ctxnav, s); renderResources(E.resexp, s) }))
   const curCall = () => (s.anchor && s.anchor.calls[s.playhead]) || null
   const heldAt = (c) => !!(c && deskStep(s.desk, c.rid).held)
   // a jump (the problem pager, a drawer call link, a resource card) aimed at a step whose lane is not held waits for the lane and
   // runs once after the window has repainted; the next reader move clears it (jump.mjs)
   const jumps = createJumpQueue({
     getPlayhead: () => s.playhead, getCall: curCall, getHeld: () => heldAt(curCall()),
-    perform: (j) => (j.kind === 'anchor' ? jumpToAnchor(s, j.id) : jumpToResourceBlock(s, j.resKey)),
+    perform: (j) => {
+      if (j.kind === 'anchor') jumpToAnchor(s, j.id)
+      else if (j.kind === 'fi') jumpToBlockIndex(s, j.fi)
+      else if (j.kind === 'prompt') jumpToLastPrompt(s)
+      else if (!jumpToResourceBlock(s, j.resKey)) s.noBlock?.()
+    },
+    dropped: (j) => { if (j.kind === 'block') s.noBlock?.() },
   })
   s.jumpTo = (step, jump) => { setPlayhead(step, true); jumps.queue(s.playhead, jump) }
   s.queueJump = (jump) => jumps.queue(s.playhead, jump)
+  // a resource name is never a dead click (2.4): the new desk says why its block is not in this step
+  if (s.rawPanelGone) s.noBlock = () => { const c = curCall(); toast(c && c.unparsed ? UNPARSED_LINE : c && !c.rec ? NO_REQUEST : RES_NOT_FOUND) }
   // the drawer as drawn: the selected call's row object and whether its step is held (refreshDrawer redraws on a change only)
   let drawnDetail = null
   s.openDetail = (lane, i) => { const c = lane.calls[i]; drawnDetail = c ? { row: s.desk.rows.get(c.rid) ?? c, held: heldAt(c) } : null; openDetail(E.detail, s, lane, i) }
@@ -351,6 +362,10 @@ function openDesk(ctx, route0, makeView = legacyView) {
     if (i != null) setPlayhead(i, true); else nameStep(g + 1)
   }
   s.setView = setView
+  // the reader's hand on the strip (a view with `spans`): at most one paint a frame, the bars and the rails only: a drag frame reads no body (D64)
+  // any change the reader makes to the window is the reader's gesture: it stops following (1.3 §拖), or the next poll would undo it
+  s.brushTo = (lo, hi) => { if (s.follow) followOff(); if (brushTarget == null) frame(paintBrush); brushTarget = { lo, hi } }
+  s.brushBack = () => { brushTarget = null; s.brushed = false; placeWin(true); paintSpan() }
   // the 内容对比步 (2.3): the compare menu's choice survives scrubbing, clears on a session switch
   s.setDiff = (idx) => { s.diffRef = idx; drawPlayhead() }
   s.renderStep = () => view.step()
@@ -364,15 +379,19 @@ function openDesk(ctx, route0, makeView = legacyView) {
   // ── empty and failed states: every widget that carries per-session data is neutralised, nothing of the last session stays ──
   // `msg` empty → ⑧, the empty frame (1.4: no text, no control); else the honest failure sentence, Retry, and the reason in details
   // (`err`: the failed answer)
+  let brushTarget = null // the window a drag frame asked for, painted on the next frame (s.brushTo)
   let emptied = { msg: '', err: null } // the last empty state, null when the rough page was drawn after it: a view whose frame comes later draws that then (catchUp)
   function renderEmpty(msg, err = null) {
     emptied = { msg, err }
-    s.brushDragging = false; s.anchor = null; s.lanes = []; s.curFlat = []; s.curRemoved = []; s.breaks = []; jumps.clear()
+    s.brushDragging = false; brushTarget = null; s.span = null; s.brushed = false; s.spanEnd = null; s.anchor = null; s.lanes = []; s.curFlat = []; s.curRemoved = []; s.breaks = []; jumps.clear()
     s.landedFor = null; s.turnLanded.clear(); s.lastPhSig = null
     view.empty(msg)
     onEls(() => {
       view.window({ kind: 'empty', msg, err })
-      E.ctxnav.innerHTML = ''; E.rails.innerHTML = ''; E.resexp.innerHTML = ''; E.rawpanel.innerHTML = ''
+      E.rails.innerHTML = ''; E.resexp.innerHTML = ''
+      if (E.ctxnav) E.ctxnav.innerHTML = ''
+      if (E.rawpanel) E.rawpanel.innerHTML = ''
+      view.nav?.()
     })
     view.problems() // no problems: the row name stops quoting the last session's count and ‹ › disappear
     if (host && E) closeDetail(E.detail, s) // the drawer is shared by every screen: a detached desk closed it when it left
@@ -392,6 +411,7 @@ function openDesk(ctx, route0, makeView = legacyView) {
   // a named step (the URL's `step=`, Home) → its index in the anchor lane once its skeleton row and its lane are here, else -1
   // (2.3 §点名的一步不在手里). A lane read that failed lands it too: the step then says so (2.3 §读失败)
   function namedAt() {
+    if (!s.anchor) return -1
     const a = s.anchor, M = Math.max((s.desk.head && s.desk.head.steps) || 0, a.count || 0, a.calls.length) // the head's steps may lag the tails' (the head is written when a part only it carries changes)
     const rid = ridAt(s.desk, a.id, Math.max(1, Math.min(M, s.initialStep)) - 1), i = rid == null ? undefined : a.ridLocal.get(rid)
     return i ?? -1
@@ -534,25 +554,53 @@ function openDesk(ctx, route0, makeView = legacyView) {
     s.followLanding = followLanding
     jumps.clear() // a move by the reader ends any jump still waiting for its lane (jumpTo queues its own after this)
     s.initialStep = null // and any named step still waiting to land
+    brushTarget = null; s.brushed = false // and the strip goes back to following the playhead
     const N = s.anchor.calls.length, np = Math.max(0, Math.min(N - 1, i | 0))
     if (np !== s.playhead) s.turnLanded.clear() // a different call: no landing turn lingers; open rows stay by bid (1.4:114)
     s.playhead = np; s.playRid = s.anchor.calls[np].rid; arrived(s, s.playRid)
     if (manual) s.follow = np === N - 1 // the reader's move: on the newest call it follows, anywhere else it does not
       // keep the scrub target inside the brush window, which stays inside its chapter (1.3 §章): pan it, keeping its width; another
     // chapter's window becomes this chapter's
-    const ch = chapterHere(s), v = placeView(s.view, np, ch.c0, ch.c1, sawCapacity())
-    if (v.lo !== s.view.lo || v.hi !== s.view.hi) {
-      s.view.lo = v.lo; s.view.hi = v.hi
-      view.saw(); drawRails()
-    }
+    if (placeWin()) { view.saw(); drawRails() }
     view.cur() // the common case: only the current marks move
     drawPlayhead()
     restoreSelection()
   }
   // how many bars the scope's bar lane can draw (the view measures it)
   const sawCapacity = () => view.capacity()
+  // the window around the playhead → whether it moved. A view with `spans` holds it in global steps and leaves a window the reader
+  // dragged alone; `rowsMoved`: s.view is taken again even when the span stayed, the lane's indexes may be new
+  function placeWin(rowsMoved = false) {
+    if (!view.spans) {
+      const ch = chapterHere(s), v = placeView(s.view, s.playhead, ch.c0, ch.c1, sawCapacity()), moved = v.lo !== s.view.lo || v.hi !== s.view.hi
+      s.view = v
+      return moved
+    }
+    const moved = placeWindow(s, sawCapacity())
+    if (moved || rowsMoved) s.view = anchorSpan(s, s.span)
+    return moved
+  }
+  function paintSpan() { view.saw(); drawRails(); view.cur() }
+  function paintBrush() {
+    const t = brushTarget, was = s.span
+    brushTarget = null
+    if (!t || s.dead) return
+    s.brushed = true
+    // never wider than the lane draws: what is cut goes around the window as it stood
+    s.span = capWindow({ ...t, prev: was || t, K: sawCapacity(), playhead: was ? (was.lo + was.hi) >> 1 : t.lo })
+    s.view = anchorSpan(s, s.span)
+    paintSpan()
+  }
   // a window wider than the lane draws is clipped, and the steps it clips are the latest ones: shrink it, keeping the playhead in it
   function fitView() {
+    if (view.spans) {
+      if (!s.span) return false // the rough page's window is the model's, at the K of the moment
+      if (!s.brushed) return placeWin(true)
+      const { lo, hi } = s.span
+      if (hi - lo <= sawCapacity()) return false
+      s.span = fitWindow({ lo, hi, K: sawCapacity(), playhead: (lo + hi) >> 1 }); s.view = anchorSpan(s, s.span)
+      return true
+    }
     if (!s.anchor || !s.anchor.calls.length) return false
     const { c0, c1 } = chapterHere(s), inside = s.view.lo >= c0 && s.view.hi <= c1 && s.view.lo < s.view.hi // 1.3 §章: never across a chapter's edge
     const w = fitWindow({ lo: inside ? s.view.lo : c0, hi: inside ? s.view.hi : c1, K: sawCapacity(), playhead: s.playhead })
@@ -748,7 +796,7 @@ function openDesk(ctx, route0, makeView = legacyView) {
       chaining = false
       if (!r || gone()) return
       ledgerFailed = !r.ok
-      if (s.playRid != null) { if (host && E) renderResources(E.resexp, s); else missed = true }
+      if (s.playRid != null) { if (!host || !E) missed = true; else if (view.nav) view.nav(); else renderResources(E.resexp, s) }
       if (s.anchor && s.anchor.id !== key) chainLedger()
     }, (e) => { chaining = false; console.error(e) })
   }
@@ -757,7 +805,9 @@ function openDesk(ctx, route0, makeView = legacyView) {
     s.initialStep = n; s.follow = false
     const i = namedAt()
     if (i >= 0) { setPlayhead(i, false); return }
-    renderHeader(); if (s.playRid != null) namedRows(); fill()
+    if (view.spans) { s.brushed = false; if (placeWin()) { view.saw(); drawRails() } }
+    renderHeader(); if (s.playRid != null) namedRows(); else if (view.spans) renderRough()
+    fill()
   }
   // the playhead's rid changed: its reads go out once it rests (createStepReads)
   function aim() { if (s.playRid != null && s.playRid !== targeted) { targeted = s.playRid; steps.target(s.playRid); fill() } }
@@ -916,7 +966,7 @@ function openDesk(ctx, route0, makeView = legacyView) {
       if (keepPins.atEnd) s.view.hi = N // a window parked at the live end grows with it
       s.view.hi = Math.min(N, s.view.hi || N); s.view.lo = Math.max(0, Math.min(s.view.lo, N - 1)); if (s.view.hi <= s.view.lo) s.view.hi = Math.min(N, s.view.lo + 1)
     }
-    const ch = chapterHere(s); s.view = placeView(s.view, s.playhead, ch.c0, ch.c1, sawCapacity())
+    placeWin(true)
     renderAll()
     refreshDrawer()
     chainLedger()
@@ -933,16 +983,23 @@ function openDesk(ctx, route0, makeView = legacyView) {
 
   // ── the desk's own listeners (inside its root): wired once its frame is there, kept while it is detached, dropped by dispose() ──
   const onRp = () => { s.rpOpen = !s.rpOpen; view.frame() }
+  s.toggleRise = onRp // the bottom panel on a narrow new desk (1.2 §窄屏); Escape lowers it through onEscape
   const onRpKey = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onRp() } }
   const offs = []
   // a view whose scope is its own (the new desk's Scope.tsx) frames with no `saw`: its rows are not wired here
   function wire() {
     const rpbar = $('#rpbar'), { rails } = E
     rails.addEventListener('mouseover', onRailHover)
-    rpbar.addEventListener('click', onRp); rpbar.addEventListener('keydown', onRpKey)
-    offs.push(() => { rpbar.removeEventListener('click', onRp); rpbar.removeEventListener('keydown', onRpKey); rails.removeEventListener('mouseover', onRailHover) },
-      E.saw ? wireTimeline(E.saw, s) : () => {}, wireRails(rails, s), wireOutline(E.ctxnav, s), wireResources(E.resexp, s),
-      wireRawPanel(E.rawpanel, s), initLayout(root))
+    offs.push(() => rails.removeEventListener('mouseover', onRailHover),
+      E.saw ? wireTimeline(E.saw, s) : () => {}, wireRails(rails, s), wireResources(E.resexp, s))
+    // the legacy desk's own: the new desk has no outline column, no raw panel and its boundaries are the library's
+    if (rpbar) {
+      rpbar.addEventListener('click', onRp); rpbar.addEventListener('keydown', onRpKey)
+      offs.push(() => { rpbar.removeEventListener('click', onRp); rpbar.removeEventListener('keydown', onRpKey) })
+    }
+    if (E.ctxnav) offs.push(wireOutline(E.ctxnav, s))
+    if (E.rawpanel) offs.push(wireRawPanel(E.rawpanel, s))
+    if ($('#divider')) offs.push(initLayout(root))
     // a view that draws the session head and the step head itself (the React view) hands no #deskhead / #stepbar: it acts on them too
     if (E.deskhead) offs.push(wireSessionHead(E.deskhead, s))
     if (E.stepbar) offs.push(wireStepBar(E.stepbar, s))
@@ -954,8 +1011,10 @@ function openDesk(ctx, route0, makeView = legacyView) {
   const paintKey = () => { const t = keyTarget; keyTarget = null; if (!s.dead && t != null) setPlayhead(t, true) }
   const onKey = (e) => {
     if (e.key === 'Escape' || !s.anchor || e.ctrlKey || e.metaKey || e.altKey) return
-    const at = keyTarget ?? s.playhead, ch = chapterHere(s)
-    const a = keyAction(e, { at, n: s.anchor.calls.length, problems: s.problems, chapters: ch.chs, step: s.anchor.no ? s.anchor.no(at) : at })
+    // [ ] count from the part the bars show (1.2 §键盘): with `spans` that is s.span's, else the playhead's chapter
+    const at = keyTarget ?? s.playhead, ch = view.spans && s.span ? { chs: partsOf(s) } : chapterHere(s)
+    const step = view.spans && s.span ? s.span.lo : s.anchor.no ? s.anchor.no(at) : at
+    const a = keyAction(e, { at, n: s.anchor.calls.length, problems: s.problems, chapters: ch.chs, step })
     if (!a) return
     e.preventDefault()
     if (a.keys) openModal({ title: KEYS_TITLE, bodyHtml: `<dl class="keylist">${KEY_LIST.map(([k, w]) => `<dt><kbd>${esc(k)}</kbd></dt><dd>${esc(w)}</dd>`).join('')}</dl>` })
@@ -969,7 +1028,7 @@ function openDesk(ctx, route0, makeView = legacyView) {
   const onEscape = () => { if (E && E.detail.classList.contains('open')) closeDetail(E.detail, s); else if (s.rpOpen) onRp() }
   const onVis = () => { if (!document.hidden) poll() } // back in view: read now, not a tick later
   // the lane's width changes with the window and with the right-page divider: watch both. Only a window that no longer fits is touched.
-  const refit = () => { if (s.anchor && alive() && fitView()) { view.saw(); drawRails(); view.overview() } }
+  const refit = () => { if (alive() && fitView()) { view.saw(); drawRails(); view.overview() } }
   const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(refit) : null
   let unwireDetail = null, scrolls = []
 

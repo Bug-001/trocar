@@ -1142,6 +1142,27 @@ a.ovtr:hover { background: var(--hover); }
 .desk.next #saw .ctrace .none{stroke:var(--dimmer);stroke-dasharray:3 3;}
 .desk.next #saw .ctrace .unk{stroke:var(--purple);stroke-dasharray:1 2;}
 .desk.next #saw .cacherow .cbar{background:none;opacity:1;border:0;height:100%;}
+/* the whole-session strip (Strip.tsx): a block per part on the bare scope, the window's lit; the box and the mark stand a little past the
+   blocks; the grips hit outward, so a box a pixel wide keeps both; the label stays inside the strip at either end (--f = the pointer's place) */
+.desk.next #saw .ovstrip{border:0;border-radius:2px;background:none;overflow:visible;cursor:pointer;}
+.desk.next #saw .ovstrip.drag,.desk.next #saw .ovstrip.drag *{cursor:grabbing;}
+.desk.next #saw .ovstrip:focus-visible{outline:1.5px solid var(--scope-action);outline-offset:3px;}
+.desk.next #saw .ovpart{position:absolute;top:0;bottom:0;border-radius:2px;background:var(--scope-fill);}
+.desk.next #saw .ovpart.lit{background:var(--scope-fill-2);}
+.desk.next #saw .ovsvg{inset:0;width:100%;height:100%;pointer-events:none;}
+.desk.next #saw .ovsvg rect{fill:var(--dim);opacity:.5;}
+.desk.next #saw .ovsvg rect.err{fill:var(--bad-lamp);opacity:.6;}
+.desk.next #saw .ovbrush{top:-2px;bottom:-2px;min-width:2px;border:1.5px solid var(--scope-action);border-radius:3px;background:color-mix(in srgb,var(--scope-action) 20%,transparent);}
+.desk.next #saw .ovbrush .ovh{top:0;bottom:0;width:8px;background:none;}
+.desk.next #saw .ovbrush .ovh-l{left:-6px;}
+.desk.next #saw .ovbrush .ovh-r{right:-6px;}
+.desk.next #saw .ovpin{top:-2px;bottom:-2px;width:2px;margin-left:-1px;opacity:1;z-index:1;}
+.desk.next #saw .ovlabel{position:absolute;bottom:calc(100% + 6px);transform:translateX(calc(var(--f) * -100%));padding:2px 8px;border-radius:6px;background:var(--tag);color:var(--tag-ink);
+  font-size:var(--fs-chart);line-height:1.4;white-space:nowrap;pointer-events:none;z-index:6;}
+/* the chapter row (1.3 §章): the part's start and go back after its label; the short part's card in the room right of the bars */
+.desk.next #saw .chaptime,.desk.next #saw .chapback{flex:none;font-size:var(--fs-chart);color:var(--dimmer);white-space:nowrap;}
+.desk.next #saw .chapgo{font:inherit;border:0;padding:0;background:none;color:var(--scope-action);cursor:pointer;text-decoration:underline;}
+.desk.next #saw .chapcard{position:absolute;left:calc(100% + 12px);bottom:0;white-space:nowrap;font-size:var(--fs-chart);color:var(--dimmer);pointer-events:none;}
 /* css/cells.css — the two-mode block cell (Raw / Readable) inside a row of the context window, the reply and the drawer.
    Styles exactly the cell class vocabulary (RFC 2.3 §两种模式); colours only through tokens (base.css, §2.5). The cell grows in
    the page flow: no max-height and no inner scroller on the body; only code, diff and tables scroll sideways inside the cell. */
@@ -1252,7 +1273,7 @@ a.ovtr:hover { background: var(--hover); }
 .desk.next #ctxwin .cblk.cwtrow{margin-left:12px;}
 /* the head: the whole of it toggles; the button inside it is the keyboard's way in */
 .desk.next #ctxwin .cbh::before{content:none;}
-.desk.next #ctxwin .cbh{gap:10px;}
+.desk.next #ctxwin .cbh{column-gap:10px;} /* column only: at 600 px a head is two lines and its height has no room for a row gap */
 .desk.next #ctxwin .cbtog{display:flex;align-items:center;gap:6px;flex:none;min-width:9ch;margin:0;padding:0;border:0;background:none;font:inherit;color:inherit;text-align:left;cursor:pointer;}
 .desk.next #ctxwin .cbtog:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px;}
 .desk.next #ctxwin .cbtag{flex:none;color:var(--ink);background:var(--sunk);border:1px solid var(--rule);border-radius:5px;padding:0 6px;line-height:18px;}
@@ -1261,6 +1282,84 @@ a.ovtr:hover { background: var(--hover); }
 .desk.next #ctxwin .cbh:hover{background:var(--hover);}
 .desk.next #ctxwin .cblabel{color:var(--ink-2);}
 .desk.next #ctxwin .cbchars{text-align:right;color:var(--ink-2);}
+/* web/legacy/css/desk-frame.css — the new desk's frame (1.2 §回放台布局, DeskFrame.tsx, Sidebar.tsx). Only under .desk.next: the legacy desk
+   keeps replay.css alone. Tokens only. */
+.desk.next .deskpanes{flex:1;min-height:0;}
+.desk.next #midcol{height:100%;}
+/* the scope's own cell scrolls: #rails no longer scrolls apart, and the whole-session row stays at the cell's foot (1.3) */
+.desk.next .scopefit{display:flow-root;}
+.desk.next #saw{border-radius:16px;margin-bottom:6px;}
+.desk.next #rails{overflow:visible;}
+.desk.next #saw .tkrow-ovw{position:sticky;bottom:0;z-index:5;background:var(--scope-2);}
+
+/* the boundaries (1.2 「边界的样子」): a 1 px --rule hairline, the library's hit area around it, 2 px --action on hover or drag */
+.desk.next [data-separator]{position:relative;background:var(--rule);outline:none;}
+.desk.next .deskpanes > [data-separator]{width:1px;}
+.desk.next .deskcol > [data-separator]{height:1px;}
+.desk.next [data-separator]::after{content:"";position:absolute;inset:0;z-index:6;}
+.desk.next .deskpanes > [data-separator]::after{left:-1px;}
+.desk.next .deskcol > [data-separator]::after{top:-1px;}
+.desk.next [data-separator=hover]::after,.desk.next [data-separator=active]::after,.desk.next [data-separator]:focus-visible::after{background:var(--action);}
+
+/* the right sidebar */
+.desk.next .deskside{display:flex;flex-direction:column;height:100%;min-height:0;background:var(--raised);}
+.desk.next .deskside.folded{align-items:center;padding-top:6px;}
+.desk.next .sidehead{flex:none;display:flex;align-items:center;gap:4px;padding:6px 6px 0 10px;border-bottom:1px solid var(--rule);}
+.desk.next .sidetabs{flex:1;min-width:0;display:flex;gap:14px;}
+.desk.next .sidetab{padding:4px 0 6px;margin-bottom:-1px;border-bottom:2px solid transparent;font-size:var(--fs-cap);color:var(--ink-2);cursor:pointer;outline:none;}
+.desk.next .sidetab[data-hovered]{color:var(--ink);}
+.desk.next .sidetab[data-selected]{color:var(--ink);border-bottom-color:var(--action);}
+.desk.next .sidetab[data-focus-visible]{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px;}
+.desk.next .sidefold{flex:none;display:flex;width:24px;height:24px;align-items:center;justify-content:center;padding:0;border:0;border-radius:6px;background:none;color:var(--ink-2);cursor:pointer;}
+.desk.next .sidefold svg{transform:scaleX(-1);} /* the left sidebar's pair, mirrored: this panel sits on the right */
+.desk.next .sidefold[data-hovered]{background:var(--hover);color:var(--ink);}
+.desk.next .sidefold[data-focus-visible]{outline:2px solid var(--accent);outline-offset:2px;}
+.desk.next .sidepanel{flex:1;min-height:0;display:flex;flex-direction:column;outline:none;}
+.desk.next .sidepane{flex:1;min-height:0;display:flex;flex-direction:column;}
+
+/* the narrow desk (1.2 §窄屏, the breakpoints' only table). The bottom row stays in the flow, so the Group's column ends above it; the panel
+   rises over the desk and moves nothing. The legacy #rightpage and #rpbar rules do not reach this desk: it has neither. */
+.desk.next{position:relative;--siderow:36px;}
+.desk.next .deskside.bottom{flex:none;height:auto;}
+.desk.next .deskside.bottom .sidehead{box-sizing:border-box;height:var(--siderow);padding:0 6px 0 10px;border-top:1px solid var(--rule);border-bottom:0;}
+.desk.next .deskside.bottom .sidetab{margin:0;border-bottom:0;border-top:2px solid transparent;}
+.desk.next .deskside.bottom .sidetab[data-selected]{border-top-color:var(--action);}
+.desk.next .deskside.bottom .sidefold svg{transform:none;}
+.desk.next .deskside.bottom .sidefold[aria-expanded=false] svg{transform:rotate(180deg);}
+.desk.next .deskside.bottom .sidepanel{position:absolute;left:0;right:0;bottom:var(--siderow);height:50%;z-index:8;background:var(--raised);border-top:1px solid var(--rule);}
+@media (max-width:899.98px){
+  .desk.next #saw,.desk.next #rails{--gut:0px;} /* px: scope.css adds it to a length in calc() */
+  .desk.next .tgut,.desk.next #saw #sawgut{display:none;}
+  .desk.next .tkrow > *,.desk.next .chaprow > *{grid-column:2;} /* the lanes keep their column with the name cell gone */
+}
+@media (max-width:599.98px){
+  .desk.next #saw .sawlegend,.desk.next #saw .sdetail,.desk.next .deskside.bottom{display:none;}
+}
+/* web/legacy/css/desk-overview.css — the sidebar's Overview (2.5, Overview.tsx). Only under .desk.next. Tokens only. */
+.desk.next .ovw{flex:1;min-height:0;overflow:auto;padding:6px;font-size:var(--fs-cap);color:var(--ink);}
+.desk.next .ovph,.desk.next .ovgh,.desk.next .ovrow{display:flex;align-items:center;gap:6px;width:100%;min-width:0;min-height:26px;padding:0 8px;border:0;border-radius:6px;background:none;color:inherit;font:inherit;text-align:left;cursor:pointer;outline:none;}
+.desk.next .ovph{min-height:28px;}
+.desk.next .ovph[aria-current]{font-weight:600;background:var(--action-wash);}
+.desk.next .ovph[data-hovered],.desk.next .ovgh[data-hovered],.desk.next .ovrow:hover{background:var(--hover);}
+.desk.next .ovph[data-focus-visible],.desk.next .ovgh[data-focus-visible],.desk.next .ovrow:focus-visible{outline:2px solid var(--accent);outline-offset:-2px;}
+.desk.next .ovgh{padding-left:22px;color:var(--ink-2);}
+.desk.next .ovrow{padding-left:40px;color:var(--ink-2);}
+.desk.next .ovrow[aria-current]{color:var(--action);}
+.desk.next .ovlbl{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}
+.desk.next .ovx,.desk.next .ovct{flex:none;color:var(--ink-3);font-weight:400;font-variant-numeric:tabular-nums;}
+.desk.next .ovrow[aria-current] .ovx{color:inherit;}
+.desk.next .ovct[aria-busy]{width:2ch;height:1em;border-radius:3px;background:var(--hover);}
+.desk.next .ovmark{flex:none;display:flex;color:var(--ink-3);}
+.desk.next .ovbusy{height:26px;margin:0 8px 0 40px;}
+.desk.next .ovnone{padding:4px 8px 4px 40px;color:var(--ink-3);}
+/* web/legacy/css/desk-details.css — Call details in the window (2.6 §A). Only under .desk.next. Tokens only. */
+.desk.next #ctxwin .cwimpact{margin:8px 0 0;padding:5px 9px;font-size:var(--fs-cap);line-height:1.5;color:var(--ink-2);}
+.desk.next #ctxwin .cwdetails{margin:8px 0 4px;border-bottom:0;}
+.desk.next #ctxwin .cwdetails > .disc-b{padding:0 0 4px;}
+.desk.next #ctxwin .cdgrp{margin:8px 0 4px;font-size:var(--fs-cap);font-weight:var(--fw-strong);color:var(--ink-2);}
+.desk.next #ctxwin .cdnote{margin:4px 0;padding:0 9px;font-size:var(--fs-cap);color:var(--ink-2);}
+.desk.next #ctxwin .cdline{display:flex;align-items:center;gap:10px;margin-bottom:4px;padding:4px 9px;font-size:var(--fs-cap);}
+.desk.next #ctxwin .cdval{margin-left:auto;min-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--ink-2);}
 /* css/capture.css — the 采集 page + 采集记录 (1.9). Tokens only (1.5 D77), both themes follow. */
 
 /* the page */

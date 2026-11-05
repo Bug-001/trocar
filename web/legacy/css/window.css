@@ -22,7 +22,7 @@
 .desk.next #ctxwin .cblk.cwtrow{margin-left:12px;}
 /* the head: the whole of it toggles; the button inside it is the keyboard's way in */
 .desk.next #ctxwin .cbh::before{content:none;}
-.desk.next #ctxwin .cbh{gap:10px;}
+.desk.next #ctxwin .cbh{column-gap:10px;} /* column only: at 600 px a head is two lines and its height has no room for a row gap */
 .desk.next #ctxwin .cbtog{display:flex;align-items:center;gap:6px;flex:none;min-width:9ch;margin:0;padding:0;border:0;background:none;font:inherit;color:inherit;text-align:left;cursor:pointer;}
 .desk.next #ctxwin .cbtog:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px;}
 .desk.next #ctxwin .cbtag{flex:none;color:var(--ink);background:var(--sunk);border:1px solid var(--rule);border-radius:5px;padding:0 6px;line-height:18px;}

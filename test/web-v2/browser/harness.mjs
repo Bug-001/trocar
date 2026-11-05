@@ -386,9 +386,11 @@ export const layoutFaults = (page, root = '#content') => page.evaluate(async ({ 
   }
   for (const b of boxes) {
     if (b.control) continue
-    for (let e = b.el; e && e !== document.body; e = e.parentElement) {
+    let scroller = false // what a scroll container's rows do past its edge is scrolling, whatever clips the container itself
+    for (let e = b.el; e && e !== document.body && !scroller; e = e.parentElement) {
       const cs = getComputedStyle(e)
       const clips = (o) => o === 'hidden' || o === 'clip'
+      scroller = /auto|scroll/.test(cs.overflowY)
       if (!clips(cs.overflowX) && !clips(cs.overflowY)) continue
       const er = e.getBoundingClientRect()
       if (er.width <= 2 || er.height <= 2) break // a box hidden on purpose (a screen-reader-only label)

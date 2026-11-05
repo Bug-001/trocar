@@ -83,11 +83,11 @@ function turn(next, i, growth, reads, names) {
 /**
  * bigSession({home, id, wire, growth, seed, subEvery, subLen, segment}) → a writer of ONE session into <home>/raw/<segment>.ndjson.
  * A subagent's context starts over (a new subagent) once it holds more than `subLen` messages; the main one (a compaction: a new
- * thread or chain) once it holds more than `compactAt` characters.
+ * thread or chain) once it holds more than `compactAt` characters; `compactMark`: the main call before that is the harness's marked request.
  * `append(n)` appends the next n calls (as the daemon would, one line each) and returns the session's stored bytes so far.
  */
 export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire = 'http', growth = 2_500, seed = 7, subEvery = 5, subLen = 30, subLanes = 1, late = 0, compactAt = 1_000_000, segment = '20261020T164737Z', preamble = '', cc = 0, reads = 0, names = 0, freshTools = 0, hugeEvery = 0, hugeBytes = 40_000, imageEvery = 0, failEvery = 0, tools = null,
-  paths = 0, pathPool = 0, prompt = 0, writes = 0, bigEvery = 0, bigBytes = 2_000_000, bigRun = 4, shared = 0, quiet = null, marked = false, hold = null, seal = 64 << 10 } = {}) {
+  paths = 0, pathPool = 0, prompt = 0, writes = 0, bigEvery = 0, bigBytes = 2_000_000, bigRun = 4, shared = 0, quiet = null, marked = false, compactMark = false, hold = null, seal = 64 << 10 } = {}) {
   const next = rng(seed), delay = rng(seed + 1), xr = rng(seed + 2)
   let file = path.join(home, 'raw', `${segment}.ndjson`)
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
@@ -193,7 +193,7 @@ export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire 
         : { ...(threads ? { thread: { type: 'create' } } : {}), system: sub && marked ? [...sys, { type: 'text', text: 'x-anthropic-billing-header: cc_is_subagent=true;' }] : sys, messages: mark(ask) }) }
       env = {
         ts, endpoint: '/v1/messages', method: 'POST',
-        req_headers: { host: 'api.anthropic.com', 'content-type': 'application/json', 'user-agent': 'claude-cli/2.0.0 (external, cli)', 'x-app': 'cli', 'x-claude-code-session-id': id, ...(agent ? { 'x-claude-code-agent-id': agent } : {}), 'anthropic-version': '2023-06-01' },
+        req_headers: { host: 'api.anthropic.com', 'content-type': 'application/json', 'user-agent': 'claude-cli/2.0.0 (external, cli)', 'x-app': 'cli', 'x-claude-code-session-id': id, ...(compactMark && !sub && lane.chars > compactAt ? { 'x-cc-compaction-request': '1' } : {}), ...(agent ? { 'x-claude-code-agent-id': agent } : {}), 'anthropic-version': '2023-06-01' },
         req_body: JSON.stringify(body),
         resp: failed ? { status: 529, kind: 'json', body: { type: 'error', error: { type: 'overloaded_error', message: 'Overloaded' } } } : threads ? replyOf(msgId, reply, usage) : { status: 200, kind: 'json', body: { id: msgId, model: MODEL, stop_reason: n % 4 ? 'tool_use' : 'end_turn', content: reply, usage } },
         id: reqId, ts_request: ts, ts_response_start: ts, ts_response_end: ts, duration_ms: 900,
@@ -256,10 +256,10 @@ export function live(scale = 1) {
     compactAt: 110_000, cc: 16, shared: 12_000, paths: 4, prompt: 12_000, writes: 1_200, bigEvery: 400, bigBytes: 2_000_000, bigRun: 4 }
 }
 
-/** firstAskOf(record, records) → what 4.4 §看板 v2 需要的补充 says a lane's `task` is, read straight off the request bytes: the first
- *  user text of the call's context that is not only <system-reminder> blocks, whitespace runs squashed to one space, trimmed, at most
- *  80 characters. A call that continues a server-held context (a `previous_*_id`) has its predecessors' messages first. */
-export function firstAskOf(rec, records = []) {
+/** firstPromptOf(record, records) → the first prompt of a lane read straight off the request bytes: the first user text of the call's
+ *  context that is not only <system-reminder> blocks, those removed. A call that continues a server-held context (a `previous_*_id`)
+ *  has its predecessors' messages first. */
+export function firstPromptOf(rec, records = []) {
   const users = [], prev = []
   const walk = (o) => {
     if (Array.isArray(o)) { for (const x of o) walk(x); return }
@@ -270,14 +270,17 @@ export function firstAskOf(rec, records = []) {
   walk(JSON.parse(rec.req_body))
   const answered = (r) => { const t = JSON.stringify(r.resp); return t.includes(`"${prev[0]}"`) || t.includes(`\\"${prev[0]}\\"`) }
   const before = prev.length ? records.find((r) => r !== rec && answered(r)) : null
-  const head = before ? firstAskOf(before, records) : null
+  const head = before ? firstPromptOf(before, records) : null
   if (head) return head
   for (const m of users) {
     const parts = typeof m.content === 'string' ? [m.content] : (m.content || []).filter((p) => p && typeof p.text === 'string').map((p) => p.text)
     for (const t of parts) {
-      const h = t.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').replace(/\s+/g, ' ').trim()
-      if (h) return h.slice(0, 80)
+      const h = t.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim()
+      if (h) return h
     }
   }
   return null
 }
+/** firstAskOf(record, records) → what 4.4 §看板 v2 需要的补充 says the `task` of a lane that is no sub-agent is: its first prompt,
+ *  whitespace runs squashed to one space, at most 80 characters. */
+export const firstAskOf = (rec, records = []) => { const p = firstPromptOf(rec, records); return p && p.replace(/\s+/g, ' ').trim().slice(0, 80) }

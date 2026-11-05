@@ -17,13 +17,18 @@ export const LANE_KIND = Object.freeze({
   notify: { word: 'notification summary', row: 'bg', bucket: 'bg', hint: 'The agent asks the model to sum up recent activity in a one-line notification' },
   titlegen: { word: 'title generation', row: 'bg', bucket: 'bg', hint: 'The agent asks the model to give the session a title' },
   quota: { word: 'keep-alive check', row: 'bg', bucket: 'bg', hint: 'A check call with a tiny reply limit; the reply is not used' },
-  aux: { word: 'other background call', row: 'bg', bucket: 'bg', hint: 'Any other helper call outside the main thread and the sub-agents' },
+  suggest: { word: 'Next-prompt suggestion', row: 'bg', bucket: 'bg', hint: 'The agent copies the whole conversation and asks the model what the next prompt might be; the reply is only a hint in the input box and does not enter the conversation' },
+  websearch: { word: 'Web search', row: 'bg', bucket: 'bg', hint: 'A model call the search tool makes on its own' },
+  webfetch: { word: 'Web page summary', row: 'bg', bucket: 'bg', hint: 'A small model answers from one fetched page' },
+  aux: { word: 'Unnamed background call', row: 'bg', bucket: 'bg', hint: 'A background call the board cannot name' },
   probe: { word: 'warm-up request', row: 'bg', bucket: 'bg', hint: 'A warm-up request the agent marked itself: it writes the cache ahead of time; not a step of the main thread' },
   'token-count': { word: 'token count', row: 'tc', bucket: null, hint: 'Token count: generates no reply and is not billed' },
 })
 // a kind the table does not know yet (the server grew one): its own words, the 后台调用 row, no guess about the bucket
-export const laneKind = (kind) => LANE_KIND[kind] || { word: 'other call', row: 'bg', bucket: 'bg', hint: 'The board does not know this kind of call yet' }
+export const laneKind = (kind) => LANE_KIND[kind] || { word: 'Unnamed background call', row: 'bg', bucket: 'bg', hint: 'The board does not know this kind of call yet' }
 export const laneWord = (kind) => laneKind(kind).word
+// the background group row's own hover: the row holds every 'bg' kind
+export const BG_ROW_HINT = 'Helper calls outside the main thread and the sub-agents'
 
 // ── the cache predicate's own words (2.2 §缓存判定; the states are core/metrics.mjs : CACHE_STATES) ──────────────────
 // cacheSentence(state, {laneW, causeW, attrW, hitPct, warm, inferred, errMsg, zeroInput}) → the sentence the 缓存 popover opens
@@ -292,6 +297,19 @@ export const VIEW_CTX = 'Context size'
 export const VIEW_COST = 'Cost'
 export const COMP_LEGEND = 'colour = content type (estimated from content size)'
 export const COST_LEGEND = 'bar height = estimated cost of the step (usage × unit price) · hatched = cannot be computed'
+// a part by the compaction before it (k = its index); the strip's label says where the pointer is on it
+export const partWord = (k) => (k ? `Since compaction ${k}` : 'Before the first compaction')
+// the new desk's chapter row (1.3 §章): the part the bars show, its steps, and what of it the window shows when it is narrower
+const stepsAB = (a, b) => (a === b ? `step ${a}` : `steps ${a}–${b}`)
+export const partLabel = (k, a, b, shown, inferred) => `${partWord(k)}${inferred ? ' (inferred)' : ''} · ${stepsAB(a, b)}${shown ? ` · showing ${shown[0] === shown[1] ? shown[0] : `${shown[0]}–${shown[1]}`}` : ''}`
+export const compactionAt = (dir, k, n, at) => `${dir < 0 ? 'Previous' : 'Next'} compaction: compaction ${k} · step ${n}${at ? ` · ${at}` : ''}`
+export const inOtherPart = (n) => `Step ${n} is in another part`
+export const GO_BACK = 'go back'
+export const GO_BACK_TIP = 'Bring the bars back to the step being read'
+export const partCard = (steps, took, prompts) => `${count(steps, 'step')} · ${took} · ${count(prompts, 'prompt')}`
+export const stripAt = (part, n) => (part ? `${part} · step ${n}` : `step ${n}`)
+export const STRIP_LABEL = 'Step being read, in the whole session (the arrow keys move it)'
+export const STRIP_TIP = 'The whole session: drag to show another stretch of steps, click to go to a step, drag the box\'s edges to zoom, double-click the box to widen it'
 export const showSteps = (a, b) => (a === b ? `Showing step ${a}` : `Showing steps ${a}–${b}`)
 export const noMainLane = (laneW) => `This session has no main thread; the timeline follows the ${laneW} calls`
 export const ONLY_MAIN = 'This session has only the main thread'
@@ -326,7 +344,14 @@ export const UNPARSED_LINE = 'The request body could not be parsed'
 // ── the resource explorer (2.4) ──────────────────────────────────────────────────────────────────────────────────────
 export const RES_SECTION = 'Resources · whole session'
 export const RES_GRP = Object.freeze({
-  file: 'Files read', seen: 'Names seen only', load: 'Instruction files loaded', cap: 'Tools and capabilities', dl: 'Directories and links', comp: 'Compaction', other: 'Other resources',
+  file: 'Files read', seen: 'Names seen only', load: 'Instruction files loaded', cap: 'Tools and capabilities', dl: 'Directories and links', comp: 'Compaction', other: 'Other resources', runtime: 'Path known only at run time',
+})
+// why a shell read's path stays as written, one sentence per `runtime` code (2.4 fidelity boundary item 6)
+export const RUNTIME_WHY = Object.freeze({
+  output: 'The path comes from the output of another command or a computed value',
+  read: 'The path comes from a read loop over input',
+  earlier: 'The path uses a variable set by an earlier command',
+  cwd: 'A relative path, and the command does not change to a known directory',
 })
 export const OTHERS_ROW = (n) => `${n} more`
 // the lifecycle words take the composed step word (「step 5」, or 「call 5」 when the session has no main lane)
@@ -372,6 +397,7 @@ export const rawReplyRow = (chars) => `Raw reply · ${chars} characters ›`
 export const rawReplyNth = (k) => `Raw reply ${k}`
 export const NO_RAW_REPLY = 'The raw reply has no bytes to read back'
 export const noBytesWhy = (why) => `no bytes to read back: ${why}`
+export const NO_BYTES = 'No bytes to read back'
 export const REQ_PARAMS = 'Request parameters'
 export const NO_PARAMS = 'This record has no request parameters to read back'
 export const UNPARSED_PARAMS = 'The request body could not be parsed, so no parameters can be listed'
@@ -444,3 +470,24 @@ export const SAMPLED_TIP = 'Sampled: one point per bucket, not one per step (the
 export const MAINDIV_TIP = 'Drag to resize the outline · double-click to reset'
 export const DIVIDER_TIP = 'Drag to resize the right page · double-click to reset'
 export const RPBAR_TIP = 'Expand the right page'
+// the desk's frame (1.2 §回放台布局): the two boundaries and the sidebar
+export const SIDE_SPLIT_TIP = 'Drag to resize the sidebar · double-click to reset'
+export const SCOPE_SPLIT_TIP = 'Drag to resize the tracks · double-click to reset'
+export const SIDE_TABS = 'Session panels'
+export const TAB_OVERVIEW = 'Overview'
+export const TAB_RESOURCES = 'Resources'
+export const COLLAPSE_SIDE = 'Collapse the sidebar'
+export const EXPAND_SIDE = 'Expand the sidebar'
+export const RAISE_PANEL = 'Raise the panel'
+export const LOWER_PANEL = 'Lower the panel'
+// 2.5: a chapter's name (k: compactions before it), a group, a row's step and calls
+export const partName = (k, inferred) => `${k === 0 ? 'Before the first compaction' : `Since compaction ${k}`}${inferred ? ' (inferred)' : ''}`
+export const GRP_AGENTS = 'Sub-agents'
+export const rowStep = (n) => `step ${n}`
+export const agentCalls = (n) => count(n, 'call')
+export const NO_PROMPTS_HERE = 'No prompts in these steps'
+// 2.6 §A: the folded row after the reply
+export const CALL_DETAILS = 'Call details'
+export const CD_EXTRA_MSGS = (n) => `Messages the client sent later in this call · ${n}`
+// 2.5: a chapter head's compaction numbers (the landing step's compaction-landed event); an empty side reads —
+export const partCompaction = (from, to) => `${from ?? '—'} → ${to ?? '—'} messages`

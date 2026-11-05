@@ -19,6 +19,7 @@ const P = {
   pause: '<path d="M5.5 3.5v9M10.5 3.5v9"/>',
   search: '<circle cx="7" cy="7" r="4.25"/><path d="m10.25 10.25 3.5 3.5"/>',
   gear: '<circle cx="8" cy="8" r="2"/><path d="M8 1.8v1.7M8 12.5v1.7M1.8 8h1.7M12.5 8h1.7M3.6 3.6l1.2 1.2M11.2 11.2l1.2 1.2M3.6 12.4l1.2-1.2M11.2 4.8l1.2-1.2"/>',
+  cycle: '<path d="M13.25 8A5.25 5.25 0 1 1 11.7 4.3M13.25 2v3h-3"/>',
   flag: '<path d="M4 14V2.5M4 3h7l-1.6 2.5L11 8H4"/>',
   // navigation (the sidebar's five areas). Each glyph carries one solid port dot, the dot the brand mark is built on.
   // overview: the whole run as one scope trace, the dot on its peak
