@@ -18,7 +18,7 @@ import { parseTime } from '../src/query/named/index.mjs'
 import { SEALED_EXT } from '../src/raw/seal.mjs'
 import { foldedRuns, isHex, longRuns, opened } from './lib/encoded-text.mjs'
 import { textsBehind } from './lib/record-text.mjs'
-import { normalize, WindowTable } from './lib/text-windows.mjs'
+import { normalize, standsIn, WindowTable } from './lib/text-windows.mjs'
 import { callOf, findCli } from './lib/trocar-cli.mjs'
 
 const USAGE = `usage: node scripts/pr-check.mjs --before <time> --title <file> --body <file> [--base <ref>] [--accept-partial] [--cli <path>] [--json]
@@ -433,16 +433,17 @@ function titleOf(cli, add, row) {
 
 /** The capture's facts as words; a segment's name also covers every `<segment>:<n>` record id. */
 function checkFacts(cli, segments, sources, add, hold) {
-  const facts = [...allPages(cli, add, 'sessions', 'sessions').flatMap((s) => [s.project_path, s.project_slug, s.session_id, titleOf(cli, add, s)]),
+  const sessions = allPages(cli, add, 'sessions', 'sessions')
+  const titles = new Set(sessions.map((s) => titleOf(cli, add, s)))
+  const facts = [...sessions.flatMap((s) => [s.project_path, s.project_slug, s.session_id]), ...titles,
     ...allPages(cli, add, 'traffic', 'hosts').map((h) => h.host), ...segments.map((s) => s.segment)]
   const words = new Map()
-  for (const fact of facts) {
-    if (typeof fact !== 'string') continue
+  for (const fact of facts.filter((f) => typeof f === 'string')) {
     const word = normalized(fact)
     if (word.toString().length >= MIN_FACT) words.set(word.toString('latin1'), { word, fact })
   }
   for (const { word, fact } of words.values()) {
-    for (const source of sources) if (source.norm.includes(word)) hold(fact, 'captured-facts', source.where)
+    for (const source of sources) if (source.norm.includes(word) && (!titles.has(fact) || standsIn(source.bytes, word))) hold(fact, 'captured-facts', source.where)
   }
 }
 

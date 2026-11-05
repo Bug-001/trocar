@@ -125,8 +125,8 @@ function decodeUtf8(src, at) {
 // Normalizes src into out (capacity(src) bytes hold any input) and returns the length written. Folding grows a
 // character's UTF-8 by 2x at most, and an escape only shrinks. `run` is the backslash state: 1 after a run of
 // literal backslashes, 2 when the run holds an escaped backslash, which makes the next decoded character count as
-// escaped as well.
-function normalizeInto(src, out) {
+// escaped as well. `breaks`, when given, collects the places in `out` where something that was no letter went.
+function normalizeInto(src, out, breaks) {
   const fold = folds()
   const n = src.length
   let i = 0
@@ -151,6 +151,7 @@ function normalizeInto(src, out) {
     }
     if (cp === BACKSLASH) {
       if (run === 0) run = 1
+      breaks?.add(o)
       continue
     }
     const wasRun = run
@@ -178,8 +179,13 @@ function normalizeInto(src, out) {
       }
     }
     high = 0
-    if (escaped && (cp === 0x6e || cp === 0x74 || cp === 0x72)) continue
-    for (let bytes = fold[cp]; bytes !== 0; bytes >>>= 8) out[o++] = bytes & 0xff
+    if (escaped && (cp === 0x6e || cp === 0x74 || cp === 0x72)) {
+      breaks?.add(o)
+      continue
+    }
+    let bytes = fold[cp]
+    if (bytes === 0) breaks?.add(o)
+    for (; bytes !== 0; bytes >>>= 8) out[o++] = bytes & 0xff
   }
   return o
 }
@@ -189,6 +195,19 @@ const capacity = (bytes) => 2 * bytes.length + 4
 export function normalize(bytes) {
   const out = new Uint8Array(capacity(bytes))
   return out.slice(0, normalizeInto(bytes, out))
+}
+
+/** Whether normalized `word` is said in `bytes`, not just spelled: a hit with both ends inside words of the text is letters that run together
+ *  across them. Only ASCII is read as inside a word: Han has no breaks to read, so there every hit stands. */
+export function standsIn(bytes, word) {
+  const out = new Uint8Array(capacity(bytes))
+  const breaks = new Set()
+  const text = Buffer.from(out.buffer, 0, normalizeInto(bytes, out, breaks))
+  const inWord = (at) => text[at - 1] < 0x80 && text[at] < 0x80 && !breaks.has(at) // past either end a byte reads undefined
+  for (let at = text.indexOf(word); at >= 0; at = text.indexOf(word, at + 1)) {
+    if (!inWord(at) || !inWord(at + word.length)) return true
+  }
+  return false
 }
 
 function hashOf(bytes, at) {
