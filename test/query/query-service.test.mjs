@@ -923,7 +923,7 @@ test('relay: a request reading a cold segment index sends progress on the IPC ch
 })
 
 // 4.4 §存下的答案「刷新」: refresh({name, params}) is true while a refresh of that name is queued or running (queueing nothing more),
-// or when there is no worker or a worker whose rows are unread (queueing one refresh of these params); false when the worker is warm with no
+// or when there is no worker, a worker whose rows are unread or a request in flight (queueing one refresh of these params); false when the worker is warm and idle with no
 // refresh of the name pending, or the subject is cooling (the relay then answers 500 with its reason, D38). The stub records every line written
 // to it and answers each `hold` ms after it arrives; it has no IPC and no rows pass, so a test says `{rows: true}` by emitting it on the child.
 const refreshWorld = ({ hold = 0, script } = {}) => {
@@ -973,6 +973,30 @@ test('refresh: a live worker with its rows unread is true and gets one refresh; 
     await within((async () => { while (svc.refresh(sessions)) await new Promise((d) => setTimeout(d, 20)) })(), 10_000, 'false once the refresh landed')
     await new Promise((d) => setTimeout(d, 50))
     assert.deepEqual(lines.map((l) => l.name), ['segments', 'sessions'], 'nothing more queued')
+  } finally { svc.stop() }
+})
+
+test('refresh: with a request in flight on a warm worker it is true, and the one refresh goes to the worker behind that request (4.4 #18)', async () => {
+  const lines = []
+  let c = null
+  const svc = createQueryService({ home: rawHome('trocar-qsvc-'), failure: () => {}, fork: () => (c = Object.assign(new EventEmitter(), { stdout: Object.assign(new EventEmitter(), { pause() {}, resume() {} }), stderr: new EventEmitter(), stdin: Object.assign(new EventEmitter(), { write: (l) => lines.push(JSON.parse(l).name) }), kill() {} })) })
+  const sent = (n) => within((async () => { while (lines.length < n) await new Promise((d) => setTimeout(d, 2)) })(), 10_000, `line ${n} to the worker`)
+  const answers = () => { c.stdout.emit('data', Buffer.from('200 2\n{}')); return new Promise((d) => setTimeout(d, 20)) }
+  const sessions = { name: 'sessions', params: { limit: '500' } }
+  try {
+    const lane = svc.relay({ name: 'lane', params: { id: 'x' }, res: recorder() })
+    await sent(1)
+    c.emit('message', { rows: true })
+    assert.equal(svc.refresh(sessions), true)
+    assert.equal(svc.refresh(sessions), true)
+    assert.deepEqual(lines, ['lane'], 'nothing goes to the worker while the lane runs')
+    await answers()
+    await lane
+    await sent(2)
+    assert.deepEqual(lines, ['lane', 'sessions'])
+    await answers()
+    assert.equal(svc.refresh(sessions), false)
+    assert.deepEqual(lines, ['lane', 'sessions'])
   } finally { svc.stop() }
 })
 

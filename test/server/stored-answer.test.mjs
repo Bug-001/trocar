@@ -115,12 +115,12 @@ test('3.5 #38: a file of another STORED_V, or from before versions, is not hande
 
 // The real worker, forked by the daemon's `sweep` before anyone asks, its row pass held shut (test/query/worker-rows-deps.mjs).
 const ROWS_DEPS = fileURLToPath(new URL('../query/worker-rows-deps.mjs', import.meta.url))
-const heldWorker = async (home) => {
-  const gate = path.join(home, 'rows.open'), fork = workerForkIn({ TROCAR_TEST_ROWS_GATE: gate })
+const heldWorker = async (home, serveName = null) => {
+  const gate = path.join(home, 'gate.open'), fork = workerForkIn(serveName ? { TROCAR_TEST_SERVE_GATE: gate, TROCAR_TEST_SERVE_NAME: serveName } : { TROCAR_TEST_ROWS_GATE: gate })
   const svc = createQueryService({ home, failure: () => {}, fork: (h) => fork(h, ROWS_DEPS) })
   const face = await serveFace({ home, query: svc })
   svc.sweep()
-  return { port: face.port, open: () => fs.writeFileSync(gate, ''), close: () => { face.close(); svc.stop() } }
+  return { port: face.port, held: `${gate}.held`, open: () => fs.writeFileSync(gate, ''), close: () => { face.close(); svc.stop() } }
 }
 
 test('4.4 #18: a worker forked by the sweep with its rows held: the stored file answers at once', { timeout: 60_000 }, async () => {
@@ -146,5 +146,23 @@ test('4.4 #18: a worker forked by the sweep with its rows held and no stored fil
     const got = await within(asked, 30_000, 'sessions')
     assert.equal(got.status, 200)
     assert.equal(got.doc.stored, undefined)
+  } finally { w.close() }
+})
+
+test('4.4 #18: a lane in flight on a warm worker: the stored file answers at once, and the refresh behind the lane brings the fresh answer', { timeout: 60_000 }, async () => {
+  const home = rawHome('trocar-stored-held-')
+  writeStored(home, 'sessions', PARAMS, { sessions: [], stored: { at: '2020-01-01T00:00:00.000Z' } })
+  const w = await heldWorker(home, 'lane')
+  const fresh = () => within(until('a fresh answer', async () => { const r = await get(w.port, LIST); return r.doc && !r.doc.stored ? r : null }), 30_000, 'a fresh answer')
+  try {
+    await fresh() // the worker is warm: without a request in flight it would be forwarded
+    const lane = get(w.port, '/api/lane?id=nobody')
+    await within(until('the lane reached its worker', () => fs.existsSync(w.held)), 30_000, 'the lane held')
+    const got = await within(get(w.port, LIST), 10_000, 'sessions while the lane runs')
+    assert.equal(got.status, 200)
+    assert.ok(got.doc.stored, 'from the file')
+    w.open()
+    assert.ok((await fresh()).headers.etag, 'the fresh answer carries its ETag')
+    await within(lane, 30_000, 'the lane once its gate opened')
   } finally { w.close() }
 })
