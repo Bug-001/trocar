@@ -185,66 +185,109 @@ function commit({ dir, manifest, fresh, resumed, before, res, backup, real, char
 // `alsoSet` (names) and `fold` (4.6「名字族」: the JSON form): every member of the same object that is ALREADY there and is named in `alsoSet`, or is
 // the key's own name compared without case when `fold`, gets the value too — each one its own plain json-key entry, keyed by the member's own
 // spelling, with its own prior_value (an older build undoes it as any json-key). A member is only ever given the value: never removed, moved or
-// added. `fold` is recorded on every entry it makes (`fold: true`).
-export function applyJsonKey({ dir, manifest, harness, phase, file, keys, value, home, alsoSet = [], fold = false, door = null, now = new Date(), fs = nodeFs }) {
-  const main = setOneKey({ dir, manifest, harness, phase, file, keys, value, home, fold, door, now, fs })
-  const leaf = keys[keys.length - 1]
-  const named = (m) => isAlsoSetMember(m, leaf, alsoSet, fold)
-  if (!alsoSet.length && !fold) return main
-  let parent
-  try { parent = getPath(parseJsonText(readUserText(file, readOrNull(fs, editTarget(file, fs))).text), keys.slice(0, -1)) } catch { return main }
-  if (!parent || typeof parent !== 'object' || Array.isArray(parent)) return main
-  for (const m of Object.keys(parent).filter(named)) setOneKey({ dir, manifest, harness, phase, file, keys: [...keys.slice(0, -1), m], value, home, fold, door, now, fs })
-  return main
-}
-function setOneKey({ dir, manifest, harness, phase, file, keys, value, home, fold, door, now, fs }) {
-  needHome('applyJsonKey', home)
-  needPhase('applyJsonKey', phase)
-  const j = judgeEntry({ manifest, planned: { harness, kind: 'json-key', path: file, keys }, fs })
-  if (j.action === 'skip-intact') return null // nothing written, as when the key already held the value
-  if (j.action === 'skip-user-changed') throw refuseChanged(j)
-  const real = editTarget(file, fs)
-  const before = readOrNull(fs, real)
-  if (j.adopt) { j.entry.post_sha256 = sha256(before); saveManifest(dir, manifest, fs); return j.entry } // the file was written; only the record of it was not
-  const read = readUserText(file, before)
-  const res = setUserKey(file, read.text, keys, value) // parse-checked before any write
-  if (res.prior === value) return null
-  const resumed = j.action === 'resume' ? j.entry : null
-  const fresh = {
-    kind: 'json-key', harness, phase, path: file, ...(real !== file ? { real_path: real } : {}), keys, value,
-    existed_before: before != null, mode: before != null ? fs.statSync(real).mode & 0o777 : 0o600,
-    pre_sha256: sha256(before), post_sha256: null, ops: res.ops, prior_value: res.prior,
-    existing_depth: res.existingDepth, created_dirs: missingDirs(path.dirname(file), fs), installed_at: now.toISOString(), ...(fold ? { fold: true } : {}), ...(door ? { door } : {}),
-  }
-  return commit({ dir, manifest, fresh, resumed, before, res, real, charset: read.charset, now, fs, backup: () => backupFirst({ home, file, before, now, fs }) }) // keyed by the path the user knows (the link, for a symlinked file), holding the target's bytes
+// added. `fold` is recorded on every entry it makes (`fold: true`). → the entry for `keys`, or null when nothing was written for it.
+export function applyJsonKey({ keys, value, alsoSet = [], fold = false, ...rest }) {
+  needHome('applyJsonKey', rest.home)
+  needPhase('applyJsonKey', rest.phase)
+  return applyJsonKeys({ ...rest, sets: [{ keys, value, alsoSet, fold }] }).find((x) => (x.kind ?? 'json-key') === 'json-key' && sameKeys(x.keys, keys)) ?? null
 }
 
 // One element trocar appends to a JSON array (4.11 P5 `arrayItems`, kind `json-array-item`; undone by src/off/journal.mjs undoEntry: only that element goes,
 // and the array too when trocar created it and it is empty again). Judged and committed as a json-key is; an array that already holds the element is
 // left as it is (null: nothing trocar added, nothing to undo).
-export function applyJsonArrayItem({ dir, manifest, harness, phase, file, keys, item, home, door = null, now = new Date(), fs = nodeFs }) {
-  needHome('applyJsonArrayItem', home)
-  needPhase('applyJsonArrayItem', phase)
-  const j = judgeEntry({ manifest, planned: { harness, kind: 'json-array-item', path: file, keys, item }, fs })
-  if (j.action === 'skip-intact') return null
-  if (j.action === 'skip-user-changed') throw refuseChanged(j)
+export function applyJsonArrayItem({ keys, item, ...rest }) {
+  needHome('applyJsonArrayItem', rest.home)
+  needPhase('applyJsonArrayItem', rest.phase)
+  return applyJsonKeys({ ...rest, items: [{ keys, item }] }).find((x) => x.kind === 'json-array-item' && sameKeys(x.keys, keys) && isDeepStrictEqual(x.item, item)) ?? null
+}
+
+/** Every key (`sets`: {keys, value, alsoSet?, fold?}) and array element (`items`: {keys, item}) one command puts in one JSON file, written once (4.6「日志」):
+ *  one record per key or element, edited in memory one after the other, so record k's pre is record k-1's post and undo last-first lands on each in
+ *  turn. Only the first carries `backup` (the user's bytes before the command); it is undone last. Intents a crashed run left for this file are
+ *  finished first, as a group: still at the first one's pre → planned again (its backup kept); already written → adopted; anything else → refused.
+ *  → the records written or adopted. */
+export function applyJsonKeys({ dir, manifest, harness, phase, file, sets = [], items = [], home, door = null, now = new Date(), fs = nodeFs }) {
+  needHome('applyJsonKeys', home)
+  needPhase('applyJsonKeys', phase)
   const real = editTarget(file, fs)
   const before = readOrNull(fs, real)
-  if (j.adopt) { j.entry.post_sha256 = sha256(before); saveManifest(dir, manifest, fs); return j.entry }
+  const pending = manifest.entries.filter((x) => x.harness === harness && samePath(x.path, file, fs) && ['json-key', 'json-array-item'].includes(x.kind ?? 'json-key') && x.post_sha256 == null)
+  let reuse = null, dirs = []
+  if (pending.length) {
+    const p0 = pending[0]
+    if (sha256(before) === p0.pre_sha256 || (before == null && !p0.existed_before)) { // the write never happened: plan it again
+      for (const x of pending) manifest.entries.splice(manifest.entries.indexOf(x), 1)
+      reuse = p0.backup && fs.existsSync(p0.backup) ? p0.backup : null
+      dirs = pending.flatMap((x) => x.created_dirs || [])
+    } else {
+      const now0 = before == null ? null : readUserText(file, before).text
+      const texts = [now0]
+      for (let k = pending.length - 1; k >= 0 && texts[0] != null; k--) texts.unshift(reverseOps(texts[0], unseal(pending[k], now0).ops || []))
+      const t0 = texts[0]
+      if (t0 == null || !(p0.existed_before ? sha256(encodeText(t0, p0.charset || 'utf8')) === p0.pre_sha256 : t0 === '')) {
+        throw refuseChanged({ entry: p0, why: `${file} changed after an earlier run recorded its intent to change it, and is not what that run would have written` })
+      }
+      pending.forEach((x, k) => { x.post_sha256 = k === pending.length - 1 ? sha256(before) : sha256(encodeText(texts[k + 1], x.charset || 'utf8')) })
+      saveManifest(dir, manifest, fs) // the file was written; only the record of it was not
+      return pending
+    }
+  }
   const read = readUserText(file, before)
-  let res
-  try { res = addItem(read.text, keys, item) } catch (e) {
-    if (!e || !e.why) throw e
-    throw Object.assign(new Error(`${file} was not changed: ${e.message.replace(/^(setKey|addItem): /, '')}`), { code: CODE_OFF.entryRefused, why: e.why, path: file })
+  const charset = read.charset
+  let text = read.text
+  const steps = [] // { rec, text }: each planned edit, on the text the one before it made
+  const plan = (planned, edit) => {
+    const j = judgeEntry({ manifest, planned: { harness, path: file, ...planned }, fs })
+    if (j.action === 'skip-intact') return
+    if (j.action === 'skip-user-changed') throw refuseChanged(j)
+    const s = edit(text) // parse-checked before any write
+    if (s) { steps.push(s); text = s.text }
   }
-  if (res == null) return null
-  const fresh = {
-    kind: 'json-array-item', harness, phase, path: file, ...(real !== file ? { real_path: real } : {}), keys, item, created_array: res.createdArray,
-    existed_before: before != null, mode: before != null ? fs.statSync(real).mode & 0o777 : 0o600,
-    pre_sha256: sha256(before), post_sha256: null, ops: res.ops, prior_value: null,
-    existing_depth: res.existingDepth, created_dirs: missingDirs(path.dirname(file), fs), installed_at: now.toISOString(), ...(door ? { door } : {}),
+  for (const { keys, value, alsoSet = [], fold = false } of sets) {
+    const one = (k) => plan({ kind: 'json-key', keys: k }, (t) => {
+      const res = setUserKey(file, t, k, value)
+      return res.prior === value ? null : { text: res.text, rec: { kind: 'json-key', keys: k, value, ops: res.ops, prior_value: res.prior, existing_depth: res.existingDepth, ...(fold ? { fold: true } : {}) } }
+    })
+    one(keys)
+    if (!alsoSet.length && !fold) continue
+    let parent
+    try { parent = getPath(parseJsonText(text), keys.slice(0, -1)) } catch { continue }
+    if (!parent || typeof parent !== 'object' || Array.isArray(parent)) continue
+    for (const m of Object.keys(parent).filter((m) => isAlsoSetMember(m, keys[keys.length - 1], alsoSet, fold))) one([...keys.slice(0, -1), m])
   }
-  return commit({ dir, manifest, fresh, resumed: j.action === 'resume' ? j.entry : null, before, res, real, charset: read.charset, now, fs, backup: () => backupFirst({ home, file, before, now, fs }) })
+  for (const { keys, item } of items) {
+    plan({ kind: 'json-array-item', keys, item }, (t) => {
+      let res
+      try { res = addItem(t, keys, item) } catch (e) {
+        if (!e || !e.why) throw e
+        throw Object.assign(new Error(`${file} was not changed: ${e.message.replace(/^(setKey|addItem): /, '')}`), { code: CODE_OFF.entryRefused, why: e.why, path: file })
+      }
+      return res == null ? null : { text: res.text, rec: { kind: 'json-array-item', keys, item, created_array: res.createdArray, ops: res.ops, prior_value: null, existing_depth: res.existingDepth } }
+    })
+  }
+  if (!steps.length) return []
+  const enc = (t) => encodeText(t, charset)
+  const mode = before != null ? fs.statSync(real).mode & 0o777 : 0o600
+  const backup = reuse ?? backupFirst({ home, file, before, now, fs }) // keyed by the path the user knows (the link), holding the target's bytes
+  const recs = steps.map(({ rec }, k) => {
+    const { kind, ...what } = rec
+    const r = {
+      kind, harness, phase, path: file, ...(real !== file ? { real_path: real } : {}), ...what,
+      existed_before: k === 0 ? before != null : true, mode, pre_sha256: k === 0 ? sha256(before) : sha256(enc(steps[k - 1].text)), post_sha256: null,
+      created_dirs: k === 0 ? [...new Set([...dirs, ...missingDirs(path.dirname(file), fs)])] : [], installed_at: now.toISOString(),
+      backup: k === 0 ? backup : null, ...(door ? { door } : {}), ...(charset !== 'utf8' ? { charset } : {}),
+    }
+    r.undo_by_hand = undoByHand(r)
+    return r
+  })
+  manifest.entries.push(...recs)
+  saveManifest(dir, manifest, fs) // every intent is durable (and sealed) before the user's file changes
+  makeDirs(recs[0], fs)
+  const bytes = enc(text)
+  writeDurable(real, bytes, mode, fs)
+  recs.forEach((r, k) => { r.post_sha256 = k === recs.length - 1 ? sha256(bytes) : sha256(enc(steps[k].text)) })
+  saveManifest(dir, manifest, fs)
+  return recs
 }
 
 // A text entry (text-edit.mjs): edit = { format: 'dotenv-block', vars, quote?, neutralize?, fold? } (the names put out of effect with the

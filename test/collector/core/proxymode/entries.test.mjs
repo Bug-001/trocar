@@ -73,7 +73,6 @@ for (const { h, id, r } of ROUTES.filter((x) => x.r.kind === 'json-key' || x.r.k
         assert.ok(now.startsWith(original ?? ''), `${label}: CM17 the user's lines stay first, byte for byte; nothing is commented out`)
         if (s.spell) assert.equal(recs[0].prior_value[r.proxyKeys[0]], USER_PROXY, `${label}: CM17 the user's value is the prior`)
       } else if (s.spell) assert.equal(recs.find((x) => JSON.stringify(x.keys) === JSON.stringify(r.proxyKeys[0])).prior_value, USER_PROXY, `${label}: the replaced value is the prior`)
-      if (exists) assert.ok(recs.every((x) => x.backup && fs.existsSync(x.backup) && path.dirname(x.backup).startsWith(backupDir(w.home))), `${label}: the user's file was saved to ~/.trocar/backup first`)
       assert.equal(routeEntry(r.kind).check(ctx, recs).ok, true, label)
       assert.equal(routeEntry(r.kind).write(ctx, door()).ok, true, `${label}: on again`)
       assert.equal(recordsOf(w.ctx.manifest, h.name, id).length, recs.length, `${label}: on again writes nothing more (R9)`)

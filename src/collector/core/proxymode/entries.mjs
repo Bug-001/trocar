@@ -10,7 +10,7 @@
 // nothing changed. Records carry `route` (the route id: one entry group) and the door written (sealed at save: `door_sha256`, src/off/seal.mjs), so a moved door rewrites that route only.
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { applyJsonKey, applyJsonArrayItem, applyTextEntry, writeOwnedFile, judgeOwned, saveManifest, undoEntry, removeOwnedFile, sha256 } from '../trust/journal.mjs'
+import { applyJsonKey, applyJsonKeys, applyTextEntry, writeOwnedFile, judgeOwned, saveManifest, undoEntry, removeOwnedFile, sha256 } from '../trust/journal.mjs'
 import { parseJsonText, getPath } from '../../../off/json-text.mjs'
 import { decodeText } from '../../../off/text-codec.mjs'
 import { parseDotenv } from '../config-read.mjs'
@@ -84,9 +84,9 @@ function writeJson(ctx, door) {
   if (!create && text === null && r.absent === 'not-routed') return notRouted('absent', file)
   const doc = parse(text)
   if (r.value === 'pac-url' && doc) { const g = pacGate(ctx, doc, file, value); if (g) return g }
-  for (const keys of r.proxyKeys || []) out.push(applyJsonKey({ ...b, file, keys, value }))
-  if (r.noProxyKeys) { const v = noProxy(ctx, r.noProxyKeys.map((k) => (doc ? getPath(doc, k) : undefined))); for (const keys of r.noProxyKeys) out.push(applyJsonKey({ ...b, file, keys, value: v })) }
-  for (const a of r.arrayItems || []) out.push(applyJsonArrayItem({ ...b, file, keys: a.keys, item: a.value }))
+  const sets = (r.proxyKeys || []).map((keys) => ({ keys, value }))
+  if (r.noProxyKeys) { const v = noProxy(ctx, r.noProxyKeys.map((k) => (doc ? getPath(doc, k) : undefined))); for (const keys of r.noProxyKeys) sets.push({ keys, value: v }) }
+  out.push(...applyJsonKeys({ ...b, file, sets, items: (r.arrayItems || []).map((a) => ({ keys: a.keys, item: a.value })) })) // one write, one backup (4.6「日志」)
   if (create) out.push(applyJsonKey({ ...b, file: create.meta, keys: [ctx.route.select.idKey], value: create.id }))
   return { ok: true, records: out }
 }
