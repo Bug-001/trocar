@@ -296,3 +296,28 @@ for (const { h, id, r } of (await loadHarnesses()).flatMap((d) => Object.entries
     })
   }
 }
+
+// the same through `off` itself on macOS (runOff, its receipt, its --dry-run): the door value is undone after a yes, and with ingress.json unreadable the
+// receipt names the file it left. One route stands for all: the generated cases above cover each.
+test('off on darwin with the manifest gone: --yes takes the door value out (undone-by-marker); with ingress.json unreadable the receipt, real and dry run, names the file and it stays', async () => {
+  const { runOff } = await import('../../src/off/orchestrate.mjs')
+  const zc = (await loadHarnesses()).find((d) => d.name === 'z-code')
+  const [id, r] = Object.entries(zc.proxyMode.routes).find(([, x]) => x.kind === 'json-key')
+  const s = (() => { const w = world({ os: 'darwin' }); const ctx = { ...w.ctx, harness: zc.name, routeId: id, route: r }; return { w, ctx, file: resolveLoc(r.file, ctx)[0] } })()
+  fs.mkdirSync(path.dirname(s.file), { recursive: true }); fs.writeFileSync(s.file, '{ "keep": 1 }\n')
+  putIngress(s.w.dir, PORT)
+  assert.ok(routeEntry('json-key').write(s.ctx, door(PORT)).ok)
+  const off = (o) => runOff({ home: s.w.home, env: { HOME: s.w.home }, ids: [zc.name], ...o, deps: { platform: 'darwin', exec: () => ({ status: 1, stdout: '', stderr: 'no tool here' }), procs: async () => [], sleep: async () => {} } })
+  fs.rmSync(manifestPath(s.w.dir))
+  const on = read(s.file)
+  fs.rmSync(path.join(s.w.dir, 'ingress.json'))
+  for (const o of [{ dryRun: true }, { yes: true }]) {
+    const { receipt } = await off(o)
+    assert.ok(receipt.notes.some((n) => n.includes(s.file)), `${JSON.stringify(o)}: ${JSON.stringify(receipt.notes)}`)
+    assert.equal(read(s.file), on)
+  }
+  putIngress(s.w.dir, PORT)
+  const { receipt, exit } = await off({ yes: true })
+  assert.deepEqual([exit, receipt.undone_by_marker], [0, true], JSON.stringify(receipt.problems))
+  r.proxyKeys.forEach((k) => assert.equal(valueAt(parseJsonText(read(s.file)), k), undefined, k.join('.')))
+})

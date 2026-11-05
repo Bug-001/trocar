@@ -150,6 +150,32 @@ async function serveControl(daemon) {
   return { run, server, close: () => new Promise((resolve) => server.close(resolve)) }
 }
 
+// the copy on macOS: a door value a json-key route wrote, with the manifest gone, goes after --yes as it does under `trocar off` (marker.test.mjs). launchd is a
+// stub that answers nothing (a function literal in the entry, as AS_LINUX's table is), so no real launchctl is asked.
+test('V2: with the install manifest lost the copy on darwin takes out a door value `on` wrote, after a yes', async () => {
+  const { world, door } = await import('../collector/core/proxymode/fixtures/entries-ctx.mjs')
+  const { routeEntry } = await import('../../src/collector/core/proxymode/entries.mjs')
+  const { loadHarnesses } = await import('../../src/collector/harness/index.mjs')
+  const { resolveLoc } = await import('../../src/off/loc.mjs')
+  const zc = (await loadHarnesses()).find((d) => d.name === 'z-code')
+  const [id, r] = Object.entries(zc.proxyMode.routes).find(([, x]) => x.kind === 'json-key')
+  const w = world({ os: 'darwin' }), ctx = { ...w.ctx, harness: zc.name, routeId: id, route: r }
+  const file = resolveLoc(r.file, ctx)[0]
+  fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, '{ "keep": 1 }\n')
+  fs.writeFileSync(path.join(w.dir, 'ingress.json'), JSON.stringify({ groupPorts: { a: 18001 } }))
+  assert.ok(routeEntry('json-key').write(ctx, door(18001)).ok)
+  fs.rmSync(manifestPath(w.dir))
+  writeStandalone({ home: w.home, platform: 'darwin' })
+  const text = fs.readFileSync(standalonePath(w.home), 'utf8')
+  assert.ok(text.includes(STANDALONE_ENTRY))
+  const asDarwin = `runOffCli(process.argv.slice(2), { standalone: true, platform: 'darwin', deps: { platform: 'darwin', exec: () => ({ status: 1, stdout: '', stderr: 'stub' }), procs: async () => [], getuid: () => 1000, sleep: async () => {} } })`
+  const run = await runCopy(text.replace(STANDALONE_ENTRY, asDarwin), [zc.name, '--yes', '--json'], { env: { HOME: w.home, PATH: stubBin().bin } })
+  assert.equal(run.status, 0, run.stdout + run.stderr)
+  assert.equal(JSON.parse(run.stdout).undone_by_marker, true)
+  const after = JSON.parse(fs.readFileSync(file, 'utf8'))
+  assert.deepEqual([after.keep, ...r.proxyKeys.map((k) => k.reduce((o, x) => (o == null ? o : o[x]), after))], [1, ...r.proxyKeys.map(() => undefined)], 'the door key is gone, the rest stays')
+})
+
 test('V2: a daemon that answers is told to switch off by the copy, over the control socket, and the receipt is the same', async (t) => {
   const a = await installedHome({ names: ['claude-code', 'codex'] }), b = await installedHome({ names: ['claude-code', 'codex'] }) // both daemons up after on
   const ctl = await serveControl(b.sys.daemon)
