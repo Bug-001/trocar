@@ -5,7 +5,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { createDesk, applySession, applyLane, listOf, stepOf, laneEvents, askOrdinal, applyLedger, ledgerAsk, ledgerDone,
-  readLedger, seenFiles } from '../../web/legacy/replay/model.mjs'
+  readLedger, seenFiles, compactionNumbers } from '../../web/legacy/replay/model.mjs'
 import { world, readLane, deskFrom } from './desk-world.mjs'
 
 const fx = JSON.parse(fs.readFileSync(new URL('../fixtures/session-read-contract.json', import.meta.url), 'utf8'))
@@ -284,4 +284,27 @@ test('3.5 tail page: a reset holds the tail page only, prev pages restore every 
     for (const [b, d] of desk.defs) assert.equal(d.bid, b)
   }
   assert.ok(resent > 0, 'some --from answer resends a held definition')
+})
+
+// 2.4 压缩行: a harness's request shows the numbers of its landing, an inferred compaction its own, in whatever order the events arrived.
+test('2.4 compactionNumbers: marked landed, marked unlanded, inferred, two in a row, shuffled', () => {
+  const marked = (step, from) => ({ type: 'compaction', step, from, to: from + 1, inferred: false })
+  const inferred = (step, from, to) => ({ type: 'compaction', step, from, to, inferred: true })
+  const landed = (step, from, to) => ({ type: 'compaction-landed', step, from, to })
+  const others = [{ type: 'summarize', step: 1, out: 9 }, { type: 'user', step: 2 }]
+  const m1 = marked(3, 40), m2 = marked(6, 12), m3 = marked(9, 30), i1 = inferred(12, 50, 5), l1 = landed(4, 41, 12), l2 = landed(7, 13, 3), late = landed(13, 5, 2)
+  for (const [events, want] of [
+    [[m1, l1], [[m1, 41, 12]]],
+    [[m1], [[m1, 40, null]]],
+    [[i1], [[i1, 50, 5]]],
+    [[i1, late], [[i1, 50, 5]]],
+    [[m1, m2, l2], [[m1, 40, null], [m2, 13, 3]]],
+    [[m1, l1, m2, l2, m3, i1, late], [[m1, 41, 12], [m2, 13, 3], [m3, 30, null], [i1, 50, 5]]],
+  ]) for (let turn = 0; turn < events.length; turn++) {
+    const list = [...events.slice(turn), ...others, ...events.slice(0, turn)]
+    const got = compactionNumbers(list, (e) => e.step)
+    assert.deepEqual([...got.keys()].filter((e) => e.type !== 'compaction'), [])
+    assert.deepEqual(want.map(([e]) => got.get(e)), want.map(([, from, to]) => ({ from, to })))
+    assert.equal(got.size, want.length)
+  }
 })

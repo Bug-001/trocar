@@ -83,11 +83,11 @@ function turn(next, i, growth, reads, names) {
 /**
  * bigSession({home, id, wire, growth, seed, subEvery, subLen, segment}) → a writer of ONE session into <home>/raw/<segment>.ndjson.
  * A subagent's context starts over (a new subagent) once it holds more than `subLen` messages; the main one (a compaction: a new
- * thread or chain) once it holds more than `compactAt` characters.
+ * thread or chain) once it holds more than `compactAt` characters; `compactMark`: the main call before that is the harness's marked request.
  * `append(n)` appends the next n calls (as the daemon would, one line each) and returns the session's stored bytes so far.
  */
 export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire = 'http', growth = 2_500, seed = 7, subEvery = 5, subLen = 30, subLanes = 1, late = 0, compactAt = 1_000_000, segment = '20261020T164737Z', preamble = '', cc = 0, reads = 0, names = 0, freshTools = 0, hugeEvery = 0, hugeBytes = 40_000, imageEvery = 0, failEvery = 0, tools = null,
-  paths = 0, pathPool = 0, prompt = 0, writes = 0, bigEvery = 0, bigBytes = 2_000_000, bigRun = 4, shared = 0, quiet = null, marked = false, hold = null, seal = 64 << 10 } = {}) {
+  paths = 0, pathPool = 0, prompt = 0, writes = 0, bigEvery = 0, bigBytes = 2_000_000, bigRun = 4, shared = 0, quiet = null, marked = false, compactMark = false, hold = null, seal = 64 << 10 } = {}) {
   const next = rng(seed), delay = rng(seed + 1), xr = rng(seed + 2)
   let file = path.join(home, 'raw', `${segment}.ndjson`)
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
@@ -193,7 +193,7 @@ export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire 
         : { ...(threads ? { thread: { type: 'create' } } : {}), system: sub && marked ? [...sys, { type: 'text', text: 'x-anthropic-billing-header: cc_is_subagent=true;' }] : sys, messages: mark(ask) }) }
       env = {
         ts, endpoint: '/v1/messages', method: 'POST',
-        req_headers: { host: 'api.anthropic.com', 'content-type': 'application/json', 'user-agent': 'claude-cli/2.0.0 (external, cli)', 'x-app': 'cli', 'x-claude-code-session-id': id, ...(agent ? { 'x-claude-code-agent-id': agent } : {}), 'anthropic-version': '2023-06-01' },
+        req_headers: { host: 'api.anthropic.com', 'content-type': 'application/json', 'user-agent': 'claude-cli/2.0.0 (external, cli)', 'x-app': 'cli', 'x-claude-code-session-id': id, ...(compactMark && !sub && lane.chars > compactAt ? { 'x-cc-compaction-request': '1' } : {}), ...(agent ? { 'x-claude-code-agent-id': agent } : {}), 'anthropic-version': '2023-06-01' },
         req_body: JSON.stringify(body),
         resp: failed ? { status: 529, kind: 'json', body: { type: 'error', error: { type: 'overloaded_error', message: 'Overloaded' } } } : threads ? replyOf(msgId, reply, usage) : { status: 200, kind: 'json', body: { id: msgId, model: MODEL, stop_reason: n % 4 ? 'tool_use' : 'end_turn', content: reply, usage } },
         id: reqId, ts_request: ts, ts_response_start: ts, ts_response_end: ts, duration_ms: 900,

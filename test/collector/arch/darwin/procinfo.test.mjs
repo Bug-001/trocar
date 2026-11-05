@@ -7,7 +7,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import path from 'node:path'
-import { factsOfPid, cwdOf, parentOf } from '../../../../src/collector/arch/darwin/procinfo.mjs'
+import { factsOfPid, cwdOf, parentOf, envOf, realExeOf } from '../../../../src/collector/arch/darwin/procinfo.mjs'
+import { ownerOfSocket } from '../../../../src/collector/arch/darwin/socktable.mjs'
+import { ASK_HANG_MS, execTool } from '../../../../src/off/exec.mjs'
 import { psLocale } from '../../../off/fixtures/darwin-tools.mjs'
 
 const HELPER = '/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper'
@@ -75,4 +77,32 @@ test('every ps of the targeted asks reads the same whatever the user\'s locale s
     assert.equal(f.startedAt, at.getTime(), JSON.stringify(env))
     assert.deepEqual(parentOf(42, { exec: run, env, cache: new Map() }), { ppid: 100, startedAt: up.getTime() }, JSON.stringify(env))
   }
+})
+
+test('every question at the door waits for the one hang limit, ASK_HANG_MS (4.9 §1)', async () => {
+  const asks = {
+    'ps row': (exec) => factsOfPid(42, { exec, env: {}, cache: new Map() }),
+    'ps comm': (exec) => realExeOf(42, { exec, env: {}, cache: new Map() }),
+    procenv: (exec) => envOf(42, ['HOME'], { exec, env: {}, cache: new Map() }),
+    'parent ps': (exec) => parentOf(42, { exec, env: {}, cache: new Map() }),
+    socktable: (exec) => ownerOfSocket({ exec: (file, args, o) => execTool(file, args, { run: exec, ...o }), peer: { address: '127.0.0.1', port: 52312 } }),
+  }
+  for (const [name, ask] of Object.entries(asks)) {
+    const waits = []
+    await ask((file, args, o) => { waits.push(o.timeout); return { status: 1, stdout: '', stderr: '' } })
+    assert.ok(waits.length > 0, name)
+    for (const ms of waits) assert.equal(ms, ASK_HANG_MS, name)
+  }
+})
+
+test('MA18 a ps that answers 0 without a row it can read is told as unread, and a ps that never started says why', () => {
+  const unread = (answer) => { const why = []; return { facts: factsOfPid(42, { exec: () => answer, env: {}, cache: new Map(), onUnread: (w) => why.push(w) }), why } }
+  for (const stdout of ['', '\n', 'a line no ps of ours prints\n']) {
+    const { facts: f, why } = unread({ status: 0, stdout, stderr: '' })
+    assert.equal(f, null, JSON.stringify(stdout))
+    assert.equal(why.length, 1, JSON.stringify(stdout))
+  }
+  const { facts: f, why } = unread({ status: null, stdout: '', stderr: '', error: new Error('spawn ps ENOENT') })
+  assert.equal(f, null)
+  assert.match(why[0], /ENOENT/)
 })

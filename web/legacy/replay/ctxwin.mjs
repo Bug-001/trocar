@@ -18,7 +18,7 @@ import { READABLE_VIEW } from '../labels/cells.mjs'
 import { setFold, turnAnchorKey } from './fold.mjs'
 import { ctxBlockHtml, blockRowHtml, fillBody, showBody, faithOf, ffBadgeHtml, tagWord, bodyFor } from './blocks.mjs'
 import { stepOf } from './model.mjs'
-import { windowItems, landingFor, rowKeys, turnsOf, turnOpen } from '../../src/screens/replay/window-model.mjs' // the window's rules (both desks)
+import { windowItems, landed, landingFor, rowKeys, turnsOf, turnOpen } from '../../src/screens/replay/window-model.mjs' // the window's rules (both desks)
 
 export { blockBodyHtml } from './blocks.mjs'
 export { landingTarget, rowKeys } from '../../src/screens/replay/window-model.mjs'
@@ -104,7 +104,7 @@ export function ctxWindowUnits(s, { all = false, focus = null } = {}) {
   const winLine = items.some((it) => it.type === 'win'), out = [], groups = []
   let turn = null, g = null, pend = [] // the open turn's kids; its current group; the change line waiting for its row
   for (const it of items) {
-    if (it.type === 'turn') {
+    if (it.type === 'card') {
       turn = it.open ? [] : null; g = null
       out.push({ key: it.key, set: { 'data-turn': it.ti }, html: turnHtml(it), kids: turn || [] })
       continue
@@ -168,7 +168,7 @@ function replyUnit({ failed, empty, stop, rows }) {
 // `focus`: a list position whose group is drawn now (a jump); otherwise the landing target, else the row at the window's top.
 export function renderContextWindow(el, s, { busy = false, focus = null } = {}) {
   el.__gen = (el.__gen || 0) + 1
-  const t = landingDue(s)
+  const t = landingDue(el, s)
   const units = ctxWindowUnits(s, { focus: focus ?? (t ? t.fi : null) ?? topRow(el, s) ?? 0 })
   if (!busy && el.__units && units.some((u) => u.key === 'frames')) return
   paint(el, units)
@@ -244,13 +244,14 @@ function hydrate(el, s) {
 // held; later repaints of the same step never scroll again. It is decided before the units are built, so the target's group is
 // drawn in the same paint. A target inside a folded turn opens that turn for this display only (s.turnLanded) — the D12 memory
 // records the reader's own folds.
-function landingDue(s) {
-  const t = landingFor(s)
+function landingDue(el, s) {
+  const t = landingFor(s, () => el.scrollTop)
   if (t && t.turn != null) s.turnLanded.add(t.turn)
   return t
 }
-function land(el, s, { t }) {
-  s.landedFor = s.anchor.calls[s.playhead].rid
+function land(el, s, due) {
+  landed(s, due, () => el.scrollTop)
+  const { t } = due
   const node = !t || !el.querySelector ? null : t.reply ? el.querySelector('.cwreply') : t.anchor ? el.querySelector('#cachebrk') : el.querySelector(`.cblk[data-bi="${t.bi}"]`)
   if (!node || typeof node.scrollIntoView !== 'function') return
   unreal(s)
@@ -267,12 +268,13 @@ const unreal = (s) => { for (const x of s.landReal || []) x.classList.remove('cw
 // screen with the target are made real (.cwreal) first: within one window height of its top, which holds as each is never shorter than
 // its preset. Card by card from the outside in (a card's rows count once the card is real), reading the rects of one level per layout.
 function realBand(el, node) {
-  const H = el.clientHeight, kids = new Map(), real = []
-  for (const x of el.querySelectorAll('.cblk, .cwturn')) {
-    const up = x.parentElement.closest('.cwturn'), k = up && el.contains(up) ? up : null
-    kids.has(k) ? kids.get(k).push(x) : kids.set(k, [x])
-  }
-  let level = kids.get(null) || []
+  const H = el.clientHeight
+  // a level's rows are asked for when the band reaches them: the walk costs what the band holds, not what the window holds
+  const kidsOf = (card) => [...card.querySelectorAll('.cblk, .cwturn')].filter((x) => x.parentElement.closest('.cwturn') === card)
+  // the target's own turns first: skipped at their preset height, the rects around them say the target lies below the whole list
+  const real = []
+  for (let x = node; (x = x.parentElement.closest('.cwturn')) && el.contains(x);) { x.classList.add('cwreal'); real.push(x) }
+  let level = [...el.querySelectorAll('.cblk:not(.cwturn .cblk), .cwturn:not(.cwturn .cwturn)')]
   while (level.length) {
     const y = node.getBoundingClientRect().top, lo = y - H, hi = y + H, box = (i) => level[i].getBoundingClientRect()
     let a = 0, b = level.length // in document order the rects go down: the first one whose bottom reaches the band
@@ -281,7 +283,7 @@ function realBand(el, node) {
     for (let i = a; i < level.length && box(i).top <= hi; i++) hit.push(level[i])
     for (const x of hit) x.classList.add('cwreal')
     real.push(...hit)
-    level = hit.flatMap((x) => x.classList.contains('collapsed') ? [] : kids.get(x) || [])
+    level = hit.flatMap((x) => x.classList.contains('collapsed') || !x.classList.contains('cwturn') ? [] : kidsOf(x))
   }
   return real
 }

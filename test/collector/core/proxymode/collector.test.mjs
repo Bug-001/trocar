@@ -39,12 +39,13 @@ const ready = { state: () => 'ready' }
 const manifestOf = (h, { on = [], liveness = {} } = {}) => ({ ...newManifest(), entries: [{ phase: 'install', harness: h, kind: 'json-key', path: '/x', installed_at: iso(INSTALLED) }, { phase: 'install', harness: null, kind: 'system-root', installed_at: iso(INSTALLED) }, ...on], liveness })
 
 /** One collector over one harness: `w` is what the injected readers answer now (facts, env, cwd, verdict ctx, manifest, process table). */
-async function rig({ desc, os = 'darwin', custody = stub, rootPem = STUB_PEM, w = {}, opened = [], taken = new Set(), timers, ingress, upstreamRoots = null, others = [], forget, holds, dir = tmpDir() } = {}) {
+async function rig({ desc, os = 'darwin', custody = stub, rootPem = STUB_PEM, w = {}, opened = [], taken = new Set(), timers, ingress, upstreamRoots = null, others = [], forget, holds, doorHangMs, dir = tmpDir() } = {}) {
+  const asked = {}, gate = (q, x) => w.wait?.(q, x, asked[`${q}\0${x}`] = (asked[`${q}\0${x}`] ?? 0) + 1) // w.wait(question, pid, nth of that question of that pid): a promise holds it
   const records = [], ctx = { os, home: '/h', dirs: {}, join: path.posix.join, readFile: (p) => w.ctx.readFile(p), readdir: (d) => w.ctx.readdir(d), exists: (p) => w.ctx.exists(p), policy: (s) => w.ctx.policy(s) }
   w.ctx ||= ctxOf(newWorld(os))
-  const c = createModelCollector({ harnesses: [desc, ...others], dir, ctx, custody, rootPem, proxyOf, upstreamRoots, templates: TEMPLATES, ownUid: 501, timers, record: (r) => records.push(r),
-    identify: (f) => (f.agent ? { reason: 'match', agent: f.agent } : { reason: 'no-match' }), ownerOf: async () => ({ pid: w.pid, source: 'socket-table', ms: 1, ...(w.owner || {}) }), factsOf: async (q, o) => { if (w.facts == null && w.factsWhy && o && o.onUnread) o.onUnread(w.factsWhy); return w.facts },
-    proc: { envOf: async (_, names) => (w.envCalls = (w.envCalls || 0) + 1, w.env == null ? null : (w.asked && w.asked.push(...names), Object.fromEntries(Object.entries(w.env).filter(([k]) => names.includes(k))))), cwdOf: async () => w.cwd ?? null, parentOf: async () => null }, systemProxy: () => w.sp ?? null, hostsOf: () => w.hostSet ?? null,
+  const c = createModelCollector({ harnesses: [desc, ...others], dir, ctx, custody, rootPem, proxyOf, upstreamRoots, templates: TEMPLATES, ownUid: 501, timers, doorHangMs, record: (r) => records.push(r),
+    identify: (f) => (f.agent ? { reason: 'match', agent: f.agent } : { reason: 'no-match' }), ownerOf: async () => { await gate('ownerOf'); return { pid: w.pid, source: 'socket-table', ms: 1, ...(w.owner || {}) } }, factsOf: async (q, o) => { await gate('factsOf', q); if (w.facts == null && w.factsWhy && o && o.onUnread) o.onUnread(w.factsWhy); return w.facts },
+    proc: { envOf: async (q, names) => (await gate('envOf', q), w.envCalls = (w.envCalls || 0) + 1, w.env == null ? null : (w.asked && w.asked.push(...names), Object.fromEntries(Object.entries(w.env).filter(([k]) => names.includes(k))))), cwdOf: async (q) => (await gate('cwdOf', q), w.cwd ?? null), parentOf: async (q) => (await gate('parentOf', q), w.parent ? w.parent(q) : null) }, systemProxy: () => w.sp ?? null, hostsOf: () => w.hostSet ?? null,
     readState: () => w.state, readIngress: () => ingress || { groupPorts: {}, listenerToken: TOKEN }, readManifest: () => { if (w.manifestErr) throw w.manifestErr; return w.manifest || manifestOf(desc.name) }, procTable: async () => w.procs || [], clock: () => w.now ?? INSTALLED + 5, ...(forget ? { forget } : {}), ...(holds ? { holds } : {}) })
   c.bindDoors({ open: async (l) => { for (const x of l) { if (taken.has(x.port)) throw Object.assign(new Error('listen EADDRINUSE'), { code: 'EADDRINUSE' }); opened.push(x) } }, close: async (ids) => { opened.push(...ids.map((id) => ({ closed: id }))) } })
   await c.start()
@@ -264,7 +265,7 @@ test('CM19 / CM33 · the PAC door: this user\'s process gets the PAC (door leg w
   w.owner = { why: 'shared', sameUser: true } // the table proves the end is this user's but names no single pid (4.9 §5.3 step 1)
   const shared = await c.lookupIngress({ peer: PEER, user: pacG, target: { address: 'api.example', port: 443 } })
   assert.equal(shared.refuse, undefined, 'this user\'s, pid unknown: not refused')
-  assert.deepEqual([shared.pid, shared.decrypt, shared.skip], [null, false, { not_captured: 'untracked', reason: 'pid-unresolved' }], 'forwarded untracked (4.8 §5.3 no pid)')
+  assert.deepEqual([shared.pid, shared.decrypt, shared.skip.not_captured, shared.skip.reason], [null, false, 'untracked', 'pid-unresolved'], 'forwarded untracked (4.8 §5.3 no pid)')
   const sharedPac = await wrote(pacReq)
   assert.match(sharedPac.res.body, /PROXY 127\.0\.0\.1:18103/, 'and it gets the door PAC')
   assert.deepEqual(sharedPac.got, [], 'the door PAC to this user\'s process: nothing to record')
@@ -272,7 +273,7 @@ test('CM19 / CM33 · the PAC door: this user\'s process gets the PAC (door leg w
   Object.assign(w, { pid: 63420, owner: { sameUser: true }, facts: null, factsWhy: 'ps -p 63420 did not answer within 2000 ms' })
   const dark = await c.lookupIngress({ peer: PEER, user: pacG, target: { address: 'api.example', port: 443 } })
   assert.equal(dark.refuse, undefined, 'this user\'s by the table, facts unread: not refused')
-  assert.deepEqual([dark.pid, dark.decrypt, dark.skip], [63420, false, { not_captured: 'untracked', reason: 'facts-unavailable' }], 'forwarded untracked')
+  assert.deepEqual([dark.pid, dark.decrypt, dark.skip.not_captured, dark.skip.reason], [63420, false, 'untracked', 'facts-unavailable'], 'forwarded untracked')
   const darkPac = await wrote(pacReq)
   assert.match(darkPac.res.body, /PROXY 127\.0\.0\.1:18103/, 'and it gets the door PAC')
   assert.deepEqual(darkPac.got, [], 'nothing to record')
@@ -469,6 +470,43 @@ test('CM23 · a second off answers GET /holders and mayExit from its own table, 
     assert.equal(c.mayExit(), false, 'and the daemon may not exit under it')
   } finally { release(); c.close() }
 })
+
+// ---- 1.6 §5.2 (D82): a daemon swap's drain is no off ----------------------------------------------------------------------------------------------
+test('a stop that replaces the daemon leaves the harness on: the door still decrypts and the reply reads off, until on cancels it', async () => {
+  const { d, f, os } = rootForm
+  const g = `${d.name}:${f.route}`, { w, facts } = worldOf(d, f, os, {}), base = ctxOf(w)
+  const { c } = await rig({ desc: { ...d, proxyMode: { ...d.proxyMode, forms: [f] } }, os, upstreamRoots: { os: async () => '', node: [], extra: [] },
+    w: { pid: ++pid, facts: { exe: '/bin/x', uid: 501, agent: d.name, startedAt: facts.startedAt }, env: w.env, cwd: w.cwd, ctx: { ...base, readFile: (p) => base.readFile(p).replace(ROOT.pem, STUB_PEM) } } })
+  await c.on({ harnesses: [d.name], groups: { [g]: 18107 } })
+  const reply = await c.off({ exit: true, by: 'install' })
+  assert.equal(reply.actual, 'off', 'the CLI confirms a nameless off by actual (1.6 §3.1)')
+  assert.equal(c.isOn(d.name), true)
+  const meta = await c.lookupIngress({ peer: PEER, user: g, target: { address: d.hosts[0], port: 443 } })
+  assert.equal(meta.decrypt, true, JSON.stringify(meta))
+  assert.deepEqual(c.doors(), { [g]: 18107 })
+  assert.equal(c.mayExit(), true, 'leaving with no connection: it may go though the harness is on')
+  await c.on({ harnesses: [d.name], groups: {} })
+  assert.equal(c.leaving(), false, 'POST /on cancels the exit')
+  assert.equal(c.mayExit(), false, 'the on harness keeps the daemon again')
+  c.close()
+})
+
+for (const by of ['uninstall', null]) {
+  test(`an exit ${by ? `by ${by}` : 'with no by'} is an off: the harness leaves the on set and a kept door only forwards`, async () => {
+    const { d, f } = rootForm, g = `${d.name}:${f.route}`
+    const { c, w } = await rig({ desc: d, w: { pid: 4242, facts: { agent: d.name, startedAt: INSTALLED + 1 }, env: {}, procs: [{ pid: 4242, startedAt: INSTALLED + 1 }] } })
+    await c.on({ harnesses: [d.name], groups: { [g]: 18108 } })
+    await c.lookupIngress({ peer: PEER, user: g, target: { address: 'api.example', port: 443 } })
+    w.manifest = manifestOf(d.name, { liveness: { [d.name]: { on_at: iso(INSTALLED) } } })
+    w.now = INSTALLED + 10
+    assert.equal((await c.off({ exit: true, by })).actual, 'off')
+    assert.equal(c.isOn(d.name), false)
+    assert.equal(c.leaving(), false)
+    const meta = await c.lookupIngress({ peer: PEER, user: g, target: { address: 'api.example', port: 443 } })
+    assert.deepEqual(meta.skip, { not_captured: 'untracked', reason: 'group-off' })
+    c.close()
+  })
+}
 
 // ---- the door's durable record (P12 「门的持久记录」) ------------------------------------------------------------------------------------
 const doorRows = (dir) => readDoorSeen({ dir }).rows
@@ -785,4 +823,136 @@ test('4.8 §5.1 · ownerOfPeer (the ingress-unknown sender): the door\'s owner a
   assert.deepEqual(await r.c.ownerOfPeer(PEER), { pid: null, why: 'shared' })
   Object.assign(r.w, { pid: 4322, owner: {}, facts: null, factsWhy: 'ps did not answer' })
   assert.deepEqual(await r.c.ownerOfPeer(PEER), { pid: 4322, process: null, why: 'ps did not answer' })
+})
+
+// ---- 4.9 MA17 · MA18: a door's total limit, and what the row says ---------------------------------------------------------------------------------
+const NEVER = new Promise(() => {})
+const HANG_MS = 50
+const QUESTIONS = [ // each one asked by a connection of a known agent at another harness's door, so the verdict's own cwd read is a read of its own
+  ['ownerOf', (q) => q === 'ownerOf'],
+  ['factsOf', (q) => q === 'factsOf'],
+  ['envOf', (q) => q === 'envOf'],
+  ['parentOf, second step', (q, p) => q === 'parentOf' && p === 9002],
+  ['cwdOf in the verdict', (q, p, nth) => q === 'cwdOf' && p === 9001 && nth === 2],
+]
+async function deadlineRig({ limit = HANG_MS, on = (d, other) => [d.name, other.name], facts = (d) => ({ agent: d.name, uid: 501, startedAt: INSTALLED + 1 }), factsWhy } = {}) {
+  const { d, f, os } = rootForm
+  const other = descs.find((x) => x !== d && x.proxy.env.length && x.proxyMode.forms.some((y) => y.os.includes(os) && !y.hostTree && (x.proxyMode.routes[y.route] || {}).auth !== false))
+  const g = `${other.name}:${other.proxyMode.forms.find((y) => y.os.includes(os) && !y.hostTree && (other.proxyMode.routes[y.route] || {}).auth !== false).route}`
+  const r = await rig({ desc: { ...d, proxyMode: { ...d.proxyMode, forms: [f] } }, others: [other], os, doorHangMs: limit, w: { pid: 9001, facts: facts(d), factsWhy, cwd: '/',
+    env: { [other.proxy.env[0]]: 'http://127.0.0.1:18107' }, parent: (q) => (q === 9001 ? { ppid: 9002, startedAt: INSTALLED } : null) } }) // the door in its env: the walk goes up (P7 step 3)
+  await r.c.on({ harnesses: on(d, other), groups: { [g]: 18107 } })
+  return { ...r, connect: (q) => r.c.lookupIngress({ peer: PEER, user: g, target: { address: d.hosts[0], port: 443 }, ...q }) }
+}
+for (const [name, held] of QUESTIONS) {
+  test(`MA17 · ${name} hung: the connection is forwarded at the limit, door-deadline, never decrypted, and says where it stuck`, async () => {
+    const { c, w, connect } = await deadlineRig()
+    w.wait = (...a) => (held(...a) ? NEVER : undefined)
+    const t0 = performance.now()
+    const meta = await connect()
+    assert.ok(performance.now() - t0 < 1000, 'the limit, not the ask, ends the wait')
+    assert.deepEqual([meta.decrypt, meta.skip.not_captured, meta.skip.reason], [false, 'untracked', 'door-deadline'])
+    assert.equal(typeof meta.skip.unread, 'string'); assert.ok(meta.skip.unread.length > 0)
+    c.close()
+  })
+
+  test(`MA17 · ${name} answers after the limit: this connection stays forwarded, the next is judged as ever`, async () => {
+    const { c, w, connect } = await deadlineRig()
+    let release
+    const late = new Promise((r) => { release = r })
+    w.wait = (...a) => (held(...a) ? late : undefined)
+    const meta = await connect()
+    const said = JSON.stringify(meta)
+    w.wait = null
+    release()
+    await new Promise((r) => setTimeout(r, 5))
+    assert.equal(JSON.stringify(meta), said, 'nothing reaches a row already answered')
+    assert.equal(meta.decrypt, false)
+    assert.equal((await connect()).decrypt, true, 'the limit is no verdict: nothing of it was kept')
+    c.close()
+  })
+}
+
+// every process the door forwards without a verdict still has its env read first (P7 step 1): a limit that stopped that read is the row's reason, not the process's class
+const UNJUDGED = [
+  ['a process no harness names', 'not-an-agent', { facts: () => ({ uid: 501, startedAt: INSTALLED + 1 }) }],
+  ['a process whose facts failed', 'facts-unavailable', { facts: () => null, factsWhy: 'ps could not start' }],
+  ['an agent whose harness is off', 'harness-off', { on: (d, other) => [other.name] }],
+  ['an agent at a door whose harness is off', 'group-off', { on: (d) => [d.name] }],
+]
+for (const [name, reason, world] of UNJUDGED) {
+  test(`MA17 · ${name}: ${reason} when its env answers, door-deadline with the question when that read hangs`, async () => {
+    const answered = await deadlineRig(world)
+    assert.equal((await answered.connect()).skip.reason, reason)
+    answered.c.close()
+    const { c, w, connect } = await deadlineRig(world) // a process's env is read once: the hang needs a process not yet read
+    w.wait = (q) => (q === 'envOf' ? NEVER : undefined)
+    const meta = await connect()
+    assert.deepEqual([meta.decrypt, meta.skip.not_captured, meta.skip.reason], [false, 'untracked', 'door-deadline'])
+    assert.equal(typeof meta.skip.unread, 'string'); assert.ok(meta.skip.unread.length > 0)
+    c.close()
+  })
+}
+
+for (const spent of [0.9, 1, 2]) { // of the limit, gone before the door was asked: a slow opener's time is the connection's own (D82③)
+  test(`MA17 · the limit runs from the accept: ${spent} of it spent before the lookup leaves the rest of it, not a new limit`, async () => {
+    const limit = 2000, { c, w, connect } = await deadlineRig({ limit })
+    w.wait = (q) => (q === 'factsOf' ? NEVER : undefined)
+    const t0 = performance.now()
+    const meta = await connect({ acceptedAt: INSTALLED + 5 - limit * spent })
+    assert.ok(performance.now() - t0 < limit / 2, 'the time left, not the whole limit')
+    assert.equal(meta.skip.reason, 'door-deadline')
+    c.close()
+  })
+}
+
+test('MA17 · the PAC door: an owner that hangs is refused as unread; an owner proven this user\'s whose facts hang is forwarded door-deadline', async () => {
+  const { c, w } = await rig({ desc: pacDesc, doorHangMs: HANG_MS, w: { pid: 77, facts: { uid: 501, startedAt: INSTALLED + 1 } } })
+  await c.on({ harnesses: [pacDesc.name], groups: { [pacG]: 18108 } })
+  const connect = () => c.lookupIngress({ peer: PEER, user: pacG, target: { address: 'api.example', port: 443 } })
+  w.wait = (q) => (q === 'ownerOf' ? NEVER : undefined)
+  const unread = await connect()
+  assert.equal(unread.refuse.unread, true)
+  Object.assign(w, { owner: { sameUser: true }, wait: (q) => (q === 'factsOf' ? NEVER : undefined) })
+  const mine = await connect()
+  assert.equal(mine.refuse, undefined)
+  assert.deepEqual([mine.decrypt, mine.skip.reason], [false, 'door-deadline'])
+  c.close()
+})
+
+test('MA17 · the PAC file: an owner or facts question that hangs takes the pac-owner-unread way: the door-less PAC at the limit, one record', async () => {
+  for (const q of ['ownerOf', 'factsOf']) {
+    const { c, w, records } = await rig({ desc: pacDesc, doorHangMs: HANG_MS, w: { pid: 77, facts: { uid: 501, startedAt: INSTALLED + 1 }, sp: { url: 'http://sys.corp:8080', bypass: [] } } })
+    await c.on({ harnesses: [pacDesc.name], groups: { [pacG]: 18109 } })
+    w.wait = (x) => (x === q ? NEVER : undefined)
+    const res = await c.servePac({ peer: PEER, user: pacG, path: '/trocar.pac' })
+    assert.equal(res.status, 200); assert.doesNotMatch(res.body, /18109/, 'no door')
+    assert.deepEqual(records.filter((r) => r.code === 'pac-owner-unread').map((r) => r.peer), [PEER], q)
+    c.close()
+  }
+})
+
+test('MA17 · the PAC file: its limit runs from the accept too', async () => {
+  const limit = 2000, { c, w, records } = await rig({ desc: pacDesc, doorHangMs: limit, w: { pid: 77, facts: { uid: 501, startedAt: INSTALLED + 1 } } })
+  await c.on({ harnesses: [pacDesc.name], groups: { [pacG]: 18111 } })
+  w.wait = (x) => (x === 'ownerOf' ? NEVER : undefined)
+  const t0 = performance.now()
+  await c.servePac({ peer: PEER, user: pacG, path: '/trocar.pac', acceptedAt: INSTALLED + 5 - limit * 0.9 })
+  assert.ok(performance.now() - t0 < limit / 2, 'the time left, not the whole limit')
+  assert.equal(records.filter((r) => r.code === 'pac-owner-unread').length, 1)
+  c.close()
+})
+
+test('MA18 · the row carries the reader\'s own words: facts-unavailable says why the facts failed, pid-unresolved why the owner did; facts_ms is what the facts question took', async () => {
+  const { d, f, os } = rootForm
+  const g = `${d.name}:${f.route}`, why = 'ps could not start: EAGAIN'
+  const { c, w } = await rig({ desc: { ...d, proxyMode: { ...d.proxyMode, forms: [f] } }, os, w: { pid: 9011, facts: null, factsWhy: why, now: INSTALLED + 5, wait: (q) => { if (q === 'factsOf') w.now += 7 } } })
+  await c.on({ harnesses: [d.name], groups: { [g]: 18110 } })
+  const connect = () => c.lookupIngress({ peer: PEER, user: g, target: { address: d.hosts[0], port: 443 } })
+  const unread = await connect()
+  assert.deepEqual([unread.skip.reason, unread.skip.unread, unread.facts_ms], ['facts-unavailable', why, 7])
+  Object.assign(w, { pid: null, owner: { why: 'no-row' } })
+  const nobody = await connect()
+  assert.deepEqual([nobody.skip.reason, nobody.skip.unread], ['pid-unresolved', 'no-row'])
+  c.close()
 })
