@@ -17,6 +17,7 @@ import { parseDotenv } from '../config-read.mjs'
 import { resolveLoc, readSrc, holds, isPresent } from './sources.mjs'
 import { entryGate } from '../entry-forms.mjs'
 import { CODE } from '../codes.mjs'
+import { unseal, doorFp } from '../../../off/seal.mjs'
 
 export const LOOPBACK = Object.freeze(['localhost', '127.0.0.1', '::1'])
 export const PAC_PATH = '/trocar.pac' // P10: the daemon serves the PAC here on the PAC group's door
@@ -142,8 +143,9 @@ function undo(ctx, records) {
 /** check(ctx, records): does every record still hold trocar's value? → { ok, failing: [path] } */
 function check(ctx, records) {
   const failing = []
-  for (const x of records) {
-    const t = readText(ctx, x.real_path || x.path)
+  for (const r of records) {
+    const t = readText(ctx, r.real_path || r.path)
+    const x = unseal(r, t)
     let ok = false
     if (x.kind === 'owned-file') { try { ok = sha256(ctx.fs.readFileSync(x.path)) === x.sha256 } catch { ok = false } }
     else if (x.kind === 'text') { const env = parseDotenv(t || ''); ok = t != null && Object.entries(x.vars).every(([k, v]) => env.get(k) === v) }
@@ -161,7 +163,7 @@ export function routeEntry(kind) {
   return {
     write(ctx, door) {
       const old = recordsOf(ctx.manifest, ctx.harness, ctx.routeId)
-      if (old.some((x) => x.door !== door)) undo(ctx, old)
+      if (old.some((x) => doorFp(x) !== sha256(door))) undo(ctx, old)
       // all or nothing: a route refused partway (its last key or item, the select meta) takes back what this call already wrote, so no record without
       // a route tag is left for off to miss (invariant 5)
       const m = ctx.manifest, had = new Set([...m.entries, ...m.files])

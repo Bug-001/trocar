@@ -30,6 +30,7 @@ import { CODE_OFF } from '../../../off/names.mjs'
 import { describeEntry } from '../../../off/journal.mjs'
 import { decodeText, encodeText, WHY_TEXT } from '../../../off/text-codec.mjs'
 import { isAlsoSetMember } from '../../../off/env-names.mjs'
+import { unseal } from '../../../off/seal.mjs'
 
 // One file under two spellings is one file (X18): every path the journal compares goes through pathKey (src/off/fsutil.mjs).
 const realOf = (fs) => (d) => fs.realpathSync.native(d) // the file system the journal is handed decides what a path is (pathKey)
@@ -120,12 +121,14 @@ const entryOf = (manifest, p, fs) => ((manifest && manifest.entries) || []).find
 // is trocar's text still in the file? a JSON key by its value, a block or line by the text it inserted (the same test undo makes of an edited file)
 function holds(x, text) {
   if (text == null) return false
+  x = unseal(x, text)
   if (x.kind === 'text') return removeTrocarText(text, x.ops || []).found
   try { const v = getPath(parseJsonText(text), x.keys); return x.kind === 'json-array-item' ? Array.isArray(v) && v.some((e) => isDeepStrictEqual(e, x.item)) : v === x.value } catch { return false }
 }
 // the file is what trocar's ops made of the file it recorded (an intent whose write finished and whose `post_sha256` did not): undo reads it the same way
 function writtenBy(x, text) {
   if (text == null) return false
+  x = unseal(x, text)
   const back = reverseOps(text, x.ops || [])
   return back != null && (x.existed_before ? sha256(encodeText(back, x.charset || 'utf8')) === x.pre_sha256 : back === '')
 }
@@ -308,10 +311,11 @@ export function applyTextEntry({ dir, manifest, harness, phase, file, edit, home
 export function installedAt(manifest, layer, { fs = nodeFs } = {}) {
   if (!manifest || !layer || !layer.file || !layer.vars) return null
   const key = pathKey(layer.file, { realpath: realOf(fs) })
-  for (const e of manifest.entries || []) {
+  for (let e of manifest.entries || []) {
     if (!(typeof e.path === 'string' && pathKey(e.path, { realpath: realOf(fs) }) === key) && !(typeof e.real_path === 'string' && pathKey(e.real_path, { realpath: realOf(fs) }) === key)) continue
     const t = Date.parse(e.installed_at)
     if (!Number.isFinite(t)) continue
+    e = unseal(e, Object.values(layer.vars).join('\n'))
     if (e.vars) { if (Object.entries(e.vars).every(([k, v]) => layer.vars[k] === v)) return t; continue } // a dotenv block
     if (e.value != null && Object.values(layer.vars).includes(e.value)) return t // under its key, or a descriptor's pseudo-variable
   }

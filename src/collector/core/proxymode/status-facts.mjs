@@ -118,7 +118,7 @@ export async function modelFormFacts({ harnesses, os, manifest: m, reply = null,
       if (certificate.in_effect && uf && uf.state !== 'intact' && carrier !== 'root') Object.assign(certificate, { in_effect: false, code: uf.state === 'changed' ? 'entry-changed' : CODE.notUsersFile, command: INSTALL })
       const g = `${h}:${f.route}`, route = pm.routes[f.route] || {}
       const es = on.filter((i) => i.harness === h && i.route === f.route)
-      const main = es.find((i) => i.door) || es[0] || null
+      const main = es.find((i) => i.door_sha256 || i.door) || es[0] || null
       const priorItem = es.find((i) => typeof i.prior_value === 'string') ?? null
       const priorRaw = priorItem ? priorItem.prior_value : null
       const intact = es.length > 0 && es.every((i) => intactOf(m, i, fs))
