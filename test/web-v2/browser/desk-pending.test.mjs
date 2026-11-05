@@ -21,6 +21,8 @@ const skip = gate.ok ? false : gate.reason
 function instrument() {
   window.__lt = []
   try { new PerformanceObserver((l) => { for (const x of l.getEntries()) window.__lt.push(x.duration) }).observe({ type: 'longtask', buffered: true }) } catch { /* no long-task timing here */ }
+  window.__press = []
+  for (const k of ['pointerdown', 'pointerup', 'click']) addEventListener(k, (e) => window.__press.push(`${k} ${e.target.className || e.target.nodeName}${e.target.isConnected ? '' : ' (gone)'}`), true)
   window.__head = () => { const e = document.querySelector('#stepbar .sb-no'), m = e && /\/\s*(\d+)/.exec(e.textContent); return e && m ? { n: +e.dataset.n, m: +m[1] } : null }
 }
 
@@ -48,7 +50,9 @@ async function growingDesk(w, fn) {
     await page.evaluate(() => { location.hash = '#/replay/p/S' })
     await page.waitForSelector('#stepbar .sb-no')
     const stepN = async () => { const h = await page.evaluate(() => window.__head()); assert.ok(h, 'the step head is drawn'); return h.n }
-    const until = (fn, arg, what) => page.waitForFunction(fn, arg, { timeout: 30000, polling: 'raf' }).catch((e) => { throw new Error(`${what}: ${e.message}`) })
+    const until = (fn, arg, what) => page.waitForFunction(fn, arg, { timeout: 30000, polling: 'raf' }).catch(async (e) => {
+      throw new Error(`${what} (now ${JSON.stringify(await page.evaluate(() => ({ head: window.__head(), drawer: !!document.querySelector('#detail.open'), pressed: window.__press })))}): ${e.message}`)
+    })
     const grant = async (n) => {
       const to = growth.left() - n * 1000
       growth.more(n)
@@ -90,7 +94,7 @@ test('2.3 归约前沿 · D64②: a session growing by 1,000 members an answer �
     await longTasks() // the open is D64①'s, not this case's
     const seen = { follow: [], scrub: [], lanes: [] }, samples = []
     // a timed input: its step change, judged by the step number, so an input that moves nothing is red however the count grows
-    const input = async (act) => samples.push(await timed(page, 'n', await stepN(), act))
+    const input = async (what, act) => samples.push(await timed(page, 'n', await stepN(), act).catch((e) => { e.message = `${what}: ${e.message}`; throw e }))
 
     // following while 8 answers land
     const first = await stepN()
@@ -101,7 +105,7 @@ test('2.3 归约前沿 · D64②: a session growing by 1,000 members an answer �
     // scrubbing: 30 steps back, 30 forward; every 6th input runs while an answer just taken by a head read is being read and drawn
     for (let i = 0; i < 60; i++) {
       if (i % 6 === 3) await grant(1)
-      await input(() => page.keyboard.press(i < 30 ? 'ArrowLeft' : 'ArrowRight'))
+      await input(`scrub ${i}`, () => page.keyboard.press(i < 30 ? 'ArrowLeft' : 'ArrowRight'))
     }
     await drawn()
     seen.scrub = await longTasks()
@@ -112,13 +116,13 @@ test('2.3 归约前沿 · D64②: a session growing by 1,000 members an answer �
       await toEnd(d)
       if (j % 2 === 1) await grant(1)
       const pt = await aimOlder(d, j)
-      await input(() => page.mouse.click(pt.x, pt.y))
+      await input(`lane jump ${j}`, () => page.mouse.click(pt.x, pt.y))
     }
     await drawn()
     seen.lanes = await longTasks()
 
     const { p50, p95 } = growing = stats(samples)
-    console.log(`# pending growth: ${growth.left()} members still to come; long tasks follow [${seen.follow.map(Math.round)}] scrub [${seen.scrub.map(Math.round)}] lanes [${seen.lanes.map(Math.round)}]; step n=${samples.length} p50=${p50.toFixed(1)} ms p95=${p95.toFixed(1)} ms line=${BOARD_LINES.stepClick} ms`)
+    console.log(`# pending growth: ${growth.left()} members still to come; long tasks follow [${seen.follow.map(Math.round)}] scrub [${seen.scrub.map(Math.round)}] lanes [${seen.lanes.map(Math.round)}]; step n=${samples.length} p50=${p50.toFixed(1)} ms p95=${p95.toFixed(1)} ms (scrub ${stats(samples.slice(0, 60)).p95.toFixed(1)}, lane jumps ${stats(samples.slice(60)).p95.toFixed(1)}) line=${BOARD_LINES.stepClick} ms`)
     assert.equal(growth.left(), left0 - 23 * 1000, 'the growth moved by the answers asked, no more')
     assert.ok(growth.left() > 0, 'the session was still pending through every phase')
     for (const [phase, ms] of Object.entries(seen)) assert.ok(Math.max(0, ...ms) <= LIMITS.longtaskMs, `${phase}: a long task of ${Math.round(Math.max(...ms))} ms`)
@@ -138,7 +142,7 @@ test('2.3 归约前沿 · D64②: step p95 within the line while the session gro
 test('2.3 读者优先: a tick held down while an answer lands moves the step when it is let go', { skip }, async () => {
   const w = world(12, { calls: 30000, page: 1500, files: 600, compact: 0.02 })
   await growingDesk(w, async (d) => {
-    const { page, grant, drawn, stepN, until } = d
+    const { page, growth, grant, drawn, stepN, until } = d
     await grant(2); await drawn()
     for (let j = 0; j < 3; j++) {
       await toEnd(d)
@@ -147,12 +151,51 @@ test('2.3 读者优先: a tick held down while an answer lands moves the step wh
       const pt = await aimOlder(d, j), n0 = await stepN()
       await page.mouse.move(pt.x, pt.y)
       await page.mouse.down()
-      await grant(1)
-      await page.waitForTimeout(400) // the answer read and applied while the pointer is down
+      growth.more(1) // not waited for: a round already in flight waits for the release like its redraw, and the press is let go in time
+      await page.waitForTimeout(1500 + 400) // the next round's answer read and applied while the pointer is down
       await page.mouse.up()
       await until((n0) => { const h = window.__head(); return !!h && h.n !== n0 && !!document.querySelector('#detail.open') }, n0, `the tick let go at step ${n0} did not move the step`)
       await drawn()
     }
+  })
+})
+
+// The other half of the same rule: a redraw already past the pace when the pointer goes down. The followed step's bodies hold it between
+// its turn and the drawing of the lanes; pressed there and let go after they come, the tick still jumps. The window holds ticks at the
+// newest step (a wide chapter), so the reader is following when pressing.
+test('2.3 读者优先: a redraw already on its way when the tick is pressed waits for the release', { skip }, async () => {
+  const w = world(12, { calls: 30000, page: 1500, files: 600, compact: 0.002 })
+  await growingDesk(w, async (d) => {
+    const { page, grant, drawn, stepN, until } = d
+    await grant(1); await drawn()
+    await toEnd(d)
+    await page.waitForTimeout(500) // the bodies of the step End reached are in: what comes next is the redraw's own read
+    const held = []
+    let hold = true
+    await page.route('**/api/block?**', (route) => (hold ? held.push(route) : route.fallback()))
+    // a step with no reply asks no bodies before it is drawn: the next answer's newest step is tried, until one's redraw waits for them
+    let n0 = await stepN()
+    for (let k = 0; ; k++) {
+      assert.ok(k < 8, 'a followed step asked for its bodies before it was drawn')
+      await grant(1)
+      for (const t = Date.now(); !held.length && await stepN() === n0; await page.waitForTimeout(50)) assert.ok(Date.now() - t < 20000, 'the answer moved nothing')
+      if (await stepN() === n0) break
+      hold = false
+      await page.waitForTimeout(500)
+      for (const r of held.splice(0)) await r.fallback()
+      n0 = await stepN()
+      hold = true
+    }
+    const pt = await olderTick(page, 0)
+    assert.ok(pt, 'the window holds a tick left of the newest step')
+    await page.mouse.move(pt.x, pt.y)
+    await page.mouse.down()
+    hold = false
+    for (const r of held) await r.fallback()
+    await page.waitForTimeout(400) // the bodies in, the redraw free to go, the pointer still down
+    await page.mouse.up()
+    await until((n0) => { const h = window.__head(); return !!h && h.n !== n0 && !!document.querySelector('#detail.open') }, n0, `the tick let go at step ${n0} did not move the step`)
+    await drawn()
   })
 })
 

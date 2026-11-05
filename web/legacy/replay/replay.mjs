@@ -673,7 +673,8 @@ function openDesk(ctx, route0, makeView = legacyView) {
     if (s.dead || !host || !s.desk.head || (packFailed && !byPoll)) return
     packFailed = false
     const due = packsDue()
-    for (; jobs < Math.min(3, due.length); jobs++) loader.run(due[jobs].pri, packJob).then((x) => x && x.applied).catch(() => {}).finally(() => { jobs--; if (!s.dead) fill() })
+    // a pack's turn waits for the reader, outside the loader, so a body the reader's step asks for keeps its slot (2.3 读者优先)
+    for (; jobs < Math.min(3, due.length); jobs++) { const { pri } = due[jobs]; pace.calm().then(() => (s.dead ? null : loader.run(pri, packJob))).then((x) => x && x.applied).catch(() => {}).finally(() => { jobs--; if (!s.dead) fill() }) }
   }
   // a pack's reads hold a loader slot; its applies do not: they wait their turn on `serial` after the slot is free, since a redraw's own
   // reads (the followed step's bodies) go through the loader too — a slot held while waiting on `serial` deadlocks the desk
@@ -860,7 +861,9 @@ function openDesk(ctx, route0, makeView = legacyView) {
     const d = redrawDue
     if (d) { d.changed = d.changed === null || changed === null ? null : new Set([...d.changed, ...changed]); return d.p }
     const due = redrawDue = { changed }
-    due.p = yieldNow().then(() => pace.redraw()).then(() => serial(() => { if (redrawDue === due) redrawDue = null; pace.drew(); return redrawNow(due.changed) }))
+    // calm again at its turn: a press since the pace let it through is not redrawn away (2.3 读者优先), and it comes before buildLanes, so
+    // the rows under the pointer and the lanes a click reads stay one drawing
+    due.p = yieldNow().then(() => pace.redraw()).then(() => serial(async () => { await pace.calm(); if (redrawDue === due) redrawDue = null; pace.drew(); return redrawNow(due.changed) }))
     return due.p
   }
   async function redrawNow(changed) {
@@ -886,13 +889,13 @@ function openDesk(ctx, route0, makeView = legacyView) {
     const desk = s.desk, key = sessionKey(), first = s.viewSig !== key, signal = s.reads.signal
     unpin(keepPins)
     const moved = placePlayhead(prevRow)
+    arrived(s, s.playRid)
     if (s.playRid == null) { renderRough(); chainLedger(); fill(); return } // the rough page until the named step is here
     // the followed step's open reply bodies in one read before it is drawn, so its newest reply shows with its bytes; the same
-    arrived(s, s.playRid)
     // read carries the ±NEAR prefetch (2.3 §正文预取), so the rest after it finds nothing left and a delta stays one `block` (4.4:52)
     if (s.follow && moved && !first && host) {
       const refs = openRefs(s.playRid)
-      if (refs.length) { await loadBodies({ get: (n, p, o) => via(0, n, p, o) }, [...refs, ...nearRefs(s.playRid)], { signal }); if (s.dead || key !== sessionKey()) return }
+      if (refs.length) { await loadBodies({ get: (n, p, o) => via(0, n, p, o) }, [...refs, ...nearRefs(s.playRid)], { signal }); await pace.calm(); if (s.dead || key !== sessionKey()) return } // a press during the read is not redrawn away either
     }
     // brush window: a new session starts on the whole of it when that fits the lane, else on the last steps that fit — or, when the
     // URL named an earlier step, on the ones around it. On live growth keep the reader's window, extending it when parked at the end.
