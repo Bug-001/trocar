@@ -464,12 +464,12 @@ test('V96: a collector that refuses the off request is not named by a null pid',
 /** The world of a finish whose daemon may run another code, on a REAL entry file: `disk` is what the file holds now (default: this copy's
  *  program line under the older text), the entry this code renders has one line more, and `install` writes that text when it runs. The login
  *  entry's start records the bytes launchd would read at that moment. */
-function entryFinish(s, { disk = null, daemon = '0.1.0+0000000', comesBackOn = codeId(s.root), installExit = EXIT.ok, installDoc = {}, ...over } = {}) {
+function entryFinish(s, { disk = null, daemon = '0.1.0+0000000', comesBackOn = codeId(s.root), installExit = () => EXIT.ok, installDoc = {}, on = [], ...over } = {}) {
   const script = path.join(s.root, 'bin', 'trocar.mjs')
   const entry = (extra) => `<key>ProgramArguments</key>\n<array>\n  <string>${script}</string>\n  <string>daemon</string>\n</array>\n${extra}`
   const file = path.join(s.base, 'login-entry'), rendered = entry('<key>ProcessType</key>\n<string>Interactive</string>\n')
   fs.writeFileSync(file, disk ?? entry(''))
-  fs.writeFileSync(path.join(s.dir, 'update.json'), JSON.stringify({ from: '0.1.0+0000000', on: [] }) + '\n')
+  fs.writeFileSync(path.join(s.dir, 'update.json'), JSON.stringify({ from: '0.1.0+0000000', on }) + '\n')
   const seen = { started: [], stopped: [], installed: [] }
   const unit = { path: file, text: () => rendered, registered: () => ({ state: 'present' }), enable: () => { seen.started.push(fs.readFileSync(file, 'utf8')); daemon = comesBackOn; return { code: 0 } } }
   const t = ctx(s, {
@@ -481,10 +481,11 @@ function entryFinish(s, { disk = null, daemon = '0.1.0+0000000', comesBackOn = c
       stopDaemon: async () => { seen.stopped.push(daemon); return { stopped: true, pid: 4242, signals: ['SIGTERM'] } },
       install: async (argv, c) => {
         seen.installed.push(argv)
-        if (installExit === EXIT.ok) fs.writeFileSync(file, rendered)
+        const exit = installExit(daemon)
+        fs.writeFileSync(file, rendered) // the entry goes first: what fails in install is the daemon step after it
         if (installDoc.daemon && installDoc.daemon.started) daemon = comesBackOn
-        c.io.out(JSON.stringify({ ...newReceipt('install'), ok: installExit === EXIT.ok, problems: [], notes: [], ...installDoc }))
-        return installExit
+        c.io.out(JSON.stringify({ ...newReceipt('install'), ok: exit === EXIT.ok, problems: [], notes: [], ...installDoc }))
+        return exit
       },
     },
   })
@@ -526,11 +527,20 @@ test('V124: an entry this code renders nothing of is no evidence: the collector 
 
 test('V124: an install that fails leaves the collector replaced all the same: not-finished, and the update stays written down', async () => {
   const s = sandbox()
-  const t = entryFinish(s, { installExit: EXIT.incomplete })
+  const t = entryFinish(s, { installExit: () => EXIT.incomplete })
   assert.equal(await runUpdateCli(['--yes', '--json'], t.c), EXIT.incomplete, t.io.text())
   assert.equal(t.io.json().error.code, 'not-finished')
   assert.equal(t.seen.stopped.length, 1)
   assert.deepEqual(s.handover(), { from: '0.1.0+0000000', on: [] })
+})
+
+test('V124: an install the old collector failed is run again on the new one, and the update closes in one go', async () => {
+  const s = sandbox()
+  const t = entryFinish(s, { on: ['codex'], installExit: (daemon) => (daemon === codeId(s.root) ? EXIT.ok : EXIT.incomplete) }) // a hung daemon: install cannot pass beside it
+  assert.equal(await runUpdateCli(['--yes', '--json'], t.c), EXIT.ok, t.io.text())
+  assert.deepEqual(t.seen.started, [t.rendered], 'the new collector came up from the new entry')
+  assert.deepEqual(t.calls.on.map((a) => a.filter((x) => !x.startsWith('--'))), [['codex']])
+  assert.equal(s.handover(), null)
 })
 
 // the question runs on each OS's own renderer: what install wrote (with the daemon's environment), and an older entry that lacks every line not naming

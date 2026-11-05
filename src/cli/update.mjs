@@ -288,7 +288,8 @@ async function finish({ io, env, home, platform, deps, dir, handover, root, fs, 
     lines.push(`trocar is now running ${r.to}.`)
     return done(EXIT.ok)
   }
-  const installed = early || await step(deps.install || runInstallCli, ['--yes', '--json'], { io, env, home, platform, deps })
+  // an install that failed beside the old collector (a hung one halts it) runs again on the new one: only that run says whether install can finish
+  const installed = early && early.exit === EXIT.ok ? early : await step(deps.install || runInstallCli, ['--yes', '--json'], { io, env, home, platform, deps })
   r.install = installed.doc
   let failed = null // the step that did not finish: its own reason is printed under the problem (with --json, r.install / r.on carry it)
   if (installed.exit !== EXIT.ok) { problems.push(`the new code could not finish installing itself (trocar install exit ${installed.exit}). ${AGAIN}`); failed = { command: 'install', doc: installed.doc } }
