@@ -19,16 +19,19 @@ const CONSOLE_BYTES = 16 * 1024
 const LOAD_REASON_CHARS = 1024
 const SCRIPT_RESULT_KEYS = new Set(['body', 'headers'])
 const KEPT_ENV = Object.freeze(['SYSTEMROOT', 'XDG_RUNTIME_DIR'])
+const SOCKET = /^(TCP(Socket|Server)|Pipe(Server)?|TLS|UDP)Wrap$/
 
 const [slotPath, parentPid, scriptPath] = process.argv.slice(2)
 const capBytes = Number(capMiB) * MIB
 const slot = fs.openSync(slotPath, 'r+')
 
-const shared = new SharedArrayBuffer(24)
+const shared = new SharedArrayBuffer(48)
 const deadline = new BigInt64Array(shared, 0, 1)
 const wake = new Int32Array(shared, 8, 1)
 const over = new Int32Array(shared, 12, 1) // an index into DEATHS, plus one
 const beat = new Int32Array(shared, 16, 1)
+const working = new BigInt64Array(shared, 24, 2) // the nanoseconds tasks have taken, and when the one running began
+const tasks = new Int32Array(shared, 40, 1)
 const setClock = (at) => {
   Atomics.store(deadline, 0, at)
   Atomics.add(wake, 0, 1)
@@ -62,7 +65,6 @@ modules.registerHooks({
 for (const name of ['kill', '_kill', '_debugProcess', '_debugEnd', '_tickCallback', 'getBuiltinModule']) delete process[name]
 fixed(process, 'reallyExit', end)
 fixed(process, '_fatalException', end)
-delete net.default._createServerHandle
 // Windows hands every child PATH, USERNAME and the like whatever env it was given. SYSTEMROOT stays: sockets do not load without it.
 for (const name of Object.keys(process.env)) if (!KEPT_ENV.includes(name.toUpperCase())) delete process.env[name]
 os.default.setPriority = function refused() { throw new Error('a rule process has no say over other processes') }
@@ -72,8 +74,8 @@ Object.freeze(Buffer.prototype)
 Object.freeze(Buffer)
 
 // RSS misses pages macOS compressed and Windows trimmed, and a leak of sockets is ports nobody else on the machine can have. A stuck main thread stops this tick, and the beat says so.
-// A socket that is closed holds its port for a while yet, and one that is unref'd is not in the count, so connections and binds are counted where they all pass, against the clock: a script
-// can reach the tick. A bind to a path is a file the permission model never sees, on a name trocar may be about to need.
+// A socket that is closed holds its port for a while yet, and one that is unref'd is in no count, so what takes a port is counted on the handle, where every way of asking ends up. A bind to
+// a path is a file the permission model never sees, on a name trocar may be about to need.
 const tell = (why) => {
   Atomics.store(over, 0, DEATHS.indexOf(why) + 1) // the watchdog kills: this thread no longer can
   Atomics.add(wake, 0, 1)
@@ -86,20 +88,24 @@ const open = () => {
   openedAt = now
   if (opened > LIMITS.scriptConnects) tell('handles')
 }
-const { Server, Socket } = net, { connect } = Socket.prototype, { _listen2: bind } = Server.prototype
-Socket.prototype.connect = function counted(...args) { open(); return connect.apply(this, args) }
-Server.prototype._listen2 = function counted(address, port, addressType, ...rest) {
-  if (port === -1 && addressType === -1) throw new Error('a rule process binds no path')
-  open()
-  return bind.call(this, address, port, addressType, ...rest)
+const unconnected = new net.Socket().on('error', () => {}).connect(1, '127.0.0.1') // destroyed before it dials: all this wants is the kind of handle a socket has
+const tcp = Object.getPrototypeOf(unconnected._handle), pipe = Object.getPrototypeOf(process.stdin._handle)
+const wrap = Object.getPrototypeOf(Object.getPrototypeOf(tcp))
+unconnected.destroy()
+for (const name of ['connect', 'connect6', 'bind', 'bind6']) {
+  const real = tcp[name]
+  tcp[name] = function counted(...args) { open(); return real.apply(this, args) }
 }
-Socket.prototype.unref = Server.prototype.unref = function counts() { return this }
-setInterval(() => {
+pipe.bind = function refused() { throw new Error('a rule process binds no path') }
+wrap.unref = function counts() {}
+for (const prototype of [tcp, pipe, wrap]) Object.freeze(prototype)
+// The watchdog's message and not a timer: a script can walk Node's timer lists to a timer of this length and call it, or clear it.
+watchdog.on('message', () => {
   Atomics.add(beat, 0, 1)
   const { heapUsed, external, arrayBuffers } = memoryUsage()
   if (heapUsed + Math.max(external, arrayBuffers) > capBytes) tell('memory') // a Buffer is in both
-  if (getActiveResourcesInfo().length > LIMITS.scriptHandles) tell('handles')
-}, 1000).unref()
+  if (getActiveResourcesInfo().filter((name) => SOCKET.test(name)).length > LIMITS.scriptSockets) tell('handles')
+})
 
 let printed = ''
 const print = (...args) => { printed = `${printed}${util.format(...args)}\n`.slice(0, CONSOLE_BYTES) }
@@ -255,6 +261,17 @@ async function runTask(task) {
   return frame
 }
 
+// What the watchdog gives work its CPU allowance by.
+async function timed(work) {
+  const started = clockNow()
+  Atomics.store(working, 1, started)
+  try { return await work() } finally {
+    Atomics.add(working, 0, clockNow() - started)
+    Atomics.store(working, 1, 0n)
+    Atomics.add(tasks, 0, 1)
+  }
+}
+
 // Not a net.Socket on a file descriptor: a newer permission model counts that as network, and the built-in process has none. Not fs streams either: a read parked on the thread pool
 // holds process.exit back.
 const send = (frame) => { for (let at = 0; at < frame.length;) at += fs.writeSync(3, frame, at) }
@@ -263,7 +280,7 @@ process.stdin.on('data', frameReader((message) => {
   last = last.then(async () => {
     if (message.load && loaded) return // a script can emit on stdin, and a limit it chose is none
     loaded ||= Boolean(message.load)
-    send(message.load ? encodeFrame(await load(message.load)) : await runTask(message))
+    send(await timed(() => (message.load ? load(message.load).then(encodeFrame) : runTask(message))))
   })
 }, end))
 process.stdin.once('close', end)

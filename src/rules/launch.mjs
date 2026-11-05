@@ -39,7 +39,9 @@ export function runnerArgs({ script, slot, app = APP, capBytes, allowed = proces
 // a process says what it answers, never how it ended.
 function talkTo(args, slot) {
   const { XDG_RUNTIME_DIR } = process.env
-  const child = spawn(process.execPath, args, { stdio: ['pipe', 'ignore', 'ignore', 'pipe'], windowsHide: true, env: XDG_RUNTIME_DIR ? { XDG_RUNTIME_DIR } : {} })
+  // The table of open files is the machine's, and Node takes its limit as high as it goes. `;` and not `&&`: a lower limit than this is fine too. Windows has no such table.
+  const [file, argv] = process.platform === 'win32' ? [process.execPath, args] : ['/bin/sh', ['-c', `ulimit -n ${LIMITS.scriptFds}; exec "$0" "$@"`, process.execPath, ...args]]
+  const child = spawn(file, argv, { stdio: ['pipe', 'ignore', 'ignore', 'pipe'], windowsHide: true, env: XDG_RUNTIME_DIR ? { XDG_RUNTIME_DIR } : {} })
   const [pipeIn, , , pipe] = child.stdio ?? [] // none at all when no fd was left to make them: 'error' below says so
   let asked = null, killed = null
   const kill = (why) => {
@@ -53,7 +55,11 @@ function talkTo(args, slot) {
     clearTimeout(timer)
     resolve(value)
   }
-  pipe?.on('data', frameReader((frame) => (asked && frame.id === asked.id ? settle({ frame }) : kill('bad-result')), () => kill('bad-result'), ANSWER_BYTES))
+  // With no question out even half a frame is the rule broken: it would hold back whatever came after it. The process has the only copy of its end, so that end closing is a script at work
+  // too, unless the process is on its way out, and then 'close' knows why.
+  const read = frameReader((frame) => (asked && frame.id === asked.id ? settle({ frame }) : kill('bad-result')), () => kill('bad-result'), ANSWER_BYTES)
+  pipe?.on('data', (chunk) => { if (asked) read(chunk); else kill('bad-result') })
+  pipe?.once('end', () => child.kill('SIGKILL'))
   for (const end of [pipeIn, pipe]) end?.on('error', () => {}) // the write to a dead process: 'close' below says what happened
   const link = {
     dead: false,
@@ -111,6 +117,10 @@ export function openOneShot({ script, rules, maxTaskMs = 2000, tmp = os.tmpdir()
     return out
   }
 
+  // A script can write its slot's head too: another rule's number there, and three deaths rest a rule that may be an `on_error: drop`. A death in its process is that script's.
+  const own = script ? rules.findIndex((rule) => normalizeRule(rule).do.some((action) => action.script === script)) : -1
+  const blamed = (rule) => (script ? own : rule)
+
   // A script can write on the channel too, so what makes an answer safe to use is checked here, not only where the answer was made.
   function trusted({ why, skipped = [], hits = [], would = [], rule_ms: ms = {}, console: said = '', verdict, headers }, unit) {
     const shaped = [skipped, hits, would].every(Array.isArray) && Object(ms) === ms && typeof said === 'string' && (why !== undefined || VERDICTS.includes(verdict))
@@ -146,10 +156,10 @@ export function openOneShot({ script, rules, maxTaskMs = 2000, tmp = os.tmpdir()
       const reply = answer.reply_at ? effectAt(answer.reply_at, 'reply', hits) : null, inject = places.map((at) => effectAt(at, 'inject', hits))
       const segment = edits ? slice(edits) : Buffer.alloc(0)
       if (!segmentHolds(segment)) throw new RangeError('not an edits segment')
-      return { ...answer, reply, inject, bytes: body ? slice(body) : null, edits: JSON.parse(`[${segment}]`) }
+      return { ...answer, reply, inject, bytes: body ? slice(body) : null, edits: segment } // bytes: the time to parse them is not this loop's, see readEdits
     } catch {
       runner.kill('bad-result')
-      return { died: 'bad-result' }
+      return { died: 'bad-result', rule: blamed(null) }
     }
   }
 
@@ -159,6 +169,7 @@ export function openOneShot({ script, rules, maxTaskMs = 2000, tmp = os.tmpdir()
     if (runner?.killed) await runner.gone
     if (!runner || runner.dead) {
       unloaded = await start().catch((e) => ({ died: 'load-failed', reason: e.message }))
+      if (closed) return { died: 'closed' }
       if (unloaded) return unloaded
     }
     const id = ++task
@@ -167,7 +178,7 @@ export function openOneShot({ script, rules, maxTaskMs = 2000, tmp = os.tmpdir()
     if (closed) return { died: 'closed' }
     const { task: ran, rule } = readProgress(slot)
     const fate = died ?? runner.killed // a second answer in the same read as the first
-    const answer = fate ? { died: fate, rule: ran === id && rule !== NO_RULE ? rule : null } : take(frame, unit)
+    const answer = fate ? { died: fate, rule: blamed(ran === id && rule !== NO_RULE ? rule : null) } : take(frame, unit)
     fs.ftruncateSync(slot, 0) // the body is an agent's: it stays here only as long as the task
     return answer
   }

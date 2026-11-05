@@ -14,6 +14,7 @@ import { indexRows } from '../query/rows.mjs'
 import { byteBudget } from '../rules/budget.mjs'
 import { compileRules } from '../rules/compile.mjs'
 import { editsToResult } from '../rules/edits.mjs'
+import { readEdits } from '../rules/slot.mjs'
 import { badScriptPlace, readRules } from '../rules/file.mjs'
 import { headerChanges } from '../rules/headers.mjs'
 import { openOneShot } from '../rules/launch.mjs'
@@ -104,10 +105,15 @@ async function testRecord(one, { ref, rec, unread }, { rule, rules, asSent, time
     }
     const touched = Boolean(answer.bytes || answer.headers)
     changed ||= touched
-    if (answer.bytes && !answer.edits.length) exact = false
+    let listed
+    try { listed = readEdits(answer.edits) } catch {
+      why = 'bad-result'
+      break
+    }
+    if (answer.bytes && !listed.length) exact = false
     for (const [name, value] of blanked(headerChanges(seen.headers, answer.headers ?? seen.headers))) headers.set(name, value)
     // Each unit's edits count from its own start; together they are one list over the record's bytes, or per message on a WebSocket.
-    edits.push(...editsToResult(rule.on, answer.bytes, answer.edits).map((edit) => (rule.on.startsWith('ws-') ? { ...edit, message: index } : { ...edit, at: edit.at + shift })))
+    edits.push(...editsToResult(rule.on, answer.bytes, listed).map((edit) => (rule.on.startsWith('ws-') ? { ...edit, message: index } : { ...edit, at: edit.at + shift })))
     shift += (answer.bytes ?? unit.body)?.length ?? 0
     why ??= performance.now() - begun > RECORD_MS ? 'timeout' : null
     if (why) break

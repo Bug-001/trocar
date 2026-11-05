@@ -267,7 +267,7 @@ export function rulesManual() {
       bullets(
         'It cannot start a process or a thread, send a signal or write a file. To use another program go over HTTP with fetch, to a service you started on this machine. It reads its own folder, so give it a folder of its own, outside your home folder\'s top level and outside ~/.trocar.',
         `It can import ES modules, JSON and these of Node's own: ${SCRIPT_BUILTINS.join(', ')}. Anything else is refused when the rule loads, so bundle a CommonJS dependency into an ES module first.`,
-        `A script is stopped if it holds more than ${LIMITS.scriptHandles} sockets and timers or ${LIMITS.scriptFds} open files at once, keeps opening more than ${LIMITS.scriptConnectsPerSecond} connections a second, or keeps using more than a quarter of a CPU core with no request to work on. Close what you open, and reuse connections.`,
+        `A script is stopped if it holds more than ${LIMITS.scriptSockets} sockets or ${LIMITS.scriptFds} open files at once, keeps opening more than ${LIMITS.scriptConnectsPerSecond} connections a second, or keeps using more CPU than a quarter of a core plus twice the time its requests take. Close what you open, and reuse connections.`,
         'A script cannot listen on a path or replace a built-in global, and an uncaught exception ends its process whatever handler it set.',
         'console.log is seen only in rules test.',
         'It can import only files inside its own directory. A node_modules in a parent directory and a link that leaves the directory are refused, and the error does not name the path.',

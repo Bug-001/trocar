@@ -51,7 +51,7 @@ export const LIMITS = Object.freeze({
   bodyBytes: 64 * 1024 * 1024,
   loadMs: 10_000,
   regexLoadMs: 2_000,
-  scriptHandles: 1024,
+  scriptSockets: 64,
   scriptConnects: 2048,
   scriptConnectsPerSecond: 30,
   scriptFds: 2560,

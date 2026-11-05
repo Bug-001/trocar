@@ -12,7 +12,7 @@ import { applyRules } from '../../src/rules/apply.mjs';
 import { byteBudget } from '../../src/rules/budget.mjs';
 import { compileRules } from '../../src/rules/compile.mjs';
 import { memoryCap, openOneShot, runnerArgs } from '../../src/rules/launch.mjs';
-import { DEATHS, editsSegment, HEAD_BYTES, readProgress, writeProgress } from '../../src/rules/slot.mjs';
+import { DEATHS, editsSegment, HEAD_BYTES, readEdits, readProgress, writeProgress } from '../../src/rules/slot.mjs';
 
 const MIB = 1024 * 1024, GIB = 1024 * MIB;
 const RUNNER = fileURLToPath(new URL('../../src/rules/runner.mjs', import.meta.url));
@@ -152,7 +152,7 @@ test('a script\'s change in place stays in its copy: the record still rebuilds w
   try {
     const { bytes, edits } = await runner.run(unitOf('xyz'));
     assert.equal(String(bytes), 'xQz');
-    assert.deepEqual(edits, [{ at: 1, del: 1, ins: 'y' }]);
+    assert.deepEqual(readEdits(edits), [{ at: 1, del: 1, ins: 'y' }]);
   } finally { await runner.close(); }
 });
 
@@ -198,7 +198,7 @@ test('9: the same rules on the same input give the same bytes in the rule proces
       assert.equal(remote.died, undefined);
       assert.deepEqual(remote.skipped.map(({ rule, why }) => [rule, why]), local.skipped.map(({ rule, why }) => [rule, why]));
       assert.deepEqual(remote.bytes, local.bytes);
-      assert.deepEqual(remote.edits, local.edits);
+      assert.deepEqual(readEdits(remote.edits), local.edits);
       assert.deepEqual(remote.headers, local.headers);
       assert.deepEqual([remote.verdict, remote.hits, remote.recover?.result_sha256], [local.verdict, local.hits, local.recover?.result_sha256]);
     }

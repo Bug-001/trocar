@@ -39,6 +39,9 @@ export function die(fd, why) {
 /** What a rule process's edits segment must look like before anything goes near a record: the checks that cost the same however long it is, and no line break. */
 export const segmentHolds = (segment) => !segment.length || (segment[0] === 0x7b && segment.at(-1) === 0x7d && !segment.includes(0x0a))
 
+/** A segment's edits, for whoever may spend the time: 8 MiB of them is over a second, so never a parent that has other work on its loop. */
+export const readEdits = (segment) => JSON.parse(`[${segment}]`)
+
 /** The edits as the envelope will splice them: a comma list with no brackets, empty when there are none. A bug here must not reach the record, so it is parsed once first. */
 export function editsSegment(edits) {
   const segment = serializeEdits(edits)
