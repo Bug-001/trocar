@@ -52,6 +52,7 @@ export const LIMITS = Object.freeze({
   loadMs: 10_000,
   regexLoadMs: 2_000,
   scriptSockets: 64,
+  scriptTaskCpu: 4, // times a task's running time: the heaviest honest one measured took 2.4, a regex over 16 MiB with V8's own threads working beside it
   scriptConnects: 2048,
   scriptConnectsPerSecond: 30,
   scriptFds: 2560,

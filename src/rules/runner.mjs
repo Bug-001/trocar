@@ -273,7 +273,7 @@ async function timed(work) {
 }
 
 // Not a net.Socket on a file descriptor: a newer permission model counts that as network, and the built-in process has none. Not fs streams either: a read parked on the thread pool
-// holds process.exit back.
+// queues behind whatever a script keeps the pool busy with.
 const send = (frame) => { for (let at = 0; at < frame.length;) at += fs.writeSync(3, frame, at) }
 let last = Promise.resolve(), loaded = false
 process.stdin.on('data', frameReader((message) => {

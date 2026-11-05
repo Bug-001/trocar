@@ -56,14 +56,14 @@ export function encodeFrame(message) {
   return Buffer.concat([head, body])
 }
 
-/** → a function to feed chunks to. `onBad` is called once a frame is over `limit` or is not a JSON object, and nothing after it is read. */
+/** → a function to feed chunks to, which says how many bytes it is left holding. `onBad` is called once a frame is over `limit` or is not a JSON object, and nothing after it is read. */
 export function frameReader(onFrame, onBad, limit = Infinity) {
   let held = Buffer.alloc(0), bad = false
   return (chunk) => {
     held = held.length ? Buffer.concat([held, chunk]) : chunk
     while (!bad && held.length >= 4) {
       const size = held.readUInt32LE(0)
-      if (size <= limit && held.length < 4 + size) return
+      if (size <= limit && held.length < 4 + size) return held.length
       let frame
       try {
         if (size > limit) throw new RangeError('frame too long')
@@ -76,5 +76,6 @@ export function frameReader(onFrame, onBad, limit = Infinity) {
       held = held.subarray(4 + size)
       onFrame(frame)
     }
+    return held.length
   }
 }

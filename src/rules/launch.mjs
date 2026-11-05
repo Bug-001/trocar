@@ -35,8 +35,7 @@ export function runnerArgs({ script, slot, app = APP, capBytes, allowed = proces
   return [REGEX_FLAG, ...flags.filter((flag) => allowed.has(flag.split('=')[0])), real(RUNNER), slotPath, String(process.pid), ...(target ? [target] : [])]
 }
 
-// One process and its one question at a time. An answer nobody asked for is the process breaking the rule, so it goes. `ask` resolves to `{frame}` or to `{died, code}`:
-// a process says what it answers, never how it ended.
+// One process and its one question at a time. An answer nobody asked for is the process breaking the rule, so it goes. `ask` resolves to `{frame}` or to `{died}`.
 function talkTo(args, slot) {
   const { XDG_RUNTIME_DIR } = process.env
   // The table of open files is the machine's, and Node takes its limit as high as it goes. `;` and not `&&`: a lower limit than this is fine too. Windows has no such table.
@@ -58,7 +57,7 @@ function talkTo(args, slot) {
   // With no question out even half a frame is the rule broken: it would hold back whatever came after it. The process has the only copy of its end, so that end closing is a script at work
   // too, unless the process is on its way out, and then 'close' knows why.
   const read = frameReader((frame) => (asked && frame.id === asked.id ? settle({ frame }) : kill('bad-result')), () => kill('bad-result'), ANSWER_BYTES)
-  pipe?.on('data', (chunk) => { if (asked) read(chunk); else kill('bad-result') })
+  pipe?.on('data', (chunk) => { if (!asked || (read(chunk) && !asked)) kill('bad-result') })
   pipe?.once('end', () => child.kill('SIGKILL'))
   for (const end of [pipeIn, pipe]) end?.on('error', () => {}) // the write to a dead process: 'close' below says what happened
   const link = {
@@ -79,19 +78,19 @@ function talkTo(args, slot) {
     }),
   }
   link.gone = new Promise((resolve) => {
-    const end = (code) => {
+    const end = () => {
       link.dead = true
-      settle({ died: killed ?? readProgress(slot).death ?? 'crashed', code })
+      settle({ died: killed ?? readProgress(slot).death ?? 'crashed' })
       resolve()
     }
     child.once('close', end)
-    child.on('error', () => end(null))
+    child.on('error', end)
   })
   return link
 }
 
 /** A rule process for `rules test`: `run(unit)` → the answer, `{died}` when the process died on it, one at a time; the next run starts a new one, unless it was the load that failed:
- *  every run after that gets the same `{died, reason}`. `close()` takes the process and its slot away. An answer is applyRules's result less `survivors`, plus `console`, `edits` parsed and `bytes` read back; or `{id, why}` when the process would not answer. */
+ *  every run after that gets the same `{died, reason}`. `close()` takes the process and its slot away. An answer is applyRules's result less `survivors`, plus `console`, `edits` as the segment's bytes (readEdits parses them) and `bytes` read back; or `{id, why}` when the process would not answer. */
 export function openOneShot({ script, rules, maxTaskMs = 2000, tmp = os.tmpdir(), capBytes = memoryCap() }) {
   const dir = fs.mkdtempSync(path.join(fs.realpathSync(tmp), 'trocar-slot-'))
   const file = path.join(dir, 'slot.bin')
@@ -103,7 +102,7 @@ export function openOneShot({ script, rules, maxTaskMs = 2000, tmp = os.tmpdir()
     const args = runnerArgs({ script, slot: file, capBytes })
     if (!args) return { died: 'runner-down' }
     runner = talkTo(args, slot)
-    const { frame, died, code } = await runner.ask({ load: { rules, max_delay_ms: maxTaskMs } }, LIMITS.loadMs + FROZEN_MS)
+    const { frame, died } = await runner.ask({ load: { rules, max_delay_ms: maxTaskMs } }, LIMITS.loadMs + FROZEN_MS)
     if (frame?.ready) return null
     runner.kill('load-failed')
     await runner.gone
@@ -123,7 +122,8 @@ export function openOneShot({ script, rules, maxTaskMs = 2000, tmp = os.tmpdir()
 
   // A script can write on the channel too, so what makes an answer safe to use is checked here, not only where the answer was made.
   function trusted({ why, skipped = [], hits = [], would = [], rule_ms: ms = {}, console: said = '', verdict, headers }, unit) {
-    const shaped = [skipped, hits, would].every(Array.isArray) && Object(ms) === ms && typeof said === 'string' && (why !== undefined || VERDICTS.includes(verdict))
+    const shaped = [skipped, hits, would].every(Array.isArray) && would.every((item) => typeof item?.text === 'string') && Object(ms) === ms && Object.values(ms).every(Number.isFinite)
+      && typeof said === 'string' && (why !== undefined || VERDICTS.includes(verdict))
     if (!shaped) return false
     const known = (reason) => SKIP_WHY.includes(reason)
     const inClosedSet = (why === undefined || known(why)) && skipped.every((skip) => known(skip?.why))
@@ -147,7 +147,7 @@ export function openOneShot({ script, rules, maxTaskMs = 2000, tmp = os.tmpdir()
     return true
   }
 
-  function take({ body, edits, ...answer }, unit) {
+  function take({ body, edits, ...answer }, unit, rule) {
     try {
       if ('died' in answer || !trusted(answer, unit) || !couldSay(answer)) throw new RangeError('an answer the rules could not have given')
       const { hits = [] } = answer
@@ -159,7 +159,7 @@ export function openOneShot({ script, rules, maxTaskMs = 2000, tmp = os.tmpdir()
       return { ...answer, reply, inject, bytes: body ? slice(body) : null, edits: segment } // bytes: the time to parse them is not this loop's, see readEdits
     } catch {
       runner.kill('bad-result')
-      return { died: 'bad-result', rule: blamed(null) }
+      return { died: 'bad-result', rule: blamed(rule) }
     }
   }
 
@@ -178,7 +178,8 @@ export function openOneShot({ script, rules, maxTaskMs = 2000, tmp = os.tmpdir()
     if (closed) return { died: 'closed' }
     const { task: ran, rule } = readProgress(slot)
     const fate = died ?? runner.killed // a second answer in the same read as the first
-    const answer = fate ? { died: fate, rule: blamed(ran === id && rule !== NO_RULE ? rule : null) } : take(frame, unit)
+    const current = ran === id && rule !== NO_RULE ? rule : null
+    const answer = fate ? { died: fate, rule: blamed(current) } : take(frame, unit, current)
     fs.ftruncateSync(slot, 0) // the body is an agent's: it stays here only as long as the task
     return answer
   }

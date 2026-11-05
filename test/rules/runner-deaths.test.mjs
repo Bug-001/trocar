@@ -52,6 +52,16 @@ const ROWS = [
       await new Promise(() => {})`,
   },
   {
+    name: 'a leak of sockets unref\'d on their handles, past whatever stands in the way', why: 'handles', maxTaskMs: 8000, top: 'import net from "node:net"; import { once } from "node:events"',
+    body: `const server = net.createServer((socket) => socket.on("error", () => {})).listen(0, "127.0.0.1"); await once(server, "listening");
+      for (let i = 0; i < ${LIMITS.scriptSockets + 10}; i++) {
+        const socket = net.connect(server.address().port, "127.0.0.1"); await once(socket, "connect");
+        for (let on = Object.getPrototypeOf(socket._handle); on; on = Object.getPrototypeOf(on)) try { delete on.unref } catch {}
+        socket._handle.unref()
+      }
+      await new Promise(() => {})`,
+  },
+  {
     name: 'a leak of listeners that says they do not count', why: 'handles', maxTaskMs: 8000, top: 'import net from "node:net"; import { once } from "node:events"',
     body: `for (let i = 0; i < ${LIMITS.scriptSockets + 10}; i++) await once(net.createServer().listen(0, "127.0.0.1").unref(), "listening"); await new Promise(() => {})`,
   },
@@ -63,8 +73,10 @@ const ROWS = [
   },
   { name: 'a leak of file descriptors', why: 'handles', maxTaskMs: 8000, body: `try { for (let i = 0; i <= ${LIMITS.scriptFds}; i++) fs.openSync(process.argv[2], "r") } catch {}; await new Promise(() => {})` },
   {
-    name: 'connections opened and closed faster than ports come back', why: 'handles', maxTaskMs: 8000, top: 'import net from "node:net"',
-    body: `for (let i = 0; i < ${1.5 * LIMITS.scriptConnects}; i++) net.connect(1, "127.0.0.1").on("error", () => {}); await new Promise(() => {})`,
+    name: 'connections opened and closed faster than ports come back', why: 'handles', maxTaskMs: 8000, top: 'import net from "node:net"; import { once } from "node:events"',
+    body: `const server = net.createServer((socket) => socket.on("error", () => {}).destroy()).listen(0, "127.0.0.1"); await once(server, "listening");
+      for (let i = 0; i < ${LIMITS.scriptConnects + 100}; i++) await new Promise((done) => net.connect(server.address().port, "127.0.0.1").on("error", () => {}).once("close", done).resume());
+      await new Promise(() => {})`,
   },
   {
     name: 'a load the script wrote itself', why: 'timeout', body: 'for (;;);', maxTaskMs: 300,
@@ -323,6 +335,7 @@ for (const [name, ending] of [
   ['a throw in a timer', 'setTimeout(() => { throw new Error("boom") }, 10)'],
   ['an unhandled rejection', 'Promise.reject(new Error("boom"))'],
   ['a handler that throws', 'process.on("uncaughtException", () => { throw new Error("again") }); setTimeout(() => { throw new Error("boom") }, 10)'],
+  ['a handler that swallows it', 'process.on("uncaughtException", () => {}); setTimeout(() => { throw new Error("boom") }, 10)'],
   ['with no handler for it left', 'try { process._fatalException = 0 } catch {}; setTimeout(() => { throw new Error("boom") }, 10)'],
 ]) {
   test(`a rule process leaves at once with its thread pool busy, ${name}`, async (t) => {
@@ -359,13 +372,29 @@ for (const [name, act] of [
 ]) {
   test(`a rule process with no question out does not survive ${name}`, async (t) => {
     const dir = tmpDir('trocar-channel-'), script = path.join(dir, 'script.mjs');
-    fs.writeFileSync(script, `import fs from 'node:fs'\nexport default () => { setTimeout(() => { ${act} }, 50); return String(process.pid) }`);
+    fs.writeFileSync(script, moduleOf({ top: `setInterval(() => { if (armed()) { ${act} } }, 20)`, body: '' }, dir));
     const runner = openOneShot({ script, rules: [{ name: 'script', on_error: 'forward', match: { harness: 'any' }, do: [{ script }] }] });
     t.after(() => runner.close());
     const pid = Number((await runner.run(unit())).bytes);
+    fs.writeFileSync(path.join(dir, 'die'), '');
     assert.ok(await until(() => isGone(pid), 2000), 'the rule process is still there');
   });
 }
+
+test('half a frame behind an answer is half a frame with no question out', async (t) => {
+  const dir = tmpDir('trocar-channel-'), script = path.join(dir, 'script.mjs');
+  fs.writeFileSync(script, moduleOf({ body: `
+    const body = Buffer.from(JSON.stringify({ id: taskId(), verdict: 'forward' })), head = Buffer.alloc(4)
+    head.writeUInt32LE(body.length)
+    fs.writeSync(3, Buffer.concat([head, body, Buffer.from([0, 0, 1, 0])]))
+    await new Promise(() => {})` }, dir));
+  const runner = openOneShot({ script, rules: [{ name: 'script', on_error: 'forward', match: { harness: 'any' }, do: [{ script }] }] });
+  t.after(() => runner.close());
+  const pid = Number((await runner.run(unit())).bytes);
+  fs.writeFileSync(path.join(dir, 'die'), '');
+  await runner.run(unit());
+  assert.ok(await until(() => isGone(pid), 2000), 'the rule process is still there');
+});
 
 for (const [name, ending, why] of [['a task it overran', 'for (;;);', 'timeout'], ['a crash', 'process.abort()', 'crashed'], ['a bad answer', 'say({ id: taskId(), verdict: "hold" }); await new Promise(() => {})', 'bad-result']]) {
   test(`a script process answers for its own death whatever its slot says: ${name}`, async () => {
@@ -394,16 +423,31 @@ test('timers are not sockets: a cache of them lives', async () => {
   } finally { await runner.close(); }
 });
 
-test('what counts a connection is out of a script\'s reach', async () => {
-  const dir = tmpDir('trocar-counted-'), script = path.join(dir, 'script.mjs');
-  fs.writeFileSync(script, `import net from 'node:net'
-    export default () => {
-      const socket = net.connect(1, '127.0.0.1').on('error', () => {}), kinds = [Object.getPrototypeOf(socket._handle), Object.getPrototypeOf(process.stdin._handle)]
-      socket.destroy()
-      return String(kinds.every(Object.isFrozen))
-    }`);
+test('a process has no more open files than the limit, by the kernel\'s count', { skip: WIN && 'Windows has no such table' }, async (t) => {
+  const dir = tmpDir('trocar-ulimit-'), node = path.join(dir, 'node'), seen = path.join(dir, 'seen'), real = process.execPath;
+  fs.writeFileSync(node, `#!/bin/sh\nulimit -n > ${JSON.stringify(seen)}\nexec ${JSON.stringify(real)} "$@"\n`, { mode: 0o755 });
+  process.execPath = node;
+  t.after(() => { process.execPath = real; });
+  const runner = openOneShot({ rules: [{ name: 'r', on_error: 'forward', match: { harness: 'any' }, do: [{ replace: 'a', with: 'b' }] }] });
+  try { await runner.run(unit()); } finally { await runner.close(); }
+  assert.equal(Number(fs.readFileSync(seen, 'utf8')), LIMITS.scriptFds);
+});
+
+test('edits up to the limit stay bytes for whoever reads them', async () => {
+  const dir = tmpDir('trocar-segment-'), script = path.join(dir, 'script.mjs');
+  const one = '{"at":0,"del":0,"ins":""},', bytes = Math.floor(LIMITS.editsBytes / one.length) * one.length - 1;
+  fs.writeFileSync(script, moduleOf({ body: `
+    const slot = fs.openSync(process.argv[2], 'r+')
+    fs.writeSync(slot, Buffer.alloc(${bytes}, ${JSON.stringify(one)}), 0, ${bytes}, ${HEAD_BYTES})
+    say({ id: taskId(), verdict: 'forward', edits: { at: ${HEAD_BYTES}, bytes: ${bytes} } }); ${HOLD}` }, dir));
   const runner = openOneShot({ script, rules: [{ name: 'script', on_error: 'forward', match: { harness: 'any' }, do: [{ script }] }] });
-  try { assert.equal(String((await runner.run(unit())).bytes), 'true'); } finally { await runner.close(); }
+  try {
+    await runner.run(unit());
+    fs.writeFileSync(path.join(dir, 'die'), '');
+    const { edits } = await runner.run(unit());
+    assert.ok(Buffer.isBuffer(edits));
+    assert.equal(edits.length, bytes);
+  } finally { await runner.close(); }
 });
 
 test('a script binds no path, however it asks', { skip: WIN && 'a named pipe is no file on disk' }, async () => {
@@ -443,7 +487,7 @@ for (const [name, places, check] of [
   });
 }
 
-test('a script finds no way to run microtasks with its stack nearly full', async () => {
+test('process has no _tickCallback to run microtasks with on a nearly full stack', async () => {
   const dir = tmpDir('trocar-tick-'), script = path.join(dir, 'script.mjs');
   fs.writeFileSync(script, 'export default () => typeof process._tickCallback');
   const runner = openOneShot({ script, rules: [{ name: 'script', on_error: 'forward', match: { harness: 'any' }, do: [{ script }] }] });
@@ -466,7 +510,8 @@ test('more edits than a record holds is edits-full, not a bad answer', async () 
   try { assert.equal(whyOf(await runner.run({ ...unit(), body: Buffer.alloc(LIMITS.editsBytes / 16, 'a') })), 'edits-full'); } finally { await runner.close(); }
 });
 
-describe('CPU', { concurrency: 6 }, () => {
+describe('CPU', () => {
+  const BURNS = [['a timer that never lets up', 'setInterval(() => { const end = Date.now() + 900; while (Date.now() < end); }, 1)'], ['the thread pool', POOL]];
   const started = async (t, start) => {
     const dir = tmpDir('trocar-idle-cpu-'), script = path.join(dir, 'script.mjs');
     fs.writeFileSync(script, `import crypto from 'node:crypto'\nlet on = false\nexport default () => { if (!on) { on = true; ${start} } return String(process.pid) }`);
@@ -474,34 +519,39 @@ describe('CPU', { concurrency: 6 }, () => {
     t.after(() => runner.close());
     return { runner, pid: Number((await runner.run(unit())).bytes) };
   };
-  for (const [name, start] of [['a timer that never lets up', 'setInterval(() => { const end = Date.now() + 900; while (Date.now() < end); }, 1)'], ['the thread pool', POOL]]) {
+  // One at a time: side by side on two cores, none of them gets the share it is being tested for.
+  for (const [name, start] of BURNS) {
     test(`with no task on it is ended: ${name}`, async (t) => {
       const { pid } = await started(t, start);
       assert.ok(await until(() => isGone(pid), 16000), 'nothing ended it');
     });
-  }
-  test('with a task every 500 ms is ended all the same: the thread pool', async (t) => {
-    const { runner, pid } = await started(t, POOL);
-    const steady = setInterval(() => { if (!isGone(pid)) runner.run(unit()); }, 500);
-    t.after(() => clearInterval(steady));
-    assert.ok(await until(() => isGone(pid), 16000), 'nothing ended it');
-  });
-  for (const [name, start] of [
-    ['a timer that takes a tenth of a core', 'setInterval(() => { const end = Date.now() + 50; while (Date.now() < end); }, 500)'],
-    ['one burst of work', 'setTimeout(() => { const end = Date.now() + 4000; while (Date.now() < end); }, 100)'],
-  ]) {
-    test(`leaves alone ${name}`, async (t) => {
+    test(`with a task every 500 ms is ended all the same: ${name}`, async (t) => {
       const { runner, pid } = await started(t, start);
-      await new Promise((r) => setTimeout(r, 16000));
-      assert.equal(Number((await runner.run(unit())).bytes), pid);
+      for (const end = Date.now() + 16000; !isGone(pid) && Date.now() < end;) {
+        await runner.run(unit());
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      assert.ok(isGone(pid), 'nothing ended it');
     });
   }
-  test('leaves alone a stream of short tasks, however fast', async (t) => {
-    const { runner, pid } = await started(t, '');
-    for (const end = Date.now() + 16000; Date.now() < end;) {
-      const answer = await runner.run(unit());
-      assert.equal(Number(answer.bytes), pid, JSON.stringify({ ...answer, bytes: undefined }));
+  describe('leaves alone', { concurrency: 3 }, () => {
+    for (const [name, start] of [
+      ['a timer that takes a tenth of a core', 'setInterval(() => { const end = Date.now() + 50; while (Date.now() < end); }, 500)'],
+      ['one burst of work', 'setTimeout(() => { const end = Date.now() + 2400; while (Date.now() < end); }, 3800)'],
+    ]) {
+      test(name, async (t) => {
+        const { runner, pid } = await started(t, start);
+        await new Promise((r) => setTimeout(r, 16000));
+        assert.equal(Number((await runner.run(unit())).bytes), pid);
+      });
     }
+    test('a stream of short tasks, however fast', async (t) => {
+      const { runner, pid } = await started(t, '');
+      for (const end = Date.now() + 16000; Date.now() < end;) {
+        const answer = await runner.run(unit());
+        assert.equal(Number(answer.bytes), pid, JSON.stringify({ ...answer, bytes: undefined }));
+      }
+    });
   });
 });
 

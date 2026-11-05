@@ -1,4 +1,4 @@
-// watchdog.mjs (src/rules) — the thread that kills its rule process (RFC 5.1 §规则进程「看门狗」). It reads nothing from the main thread but one shared deadline, so a main
+// watchdog.mjs (src/rules) — the thread that kills its rule process (RFC 5.1 §规则进程「看门狗」). It reads what the main thread leaves in shared memory and never waits on it, so a main
 // thread stuck in a regex, a loop or an allocation does not stop it. The parent's event loop is not involved either.
 import fs from 'node:fs'
 import { parentPort, workerData } from 'node:worker_threads'
@@ -12,7 +12,6 @@ const BEAT_NS = 1_000_000_000n
 const CPU_WINDOW_NS = 5_000_000_000n
 const CPU_WINDOWS = 2
 const CPU_SHARE = 0.25 // of a core, with or without tasks
-const CPU_PER_TASK_TIME = 4 // the heaviest honest task measured took 2.4: a regex over 16 MiB, with V8's own threads working beside it
 const CPU_PER_TASK_US = 1000
 const NS_PER_US = 1000
 const SLOT_BYTES = HEAD_BYTES + 4 * LIMITS.bodyBytes
@@ -53,7 +52,7 @@ try {
     }
     if (now - windowAt > CPU_WINDOW_NS) { // a timer of the script's, or the thread pool: the beat goes on, and a clock is only on while a task is
       const { user, system } = process.cpuUsage(windowCpu), worked = workedBy(now), done = Atomics.load(tasks, 0)
-      const allowed = CPU_SHARE * Number(now - windowAt) / NS_PER_US + CPU_PER_TASK_TIME * Number(worked - windowWorked) / NS_PER_US + CPU_PER_TASK_US * (done - windowTasks)
+      const allowed = CPU_SHARE * Number(now - windowAt) / NS_PER_US + LIMITS.scriptTaskCpu * Number(worked - windowWorked) / NS_PER_US + CPU_PER_TASK_US * (done - windowTasks)
       burning = user + system > allowed ? burning + 1 : 0
       if (burning >= CPU_WINDOWS) die(fd, 'timeout')
       windowAt = now
