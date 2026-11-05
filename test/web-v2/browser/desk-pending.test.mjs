@@ -27,15 +27,15 @@ function instrument() {
 }
 
 // In the page, in one task: a tick of the overlay rows more than a bar left of the playhead, as a point hit-checked there (a node or an
-// index read in one task and clicked in another can name another tick or a detached one); null when the window shows none.
+// index read in one task and clicked in another can name another tick or a detached one), with its call; null when the window shows none.
 const olderTick = (page, j) => page.evaluate((j) => {
   const cur = document.querySelector('#sawrow .bar.cur'), r0 = cur && cur.getBoundingClientRect()
   if (!r0) return null
   const mid = (e) => { const r = e.getBoundingClientRect(); return r.left + r.width / 2 }
-  const ts = [...document.querySelectorAll('#rails .tick[data-lane]')].filter((t) => mid(t) < r0.left - r0.width), t = ts[j % Math.max(1, ts.length)]
+  const ts = [...document.querySelectorAll('#rails .tick[data-lane]')].filter((t) => mid(t) < r0.left - r0.width), t = ts.at(j % Math.max(1, ts.length))
   if (!t) return null
   const r = t.getBoundingClientRect(), x = r.left + r.width / 2, y = r.top + r.height / 2
-  return document.elementFromPoint(x, y) === t ? { x, y } : null
+  return document.elementFromPoint(x, y) === t ? { x, y, rid: t.dataset.rid } : null
 }, j)
 // the desk over the growing world `w`, its first answer drawn: page, grant(n) (n more answers, and a wait until head reads have taken
 // them, not until they are drawn; a stall is no head read in 20 s), drawn() (every answer taken is drawn: the step head counts the main
@@ -165,9 +165,11 @@ test('2.3 读者优先: a tick held down while an answer lands moves the step wh
 })
 
 // The other half of the same rule: a redraw already past the pace when the pointer goes down. The followed step's bodies hold it between
-// its turn and the drawing of the lanes; pressed there and let go after they come, the tick still jumps. The window holds ticks at the
-// newest step (a wide chapter), so the reader is following when pressing.
-test('2.3 读者优先: a redraw already on its way when the tick is pressed waits for the release', { skip }, async () => {
+// its turn and the drawing of the lanes; pressed there and let go after they come, the tick still jumps, and to the call pressed: the
+// lanes already hold the answer's rows and the drawn ticks do not, so a place read off a tick names another call (2.3 §播放头是调用). The
+// window holds ticks at the newest step (a wide chapter), so the reader is following when pressing; the newest tick left of it is the one
+// the answer's rows land before.
+test('2.3 读者优先: a redraw already on its way when the tick is pressed waits for the release, and the call pressed is the one selected', { skip }, async () => {
   const w = world(12, { calls: 30000, page: 1500, files: 600, compact: 0.002 })
   await growingDesk(w, async (d) => {
     const { page, grant, drawn, stepN, until } = d
@@ -183,6 +185,7 @@ test('2.3 读者优先: a redraw already on its way when the tick is pressed wai
       assert.ok(k < 8, 'a followed step asked for its bodies before it was drawn')
       await grant(1)
       for (const t = Date.now(); !held.length && await stepN() === n0; await page.waitForTimeout(50)) assert.ok(Date.now() - t < 20000, 'the answer moved nothing')
+      await page.waitForTimeout(400) // the bodies asked may be the apply's own: the redraw's turn comes after, and it is drawn at once unless it waits for them
       if (await stepN() === n0) break
       hold = false
       await page.waitForTimeout(500)
@@ -190,8 +193,8 @@ test('2.3 读者优先: a redraw already on its way when the tick is pressed wai
       n0 = await stepN()
       hold = true
     }
-    const pt = await olderTick(page, 0)
-    assert.ok(pt, 'the window holds a tick left of the newest step')
+    const pt = await olderTick(page, -1)
+    assert.ok(pt?.rid, 'the window holds a tick left of the newest step')
     await page.mouse.move(pt.x, pt.y)
     await page.mouse.down()
     hold = false
@@ -200,6 +203,7 @@ test('2.3 读者优先: a redraw already on its way when the tick is pressed wai
     await page.mouse.up()
     await until((n0) => { const h = window.__head(); return !!h && h.n !== n0 && !!document.querySelector('#detail.open') }, n0, `the tick let go at step ${n0} did not move the step`)
     await drawn()
+    assert.equal(await page.evaluate(() => document.querySelector('#rails .tick.sel')?.dataset.rid), pt.rid, 'the tick pressed is the call selected')
   })
 })
 
