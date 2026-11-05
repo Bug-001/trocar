@@ -14,7 +14,7 @@ const { fakeProc } = await import('../arch/linux/fixtures/fake-proc.mjs')
 
 const FAKE = fileURLToPath(new URL('../arch/linux/fixtures/fake-loader.mjs', import.meta.url))
 const [home, socketPath, bundleMs] = process.argv.slice(3)
-const p = fakeProc()
+const p = fakeProc(path.join(path.dirname(home), 'proc')) // in the test's own temp directory: this process ends by SIGKILL, so nothing of its own would remove it
 await installCollector({ home, env: { HOME: home }, osName: 'none', harnesses: [cc], freePort: async () => 0 })
 const makeClient = () => createRedirectorClient({ binary: process.execPath, args: [FAKE], env: { ...process.env, TROCAR_FAKE_LOADER: '1' }, autoHeartbeatMs: 0 })
 const arch = { os: 'linux', createRedirector: () => createLinuxRedirector({ makeClient, procRoot: p.root, uid: process.getuid() }) }
