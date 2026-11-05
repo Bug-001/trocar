@@ -174,3 +174,25 @@ for (const { h, id, r } of (await loadHarnesses()).flatMap((d) => Object.entries
     }
   }
 }
+
+// Class 2 (4.11 P5): the switch file `on` writes for a hook-read route, <collector>/switch/<harness>, holding the door. It is in trocar's own tree and
+// trocar created it, so with the manifest lost it is trocar's by where it is (1.6 R3 「trocar 建的开关文件」): a switch file left behind names a door the
+// same off just closed, and the harness's next start cannot connect (invariant 5).
+for (const { h, id, r } of (await loadHarnesses()).flatMap((d) => Object.entries((d.proxyMode && d.proxyMode.routes) || {}).map(([id, r]) => ({ h: d, id, r }))).filter((x) => x.r.kind === 'switch-file')) {
+  for (const os of ['darwin', 'win32']) {
+    test(`${h.name} · ${id} (switch-file) · ${os}: the switch file \`on\` wrote goes with the manifest gone, and the switch file of another harness stays`, async () => {
+      const w = world({ os })
+      const res = routeEntry('switch-file').write({ ...w.ctx, harness: h.name, routeId: id, route: r }, door())
+      assert.ok(res.ok, JSON.stringify(res))
+      const file = res.records[0].path
+      assert.ok(fs.existsSync(file), file)
+      const other = path.join(path.dirname(file), 'not-asked-for')
+      fs.writeFileSync(other, door())
+      const plan = planByMarker({ home: w.home, env: w.ctx.env, platform: os, ids: [h.name] })
+      assert.deepEqual(plan.map((x) => [x.harness, x.path, x.how]), [[h.name, file, 'owned-file']])
+      assert.deepEqual(undoByMarker(plan, { home: w.home }).map((x) => x.result), ['undone-by-marker'])
+      assert.ok(!fs.existsSync(file), 'the switch file is gone: the next start goes direct')
+      assert.equal(read(other), door(), 'a file that is not this harness\'s switch is not touched')
+    })
+  }
+}
