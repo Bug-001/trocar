@@ -23,15 +23,15 @@ const EOLS = { lf: '\n', crlf: '\r\n' }
 const CERT_KINDS = new Set(['root-key', 'system-root'])
 
 // the user's file as the generator shapes it: one unrelated setting (an API key in a .env: it must never move), the user's proxy, the user's NO_PROXY
-function userText(route, { spell, noProxy, eol }) {
+function userText(route, { spell, noProxy, eol, proxy: userProxy = USER_PROXY }) {
   const proxy = (route.proxyKeys || []).slice(0, spell)
   if (route.kind === 'dotenv-block') {
-    const lines = ['OPENAI_API_KEY=sk-user-secret', ...proxy.map((k) => `${k}=${USER_PROXY}`), ...(noProxy && route.noProxyKeys ? [`${route.noProxyKeys[0]}=${USER_NO}`] : [])]
+    const lines = ['OPENAI_API_KEY=sk-user-secret', ...proxy.map((k) => `${k}=${userProxy}`), ...(noProxy && route.noProxyKeys ? [`${route.noProxyKeys[0]}=${USER_NO}`] : [])]
     return lines.join(eol) + eol
   }
   const doc = { unrelated: 'keep' }
   const set = (keys, v) => { let o = doc; for (const k of keys.slice(0, -1)) o = o[k] ??= {}; o[keys.at(-1)] = v }
-  for (const k of proxy) set(k, USER_PROXY)
+  for (const k of proxy) set(k, userProxy)
   if (noProxy && route.noProxyKeys) set(route.noProxyKeys[0], USER_NO)
   return JSON.stringify(doc, null, 2).replace(/\n/g, eol) + eol
 }
@@ -81,6 +81,34 @@ for (const { h, id, r } of ROUTES.filter((x) => x.r.kind === 'json-key' || x.r.k
       assert.deepEqual(bytesOf(file), before, `${label}: CM15 off restores every byte (the file is gone again when trocar made it)`)
       assert.equal(fs.readFileSync(ca, 'utf8'), '-----BEGIN CERTIFICATE-----\nAA==\n-----END CERTIFICATE-----\n', `${label}: CM15 no certificate bytes touched`)
       assert.deepEqual(recordsOf(w.ctx.manifest, h.name, id), [], `${label}: the undone records leave the manifest`)
+    }
+  })
+}
+
+// P5: a value left in the file that is one of trocar's doors (a loopback URL on a port ingress.json records; the manifest that wrote it lost) is not the
+// user's prior — on records none for it and off leaves no door behind; a loopback proxy of the user's on another port is their prior as any other
+for (const { h, id, r } of ROUTES.filter((x) => x.r.kind === 'json-key' || x.r.kind === 'dotenv-block')) {
+  test(`P5 ${h.name}.${id} (${r.kind}) — a door value already in the file is not the prior; off leaves no door; the user's own loopback proxy is the prior`, () => {
+    const OLD = 'http://g:ffffffffffffffffffffffffffffffff@127.0.0.1:18001'
+    for (const [proxy, isDoor] of [[OLD, true], [door(), true], ['http://127.0.0.1:7890', false]]) {
+      const w = world()
+      put(path.join(w.dir, 'ingress.json'), JSON.stringify({ groupPorts: { [`${h.name}:a`]: 18001, [`${h.name}:b`]: 18003 } }))
+      const ctx = ctxFor(w, h, id)
+      const file = resolveLoc(r.file, ctx)[0]
+      const before = Buffer.from(userText(r, { spell: (r.proxyKeys || []).length, noProxy: false, eol: '\n', proxy }))
+      put(file, before)
+      const res = routeEntry(r.kind).write(ctx, door())
+      assert.equal(res.ok, true, proxy)
+      for (const k of r.proxyKeys) assert.equal(valueIn(r, textOf(file), k), door(), `${proxy}: ${k} is the door`)
+      const priors = JSON.stringify(res.records.map((x) => x.prior_value))
+      if (isDoor) assert.ok(!priors.includes('127.0.0.1:18001'), `${proxy}: a door is never recorded as the user's prior (${priors})`)
+      else assert.ok(priors.includes(proxy), `${proxy}: the user's loopback proxy on another port is the prior`)
+      assert.equal(routeEntry(r.kind).undo(ctx, res.records).ok, true, proxy)
+      const after = textOf(file)
+      if (isDoor) {
+        assert.ok(after != null && !after.includes('127.0.0.1:18001'), `${proxy}: off leaves no door value in the file`)
+        assert.ok(after.includes(r.kind === 'dotenv-block' ? 'OPENAI_API_KEY=sk-user-secret' : '"unrelated": "keep"'), `${proxy}: the user's other settings stay`)
+      } else assert.deepEqual(bytesOf(file), before, `${proxy}: off restores every byte`)
     }
   })
 }
