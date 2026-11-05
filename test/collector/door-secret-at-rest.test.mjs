@@ -48,9 +48,10 @@ test('4.6「日志」· 1.6 V106: the door password is in ingress.json and the s
   }
   for (const f of forms) {
     if (f.present.some((p) => p && 'command' in p)) continue
-    const p = f.present.find((x) => x && x.base !== 'abs' && (() => { try { return resolveLoc({ ...x, glob: undefined }, w.ctx).length } catch { return false } })())
+    const where = (x) => { try { return resolveLoc({ ...x, glob: undefined }, w.ctx)[0] } catch { return null } }
+    const p = f.present.map((x) => (x && x.perOs ? x.perOs[OS] : x)).find((x) => x && where(x)?.startsWith(w.home + path.sep)) // judged by where it resolves: this world writes only in its own HOME
     if (!p) continue
-    const at = resolveLoc({ ...p, glob: undefined }, w.ctx)[0]
+    const at = where(p)
     if (p.glob) { fs.mkdirSync(path.join(at, p.glob.replace(/\*/g, '0')), { recursive: true }); continue }
     if (fs.existsSync(at)) continue
     // a place is a folder, but the program an install-folder wrapper wraps, which must be one native program (a Mach-O header)
