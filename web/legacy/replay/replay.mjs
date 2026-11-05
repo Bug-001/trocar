@@ -30,7 +30,7 @@
 import { esc } from '../core/fmt.mjs'
 import { api as rootApi, scoped } from '../core/api.mjs'
 import { sessionCache } from './session-cache.mjs'
-import { stepCount, partsOf, stepAt, placeSpan, anchorSpan } from '../../src/screens/replay/strip.mjs'
+import { partsOf, placeWindow, anchorSpan } from '../../src/screens/replay/strip-layout.mjs'
 import { setScreenKeys } from '../core/keys.mjs'
 import { openModal } from '../core/dom.mjs'
 import { keyAction } from './keymap.mjs'
@@ -353,7 +353,8 @@ function openDesk(ctx, route0, makeView = legacyView) {
   }
   s.setView = setView
   // the reader's hand on the strip (a view with `spans`): at most one paint a frame, the bars and the rails only: a drag frame reads no body (D64)
-  s.brushTo = (lo, hi) => { if (brushTarget == null) frame(paintBrush); brushTarget = { lo, hi } }
+  // any change the reader makes to the window is the reader's gesture: it stops following (1.3 §拖), or the next poll would undo it
+  s.brushTo = (lo, hi) => { if (s.follow) followOff(); if (brushTarget == null) frame(paintBrush); brushTarget = { lo, hi } }
   s.brushBack = () => { brushTarget = null; s.brushed = false; placeWin(true); paintSpan() }
   // the 内容对比步 (2.3): the compare menu's choice survives scrubbing, clears on a session switch
   s.setDiff = (idx) => { s.diffRef = idx; drawPlayhead() }
@@ -368,10 +369,11 @@ function openDesk(ctx, route0, makeView = legacyView) {
   // ── empty and failed states: every widget that carries per-session data is neutralised, nothing of the last session stays ──
   // `msg` empty → ⑧, the empty frame (1.4: no text, no control); else the honest failure sentence, Retry, and the reason in details
   // (`err`: the failed answer)
+  let brushTarget = null // the window a drag frame asked for, painted on the next frame (s.brushTo)
   let emptied = { msg: '', err: null } // the last empty state, null when the rough page was drawn after it: a view whose frame comes later draws that then (catchUp)
   function renderEmpty(msg, err = null) {
     emptied = { msg, err }
-    s.brushDragging = false; s.span = null; s.brushed = false; s.spanEnd = null; s.anchor = null; s.lanes = []; s.curFlat = []; s.curRemoved = []; s.breaks = []; jumps.clear()
+    s.brushDragging = false; brushTarget = null; s.span = null; s.brushed = false; s.spanEnd = null; s.anchor = null; s.lanes = []; s.curFlat = []; s.curRemoved = []; s.breaks = []; jumps.clear()
     s.landedFor = null; s.turnLanded.clear(); s.lastPhSig = null
     view.empty(msg)
     onEls(() => {
@@ -561,14 +563,10 @@ function openDesk(ctx, route0, makeView = legacyView) {
       s.view = v
       return moved
     }
-    const was = s.span, end = s.spanEnd
-    s.spanEnd = stepCount(s)
-    if (!s.brushed) s.span = placeSpan(was, stepAt(s), partsOf(s), sawCapacity(), end)
-    const moved = !was || was.lo !== s.span.lo || was.hi !== s.span.hi
+    const moved = placeWindow(s, sawCapacity())
     if (moved || rowsMoved) s.view = anchorSpan(s, s.span)
     return moved
   }
-  let brushTarget = null
   function paintSpan() { view.saw(); drawRails(); view.cur() }
   function paintBrush() {
     const t = brushTarget, was = s.span
@@ -978,8 +976,10 @@ function openDesk(ctx, route0, makeView = legacyView) {
   const paintKey = () => { const t = keyTarget; keyTarget = null; if (!s.dead && t != null) setPlayhead(t, true) }
   const onKey = (e) => {
     if (e.key === 'Escape' || !s.anchor || e.ctrlKey || e.metaKey || e.altKey) return
-    const at = keyTarget ?? s.playhead, ch = chapterHere(s)
-    const a = keyAction(e, { at, n: s.anchor.calls.length, problems: s.problems, chapters: ch.chs, step: s.anchor.no ? s.anchor.no(at) : at })
+    // [ ] count from the part the bars show (1.2 §键盘): with `spans` that is s.span's, else the playhead's chapter
+    const at = keyTarget ?? s.playhead, ch = view.spans && s.span ? { chs: partsOf(s) } : chapterHere(s)
+    const step = view.spans && s.span ? s.span.lo : s.anchor.no ? s.anchor.no(at) : at
+    const a = keyAction(e, { at, n: s.anchor.calls.length, problems: s.problems, chapters: ch.chs, step })
     if (!a) return
     e.preventDefault()
     if (a.keys) openModal({ title: KEYS_TITLE, bodyHtml: `<dl class="keylist">${KEY_LIST.map(([k, w]) => `<dt><kbd>${esc(k)}</kbd></dt><dd>${esc(w)}</dd>`).join('')}</dl>` })

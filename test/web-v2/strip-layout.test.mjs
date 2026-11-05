@@ -3,7 +3,7 @@
 // Every expected value comes from the layout rules; asserted on numbers only.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { stripLayout, placeSpan, anchorSpan, PART_MIN, PART_GAP, PART_HIT } from '../../web/src/screens/replay/strip.mjs'
+import { stripLayout, placeSpan, placeWindow, anchorSpan, PART_MIN, PART_GAP, PART_HIT } from '../../web/src/screens/replay/strip-layout.mjs'
 import { buildLanes, anchorLane } from '../../web/legacy/replay/lanes.mjs'
 import { deskOf } from './desk-world.mjs'
 
@@ -154,6 +154,20 @@ test('1.3 #23 · placeSpan: a window parked at the end grows with the part, lo k
     assert.deepEqual(placeSpan({ lo, hi: end }, grown - 1, parts, K, end), { lo, hi: grown })
     assert.deepEqual(placeSpan({ lo, hi: end - 1 }, end - 2, parts, K, end), { lo, hi: end - 1 })
   }
+})
+
+test('1.3 #22 #23 · placeWindow: as the session grows a window parked at the live end follows it; one the reader dragged stays', () => {
+  const desk = (steps) => ({ head: { axis: 'R0-0', steps, chapters: [{ k: 0, s0: 0, s1: 40 }, { k: 1, s0: 40, s1: steps }] } })
+  const live = { desk: desk(50), anchor: null, playRid: null, initialStep: null, span: null, brushed: false }
+  placeWindow(live, 100)
+  assert.deepEqual(live.span, { lo: 40, hi: 50 })
+  live.desk = desk(55)
+  assert.equal(placeWindow(live, 100), true)
+  assert.deepEqual(live.span, { lo: 40, hi: 55 })
+  const dragged = { ...live, span: { lo: 0, hi: 40 }, brushed: true }
+  dragged.desk = desk(60)
+  assert.equal(placeWindow(dragged, 100), false)
+  assert.deepEqual(dragged.span, { lo: 0, hi: 40 })
 })
 
 test('1.3 #23 · anchorSpan: the span\'s local indexes when every step is held in a row; none when one is not', () => {

@@ -1,12 +1,12 @@
 // web/src/screens/replay/Strip.tsx — the whole-session strip (1.3 §概览条), drawn from models.mjs : overviewModel(s) and the window in
-// scopeModel(); strip.mjs : stripLayout() is the one source of every x here, in pixels, and the DOM takes them as % of W. A part is a block,
+// scopeModel(); strip-layout.mjs : stripLayout() is the one source of every x here, in pixels, and the DOM takes them as % of W. A part is a block,
 // the window's is lit; the box marks the window in a part too long for it; the mark is the playhead wherever the window is.
 // On the strip a press that travels drags the bars and leaves the playhead alone, a press that does not is a click, and the box's grips
 // zoom. A drag frame only asks for a window (s.brushTo): the terrain is memoized and nothing here reads a body (D64).
 import { memo, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type PointerEvent } from 'react'
 import { capWindow, chapterAt, fitWindow } from '../../../legacy/replay/timeline.mjs'
 import * as W from '../../../legacy/labels/replay.mjs'
-import { panSpan, stripLayout } from './strip.mjs'
+import { panSpan, stripLayout } from './strip-layout.mjs'
 import type { DeskView } from './view'
 
 type Mark = { g: number, v: number, failed: boolean }
@@ -48,7 +48,7 @@ const Blocks = memo(function Blocks({ l, lit }: { l: Layout, lit: number }) {
 })
 
 export function Strip({ desk, m, ov }: { desk: DeskView, m: any, ov: Overview | null }) {
-  const el = useRef<HTMLDivElement>(null), press = useRef<Press | null>(null)
+  const el = useRef<HTMLDivElement>(null), press = useRef<Press | null>(null), tap = useRef<number | null>(null)
   const [w, setW] = useState(0)
   const [label, setLabel] = useState<{ f: number, g: number, k: number } | null>(null)
   const s = desk.s
@@ -67,6 +67,7 @@ export function Strip({ desk, m, ov }: { desk: DeskView, m: any, ov: Overview | 
 
   const down = (e: PointerEvent<HTMLDivElement>) => {
     if (!on || e.button) return
+    tap.current = null
     const strip = e.currentTarget, left = strip.getBoundingClientRect().left, x = e.clientX - left, t = e.target as Element
     const win = { lo: m.view.lo, hi: m.view.hi }, g = l!.hit(x).g
     const mode = t.classList.contains('ovh-l') ? 'l' : t.classList.contains('ovh-r') ? 'r' : 'pending'
@@ -77,29 +78,35 @@ export function Strip({ desk, m, ov }: { desk: DeskView, m: any, ov: Overview | 
   const move = (e: PointerEvent<HTMLDivElement>) => {
     const p = press.current
     if (!p) return
+    if (!on || !l) { end(); return } // the desk emptied under the press
     const x = e.clientX - p.left, K = desk.capacity()
     if (p.mode === 'pending') {
       if (Math.abs(x - p.x) <= SLOP) return
       p.mode = 'drag'
-      if (s.follow) s.followOff()
     }
     if (p.mode === 'drag') {
-      const { k, g } = l!.hit(x)
+      const { k, g } = l.hit(x)
       if (k !== p.part) { p.part = k; p.grab = 0 }
-      p.win = panSpan(p.win, l!.parts[k], g - p.grab, K)
-      setLabel({ f: Math.max(0, Math.min(1, x / l!.W)), g, k })
+      p.win = panSpan(p.win, l.parts[k], g - p.grab, K)
+      setLabel({ f: Math.max(0, Math.min(1, x / l.W)), g, k })
     } else {
-      const c = l!.parts[p.part], edge = Math.round(l!.stepOf(x)), { lo, hi } = p.win
+      const c = l.parts[p.part], edge = Math.round(l.stepOf(x)), { lo, hi } = p.win
       const next = p.mode === 'l' ? { lo: Math.max(c.s0, Math.min(hi - 1, edge)), hi } : { lo, hi: Math.min(c.s1, Math.max(lo + 1, edge)) }
       p.win = capWindow({ ...next, prev: p.win, K, playhead: (lo + hi) >> 1 })
     }
     s.brushTo(p.win.lo, p.win.hi)
   }
   const end = () => { press.current = null; setLabel(null) }
+  // a press that did not travel is a click, taken on the click event: its detail counts a double-click's second half, which widen() has
   const up = (e: PointerEvent<HTMLDivElement>) => {
     const p = press.current
-    if (p?.mode === 'pending') s.chapterGo(l!.hit(e.clientX - p.left).g)
+    tap.current = p?.mode === 'pending' ? e.clientX - p.left : null
     end()
+  }
+  const click = (e: MouseEvent<HTMLDivElement>) => {
+    const x = tap.current
+    tap.current = null
+    if (x != null && e.detail <= 1 && on) s.chapterGo(l!.hit(x).g)
   }
   // by the step under the pointer, not the event's target: under the press's capture a double-click lands on the strip itself
   const widen = (e: MouseEvent<HTMLDivElement>) => {
@@ -112,11 +119,11 @@ export function Strip({ desk, m, ov }: { desk: DeskView, m: any, ov: Overview | 
 
   const slider = on ? { role: 'slider', tabIndex: 0, 'aria-label': W.STRIP_LABEL, 'aria-valuemin': 1, 'aria-valuemax': m.view.N, 'aria-valuenow': m.at + 1,
     'aria-valuetext': W.stripAt(wordAt(chapterAt(l!.parts, m.at)), m.at + 1) } : undefined
-  return <div className={`ovstrip${label ? ' drag' : ''}`} id="ovstrip" ref={el} {...slider} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={end} onDoubleClick={widen}>
+  return <div className={`ovstrip${label ? ' drag' : ''}`} id="ovstrip" ref={el} {...slider} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={end} onClick={click} onDoubleClick={widen}>
     {l && ov ? <>
       {on ? <Blocks l={l} lit={m.part} /> : null}
       <Backdrop ov={ov} l={l} />
-      {on && m.box ? <div className="ovbrush" id="ovbrush" style={span(l, l.xOf(m.box.lo), l.xOf(m.box.hi))}><span className="ovh ovh-l" /><span className="ovh ovh-r" /></div> : null}
+      {on && m.box ? <div className="ovbrush" id="ovbrush" style={span(l, l.xOf(m.box.lo), Math.min(l.parts[m.part].x1, l.xOf(m.box.hi)))}><span className="ovh ovh-l" /><span className="ovh ovh-r" /></div> : null}
       {on ? <div className="ovpin" id="ovpin" style={{ left: pct(l.xOf(m.at + 0.5) / l.W) }} /> : null}
       {label ? <div className="ovlabel" data-step={label.g} style={{ left: pct(label.f), '--f': label.f } as CSSProperties}>{W.stripAt(wordAt(label.k), label.g + 1)}</div> : null}
     </> : null}

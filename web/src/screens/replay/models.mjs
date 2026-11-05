@@ -15,7 +15,7 @@ import { cacheLabel, costLabel, contentRefOf, contentRefKOf, priceStateNote } fr
 import { totalsOf } from '../../../legacy/replay/header.mjs'
 import { FLAG, cellsOf } from '../../../../src/view/head-cols.mjs'
 import { ENTRY, ENTRY_TIP } from '../../../legacy/labels/library.mjs'
-import { stepCount, partsOf, stepAt, placeSpan } from './strip.mjs'
+import { stepCount, partsOf, stepAt, placeSpan } from './strip-layout.mjs'
 import * as W from '../../../legacy/labels/replay.mjs'
 
 const has = (o, k) => o != null && Object.prototype.hasOwnProperty.call(o, k)

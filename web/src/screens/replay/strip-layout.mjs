@@ -1,4 +1,4 @@
-// web/src/screens/replay/strip.mjs — the strip's one coordinate source (1.3 acceptance 21): chapters and a pixel width in, the
+// web/src/screens/replay/strip-layout.mjs — the strip's one coordinate source (1.3 acceptance 21): chapters and a pixel width in, the
 // parts' spans and the step <-> x maps out, framework-free. Blocks when every chapter can show one; otherwise ticks, x linear in steps.
 // The bars' one window lives here too (1.3 acceptance 23): s.span in global steps, in any part, rows held or not; s.view is its image in
 // the anchor lane, which only the rails read.
@@ -95,6 +95,14 @@ export function placeSpan(prev, g, parts, K, prevEnd) {
   const c = parts[chapterAt(parts, g)]
   const from = !prev ? { lo: 0, hi: 0 } : prev.hi === prevEnd ? { lo: prev.lo, hi: Math.max(prev.hi, c.s1) } : prev
   return placeView(from, g, c.s0, c.s1, K)
+}
+// the bars' window now (replay.mjs placeWin): around the playhead, unless the reader dragged it (s.brushed): that one stays while the
+// session grows; → whether it moved
+export function placeWindow(s, K) {
+  const was = s.span, end = s.spanEnd
+  s.spanEnd = stepCount(s)
+  if (!s.brushed) s.span = placeSpan(was, stepAt(s), partsOf(s), K, end)
+  return !was || was.lo !== s.span.lo || was.hi !== s.span.hi
 }
 // the window a drag leaves with its centre at step g of part `c`: the same width inside the part it is in; in another part that part's
 // window, at most K bars around g (1.3 §概览条)

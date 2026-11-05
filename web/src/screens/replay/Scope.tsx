@@ -12,8 +12,8 @@ import { stepOfMark } from '../../../legacy/replay/lanes.mjs'
 import { L } from '../../../legacy/core/labels.mjs'
 import * as W from '../../../legacy/labels/replay.mjs'
 import { overviewModel, scopeModel } from './models.mjs'
-import { stepCount } from './strip.mjs'
-import { Strip } from './Strip.tsx' // with its extension: on a case-insensitive disk the bare name finds strip.mjs
+import { stepCount } from './strip-layout.mjs'
+import { Strip } from './Strip'
 import { useDeskVersion } from './useDesk'
 import type { Area, DeskState, DeskView } from './view'
 
