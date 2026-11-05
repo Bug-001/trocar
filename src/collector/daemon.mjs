@@ -615,7 +615,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     const startHelper = () => chained(async () => {
       if (helperLive()) return
       await redirector.start()
-      await redirector.configure(port)
+      try { await redirector.configure(port) } catch (e) { await redirector.close().catch(() => {}); throw e } // a half-started helper is dropped: the next `on` starts a fresh one
       const was = helperDown
       helperDown = null; helperUp = true
       if (lock) lock.name({ helper_pid: redirector.helperInfo().pid }) // the standalone off reads it (helperGone)

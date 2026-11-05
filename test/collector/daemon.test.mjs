@@ -556,6 +556,24 @@ test('daemon: started with no harness on it spawns no helper, and status is off 
   } finally { await d.stop(); p.done(); s.done() }
 })
 
+test('daemon: a helper that fails to configure at /on is dropped, so the next /on starts a fresh one and attaches (4.6 S20)', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  const clients = []
+  const makeClient = () => {
+    const c = createRedirectorClient({ binary: process.execPath, args: [FAKE], env: { ...process.env, TROCAR_FAKE_LOADER: '1' }, autoHeartbeatMs: 0 })
+    if (!clients.length) c.configure = async () => { throw new Error('configure refused') } // the first helper starts and then fails to configure
+    clients.push(c); return c
+  }
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: { os: 'linux', createRedirector: () => createLinuxRedirector({ makeClient, procRoot: p.root, uid: UID }) }, harnesses: [cc] })
+  try {
+    await req(s.sock, 'POST', '/on', {}).catch(() => {})
+    await until(() => helperExited(clients[0]))
+    const on = await req(s.sock, 'POST', '/on', {})
+    assert.deepEqual([on.actual, clients.length], ['on', 2])
+  } finally { await d.stop(); p.done(); s.done() }
+})
+
 // 4.6 S20 a/b: an off that leaves no harness on ends the helper once nothing is relayed; the daemon stays and answers, no helper death is
 // recorded, and the next on starts a new helper and attaches
 for (const body of [{}, { harnesses: [cc.name] }]) {
