@@ -254,7 +254,9 @@ export function formatUninstallReceipt(r, { home = null, platform = process.plat
   // §1.1: a connection nothing else would end was cut — how many is said, never left to --json alone
   if ((r.relayed || {}).cut) lines.push(`${r.relayed.cut} connection${r.relayed.cut === 1 ? '' : 's'} that would not end by itself ${r.relayed.cut === 1 ? 'was' : 'were'} cut.`)
   for (const n of r.non_identical || []) lines.push(`Not byte for byte what it was (you changed it after trocar did; only trocar's part was taken out): ${t(n.path)} (backup ${t(n.backup)})`)
-  for (const l of r.left || []) lines.push(`Left in place: ${t(l.path)}: ${l.reason}`, ...(l.command ? [commandLine(l.command)] : []))
+  // a reason that already starts with its file (`<path> could not be removed: …`) is that row; any other is said after the file — the file is named once
+  const leftRow = (l) => (typeof l.reason === 'string' && l.path && l.reason.startsWith(l.path) ? `${t(l.path)}${l.reason.slice(l.path.length)}` : `${t(l.path)}: ${l.reason}`)
+  for (const l of r.left || []) lines.push(`Left in place: ${leftRow(l)}`, ...(l.command ? [commandLine(l.command)] : []))
   for (const p of r.problems || []) lines.push(`Problem: ${p}`)
   for (const n of r.notes || []) lines.push(`Note: ${n}`)
   // §3.6: the purge hint names what `kept` holds — what --purge-data deletes — and is not given when nothing is kept

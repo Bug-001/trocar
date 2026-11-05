@@ -535,3 +535,17 @@ test('the text receipt says a file once: the entries of one file, whatever each 
   assert.equal(rows({ changed: [{ path: file, change: 'restored' }, { path: file, change: 'trocar\'s lines removed' }] }), 1)
   assert.equal(rows({ removed: [file, file] }), 1)
 })
+
+test('formatUninstallReceipt: each left row names its file once, whether or not its reason starts with the path', () => {
+  const home = '/home/u'
+  const left = [
+    { path: '/home/u/.config/systemd/user/trocar.service', result: 'error', reason: '/home/u/.config/systemd/user/trocar.service could not be removed: EACCES' },
+    { path: '/home/u/.trocar/ca/root.key', result: 'error', reason: '/home/u/.trocar/ca/root.key, named as the CA key, is not inside /home/u/.trocar' },
+    { path: '/home/u/.codex/.env', result: 'left-unparsable', reason: 'no longer valid' },
+  ]
+  const text = formatUninstallReceipt({ ok: false, left, problems: [], notes: [], kept: [] }, { home, platform: 'linux' })
+  for (const l of left) {
+    const name = path.posix.basename(l.path) // the text may fold a row and tildes the path: its file name is what is counted
+    assert.equal(text.split(name).length - 1, 1, `${l.path} is named once:\n${text}`)
+  }
+})
