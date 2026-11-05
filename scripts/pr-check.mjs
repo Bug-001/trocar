@@ -119,7 +119,8 @@ function parse(argv) {
     const cli = findCli(values.cli)
     if (!cli) return null
     return { ...values, cli, before: parseTime(values.before),
-      title: values.title && fs.readFileSync(values.title), body: fs.readFileSync(values.body) }
+      title: values.title && Buffer.from(fs.readFileSync(values.title, 'latin1').replace(/\n+$/, ''), 'latin1'), // as `$(cat <file>)` hands it to gh
+      body: fs.readFileSync(values.body) }
   } catch {
     return null
   }
