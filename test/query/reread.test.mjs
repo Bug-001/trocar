@@ -20,7 +20,7 @@ import { extendSession, version } from '../../src/query/named/session.mjs'
 import { answer } from '../../src/query/answers.mjs'
 import { saveTitles, titlesFile } from '../../src/query/titles.mjs'
 import { workerFork, workerForkIn } from '../helpers/worker-fork.mjs'
-import { within, whileMoving, reporting } from '../helpers/bounded.mjs'
+import { drain, within, whileMoving, reporting } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
 
@@ -54,7 +54,7 @@ const packsOf = (home, id) => Object.fromEntries(Object.entries(filesOf(home, id
 const oldAnswer = (home, id) => ({ files: Object.fromEntries(Object.entries(filesOf(home, id)).filter(([n]) => !n.startsWith('head'))), head: { ...readHead(home, id), pending: null } })
 const CONTRACT = JSON.parse(fs.readFileSync(new URL('../fixtures/session-read-contract.json', import.meta.url), 'utf8'))
 const inWorker = (home, f = fs) => ({ home, fs: f, writer: true })
-const toTheEnd = async (ctx, id) => { while (await extendSession(ctx, id, 1_000)); }
+const toTheEnd = async (ctx, id) => { await drain(() => extendSession(ctx, id, 1_000)) }
 
 /** Folds these sessions to their end in one worker, which then leaves: the first read's files, on disk. */
 async function foldAll(home, ids) {
@@ -121,17 +121,18 @@ for (const axis of ['PROJ_V changed', 'FOLD_V changed']) {
     AXES[axis](home, id)
     const old = oldAnswer(home, id), total = sessionGroups(await indexRows({ home })).get(id).length
     let read = 0, n = 0
-    for (;;) {
+    await drain(async () => {
       await extendSession(ctx, id, 5)
       const a = await runQuery('session', { id }, ctx)
-      if (!(a.pending?.done < total)) break // at its end the answer files change
+      if (!(a.pending?.done < total)) return false // at its end the answer files change
       const { pending } = readHead(home, id)
       assert.ok(fs.existsSync(headFile(home, id, true)) && !fs.existsSync(headFile(home, id)))
       assert.deepEqual({ ...pending, read: 0 }, { done: total, total, seen: true, calls: 0, read: 0 })
       assert.ok(pending.read >= read, 'read never falls')
       assert.deepEqual(oldAnswer(home, id), old)
       read = pending.read; n++
-    }
+      return true
+    })
     assert.ok(n > 0, 'seen before the end')
     await toTheEnd(ctx, id)
     assert.equal(rereads(home, id), false)
@@ -144,12 +145,13 @@ test('with no new member `read` follows the frontier in steps of a pack: one hea
   await foldAll(home, [id])
   AXES['PROJ_V changed'](home, id)
   const reads = []
-  for (;;) { // background slices alone: a request's slice would jump the frontier past what the head says
+  await drain(async () => { // background slices alone: a request's slice would jump the frontier past what the head says
     await extendSession(ctx, id, 1)
-    if (!rereads(home, id)) break
+    if (!rereads(home, id)) return false
     const { read } = readHead(home, id).pending
     if (read !== reads.at(-1)) reads.push(read)
-  }
+    return true
+  })
   assert.ok(reads.at(-1) >= PACK_MEMBERS, `read passed a multiple of a pack: ${reads}`)
   reads.slice(1).forEach((r, i) => assert.ok(spans(r) > spans(reads[i]), `each new read is in a later span: ${reads}`))
 })
@@ -333,7 +335,7 @@ test('a head that cannot be written ends the turn the same way: one record, the 
   lastVersion(home, id)
   AXES['PROJ_V changed'](home, id)
   const said = [], refusing = { ...fs, renameSync: (a, b) => { if (b === headFile(home, id)) throw Object.assign(new Error('injected: no room'), { code: 'ENOSPC' }); return fs.renameSync(a, b) } }
-  const turn = async (f) => { while (await extendSession({ home, fs: f, writer: true, persist: (e) => said.push(e.code) }, id, 1_000)); }
+  const turn = async (f) => { await drain(() => extendSession({ home, fs: f, writer: true, persist: (e) => said.push(e.code) }, id, 1_000)) }
   await turn(refusing)
   await turn(refusing)
   assert.deepEqual(said, ['projection-write-failed'])

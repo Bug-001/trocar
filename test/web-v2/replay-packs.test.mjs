@@ -13,6 +13,7 @@ import { createDesk, listOf, stepOf, indexOf, ridAt, laneEvents } from '../../we
 import { parseLines, applyFile, applyHead } from '../../web/legacy/replay/packs.mjs'
 import { behindOf, readStateHtml } from '../../web/legacy/replay/header.mjs'
 import { world } from './desk-world.mjs'
+import { drain } from '../helpers/bounded.mjs'
 
 const fx = JSON.parse(fs.readFileSync(new URL('../fixtures/session-read-contract.json', import.meta.url), 'utf8'))
 const text = (lines) => lines.map((l) => JSON.stringify(l)).join('\n') + '\n'
@@ -337,7 +338,7 @@ test('3.5 答案文件 head: an older head of the open span with the same packs 
   const home = path.join(tmpDir('trocar-oldhead-'), '.trocar')
   const s = bigSession({ home, id: 'eeee-0000-4a1b-9c2d-000000000006', growth: 300, subEvery: 4, subLanes: 2, subLen: 1e9 })
   const ctx = { home, writer: true }, dir = sessionDir(home, s.id), read = (f) => fs.readFileSync(path.join(dir, f))
-  const fold = async () => { while (await extendSession(ctx, s.id, Infinity)); }
+  const fold = async () => { await drain(() => extendSession(ctx, s.id, Infinity)) }
   s.append(520) // pack 0 sealed, the open span begun
   await fold()
   const older = JSON.parse(gunzipSync(read('head.json.gz')).toString('utf8'))

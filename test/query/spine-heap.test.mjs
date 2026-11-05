@@ -29,6 +29,7 @@ const K = STORE_HEAP + REDUCE_HEAP + 2 * LOG_BYTES
 // one cold read as the worker reads, until no member is above the reduction frontier and its background is done → {calls, truncated,
 // retained, blocks}
 const READ = `${TICK}
+const { drain } = await import(${at('../helpers/bounded.mjs')})
 const fs = await import('node:fs')
 const { runQuery } = await import(${JSON.stringify(QUERY)})
 const { extendSession } = await import(${JSON.stringify(new URL('../../src/query/named/session.mjs', import.meta.url).href)})
@@ -46,7 +47,7 @@ const before = process.memoryUsage().heapUsed
 // step-order columns. In a function of its own, so the top-level frame's registers keep no answer.
 const ask = async () => {
   let doc = await runQuery('session', { id, limit: '20' }, { home, writer: true, progress: tick })
-  while (await extendSession({ home, writer: true, progress: tick }, id, Infinity));
+  await drain(() => extendSession({ home, writer: true, progress: tick }, id, Infinity))
   doc = await runQuery('session', { id, limit: '20' }, { home, writer: true, progress: tick })
   return { calls: doc.lanes.reduce((n, l) => n + l.count, 0), truncated: doc.truncated }
 }
@@ -89,6 +90,7 @@ const BLOCK_COLUMNS = 77
 // from its log, not refolded: 3.5:42); the read extracts it, so each round grows on a store of its own (a fresh fs object: the
 // projection opened again), as a worker forked again does.
 const GROWN = `${TICK}
+const { drain } = await import(${at('../helpers/bounded.mjs')})
 const fs = await import('node:fs')
 await import(${JSON.stringify(QUERY)})
 const { extendSession } = await import(${at('../../src/query/named/session.mjs')})
@@ -100,7 +102,7 @@ const [home, opts, N] = [process.argv[1], JSON.parse(process.argv[2]), Number(pr
 const s = bigSession({ home, ...opts })
 const grow = async (own) => {
   for (let n = 0; n < N; n += 100) { s.append(Math.min(100, N - n)); tick() }
-  while (await extendSession({ home, fs: own, writer: true, progress: tick }, s.id, Infinity));
+  await drain(() => extendSession({ home, fs: own, writer: true, progress: tick }, s.id, Infinity))
 }
 console.log(JSON.stringify(s.id))
 for await (const _ of (await import('node:readline')).createInterface({ input: process.stdin })) {

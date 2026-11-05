@@ -25,7 +25,7 @@ import { runQuery } from '../../src/query/named/index.mjs' // first: the named q
 import { PLAN_PER_MEMBER } from '../../src/query/named/session.mjs'
 import { FOLD_STOPS } from '../../src/health/codes.mjs'
 import { workerFork } from '../helpers/worker-fork.mjs'
-import { whileMoving, reporting } from '../helpers/bounded.mjs'
+import { drain, whileMoving, reporting } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
 import { readerBudget } from './past-room.mjs'
@@ -106,7 +106,7 @@ test('3.5 `seen`: a stop on a whole answer keeps saying so, and what clears it i
   fs.mkdirSync(path.join(home, 'raw'), { recursive: true, mode: 0o700 })
   const s = bigSession({ home, segment, growth: 2_000, subEvery: 3, compactAt: 20_000 })
   s.append(30)
-  while (await extendSession(ctx, s.id, 1_000));
+  await drain(() => extendSession(ctx, s.id, 1_000))
   assert.equal(headOf(home, s.id).pending, null)
   s.append(120)
   let fail = true
