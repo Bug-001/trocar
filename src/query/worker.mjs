@@ -223,6 +223,7 @@ async function background() {
     const id = target // a request answered during the slice may change `target`
     noRoom.delete(id)
     try { more = await extendSession(ctx, id, SLICE_MS) } catch (e) { say(e); if (e?.code === 'heap-no-room') noRoom.add(id) }
+    if (more === null) noRoom.add(id) // its state went in the slice: the heap again, not the session
     if (!more && !noRoom.has(id) && up && up[0] === target && !answered.has(target) && !follow.has(target) && !nodeFs.existsSync(path.join(sessionDir(home, target), 'open.main.ndjson'))) {
       try { writeSkip(home, target, up[1]) } catch { /* the next worker tries again */ }
     }

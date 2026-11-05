@@ -108,8 +108,9 @@ class HeapBound extends Error {
 // What the reduction holds (`m.held`, its weight in the shared ledger: costOf) is what the heap grew by since it began (`m.base`,
 // measured for a state from scratch, and kept by a state grown across requests).
 const heapLine = () => heapBudget() - heapBudget() / BOUND_STEPS / 2;
-/** Whether the live heap is short of the line a fold stops at (a full collection): a session stopped by heap-no-room is worth another try. */
-export const heapHasRoom = () => liveHeap() <= heapLine();
+/** With the warm entries let go, whether the live heap is short of the line a fold stops at (a full collection): a session stopped by
+ *  heap-no-room is worth another try. The worker asks at idle, with no reader: a state kept there is no lack of room. */
+export function heapHasRoom() { yieldCaches(); return liveHeap() <= heapLine(); }
 function bounded(m, rows, bytes) {
   m.since += bytes;
   if (usedHeap() <= heapCeiling() && m.since < m.gap) return;
@@ -612,7 +613,7 @@ export async function extendSession(ctx, id, budgetMs) {
     shown.delete(s.id);
     if (!toState(ctx, s, end)) return true;
   } catch (e) { if (!e || e.code !== 'ELINEPART') throw e; letLinesGo(ctx, id); return true; }
-  if (s.st.gone) return false; // read-only since this slice: as a write that failed, the next turn reopens it
+  if (s.st.gone) return null; // read-only since this slice: nothing written, and no end of the session, so a later turn reopens it
   if (rereading(ctx, s.id)) {
     stops.delete(s.id);
     heads.delete(s.id); // what this worker wrote at this mark may be from before the rebuild

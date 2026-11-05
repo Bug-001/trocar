@@ -11,7 +11,7 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { drain } from '../helpers/bounded.mjs'
 import { bigSession } from './big-session.mjs'
 import { runQuery } from '../../src/query/named/index.mjs' // first: the named queries' registry imports session.mjs
-import { extendSession, files, sessionState } from '../../src/query/named/session.mjs'
+import { extendSession, files, heapHasRoom, sessionState } from '../../src/query/named/session.mjs'
 import { readHead, writeInFlight } from '../../src/query/ctx-files.mjs'
 import { sessionDir } from '../../src/query/projection.mjs'
 import { titlesFile } from '../../src/query/titles.mjs'
@@ -80,6 +80,28 @@ for (const [name, params] of [['session --head', { head: true }], ['lane --tail'
   })
 }
 
+test('at idle a state kept is no lack of room: the heap is looked at once it went', async () => {
+  const s = homeWith(30)
+  await whole(s)
+  const { st } = await sessionState(s.ctx, s.id), real = v8.getHeapStatistics
+  v8.getHeapStatistics = () => { const h = real(); return st.gone ? h : { ...h, used_heap_size: h.heap_size_limit } }
+  try { assert.equal(heapHasRoom(), true) } finally { v8.getHeapStatistics = real }
+})
+
+test('a state let go in its own slice says neither more nor the end: nothing is written, and a later turn folds it', async () => {
+  const s = homeWith(30)
+  await whole(s)
+  const d = sessionDir(s.home, s.id)
+  for (const n of fs.readdirSync(d)) if (ANSWERS.test(n)) fs.unlinkSync(path.join(d, n))
+  s.ctx.fs.statSync = (f, ...r) => { if (f === titlesFile(s.home)) yieldCaches(); return fs.statSync(f, ...r) }
+  s.a.append(5)
+  assert.equal(await extendSession(s.ctx, s.id, Infinity), null)
+  assert.deepEqual(bytesOf(s, ANSWERS), {})
+  s.ctx.fs.statSync = fs.statSync
+  await whole(s)
+  assert.deepEqual([readHead(s.home, s.id).tier, readHead(s.home, s.id).pending], [1, null])
+})
+
 for (const [name, letGo] of [['the ledger making room', () => hold(heapBudget())()], ['yieldCaches', yieldCaches]]) {
   test(`a write in flight let go by ${name}: the files end as those of a home never let go`, async () => {
     const id = nextId(), cut = homeWith(300, id), kept = homeWith(903, id)
@@ -129,18 +151,19 @@ async function slice(s) {
   assert.equal(more, true)
   assert.ok(now.extract > was.extract || now.fold > was.fold || JSON.stringify(now.files) !== JSON.stringify(was.files), 'a slice that says more has done something')
 }
-// the live heap past the ceiling for advance()'s one look (usedHeap, heapCeiling, liveHeap, heapCeiling) of the end of grow()
-function past(f) {
-  const real = v8.getHeapStatistics
-  let over = 4
-  v8.getHeapStatistics = () => { const h = real(); return over-- > 0 ? { ...h, used_heap_size: h.heap_size_limit } : h }
-  return Promise.resolve().then(f).finally(() => { v8.getHeapStatistics = real })
+// the live heap past the ceiling until the heap retry opens the fold log again: its state went
+function past(s, f) {
+  const real = v8.getHeapStatistics, open = s.ctx.fs.openSync
+  let over = true
+  v8.getHeapStatistics = () => { const h = real(); return over ? { ...h, used_heap_size: h.heap_size_limit } : h }
+  s.ctx.fs.openSync = (file, ...a) => { if (path.basename(file) === 'fold.idx') over = false; return open(file, ...a) }
+  return Promise.resolve().then(f).finally(() => { v8.getHeapStatistics = real; s.ctx.fs.openSync = open })
 }
 
 test('#39: the slice whose write went with the state in the heap retry does something', async () => {
   const s = homeWith(300)
   await inWrite(s)
-  await past(() => slice(s))
+  await past(s, () => slice(s))
 })
 
 test('#39: the slice whose write went with the state when the cut moved does something', async () => {
@@ -148,7 +171,7 @@ test('#39: the slice whose write went with the state when the cut moved does som
   await whole(s)
   s.a.append(600)
   await sessionState(s.ctx, s.id) // no other session is being read: its fold is cut, not stopped
-  await past(() => extendSession(s.ctx, s.id, Infinity))
+  await past(s, () => extendSession(s.ctx, s.id, Infinity))
   await whole(s)
   s.a.append(600)
   const log = (await sessionState(s.ctx, s.id)).V.log

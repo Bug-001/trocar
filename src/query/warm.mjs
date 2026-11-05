@@ -125,17 +125,17 @@ export function yieldCaches() { for (const e of lru) if (!e.steady && e !== read
  * estimate from stored bytes, never a count of entries or a serialized size); `estimate` is the same, known BEFORE computing, so
  * the room is made first and the peak never passes the budget. A value whose cost is past the whole budget is returned but never
  * kept. `max` bounds this cache's entries. `steady`: every query reads these entries again (steadyBytes). `drop(value)`: the ledger let
- * this entry go (making room, yieldCaches, past `max`), and whatever else holds the value must let it go too; never for take(), for a
- * stale entry `get` replaces, or for a value that was never kept: their caller has the value in hand. `pin(id)`: the one entry the ledger
+ * this entry go (making room, yieldCaches, past `max`) or did not keep it, and whatever else holds the value must let it go too; never
+ * for take() or a stale entry `get` replaces: their caller has the value in hand. `pin(id)`: the one entry the ledger
  * does not let go until the next pin, of any cache (null: none) → whether there is such an entry.
  */
 export function warmCache({ max = Infinity, cost = () => 0, steady: isSteady = false, drop = null } = {}) {
   const m = new Map()
   const keep = (id, e, size) => {
     e.size = size; e.drop = drop
-    if (size > heapBudget()) return // answered this once, never kept, and nothing else is pushed out for it
+    if (size > heapBudget()) { if (drop) drop(e.value); return } // answered this once, never kept, and nothing else is pushed out for it
     room(size)
-    if (total + size > heapBudget()) return // past what the budget can give it (a query in flight holds the rest): answered, never kept
+    if (total + size > heapBudget()) { if (drop) drop(e.value); return } // past what the budget can give it (a query in flight holds the rest): answered, never kept
     m.set(id, e); lru.add(e); total += size
     if (isSteady) { e.steady = true; steady += size }
     if (m.size > max) for (const old of m.values()) { if (m.size <= max) break; if (old !== e) evict(old) }
