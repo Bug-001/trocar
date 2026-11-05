@@ -44,6 +44,9 @@ export function rowsKey(rows) {
  *  side's budget is derived from it: every process that answers a query cuts at the same place, so the worker and the local path
  *  give the same document (3.5 §内存有界). */
 export const WORKER_MEMORY_MB = 384
+/** The light role's heap (3.5 §内存有界): it holds no rows and no spine, so what it needs is one `block`'s segment index and record. Set from measurement:
+ *  deploy-check's lightHeapPeakMb on a real capture. A read that does not fit is a crash, and the router hands that request to the main role. */
+export const LIGHT_MEMORY_MB = 128
 /** The flags that give a process a heap of `mb` MB: V8's `--max-heap-size`, the young generation inside it, so V8's heap_size_limit
  *  is `mb` and the used heap (both generations) is measured against the heap it can use. `--max-old-space-size` adds the young
  *  generation on top (3 × its semi-space, 48 MB at V8's default): a process started with it reckons its budget and ceiling past its

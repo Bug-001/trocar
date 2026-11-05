@@ -59,6 +59,8 @@ const easing = (ease) => {
 // unit of "a chunk of index work". A READER that had to read more than this from a segment is the honest definition of
 // a cold index (D62 · D38): the keeper never leaves that much behind, so nothing was keeping this index current.
 export const KEEPER_CHUNK_BYTES = 4 << 20;
+/** A `warmOnly` read met a segment whose index it may not build (segmentIndex): the light worker answers `102`, and the main role reads it. */
+export class IndexPending extends Error {}
 const NL = 0x0a;
 // One direction's wire bytes: the number when it is one, else null — not recorded is never 0 (4.2 §段索引, invariant 4).
 const finite = (v) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null);
@@ -485,9 +487,11 @@ export const problemEntry = (where, p) => ({ where, code: p.code, ...(p.level ? 
  *   progress: called after every chunk the scan reads (a reader's; scanNdjson).
  *   ease: an async function a scan awaits at least every EASE_MS or so, so a long one leaves the event loop to others (a reader's;
  *     `easing`). The answer and any index written are the same with it or without.
+ *   warmOnly: the light worker's read (3.5 §行表先读): a stored index it cannot use (to rebuild, or a tail longer than the `index-cold` line) throws
+ *     IndexPending before any scan or write. A shorter tail is read as ever, or the newest step's block would never answer.
  * Never throws for a segment it cannot read: the reason is in `problems` and the caller lists it in `errors`.
  */
-export async function segmentIndex({ home = trocarHome(), segment, fs = nodeFs, maxBytes = Infinity, owner = false, entries = null, past = null, progress = null, ease = null } = {}) {
+export async function segmentIndex({ home = trocarHome(), segment, fs = nodeFs, maxBytes = Infinity, owner = false, entries = null, past = null, progress = null, ease = null, warmOnly = false } = {}) {
   const problems = [];
   const source = segmentSource(home, segment, fs);
   const sealed = /\.sealed$/.test(source);
@@ -502,6 +506,7 @@ export async function segmentIndex({ home = trocarHome(), segment, fs = nodeFs, 
   const grown = !owner && !!past && (stored === past || continued.has(stored)) && how !== 'rebuild';
   const kept = owner ? null : stored;
   if (how === 'reuse') return { segment, source, records: stored.records || [], problems: stored.problems || [], bytesRead: 0, done: true, stored: kept, grown };
+  if (warmOnly && (how === 'rebuild' || fs.statSync(source).size - stored.mark.end > KEEPER_CHUNK_BYTES)) throw new IndexPending(`the index of ${segment} is not usable yet`);
   const prior = how === 'resume' && stored.problems ? stored.problems : []; // stored by an earlier pass, said again
   let got;
   try {
