@@ -66,41 +66,41 @@ async function readGroup({ read, errors, progress }, group, blocks) {
     raw = await read(at);
     if (!raw) unread = ['record-missing', `no record ${recordId} in this home's raw segments`];
   } catch (e) { unread = ['record-unreadable', `record ${recordId} could not be read back: ${String((e && e.message) || e)}`]; }
-  const rec = raw && stampRecord(raw, { ...at, stream: raw._stream });
+  let rec = null; // stamped on the first view asked for, inside viewAt's try: a record that will not stamp costs the views alone
+  const recOf = () => (rec ??= stampRecord(raw, { ...at, stream: raw._stream }));
   for (const item of group) {
-    blocks[item.i] = unread ? miss(errors, item.ref, ...unread) : one(errors, raw, rec, item);
+    blocks[item.i] = unread ? miss(errors, item.ref, ...unread) : one(errors, raw, recOf, item);
     if (progress) progress();
   }
 }
 
 // What a ref cannot read is `bytes: null` and an errors entry with a BLOCK_PROBLEMS code (3.5 §会话读 `block`).
-function miss(errors, where, code, reason, truncated = null) {
+function miss(errors, where, code, reason) {
   errors.push({ where, code, reason });
-  return { ref: where, bytes: null, encoding: null, fidelity: null, truncated };
+  return { ref: where, bytes: null, encoding: null, fidelity: null, truncated: null };
 }
 
-function one(errors, raw, rec, { ref, recordId, field, start, end }) {
+function one(errors, raw, recOf, { ref, recordId, field, start, end }) {
   // A field of a record is the stored decoded text itself (4.6 §记录), so it is verbatim as it stands, unless the field says otherwise.
   const got = field ? fieldTextOf(raw, field) : { text: normalizeRecord(raw).req_body };
   const fidelity = !field ? classifyFidelity(raw) : got.reserialized ? 'reserialized' : 'verbatim';
-  const truncated = reqIncompleteOf(raw);
-  if (typeof got.text !== 'string') return miss(errors, ref, 'field-missing', `record ${recordId} ${got.missing || 'carries no request body'}`, truncated);
+  if (typeof got.text !== 'string') return miss(errors, ref, 'field-missing', `record ${recordId} ${got.missing || 'carries no request body'}`);
   const bytes = start == null || end == null ? got.text : got.text.slice(start, end);
-  const view = viewAt(errors, rec, ref);
+  const view = viewAt(errors, recOf, ref);
   return {
     ref, bytes,
     encoding: requestEncodingOf(raw) || 'identity',
     fidelity: { verbatim: fidelity !== 'reserialized', ...(NOTE[fidelity] ? { note: NOTE[fidelity] } : {}) },
-    truncated,
+    truncated: reqIncompleteOf(raw),
     ...(view ? { view } : {}),
   };
 }
 
 // The block's parsed view, or null when `ref` names no block or the block has nothing parsed to show; a parse that throws costs the
 // view alone, and says so as a note: the bytes above are as good as ever.
-function viewAt(errors, rec, ref) {
+function viewAt(errors, recOf, ref) {
   try {
-    const flat = blockAt(rec, ref), view = flat && viewOf(flat);
+    const flat = blockAt(recOf(), ref), view = flat && viewOf(flat);
     return view && (flat.events ? { ...view, events: flat.events } : view);
   } catch (e) {
     errors.push({ where: ref, code: 'view-unreadable', reason: `this block's parsed view could not be built: ${String((e && e.message) || e)}`, level: 'note' });
