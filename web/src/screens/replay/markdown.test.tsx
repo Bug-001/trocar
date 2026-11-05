@@ -56,7 +56,7 @@ describe('links, images, tables', () => {
       expect(a?.getAttribute('rel')?.split(' ').sort()).toEqual(['noopener', 'noreferrer'])
       expect(a?.getAttribute('title')).toBe(url)
     }
-    for (const url of ['docs/a.md', '../a.md', '#/x', 'javascript:alert(1)', 'JaVaScRiPt:alert(1)', '//evil.io/a', 'file:///etc/passwd', 'data:text/html,x', 'http:x']) {
+    for (const url of ['docs/a.md', '../a.md', '#/x', 'javascript:alert(1)', 'JaVaScRiPt:alert(1)', '//evil.io/a', 'file:///etc/passwd', 'data:text/html,x', 'vbscript:msgbox(1)', 'http:x']) {
       const d = dom(`see [the words](${url}) and on`)
       expect(d.querySelector('a')).toBeNull()
       expect(d.querySelector('.md-link')?.textContent).toBe('the words')
@@ -156,7 +156,7 @@ it('is what kinds.mjs draws a markdown block with', () => {
 })
 
 it('emits only the allowed markup for hostile text (2.3 #17)', () => {
-  const BAD = ['<script>alert(1)</script>', '<img src=x onerror=alert(1)>', 'javascript:alert(1)', '"><svg onload=x>', '</pre></div>', '\u0000\u0001\u001b[31m \u007f', '&lt;script&gt;', "' onmouseover='x", '`']
+  const BAD = ['<script>alert(1)</script>', '<img src=x onerror=alert(1)>', '<a style="color:red" href="javascript:x">a</a>', 'javascript:alert(1)', 'vbscript:msgbox(1)', 'data:text/html,<b>x</b>', '"><svg onload=x>', '</pre></div>', '\u0000\u0001\u001b[31m \u007f', '&lt;script&gt;', "' onmouseover='x", '`']
   const FORMS = (x: string) => [x, `# ${x}`, `- ${x}`, `1. ${x}`, `> ${x}`, `**${x}**`, `\`${x}\``, `[${x}](${x})`, `[a](<${x}>)`, `[a](http://x.io/${x})`, `[a](http://x.io "${x}")`, `![${x}](${x})`, `![a](http://x.io/${x})`,
     `\`\`\`${x}\n${x}\n\`\`\``, `| ${x} | b |\n|---|---|\n| c | ${x} |`, `<${x}>`, `<k ${x}>`, `<k>${x}</k>`, `<a b="${x}">`, `https://x.io/${x}`]
   for (const x of BAD) for (const src of FORMS(x)) for (const file of [false, true]) {
