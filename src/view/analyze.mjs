@@ -27,7 +27,7 @@ import { compactionVerdict, compactionBaseline, hasCompactionPreamble } from '..
 // `response`. Reading `.response` directly is the bug class that silently killed every HTTP status
 // on real captures — so go through the shared helper, never the raw key.
 import { respOf } from '../dissect/record-fields.mjs'
-import { HEAD, taskOf, shorten } from './blockmeta.mjs'
+import { HEAD, TASK_HEAD, taskOf, shorten } from './blockmeta.mjs'
 import { streamParts } from '../dissect/sse-spans.mjs'
 import { num52, numTable } from '../query/projection.mjs'
 import { mapUsage } from '../model/schema.mjs'
@@ -217,8 +217,6 @@ function acceptPath(p) {
 // A string the fold keeps (a seen path, a byte context, a subagent's first text) in bytes of its own: a slice of a block's text, or
 // a cons string over one, would keep that whole text alive for as long as the fold lives (3.5 §内存有界).
 const own = (s) => (' ' + s).slice(1)
-// What a subagent lane keeps of its first user text to find the spawn that opened it (finish: the spawn's prompt opens that text).
-const FIRST_TEXT_CHARS = 4096
 // ── THE ANALYZER'S FACTS (RFC 4.3 §3 · §4) ─────────────────────────────────────────────────────────────────────────────────────────
 // Everything the fold reads of a call comes from two pure producers whose results are plain JSON (the context projection persists
 // them, src/query/projection.mjs): blockFacts(block) for one message block, callFacts(record) for the call itself. The fold reads a
@@ -390,7 +388,7 @@ export function callFacts(r) {
     preamble: hasCompactionPreamble(req.messages),
     mcp: (req.tools || []).filter((t) => /^mcp__/.test(t.name || '')).map((t) => 'MCP: ' + (String(t.name).split('__')[1] || t.name)),
     // a subagent's first user text, its head only: a spawn's prompt opens it (finish)
-    firstText: sub ? (firstUser ? own(textOfMessage(firstUser).replace(REMINDER, '').slice(0, FIRST_TEXT_CHARS)) : '') : undefined,
+    firstText: sub ? (firstUser ? own(textOfMessage(firstUser).replace(REMINDER, '').slice(0, TASK_HEAD)) : '') : undefined,
     reply: defined({
       text: evText(text), thinking: nr.thinking ? evText(nr.thinking) : undefined,
       tools: (nr.tools || []).map((c) => defined({ id: c.id, name: c.name, input: c.input })),

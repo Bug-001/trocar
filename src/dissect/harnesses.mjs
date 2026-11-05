@@ -247,12 +247,12 @@ const textOf = (m) => (Array.isArray(m?.content) ? m.content.map((b) => (b?.type
 
 const systemOf = (b) => (Array.isArray(b.system) ? b.system.map((s) => s?.text || '').join('\n') : String(b.system || ''));
 
-/** auxKindOf(rec) → the kind of a background call by its harness's `aux` table (2.1); a record with no row reads Claude Code's. */
+/** auxKindOf(rec) → the kind of a background call by its harness's `aux` table (2.1); a record with no row reads the neutral row's. */
 export function auxKindOf(rec) {
   const b = bodyOf(rec) || {}, users = (Array.isArray(b.messages) ? b.messages : []).filter((m) => m?.role === 'user');
   const cap = typeof b.max_tokens === 'number' ? b.max_tokens : Infinity, first = textOf(users[0]), last = textOf(users.findLast(textOf));
   const system = systemOf(b);
-  const hit = (harnessOf(rec).row || byId('cc')).aux.find((e) => cap <= e.maxTokens || e.first?.test(first) || e.last?.test(last) || e.system?.test(system));
+  const hit = (harnessOf(rec).row || ROW).aux.find((e) => cap <= e.maxTokens || e.first?.test(first) || e.last?.test(last) || e.system?.test(system));
   return hit ? hit.kind : 'aux';
 }
 
