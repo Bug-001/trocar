@@ -26,6 +26,7 @@ import { makeIssuer } from '../tls/issuer.mjs'
 import { bypassHit } from '../upstream-shape.mjs'
 import { hostSetOf } from '../host-agent.mjs'
 import { configuredHosts } from './sources.mjs'
+import { priorRecordOf } from './entries.mjs'
 import { CODE } from '../codes.mjs'
 import { agentTrustSet, createAgentTrust, CERT_VARS } from './upstream-trust.mjs'
 import { redactProxyUrl } from '../../../netenv/redact.mjs'
@@ -132,7 +133,7 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     keep(fcache, k, { at: answer.unknown || start == null ? clock() : null, answer })
     return answer
   }
-  const priorOf = (d) => { const e = itemsOfPhase(manifest(), 'on').find((i) => i.harness === d.harness && i.route === d.routeId && typeof i.prior_value === 'string'); return e ? e.prior_value : null }
+  const priorOf = (d) => { const e = priorRecordOf(byName.get(d.harness)?.proxyMode?.routes?.[d.routeId], itemsOfPhase(manifest(), 'on').filter((i) => i.harness === d.harness && i.route === d.routeId)); return e ? e.prior_value : null }
 
   /** The process's env, cwd and parent walk, read once per pid + start when read (P7, 4.9 §5.2). An answer with env or cwd unread, or of a process
    *  whose start time is unknown (a pid alone can be reused), is asked again on a later connection, at most once a second (4.11 P7, D38). The start
