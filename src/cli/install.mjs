@@ -33,8 +33,10 @@ const COST = "While installed, programs you run trust certificates issued by thi
 const RISK = 'Any program running as you can ask trocar to issue a trusted certificate, but cannot copy the key. If you suspect misuse: trocar uninstall, then trocar install.'
 
 // 1.6 §3.2 step 5: the code the answering collector names when it is not this copy's (`root`), else null — a collector that names none is a build
-// from before the first release (D67④) and is left
+// from before the first release (D67④) and is left. Under `deps.keepDaemon` nothing is stale: the update that runs this install replaces the
+// collector itself right after it, once the login entry is written (§5.5 step 4)
 async function staleDaemon({ platform, home, env, fs, deps, root }) {
+  if (deps.keepDaemon) return null
   const running = await daemonCode({ platform, dir: path.join(home, '.trocar', 'collector'), env, fs, deps })
   return typeof running === 'string' && running !== codeId(root) ? running : null
 }

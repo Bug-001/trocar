@@ -28,7 +28,7 @@ const pairs = (rows) => pairsAt(rows, { label: Math.max(...Object.values(ROW).ma
 import { runOffCli } from '../off/main.mjs'
 import { runOnCli } from './on.mjs'
 import { runInstallCli } from './install.mjs'
-import { replaceDaemon, daemonCode, CUT } from './replace-daemon.mjs'
+import { replaceDaemon, daemonCode, entryStartsThisCopy, CUT } from './replace-daemon.mjs'
 import { runPlaceCli } from './place.mjs'
 import { PS_FILE_ARGS } from '../collector/arch/win32/custody.mjs'
 import { printJson } from './json.mjs'
@@ -267,15 +267,19 @@ async function update({ io, env, home, platform, deps, flags }) {
   return spawnNew(process.execPath, [path.join(root, 'bin', 'trocar.mjs'), 'update', '--yes', ...(json ? ['--json'] : [])], {}, r.to)
 }
 
-/** 4 · (the new code) the daemon, `install` and `on`, and the handover file gone when all three are done (§5.5). `only: 'daemon'`: the
- *  code is already the newest and only the daemon runs another one — the one step of this phase the spec asks for then. */
+/** 4 · (the new code) the daemon, `install` and `on`, and the handover file gone when all three are done (§5.5). A login entry that starts this code
+ *  is rewritten first: the new daemon is pulled up from what the entry says, and `enable` does not reread a job already loaded (D82⑥). One that
+ *  starts another copy, or cannot be asked, keeps the daemon first: install would quietly point it at this copy. `only: 'daemon'`: the code is
+ *  already the newest and only the daemon runs another one — the one step of this phase the spec asks for then. */
 async function finish({ io, env, home, platform, deps, dir, handover, root, fs, r, lines, done, no, waiting, only = null }) {
   r.from = waiting.from || r.from
   r.to = codeId(root)
   r.harnesses = waiting.on
   const problems = []
+  const first = only !== 'daemon' && await entryStartsThisCopy({ home, env, platform, deps, fs })
+  const early = first ? await step(deps.install || runInstallCli, ['--yes', '--json'], { io, env, home, platform, deps: { ...deps, keepDaemon: true } }) : null
   const replaced = await replaceDaemon({ by: 'update', env, home, platform, deps, dir, root, fs, problems })
-  r.restarted = replaced.restarted
+  r.restarted = replaced.restarted || !!(early && early.doc && early.doc.daemon && early.doc.daemon.started) // a daemon that was not there: install pulled it up on the new entry
   if (replaced.notes.length) r.notes.push(...replaced.notes)
   const daemonFailed = problems.length > 0
   // the login entry runs another copy: install here would quietly point it at this one — which copy it runs is the operator's to say
@@ -284,7 +288,7 @@ async function finish({ io, env, home, platform, deps, dir, handover, root, fs, 
     lines.push(`trocar is now running ${r.to}.`)
     return done(EXIT.ok)
   }
-  const installed = await step(deps.install || runInstallCli, ['--yes', '--json'], { io, env, home, platform, deps })
+  const installed = early || await step(deps.install || runInstallCli, ['--yes', '--json'], { io, env, home, platform, deps })
   r.install = installed.doc
   let failed = null // the step that did not finish: its own reason is printed under the problem (with --json, r.install / r.on carry it)
   if (installed.exit !== EXIT.ok) { problems.push(`the new code could not finish installing itself (trocar install exit ${installed.exit}). ${AGAIN}`); failed = { command: 'install', doc: installed.doc } }
