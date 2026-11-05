@@ -131,6 +131,7 @@ A new shape found here goes back to stage 1 and stage 3. Do not work around it.
 - Reviewers go through what no test forces, in the diff: the contents of `MARKER_PATHS`, the sample in `seven-shapes.mjs`, the descriptor's own test, and the evidence behind each `verified: true`.
 - New words in CLI output: render them with `node scripts/cli-shot.mjs -- node bin/trocar.mjs <command>`, in both `status` and `status <h>`. The detail comes from the daemon's hint in `src/collector/core/codes.mjs`, not `src/cli/words.mjs`, and both must read as plain English for a user.
 - Commit size, spec order and the pull request template are in [CONTRIBUTING.md](../CONTRIBUTING.md).
+- A new harness's host is in your capture, so this pull request needs `--public-host` on `scripts/pr-check.mjs` (`trocar-pr`).
 
 ### Afterwards: each agent upgrade
 

@@ -21,7 +21,7 @@
 
 ## Docs
 
-- [ ] README.md updated (or no user-visible change)
+- [ ] README.md updated (or no user-visible change, or nothing it says changed)
 - [ ] docs/release-notes/ updated (or no user-visible change)
 
 ## Licensing

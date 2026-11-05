@@ -1,19 +1,19 @@
 ---
 name: trocar-pr
-description: Use when a change to trocar is ready to leave the machine, or when reviewing someone else's trocar pull request. Reviews the diff against the project's rules, checks for vulnerabilities and fixes them, proves that nothing private is in it, and opens the pull request only after the user agrees. Comes after trocar-fix.
+description: Use when a change to trocar is ready to leave the machine, or when reviewing someone else's trocar pull request. Reviews the diff against the project's rules, checks for vulnerabilities and fixes them, proves that nothing private is in it, and opens the pull request only after the check passes and the user agrees. Comes after trocar-fix.
 ---
 
 # trocar-pr: review, clean, and send
 
 Everything that leaves this machine goes through this skill: a pull request, an issue, a comment. The hard rule is that **no real session content and no screenshot of a real session is ever uploaded**. A pull request describes the functional change and a repro on synthetic data, and nothing about what the user was doing.
 
-You hold the keys here. `scripts/pr-check.mjs` can refuse, but nothing stops you going around it, so do not. If it refuses, the text changes or the change does not go. Nothing is "only a warning". The one way past is `--accept-partial`: it covers only a capture that was not fully compared, you use it only after the user has seen `coverage` and clearly agreed, and it is written into the report and the hash.
+You hold the keys here. `scripts/pr-check.mjs` can refuse, but nothing stops you going around it, so do not. If it refuses, the text changes or the change does not go. Nothing is "only a warning". This holds when the user asks too. A yes, however exact or urgent, covers only text the check passed; `--accept-partial` is the one exception. If they want refused text public, send nothing, tell them which rule refused it, and leave it to them: they can post it on GitHub themselves, and that is their call. `--accept-partial` covers only a capture that was not fully compared, you use it only after the user has seen `coverage` and clearly agreed, and it is written into the report and the hash.
 
 ## Steps
 
 ### 1. Review the whole branch
 
-Read `git diff origin/main...HEAD` as if someone else wrote it. If your harness can start a fresh agent with no memory of this work, use one: hand it the diff, not your conclusions.
+Start a fresh agent with no memory of this work to read `git diff origin/main...HEAD` as if someone else wrote it: hand it the diff, not your conclusions.
 
 - `spec/01-trocar-rfc/0.1-engineering-rules.md` §6 is the closing checklist: give each item pass, fail or not applicable.
 - Would each new test really go red if the behaviour broke? Is an acceptance item silently skipped? Is any code unreachable from the product's own entry points?
@@ -57,14 +57,14 @@ There is no place for what the user was doing, what a session contained, or how 
 `--before` is the time you started working, in UTC. Your own session may be under capture, so the check compares against what was captured before you began. Later is never safer, it only refuses more.
 
 ```bash
-node scripts/pr-check.mjs --before <start-time> --title <title-file> --body <body-file>
+node scripts/pr-check.mjs --json --before <start-time> --title <title-file> --body <body-file>
 ```
 
 It judges every commit on the branch (paths, added lines, messages, author and committer), the branch name, the title and the body. It refuses, with the place and the rule but never the value:
 
 - images, video, PDF, archives, capture formats and other binary files; Git LFS pointers; an SVG that reaches outside itself, by data, an image or a reference to another file; a `data:` URI of a bitmap, or in base64 with an image type or no type, in any text (one of SVG text is text, read by the rules below, and a bitmap URI inside it is refused), and a Markdown image, an `<img` or `<video` tag or a bare `github.com/user-attachments/` address in a title, body or comment (inside a committed file those are fine); a change to the built board that a rebuild does not reproduce;
 - credentials and key material, and a folded block of encoded text that opens to nothing readable; encoded text that does open is judged by what it says;
-- your user name, host name, real name, git email, home paths in any OS's spelling, and a commit email that is not a GitHub noreply address, which `gh api user --jq '"\(.id)+\(.login)@users.noreply.github.com"'` prints for you (`noreply@github.com` passes: a web edit is committed by it);
+- your user name, host name, real name (outside the author field), git email, home paths in any OS's spelling, and a commit email that is not a GitHub noreply address, which `gh api user --jq '"\(.id)+\(.login)@users.noreply.github.com"'` prints for you (`noreply@github.com` passes: a web edit is committed by it);
 - project paths, session ids, session titles, hosts, segment names and record ids from your captures, in the login of a commit email too;
 - any run of about 12 English words or 20 CJK characters (60 bytes once normalized) that also occurs verbatim in your captures;
 - commits over 400 lines, commits without a body, control bytes in any text, path, title or body, text that is not UTF-8, a hash line holding anything but this run's hash, and merge commits (rebase instead);
@@ -72,11 +72,13 @@ It judges every commit on the branch (paths, added lines, messages, author and c
 
 Text already in the public repository is public and passes.
 
-By default the check reads every capture through the installed `trocar`, which can take a few minutes. Without trocar installed, add `--cli bin/trocar.mjs`. The report's `coverage` gives the time range it compared (`from`, `to`), `scanned_bytes`, `opaque_bytes`, the bytes of records it could not open, and `after_bytes`, the bytes it skipped for being at or past `--before`.
+By default the check reads every capture through the installed `trocar`, which can take a few minutes. Without trocar installed, add `--cli bin/trocar.mjs`. `coverage`, which only `--json` prints, gives the time range it compared (`from`, `to`), `scanned_bytes`, `opaque_bytes`, the bytes of records it could not open, and `after_bytes`, the bytes it skipped for being at or past `--before`.
 
 A comparison that did not finish is a refusal: a segment that cannot be read, a record that cannot be opened, a `--before` earlier than every record, or one over a week old that skips records. Comparing 0 bytes because there is no capture at all is normal, but tell the user that nothing was compared.
 
 If `partial` is the only refusal, show the user `coverage`. Only if they clearly agree to send on that comparison, add `--accept-partial` and keep it on every later run: it moves that refusal into `accepted`. It lets nothing else through. The hash holds `--before`, what was accepted and how much was compared, so a later run that read less gets another hash and goes back to the user.
+
+Add `--public-host <host>` (repeatable) only when the host is a public service and the user has said so in this conversation. You never judge that yourself, and you list what it let through for the user. If a link to a public document is refused, rewrite the link or ask the user.
 
 The check cannot see a paraphrase, so a clean run does not excuse step 3. Reread the text yourself and ask: could someone learn anything about this user's work from it?
 
@@ -84,7 +86,7 @@ A refusal means rewrite and run it again. Never edit the check, never pass it a 
 
 ### 5. Ask the user
 
-Show the user, in full: the list of changed files, the title, the body, the name and email that become public, the repository it goes to, `from`, `to` and `opaque_bytes` from `coverage`, `accepted`, and the `hash` the check printed. Ask plainly whether to send it. Do not proceed on anything but a clear yes to this exact content. "Fix it" earlier in the conversation is not a yes to this.
+Show the user, in full: the list of changed files, the title, the body, the name and email that become public, the repository it goes to, `from`, `to` and `opaque_bytes` from `coverage`, `accepted`, the `hash` the check printed, and the Licensing box, which is the user's to tick. Ask plainly whether to send it. Do not proceed on anything but a clear yes to this exact content, which the check has passed. "Fix it" earlier in the conversation is not a yes to this.
 
 ### 6. Send
 
@@ -105,7 +107,7 @@ Give the user the link. An issue instead of a change: run the check with `--issu
 
 A review comment is outbound text too. Run each reply through `node scripts/pr-check.mjs --issue --before <start-time> --body <file>` first, and ask the user before sending.
 
-The same goes for anything else that changes what is public: every further push, a force-push, `gh pr edit`. Run `pr-check` first, then ask the user.
+The same goes for anything else that changes what is public: every further push, a force-push, `gh pr edit`. Run `pr-check` first; ask the user only once it passes.
 
 Delete your working folder and every screenshot.
 
