@@ -53,7 +53,7 @@ test('V120: a positional no command knows is refused with one `usage` document o
     const { exit, out, err } = await fresh([name, 'no-such-name', '--json'])
     const doc = oneLine(out, name)
     assert.equal(err, '', name)
-    assert.equal(doc.ok, false, name); assert.equal(doc.error.code, 'usage', name)
+    assert.equal(doc.ok, false, name); assert.equal(doc.error.code, name === 'rules' ? 'rule-unknown' : 'usage', name) // `rules <name>` takes any word for a rule's name
     assert.equal(exit, (await fresh([name, 'no-such-name'])).exit, `${name}: the same exit as without --json`)
   }
 })

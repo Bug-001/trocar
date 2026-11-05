@@ -6,7 +6,8 @@ import path from 'node:path';
 import { statKey } from './warm.mjs';
 import { segStamp } from './index-build.mjs';
 import { namesStamp } from './rows.mjs';
-import { classesFile, classesLog } from '../paths.mjs';
+import { classesFile, classesLog, rulesFile, rulesState, rulesStats } from '../paths.mjs';
+import { stateFileIn } from '../off/paths.mjs';
 import { pricingFile } from './named/pricing.mjs';
 import { usageFile } from './usage.mjs';
 
@@ -33,3 +34,6 @@ export function pricing({ home, fs, env }) {
   const f = pricingFile({ home, env });
   return [f, statKey(f, fs)];
 }
+
+/** `rules`: the four files its document is read from (the audit stream is not one of them). */
+export const rules = ({ home, fs }) => [rulesFile, rulesStats, stateFileIn, rulesState].map((file) => statKey(file(home), fs));

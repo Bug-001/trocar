@@ -95,7 +95,7 @@ there. Then:
 trocar on                       # start capture
 ```
 
-For developers, from npm (Node ≥ 22). The package is `trocar-cli`; the command it installs is `trocar`.
+For developers, from npm (Node ≥ 22.15). The package is `trocar-cli`; the command it installs is `trocar`.
 
 ```sh
 npm i -g trocar-cli
@@ -131,7 +131,7 @@ makes trocar try decrypting it now; otherwise trocar tries again by itself later
 `trocar install` from another copy of trocar restarts the collector on that copy's code: the agents being captured
 stay captured, and connections open at that moment are cut and retried by the agent.
 
-From source (Node ≥ 22): there is no global `trocar` on your PATH, so run it through the repo.
+From source (Node ≥ 22.15): there is no global `trocar` on your PATH, so run it through the repo.
 
 ```sh
 git clone https://github.com/Bug-001/trocar && cd trocar && npm install --omit=dev
@@ -629,8 +629,9 @@ Whether Desktop's own model calls come out decrypted verbatim is not claimed her
 
 ## Commands
 
-`trocar help` prints the same, in three sections; `trocar help <command>` says one command, and
+`trocar help` prints the same, in four sections; `trocar help <command>` says one command, and
 `trocar query <name> --help` one query. `trocar help --json` gives all of it as one document.
+`trocar help rules` is the rules manual: every field, condition and action, with examples.
 
 ```sh
 # common
@@ -649,6 +650,14 @@ trocar classes add <class> <host-regex> [<path-regex>] [--harness <harness>]
 trocar classes rm <class> [<rule>]
 trocar classes reset
 trocar board [--json]         # prints the board's address with your key and opens it; exit 1 when the board is not there
+
+# intervene
+trocar rules [<name>] [--json]
+trocar rules add <file|-> [--replace] [--dry-run] [--json]   # a rule is added switched off
+trocar rules enable|disable|rm <name>... [--json]
+trocar rules off [--json]     # stops every rule, from any terminal
+trocar rules max-delay [<ms>] [--json]
+trocar rules test <name> [--ref <record>]... [--last <n>] [--with-live] [--as-sent] [--run-script] [--json]
 
 # maintenance
 trocar update [--yes] [--dry-run] [--json]   # the newest code, and the machine as it was (D67)

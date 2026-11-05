@@ -25,6 +25,7 @@ export const OPENAI_SECTIONS = [
 import { parsedRequestBody } from './request-body.mjs';
 import { endpointOf } from './endpoints.mjs';
 import { streamParts } from './sse-spans.mjs';
+import { ruleBlocksFrom } from './cc.mjs';
 
 // ── detection ───────────────────────────────────────────────────────────────────────────────
 // D25 · detect on WIRE SHAPE, not the User-Agent. The old UA test (/codex|openai/) was unreliable in
@@ -391,6 +392,20 @@ export function normResp(rec) {
 export function ctxTokens(norm) {
   const u = (norm && norm.usage) || {};
   return u.input_tokens || u.prompt_tokens || 0;
+}
+
+// ── rule blocks (5.1 按块改): both OpenAI wires as entries of the shared description (cc.mjs ruleBlocksFrom)
+const ruleEntries = (list, base, section) => list.map((x) => ({ ...x, section, base, shared: list.length > 1 }));
+export function ruleBlocksResponses(req) {
+  const instr = req?.instructions, input = req?.input;
+  const entries = instr == null ? [] : [{ section: 'system', role: 'system', block: { text: instr }, base: ['instructions'], sub: [] }];
+  if (typeof input === 'string') entries.push({ section: 'messages', role: 'user', block: { type: 'text', text: input }, base: ['input'], sub: [] });
+  (Array.isArray(input) ? input : []).forEach((item, i) => entries.push(...ruleEntries(itemToBlocks(item), ['input', i], 'messages')));
+  return ruleBlocksFrom(req, entries);
+}
+export function ruleBlocksChat(req) {
+  const msgs = Array.isArray(req?.messages) ? req.messages : [];
+  return ruleBlocksFrom(req, msgs.flatMap((m, i) => ruleEntries(chatMessageToBlocks(m), ['messages', i], m?.role === 'system' || m?.role === 'developer' ? 'system' : 'messages')));
 }
 
 // ── D25 dissector objects: what the board's extraction and reduction (src/view/extract.mjs, src/view/reduce.mjs) call, so they never

@@ -43,6 +43,13 @@ export const indexHome = (home = trocarHome()) => path.join(home, 'index');
 // log of every change (old value, new value, time). Read by the collector (the level of a call) and by `trocar classes`.
 export const classesFile = (home = trocarHome()) => path.join(home, 'classes.json');
 export const classesLog = (home = trocarHome()) => path.join(home, 'logs', 'classes.ndjson');
+// The operator's rules (5.1 §住哪, 1.6 §1.7): the rule file, the lock every writer holds while editing it, and the log of every change. The daemon's
+// own account of them lives under the collector: per-rule counts (losable) and what decides whether rules come back by themselves.
+export const rulesFile = (home = trocarHome()) => path.join(home, 'rules.json');
+export const rulesLock = (home = trocarHome()) => path.join(home, 'rules.lock');
+export const rulesLog = (home = trocarHome()) => path.join(home, 'logs', 'rules.ndjson');
+export const rulesStats = (home = trocarHome()) => path.join(collectorHome(home), 'rules-stats.json');
+export const rulesState = (home = trocarHome()) => path.join(collectorHome(home), 'rules-state.json');
 
 // Capture CA. NOT symmetric with the others: for every other path "not found" means an empty board,
 // but for the CA it means the code MINTS A SECOND ROOT and asks the user to trust it — while the

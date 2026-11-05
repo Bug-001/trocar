@@ -10,13 +10,27 @@ export { SCHEMA_VERSION, EXIT, RECEIPT_KEYS, UNDO_LINE, newReceipt }
 /** 附录 C.2: besides the common keys of C.1, the keys each state-changing command's receipt may carry — the list a reader of 附录 C writes a client against.
  *  A receipt with a key outside its list is drift (tested 2026-10-18: thirteen keys 附录 C named nowhere), so `validateReceipt` reports it.
  *  C.2's table and this object name the same keys (test/cli/schema.test.mjs). */
+const RULE_SWITCH_KEYS = Object.freeze(['rules', 'loaded', 'held', 'notes'])
+const HELD_DECISION_KEYS = Object.freeze(['id', 'outcome', 'rules', 'harness'])
 export const COMMAND_KEYS = Object.freeze({
   install: Object.freeze(['fp256', 'items', 'carriers', 'harnesses', 'pending', 'standalone', 'commands', 'residual_risk', 'daemon', 'autostart', 'left', 'notes']),
-  on: Object.freeze(['harnesses', 'refused', 'routes', 'user', 'standalone', 'commands', 'unchanged', 'capture', 'daemon', 'linger', 'linger_reason', 'adopted', 'notes']),
-  off: Object.freeze(['harnesses', 'all', 'outcome', 'daemon', 'daemon_stop', 'holders', 'left', 'kept_backups', 'orphan_backups', 'kept_bundles', 'still_trusting', 'residue', 'undone_by_marker', 'routing', 'install_items', 'pending', 'user_processes', 'nothing_installed', 'relayed_reason', 'notes']),
+  on: Object.freeze(['harnesses', 'refused', 'routes', 'user', 'standalone', 'commands', 'unchanged', 'capture', 'daemon', 'linger', 'linger_reason', 'adopted', 'rules_stopped', 'notes']),
+  off: Object.freeze(['harnesses', 'all', 'outcome', 'daemon', 'daemon_stop', 'holders', 'left', 'kept_backups', 'orphan_backups', 'kept_bundles', 'still_trusting', 'residue', 'undone_by_marker', 'routing', 'install_items', 'pending', 'user_processes', 'nothing_installed', 'relayed_reason', 'held', 'notes']),
   uninstall: Object.freeze(['harnesses', 'all', 'purge_data', 'kept', 'kept_bundles', 'still_trusting', 'residue', 'dropped_backups', 'non_identical', 'entries', 'left', 'pending', 'scheduled', 'autostart', 'daemon', 'relayed_reason', 'routing', 'user_processes', 'declined', 'notes']),
   update: Object.freeze(['from', 'to', 'harnesses', 'restarted', 'install', 'on', 'notes']),
   classes: Object.freeze(['class', 'before', 'after']),
+  // C.1: a `rules` or `held` receipt's command carries its verb, so the key is the whole name
+  'rules add': Object.freeze(['rules', 'loaded', 'notes']),
+  'rules enable': RULE_SWITCH_KEYS,
+  'rules disable': RULE_SWITCH_KEYS,
+  'rules rm': RULE_SWITCH_KEYS,
+  'rules off': Object.freeze(['rules', 'memory', 'file', 'seq', 'held', 'notes']),
+  'rules max-delay': Object.freeze(['max_delay_ms', 'before', 'loaded']),
+  'rules test': Object.freeze(['rule', 'input', 'with_live', 'run_script', 'counts', 'records', 'rule_ms', 'over_max_delay', 'passthrough_hosts', 'notes']),
+  'held show': Object.freeze(['id', 'harness', 'pid', 'on', 'method', 'host', 'path', 'rules', 'since', 'waited_ms', 'left_ms', 'on_timeout', 'body_bytes', 'edited', 'headers']),
+  'held release': HELD_DECISION_KEYS,
+  'held drop': HELD_DECISION_KEYS,
+  resend: Object.freeze(['batch', 'sent', 'failed', 'replays', 'hop', 'notes']),
 })
 /** C.1: the keys any receipt may carry besides `RECEIPT_KEYS` — a refusal's `error`, and what a run stopped before writing says (`planned`, `blocked`, `needs_yes`, `dry_run`). */
 const COMMON_OPTIONAL = Object.freeze(['error', 'problems', 'planned', 'blocked', 'needs_yes', 'dry_run'])
@@ -53,6 +67,14 @@ function checkHarnessIds(v, at, bad, seen) {
 }
 
 /** Problems with a receipt object against R5 (`[]` = valid). Extra keys are allowed: R5 lists the least a receipt has. */
+// C.2: one row of `rules test`; `headers` are `[name, value or null]`.
+const TEST_ROW_KEYS = new Set(['ref', 'result', 'why', 'would', 'edits', 'headers', 'ms', 'console'])
+function checkTestRow(row, at, bad) {
+  if (!isObject(row)) { bad.push(`${at}: not an object`); return }
+  for (const k of Object.keys(row)) if (!TEST_ROW_KEYS.has(k)) bad.push(`${at}.${k}: not a key 附录 C names for rules test`)
+  for (const [i, pair] of (row.headers ?? []).entries()) if (!(Array.isArray(pair) && pair.length === 2 && isString(pair[0]) && (pair[1] === null || isString(pair[1])))) bad.push(`${at}.headers[${i}]: not [name, value or null]`)
+}
+
 export function validateReceipt(r) {
   if (!isObject(r)) return ['receipt: not an object']
   const bad = []
@@ -90,6 +112,7 @@ export function validateReceipt(r) {
   if (r.command in UNDO_LINE && r.undo !== null && r.undo !== UNDO_LINE[r.command]) bad.push(`undo: ${JSON.stringify(r.undo)}, expected ${JSON.stringify(UNDO_LINE[r.command])}`)
   // C.1: a problem is an English sentence, so a reader needs no code table to print it
   listOf(r, 'problems', bad, (p, at) => { if (!(isString(p) && p.trim() !== '')) bad.push(`${at}: not a sentence`) })
+  if (r.command === 'rules test') listOf(r, 'records', bad, (row, at) => checkTestRow(row, at, bad))
   const named = COMMAND_KEYS[r.command]
   if (named) {
     const allowed = new Set([...RECEIPT_KEYS, ...COMMON_OPTIONAL, ...named])

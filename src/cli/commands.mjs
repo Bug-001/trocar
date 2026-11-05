@@ -1,26 +1,30 @@
 // commands.mjs — the one table of commands (RFC 1.6 §2, §5.4, D58): one list that `trocar help` prints, src/cli/main.mjs dispatches over,
 // src/cli/args.mjs parses by, and test/cli/{commands,dispatch}.test.mjs holds equal. One feature has one name: there are no hidden aliases
 // and no test-only public option (D58⑤).
-//   COMMANDS  [{ name, group, usage, summary, options, exits, mutates, needsRoot?, openOptions?, run(argv, ctx) → exit }]
-//     group       'Capture' | 'Data' | 'Maintenance' — the three sections of help, in that order.
+//   COMMANDS  [{ name, group, usage, summary, options, exits, details?, mutates, needsRoot?, openOptions?, run(argv, ctx) → exit }]
+//     group       'Capture' | 'Data' | 'Intervene' | 'Maintenance' — the four sections of help, in that order.
 //     usage       one or more lines, each beginning `trocar <name>` or `sudo trocar <name>` (the first is the one a usage error prints).
 //     summary     two or three sentences of English a user understands: no section numbers, decision numbers, source paths or internal code names.
-//     options     [['--name' | '--name <value>', 'one line of help']] — the declaration src/cli/args.mjs parses by (nothing is guessed).
+//     options     [['--name' | '--name <value>', 'one line of help', { repeat: true }?]] — the declaration src/cli/args.mjs parses by (nothing is guessed).
 //     exits       [[code, 'what it means']], out of the five codes of §1.3.
+//     details     the command's long manual: a string, or a function returning one so it loads only when asked for. Printed after the exit
+//                 codes in that command's own help (§2, §5.4), never in `trocar help`.
 //     mutates     changes the user's own state, so it refuses root (§1.5): true, or a function of the parsed args when only some subcommands do
 //                 (`classes set|add|rm|reset` refuse root; `classes` shown does not). needsRoot: setup-helper, the one command that must be root.
 //     hidden      not in help or the README: `place`, which only the install scripts and `trocar update` run (§2).
 //     run         gets the argv after the name and the context of runCli: { io, env, home, platform, uid, args: { positionals, flags }, deps }.
 //     topics      pages of its own below the command: `--help` with a positional goes here, with the context { io, json, args } (`query <name> --help`, §4.1).
-//   helpText    the help, made from the table: the three sections, or one command when named.
+//   helpText    the help, made from the table: the four sections, or one command when named.
 //   printHelp   that help, or under `--json` the same rows as one document (C.6).
 //   page        the layout of one page of help, the command's or a query's.
+import { createRequire } from 'node:module'
 import { optionsOf } from './args.mjs'
 import { wrap, WIDTH } from './text.mjs'
 import { printJson } from './json.mjs'
 import { SCHEMA_VERSION, EXIT } from './schema.mjs'
 
-export const GROUPS = Object.freeze(['Capture', 'Data', 'Maintenance'])
+export const GROUPS = Object.freeze(['Capture', 'Data', 'Intervene', 'Maintenance'])
+const require = createRequire(import.meta.url) // help is synchronous, and a manual is only read when asked for
 const via = (file, fn) => async (argv, c) => (await import(file))[fn](argv, c)
 const HARNESS = '[<harness>...]'
 const JSON_OPT = ['--json', 'print one JSON document instead of text, and nothing on stderr']
@@ -93,6 +97,17 @@ export const COMMANDS = Object.freeze([
     options: [JSON_OPT],
     exits: [[0, 'the address is printed'], [1, 'the board is not there: trocar is not installed, the collector did not start, or its port is taken'], [2, 'a usage error']] },
 
+  { name: 'rules',
+    group: 'Intervene', mutates: (args) => ['add', 'enable', 'disable', 'rm', 'off'].includes(args.positionals[0]) || (args.positionals[0] === 'max-delay' && args.positionals.length > 1), run: via('./rules.mjs', 'run'),
+    usage: 'trocar rules [<name>] [--json]\ntrocar rules add <file|-> [--replace] [--dry-run] [--json]\ntrocar rules enable|disable|rm <name>... [--json]\ntrocar rules off [--json]\ntrocar rules max-delay [<ms>] [--json]\ntrocar rules test <name> [--ref <record>]... [--last <n>] [--with-live] [--as-sent] [--run-script] [--json]',
+    summary: 'Shows and edits your rules: what trocar changes in the traffic it sees, and only what you wrote down. A rule is added switched off. trocar rules off stops them all at any time, from any terminal.',
+    options: [['--replace', 'with add: change the rule of that name, which switches it off'], ['--dry-run', 'with add: check the rule and print what would happen, writing nothing'],
+      ['--ref <record>', 'with test: try it on this record; give it again for more', { repeat: true }], ['--last <n>', 'with test: try it on the newest n records its conditions pass, at most 500; the default is 20'],
+      ['--with-live', 'with test: stack it on the live rules, in file order'], ['--as-sent', 'with test: show request rules the bytes that went out, not what the agent sent'],
+      ['--run-script', 'with test: run scripts too; a script can fetch, so it may have side effects'], JSON_OPT],
+    details: () => require('./rules-manual.mjs').rulesManual(),
+    exits: [[0, 'done, shown, or tested, however many records it changed'], [1, 'it could not be done, the collector did not answer `rules off`, or `rules test` could test nothing or failed on a record; it says what is still true'], [2, 'nothing ran: a usage error, a rule that is not valid, an unknown rule, or root']] },
+
   { name: 'update',
     group: 'Maintenance', mutates: true, run: via('./update.mjs', 'runUpdateCli'),
     usage: 'trocar update [--yes] [--dry-run] [--json]',
@@ -145,7 +160,7 @@ const split = (line) => {
   return at < 0 ? [line, ''] : [line.slice(0, at), line.slice(at + 1)]
 }
 
-/** The listed usage lines of the three sections, aligned on one column (the `sudo` line is longer than the rest and keeps one space, §2).
+/** The listed usage lines of the sections, aligned on one column (the `sudo` line is longer than the rest and keeps one space, §2).
  *  A line that would pass 80 columns goes on as a second line indented to that column, never ragged at the margin (§1.1⑥). */
 function listing() {
   const rows = COMMANDS.filter((c) => c.group).flatMap((c) => c.usage.split('\n').map((l) => [c.group, ...split(l)]))
@@ -167,21 +182,22 @@ const block = (rows) => {
   })
 }
 
-/** One page of help (§5.4): the usage, what it does, the rows under `title`, and the exit codes. */
-export function page({ usage, summary, title, rows, exits }) {
+/** One page of help (§5.4): the usage, what it does, the rows under `title`, the exit codes, and a manual if it has one. */
+export function page({ usage, summary, title, rows, exits, details }) {
   const out = [...usage.split('\n').flatMap((l) => wrap(l, WIDTH, '  ')), '', ...wrap(summary)]
   if (rows.length) out.push('', title, ...block(rows))
   out.push('', 'Exit codes', ...block(exits.map(([c, what]) => [String(c), what])))
+  if (details) out.push('', typeof details === 'function' ? details() : details)
   return out.join('\n')
 }
 
-/** The help (§2, §5.4): the three sections, or `helpText('on')` for one command. A name that is no command throws. */
+/** The help (§2, §5.4): the four sections, or `helpText('on')` for one command. A name that is no command throws. */
 export function helpText(name) {
   if (name !== undefined) {
     const cmd = commandNamed(name)
     if (!cmd) throw new RangeError(`no command named ${name}`)
     const rows = [...optionsOf(cmd).values()].map((o) => [o.value ? `${o.name} <${o.value}>` : o.name, o.help])
-    return page({ usage: cmd.usage, summary: cmd.summary, title: 'Options', rows, exits: cmd.exits })
+    return page({ usage: cmd.usage, summary: cmd.summary, title: 'Options', rows, exits: cmd.exits, details: cmd.details })
   }
   const out = [...wrap('trocar - see every byte your agents really send to a model: captured as it is, replayed and taken apart'), '']
   const lines = listing()

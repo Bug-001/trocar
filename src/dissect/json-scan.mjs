@@ -4,11 +4,13 @@
 // Minimal span-tracking JSON scanner. Parses `text` and returns a node tree where
 // every value carries { start, end } string offsets into the ORIGINAL text, so a
 // caller can slice the exact wire serialization of any sub-value.
-//   node = { kind:'object', props:Map<key,node>, start, end }
+//   node = { kind:'object', props:Map<key,node>, shadowed?:node[], start, end }
 //        | { kind:'array',  items:node[],        start, end }
 //        | { kind:'string'|'literal',            start, end }
 // Whitespace between tokens is excluded from a value's [start,end); the span is
-// from the value's first non-ws char to just past its last char.
+// from the value's first non-ws char to just past its last char. `props` holds the
+// last value of a repeated key, as JSON.parse does; `shadowed`, only on an object that
+// repeats one, holds the values it hid, which a reader that takes the first one still sees.
 // Object keys, each a copy of its own: never a slice of the text, which would keep the whole text (a multi-MB request body) alive
 // for as long as the tree or a key of it is kept (V8 slices strings of 13+ chars). Keys repeat across bodies, so each distinct
 // short one (the API's names: cache_control, input_schema) is copied once and shared; the table is bounded in entries and in each
@@ -66,6 +68,7 @@ export function scanJson(text) {
   function parseObject() {
     i++; // {
     const props = new Map();
+    let shadowed = null;
     skipWs();
     if (text[i] === '}') { i++; return { kind: 'object', props }; }
     for (;;) {
@@ -77,13 +80,15 @@ export function scanJson(text) {
       skipWs();
       if (text[i] !== ':') throw new Error(`scanJson: expected ':' at ${i}`);
       i++; // :
-      props.set(key, parseValue());
+      const value = parseValue();
+      if (props.has(key)) (shadowed ??= []).push(props.get(key));
+      props.set(key, value);
       skipWs();
       if (text[i] === ',') { i++; continue; }
       if (text[i] === '}') { i++; break; }
       throw new Error(`scanJson: expected ',' or '}' at ${i}`);
     }
-    return { kind: 'object', props };
+    return shadowed ? { kind: 'object', props, shadowed } : { kind: 'object', props };
   }
 
   function parseArray() {

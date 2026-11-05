@@ -6,7 +6,8 @@
 // as a URL parser reads it) and never past a character a URL cannot hold raw — white space, `/ ? #`, `"`, a backtick, `< >` or a backslash — so it
 // never runs out of a JSON string either. The sub-delims RFC 3986 lets a password carry raw (`!$&'()*+,;=`) are inside it. A user alone and a
 // password alone are hidden the same way. Idempotent; text without a URL passes as it is.
-const USERINFO = /([a-z][a-z0-9+.-]*:\/\/)[^\s/?#"`<>\\@]*(?:@[^\s/?#"`<>\\@]*)*@/gi
-export const hideUserinfo = (s) => String(s).replace(USERINFO, '$1***@')
+// The scheme is looked at only once `://` is found: read forwards, every letter of a long word would start a scheme, and that is quadratic.
+const USERINFO = /:\/\/(?<=[a-z][a-z0-9+.-]*:\/\/)[^\s/?#"`<>\\@]*(?:@[^\s/?#"`<>\\@]*)*@/gi
+export const hideUserinfo = (s) => String(s).replace(USERINFO, '://***@')
 /** The same over a JSON value (a receipt, a key's value): every string in it, as JSON; hideUserinfo never runs out of a JSON string. */
 export const hideUserinfoIn = (v) => (v === undefined ? v : JSON.parse(hideUserinfo(JSON.stringify(v))))

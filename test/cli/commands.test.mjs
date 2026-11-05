@@ -9,9 +9,9 @@ import { WIDTH } from '../../src/cli/text.mjs'
 /** The command names a screen of help lists, by the shape of a usage line. */
 const commandsOf = (text) => new Set(text.split('\n').map((l) => l.match(/^ {2}(?:sudo )?trocar ([a-z-]+)/)).filter(Boolean).map((m) => m[1]))
 
-test('the table is the command list of 1.6 §2 — the names of that list, each once, in three groups', () => {
+test('the table is the command list of 1.6 §2 — the names of that list, each once, in its groups', () => {
   const names = COMMANDS.map((c) => c.name)
-  assert.deepEqual([...names].sort(), ['board', 'classes', 'daemon', 'doctor', 'help', 'install', 'off', 'on', 'place', 'query', 'raw', 'setup-helper', 'status', 'uninstall', 'update'])
+  assert.deepEqual([...names].sort(), ['board', 'classes', 'daemon', 'doctor', 'help', 'install', 'off', 'on', 'place', 'query', 'raw', 'rules', 'setup-helper', 'status', 'uninstall', 'update'])
   assert.equal(new Set(names).size, names.length, 'a name once')
   for (const gone of ['etl', 'shard', 'keep', 'verify', 'version', 'collector', 'test', 'monitor', 'capture']) {
     assert.equal(commandNamed(gone), undefined, `${gone} is not a command any more (1.6 §6: one feature, one name)`)
@@ -39,24 +39,29 @@ test('§1.5: exactly the commands that change your own state refuse root, and se
 
 test('D58: every word of help is English ASCII — no section number, decision number, source path or internal code name', () => {
   const texts = [helpText(), ...COMMANDS.map((c) => helpText(c.name))]
+  // what a manual's reader types is not source: a script's file name, a JSON null
+  const typed = COMMANDS.flatMap((c) => (c.details ? [c.details()] : []))
   for (const text of texts) {
     assert.ok(/^[\x20-\x7e\n]*$/.test(text), `only printable ASCII: ${text.split('\n').find((l) => !/^[\x20-\x7e]*$/.test(l))}`)
-    for (const bad of [/§/, /\bD\d\d\b/, /\bR\d+\b/, /src\/[a-z]/, /\.mjs\b/, /desired-off|left-unparsable|negative-cache/, /undefined|null|NaN/]) {
+    for (const bad of [/§/, /\bD\d\d\b/, /\bR\d+\b/, /src\/[a-z]/, /desired-off|left-unparsable|negative-cache/]) {
       assert.ok(!bad.test(text), `${bad} is in:\n${text}`)
     }
+    const own = typed.reduce((t, manual) => t.replace(manual, ''), text)
+    for (const bad of [/\.mjs\b/, /undefined|null|NaN/]) assert.ok(!bad.test(own), `${bad} is in:\n${own}`)
   }
 })
 
-test('§1.1: help is laid out for 80 columns, in the three groups in order, and lists every command of the table', () => {
+test('§1.1: help is laid out for 80 columns, in its groups in order, and lists every command of the table', () => {
   const text = helpText()
   assert.deepEqual([...commandsOf(text)].sort(), COMMANDS.filter((c) => c.group).map((c) => c.name).sort())
   const at = GROUPS.map((g) => text.split('\n').findIndex((l) => l === g))
-  assert.ok(at.every((i) => i > 0) && [...at].sort((a, b) => a - b).join() === at.join(), `the three groups in order: ${at}`)
+  assert.ok(at.every((i) => i > 0) && [...at].sort((a, b) => a - b).join() === at.join(), `the groups in order: ${at}`)
   for (const line of text.split('\n')) assert.ok(line.length <= WIDTH, `${line.length} columns: ${line}`) // §1.1⑥: a long usage line folds under its own column, it does not pass 80
   const group = (i) => commandsOf(text.split('\n').slice(at[i], at[i + 1] === undefined ? undefined : at[i + 1]).join('\n'))
   assert.deepEqual([...group(0)].sort(), ['doctor', 'install', 'off', 'on', 'status', 'uninstall'])
   assert.deepEqual([...group(1)].sort(), ['board', 'classes', 'query'])
-  assert.deepEqual([...group(2)].sort(), ['daemon', 'raw', 'setup-helper', 'update'])
+  assert.deepEqual([...group(2)].sort(), ['rules'])
+  assert.deepEqual([...group(3)].sort(), ['daemon', 'raw', 'setup-helper', 'update'])
 })
 
 test('§5.4: one command\'s help is its usage, its summary, its options with a line each, and its exit codes; a name that is no command throws', () => {
@@ -69,6 +74,17 @@ test('§5.4: one command\'s help is its usage, its summary, its options with a l
   assert.ok(!/trocar uninstall/.test(one), 'one command only')
   assert.match(helpText('classes'), /trocar classes set[\s\S]*trocar classes add[\s\S]*trocar classes rm[\s\S]*trocar classes reset/, 'a command with subcommands says all of them')
   assert.throws(() => helpText('nope'), /nope/)
+})
+
+test('§2, §5.4: a command\'s details come after its options and exit codes in its own help, and never in the overview; a function is called for them', () => {
+  const entry = commandNamed('on')
+  for (const [details, text] of [['MANUAL-AS-TEXT', 'MANUAL-AS-TEXT'], [() => 'MANUAL-FROM-A-CALL', 'MANUAL-FROM-A-CALL']]) {
+    entry.details = details
+    try {
+      assert.ok(helpText('on').endsWith(text), helpText('on'))
+      assert.ok(!helpText().includes(text))
+    } finally { delete entry.details }
+  }
 })
 
 test('every command of the table parses its own usage line: every option the usage shows is declared, and nothing is declared twice', () => {
