@@ -70,7 +70,7 @@ export function headDoc(s) {
   const lanes = ax ? [ax, ...others.slice(0, HEAD_LANES - 1)] : [];
   const lastRid = n ? lane.rids[n - 1] : null, list = lastRid && listOf(s.store, lastRid);
   return docOf(errorsOf(s.indexErrors, s.failed), {
-    id: s.id, tier: 1, mark: s.mark, markTs: s.markTs, pending: s.pending ? { done: s.pending.done, total: s.pending.total, calls: s.pending.calls } : null,
+    id: s.id, tier: 1, mark: s.mark, markTs: s.markTs, pending: s.pending ? { done: s.pending.done, total: s.pending.total, ...(s.pending.seen ? { seen: true } : null), calls: s.pending.calls } : null,
     truncated: s.truncated, failed: s.failed.length, meta: { ...V.meta, ...s.title }, stats: V.stats, logged: V.logged, probes: V.probes,
     ...(V.unknown ? { unknown: V.unknown } : null),
     axis: ax ? ax.lane : null, steps: n, peak, cols: cells.toString('base64'), bucket, chapters, packs: s.packs, open: s.open,
@@ -95,6 +95,9 @@ export function tier0Doc(id, members, errors, title = null) {
   });
 }
 
+/** seenOf(d) → what a `pending` built on head `d` says of it (3.5 `seen`): `{seen: true}` on a whole answer, a tier-1 head of this CTX_V with
+ *  no `pending` or with one that has `seen`; else null. Every `pending` a head or answer carries asks here. */
+export const seenOf = (d) => (d && d.v === CTX_V && d.tier === 1 && (!d.pending || d.pending.seen) ? { seen: true } : null);
 /** markDone(d, members) → the members at or below the mark of head `d`. */
 export function markDone(d, members) {
   const rid = d.mark == null ? null : String(d.mark).replace(/@.*$/, ''); // a cut's mark is `rid@cut` (named/session.mjs markOn)
@@ -263,12 +266,15 @@ const writers = new WeakMap();
  *  that say so (named/session.mjs sidecars): `w.f` that offset, so a worker that starts again re-renders the packs that changed past
  *  it; `w.t` the tails' checkpoint (the axis, the records appended up to, each tail's size), so it appends to the tails. */
 export const filesAt = (log) => (writers.has(log) ? writers.get(log).f : -1);
-/** filesReach(log) → the members the tails reach (from the first, in write order), as this log's writer or its sidecar's checkpoint
- *  says, else null: neither speaks for the tails on disk (a re-read's new log, a first read). */
-export function filesReach(log) {
+/** filesReach(log, home, id, fs) → the members the tails reach (from the first, in write order), as this log's writer or its sidecar's
+ *  checkpoint says, else null: neither speaks for the tails on disk (a re-read's new log, a first read, tails written past the checkpoint). */
+export function filesReach(log, home, id, fs = nodeFs) {
   const W = log && writers.get(log);
   if (W && W.tails) return W.rec;
-  try { return JSON.parse(log.saved.parts['w.t'][0]).rec; } catch { return null; }
+  try {
+    const c = JSON.parse(log.saved.parts['w.t'][0]);
+    return PARTS.every((p, i) => fs.statSync(tailFile(home, id, p)).size === c.size[i]) ? c.rec : null;
+  } catch { return null; }
 }
 /** tailsReach(home, id, members, fs) → the same read off the tails on disk: past the last `{r}` line of the two, at least the first
  *  member of their span; 0 with no tail. */
@@ -291,8 +297,10 @@ export function filesParts(log) {
 }
 /** forget(log): the files are written afresh at the next slice (a write that failed). */
 export const forget = (log) => { writers.delete(log); jobs.delete(log); };
-// fold log → {f, ax, it}: the writer's work toward the state at frontier `f` that a slice's budget did not cover (writeFiles)
+// fold log → the writer's work toward the state it began at that a slice's budget did not cover (writeFiles). While it is here the session does not fold on (named/session.mjs advance)
 const jobs = new WeakMap();
+/** writeInFlight(log) → whether a write of the session's answer files is under way. */
+export const writeInFlight = (log) => !!log && jobs.has(log);
 // The gzip of a file's text ~1 MiB at a time (one piece a unit): each piece deflated with the 32 KiB before it as its dictionary and
 // flushed to a byte boundary, the last one finished, so the pieces make one deflate stream; they are cut by offset only, so the
 // bytes do not depend on how the work was sliced (3.5 后台抽取与归约). One gzip member: the header, the stream, CRC-32, the length.
@@ -389,9 +397,9 @@ function* dirtyOf(s, off, open) {
 }
 
 /** writeFiles(ctx, s, deadline = Infinity) → {packs, open} of the head: brings the session's pack and tail files to the state `s`
- *  (the worker's, after a slice); null when `deadline` (a performance.now() time) passed first: what is left goes on at the next call
- *  at the same state, a unit at a time (SCAN rids of the scan for what changed, a call's render, a piece of a gzip, a file: 3.5 后台抽取与归约); a call at another state
- *  goes on from the packs the last one finished. The first slice of a session in this worker (or of a fold log opened again) re-renders the packs with fold-log lines past
+ *  (the worker's, after a slice); null when `deadline` (a performance.now() time) passed first: what is left goes on at the next call,
+ *  a unit at a time (SCAN rids of the scan for what changed, a call's render, a piece of a gzip, a file: 3.5 后台抽取与归约), at the state it
+ *  began at, where the fold waits for it. The first slice of a session in this worker (or of a fold log opened again) re-renders the packs with fold-log lines past
  *  the offset its sidecar says the files stood at, takes the others from their files when whole and written under the axis it has
  *  (its checkpoint's; else renders them), and carries
  *  on the tails its sidecar's checkpoint vouches for (carried), writing the others afresh; later slices seal the spans the mark passed
@@ -400,16 +408,14 @@ function* dirtyOf(s, off, open) {
 export function writeFiles(ctx, s, deadline = Infinity) {
   if (s.mark == null) return { packs: [], open: null };
   const log = s.V.log, ax = axisOf(s.V);
-  let j = jobs.get(log);
-  // the frontier moved under it: the packs it finished stay (W), the rest is written at the new state (3.5 后台抽取与归约)
-  if (j && (j.f !== log.frontier || j.ax !== ax)) { jobs.delete(log); j = null; }
-  if (!j) {
+  let it = jobs.get(log);
+  if (!it) {
     const W = writers.get(log);
     if (W && W.ax === ax && W.f === log.frontier) return W.files;
-    jobs.set(log, (j = { f: log.frontier, ax, it: writing(ctx, s) }));
+    jobs.set(log, (it = writing(ctx, s)));
   }
   for (;;) {
-    const r = j.it.next();
+    const r = it.next();
     if (r.done) { jobs.delete(log); return r.value; }
     if (performance.now() >= deadline) return null;
   }
@@ -431,22 +437,12 @@ function* writing(ctx, s) {
     W = { ax, f, open: N, packs: [], tails, rec: tails ? c.rec : 0, files: null, memo: lru(memoBytes()), mn: N, sp: [], c };
     writers.set(log, W);
   }
-  // `sp` stands as far as it was made: a job cut in this scan, before making it, left it empty for the next one
   const c = W.c, d = yield* dirtyOf(s, W.f, Math.min(W.open, N)), spans = spansOf(s, axisSteps(s, W.sp, Math.min(d.axis ?? Infinity, W.sp.length)));
   W.packs.length = Math.min(W.packs.length, N);
   for (let n = 0; n < N; n++) {
     const k = W.packs[n];
     if (k && !d.packs.has(n) && k.s0 === spans[n][0] && k.s1 === spans[n][1]) continue; // its rows and its doc head as written
-    // a pack whose writing a moved frontier cut short goes on where it stood while no member folded since touched its rows or its doc
-    // head (3.5 后台抽取与归约): calls arriving faster than one seal do not start it over
-    let P = W.part;
-    if (!(P && P.n === n && P.s0 === spans[n][0] && P.s1 === spans[n][1] && (P.f === log.frontier || !(yield* dirtyOf(s, P.f, n + 1)).packs.has(n))))
-      W.part = P = { n, s0: spans[n][0], s1: spans[n][1], it: sealing(s, { home, fs, ax, memo: n >= W.open ? W.memo : null }, n, spans, c && c.ax === ax && !d.packs.has(n), k) };
-    P.f = log.frontier;
-    let r;
-    while (!(r = P.it.next()).done) yield;
-    W.packs[n] = r.value;
-    W.part = null;
+    W.packs[n] = yield* sealing(s, { home, fs, ax, memo: n >= W.open ? W.memo : null }, n, spans, c && c.ax === ax && !d.packs.has(n), k);
   }
   // a tail written afresh → its {size, defs}
   const fresh = function* (part) {
@@ -456,9 +452,8 @@ function* writing(ctx, s) {
     return { size: buf.length, defs: wrote };
   };
   const upTo = upToOf(s);
-  if (N !== W.mn) { W.memo = lru(memoBytes()); W.mn = N; } // the sealed span's steps let go, once a seal (not at each start over)
-  // the tails are no checkpoint while they are written (W.tails null): a frontier that moves before they are done has them written
-  // afresh, as has a worker that starts again from a save between the units
+  if (N !== W.mn) { W.memo = lru(memoBytes()); W.mn = N; } // the sealed span's steps let go, once a seal
+  // the tails are no checkpoint while they are written (W.tails null): a worker that starts again from a save between the units writes them afresh
   const t = N !== W.open ? null : W.tails;
   W.tails = null;
   if (!t) { const t = {}; for (const p of PARTS) t[p] = yield* fresh(p); W.tails = t; }

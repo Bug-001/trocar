@@ -11,7 +11,7 @@ import { runQuery } from '../../src/query/named/index.mjs' // first: the named q
 import { extendSession, saveIndexes } from '../../src/query/named/session.mjs'
 import { answer } from '../../src/query/answers.mjs'
 import { projectionFile, sessionDir, PROJ_V } from '../../src/query/projection.mjs'
-import { headFile, packFile, readHead, rereadFile, tailFile } from '../../src/query/ctx-files.mjs'
+import { headFile, listedText, packFile, readHead, rereadFile, tailFile } from '../../src/query/ctx-files.mjs'
 import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
 import { applySession, createDesk } from '../../web/legacy/replay/model.mjs'
 import { within } from '../helpers/bounded.mjs'
@@ -86,6 +86,16 @@ test('3.5 重读 ①: through the worker `lane --pack`, `--tail` and `session --
   for (const [params, bytes] of reads()) { assert.ok(!bytes.includes(LAST)); assert.equal(await text(params, ctx), bytes, `${JSON.stringify(params)} after the switch`) }
 })
 
+test('3.5 重读 ①: a pack on disk the head does not list is no listed text', async () => {
+  const home = homeOf(), { id } = sessionIn(home)
+  await folded(home, id)
+  const d = readHead(home, id), { n } = d.packs[0]
+  assert.equal(listedText(home, id, n, 'main'), gunzipSync(fs.readFileSync(packFile(home, id, n, 'main'))).toString('utf8'))
+  fs.writeFileSync(headFile(home, id), gzipSync(Buffer.from(JSON.stringify({ ...d, packs: d.packs.filter((p) => p.n !== n) }), 'utf8')))
+  assert.ok(fs.existsSync(packFile(home, id, n, 'main')))
+  assert.equal(listedText(home, id, n, 'main'), null)
+})
+
 test('3.5 重读 ①: a file the head lists that is gone falls through to the frontier\'s answer; the local path never reads the files', async () => {
   const home = homeOf(), { id } = sessionIn(home), ctx = await inReread(home, id)
   const local = await runQuery('lane', { id, pack: '0.main' }, { home })
@@ -109,7 +119,7 @@ test('3.5 重读 ①: `session --since M` is an empty delta on M with pending an
     const d = await runQuery('session', { id, since: M }, ctx)
     if (!rereads(home, id)) break
     assert.deepEqual(Object.keys(d).sort(), [...Object.keys(CONTRACT.session_since), 'pending'].sort(), 'the delta\'s closed set')
-    assert.deepEqual(Object.keys(d.pending).sort(), Object.keys(CONTRACT.session_pending.pending).sort())
+    assert.deepEqual(Object.keys(d.pending).sort(), [...Object.keys(CONTRACT.session_pending.pending), 'read', 'seen'].sort(), 'the head\'s seen and read, with done and work')
     assert.deepEqual([d.base, d.mark], [M, M])
     for (const k of ['calls', 'gone', 'lanes', 'lanes_gone', 'events', 'records']) assert.deepEqual(d[k], [], k)
     for (const k of ['meta', 'stats', 'logged', 'probes', 'truncated']) assert.deepEqual(d[k], was[k], k)

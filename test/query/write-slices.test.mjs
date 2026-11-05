@@ -10,7 +10,8 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
 import '../../src/query/named/index.mjs' // first: the cycle through session.mjs is entered here
 import { extendSession, saveIndexes, sessionState } from '../../src/query/named/session.mjs'
-import { writeFiles } from '../../src/query/ctx-files.mjs'
+import { packFile, readHead, tailFile, writeFiles, writeInFlight } from '../../src/query/ctx-files.mjs'
+import { runQuery } from '../../src/query/named/index.mjs'
 import { openProjection, sessionDir } from '../../src/query/projection.mjs'
 import { openFoldLog } from '../../src/query/fold-log.mjs'
 import { columns, dumpColumns, loadColumns, sync } from '../../src/query/session-doc.mjs'
@@ -27,12 +28,12 @@ function homeWith(calls, shape = SHAPE, id = nextId()) {
   return { home, id, other, a, ctx: { home, fs, writer: true } }
 }
 const toTheEnd = async (ctx, id) => { while (await extendSession(ctx, id, Infinity)); }
-// the state folded to the end by requests, which write no answer file; a state answering from its log folds in a background slice first
+// the state folded to the end by requests, which write no answer file; a state answering from its log, or held by a write in flight, goes on in a background slice first
 async function folded(ctx, id) {
   for (;;) {
     const s = await sessionState(ctx, id)
     if (!s.pending) return s
-    if (s.st.target != null) await extendSession(ctx, id, 1)
+    if (s.st.target != null || writeInFlight(s.V.log)) await extendSession(ctx, id, 1)
   }
 }
 // the deadline already passed at every call: a unit of the write a call, `units` of them at most
@@ -122,6 +123,41 @@ test('the first write of a worker that starts from a checkpoint, cut in its scan
   sameFiles(sliced, whole, 'from a checkpoint', (n) => !n.startsWith('head')) // one id in both homes: what the worker keeps of a head is shared
 })
 
+// Every pack and tail a head lists is on disk, whole.
+function listedThere(home, id, where) {
+  const d = readHead(home, id)
+  if (!d) return
+  for (const p of d.packs) for (const part of ['main', 'rest']) assert.ok(gunzipSync(fs.readFileSync(packFile(home, id, p.n, part))).length, `${where}: pack ${p.n}.${part}`)
+  if (d.open) for (const part of ['main', 'rest']) assert.ok(fs.existsSync(tailFile(home, id, part)), `${where}: tail ${part}`)
+}
+const REQUESTS = { 'session --head': (c, id) => runQuery('session', { id, head: '' }, c), session: (c, id) => runQuery('session', { id }, c), 'lane --tail': (c, id) => runQuery('lane', { id, tail: 'main' }, c) }
+
+for (const [name, ask] of Object.entries(REQUESTS)) {
+  test(`3.5 后台抽取与归约: \`${name}\` with its deadline already passed writes what a slice covers, the head never lists what is not on disk, and the background ends on the bytes of an uncut run`, async () => {
+    const cuts = homeWith(1100), whole = homeWith(1100), late = { ...cuts.ctx, filesMs: 0 }
+    await folded(cuts.ctx, cuts.id)
+    await ask(late, cuts.id)
+    assert.ok(!fs.existsSync(packFile(cuts.home, cuts.id, 1, 'rest')), 'the request stopped short of the last pack')
+    for (let i = 1, more = true; more; i++) {
+      await ask(late, cuts.id)
+      listedThere(cuts.home, cuts.id, `after request ${i}`)
+      more = await extendSession(cuts.ctx, cuts.id, 2)
+      listedThere(cuts.home, cuts.id, `after slice ${i}`)
+    }
+    await toTheEnd(whole.ctx, whole.id)
+    sameFiles(cuts, whole, 'cut requests')
+    assert.deepEqual(textsOf(cuts, (n) => !n.startsWith('open.')), textsOf(whole, (n) => !n.startsWith('open.')))
+  })
+}
+
+test('3.5 后台抽取与归约: the files cut short, `lane --tail` gives the document the file holds once written', async () => {
+  const { id, ctx } = homeWith(700), late = { ...ctx, filesMs: 0 }
+  await folded(ctx, id)
+  const cut = (await runQuery('lane', { id, tail: 'main' }, late)).$text
+  await toTheEnd(ctx, id)
+  assert.equal(cut, (await runQuery('lane', { id, tail: 'main' }, ctx)).$text)
+})
+
 // The columns as they read: a lane by its key (its int is only the order it was met in), slots with no row left out, the live lanes as a set.
 function said(parts) {
   const p = Object.fromEntries(parts), row = (k) => p['s.tk'][k] !== 0, by = (a) => Array.from(a, (v, k) => (row(k) ? v : null))
@@ -183,7 +219,7 @@ test('a whole sync says it is working while it runs, here and on a cold read wit
   let said1 = 0
   sync(columns(o.p.rows.slotOf), o.log, () => { said1++ })
   o.close()
-  assert.ok(said1 > 0, 'sync reports through the progress it is given')
+  assert.ok(said1 > 1, 'sync reports through the progress it is given, not only at its end')
   const coldRead = async (drop) => {
     const to = path.join(tmpDir('trocar-slices-cold-'), '.trocar')
     fs.cpSync(home, to, { recursive: true, filter: (f) => !(drop && path.basename(f) === 'fold.idx') })

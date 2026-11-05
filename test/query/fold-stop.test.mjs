@@ -100,6 +100,25 @@ test('3.5 #37: the first background slice that does not throw clears pending.sto
   saysTheTitle(stoppedAt, (await runQuery('sessions', {}, { home })).sessions[0])
 })
 
+test('3.5 `seen`: a stop on a whole answer keeps saying so, and what clears it is a catch-up, no first read', async () => {
+  const { extendSession } = await import('../../src/query/named/session.mjs')
+  const home = path.join(tmpDir('trocar-foldstop-seen-'), '.trocar'), segment = '20261020T164737Z', ctx = { home, fs, writer: true }
+  fs.mkdirSync(path.join(home, 'raw'), { recursive: true, mode: 0o700 })
+  const s = bigSession({ home, segment, growth: 2_000, subEvery: 3, compactAt: 20_000 })
+  s.append(30)
+  while (await extendSession(ctx, s.id, 1_000));
+  assert.equal(headOf(home, s.id).pending, null)
+  s.append(120)
+  let fail = true
+  const failing = { ...fs, openSync: (f, ...a) => { if (fail && String(f).includes(`${path.sep}ctx${path.sep}`)) { fail = false; throw new Error('injected: the projection could not be read') } return fs.openSync(f, ...a) } }
+  await assert.rejects(extendSession({ home, fs: failing, writer: true }, s.id, 10))
+  const stopped = headOf(home, s.id).pending
+  assert.deepEqual([stopped.stopped?.code, stopped.seen], ['fold-failed', true])
+  assert.equal(await extendSession(ctx, s.id, 10), true)
+  const { pending } = headOf(home, s.id)
+  assert.deepEqual([pending.stopped, pending.seen, 'read' in pending], [undefined, true, false])
+})
+
 // A slice that leaves members past the frontier with no head on disk starts the head from the index (3.5 §会话读「`session --head`」 tier 0).
 test('3.5 §会话读 `session --head`: the first head of a fold still behind says the title sessions says', async () => {
   const { extendSession } = await import('../../src/query/named/session.mjs')

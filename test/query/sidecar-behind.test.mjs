@@ -9,7 +9,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { gunzipSync } from 'node:zlib'
 import { runQuery } from '../../src/query/named/index.mjs' // first: the named queries' registry imports session.mjs
-import { extendSession } from '../../src/query/named/session.mjs'
+import { extendSession, saveIndexes } from '../../src/query/named/session.mjs'
 import { openFoldLog } from '../../src/query/fold-log.mjs'
 import { openProjection, sessionDir } from '../../src/query/projection.mjs'
 import { readHead } from '../../src/query/ctx-files.mjs'
@@ -53,12 +53,9 @@ const atLeast = (now, was, where) => { for (const k of ['tier', 'mark', 'steps',
 const SIDECARS = ['extract.idx', 'fold.idx']
 const sidecarsOf = (home, id) => SIDECARS.map((n) => [n, fs.readFileSync(path.join(sessionDir(home, id), n))])
 
-// A known shortfall, reported and not red: a request while the frontier stands cut back writes the files and the head at it, so the disk
-// says less until the fold is back. Whether that is answered at the cut, or the cut goes, is a design question still open.
-const FALLS = 'a request at the cut-back frontier writes the head and tails at it: mark 900 fell to 412 until the fold came back; the end state loses nothing'
 for (const [axis, asks] of [['background slices alone', false], ['a request between two slices', true]]) {
-  test(`4.3 §4 旁索引: killed far past the sidecar, a new member, ${axis}: the end is a fold never killed, and no answer on disk says less`, { todo: asks ? FALLS : false }, async () => {
-    const home = homeOf(), s = bigSession({ home, id: 'big-0000-4a1b-9c2d-000000000001', segment: '20261020T164731Z', growth: 120, compactAt: 6_000 }), { id } = s
+  test(`4.3 §4 旁索引: killed far past the sidecar, a new member, ${axis}: the end is a fold never killed, and no answer on disk says less`, async () => {
+    const home = homeOf(), s = bigSession({ home, id: `big-0000-4a1b-9c2d-00000000000${asks ? 2 : 1}`, segment: '20261020T164731Z', growth: 120, compactAt: 6_000 }), { id } = s // the worker keeps what it wrote of a head by id: one id a test
     s.append(300)
     await fold(home, id, false)
     const old = sidecarsOf(home, id) // what the disk holds when a worker's saves stopped here: more than a request's slice folds lies past them
@@ -81,6 +78,7 @@ for (const [axis, asks] of [['background slices alone', false], ['a request betw
       if (!more) break
       if (asks) { await runQuery('session', { id }, ctx); check(`the request after slice ${slices}`) }
     }
+    saveIndexes() // the head a mark alone did not make due (3.5 答案文件): `fold` below ends on the same save
     const other = homeOf()
     fs.cpSync(path.join(home, 'raw'), path.join(other, 'raw'), { recursive: true })
     await fold(other, id, false)

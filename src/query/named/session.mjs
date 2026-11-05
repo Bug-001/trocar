@@ -42,7 +42,7 @@ import { parseTextRef } from '../../raw/refs.mjs';
 import { QueryArgError } from './index.mjs';
 import { columns, dumpColumns, loadColumns, sync, viewOf, pageOf, deltaOf, limitOf, markOf } from '../session-doc.mjs';
 import { titleOf } from '../titles.mjs';
-import { clearReread, endReread, setMtimes, filesAt, filesParts, filesReach, forget, hasHead, hasReread, headDoc, markDone, markReread, packsOf, pendingHead, readHead, tailsReach, tier0Doc, writeFiles, writeHead, memoBytes, CTX_V, PACK_MEMBERS } from '../ctx-files.mjs';
+import { clearReread, endReread, setMtimes, filesAt, filesParts, filesReach, forget, hasHead, hasReread, headDoc, markDone, markReread, packsOf, pendingHead, readHead, seenOf, tailsReach, tier0Doc, writeFiles, writeHead, writeInFlight, memoBytes, CTX_V, PACK_MEMBERS } from '../ctx-files.mjs';
 
 export const about = Object.freeze({
   summary: "One session's outline: its calls in step order, its lanes, events, member records and totals.",
@@ -485,7 +485,8 @@ export class HandOff extends Error {
 const costOf = (st) => Math.max(0, st.meter.held);
 
 // One slice: extraction, then folding (a request: SLICE_MS of each; a background slice: half of `budgetMs` each, the fold also what
-// extraction left; the local path: everything).
+// extraction left; the local path: everything), neither while a write of the session's answer files is in flight: it goes on at its
+// frontier (`writing`), and the fold takes up what came when it ends (3.5 后台抽取与归约).
 async function advance(ctx, id, { budgetMs, request }) {
   const t0 = performance.now(), index = await indexed(ctx);
   const members = sessionGroups(index.rows).get(id);
@@ -497,13 +498,14 @@ async function advance(ctx, id, { budgetMs, request }) {
   const read = (rs) => { progress(); return recordsAt({ home: ctx.home, fs: ctx.fs, rows: rs.filter(Boolean), errors: [], remember: false }); };
   const exErrors = [], from = planOf(members, k, store, id).ex, had = store.rows.size;
   if (ctx.handOff && ctx.writer !== true) for (let i = from; i < members.length; i++) if (!store.rows.has(String(members[i].id))) throw letGo(k, new HandOff(id));
-  const ex = extractMembers({ store, members, recordsAt: read, sessionId: id, budgetMs: request ? budgetMs : Math.max(1, budgetMs / 2 - (performance.now() - t0)), errors: exErrors, from });
+  const held = writeInFlight(fileLogs.get(store)?.log);
+  const ex = held ? { done: from, total: members.length } : extractMembers({ store, members, recordsAt: read, sessionId: id, budgetMs: request ? budgetMs : Math.max(1, budgetMs / 2 - (performance.now() - t0)), errors: exErrors, from });
   passed(planOf(members, k, store, id), ex.done);
   store.work += store.rows.size - had;
   persisted(ctx, exErrors, id);
   errors.push(...exErrors);
   // a background slice: extraction has half of it, the fold at least the other half, so the frontier moves from the first slice
-  const foldMs = request ? budgetMs : Math.max(budgetMs / 2, budgetMs - (performance.now() - t0));
+  const foldMs = held ? 0 : request ? budgetMs : Math.max(budgetMs / 2, budgetMs - (performance.now() - t0));
   // a block's text read back for a cache-break detail, or BlockUnread with a BLOCK_PROBLEMS code; a definition's ref names a record
   // this store extracted (a stitched block's too: extraction stitches from the store's own rows), so a member's
   // within the slice the records read back stay by id, their stored bytes at most CHUNK_STORED, the least recently used first out
@@ -553,7 +555,7 @@ async function advance(ctx, id, { budgetMs, request }) {
     states.get(k, st, () => st); // kept once the work's reservation is given back: the next slice grows it
     // the columns go with the fold, a background slice at a time: a checkpoint (sidecars) has only what came since to bring
     if (!request && st.writer && st.target == null) sync(st.cols, st.log, progress);
-    return { st, plan, members, ex, errors, indexErrors: index.errors };
+    return { st, plan, members, ex, errors, indexErrors: index.errors, writing: writeInFlight(st.log) };
   }
 }
 
@@ -562,14 +564,14 @@ async function advance(ctx, id, { budgetMs, request }) {
  *  folding (or a cold state's rebuild, when a member lies past its log's frontier): half of `budgetMs` each, the fold also what
  *  extraction left; once no member is left past the frontier, the answer files at the state in what is left of `budgetMs`, the
  *  rest in the next slices, and the head once they reach the state (files written while members are left past the frontier would be
- *  written again at the next one); meanwhile only the head's `pending` (backlog). */
+ *  written again at the next one); meanwhile only the head's `pending` (backlog). A write in flight goes on first, whatever came. */
 export async function extendSession(ctx, id, budgetMs) {
   const end = performance.now() + budgetMs;
   let r;
   try { r = await again(ctx, id, () => advance(ctx, String(id), { budgetMs, request: false })); } catch (e) { await stopped(ctx, String(id), e); throw e; }
   if (!r) return false;
-  const { st, plan, ex } = r;
-  if (ex.done < ex.total || (st.target != null ? pastOf(plan, st.target, ex.done) : st.fp !== plan || st.fc < plan.n)) { backlog(ctx, String(id), r); return true; }
+  const { st, plan, ex, writing } = r;
+  if (!writing && (ex.done < ex.total || (st.target != null ? pastOf(plan, st.target, ex.done) : st.fp !== plan || st.fc < plan.n))) { backlog(ctx, String(id), r); return true; }
   const s = stateAt(ctx, r, String(id));
   shown.delete(s.id);
   if (!toState(ctx, s, end)) return true;
@@ -586,7 +588,7 @@ export async function extendSession(ctx, id, budgetMs) {
     if (stops.delete(s.id)) putHead(ctx, s); else headAt(ctx, s); // a stop is cleared at once
   }
   releaseParts(); // folded to its frontier: between calls the worker holds no decoded part (3.5:40 ⑤)
-  return false;
+  return writing && !!s.pending; // what came during the write is folded next
 }
 
 // The head file (3.5 §谁执行它「答案文件」): the worker writes it at the end of a request or background slice of the session when the
@@ -622,7 +624,7 @@ async function stopped(ctx, id, e) {
     const index = await indexed(ctx), members = sessionGroups(index.rows).get(id);
     if (members) {
       const k = keyOf(ctx, id), store = stores.get(k), calls = callsPast({ members, n: members.length }, reachOf(ctx, id, store && fileLogs.get(store)?.log, members));
-      writeHead(home, id, pendingHead(home, id, members, index.errors, (d, done) => ({ done, total: members.length, calls, stopped: stop }), fs, titleOf({ home, fs, id, members })), fs);
+      writeHead(home, id, pendingHead(home, id, members, index.errors, (d, done) => ({ ...d.pending, done, total: members.length, ...seenOf(d), calls, stopped: stop }), fs, titleOf({ home, fs, id, members })), fs);
       heads.set(id, { sig, shape: null });
     }
   } catch { /* a head not written is written at the next stop or slice */ }
@@ -635,29 +637,41 @@ const shown = new Map(); // session id → {read, called} of the pending this wo
 function backlog(ctx, id, { st, plan, members, indexErrors }) {
   if (ctx.writer !== true) return;
   const home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs, mark = markOf(st.log), read = mark == null ? 0 : posOf(plan, mark) + 1;
-  const was = shown.get(id), cleared = stops.delete(id), re = rereading(ctx, id), total = members.length;
-  const calls = callsPast(plan, reachOf(ctx, id, st.log, members));
+  const re = rereading(ctx, id);
+  if (!re && behind(ctx, id, read, st.log, members)) return; // a stop stands with it, until the fold is past it
+  const was = shown.get(id), cleared = stops.delete(id), total = members.length, calls = callsPast(plan, reachOf(ctx, id, st.log, members));
   if (!cleared && was && was.called === calls > 0 && Math.floor(was.read / PACK_MEMBERS) === Math.floor(read / PACK_MEMBERS) && hasHead(home, id, fs)) return;
-  const pending = (d) => (re && d.tier === 1 ? { done: markDone(d, members), total, seen: true, calls, read } : { done: read, total, calls });
+  const pending = (d) => (re && d.tier === 1 ? { done: markDone(d, members), total, seen: true, calls, read } : { done: read, total, ...seenOf(d), calls });
   try { writeHead(home, id, pendingHead(home, id, members, indexErrors, pending, fs, titleOf({ home, fs, id, members })), fs); } catch { if (cleared) stops.add(id); return; } // tried again next slice
   shown.set(id, { read, called: calls > 0 });
   heads.set(id, { sig: JSON.stringify(['pending', read]), shape: null });
   lagging.delete(id);
 }
 function headAt(ctx, s) {
-  if (ctx.writer !== true || rereading(ctx, s.id)) return;
+  if (ctx.writer !== true) return;
   const h = heads.get(s.id), home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs;
   if (!h || h.shape !== shapeOf(s) || !hasHead(home, s.id, fs)) putHead(ctx, s);
   else lagging.set(s.id, { s, home, fs });
 }
-/** files(ctx, s) → a request's turn at the answer files: toState(), or nothing while the session is re-read. */
-export const files = (ctx, s) => rereading(ctx, s.id) || toState(ctx, s);
+// Answer files never go back (3.5): a fold's frontier at `read` members, below what the files reach (a log cut back to its sidecar), writes
+// neither head nor tail while a tier-1 head stands on disk. With none there is no answer to keep. The end of a fold writes all the same.
+const behind = (ctx, id, read, log, members) => read < reachOf(ctx, id, log, members) && readHead(ctx.home ?? trocarHome(), id, ctx.fs || nodeFs)?.tier === 1;
+/** stands(ctx, s) → whether the answer on disk stands, whatever the state `s`: while the session is re-read, and while its fold is behind the files. */
+export const stands = (ctx, s) => rereading(ctx, s.id) || (ctx.writer === true && behind(ctx, s.id, s.mark == null ? 0 : s.pos(s.mark) + 1, s.V.log, s.rows));
+/** files(ctx, s) → a request's turn at the answer files, one slice (ctx.filesMs in a test; what is left goes on in the background): whether
+ *  they stand at the state `s`, so a head of it may be written. */
+export function files(ctx, s) {
+  if (stands(ctx, s)) return false;
+  toState(ctx, s, performance.now() + (ctx.filesMs ?? SLICE_MS));
+  return ctx.writer !== true || s.mark == null || !!s.files;
+}
 // false while the session's pack and tail files are short of the state `s` at `deadline` (the next slice goes on: ctx-files.mjs
 // writeFiles), else true: brought to it (the worker only), their `packs` / `open` kept on `s` for its head; a write that failed, or a render
 // that threw, is writeFailed's and is done afresh at the session's next turn.
-function toState(ctx, s, deadline = Infinity) {
+function toState(ctx, s, deadline) {
   if (ctx.writer !== true || s.mark == null) return true;
   try { s.files = writeFiles({ home: ctx.home ?? trocarHome(), fs: ctx.fs || nodeFs }, s, deadline); } catch (e) { forget(s.V.log); writeFailed(ctx, s.id, e); return true; }
+  if (s.files && s.pending) s.pending.calls = callsPast(s.plan, reachOf(ctx, s.id, s.V.log, s.rows)); // they reach further now
   return s.files != null;
 }
 // What could not be written of a session, its store or an answer file or head, is one D38 record per episode, whatever turn tried it; a whole
@@ -696,9 +710,9 @@ function callsPast(p, reach) {
 // session key → how far the tails on disk reach while no writer or sidecar of this log says so (a re-read's are the last version's)
 const tailReach = new Map();
 function reachOf(ctx, id, log, members) {
-  const at = filesReach(log), k = keyOf(ctx, id);
+  const home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs, at = filesReach(log, home, id, fs), k = keyOf(ctx, id);
   if (at != null) { tailReach.delete(k); return at; }
-  if (!tailReach.has(k)) tailReach.set(k, tailsReach(ctx.home ?? trocarHome(), id, members, ctx.fs || nodeFs));
+  if (!tailReach.has(k)) tailReach.set(k, tailsReach(home, id, members, fs));
   return tailReach.get(k);
 }
 // What a head says of the title: titleOf's. `unread` alone changes no head: the head on disk's stands (4.4 §人类标题的来源).
@@ -710,8 +724,8 @@ function headTitle(ctx, id, said) {
 /** sessionState(ctx, id) → null (no such session) | {id, rows, store, mark, pending, truncated, V, failed, errors, plan}: the
  *  session after this request's slice (the local path: everything), read from its fold log at the reduction frontier `mark` (V:
  *  src/query/session-doc.mjs viewOf, its columns synced to that frontier), `pending:
- *  {done, total, work, calls}` while members are above the mark or the session is re-read (`done` = the members at or below it; `work` =
- *  the store's members extracted and handed to a reduction so far, a rebuild's included; callsPast), the cut. `errors`: the index's
+ *  {done, total, work, seen?, calls, read?}` while members are above the mark or the session is re-read (`done` = the members at or below it; `work` =
+ *  the store's members extracted and handed to a reduction so far, a rebuild's included; seenOf; callsPast; `read`: a re-read's), the cut. `errors`: the index's
  *  problems, the store's notes and a title that could not be read. The state stays warm. */
 export async function sessionState(ctx, id) {
   const r = await advance(ctx, String(id), { budgetMs: ctx.writer === true ? SLICE_MS : Infinity, request: true });
@@ -728,9 +742,10 @@ function stateAt(ctx, r, id, reading = false) {
   const V = st.view.V, done = mark == null ? 0 : posOf(plan, mark) + 1;
   let above = ex.done < ex.total;
   for (let i = done; !above && i < members.length; i++) above = inCut(plan, members[i]);
-  const said = titleOf({ home: ctx.home ?? trocarHome(), fs: ctx.fs || nodeFs, id, members, errors });
+  const home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs, said = titleOf({ home, fs, id, members, errors });
   V.meta = { ...V.meta, ...said };
-  return { id, rows: members, store: st.store, mark, pending: above || reading ? { done, total: members.length, work: st.store.work, calls: callsPast(plan, reachOf(ctx, id, st.log, members)) } : null,
+  const pending = above || reading ? { done, total: members.length, work: st.store.work, ...(reading ? { seen: true } : seenOf(readHead(home, id, fs))), calls: callsPast(plan, reachOf(ctx, id, st.log, members)), ...(reading ? { read: done } : null) } : null;
+  return { id, rows: members, store: st.store, mark, pending,
     title: headTitle(ctx, id, said), truncated: plan.bound, V, failed: V.failed, errors, indexErrors, st, plan, pos: (rid) => posOf(plan, rid), cut: (row) => inCut(plan, row) };
 }
 
@@ -743,7 +758,8 @@ export async function version(ctx) {
   const members = sessionGroups(rows).get(String(p.id));
   if (!members) return null;
   const k = keyOf(ctx, p.id), store = storeOf(ctx, String(p.id), k), plan = planOf(members, k, store, p.id);
-  return { key: JSON.stringify([plan.key, frontiers.get(k) ?? null, plan.bound]), errors };
+  // a re-read and a write in flight answer off the disk at one frontier: neither's answer may be kept past it
+  return { key: JSON.stringify([plan.key, frontiers.get(k) ?? null, plan.bound, rereading(ctx, String(p.id)), writeInFlight(fileLogs.get(store)?.log)]), errors };
 }
 
 const one = (v) => (v == null || v === '' ? null : String(v));
@@ -763,6 +779,8 @@ function thenOf(s, M) {
 }
 
 const headKept = (ctx, id) => readHead(ctx.home ?? trocarHome(), id, ctx.fs || nodeFs);
+// the head a request answers while the disk's stands or the files are short of the state: the file, else the tier-0 head (never a head that lists what is not on disk)
+const headStanding = (ctx, s) => pendingHead(ctx.home ?? trocarHome(), s.id, s.rows, s.indexErrors, (d) => d.pending, ctx.fs || nodeFs, s.title);
 export async function run(ctx) {
   const { params: p, errors } = ctx;
   const id = one(p.id), since = one(p.since), before = one(p.before);
@@ -777,14 +795,14 @@ export async function run(ctx) {
     errors.push(...idx.errors, { where: `session/${id}`, code: 'session-unknown', reason: 'no session with this id among the captured records' });
     return { base: null, mark: null, truncated: null, more: false, meta: null, stats: null, logged: null, probes: null, lanes: [], calls: [], events: [], records: [] };
   }
-  files(ctx, s);
+  const ready = files(ctx, s);
   if (asHead) {
-    const doc = (rereading(ctx, id) && headKept(ctx, id)) || headOf(s); // a re-read's is the file (3.5 #33), the frontier's only when it is gone
-    if (ctx.writer === true && !rereading(ctx, id)) putHead(ctx, s, doc); // the answer is the file (writeHead: the same bytes are not written)
+    const doc = ready || (rereading(ctx, id) && !headKept(ctx, id)) ? headOf(s) : headStanding(ctx, s); // a re-read's is the file (3.5 #33), the frontier's only when it is gone
+    if (ctx.writer === true && ready) putHead(ctx, s, doc); // the answer is the file (writeHead: the same bytes are not written)
     errors.push(...doc.errors);
     return doc;
   }
-  headAt(ctx, s);
+  if (ready) headAt(ctx, s);
   errors.push(...s.errors, ...s.failed.map((f) => ({ where: f.id, code: f.code, reason: f.reason })));
   const kept = since != null && rereading(ctx, id) && headKept(ctx, id);
   // the answer a client holds stays until the switch: nothing of the frontier, whose scalars are half way (3.5 §访问模式「版本变更的重读」①)

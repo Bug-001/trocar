@@ -16,7 +16,7 @@ import { headFile, readHead, rereadFile, PACK_MEMBERS } from '../../src/query/ct
 import { dirUse, gcProjections } from '../../src/query/projection.mjs'
 import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
 import { runQuery } from '../../src/query/named/index.mjs' // first: the named queries' registry imports session.mjs
-import { extendSession } from '../../src/query/named/session.mjs'
+import { extendSession, version } from '../../src/query/named/session.mjs'
 import { answer } from '../../src/query/answers.mjs'
 import { saveTitles, titlesFile } from '../../src/query/titles.mjs'
 import { workerFork, workerForkIn } from '../helpers/worker-fork.mjs'
@@ -459,6 +459,74 @@ test('calls of a session past its first read start where the writer\'s tails rea
   }
 })
 
+test('3.5 `seen`: a first read never says seen until its first whole answer; a catch-up on a whole head says it, with no read, in the head and the answer', async () => {
+  const home = homeOf(), s = sessionIn(home, 1, 600), { id } = s, ctx = inWorker(home), says = (h) => h?.pending && ('seen' in h.pending || 'read' in h.pending)
+  for (let more = true; more;) {
+    more = await extendSession(ctx, id, 5)
+    assert.ok(!says(readHead(home, id)), 'a first read')
+    assert.ok(!says(await runQuery('session', { id }, ctx)), 'and its answer')
+  }
+  await toTheEnd(ctx, id)
+  assert.equal(readHead(home, id).pending, null)
+  s.append(700)
+  for (let n = 0, more = true; more; n++) {
+    more = await extendSession(ctx, id, 1)
+    const { pending } = readHead(home, id)
+    if (more) { assert.ok(pending, `slice ${n}`); assert.equal(pending.seen, true); assert.ok(!('read' in pending)) }
+    const a = await runQuery('session', { id }, ctx)
+    if (a.pending) { assert.equal(a.pending.seen, true); assert.ok(!('read' in a.pending)) }
+  }
+  await toTheEnd(ctx, id)
+  assert.equal(readHead(home, id).pending, null)
+})
+
+// Calls keep arriving, one every few slices, while the write that ends a re-read takes many more: in slices, not in milliseconds.
+test('3.5 后台抽取与归约: a live session whose calls come faster than the re-read\'s last write ends: it switches, and after it every call is there (#43)', async () => {
+  const home = homeOf(), s = sessionIn(home, 1, 700), { id } = s, ctx = inWorker(home), EVERY = 8, MOST = 20_000
+  await foldAll(home, [id])
+  AXES['PROJ_V changed'](home, id)
+  await extendSession(ctx, id, 1)
+  let slices = 0
+  for (; rereads(home, id); slices++) {
+    assert.ok(slices < MOST, 'the re-read switched')
+    if (slices % EVERY === 0) s.append(1)
+    await extendSession(ctx, id, 1)
+  }
+  const { pending } = readHead(home, id)
+  if (pending) assert.deepEqual([pending.seen, 'read' in pending], [true, false], 'past the switch a catch-up')
+  await toTheEnd(ctx, id)
+  const rows = sessionGroups(await indexRows({ home })).get(id), d = readHead(home, id)
+  assert.equal(d.pending, null)
+  assert.equal(d.mark, String(rows.at(-1).id), 'every call is there')
+  assert.equal(d.stats.calls, 700 + Math.ceil(slices / EVERY))
+})
+
+test('through a real worker, in a re-read: `lane --pack`, `lane --tail` are the files, `session --head` the head, `session --since M` the empty delta (#43)', async () => {
+  const home = homeOf(), { id } = sessionIn(home, 1, 1300), part = 'main'
+  await foldAll(home, [id])
+  const { mark } = readHead(home, id)
+  lastVersion(home, id)
+  AXES['PROJ_V changed'](home, id)
+  const old = oldAnswer(home, id), bytes = (n) => fs.readFileSync(path.join(sessionDir(home, id), n)), { r, svc } = serviceOf(home)
+  const raw = async (params) => { const res = recorder(); await within(svc.relay({ name: 'lane', params, res }), 60_000, 'lane answered'); assert.equal(res.status, 200); return res.text() }
+  try {
+    await ask(svc, 'session', { id })
+    let sampled = 0
+    await whileMoving(async () => {
+      const a = { pack: await raw({ id, pack: `0.${part}` }), tail: await raw({ id, tail: part }), head: await ask(svc, 'session', { id, head: '' }), since: await ask(svc, 'session', { id, since: mark }) }
+      if (!rereads(home, id)) return true // the switch came between two of the four
+      assert.equal(a.pack, gunzipSync(bytes(`p0.${part}.ndjson.gz`)).toString('utf8'))
+      assert.equal(a.tail, bytes(`open.${part}.ndjson`).toString('utf8'))
+      assert.deepEqual({ ...a.head, pending: null }, old.head)
+      assert.deepEqual([a.since.base, a.since.mark, a.since.calls], [mark, mark, []])
+      assert.deepEqual([a.since.pending.seen, typeof a.since.pending.read, typeof a.since.pending.work], [true, 'number', 'number'])
+      sampled++
+      return false
+    }, () => r.n, 'the re-read ended')
+    assert.ok(sampled > 0, 'sampled in the re-read')
+  } finally { svc.stop() }
+})
+
 test('a lane answers with pending during a re-read, at the frontier, in the contract\'s closed set, and with none after it, at an unchanged version too (#43)', async () => {
   const home = homeOf(), { id } = sessionIn(home, 1, 120)
   await foldAll(home, [id])
@@ -471,8 +539,9 @@ test('a lane answers with pending during a re-read, at the frontier, in the cont
   assert.equal(await extendSession(ctx, id, 0), true, 'the slice leaves members past the frontier: the head says pending')
   const first = await ask()
   assert.deepEqual(set(first), set(CONTRACT.lane_ops))
-  assert.deepEqual(set(first.pending), set(CONTRACT.lane_ops.pending))
-  assert.deepEqual(set((await ask('no-such-lane')).pending), set(CONTRACT.lane_ops.pending), 'an empty lane says it too')
+  const reading = [...set(CONTRACT.lane_ops.pending), 'read', 'seen'].sort() // the contract's, and what a re-read says (3.5 `seen`, `read`)
+  assert.deepEqual(set(first.pending), reading)
+  assert.deepEqual(set((await ask('no-such-lane')).pending), reading, 'an empty lane says it too')
   await toTheEnd(ctx, id) // to the last member and the files: the head alone is refused, so the re-read is not over
   assert.ok(rereads(home, id))
   assert.ok(fs.existsSync(headFile(home, id, true)), 'the head that failed left the one there was')
@@ -480,9 +549,11 @@ test('a lane answers with pending during a re-read, at the frontier, in the cont
   assert.deepEqual({ ...readHead(home, id), pending: null }, { ...was, pending: null })
   const end = await ask()
   assert.equal(end.pending.done, end.pending.total, 'nothing above the mark, and pending all the same')
+  const keyNow = async () => (await version({ ...ctx, params: { id } })).key, during = await keyNow()
   refuse = false
   await toTheEnd(ctx, id)
   assert.equal(rereads(home, id), false)
+  assert.notEqual(await keyNow(), during, 'an answer kept in the re-read does not outlive the switch, at one frontier')
   const after = await ask(), { pending, ...plain } = CONTRACT.lane_ops
   assert.deepEqual(set(after), set(plain))
   assert.equal('pending' in await ask('no-such-lane'), false)

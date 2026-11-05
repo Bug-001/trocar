@@ -29,7 +29,7 @@ const STALL = 60_000
 // member) — so it arrives while the files of the first half are being written. With `drips` > 0 the second half comes in that many
 // drips instead, each `gap` slices that wrote answer files only after the one before, or at once after a slice that said nothing is
 // left (an `r` line: the files reached the state while calls were still coming). It prints an `f` for each slice that began with
-// members past the frontier and did not move it.
+// members past the frontier, no write in flight (which holds the fold, 3.5 后台抽取与归约), and did not move it.
 const DRIVER = `
 await import(${at('../../src/query/named/index.mjs')})
 const { extendSession, saveIndexes, version } = await import(${at('../../src/query/named/session.mjs')})
@@ -39,13 +39,14 @@ const { readHead } = await import(${at('../../src/query/ctx-files.mjs')})
 const [home, id, ms, late, drips, gap] = [process.argv[1], process.argv[2], ...process.argv.slice(3).map(Number)]
 const s = late > 0 ? bigSession({ home, wire: 'http', ...${JSON.stringify(SHAPE)} }) : null
 if (s) s.append(${CALLS} - late)
-const frontier = async () => JSON.parse((await version({ home, writer: true, params: { id } })).key)[1]
+const key = async () => JSON.parse((await version({ home, writer: true, params: { id } })).key)
+const frontier = async () => (await key())[1]
 const last = async () => String(sessionGroups(await indexRows({ home, errors: [] })).get(id).at(-1).id)
 const head = () => readHead(home, id)
 let t = 0, added = 0, since = 0
 const progress = () => { const n = Date.now(); if (n - t > 200) { t = n; process.stdout.write('.\\n') } }
 for (let more = true; more;) {
-  const was = s && await frontier(), left = s && was !== await last()
+  const was = s && await frontier(), left = s && was !== await last() && !(await key())[4]
   more = await extendSession({ home, writer: true, progress }, id, ms)
   process.stdout.write(more ? '1\\n' : '0\\n')
   const h = head()
@@ -118,22 +119,22 @@ test('3.5 #39: answer files a slice cannot fit are written over several slices t
   assert.ok(new Set(zd).size >= 2, `the head's pending.done grew before the fold ended (${[...new Set(zd)]})`)
   zd.forEach((d, i) => assert.ok(i === 0 || d >= zd[i - 1], `pending.done never drops (${zd[i - 1]} → ${d})`))
 
-  // calls that arrive while the files of a pack sealed by calls before them are being written move the frontier under them: the files
-  // still end as the bytes of a run with no budget over the same calls
+  // calls that arrive while the files of a pack sealed by calls before them are being written wait for that write: the files still end
+  // as the bytes of a run with no budget over the same calls
   const w = homeOf(), LATE = 100 // the first half seals pack 1 (3.5 PACK_MEMBERS)
   const zs = await drive(w, id, SPENT, LATE)
   assert.equal(zs.added, 2, 'both halves arrived')
-  assert.equal(zs.stood, 0, 'every slice that began with members past the frontier moved it (3.5:42), files being written or not')
+  assert.equal(zs.stood, 0, 'every slice that began with members past the frontier and no write in flight moved it (3.5:42)')
   const raw = (home) => fs.readdirSync(path.join(home, 'raw'), { recursive: true }).sort().map((f) => [f, String(fs.statSync(path.join(home, 'raw', f)).size)])
   assert.deepEqual(raw(w), raw(x), 'the same calls as the run with no budget')
   sameFiles(filesOf(w, id), want, 'written in spent slices with calls arriving meanwhile')
 
-  // calls that keep arriving, each fewer slices after the one before than sealing a pack takes, and none of them in that pack: the
-  // seal goes on where it stood, so the files reach the state while calls are still coming (they would never if each started it over)
+  // calls that keep arriving, each fewer slices after the one before than sealing a pack takes: the seal goes on at its frontier, so the
+  // files reach the state while calls are still coming (they would never if each started it over)
   const v = homeOf(), GAP = 150
   const vs = await drive(v, id, SPENT, LATE, 5, GAP)
   assert.equal(vs.added, 6, 'the first half and five drips arrived')
-  assert.equal(vs.stood, 0, 'every slice that began with members past the frontier moved it (3.5:42)')
+  assert.equal(vs.stood, 0, 'every slice that began with members past the frontier and no write in flight moved it (3.5:42)')
   assert.ok(vs.reached > 0, `the files reached the state between drips ${GAP} slices apart`)
   assert.deepEqual(raw(v), raw(x), 'the same calls as the run with no budget')
   sameFiles(filesOf(v, id), want, 'written in spent slices with calls arriving faster than a seal')
