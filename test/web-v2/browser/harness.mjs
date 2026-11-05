@@ -42,7 +42,8 @@ export async function launchChrome(chromium) {
   const profile = path.join(tmp, 'profile')
   fs.mkdirSync(profile)
   fs.writeFileSync(path.join(profile, 'Local State'), JSON.stringify(LOCAL_STATE))
-  const browser = (await chromium.launchPersistentContext(profile, { ...CHANNEL, env: { ...process.env, TMP: tmp, TEMP: tmp, TMPDIR: tmp } })).browser()
+  // a `{ launch }` stand-in (the WebKit cases') has no Chrome profile to seed: it is launched as is
+  const browser = chromium.launchPersistentContext ? (await chromium.launchPersistentContext(profile, { ...CHANNEL, env: { ...process.env, TMP: tmp, TEMP: tmp, TMPDIR: tmp } })).browser() : await chromium.launch()
   const close = browser.close.bind(browser)
   browser.close = async (...a) => {
     try { return await close(...a) } finally {
