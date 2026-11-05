@@ -44,7 +44,6 @@ const ROWS = [
   { name: 'a header trocar owns', why: 'rule-error', body: 'return { headers: { "Content-Length": "1" } }' },
   { name: 'a body past 64 MiB', why: 'too-big', body: 'return "x".repeat(65 * 1024 * 1024)' },
   ...['new ArrayBuffer(4)', 'new Map([["body", "x"]])', 'new Date()', '[]'].map((value) => ({ name: `a result that says nothing: ${value}`, why: 'bad-result', body: `return ${value}` })),
-  { name: 'an endless loop behind a stopped clock', why: 'timeout', top: 'process.hrtime.bigint = () => 1n << 61n', body: 'for (;;);', maxTaskMs: 300 },
   { name: 'memory behind a stopped gauge', why: 'memory', top: 'process.memoryUsage = () => ({ heapUsed: 0, external: 0, arrayBuffers: 0 })', body: 'const keep = []; for (;;) { keep.push(Buffer.allocUnsafeSlow(32 << 20)); await new Promise((r) => setTimeout(r, 20)) }', capBytes: 192 * MIB, maxTaskMs: 30000 },
   { name: 'a cycle', why: 'bad-result', body: 'const o = {}; o.self = o; return o' },
   { name: 'a cycle in the body key', why: 'bad-result', body: 'const o = {}; o.body = o; return o' },
@@ -191,9 +190,9 @@ test('a timeout is the rule the progress names', async () => {
 });
 
 // Straight on the channel: the one-shot client's own timer would hide a watchdog that never fired.
-test('the watchdog kills a task at its limit by itself, and the slot says why and who', { timeout: 10000 }, async (t) => {
+for (const [how, top] of [['by itself', ''], ['with the clock swapped under it', 'process.hrtime.bigint = () => 1n << 61n\n']]) test(`the watchdog kills a task at its limit ${how}, and the slot says why and who`, { timeout: 10000 }, async (t) => {
   const dir = tmpDir('trocar-watchdog-'), script = path.join(dir, 'script.mjs'), slot = path.join(dir, 'slot');
-  fs.writeFileSync(script, 'export default () => { for (;;); }');
+  fs.writeFileSync(script, `${top}export default () => { for (;;); }`);
   fs.writeFileSync(slot, '');
   const child = spawn(process.execPath, runnerArgs({ script, slot, capBytes: memoryCap() }), { stdio: ['pipe', 'ignore', 'ignore', 'pipe'], env: {} });
   t.after(() => child.kill('SIGKILL'));
