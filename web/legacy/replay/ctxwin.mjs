@@ -14,7 +14,7 @@ import { KIDS, serialize, patchInto } from '../core/units.mjs'
 import { techDetailsHtml } from '../core/ui.mjs'
 import { HALF, discChev } from '../core/icons.mjs'
 import * as W from '../labels/replay.mjs'
-import { READABLE_VIEW } from '../labels/cells.mjs'
+import { READABLE_VIEW, ASSEMBLED } from '../labels/cells.mjs'
 import { setFold, turnAnchorKey } from './fold.mjs'
 import { ctxBlockHtml, blockRowHtml, fillBody, showBody, faithOf, ffBadgeHtml, tagWord, bodyFor } from './blocks.mjs'
 import { stepOf } from './model.mjs'
@@ -152,7 +152,7 @@ function resetReplyFlips(s) {
   s.replyFor = call.rid
 }
 const replyGroup = (inner) => ({ key: 'reply', html: `<div class="cwreply" role="group" aria-label="${esc(W.REPLY_WORD)}">${inner}</div>` })
-function replyUnit({ failed, empty, stop, rows }) {
+function replyUnit({ failed, empty, stop, rows, assembled }) {
   if (failed) return replyGroup(`<div class="cwrline">${esc(W.FAILED_NO_REPLY)}${failed.reason ? techDetailsHtml([['reason', failed.reason]], { id: 'cwfail' }) : ''}</div>`)
   const st = stop ? `<span class="cbstop">${W.stopReasonRow(`<span class="mono">${esc(stop)}</span>`)}</span>` : ''
   if (empty) return replyGroup(`<div class="cwrline">${esc(empty === 'unread' ? W.UNREAD_REPLY : W.EMPTY_REPLY)}${st}</div>`)
@@ -160,7 +160,7 @@ function replyUnit({ failed, empty, stop, rows }) {
     cls: `r-assistant k-${esc(b.kind)}`, attrs: ` data-rp="${esc(key)}" data-ff="${mark}"`,
     badges: (mark === 'verbatim' ? `<span class="sr-only">,${esc(W.FF_WORD[sr])}</span>` : ffBadgeHtml(mark)) + (last ? st : ''),
     chars: typeof b.chars === 'number' ? b.chars : null, open, body: open ? bodyFor(b) : '' }) }))
-  return { ...replyGroup(`<div class="cwrrows" data-kids>${KIDS}</div>`), kids }
+  return { ...replyGroup(`<div class="cwrrows" data-kids>${KIDS}</div>${assembled ? `<div class="cwrline" data-assembled="">${esc(ASSEMBLED)}</div>` : ''}`), kids }
 }
 
 // ── repaint: patch to the units, fill open bodies, land once per step, then fill the placeholders ──────────────────────

@@ -11,6 +11,7 @@ import { stepOf, boardDef } from '../../web/legacy/replay/model.mjs'
 import * as W from '../../web/legacy/labels/replay.mjs'
 import { esc } from '../../web/legacy/core/fmt.mjs'
 import { bodyFor, bodyCache } from '../../web/legacy/replay/blocks.mjs'
+import { setDeskMode } from '../../web/legacy/replay/cell.mjs'
 import { deskOf, world, deskFrom } from './desk-world.mjs'
 import { boardHome, serveBoard } from './real-face.mjs'
 
@@ -211,6 +212,21 @@ test('2.3 #13: a part without its span says parsed on its own row; an incomplete
   assert.match(rows(opaque)[0].attrs, /data-ff="opaque"/); assert.ok(heads(opaque)[0].includes('class="ffbadge') && !heads(opaque)[0].includes('sr-only'))
   const part = ctxWindowHtml(stateOf(replyDesk([[rp('text')]], [{ respIncomplete: { truncated: true } }])))
   assert.match(rows(part)[0].attrs, /data-ff="verbatim"/); assert.ok(!seg(part).includes('ffbadge'))
+})
+
+test('2.3 #13: the reply ends in one assembled-from-the-stream line only while a row of it reads stream events in Readable', () => {
+  const ref = 's/m#R::resp.raw::9100-9' // a fresh desk each time: the window's memo moves with bodies the board loads, not with this hand-set cache
+  const marks = () => (seg(ctxWindowHtml(stateOf(replyDesk([[rp('text', { ref }), rp('tool_use')]])))).match(/data-assembled/g) || []).length
+  const view = { r: { as: 'text', f: { body: ['text'] } }, body: { text: 'text' } }
+  try {
+    setDeskMode('read')
+    bodyCache.set(ref, { status: 'ok', text: 'text', view })
+    assert.equal(marks(), 0, 'no events: put together from no stream')
+    bodyCache.set(ref, { status: 'ok', text: 'text', view: { ...view, events: 3 } })
+    assert.equal(marks(), 1, 'once, at the end')
+    setDeskMode('raw')
+    assert.equal(marks(), 0, 'Raw shows the bytes, not the assembly')
+  } finally { bodyCache.delete(ref); setDeskMode('raw') }
 })
 
 test('2.3 #13: a reply with no parts is one line with its stop reason', () => {
