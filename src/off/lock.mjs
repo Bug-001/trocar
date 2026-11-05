@@ -6,7 +6,7 @@
 // free soon after. Nothing here knows what a command does with it. Imports only node:* and src/off (0.1 §2).
 import nodeFs from 'node:fs'
 import path from 'node:path'
-import { readBounded } from './fsutil.mjs'
+import { NotRegularFile, readBounded } from './fsutil.mjs'
 import { procIdentity, pidAlive } from './proc.mjs'
 
 /** The `code` of the error `acquireOpLock` throws when the wait ran out (an Error's code, not a `flows/` record's). */
@@ -30,7 +30,7 @@ function readLockHolder({ file, fs, alive, identity, now }) {
     text = readBounded(fs, file, LOCK_BYTES).toString('utf8'); mtimeMs = seen.mtimeMs
   } catch (e) {
     if (e && e.code === 'ENOENT') return null
-    if (e && e.code === 'not-regular') return nobodys // swapped since the lstat
+    if (e instanceof NotRegularFile) return nobodys // swapped since the lstat
     throw e
   }
   let holder = null
