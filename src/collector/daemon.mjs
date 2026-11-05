@@ -507,6 +507,9 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     let helperUp = false // the helper came up in this run: one that dies after that is never started again (4.6 §事件)
     let lock = null
     let sw = null
+    // a helper is running in this run and has not died: it runs only while some harness is on (4.6 §开关语义); off that leaves none on stops it, and that is no death
+    const helperLive = () => !helperDown && redirector.helperInfo().pid != null
+    let releaseAsked = 0 // the pending helper releases (releaseWhenDrained), counted apart from exits: neither cancels the other; /on cancels both
 
     engine = createEngine({
       redirector: {
@@ -556,7 +559,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       syncTracker() // which harnesses are on, and their policy, before the live processes are judged
       if (!caState.ok) throw new Error(`the collector CA is unusable (${caState.which}: ${caState.reason}); not attaching, agent connections go direct`)
       if (helperDown && helperUp) throw new Error(`the capability helper is down (${helperDown}); restart the collector`)
-      if (helperDown) await startHelper() // never up in this run (not installed at start, 4.6 「助手还没装」): asked again now; still missing = its own helper-down says why
+      if (!helperLive()) await startHelper() // none running: never up (not installed, 4.6 「助手还没装」), nothing on at start, or stopped by the last off; still missing = its own helper-down says why
       if (v6Held) throw new Error(`${v6Held}; refusing to attach so no IPv6 connection is steered to it (M8)`)
       const { proto } = redirector.helperInfo()
       if (proto !== redirector.expectedProto) throw new Error(`helper speaks protocol ${proto}, this daemon expects ${redirector.expectedProto}; run \`${setupHelperCommand()}\` (G2)`)
@@ -590,13 +593,13 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     const syncTracker = () => { const st = sw.state(); tracker.setEnabled(sw.enabled()); tracker.setPolicy({ byHarness: Object.fromEntries(Object.entries(st.harnesses).map(([id, h]) => [id, { mode: h.policy, extraHosts: h.extra_hosts }])) }) }
     // bring the kernel watch table to the enabled set. With the helper dead there is no table to bring: its links and watch table died with it,
     // so nothing is asked of it (no unwatch failure to record) and every pid counts as taken out
-    const reconcileTable = () => { syncTracker(); return tracker.reconcile({ kernelGone: !!helperDown }) }
+    const reconcileTable = () => { syncTracker(); return tracker.reconcile({ kernelGone: !helperLive() }) }
     // the switch calls this when harnesses go off, before the links come off: their processes leave the kernel watch table first
     sw = createSwitch({ redirector, stateFile: P.state, known: harnessList.map((d) => d.name), installed, ensureReady, onEvent: event, reconcile: reconcileTable })
     // the file may only take capture away (switch.mjs). A harness the file turned off is off like one the route turned off: its connections still relayed
     // are closed where the engine sees a boundary (1.6 §1.3) — the CLI writes the file before it asks the route, and a daemon whose route nobody reached
     // would otherwise keep them for good
-    const reload = async () => { const r = await sw.reloadIfChanged(); if (r.changed) syncTracker(); if (r.turnedOff.length) engine.drain({ agents: new Set(r.turnedOff) }); return r }
+    const reload = async () => { const r = await sw.reloadIfChanged(); if (r.changed) syncTracker(); if (r.turnedOff.length) { engine.drain({ agents: new Set(r.turnedOff) }); if (!sw.anyOn()) releaseWhenDrained(false) } return r }
     // An unwatch the helper did not answer leaves a pid the kernel may still steer although its harness is off. It is asked again here — before every
     // beat and at the 5 s check — until it is answered; true = the table is clean.
     const settle = async () => { if (tracker.stuckPids().length) await reconcileTable(); return tracker.stuckPids().length === 0 }
@@ -607,14 +610,29 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     // the helper up and pointed at the engine. Not installed (no file at its path: a script install's first `install`, 4.6 「助手还没装」) is no
     // reason to exit: helper-down is on disk with the reason, nothing is attached (agents go direct), and the next `on` asks again (ensureReady).
     // A helper that is there and fails to start is still a start failure.
-    async function startHelper() {
+    // Start and stop are chained (helperOp): a release that is stopping the helper is finished before an `on` starts the next one.
+    let helperOp = Promise.resolve()
+    const chained = (fn) => { const r = helperOp.then(fn); helperOp = r.catch(() => {}); return r }
+    const startHelper = () => chained(async () => {
+      if (helperLive()) return
       await redirector.start()
-      await redirector.configure(port)
+      try { await redirector.configure(port) } catch (e) { await redirector.close().catch(() => {}); throw e } // a half-started helper is dropped: the next `on` starts a fresh one
       const was = helperDown
       helperDown = null; helperUp = true
-      if (was) { sw.clearDown(); if (lock) lock.name({ helper_pid: redirector.helperInfo().pid }); event({ event: 'helper-ok', reason: 'the capability helper is installed now and started; capture can be switched on' }) }
-    }
-    try { await startHelper() } catch (e) { if (!e || e.code !== 'ENOENT') throw e }
+      if (lock) lock.name({ helper_pid: redirector.helperInfo().pid }) // the standalone off reads it (helperGone)
+      if (was) { sw.clearDown(); event({ event: 'helper-ok', reason: 'the capability helper is installed now and started; capture can be switched on' }) }
+    })
+    // No harness left on and the engine drained: the helper goes, and its links, maps and programs with its fds. A deliberate stop is no death —
+    // the client is dropped before it closes, so its 'down' never reaches us (no helper-down, not degraded); the next `on` starts a new one.
+    const stopHelper = () => chained(async () => {
+      if (!helperLive() || sw.anyOn()) return
+      helperUp = false
+      await redirector.close()
+      tracker.clear('off') // what the table would say from here on nobody tells it: the next `on`'s rescan rebuilds it
+      if (lock) lock.name({ helper_pid: null })
+    })
+    // with nothing on at start no helper is spawned: the first `on` does it (4.6 「助手还没装」, D61)
+    if (sw.anyOn()) { try { await startHelper() } catch (e) { if (!e || e.code !== 'ENOENT') throw e } }
     // the lock (4.6 §控制面, D-25): pid + start time + boot id, so a reused pid or a reboot is never "running"; its
     // mtime is refreshed every second, so a stuck daemon shows as unresponsive within 5 s — read from disk alone
     const me = identity(process.pid)
@@ -636,7 +654,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       upstream_ca: env.NODE_EXTRA_CA_CERTS || null, linger: typeof redirector.linger === 'function' ? redirector.linger() : null })
     syncTracker() // before the first rescan: a harness that is off at start is never judged
     tracker.start()
-    await tracker.rescan()
+    if (sw.anyOn()) await tracker.rescan() // with nothing on no helper follows exec / exit, so a table built now could not be kept true; the first `on` scans
     await sw.restore()
 
     // The 5 s check (D-26, 4.6 §开关语义): nobody has to run status for these to reach flows/ —
@@ -713,7 +731,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
         relayed: relayedOf(engine, new Set(Object.entries(sw.state().harnesses).filter(([, h]) => h.desired === 'off').map(([id]) => id)), leaving),
         ca: caState, // {ok, not_after} or {ok:false, which, file, reason}: "CA unusable", never "not installed" (D-4)
         unmatched: tracker.unmatched(), // processes two descriptors claim (D-19)
-        helper: { pid, proto, build, expected_proto: redirector.expectedProto, ok: proto === redirector.expectedProto, down: helperDown, unparsable_lines: unparsable, timeouts },
+        helper: { pid, proto, build, expected_proto: redirector.expectedProto, ok: pid == null ? null : proto === redirector.expectedProto, down: helperDown, unparsable_lines: unparsable, timeouts },
         agents, running_untrusted: agents.filter((a) => !a.trusted && !a.off).length,
         unjudged: { count: unjudged.length, sample: unjudged.slice(0, 10).map((u) => ({ pid: u.pid, comm: u.comm, errno: u.errno })) },
         health: healthOnDisk(P.dir, harnessList.map((d) => d.name)),
@@ -739,7 +757,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       // capture on again cancels a pending `off {exit}` (exitWhenDrained): the daemon that was going away is the one now serving it
       // The manifest is read again first (1.6 §1.1, R9): `trocar on` writes the entries, and their `installed_at`, before it asks, so a harness turned on
       // again after `off` is judged against when trocar wrote the entry NOW — a process that started while it was off is config-after-start, and says so
-      on: async ({ body }) => { reloadManifest(); leaving = false; const r = await sw.on({ ...(body && typeof body === 'object' ? body : {}), harnesses: namesOf(body) }); exitAsked++; syncTracker(); return { ...(await status()), ...(r.noop ? { noop: true } : {}), retried: retryNow(engine, failure, namesOf(body)) } },
+      on: async ({ body }) => { reloadManifest(); leaving = false; const r = await sw.on({ ...(body && typeof body === 'object' ? body : {}), harnesses: namesOf(body) }); exitAsked++; releaseAsked++; syncTracker(); return { ...(await status()), ...(r.noop ? { noop: true } : {}), retried: retryNow(engine, failure, namesOf(body)) } },
       // → {…status, unwatched: [pid], confirmed, relayed: {closing, waiting, cut}, pid}: the pids taken out of the kernel watch table, and whether the kernel
       // confirms the state asked for (every unwatch answered; with no harness left on, the links gone). With the helper dead its table is gone with it: every pid
       // counts as taken out and `confirmed` does not wait on an unwatch nobody can answer. After the switch the engine closes the connections of those harnesses
@@ -760,6 +778,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
         const relayed = engine.drain({ agents: names ? new Set(names) : null, now: b.now === true, ...drainBy(by) })
         const st = await status()
         if (b.exit === true) exitWhenDrained(b.now === true, by)
+        else if (!swap && !sw.anyOn()) releaseWhenDrained(b.now === true)
         return { ...st, ...(swap ? { actual: 'off' } : {}), ...(r.noop ? { noop: true } : {}), unwatched: r.unwatched, confirmed: r.unwatch_failed.length === 0 && (swap || sw.anyOn() || st.actual === 'off'), relayed, pid: process.pid }
       },
     })
@@ -781,11 +800,18 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     // meanwhile talks to this daemon (`on` starts one only when none is running). `exitAsked` counts the requests; /on and a newer /off {exit} both
     // bump it, so only the latest request may stop the daemon, and never while some harness is on — an exit would leave state.json saying on with
     // nothing attached and, being a clean exit, no supervisor to restart it.
+    function whenDrained(now) { // a declaration: a reload during the start's awaits may already ask for a release
+      const left = engine.drained({ agents: null })
+      return (now ? Promise.race([left, new Promise((r) => setTimeout(r, 500))]) : left).then(() => new Promise((r) => setTimeout(r, 50)))
+    }
     function exitWhenDrained(now, by = null) {
       const mine = ++exitAsked
-      const left = engine.drained({ agents: null })
-      const ready = now ? Promise.race([left, new Promise((r) => setTimeout(r, 500))]) : left
-      ready.then(() => new Promise((r) => setTimeout(r, 50))).then(() => { if (mine === exitAsked && (leaving || !sw.anyOn())) return stop({ reason: by || 'off', who: by }) }).catch((e) => failure('daemon', coded(e, 'stop-failed')))
+      whenDrained(now).then(() => { if (mine === exitAsked && (leaving || !sw.anyOn())) return stop({ reason: by || 'off', who: by }) }).catch((e) => failure('daemon', coded(e, 'stop-failed')))
+    }
+    // the helper's release once no harness is on (4.6 §开关语义): after the drain, so a connection still relayed keeps its redirect; the latest request only
+    function releaseWhenDrained(now) {
+      const mine = ++releaseAsked
+      whenDrained(now).then(() => { if (mine === releaseAsked && !sw.anyOn() && helperLive()) return stopHelper() }).catch((e) => failure('helper', coded(e, 'helper-error')))
     }
     async function doStop({ signal = null, reason = null, who = null } = {}) {
       seal.stop() // the segment store.close() closes below is sealed by the next start's scan, not by a worker this stop cuts off

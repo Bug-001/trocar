@@ -1041,7 +1041,9 @@ test('V16 (unit half): a Claude Code started while its harness was off, then on 
   const arch = { os: 'linux', createRedirector: () => createLinuxRedirector({ makeClient: () => { const c = createRedirectorClient({ binary: process.execPath, args: [FAKE_LOADER], env: { ...process.env, TROCAR_FAKE_LOADER: '1' }, autoHeartbeatMs: 0 }); clients.push(c); return c }, procRoot: p.root, uid: process.getuid() }) }
   const ticks = () => Math.ceil((Date.now() / 1000 - p.btime) * 100)
   const CC_EXE = '/home/u/.local/share/claude/versions/2.1.289'
-  const start = async (pid) => { p.add(pid, { uid: process.getuid(), exe: CC_EXE, argv: ['claude', '-p', 'hi'], cwd: root, env: { HOME: home }, startTicks: ticks() }); await clients[0].raw({ op: '__emit', ev: 'exec', tgid: pid, pid, comm: 'claude', filename: CC_EXE, ts_ns: pid }) }
+  const helper = () => clients[clients.length - 1] // off with nothing left on lets the helper go; the next on starts a new one (4.6 §开关语义)
+  // exec: reported by the helper; with none running (off) the process is only in /proc, and the next on's rescan finds it
+  const start = async (pid, exec = true) => { p.add(pid, { uid: process.getuid(), exe: CC_EXE, argv: ['claude', '-p', 'hi'], cwd: root, env: { HOME: home }, startTicks: ticks() }); if (exec) await helper().raw({ op: '__emit', ev: 'exec', tgid: pid, pid, comm: 'claude', filename: CC_EXE, ts_ns: pid }) }
   const ask = (method, path_, body) => controlRequest({ socketPath: sock, method, path: path_, body })
   const agentOf = async (pid) => (await ask('GET', '/status')).agents.find((a) => a.pid === pid)
   // the daemon below really binds the manifest's engine port: a free one, not onBase's fixed 47011 (two full runs at once collided there)
@@ -1063,7 +1065,7 @@ test('V16 (unit half): a Claude Code started while its harness was off, then on 
     const out = await undoHarnesses({ dir: b.dir, home, phases: PHASES, manifest: readManifest(b.dir), ids: ['claude-code'], procs: async () => [], roots: ROOTS })
     assert.deepEqual(out.left, [])
     await pause(30)
-    await start(4343) // started while it is off
+    await start(4343, false) // started while it is off: no helper runs to report its exec
     await pause(40)
     // Linux off still takes the certificate entry out (the handoff's open item (a)), so install writes it again, and on: both processes are older than it
     await installCollector({ ...onBase(b), unit: null })
@@ -1074,10 +1076,10 @@ test('V16 (unit half): a Claude Code started while its harness was off, then on 
     assert.deepEqual(again.receipt.restart.map((x) => [x.harness, x.pid, x.reason]).sort((x, y) => x[1] - y[1]), [['claude-code', 4242, 'config-after-start'], ['claude-code', 4343, 'config-after-start']], 'the receipt says which processes capture waits for a restart of')
     const row = await agentOf(4343)
     assert.deepEqual([row.trusted, row.reason, row.decrypt], [false, 'config-after-start', false])
-    assert.equal((await clients[0].raw({ op: '__watched' })).watch['4343'], 0, 'the kernel only observes it: its connections go direct')
+    assert.equal((await helper().raw({ op: '__watched' })).watch['4343'], 0, 'the kernel only observes it: its connections go direct')
     // its connection passes through the engine untouched: the client sees the relay's own certificate, no error, and the relay got the bytes
     const raw = net.connect(d.port, '127.0.0.1'); await once(raw, 'connect')
-    await clients[0].raw({ op: '__inject_port', port: raw.localPort, family: 4, dst: { address: '127.0.0.1', port: up.port, family: 4 }, pid: 4343, decrypt: 0 })
+    await helper().raw({ op: '__inject_port', port: raw.localPort, family: 4, dst: { address: '127.0.0.1', port: up.port, family: 4 }, pid: 4343, decrypt: 0 })
     const conn = tls.connect({ socket: raw, servername: 'relay.asight.test', ca: up.ca.certPem }); await once(conn, 'secureConnect')
     const body = JSON.stringify({ model: 'claude-x', max_tokens: 4, messages: [{ role: 'user', content: 'v16-through' }] })
     const reply = await new Promise((resolve, reject) => { let t = ''; conn.on('error', reject); conn.on('data', (x) => { t += x; if (t.endsWith(REPLY)) resolve(t) }); conn.write(`POST /v1/messages HTTP/1.1\r\nhost: relay.asight.test\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(body)}\r\n\r\n${body}`) })
@@ -1091,7 +1093,7 @@ test('V16 (unit half): a Claude Code started while its harness was off, then on 
     const fresh = await until(async () => { const a = await agentOf(4444); return a && a.trusted && a })
     assert.deepEqual([fresh.reason, fresh.decrypt], ['ok', true])
     const raw2 = net.connect(d.port, '127.0.0.1'); await once(raw2, 'connect')
-    await clients[0].raw({ op: '__inject_port', port: raw2.localPort, family: 4, dst: { address: '127.0.0.1', port: up.port, family: 4 }, pid: 4444, decrypt: 1 })
+    await helper().raw({ op: '__inject_port', port: raw2.localPort, family: 4, dst: { address: '127.0.0.1', port: up.port, family: 4 }, pid: 4444, decrypt: 1 })
     const conn2 = tls.connect({ socket: raw2, servername: 'relay.asight.test', ca: fs.readFileSync(path.join(b.dir, 'ca', 'trocar-ca.pem'), 'utf8') }); await once(conn2, 'secureConnect') // trocar's leaf, which only a process that trusts trocar's CA accepts
     const body2 = JSON.stringify({ model: 'claude-x', max_tokens: 4, messages: [{ role: 'user', content: 'v16-after-restart' }] })
     await new Promise((resolve, reject) => { let t = ''; conn2.on('error', reject); conn2.on('data', (x) => { t += x; if (t.endsWith(REPLY)) resolve(t) }); conn2.write(`POST /v1/messages HTTP/1.1\r\nhost: relay.asight.test\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(body2)}\r\n\r\n${body2}`) })
