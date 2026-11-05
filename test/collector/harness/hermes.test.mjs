@@ -32,6 +32,7 @@ test('hermes: the bootstrap interpreter (hermes and hermes-acp) and the TUI gate
   assert.equal(matchOf([hermes], facts({ exe: PY, argv: ['python3', '-I', '-c', "import os, sys, runpy; import hermes_bootstrap; runpy.run_module('hermes_cli.main', run_name='__main__', alter_sys=True)", 'gateway', 'run'] })).agent, 'hermes', 'the runtime command a service unit runs')
   assert.equal(matchOf([hermes], facts({ exe: PY, argv: ['python3', '-X', 'utf8', '-I', '-c', `import sys, runpy; sys.argv = ['hermes']; exec(${JSON.stringify(boot(root))})`, '-z', 'hi'] })).agent, 'hermes', 'the bootstrap relaunching itself with interpreter flags first')
   assert.equal(matchOf([hermes], facts({ exe: PY, argv: ['python3', '-m', 'tui_gateway.entry'] })).agent, 'hermes')
+  for (const script of ['/home/u/.local/bin/hermes', '/home/u/.local/share/hermes-venv/bin/hermes-acp']) assert.equal(matchOf([hermes], facts({ exe: '/usr/bin/python3.12', argv: ['/home/u/.local/share/hermes-venv/bin/python', script, 'chat', '-q', 'hi'] })).agent, 'hermes', `a pip install's console script ${script}`)
   assert.equal(matchOf([hermes], facts({ exe: PY, argv: ['python3', '-m', 'tui_gateway.slash_worker', '--session-key', 'k', '--parent-pid', '7'] })).agent, 'hermes')
   for (const [exe, argv, why] of [
     [PY, ['python3', '-I', '-B', '-c', 'import packaging, tomli_w, truststore; import hermes_bootstrap'], 'a dependency helper (-I -B -c)'],
@@ -43,9 +44,12 @@ test('hermes: the bootstrap interpreter (hermes and hermes-acp) and the TUI gate
     [PY, ['python3', '-m', 'tui_gateway.compute_host'], 'not an agent child'],
     ['/usr/bin/dash', ['/bin/sh', '/home/u/.local/bin/hermes', '-z', 'hi'], 'the sh launcher before its exec'],
     ['/usr/bin/python3.12', ['python3', '/srv/hermes_bootstrap.py'], 'some other script'],
+    ['/usr/bin/python3.12', ['python3', '/home/u/.local/bin/hermes.py'], 'a script that only starts with the name'],
+    ['/usr/bin/python3.12', ['python3', '/home/u/hermes-agent/pm/worker.py'], 'a package-manager worker'],
   ]) assert.equal(matchOf([hermes], facts({ exe, argv })).agent, null, why)
   const reg = createRegistry([hermes])
   assert.equal(reg.isLongLived(hermes, facts({ exe: PY, argv: cli(root, 'gateway', 'run') })), true)
+  assert.equal(reg.isLongLived(hermes, facts({ exe: '/usr/bin/python3.12', argv: ['python', '/home/u/.local/bin/hermes', 'gateway', 'run'] })), true, 'a pip gateway')
   assert.equal(reg.isLongLived(hermes, facts({ exe: PY, argv: cli(root, '-z', 'hi') })), false)
 })
 
