@@ -78,7 +78,7 @@ const proxy = {
 }
 
 // Proxy mode, macOS and Windows (spec 4.11 §2.3, plan A.4): data only. Measured facts — a plugin loaded by one
-// cordis.patch.yml row wraps dsh's own dispatcher and reads the switch file per request (live), and adds the CA in process (R3-M6, R3-W3); every form.
+// cordis.patch.yml row wraps dsh's own dispatcher and reads the switch file per request (live), and adds the CA in process; every form.
 const DSH = (path) => ({ base: 'home', dir: '.dsh', env: 'DSH_HOME', path })
 const DESKTOP = perOs({ darwin: { base: 'abs', path: '/Applications/DeepSeek Harness.app' } })
 const form = (id, present) => ({ id, os: ['darwin', 'win32'], route: 'switch', cert: 'plugin', trust: 'node', present: [...present, DSH()], verified: { darwin: true, win32: true } })
