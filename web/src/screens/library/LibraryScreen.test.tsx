@@ -7,6 +7,7 @@ import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
 import { api } from '../../../legacy/core/api.mjs'
+import { LIST_WAIT_MS } from '../../../legacy/library/logic.mjs'
 import { INTERVAL } from '../../../legacy/core/poll.mjs'
 import { parseHash } from '../../../legacy/core/router.mjs'
 import { initKeys } from '../../../legacy/core/keys.mjs'
@@ -113,14 +114,43 @@ test('1.8 载入: a held answer is Loading, across polls, and No sessions yet on
     ? new Promise((res) => { answer = res }) as never : Promise.resolve({ ok: false, status: 404, data: null, error: 'HTTP 404' }) as never))
   const p = await mount()
   for (let i = 0; i < 2; i++) {
-    expect(p.list.textContent).toContain(W.LOADING)
     expect(p.container.textContent).not.toContain(W.NO_SESSIONS)
     await poll()
   }
   await act(async () => { answer({ ok: true, status: 200, data: { schema: 2, command: 'sessions', ok: true, errors: [], as_of: iso(0), next: null, sessions: [] } }) })
   await settle()
-  expect(p.list.textContent).not.toContain(W.LOADING)
   expect(p.list.textContent).toContain(W.NO_SESSIONS)
+})
+
+// 1.8 #18: only the sessions read differs, so the other names answer as in beforeEach
+const onlySessions = (read: () => Promise<unknown>) => vi.mocked(api.get).mockImplementation((name: string) => (name === 'sessions'
+  ? read() : Promise.resolve({ ok: false, status: 404, data: null, error: 'HTTP 404' })) as never)
+
+test('1.8 #18: a read that fails with status 0 is the failure state at once, not the wait', async () => {
+  onlySessions(async () => ({ ok: false, status: 0, error: 'cut' }))
+  const p = await mount()
+  expect(p.list.querySelector('[data-read-fail]')).not.toBeNull()
+  await tick(LIST_WAIT_MS)
+  expect(p.list.querySelector('[data-list-wait]')).toBeNull()
+})
+
+test('1.8 #18: a read still out says what is going on from 3 s until the rows come, and is never the no-sessions state', async () => {
+  let answer: (r: unknown) => void = () => {}
+  onlySessions(() => new Promise((res) => { answer = res }))
+  const p = await mount() // settle() has run 4 ms of the wait
+  const noSessions = () => p.list.querySelector('.libempty .dimline')
+  await tick(LIST_WAIT_MS - 104)
+  expect(p.list.querySelector('[data-list-wait]')).toBeNull()
+  expect(noSessions()).toBeNull()
+  await tick(100)
+  expect(p.list.querySelector('[data-list-wait]')).not.toBeNull()
+  await poll()
+  expect(p.list.querySelector('[data-list-wait]')).not.toBeNull()
+  expect(noSessions()).toBeNull()
+  await act(async () => { answer({ ok: true, status: 200, data: { schema: 2, command: 'sessions', ok: true, errors: [], as_of: iso(0), next: null, sessions: [sess('s1', 1, 1)] } }) })
+  await settle()
+  expect(p.list.querySelector('[data-list-wait]')).toBeNull()
+  expect(p.row(key(sess('s1', 1, 1)))).not.toBeNull()
 })
 
 test('V1: across polls that add sessions above and change counts, a session keeps its row node, the highlight and the scroll', async () => {

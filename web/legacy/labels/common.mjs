@@ -55,6 +55,8 @@ export const HEALTH_READ = Object.freeze({
 export const READ_FAIL = (what, status) => `${what} could not be read${status === 0 ? ': cannot reach the trocar service'
   : typeof status === 'number' ? `: the trocar service returned ${status}` : ''}`
 export const READING = 'Reading…' // the content area while a screen module loads (web/src/LegacyScreen.tsx)
+// a first read of the list that is taking long (1.8 §载入). True with no update too: a deleted index is built the same way
+export const LIST_WAIT = 'Building the session list. This can take a few minutes.'
 export const WINDOW_LABEL = Object.freeze({ '24h': '24 hours', '7d': '7 days', all: 'All' })
 export const UNTITLED = 'No prompt captured'
 // a title this read could not take from its record (1.8 §标题规则): a read failure, not a fact about the session; the next read tries again

@@ -7,11 +7,14 @@ import type { Virtualizer } from '@tanstack/react-virtual'
 import { fmtStamp, fmtTime, relTime } from '../../../legacy/core/fmt.mjs'
 import { formatHash } from '../../../legacy/core/router.mjs'
 import { readFailure } from '../../../legacy/core/ui.mjs'
+import { LIST_WAIT, READING } from '../../../legacy/labels/common.mjs'
 import * as W from '../../../legacy/labels/library.mjs'
+import { LIST_WAIT_MS } from '../../../legacy/library/logic.mjs'
 import { HALF } from '../../../legacy/core/icons.mjs'
 import { HarnessIcon } from '../../ui/HarnessIcon'
 import { Svg } from '../../ui/Svg'
 import { TechDetails, type TechValue } from '../../ui/TechDetails'
+import { useAfter } from '../../ui/useAfter'
 import { rowModel, dayHead, captionFacts as captionFactsJs, emptyBoardState, filteredAgentLine } from './model.mjs'
 import type { Failed, Session, SessionsData } from './useSessions'
 
@@ -102,12 +105,16 @@ type Shot = Parameters<typeof emptyBoardState>[0]
 const asOf = (t: number | null | undefined) => (t != null ? ` · ${W.AS_OF} ${fmtTime(t)}` : '')
 const Empty = ({ children }: { children: ReactNode }) => <div className="libempty">{children}</div>
 
-export const LoadingState = () => <Empty>{W.LOADING}</Empty>
+// no list yet and none stored: `sessions` has not answered, which says nothing about whether there are sessions (1.8 §载入)
+export function LoadingState() {
+  const long = useAfter(LIST_WAIT_MS)
+  return long ? <div className="libempty" data-list-wait="">{LIST_WAIT}</div> : <Empty>{READING}</Empty>
+}
 
 // the read failed and there is no older list: the failure IS the content, never worded as 「还没有会话」
 export const ReadFailState = ({ err, onRetry }: { err: Failed, onRetry: () => void }) => (
-  <Empty>{readFailure(W.SESSION_LIST, err).line}<br />
-    <button type="button" className="linkbtn" onClick={onRetry}>{W.RETRY}</button><Tech pairs={failPairs(err)} /></Empty>
+  <div className="libempty" data-read-fail="">{readFailure(W.SESSION_LIST, err).line}<br />
+    <button type="button" className="linkbtn" onClick={onRetry}>{W.RETRY}</button><Tech pairs={failPairs(err)} /></div>
 )
 
 // the empty board: 还没有会话, then the capture service's own sentence (read once) with 「截至」, then the way out

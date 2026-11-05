@@ -16,8 +16,8 @@
 // `status`, then the page. The numbers below are taken while the background re-read runs. --full then waits for the re-read to end, and for
 // every segment of raw to be in the rows once.
 // --home may be an earlier run's side home: a stored answer of this code is then there, as at the next update. With none (the first
-// open after a stored answer's format changed) `firstListMs` is reported instead of `listMs`; the page must say it is loading, and
-// never that there are no sessions.
+// open after a stored answer's format changed) `firstListMs` is reported instead of `listMs`; a list that takes over LIST_WAIT_MS must
+// say so (`list-wait.png` is taken while it does), never that there are no sessions, and never that the read failed.
 //
 // Then the agent's side: a real daemon on a home of its own re-reads the same copy, and scripts/deploy-check-daemon.mjs times one request through
 // its door and the index that follows, in windows under the re-read and idle. With nothing to re-read those two lines are not measured, and fail.
@@ -74,6 +74,7 @@ const from = (file) => import(path.join(code, file)) // anything versioned is re
 const { clone, p95, preRead, rawDiff, rawList, requestsByPath, rereading, segmentCheck, verdict } = await from('scripts/deploy-check-lib.mjs')
 const { withBoard } = await from('test/web-v2/browser/harness.mjs')
 const { NO_SESSIONS } = await from('web/legacy/labels/library.mjs')
+const { FIRST_LIST_DEADLINE_MS, LIST_WAIT_MS } = await from('web/legacy/library/logic.mjs')
 const { storedFile } = await from('src/query/stored.mjs')
 const { withToken } = await from('test/server/face.mjs')
 const { indexRows, sessionGroups } = await from('src/query/rows.mjs')
@@ -116,7 +117,11 @@ async function theBoard() {
     setup: async (page, face) => {
       port = face.port
       await page.addInitScript((empty) => {
-        const look = () => { if (document.body && document.body.innerText.includes(empty)) globalThis.__sawEmpty = true }
+        const look = () => {
+          if (document.body && document.body.innerText.includes(empty)) globalThis.__sawEmpty = true
+          if (document.querySelector('[data-list-wait]')) globalThis.__sawWait = true
+          if (document.querySelector('[data-read-fail], [data-g="sessions"]')) globalThis.__sawFail = true
+        }
         new MutationObserver(look).observe(document, { childList: true, subtree: true, characterData: true })
       }, NO_SESSIONS)
       face.sweep()
@@ -128,11 +133,21 @@ async function theBoard() {
     const notRead = async () => { if (/not read yet/i.test(await b.page.evaluate(() => document.body.innerText))) fail('the page says something is not read yet') }
     // 1 the list, from the moment the page was asked for
     await b.page.evaluate(() => { location.hash = '#/sessions' })
-    await b.page.waitForFunction(() => document.querySelectorAll('.lrow').length > 0, null, { timeout: 180_000, polling: 25 })
-    const listed = Math.round(performance.now() - t0)
+    const asked = performance.now()
+    if (!stored) {
+      await b.page.waitForSelector('[data-list-wait], .lrow', { timeout: FIRST_LIST_DEADLINE_MS })
+      if (await b.page.$('[data-list-wait]')) await b.page.screenshot({ path: path.join(out, 'list-wait.png') })
+    }
+    await b.page.waitForFunction(() => document.querySelectorAll('.lrow').length > 0, null, { timeout: stored ? 180_000 : FIRST_LIST_DEADLINE_MS, polling: 25 })
+    const listed = Math.round(performance.now() - t0), onPage = performance.now() - asked
     if (stored) took('listMs', listed); else { delete lines.listMs; took('firstListMs', listed) } // no stored answer of this code: reported, no line
     await b.page.screenshot({ path: path.join(out, 'list.png') })
     if (await b.page.evaluate(() => globalThis.__sawEmpty === true)) fail(`the page said "${NO_SESSIONS}" while the list was loading`)
+    if (!stored) {
+      const saw = await b.page.evaluate(() => ({ wait: globalThis.__sawWait === true, failed: globalThis.__sawFail === true }))
+      if (saw.failed) fail('the page showed a read failure while the list was loading')
+      if (onPage > LIST_WAIT_MS + 250 && !saw.wait) fail(`the list took ${Math.round(onPage)} ms on the page and the page never said what it was doing`) // 250: the screen mounts after the hash is set
+    }
     await notRead()
     const list = docOf(await get('/api/sessions?limit=500'))
     const rows = (list && list.sessions) || []

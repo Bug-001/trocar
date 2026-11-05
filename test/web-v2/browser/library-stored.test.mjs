@@ -68,3 +68,19 @@ test('1.8 (17): the stored list paints at once with the refreshing fact; the fre
     } finally { await context.close() }
   } finally { await b.stop() }
 })
+
+test('1.8 (18): with no stored answer a first read held past 3 s says what is going on, shows no failure, then the rows', { skip, timeout: 120_000 }, async () => {
+  const b = await withBoard({ chromium: gate.chromium, setup: async (page) => {
+    await page.route('**/api/sessions*', async (route) => { await new Promise((d) => setTimeout(d, 3500)); await route.continue().catch(() => { /* the screen left: the read was cancelled */ }) })
+    await page.addInitScript(() => {
+      new MutationObserver(() => { if (document.querySelector('[data-read-fail]')) window.__failed = true }).observe(document, { subtree: true, childList: true })
+    })
+  } })
+  try {
+    await b.page.evaluate(() => { location.hash = '#/sessions' })
+    await b.page.waitForSelector('[data-list-wait]', { timeout: 10_000 })
+    await b.page.waitForSelector('.lrow[data-key]', { timeout: 60_000 })
+    assert.equal(await b.page.$('[data-list-wait]'), null, 'the rows took the words away')
+    assert.equal(await b.page.evaluate(() => window.__failed === true), false, 'no failure state at any point')
+  } finally { await b.stop() }
+})
