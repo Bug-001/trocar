@@ -15,6 +15,7 @@ import { runQuery } from '../../src/query/named/index.mjs'
 import { openProjection, sessionDir } from '../../src/query/projection.mjs'
 import { openFoldLog } from '../../src/query/fold-log.mjs'
 import { columns, dumpColumns, loadColumns, sync } from '../../src/query/session-doc.mjs'
+import { drain } from '../helpers/bounded.mjs'
 
 const SHAPE = { growth: 120, compactAt: 6_000, subEvery: 3, subLanes: 2, late: 3 }
 const homeOf = () => { const home = path.join(tmpDir('trocar-slices-'), '.trocar'); fs.mkdirSync(path.join(home, 'raw'), { recursive: true, mode: 0o700 }); return home }
@@ -27,14 +28,16 @@ function homeWith(calls, shape = SHAPE, id = nextId()) {
   a.append(calls); b.append(20)
   return { home, id, other, a, ctx: { home, fs, writer: true } }
 }
-const toTheEnd = async (ctx, id) => { while (await extendSession(ctx, id, Infinity)); }
+const toTheEnd = async (ctx, id) => { await drain(() => extendSession(ctx, id, Infinity)) }
 // the state folded to the end by requests, which write no answer file; a state answering from its log, or held by a write in flight, goes on in a background slice first
 async function folded(ctx, id) {
-  for (;;) {
-    const s = await sessionState(ctx, id)
-    if (!s.pending) return s
-    if (s.st.target != null || writeInFlight(s.V.log)) await extendSession(ctx, id, 1)
-  }
+  let s
+  await drain(async () => {
+    s = await sessionState(ctx, id)
+    if (s.pending && (s.st.target != null || writeInFlight(s.V.log))) await extendSession(ctx, id, 1)
+    return s.pending
+  }, 'a request')
+  return s
 }
 // the deadline already passed at every call: a unit of the write a call, `units` of them at most
 const cut = (ctx, s, units = Infinity) => { for (let i = 0; i < units; i++) if (writeFiles(ctx, s, 0)) return }
@@ -205,12 +208,12 @@ for (const [name, shape] of [['rows arriving in order', { growth: 120, subEvery:
 
 test('a background slice leaves the columns at its frontier: a checkpoint has only its own slice to bring', async () => {
   const { id, ctx } = homeWith(600), seen = new Set(), { st } = await sessionState(ctx, id)
-  while (await extendSession(ctx, id, 2)) {
-    assert.equal(st.target, null, 'a reduction writing into its log')
-    if (st.log.frontier == null) continue
-    assert.equal(st.cols.at, st.log.frontier)
-    seen.add(st.log.frontier)
-  }
+  await drain(async () => {
+    const more = await extendSession(ctx, id, 2)
+    if (more) assert.equal(st.target, null, 'a reduction writing into its log')
+    if (more && st.log.frontier != null) { assert.equal(st.cols.at, st.log.frontier); seen.add(st.log.frontier) }
+    return more
+  })
   assert.ok(seen.size > 1, 'the frontier moved between slices')
 })
 

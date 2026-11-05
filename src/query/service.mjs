@@ -29,6 +29,7 @@ import { fork } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { QUERY_PATH, QUERY_NAMES, WINDOW_PARAMS, paramsOf } from './client.mjs'
 import { LIGHT_MEMORY_MB, heapFlags, workerEnv } from './warm.mjs'
+import { lowFork } from '../low-priority.mjs'
 import { QUERY_WAIT_PROBLEMS } from '../health/codes.mjs'
 import { SCHEMA_VERSION } from '../off/schema.mjs'
 import { OS_PROMPT_MS } from '../off/root-store.mjs'
@@ -91,8 +92,10 @@ const NO_WORKER = JSON.stringify({ error: 'no warm query worker in this daemon y
 const SERVE_ORDER = Object.freeze(['block', 'status', 'sessions', 'lane', 'session'])
 const rank = (name) => { const i = SERVE_ORDER.indexOf(name); return i < 0 ? SERVE_ORDER.length : i }
 
+/** forkOptions(role) → how a worker of `role` starts. The main role stays low (`lowFork`, 4.9 §4); the light one follows the daemon, so `status` answers under load (3.5 §谁执行它). */
+export const forkOptions = (role, o) => (role === 'light' ? { execArgv: heapFlags(LIGHT_MEMORY_MB) } : lowFork(heapFlags(), o))
 /** `argv` after the home is the worker's own: the deps path ('' for none) and the role. */
-export const forkWorker = (home, ...argv) => fork(WORKER, [home, ...argv], { stdio: ['pipe', 'pipe', 'pipe', 'ipc'], execArgv: heapFlags(argv[1] === 'light' ? LIGHT_MEMORY_MB : undefined), env: workerEnv() })
+export const forkWorker = (home, ...argv) => fork(WORKER, [home, ...argv], { stdio: ['pipe', 'pipe', 'pipe', 'ipc'], ...forkOptions(argv[1]), env: workerEnv() })
 
 const logLine = (m) => process.stdout.write(`${new Date().toISOString()} ${m}\n`) // the daemon's stdout is its log
 const mb = (n) => `${(n / 1048576).toFixed(1)} MB`

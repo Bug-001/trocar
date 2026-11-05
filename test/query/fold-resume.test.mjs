@@ -17,7 +17,7 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { tmpDir } from '../helpers/tmp.mjs'
-import { within } from '../helpers/bounded.mjs'
+import { drain, within } from '../helpers/bounded.mjs'
 import { bigSession, rng } from './big-session.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
 import { extendSession, saveIndexes } from '../../src/query/named/session.mjs'
@@ -34,15 +34,18 @@ const SHAPE = { growth: 2_000, compactAt: 20_000, subEvery: 3, subLanes: 3, late
 const WORKER = `
 await import(${at('../../src/query/named/index.mjs')})
 const { extendSession, saveIndexes } = await import(${at('../../src/query/named/session.mjs')})
+const { drain } = await import(${at('../helpers/bounded.mjs')})
 const { rng } = await import(${at('./big-session.mjs')})
 const [home, id, kill, idle, seed] = [process.argv[1], process.argv[2], Number(process.argv[3]), Number(process.argv[4]), Number(process.argv[5])]
 const r = rng(seed)
 let k = 0
-while (await extendSession({ home, writer: true }, id, 4)) {
+await drain(async () => {
+  if (!(await extendSession({ home, writer: true }, id, 4))) return false
   if (r() < idle) saveIndexes()
   if (++k === kill) { process.stdout.write(JSON.stringify({ slices: k, killed: true })); process.exit(0) }
   await new Promise((ok) => setImmediate(ok))
-}
+  return true
+})
 saveIndexes()
 process.stdout.write(JSON.stringify({ slices: k, killed: false }))`
 
@@ -115,7 +118,7 @@ test('killed at any point and resumed from the sidecar: every answer and every k
     s.append(360)
     const fresh = () => { const home = path.join(tmpDir('trocar-resume-'), '.trocar'); fs.cpSync(path.join(src, 'raw'), path.join(home, 'raw'), { recursive: true }); return home }
     const ref = fresh()
-    while (await extendSession({ home: ref, writer: true }, s.id, Infinity));
+    await drain(() => extendSession({ home: ref, writer: true }, s.id, Infinity))
     const members = (await runQuery('session', { id: s.id }, { home: ref })).calls.map((c) => c.rid)
     const since = members[Math.floor(members.length / 4)]
     const want = await answers(ref, s.id, since), wantLines = keyed(ref, s.id)
@@ -151,7 +154,7 @@ async function reopenAt(calls, M) {
   const home = path.join(tmpDir('trocar-regrow-'), '.trocar')
   const s = bigSession({ home, ...SHAPE, subEvery: 4, paths: 4 })
   s.append(calls)
-  while (await extendSession({ home, writer: true }, s.id, Infinity));
+  await drain(() => extendSession({ home, writer: true }, s.id, Infinity))
   saveIndexes()
   let counting = false, bytes = 0
   const counted = () => {
@@ -171,7 +174,7 @@ async function reopenAt(calls, M) {
     p.close()
   })
   const was = ctxBytes(home), own = counted()
-  const read = await count(async () => { while (await extendSession({ home, fs: own, writer: true }, s.id, Infinity)); })
+  const read = await count(async () => { await drain(() => extendSession({ home, fs: own, writer: true }, s.id, Infinity)) })
   return { read: read - open, appended: ctxBytes(home) - was }
 }
 
@@ -188,14 +191,14 @@ test('a worker that folds without extracting keeps the extraction seed in the pr
   const home = path.join(tmpDir('trocar-foldonly-'), '.trocar')
   const s = bigSession({ home, ...SHAPE, subEvery: 4, paths: 4 })
   s.append(300)
-  while (await extendSession({ home, writer: true }, s.id, Infinity));
+  await drain(() => extendSession({ home, writer: true }, s.id, Infinity))
   const file = projectionFile(home, s.id), log = foldLogFile(home, s.id)
   const lines = fs.readFileSync(file, 'utf8').split('\n')
   assert.ok(lines.some((l) => l.startsWith('{"b"')), 'the session has break details')
   fs.writeFileSync(file, lines.filter((l) => !l.startsWith('{"b"')).join('\n'))
   for (const f of [sidecarOf(file), log, sidecarOf(log)]) fs.rmSync(f, { force: true })
   const own = { ...fs } // a second fs object: fresh stores and states
-  while (await extendSession({ home, fs: own, writer: true }, s.id, Infinity));
+  await drain(() => extendSession({ home, fs: own, writer: true }, s.id, Infinity))
   saveIndexes()
   const sc = loadSidecar({ file }), calls = new Set(linesOf(file).filter((o) => o.c).map((o) => o.c.rid)).size
   assert.ok(sc && sc.parts['e.n'], 'the projection sidecar holds the extraction seed')

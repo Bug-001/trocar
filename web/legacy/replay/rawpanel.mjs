@@ -8,36 +8,15 @@ import { esc, kf } from '../core/fmt.mjs'
 import { techDetailsHtml, mark } from '../core/ui.mjs'
 import { relPath, ROUTING_LABELS } from './analysis.mjs'
 import { showBody, bodyFor, faithOf } from './blocks.mjs'
+import { replyOf } from '../../src/screens/replay/window-model.mjs'
 import { stepOf } from './model.mjs'
 import { stepRef } from './lanes.mjs'
 import { keyed, patchInto } from '../core/units.mjs'
 import * as W from '../labels/replay.mjs'
 
-// ── the reply: its parts · stop reason · ONE fidelity mark ─────────────────────────────────────────────────────────
-// replyOf({row, reply, detail}) is the one rule (2.3 §这一步的回复 · 2.6 §A) over a step as the desk holds it: `reply` = the
-// step's reply definitions (thinking · text · tool calls, each with its `ref`), `detail` = the lane step's detail. The mark:
-// the bytes only partially stored → 'partial' (「◐ 回复没采全」); every part resolving to its own span of the reply
-// (`…::resp.raw::a-b`, or `…::resp.messages.<j>::a-b` on WebSocket; RFC 3.1 回复块也回源) → null; anything else → 'parsed' (「◐ 解析后的回复」). 逐字 is never written without that span.
-// partMark(d) marks ONE part as the window's rows do: the request rows' proof rule (faithOf) over the part's span — proven on it
-// with no non-verbatim value, a known value is that value's mark, no span is 'parsed' (the partial fact is the call line's, 2.3)
-const RESP_SPAN = /::resp\.(raw|messages\.\d+)::\d+-\d+$/
-const onSpan = (d) => RESP_SPAN.test(String(d.ref || ''))
-export function partMark(d) {
-  const f = faithOf({ ...d, text_ref: onSpan(d) ? d.ref : null })
-  return f === 'verbatim' ? null : f === 'unaddressable' ? 'parsed' : f
-}
-const PARTIAL_LABELS = new Set(['resp-truncated', 'resp-partial', 'resp-undecoded'])
-export function replyOf({ row, reply, detail } = {}) {
-  const c = row || {}, parts = reply || [], norm = (detail && detail.norm) || {}
-  const partial = !!(c.respIncomplete || ((c.wire && c.wire.labels) || []).some((l) => PARTIAL_LABELS.has(l.id)))
-  const mark = partial ? 'partial' : parts.every(onSpan) ? null : 'parsed'
-  // an unparsed step is a REQUEST-body fact; where the response itself parsed, the reply still renders (2.6 §A)
-  let failed = null
-  if (!(c.unparsed && parts.length) && c.error) {
-    failed = { reason: c.unparsed ? '' : (typeof c.error === 'string' ? c.error : (c.errMsg || (c.error && c.error.message) || (c.status != null ? `status ${c.status}` : ''))) }
-  }
-  return { failed, mark, stop: norm.stop_reason || null, parts }
-}
+// ── the reply: its parts · stop reason · ONE fidelity mark — replyOf / partMark are the window model's (one reply rule,
+// two drawings: 2.3 §这一步的回复 · 2.6 §A)
+export { replyOf, partMark } from '../../src/screens/replay/window-model.mjs'
 // the reply's ONE fidelity mark as HTML (a replyOf result). Shared with the call drawer: one rule.
 export function replyMarkHtml(r) {
   const m = r && r.mark

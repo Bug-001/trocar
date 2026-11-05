@@ -13,7 +13,7 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { tmpDir } from '../helpers/tmp.mjs'
-import { within } from '../helpers/bounded.mjs'
+import { drain, within } from '../helpers/bounded.mjs'
 import { bigSession } from './big-session.mjs'
 import '../../src/query/named/index.mjs'
 import { extendSession, saveIndexes } from '../../src/query/named/session.mjs'
@@ -75,7 +75,7 @@ test('pending.work grows between answers while the fold runs, done never goes do
   const src = path.join(tmpDir('trocar-work-'), '.trocar')
   const s = bigSession({ home: src, ...SHAPE })
   s.append(2_000)
-  while (await extendSession({ home: src, writer: true }, s.id, Infinity));
+  await drain(() => extendSession({ home: src, writer: true }, s.id, Infinity))
   saveIndexes()
   s.append(400)
   for (const [axis, apply] of Object.entries(AXES)) {

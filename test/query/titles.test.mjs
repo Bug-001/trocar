@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { tmpDir } from '../helpers/tmp.mjs'
-import { within } from '../helpers/bounded.mjs'
+import { drain, within } from '../helpers/bounded.mjs'
 import { workerFork } from '../helpers/worker-fork.mjs'
 import { SEVEN } from '../helpers/seven-shapes.mjs'
 import { bigSession, firstAskOf, rng } from './big-session.mjs'
@@ -324,7 +324,7 @@ test('3.5 #40: a session of subagent calls only says the title `sessions` says a
   assert.equal(tier0.tier, 0)
   assert.deepEqual(said(tier0.meta), listed)
   const ctx = { home, fs: cold(), writer: true }
-  while (await extendSession(ctx, sid, 1_000));
+  await drain(() => extendSession(ctx, sid, 1_000))
   const head = readHead(home, sid)
   assert.equal(head.tier, 1)
   assert.deepEqual(said(head.meta), listed)

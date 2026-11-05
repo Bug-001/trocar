@@ -19,10 +19,11 @@ const READ = `
 const { runQuery } = await import(${at('../../src/query/named/index.mjs')}) // first: the registry imports session.mjs
 const { heapBudget, liveHeap } = await import(${at('../../src/query/warm.mjs')})
 const { indexRows } = await import(${at('../../src/query/rows.mjs')})
+const { drain } = await import(${at('../helpers/bounded.mjs')})
 const [home, id] = process.argv.slice(1)
 const rows = await indexRows({ home, errors: [] })
 let doc, peak = 0
-do { doc = await runQuery('session', { id, limit: '60' }, { home, writer: true }); peak = Math.max(peak, liveHeap()) } while (doc.pending)
+await drain(async () => { doc = await runQuery('session', { id, limit: '60' }, { home, writer: true }); peak = Math.max(peak, liveHeap()); return doc.pending }, 'a request')
 const { truncated } = doc, total = doc.lanes.reduce((n, l) => n + l.count, 0)
 doc = null
 console.log(JSON.stringify({ truncated, total, peak, budget: heapBudget(), shared: (await indexRows({ home, errors: [] })) === rows }))`

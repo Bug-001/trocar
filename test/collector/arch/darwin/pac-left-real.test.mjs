@@ -36,7 +36,8 @@ async function pacDoor(t, ready) {
     const a = peerAllowed({ pid: o.pid, ...(o.pid != null ? me : {}), ...(o.sameUser ? { sameUser: true } : {}) }, me)
     return a.ok ? null : { refuse: { code: a.code, unread: a.unread, reason: `${a.detail} (owner ${o.why})` } }
   }
-  const ing = createIngress({ token: 'f'.repeat(32), failure: (f) => failures.push(f), handleFlow: () => {}, connectUpstream: () => { throw new Error('no upstream here') }, lookupIngress })
+  // a fresh helper's first run can pass the real SLOW_ENGINE_MS on a loaded machine: a client-left-held here says nothing of the refusal, MA19 owns it
+  const ing = createIngress({ token: 'f'.repeat(32), timing: { slowEngineMs: 60_000 }, failure: (f) => failures.push(f), handleFlow: () => {}, connectUpstream: () => { throw new Error('no upstream here') }, lookupIngress })
   const srv = net.createServer((s) => ing.connection(s, { user: 'h:pac', token: null, open: true }))
   srv.listen(0, '127.0.0.1')
   await once(srv, 'listening')

@@ -27,13 +27,14 @@
 // sessions of the model calls the daemon kicked (`{kick: ids}` on IPC: their record ids, just indexed) and of the heads it handed out
 // still folding (`{follow: id}`: the board opened a session never folded, 3.5 §谁执行它「答案文件」), then, after IDLE_SLICE_MS with no request, those
 // of the session of the newest index row (a request's, never a kick's), then, IDLE_SLICE_MS after the last request or kick, once the
-// sidecars (and the parts the save seals, a slice at a time until a request or kick) and a projection GC (gcProjections) — yielding
+// sidecars (and the parts the save seals, a slice at a time until a request or kick) and a projection GC (gcProjections), and after them, when
+// the heap has room, the sessions a background slice stopped on heap-no-room go back to the followed ones (`noRoom`) — yielding
 // with setImmediate between slices, so a request line that arrives is read before the next one. Slices are not requests, but their work is
 // reported as it is done (`{progress: true}`, throttled like a query's: each slice, and each batch of members a slice reads or member it folds; a target's last
 // slice and the idle save at once): the daemon's idle clock
 // starts again from it, so this process leaves QUERY_IDLE_MS after its last request, kick or slice, never in the middle of a fold
 // (3.5 后台抽取与归约). The work is bounded — each target is dropped at its frontier, the newest session once per request, the
-// sidecars once per idle period — so the slices stop when nothing new comes, and a slice stuck on one unit of work reports nothing. A kill
+// sidecars and the retry of `noRoom` once per idle period — so the slices stop when nothing new comes, and a slice stuck on one unit of work reports nothing. A kill
 // (a stop, an update, a crash) may cut a slice, which leaves at most a torn last line that the next open cuts off (4.3 §上下文投影),
 // and loses at most the fold since the last checkpoint (session.mjs CHECKPOINT_MS).
 //
@@ -49,7 +50,7 @@ import { LOCAL_ENV } from './client.mjs'
 import { QUERIES } from './named/index.mjs'
 import { answer } from './answers.mjs'
 import { lowerPriority } from '../low-priority.mjs'
-import { extendSession, indexed, openSessions, rereadingNow, saveIndexes, sealParts } from './named/session.mjs'
+import { READING_MS, extendSession, heapHasRoom, indexed, openSessions, rereadingNow, saveIndexes, sealParts } from './named/session.mjs'
 import { indexRows, sessionGroups } from './rows.mjs'
 import { dirUse, gcProjections, posCmp, projectionStale, sessionDir } from './projection.mjs'
 import { foldStale } from './fold-log.mjs'
@@ -124,7 +125,7 @@ async function serve(line) {
   return asked
 }
 
-const SLICE_MS = 50, IDLE_SLICE_MS = 2000
+const SLICE_MS = 50, IDLE_SLICE_MS = READING_MS
 const ease = () => new Promise((r) => setImmediate(r))
 const say = (e) => process.stderr.write(`trocar query worker: background work failed: ${(e && e.stack) || e}\n`) // the daemon keeps stderr (D38)
 // newestDone starts true: only a request opens the newest-session scan, never a kick (a worker forked for a kick has none to follow).
@@ -142,7 +143,8 @@ let sweepDue = true
 // The upgrade queue (3.5 §谁执行它「答案文件」): after the sweep, the sessions with a fold log and no tail file (folded before the answer
 // files existed, the flat layout's moved in) are folded in idle slices, each to its end, which writes its head, packs and tails: the
 // answered and followed first, then the most recently active. Made once per sweep, each session taken once, so it ends. One that ends
-// (folded to its end, or stopped) with no tail file is marked with its last member (upgrade.skip) and not queued again until that changes.
+// (folded to its end, or stopped) with no tail file is marked with its last member (upgrade.skip) and not queued again until that changes,
+// unless it stopped on heap-no-room: that is this process's heap, not the session, so it goes to `noRoom` and no marker is written.
 // The re-read group goes first (3.5 §访问模式「版本变更的重读」): a `reread` marker, or a projection or fold log of another version by its
 // first line, whatever else the directory holds: within it the newest directory first, which is the most recently opened.
 let upgrade = null, up = null
@@ -159,6 +161,7 @@ async function upgradeQueue(ctx) {
     const first = answered.has(id) || follow.has(id)
     await ease() // first lines of every session: a request is read between two
     if (names.length && staleOnDisk(id)) { list.push([true, first, dirUse(sessionDir(home, id)).t, last, id]); continue }
+    if (readHead(home, id)?.pending?.stopped?.code === 'heap-no-room') { noRoom.add(id); continue }
     if (names.includes('upgrade.skip')) { try { if (nodeFs.readFileSync(skipFile(home, id), 'utf8') === last) continue } catch { /* gone: queued */ } }
     if (!names.includes('open.main.ndjson') && (flat || names.some((f) => f.startsWith('fold.')))) list.push([false, first, 0, last, id])
   }
@@ -166,6 +169,7 @@ async function upgradeQueue(ctx) {
 }
 const answered = new Set() // the sessions this worker answered: never collected under it
 const follow = new Set() // the sessions the daemon kicked or followed (3.5 §后台抽取与归约): folded in turn from their checkpoints
+const noRoom = new Set() // the sessions a background slice stopped on heap-no-room: back to `follow` at an idle period with room, never before
 const kicked = new Set() // the record ids of the kicked model calls, not yet looked up: their sessions go to `follow`
 const opened = new Set() // the sessions a request or a follow of a re-read asked for, until their turn ends: a re-read gives way to these (giveWay)
 /** The sessions of the kicked records, by the one session rule (sessionGroups: a synthesized key too). The kicked calls are the
@@ -218,12 +222,15 @@ async function background() {
     newestDone = true
     let best = null
     for (const [id, ms] of sessionGroups((await indexed(ctx)).rows)) for (const r of ms) if (best == null || posCmp(String(r.id), best[1]) > 0) best = [id, String(r.id)]
-    target = best && best[0]
+    target = best && !noRoom.has(best[0]) ? best[0] : null
   }
   if (target != null) {
     let more = false
-    try { more = await extendSession(ctx, target, SLICE_MS) } catch (e) { say(e) }
-    if (!more && up && up[0] === target && !answered.has(target) && !follow.has(target) && !nodeFs.existsSync(path.join(sessionDir(home, target), 'open.main.ndjson'))) {
+    const id = target // a request answered during the slice may change `target`
+    noRoom.delete(id)
+    try { more = await extendSession(ctx, id, SLICE_MS) } catch (e) { say(e); if (e?.code === 'heap-no-room') noRoom.add(id) }
+    if (more === null) noRoom.add(id) // its state went in the slice: the heap again, not the session
+    if (!more && !noRoom.has(id) && up && up[0] === target && !answered.has(target) && !follow.has(target) && !nodeFs.existsSync(path.join(sessionDir(home, target), 'open.main.ndjson'))) {
       try { writeSkip(home, target, up[1]) } catch { /* the next worker tries again */ }
     }
     if (!more) { opened.delete(target); target = null; up = null }
@@ -283,6 +290,12 @@ async function background() {
     gcProjections({ home, liveKeys: [...live.keys()], keepKeys: [...answered, ...openSessions()], capOnly: errors.some((e) => e.code === 'segment-unreadable') })
   }
   worked()
+  // gcDone holds until a request or kick, so this idle period tries no more and the idle clock runs out all the same (3.5 后台抽取与归约)
+  if (noRoom.size && !busy && heapHasRoom()) {
+    for (const id of noRoom) follow.add(id)
+    noRoom.clear()
+    kick()
+  }
 }
 
 let buf = '', chain = Promise.resolve() // one at a time: a request is answered before the next is read

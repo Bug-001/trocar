@@ -7,6 +7,7 @@ import http from 'node:http'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createQueryRouter } from '../../src/query/router.mjs'
+import { forkOptions } from '../../src/query/service.mjs'
 import { indexDir, KEEPER_CHUNK_BYTES, segmentIndex } from '../../src/query/index-build.mjs'
 import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
@@ -96,6 +97,12 @@ async function daemonOf({ env = {}, seed = null } = {}) {
   return { w, trocar, api, box, failed, seeded, ...f }
 }
 const gatesIn = () => { const gate = path.join(tmpDir('trocar-light-'), 'open'); return { gate, held: `${gate}.held` } }
+
+test('MA14 on macOS the main role is started in the utility class and the light one follows the daemon', () => {
+  const on = { platform: 'darwin', execPath: '/n' }
+  assert.equal(forkOptions('', on).execPath, '/usr/sbin/taskpolicy')
+  assert.equal(forkOptions('light', on).execPath, undefined)
+})
 
 test('3.5 #57: a lane in flight on a real daemon does not hold status up', { timeout: 60_000 }, async () => {
   const { gate, held } = gatesIn()

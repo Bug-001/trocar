@@ -14,7 +14,7 @@ import { projectionFile, sessionDir, PROJ_V } from '../../src/query/projection.m
 import { headFile, listedText, packFile, readHead, rereadFile, tailFile } from '../../src/query/ctx-files.mjs'
 import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
 import { applySession, createDesk } from '../../web/legacy/replay/model.mjs'
-import { within } from '../helpers/bounded.mjs'
+import { drain, within } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
 
@@ -27,13 +27,14 @@ const sessionIn = (home, calls = 700) => {
   return s
 }
 const inWorker = (home) => ({ home, fs, writer: true })
-const toTheEnd = async (ctx, id) => { while (await extendSession(ctx, id, 1_000)); }
+const toTheEnd = async (ctx, id) => { await drain(() => extendSession(ctx, id, 1_000)) }
 const NO_REAL_OS = fileURLToPath(new URL('../helpers/no-real-os.cjs', import.meta.url))
 const at = (rel) => JSON.stringify(new URL(rel, import.meta.url).href)
 const DRIVER = `
 await import(${at('../../src/query/named/index.mjs')})
 const { extendSession, saveIndexes } = await import(${at('../../src/query/named/session.mjs')})
-while (await extendSession({ home: process.argv[1], writer: true }, process.argv[2], 1e9));
+const { drain } = await import(${at('../helpers/bounded.mjs')})
+await drain(() => extendSession({ home: process.argv[1], writer: true }, process.argv[2], 1e9))
 saveIndexes()
 process.exit(0)`
 /** The session folded to its end by a worker of its own, which leaves: this process holds nothing of it, as a new worker after an update. */
@@ -115,9 +116,9 @@ test('3.5 重读 ①: `session --since M` is an empty delta on M with pending an
   s.append(5)
   const ctx = await inReread(home, id)
   const was = readHead(home, id)
-  for (;;) {
+  await drain(async () => {
     const d = await runQuery('session', { id, since: M }, ctx)
-    if (!rereads(home, id)) break
+    if (!rereads(home, id)) return false
     assert.deepEqual(Object.keys(d).sort(), [...Object.keys(CONTRACT.session_since), 'pending'].sort(), 'the delta\'s closed set')
     assert.deepEqual(Object.keys(d.pending).sort(), [...Object.keys(CONTRACT.session_pending.pending), 'read', 'seen'].sort(), 'the head\'s seen and read, with done and work')
     assert.deepEqual([d.base, d.mark], [M, M])
@@ -130,8 +131,8 @@ test('3.5 重读 ①: `session --since M` is an empty delta on M with pending an
     const page = await runQuery('session', { id }, ctx)
     assert.equal(page.base, null)
     assert.ok(page.pending, 'with no --since: at the frontier, with pending')
-    if (!await extendSession(ctx, id, 20)) break
-  }
+    return extendSession(ctx, id, 20)
+  }, 'a re-read')
   await toTheEnd(ctx, id)
   const after = await runQuery('session', { id, since: M }, ctx)
   assert.equal(after.pending, undefined)
@@ -148,7 +149,7 @@ test('3.5 重读 ①: with its head gone a `--since` and a `--head` answer at th
   for (const n of [headFile(home, id), headFile(home, id, true)]) fs.rmSync(n, { force: true })
   const a = await runQuery('session', { id, since: M }, ctx)
   assert.notEqual(a.mark, M)
-  assert.ok(a.pending && !('seen' in a.pending), 'a deleted head is a first read')
+  assert.ok(a.pending && !('seen' in a.pending) && !('read' in a.pending), 'a deleted head is a first read')
   assert.equal((await runQuery('session', { id, head: '' }, ctx)).tier, 1)
 })
 

@@ -16,7 +16,7 @@ import { cacheState, isBreak, breakCost, usageOf, priceMatch, costOf, isFailed }
 import { CT_ORDER, callComp, hitTier, refRowOf } from './analysis.mjs'
 import { anchorJump } from './jump.mjs'
 import { laneEvents, ridAt } from './model.mjs'
-import { stepRef } from './lanes.mjs'
+import { stepRef, stepOfMark } from './lanes.mjs'
 import { laneWord } from '../labels/replay.mjs'
 import * as W from '../labels/replay.mjs'
 import { FLAG, cellsOf } from '../../../src/view/head-cols.mjs'
@@ -75,17 +75,36 @@ export function chapterNavHtml(chs, g, end) {
 // a tick on the overview at each chapter's start; `pos(g)` places step g on the strip's N
 export const chapterTicksHtml = (chs, pos, N) => chs.map((c) => `<span class="ovchap" aria-hidden="true" style="left:${((pos(c.s0) / N) * 100).toFixed(3)}%"></span>`).join('')
 // the first local index whose global step is ≥ g (the anchor lane may hold gaps while its packs are read)
-function firstAt(no, N, g) { let lo = 0, hi = N; while (lo < hi) { const m = (lo + hi) >> 1; if (no(m) < g) lo = m + 1; else hi = m } return lo }
+function firstAt(no, N, g, lo = 0) { let hi = N; while (lo < hi) { const m = (lo + hi) >> 1; if (no(m) < g) lo = m + 1; else hi = m } return lo }
+// every chapter start's position in one walk: from the last start, the steps between them are guessed contiguous and the guess checked by
+// two reads of `no`; where it fails (a gap), a binary search above the last start
+function startsOf(no, N, chs) {
+  const at = new Map()
+  let p = 0, g0 = null
+  for (const { s0: g } of chs) {
+    let i = g0 == null ? -1 : p + (g - g0)
+    if (!(i >= p && i <= N && (i === N || no(i) >= g) && (i === 0 || no(i - 1) < g))) i = firstAt(no, N, g, g0 != null && g >= g0 ? p : 0)
+    at.set(g, i); p = i; g0 = g
+  }
+  return at
+}
 // the desk's chapters around its playhead: the head's table when the anchor is the head's axis lane, else one chapter; `c0` / `c1` are
 // the playhead chapter's span in the anchor's local indexes, `pos` maps a global step onto them
+// the positions found, per anchor lane object and chapter table: a lane object is rebuilt when its calls change (lanes.mjs), so each
+// chapter's position is searched once per answer that changed the lane, not per paint
+const POS = new WeakMap()
 export function chapterHere(s) {
   const a = s.anchor, N = a ? a.calls.length : 0, head = s.desk && s.desk.head, no = a && a.no ? (i) => a.no(i) : (i) => i
   const end = N ? no(N - 1) + 1 : 0
-  const chs = head && head.chapters && head.chapters.length && a && a.id === head.axis ? head.chapters : [{ s0: 0, s1: end, ts0: null, inferred: false }]
-  const g = N ? no(s.playhead) : 0, k = chapterAt(chs, g), pos = (x) => firstAt(no, N, x)
+  const table = head && head.chapters && head.chapters.length && a && a.id === head.axis
+  const chs = table ? head.chapters : [{ s0: 0, s1: end, ts0: null, inferred: false }]
+  let at = null
+  if (table && N) { const m = POS.get(a); if (m && m.chs === chs) at = m.at; else POS.set(a, { chs, at: at = startsOf(no, N, chs) }) }
+  const pos = at ? (x) => { let v = at.get(x); if (v === undefined) at.set(x, v = firstAt(no, N, x)); return v } : (x) => firstAt(no, N, x)
+  const g = N ? no(s.playhead) : 0, k = chapterAt(chs, g)
   if (!N) return { chs, g, end, pos, c0: 0, c1: 0 }
-  const at = Math.max(0, Math.min(N - 1, s.playhead)) // the span always holds the playhead, even where the lane's numbers are not in order
-  const c0 = Math.min(at, pos(chs[k].s0)), c1 = Math.max(at + 1, k === chs.length - 1 ? N : pos(chs[k].s1))
+  const ph = Math.max(0, Math.min(N - 1, s.playhead)) // the span always holds the playhead, even where the lane's numbers are not in order
+  const c0 = Math.min(ph, pos(chs[k].s0)), c1 = Math.max(ph + 1, k === chs.length - 1 ? N : pos(chs[k].s1))
   return { chs, g, end, pos, c0, c1 }
 }
 
@@ -221,13 +240,13 @@ export function renderSaw(el, s) {
     peak = any ? `≈ ${usd(maxCost)}` : '≈ —'
     q(el, '#sawrow').innerHTML = BRACKET() + win.map(([c, i]) => {
       const b = costBarHtml(c, i, s, maxCost)
-      return `<div class="bar cost ${isFailed(c) ? 'err' : ''} ${i === s.playhead ? 'cur' : ''}" data-i="${i}" style="height:${b.h}px" title="step ${i + 1} · ${esc(b.tip)}">${b.html}</div>`
+      return `<div class="bar cost ${isFailed(c) ? 'err' : ''} ${i === s.playhead ? 'cur' : ''}" data-i="${i}" data-rid="${esc(c.rid)}" style="height:${b.h}px" title="step ${i + 1} · ${esc(b.tip)}">${b.html}</div>`
     }).join('')
   } else {
     const pk = Math.max(1, s.anchor.peakCtx)
     peak = `${kf(pk)} tok`
     peakTip = 'The largest real input total of a main thread step (input + cache read + cache write)'
-    q(el, '#sawrow').innerHTML = BRACKET() + win.map(([c, i]) => ctxBarHtml(c, i + 1, `data-i="${i}"`, i === s.playhead, pk)).join('')
+    q(el, '#sawrow').innerHTML = BRACKET() + win.map(([c, i]) => ctxBarHtml(c, i + 1, `data-i="${i}" data-rid="${esc(c.rid)}"`, i === s.playhead, pk)).join('')
   }
   // the cache band
   q(el, '#cacherow').innerHTML = win.map(([c, i]) => cacheCell(c, i, s)).join('')
@@ -292,9 +311,17 @@ export function renderOverview(el, s) {
   // do not destroy the brush (and its pointer capture) mid-drag: just reposition; rebuild when the drag ends
   if (s.brushDragging) { repositionBrush(el, s); return }
   const peak = Math.max(1, s.anchor.peakCtx), calls = s.anchor.calls, ch = chapterHere(s)
-  strip.innerHTML = stripHtml(N, (i) => (calls[i].ctx || 0) / peak, (i) => isFailed(calls[i])) + chapterTicksHtml(ch.chs, ch.pos, N) + BRUSH()
+  // the strip is rewritten only when what it draws changed: the anchor lane, its length and peak, the chapter table, its failed marks;
+  // `node` = the brush this rewrite made, so a strip anything else rewrote (the rough page, an emptied scope) is drawn again
+  const was = STRIP.get(strip), now = { a: s.anchor, N, peak, chs: ch.chs, failed: failedOf(s.anchor), node: strip.lastElementChild }
+  if (!was || Object.keys(now).some((k) => was[k] !== now[k])) {
+    strip.innerHTML = stripHtml(N, (i) => (calls[i].ctx || 0) / peak, (i) => isFailed(calls[i])) + chapterTicksHtml(ch.chs, ch.pos, N) + BRUSH()
+    STRIP.set(strip, { ...now, node: strip.lastElementChild })
+  }
   repositionBrush(el, s)
 }
+const STRIP = new WeakMap() // strip → what its last rewrite drew
+const FAILED = new WeakMap(), failedOf = (lane) => { let n = FAILED.get(lane); if (n === undefined) FAILED.set(lane, n = lane.calls.filter(isFailed).length); return n }
 const BRUSH = () => '<div class="ovpin" id="ovpin"></div>' +
   `<div class="ovbrush" id="ovbrush" tabindex="0" aria-label="${esc(W.BRUSH_LABEL)}" title="Drag = pan · drag an edge = zoom · double-click = the whole part between two compactions (when it does not fit the row above, the largest range that fits)"><span class="ovh ovh-l"></span><span class="ovh ovh-r"></span></div>`
 // the strip's backdrop over N points: `val(i)` its height (0–1), `failed(i)`; `sampled` says a point is not one step even when N ≤ 240
@@ -404,7 +431,7 @@ export function wireTimeline(el, s) {
     const vs = e.target.closest('[data-view]')
     if (vs && vs.closest('#viewswitch')) { s.sawView = vs.dataset.view === 'cost' ? 'cost' : 'ctx'; renderSaw(el, s); return }
     const bar = e.target.closest('#sawrow .bar')
-    if (bar) { s.setPlayhead(+bar.dataset.i, true); return }
+    if (bar) { const i = stepOfMark(s, bar.dataset.rid); if (i >= 0) s.setPlayhead(i, true); return }
     const btn = e.target.closest('button')
     if (btn && (btn.id === 'chapPrev' || btn.id === 'chapNext')) { if (btn.dataset.to != null) s.chapterGo(+btn.dataset.to); return } // works on the rough page too
     if (!btn || !s.anchor) return

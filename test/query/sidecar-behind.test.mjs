@@ -14,7 +14,7 @@ import { openFoldLog } from '../../src/query/fold-log.mjs'
 import { openProjection, sessionDir } from '../../src/query/projection.mjs'
 import { readHead } from '../../src/query/ctx-files.mjs'
 import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
-import { within } from '../helpers/bounded.mjs'
+import { drain, within } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
 
@@ -24,8 +24,9 @@ const at = (rel) => JSON.stringify(new URL(rel, import.meta.url).href)
 const DRIVER = `
 await import(${at('../../src/query/named/index.mjs')})
 const { extendSession, saveIndexes } = await import(${at('../../src/query/named/session.mjs')})
+const { drain } = await import(${at('../helpers/bounded.mjs')})
 const [home, id, kill] = [process.argv[1], process.argv[2], process.argv[3] === 'kill']
-while (await extendSession({ home, writer: true }, id, 1e9));
+await drain(() => extendSession({ home, writer: true }, id, 1e9))
 if (kill) process.kill(process.pid, 'SIGKILL')
 saveIndexes()
 process.exit(0)`
@@ -72,18 +73,18 @@ for (const [axis, asks] of [['background slices alone', false], ['a request betw
     const f = Object.assign(Object.create(fs), { renameSync: (a, b) => { fs.renameSync(a, b); if (/head|\.gz$|open\./.test(path.basename(b))) check(`after ${path.basename(b)}`) } })
     const ctx = { home, fs: f, writer: true }
     let slices = 0, held = 0
-    for (;;) {
+    await drain(async () => {
       const more = await extendSession(ctx, id, 20)
       check(`slice ${++slices}`)
-      if (!more) break
-      if (!asks) continue
+      if (!more || !asks) return more
       const { mark } = await runQuery('session', { id }, ctx)
       check(`the request after slice ${slices}`)
-      if (members.findIndex((r) => String(r.id) === String(mark)) + 1 >= was.mark) continue
+      if (members.findIndex((r) => String(r.id) === String(mark)) + 1 >= was.mark) return true
       held++ // the fold is behind the files: they are the answer
       assert.equal((await runQuery('lane', { id, pack: '0.main' }, ctx)).$text, textOf(home, id, 'p0.main.ndjson.gz'), 'lane --pack is the file on disk')
       assert.equal((await runQuery('lane', { id, tail: 'main' }, ctx)).$text, textOf(home, id, 'open.main.ndjson'), 'lane --tail is the file on disk')
-    }
+      return true
+    })
     assert.equal(held > 0, asks, 'a request came while the fold was behind')
     saveIndexes() // the head a mark alone did not make due (3.5 答案文件): `fold` below ends on the same save
     const other = homeOf()
