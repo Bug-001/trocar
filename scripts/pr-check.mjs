@@ -1,9 +1,6 @@
 #!/usr/bin/env node
 // scripts/pr-check.mjs — what is about to leave this machine, checked against the rules and against the capture (spec 1.12 §6).
 //
-//   node scripts/pr-check.mjs --before <time> --title <file> --body <file> [--base <ref>] [--accept-partial] [--cli <path>] [--json]
-//   node scripts/pr-check.mjs --issue --before <time> [--title <file>] --body <file> [--base <ref>] [--accept-partial] [--cli <path>] [--json]
-//
 // The report is {ok, hash, findings: [{rule, where, why}], accepted: [{rule, where, why}], coverage: {scanned_bytes, opaque_bytes, after_bytes,
 // total_bytes, from, to}, leaving: {files, commits, identity, branch}}. Exit 0 passed, 1 refused, 2 usage error. A finding names a place and a rule, never a value: `where` points into
 // `leaving.files` by index, because a path is outbound text too, and `why` is one constant sentence per rule. Captured bytes pass through
@@ -34,7 +31,6 @@ const MIN_FACT = 4
 const GIT_BINARY_PEEK = 8000 // how far git looks for a NUL to call a file binary
 const MAX_WORK_MS = 7 * 86_400_000 // a --before further back than this leaves the recent capture out, whatever the reason
 const BOARD = 'src/web/board/'
-const BOARD_INPUT = 'web/'
 const LOCK = /(?:^|\/)package-lock\.json$/
 const isUncounted = (file) => file.startsWith('test/fixtures/') || file.startsWith(BOARD) || LOCK.test(file)
 const INTEGRITY = /"integrity":\s*"[^"]*"/g
@@ -79,13 +75,10 @@ const CONTROL = /[\x00-\x08]/g
 const TEXT_KINDS = new Set(['added', 'message', 'header', 'title', 'body'])
 const CONTROL_KINDS = new Set(['added', 'message', 'path', 'title', 'body'])
 const RECORD_TS = /^\{"ts":"([^"]+)"/
-const DIFF_HEADER = 'diff --git '
-const NEWLINE = Buffer.from('\n')
 const STANDARD_HEADER = /^(?:tree|parent|author|committer|encoding) .*\n/gm
 const SIGNATURE = /^gpgsig(?:-sha256)? .*\n(?: .*\n)*/gm
-const PERSON = (role) => new RegExp(`^${role} (.*) <(.*)> \\d+ [+-]\\d+$`, 'm')
 const ALNUM = String.raw`[\p{L}\p{N}]`
-const isAlnum = (char) => char !== undefined && new RegExp(ALNUM, 'u').test(char)
+const ALNUM_CHAR = new RegExp(ALNUM, 'u')
 // the row of .github/pull_request_template.md the hash is written on: it cannot hold its own hash, and holds nothing else or it counts.
 // What it holds is left out of the hash, so main refuses any value but the hash: it is no way out for 32 unjudged bytes, and no mistaken paste.
 const HASH_ROW = /^- Written by an agent: the `hash` from `node scripts\/pr-check\.mjs`:[ \t]*(?:(`?)([0-9a-f]{64})\1[ \t]*)?\r?$/gm
@@ -119,20 +112,19 @@ const WHY = {
 function parse(argv) {
   let values
   try {
-    ({ values } = parseArgs({ args: argv, options: { before: { type: 'string' }, title: { type: 'string' }, body: { type: 'string' }, base: { type: 'string' },
+    ({ values } = parseArgs({ args: argv, options: { before: { type: 'string' }, title: { type: 'string' }, body: { type: 'string' }, base: { type: 'string', default: 'origin/main' },
       'accept-partial': { type: 'boolean' }, cli: { type: 'string' }, issue: { type: 'boolean' }, json: { type: 'boolean' } } }))
     if (!values.before || !values.body || !(values.title || values.issue)) return null
     const cli = findCli(values.cli)
     if (!cli) return null
-    return { ...values, cli, before: parseTime(values.before), base: values.base ?? 'origin/main',
+    return { ...values, cli, before: parseTime(values.before),
       title: values.title && fs.readFileSync(values.title), body: fs.readFileSync(values.body) }
   } catch {
     return null
   }
 }
 
-const normalized = (bytes) => Buffer.from(normalize(bytes).buffer)
-const wordOf = (text) => normalized(Buffer.from(text))
+const normalized = (text) => Buffer.from(normalize(Buffer.from(text)).buffer)
 
 function git(cwd, ...args) {
   const r = spawnSync('git', args, { cwd, maxBuffer: Infinity, stdio: ['ignore', 'pipe', 'ignore'] })
@@ -140,56 +132,51 @@ function git(cwd, ...args) {
   return r.stdout
 }
 
-/** `git show --numstat -z`: {path, lines, binary} per file; a rename is an empty name followed by the old one and the new one. */
+/** `git show --numstat -z`: {path, count, binary} per file; a rename is an empty name followed by the old one and the new one. */
 function numstat(out) {
   const fields = out.toString().split('\0')
   const files = []
   for (let i = 0; i + 1 < fields.length; i++) {
-    const columns = fields[i].split('\t')
-    const [added, deleted] = columns, name = columns.slice(2).join('\t')
+    const [added, deleted, ...rest] = fields[i].split('\t')
+    const name = rest.join('\t')
     if (!name) i += 2
-    files.push({ path: name || fields[i], binary: added === '-', lines: (Number(added) || 0) + (Number(deleted) || 0) })
+    files.push({ path: name || fields[i], binary: added === '-', count: (Number(added) || 0) + (Number(deleted) || 0) })
   }
   return files
 }
 
-/** `git show --unified=0`, one entry per file: the added lines, the line each has in the new file, and whether the file went away. A file
- *  that became a link or the reverse is printed as a deletion and a creation under one header, and is one entry that did not go away,
- *  whichever comes first. */
+/** `git show --unified=0`, one entry per file: the added lines as `bytes`, the line each has in the new file, and whether the file went away.
+ *  A file that became a link or the reverse is printed as a deletion, then a creation under the same header: one entry that did not go away. */
 function patches(out) {
   const files = []
   let file = null, header = null, inHunk = false, line = 0
-  for (let at = 0; at < out.length;) {
-    const nl = out.indexOf(10, at), end = nl < 0 ? out.length : nl
-    const row = out.subarray(at, end)
-    at = end + 1
-    if (row.subarray(0, DIFF_HEADER.length).toString('latin1') === DIFF_HEADER) {
-      const split = header?.equals(row)
-      if (!split) files.push(file = { added: [], lines: [], gone: false, split: false })
-      else Object.assign(file, { gone: false, split: true })
+  for (const row of out.toString('latin1').split('\n')) { // latin1 is one character per byte, so `bytes` comes back as git printed it
+    if (row.startsWith('diff --git ')) {
+      if (row === header) file.gone = false
+      else files.push(file = { bytes: '', lines: [], gone: false })
       header = row
       inHunk = false
-    } else if (row[0] === 0x40) { // @@ -a,b +c,d @@
+    } else if (row[0] === '@') { // @@ -a,b +c,d @@
       inHunk = true
-      line = Number(/\+(\d+)/.exec(row.toString('latin1'))[1])
+      line = Number(/\+(\d+)/.exec(row)[1])
     } else if (inHunk) {
-      if (row[0] !== 0x2b) continue // not in the new file: a removed line, or `\ No newline`
-      file.added.push(row.subarray(1))
+      if (row[0] !== '+') continue // not in the new file: a removed line, or `\ No newline`
+      file.bytes += `${row.slice(1)}\n`
       file.lines.push(line++)
-    } else if (file && row.subarray(0, 12).toString() === 'deleted file') {
-      file.gone = !file.split
+    } else if (row.startsWith('deleted file')) {
+      file.gone = true
     }
   }
-  return files
+  return files.map((f) => ({ ...f, bytes: Buffer.from(f.bytes, 'latin1') }))
 }
 
-/** What one commit brings, or what lies between two, {stats, diffs} file by file. */
+/** What one commit brings, or what lies between two, file by file: numstat's fields and the patch's. */
 function brought(cwd, ...revs) {
   const read = (...args) => git(cwd, ...(revs.length === 1 ? ['show', '--format='] : ['diff']), '-M', '--no-relative', ...args, ...revs)
   const diffs = patches(read('--unified=0', '--no-color', '--no-ext-diff', '--no-textconv'))
   const stats = numstat(read('--numstat', '-z'))
   if (stats.length !== diffs.length) throw new Error('git')
-  return { stats, diffs }
+  return stats.map((stat, i) => ({ ...stat, ...diffs[i] }))
 }
 
 /** Whether a text of the base holds `word` as a word: its pieces in order, punctuation between them, nothing alphanumeric touching it. */
@@ -202,23 +189,21 @@ function asWord(word) {
 /** Whether a text of the base holds these very bytes, and no longer run of the same letters. */
 const asIs = (bytes) => (text) => {
   for (let at = text.indexOf(bytes); at >= 0; at = text.indexOf(bytes, at + 1)) {
-    if (!isAlnum(text[at + bytes.length])) return true
+    if (!ALNUM_CHAR.test(text.charAt(at + bytes.length))) return true
   }
   return false
 }
-
-const addedOf = (diff) => Buffer.concat(diff.added.flatMap((row) => [row, NEWLINE]))
 
 /** A commit as it is stored: every byte is in here, whatever `git log` would print of it. */
 function commitObject(cwd, sha) {
   const raw = git(cwd, 'cat-file', 'commit', sha)
   const split = raw.indexOf('\n\n')
   const head = raw.subarray(0, split + 1).toString()
-  const person = (role) => {
-    const [, name, email] = PERSON(role).exec(head)
+  const people = ['author', 'committer'].map((role) => {
+    const [, name, email] = new RegExp(`^${role} (.*) <(.*)> \\d+ [+-]\\d+$`, 'm').exec(head)
     return { name, email }
-  }
-  return { message: raw.subarray(split + 2), author: person('author'), committer: person('committer'), merge: head.match(/^parent /gm)?.length > 1,
+  })
+  return { message: raw.subarray(split + 2), people, merge: head.match(/^parent /gm)?.length > 1,
     signature: head.match(SIGNATURE)?.join('') ?? '', extra: head.replace(SIGNATURE, '').replace(STANDARD_HEADER, '') }
 }
 
@@ -233,37 +218,34 @@ function readGit(cwd, base, out) {
   }
   for (const sha of git(cwd, 'rev-list', '--reverse', `${base}..HEAD`).toString().split('\n').filter(Boolean)) {
     const short = sha.slice(0, SHORT_SHA)
-    const { message: bytes, author, committer, merge, signature, extra } = commitObject(cwd, sha)
+    const { message: bytes, people, merge, signature, extra } = commitObject(cwd, sha)
     const message = bytes.toString()
-    const people = [author, committer].map(({ name, email }) => `${name} <${email}>`)
-    for (const person of people) if (!out.leaving.identity.includes(person)) out.leaving.identity.push(person)
+    const signed = people.map(({ name, email }) => `${name} <${email}>`)
+    for (const person of signed) if (!out.leaving.identity.includes(person)) out.leaving.identity.push(person)
     out.leaving.commits.push({ sha: short, subject: message.split('\n')[0] })
     out.sources.push({ where: `${short}:message`, kind: 'message', bytes })
     if (extra) out.sources.push({ where: `${short}:message`, kind: 'header', bytes: Buffer.from(extra) })
     if (signature) out.sources.push({ where: `${short}:message`, kind: 'signature', bytes: Buffer.from(signature) })
     // the noreply address is a public login, judged by the email rule, so the identity words read only the names; a captured fact in it still leaks
-    const names = `${author.name}\n${committer.name}`, locals = [author, committer].map(({ email }) => email.split('@')[0]).join('\n')
-    out.sources.push({ where: `${short}:author`, kind: 'author', bytes: Buffer.from(people.join('\n')), names: wordOf(names), norm: wordOf(`${names}\n${locals}`) })
-    const commit = { sha, short, message, merge, emails: [author.email, committer.email], lines: 0, changed: [] }
+    const names = people.map(({ name }) => name).join('\n'), locals = people.map(({ email }) => email.split('@')[0]).join('\n')
+    out.sources.push({ where: `${short}:author`, kind: 'author', bytes: Buffer.from(signed.join('\n')), names: normalized(names), norm: normalized(`${names}\n${locals}`) })
+    const commit = { sha, short, message, merge, emails: people.map(({ email }) => email), lines: 0, changed: [] }
     out.commits.push(commit)
-    if (commit.merge) continue // the shape rule refuses it whole, so its diff is not read
-    const { stats, diffs } = brought(cwd, sha)
-    stats.forEach((stat, i) => {
-      if (!isUncounted(stat.path)) commit.lines += stat.lines
-      if (diffs[i].gone) return
-      const where = `${short}:file#${indexOf(stat.path)}`
-      const added = addedOf(diffs[i])
-      commit.changed.push({ ...stat, where, added })
-      out.sources.push({ where, kind: 'path', bytes: Buffer.from(stat.path) })
-      out.sources.push({ where, kind: 'added', path: stat.path, lines: diffs[i].lines, bytes: added })
-    })
+    if (merge) continue // the shape rule refuses it whole, so its diff is not read
+    for (const file of brought(cwd, sha)) {
+      if (!isUncounted(file.path)) commit.lines += file.count
+      if (file.gone) continue
+      const where = `${short}:file#${indexOf(file.path)}`
+      const source = { ...file, where, kind: 'added' }
+      commit.changed.push(source)
+      out.sources.push({ where, kind: 'path', bytes: Buffer.from(file.path) }, source)
+    }
   }
   if (out.commits.length < 2) return
   // a window does not cross sources, and what two commits each bring half of sits whole in the tree they leave
-  const { stats, diffs } = brought(cwd, base, 'HEAD')
-  stats.forEach((stat, i) => {
-    if (!diffs[i].gone) out.sources.push({ where: `tree:file#${indexOf(stat.path)}`, kind: 'added', path: stat.path, lines: diffs[i].lines, bytes: addedOf(diffs[i]) })
-  })
+  for (const file of brought(cwd, base, 'HEAD')) {
+    if (!file.gone) out.sources.push({ ...file, where: `tree:file#${indexOf(file.path)}`, kind: 'added' })
+  }
 }
 
 /** The whole outbound text, source by source, in a form that changes when any of its bytes does, and the terms it was judged on: what the
@@ -280,49 +262,35 @@ function hashOf(sources, { base, before, accepting, accepted, coverage }) {
 
 /** `where`, narrowed to the line of the new file a match at `index` sits on, when the source knows its lines. */
 function placeOf(source, text, index) {
-  if (!source.lines) return source.where
-  let row = 0
-  for (let at = text.indexOf('\n'); at >= 0 && at < index; at = text.indexOf('\n', at + 1)) row++
-  return source.lines[row] === undefined ? source.where : `${source.where}:${source.lines[row]}`
-}
-
-function isBlocked(file, read) {
-  const ext = file.path.slice(file.path.lastIndexOf('.')).toLowerCase()
-  const added = file.added.toString()
-  if (file.binary || BLOCKED.has(ext) || LFS_POINTER.test(added) || (GITATTRIBUTES.test(file.path) && LFS_FILTER.test(added))) return true
-  return ext === '.svg' && spelled({ bytes: read() }).some((text) => SVG_EMBED.test(text)) // whole: a rename brings no added lines
+  const line = source.lines?.[text.slice(0, index).split('\n').length - 1]
+  return line === undefined ? source.where : `${source.where}:${line}`
 }
 
 /** The object `rev` names, empty when it names none. */
 const answer = (cwd, ...args) => spawnSync('git', args, { cwd, stdio: ['ignore', 'pipe', 'ignore'] }).stdout.toString().trim()
 const revOf = (cwd, rev) => answer(cwd, 'rev-parse', '--verify', '--quiet', rev)
-const isAncestor = (cwd, older, newer) => spawnSync('git', ['merge-base', '--is-ancestor', older, newer], { cwd, stdio: 'ignore' }).status === 0
 
-const undoEntities = (text) => text.replace(ENTITY, (all, decimal, hex, name) => {
-  if (name) return NAMED[name.toLowerCase()]
-  const cp = decimal ? Number(decimal) : parseInt(hex, 16)
-  return cp <= 0x10ffff ? String.fromCodePoint(cp) : all
-})
-
-/** %HH runs, as §6.2 reads them: bytes that are not UTF-8 are no escape. */
-const undoPercent = (text) => text.replace(/(?:%[0-9a-f]{2})+/gi, (run) => {
-  const bytes = Buffer.from(run.replaceAll('%', ''), 'hex')
-  return isUtf8(bytes) ? bytes.toString() : run
-})
-
-/** A source's text as it stands and, when they differ, with its \uXXXX undone, then its HTML entities, then its percent escapes. */
-function spelled(source) {
-  const raw = source.bytes.toString()
+/** A text as it stands and, when they differ, with its \uXXXX undone, then its HTML entities, then its %HH runs, which §6.2 reads as bytes: what is not UTF-8 is no escape. */
+function spelled(bytes) {
+  const raw = bytes.toString()
   const decoded = raw.replace(/\\+u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
-  const unescaped = undoEntities(decoded)
-  return [...new Set([raw, decoded, unescaped, undoPercent(unescaped)])]
+  const unescaped = decoded.replace(ENTITY, (all, decimal, hex, name) => {
+    if (name) return NAMED[name.toLowerCase()]
+    const cp = Number(decimal ?? `0x${hex}`)
+    return cp <= 0x10ffff ? String.fromCodePoint(cp) : all
+  })
+  const unpercented = unescaped.replace(/(?:%[0-9a-f]{2})+/gi, (run) => {
+    const escaped = Buffer.from(run.replaceAll('%', ''), 'hex')
+    return isUtf8(escaped) ? escaped.toString() : run
+  })
+  return [...new Set([raw, decoded, unescaped, unpercented])]
 }
 
 /** An image riding in text. A Markdown image in a committed file points into the repository; in a pull request's text it loads from anywhere. */
 function checkImages(sources, hold, add) {
   for (const source of sources) {
     const posted = source.kind === 'title' || source.kind === 'body'
-    for (const text of spelled(source)) {
+    for (const text of spelled(source.bytes)) {
       const keep = (match) => hold(match[0], 'files', placeOf(source, text, match.index), { exact: true, why: WHY.image })
       for (const match of text.matchAll(DATA_IMAGE)) {
         if (HAS_PAYLOAD.test(match[0])) keep(match)
@@ -339,17 +307,21 @@ function checkFiles(commits, cwd, add) {
     for (const file of commit.changed) {
       const inBoard = file.path.startsWith(BOARD)
       if (inBoard) board ??= file.where
+      const ext = file.path.slice(file.path.lastIndexOf('.')).toLowerCase()
+      const added = file.bytes.toString()
+      const object = `${commit.sha}:${file.path}`
+      const blocked = file.binary || BLOCKED.has(ext) || LFS_POINTER.test(added) || (GITATTRIBUTES.test(file.path) && LFS_FILTER.test(added))
+        || (ext === '.svg' && spelled(git(cwd, 'cat-file', 'blob', object)).some((text) => SVG_EMBED.test(text))) // whole: a rename brings no added lines
       // what HEAD holds of the board is the build, judged below; what only an earlier commit holds would ride along in the history
-      const blob = () => git(cwd, 'cat-file', 'blob', `${commit.sha}:${file.path}`)
-      if (isBlocked(file, blob) && !(inBoard && revOf(cwd, `${commit.sha}:${file.path}`) === revOf(cwd, `HEAD:${file.path}`))) add('files', file.where)
+      if (blocked && !(inBoard && revOf(cwd, object) === revOf(cwd, `HEAD:${file.path}`))) add('files', file.where)
     }
   }
   if (!board) return
   // someone else's branch: its package.json is its code, and this machine holds the capture (§1)
   if (fs.realpathSync(git(cwd, 'rev-parse', '--show-toplevel').toString().trim()) !== fs.realpathSync(CLONE)) add('files', board, WHY.foreign)
   // test:build compares the working tree, so it says nothing of HEAD unless the two are the same
-  else if (git(cwd, 'status', '--porcelain', '--untracked-files=all', '--ignored=matching', '--', BOARD_INPUT, BOARD).length > 0) add('files', board, WHY.build)
-  else if (spawnSync('npm', ['run', 'test:build'], { cwd, stdio: 'ignore', shell: process.platform === 'win32' }).status !== 0) add('files', board, WHY.build)
+  else if (git(cwd, 'status', '--porcelain', '--untracked-files=all', '--ignored=matching', '--', 'web/', BOARD).length > 0
+    || spawnSync('npm', ['run', 'test:build'], { cwd, stdio: 'ignore', shell: process.platform === 'win32' }).status !== 0) add('files', board, WHY.build)
 }
 
 function checkShape(commits, sources, add) {
@@ -377,9 +349,10 @@ function runnable(source) {
 
 function checkSecrets(sources, add) {
   for (const source of sources) {
-    for (const text of spelled(source)) {
-      const hit = (match) => { if (!isFake(match[0])) add('secrets', placeOf(source, text, match.index)) }
-      for (const pattern of [TOKEN, CREDENTIAL, VALUED]) for (const match of text.matchAll(pattern)) hit(match)
+    for (const text of spelled(source.bytes)) {
+      for (const pattern of [TOKEN, CREDENTIAL, VALUED]) {
+        for (const match of text.matchAll(pattern)) if (!isFake(match[0])) add('secrets', placeOf(source, text, match.index))
+      }
       for (const match of text.replace(LINE_BREAK, '').matchAll(TOKEN)) if (!isFake(match[0])) add('secrets', source.where)
     }
     const text = runnable(source)
@@ -390,8 +363,8 @@ function checkSecrets(sources, add) {
 /** What a source says in another alphabet joins the sources, to be compared by what it says. A folded block that says nothing readable is
  *  what a file looks like when it is carried as text, and hex is left out of that: a list of hashes opens to noise too. */
 function openEncoded(sources, add) {
-  for (const source of [...sources]) {
-    const text = TEXT_KINDS.has(source.kind) ? runnable(source) : null
+  for (const source of sources.filter((s) => TEXT_KINDS.has(s.kind))) {
+    const text = runnable(source)
     if (text === null) continue
     const open = (run) => {
       const bytes = opened(run)
@@ -410,9 +383,9 @@ function checkIdentity(out, cwd, hold, add) {
   const names = [os.userInfo().username, host, host.split('.')[0], process.env.USER, process.env.LOGNAME, process.env.USERNAME, process.env.COMPUTERNAME]
   const gitConfig = (key) => answer(cwd, 'config', '--get', key)
   const gitName = gitConfig('user.name')
-  const own = wordOf(gitName || '')
+  const own = normalized(gitName)
   for (const name of [...names, gitName, gitConfig('user.email')].filter(Boolean)) {
-    const word = wordOf(name)
+    const word = normalized(name)
     if (word.length === 0) continue
     for (const source of out.sources) {
       if (source.kind === 'author' && word.equals(own)) continue
@@ -420,7 +393,7 @@ function checkIdentity(out, cwd, hold, add) {
     }
   }
   for (const source of out.sources) {
-    for (const text of spelled(source)) {
+    for (const text of spelled(source.bytes)) {
       for (const match of text.matchAll(HOME_PATH)) {
         if (!NEUTRAL.has(match[1].toLowerCase())) hold(match[0], 'identity', placeOf(source, text, match.index))
       }
@@ -434,9 +407,7 @@ function checkIdentity(out, cwd, hold, add) {
 function ask(cli, add, ...args) {
   const [file, argv, options] = callOf(cli, ['query', ...args])
   const r = spawnSync(file, argv, { ...options, maxBuffer: Infinity, stdio: ['ignore', 'pipe', 'ignore'] })
-  let doc = null
-  try { doc = JSON.parse(r.stdout) } catch { /* no document is the failure below */ }
-  if (doc === null || typeof doc !== 'object') throw new Error('capture')
+  const doc = JSON.parse(r.stdout)
   if (r.status !== 0 || doc.ok !== true) add('partial', 'capture', WHY.query)
   return doc
 }
@@ -468,7 +439,7 @@ function checkFacts(cli, segments, sources, add, hold) {
   const words = new Map()
   for (const fact of facts) {
     if (typeof fact !== 'string') continue
-    const word = wordOf(fact)
+    const word = normalized(fact)
     if (word.toString().length >= MIN_FACT) words.set(word.toString('latin1'), { word, fact })
   }
   for (const { word, fact } of words.values()) {
@@ -579,14 +550,14 @@ async function main() {
   const out = { sources: [], commits: [], leaving: { files: [], commits: [], identity: [], branch: null } }
   const given = revOf(cwd, `${options.base}^{commit}`)
   const base = given && answer(cwd, 'merge-base', given, 'HEAD') // the fork point, as one commit from here on: a ref could move between reads
-  const mains = answer(cwd, 'for-each-ref', '--format=%(objectname)', 'refs/remotes/*/main').split('\n').filter(Boolean)
+  const mains = (...args) => answer(cwd, 'for-each-ref', ...args, 'refs/remotes/*/main')
   // what comes before the base is not judged and its tree exempts what comes after, so it has to be out already
-  const isPublic = base && mains.some((main) => isAncestor(cwd, base, main))
+  const isPublic = base && mains('--contains', base)
   if (!options.issue) {
     try {
-      if (!given && mains.length > 0) throw new Error('git')
+      if (!given && mains()) throw new Error('git')
       if (base) readGit(cwd, base, out)
-      if (out.commits.length === 0 || !isPublic) add('base', 'git', WHY.base)
+      if (out.commits.length === 0 || !isPublic) add('base', 'git')
     } catch { add('unreadable', 'git', WHY.git) }
   }
   if (options.title) out.sources.push({ where: 'title', kind: 'title', bytes: options.title })
