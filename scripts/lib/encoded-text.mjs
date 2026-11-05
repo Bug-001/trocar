@@ -10,13 +10,12 @@ const LONG_RUN = new RegExp(`(?<![${ALPHABET}])[${ALPHABET}]{64,}={0,2}`, 'g')
 const BLOCK_ROW = new RegExp(String.raw`^[\s"'${'`'}+,\\]*([=${ALPHABET}]+)[\s"'${'`'}+,;\\]*$`) // bare, or one piece of a folded string literal
 const MIN_ROW = 16
 const MIN_ROWS = 3
-const HEX = /^[0-9a-f]+$/i
 const BASE32 = /^[A-Z2-7]+=*$/
 const BASE32_DIGITS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
 const CONTROL = /[\x00-\x08\x0e-\x1f]/
 const isZlib = (a, b) => (a & 0x0f) === 8 && (a * 256 + b) % 31 === 0
 
-export const isHex = (run) => HEX.test(run)
+export const isHex = (run) => /^[0-9a-f]+$/i.test(run)
 export const longRuns = (text) => text.match(LONG_RUN) ?? []
 
 /** Blocks of at least three rows of one width, the last perhaps shorter, as a tool folds what it encodes: [{index, run}], `run` the rows joined. */
