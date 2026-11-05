@@ -186,13 +186,27 @@ for (const { h, id, r } of (await loadHarnesses()).flatMap((d) => Object.entries
       assert.ok(res.ok, JSON.stringify(res))
       const file = res.records[0].path
       assert.ok(fs.existsSync(file), file)
-      const other = path.join(path.dirname(file), 'not-asked-for')
-      fs.writeFileSync(other, door())
+      const otherName = HARNESS_IDS.find((x) => x !== h.name)
+      const other = routeEntry('switch-file').write({ ...w.ctx, harness: otherName, routeId: id, route: r }, door()).records[0].path // another harness's, through the same writer
       const plan = planByMarker({ home: w.home, env: w.ctx.env, platform: os, ids: [h.name] })
       assert.deepEqual(plan.map((x) => [x.harness, x.path, x.how]), [[h.name, file, 'owned-file']])
       assert.deepEqual(undoByMarker(plan, { home: w.home }).map((x) => x.result), ['undone-by-marker'])
       assert.ok(!fs.existsSync(file), 'the switch file is gone: the next start goes direct')
-      assert.equal(read(other), door(), 'a file that is not this harness\'s switch is not touched')
+      assert.equal(read(other), door(), 'the switch file of a harness off was not asked about stays')
     })
   }
 }
+
+test('a switch file that is a link: the link goes, the file it names stays byte for byte', () => {
+  const w = world({ os: 'darwin' })
+  const mine = path.join(w.home, 'mine.txt')
+  fs.writeFileSync(mine, 'the user\'s own bytes\n')
+  const link = path.join(w.dir, 'switch', 'pi')
+  fs.mkdirSync(path.dirname(link), { recursive: true })
+  fs.symlinkSync(mine, link)
+  const plan = planByMarker({ home: w.home, env: w.ctx.env, platform: 'darwin', ids: ['pi'] })
+  assert.deepEqual(plan.map((x) => x.path), [link])
+  assert.deepEqual(undoByMarker(plan, { home: w.home }).map((x) => x.result), ['undone-by-marker'])
+  assert.throws(() => fs.lstatSync(link), { code: 'ENOENT' })
+  assert.equal(read(mine), 'the user\'s own bytes\n')
+})
