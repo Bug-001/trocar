@@ -1,1 +1,17 @@
 /* web/legacy/css/desk-overview.css — the sidebar's Overview (2.5, Overview.tsx). Only under .desk.next. Tokens only. */
+.desk.next .ovw{flex:1;min-height:0;overflow:auto;padding:6px;font-size:var(--fs-cap);color:var(--ink);}
+.desk.next .ovph,.desk.next .ovgh,.desk.next .ovrow{display:flex;align-items:center;gap:6px;width:100%;min-width:0;min-height:26px;padding:0 8px;border:0;border-radius:6px;background:none;color:inherit;font:inherit;text-align:left;cursor:pointer;outline:none;}
+.desk.next .ovph{min-height:28px;}
+.desk.next .ovph[aria-current]{font-weight:600;background:var(--action-wash);}
+.desk.next .ovph[data-hovered],.desk.next .ovgh[data-hovered],.desk.next .ovrow:hover{background:var(--hover);}
+.desk.next .ovph[data-focus-visible],.desk.next .ovgh[data-focus-visible],.desk.next .ovrow:focus-visible{outline:2px solid var(--accent);outline-offset:-2px;}
+.desk.next .ovgh{padding-left:22px;color:var(--ink-2);}
+.desk.next .ovrow{padding-left:40px;color:var(--ink-2);}
+.desk.next .ovrow[aria-current]{color:var(--action);}
+.desk.next .ovlbl{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}
+.desk.next .ovx,.desk.next .ovct{flex:none;color:var(--ink-3);font-weight:400;font-variant-numeric:tabular-nums;}
+.desk.next .ovrow[aria-current] .ovx{color:inherit;}
+.desk.next .ovct[aria-busy]{width:2ch;height:1em;border-radius:3px;background:var(--hover);}
+.desk.next .ovmark{flex:none;display:flex;color:var(--ink-3);}
+.desk.next .ovbusy{height:26px;margin:0 8px 0 40px;}
+.desk.next .ovnone{padding:4px 8px 4px 40px;color:var(--ink-3);}
