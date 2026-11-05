@@ -138,8 +138,8 @@ function guardWrite(name, p) {
   refused.push({ tool: name, command: at, message })
   throw Object.assign(new Error(message), { code: 'ESANDBOX' })
 }
-const opensForWrite = (flags) => (typeof flags === 'number' ? (flags & (fs.constants.O_WRONLY | fs.constants.O_RDWR | fs.constants.O_CREAT)) !== 0 : /[wa+]/.test(flags ?? 'r'))
-const WRITERS = { writeFile: [0], appendFile: [0], mkdir: [0], mkdtemp: [0], rm: [0], rmdir: [0], unlink: [0], truncate: [0], chmod: [0], chown: [0], utimes: [0], rename: [0, 1], copyFile: [1], cp: [1], link: [1], symlink: [1], createWriteStream: [0], open: 'open' }
+const opensForWrite = (flags) => (typeof flags === 'number' ? (flags & (fs.constants.O_WRONLY | fs.constants.O_RDWR | fs.constants.O_CREAT)) !== 0 : typeof flags === 'string' && /[wa+]/.test(flags)) // no flags (fs.open(path, callback)): a read
+const WRITERS = { writeFile: [0], appendFile: [0], mkdir: [0], mkdtemp: [0], rm: [0], rmdir: [0], unlink: [0], truncate: [0], chown: [0], lchown: [0], chmod: [0], lchmod: [0], utimes: [0], lutimes: [0], rename: [0, 1], copyFile: [1], cp: [1], link: [1], symlink: [1], createWriteStream: [0], open: 'open' }
 function patchFs(obj, name, spec, wrap = (g, f) => function (...a) { g(a); return f.apply(this, a) }) {
   const original = obj[name]
   if (typeof original !== 'function') return
