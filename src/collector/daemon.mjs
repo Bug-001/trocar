@@ -849,9 +849,10 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
     // what it holds in memory, so this costs nothing. Without it `status` said "Connections unknown (the daemon's reply does not
     // carry the connection counts)" on every model-mode machine — a reason about trocar's own IPC (a macOS test machine 2026-10-18).
     // off in THIS daemon's memory, not state.json's desired: an update's exit drain leaves the file saying on (1.6 §5.2), and the wait reads this;
-    // `scope: 'memory'` says so, and only such a count may end that wait (an older daemon's status lacks it)
+    // `scope: 'memory'` says so, and only such a count may end that wait (an older daemon's status lacks it). A daemon being replaced keeps its harnesses on,
+    // so it counts every connection: the off set would read 0 and end the wait at once, and the cut that follows would be the whole drain
     const off = new Set(list.filter((x) => !collector.isOn(x.name)).map((x) => x.name))
-    return { code, pid: process.pid, doors: collector.doors(), upstreams: collector.upstreams(), harnesses: hs, holders: collector.polledHolders(), agents: collector.verdicts(), negatives: engine.negatives(), relayed: { ...engine.relayed({ agents: off }), scope: 'memory' }, cert: { key: st === 'key-missing' ? 'missing' : st === 'unavailable' ? 'unknown' : 'present', intermediate: st, expires: collector.issuer.expires() }, engine: engine.stats() }
+    return { code, pid: process.pid, doors: collector.doors(), upstreams: collector.upstreams(), harnesses: hs, holders: collector.polledHolders(), agents: collector.verdicts(), negatives: engine.negatives(), relayed: { ...engine.relayed({ agents: collector.leaving() ? null : off }), scope: 'memory' }, cert: { key: st === 'key-missing' ? 'missing' : st === 'unavailable' ? 'unknown' : 'present', intermediate: st, expires: collector.issuer.expires() }, engine: engine.stats() }
   }
   const body = (q) => (q && q.body && typeof q.body === 'object' ? q.body : {})
   // the daemon's own identity, as it writes it into its lock (below): the read route hands it back, and an answer on the token-checked channel is

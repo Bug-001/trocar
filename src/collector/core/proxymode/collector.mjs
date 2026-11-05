@@ -288,6 +288,9 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
   /** The off time the daemon knows (§3 ②): `off` reaches the daemon before the CLI writes the manifest's `off_at` (orchestrate's step 3 before
    *  undo), so a harness turned off here whose liveness has `on_at` and no `off_at` yet is judged with this time; once the CLI's own lands it rules. */
   const offAt = new Map()
+  /** A stop that replaces the daemon (1.6 §5.2, D82): `by` is present and is not `uninstall`, by that rule and no list, since the daemon does not know the
+   *  names of newer commands. The harnesses stay in onSet, so the door still decrypts and records, while the daemon reads as off to those who ask whether it may go. */
+  let leaving = false
   const withOffAt = (m) => {
     if (!m || !m.liveness || !offAt.size) return m
     const lv = Object.fromEntries(Object.entries(m.liveness).map(([h, l]) => [h, l && l.on_at != null && l.off_at == null && offAt.has(h) ? { ...l, off_at: offAt.get(h) } : l]))
@@ -378,6 +381,7 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
       return { doors: out, problems: [] }
     },
     async on({ harnesses: hs = [], groups = {} } = {}) {
+      leaving = false // POST /on cancels the exit
       if (!bound) throw new TypeError('on: bindDoors first (the engine\'s door half)')
       const ing = tokenOf()
       for (const h of hs) if (byName.has(h)) { onSet.add(h); offAt.delete(h) }
@@ -386,16 +390,19 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
       for (const [g, port] of Object.entries(groups)) { const r = await openDoor(g, port, ing.listenerToken); if (r.door) out[g] = r.door.url; else skipped.push({ g, reason: r.reason }) }
       return { doors: out, ...(skipped.length ? { skipped } : {}) }
     },
-    /** off (§3 ②): the harnesses leave the on set; a door with a holder stays forward-only, the others close; the poll watches what is kept. */
+    /** off (§3 ②): the harnesses leave the on set; a door with a holder stays forward-only, the others close; the poll watches what is kept.
+     *  A stop that replaces the daemon is no off (`leaving`): only its connections are drained. */
     async off({ harnesses: hs = null, now = false, exit = false, by = null } = {}) {
-      const ids = exit || !hs || !hs.length ? [...onSet] : hs
+      const swap = exit && by && by !== 'uninstall'
+      if (swap) leaving = true
+      const ids = swap ? [] : exit || !hs || !hs.length ? [...onSet] : hs
       for (const h of ids) { if (onSet.delete(h)) offAt.set(h, clock()) }
       let rows = null
       try { rows = await holdersNow() } catch { rows = null } // unreadable: unknown, every door stays
       if (rows) await settle(rows)
       if (kept().length) poll.start(rows) // this off's own table: never the last watch's answer
       const relayed = drain ? await drain({ harnesses: exit ? null : ids, now: !!now, ...(by ? { by } : {}) }) : null // exit: the whole daemon goes, so every connection it relays, whatever harness
-      return { pid, actual: onSet.size ? 'on' : 'off', confirmed: true, relayed, holders: rows ? rows.length : null }
+      return { pid, actual: leaving || !onSet.size ? 'off' : 'on', confirmed: true, relayed, holders: rows ? rows.length : null }
     },
     lookupIngress,
     servePac,
@@ -409,6 +416,8 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     },
     /** Is `h` on in this daemon? The one switch both decryption (lookupIngress) and recording (the engine's isRecording) read (4.6 §开关). */
     isOn: (h) => onSet.has(h),
+    /** Is this daemon draining to be replaced? Its harnesses read on, and `relayed` counts every connection. */
+    leaving: () => leaving,
     /** The engine's onHeld: its negative cache holds a strike or an entry under `negKey`, to clear when its process or door is gone (4.8 §5.5). */
     noteHeld(negKey) { if (negKey != null) { held.add(String(negKey)); arm() } },
     holders: holdersRoute({ holders: async () => poll.now() ?? holdersNow() }),
@@ -417,7 +426,7 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     polledHolders: () => { const r = poll.now(); return Array.isArray(r) ? r.length : null },
     /** The door's verdicts, latest last (bounded; from memory, never the process table: a row may name a process that has exited since). */
     verdicts: () => [...verdicts.values()],
-    mayExit: () => mayExit({ harnessesOn: [...onSet], holders: kept().length ? poll.now() : [], openConns: openConns() }),
+    mayExit: () => mayExit({ harnessesOn: leaving ? [] : [...onSet], holders: kept().length ? poll.now() : [], openConns: openConns() }),
     close() { closed = true; if (sweepT) timers.clearTimeout(sweepT); sweepT = null; poll.stop(); seen.close(); if (iss) iss.close() }, // the door record is written here, synchronously (doStop runs it before daemon-stop)
   }
 }

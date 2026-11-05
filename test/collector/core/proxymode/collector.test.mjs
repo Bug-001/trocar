@@ -471,6 +471,43 @@ test('CM23 · a second off answers GET /holders and mayExit from its own table, 
   } finally { release(); c.close() }
 })
 
+// ---- 1.6 §5.2 (D82): a daemon swap's drain is no off ----------------------------------------------------------------------------------------------
+test('a stop that replaces the daemon leaves the harness on: the door still decrypts and the reply reads off, until on cancels it', async () => {
+  const { d, f, os } = rootForm
+  const g = `${d.name}:${f.route}`, { w, facts } = worldOf(d, f, os, {}), base = ctxOf(w)
+  const { c } = await rig({ desc: { ...d, proxyMode: { ...d.proxyMode, forms: [f] } }, os, upstreamRoots: { os: async () => '', node: [], extra: [] },
+    w: { pid: ++pid, facts: { exe: '/bin/x', uid: 501, agent: d.name, startedAt: facts.startedAt }, env: w.env, cwd: w.cwd, ctx: { ...base, readFile: (p) => base.readFile(p).replace(ROOT.pem, STUB_PEM) } } })
+  await c.on({ harnesses: [d.name], groups: { [g]: 18107 } })
+  const reply = await c.off({ exit: true, by: 'install' })
+  assert.equal(reply.actual, 'off', 'the CLI confirms a nameless off by actual (1.6 §3.1)')
+  assert.equal(c.isOn(d.name), true)
+  const meta = await c.lookupIngress({ peer: PEER, user: g, target: { address: d.hosts[0], port: 443 } })
+  assert.equal(meta.decrypt, true, JSON.stringify(meta))
+  assert.deepEqual(c.doors(), { [g]: 18107 })
+  assert.equal(c.mayExit(), true, 'leaving with no connection: it may go though the harness is on')
+  await c.on({ harnesses: [d.name], groups: {} })
+  assert.equal(c.leaving(), false, 'POST /on cancels the exit')
+  assert.equal(c.mayExit(), false, 'the on harness keeps the daemon again')
+  c.close()
+})
+
+for (const by of ['uninstall', null]) {
+  test(`an exit ${by ? `by ${by}` : 'with no by'} is an off: the harness leaves the on set and a kept door only forwards`, async () => {
+    const { d, f } = rootForm, g = `${d.name}:${f.route}`
+    const { c, w } = await rig({ desc: d, w: { pid: 4242, facts: { agent: d.name, startedAt: INSTALLED + 1 }, env: {}, procs: [{ pid: 4242, startedAt: INSTALLED + 1 }] } })
+    await c.on({ harnesses: [d.name], groups: { [g]: 18108 } })
+    await c.lookupIngress({ peer: PEER, user: g, target: { address: 'api.example', port: 443 } })
+    w.manifest = manifestOf(d.name, { liveness: { [d.name]: { on_at: iso(INSTALLED) } } })
+    w.now = INSTALLED + 10
+    assert.equal((await c.off({ exit: true, by })).actual, 'off')
+    assert.equal(c.isOn(d.name), false)
+    assert.equal(c.leaving(), false)
+    const meta = await c.lookupIngress({ peer: PEER, user: g, target: { address: 'api.example', port: 443 } })
+    assert.deepEqual(meta.skip, { not_captured: 'untracked', reason: 'group-off' })
+    c.close()
+  })
+}
+
 // ---- the door's durable record (P12 「门的持久记录」) ------------------------------------------------------------------------------------
 const doorRows = (dir) => readDoorSeen({ dir }).rows
 const fireAll = async (pending, rounds = 4) => { for (let i = 0; i < rounds; i++) { for (const fn of pending.splice(0)) await fn(); await new Promise((r) => setImmediate(r)) } }
