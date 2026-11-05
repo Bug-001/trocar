@@ -27,7 +27,8 @@ test('1.6 §3.1: a FIFO put on op.lock under a running daemon stops nothing: the
   })
   const answer = () => controlRequest({ socketPath: sock, method: 'GET', path: '/status', timeoutMs: 3000 })
   assert.ok(await answer(), 'it answers before the FIFO')
-  execFileSync('mkfifo', [lock])
+  execFileSync('mkfifo', [`${lock}.fifo`]) // made beside it and renamed in: a bundle round may hold the lock right now, and mkfifo does not replace
+  fs.renameSync(`${lock}.fifo`, lock)
   await pause(ROUND_MS * 10)
   assert.ok(await answer(), 'its event loop did not stop')
   assert.ok(!fs.lstatSync(lock, { throwIfNoEntry: false })?.isFIFO(), 'the FIFO was taken over')
