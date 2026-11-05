@@ -15,6 +15,8 @@ export const collectorDir = (home = os.homedir()) => collectorIn(trocarHome(home
 /** The same directory named from the TROCAR home instead of the user's (whoever already holds ~/.trocar: the board's
  *  server, src/server.mjs — so a server given a sandbox home asks THAT sandbox's daemon and no other). */
 export const collectorIn = (home) => path.join(home, 'collector')
+/** <collector>/switch/<harness>: the class-2 switch file `on` writes for a harness whose hook reads it (4.11 P5); `off` deletes it, by the manifest or, with none, by where it is. */
+export const switchFileIn = (collector, harness, join = path.join) => join(collector, 'switch', harness)
 /** ~/.trocar/backup: what trocar saved of a user's file before changing it (1.6 R2; 0700, the files 0600). */
 export const backupDir = (home = os.homedir()) => path.join(trocarHome(home), 'backup')
 /** ~/.trocar/bin/trocar-off: the single-file copy of src/off that runs without the repo (1.6 R3). */

@@ -483,31 +483,33 @@ test('D38: every line off writes to flows/ is in the closed sets, every run of o
   assert.ok(un.some((e) => e.code === 'reverted-not-identical') && un.some((e) => e.code === 'still-trusting'), JSON.stringify(un.map((e) => [e.where, e.kind, e.code])))
 })
 
-test('V24: with the install manifest gone and no terminal, off takes the routing off, stops the daemon and leaves the files alone, lists what it found by trocar\'s marks, exits 1 with outcome partial; with --yes it undoes them by those marks (undone-by-marker): the commented user line is back, the JSON value comes back from the backup', async () => {
+test('V24: with the install manifest gone and no terminal, off takes the routing off, stops the daemon and leaves the files alone, lists what it found by trocar\'s marks, exits 1 with outcome partial; with --yes it undoes them by those marks (undone-by-marker), and what install wrote stays (D55①): the commented user line and the certificate key are uninstall\'s', async () => {
   const codexOriginal = 'SSL_CERT_FILE=/corp/ca.pem\nOPENAI_API_KEY=sk-test\n'
-  const s = await installedHome({ names: ['claude-code', 'codex'], seed: (home, sh) => {
+  let rcOriginal
+  const s = await installedHome({ names: ['claude-code', 'codex', 'kimi-code'], seed: (home, sh) => {
     fs.writeFileSync(path.join(home, '.codex', '.env'), codexOriginal)
     fs.writeFileSync(path.join(home, '.claude', 'settings.json'), `{\n  "env": { "NODE_EXTRA_CA_CERTS": "${sh.corp}" }\n}\n`)
+    rcOriginal = fs.readFileSync(sh.files['kimi-code'][0], 'utf8')
   } })
-  const settings = path.join(s.home, '.claude', 'settings.json'), codexEnv = path.join(s.home, '.codex', '.env')
-  const settingsOriginal = `{\n  "env": { "NODE_EXTRA_CA_CERTS": "${s.sh.corp}" }\n}\n`
+  const settings = path.join(s.home, '.claude', 'settings.json'), codexEnv = path.join(s.home, '.codex', '.env'), rc = s.sh.files['kimi-code'][0]
   assert.match(fs.readFileSync(codexEnv, 'utf8'), /#trocar-collector-off# SSL_CERT_FILE=\/corp\/ca\.pem/, 'install put the user line out of effect with the sentinel prefix')
   fs.rmSync(path.join(s.dir, 'install-manifest.json'))
   const installed = s.userFiles()
+  const carriers = [settings, codexEnv].map((f) => fs.readFileSync(f, 'utf8'))
   const first = await s.off({ yes: false, interactive: false })
   assert.equal(first.exit, 1)
   assert.deepEqual(validateReceipt(first.receipt), [])
   assert.deepEqual(s.userFiles(), installed, 'the files are byte for byte what they were: nothing is changed without a yes')
-  assert.deepEqual(first.receipt.pending.map((p) => [path.relative(s.home, p.path), p.how]).sort(), [['.claude/settings.json', 'json-value'], ['.codex/.env', 'block']])
+  assert.deepEqual(first.receipt.pending.map((p) => [path.relative(s.home, p.path), p.how]).sort(), [['.bashrc', 'line'], ['.trocar/collector/bin/kimi', 'owned-file']])
   assert.match(first.receipt.problems.join('\n'), /record of what it wrote is missing[\s\S]*trocar off --yes/)
-  assert.deepEqual(Object.values(s.state().harnesses).map((h) => h.desired), ['off', 'off'], 'desired off for every harness')
+  assert.deepEqual(Object.values(s.state().harnesses).map((h) => h.desired), ['off', 'off', 'off'], 'desired off for every harness')
   assert.deepEqual([first.receipt.routing.confirmed, s.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), first.receipt.autostart], [true, ['POST /off {"exit":true}'], undefined], 'the routing is off, the daemon was asked to exit, and the receipt carries no autostart key (D61: off touches no registration) — none of it needs the manifest')
   assert.deepEqual([flowEvents(s.dir).at(-1).kind, flowEvents(s.dir).at(-1).outcome], ['result', 'partial'])
   const second = await s.off({ yes: true })
   assert.equal(second.exit, 0, JSON.stringify(second.receipt.problems))
   assert.equal(second.receipt.undone_by_marker, true)
-  assert.equal(fs.readFileSync(codexEnv, 'utf8'), codexOriginal, 'the block is out and the commented user line is back')
-  assert.equal(fs.readFileSync(settings, 'utf8'), settingsOriginal, 'the JSON value is back, taken from the backup, this key only')
+  assert.equal(fs.readFileSync(rc, 'utf8'), rcOriginal, 'the PATH line is out')
+  assert.deepEqual([settings, codexEnv].map((f) => fs.readFileSync(f, 'utf8')), carriers, 'the certificate key and block are install\'s: byte for byte')
   assert.deepEqual(flowEvents(s.dir).filter((e) => e.code === 'undone-by-marker').length, 2, 'one note per file, each with the code')
   assert.equal(flowEvents(s.dir).at(-1).outcome, 'undone-by-marker')
   const asked = fakeAsk(); const third = await s.off({ interactive: true, io: asked.io, say: asked.say }) // nothing left to find: no question
@@ -524,18 +526,18 @@ function fakeAsk(answer = 'y') {
 }
 
 test('V24 (terminal): the list is printed and ONE question asked; yes undoes by the marks, no leaves every file as it is (exit 1, partial)', async () => {
-  const make = async () => { const s = await installedHome({ names: ['codex'] }); fs.rmSync(path.join(s.dir, 'install-manifest.json')); return s }
+  const make = async () => { const s = await installedHome({ names: ['kimi-code'] }); fs.rmSync(path.join(s.dir, 'install-manifest.json')); return s }
   const no = await make(); const before = no.userFiles(); const asked = fakeAsk('n')
   const declined = await no.off({ interactive: true, io: asked.io, say: asked.say })
   assert.deepEqual([declined.exit, no.userFiles(), asked.printed.filter((t) => /\[y\/N\]/.test(t)).length], [1, before, 1])
-  assert.match(asked.said.join('\n'), /\.codex\/\.env|\.codex[\\/]\.env/)
+  assert.match(asked.said.join('\n'), /\.bashrc/)
   const yes = await make(); const asked2 = fakeAsk('y')
   const done = await yes.off({ interactive: true, io: asked2.io, say: asked2.say })
-  assert.deepEqual([done.exit, done.receipt.undone_by_marker, /trocar collector/.test(fs.readFileSync(path.join(yes.home, '.codex', '.env'), 'utf8'))], [0, true, false])
+  assert.deepEqual([done.exit, done.receipt.undone_by_marker, /trocar collector/.test(fs.readFileSync(yes.sh.files['kimi-code'][0], 'utf8'))], [0, true, false])
 })
 
 test('R3: a manifest this build does not read (a newer version) leaves every entry alone, says so, exits 1 — the routing is still taken off; an unreadable manifest falls back to the marks', async () => {
-  const s = await installedHome({ names: ['claude-code'] })
+  const s = await installedHome({ names: ['claude-code', 'kimi-code'] })
   const manifestFile = path.join(s.dir, 'install-manifest.json')
   const m = JSON.parse(fs.readFileSync(manifestFile, 'utf8')); m.version = 99
   fs.writeFileSync(manifestFile, JSON.stringify(m)); const before = s.userFiles()
@@ -546,7 +548,8 @@ test('R3: a manifest this build does not read (a newer version) leaves every ent
   fs.writeFileSync(manifestFile, '{ not json')
   const garbled = await s.off({ yes: true })
   assert.equal(garbled.exit, 0, JSON.stringify(garbled.receipt.problems)); assert.match(garbled.receipt.notes.join('\n'), /manifest cannot be read/)
-  assert.ok(!fs.readFileSync(path.join(s.home, '.claude', 'settings.json'), 'utf8').includes('trocar'), 'undone by the marks')
+  assert.ok(!fs.readFileSync(s.sh.files['kimi-code'][0], 'utf8').includes('trocar'), 'undone by the marks')
+  assert.ok(fs.readFileSync(path.join(s.home, '.claude', 'settings.json'), 'utf8').includes('trocar'), 'the certificate key is install\'s')
 })
 
 test('V34: an off that lands while `on` is writing wins — `on` exits 1, saying it was turned off; at the end desired is off, only the items install wrote are left, the files are as they were, and the daemon is told to switch off', async () => {
@@ -664,7 +667,7 @@ for (const [harness, rel] of [['codex', '.codex/.env'], ['hermes', '.hermes/.env
 // (routing off, no receipt). Now it is as unreadable as one that does not parse: the routing is taken off, the entries are found by trocar's marks after a yes (R3), and a receipt is printed.
 for (const [what, doc] of [['{"version":3}', () => ({ version: 3 })], ['entries is an object', (m) => ({ ...m, entries: { a: 1 } })], ['entries holds null', (m) => ({ ...m, entries: [...m.entries, null] })], ['files is null', (m) => ({ ...m, files: null })]]) {
   test(`R3 / semantics 2: an install manifest of the wrong shape (${what}) — off takes the routing off, touches no file without a yes, says why and exits 1; with --yes it undoes by the marks; a receipt either way`, async () => {
-    const s = await installedHome({ names: ['claude-code', 'codex'] })
+    const s = await installedHome({ names: ['claude-code', 'codex', 'kimi-code'] })
     s.sys.daemon.state.up = false
     const manifestFile = path.join(s.dir, 'install-manifest.json')
     fs.writeFileSync(manifestFile, JSON.stringify(doc(JSON.parse(fs.readFileSync(manifestFile, 'utf8')))))
@@ -675,13 +678,13 @@ for (const [what, doc] of [['{"version":3}', () => ({ version: 3 })], ['entries 
     assert.deepEqual(s.userFiles(), installed, 'no file is touched without a yes')
     assert.match(first.receipt.notes.join('\n'), /the install manifest cannot be read .*not an install manifest this build can use/)
     assert.match(first.receipt.problems.join('\n'), /record of what it wrote cannot be read[\s\S]*trocar off --yes/)
-    assert.deepEqual([first.receipt.routing.confirmed, Object.values(s.state().harnesses).map((h) => h.desired)], [true, ['off', 'off']], 'the routing is off and desired is off, with no manifest to say what is installed')
-    assert.deepEqual(first.receipt.pending.map((p) => path.relative(s.home, p.path)).sort(), ['.claude/settings.json', '.codex/.env'])
+    assert.deepEqual([first.receipt.routing.confirmed, Object.values(s.state().harnesses).map((h) => h.desired)], [true, ['off', 'off', 'off']], 'the routing is off and desired is off, with no manifest to say what is installed')
+    assert.deepEqual(first.receipt.pending.map((p) => path.relative(s.home, p.path)).sort(), ['.bashrc', '.trocar/collector/bin/kimi'])
     assert.equal(flowEvents(s.dir).at(-1).kind, 'result')
     const second = await s.off({ yes: true })
     assert.equal(second.exit, 0, JSON.stringify(second.receipt.problems))
     assert.equal(second.receipt.undone_by_marker, true)
-    assert.ok(!/trocar/.test(fs.readFileSync(path.join(s.home, '.claude', 'settings.json'), 'utf8')) && !/trocar collector/.test(fs.readFileSync(path.join(s.home, '.codex', '.env'), 'utf8')))
+    assert.ok(!/trocar/.test(fs.readFileSync(s.sh.files['kimi-code'][0], 'utf8')))
   })
 }
 
