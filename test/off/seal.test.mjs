@@ -1,6 +1,6 @@
 // seal.test.mjs — the door password at rest (spec 4.6「日志」, 1.6 :40): a sealed record (the password `***`, `secret:{sha256, fields}`, the door only as
 // `door_sha256`) is judged and undone exactly like a clear one. Generated over every json-key and dotenv-block route of every descriptor × darwin / win32;
-// the records are written clear by the route writers and sealed here (sealRecord stands in for the write side).
+// the route writers' records are sealed by the manifest save (src/off/manifest.mjs); A1's byte-keeping of the user's fields is checked on a clear record.
 // A5 (an unsealed record still undoes): test/collector/core/proxymode/entries.test.mjs 'P5 … CM15 on;off restores the bytes'.
 // A6 (the standalone copy builds with seal.mjs): test/off/standalone.test.mjs V11.
 import test from 'node:test'
@@ -33,7 +33,7 @@ function userText(r) {
   o[r.proxyKeys[0].at(-1)] = USER_PROXY
   return JSON.stringify(doc, null, 2) + '\n'
 }
-// on, then seal: the world, the route's file, its bytes before, the sealed records and what the records held before sealing
+// on (the save seals): the world, the route's file, its bytes before and the sealed records
 function sealedOn({ h, id, r, os }, { exists = true } = {}) {
   const w = world({ os })
   const ctx = { ...w.ctx, harness: h.name, route: r, routeId: id }
@@ -42,24 +42,19 @@ function sealedOn({ h, id, r, os }, { exists = true } = {}) {
   if (before) put(file, before)
   const res = routeEntry(r.kind).write(ctx, door())
   if (!res.ok) return null
-  const recs = recordsOf(ctx.manifest, h.name, id)
-  const clear = structuredClone(recs)
-  for (const x of recs) sealRecord(x)
-  return { w, ctx, file, before, recs, clear }
+  return { w, ctx, file, before, recs: recordsOf(ctx.manifest, h.name, id) }
 }
 
 for (const c of CASES) {
   const label = `${c.h.name}.${c.id} (${c.r.kind}) · ${c.os}`
 
-  test(`A1 ${label} — sealing leaves no password, records its fingerprint and the door's, and keeps the user's bytes`, () => {
+  test(`A1 ${label} — the saved records hold no password, and record its fingerprint and the door's`, () => {
     const s = sealedOn(c)
-    for (const [i, x] of s.recs.entries()) {
+    for (const x of s.recs) {
       assert.ok(!JSON.stringify(x).includes(PW), 'no password at rest')
       assert.equal(x.door, undefined)
       assert.equal(x.door_sha256, hash(door()))
       assert.equal(x.secret.sha256, hash(PW))
-      assert.deepEqual(x.prior_value, s.clear[i].prior_value, 'prior_value is the user\'s bytes')
-      assert.deepEqual((x.ops || []).map((o) => o.removed), (s.clear[i].ops || []).map((o) => o.removed), 'ops[].removed is the user\'s bytes')
     }
   })
 
@@ -112,6 +107,20 @@ for (const c of CASES) {
     assert.deepEqual(recordsOf(s.ctx.manifest, c.h.name, c.id), [])
   })
 }
+
+test('A1 sealing masks only the fields trocar wrote: prior_value and ops[].removed keep the user\'s bytes, the password in them included', () => {
+  const user = `user-${PW}-own` // a user's string that holds the password as a substring
+  const priors = [user, { proxy: user, n: 1 }, [user], null]
+  for (const prior_value of priors) {
+    const clear = { door: door(), value: door(), vars: { HTTPS_PROXY: door() }, line: `HTTPS_PROXY=${door()}`, prior_value,
+      ops: [{ inserted: `"proxy": "${door()}"`, removed: `"proxy": "${user}"` }, { inserted: door(), removed: user }] }
+    const x = sealRecord(structuredClone(clear))
+    assert.deepEqual(x.prior_value, clear.prior_value)
+    assert.deepEqual(x.ops.map((o) => o.removed), clear.ops.map((o) => o.removed))
+    for (const w of [x.value, x.vars.HTTPS_PROXY, x.line, ...x.ops.map((o) => o.inserted)]) assert.ok(!w.includes(PW) && w.includes('***'))
+    assert.deepEqual(x.secret.fields.map((p) => p.join('.')).sort(), ['line', 'ops.0.inserted', 'ops.1.inserted', 'value', 'vars.HTTPS_PROXY'])
+  }
+})
 
 test('A1 a PAC door gets a fingerprint and no secret; a password outside the token charset is refused', () => {
   const pac = { door: 'http://127.0.0.1:1/trocar.pac', value: 'http://127.0.0.1:1/trocar.pac' }
