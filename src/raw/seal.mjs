@@ -1,7 +1,7 @@
 // src/raw/seal.mjs — the D35 sealer (RFC 4.2 §自动封存).
 //
-// Re-encodes ONE closed segment, losslessly, into `<segment>.sealed` beside it. Besides appending and a same-device
-// rename (D27③), this is the only write ever allowed on a source file — and it only ever deletes the plaintext after
+// Re-encodes ONE closed segment, losslessly, into `<segment>.sealed` beside it. Besides appending, this is the
+// only write ever allowed on a source file — and it only ever deletes the plaintext after
 // the sealed file is proven to rebuild it byte for byte (invariant 2). The order is the MUST:
 //
 //   temp (0600 at open, in raw/) → write → fsync → decode EVERY record and compare sha256, plus the whole file's
