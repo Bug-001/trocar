@@ -9,7 +9,7 @@ import crypto from 'node:crypto'
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import tls from 'node:tls'
-import { createDoorIdentity } from '../engine/door-identity.mjs'
+import { createDoorIdentity, DOOR_HANG_MS } from '../engine/door-identity.mjs'
 import { processNames } from '../../../off/identity.mjs'
 import { verdictOf, judgedForms, carrierAt } from './verdict.mjs'
 import { upstreamFor, isTrocarDoorUrl, isLoopbackHost, HOOK_ENV, HOOK_PID_ENV } from './chain.mjs'
@@ -31,7 +31,7 @@ import { agentTrustSet, createAgentTrust, CERT_VARS } from './upstream-trust.mjs
 import { redactProxyUrl } from '../../../netenv/redact.mjs'
 import { proxyFileValues } from '../../../netenv/adopt.mjs'
 
-const untracked = (reason) => ({ not_captured: 'untracked', reason })
+const untracked = (reason, unread) => ({ not_captured: 'untracked', reason, ...(unread ? { unread } : {}) })
 const split = (g) => { const i = String(g).lastIndexOf(':'); return { harness: g.slice(0, i), routeId: g.slice(i + 1) } }
 const safe = async (f) => { try { return (await f()) ?? null } catch { return null } }
 const ISSUER_CODES = new Set([CODE.certIntermediateUnavailable, CODE.certKeyMissing]) // verdicts on the issuer's state, which changes (P2)
@@ -61,13 +61,18 @@ function envNamesOf(desc) {
  *   custody    the key custody, or 'unavailable' (no backend): then no issuer, every verdict forward-only (P2)
  *   forget     (negKey, pid | null) → void: the engine's entries of a key whose process exited, or whose door closed, are to go (4.8 §5.5); the daemon
  *              calls engine.forgetNegKey and records negative-cache-cleared. The keys come from `noteHeld(negKey)`: the engine's onHeld, a strike or an entry.
+ *   doorHangMs one connection's limit from accept to judgement (4.9 §5.3, D82③), run on `timers`: at it the connection is forwarded `door-deadline`, never decrypted
  *   holds      (negKey) → does the engine's cache still keep a strike or an entry under it (engine.holdsNegKey): a key it no longer does (an
  *              acceptance reset its strike) leaves the sweep, so the process table is read only while something is held (4.8 §5.5)
  * → { bindDoors, start, restore, on, off, lookupIngress, servePac, issuer, holders, mayExit, doors, attached }
  */
+/** A stop that replaces the daemon (1.6 §5.2, D82): `exit` with a `by` that is not `uninstall`, by that rule and no list, since the daemon does not know the names
+ *  of newer commands. Capture stays on for the whole drain, in both modes; the state file and the routing are the new daemon's to carry on from. */
+export const replacesDaemon = ({ exit, by }) => !!(exit && by && by !== 'uninstall')
+
 export function createModelCollector({ harnesses, dir, identify, ownerOf = null, factsOf = null, proc = {}, ctx, systemProxy = () => null, custody = null, rootPem = null,
   procTable = async () => [], record = () => {}, event = () => {}, clock = Date.now, timers = globalThis, readState = null, readIngress = null, readManifest = null,
-  proxyOf, templates = {}, hostsOf = () => null, ownUid = process.getuid?.() ?? null, ownSid = null, agentList = () => null, openConns = () => 0, drain = null, pid = process.pid, fs = nodeFs, upstreamRoots = null, forget = () => {}, holds = () => true } = {}) {
+  proxyOf, templates = {}, hostsOf = () => null, ownUid = process.getuid?.() ?? null, ownSid = null, agentList = () => null, openConns = () => 0, drain = null, pid = process.pid, fs = nodeFs, upstreamRoots = null, forget = () => {}, holds = () => true, doorHangMs = DOOR_HANG_MS } = {}) {
   if (typeof proxyOf !== 'function') throw new TypeError('createModelCollector needs proxyOf: how a proxy address is dialled is the arch\'s reading')
   const byName = new Map(harnesses.map((d) => [d.name, d]))
   const readSt = readState || (() => readStateFile(path.join(dir, 'state.json'), { fs }).state)
@@ -91,7 +96,7 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     return t.hosts
   }
   const hostSetFor = (f) => hostsOf(f) || treeHosts(f)
-  const ident = createDoorIdentity({ ownerOf, factsOf, identify, ownUid, hostsOf: hostSetFor, onFailure: record, onEvent: event })
+  const ident = createDoorIdentity({ ownerOf, factsOf, identify, ownUid, hostsOf: hostSetFor, onFailure: record, onEvent: event, clock })
   const pcache = new Map(), vcache = new Map(), said = new Map()
   const once = (key) => { if (said.has(key)) return false; keep(said, key, true); return true } // one record per key, bounded like the caches
   const answers = new Map() // door → Map(pid → { pid, source, url_redacted }): the upstream the door chose per process, status's per-form `proxy.upstream` (1.6 §9.4)
@@ -185,11 +190,20 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     return v
   }
 
-  async function lookupIngress({ peer, user, target, header = null }) {
+  /** Runs a door's answer under one connection's total limit, counted from its accept (4.9 §5.3, D82③). `within(ask, answer)` is `ask`, or `answer` once the
+   *  limit passed: the ask itself goes on and keeps its caches, so the limit is no verdict and the next connection is judged as ever. */
+  const limited = (answerDoor) => async (q) => {
+    let timer = null, over = false
+    const expired = new Promise((resolve) => { timer = timers.setTimeout(() => { over = true; resolve() }, (q.acceptedAt ?? clock()) + doorHangMs - clock()) })
+    const within = (ask, answer) => { const p = Promise.resolve(ask); p.catch(() => {}); return Promise.race([p, expired.then(() => answer)]) } // an ask that lost the race may still fail
+    try { return await answerDoor(q, { within, late: () => over }) } finally { timers.clearTimeout(timer) }
+  }
+
+  const lookupIngress = limited(async ({ peer, user, target, header = null }, { within, late }) => {
     const d = doors.get(user)
     if (!d || !target) return null
     if (isLoopbackHost(target.address) && target.port === d.port) return null // a loop through the door, not a flow
-    const id = await ident.identityOf({ peer, door: doorOf(d), target })
+    const id = await ident.identityOf({ peer, door: doorOf(d), target, within })
     if (!d.auth) { // the PAC door takes no credentials: this user's processes only (P10); a refusal is an answer of its own, the ingress writes its one record and closes
       const a = peerAllowed({ ...(id.facts || {}), pid: id.pid }, self)
       if (!a.ok) return { refuse: { code: a.code, unread: a.unread, reason: `trocar's proxy settings file (PAC) refused a connection: ${a.detail}${id.unresolved ? ` (owner ${id.unresolved})` : ''}; it takes no credentials, so it forwards only this user's processes` } }
@@ -198,8 +212,12 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     if (known && onSet.has(id.agent)) seen.add({ harness: id.agent, group: d.g, pid: id.pid, start: id.facts.startedAt ?? null, kind: 'accept' })
     const desc = byName.get(d.harness) // the upstream is the door group's (4.8 §5.3, D51⑥)
     const start = (id.facts && id.facts.startedAt) ?? null
+    let asking = null // the question the limit stopped: the row's `unread`
+    const ask = (what, p, answer) => { if (!late()) asking = what; return within(p, answer) }
+    const bound = (f) => ({ ...f, parentOf: async () => { const up = await ask('waiting for a parent process', f.parentOf(), null); return up && bound(up) } }) // a copy: pcache's answer is every connection's
+    const read = async (q, s, of) => bound(await ask('waiting for the process env and cwd', procFacts(q, s, of), { pid: q, start: s, env: null, cwd: null, parentOf: async () => null }))
     // an unidentified process with the door's credentials had its env written by a hook (an agent's tool subprocess): its own hook value first (⑥)
-    const pf = known ? await procFacts(id.pid, start, desc) : d.auth ? { ...(id.pid != null ? await procFacts(id.pid, start, null) : { env: null }), hookOnly: true } : null
+    const pf = known ? await read(id.pid, start, desc) : d.auth ? { ...(id.pid != null ? await read(id.pid, start, null) : { env: null }), hookOnly: true } : null
     const own = known ? formsOn(byName.get(id.agent), id.agent === d.harness ? d.routeId : null) : []
     const allowed = own.length > 0 && own.every((f) => sendsHeader(byName.get(id.agent), f)) // only a form whose hook sends the header (P7 step 1)
     const ports = [...doors.values()].map((x) => x.port)
@@ -214,25 +232,27 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
       dial = proxyOf(up.url)
       if (!dial) throw Object.assign(new Error(`the upstream of ${d.g} is not a proxy address trocar can dial`), { code: 'upstream-unavailable', why: 'upstream-unparseable' })
     }
-    const base = { pid: id.pid, agent: known ? id.agent : d.harness, decrypt: false, capture: 'proxy', door: d.g, exe: id.exe, upstream: dial, pid_source: id.source, pid_ms: id.ms, negKey: id.pid != null ? (id.facts && id.facts.startedAt != null ? `${id.pid}@${id.facts.startedAt}` : String(id.pid)) : d.g } // per process life: a reused pid inherits nothing (4.8 §5.5)
-    if (!known) return { ...base, skip: untracked(id.why || 'not-an-agent') }
+    const base = { pid: id.pid, agent: known ? id.agent : d.harness, decrypt: false, capture: 'proxy', door: d.g, exe: id.exe, upstream: dial, pid_source: id.source, pid_ms: id.ms, facts_ms: id.facts_ms, negKey: id.pid != null ? (id.facts && id.facts.startedAt != null ? `${id.pid}@${id.facts.startedAt}` : String(id.pid)) : d.g } // per process life: a reused pid inherits nothing (4.8 §5.5)
+    if (late() && asking) return { ...base, skip: untracked('door-deadline', asking) } // the limit stopped a question of this connection: its class is the limit's, whatever the process turned out to be
+    if (!known) return { ...base, skip: untracked(id.why || 'not-an-agent', id.unresolved) }
     if (!onSet.has(d.harness)) return { ...base, skip: untracked('group-off') } // a door kept for its holders: forward only
     if (!onSet.has(id.agent)) return { ...base, skip: untracked('harness-off') }
-    const v = await judge(id, d, String(target.address).toLowerCase())
+    const v = await ask('waiting for the verdict', judge(id, d, String(target.address).toLowerCase()), null)
+    if (late()) return { ...base, skip: untracked('door-deadline', asking) } // a verdict past the limit is the next connection's, kept by judge if it may be
     return { ...base, decrypt: v.decrypt === true, ...(v.upstreamTrust ? { upstreamTrust: v.upstreamTrust } : {}), ...(v.decrypt === true ? {} : { skip: { not_captured: 'untrusted', reason: v.code } }) } // P11's closed code on the row (D38)
-  }
+  })
 
   /** GET /trocar.pac on the auth:false door (P10): the door leg for this user's processes while its harness is on; a requester whose owner could not
    *  be read, and every requester after off, gets only the app's own way — never an empty answer, which would send the app direct around the user's
    *  system proxy; another user's process is refused; a requester whose owner could not be read and that left while it was judged (`left()`, the
-   *  ingress's) gets nothing and is recorded nothing. */
-  async function servePac({ peer, user, path: p, left = async () => false }) {
+   *  ingress's) gets nothing and is recorded nothing. A question past the connection's limit is an owner that could not be read. */
+  const servePac = limited(async ({ peer, user, path: p, left = async () => false }, { within, late }) => {
     const d = doors.get(user)
     if (!d || d.auth) return null
-    const { pid: q, why: ownerWhy, sameUser } = await ident.owningPid(peer)
-    const read = q != null ? await ident.factsCached(q) : null
+    const { pid: q, why: ownerWhy, sameUser } = await within(ident.owningPid(peer), { pid: null })
+    const read = q != null ? await within(ident.factsCached(q), null) : null
     const facts = read || (sameUser ? { sameUser: true } : null) // the socket table's own-user proof stands when the pid's facts cannot be read (P10)
-    const why = ownerWhy || (q != null && !read ? (ident.cache.get(q) || {}).unread || null : null)
+    const why = late() ? 'door-deadline' : ownerWhy || (q != null && !read ? (ident.cache.get(q) || {}).unread || null : null)
     const a = peerAllowed({ ...(facts || {}), pid: q }, self), mine = a.ok
     if (!mine && !a.unread) { // another user's, for certain: refused (P10)
       record({ event: 'failure', where: 'ingress', code: a.code, peer, reason: `a request for trocar's proxy settings file (PAC) was refused: ${a.detail}` })
@@ -248,7 +268,7 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     let res = { status: 404, headers: {}, body: '' }
     pacHandler({ state: () => ({ door: mine && onSet.has(d.harness) ? `127.0.0.1:${d.port}` : null, ownLeg: leg.url, bypass: leg.bypass }) })({ method: 'GET', url: p }, { writeHead: (status, headers) => { res = { status, headers, body: '' } }, end: (b) => { res.body = b } })
     return res
-  }
+  })
 
   async function openDoor(g, port, token) {
     const { harness, routeId } = split(g)
@@ -272,6 +292,9 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
   /** The off time the daemon knows (§3 ②): `off` reaches the daemon before the CLI writes the manifest's `off_at` (orchestrate's step 3 before
    *  undo), so a harness turned off here whose liveness has `on_at` and no `off_at` yet is judged with this time; once the CLI's own lands it rules. */
   const offAt = new Map()
+  /** A stop that replaces the daemon (replacesDaemon): the harnesses stay in onSet, so the door still decrypts and records, while the daemon reads as off to
+   *  those who ask whether it may go. */
+  let leaving = false
   const withOffAt = (m) => {
     if (!m || !m.liveness || !offAt.size) return m
     const lv = Object.fromEntries(Object.entries(m.liveness).map(([h, l]) => [h, l && l.on_at != null && l.off_at == null && offAt.has(h) ? { ...l, off_at: offAt.get(h) } : l]))
@@ -362,6 +385,7 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
       return { doors: out, problems: [] }
     },
     async on({ harnesses: hs = [], groups = {} } = {}) {
+      leaving = false // POST /on cancels the exit
       if (!bound) throw new TypeError('on: bindDoors first (the engine\'s door half)')
       const ing = tokenOf()
       for (const h of hs) if (byName.has(h)) { onSet.add(h); offAt.delete(h) }
@@ -370,16 +394,19 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
       for (const [g, port] of Object.entries(groups)) { const r = await openDoor(g, port, ing.listenerToken); if (r.door) out[g] = r.door.url; else skipped.push({ g, reason: r.reason }) }
       return { doors: out, ...(skipped.length ? { skipped } : {}) }
     },
-    /** off (§3 ②): the harnesses leave the on set; a door with a holder stays forward-only, the others close; the poll watches what is kept. */
+    /** off (§3 ②): the harnesses leave the on set; a door with a holder stays forward-only, the others close; the poll watches what is kept.
+     *  A stop that replaces the daemon is no off (`leaving`): only its connections are drained. */
     async off({ harnesses: hs = null, now = false, exit = false, by = null } = {}) {
-      const ids = exit || !hs || !hs.length ? [...onSet] : hs
+      const swap = replacesDaemon({ exit, by })
+      if (swap) leaving = true
+      const ids = swap ? [] : exit || !hs || !hs.length ? [...onSet] : hs
       for (const h of ids) { if (onSet.delete(h)) offAt.set(h, clock()) }
       let rows = null
       try { rows = await holdersNow() } catch { rows = null } // unreadable: unknown, every door stays
       if (rows) await settle(rows)
       if (kept().length) poll.start(rows) // this off's own table: never the last watch's answer
       const relayed = drain ? await drain({ harnesses: exit ? null : ids, now: !!now, ...(by ? { by } : {}) }) : null // exit: the whole daemon goes, so every connection it relays, whatever harness
-      return { pid, actual: onSet.size ? 'on' : 'off', confirmed: true, relayed, holders: rows ? rows.length : null }
+      return { pid, actual: leaving || !onSet.size ? 'off' : 'on', confirmed: true, relayed, holders: rows ? rows.length : null }
     },
     lookupIngress,
     servePac,
@@ -393,6 +420,8 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     },
     /** Is `h` on in this daemon? The one switch both decryption (lookupIngress) and recording (the engine's isRecording) read (4.6 §开关). */
     isOn: (h) => onSet.has(h),
+    /** Is this daemon draining to be replaced? Its harnesses read on, and `relayed` counts every connection still carrying something. */
+    leaving: () => leaving,
     /** The engine's onHeld: its negative cache holds a strike or an entry under `negKey`, to clear when its process or door is gone (4.8 §5.5). */
     noteHeld(negKey) { if (negKey != null) { held.add(String(negKey)); arm() } },
     holders: holdersRoute({ holders: async () => poll.now() ?? holdersNow() }),
@@ -401,7 +430,7 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     polledHolders: () => { const r = poll.now(); return Array.isArray(r) ? r.length : null },
     /** The door's verdicts, latest last (bounded; from memory, never the process table: a row may name a process that has exited since). */
     verdicts: () => [...verdicts.values()],
-    mayExit: () => mayExit({ harnessesOn: [...onSet], holders: kept().length ? poll.now() : [], openConns: openConns() }),
+    mayExit: () => mayExit({ harnessesOn: leaving ? [] : [...onSet], holders: kept().length ? poll.now() : [], openConns: openConns() }),
     close() { closed = true; if (sweepT) timers.clearTimeout(sweepT); sweepT = null; poll.stop(); seen.close(); if (iss) iss.close() }, // the door record is written here, synchronously (doStop runs it before daemon-stop)
   }
 }

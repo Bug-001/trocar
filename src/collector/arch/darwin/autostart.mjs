@@ -66,8 +66,8 @@ const xmlText = (v) => v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>
 
 /**
  * The LaunchAgent plist (4.9 §4). Label com.trocar.collector; ProgramArguments = `<program…> daemon` (autostartProgram: `node <trocar>`, or the script channel's launcher) and nothing more — no `--supervise`, that flag went with the supervisor parent;
- * RunAtLoad true and KeepAlive {SuccessfulExit: false} (a crash is relaunched, a drained daemon's exit 0 is not), and KeepAlive is the reason there is no supervisor (launchd brings a killed daemon back) and the reason `off` boots the agent out BEFORE it stops the
- * daemon. `env` is the daemon's own environment (install's daemonEnv: NODE_EXTRA_CA_CERTS of the install shell, an absolute path), written as EnvironmentVariables — a launchd job starts
+ * RunAtLoad true and KeepAlive {SuccessfulExit: false} (a crash is relaunched, a drained daemon's exit 0 is not), and KeepAlive is the reason there is no supervisor (launchd brings a killed daemon back).
+ * ProcessType Interactive (D82): the agent's CONNECT waits on this process, and with no ProcessType launchd leaves it in the utility class; Adaptive switches class on XPC activity, which node does not have. `env` is the daemon's own environment (install's daemonEnv: NODE_EXTRA_CA_CERTS of the install shell, an absolute path), written as EnvironmentVariables — a launchd job starts
  * with none of the shell's exports, so what install wants the daemon to have must be in the plist (the linux unit's `Environment=`, 4.6 §引擎 5; a Windows task cannot carry any, 4.8 §7).
  * `logs` (D46, given by userUnit) adds StandardOutPath / StandardErrorPath under ~/.trocar/collector/logs/ — the daemon's own stdout / stderr, a launchd-started daemon's only console:
  * without them a daemon that dies at every login does so with an error nobody sees. A quote in a path is harmless here (plist element content, not a command line): only & < > are escaped,
@@ -99,6 +99,8 @@ export function plistXml({ program, env = {}, logs = null } = {}) {
     ...sinks.flatMap(([key, file]) => ['  <key>' + key + '</key>', `  <string>${xmlText(file)}</string>`]),
     '  <key>RunAtLoad</key>',
     '  <true/>',
+    '  <key>ProcessType</key>',
+    '  <string>Interactive</string>',
     '  <key>KeepAlive</key>', // relaunched only after an exit that is not clean — a daemon that drained after `off` exits 0 and stays down
     '  <dict>',
     '    <key>SuccessfulExit</key>',

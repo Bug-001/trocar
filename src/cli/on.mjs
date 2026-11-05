@@ -21,6 +21,7 @@ import { refuseOldManifest } from '../off/manifest.mjs'
 import { commandNamed, usageLine } from './commands.mjs'
 import { isModelOs } from '../collector/model-install.mjs'
 import { runModelOn } from './on-model.mjs'
+import { printJson } from './json.mjs'
 
 const USAGE = usageLine(commandNamed('on'))
 const FLAGS = new Set(['--dry-run', '--yes', '--json'])
@@ -54,7 +55,7 @@ export async function runOn({ io, env = process.env, home = os.homedir(), platfo
   const old = refuseOldManifest({ home, platform, fs: deps.fs || nodeFs })
   if (old) {
     const receipt = { ...newReceipt('on'), ok: false, error: { code: 'older-install', message: old.message }, harnesses: named.ids, notes: [old.message] }
-    if (json) io.out(JSON.stringify(receipt, null, 2)); else io.err(fit([`trocar on: ${old.message}`], { home }).join('\n'))
+    if (json) printJson(io, receipt); else io.err(fit([`trocar on: ${old.message}`], { home }).join('\n'))
     return EXIT.incomplete
   }
   try {
@@ -74,7 +75,7 @@ export async function runOn({ io, env = process.env, home = os.homedir(), platfo
       const pf = parts.arch.nodePreflight()
       if (pf && pf.ok === false) {
         const receipt = { ...newReceipt('on'), ok: false, harnesses: named.ids, notes: [pf.doctor] }
-        if (json) io.out(JSON.stringify(receipt, null, 2))
+        if (json) printJson(io, receipt)
         else io.out(formatOnReceipt(receipt, { tense: 'past', home }))
         return EXIT.incomplete
       }
@@ -90,7 +91,7 @@ export async function runOn({ io, env = process.env, home = os.homedir(), platfo
         const receipt = { ...newReceipt('on'), ok: false, harnesses: named.ids, notes: [refusal.reason] }
         const cdir = path.join(home, '.trocar', 'collector')
         try { if (fs.existsSync(cdir)) appendEvent(cdir, { event: 'failure', where: 'start', code: refusal.code, reason: refusal.reason, ...(source ? { source } : {}) }) } catch { /* the receipt is the record then (R11) */ }
-        if (json) io.out(JSON.stringify(receipt, null, 2))
+        if (json) printJson(io, receipt)
         else io.out(formatOnReceipt(receipt, { tense: 'past', home }))
         return EXIT.incomplete
       }
@@ -126,7 +127,7 @@ export async function runOn({ io, env = process.env, home = os.homedir(), platfo
       receipt.notes.push(...rec.notes)
       if (rec.failed.length) exit = EXIT.incomplete
     } else if (adoption && receipt.dry_run) receipt.adopted = Object.fromEntries(Object.entries(adoption.chains(receipt.harnesses || [])).filter(([h]) => (receipt.harnesses || []).includes(h)).map(([h, t]) => [h, { chain: chainText(t), dry_run: true }]))
-    if (json) { if (plan) receipt.planned = planItems(plan, { home, platform }); io.out(JSON.stringify(receipt, null, 2)) }
+    if (json) { if (plan) receipt.planned = planItems(plan, { home, platform }); printJson(io, receipt) }
     else if (receipt.planned) for (const n of receipt.notes) io.err(n) // the plan was printed; what is left to say is why nothing was done (R6)
     else {
       // D46: the harnesses THIS run newly wired (their one-time 说明 notes print; a harness wired before keeps its notes in doctor and --json — the receipt object is untouched, R5/R11)
@@ -137,7 +138,7 @@ export async function runOn({ io, env = process.env, home = os.homedir(), platfo
     return exit
   } catch (e) {
     const message = String((e && e.message) || e)
-    if (json) io.out(JSON.stringify({ ...newReceipt('on'), ok: false, notes: [message] }, null, 2)); else io.err(`trocar on: ${message}`)
+    if (json) printJson(io, { ...newReceipt('on'), ok: false, notes: [message] }); else io.err(`trocar on: ${message}`)
     return EXIT.incomplete
   }
 }

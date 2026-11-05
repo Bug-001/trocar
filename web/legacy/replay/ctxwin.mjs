@@ -268,12 +268,13 @@ const unreal = (s) => { for (const x of s.landReal || []) x.classList.remove('cw
 // screen with the target are made real (.cwreal) first: within one window height of its top, which holds as each is never shorter than
 // its preset. Card by card from the outside in (a card's rows count once the card is real), reading the rects of one level per layout.
 function realBand(el, node) {
-  const H = el.clientHeight, kids = new Map(), real = []
-  for (const x of el.querySelectorAll('.cblk, .cwturn')) {
-    const up = x.parentElement.closest('.cwturn'), k = up && el.contains(up) ? up : null
-    kids.has(k) ? kids.get(k).push(x) : kids.set(k, [x])
-  }
-  let level = kids.get(null) || []
+  const H = el.clientHeight
+  // a level's rows are asked for when the band reaches them: the walk costs what the band holds, not what the window holds
+  const kidsOf = (card) => [...card.querySelectorAll('.cblk, .cwturn')].filter((x) => x.parentElement.closest('.cwturn') === card)
+  // the target's own turns first: skipped at their preset height, the rects around them say the target lies below the whole list
+  const real = []
+  for (let x = node; (x = x.parentElement.closest('.cwturn')) && el.contains(x);) { x.classList.add('cwreal'); real.push(x) }
+  let level = [...el.querySelectorAll('.cblk:not(.cwturn .cblk), .cwturn:not(.cwturn .cwturn)')]
   while (level.length) {
     const y = node.getBoundingClientRect().top, lo = y - H, hi = y + H, box = (i) => level[i].getBoundingClientRect()
     let a = 0, b = level.length // in document order the rects go down: the first one whose bottom reaches the band
@@ -282,7 +283,7 @@ function realBand(el, node) {
     for (let i = a; i < level.length && box(i).top <= hi; i++) hit.push(level[i])
     for (const x of hit) x.classList.add('cwreal')
     real.push(...hit)
-    level = hit.flatMap((x) => x.classList.contains('collapsed') ? [] : kids.get(x) || [])
+    level = hit.flatMap((x) => x.classList.contains('collapsed') || !x.classList.contains('cwturn') ? [] : kidsOf(x))
   }
   return real
 }

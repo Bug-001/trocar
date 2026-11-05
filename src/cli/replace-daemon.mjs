@@ -1,9 +1,12 @@
 // replace-daemon.mjs — the one routine that puts the collector on this code (RFC 1.6 §5.5 step 4): `update` and `install` both call it.
 //   replaceDaemon({ by, env, home, platform, deps, dir, root, fs, problems }) → { restarted, stopped?, notes, elsewhere?, from }
 //   daemonCode({ platform, dir, env, fs, deps }) → the code the collector names on its control channel, or null
+//   entryStartsThisCopy({ home, env, platform, deps, fs }) → whether the login entry on disk starts this code
 //   deps (0.1 §3): `daemonCode`, `unit`, `request`, `socketPath`, `sleep`, `stopDaemon` (through offWorld), `script`, `exec`, `drainMs`.
+import path from 'node:path'
 import { codeId } from '../version.mjs'
 import { controlEndpointFor } from '../off/control-client.mjs'
+import { autostartProgram } from '../collector/arch/autostart-node.mjs'
 
 export const CUT = 'Connections the collector still holds are cut when it is replaced.'
 
@@ -49,6 +52,20 @@ const loginUnit = async ({ home, env, platform, deps }) => {
   const arch = await (await import('../collector/daemon.mjs')).loadArch(platform)
   if (!arch || !arch.unit || !arch.unit.userUnit) return null
   return arch.unit.userUnit({ home, node: process.execPath, script: deps.script || process.argv[1], run: deps.exec || null, env })
+}
+
+/** Does the login entry on disk start this code (§5.5 step 4)? Every line of the entry this code renders that names the program is on disk, line for
+ *  line, so the encoding stays the unit's own renderer's (plist, systemd, task XML) and a line the older entry lacks that names no program does not
+ *  count. No entry, one that cannot be read, or a renderer that names no program is no evidence: false, and the caller keeps to the safe order. */
+export async function entryStartsThisCopy({ home, env, platform, deps, fs }) {
+  try {
+    const unit = deps.unit !== undefined ? deps.unit : await loginUnit({ home, env, platform, deps })
+    if (!unit || typeof unit.text !== 'function') return false
+    const program = path.basename(autostartProgram({ home, node: process.execPath, script: deps.script || process.argv[1], env, fs, platform }).at(-1))
+    const onDisk = new Set(fs.readFileSync(unit.path, 'utf8').split(/\r?\n/))
+    const naming = unit.text({}).split(/\r?\n/).filter((line) => line.includes(program))
+    return naming.length > 0 && naming.every((line) => onDisk.has(line))
+  } catch { return false }
 }
 
 /** Which code the collector runs, as it says on its control channel (D67⑤): null when none answers or it names none. The endpoint is

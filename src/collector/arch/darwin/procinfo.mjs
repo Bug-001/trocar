@@ -39,7 +39,7 @@
 // execTool's `run`; a test injects one and nothing real runs), `env` (every `ps` runs under src/off/proc.mjs psEnv — lstart's English words
 // and the path bytes as they are, where a C locale prints each byte >= 0x80 as `M-x`; the helper prints path bytes as they are, so no locale
 // touches it).
-import { execTool } from '../../../off/exec.mjs'
+import { ASK_HANG_MS, execTool } from '../../../off/exec.mjs'
 import { psArgv, psEnv } from '../../../off/proc.mjs'
 import { NATIVE, nativePath } from './native.mjs'
 
@@ -47,9 +47,9 @@ import { NATIVE, nativePath } from './native.mjs'
 // stop the event loop that serves the other doors). `then` applies the next step at once to a plain answer and after it to a promise: the same code, sync in, sync out.
 const then = (x, f) => (x && typeof x.then === 'function' ? x.then(f) : f(x))
 
-/** How long one targeted ask waits: a single-pid read is a small question on any machine — a `ps`/`procenv` that exceeds it is killed by
- *  execTool's timeout and the answer is null (fail-safe: no facts, no form, the connection is spliced untracked), never a guess. */
-export const PS_TIMEOUT_MS = 2000
+/** How long one targeted ask waits: the door's one hang guard, never a verdict — a slow answer is an answer, and only a `ps`/`procenv` that hangs
+ *  this long is killed and answered null (fail-safe: no facts, no form, the connection is spliced untracked), never a guess. */
+export const PS_TIMEOUT_MS = ASK_HANG_MS
 
 /** A ps row: three integers, the accounting name (any characters — it is bounded by lstart's fixed shape to its right), the five words of
  *  lstart, and the command line to the end of the line. The same shape the old table read. */
@@ -84,15 +84,15 @@ export function elevationOf(row) {
  *  — fail-safe, it matches no path pattern, never a wrong one). null = the pid is gone or `ps` failed (a dead process between the accept
  *  and the ask is the common case, not an error). The caller caches by pid + startedAt: a wrapped pid (another life, another start time)
  *  is asked again, a living one is asked once; the helper's answer is cached here too, so the cwd its reader asks for later is free. `onUnread(why)`:
- *  told why `ps` gave nothing (its timeout or exit code), for the record of whoever needed the facts (D38). */
+ *  told why `ps` gave nothing (it was killed or never started, its exit code, no row it can read), for the record of whoever needed the facts (D38). */
 export function factsOfPid(pid, { exec = null, env = process.env, psTimeoutMs = PS_TIMEOUT_MS, procenvPath = nativePath(NATIVE.procenv), cache = procCache, onUnread = () => {} } = {}) {
   if (!Number.isInteger(pid)) throw new TypeError('factsOfPid needs the pid (an integer)')
   return then(execTool('ps', ['-p', String(pid), '-o', 'pid=,ppid=,uid=,comm=,lstart=,args='], { run: exec, env: psEnv(env), timeoutMs: psTimeoutMs }), (r) => {
-    if (r.code !== 0) { onUnread(r.code === null ? `ps -p ${pid} did not answer within ${psTimeoutMs} ms` : `ps -p ${pid} exited with ${r.code}`); return null } // a dead pid among them; the caller's null is the honest answer
+    if (r.code !== 0) { onUnread(r.code === null ? r.err || `ps -p ${pid} did not answer within ${psTimeoutMs} ms` : `ps -p ${pid} exited with ${r.code}`); return null } // a dead pid among them; the caller's null is the honest answer
     const line = String(r.out).split('\n').find((l) => l.trim() !== '')
-    if (!line) return null
+    if (!line) { onUnread(`ps -p ${pid} printed no row`); return null }
     const m = PS_ROW.exec(line)
-    if (!m) return null // a localized lstart or a changed format: no facts, never a guess
+    if (!m) { onUnread(`ps -p ${pid} printed a row of another shape`); return null } // a localized lstart or a changed format: no facts, never a guess
     const cmdline = m[6].trim() !== '' ? m[6].trim() : null
     const words = psArgv(cmdline)
     const at = new Date(m[5].replace(/\s+/g, ' ')).getTime()

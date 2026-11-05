@@ -16,7 +16,7 @@ import { cacheState, isBreak, breakCost, usageOf, priceMatch, costOf, isFailed }
 import { CT_ORDER, callComp, hitTier, refRowOf } from './analysis.mjs'
 import { anchorJump } from './jump.mjs'
 import { laneEvents, ridAt } from './model.mjs'
-import { stepRef } from './lanes.mjs'
+import { stepRef, stepOfMark } from './lanes.mjs'
 import { laneWord } from '../labels/replay.mjs'
 import * as W from '../labels/replay.mjs'
 import { FLAG, cellsOf } from '../../../src/view/head-cols.mjs'
@@ -240,13 +240,13 @@ export function renderSaw(el, s) {
     peak = any ? `≈ ${usd(maxCost)}` : '≈ —'
     q(el, '#sawrow').innerHTML = BRACKET() + win.map(([c, i]) => {
       const b = costBarHtml(c, i, s, maxCost)
-      return `<div class="bar cost ${isFailed(c) ? 'err' : ''} ${i === s.playhead ? 'cur' : ''}" data-i="${i}" style="height:${b.h}px" title="step ${i + 1} · ${esc(b.tip)}">${b.html}</div>`
+      return `<div class="bar cost ${isFailed(c) ? 'err' : ''} ${i === s.playhead ? 'cur' : ''}" data-i="${i}" data-rid="${esc(c.rid)}" style="height:${b.h}px" title="step ${i + 1} · ${esc(b.tip)}">${b.html}</div>`
     }).join('')
   } else {
     const pk = Math.max(1, s.anchor.peakCtx)
     peak = `${kf(pk)} tok`
     peakTip = 'The largest real input total of a main thread step (input + cache read + cache write)'
-    q(el, '#sawrow').innerHTML = BRACKET() + win.map(([c, i]) => ctxBarHtml(c, i + 1, `data-i="${i}"`, i === s.playhead, pk)).join('')
+    q(el, '#sawrow').innerHTML = BRACKET() + win.map(([c, i]) => ctxBarHtml(c, i + 1, `data-i="${i}" data-rid="${esc(c.rid)}"`, i === s.playhead, pk)).join('')
   }
   // the cache band
   q(el, '#cacherow').innerHTML = win.map(([c, i]) => cacheCell(c, i, s)).join('')
@@ -431,7 +431,7 @@ export function wireTimeline(el, s) {
     const vs = e.target.closest('[data-view]')
     if (vs && vs.closest('#viewswitch')) { s.sawView = vs.dataset.view === 'cost' ? 'cost' : 'ctx'; renderSaw(el, s); return }
     const bar = e.target.closest('#sawrow .bar')
-    if (bar) { s.setPlayhead(+bar.dataset.i, true); return }
+    if (bar) { const i = stepOfMark(s, bar.dataset.rid); if (i >= 0) s.setPlayhead(i, true); return }
     const btn = e.target.closest('button')
     if (btn && (btn.id === 'chapPrev' || btn.id === 'chapNext')) { if (btn.dataset.to != null) s.chapterGo(+btn.dataset.to); return } // works on the rough page too
     if (!btn || !s.anchor) return

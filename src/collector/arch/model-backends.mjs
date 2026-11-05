@@ -144,7 +144,7 @@ export async function doorPartsFor({ os, env = process.env, event = () => {}, fa
     const helper = startHelper({ env, onFailure: event, ...(io.helper || {}) })
     winHelper = helper
     const r = procinfo.procReaders({ helper })
-    parts = { ownerOf: (q) => ownerOfSocket({ helper, ...q, onFailure: event }), factsOf: (pid) => procinfo.factsOfPid(pid, { helper }), proc: r, regReadAllowed, close: () => helper.close() }
+    parts = { ownerOf: (q) => ownerOfSocket({ helper, ...q, onFailure: event }), factsOf: (pid, o) => procinfo.factsOfPid(pid, { helper, ...(o || {}) }), proc: r, regReadAllowed, close: () => helper.close() }
     watch = await systemProxyWatch({ up, read: up.readSystemProxyChain, io: { helper }, failure: (e) => failure('helper', e), event })
   }
   // the process table (P12's holder poll, and the CLI's own question through `POST /helper`): on Windows the warm helper's `ps` verb, never a

@@ -29,8 +29,8 @@ for (const argv of SCREENS) {
     const s = await sandbox()
     const { io } = await s.run([...argv, '--json'])
     assert.equal(io.stderrText(), '', `trocar ${argv.join(' ')} --json wrote to stderr: ${JSON.stringify(io.stderrText())}`)
-    // `raw` has no --json (it prints captured bytes, 1.6 §4.3) and a bare `query` prints the table of query names (§4.1): neither is a document
-    if (argv[0] === 'raw' || argv[0] === 'query') return
+    // `raw` has no --json: it prints captured bytes (1.6 §4.3)
+    if (argv[0] === 'raw') return
     const out = io.stdoutText().trim()
     assert.doesNotThrow(() => JSON.parse(out), `trocar ${argv.join(' ')} --json: stdout is not one document:\n${out}`)
   })

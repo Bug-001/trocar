@@ -259,6 +259,18 @@ export function world(seed, { calls: count, cut: cuts = false, page: pageSize, s
   // ── the answer files at mark `at` (3.5 session --head, lane --pack / --tail): members in arrival order, `P` to a pack; a rid lives in
   // the file of its own arrival span, `main` = the axis (main) lane's lines, `rest` the others; every lane head in the open tail. → {head, pack(n, part) → text, open(part) →
   // [[rid | `l:<lane>`, lines]] (the open span's rendering, one entry per rid and per lane head: serveWorld appends the changed ones to its tail)}
+  // a step's ops against the step before it in its file: every answer renders every sealed pack again (a late row moves their `i`, so their
+  // tags), and the lists do not change, so this half of that work is done once per pair
+  const diffs = new Map()
+  function diffOf(p, c) {
+    const key = `${p?.rid}>${c.rid}`
+    if (diffs.has(key)) return diffs.get(key)
+    const ops = p ? encode(p.list, c.list) : [[1, ...c.list]], attrs = {}
+    let pos = 0
+    for (const op of ops) { if (op[0] === 0) { pos += op[2]; continue } for (const b of op.slice(1)) { if (attrsOf.has(b)) attrs[pos] = attrsOf.get(b); pos++ } }
+    diffs.set(key, { ops, attrs })
+    return diffs.get(key)
+  }
   function answerFiles(at = now, P = 64) {
     const d = docAt(at), k = marks.indexOf(at) + 1, sealed = Math.floor(k / P), arrival = new Map(calls.map((c, j) => [c.rid, j]))
     const axis = [...d.lanes.values()].find((h) => h.kind === 'main')?.lane ?? null, mainCs = d.laneCalls.get(axis) || []
@@ -277,9 +289,7 @@ export function world(seed, { calls: count, cut: cuts = false, page: pageSize, s
       for (const rid of f.rids) {
         const c = byRid.get(rid), [key, i] = place.get(rid), p = prevIn.get(key) ?? null
         prevIn.set(key, c)
-        const ops = p ? encode(p.list, c.list) : [[1, ...c.list]], attrs = {}
-        let pos = 0
-        for (const op of ops) { if (op[0] === 0) { pos += op[2]; continue } for (const b of op.slice(1)) { if (attrsOf.has(b)) attrs[pos] = attrsOf.get(b); pos++ } }
+        const { ops, attrs } = diffOf(p, c)
         const ds = [...c.list, ...c.reply].filter((b) => !sent.has(b) && sent.add(b)).map((b) => ({ d: defs.get(b) }))
         out.push([rid, [{ c: d.rows.get(rid) }, ...ds, { s: { rid, lane: key, i, parent: p ? p.rid : null, ops, reply: c.reply, attrs, events: evs.get(rid) || [],
           detail: { norm: { stop_reason: 'end_turn', usage: null }, respRefs: [], nonBlockKeys: {}, extraMessages: [], wire: { reqEncoding: 'identity' } } } },
