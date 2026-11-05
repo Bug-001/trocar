@@ -1,0 +1,18 @@
+{
+  "name": "I-leak-overview-1",
+  "invariant": "I-leak",
+  "sig": "I-leak:overview",
+  "fp": "window # → #",
+  "seed": 1,
+  "big": false,
+  "viewport": 390,
+  "theme": "light",
+  "steps": [
+    {"a":"key","p":{"key":"p"}},
+    {"a":"switchInFlight","p":{"a":0.373,"b":0.53,"ms":2194}},
+    {"a":"screen","p":{"hash":"#/overview"}}
+  ],
+  "screenshot": "test/web-v2/browser/shots/seq/I-leak-overview-1.png",
+  "status": "new",
+  "detail": "window 25 → 40"
+}

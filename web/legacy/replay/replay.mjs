@@ -15,24 +15,38 @@
 // Each session has its own desk instance (openDesk): its state, root and nodes, its reads under its own AbortController. Leaving it (another
 // screen, another session) detaches it into the session cache (session-cache.mjs, D71③): its poll stops, its root leaves the page, its
 // reads in flight finish. Coming back attaches the same instance — the step it showed — and polls once: a conditional head, a Range per tail.
+// The context window is painted only through the view (2.3 §读与画; 1.4 §落点):
+//   s.win = {kind:'step', busy} | {kind:'empty', msg, err} | {kind:'rough', n} | {kind:'notlisted'} | {kind:'none', msg}
+//     what the window shows: the step at the playhead (busy = its rows' frames empty, frameFor); an empty state (msg '' = the empty
+//     frame, else the failure sentence; err = the failed answer {status, error}, which the legacy view says through s.errNote); the rough
+//     page's frame sized for n rows; a session the server does not list; a session with no model calls (msg)
+//   view.window(d?)  d given → s.win = d; then the window is painted. Legacy: paintWindow on #ctxwin, at once. React: the 'window'
+//     channel is bumped and flushed (flushSync) unless a React lifecycle is running, so the controller's next line sees the window drawn
+//   view.reveal(t)   t = {fi, open?, flash?} | {anchor, flash?} → the element brought into view (a row at list position fi, its turn opened
+//     into the D12 memory and its group drawn, opened when `open`; or the element #anchor, the 变化线 drawn with its row), flashed for
+//     `flash` ms; null when there is none. Legacy: revealIn; React: the function the window registered (view.setRevealer)
+//   view.cellRoots() the elements whose cells the desk wires with the drawer's (detail.mjs): legacy [root]
+//   s.reveal(t) = view.reveal(t), s.cellRoots() = view.cellRoots(): the areas' way to them
 import { esc } from '../core/fmt.mjs'
 import { api as rootApi, scoped } from '../core/api.mjs'
 import { sessionCache } from './session-cache.mjs'
 import { setScreenKeys } from '../core/keys.mjs'
 import { openModal } from '../core/dom.mjs'
 import { keyAction } from './keymap.mjs'
-import { buildLanes, anchorLane, stepsOf, nearestByTs } from './lanes.mjs'
+import { buildLanes, anchorLane, stepsOf, nearestByTs, placeOf } from './lanes.mjs'
 import { createDesk, readLedger, applyLedger, indexOf, ridAt, stepOf as deskStep } from './model.mjs'
-import { parseLines, applyFile, applyHead } from './packs.mjs'
+import { lineSlices, applyFile, applyHead } from './packs.mjs'
 import { get, getText } from '../core/http.mjs'
 import { breakSteps } from './analysis.mjs'
 import { loadFold, saveFold } from './fold.mjs'
 import { landPlayhead, createStepReads, packOrder } from './follow.mjs'
 import { createLoader } from './loader.mjs'
 import { createPoller, INTERVAL } from '../core/poll.mjs'
+import { createPace } from './pace.mjs'
 import { renderSaw, renderOverview, repositionBrush, markCurrent, renderProblemNav, problemSteps, wireTimeline, barsThatFit, fitWindow, capWindow, renderRough as roughRows, chapterHere, placeView } from './timeline.mjs'
 import { renderRails, wireRails, highlightRange, reviewing } from './rails.mjs'
-import { renderContextWindow, wireCtxWin, emptyFrameHtml, rowKeys } from './ctxwin.mjs'
+import { renderContextWindow, wireCtxWin, emptyFrameHtml, rowKeys, ensureRow, toggleCtxBlock } from './ctxwin.mjs'
+import { arrived, refWaits } from '../../src/screens/replay/window-model.mjs'
 import { renderOutline, wireOutline, jumpToAnchor, jumpToResourceBlock } from './outline.mjs'
 import { createJumpQueue } from './jump.mjs'
 import { createPricingLoader } from './pricing.mjs'
@@ -42,7 +56,7 @@ import { openDetail, closeDetail, wireDetail } from './detail.mjs'
 import { initLayout } from './layout.mjs'
 import { renderSessionHead, wireSessionHead, captureGap, behindOf } from './header.mjs'
 import { stepBarHtml, roughStepHtml, wireStepBar } from './stepbar.mjs'
-import { loadBodies, bodyCache, clearOverrides, overrideScope, isRetryable } from './cell.mjs'
+import { loadBodies, bodyCache, clearOverrides, deskMode, onModeChange, overrideScope, isRetryable } from './cell.mjs'
 import { SESSION_NOT_LISTED, BACK_TO_SESSIONS } from '../labels/shell.mjs'
 import { CACHE_LEGEND, CACHE_LEGEND_UNK, KEYS_TITLE, KEY_LIST, RETRY, THIS_SESSION, REVIEW_TIP, MAINDIV_TIP, DIVIDER_TIP, RPBAR_TIP, moreLanes } from '../labels/replay.mjs'
 import { readFailure } from '../core/ui.mjs'
@@ -92,7 +106,7 @@ export function playheadSig(s, frame = 'rows') {
   const st = c && s.desk ? deskStep(s.desk, c.rid) : null
   const ref = a && s.diffRef != null ? a.calls[s.diffRef] : null
   return JSON.stringify([a && a.id, c, frame, st && st.held ? [st.flat.map((b) => b.bid), st.reply, st.detail] : null,
-    ref ? ref.rid : null, [...(s.openBlocks || [])].sort(), [...(s.navOpen || [])].sort(), s.viewPin ? s.viewPin.resKey : null,
+    ref ? ref.rid : null, refWaits(s), [...(s.openBlocks || [])].sort(), [...(s.navOpen || [])].sort(), s.viewPin ? s.viewPin.resKey : null,
     !!s.pricing, s.pricingErr || null, s.bodyFail ? s.bodyFail.size : 0])
 }
 
@@ -120,6 +134,58 @@ const yieldNow = () => (globalThis.scheduler && typeof globalThis.scheduler.yiel
   : typeof MessageChannel === 'function' ? new Promise((r) => { const c = new MessageChannel(); c.port1.onmessage = () => { c.port1.close(); r() }; c.port2.postMessage(0) })
     : new Promise((r) => setTimeout(r, 0)))
 const frame = (f) => (typeof requestAnimationFrame === 'function' ? requestAnimationFrame(f) : setTimeout(f, 16))
+// a read file's lines parsed in slices of at most SLICE_MS, yielding between them (2.3 §归约前沿: 分片解析, 片间让出)
+const SLICE_MS = 4
+async function parseSliced(src, opts, pace) {
+  const g = lineSlices(src, opts)
+  for (let t = nowMs(); ;) {
+    const x = g.next()
+    if (x.done) return x.value
+    if (nowMs() - t > SLICE_MS) { await yieldNow(); await pace.slice(); t = nowMs() }
+  }
+}
+
+// ── the context window: one painter and one jump for both views ──────────────────────────────────────────────────────
+// `el` is the view's #ctxwin; what it shows is s.win (the header's interface)
+export function paintWindow(el, s) {
+  const w = s.win
+  if (w.kind === 'step') { renderContextWindow(el, s, { busy: !!w.busy }); return }
+  el.__units = null
+  el.innerHTML = w.kind === 'rough' ? emptyFrameHtml(w.n) : w.kind === 'notlisted' ? notListedHtml() : w.kind === 'none' ? `<div class="empty">${esc(w.msg)}</div>`
+    : w.msg ? `<div class="empty">${esc(w.msg)}${s.errNote ? `<div class="emptywhy">${s.errNote}</div>` : ''}</div>` : emptyFrameHtml()
+}
+// the window's own listeners: its rows and turns (ctxwin.mjs), and the failure state's Retry → unwire
+export function wireWindow(el, s) {
+  const onRetry = (e) => { if (e.target.closest && e.target.closest('[data-retry]')) s.poll() }
+  el.addEventListener('click', onRetry)
+  const off = wireCtxWin(el, s)
+  // the desk default changes the section headers' claim at once (2.3 §段头); a cell's own flip does not touch them
+  let mode = deskMode()
+  const unheard = onModeChange(() => { const was = mode; mode = deskMode(); if (mode !== was && s.win?.kind === 'step') paintWindow(el, s) })
+  return () => { el.removeEventListener('click', onRetry); off(); unheard() }
+}
+// a jump scrolls instantly when the viewer asked the system for less motion (1.5)
+const motion = () => (typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth')
+const flash = (el, ms) => { el.classList.add('hl'); setTimeout(() => el.classList.remove('hl'), ms) }
+// view.reveal over the desk's `root` whose #ctxwin the legacy renderer draws. A jump is the reader's own (an outline row, a resource
+// card, 2.5 §跳转联动): a folded turn it opens goes into the D12 fold memory (ensureRow → openTurnFor)
+export function revealIn(root, s, t) {
+  const win = root.querySelector('#ctxwin')
+  let el
+  if (t.anchor != null) {
+    el = root.querySelector('#' + t.anchor)
+    // the 变化线 goes with its row: in a folded turn or a group not drawn yet, draw that row first (2.3 §读与画「长对话的窗口」)
+    const call = !el && t.anchor === 'cachebrk' && s.anchor && s.anchor.calls[s.playhead]
+    if (win && call && call.cacheBreak) { ensureRow(win, s, call.cacheBreak.idx); el = root.querySelector('#' + t.anchor) }
+  } else {
+    el = win && ensureRow(win, s, t.fi) // a folded turn opened, its group drawn
+    if (el && t.open && el.classList.contains('collapsed')) toggleCtxBlock(s, el)
+  }
+  if (!el) return null
+  el.scrollIntoView({ block: t.anchor != null ? 'start' : 'center', behavior: motion() })
+  if (t.flash) flash(el, t.flash)
+  return el
+}
 
 const SCROLLED = ['#ctxwin', '#ctxnav', '#resexp', '#rawpanel', '#rails'] // scroll positions a detached node loses
 export const keyOf = (route) => route.project + '::' + route.id // a session's desk in the session cache (a route, or a desk's state)
@@ -168,15 +234,22 @@ export function roughStepHead(stepbar, s, at) {
 // The legacy view: today's DOM (DESKHEAD + SKELETON) in the desk's own root, its frame there at once. A view draws the R1 areas from
 // the state `s` and hands the controller its element map through `framed(E)` when its frame is there:
 //   { root, els() → E | null, head(), step(), saw(), overview(), cur(), problems(), review(), frame(), rough(at, K), empty(msg),
-//     capacity() → K, dispose() }
+//     window(d?), reveal(t), cellRoots(), capacity() → K, dispose() }
+// The context window is the view's own: E carries no ctxwin, and its listeners are wired here.
 function legacyView(s, framed) {
   const root = document.createElement('div')
   root.className = 'desk'
   root.innerHTML = DESKHEAD + SKELETON
   // every query runs inside the desk's own root: a detached desk keeps working on its own nodes, never on null
   const $ = (sel) => root.querySelector(sel)
-  const E = { saw: $('#saw'), rails: $('#rails'), deskhead: $('#deskhead'), stepbar: $('#stepbar'), ctxwin: $('#ctxwin'), ctxnav: $('#ctxnav'), resexp: $('#resexp'), rawpanel: $('#rawpanel'), detail: document.getElementById('detail') }
+  const E = { saw: $('#saw'), rails: $('#rails'), deskhead: $('#deskhead'), stepbar: $('#stepbar'), ctxnav: $('#ctxnav'), resexp: $('#resexp'), rawpanel: $('#rawpanel'), detail: document.getElementById('detail') }
+  const win = $('#ctxwin'), unwire = wireWindow(win, s)
   let roughMarked = false
+  // the lane's capacity, measured when its track is laid out or resized (a ResizeObserver), not by a style read per paint
+  let K = null
+  const track = E.saw && E.saw.querySelector('#sawrow')?.closest('.tkrow')
+  const ro = track && typeof ResizeObserver === 'function' ? new ResizeObserver(() => { const k = laneCapacity(E.saw); if (k !== K) { const was = K; K = k; if (was != null) s.refit?.() } }) : null
+  ro?.observe(track)
   const view = {
     root, els: () => E,
     head: () => renderSessionHead(E.deskhead, s),
@@ -199,8 +272,11 @@ function legacyView(s, framed) {
       if (!roughMarked && typeof performance !== 'undefined') { roughMarked = true; performance.mark('desk-rough') }
     },
     empty() { E.stepbar.innerHTML = ''; emptyScope(E.saw) },
-    capacity: () => laneCapacity(E.saw),
-    dispose() {},
+    window(d) { if (d) s.win = d; paintWindow(win, s) },
+    reveal: (t) => revealIn(root, s, t),
+    cellRoots: () => [root],
+    capacity: () => (ro && K != null && K !== Infinity ? K : (K = laneCapacity(E.saw))), // Infinity = not laid out yet: measured again
+    dispose: () => { ro?.disconnect(); unwire() },
   }
   framed(E)
   return view
@@ -228,11 +304,12 @@ function openDesk(ctx, route0, makeView = legacyView) {
     desk: createDesk(), meta: null, lanes: [], anchor: null, anchorTs: [], breaks: [], problems: [], playhead: 0, playRid: null, follow: true, sawView: 'ctx',
     view: { lo: 0, hi: 0 }, viewSig: null, selTick: null, viewPin: null, diffRef: null, curFlat: [], drawerFlat: [], curRemoved: [],
     followLanding: false, // the playhead was last moved by 跟随最新, not by the reader: the window lands on the reply (1.4 §打开一步时落在哪)
-    landedFor: null, replyFor: null, // the window's landing ran for that rid; the reply rows' open state belongs to that rid
+    landedFor: null, landWait: null, replyFor: null, // the window's landing ran for that rid, or waits ({rid, top}: landingFor); the reply rows' open state belongs to that rid
     navOpen: new Set(['sys', 'life-file', 'life-load']), navSeenExpanded: false, collapsedRails: new Set(), subSeeded: new Set(), subgroupOpen: false, bgOpen: false,
     railsFolded: typeof matchMedia === 'function' && matchMedia('(max-width: 900px)').matches, rpOpen: false, reviewRange: null,
     gap: null, totals: null, errNote: null, lastPhSig: null, unheld: null, notListed: false, goodKey: null, goodAt: null, staleErr: null,
     bodyFail: new Map(), // a body read that failed: ref → its failed body (2.3 §读失败)
+    win: { kind: 'empty', msg: '', err: null }, // what the context window shows (the header's interface)
   })
   const s = {
     ctx: { ...ctx, api: areaApi }, dead: false, project: route0.project, id: route0.id, initialStep: hasStep(route0) ? stepParam(route0.params.step).step : null,
@@ -244,6 +321,8 @@ function openDesk(ctx, route0, makeView = legacyView) {
   }
   const view = makeView(s, framed)
   const root = s.root = view.root
+  s.reveal = (t) => view.reveal(t)
+  s.cellRoots = () => view.cellRoots()
   const $ = (sel) => root.querySelector(sel)
   const sessionKey = () => s.project + '::' + s.id
   const alive = () => !s.dead && host != null && root.isConnected
@@ -262,7 +341,9 @@ function openDesk(ctx, route0, makeView = legacyView) {
   })
   s.jumpTo = (step, jump) => { setPlayhead(step, true); jumps.queue(s.playhead, jump) }
   s.queueJump = (jump) => jumps.queue(s.playhead, jump)
-  s.openDetail = (lane, i) => openDetail(E.detail, s, lane, i)
+  // the drawer as drawn: the selected call's row object and whether its step is held (refreshDrawer redraws on a change only)
+  let drawnDetail = null
+  s.openDetail = (lane, i) => { const c = lane.calls[i]; drawnDetail = c ? { row: s.desk.rows.get(c.rid) ?? c, held: heldAt(c) } : null; openDetail(E.detail, s, lane, i) }
   s.setPlayhead = setPlayhead
   // ‹ › and [ ] (1.3 §章): to global step g — at once when its row is here, else as a named step whose bars come from the head's cols
   s.chapterGo = (g) => {
@@ -277,20 +358,20 @@ function openDesk(ctx, route0, makeView = legacyView) {
   s.paintFrame = () => view.frame() // the rails' fold row sets s.railsFolded
   s.refit = () => refit() // a view whose lane capacity changed (view.capacity())
 
-  function paintNotListed() { onEls(() => { E.ctxwin.innerHTML = notListedHtml(); E.ctxwin.__units = null }) }
+  function paintNotListed() { onEls(() => view.window({ kind: 'notlisted' })) }
   function renderHeader() { s.headFollow = s.follow; view.head(); syncUrl() }
 
   // ── empty and failed states: every widget that carries per-session data is neutralised, nothing of the last session stays ──
   // `msg` empty → ⑧, the empty frame (1.4: no text, no control); else the honest failure sentence, Retry, and the reason in details
-  let emptied = '' // the last empty state's sentence, null when the rough page was drawn after it: a view whose frame comes later draws that then (catchUp)
-  function renderEmpty(msg) {
-    emptied = msg
+  // (`err`: the failed answer)
+  let emptied = { msg: '', err: null } // the last empty state, null when the rough page was drawn after it: a view whose frame comes later draws that then (catchUp)
+  function renderEmpty(msg, err = null) {
+    emptied = { msg, err }
     s.brushDragging = false; s.anchor = null; s.lanes = []; s.curFlat = []; s.curRemoved = []; s.breaks = []; jumps.clear()
     s.landedFor = null; s.turnLanded.clear(); s.lastPhSig = null
     view.empty(msg)
     onEls(() => {
-      E.ctxwin.__units = null
-      E.ctxwin.innerHTML = msg ? `<div class="empty">${esc(msg)}${s.errNote ? `<div class="emptywhy">${s.errNote}</div>` : ''}</div>` : emptyFrameHtml()
+      view.window({ kind: 'empty', msg, err })
       E.ctxnav.innerHTML = ''; E.rails.innerHTML = ''; E.resexp.innerHTML = ''; E.rawpanel.innerHTML = ''
     })
     view.problems() // no problems: the row name stops quoting the last session's count and ‹ › disappear
@@ -299,16 +380,14 @@ function openDesk(ctx, route0, makeView = legacyView) {
   // ── rids: what the reader holds survives an answer that moves step numbers (a late row, an older page, a relane) ─────────
   function pin() {
     const a = s.anchor, at = (i) => (a && a.calls[i] ? a.calls[i].rid : null)
-    const sl = s.selTick && s.lanes.find((l) => l.id === s.selTick.laneId)
-    return { diff: s.diffRef != null ? at(s.diffRef) : null, lo: at(s.view.lo), hi: at(s.view.hi - 1), atEnd: !!a && s.view.hi >= a.calls.length,
-      sel: sl && sl.calls[s.selTick.i] ? { laneId: sl.id, rid: sl.calls[s.selTick.i].rid } : null }
+    return { diff: s.diffRef != null ? at(s.diffRef) : null, lo: at(s.view.lo), hi: at(s.view.hi - 1), atEnd: !!a && s.view.hi >= a.calls.length }
   }
   function unpin(p) {
     const a = s.anchor, idx = (rid) => (rid != null && a ? a.ridLocal.get(rid) : undefined)
     const d = idx(p.diff); s.diffRef = d ?? null
     const lo = idx(p.lo), hi = idx(p.hi)
     if (lo != null && hi != null && hi >= lo) s.view = { lo, hi: hi + 1 }
-    if (p.sel) { const l = s.lanes.find((x) => x.id === p.sel.laneId), i = l && l.ridLocal.get(p.sel.rid); s.selTick = i != null ? { laneId: l.id, i } : null }
+    if (s.selTick && !placeOf(s.lanes, s.selTick)) s.selTick = null
   }
   // a named step (the URL's `step=`, Home) → its index in the anchor lane once its skeleton row and its lane are here, else -1
   // (2.3 §点名的一步不在手里). A lane read that failed lands it too: the step then says so (2.3 §读失败)
@@ -345,18 +424,31 @@ function openDesk(ctx, route0, makeView = legacyView) {
 
   // ── repaint ──────────────────────────────────────────────────────────────────────────────────────────────────────
   const restoreSelection = () => {
-    if (!s.selTick) return
-    const l = s.lanes.find((x) => x.id === s.selTick.laneId)
-    if (l && reviewing(l)) highlightRange(s, l, s.selTick.i)
+    const p = s.selTick && placeOf(s.lanes, s.selTick)
+    if (p && reviewing(p.lane)) highlightRange(s, p.lane, p.i)
   }
   // the playhead's panels, at most once per animation frame: a call inside a frame that already drew waits for the next one
   let inFrame = false, queued = false, busyTimer = null
+  // nothing of the playhead's step is drawn yet: the background work is what the reader waits for (2.3 §归约前沿 读者优先)
+  const pace = createPace({ now: nowMs, sleep: (ms) => new Promise((r) => setTimeout(r, ms)), frame, urgent: () => s.playRid == null || s.initialStep != null || s.unheld != null })
   // the outline, the explorer and the raw panel follow the window in a task of their own (2.3 归约前沿: no task over 50 ms): a step of a
   // long session is the window's thousands of nodes plus the ledger's lists, and one task drew both. Several paints before it runs
-  // draw these once, for the playhead then.
-  let sideDue = false
+  // draw these once, for the playhead then, once its frame is out and the reader has stopped. A tick's drawer opens in that task too, after them
+  let sideDue = false, sidesWanted = false, detailDue = null
   const drawRails = () => onEls(() => { renderRails(E.rails, s); watchRails() })
-  const drawSides = () => { if (sideDue) return; sideDue = true; yieldNow().then(() => { sideDue = false; if (!s.dead && s.anchor) { s.renderNav(); s.renderRaw() } }) }
+  const nextTask = () => {
+    if (sideDue) return
+    sideDue = true
+    yieldNow().then(() => pace.calm()).then(() => {
+      sideDue = false
+      const d = detailDue; detailDue = null
+      if (s.dead) return
+      if (sidesWanted && s.anchor) { sidesWanted = false; s.renderNav(); s.renderRaw() }
+      if (d && E) s.openDetail(...d)
+    })
+  }
+  const drawSides = () => { sidesWanted = true; nextTask() }
+  s.openDetailNext = (lane, i) => { detailDue = [lane, i]; nextTask() }
   function drawPlayhead() {
     if (inFrame) { if (!queued) { queued = true; frame(() => { queued = false; if (!s.dead) paintPlayhead() }) } return }
     inFrame = true; frame(() => { inFrame = false })
@@ -376,7 +468,7 @@ function openDesk(ctx, route0, makeView = legacyView) {
     s.renderStep() // 'Step N / M' moves with every new call
     if (sig !== s.lastPhSig) {
       // drawn from what is here: the open rows' bodies are read by the step's own reads once the playhead rests (aim)
-      renderContextWindow(E.ctxwin, s, { busy: f === 'busy' }); drawSides(); s.lastPhSig = sig
+      view.window({ kind: 'step', busy: f === 'busy' }); drawSides(); s.lastPhSig = sig
     }
     if (s.follow !== s.headFollow) renderHeader() // the follow chip (a scrub onto or off the live end, a tick selection)
     syncUrl() // the one write point for the drawn step: every path that draws a step reaches it
@@ -404,7 +496,7 @@ function openDesk(ctx, route0, makeView = legacyView) {
     onEls(() => {
       renderRails(E.rails, s); watchRails()
       if (head.lanesMore) E.rails.insertAdjacentHTML('beforeend', `<div class="railsmore" data-more="${head.lanesMore}">${esc(moreLanes(head.lanesMore))}</div>`)
-      E.ctxwin.__units = null; E.ctxwin.innerHTML = emptyFrameHtml(head.last ? head.last.n : 0)
+      view.window({ kind: 'rough', n: head.last ? head.last.n : 0 })
     })
     view.rough(at, K) // last, in the same task: the view's 'desk-rough' mark sees the whole rough page
   }
@@ -414,11 +506,14 @@ function openDesk(ctx, route0, makeView = legacyView) {
     if (s.initialStep == null || !head || !head.tier || !head.steps) return false
     view.rough(Math.min(head.steps, s.initialStep) - 1, sawCapacity()); return true
   }
-  // the drawer was built from the rows of an earlier answer: repaint it for the selected tick
-  function refreshDrawer() {
+  // the drawer was built from the rows of an earlier answer: repaint it for the selected tick when its row or its held state changed
+  // (`always`: something else it draws changed, the price table)
+  function refreshDrawer(always = false) {
     if (!s.selTick || !E || !E.detail || !E.detail.classList.contains('open')) return
-    const l = s.lanes.find((x) => x.id === s.selTick.laneId)
-    if (l && l.calls[s.selTick.i]) openDetail(E.detail, s, l, s.selTick.i)
+    const p = placeOf(s.lanes, s.selTick), c = p && p.lane.calls[p.i]
+    if (!c) return
+    const d = drawnDetail
+    if (always || !d || d.row !== (s.desk.rows.get(c.rid) ?? c) || d.held !== heldAt(c)) s.openDetail(p.lane, p.i)
   }
 
   // ── navigation ───────────────────────────────────────────────────────────────────────────────────────────────────
@@ -441,7 +536,7 @@ function openDesk(ctx, route0, makeView = legacyView) {
     s.initialStep = null // and any named step still waiting to land
     const N = s.anchor.calls.length, np = Math.max(0, Math.min(N - 1, i | 0))
     if (np !== s.playhead) s.turnLanded.clear() // a different call: no landing turn lingers; open rows stay by bid (1.4:114)
-    s.playhead = np; s.playRid = s.anchor.calls[np].rid
+    s.playhead = np; s.playRid = s.anchor.calls[np].rid; arrived(s, s.playRid)
     if (manual) s.follow = np === N - 1 // the reader's move: on the newest call it follows, anywhere else it does not
       // keep the scrub target inside the brush window, which stays inside its chapter (1.3 §章): pan it, keeping its width; another
     // chapter's window becomes this chapter's
@@ -528,7 +623,7 @@ function openDesk(ctx, route0, makeView = legacyView) {
         if (!mine()) return
         refs.forEach((ref, i) => { if (isRetryable(got[i])) s.bodyFail.set(ref, got[i]); else s.bodyFail.delete(ref) })
         if (rid !== s.playRid || !s.anchor) return
-        if (host && E) { renderContextWindow(E.ctxwin, s); s.renderRaw() } else { s.lastPhSig = null; missed = true }
+        if (host && E) { view.window({ kind: 'step', busy: false }); s.renderRaw() } else { s.lastPhSig = null; missed = true }
       },
     })
   }
@@ -538,7 +633,7 @@ function openDesk(ctx, route0, makeView = legacyView) {
   const fileBytes = new Map() // file key → the bytes held of it (bytes(): the session cache's measure)
   const keep = (k, n) => { size += n - (fileBytes.get(k) || 0); fileBytes.set(k, n) }
   let applying = Promise.resolve()
-  const serial = (fn) => { const p = applying.then(fn); applying = p.catch(() => {}); return p }
+  const serial = (fn) => { const p = applying.then(pace.slice).then(fn); applying = p.catch(() => {}); return p }
   // the lanes a file's lines change: the lanes its rows and heads name, before and after, and those of the rids it held before
   function lanesOf(file, lines) {
     const out = new Set(), d = s.desk, was = (rid) => { const r = d.rows.get(rid); if (r) out.add(r.lane) }
@@ -575,7 +670,8 @@ function openDesk(ctx, route0, makeView = legacyView) {
     if (s.dead || !host || !s.desk.head || (packFailed && !byPoll)) return
     packFailed = false
     const due = packsDue()
-    for (; jobs < Math.min(3, due.length); jobs++) loader.run(due[jobs].pri, packJob).then((x) => x && x.applied).catch(() => {}).finally(() => { jobs--; if (!s.dead) fill() })
+    // a pack's turn waits for the reader, outside the loader, so a body the reader's step asks for keeps its slot (2.3 读者优先)
+    for (; jobs < Math.min(3, due.length); jobs++) { const { pri } = due[jobs]; pace.calm().then(() => (s.dead ? null : loader.run(pri, packJob))).then((x) => x && x.applied).catch(() => {}).finally(() => { jobs--; if (!s.dead) fill() }) }
   }
   // a pack's reads hold a loader slot; its applies do not: they wait their turn on `serial` after the slot is free, since a redraw's own
   // reads (the followed step's bodies) go through the loader too — a slot held while waiting on `serial` deadlocks the desk
@@ -592,10 +688,12 @@ function openDesk(ctx, route0, makeView = legacyView) {
         const r = await getText(`/api/d/p${p.n}.${part}`, { id: s.id }, { signal: join(signal, s.reads.signal) })
         if (gone()) break
         let parsed = null
-        try { parsed = r.ok && r.status === 200 ? parseLines(r.text) : null } catch { /* not the file's lines: a failure like any other */ }
+        try { parsed = r.ok && r.status === 200 ? await parseSliced(r.text, undefined, pace) : null } catch { /* not the file's lines: a failure like any other */ }
+        if (gone()) break
         if (!parsed) { packFailed = true; if (s.playRid == null && s.initialStep != null) readFailed(r.ok ? { status: r.status, error: 'not the file\'s lines' } : r); break }
         // held once the desk holds it: a part whose apply threw, or never ran, is read again
-        applies.push(serial(() => { if (gone()) return; keep(`p${p.n}.${part}`, r.text.length); const ch = applyParsed({ kind: 'pack', n: p.n, part }, parsed); got.push(part); return redraw(ch) }))
+        applies.push(serial(() => { if (gone()) return; keep(`p${p.n}.${part}`, r.text.length); const ch = applyParsed({ kind: 'pack', n: p.n, part }, parsed); got.push(part); return { ch } })
+          .then((x) => { if (x) redraw(x.ch).catch((e) => console.error(e)) })) // the redraw is paced: the pack's slot does not wait for it
       }
     } catch (e) { err = e }
     // every apply settles before the pack's record is written, so a part still applying is neither held nor read twice
@@ -663,7 +761,7 @@ function openDesk(ctx, route0, makeView = legacyView) {
   // and why; only a session that never drew shows the failure in the content area
   function readFailed(r) {
     if (s.goodKey === sessionKey()) s.staleErr = { r, since: s.goodAt }
-    else renderEmpty(fail(r))
+    else renderEmpty(fail(r), r)
     renderHeader()
     return { ok: false }
   }
@@ -674,7 +772,7 @@ function openDesk(ctx, route0, makeView = legacyView) {
     if (!(await prices.load()) || s.dead) return
     s.pricing = prices.table(); s.pricingErr = prices.err()
     if (s.pricing) s.ctx.store.set({ pricing: s.pricing })
-    renderHeader(); if (s.anchor) { s.renderRaw(); refreshDrawer() }
+    renderHeader(); if (s.anchor) { s.renderRaw(); refreshDrawer(true) }
   }
 
   // one round in flight; a failed round backs off; the reader's own actions read at once (core/poll.mjs createPoller). A hidden tab and a
@@ -704,15 +802,14 @@ function openDesk(ctx, route0, makeView = legacyView) {
     if (!r.ok) return r
     if (r.status === 416) { const size = Number((/\/(\d+)/.exec(r.range || '') || [])[1]); return size === from ? { ok: true } : readTail(part, n, signal, true) }
     let parsed
-    try { parsed = parseLines(r.text, { head: r.status !== 206 }) } catch { return from == null ? { ok: false, status: r.status, error: 'not the file\'s lines' } : readTail(part, n, signal, true) }
+    try { parsed = await parseSliced(r.text, { head: r.status !== 206 }, pace) } catch { return from == null ? { ok: false, status: r.status, error: 'not the file\'s lines' } : readTail(part, n, signal, true) }
     if (r.status !== 206 && parsed.head && parsed.head.tail && parsed.head.tail.n !== n) n = parsed.head.tail.n
     const used = (r.status === 206 ? from : 0) + parsed.used
     return serial(() => {
       tails.set(part, { n, used, tag: r.etag }); keep(`t.${part}`, used)
       const ch = applyParsed({ kind: 'tail', n, part, whole: r.status !== 206 }, parsed)
-      const anchor = !!ch && !!s.anchor && parsed.lines.some((l) => l.s && l.s.lane === s.anchor.id)
-      return redraw(ch).then((x) => ({ ok: true, anchor, x }))
-    })
+      return { ch, anchor: !!ch && !!s.anchor && parsed.lines.some((l) => l.s && l.s.lane === s.anchor.id) }
+    }).then(({ ch, anchor }) => redraw(ch).then((x) => ({ ok: true, anchor, x })))
   }
 
   // a poll round: the head (If-None-Match), then each open tail by Range; a newly sealed or changed pack is read by the loader (fill)
@@ -737,8 +834,8 @@ function openDesk(ctx, route0, makeView = legacyView) {
     }
     if (s.notListed) { s.notListed = false; root.classList.remove('notlisted') }
     // left while the head was on its way: the head is the round's last read (a detached desk sends no next read); attach's round reads the tails
-    if (!host) { if (h.data) await serial(() => redraw(null)); return { ok: true } }
-    if (h.data && s.playRid == null) await serial(() => redraw(null)) // the rough page from the head, before any file (2.3 §大致页面)
+    if (!host) { if (h.data) await redraw(null); return { ok: true } }
+    if (h.data && s.playRid == null) await redraw(null) // the rough page from the head, before any file (2.3 §大致页面)
     else if (moved) renderHeader()
     if (stale()) return
     const rs = head.open ? await Promise.all(['main', 'rest'].map((part) => readTail(part, head.open.n, signal))) : []
@@ -746,15 +843,28 @@ function openDesk(ctx, route0, makeView = legacyView) {
     const bad = rs.find((r) => !r.ok)
     if (bad) { s.staleErr = { r: bad, since: lastGood }; s.goodAt = lastGood }
     const caught = behind()
-    if (h.data || hadStale || bad) { await serial(() => redraw(h.data ? null : new Set())); renderHeader() } else if (caught) renderHeader()
+    if (h.data || hadStale || bad) { await redraw(h.data ? null : new Set()); renderHeader() } else if (caught) renderHeader()
     fill(true); reask()
     chainLedger(true, rs.some((r) => r.anchor))
     return bad ? { ok: false } : { ok: true, pending: head.pending || undefined }
   }
 
-  // after a file or a head: the lanes it changed (null = every lane, false = nothing applied) rebuilt, the playhead found again by its rid (or a named step landed), the redraw
-  async function redraw(changed) {
-    if (changed === false || s.dead) return
+  // after a file or a head: the lanes it changed (null = every lane, false = nothing applied) rebuilt, the playhead found again by its
+  // rid (or a named step landed), the redraw — in a task of its own on `serial`, after the apply (2.3 §归约前沿: 解析、应用、画之间让出).
+  // Applies queued before it runs share it: it redraws the union of their lanes.
+  let redrawDue = null
+  function redraw(changed) {
+    if (changed === false || s.dead) return Promise.resolve()
+    const d = redrawDue
+    if (d) { d.changed = d.changed === null || changed === null ? null : new Set([...d.changed, ...changed]); return d.p }
+    const due = redrawDue = { changed }
+    // calm again at its turn: a press since the pace let it through is not redrawn away (2.3 读者优先), and it comes before buildLanes, so
+    // the rows under the pointer and the lanes a click reads stay one drawing
+    due.p = yieldNow().then(() => pace.redraw()).then(() => serial(async () => { await pace.calm(); if (redrawDue === due) redrawDue = null; pace.drew(); return redrawNow(due.changed) }))
+    return due.p
+  }
+  async function redrawNow(changed) {
+    if (s.dead) return
     const desk = s.desk, keepPins = pin(), prevRow = curCall()
     s.meta = desk.meta
     s.lanes = buildLanes(desk, { count: desk.probes || 0, series: [] }, { prev: s.lanes, changed })
@@ -764,7 +874,7 @@ function openDesk(ctx, route0, makeView = legacyView) {
     if (!s.anchor || !s.anchor.calls.length) {
       if (desk.head && !desk.head.steps) {
         renderEmpty('')
-        onEls(() => { E.ctxwin.innerHTML = `<div class="empty">${esc(desk.probes ? `This session has only token counts (${desk.probes}), no model calls to replay.` : 'No model calls have been captured in this session yet.')}</div>` })
+        onEls(() => view.window({ kind: 'none', msg: desk.probes ? `This session has only token counts (${desk.probes}), no model calls to replay.` : 'No model calls have been captured in this session yet.' }))
         renderHeader(); return
       }
       renderRough(); return
@@ -776,12 +886,13 @@ function openDesk(ctx, route0, makeView = legacyView) {
     const desk = s.desk, key = sessionKey(), first = s.viewSig !== key, signal = s.reads.signal
     unpin(keepPins)
     const moved = placePlayhead(prevRow)
+    arrived(s, s.playRid)
     if (s.playRid == null) { renderRough(); chainLedger(); fill(); return } // the rough page until the named step is here
     // the followed step's open reply bodies in one read before it is drawn, so its newest reply shows with its bytes; the same
     // read carries the ±NEAR prefetch (2.3 §正文预取), so the rest after it finds nothing left and a delta stays one `block` (4.4:52)
     if (s.follow && moved && !first && host) {
       const refs = openRefs(s.playRid)
-      if (refs.length) { await loadBodies({ get: (n, p, o) => via(0, n, p, o) }, [...refs, ...nearRefs(s.playRid)], { signal }); if (s.dead || key !== sessionKey()) return }
+      if (refs.length) { await loadBodies({ get: (n, p, o) => via(0, n, p, o) }, [...refs, ...nearRefs(s.playRid)], { signal }); await pace.calm(); if (s.dead || key !== sessionKey()) return } // a press during the read is not redrawn away either
     }
     // brush window: a new session starts on the whole of it when that fits the lane, else on the last steps that fit — or, when the
     // URL named an earlier step, on the ones around it. On live growth keep the reader's window, extending it when parked at the end.
@@ -808,16 +919,14 @@ function openDesk(ctx, route0, makeView = legacyView) {
   // ── the desk's own listeners (inside its root): wired once its frame is there, kept while it is detached, dropped by dispose() ──
   const onRp = () => { s.rpOpen = !s.rpOpen; view.frame() }
   const onRpKey = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onRp() } }
-  const onRetry = (e) => { if (e.target.closest && e.target.closest('[data-retry]')) poll() } // the failure state's Retry
   const offs = []
   // a view whose scope is its own (the new desk's Scope.tsx) frames with no `saw`: its rows are not wired here
   function wire() {
-    const rpbar = $('#rpbar'), { ctxwin, rails } = E
+    const rpbar = $('#rpbar'), { rails } = E
     rails.addEventListener('mouseover', onRailHover)
     rpbar.addEventListener('click', onRp); rpbar.addEventListener('keydown', onRpKey)
-    ctxwin.addEventListener('click', onRetry)
-    offs.push(() => { rpbar.removeEventListener('click', onRp); rpbar.removeEventListener('keydown', onRpKey); ctxwin.removeEventListener('click', onRetry); rails.removeEventListener('mouseover', onRailHover) },
-      E.saw ? wireTimeline(E.saw, s) : () => {}, wireRails(rails, s), wireCtxWin(ctxwin, s), wireOutline(E.ctxnav, s), wireResources(E.resexp, s),
+    offs.push(() => { rpbar.removeEventListener('click', onRp); rpbar.removeEventListener('keydown', onRpKey); rails.removeEventListener('mouseover', onRailHover) },
+      E.saw ? wireTimeline(E.saw, s) : () => {}, wireRails(rails, s), wireOutline(E.ctxnav, s), wireResources(E.resexp, s),
       wireRawPanel(E.rawpanel, s), initLayout(root))
     // a view that draws the session head and the step head itself (the React view) hands no #deskhead / #stepbar: it acts on them too
     if (E.deskhead) offs.push(wireSessionHead(E.deskhead, s))
@@ -871,12 +980,15 @@ function openDesk(ctx, route0, makeView = legacyView) {
   // a step left mid-wait draws now; the URL names the drawn step at once (syncUrl). Answers applied while away were not drawn: all areas then
   // A desk with no lane yet that painted before its frame was there draws now what it painted last: the rough page or its empty state.
   function catchUp() {
-    if (s.anchor) { if (missed) { missed = false; renderAll() } else paintPlayhead() } else if (missed) { missed = false; if (emptied == null) renderRough(); else { renderEmpty(emptied); if (s.notListed) paintNotListed() } }
+    if (s.anchor) { if (missed) { missed = false; renderAll() } else paintPlayhead() } else if (missed) { missed = false; if (emptied == null) renderRough(); else { renderEmpty(emptied.msg, emptied.err); if (s.notListed) paintNotListed() } }
   }
 
   // hang the desk in `el` as it was left; the URL decides the view only when it names a step (1.2 §路由「离开再回来」)
+  // the reader's inputs, heard before anything acts on them, while the desk is on the page (the pace of its background work)
+  const INPUTS = [['keydown', () => pace.input()], ['pointerdown', () => pace.press(true)], ...['pointerup', 'pointercancel', 'blur'].map((k) => [k, () => pace.press(false)])]
   function attach(el, ctx, route) {
     host = el
+    for (const [k, f] of INPUTS) window.addEventListener(k, f, true)
     s.ctx = { ...ctx, api: areaApi }
     overrideScope(sessionKey())
     el.replaceChildren(root)
@@ -904,6 +1016,7 @@ function openDesk(ctx, route0, makeView = legacyView) {
     document.removeEventListener('v2:escape', onEscape)
     document.removeEventListener('visibilitychange', onVis)
     window.removeEventListener('resize', refit)
+    for (const [k, f] of INPUTS) window.removeEventListener(k, f, true)
     if (ro) ro.disconnect()
     if (io) io.disconnect()
     if (E) { closeDetail(E.detail, s); E.detail.innerHTML = '' }

@@ -68,6 +68,7 @@ function ingressFields(meta) {
   const u = meta.upstream || {}
   return {
     ingress: { route: meta.ingress.route, group: meta.ingress.group }, pid_source: meta.pid_source ?? null, pid_ms: meta.pid_ms ?? null,
+    ...(meta.held_ms != null ? { held_ms: meta.held_ms } : {}), ...(meta.facts_ms != null ? { facts_ms: meta.facts_ms } : {}), ...(meta.skip && meta.skip.unread ? { unread: String(meta.skip.unread).slice(0, 200) } : {}),
     upstream: { kind: u.kind || 'direct', ...(u.host ? { host: u.host } : {}), ...(u.port != null ? { port: u.port } : {}), ...(u.reply != null ? { reply: u.reply } : {}) },
   }
 }
@@ -261,6 +262,7 @@ export function handleFlow(client, meta, ctx) {
       return 'closing'
     },
     state: () => (finished ? 'done' : gate ? gate.state() : drainAsked ? 'closing' : 'open'),
+    peek: () => (gate ? gate.peek() : 'open'), // a connection nobody asked to close: what it is carrying (drain.mjs)
   })
   upstream.once('error', (err) => preTeardown(went('upstream', err)))
   upstream.on('close', () => preTeardown(went('upstream')))

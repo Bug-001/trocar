@@ -28,13 +28,13 @@ export const FOLD_STOPS = Object.freeze(['heap-no-room', 'fold-failed'])
 
 /** Event lines that are failures. Every other event is a state change the reader folds conditions with. */
 export const FAILURE_EVENTS = Object.freeze(['failure', 'agent-untrusted', 'helper-down', 'helper-version-mismatch', 'attach-failed', 'detach-failed', 'log-gap'])
-export const STATE_EVENTS = Object.freeze(['switch', 'daemon-start', 'daemon-stop', 'agent-exit', 'agent-trusted', 'negative-cache-cleared', 'bundles-rebuilt', 'agent-transport', 'ca-ok', 'helper-ok', 'install-note', 'uninstall-note', 'mitm-start', 'mitm-stop', 'retention-ok', 'retention-set',
+export const STATE_EVENTS = Object.freeze(['switch', 'daemon-start', 'daemon-stop', 'agent-exit', 'agent-trusted', 'negative-cache-cleared', 'bundles-rebuilt', 'agent-transport', 'ca-ok', 'helper-ok', 'loop-late', 'client-left-held', 'client-left-queued', 'install-note', 'uninstall-note', 'mitm-start', 'mitm-stop', 'retention-ok', 'retention-set',
   'classes-ok', // ~/.trocar/classes.json reads cleanly again: ends the condition its problem opened (D60③, 4.6 §记录「保存级别」)
   'agent-list-ok', // ~/.trocar/agents.json reads cleanly again, or is gone: ends the agent-list-invalid condition (D51③, 4.6 R6)
   'process-unknown']) // a process no list item claims used a door (where 'engine'; harness, door, name, wide, named = listed only with args it missed, pid; never its command line): once per (door group, name) per daemon life (D51⑥)
 
 /** The `reason` of a door's `untracked` row (4.8 §5.2 · §5.3, 4.6 §连接行怎么落码): why the door could not vouch for the connection's process. */
-export const UNTRACKED_REASONS = Object.freeze(['pid-unresolved', 'facts-unavailable', 'other-user', 'outside-host-set', 'agent-helper', 'cmdline-pending', 'not-an-agent', 'ambiguous', 'harness-off', 'group-off'])
+export const UNTRACKED_REASONS = Object.freeze(['pid-unresolved', 'facts-unavailable', 'other-user', 'outside-host-set', 'agent-helper', 'cmdline-pending', 'not-an-agent', 'ambiguous', 'harness-off', 'group-off', 'door-deadline'])
 
 /** Failure codes the failure recorder never folds by where + code: the reader folds each of them into a condition per
  *  (pid, host), so a folded line would make the pairs folded into it vanish (4.6 §事件与码, D1-1). Bounded: a (pid,
@@ -76,10 +76,11 @@ export const RESTART_REASONS = Object.freeze(['config-after-start', 'env-frozen'
 /** Codes trocar names itself, by part (the grouping is documentation; the set is flat). */
 export const CODES_BY_PART = Object.freeze({
   daemon: ['not-installed', 'manifest-unreadable', 'root-refused', 'start-failed', 'control-endpoint-held', 'unclean-stop', 'crash', 'stop-failed', 'control-error', 'check-error',
-    'query-failed', 'projection-write-failed', 'segment-unreadable'], // control-endpoint-held: the control socket / pipe accepts a connection but answers nothing, so this daemon cannot serve and did not start (D62 ⑥, D38)
+    'query-failed', 'projection-write-failed', 'segment-unreadable', 'loop-late'], // control-endpoint-held: the control socket / pipe accepts a connection but answers nothing, so this daemon cannot serve and did not start (D62 ⑥, D38)
     // query-failed — D63 (4.6 §事件与码): the query worker crashed, exited non-zero or did not answer in time; that query is still answered (a re-fork, or the caller's local path)
     // projection-write-failed — 4.3 §4 盘满: the query worker could not write a context projection; answers are unchanged, one record per episode
     // segment-unreadable — 4.3 §4 回收: the query worker could not list raw/, so its projection GC deleted nothing that time
+    // loop-late — 4.6 §记录: the code of the state event of that name; the event loop ran ≥ 1 s late, no failure
   record: ['record-error', 'file-replaced', 'late-write'], // late-write: a write that reached the record store after the stop made it final (1.6 §5.2); not written, said once per kind
   raw: ['seal-failed', 'index-failed'], // index-failed: the daemon could not keep a segment's index current (D62); the records are on disk and the next query indexes them itself, and says so (`index-cold`)
   tracker: ['judge-error', 'unwatch-error', 'ambiguous', 'exe-unreadable', 'watch-failed', 'config-error', 'settings-unparsable', 'settings-unreadable', 'environ-unreadable'],
@@ -91,7 +92,7 @@ export const CODES_BY_PART = Object.freeze({
   note: ['ok'], // the code of an agent-trusted line
   helper: ['helper-error', 'heartbeat-failed', 'heartbeat-gap', 'loader-down', 'loader-timeout'],
   engine: ['lookup-miss', 'describe-error', 'engine-error', 'leaf-error', 'flow-write-failed', 'system-roots-unavailable', 'trust-store-error', 'framer-error', 'negative-cache', 'upstream-slow', 'unpaired-response', 'prior-proxy-unknown',
-    'trust-rejected', 'pac-peer-refused', 'pac-owner-unread', 'upstream-header-ignored', 'holders-unreadable', 'door-record-unreadable'], // the last three (4.11 P7 · P12): X-Trocar-Upstream from a form whose hook does not send it (ignored, its value never recorded); the holder poll could not read the process table (the kept doors stay); the door's durable record door-seen.json could not be read at start (its lives are not known: every live process of a harness that was on holds) // pac-peer-refused: the PAC door (no credentials) refused a peer not of this user (4.11 P10) // a decrypted connection whose client refused trocar's leaf: level 'critical', one per (pid, host) (D51④)
+    'trust-rejected', 'pac-peer-refused', 'pac-owner-unread', 'upstream-header-ignored', 'holders-unreadable', 'door-record-unreadable', 'client-left-held', 'client-left-queued'], // client-left-*: the code of the state event of that name, 4.8 §5.1: a client that left while held, or in the accept queue; no failure // the last three (4.11 P7 · P12): X-Trocar-Upstream from a form whose hook does not send it (ignored, its value never recorded); the holder poll could not read the process table (the kept doors stay); the door's durable record door-seen.json could not be read at start (its lives are not known: every live process of a harness that was on holds) // pac-peer-refused: the PAC door (no credentials) refused a peer not of this user (4.11 P10) // a decrypted connection whose client refused trocar's leaf: level 'critical', one per (pid, host) (D51④)
   ws: ['write-failed', 'decode-failed', 'broken', 'recorder-error', 'pattern-invalid'],
   // retention.json cannot be read / parsed / holds a cell that is neither full nor log (the call is kept in full), or the
   // classifier threw; a traffic pattern that does not compile is `pattern-invalid` (above), also under where 'retention'; a hand edit whose line in

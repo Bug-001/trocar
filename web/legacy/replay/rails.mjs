@@ -8,7 +8,7 @@ import { esc, kf, usd } from '../core/fmt.mjs'
 import { discChev } from '../core/icons.mjs'
 import { attrSel } from '../core/dom.mjs'
 import { when } from './analysis.mjs'
-import { xOf, windowCalls, nearestByX, nearestByTs, turnsReviewed } from './lanes.mjs'
+import { xOf, windowCalls, nearestByX, nearestByTs, turnsReviewed, placeOf } from './lanes.mjs'
 import { usageOf, priceMatch, costOf, isFailed as failOf } from '../core/metrics.mjs'
 import { laneKind, laneWord, SUBAGENT_ROW, BG_ROW, TC_ROW, laneTimes, callsWord, TC_SAMPLED_TIP, TC_NO_SIZE, FLAGGED_WORD, ONLY_MAIN } from '../labels/replay.mjs'
 import { L } from '../core/labels.mjs'
@@ -21,7 +21,8 @@ export const reviewing = (lane) => lane.kind === 'monitor' || lane.kind === 'tok
 // not held says nothing per call (its header's `flagged` marks the row name)
 const flaggedOf = (s, lane, c) => { const h = s.desk && s.desk.held.get(lane.id), e = h && (h.events.get(c.rid) || []).find((x) => x.type === 'monitor'); return !!(e && e.flagged === true) }
 
-// ticks outside the brush window are culled, not piled at the edges; data-i stays the index inside the lane.
+// ticks outside the brush window are culled, not piled at the edges; a tick names its call by data-rid, never by a place in the lane:
+// the lanes can move on before the tick is drawn again (2.3 §播放头是调用).
 // A failed call draws ×; a monitor verdict flagged true carries the mark.
 export function renderTicks(lane, s) {
   const win = windowCalls(lane, s.anchorTs, s.view)
@@ -35,11 +36,11 @@ export function renderTicks(lane, s) {
     lane.drawn = drawn.length
     return drawn.map(({ c, i }) => {
       const h = Math.max(1, Math.round((c.ctx / peak) * 24))
-      return `<span class="pbar" data-lane="token-count" data-i="${i}" style="left:${x(c)}%;height:${h}px" title="${esc(tip(c, i))}"></span>`
+      return `<span class="pbar" data-lane="token-count" data-rid="${esc(c.rid)}" style="left:${x(c)}%;height:${h}px" title="${esc(tip(c, i))}"></span>`
     }).join('')
   }
   return win.map(({ c, i }) =>
-    `<span class="tick ${flaggedOf(s, lane, c) ? 'flag' : ''} ${failOf(c) ? 'errtick' : ''}" data-lane="${esc(lane.id)}" data-i="${i}" style="left:${x(c)}%" title="${esc(tip(c, i))}"></span>`).join('')
+    `<span class="tick ${flaggedOf(s, lane, c) ? 'flag' : ''} ${failOf(c) ? 'errtick' : ''}" data-lane="${esc(lane.id)}" data-rid="${esc(c.rid)}" style="left:${x(c)}%" title="${esc(tip(c, i))}"></span>`).join('')
 }
 
 // the marks a collapsed group still draws: the failed × of every member lane, and its flagged monitor calls —
@@ -50,8 +51,8 @@ function collapsedMarks(lanes, s) {
     .map(({ c, i, l }) => {
       const head = `${laneWord(l.kind)} · call ${i + 1} · ${when(c.ts)}`
       return failOf(c)
-        ? `<span class="tick errtick" data-lane="${esc(l.id)}" data-i="${i}" style="left:${x(c)}%" title="${esc(head + ' · call failed')}"></span>`
-        : `<span class="tick flag" data-lane="${esc(l.id)}" data-i="${i}" style="left:${x(c)}%" title="${esc(head + ' · ' + FLAGGED_WORD)}"></span>`
+        ? `<span class="tick errtick" data-lane="${esc(l.id)}" data-rid="${esc(c.rid)}" style="left:${x(c)}%" title="${esc(head + ' · call failed')}"></span>`
+        : `<span class="tick flag" data-lane="${esc(l.id)}" data-rid="${esc(c.rid)}" style="left:${x(c)}%" title="${esc(head + ' · ' + FLAGGED_WORD)}"></span>`
     }).join('')
 }
 
@@ -122,7 +123,7 @@ export function renderRails(el, s) {
   for (const l of tcs) html += tcRailHtml(l, s)
   if (narrow) html = foldRowHtml(false) + html
   el.innerHTML = html || `<div class="railsonly">${esc(ONLY_MAIN)}</div>`
-  if (s.selTick) { const t = el.querySelector(`[data-lane="${attrSel(s.selTick.laneId)}"][data-i="${s.selTick.i}"]`); if (t) t.classList.add('sel') }
+  if (s.selTick) { const t = el.querySelector(`[data-rid="${attrSel(s.selTick)}"]`); if (t) t.classList.add('sel') }
 }
 
 // ── the review bracket: how much of the conversation a monitor / token-count call looked at (s.reviewRange = {k}: the first k
@@ -137,13 +138,14 @@ export function clearRange(s) { s.reviewRange = null; s.paintReview() }
 
 export function selectTick(s, lane, i) {
   if (i == null || i < 0 || !lane.calls[i]) return // an empty-window click must never open the drawer on -1
-  s.selTick = { laneId: lane.id, i }
-  for (const e of s.root.querySelectorAll('#rails .tick.sel, #rails .pbar.sel')) e.classList.remove('sel')
-  const el = s.root.querySelector(`#rails [data-lane="${attrSel(lane.id)}"][data-i="${i}"]`); if (el) el.classList.add('sel')
-  if (reviewing(lane)) highlightRange(s, lane, i); else clearRange(s)
   const c = lane.calls[i]
-  if (c && s.anchor.calls.length) { s.follow = false; s.setPlayhead(nearestByTs(s.anchor, c.ts, s.playhead), false) } // the conversation jumps to the same moment
-  s.openDetail(lane, i) // its lane not held yet: the drawer draws the row first and fills in when the lane lands (2.3 §读与画)
+  s.selTick = c.rid
+  for (const e of s.root.querySelectorAll('#rails .tick.sel, #rails .pbar.sel')) e.classList.remove('sel')
+  const el = s.root.querySelector(`#rails [data-rid="${attrSel(c.rid)}"]`); if (el) el.classList.add('sel')
+  if (reviewing(lane)) highlightRange(s, lane, i); else clearRange(s)
+  if (s.anchor.calls.length) { s.follow = false; s.setPlayhead(nearestByTs(s.anchor, c.ts, s.playhead), false) } // the conversation jumps to the same moment
+  // in the task after the step's paint (2.3 §归约前沿); its lane not held yet: the drawer draws the row first and fills in when the lane lands (2.3 §读与画)
+  s.openDetailNext(lane, i)
 }
 
 export function wireRails(el, s) {
@@ -161,7 +163,7 @@ export function wireRails(el, s) {
     const tg = e.target.closest('[data-toggle]')
     if (tg) { const id = tg.dataset.toggle; if (s.collapsedRails.has(id)) s.collapsedRails.delete(id); else s.collapsedRails.add(id); renderRails(el, s); return }
     const t = e.target.closest('.tick, .pbar')
-    if (t) { const lane = laneOf(t.dataset.lane); if (lane) selectTick(s, lane, +t.dataset.i); return }
+    if (t) { const p = placeOf(s.lanes, t.dataset.rid); if (p) selectTick(s, p.lane, p.i); return }
     // anywhere on an open rail picks the nearest call IN the window, so every call is reachable, not just the drawn ticks
     const body = e.target.closest('.railbody[data-lane]')
     if (body) { const lane = laneOf(body.dataset.lane); if (lane && lane.calls.length) selectTick(s, lane, nearestByX(lane, s.anchorTs, s.view, fracOf(body, e))) }
@@ -172,7 +174,7 @@ export function wireRails(el, s) {
     const lane = laneOf(body.dataset.lane)
     if (!lane || !lane.calls.length || !reviewing(lane)) return
     const t = e.target.closest('.tick, .pbar')
-    highlightRange(s, lane, t ? +t.dataset.i : nearestByX(lane, s.anchorTs, s.view, fracOf(body, e)))
+    highlightRange(s, lane, t ? lane.ridLocal.get(t.dataset.rid) : nearestByX(lane, s.anchorTs, s.view, fracOf(body, e)))
   }
   const onLeave = () => { if (!s.selTick) clearRange(s) }
   el.addEventListener('click', onClick)

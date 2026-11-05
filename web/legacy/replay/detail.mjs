@@ -6,7 +6,7 @@
 // `el` is #detail (shared with the other screens); the desk wires and clears it while mounted.
 import { esc, kf } from '../core/fmt.mjs'
 import { techDetailsHtml } from '../core/ui.mjs'
-import { nearestByTs } from './lanes.mjs'
+import { nearestByTs, stepOfMark } from './lanes.mjs'
 import { when } from './analysis.mjs'
 import { faithOf, FF, ffBadgeHtml, fillBody, tagWord, bodyFor } from './blocks.mjs'
 import { wireCells } from './cell.mjs'
@@ -94,7 +94,7 @@ export function openDetail(el, s, lane, i) {
   el.className = 'open k-' + lane.kind
   el.innerHTML = `<div class="dclose" id="dclose" role="button" tabindex="0">${esc(W.DRAWER_CLOSE)}</div>` +
     `<h3>${title}</h3>` +
-    `<div class="dnav"><button type="button" class="dback" data-back="${near}">${esc(W.backToStep(near + 1))}</button></div>` +
+    `<div class="dnav"><button type="button" class="dback" data-back="${esc(s.anchor?.calls[near]?.rid ?? '')}">${esc(W.backToStep(near + 1))}</button></div>` +
     body
   s.drawerFlat = flat || []
   // the lane of this call is read when the drawer opens (2.3 §读与画); the desk re-opens the drawer when it lands
@@ -114,7 +114,7 @@ export function wireDetail(el, s) {
   const onClick = (e) => {
     if (e.target.closest('#dclose')) { closeDetail(el, s); return }
     const bk = e.target.closest('[data-back]')
-    if (bk) { s.jumpTo(+bk.dataset.back, null); return } // the playhead moves; the drawer stays open (2.6 §B)
+    if (bk) { const i = stepOfMark(s, bk.dataset.back); if (i >= 0) s.jumpTo(i, null); return } // the playhead moves; the drawer stays open (2.6 §B)
     const h = e.target.closest('.dbh')
     if (!h) return
     const row = h.closest('.dblk'), b = s.drawerFlat[+row.dataset.di]
@@ -123,6 +123,6 @@ export function wireDetail(el, s) {
     if (row.classList.contains('open') && b && body && !body.dataset.filled) fillBody(s.ctx.api, body, b)
   }
   el.addEventListener('click', onClick)
-  const cells = wireCells([s.root, el].filter(Boolean), s) // every body in the desk and the drawer is a cell
+  const cells = wireCells([...s.cellRoots(), el].filter(Boolean), s) // every body in the desk (the view's cell roots) and the drawer is a cell
   return () => { el.removeEventListener('click', onClick); cells() }
 }

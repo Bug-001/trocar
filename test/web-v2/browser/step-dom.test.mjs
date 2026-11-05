@@ -1,16 +1,21 @@
-// test/web-v2/browser/step-dom.test.mjs — 2.3 #34 · D71②: a ±1 step on the mounted desk touches DOM in proportion to what changed,
-// not to the list length. Over desk-long's generated long conversation (desk-world.mjs `talk`: main lane ~1,800 steps, the newest
+// test/web-v2/browser/step-dom.test.mjs — 2.3 #34 · D71②: a ±1 step on the mounted desk touches DOM in proportion to what changed
+// and to the window's height, not to the list length. Over desk-long's generated long conversation (desk-world.mjs `talk`: main lane ~1,800 steps, the newest
 // list 1,000–1,400 blocks), for 30 seeded adjacent pairs (→ and ←, and one with a turn card the reader opened) plus a
 // step across a compaction (a generated world whose main lane compacts), a MutationObserver on #ctxwin (subtree, childList) counts the nodes added and removed from the key press
 // until two animation frames after the step is drawn; Δ = the list positions whose key (bid#occurrence) differs between the two
-// steps' lists, as the reference server hands them to the page. Every pair: count ≤ 4Δ + 64. Runs only under `npm run test:browser`.
+// steps' lists, as the reference server hands them to the page. Every pair: count ≤ 4Δ + 64 on the legacy desk, 4Δ + 2B + 8 on the new
+// one (B: the closed rows three box heights hold; a landing that moves the box swaps one band for another). Runs only under
+// `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard, serveWorld } from './harness.mjs'
+import { probe, withBoard, serveWorld, DESK_NEXT, gapInPage, windowGap } from './harness.mjs'
 import { world } from '../desk-world.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
+// which desk a case is about (2.3 rule 4): the legacy desk's groups, or the new desk's virtual list
+const legacyOnly = skip || (DESK_NEXT ? "the legacy desk's groups (2.3 rule 4, 旧台)" : false)
+const nextOnly = skip || (DESK_NEXT ? false : "the new desk's virtual list (2.3 rule 4)")
 const PAIRS = 30
 
 const keysOf = (list) => { const seen = new Map(); return list.map((b) => { const n = seen.get(b) || 0; seen.set(b, n + 1); return `${b}#${n}` }) }
@@ -51,7 +56,7 @@ async function onBoard(w, fn) {
             await raf(); await raf()
             for (const r of window.__mo.takeRecords()) window.__mut += r.addedNodes.length + r.removedNodes.length
             window.__mo.disconnect()
-            return resolve({ n: window.__mut, from: +was, to: +x[1] })
+            return resolve({ n: window.__mut, from: +was, to: +x[1], h: document.querySelector('#ctxwin').clientHeight })
           }
           if (performance.now() - t0 > 10000) return reject(new Error(`step not drawn in 10 s after ${was}`))
           requestAnimationFrame(tick)
@@ -59,18 +64,18 @@ async function onBoard(w, fn) {
         tick()
       }), [was, NO.source])
     }
-    await fn({ page, go, count })
+    await fn({ page, go, count: async (key) => ({ ...(await count(key)), pitch: DESK_NEXT ? (await windowGap(page)).pitch : 0 }) })
     assert.deepEqual(b.errors, [])
   } finally { await b.stop() }
 }
 const mainRids = (w) => w.laneRidsAt().get(w.full().lanes.find((l) => l.kind === 'main').lane)
 
-test('2.3 #34 · D71②: a ±1 step adds and removes at most 4Δ + 64 nodes in #ctxwin', { skip }, async () => {
+test('2.3 #34 · D71②: a ±1 step adds and removes at most 4Δ + 64 nodes in #ctxwin (new desk: 4Δ + 2B + 8)', { skip }, async () => {
   const out = []
   const check = async (label, w, rids, step) => {
-    const { n, from, to } = await step()
+    const { n, from, to, h, pitch } = await step()
     const d = delta(w.list(rids[from - 1]), w.list(rids[to - 1]))
-    out.push({ label, from, to, n, d, line: 4 * d + 64 })
+    out.push({ label, from, to, n, d, line: 4 * d + (DESK_NEXT ? 2 * Math.ceil(3 * h / pitch) + 8 : 64) })
   }
   // the long conversation: 30 seeded pairs, then a folded turn card the reader opened and a step each way
   const w = world(7, { calls: 2100, page: 2100, talk: { pre: 90, len: 1200, every: 40, tail: 800 } }), rids = mainRids(w), M = rids.length
@@ -99,14 +104,70 @@ test('2.3 #34 · D71②: a ±1 step adds and removes at most 4Δ + 64 nodes in #
 
   const worst = out.reduce((a, x) => (x.n - x.line > a.n - a.line ? x : a))
   console.log(`# ±1 step DOM over ${out.length} pairs (long main ${M} steps): worst ${worst.label} ${worst.from}→${worst.to}: ${worst.n} nodes, Δ=${worst.d}, line ${worst.line}`)
-  for (const x of out) assert.ok(x.n <= x.line, `${x.label} ${x.from}→${x.to}: ${x.n} nodes added+removed, over 4Δ+64 = ${x.line} (Δ=${x.d})`)
+  for (const x of out) assert.ok(x.n <= x.line, `${x.label} ${x.from}→${x.to}: ${x.n} nodes added+removed, over the line ${x.line} (Δ=${x.d})`)
+})
+
+// 1.4 §打开一步时落在哪: what a landing brings to the box's top is what the reader sees there. elementFromPoint a little inside the
+// landed item's top, for steps landing on their first 「新」 row in a window short enough for it to reach the box's top, is inside that
+// item: nothing lies over it. (The newest reply after `f`: replay-shots.test.mjs. The generated worlds draw no change line.)
+test('1.4: the landed item is what is on top at its own top edge', { skip: nextOnly }, async () => {
+  const w = world(7, { calls: 2100, page: 2100, talk: { pre: 90, len: 1200, every: 40, tail: 800 } }), M = mainRids(w).length, r = rng(14), rows = []
+  await onBoard(w, async ({ page, go }) => {
+    await page.setViewportSize({ width: 1440, height: 520 })
+    for (let j = 0; j < 12; j++) {
+      await go(2 + Math.floor(r() * (M - 2)))
+      const x = await page.evaluate(() => {
+        const el = document.querySelector('#ctxwin'), t = el.querySelector('.cblk.is-new')
+        if (!t) return null
+        const a = t.getBoundingClientRect(), hit = document.elementFromPoint(a.left + 24, a.top + 8)
+        return { at: Math.round(a.top - el.getBoundingClientRect().top), own: t.contains(hit), hit: hit?.className ?? null }
+      })
+      if (x) rows.push(x)
+    }
+  })
+  console.log(`# landed rows at ${rows.map((x) => x.at)} px`)
+  assert.ok(rows.some((x) => x.at <= 2), 'some step lands on a 「新」 row at the box top')
+  for (const x of rows) assert.ok(x.own, JSON.stringify(x))
+})
+
+// 1.4 §打开一步时落在哪: a step whose list arrives before its 内容对比步's has no 「新」 yet. The first step of a pack, its reference in the
+// pack before, which is held back: the landing is due when that pack comes (the row in the box); a reader who moved the box meanwhile
+// stays where they went.
+test('1.4: a late 内容对比步 lands the step on its first 「新」 row; a reader who moved the box stays', { skip }, async () => {
+  const w = world(7, { calls: 2100, page: 2100, talk: { pre: 90, len: 1200, every: 40, tail: 800 } }), rids = mainRids(w)
+  const p = w.files(w.marks.at(-1), 32).head.packs.find((x) => x.s0 > 300 && w.list(rids[x.s0]).some((b) => !w.list(rids[x.s0 - 1]).includes(b)))
+  for (const scrolled of [false, true]) {
+    await onBoard(w, async ({ page, go }) => {
+      await page.setViewportSize({ width: 1440, height: 520 })
+      const held = []
+      let hold = true
+      await page.route(`**/api/d/p${p.n - 1}.*`, (route) => (hold ? held.push(route) : route.fallback()))
+      await go(p.s0 + 1)
+      await page.waitForSelector('#ctxwin .cblk')
+      assert.equal(await page.locator('#ctxwin .cblk.is-new').count(), 0, 'no 「新」 while the reference step is on its way')
+      assert.ok(held.length > 0, 'the reference pack was asked for')
+      const top = await page.evaluate((d) => { const el = document.querySelector('#ctxwin'); el.scrollTop = d; return el.scrollTop }, scrolled ? 300 : 0)
+      await page.waitForTimeout(100)
+      hold = false
+      for (const r of held) await r.fallback()
+      if (!scrolled) await page.waitForSelector('#ctxwin .cblk.is-new', { timeout: 10000 })
+      await page.waitForTimeout(scrolled ? 1000 : 300) // scrolled: the row may lie outside the drawn band, the pack's answer is awaited by time
+      const x = await page.evaluate(() => {
+        const el = document.querySelector('#ctxwin'), t = el.querySelector('.cblk.is-new'), box = el.getBoundingClientRect()
+        return { top: el.scrollTop, h: el.clientHeight, at: t ? Math.round(t.getBoundingClientRect().top - box.top) : null }
+      })
+      if (scrolled) assert.equal(x.top, top, 'the reader\'s place is kept')
+      // at the box's top, within its scroll margin of 8 px: the rows below it were real when it landed, so the list's end does not cut it short
+      else assert.ok(x.at != null && x.at >= -2 && x.at <= 10, JSON.stringify(x))
+    })
+  }
 })
 
 // 2.3 §窗口按 bid 打补丁 · rule 4: inside open cards only the groups within one window height above and below the visible box are
 // rows; the rest are sized placeholders. Settled at the newest step (an 800-block open turn) and again after scrolling half way:
 // no drawn group lies wholly outside that band unless it holds an open row or the change line, and no placeholder lies inside the
 // visible box.
-test('2.3 #34 · rule 4: inside open cards only the groups near the visible box are rows', { skip }, async () => {
+test('2.3 #34 · rule 4: inside open cards only the groups near the visible box are rows', { skip: legacyOnly }, async () => {
   const w = world(7, { calls: 2100, page: 2100, talk: { pre: 90, len: 1200, every: 40, tail: 800 } }), M = mainRids(w).length
   await onBoard(w, async ({ page, go }) => {
     const faults = () => page.evaluate(() => {
@@ -127,5 +188,52 @@ test('2.3 #34 · rule 4: inside open cards only the groups near the visible box 
     assert.ok(top.groups > 4, 'the newest step has many groups (the shape this case is about)')
     assert.deepEqual(top.out, [])
     assert.deepEqual(mid.out, [])
+  })
+})
+
+// 2.3 #28 · rule 4 (新台): the virtual list holds only the items within one window height above and below the visible box, and the
+// pinned ones (the change line #cachebrk, the reply, the item holding focus, the item holding the selection); no aria-busy group; and
+// the visible box has no gap (harness gapInPage). Settled at the newest step and half way down, and on the first animation frame after
+// each of 20 ←/→ presses: a keydown capture listener arms one requestAnimationFrame, which runs after the step's synchronous commit and
+// before its first paint.
+test('2.3 #28: the rendered window holds only the items within one window height of the view, and the pinned ones; the visible box has no gap', { skip: nextOnly }, async () => {
+  const w = world(7, { calls: 2100, page: 2100, talk: { pre: 90, len: 1200, every: 40, tail: 800 } }), M = mainRids(w).length
+  await onBoard(w, async ({ page, go }) => {
+    const faults = () => page.evaluate(() => {
+      const el = document.querySelector('#ctxwin'), box = el.getBoundingClientRect(), h = el.clientHeight, out = []
+      const sel = document.getSelection(), anchor = sel && sel.rangeCount ? sel.anchorNode : null
+      const pinned = (it) => !!it.querySelector('#cachebrk, .cwreply') || it.matches('.cwreply') || it.contains(document.activeElement) || (!!anchor && it.contains(anchor))
+      const items = [...el.querySelectorAll('.cwit')]
+      for (const it of items) {
+        const r = it.getBoundingClientRect()
+        if ((r.bottom < box.top - h - 1 || r.top > box.bottom + h + 1) && !pinned(it)) out.push(`${it.dataset.key} (${it.firstElementChild?.className}) ${Math.round(r.top - box.top)} px from the box top, box ${h} px`)
+      }
+      if (el.querySelector('[aria-busy]')) out.push('an aria-busy group')
+      return { out, items: items.length }
+    })
+    const atRest = async () => ({ ...(await faults()), ...(await windowGap(page)) })
+    await go(M)
+    const top = await atRest()
+    await page.evaluate(() => { const el = document.querySelector('#ctxwin'); el.scrollTop = el.scrollHeight / 2 })
+    await page.waitForTimeout(400)
+    const mid = await atRest()
+    // the first frame after each press
+    await page.evaluate(`window.__gaps = []; addEventListener('keydown', () => requestAnimationFrame(() => window.__gaps.push((${gapInPage})())), true)`)
+    const no = () => page.evaluate(() => document.querySelector('#stepbar .sb-no')?.textContent)
+    const presses = [...Array(10).fill('ArrowLeft'), ...Array(10).fill('ArrowRight')]
+    for (const key of presses) {
+      const was = await no()
+      await page.keyboard.press(key)
+      await page.waitForFunction((was) => document.querySelector('#stepbar .sb-no')?.textContent !== was, was, { timeout: 10000, polling: 'raf' })
+      await page.waitForTimeout(100)
+    }
+    const first = await page.evaluate(() => window.__gaps)
+    console.log(`# newest step: ${top.items} items, gap ${top.gap} px; half way: ${mid.items} items, gap ${mid.gap} px; first frames: worst gap ${Math.max(...first.map((g) => g.gap))} px (pitch ${top.pitch} px)`)
+    assert.ok(top.pitch > 0, 'one --cblk-pitch measures a height')
+    assert.deepEqual(top.out, [])
+    assert.deepEqual(mid.out, [])
+    assert.ok(top.gap <= top.pitch && mid.gap <= mid.pitch, `a gap in the visible box at rest: ${top.gap} / ${mid.gap} px, pitch ${top.pitch}`)
+    assert.equal(first.length, presses.length, 'one record per press')
+    assert.deepEqual(first.filter((g) => !(g.gap <= g.pitch)), [], 'a gap in the visible box on the first frame after a step')
   })
 })
