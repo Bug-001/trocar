@@ -508,15 +508,16 @@ test('through a real worker, in a re-read: `lane --pack`, `lane --tail` are the 
   lastVersion(home, id)
   AXES['PROJ_V changed'](home, id)
   const old = oldAnswer(home, id), bytes = (n) => fs.readFileSync(path.join(sessionDir(home, id), n)), { r, svc } = serviceOf(home)
+  const pack = gunzipSync(bytes(`p0.${part}.ndjson.gz`)).toString('utf8'), tail = bytes(`open.${part}.ndjson`).toString('utf8')
   const raw = async (params) => { const res = recorder(); await within(svc.relay({ name: 'lane', params, res }), 60_000, 'lane answered'); assert.equal(res.status, 200); return res.text() }
   try {
     await ask(svc, 'session', { id })
     let sampled = 0
     await whileMoving(async () => {
       const a = { pack: await raw({ id, pack: `0.${part}` }), tail: await raw({ id, tail: part }), head: await ask(svc, 'session', { id, head: '' }), since: await ask(svc, 'session', { id, since: mark }) }
-      if (!rereads(home, id)) return true // the switch came between two of the four
-      assert.equal(a.pack, gunzipSync(bytes(`p0.${part}.ndjson.gz`)).toString('utf8'))
-      assert.equal(a.tail, bytes(`open.${part}.ndjson`).toString('utf8'))
+      if (!(a.since.pending?.read < a.since.pending?.total)) return !rereads(home, id) // at its end the files change: the fold was short of it through all four, or not sampled
+      assert.equal(a.pack, pack)
+      assert.equal(a.tail, tail)
       assert.deepEqual({ ...a.head, pending: null }, old.head)
       assert.deepEqual([a.since.base, a.since.mark, a.since.calls], [mark, mark, []])
       assert.deepEqual([a.since.pending.seen, typeof a.since.pending.read, typeof a.since.pending.work], [true, 'number', 'number'])
