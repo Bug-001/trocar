@@ -35,7 +35,7 @@ export function callDetailItems(call, st, s) {
   const d = st.detail || {}, w = wireOf(call, d), fx = w.observerEffect || []
   const rows = (xs) => xs.map((x) => ({ ...x, open: !!x.ref && s.openBlocks.has('cd:' + x.ref) }))
   return [
-    ...(fx.length ? [{ key: 'impact', type: 'impact', lines: fx.map((o, i) => ({ key: `impact:${i}`, text: o.text ?? o.what })) }] : []),
+    ...(fx.length ? [{ key: 'impact', type: 'impact', lines: fx.map((o, i) => ({ key: `impact:${o.id ?? i}`, text: o.text ?? o.what })) }] : []),
     { key: 'details', type: 'details', open: s.openBlocks.has('cd'), params: rows(keysOf(d.nonBlockKeys)), unparsed: !!call.unparsed,
       raw: rows(refsOf(d.respRefs)), extra: rows(keysOf(d.extraMessages)), transport: w.transport ?? null, tech: techRows(call, d, w, st.reply || []) },
   ]

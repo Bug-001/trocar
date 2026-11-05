@@ -381,7 +381,7 @@ export const NO_BYTES = 'No bytes to read back'
 export const REQ_PARAMS = 'Request parameters'
 export const NO_PARAMS = 'This record has no request parameters to read back'
 export const UNPARSED_PARAMS = 'The request body could not be parsed, so no parameters can be listed'
-export const EXTRA_MSGS = (n) => `Messages the client sent later in this call · ${n}`
+export const EXTRA_MSGS = (n) => `Messages the client sent later in this call · ${n} ›`
 export const TRANSPORT_HTTP = 'Transport HTTP'
 export const TRANSPORT_WS = 'Transport WebSocket'
 export const VENDOR_WORD = 'Vendor'
@@ -468,3 +468,4 @@ export const agentCalls = (n) => count(n, 'call')
 export const NO_PROMPTS_HERE = 'No prompts in these steps'
 // 2.6 §A: the folded row after the reply
 export const CALL_DETAILS = 'Call details'
+export const CD_EXTRA_MSGS = (n) => `Messages the client sent later in this call · ${n}`

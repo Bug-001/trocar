@@ -33,6 +33,7 @@ const tabs: SideTab[] = [
   { id: 'resources', label: W.TAB_RESOURCES, Panel: Resources },
 ]
 // → the function that takes the tab out again
+// shortcut: a module array, not state: a tab registered after mount shows on the sidebar's next render; upgrade to a store with a version when a tab registers late
 export function addSidebarTab(t: SideTab) {
   tabs.push(t)
   return () => { tabs.splice(tabs.indexOf(t), 1) }
@@ -55,7 +56,7 @@ export function Sidebar({ desk, bottom, folded, onFold }: { desk: DeskView, bott
     wasUp.current = risen
   }, [risen])
   const fold = bottom ? <Button className="sidefold" aria-label={risen ? W.LOWER_PANEL : W.RAISE_PANEL} aria-expanded={risen} onPress={rise}><Svg html={icon('chevron-down')} /></Button>
-    : onFold ? <Button className="sidefold" aria-label={folded ? W.EXPAND_SIDE : W.COLLAPSE_SIDE} onPress={onFold}><Svg html={icon(folded ? 'rail-out' : 'rail-in')} /></Button> : null
+    : onFold ? <Button className="sidefold" aria-label={folded ? W.EXPAND_SIDE : W.COLLAPSE_SIDE} aria-expanded={!folded} onPress={onFold}><Svg html={icon(folded ? 'rail-out' : 'rail-in')} /></Button> : null
   if (folded) return <div className="deskside folded">{fold}</div>
   return <Tabs className={bottom ? 'deskside bottom' : 'deskside'} selectedKey={current} onSelectionChange={pick}>
     <div ref={head} className="sidehead">

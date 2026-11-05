@@ -35,7 +35,8 @@ function Part({ x, label, literal = false, none, acts }: { x: Item, label: strin
   )
 }
 
-const keyOf = (x: Item, i: number) => `${x.ref ?? x.key ?? ''}#${i}`
+// a row's own ref or key; the index only for a row that has neither
+const keyOf = (x: Item, i: number) => x.ref ?? x.key ?? `#${i}`
 
 export function Details({ it, acts }: { it: Item, acts: Acts }) {
   const ws = it.transport === 'ws'
@@ -48,7 +49,7 @@ export function Details({ it, acts }: { it: Item, acts: Acts }) {
           : !it.params.length ? <div className="cdnote">{W.NO_PARAMS}</div>
             : it.params.map((x: Item, i: number) => <Part key={keyOf(x, i)} x={x} label={x.key} literal none={W.NO_BYTES} acts={acts} />)}
         {it.raw.map((x: Item, i: number) => <Part key={keyOf(x, i)} x={x} label={ws ? W.rawReplyNth(i + 1) : W.RAW_REPLY} none={W.NO_RAW_REPLY} acts={acts} />)}
-        {it.extra.length ? <div className="cdgrp">{W.EXTRA_MSGS(it.extra.length)}</div> : null}
+        {it.extra.length ? <div className="cdgrp">{W.CD_EXTRA_MSGS(it.extra.length)}</div> : null}
         {it.extra.map((x: Item, i: number) => <Part key={keyOf(x, i)} x={x} label={x.key} literal none={W.NO_BYTES} acts={acts} />)}
         {it.transport ? <div className="cdnote">{ws ? W.TRANSPORT_WS : W.TRANSPORT_HTTP}</div> : null}
         <TechDetails pairs={it.tech.map(([k, v]: [string, string]) => [k, { text: v }])} copy={it.tech.map(([k, v]: [string, string]) => `${k}: ${v}`).join('\n')} />
