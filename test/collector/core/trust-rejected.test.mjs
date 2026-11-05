@@ -201,3 +201,25 @@ test('4.6 §引擎 5: the engine stopping during the hold judges the held closes
   assert.equal(tr(s).length, 1)
   assert.deepEqual(s.flows.slice(1).map((f) => f.not_captured), ['client-rejected-leaf', 'client-rejected-leaf'])
 })
+
+test('4.6 §引擎 5: an alive check that throws or answers anything but false is alive — the held closes are judged', T, async () => {
+  for (const alive of [() => { throw new Error('table unreadable') }, () => undefined, async () => null]) {
+    const s = await windowRig({ alive, holdCloseMs: H })
+    const open = await s.used(); open.end(); await s.settled(1)
+    await s.rejecting(); await s.settled(2); await s.rejecting(); await s.settled(3)
+    assert.equal(tr(s).length, 1)
+    await s.close()
+  }
+})
+test('4.6 §引擎 5: a stop while the alive check is still asking judges the held closes and writes their rows', T, async () => {
+  let ask = null
+  const s = await windowRig({ alive: () => new Promise((r) => { ask = r }), holdCloseMs: H }) // a process-table read that does not come back
+  const open = await s.used(); open.end(); await s.settled(1)
+  await s.rejecting(); await s.rejecting()
+  await new Promise((r) => setTimeout(r, H + 100))
+  assert.ok(ask, 'the hold is asking')
+  await s.close()
+  assert.equal(tr(s).length, 1)
+  assert.deepEqual(s.flows.slice(1).map((f) => f.not_captured), ['client-rejected-leaf', 'client-rejected-leaf'])
+  ask(false) // the late answer changes nothing
+})
