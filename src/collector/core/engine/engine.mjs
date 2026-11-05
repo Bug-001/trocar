@@ -119,10 +119,11 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
       return meta
     }
   }
-  // closes held until it is known whether their process exits (flow.mjs HOLD_CLOSE_MS): settle(gone); the engine stopping settles each as alive
+  // closes held until it is known whether their process exits (flow.mjs HOLD_CLOSE_MS): settle(gone); the engine stopping settles each as alive.
+  // `alive(pid)` → boolean or a promise of one: the daemon's own process table; the OS (kill 0) when none is given
   const holds = new Set()
   function holdClose(pid, settle) {
-    const h = { settle, timer: setTimeout(() => { holds.delete(h); let gone = false; try { gone = !alive(pid) } catch { /* judged as alive */ } settle(gone) }, timing.holdCloseMs ?? HOLD_CLOSE_MS) }
+    const h = { settle, timer: setTimeout(() => { holds.delete(h); Promise.resolve().then(() => alive(pid)).then((yes) => settle(yes === false), () => settle(false)) }, timing.holdCloseMs ?? HOLD_CLOSE_MS) } // an unknown answer is alive
     holds.add(h)
   }
   const flowCtx = (connect) => ({
