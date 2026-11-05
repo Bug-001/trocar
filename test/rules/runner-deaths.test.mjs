@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpDir } from '../helpers/tmp.mjs';
-import { SKIP_WHY } from '../../src/rules/closed.mjs';
+import { LIMITS, SKIP_WHY } from '../../src/rules/closed.mjs';
 import { memoryCap, openOneShot, runnerArgs } from '../../src/rules/launch.mjs';
 import { DEATHS, encodeFrame, readProgress } from '../../src/rules/slot.mjs';
 
@@ -253,26 +253,27 @@ for (const [name, source] of [
   });
 }
 
-// Nobody takes over from a watchdog thread that ends, and the main thread that would hear of it is in the script's loop. Which road the process goes by differs per platform, so the rows ask only that it goes.
-const FILL_FDS = `
-  import fs from 'node:fs'
-  export default (m) => {
-    if (m.text === "pid") return String(process.pid)
-    try { for (;;) fs.openSync(process.argv[2], 'r') } catch {}
-    for (;;);
-  }`;
-test('a rule process does not outlive a watchdog that cannot read its slot', { skip: WIN && 'a directory has no mode to take away' }, async (t) => {
-  const { dir, middle, pid } = await stuckUnderParent(t, STUCK);
+// Nobody takes over from a watchdog thread that ends, and the main thread that would hear of it is in the script's loop. The parent stays alive here: Windows would end the process with it either way.
+test('a rule process does not outlive a watchdog that cannot cut its slot down', async (t) => {
+  const { dir, pid } = await stuckUnderParent(t, STUCK);
   const slots = path.join(dir, fs.readdirSync(dir).find((name) => name.startsWith('trocar-slot-')));
-  fs.chmodSync(slots, 0);
-  t.after(() => fs.chmodSync(slots, 0o700));
-  await new Promise((r) => setTimeout(r, 100));
-  middle.kill('SIGKILL');
+  const slot = path.join(slots, fs.readdirSync(slots)[0]), fd = fs.openSync(slot, 'r+');
+  fs.chmodSync(slot, 0o400);
+  t.after(() => fs.chmodSync(slot, 0o600));
+  fs.ftruncateSync(fd, 5 * LIMITS.bodyBytes);
+  fs.closeSync(fd);
   assert.ok(await until(() => isGone(pid), 2000), 'the rule process outlived its watchdog');
 });
 
-test('a rule process does not outlive a script that takes every file descriptor, which Linux reads the RSS through', { skip: WIN && 'no fd limit to reach this way' }, async (t) => {
-  const { middle, pid } = await stuckUnderParent(t, FILL_FDS, 256);
+// Linux reads the RSS through a file, so there the thread fails first. Elsewhere the parent check ends it. Either way it goes.
+test('a rule process does not outlive a parent and a script that takes every file descriptor', { skip: WIN && 'no fd limit to reach this way' }, async (t) => {
+  const { middle, pid } = await stuckUnderParent(t, `
+    import fs from 'node:fs'
+    export default (m) => {
+      if (m.text === "pid") return String(process.pid)
+      try { for (;;) fs.openSync(process.argv[2], 'r') } catch {}
+      for (;;);
+    }`, 256);
   middle.kill('SIGKILL');
   assert.ok(await until(() => isGone(pid), 2000), 'the rule process outlived its watchdog');
 });
