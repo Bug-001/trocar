@@ -85,7 +85,7 @@ function readOf(desk) {
   if (p.stopped) return { state: 'stopped', code: p.stopped.code ?? null, reason: p.stopped.reason ?? null, text: W.FOLD_STOPPED[p.stopped.code] || W.FOLD_STOPPED['fold-failed'] }
   const done = Number(p.done) || 0, total = Number(p.total) || 0
   const share = (x) => (total > 0 ? Math.floor((x / total) * 100) : 0)
-  if (p.seen) { const pct = share(Number(p.read) || 0), n = Number(p.calls) || 0; return { state: 'updating', pct, n, text: W.updatingTo(pct, n) } }
+  if (p.read != null) { const pct = share(Number(p.read) || 0), n = Number(p.calls) || 0; return { state: 'updating', pct, n, text: W.updatingTo(pct, n) } }
   if (desk.firstPending) { const pct = share(done); return { state: 'reading', pct, text: W.readingFirst(pct) } }
   const n = p.calls ?? Math.max(0, total - done)
   return n ? { state: 'catching-up', n, text: W.catchingUp(n) } : null

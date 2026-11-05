@@ -305,9 +305,10 @@ test('3.5 §会话读 {l}: a held tail\'s lane header wins over the head\'s, the
   assert.equal(desk.lanes.get('A').count, 7, 'tail 1\'s header')
 })
 
-// 1.5 K-31 · 1.2 §会话头 读取状态: `pending.seen` is the version-change re-read of a session already read, so it is not a first read
-test('1.5 K-31: a head with pending.seen is not a first read; plain pending is, and no pending ends it', () => {
-  for (const [pending, first, state] of [[{ done: 1, total: 4, seen: true }, false, 'updating'], [{ done: 1, total: 4 }, true, 'reading'], [null, false, null]]) {
+// 1.5 K-31 / K-33 · 1.2 §会话头 读取状态: `pending.seen` says a whole answer stands under it, so no first read; `read` says a version's re-read
+test('1.5 K-31, K-33: the three states from the head alone: plain pending reads, seen catches up, read updates, and no pending ends it', () => {
+  for (const [pending, first, state] of [[{ done: 1, total: 4, seen: true, calls: 3, read: 2 }, false, 'updating'], [{ done: 1, total: 4, seen: true, calls: 3 }, false, 'catching-up'],
+    [{ done: 1, total: 4, seen: true, calls: 0 }, false, null], [{ done: 1, total: 4, calls: 3 }, true, 'reading'], [null, false, null]]) {
     const desk = createDesk()
     applyHead(desk, { mark: 'S:1', lanes: [], pending })
     assert.equal(desk.firstPending, first, J(pending))

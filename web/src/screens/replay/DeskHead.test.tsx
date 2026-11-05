@@ -44,7 +44,7 @@ test('1.2 §读取状态: a re-read says updating with read / total and the call
     expect(line.textContent).toBe(W.updatingTo(38, calls))
     cleanup()
   }
-  const { el } = head({ desk: { pending: { done: 5, total: 9, calls: 2 } } })
+  const { el } = head({ desk: { pending: { done: 5, total: 9, seen: true, calls: 2 } } })
   expect(el.querySelector<HTMLElement>('.readstate')!.dataset.readState).toBe('catching-up')
   expect(el.querySelector('.readstate')!.textContent).toBe(W.catchingUp(2))
 })

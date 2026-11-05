@@ -39,7 +39,7 @@ const NAME_MAX = 48
 // (navGroup); a row's html depends on the playhead only through its state, so a step redraws just the rows it moved across
 const BUSY = { key: 'busy', html: '<div class="navsub busy" aria-busy="true"></div>' } // the lane is on its way: a sized empty row, no words
 const EMPTY = () => ({ key: 'empty', html: `<div class="navsub empty">${esc(W.NO_RESOURCES)}</div>` })
-const SO_FAR = (s) => ({ key: 'so-far', html: `<div class="navsub empty">${esc(s.desk.pending?.seen ? W.FILES_UPDATING : W.FILES_READING)}</div>` })
+const SO_FAR = (s) => ({ key: 'so-far', html: `<div class="navsub empty">${esc(s.desk.pending?.read != null ? W.FILES_UPDATING : W.FILES_READING)}</div>` })
 export function resourceUnits(s) {
   const a = s.anchor
   if (!a) return []

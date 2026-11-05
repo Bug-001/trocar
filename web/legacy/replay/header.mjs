@@ -187,7 +187,7 @@ export function totalsOf(s) {
 }
 
 // 1.2 §会话头 读取状态: while the server is still extracting this session (`pending{done, total}` on the session answer) one quiet
-// line says how far — the first read as a share, a version's re-read as its own share (`pending.seen`, `read / total`), later the calls still to catch up. Words only: no control (D69).
+// line says how far — the first read as a share, a version's re-read as its own share (`pending.read`, `read / total`), later the calls still to catch up. Words only: no control (D69).
 // 1.5 K-32: a head behind the capture names how many calls came after it (`behind`, behindOf).
 // 1.5 K-31: a head whose background fold stopped (`pending.stopped`) says so instead.
 export function readStateHtml(desk) {
@@ -199,8 +199,9 @@ export function readStateHtml(desk) {
   const done = Number(p.done) || 0, total = Number(p.total) || 0
   const pct = (n) => (total > 0 ? Math.floor((n / total) * 100) : 0)
   const calls = p.calls ?? Math.max(0, total - done)
-  if (!p.seen && !desk.firstPending && !calls) return ''
-  const [state, words] = p.seen ? ['updating', W.updatingTo(pct(Number(p.read) || 0), Number(p.calls) || 0)]
+  const re = p.read != null
+  if (!re && !desk.firstPending && !calls) return ''
+  const [state, words] = re ? ['updating', W.updatingTo(pct(Number(p.read) || 0), Number(p.calls) || 0)]
     : desk.firstPending ? ['reading', W.readingFirst(pct(done))] : ['catching-up', W.catchingUp(calls)]
   return `<div class="fidline readstate" data-read-state="${state}">${esc(words)}</div>`
 }
