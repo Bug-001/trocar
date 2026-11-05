@@ -1,4 +1,4 @@
-// test/scripts/pr-check.test.mjs — scripts/pr-check.mjs on a temp repo and a temp HOME (spec 1.12 §6, AN15-AN25, AN28-AN31).
+// test/scripts/pr-check.test.mjs — scripts/pr-check.mjs on a temp repo and a temp HOME (spec 1.12 §6, AN15-AN25, AN28-AN32).
 //
 // Every token, home path and machine name here is put together at run time, and what must pass carries FAKE or a neutral name: the
 // outbound checks of this very repository read this file too.
@@ -1453,6 +1453,65 @@ test('AN31: a --before a week back that skips records refuses, however little it
   whole.commit({ 'a.txt': 'nothing here\n' })
   capture(whole, SEGMENT, [line(ago(10), 'nothing shared')])
   assert.equal(whole.check({ before: ago(8) }).code, 0, 'nothing was skipped')
+})
+
+// ── AN32
+const PUBLIC = 'vault7.example.net', OTHER = 'other9.example.net'
+const open = (...hosts) => hosts.flatMap((host) => ['--public-host', host])
+function hosted(files) {
+  const w = workspace(files)
+  w.commit({ 'a.txt': 'one\n' })
+  capture(w, NEWER, [{ host: PUBLIC }, { host: OTHER }])
+  return w
+}
+const passed = (doc) => doc.accepted.map((f) => [f.rule, f.where])
+
+test('AN32: a host named public is no hit: it goes into accepted and the hash, and each host needs its own flag', () => {
+  const w = hosted()
+  const body = `see ${PUBLIC.toUpperCase()}`
+  const refused = w.check({ body })
+  assert.equal(refused.code, 1)
+  const through = w.check({ body, args: open(PUBLIC) })
+  assert.equal(through.code, 0, JSON.stringify(through.doc.findings))
+  assert.deepEqual(passed(through.doc), [['captured-facts', PUBLIC]])
+  assert.notEqual(through.doc.hash, refused.doc.hash)
+
+  const both = `see ${PUBLIC} and ${OTHER}`
+  const one = w.check({ body: both, args: open(PUBLIC) })
+  assert.equal(one.code, 1)
+  assert.deepEqual(one.doc.findings.map((f) => [f.rule, f.where]), [['captured-facts', 'body']])
+  assert.deepEqual(passed(one.doc), [['captured-facts', PUBLIC]])
+  const two = w.check({ body: both, args: open(PUBLIC, OTHER) })
+  assert.equal(two.code, 0)
+  assert.deepEqual(passed(two.doc).sort(), [['captured-facts', OTHER], ['captured-facts', PUBLIC]])
+  assert.notEqual(two.doc.hash, one.doc.hash)
+})
+
+test('AN32: it does nothing for a value the capture has no host of, a host the text does not name, or one the base holds', () => {
+  const w = hosted()
+  const plain = w.check({ body: 'nothing here' })
+  for (const host of ['never.example.org', PUBLIC]) {
+    const r = w.check({ body: 'nothing here', args: open(host) })
+    assert.deepEqual([r.code, r.doc.hash, r.doc.accepted], [plain.code, plain.doc.hash, []], host)
+  }
+  assert.equal(w.check({ body: `see ${PUBLIC}`, args: open('never.example.org') }).code, 1)
+  const known = hosted({ 'docs/old.md': `served by ${PUBLIC}\n` })
+  const r = known.check({ body: `see ${PUBLIC}`, args: open(PUBLIC) })
+  assert.deepEqual([r.code, r.doc.accepted, r.doc.hash], [0, [], known.check({ body: `see ${PUBLIC}` }).doc.hash])
+})
+
+test('AN32: no other fact passes, whether or not a host has the same words', () => {
+  const w = hosted()
+  const facts = [['title', { session_id: 'id0', title: PUBLIC, title_source: 'wire' }], ['session', { session_id: PUBLIC }], ['slug', { session_id: 'id0', project_slug: PUBLIC }],
+    ['title in another case', { session_id: 'id0', title: PUBLIC.toUpperCase(), title_source: 'wire' }]]
+  for (const [name, row] of facts) {
+    const cli = faulty(w, `if (argv[1] === 'sessions') out = JSON.stringify({ ok: true, sessions: ${JSON.stringify([row])} })`)
+    const r = w.check({ body: `see ${PUBLIC}`, args: open(PUBLIC), cli })
+    assert.deepEqual([r.code, r.doc.accepted], [1, []], name)
+    assert.equal(of(r.doc, 'captured-facts').length, 1, name)
+  }
+  const segment = w.check({ body: `see ${NEWER}`, args: open(NEWER) })
+  assert.deepEqual([segment.code, segment.doc.accepted], [1, []])
 })
 
 // ── AN29
