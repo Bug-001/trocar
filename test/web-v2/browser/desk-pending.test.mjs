@@ -132,9 +132,9 @@ test('2.3 归约前沿 · D64②: a session growing by 1,000 members an answer �
 })
 
 // the line, on the samples above: a known shortfall, reported and not red (the way an `open` sequence regression is a todo), the line as it
-// is (D64⑥). Measured interleaved at a 1-min load of 10-94: 39.7-75.0 ms over 6 runs on the build before the pack slot change, 43.8-129.9 ms
-// over 20 runs since, each over the line in all but 1 and 3 runs, the p50 16-25 ms on both. The slow samples are the inputs taken as an
-// answer lands (every 6th of the scrub); neither build holds the line at a load of 10-15.
+// is (D64⑥). Measured at a 1-min load of 10-94: 39.7-75.0 ms over 6 runs on the build before the pack slot change, over the line in 5;
+// 43.8-129.9 ms over 19 runs since, over the line in 15; the p50 16-25 ms on both. The slow samples are the inputs taken as an answer lands
+// (every 6th of the scrub).
 const SHORT = 'the board does not hold this line on every run while the session grows: step p95 over BOARD_LINES.stepClick'
 test('2.3 归约前沿 · D64②: step p95 within the line while the session grows', { skip, todo: SHORT }, () => {
   assert.ok(growing, 'the growing case ran')
