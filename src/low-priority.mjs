@@ -1,4 +1,4 @@
-// src/low-priority.mjs — the nice the daemon's children run at (RFC 1.6 §3.1: nice ≥ 5).
+// src/low-priority.mjs — how low the daemon's children run: their nice (RFC 1.6 §3.1: nice ≥ 5) and, on macOS, their scheduling class (4.9 §4).
 //
 // The daemon's own event loop forwards agent traffic, and the work it hands to a child (sealing a closed segment,
 // answering a query) is work nobody is waiting on the agent's behalf. So every such child asks the OS to put it
@@ -29,4 +29,13 @@ export function lowerPriority({ os = nodeOs, say = () => {} } = {}) {
     try { say(`trocar: this process could not be put at nice ${NICE} (${String((e && e.message) || e)}); it runs at its parent's priority instead`) } catch { /* no stderr: the parent is gone */ }
     return null
   }
+}
+
+/**
+ * lowFork(execArgv) → the `fork` options that start a low child (4.9 §4, D82). On macOS the daemon is Interactive (see plistXml), so launchd no longer holds it in the
+ * utility class and a child would rise with it by inheritance. A nice does not stop that: a nice-5 probe finished in 15 ms at load 145. So the child goes through taskpolicy,
+ * which execs node in place: same pid, same IPC channel. `fork` takes an explicit execArgv instead of inheriting one, so a caller with no flags of its own passes process.execArgv.
+ */
+export function lowFork(execArgv = [], { platform = process.platform, execPath = process.execPath } = {}) {
+  return platform === 'darwin' ? { execPath: '/usr/sbin/taskpolicy', execArgv: ['-c', 'utility', execPath, ...execArgv] } : { execArgv }
 }

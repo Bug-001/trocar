@@ -19,11 +19,11 @@
 // an agent started over ssh or in another RDP session is still the user's agent); another user's process in another session is not listed.
 
 import { splitCommandLine } from '../../../off/winargv.mjs'
-import { HELPER_WAIT_MS } from './helper.mjs'
+import { ASK_HANG_MS } from '../../../off/exec.mjs'
 
-/** How long one targeted ask waits: the first `ps` after the helper starts has an empty command-line cache, so more than 40 processes take a full
- *  Win32_Process enumeration through CIM (plus the module load), which on a cold or busy machine is more than the 2 s a table read gets. */
-export const PS_TIMEOUT_MS = HELPER_WAIT_MS
+/** How long one targeted ask waits: only the hang guard, a slow answer is still the answer (D82). The first `ps` after the helper starts has an empty command-line
+ *  cache, so more than 40 processes take a full Win32_Process enumeration through CIM (plus the module load). */
+export const PS_TIMEOUT_MS = ASK_HANG_MS
 /** What a ps row's `cmdlineState` can say (helper.ps1 decides; a test keeps the two lists equal): `ok` the command line is there · `pending` asked, no
  *  answer yet · `cim-backoff` CIM failed, not asked again for 30 s · `empty` asked three times and CIM has none (a process without one, or one CIM does
  *  not show) · `not-asked` the caller said `cmdline:false`. `pending` and `cim-backoff` are NOT "no command line": it may still come — on the accept-time
@@ -59,18 +59,19 @@ export function factsOfRow(row, source = 'accept') {
   return facts
 }
 
-/** factsOfPid(pid, { helper, psTimeoutMs }) → ProcFacts | null — the facts of ONE process, asked targeted through the resident helper's `ps` verb (the
+/** factsOfPid(pid, { helper, psTimeoutMs, onUnread }) → ProcFacts | null — the facts of ONE process, asked targeted through the resident helper's `ps` verb (the
  *  row of that pid in the session snapshot; the snapshot is the helper's own, its command lines cached in it). null = the pid is gone or the helper did
  *  not answer (a dead process between the accept and the ask is the common case, not an error; a helper that is down or times out leaves the connection
- *  judged untracked, never guessed — the ask never throws into the lookup). The caller caches by pid + startedAt: a wrapped pid (another life, another
- *  start time) is asked again, a living one is asked once. */
-export async function factsOfPid(pid, { helper, psTimeoutMs = PS_TIMEOUT_MS } = {}) {
+ *  judged untracked, never guessed — the ask never throws into the lookup). Asked once per connection: the start time in the answer keys the verdict to its
+ *  life. `onUnread(why)`: told why there is no answer (the helper's code, no table, no row), for the record of whoever needed the facts (D38). */
+export async function factsOfPid(pid, { helper, psTimeoutMs = PS_TIMEOUT_MS, onUnread = () => {} } = {}) {
   if (!Number.isInteger(pid)) throw new TypeError('factsOfPid needs the pid (an integer)')
   if (!helper || typeof helper.call !== 'function') throw new TypeError('factsOfPid needs the helper client (helper.mjs)')
   let r
-  try { r = await helper.call('ps', {}, { timeoutMs: psTimeoutMs }) } catch { return null } // helper down / timed out / refused: no facts, the fail-safe answer
-  if (!r || !Array.isArray(r.procs)) return null
+  try { r = await helper.call('ps', {}, { timeoutMs: psTimeoutMs }) } catch (e) { onUnread((e && (e.code || e.message)) || String(e)); return null } // helper down / timed out / refused: no facts, the fail-safe answer
+  if (!r || !Array.isArray(r.procs)) { onUnread('the helper\'s ps has no process list'); return null }
   const row = r.procs.find((x) => x && x.pid === pid)
+  if (!row) onUnread(`ps lists no pid ${pid}`)
   return row ? factsOfRow(row, 'accept') : null
 }
 
@@ -80,8 +81,8 @@ export async function factsOfPid(pid, { helper, psTimeoutMs = PS_TIMEOUT_MS } = 
 // (the single helper channel). A caller that does not know the start time gets no caching (a pid alone can be reused); an answer of
 // another life than the one asked about is no answer. Only the named variables are asked for, returned and cached (4.9 §5.2).
 
-/** How long one proc-env read may take once the helper is on it: a PEB read is a few reads of another process's memory. */
-export const PROC_ENV_TIMEOUT_MS = 2000
+/** How long one proc-env read may take once the helper is on it: a PEB read is a few reads of another process's memory, and only a hang ends it. */
+export const PROC_ENV_TIMEOUT_MS = ASK_HANG_MS
 const CACHE_MAX = 4096
 const upper = (n) => String(n).toUpperCase()
 

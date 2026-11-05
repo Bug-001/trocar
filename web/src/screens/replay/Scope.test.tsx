@@ -120,6 +120,17 @@ test('1.3 marks: trace columns, flags, × and compaction carry the model\'s tip 
   fireEvent.click(bar); expect(s.setPlayhead).toHaveBeenLastCalledWith(m.bars[4].i, true)
 })
 
+test('2.1 #16: a bar or a mark clicked after older rows landed, before they are drawn, moves the playhead to the call it was drawn for', () => {
+  const rows = ROWS.map((r, i) => ({ ...r, rid: `k${i}` }))
+  const one = (extra: object[]) => deskOf([{ kind: 'main', rows: [...extra, ...rows] }])
+  const s = stateOf(one([]), { at: 2 })
+  const { $$ } = mount(s)
+  const marks = [...$$('#sawrow .bar'), ...$$('#probrow [data-i]')]
+  const moved = stateOf(one([{ usage: U(2, 2, 2), rid: 'older' }]))
+  Object.assign(s, { lanes: moved.lanes, anchor: moved.anchor }) // the lanes moved on, nothing was drawn
+  for (const e of marks) { fireEvent.click(e); expect(s.setPlayhead).toHaveBeenLastCalledWith(+e.dataset.i! + 1, true) }
+})
+
 test('D75④: with a row inserted before the window (every i + 1), the bars of unchanged rows are the same DOM nodes', () => {
   const rid = (i: number) => ({ rid: `k${i}` })
   const rows = ROWS.map((r, i) => ({ ...r, ...rid(i) }))
