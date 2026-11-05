@@ -198,3 +198,21 @@ test('M9: the conditions the collector folds land on their agent row or in the s
   assert.ok(m.service.conds.some((s) => s.includes(UNKNOWN_REASON)))
   assert.ok(m.service.tech.some((p) => plain(p.v) === 'made-up-kind-3f2a'))
 })
+
+test('M3: every technical-details value on both pages, shown or copied, hides a proxy URL\'s userinfo — the server\'s free-text reasons included', () => {
+  const url = 'http://alice:pw-7d2e@proxy.example:8080', secret = ['alice', 'pw-7d2e']
+  const why = `upstream ${url} refused`
+  const groups = [{ level: 'problem', where: 'engine', code: 'upstream-refused', reason: why, harness: 'codex', count: 1, first_ts: T, last_ts: T },
+    { level: 'expected', where: 'connection', code: 'upstream-refused', reason: why, count: 1, first_ts: T, last_ts: T }]
+  const errors = [{ where: 'capture health', reason: why }, { where: 'the install record', reason: why }, { where: 'elsewhere', reason: why }]
+  const d = doc({ topology: { codex: { at: T, routing: 'proxy', captured: true, nodes: [], branches: [], notes: [why] } },
+    extra: { failures: { since: T, groups }, errors, linger: 'unknown', linger_reason: why, relayed: 'unknown', relayed_reason: why } })
+  d.daemon.error = why
+  const pairsText = (pairs) => pairs.map(({ k, v }) => `${k}: ${plain(v)}`).join('\n')
+  const m = model(d), log = logModel(d), bad = logModel({ unreadable: why })
+  const tech = [m.service.tech, ...m.rows.map((r) => r.tech), m.changes && m.changes.tech, ...log.rows.map((r) => r.tech), log.partial, log.manifest,
+    log.foot && log.foot.errors, bad.foot.errors].filter(Boolean)
+  const seen = [...tech.map(pairsText), m.service.copy, ...m.rows.map((r) => r.copy), JSON.stringify(m), JSON.stringify(log), JSON.stringify(bad)]
+  assert.ok(seen.some((s) => s.includes('***@proxy.example')))
+  for (const s of seen) for (const x of secret) assert.equal(s.includes(x), false, `${x} in ${s}`)
+})

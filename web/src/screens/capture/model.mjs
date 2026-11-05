@@ -7,7 +7,7 @@
 import { fmtStamp, fmtWhen, has } from '../../../legacy/core/fmt.mjs'
 import { harnessName, harnessKey } from '../../../legacy/core/chips.mjs'
 import { mark } from '../../../legacy/core/ui.mjs'
-import { redactUrlCredentials } from '../../../legacy/core/sensitive.mjs'
+import { redactUrlCredentials, redactPair } from '../../../legacy/core/sensitive.mjs'
 import { agentVerdicts, reasonOf, AGENT_TIER } from '../../../legacy/core/capture-verdict.mjs'
 import { controlFor } from '../../../legacy/core/harness-switch.mjs'
 import { failureRows } from './log-model.mjs'
@@ -21,7 +21,7 @@ const list = (x) => (Array.isArray(x) ? x : [])
 const T = (text) => ({ text: String(text) })
 const M = (mono) => ({ mono: String(mono) })
 const P = (...parts) => ({ parts: parts.filter(Boolean) })
-const pair = (k, v) => ({ k, v: typeof v === 'string' ? T(v) : v })
+const pair = (k, v) => redactPair({ k, v: typeof v === 'string' ? T(v) : v }) // every details value hidden once more (1.9 §保真边界)
 const plain = (v) => (v.parts ? v.parts.map(plain).join('') : v.mono ?? v.text)
 const copyOf = (pairs) => pairs.map(({ k, v }) => `${k}: ${plain(v)}`).join('\n')
 const diagOf = (used) => redactUrlCredentials(JSON.stringify(used, null, 2))
@@ -91,7 +91,7 @@ function serviceOf(h, v) {
     const parts = Object.entries(rel).filter(([, n]) => typeof n === 'number' && n > 0).map(([k, n]) => `${n} ${has(RELAYED, k) ? RELAYED[k] : k}`)
     if (parts.length) tech.push(pair('still relayed', parts.join(' · ')))
   }
-  for (const e of list(h && h.errors)) if (e) tech.push(pair('could not be read', M(`${e.where ?? '?'}: ${redactUrlCredentials(String(e.reason ?? ''))}`)))
+  for (const e of list(h && h.errors)) if (e) tech.push(pair('could not be read', M(`${e.where ?? '?'}: ${e.reason ?? ''}`)))
   tech.push(...commandPairs(commandsFor(h, { service: true })))
   return {
     id: '*service', gut: gutOf(v.cls, v.state === 'ok'),
