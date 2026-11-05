@@ -15,8 +15,17 @@ import { sessionMetaOfFacts } from '../../view/board.mjs';
 import { readUsage, fillUsage } from '../usage.mjs';
 import { asOf, indexRows, isModelCall, sessionGroups, sessionFactsOf } from '../rows.mjs';
 import { listOf, paginate, tsFilter } from './index.mjs';
+import { HARNESS, PAGE, WINDOW } from './about.mjs';
 
-export const params = Object.freeze(['harness', 'since', 'until', 'limit', 'after']);
+export const about = Object.freeze({
+  summary: 'The list of sessions, newest first: id, agent, project, title, start and end, calls and size.',
+  params: Object.freeze({
+    harness: HARNESS,
+    ...WINDOW,
+    ...PAGE,
+  }),
+});
+export const params = Object.freeze(Object.keys(about.params));
 export const stored = (p) => Object.keys(p).every((k) => k === 'limit' || k === 'after');
 
 export async function run({ home, fs, now, params: p, errors, later = null, progress = null }) {

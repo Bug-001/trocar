@@ -31,8 +31,9 @@ export function hasCompactionPreamble(messages) {
 }
 
 // The compaction verdict of ONE call against its in-lane predecessor (3.4), one rule for query and the board.
-// prev = { msgCount, marker, preamble, hinted } of the previous call in the same session lane (hinted: its verdict was step 1), or null when there is none;
-// cur = { hint, marker, msgCount, preamble }. In order:
+// prev = what compactionBaseline left, { msgCount, marker, preamble, hinted } (hinted: the calls a harness's request still waits for its landing), or
+// null when the lane has none; cur = { hint, marker, msgCount, preamble, failed }. A failed call replaced nothing: no verdict, whatever its evidence.
+// Else, in order:
 //   1. a harness header / request-kind hint (high) — compaction even on a lane's first call;
 //   2. a harness text marker (medium) on its RISING edge only: the marker stays in the history afterwards, and a
 //      lane's first call has no edge (the capture may have started after the compaction, or a new synthesized
@@ -40,18 +41,30 @@ export function hasCompactionPreamble(messages) {
 //   3. only a sharp message-count drop (medium, markCompaction) — no other evidence, no verdict. CC's own preamble
 //      lets a smaller drop count, on its RISING edge only, like the marker: the preamble stays in the first messages of
 //      every later call, so a carried one is no evidence (a 30 → 27 dip long after a compaction is no compaction).
-// A harness's own request still carries the whole history; the summary replaces it on the next call, so step 2 or 3 right after a
-// hint is that same compaction landing, not another: {compaction: false, lands: true}, with its from / to and basis.
+// A harness's own request still carries the whole history; the summary replaces it once it has come back, so step 2 or 3 within
+// LANDS_WITHIN calls of a hint is that same compaction landing, not another: {compaction: false, lands: true}, with its from / to and basis.
 // compaction_from is the predecessor's message count, NULL when the lane has none — never an invented 0
 // (invariant 4). `basis` names the evidence that fired, so a reader can say how sure it is.
 export function compactionVerdict(prev, cur) {
   const NONE = { compaction: false, compaction_from: null, compaction_to: null, basis: null }
   const from = prev ? prev.msgCount | 0 : null
   const to = cur.msgCount | 0
+  if (cur.failed) return NONE
   if (cur.hint) return { compaction: true, compaction_from: from, compaction_to: to, basis: 'hint' }
   const fired = (compaction_from, compaction_to, basis) => (prev && prev.hinted ? { compaction: false, lands: true, compaction_from, compaction_to, basis } : { compaction: true, compaction_from, compaction_to, basis })
   if (cur.marker && prev && !prev.marker) return fired(from, to, 'marker')
   if (!prev) return NONE
   const m = markCompaction(prev.msgCount | 0, to, { preamble: !!cur.preamble && !prev.preamble })
   return m.compaction ? fired(m.compaction_from, m.compaction_to, 'msg-count-drop') : NONE
+}
+
+// How many calls with a verdict a harness's request waits for its landing (3.4); past them a drop is a compaction of its own.
+const LANDS_WITHIN = 4
+
+// The next call's prev after `cur` got `verdict` (3.4): a failed call leaves prev as it was, so a retry sees the same edges and the same
+// drop, and it uses none of the wait. A successful hint starts the wait, a landing ends it, any other call uses one of it.
+export function compactionBaseline(prev, cur, verdict) {
+  if (cur.failed) return prev
+  const hinted = verdict.basis === 'hint' && verdict.compaction ? LANDS_WITHIN : verdict.lands || !prev ? 0 : Math.max(0, (prev.hinted | 0) - 1)
+  return { msgCount: cur.msgCount | 0, marker: !!cur.marker, preamble: !!cur.preamble, hinted }
 }

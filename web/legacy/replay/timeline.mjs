@@ -16,7 +16,7 @@ import { cacheState, isBreak, breakCost, usageOf, priceMatch, costOf, isFailed }
 import { CT_ORDER, callComp, hitTier, refRowOf } from './analysis.mjs'
 import { anchorJump } from './jump.mjs'
 import { laneEvents, ridAt } from './model.mjs'
-import { stepRef } from './lanes.mjs'
+import { stepRef, stepOfMark } from './lanes.mjs'
 import { laneWord } from '../labels/replay.mjs'
 import * as W from '../labels/replay.mjs'
 import { FLAG, cellsOf } from '../../../src/view/head-cols.mjs'
@@ -243,13 +243,13 @@ export function renderSaw(el, s) {
     peak = any ? `≈ ${usd(maxCost)}` : '≈ —'
     q(el, '#sawrow').innerHTML = BRACKET() + win.map(([c, i]) => {
       const b = costBarHtml(c, i, s, maxCost)
-      return `<div class="bar cost ${isFailed(c) ? 'err' : ''} ${i === s.playhead ? 'cur' : ''}" data-i="${i}" style="height:${b.h}px" title="step ${i + 1} · ${esc(b.tip)}">${b.html}</div>`
+      return `<div class="bar cost ${isFailed(c) ? 'err' : ''} ${i === s.playhead ? 'cur' : ''}" data-i="${i}" data-rid="${esc(c.rid)}" style="height:${b.h}px" title="step ${i + 1} · ${esc(b.tip)}">${b.html}</div>`
     }).join('')
   } else {
     const pk = Math.max(1, s.anchor.peakCtx)
     peak = `${kf(pk)} tok`
     peakTip = 'The largest real input total of a main thread step (input + cache read + cache write)'
-    q(el, '#sawrow').innerHTML = BRACKET() + win.map(([c, i]) => ctxBarHtml(c, i + 1, `data-i="${i}"`, i === s.playhead, pk)).join('')
+    q(el, '#sawrow').innerHTML = BRACKET() + win.map(([c, i]) => ctxBarHtml(c, i + 1, `data-i="${i}" data-rid="${esc(c.rid)}"`, i === s.playhead, pk)).join('')
   }
   // the cache band
   q(el, '#cacherow').innerHTML = win.map(([c, i]) => cacheCell(c, i, s)).join('')
@@ -372,13 +372,13 @@ export function renderRough(el, s, at, K) {
   if (!head.tier) {
     if (nav) nav.innerHTML = ''
     const bs = head.buckets || [], mx = Math.max(1, ...bs.map((b) => b.calls))
-        q(el, '#ovstrip').innerHTML = bs.length ? stripHtml(bs.length, (i) => bs[i].calls / mx, () => false, true) : ''
+    q(el, '#ovstrip').innerHTML = bs.length ? stripHtml(bs.length, (i) => bs[i].calls / mx, () => false, true) : ''
     rows.innerHTML = BRACKET()
     return
   }
   const cells = cellsOf(head.cols), per = head.bucket || 1, pk = Math.max(1, head.peak), at3 = (i) => 3 * Math.floor(i / per)
   const chs = head.chapters && head.chapters.length ? head.chapters : [{ s0: 0, s1: N, ts0: null, inferred: false }]
-    q(el, '#ovstrip').innerHTML = stripHtml(N, (i) => cells[at3(i)] / 255, (i) => !!(cells[at3(i) + 2] & FLAG.failed)) + chapterTicksHtml(chs, (g) => g, N) + BRUSH()
+  q(el, '#ovstrip').innerHTML = stripHtml(N, (i) => cells[at3(i)] / 255, (i) => !!(cells[at3(i) + 2] & FLAG.failed)) + chapterTicksHtml(chs, (g) => g, N) + BRUSH()
   if (nav) nav.innerHTML = chapterNavHtml(chs, at, N)
   const { lo, hi } = roughWindow(head, at, K)
   placeBrush(el, N, lo, hi, at)
@@ -434,7 +434,7 @@ export function wireTimeline(el, s) {
     const vs = e.target.closest('[data-view]')
     if (vs && vs.closest('#viewswitch')) { s.sawView = vs.dataset.view === 'cost' ? 'cost' : 'ctx'; renderSaw(el, s); return }
     const bar = e.target.closest('#sawrow .bar')
-    if (bar) { s.setPlayhead(+bar.dataset.i, true); return }
+    if (bar) { const i = stepOfMark(s, bar.dataset.rid); if (i >= 0) s.setPlayhead(i, true); return }
     const btn = e.target.closest('button')
     if (btn && (btn.id === 'chapPrev' || btn.id === 'chapNext')) { if (btn.dataset.to != null) s.chapterGo(+btn.dataset.to); return } // works on the rough page too
     if (!btn || !s.anchor) return

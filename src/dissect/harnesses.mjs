@@ -29,8 +29,7 @@ const LEGACY_SESSION_KEYS = [H('x-claude-code-session-id'), H('x-session-id', 'm
 // `maxTokens` the reply cap (at or under it), `first` the first user message, `last` the last user message with text, `system` the
 // system text. A kind listed here has a row in the lane kind table (LANE_META, LANE_KIND); no entry matches → `aux`.
 //
-// `cwd` (RFC 2.4 §保真边界 item 6): where a call states its working directory, a regex whose first group is the path; null: it states none.
-const ROW = { ua: null, parentKeys: [], lane: [], compaction: [], requestKind: null, observerEffects: [], traffic: [], aux: [{ kind: 'quota', maxTokens: 1 }], cwd: null };
+const ROW = { ua: null, parentKeys: [], lane: [], compaction: [], requestKind: null, observerEffects: [], traffic: [], aux: [{ kind: 'quota', maxTokens: 1 }] };
 const T = (host, cls, pathSource) => ({ host, class: cls, ...(pathSource ? { path: pathSource } : {}) });
 // 4.8 §5.6: injected trust changes the agent the same way in both modes; a legacy MITM / reverse-proxy capture still never carries one. `captures` scopes an
 // effect to the mode whose entry causes it: 'transparent' is Linux's driver mode, 'proxy' the door of macOS / Windows (D47) — what trocar writes differs (4.11)
@@ -43,7 +42,6 @@ const ROWS = [
     // a background call (progress summary, suggestion) is aux even when it carries its subagent's agent-id (3.4)
     lane: [{ header: 'x-claude-code-request-class', equals: 'auxiliary', lane: 'aux' }, { header: 'x-claude-code-agent-id', lane: 'subagent', key: true }],
     compaction: [{ header: 'x-cc-compaction-request' }],
-    cwd: /^\s*-\s*Primary working directory: (.+)$/m,
     // Different utilities with different fates for their output. quota: a one-token liveness check, the reply discarded. titlegen: its reply
     // becomes the session's name. notify: a background summary (a JSON status) that drives Claude Desktop's push notifications. suggest: a
     // copy of the whole conversation asking for the next prompt, so its marker is only ever the LAST user text, and earlier turns may
@@ -259,21 +257,10 @@ export function auxKindOf(rec) {
 }
 
 const HOME_OF = /^(\/Users\/[^/]+|\/home\/[^/]+|[A-Za-z]:\\Users\\[^\\]+)[/\\]/;
-const statedCwd = (rec) => {
-  const re = harnessOf(rec).row?.cwd, b = re ? bodyOf(rec) : null;
-  if (!b) return null;
-  for (const text of [systemOf(b), ...(Array.isArray(b.messages) ? b.messages.slice(0, 2).map(textOf) : [])]) {
-    const m = re.exec(text);
-    if (m) return m[1].trim();
-  }
-  return null;
-};
 /** pathContext(rec) → what a shell read's path resolves against (2.4 §保真边界 item 6): `home` from the process's own path, null when it
- *  does not live under one; `cwd` the working directory the call states, null when it states none, read only when asked (it scans text). */
+ *  does not live under one. A working directory is not in it: the capture holds no reliable one. */
 export function pathContext(rec) {
-  const home = HOME_OF.exec(String(rec?.proc?.exe ?? ''))?.[1] ?? null;
-  let cwd;
-  return { home, get cwd() { return cwd === undefined ? (cwd = statedCwd(rec)) : cwd; } };
+  return { home: HOME_OF.exec(String(rec?.proc?.exe ?? ''))?.[1] ?? null };
 }
 
 export function observerEffectsOf(rec) {

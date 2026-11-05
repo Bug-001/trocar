@@ -6,7 +6,7 @@
 // changes; all OpenAI-specifics (Responses request layout, SSE event stream, usage names, session
 // identity) live HERE (invariant 3). Built against a real captured /codex/responses envelope.
 //
-// Wire facts (captured 2026-07-16, codex_exec + gpt-5.5 via bestony):
+// Wire facts (captured 2026-07-16, codex_exec + gpt-5.5):
 //   request  = { model, instructions(system STRING), input[](conversation), tools[](fn defs + built-ins),
 //                reasoning:{effort}, prompt_cache_key(=session id), include:['reasoning.encrypted_content'] }
 //   input[] item kinds: {type:'message',role,content:[{type:'input_text'|'output_text',text}]} ·

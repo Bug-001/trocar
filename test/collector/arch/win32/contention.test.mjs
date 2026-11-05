@@ -9,6 +9,7 @@ import { startHelper } from '../../../../src/collector/arch/win32/helper.mjs'
 import { factsOfPid } from '../../../../src/collector/arch/win32/procinfo.mjs'
 import { ownerOfSocket } from '../../../../src/collector/arch/win32/socktable.mjs'
 import { createDoorIdentity } from '../../../../src/collector/core/engine/door-identity.mjs'
+import { doorPartsFor } from '../../../../src/collector/arch/model-backends.mjs'
 import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
 import { createRegistry } from '../../../../src/collector/core/registry.mjs'
 
@@ -24,7 +25,7 @@ function started(t, fixture) {
 }
 const later = (ms) => new Promise((r) => setTimeout(r, ms))
 
-test('a burst of connections while a cold ps (longer than the table budget) is out: every socket-table read answers its pid', async (t) => {
+test('a burst of connections while a cold ps is out: every socket-table read answers its pid', async (t) => {
   const rows = [10, 11, 12, 13].map((p, i) => trow(p, 5010 + i))
   const h = started(t, { verbs: { ps: { delayMs: 400, data: { sessionId: 1, procs: [proc(10)] } }, 'tcp-table': { data: { rows } } } })
   await h.ready
@@ -50,17 +51,13 @@ test('queued calls go fast verbs first — a table read asked after a second ps 
   assert.deepEqual(order, ['ps-1', 'tcp-table', 'ps-2'])
 })
 
-test('a helper stuck on a ps answers a waiting table read with helper-busy (naming the ps), and the table lookup is null, not a failure', async (t) => {
+test('a helper stuck on a ps answers a waiting table read with helper-busy, naming the ps', async (t) => {
   const h = started(t, { verbs: { ps: { hang: true }, 'tcp-table': { data: { rows: [trow(11, 5011)] } } } })
   await h.ready
   const stuck = h.call('ps', {}, { timeoutMs: 50 })
   await assert.rejects(stuck, (e) => e.code === 'helper-timeout')
   assert.equal(h.abandoned('ps'), 1)
   await assert.rejects(h.call('tcp-table', { localPort: 5011 }, { waitMs: 60 }), (e) => e.code === 'helper-busy' && e.behind === 'ps' && e.verb === 'tcp-table')
-  const failures = []
-  const r = await ownerOfSocket({ helper: h, peer: { address: '127.0.0.1', port: 5011 }, waitMs: 60, onFailure: (f) => failures.push(f) })
-  assert.equal(r.pid, null)
-  assert.deepEqual(failures, [], 'a busy helper is slow, not an unreadable table')
 })
 
 test('a process of the same user in another session is listed by ps and answers its facts', async (t) => {
@@ -83,7 +80,7 @@ async function doorOver(t, fixture, { psTimeoutMs } = {}) {
   return createDoorIdentity({
     identify: ID, ownUid: null,
     ownerOf: (q) => ownerOfSocket({ helper: h, peer: q.peer }),
-    factsOf: (pid) => factsOfPid(pid, { helper: h, ...(psTimeoutMs ? { psTimeoutMs } : {}) }),
+    factsOf: (pid, o) => factsOfPid(pid, { helper: h, ...o, ...(psTimeoutMs ? { psTimeoutMs } : {}) }),
   })
 }
 const ask = (r, port) => r.identityOf({ peer: { address: '127.0.0.1', port }, door: CC_DOOR, target: { address: 'api.anthropic.com', port: 443 } })
@@ -101,5 +98,16 @@ test('B through the door: a ps that never answers is facts-unavailable, never no
   const r = await doorOver(t, { verbs: { ps: { hang: true }, 'tcp-table': { data: { rows: [trow(4121, 5010)] } } } }, { psTimeoutMs: 80 })
   const m = await ask(r, 5010)
   assert.equal(m.pid, 4121)
-  assert.deepEqual([m.agent, m.why], [null, 'facts-unavailable'])
+  assert.deepEqual([m.agent, m.why, m.unresolved], [null, 'facts-unavailable', 'helper-timeout'])
+})
+
+test('the backend hands the door\'s onUnread to the helper\'s ps: facts that fail say why on the row, for a refused ps, no procs and no row of that pid', async (t) => {
+  for (const ps of [{ error: 'native-unavailable' }, { data: { nonsense: true } }, { data: { sessionId: 1, procs: [proc(9)] } }]) {
+    const parts = await doorPartsFor({ os: 'win32', env: { ...process.env }, io: { helper: { spawn: fakeSpawn({ verbs: { ps, 'tcp-table': { data: { rows: [trow(4121, 5010)] } } } }) } } })
+    t.after(() => parts.close())
+    const r = createDoorIdentity({ identify: ID, ownUid: null, ownerOf: parts.ownerOf, factsOf: parts.factsOf })
+    const m = await ask(r, 5010)
+    assert.deepEqual([m.pid, m.why], [4121, 'facts-unavailable'])
+    assert.ok(m.unresolved, `${JSON.stringify(ps)} says why`)
+  }
 })

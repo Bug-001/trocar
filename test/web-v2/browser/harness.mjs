@@ -193,8 +193,9 @@ export const windowGap = (page) => page.evaluate(gapInPage)
 export async function timed(page, cond, arg, act) {
   await page.evaluate(() => {
     performance.clearMarks('in')
-    const arm = () => { performance.mark('in'); removeEventListener('pointerdown', arm, true); removeEventListener('keydown', arm, true) }
+    const arm = (e) => { window.__in = { node: e.target, click: false }; performance.mark('in'); removeEventListener('pointerdown', arm, true); removeEventListener('keydown', arm, true) }
     addEventListener('pointerdown', arm, true); addEventListener('keydown', arm, true)
+    addEventListener('click', () => { if (window.__in) window.__in.click = true }, { capture: true, once: true })
   })
   await act()
   return page.evaluate(`(${([cond, a], gapOf) => new Promise((resolve, reject) => {
@@ -209,7 +210,7 @@ export async function timed(page, cond, arg, act) {
     const t0 = performance.now()
     const tick = () => {
       if (performance.getEntriesByName('in').length && holds()) return setTimeout(() => resolve(performance.measure('m', 'in').duration), 0)
-      if (performance.now() - t0 > 10000) return reject(new Error(`not drawn in 10 s: ${cond} ${a ?? ''} (input seen: ${performance.getEntriesByName('in').length > 0}, step head ${q('#stepbar .sb-no')?.dataset.n}, window ${JSON.stringify(gapOf())})`))
+      if (performance.now() - t0 > 10000) return reject(new Error(`not drawn in 10 s: ${cond} ${a ?? ''} (input seen: ${performance.getEntriesByName('in').length > 0}, on ${window.__in?.node?.className || window.__in?.node?.nodeName}, that node still drawn: ${window.__in?.node?.isConnected}, click came: ${window.__in?.click}, step head ${q('#stepbar .sb-no')?.dataset.n}, reads ${q('#stepbar .sb-no')?.textContent}, window ${JSON.stringify(gapOf())})`))
       requestAnimationFrame(tick)
     }
     tick()

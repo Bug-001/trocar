@@ -151,8 +151,8 @@ export async function run(argv, { io, json, args, home, deps = {} }) {
   const [name, ...extra] = args.positionals
   if (extra.length) return refuse('usage', 'trocar classes: one class at a time.', { usage: true })
   const doc = await runQuery('classes', {}, { home: trocar })
-  if (json) { printJson(io, doc); return EXIT.ok }
   if (name !== undefined && !doc.classes.some((x) => x.class === name)) return refuse('usage', `trocar classes: there is no class ${name}. Run: trocar classes`)
+  if (json) { printJson(io, doc); return EXIT.ok }
   const now = (deps.ms || Date.now)()
   for (const line of name === undefined ? classesTable(doc, { home, colors: c }) : classDetail(doc, name, { now, colors: c })) io.out(line)
   for (const e of doc.errors) io.err(`Could not read ${e.where}: ${e.reason}`)

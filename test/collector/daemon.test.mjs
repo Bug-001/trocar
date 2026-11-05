@@ -1072,6 +1072,20 @@ test('daemon: the lock carries pid, start time and boot id and is refreshed whil
   s.done()
 })
 
+// MA20 (4.6 §记录): the driver daemon's lock timer is the loop watch as well (the model daemon's: test/collector/core/loop-late.test.mjs).
+test('daemon: a loop held past the line leaves loop-late with late_ms in flows/ (MA20)', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  const { arch } = fakeArch(p)
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], identity: (pid) => ({ start_time: `t${pid}`, boot_id: 'boot-1' }), lockRefreshMs: 30 })
+  try {
+    const held = performance.now() + 1300
+    while (performance.now() < held); // the daemon runs on this very loop
+    await until(() => flowsOf(s).some((l) => l.event === 'loop-late'), 5000)
+    assert.ok(flowsOf(s).find((l) => l.event === 'loop-late').late_ms >= 1000)
+  } finally { await d.stop(); p.done(); s.done() }
+})
+
 // D-24 / D-27 / W-4 / D-22: the daemon's own lifecycle is on disk — what started (with its identity, version, whether
 // it runs in a terminal, its own NODE_EXTRA_CA_CERTS, linger) and what stopped it (SIGHUP = the terminal closed).
 test('daemon: daemon-start carries its identity, version, foreground, upstream_ca and linger; daemon-stop the signal; the next start sees a clean stop (D-24, D-27)', async () => {
@@ -1676,7 +1690,7 @@ test('daemon: POST /off {exit:true} with a spliced connection open: the reply sa
     assert.deepEqual([off.relayed, off.pid, off.desired], [{ closing: 0, waiting: 1, cut: 0 }, process.pid, 'off'])
     await new Promise((r) => setTimeout(r, 400))
     const st = await req(s.sock, 'GET', '/status')
-    assert.deepEqual(st.relayed, { closing: 0, waiting: 1 }, 'still running, and status counts what is still relayed')
+    assert.deepEqual(st.relayed, { closing: 0, waiting: 1, scope: 'memory' }, 'still running, and status counts what is still relayed')
     assert.equal(fs.existsSync(path.join(s.collector, 'lock')), true)
     let stopped = false; d.exited.then(() => { stopped = true })
     raw.destroy() // the connection closes by itself
@@ -1735,6 +1749,70 @@ test('daemon: POST /off {exit:true, now:true} cuts the spliced connection and st
     if (!raw.destroyed) await once(raw, 'close') // cut
     const row = flows().find((f) => f.decision === 'splice')
     assert.deepEqual([row.error.type, row.error.side], ['cut-by-off', 'engine'])
+    assert.equal(flows().find((f) => f.event === 'daemon-stop').reason, 'off')
+  })
+})
+
+// 1.6 §5.2, D82⑤: in driver mode too a daemon swap's drain is no off. Nothing is switched: state.json keeps its bytes (the new daemon goes on from them), a connection
+// opened during the drain is decrypted and recorded, and GET /status counts its response in flight. `now` then stops the daemon, as for any stop.
+test('daemon: POST /off {exit, by:\'install\'} leaves capture on: state.json untouched, a new connection recorded and counted, actual off for the CLI, and the stop names install (1.6 §5.2)', async () => {
+  const s = sandbox(); const p = fakeProc(); const up = await relay()
+  const relayCa = path.join(s.home, 'relay-ca.pem'); fs.writeFileSync(relayCa, up.ca.certPem)
+  fs.mkdirSync(path.join(s.home, '.claude'))
+  fs.writeFileSync(path.join(s.home, '.claude', 'settings.json'), JSON.stringify({ env: { ANTHROPIC_BASE_URL: `https://relay.asight.test:${up.port}`, NODE_EXTRA_CA_CERTS: relayCa } }))
+  await install(s)
+  const { arch, clients } = fakeArch(p)
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], env: { ...process.env, HOME: s.home }, upstreamCa: up.ca.certPem })
+  try {
+    await req(s.sock, 'POST', '/on', {})
+    p.add(4242, { uid: UID, exe: CC_EXE, argv: ['claude', '-p', 'hi'], cwd: s.home, env: { HOME: s.home }, startTicks: nowTicks(p) })
+    await clients[0].raw({ op: '__emit', ev: 'exec', tgid: 4242, pid: 4242, comm: 'claude', filename: CC_EXE, ts_ns: 1 })
+    await until(async () => (await req(s.sock, 'GET', '/status')).agents.find((a) => a.pid === 4242 && a.trusted))
+    const connect = async () => {
+      const raw = net.connect(d.port, '127.0.0.1'); await once(raw, 'connect')
+      await clients[0].raw({ op: '__inject_port', port: raw.localPort, family: 4, dst: { address: '127.0.0.1', port: up.port, family: 4 }, pid: 4242, decrypt: 1 })
+      const c = tls.connect({ socket: raw, servername: 'relay.asight.test', ca: fs.readFileSync(path.join(s.collector, 'ca', 'extra-cc.pem'), 'utf8') }); await once(c, 'secureConnect')
+      c.got = ''; c.on('data', (x) => { c.got += x }); c.on('error', () => {})
+      return c
+    }
+    const post = (text) => { const body = JSON.stringify({ model: 'claude-x', max_tokens: 16, messages: [{ role: 'user', content: [{ type: 'text', text }] }] }); return `POST /v1/messages HTTP/1.1\r\nhost: relay.asight.test:${up.port}\r\nanthropic-version: 2023-06-01\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(body)}\r\n\r\n${body}` }
+    const relayed = async () => (await req(s.sock, 'GET', '/status')).relayed
+    const stateFile = path.join(s.collector, 'state.json'), stateBefore = fs.readFileSync(stateFile)
+
+    const old = await connect()
+    up.hold(); old.write(post('trocar-before-drain')); await until(() => up.got.length === 1)
+    const off = await req(s.sock, 'POST', '/off', { exit: true, by: 'install' })
+    assert.deepEqual([off.actual, off.confirmed, off.relayed], ['off', true, { closing: 1, waiting: 0, cut: 0 }])
+    assert.deepEqual(fs.readFileSync(stateFile), stateBefore, 'nothing was switched')
+
+    const fresh = await connect()
+    assert.deepEqual(await relayed(), { closing: 1, waiting: 0, scope: 'memory' }, 'idle: nothing of it to wait for')
+    fresh.write(post('trocar-during-drain')); await until(() => up.got.length === 2)
+    assert.deepEqual(await relayed(), { closing: 2, waiting: 0, scope: 'memory' })
+    up.release()
+    await until(() => fresh.got.endsWith(REPLY))
+    await until(async () => (await relayed()).closing === 0)
+    const rawDir = path.join(s.home, '.trocar', 'raw')
+    await until(() => fs.readdirSync(rawDir).some((f) => fs.readFileSync(path.join(rawDir, f), 'utf8').includes('trocar-during-drain')))
+
+    await req(s.sock, 'POST', '/off', { exit: true, now: true, by: 'install' })
+    await d.exited
+    assert.equal(flowsOf(s).find((f) => f.event === 'daemon-stop').reason, 'install')
+    assert.deepEqual(fs.readFileSync(stateFile), stateBefore, 'the new daemon reads the file this one found')
+  } finally { await d.stop(); up.close(); p.done(); s.done() }
+})
+
+test('daemon: POST /on withdraws a swap\'s exit: the daemon stays up, status counts by the off set again, and a later exit with no by is a real off (1.6 §5.2)', async () => {
+  await withSplice(async ({ s, d, raw, flows }) => {
+    await req(s.sock, 'POST', '/off', { exit: true, by: 'install' })
+    assert.equal((await req(s.sock, 'GET', '/status')).relayed.waiting, 1)
+    await req(s.sock, 'POST', '/on', {})
+    assert.equal((await req(s.sock, 'GET', '/status')).relayed.waiting, 0, 'nothing is off any more')
+    raw.destroy()
+    await new Promise((r) => setTimeout(r, 400))
+    assert.equal(await Promise.race([d.exited.then(() => 'stopped'), Promise.resolve('running')]), 'running')
+    assert.equal((await req(s.sock, 'POST', '/off', { exit: true })).desired, 'off')
+    await d.exited
     assert.equal(flows().find((f) => f.event === 'daemon-stop').reason, 'off')
   })
 })
@@ -1809,7 +1887,7 @@ test('daemon: a harness that state.json turns off (the CLI writes the file; the 
     const raw = net.connect(d.port, '127.0.0.1'); await once(raw, 'connect')
     await clients[0].raw({ op: '__inject_port', port: raw.localPort, family: 4, dst: { address: '127.0.0.1', port: echo.address().port, family: 4 }, pid: 4242, decrypt: 0 })
     raw.write('ZZZZ not a protocol the engine knows\n'); await once(raw, 'data')
-    assert.deepEqual((await req(s.sock, 'GET', '/status')).relayed, { closing: 0, waiting: 0 }, 'while it is on nothing is asked to close')
+    assert.deepEqual((await req(s.sock, 'GET', '/status')).relayed, { closing: 0, waiting: 0, scope: 'memory' }, 'while it is on nothing is asked to close')
     rewriteState(s, (st) => { st.harnesses['claude-code'].desired = 'off' })
     const st = await until(async () => { const x = await req(s.sock, 'GET', '/status'); return x.relayed.waiting === 1 && x })
     assert.equal(st.harnesses['claude-code'].desired, 'off')

@@ -28,6 +28,18 @@ export function buildLanes(desk, probes, { prev = null, changed = null } = {}) {
   return ls
 }
 
+// A drawn mark names its call by rid (2.3 §播放头是调用): the lanes can move on before the mark is drawn again (a redraw waiting for the
+// followed step's bodies, a pack's older rows), so what it stands for is looked up when it is used. → {lane, i} now, null when no lane holds it
+export function placeOf(lanes, rid) {
+  for (const lane of lanes || []) { const i = lane.ridLocal.get(rid); if (i !== undefined) return { lane, i } }
+  return null
+}
+// the anchor step a mark stands for now: its call's step, the step nearest in time when the call left the anchor lane, -1 when no lane holds it
+export function stepOfMark(s, rid) {
+  const p = placeOf(s.lanes, rid)
+  return !p ? -1 : p.lane === s.anchor ? p.i : nearestByTs(s.anchor, p.lane.calls[p.i].ts, s.playhead)
+}
+
 // the steps: the main lane's calls; a session without a main lane anchors on its first lane (K-04)
 export const anchorLane = (lanes) => (lanes || []).find((l) => l.kind === 'main') || (lanes || [])[0] || null
 export const stepsOf = (lanes) => { const a = anchorLane(lanes); return a ? a.calls : [] }

@@ -270,6 +270,19 @@ async function lab(t, { delays, terminal = TERMINAL, spliceHost = 'splice.asight
 }
 const NOW = { agents: null }
 
+// what a connection nobody asked to close is carrying (a daemon swap's drain counts these, 1.6 §5.2): every shape of the tee's boundary
+for (const [what, tee, want] of [
+  ['idle', { boundary: () => ({ idle: true, blind: false }) }, 'open'],
+  ['a response in flight', { boundary: () => ({ idle: false, blind: false }) }, 'closing'],
+  ['no boundary to see', { boundary: () => ({ idle: false, blind: true }) }, 'waiting'],
+  ['spliced', null, 'waiting'],
+  ['a tee that throws', { boundary: () => { throw new Error('boom') } }, 'waiting'],
+]) test(`peek: ${what} reads ${want}, and the gate stays unasked`, () => {
+  const gate = createDrain({ flowId: 'f', tee, client: new EventEmitter(), upstream: new EventEmitter() })
+  assert.equal(gate.peek(), want)
+  assert.deepEqual(gate.beforeUpstream(Buffer.from('x')), [Buffer.from('x')], 'nothing is held or changed')
+})
+
 test('V37: off lands after the request went out and before the response head: one Connection: close line, the body verbatim, no reuse; recorded in the envelope and on the flows/ row', T, async (t) => {
   const L = await lab(t, { delays: { stallMs: 300 } })
   const c = await L.client()
