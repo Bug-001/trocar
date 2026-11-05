@@ -33,7 +33,7 @@ const walk = (d, out = {}) => {
   return out
 }
 
-test('4.6「日志」· 1.6 V106: the door password is in ingress.json and the switch files only, through on, a crash, an update, off and the standalone off', async () => {
+test('4.6「日志」· 1.6 V106: the door password is in ingress.json and the switch files only, through on, a crash, an update, off and the standalone off', async (t) => {
   const descs = (await loadHarnesses()).filter((d) => d.proxyMode && d.proxyMode.forms.some((f) => f.os.includes(OS)))
   const forms = descs.flatMap((d) => d.proxyMode.forms.filter((f) => f.os.includes(OS)))
   // every form present: a command `which` finds, else the first place in the tmp HOME (the hermetic ctx never sees /Applications)
@@ -140,17 +140,22 @@ test('4.6「日志」· 1.6 V106: the door password is in ingress.json and the s
     assert.equal((await on()).exit, 0)
     scan('on after off')
   } finally { await server.close() }
-  const files = agentFiles()
-  const copy = writeStandalone({ home: w.home }).path
-  const stubs = tmpDir('trocar-stub-')
-  for (const t of ['ps', 'launchctl']) fs.writeFileSync(path.join(stubs, t), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
-  const status = await new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [copy], { cwd: w.home, env: { HOME: w.home, PATH: stubs, NODE_PATH: '', TROCAR_TEST_SANDBOX: '1', TMPDIR: os.tmpdir() }, stdio: ['ignore', 'pipe', 'pipe'] })
-    const out = []; child.stdout.on('data', (d) => out.push(d)); child.stderr.on('data', (d) => out.push(d))
-    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('trocar-off did not exit in 30 s')) }, 30_000)
-    child.on('close', (code) => { clearTimeout(timer); resolve({ code, out: Buffer.concat(out).toString('utf8') }) })
+  // the copy's process-table question goes to powershell on win32, which the sandbox refuses; this step has not run on Windows yet
+  await t.test('6 the standalone copy\'s off', { skip: OS === 'win32' && 'the copy asks powershell for the process table; no Windows run yet' }, async () => {
+    const files = agentFiles()
+    const copy = writeStandalone({ home: w.home }).path
+    const stubs = tmpDir('trocar-stub-')
+    for (const n of ['ps', 'launchctl']) fs.writeFileSync(path.join(stubs, n), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+    // every per-user folder resolves inside the sandbox (USERPROFILE is what os.homedir() reads on Windows)
+    const env = { ...w.env, HOME: w.home, USERPROFILE: w.home, PATH: stubs, NODE_PATH: '', TROCAR_TEST_SANDBOX: '1', TMPDIR: os.tmpdir() }
+    const status = await new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, [copy], { cwd: w.home, env, stdio: ['ignore', 'pipe', 'pipe'] })
+      const out = []; child.stdout.on('data', (d) => out.push(d)); child.stderr.on('data', (d) => out.push(d))
+      const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('trocar-off did not exit in 30 s')) }, 30_000)
+      child.on('close', (code) => { clearTimeout(timer); resolve({ code, out: Buffer.concat(out).toString('utf8') }) })
+    })
+    assert.equal(status.code, 0, status.out)
+    assert.deepEqual(bytesOf(files), asUser(files))
+    scan('standalone off')
   })
-  assert.equal(status.code, 0, status.out)
-  assert.deepEqual(bytesOf(files), asUser(files))
-  scan('standalone off')
 })
