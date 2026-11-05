@@ -3,7 +3,8 @@
 import { describe, expect, it } from 'vitest'
 import { check } from '../../../../test/helpers/cell-html.mjs'
 import { renderKind } from '../../../legacy/replay/kinds.mjs'
-import { draw } from './markdown.mjs'
+import { draw, held } from './markdown.mjs'
+import { MD_HELD } from '../../../legacy/replay/cell.mjs'
 
 const whole = (src: string, file = false) => draw(src, { from: 0, budget: Infinity, file }).html
 const dom = (src: string, file = false) => { const d = document.createElement('div'); d.innerHTML = whole(src, file); return d }
@@ -165,4 +166,12 @@ it('emits only the allowed markup for hostile text (2.3 #17)', () => {
     d.innerHTML = html
     for (const a of d.querySelectorAll('a')) expect(a.protocol).toMatch(/^(?:https?|mailto):$/)
   }
+})
+
+it('keeps parsed documents to MD_HELD source characters, the newest kept', () => {
+  const docs = [0, 1, 2, 3].map((k) => `${k}`.repeat(MD_HELD / 3))
+  for (const src of docs) draw(src, { from: 0, budget: 10, file: true })
+  const kept = held(true)
+  expect(kept.reduce((n, s) => n + s.length, 0)).toBeLessThanOrEqual(MD_HELD)
+  expect(kept.at(-1)).toBe(docs.at(-1))
 })

@@ -9,11 +9,11 @@
 import MarkdownIt from 'markdown-it'
 import cjkFriendly from 'markdown-it-cjk-friendly'
 import { setMarkdown } from '../../../legacy/replay/kinds.mjs'
+import { MD_HELD } from '../../../legacy/replay/cell.mjs'
 
 const LINKED = /^(?:https?:\/\/|mailto:)/i
 const TAG_LINE = /^<\/?[A-Za-z][\w:.-]*(?:\s[^<>]*)?\/?>\s*$/
 const TAG_PAIR = /^<(([A-Za-z][\w:.-]*)(?:\s[^<>]*)?)>(.*)<\/\2>\s*$/
-const KEPT = 20 // parsed documents kept per reader, past the bodies drawn ahead (2.3 §正文预取): a slice's next read finds its tokens
 
 // `<tag attrs>` or `<tag>value</tag>` alone on a line. It ends a paragraph, list, quote or table like any block; its value is bytes
 function tagLine(state, start, end, silent) {
@@ -64,19 +64,26 @@ function reader(breaks) {
   R.image = (ts, i) => `<span class="md-img">${esc(ts[i].content)} ${esc(ts[i].attrGet('src'))}</span>`
   R.table_open = () => '<div class="md-table"><table>\n'
   R.table_close = () => '</table></div>\n'
-  return { md, docs: new Map() }
+  return { md, docs: new Map(), held: 0 }
 }
 const writing = reader(true), files = reader(false)
 
 // src → its tokens and its top-level blocks ({i: first token, at: source offset}); block maps are in lines, as markdown-it counts them
-function parsed({ md, docs }, src) {
-  const doc = docs.get(src) ?? (() => {
+// the parsed documents are kept, least recently drawn first, to MD_HELD source characters: a slice's next read finds its tokens
+function parsed(r, src) {
+  const { md, docs } = r, had = docs.get(src)
+  const doc = had ?? (() => {
     const tokens = md.parse(src, {}), lines = [0, ...[...src.matchAll(/\r\n?|\n/g)].map((m) => m.index + m[0].length)]
     return { tokens, blocks: tokens.flatMap((t, i) => (t.level === 0 && t.nesting >= 0 ? [{ i, at: lines[t.map[0]] }] : [])) }
   })()
   docs.delete(src)
   docs.set(src, doc)
-  if (docs.size > KEPT) docs.delete(docs.keys().next().value)
+  if (!had) r.held += src.length
+  for (const k of docs.keys()) {
+    if (r.held <= MD_HELD || k === src) break
+    docs.delete(k)
+    r.held -= k.length
+  }
   return doc
 }
 
@@ -91,5 +98,8 @@ export function draw(src, { from, budget, file }) {
   while (b < blocks.length && startOf(b + 1) - from <= budget) b++
   return { html: r.md.renderer.render(tokens.slice(blocks[a].i, blocks[b]?.i), r.md.options, {}), more: blocks[b]?.at ?? null }
 }
+
+/** The sources each reader holds parsed (for the bound's test). */
+export const held = (file) => [...(file ? files : writing).docs.keys()]
 
 setMarkdown(draw)

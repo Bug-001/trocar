@@ -15,6 +15,7 @@ import { isTyping } from '../core/keys.mjs'
 
 export const DISPLAY_CLIP = 20000
 export const CELL_CAP = 2000000 // characters a cell shows at most; the copy button still copies all
+export const MD_HELD = 2 * CELL_CAP // source characters of parsed markdown each reader keeps: the document drawn and one more at the cap
 const BODY_CHARS = 16000000, HTML_CHARS = 8000000, OVERRIDES = 500, CELLS = 2000
 
 // escape for <pre>. A leading newline right after <pre> is dropped by the parser and a raw CR is read as LF: guard both
