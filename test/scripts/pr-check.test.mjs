@@ -979,6 +979,18 @@ test('AN19: a title the list has not read yet is read through the head, and refu
   assert.deepEqual(doc.findings.map((f) => [f.rule, f.where]), [['captured-facts', 'body']])
 })
 
+test('AN19: letters that only run together across two words are not the title, one edge on a word break is, and a host stays a substring', () => {
+  const w = workspace()
+  w.commit({ 'a.txt': 'one\n' })
+  capture(w, NEWER, [{ host: 'vault7.example.net' }])
+  const rows = ['fix ci', '修复登录'].map((title, i) => ({ session_id: `id${i}`, title, title_source: 'wire' }))
+  const cli = faulty(w, `if (argv[1] === 'sessions') out = JSON.stringify({ ok: true, sessions: ${JSON.stringify(rows)} })`)
+  const refused = (body) => of(w.check({ body, cli }).doc, 'captured-facts').length > 0
+  for (const body of ['The prefix cites the rule.', 'a suffix circle']) assert.equal(refused(body), false, body)
+  for (const body of ['Fix CI', 'fix-ci', 'fixci', 'fi\nx ci', 'a hotfix ci', 'fix cis', '"a\\nfix ci\\nb"', '\\u0066\\u0069\\u0078 ci', 'fix%20ci', 'at C:\\fix ci', '\uff46\uff49\uff58 \uff43\uff49',
+    '我们修复登录问题', '修复登录bug', 'myvault7.example.network']) assert.equal(refused(body), true, body)
+})
+
 // ── AN20
 const NOW_THEN = '2026-10-18T10:00:00.000Z'
 test('AN20: 60 shared normalized bytes are refused in every spelling, 59 pass, and the coverage is all of it', () => {
