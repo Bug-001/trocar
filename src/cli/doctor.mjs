@@ -20,6 +20,7 @@ import { serveSource } from '../paths.mjs'
 import { formatInstallNotes } from './status-text.mjs'
 import { trocarHome, backupDir, collectorDir } from '../off/paths.mjs'
 import { readManifest, manifestPath } from '../off/manifest.mjs'
+import { readIngressConfig } from '../collector/core/ingress-config.mjs'
 import { memoProcQuestions, daemonProcReader } from '../off/proc.mjs'
 import { printJson } from './json.mjs'
 
@@ -84,7 +85,7 @@ async function collect({ home, env, sourceFlags, deps, capture }) {
       } catch (e) { readErrors.push(`${f}: ${(e && e.message) || e}`) }
     }
   }
-  return { sources, files, extra, records, srcMeta, readErrors }
+  return { sources, files, extra, records, srcMeta, readErrors, backups: backups.files }
 }
 
 /** The things `doctor` looked at and could not judge (附录 C.4 `undetermined`), in English, from the structured result — never a reason string of another module. */
@@ -138,6 +139,16 @@ async function doctorDocOf({ names, home, env, platform, deps }) {
   try { const m = readManifest(collectorDir(home), fs); orphans = m && m.unsupported ? null : orphanBackups({ home, manifest: m, fs }); if (orphans === null) orphansError = 'the install record is of a version this trocar does not read, so which backups it names cannot be said' } catch (e) { orphansError = `${manifestPath(collectorDir(home))}: ${errText(e)}` }
   if (orphans && orphans.length) extra.push({ code: 'backup-unclaimed', class: 'note', what: `${orphans.length} backup file(s) belong to no install record.`, why: 'An edit that was interrupted left them behind.', commands: [{ run: `Look at them, then remove them: ${orphans[0]}`, shell: 'sh' }], verify: 'trocar doctor' })
   if (orphansError) extra.push({ code: 'backup-unclaimed', class: 'note', what: `Whether any backup belongs to no install record is ${unknown(orphansError)}.`, why: 'The install record could not be read.', commands: [], verify: 'trocar doctor' })
+  // an earlier trocar's `on` saved its own intermediate copies of a file, each with the door password in it (1.6 §3.7): the path only, never the password; no door file, no password
+  const door = readIngressConfig({ dir: collectorDir(home), fs })
+  if (door.listenerToken) {
+    const secret = Buffer.from(door.listenerToken)
+    for (const file of c.backups) {
+      let bytes = null
+      try { bytes = fs.readFileSync(file) } catch (e) { rethrowSandbox(e); continue }
+      if (bytes.includes(secret)) extra.push({ code: 'backup-holds-door-password', class: 'note', what: `${file} holds trocar's local proxy password.`, why: 'An earlier trocar saved its own intermediate copy of a file there.', commands: [{ run: `If you no longer need it: rm ${shq(file)}`, shell: 'sh' }], verify: 'trocar doctor' })
+    }
+  }
   const all = findings === null ? null : [...extra.filter((x) => x.class === 'problem'), ...findings, ...extra.filter((x) => x.class !== 'problem')]
   const summary = all === null ? null : { problem: all.filter((x) => x.class === 'problem').length, expected: all.filter((x) => x.class === 'expected').length, note: all.filter((x) => x.class === 'note').length }
   const undetermined = undeterminedOf(res, c.readErrors, { files: c.files.length, records: c.records.length, root: (status.cert || {}).root || null })
