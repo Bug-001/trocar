@@ -1,6 +1,6 @@
 // door-identity.mjs — who a connection at a door is (RFC 4.9 §5.3, 4.8 §5.3, D47 · D51): the identity half of a door's lookup, written once. The engine's
 // peer 4-tuple IS the agent's outbound socket, so ONE targeted owner question (`ownerOf`) answers its pid and ONE targeted facts question (`factsOf`) that
-// pid's facts, cached by pid + start time (a wrapped pid is a new life, asked again). Then, in order: this user (`uid`) → the host tree (a form whose
+// pid's facts, asked for every connection (the cache only remembers the last life met: door, host, unread). Then, in order: this user (`uid`) → the host tree (a form whose
 // `hosts.processes` names the host program: its connections are the door harness's only for the targets on the applied host set) → the D51 name list
 // (`identify`, registry.match), with `process-unknown` said once per (door group, name). The collector model's doors
 // (core/proxymode/collector.mjs) ask this; nothing keeps its own copy. Names no harness and no OS; execs nothing itself.
