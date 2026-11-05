@@ -7,7 +7,7 @@ import { overviewModel, scopeModel } from '../../web/src/screens/replay/models.m
 import { deskOf, deskFrom } from './desk-world.mjs'
 import { boardHome, serveBoard } from './real-face.mjs'
 import { buildLanes, anchorLane, turnsReviewed } from '../../web/legacy/replay/lanes.mjs'
-import { problemSteps } from '../../web/legacy/replay/timeline.mjs'
+import { problemSteps, chapterAt } from '../../web/legacy/replay/timeline.mjs'
 import { isBreak, isFailed, breakCost, hitRatio, refOf } from '../../web/legacy/core/metrics.mjs'
 import { FLAG } from '../../src/view/head-cols.mjs'
 import { L } from '../../web/legacy/core/labels.mjs'
@@ -220,6 +220,30 @@ test('1.3 #18 · chapters: k / n, a–b, inferred; ‹ › null at the ends; rou
   assert.deepEqual(after.bars.map((b) => [b.g, b.col]), before.bars.map((b) => [b.g, b.col]))
   assert.ok(before.bars.every((b) => b.rid === undefined), 'a cell drawn from cols carries no rid')
   assert.ok(after.bars.every((b) => typeof b.rid === 'string'), 'a held row carries its rid')
+})
+
+test('1.3 #18 #22 · no chapter row without a compaction; ‹ › count from the part the bars show; go back only while the playhead is in another part', () => {
+  const N = 12, rows = Array.from({ length: N }, () => ({ usage: U(1, 1, 1) }))
+  const one = deskOf([{ kind: 'main', rows }]); one.head = headOf('R0-0', N)
+  assert.equal(scopeModel(stateOf(one, { at: 5 }), 60).chapters, null)
+  const desk = deskOf([{ kind: 'main', rows }]); desk.head = headOf('R0-0', N, { starts: [4, 9] })
+  const chs = desk.head.chapters
+  for (const at of [0, 5, 11]) for (const k of [0, 1, 2]) {
+    const c = chs[k], m = scopeModel(stateOf(desk, { at, span: { lo: c.s0, hi: c.s1 }, brushed: true }), 60)
+    assert.equal(m.chapters.a, c.s0 + 1, `at ${at}, bars in part ${k}`)
+    assert.equal(m.chapters.prev, k ? chs[k - 1].s1 - 1 : null)
+    assert.equal(m.chapters.next, k < 2 ? chs[k + 1].s0 : null)
+    assert.equal(m.chapters.back, chapterAt(chs, at) === k ? null : at + 1)
+  }
+})
+
+test('1.3 #24 · the short part\'s card: steps, time and prompts of the head\'s part while the window is the whole part; none when it is narrower', () => {
+  const N = 12, rows = Array.from({ length: N }, () => ({ usage: U(1, 1, 1) }))
+  const desk = deskOf([{ kind: 'main', rows }]); desk.head = headOf('R0-0', N, { starts: [4, 9] })
+  const c = Object.assign(desk.head.chapters[1], { ts0: '2026-01-01T10:00:00Z', ts1: '2026-01-01T10:30:00Z', prompts: 3 })
+  const card = scopeModel(stateOf(desk, { at: 5 }), 60).chapters.card
+  assert.deepEqual([card.steps, card.ms, card.prompts], [c.s1 - c.s0, Date.parse(c.ts1) - Date.parse(c.ts0), c.prompts])
+  assert.equal(scopeModel(stateOf(desk, { at: 5 }), 2).chapters.card, null)
 })
 
 // the same session three ways: nothing held, the steps from `from` on held, all held

@@ -300,6 +300,14 @@ export const COMP_LEGEND = 'colour = content type (estimated from content size)'
 export const COST_LEGEND = 'bar height = estimated cost of the step (usage × unit price) · hatched = cannot be computed'
 // a part by the compaction before it (k = its index); the strip's label says where the pointer is on it
 export const partWord = (k) => (k ? `Since compaction ${k}` : 'Before the first compaction')
+// the new desk's chapter row (1.3 §章): the part the bars show, its steps, and what of it the window shows when it is narrower
+const stepsAB = (a, b) => (a === b ? `step ${a}` : `steps ${a}–${b}`)
+export const partLabel = (k, a, b, shown, inferred) => `${partWord(k)}${inferred ? ' (inferred)' : ''} · ${stepsAB(a, b)}${shown ? ` · showing ${shown[0] === shown[1] ? shown[0] : `${shown[0]}–${shown[1]}`}` : ''}`
+export const compactionAt = (dir, k, n, at) => `${dir < 0 ? 'Previous' : 'Next'} compaction: compaction ${k} · step ${n}${at ? ` · ${at}` : ''}`
+export const inOtherPart = (n) => `Step ${n} is in another part`
+export const GO_BACK = 'go back'
+export const GO_BACK_TIP = 'Bring the bars back to the step being read'
+export const partCard = (steps, took, prompts) => `${count(steps, 'step')} · ${took} · ${count(prompts, 'prompt')}`
 export const stripAt = (part, n) => (part ? `${part} · step ${n}` : `step ${n}`)
 export const STRIP_LABEL = 'Step being read, in the whole session (the arrow keys move it)'
 export const STRIP_TIP = 'The whole session: drag to show another stretch of steps, click to go to a step, drag the box\'s edges to zoom, double-click the box to widen it'

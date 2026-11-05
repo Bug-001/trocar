@@ -1,5 +1,5 @@
 // web/src/screens/replay/Scope.tsx — the scope (1.3) in the new desk, drawn from models.mjs : scopeModel(s, K). Top to bottom (1.3 §排布):
-// the legend row · the chapter row (a header on the bars' grid, not a track: replay.css .chaprow) · the axis with the playhead's step tag · the problem lane · the main track · the cache trace · the
+// the chapter row, only with a compaction (a header on the bars' grid, not a track: replay.css .chaprow) · the legend row · the axis with the playhead's step tag · the problem lane · the main track · the cache trace · the
 // prompts lane · #rails (rails.mjs draws it; React renders it empty and never touches what is inside) · the whole-session strip (Strip.tsx).
 // Every track is a .tkrow (.tgut + .tlane) on one --gut; one --cursor line runs through the detail rows.
 // What changes on a step move is only what the playhead touches: bars, trace cells and problem marks are memoized and keyed by the row's
@@ -121,6 +121,9 @@ export function Scope({ desk }: { desk: DeskView }) {
       const e = saw.querySelector<HTMLElement>(id)!, q = e.getBoundingClientRect()
       e.toggleAttribute('data-covered', !!r && r.width > 0 && q.width > 0 && r.left < q.right + 4 && q.left < r.right + 4)
     }
+    // the short part's card stands in the room right of the bars; when they need it, it goes (1.3 §短章)
+    const card = saw.querySelector<HTMLElement>('.chapcard')
+    if (card) { card.hidden = false; card.hidden = card.getBoundingClientRect().right > saw.getBoundingClientRect().right }
   }, [m])
 
   const cost = s.sawView === 'cost', rough = !!m?.rough, bars: Bar[] = m ? m.bars : [], n = Math.max(1, bars.length)
@@ -149,20 +152,21 @@ export function Scope({ desk }: { desk: DeskView }) {
   // the bars the window draws, which every detail lane (and #rails, inside #saw) narrows to: the model's window (1.3 §窗内步少时收窄)
   const nb = m ? { '--nbars': String(Math.max(1, m.view.hi - m.view.lo)) } as CSSProperties : undefined
   return <div id="saw" ref={el} style={nb}>
+    {ch ? <div className="chaprow"><div className="tgut" /><div className="chapnav" id="chapnav">
+      <button type="button" className="pgbtn chapbtn" id="chapPrev" disabled={ch.prev == null} title={ch.prevTip} aria-label={ch.prevTip} onClick={() => ch.prev != null && s.chapterGo(ch.prev)}>‹</button>
+      <span className="chaplabel" data-part={ch.k} data-of={ch.n} data-s0={ch.a - 1} data-s1={ch.b} data-inferred={String(ch.inferred)}>{ch.label}</span>
+      {ch.time ? <span className="chaptime">{ch.time}</span> : null}
+      {ch.back != null ? <span className="chapback" data-step={ch.back - 1}>{W.inOtherPart(ch.back)} · <button type="button" className="chapgo" id="chapBack" title={W.GO_BACK_TIP} onClick={() => s.brushBack()}>{W.GO_BACK}</button></span> : null}
+      <button type="button" className="pgbtn chapbtn" id="chapNext" disabled={ch.next == null} title={ch.nextTip} aria-label={ch.nextTip} onClick={() => ch.next != null && s.chapterGo(ch.next)}>›</button>
+    </div></div> : null}
     <div className="sawlegend">
       <span id="viewswitch">{m && !rough ? (['ctx', 'cost'] as const).map((v) => <button key={v} type="button" className={`segbtn${(v === 'cost') === cost ? ' on' : ''}`} data-view={v} aria-pressed={(v === 'cost') === cost} onClick={() => setView(v)}>{v === 'cost' ? W.VIEW_COST : W.VIEW_CTX}</button>) : null}</span>
       <span id="complegend">{lg ? cost && !rough ? <span>{W.COST_LEGEND}</span> : <><span>{lg.estimate}</span><span className="barlegend">{(BAR_KEYS as Array<[string, string]>).map(([c, word]) => <span key={c}><i className={`ct-${c}`} />{word}</span>)}</span></> : null}</span>
       {lg ? <span className="cachelegend" title={w.cacheTip}><i className="tracekey" aria-hidden="true" />{lg.cache[0]} · <i className="tracekey unk" aria-hidden="true" />{lg.cache[1]}</span> : null}
-      <span id="viewrange">{lg?.rangeText || ''}</span>
       {lg?.sampled ? <span className="sampled" title={W.SAMPLED_TIP}>{L.SAMPLED}</span> : null}
       <span id="nomain" style={m?.noMain ? undefined : { display: 'none' }} title={m?.noMain || undefined}>{m?.noMain || ''}</span>
     </div>
     <div className="sdetail" onClick={pick}>
-      <div className="chaprow"><div className="tgut" /><div className="chapnav" id="chapnav">{ch ? <>
-        <button type="button" className="pgbtn chapbtn" id="chapPrev" disabled={ch.prev == null} title={ch.prevTip} aria-label={ch.prevTip} onClick={() => ch.prev != null && s.chapterGo(ch.prev)}>‹</button>
-        <span className="chaplabel" data-part={ch.k} data-of={ch.n} data-s0={ch.a - 1} data-s1={ch.b} data-inferred={String(ch.inferred)}>{ch.label}</span>
-        <button type="button" className="pgbtn chapbtn" id="chapNext" disabled={ch.next == null} title={ch.nextTip} aria-label={ch.nextTip} onClick={() => ch.next != null && s.chapterGo(ch.next)}>›</button>
-      </> : null}</div></div>
       <div className="tkrow tkrow-axis"><div className="tgut" /><div className="tlane"><div className="sawaxis">
         <span id="sawstart">{m?.axis?.start || ''}</span>
         {f != null && m!.tag ? <span className="axtag" style={{ left: pct(f) }}>{m!.tag}</span> : null}
@@ -177,6 +181,7 @@ export function Scope({ desk }: { desk: DeskView }) {
         <div className="tlane"><div className="sawrow" id="sawrow">
           <div id="reviewbracket" style={m?.review ? { display: 'block', width: pct(m.review.width) } : { display: 'none' }} title={m?.review?.tip}><span className="rbend" aria-hidden="true">{W.GUESS}</span></div>
           {bars.map((b, col) => <BarView key={keyAt(col)} b={b} cost={cost && !rough} />)}
+          {ch?.card ? <span className="chapcard">{ch.card.text}</span> : null}
         </div></div></div>
       <div className="tkrow tkrow-cache"><div className="tgut">{W.CACHE_TITLE}</div><div className="tlane"><div className="cacherow" id="cacherow">
         <svg className="ctrace" viewBox={`0 0 ${n} 10`} preserveAspectRatio="none" aria-hidden="true">

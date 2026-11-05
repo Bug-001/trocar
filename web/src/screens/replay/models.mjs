@@ -317,8 +317,8 @@ export function scopeModel(s, K) {
   const shares = !cost && pc ? compShares(pc.comp) : null
   return {
     view: { lo, hi, N }, at, rough,
-    legend: { estimate: cost ? W.COST_LEGEND : W.COMP_LEGEND, cache: [W.CACHE_LEGEND, W.CACHE_LEGEND_UNK], range: [lo + 1, hi], rangeText: W.showSteps(lo + 1, hi), sampled: N > OVW_POINTS },
-    chapters: chaptersOf(parts, lo), part, box: hi - lo < parts[part].s1 - parts[part].s0 ? { lo, hi } : null,
+    legend: { estimate: cost ? W.COST_LEGEND : W.COMP_LEGEND, cache: [W.CACHE_LEGEND, W.CACHE_LEGEND_UNK], sampled: N > OVW_POINTS },
+    chapters: chaptersOf(parts, lo, hi, at), part, box: hi - lo < parts[part].s1 - parts[part].s0 ? { lo, hi } : null,
     problems: rows ? problemsOf(s, bars) : null,
     bars, peak,
     trace: bars.map((b) => (b.i != null ? traceOf(a.calls[b.i], refRowOf(a, b.i), b.col) : { col: b.col, state: 'gap', tip: '' })),
@@ -336,7 +336,7 @@ export function scopeModel(s, K) {
 // a tier-0 head (1.5 K-31): the calls by time, sampled, no bars
 function timeScope(head) {
   return { view: { lo: 0, hi: 0, N: head.steps }, at: null, rough: true, chapters: null, problems: null, bars: [], trace: [], asks: null, review: null, axis: null, gutter: [], cursor: { col: null }, noMain: null,
-    peak: { text: '', tip: null }, legend: { estimate: W.COMP_LEGEND, cache: [W.CACHE_LEGEND, W.CACHE_LEGEND_UNK], range: null, rangeText: '', sampled: true }, box: null }
+    peak: { text: '', tip: null }, legend: { estimate: W.COMP_LEGEND, cache: [W.CACHE_LEGEND, W.CACHE_LEGEND_UNK], sampled: true }, box: null }
 }
 
 // one cache-trace cell, drawn by cacheState()'s own order (1.3 §缓存迹线)
@@ -374,13 +374,22 @@ function problemsOf(s, bars) {
   return { k: at >= 0 ? at + 1 : null, n: probs.length, name: W.problemPager(at >= 0 ? at + 1 : null, probs.length), items }
 }
 
-// the chapter row (1.3 §章): the part step `g` is in (the window's: the label says what the bars show): k / n, the steps a–b, inferred,
-// where ‹ / › land (null at the ends: disabled, not hidden)
-function chaptersOf(chs, g) {
-  const k = chapterAt(chs, g), c = chs[k], b = c.s1
-  return { k: k + 1, n: chs.length, a: c.s0 + 1, b, inferred: !!c.inferred, prev: chapterJump(chs, g, -1), next: chapterJump(chs, g, 1),
-    label: W.chapterLabel(k + 1, chs.length, c.s0 + 1, b, !!c.inferred), prevTip: W.CHAPTER_PREV, nextTip: W.CHAPTER_NEXT }
+// the chapter row (1.3 §章), null without a compaction: the part the window [lo, hi) is in (the label says what the bars show): k / n,
+// the steps a–b, inferred, its start; where ‹ / › land (null at the ends: disabled, not hidden) and the compaction each crosses;
+// `back` = the playhead's step when it is in another part (go back); `card` = the part's facts when the window is the whole part
+function chaptersOf(chs, lo, hi, at) {
+  if (chs.length < 2) return null
+  const k = chapterAt(chs, lo), c = chs[k], a = c.s0 + 1, b = c.s1, inferred = !!c.inferred, whole = hi - lo === c.s1 - c.s0
+  // compaction j opens part j: a harness-marked one is the last step before it, an inferred one its first step (1.3 #18)
+  const edge = (j, dir) => { const d = chs[j]; if (!d || !j) return dir < 0 ? W.CHAPTER_PREV : W.CHAPTER_NEXT
+    return W.compactionAt(dir, j, d.inferred ? d.s0 + 1 : d.s0, fmtStampOr(d.inferred ? d.ts0 : chs[j - 1].ts1)) }
+  return { k: k + 1, n: chs.length, a, b, inferred, prev: chapterJump(chs, lo, -1), next: chapterJump(chs, lo, 1),
+    label: W.partLabel(k, a, b, whole ? null : [lo + 1, hi], inferred), time: fmtStampOr(c.ts0),
+    prevTip: edge(k, -1), nextTip: edge(k + 1, 1), back: at != null && chapterAt(chs, at) !== k ? at + 1 : null,
+    card: whole && c.prompts != null ? cardOf(b - a + 1, new Date(c.ts1) - new Date(c.ts0), c.prompts) : null }
 }
+const cardOf = (steps, ms, prompts) => ({ steps, ms: Number.isFinite(ms) ? ms : null, prompts, text: W.partCard(steps, fmtUp(ms), prompts) })
+const fmtStampOr = (ts) => (ts == null ? '' : fmtStamp(ts))
 
 // the 提问刻度 (1.3 §提问刻度): ticks from the skeleton's user events on the window's rows; K and P are the server's `k`, never a count
 function asksOf(s, bars) {

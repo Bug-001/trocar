@@ -53,6 +53,32 @@ test('1.3 #1: every track is a .tkrow of exactly a .tgut and a .tlane', () => {
   }
 })
 
+test('1.3 #18 #19: without a compaction there is no chapter row and the legend is the first row; with one the chapter row is first, the legend second', () => {
+  const N = ROWS.length
+  for (const starts of [[0], [0, 4]]) {
+    const desk = deskOf([{ kind: 'main', rows: ROWS }], { events: EVENTS })
+    desk.head = { tier: 1, axis: 'R0-0', steps: N, peak: 1000, bucket: 1, chapters: starts.map((s0, k) => ({ k, s0, s1: starts[k + 1] ?? N, ts0: null, inferred: false })) }
+    const { $ } = mount(stateOf(desk, { at: 1 }))
+    const rows = [...$('#saw')!.children].map((c) => c.className.split(' ')[0])
+    expect(rows.slice(0, 2), `${starts.length} parts`).toEqual(starts.length > 1 ? ['chaprow', 'sawlegend'] : ['sawlegend', 'sdetail'])
+    expect($('#chapnav'), `${starts.length} parts`).toBe(starts.length > 1 ? $('#saw .chaprow #chapnav') : null)
+    cleanup(); document.body.replaceChildren()
+  }
+})
+
+test('1.3 #22: go back is on the chapter row only while the bars show another part than the playhead\'s, and takes them back to it', () => {
+  const N = ROWS.length, starts = [0, 4]
+  const desk = deskOf([{ kind: 'main', rows: ROWS }], { events: EVENTS })
+  desk.head = { tier: 1, axis: 'R0-0', steps: N, peak: 1000, bucket: 1, chapters: starts.map((s0, k) => ({ k, s0, s1: starts[k + 1] ?? N, ts0: null, inferred: false })) }
+  const { s, desk: view, $ } = mount(stateOf(desk, { at: 1, span: { lo: 4, hi: N }, brushed: true }))
+  expect($('#chapBack')).not.toBeNull()
+  expect(+$('.chapback')!.dataset.step!).toBe(1)
+  s.brushBack = () => { s.span = null; s.brushed = false; view.saw() } // the controller's: the bars go back to the playhead
+  act(() => { fireEvent.click($('#chapBack')!) })
+  expect($('#chapBack')).toBeNull()
+  expect(+$('#chapnav .chaplabel')!.dataset.s0!).toBe(starts[0])
+})
+
 test('1.3 #19: the legend is the first row; #rails comes after the prompts row and before the overview; one playhead; the gutter shares', () => {
   for (const at of ROWS.keys()) {
     const { s, desk, $, $$ } = world({ at })
