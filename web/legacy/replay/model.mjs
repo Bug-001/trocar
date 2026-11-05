@@ -151,6 +151,8 @@ export const boardDef = (w) => ({ ...w, faithfulness: w.ff ? w.ff.faithfulness :
 
 /** A resource's identity: the server's `resKey` / `key`, else `kind::label` (3.5's ledger key). */
 export const resKeyOf = (r) => r.resKey || r.key || r.kind + '::' + r.label
+/** Does block `b` carry resource `key`: its `resKey`, or any of `resKeys` (a shell read of several files, 2.4). */
+export const carriesRes = (b, key) => b.resKey === key || (Array.isArray(b.resKeys) && b.resKeys.includes(key))
 
 function mergeLedger(h, a) {
   merge(h.resources, a.resources, resKeyOf)

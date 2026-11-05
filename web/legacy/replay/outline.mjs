@@ -5,7 +5,7 @@
 import { esc, kf } from '../core/fmt.mjs'
 import { KIDS, serialize, keyed, patchInto } from '../core/units.mjs'
 import { humanTurns, hasChangeLine, foldWs, QUIET_CAUSES } from './analysis.mjs'
-import { stepOf, laneEvents } from './model.mjs'
+import { stepOf, laneEvents, carriesRes } from './model.mjs'
 import { anchorJump, blockJump } from './jump.mjs'
 import { stepRef } from './lanes.mjs'
 import * as W from '../labels/replay.mjs'
@@ -120,7 +120,7 @@ export const jumpToBlockIndex = (s, fi) => { s.reveal({ fi, open: true, flash: 2
 // open and highlight the block that carries a resource, in the step the playhead is on. Found in the step's list, not the DOM:
 // its row may sit in a folded turn or a group not drawn yet, which the jump draws first. → whether the step carries that block.
 export function jumpToResourceBlock(s, resKey) {
-  const fi = (s.curFlat || []).findIndex((b) => b.resKey === resKey)
+  const fi = (s.curFlat || []).findIndex((b) => carriesRes(b, resKey))
   if (fi >= 0) jumpToBlockIndex(s, fi)
   return fi >= 0
 }

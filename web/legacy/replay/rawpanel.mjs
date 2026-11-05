@@ -10,7 +10,7 @@ import { relPath } from './analysis.mjs'
 import { showBody, bodyFor, faithOf } from './blocks.mjs'
 import { replyOf } from '../../src/screens/replay/window-model.mjs'
 import { refsOf, keysOf, scalarShown, techRows, wireOf } from '../../src/screens/replay/call-details.mjs'
-import { stepOf } from './model.mjs'
+import { stepOf, carriesRes } from './model.mjs'
 import { stepRef } from './lanes.mjs'
 import { keyed, patchInto } from '../core/units.mjs'
 import * as W from '../labels/replay.mjs'
@@ -118,9 +118,9 @@ export function renderResourceView(el, s) {
   const call = s.anchor && s.anchor.calls[s.playhead]
   const held = !!(call && s.desk && stepOf(s.desk, call.rid).held)
   const notHere = !call ? '' : call.unparsed ? W.UNPARSED_LINE : !call.rec ? W.NO_REQUEST : ''
-  const tools = pin.resKey ? flat.filter((x) => x.sec === 'tools' && x.resKey === pin.resKey) : []
+  const tools = pin.resKey ? flat.filter((x) => x.sec === 'tools' && carriesRes(x, pin.resKey)) : []
   // prefer a block that carries the content (a result / injected text) over the call that requested it
-  const b = pin.resKey && !tools.length ? (flat.find((x) => x.resKey === pin.resKey && x.kind !== 'tool_use') || flat.find((x) => x.resKey === pin.resKey)) : null
+  const b = pin.resKey && !tools.length ? (flat.find((x) => carriesRes(x, pin.resKey) && x.kind !== 'tool_use') || flat.find((x) => carriesRes(x, pin.resKey))) : null
   let body
   if (notHere) body = `<div class="rpk">${esc(notHere)}</div>`
   else if (call && !held) body = busyRowsHtml()

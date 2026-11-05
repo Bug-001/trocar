@@ -8,6 +8,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { resourcesHtml, renderResources, wireResources } from '../../web/legacy/replay/resources.mjs'
 import * as W from '../../web/legacy/labels/replay.mjs'
+import { esc } from '../../web/legacy/core/fmt.mjs'
 import { relPath } from '../../web/legacy/replay/analysis.mjs'
 import { buildLanes, anchorLane } from '../../web/legacy/replay/lanes.mjs'
 import { deskOf } from './desk-world.mjs'
@@ -244,4 +245,19 @@ test('2.4: without the flag the name pins the resource as before', () => {
   assert.equal(s.viewPin.resKey, 'file:a')
   assert.equal(got.renderRaw, 1)
   assert.deepEqual([got.reveal, got.jumpTo, got.noBlock], [[], [], 0])
+})
+
+test('2.4 #13: a resource with a runtime code sits in its own group, never in the files read, with its code\'s reason', () => {
+  const codes = Object.keys(W.RUNTIME_WHY)
+  const anchor = anchorOf({ resources: [
+    { kind: 'file', label: '/w/p/a.mjs', segments: [{ enter: R(0), evict: null }] },
+    ...codes.map((c, i) => ({ kind: 'file', label: `x${i}/$f`, runtime: c, segments: [{ enter: R(i), evict: null }] })),
+  ] })
+  const h = resourcesHtml(stateOf(anchor, { navOpen: new Set([...ALL_OPEN, 'life-runtime']) }))
+  assert.equal(grpCount(h, W.RES_GRP.file), 1, 'only the settled path is a file read')
+  assert.equal(grpCount(h, W.RES_GRP.runtime), codes.length)
+  codes.forEach((c, i) => {
+    const row = h.match(new RegExp(`<div class="navsub[^"]*"[^>]*data-navres="file:x${i}/\\$f">[\\s\\S]*?</div>`))
+    assert.ok(row && row[0].includes(esc(W.RUNTIME_WHY[c])), c)
+  })
 })
