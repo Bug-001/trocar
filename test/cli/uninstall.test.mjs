@@ -528,10 +528,10 @@ test('§3.6: a plain uninstall lists every place it keeps — flows/, audit/, re
   assert.deepEqual([p.io.json().kept, ['flows', 'audit', 'replays'].filter((d) => fs.existsSync(path.join(purged.dir, d)))], [[], []])
 })
 
-test('the text receipt says a file once: two entries of one file with the same change, or a file named twice as removed, are one row', () => {
+test('the text receipt says a file once: the entries of one file, whatever each changed, or a file named twice as removed, are one row', () => {
   const file = path.join('/h', 'Library', 'Application Support', 'Code', 'User', 'settings.json') // one file, two json entries (a proxy key and an array item)
   const rows = (r) => formatUninstallReceipt({ command: 'uninstall', ok: true, removed: [], ...r }, { home: '/h' }).split('\n').filter((l) => l.includes('settings.json')).length
   assert.equal(rows({ changed: [{ path: file, change: 'restored' }, { path: file, change: 'restored' }] }), 1)
-  assert.equal(rows({ changed: [{ path: file, change: 'restored' }, { path: file, change: 'trocar\'s lines removed' }] }), 2)
+  assert.equal(rows({ changed: [{ path: file, change: 'restored' }, { path: file, change: 'trocar\'s lines removed' }] }), 1)
   assert.equal(rows({ removed: [file, file] }), 1)
 })
