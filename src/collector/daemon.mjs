@@ -798,7 +798,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     // meanwhile talks to this daemon (`on` starts one only when none is running). `exitAsked` counts the requests; /on and a newer /off {exit} both
     // bump it, so only the latest request may stop the daemon, and never while some harness is on — an exit would leave state.json saying on with
     // nothing attached and, being a clean exit, no supervisor to restart it.
-    const whenDrained = (now) => {
+    function whenDrained(now) { // a declaration: a reload during the start's awaits may already ask for a release
       const left = engine.drained({ agents: null })
       return (now ? Promise.race([left, new Promise((r) => setTimeout(r, 500))]) : left).then(() => new Promise((r) => setTimeout(r, 50)))
     }
