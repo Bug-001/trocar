@@ -82,7 +82,7 @@ Add `--public-host <host>` (repeatable) only when the host is a public service a
 
 The check cannot see a paraphrase, so a clean run does not excuse step 3. Reread the text yourself and ask: could someone learn anything about this user's work from it?
 
-A refusal means rewrite and run it again. Never edit the check, never pass it a different time to get through, never push first and clean up after: GitHub keeps every revision of a pull request's text.
+A refusal means rewrite and run it again. captured-facts names the kind of fact and the line: rewrite that line. Never edit the check, never pass it a different time to get through, never push first and clean up after: GitHub keeps every revision of a pull request's text.
 
 ### 5. Ask the user
 
