@@ -107,10 +107,13 @@ class HeapBound extends Error {
 // processes look at the same rows. The fold stops when the live heap comes within half a step of the budget or passes the ceiling.
 // What the reduction holds (`m.held`, its weight in the shared ledger: costOf) is what the heap grew by since it began (`m.base`,
 // measured for a state from scratch, and kept by a state grown across requests).
+const heapLine = () => heapBudget() - heapBudget() / BOUND_STEPS / 2;
+/** Whether the live heap is short of the line a fold stops at (a full collection): a session stopped by heap-no-room is worth another try. */
+export const heapHasRoom = () => liveHeap() <= heapLine();
 function bounded(m, rows, bytes) {
   m.since += bytes;
   if (usedHeap() <= heapCeiling() && m.since < m.gap) return;
-  const line = heapBudget() - heapBudget() / BOUND_STEPS / 2;
+  const line = heapLine();
   let live = liveHeap();
   if (live > line) { yieldCaches(); live = liveHeap(); } // every other kept entry but the steady ones gives way before this fold is cut
   m.held = live - m.base;
