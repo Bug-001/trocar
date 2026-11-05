@@ -61,8 +61,8 @@ export function textsBehind(rec) {
         // the read side has no one entry for this: Anthropic's normResp is its own, the other wires' sit on their dissectors
         const norm = format === 'anthropic' ? normResp(view) : boardDissectorOf(format)?.normResp(view)
         if (norm) texts.push(...[norm.text, norm.thinking, JSON.stringify(norm.tools)].filter(Boolean).map((text) => Buffer.from(text)))
-        // a stream with no events, or messages kept only by size, have nothing that could hide
-        else if (resp.raw_sse?.length > 0 || resp.messages?.some((m) => typeof m === 'string' || typeof m?.b64 === 'string')) opaque = true
+        // deltas no wire joins hide what they spell; one event has it all on the line, and messages kept only by size have nothing that could hide
+        else if (resp.raw_sse?.length > 1 || resp.messages?.some((m) => typeof m === 'string' || typeof m?.b64 === 'string')) opaque = true
       } else if ((part.kind === 'text' || part.kind === 'json') && STREAMED.test(headers['content-type'])) {
         opaque = true
       }
