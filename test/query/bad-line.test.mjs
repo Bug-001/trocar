@@ -93,3 +93,22 @@ for (const name of Object.keys(KEEP)) for (const kind of KINDS[name]) for (const
     } finally { svc.stop() }
   })
 }
+
+// every file of a home by its bytes
+const tree = (home) => {
+  const h = crypto.createHash('sha256')
+  for (const n of fs.readdirSync(home, { recursive: true }).sort()) { const f = path.join(home, n); if (fs.statSync(f).isFile()) h.update(n).update(fs.readFileSync(f)) }
+  return h.digest('hex')
+}
+for (const [name, kind] of [['extract', 'c'], ['extract', 'd'], ['fold', 'c'], ['fold', 'l']]) {
+  test(`4.3 旁索引: with no worker a ${name} ${kind} line that is not whole under its sidecar is read through at once, and the disk stays`, async () => {
+    const whole = await runQuery('session', { id: ID }, { home: await foldedHome() })
+    const home = path.join(tmpDir('trocar-badline-'), '.trocar')
+    fs.cpSync(await foldedHome(), home, { recursive: true })
+    spoil(sessionDir(home, ID), name, kind, 0.8)
+    const was = tree(home), d = await runQuery('session', { id: ID }, { home })
+    assert.deepEqual([d.mark, d.pending, d.calls.length], [whole.mark, whole.pending, whole.calls.length])
+    assert.deepEqual(d.calls.map((c) => c.rid), whole.calls.map((c) => c.rid))
+    assert.equal(tree(home), was, 'a local read writes nothing')
+  })
+}
