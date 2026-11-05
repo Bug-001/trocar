@@ -3,8 +3,10 @@
 // column #midcol, which holds only the step head and the context window (1.4 中栏). The two boundaries are react-resizable-panels'
 // (D80①); neither Group has an id: the library keeps mounted groups in a module-level table by id, and two cached desks would collide.
 // Until the reader moves it the scope's boundary follows the content; a move, or a stored layout, stops that. Its first layout effect
-// hands the controller what it still draws into (view.framed), once.
-import { useCallback, useLayoutEffect, useRef, useState } from 'react'
+// hands the controller what it still draws into (view.framed), once. Under 1200 px the sidebar's cell leaves the Group and the bottom row
+// follows it (1.2 §窄屏); desk-main keeps its place, so the scope and the window stay mounted, and the Group keeps the layout it had
+// for each set of panels, so the sidebar comes back at its width.
+import { useCallback, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { Group, Panel, Separator, useGroupRef, usePanelRef } from 'react-resizable-panels'
 import { SCOPE_SPLIT_TIP, SIDE_SPLIT_TIP } from '../../../legacy/labels/replay.mjs'
 import { DeskHead } from './DeskHead'
@@ -16,9 +18,17 @@ import { Window } from './Window'
 import type { DeskView } from './view'
 
 const SIDE_PX = 352 // 1.2 §回放台布局
+const NARROW = '(max-width: 1199.98px)' // 1.2 §窄屏
+const isNarrow = () => typeof matchMedia === 'function' && matchMedia(NARROW).matches
+function onWidth(f: () => void) {
+  if (typeof matchMedia !== 'function') return () => {}
+  const m = matchMedia(NARROW)
+  m.addEventListener('change', f)
+  return () => m.removeEventListener('change', f)
+}
 
 export function DeskFrame({ desk }: { desk: DeskView }) {
-  const wide = true as boolean
+  const wide = !useSyncExternalStore(onWidth, isNarrow)
   const side = useSplit('trocar.v2.split.side'), scope = useSplit('trocar.v2.split.scope'), { held } = scope
   const sideGroup = useGroupRef(), sidePanel = usePanelRef(), scopePanel = usePanelRef()
   const col = useRef<HTMLDivElement>(null), content = useRef<HTMLDivElement>(null)
@@ -29,11 +39,12 @@ export function DeskFrame({ desk }: { desk: DeskView }) {
     desk.framed({ rails: $('#rails'), resexp: desk.resexp, saw: null, detail: document.getElementById('detail') })
   }, [desk])
 
-  // the scope is as tall as its content, up to half the column less the step head (1.2 §上下文窗的高度)
+  // the scope is as tall as its content, up to half the column less the step head and the boundary (1.2 §上下文窗的高度). The less one:
+  // the half is of the height under the head as the viewport has it, and the column starts a pixel lower than that
   const fit = useCallback(() => {
-    const h = col.current!.clientHeight
-    if (h && !held()) scopePanel.current?.resize(Math.min(content.current!.offsetHeight, h / 2 - desk.root.querySelector<HTMLElement>('#stepbar')!.offsetHeight))
-  }, [desk, held, scopePanel])
+    const h = col.current!.clientHeight, $h = (sel: string) => col.current!.querySelector<HTMLElement>(sel)!.offsetHeight
+    if (h && !held()) scopePanel.current?.resize(Math.min(content.current!.offsetHeight, h / 2 - 1 - $h('#stepbar') - $h('[data-separator]')))
+  }, [held, scopePanel])
   useLayoutEffect(() => {
     const ro = new ResizeObserver(fit)
     for (const el of [content.current!, col.current!, desk.root.querySelector('#stepbar')!]) ro.observe(el)
