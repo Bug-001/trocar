@@ -193,6 +193,19 @@ test('CM20 · meta.upstream equals upstreamFor over env × system proxy × prior
   }
 })
 
+test('CM20 · the user\'s own NO_PROXY, recorded as the prior of its key, is never the upstream: with no proxy of theirs the door dials direct', async () => {
+  for (const d of descs) for (const [rid, r] of Object.entries(d.proxyMode.routes).filter(([, x]) => x.kind === 'json-key' && x.noProxyKeys && x.auth !== false)) {
+    if (!d.proxyMode.forms.some((f) => f.route === rid && f.os.includes('darwin'))) continue
+    const g = `${d.name}:${rid}`
+    const on = [{ phase: 'on', harness: d.name, route: rid, kind: 'json-key', keys: r.proxyKeys[0] }, ...r.noProxyKeys.map((keys) => ({ phase: 'on', harness: d.name, route: rid, kind: 'json-key', keys, prior_value: 'corp.example' }))]
+    const { c } = await rig({ desc: d, w: { pid: ++pid, facts: { agent: null, startedAt: INSTALLED + 1 }, env: {}, sp: null, manifest: manifestOf(d.name, { on }) } })
+    await c.on({ harnesses: [d.name], groups: { [g]: 18101 } })
+    const meta = await c.lookupIngress({ peer: PEER, user: g, target: { address: 'api.example', port: 443 } })
+    assert.deepEqual(meta.upstream, { kind: 'direct' }, g)
+    c.close()
+  }
+})
+
 test('CM20 / ⑥ · an unidentified process at a credentialed door (an agent\'s child that inherited a hook\'s env) dials the hook value from its own env; unread is prior-proxy-unknown, never a silent direct', async () => {
   for (const d of descs.filter((x) => x.proxyMode.forms.some((f) => f.os.includes('darwin') && x.proxyMode.routes[f.route]?.auth !== false))) {
     const f = d.proxyMode.forms.find((x) => x.os.includes('darwin') && d.proxyMode.routes[x.route]?.auth !== false)
