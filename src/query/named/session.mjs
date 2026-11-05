@@ -590,9 +590,12 @@ export async function extendSession(ctx, id, budgetMs) {
   if (!r) return false;
   const { st, plan, ex, writing } = r;
   if (!writing && (ex.done < ex.total || (st.target != null ? pastOf(plan, st.target, ex.done) : st.fp !== plan || st.fc < plan.n))) { backlog(ctx, String(id), r); return true; }
-  const s = stateAt(ctx, r, String(id));
-  shown.delete(s.id);
-  try { if (!toState(ctx, s, end)) return true; } catch (e) { if (!e || e.code !== 'ELINEPART') throw e; letLinesGo(ctx, id); return true; }
+  let s;
+  try {
+    s = stateAt(ctx, r, String(id)); // the lane heads read lines too (viewOf)
+    shown.delete(s.id);
+    if (!toState(ctx, s, end)) return true;
+  } catch (e) { if (!e || e.code !== 'ELINEPART') throw e; letLinesGo(ctx, id); return true; }
   if (s.st.gone) return false; // read-only since this slice: as a write that failed, the next turn reopens it
   if (rereading(ctx, s.id)) {
     stops.delete(s.id);
