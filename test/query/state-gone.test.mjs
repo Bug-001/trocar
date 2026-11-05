@@ -37,14 +37,14 @@ function bytesOf({ home, id }, names) {
   return o
 }
 const ANSWERS = /^(head|p\d|open\.)/, WRITTEN = /^(fold\.|head|p\d|open\.)/
-// a write of many units under way, with members landed that wait for it → the log it is on
+// a write of many units under way, with members landed that wait for it → the log it is on and its state
 async function inWrite(s) {
   await whole(s)
   s.a.append(600) // a pack to seal
-  const log = (await sessionState(s.ctx, s.id)).V.log
+  const { st, V: { log } } = await sessionState(s.ctx, s.id)
   await drain(async () => { await extendSession(s.ctx, s.id, SPENT); return !writeInFlight(log) }, 'until a write is in flight', 50_000)
   s.a.append(3)
-  return log
+  return { log, st }
 }
 
 test('a state let go folds and writes no more: its holder goes on through files() and the disk is the new state\'s', async () => {
@@ -102,12 +102,15 @@ test('a state let go in its own slice says neither more nor the end: nothing is 
   assert.deepEqual([readHead(s.home, s.id).tier, readHead(s.home, s.id).pending], [1, null])
 })
 
-for (const [name, letGo] of [['the ledger making room', () => hold(heapBudget())()], ['yieldCaches', yieldCaches]]) {
+// past the whole budget: the ledger lets every entry go, the state too whatever its measured cost (a state measured as 0 frees no room,
+// so room for just the budget can leave it)
+for (const [name, letGo] of [['the ledger making room', () => hold(heapBudget() + 1)()], ['yieldCaches', yieldCaches]]) {
   test(`a write in flight let go by ${name}: the files end as those of a home never let go`, async () => {
     const id = nextId(), cut = homeWith(300, id), kept = homeWith(903, id)
-    const log = await inWrite(cut)
+    const { log, st } = await inWrite(cut)
     assert.equal(writeInFlight(log), true)
     letGo()
+    assert.equal(st.gone, true, 'the state was let go')
     await whole(cut)
     assert.deepEqual([readHead(cut.home, id).tier, readHead(cut.home, id).pending], [1, null])
     await whole(kept)
