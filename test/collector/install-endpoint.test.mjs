@@ -45,10 +45,10 @@ const claudeHome = (root) => {
 
 // linux keeps the $XDG_RUNTIME_DIR socket with no token: the same no-injection world must resolve it the linux way.
 test('on (linux): the daemon is found through $XDG_RUNTIME_DIR, and POST /on sends no token there', async () => {
-  const root = tmpDir('as-ep-linux-')
+  const root = tmpDir('as-') // short: macOS caps a unix socket path at 104 bytes, and $TMPDIR there is long
   try {
     const home = claudeHome(root)
-    const run = path.join(root, 'run'); fs.mkdirSync(run, { recursive: true })
+    const run = path.join(root, 'r'); fs.mkdirSync(run, { recursive: true })
     const sock = path.join(run, 'trocar', 'collector.sock')
     fs.mkdirSync(path.dirname(sock), { recursive: true })
     const d = daemon({ sock, token: null })
