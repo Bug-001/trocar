@@ -379,7 +379,7 @@ for (const [name, places, check] of [
   test(`what a frame says of an injected event, ${name}`, async () => {
     const dir = tmpDir('trocar-inject-'), script = path.join(dir, 'script.mjs');
     fs.writeFileSync(script, moduleOf({ body: `say({ id: taskId(), verdict: 'forward', hits: ['two'], inject_at: ${places} }); ${HOLD}` }, dir));
-    const rule = (name, action) => ({ name, on_error: 'forward', match: { harness: 'any', on: 'response' }, do: [action] });
+    const rule = (name, action) => ({ name, on: 'response', on_error: 'forward', match: { harness: 'any' }, do: [action] });
     const runner = openOneShot({ script, rules: [rule('one', { script }), rule('two', { inject: 'data: x\n\n' })] });
     const on = { ...unit(), on: 'response' };
     try {
