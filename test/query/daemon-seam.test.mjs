@@ -22,7 +22,7 @@ import { within } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { apply, canon } from '../helpers/session-apply.mjs'
 import { generate } from '../../scripts/gen-dataset.mjs'
-import { run as runQueryCli } from '../../src/cli/query.mjs'
+import { cli } from './query-cli.mjs'
 import { commandNamed } from '../../src/cli/commands.mjs'
 import { parseArgs } from '../../src/cli/args.mjs'
 import { EXIT } from '../../src/cli/schema.mjs'
@@ -33,17 +33,6 @@ import { controlEndpointFor } from '../../src/off/control-client.mjs'
 import { CONTROL_TOKEN_HEADER } from '../../src/off/token-header.mjs'
 
 const QUERY = commandNamed('query')
-
-/** `trocar query <argv>` as the command line runs it → { out, exit }: the flags are what the real parser makes of argv (a repeated
- *  option reaches the command as the list of its values), one document on stdout, nothing injected. */
-async function cli(argv, { home, env, platform }) {
-  const out = [], err = []
-  const io = { out: (s) => out.push(s), err: (s) => { out.push(s); err.push(s) }, stdout: { isTTY: false }, stderr: {}, stdin: { isTTY: false } }
-  const args = parseArgs(QUERY, argv)
-  assert.equal(args.error, null, `${argv.join(' ')} parses`)
-  const exit = await runQueryCli(argv, { io, json: !!args.flags.json, args, home, env, platform, deps: {} })
-  return { out: out.join('\n'), err: err.join('\n'), exit }
-}
 
 /** The id of the session with the most records in a generated corpus. */
 const biggestSession = (doc) => JSON.parse(doc).sessions.slice().sort((a, b) => b.calls - a.calls)[0].session_id
