@@ -206,14 +206,16 @@ function letGo(k, e) { closeStore(k); return e; }
 export const openSessions = () => [...stores.values()].map((s) => s.session);
 // Every store closes here (a hand-off, the eviction past STORES): its reduction state with it, and its `work` stays with the worker.
 function closeStore(k) { const s = stores.get(k), st = states.take(k); if (st) closeState(st); stores.delete(k); frontiers.delete(k); if (s) { works.set(k, s.work); s.close(); } }
+// ELINEPART: the session's warm store and its state (fold log, reduction) go, so the next read opens them again.
+function letLinesGo(ctx, id) { closeStore(keyOf(ctx, String(id))); lagging.delete(String(id)); }
 /** again(ctx, id, f) → f(), and f() once more when it threw ELINEPART (line-file.mjs: a part first decoded after the open, which
- *  a sidecar lets skip the scan, did not decode): the session's warm store and its state (fold log, reduction) are let go first,
- *  so the second opens them again and rebuilds that line file with its projection-rebuilt note (4.3 §4 分片). Any other error is
+ *  a sidecar lets skip the scan, did not decode, or a line the sidecar names is no whole line): a writer removed the part or that
+ *  sidecar, so the second opens them again and rebuilds that line file with its projection-rebuilt note (4.3 §4 分片). Any other error is
  *  thrown as it is. In the same request: the next one would do the same rebuild, and this answer already says it. */
 export async function again(ctx, id, f) {
   try { return await f(); } catch (e) {
     if (!e || e.code !== 'ELINEPART' || id == null) throw e;
-    closeStore(keyOf(ctx, String(id))); lagging.delete(String(id));
+    letLinesGo(ctx, id);
     return f();
   }
 }
@@ -587,7 +589,7 @@ export async function extendSession(ctx, id, budgetMs) {
   if (!writing && (ex.done < ex.total || (st.target != null ? pastOf(plan, st.target, ex.done) : st.fp !== plan || st.fc < plan.n))) { backlog(ctx, String(id), r); return true; }
   const s = stateAt(ctx, r, String(id));
   shown.delete(s.id);
-  if (!toState(ctx, s, end)) return true;
+  try { if (!toState(ctx, s, end)) return true; } catch (e) { if (!e || e.code !== 'ELINEPART') throw e; letLinesGo(ctx, id); return true; }
   if (s.st.gone) return false; // read-only since this slice: as a write that failed, the next turn reopens it
   if (rereading(ctx, s.id)) {
     stops.delete(s.id);
@@ -682,11 +684,12 @@ export function files(ctx, s) {
 }
 // false while the session's pack and tail files are short of the state `s` at `deadline` (the next slice goes on: ctx-files.mjs
 // writeFiles), else true: brought to it (the worker only), their `packs` / `open` kept on `s` for its head; a write that failed, or a render
-// that threw, is writeFailed's and is done afresh at the session's next turn. A state let go writes nothing, no failure: `s.files` stays
-// empty, so the caller answers as after a write that failed.
+// that threw, is writeFailed's and is done afresh at the session's next turn. ELINEPART (a line of the log read for them is no whole line)
+// is no write that failed: it is thrown, as at any other read, and the caller opens the session again (4.3 §4 分片). A state let go writes
+// nothing, no failure: `s.files` stays empty, so the caller answers as after a write that failed.
 function toState(ctx, s, deadline = Infinity) {
   if (ctx.writer !== true || s.mark == null || s.st.gone) return true;
-  try { s.files = writeFiles({ home: ctx.home ?? trocarHome(), fs: ctx.fs || nodeFs }, s, deadline); } catch (e) { forget(s.V.log); writeFailed(ctx, s.id, e); return true; }
+  try { s.files = writeFiles({ home: ctx.home ?? trocarHome(), fs: ctx.fs || nodeFs }, s, deadline); } catch (e) { forget(s.V.log); if (e && e.code === 'ELINEPART') throw e; writeFailed(ctx, s.id, e); return true; }
   if (s.files && s.pending) s.pending.calls = callsPast(s.plan, reachOf(ctx, s.id, s.V.log, s.rows)); // they reach further now
   return s.files != null;
 }
