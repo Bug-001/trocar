@@ -631,6 +631,7 @@ Whether Desktop's own model calls come out decrypted verbatim is not claimed her
 
 `trocar help` prints the same, in four sections; `trocar help <command>` says one command, and
 `trocar query <name> --help` one query. `trocar help --json` gives all of it as one document.
+`trocar help rules` is the rules manual: every field, condition and action, with examples.
 
 ```sh
 # common
@@ -657,7 +658,6 @@ trocar rules enable|disable|rm <name>... [--json]
 trocar rules off [--json]     # stops every rule, from any terminal
 trocar rules max-delay [<ms>] [--json]
 trocar rules test <name> [--ref <record>]... [--last <n>] [--with-live] [--as-sent] [--run-script] [--json]
-trocar help rules             # the manual: every field, condition and action, with examples
 
 # maintenance
 trocar update [--yes] [--dry-run] [--json]   # the newest code, and the machine as it was (D67)
