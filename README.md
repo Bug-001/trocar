@@ -435,7 +435,10 @@ agent group, loopback only, no TUN, never the system proxy, nothing written into
   door, which now only forwards (no decryption, no record), and `trocar status` says how many are left (its
   Connections line counts every connection open through trocar, and how many of them are still closing). The daemon
   itself stays up with its doors closed — the same idle state as right after a login, so the next `on` is a door
-  opening (about 0.2 s) and not a daemon start. On Linux `off` drains what it was relaying and the daemon exits.
+  opening (about 0.2 s) and not a daemon start. On Linux the daemon and the board stay up too: `off` takes trocar's
+  links off, and once the connections it was relaying are through (at once with `--now`) the capability helper exits,
+  so no trocar eBPF program stays loaded; the next `on` starts the helper again without a daemon start. A login with
+  nothing on starts the daemon with no helper, and a helper that crashed is not restarted until the daemon restarts.
 - *macOS*: the autostart unit is the LaunchAgent `com.trocar.collector` in `~/Library/LaunchAgents` (`RunAtLoad` +
   `KeepAlive` — logout stops it — and `ProcessType` `Interactive`, because agent connections wait on it). *Windows*: a scheduled task run by a supervisor that re-pulls the daemon. `install`
   registers the entry and `uninstall` removes it; `on` and `off` leave it alone, so on and off both survive a reboot.
