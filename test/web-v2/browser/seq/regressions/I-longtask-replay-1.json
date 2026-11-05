@@ -1,0 +1,18 @@
+{
+  "name": "I-longtask-replay-1",
+  "invariant": "I-longtask",
+  "sig": "I-longtask:replay",
+  "fp": "a long task of # ms",
+  "seed": 1,
+  "big": false,
+  "viewport": 390,
+  "theme": "light",
+  "steps": [
+    {"a":"open","p":{"via":"link","f":0.003}},
+    {"a":"late","p":{"k":2}},
+    {"a":"nav","p":{"key":"step:prev"}}
+  ],
+  "screenshot": "test/web-v2/browser/shots/seq/I-longtask-replay-1.png",
+  "status": "timing",
+  "detail": "a long task of 56 ms: the resource explorer drawn in one task, each evicted row walking the lane events"
+}

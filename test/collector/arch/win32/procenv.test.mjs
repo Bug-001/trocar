@@ -6,6 +6,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { HELPER_PS1 } from '../../../../src/collector/arch/win32/helper.mjs'
 import { parseProcEnv, procReaders } from '../../../../src/collector/arch/win32/procinfo.mjs'
+import { ASK_HANG_MS } from '../../../../src/off/exec.mjs'
 
 /** UTF-16LE "N=V\0…\0" in base64, as ProcEnvJson writes it. */
 const block = (entries) => Buffer.from(entries.map((e) => `${e}\0`).join(''), 'utf16le').toString('base64')
@@ -51,6 +52,12 @@ test('readers: another life of the pid, an unreadable process and a failed helpe
   await rd.cwdOf(10); await rd.cwdOf(10)
   assert.equal(h.calls.filter((c) => c.args.pid === 10).length, 2, 'a pid alone can be reused: no caching without the start time')
   assert.deepEqual(await rd.envOf(10, []), {})
+})
+
+test('readers: a proc-env read is limited only by the hang guard', async () => {
+  const h = fakeHelper({ 7: ok(7) })
+  await procReaders({ helper: h }).cwdOf(7)
+  assert.equal(h.calls[0].opts.timeoutMs, ASK_HANG_MS)
 })
 
 test('helper.ps1 proc-env: same user only, QUERY_LIMITED | VM_READ, the asked names filtered in the helper; ps keeps the user\'s rows of other sessions', () => {

@@ -56,6 +56,7 @@ test('2.3 #31: a step adds, removes or changes at most 64 nodes in the resource 
         await page.keyboard.press(key)
         at += d
         await drawn(at)
+        await page.waitForTimeout(250) // the side panels draw once the reader has stopped (2.3 读者优先)
         const n = await page.evaluate(() => window.__mut)
         worst = Math.max(worst, n)
         assert.ok(n <= NODE_CAP, `${key} to step ${at}: ${n} nodes added, removed or changed in #resexp`)
