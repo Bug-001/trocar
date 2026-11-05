@@ -28,8 +28,10 @@ const NO_HELD = Object.freeze({ released: 0, cut: 0 })
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`
 const exitOf = (code) => (['usage', 'rule-invalid', 'rule-unknown'].includes(code) ? EXIT.usage : EXIT.incomplete)
+// a refusal's code (one of ERROR_CODES, 1.6 §3) and its words, written code first so the error-code scan judges it
+const no = (code, message) => ({ code, message })
 const refused = (command, { code, message }) => ({ doc: errorDoc(command, code, `trocar ${command}: ${message}`) })
-const failureOf = (e) => e.error ?? { code: 'rule-invalid', message: `${e.invalid[0].path ? `${e.invalid[0].path}: ` : ''}${e.invalid[0].reason}` }
+const failureOf = (e) => e.error ?? no('rule-invalid', `${e.invalid[0].path ? `${e.invalid[0].path}: ` : ''}${e.invalid[0].reason}`)
 const disarm = ({ armed: _armed, armed_at: _at, script_entry_sha256: _script, ...rule }) => rule
 
 /** POST to the daemon → 'absent' when nobody is there or it has no such route yet, 'no-answer' when it is there and did not answer, or `{answer}`. A reply that is no JSON object says
@@ -128,7 +130,7 @@ async function parsedInput(c, source) {
 async function add(c, [source]) {
   const command = 'rules add', replace = c.flags.replace === true, dryRun = c.flags['dry-run'] === true
   const { rule, problem } = await parsedInput(c, source)
-  if (problem) return refused(command, { code: 'rule-invalid', message: problem })
+  if (problem) return refused(command, no('rule-invalid', problem))
   let gone = null
   const e = edit((doc) => {
     const at = doc.rules.findIndex((r) => r.name === rule.name)
@@ -208,7 +210,7 @@ async function off(c) {
   const notes = [...moved.map((p) => `${rulesFile(c.home)} could not be used. It is kept as ${p}.`), ...(e.kept_delay === false ? [`The max delay could not be read from it, so it is ${e.after.max_delay_ms} ms now.`] : [])]
 
   const reason = e.ok ? null : failureOf(e).message
-  const failure = reason ? { code: 'rules-unwritable', message: reason } : memory === 'no-answer' ? { code: 'rules-no-answer', message: 'the collector did not answer.' } : null
+  const failure = reason ? no('rules-unwritable', reason) : memory === 'no-answer' ? no('rules-no-answer', 'the collector did not answer.') : null
   const { lead, problems } = offOutcome(memory, e.ok, seq)
   const w = wrote(c, e)
   const doc = { ...newReceipt(command), ...w.fields, ok: e.ok && memory !== 'no-answer', rules, memory, file: { written: e.ok, reason },
@@ -218,7 +220,7 @@ async function off(c) {
 
 function shownDelay(c) {
   const read = readRules({ home: c.home })
-  if (read.state === 'bad') return refused('rules max-delay', { code: 'rules-unreadable', message: `${rulesFile(c.home)} cannot be used: ${read.problem.reason}.` })
+  if (read.state === 'bad') return refused('rules max-delay', no('rules-unreadable', `${rulesFile(c.home)} cannot be used: ${read.problem.reason}.`))
   const doc = { ...newReceipt('rules max-delay'), max_delay_ms: read.doc.max_delay_ms, loaded: null }
   return { doc, lines: [`Max delay: ${doc.max_delay_ms} ms.`] }
 }
@@ -226,7 +228,7 @@ function shownDelay(c) {
 async function maxDelay(c, [value]) {
   if (value === undefined) return shownDelay(c)
   const command = 'rules max-delay', ms = /^[0-9]+$/.test(value) ? Number(value) : NaN
-  if (!(ms >= 1 && ms <= LIMITS.maxDelayMs)) return refused(command, { code: 'usage', message: `the max delay is a whole number of milliseconds from 1 to ${LIMITS.maxDelayMs}.` })
+  if (!(ms >= 1 && ms <= LIMITS.maxDelayMs)) return refused(command, no('usage', `the max delay is a whole number of milliseconds from 1 to ${LIMITS.maxDelayMs}.`))
   const e = edit((doc) => ({ ...doc, max_delay_ms: ms }), { home: c.home, op: 'max-delay' })
   if (!e.ok) return refused(command, failureOf(e))
   const w = wrote(c, e), r = await reload(c), before = e.before.max_delay_ms
@@ -275,7 +277,7 @@ function detailLines(doc, { now, c }) {
 async function show(c, [name]) {
   let doc
   try { doc = await runQuery('rules', name === undefined ? {} : { rule: name }, { home: c.home }) } catch (e) {
-    if (e instanceof QueryArgError) return refused('rules', { code: 'rule-unknown', message: `there is no rule called ${name}.` })
+    if (e instanceof QueryArgError) return refused('rules', no('rule-unknown', `there is no rule called ${name}.`))
     throw e
   }
   const say = { now: c.now(), c: colors(c.io, c.env) }
@@ -302,7 +304,7 @@ export async function run(argv, { io, json, args, home, env, platform, deps = {}
   const flags = Object.keys(args.flags).filter((f) => f !== 'json')
   const c = { io, env, platform, json, flags: args.flags, user: home, home: trocarHome(home), now: deps.ms || Date.now }
   const misused = given.length < least || given.length > most || flags.some((flag) => !(verb && VERBS[verb].flags?.includes(flag)))
-  const out = misused ? refused(verb ? `rules ${verb}` : 'rules', { code: 'usage', message: 'this does not take these arguments.' })
+  const out = misused ? refused(verb ? `rules ${verb}` : 'rules', no('usage', 'this does not take these arguments.'))
     : await (verb ? VERBS[verb].run(c, given) : show(c, given))
   const { doc, lines = [], errors = [] } = out
   if (json) printJson(io, doc)
