@@ -18,8 +18,8 @@ The user noticed something off. Your job is to find out whether trocar broke a c
    | Tier | What | Rule |
    |---|---|---|
    | No content | `status`, `doctor`, `segments`, `overview`, `traffic`, `classes`, contract-check results | Read freely. They still carry user names, paths and hosts, so none of it goes in a report that leaves the machine |
-   | Content | `block`, session titles, the board on real data | Only what the symptom needs |
-   | Never | Output of `trocar raw`, and `calls --reveal` | Captured headers hold real tokens. Compare bytes by hash through a pipe, never print them |
+   | Content | `block`, `calls --ref`, session titles, the board on real data | Only what the symptom needs |
+   | Never | Output of `trocar raw` and `calls --reveal`, or reading `~/.trocar/raw` yourself | Captured headers hold real tokens. Compare bytes by hash through a pipe, never print them |
 
 4. **Big documents go to a file.** A `session` document can be 1 MB. Write it to your working folder and pull fields with `node -e`.
 5. **A security problem stops the work.** Tell the user and follow `SECURITY.md`. It does not go in a public issue or pull request.
@@ -30,7 +30,7 @@ The user noticed something off. Your job is to find out whether trocar broke a c
 
 Ask what looked wrong, on which agent, in which session or at what time, and what they expected. One clear symptom is worth more than a tour.
 
-Note the time now in UTC: `trocar-pr` needs it. Make a working folder outside any repository (`mktemp -d`); screenshots and documents go there.
+Note the time now in UTC: `trocar-pr` needs it. Make a working folder outside any repository (`RUN=$(mktemp -d)`); screenshots and documents go there.
 
 ### 2. Get the contracts
 
@@ -60,7 +60,7 @@ A finding here is a lead. Confirm it before you report it.
 | Records | The stored bytes are the truth; everything else can be rebuilt from them | `query segments`, contract-check | 4.2 |
 | Agent recognition | Each call lands in the right session and lane, under an honest name | `query sessions`, `query session --id <id> --head` | 3.1, 3.4 |
 | Replay | Each step shows what was really sent and received | `query session`, `query lane`, `query block` | 1.4, 3.5 |
-| Cache and cost | Numbers come from reported usage; unknown stays unknown | `query session --id <id> --head`, `query analysis`, `query pricing` | 3.3 |
+| Cache and cost | Numbers come from reported usage; unknown stays unknown | `query session --id <id> --head`, `query analysis`, `query pricing`, `query calls --ref <rid>` | 3.3 |
 | Traffic and storage | Every host and class is accounted for | `query traffic`, `query calls`, `query classes` | 1.10, 1.11 |
 | CLI | One document under `--json`, the documented exit codes, plain English | `trocar help --json` | 1.6 §1 |
 | Board | The twelve checks | Step 5 | `trocar skill trocar-ux` |

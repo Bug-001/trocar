@@ -73,9 +73,9 @@ Before anything leaves your machine, the whole branch gets one review by an agen
 
 ## Commits and pull requests
 
-- Each commit is at most 400 lines, can be verified on its own, and has a body that says why and what the evidence is.
+- Each commit is at most 400 lines, can be verified on its own, and has a body that says why and what the evidence is. Its subject reads `<type>(<scope>): <summary>`.
 - Related commits go in one pull request. Fill in the pull request template: what and why, how you verified it (fresh-HOME counts and skips), which spec section it touches.
-- A change to user-visible behaviour also updates `README.md` and adds or extends a note in `docs/release-notes/`.
+- A change to user-visible behaviour also updates anything `README.md` says about it, and adds or extends a note in `docs/release-notes/`.
 - The gate for a pull request is the local fresh-HOME run reported in its description, not GitHub Actions.
 
 ## Licensing
