@@ -173,11 +173,11 @@ test('dryRun takes no lock and makes no directory: a held lock and a home that i
 const shapes = [
   { name: 'a 1 GiB sparse file', code: 'too-big', make: (f) => { fs.closeSync(fs.openSync(f, 'w')); fs.truncateSync(f, 2 ** 30) } },
   { name: 'a million levels of nesting', code: 'too-deep', make: (f) => fs.writeFileSync(f, '['.repeat(1e6)) },
-  { name: 'a directory', code: 'not-regular', make: (f) => fs.mkdirSync(f) },
+  { name: 'a directory', code: 'unreadable', make: (f) => fs.mkdirSync(f) },
   { name: 'broken JSON', code: 'not-json', make: (f) => fs.writeFileSync(f, '{"rules": [') },
   { name: 'a rule that fails its check', code: 'invalid', make: (f) => fs.writeFileSync(f, '{"rules": [{"name": "a"}]}') },
-  { name: 'a FIFO', code: 'not-regular', make: neverWrites },
-  { name: 'a symlink to /dev/zero', code: 'not-regular', skip: !posix && 'no device on Windows reads forever', make: (f) => fs.symlinkSync('/dev/zero', f) },
+  { name: 'a FIFO', code: 'unreadable', make: neverWrites },
+  { name: 'a symlink to /dev/zero', code: 'unreadable', skip: !posix && 'no device on Windows reads forever', make: (f) => fs.symlinkSync('/dev/zero', f) },
 ]
 
 const inChild = (job) => {

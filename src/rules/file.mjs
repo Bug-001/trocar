@@ -30,7 +30,7 @@ function delayOf(doc) {
 }
 
 /**
- * The rule file now → `{state, doc, sha256, problem?}`. `state` is `absent`, `ok` or `bad`; `problem` is `{code, reason}` with `code` not-regular, unreadable,
+ * The rule file now → `{state, doc, sha256, problem?}`. `state` is `absent`, `ok` or `bad`; `problem` is `{code, reason}` with `code` unreadable,
  * too-big, too-deep, not-json or invalid. `doc` is always a usable document: when `bad` it has no rules and the delay the file still says, and `kept_delay`
  * is false if it could not say. `sha256` is of the file's bytes, null when there are none or only a prefix was read.
  */
@@ -43,7 +43,7 @@ export function readRules({ home, fs = nodeFs } = {}) {
   let bytes
   try { bytes = readBounded(fs, rulesFile(home), LIMITS.fileBytes + 1) } catch (e) {
     if (e.code === 'ENOENT') return { state: 'absent', doc: empty, sha256: null }
-    return bad({ code: e.code === 'not-regular' ? e.code : 'unreadable', reason: e.message })
+    return bad({ code: 'unreadable', reason: e.message })
   }
   const hash = bytes.length > LIMITS.fileBytes ? null : sha256(bytes)
   const { doc, problem } = parseRulesBytes(bytes)

@@ -5,7 +5,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { pathKey, writeDurable, fsyncDir, TMP_MARK, readBounded, readSmall } from '../../src/off/fsutil.mjs'
+import { pathKey, writeDurable, fsyncDir, TMP_MARK, readBounded, readSmall, NotRegularFile, TooBigFile } from '../../src/off/fsutil.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 
 const errno = (code) => Object.assign(new Error(`${code}: rename`), { code })
@@ -128,22 +128,22 @@ test('fsyncDir: any other error is thrown', () => {
   assert.throws(() => fsyncDir({ ...fs, fsyncSync: () => { throw errno('EIO') } }, dir), /EIO/)
 })
 
-test('readBounded reads at most the limit of a regular file, through a link too, and anything else is not-regular', () => {
+test('readBounded reads at most the limit of a regular file, through a link too, and anything else is NotRegularFile', () => {
   const dir = tmpDir('trocar-fsu-')
   const file = path.join(dir, 'a'), link = path.join(dir, 'b')
   fs.writeFileSync(file, 'abcdef')
   fs.symlinkSync(file, link)
   for (const at of [file, link]) assert.equal(String(readBounded(fs, at, 4)), 'abcd')
-  assert.throws(() => readBounded(fs, dir, 4), { code: 'not-regular' })
+  assert.throws(() => readBounded(fs, dir, 4), NotRegularFile)
   assert.throws(() => readBounded(fs, path.join(dir, 'gone'), 4), { code: 'ENOENT' })
 })
 
-test('readSmall: the text of a file up to its limit, and over it too-big, never a prefix', () => {
+test('readSmall: the text of a file up to its limit, and over it TooBigFile, never a prefix', () => {
   const file = path.join(tmpDir('trocar-fsu-'), 'a')
   for (const [text, limit] of [['', 1], ['中', 3]]) {
     fs.writeFileSync(file, text)
     assert.equal(readSmall(fs, file, limit), text)
   }
   fs.writeFileSync(file, 'abcd')
-  assert.throws(() => readSmall(fs, file, 3), { code: 'too-big' })
+  assert.throws(() => readSmall(fs, file, 3), TooBigFile)
 })

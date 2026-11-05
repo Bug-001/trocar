@@ -50,7 +50,7 @@ export function migrateV1(v1, installedIds, now = new Date()) {
 
 /** Reads `file` → `{ state, from }`: `from` is the version the file had (1, 2) or null when there is no file (then `state` is
  *  `emptyState()`). A version 1 file comes back migrated for `installed` (default: no harness, so nothing is on). Throws what could
- *  not be read (its errno, `not-regular` or `too-big`), or `state-unparsable` for a file that is not a state or has a version this build does not know. */
+ *  not be read (its errno, NotRegularFile or TooBigFile), or `state-unparsable` for a file that is not a state or has a version this build does not know. */
 export function readStateFile(file, { fs = nodeFs, installed = [], now = new Date() } = {}) {
   let text
   try { text = readSmall(fs, file) } catch (e) { if (e && e.code === 'ENOENT') return { state: emptyState(), from: null }; throw e }

@@ -7,6 +7,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { STATE_VERSION, emptyState, migrateV1, readStateFile, setDesired, writeStateAtomic } from '../../src/off/state.mjs'
 import { HARNESS_IDS } from '../../src/off/harness-names.mjs'
+import { NotRegularFile, TooBigFile } from '../../src/off/fsutil.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 
 const NOW = new Date('2026-10-07T10:00:00.000Z')
@@ -116,9 +117,9 @@ test('writeStateAtomic: a directory that cannot fsync (EINVAL) is not a failed w
 
 test('a state path that is no regular file or is over any size a state reaches is thrown, as a file that could not be read', () => {
   const dir = tmpDir('trocar-state-')
-  assert.throws(() => readStateFile(dir), { code: 'not-regular' })
+  assert.throws(() => readStateFile(dir), NotRegularFile)
   const huge = path.join(dir, 'state.json')
   fs.closeSync(fs.openSync(huge, 'w'))
   fs.truncateSync(huge, 2 ** 30)
-  assert.throws(() => readStateFile(huge), { code: 'too-big' })
+  assert.throws(() => readStateFile(huge), TooBigFile)
 })
