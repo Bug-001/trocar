@@ -287,12 +287,14 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
     }
     return out
   }
-  // → {closing, waiting}: the connections of `agents` that off has asked to close and that are still relayed
-  function relayed({ agents = null } = {}) {
+  // → {closing, waiting}: the connections of `agents` that off has asked to close and that are still relayed. `unasked`: those nobody asked as well (a daemon
+  // swap's drain leaves the connections it did not find open): one with a response on its way is closing, one with no boundary to see waiting, an idle one neither
+  function relayed({ agents = null, unasked = false } = {}) {
     const out = { closing: 0, waiting: 0 }
     for (const e of flows) {
       if (!mine(e, agents) || !e.handle) continue
-      const st = e.handle.state()
+      const asked = e.handle.state()
+      const st = asked === 'open' && unasked ? e.handle.peek() : asked
       if (st === 'closing' || st === 'waiting') out[st]++
     }
     return out

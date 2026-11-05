@@ -15,6 +15,14 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawnSync, execFile, spawn } from 'node:child_process'
 
+/** How long a question at the door (`ps`, `procenv`, `socktable`) may hang before it is killed and answered null: a hang guard, never a
+ *  verdict (4.9 §1). Slowness judges nothing: a child that answers within it is an answer however long it took. */
+export const ASK_HANG_MS = 10_000
+
+/** runAsync's limit is due: event-loop turns it still gives a child that has exited and whose pipes are draining. It always gives one, so the
+ *  pipe reads that were due alongside the timer (a loop stalled in a callback past the limit) run before anything is judged. */
+const TURNS = 8
+
 /** The file `file` names, on `PATH` (or as given when it holds a slash): null when it is nowhere. */
 function lookupOnPath(file, PATH) {
   if (file.includes('/')) return file
@@ -75,6 +83,8 @@ export function spawnDetached(file, args, { env = process.env, verbatim = false 
 
 /** spawnSync's runner shape without blocking the event loop (a daemon that serves doors must not stop for an `lsof`): `execFile`, the
  *  same options execTool passes, resolving `{ status, stdout, stderr, error? }` — status null when it was killed (the timeout) or never started.
+ *  `timeout` is a limit in fact, so execFile's own is not used: that one destroys stdout when its timer runs before the pipe was read (exit 0, no
+ *  output) and answers only once the child has exited (a child ignoring TERM, one stuck in the kernel, holds the caller for as long as it lives).
  *  `quiet` asks for no output and settles on the child's exit (`inherit`: the child writes on this process's own streams instead — a child
  *  that IS the command the user is running, `trocar update`'s new code, §5.5 step 3); `windowsVerbatimArguments` is spawn's own (cmd's quoting).
  *  Pass it as execTool's `run`; it refuses a real tool under npm test the way execTool does (only a stub inside the temp dir runs). */
@@ -91,8 +101,17 @@ export function runAsync(file, args, opts = {}) {
     })
   }
   return new Promise((resolve) => {
-    const c = execFile(file, args, { encoding: 'utf8', env, timeout: opts.timeout, maxBuffer: opts.maxBuffer || 1024 * 1024, ...win }, (error, stdout, stderr) =>
-      resolve({ status: error ? (Number.isInteger(error.code) ? error.code : null) : 0, stdout, stderr, ...(error && !Number.isInteger(error.code) && !stderr ? { error } : {}) }))
+    let settled = false
+    const settle = (answer) => { if (!settled) { settled = true; clearTimeout(t); resolve(answer) } }
+    const c = execFile(file, args, { encoding: 'utf8', env, maxBuffer: opts.maxBuffer || 1024 * 1024, ...win }, (error, stdout, stderr) =>
+      settle({ status: error ? (Number.isInteger(error.code) ? error.code : null) : 0, stdout, stderr, ...(error && !Number.isInteger(error.code) && !stderr ? { error } : {}) }))
+    const guard = (n) => {
+      if (settled) return
+      if (n === TURNS || (n > 0 && (c.exitCode !== null || c.signalCode !== null))) return void setImmediate(guard, n - 1)
+      c.kill('SIGKILL'); c.stdout?.destroy(); c.stderr?.destroy()
+      settle({ status: null, stdout: '', stderr: '', error: new Error(`${file} did not answer within ${opts.timeout} ms and was killed`) })
+    }
+    const t = opts.timeout ? setTimeout(guard, opts.timeout, TURNS) : null
     if (c.stdin) c.stdin.end(opts.input ?? undefined)
   })
 }

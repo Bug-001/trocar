@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url'
 import { gunzipSync, gzipSync } from 'node:zlib'
 import { createQueryService } from '../../src/query/service.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
-import { sessionDir } from '../../src/query/projection.mjs'
+import { sessionDir, PROJ_V } from '../../src/query/projection.mjs'
 import { lineFile } from '../../src/query/line-file.mjs'
 import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
 import { PACK_MEMBERS, CTX_V } from '../../src/query/ctx-files.mjs'
@@ -27,7 +27,7 @@ const CALLS = 1_700
 // 3.5 §会话读: the lines' closed sets
 const HEAD = ['schema', 'command', 'ok', 'errors', 'v', 'id']
 const STEP = ['rid', 'lane', 'i', 'parent', 'ops', 'reply', 'attrs', 'detail', 'events']
-const DEF = ['bid', 'fh', 'ref', 'sec', 'role', 'kind', 'label', 'name', 'mcp', 'cc', 'ff', 'head', 'preview', 'chars', 'bytes', 'resKey', 'r', 'unaddressable', 'inline']
+const DEF = ['bid', 'fh', 'ref', 'sec', 'role', 'kind', 'label', 'name', 'mcp', 'cc', 'ff', 'head', 'preview', 'chars', 'bytes', 'resKey', 'resKeys', 'r', 'unaddressable', 'inline']
 const REC = ['id', 'ts_request', 'is_llm_call', 'response']
 const ERR = ['where', 'code', 'reason']
 
@@ -182,6 +182,25 @@ test('3.5 #35, damaged files: a missing head, a truncated pack, a pack of anothe
   await drive(z.home, z.id)
   for (const f of others) assert.deepEqual(statOf(file(f)), before[f], `${f} was not written`)
   for (const f of hit) assert.ok(fs.readFileSync(file(f)).equals(fs.readFileSync(path.join(dirOf(x), f))), `${f}: rewritten to the untouched home's bytes`)
+})
+
+test('3.5 #35 neighbour: answer files of the same `v` with stale content are written anew when the projection under them is of another version', { timeout: 600_000 }, async () => {
+  const shape = { ...SHAPE, wire: 'http', compactAt: 8_000 }, calls = PACK_MEMBERS + 40
+  const homes = [homeOf(), homeOf()].map((home) => { const s = bigSession({ home, ...shape }); s.append(calls); return { home, id: s.id } })
+  for (const h of homes) await drive(h.home, h.id)
+  const [x, z] = homes, file = (f) => path.join(dirOf(z), f)
+  // the last digit of a file's text moved: a line that still parses, the `v` of its head as it was
+  const stale = (text) => { const i = text.search(/\d\D*$/); return text.slice(0, i) + (text[i] === '7' ? '8' : '7') + text.slice(i + 1) }
+  const hit = ['head.json.gz', 'p0.main.ndjson.gz', 'open.main.ndjson']
+  for (const f of hit) {
+    const text = stale(fileText(z, f))
+    assert.equal(JSON.parse(text.split('\n')[0]).v, CTX_V)
+    fs.writeFileSync(file(f), f.endsWith('.gz') ? gzipSync(Buffer.from(text)) : text)
+  }
+  const proj = fs.readFileSync(file('extract.0.ndjson'), 'utf8'), nl = proj.indexOf('\n')
+  fs.writeFileSync(file('extract.0.ndjson'), JSON.stringify({ ...JSON.parse(proj.slice(0, nl)), v: PROJ_V + 1 }) + proj.slice(nl))
+  await drive(z.home, z.id)
+  for (const f of hit) assert.equal(fileText(z, f), fileText(x, f), `${f}: the bytes of the untouched fold`)
 })
 
 // the layout the fold log is in when the worker starts: the session's directory, or the flat layout (4.3 §4 迁移), which the start-up

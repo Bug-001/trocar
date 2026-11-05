@@ -8,6 +8,7 @@
 import { memo, useLayoutEffect, useMemo, useRef, useSyncExternalStore, type CSSProperties, type MouseEvent } from 'react'
 import { SKELETON, laneCapacity } from '../../../legacy/replay/replay.mjs'
 import { BAR_KEYS, problemJump } from '../../../legacy/replay/timeline.mjs'
+import { stepOfMark } from '../../../legacy/replay/lanes.mjs'
 import { L } from '../../../legacy/core/labels.mjs'
 import * as W from '../../../legacy/labels/replay.mjs'
 import { overviewModel, scopeModel } from './models.mjs'
@@ -66,7 +67,7 @@ const sameBar = (p: { b: Bar, cost: boolean }, n: { b: Bar, cost: boolean }) => 
 const BarView = memo(function BarView({ b, cost }: { b: Bar, cost: boolean }) {
   // a hatched cost bar is 0 high: its stripe says the estimate cannot be made
   const cls = ['bar', cost && 'cost', b.fail && 'err', b.compact && 'compact', b.cur && 'cur', b.reviewed && 'reviewed'].filter(Boolean).join(' ')
-  const at = b.i != null ? { 'data-i': b.i } : { 'data-step': b.g } // a step without its row yet is a control too: it names the step
+  const at = b.i != null ? { 'data-i': b.i, 'data-rid': b.rid } : { 'data-step': b.g } // a step without its row yet is a control too: it names the step
   return <div className={cls} {...at} style={{ height: barH(b.h) }} title={b.tip}>
     {b.fail ? null : b.hatched ? <span className="ct-unloaded" style={{ height: `max(6px, ${barH(b.h)})` }} />
       : cost || !b.segs ? null : b.segs.map(([k, f]) => f * b.h * BAR_PX < 0.4 ? null : <span key={k} className={`ct-${k}`} style={{ height: barH(f * b.h) }} />)}
@@ -92,9 +93,9 @@ function tracePaths(cells: Cell[]) {
 }
 
 const ProblemMark = memo(function ProblemMark({ p }: { p: Item }) {
-  if (p.kind === 'x') return <button type="button" className="pxmark" data-i={p.i} title={p.tip} aria-label={p.aria}>×</button>
-  if (p.kind === 'compact') return <button type="button" className={`pcompact${p.tip.startsWith(`${W.COMPACT_WORD} · `) ? ' inf' : ''}`} data-i={p.i} title={p.tip} aria-label={p.aria} />
-  return <button type="button" className="pflag" data-i={p.i} style={{ height: `${Math.max(4, Math.round((p.h ?? 0) * FLAG_PX))}px` }} title={p.tip} aria-label={p.aria} />
+  if (p.kind === 'x') return <button type="button" className="pxmark" data-i={p.i} data-rid={p.rid} title={p.tip} aria-label={p.aria}>×</button>
+  if (p.kind === 'compact') return <button type="button" className={`pcompact${p.tip.startsWith(`${W.COMPACT_WORD} · `) ? ' inf' : ''}`} data-i={p.i} data-rid={p.rid} title={p.tip} aria-label={p.aria} />
+  return <button type="button" className="pflag" data-i={p.i} data-rid={p.rid} style={{ height: `${Math.max(4, Math.round((p.h ?? 0) * FLAG_PX))}px` }} title={p.tip} aria-label={p.aria} />
 }, (p, n) => p.p.i === n.p.i && p.p.kind === n.p.kind && p.p.h === n.p.h && p.p.tip === n.p.tip)
 
 export function Scope({ desk }: { desk: DeskView }) {
@@ -130,8 +131,9 @@ export function Scope({ desk }: { desk: DeskView }) {
   const pick = (e: MouseEvent) => {
     const t = (e.target as Element).closest('#sawrow [data-i], #sawrow [data-step], #probrow [data-i]') as HTMLElement | null
     if (!t) return
-    if (t.dataset.i != null) s.setPlayhead(+t.dataset.i, true)
-    else s.chapterGo(+t.dataset.step!)
+    if (t.dataset.i == null) { s.chapterGo(+t.dataset.step!); return }
+    const i = stepOfMark(s, t.dataset.rid)
+    if (i >= 0) s.setPlayhead(i, true)
   }
   const probGo = (dir: number) => {
     if (!s.anchor) return

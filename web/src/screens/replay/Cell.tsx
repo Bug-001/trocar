@@ -130,9 +130,10 @@ function Shown({ cell, mode, text, api }: { cell: CellModel, mode: Mode, text: s
   )
 }
 
-// the body leaf: its markup is set once, when it mounts (the parent keys it by bid, mode and bytes); React never renders into it again
+// the body leaf: its markup is set once per node (the parent keys it by bid, mode and bytes); React never renders into it again, and
+// a hidden <Activity> shown again runs this effect on a leaf that already holds what the sentinel grew and the reader opened
 const Leaf = memo(function Leaf({ raw, cls, html, onSet }: { raw: boolean, cls: string, html: string, onSet: (el: HTMLElement) => void }) {
   const ref = useRef<HTMLElement>(null)
-  useLayoutEffect(() => { const el = ref.current!; el.innerHTML = inner(raw ? 'raw' : 'read', html); onSet(el) }, [raw, html, onSet])
+  useLayoutEffect(() => { const el = ref.current!; if (el.firstChild) return; el.innerHTML = inner(raw ? 'raw' : 'read', html); onSet(el) }, [raw, html, onSet])
   return raw ? <pre ref={ref as RefObject<HTMLPreElement>} className="cellraw" /> : <div ref={ref as RefObject<HTMLDivElement>} className={`cellread ${cls}`} />
 }, () => true)

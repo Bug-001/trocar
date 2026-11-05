@@ -223,6 +223,24 @@ test('(c) a restart — rows 0..k stored, the store reopened from disk — goes 
   }
 });
 
+test('(a) part 2: a result whose tool_use sits in an earlier record keeps every key of a read of several files', () => {
+  const files = ['/w/z.txt', '/w/a.txt', '/w/m.txt'], keys = files.map((f) => `file::${f}`);
+  const use = { type: 'tool_use', id: 'tu_1', name: 'Bash', input: { command: `cat ${files.join(' ')}` } };
+  const answered = { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu_1', content: 'file a' }] };
+  const says = (r, content) => ({ ...r, resp: replyOf(`msg_${r.id.toLowerCase()}`, content) });
+  const carrying = (r, messages) => rebody(r, (b) => ({ ...b, messages }));
+  const reply = says(T.M0, [use]), wait = carrying(T.M1, [{ role: 'user', content: [{ type: 'text', text: 'hold on' }] }]);
+  for (const [axis, recs] of Object.entries({
+    'the reply before': [reply, T.M1],
+    'a reply two records back': [reply, wait, carrying(T.M2, [answered])],
+    'a request two records back': [T.M0, carrying(T.M1, [{ role: 'assistant', content: [use] }]), carrying(T.M2, [answered])],
+  })) {
+    const stored = filed(recs), { rows } = run(stored);
+    const attrs = Object.values(listsOf(rows)(stored.at(-1).id, 'attrs')).filter((a) => a.resRole === 'result');
+    assert.deepEqual(attrs.map((a) => [a.resKey, a.resKeys]), [[keys[0], keys]], axis);
+  }
+});
+
 test('(d) frontier: the largest rid with every member up to it extracted; done: the members up to it, the cursor to go on from', () => {
   const recs = stitchedSessions().threads, members = membersOf(recs), recordsAt = reader(recs);
   const store = opened(tmpDir('trocar-extract-'));
