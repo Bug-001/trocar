@@ -26,12 +26,16 @@ async function board(chromium, opts) {
   return { b, only }
 }
 
-// the first closed row in view, opened and drawn: its data-bi
+// a closed row with its head at or below the box's top, opened and drawn: its data-bi. Where the window lands depends on when the reply's
+// body arrives (the whole of a short request can sit above the box): with none such, the last closed row is brought to the box's top
 async function openRow(page) {
-  const bi = await page.evaluate(() => {
-    const box = document.querySelector('#ctxwin').getBoundingClientRect()
-    return [...document.querySelectorAll('#ctxwin .cblk.collapsed[data-bi]')].find((e) => e.getBoundingClientRect().top >= box.top).dataset.bi
-  })
+  const bi = await (await page.waitForFunction(() => {
+    const W = document.querySelector('#ctxwin'), box = W.getBoundingClientRect(), rows = [...W.querySelectorAll('.cblk.collapsed[data-bi]')]
+    const at = rows.find((e) => e.getBoundingClientRect().top >= box.top)
+    if (at) return at.dataset.bi
+    if (rows.length) W.scrollTop += rows.at(-1).getBoundingClientRect().top - box.top
+    return null
+  })).jsonValue()
   await page.click(`#ctxwin .cblk[data-bi="${bi}"] > .cbh`)
   await page.waitForSelector(`#ctxwin .cblk[data-bi="${bi}"]:not(.collapsed) .cell`)
   return bi
