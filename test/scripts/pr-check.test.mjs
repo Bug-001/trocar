@@ -286,11 +286,20 @@ const SVG_URI = ['data', 'image/svg+xml,'].join(':')
 test('AN16: the start of a data URI in the base makes nothing after it public', () => {
   const png = ['data', 'image/png;base64,'].join(':'), encoded = ['data', 'image/svg+xml;base64,'].join(':')
   const known = { 'old.js': `const b = '${png}'\n${png}\n${encoded}\n` }
-  for (const text of [`${png} AAAA`, png, encoded]) {
+  for (const text of [`${png}AAAA`, `${png} AAAA`, `${png}\n  AAAA`, `${encoded}AAAA`]) {
     const w = workspace(known)
     w.commit({ 'a.txt': `${text}\n` })
     assert.deepEqual(named(w.check().doc, 'files'), ['a.txt'], text)
     assert.equal(of(w.check({ body: text }).doc, 'files').filter((f) => f.where === 'body').length, 1, text)
+  }
+})
+
+test('AN16: a data URI with nothing past its comma holds no image and passes, whatever the base holds', () => {
+  const png = ['data', 'image/png;base64,'].join(':')
+  for (const text of [png, `'${png}' + bytes`, `"${png}"`, `\`${png}\` is how it starts`, ['data', 'image/svg+xml;base64,'].join(':'), ['data', ';base64,'].join(':'), ['data', 'image/png'].join(':')]) {
+    const w = workspace()
+    w.commit({ 'a.txt': `${text}\n` })
+    assert.deepEqual(of(w.check({ body: text }).doc, 'files'), [], text)
   }
 })
 
