@@ -204,7 +204,8 @@ export function applyJsonArrayItem({ keys, item, ...rest }) {
 /** Every key (`sets`: {keys, value, alsoSet?, fold?}) and array element (`items`: {keys, item}) one command puts in one JSON file, written once (4.6「日志」):
  *  one record per key or element, edited in memory one after the other, so record k's pre is record k-1's post and undo last-first lands on each in
  *  turn. Only the first carries `backup` (the user's bytes before the command); it is undone last. Intents a crashed run left for this file are
- *  finished first, as a group: still at the first one's pre → planned again (its backup kept); already written → adopted; anything else → refused.
+ *  finished first, as a group: still at the first one's pre → planned again (its backup kept); already written → adopted, and the keys this call
+ *  plans that they do not cover are written on top (no second backup: the adopted first holds the user's bytes); anything else → refused.
  *  → the records written or adopted. */
 export function applyJsonKeys({ dir, manifest, harness, phase, file, sets = [], items = [], home, door = null, now = new Date(), fs = nodeFs }) {
   needHome('applyJsonKeys', home)
@@ -212,7 +213,7 @@ export function applyJsonKeys({ dir, manifest, harness, phase, file, sets = [], 
   const real = editTarget(file, fs)
   const before = readOrNull(fs, real)
   const pending = manifest.entries.filter((x) => x.harness === harness && samePath(x.path, file, fs) && ['json-key', 'json-array-item'].includes(x.kind ?? 'json-key') && x.post_sha256 == null)
-  let reuse = null, dirs = []
+  let reuse = null, dirs = [], adopted = []
   if (pending.length) {
     const p0 = pending[0]
     if (sha256(before) === p0.pre_sha256 || (before == null && !p0.existed_before)) { // the write never happened: plan it again
@@ -229,7 +230,7 @@ export function applyJsonKeys({ dir, manifest, harness, phase, file, sets = [], 
       }
       pending.forEach((x, k) => { x.post_sha256 = k === pending.length - 1 ? sha256(before) : sha256(encodeText(texts[k + 1], x.charset || 'utf8')) })
       saveManifest(dir, manifest, fs) // the file was written; only the record of it was not
-      return pending
+      adopted = pending // planned below as any key: those are intact, the rest are written on top (their undo lands on the adopted last post)
     }
   }
   const read = readUserText(file, before)
@@ -265,10 +266,10 @@ export function applyJsonKeys({ dir, manifest, harness, phase, file, sets = [], 
       return res == null ? null : { text: res.text, rec: { kind: 'json-array-item', keys, item, created_array: res.createdArray, ops: res.ops, prior_value: null, existing_depth: res.existingDepth } }
     })
   }
-  if (!steps.length) return []
+  if (!steps.length) return adopted
   const enc = (t) => encodeText(t, charset)
   const mode = before != null ? fs.statSync(real).mode & 0o777 : 0o600
-  const backup = reuse ?? backupFirst({ home, file, before, now, fs }) // keyed by the path the user knows (the link), holding the target's bytes
+  const backup = adopted.length ? null : reuse ?? backupFirst({ home, file, before, now, fs }) // keyed by the path the user knows (the link), holding the target's bytes
   const recs = steps.map(({ rec }, k) => {
     const { kind, ...what } = rec
     const r = {
@@ -287,7 +288,7 @@ export function applyJsonKeys({ dir, manifest, harness, phase, file, sets = [], 
   writeDurable(real, bytes, mode, fs)
   recs.forEach((r, k) => { r.post_sha256 = k === recs.length - 1 ? sha256(bytes) : sha256(enc(steps[k].text)) })
   saveManifest(dir, manifest, fs)
-  return recs
+  return [...adopted, ...recs]
 }
 
 // A text entry (text-edit.mjs): edit = { format: 'dotenv-block', vars, quote?, neutralize?, fold? } (the names put out of effect with the

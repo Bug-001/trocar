@@ -13,6 +13,7 @@ import { readManifest } from '../../../../src/off/manifest.mjs'
 import { backupDir } from '../../../../src/off/paths.mjs'
 import { sha256 } from '../../../../src/off/fsutil.mjs'
 import { undoHarnesses } from '../../../../src/off/undo.mjs'
+import { applyJsonKey } from '../../../../src/collector/core/trust/journal.mjs'
 import { world, put, bytesOf, door } from './fixtures/entries-ctx.mjs'
 
 const harnesses = await loadHarnesses()
@@ -110,5 +111,22 @@ test('O4 · off after each of O1–O3: the file is its pre-on bytes (gone when t
     assert.equal(sha256(bytesOf(c.file)), first.pre_sha256, label)
     assert.deepEqual(backups(c.w.home), [], `${label}: the backup goes`)
     assert.deepEqual(ons(c.w.dir), [], `${label}: no on record left`)
+  }
+})
+
+test('O3 · a crash after the write, then a call for a key the crashed run did not plan: that key is written too, no second backup, and off still lands on the pre bytes', async () => {
+  for (const x of CELLS) {
+    const c = cell(x)
+    assert.throws(() => c.run(spyFs((d, done) => done.includes(c.file))), /crashed/, c.label)
+    const manifest = readManifest(c.w.dir)
+    const n = backups(c.w.home).length
+    const rec = applyJsonKey({ dir: c.w.dir, manifest, harness: x.h.name, phase: 'on', file: c.file, keys: ['trocar_extra'], value: 'x', home: c.w.home, fs })
+    assert.ok(rec, `${c.label}: a record for the key`)
+    assert.equal(JSON.parse(bytesOf(c.file).toString('utf8')).trocar_extra, 'x', `${c.label}: the key is in the file`)
+    assert.equal(backups(c.w.home).length, n, `${c.label}: no second backup`)
+    assert.ok(ons(c.w.dir).every((e) => e.post_sha256 != null), c.label)
+    await undoHarnesses({ dir: c.w.dir, home: c.w.home, manifest: readManifest(c.w.dir), ids: null, procs: async () => [] })
+    assert.deepEqual(bytesOf(c.file), c.pre, `${c.label}: the pre-on bytes`)
+    assert.deepEqual(backups(c.w.home), [], `${c.label}: the backup goes`)
   }
 })
