@@ -17,7 +17,7 @@ export const LANE_KIND = Object.freeze({
   notify: { word: 'notification summary', row: 'bg', bucket: 'bg', hint: 'The agent asks the model to sum up recent activity in a one-line notification' },
   titlegen: { word: 'title generation', row: 'bg', bucket: 'bg', hint: 'The agent asks the model to give the session a title' },
   quota: { word: 'keep-alive check', row: 'bg', bucket: 'bg', hint: 'A check call with a tiny reply limit; the reply is not used' },
-  suggest: { word: 'Next-prompt suggestion', row: 'bg', bucket: 'bg', hint: 'The agent copies the whole conversation and asks the model what the next prompt might be; the reply is only a hint in the input box and does not enter the conversation' },
+  suggest: { word: 'Next-prompt suggestion', row: 'bg', bucket: 'bg', hint: 'The agent copies the whole session and asks the model what the next prompt might be; the reply is only a hint in the input box and does not enter the session' },
   websearch: { word: 'Web search', row: 'bg', bucket: 'bg', hint: 'A model call the search tool makes on its own' },
   webfetch: { word: 'Web page summary', row: 'bg', bucket: 'bg', hint: 'A small model answers from one fetched page' },
   aux: { word: 'Unnamed background call', row: 'bg', bucket: 'bg', hint: 'A background call the board cannot name' },
