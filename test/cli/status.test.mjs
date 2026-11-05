@@ -309,7 +309,7 @@ test('off: every harness is desired-off, exit 0 — nothing is wrong with a swit
 test('V32: no daemon and state.json unreadable: 不知道 with the file and the errno for every harness, exit 3 — and --json says the same (captured null)', async () => {
   const s = await installedHome()
   const stateF = path.join(s.dir, 'state.json')
-  const broken = { ...fs, readFileSync: (f, ...a) => { if (f === stateF) throw Object.assign(new Error(`EACCES: permission denied, open '${f}'`), { code: 'EACCES' }); return fs.readFileSync(f, ...a) } }
+  const broken = { ...fs, openSync: (f, ...a) => { if (f === stateF) throw Object.assign(new Error(`EACCES: permission denied, open '${f}'`), { code: 'EACCES' }); return fs.openSync(f, ...a) } }
   const r = await run(s, [], { fs: broken })
   assert.equal(r.exit, 3, r.text)
   assert.match((await run(s, ['claude-code'], { fs: broken })).text, /^claude-code: unknown \(its on\/off state could not be read\), unknown \(/m)

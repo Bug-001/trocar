@@ -1,5 +1,6 @@
 // applyRules: the one entry of rules test, the live path and resend (spec 5.1 §规则「多条规则都命中时」, §分派, §记录与标注). tier 1 runs on the real
 // compiled rules, tier 2 on the real rule-process half, so a disagreement between the two is a red test here.
+import path from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import zlib from 'node:zlib';
@@ -330,7 +331,7 @@ test('5.1 §头的写法: the 8 KiB is the unit\'s, whatever rules and scripts a
   assert.deepEqual(undone.headers.map(([name]) => name), ['content-type', 'x-a'], 'a rule that fails leaves none of its headers');
 
   const script = async () => ({ headers: [['x-s', 'v'.repeat(7000)]] });
-  const scripted = await tier2(unitOf('{}'), rules(big('a', 'x-a'), rule('s', { script: '/abs/s.mjs' })), { script });
+  const scripted = await tier2(unitOf('{}'), rules(big('a', 'x-a'), rule('s', { script: path.resolve('/abs/s.mjs') })), { script });
   assert.deepEqual(names(scripted.skipped), [['s', 'rule-error']]);
 
   const room = [['content-type', 'application/json'], ['x-old', 'v'.repeat(7000)]];
@@ -407,7 +408,7 @@ test('9, 63: a rule tier 1 cannot finish hands every survivor to tier 2 and noth
     [{ json: '/a', set: 1 }, '{"a":"ALPHA"}'],
     [{ blocks: { role: 'user' }, remove: true }, '{"a":"ALPHA"}'],
     [lit('ALPHA', 'B', { blocks: { role: 'user' } }), '{"a":"ALPHA"}'],
-    [{ script: '/abs/s.mjs' }, '{"a":"ALPHA"}'],
+    [{ script: path.resolve('/abs/s.mjs') }, '{"a":"ALPHA"}'],
   ];
   for (const [action, body] of cases) {
     const compiled = rules(rule('head', { header: 'x-a', set: '1' }), rule('edit', action), rule('other', { drop: true }, { match: { method: 'GET' } }));
@@ -481,7 +482,7 @@ test('order: delays add up to the 60 s ceiling, injects stay in file order', asy
 });
 
 test('would: what rules test cannot do is reported per rule, and reply names its status', async () => {
-  const result = await tier2(unitOf('x'), rules(rule('r', { reply: { status: 429 } }), rule('d', [{ delay_ms: 5 }, { drop: true }]), rule('s', { script: '/abs/s.mjs' })));
+  const result = await tier2(unitOf('x'), rules(rule('r', { reply: { status: 429 } }), rule('d', [{ delay_ms: 5 }, { drop: true }]), rule('s', { script: path.resolve('/abs/s.mjs') })));
   assert.ok(result.would.some((w) => w.rule === 'r' && w.text === 'reply 429'));
   assert.deepEqual(result.would.map((w) => w.rule), ['r', 'd', 'd', 's']);
   assert.equal(result.bytes, null);
@@ -525,7 +526,7 @@ test('38: rules that grow the body one after another pay for the body as it is, 
 test('61: the second script of a unit is skipped, by its on_error, and the first one stands', async () => {
   const calls = [];
   const script = (r, message) => { calls.push(r.name); return { body: `${message.text}!` }; };
-  const compiled = (onError) => rules(rule('a', { script: '/abs/a.mjs' }), rule('b', [{ header: 'x-b', set: '1' }, { script: '/abs/b.mjs' }], { on_error: onError, match: { host: '*' } }));
+  const compiled = (onError) => rules(rule('a', { script: path.resolve('/abs/a.mjs') }), rule('b', [{ header: 'x-b', set: '1' }, { script: '/abs/b.mjs' }], { on_error: onError, match: { host: '*' } }));
   const forward = await tier2(unitOf('body'), compiled('forward'), { script });
   assert.deepEqual(calls, ['a']);
   assert.equal(text(forward), 'body!');
@@ -550,7 +551,7 @@ test('61: a rule that fails loses only its own changes, later rules run, and on_
 });
 
 test('61: a script that throws is a rule-error, and what a script may return is checked', async () => {
-  const compiled = rules(rule('s', { script: '/abs/s.mjs' }));
+  const compiled = rules(rule('s', { script: path.resolve('/abs/s.mjs') }));
   const skippedBy = async (script) => names((await tier2(unitOf('body'), compiled, { script })).skipped);
   assert.deepEqual(await skippedBy(() => { throw new Error('boom'); }), [['s', 'rule-error']]);
   assert.deepEqual(await skippedBy(() => ({ headers: [['content-length', '1']] })), [['s', 'rule-error']]);
@@ -563,19 +564,19 @@ test('a script reads the message of 5.1, on the bytes the rules before it left, 
   let seen;
   const script = (_, message) => { seen = message; };
   const unit = unitOf('ALPHA', { headers: [['authorization', 'Bearer real'], ['x-api-key', 'real'], ['accept', '*/*']] });
-  const result = await tier2(unit, rules(rule('a', lit('ALPHA', '中文', { in: 'body' })), rule('s', { script: '/abs/s.mjs' })), { script });
+  const result = await tier2(unit, rules(rule('a', lit('ALPHA', '中文', { in: 'body' })), rule('s', { script: path.resolve('/abs/s.mjs') })), { script });
   assert.deepEqual(seen.bytes, Buffer.from('中文'));
   assert.equal(seen.text, '中文');
   assert.deepEqual({ ...seen, bytes: 0, text: 0 }, { on: 'request', harness: 'codex', pid: 42, method: 'POST', host: 'api.example.com', path: '/v1/messages', status: null, headers: [['authorization', ''], ['x-api-key', ''], ['accept', '*/*']], bytes: 0, text: 0 });
   assert.equal(text(result), '中文', 'an empty return changes nothing');
 
-  await tier2(unitOf(Buffer.from([0xff, 0xfe])), rules(rule('s', { script: '/abs/s.mjs' })), { script });
+  await tier2(unitOf(Buffer.from([0xff, 0xfe])), rules(rule('s', { script: path.resolve('/abs/s.mjs') })), { script });
   assert.equal('text' in seen, false);
 });
 
 test('a script changes the body and the headers, in binary too', async () => {
   const binary = Buffer.from([0, 0xff, 1]);
-  const compiled = rules(rule('s', { script: '/abs/s.mjs' }));
+  const compiled = rules(rule('s', { script: path.resolve('/abs/s.mjs') }));
   const headers = await tier2(unitOf('x'), compiled, { script: () => ({ headers: [['x-a', '1'], ['content-type', null]] }) });
   assert.deepEqual(headers.headers, [['x-a', '1']]);
   assert.equal(headers.bytes, null);
@@ -594,7 +595,7 @@ test('a script changes the body and the headers, in binary too', async () => {
 });
 
 test('rules test without --run-script: the script is reported, not run', async () => {
-  const result = await tier2(unitOf('body'), rules(rule('s', [{ header: 'x-a', set: '1' }, { script: '/abs/s.mjs' }])));
+  const result = await tier2(unitOf('body'), rules(rule('s', [{ header: 'x-a', set: '1' }, { script: path.resolve('/abs/s.mjs') }])));
   assert.deepEqual(result.would, [{ rule: 's', text: 'script' }]);
   assert.deepEqual(result.skipped, []);
   assert.equal(result.bytes, null);

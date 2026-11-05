@@ -1,5 +1,5 @@
 // 12i: a script does not reach the control routes (spec 5.1 §隔离). A real control server with its token, and a real rule process: the token's file is outside what the process may
-// read, and a request without the token gets the server's 401. Windows's pipe and Linux's token come with the engine step.
+// read, and a request without the token gets the server's 401. Linux's token comes with the engine step.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -11,8 +11,8 @@ import { openOneShot } from '../../src/rules/launch.mjs';
 const unit = { on: 'request', harness: 'codex', pid: 42, method: 'POST', host: 'api.example.com', path: '/v1/messages', class: 'llm', status: null, event_index: null, sse: false,
   headers: [], req_headers: [], encoding: null, body: Buffer.from('{}') };
 
-test('12i: the token cannot be read, and a request without it is refused', { skip: process.platform === 'win32' && 'a named pipe, on the lab machine' }, async () => {
-  const collector = tmpDir('trocar-collector-'), token = 't'.repeat(32), socketPath = path.join(collector, 'c.sock'), control = path.join(collector, 'control.json');
+test('12i: the token cannot be read, and a request without it is refused', async () => {
+  const collector = tmpDir('trocar-collector-'), token = 't'.repeat(32), socketPath = process.platform === 'win32' ? `\\\\.\\pipe\\${path.basename(collector)}` : path.join(collector, 'c.sock'), control = path.join(collector, 'control.json');
   fs.writeFileSync(control, JSON.stringify({ path: socketPath, token }), { mode: 0o600 });
   let reached = 0;
   const server = await startControlServer({ socketPath, token, routes: { 'POST /off': () => { reached++; return {}; } } });

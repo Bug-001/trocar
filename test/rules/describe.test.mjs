@@ -1,5 +1,6 @@
 // test/rules/describe.test.mjs — what `trocar query rules` says about one rule (RFC 1.6 C.5, 5.1 §三档开销). Expected tiers and buffers are written by
 // hand from those two tables, along the action kinds and the positions; every rule here passes checkRule first, so none is a shape the file cannot hold.
+import path from 'node:path'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
@@ -26,7 +27,7 @@ const ACTIONS = {
   'literal replace inside blocks': [{ replace: 'alpha', with: 'beta', literal: true, blocks: { role: 'user' } }, 2],
   json: [{ json: '/model', set: 'm' }, 2],
   blocks: [{ blocks: { role: 'user' }, remove: true }, 2],
-  script: [{ script: '/abs/s.mjs' }, 2],
+  script: [{ script: path.resolve('/abs/s.mjs') }, 2],
   header: [{ header: 'x-a', set: 'b' }, 0],
   hold: [{ hold: true, release_after_ms: 1000 }, 0],
   drop: [{ drop: true }, 0],
@@ -70,7 +71,7 @@ const BUFFER_CASES = [
   ['request, replace', make({ replace: 'a', with: 'b' }), 'request'],
   ['request, json', make({ json: '/m', set: 1 }), 'request'],
   ['request, blocks', make({ blocks: { role: 'user' }, remove: true }), 'request'],
-  ['request, script', make({ script: '/abs/s.mjs' }), 'request'],
+  ['request, script', make({ script: path.resolve('/abs/s.mjs') }), 'request'],
   ['request, reply', make({ reply: { status: 429 } }), 'request'],
   ['request, hold', make({ hold: true, release_after_ms: 1000 }), 'request'],
   ['response, head only', make({ header: 'x-a', set: 'b' }, { on: 'response' }), 'none'],
@@ -93,7 +94,7 @@ for (const [label, rule, buffers] of BUFFER_CASES) {
 }
 
 test('resend takes a request rule whose actions are all modifications, and no other', () => {
-  const modify = [{ replace: 'a', with: 'b' }, { header: 'x-a', set: 'b' }, { json: '/m', set: 1 }, { blocks: { role: 'user' }, remove: true }, { script: '/abs/s.mjs' }]
+  const modify = [{ replace: 'a', with: 'b' }, { header: 'x-a', set: 'b' }, { json: '/m', set: 1 }, { blocks: { role: 'user' }, remove: true }, { script: path.resolve('/abs/s.mjs') }]
   for (const action of modify) assert.equal(resendOk(make(action)), true, JSON.stringify(action))
   assert.equal(resendOk(make(modify.slice(0, 4))), true)
   for (const action of [{ hold: true, release_after_ms: 1000 }, { drop: true }, { delay_ms: 10 }, { reply: { status: 429 } }]) {

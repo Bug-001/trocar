@@ -1,5 +1,5 @@
 // test/cli/rules-daemon.test.mjs — the seam between `trocar rules` and the daemon (0.1 平台缝): a real HTTP server on a real socket, found the way the product finds it
-// (control.json with its token on darwin, $XDG_RUNTIME_DIR on Linux), with no request function or socket path injected. RFC 1.6 §4.4, 附录 C.2; V116.
+// (control.json with its token on darwin and win32, $XDG_RUNTIME_DIR on Linux), with no request function or socket path injected. RFC 1.6 §4.4, 附录 C.2; V116.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -14,25 +14,28 @@ import { rulesState } from '../../src/paths.mjs'
 import { fakeIo } from './fixtures/on-ctx.mjs'
 import { within } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { readOnly } from '../rules/helpers/never-writes.mjs'
 
 const TOKEN = 'e'.repeat(64)
 const rule = (over = {}) => ({ name: 'one', on_error: 'forward', match: { harness: 'claude-code', host: 'api.anthropic.com' }, do: [{ header: 'x-tag', set: '1' }], ...over })
 const armed = { armed: { off: 0, rules: 0 }, armed_at: '2026-11-05T10:00:00.000Z' }
 
-// Each platform's real shape: darwin names its socket and token in control.json and has no XDG_RUNTIME_DIR; Linux has only the derived path, no token.
-const WORLDS = {
-  darwin: (home) => {
-    const socket = path.join(tmpDir('rd-'), 'c.sock'), collector = path.join(home, '.trocar', 'collector')
-    fs.mkdirSync(collector, { recursive: true })
-    fs.writeFileSync(path.join(collector, 'control.json'), JSON.stringify({ path: socket, token: TOKEN }))
-    return { socket, env: { HOME: home }, token: TOKEN }
-  },
+// Each platform's real shape: darwin and win32 name their endpoint and token in control.json, and Linux has only the derived path, no token. A host can listen on its own kind only.
+const named = (endpoint) => (home) => {
+  const socket = endpoint(), collector = path.join(home, '.trocar', 'collector')
+  fs.mkdirSync(collector, { recursive: true })
+  fs.writeFileSync(path.join(collector, 'control.json'), JSON.stringify({ path: socket, token: TOKEN }))
+  return { socket, env: { HOME: home, USERPROFILE: home }, token: TOKEN }
+}
+const WORLDS = process.platform === 'win32' ? { win32: named(() => `\\\\.\\pipe\\${path.basename(tmpDir('rd-'))}`) } : {
+  darwin: named(() => path.join(tmpDir('rd-'), 'c.sock')),
   linux: (home) => {
     const runtime = tmpDir('rd-'), socket = path.join(runtime, 'trocar', 'collector.sock')
     fs.mkdirSync(path.dirname(socket))
     return { socket, env: { HOME: home, XDG_RUNTIME_DIR: runtime }, token: undefined }
   },
 }
+const TOKENED = Object.keys(WORLDS)[0]
 
 async function world(platform, reply) {
   const home = tmpDir('trocar-rules-d-')
@@ -81,7 +84,7 @@ test('the seam: add, disable, rm and max-delay POST /rules/reload and off POST /
 })
 
 test('--dry-run asks the daemon nothing', async () => {
-  const w = await world('darwin', json(200, {}))
+  const w = await world(TOKENED, json(200, {}))
   try {
     const input = path.join(w.home, 'in.json')
     fs.writeFileSync(input, JSON.stringify(rule()))
@@ -91,7 +94,7 @@ test('--dry-run asks the daemon nothing', async () => {
 })
 
 test('C.2: disable and rm pass on what the daemon released and cut', async () => {
-  const w = await world('darwin', json(200, STOPPED))
+  const w = await world(TOKENED, json(200, STOPPED))
   try {
     w.seed([rule(armed), rule({ ...armed, name: 'two' })])
     assert.deepEqual((await w.rules(['disable', 'one'])).doc.held, STOPPED.held)
@@ -100,7 +103,7 @@ test('C.2: disable and rm pass on what the daemon released and cut', async () =>
 })
 
 test('V116: the daemon answers: memory stopped, its seq and held passed on, file written, exit 0', async () => {
-  const w = await world('darwin', json(200, STOPPED))
+  const w = await world(TOKENED, json(200, STOPPED))
   try {
     w.seed([rule(armed)])
     const { exit, doc } = await w.rules(['off'])
@@ -115,7 +118,7 @@ test('V116: the daemon answers: memory stopped, its seq and held passed on, file
 
 test('§4.4, 5.1: rules off reaches the daemon before it touches the file: the rule is still on in the file when the daemon hears, and off once the command is done', async () => {
   let inFile = null
-  const w = await world('darwin', (req, res) => { inFile = JSON.parse(fs.readFileSync(w.file, 'utf8')).rules[0]; json(200, STOPPED)(req, res) })
+  const w = await world(TOKENED, (req, res) => { inFile = JSON.parse(fs.readFileSync(w.file, 'utf8')).rules[0]; json(200, STOPPED)(req, res) })
   try {
     w.seed([rule(armed)])
     assert.equal((await w.rules(['off'])).exit, 0)
@@ -125,7 +128,7 @@ test('§4.4, 5.1: rules off reaches the daemon before it touches the file: the r
 })
 
 test('5.1: rules off does not wait on the lock to stop the rules: with rules.lock held the daemon still hears, memory stopped, exit 1 rules-unwritable', async () => {
-  const w = await world('darwin', json(200, STOPPED))
+  const w = await world(TOKENED, json(200, STOPPED))
   try {
     w.seed([rule(armed)])
     const bytes = fs.readFileSync(w.file), lock = path.join(w.trocar, 'rules.lock'), later = new Date(Date.now() + 1000)
@@ -145,9 +148,9 @@ test('V116: the daemon stopped but the file cannot be written: exit 1 rules-unwr
   for (const written of [true, false]) {
     // What a real daemon does before it answers (5.1): the stop goes into rules-state.json, or it could not be written and the reply says so.
     const say = json(200, { ...STOPPED, seq: { written, reason: written ? null : 'ENOSPC' } })
-    const w = await world('darwin', (req, res) => { if (written) fs.writeFileSync(rulesState(w.trocar), JSON.stringify({ rules_off_seq: 1 })); say(req, res) })
+    const w = await world(TOKENED, (req, res) => { if (written) fs.writeFileSync(rulesState(w.trocar), JSON.stringify({ rules_off_seq: 1 })); say(req, res) })
     w.seed([rule(armed)])
-    fs.chmodSync(w.trocar, 0o500)
+    const free = readOnly(w.trocar, w.file)
     try {
       const { exit, doc } = await w.rules(['off'])
       assert.equal(exit, 1)
@@ -159,12 +162,13 @@ test('V116: the daemon stopped but the file cannot be written: exit 1 rules-unwr
       assert.deepEqual(doc.held, STOPPED.held)
       assert.deepEqual(doc.rules.map((r) => r.name), ['one'])
       if (written) assert.equal(doc.rules[0].state, 'disabled', 'the recorded stop holds the rule off though the file still has it on')
-    } finally { fs.chmodSync(w.trocar, 0o700); await w.close() }
+    } finally { free(); await w.close() }
   }
 })
 
 test('V116: the daemon does not answer: exit 1 even with the file written; neither written is exit 1 rules-unwritable', async () => {
-  const w = await world('darwin', () => {})
+  const w = await world(TOKENED, () => {})
+  let free
   try {
     w.seed([rule(armed)])
     const first = await w.rules(['off'])
@@ -176,18 +180,18 @@ test('V116: the daemon does not answer: exit 1 even with the file written; neith
     assert.equal(first.doc.file.written, true)
     assert.equal(Object.hasOwn(first.doc, 'seq'), false)
     assert.ok(first.doc.problems.length > 0)
-    fs.chmodSync(w.trocar, 0o500)
+    free = readOnly(w.trocar, w.file)
     const second = await w.rules(['off'])
     assert.equal(second.exit, 1)
     assert.equal(second.doc.error.code, 'rules-unwritable')
     assert.equal(second.doc.memory, 'no-answer')
     assert.equal(second.doc.file.written, false)
     valid(second.doc)
-  } finally { fs.chmodSync(w.trocar, 0o700); await w.close() }
+  } finally { free?.(); await w.close() }
 })
 
 test('a daemon without the route answers 404: loaded null, memory no-daemon, exit 0', async () => {
-  const w = await world('darwin', json(404, { error: 'not found' }))
+  const w = await world(TOKENED, json(404, { error: 'not found' }))
   try {
     w.seed([rule(armed)])
     const disabled = await w.rules(['disable', 'one'])
@@ -203,7 +207,7 @@ test('a daemon without the route answers 404: loaded null, memory no-daemon, exi
 test('a daemon that fails or dies is not the same as no daemon: the file is written, loaded false and a problem says so', async () => {
   const replies = [json(500, { error: 'boom' }), (req) => req.socket.destroy()]
   for (const reply of replies) {
-    const w = await world('darwin', reply)
+    const w = await world(TOKENED, reply)
     try {
       w.seed([rule(armed)])
       const { exit, doc } = await w.rules(['disable', 'one'])
@@ -217,7 +221,7 @@ test('a daemon that fails or dies is not the same as no daemon: the file is writ
 })
 
 test('a socket that is gone is no daemon', async () => {
-  const w = await world('linux', json(200, {}))
+  const w = await world(process.platform === 'win32' ? TOKENED : 'linux', json(200, {}))
   await w.close()
   w.seed([rule(armed)])
   const { exit, doc } = await w.rules(['off'])
@@ -241,7 +245,7 @@ test('§4.4: a daemon that keeps dripping bytes counts as not answering: rules o
     const timer = setInterval(() => res.write(' '), 100)
     res.on('close', () => clearInterval(timer))
   }
-  const w = await world(process.platform === 'linux' ? 'linux' : 'darwin', drip)
+  const w = await world(process.platform === 'linux' ? 'linux' : TOKENED, drip)
   try {
     w.seed([rule(armed)])
     const { exit, doc } = await offProcess(w, w.env)
@@ -252,7 +256,7 @@ test('§4.4: a daemon that keeps dripping bytes counts as not answering: rules o
 
 for (const body of ['null', '[]', '5', '"stopped"', '<html>', '']) {
   test(`a 200 with ${JSON.stringify(body)} says nothing was stopped: no-answer, the file written, exit 1`, async () => {
-    const w = await world('darwin', (req, res) => { res.writeHead(200); res.end(body) })
+    const w = await world(TOKENED, (req, res) => { res.writeHead(200); res.end(body) })
     try {
       w.seed([rule(armed)])
       const { exit, doc } = await w.rules(['off'])
@@ -264,7 +268,7 @@ for (const body of ['null', '[]', '5', '"stopped"', '<html>', '']) {
 
 test('C.2: held counts that are not counts are not passed on: what happened to held requests is not known', async () => {
   for (const held of [{ released: 'x' }, { released: 1 }, { released: 1, cut: -1 }, 5, []]) {
-    const w = await world('darwin', json(200, { held, seq: { written: true, reason: null } }))
+    const w = await world(TOKENED, json(200, { held, seq: { written: true, reason: null } }))
     try {
       w.seed([rule(armed)])
       const { doc } = await w.rules(['off'])

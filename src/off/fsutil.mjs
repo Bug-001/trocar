@@ -15,7 +15,8 @@ export function readOrNull(fs, file) { try { return fs.readFileSync(file) } catc
 const notRegular = () => Object.assign(new Error('not a regular file'), { code: 'not-regular' })
 
 /** At most `limit` bytes of a regular file. Throws for anything else, the file's own error or `not-regular`. A path swapped for a FIFO after the stat
- *  still cannot block: O_NONBLOCK, then fstat what was opened. */
+ *  still cannot block: O_NONBLOCK, then fstat what was opened. Windows has no O_NONBLOCK, and its stat calls a link to a named pipe a file, so there the fstat is all that stands
+ *  before a read that never returns. */
 export function readBounded(fs, file, limit) {
   if (!fs.statSync(file).isFile()) throw notRegular()
   const fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK || 0))
@@ -33,10 +34,9 @@ const SMALL_FILE_BYTES = 4 * 1024 * 1024
 /** The text of one of the collector's own small files, under readBounded's terms: what `rules off` and `off` go through cannot hang on it. Throws the file's own error, `not-regular`
  *  or `too-big`. */
 export function readSmall(fs, file, limit = SMALL_FILE_BYTES) {
-  const stat = fs.statSync(file)
-  if (!stat.isFile()) throw notRegular()
-  if (stat.size > limit) throw Object.assign(new Error(`over ${limit} bytes`), { code: 'too-big' })
-  return fs.readFileSync(file, { encoding: 'utf8', flag: fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK || 0) })
+  const bytes = readBounded(fs, file, limit + 1)
+  if (bytes.length > limit) throw Object.assign(new Error(`over ${limit} bytes`), { code: 'too-big' })
+  return bytes.toString('utf8')
 }
 
 // A directory cannot be fsynced everywhere (Windows refuses the open or the fsync with EPERM / EISDIR / EBADF, some network
@@ -58,8 +58,9 @@ export const TMP_MARK = '.trocar-tmp-'
 const RENAME_BUSY = new Set(['EBUSY', 'EPERM', 'EACCES'])
 const RENAME_WAITS = [10, 20, 40, 60, 80, 100, 120, 150, 200, 220] // ms between tries; 1 s in all
 const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) // a synchronous wait: every writer here is synchronous
-function renameRetrying(fs, from, to) {
+function renameRetrying(fs, from, to, before) {
   for (let i = 0; ; i++) {
+    before()
     try { return fs.renameSync(from, to) } catch (e) {
       if (!(e && RENAME_BUSY.has(e.code)) || i >= RENAME_WAITS.length) throw e
       pause(RENAME_WAITS[i])
@@ -71,8 +72,7 @@ export function writeDurable(file, data, mode, fs = nodeFs, beforeRename = () =>
   const fd = fs.openSync(tmp, 'w', mode)
   try {
     try { fs.writeSync(fd, data); fs.fchmodSync(fd, mode); fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
-    beforeRename() // the last word on the write: it throws and nothing lands
-    renameRetrying(fs, tmp, file)
+    renameRetrying(fs, tmp, file, beforeRename) // the last word on the write, each try: it throws and nothing lands
   } catch (e) {
     try { fs.rmSync(tmp, { force: true }) } catch { /* the error to report is the write's */ }
     throw e

@@ -1,5 +1,6 @@
 // rules-manual.mjs — `trocar help rules`, the one text a person or an agent needs to write, try, list and remove a rule (RFC 1.6 §4.4, 5.1). Loaded only
 // when that help is asked for. The table of actions and positions and every limit come from the rule system itself, so they cannot drift from what `rules add` does.
+import path from 'node:path'
 import { ACTION_POSITIONS, PLACES, LIMITS, DEFAULT_MAX_DELAY_MS } from '../rules/validate.mjs'
 import { SCRIPT_BUILTINS } from '../rules/closed.mjs'
 import { HARNESS_IDS, NAME_ALIASES } from '../off/harness-names.mjs'
@@ -7,7 +8,7 @@ import { COMMAND_INDENT } from '../off/receipt.mjs'
 import { WIDTH, wrap, size } from './text.mjs'
 
 const GAP = 2
-const SCRIPT_EXAMPLE = '/Users/me/rules/surgery.mjs'
+const SCRIPT_EXAMPLE = path.resolve('/Users/me/rules/surgery.mjs') // an example `rules add` takes as it stands, on this platform
 const seconds = (ms) => `${ms / 1000} seconds`
 
 /** One row of cells, each folded in its own column; `widths` is every column but the last, which takes what is left of the line. */
@@ -80,7 +81,7 @@ const EXAMPLES = [
   "on": "response",
   "whole": true,
   "match": { "pid": 4242, "host": "api.openai.com", "class": "llm" },
-  "do": [ { "script": "${SCRIPT_EXAMPLE}" } ],
+  "do": [ { "script": ${JSON.stringify(SCRIPT_EXAMPLE)} } ],
   "on_error": "drop"
 }`],
 ]
@@ -106,7 +107,7 @@ export function rulesManual() {
     ...paragraph('A rule says where trocar acts, when, and what it does there. trocar changes traffic only by the rules you wrote down, and a rule changes nothing until it is turned on.'),
     ...section('The way through',
       steps(
-        ['Write the rule in a file and add it. It is added switched off. - reads the rule from standard input; --dry-run checks it and writes nothing.', 'trocar rules add rule.json'],
+        ['Write the rule in a file and add it. It is added switched off. - reads the rule from standard input, though Windows PowerShell 5.1 turns what it pipes into its own code page, so give it the file there; --dry-run checks it and writes nothing.', 'trocar rules add rule.json'],
         ['Try it on what was captured. Nothing is sent and the rule file does not change, so this is safe on a rule that is off.', 'trocar rules test swap-alpha --last 20'],
         ['Turn it on. rules enable refuses every rule until the collector can run them, and this version cannot yet: it says so and turns nothing on.', 'trocar rules enable swap-alpha'],
         ['See your rules and what each one did. The last one is the same as JSON, for a program.', 'trocar rules', 'trocar rules swap-alpha', 'trocar query rules'],
@@ -266,6 +267,7 @@ export function rulesManual() {
       bullets(
         'It cannot start a process or a thread, send a signal or write a file. To use another program go over HTTP with fetch, to a service you started on this machine. It reads its own folder, so give it a folder of its own, outside your home folder\'s top level and outside ~/.trocar.',
         `It can import ES modules, JSON and these of Node's own: ${SCRIPT_BUILTINS.join(', ')}. Anything else is refused when the rule loads, so bundle a CommonJS dependency into an ES module first.`,
+        `A script that holds more than ${LIMITS.scriptHandles} sockets and timers at once is stopped, so close what you open.`,
         'console.log is seen only in rules test.',
         'It can import only files inside its own directory. A node_modules in a parent directory and a link that leaves the directory are refused, and the error does not name the path.',
         'If you change the script file, run rules enable again; until then the rule is not live. Files it imports are not checked for changes.',

@@ -69,12 +69,14 @@ function isZonedTime(v) {
 
 // An action's form: `need` every key, `one` exactly one of them, `may` any of them, nothing else. The key that names the kind comes first in `need`.
 const SELECTOR_KEYS = { section: isString, kind: isString, role: isString, name: isString, text: isString, min_bytes: isCount, max_bytes: isCount, newest: isCount, skip_newest: isCount }
+// Windows calls /x absolute, and reads it on the drive of whoever is asking.
+const rooted = (v) => path.isAbsolute(v) && (path.sep === '/' || path.parse(path.normalize(v)).root !== path.sep)
 const isPointer = (v) => isString(v) && /^(\/([^~/]|~[01])*)+$/.test(v)
 const FORMS = {
   replace: { need: { replace: isFilled, with: isString }, may: { in: (v) => v === 'text' || v === 'body', literal: isBool, blocks: isObject } },
   header: { need: { header: isString }, one: { set: isString, remove: isTrue } },
   json: { need: { json: isPointer }, one: { set: isAny, add: isAny, remove: isTrue } },
-  script: { need: { script: (v) => isFilled(v) && path.isAbsolute(v) } },
+  script: { need: { script: (v) => isFilled(v) && rooted(v) } },
   hold: { need: { hold: isTrue, release_after_ms: inRange(1, LIMITS.releaseAfterMs) } },
   drop: { need: { drop: isTrue } },
   delay: { need: { delay_ms: inRange(1, LIMITS.delayMs) } },

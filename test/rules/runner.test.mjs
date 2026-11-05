@@ -75,7 +75,7 @@ test('57: a script reads its own directory, writes nowhere, sees no environment 
     assert.equal(seen.read, 'next door');
     assert.equal(seen.write, 'ERR_ACCESS_DENIED');
     assert.ok(!fs.existsSync(path.join(path.dirname(script), 'written.txt')));
-    for (const name of ['PATH', 'HOME', 'TROCAR_TEST_SANDBOX']) assert.ok(!seen.env.includes(name), name);
+    assert.deepEqual(seen.env.filter((name) => !['SYSTEMROOT', 'XDG_RUNTIME_DIR'].includes(name.toUpperCase())), []);
     assert.equal(seen.send, 'undefined');
     assert.equal(seen.channel, 'undefined');
   });

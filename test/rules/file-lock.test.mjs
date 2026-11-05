@@ -35,7 +35,7 @@ const timed = async (w, ms, what) => { const started = Date.now(); const out = a
 test('a writer killed inside the edit holds nobody up: the next one writes within 3 seconds', { timeout: 30_000 }, async () => {
   const home = tmpDir('trocar-rules-')
   const dead = await finish(writer({ home, name: 'dead', inFn: 'SIGKILL' }), 15_000, 'the writer that kills itself')
-  assert.equal(dead.signal, 'SIGKILL')
+  assert.equal(dead.signal, process.platform === 'win32' ? null : 'SIGKILL') // Windows reports an exit code, there being no signals
   assert.equal(fs.existsSync(rulesLock(home)), true)
   const next = await timed(writer({ home, name: 'next' }), 15_000, 'the next writer')
   assert.equal(next.result.ok, true)

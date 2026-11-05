@@ -5,12 +5,13 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
-import { spawn, spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { readRules, edit, RuleRefused } from '../../src/rules/file.mjs'
+import { badScriptPlace, readRules, edit, RuleRefused } from '../../src/rules/file.mjs'
 import { LIMITS, DEFAULT_MAX_DELAY_MS } from '../../src/rules/validate.mjs'
 import { rulesFile, rulesLock, rulesLog } from '../../src/paths.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { neverWrites } from './helpers/never-writes.mjs'
 import { within } from '../helpers/bounded.mjs'
 import { rule } from './helpers/writer.mjs'
 
@@ -149,7 +150,7 @@ const deadLocks = [
   ['a directory with files in it', (l) => { fs.mkdirSync(path.join(l, 'a'), { recursive: true }); fs.writeFileSync(path.join(l, 'a', 'b'), 'x') }],
 ]
 for (const [name, make] of deadLocks) {
-  test(`${name} on rules.lock does not hold up the first edit and leaves nothing behind`, { skip: !posix && 'links and renamed directories go by other rules on Windows' }, () => {
+  test(`${name} on rules.lock does not hold up the first edit and leaves nothing behind`, () => {
     const home = seeded('{"rules": []}')
     make(rulesLock(home))
     const out = edit(add('a'), { home, op: 'add' })
@@ -175,8 +176,8 @@ const shapes = [
   { name: 'a directory', code: 'not-regular', make: (f) => fs.mkdirSync(f) },
   { name: 'broken JSON', code: 'not-json', make: (f) => fs.writeFileSync(f, '{"rules": [') },
   { name: 'a rule that fails its check', code: 'invalid', make: (f) => fs.writeFileSync(f, '{"rules": [{"name": "a"}]}') },
-  { name: 'a FIFO', code: 'not-regular', posix: true, make: (f) => assert.equal(spawnSync('mkfifo', [f]).status, 0) },
-  { name: 'a symlink to /dev/zero', code: 'not-regular', posix: true, make: (f) => fs.symlinkSync('/dev/zero', f) },
+  { name: 'a FIFO', code: 'not-regular', make: neverWrites },
+  { name: 'a symlink to /dev/zero', code: 'not-regular', skip: !posix && 'no device on Windows reads forever', make: (f) => fs.symlinkSync('/dev/zero', f) },
 ]
 
 const inChild = (job) => {
@@ -189,10 +190,10 @@ const inChild = (job) => {
 const shapeOf = (file) => { const s = fs.lstatSync(file); return [s.ino, s.mode, s.size, s.mtimeMs] }
 
 for (const shape of shapes) {
-  test(`${shape.name} is a bad file: read says why, edit refuses, nothing moves, nothing hangs`, { skip: shape.posix && !posix && 'no FIFO or /dev/zero on Windows' }, async () => {
+  test(`${shape.name} is a bad file: read says why, edit refuses, nothing moves, nothing hangs`, { skip: shape.skip }, async (t) => {
     const home = tmpDir('trocar-rules-')
     const file = rulesFile(home)
-    shape.make(file)
+    await shape.make(file, t)
     const before = shapeOf(file)
     const { read, result } = await inChild({ home, name: 'a', read: true })
     assert.equal(read.state, 'bad')
@@ -203,9 +204,9 @@ for (const shape of shapes) {
     assert.equal(fs.existsSync(rulesLog(home)), false)
   })
 
-  test(`onBad aside takes ${shape.name} out of the way too`, { skip: shape.posix && !posix && 'no FIFO or /dev/zero on Windows' }, async () => {
+  test(`onBad aside takes ${shape.name} out of the way too`, { skip: shape.skip }, async (t) => {
     const home = tmpDir('trocar-rules-')
-    shape.make(rulesFile(home))
+    await shape.make(rulesFile(home), t)
     const before = shapeOf(rulesFile(home))
     const { result } = await inChild({ home, name: 'a', onBad: 'aside' })
     assert.equal(result.ok, true)
@@ -213,6 +214,34 @@ for (const shape of shapes) {
     assert.deepEqual(readRules({ home }).doc.rules.map((r) => r.name), ['a'])
   })
 }
+
+test('a script folder is judged by where it is, however it is spelled', () => {
+  const home = fs.realpathSync(tmpDir('trocar-rules-')), place = (file) => badScriptPlace({ do: [{ script: file }] }, home)
+  assert.equal(place(path.join(tmpDir('trocar-elsewhere-'), 'a.mjs')), null)
+  assert.ok(place(path.join(home, 'a.mjs')))
+  assert.ok(place(path.join(home, 'collector', 'a.mjs')))
+  assert.ok(place(path.join(path.dirname(home), 'a.mjs')), 'the folder above')
+  assert.ok(place(path.join(path.parse(home).root, 'a.mjs')), 'the root, whose name ends in a separator')
+  if (fs.existsSync(home.toUpperCase())) assert.ok(place(path.join(home.toUpperCase(), 'a.mjs')), 'another case on a volume that ignores it')
+  assert.equal(place(posix ? '/no/such/place/a.mjs' : 'Q:\\no\\a.mjs'), null, 'a place that is not there')
+})
+
+test('a writer that Windows puts off for a moment waits like any other, and one that is refused for good says why', () => {
+  const home = seeded('{"rules": []}')
+  let left = 2
+  const busy = { ...fs, writeFileSync: (f, ...rest) => {
+    if (f === rulesLock(home) && left-- > 0) throw Object.assign(new Error('delete pending'), { code: 'EPERM' })
+    return fs.writeFileSync(f, ...rest)
+  } }
+  assert.equal(edit(add('a'), { home, op: 'add', fs: busy }).ok, true)
+  const refused = { ...fs, writeFileSync: (f, ...rest) => {
+    if (f === rulesLock(home)) throw Object.assign(new Error('access denied'), { code: 'EPERM' })
+    return fs.writeFileSync(f, ...rest)
+  } }
+  const out = edit(add('b'), { home, op: 'add', fs: refused })
+  assert.deepEqual([out.ok, out.error.code], [false, 'rules-unwritable'])
+  assert.match(out.error.message, /access denied/)
+})
 
 test('a packed file near the size limit still takes an edit that shrinks it, though its indented form would not fit', () => {
   const pad = 'x'.repeat(4000)

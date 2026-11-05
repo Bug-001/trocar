@@ -113,8 +113,14 @@ test('an action carries exactly the keys of its form', () => {
   passes(rule({ do: [{ replace: 'x'.repeat(LIMITS.regexBytes), with: '' }] }))
 })
 
+test('a script path that hangs on the drive of whoever reads it is not absolute', { skip: process.platform !== 'win32' && 'a rooted path is whole on POSIX' }, () => {
+  refused(rule({ do: [{ script: '/a.mjs' }] }), 'do.0')
+  refused(rule({ do: [{ script: '\\a.mjs' }] }), 'do.0')
+  assert.deepEqual(checkRule(rule({ do: [{ script: 'c:/a.mjs' }] })), [])
+})
+
 test('a rule has at most one script: it carries one script_entry_sha256', () => {
-  refused(rule({ do: [{ script: '/a.mjs' }, { script: '/b.mjs' }] }), 'do.1')
+  refused(rule({ do: [{ script: path.resolve('/a.mjs') }, { script: path.resolve('/b.mjs') }] }), 'do.1')
 })
 
 test('hold, drop and reply end the list; nothing follows them', () => {
@@ -136,7 +142,7 @@ test('hard rule: harness or pid is required, and "any" is written out', () => {
 test('hard rule: a rule that reads the body needs host, path or class', () => {
   const readers = [
     [{ body: 'ALPHA' }, [{ delay_ms: 1 }]], [{ blocks: { role: 'user' } }, [{ delay_ms: 1 }]],
-    [{}, [{ replace: 'a', with: 'b' }]], [{}, [{ json: '/a', set: 1 }]], [{}, [{ blocks: {}, remove: true }]], [{}, [{ script: '/s.mjs' }]],
+    [{}, [{ replace: 'a', with: 'b' }]], [{}, [{ json: '/a', set: 1 }]], [{}, [{ blocks: {}, remove: true }]], [{}, [{ script: path.resolve('/s.mjs') }]],
   ]
   for (const [extra, actions] of readers) {
     const match = { harness: 'codex', ...extra }

@@ -20,7 +20,7 @@ export const SKIP_WHY = list(
   'expect-continue', 'encoding', 'not-utf8', 'too-big', 'event-too-big', 'multi-line-event', 'not-json', 'no-blocks', 'streaming', 'http10', 'edits-full', 'bad-result',
   'multi-script', 'rule-error', 'load-failed', 'audit-failed', 'no-progress', 'no-terminal',
   'pipelined', 'no-recorder', 'credentialed-hop', 'head-too-big', 'head-timeout', 'not-http', 'blind', 'ws-compressed', 'passthrough', 'gate-full',
-  'gate-error', 'no-runner')
+  'gate-error', 'no-runner', 'handles')
 /** What a rule process lets anything import of Node's own (5.1 §隔离). A list of what may stay, because Node keeps adding ways past its own permission model, and a list of what to
  *  take away has to know them all. */
 export const SCRIPT_BUILTINS = list('assert', 'assert/strict', 'buffer', 'crypto', 'dns', 'dns/promises', 'events', 'fs', 'fs/promises', 'http', 'http2', 'https', 'net', 'os', 'path',
@@ -51,4 +51,5 @@ export const LIMITS = Object.freeze({
   bodyBytes: 64 * 1024 * 1024,
   loadMs: 10_000,
   regexLoadMs: 2_000,
+  scriptHandles: 1024,
 })

@@ -1,4 +1,5 @@
 // test/cli/rules-manual.test.mjs — `trocar help rules` is the manual (1.6 §4.4, §5.4): what it shows is held to the validator, not to its wording.
+import path from 'node:path'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { sandbox } from './fixtures/dispatch-ctx.mjs'
@@ -14,7 +15,7 @@ const manual = rulesManual()
 // one action of each kind of 5.1 §动作
 const ACTIONS = {
   replace: { replace: 'a', with: 'b' }, header: { header: 'x-a', set: 'b' }, json: { json: '/a', set: 1 }, blocks: { blocks: { role: 'user' }, remove: true },
-  script: { script: '/abs/s.mjs' }, hold: { hold: true, release_after_ms: 1000 }, drop: { drop: true }, delay: { delay_ms: 1 }, reply: { reply: { status: 429 } }, inject: { inject: 'data: x\n\n' },
+  script: { script: path.resolve('/abs/s.mjs') }, hold: { hold: true, release_after_ms: 1000 }, drop: { drop: true }, delay: { delay_ms: 1 }, reply: { reply: { status: 429 } }, inject: { inject: 'data: x\n\n' },
 }
 const at = (place) => (place === 'response-whole' ? { on: 'response', whole: true } : { on: place })
 const ruleOf = (action, place) => ({ name: 'r', ...at(place), match: { harness: 'any', class: 'llm' }, do: [action], on_error: 'forward' })

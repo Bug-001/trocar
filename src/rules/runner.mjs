@@ -10,32 +10,34 @@ const [{ Buffer }, { once }, fs, { pathToFileURL }, util, threads, modules, os, 
   import('node:buffer'), import('node:events'), import('node:fs'), import('node:url'), import('node:util'), import('node:worker_threads'), import('node:module'), import('node:os'),
   import('./actions.mjs'), import('./apply.mjs'), import('./budget.mjs'), import('./closed.mjs'), import('./compile.mjs'), import('./slot.mjs'),
 ])
-const { ANSWER_BYTES, editsSegment, encodeFrame, frameReader, HEAD_BYTES, NO_RULE, writeProgress } = slots
+const { ANSWER_BYTES, DEATHS, editsSegment, encodeFrame, frameReader, HEAD_BYTES, NO_RULE, writeProgress } = slots
 
 const MIB = 1024 * 1024
 const NS_PER_MS = 1_000_000n
 const CONSOLE_BYTES = 16 * 1024
 const LOAD_REASON_CHARS = 1024
 const SCRIPT_RESULT_KEYS = new Set(['body', 'headers'])
+const KEPT_ENV = Object.freeze(['SYSTEMROOT', 'XDG_RUNTIME_DIR'])
 
 const [slotPath, parentPid, scriptPath] = process.argv.slice(2)
 const capBytes = Number(capMiB) * MIB
 const slot = fs.openSync(slotPath, 'r+')
 
-const shared = new SharedArrayBuffer(16)
+const shared = new SharedArrayBuffer(24)
 const deadline = new BigInt64Array(shared, 0, 1)
 const wake = new Int32Array(shared, 8, 1)
-const overMemory = new Int32Array(shared, 12, 1)
+const over = new Int32Array(shared, 12, 1) // an index into DEATHS, plus one
+const beat = new Int32Array(shared, 16, 1)
 const setClock = (at) => {
   Atomics.store(deadline, 0, at)
   Atomics.add(wake, 0, 1)
   Atomics.notify(wake, 0)
 }
 // Kept here: `process` is not frozen, and a script that swaps these must not stop the clock or the memory check.
-const { memoryUsage } = process, { bigint: clockNow } = process.hrtime
+const { getActiveResourcesInfo, memoryUsage } = process, { bigint: clockNow } = process.hrtime
 const arm = (ms) => setClock(clockNow() + BigInt(Math.max(0, Math.ceil(ms))) * NS_PER_MS)
 
-const watchdog = new threads.Worker(new URL('./watchdog.mjs', import.meta.url), { workerData: { shared, fd: slot, capBytes, ppid: Number(parentPid) } })
+const watchdog = new threads.Worker(new URL('./watchdog.mjs', import.meta.url), { workerData: { shared, fd: slot, slotPath, capBytes, ppid: Number(parentPid) } })
 watchdog.once('exit', () => process.exit(1)) // no rule runs unwatched
 await once(watchdog, 'online')
 
@@ -53,20 +55,25 @@ modules.registerHooks({
   },
 })
 for (const name of ['kill', '_kill', '_debugProcess', '_debugEnd', 'getBuiltinModule']) delete process[name]
+// Windows hands every child PATH, USERNAME and the like whatever env it was given. SYSTEMROOT stays: sockets do not load without it.
+for (const name of Object.keys(process.env)) if (!KEPT_ENV.includes(name.toUpperCase())) delete process.env[name]
 os.default.setPriority = function refused() { throw new Error('a rule process has no say over other processes') }
 modules.syncBuiltinESMExports()
 // The flag freezes what the language brings. Buffer is Node's, and this code reports through it.
 Object.freeze(Buffer.prototype)
 Object.freeze(Buffer)
 
-// RSS misses pages macOS compressed and Windows trimmed. A stuck main thread stops this one, but then what it allocates is in the RSS.
+// RSS misses pages macOS compressed and Windows trimmed, and a leak of sockets is ports nobody else on the machine can have. A stuck main thread stops this tick, and the beat says so.
+const tell = (why) => {
+  Atomics.store(over, 0, DEATHS.indexOf(why) + 1) // the watchdog kills: this thread no longer can
+  Atomics.add(wake, 0, 1)
+  Atomics.notify(wake, 0)
+}
 setInterval(() => {
+  Atomics.add(beat, 0, 1)
   const { heapUsed, external, arrayBuffers } = memoryUsage()
-  if (heapUsed + external + arrayBuffers > capBytes) {
-    Atomics.store(overMemory, 0, 1) // the watchdog kills: this thread no longer can
-    Atomics.add(wake, 0, 1)
-    Atomics.notify(wake, 0)
-  }
+  if (heapUsed + external + arrayBuffers > capBytes) tell('memory')
+  if (getActiveResourcesInfo().length > LIMITS.scriptHandles) tell('handles')
 }, 1000).unref()
 
 let printed = ''

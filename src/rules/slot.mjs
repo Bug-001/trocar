@@ -10,7 +10,7 @@ export const ANSWER_BYTES = 64 * 1024
 /** `rule` and `slowest` before any rule ran. */
 export const NO_RULE = 0xFFFFFFFF
 /** What a rule process writes down before it kills itself. Any other death is the parent's to name. */
-export const DEATHS = Object.freeze(['timeout', 'memory', 'parent'])
+export const DEATHS = Object.freeze(['timeout', 'memory', 'parent', 'handles'])
 
 const DONE_AT = 12
 const DEATH_AT = 13

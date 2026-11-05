@@ -2,7 +2,7 @@
 // runCli in a temporary HOME, so the table entry, root refusal and the option parsing are the real ones. The daemon's side is rules-daemon.test.mjs.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { spawn, spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -15,6 +15,7 @@ import { rulesState, rulesStats } from '../../src/paths.mjs'
 import { fakeIo, snapshot } from './fixtures/on-ctx.mjs'
 import { within } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { neverWrites, readOnly } from '../rules/helpers/never-writes.mjs'
 
 const rule = (over = {}) => ({ name: 'tag-header', on_error: 'forward', match: { harness: 'claude-code', host: 'api.anthropic.com' }, do: [{ header: 'x-tag', set: '1' }], ...over })
 const armed = { armed: { off: 0, rules: 0 }, armed_at: '2026-11-05T10:00:00.000Z' }
@@ -281,7 +282,7 @@ test('V116: no daemon: rules off writes every rule off, exit 0, memory no-daemon
 })
 
 const blocked = {
-  'home is read-only': (s) => { fs.chmodSync(s.trocar, 0o500); return () => fs.chmodSync(s.trocar, 0o700) },
+  'home is read-only': (s) => readOnly(s.trocar, s.file),
   'the lock is held': (s) => { const lock = path.join(s.trocar, 'rules.lock'); fs.writeFileSync(lock, 'someone'); const later = new Date(Date.now() + 1000); fs.utimesSync(lock, later, later); return () => {} },
 }
 
@@ -305,6 +306,15 @@ test('V116: no daemon and the file cannot be written: exit 1 rules-unwritable, a
       assert.deepEqual(fs.readFileSync(s.file), bytes, what)
     } finally { free() }
   }
+})
+
+test('a read-only rules.json does not stop rules off', async () => {
+  const s = sandbox()
+  seed(s, [rule({ ...armed, name: 'on-one' })])
+  fs.chmodSync(s.file, 0o400)
+  const { exit, doc } = await rules(s, ['off'])
+  assert.deepEqual([exit, doc.file.written], [0, true])
+  assert.equal(Object.hasOwn(stored(s).rules[0], 'armed'), false)
 })
 
 test('§4.4: a write verb that cannot write is exit 1 rules-unwritable, and rules.json is what it was', async () => {
@@ -457,21 +467,19 @@ test('V115: a regex that does not parse is exit 2 rule-invalid wherever a rule w
 // A real process: what these guard against is a hang, and a hang in-process would take the test run with it.
 const BIN = fileURLToPath(new URL('../../bin/trocar.mjs', import.meta.url))
 function real(s, argv, { env = {} } = {}) {
-  const child = spawn(process.execPath, [BIN, 'rules', ...argv], { stdio: ['ignore', 'pipe', 'pipe'], env: { HOME: s.home, ...env } })
+  const child = spawn(process.execPath, [BIN, 'rules', ...argv], { stdio: ['ignore', 'pipe', 'pipe'], env: { HOME: s.home, USERPROFILE: s.home, ...env } })
   let out = '', err = ''
   child.stdout.on('data', (d) => { out += d })
   child.stderr.on('data', (d) => { err += d })
   const done = new Promise((resolve) => { child.on('close', (exit) => resolve({ exit, out, err })) })
   return within(done, 20_000, `trocar rules ${argv.join(' ')}`, () => child.kill('SIGKILL'))
 }
-const posix = { skip: process.platform === 'win32' && 'no FIFO on Windows' }
-
 for (const name of ['control.json', 'rules-stats.json', 'rules-state.json', 'state.json']) {
-  test(`§4.4: a FIFO on collector/${name} does not stop rules off: the file is written, the receipt comes back`, posix, async () => {
+  test(`§4.4: a FIFO on collector/${name} does not stop rules off: the file is written, the receipt comes back`, async (t) => {
     const s = sandbox()
     seed(s, [rule(armed)])
     fs.mkdirSync(path.join(s.trocar, 'collector'))
-    assert.equal(spawnSync('mkfifo', [path.join(s.trocar, 'collector', name)]).status, 0)
+    await neverWrites(path.join(s.trocar, 'collector', name), t)
     const { exit, out } = await real(s, ['off', '--json'])
     assert.equal(JSON.parse(out).file.written, true)
     assert.equal(exit, 0)
@@ -480,11 +488,11 @@ for (const name of ['control.json', 'rules-stats.json', 'rules-state.json', 'sta
 }
 
 for (const name of ['rules-stats.json', 'rules-state.json', 'state.json']) {
-  test(`a FIFO on collector/${name} is a file that cannot be read to trocar rules, and it names it`, posix, async () => {
+  test(`a FIFO on collector/${name} is a file that cannot be read to trocar rules, and it names it`, async (t) => {
     const s = sandbox()
     seed(s, [rule(armed)])
     fs.mkdirSync(path.join(s.trocar, 'collector'))
-    assert.equal(spawnSync('mkfifo', [path.join(s.trocar, 'collector', name)]).status, 0)
+    await neverWrites(path.join(s.trocar, 'collector', name), t)
     assert.ok(JSON.parse((await real(s, ['--json'])).out).errors.some((e) => e.where === name))
   })
 }
@@ -542,8 +550,8 @@ test('C.1, §4.4: --dry-run has no undo and writes nothing, not even a directory
   assert.deepEqual(snapshot(fresh), before)
 
   const locked = sandbox()
-  fs.chmodSync(locked.trocar, 0o500)
-  try { assert.equal((await rules(locked, ['add', file, '--dry-run'])).exit, 0) } finally { fs.chmodSync(locked.trocar, 0o700) }
+  const free = readOnly(locked.trocar, locked.file)
+  try { assert.equal((await rules(locked, ['add', file, '--dry-run'])).exit, 0) } finally { free() }
 })
 
 test('C.1: a usage error names the verb in command, whichever way the usage is wrong', async () => {
@@ -614,7 +622,7 @@ test('escaping a rule\'s text leaves trocar\'s own colours alone', async () => {
 test('a reader that goes away is no error: nothing on stderr, the command\'s own exit', async () => {
   for (const argv of [['help', 'rules'], ['rules', '--json']]) {
     const home = tmpDir('trocar-rules-')
-    const child = spawn(process.execPath, [BIN, ...argv], { stdio: ['ignore', 'pipe', 'pipe'], env: { HOME: home } })
+    const child = spawn(process.execPath, [BIN, ...argv], { stdio: ['ignore', 'pipe', 'pipe'], env: { HOME: home, USERPROFILE: home } })
     child.stdout.destroy() // shut before node is up, so the first write finds nobody
     let err = ''
     child.stderr.on('data', (d) => { err += d })

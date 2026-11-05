@@ -45,6 +45,8 @@ const ROWS = [
   { name: 'a body past 64 MiB', why: 'too-big', body: 'return "x".repeat(65 * 1024 * 1024)' },
   ...['new ArrayBuffer(4)', 'new Map([["body", "x"]])', 'new Date()', '[]'].map((value) => ({ name: `a result that says nothing: ${value}`, why: 'bad-result', body: `return ${value}` })),
   { name: 'memory behind a stopped gauge', why: 'memory', top: 'process.memoryUsage = () => ({ heapUsed: 0, external: 0, arrayBuffers: 0 })', body: 'const keep = []; for (;;) { keep.push(Buffer.allocUnsafeSlow(32 << 20)); await new Promise((r) => setTimeout(r, 20)) }', capBytes: 192 * MIB, maxTaskMs: 30000 },
+  { name: 'a leak of handles', why: 'handles', body: 'for (let i = 0; i < 2000; i++) setTimeout(() => {}, 600000); await new Promise(() => {})', maxTaskMs: 8000 },
+  { name: 'a slot grown past its limit', why: 'memory', body: 'fs.ftruncateSync(fs.openSync(process.argv[2], "r+"), 2 ** 29); await new Promise(() => {})', maxTaskMs: 8000 },
   { name: 'a cycle', why: 'bad-result', body: 'const o = {}; o.self = o; return o' },
   { name: 'a cycle in the body key', why: 'bad-result', body: 'const o = {}; o.body = o; return o' },
   { name: 'memory past the limit', why: 'memory', body: 'const keep = []; for (;;) keep.push(Buffer.alloc(8 << 20, 1))', capBytes: 192 * MIB, maxTaskMs: 30000 },
@@ -202,7 +204,7 @@ for (const [how, top] of [['by itself', ''], ['with the clock swapped under it',
   const signal = await new Promise((resolve) => { child.once('close', (_, killedBy) => resolve(killedBy)); });
   const fd = fs.openSync(slot, 'r');
   t.after(() => fs.closeSync(fd));
-  assert.equal(signal, 'SIGKILL');
+  assert.equal(signal, WIN ? null : 'SIGKILL'); // Windows reports an exit code, there being no signals
   assert.deepEqual([readProgress(fd).task, readProgress(fd).rule, readProgress(fd).done, readProgress(fd).death], [7, 0, false, 'timeout']);
 });
 
@@ -292,6 +294,17 @@ test('the channel closed is the end of the process, and a wrong parent is too', 
   const { signal } = await exited(orphan);
   assert.equal(signal, WIN ? null : 'SIGKILL');
   assert.equal(readProgress(fs.openSync(slot, 'r')).death, 'parent');
+});
+
+test('a main thread stuck with no task on it is ended within seconds, and the next unit gets a new process', async () => {
+  const dir = tmpDir('trocar-idle-stuck-'), script = path.join(dir, 'script.mjs');
+  fs.writeFileSync(script, 'export default () => { setTimeout(() => { for (;;); }, 50); return String(process.pid) }');
+  const runner = openOneShot({ script, rules: [{ name: 'script', on_error: 'forward', match: { harness: 'any' }, do: [{ script }] }], maxTaskMs: 3000 });
+  try {
+    const pid = Number((await runner.run(unit())).bytes);
+    assert.ok(await until(() => isGone(pid), 9000), 'nothing ended it');
+    assert.notEqual(Number((await runner.run(unit())).bytes), pid);
+  } finally { await runner.close(); }
 });
 
 test('close twice is one close, and a run after it touches nothing', async () => {

@@ -53,6 +53,9 @@ export function readRules({ home, fs = nodeFs } = {}) {
   return { state: 'ok', doc: { ...empty, ...doc }, sha256: hash }
 }
 
+// What Windows answers while another writer's lock is on its way out, or a scanner has it. The wait below is for that too: POSIX says EEXIST and nothing else here.
+const LOCK_BUSY = new Set(['EEXIST', 'EPERM', 'EBUSY'])
+
 const holds = (fs, lock, token) => {
   try { return readBounded(fs, lock, token.length + 1).toString() === token } catch { return false }
 }
@@ -79,10 +82,16 @@ function takeLock(fs, lock) {
   fs.mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 })
   const token = randomBytes(TOKEN_BYTES).toString('hex')
   const deadline = Date.now() + LOCK_WAIT_MS
-  for (;;) {
-    try { fs.writeFileSync(lock, token, { flag: 'wx', mode: 0o600 }); return token } catch (e) { if (e.code !== 'EEXIST') throw e }
-    takeStale(fs, lock, token)
-    if (Date.now() >= deadline) return null
+  for (let refused = null; ; ) {
+    try {
+      takeStale(fs, lock, token) // first: Windows writes through a link to nothing where POSIX says EEXIST, and a link to itself is ELOOP there
+      fs.writeFileSync(lock, token, { flag: 'wx', mode: 0o600 })
+      return token
+    } catch (e) {
+      if (!LOCK_BUSY.has(e.code)) throw e
+      refused = e.code === 'EEXIST' ? null : e
+    }
+    if (Date.now() >= deadline) { if (refused) throw refused; return null }
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, LOCK_NAP_MS)
   }
 }
@@ -101,10 +110,19 @@ function serialized(doc) {
 export function badScriptPlace(rule, home) {
   const script = scriptOf(rule)
   if (!script) return null
-  // What is not there yet is read through what is: macOS's temporary folders are behind a link.
-  const real = (p) => { try { return nodeFs.realpathSync(p) } catch { return path.join(real(path.dirname(p)), path.basename(p)) } }
+  // What is not there yet is read through what is: macOS's temporary folders are behind a link. Native for the spellings of one place: case, 8.3 names, a substituted drive.
+  const real = (p) => {
+    try { return nodeFs.realpathSync.native(p) } catch {
+      const up = path.dirname(p)
+      return up === p ? p : path.join(real(up), path.basename(p))
+    }
+  }
   const dir = path.dirname(real(script)), trocar = real(home)
-  const within = (inner, outer) => inner === outer || inner.startsWith(outer + path.sep)
+  // relative folds case where the platform does, and a drive's root already ends in a separator.
+  const within = (inner, outer) => {
+    const way = path.relative(outer, inner)
+    return way !== '..' && !way.startsWith(`..${path.sep}`) && !path.isAbsolute(way)
+  }
   return within(dir, trocar) || within(trocar, dir) ? `do: a script reads its whole folder, so ${dir} would give it trocar's own files. Put the script in a folder of its own.` : null
 }
 
@@ -151,6 +169,9 @@ export function edit(fn, { home, fs = nodeFs, now = () => new Date(), source = '
     const at = now(), written = planned.written
     const moved = `${file}.bad-${at.toISOString().replace(/[:.]/g, '-')}`
     try {
+      // Windows will not rename over a read-only file, and on POSIX its mode is no reason to fail.
+      const held = fs.lstatSync(file, { throwIfNoEntry: false })
+      if (held?.isFile() && !(held.mode & 0o200)) fs.chmodSync(file, 0o600)
       writeDurable(file, bytes, 0o600, fs, () => {
         if (!holds(fs, lock, token)) throw new Error(`another writer took ${lock}, so nothing was changed`)
         if (broken) { fs.renameSync(file, moved); written.push(moved) }

@@ -37,7 +37,7 @@ const specTopKeys = () => specRow().split('|')[2].split('。')[0].split('·').sl
 
 const header = { name: 'tag-header', note: 'marks the call', on: 'request', match: { harness: ['claude-code'], host: 'api.anthropic.com' }, do: [{ header: 'x-tag', set: '1' }], on_error: 'forward' }
 const armedOn = (rule, seq = {}) => ({ ...rule, armed: { off: 5, rules: 0, ...seq }, armed_at: '2026-11-05T10:00:00.000Z' })
-const script = { name: 'surgery', on: 'request', match: { harness: 'any', host: 'api.anthropic.com' }, do: [{ script: '/abs/surgery.mjs' }], on_error: 'drop', limit: { times: 5, until: '2026-11-06T00:00:00.000Z' } }
+const script = { name: 'surgery', on: 'request', match: { harness: 'any', host: 'api.anthropic.com' }, do: [{ script: path.resolve('/abs/surgery.mjs') }], on_error: 'drop', limit: { times: 5, until: '2026-11-06T00:00:00.000Z' } }
 const stream = { name: 'scrub', on: 'response', match: { harness: ['codex'], host: '*.example' }, do: [{ replace: 'alpha', with: 'beta', literal: true }], on_error: 'forward' }
 
 const statePath = (home) => path.join(home, 'collector', 'state.json')
