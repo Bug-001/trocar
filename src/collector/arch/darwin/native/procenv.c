@@ -1,4 +1,4 @@
-// procenv.c — the LAUNCH environment of one process (RFC 4.11 P7 `proc.envOf` on macOS, M2)
+// procenv.c — the LAUNCH environment of one process (RFC 4.11 P7 `proc.envOf` on macOS)
 // Read the one way a non-root user can: sysctl {CTL_KERN, KERN_PROCARGS2, pid} (same user only).
 // The buffer: int argc; exec_path NUL; NUL padding; argv[0..argc-1] NUL each; env strings NUL each; an empty string; then the
 // kernel's "apple" strings (executable_path=, ptr_munge=, ...). These are the bytes in the target's memory now: in-place writes

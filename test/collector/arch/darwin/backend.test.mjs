@@ -31,7 +31,7 @@ test('CM7: the darwin root store adds to the LOGIN keychain with trustRoot and n
   const add = calls.find((x) => x.args[0] === 'add-trusted-cert')
   assert.deepEqual(add.args.slice(0, 4), ['add-trusted-cert', '-r', 'trustRoot', '-k'])
   assert.equal(add.args[4], path.join(home, 'Library', 'Keychains', 'login.keychain-db'))
-  assert.ok(!add.args.includes('-p'), 'no -p: the trust is unrestricted (M7, M8)')
+  assert.ok(!add.args.includes('-p'), 'no -p: the trust is unrestricted')
   assert.ok(!add.args.includes('-d'), 'never the admin (system) trust domain')
   assert.ok(calls.every((x) => !x.args.some((a) => /System\.keychain/.test(a))), 'never the System keychain')
 })

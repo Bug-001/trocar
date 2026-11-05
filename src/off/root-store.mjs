@@ -1,7 +1,7 @@
 // root-store.mjs (src/off) — the user's OS root store, P3 of RFC 4.11: the one place that knows its argv on both
 // OSes; the collector's install and the standalone uninstall import it (node:* and src/off only). Always the user's store: the
 // login keychain on macOS, CurrentUser\Root on Windows — a machine store is never written. The OS prompt is the consent.
-//   darwin  add     security add-trusted-cert -r trustRoot -k <login keychain> <file>   (no -p: unrestricted, M7 / M8)
+//   darwin  add     security add-trusted-cert -r trustRoot -k <login keychain> <file>   (no -p: unrestricted)
 //           has     security find-certificate -a -Z -p <login keychain>, matched by SHA-256, AND a user trust setting for it:
 //                   security trust-settings-export <file> (the user domain), its trustList keyed by SHA-1, not Deny — an import whose
 //                   prompt was declined or ignored is in the keychain without trust, and must read as absent so the next add asks again
