@@ -94,11 +94,13 @@ export function liveHeap() {
 export const usedHeap = () => v8.getHeapStatistics().used_heap_size
 
 const forget = (e) => { if (lru.delete(e)) { e.cache.delete(e.id); total -= e.size; if (e.steady) steady -= e.size } }
+// the ledger's own letting go: the only way a kept entry leaves without its cache's caller asking, so its `drop` is told
+const evict = (e) => { forget(e); if (e.drop) e.drop(e.value) }
 /** Make room for `need` more bytes: the least recently used entries of ANY cache go first; `keep` never. */
 function room(need, keep = null) {
   for (const e of lru) {
     if (total + need <= heapBudget()) return
-    if (e !== keep) forget(e)
+    if (e !== keep) evict(e)
   }
 }
 
@@ -114,25 +116,27 @@ export function hold(bytes) {
 /** Every kept entry but the steady ones let go (src/query/named/session.mjs: a fold about to be stopped by the measured bound, 3.5
  *  §内存有界). A steady entry is never let go here: the plan of every session read holds the rows it is made of, so letting it go
  *  frees nothing and the next read builds the rows a second time beside the ones the plan holds. */
-export function yieldCaches() { for (const e of lru) if (!e.steady) forget(e) }
+export function yieldCaches() { for (const e of lru) if (!e.steady) evict(e) }
 
 /**
  * warmCache({max, cost}) → { get(id, stamp, compute, estimate), peek(id, stamp) }: `compute(previous)` runs when this `id` was never
  * seen or its `stamp` moved (`previous` = the value it held, if any, which the cache lets go of); otherwise the remembered value comes back untouched. `cost(value)` is what the value costs in the HEAP (an
  * estimate from stored bytes, never a count of entries or a serialized size); `estimate` is the same, known BEFORE computing, so
  * the room is made first and the peak never passes the budget. A value whose cost is past the whole budget is returned but never
- * kept. `max` bounds this cache's entries. `steady`: every query reads these entries again (steadyBytes).
+ * kept. `max` bounds this cache's entries. `steady`: every query reads these entries again (steadyBytes). `drop(value)`: the ledger let
+ * this entry go (making room, yieldCaches, past `max`), and whatever else holds the value must let it go too; never for take(), for a
+ * stale entry `get` replaces, or for a value that was never kept: their caller has the value in hand.
  */
-export function warmCache({ max = Infinity, cost = () => 0, steady: isSteady = false } = {}) {
+export function warmCache({ max = Infinity, cost = () => 0, steady: isSteady = false, drop = null } = {}) {
   const m = new Map()
   const keep = (id, e, size) => {
-    e.size = size
+    e.size = size; e.drop = drop
     if (size > heapBudget()) return // answered this once, never kept, and nothing else is pushed out for it
     room(size)
     if (total + size > heapBudget()) return // past what the budget can give it (a query in flight holds the rest): answered, never kept
     m.set(id, e); lru.add(e); total += size
     if (isSteady) { e.steady = true; steady += size }
-    if (m.size > max) for (const old of m.values()) { if (m.size <= max) break; if (old !== e) forget(old) }
+    if (m.size > max) for (const old of m.values()) { if (m.size <= max) break; if (old !== e) evict(old) }
   }
   const fresh = (id, stamp) => { const hit = m.get(id); return hit && hit.stamp === stamp ? hit : null }
   const touch = (e) => { if (lru.delete(e)) lru.add(e); return e.value } // a promise still in flight is in no ledger yet

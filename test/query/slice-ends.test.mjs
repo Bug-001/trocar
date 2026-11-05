@@ -11,6 +11,7 @@ import { runQuery } from '../../src/query/named/index.mjs' // first: the named q
 import { extendSession, sessionState } from '../../src/query/named/session.mjs'
 import { readHead, rereadFile, writeInFlight } from '../../src/query/ctx-files.mjs'
 import { projectionFile, PROJ_V, sessionDir } from '../../src/query/projection.mjs'
+import { yieldCaches } from '../../src/query/warm.mjs'
 
 const SHAPE = { growth: 120, compactAt: 6_000, subEvery: 3, subLanes: 2, late: 3 }
 const SPENT = 1e-6 // a budget spent before any unit of work ends
@@ -69,8 +70,9 @@ for (const budget of [0, 1, 50, Infinity]) for (const start of ['a first read', 
         events--
         const x = r()
         if (x < 0.4) { const n = 1 + Math.floor(r() * 4); a.append(n); landed += n }
-        else if (x < 0.6) await runQuery('session', { id }, slices)
-        else if (x < 0.8) await extendSession(slices, other, 1)
+        else if (x < 0.55) await runQuery('session', { id }, slices)
+        else if (x < 0.7) await extendSession(slices, other, 1)
+        else if (x < 0.85) yieldCaches()
         else full = !full
       }
       // turn after turn until nothing comes: a write that failed ends a turn, the next one tries again

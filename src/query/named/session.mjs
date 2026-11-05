@@ -19,7 +19,9 @@
 //
 // WARM (D63 ①; 3.5 §缓存按依赖失效): per (fs, home, session, writer) the projection store stays open and the state (the reduction,
 // its log, the step-order columns) is kept; it is let go (take(): the only reference dropped) before a state from scratch, so the heap
-// never holds two. The reduction frontier of each session is kept for version().
+// never holds two. The reduction frontier of each session is kept for version(). The shared ledger may let a state go at any time
+// (letGoState): nothing here keeps it after that but a request that is answering from it, for which it is read-only (`gone`: no answer
+// file, no head, no fold: only grow() folds and it takes its state from the cache), and the session reopens at its last checkpoint.
 //
 // THE CUT (3.5 §内存有界「截断只是兜底,按实测的堆截」, a backstop): the constants below are the design bound acceptance #11 measures,
 // never a cut: a session is read whole until a fold of it in THIS process measured its live heap within half a step of the budget
@@ -259,7 +261,15 @@ function storeOf(ctx, id, k) {
   return s;
 }
 
-const states = warmCache({ cost: (v) => v.cost });
+const states = warmCache({ cost: (v) => v.cost, drop: letGoState });
+// The ledger let `st` go (3.5 §内存有界): the references that would keep it in the heap go, the ones keyed by something else than this
+// state compared first. Never closed: a request may be answering from it; its descriptor goes when it is collected (line-file.mjs).
+function letGoState(st) {
+  st.gone = true;
+  if (fileLogs.get(st.store) === st) fileLogs.delete(st.store);
+  const id = st.store.session;
+  if (lagging.get(id)?.s.st === st) lagging.delete(id);
+}
 // session key → its reduction frontier (the mark its answers are at), as every new state and every fold slice leaves it: version().
 const frontiers = new Map();
 // The store's notes that are D38 records besides (4.3 盘满): the worker passes `ctx.persist`, which sends each to the daemon. The store
@@ -487,11 +497,11 @@ const costOf = (st) => Math.max(0, st.meter.held);
 // One slice: extraction, then folding (a request: SLICE_MS of each; a background slice: half of `budgetMs` each, the fold also what
 // extraction left; the local path: everything), neither while a write of the session's answer files is in flight: it goes on at its
 // frontier (`writing`), and the fold takes up what came when it ends (3.5 后台抽取与归约).
-async function advance(ctx, id, { budgetMs, request }) {
+async function advance(ctx, id, { budgetMs, request, said = [] }) {
   const t0 = performance.now(), index = await indexed(ctx);
   const members = sessionGroups(index.rows).get(id);
   if (!members) return null;
-  const errors = [...index.errors], k = keyOf(ctx, id), progress = ctx.progress || (() => {});
+  const errors = [...index.errors, ...said], k = keyOf(ctx, id), progress = ctx.progress || (() => {});
   const store = storeOf(ctx, id, k);
   if (request) errors.push(...store.opened.splice(0));
   // extraction errors are the member's own (its row says why, on every answer), not this request's
@@ -555,6 +565,9 @@ async function advance(ctx, id, { budgetMs, request }) {
     states.get(k, st, () => st); // kept once the work's reservation is given back: the next slice grows it
     // the columns go with the fold, a background slice at a time: a checkpoint (sidecars) has only what came since to bring
     if (!request && st.writer && st.target == null) sync(st.cols, st.log, progress);
+    // the write this pass waited for went with its state (a heap retry, a moved cut): nothing holds the session back, and this pass did
+    // nothing, so the slice does its work now (3.5 #39). What this pass took off the store and the state is said by the next one.
+    if (held && !writeInFlight(st.log)) return advance(ctx, id, { budgetMs, request, said: errors.slice(index.errors.length) });
     return { st, plan, members, ex, errors, indexErrors: index.errors, writing: writeInFlight(st.log) };
   }
 }
@@ -575,6 +588,7 @@ export async function extendSession(ctx, id, budgetMs) {
   const s = stateAt(ctx, r, String(id));
   shown.delete(s.id);
   if (!toState(ctx, s, end)) return true;
+  if (s.st.gone) return false; // read-only since this slice: as a write that failed, the next turn reopens it
   if (rereading(ctx, s.id)) {
     stops.delete(s.id);
     heads.delete(s.id); // what this worker wrote at this mark may be from before the rebuild
@@ -636,7 +650,7 @@ async function stopped(ctx, id, e) {
 // per 512 members. A re-read's head keeps its mark, so its `pending` keeps `done` there and says how far the fold is in `read`.
 const shown = new Map(); // session id → {read, called} of the pending this worker last put into its head while members were left
 function backlog(ctx, id, { st, plan, members, indexErrors }) {
-  if (ctx.writer !== true) return;
+  if (ctx.writer !== true || st.gone) return;
   const home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs, mark = markOf(st.log), read = mark == null ? 0 : posOf(plan, mark) + 1;
   const re = rereading(ctx, id);
   if (!re && behind(ctx, id, read, st.log, members)) return; // a stop stands with it, until the fold is past it
@@ -649,7 +663,7 @@ function backlog(ctx, id, { st, plan, members, indexErrors }) {
   lagging.delete(id);
 }
 function headAt(ctx, s) {
-  if (ctx.writer !== true) return;
+  if (ctx.writer !== true || s.st.gone) return;
   const h = heads.get(s.id), home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs;
   if (!h || h.shape !== shapeOf(s) || !hasHead(home, s.id, fs)) putHead(ctx, s);
   else lagging.set(s.id, { s, home, fs });
@@ -668,9 +682,10 @@ export function files(ctx, s) {
 }
 // false while the session's pack and tail files are short of the state `s` at `deadline` (the next slice goes on: ctx-files.mjs
 // writeFiles), else true: brought to it (the worker only), their `packs` / `open` kept on `s` for its head; a write that failed, or a render
-// that threw, is writeFailed's and is done afresh at the session's next turn.
+// that threw, is writeFailed's and is done afresh at the session's next turn. A state let go writes nothing, no failure: `s.files` stays
+// empty, so the caller answers as after a write that failed.
 function toState(ctx, s, deadline = Infinity) {
-  if (ctx.writer !== true || s.mark == null) return true;
+  if (ctx.writer !== true || s.mark == null || s.st.gone) return true;
   try { s.files = writeFiles({ home: ctx.home ?? trocarHome(), fs: ctx.fs || nodeFs }, s, deadline); } catch (e) { forget(s.V.log); writeFailed(ctx, s.id, e); return true; }
   if (s.files && s.pending) s.pending.calls = callsPast(s.plan, reachOf(ctx, s.id, s.V.log, s.rows)); // they reach further now
   return s.files != null;
@@ -692,6 +707,7 @@ const headOf = (s) => (s.mark == null ? tier0Doc(s.id, s.rows, s.indexErrors, s.
   : headDoc({ ...s, ...(s.files || packsOf(s)), mark: markOn(s.plan, s.mark), markTs: s.plan.byId.get(s.mark)?.ts ?? null }));
 // → whether the head at this state is on disk; `failed(e)` hears why it is not
 function putHead(ctx, s, doc = null, failed = () => {}) {
+  if (s.st.gone) return false;
   const h = heads.get(s.id), sig = sigOf(s), home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs;
   if (!(h && h.sig === sig && hasHead(home, s.id, fs))) {
     try { writeHead(home, s.id, doc || headOf(s), fs); } catch (e) { failed(e); return false; } // a head not written is written at the next slice
