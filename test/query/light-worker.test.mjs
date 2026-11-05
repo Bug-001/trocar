@@ -7,7 +7,7 @@ import http from 'node:http'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createQueryRouter } from '../../src/query/router.mjs'
-import { indexDir } from '../../src/query/index-build.mjs'
+import { indexDir, KEEPER_CHUNK_BYTES, segmentIndex } from '../../src/query/index-build.mjs'
 import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
 import { QUERY_WAIT_PROBLEMS } from '../../src/health/codes.mjs'
@@ -27,17 +27,35 @@ const SEGMENT = '20261020T164737Z'
 const until = (ok, what) => within((async () => { while (!ok()) await new Promise((d) => setTimeout(d, 10)) })(), 30_000, what)
 const pending = (p) => { const s = { settled: false, answer: p }; p.finally(() => { s.settled = true }).catch(() => {}); return s }
 
-/** One sealed session under `home`; `indexed: false` leaves it no index on disk. → the record id of its first call. */
-async function sealed(home, { indexed = true } = {}) {
+const sessionIn = (home, over = {}) => {
   fs.mkdirSync(path.join(home, 'raw'), { recursive: true, mode: 0o700 })
   fs.mkdirSync(path.join(home, 'collector'), { recursive: true, mode: 0o700 })
-  const s = bigSession({ home, id: A, segment: SEGMENT })
+  return bigSession({ home, id: A, segment: SEGMENT, ...over })
+}
+
+/** One sealed session under `home`; `indexed: false` leaves it no index on disk. → the record id of its first call. */
+async function sealed(home, { indexed = true } = {}) {
+  const s = sessionIn(home)
   s.append(6)
   await s.seal()
   const ref = String(sessionGroups(await indexRows({ home })).get(A)[0].id)
   if (!indexed) fs.rmSync(indexDir(home), { recursive: true, force: true })
   return ref
 }
+
+/** A plaintext segment under `home` whose index the keeper stored, then a tail it has not reached, longer than one of its chunks when `long`. → the record id of the newest call. */
+async function tailed(home, { long }) {
+  const s = sessionIn(home, { growth: 100_000 }), file = path.join(home, 'raw', `${SEGMENT}.ndjson`)
+  s.append(6)
+  await segmentIndex({ home, segment: SEGMENT, owner: true })
+  const indexed = fs.statSync(file).size, over = () => fs.statSync(file).size - indexed > KEEPER_CHUNK_BYTES
+  do s.append(1); while (long && !over())
+  assert.equal(over(), long)
+  return String(sessionGroups(await indexRows({ home })).get(A).at(-1).id)
+}
+
+/** Every file under index/, name and bytes. */
+const indexFiles = (home) => Object.fromEntries(fs.readdirSync(indexDir(home), { recursive: true }).sort().map((f) => { const p = path.join(indexDir(home), f); return [f, fs.statSync(p).isFile() ? fs.readFileSync(p, 'base64') : 'dir'] }))
 
 /** Workers forked with worker-rows-deps.mjs under `env`, each kept in `kids` with its role; `again` counts the `102`s they said. */
 function forks(env = {}) {
@@ -94,14 +112,29 @@ test('3.5 #45: a lane in flight on a real daemon does not hold status up', { tim
 
 test('3.5 #46: status, doctor, pricing and block of a current index write nothing under index/, and no main worker is forked', { timeout: 60_000 }, async () => {
   const home = path.join(tmpDir('trocar-light-'), '.trocar'), ref = await sealed(home)
-  const look = () => Object.fromEntries(fs.readdirSync(indexDir(home), { recursive: true }).sort().map((f) => { const p = path.join(indexDir(home), f); return [f, fs.statSync(p).isFile() ? fs.readFileSync(p, 'base64') : 'dir'] }))
-  const before = look(), f = forks(), q = createQueryRouter({ home, fork: f.watched })
+  const before = indexFiles(home), f = forks(), q = createQueryRouter({ home, fork: f.watched })
   try {
     for (const [name, params] of [['status', {}], ['doctor', {}], ['pricing', {}], ['block', { ref }]]) assert.equal((await ask(q, name, params)).status, 200, name)
-    assert.deepEqual(look(), before)
+    assert.deepEqual(indexFiles(home), before)
     assert.deepEqual([...new Set(f.kids.map((c) => c.role))], ['light'])
   } finally { q.stop() }
 })
+
+for (const long of [false, true]) {
+  test(`3.5 #46: block of the newest step over ${long ? 'a tail longer than the keeper\'s chunk goes to the main worker' : 'a short tail is answered by the light worker, which stores nothing'}`, { timeout: 60_000 }, async () => {
+    const home = path.join(tmpDir('trocar-light-'), '.trocar'), ref = await tailed(home, { long })
+    const before = indexFiles(home), f = forks(), q = createQueryRouter({ home, fork: f.watched })
+    try {
+      const got = await ask(q, 'block', { ref })
+      assert.equal(got.status, 200)
+      assert.deepEqual(got.doc.blocks, (await runQuery('block', { ref }, { home })).blocks)
+      assert.equal(typeof got.doc.blocks[0].bytes, 'string')
+      assert.equal(f.kids.some((c) => c.role !== 'light'), long, 'a main worker was forked')
+      assert.equal(f.frames.again > 0, long, 'the light worker said 102')
+      if (!long) assert.deepEqual(indexFiles(home), before)
+    } finally { q.stop() }
+  })
+}
 
 test('3.5 #47: a light worker killed idle leaves one query-failed, the next status is answered, and no new light is forked', { timeout: 60_000 }, async () => {
   const d = await daemonOf()
@@ -154,12 +187,22 @@ test('3.5 #48: `trocar query block` in that state exits 0 with runQuery\'s docum
   } finally { await d.box.stop() }
 })
 
-test('3.5 #49: past its bound a request is answered 503 with a closed code and nothing more is written; a refresh past it leaves the next one able to queue', async () => {
+/** Each line the worker gets it answers `102`, until `done()`; a bound that never ends the job fails here. */
+const sayingAgain = async ({ sent, parked }, done, each = () => {}) => {
+  const end = Date.now() + 20_000
+  for (let n = 1; !done(); n++) {
+    assert.ok(Date.now() < end, 'the job ended at its bound')
+    await sent(n); await parked(); await new Promise((d) => setTimeout(d, 8))
+    each()
+  }
+}
+
+test('3.5 #49: past its bound a request is answered 503 with a closed code and nothing more is written; a refresh past it leaves the next one able to queue', { timeout: 60_000 }, async () => {
   for (const name of ['block', 'sessions']) {
-    const { svc, got, parked, ask: askOf, sent } = handWorld({ againMs: 5, againLimitMs: { sessions: 20, other: 20 } })
+    const world = handWorld({ againMs: 5, againLimitMs: { sessions: 20, other: 20 } }), { svc, got, ask: askOf } = world
     try {
       const res = recorder(), caller = pending(askOf(name, 'a', res))
-      for (let n = 1; !caller.settled; n++) { await sent(n); await parked(); await new Promise((d) => setTimeout(d, 8)) }
+      await sayingAgain(world, () => caller.settled)
       const lines = got.length, doc = JSON.parse(res.text())
       assert.equal(res.status, 503)
       assert.deepEqual([doc.ok, doc.command], [false, name])
@@ -168,14 +211,10 @@ test('3.5 #49: past its bound a request is answered 503 with a closed code and n
       assert.equal(got.length, lines, 'no further line')
     } finally { svc.stop() }
   }
-  const { svc, got, parked, sent } = handWorld({ againMs: 5, againLimitMs: { sessions: 20, other: 20 } })
+  const world = handWorld({ againMs: 5, againLimitMs: { sessions: 20, other: 20 } }), { svc, got } = world
   try {
     assert.equal(svc.refresh({ name: 'sessions', params: { tag: 'first' } }), true)
-    let n = 1
-    for (; got.at(-1) !== 'next'; n++) {
-      await sent(n); await parked(); await new Promise((d) => setTimeout(d, 8))
-      svc.refresh({ name: 'sessions', params: { tag: 'next' } })
-    }
+    await sayingAgain(world, () => got.at(-1) === 'next', () => svc.refresh({ name: 'sessions', params: { tag: 'next' } }))
     assert.equal(got.at(-1), 'next')
   } finally { svc.stop() }
 })
