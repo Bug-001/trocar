@@ -40,7 +40,7 @@ A test asserts contracts and invariants: exit codes, JSON fields and codes, byte
 - Provider knowledge stays in the dissectors. The board has no provider branches.
 - A number or a judgement the board shows comes from a query document; the board only lays it out. Add a field to the query, never arithmetic to `web/`. The CLI then has it for free.
 - Keep it short. Among correct designs, take the one with less code.
-- A value that is stored reaches old sessions only through a version bump (`PROJ_V`, `USAGE_V`): spec 3.5, test shape in test/query/reread.test.mjs.
+- A value that is stored reaches old sessions only through a version bump (`PROJ_V`, `USAGE_V`): spec 3.5, test shape in `test/query/reread.test.mjs`.
 
 ### 4. Verify
 
@@ -63,7 +63,7 @@ Always go through `npm test`, never bare `node --test`: the preloads are part of
 
 - Each commit is at most 400 lines, can be verified on its own, and has a body that says why and what the evidence is.
 - Subject: `<type>(<scope>): <summary>`. Commit with your noreply address (`trocar-pr` step 4); the check refuses any other.
-- User-visible change: update `README.md` and `docs/release-notes/<date>.md`.
+- User-visible change: update what `README.md` says about it, and `docs/release-notes/<date>.md`.
 - Use `git add <paths>`, never `git add -A`. Keep your working notes and screenshots outside the clone.
 
 ### 6. Hand over

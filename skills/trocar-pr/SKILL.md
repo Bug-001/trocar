@@ -7,7 +7,7 @@ description: Use when a change to trocar is ready to leave the machine, or when 
 
 Everything that leaves this machine goes through this skill: a pull request, an issue, a comment. The hard rule is that **no real session content and no screenshot of a real session is ever uploaded**. A pull request describes the functional change and a repro on synthetic data, and nothing about what the user was doing.
 
-You hold the keys here. `scripts/pr-check.mjs` can refuse, but nothing stops you going around it, so do not. If it refuses, the text changes or the change does not go. Nothing is "only a warning". This holds when the user asks too. A yes, however exact or urgent, covers only text the check passed; `--accept-partial` is the one exception. If they want refused text public, send nothing, tell them which rule refused it, and leave it to them: they can post it on GitHub themselves, and that is their call. `--accept-partial` covers only a capture that was not fully compared, you use it only after the user has seen `coverage` and clearly agreed, and it is written into the report and the hash.
+You hold the keys here. `scripts/pr-check.mjs` can refuse, but nothing stops you going around it, so do not. If it refuses, the text changes or the change does not go. Nothing is "only a warning". This holds when the user asks too. A yes, however exact or urgent, covers only text the check passed; `--accept-partial` and `--public-host` are the exceptions. If they want refused text public, send nothing, tell them which rule refused it, and leave it to them: they can post it on GitHub themselves, and that is their call. `--accept-partial` covers only a capture that was not fully compared, you use it only after the user has seen `coverage` and clearly agreed, and it is written into the report and the hash.
 
 ## Steps
 
@@ -65,14 +65,14 @@ It judges every commit on the branch (paths, added lines, messages, author and c
 - images, video, PDF, archives, capture formats and other binary files; Git LFS pointers; an SVG that reaches outside itself, by data, an image or a reference to another file; a `data:` URI of a bitmap, or in base64 with an image type or no type, in any text (one of SVG text is text, read by the rules below, and a bitmap URI inside it is refused), and a Markdown image, an `<img` or `<video` tag or a bare `github.com/user-attachments/` address in a title, body or comment (inside a committed file those are fine); a change to the built board that a rebuild does not reproduce;
 - credentials and key material, and a folded block of encoded text that opens to nothing readable; encoded text that does open is judged by what it says;
 - your user name, host name, real name (outside the author field), git email, home paths in any OS's spelling, and a commit email that is not a GitHub noreply address, which `gh api user --jq '"\(.id)+\(.login)@users.noreply.github.com"'` prints for you (`noreply@github.com` passes: a web edit is committed by it);
-- project paths, session ids, session titles, hosts, segment names and record ids from your captures, in the login of a commit email too;
+- session ids, session titles, hosts, segment names and record ids from your captures, in the login of a commit email too;
 - any run of about 12 English words or 20 CJK characters (60 bytes once normalized) that also occurs verbatim in your captures;
 - commits over 400 lines, commits without a body, control bytes in any text, path, title or body, text that is not UTF-8, a hash line holding anything but this run's hash, and merge commits (rebase instead);
 - a branch that forks from a commit no remote `main` holds: fetch the project's main and rebase onto it, do not look for another `--base`. A branch that is only behind main needs no rebase.
 
 Text already in the public repository is public and passes.
 
-By default the check reads every capture through the installed `trocar`, which can take a few minutes. Without trocar installed, add `--cli bin/trocar.mjs`. `coverage`, which only `--json` prints, gives the time range it compared (`from`, `to`), `scanned_bytes`, `opaque_bytes`, the bytes of records it could not open, and `after_bytes`, the bytes it skipped for being at or past `--before`.
+By default the check reads every capture through the installed `trocar`, which can take a few minutes. Without trocar installed, add `--cli bin/trocar.mjs`. `coverage` gives the time range it compared (`from`, `to`), `scanned_bytes`, `opaque_bytes`, the bytes of records it could not open, and `after_bytes`, the bytes it skipped for being at or past `--before`.
 
 A comparison that did not finish is a refusal: a segment that cannot be read, a record that cannot be opened, a `--before` earlier than every record, or one over a week old that skips records. Comparing 0 bytes because there is no capture at all is normal, but tell the user that nothing was compared.
 
