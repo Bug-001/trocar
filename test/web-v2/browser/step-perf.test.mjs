@@ -3,7 +3,7 @@
 // D64⑥: acceptance numbers come from the test machines, not this one). Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard, stats, timed, timerReads } from './harness.mjs'
+import { probe, withBoard, stats, timed, timerReads, DESK_NEXT } from './harness.mjs'
 import { INTERVAL } from '../../../web/legacy/core/poll.mjs'
 import { BOARD_LINES } from '../perf-lines.mjs'
 
@@ -48,6 +48,8 @@ test('D64②: 20 step changes by click and 20 by ←/→ send no request; a live
   const b = await withBoard({ bytes: BYTES, chromium: gate.chromium })
   try {
     await openSession(b.page, null)
+    // 2.5 #6: on the new desk the sidebar's Overview (its first tab, open at this width) is drawn while the steps change
+    if (DESK_NEXT) await b.page.waitForSelector('.ovw', { state: 'visible', timeout: 5000 })
     const t0 = Date.now(), bounce = { dir: -1 }
     for (const [kind, by] of [['stepClick', 'click'], ['stepKey', 'key']]) {
       for (let i = 0; i < 20; i++) { const ms = await stepOnce(b.page, by, bounce); if (ms == null) break; samples[kind].push(ms) }
@@ -56,6 +58,7 @@ test('D64②: 20 step changes by click and 20 by ←/→ send no request; a live
     for (const until = Date.now() + 20 * INTERVAL.session; !round() && Date.now() < until;) await stepOnce(b.page, 'key', bounce)
     for (let i = 0; i < 4; i++) await stepOnce(b.page, 'click', bounce)
     await b.page.waitForLoadState('networkidle')
+    if (DESK_NEXT) assert.ok(await b.page.isVisible('.ovw'), 'the Overview stayed open')
     const during = b.requests.filter((r) => r.start >= t0), timerRead = await timerReads(b)
     console.log(`# requests while stepping: ${during.length}, of them the timers': ${during.filter(timerRead).length}`)
     assert.ok(samples.stepClick.length > 0 && samples.stepKey.length > 0, 'the session has more than one step')
