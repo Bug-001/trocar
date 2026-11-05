@@ -11,7 +11,7 @@ import { runOffCli } from '../../src/off/main.mjs'
 import { runOff } from '../../src/off/orchestrate.mjs'
 import { formatOffReceipt } from '../../src/off/receipt.mjs'
 import { fakeIo } from '../cli/fixtures/on-ctx.mjs'
-import { installedHome } from './fixtures/off-ctx.mjs'
+import { installedHome, onSwitch } from './fixtures/off-ctx.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 
 const CODE_NAMES = /desired-off|left-unparsable|left-unreadable|unknown-kind|json-key|owned-file|pem-block|config-entry|root-key|json-array-item|nothing_installed|dry_run|op\.lock/
@@ -62,12 +62,12 @@ test('D58: off on a machine trocar is not on, and off with the install record lo
   // §1.4: the record is gone, there is no terminal and no --yes — the routing comes off, the files are untouched, the plan is listed, exit 1
   const s = await installedHome({ names: ['kimi-code'] })
   fs.rmSync(path.join(s.dir, 'install-manifest.json'))
-  fs.rmSync(path.join(s.dir, 'bin', 'kimi')) // one file left to undo: its PATH line
+  const sw = onSwitch(s, 'kimi-code') // one file left to undo: on's switch file (the Kimi shim and rc line are install's)
   const rc = s.sh.files['kimi-code'][0]
-  const before = fs.readFileSync(rc)
+  const before = [rc, sw].map((f) => fs.readFileSync(f))
   const io = fakeIo({ tty: false })
   assert.equal(await runOffCli([], { io, home: s.home, env: s.sh.env, platform: 'linux', deps: s.offDeps({ getuid: () => 1000 }) }), 1, io.text())
-  assert.deepEqual(fs.readFileSync(rc), before, 'not a byte of the user\'s file moved')
+  assert.deepEqual([rc, sw].map((f) => fs.readFileSync(f)), before, 'not a byte moved')
   readable('off-no-record', io.stdoutText(), { home: s.home })
   assert.match(io.stdoutText(), /Found by trocar's own marks and not undone yet:/)
   assert.match(io.stdoutText(), /Undo it by the marks trocar left in it: trocar off --yes/) // one file: the sentence counts with it

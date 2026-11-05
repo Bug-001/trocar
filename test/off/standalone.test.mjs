@@ -21,7 +21,7 @@ import { runOffCli } from '../../src/off/main.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
 import { formatPlan } from '../../src/cli/receipt.mjs'
 import { fakeIo, onCtx, seedClaude } from '../cli/fixtures/on-ctx.mjs'
-import { installedHome, flowEvents } from './fixtures/off-ctx.mjs'
+import { installedHome, onSwitch, flowEvents } from './fixtures/off-ctx.mjs'
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 
@@ -114,7 +114,7 @@ test('V2: the text a person reads is the same too, and a per-harness off leaves 
 test('V2: with the install manifest lost the copy undoes by trocar\'s own marks, after a yes, and prints what `trocar off --yes` prints', async () => {
   const names = ['codex', 'kimi-code']
   const a = await brokenTrocar(names), b = await brokenTrocar(names)
-  for (const s of [a, b]) fs.rmSync(manifestPath(s.dir))
+  const sw = Object.fromEntries([a, b].map((s) => { fs.rmSync(manifestPath(s.dir)); return [s.home, names.map((h) => onSwitch(s, h))] })) // what on wrote, found by its place (Linux's on writes nothing else off finds by a mark)
   const io = fakeIo()
   const viaCli = await runOffCli(['--yes', '--json'], cliCtx(a, io))
   const r = await runWritten(b, ['--yes', '--json'])
@@ -124,8 +124,8 @@ test('V2: with the install manifest lost the copy undoes by trocar\'s own marks,
   assert.deepEqual(normalize(out, b.home), normalize(io.json(), a.home))
   assert.equal(out.undone_by_marker, true)
   const inTrocar = (f) => fs.readFileSync(f, 'utf8').includes(path.join(b.home, '.trocar'))
-  assert.deepEqual([b.sh.files['kimi-code'][0], b.sh.files.codex[0]].map(inTrocar), [false, true], 'the PATH line is out; the certificate block is install\'s and stays, as under trocar off')
-  const nobody = await runWritten(await brokenTrocar(names).then((s) => { fs.rmSync(manifestPath(s.dir)); return s }), ['--json'])
+  assert.deepEqual([...sw[b.home].map((f) => fs.existsSync(f)), ...[b.sh.files['kimi-code'][0], b.sh.files.codex[0]].map(inTrocar)], [false, false, true, true], 'the switch files are out; the Kimi rc line and the certificate block are install\'s and stay, as under trocar off')
+  const nobody = await runWritten(await brokenTrocar(names).then((s) => { fs.rmSync(manifestPath(s.dir)); for (const h of names) onSwitch(s, h); return s }), ['--json'])
   assert.equal(nobody.status, 1, 'not in a terminal and no --yes: it lists, and stops')
   assert.equal(JSON.parse(nobody.stdout).pending.length >= 2, true)
 })

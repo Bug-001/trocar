@@ -11,7 +11,7 @@ import { HARNESS_IDS } from '../../src/off/harness-names.mjs'
 import { formatOffReceipt } from '../../src/off/receipt.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
 import { fakeIo, snapshot } from '../cli/fixtures/on-ctx.mjs'
-import { installedHome, flowEvents } from './fixtures/off-ctx.mjs'
+import { installedHome, onSwitch, flowEvents } from './fixtures/off-ctx.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 
 const ctx = (s, io, { deps = {}, platform = 'linux' } = {}) => ({ io, home: s.home, env: s.sh.env, platform, deps: s.offDeps({ getuid: () => 1000, ...deps }) })
@@ -135,12 +135,12 @@ test('V82: `off` leaves ~/.trocar/classes.json and logs/classes.ndjson byte for 
 test('§1.2 · R6: with no install manifest and --json, off asks nothing and writes no stderr at all — stdout is one document whose `planned` holds the plan, exit 1; the same on a terminal', async () => {
   for (const tty of [false, true]) { // on a terminal the plan used to go to stderr and the run waited on stdin, with --json (review 2026-10-18)
     const s = await installedHome({ names: ['kimi-code'] }); fs.rmSync(path.join(s.dir, 'install-manifest.json'))
-    fs.rmSync(path.join(s.dir, 'bin', 'kimi')) // one file left to undo by its mark (on's): the PATH line
+    onSwitch(s, 'kimi-code') // one file to undo by its mark: on's switch file (the Kimi shim and rc line are install's)
     const io = fakeIo({ tty })
     assert.equal(await runOffCli(['--json'], ctx(s, io)), 1, `tty ${tty}: nothing was undone`)
     const r = io.json()
-    assert.deepEqual([r.ok, r.pending.map((p) => path.basename(p.path)), validateReceipt(r)], [false, ['.bashrc'], []])
-    assert.deepEqual(r.planned.map((p) => [path.basename(p.path), typeof p.change]), [['.bashrc', 'string']], '附录 C.2: the plan is in `planned`, each item {path, change}')
+    assert.deepEqual([r.ok, r.pending.map((p) => path.basename(p.path)), validateReceipt(r)], [false, ['kimi-code'], []])
+    assert.deepEqual(r.planned.map((p) => [path.basename(p.path), typeof p.change]), [['kimi-code', 'string']], '附录 C.2: the plan is in `planned`, each item {path, change}')
     assert.equal(io.stderrText(), '', '§1.2: stderr is empty under --json')
     assert.deepEqual(io.asked, [], 'and no question was asked')
     assert.equal(flowEvents(s.dir).at(-1).outcome, 'partial')
