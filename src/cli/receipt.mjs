@@ -225,12 +225,16 @@ export function formatUninstallReceipt(r, { home = null, platform = process.plat
   const t = (x) => tilde(x, home)
   const P = platform === 'win32' ? path.win32 : path.posix
   const removed = [], kept = []
-  for (const c of r.changed || []) removed.push(`${t(c.path)}: ${c.change}`)
-  const said = new Set((r.changed || []).map((c) => c.path)) // a file both changed and removed (the root certificate: out of the trust store, then deleted) is one row
+  // a file is one row, keyed by the path as it is printed (a Windows path is the same file in any case, and the entries of one install may spell it
+  // differently): its changes once each; a file both changed and removed (the root certificate: out of the trust store, then deleted) is that row
+  const key = (p) => (platform === 'win32' ? t(p).toLowerCase() : t(p))
+  const rows = new Map()
+  for (const c of r.changed || []) { const row = rows.get(key(c.path)) || { path: c.path, changes: [] }; if (!row.changes.includes(c.change)) row.changes.push(c.change); rows.set(key(c.path), row) }
+  for (const row of rows.values()) removed.push(`${t(row.path)}: ${row.changes.join(', ')}`)
   // a file trocar made by writing its key or line into it, and so deleted: what was taken out (its entries' `change`), then that the file went too
-  const made = new Map()
-  for (const e of r.entries || []) if (e && e.change && (r.removed || []).includes(e.path)) made.set(e.path, [...new Set([...(made.get(e.path) || []), e.change])])
-  for (const p of r.removed || []) if (!said.has(p)) removed.push(made.has(p) ? `${t(p)}: ${made.get(p).join(', ')}; the file, which trocar had made, ${past ? 'is gone' : 'goes'} too` : removedWords(p, t))
+  const gone = new Set((r.removed || []).map(key)), made = new Map()
+  for (const e of r.entries || []) if (e && e.change && gone.has(key(e.path))) made.set(key(e.path), [...new Set([...(made.get(key(e.path)) || []), e.change])])
+  for (const p of r.removed || []) if (!rows.has(key(p))) { rows.set(key(p), null); removed.push(made.has(key(p)) ? `${t(p)}: ${made.get(key(p)).join(', ')}; the file, which trocar had made, ${past ? 'is gone' : 'goes'} too` : removedWords(p, t)) }
   if ((r.dropped_backups || []).length) removed.push(`${r.dropped_backups.length} backup${r.dropped_backups.length === 1 ? '' : 's'} in ${asDir(t(P.dirname(r.dropped_backups[0])), platform)}`)
   if (dataNote) kept.push(dataNote)
   else if (r.purge_data) removed.push('your captured records (--purge-data)')

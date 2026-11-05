@@ -268,9 +268,21 @@ test('V5: off claude-code takes only Claude Code\'s routing: no certificate item
   assert.deepEqual([s.state().harnesses['claude-code'].desired, s.state().harnesses.codex.desired], ['off', 'on'])
   assert.deepEqual([s.sys.daemon.isRecording('claude-code'), s.sys.daemon.isRecording('codex')], [false, true], 'the daemon still has codex attached')
   assert.deepEqual([receipt.harnesses, receipt.all, receipt.daemon.state], [[{ harness: 'claude-code', ok: true, reason: null, undone: [], kept_backups: [] }], false, 'running'], 'appendix C.2: one object per harness named')
+  assert.deepEqual(receipt.still_on, ['codex'], 'appendix C.2: the harnesses still on after this off')
   assert.deepEqual(receipt.changed, [], 'off changed no file of the user')
   assert.ok(s.sys.exec.calls.every((c) => !/disable/.test(c)), 'a named off leaves the autostart alone')
   assert.ok(['codex', 'claude-code'].every((h) => readManifest(s.dir).entries.some((e) => e.harness === h)), 'both are still installed')
+})
+
+test('appendix C.2: still_on names the harnesses left on after a named off, and is empty once the last one is off', async () => {
+  const s = await installedHome({ names: ['claude-code', 'codex'] })
+  const a = await s.off({ ids: ['codex'], dryRun: true })
+  assert.deepEqual(a.receipt.still_on, ['claude-code'], 'a dry run says which would stay on')
+  assert.deepEqual((await s.off({ ids: ['codex'] })).receipt.still_on, ['claude-code'])
+  const { receipt, exit } = await s.off({ ids: ['claude-code'] })
+  assert.equal(exit, 0, JSON.stringify(receipt.problems))
+  assert.deepEqual(validateReceipt(receipt), [])
+  assert.deepEqual(receipt.still_on, [], 'no harness is left on')
 })
 
 test('V21: off,off changes nothing — the second run leaves state.json, the manifest and every user file as they were; per-harness: the bundle install wrote stays, CA and all, and so does the .env naming it', async () => {
@@ -914,10 +926,20 @@ test('1.6 §3.1 · D62 ⑥: a nameless off in proxy mode reads the routing back 
   assert.deepEqual([good.receipt.routing.confirmed, good.receipt.daemon], [true, { pid: 4242, state: 'running' }])
 })
 
-test('the text receipt says a changed file once, as it says a removed file once: two entries of one file that ended the same way are one row; two that ended differently are two', () => {
+test('the text receipt says a changed file once, as it says a removed file once: the entries of one file are one row, however each ended', () => {
   const file = path.join('/h', 'Library', 'Application Support', 'Code', 'User', 'settings.json') // one file, two json entries (a proxy key and an array item)
   const rows = (changed) => formatOffReceipt({ command: 'off', ok: true, outcome: 'done', changed, removed: [] }, { home: '/h' }).split('\n').filter((l) => l.includes('settings.json')).length
   const restored = { harness: 'kimi-code', path: file, result: 'restored' }
   assert.equal(rows([restored, { ...restored }]), 1)
-  assert.equal(rows([restored, { ...restored, result: 'old-command' }]), 2)
+  assert.equal(rows([restored, { ...restored, result: 'old-command' }]), 1)
+  assert.equal(rows([restored, { ...restored, backup: '/h/.trocar/backup/settings.json', backup_dropped: true }]), 1, 'the backup goes with the last entry of the file (a macOS test machine: two restored rows)')
+})
+
+test('the text receipt says what it says about files an agent wrote because of trocar\'s plugin once, then lists each of them once', () => {
+  const paths = ['/h/.config/opencode/node_modules', '/h/.config/opencode/package.json']
+  const text = formatOffReceipt({ command: 'off', ok: true, outcome: 'done', changed: [], removed: [], residue: paths.map((p) => ({ harness: 'opencode', path: p, why: 'opencode installs its SDK on first run' })) }, { home: '/h' })
+  const lines = text.split('\n')
+  for (const p of paths) assert.equal(lines.filter((l) => l.includes(p.replace('/h', '~'))).length, 1, p)
+  const bare = lines.map((l) => paths.reduce((s, p) => s.replace(p.replace('/h', '~'), ''), l)).filter((l) => l.trim())
+  assert.deepEqual(bare.filter((l, i) => bare.indexOf(l) !== i), [], 'no sentence is said twice')
 })
