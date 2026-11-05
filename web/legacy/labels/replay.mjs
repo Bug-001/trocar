@@ -332,7 +332,14 @@ export const UNPARSED_LINE = 'The request body could not be parsed'
 // ── the resource explorer (2.4) ──────────────────────────────────────────────────────────────────────────────────────
 export const RES_SECTION = 'Resources · whole session'
 export const RES_GRP = Object.freeze({
-  file: 'Files read', seen: 'Names seen only', load: 'Instruction files loaded', cap: 'Tools and capabilities', dl: 'Directories and links', comp: 'Compaction', other: 'Other resources',
+  file: 'Files read', seen: 'Names seen only', load: 'Instruction files loaded', cap: 'Tools and capabilities', dl: 'Directories and links', comp: 'Compaction', other: 'Other resources', runtime: 'Path known only at run time',
+})
+// why a shell read's path stays as written, one sentence per `runtime` code (2.4 fidelity boundary item 6)
+export const RUNTIME_WHY = Object.freeze({
+  output: 'The path comes from the output of another command or a computed value',
+  read: 'The path comes from a read loop over input',
+  earlier: 'The path uses a variable set by an earlier command',
+  cwd: 'A relative path, and the command does not change to a known directory',
 })
 export const OTHERS_ROW = (n) => `${n} more`
 // the lifecycle words take the composed step word (「step 5」, or 「call 5」 when the session has no main lane)
