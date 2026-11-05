@@ -36,6 +36,10 @@
 // sidecars once per idle period — so the slices stop when nothing new comes, and a slice stuck on one unit of work reports nothing. A kill
 // (a stop, an update, a crash) may cut a slice, which leaves at most a torn last line that the next open cuts off (4.3 §上下文投影),
 // and loses at most the fold since the last checkpoint (session.mjs CHECKPOINT_MS).
+//
+// THE LIGHT ROLE (argv[4] === 'light', 3.5 §谁执行它「两个角色」): the same wire, for the names `rowFree` in QUERIES only (src/query/router.mjs). It writes
+// nothing and never reads the rows, so `rowsRead` stays false: background() never runs, a name that needs the rows and a line with `rows: true` are
+// answered `102`, and so is a `block` of a segment whose index it may not build (`warmOnly`, 3.5 §行表先读).
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { promisify } from 'node:util'
@@ -54,8 +58,9 @@ import { saveTitles, titleOf } from './titles.mjs'
 
 const home = process.argv[2]
 // The board's control verbs (`{control, body}`, 4.4 §控制面) run the CLI's own functions, which take `deps` for what they ask of the machine.
-// The daemon never passes argv[3]; a test fork names an ES module whose default export is that `deps` object. `beforeRows` and `beforeTitles`, a
-// test's alone, are awaited before the row pass starts and before the title pass behind it.
+// The daemon passes no deps: argv[3] is absent, or '' before a role; a test fork names an ES module whose default export is that `deps` object. `beforeRows`, `beforeTitles`
+// and `beforeServe`, a test's alone, are awaited before the row pass starts, before the title pass behind it and before a query is answered.
+const light = process.argv[4] === 'light'
 const depsP = process.argv[3] ? import(pathToFileURL(process.argv[3]).href).then((m) => m.default) : Promise.resolve({})
 // What the CLI's own environment may change about an answer goes local (client.mjs LOCAL_ENV); this worker serves
 // every caller, so it answers as a clean environment would and never as the daemon's happened to be.
@@ -87,8 +92,8 @@ async function serve(line) {
   let status = 200, bytes, enc = '-', tag = '-', asked = null
   const after = [], cpu0 = process.cpuUsage()
   try {
-    const { name, params, indent, control, body, gzip: wants, etag } = JSON.parse(line)
-    if (!rowsRead && !control && Object.hasOwn(QUERIES, name) && !QUERIES[name].rowFree) { await write(102, Buffer.alloc(0), '-', 0, '-'); return null } // ask again: the daemon does (3.5 §行表先读)
+    const { name, params, indent, control, body, gzip: wants, etag, rows } = JSON.parse(line)
+    if (!rowsRead && !control && Object.hasOwn(QUERIES, name) && (!QUERIES[name].rowFree || rows)) { await write(102, Buffer.alloc(0), '-', 0, '-'); return null } // ask again: the daemon does (3.5 §行表先读)
     asked = { name, params }
     if (control) { // one JSON line, the bytes `trocar <command> --json` prints into a pipe; the verb says the status (src/control/board.mjs)
       try {
@@ -104,8 +109,9 @@ async function serve(line) {
       // 400 = the caller's mistake (an unknown name or parameter), 500 = this worker's (src/query/answers.mjs); the message is the
       // query core's own, so the caller can raise the very error its local path would have raised.
       const deps = await depsP;
+      await deps.beforeServe?.(name);
       ({ status, bytes, enc, tag } = await answer({ name, params: params || {}, indent, gzip: wants === true, etag: typeof etag === 'string' ? etag : null },
-        { home, fs: nodeFs, writer: true, persist, progress, later: (fn) => after.push(fn), userHome: path.dirname(home), env: deps.env || process.env, platform: deps.platform || process.platform, deps }))
+        { home, fs: nodeFs, writer: !light, warmOnly: light, persist, progress, later: (fn) => after.push(fn), userHome: path.dirname(home), env: deps.env || process.env, platform: deps.platform || process.platform, deps }))
     }
   } catch (e) { // a line that is not a request
     status = 500
@@ -329,6 +335,6 @@ async function readRows() {
     await saveTitles({ home, fs: nodeFs })
   } catch (e) { say(e) } finally { sweeping = false; kick() } // the first idle period: the sweep
 }
-readRows()
+if (!light) readRows()
 process.stdin.on('end', () => process.exit(0))
 process.on('disconnect', () => process.exit(0)) // the daemon is gone: so is the reason to be here
