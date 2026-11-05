@@ -1,4 +1,4 @@
-// test/query/light-worker.test.mjs — the light worker role and the bound on `102` (RFC 3.5 §谁执行它「两个角色」, §行表先读; 验收 #45–#49; D78 ②). The real
+// test/query/light-worker.test.mjs — the light worker role and the bound on `102` (RFC 3.5 §谁执行它「两个角色」, §行表先读; 验收 #57–#61; D78 ②). The real
 // router over real worker forks, or a real daemon on a model world with only the worker's fork the test one; worker-rows-deps.mjs forces what comes first.
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -97,7 +97,7 @@ async function daemonOf({ env = {}, seed = null } = {}) {
 }
 const gatesIn = () => { const gate = path.join(tmpDir('trocar-light-'), 'open'); return { gate, held: `${gate}.held` } }
 
-test('3.5 #45: a lane in flight on a real daemon does not hold status up', { timeout: 60_000 }, async () => {
+test('3.5 #57: a lane in flight on a real daemon does not hold status up', { timeout: 60_000 }, async () => {
   const { gate, held } = gatesIn()
   const d = await daemonOf({ env: { TROCAR_TEST_SERVE_GATE: gate, TROCAR_TEST_SERVE_NAME: 'lane' } })
   try {
@@ -110,7 +110,7 @@ test('3.5 #45: a lane in flight on a real daemon does not hold status up', { tim
   } finally { await d.box.stop() }
 })
 
-test('3.5 #46: status, doctor, pricing and block of a current index write nothing under index/, and no main worker is forked', { timeout: 60_000 }, async () => {
+test('3.5 #58: status, doctor, pricing and block of a current index write nothing under index/, and no main worker is forked', { timeout: 60_000 }, async () => {
   const home = path.join(tmpDir('trocar-light-'), '.trocar'), ref = await sealed(home)
   const before = indexFiles(home), f = forks(), q = createQueryRouter({ home, fork: f.watched })
   try {
@@ -121,7 +121,7 @@ test('3.5 #46: status, doctor, pricing and block of a current index write nothin
 })
 
 for (const long of [false, true]) {
-  test(`3.5 #46: block of the newest step over ${long ? 'a tail longer than the keeper\'s chunk goes to the main worker' : 'a short tail is answered by the light worker, which stores nothing'}`, { timeout: 60_000 }, async () => {
+  test(`3.5 #58: block of the newest step over ${long ? 'a tail longer than the keeper\'s chunk goes to the main worker' : 'a short tail is answered by the light worker, which stores nothing'}`, { timeout: 60_000 }, async () => {
     const home = path.join(tmpDir('trocar-light-'), '.trocar'), ref = await tailed(home, { long })
     const before = indexFiles(home), f = forks(), q = createQueryRouter({ home, fork: f.watched })
     try {
@@ -136,7 +136,7 @@ for (const long of [false, true]) {
   })
 }
 
-test('3.5 #47: a light worker killed idle leaves one query-failed, the next status is answered, and no new light is forked', { timeout: 60_000 }, async () => {
+test('3.5 #59: a light worker killed idle leaves one query-failed, the next status is answered, and no new light is forked', { timeout: 60_000 }, async () => {
   const d = await daemonOf()
   try {
     assert.equal((await d.api('/api/status')).status, 200)
@@ -149,7 +149,7 @@ test('3.5 #47: a light worker killed idle leaves one query-failed, the next stat
   } finally { await d.box.stop() }
 })
 
-test('3.5 #47: a light worker killed with a request in flight: that caller gets 200', { timeout: 60_000 }, async () => {
+test('3.5 #59: a light worker killed with a request in flight: that caller gets 200', { timeout: 60_000 }, async () => {
   const { gate, held } = gatesIn()
   const d = await daemonOf({ env: { TROCAR_TEST_SERVE_GATE: gate, TROCAR_TEST_SERVE_NAME: 'light:status' } })
   try {
@@ -160,7 +160,7 @@ test('3.5 #47: a light worker killed with a request in flight: that caller gets 
   } finally { await d.box.stop() }
 })
 
-test('3.5 #48: a sealed segment with no index while the rows are held: block waits and status does not; rows opened, block has the record\'s bytes', { timeout: 60_000 }, async () => {
+test('3.5 #60: a sealed segment with no index while the rows are held: block waits and status does not; rows opened, block has the record\'s bytes', { timeout: 60_000 }, async () => {
   const home = path.join(tmpDir('trocar-light-'), '.trocar'), ref = await sealed(home, { indexed: false }), gate = path.join(home, 'rows.open')
   const f = forks({ TROCAR_TEST_ROWS_GATE: gate }), q = createQueryRouter({ home, fork: f.watched })
   try {
@@ -176,7 +176,7 @@ test('3.5 #48: a sealed segment with no index while the rows are held: block wai
   } finally { q.stop() }
 })
 
-test('3.5 #48: `trocar query block` in that state exits 0 with runQuery\'s document', { timeout: 60_000 }, async () => {
+test('3.5 #60: `trocar query block` in that state exits 0 with runQuery\'s document', { timeout: 60_000 }, async () => {
   const gate = path.join(tmpDir('trocar-light-'), 'rows.open')
   const d = await daemonOf({ env: { TROCAR_TEST_ROWS_GATE: gate }, seed: (home) => sealed(home, { indexed: false }) })
   try {
@@ -197,7 +197,7 @@ const sayingAgain = async ({ sent, parked }, done, each = () => {}) => {
   }
 }
 
-test('3.5 #49: past its bound a request is answered 503 with a closed code and nothing more is written; a refresh past it leaves the next one able to queue', { timeout: 60_000 }, async () => {
+test('3.5 #61: past its bound a request is answered 503 with a closed code and nothing more is written; a refresh past it leaves the next one able to queue', { timeout: 60_000 }, async () => {
   for (const name of ['block', 'sessions']) {
     const world = handWorld({ againMs: 5, againLimitMs: { sessions: 20, other: 20 } }), { svc, got, ask: askOf } = world
     try {
