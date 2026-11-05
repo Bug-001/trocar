@@ -44,8 +44,8 @@ function folds() {
 const utf8Size = (lead) => (lead < 0xc2 ? 0 : lead < 0xe0 ? 2 : lead < 0xf0 ? 3 : lead < 0xf5 ? 4 : 0)
 const digitOf = (c) => (c >= 0x30 && c <= 0x39 ? c - 0x30 : (c | 0x20) >= 0x61 && (c | 0x20) <= 0x66 ? (c | 0x20) - 0x57 : 16)
 
+// Past the end a byte reads undefined, which is no digit and no UTF-8 tail: the readers below need no bounds of their own.
 function hexAt(src, at, count) {
-  if (at + count > src.length) return -1
   let value = 0
   for (let i = at; i < at + count; i++) {
     const digit = digitOf(src[i])
@@ -62,7 +62,7 @@ let taken = 0
 function bracedAt(src, at) {
   let value = 0
   let i = at + 1
-  for (; i < src.length && digitOf(src[i]) < 16; i++) value = value * 16 + digitOf(src[i])
+  for (; digitOf(src[i]) < 16; i++) value = value * 16 + digitOf(src[i])
   if (i === at + 1 || src[i] !== CLOSE_BRACE || value > MAX_CP) return -1
   taken = i + 1 - at
   return value
@@ -91,7 +91,7 @@ function percentAt(src, at) {
 function referenceAt(src, at) {
   if (src[at + 1] !== HASH) {
     let i = at + 1
-    while (i < src.length && i <= at + MAX_ENTITY_NAME && ((src[i] | 0x20) >= 0x61 && (src[i] | 0x20) <= 0x7a)) i++
+    while (i <= at + MAX_ENTITY_NAME && (src[i] | 0x20) >= 0x61 && (src[i] | 0x20) <= 0x7a) i++
     if (i < at + 3 || src[i] !== SEMICOLON) return -1
     taken = i + 1 - at
     return 0x20
@@ -101,7 +101,7 @@ function referenceAt(src, at) {
   const start = at + (hex ? 3 : 2)
   let value = 0
   let i = start
-  for (; i < src.length && digitOf(src[i]) < base; i++) value = value * base + digitOf(src[i])
+  for (; digitOf(src[i]) < base; i++) value = value * base + digitOf(src[i])
   if (i === start || value > MAX_CP || (value >= 0xd800 && value < 0xe000)) return -1
   taken = i + (src[i] === SEMICOLON ? 1 : 0) - at
   return value
@@ -112,7 +112,7 @@ function referenceAt(src, at) {
 function decodeUtf8(src, at) {
   const lead = src[at]
   const size = utf8Size(lead)
-  if (size === 0 || at + size > src.length) return -1
+  if (size === 0) return -1
   let cp = lead & (0xff >> (size + 1))
   for (let i = at + 1; i < at + size; i++) {
     if ((src[i] & 0xc0) !== 0x80) return -1
