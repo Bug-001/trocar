@@ -48,7 +48,7 @@ test('4.6「日志」· 1.6 V106: the door password is in ingress.json and the s
   }
   for (const f of forms) {
     if (f.present.some((p) => p && 'command' in p)) continue
-    const p = f.present.find((x) => x && x.base !== 'abs' && (() => { try { return resolveLoc({ ...x, glob: undefined }, w.ctx).length } catch { return false } })())
+    const p = f.present.map((x) => (x && x.perOs ? x.perOs[OS] : x)).find((x) => x && x.base !== 'abs' && (() => { try { return resolveLoc({ ...x, glob: undefined }, w.ctx).length } catch { return false } })()) // an `abs` place is the machine's own: this world never writes it
     if (!p) continue
     const at = resolveLoc({ ...p, glob: undefined }, w.ctx)[0]
     if (p.glob) { fs.mkdirSync(path.join(at, p.glob.replace(/\*/g, '0')), { recursive: true }); continue }
