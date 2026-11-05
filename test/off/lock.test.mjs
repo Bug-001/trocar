@@ -6,12 +6,11 @@ import fs from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
 import { execFileSync, spawn } from 'node:child_process'
-import { fileURLToPath } from 'node:url'
 import { acquireOpLock, tryOpLock } from '../../src/off/lock.mjs'
 import { identityFor } from '../../src/off/proc.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 
-const LOCK_MODULE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../src/off/lock.mjs')
+const LOCK_MODULE = new URL('../../src/off/lock.mjs', import.meta.url).href
 const fileOf = () => path.join(tmpDir('as-l-'), 'collector', 'op.lock') // short: unix socket paths are length-limited
 const ident = (table = {}) => (pid) => table[pid] || { start_time: null, boot_id: null }
 const clock = () => { let t = 1_000_000; return { now: () => t, sleep: async (ms) => { t += ms } } }
@@ -20,11 +19,13 @@ test('R12: the lock is written O_EXCL as {pid, start_time}, in a 0700 directory,
   const file = fileOf()
   const lock = await acquireOpLock({ file, identity: ident({ [process.pid]: { start_time: '777', boot_id: 'boot-1' } }) })
   assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { pid: process.pid, start_time: '777', boot_id: 'boot-1' })
-  assert.equal(fs.statSync(file).mode & 0o777, 0o600)
-  assert.equal(fs.statSync(path.dirname(file)).mode & 0o777, 0o700)
+  if (process.platform !== 'win32') { // a mode means nothing there
+    assert.equal(fs.statSync(file).mode & 0o777, 0o600)
+    assert.equal(fs.statSync(path.dirname(file)).mode & 0o777, 0o700)
+  }
   lock.release(); lock.release()
   assert.ok(!fs.existsSync(file))
-  const again = await acquireOpLock({ file }); again.release()
+  const again = await acquireOpLock({ file, identity: ident() }); again.release()
 })
 
 test('R12: a lock held by a live command is not taken: tryOpLock names the holder, a wait of 0 throws code locked with it, and offFirst ran once before giving up', async () => {
@@ -100,7 +101,7 @@ test('R12: a stale lock is taken out of the way without a trace — the director
 
 test('R12: release removes only a lock that is still ours — one taken over in the meantime is left to its new holder', async () => {
   const file = fileOf()
-  const lock = await acquireOpLock({ file })
+  const lock = await acquireOpLock({ file, identity: ident() })
   fs.writeFileSync(file, JSON.stringify({ pid: 999999, start_time: '5' }))
   lock.release()
   assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).pid, 999999)
@@ -108,9 +109,9 @@ test('R12: release removes only a lock that is still ours — one taken over in 
 
 test('R12: two commands of one process queue behind each other, and a command that waited gets the lock right after the first released it', async () => {
   const file = fileOf()
-  const first = await acquireOpLock({ file })
+  const first = await acquireOpLock({ file, identity: ident() })
   const events = []
-  const second = acquireOpLock({ file, waitMs: 5000 }).then((l) => { events.push('second got it'); return l })
+  const second = acquireOpLock({ file, waitMs: 5000, identity: ident() }).then((l) => { events.push('second got it'); return l })
   await new Promise((r) => setTimeout(r, 80))
   events.push('first releases'); first.release()
   const l = await second
@@ -120,7 +121,7 @@ test('R12: two commands of one process queue behind each other, and a command th
 
 test('R12: six real processes race for the real file: exactly one wins (O_EXCL), the five others are told who holds it', async () => {
   const file = fileOf()
-  const script = `import(${JSON.stringify(LOCK_MODULE)}).then(({ tryOpLock }) => { const r = tryOpLock({ file: ${JSON.stringify(file)} }); console.log(r.lock ? 'won' : 'held:' + (r.holder && r.holder.pid)); setTimeout(() => process.exit(0), 600) })`
+  const script = `import(${JSON.stringify(LOCK_MODULE)}).then(({ tryOpLock }) => { const r = tryOpLock({ file: ${JSON.stringify(file)}, identity: () => null }); console.log(r.lock ? 'won' : 'held:' + (r.holder && r.holder.pid)); setTimeout(() => process.exit(0), 600) })`
   const runs = Array.from({ length: 6 }, () => new Promise((resolve) => {
     const c = spawn(process.execPath, ['-e', script], { stdio: ['ignore', 'pipe', 'inherit'] })
     let out = ''; c.stdout.on('data', (d) => { out += d }); c.on('close', () => resolve(out.trim()))
@@ -196,7 +197,7 @@ for (const [name, { posix, make }] of Object.entries(SHAPES)) {
         import fs from 'node:fs'
         import { acquireOpLock } from ${JSON.stringify(LOCK_MODULE)}
         const file = ${JSON.stringify(file)}
-        const lock = await acquireOpLock({ file })
+        const lock = await acquireOpLock({ file, identity: () => null })
         const regular = fs.lstatSync(file).isFile()
         lock.release()
         console.log(JSON.stringify({ regular, left: fs.readdirSync(${JSON.stringify(path.dirname(file))}) }))`)
@@ -212,7 +213,7 @@ test('1.6 §3.1: a FIFO put on the path while the lock is held does not stop the
     import { execFileSync } from 'node:child_process'
     import { acquireOpLock } from ${JSON.stringify(LOCK_MODULE)}
     const file = ${JSON.stringify(file)}
-    const lock = await acquireOpLock({ file })
+    const lock = await acquireOpLock({ file, identity: () => null })
     fs.rmSync(file); execFileSync('mkfifo', [file])
     lock.release()
     console.log(fs.lstatSync(file).isFIFO())`)
