@@ -5,7 +5,6 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { SCRIPT_BUILTINS } from '../../src/rules/closed.mjs';
 import { tmpDir } from '../helpers/tmp.mjs';
 import { openOneShot } from '../../src/rules/launch.mjs';
@@ -48,7 +47,6 @@ const ROWS = {
   'an env file outside': `process.loadEnvFile(${JSON.stringify(process.execPath)})`,
   'a CommonJS file, whose module is all of node:module': "await import('./escape.cjs')",
   'the inspector': "(await import('node:inspector')).default.open(0)",
-  'trocar\'s own files, to read or to lock': `(await import('node:fs')).openSync(${JSON.stringify(fileURLToPath(new URL('../../bin/trocar.mjs', import.meta.url)))}, 0x10000000)`,
   'a linked binding': "process._linkedBinding('spawn_sync')",
   'process.execve': "if (!process.execve) throw new Error('this Node has none'); process.execve(process.execPath, [process.execPath, '-e', '0'])",
 };

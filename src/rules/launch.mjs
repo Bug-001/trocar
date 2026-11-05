@@ -4,7 +4,6 @@ import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { LIMITS, SKIP_WHY } from './closed.mjs'
 import { checkHeaderSet, headerChanges } from './headers.mjs'
 import { actionKind, normalizeRule } from './validate.mjs'
@@ -13,9 +12,7 @@ import { ANSWER_BYTES, encodeFrame, frameReader, HEAD_BYTES, NO_RULE, readProgre
 const MIB = 1024 * 1024
 const GIB = 1024 * MIB
 const APP = new URL('../..', import.meta.url) // no trailing slash: test/ci/reachable.test.mjs reads one as "everything in this directory"
-const RUNNER = ['src', 'rules', 'runner.mjs']
-const ENTRIES = [new URL('./runner.mjs', import.meta.url), new URL('./watchdog.mjs', import.meta.url)].map(fileURLToPath)
-const IMPORTED = /(?:from\s+|import\()\s*'(\.[^']+)'/g
+const RUNNER = new URL('./runner.mjs', import.meta.url)
 // The watchdog gets there first. This one is for a process frozen whole, watchdog included.
 const FROZEN_MS = 100
 const VERDICTS = Object.freeze(['forward', 'drop', 'reply', 'hold'])
@@ -26,22 +23,6 @@ const REGEX_FLAG = '--no-regexp-tier-up'
 /** The memory limit of one rule process: at most six run, so together they stay under 3/8 of the machine. */
 export const memoryCap = (total = os.totalmem()) => Math.min(GIB, Math.floor(total / 16))
 
-/** Copies what a rule process runs into `to`, as the imports reach it, and → `to`. A script can open whatever it can read so that nobody else can (Windows, share mode 0), so what it
- *  reads must be nobody else's: on trocar's own files that stops `trocar rules off` from starting. */
-export function stageRunner(to) {
-  const root = fileURLToPath(APP), seen = new Set()
-  const copy = (file) => {
-    if (seen.has(file)) return
-    seen.add(file)
-    const text = fs.readFileSync(file, 'utf8'), there = path.join(to, path.relative(root, file))
-    fs.mkdirSync(path.dirname(there), { recursive: true })
-    fs.writeFileSync(there, text)
-    for (const [, name] of text.matchAll(IMPORTED)) copy(path.resolve(path.dirname(file), name))
-  }
-  ENTRIES.forEach(copy)
-  return to
-}
-
 /** argv for `process.execPath`, or null when this Node has no permission model. Every path is real: a symlink in an allow list stops the process starting. */
 export function runnerArgs({ script, slot, app = APP, capBytes, allowed = process.allowedNodeEnvironmentFlags }) {
   if (!allowed.has('--permission')) return null
@@ -51,7 +32,7 @@ export function runnerArgs({ script, slot, app = APP, capBytes, allowed = proces
     `--allow-fs-read=${path.join(real(app), '*')}`, ...(target ? [`--allow-fs-read=${path.join(path.dirname(target), '*')}`] : []),
     `--allow-fs-read=${slotPath}`, `--allow-fs-write=${slotPath}`, `--max-old-space-size=${Math.ceil(capBytes / MIB)}`,
   ]
-  return [REGEX_FLAG, ...flags.filter((flag) => allowed.has(flag.split('=')[0])), path.join(real(app), ...RUNNER), slotPath, String(process.pid), ...(target ? [target] : [])]
+  return [REGEX_FLAG, ...flags.filter((flag) => allowed.has(flag.split('=')[0])), real(RUNNER), slotPath, String(process.pid), ...(target ? [target] : [])]
 }
 
 // One process and its one question at a time. An answer nobody asked for is the process breaking the rule, so it goes. `ask` resolves to `{frame}` or to `{died, code}`:
@@ -109,12 +90,11 @@ export function openOneShot({ script, rules, maxTaskMs = 2000, tmp = os.tmpdir()
   const dir = fs.mkdtempSync(path.join(fs.realpathSync(tmp), 'trocar-slot-'))
   const file = path.join(dir, 'slot.bin')
   const slot = fs.openSync(file, 'wx+', 0o600)
-  let runner = null, task = 0, unloaded = null, closed = false, staged
+  let runner = null, task = 0, unloaded = null, closed = false
 
   async function start() {
     fs.ftruncateSync(slot, 0)
-    staged ??= script ? stageRunner(path.join(dir, 'app')) : undefined
-    const args = runnerArgs({ script, slot: file, capBytes, app: staged })
+    const args = runnerArgs({ script, slot: file, capBytes })
     if (!args) return { died: 'runner-down' }
     runner = talkTo(args, slot)
     const { frame, died, code } = await runner.ask({ load: { rules, max_delay_ms: maxTaskMs } }, LIMITS.loadMs + FROZEN_MS)
@@ -198,7 +178,7 @@ export function openOneShot({ script, rules, maxTaskMs = 2000, tmp = os.tmpdir()
       await runner.gone
     }
     fs.closeSync(slot)
-    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 }) // Windows: a scanner in the copied code for a moment
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 }) // Windows: a scanner on the slot for a moment, and a finished run must not fail on it
   }
   return { run, close }
 }

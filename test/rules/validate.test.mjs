@@ -164,7 +164,7 @@ test('hard rule: on_error drop needs host, and "*" writes out everything', () =>
 })
 
 test('hard rule: a script rule decides nothing from the body and nothing in the rule process', () => {
-  const script = { do: [{ script: '/s.mjs' }] }
+  const script = { do: [{ script: path.resolve('/s.mjs') }] }
   passes(withMatch({ path: '/v1/*', header: { 'x-a': ['b', { not: 'c' }] } }, script))
   refused(withMatch({ body: 'ALPHA' }, script), 'match.body')
   refused(withMatch({ blocks: { role: 'user' } }, script), 'match.blocks')
@@ -303,10 +303,10 @@ test('normalizeRule: aliases to code ids, pid alone means any harness, the input
 
 test('actionKind and scriptOf read an action by its form', () => {
   for (const [kind, action] of [['replace', { replace: 'a', with: 'b', blocks: {} }], ['header', { header: 'x', remove: true }], ['json', { json: '/a', remove: true }], ['blocks', { blocks: {}, remove: true }],
-    ['script', { script: '/s.mjs' }], ['hold', { hold: true, release_after_ms: 1 }], ['drop', { drop: true }], ['delay', { delay_ms: 1 }], ['reply', { reply: { status: 200 } }], ['inject', { inject: 'x' }]]) {
+    ['script', { script: path.resolve('/s.mjs') }], ['hold', { hold: true, release_after_ms: 1 }], ['drop', { drop: true }], ['delay', { delay_ms: 1 }], ['reply', { reply: { status: 200 } }], ['inject', { inject: 'x' }]]) {
     assert.equal(actionKind(action), kind)
   }
-  assert.equal(scriptOf(rule({ do: [{ delay_ms: 1 }, { script: '/s.mjs' }] })), '/s.mjs')
+  assert.equal(scriptOf(rule({ do: [{ delay_ms: 1 }, { script: path.resolve('/s.mjs') }] })), path.resolve('/s.mjs'))
   assert.equal(scriptOf(rule()), null)
 })
 
@@ -374,7 +374,7 @@ test('the index is counted before it is built: harnesses × exact hosts, summed'
 })
 
 test('at most four armed script files: the same file counts once, a rule that is off not at all', () => {
-  const scripted = (i, armed) => rule({ do: [{ script: `/s${i}.mjs` }], ...(armed ? { armed: { off: 0, rules: 0 } } : {}) })
+  const scripted = (i, armed) => rule({ do: [{ script: path.resolve(`/s${i}.mjs`) }], ...(armed ? { armed: { off: 0, rules: 0 } } : {}) })
   assert.deepEqual(checkFile({ rules: named(many(LIMITS.armedScripts, (i) => scripted(i, true))) }), [])
   assert.deepEqual(checkFile({ rules: named(many(LIMITS.armedScripts + 1, (i) => scripted(i, true))) }).map((p) => p.path), ['rules'])
   assert.deepEqual(checkFile({ rules: named(many(LIMITS.armedScripts + 1, (i) => scripted(i, i < 4))) }), [])

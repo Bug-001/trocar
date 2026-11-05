@@ -93,9 +93,9 @@ test('V115: every kind of rule that may not be written is exit 2 rule-invalid an
     'armed': rule({ armed: { off: 0, rules: 0 } }),
     'armed_at': rule({ armed_at: '2026-11-05T10:00:00.000Z' }),
     'script_entry_sha256': rule({ script_entry_sha256: 'a'.repeat(64) }),
-    'script reading match.body': rule({ match: { harness: 'any', host: 'x.example', body: 'a' }, do: [{ script: '/tmp/s.mjs' }] }),
-    'script reading match.blocks': rule({ match: { harness: 'any', host: 'x.example', blocks: { type: 'text' } }, do: [{ script: '/tmp/s.mjs' }] }),
-    'script with a regex condition': rule({ match: { harness: 'any', host: 'x.example', path: { re: '^/v' } }, do: [{ script: '/tmp/s.mjs' }] }),
+    'script reading match.body': rule({ match: { harness: 'any', host: 'x.example', body: 'a' }, do: [{ script: path.resolve('/tmp/s.mjs') }] }),
+    'script reading match.blocks': rule({ match: { harness: 'any', host: 'x.example', blocks: { type: 'text' } }, do: [{ script: path.resolve('/tmp/s.mjs') }] }),
+    'script with a regex condition': rule({ match: { harness: 'any', host: 'x.example', path: { re: '^/v' } }, do: [{ script: path.resolve('/tmp/s.mjs') }] }),
   }
   const s = sandbox()
   seed(s, [rule({ name: 'kept' })])
@@ -227,7 +227,7 @@ test('V115: a name that is not there is exit 2 rule-unknown on enable, disable a
 })
 
 test('V115 (5.1): no engine yet: rules enable is exit 1 engine-unsupported for every action, and the file stays as it was', async () => {
-  const actions = [{ header: 'x-a', set: '1' }, { replace: 'a', with: 'b' }, { json: '/a', set: 1 }, { script: '/tmp/s.mjs' }, { hold: true, release_after_ms: 10 }, { drop: true }, { delay_ms: 5 }, { reply: { status: 429 } }]
+  const actions = [{ header: 'x-a', set: '1' }, { replace: 'a', with: 'b' }, { json: '/a', set: 1 }, { script: path.resolve('/tmp/s.mjs') }, { hold: true, release_after_ms: 10 }, { drop: true }, { delay_ms: 5 }, { reply: { status: 429 } }]
   for (const action of actions) {
     const s = sandbox()
     assert.equal((await add(s, rule({ do: [action] }))).exit, 0, JSON.stringify(action))
