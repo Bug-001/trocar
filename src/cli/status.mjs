@@ -42,6 +42,7 @@ import { colors, noColor, unknown as unknownText2 } from './text.mjs'
 import { squashed } from './words.mjs'
 import { tilde } from './receipt.mjs'
 import { isProxyMode } from '../off/mode.mjs' // proxy mode or driver mode (D47), decided in ONE place (src/cli may import src/off; the collector's copy is isModelOs)
+import { printJson } from './json.mjs'
 
 export { STATUS_REASONS, judgeHarness } // judgeHarness lives in src/netenv/verdict.mjs: the topology (1.6 §9) judges `captured` and `reason` with the same function over the per-process verdicts status hands it (never judged again), so the two cannot disagree
 
@@ -571,7 +572,7 @@ export async function statusRun(argv, { io, env = process.env, home = nodeOs.hom
   const f = await statusFacts({ names: named.ids, home, env, platform, deps })
   const exit = statusExit(f)
   const doc = statusDocOf(f)
-  if (json) { io.out(JSON.stringify(doc, null, 2)); return { exit, f } }
+  if (json) { printJson(io, doc); return { exit, f } }
   const c = colors(io) // zero ANSI bytes when stdout is not a TTY or NO_COLOR is set (src/cli/text.mjs)
   const now = (deps.ms || Date.now)()
   const detail = named.ids || []

@@ -42,6 +42,8 @@ class BodyCache extends Map {
   clear() { this.total = 0; super.clear() }
 }
 export const bodyCache = new BodyCache(BODY_CHARS)
+const evicted = new Set() // the refs whose bytes the cache let go and nothing has put back
+export const leftCache = (ref) => evicted.has(ref) && !bodyCache.has(ref)
 // What is cached: the bytes (200), and a 404 — the server looked the locator up in every capture root and found no such record,
 // kept as `absent`. A network failure, a 400 / 409 / 5xx is shown (status 'error') but never remembered: the next ask may work.
 // one item of a `block` answer ({ref, bytes, encoding, fidelity, truncated}, 3.5 §会话读) as the body the cell shows
@@ -241,7 +243,7 @@ export function cellBodyHtml(cell, mode) {
 const at = (v, p) => { for (const k of p) { if (v == null || typeof v !== 'object' || !Object.hasOwn(v, k)) return undefined; v = v[k] } return v }
 const blobs = new Map() // byte key -> the blob: URL made from a media cell's bytes; revoked when those bytes leave the caches
 function revoke(k) { const u = blobs.get(k); if (u) { blobs.delete(k); try { URL.revokeObjectURL(u) } catch { /* already gone */ } } }
-bodyCache.onEvict = (ref) => revoke('r:' + ref)
+bodyCache.onEvict = (ref) => { revoke('r:' + ref); evicted.add(ref) }
 cellGone = revoke
 
 // the cell behind a .cell element and the bytes it shows, or null

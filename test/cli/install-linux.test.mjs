@@ -188,6 +188,18 @@ test('Linux install replaces a collector that answers another code: the receipt 
   assert.equal(sys.daemon.state.up, true, 'the unit brought the collector up again')
 })
 
+// 1.6 §5.5 step 4: the update that runs install replaces the collector itself, right after it
+test('Linux install under an update that replaces the collector next leaves it running and plans no replacement', async () => {
+  const home = tmpDir('trocar-install-keep-')
+  seedClaude(home)
+  const sys = fakeSystem({ up: true })
+  const stops = []
+  const deps = { keepDaemon: true, daemonCode: async () => '0.0.0+0000000', stopDaemon: async () => { stops.push('stop'); return { stopped: true, pid: 4242, signals: ['SIGTERM'] } } }
+  const io = fakeIo()
+  assert.equal(await runInstallCli(['--yes', '--json'], { ...onCtx(home, io, { exec: sys.exec, daemon: sys.daemon, deps }), platform: 'linux' }), 0, io.text())
+  assert.deepEqual([stops, io.json().daemon.replaced, io.json().planned.filter((p) => p.what === 'daemon')], [[], false, []], io.text())
+})
+
 // 1.6 §3.2: the undo's rows come from standaloneFiles
 test('Linux install: the plan names every file of the standalone undo', async () => {
   const { standaloneFiles } = await import('../../src/off/paths.mjs')

@@ -14,8 +14,8 @@
     "probes": 0,
     "unknown": {"records": 1, "reason": "No registered dissector reads this record as a call.", "endpoints": ["/v1/x"]},
     "lanes": [
-      {"lane": "20261021T101500Z:12", "kind": "main", "icon": "main", "label": "Main", "task": "", "count": 5, "first": "20261021T101500Z:12", "last": "20261021T101500Z:17", "peakCtx": 2800, "spawnRid": null, "parent": null, "flagged": false},
-      {"lane": "20261021T101500Z:15", "kind": "subagent", "icon": "agent", "label": "Explore", "task": "Find the config loader", "count": 1, "first": "20261021T101500Z:15", "last": "20261021T101500Z:15", "peakCtx": 1100, "spawnRid": "20261021T101500Z:13", "parent": "20261021T101500Z:12", "flagged": false}
+      {"lane": "20261021T101500Z:12", "kind": "main", "icon": "main", "label": "Main", "task": "", "count": 5, "first": "20261021T101500Z:12", "last": "20261021T101500Z:17", "peakCtx": 2800, "spawnRid": null, "parent": null, "flagged": false, "parts": 2},
+      {"lane": "20261021T101500Z:15", "kind": "subagent", "icon": "agent", "label": "Explore", "task": "Find the config loader", "count": 1, "first": "20261021T101500Z:15", "last": "20261021T101500Z:15", "peakCtx": 1100, "spawnRid": "20261021T101500Z:13", "parent": "20261021T101500Z:12", "flagged": false, "parts": 1}
     ],
     "calls": [
       {"rid": "20261021T101500Z:12", "lane": "20261021T101500Z:12", "ts": "2026-10-21T10:15:12.000Z", "ctx": 1600, "comp": {"system": 250, "user": 1200, "tools": 150}, "usage": {"input": 1600, "output": 80, "cache_read": 1400, "cache_write": 200}, "tools": 0, "status": 200, "rec": {"id": "20261021T101500Z:12", "request": {"model": "claude-x"}}, "wire": {"cacheSemanticsKnown": true, "contextState": "complete", "contextMissing": 0, "reqEncoding": "identity", "labels": []}, "cacheBreak": {"cause": "first", "attribution": "none", "idx": 0, "refRid": null, "gt": null, "firstCall": true}},
@@ -57,7 +57,7 @@
     ],
     "gone": [],
     "lanes": [
-      {"lane": "20261021T101500Z:15", "kind": "subagent", "icon": "agent", "label": "Explore", "task": "Find the config loader", "count": 3, "first": "20261021T101500Z:15", "last": "20261021T101500Z:19", "peakCtx": 2900, "spawnRid": "20261021T101500Z:13", "parent": "20261021T101500Z:12", "flagged": false}
+      {"lane": "20261021T101500Z:15", "kind": "subagent", "icon": "agent", "label": "Explore", "task": "Find the config loader", "count": 3, "first": "20261021T101500Z:15", "last": "20261021T101500Z:19", "peakCtx": 2900, "spawnRid": "20261021T101500Z:13", "parent": "20261021T101500Z:12", "flagged": false, "parts": 1}
     ],
     "lanes_gone": [],
     "events": [
@@ -84,7 +84,7 @@
     "logged": 0,
     "probes": 0,
     "lanes": [
-      {"lane": "20261021T101500Z:12", "kind": "main", "icon": "main", "label": "Main", "task": "", "count": 2, "first": "20261021T101500Z:12", "last": "20261021T101500Z:13", "peakCtx": 2400, "spawnRid": null, "parent": null, "flagged": false}
+      {"lane": "20261021T101500Z:12", "kind": "main", "icon": "main", "label": "Main", "task": "", "count": 2, "first": "20261021T101500Z:12", "last": "20261021T101500Z:13", "peakCtx": 2400, "spawnRid": null, "parent": null, "flagged": false, "parts": 1}
     ],
     "calls": [
       {"rid": "20261021T101500Z:12", "lane": "20261021T101500Z:12", "ts": "2026-10-21T10:15:12.000Z", "ctx": 1600, "comp": {"system": 250, "user": 1200, "tools": 150}, "usage": {"input": 1600, "output": 80, "cache_read": 1400, "cache_write": 200}, "tools": 0, "status": 200, "rec": {"id": "20261021T101500Z:12", "request": {"model": "claude-x"}}, "wire": {"cacheSemanticsKnown": true, "contextState": "complete", "contextMissing": 0, "reqEncoding": "identity", "labels": []}, "cacheBreak": {"cause": "first", "attribution": "none", "idx": 0, "refRid": null, "gt": null, "firstCall": true}},
@@ -119,10 +119,10 @@
     "peak": 2800,
     "cols": "khsU2xxA7RwY7RoF/x0A",
     "bucket": 1,
-    "chapters": [{"k": 0, "s0": 0, "s1": 3, "rid0": "20261021T101500Z:12", "ts0": "2026-10-21T10:15:12.000Z", "ts1": "2026-10-21T10:15:14.000Z", "inferred": false, "peakCtx": 2600}, {"k": 1, "s0": 3, "s1": 5, "rid0": "20261021T101500Z:16", "ts0": "2026-10-21T10:15:16.000Z", "ts1": "2026-10-21T10:15:17.000Z", "inferred": false, "peakCtx": 2800}],
+    "chapters": [{"k": 0, "s0": 0, "s1": 3, "rid0": "20261021T101500Z:12", "ts0": "2026-10-21T10:15:12.000Z", "ts1": "2026-10-21T10:15:14.000Z", "inferred": false, "peakCtx": 2600, "prompts": 1}, {"k": 1, "s0": 3, "s1": 5, "rid0": "20261021T101500Z:16", "ts0": "2026-10-21T10:15:16.000Z", "ts1": "2026-10-21T10:15:17.000Z", "inferred": false, "peakCtx": 2800, "prompts": 1}],
     "packs": [{"n": 0, "s0": 0, "s1": 3, "tag": "524b97cc209afb69"}],
     "open": {"n": 1, "s0": 3},
-    "lanes": [{"lane": "20261021T101500Z:12", "kind": "main", "icon": "main", "label": "Main", "task": "", "count": 5, "first": "20261021T101500Z:12", "last": "20261021T101500Z:17", "peakCtx": 2800, "spawnRid": null, "parent": null, "flagged": false}, {"lane": "20261021T101500Z:15", "kind": "subagent", "icon": "agent", "label": "Explore", "task": "Find the config loader", "count": 1, "first": "20261021T101500Z:15", "last": "20261021T101500Z:15", "peakCtx": 1100, "spawnRid": "20261021T101500Z:13", "parent": "20261021T101500Z:12", "flagged": false}],
+    "lanes": [{"lane": "20261021T101500Z:12", "kind": "main", "icon": "main", "label": "Main", "task": "", "count": 5, "first": "20261021T101500Z:12", "last": "20261021T101500Z:17", "peakCtx": 2800, "spawnRid": null, "parent": null, "flagged": false, "parts": 2}, {"lane": "20261021T101500Z:15", "kind": "subagent", "icon": "agent", "label": "Explore", "task": "Find the config loader", "count": 1, "first": "20261021T101500Z:15", "last": "20261021T101500Z:15", "peakCtx": 1100, "spawnRid": "20261021T101500Z:13", "parent": "20261021T101500Z:12", "flagged": false, "parts": 1}],
     "lanesMore": 0,
     "last": {"rid": "20261021T101500Z:17", "n": 8}
   },
@@ -297,7 +297,7 @@
   ],
   "lane_tail": [
     {"schema": 2, "command": "lane", "ok": true, "errors": [], "v": 2, "id": "s1", "tail": {"n": 1, "part": "main", "s0": 3}},
-    {"l": {"lane": "20261021T101500Z:12", "kind": "main", "icon": "main", "label": "Main", "task": "", "count": 5, "first": "20261021T101500Z:12", "last": "20261021T101500Z:17", "peakCtx": 2800, "spawnRid": null, "parent": null, "flagged": false}},
+    {"l": {"lane": "20261021T101500Z:12", "kind": "main", "icon": "main", "label": "Main", "task": "", "count": 5, "first": "20261021T101500Z:12", "last": "20261021T101500Z:17", "peakCtx": 2800, "spawnRid": null, "parent": null, "flagged": false, "parts": 2}},
     {"c": {"rid": "20261021T101500Z:16", "lane": "20261021T101500Z:12", "ts": "2026-10-21T10:15:16.000Z", "ctx": 2600, "comp": {"system": 250, "user": 2200, "tools": 150}, "usage": {"input": 2600, "output": 80, "cache_read": 2400, "cache_write": 200}, "tools": 0, "status": 200, "rec": {"id": "20261021T101500Z:16", "request": {"model": "claude-x"}}, "wire": {"cacheSemanticsKnown": true, "contextState": "complete", "contextMissing": 0, "reqEncoding": "identity", "labels": []}, "cacheBreak": {"cause": "ttl", "attribution": "time", "idx": 2, "refRid": "20261021T101500Z:13", "gt": true, "firstCall": false}, "compaction": true}},
     {"d": {"bid": "UYtn5lJTHF_n4l1rLDtO9g", "fh": "PcnlXQfMWxeSVm6aVeQFGw", "ref": "s1/main#20261021T101500Z:12::1200-1450", "sec": "system", "role": "system", "kind": "text", "ff": "text", "head": {"role": "system", "tag": "text", "label": "text"}, "preview": "You are a coding agent.", "chars": 23, "bytes": 250, "r": {"as": "markdown"}}},
     {"d": {"bid": "u4IDDbwryroyqQvy4geoSg", "fh": "yQTv1uGxhW2sG1KA89QSxg", "ref": "s1/main#20261021T101500Z:12::1450-1600", "sec": "messages", "role": "user", "kind": "text", "ff": "text", "head": {"role": "user", "tag": "text", "label": "text"}, "preview": "Fix the failing test", "chars": 20, "bytes": 150, "r": {"as": "markdown"}}},

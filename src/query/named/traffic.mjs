@@ -6,8 +6,16 @@
 // A byte sum over rows that recorded nothing is null, never 0 (invariant 4); `totals` cover the window, not the page.
 import { asOf, indexRows } from '../rows.mjs';
 import { paginate, tsFilter } from './index.mjs';
+import { PAGE, WINDOW } from './about.mjs';
 
-export const params = Object.freeze(['since', 'until', 'limit', 'after']);
+export const about = Object.freeze({
+  summary: 'Traffic per agent and host: first and last seen, requests, bytes sent and received, requests not recorded, and counts by class.',
+  params: Object.freeze({
+    ...WINDOW,
+    ...PAGE,
+  }),
+});
+export const params = Object.freeze(Object.keys(about.params));
 
 const add = (sum, v) => (v == null ? sum : (sum ?? 0) + v);
 

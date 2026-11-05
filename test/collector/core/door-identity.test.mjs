@@ -236,15 +236,20 @@ test('4.9 MA1 (unit half): curl holding the door\'s token is not an agent — `n
   assert.deepEqual([m.agent, m.why, d.events.map((e) => e.name)], [null, 'not-an-agent', ['curl']])
 })
 
-test('W4 the facts are asked targeted for every connection, never a cached row a wrapped pid could have left; two lookups of one pid at once share one ask', async () => {
+test('4.9 MA22 a question that arrives while a pid\'s ask runs is answered by the next ask: exec may have changed the program since the running one began', async () => {
   const asks = []
-  let life = 1
+  const lives = ['/Users/u/.local/bin/claude', '/Users/u/bin/other', '/Users/u/.local/bin/claude']
+  let release
+  const first = new Promise((r) => { release = r })
   const id = createDoorIdentity({ identify: REG.match, ownUid: OWN_UID, ownerOf: async () => ({ pid: 131, source: 'socket-table', ms: 1 }),
-    factsOf: async (pid) => { asks.push(pid); await new Promise((r) => setImmediate(r)); return darwinFacts(pid, { exe: life === 1 ? '/Users/u/.local/bin/claude' : '/Users/u/bin/other', cmdline: 'x' }) } })
+    factsOf: async (pid) => { const n = asks.push(pid); if (n === 1) await first; return darwinFacts(pid, { exe: lives[n - 1], cmdline: 'x' }) } })
   const q = () => id.identityOf({ peer: { address: '127.0.0.1', port: 50131 }, door: CC, target: target() })
-  assert.equal((await q()).agent, 'claude-code')
-  life = 2 // the pid wrapped: another program now holds it
-  assert.deepEqual([(await q()).agent, asks], [null, [131, 131]], 'asked again: the second connection is the other program, not the cached claude')
-  await Promise.all([q(), q()])
-  assert.equal(asks.length, 3, 'concurrent lookups of one pid share the ask')
+  const running = q()
+  await new Promise((r) => setImmediate(r))
+  const arrived = q()
+  await new Promise((r) => setImmediate(r))
+  release()
+  const [a, b] = await Promise.all([running, arrived])
+  assert.deepEqual([a.exe, b.exe], lives.slice(0, 2))
+  assert.equal((await q()).exe, lives[2], 'nothing cached: a later connection is asked again (4.8 W4)')
 })

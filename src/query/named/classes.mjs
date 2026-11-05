@@ -8,7 +8,11 @@ import { asOf, indexRows } from '../rows.mjs';
 import { readTable } from '../../classes/table.mjs';
 import { diskUsage } from '../disk.mjs';
 
-export const params = Object.freeze([]);
+export const about = Object.freeze({
+  summary: 'The traffic classes, each with its calls and size over 24 hours, 7 days and all time, what trocar takes on disk, and the latest changes.',
+  params: Object.freeze({}),
+});
+export const params = Object.freeze(Object.keys(about.params));
 
 const WINDOWS = Object.freeze([['h24', 24 * 3600e3], ['d7', 7 * 86400e3], ['all', null]]);
 const zero = () => Object.fromEntries(WINDOWS.map(([k]) => [k, { calls: 0, bytes: 0 }]));

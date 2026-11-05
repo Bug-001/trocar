@@ -35,6 +35,8 @@ function literals(root) {
     grab(/\bwhere:\s*'([^']+)'/g, 'where')
     // `error: { code: … }` is the JSON error document of 1.6 §3 (V74), not a D38 record: its own closed set is src/cli/json.mjs ERROR_CODES
     grab(/\berror:\s*\{\s*code:\s*'([^']+)'/g, 'error-code')
+    // and the two refusal helpers of the CLI that take the code first: `refuse('unreadable', …)`, `no('local-changes', …)`
+    if (rel.startsWith(path.join('src', 'cli'))) grab(/\b(?:refuse|no)\(\s*'([^']+)'/g, 'error-code')
     grab(/(?<!error:\s*\{\s*)\bcode:\s*'([^']+)'/g, 'code')
     grab(/\bnot_captured(?:\s*=\s*|:\s*)'([^']+)'/g, 'not_captured')
     grab(/\bnotCaptured\(\s*'([^']+)'/g, 'not_captured') // the engine flow's helper: notCaptured('h2', reason)
@@ -62,6 +64,7 @@ test('D38 every event / where / code / not_captured a collector writer names is 
   }
   assert.ok(lits.some((l) => l.kind === 'where' && l.name === 'off' && l.file.startsWith(path.join('src', 'off'))), 'and it reaches src/off (D39⑦), where `off` names its records')
   assert.ok(lits.some((l) => l.kind === 'error-code' && l.name === 'usage' && l.file === path.join('src', 'cli', 'args.mjs')), 'the parser\'s error document is seen, and judged by ERROR_CODES (1.6 §3, V74)')
+  for (const [file, name] of [['query.mjs', 'unreadable'], ['update.mjs', 'local-changes']]) assert.ok(lits.some((l) => l.kind === 'error-code' && l.name === name && l.file === path.join('src', 'cli', file)), `the scan sees ${name}`)
   assert.deepEqual(outside(lits), [])
 })
 

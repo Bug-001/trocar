@@ -5,6 +5,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
+import net from 'node:net'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { execTool, runAsync } from '../../src/off/exec.mjs'
@@ -163,4 +164,38 @@ test('runAsync quiet settles on the child\'s exit, not when something it started
   assert.ok(Date.now() - t0 < 2500, `${Date.now() - t0} ms`)
   assert.equal((await runAsync('stuck', [], { env, timeout: 300, quiet: true })).status, null)
   assert.equal((await runAsync('nope', [], { env, timeout: 3000, quiet: true })).status, 3)
+})
+
+test('MA15 an answer already in the pipe is whole when the event loop gets to it only after the limit: a callback stalled past it costs nothing', { skip: process.platform === 'win32', timeout: 20_000 }, async () => {
+  const bin = tmpDir('trocar-exec-'), env = { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}` }
+  stub(bin, 'answers', 'echo the-whole-answer')
+  await runAsync('answers', [], { env, timeout: 5000 }) // macOS spends ~100 ms on a new script's first exec: the rounds below are about the answer, not that
+  const stall = (ms) => { const end = Date.now() + ms; while (Date.now() < end); }
+  const server = net.createServer((s) => s.on('data', () => stall(250))) // the loop stuck in somebody's callback: the limit passes and the timer runs before the pipe is read
+  await new Promise((r) => server.listen(0, '127.0.0.1', r))
+  const client = net.connect(server.address().port, '127.0.0.1')
+  await new Promise((r) => client.once('connect', r))
+  try {
+    for (let i = 0; i < 6; i++) {
+      const asked = runAsync('answers', [], { env, timeout: 100 })
+      await new Promise((r) => setTimeout(r, 30))
+      client.write('x')
+      const r = await asked
+      assert.equal(r.status, 0, `round ${i}: the child exited 0`)
+      assert.equal(r.stdout, 'the-whole-answer\n', `round ${i}`)
+    }
+  } finally { client.destroy(); server.close() }
+})
+
+test('MA16 the limit is a limit: what does not answer is null just past it, whether it ignores TERM, leaves a grandchild on the pipe, or simply hangs', { skip: process.platform === 'win32', timeout: 20_000 }, async () => {
+  const bin = tmpDir('trocar-exec-'), env = { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}` }
+  const tools = { deaf: "trap '' TERM\nexec sleep 30", holder: 'sleep 2 & exit 0', hung: 'exec sleep 30' }
+  for (const [tool, body] of Object.entries(tools)) {
+    stub(bin, tool, `[ $# = 0 ] || exit 0\n${body}`)
+    await runAsync(tool, ['first-exec'], { env, timeout: 5000 }) // macOS spends ~100 ms on a new script's first exec: the limit must find the trap already set
+    const t0 = Date.now()
+    const r = await runAsync(tool, [], { env, timeout: 100 })
+    assert.equal(r.status, null, tool)
+    assert.ok(Date.now() - t0 < 1500, `${tool}: ${Date.now() - t0} ms`)
+  }
 })

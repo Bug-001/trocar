@@ -217,7 +217,7 @@ export function buildStandalone({ srcDir = SOURCE_DIR, version, fs = nodeFs } = 
     // names, as the launcher finds it, else the one on PATH; nothing of the writer's own Node is in the bytes. Node skips the #! line and reads line 2
     // as a string and a comment
     '#!/bin/sh',
-    `':' //; d="\${0%/*}/../app"; n=; read -r v i <"$d/current" 2>/dev/null && n="$d/node/$i/bin/node"; [ -x "$n" ] || n=node; exec "$n" "$0" "$@"`,
+    `':' //; d="\${0%/*}/../app"; n=; { read -r v i <"$d/current"; } 2>/dev/null && n="$d/node/$i/bin/node"; [ -x "$n" ] || n=node; exec "$n" "$0" "$@"`,
     `// trocar-off ${version} — generated from src/off by trocar on; do not edit`,
     '// `trocar off` without the repository, node_modules or the daemon (RFC 1.6 R3): the undo side of trocar in one file, which brings in `node:*` and nothing else.',
     '// It has no ES module syntax, so the Node that runs it need not guess what kind of file a file with no extension is.',

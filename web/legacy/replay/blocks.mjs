@@ -132,7 +132,7 @@ export function blockRowHtml(head, { cls = '', attrs = '', badges = '', chars = 
 export function ctxBlockHtml(b, { prevKeys, open, windowLine = false, marks = rowMarks(b, { prevKeys, open, windowLine }) } = {}) {
   const h = b.head || { role: b.role || '', tag: b.kind || '', label: '' }
   const f = marks.ff
-  const bp = marks.cc ? `<span class="bpbadge" title="${esc(W.CACHE_MARK_TIP)} · declared value: ${esc(JSON.stringify(marks.cc))}">${esc(W.CACHE_MARK)}</span>` : ''
+  const bp = marks.cacheMark ? `<span class="bpbadge" title="${esc(W.CACHE_MARK_TIP)} · declared value: ${esc(JSON.stringify(marks.cacheMark))}">${esc(W.CACHE_MARK)}</span>` : ''
   const vol = marks.volatile ? `<span class="volbadge" title="${esc(W.VOLATILE_MARK_TIP)}">${esc(W.VOLATILE_MARK)}</span>` : ''
   const nw = marks.isNew ? `<span class="newmark" title="${esc(W.NEW_MARK_TIP)}">${esc(W.NEW_MARK)}</span>` : ''
   // the window line already said "nothing here resolves": the per-block 不能回源 is not repeated, its screen-reader word is (2.3 §窗口行)
