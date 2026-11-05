@@ -220,7 +220,8 @@ test('2.3 #28: the rendered window holds only the items within one window height
     // the first frame after each press
     await page.evaluate(`window.__gaps = []; addEventListener('keydown', () => requestAnimationFrame(() => window.__gaps.push((${gapInPage})())), true)`)
     const no = () => page.evaluate(() => document.querySelector('#stepbar .sb-no')?.textContent)
-    for (const key of [...Array(10).fill('ArrowLeft'), ...Array(10).fill('ArrowRight')]) {
+    const presses = [...Array(10).fill('ArrowLeft'), ...Array(10).fill('ArrowRight')]
+    for (const key of presses) {
       const was = await no()
       await page.keyboard.press(key)
       await page.waitForFunction((was) => document.querySelector('#stepbar .sb-no')?.textContent !== was, was, { timeout: 10000, polling: 'raf' })
@@ -232,7 +233,7 @@ test('2.3 #28: the rendered window holds only the items within one window height
     assert.deepEqual(top.out, [])
     assert.deepEqual(mid.out, [])
     assert.ok(top.gap <= top.pitch && mid.gap <= mid.pitch, `a gap in the visible box at rest: ${top.gap} / ${mid.gap} px, pitch ${top.pitch}`)
-    assert.equal(first.length, 20, 'one record per press')
+    assert.equal(first.length, presses.length, 'one record per press')
     assert.deepEqual(first.filter((g) => !(g.gap <= g.pitch)), [], 'a gap in the visible box on the first frame after a step')
   })
 })
