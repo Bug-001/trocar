@@ -126,6 +126,13 @@ export function recordsOf(manifest, harness, routeId) {
   return [...((manifest && manifest.entries) || []).filter(mine), ...((manifest && manifest.files) || []).filter(mine)]
 }
 
+/** The record of one route's `on` records whose prior is the user's own proxy (4.11 P7 step 2): the first string prior that is not of a NO_PROXY key (a
+ *  bypass list, never an upstream), or null. */
+export function priorRecordOf(route, records) {
+  const same = (a, b) => Array.isArray(a) && Array.isArray(b) && a.join('\0') === b.join('\0')
+  return records.find((i) => typeof i.prior_value === 'string' && !((route && route.noProxyKeys) || []).some((k) => same(k, i.keys))) ?? null
+}
+
 const KEEP = (res) => typeof res === 'string' && res.startsWith('left-') && res !== 'left-user-value' // the user's value now: nothing of trocar's left to undo
 
 /** undo(ctx, records): entries last-first (each back to its prior only while it still holds trocar's value), then owned files (a config-library entry only
