@@ -45,7 +45,7 @@ const STEPS = [
     // what the world's ctx sees (HOME and the apps placed on its fake machine), so the CLI judges the same forms present as the world's install did
     const inside = (p) => String(p).startsWith(w.home + path.sep)
     const fsx = { ...fs, existsSync: (p) => w.ctx.exists(p), readdirSync: (p, ...a) => (inside(p) ? fs.readdirSync(p, ...a) : w.ctx.readdir(p)) }
-    const deps = { getuid: () => 501, unit: null, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: kitOf(w.os), dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, fs: fsx }
+    const deps = { getuid: () => 501, unit: null, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: kitOf(w.os), dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, fs: fsx }
     const exit = await runInstallCli(['--json', '--yes'], { io, env: w.env, home: w.home, platform: w.os, deps })
     return { exit, doc: JSON.parse(io.stdoutText()) }
   } },

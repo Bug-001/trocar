@@ -75,7 +75,7 @@ for (const platform of ['darwin', 'win32']) {
     const { controlEndpoint } = await import(`../../src/collector/arch/${platform}/control-path.mjs`)
     await withScratchCwd(platform, async () => {
       const d = await startDaemon({ dir: w.dir, env: w.env, home: w.home, arch: { os: platform, controlEndpoint }, harnesses: w.harnesses, getuid: () => 501,
-        identity: () => ({ start_time: '111', boot_id: 'boot-1' }), model: { backends: { custody: w.custody, dirs: w.ctx.dirs }, parts: NOBODY } })
+        identity: () => ({ start_time: '111', boot_id: 'boot-1' }), model: { backends: { custody: w.custody, dirs: w.ctx.dirs }, ctx: w.ctx, parts: NOBODY } })
       try { await sealedLeftover(left) } finally { await d.stop({ reason: 'test' }) }
     })
   })

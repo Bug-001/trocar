@@ -56,7 +56,7 @@ for (const platform of ['darwin', 'win32']) for (const kase of [null, 'older', .
     let boxB = null
     const exec = (file, args) => ({ status: 0, stdout: /ForEach-Object/.test([file, ...args].join(' ')) ? 'boot 1740000000000\n' : '', stderr: '' })
     const deps = {
-      getuid: () => 501, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs },
+      getuid: () => 501, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, ctx: w.ctx,
       harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, unit: boxA.unit, exec,
       identity: () => ({ start_time: '111', boot_id: 'boot-1' }), // what the daemons' lock stub wrote
       kill: () => { throw Object.assign(new Error('no'), { code: 'ESRCH' }) }, // never signal the test process

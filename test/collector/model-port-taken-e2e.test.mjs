@@ -32,7 +32,7 @@ for (const platform of ['darwin', 'win32']) {
     assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
     const envFile = path.join(w.home, '.codex', '.env')
     const box = await liveUnit({ w, platform })
-    const deps = { getuid: () => 501, backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: box.parts, sleep: (ms) => new Promise((res) => setTimeout(res, Math.min(ms, 25))) }
+    const deps = { getuid: () => 501, backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, parts: box.parts, sleep: (ms) => new Promise((res) => setTimeout(res, Math.min(ms, 25))) }
     const offDeps = { getuid: () => 501, procs: async () => [], alive: () => false, identity: () => ({ start_time: '111', boot_id: 'boot-1' }), sleep: async () => {}, exec: () => ({ status: 0, stdout: '', stderr: '' }) }
     const doors = async () => { const ep = controlEndpointFor({ platform, dir: w.dir, env: w.env }); return (await ep.request({ socketPath: ep.socketPath, method: 'GET', path: '/status' })).doors }
     let held = null

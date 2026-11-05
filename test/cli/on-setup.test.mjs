@@ -30,7 +30,7 @@ test('V91 · 1.6 §3.3: on A B, A needing setup → exit 1, error.code setup-nee
     'GET /status': async () => ({ doors: {} }),
     'POST /on': async ({ body }) => ({ doors: Object.fromEntries(Object.entries(body.groups).map(([g, port]) => [g, `http://127.0.0.1:${port}`])) }),
   } })
-  const deps = { getuid: () => 501, backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, daemonReader: reader, parts: { os: 'darwin', harnesses: w.harnesses, arch: { unit: { userUnit: () => unit } } } }
+  const deps = { getuid: () => 501, backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, daemonReader: reader, parts: { os: 'darwin', harnesses: w.harnesses, arch: { unit: { userUnit: () => unit } } } }
   const on = async (argv) => { const io = fakeIo(); return { exit: await runOnCli(argv, { io, env: w.env, home: w.home, platform: 'darwin', deps }), io } }
   try {
     const before = filesOf(w)
