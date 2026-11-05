@@ -15,7 +15,7 @@ import net from 'node:net'
 import { handleFlow, writeRefusal, HOLD_CLOSE_MS } from './flow.mjs'
 
 // Is this pid still running? EPERM = it is (another user's): only ESRCH says it is gone. Same on every OS.
-const pidAlive = (pid) => { try { process.kill(pid, 0); return true } catch (e) { return e.code !== 'ESRCH' } }
+export const pidAlive = (pid) => { try { process.kill(pid, 0); return true } catch (e) { return e.code !== 'ESRCH' } }
 import { createIngress } from './ingress.mjs'
 import { createNegativeCache } from './negcache.mjs'
 import { createUpstreamTrust, systemRoots } from '../tls/roots.mjs'
@@ -122,9 +122,15 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
   // closes held until it is known whether their process exits (flow.mjs HOLD_CLOSE_MS): settle(gone); the engine stopping settles each as alive.
   // `alive(pid)` → boolean or a promise of one: the daemon's own process table; the OS (kill 0) when none is given
   const holds = new Set()
+  const HOLDS_MAX = 256 // more closes than this held at once: the next is judged at once, never queued without bound
   function holdClose(pid, settle) {
-    const h = { settle, timer: setTimeout(() => { holds.delete(h); Promise.resolve().then(() => alive(pid)).then((yes) => settle(yes === false), () => settle(false)) }, timing.holdCloseMs ?? HOLD_CLOSE_MS) } // an unknown answer is alive
+    if (holds.size >= HOLDS_MAX) return false
+    let done = false
+    const h = { settle: (gone) => { if (done) return; done = true; holds.delete(h); clearTimeout(h.timer); settle(gone) } }
+    // an unknown answer (a throw, anything but false) is alive; the hold stays in the set until settled, so a stop settles it even mid-question
+    h.timer = setTimeout(() => { Promise.resolve().then(() => alive(pid)).then((yes) => h.settle(yes === false), () => h.settle(false)) }, timing.holdCloseMs ?? HOLD_CLOSE_MS)
     holds.add(h)
+    return true
   }
   const flowCtx = (connect) => ({
     ...timing, drainTimeoutMs, issuer, store, upstreamCa, upstreamTrust, policy, isRecording, retention, negCache, counters, failure,
@@ -256,7 +262,7 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
   // every connection still there — one in its lookup, one whose gate failed or threw — so none outlives the cut. Then wait for every cut flow's row and
   // envelopes, so what the stop writes after it (daemon-stop) comes after them; a flow that has still not ended `boundMs` later rejects close() with   // `stop-failed` (the stop records it and goes on: the stop is bounded, V99). closing / waiting: what the first ask found; cut: what the grace left.
   async function close({ graceMs = 2000, boundMs = 2000, who = null } = {}) { // who: the command stopping the daemon (update / uninstall), named in the cut rows
-    for (const h of [...holds]) { holds.delete(h); clearTimeout(h.timer); h.settle(false) } // never dropped by a stop: judged as any other close
+    for (const h of [...holds]) h.settle(false) // never dropped by a stop: judged as any other close
     let open = servers.length
     const closing = Promise.all(servers.map((s) => new Promise((res) => s.close(() => { open--; res() }))))
     if (ingress) ingress.closeIdle() // handshakes and health tunnels are not flows: nothing of an agent's is lost, and they would hold close() for their idle timeout

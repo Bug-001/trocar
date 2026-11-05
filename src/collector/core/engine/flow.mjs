@@ -548,8 +548,9 @@ export function handleFlow(client, meta, ctx) {
         if (gaveUp && ctx.negCache.trusts(key)) { notCaptured('client-closed-no-data', 'trusted-before'); if (!rec.error) rec.error = how; return }
         // trusted before, engine fast: held until it is known whether the process is going (its unused sockets close as it exits)
         if (!alert && !gaveUp && meta.pid != null && ctx.holdClose && ctx.negCache.trusts(key)) {
-          pending = new Promise((settle) => ctx.holdClose(meta.pid, (gone) => { pending = null; if (!gone) rejected(how, alert, gaveUp, e); settle() }))
-          return
+          let held = false
+          const p = new Promise((settle) => { held = ctx.holdClose(meta.pid, (gone) => { pending = null; try { if (!gone) rejected(how, alert, gaveUp, e) } finally { settle() } }) !== false })
+          if (held) { pending = p; return }
         }
         rejected(how, alert, gaveUp, e)
       }
