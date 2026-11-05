@@ -1,6 +1,7 @@
 // test/web-v2/browser/desk-splits.test.mjs — 1.2 #9, the gesture half, on the mounted desk (a generated session, desk-world.mjs).
-// The new desk: a drag writes only its boundary's key and survives a reload, a double-click deletes it, a stored non-table reads as the
-// default, the collapsed sidebar survives a reload, and an untouched scope follows its content. The legacy desk:
+// The new desk: a drag writes only its boundary's key and survives a reload and a poll, a double-click deletes it, a stored out-of-range
+// size reads back clamped, a stored non-table reads as the default, the collapsed sidebar survives a reload, and an untouched scope
+// follows its content. The legacy desk:
 // - by default the outline column is --outline-w and the right page is --rightpage-w, the base.css tokens, and nothing is stored;
 // - dragging a boundary stores its own key only and the width survives a reload;
 // - a double-click removes the key and the inline property: the width is the token again;
@@ -99,14 +100,16 @@ async function drag(page, edge, dx, dy) {
   const x = box.x + box.width / 2, y = box.y + box.height / 2
   await page.mouse.move(x, y); await page.mouse.down(); await page.mouse.move(x + dx / 2, y + dy / 2); await page.mouse.move(x + dx, y + dy); await page.mouse.up()
 }
-async function desk(run) {
+// `behind`: the server starts that many members before the last mark and moves on one per granted head read (run's third argument)
+async function desk(run, behind = 0) {
   const w = world(3, { calls: 40, page: 40, talk: { pre: 4, len: 120, every: 20, tail: 40 } })
-  const M = w.laneRidsAt().get(w.full().lanes.find((l) => l.kind === 'main').lane).length
+  const from = w.marks.length - 1 - behind
+  const M = w.laneRidsAt(w.marks[from]).get(w.full().lanes.find((l) => l.kind === 'main').lane).length
   const b = await withBoard({ bytes: 1e5, width: 1440, height: 900, chromium: gate.chromium })
   try {
-    await serveWorld(b.page, w)
+    const growth = await serveWorld(b.page, w, behind ? { from, grow: 1, paced: true } : {})
     await open(b.page, M)
-    await run(b.page, () => b.page.reload().then(() => open(b.page, M)))
+    await run(b.page, () => b.page.reload().then(() => open(b.page, M)), growth)
   } finally { await b.stop() }
 }
 
@@ -134,6 +137,30 @@ test('1.2 #9: a drag stores only its own key and survives a reload; a double-cli
       near(z[k], k === 'side' ? SIDE_PX : fitted(z), `${k}: a double-click returns to the default`)
     }
   })
+})
+
+test('1.2 #9: a stored out-of-range size reads back clamped; a dragged size survives a poll', { skip: nextOnly }, async () => {
+  await desk(async (page, reload, growth) => {
+    // the panels' own limits (DeskFrame.tsx): the sidebar 220-720 px beside a main area of at least 480, the scope at most 75% of the column
+    await page.evaluate((k) => { localStorage.setItem(k.side, '{"desk-main":1,"desk-side":99}'); localStorage.setItem(k.scope, '{"desk-scope":99,"desk-read":1}') }, NEXT)
+    await reload()
+    let z = await page.evaluate(sizes)
+    const main = await page.evaluate(() => document.querySelector('#desk-main').getBoundingClientRect().width)
+    assert.ok(z.side >= 218 && z.side <= 722 && main >= 478, `a stored 99% sidebar reads back clamped: ${z.side} px beside ${main} px`)
+    assert.ok(z.scope <= 0.75 * z.col + 2, `a stored 99% scope reads back clamped: ${z.scope} of ${z.col}`)
+    await page.evaluate((k) => { localStorage.removeItem(k.side); localStorage.removeItem(k.scope) }, NEXT)
+    await reload()
+    for (const [k, dx, dy] of [['side', -60, 0], ['scope', 0, -40]]) await drag(page, EDGE[k], dx, dy)
+    const dragged = await page.evaluate(sizes)
+    const left = growth.left()
+    growth.more(1) // the next head read takes one member more: a poll answer that differs
+    for (const t = Date.now(); growth.left() === left; await page.waitForTimeout(50)) assert.ok(Date.now() - t < 20000, 'no poll took the granted member')
+    await page.waitForTimeout(300) // the answer is drawn
+    z = await page.evaluate(sizes)
+    near(z.side, dragged.side, 'the sidebar after a poll')
+    near(z.scope, dragged.scope, 'the scope after a poll')
+    assert.deepEqual(z.stored, dragged.stored, 'a poll writes no key')
+  }, 2)
 })
 
 test('1.2 #9: a stored value that is no table of numbers reads as the default; the collapsed sidebar survives a reload', { skip: nextOnly }, async () => {
