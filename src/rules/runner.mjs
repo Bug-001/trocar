@@ -68,6 +68,8 @@ fixed(process, '_fatalException', end)
 // Windows hands every child PATH, USERNAME and the like whatever env it was given. SYSTEMROOT stays: sockets do not load without it.
 for (const name of Object.keys(process.env)) if (!KEPT_ENV.includes(name.toUpperCase())) delete process.env[name]
 os.default.setPriority = function refused() { throw new Error('a rule process has no say over other processes') }
+// A file watch or a c-ares socket is a handle in none of the counts below, so a script could hold them up to the fd limit. dns is off the list; these go.
+for (const on of [fs.default, fs.default.promises]) for (const name of ['watch', 'watchFile']) if (on[name]) on[name] = function refused() { throw new Error('a rule process watches no files') }
 modules.syncBuiltinESMExports()
 // The flag freezes what the language brings. Buffer is Node's, and this code reports through it.
 Object.freeze(Buffer.prototype)

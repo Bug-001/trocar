@@ -49,6 +49,13 @@ const ROWS = {
   'the inspector': "(await import('node:inspector')).default.open(0)",
   'a linked binding': "process._linkedBinding('spawn_sync')",
   'process.execve': "if (!process.execve) throw new Error('this Node has none'); process.execve(process.execPath, [process.execPath, '-e', '0'])",
+  // Not ways out but handles in none of the counts (5.1 §隔离): a script could hold them up to the fd limit.
+  'fs.watch': "(await import('node:fs')).default.watch(import.meta.dirname).close()",
+  'a named import of watch': "const { watch } = await import('node:fs'); watch(import.meta.dirname).close()",
+  'fs.watchFile': "(await import('node:fs')).watchFile(import.meta.filename, () => {})",
+  'watch from fs/promises': "(await import('node:fs/promises')).watch(import.meta.dirname)",
+  'node:dns': "await import('node:dns')",
+  'node:dns/promises': "await import('node:dns/promises')",
 };
 
 const unit = { on: 'request', harness: 'codex', pid: 42, method: 'POST', host: 'api.example.com', path: '/v1/messages', class: 'llm', status: null, event_index: null, sse: false,
@@ -86,7 +93,7 @@ test('12e: a script still runs, and the row above it proves nothing by accident'
 // A walk, not a list of paths: a Node that hangs one of these where a script can see it is caught here.
 test('12e: nothing a script can reach is a way out', async () => {
   const answer = await outcome(`
-    const BARRED = /^(Worker|ChildProcess|spawn|spawnSync|fork|execFile|execFileSync|execSync|kill|_kill|getBuiltinModule|createRequire|registerHooks|setFlagsFromString|createTracing|DatabaseSync|runInThisContext|_debugProcess|_debugEnd)$/
+    const BARRED = /^(Worker|ChildProcess|spawn|spawnSync|fork|execFile|execFileSync|execSync|kill|_kill|getBuiltinModule|createRequire|registerHooks|setFlagsFromString|createTracing|DatabaseSync|runInThisContext|_debugProcess|_debugEnd|watch|watchFile)$/
     const queue = [globalThis, process], seen = new Set(), found = []
     for (const id of ${JSON.stringify(SCRIPT_BUILTINS)}) queue.push((await import('node:' + id)).default ?? {})
     const roots = new Set(queue) // a getter called on anything else can take native code down with a wrong receiver

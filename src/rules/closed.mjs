@@ -23,7 +23,7 @@ export const SKIP_WHY = list(
   'gate-error', 'no-runner', 'handles')
 /** What a rule process lets anything import of Node's own (5.1 §隔离). A list of what may stay, because Node keeps adding ways past its own permission model, and a list of what to
  *  take away has to know them all. */
-export const SCRIPT_BUILTINS = list('assert', 'assert/strict', 'buffer', 'crypto', 'dns', 'dns/promises', 'events', 'fs', 'fs/promises', 'http', 'http2', 'https', 'net', 'os', 'path',
+export const SCRIPT_BUILTINS = list('assert', 'assert/strict', 'buffer', 'crypto', 'events', 'fs', 'fs/promises', 'http', 'http2', 'https', 'net', 'os', 'path',
   'path/posix', 'path/win32', 'perf_hooks', 'process', 'querystring', 'readline', 'readline/promises', 'stream', 'stream/consumers', 'stream/promises', 'stream/web', 'string_decoder',
   'timers', 'timers/promises', 'tls', 'url', 'util', 'util/types', 'zlib')
 export const SCRIPT_FORMATS = list('module', 'builtin', 'json')
