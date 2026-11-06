@@ -51,13 +51,12 @@ const BARE = /\u001b\[\d+m/g
  *  would paste as `sudo` alone and then a Node with no script (§1.1⑥: a command keeps its own line unbroken). */
 export const commandLine = (command) => ({ command })
 /** A line `fit` prints as it is, at column 0, never folded (HOME as `~` still): on's route line, which 附录 A.1 shortens instead of folding. */
-export const wholeLine = (whole) => ({ whole })
+const wholeLine = (whole) => ({ whole })
 
-export { tildeText } from './text.mjs'
 
 /** §1.1⑤: a command to copy shows HOME as `~` where sh, zsh and bash expand it — an unquoted word that starts with a POSIX HOME, then `/` or the word's
  *  end. A path after a `sudo` word keeps the absolute form selfCommand writes (§3.2), and a Windows HOME is never a `~`. */
-export const tildeCommand = (s, home) => (home && home.startsWith('/')
+const tildeCommand = (s, home) => (home && home.startsWith('/')
   ? s.replace(new RegExp(`(^|\\s)${escRe(home)}(?=/|\\s|$)`, 'g'), (m, pre, at) => (/(^|\s)sudo\s/.test(s.slice(0, at + pre.length)) ? m : `${pre}~`))
   : s)
 
@@ -150,7 +149,7 @@ const lingerText = ({ linger, linger_reason: why = null, user = null }) => (ling
 
 /** A label that lists paths (§1.1⑥): the label on its own line, each path on a line of its own two deeper — two paths on one line fold the second to
  *  column 0. `more`: a last item after the paths (how many are not shown). */
-export const pathList = (label, list, home, more = null) => [label, ...list.map((x) => `  ${tilde(typeof x === 'string' ? x : x.path, home)}`), ...(more ? [`  ${more}`] : [])]
+const pathList = (label, list, home, more = null) => [label, ...list.map((x) => `  ${tilde(typeof x === 'string' ? x : x.path, home)}`), ...(more ? [`  ${more}`] : [])]
 
 /** The file lines of a receipt that writes (`on`, Linux `install`): each file changed — path, what, where its backup is — then what trocar made
  *  itself. `past`: false for a dry run (what it would do). */
@@ -211,7 +210,7 @@ export function formatOnReceipt(r, { tense = 'past', home = null, platform = 'li
  *  'future' (`--dry-run`, or the plan printed when a yes is missing). */
 /** 1.6 §3.6: the uninstall receipt's first line, true on each platform — the root is in the user's trust store on macOS and Windows only; on Linux it
  *  reached the agents through the certificate settings install gave them (4.6), so that is what is said gone. The one place this line is decided. */
-export function uninstallHeadline({ platform = process.platform, past = true } = {}) {
+function uninstallHeadline({ platform = process.platform, past = true } = {}) {
   const linux = platform === 'linux'
   if (!past) return `trocar uninstall will take out everything install put on this machine, ${linux ? 'the certificate settings it gave your agents included' : 'and remove the root certificate from your trust settings'}.`
   return `Uninstalled. trocar is no longer on your agents' path, and ${linux ? 'the certificate settings it gave them are gone' : 'its root certificate is gone from your trust settings'}.`

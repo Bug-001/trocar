@@ -19,7 +19,7 @@ const VERSION = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]+)?$/
 const WIN_BUSY = new Set(['EPERM', 'EBUSY', 'EACCES'])
 
 /** The Node directory name (`<node version>-<target>`) the version at `dir` pins for this platform, or null. */
-export function nodeIdOf(dir, { platform = process.platform, arch = process.arch, fs = nodeFs } = {}) {
+function nodeIdOf(dir, { platform = process.platform, arch = process.arch, fs = nodeFs } = {}) {
   const target = `${platform === 'win32' ? 'win' : platform}-${arch}`
   let text
   try { text = fs.readFileSync(path.join(dir, 'install', 'node.sha256'), 'utf8') } catch { return null }
@@ -34,7 +34,7 @@ export function nodeIdOf(dir, { platform = process.platform, arch = process.arch
 export const nodeExe = (app, id, platform = process.platform) => (platform === 'win32' ? path.join(app, 'node', id, 'node.exe') : path.join(app, 'node', id, 'bin', 'node'))
 
 /** The launcher's bytes. sh: the app path is baked in (quoted for sh). cmd: ASCII only, found from its own folder, so a profile path in any script works. */
-export function launcherText(app, platform = process.platform) {
+function launcherText(app, platform = process.platform) {
   if (platform === 'win32') {
     return ['@echo off', 'setlocal', 'set "D=%~dp0..\\app"', 'set "V=" & set "N="',
       'for /f "usebackq tokens=1,2" %%a in ("%D%\\current") do set "V=%%a" & set "N=%%b"',
@@ -61,7 +61,7 @@ function renameOver(from, to, fs, platform) {
 }
 
 /** Switches to the version at `dir` and prunes (see the header). The caller holds the op lock. */
-export function placeVersion({ dir, home = nodeOs.homedir(), platform = process.platform, arch = process.arch, fs = nodeFs }) {
+function placeVersion({ dir, home = nodeOs.homedir(), platform = process.platform, arch = process.arch, fs = nodeFs }) {
   const app = appDir(home)
   const abs = path.resolve(dir)
   const version = path.basename(abs)
