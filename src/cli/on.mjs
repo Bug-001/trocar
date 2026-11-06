@@ -11,7 +11,7 @@ import path from 'node:path'
 import { resolveHarnesses } from '../off/harness-names.mjs'
 import { EXIT, newReceipt } from './schema.mjs'
 import { isInteractive, confirm as ask } from '../off/io.mjs'
-import { fit, formatOnReceipt, formatPlan, planItems } from './receipt.mjs'
+import { fit, formatOnReceipt, formatPlan, planItems, onlyRefused } from './receipt.mjs'
 import { colors, noColor } from './text.mjs'
 import { renderCompact, BRANCH_SEP } from '../netenv/topology-text.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
@@ -119,7 +119,6 @@ export async function runOn({ io, env = process.env, home = os.homedir(), platfo
       request: deps.request, now: deps.now, getuid: deps.getuid, helperState, linger: deps.linger || parts.linger || null, lingerRead: deps.lingerRead || (deps.linger ? null : parts.lingerRead || null), sleep: deps.sleep, user: deps.user, fs: deps.fs,
     })
     // 1.6 §3.3: a run whose only shortfall is a harness refused for setup turned the others on: their proxies are recorded as on any done run
-    const onlyRefused = (x) => !!x.error && x.error.code === 'setup-needed' && !(x.problems || []).length
     if (adoption && adoption.error) receipt.notes.push(adoption.error)
     else if (adoption && receipt.harnesses && receipt.harnesses.length && (receipt.ok !== false || onlyRefused(receipt)) && !receipt.dry_run && !receipt.planned && !receipt.declined) {
       const rec = await recordAdoption({ adoption, routing, targets: receipt.harnesses, home, env, now: deps.now ? () => deps.now().getTime() : Date.now, fs: deps.fs })

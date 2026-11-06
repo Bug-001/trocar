@@ -161,7 +161,7 @@ const stop = (message) => Object.assign(new Error(message), { stopsRun: true })
  *  `_` is what the writing needs (the manifest as read, the draft, the roots). `ids`: the harness code ids named, or null for every one found.
  *  The combined bundles' roots are `roots` when given (a test's, an embedder's), else the arch's (tls/roots.mjs bundleRoots: `missing` is said per
  *  bundle by planTrust; a read that fails throws here, before anything is written). */
-export async function planOn({ home = os.homedir(), env = process.env, ids = null, osName, harnesses, scan = async () => [], match = () => ({ agent: null }), arch = null, roots = null, unit = null, fs = nodeFs, now = () => new Date() } = {}) {
+export async function planOn({ home = os.homedir(), env = process.env, ids = null, osName, harnesses, scan = async () => [], match = () => ({ agent: null }), arch = null, roots = null, unit = null, fs = nodeFs, now = () => new Date(), judge = null } = {}) {
   const dir = collectorHome(path.join(home, '.trocar'))
   let prior
   try { prior = readManifest(dir, fs) } catch (e) { // not written over: it is the only list of what trocar changed; `off` has the way back by trocar's own marks (R3)
@@ -176,7 +176,10 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
   }
   if (prior && prior.pending_bundles) throw new Error(`an earlier uninstall kept combined bundles that running agents still use (${prior.files.filter((f) => f.role === 'bundle' || f.role === 'trust-file').map((f) => f.path).join(', ')}); run "trocar uninstall" again once they exit`)
   if (prior && prior.uninstall_left) throw new Error(`an earlier uninstall could not undo ${prior.uninstall_left.length} item(s) (${prior.uninstall_left.map((l) => l.path).join(', ')}); fix them, run "trocar uninstall" again, then "trocar on"`)
-  const descs = ids ? harnesses.filter((d) => ids.includes(d.name)) : harnesses
+  // `judge(descs, prior)` → the names held back before anything of theirs is read for writing (on's 1.6 §3.3 ⑪): asked only of a complete install
+  const asked = ids ? harnesses.filter((d) => ids.includes(d.name)) : harnesses
+  const held = new Set(judge && installComplete(prior) ? judge(asked, prior) : [])
+  const descs = asked.filter((d) => !held.has(d.name))
   const ca = caPaths(path.join(dir, 'ca'))
   const facts = await scan()
   const envMap = new Map(Object.entries(env).filter(([, v]) => typeof v === 'string'))
@@ -458,26 +461,28 @@ export async function turnOn(opts = {}) {
     return v === true || v === false ? { linger: v } : { linger: 'unknown', linger_reason: linger ? 'the linger state could not be read (/var/lib/systemd/linger)' : 'nothing reads it here' }
   } catch (e) { return { linger: 'unknown', linger_reason: String((e && e.message) || e) } } }
   return recorded(dir, 'install', async (run) => {
-    const planArgs = { home, env, ids, osName, harnesses, scan, match, arch, roots, unit: null, fs, now }
-    let plan = await planOn(planArgs) // D61: the login entry is `install`'s and `on` never writes it, so the writing side is handed no unit at all
+    // 1.6 §3.3 前提 ⑪ (D65④, 4.6「这个 harness 装好了没有」): a harness whose setup is needed is refused alone, judged before planOn reads its files, so
+    // not one byte is planned or written for it (no desired on, not in POST /on) and nothing of its own stops the others; the judgement reads the manifest
+    // planOn read, as `status` does (V91). `unknown` goes on with a note. macOS / Windows judge it in turnOnModel.
+    const refused = [], setupNotes = []
+    const judge = isModelOs(osName) ? null : (descs, prior) => descs.filter((d) => {
+      const s = driverSetup(d, { os: osName, home, env, manifest: prior, fs })
+      if (s.state === 'unknown') setupNotes.push(`whether ${d.name} is set up could not be told (${s.reason})`)
+      if (s.state !== 'needed') return false
+      refused.push({ harness: d.name, reason: CODE.setupNeeded, why: [...new Set(s.missing.map((x) => SETUP_WHY[x.what]))].join('; '), command: 'trocar install' })
+      return true
+    }).map((d) => d.name)
+    const plan = await planOn({ home, env, ids, osName, harnesses, scan, match, arch, roots, unit: null, fs, now, judge }) // D61: the login entry is `install`'s and `on` never writes it, so the writing side is handed no unit at all
     // D55⑥ / override #15: `on` never writes a certificate, so it never installs silently — no install record, no on (macOS / Windows: turnOnModel)
     // 附录 C.1: the refusal's code lives in `error`, the one place a client looks (never a top-level `code`)
     if (!isModelOs(osName) && !installComplete(plan._.prior)) { const message = 'certificates are not installed. Run: trocar install'; return { receipt: unwritten({ ...fresh(), ok: false, error: { code: CODE.certNotInstalled, message }, notes: [message] }), manifest: plan._.prior, plan, exit: 1 } }
-    // 1.6 §3.3 前提 ⑪ (D65④, 4.6「这个 harness 装好了没有」): a target whose setup is needed is refused alone — planned again without it, so not one byte
-    // is written for it (no desired on, not in POST /on); the judgement reads the manifest planOn read, as `status` does (V91). `unknown` goes on with a note.
-    const refused = [], setupNotes = []
-    for (const h of isModelOs(osName) ? [] : plan.targets) { // macOS / Windows judge it in turnOnModel
-      const s = driverSetup(plan._.descs.find((d) => d.name === h), { os: osName, home, env, manifest: plan._.prior, fs })
-      if (s.state === 'needed') refused.push({ harness: h, reason: CODE.setupNeeded, why: [...new Set(s.missing.map((x) => SETUP_WHY[x.what]))].join('; '), command: 'trocar install' })
-      else if (s.state === 'unknown') setupNotes.push(`whether ${h} is set up could not be told (${s.reason})`)
-    }
     const setupBlk = setupBlocked({ refused })
-    if (refused.length) {
-      const rest = plan.targets.filter((h) => !refused.some((x) => x.harness === h))
-      if (!rest.length) return { receipt: unwritten({ ...fresh(), ok: !!dryRun, harnesses: [], refused, blocked: setupBlk, notes: setupNotes, ...(dryRun ? { dry_run: true } : { error: setupError(setupBlk) }) }), manifest: plan._.prior, plan, exit: dryRun ? 0 : 1 }
-      const first = plan
-      plan = await planOn({ ...planArgs, ids: rest })
-      plan.skipped = [...first.skipped.filter((x) => first._.descs.some((d) => d.name === x.what) && !first.targets.includes(x.what)), ...plan.skipped] // the harnesses with nothing to install stay said
+    if (refused.length && !plan.targets.length) { // nothing left to turn on: a real run still leaves its result line (1.6 §1); a dry run changes nothing
+      const r0 = unwritten({ ...fresh(), ok: !!dryRun, harnesses: [], refused, blocked: setupBlk, skipped: plan.skipped, notes: setupNotes, ...(dryRun ? { dry_run: true } : { error: setupError(setupBlk) }) })
+      if (dryRun) return { receipt: r0, manifest: plan._.prior, plan, exit: 0 }
+      const put = noteRun({ dir, run, final: { records: [] }, written: { entries: [] }, notes: r0.notes, fs, log: opts.log })
+      put({ event: EVENT.installNote, where: 'install', kind: 'result', outcome: 'failed', harnesses: [], refused: refused.map((x) => x.harness), reason: `on did not finish: ${r0.error.message}` })
+      return { receipt: { ...r0, log: path.join(dir, 'flows') }, manifest: plan._.prior, plan, exit: 1 }
     }
     // the copy of the undo side that needs no source tree (R3) is one more file trocar writes: listed in the plan and the dry run when it is missing or not what src/off generates now
     let due
