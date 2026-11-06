@@ -20,6 +20,7 @@ import { serveSource } from '../paths.mjs'
 import { formatInstallNotes } from './status-text.mjs'
 import { trocarHome, backupDir, collectorDir } from '../off/paths.mjs'
 import { readManifest, manifestPath } from '../off/manifest.mjs'
+import { rootStore as userRootStore, strayRoots } from '../off/root-store.mjs'
 import { readIngressConfig } from '../collector/core/ingress-config.mjs'
 import { memoProcQuestions, daemonProcReader } from '../off/proc.mjs'
 import { printJson } from './json.mjs'
@@ -102,6 +103,14 @@ function undeterminedOf(res, readErrors, { files = 0, records = 0, root = null }
   for (const e of readErrors) out.push({ what: 'a captured file', reason: e })
   return out
 }
+/** 4.11 §3 ㉔ → { roots } (the trocar roots the store holds that the install record does not list) | { why } (not known: the store or the record could not be read). */
+async function strayOf({ platform, home, env, fs, deps }) {
+  let m
+  try { m = readManifest(collectorDir(home), fs) } catch (e) { rethrowSandbox(e); return { why: `the install record cannot be read (${errText(e)})` } }
+  if (m && m.unsupported) return { why: 'the install record is of a version this trocar does not read' }
+  const r = await strayRoots(deps.rootStore || (deps.backends && deps.backends.rootStore) || userRootStore({ platform, run: deps.exec || null, home, env, fs }), m)
+  return r.error ? { why: `the root store could not be listed (${r.error})` } : r
+}
 /** Only these keep `doctor` from judging (exit 3). No captured data yet does not. */
 const realUndetermined = (u) => u.filter((x) => x.reason !== 'no captured data yet')
 
@@ -117,7 +126,9 @@ async function doctorDocOf({ names, home, env, platform, deps }) {
   // the capture half of this command is sixteen modules `status` never touches (D62): start loading it, then ask the OS — it compiles while the daemon answers
   const capture = deps.capture || import('./doctor-deps.mjs')
   // the capture files and what `status` reads are independent: the disk walk and the OS questions run together (D62 task E)
-  const [c, f] = await Promise.all([collect({ home, env, sourceFlags: [], deps, capture }), statusFacts({ names, home, env, platform, deps })])
+  // 4.11 §3 ㉔: a trocar root no install record lists (macOS / Windows; Linux keeps its root in no trust store). Asked beside the rest: it is an OS tool
+  const stray = platform === 'darwin' || platform === 'win32' ? strayOf({ platform, home, env, fs, deps }) : null
+  const [c, f, s] = await Promise.all([collect({ home, env, sourceFlags: [], deps, capture }), statusFacts({ names, home, env, platform, deps }), stray])
   const { checkDeps, runSelfTest, orphanBackups, checkStandalone } = await capture
   const depList = checkDeps({ platform, has: deps.has || ((bin) => onPath(bin, { env, platform, fs })) })
   const res = runSelfTest({ records: c.records, srcMeta: c.srcMeta, deps: depList, files: [...c.files, ...c.extra], readErrors: c.readErrors, platform })
@@ -129,6 +140,7 @@ async function doctorDocOf({ names, home, env, platform, deps }) {
   else findingsError = f.topology_error || 'the network facts could not be read on this platform'
   // what `doctor` looks at besides the network: the files only you may read, the copy of the undo program, the backups no install record names
   const extra = []
+  if (s && s.roots && s.roots.length) extra.push({ code: 'stray-root', class: 'problem', what: `Your trust store holds a trocar root no install record lists: ${s.roots.map((x) => (x.sha1 ? `thumbprint ${x.sha1}` : `SHA-256 ${x.fp256}`)).join(', ')}.`, why: 'trocar trusts one root per user; trocar uninstall removes every trocar root.', commands: [{ run: 'trocar uninstall', shell: 'sh' }, { run: 'trocar install', shell: 'sh' }], verify: 'trocar doctor' })
   for (const bad of res.q4b.bad) extra.push({ code: 'file-readable-by-others', class: 'problem', what: `${bad.file} (mode ${bad.mode}) can be read by someone else, and captured files hold live credentials.`, why: 'Only you may read what trocar captured.', commands: [{ run: `chmod 600 ${shq(bad.file)}`, shell: 'sh' }], verify: 'trocar doctor' })
   // the copy of the undo program is `install`'s; a machine where nothing was installed has nothing to check (§3.7)
   const installed = !!(status.install && status.install.state)
@@ -153,6 +165,7 @@ async function doctorDocOf({ names, home, env, platform, deps }) {
   const all = findings === null ? null : [...extra.filter((x) => x.class === 'problem'), ...findings, ...extra.filter((x) => x.class !== 'problem')]
   const summary = all === null ? null : { problem: all.filter((x) => x.class === 'problem').length, expected: all.filter((x) => x.class === 'expected').length, note: all.filter((x) => x.class === 'note').length }
   const undetermined = undeterminedOf(res, c.readErrors, { files: c.files.length, records: c.records.length, root: (status.cert || {}).root || null })
+  if (s && s.why) undetermined.push({ what: 'whether your trust store holds a trocar root no install record lists', reason: s.why })
   const exit = summary && summary.problem ? EXIT.incomplete : realUndetermined(undetermined).length ? EXIT.unknown : EXIT.ok
   let notes = []
   // the capture health `status` already read of the same files (gatherStatus): one command, one read (D62). A read that failed is `null` there and

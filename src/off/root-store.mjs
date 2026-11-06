@@ -29,6 +29,15 @@ export const ROOT_SUBJECT = 'trocar local root'
 /** Are two root ids ({ fp256?, sha1? }, a manifest's `system-root` as { fp256, sha1: thumbprint }) the same certificate? */
 export const sameRoot = (a, b) => !!((a.fp256 && b.fp256 && a.fp256 === b.fp256) || (a.sha1 && b.sha1 && a.sha1.toLowerCase() === b.sha1.toLowerCase()))
 
+/** 4.11 §3 ㉔: the trocar roots `store` holds that manifest `m` does not list as a `system-root` → { roots } | { error } — a listing that fails or
+ *  throws is an error, never none (D38). install refuses on it, uninstall removes them, doctor reports them. */
+export async function strayRoots(store, m) {
+  const listed = ((m && !m.unsupported && m.entries) || []).filter((e) => e && e.kind === 'system-root').map((e) => ({ fp256: e.fp256, sha1: e.thumbprint }))
+  let r
+  try { r = await store.list() } catch (e) { r = { error: String((e && e.message) || e) } }
+  return !r || r.error || !Array.isArray(r.roots) ? { error: (r && r.error) || 'no answer' } : { roots: r.roots.filter((x) => !listed.some((e) => sameRoot(x, e))) }
+}
+
 /** { fp256, sha1 } of a certificate (DER or PEM). */
 export function rootIdOf(cert) {
   const x = new crypto.X509Certificate(cert)
