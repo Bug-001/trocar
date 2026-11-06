@@ -99,11 +99,10 @@ test('journal owned files: a plugin in an agent\'s directory is listed with the 
   try {
     const plug = path.join(b.root, '.config', 'opencode', 'plugins', 'trocar-ca.js')
     const m = newManifest()
-    writeOwnedFile({ phase: 'install', dir: b.dir, manifest: m, harness: 'o', role: 'plugin', file: plug, data: '// trocar collector\n', mode: 0o644, exclusive: true })
+    writeOwnedFile({ phase: 'install', dir: b.dir, manifest: m, harness: 'o', role: 'plugin', file: plug, data: '// trocar collector\n', mode: 0o644 })
     const item = readManifest(b.dir).files[0]
     assert.deepEqual([item.role, item.mode, item.created_dirs], ['plugin', 0o644, [path.join(b.root, '.config'), path.join(b.root, '.config', 'opencode'), path.dirname(plug)]])
     assert.equal(fs.statSync(plug).mode & 0o777, 0o644)
-    assert.throws(() => writeOwnedFile({ phase: 'install', dir: b.dir, manifest: m, role: 'plugin', file: plug, data: 'x', exclusive: true }), /already exists; trocar will not write over it/)
     fs.writeFileSync(path.join(path.dirname(path.dirname(plug)), 'opencode.json'), '{}') // the user's own config appears
     fs.appendFileSync(plug, '// edited\n')
     assert.deepEqual(removeOwnedFile(item), { path: plug, result: 'removed', changed: true })
@@ -144,3 +143,31 @@ test('journal json: a member that is not there is never added, a config key neve
   assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { network: { HttpProxy: 'x', httpProxy: 'http://127.0.0.1:1' }, env: { https_proxy: 'y' } })
   assert.equal(m.entries.length, 1)
 })
+
+// 4.11 P4 「trocar 拥有的文件不写在别人的上面」: a path the manifest does not list, with a file already there — written over only when the file is
+// trocar's (inside its tree, or carrying its sentinel); a file that is not trocar's, or that cannot be read, is refused, byte for byte as it was, unrecorded
+for (const where of ['outside', 'inside']) {
+  for (const [at, seed] of [['none', null], ['ours', '// trocar collector: trust plugin, an earlier one\n'], ['foreign', '// the user\'s own plugin\n'], ['unreadable', 'x\n']]) {
+    test(`writeOwnedFile · ${where} trocar's tree · ${at} at the path`, () => {
+      const b = box()
+      try {
+        const file = where === 'inside' ? path.join(b.dir, 'ca', 'combined-x.pem') : path.join(b.root, '.agent', 'plugins', 'trocar-ca.js')
+        if (seed != null) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, seed) }
+        const sealed = { ...fs, readFileSync: (f, ...a) => { if (at === 'unreadable' && f === file) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }); return fs.readFileSync(f, ...a) } }
+        const m = newManifest()
+        const data = '// trocar collector: new\n'
+        const refused = where === 'outside' && (at === 'foreign' || at === 'unreadable')
+        const write = () => writeOwnedFile({ phase: 'install', dir: b.dir, manifest: m, harness: 'h', role: 'plugin', file, data, mode: 0o644, fs: sealed })
+        if (refused) {
+          assert.throws(write, (e) => e.code === 'not-users-file' && e.path === file)
+          assert.equal(fs.readFileSync(file, 'utf8'), seed, 'left byte for byte')
+          assert.deepEqual(m.files.filter((f) => f.path === file), [], 'no record of it')
+        } else {
+          write()
+          assert.equal(fs.readFileSync(file, 'utf8'), data)
+          assert.deepEqual(readManifest(b.dir).files.map((f) => f.path), [file])
+        }
+      } finally { b.done() }
+    })
+  }
+}

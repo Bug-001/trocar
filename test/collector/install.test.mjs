@@ -1163,3 +1163,35 @@ for (const [name, reply, turned] of [['POST /on throws', null, false], ['the dae
     if (turned) assert.ok(r.plan.targets.length > 0)
   })
 }
+
+// 4.11 P4 「trocar 拥有的文件不写在别人的上面」 (Linux): a plugin path the manifest does not list, with a file there that is not trocar's, or cannot be
+// read, is left byte for byte and unrecorded; the receipt's `skipped` names it, that harness gets nothing more, the others are installed. A file
+// inside trocar's own tree (a combined bundle) is trocar's by its place: written and recorded.
+for (const [at, seed] of [['none', null], ['ours', '// trocar collector: an earlier plugin\n'], ['foreign', '// the user\'s own plugin\n'], ['unreadable', 'x\n']]) {
+  test(`install (Linux) · 4.11 P4: an owned plugin, ${at} at its path; a combined bundle with someone else's text at its path`, async () => {
+    const b = box()
+    try {
+      const file = path.join(b.home, '.plug', 'plugins', 'trocar-ca.js')
+      const plug = { name: 'plug', runtime: 'node', processes: { names: [{ name: 'plug' }] }, hosts: [], trust: { chain: [{ var: 'X', semantic: 'append' }] },
+        inject: () => ({ owned: [{ path: file, role: 'plugin', data: '// trocar collector: trust plugin\n', mode: 0o644 }] }) }
+      const bundle = path.join(b.dir, 'ca', 'combined-picky.pem')
+      const picky = { ...repHarness(b.dir), name: 'picky', processes: { names: [{ name: 'picky' }] },
+        inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, '.picky', '.env'), vars: { SSL_CERT_FILE: bundle }, semantic: 'replace' }], files: [{ path: bundle, bundle: true, certsFrom: [] }] }) }
+      if (seed != null) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, seed) }
+      fs.mkdirSync(path.dirname(bundle), { recursive: true }); fs.writeFileSync(bundle, 'not a bundle\n')
+      const sealed = { ...fs, readFileSync: (f, ...a) => { if (at === 'unreadable' && f === file) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }); return fs.readFileSync(f, ...a) } }
+      const r = await installCollector(base(b, { harnesses: [plug, picky], roots: { node: [], osText: '' }, fs: sealed }))
+      const m = readManifest(b.dir)
+      assert.ok(m.files.some((f) => f.path === bundle) && fs.readFileSync(bundle, 'utf8').includes('BEGIN CERTIFICATE'), 'the bundle inside trocar\'s tree is written and recorded')
+      if (at === 'foreign' || at === 'unreadable') {
+        assert.equal(fs.readFileSync(file, 'utf8'), seed, 'left byte for byte')
+        assert.deepEqual(m.files.filter((f) => f.path === file), [], 'no record of it')
+        assert.ok(r.skipped.some((s) => s.what === file && typeof s.reason === 'string'), JSON.stringify(r.skipped))
+        assert.ok(readEvents(b.dir).some((e) => e.event === 'failure' && e.code === 'not-users-file' && e.path === file), 'on record (D38)')
+      } else {
+        assert.equal(fs.readFileSync(file, 'utf8'), '// trocar collector: trust plugin\n')
+        assert.equal(m.files.filter((f) => f.path === file).length, 1)
+      }
+    } finally { b.done() }
+  })
+}

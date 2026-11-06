@@ -104,7 +104,7 @@ function writeDotenv(ctx, door) {
 
 function writeOwned(ctx, file, role, data) {
   const j = judgeOwned({ manifest: ctx.manifest, file, planned: sha256(Buffer.from(data)), fs: ctx.fs })
-  if (j.action !== 'skip-intact') writeOwnedFile({ ...base(ctx), role, file, data, exclusive: j.action === 'write' })
+  if (j.action !== 'skip-intact') writeOwnedFile({ ...base(ctx), role, file, data })
   return { ok: true, records: [ctx.manifest.files.find((f) => f.path === file)] }
 }
 

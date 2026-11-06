@@ -353,3 +353,27 @@ test('1.6 §3.6: an uninstall that deletes a file trocar made for its key or lin
   const rows = formatUninstallReceipt(receipt, { home: w.home, platform: 'darwin' }).split('\n')
   for (const p of yours) assert.ok(rows.some((l) => l.trim().startsWith(`${tilde(p, w.home)}: `)), `${p}: what was taken out is said: ${rows.join('\n')}`)
 })
+
+// 4.11 P4 「trocar 拥有的文件不写在别人的上面」: a file already at a plugin's path that the manifest does not list is written over only when it carries
+// trocar's sentinel; a file that is not trocar's, or cannot be read, is left byte for byte, unrecorded, its carrier skipped with the path and why (D38)
+for (const [at, seed] of [['none', null], ['ours', '// trocar collector: an earlier extension\n'], ['foreign', '// the user\'s own extension\n'], ['unreadable', 'x\n']]) {
+  test(`P4 · a loaderless plugin, ${at} at its path`, async () => {
+    const [eighth] = await loadHarnesses(new URL('./harness/fixtures/', import.meta.url))
+    const w = await modelWorld()
+    const file = path.join(w.home, '.eighth', 'extensions', 'trocar-pi-extension.js')
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    if (seed != null) fs.writeFileSync(file, seed)
+    const sealed = { ...fs, readFileSync: (f, ...a) => { if (at === 'unreadable' && f === file) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }); return fs.readFileSync(f, ...a) } }
+    const r = await w.install({ harnesses: [eighth], ...(at === 'unreadable' ? { fs: sealed } : {}) })
+    const rec = readManifest(w.dir).files.filter((f) => f.path === file)
+    const row = r.carriers.find((c) => c.harness === 'eighth' && c.carrier === 'plugin')
+    if (at === 'foreign' || at === 'unreadable') {
+      assert.equal(fs.readFileSync(file, 'utf8'), seed, 'left byte for byte')
+      assert.deepEqual([rec, row.state, row.code, row.why.includes(file)], [[], 'skipped', 'not-users-file', true])
+      assert.equal(r.exit, 1)
+    } else {
+      assert.ok(fs.readFileSync(file, 'utf8').includes('trocar collector'))
+      assert.deepEqual([rec.length, row.state], [1, 'placed'])
+    }
+  })
+}
