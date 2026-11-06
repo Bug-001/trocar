@@ -320,6 +320,21 @@ test('R12: an uninstall that cannot get the op lock has written desired off firs
   assert.equal(flowEvents(s.dir).at(-1).outcome, 'failed')
 })
 
+// 1.6 §3.6: a refusal changes nothing — the unanswering daemon is found before any write, the desired-off R12 has a waiting `off` write included:
+// the op lock is busy and its holder goes while uninstall waits; state.json and every other file stay as they were
+test('§3.6: an uninstall that must wait for the op lock and finds an unanswering daemon refuses before it writes desired off', async () => {
+  const s = await installedHome({ names: ['claude-code'] }); writeDaemonLock(s)
+  fs.writeFileSync(path.join(s.dir, 'op.lock'), JSON.stringify({ pid: 5555, start_time: '9', boot_id: 'boot-1' }))
+  const t = procTable(DAEMON_ROWS); let holderChecks = 0
+  const before = snapshot(s.home)
+  const alive = (pid) => (pid === 5555 ? holderChecks++ < 1 : t.alive(pid))
+  const identity = (pid) => (pid === 5555 ? { start_time: '9', boot_id: 'boot-1' } : t.identity(pid))
+  const r = await s.uninstall({ yes: true, deps: { lockWaitMs: 1000, request: hangsOnStatus(s), alive, identity, kill: t.kill, isHelper: t.isHelper, stopDaemon: async () => assert.fail('the daemon is not stopped') } })
+  assert.deepEqual([r.exit, r.receipt.error && r.receipt.error.code], [1, 'collectors-online'])
+  const after = snapshot(s.home)
+  assert.deepEqual(Object.keys(after).filter((k) => after[k] !== before[k] && !k.includes(`${path.sep}flows${path.sep}`)), [], 'not one file changed, state.json included')
+})
+
 test('V24 (uninstall): with the install manifest gone and no terminal, uninstall takes the routing off, stops the daemon, undoes nothing, removes nothing of trocar\'s and exits 1; with --yes it undoes the entries by their marks and removes trocar\'s own files by name — the CA, the unit, the state, every backup', async () => {
   const codexOriginal = 'SSL_CERT_FILE=/corp/ca.pem\nOPENAI_API_KEY=sk-test\n'
   const s = await installedHome({ names: ['claude-code', 'codex'], seed: (home, sh) => {

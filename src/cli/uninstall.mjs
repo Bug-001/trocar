@@ -147,6 +147,19 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
       return { receipt, exit: ok === null ? EXIT.usage : EXIT.incomplete }
     }
   }
+  const refuse = (why) => {
+    // 附录 C.1: the refusal's code lives in `error` and nowhere else; `message` is the sentence the text form prints
+    receipt.ok = false; receipt.error = { code: 'collectors-online', message: why }; receipt.purge_data = false; receipt.kept = keptOf(home, fs) // nothing changed: --purge-data deleted nothing either
+    receipt.problems.push(why)
+    receipt.problems.push(`Run: ${findingFor('collectors-online', { platform: w.platform }).commands.map((c) => c.run).join(', then: ')}`) // the doctor's own steps for the code (1.6 附录 B)
+    put({ event: 'failure', code: 'collectors-online', reason: why })
+    put({ kind: 'result', outcome: 'failed', reason: `uninstall refused: ${why}` })
+    return { receipt, exit: EXIT.incomplete }
+  }
+  // 1.6 §3.6: a daemon alive that does not answer (stuck, or still starting) is not off: the agents' entries may still point at its doors, so
+  // it is not stopped (invariant 5) — refused before anything is written, the desired-off a waiting lock writes included (a refusal changes nothing); `trocar off` stops it and confirms the routing off
+  const ds = await w.daemonState()
+  if (ds.state === 'unresponsive' || ds.state === 'starting') return refuse(`the daemon (pid ${ds.lock && ds.lock.pid}) is running but does not answer (${ds.reason}), so capture is not known to be off. Nothing was changed`)
   const tryOff = () => { try { return { r: desiredOff(w, null, harnessIdsOf(m)), error: null } } catch (e) { return { r: null, error: e } } }
   let early = null, lock = null
   if (fs.existsSync(w.dir)) {
@@ -164,19 +177,6 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     ;({ m, merr } = read()) // read AGAIN under the lock: an `on` that held it has written to the manifest since
     receipt.harnesses = harnessIdsOf(m)
     // CM24: on macOS / Windows uninstall never does off — capture online (a harness on, a holder, or not knowable) is named and nothing changes
-    const refuse = (why) => {
-      // 附录 C.1: the refusal's code lives in `error` and nowhere else; `message` is the sentence the text form prints
-      receipt.ok = false; receipt.error = { code: 'collectors-online', message: why }; receipt.purge_data = false; receipt.kept = keptOf(home, fs) // nothing changed: --purge-data deleted nothing either
-      receipt.problems.push(why)
-      receipt.problems.push(`Run: ${findingFor('collectors-online', { platform: w.platform }).commands.map((c) => c.run).join(', then: ')}`) // the doctor's own steps for the code (1.6 附录 B)
-      put({ event: 'failure', code: 'collectors-online', reason: why })
-      put({ kind: 'result', outcome: 'failed', reason: `uninstall refused: ${why}` })
-      return { receipt, exit: EXIT.incomplete }
-    }
-    // 1.6 §3.6: a daemon alive that does not answer (stuck, or still starting) is not off: the agents' entries may still point at its doors, so
-    // it is not stopped (invariant 5) — refused before anything is written; `trocar off` stops it and confirms the routing off
-    const ds = await w.daemonState()
-    if (ds.state === 'unresponsive' || ds.state === 'starting') return refuse(`the daemon (pid ${ds.lock && ds.lock.pid}) is running but does not answer (${ds.reason}), so capture is not known to be off. Nothing was changed`)
     const online = isModelOs(w.platform) && m && !m.unsupported ? await captureOnline(w, m, receipt.notes) : null
     if (online) {
       const why = [online.on.length ? `capture is still on for ${online.on.join(', ')}` : null, online.holders.length ? `these processes still have trocar in their environment: ${online.holders.map((x) => `${x.harness} (pid ${x.pid})`).join(', ')}${online.stale ? ` (trocar's last check, which may be out of date: the process table could not be read just now: ${online.stale})` : ''}` : null, online.unknown ? `whether any process still has trocar in its environment is unknown (${online.unknown})` : null].filter(Boolean).join('; ') + '. Nothing was changed' // the next step is the doctor's line below, said once (1.6 §1.1③)
@@ -203,6 +203,8 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
       for (const f of failed) put({ event: 'failure', ...f })
       put({ kind: 'result', outcome: 'failed', reason: `uninstall stopped: ${routing.problems[0] || 'the routing was not confirmed off'}` })
       receipt.ok = false
+      const silent = routing.failures.find((f) => f.code === 'collectors-online') // the daemon stopped answering at the off request: the same refusal as §3.6's (附录 C.1)
+      if (silent) receipt.error = { code: silent.code, message: silent.reason }
       return { receipt, exit: EXIT.incomplete }
     }
     // the platform's own way out: darwin boots the LaunchAgent out and removes the plist (the same arm `off` uses, 4.9 §4 flip checklist ①),
