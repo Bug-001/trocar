@@ -12,6 +12,7 @@
 //        '*' in keys matches any key or list index. A list is a precedence: the first source that is set answers (an error answers too: D38).
 // <cond> { src, equals? } — without `equals`: "is set".
 // A file that exists but cannot be read or parsed is { error }, never "unset" (D38).
+import path from 'node:path'
 import { parseJsonText } from '../../../off/json-text.mjs'
 import { parseDotenv, expandHome } from '../config-read.mjs'
 import { resolveLoc } from '../../../off/loc.mjs'
