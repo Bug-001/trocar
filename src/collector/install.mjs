@@ -20,7 +20,7 @@ import { planTrust } from './core/trust/plan.mjs'
 import { livenessOf } from './core/registry.mjs'
 import { readAgentList } from '../off/identity.mjs'
 import { patternsOf } from '../off/signature.mjs'
-import { readManifest, saveManifest, newManifest, missingDirs, applyJsonKey, previewJsonKey, applyTextEntry, previewTextEntry, writeOwnedFile, manifestPath, describeEntry, judgeEntry, judgeOwned, sha256, replaceable, retireEntry } from './core/trust/journal.mjs'
+import { readManifest, saveManifest, newManifest, missingDirs, applyJsonKey, previewJsonKey, applyTextEntry, previewTextEntry, writeOwnedFile, manifestPath, describeEntry, judgeEntry, judgeOwned, sha256, replaceable, retireEntry, inheritDirs } from './core/trust/journal.mjs'
 import { EVENT, CODE } from './core/codes.mjs'
 import { RESTART_REASONS } from '../health/codes.mjs'
 import { controlRequest, controlEndpointFor } from './core/control.mjs'
@@ -218,9 +218,10 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
   const withItems = new Set([...draft.entries, ...draft.files, ...draft.owned].map((x) => x.harness))
   const targets = descs.map((d) => d.name).filter((n) => withItems.has(n) || installed.has(n))
   const reasonOf = (name) => draft.records.filter((r) => r.harness === name).map((r) => r.reason.replace(`${name}: `, '')).join('; ') || `no ${name} configuration was found on this machine: nothing to change for it`
+  const hint = new Set(certs ? [] : draft.entries.filter((e, i) => replaceable(entryJ[i])).map((e) => e.path))
   const skipped = [
     ...descs.map((d) => d.name).filter((n) => !targets.includes(n)).map((n) => ({ what: n, reason: reasonOf(n) })),
-    ...steps.filter((s) => s.action === 'skip-user-changed').map((s) => ({ what: s.path, reason: certs ? s.why : `${s.why}; run "trocar install" to place it again` })), // a certificate item: install places it again (replaceable); on never does (D55⑥)
+    ...steps.filter((s) => s.action === 'skip-user-changed').map((s) => ({ what: s.path, reason: hint.has(s.path) ? `${s.why}; run "trocar install" to place it again` : s.why })), // a certificate item install can place again (replaceable): on never does (D55⑥), so it names the fix
   ]
   // what is written, and what the user has not yet confirmed (1.6 §1.6: the paths beyond the manifest's `confirmed_paths`; an installed one counts as confirmed)
   const known = new Set([...((prior && prior.confirmed_paths) || []), ...((prior && prior.entries) || []).map((x) => x.path), ...((prior && prior.files) || []).filter((x) => x.role !== 'ca-key' && x.role !== 'ca-cert').map((x) => x.path)])
@@ -333,17 +334,20 @@ async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePo
     writeOwnedFile({ dir, manifest: m, harness: o.harness, role: o.role, phase: 'install', file: o.path, data: o.data, mode: o.mode, exclusive: j.action === 'write', now: now(), fs })
     written.owned.push(o.path)
   }
-  for (const e of final.entries) {
+  const entrySteps = plan.steps.filter((s) => s.kind === 'entry') // planOn pushed one per draft entry, in order; final.paths == draft.paths (checked above)
+  for (const [i, e] of final.entries.entries()) {
     const j = judgeEntry({ manifest: m, planned: e, fs })
     if (j.action === 'skip-intact') { written.intact.push(e.path); continue }
-    const again = certs && replaceable(j) && plan.steps.some((s) => s.kind === 'entry' && s.harness === e.harness && s.path === e.path && s.action === 'rewrite') // what the plan said it places again
+    const step = entrySteps[i]
+    const again = certs && replaceable(j) && !!step && step.harness === e.harness && step.path === e.path && step.action === 'rewrite' // this very item, as the plan said
     if (j.action === 'skip-user-changed' && !again) { written.userChanged.push({ path: e.path, why: j.why }); continue }
     if (certItem(e.path)) continue
     guard()
-    if (j.action === 'skip-user-changed') retireEntry({ dir, manifest: m, entry: j.entry, now: now(), fs }) // placed again as a new entry (planOn planned it so)
+    const retired = j.action === 'skip-user-changed' ? retireEntry({ dir, manifest: m, entry: j.entry, now: now(), fs }) : null // placed again as a new entry (planOn planned it so)
     const entry = e.kind === 'text'
       ? applyTextEntry({ dir, manifest: m, harness: e.harness, phase: 'install', file: e.path, edit: e, home, now: now(), fs }) // a backup of the file first (1.6 R2): no backup, no change
       : applyJsonKey({ dir, manifest: m, harness: e.harness, phase: 'install', file: e.path, keys: e.keys, value: e.value, home, now: now(), fs })
+    if (entry && retired) inheritDirs({ dir, manifest: m, entry, from: retired, fs })
     if (entry) written.entries.push(entry)
   }
   // the per-user autostart unit (arch: systemd --user on Linux), listed like every other file. The manifest is complete before the unit starts the

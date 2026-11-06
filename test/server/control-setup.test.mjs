@@ -243,8 +243,13 @@ for (const h of ['claude-code', 'codex', 'hermes', 'kimi-code', 'z-code']) for (
   test(`Linux · V67 · V91: ${h}'s certificate item ${how} → setup needed; Set up places it again → ready, and on ${h} turns it on`, async () => {
     const s = await installedHome({ names: [h] })
     const desc = s.descs[0], judged = () => driverSetup(desc, { os: 'linux', home: s.home, env: s.sh.env, manifest: s.manifest() })
-    for (const x of s.manifest().entries.filter((e) => e.harness === h && e.phase === 'install')) damage(x)
-    if (judged().state === 'needed') { // a form whose files are gone may no longer be there at all: then nothing is needed and on goes on
+    const items = s.manifest().entries.filter((e) => e.harness === h && e.phase === 'install')
+    for (const x of items) damage(x)
+    const left = () => items.map((x) => (fs.existsSync(x.path) ? fs.readFileSync(x.path, 'utf8') : null)) // what the user (or the harness's own update) left
+    const userLeft = left()
+    const st = judged().state
+    if (st !== 'needed') assert.deepEqual([how, st], ['deleted', 'ready'], 'only a deleted file may take the form away (nothing then is needed)')
+    else {
       const ctx = { home: path.join(s.home, '.trocar'), deps: linuxSetupDeps(s) }
       const p = await VERBS.setup({ harness: h }, ctx)
       assert.equal(p.status, 409, JSON.stringify(p.doc))
@@ -257,8 +262,36 @@ for (const h of ['claude-code', 'codex', 'hermes', 'kimi-code', 'z-code']) for (
     const on = await s.on({ ids: [h] })
     assert.equal(on.exit, 0, JSON.stringify(on.receipt))
     assert.ok(on.receipt.harnesses.includes(h) && !on.receipt.refused.length)
+    const un = await s.uninstall({ yes: true })
+    assert.equal(un.exit, 0, JSON.stringify(un.receipt && un.receipt.problems))
+    assert.deepEqual(left(), userLeft, 'uninstall puts back what the user left, byte for byte (invariant 5)')
   })
 }
+
+test('Linux · invariant 5: a file trocar created in a directory it made, deleted and placed again by Set up, leaves neither behind at uninstall', async () => {
+  const s = await installedHome({ names: ['claude-code'], seed: (home) => fs.rmSync(path.join(home, '.claude'), { recursive: true, force: true }) })
+  const x = s.manifest().entries.find((e) => e.harness === 'claude-code' && e.phase === 'install')
+  assert.deepEqual([x.existed_before, x.created_dirs.includes(path.dirname(x.path))], [false, true], 'install made the file and its directory')
+  fs.rmSync(x.path)
+  const ctx = { home: path.join(s.home, '.trocar'), deps: linuxSetupDeps(s) }
+  const p = await VERBS.setup({ harness: 'claude-code' }, ctx)
+  assert.equal((await VERBS.setup({ harness: 'claude-code', confirm: p.doc.plan_id }, ctx)).doc.ok, true)
+  assert.ok(fs.existsSync(x.path), 'placed again')
+  assert.equal((await s.uninstall({ yes: true })).exit, 0)
+  assert.deepEqual([fs.existsSync(x.path), fs.existsSync(path.dirname(x.path))], [false, false])
+})
+
+test('Linux · 4.11 P4b · D38: a carrier file that cannot be read judges `unknown` with its reason, never ready; on goes on with a note, not a refusal', { skip: process.getuid && process.getuid() === 0 ? 'root reads a 000 file' : false }, async () => {
+  const s = await installedHome({ names: ['claude-code'] })
+  const x = s.manifest().entries.find((e) => e.harness === 'claude-code' && e.phase === 'install')
+  fs.chmodSync(x.path, 0o000)
+  try {
+    const j = driverSetup(s.descs[0], { os: 'linux', home: s.home, env: s.sh.env, manifest: s.manifest() })
+    assert.equal(j.state, 'unknown', JSON.stringify(j)); assert.ok(j.reason)
+    const on = await s.on({ ids: ['claude-code'] })
+    assert.deepEqual(on.receipt.refused, [], JSON.stringify(on.receipt))
+  } finally { fs.chmodSync(x.path, 0o600) }
+})
 
 test('Linux · D38: a carrier install cannot place again (its file now a link to nothing) → Set up refuses with setup-needed and writes nothing', async () => {
   const s = await installedHome({ names: ['claude-code'] })

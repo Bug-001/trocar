@@ -39,7 +39,11 @@ function carrierLoss(m, desc, own, fs) {
     if (x.kind === 'owned-file') {
       const d = x.role === 'wrapper' ? checkWrapper({ fs }, x) : (() => { const b = readOrNull(fs, x.path); return b == null ? { reason: 'entry-missing' } : sha256(b) !== x.sha256 ? { reason: 'entry-changed' } : null })()
       if (d) return d.reason === 'entry-missing' ? 'carrier-absent' : 'carrier-overwritten'
-    } else if (judgeEntry({ manifest: m, planned: x, fs }).action !== 'skip-intact') return fs.existsSync(x.path) ? 'carrier-overwritten' : 'carrier-absent'
+    } else {
+      const j = judgeEntry({ manifest: m, planned: x, fs })
+      if (j.unreadable) throw new Error(j.why) // not read is not changed: setupOf says unknown (D38), never needed or ready
+      if (j.action !== 'skip-intact') return fs.existsSync(x.path) ? 'carrier-overwritten' : 'carrier-absent'
+    }
   }
   return null
 }
