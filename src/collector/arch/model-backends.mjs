@@ -139,6 +139,13 @@ export async function systemProxyWatch({ up, read, io = {}, changes = null, fail
   return { now: () => up.chainSystemProxy(good && !readable(watch.last()) ? good : watch.last()), poll: () => watch.poll(), stop: () => { const pending = !!held; drop(); if (pending && !readable(watch.last())) unread(); watch.stop() } } // a daemon that goes down inside the hold window still says the read that failed (D38: none is left unsaid)
 }
 
+/** systemProxyNow({ os, env, io }) → the system proxy now, read once, in the chain's shape — the reader and the shape the door's watch uses (below):
+ *  `on` reads it for the PAC route's gate (4.11 §3 ③). `io`: { exec } on darwin, { helper } on win32 (the daemon's reader, src/off/daemon-read.mjs). */
+export async function systemProxyNow({ os, env = process.env, io = {} }) {
+  const up = await import(`./${os}/upstream.mjs`)
+  return up.chainSystemProxy(await (os === 'darwin' ? up.readSystemProxy({ ...io, env }) : up.readSystemProxyChain(io)).catch(() => null))
+}
+
 /** The door's readers of the world for the model collector (4.11 §1, createModelCollector): who owns a socket and that pid's facts, its env / cwd /
  *  parent (P7), how a proxy address is dialled, the system proxy now (a watcher's last read), the process table (P12). → { ownerOf, factsOf, proc,
  *  proxyOf, bypassOf, systemProxy, procTable, close }. Read-only, as the arch's own modules are. `io`: the OS readers only (a test's seam, 0.1 §3; the daemon's
