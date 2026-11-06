@@ -77,6 +77,7 @@ export function createSwitch({ redirector, stateFile, known, installed = () => [
   // so an `on` the CLI already wrote is the file's bytes exactly and is not written again; a state made up from an unreadable file always is.
   function commit(next, { tolerate = false } = {}) {
     const at = new Date().toISOString()
+    const k0 = keyOf() // before the read: a CLI write after it changes the key, so a skipped write never hides it from the next reload
     let text = null; let disk = null
     try { text = fs.readFileSync(stateFile, 'utf8'); disk = JSON.parse(text) } catch { /* no file or not a state: written */ }
     const dh = disk && typeof disk.harnesses === 'object' && disk.harnesses ? disk.harnesses : {}
@@ -86,8 +87,8 @@ export function createSwitch({ redirector, stateFile, known, installed = () => [
     const same = disk && typeof disk.updated_at === 'string' && JSON.stringify(harnesses) === JSON.stringify(dh)
     const out = stamped({ ...st, harnesses, ...(same ? { updated_at: disk.updated_at } : {}) }, at)
     try {
-      if (dirty || JSON.stringify(out, null, 2) + '\n' !== text) writeState(stateFile, out)
-      diskKey = keyOf(); dirty = false
+      if (dirty || JSON.stringify(out, null, 2) + '\n' !== text) { writeState(stateFile, out); diskKey = keyOf() } else diskKey = k0
+      dirty = false
     } catch (e) {
       if (!tolerate) throw e
       onEvent({ event: 'failure', where: 'state', code: (e && e.code) || 'record-error', reason: `${stateFile} could not be written (${String((e && e.message) || e)}); detaching anyway, but the next start restores the old desired state` })
