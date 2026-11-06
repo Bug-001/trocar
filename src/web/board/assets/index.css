@@ -1372,9 +1372,19 @@ a.ovtr:hover { background: var(--hover); }
 .desk.next .deskside.bottom .sidefold svg{transform:none;}
 .desk.next .deskside.bottom .sidefold[aria-expanded=false] svg{transform:rotate(180deg);}
 .desk.next .deskside.bottom .sidepanel{position:absolute;left:0;right:0;bottom:var(--siderow);height:50%;z-index:8;background:var(--raised);border-top:1px solid var(--rule);}
+.desk.next #saw .tracksbtn{display:none;font-size:var(--fs-chart);padding:1px 8px;color:var(--ink-2);border:1px solid var(--rule);border-radius:var(--r-pill);}
+.desk.next #saw .tracksbtn:hover,.desk.next #saw .tracksbtn[aria-expanded="true"]{color:var(--ink);}
+.desk.next .pop.menu [role=menu]{min-width:0;outline:none;}
+.desk.next .pop.menu header{padding:4px 10px;font-size:var(--fs-cap);color:var(--ink-2);}
+.desk.next .pop.menu [role=menuitem],.desk.next .pop.menu [role=menuitemcheckbox]{display:flex;align-items:center;gap:6px;min-width:0;height:30px;padding:0 10px;font-size:var(--fs-body);color:var(--ink);border-radius:var(--r-2);cursor:pointer;outline:none;}
+.desk.next .pop.menu [role=menuitem][data-focused],.desk.next .pop.menu [role=menuitemcheckbox][data-focused]{background:var(--action);color:var(--action-ink);}
+.desk.next .pop.menu [role=menuitem][data-disabled]{color:var(--ink-3);cursor:default;}
+.desk.next .pop.menu .trackstick{flex:none;display:inline-flex;width:16px;}
+.desk.next .pop.menu .tracksname{flex:1 1 auto;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}
 @media (max-width:899.98px){
   .desk.next #saw,.desk.next #rails{--gut:0px;} /* px: scope.css adds it to a length in calc() */
   .desk.next .tgut,.desk.next #saw #sawgut{display:none;}
+  .desk.next #saw .tracksbtn{display:inline-flex;align-items:center;gap:4px;} /* the gutter's controls, while the gutter is gone (1.2 §窄屏) */
   .desk.next .tkrow > *,.desk.next .chaprow > *{grid-column:2;} /* the lanes keep their column with the name cell gone */
 }
 @media (max-width:599.98px){
