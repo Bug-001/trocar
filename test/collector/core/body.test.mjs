@@ -86,6 +86,7 @@ test('4.1 #13 — a compressed reply keeps its wire bytes once: wire_b64 when de
         const isWire = (x) => typeof x === 'string' && Buffer.from(x, 'base64').equals(wire)
         assert.equal([r.wire_b64, r.raw_b64].filter(isWire).length, 1, at)
         assert.ok(!('wire_b64' in r && 'encoding_error' in r), at)
+        if (state === 'decoded' && header.split(',').every((c) => code[c.trim()])) assert.ok('wire_b64' in r, `${at}: a body that decodes keeps its wire bytes`)
         if ('wire_b64' in r) {
           const text = r.kind === 'json' ? (r.raw ?? JSON.stringify(r.body)) : r.raw
           assert.ok(decodeContent(Buffer.from(r.wire_b64, 'base64'), r.content_encoding).buf.equals(Buffer.from(text)), at)

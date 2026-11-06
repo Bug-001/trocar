@@ -5,7 +5,7 @@
 // (invariant 2: the decoded text is derived): wire_b64 when it decoded, raw_b64 when it did not, with the header as sent in
 // content_encoding. Decoding failures and truncation are labeled in place (invariant 4), never silently dropped.
 import { makeSseReconstructor } from '../../../capture/sse-reconstruct.mjs'
-import { decodeContent, utf8Strict, responseDecodeLimit, decodedOverLimit, parseJsonReply } from '../../../capture/request-body.mjs'
+import { decodeContent, utf8Strict, responseDecodeLimit, decodedOverLimit, parseJsonReply, nonIdentityEncoding } from '../../../capture/request-body.mjs'
 
 // decodeContent moved to src/capture/request-body.mjs when the request-body rule became one rule for every call (D40);
 // re-exported here because the response side below still uses it.
@@ -36,7 +36,7 @@ export function shapeResponse({ status, headers = [], body, truncated = false, l
   } else {
     const maxBytes = responseDecodeLimit(llm)
     const dec = decodeContent(body, cenc, { maxBytes })
-    if (String(cenc).split(',').some((c) => !['', 'identity'].includes(c.trim().toLowerCase()))) {
+    if (nonIdentityEncoding(String(cenc))) {
       resp.content_encoding = cenc
       if (dec.decoded) resp.wire_b64 = body.toString('base64')
     }
