@@ -38,6 +38,9 @@ export async function strayRoots(store, m) {
   return !r || r.error || !Array.isArray(r.roots) ? { error: (r && r.error) || 'no answer' } : { roots: r.roots.filter((x) => !listed.some((e) => sameRoot(x, e))) }
 }
 
+/** How every command names a root to the user: the SHA-256 when the store gives it, else the thumbprint (Windows lists only that). */
+export const rootName = (id) => (id.fp256 ? `SHA-256 ${id.fp256}` : `thumbprint ${id.sha1}`)
+
 /** { fp256, sha1 } of a certificate (DER or PEM). */
 export function rootIdOf(cert) {
   const x = new crypto.X509Certificate(cert)

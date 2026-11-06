@@ -10,7 +10,7 @@ import tls from 'node:tls'
 import { collectorHome } from '../paths.mjs'
 import { caPaths } from './core/tls/ca-store.mjs'
 import { ROOT, checkProfile, certPem, pemToDer } from './core/tls/cert.mjs'
-import { rootIdOf, ROOT_SUBJECT, strayRoots } from '../off/root-store.mjs'
+import { rootIdOf, rootName, ROOT_SUBJECT, strayRoots } from '../off/root-store.mjs'
 import { readManifest, saveManifest, newManifest, applyJsonKey, applyTextEntry, writeOwnedFile, judgeOwned, sha256 } from './core/trust/journal.mjs'
 import { codeId } from '../version.mjs'
 import { installComplete, itemsOfPhase, undoByHand, OFF_VERSION } from '../off/manifest.mjs'
@@ -56,7 +56,7 @@ export async function strayRootRefusal({ m, rootStore }) {
   if (r.error) return { code: UNREADABLE, reason: `your user trust store could not be read (${r.error}), so whether it already holds a trocar root is not known; nothing was changed. Run trocar install again once it can be read` }
   const stray = r.roots
   if (!stray.length) return null
-  const names = stray.map((x) => (x.fp256 ? `SHA-256 ${x.fp256}` : `thumbprint ${x.sha1}`)).join(', ')
+  const names = stray.map(rootName).join(', ')
   return { code: STRAY_ROOT, reason: `your user trust store already holds a trocar root that trocar's install record does not list (${names}), and trocar never trusts a second one beside it; nothing was changed. Run trocar uninstall first (it removes every trocar root), then trocar install` }
 }
 

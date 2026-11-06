@@ -13,7 +13,7 @@ import { offWorld, desiredOff, drainDaemon, undoSide, harnessIdsOf, flowWriter, 
 import { userProcessesOf } from '../off/user-procs.mjs'
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
 import { readManifest, saveManifest, manifestPath, refuseOldManifest, undoByHand } from '../off/manifest.mjs'
-import { rootStore, sameRoot, strayRoots as strayRootsOf } from '../off/root-store.mjs'
+import { rootName, rootStore, sameRoot, strayRoots as strayRootsOf } from '../off/root-store.mjs'
 import { disableAutostart, unitFilePath, removeWantsLinks } from '../off/autostart.mjs'
 import { undoAutostart, plistFilePath } from '../off/darwin.mjs'
 import { findingFor } from '../netenv/findings.mjs'
@@ -375,7 +375,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
 const storeOf = (w) => w.deps.rootStore || rootStore({ platform: w.platform, run: w.exec, home: w.home, env: w.env, fs: w.fs })
 const storeWhere = (w) => (w.platform === 'win32' ? 'Cert:\\CurrentUser\\Root' : path.join(w.home, 'Library', 'Keychains', 'login.keychain-db'))
 const ask = async (fn) => { try { return (await fn()) || { error: 'no answer' } } catch (e) { return { error: errText(e) } } }
-const nameOf = (id) => (id.fp256 ? `SHA-256 ${id.fp256}` : `thumbprint ${id.sha1}`)
+const nameOf = rootName
 const strayChange = (id) => `a trocar root no install record listed (${nameOf(id)}) taken out of your trust store` // no tense: the plan and the receipt say it alike
 const recordKeyed = (m) => !!(m && !m.unsupported && m.entries.some((e) => e.kind === 'root-key'))
 const custodyKey = (c) => `${(c && c.kind) || 'custody'}:?`
