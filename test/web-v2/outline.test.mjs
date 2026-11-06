@@ -1,12 +1,10 @@
-// test/web-v2/outline.test.mjs — the left outline (2.5): three groups (no counts: 2.5 §只做导航), the 「跳到变化处」 row gated by
-// the window's own 变化线 predicate, the query rows' 「第 N 步起」 pairing and 「推测」 mark, and the B-split (resources never
-// appear here). String level over constructed states; the jump-source identity (data-jumpfi ↔ the window's data-bi)
-// is guarded by the test of that name below.
+// test/web-v2/outline.test.mjs — the step's entry table the Overview reads (outlineEntries, 2.5) and the jumps: the jump-source
+// identity (an entry's jump ↔ the window's data-bi), the lane-wait jump queue and the resource-block landing. The Overview's rows
+// themselves are guarded by overview-model.test.mjs.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { outlineHtml, outlineEntries, queryStepLabels, wireOutline, jumpToResourceBlock } from '../../web/legacy/replay/outline.mjs'
-import { resourcesHtml } from '../../web/legacy/replay/resources.mjs'
-import { humanTurns, messageTurns } from '../../web/legacy/replay/analysis.mjs'
+import { outlineEntries, jumpToResourceBlock } from '../../web/legacy/replay/outline.mjs'
+import { messageTurns } from '../../web/legacy/replay/analysis.mjs'
 import { windowItems } from '../../web/src/screens/replay/window-model.mjs'
 import { turnIsOpen } from '../../web/legacy/replay/fold.mjs'
 import { buildLanes, anchorLane } from '../../web/legacy/replay/lanes.mjs'
@@ -26,67 +24,11 @@ const deskState = (lanes, { events, playhead = 0, ...extra } = {}) => {
 }
 const stateOf = (flat, extra = {}) => deskState([{ kind: 'main', rows: [{}], blocks: [flat] }], extra)
 
-test('a system row carries its size from the input; a tool row is a name, never a schema', () => {
-  const flat = [tool({ schema: '{"type":"object"}' }), sys({ cc: { kind: 'ephemeral' } }), sys({ label: 'v', volatile: true })]
-  const h = outlineHtml(stateOf(flat))
-  assert.match(h, /1\.2k/) // 1200 chars from the input
-  assert.ok(!/schema|type":"object/.test(h), 'a tool row is a navigation name; the schema lives in the window')
-})
-
-test('「跳到变化处」 appears iff the window draws the 变化线 (the one predicate), and it targets #cachebrk', () => {
-  const mk = (row, held = true) => deskState([{ kind: 'main', rows: [row], ...(held ? { blocks: [[blk()]] } : {}) }])
-  const changed = { cacheBreak: { cause: 'content-changed', idx: 0 } }
-  const J = /data-jump="cachebrk"/
-  assert.match(outlineHtml(mk(changed)), J)
-  assert.ok(!J.test(outlineHtml(mk({ cacheBreak: { cause: 'append' } }))))
-  assert.match(outlineHtml(mk({ ...changed, error: 'x' })), J, 'a failed step keeps the line: the 变化线 speaks about content')
-  // a step whose lane is not held is still judged by cause (2.5 Edge case): the click queues the jump and waits for the lane
-  assert.match(outlineHtml(mk({ ...changed, tools: 3 }, false)), J, 'unheld + content-changed keeps the row')
-  assert.ok(!J.test(outlineHtml(mk({ cacheBreak: { cause: 'append' }, tools: 3 }, false))), 'a quiet-cause unheld step does not')
-  // a body that can NEVER arrive draws a control that cannot work: the row stays off (jumpDecision drops those)
-  assert.ok(!J.test(outlineHtml(mk({ ...changed, unparsed: true }, false))), 'unparsed: no blocks will ever land')
-  assert.ok(!J.test(outlineHtml(mk({ ...changed, rec: null }, false))), 'no request: nothing to land on')
-})
-
 // ── the fold memory (2.5 验收 #2: the window's reveal into a folded turn writes it — Window.test.tsx 2.3 #28) ───────────
 test('an explicit fold beats the automatic landing\'s ephemeral set', () => {
   const flat = [sys({ key: 's' }), blk({ query: '第一问', key: 'a1' }), blk({ role: 'assistant', kind: 'text', key: 'a2' }), blk({ query: '第二问', key: 'b1' })]
   const t0 = messageTurns(flat)[0]
   assert.equal(turnIsOpen(new Map([['a1', false]]), flat, t0, 0, 1, new Set(['a1'])), false, 'an explicit fold beats the ephemeral landed set')
-})
-
-test('query rows: 「第 N 步起」 pairs from the last, a mismatch kills it and every earlier one', () => {
-  const flat = [blk({ query: '第一问,稍微长一点的问题文字' }), blk({ query: '第二问' }), blk({ query: '第三问' })]
-  const lanes = [{ kind: 'main', rows: [{}, {}, {}], blocks: [[], [], flat] }]
-  const ev = (i, preview) => ({ type: 'user', rid: `R0-${i}`, k: i + 1, preview })
-  // the main lane's `lane` answer carries the user events with their preview (2.5:16)
-  const held = (ls, events) => ls.map((l, i) => (i ? l : { ...l, events }))
-  // events pair from the LAST backwards; the middle preview does not prefix-match → it and the first stay unnumbered
-  let s = deskState(held(lanes, [ev(0, '第一问,稍微长一点的问题文字'), ev(1, '完全不相关的另一段'), ev(2, '第三问')]), { playhead: 2 })
-  assert.deepEqual(queryStepLabels(s, humanTurns(stepOf(s.desk, 'R0-2').flat)), [null, null, { n: 3, rid: 'R0-2' }], 'a failed pair kills its own and every earlier number')
-  s = deskState(held(lanes, [ev(0, '第一问,稍微长一点的问题文字'), ev(1, '第二问'), ev(2, '第三问')]), { playhead: 2, navOpen: new Set(['msg']) })
-  assert.deepEqual(queryStepLabels(s, humanTurns(stepOf(s.desk, 'R0-2').flat)).map((x) => x && x.n), [1, 2, 3], 'N = stepRef(event.rid)')
-  assert.match(outlineHtml(s), /data-jumprid="R0-0"/)
-  // an event after the playhead's step is not counted: on step 2 only two events precede, so only the last two rows pair
-  const s1 = deskState(held([{ kind: 'main', rows: [{}, {}, {}], blocks: [[], flat, []] }], [ev(0, '第二问'), ev(1, '第三问'), ev(2, 'later')]), { playhead: 1 })
-  assert.deepEqual(queryStepLabels(s1, humanTurns(flat)).map((x) => x && x.n), [null, 1, 2])
-  // no user events → no numbers
-  assert.ok(!/data-jumprid/.test(outlineHtml(deskState(lanes, { playhead: 2, navOpen: new Set(['msg']) }))))
-  // not the main lane → never numbered
-  assert.deepEqual(queryStepLabels({ ...s, anchor: { ...s.anchor, kind: 'aux' } }, humanTurns(flat)), [])
-})
-
-test('B-split: the outline carries only this step\'s entries; resource groups live on the right page', () => {
-  const flat = [tool(), sys(), blk({ query: 'q' })]
-  const s = deskState([{ kind: 'main', rows: [{}], blocks: [flat], resources: [{ kind: 'file', label: '/w/a.mjs', segments: [{ enter: 'R0-0', evict: null }] }] }],
-    { navOpen: new Set(['tools', 'sys', 'msg', 'life-file']) })
-  const h = outlineHtml(s)
-  assert.ok(!/a\.mjs|data-rk/.test(h), 'no resource rows in #ctxnav')
-  assert.match(resourcesHtml(s), /a\.mjs/)
-})
-
-test('a step with no call clears the column', () => {
-  assert.equal(outlineHtml({ anchor: null, lanes: [] }), '')
 })
 
 test('outlineEntries is the one table any narrow-screen dropdown would draw from', () => {
@@ -96,43 +38,14 @@ test('outlineEntries is the one table any narrow-screen dropdown would draw from
   assert.deepEqual(e.groups[0].kids.map((k) => k.label), ['read_file'])
 })
 
-// ── keyboard reachability (2.5 前置定义: 子条键盘可达) ──────────────────────────────────────────────────────────────────
-test('every interactive outline row is focusable and Enter/Space route through the click dispatch', () => {
-  const flat = [tool(), sys(), blk({ query: '改一下' })]
-  const h = outlineHtml(stateOf(flat))
-  // group heads, tools/sys/msg rows, 跳到变化处 and 第 N 步起 all carry role="button" tabindex="0"
-  const rows = h.match(/<(?:div|span)[^>]*>/g) || []
-  const interactive = rows.filter((tag) => /data-navtoggle=|data-jumpfi=|data-jump=|data-jumprid=/.test(tag))
-  assert.ok(interactive.length, 'the fixture renders interactive rows')
-  for (const tag of interactive) { assert.match(tag, /role="button"/, tag); assert.match(tag, /tabindex="0"/, tag) }
-  // wiring: keydown Enter/Space dispatch exactly like a click; other keys do nothing
-  const handlers = {}
-  const el = { addEventListener: (t, fn) => { handlers[t] = fn }, removeEventListener: () => {} }
-  const acts = []
-  const s = deskState([{ kind: 'main', rows: [{}, {}], blocks: [flat, flat] }],
-    { renderNav: () => acts.push('render'), jumpTo: (i) => acts.push(['jumpTo', i]), queueJump: (j) => acts.push(['queue', j]) })
-  wireOutline(el, s)
-  const target = (sel, data) => ({ closest: (q) => (q === sel ? { dataset: data } : null) })
-  handlers.keydown({ key: 'Enter', target: target('[data-navtoggle]', { navtoggle: 'tools' }) })
-  assert.ok(!s.navOpen.has('tools'), 'Enter closes the group'); assert.deepEqual(acts[0], 'render')
-  handlers.keydown({ key: ' ', target: target('[data-jump]', { jump: 'cachebrk' }) })
-  assert.deepEqual(acts[1], ['queue', { kind: 'anchor', id: 'cachebrk' }], 'Space runs 跳到变化处 through queueJump')
-  handlers.keydown({ key: 'Enter', target: target('[data-jumprid]', { jumprid: 'R0-1' }) })
-  assert.deepEqual(acts[2], ['jumpTo', 1], 'Enter on 第 N 步起 moves the playhead to that rid\'s step')
-  handlers.keydown({ key: 'a', target: target('[data-navtoggle]', { navtoggle: 'tools' }) })
-  assert.equal(acts.length, 3, 'other keys are ignored')
-  assert.ok(handlers.click, 'the click dispatch stays wired for the mouse')
-})
-
-// ── the jump-source identity (2.5 验收 #2: 点条必落对块 — data-jumpfi ⊆ the window's data-bi) ─────────────────────────
-test('jump-source identity: every data-jumpfi names a row the window draws (.cblk[data-bi])', () => {
+// ── the jump-source identity (2.5 验收 #2: 点条必落对块 — every entry jump ⊆ the window's data-bi) ─────────────────────────
+test('jump-source identity: every entry\'s jump names a row the window draws (.cblk[data-bi])', () => {
   const flat = [tool(), tool({ name: 'grep' }), sys(), blk({ query: '第一问' }), blk({ role: 'assistant', kind: 'text', query: null })]
   const s = stateOf(flat, { openBlocks: new Set(), turnFold: new Map(), turnLanded: new Set(), diffRef: null })
-  const outline = outlineHtml(s)
   const inWindow = new Set(windowItems(s).items.filter((it) => it.type === 'row').map((it) => it.bi)) // the rows Window.tsx draws as .cblk[data-bi]
-  const jumps = [...outline.matchAll(/data-jumpfi="(\d+)"/g)].map((m) => +m[1])
+  const jumps = outlineEntries(s).groups.flatMap((g) => g.kids || []).map((k) => k.jump)
   assert.ok(jumps.length, 'the fixture yields jump rows')
-  for (const j of jumps) assert.ok(inWindow.has(j), `data-jumpfi=${j} must be a .cblk[data-bi] the window drew`)
+  for (const j of jumps) assert.ok(inWindow.has(j), `jump ${j} must be a .cblk[data-bi] the window drew`)
 })
 
 // ── 2.5 #2 (lane-wait half): a jump to a step whose lane is not held waits for the lane, runs once, and a reader move drops it
@@ -185,25 +98,6 @@ test('outlineEntries(s, at) reads step `at`, the same table as with the playhead
     const calls = rids.map((rid) => desk.rows.get(rid)), anchor = { id: key, kind: 'main', calls, ridLocal: new Map(rids.map((r, i) => [r, i])) }
     const s = (playhead) => ({ desk, anchor, playhead, lanes: [anchor] })
     for (const at of [0, rids.length - 1]) assert.deepEqual(outlineEntries(s(rids.length - 1 - at), at), outlineEntries(s(at)), `seed ${seed} step ${at}`)
-  }
-})
-
-// ── 2.5 #9: the outline on a step whose lane is not held, and the same step once held ──────────────────────────────────
-test('an unheld step: the tool count is the row\'s, the other groups are busy rows (no words, no 0, no control); held → its blocks', () => {
-  const ALL = new Set(['tools', 'sys', 'msg'])
-  for (let tools = 1; tools <= 4; tools++) {
-    const flat = [...Array.from({ length: tools }, (_, i) => tool({ name: `t${i}` })), sys(), blk({ query: 'q' + tools })]
-    const rows = [{ tools }, { tools }]
-    const unheld = outlineHtml(deskState([{ kind: 'main', rows }], { playhead: 1, navOpen: ALL }))
-    assert.equal(+(unheld.match(/data-tools="(\d+)"/) || [])[1], tools, 'the tool count is the skeleton row\'s `tools`')
-    const busy = [...unheld.matchAll(/<div[^>]*aria-busy="true"[^>]*>([\s\S]*?)<\/div>/g)]
-    assert.equal(busy.length, 2, 'the system and query groups each hold a busy row')
-    for (const b of busy) assert.equal(b[1], '', 'a busy row has no text and no element in it')
-    assert.ok(!/data-tools="0"|class="navct">0</.test(unheld), 'no count renders 0')
-    assert.ok(!/data-jumpfi/.test(unheld), 'no block row before the blocks are there')
-    const held = outlineHtml(deskState([{ kind: 'main', rows, blocks: [flat, flat] }], { playhead: 1, navOpen: ALL }))
-    assert.ok(!/aria-busy/.test(held), 'held: no busy row')
-    assert.equal((held.match(/data-jumpfi=/g) || []).length, tools + 2, 'held: every tool, the system block and the query are listed')
   }
 })
 

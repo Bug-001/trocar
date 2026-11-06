@@ -1,21 +1,20 @@
-// test/web-v2/panels-patch.test.mjs — 2.3 #31 (三个面板按键打补丁): over generated session worlds (desk-world.mjs), the
-// outline and the resource explorer are keyed units whose keys are unique on every level, and the units of one
+// test/web-v2/panels-patch.test.mjs — 2.3 #31 (面板按键打补丁): over generated session worlds (desk-world.mjs), the
+// resource explorer is keyed units whose keys are unique on every level, and the units of one
 // step patched to another step equal the panel drawn directly at that step.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { buildLanes } from '../../web/legacy/replay/lanes.mjs'
 import { serialize, patchUnits, applyOps } from '../../web/legacy/core/units.mjs'
 import { resourceUnits, resourcesHtml } from '../../web/legacy/replay/resources.mjs'
-import { outlineUnits, outlineHtml } from '../../web/legacy/replay/outline.mjs'
 import { world, deskFrom } from './desk-world.mjs'
 
 const SEEDS = Array.from({ length: 16 }, (_, i) => i + 1)
 function rng(seed) { let a = seed >>> 0 || 1; return () => ((a = Math.imul(a ^ (a >>> 13), 0x5bd1e995) + 0x9e3779b9 >>> 0) / 4294967296) }
-const GROUPS = ['tools', 'sys', 'msg', 'life-file', 'life-load', 'life-others', 'life-seen', 'life-cap', 'life-dl', 'life-other']
+const GROUPS = ['life-file', 'life-load', 'life-others', 'life-seen', 'life-cap', 'life-dl', 'life-other']
 
 const stateOf = (desk, extra = {}) => ({ desk, lanes: buildLanes(desk), playhead: 0, diffRef: null, navOpen: new Set(), navSeenExpanded: false,
   openBlocks: new Set(), turnFold: new Map(), turnLanded: new Set(), meta: { project_path: '/w/proj' }, ctx: {}, ...extra })
-const PANELS = [['resources', resourceUnits, resourcesHtml], ['outline', outlineUnits, outlineHtml]]
+const PANELS = [['resources', resourceUnits, resourcesHtml]]
 
 function uniqueKeys(units, where) {
   const keys = units.map((u) => u.key)

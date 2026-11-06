@@ -1,12 +1,11 @@
 // test/web-v2/asks.test.mjs — 第 K 次提问 and the ask ticks over D69 answers: the step head's K is the held main lane's
 // user-event `k` (2.2 K row), never a count of the held events, and is not drawn when the held pages cannot know it; the
-// ticks come from the `session` events, their hover's K / opening from the held `lane` event of that rid (1.3 §提问刻度);
-// the outline's 「第 N 步起」 pairs with held lane events only (2.5:16). Held pages here start mid-lane (`prev` set).
+// ticks come from the `session` events, their hover's K / opening from the held `lane` event of that rid (1.3 §提问刻度). Held pages here
+// start mid-lane (`prev` set). The prompt rows' step numbers are overview-model.test.mjs's (2.5 #2).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { stepBarHtml } from '../../web/legacy/replay/stepbar.mjs'
 import { renderSaw } from '../../web/legacy/replay/timeline.mjs'
-import { outlineHtml } from '../../web/legacy/replay/outline.mjs'
 import { applyLane } from '../../web/legacy/replay/model.mjs'
 import { buildLanes, anchorLane } from '../../web/legacy/replay/lanes.mjs'
 import { deskOf } from './desk-world.mjs'
@@ -58,14 +57,4 @@ test('1.3 §提问刻度: the ask ticks come from the session events; the hover 
   assert.match(tick(3), /data-k="5"/)
   assert.ok(tick(3).includes('refactor the parser &lt;b&gt;'), 'the held preview, escaped')
   assert.ok(!/data-k=/.test(tick(1)), 'the page holding that ask is not held: no K')
-})
-
-test('2.5: the outline\'s 「第 N 步起」 is there when the user event is held, absent when not', () => {
-  const q = 'fix the flaky test'
-  // the playhead step (index 4) holds the question; its user event is on step index 3
-  const held = world({ asks: [3], from: 2, queries: { 4: q }, laneEvents: [{ type: 'user', rid: R(3), k: 2, preview: q }] })
-  assert.match(outlineHtml(held(4)), new RegExp(`data-jumprid="${R(3)}"`))
-  // the same question whose event page is not held (held from index 4): the skeleton still has the event, no number
-  const unheld = world({ asks: [3], from: 4, queries: { 4: q }, laneEvents: [] })
-  assert.ok(!/data-jumprid/.test(outlineHtml(unheld(4))))
 })
