@@ -10,7 +10,7 @@ import tls from 'node:tls'
 import { collectorHome } from '../paths.mjs'
 import { caPaths } from './core/tls/ca-store.mjs'
 import { ROOT, checkProfile, certPem, pemToDer } from './core/tls/cert.mjs'
-import { rootIdOf } from '../off/root-store.mjs'
+import { rootIdOf, ROOT_SUBJECT, sameRoot } from '../off/root-store.mjs'
 import { readManifest, saveManifest, newManifest, applyJsonKey, applyTextEntry, writeOwnedFile, judgeOwned, sha256 } from './core/trust/journal.mjs'
 import { codeId } from '../version.mjs'
 import { installComplete, itemsOfPhase, undoByHand, OFF_VERSION } from '../off/manifest.mjs'
@@ -32,8 +32,7 @@ import { certBlocks, certsOf, composeBundle } from '../off/pem.mjs'
 export const MODEL_OS = Object.freeze(['darwin', 'win32'])
 export const isModelOs = (os) => MODEL_OS.includes(os)
 
-const STORE = Object.freeze({ darwin: 'darwin-user-trust', win32: 'win-currentuser-root' }) // the store the user root goes into (src/off/root-store.mjs removes it on uninstall)
-export const ROOT_SUBJECT = 'trocar local root' // the subject a reset uses to recognise trocar's own certificate
+export const STORE = Object.freeze({ darwin: 'darwin-user-trust', win32: 'win-currentuser-root' }) // the store the user root goes into (src/off/root-store.mjs removes it on uninstall)
 const NOT_USERS = CODE.notUsersFile
 const errText = (e) => String((e && e.message) || e)
 // The key custody is a native program (4.11 P1): 'unavailable' is a VALUE, but it can also FAIL outright — a HOME with no login keychain answers
@@ -46,6 +45,22 @@ const CUSTODY_ADVICE = Object.freeze({
 })
 // an OS prompt that was not answered (timeout, no GUI session) is pending; one the user answered no is declined (1.6 §1.6)
 const promptState = (r) => r.state || (/time[d ]?out|no gui|interaction|session|unavailable/i.test(String(r.reason || '')) ? 'pending' : 'declined')
+
+export const STRAY_ROOT = 'stray-root'
+const UNREADABLE = 'unreadable' // 1.6 附录 C.1: both are ERROR_CODES (src/cli/json.mjs), refusals before any write, not D38 records
+/** 4.11 §3 ㉔: one trocar root per user. The trocar roots the user's store holds (P3 `list`, by subject) that manifest `m` does not list → null
+ *  (none), or the refusal { code, reason }: `stray-root`, naming each by its fingerprint; `unreadable` when the store cannot be listed (never
+ *  read as none, D38). Asked before install writes anything, and by its plan. */
+export async function strayRootRefusal({ os, m, rootStore }) {
+  let r
+  try { r = await rootStore.list() } catch (e) { r = { error: errText(e) } }
+  if (!r || r.error || !Array.isArray(r.roots)) return { code: UNREADABLE, reason: `your user trust store could not be read (${(r && r.error) || 'no answer'}), so whether it already holds a trocar root is not known; nothing was changed. Run trocar install again once it can be read` }
+  const listed = ((m && m.entries) || []).filter((e) => e && e.kind === 'system-root' && e.store === STORE[os]).map((e) => ({ fp256: e.fp256, sha1: e.thumbprint }))
+  const stray = r.roots.filter((x) => !listed.some((e) => sameRoot(x, e)))
+  if (!stray.length) return null
+  const names = stray.map((x) => (x.fp256 ? `SHA-256 ${x.fp256}` : `thumbprint ${x.sha1}`)).join(', ')
+  return { code: STRAY_ROOT, reason: `your user trust store already holds a trocar root that trocar's install record does not list (${names}), and trocar never trusts a second one beside it; nothing was changed. Run trocar uninstall first (it removes every trocar root), then trocar install` }
+}
 
 /** Rule U (P4): may trocar append its block to `file`? → null (yes) or the reason it is not this user's own file. */
 function usersFileWhy(file, { fs = nodeFs, owns }) {
@@ -66,6 +81,8 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
   const dir = collectorHome(path.join(home, '.trocar'))
   const ca = caPaths(path.join(dir, 'ca'))
   const m = readManifest(dir, fs) || newManifest(now())
+  const stray = await strayRootRefusal({ os, m, rootStore }) // ㉔: before the first write
+  if (stray) return { refusal: stray, manifest: null, fp256: null, items: [], carriers: [], pending: [], problems: [stray.reason], notes: [], exit: 1 }
   const before = JSON.stringify(m)
   const items = [], carriers = [], pending = [], problems = [], notes = [], installedHarnesses = [] // the last: read by finish(), which an install with no root reaches early
   // R5 / 附录 C.1: an item that is about no harness carries NO harness field (a `harness: null` is drift validateReceipt reports, a Windows test machine 2026-10-18)

@@ -3,5 +3,5 @@
 // once, in that standalone-safe module, which the standalone uninstall imports too.
 import { rootStore } from '../../../off/root-store.mjs'
 
-/** userRootStore({ home, run, env, fs }) → { add(rootDer), has(id), remove(id) } on the user's login keychain. */
+/** userRootStore({ home, run, env, fs }) → { add(rootDer), has(id), remove(id), list() } on the user's login keychain. */
 export const userRootStore = ({ home, run = null, env = process.env, fs } = {}) => rootStore({ platform: 'darwin', home, run, env, ...(fs ? { fs } : {}) })
