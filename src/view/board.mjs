@@ -4,6 +4,7 @@
 import { stepOrder } from './analyze.mjs';
 import { endpointClass } from '../dissect/endpoints.mjs';
 import { isLogOnly } from '../dissect/capture-labels.mjs';
+import { projectFields } from '../dissect/project.mjs';
 
 const isProbe = (r) => endpointClass(r.endpoint) === 'token-count';
 // D40 (3.2 §D40, K7): an inference call the operator set to 「只记日志」 kept its headers and sizes but no body. It is neither a call the board can
@@ -13,13 +14,13 @@ const isLogged = (r) => !!r.is_llm_call && isLogOnly(r);
 // The ONE place the session document's shape lives (附录 C.5): `trocar query sessions` derives the same facts from the segment
 // index (src/query/rows.mjs sessionFactsOf) and hands them to this function, so the list the board draws and the list the CLI prints
 // are one document, however they were counted. The title is the main lane's task — the first prompt of the captured request (4.4
-// §人类标题的来源) — so where it came from is the wire, unless `title_source` says otherwise. No project is known from the capture: '_unresolved', no path.
+// §人类标题的来源) — so where it came from is the wire, unless `title_source` says otherwise. The project is the working directory the request states (`project_path`, from the title
+// table, src/query/titles.mjs); none stated: '_unresolved', no path.
 function sessionDoc(base) {
   const title = base.title ?? null;
   return {
     session_id: base.session_id,
-    project_slug: '_unresolved',
-    project_path: null,
+    ...projectFields(base.project_path ?? null),
     entrypoint: base.entrypoint ?? null,
     harness: base.harness ?? null,
     // a meta.json written before D37 has no flag: that fold read only the UA, so its harness was inferred
