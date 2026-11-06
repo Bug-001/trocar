@@ -192,3 +192,39 @@ test('1.6 §3.3: the plan of on lists every path once, and speaks of an earlier 
   once(later)
   assert.match(later.find((l) => l.includes(env)) || '', /new since you last said yes/, `the new row says so\n${later.join('\n')}`)
 })
+
+// 4.11 §3 ③ (P5): `on` reads the system proxy (scutil, injected below the reader) when a form that follows it is present. A PAC system proxy → the
+// desktop app's library route is not-routed, and the door the last on wrote there is taken out
+test('4.11 §3 ③ (darwin): on over a PAC system proxy says the library route not-routed (system-pac) and takes the door the last on wrote out', async () => {
+  const w = await modelWorld({ commands: ['claude', 'codex'] })
+  fs.mkdirSync(path.join(w.home, 'Applications', 'Claude.app'), { recursive: true })
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  const sock = path.join(w.home, 'c.sock'), token = 't'.repeat(32)
+  fs.writeFileSync(path.join(w.dir, 'control.json'), JSON.stringify({ path: sock, token }))
+  const server = await startControlServer({ socketPath: sock, token, routes: {
+    'GET /status': async () => ({ doors: {} }),
+    'POST /on': async ({ body }) => ({ doors: Object.fromEntries(Object.entries(body.groups).map(([g, port]) => [g, `http://127.0.0.1:${port}`])) }),
+  } })
+  const box = { pac: false }
+  const exec = (file, args) => (file === 'scutil' && args[0] === '--proxy' ? { status: 0, stdout: `<dictionary> {\n${box.pac ? '  ProxyAutoConfigEnable : 1\n' : ''}}\n`, stderr: '' } : { status: 1, stdout: '', stderr: 'not here' })
+  const run = async (json) => {
+    const io = fakeIo()
+    const deps = { getuid: () => 501, exec, backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: { os: 'darwin', harnesses: w.harnesses, arch: { unit: { userUnit: () => neverStarts } } } }
+    const exit = await runOn({ io, env: w.env, home: w.home, platform: 'darwin', deps, ids: null, flags: new Set(['--yes']), json })
+    return { exit, io }
+  }
+  const library = () => fs.readdirSync(w.home, { recursive: true }).map((n) => path.join(w.home, n)).filter((p) => p.includes('configLibrary') && p.endsWith('.json') && fs.statSync(p).isFile())
+  const doorIn = () => library().filter((p) => /127\.0\.0\.1:\d+/.test(fs.readFileSync(p, 'utf8')))
+  try {
+    const first = await run(true)
+    assert.equal(first.exit, 0, first.io.text())
+    assert.ok(doorIn().length, 'the first on wrote the door into the library entry')
+    box.pac = true
+    const second = await run(true)
+    const doc = second.io.json()
+    const lib = doc.routes.filter((r) => r.harness === 'claude-code' && !r.ok)
+    assert.deepEqual(lib.map((r) => [r.code, r.reason]), [['not-routed', 'system-pac']], JSON.stringify(doc.routes))
+    assert.equal(second.exit, 1)
+    assert.deepEqual(doorIn(), [], 'no library entry holds the door any more')
+  } finally { await server.close() }
+})
