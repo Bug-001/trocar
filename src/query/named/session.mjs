@@ -516,9 +516,10 @@ const unfolded = (st, plan, F) => { for (let i = st.fp === plan ? st.fc : 0; i <
 export class HandOff extends Error {
   constructor(id) { super(`session ${id}: its projection or fold log does not cover every member yet`); this.name = 'HandOff'; this.code = 'hand-off'; }
 }
-// What a kept state weighs in the shared ledger: the heap it was measured to hold (3.5 §内存有界: never an estimate past the budget,
-// which would leave it unkept and rebuilt from scratch every slice).
-const costOf = (st) => Math.max(0, st.meter.held);
+// What a kept state weighs in the shared ledger: the heap it was measured to hold, and at least its rows at SPINE_PER_ROW, since the
+// measure is a difference that other caches let go in between can bring to 0 or below, and the ledger would then keep it for free
+// (3.5 §内存有界: never an estimate past the budget, which would leave it unkept and rebuilt from scratch every slice).
+export const costOf = (st) => Math.max(st.meter.held, Math.min(heapBudget(), Math.max(1, st.n) * SPINE_PER_ROW));
 
 // One slice: extraction, then folding (a request: SLICE_MS of each; a background slice: half of `budgetMs` each, the fold also what
 // extraction left; the local path: everything), neither while a write of the session's answer files is in flight: it goes on at its
