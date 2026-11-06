@@ -492,6 +492,10 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
     receipt.dry_run = true
     receipt.changed = [...items.entries.filter((e) => mine(e) && (e.kind === 'json-key' || e.kind === 'text')).map((e) => ({ path: e.path, change: offChangeText(e), backup: e.backup ?? null, ...withHarness(e.harness) })), ...perFile(marks.filter((p) => p.how !== 'owned-file').map((p) => ({ path: p.path, change: MARKER_TEXT[p.how], backup: null, ...withHarness(p.harness) })))]
     receipt.removed = [...gone, ...marks.filter((p) => p.how === 'owned-file').map((p) => p.path)]
+    // 附录 C.2: what this off would do, record or not; the board's plan is these bytes (4.4), so a record changed between its two requests makes its plan_id stale
+    receipt.planned = [...items.entries.filter((e) => mine(e) && (e.kind === 'json-key' || e.kind === 'text')).map((e) => ({ path: e.path, how: e.kind, change: offChangeText(e), ...withHarness(e.harness) })),
+      ...items.files.filter((f) => gone.includes(f.path)).map((f) => ({ path: f.path, how: 'owned-file', change: MARKER_TEXT['owned-file'], ...withHarness(f.harness) })),
+      ...perFile(marks.map((p) => ({ path: p.path, how: p.how, change: MARKER_TEXT[p.how], ...withHarness(p.harness) })))]
     if (manifest && manifest.unsupported) receipt.notes.push(`the install manifest is version ${JSON.stringify(manifest.version)}, which this build does not read: no entry would be touched`)
     else if (!manifest) receipt.notes.push(`there is no usable install manifest${manifestError ? ` (${errMessage(manifestError)})` : ''}: ${marks.length ? `${marks.length} file(s) would be undone by trocar's own marks, after a yes` : 'no file holds trocar\'s marks'}`)
     for (const id of ids || []) if (manifest && !installed.includes(id)) receipt.skipped.push({ what: id, reason: 'trocar has nothing on its path (it was never set up, or it is already off)' })
