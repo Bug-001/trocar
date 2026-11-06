@@ -18,7 +18,7 @@ const HEAP_MB = 192, SHARE = 0.275 // each a fold of more than half the budget (
 const SHAPE = { wire: 'threads', growth: 150, compactAt: 3_000, subEvery: 4, subLanes: 3, subLen: 12, names: 16_000 }
 const READ = `${TICK}
 const { runQuery } = await import(${at('../../src/query/named/index.mjs')}) // first: the registry imports session.mjs
-const { READING_MS, extendSession, heapHasRoom, saveIndexes } = await import(${at('../../src/query/named/session.mjs')})
+const { READING_MS, extendSession, heapHasRoom, saveIndexes, sealParts } = await import(${at('../../src/query/named/session.mjs')})
 const { sessionDir } = await import(${at('../../src/query/projection.mjs')})
 const { readHead } = await import(${at('../../src/query/ctx-files.mjs')})
 const { drain } = await import(${at('../helpers/bounded.mjs')})
@@ -28,7 +28,8 @@ const log = path.join(sessionDir(home, read), 'fold.idx')
 let opens = 0
 const ctx = { home, writer: true, persist: () => {}, progress: tick, fs: Object.assign(Object.create(nodeFs), { openSync: (f, ...a) => { if (f === log) opens++; return nodeFs.openSync(f, ...a) } }) }
 for (const id of last === read ? [folded, read] : [read, folded]) await drain(() => { tick(); return extendSession(ctx, id, 50) }, id)
-saveIndexes()
+saveIndexes(performance.now() + 50) // sealed in slices, as the worker's idle save: whole, it is seconds with no tick
+await drain(() => { tick(); return sealParts(performance.now() + 50) }, 'the seal')
 console.log('{}')
 for await (const _ of (await import('node:readline')).createInterface({ input: process.stdin })) {
   const page = async () => { const d = await runQuery('session', { id: read }, ctx); tick(); return d }
