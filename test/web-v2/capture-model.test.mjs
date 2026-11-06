@@ -6,7 +6,8 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { pageModel, holdOrder } from '../../web/src/screens/capture/model.mjs'
 import { logModel } from '../../web/src/screens/capture/log-model.mjs'
-import { captureVerdict } from '../../web/legacy/core/capture-verdict.mjs'
+import { captureVerdict, CAPH_MS } from '../../web/legacy/core/capture-verdict.mjs'
+import { capCard } from '../../web/src/screens/overview/model.mjs'
 import { ALIASES, harnessKey } from '../../web/legacy/core/chips.mjs'
 import { COMMANDS, CHANGE_REMOVAL, UNKNOWN_REASON, CONDITION_KIND, LOG } from '../../web/legacy/labels/capture.mjs'
 import { redactUrlCredentials } from '../../web/legacy/core/sensitive.mjs'
@@ -197,4 +198,37 @@ test('M9: the conditions the collector folds land on their agent row or in the s
   assert.equal(m.service.conds.length, critical.filter((c) => c.harness == null).length + 1)
   assert.ok(m.service.conds.some((s) => s.includes(UNKNOWN_REASON)))
   assert.ok(m.service.tech.some((p) => plain(p.v) === 'made-up-kind-3f2a'))
+})
+
+// 1.5 §采集状态: the table's last column (灯 / 点) is the lamp every face draws for the state — the verdict, the overview capture card's
+// head and the capture page's service-row gutter. Rows and expectations are read from the spec table itself; the 覆盖 row covers the
+// stale read and the first-answer 「读取中」. A grey `dim` lamp is the kit's unlit dot (1.5 §前置定义 灯), so it counts as none.
+test('the capture state lamp follows 1.5 §采集状态 on the verdict, the overview card and the capture page', () => {
+  const S15 = fs.readFileSync(new URL('../../spec/01-trocar-rfc/1.5-states-aesthetics.md', import.meta.url), 'utf8')
+  const sec = S15.slice(S15.indexOf('## 采集状态'))
+  const rows = sec.slice(0, sec.indexOf('\n\n', sec.indexOf('| 次序'))).split('\n').filter((l) => l.startsWith('| ') && !l.startsWith('| 次序')).map((l) => l.split('|').map((c) => c.trim()))
+  const LAMP = [['不点灯', 'none'], ['坏', 'bad'], ['注意', 'warn'], ['状态点', 'ok']]
+  const lit = (cls) => (['ok', 'warn', 'bad', 'note'].includes(cls) ? cls : 'none')
+  const want = new Map()
+  for (const [, , st, , lamp] of rows) {
+    const l = LAMP.find(([w]) => lamp.startsWith(w))
+    if (!l) continue // the 「· 读不全」 suffix row lights nothing of its own
+    const name = /^`([a-z-]+)`$/.exec(st)?.[1] ?? (st.startsWith('读不出') ? 'unreadable' : st.startsWith('没见过') ? 'unrecognized' : st.includes('轮询') ? 'stale' : null)
+    assert.ok(name, `a row of the table maps to a state: ${st}`)
+    want.set(name, l[1])
+    if (name === 'stale') want.set('loading', l[1])
+  }
+  assert.ok(want.size >= 12, [...want.keys()].join(' '))
+  const now = Date.parse(T) + 60e3, fresh = now
+  const input = (state) => state === 'loading' ? { data: null, okAt: null }
+    : state === 'stale' ? { data: doc(), okAt: now - 2 * CAPH_MS - 1 }
+      : state === 'unreadable' ? { data: { ...doc(), health: undefined, unreadable: 'r' }, okAt: fresh }
+        : { data: doc({ state: state === 'unrecognized' ? 'zz-new' : state }), okAt: fresh }
+  for (const [state, lamp] of want) {
+    const c = input(state), v = captureVerdict(c.data, { okAt: c.okAt, now })
+    assert.equal(v.state, state)
+    assert.equal(lit(v.cls), lamp, `${state}: verdict`)
+    assert.equal(lit(capCard(c, now).cls), lamp, `${state}: overview card head`)
+    assert.equal(pageModel(c.data, v).service.gut ?? 'none', lamp, `${state}: capture page gutter`)
+  }
 })
