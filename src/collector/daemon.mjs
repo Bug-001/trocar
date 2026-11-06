@@ -865,7 +865,10 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
   // the daemon's own identity, as it writes it into its lock (below): the read route hands it back, and an answer on the token-checked channel is
   // what proves which process the lock names — so `status` does not ask the OS about that pid (4.8 §7; D62). null until the lock is written.
   let selfId = null
-  let stop = null, markReady
+  let stop = null, markReady, markStoppable
+  // markReady releases the control requests before the daemon has read its own identity (an async OS read, up to a second): an `off {exit}` in
+  // that window waits here for the stop to exist rather than calling a stop that is not there yet (off comes first: it is not refused meanwhile)
+  const stoppable = new Promise((r) => { markStoppable = r })
   // restore() first (runDaemon's `ready` gate): a request that arrives while it reopens the recorded doors waits for it, so an `on` racing a restart
   // (launchd / the task bringing the daemon back while the user runs on) never binds a group's port a second time
   const ready = new Promise((r) => { markReady = r })
@@ -897,7 +900,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
       const r = await collector.off({ ...b, by })
       if (b.exit === true) {
         const mine = ++exitAsked; clearInterval(exitTimer)
-        const go = () => { if (mine === exitAsked) { clearInterval(exitTimer); stop({ reason: by || 'off', who: by }) } }
+        const go = () => { if (mine === exitAsked) { clearInterval(exitTimer); stoppable.then((s) => { if (mine === exitAsked) s({ reason: by || 'off', who: by }) }) } }
         if (b.now === true) Promise.race([engine.drained({ agents: null }), new Promise((res) => setTimeout(res, 500))]).then(() => new Promise((res) => setTimeout(res, 50))).then(go)
         else exitTimer = setInterval(() => { if (collector.mayExit()) go() }, 250)
       }
@@ -934,6 +937,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
         after: async (step) => { collector.close(); await step('helper', () => parts.close && parts.close()) } })
     }
     stop = (o) => { if (!stopping) { stopping = doStop(o); stopping.then(markExited, () => markExited({ failed: ['stop'] })) } return stopping }
+    markStoppable(stop)
     return { port: null, socketPath: sock, paths: P, stop, exited, status, engine, collector }
   } catch (e) {
     failure.flush(); await control.close(); collector.close(); if (parts.close) parts.close()
