@@ -312,7 +312,8 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
   if (!A0) { try { A0 = await loadArch() } catch { A0 = null } } // a platform with no collector has no part of its own (netFactsDeps' pattern)
   if (A0 && typeof A0.nodePreflight === 'function') { // macOS / Windows (4.9 §7, 4.8 §7): the Node floor `on` holds, asked first because it is free; Linux's arch has none
     const pf = A0.nodePreflight()
-    if (pf && pf.ok === false) throw Object.assign(new Error(pf.doctor), { code: 'node-too-old' }) // startDaemon's catch writes the {where:'start'} record with doctor's fix; nothing was claimed
+    // not `on`'s doctor line: the login entry names this fixed Node, and only `install` rewrites the entry (`on` never does). startDaemon's catch writes the {where:'start'} record; nothing was claimed
+    if (pf && pf.ok === false) throw Object.assign(new Error(`the background process runs on Node ${pf.have || '(version unreadable)'} at ${process.execPath}, and trocar needs Node ${pf.min} or newer: update that Node, or run trocar install with a newer Node so the login entry starts that one`), { code: 'node-too-old' })
   }
   if (A0 && typeof A0.refuseElevated === 'function') { // win32 (4.8 §7, W25, R7): the daemon does not run on an elevated or SYSTEM token
     const r = await A0.refuseElevated({ env, onUnknown: (why) => log('daemon', new Error(why)) }) // a token that cannot be read is not a refusal (R11): said, and the start goes on
