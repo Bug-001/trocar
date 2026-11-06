@@ -8,6 +8,7 @@ import { standaloneCommand, appDir } from '../off/paths.mjs'
 import { COMMAND_INDENT, isCommandLine, foldHang } from '../off/receipt.mjs'
 import { noColor, WIDTH, wrap, pairs, size, tildeText, escRe } from './text.mjs'
 import { HARNESS_IDS } from '../off/harness-names.mjs'
+import { TASK_NAME } from '../off/win32.mjs'
 import { fitCompact } from '../netenv/topology-text.mjs'
 
 /** `/home/alice/.claude/x` → `~/.claude/x` when `p` is under `home`. */
@@ -218,7 +219,8 @@ export function uninstallHeadline({ platform = process.platform, past = true } =
 }
 // a root key is named by its custody, `<kind>:<id>` (src/off/undo.mjs keyWhere): said as where it was, never the id (D58)
 const KEY_WHERE = { keychain: "trocar's root key, from your login keychain", cng: "trocar's root key, from Windows' key storage" }
-const removedWords = (p, t) => { const k = /^([a-z]{2,}):/.exec(p); return k ? KEY_WHERE[k[1]] || "trocar's root key" : t(p) }
+// Windows' scheduled task is a name in the Task Scheduler, not a file: said as the task (§3.6), never bare, where it would read as a path on the current drive
+const removedWords = (p, t) => { if (p === TASK_NAME) return `the scheduled task ${p}`; const k = /^([a-z]{2,}):/.exec(p); return k ? KEY_WHERE[k[1]] || "trocar's root key" : t(p) }
 
 export function formatUninstallReceipt(r, { home = null, platform = process.platform, tense = r.dry_run ? 'future' : 'past', dataNote = null } = {}) {
   const past = tense !== 'future'
