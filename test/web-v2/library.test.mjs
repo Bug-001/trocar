@@ -4,6 +4,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { parseFilters, filtersToParams, applyFilters, listEntries, dayHead, captionFacts, capShotMaker, emptyBoardState, filteredAgentLine, flattenSessions, rowModel, sessionKey, titleText, titleTipOf } from '../../web/src/screens/library/model.mjs'
 import { loadSessions, freshSessions } from '../../web/legacy/library/logic.mjs'
+import { INTERVAL } from '../../web/legacy/core/poll.mjs'
 import { captureVerdict, capHealthPatch } from '../../web/legacy/core/capture-verdict.mjs'
 import * as W from '../../web/legacy/labels/library.mjs'
 
@@ -151,6 +152,22 @@ test('(17) freshSessions: an answer that carries stored is read again 1.5 s late
   const gone = await freshSessions(api, { alive: () => false })
   assert.equal(reads, 1, 'no read after the screen is gone')
   assert.equal(gone.data.stored, old.stored.at)
+})
+
+test('(17) freshSessions reads nothing while the page is hidden, and reads again once it shows (1.7)', async () => {
+  const fresh = { sessions: [], errors: [], next: null }
+  const old = { ...fresh, stored: { at: new Date(NOW - 60e3).toISOString() } }
+  let reads = 0
+  const api = { get: async () => ({ ok: true, status: 200, data: ++reads === 1 ? old : fresh }) }
+  globalThis.document = { hidden: true }
+  try {
+    const read = freshSessions(api)
+    await new Promise((d) => setTimeout(d, INTERVAL.session * 2.5))
+    assert.equal(reads, 1, 'no read while hidden')
+    globalThis.document = { hidden: false }
+    assert.equal((await read).data.stored, null)
+    assert.equal(reads, 2)
+  } finally { delete globalThis.document }
 })
 
 test('(18) until a whole list came back every page asks for the long deadline, a failed read changes nothing, afterwards none does', async () => {

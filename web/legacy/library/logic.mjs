@@ -27,12 +27,13 @@ export async function loadSessions(api, { limit = 500 } = {}) {
   }
 }
 /** freshSessions(api, {alive}) → a `sessions` answer without `stored`: loadSessions, read again INTERVAL.session after every answer that
- *  carries `stored` (the worker's last, older list, 4.4 §存下的答案) while `alive()`. For a screen that draws a conclusion from the
+ *  carries `stored` (the worker's last, older list, 4.4 §存下的答案) while `alive()`, once the page shows. For a screen that draws a conclusion from the
  *  list (the traffic page's coverage note, the overview, #/session/<id>); the Sessions page shows the stored list itself (1.8). */
 export async function freshSessions(api, { alive = () => true } = {}) {
   let r = await loadSessions(api)
   while (r && r.ok && r.data.stored && alive()) {
-    await new Promise((d) => setTimeout(d, INTERVAL.session))
+    do await new Promise((d) => setTimeout(d, INTERVAL.session))
+    while (alive() && typeof document !== 'undefined' && document.hidden) // a hidden page reads nothing (1.7)
     if (!alive()) break
     r = await loadSessions(api)
   }
