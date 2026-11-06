@@ -712,6 +712,18 @@ function cacheSemanticsKnown(vendor, wireFormat) {
   const only = VERIFIED_WIRES[vendor];
   return !(only && wireFormat != null && !only.includes(wireFormat));
 }
+// 3.3 Edge cases: what a reported zero cache read means on a vendor whose cache row says so
+const CACHE_ZERO_READ = { deepseek: { bestEffort: true }, openai: { minTokens: 1024 } };
+// A call's wire with the labels a reported zero cache read earns on its vendor; a new object, never the projection row's.
+export function withCacheLabels(wire, usage) {
+  const row = wire && wire.cacheSemanticsKnown ? CACHE_ZERO_READ[wire.vendor] : null;
+  const input = usage ? (usage.read || 0) + (usage.create || 0) + (usage.fresh || 0) : 0;
+  if (!row || !usage || usage.read !== 0 || !(input > 0)) return wire;
+  const add = [];
+  if (row.bestEffort) add.push({ id: 'cache-best-effort', label: 'Best-effort cache: the same prefix can miss', text: "This provider's cache is best-effort: the same input can hit once and miss the next time, so a read of 0 does not show that the prefix changed" });
+  if (row.minTokens && input < row.minTokens) add.push({ id: 'cache-below-minimum', label: 'Below the minimum cacheable length', text: `This provider caches a prompt only from ${row.minTokens} tokens on; this one is shorter, so a read of 0 is expected` });
+  return add.length ? { ...wire, labels: [...(wire.labels || []), ...add] } : wire;
+}
 
 // Canonical wire facts per call (3.2:131-133), baked HERE so the page only reads them (invariant 3):
 // format, vendor, whether that vendor's cache semantics are known on this wire (3.3:89: false for
