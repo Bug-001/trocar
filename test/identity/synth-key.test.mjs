@@ -368,37 +368,75 @@ test('chains: concurrent agents with one system text are one session each, with 
   }
 })
 
+// A turn returns N parallel tool calls: one call adds the model's output and N results (chat: an assistant message and N `tool`
+// messages; Responses `input`: a reasoning item, N function_call and N function_call_output items), however large N is.
+const toolTurn = (wire, a, t, n) => {
+  const id = (k) => `call_${a}_${t}_${k}`, out = (k) => `result ${k} of turn ${t}: ${userText('en', 9000 + a * 100 + t * 10 + k)}`
+  return wire === 'chat'
+    ? [{ role: 'assistant', content: null, tool_calls: Array.from({ length: n }, (_, k) => ({ id: id(k), type: 'function', function: { name: 'read', arguments: `{"path":"f${k}"}` } })) },
+      ...Array.from({ length: n }, (_, k) => ({ role: 'tool', tool_call_id: id(k), content: out(k) }))]
+    : [{ type: 'reasoning', id: `rs_${a}_${t}`, summary: [] },
+      ...Array.from({ length: n }, (_, k) => ({ type: 'function_call', call_id: id(k), name: 'read', arguments: `{"path":"f${k}"}` })),
+      ...Array.from({ length: n }, (_, k) => ({ type: 'function_call_output', call_id: id(k), output: out(k) }))]
+}
+const toolCall = (wire, items, ms) => ({ ...call({ agent: 'hermes', host: 'llm.internal.test', ms, ...(wire === 'chat'
+  ? { path: '/v1/chat/completions', body: { model: 'm', messages: [{ role: 'system', content: SHARED }, ...items] } }
+  : { path: '/v1/responses', body: { model: 'm', instructions: SHARED, input: items } }) }), id: rid() })
+
+test('chains: a turn that adds many items (N parallel tool results) still extends its chain, beside a concurrent agent', async () => {
+  for (const wire of ['chat', 'responses']) {
+    for (const n of [1, 2, 8, 12]) {
+      const at = `${wire}/N=${n}`, by = [[], []], recs = [], hist = [0, 1].map((a) => [{ role: 'user', content: userText('en', 8000 + a + n) }])
+      let ms = T0
+      for (let t = 0; t < 4; t++) for (const a of [0, 1]) {
+        if (t) hist[a] = [...hist[a], ...toolTurn(wire, a, t, n)]
+        const rec = toolCall(wire, hist[a], (ms += 5_000)); by[a].push(rec); recs.push(rec)
+      }
+      const home = homeOf([[SEG1, recs]])
+      const m = await membership(home)
+      const ids = by.map((rs) => sidsOf(m, home, rs))
+      for (const s of ids) assert.equal(s.size, 1, `${at}: one session per agent`)
+      assert.notEqual([...ids[0]][0], [...ids[1]][0], `${at}: two agents, two sessions`)
+    }
+  }
+})
+
 // A2 · A3: one agent X compacts (pi: the summary request, then the call after it; Hermes: the call after carries the marker), with
-// `others` agents of the same system text beside it; with no evidence the history is rewritten with neither.
-function compacting(shape, others, evidence, seed) {
-  const n = others + 1, task = Array.from({ length: n }, (_, a) => [0, 1, 2, 3].map((t) => userText('en', seed + a * 10 + t)))
+// `others` agents of the same system text beside it; with no evidence the history is rewritten with neither. `boiler`: every agent's
+// first user text opens with one shared brief; `fresh`: a new agent (the last of `by`) starts between the summary request and the call after it.
+function compacting(shape, others, evidence, seed, { boiler = false, fresh = false } = {}) {
+  const n = others + 1 + (fresh ? 1 : 0)
+  const task = Array.from({ length: n }, (_, a) => [0, 1, 2, 3].map((t) => (t === 0 && boiler ? BOILER : '') + userText('en', seed + a * 10 + t)))
   const hermes = (messages, ms) => ({ ...call({ agent: 'hermes', host: 'llm.internal.test', path: '/v1/chat/completions', ms,
     body: { model: 'm', messages: [{ role: 'system', content: SHARED }, ...messages] } }), id: rid() })
   const at = (a, messages, ms) => shape === 'pi' ? agentCall('keyless', messages, ms) : hermes(messages, ms)
   const by = Array.from({ length: n }, () => []), recs = []
   const push = (a, rec) => { by[a].push(rec); recs.push(rec); return rec }
   let ms = T0
-  for (let t = 0; t < 3; t++) for (let a = 0; a < n; a++) push(a, at(a, msgs(task[a].slice(0, t + 1)), (ms += 5_000)))
+  const old = fresh ? n - 1 : n
+  for (let t = 0; t < 3; t++) for (let a = 0; a < old; a++) push(a, at(a, msgs(task[a].slice(0, t + 1)), (ms += 5_000)))
   let marked = null
   const kept = task[0].slice(1, 3)
   const head = shape === 'pi' ? (evidence ? COMPACTED(0) : `Where we are: ${task[0][0]}`)
     : `${evidence ? MARK + ' ' : ''}Earlier turns were compacted. The task: ${task[0][0]}`
   const after = shape === 'pi' ? [head, ...kept] : [head]
   if (shape === 'pi' && evidence) marked = push(0, summary(task[0].slice(0, 3), (ms += 5_000), 'keyless'))
-  for (let a = 1; a < n; a++) push(a, at(a, msgs(task[a]), (ms += 5_000)))
+  if (fresh) push(n - 1, at(n - 1, msgs(task[n - 1].slice(0, 1)), (ms += 5_000)))
+  for (let a = 1; a < old; a++) push(a, at(a, msgs(task[a]), (ms += 5_000)))
   const rewritten = push(0, at(0, msgs(after), (ms += 5_000)))
   if (shape === 'hermes' && evidence) marked = rewritten
   push(0, at(0, msgs([...after, task[0][3]]), (ms += 5_000)))
+  if (fresh) push(n - 1, at(n - 1, msgs(task[n - 1].slice(0, 2)), (ms += 5_000)))
   return { by, recs, marked, rewritten, texts: [...task.flat(), head] }
 }
 
 test('chains: a compaction stays in the session of the chain it rewrites and is marked there, beside concurrent agents', async () => {
   let seed = 7000
   for (const shape of ['pi', 'hermes']) {
-    for (const others of [0, 2]) {
+    for (const [others, boiler, fresh] of [[0, false, false], [2, false, false], [0, true, false], [0, false, true], [0, true, true], [2, true, true]]) {
       for (const evidence of [true, false]) {
-        const at = `${shape}/${others}/${evidence ? 'evidence' : 'none'}`
-        const { by, recs, marked, rewritten } = compacting(shape, others, evidence, (seed += 100))
+        const at = `${shape}/${others}/${boiler ? 'brief' : ''}/${fresh ? 'fresh' : ''}/${evidence ? 'evidence' : 'none'}`
+        const { by, recs, marked, rewritten } = compacting(shape, others, evidence, (seed += 100), { boiler, fresh })
         const home = homeOf([[SEG1, recs]])
         const m = await membership(home)
         const { compaction } = await sessionsOf(home)

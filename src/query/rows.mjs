@@ -90,7 +90,7 @@ function rowList(segs, old) {
     for (let k = k0; k < view.length; k++) {
       const r = view.at(k);
       const got = r.synth_hash != null || r.kin_fp != null ? assign({ harness: r.harness_id, ms: Date.parse(r.ts || ''), key: r.session_key,
-        hash: r.synth_hash, fp: fpOf(r.kin_fp), probe: fpOf(r.kin_probe), chain: r.kin_chain ? r.kin_chain.split(' ') : [], mark: r.kin_mark === true }) : null;
+        hash: r.synth_hash, fp: fpOf(r.kin_fp), probe: fpOf(r.kin_probe), late: r.kin_late, chain: r.kin_chain ? r.kin_chain.split(' ') : [], mark: r.kin_mark === true }) : null;
       const sid = r.session_key ?? (got && got.key) ?? null;
       derived.push({ session_id: sid, synthesized: !!got && !got.kin });
       if (sid) place(sid, start + k); // a row with no session id is in no group (sessionGroups)

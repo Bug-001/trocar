@@ -70,24 +70,27 @@ function fingerprints(texts, cap) {
 }
 
 // ── chains (3.4 合成键) ───────────────────────────────────────────────────────────────────────────────────────────────────────
-// A call's history as cumulative hashes, oldest first, the last CHAIN_K kept: c_1 = h(item_1), c_i = h(c_{i-1} + '\n' + item_i),
-// h = the first 16 hex of SHA-256, each item JSON with every `cache_control` key dropped (it moves between calls on real wires).
-// History items: `messages`, else an `input` array, else a string `input`. A call extends a chain when the chain's tail is among them.
-const CHAIN_K = 8, CHAIN_CAP = 32;
+// A call's history as cumulative hashes: c_1 = h(item_1), c_i = h(c_{i-1} + '\n' + item_i), h = the first 16 hex of SHA-256, each item
+// JSON with every `cache_control` key dropped (it moves between calls on real wires). History items: `messages`, else an `input`
+// array, else a string `input`. A call extends a chain when the chain's tail (its last call's whole history) is among the hashes kept:
+// the last TAIL positions, and before them the turn boundaries — where the model's output starts (an item with role `assistant`, or a
+// Responses `reasoning` / `*_call` item, after one that is not): a previous call ends there however many items its turn returned
+// (one assistant message and N parallel tool results), so a turn costs one hash. At most CHAIN_K, oldest first.
+const CHAIN_K = 12, TAIL = 4, CHAIN_CAP = 32;
 const h16 = (s) => createHash('sha256').update(s, 'utf8').digest('hex').slice(0, 16);
 const bare = (k, v) => (k === 'cache_control' ? undefined : v);
+const fromModel = (it) => !!it && (it.role === 'assistant' || it.type === 'reasoning' || /_call$/.test(it.type ?? ''));
 function chainOf(body) {
   const b = body || {};
   const items = Array.isArray(b.messages) ? b.messages : Array.isArray(b.input) ? b.input : typeof b.input === 'string' ? [b.input] : [];
   const out = [];
   let c = null;
-  for (const it of items) {
+  items.forEach((it, i) => {
     const j = JSON.stringify(it, bare) ?? 'null';
     c = h16(c == null ? j : c + '\n' + j);
-    out.push(c);
-    if (out.length > CHAIN_K) out.shift();
-  }
-  return out;
+    if (i >= items.length - TAIL || (fromModel(items[i + 1]) && !fromModel(it))) out.push(c);
+  });
+  return out.slice(-CHAIN_K);
 }
 
 export function createSynthKeys({ gapMs = SYNTH_GAP_MS } = {}) {
@@ -95,7 +98,7 @@ export function createSynthKeys({ gapMs = SYNTH_GAP_MS } = {}) {
   return { keyOf: (rec) => { const got = assign(synthFactsOf(rec)); return got ? got.key : null; } };
 }
 
-/** What a call brings to the rule, or null when it takes no part in it. Keyless → {harness, ms, hash, fp, probe, chain, mark}: `fp` is the
+/** What a call brings to the rule, or null when it takes no part in it. Keyless → {harness, ms, hash, fp, probe, late, chain, mark}: `fp` is the
  *  fingerprints its session is recognized by, `probe` the ones it looks for its session with when it is the harness's
  *  compaction request, else null; `chain` its history's last cumulative hashes (chainOf); `mark` whether it carries its harness's
  *  compaction text marker without being the compaction request (Hermes's call after a compaction). Keyed (a `synth: true` harness only) → {harness, ms, key, fp}, with NO hash: a keyed call never opens or moves a synthesized group. A reader that cannot afford the body later (the
@@ -118,8 +121,9 @@ function factsOf(rec) {
   const body = bodyOf(rec), texts = userTextsOf(body), fp = fingerprints([...texts].reverse(), FP_CAP);
   if (key) return { harness: h.id, ms, key, fp };
   const probe = compactionRequest(rec, h.row) ? fingerprints(texts, PROBE_CAP) : null;
+  // `late`: how many of `fp` (a prefix: the texts are taken newest first) come from user texts after the first one
   return { harness: h.id, ms, hash: createHash('sha256').update(systemTextOf(body), 'utf8').digest('hex'), fp, probe,
-    chain: chainOf(body), mark: !probe && hintsOf(rec).compactionMarker === true };
+    late: fingerprints([...texts.slice(1)].reverse(), FP_CAP).length, chain: chainOf(body), mark: !probe && hintsOf(rec).compactionMarker === true };
 }
 
 // The call that is the compaction request: a header / request-kind hint, or its harness's text marker in one block of its own system
@@ -141,7 +145,8 @@ function compactionRequest(rec, row) {
  *     fingerprints with it (at least MIN_SHARED; a tie → the later last call) — kin: true; a chain so found is `pending`;
  *  2. else the chain whose tail sits latest in its own chain (a tie → the later last call);
  *  3. else, among the `pending` chains (and every chain when it carries its harness's marker), the one sharing the most
- *     fingerprints (at least MIN_SHARED; a tie → the later last call): its rewritten history replaces the chain's tail;
+ *     fingerprints (at least MIN_SHARED; a tie → the later last call): its rewritten history replaces the chain's tail. Without the
+ *     marker only the `late` fingerprints count: a new agent's first user text (one system text, a shared brief) is no rewrite;
  *  4. else a new chain, a new session (at most CHAIN_CAP per group: the oldest goes). */
 export function createSynthAssigner({ gapMs = SYNTH_GAP_MS, open = new Map() } = {}) {
   // `${harness}\0${hash}\0${key}` → { key, lastMs, fp, tail, pending }; `\u0001${harness}\0${key}` → { key, lastMs, fp } (fp: a
@@ -194,9 +199,10 @@ export function createSynthAssigner({ gapMs = SYNTH_GAP_MS, open = new Map() } =
     }
     if (best) return join(best);
     let bestN = 0;
+    const evidence = facts.mark ? facts.fp : (facts.fp || []).slice(0, facts.late || 0);
     for (const e of live) {
       if (!e.pending && !facts.mark) continue;
-      const n = shared(e, facts.fp);
+      const n = shared(e, evidence);
       if (n >= MIN_SHARED && (n > bestN || (n === bestN && e.lastMs > best.lastMs))) { best = e; bestN = n; }
     }
     if (best) return join(best);
