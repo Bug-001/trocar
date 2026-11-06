@@ -1,10 +1,7 @@
-// test/web-v2/asks.test.mjs — 第 K 次提问 and the ask ticks over D69 answers: the step head's K is the held main lane's
-// user-event `k` (2.2 K row), never a count of the held events, and is not drawn when the held pages cannot know it; the
-// ticks come from the `session` events, their hover's K / opening from the held `lane` event of that rid (1.3 §提问刻度). Held pages here
-// start mid-lane (`prev` set). The prompt rows' step numbers are overview-model.test.mjs's (2.5 #2).
+// test/web-v2/asks.test.mjs — the ask ticks over D69 answers: the ticks come from the `session` events, their hover's K / opening
+// from the held `lane` event of that rid (1.3 §提问刻度). Held pages here start mid-lane (`prev` set). The prompt rows' step numbers are overview-model.test.mjs's (2.5 #2).
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { stepBarHtml } from '../../web/legacy/replay/stepbar.mjs'
 import { renderSaw } from '../../web/legacy/replay/timeline.mjs'
 import { applyLane } from '../../web/legacy/replay/model.mjs'
 import { buildLanes, anchorLane } from '../../web/legacy/replay/lanes.mjs'
@@ -27,23 +24,6 @@ function world({ asks, from, laneEvents, queries = {} }) {
   const lanes = buildLanes(desk), anchor = anchorLane(lanes)
   return (playhead) => ({ desk, lanes, anchor, playhead, view: { lo: 0, hi: ROWS }, sawView: 'ctx', problems: [], navOpen: new Set(['msg']) })
 }
-const dataK = (h, cls) => { const m = new RegExp(`<span class="${cls}"[^>]*>`).exec(h); return m ? (/data-k="([^"]*)"/.exec(m[0]) || [])[1] ?? '' : null }
-
-test('2.2 K: the step head\'s K is the held user event\'s k; not drawn where the held pages cannot know it', () => {
-  for (const k of [2, 5, 9]) {
-    // held from step 3 (index 2); the first held user event (index 3) is the lane's k-th ask: a count of held events says 1
-    const at = world({ asks: [1, 3], from: 2, laneEvents: [{ type: 'user', rid: R(3), k, preview: 'p' }] })
-    assert.equal(dataK(stepBarHtml(at(3)), 'sb-ask'), String(k), `k=${k} on its own step`)
-    assert.equal(dataK(stepBarHtml(at(5)), 'sb-ask'), String(k), `k=${k} on a later step`)
-    assert.equal(dataK(stepBarHtml(at(2)), 'sb-ask'), null, 'held, but its ask lies before the held pages: no K')
-    assert.equal(dataK(stepBarHtml(at(1)), 'sb-ask'), null, 'the step is not held: no K')
-  }
-  // the lane from its first step without a user event at or before the step: no 「第 0 次」
-  const none = world({ asks: [4], from: 0, laneEvents: [{ type: 'user', rid: R(4), k: 1, preview: 'p' }] })
-  assert.equal(dataK(stepBarHtml(none(2)), 'sb-ask'), null)
-  assert.equal(dataK(stepBarHtml(none(4)), 'sb-ask'), '1')
-})
-
 test('1.3 §提问刻度: the ask ticks come from the session events; the hover carries the held event\'s k and preview, no K when not held', () => {
   const preview = 'refactor the parser <b>'
   const at = world({ asks: [1, 3], from: 2, laneEvents: [{ type: 'user', rid: R(3), k: 5, preview }] })

@@ -12,7 +12,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { buildLanes, anchorLane } from '../../web/legacy/replay/lanes.mjs'
 import { windowItems } from '../../web/src/screens/replay/window-model.mjs'
-import { stepBarHtml } from '../../web/legacy/replay/stepbar.mjs'
+import { stepHeadModel } from '../../web/src/screens/replay/models.mjs'
 import { detailHtml } from '../../web/legacy/replay/detail.mjs'
 import { bodyCache } from '../../web/legacy/replay/blocks.mjs'
 import { loadBodies, setDeskMode } from '../../web/legacy/replay/cell.mjs'
@@ -251,7 +251,7 @@ const fidOf = (items) => items.find((x) => x.type === 'fid') || null
 // the row's words as Window.tsx joins them; its technical details
 const factsOf = (items) => { const f = fidOf(items); return f ? f.facts.join(' · ') : null }
 const techOf = (items) => JSON.stringify((fidOf(items) || {}).tech ?? null)
-const headLit = (s) => stepBarHtml(s).includes('class="sb-fid"')
+const headLit = (s) => !!stepHeadModel({ ...s, playRid: s.anchor.calls[s.playhead].rid }).half // the step head's ◐ (StepHead.tsx draws .sb-fid iff half)
 
 test('2.3 #8 · 1.4 #9: each call fidelity fact is said once in the row, with the step head\'s ◐; no fact (capture routing included), no row', () => {
   const cases = [...FACTS,
