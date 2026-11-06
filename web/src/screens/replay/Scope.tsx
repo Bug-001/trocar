@@ -114,16 +114,15 @@ export function Scope({ desk }: { desk: DeskView }) {
     return () => ro?.disconnect()
   }, [desk])
   useLayoutEffect(() => { if (vRough) desk.roughDrawn('scope') }, [desk, vRough])
-  // the step tag sits over the axis: an end label it would be drawn on is hidden while it is there
+  // the step tag sits over the axis: an end label it would be drawn on is hidden while it is there. The short part's card stands in
+  // the room right of the bars; when they need it, it goes (1.3 §短章). Every box is read before anything is written: one layout
   useLayoutEffect(() => {
-    const saw = el.current!, tag = saw.querySelector('.axtag'), r = tag?.getBoundingClientRect()
-    for (const id of ['#sawstart', '#sawend']) {
-      const e = saw.querySelector<HTMLElement>(id)!, q = e.getBoundingClientRect()
-      e.toggleAttribute('data-covered', !!r && r.width > 0 && q.width > 0 && r.left < q.right + 4 && q.left < r.right + 4)
-    }
-    // the short part's card stands in the room right of the bars; when they need it, it goes (1.3 §短章)
-    const card = saw.querySelector<HTMLElement>('.chapcard')
-    if (card) { card.hidden = false; card.hidden = card.getBoundingClientRect().right > saw.getBoundingClientRect().right }
+    const saw = el.current!, tag = saw.querySelector('.axtag'), card = saw.querySelector<HTMLElement>('.chapcard')
+    if (card) card.hidden = false
+    const r = tag?.getBoundingClientRect(), ends = ['#sawstart', '#sawend'].map((id) => saw.querySelector<HTMLElement>(id)!)
+    const qs = ends.map((e) => e.getBoundingClientRect()), cut = card ? card.getBoundingClientRect().right > saw.getBoundingClientRect().right : false
+    ends.forEach((e, i) => { const q = qs[i]; e.toggleAttribute('data-covered', !!r && r.width > 0 && q.width > 0 && r.left < q.right + 4 && q.left < r.right + 4) })
+    if (card) card.hidden = cut
   }, [m])
 
   const cost = s.sawView === 'cost', rough = !!m?.rough, bars: Bar[] = m ? m.bars : [], n = Math.max(1, bars.length)
