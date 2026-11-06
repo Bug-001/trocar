@@ -18,7 +18,6 @@ import { LOCAL_ENV, QUERY_NAMES, paramsOf } from './query/client.mjs';
 import { HEAD_FILES, ctxKey } from './query/ctx-key.mjs';
 import { storedFile } from './query/stored.mjs';
 import { keep } from './query/service.mjs';
-export { tipTable } from './query/tips.mjs';
 
 // The one board (1.2 §托管与打开): the build in src/web/board/ (web/ through Vite, committed, D75③) is the static plane, served at `/`.
 // Named as new URL('./web/board/', import.meta.url) so test/ci/reachable.test.mjs follows it into the built board.
