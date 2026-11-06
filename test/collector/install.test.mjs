@@ -749,6 +749,7 @@ test('ensureDaemonUp: on win32 an EPIPE / ECONNRESET on the FIRST probe is "not 
   assert.deepEqual([gone.up, gone.halt, gone.problems, gone.startedUnit], [true, false, [], true], 'EPIPE then ENOENT is a gone pipe, so the daemon is started')
   const other = await run({ osName: 'win32', code: 'EACCES', upAfter: 99 })
   assert.deepEqual([other.up, other.halt, other.startedUnit], [false, true, false], 'an error that is not a gone pipe is still a daemon that does not answer')
+  assert.ok(other.problems.length && other.problems.every((p) => !p.includes('§')), 'the refusal is user text: no spec section numbers (1.6 §1.1)')
   const linux = await run({ osName: 'linux', code: 'EPIPE', upAfter: 99 })
   assert.deepEqual([linux.up, linux.halt], [false, true], 'only win32 reads EPIPE this way')
 })

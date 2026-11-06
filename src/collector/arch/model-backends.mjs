@@ -126,7 +126,7 @@ export async function systemProxyWatch({ up, read, io = {}, changes = null, fail
     if (failed) return
     failed = true
     const raw = watch.last() || {}
-    try { event({ event: 'failure', where: 'netenv', code: 'system-proxy-unreadable', reason: `the system proxy could not be read (${[raw.reason, raw.detail].filter(Boolean).join(': ') || 'no reason given'}); the doors keep the last one read`, ...(said ? { last: said } : {}) }) } catch { /* the event writer's own failure: nothing left to tell */ }
+    try { event({ event: 'failure', where: 'netenv', code: 'system-proxy-unreadable', reason: [raw.reason, raw.detail].filter(Boolean).join(': ') || 'the system gave no reading', /* the cause only: the code's words say the rest */ ...(said ? { last: said } : {}) }) } catch { /* the event writer's own failure: nothing left to tell */ }
   }
   const drop = () => { if (held) { timers.clearTimeout(held); held = null } }
   watch.on('change', ({ after }) => {

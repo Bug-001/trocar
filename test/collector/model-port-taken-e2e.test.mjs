@@ -51,8 +51,9 @@ for (const platform of ['darwin', 'win32']) {
         held = await squat(port)
         const io3 = fakeIo()
         assert.equal(await runOnCli(['--yes'], { io: io3, env: w.env, home: w.home, platform, deps }), 0, io3.text())
-        assert.match(io3.text(), /engine-port-taken/, 'on says the code')
-        assertEnglish(io3.text().split('\n').filter((l) => /engine-port-taken/.test(l)).join('\n'), 'the engine-port-taken note (D58)')
+        const said = io3.text().split('\n').filter((l) => l.includes(String(port)))
+        assert.ok(said.length && !/engine-port-taken/.test(io3.text()), `on names the taken port in words, not the code (1.6 \u00a71.1): ${io3.text()}`)
+        assertEnglish(said.join('\n'), 'the engine-port-taken note (D58)')
         const moved = (await doors())[g]
         assert.ok(moved && moved !== port, `the door moved off the taken port ${port}: ${moved}`)
         assert.equal(await canConnect(moved), true, 'the new door listens')

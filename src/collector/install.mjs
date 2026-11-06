@@ -631,7 +631,7 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = nul
   const notes = [], problems = []
   const was = await probe(true)
   let up = was.up, started = false, unitFailed = null, halt = false
-  if (was.stuck) { problems.push(`a daemon holds the control socket but does not answer (${was.stuck}); run "trocar off", then "trocar on" (off stops a stuck daemon, 1.6 §1.4)`); halt = true }
+  if (was.stuck) { problems.push(`a daemon holds the control socket but does not answer (${was.stuck}); run "trocar off", then "trocar on" (off stops a daemon that does not answer)`); halt = true }
   else if (unit) {
     if (halted()) halt = true
     else {

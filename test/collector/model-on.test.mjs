@@ -407,6 +407,7 @@ test('a held door port while our daemon is there but does not answer GET /status
       const r = await on(w, { request, isFree: async (p) => !Object.values(was).includes(p) })
       const recs = flows(w).slice(seen).filter((x) => x.event === 'failure' && x.where === 'ingress')
       assert.ok(recs.every((x) => checkRecord(x).length === 0), JSON.stringify(recs.map(checkRecord)))
+      assert.deepEqual(recs.map((x) => x.harness), recs.map(() => 'codex'), `${c.at}: each record names its harness, which status says it under`)
       if (c.own) {
         assert.deepEqual(ports(w), was, `${c.at}: the ports are kept`)
         assert.deepEqual(recs.map((x) => x.code), Object.keys(was).map(() => 'door-unconfirmed'), c.at)
