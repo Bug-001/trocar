@@ -68,7 +68,7 @@ test('W13 an owner question that finds nothing, or fails, writes why instead of 
 
 test('W13 the door does not wait on one owner question: another connection is answered while it is unanswered', T, async (t) => {
   let release
-  const D = await door(t, () => new Promise((res) => { release = () => res({ pid: 7, process: 'slow' }) }))
+  const D = await door(t, () => new Promise((res) => { release ??= () => res({ pid: 7, process: 'slow' }) })) // the first question is the one held; the 407's own question (its source) may wait forever
   const first = D.send('HEAD / HTTP/1.1\r\n\r\n')
   while (!release) await new Promise((r) => setTimeout(r, 5))
   const second = await D.send('CONNECT h.example:443 HTTP/1.1\r\n\r\n') // no credentials: the 407 challenge, at once

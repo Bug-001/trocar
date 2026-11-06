@@ -139,6 +139,57 @@ test('W13 the Basic challenge round trip (VS Code\'s Chromium): no credentials โ
   assert.equal(L.engine.stats().ingress.challenged, 1)
 })
 
+// A challenged client that never comes back with the right credentials is a silent loss (4.8 ยง5.1, D38): after ingressChallengeMs one
+// ingress-challenge-unanswered for the source (door + the pid that holds the client's end), never a credential value; one per episode.
+const CHALLENGE_MS = 150
+const SENT = [['no-credentials', ''], ['not-basic', 'Proxy-Authorization: Bearer abc.def-secret\r\n'], ['malformed-basic', 'Proxy-Authorization: Basic !!not*base64%%\r\n']]
+const challengeLab = (t) => { const redirector = createStaticRedirector(); redirector.ownerOfPeer = async () => ({ pid: 4242, process: 'Code Helper' }); return lab(t, { redirector, timing: { ingressChallengeMs: CHALLENGE_MS } }) }
+const challenge = async (L, header) => {
+  const target = `127.0.0.1:${L.echoPort}`
+  const c = L.client(); c.write(`CONNECT ${target} HTTP/1.1\r\nHost: ${target}\r\n${header}\r\n`)
+  assert.match(await c.head(), /^HTTP\/1\.1 407 /); await c.closed()
+}
+const unanswered = (L) => L.failures.filter((f) => f.code === 'ingress-challenge-unanswered')
+
+for (const [kind, header] of SENT) {
+  test(`W13 a 407 challenge (${kind}) the client never answers: one ingress-challenge-unanswered with the source and what was sent, no credential value`, T, async (t) => {
+    const L = await challengeLab(t)
+    await challenge(L, header)
+    await sleep(CHALLENGE_MS * 3)
+    const got = unanswered(L)
+    assert.equal(got.length, 1)
+    assert.deepEqual([got[0].event, got[0].where, got[0].pid, got[0].challenges, got[0].sent], ['failure', 'ingress', 4242, 1, [kind]])
+    assert.deepEqual(checkRecord(got[0]), []); assert.equal(isFailure(got[0]), true)
+    const all = JSON.stringify(L.failures)
+    for (const secret of ['abc.def-secret', '!!not*base64%%', TOKEN]) assert.equal(all.includes(secret), false, 'no credential value in any record')
+    assert.equal(L.upConns.length, 0)
+  })
+}
+
+test('W13 a challenge answered by the same source with the right credentials writes no failure', T, async (t) => {
+  const L = await challengeLab(t)
+  for (const [, header] of SENT) {
+    await challenge(L, header)
+    const again = L.client(); again.write(connectHead(`127.0.0.1:${L.echoPort}`))
+    assert.match(await again.head(), /^HTTP\/1\.1 200 /); again.sock.destroy()
+  }
+  await sleep(CHALLENGE_MS * 3)
+  assert.deepEqual(L.failures, [])
+})
+
+test('W13 one source challenged again and again without answering: one record for the episode, the challenges counted', T, async (t) => {
+  const L = await challengeLab(t)
+  for (let i = 0; i < 4; i++) await challenge(L, SENT[i % 3][1])
+  await sleep(CHALLENGE_MS * 3)
+  for (let i = 0; i < 3; i++) await challenge(L, '')
+  await sleep(CHALLENGE_MS * 3)
+  const got = unanswered(L)
+  assert.equal(got.length, 1, 'one record, not one per challenge')
+  assert.equal(got[0].challenges >= 4, true)
+  assert.deepEqual([...got[0].sent].sort(), SENT.map(([k]) => k).sort())
+  assert.equal(L.engine.stats().ingress.challenged, 7)
+})
+
 test('W13 no token reaches a record through the user field: the token sent as a username, or as a credential with no colon, is written as "(not a route name)"; a real route name is kept', T, async (t) => {
   const L = await lab(t)
   const WRONG = 'f'.repeat(32), target = `127.0.0.1:${L.echoPort}`
