@@ -162,7 +162,8 @@ export function regressions() {
  * the full list when it does not reproduce). A timing invariant (invariants TIMING) is not shrunk: a noisy box makes ddmin's trials
  * wander, so a reproduced one is saved whole as `timing`. → the saved document plus {file, trials}.
  */
-export async function findOne(v, steps, opts, { budgetMs = +(process.env.SEQ_SHRINK_MS || 600000), maxTrials = 40, log = () => {}, run = runSequence, dir = REGRESSIONS } = {}) {
+export const SHRINK_MS = +(process.env.SEQ_SHRINK_MS || 600000)
+export async function findOne(v, steps, opts, { budgetMs = SHRINK_MS, maxTrials = 40, log = () => {}, run = runSequence, dir = REGRESSIONS } = {}) {
   const head = steps.slice(0, v.step + 1)
   let trials = 0
   const fails = async (sub) => { trials++; const r = await run({ ...opts, steps: sub, shot: 'trial' }); log(`trial ${trials}: ${sub.length} steps → ${r.violation?.sig || 'pass'}`); return !!r.violation && keyOf(r.violation) === keyOf(v) }
