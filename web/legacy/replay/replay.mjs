@@ -203,7 +203,6 @@ function openDesk(ctx, route0, makeView) {
   s.setDiff = (idx) => { s.diffRef = idx; drawPlayhead() }
   s.renderStep = () => view.step()
   s.paintReview = () => view.review() // rails.mjs : highlightRange / clearRange set s.reviewRange
-  s.paintFrame = () => view.frame() // the rails' fold row sets s.railsFolded
   s.refit = () => refit() // a view whose lane capacity changed (view.capacity())
 
   function paintNotListed() { onEls(() => view.window({ kind: 'notlisted' })) }
