@@ -13,7 +13,7 @@ const DISK_GROUPS = Object.freeze(['records', 'sealed', 'index', 'logs', 'other'
 // What a file under the home is, by where it lies and what it is called (first rule that fits) — today's layout
 // (4.2 §目录): raw/<segment>.ndjson the captured records, raw/<segment>.sealed their sealed copies, index/ the
 // rebuildable segment index, and the journals and event logs. No rule names one file of one product.
-function groupOf(rel) {
+export function groupOf(rel) {
   if (rel.startsWith('logs/') || /(^|\/)flows\//.test(rel) || /(^|\/)journal\.jsonl$/.test(rel)) return 'logs'; // events, the raw journal, the change log
   if (/\.sealed$/.test(rel)) return 'sealed';
   if (/\.ndjson$/.test(rel)) return 'records';
