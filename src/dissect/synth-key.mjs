@@ -198,6 +198,11 @@ export function createSynthAssigner({ gapMs = SYNTH_GAP_MS, open = new Map() } =
       if (at >= 0 && (at > bestAt || (at === bestAt && e.lastMs > best.lastMs))) { best = e; bestAt = at; }
     }
     if (best) return join(best);
+    if (!chain.length && live.length) { // no history to judge by (3.4 合成键 step 4): the group's latest chain, which keeps the tail it has
+      const e = live.reduce((x, y) => (y.lastMs > x.lastMs ? y : x));
+      e.lastMs = Math.max(e.lastMs, ms); e.fp = grow(e.fp, facts.fp);
+      return { key: e.key, kin: false };
+    }
     let bestN = 0;
     const evidence = facts.mark ? facts.fp : (facts.fp || []).slice(0, facts.late || 0);
     for (const e of live) {

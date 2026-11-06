@@ -2,7 +2,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { createSynthKeys, SYNTH_GAP_MS } from '../../src/dissect/synth-key.mjs'
+import { createSynthKeys, createSynthAssigner, SYNTH_GAP_MS } from '../../src/dissect/synth-key.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
 import { rawHome, writeSegment } from '../query/raw-home.mjs'
 import fs from 'node:fs'
@@ -459,6 +459,16 @@ test('chains: a compaction stays in the session of the chain it rewrites and is 
       }
     }
   }
+})
+
+test('chains: a call with no readable history joins the group\'s latest chain and leaves its tail as it was; alone it opens one', () => {
+  const assign = createSynthAssigner(), f = (ms, chain) => ({ harness: 'hermes', ms, hash: 'h'.repeat(64), fp: [], chain })
+  assert.equal(assign(f(1000, [])).key, assign(f(2000, [])).key, 'no chain open yet, then one')
+  const a = assign(f(3000, ['a1'])).key
+  assert.notEqual(a, undefined)
+  const b = assign(f(4000, ['b1'])).key
+  assert.equal(assign(f(5000, [])).key, b)
+  assert.equal(assign(f(6000, ['b1', 'b2'])).key, b, 'the tail stands')
 })
 
 test('chains: the same membership in one pass, cut across two segments, and as the live segment grows; the index holds no message text', async () => {
