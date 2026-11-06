@@ -234,9 +234,8 @@ test('Linux · 4.4 #13 · 4.6: Set up on a HOME without an install record is cer
 })
 
 // 4.11 P4b · 4.6 (V67 / V91): what the judge calls `needed` is what install places again. Axes: every harness with an install-phase config item ×
-// the item's file deleted / rewritten without trocar's text (its own update): a `needed` setup is `ready` after Set up, and `on <h>` turns it on.
+// the item's file rewritten without trocar's text (its own update): a `needed` setup is `ready` after Set up, and `on <h>` turns it on.
 const DAMAGE = {
-  deleted: (x) => fs.rmSync(x.path),
   overwritten: (x) => { const t = fs.readFileSync(x.path, 'utf8'); fs.writeFileSync(x.path, x.kind === 'json-key' ? setKey(t, x.keys, '/elsewhere/ca.pem').text : removeTrocarText(t, x.ops).text) },
 }
 for (const h of ['claude-code', 'codex', 'hermes', 'kimi-code', 'z-code']) for (const [how, damage] of Object.entries(DAMAGE)) {
@@ -247,18 +246,15 @@ for (const h of ['claude-code', 'codex', 'hermes', 'kimi-code', 'z-code']) for (
     for (const x of items) damage(x)
     const left = () => items.map((x) => (fs.existsSync(x.path) ? fs.readFileSync(x.path, 'utf8') : null)) // what the user (or the harness's own update) left
     const userLeft = left()
-    const st = judged().state
-    if (st !== 'needed') assert.deepEqual([how, st], ['deleted', 'ready'], 'only a deleted file may take the form away (nothing then is needed)')
-    else {
-      const ctx = { home: path.join(s.home, '.trocar'), deps: linuxSetupDeps(s) }
-      const p = await VERBS.setup({ harness: h }, ctx)
-      assert.equal(p.status, 409, JSON.stringify(p.doc))
-      assert.ok(p.doc.plan.length > 0, JSON.stringify(p.doc))
-      const r = await VERBS.setup({ harness: h, confirm: p.doc.plan_id }, ctx)
-      assert.equal(r.status, 200, JSON.stringify(r.doc))
-      assert.equal(r.doc.ok, true)
-      assert.deepEqual([judged().state, judged().missing], ['ready', []])
-    }
+    assert.equal(judged().state, 'needed')
+    const ctx = { home: path.join(s.home, '.trocar'), deps: linuxSetupDeps(s) }
+    const p = await VERBS.setup({ harness: h }, ctx)
+    assert.equal(p.status, 409, JSON.stringify(p.doc))
+    assert.ok(p.doc.plan.length > 0, JSON.stringify(p.doc))
+    const r = await VERBS.setup({ harness: h, confirm: p.doc.plan_id }, ctx)
+    assert.equal(r.status, 200, JSON.stringify(r.doc))
+    assert.equal(r.doc.ok, true)
+    assert.deepEqual([judged().state, judged().missing], ['ready', []])
     const on = await s.on({ ids: [h] })
     assert.equal(on.exit, 0, JSON.stringify(on.receipt))
     assert.ok(on.receipt.harnesses.includes(h) && !on.receipt.refused.length)

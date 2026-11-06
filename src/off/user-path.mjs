@@ -16,6 +16,18 @@ export function userPathEnv({ home, env = process.env, fs = nodeFs }) {
   return env
 }
 
+/** `which(command)` over the user's PATH (userPathEnv): the first <dir>/<command><suffix> that exists, or null. */
+export function userWhich({ home, env = process.env, os, fs = nodeFs }) {
+  const pe = userPathEnv({ home, env, fs })
+  const get = (k) => (pe instanceof Map ? pe.get(k) : pe && pe[k])
+  const dirs = String(get('PATH') || get('Path') || '').split(os === 'win32' ? ';' : ':').filter(Boolean)
+  const exts = os === 'win32' ? String(get('PATHEXT') || '.EXE;.CMD;.BAT').split(';').filter(Boolean).concat(['']) : ['']
+  return (command) => {
+    for (const d of dirs) for (const x of exts) { const f = path.join(d, `${command}${x.toLowerCase()}`); if (fs.existsSync(f)) return f }
+    return null
+  }
+}
+
 /** Record `env`'s PATH while trocar is installed (an install manifest this build reads: a version 1 / 2 one makes every writing command refuse
  *  before any write, 4.11 ⑰); writes only when it differs. */
 export function recordUserPath({ home, env = process.env, fs = nodeFs }) {
