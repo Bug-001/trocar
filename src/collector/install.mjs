@@ -32,7 +32,7 @@ import { backupDir, opLockFile, standalonePath, standaloneFiles } from '../off/p
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
 import { readStateFile, emptyState, setDesired, writeStateAtomic } from '../off/state.mjs'
 import { newReceipt, UNDO_LINE } from '../off/schema.mjs'
-import { OFF_VERSION, installComplete } from '../off/manifest.mjs'
+import { OFF_VERSION, installComplete, daemonMayStart } from '../off/manifest.mjs'
 import { writeStandalone, standaloneDue } from '../off/standalone.mjs'
 import { codeId, setupHelperCommand } from '../version.mjs'
 
@@ -456,7 +456,9 @@ export async function turnOn(opts = {}) {
   // D62 ①: the daemon is asked for now, and its start asked when nothing answers, so it comes up while the plan below is read; ensureDaemonUp
   // takes this answer and reports the start as before. A run that stops before then leaves that daemon with what state.json already had on:
   // the daemon a login starts (no harness on: no helper, nothing steered, 4.6 「助手还没装」)
-  const early = dryRun ? null : await kickDaemon({ osName, dir, env, fs, unit, socketPath, request, pause })
+  // only a daemon that will run (its own gate, 1.6 §5.2): without an install record it refuses, and on refuses below with cert-not-installed
+  const mayStart = (() => { try { return daemonMayStart(readManifest(dir, fs)) } catch { return false } })()
+  const early = dryRun || !mayStart ? null : await kickDaemon({ osName, dir, env, fs, unit, socketPath, request, pause })
   // `lingerRead()` → { state, error? } (src/collector/arch/linux/redirector.mjs) says why when it cannot be read; `linger()` → true | false | null is the older form
   const lingerNow = () => { try {
     if (lingerRead) { const r = lingerRead(); return r.state === true || r.state === false ? { linger: r.state } : { linger: 'unknown', linger_reason: r.error || 'the linger state could not be read' } }

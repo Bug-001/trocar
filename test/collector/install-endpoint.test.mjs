@@ -83,6 +83,20 @@ test('loadParts (win32): the CLI parts view builds no redirector on win32 — th
   assert.deepEqual(p2.lingerRead(), { state: false })
 })
 
+// D62 ①, invariant 5: no install record, no early start — the daemon would refuse to run (1.6 §5.2), so `on` asks for no start it cannot have
+test('on (linux): with no install record the daemon is not started early; on refuses before the plan, with cert-not-installed', async () => {
+  const root = tmpDir('k-')
+  try {
+    const home = claudeHome(root)
+    const run = path.join(root, 'r'); fs.mkdirSync(path.join(run, 'trocar'), { recursive: true })
+    const env = { HOME: home, XDG_RUNTIME_DIR: run }
+    const order = []
+    const unit = { ...fakeUnit(home), startNow: () => { order.push('start'); return { code: 0 } }, start: () => { order.push('start'); return { code: 0 } } }
+    const r = await turnOn({ home, env, osName: 'linux', harnesses: [cc], freePort: async () => 47011, roots: ROOTS, unit, sleep: async () => {}, onPlan: () => order.push('plan'), confirm: async () => true })
+    assert.deepEqual([r.exit, r.receipt.error && r.receipt.error.code, order.filter((x) => x === 'start')], [1, 'cert-not-installed', []])
+  } finally { fs.rmSync(root, { recursive: true, force: true }) }
+})
+
 // D62 ①: with nothing on the socket, `on` asks the OS to start the daemon before it reads the plan, so the daemon boots while the plan is read; the start is
 // asked once, and what it answered is still the receipt's (a start that fails is a problem and exit 1, never a silent wait).
 for (const fails of [false, true]) {
