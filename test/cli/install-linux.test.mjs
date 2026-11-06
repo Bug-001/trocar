@@ -210,3 +210,22 @@ test('Linux install: the plan names every file of the standalone undo', async ()
   const planned = io.json().planned
   for (const f of standaloneFiles(home, 'linux')) assert.ok(planned.some((p) => p.path === f), `${f} is planned: ${JSON.stringify(planned)}`)
 })
+
+// 4.6 「这个 harness 装好了没有」 · 1.6 附录 C.2 `skipped`: what install has nothing to place for is in the receipt's `skipped`, with its reason —
+// an agent present whose inject gives nothing (Codex with no home yet) and an agent that is not here — never one it set up
+test('Linux install --json: the receipt\'s skipped names each agent install had nothing to place for, with a reason; not the agent it set up', async () => {
+  const { loadHarnesses } = await import('../../src/collector/harness/index.mjs')
+  const all = await loadHarnesses()
+  const home = tmpDir('trocar-install-skipped-')
+  seedClaude(home)
+  fs.mkdirSync(path.join(home, 'bin'), { recursive: true }); fs.writeFileSync(path.join(home, 'bin', 'codex'), '#!/bin/sh\n', { mode: 0o755 }) // codex on PATH, no ~/.codex
+  const io = fakeIo()
+  const exit = await runInstallCli(['--yes', '--json'], { ...onCtx(home, io, { harnesses: all, env: { PATH: path.join(home, 'bin') } }), platform: 'linux' })
+  assert.equal(exit, 0, io.text())
+  const doc = JSON.parse(io.stdoutText())
+  const names = doc.skipped.map((s) => s.what)
+  assert.ok(names.includes('codex'), JSON.stringify(doc.skipped))
+  for (const d of all.filter((x) => !['claude-code', 'codex'].includes(x.name))) assert.ok(names.includes(d.name), `${d.name} is not here: skipped`)
+  assert.ok(!names.includes('claude-code'), 'the agent install set up is not skipped')
+  assert.ok(doc.skipped.every((s) => typeof s.reason === 'string' && s.reason.length > 0), 'each with its reason')
+})
