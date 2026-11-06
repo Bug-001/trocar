@@ -22,7 +22,7 @@ import { patternsOf } from '../off/signature.mjs'
 import { readManifest, saveManifest, newManifest, missingDirs, applyJsonKey, previewJsonKey, applyTextEntry, previewTextEntry, writeOwnedFile, manifestPath, describeEntry, judgeEntry, judgeOwned, sha256 } from './core/trust/journal.mjs'
 import { EVENT, CODE } from './core/codes.mjs'
 import { RESTART_REASONS } from '../health/codes.mjs'
-import { controlRequest, controlEndpointFor } from './core/control.mjs'
+import { controlEndpointFor } from './core/control.mjs'
 import { readText, readTextOrError } from './core/config-read.mjs'
 import { appendEvent } from './core/events.mjs'
 import { runEventWriter } from '../off/events.mjs'
@@ -142,7 +142,7 @@ export function autostartBlock({ unit, osName }) {
 }
 
 /** What the receipt says an entry did, in one phrase — the same words in the dry run (from the preview) and in the real run (from the entry). */
-export function changeText(e, prior = null) {
+function changeText(e, prior = null) {
   if (e.kind === 'text') {
     if (e.vars) return `trocar block added at the top (${Object.keys(e.vars).join(', ')})${prior ? `; your own ${Object.keys(prior).join(', ')} commented out` : ''}`
     return `one line added (${shortLine(e.line)})`

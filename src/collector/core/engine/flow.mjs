@@ -3,7 +3,6 @@
 // and then decrypts / splices / tunnels. On the default path it only forwards the bytes it received
 // (passive relay); a decrypted flow additionally feeds a copy to the exchange tee. Any failure is
 // fail-open at the byte level: we destroy our own sockets and never inject bytes of our own.
-import net from 'node:net'
 import tls from 'node:tls'
 import { classify, parseClientHello, parseHead } from './sniff.mjs'
 import { createExchangeTee } from './exchange.mjs'
@@ -17,7 +16,7 @@ const msgOf = (e) => String((e && e.message) || e)
 // How long after our side of the TLS handshake with the client a zero-data close still reads as a rejection of our leaf (RFC 4.6 §引擎 5):
 // rejecting clients go inside the handshake or within ms after it, an unused pooled socket lives >= 60 s (Chromium; Go, reqwest 90 s).
 // Tests shorten it through the engine's timing.rejectWindowMs.
-export const REJECT_WINDOW_MS = 10_000
+const REJECT_WINDOW_MS = 10_000
 // From accepting the client's connection to starting our TLS server on its ClientHello: past this the engine was the slow side, so a
 // zero-data close before our side of the handshake completes may be the client giving up. It may as well be a refusal (a Node client
 // destroys its socket before its Finished leaves), so it still counts toward the negative entry (D31 fail-open) but never writes
