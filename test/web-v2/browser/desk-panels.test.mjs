@@ -4,7 +4,7 @@
 // units drawn directly into a detached element make. Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard, serveWorld, DESK_NEXT } from './harness.mjs'
+import { probe, withBoard, serveWorld } from './harness.mjs'
 import { world } from '../desk-world.mjs'
 import { serialize } from '../../../web/legacy/core/units.mjs'
 
@@ -28,7 +28,7 @@ test('2.3 #31: a step adds, removes or changes at most 64 nodes in the resource 
     }, n, { timeout: 30000, polling: 'raf' }).then(() => page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))))
     await page.evaluate((m) => { location.hash = `#/replay/p/S?step=${m}` }, mid)
     // the new desk draws the explorer only while Resources is the sidebar's current tab (1.2 §回放台布局: 不是当前标签时不画)
-    if (DESK_NEXT) await page.locator('.deskside [role=tab]').nth(1).click()
+    await page.locator('.deskside [role=tab]').nth(1).click()
     await drawn(mid)
     for (const t0 = Date.now(); new Set(b.requests.filter((r) => /^\/api\/d\/p\d/.test(r.url) && r.status === 200).map((r) => r.url)).size < files && Date.now() - t0 < 30000;) await page.waitForTimeout(100)
     await page.waitForTimeout(300)

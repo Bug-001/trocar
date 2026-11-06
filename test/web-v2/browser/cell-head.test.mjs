@@ -2,14 +2,14 @@
 // Reading a block far longer than the window, the controls stay in the visible box,
 // and the body's text never shows through them; a click flips the cell and leaves the row open; at 600 px and narrower they take a line
 // of their own; a cell with only Raw has no switch. Chromium (system Chrome); WebKit only when its executable is already installed.
-// Runs only under `npm run test:browser -- --desk-next`.
+// Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { DESK_NEXT, probe, serveWorld, webkitGate, withBoard } from './harness.mjs'
+import { probe, serveWorld, webkitGate, withBoard } from './harness.mjs'
 import { world } from '../desk-world.mjs'
 
 const gate = await probe()
-const skip = gate.ok ? DESK_NEXT ? false : "the new desk's row head" : gate.reason
+const skip = gate.ok ? false : gate.reason
 const webkitSkip = await webkitGate(skip)
 const LONG = Array.from({ length: 200 }, (_, i) => `Paragraph ${i} of a block far longer than the window it is read in.`).join('\n\n')
 

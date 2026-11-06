@@ -152,8 +152,6 @@ export async function withBoard({ bytes, home, base, idleMs, token = true, width
   return { url: face ? face.base : ext.origin, get, face, page, stop, requests, errors, missing }
 }
 
-// the build the face serves: the desk-next build under `npm run test:browser -- --desk-next` (scripts/test-browser.mjs), else the default
-export const DESK_NEXT = process.env.TROCAR_DESK_NEXT === '1'
 export const mark = (page, name) => page.evaluate((n) => { performance.mark(n) }, name)
 /** ms from `startMark` to now, recorded as measure `name`. */
 export const measure = (page, name, startMark) => page.evaluate(([n, s]) => performance.measure(n, s).duration, [name, startMark])

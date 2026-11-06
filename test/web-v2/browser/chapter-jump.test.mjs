@@ -7,7 +7,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { probe, withBoard, stats, DESK_NEXT } from './harness.mjs'
+import { probe, withBoard, stats } from './harness.mjs'
 import { BOARD_LINES } from '../perf-lines.mjs'
 import { chapterAt, chapterJump } from '../../../web/legacy/replay/timeline.mjs'
 import { readHead } from '../../../src/query/ctx-files.mjs'
@@ -17,7 +17,6 @@ import { stripLayout } from '../../../web/src/screens/replay/strip-layout.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
-const nextOnly = skip || (DESK_NEXT ? false : 'the new desk\'s strip (1.3 §概览条)')
 const SHAPE = { subLanes: 3, late: 4, subEvery: 4, compactAt: 20_000, growth: 1_000 }
 const CALLS = 1_700
 const TIP = 'trocar.token' // core/http.mjs: the board's token slot (4.4 §每用户口令)
@@ -148,7 +147,7 @@ test('1.3 §章 · 18: a jump into a chapter whose packs are not here paints fro
   } finally { release(); await c.context.close() }
 })
 
-test('1.3 · 22: a drag on the strip moves the bars to another part and stops following, never the step; go back brings them to it; [ ] count from the bars\' part', { skip: nextOnly, timeout: 300_000 }, async () => {
+test('1.3 · 22: a drag on the strip moves the bars to another part and stops following, never the step; go back brings them to it; [ ] count from the bars\' part', { skip, timeout: 300_000 }, async () => {
   const w = await folded(), chs = w.head.chapters, last = chs.length - 1, N = w.head.steps
   const c = await fresh(w)
   try {

@@ -5,7 +5,7 @@
 // Runs only under `npm run test:browser`.
 import test, { before, after } from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard, DESK_NEXT } from '../harness.mjs'
+import { probe, withBoard } from '../harness.mjs'
 import { makeWorld, mainCount } from './world.mjs'
 import { installProbe, snap } from './probe.mjs'
 import { check } from './invariants.mjs'
@@ -421,7 +421,7 @@ test('V-select a click that ends a drag-select folds a block', { skip }, async (
 
 // I-jump (2.5 #5): an Overview row whose click never reaches the desk. The planted listener sits on window in the capture phase, ahead
 // of React's root, and stops every click on a row; the reader's ovjump step then sees no landing.
-test('V-jump a click on an Overview row that never reaches the desk does not land', { skip: skip || (DESK_NEXT ? false : "the new desk's Overview (D80)") }, async () => {
+test('V-jump a click on an Overview row that never reaches the desk does not land', { skip }, async () => {
   await fresh(); await following()
   await b.page.evaluate(() => { window.__plantStop = (e) => { if (e.target.closest?.('[data-ovjump]')) e.stopPropagation() }; window.addEventListener('click', window.__plantStop, true) })
   try {
