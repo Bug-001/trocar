@@ -1,6 +1,6 @@
 // RFC 4.4 #4 (D35): reads running beside the daemon's appends and the seal worker's rename and unlink see every record exactly once,
 // none twice, none missing, and say no error for a record that is on disk. Windows is a seam here (a real run is owed on a Windows
-// machine): a plaintext another process has open refuses the unlink, or lingers under its name until the last handle closes.
+// machine): these model an unlink refused, and a name that lingers until the last handle closes.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { fork } from 'node:child_process'
@@ -99,9 +99,9 @@ for (const code of ['ENOENT', 'EPERM']) {
   })
 }
 
-// Windows: an unlink while a reader has the file open is refused; the plaintext stays and wins, and a later seal finishes it.
+// An unlink refused, as another process's open file can on Windows (node's own opens share delete): the plaintext stays and wins, and a later seal finishes it.
 for (const code of ['EBUSY', 'EPERM']) {
-  test(`an unlink refused while a reader has the plaintext open (${code}): nothing is lost, the reads stay whole, and the next seal finishes`, async () => {
+  test(`an unlink the OS refuses (${code}): nothing is lost, the reads stay whole, and the next seal finishes`, async () => {
     const home = homeWith(), want = idsOf([[CLOSED, N], [OTHER, N]]), plain = plainOf(home, CLOSED)
     const refusing = new Proxy(nodeFs, { get: (t, k) => (k === 'unlinkSync' ? (p) => { if (String(p) === plain) throw Object.assign(new Error(`${code}: unlink '${p}'`), { code }); return t.unlinkSync(p) } : t[k]) })
     await assert.rejects(sealSegment(plain, { lockFile: lockOf(home), journal: null, fs: refusing }), /the plaintext is kept/)
@@ -170,7 +170,8 @@ test('real processes: seal workers run while the daemon appends and reads loop, 
   })
   const sealing = (async () => { for (const s of segs) await worker(s); done = true })()
   let reads = 0, sawSealed = 0
-  while (!done || reads < 2) {
+  try {
+  while (!done || reads < 3) {
     const before = written, ask = askRead(null)
     const one = await ask('session', { id: SESSION }, home), rids = one.calls.map((c) => String(c.rid)), after = written
     assert.deepEqual(one.errors ?? [], [], `read ${reads}`)
@@ -178,12 +179,12 @@ test('real processes: seal workers run while the daemon appends and reads loop, 
     const inLive = rids.filter((r) => r.startsWith(`${LIVE}:`)).length
     assert.deepEqual(rids.filter((r) => !r.startsWith(`${LIVE}:`)).sort(), idsOf(closed).sort(), `read ${reads}: every closed record`)
     assert.ok(inLive >= before && inLive <= after, `read ${reads}: ${inLive} of the live segment, ${before}..${after} written`)
-    if (segs.some((s) => nodeFs.existsSync(sealedOf(home, s)))) sawSealed++
+    if (!done && segs.some((s) => nodeFs.existsSync(sealedOf(home, s)))) sawSealed++
     reads++
     await sleep(0)
   }
-  await sealing; await appender
+  } finally { await sealing; done = true; await appender }
   assert.deepEqual(failures, [])
   for (const s of segs) assert.ok(nodeFs.existsSync(sealedOf(home, s)) && !nodeFs.existsSync(plainOf(home, s)), `${s} sealed`)
-  assert.ok(sawSealed > 0 && reads > 2, `reads overlapped the seals: ${reads} reads`)
+  assert.ok(sawSealed > 0, `reads overlapped the seals: ${reads} reads`)
 })
