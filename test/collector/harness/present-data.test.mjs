@@ -27,6 +27,14 @@ for (const d of withInject) {
         continue
       }
       const ctx = ctxFor()
+      if (el.glob) { // the dir with no match is absent; one entry the glob matches makes it present
+        const dir = resolveLoc({ ...el, glob: undefined }, ctx)[0]
+        make(path.join(dir, `not-${el.glob.replace(/\*/g, '1')}`))
+        assert.equal(isPresent(only, ctx), false, `present[${i}]: nothing in ${dir} matches ${el.glob}`)
+        make(path.join(dir, el.glob.replace(/\*/g, '1.0.0')))
+        assert.equal(isPresent(only, ctx), true, `present[${i}]`)
+        continue
+      }
       const [at] = resolveLoc(el, ctx)
       if (el.base === 'abs') ctx.exists = (f) => f === at
       else make(at)

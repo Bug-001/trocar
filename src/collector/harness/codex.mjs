@@ -18,7 +18,7 @@
 import path from 'node:path'
 import { parseTomlLite, parseDotenv, hostOf, dig, expandHome } from '../core/config-read.mjs'
 import { CODE } from '../core/codes.mjs'
-import { envProxies, argAfter, dotenvLayer, isOwnPath, perOs } from './_common.mjs'
+import { envProxies, argAfter, dotenvLayer, isOwnPath, perOs, editorExtension } from './_common.mjs'
 import { ROUTE_PLACES } from '../../off/marker.mjs'
 
 const ETC_CONFIG = '/etc/codex/config.toml'
@@ -132,7 +132,7 @@ export default {
   layers: (ctx) => [dotenvLayer(ctx, path.join(codexHome(ctx.environ, ctx.home), '.env'), { name: '$CODEX_HOME/.env', drop: (k) => /^CODEX_/.test(k), live: false })],
   configHosts,
   proxies: (ctx) => envProxies(ctx.env, ['HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy', 'HTTP_PROXY', 'http_proxy']),
-  present: [{ base: 'home', dir: '.codex', env: 'CODEX_HOME' }, { command: 'codex' }],
+  present: [{ base: 'home', dir: '.codex', env: 'CODEX_HOME' }, { command: 'codex' }, ...editorExtension('openai.chatgpt')],
   inject,
   trust: {
     chain: [{ var: 'SSL_CERT_FILE', semantic: 'append' }, { var: 'CODEX_CA_CERTIFICATE', semantic: 'append' }], // both count (lab ①)

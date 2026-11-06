@@ -53,4 +53,7 @@ export const truthy = (v) => /^(1|true|yes|on)$/i.test(String(v || '').trim())
 
 // A value that differs per OS, as plain tagged data (spec 4.11 §2.3): core/proxymode/sources.mjs picks the entry of ctx.os. Not a function value, so
 // a descriptor's proxyMode stays data only.
+/** Driver-mode footprint places of an agent installed as a VS Code extension (4.6 「这个 harness 装好了没有」): the extension dir the desktop editor
+ *  and a remote one (Remote-SSH's server on this machine) install it into, `<id>-<version>[-<target>]`. */
+export const editorExtension = (id) => ['.vscode/extensions', '.vscode-server/extensions'].map((p) => ({ base: 'home', path: p, glob: `${id}-*` }))
 export const perOs = ({ darwin, win32 }) => ({ perOs: { ...(darwin !== undefined ? { darwin } : {}), ...(win32 !== undefined ? { win32 } : {}) } })

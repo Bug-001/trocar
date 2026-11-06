@@ -14,7 +14,7 @@
 // over into extra-cc.pem (its certificate blocks + the trocar CA); with none, the key points at trocar-ca.pem.
 import path from 'node:path'
 import { parseJsonc } from '../core/config-read.mjs'
-import { envHosts, argAfter, isOwnPath, perOs } from './_common.mjs'
+import { envHosts, argAfter, isOwnPath, perOs, editorExtension } from './_common.mjs'
 import { chromiumRole, NETWORK_SERVICE_ARG } from '../../off/chromium.mjs'
 
 const BASE_URL_KEYS = ['ANTHROPIC_BASE_URL', 'ANTHROPIC_BEDROCK_BASE_URL', 'ANTHROPIC_VERTEX_BASE_URL', 'ANTHROPIC_FOUNDRY_BASE_URL', 'ANTHROPIC_BEDROCK_MANTLE_BASE_URL']
@@ -202,7 +202,8 @@ export default {
   proxy,
   proxyMode,
   layers,
-  present: [{ base: 'home', path: '.local/bin/claude' }, { command: 'claude' }, { base: 'home', dir: '.claude', env: 'CLAUDE_CONFIG_DIR' }, { base: 'home', env: 'CLAUDE_CONFIG_DIR', path: '.claude.json' }],
+  present: [{ base: 'home', path: '.local/bin/claude' }, { command: 'claude' }, { base: 'home', dir: '.claude', env: 'CLAUDE_CONFIG_DIR' }, { base: 'home', env: 'CLAUDE_CONFIG_DIR', path: '.claude.json' },
+    ...editorExtension('anthropic.claude-code')],
   inject,
   configHosts: (ctx) => envHosts(ctx.env, BASE_URL_KEYS),
   trust: {
