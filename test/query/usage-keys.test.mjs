@@ -10,12 +10,12 @@ import { bigSession } from './big-session.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
 
 const KEY = 'vendor_probe_tokens'
-for (const wire of ['http', 'chat', 'ws']) {
+for (const wire of ['http', 'threads', 'chat', 'ws']) {
   test(`${wire}: a usage key no mapping knows is in every step's detail.norm.usage, with its value`, async () => {
     const home = path.join(tmpDir('trocar-usagekeys-'), '.trocar')
     const s = bigSession({ home, wire, growth: 400, subEvery: 0 })
     s.append(6)
-    // every usage object of every stored reply (JSON or the text of an SSE stream) gains the key
+    // every usage object of every stored reply (a JSON body, the text of an SSE stream on `threads`, or a WebSocket message on `ws`) gains the key
     const text = fs.readFileSync(s.file, 'utf8')
     const added = text.replace(/\\?"usage\\?":\s*\{/g, (m) => `${m}${m.startsWith('\\') ? `\\"${KEY}\\":7,` : `"${KEY}":7,`}`)
     assert.notEqual(added, text, 'the fixture has usage objects to extend')
