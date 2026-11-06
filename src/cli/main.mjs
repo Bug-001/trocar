@@ -66,7 +66,8 @@ export async function runCli(argv, { io = makeIo({ stdin: process.stdin, stdout:
   const remember = async () => {
     if (!(mutates && cmd.recordsPath !== false && run === cmd.run)) return
     try {
-      names = names || presentEnvNames(deps.harnesses || await (await import('../collector/harness/index.mjs')).loadHarnesses().catch(() => []))
+      // only driver mode (Linux) judges presence by footprint places: elsewhere no descriptor is loaded for this (it costs `on` / `off` ~50 ms)
+      names = names || (platform === 'linux' ? presentEnvNames(deps.harnesses || await (await import('../collector/harness/index.mjs')).loadHarnesses().catch(() => [])) : [])
       recordUserPath({ home, env, names, ...(deps.fs ? { fs: deps.fs } : {}) })
     } catch { /* the next command records it */ }
   }
