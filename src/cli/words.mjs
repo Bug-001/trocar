@@ -100,6 +100,7 @@ export const FAILURE_WORDS = Object.freeze({
   'ingress-unknown': 'a program spoke something other than a proxy request to trocar',
   'engine-port-taken': "trocar's port is taken",
   'door-unconfirmed': "trocar's background process did not answer, so trocar on kept its ports",
+  'system-proxy-unreadable': 'the system proxy could not be read; trocar keeps the last one it read',
   'upstream-unavailable': 'the upstream could not be dialled',
   // a connection row forwarded by design (4.6 §记录「连接行」的预期类; `where` is the row's 'flow'): the reason when the reason decided the class, else not_captured
   'flow/not-an-agent': 'connections of programs that are not agents, passed on unread',
