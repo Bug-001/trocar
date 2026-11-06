@@ -6,7 +6,7 @@
 // `trocar uninstall` — is src/off/ (the entries, the daemon stop, the lock) and src/cli/uninstall.mjs (1.6 §1.4, R3).
 import { retriedNote } from '../cli/words.mjs'
 import { UNDO_WORDS } from '../cli/receipt.mjs'
-import { isModelOs } from './model-install.mjs' // macOS / Windows: their on is turnOnModel (src/cli/on-model.mjs); this turnOn is Linux's
+import { isProxyMode as isModelOs } from '../off/mode.mjs' // model-install.mjs MODEL_OS, the same fact (test/off/mode.test.mjs); this file does not load the model's graph. macOS / Windows: their on is turnOnModel (src/cli/on-model.mjs); this turnOn is Linux's
 import fs from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
@@ -723,6 +723,3 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = nul
   return { up, state: up ? 'running' : was.stuck ? 'not-responding' : 'not-running', started: started && up, sock: p.sock(), ask: p.ask(), unitFailed, notes, problems, halt }
 }
 function readLockPid(dir, fs) { try { return JSON.parse(fs.readFileSync(path.join(dir, 'lock'), 'utf8')).pid ?? null } catch { return null } }
-
-// `trocar install` on macOS and Windows (4.11 §1, plan T20): the model's install lives beside this one; Linux keeps installCollector.
-export { runInstall } from './model-install.mjs'

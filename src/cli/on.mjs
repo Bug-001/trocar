@@ -19,8 +19,7 @@ import { readAgentList } from '../off/identity.mjs'
 import { prepareAdoption, editedFields, recordAdoption } from './on-adopt.mjs'
 import { refuseOldManifest } from '../off/manifest.mjs'
 import { commandNamed, usageLine } from './commands.mjs'
-import { isModelOs } from '../collector/model-install.mjs'
-import { runModelOn } from './on-model.mjs'
+import { isProxyMode as isModelOs } from '../off/mode.mjs' // model-install.mjs MODEL_OS, the same fact: the Linux on does not load the model's graph (D62)
 import { printJson } from './json.mjs'
 
 const USAGE = usageLine(commandNamed('on'))
@@ -96,7 +95,7 @@ export async function runOn({ io, env = process.env, home = os.homedir(), platfo
         return EXIT.incomplete
       }
     }
-    if (model) return await runModelOn({ io, env, home, os: parts.os, deps, parts, flags, ids: named.ids, json, source })
+    if (model) return await (await import('./on-model.mjs')).runModelOn({ io, env, home, os: parts.os, deps, parts, flags, ids: named.ids, json, source })
     const script = deps.script || process.argv[1]
     const unit = !parts.arch || !parts.arch.unit || !parts.arch.unit.userUnit ? null : parts.arch.unit.userUnit({ home, node: process.execPath, script, run: deps.exec || null, env, ...(deps.spawn ? { spawn: deps.spawn } : {}) }) // `deps.spawn`: the direct start (D61: `on`'s fallback when the login mechanism refuses) is a real spawn, so a test hands in its own (0.1 §3)
     const helperState = deps.helperState || (parts.arch && parts.arch.install && parts.arch.install.helperState ? () => parts.arch.install.helperState() : null)
