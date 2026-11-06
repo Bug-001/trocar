@@ -10,11 +10,12 @@ import { CONTROL_FILE } from './control-client.mjs'
 
 /** ~/.trocar (D27; the v0 prototype's ~/.atrace is read, never written, and is not here). */
 export const trocarHome = (home = os.homedir()) => path.join(home, '.trocar')
-/** 1.6 §1.5: the login entry (launchd, systemd --user, the scheduled task) starts the daemon with the account's own home — the user record's,
- *  the profile directory — never this shell's HOME / USERPROFILE. → that home, or null when it cannot be read or `home` is not the one the
- *  environment gave this process (a caller's sandbox HOME is not asked about). */
-export function accountHomeOf(home) {
-  if (home !== os.homedir()) return null
+/** 1.6 §1.5: on macOS and Windows the login entry (launchd, the scheduled task) starts the daemon with the account's own home — the user
+ *  record's, the profile directory — never this shell's HOME / USERPROFILE. → that home, or null when it cannot be read, on Linux (systemd
+ *  --user uses its manager's HOME, and enabling the unit by name there fails aloud when that is another home), or when `home` is not the
+ *  one the environment gave this process (a caller's sandbox HOME is not asked about). */
+export function accountHomeOf(home, platform = process.platform) {
+  if (platform === 'linux' || home !== os.homedir()) return null
   try { return os.userInfo().homedir || null } catch { return null }
 }
 /** `install` and `uninstall` before they read or write anything (1.6 §1.5, V126): this run's home and the account's (`account`, null = not

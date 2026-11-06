@@ -508,7 +508,7 @@ export async function runUninstallCli(argv, { io, env = process.env, home = node
   const json = flags.has('--json')
   if ((deps.getuid || processUid)() === 0) { io.err('trocar uninstall: run this as your own user, not as root.'); return EXIT.usage }
   // 1.6 §1.5 (V126): under a HOME that is not the account's, this run would undo that home while the login entry and its daemon are the account's
-  const away = homeMismatch({ home, account: deps.accountHome ? deps.accountHome() : accountHomeOf(home), platform: deps.platform || platform, fs: deps.fs })
+  const away = homeMismatch({ home, account: deps.accountHome ? deps.accountHome() : accountHomeOf(home, deps.platform || platform), platform: deps.platform || platform, fs: deps.fs })
   if (away) { if (json) printJson(io, { ...newReceipt('uninstall'), ok: false, error: { code: away.code, message: away.message }, notes: [away.message] }); else io.err(fit([`trocar uninstall: ${away.message}`]).join('\n')); return EXIT.usage }
   try {
     // a platform without a collector reaches runUninstall the same way and finds nothing to undo (D39⑥ executed 2026-10-11: the old capture's own uninstall went with it)

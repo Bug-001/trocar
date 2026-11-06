@@ -97,7 +97,7 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
   if ((deps.getuid || processUid)() === 0) { io.err('trocar install: run this as your own user, not as root.'); return EXIT.usage }
   const fs = deps.fs || nodeFs
   // 1.6 §1.5 (V126): a HOME that is not the account's is refused before anything is read — the daemon the login entry starts would use the other one
-  const away = homeMismatch({ home, account: deps.accountHome ? deps.accountHome() : accountHomeOf(home), platform, fs })
+  const away = homeMismatch({ home, account: deps.accountHome ? deps.accountHome() : accountHomeOf(home, platform), platform, fs })
   if (away) { if (json) printJson(io, { ...newReceipt('install'), ok: false, error: { code: away.code, message: away.message }, notes: [away.message] }); else io.err(fit([`trocar install: ${away.message}`]).join('\n')); return EXIT.usage }
   const old = refuseOldManifest({ home, platform, fs })
   if (old) { if (json) printJson(io, { ...newReceipt('install'), ok: false, error: { code: 'older-install', message: old.message }, notes: [old.message] }); else io.err(fit([`trocar install: ${old.message}`], { home }).join('\n')); return EXIT.incomplete }
