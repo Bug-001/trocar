@@ -3,7 +3,9 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path'
 import { buildTransparentEnvelope, buildWsEnvelope } from '../../../src/collector/core/record/envelope.mjs'
 import { createRecordStore } from '../../../src/collector/core/record/store.mjs'
+import zlib from 'node:zlib'
 import { tmpDir } from '../../helpers/tmp.mjs'
+import { engineExchange } from '../../helpers/engine-exchange.mjs'
 
 const FLOW = { id: 'f1', host: 'relay.test', scheme: 'https', dst: { address: '10.0.0.9', port: 443 }, proc: { pid: 9, exe: '/usr/bin/claude', agent: 'claude-code' } }
 const head = (s) => ({ raw: Buffer.from(s, 'latin1'), startLine: s.split('\r\n')[0] })
@@ -224,4 +226,21 @@ test('compressed request bodies: cut or unfinished bodies are not decoded; non-U
   assert.equal(mk('br', zlib.brotliCompressSync(json)).req_body, json)
   const empty = mk('gzip', Buffer.alloc(0))
   assert.deepEqual([empty.req_body, 'req_body_b64' in empty, 'req_encoding_error' in empty], ['', false, false])
+})
+
+test('4.1 #13 — through the real engine a compressed reply records its wire bytes and the header; the client gets them unchanged; a log-level record has neither', { timeout: 30_000 }, async () => {
+  const sse = Buffer.from('event: message_stop\ndata: {"type":"message_stop"}\n\n')
+  const calls = [
+    { path: '/v1/messages', headers: { 'Content-Type': 'text/event-stream', 'Content-Encoding': 'gzip' }, wire: zlib.gzipSync(sse) },
+    { path: '/api/x', headers: { 'Content-Type': 'application/json', 'Content-Encoding': 'br' }, wire: zlib.brotliCompressSync(Buffer.from('{"a":1}')) },
+  ]
+  for (const c of calls) {
+    const { env, failures, got, head } = await engineExchange(c)
+    assert.ok(Buffer.from(env.resp.wire_b64, 'base64').equals(c.wire), c.path)
+    assert.equal(env.resp.content_encoding, c.headers['Content-Encoding'], c.path)
+    assert.equal(got, Buffer.byteLength(head) + c.wire.length, c.path)
+    assert.deepEqual(failures, [], c.path)
+  }
+  const { env } = await engineExchange({ ...calls[0], retention: () => ({ class: 'telemetry', level: 'log' }) })
+  assert.deepEqual(['wire_b64' in env.resp, 'content_encoding' in env.resp], [false, false])
 })
