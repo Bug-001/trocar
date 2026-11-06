@@ -68,8 +68,8 @@ export function judgeHarness({ desired, entryIntact = null, entryWhy = 'entry-mi
   return { captured, rows }
 }
 
-/** A harness's `cert` for judgeHarness (V32) from its forms' `certificate` (1.6 §9.4, proxy mode): true when every present form's is in effect (or none says), else the first one that is not —
- *  its code, or null (not known) when it has none (the user's root store could not be read); else null when one is not known (`in_effect: null`, D38). */
+/** A harness's `cert` for judgeHarness (V32) from its forms' `certificate` (1.6 §9.4, proxy mode): true when every present form's is in effect (or none says), else the code of the first
+ *  one that is not; else null when one is not known (`in_effect: null`: a file, setting or root store not read, D38). */
 export function certOfForms(forms) {
   const cs = (forms || []).map((x) => x.certificate).filter(Boolean)
   const bad = cs.find((c) => c.in_effect === false)

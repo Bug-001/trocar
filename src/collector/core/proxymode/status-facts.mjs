@@ -120,11 +120,12 @@ export async function modelFormFacts({ harnesses, os, manifest: m, reply = null,
       const c = f.cert === 'root' ? null : (pm.certs || {})[f.cert]
       const carrier = !c || (c.when && holds(c.when, ctx) === false) ? 'root' : CARRIER[c.kind] ?? null
       const r = root || {}
-      const bad = carrier === 'root' ? (r.state === 'in-place' ? null : { reason: root ? r.code ?? null : CODE.certNotInstalled, command: r.command || INSTALL }) // a root status could not read (no code): not known, never a made-up code
+      const bad = carrier === 'root' ? (r.state === 'in-place' ? null : { reason: root ? r.code ?? null : CODE.certNotInstalled, command: r.command || INSTALL })
         : d || (own.length ? null : { reason: 'entry-missing', command: INSTALL })
       const certificate = { in_effect: !bad, carrier, user_file: uf.state ? uf : null, since: latest(carrier === 'root' ? inst.filter((i) => i.kind === 'system-root') : own), code: bad ? bad.reason : null, command: bad ? bad.command || INSTALL : null }
       // the user file a setting names carries the form whatever its carrier: a root form's file replaces the system roots (rule U, SSL_CERT_FILE)
-      if (certificate.in_effect && uf.state === 'unknown') Object.assign(certificate, { in_effect: null, code: ufCode, command: null }) // not known (D38)
+      if (bad && bad.reason === null) Object.assign(certificate, { in_effect: null, command: null }) // the user's root store could not be read: not known (D38), never a made-up code
+      else if (certificate.in_effect && uf.state === 'unknown') Object.assign(certificate, { in_effect: null, code: ufCode, command: null }) // not known (D38)
       else if (certificate.in_effect && uf.state && uf.state !== 'intact') Object.assign(certificate, { in_effect: false, code: uf.state === 'changed' ? 'entry-changed' : CODE.notUsersFile, command: INSTALL })
       const g = `${h}:${f.route}`, route = pm.routes[f.route] || {}
       const es = on.filter((i) => i.harness === h && i.route === f.route)

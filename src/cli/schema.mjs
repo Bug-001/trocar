@@ -169,8 +169,8 @@ const CARRIERS = Object.freeze(['root', 'config-key', 'wrapper', 'plugin', null]
 const USER_FILE_STATES = Object.freeze(['intact', 'changed', 'not-users-file', 'unknown'])
 // `user_file`: null, or { path, state } — `unknown` (the file or a setting naming it not read) with its reason, its path null when the setting was the one
 const userFileOk = (u) => u === null || (isObject(u) && USER_FILE_STATES.includes(u.state) && (u.state === 'unknown' ? isString(u.reason) && u.reason !== '' && (u.path === null || isString(u.path)) : isString(u.path)))
-// `in_effect`: true · false (with its code's command) · null = not known (D38), with the code saying why and no command
-const inEffectOk = (c) => c.in_effect === true || (c.in_effect === false && isId(c.command)) || (c.in_effect === null && isId(c.code) && c.command === null)
+// `in_effect`: true · false (with its code and command) · null = not known (D38), with the code saying why (null only when a root carrier's store could not be read) and no command
+const inEffectOk = (c) => c.in_effect === true || (c.in_effect === false && isId(c.code) && isId(c.command)) || (c.in_effect === null && c.command === null && (isId(c.code) || (c.code === null && c.carrier === 'root')))
 const UPSTREAM_SOURCES = Object.freeze(['hook', 'config-prior', 'process-env', 'system-proxy', 'direct', 'unknown'])
 const redacted = (v) => v === null || (typeof v === 'string' && !/\/\/[^/@]*:(?!\*\*\*@)[^/@]*@/.test(v) && !/\/\/(?!\*\*\*@)[^/:@]+@/.test(v)) // no user or password left in a URL
 /** status --json `forms` (1.6 §9.4): per harness, per form, `certificate` and `proxy` with their closed sets; every URL redacted. */

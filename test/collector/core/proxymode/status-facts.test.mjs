@@ -81,6 +81,9 @@ for (const os of OSES) {
         assert.equal(y.hook, ['wrapper', 'plugin'].includes(x.certificate.carrier) ? 'entry-changed' : null, 'a hook carrier that drifted takes the form off the path (row 31)')
         assert.deepEqual(y.proxy, x.proxy, 'the two axes do not touch (D55①)')
       })
+      // the user's root store could not be read (cert.root unknown, no code): a root form's certificate is not known — in_effect null, never false (D38)
+      const unread = await modelFormFacts({ harnesses: all, os, manifest: m, reply: { doors }, root: { state: 'unknown', code: null, command: null }, ctx: ctxOf(os, home) })
+      for (const y of unread[desc.name].filter((x) => x.certificate.carrier === 'root')) assert.deepEqual([y.certificate.in_effect, y.certificate.code, y.certificate.command], [null, null, null], y.id)
     })
   }
 }

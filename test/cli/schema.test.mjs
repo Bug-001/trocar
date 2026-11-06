@@ -205,7 +205,7 @@ test('附录 C.2 names exactly the keys of COMMAND_KEYS, for every command', () 
   }
 })
 
-// 1.6 §9.4 `certificate.in_effect` / `user_file` (D38): not known is `in_effect: null` with the read code and no command, the user file `unknown` with a reason
+// 1.6 §9.4 `certificate.in_effect` / `user_file` (D38): false carries its code and command; not known is `in_effect: null` with the read code (null only for an unread root store) and no command, the user file `unknown` with a reason
 // (its path null when the setting naming it was not read); anything else written there is refused.
 test('status forms: a certificate not known is in_effect null with a code, user_file unknown with a reason; malformed ones are refused', () => {
   const proxy = { connected: true, entry_intact: true, door_up: true, upstream: { url_redacted: null, source: 'direct' }, written: null, prior: null }
@@ -215,9 +215,11 @@ test('status forms: a certificate not known is in_effect null with a code, user_
     { in_effect: null, code: 'config-unreadable', command: null, user_file: { path: null, state: 'unknown', reason: '/h/settings.json: EACCES' } },
     { in_effect: false, code: 'entry-changed', command: 'trocar install', user_file: { path: '/h/mine.pem', state: 'changed' } },
     { in_effect: true, code: null, command: null, user_file: null },
+    { in_effect: null, carrier: 'root', code: null, command: null, user_file: null }, // the user's root store could not be read
   ]) assert.deepEqual(certOf(c), [], JSON.stringify(c))
   for (const c of [
-    { in_effect: null, code: null, command: null, user_file: null }, // not known says why
+    { in_effect: null, code: null, command: null, user_file: null }, // not known says why (a null code only on a root carrier)
+    { in_effect: false, carrier: 'root', code: null, command: 'trocar install', user_file: null }, // not known is null, never false without a code
     { in_effect: 'unknown', code: 'file-unreadable', command: null, user_file: null },
     { in_effect: null, code: 'file-unreadable', command: null, user_file: { path: '/h/mine.pem', state: 'unknown' } }, // unknown without its reason
     { in_effect: null, code: 'file-unreadable', command: null, user_file: { path: '/h/mine.pem', state: 'unreadable', reason: 'x' } },
