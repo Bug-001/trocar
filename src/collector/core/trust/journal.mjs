@@ -91,7 +91,7 @@ export function writeOwnedFile({ dir, manifest, harness = null, role, phase, fil
   item.undo_by_hand = undoByHand(item)
   if (known) manifest.files[manifest.files.indexOf(known)] = item
   else manifest.files.push(item)
-  saveManifest(dir, manifest, fs)
+  save(dir, manifest, fs)
   for (const d of created) if (!fs.existsSync(d)) fs.mkdirSync(d, { mode: 0o700 })
   writeDurable(file, data, mode, fs)
 }
@@ -167,23 +167,31 @@ export function judgeEntry({ manifest, planned, fs = nodeFs }) {
   return { action: 'skip-user-changed', entry: x, why: `${x.path} changed after an earlier run recorded its intent to change it, and is not what that run would have written` }
 }
 const refuseChanged = (j) => new Error(`${j.entry.path}: ${j.why}; trocar leaves it as it is — run "trocar off", then "trocar on", to write the entry again`)
+// D62①: `defer` (the routes of one `on`) leaves the save after a write to the next save — the next file's intent, which is saved before that file
+// changes, or flushResults at the end of the run. The intent is durable before its file changes as always; a crash between the two leaves the
+// record with no post_sha256, the state a crash between the write and its own save left, and the next run finishes it the same way.
+const RESULT_PENDING = Symbol('a result not saved yet')
+const save = (dir, manifest, fs) => { saveManifest(dir, manifest, fs); delete manifest[RESULT_PENDING] }
+const settle = (dir, manifest, fs, defer) => { if (defer) manifest[RESULT_PENDING] = true; else save(dir, manifest, fs) }
+/** Saves the manifest when a deferred result is not on disk yet. */
+export function flushResults(dir, manifest, fs = nodeFs) { if (manifest && manifest[RESULT_PENDING]) save(dir, manifest, fs) }
 const makeDirs = (entry, fs) => { for (const d of entry.created_dirs) if (!fs.existsSync(d)) fs.mkdirSync(d, { mode: 0o700 }) }
 
 // the part of applyJsonKey / applyTextEntry after the edit is decided: the backup (kept from the intent a crashed run left, if it is still there),
 // the record before the write, the write, the record after it — `resumed` is that crashed run's entry, finished in place. The text is written in the
 // file's own form (`charset`: recorded on the entry only when it is not utf8, 4.6 日志), and post_sha256 is of the bytes written.
-function commit({ dir, manifest, fresh, resumed, before, res, backup, real, charset, now, fs }) {
+function commit({ dir, manifest, fresh, resumed, before, res, backup, real, charset, now, fs, defer = false }) {
   if (charset !== 'utf8') fresh.charset = charset
   else if (resumed) delete resumed.charset
   const entry = resumed ? Object.assign(resumed, { ...fresh, created_dirs: [...new Set([...(resumed.created_dirs || []), ...fresh.created_dirs])], backup: resumed.backup && fs.existsSync(resumed.backup) ? resumed.backup : backup(), existed_before: resumed.existed_before, mode: resumed.mode, pre_sha256: resumed.pre_sha256 }) : { ...fresh, backup: backup() }
   entry.undo_by_hand = undoByHand(entry)
   if (!resumed) manifest.entries.push(entry)
-  saveManifest(dir, manifest, fs) // the intent is durable before the user's file changes
+  save(dir, manifest, fs) // the intent is durable before the user's file changes
   makeDirs(entry, fs)
   const bytes = encodeText(res.text, charset)
   writeDurable(real, bytes, entry.mode, fs)
   entry.post_sha256 = sha256(bytes)
-  saveManifest(dir, manifest, fs)
+  settle(dir, manifest, fs, defer)
   return entry
 }
 
@@ -205,7 +213,7 @@ export function applyJsonKey({ keys, value, alsoSet = [], fold = false, ...rest 
  *  finished first, as a group: still at the first one's pre → planned again (its backup kept); already written → adopted, and the keys this call
  *  plans that they do not cover are written on top (no second backup: the adopted first holds the user's bytes); anything else → refused.
  *  → the records written or adopted. */
-export function applyJsonKeys({ dir, manifest, harness, phase, file, sets = [], items = [], base = null, home, door = null, now = new Date(), fs = nodeFs }) {
+export function applyJsonKeys({ dir, manifest, harness, phase, file, sets = [], items = [], base = null, home, door = null, route = null, defer = false, now = new Date(), fs = nodeFs }) {
   needHome('applyJsonKeys', home)
   needPhase('applyJsonKeys', phase)
   const real = editTarget(file, fs)
@@ -227,7 +235,7 @@ export function applyJsonKeys({ dir, manifest, harness, phase, file, sets = [], 
         throw refuseChanged({ entry: p0, why: `${file} changed after an earlier run recorded its intent to change it, and is not what that run would have written` })
       }
       pending.forEach((x, k) => { x.post_sha256 = k === pending.length - 1 ? sha256(before) : sha256(encodeText(texts[k + 1], x.charset || 'utf8')) })
-      saveManifest(dir, manifest, fs) // the file was written; only the record of it was not
+      save(dir, manifest, fs) // the file was written; only the record of it was not
       adopted = pending // planned below as any key: those are intact, the rest are written on top (their undo lands on the adopted last post)
     }
   }
@@ -274,18 +282,18 @@ export function applyJsonKeys({ dir, manifest, harness, phase, file, sets = [], 
       kind, harness, phase, path: file, ...(real !== file ? { real_path: real } : {}), ...what,
       existed_before: k === 0 ? before != null : true, mode, pre_sha256: k === 0 ? sha256(before) : sha256(enc(steps[k - 1].text)), post_sha256: null,
       created_dirs: k === 0 ? [...new Set([...dirs, ...missingDirs(path.dirname(file), fs)])] : [], installed_at: now.toISOString(),
-      backup: k === 0 ? backup : null, ...(door ? { door } : {}), ...(charset !== 'utf8' ? { charset } : {}),
+      backup: k === 0 ? backup : null, ...(door ? { door } : {}), ...(route ? { route } : {}), ...(charset !== 'utf8' ? { charset } : {}),
     }
     r.undo_by_hand = undoByHand(r)
     return r
   })
   manifest.entries.push(...recs)
-  saveManifest(dir, manifest, fs) // every intent is durable (and sealed) before the user's file changes
+  save(dir, manifest, fs) // every intent is durable (and sealed) before the user's file changes
   makeDirs(recs[0], fs)
   const bytes = enc(text)
   writeDurable(real, bytes, mode, fs)
   recs.forEach((r, k) => { r.post_sha256 = k === recs.length - 1 ? sha256(bytes) : sha256(enc(steps[k].text)) })
-  saveManifest(dir, manifest, fs)
+  settle(dir, manifest, fs, defer)
   return [...adopted, ...recs]
 }
 
@@ -318,7 +326,7 @@ export function previewTextEntry({ file, edit, fs = nodeFs }) {
   const res = editText(file, readUserText(file, readOrNull(fs, real)).text, edit)
   return { path: file, ...(real !== file ? { real_path: real } : {}), changes: true, prior: res.prior ?? null }
 }
-export function applyTextEntry({ dir, manifest, harness, phase, file, edit, base = null, home, door = null, now = new Date(), fs = nodeFs }) {
+export function applyTextEntry({ dir, manifest, harness, phase, file, edit, base = null, home, door = null, route = null, defer = false, now = new Date(), fs = nodeFs }) {
   needHome('applyTextEntry', home)
   needPhase('applyTextEntry', phase)
   const j = judgeEntry({ manifest, planned: { harness, kind: 'text', path: file, format: edit.format, ...(edit.vars ? { vars: edit.vars } : { line: edit.line }) }, fs })
@@ -329,7 +337,7 @@ export function applyTextEntry({ dir, manifest, harness, phase, file, edit, base
   const joined = edit.joinBlock === true && (manifest.entries || []).some((x) => x.harness === harness && samePath(x.path, file, fs) && x.kind === 'text' && x.format === 'dotenv-block')
   const real = editTarget(file, fs)
   const before = startFrom(file, readOrNull(fs, real), base)
-  if (j.adopt) { j.entry.post_sha256 = sha256(before); saveManifest(dir, manifest, fs); return j.entry }
+  if (j.adopt) { j.entry.post_sha256 = sha256(before); save(dir, manifest, fs); return j.entry }
   // an intent a crashed run left, whose write never happened: the file is still as it was, so its text is not yet in it
   const read = readUserText(file, before)
   const res = editText(file, read.text, edit, { joined, phase })
@@ -340,9 +348,9 @@ export function applyTextEntry({ dir, manifest, harness, phase, file, edit, base
     ...(edit.neutralize && edit.neutralize.length ? { neutralize: edit.neutralize } : {}), ...(edit.fold === true ? { fold: true } : {}),
     existed_before: before != null, mode: before != null ? fs.statSync(real).mode & 0o777 : (edit.mode || 0o600),
     pre_sha256: sha256(before), post_sha256: null, ops: res.ops, prior_value: res.prior,
-    created_dirs: missingDirs(path.dirname(file), fs), installed_at: now.toISOString(), ...(door ? { door } : {}),
+    created_dirs: missingDirs(path.dirname(file), fs), installed_at: now.toISOString(), ...(door ? { door } : {}), ...(route ? { route } : {}),
   }
-  return commit({ dir, manifest, fresh, resumed, before, res, real, charset: read.charset, now, fs, backup: () => backupFirst({ home, file, before, now, fs }) })
+  return commit({ dir, manifest, fresh, resumed, before, res, real, charset: read.charset, now, fs, defer, backup: () => backupFirst({ home, file, before, now, fs }) })
 }
 
 // When trocar installed the value a config layer holds (ms), or null. A layer counts when an entry changed its file

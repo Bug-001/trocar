@@ -8,7 +8,7 @@ import nodeFs from 'node:fs'
 import crypto from 'node:crypto'
 import path from 'node:path'
 import { collectorHome } from '../paths.mjs'
-import { readManifest, saveManifest } from './core/trust/journal.mjs'
+import { readManifest, saveManifest, flushResults } from './core/trust/journal.mjs'
 import { installUsable, OFF_VERSION } from '../off/manifest.mjs'
 import { writeStandalone } from '../off/standalone.mjs'
 import { readStateFile, setDesired, writeStateAtomic } from '../off/state.mjs'
@@ -65,7 +65,7 @@ export async function turnOnModel({ os, home, env = process.env, ids = null, har
   const out = { on, refused, routes: [], notes: [...pending, ...unsure], problems: [], doors: {}, planned: [], root, exit: 1 }
   if (!on.length) return out
   const render = (tpl, { door, harness }) => { const d = byName.get(harness), p = (d.proxy || {}).env || []; return renderHook(tpl, { DOOR: door, PROXY_ENV: p, PROXY_NAMES: p, NO_PROXY_ENV: noProxyNames(d) }).text }
-  const wctx = { ...ctx, dir, home, manifest: m, fs, now, persistentEnv, systemProxy, render, ...(newId ? { newId } : {}) }
+  const wctx = { ...ctx, dir, home, manifest: m, fs, now, persistentEnv, systemProxy, render, deferResult: true, ...(newId ? { newId } : {}) } // deferResult: a route's result is saved with the next route's intent (D62①)
   const planned = on.map((h) => ({ h, plan: planRoutes(byName.get(h), wctx) }))
   // --dry-run (1.6 §1.1): what would be written — each planned route with the files it resolves to — and nothing written
   out.planned = planned.flatMap(({ h, plan }) => plan.routes.map((r) => ({ harness: h, route: r.id, kind: r.route.kind, forms: r.forms, paths: routePaths(r.route, wctx), ...(r.route.proxyKeys ? { keys: r.route.proxyKeys.map((k) => [].concat(k).join('.')) } : {}) })))
@@ -143,7 +143,10 @@ export async function turnOnModel({ os, home, env = process.env, ids = null, har
         for (const n of w.notRouted) out.routes.push({ harness: h, ok: false, ...n })
         out.notes.push(...w.notes.map((n) => ({ harness: h, ...n })))
       }
-    } catch (e) { if (e && typeof e === 'object') e.turnedOn = turned(); throw e }
+    } catch (e) { if (e && typeof e === 'object') e.turnedOn = turned(); throw e } finally {
+      // the last route's result (wctx.deferResult). In a finally it must not throw: that would replace the error on its way out, or drop this receipt with the entries already written (V104)
+      try { flushResults(dir, m, fs) } catch (e) { out.problems.push(`the entries were written but trocar could not save its record of them (${errText(e)}); trocar off still undoes them; fix that, then run trocar on again`) }
+    }
   }
   out.turnedOn = turned()
   out.exit = !refused.length && !pending.length && doors && out.routes.every((r) => r.ok) && !out.problems.length ? 0 : 1

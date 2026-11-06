@@ -47,7 +47,7 @@ const readText = (ctx, f) => { try { const d = decodeText(ctx.fs.readFileSync(f)
 const parse = (t) => { if (t === undefined) return undefined; try { return t === null ? {} : parseJsonText(t) ?? {} } catch { return undefined } } // undefined: undecodable or unparsable
 const isSet = (v) => v !== undefined && v !== null && v !== ''
 const where = (file, keys) => `${file}#${keys.join('.')}`
-const base = (ctx) => ({ dir: ctx.dir, manifest: ctx.manifest, harness: ctx.harness, phase: 'on', home: ctx.home, door: ctx.door ?? null, now: ctx.now ? ctx.now() : new Date(), fs: ctx.fs }) // the door rides in the record from its intent on: saveManifest seals it
+const base = (ctx) => ({ dir: ctx.dir, manifest: ctx.manifest, harness: ctx.harness, phase: 'on', home: ctx.home, door: ctx.door ?? null, route: ctx.routeId ?? null, defer: ctx.deferResult === true, now: ctx.now ? ctx.now() : new Date(), fs: ctx.fs }) // the door and the route ride in the record from its intent on: saveManifest seals the door, and a crashed intent names its route for the next on (recordsOf: a moved door rewrites that route only)
 const noProxy = (ctx, values) => mergeNoProxy({ userValues: values, persistent: ctx.persistentEnv ? ctx.persistentEnv(['NO_PROXY']) : {} })
 
 // P5: a value in the file that is one of trocar's doors (src/off/door-value.mjs, the judge off uses: loopback on a port ingress.json records) is no prior
@@ -134,7 +134,7 @@ function writeDotenv(ctx, door) {
 
 function writeOwned(ctx, file, role, data) {
   const j = judgeOwned({ manifest: ctx.manifest, file, planned: sha256(Buffer.from(data)), fs: ctx.fs })
-  if (j.action !== 'skip-intact') writeOwnedFile({ ...base(ctx), role, file, data, exclusive: j.action === 'write', extra: ctx.door ? { door: ctx.door } : {} })
+  if (j.action !== 'skip-intact') writeOwnedFile({ ...base(ctx), role, file, data, exclusive: j.action === 'write', extra: { ...(ctx.door ? { door: ctx.door } : {}), ...(ctx.routeId ? { route: ctx.routeId } : {}) } })
   return { ok: true, records: [ctx.manifest.files.find((f) => f.path === file)] }
 }
 
@@ -200,7 +200,6 @@ export function routeEntry(kind) {
     write(ctx, door) {
       const old = recordsOf(ctx.manifest, ctx.harness, ctx.routeId)
       if (old.some((x) => doorFp(x) !== sha256(door))) undo(ctx, old)
-      const was = JSON.stringify(ctx.manifest) // what the disk holds now: a route that is already in place has nothing to record, and a save is two fsyncs (D62①)
       // all or nothing: a route refused partway (its last key or item, the select meta) takes back what this call already wrote, so no record without
       // a route tag is left for off to miss (invariant 5)
       const m = ctx.manifest, had = new Set([...m.entries, ...m.files])
@@ -208,9 +207,12 @@ export function routeEntry(kind) {
       let res
       try { res = w({ ...ctx, door }, door) } catch (e) { takeBack(); throw e }
       if (!res.ok) { takeBack(); return res }
-      for (const x of res.records) if (x) x.route = ctx.routeId // the door is on the record already, sealed
-      const clear = [...ctx.manifest.entries, ...(ctx.manifest.files || [])].some((x) => x.door) // a record an earlier version wrote: saving is what seals it (4.6「日志」)
-      if (clear || JSON.stringify(ctx.manifest) !== was) saveManifest(ctx.dir, ctx.manifest, ctx.fs)
+      // every record the journal wrote carries the route from its intent on; its last change is saved by the journal, or under defer by the next save
+      // (flushResults at the end of on). What is left to save here is a record of an older run — one without the tag, or one holding its door in
+      // clear, which the save seals (a save is two fsyncs, D62①)
+      const saved = JSON.stringify(ctx.manifest)
+      for (const x of res.records) if (x) x.route = ctx.routeId
+      if (JSON.stringify(ctx.manifest) !== saved || recordsOf(ctx.manifest, ctx.harness, ctx.routeId).some((x) => typeof x.door === 'string')) saveManifest(ctx.dir, ctx.manifest, ctx.fs)
       return { ok: true, records: recordsOf(ctx.manifest, ctx.harness, ctx.routeId) }
     },
     undo,

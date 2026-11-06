@@ -130,3 +130,34 @@ test('O3 · a crash after the write, then a call for a key the crashed run did n
     assert.deepEqual(backups(c.w.home), [], `${c.label}: the backup goes`)
   }
 })
+
+// D62①: under `defer` (the routes of one `on`) a route's result is saved with the next save, so a crash after its write and before that save leaves its
+// records with no post_sha256 on disk. Undo never reads post_sha256: off still lands on the user's bytes. And when the agent rewrites the file before the
+// next `on`, that run cannot tell trocar's write from the agent's: it refuses (fails closed) and names the way out (D38), which then works.
+const everyFile = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? everyFile(path.join(d, e.name)) : [path.join(d, e.name)]))
+test('O5 · defer: a crash before the deferred save → post_sha256 null on disk; off lands on the pre bytes with no door password on disk', async () => {
+  for (const x of CELLS) {
+    const c = cell(x)
+    assert.equal(routeEntry(x.r.kind).write({ ...c.w.ctx, deferResult: true, harness: x.h.name, route: x.r, routeId: x.id }, door()).ok, true, c.label) // and no flush: the process died
+    const disk = readManifest(c.w.dir)
+    assert.ok(ons(c.w.dir).length > 0 && ons(c.w.dir).every((e) => e.post_sha256 == null), `${c.label}: the result was not saved`)
+    await undoHarnesses({ dir: c.w.dir, home: c.w.home, manifest: disk, ids: null, procs: async () => [] })
+    assert.deepEqual(bytesOf(c.file), c.pre, `${c.label}: the pre-on bytes`)
+    assert.deepEqual(ons(c.w.dir), [], `${c.label}: no on record left`)
+    for (const f of everyFile(c.w.home)) assert.ok(!fs.readFileSync(f, 'latin1').includes(PW), `${c.label}: no door password in ${f}`)
+  }
+})
+
+test('O6 · defer: a crash before the deferred save, then the agent rewrites the file → the next on refuses, naming trocar off; off then on writes it', async () => {
+  for (const x of CELLS) {
+    const c = cell(x)
+    routeEntry(x.r.kind).write({ ...c.w.ctx, deferResult: true, harness: x.h.name, route: x.r, routeId: x.id }, door())
+    fs.writeFileSync(c.file, JSON.stringify({ ...JSON.parse(fs.readFileSync(c.file, 'utf8')), agent: 'rewrote' }, null, 4)) // the agent saves its settings its own way
+    const before = bytesOf(c.file)
+    assert.throws(() => c.run(spyFs(), readManifest(c.w.dir)), (e) => /\btrocar off\b/.test(e.message), `${c.label}: the refusal names the way out`)
+    assert.deepEqual(bytesOf(c.file), before, `${c.label}: a refusal writes nothing`)
+    await undoHarnesses({ dir: c.w.dir, home: c.w.home, manifest: readManifest(c.w.dir), ids: null, procs: async () => [] })
+    assert.equal(c.run(spyFs(), readManifest(c.w.dir)).ok, true, `${c.label}: on after off`)
+    assert.ok(ons(c.w.dir).length > 0 && ons(c.w.dir).every((e) => e.post_sha256 != null), c.label)
+  }
+})
