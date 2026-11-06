@@ -113,7 +113,7 @@ test('departer: after every add and remove each prompt departs where the brute-f
 })
 
 // The question past injected wrappers (4.4 #20), through the whole pipeline: the main lane's task, the session's title and the list's title
-// say the same. `want` is the fixture's text squashed and cut at 80: what a title is, never what the code printed.
+// say the same. `want` is the fixture's text squashed and cut at the cap (taskOf, whose cut has its own test above): which prompt it is comes from the fixture.
 const U = (...texts) => ({ role: 'user', content: texts.map((text) => ({ type: 'text', text })) })
 const A = { role: 'assistant', content: [{ type: 'text', text: 'ok' }] }
 const squashed = (t) => taskOf(t)
