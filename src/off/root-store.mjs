@@ -20,7 +20,7 @@ import crypto from 'node:crypto'
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { execTool } from './exec.mjs'
-import { findCert } from './pem.mjs'
+import { certBlocks, findCert } from './pem.mjs'
 
 /** The subject trocar's root carries, frozen (D27②): how every trocar root in a user's store is found again, so a second one is never trusted
  *  beside it (4.11 §3 ㉔). The custody makes the root with it (src/collector/model-install.mjs). */

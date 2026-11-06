@@ -209,7 +209,8 @@ export function routeEntry(kind) {
       try { res = w({ ...ctx, door }, door) } catch (e) { takeBack(); throw e }
       if (!res.ok) { takeBack(); return res }
       for (const x of res.records) if (x) x.route = ctx.routeId // the door is on the record already, sealed
-      if (JSON.stringify(ctx.manifest) !== was) saveManifest(ctx.dir, ctx.manifest, ctx.fs)
+      const clear = [...ctx.manifest.entries, ...(ctx.manifest.files || [])].some((x) => x.door) // a record an earlier version wrote: saving is what seals it (4.6「日志」)
+      if (clear || JSON.stringify(ctx.manifest) !== was) saveManifest(ctx.dir, ctx.manifest, ctx.fs)
       return { ok: true, records: recordsOf(ctx.manifest, ctx.harness, ctx.routeId) }
     },
     undo,
