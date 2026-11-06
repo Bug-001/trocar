@@ -50,6 +50,14 @@ test('2.2 #3 · ≈ $: the label is costOf(priceMatch(table, model).row, usage);
   }
 })
 
+test('2.2 · 缓存 popover: each of the verdict\'s cache labels is a row in the server\'s words; a step without any draws none', () => {
+  const labels = [{ id: 'cache-best-effort', label: 'A' }, { id: 'cache-below-minimum', label: 'B' }]
+  const rows = rowsOf(head([{ usage: U(0, 10, 1), cacheBreak: { cause: 'append', labels } }]), 'cacheRows')
+  assert.deepEqual(labels.map((l) => rows.find((r) => r.key === l.id)?.text), ['A', 'B'])
+  const bare = rowsOf(head([{ usage: U(0, 10, 1), cacheBreak: { cause: 'append' } }]), 'cacheRows')
+  for (const l of labels) assert.ok(!bare.some((r) => r.key === l.id), l.id)
+})
+
 test('2.2 #4 · 缓存 popover: the four numbers are usage.read / create / fresh / out; NULL is — with its tip; no usage writes no row and no 0%', () => {
   const u = { read: 0, create: null, fresh: 14, out: 164 }
   const rows = rowsOf(head([{ usage: u, cacheBreak: { cause: 'append' } }]), 'cacheRows')

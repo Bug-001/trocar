@@ -202,6 +202,7 @@ function cacheRows(s, call, ref, model) {
   }
   if (hasChangeLine(call, flatOf(s, call))) rows.push({ key: 'jump', text: W.JUMP_TO_CHANGE })
   if (call.wire && call.wire.cacheSemanticsKnown === false) rows.push({ key: 'unknown', text: W.CACHE_SEMANTICS_UNKNOWN })
+  for (const l of b.labels || []) rows.push({ key: l.id, text: l.label })
   return rows
 }
 

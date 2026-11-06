@@ -64,6 +64,7 @@ const fromLabels = (where, labels) => { for (const l of labels || []) { collect(
 const fromStep = (where, s) => {
   if (!s) return
   fromLabels(where, s.wire && s.wire.labels)
+  fromLabels(where, s.cacheBreak && s.cacheBreak.labels)
   for (const e of (s.wire && s.wire.observerEffect) || []) { collect(`${where} effect`, e.what); collect(`${where} effect`, e.cause) }
 }
 

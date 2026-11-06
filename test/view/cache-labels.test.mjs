@@ -1,10 +1,12 @@
 // test/view/cache-labels.test.mjs — RFC 3.3 §Edge cases: a reported zero cache read earns the label its vendor's cache row gives —
 // best-effort on DeepSeek's Chat Completions, below the minimum cacheable length on OpenAI's Responses — and nothing on a vendor of
-// unknown cache semantics, on a non-zero read, or on a failed call. Read off the `session` document's `wire.labels` ids.
+// unknown cache semantics, on a non-zero read, or on a failed call. Read off the `session` document's `cacheBreak.labels` ids; they say what
+// the cache numbers mean, so they stay out of the call's fidelity facts.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { sessionDoc } from '../helpers/session-doc.mjs';
 import { shapeResponse } from '../../src/collector/core/record/body.mjs';
+import { callFacts } from '../../web/legacy/replay/analysis.mjs';
 
 const BEST = 'cache-best-effort', MIN = 'cache-below-minimum';
 const ok = (body) => ({ status: 200, kind: 'json', body });
@@ -36,7 +38,9 @@ for (const wire of Object.keys(WIRES))
     test(`${wire}: input ${input}, read ${read}${failed ? ', failed' : ''} → [${want}]`, async () => {
       const d = await sessionDoc([WIRES[wire](input, read, failed)], 's');
       assert.equal(d.calls.length, 1, JSON.stringify(d.errors));
-      const ids = (d.calls[0].wire.labels || []).map((l) => l.id);
+      const labels = d.calls[0].cacheBreak.labels || [], ids = labels.map((l) => l.id);
       for (const id of [BEST, MIN]) assert.equal(ids.includes(id), want.includes(id), `${id} in [${ids}]`);
+      const facts = callFacts(d.calls[0]).facts;
+      for (const l of labels) assert.ok(!facts.includes(l.label), `${l.id} is no fidelity fact: [${facts}]`);
     });
   }

@@ -18,7 +18,7 @@ import { compactionVerdict } from '../identity/session-identity.mjs';
 import { boardDissectorOf as dOf } from '../dissect/registry.mjs';
 import { askOf, COMP_KEYS, departer, departs, taskOf, HEAD } from './blockmeta.mjs';
 import { posCmp, lru, num52, numTable } from '../query/projection.mjs';
-import { materializeAttrs, withCacheLabels } from './extract.mjs';
+import { materializeAttrs, cacheLabelsOf } from './extract.mjs';
 import { openFoldLog } from '../query/fold-log.mjs';
 
 // Ground-truth from PROVEN byte-identity (not the structural proxy). Strict wording per 3.3:73 — the
@@ -406,6 +406,8 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
     brk.prefixByteIdentical = same;
     brk.gt = brk.cause === 'model-or-route-change' ? null : realGroundTruth(same, usage.read, usage.create, x.wire.cacheSemanticsKnown === true);
     brk.gtReal = true;
+    const labels = cacheLabelsOf(x.wire, x.error ? null : usage);
+    if (labels.length) brk.labels = labels;
     if (base) brk.refRid = base.rid; // the 缓存对比步 (2.3): the call this one's break is taken against
     return brk;
   }
@@ -793,7 +795,7 @@ function anthropicFold(d, { at, B, cacheOf, pushOf, emit, newSub, baseOf, lastOf
     let S = F.subs.get(lane);
     if (!S) { S = newSub(d.id, lane.kind, lane.kind === 'subagent' ? `\0${F.uid}` : lane.kind); S.stream = lane; F.subs.set(lane, S); }
     if (!S.rids.length) S.ask = firstHumanOf(list, B);
-    call.wire = withCacheLabels(x.wire, x.error ? null : x.usage);
+    call.wire = x.wire;
     call.respRefs = x.respRefs;
     call.usage = x.usage;
     call.cacheBreak = cacheOf(baseOf(S.base), list, attrs, x, !!call.compaction, call.usage);
@@ -836,7 +838,7 @@ function flatFold(d, { at, B, cacheOf, pushOf, emit, newSub, baseOf, lastOf, int
       msgCount: rq.message_count || 0, tools: rq.tool_count || 0, ts: x.ts, status: x.status || null,
       ...comp, error: !!x.error, reqIncomplete: x.reqIncomplete, wsIncomplete: x.wsIncomplete, respIncomplete: x.respIncomplete,
       ...(x.unparsed ? { unparsed: true, errMsg: unparsedErrMsg(x.reqIncomplete) } : x.unstored != null ? { unparsed: true, errMsg: `unrenderable: ${x.unstored}` } : null),
-      wire: withCacheLabels(x.wire, x.error ? null : x.usage), nonBlockKeys: [], ...(x.extraMessages ? { extraMessages: x.extraMessages } : null), respRefs: x.respRefs, flat: [], paged_out: true,
+      wire: x.wire, nonBlockKeys: [], ...(x.extraMessages ? { extraMessages: x.extraMessages } : null), respRefs: x.respRefs, flat: [], paged_out: true,
       comp: compOf(lastOf(S), list, B), usage: x.usage, cacheBreak: brk, gt: brk.gt,
     };
     S.last = k; S.comp = call.comp;
