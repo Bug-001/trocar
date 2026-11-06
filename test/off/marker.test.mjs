@@ -174,3 +174,19 @@ for (const { h, id, r } of (await loadHarnesses()).flatMap((d) => Object.entries
     }
   }
 }
+
+// 4.6 (undo by marker): install puts the rc line at the end, with a line end before it when the file had none. With no record, that line end cannot
+// be told from the user's own, so it stays: the file comes back with exactly one final line end more (the file's own: CRLF in a CRLF file).
+test('undo by marker of the Kimi rc line: a file with no final line end gets exactly one back, in its own line ending; one that had it comes back byte for byte', async () => {
+  const A = 'export PATH="$HOME/.kimi-code/bin:$PATH"'
+  for (const [before, eol] of [[`${A}\nalias ll=ls`, '\n'], [`${A}\r\nalias ll=ls`, '\r\n'], [`if false; then\n  ${A}\nfi`, '\n'], [`${A}\nalias ll=ls\n`, ''], [`${A}\r\nalias ll=ls\r\n`, '']]) {
+    const home = tmpDir('trocar-marker-eof-')
+    fs.mkdirSync(path.join(home, '.kimi-code/bin'), { recursive: true }); fs.writeFileSync(path.join(home, '.kimi-code/bin/kimi'), '#!/bin/sh\n', { mode: 0o755 })
+    const rc = path.join(home, '.bashrc'); fs.writeFileSync(rc, before)
+    await installCollector({ home, env: { HOME: home }, osName: 'linux', harnesses: (await loadHarnesses()).filter((h) => h.name === 'kimi-code'), freePort: async () => 47011, scan: async () => [], roots })
+    assert.notEqual(read(rc), before, 'installed')
+    fs.rmSync(manifestPath(path.join(home, '.trocar', 'collector')))
+    undoByMarker(planByMarker({ home, ids: ['kimi-code'], env: { HOME: home } }), { home })
+    assert.equal(read(rc), before + eol, JSON.stringify(before))
+  }
+})
