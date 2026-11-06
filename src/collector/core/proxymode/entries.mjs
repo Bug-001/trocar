@@ -191,6 +191,9 @@ function check(ctx, records) {
   return { ok: failing.length === 0, failing }
 }
 
+/** P5: a route not written this time (not-routed, any reason) keeps nothing an earlier `on` wrote there: its records are undone the way off does. */
+const dropRoute = (ctx, harness, routeId) => { const left = recordsOf(ctx.manifest, harness, routeId); if (left.length) undo(ctx, left) }
+
 /** routeEntry(kind) → { write(ctx, doorUrl), undo(ctx, records), check(ctx, records) }. write → { ok, records } | { code: 'not-routed', reason, at? };
  *  a record of this route that holds another door is undone first (a rebound port), then the route is written again. */
 export function routeEntry(kind) {
@@ -206,7 +209,7 @@ export function routeEntry(kind) {
       const takeBack = () => { const added = [...m.entries, ...m.files].filter((x) => !had.has(x)); if (added.length) undo(ctx, added) }
       let res
       try { res = w({ ...ctx, door }, door) } catch (e) { takeBack(); throw e }
-      if (!res.ok) { takeBack(); return res }
+      if (!res.ok) { takeBack(); if (res.code === 'not-routed') dropRoute(ctx, ctx.harness, ctx.routeId); return res }
       for (const x of res.records) if (x) x.route = ctx.routeId // the door is on the record already, sealed
       saveManifest(ctx.dir, ctx.manifest, ctx.fs)
       return { ok: true, records: recordsOf(ctx.manifest, ctx.harness, ctx.routeId) }
@@ -246,5 +249,9 @@ export function writeRoutes(desc, ctx, doorOf) {
       return { route: id, ok: false, code: (e && e.code) || 'entry-refused', reason: String((e && e.message) || e), ...(e && e.path ? { at: e.path } : {}) }
     }
   })
+  // a route of the harness no planned form uses (no form present, or every one blocked) is not-routed too: what an earlier on wrote there goes (P5)
+  const planned = new Set(plan.routes.map((x) => x.id)), m = ctx.manifest
+  const stale = [...new Set([...m.entries, ...m.files].filter((x) => x.harness === desc.name && x.phase === 'on' && typeof x.route === 'string' && !planned.has(x.route)).map((x) => x.route))]
+  for (const id of stale) dropRoute({ ...ctx, harness: desc.name }, desc.name, id)
   return { results, notRouted: plan.notRouted, notes: plan.notes }
 }
