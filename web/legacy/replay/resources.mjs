@@ -10,6 +10,7 @@ import { resState } from './lanes.mjs'
 import { relPath, midClip } from './analysis.mjs'
 import { navGroup, jumpToStepAndBlock, jumpToBlockIndex } from './outline.mjs'
 import { blockJump } from './jump.mjs'
+import { onChapterAxis } from './timeline.mjs'
 import { KIDS, serialize, keyed, patchInto } from '../core/units.mjs'
 import * as W from '../labels/replay.mjs'
 import { resKeyOf, laneEvents, seenFiles, ledgerDone, compactionNumbers, stepOf, carriesRes } from './model.mjs'
@@ -113,8 +114,9 @@ export function resourceUnits(s) {
       ? W.compactRow(at(atStep), n.from != null ? String(n.from) : '—', n.to != null ? String(n.to) : '—') + (e.inferred ? ` · ${W.GUESS}` : '')
       : W.summarizeRow(at(atStep), e.out != null ? kf(e.out) : '—')
     return `<div class="navsub" data-navstep="${atStep}"><span class="nsl" title="${esc(word)}">${esc(word)}</span></div>` }
-  // the new desk (no raw panel) has none: its Overview's chapter heads carry each compaction and its numbers (2.4, 2.5)
-  const comps = s.rawPanelGone ? [] : events.filter((e) => e && (e.type === 'compaction' || e.type === 'summarize'))
+  // the new desk (no raw panel) leaves out compactions on the chapter axis: the Overview's chapter heads carry them (2.4, 2.5)
+  const dropComp = s.rawPanelGone && onChapterAxis(s)
+  const comps = events.filter((e) => e && ((e.type === 'compaction' && !dropComp) || e.type === 'summarize'))
   const others = res.filter((r) => !['file', 'scaffold', 'skill', 'capability', 'dir', 'link'].includes(r.kind))
   // others keeps EVERY unknown kind (even one without segments — 2.4 Edge cases: 不丢); an undated row shows no step
   // number and carries no data-navstep (there is no enter to locate)
