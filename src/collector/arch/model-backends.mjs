@@ -68,10 +68,17 @@ export async function formPrograms({ os, home, env = process.env, harnesses }) {
 }
 
 /** The places install's certificate carriers would be at on this machine (model-install.mjs carrierPlaces), resolved with this OS's folders and
- *  platform facts, as install resolves them: what `uninstall` looks at when the install record is lost. Paths and the bytes install writes; reads only. */
-export async function carrierPlacesFor({ os, home, env = process.env, harnesses, renderHook, fs = nodeFs }) { // renderHook: the caller's (an arch part never imports the harness layer)
-  const [{ dirsOf, platformFacts }, { carrierPlaces }] = await Promise.all([os === 'darwin' ? import('./darwin/policy.mjs') : import('./win32/policy.mjs'), import('../model-install.mjs')])
-  const ctx = { ...sourcesCtx({ os, home, env, dirs: dirsOf(home, env), fs }), facts: typeof platformFacts === 'function' ? platformFacts({ env }) : platformFacts }
+ *  platform facts, as install resolves them: what `uninstall` looks at when the install record is lost. Paths and the bytes install writes; reads only.
+ *  `run`: the runner of the OS tools that read the login environment (a test's stand-in). → carrierPlaces' { places, unseen }. */
+export async function carrierPlacesFor({ os, home, env = process.env, harnesses, renderHook, run = null, fs = nodeFs }) { // renderHook: the caller's (an arch part never imports the harness layer)
+  const [pol, { carrierPlaces, certVars }] = await Promise.all([os === 'darwin' ? import('./darwin/policy.mjs') : import('./win32/policy.mjs'), import('../model-install.mjs')])
+  const facts = typeof pol.platformFacts === 'function' ? pol.platformFacts({ run, env }) : pol.platformFacts
+  // a certificate variable install saw may be set where this process does not inherit it: the user's login environment (launchd's on macOS,
+  // the persistent one on Windows) is read for the ones this environment lacks — read only (4.11 §1 uninstall)
+  const unset = [...new Set(harnesses.filter((d) => d.proxyMode).flatMap(certVars))].filter((n) => !env[n])
+  const login = unset.length ? (os === 'darwin' ? pol.launchdEnv(unset, { run, env }) : facts.persistentEnv(unset)) : {}
+  const seen = { ...env, ...login }
+  const ctx = { ...sourcesCtx({ os, home, env: seen, dirs: pol.dirsOf(home, env), fs }), facts }
   return carrierPlaces({ os, harnesses, ctx, home, owns: ownsBy({ os, home, fs }), renderHook, fs })
 }
 

@@ -73,7 +73,8 @@ export const fit = (lines, { home = null } = {}) => lines.flatMap((l) => {
   if (s.length <= WIDTH || BARE.test(s)) return [s]
   const own = ' '.repeat(s.length - s.trimStart().length)
   const [first, ...more] = wrap(s.trimStart(), WIDTH - own.length, foldHang(own))
-  return [own + first, ...more]
+  // a word too long even at the fold column (a fingerprint) starts at the item's own column instead, whole (§1.1⑥)
+  return [own + first, ...more.map((x) => (x.length > WIDTH && !/\s/.test(x.trim()) ? own + x.trimStart() : x))]
 })
 
 /** One harness's chain after `on` (§3.3): where a new connection goes, then the proxy setting it was drawn from (credentials masked). A chain whose

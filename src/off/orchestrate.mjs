@@ -315,6 +315,7 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
       else if (!['restored', 'left-unparsable', 'left-unreadable', 'left-link', 'left-text', 'error'].includes(r.result)) note(SKIP_CODE[r.result] || 'harness-note', { ...withHarness(r.harness), path: r.path }, UNDO_NOTE[r.result] || r.result)
     }
     u.removed.push(...out.removed)
+    for (const r of out.restored || []) u.changed.push({ path: r.path, change: MARKER_TEXT[r.role] || `trocar's ${r.role} undone`, backup: null, result: 'restored', ...withHarness(r.harness) }) // a file put back as it was (the real program in place of the wrapper)
     // an item whose kind this build does not know is left alone; the copy says who knows it (R3, V35)
     const hint = w.standalone ? ` — this trocar-off (version ${OFF_VERSION}) does not know that kind; run \`trocar off\`, the trocar that wrote the manifest, to take it out` : ''
     u.left = out.left.map((l) => ({ path: l.path, result: l.result, reason: l.result === 'unknown-kind' ? `${l.reason}${hint}` : l.reason, ...(l.backup ? { backup: l.backup, restore: l.restore } : {}), ...withHarness(l.harness) }))
@@ -338,8 +339,7 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
     u.procs_error = out.procs_error
     u.kept_backups = (manifest.kept_backups || []).map((k) => ({ ...k }))
     for (const k of u.kept_backups.filter((x) => x.at === at.toISOString())) note(CODE_OFF.backupKept, { path: k.path, backup: k.backup }, `${k.path}: ${k.reason}`)
-    u.orphan_backups = orphanBackups({ home: w.home, manifest, fs: w.fs })
-    if (u.orphan_backups.length) u.notes.push(`backups that no manifest entry names (leave them, or delete them if you do not need them): ${u.orphan_backups.join(', ')}`)
+    u.orphan_backups = orphanBackups({ home: w.home, manifest, fs: w.fs }) // what happens to them is the caller's: `off` keeps them, `uninstall` deletes them
     // the root in the user's OS store (D55, 4.11 P3): only a whole-machine uninstall takes it out, by its fingerprint — `off` never touches a
     // certificate (1.6 §1.1). It goes before the root's key below (4.11 卸载「最后删根的密钥」); one that could not be removed is a left item (D38)
     const roots = dropCa && ids == null ? manifest.entries.filter((e) => e && e.kind === 'system-root') : []
@@ -412,7 +412,6 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
   }
   u.changed = perFile(u.changed)
   u.removed = [...new Set(u.removed)]
-  if (u.orphan_backups.length) u.notes.push(`the backups of the files above (JSON values taken back from them), and any others, are left in place: ${u.orphan_backups.join(', ')}`)
   return u
 }
 
@@ -565,6 +564,8 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
       for (const k of ['kept_bundles', 'still_trusting', 'residue', 'kept_backups', 'orphan_backups', 'pending', 'planned', 'install_items']) receipt[k] = u[k]
       if (u.holders !== undefined) receipt.holders = u.holders
       receipt.problems.push(...u.problems); receipt.notes.push(...u.notes)
+      // off keeps every backup no entry names (uninstall deletes them, and says so): said here, where it is true
+      if (u.orphan_backups.length) receipt.notes.push(u.mode === 'marker' ? `the backups of the files above (JSON values taken back from them), and any others, are left in place: ${u.orphan_backups.join(', ')}` : `backups that no manifest entry names (leave them, or delete them if you do not need them): ${u.orphan_backups.join(', ')}`)
       receipt.undone_by_marker = u.undone_by_marker
       for (const ev of u.events) put(ev)
       for (const f of u.failures) put({ event: 'failure', ...f })

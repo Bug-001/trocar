@@ -126,7 +126,7 @@ export function formatOffReceipt(r, { home = null, tense = r.dry_run ? 'future' 
     const out = [header || 'Nothing to turn off. trocar is not installed on this machine.']
     if ((r.skipped || []).length) for (const s of r.skipped) out.push(...fit(`  ${t(s.what)}: ${s.reason}`))
     if ((r.user_processes || []).length) for (const p of r.user_processes) out.push(...fit(`Still running, started by you: ${p.command} (pid ${p.pid}, ${p.note}).`))
-    for (const n of r.notes || []) out.push(...fit(n))
+    for (const n of r.notes || []) out.push(...textLines(n, home))
     out.push(...extra, footer || 'Turn capture on: trocar install, then trocar on') // `on` refuses with no certificates installed (§3.3 前提), so the next step is install first
     return out.join('\n')
   }
@@ -182,7 +182,7 @@ export function formatOffReceipt(r, { home = null, tense = r.dry_run ? 'future' 
   }
   for (const l of r.left || []) lines.push(...fit(`Not undone: ${t(l.path)} (${l.reason || l.result})`))
   for (const n of r.problems || []) lines.push(...(n.includes('\n') ? textLines(n, home) : fit(n)))
-  for (const n of r.notes || []) lines.push(...fit(n))
+  for (const n of r.notes || []) lines.push(...textLines(n, home)) // HOME as ~ (1.6 §1.1⑤), a note's command on its own line
   lines.push(...extra, footer || (past ? 'Certificates stay installed. To remove them: trocar uninstall' : 'Nothing was changed. Run it without --dry-run to do it.'))
   return lines.join('\n')
 }

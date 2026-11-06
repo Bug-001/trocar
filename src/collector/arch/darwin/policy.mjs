@@ -29,8 +29,17 @@ export function policyReader({ user = os.userInfo().username, run = null, env = 
   }
 }
 
+/** launchdEnv(names, { run, env }) → { <name>: value } of the variables launchd holds for this user's session (`launchctl getenv <name>`, read
+ *  only): where a variable set with `launchctl setenv` lives, which a shell started later may not have. A name it does not hold adds nothing. */
+export function launchdEnv(names, { run = null, env = process.env } = {}) {
+  const out = {}
+  for (const n of new Set(names)) { const r = execTool('launchctl', ['getenv', n], { run, env }); if (r.code === 0 && r.out) out[n] = r.out }
+  return out
+}
+
 /** The platform facts core asks for (4.11 OS backends): environment names are case-sensitive, a path is keyed as is (after its
- *  real path), and macOS has no persistent user environment to read (ruling ⑤: no launchctl setenv / login-profile reading). */
+ *  real path), and install reads no persistent user environment on macOS (no login-profile reading; nothing is ever written there).
+ *  Only an uninstall with no record asks launchd for a certificate variable its own environment lacks (launchdEnv above). */
 export const platformFacts = Object.freeze({
   envCaseInsensitive: false,
   exeSuffix: '', // a command's program file name (4.11 P8)

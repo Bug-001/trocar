@@ -32,6 +32,7 @@ import { DEFAULT_REDIRECTOR_BIN } from '../collector/arch/linux/redirector-clien
 import { confirm, isInteractive } from '../off/io.mjs'
 import { CODE_OFF } from '../off/names.mjs'
 import { formatUninstallReceipt } from './receipt.mjs'
+import { COMMAND_INDENT } from '../off/receipt.mjs'
 import { removeIngressConfig } from '../collector/core/ingress-config.mjs'
 import { refuseElevatedByWhoami, disableScheduledTask, TASK_NAME } from '../off/win32.mjs'
 import { holdersOf } from '../off/holders.mjs'
@@ -138,8 +139,9 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
   const plannedItems = (p) => [...p.changed.map((c) => ({ path: c.path, change: c.change, harness: c.harness ?? null })), ...p.removed.map((x) => ({ path: x, change: 'removed' }))]
   const stray = dryRun || !yes ? await strayPlan(w, m) : null // 4.11 §3 ㉔: the roots the run would sweep, read once, so the plan the user agrees to names them (1.6 §1.4)
   // no install record: the places install's certificate carriers are at by the harness descriptors (macOS / Windows), looked at beside trocar's marks (1.6 R3)
-  const places = !m && isModelOs(w.platform) ? await carrierPlacesFor({ os: w.platform, home, env, harnesses: deps.harnesses || await (await import('../collector/harness/index.mjs')).loadHarnesses(), renderHook: (await import('../collector/harness/templates/index.mjs')).renderHook, fs }) : []
-  const planOf = () => { const p = planUninstall(w, m, purgeData, deps.root, places); return { ...p, changed: [...p.changed, ...stray.changed], removed: [...p.removed, ...stray.removed], notes: [...p.notes, ...stray.notes] } }
+  const { places, unseen } = !m && isModelOs(w.platform) ? await carrierPlacesFor({ os: w.platform, home, env, harnesses: deps.harnesses || await (await import('../collector/harness/index.mjs')).loadHarnesses(), renderHook: (await import('../collector/harness/templates/index.mjs')).renderHook, run: w.exec, fs }) : { places: [], unseen: [] }
+  const lost = unseenNote(unseen, w.platform) // D38: a block trocar may have put in a file nothing names now is said, with the way to take it out
+  const planOf = () => { const p = planUninstall(w, m, purgeData, deps.root, places); return { ...p, changed: [...p.changed, ...stray.changed], removed: [...p.removed, ...stray.removed], notes: [...p.notes, ...stray.notes, ...lost] } }
   const plan = () => { const p = planOf(); return Object.assign(receipt, { dry_run: true }, p, { planned: plannedItems(p) }) }
   if (dryRun) { plan(); return { receipt, exit: EXIT.ok } }
   // §3.6: uninstall always prints its plan and asks — it takes certificates out of your trust settings and removes files of yours. Not a terminal
@@ -243,7 +245,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     const u = await undoSide(w, { ids: null, manifest: m, manifestError: merr, yes, interactive, io, say, dropCa: true, beforeKey: isModelOs(w.platform) ? sweep : null, places })
     for (const k of ['changed', 'removed', 'skipped', 'left']) receipt[k].push(...u[k])
     Object.assign(receipt, { kept_bundles: u.kept_bundles, still_trusting: u.still_trusting, residue: u.residue, pending: u.pending, entries: u.results || [] })
-    receipt.problems.push(...u.problems); receipt.notes.push(...u.notes)
+    receipt.problems.push(...u.problems); receipt.notes.push(...u.notes, ...lost)
     for (const f of u.failures) failed.push(f)
     if (isModelOs(w.platform) && !swept && !u.stopped && !u.pending.length && u.mode !== 'unsupported') await sweep()
     const noted = u.events.filter((e) => e.kind !== CODE_OFF.backupKept) // the backup an edited file kept is dropped below, listed in the receipt as non-identical: "kept" would be untrue
@@ -383,7 +385,8 @@ const storeOf = (w) => w.deps.rootStore || rootStore({ platform: w.platform, run
 const storeWhere = (w) => (w.platform === 'win32' ? 'Cert:\\CurrentUser\\Root' : path.join(w.home, 'Library', 'Keychains', 'login.keychain-db'))
 const ask = async (fn) => { try { return (await fn()) || { error: 'no answer' } } catch (e) { return { error: errText(e) } } }
 const nameOf = (id) => (id.fp256 ? `SHA-256 ${id.fp256}` : `thumbprint ${id.sha1}`)
-const strayChange = (id) => `a trocar root no install record listed (${nameOf(id)}) taken out of your trust store` // no tense: the plan and the receipt say it alike
+// the fingerprint last, a word of its own: too long for any line, it gets one to itself, whole (1.6 §1.1⑥), and no bracket is split from it
+const strayChange = (id) => `a trocar root that no install record listed, taken out of your trust store: ${nameOf(id)}` // no tense: the plan and the receipt say it alike
 const recordKeyed = (m) => !!(m && !m.unsupported && m.entries.some((e) => e.kind === 'root-key'))
 const custodyKey = (c) => `${(c && c.kind) || 'custody'}:?`
 /** The trocar roots the store holds that the record `m` does not list → { roots } | { error }. */
@@ -399,6 +402,16 @@ async function strayPlan(w, m) {
   const s = await strayRoots(w, m)
   if (s.error) return { changed: [], removed: [], notes: [`whether your trust store holds a trocar root no install record lists could not be read (${s.error}); the run reads it again and takes out every one it finds`] }
   return { changed: s.roots.map((id) => ({ path: storeWhere(w), change: strayChange(id), backup: null })), removed: s.roots.length && !recordKeyed(m) ? [custodyKey(w.deps.custody)] : [], notes: [] }
+}
+
+/** 4.11 §1 uninstall: with no install record, the certificate variables (by the descriptors) that name no file now, here or in the login
+ *  environment → the note that says trocar may have appended its marked block to the user's own certificate file then, and how to take it out:
+ *  this command again with the variable set to that file (one line per variable, in this OS's shell), or the block deleted by hand. [] when none. */
+function unseenNote(names, platform) {
+  if (!names.length) return []
+  const cmd = (n) => (platform === 'win32' ? `cmd /c "set ${n}=<your certificate file>&& trocar uninstall"` : `${n}=<your certificate file> trocar uninstall`)
+  return [[`trocar may have added a marked certificate block to the end of a certificate file of your own, named by ${names.join(' or ')} when trocar was installed. ${names.length === 1 ? 'That variable is' : 'None of them is'} set now, so trocar could not look in the file. To take the block out, run this with the file the variable named, or delete the block between trocar's marks by hand:`,
+    ...names.map((n) => `${COMMAND_INDENT}${cmd(n)}`)].join('\n')]
 }
 
 async function everyTrocarRoot(w, m, receipt, failed) {
