@@ -231,10 +231,19 @@ and the context window ends with that step's reply: its text, thinking and tool 
 last good view on screen, says it is out of date, and tries again with a growing pause. When an agent is not captured, its row says why in the same sentence `trocar status` prints in its NOTE column (one
 catalog, `src/cli/words.mjs`, a sentence for every reason).
 
-The replay page puts the time axis strip on top, with the reading column (the step head and the context window) below it, and a sidebar on the right. The sidebar has two tabs. **Overview** has one row per chapter; the current chapter is open and lists its tool definitions, system prompt, prompts and sub-agents, plus **Jump to the change ›** when its cache broke, and every row jumps to that place. **Resources** lists the files and resources the session used; a click on a name opens that block in the context window. A button collapses the sidebar to a thin strip and brings it back. A call's details (its request parameters, the raw reply and the transport) sit folded under **Call details** after the reply in the context window. The boundary between the main area and the sidebar, and the one between the strip and the reading column, can be dragged; the page remembers where you left them and which tab was open, and a double-click on a boundary puts it back. On a narrower window the page keeps the reading column first: below 1200 px the sidebar becomes a row of tabs at the bottom whose panel rises over the page; below 900 px the track names fold into a **Tracks** menu on the strip, with the problem pager and the track toggles; below 600 px the bottom row and the strip's legend go away, leaving the strip and the reading column.
+The replay page is one desk in two splits: the main area and the right sidebar, and inside the main area the scope
+and the reading column; the sizes you drag are remembered. The scope's **Whole session** strip is the time axis.
+The right sidebar has the tabs **Overview**, **Resources** and **Rules** (Rules only when something is registered)
+and a button that collapses it. Overview has one row per chapter, the current one open, with its Tools, System
+prompt, Prompts, Sub-agents and **Jump to change**. A resource name opens that block in the context window. There is
+no left outline and no separate panel of raw data: what only that panel showed is in **Call details**, folded after the reply in
+the context window (what the capture changes in the agent is not folded). On a narrow window, below 1200 px the
+sidebar becomes a row at the bottom whose panel rises over the desk, below 900 px the track names fold and their
+controls (the problem pager, the track folds) move into the **Tracks** menu, and below 600 px only the whole-session
+strip and the reading column remain.
 
-Per call, on one board: **context replay** (the full assembled request, block by block, plus the raw
-wire body) · **cache overlay** (real `cache_read` / `cache_write` counts, the marked break, its cause
+Per call, on one board: **context replay** (the full assembled request, block by block, plus
+**Call details**) · **cache overlay** (real `cache_read` / `cache_write` counts, the marked break, its cause
 and fix hint) · **reconstructed streamed reply** with usage and an estimated cost · **resource
 lifecycle** — which files entered context, when, via which tool *(Claude Code only — see Limits)*; a
 file printed by a shell command (`cat`, `sed -n`, `grep`, `jq` and the like) counts as read, one entry per file.
@@ -243,8 +252,8 @@ Cost is a local, editable estimate in `~/.trocar/pricing.json` (or the file `TRO
 `trocar query pricing` prints the table in effect and says where it came from); providers return
 usage, never dollars.
 
-What the board cannot vouch for, it labels on the call (the line at the top of the context window; **Call details**
-holds the detail):
+What the board cannot vouch for, it labels on the call (the line at the top of the context window; **Call details**,
+folded after the reply in the context window, holds the detail):
 - **Context incomplete: earlier records are missing** (naming the record when it is known; **Context incomplete ·
   cause unknown** when it is not): what is shown is not the whole context the model saw. When the request body itself
   was stored incomplete, the request's own label says exactly how instead.
@@ -252,7 +261,7 @@ holds the detail):
   connection; every block is still verbatim.
 - **the server edited the context; this is not everything the model received**: the response says so.
 - What trocar's trust injection changes in that agent (e.g. request gzip off, a different TLS stack) is one
-  line each under the reply in the context window; legacy captures carry none.
+  line each in **Call details** (not folded); legacy captures carry none.
 - **What this provider's cache numbers mean is not certain**: the upstream host is not a known vendor, so no
   cache claim is made for it.
 - **request: truncated at the capture limit** / **request: incomplete** / **reply: not decompressed** /
@@ -273,7 +282,7 @@ holds the detail):
   before you change it. A level is changed there (switching model calls or token counts to log only asks first) or with
   `trocar classes`, and applies to calls that start later; the sealed compression ratio is marked **estimate**.
   A call kept as log only says so on the call: **Logged only (your setting for** *harness* **·** *class***)**.
-- **The reply as captured** is listed under **Call details** with a locator per piece — the whole decoded
+- **The reply as captured** is listed in **Call details** with a locator per piece — the whole decoded
   stream of an HTTP call, each server message of a WebSocket call — each opening its verbatim bytes. A
   piece that cannot be opened says why (a JSON reply stored parsed only — one from before D40, or one that re-serializes to itself — a message kept as
   base64 or past the size cap, no reply at all).
