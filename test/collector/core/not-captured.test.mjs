@@ -9,7 +9,7 @@ import { createCa, loadCa } from '../../../src/collector/core/tls/ca.mjs'
 import { createLeafIssuer } from '../../../src/collector/core/tls/leaf.mjs'
 import { handleFlow } from '../../../src/collector/core/engine/flow.mjs'
 import { createNegativeCache } from '../../../src/collector/core/engine/negcache.mjs'
-import { NOT_CAPTURED_FAILURE, NOT_CAPTURED_EXPECTED, CODES_BY_PART } from '../../../src/health/codes.mjs'
+import { NOT_CAPTURED, ENGINE_EVENTS, isNotCapturedCode } from '../../../src/collector/core/engine/codes.mjs'
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path'; import { EventEmitter } from 'node:events'
 import { createRegistry } from '../../../src/collector/core/registry.mjs'
 import { createTrustChecker } from '../../../src/collector/core/trust/confirm.mjs'
@@ -47,12 +47,6 @@ const rawTalk = (port, bytes, { end = true } = {}) => new Promise((resolve) => {
   const c = net.connect(port, '127.0.0.1', () => { if (bytes) c.write(bytes); if (end) setTimeout(() => c.end(), 50) })
   let got = Buffer.alloc(0); c.on('data', (d) => { got = Buffer.concat([got, d]) }); c.on('error', () => {}); c.on('close', () => resolve(got))
 })
-
-// The closed sets of src/health/codes.mjs as the engine uses them: a connection row's not_captured (failure or expected), and the
-// engine's failure events (where:'engine'): its own group plus the helper-lookup codes it writes for a redirector it could not ask.
-const NOT_CAPTURED = { failure: NOT_CAPTURED_FAILURE, expected: NOT_CAPTURED_EXPECTED }
-const ENGINE_EVENTS = [...CODES_BY_PART.engine, 'loader-down', 'loader-timeout']
-const isNotCapturedCode = (c) => NOT_CAPTURED.failure.includes(c) || NOT_CAPTURED.expected.includes(c)
 
 // Every engine failure record carries a code from the closed event set (RFC 4.6 §记录 事件行, D38).
 const assertEvents = (fs) => { for (const f of fs) assert.ok(ENGINE_EVENTS.includes(f.code) && typeof f.reason === 'string', `${f.code} is not an engine event code, or has no reason`) }

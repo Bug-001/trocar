@@ -228,7 +228,7 @@ const chatText = (content) => {
 };
 // one chat message → [{role, block, sub}] (a message may fan out: assistant text + several tool_calls).
 // `sub` = the JSON path of the block's bytes within the message (the board's text_ref locator).
-function chatMessageToBlocks(m) {
+export function chatMessageToBlocks(m) {
   if (!m || typeof m !== 'object') return [{ role: 'user', block: { type: 'text', text: String(m ?? '') }, sub: [] }];
   const role = m.role || 'user';
   if (role === 'tool') return [{ role: 'tool', block: { type: 'tool_result', tool_use_id: m.tool_call_id || '', content: chatText(m.content) }, sub: ['content'] }];
@@ -260,7 +260,7 @@ function chatMessageToBlocks(m) {
   if (!out.length) out.push({ role, block: { type: 'text', text: '' }, sub: [] });
   return out;
 }
-function boardFlatChat(req) {
+export function boardFlatChat(req) {
   const flat = [];
   const tools = Array.isArray(req && req.tools) ? req.tools : [];
   tools.forEach((t, i) => {

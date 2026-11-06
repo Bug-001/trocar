@@ -145,7 +145,7 @@ const WIRE_RULES = {
   openai: { resourceRef: oaResourceRef, faith: (bl) => (bl.type === 'thinking' ? oaFaithfulness(bl) : undefined) },
 };
 /** replyBlocks(rec, wire) → [{ b, ref, exact, why }] in reply order: the call's own reply blocks (a part with no block has none). */
-function replyBlocks(rec, { d, format }) {
+export function replyBlocks(rec, { d, format }) {
   const parts = format === 'anthropic' ? replyPartsAnthropic(rec) : d && d.replyParts ? d.replyParts(rec) : [];
   const rules = WIRE_RULES[format === 'anthropic' ? 'anthropic' : 'openai'], base = rawRefOf(rec);
   const out = [];
@@ -795,7 +795,7 @@ function nonBlockKeysOf(rec, format) {
 // the browser → invariant 3). opaque = encrypted/redacted reasoning replayed as signature-only, no plaintext on the wire
 // (thinking/redacted_thinking with a signature but empty text). The board renders a badge off b.faithfulness so nobody
 // mistakes ciphertext for verbatim content (invariant 4). (1.4:52)
-function anthropicFlat(request, keyMemo) {
+export function anthropicFlat(request, keyMemo) {
   const flat = linearContext(request, keyMemo);
   for (const b of flat) {
     const bl = b.block || {};
