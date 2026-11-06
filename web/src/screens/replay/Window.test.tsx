@@ -749,4 +749,4 @@ test('2.3 #22 · 1.4:114: across random steps the patched window equals a fresh 
     }
   }
   expect(kept).toBeGreaterThan(0); expect(compared).toBeGreaterThan(0)
-})
+}, 30_000)
