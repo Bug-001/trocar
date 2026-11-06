@@ -9,6 +9,9 @@ const ERRNO = /^(E[A-Z0-9_]+|Z_[A-Z_]+|ERR_[A-Z0-9_]+)$/ // Node's own error cod
  *  outcomes and segment problems): the one catalog the CLI and the board word a failure group from (0.1 §2, D58②: no code on screen). A key is
  *  a bare `code`, or `where/code` where one code means two things under two `where`s (that key wins). A code that is also a status reason and
  *  has no key here reads statusReason's clause (below), so the two catalogs never word one code twice. */
+/** 1.6 §3.3 · 1.9 §保真边界: the note of a route that sends loopback direct, naming the hosts it carries (4.11 P6). */
+export const loopbackWords = (hosts) => `requests to ${hosts.join(', ')} (a model or relay on this computer) do not go through trocar and are not captured`
+
 export const FAILURE_WORDS = Object.freeze({
   // the background process (daemon) and its start
   'daemon/start-failed': 'the background process would not start',
@@ -63,6 +66,7 @@ export const FAILURE_WORDS = Object.freeze({
   'config-unparsable': 'a config file could not be parsed',
   'agent-list-invalid': 'the list of agent names could not be read, or holds items trocar cannot use',
   'harness-note': 'a note from the install',
+  'loopback-direct': 'requests to this computer do not go through trocar and are not captured',
   'unit-env-not-carried': "the login item's environment cannot carry the install's certificate variable",
   'holders-unreadable': 'the list of running processes could not be read',
   'door-record-unreadable': "trocar's record of which programs used its doors could not be read",

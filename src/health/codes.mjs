@@ -86,7 +86,7 @@ export const CODES_BY_PART = Object.freeze({
   raw: ['seal-failed', 'index-failed'], // index-failed: the daemon could not keep a segment's index current (D62); the records are on disk and the next query indexes them itself, and says so (`index-cold`)
   tracker: ['judge-error', 'unwatch-error', 'ambiguous', 'exe-unreadable', 'watch-failed', 'config-error', 'settings-unparsable', 'settings-unreadable', 'environ-unreadable'],
   // a harness's configuration or files, read or written (the Claude Code settings layers have their own codes, above)
-  harness: ['config-unreadable', 'config-unparsable', 'harness-note', 'shim-not-on-path', 'cert-not-merged', 'source-unreadable', 'relative-path', 'unit-env-not-carried', 'system-roots-unavailable', 'system-roots-unparsable', 'system-roots-partial',
+  harness: ['config-unreadable', 'config-unparsable', 'harness-note', 'loopback-direct', 'shim-not-on-path', 'cert-not-merged', 'source-unreadable', 'relative-path', 'unit-env-not-carried', 'system-roots-unavailable', 'system-roots-unparsable', 'system-roots-partial',
     'agent-list-invalid'], // ~/.trocar/agents.json cannot be read / parsed, or holds bad items (with `path` and `problems`; one per file version, D51③)
   trust: [...TRUST_REASONS],
   bundle: ['roots-changed', 'missing', 'system-roots-unavailable', 'system-roots-unparsable', 'system-roots-partial'], // the last three: the bundles of the harnesses that are on were (re)built with no OS root, without OS roots that did not parse, without a roots source whose read failed (4.6 「合并包」)

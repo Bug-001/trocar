@@ -163,7 +163,7 @@ export async function turnOnModel({ os, home, env = process.env, ids = null, har
         const w = writeRoutes(byName.get(h), { ...wctx, harness: h }, doorOf)
         for (const r of w.results) out.routes.push({ harness: h, ...r })
         for (const n of w.notRouted) out.routes.push({ harness: h, ok: false, ...n })
-        out.notes.push(...w.notes.map((n) => ({ harness: h, ...n })))
+        for (const n of w.notes.map((x) => ({ harness: h, ...x }))) if (n.harness != null || !out.notes.some((o) => o.harness == null && o.code === n.code && o.text === n.text)) out.notes.push(n) // a harness-less note: once per run
       }
     } catch (e) { if (e && typeof e === 'object') e.turnedOn = turned(); throw e } finally {
       // the last route's result (wctx.deferResult). In a finally it must not throw: that would replace the error on its way out, or drop this receipt with the entries already written (V104)

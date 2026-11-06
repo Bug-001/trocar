@@ -285,3 +285,35 @@ test('1.6 §1.6 (darwin): off writes off after on wrote its first harness → on
   assert.equal(off.exit, 0, JSON.stringify(off.receipt.problems))
   assert.deepEqual(mine(w.home), before, 'off took out every entry on wrote')
 })
+
+// 1.6 §3.3 · invariant 4: a route that sends loopback direct (P6 NO_PROXY) leaves requests to this computer uncaptured, so the receipt says it
+// once, naming the loopback hosts (4.11 P6); a run whose routes send loopback to the door (the P8 wrapper) says nothing of it
+test('1.6 §3.3 (darwin): an on that wrote NO_PROXY notes once that loopback requests are not captured; an on that did not, does not', async () => {
+  const w = await modelWorld({ os: 'darwin', commands: ['codex', 'opencode', 'kimi'] })
+  const kimi = path.join(w.home, '.kimi-code', 'bin', 'kimi')
+  fs.mkdirSync(path.dirname(kimi), { recursive: true }); fs.writeFileSync(kimi, Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 0, 0, 0, 0])) // a Mach-O header: the wrapper's precondition
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  const sock = path.join(w.home, 'c.sock'), token = 't'.repeat(32)
+  fs.writeFileSync(path.join(w.dir, 'control.json'), JSON.stringify({ path: sock, token }))
+  const server = await startControlServer({ socketPath: sock, token, routes: {
+    'GET /status': async () => ({ doors: {} }),
+    'POST /on': async ({ body }) => ({ doors: Object.fromEntries(Object.entries(body.groups).map(([g, port]) => [g, `http://127.0.0.1:${port}`])) }),
+  } })
+  const hosts = ['localhost', '127.0.0.1', '::1'] // 4.11 P6: the loopback the NO_PROXY merge puts first
+  const local = (r) => r.io.json().notes.filter((n) => n && n.code === 'loopback-direct')
+  try {
+    const wrapped = await on(w, 'darwin', ['kimi-code', '--yes', '--json'])
+    assert.equal(wrapped.exit, 0, wrapped.io.text())
+    assert.deepEqual(local(wrapped), [], 'the wrapper sends loopback to the door: no note')
+    const both = await on(w, 'darwin', ['codex', 'opencode', '--yes', '--json'])
+    assert.equal(both.exit, 0, both.io.text())
+    const notes = local(both)
+    assert.equal(notes.length, 1, `said once, not per harness: ${JSON.stringify(both.io.json().notes)}`)
+    assert.deepEqual([...notes[0].hosts].sort(), [...hosts].sort())
+    assert.equal(notes[0].harness, null)
+    const text = await on(w, 'darwin', ['codex', 'opencode', '--yes'])
+    const lines = text.io.text().split('\n').filter((l) => hosts.every((h) => l.includes(h)))
+    assert.equal(lines.length, 1, text.io.text())
+    assertEnglish(text.io.text(), 'the receipt of on')
+  } finally { await server.close() }
+})
