@@ -205,7 +205,7 @@ export function applyJsonKey({ keys, value, alsoSet = [], fold = false, ...rest 
  *  finished first, as a group: still at the first one's pre → planned again (its backup kept); already written → adopted, and the keys this call
  *  plans that they do not cover are written on top (no second backup: the adopted first holds the user's bytes); anything else → refused.
  *  → the records written or adopted. */
-export function applyJsonKeys({ dir, manifest, harness, phase, file, sets = [], items = [], base = null, home, door = null, now = new Date(), fs = nodeFs }) {
+export function applyJsonKeys({ dir, manifest, harness, phase, file, sets = [], items = [], base = null, home, door = null, route = null, now = new Date(), fs = nodeFs }) {
   needHome('applyJsonKeys', home)
   needPhase('applyJsonKeys', phase)
   const real = editTarget(file, fs)
@@ -274,7 +274,7 @@ export function applyJsonKeys({ dir, manifest, harness, phase, file, sets = [], 
       kind, harness, phase, path: file, ...(real !== file ? { real_path: real } : {}), ...what,
       existed_before: k === 0 ? before != null : true, mode, pre_sha256: k === 0 ? sha256(before) : sha256(enc(steps[k - 1].text)), post_sha256: null,
       created_dirs: k === 0 ? [...new Set([...dirs, ...missingDirs(path.dirname(file), fs)])] : [], installed_at: now.toISOString(),
-      backup: k === 0 ? backup : null, ...(door ? { door } : {}), ...(charset !== 'utf8' ? { charset } : {}),
+      backup: k === 0 ? backup : null, ...(door ? { door } : {}), ...(route ? { route } : {}), ...(charset !== 'utf8' ? { charset } : {}),
     }
     r.undo_by_hand = undoByHand(r)
     return r
@@ -318,7 +318,7 @@ export function previewTextEntry({ file, edit, fs = nodeFs }) {
   const res = editText(file, readUserText(file, readOrNull(fs, real)).text, edit)
   return { path: file, ...(real !== file ? { real_path: real } : {}), changes: true, prior: res.prior ?? null }
 }
-export function applyTextEntry({ dir, manifest, harness, phase, file, edit, base = null, home, door = null, now = new Date(), fs = nodeFs }) {
+export function applyTextEntry({ dir, manifest, harness, phase, file, edit, base = null, home, door = null, route = null, now = new Date(), fs = nodeFs }) {
   needHome('applyTextEntry', home)
   needPhase('applyTextEntry', phase)
   const j = judgeEntry({ manifest, planned: { harness, kind: 'text', path: file, format: edit.format, ...(edit.vars ? { vars: edit.vars } : { line: edit.line }) }, fs })
@@ -340,7 +340,7 @@ export function applyTextEntry({ dir, manifest, harness, phase, file, edit, base
     ...(edit.neutralize && edit.neutralize.length ? { neutralize: edit.neutralize } : {}), ...(edit.fold === true ? { fold: true } : {}),
     existed_before: before != null, mode: before != null ? fs.statSync(real).mode & 0o777 : (edit.mode || 0o600),
     pre_sha256: sha256(before), post_sha256: null, ops: res.ops, prior_value: res.prior,
-    created_dirs: missingDirs(path.dirname(file), fs), installed_at: now.toISOString(), ...(door ? { door } : {}),
+    created_dirs: missingDirs(path.dirname(file), fs), installed_at: now.toISOString(), ...(door ? { door } : {}), ...(route ? { route } : {}),
   }
   return commit({ dir, manifest, fresh, resumed, before, res, real, charset: read.charset, now, fs, backup: () => backupFirst({ home, file, before, now, fs }) })
 }
