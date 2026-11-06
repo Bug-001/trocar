@@ -17,7 +17,7 @@ import { rootStore, sameRoot } from '../off/root-store.mjs'
 import { disableAutostart, unitFilePath, removeWantsLinks } from '../off/autostart.mjs'
 import { undoAutostart, plistFilePath } from '../off/darwin.mjs'
 import { findingFor } from '../netenv/findings.mjs'
-import { standaloneFiles, backupDir, opLockFile, trocarHome, appDir, launcherPath, COLLECTOR_STATE_FILES } from '../off/paths.mjs'
+import { standaloneFiles, backupDir, opLockFile, trocarHome, appDir, launcherPath, COLLECTOR_STATE_FILES, compileCacheDir } from '../off/paths.mjs'
 import { rawHome, indexHome, classesLog, collectorHome } from '../paths.mjs' // D60: the records are segments under ~/.trocar/raw, the index trocar builds from them under ~/.trocar/index
 import { netenvFile } from '../netenv/index.mjs'
 import { dropBackup, orphanBackups } from '../off/backup.mjs'
@@ -304,7 +304,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
       rm(daemonLogPaths(home).dir)
       // the darwin key custody's signing helper (install put it there, 4.11 P1): it goes once no root key is left for it to remove — after undoRootKeys, which needs it
       const helper = w.platform === 'darwin' && !(m && !m.unsupported && m.entries.some((e) => e.kind === 'root-key')) ? signHelperPath(home, NATIVE.signHelper) : null
-      for (const p of [path.join(w.dir, 'run'), ...COLLECTOR_STATE_FILES.map((n) => path.join(w.dir, n)), w.lockFile, runtime, ...standaloneFiles(home, w.platform), netenvFile(home), helper]) if (p) rm(p) // update.json: an update that never finished is trocar's own note, and goes with the rest of its state (§5.5); door-seen.json: the holder check above has read it
+      for (const p of [path.join(w.dir, 'run'), ...COLLECTOR_STATE_FILES.map((n) => path.join(w.dir, n)), w.lockFile, runtime, ...standaloneFiles(home, w.platform), netenvFile(home), compileCacheDir(home), helper]) if (p) rm(p) // update.json: an update that never finished is trocar's own note, and goes with the rest of its state (§5.5); door-seen.json: the holder check above has read it
       removeEmptyDirs([path.dirname(standaloneFiles(home)[0])], fs)
       // the door ports and their tokens (decision #16): the next install and on choose them again
       const ing = removeIngressConfig({ dir: w.dir, fs })

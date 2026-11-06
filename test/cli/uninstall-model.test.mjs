@@ -216,6 +216,7 @@ test('invariant 5 · offline uninstall: ~/.trocar keeps only the captures — th
   fs.writeFileSync(helper, MACHO, { mode: 0o755 })
   fs.writeFileSync(path.join(w.dir, 'board.token'), 'A'.repeat(43), { mode: 0o600 }) // the daemon's board token (4.4: it goes with uninstall)
   fs.writeFileSync(path.join(w.dir, USER_PATH_FILE), '{"PATH":"/usr/bin"}\n', { mode: 0o600 }) // the PATH a terminal command recorded (1.6 §3.6: it goes with uninstall)
+  fs.mkdirSync(path.join(w.home, '.trocar', 'compile-cache', 'v22'), { recursive: true }); fs.writeFileSync(path.join(w.home, '.trocar', 'compile-cache', 'v22', 'x'), 'c') // Node's compile cache (1.6 §uninstall: it goes)
   const { receipt, exit } = await uninstall(w)
   assert.equal(exit, 0, JSON.stringify({ p: receipt.problems, l: receipt.left }))
   assert.deepEqual(leftUnder(w.home), [], 'nothing of trocar\'s but the captures')
