@@ -6,7 +6,6 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { stepPos, windowCalls, buildLanes, anchorLane, turnsReviewed, nearestByTs, stepOfMark } from '../../web/legacy/replay/lanes.mjs'
 import { renderTicks, renderRails, railToggles, flipRail, wireRails, hasRails } from '../../web/legacy/replay/rails.mjs'
-import { wireTimeline } from '../../web/legacy/replay/timeline.mjs'
 import { wireDetail } from '../../web/legacy/replay/detail.mjs'
 import { deskOf } from './desk-world.mjs'
 import { LANE_KIND } from '../../web/legacy/labels/replay.mjs'
@@ -109,20 +108,13 @@ test('2.1 #16: a tick whose call moved to another lane opens it there; one whose
   rails.click(b); assert.deepEqual(s.rec.opened, ['w3'], 'w5 is no more')
 })
 
-// the clicks of the legacy view's bars and of the drawer's back button, read off what was drawn before the lanes moved on
+// the clicks of the drawer's back button, read off what was drawn before the lanes moved on
 function wiredClick(wire, s) {
   let click = null
   const el = { addEventListener: (k, f) => { if (k === 'click') click = f }, removeEventListener() {}, querySelector: () => ({ addEventListener() {} }) }
   wire(el, s)
   return (hit) => click({ target: { closest: (sel) => hit(sel) } })
 }
-
-test('2.1 #16: a bar clicked after older rows landed moves the playhead to the call it was drawn for', () => {
-  const s = markedDesk(marked(false)), click = wiredClick(wireTimeline, s)
-  moveOn(s, marked(true))
-  click((sel) => (sel === '#sawrow .bar' ? { dataset: { i: '1', rid: 'm4' } } : null))
-  assert.deepEqual(s.rec.steps, [2])
-})
 
 test('2.6 §B: the drawer\'s back button goes to the step it was drawn for after older rows landed', () => {
   const s = markedDesk(marked(false)), steps = []
@@ -142,10 +134,10 @@ test('2.1 #16: stepOfMark finds the step of a call now: its place in the anchor 
 
 // ── what can fold: the gutter and the Tracks menu read one list (2.1 ⑥) ─────────────────────────────────────────────────────────────────────
 const lane = (id, kind, n) => ({ id, kind, calls: Array.from({ length: n }, (_, i) => ({ rid: `${id}-${i}`, ts: iso(T0 + (i + 1) * 1000), ctx: 10 })), peakCtx: 10 })
-function railDesk({ subs, bgs, tc, subgroupOpen = false, bgOpen = false, rawPanelGone }) {
+function railDesk({ subs, bgs, tc, subgroupOpen = false, bgOpen = false, railsFolded }) {
   const main = lane('main', 'main', 3)
   const lanes = [main, ...Array.from({ length: subs }, (_, i) => lane(`sub${i}`, 'subagent', i + 1)), ...Array.from({ length: bgs }, (_, i) => lane(`bg${i}`, i % 2 ? 'notify' : 'monitor', i + 2)), ...(tc ? [lane('token-count', 'token-count', 2)] : [])]
-  return { lanes, anchor: main, anchorTs: main.calls.map((c) => Date.parse(c.ts)), view: { lo: 0, hi: 3 }, selTick: null, collapsedRails: new Set(), subSeeded: new Set(), subgroupOpen, bgOpen, rawPanelGone }
+  return { lanes, anchor: main, anchorTs: main.calls.map((c) => Date.parse(c.ts)), view: { lo: 0, hi: 3 }, selTick: null, collapsedRails: new Set(), subSeeded: new Set(), subgroupOpen, bgOpen, railsFolded }
 }
 const railWorlds = function* () {
   for (const subs of [0, 1, 2, 3]) for (const bgs of [0, 1, 2]) for (const tc of [false, true]) for (const subgroupOpen of [false, true]) for (const bgOpen of [false, true]) {
@@ -197,13 +189,17 @@ test('2.1 #17: flipRail flips that row and no other, and the gutter click leaves
   }
 })
 
-test('2.1 #17: the narrow new desk draws no fold row; the old desk keeps it', () => {
+test('2.1 #17: renderRails writes no fold row, at any width and whatever s.railsFolded holds', () => {
   const had = Object.getOwnPropertyDescriptor(globalThis, 'matchMedia')
-  globalThis.matchMedia = () => ({ matches: true })
   try {
-    const drawn = (rawPanelGone) => { const el = {}; renderRails(el, railDesk({ subs: 2, bgs: 1, tc: true, rawPanelGone })); return el.innerHTML }
-    assert.doesNotMatch(drawn(true), /data-railunfold/)
-    assert.match(drawn(undefined), /data-railunfold/)
+    for (const narrow of [false, true]) {
+      globalThis.matchMedia = () => ({ matches: narrow })
+      for (const { axes, where } of railWorlds()) for (const railsFolded of [undefined, false, true]) {
+        const el = {}
+        renderRails(el, railDesk({ ...axes, railsFolded }))
+        assert.doesNotMatch(el.innerHTML, /data-railunfold/, `${where} narrow=${narrow} folded=${railsFolded}`)
+      }
+    }
   } finally {
     if (had) Object.defineProperty(globalThis, 'matchMedia', had); else delete globalThis.matchMedia
   }
