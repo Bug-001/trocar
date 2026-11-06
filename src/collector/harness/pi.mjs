@@ -121,6 +121,7 @@ export default {
   proxy,
   proxyMode,
   proxies: (ctx) => envProxies(ctx.env, proxy.env),
+  present: [{ base: 'home', dir: '.pi/agent', env: 'PI_CODING_AGENT_DIR' }, { command: 'pi' }],
   inject,
   trust: {
     // the marker first: when it is there, a failure names it, not a CA file the user exported for pi

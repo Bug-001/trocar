@@ -202,6 +202,7 @@ export default {
   proxy,
   proxyMode,
   layers,
+  present: [{ base: 'home', path: '.local/bin/claude' }, { command: 'claude' }, { base: 'home', env: 'CLAUDE_CONFIG_DIR', path: '.claude.json' }],
   inject,
   configHosts: (ctx) => envHosts(ctx.env, BASE_URL_KEYS),
   trust: {

@@ -122,6 +122,7 @@ export default {
   layers,
   configHosts,
   proxies: (ctx) => envProxies(ctx.env, ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy']),
+  present: [{ base: 'home', dir: '.dsh', env: 'DSH_HOME' }, { command: 'dsh' }],
   inject,
   trust: {
     // the marker first: when it is there, a failure names it, not a CA file the user exported for dsh

@@ -140,6 +140,8 @@ export default {
   proxy,
   configHosts,
   proxies: (ctx) => envProxies(ctx.env, ['https_proxy', 'HTTPS_PROXY', 'http_proxy', 'HTTP_PROXY', 'all_proxy', 'ALL_PROXY']),
+  // no { command }: after install the first `kimi` on PATH is trocar's shim; npm kimi has no carrier on Linux
+  present: [{ base: 'home', path: '.kimi-code/bin/kimi' }],
   inject,
   trust: {
     // the marker first (dsh's ordering): on an OS whose judge cannot read the environment, the shim's launch marker is
