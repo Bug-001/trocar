@@ -430,15 +430,15 @@ test('4.4 §条件 GET: the sessions stamp moves when the title table is written
 // One session per harness, each call's system text stating a working directory as the harness writes it; kimi's row has no rule (3.4 §工作目录).
 const STATED = { cc: '/w/project one', opencode: '/w/oc', kimi: null }
 function projectHome() {
-  const home = homeOf(), lines = [], env = (p) => `\n<env>\nWorking directory: ${p}\n</env>`
+  const home = homeOf(), lines = [], env = (h, p) => h.harness === 'cc' ? `\n# Environment\nYou have been invoked in the following environment: \n - Primary working directory: ${p}\n - Is a git repository: true` : `\n<env>\nWorking directory: ${p}\n</env>`
   let i = 0
   for (const h of SEVEN.filter((x) => x.harness in STATED)) {
     const sid = `proj-${h.harness}-4a1b-9c2d-000000000001`, p = STATED[h.harness] ?? '/w/kimi'
     for (let t = 0; t < 3; t++) {
       const b = JSON.parse(h.body(sid, t))
-      if (Array.isArray(b.system)) b.system[0].text += env(p)
-      else if (typeof b.system === 'string') b.system += env(p)
-      else b.messages[0].content += env(p)
+      if (Array.isArray(b.system)) b.system[0].text += env(h, p)
+      else if (typeof b.system === 'string') b.system += env(h, p)
+      else b.messages[0].content += env(h, p)
       lines.push(envelope(h, sid, JSON.stringify(b), replyTo(h, t), stamp(i++)))
     }
   }

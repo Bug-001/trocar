@@ -39,7 +39,7 @@ const ROWS = [
     // a background call (progress summary, suggestion) is aux even when it carries its subagent's agent-id (3.4)
     lane: [{ header: 'x-claude-code-request-class', equals: 'auxiliary', lane: 'aux' }, { header: 'x-claude-code-agent-id', lane: 'subagent', key: true }],
     compaction: [{ header: 'x-cc-compaction-request' }],
-    cwd: [{ in: 'system', re: /^[ \t]*(?:Primary working|Working) directory:[ \t]*([^\n]+)$/m }],
+    cwd: [{ in: 'system', re: /^[ \t]*(?:[-*][ \t]+)?(?:Primary working|Working) directory:[ \t]*([^\n]+)$/m }], // main: ` - Primary working directory:` list item; subagent: bare `Working directory:`
     observerEffects: [effect('cc-gzip-off', 'NODE_EXTRA_CA_CERTS in settings env',
       'Claude Code sends request bodies uncompressed while a custom CA is set')],
     // the endpoints measured on the live capture (2026-10-07): remote-session sync, telemetry, uploads,

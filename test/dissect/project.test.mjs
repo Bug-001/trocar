@@ -15,7 +15,7 @@ const rec = (id, body, over = {}) => ({
 const envUser = (p) => ({ type: 'message', role: 'user', content: [{ type: 'input_text', text: `<environment_context>\n  <cwd>${p}</cwd>\n  <shell>zsh</shell>\n</environment_context>` }] });
 const BUILD = {
   cc: (p) => ({ system: [{ type: 'text', text: 'You are Claude Code.' },
-    { type: 'text', text: `Here is useful information.\n<env>\nWorking directory: ${p}\nIs directory a git repo: Yes\n</env>\nEnd.` }],
+    { type: 'text', text: `# Environment\nYou have been invoked in the following environment: \n - Primary working directory: ${p}\n - Is a git repository: true\nEnd.` }],
   messages: [{ role: 'user', content: 'q0' }] }),
   codex: (p) => ({ instructions: 'You are Codex.', input: [envUser(p), { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'q0' }] }] }),
   opencode: (p) => ({ messages: [{ role: 'system', content: `You are opencode.\n<env>\n  Working directory: ${p}\n  Is directory a git repo: yes\n</env>` }, { role: 'user', content: 'q0' }] }),
@@ -31,9 +31,12 @@ test('3.4 #8 every harness with cwd rules reads the absolute path its request st
     assert.ok(BUILD[h.id], `no body builder for ${h.id}`);
     for (const p of PATHS) assert.equal(projectOf(rec(h.id, BUILD[h.id](p))), p, `${h.id} ${p}`);
   }
-  const primary = BUILD.cc('/w/x');
-  primary.system[1].text = 'Primary working directory: /w/project\n';
-  assert.equal(projectOf(rec('cc', primary)), '/w/project');
+  // cc subagent prompt: a bare line, with or without list markers
+  for (const line of ['Working directory: /w/project', '  Working directory: /w/project', '* Primary working directory: /w/project']) {
+    const sub = BUILD.cc('/w/x');
+    sub.system[1].text = `Here is useful information.\n<env>\n${line}\n</env>`;
+    assert.equal(projectOf(rec('cc', sub)), '/w/project', line);
+  }
 });
 
 test('3.4 #8 a path that is not absolute, too long or has a control char, a non-inference call, or a body that is not JSON states none', () => {
