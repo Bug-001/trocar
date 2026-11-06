@@ -160,6 +160,9 @@ for (const [kind, header] of SENT) {
     assert.equal(got.length, 1)
     assert.deepEqual([got[0].event, got[0].where, got[0].pid, got[0].challenges, got[0].sent], ['failure', 'ingress', 4242, 1, [kind]])
     assert.deepEqual(checkRecord(got[0]), []); assert.equal(isFailure(got[0]), true)
+    // the reason is for a person (1.6 §1.1): it names the program and its pid, and no closed code of what was sent
+    assert.ok(got[0].reason.includes('Code Helper') && got[0].reason.includes('4242'), got[0].reason)
+    assert.equal(got[0].reason.includes(kind), false, got[0].reason)
     const all = JSON.stringify(L.failures)
     for (const secret of ['abc.def-secret', '!!not*base64%%', TOKEN]) assert.equal(all.includes(secret), false, 'no credential value in any record')
     assert.equal(L.upConns.length, 0)

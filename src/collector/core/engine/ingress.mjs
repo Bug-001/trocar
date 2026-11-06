@@ -31,6 +31,14 @@ import { absTarget, forwardHttp, withCredential } from './forward.mjs'
 const HEAD_MAX = 16 * 1024        // no opener or proxy reply head is longer
 const HOLD_MAX = 256 * 1024       // what a client may send while the upstream is being dialled
 const sha = (s) => crypto.createHash('sha256').update(s).digest()
+// The unanswered challenge said for a person (1.6 §1.1, 4.8 §5.1): who, for which group, how often, how long, what came instead; never a credential.
+const SENT_WORDS = { 'no-credentials': 'no password', 'not-basic': 'a login of another kind than a password', 'malformed-basic': 'a password it could not read' }
+const plural = (n, one) => `${n} ${one}${n === 1 ? '' : 's'}`
+function challengeReason({ pid, process, count, sent }, group, ms) {
+  const who = pid == null ? 'a program' : process ? `${printable(process)} pid ${pid}` : `the program with pid ${pid}`
+  const times = count === 1 ? 'once' : count === 2 ? 'twice' : `${count} times`, wait = ms % 1000 ? `${ms} ms` : plural(ms / 1000, 'second')
+  return `${who} was asked ${times} for trocar's proxy password${group ? ` at the proxy trocar runs for ${group}` : ''} and did not send it within ${wait}, so its connection was not made; it sent ${[...sent].map((x) => SENT_WORDS[x] || 'something else').join(' and ')}`
+}
 const printable = (s, n = 80) => String(s).replace(/[^\x20-\x7e]/g, '?').slice(0, n)
 const ROUTE_NAME = /^[\w-]+\.[\w.-]+$/ // the user an trocar-written route or block authenticates as: <route>.<group>
 const msgOf = (e) => String((e && e.message) || e)
@@ -303,7 +311,7 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
         failure({
           where: 'ingress', code: 'ingress-challenge-unanswered', ...(door ? { user: shownUser(door) } : {}), ...(pid != null ? { pid, ...(e.process ? { process: printable(e.process) } : {}) } : {}),
           challenges: e.count, sent: [...e.sent],
-          reason: `a client was asked for the door's credentials (407) ${e.count} time(s) and did not come back with them within ${challengeMs} ms (it sent: ${[...e.sent].join(', ')})`,
+          reason: challengeReason(e, door ? shownUser(door) : '', challengeMs),
         })
       }, challengeMs)
       if (e.timer.unref) e.timer.unref()
