@@ -609,7 +609,7 @@ Whether Desktop's own model calls come out decrypted verbatim is not claimed her
   of the same agent that was active in the last 30 minutes: it joins that session as a compaction. A session with an id
   stays unmarked; a session that was itself grouped by guess stays marked inferred.
 - **Only some agents name a session's project.** A session's project is the working directory its own requests
-  state. Claude Code, Codex, OpenCode and pi state it; sessions of the other agents show no project yet.
+  state. Claude Code, Codex, OpenCode, Hermes, Z-Code and pi state it; sessions of Kimi Code and DeepSeek `dsh` show no project yet.
 - **On captures without process identity the harness is a guess.** Sessions recorded by the MITM or
   reverse proxy carry no `proc.agent`, so the board names their agent from the User-Agent and it is
   marked **inferred** (from the request headers, not the process). Sessions from the per-process collector are named by process, never by UA.

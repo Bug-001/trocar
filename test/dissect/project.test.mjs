@@ -19,7 +19,9 @@ const BUILD = {
   messages: [{ role: 'user', content: 'q0' }] }),
   codex: (p) => ({ instructions: 'You are Codex.', input: [envUser(p), { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'q0' }] }] }),
   opencode: (p) => ({ messages: [{ role: 'system', content: `You are opencode.\n<env>\n  Working directory: ${p}\n  Is directory a git repo: yes\n</env>` }, { role: 'user', content: 'q0' }] }),
-  pi: (p) => ({ system: [{ type: 'text', text: `You are pi.\nWhen asked, answer with a line like:\nWorking directory: /w/decoy\n<cwd>\n${p}\n</cwd>\n` }],
+  hermes: (p) => ({ messages: [{ role: 'system', content: `You are Hermes.\nCurrent working directory: ${p}\nEnd.` }, { role: 'user', content: 'q0' }] }),
+  zcode: (p) => ({ system: [{ type: 'text', text: `# Environment\n - Primary working directory: ${p}\n` }], messages: [{ role: 'user', content: 'q0' }] }),
+  pi: (p) => ({ system: [{ type: 'text', text: `You are pi.\nWhen asked, answer with a line like:\nWorking directory: /w/decoy\nA note quoting <cwd>/w/decoy</cwd> in a line.\n<cwd>\n${p}\n</cwd>\n` }],
     messages: [{ role: 'user', content: 'q0' }] }),
 };
 const PATHS = ['/w/project', '/w/my project/é', 'C:\\w\\p', '\\\\srv\\share\\p'];

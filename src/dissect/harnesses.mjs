@@ -26,6 +26,8 @@ const LEGACY_SESSION_KEYS = [H('x-claude-code-session-id'), H('x-session-id', 'm
 // record. A harness with no entries is not a loss: its calls are `other`, kept in full (4.1 Edge cases).
 // `cwd` (3.4 §工作目录): where a call states its working directory — rules {in: 'system'|'user', re}, capture 1 the path, read by
 // src/dissect/project.mjs only. [] = this harness states none that is read.
+// main lane: a ` - Primary working directory:` list item; a subagent prompt: a bare line
+const CC_CWD = [{ in: 'system', re: /^[ \t]*(?:[-*][ \t]+)?(?:Primary working|Working) directory:[ \t]*([^\n]+)$/m }];
 const ROW = { ua: null, parentKeys: [], lane: [], compaction: [], requestKind: null, observerEffects: [], traffic: [], cwd: [] };
 const T = (host, cls, pathSource) => ({ host, class: cls, ...(pathSource ? { path: pathSource } : {}) });
 // 4.8 §5.6: injected trust changes the agent the same way in both modes; a legacy MITM / reverse-proxy capture still never carries one. `captures` scopes an
@@ -39,7 +41,7 @@ const ROWS = [
     // a background call (progress summary, suggestion) is aux even when it carries its subagent's agent-id (3.4)
     lane: [{ header: 'x-claude-code-request-class', equals: 'auxiliary', lane: 'aux' }, { header: 'x-claude-code-agent-id', lane: 'subagent', key: true }],
     compaction: [{ header: 'x-cc-compaction-request' }],
-    cwd: [{ in: 'system', re: /^[ \t]*(?:[-*][ \t]+)?(?:Primary working|Working) directory:[ \t]*([^\n]+)$/m }], // main: ` - Primary working directory:` list item; subagent: bare `Working directory:`
+    cwd: CC_CWD, // main: ` - Primary working directory:` list item; subagent: bare `Working directory:`
     observerEffects: [effect('cc-gzip-off', 'NODE_EXTRA_CA_CERTS in settings env',
       'Claude Code sends request bodies uncompressed while a custom CA is set')],
     // the endpoints measured on the live capture (2026-10-07): remote-session sync, telemetry, uploads,
@@ -81,11 +83,13 @@ const ROWS = [
     compaction: [{ header: 'x-deepseek-harness-compact', equals: '1' }],
     observerEffects: [effect('dsh-plugin', 'trocar trust plugin', 'trocar code runs inside the agent process')] },
   { ...ROW, id: 'hermes',
+    cwd: [{ in: 'system', re: /(?:^|\s)Current working directory:[ \t]*([^\n]+)$/m }],
     sessionKeys: [B(['session_id']), B(['prompt_cache_key'])], // custom endpoints carry neither → synthesized
     synth: true, // (src/dissect/synth-key.mjs, gate G11)
     // a text marker (medium). Hermes is Python, so the em dash may arrive JSON-escaped.
     compaction: [{ marker: /\[CONTEXT COMPACTION (?:—|\\u2014) REFERENCE ONLY\]/ }] },
   { ...ROW, id: 'zcode',
+    cwd: CC_CWD,
     sessionKeys: [H('x-session-id')],
     lane: [{ header: 'x-zcode-session-type', equals: 'subagent', lane: 'subagent' }], // values not yet seen live
     observerEffects: [effect('zcode-node-https', 'network.caCertFile in ~/.zcode/cli/config.json',
@@ -96,7 +100,7 @@ const ROWS = [
     // send none → synthesized (src/dissect/synth-key.mjs, gate G11)
     sessionKeys: [H('session_id'), H('session-id'), B(['prompt_cache_key'])],
     synth: true,
-    cwd: [{ in: 'system', re: /<cwd>\s*([^\n<]+?)\s*<\/cwd>/ }], // system only: pi's system text also quotes `Working directory:` lines, never read
+    cwd: [{ in: 'system', re: /^<cwd>[ \t]*\n[ \t]*([^\n<]+?)[ \t]*\n<\/cwd>/m }], // system only: pi's system text also quotes `Working directory:` lines, never read
     // the summary request (same endpoint, no tools, one user message) starts its system prompt with this sentence; a JSON string's start
     compaction: [{ marker: /(?<!\\)"You are a context summarization assistant\./ }],
     observerEffects: [
