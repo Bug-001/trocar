@@ -9,6 +9,7 @@ import { memo, useLayoutEffect, useMemo, useRef, useSyncExternalStore, type CSSP
 import { SKELETON, laneCapacity } from '../../../legacy/replay/replay.mjs'
 import { BAR_KEYS, problemGo } from '../../../legacy/replay/timeline.mjs'
 import { stepOfMark } from '../../../legacy/replay/lanes.mjs'
+import { hasRails } from '../../../legacy/replay/rails.mjs'
 import { L } from '../../../legacy/core/labels.mjs'
 import * as W from '../../../legacy/labels/replay.mjs'
 import { overviewModel, scopeModel } from './models.mjs'
@@ -156,7 +157,7 @@ export function Scope({ desk }: { desk: DeskView }) {
     </div></div> : null}
     <div className="sawlegend">
       <span id="viewswitch">{m && !rough ? (['ctx', 'cost'] as const).map((v) => <button key={v} type="button" className={`segbtn${(v === 'cost') === cost ? ' on' : ''}`} data-view={v} aria-pressed={(v === 'cost') === cost} onClick={() => setView(v)}>{v === 'cost' ? W.VIEW_COST : W.VIEW_CTX}</button>) : null}</span>
-      {m && !rough && (pr?.n || s.lanes.length > 1) ? <TracksMenu desk={desk} /> : null}
+      {m && !rough && (pr?.n || hasRails(s)) ? <TracksMenu desk={desk} /> : null}
       <span id="complegend">{lg ? cost && !rough ? <span>{W.COST_LEGEND}</span> : <><span>{lg.estimate}</span><span className="barlegend">{(BAR_KEYS as Array<[string, string]>).map(([c, word]) => <span key={c}><i className={`ct-${c}`} />{word}</span>)}</span></> : null}</span>
       {lg ? <span className="cachelegend" title={w.cacheTip}><i className="tracekey" aria-hidden="true" />{lg.cache[0]} · <i className="tracekey unk" aria-hidden="true" />{lg.cache[1]}</span> : null}
       {lg?.sampled ? <span className="sampled" title={W.SAMPLED_TIP}>{L.SAMPLED}</span> : null}

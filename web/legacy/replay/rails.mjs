@@ -106,6 +106,8 @@ function rowsOf(s) {
   const of = (row) => rl.filter((l) => laneKind(l.kind).row === row)
   return { subs: of('sub'), bgs: of('bg'), tcs: of('tc') }
 }
+// whether the gutter has any row to open or close (the Tracks menu shows only then): one pass, no rows built
+export const hasRails = (s) => s.lanes.some((l) => l !== s.anchor && ['sub', 'bg', 'tc'].includes(laneKind(l.kind).row))
 const bgCalls = (bgs) => bgs.reduce((n, l) => n + (l.count ?? l.calls.length), 0)
 
 // what can be opened and closed, in the order renderRails draws it: the gutter draws these rows, the Tracks menu lists them

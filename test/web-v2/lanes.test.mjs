@@ -5,7 +5,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { stepPos, windowCalls, buildLanes, anchorLane, turnsReviewed, nearestByTs, stepOfMark } from '../../web/legacy/replay/lanes.mjs'
-import { renderTicks, renderRails, railToggles, flipRail, wireRails } from '../../web/legacy/replay/rails.mjs'
+import { renderTicks, renderRails, railToggles, flipRail, wireRails, hasRails } from '../../web/legacy/replay/rails.mjs'
 import { wireTimeline } from '../../web/legacy/replay/timeline.mjs'
 import { wireDetail } from '../../web/legacy/replay/detail.mjs'
 import { deskOf } from './desk-world.mjs'
@@ -172,6 +172,14 @@ test('2.1 #17: railToggles lists what the gutter draws, in its order and with it
       if (opened) s.collapsedRails.delete(opened.id)
       assert.deepEqual(railToggles(s).map(({ id, open }) => ({ id, open })), gutterRows(s).map(({ id, open }) => ({ id, open })), where)
     }
+  }
+})
+
+test('2.1 #17: hasRails is true exactly when the gutter has a row to open or close', () => {
+  for (const { s, where } of railWorlds()) {
+    assert.equal(hasRails(s), railToggles(s).length > 0, where)
+    const only = { ...s, lanes: s.lanes.filter((l) => l === s.anchor || l.kind === 'main') }
+    assert.equal(hasRails(only), false, `${where}, main lanes only`)
   }
 })
 
