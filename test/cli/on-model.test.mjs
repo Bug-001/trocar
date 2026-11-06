@@ -20,9 +20,9 @@ function fakeIo() {
 }
 // `registered()` is a READ (1.6 §3.3: `on` asks before it writes) — the login entry install made is there; nothing of it may be changed
 const neverStarts = { path: '/nowhere/unit', text: () => '', registered: () => ({ state: 'present' }), enable: () => { throw new Error('the unit must not be touched') }, start: () => { throw new Error('the unit must not be touched') }, startNow: () => { throw new Error('the unit must not be touched') } }
-const on = (w, os, argv, unit = neverStarts, backends = {}) => {
+const on = (w, os, argv, unit = neverStarts) => {
   const io = fakeIo()
-  const deps = { getuid: () => 501, backends: { dirs: w.ctx.dirs, ...backends }, harnesses: w.harnesses, which: w.ctx.which, parts: { os, harnesses: w.harnesses, arch: { unit: { userUnit: () => unit } } } }
+  const deps = { getuid: () => 501, backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: { os, harnesses: w.harnesses, arch: { unit: { userUnit: () => unit } } } }
   return runOnCli(argv, { io, env: w.env, home: w.home, platform: os, deps }).then((exit) => ({ exit, io }))
 }
 
