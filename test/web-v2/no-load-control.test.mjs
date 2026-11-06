@@ -11,7 +11,6 @@ import { stepOf } from '../../web/legacy/replay/model.mjs'
 import { ctxWindowUnits, ctxWindowHtml, renderContextWindow } from '../../web/legacy/replay/ctxwin.mjs'
 import { stepBarHtml } from '../../web/legacy/replay/stepbar.mjs'
 import { renderSessionHead } from '../../web/legacy/replay/header.mjs'
-import { renderRawPanel } from '../../web/legacy/replay/rawpanel.mjs'
 import { bodyCache } from '../../web/legacy/replay/cell.mjs'
 import { frameFor } from '../../web/legacy/replay/replay.mjs'
 import { world, deskFrom, readLane } from './desk-world.mjs'
@@ -84,9 +83,8 @@ test('2.3 #10 #21 #24 · 1.4 ⑧: no load control in any desk state; unheld keep
               const st = cache(s)
               const what = `seed ${seed} step ${s.playhead} ${which} pending=${JSON.stringify(pending)} trunc=${!!truncated} body=${body}`
               const head = fake(); renderSessionHead(head, s)
-              const raw = fake(); renderRawPanel(raw, s)
               const win = ctxWindowHtml(s), bar = stepBarHtml(s)
-              for (const [h, part] of [[win, 'window'], [bar, 'step bar'], [head.innerHTML, 'session head'], [raw.innerHTML, 'raw panel']]) noControl(h, `${what} ${part}`)
+              for (const [h, part] of [[win, 'window'], [bar, 'step bar'], [head.innerHTML, 'session head']]) noControl(h, `${what} ${part}`)
               assert.equal(READ_STATE.test(head.innerHTML), pending != null, `${what}: the read-state line is there exactly while pending`)
               if (which === 'unheld') {
                 unheldSeen++

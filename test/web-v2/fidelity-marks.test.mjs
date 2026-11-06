@@ -12,8 +12,7 @@ import path from 'node:path'
 import { buildLanes, anchorLane } from '../../web/legacy/replay/lanes.mjs'
 import { ctxWindowHtml } from '../../web/legacy/replay/ctxwin.mjs'
 import { stepBarHtml } from '../../web/legacy/replay/stepbar.mjs'
-import { rawPanelUnits } from '../../web/legacy/replay/rawpanel.mjs'
-import { serialize } from '../../web/legacy/core/units.mjs'
+import { detailHtml } from '../../web/legacy/replay/detail.mjs'
 import { bodyCache, showBody } from '../../web/legacy/replay/blocks.mjs'
 import { loadBodies, setDeskMode, setMode } from '../../web/legacy/replay/cell.mjs'
 import { stepOf } from '../../web/legacy/replay/model.mjs'
@@ -58,6 +57,8 @@ const stateOf = (desk, playhead = 0, extra = {}) => {
   return { desk, lanes, anchor: anchorLane(lanes), playhead, diffRef: null, navOpen: new Set(), openBlocks: new Set(), turnFold: OPEN_TURNS, turnLanded: new Set(), ctx: {},
     curFlat: [], viewPin: null, meta: {}, ...extra }
 }
+// the call drawer's body for the step at the playhead (2.6 §B: the reply with its one mark)
+const drawerOf = (s) => detailHtml(s, s.anchor, s.playhead).body
 const deskOfSteps = (steps, { rows = steps.map(() => ({})), replies, details } = {}) => deskOf([{ kind: 'main', rows, blocks: steps, replies, details }])
 
 const visible = (h) => h.replace(/<span class="sr-only">[^<]*<\/span>/g, '').replace(/<[^>]*>/g, ' ')
@@ -255,7 +256,7 @@ test('2.3 #9: no block with a ref draws the window line, ◐ on each header, 不
 })
 
 // ── this step's reply (2.3 §这一步的回复 · 2.6 #3) ─────────────────────────────────────────────────────────────────────
-test('2.3 #2 · 2.6 #3: a reply part is proven only on its own span (resp.raw or resp.messages.<j>), else parsed; the panel\'s one mark never says 逐字 without the spans', () => {
+test('2.3 #2 · 2.6 #3: a reply part is proven only on its own span (resp.raw or resp.messages.<j>), else parsed; the drawer\'s one mark never says 逐字 without the spans', () => {
   const SPAN = /::resp\.(raw|messages\.\d+)::\d+-\d+$/
   const part = (where, ff) => {
     const k = n++, d = { bid: `P${k}`, kind: 'text', head: { role: 'assistant', tag: 'say', label: 'say' }, preview: `say ${k}`, chars: 4, bytes: 4, r: { as: 'text' }, ...(ff ? { ff } : null) }
@@ -284,9 +285,9 @@ test('2.3 #2 · 2.6 #3: a reply part is proven only on its own span (resp.raw or
       assert.equal(count(r.attrs, 'data-ff="'), 1, `${why} part ${i}: one fidelity value`)
       assertMark(r, expect(parts[i]), `${why} part ${i} ${JSON.stringify(parts[i].ff)} ${parts[i].ref}`)
     })
-    // the raw panel's one mark, by the proof rule over the parts: not stored whole → 回复没采全; a part off its span → 解析后的回复
+    // the call drawer's one mark (replyOf over the parts): not stored whole → 回复没采全; a part off its span → 解析后的回复
     // (never 逐字 without the spans); every part proven → none
-    const panel = serialize(rawPanelUnits(s)), marks = count(panel, 'class="rpmark"'), partial = Object.keys(row).length > 0
+    const panel = drawerOf(s), marks = count(panel, 'class="rpmark"'), partial = Object.keys(row).length > 0
     assert.ok(marks <= 1, `${why}: one mark at most`)
     if (partial) assert.ok(marks === 1 && visible(panel).includes(w(W.REPLY_PARTIAL)), `${why}: reply incomplete`)
     else if (!parts.every((d) => SPAN.test(d.ref || ''))) assert.ok(marks === 1 && visible(panel).includes(w(W.REPLY_PARSED)), `${why}: parsed`)
@@ -427,9 +428,8 @@ test('2.3 #9 (real face): a v0 envelope draws the window line, ◐ on each heade
       for (const r of rowsOf(h.slice(h.indexOf('<div class="cwreply"')), { reply: true })) assert.notEqual(r.ff, 'verbatim', `${why}: a v0 reply is parsed`)
       // 2.6 §A v0 记录: no request key to read back, and the reply's one mark says it was parsed
       assert.deepEqual(st.detail.nonBlockKeys, [], `${why}: no non-block keys`)
-      const panel = serialize(rawPanelUnits(s))
-      assert.ok(visible(panel).includes(w(W.NO_PARAMS)), `${why}: the panel says there are no request keys`)
-      if (st.reply.length) assert.ok(count(panel, 'class="rpmark"') === 1 && visible(panel).includes(w(W.REPLY_PARSED)), `${why}: the panel's reply is parsed`)
+      const panel = drawerOf(s)
+      if (st.reply.length) assert.ok(count(panel, 'class="rpmark"') === 1 && visible(panel).includes(w(W.REPLY_PARSED)), `${why}: the drawer's reply is parsed`)
       steps++
     })
     assert.ok(steps > 1, 'every step of the session')
