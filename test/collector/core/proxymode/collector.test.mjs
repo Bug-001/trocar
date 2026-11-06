@@ -75,6 +75,7 @@ for (const { d, f, os } of CASES) {
       const meta = await r.c.lookupIngress({ peer: PEER, user: g, target: { address: cs.host, port: 443 } })
       const want = verdictOf({ desc, form, facts: { ...facts, pid }, record: { carrierInstalledAt: INSTALLED, rootFp256: STUB_FP }, issuer: cs.issuer ? ready : null, host: cs.host, hostSet: cs.hostSet, ctx: r.w.ctx })
       assert.equal(meta.decrypt, want.decrypt, `${f.id} · ${os} · ${JSON.stringify(over)}: ${JSON.stringify(want)}`)
+      if (!want.decrypt && cs.known) assert.equal(meta.skip && meta.skip.reason, want.code, `${f.id} · ${os} · ${JSON.stringify(over)}: the forward-only row carries P11's code`) // off the list: the door's own class, before P11
     }
     for (const r of Object.values(rigs)) { for (const x of r.records) assert.deepEqual(checkRecord(x), [], JSON.stringify(x)); r.c.close() }
   })
