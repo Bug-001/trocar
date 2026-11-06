@@ -677,12 +677,12 @@ test('ensureDaemonUp: a start call the OS held back is said in the notes with th
 test('ensureDaemonUp: a start the daemon refused ends the poll with the daemon\'s own reason and no second record; one that never answers still ends in start-failed', async () => {
   const boxes = []
   try {
-    const run = async (refuse) => {
+    const run = async (refuse, code = 'node-too-old') => {
       const b = box(); boxes.push(b) // a box per run: the first run's refusal is not the second's, even within one millisecond
       appendEvent(b.dir, { event: 'failure', where: 'start', code: 'node-too-old', reason: 'AN OLDER REFUSAL' }, { now: new Date(Date.now() - 3600e3) })
       let polls = 0
       const put = []
-      const unit = { path: '/Users/ada/Library/LaunchAgents/com.trocar.collector.plist', registered: () => ({ state: 'present' }), startNow: () => { if (refuse) appendEvent(b.dir, { event: 'failure', where: 'start', code: 'node-too-old', reason: 'THE DAEMON SAYS WHY' }); return { code: 0 } } }
+      const unit = { path: '/Users/ada/Library/LaunchAgents/com.trocar.collector.plist', registered: () => ({ state: 'present' }), startNow: () => { if (refuse) appendEvent(b.dir, { event: 'failure', where: 'start', code, reason: 'THE DAEMON SAYS WHY' }); return { code: 0 } } }
       const out = await ensureDaemonUp({ osName: 'darwin', dir: b.dir, env: {}, unit, socketPath: '/tmp/trocar-test.sock', put: (e) => put.push(e),
         request: async () => { polls++; throw Object.assign(new Error('not there'), { code: 'ENOENT' }) }, pause: async () => {} })
       return { ...out, polls, put }
@@ -690,6 +690,9 @@ test('ensureDaemonUp: a start the daemon refused ends the poll with the daemon\'
     const refused = await run(true)
     assert.deepEqual([refused.up, refused.problems, refused.put], [false, ['THE DAEMON SAYS WHY'], []], 'the daemon\'s reason, nothing written on top')
     assert.ok(refused.polls <= 3, `the poll stops at the record, not after 15 s: ${refused.polls} probes`)
+    // a start failure the OS's next start may clear (the endpoint held, say) is no answer yet: the wait goes on to its end
+    const passing = await run(true, 'control-endpoint-held')
+    assert.ok(passing.polls > 3 && passing.put.some((e) => e.code === 'start-failed'), `a failure a relaunch may clear does not end the wait: ${passing.polls} probes`)
     const silent = await run(false)
     assert.deepEqual([silent.up, silent.problems.length, silent.put.map((e) => [e.where, e.code])], [false, 1, [['start', 'start-failed']]], 'no answer and no refusal: start-failed as before')
     assert.ok(!silent.problems[0].includes('AN OLDER REFUSAL'), 'a refusal from before this start is not its answer')
