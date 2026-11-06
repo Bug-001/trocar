@@ -154,9 +154,14 @@ for (const wire of ['http', 'chat', 'threads', 'ws'])
     // one sub-agent lane: a sibling's departure line would hide the wrapper
     const s = bigSession({ home, wire, growth: 600, subEvery: 3, subLanes: 1, subLen: 100, preamble: '<boot>injected</boot>' })
     s.append(18)
+    const recs = fs.readFileSync(s.file, 'utf8').trim().split('\n').map((l) => JSON.parse(l))
     const subs = (await runQuery('session', { id: s.id }, { home })).lanes.filter((l) => l.kind === 'subagent')
     assert.equal(subs.length, 1)
-    for (const l of subs) assert.ok(l.task && !l.task.includes('<boot>'), `lane ${l.lane}: ${l.task}`)
+    for (const l of subs) {
+      // the prompt as a wire reader takes it, wrapper and all: what is left of it is where the task starts
+      const want = firstAskOf(recs[Number(String(l.first).split(':').pop()) - 1], recs).replace('<boot>injected</boot> ', '').replace(/…$/, '')
+      assert.ok(want && l.task && l.task.startsWith(want), `lane ${l.lane}: ${l.task}`)
+    }
   })
 
 for (const text of ['<boot>a</boot>\nFix it', '<boot>a</boot>'])
