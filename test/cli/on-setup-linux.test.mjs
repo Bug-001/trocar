@@ -47,7 +47,7 @@ test('V91-O2 · --dry-run with z-code needing setup → exit 0, z-code in blocke
   assert.deepEqual(snapshot(s.home), before)
 })
 
-test('V91-O3 · claude-code carrier overwritten → on claude-code exit 1, refused claude-code, settings.json bytes untouched by the run', async () => {
+test('V91-O3 · claude-code carrier overwritten → on claude-code exit 1, refused claude-code, settings.json bytes untouched by the run; install places it again and on turns it on', async () => {
   const s = await installedHome({ names: [CC] })
   const f = path.join(s.home, '.claude', 'settings.json')
   const j = JSON.parse(fs.readFileSync(f, 'utf8'))
@@ -58,6 +58,13 @@ test('V91-O3 · claude-code carrier overwritten → on claude-code exit 1, refus
   assert.equal(r.exit, 1)
   assert.deepEqual(r.receipt.refused.map((x) => x.harness), [CC])
   assert.deepEqual(fs.readFileSync(f), bytes)
+  // the fix the refusal names: install places the carrier again (the overwritten value is what its undo puts back), then on turns it on
+  await s.install()
+  assert.equal(JSON.parse(fs.readFileSync(f, 'utf8')).env.NODE_EXTRA_CA_CERTS, s.manifest().entries.find((e) => e.harness === CC && e.kind === 'json-key').value)
+  assert.equal(s.manifest().entries.find((e) => e.harness === CC && e.kind === 'json-key').prior_value, path.join(s.home, 'other-ca.pem'))
+  const again = await s.on({ ids: [CC] })
+  assert.equal(again.exit, 0, JSON.stringify(again.receipt))
+  assert.deepEqual(again.receipt.refused, [])
 })
 
 test('V91-O4 · bare on with z-code present but never set up → only z-code refused, claude-code turned on', async () => {

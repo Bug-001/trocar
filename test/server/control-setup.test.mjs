@@ -16,7 +16,7 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { request } from './face.mjs'
 import { snapshot } from '../query/raw-home.mjs'
 import { CONTROL_TOKEN_HEADER } from '../../src/off/token-header.mjs'
-import { readManifest, saveManifest, itemsOfPhase } from '../../src/off/manifest.mjs'
+import { readManifest, saveManifest, itemsOfPhase, manifestPath } from '../../src/off/manifest.mjs'
 import { setupOf } from '../../src/collector/core/proxymode/status-facts.mjs'
 import { createServer } from '../../src/server.mjs'
 import { createQueryService } from '../../src/query/service.mjs'
@@ -24,6 +24,8 @@ import { validateReceipt } from '../../src/cli/schema.mjs'
 import { VERBS } from '../../src/control/board.mjs'
 import { driverSetup } from '../../src/collector/driver-setup.mjs'
 import { installedHome, ROOTS } from '../off/fixtures/off-ctx.mjs'
+import { setKey } from '../../src/off/json-text.mjs'
+import { removeTrocarText } from '../../src/off/text-edit.mjs'
 
 const A = 'codex', B = 'z-code' // B: its CLI form is present when ~/.zcode is, and carries the root through a config key (a carrier of its own)
 const HELPER = { close: async () => {}, call: async (verb) => { if (verb === 'ps') return { procs: [] }; throw Object.assign(new Error(`not in this stand-in: ${verb}`), { code: 'helper-verb-error' }) } }
@@ -229,4 +231,45 @@ test('Linux · 4.4 #13 · 4.6: Set up on a HOME without an install record is cer
   assert.equal(r.doc.ok, false, JSON.stringify(r.doc))
   assert.equal(r.doc.error.code, 'cert-not-installed')
   assert.deepEqual(snapshot(home), home0)
+})
+
+// 4.11 P4b · 4.6 (V67 / V91): what the judge calls `needed` is what install places again. Axes: every harness with an install-phase config item ×
+// the item's file deleted / rewritten without trocar's text (its own update): a `needed` setup is `ready` after Set up, and `on <h>` turns it on.
+const DAMAGE = {
+  deleted: (x) => fs.rmSync(x.path),
+  overwritten: (x) => { const t = fs.readFileSync(x.path, 'utf8'); fs.writeFileSync(x.path, x.kind === 'json-key' ? setKey(t, x.keys, '/elsewhere/ca.pem').text : removeTrocarText(t, x.ops).text) },
+}
+for (const h of ['claude-code', 'codex', 'hermes', 'kimi-code', 'z-code']) for (const [how, damage] of Object.entries(DAMAGE)) {
+  test(`Linux · V67 · V91: ${h}'s certificate item ${how} → setup needed; Set up places it again → ready, and on ${h} turns it on`, async () => {
+    const s = await installedHome({ names: [h] })
+    const desc = s.descs[0], judged = () => driverSetup(desc, { os: 'linux', home: s.home, env: s.sh.env, manifest: s.manifest() })
+    for (const x of s.manifest().entries.filter((e) => e.harness === h && e.phase === 'install')) damage(x)
+    if (judged().state === 'needed') { // a form whose files are gone may no longer be there at all: then nothing is needed and on goes on
+      const ctx = { home: path.join(s.home, '.trocar'), deps: linuxSetupDeps(s) }
+      const p = await VERBS.setup({ harness: h }, ctx)
+      assert.equal(p.status, 409, JSON.stringify(p.doc))
+      assert.ok(p.doc.plan.length > 0, JSON.stringify(p.doc))
+      const r = await VERBS.setup({ harness: h, confirm: p.doc.plan_id }, ctx)
+      assert.equal(r.status, 200, JSON.stringify(r.doc))
+      assert.equal(r.doc.ok, true)
+      assert.deepEqual([judged().state, judged().missing], ['ready', []])
+    }
+    const on = await s.on({ ids: [h] })
+    assert.equal(on.exit, 0, JSON.stringify(on.receipt))
+    assert.ok(on.receipt.harnesses.includes(h) && !on.receipt.refused.length)
+  })
+}
+
+test('Linux · D38: a carrier install cannot place again (its file now a link to nothing) → Set up refuses with setup-needed and writes nothing', async () => {
+  const s = await installedHome({ names: ['claude-code'] })
+  const x = s.manifest().entries.find((e) => e.harness === 'claude-code' && e.phase === 'install')
+  fs.rmSync(x.path); fs.symlinkSync(path.join(s.home, 'gone', 'settings.json'), x.path)
+  const desc = s.descs[0]
+  assert.equal(driverSetup(desc, { os: 'linux', home: s.home, env: s.sh.env, manifest: s.manifest() }).state, 'needed')
+  const seen = () => [fs.readlinkSync(x.path), fs.readFileSync(manifestPath(s.dir), 'utf8')] // a link to nothing: not a file a snapshot reads
+  const before = seen()
+  const r = await VERBS.setup({ harness: 'claude-code', confirm: 'x' }, { home: path.join(s.home, '.trocar'), deps: linuxSetupDeps(s) })
+  assert.equal(r.doc.ok, false, JSON.stringify(r.doc))
+  assert.equal(r.doc.error.code, 'setup-needed')
+  assert.deepEqual(seen(), before)
 })

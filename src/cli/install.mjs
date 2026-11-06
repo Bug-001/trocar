@@ -14,7 +14,7 @@ import { isInteractive, confirm } from '../off/io.mjs'
 import { fit, tilde, planItems, formWords, carrierWords, planWords, commandLine, UNDO_WORDS, asDir } from './receipt.mjs'
 import { pairs, wrap } from './text.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
-import { EVENT } from '../collector/core/codes.mjs'
+import { EVENT, CODE } from '../collector/core/codes.mjs'
 import { codeId, packageRoot, channelOf, setupHelperCommand } from '../version.mjs'
 import { CUT, daemonCode, replaceDaemon } from './replace-daemon.mjs'
 import { printJson } from './json.mjs'
@@ -229,7 +229,7 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
   const inst = await import('../collector/install.mjs')
   // D61: the login entry is install's — written here and enabled with `--now` (not Set up's: `only` has none), so the daemon is up from install until uninstall
   const unit = only ? null : deps.unit !== undefined ? deps.unit : (!parts.arch || !parts.arch.unit || !parts.arch.unit.userUnit ? null : parts.arch.unit.userUnit({ home, node: process.execPath, script: deps.script || process.argv[1], run: deps.exec || null, env, ...(deps.spawn ? { spawn: deps.spawn } : {}) }))
-  const args = { home, env, osName: parts.os, harnesses: parts.harnesses, scan: parts.scan, match: parts.match, arch: parts.arch || null, roots: deps.roots || null, unit, fs, ...(deps.freePort ? { freePort: deps.freePort } : {}), ...(deps.now ? { now: deps.now } : {}), ...(deps.request ? { request: deps.request } : {}), ...(deps.sleep ? { sleep: deps.sleep } : {}) } // request / sleep: installCollector's ensureDaemonUp seam (D61), so a test's daemon is the one asked
+  const args = { home, env, osName: parts.os, harnesses: parts.harnesses, scan: parts.scan, match: parts.match, arch: parts.arch || null, roots: deps.roots || null, unit, certs: true, fs, ...(deps.freePort ? { freePort: deps.freePort } : {}), ...(deps.now ? { now: deps.now } : {}), ...(deps.request ? { request: deps.request } : {}), ...(deps.sleep ? { sleep: deps.sleep } : {}) } // request / sleep: installCollector's ensureDaemonUp seam (D61), so a test's daemon is the one asked
   if (only) return await linuxSetup({ io, home, platform, flags, json, say, fs, locked, inst, args: { ...args, ids: [only], unit: null }, only })
   let plan
   const ingressPath = path.join(home, '.trocar', 'collector', 'ingress.json')
@@ -304,6 +304,8 @@ async function linuxSetup({ io, home, platform, flags, json, say, fs, locked, in
   let plan
   try { plan = await inst.planOn(args) } catch (e) { return refuse('failed', `the plan could not be made (${String((e && e.message) || e)}). Nothing was changed`) }
   const planned = planItems(plan, { home, platform }).filter((r) => r.what === only) // the harness's rows only: trocar's own records are not Set up's (1.6 §3.2, V85)
+  const left = plan.steps.filter((s) => s.harness === only && s.action === 'skip-user-changed') // a carrier install cannot place again: setup stays needed, said (D38)
+  if (left.length) return refuse(CODE.setupNeeded, `${only} cannot be set up: ${left.map((s) => s.why).join('; ')}. Nothing was changed`)
   say(fit([planned.length ? `trocar install will set up ${only}:` : `${only} has every certificate carrier it needs: there is nothing to set up.`, ...pairs(planned.map((p) => [p.what, p.detail]), { home })], { home }).join('\n'))
   if (flags.has('--dry-run')) { if (json) printJson(io, { ...newReceipt('install'), dry_run: true, planned, ...(planned.length ? {} : { notes: [`${only}: nothing to set up`] }) }); return EXIT.ok }
   if (plan.writing && !flags.has('--yes')) {

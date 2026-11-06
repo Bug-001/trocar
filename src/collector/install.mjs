@@ -20,7 +20,7 @@ import { planTrust } from './core/trust/plan.mjs'
 import { livenessOf } from './core/registry.mjs'
 import { readAgentList } from '../off/identity.mjs'
 import { patternsOf } from '../off/signature.mjs'
-import { readManifest, saveManifest, newManifest, missingDirs, applyJsonKey, previewJsonKey, applyTextEntry, previewTextEntry, writeOwnedFile, manifestPath, describeEntry, judgeEntry, judgeOwned, sha256 } from './core/trust/journal.mjs'
+import { readManifest, saveManifest, newManifest, missingDirs, applyJsonKey, previewJsonKey, applyTextEntry, previewTextEntry, writeOwnedFile, manifestPath, describeEntry, judgeEntry, judgeOwned, sha256, replaceable, retireEntry } from './core/trust/journal.mjs'
 import { EVENT, CODE } from './core/codes.mjs'
 import { RESTART_REASONS } from '../health/codes.mjs'
 import { controlRequest, controlEndpointFor } from './core/control.mjs'
@@ -159,7 +159,7 @@ const stop = (message) => Object.assign(new Error(message), { stopsRun: true })
  *  `_` is what the writing needs (the manifest as read, the draft, the roots). `ids`: the harness code ids named, or null for every one found.
  *  The combined bundles' roots are `roots` when given (a test's, an embedder's), else the arch's (tls/roots.mjs bundleRoots: `missing` is said per
  *  bundle by planTrust; a read that fails throws here, before anything is written). */
-export async function planOn({ home = os.homedir(), env = process.env, ids = null, osName, harnesses, scan = async () => [], match = () => ({ agent: null }), arch = null, roots = null, unit = null, fs = nodeFs, now = () => new Date(), judge = null } = {}) {
+export async function planOn({ home = os.homedir(), env = process.env, ids = null, osName, harnesses, scan = async () => [], match = () => ({ agent: null }), arch = null, roots = null, unit = null, fs = nodeFs, now = () => new Date(), judge = null, certs = false } = {}) {
   const dir = collectorHome(path.join(home, '.trocar'))
   let prior
   try { prior = readManifest(dir, fs) } catch (e) { // not written over: it is the only list of what trocar changed; `off` has the way back by trocar's own marks (R3)
@@ -188,13 +188,16 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
 
   // per item: written, intact, resumed, or changed by the user since (R9)
   const steps = []
+  // install (certs) places again a carrier item that is gone or changed (`replaceable`): planned as new, its preview said when it cannot be (D38)
+  const previewOf = (e) => (e.kind === 'text' ? previewTextEntry({ file: e.path, edit: e, fs }) : previewJsonKey({ file: e.path, keys: e.keys, value: e.value, fs }))
   const entryJ = draft.entries.map((e) => {
-    const j = judgeEntry({ manifest: prior, planned: e, fs })
+    let j = judgeEntry({ manifest: prior, planned: e, fs })
+    if (certs && replaceable(j)) { try { previewOf(e); j = { action: 'rewrite', entry: null, why: j.why } } catch (err) { j = { ...j, why: `${j.why}; trocar install cannot place it again (${String((err && err.message) || err)})` } } }
     steps.push({ harness: e.harness, path: e.path, kind: 'entry', action: j.action, ...(j.why ? { why: j.why } : {}) })
     return j
   })
   // every per-file refusal too, for what is to be written (a dangling link, a file that is not JSON, a patch file that is not a list) — before onPlan, before any write
-  const preview = draft.entries.map((e, i) => (entryJ[i].action !== 'write' ? null : e.kind === 'text' ? previewTextEntry({ file: e.path, edit: e, fs }) : previewJsonKey({ file: e.path, keys: e.keys, value: e.value, fs })))
+  const preview = draft.entries.map((e, i) => (entryJ[i].action !== 'write' && entryJ[i].action !== 'rewrite' ? null : previewOf(e)))
   const fileJ = draft.files.map((f) => {
     const j = judgeOwned({ manifest: prior, file: f.path, fs })
     steps.push({ harness: f.harness, path: f.path, kind: f.role, action: j.action, ...(j.why ? { why: j.why } : {}) })
@@ -217,7 +220,7 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
   const reasonOf = (name) => draft.records.filter((r) => r.harness === name).map((r) => r.reason.replace(`${name}: `, '')).join('; ') || `no ${name} configuration was found on this machine: nothing to change for it`
   const skipped = [
     ...descs.map((d) => d.name).filter((n) => !targets.includes(n)).map((n) => ({ what: n, reason: reasonOf(n) })),
-    ...steps.filter((s) => s.action === 'skip-user-changed').map((s) => ({ what: s.path, reason: `${s.why}; run "trocar off", then ${isModelOs(osName) ? '"trocar on"' : '"trocar install" and "trocar on"'}, to write it again` })), // D55⑥: off then install writes a certificate item again; on never does (macOS / Windows: turnOnModel)
+    ...steps.filter((s) => s.action === 'skip-user-changed').map((s) => ({ what: s.path, reason: certs ? s.why : `${s.why}; run "trocar install" to place it again` })), // a certificate item: install places it again (replaceable); on never does (D55⑥)
   ]
   // what is written, and what the user has not yet confirmed (1.6 §1.6: the paths beyond the manifest's `confirmed_paths`; an installed one counts as confirmed)
   const known = new Set([...((prior && prior.confirmed_paths) || []), ...((prior && prior.entries) || []).map((x) => x.path), ...((prior && prior.files) || []).filter((x) => x.role !== 'ca-key' && x.role !== 'ca-cert').map((x) => x.path)])
@@ -333,9 +336,11 @@ async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePo
   for (const e of final.entries) {
     const j = judgeEntry({ manifest: m, planned: e, fs })
     if (j.action === 'skip-intact') { written.intact.push(e.path); continue }
-    if (j.action === 'skip-user-changed') { written.userChanged.push({ path: e.path, why: j.why }); continue }
+    const again = certs && replaceable(j) && plan.steps.some((s) => s.kind === 'entry' && s.harness === e.harness && s.path === e.path && s.action === 'rewrite') // what the plan said it places again
+    if (j.action === 'skip-user-changed' && !again) { written.userChanged.push({ path: e.path, why: j.why }); continue }
     if (certItem(e.path)) continue
     guard()
+    if (j.action === 'skip-user-changed') retireEntry({ dir, manifest: m, entry: j.entry, now: now(), fs }) // placed again as a new entry (planOn planned it so)
     const entry = e.kind === 'text'
       ? applyTextEntry({ dir, manifest: m, harness: e.harness, phase: 'install', file: e.path, edit: e, home, now: now(), fs }) // a backup of the file first (1.6 R2): no backup, no change
       : applyJsonKey({ dir, manifest: m, harness: e.harness, phase: 'install', file: e.path, keys: e.keys, value: e.value, home, now: now(), fs })
@@ -386,7 +391,7 @@ export async function installCollector({ home = os.homedir(), ...opts } = {}) {
   return recorded(dir, 'install', async (run) => {
     const fs = opts.fs || nodeFs
     const now = opts.now || (() => new Date())
-    const plan = await planOn({ home, ...opts })
+    const plan = await planOn({ home, ...opts, certs: true }) // install's plan places a gone or changed certificate item again (replaceable)
     // D61: the login registration and the daemon, through the one seam every command uses — so Linux's install probes before it starts too
     // (拉起不是重启, R8: a daemon someone started by hand is never started a second time), and no `--now` is issued blind.
     const register = (put, reload) => (opts.unit ? ensureDaemonUp({ osName: opts.osName, dir, env: opts.env || process.env, fs, unit: opts.unit, register: true, reload, put, ...(opts.request ? { request: opts.request } : {}), ...(opts.socketPath ? { socketPath: opts.socketPath } : {}), ...(opts.sleep ? { pause: opts.sleep } : {}) }) : null)
