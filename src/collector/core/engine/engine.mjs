@@ -18,7 +18,7 @@ import { createNegativeCache } from './negcache.mjs'
 import { createUpstreamTrust, systemRoots } from '../tls/roots.mjs'
 
 // upstreamCa: extra CAs the engine trusts upstream (test seam); systemCa: stands in for the OS store
-// (tests; undefined = read it): PEM text / array, or a systemRoots()-shaped {certs, errors}. The upstream trust set is built once (RFC 4.6 §引擎 5, tls/roots.mjs).
+// (tests; undefined = read it): PEM text / array, a systemRoots()-shaped {certs, errors}, or a function returning either. The upstream trust set is built once, at the first handshake that needs it (RFC 4.6 §引擎 5, tls/roots.mjs).
 // timing (tests): {firstByteTimeoutMs, upstreamSlowMs, preludeStallMs} — the engine's waits, 5 s each by default; rejectWindowMs — the leaf
 // rejection window (flow.mjs REJECT_WINDOW_MS, 10 s); slowEngineMs — past it from accepting a connection to our TLS server, a zero-data close before our
 // handshake completes is recorded as engine-slow and counts toward the entry without trust-rejected (flow.mjs SLOW_ENGINE_MS, 2 s); now — the negative cache's clock (negcache.mjs retry_at).
@@ -55,18 +55,26 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
       onFailure(r)
     } catch (e) { onError(e) }
   }
-  const upstreamTrust = createUpstreamTrust({
-    system: systemCa === undefined ? systemRoots()
-      : Array.isArray(systemCa.certs) ? { sources: ['option:systemCa'], errors: [], ...systemCa }
-        : { certs: [].concat(systemCa).map(String).filter((p) => p.includes('BEGIN CERTIFICATE')), sources: ['option:systemCa'], errors: [] },
-    extra: upstreamCa,
-  })
-  // a trust-store source that is there but unreadable, or no OS store at all: the engine still verifies
-  // against what it has, but upstreams signed by a CA only the missing part holds will step aside (D38)
-  for (const error of upstreamTrust.errors) { onError(new Error(error)); failure({ code: 'trust-store-error', reason: error }) }
-  if (upstreamTrust.missingSystem) {
-    const error = 'no OS trust store found: upstreams signed by a system-only CA will step aside'
-    onError(new Error(error)); failure({ code: 'system-roots-unavailable', reason: error })
+  // The upstream trust set, read at the first handshake that needs it and reused (4.6 §引擎 5): reading the OS store is slow and the
+  // doors do not wait for it. Its failures are recorded the moment it is read.
+  let trustSet = null
+  function upstreamTrust() {
+    if (trustSet) return trustSet
+    const sys = typeof systemCa === 'function' ? systemCa() : systemCa
+    trustSet = createUpstreamTrust({
+      system: sys === undefined ? systemRoots()
+        : Array.isArray(sys.certs) ? { sources: ['option:systemCa'], errors: [], ...sys }
+          : { certs: [].concat(sys).map(String).filter((p) => p.includes('BEGIN CERTIFICATE')), sources: ['option:systemCa'], errors: [] },
+      extra: upstreamCa,
+    })
+    // a trust-store source that is there but unreadable, or no OS store at all: the engine still verifies
+    // against what it has, but upstreams signed by a CA only the missing part holds will step aside (D38)
+    for (const error of trustSet.errors) { onError(new Error(error)); failure({ code: 'trust-store-error', reason: error }) }
+    if (trustSet.missingSystem) {
+      const error = 'no OS trust store found: upstreams signed by a system-only CA will step aside'
+      onError(new Error(error)); failure({ code: 'system-roots-unavailable', reason: error })
+    }
+    return trustSet
   }
 
   // accepted sockets still in their redirector lookup (not flows yet): drained() waits for them too, and the stop destroys the ones its grace leaves
