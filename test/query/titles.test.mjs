@@ -436,9 +436,12 @@ function projectHome() {
     const sid = `proj-${h.harness}-4a1b-9c2d-000000000001`, p = STATED[h.harness] ?? '/w/kimi'
     for (let t = 0; t < 3; t++) {
       const b = JSON.parse(h.body(sid, t))
-      if (Array.isArray(b.system)) b.system[0].text += env(h, p)
+      const m = b.messages?.[0]
+      if (h.harness === 'opencode' && t === 0) { /* a first call that is a small one: no environment, the next call states it */ }
+      else if (h.harness === 'cc') { if (typeof m.content === 'string') m.content += env(h, p); else m.content[0].text += env(h, p) } // Claude Code's main lane: a user text
+      else if (Array.isArray(b.system)) b.system[0].text += env(h, p)
       else if (typeof b.system === 'string') b.system += env(h, p)
-      else b.messages[0].content += env(h, p)
+      else m.content += env(h, p)
       lines.push(envelope(h, sid, JSON.stringify(b), replyTo(h, t), stamp(i++)))
     }
   }

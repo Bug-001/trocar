@@ -14,9 +14,8 @@ const rec = (id, body, over = {}) => ({
 
 const envUser = (p) => ({ type: 'message', role: 'user', content: [{ type: 'input_text', text: `<environment_context>\n  <cwd>${p}</cwd>\n  <shell>zsh</shell>\n</environment_context>` }] });
 const BUILD = {
-  cc: (p) => ({ system: [{ type: 'text', text: 'You are Claude Code.' },
-    { type: 'text', text: `# Environment\nYou have been invoked in the following environment: \n - Primary working directory: ${p}\n - Is a git repository: true\nEnd.` }],
-  messages: [{ role: 'user', content: 'q0' }] }),
+  cc: (p) => ({ system: [{ type: 'text', text: 'You are Claude Code.' }, { type: 'text', text: 'Be brief.' }],
+    messages: [{ role: 'user', content: [{ type: 'text', text: `# Environment\nYou have been invoked in the following environment: \n - Primary working directory: ${p}\n - Is a git repository: true\nEnd.` }, { type: 'text', text: 'q0' }] }] }),
   codex: (p) => ({ instructions: 'You are Codex.', input: [envUser(p), { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'q0' }] }] }),
   opencode: (p) => ({ messages: [{ role: 'system', content: `You are opencode.\n<env>\n  Working directory: ${p}\n  Is directory a git repo: yes\n</env>` }, { role: 'user', content: 'q0' }] }),
   hermes: (p) => ({ messages: [{ role: 'system', content: `You are Hermes.\nCurrent working directory: ${p}\nEnd.` }, { role: 'user', content: 'q0' }] }),
