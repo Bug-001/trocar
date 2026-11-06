@@ -1,7 +1,7 @@
 // web/src/screens/replay/CallDetails.tsx — the window's two items after the reply (2.6 §A): what capturing changed, always in view, and the
 // folded Call details. Each row with bytes is a .cblk, so the window's v and c keys reach its cell; the row asks for its bytes when it opens,
 // and again when a step comes back with it open, since the step's own reads do not cover these refs.
-import { useEffect, useId, type ReactNode } from 'react'
+import { memo, useEffect, useId, type ReactNode } from 'react'
 import { Button, Disclosure, DisclosurePanel } from 'react-aria-components'
 import { kf } from '../../../legacy/core/fmt.mjs'
 import { discChev } from '../../../legacy/core/icons.mjs'
@@ -38,7 +38,7 @@ function Part({ x, label, literal = false, none, acts }: { x: Item, label: strin
 // a row's own ref or key; the index only for a row that has neither
 const keyOf = (x: Item, i: number) => x.ref ?? x.key ?? `#${i}`
 
-export function Details({ it, acts }: { it: Item, acts: Acts }) {
+export const Details = memo(function Details({ it, acts }: { it: Item, acts: Acts }) {
   const ws = it.transport === 'ws'
   return (
     <Disclosure className="disc cwdetails" isExpanded={it.open} onExpandedChange={() => acts.details('cd')}>
@@ -56,4 +56,4 @@ export function Details({ it, acts }: { it: Item, acts: Acts }) {
       </> : null}</DisclosurePanel>
     </Disclosure>
   )
-}
+}, (p, n) => !p.it.open && !n.it.open && p.acts === n.acts) // folded it draws only its head, which says the same on every step
