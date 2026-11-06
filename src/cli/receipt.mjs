@@ -165,6 +165,12 @@ export function changeLines(r, { past = true, home = null } = {}) {
   return lines
 }
 
+// 1.6 §3.3: a harness that needs setup — the fix is two commands, never the code (§1.1); both modes' `on` say it this way
+export const refusedLine = (r) => `${r.harness} was not turned on: ${r.why}. Run: ${r.command}, then: trocar on ${r.harness}`
+/** 1.6 §3.3 (D65④): the harnesses `on` refused because their setup is needed — `blocked` of a dry run, `error` of a real one (exit 1). */
+export const setupBlocked = (r) => (r.refused || []).filter((x) => x.reason === 'setup-needed').map((x) => ({ what: x.harness, reason: x.why }))
+export const setupError = (b) => ({ code: 'setup-needed', message: `${b.map((x) => x.what).join(', ')} ${b.length === 1 ? 'is' : 'are'} not set up for capture; run trocar install, then trocar on again` })
+
 /** The receipt of `trocar on` as text (the verdict first, then every file it changed). `tense`: 'past' | 'future' (the dry run). `fresh` = the set of
  *  harnesses THIS run newly wired (their one-time notes print; the rest live in `doctor` and `--json`); null prints every note. */
 export function formatOnReceipt(r, { tense = 'past', home = null, platform = 'linux', fresh = null, topology = null, colors: c = noColor() } = {}) { // `topology`: { <h>: HarnessTopology }, what the route lines degrade from (A.1)
@@ -184,6 +190,7 @@ export function formatOnReceipt(r, { tense = 'past', home = null, platform = 'li
   if (r.unchanged && r.unchanged.length) { // the display caps at three names; the whole list is in --json, and none of them is rewritten by a second on
     lines.push(...pathList('Already in place, not rewritten:', r.unchanged.slice(0, 3), home, r.unchanged.length > 3 ? `and ${r.unchanged.length - 3} more (all of them: --json)` : null))
   }
+  lines.push(...(r.refused || []).map(refusedLine))
   if (r.skipped.length) lines.push(`Skipped: ${r.skipped.map((s) => `${t(s.what)} (${s.reason})`).join('; ')}`)
   if (lingerText(r)) lines.push(lingerText(r))
   for (const [h, x] of Object.entries(r.adopted || {})) if (saysSomething(x)) lines.push(...adoptedLines(h, x, topology && topology[h]))
