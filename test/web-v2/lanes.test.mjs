@@ -167,6 +167,16 @@ test('2.1 #17: railToggles lists what the gutter draws, in its order and with it
   }
 })
 
+test('1.3 子 agent 行名: the ≈ $ only when a call of the lane was priced; no table, an unknown model or no usage is no ≈ $, never $0', () => {
+  const s = railDesk({ subs: 1, bgs: 0, tc: false }), sub = s.lanes.find((l) => l.kind === 'subagent')
+  sub.calls[0].usage = { read: 0, create: 0, fresh: 1000, out: 100 }; sub.calls[0].rec = { request: { model: 'known' } }
+  const name = (pricing) => railToggles({ ...s, pricing }).find((r) => r.id === sub.id).name
+  for (const pricing of [null, { other: [3, 15, 3.75, 0.3] }]) assert.ok(!name(pricing).includes('≈'), JSON.stringify(pricing))
+  assert.match(name({ known: [3, 15, 3.75, 0.3] }), /≈ \$/, 'a priced call gives the lane its ≈ $')
+  sub.calls[0].usage = null
+  assert.ok(!name({ known: [3, 15, 3.75, 0.3] }).includes('≈'), 'no usage: nothing priced')
+})
+
 test('2.1 #17: hasRails is true exactly when the gutter has a row to open or close', () => {
   for (const { s, where } of railWorlds()) {
     assert.equal(hasRails(s), railToggles(s).length > 0, where)

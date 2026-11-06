@@ -61,16 +61,17 @@ function collapsedMarks(lanes, s) {
 function railName(l, s, sub) {
   if (!sub) return laneTimes(laneWord(l.kind), l.count ?? l.calls.length)
   const model = (c) => (c.rec && c.rec.request && c.rec.request.model) || ''
-  let sum = 0, from = false
+  let sum = 0, priced = 0, from = false
   for (const c of l.calls) {
     if (failOf(c)) continue // a failed call is not billed
     const u = usageOf(c), m = u && s.pricing ? priceMatch(s.pricing, model(c)) : null
     const v = m ? costOf(m.row, u) : null
     if (v == null) { if (u) from = true; continue }
-    sum += v; if (m.exact === false) from = true
+    sum += v; priced++; if (m.exact === false) from = true
   }
   const task = String(l.task != null && l.task !== '' ? l.task : l.label || '')
-  return `${task} · ${callsWord(l.count ?? l.calls.length)}` + (sum > 0 || from ? ` · ≈ ${from ? 'from ' : ''}${usd(sum)}` : '')
+  // no call priced (or no table yet): no ≈ $ at all, never a $0 (1.3 子 agent 行名)
+  return `${task} · ${callsWord(l.count ?? l.calls.length)}` + (priced ? ` · ≈ ${from ? 'from ' : ''}${usd(sum)}` : '')
 }
 
 // one lane's own row

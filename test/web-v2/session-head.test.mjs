@@ -9,6 +9,7 @@ import { sessionHeadModel } from '../../web/src/screens/replay/models.mjs'
 import { sessionTotals, priceMatch } from '../../web/legacy/core/metrics.mjs'
 import { L } from '../../web/legacy/core/labels.mjs'
 import * as W from '../../web/legacy/labels/replay.mjs'
+import { priceStateNote } from '../../web/legacy/replay/stepbar.mjs'
 
 const SEEDS = [1, 7, 19, 42]
 const worldDesk = (seed) => { const w = world(seed); return deskFrom(w.get(), 'S').then((desk) => ({ w, desk })) }
@@ -106,6 +107,17 @@ test('1.2 #3 · model: two sessions with one title carry no same-name word; the 
     for (const r of rows) assert.ok(INFO_KEYS.has(r.key), r.key)
     assert.equal(rows.find((r) => r.key === 'counts').sub, 1, 'the sub-agent is counted, not named')
   }
+})
+
+test('1.2 §信息弹出层 row 1: no price table yet, or an unreadable one: ≈ — with the table\'s reason only, never "no unit price"', () => {
+  const lanes = [{ kind: 'main', rows: mainRows() }]
+  const costOf = (extra) => sessionHeadModel(headState(lanes, {}, extra)).info().find((r) => r.key === 'cost')
+  for (const [extra, why] of [[{ pricing: null }, W.PRICES_LOADING], [{ pricing: null, pricingErr: 'E-read' }, priceStateNote(null, 'E-read')]]) {
+    const c = costOf(extra)
+    assert.equal(c.usd, null); assert.deepEqual(c.notes, [why], JSON.stringify(extra))
+    assert.ok(c.buckets.every((b) => b.usd == null))
+  }
+  assert.ok(costOf({}).usd > 0, 'with the table the session is priced')
 })
 
 test('1.2 #7 · model: every info number is core/metrics.mjs\'s on the same answer; estimates carry ≈; no field name in any word', () => {

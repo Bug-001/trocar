@@ -140,10 +140,12 @@ function infoRows(s) {
   const t = totalsOf(s), rows = []
   const c = t.cost.total
   if (c.priced || c.unpriced || c.failed) {
-    const some = c.priced > 0
-    rows.push({ key: 'cost', approx: true, usd: some ? c.usd : null, text: `${W.COST_LINE} ${some ? usd(c.usd) : '—'}${c.unpriced ? ` ${W.COST_FROM}` : ''}`,
+    const some = c.priced > 0, table = !!s.pricing
+    // no table yet (or an unreadable one): nothing is priced, and the one reason is the table's, never "no unit price" (1.2 §信息弹出层 row 1)
+    const notes = !table ? [s.pricingErr ? priceStateNote(null, s.pricingErr) : W.PRICES_LOADING] : [c.unpriced ? W.noPriceCalls(c.unpriced) : null, some ? null : W.NO_ANY_PRICE].filter(Boolean)
+    rows.push({ key: 'cost', approx: true, usd: some ? c.usd : null, text: `${W.COST_LINE} ${some ? usd(c.usd) : '—'}${some && c.unpriced ? ` ${W.COST_FROM}` : ''}`,
       buckets: ['main', 'sub', 'bg'].map((k) => ({ key: k, word: W.BUCKETS[k], usd: t.cost[k] && t.cost[k].priced ? t.cost[k].usd : null })),
-      notes: [c.unpriced ? W.noPriceCalls(c.unpriced) : null, some ? null : W.NO_ANY_PRICE].filter(Boolean), prices: { text: W.SEE_PRICES, href: '#/settings/prices' } })
+      notes, prices: { text: W.SEE_PRICES, href: '#/settings/prices' } })
   }
   const main = lanes.find((l) => l.kind === 'main')
   if (t.hitSteps) {
