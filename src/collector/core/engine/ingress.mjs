@@ -31,13 +31,14 @@ import { absTarget, forwardHttp, withCredential } from './forward.mjs'
 const HEAD_MAX = 16 * 1024        // no opener or proxy reply head is longer
 const HOLD_MAX = 256 * 1024       // what a client may send while the upstream is being dialled
 const sha = (s) => crypto.createHash('sha256').update(s).digest()
-// The unanswered challenge said for a person (1.6 §1.1, 4.8 §5.1): who, for which group, how often, how long, what came instead; never a credential.
+// The unanswered challenge's specifics for a person (1.6 §1.1, 4.8 §5.1): who, which agent's proxy, how often, how long, what came instead. The
+// headline (words.mjs) already says it was asked and did not answer; never a credential.
 const SENT_WORDS = { 'no-credentials': 'no password', 'not-basic': 'a login of another kind than a password', 'malformed-basic': 'a password it could not read' }
 const plural = (n, one) => `${n} ${one}${n === 1 ? '' : 's'}`
 function challengeReason({ pid, process, count, sent }, group, ms) {
-  const who = pid == null ? 'a program' : process ? `${printable(process)} pid ${pid}` : `the program with pid ${pid}`
+  const who = pid == null ? 'program not known' : process ? `${printable(process)} (pid ${pid})` : `pid ${pid}`
   const times = count === 1 ? 'once' : count === 2 ? 'twice' : `${count} times`, wait = ms % 1000 ? `${ms} ms` : plural(ms / 1000, 'second')
-  return `${who} was asked ${times} for trocar's proxy password${group ? ` at the proxy trocar runs for ${group}` : ''} and did not send it within ${wait}, so its connection was not made; it sent ${[...sent].map((x) => SENT_WORDS[x] || 'something else').join(' and ')}`
+  return `${who}${group ? ` at ${group}'s proxy` : ''}, ${times} in ${wait}; it sent ${[...sent].map((x) => SENT_WORDS[x] || 'something else').join(' and ')}`
 }
 const printable = (s, n = 80) => String(s).replace(/[^\x20-\x7e]/g, '?').slice(0, n)
 const ROUTE_NAME = /^[\w-]+\.[\w.-]+$/ // the user an trocar-written route or block authenticates as: <route>.<group>
@@ -285,7 +286,8 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
   }
   const now = timing.now || Date.now, lastUnreachable = new Map() // door group → when its upstream-unreachable event was written (1.6 §9.7: at most one per form per 60 s)
   // An unanswered 407 challenge (4.8 §5.1, D38). The 407 closes the connection, so the answer comes on a new one: the source is the door and the
-  // pid holding the client's end (asked at the challenge; '' when not told). No connection of that source through the lookup within challengeMs →
+  // pid holding the client's end (asked before the 407 is sent: a client that exits on it leaves no holder to ask; '' when not told). The caller
+  // awaits this, so the 407 waits for the owner question, bounded by that question's own budget. No connection of that source through the lookup within challengeMs →
   // one ingress-challenge-unanswered; then quiet for the source until it gets through or goes quiet for quietMs. Never a credential value.
   const challengeMs = timing.ingressChallengeMs ?? 10_000, quietMs = 10 * 60_000, SOURCES_MAX = 1024
   const sources = new Map() // `${door}\0${pid}` → { first, last, count, sent:Set, said, timer, pid, process }
@@ -296,7 +298,7 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
   function challenged(door, peer, sent) {
     counters.challenged++
     const at = now()
-    Promise.resolve(ownerOfPeer ? ownerOfPeer(peer) : null).catch(() => null).then((o) => {
+    return Promise.resolve(ownerOfPeer ? ownerOfPeer(peer) : null).catch(() => null).then((o) => {
       const pid = o && o.pid != null ? o.pid : null, k = keyOf(door, pid)
       if ((okAt.get(k) ?? -Infinity) >= at) return // answered while its owner was asked
       let e = sources.get(k)
@@ -309,9 +311,9 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
         if (sources.get(k) !== e) return
         e.said = true
         failure({
-          where: 'ingress', code: 'ingress-challenge-unanswered', ...(door ? { user: shownUser(door) } : {}), ...(pid != null ? { pid, ...(e.process ? { process: printable(e.process) } : {}) } : {}),
+          where: 'ingress', code: 'ingress-challenge-unanswered', ...(door ? { user: printable(door) } : {}), ...(pid != null ? { pid, ...(e.process ? { process: printable(e.process) } : {}) } : {}),
           challenges: e.count, sent: [...e.sent],
-          reason: challengeReason(e, door ? shownUser(door) : '', challengeMs),
+          reason: challengeReason(e, door ? printable(door) : '', challengeMs),
         })
       }, challengeMs)
       if (e.timer.unref) e.timer.unref()
@@ -425,7 +427,7 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
     //    network service) sends none until a 407 asks, then answers from http.proxy's user:token. It gets the 407 challenge, is counted
     //    (`challenged`), and writes no failure line unless the challenge goes unanswered (challenged()); a wrong token is `ingress-auth-failed` (4.8 §5.1).
     const source = door && typeof door.user === 'string' ? door.user : ''
-    if (!o.authed && !(door && door.open) && o.pass === null) { challenged(source, peer, o.none); r.detach(); return o.denied() }
+    if (!o.authed && !(door && door.open) && o.pass === null) { await challenged(source, peer, o.none); r.detach(); return o.denied() }
     if (!o.authed && !(door && door.open) && !tokenOk(o.pass, doorHash ?? tokenHash)) { authFailed(o.user, 'token mismatch'); r.detach(); return o.denied() }
     // who this connection is for: a door names its group (the client's own user is only the engine's own ingress's to say), and the lookup
     // answers it with the process the socket belongs to, not with anything the credentials claim
