@@ -27,6 +27,7 @@ import { serializeSignature } from '../../../../src/off/signature.mjs'
 import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
 import { ROOT, INSTALLED, descs, newWorld, ctxOf, worldOf, combos, makeRoot } from './verdict-world.mjs'
 import { CERT_VARS } from '../../../../src/collector/core/proxymode/upstream-trust.mjs'
+import { resolveLoc } from '../../../../src/collector/core/proxymode/sources.mjs'
 
 const TOKEN = 'ab'.repeat(16)
 const iso = (ms) => new Date(ms).toISOString()
@@ -898,6 +899,29 @@ for (const d of await loadHarnesses()) {
       if (late) assert.notEqual(why, 'config-after-start', `${d.name}: started after the block`)
       else assert.equal(why, 'config-after-start', `${d.name}: started after its own items, before the shared block: ${JSON.stringify(meta.skip)}`)
     }
+    r.c.close()
+  })
+}
+
+// 4.11 P4 rule U · P11 (D38): a setting that may name rule U's file cannot be read, so whether the recorded block is this process's carrier, and its time,
+// is not known — forwarded with config-unreadable and a failure record, never judged as if the setting named nothing. Every shipped harness with a file
+// setting among its userCertFiles, darwin; the block recorded under another harness after this one's own items.
+for (const d of await loadHarnesses()) {
+  const s = (d.proxyMode && d.proxyMode.userCertFiles || []).find((x) => x.file)
+  const f = s && judgedForms(d, 'darwin')[0]
+  if (!f) continue
+  test(`rule U · ${d.name}: a setting naming the user certificate file cannot be read — forwarded only, with config-unreadable on record`, async () => {
+    const g = `${d.name}:${f.route}`
+    const manifest = { ...manifestOf(d.name), entries: [...manifestOf(d.name).entries, { phase: 'install', harness: 'another-harness', kind: 'text', format: 'pem-block', path: '/h/certs/mine.pem', installed_at: iso(INSTALLED + 10) }] }
+    const base = ctxOf(newWorld('darwin'))
+    const blocked = new Set(resolveLoc(s.file, { os: 'darwin', home: '/h', dirs: {}, join: path.posix.join, env: {}, cwd: '/' }))
+    const readFile = (p) => { if (blocked.has(p)) throw Object.assign(new Error('permission denied'), { code: 'EACCES' }); return base.readFile(p) }
+    const r = await rig({ desc: d, os: 'darwin', w: { pid: 7171, manifest, env: {}, cwd: '/', ctx: { ...base, readFile } } })
+    await r.c.on({ harnesses: [d.name], groups: Object.fromEntries([...new Set(d.proxyMode.forms.map((x) => x.route))].map((rt, i) => [`${d.name}:${rt}`, 18650 + i])) })
+    Object.assign(r.w, { facts: { exe: '/bin/x', uid: 501, agent: d.name, startedAt: INSTALLED + 20 }, now: INSTALLED + 30 })
+    const meta = await r.c.lookupIngress({ peer: PEER, user: g, target: { address: d.hosts[0], port: 443 } })
+    assert.deepEqual(meta.skip, { not_captured: 'untrusted', reason: 'config-unreadable' }, JSON.stringify(meta))
+    assert.ok(r.records.some((x) => x.event === 'failure' && x.code === 'config-unreadable'), 'the forward is on record')
     r.c.close()
   })
 }

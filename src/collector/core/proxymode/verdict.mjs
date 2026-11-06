@@ -70,14 +70,15 @@ export function judgedForms(desc, os, routeId = null) {
 }
 
 /** The carrier time of a form (rule 3): the latest install item of its harness, or the root in the user's store for a root-trust form; and rule U's
- *  block in a file `files()` names (the files its settings name for the process, userCertFilesOf; asked only when a block is recorded), whichever
- *  harness it is recorded under, its own included (4.11 P4: one block per file, recorded once, serves every harness that names it). The newest
- *  time wins: it errs toward forwarding. Unknown → null. */
-export function carrierAt(manifest, desc, f, files = () => []) {
+ *  block in a file `files()` names (the files its settings name for the process, userCertFilesOf → { files, unread }; asked only when a block is
+ *  recorded), whichever harness it is recorded under, its own included (4.11 P4: one block per file, recorded once, serves every harness that names
+ *  it). The newest time wins: it errs toward forwarding. Unknown → null; a setting not read → its { error, where } (D38: not known, never none). */
+export function carrierAt(manifest, desc, f, files = () => ({ files: [] })) {
   const items = itemsOfPhase(manifest, 'install')
   const own = f.cert !== 'root' && (desc.proxyMode.certs || {})[f.cert] ? items.filter((i) => i.harness === desc.name) : []
   const blocks = items.filter((i) => i.kind === 'text' && i.format === 'pem-block')
-  const named = blocks.length ? files() : []
+  const { files: named, unread } = blocks.length ? files() : { files: [] }
+  if (unread) return unread
   const shared = blocks.filter((i) => named.includes(i.path))
   const t = [...(own.length ? own : items.filter((i) => i.kind === 'system-root')), ...shared].map((i) => ms(i.installed_at)).filter(Number.isFinite)
   return t.length ? Math.max(...t) : null
@@ -101,6 +102,7 @@ export function verdictOf({ desc, form, facts = {}, record = {}, issuer, host, h
   if (v !== true) return fwd('not-verified', `${form.id} is not verified on ${ctx.os}${v && v.reason ? `: ${v.reason}` : ''}`)
   if ((form.forwardOnlyHosts || []).some((x) => x.toLowerCase() === h)) return fwd('not-verified', `${host} is forward-only for ${form.id} until it is verified there`)
   if (form.hostTree && !(hostSet || desc.hosts || []).some((x) => x.toLowerCase() === h)) return fwd('outside-host-set', `${host} is outside ${form.id}'s host set; the host program's other connections are forwarded`)
+  if (record.carrierInstalledAt && record.carrierInstalledAt.error) return fwd('config-unreadable', `a setting that may name ${form.id}'s certificate file could not be read: ${why(record.carrierInstalledAt)}`, { unread: true }) // rule U (4.11 P4)
   const sv = startVerdict(facts.startedAt, record.carrierInstalledAt)
   if (sv === 'cert-not-installed') return fwd(sv, `${form.id} has no certificate carrier on record`)
   if (sv === 'start-time-unknown') return fwd(sv, `the start time of pid ${facts.pid} could not be read`, { unread: true })
