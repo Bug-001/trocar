@@ -69,8 +69,9 @@ export function judgeHarness({ desired, entryIntact = null, entryWhy = 'entry-mi
 }
 
 /** A harness's `cert` for judgeHarness (V32) from its forms' `certificate` (1.6 §9.4, proxy mode): true when every present form's is in effect (or none says), else the first one that is not —
- *  its code, or null (not known) when it has none (the user's root store could not be read). */
+ *  its code, or null (not known) when it has none (the user's root store could not be read); else null when one is not known (`in_effect: null`, D38). */
 export function certOfForms(forms) {
-  const bad = (forms || []).find((x) => x.certificate && x.certificate.in_effect === false)
-  return bad ? bad.certificate.code ?? null : true
+  const cs = (forms || []).map((x) => x.certificate).filter(Boolean)
+  const bad = cs.find((c) => c.in_effect === false)
+  return bad ? bad.code ?? null : cs.some((c) => c.in_effect === null) ? null : true
 }

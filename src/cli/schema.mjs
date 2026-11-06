@@ -166,7 +166,11 @@ function validateInstallCert({ install: i, cert: c }) {
 }
 
 const CARRIERS = Object.freeze(['root', 'config-key', 'wrapper', 'plugin', null])
-const USER_FILE_STATES = Object.freeze(['intact', 'changed', 'not-users-file'])
+const USER_FILE_STATES = Object.freeze(['intact', 'changed', 'not-users-file', 'unknown'])
+// `user_file`: null, or { path, state } — `unknown` (the file or a setting naming it not read) with its reason, its path null when the setting was the one
+const userFileOk = (u) => u === null || (isObject(u) && USER_FILE_STATES.includes(u.state) && (u.state === 'unknown' ? isString(u.reason) && u.reason !== '' && (u.path === null || isString(u.path)) : isString(u.path)))
+// `in_effect`: true · false (with its code's command) · null = not known (D38), with the code saying why and no command
+const inEffectOk = (c) => c.in_effect === true || (c.in_effect === false && isId(c.command)) || (c.in_effect === null && isId(c.code) && c.command === null)
 const UPSTREAM_SOURCES = Object.freeze(['hook', 'config-prior', 'process-env', 'system-proxy', 'direct', 'unknown'])
 const redacted = (v) => v === null || (typeof v === 'string' && !/\/\/[^/@]*:(?!\*\*\*@)[^/@]*@/.test(v) && !/\/\/(?!\*\*\*@)[^/:@]+@/.test(v)) // no user or password left in a URL
 /** status --json `forms` (1.6 §9.4): per harness, per form, `certificate` and `proxy` with their closed sets; every URL redacted. */
@@ -176,7 +180,7 @@ function validateForms(forms) {
   for (const [h, list] of Object.entries(forms)) (Array.isArray(list) ? list : [null]).forEach((x, i) => {
     const at = `forms.${h}[${i}]`, c = x && x.certificate, p = x && x.proxy, u = p && p.upstream
     if (!isObject(x) || !isId(x.form)) return bad.push(`${at}: not {form, certificate, proxy}`)
-    if (!isObject(c) || typeof c.in_effect !== 'boolean' || !CARRIERS.includes(c.carrier) || !isCodeOrNull(c.code) || (c.in_effect === false && !isId(c.command)) || !(c.user_file === null || (isObject(c.user_file) && USER_FILE_STATES.includes(c.user_file.state)))) bad.push(`${at}.certificate: not in the closed sets`)
+    if (!isObject(c) || !inEffectOk(c) || !CARRIERS.includes(c.carrier) || !isCodeOrNull(c.code) || !userFileOk(c.user_file)) bad.push(`${at}.certificate: not in the closed sets`)
     if (!isObject(p) || !['connected', 'entry_intact', 'door_up'].every((k) => typeof p[k] === 'boolean') || !isObject(u) || !UPSTREAM_SOURCES.includes(u.source) || ![u.url_redacted, p.written, p.prior].every(redacted)) bad.push(`${at}.proxy: not in the closed sets, or a URL not redacted`)
   })
   return bad

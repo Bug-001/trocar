@@ -126,3 +126,29 @@ test('rule U · one SSL_CERT_FILE named by Codex and Hermes (root carriers): in 
   const gone = await facts()
   for (const h of pair) for (const c of certs(gone, h)) assert.deepEqual([c.in_effect, c.code, c.user_file && c.user_file.state], [false, 'entry-changed', 'changed'], `${h}: ${JSON.stringify(c)}`)
 })
+
+// 4.11 P4 rule U · 1.6 §9.4 `certificate.in_effect` / `user_file` (D38): a read that failed is not known — never `changed`, never in effect. The user file
+// unreadable: every harness naming it reads `file-unreadable`; a setting that names it unreadable: the harnesses with such a file setting read `config-unreadable`.
+test('rule U · the user file or a setting naming it cannot be read: in_effect null with the read code, user_file unknown with a reason', async () => {
+  const w = await sharedCertFileWorld({ userPem: `${tls.rootCertificates[1].trim()}\n` })
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  const pair = ['claude-code', 'kimi-code']
+  const denied = () => { throw Object.assign(new Error('permission denied'), { code: 'EACCES' }) }
+  const certs = (out, h) => out[h].filter((x) => x.certificate.carrier !== 'root').map((x) => x.certificate)
+  const unknownWith = (c, code, path) => c.in_effect === null && c.code === code && c.command === null && c.user_file && c.user_file.state === 'unknown' && c.user_file.path === path && typeof c.user_file.reason === 'string' && c.user_file.reason.length > 0
+  // the file itself
+  const fsDenied = { ...fs, readFileSync: (p, ...a) => (p === w.file ? denied() : fs.readFileSync(p, ...a)) }
+  const out = await modelFormFacts({ harnesses: w.harnesses, os: 'darwin', manifest: readManifest(w.dir), root: ROOT_OK, ctx: w.ctx, fs: fsDenied })
+  for (const h of pair) for (const c of certs(out, h)) assert.ok(unknownWith(c, 'file-unreadable', w.file), `${h}: ${JSON.stringify(c)}`)
+  // a setting that names it
+  const { resolveLoc } = await import('../../../../src/collector/core/proxymode/sources.mjs')
+  const settingFiles = (h) => (w.harnesses.find((d) => d.name === h).proxyMode.userCertFiles || []).filter((s) => s.file).flatMap((s) => resolveLoc(s.file, w.ctx))
+  const blocked = new Set(pair.flatMap(settingFiles))
+  assert.ok(blocked.size, 'a harness here names its file in a settings file')
+  const ctx = { ...w.ctx, readFile: (p) => (blocked.has(p) ? denied() : w.ctx.readFile(p)) }
+  const out2 = await modelFormFacts({ harnesses: w.harnesses, os: 'darwin', manifest: readManifest(w.dir), root: ROOT_OK, ctx })
+  for (const h of pair) for (const c of certs(out2, h)) {
+    if (settingFiles(h).length) assert.ok(unknownWith(c, 'config-unreadable', null), `${h}: ${JSON.stringify(c)}`)
+    else assert.deepEqual([c.in_effect, c.user_file && c.user_file.state], [true, 'intact'], `${h}: no setting of it was unread`)
+  }
+})
