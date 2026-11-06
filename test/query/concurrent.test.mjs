@@ -29,29 +29,38 @@ const lines = (tag, n) => Array.from({ length: n }, (_, i) => line(tag, i))
 const N = 12
 const homeWith = (n = N) => { const home = rawHome('trocar-conc-'); writeSegment(home, CLOSED, lines('a', n)); writeSegment(home, OTHER, lines('b', n)); return home }
 
-// What each of the three ways to read says is there: `sessions` as a count, `session` by id, `block` and `raw` by bytes.
+// What each way to read says is there: `sessions` as a count, `session` by id, `calls --host` and `traffic` from the segment index
+// (the list and the host's request count), `block` and `raw` by bytes.
 const askRead = (fs) => async (name, params, home) => runQuery(name, params, { home, ...(fs ? { fs } : {}) })
 async function readAll(home, { fs = null, want } = {}) {
   const ask = askRead(fs), errors = []
   const list = await ask('sessions', { limit: '500' }, home); errors.push(...list.errors)
   const one = await ask('session', { id: SESSION }, home); errors.push(...(one.errors || []))
   const rids = (one.calls || []).map((c) => String(c.rid))
+  const host = [], tr = await ask('traffic', {}, home); errors.push(...(tr.errors || []))
+  for (let page = 0, after = null, d; ; after = d.next) {
+    assert.ok(++page <= 100, 'the calls pages end')
+    d = await ask('calls', { host: 'api.anthropic.com', ...(after ? { after } : {}) }, home); errors.push(...(d.errors || []))
+    host.push(...(d.records || []).map((r) => String(r.id))); if (!d.has_more) break
+  }
+  const hostCount = (tr.hosts || []).filter((h) => h.host === 'api.anthropic.com').reduce((n, h) => n + h.requests, 0)
   const raw = []
   for (const [segment] of segmentFiles(home, fs || nodeFs, errors)) for (const [no] of segmentLines({ home, segment, ...(fs ? { fs } : {}) })) raw.push(`${segment}:${no}`)
   const blocks = []
   for (const ref of want) { const b = await ask('block', { ref }, home); errors.push(...(b.errors || [])); blocks.push(...(b.blocks || []).filter((x) => x.bytes != null).map(() => ref)) }
-  return { calls: list.sessions.find((s) => s.session_id === SESSION)?.calls ?? 0, rids, raw, blocks, errors }
+  return { calls: list.sessions.find((s) => s.session_id === SESSION)?.calls ?? 0, rids, raw, blocks, host, hostCount, errors }
 }
 const idsOf = (segs) => segs.flatMap(([seg, n]) => Array.from({ length: n }, (_, i) => `${seg}:${i + 1}`))
 function assertOnce(got, want, at) {
   assert.deepEqual(got.errors, [], `${at}: no error for a record on disk`)
   assert.equal(got.calls, want.length, `${at}: sessions counts each once`)
-  for (const k of ['rids', 'raw', 'blocks']) assert.deepEqual([...got[k]].sort(), [...want].sort(), `${at}: ${k}`)
+  assert.equal(got.hostCount, want.length, `${at}: traffic counts each once`)
+  for (const k of ['rids', 'raw', 'blocks', 'host']) assert.deepEqual([...got[k]].sort(), [...want].sort(), `${at}: ${k}`)
 }
 
 test('at every step of a seal, warm and cold, each read sees every record exactly once', async () => {
   for (const warm of [false, true]) {
-    for (const stop of ['verified', 'renamed', 'deleted']) {
+    for (const stop of ['written', 'verified', 'renamed', 'deleted']) {
       const at = `${stop}/${warm ? 'warm' : 'cold'}`, home = homeWith(), want = idsOf([[CLOSED, N], [OTHER, N]])
       if (warm) assertOnce(await readAll(home, { want }), want, `${at}: before`)
       await sealSegment(plainOf(home, CLOSED), { lockFile: lockOf(home), journal: null, onPhase: async (p) => { if (p === stop) assertOnce(await readAll(home, { want }), want, at) } })
