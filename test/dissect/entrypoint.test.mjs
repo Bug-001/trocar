@@ -1,5 +1,6 @@
 // RFC 3.4 #10 (每行 `entry`): a session's entrypoint is its harness's own rule over `x-app` and the user agent; a harness with no rule
-// has none, whatever the header says. The user agents are real ones' first tokens.
+// has none, whatever the header says. Seen on real captures: claude-cli, codex_exec, kimi-code-cli, opencode, OpenAI, deepseek-harness, ZCode, pi;
+// the other user agents here are made-up shapes of the same rules.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { HARNESSES, entrypointOf } from '../../src/dissect/harnesses.mjs';
