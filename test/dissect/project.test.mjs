@@ -40,6 +40,15 @@ test('3.4 #8 every harness with cwd rules reads the absolute path its request st
   }
 });
 
+test('3.4 #8 a person quoting a cwd line in a prompt names no project; the environment list after it does', () => {
+  const said = (...texts) => ({ system: [{ type: 'text', text: 'You are Claude Code.' }], messages: texts.map((text) => ({ role: 'user', content: text })) })
+  const env = BUILD.cc('/w/real').messages[0].content[0].text
+  for (const quote of ['Working directory: /w/decoy', ' - Primary working directory: /w/decoy', 'why does it say\n - Primary working directory: /w/decoy\nhere?']) {
+    assert.equal(projectOf(rec('cc', said(quote))), null, quote)
+    assert.equal(projectOf(rec('cc', said(quote, env))), '/w/real', quote)
+  }
+})
+
 test('3.4 #8 a path that is not absolute, too long or has a control char, a non-inference call, or a body that is not JSON states none', () => {
   const bad = ['w/project', '~/w', '/' + 'a'.repeat(1024), '/w/p\u0001q'];
   for (const h of HARNESSES.filter((x) => x.cwd.length)) {
