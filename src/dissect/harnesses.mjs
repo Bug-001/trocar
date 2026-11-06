@@ -74,9 +74,11 @@ const ROWS = [
       effect('opencode-route-plugin', 'trocar route plugin',
         'trocar code runs inside the agent process; OpenCode 1.x\'s first run with a plugin adds one npm registry fetch of @opencode-ai/plugin', DOOR)] },
   { ...ROW, id: 'kimi',
+    cwd: [{ in: 'system', re: /urrent working directory is `([^`\n]+)`/ }],
     sessionKeys: [B(['prompt_cache_key']), B(['metadata', 'user_id'])],
     synth: true }, // without a body key → a synthesized key (src/dissect/synth-key.mjs, gate G11)
   { ...ROW, id: 'dsh',
+    cwd: [{ key: ['dsh_session_log', 'session', 'cwd'] }, { in: 'system', re: /^Your working directory is ([^\n]+?)\.?$/m }],
     sessionKeys: [H('x-deepseek-harness-session-id')],
     parentKeys: [B(['dsh_session_log', 'session', 'parentSession'], 'high')],
     lane: [{ body: ['dsh_session_log', 'session', 'origin'], equals: 'subagent', lane: 'subagent' }],

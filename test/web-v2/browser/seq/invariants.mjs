@@ -121,7 +121,7 @@ const rateKey = (url) => {
 }
 
 /** I-rate over the probe's fetch log (see LIMITS for every bound; the session rule is 4.4:52, live-poll). → [detail] */
-function rateFaults(log, { actions = [], hidden = [] } = {}) {
+export function rateFaults(log, { actions = [], hidden = [] } = {}) {
   const out = []
   const [lo, hi] = LIMITS.actionWindowMs
   // a page load is no reader action (a goto, a background tab's open): its reads are judged as the load's opening below
@@ -137,10 +137,11 @@ function rateFaults(log, { actions = [], hidden = [] } = {}) {
   for (const a of actions) if (a.a === 'load') firstIn(a.t + lo, a.t + LIMITS.openReadMs, loadExempt)
   const last = new Map() // key → {start, dur, fails, pending, recovered}
   let sessionAt = -Infinity // the start of the latest poll round (its head read, or a `session` read), whatever caused it
+  let byHand = false // that round was opened by the reader or a screen, not by the timer
   for (const e of sorted) {
     const name = nameOf(e.url), key = rateKey(e.url), p = last.get(key)
     const since = sessionAt, failed = failedRead(e)
-    if (name === 'session' || name === 'd/head') sessionAt = e.start
+    if (name === 'session' || name === 'd/head') { sessionAt = e.start; byHand = byReader(e.start) || exempt.has(e) || loadExempt.has(e) }
     if (key == null) continue
     // the reader's read (and a screen it opened) starts the timer's chain over. Input reaching a hidden page is the harness's emulation:
     // such reads are the reader's, not the hidden tab's
@@ -152,7 +153,10 @@ function rateFaults(log, { actions = [], hidden = [] } = {}) {
     // an open tail read again in its own poll round (no head read since) is the round's whole read after a Range answer that was not
     // the file's lines or a 416 (4.4 §答案文件, replay.mjs readTail): once per round
     if (p && /^d\/open/.test(name) && since <= p.start && !p.chained) { last.set(key, { ...p, chained: true }); continue }
-    last.set(key, { start: e.start, dur: (e.end ?? e.start) - e.start, fails: failed ? (p ? p.fails : 0) + 1 : 0, pending: !!e.pending, recovered: !failed && !!p && p.fails > 0 })
+    // a tail starts once its round's head has answered, and the redraw before it can queue: the rounds are what is paced, so a tail is judged by its round
+    const tail = /^d\/open/.test(name) && since > -Infinity
+    if (tail && byHand) { last.delete(key); continue }
+    last.set(key, { start: e.start, round: tail ? since : null, dur: (e.end ?? e.start) - e.start, fails: failed ? (p ? p.fails : 0) + 1 : 0, pending: !!e.pending, recovered: !failed && !!p && p.fails > 0 })
     if (!p) continue
     const base = DELTA_PACED.has(name) ? LIMITS.interval.session : LIMITS.interval[name] || LIMITS.intervalOther
     if (DELTA_PACED.has(name) && !p.fails) {
@@ -163,7 +167,7 @@ function rateFaults(log, { actions = [], hidden = [] } = {}) {
     // duration unless it answered `pending` or ended a back-off
     let want = p.fails ? Math.min(base * 2 ** (p.fails - 1), LIMITS.backoffCapMs) : base
     if ((name === 'session' || name === 'd/head') && !p.fails && !p.pending && !p.recovered) want = Math.max(want, LIMITS.sessionDurFactor * p.dur)
-    const gap = e.start - p.start
+    const gap = tail && p.round != null ? since - p.round : e.start - p.start
     if (gap < LIMITS.rateSlack * want) out.push(`${key}: ${gap} ms after the last timer read, expected ≥ ${Math.round(LIMITS.rateSlack * want)} ms`)
   }
   return out
@@ -260,7 +264,7 @@ export async function check(ctx) {
   // a hidden tab reads nothing (4.4:49-51): following is held to the growth only from the later of the growth and the return
   const shownAt = Math.max(grownAt ?? 0, ...hidden.map((h) => h.to ?? Infinity))
   if (desk && follow && grownAt != null && truth && shownAt !== Infinity) {
-    let w = v, m = await truth()
+    let m = await truth(), w = await viewOf(page) // truth() can wait out a read: the view it is held to is the one after it
     while (!(w.step === m && w.of === m && w.reply) && Date.now() < shownAt + LIMITS.followMs) {
       await page.waitForTimeout(250); w = await viewOf(page); m = await truth()
     }
