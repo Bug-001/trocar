@@ -55,11 +55,11 @@ test('W29/D49 the one line about per-process rules of a VPN / proxy: in `status 
   assert.ok(ROWS.some((r) => r.on_path === true) && ROWS.some((r) => r.on_path === false), 'both sides are covered')
 })
 
-test('W29 row e (v2rayN) is a proxy hop named by its executable and its port, and nothing else about it (D49: no product, no mode, no rule, no secret, no node name of the user\'s)', () => {
+test('W29 row e (v2rayN) is a proxy hop named by its address and port, never its executable, and nothing else about it (D49: no product, no mode, no rule, no secret, no node name of the user\'s)', () => {
   const row = ROWS.find((r) => r.n === 'e'), t = buildTopology(row.facts).codex
   const hop = t.nodes.find((n) => n.kind === 'proxy')
-  assert.deepEqual(hop, { id: hop.id, kind: 'proxy', name: 'v2rayN.exe', addr: '127.0.0.1', port: 10808, pid: 23001 })
-  assert.equal(renderCompact(t)[0].includes('v2rayN.exe :10808'), true)
+  assert.deepEqual(hop, { id: hop.id, kind: 'proxy', name: '127.0.0.1:10808', addr: '127.0.0.1', port: 10808, pid: 23001 })
+  assert.equal(renderCompact(t)[0].includes('] :10808 -> ') && !/v2rayN/i.test(JSON.stringify(t)), true)
   for (const n of t.nodes) assert.ok(!/password|secret|HK-|proxies:/i.test(JSON.stringify(n)))
 })
 

@@ -22,7 +22,7 @@ const row = (r) => { ROWS.push(r); return r }
 row({ n: 'a', title: 'Verge with the system proxy on, a form that follows it (Codex): the kernel, the engine, then the system proxy; the WebSocket used to go direct', h: 'codex',
   facts: pfacts('codex', form('codex.app', { procs: [proc(5530, CODEX_PROC)], systemProxy: sysProxy(), follows: { http: true, ws: false } }), fwForm(17992, { upstream: 'http://127.0.0.1:7897', source: 'system-proxy' }), viaSystemProxy()),
   kinds: [[...ENGINE_AND_KERNEL, 'proxy', 'egress'], [...ENGINE_AND_KERNEL, 'proxy', 'egress']], forms: ['codex.app', 'codex.app'], names: ['http', 'ws'], on_path: true, captured: true, reason: null,
-  compact: ['codex app-server (pid 5530) -> [.env HTTPS_PROXY, written by trocar] trocar :17992 -> [system proxy] verge-mihomo.exe :7897 -> internet'] })
+  compact: ['codex app-server (pid 5530) -> [.env HTTPS_PROXY, written by trocar] trocar :17992 -> [system proxy] :7897 -> internet'] })
 
 row({ n: 'b', title: 'Verge with the system proxy on, a form that does not follow it (Claude Code CLI): the engine dials the API host direct', h: 'claude-code',
   facts: pfacts('claude-code', form('claude-code.cli', { entry: { where: SETTINGS, trocar: true, opt_in: false, intact: true }, procs: [proc(7712, CLAUDE_PROC)] }), fwForm(17991), viaSystemProxy()),
@@ -32,7 +32,7 @@ row({ n: 'b', title: 'Verge with the system proxy on, a form that does not follo
 row({ n: 'c', title: 'the agent had a proxy of its own, and it was Verge: it is the upstream, the entry points at the kernel', h: 'claude-code',
   facts: pfacts('claude-code', form('claude-code.cli', { entry: { where: SETTINGS, trocar: true, opt_in: false, intact: true }, setting: proxyOf('http://127.0.0.1:7897', [{ kind: 'file', where: 'C:\\Users\\u\\.claude\\settings.json', key: 'env.HTTPS_PROXY' }]), procs: [proc(7712, CLAUDE_PROC)] }), fwForm(17991, { upstream: 'http://127.0.0.1:7897', source: 'agent' }), viaSystemProxy()),
   kinds: [[...ENGINE_AND_KERNEL, 'proxy', 'egress']], forms: ['claude-code.cli'], names: ['all'], on_path: true, captured: true, reason: null,
-  compact: ['claude (pid 7712) -> [settings env.HTTPS_PROXY, written by trocar] trocar :17991 -> [CONNECT passed on as it is] verge-mihomo.exe :7897 -> internet'] })
+  compact: ['claude (pid 7712) -> [settings env.HTTPS_PROXY, written by trocar] trocar :17991 -> [CONNECT passed on as it is] :7897 -> internet'] })
 
 row({ n: 'd', title: 'Verge with TUN on (service mode): TUN is not read (D49), the engine dials the API host as the agent would, direct', h: 'claude-code',
   facts: pfacts('claude-code', form('claude-code.cli', { entry: { where: SETTINGS, trocar: true, opt_in: false, intact: true }, procs: [proc(7712, CLAUDE_PROC)] }), fwForm(17991), { listeners: [CLASH], vpn: clashVpn({ tun: true }) }),
@@ -42,7 +42,7 @@ row({ n: 'd', title: 'Verge with TUN on (service mode): TUN is not read (D49), t
 row({ n: 'e', title: 'v2rayN with the system proxy on: the same follower shape with a product the adapter does not read (a unit fixture; the end-to-end suite covers it in W67)', h: 'codex',
   facts: pfacts('codex', form('codex.app', { procs: [proc(5530, CODEX_PROC)], systemProxy: { value: 'http://127.0.0.1:10808', pac: false }, follows: { http: true, ws: false } }), fwForm(17992, { upstream: 'http://127.0.0.1:10808', source: 'system-proxy' }), { listeners: [V2RAYN], vpn: v2raynVpn() }),
   kinds: [[...ENGINE_AND_KERNEL, 'proxy', 'egress'], [...ENGINE_AND_KERNEL, 'proxy', 'egress']], forms: ['codex.app', 'codex.app'], names: ['http', 'ws'], on_path: true, captured: true, reason: null,
-  compact: ['codex app-server (pid 5530) -> [.env HTTPS_PROXY, written by trocar] trocar :17992 -> [system proxy] v2rayN.exe :10808 -> internet'] })
+  compact: ['codex app-server (pid 5530) -> [.env HTTPS_PROXY, written by trocar] trocar :17992 -> [system proxy] :10808 -> internet'] })
 
 row({ n: 'f', title: 'no VPN: the kernel and the engine dial the API host', h: 'codex',
   facts: pfacts('codex', form('codex.app', { procs: [proc(5530, CODEX_PROC)] }), fwForm(17992)),
@@ -70,7 +70,7 @@ row({ n: 'i', title: 'the engine is gone: nobody listens on the door the entry p
 row({ n: 'k', title: 'after off, an agent started while it was on is still connected to the kernel, which only forwards', h: 'codex',
   facts: pfacts('codex', form('codex.app', { procs: [proc(5530, CODEX_PROC)], systemProxy: sysProxy(), follows: { http: true, ws: false }, entry: null }), fwForm(17992, { state: 'forward-only', upstream: 'http://127.0.0.1:7897', source: 'system-proxy', clients: [5530] }), { desired: { codex: 'off' }, ...viaSystemProxy() }),
   kinds: [['agent', 'trocar-forwarder', 'proxy', 'egress'], ['agent', 'trocar-forwarder', 'proxy', 'egress']], forms: ['codex.app', 'codex.app'], names: ['http', 'ws'], on_path: true, captured: false, reason: 'desired-off',
-  compact: ['codex app-server (pid 5530) -> trocar :17992 (forwarded only) -> [system proxy] verge-mihomo.exe :7897 -> internet'], notes: ['1 process(es) are still connected through trocar, forwarded only; trocar exits once they do'] })
+  compact: ['codex app-server (pid 5530) -> trocar :17992 (forwarded only) -> [system proxy] :7897 -> internet'], notes: ['1 process(es) are still connected through trocar, forwarded only; trocar exits once they do'] })
 
 row({ n: 'l', title: 'the user changed the agent\'s own proxy: it no longer points at the kernel and goes where the setting says', h: 'codex',
   facts: pfacts('codex', form('codex.app', { procs: [proc(5530, CODEX_PROC)], setting: proxyOf('http://proxy.new:3128', [{ kind: 'file', where: 'C:\\Users\\u\\.codex\\.env', key: 'HTTPS_PROXY' }]), entry: { where: ENV, trocar: true, opt_in: false, intact: false } }), fwForm(17992, { upstream: 'http://proxy.corp:8080', source: 'agent' })),
@@ -80,7 +80,7 @@ row({ n: 'l', title: 'the user changed the agent\'s own proxy: it no longer poin
 row({ n: 'm', title: 'the system proxy changed its port: the kernel was reloaded, the agent\'s own setting did not change', h: 'codex',
   facts: pfacts('codex', form('codex.app', { procs: [proc(5530, CODEX_PROC)], systemProxy: sysProxy(7898), follows: { http: true, ws: false } }), fwForm(17992, { upstream: 'http://127.0.0.1:7898', source: 'system-proxy' }), viaSystemProxy(7898)),
   kinds: [[...ENGINE_AND_KERNEL, 'proxy', 'egress'], [...ENGINE_AND_KERNEL, 'proxy', 'egress']], forms: ['codex.app', 'codex.app'], names: ['http', 'ws'], on_path: true, captured: true, reason: null,
-  compact: ['codex app-server (pid 5530) -> [.env HTTPS_PROXY, written by trocar] trocar :17992 -> [system proxy] verge-mihomo.exe :7898 -> internet'] })
+  compact: ['codex app-server (pid 5530) -> [.env HTTPS_PROXY, written by trocar] trocar :17992 -> [system proxy] :7898 -> internet'] })
 
 row({ n: 'q', title: 'Kimi\'s VS Code extension, named: the editor\'s setting points at the kernel, only Kimi\'s host set goes to the engine', h: 'kimi-code',
   facts: pfacts('kimi-code', form('kimi-code.vscode', { entry: { where: VSCODE, trocar: true, opt_in: true, intact: true }, optIn: { state: 'done' }, procs: [proc(8100, { name: 'Code', exe: 'C:\\Program Files\\Microsoft VS Code\\Code.exe', version: null })], hosts: { program: 'VS Code', extension: 'Kimi', defaults: ['api.kimi.com', 'api.kimi.ai', 'api.moonshot.ai', 'api.moonshot.cn'], hosts: ['api.moonshot.cn', 'relay.corp.example'], settings: 'read', dropped: [] } }), fwForm(17995)),
@@ -91,7 +91,7 @@ row({ n: 'q', title: 'Kimi\'s VS Code extension, named: the editor\'s setting po
 row({ n: 'r', title: 'Claude Desktop, named: the policy value points at the kernel\'s own port, the upstream is the system proxy', h: 'claude-code',
   facts: pfacts('claude-code', form('claude-code.desktop', { entry: { where: POLICY, trocar: true, opt_in: true, intact: true }, optIn: { state: 'done' }, systemProxy: sysProxy(), follows: { http: true, ws: false }, procs: [proc(8801, { name: 'Claude', exe: 'C:\\Program Files\\Claude\\Claude.exe', version: null })] }), fwForm(17996, { upstream: 'http://127.0.0.1:7897', source: 'system-proxy' }), viaSystemProxy()),
   kinds: [[...ENGINE_AND_KERNEL, 'proxy', 'egress']], forms: ['claude-code.desktop'], names: ['all'], on_path: true, captured: true, reason: null,
-  compact: ['Claude (pid 8801) -> [policy egressProxyUrl, you named it] trocar :17996 -> [system proxy] verge-mihomo.exe :7897 -> internet'] })
+  compact: ['Claude (pid 8801) -> [policy egressProxyUrl, you named it] trocar :17996 -> [system proxy] :7897 -> internet'] })
 
 /** What the gatherWin32Facts-driven tests reach the facts through: the parts the rows fix by hand (the helper's reads, the collector dir's files). */
 export { ENV, SETTINGS, POLICY, VSCODE, CODEX_PROC, CLAUDE_PROC, sysProxy, viaSystemProxy }
