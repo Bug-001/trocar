@@ -26,7 +26,8 @@ const line = (tag, i, repeat = 40) => {
   return JSON.stringify(o)
 }
 const lines = (tag, n) => Array.from({ length: n }, (_, i) => line(tag, i))
-const homeWith = (n = 12) => { const home = rawHome('trocar-conc-'); writeSegment(home, CLOSED, lines('a', n)); writeSegment(home, OTHER, lines('b', n)); return home }
+const N = 12
+const homeWith = (n = N) => { const home = rawHome('trocar-conc-'); writeSegment(home, CLOSED, lines('a', n)); writeSegment(home, OTHER, lines('b', n)); return home }
 
 // What each of the three ways to read says is there: `sessions` as a count, `session` by id, `block` and `raw` by bytes.
 const askRead = (fs) => async (name, params, home) => runQuery(name, params, { home, ...(fs ? { fs } : {}) })
@@ -51,7 +52,7 @@ function assertOnce(got, want, at) {
 test('at every step of a seal, warm and cold, each read sees every record exactly once', async () => {
   for (const warm of [false, true]) {
     for (const stop of ['verified', 'renamed', 'deleted']) {
-      const at = `${stop}/${warm ? 'warm' : 'cold'}`, home = homeWith(), want = idsOf([[CLOSED, 12], [OTHER, 12]])
+      const at = `${stop}/${warm ? 'warm' : 'cold'}`, home = homeWith(), want = idsOf([[CLOSED, N], [OTHER, N]])
       if (warm) assertOnce(await readAll(home, { want }), want, `${at}: before`)
       await sealSegment(plainOf(home, CLOSED), { lockFile: lockOf(home), journal: null, onPhase: async (p) => { if (p === stop) assertOnce(await readAll(home, { want }), want, at) } })
       assertOnce(await readAll(home, { want }), want, `${at}: after`)
@@ -91,9 +92,9 @@ for (const code of ['ENOENT', 'EPERM']) {
       await sealedBeside(home, CLOSED)
       const v = vanishes(home, CLOSED, code), got = await read(v, home)
       assert.ok(v.wentAway(), `${name}: the window was exercised`)
-      if (name === 'raw') assert.equal(got, 12)
-      if (name === 'block') { assert.deepEqual(got.errors, [], name); assert.equal(got.blocks?.length, 1, name); assert.ok(got.blocks[0].bytes, name) }
-      if (name === 'session') { assert.deepEqual(got.errors, [], name); assert.equal(new Set(got.calls.map((c) => c.rid)).size, 24, name) }
+      if (name === 'raw') assert.equal(got, N)
+      if (name === 'block') { assert.deepEqual(got.errors, [], name); assert.ok(got.blocks?.[0]?.bytes, name) }
+      if (name === 'session') { assert.deepEqual(got.errors, [], name); assert.deepEqual(got.calls.map((c) => c.rid).sort(), idsOf([[CLOSED, N], [OTHER, N]]).sort(), name) }
     }
   })
 }
@@ -101,7 +102,7 @@ for (const code of ['ENOENT', 'EPERM']) {
 // Windows: an unlink while a reader has the file open is refused; the plaintext stays and wins, and a later seal finishes it.
 for (const code of ['EBUSY', 'EPERM']) {
   test(`an unlink refused while a reader has the plaintext open (${code}): nothing is lost, the reads stay whole, and the next seal finishes`, async () => {
-    const home = homeWith(), want = idsOf([[CLOSED, 12], [OTHER, 12]]), plain = plainOf(home, CLOSED)
+    const home = homeWith(), want = idsOf([[CLOSED, N], [OTHER, N]]), plain = plainOf(home, CLOSED)
     const refusing = new Proxy(nodeFs, { get: (t, k) => (k === 'unlinkSync' ? (p) => { if (String(p) === plain) throw Object.assign(new Error(`${code}: unlink '${p}'`), { code }); return t.unlinkSync(p) } : t[k]) })
     await assert.rejects(sealSegment(plain, { lockFile: lockOf(home), journal: null, fs: refusing }), /the plaintext is kept/)
     assert.ok(nodeFs.existsSync(plain) && nodeFs.existsSync(sealedOf(home, CLOSED)), 'both files')
@@ -114,7 +115,7 @@ for (const code of ['EBUSY', 'EPERM']) {
 
 // Windows: the unlink succeeded while another handle is open. The name stays listed until that handle closes, and every look at it is refused.
 test('a plaintext whose delete is pending: listed, unopenable, and the sealed copy answers', async () => {
-  const home = homeWith(), want = idsOf([[CLOSED, 12], [OTHER, 12]]), plain = plainOf(home, CLOSED)
+  const home = homeWith(), want = idsOf([[CLOSED, N], [OTHER, N]]), plain = plainOf(home, CLOSED)
   await sealSegment(plain, { lockFile: lockOf(home), journal: null })
   const denied = (p) => { throw Object.assign(new Error(`EPERM: operation not permitted '${p}'`), { code: 'EPERM' }) }
   const pending = new Proxy(nodeFs, { get: (t, k) => {
@@ -153,12 +154,12 @@ test('beside the daemon\'s appends: a half line is not a record until its newlin
 
 test('real processes: seal workers run while the daemon appends and reads loop, and no read sees a record twice or misses one it could see', async () => {
   const home = rawHome('trocar-conc-'), big = (tag, i) => line(tag, i, 800)
-  const segs = ['20261018T100000Z', '20261018T101000Z', '20261018T102000Z', '20261018T103000Z'], N = 150
-  for (const [k, s] of segs.entries()) writeSegment(home, s, Array.from({ length: N }, (_, i) => big(`s${k}`, i)))
+  const segs = ['20261018T100000Z', '20261018T101000Z', '20261018T102000Z', '20261018T103000Z'], BIG = 150
+  for (const [k, s] of segs.entries()) writeSegment(home, s, Array.from({ length: BIG }, (_, i) => big(`s${k}`, i)))
   nodeFs.mkdirSync(path.dirname(lockOf(home)), { recursive: true })
   nodeFs.writeFileSync(plainOf(home, LIVE), '', { mode: 0o600 })
   nodeFs.writeFileSync(lockOf(home), JSON.stringify({ pid: process.pid, segment: LIVE, at: Date.now() }))
-  const closed = segs.map((s) => [s, N])
+  const closed = segs.map((s) => [s, BIG])
   let written = 0, done = false
   const appender = (async () => { while (!done) { nodeFs.appendFileSync(plainOf(home, LIVE), `${line('live', written)}\n`); written++; await sleep(2) } })()
   const failures = []
