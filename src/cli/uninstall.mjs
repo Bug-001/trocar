@@ -12,7 +12,8 @@ import { newReceipt, EXIT, UNDO_LINE } from '../off/schema.mjs'
 import { offWorld, desiredOff, drainDaemon, undoSide, harnessIdsOf, flowWriter, OFF_LOCK_WAIT_MS } from '../off/orchestrate.mjs'
 import { userProcessesOf } from '../off/user-procs.mjs'
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
-import { readManifest, saveManifest, manifestPath, refuseOldManifest } from '../off/manifest.mjs'
+import { readManifest, saveManifest, manifestPath, refuseOldManifest, undoByHand } from '../off/manifest.mjs'
+import { rootStore, sameRoot } from '../off/root-store.mjs'
 import { disableAutostart, unitFilePath, removeWantsLinks } from '../off/autostart.mjs'
 import { undoAutostart, plistFilePath } from '../off/darwin.mjs'
 import { findingFor } from '../netenv/findings.mjs'
@@ -40,7 +41,7 @@ import { readAgentList } from '../off/identity.mjs'
 import { signHelperPath } from '../collector/arch/model-backends.mjs'
 import { NATIVE } from '../collector/arch/darwin/native.mjs'
 import { daemonLogPaths } from '../collector/arch/daemon-logs.mjs'
-import { isModelOs } from '../collector/model-install.mjs' // macOS / Windows run the collector model (4.11): uninstall never does off — it refuses while capture is online (1.6 §1.1, CM24)
+import { isModelOs, STORE } from '../collector/model-install.mjs' // macOS / Windows run the collector model (4.11): uninstall never does off — it refuses while capture is online (1.6 §1.1, CM24)
 import { printJson } from './json.mjs'
 
 /** Is the daemon's holder (its `start`) the life `p` of a fresh table? The daemon's start and this CLI's may come from different readers (on Windows its
@@ -228,11 +229,16 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     }
 
     // 5 · the entries
-    const u = await undoSide(w, { ids: null, manifest: m, manifestError: merr, yes, interactive, io, say, dropCa: true })
+    // 4.11 §3 ㉔: every trocar root the record does not list goes too — inside the record's undo, before its key; without a record (or one that
+    // stopped before its key), after the undo
+    let swept = false
+    const sweep = async () => { swept = true; await everyTrocarRoot(w, m, receipt, failed) }
+    const u = await undoSide(w, { ids: null, manifest: m, manifestError: merr, yes, interactive, io, say, dropCa: true, beforeKey: isModelOs(w.platform) ? sweep : null })
     for (const k of ['changed', 'removed', 'skipped', 'left']) receipt[k].push(...u[k])
     Object.assign(receipt, { kept_bundles: u.kept_bundles, still_trusting: u.still_trusting, residue: u.residue, pending: u.pending, entries: u.results || [] })
     receipt.problems.push(...u.problems); receipt.notes.push(...u.notes)
     for (const f of u.failures) failed.push(f)
+    if (isModelOs(w.platform) && !swept && !u.stopped && !u.pending.length && u.mode !== 'unsupported') await sweep()
     const noted = u.events.filter((e) => e.kind !== CODE_OFF.backupKept) // the backup an edited file kept is dropped below, listed in the receipt as non-identical: "kept" would be untrue
     const blocked = !gone || u.mode === 'unsupported' || u.pending.length > 0 || u.stopped // `stopped`: the manifest on disk is not what the entries now are: it and the CA stay
     if (blocked) receipt.problems.push(gone ? 'trocar\'s own files were left in place (the entries above are not all undone): run trocar uninstall again' : 'trocar\'s own files were left in place: the daemon is still running')
@@ -240,7 +246,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     // 6 · trocar's own files — only when nothing above is still open
     const unitFile = m && !m.unsupported ? m.files.find((f) => f.role === 'unit') : null
     let unitLeft = false
-    const bare = !blocked && !m && u.mode === 'none' // no install record: said after the script copy's last step below, which may still remove trocar itself
+    const bare = !blocked && !m && u.mode === 'none' && !receipt.changed.length // no install record (and no trocar root found without one, ㉔): said after the script copy's last step below, which may still remove trocar itself
     // 1.6 §3.6: a Linux helper that keeps the script copy's code is known now, so it is a left row before the PATH item, the purge and the result line:
     // the PATH item stays with the code (the next `trocar uninstall` is found by it; the manifest that names it is kept, as with every left row), no record is deleted
     const helperRow = blocked ? null : helperHoldsCode(w, deps.root || packageRoot())
@@ -359,6 +365,45 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     try { if (fs.existsSync(w.dir)) { put({ event: 'failure', code: (e && e.code) || 'uninstall-error', reason: errText(e) }); put({ kind: 'result', outcome: 'failed', reason: `uninstall failed: ${errText(e)}` }) } } catch { /* the original error is the one that matters */ }
     throw e
   } finally { if (lock) lock.release() }
+}
+
+/** 4.11 §3 ㉔ (1.6 §3.6): after the record's own items, every trocar root the user's store still holds that the record did not list (P3 `list`, by
+ *  subject) is removed too — with a record or without — and checked gone by a second listing; then, when the record names no root key any more, the
+ *  custody's one key (P1: one key, under a fixed name). What could not be read, removed or confirmed is a left row and a problem (D38). */
+async function everyTrocarRoot(w, m, receipt, failed) {
+  const store = w.deps.rootStore || rootStore({ platform: w.platform, run: w.exec, home: w.home, env: w.env, fs: w.fs })
+  const where = w.platform === 'win32' ? 'Cert:\\CurrentUser\\Root' : path.join(w.home, 'Library', 'Keychains', 'login.keychain-db')
+  const ask = async (fn) => { try { return (await fn()) || { error: 'no answer' } } catch (e) { return { error: errText(e) } } }
+  const nameOf = (id) => (id.fp256 ? `SHA-256 ${id.fp256}` : `thumbprint ${id.sha1}`)
+  const leave = (reason, code = 'entry-not-undone') => { receipt.left.push({ path: where, result: 'failed', reason }); receipt.problems.push(reason); failed.push({ code, path: where, reason }) }
+  const notOut = (id, why) => {
+    const command = undoByHand({ kind: 'system-root', store: STORE[w.platform], fp256: id.fp256 ?? null, thumbprint: id.sha1 ?? null })
+    receipt.still_trusting.push({ what: 'root', store: STORE[w.platform], fp256: id.fp256 ?? null, reason: why, command })
+    leave(`a trocar root no install record listed (${nameOf(id)}) was NOT taken out of your trust store: ${why}. By hand: ${command}`, 'root-not-removed')
+  }
+  const listed = ((m && !m.unsupported && m.entries) || []).filter((e) => e && e.kind === 'system-root').map((e) => ({ fp256: e.fp256, sha1: e.thumbprint }))
+  const first = await ask(() => store.list())
+  if (first.error || !Array.isArray(first.roots)) return leave(`whether your trust store holds another trocar root could not be read (${first.error}); run trocar uninstall again once it can be`)
+  const gone = []
+  for (const id of first.roots.filter((x) => !listed.some((e) => sameRoot(x, e)))) {
+    const r = await ask(() => store.remove(id))
+    if (r.ok) gone.push(id); else notOut(id, r.reason || r.error)
+  }
+  if (!gone.length) return
+  const after = await ask(() => store.list()) // a removal asks the operator first, and an OS tool's exit is not the answer (1.6 §3.6)
+  for (const id of gone) {
+    if (after.error || !Array.isArray(after.roots)) notOut(id, `whether it is still there could not be read (${after.error})`)
+    else if (after.roots.some((x) => sameRoot(x, id))) notOut(id, 'it is still in your trust store: removing a root asks you first, and that question was not answered with yes')
+    else receipt.changed.push({ path: where, change: `a trocar root no install record listed (${nameOf(id)}) removed from your trust store`, result: 'restored' })
+  }
+  if (m && !m.unsupported && m.entries.some((e) => e.kind === 'root-key')) return // the record's key: its own removal said what happened
+  const c = w.deps.custody || null, key = `${(c && c.kind) || 'custody'}:?`
+  try {
+    if (!c || typeof c.remove !== 'function') throw new Error('this trocar has no custody backend to remove it with')
+    const k = await c.remove({ kind: c.kind })
+    if (!k || typeof k !== 'object' || typeof k.removed !== 'boolean') throw new Error(k === 'unavailable' ? 'the key custody is not reachable now (macOS: no graphical login session, or the keychain is locked); run trocar uninstall again in a terminal of that session' : `the key custody answered ${JSON.stringify(k)}`)
+    if (k.removed) receipt.removed.push(key)
+  } catch (e) { receipt.left.push({ path: key, result: 'error', reason: `trocar's root key could not be removed (${errText(e)})` }); failed.push({ code: 'entry-not-undone', path: key, reason: `trocar's root key could not be removed (${errText(e)})` }) }
 }
 
 /** 1.6 §3.6 「脚本渠道的最后一步」 (D74⑧): a copy the install script placed goes last — the launcher and ~/.trocar/app (the code and its private Node), also

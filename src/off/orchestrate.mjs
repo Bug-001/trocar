@@ -251,7 +251,7 @@ const rebuildRoots = async (w) => {
 /** Step 4: the entries, by the manifest or by trocar's own marks. `dropCa`: only `uninstall` removes trocar-ca.pem. → one object of what was undone and what was left
  *  (`changed`, `removed`, `skipped`, `left`, `kept_bundles`, `still_trusting`, `residue`, `kept_backups`, `dropped_backups`, `pending`, `orphan_backups`, `problems`,
  *  `notes`, `failures`, `events`, `stopped` (an error ended the undoing part-way; what it had done is in the other fields), `mode`: 'manifest' | 'marker' | 'none' |
- *  'unsupported'). */
+ *  'unsupported'). `beforeKey`: an async step run after the trust store's roots and before the root's key (uninstall's, 4.11 §3 ㉔). */
 export async function undoSide(w, opts = {}) {
   const u = { mode: 'none', install_items: [], changed: [], removed: [], skipped: [], left: [], kept_bundles: [], still_trusting: [], residue: [], kept_backups: [], dropped_backups: [], pending: [], planned: [], orphan_backups: [], problems: [], notes: [], failures: [], events: [], undone_by_marker: false, procs_error: null, stopped: false }
   try { return await undoBody(w, opts, u) } catch (e) { // whatever throws here (a manifest of a shape nobody foresaw, a file that vanishes) must not cost the receipt: the routing is already off and files may already be written (R1, R11)
@@ -267,7 +267,7 @@ export async function undoSide(w, opts = {}) {
   }
 }
 
-async function undoBody(w, { ids = null, manifest, manifestError = null, yes = false, interactive = false, io = null, say = null, dropCa = false, phases = undefined } = {}, u) {
+async function undoBody(w, { ids = null, manifest, manifestError = null, yes = false, interactive = false, io = null, say = null, dropCa = false, phases = undefined, beforeKey = null } = {}, u) {
   if (manifest && manifest.unsupported) {
     u.mode = 'unsupported'
     u.problems.push(w.standalone
@@ -366,6 +366,7 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
       }
     }
     if (dropCa && ids == null && !stopped) { // last: the root's key, after the trust store's root above (4.11 卸载「最后删根的密钥」)
+      if (beforeKey) await beforeKey() // uninstall's other trocar roots (4.11 §3 ㉔): out of the store before any key goes
       const k = await undoRootKeys({ dir: w.dir, manifest, custody: w.deps.custody || null, fs: w.fs })
       u.removed.push(...k.removed)
       for (const l of k.left) { u.left.push({ path: l.path, result: l.result, reason: l.reason }); u.failures.push({ code: 'entry-not-undone', path: l.path, reason: l.reason }) }
