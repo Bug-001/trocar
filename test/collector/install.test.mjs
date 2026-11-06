@@ -670,6 +670,28 @@ test('ensureDaemonUp: a start call the OS held back is said in the notes with th
   assert.deepEqual([fast.up, fast.notes], [true, []], 'a start that did not block says nothing')
 })
 
+// R12 / D62: while the daemon starts, `on` asks it again and again until a deadline of about 15 s; an `off` that lands meanwhile stops the wait.
+// The clock is the pauses themselves, so this asserts what is found, never how fast.
+test('ensureDaemonUp: a daemon that answers late in the wait is found, one that never answers is a start failure, and an off seen meanwhile halts', async () => {
+  const run = async ({ upAt = Infinity, haltAfter = Infinity } = {}) => {
+    let clock = 0, polls = 0
+    const unit = { path: '/u/com.trocar.collector.plist', registered: () => ({ state: 'present' }), startNow: () => ({ code: 0 }) }
+    return ensureDaemonUp({
+      osName: 'darwin', dir: '/nope/collector', env: {}, unit, socketPath: '/tmp/trocar-test.sock',
+      request: async () => { if (clock < upAt) throw Object.assign(new Error('not there'), { code: 'ENOENT' }); return { doors: {} } },
+      pause: async (ms) => { clock += ms }, ms: () => clock, halted: () => ++polls > haltAfter,
+    })
+  }
+  const late = await run({ upAt: 14_000 })
+  assert.deepEqual([late.up, late.started, late.problems], [true, true, []])
+  const soon = await run({ upAt: 1 })
+  assert.deepEqual([soon.up, soon.problems], [true, []])
+  const never = await run()
+  assert.deepEqual([never.up, never.problems.length], [false, 1])
+  const halted = await run({ haltAfter: 3 })
+  assert.deepEqual([halted.up, halted.halt, halted.problems], [false, true, []])
+})
+
 // A Windows test machine, tested 2026-10-20 (`trocar update`): right after the daemon was stopped, the first probe on the named pipe came back `write EPIPE` --
 // Windows' answer for a pipe whose server has gone, where a unix socket answers ENOENT. Read as "a daemon holds the socket and does not answer",
 // it halted the run and the collector was never started again. The first probe asks once more, and an answer like that twice is "not up".

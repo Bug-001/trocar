@@ -666,7 +666,8 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = nul
         }
         notes.push(unitFailed); problems.push(unitFailed)
       } else if (!was.up) {
-        for (let i = 0; i < 60 && !up && !halt; i++) { up = (await probe()).up; if (!up) { await pause(250); if (halted()) halt = true } } // an off that lands while the daemon starts is seen within a poll, not after 15 s (R12)
+        // asked every 25 ms for the first 0.5 s (a daemon is often up within it, D62 ①), then every 250 ms: about 15 s in all
+        for (let i = 0; i < 78 && !up && !halt; i++) { up = (await probe()).up; if (!up) { await pause(i < 20 ? 25 : 250); if (halted()) halt = true } } // an off that lands while the daemon starts is seen within a poll, not after 15 s (R12)
         if (!up && !halt) {
           const where = osName === 'darwin' ? 'launchctl print gui/$(id -u)/com.trocar.collector' : osName === 'win32' ? 'schtasks /Query /TN \\trocar\\collector (and "trocar status" for the daemon)' : `systemctl --user status ${UNIT_NAME_HINT}` // the autostart's own status question, in the platform's words (4.9 §4: the LaunchAgent, not a systemd unit; 4.8 §7: the task, not a unit)
           const why = `the collector was started${sock ? ` but does not answer on ${sock}` : ', but it does not answer yet'}; look at "${where}" and the capture health on the board` // never "answers on null": an endpoint that is not known yet is not named (1.6 §1.1)
