@@ -30,7 +30,7 @@ export const intactOf = (m, e, fs) => { try { return (e.kind === 'owned-file' ? 
 
 /** The install items that carry a harness's certificate: its own, and the pem-block in a user file its settings name that another harness's entry holds —
  *  one block per file, recorded once (4.11 P4 rule U, shared_with), yet it serves both. */
-const itemsFor = (desc, inst, ctx) => { const { files } = userCertFilesOf(desc, ctx); return inst.filter((i) => i.harness === desc.name || (i.kind === 'text' && i.format === 'pem-block' && files.includes(i.path))) }
+const itemsFor = (desc, inst, ctx) => { const { files } = userFilesOf(desc, ctx); return inst.filter((i) => i.harness === desc.name || (i.kind === 'text' && i.format === 'pem-block' && files.includes(i.path))) }
 
 /** Whether the install items that carry a harness's certificate are all there and unchanged → null | 'carrier-absent' | 'carrier-overwritten'. What install
  *  placed (m.install.items) must still be on record: an item whose record is gone is as absent as its file. Throws when a file cannot be read. */
@@ -66,7 +66,7 @@ export function setupOf(desc, { os, manifest: m, ctx, root = null, fs = nodeFs }
       const c = f.cert === 'root' ? null : (pm.certs || {})[f.cert]
       if (!c || (c.when && holds(c.when, ctx) === false)) continue // the root carries it: nothing per form, whether install saw the harness or not
       // a carrier of its own: install's items for it (none when install never saw the harness, unless rule U's shared block carries it)
-      const unread = lost === undefined && userCertFilesOf(desc, ctx).unread // a setting that may name rule U's file, not read: whose block carries it is not known
+      const unread = lost === undefined && userFilesOf(desc, ctx).unread // a setting that may name rule U's file, not read: whose block carries it is not known
       if (unread) throw new Error(`${unread.where}: ${unread.error}`)
       if (lost === undefined) lost = carrierLoss(m || {}, desc, itemsFor(desc, itemsOfPhase(m, 'install'), ctx), fs)
       if (lost) missing.push({ form: f.id, what: lost })
@@ -79,7 +79,7 @@ export function setupOf(desc, { os, manifest: m, ctx, root = null, fs = nodeFs }
 /** The user's own certificate file a `userCertFiles` key names (1.6 §9.4 `user_file`; of several, the worst): trocar appended to it (intact / changed), or it is not one trocar could
  *  append to; `unknown` with the read code when the file, or a setting that may name it, cannot be read (D38: never `changed`, never none). */
 function userFileOf(desc, { m, ctx, fs, own }) {
-  const { files, unread } = userCertFilesOf(desc, ctx)
+  const { files, unread } = userFilesOf(desc, ctx)
   if (unread) return { path: null, state: 'unknown', reason: `${unread.where}: ${unread.error}`, code: CODE.configUnreadable }
   const rows = files.filter((file) => !own.some((i) => i.path === file && i.kind === 'owned-file')).map((file) => { // trocar's own bundle: not the user's file
     const e = own.find((i) => i.path === file && i.kind !== 'owned-file')
