@@ -114,6 +114,8 @@ function blocksIn(t, root) {
   }
   return out
 }
+// whether a YAML text still holds content (a line that is not blank and not only a comment), read as insertLine reads a yaml-list
+const yamlItems = (t) => t.split('\n').some((l) => l.replace(/\r$/, '').replace(/(^|\s)#.*$/, '').trim() !== '')
 const lineHits = (t, root) => linesOf(t).filter((l) => l.line.includes(LINE_MARK) && l.line.includes(root + path.sep))
 
 // the entry a select route names: <dir>/<id>.json, id = the meta file's idKey (one plain file name, nothing outside the directory); none → []
@@ -237,8 +239,12 @@ function undoOne(item, home, fs) {
   if (item.how === 'line') {
     const hits = lineHits(t, root).reverse()
     if (!hits.length) return { result: 'already-clean' }
-    let out = t
-    for (const h of hits) out = out.slice(0, h.at) + out.slice(h.next)
+    const drop = (text) => hits.reduce((o, h) => o.slice(0, h.at) + o.slice(h.next), text) // hits run bottom-up: earlier offsets stay valid
+    // a YAML list whose only item was trocar's row stays a list: `[]` where the topmost row was, its line end kept (install replaced a `[]` there, so
+    // that is byte-exact), the user's comments and blank lines as they were; dsh will not start on a patch file with no list in it (4.6)
+    const top = hits[hits.length - 1], rest = drop(t)
+    const asList = (item.detail || {}).yaml && rest !== '' && !yamlItems(rest) // nothing at all left (a file install created): deleted below
+    const out = !asList ? rest : hits.reduce((o, h) => (h === top ? o.slice(0, h.at) + (h.line.endsWith('\r') ? '[]\r' : '[]') + o.slice(h.at + h.line.length) : o.slice(0, h.at) + o.slice(h.next)), t)
     if ((item.detail || {}).yaml && out.trim() === '') { fs.rmSync(file, { force: true }); removeEmptyDirs([path.dirname(item.path)], fs); return done({ lines: hits.length, deleted: true }) } // dsh will not start on an empty patch file; with no row there is nothing to read
     put(out)
     return done({ lines: hits.length })

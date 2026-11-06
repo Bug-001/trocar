@@ -464,3 +464,28 @@ for (const rcName of MARKER_PATHS['kimi-code'].filter((x) => x.how === 'line').m
     assert.deepEqual([read(rc), fs.existsSync(shim)], [original, false])
   })
 }
+
+// A YAML list file trocar's row was the only item of (install replaced its `[]`, or appended to a file with no item): the marker undo leaves a valid
+// empty list — the user's comments and blank lines kept, `[]` where the row was — so dsh still starts; byte-exact where install replaced a `[]`.
+// A file with nothing left keeps today's delete; other items stay as they were.
+test('a YAML list whose only item was trocar\'s row comes back a valid empty list, comments and blanks kept; other items unchanged; an empty remainder is deleted', async () => {
+  const { insertLine } = await import('../../src/off/text-edit.mjs')
+  const shapes = [
+    ['comment only', '# my dsh patches\n[]\n', '# my dsh patches\n[]\n'],
+    ['blank only', '\n[]\n', '\n[]\n'],
+    ['no trailing newline', '# mine\n[]', '# mine\n[]'],
+    ['CRLF', '# mine\r\n[]\r\n', '# mine\r\n[]\r\n'],
+    ['comment, no list', '# mine\n', '# mine\n[]\n'],
+    ['other items left', '- set: {a: 1}\n', '- set: {a: 1}\n'],
+    ['nothing left', '[]\n', null],
+  ]
+  for (const [what, before, after] of shapes) {
+    const home = tmpDir('trocar-marker-yaml-')
+    const root = path.join(home, '.trocar')
+    const file = path.join(home, '.dsh', 'cordis.patch.yml'); fs.mkdirSync(path.dirname(file), { recursive: true })
+    const row = `- insert: [{ name: "${root}/collector/plugins/dsh/index.js" }] # trocar collector: loads trocar's CA trust plugin`
+    fs.writeFileSync(file, insertLine(before, { line: row, format: 'yaml-list' }).text)
+    assert.deepEqual(undoByMarker(planByMarker({ home, ...UNINSTALL, ids: ['deepseek-dsh'] }), { home }).filter((r) => r.path === file).map((r) => r.result), ['undone-by-marker'], what)
+    assert.equal(fs.existsSync(file) ? read(file) : null, after, what)
+  }
+})
