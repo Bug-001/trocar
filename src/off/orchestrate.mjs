@@ -225,7 +225,7 @@ const UNDO_NOTE = { // what each undo result other than a plain restore means fo
   'left-user-value': 'the key now holds a value the user set: left as it is',
 }
 const UNTIL_REASON = { restart: 'until it restarts', 'next-connection': 'until its next new connection (it re-reads the bundle)', 'next-handshake': 'until its next TLS handshake (it re-reads the bundle)', 'session-end': 'until its current session ends' }
-const MARKER_TEXT = { block: "trocar's block removed", line: 'the line trocar added removed', 'json-value': "trocar's value removed (the old one taken from the copy of the file as it was)", 'owned-file': 'the file trocar created deleted' }
+export const MARKER_TEXT = { block: "trocar's block removed", line: 'the line trocar added removed', 'json-value': "trocar's value removed (the old one taken from the copy of the file as it was)", 'owned-file': 'the file trocar created deleted', wrapper: "trocar's wrapper replaced by the real program again", 'pem-block': "trocar's certificate block removed" }
 const SKIP_REASON = { 'already-restored': 'already as it was before install', missing: 'the file is gone; nothing of trocar is in it', 'left-user-value': 'this key now holds a value you set, so it was left as it is', 'already-removed': "trocar's text is no longer in this file" }
 const SKIP_CODE = { 'already-restored': 'already-restored', missing: 'missing', 'left-user-value': 'left-user-value' } // the results that are in the closed set of codes (src/health/codes.mjs)
 const withHarness = (h) => (typeof h === 'string' ? { harness: h } : {})
@@ -257,7 +257,8 @@ const rebuildRoots = async (w) => {
 /** Step 4: the entries, by the manifest or by trocar's own marks. `dropCa`: only `uninstall` removes trocar-ca.pem. → one object of what was undone and what was left
  *  (`changed`, `removed`, `skipped`, `left`, `kept_bundles`, `still_trusting`, `residue`, `kept_backups`, `dropped_backups`, `pending`, `orphan_backups`, `problems`,
  *  `notes`, `failures`, `events`, `stopped` (an error ended the undoing part-way; what it had done is in the other fields), `mode`: 'manifest' | 'marker' | 'none' |
- *  'unsupported'). `beforeKey`: an async step run after the trust store's roots and before the root's key (uninstall's, 4.11 §3 ㉔). */
+ *  'unsupported'). `beforeKey`: an async step run after the trust store's roots and before the root's key (uninstall's, 4.11 §3 ㉔). `places`: with no
+ *  manifest, the places install's certificate carriers are at by the harness descriptors (model-install.mjs carrierPlaces), looked at beside MARKER_PATHS. */
 export async function undoSide(w, opts = {}) {
   const u = { mode: 'none', install_items: [], changed: [], removed: [], skipped: [], left: [], kept_bundles: [], still_trusting: [], residue: [], kept_backups: [], dropped_backups: [], pending: [], planned: [], orphan_backups: [], problems: [], notes: [], failures: [], events: [], undone_by_marker: false, procs_error: null, stopped: false }
   try { return await undoBody(w, opts, u) } catch (e) { // whatever throws here (a manifest of a shape nobody foresaw, a file that vanishes) must not cost the receipt: the routing is already off and files may already be written (R1, R11)
@@ -273,7 +274,7 @@ export async function undoSide(w, opts = {}) {
   }
 }
 
-async function undoBody(w, { ids = null, manifest, manifestError = null, yes = false, interactive = false, io = null, say = null, dropCa = false, phases = undefined, beforeKey = null } = {}, u) {
+async function undoBody(w, { ids = null, manifest, manifestError = null, yes = false, interactive = false, io = null, say = null, dropCa = false, phases = undefined, beforeKey = null, places = [] } = {}, u) {
   if (manifest && manifest.unsupported) {
     u.mode = 'unsupported'
     u.problems.push(w.standalone
@@ -386,7 +387,7 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
   }
   // no manifest (or one that cannot be read): trocar's own marks, listed first and undone only after a yes (R3)
   if (manifestError) u.notes.push(`the install manifest cannot be read (${errMessage(manifestError)}); trocar's own marks are used instead`)
-  const plan = planByMarker({ home: w.home, ids, fs: w.fs, env: w.env, platform: w.platform, phases: phases || (dropCa ? PHASES : ['on']), notes: u.notes }) // off spares install's carriers (D55①), as undoHarnesses does
+  const plan = planByMarker({ home: w.home, ids, fs: w.fs, env: w.env, platform: w.platform, phases: phases || (dropCa ? PHASES : ['on']), notes: u.notes, places }) // off spares install's carriers (D55①), as undoHarnesses does
   u.orphan_backups = orphanBackups({ home: w.home, manifest: null, fs: w.fs })
   if (!plan.length) { u.mode = manifestError ? 'marker' : 'none'; return u }
   u.mode = 'marker'
