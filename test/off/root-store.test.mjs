@@ -5,7 +5,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { rootStore, rootIdOf } from '../../src/off/root-store.mjs'
+import { rootStore, rootIdOf, ROOT_SUBJECT } from '../../src/off/root-store.mjs'
 import { custodyStub } from '../helpers/custody-stub.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { certutilModel } from '../helpers/certutil-model.mjs'
@@ -145,4 +145,50 @@ for (const [label, ans, want] of TRUST_AXIS) {
 test('CM7 darwin has: a trust export that fails for another reason is an error, never "absent" (D38)', () => {
   const run = (file, args) => (args[0] === 'find-certificate' ? { status: 0, stdout: pemOf(rootDer) } : { status: 36, stderr: 'interaction not allowed' })
   assert.match(rootStore({ platform: 'darwin', run, home: tmpDir('trocar-rs-') }).has(id).error, /trust-settings-export failed \(exit 36/)
+})
+
+// 4.11 P3 `list` (§3 ㉔, CM40): every certificate in the user's store whose subject is trocar's root subject, with or without trust — the one read
+// install refuses a second root by and uninstall takes every trocar root out by. Generated over 0 / 1 / 3 such roots among certificates of another
+// subject; a store that cannot be read is { error }, never "none" (D38).
+const trocarRoots = (n) => Array.from({ length: n }, () => { const c = custodyStub(); return c.create({ subject: ROOT_SUBJECT }).rootDer })
+for (const n of [0, 1, 3]) {
+  const roots = trocarRoots(n), others = [rootDer, other.rootDer] // the custody stub's default subject is another name
+  const want = roots.map(rootIdOf)
+  test(`CM40 darwin list, ${n} trocar root(s) among others: the login keychain searched by subject, only that exact subject`, () => {
+    const home = tmpDir('trocar-rs-'), calls = []
+    const run = (file, args) => { calls.push([file, args]); return { status: 0, stdout: [...others, ...roots].map((d) => `SHA-1 hash: X\n${pemOf(d)}`).join('') } }
+    const out = rootStore({ platform: 'darwin', run, home }).list()
+    assert.deepEqual(calls, [['security', ['find-certificate', '-a', '-c', ROOT_SUBJECT, '-Z', '-p', KC(home)]]])
+    assert.deepEqual(out, { roots: want })
+  })
+  test(`CM40 win32 list, ${n} trocar root(s) among others: the user's store listed, each by its thumbprint`, () => {
+    const m = certutilModel({ store: [...others.map((d) => rootIdOf(d).sha1), ...roots.map((d) => ({ sha1: rootIdOf(d).sha1, subject: `CN=${ROOT_SUBJECT}` }))], spaced: n === 3 })
+    const out = rootStore({ platform: 'win32', run: m.run, home: tmpDir('trocar-rs-') }).list()
+    assert.deepEqual(m.calls, [['certutil', '-user', '-store', 'Root']])
+    assert.deepEqual(out, { roots: want.map((x) => ({ sha1: x.sha1 })) })
+  })
+}
+test('CM40 list: none in the keychain (errSecItemNotFound, exit 44) is none; any other failure is an error, never "none" (D38)', () => {
+  const home = tmpDir('trocar-rs-')
+  assert.deepEqual(rootStore({ platform: 'darwin', run: () => ({ status: 44, stderr: 'security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain.' }), home }).list(), { roots: [] })
+  for (const status of [null, 5, 0x80070005]) {
+    for (const platform of ['darwin', 'win32']) assert.match(rootStore({ platform, run: () => ({ status, stderr: 'boom' }), home }).list().error, /failed/, `${platform} ${status}`)
+  }
+})
+test('CM40 win32 list: a certificate the root issued is not the root, whatever the labels are in this language', () => {
+  const [d] = trocarRoots(1)
+  const issued = { sha1: rootIdOf(trocarRoots(1)[0]).sha1, subject: 'CN=someone else', issuer: `CN=${ROOT_SUBJECT}` }
+  const m = certutilModel({ store: [{ sha1: rootIdOf(d).sha1, subject: `CN=${ROOT_SUBJECT}` }, issued] })
+  assert.deepEqual(rootStore({ platform: 'win32', run: m.run, home: tmpDir('trocar-rs-') }).list().roots.map((r) => r.sha1), [rootIdOf(d).sha1.toUpperCase()])
+})
+
+test('CM40 win32 list: the root the store took is listed by the thumbprint remove takes it out by', () => {
+  const m = certutilModel()
+  const store = rootStore({ platform: 'win32', run: m.run, home: tmpDir('trocar-rs-') })
+  const [der] = trocarRoots(1)
+  assert.deepEqual(store.add(der), { ok: true })
+  const { roots } = store.list()
+  assert.deepEqual(roots, [{ sha1: rootIdOf(der).sha1 }])
+  assert.deepEqual(store.remove(roots[0]), { ok: true })
+  assert.deepEqual(store.list(), { roots: [] })
 })
