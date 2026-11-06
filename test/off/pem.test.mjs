@@ -5,12 +5,18 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { X509Certificate } from 'node:crypto'
 import { createCa } from '../../src/collector/core/tls/ca.mjs'
-import { certBlocks, stripCert, composeBundle, certsOf } from '../../src/off/pem.mjs'
+import { certBlocks, findCert, stripCert, composeBundle, certsOf } from '../../src/off/pem.mjs'
 import * as collectorBundle from '../../src/collector/core/trust/bundle.mjs'
 
 const A = createCa({ commonName: 'pem A' }), B = createCa({ commonName: 'pem B' }), C = createCa({ commonName: 'pem C' })
 const fp = (ca) => new X509Certificate(ca.certPem).fingerprint256
 const KEY = '-----BEGIN PRIVATE KEY-----\nSECRET\n-----END PRIVATE KEY-----\n'
+
+test('findCert finds what certBlocks finds, by fingerprint, in a listing with keys and broken blocks', () => {
+  const text = `SHA-1 hash: X\n${KEY}${A.certPem}\n-----BEGIN CERTIFICATE-----\nnot base64 !!\n-----END CERTIFICATE-----\nSHA-256 hash: Y\n${B.certPem}`
+  for (const c of certBlocks(text)) assert.deepEqual(findCert(text, c.fp), c)
+  assert.equal(findCert(text, fp(C)), null)
+})
 
 test('certBlocks lists the CERTIFICATE blocks of a file in order, each with the fingerprint of its certificate; keys, junk and cut-short blocks are not certificates', () => {
   const text = `# header\n${KEY}${A.certPem}\nnoise\n${B.certPem}-----BEGIN CERTIFICATE-----\nnot base64 !!\n-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\ncut short`

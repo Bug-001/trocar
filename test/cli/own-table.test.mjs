@@ -11,6 +11,7 @@ import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { contractWorld, daemonFor, placesOf } from '../helpers/contract-world.mjs'
 import { turnOnModel } from '../../src/collector/model-on.mjs'
@@ -43,7 +44,9 @@ const STEPS = [
   { name: 'install', run: async (w) => {
     const io = fakeIo()
     // what the world's ctx sees (HOME and the apps placed on its fake machine), so the CLI judges the same forms present as the world's install did
-    const inside = (p) => String(p).startsWith(w.home + path.sep)
+    // (trocar's own sources are not part of that machine: the undo copy's digest lists them)
+    const SOURCES = path.dirname(fileURLToPath(import.meta.resolve('../../src/off/main.mjs')))
+    const inside = (p) => String(p).startsWith(w.home + path.sep) || p === SOURCES
     const fsx = { ...fs, existsSync: (p) => w.ctx.exists(p), readdirSync: (p, ...a) => (inside(p) ? fs.readdirSync(p, ...a) : w.ctx.readdir(p)) }
     const deps = { getuid: () => 501, unit: null, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: kitOf(w.os), dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, fs: fsx }
     const exit = await runInstallCli(['--json', '--yes'], { io, env: w.env, home: w.home, platform: w.os, deps })
