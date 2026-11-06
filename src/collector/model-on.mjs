@@ -118,10 +118,12 @@ export async function turnOnModel({ os, home, env = process.env, ids = null, har
   const groups = planned.flatMap(({ h, plan }) => plan.routes.map((r) => groupOf(h, r.id)))
   const ep = controlEndpointFor({ platform: os, dir, env, fs })
   const ask = request || ep.request
-  let doorsNow = {}, unanswered = false
-  try { doorsNow = ep.socketPath ? ((await ask({ socketPath: ep.socketPath, method: 'GET', path: '/status', timeoutMs: 2000 })).doors || {}) : {} } catch { doorsNow = {}; unanswered = true }
-  // a daemon that lives (its lock) but did not answer (starting, stuck): a held recorded port is its own door as far as on can tell — kept, not engine-port-taken
-  const ownDaemon = unanswered && ['running', 'unresponsive'].includes(lockState({ file: path.join(dir, 'lock'), fs }).state)
+  let doorsNow = {}, unanswered = null
+  try { doorsNow = ep.socketPath ? ((await ask({ socketPath: ep.socketPath, method: 'GET', path: '/status', timeoutMs: 2000 })).doors || {}) : {} } catch (e) { doorsNow = {}; unanswered = e || {} }
+  // our daemon is there but did not answer: something listens on its control endpoint (a timeout or an HTTP error, not ENOENT / ECONNREFUSED — the
+  // control server is up before the doors and the lock, and refuses to start while another daemon answers: still starting) or its lock lives (stuck).
+  // A held recorded port is then its own door as far as on can tell — kept, not engine-port-taken.
+  const ownDaemon = !!unanswered && (unanswered.code === 'ETIMEDOUT' || unanswered.status != null || ['running', 'unresponsive'].includes(lockState({ file: path.join(dir, 'lock'), fs }).state))
   const was = await loadIngressConfig({ dir, groups, isFree, fs })
   const unconfirmed = []
   // 4.11 §3 ㉓: a group of an id outside the table is another copy's — its port is never moved (the picker still avoids it)
