@@ -333,6 +333,17 @@ test('cli: a daemon that finds another one answering on the control channel says
   fs.rmSync(home, { recursive: true, force: true })
 })
 
+// The Node floor (4.9 §7): a relaunch runs on the same Node and is refused again, so the refusal exits 0 — launchd's KeepAlive {SuccessfulExit: false} and the
+// Windows supervisor (4.8 §7) then do not re-pull it, and the one record startDaemon wrote is the episode's only one until the next login or `on`.
+test('cli: a daemon refused by the Node floor exits 0, so the platform does not relaunch it into the same refusal', async () => {
+  const home = tmpDir('trocar-cli-node-')
+  markInstalled(home)
+  const daemon = { startDaemon: async () => { throw Object.assign(new Error('Node 20.1.0 is too old'), { code: 'node-too-old' }) } }
+  const exit = await runDaemonCli([], { io: io(), home, env: {}, platform: 'darwin', deps: { daemon, proc: { on() {} }, getuid: () => 1000 } })
+  assert.equal(exit, 0)
+  fs.rmSync(home, { recursive: true, force: true })
+})
+
 // the other half of the same probe (D38): the control endpoint accepts a connection but answers nothing — a daemon with a wedged event loop, another
 // program holding the pipe name. Exiting 0 here would leave the machine with no working collector and no record until the next login, so this one is a
 // failure: one persistent record naming the pid the lock claims holds it, and a non-zero exit, which the platform retries at its own throttle.

@@ -25,6 +25,7 @@ import { RESTART_REASONS } from '../health/codes.mjs'
 import { controlRequest, controlEndpointFor } from '../off/control-client.mjs'
 import { readText, readTextOrError } from './core/config-read.mjs'
 import { appendEvent } from './core/events.mjs'
+import { readFlows } from '../health/flows.mjs'
 import { runEventWriter } from '../off/events.mjs'
 import { hideUserinfoIn } from '../off/userinfo.mjs'
 import { backupDir, opLockFile, standalonePath, standaloneFiles } from '../off/paths.mjs'
@@ -114,6 +115,8 @@ export function daemonEnv(env, dir) {
 //   installCollector   the install half alone, as the harness and lab tests set an agent up (no state.json, no daemon, no confirmation)
 
 const OP_LOCK_WAIT_MS = 10_000 // 1.6 R12: another state-changing command (an `off`, say) is waited for at most this long
+// start failures a relaunch cannot fix (the same Node, the same token): any other one may clear when the OS starts the daemon again, so the wait goes on
+const REFUSED_START = new Set(['node-too-old', 'elevated-token', 'root-token', 'root-refused'])
 const SLOW_START_MS = 1000 // D62: a start call that blocks longer than this is the OS holding the job back, not trocar working — said in the receipt (D38)
 const nodeFs = fs
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
@@ -151,7 +154,7 @@ export function changeText(e, prior = null) {
 }
 
 // An error that is not a failure of trocar: an `off` asked for while this `on` ran (R12: off wins), or a step that has to stop the run.
-const stop = (message) => Object.assign(new Error(message), { stopsRun: true })
+const stop = (message, code = null) => Object.assign(new Error(message), { stopsRun: true, ...(code ? { code } : {}) })
 
 /** What `on` would do, read from the disk and the manifest, written nowhere. Refusals come first, so a refused plan writes nothing at all (not even the
  *  manifest): a file that is not JSON, a dangling link, a plugin file already there, a manifest this build cannot read, a CA that cannot be used.
@@ -515,14 +518,14 @@ export async function turnOn(opts = {}) {
       let st
       try { st = readState().state } catch (e) { throw stop(`${stateF} cannot be read (${String((e && e.message) || e)}), so it is not known whether an off was asked; stopped (1.6 R12)`) }
       const off = plan.targets.filter((id) => !(st.harnesses[id] && st.harnesses[id].desired === 'on'))
-      if (off.length) throw stop(`${off.join(', ')} was turned off while this on ran (${stateF}); stopped, the off wins (1.6 R12). What was written is a resumable install: trocar on finishes it`)
+      if (off.length) throw stop(`${off.join(', ')} was turned off while this on ran (${stateF}); stopped, the off wins (1.6 R12). What was written is a resumable install: trocar on finishes it`, CODE.stoppedByOff)
     }
     const notes = r.notes
     const problems = []
-    let written = null, final = null, halt = false
+    let written = null, final = null, halt = false, offCame = null // offCame: the off's stop, whose code is the receipt's error (1.6 §3.1)
     try { ({ final, written } = await writeInstall({ dir, home, plan, m, osName, harnesses, freePort, now, fs, guard, confirmed: true, certs: isModelOs(osName) })) } catch (e) {
       if (!e.stopsRun) throw e
-      written = e.written; halt = true
+      written = e.written; halt = true; if (e.code === CODE.stoppedByOff) offCame = e
       problems.push(e.message)
     }
     if (written && written.needInstall.length) problems.push(`these certificate items are not in place and on does not write them: ${written.needInstall.join(', ')}; run trocar install (D55①)`)
@@ -540,6 +543,7 @@ export async function turnOn(opts = {}) {
       const counts = { entries: m.entries.length, changed: receipt.changed.length, notes: notes.length + problems.length }
       put({ event: EVENT.installNote, where: 'install', kind: 'result', outcome, harnesses: on, refused: [], counts, reason }) // before the notes are taken: a result line that cannot be written adds its own "not recorded" (R11)
       receipt.notes = [...notes, ...problems]
+      if (offCame) receipt.error = { code: offCame.code, message: offCame.message }
       receipt.problems = problems // the renderer labels exactly these 问题: — a failed run's SUCCESS notes (the kernel's "downloaded and both digests
       // verified") must not wear the problem label, which is what a whole-receipt ok===false test did (seen on a macOS test machine, 2026-10-11)
       return { receipt, manifest: m, plan, exit: receipt.ok ? 0 : 1 }
@@ -547,7 +551,7 @@ export async function turnOn(opts = {}) {
     if (halt) { put({ event: EVENT.failure, where: 'install', code: 'install-error', reason: problems[0] }); return finish('stopped', `on stopped: ${problems[0]}`) }
 
     // ── the unit and the daemon: started when nothing answers, never started a second time (拉起不是重启, R8) ──
-    const checked = (fn) => { try { fn() } catch (e) { if (!e.stopsRun) throw e; problems.push(e.message); halt = true } }
+    const checked = (fn) => { try { fn() } catch (e) { if (!e.stopsRun) throw e; problems.push(e.message); halt = true; if (e.code === CODE.stoppedByOff) offCame = e } }
     const d = await ensureDaemonUp({ osName, dir, env, fs, unit, socketPath, request, pause, put, halted: () => { checked(() => guard()); return halt } })
     const { sock, ask, started, unitFailed } = d
     const up = d.up
@@ -667,8 +671,13 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = nul
         notes.push(unitFailed); problems.push(unitFailed)
       } else if (!was.up) {
         // asked every 25 ms for the first 0.5 s (a daemon is often up within it, D62 ①), then every 250 ms: about 15 s in all
-        for (let i = 0; i < 78 && !up && !halt; i++) { up = (await probe()).up; if (!up) { await pause(i < 20 ? 25 : 250); if (halted()) halt = true } } // an off that lands while the daemon starts is seen within a poll, not after 15 s (R12)
-        if (!up && !halt) {
+        // a daemon that refuses to start (node-too-old, elevated-token, root-token) writes its own {where:'start'} record and exits 0, so nothing will answer:
+        // one read of the newest flows tail per poll, and its reason is the problem (D38: the daemon's words, no start-failed on top). Unreadable = keep polling.
+        const refusedSince = () => { try { return readFlows({ dir, fs, maxBytes: 64 * 1024 }).records.find((r) => r.event === EVENT.failure && r.where === 'start' && REFUSED_START.has(r.code) && Date.parse(r.ts) >= startAt) || null } catch { return null } }
+        let refusal = null
+        for (let i = 0; i < 78 && !up && !halt; i++) { up = (await probe()).up; if (!up && (refusal = refusedSince())) break; if (!up) { await pause(i < 20 ? 25 : 250); if (halted()) halt = true } } // an off that lands while the daemon starts is seen within a poll, not after 15 s (R12)
+        if (refusal) problems.push(refusal.reason || refusal.code)
+        else if (!up && !halt) {
           const where = osName === 'darwin' ? 'launchctl print gui/$(id -u)/com.trocar.collector' : osName === 'win32' ? 'schtasks /Query /TN \\trocar\\collector (and "trocar status" for the daemon)' : `systemctl --user status ${UNIT_NAME_HINT}` // the autostart's own status question, in the platform's words (4.9 §4: the LaunchAgent, not a systemd unit; 4.8 §7: the task, not a unit)
           const why = `the collector was started${sock ? ` but does not answer on ${sock}` : ', but it does not answer yet'}; look at "${where}" and the capture health on the board` // never "answers on null": an endpoint that is not known yet is not named (1.6 §1.1)
           problems.push(why); put({ event: EVENT.failure, where: 'start', code: 'start-failed', reason: why })

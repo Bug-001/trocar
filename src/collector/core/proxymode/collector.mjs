@@ -406,7 +406,8 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
       try { rows = await holdersNow() } catch { rows = null } // unreadable: unknown, every door stays
       if (rows) await settle(rows)
       if (kept().length) poll.start(rows) // this off's own table: never the last watch's answer
-      const relayed = drain ? await drain({ harnesses: exit ? null : ids, now: !!now, ...(by ? { by } : {}) }) : null // exit: the whole daemon goes, so every connection it relays, whatever harness
+      // exit or no names: every connection it relays, whatever harness — a second nameless off finds the on set empty, and its --now still cuts what the first left draining
+      const relayed = drain ? await drain({ harnesses: exit || !hs || !hs.length ? null : ids, now: !!now, ...(by ? { by } : {}) }) : null
       return { pid, actual: leaving || !onSet.size ? 'off' : 'on', confirmed: true, relayed, holders: rows ? rows.length : null }
     },
     lookupIngress,

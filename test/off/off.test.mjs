@@ -615,6 +615,7 @@ test('R12: while `on` holds the op lock (it waits for its daemon to come up) an 
   const on = await s.on({ request: never, sleep })
   assert.deepEqual(meanwhile, { entry: true, desired: 'off', lock: true }, 'the entry install wrote is there and on holds the lock; off had already written desired off')
   assert.equal(on.exit, 1); assert.match(on.receipt.notes.join('\n'), /turned off while this on ran/)
+  assert.equal(on.receipt.error && on.receipt.error.code, 'stopped-by-off', '1.6 §3.1: the code of an on an off stopped, on Linux as on macOS / Windows')
   assert.ok(pauses < 8, `on stopped at its next poll (${pauses} pauses), not after 60`)
   const off = await offRun
   assert.equal(off.exit, 0, JSON.stringify(off.receipt.problems))
@@ -918,6 +919,17 @@ test('1.6 §3.1 · D62 ⑥: a nameless off in proxy mode reads the routing back 
   const good = await t.off({ deps: { platform: 'darwin', request: async (q) => (q.path === '/off' ? { actual: 'off', confirmed: true, relayed: { closing: 0, waiting: 0, cut: 0 }, pid: 4242 } : t.sys.daemon.request(q)) } })
   assert.equal(good.exit, 0, JSON.stringify(good.receipt.problems))
   assert.deepEqual([good.receipt.routing.confirmed, good.receipt.daemon], [true, { pid: 4242, state: 'running' }])
+})
+
+test('1.6 §1.1 --now: in proxy mode, off --now after a plain off still asks the running daemon to cut, and the receipt carries what it cut', async () => {
+  const s = await installedHome({ names: ['claude-code'], daemon: { pid: 4242 } })
+  const asked = []
+  const deps = { platform: 'darwin', request: async (q) => { if (q.path !== '/off') return s.sys.daemon.request(q); asked.push(q.body); return { actual: 'off', confirmed: true, relayed: q.body.now ? { closing: 0, waiting: 0, cut: 1 } : { closing: 1, waiting: 0, cut: 0 }, pid: 4242 } } }
+  assert.equal((await s.off({ deps })).exit, 0)
+  const cut = await s.off({ now: true, deps })
+  assert.equal(cut.exit, 0, JSON.stringify(cut.receipt.problems))
+  assert.deepEqual(asked, [{}, { now: true }], 'everything already off: the daemon is still asked, with now')
+  assert.equal(cut.receipt.relayed.cut, 1)
 })
 
 test('the text receipt says a changed file once, as it says a removed file once: two entries of one file that ended the same way are one row; two that ended differently are two', () => {

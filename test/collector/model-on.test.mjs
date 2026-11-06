@@ -349,3 +349,24 @@ test('P12 · an on over a full windows list trims the earliest and deletes since
     assert.deepEqual(holdersOf({ manifest: readManifest(w.dir), procs: [p] }).filter((x) => x.harness === h).map((x) => x.why), ['history-unknown'])
   } finally { await d.close() }
 })
+
+// 1.6 §1.6 (R12): an off that came in after the caller took the lock and before turnOnModel wrote desired on (while the daemon was being started) is
+// not written over: on stops with stopped-by-off before its first write, exit 1, and the state file keeps the off
+test('1.6 §1.6: a harness on at lock time and off by the time on writes → stopped-by-off, nothing written, the off kept', async () => {
+  const { desiredOff, offWorld } = await import('../../src/off/orchestrate.mjs')
+  const w = await modelWorld({ commands: ['codex'] })
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  const d = await daemon(w)
+  try {
+    assert.equal((await on(w)).exit, 0)
+    await undoHarnesses({ dir: w.dir, home: w.home, manifest: readManifest(w.dir), ids: null, procs: async () => [] })
+    const env = path.join(w.home, '.codex', '.env'), was = fs.existsSync(env) ? fs.readFileSync(env) : null
+    desiredOff(offWorld({ home: w.home, env: w.env, deps: { platform: 'darwin' } }), null, ['codex'])
+    d.asked.length = 0
+    const r = await on(w, { wasOn: ['codex'] })
+    assert.deepEqual([r.exit, r.error && r.error.code, r.turnedOn], [1, 'stopped-by-off', []], JSON.stringify(r))
+    assert.deepEqual(d.asked, [], 'the daemon was not asked to open doors')
+    assert.equal(JSON.parse(fs.readFileSync(path.join(w.dir, 'state.json'), 'utf8')).harnesses.codex.desired, 'off')
+    assert.deepEqual(fs.existsSync(env) ? fs.readFileSync(env) : null, was, 'no entry written')
+  } finally { await d.close() }
+})
