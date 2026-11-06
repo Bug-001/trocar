@@ -211,6 +211,10 @@ export function formatOnReceipt(r, { tense = 'past', home = null, platform = 'li
  *  'future' (`--dry-run`, or the plan printed when a yes is missing). */
 /** 1.6 §3.6: the uninstall receipt's first line, true on each platform — the root is in the user's trust store on macOS and Windows only; on Linux it
  *  reached the agents through the certificate settings install gave them (4.6), so that is what is said gone. The one place this line is decided. */
+/** A refusal that names files and the one line that gets past it (1.6 §1.1⑥): the sentence, each file on a line of its own (each problem
+ *  starts with its path), then `error.command` whole on a line of its own. → lines */
+export const formatRefusal = (r, { home = null } = {}) => fit([`trocar ${r.command}: ${r.error.message}`, ...(r.problems || []).map((p) => `  ${tilde(p, home)}`), ...(r.error.command ? [commandLine(r.error.command)] : [])], { home })
+
 export function uninstallHeadline({ platform = process.platform, past = true } = {}) {
   const linux = platform === 'linux'
   if (!past) return `trocar uninstall will take out everything install put on this machine, ${linux ? 'the certificate settings it gave your agents included' : 'and remove the root certificate from your trust settings'}.`

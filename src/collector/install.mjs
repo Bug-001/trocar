@@ -19,7 +19,7 @@ import { planTrust } from './core/trust/plan.mjs'
 import { livenessOf } from './core/registry.mjs'
 import { readAgentList } from '../off/identity.mjs'
 import { patternsOf } from '../off/signature.mjs'
-import { readManifest, saveManifest, newManifest, missingDirs, applyJsonKey, previewJsonKey, applyTextEntry, previewTextEntry, writeOwnedFile, notTrocars, manifestPath, describeEntry, judgeEntry, judgeOwned, sha256 } from './core/trust/journal.mjs'
+import { readManifest, saveManifest, newManifest, missingDirs, applyJsonKey, previewJsonKey, applyTextEntry, previewTextEntry, writeOwnedFile, notTrocars, manifestPath, describeEntry, judgeEntry, judgeOwned, sha256, MARKED_WITHOUT_RECORD } from './core/trust/journal.mjs'
 import { EVENT, CODE } from './core/codes.mjs'
 import { RESTART_REASONS } from '../health/codes.mjs'
 import { controlRequest, controlEndpointFor } from './core/control.mjs'
@@ -203,7 +203,17 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
     return j
   })
   // every per-file refusal too, for what is to be written (a dangling link, a file that is not JSON, a patch file that is not a list) — before onPlan, before any write
-  const preview = draft.entries.map((e, i) => (entryJ[i].action !== 'write' ? null : e.kind === 'text' ? previewTextEntry({ file: e.path, edit: e, fs }) : previewJsonKey({ file: e.path, keys: e.keys, value: e.value, fs })))
+  // marked text no record lists (1.6 §3.2) is collected over every file, so the refusal names them all, not the first
+  const marked = []
+  const preview = draft.entries.map((e, i) => {
+    if (entryJ[i].action !== 'write') return null
+    try { return e.kind === 'text' ? previewTextEntry({ file: e.path, edit: e, fs }) : previewJsonKey({ file: e.path, keys: e.keys, value: e.value, fs }) } catch (err) {
+      if (!err || err.code !== MARKED_WITHOUT_RECORD) throw err
+      if (!marked.includes(err.path)) marked.push(err.path)
+      return null
+    }
+  })
+  if (marked.length) throw Object.assign(new Error(`${marked.length === 1 ? 'this file holds' : 'these files hold'} trocar's text from an earlier install whose record is gone, so nothing was changed. Take it out by trocar's own marks with the line below, then run trocar install again.`), { code: MARKED_WITHOUT_RECORD, paths: marked })
   const fileJ = draft.files.map((f) => {
     const j = judgeOwned({ manifest: prior, file: f.path, fs })
     steps.push({ harness: f.harness, path: f.path, kind: f.role, action: j.action, ...(j.why ? { why: j.why } : {}) })
@@ -715,3 +725,5 @@ function readLockPid(dir, fs) { try { return JSON.parse(fs.readFileSync(path.joi
 
 // `trocar install` on macOS and Windows (4.11 §1, plan T20): the model's install lives beside this one; Linux keeps installCollector.
 export { runInstall } from './model-install.mjs'
+
+export { MARKED_WITHOUT_RECORD } // the plan's refusal code, for the command that prints it (src/cli/install.mjs)
