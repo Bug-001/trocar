@@ -48,6 +48,26 @@ test('§3.5 the summary: conclusion first, one row per harness, the three facts 
   assert.ok(fresh.includes('Next: trocar install'))
 })
 
+test('§3.5 a harness that needs setting up has its own row, says so before `on` refuses it, and stays out of `not installed`', () => {
+  const setup = (state) => ({ setup: { state, missing: [] } })
+  const lines = statusSummary(doc({
+    harnesses: {
+      'claude-code': harness(setup('ready')),
+      hermes: harness({ desired: 'off', captured: false, reason: 'desired-off', ...setup('needed') }), // trocar was installed before it
+      codex: harness({ captured: false, reason: 'config-after-start', ...setup('needed') }), // on the install record, its carrier overwritten by its own update
+      opencode: harness({ desired: 'off', captured: false, reason: 'desired-off', ...setup('ready') }), // new, its certificate is the root: nothing to set up
+      pi: harness({ desired: 'off', captured: false, reason: 'desired-off', ...setup('unknown') }),
+    },
+    install: { state: 'complete', harnesses: ['claude-code', 'codex'], pending: [] },
+  }), { now: NOW })
+  clean(lines, 'status')
+  const row = (h) => lines.find((l) => l.startsWith(`  ${h} `))
+  for (const h of ['hermes', 'codex']) assert.ok(row(h).includes('trocar install'), `${h}: ${row(h)}`)
+  assert.ok(row('claude-code') && !row('claude-code').includes('trocar install'))
+  const out = lines.find((l) => l.startsWith('  not installed:'))
+  assert.deepEqual(out.replace('  not installed: ', '').split(', '), ['opencode', 'pi'], 'a harness needing setup is not said to be not installed, nor is setup asked of the others')
+})
+
 test('§1.1 · §3.5 a long NOTE folds under its own column: every line of the summary inside 80 columns, for every reason and harness name', () => {
   const names = ['pi', 'opencode', 'a-harness-of-twenty'] // the HARNESS column's width moves where NOTE starts; each name is also in its own note
   for (const code of STATUS_REASONS) {

@@ -30,7 +30,8 @@ const CAPTURED = (h) => (h.captured === true ? 'yes' : h.desired === 'off' ? 'of
 export function statusSummary(doc, { now = Date.now(), colors: c = noColor() } = {}) {
   const names = Object.keys(doc.harnesses || {})
   const installed = (doc.install && doc.install.harnesses) || []
-  const shown = names.filter((h) => installed.length === 0 || installed.includes(h))
+  const needsSetup = (h) => doc.harnesses[h].setup?.state === 'needed' // on would refuse it (§3.2 前提): the row says so first
+  const shown = names.filter((h) => installed.length === 0 || installed.includes(h) || needsSetup(h))
   const on = shown.filter((h) => doc.harnesses[h].desired === 'on')
   const captured = shown.filter((h) => doc.harnesses[h].captured === true)
   if (!shown.length) return [c.bold('No harness is set up for capture yet.'), '', ...readErrorLines(doc), 'Next: trocar install']
@@ -42,7 +43,7 @@ export function statusSummary(doc, { now = Date.now(), colors: c = noColor() } =
     for (const h of shown) {
       const x = doc.harnesses[h]
       const pid = (x.processes || []).find((p) => p.captured === false) || null
-      rows.push([h, CAPTURED(x), x.captured === true ? notSeenYet(x) : x.captured === null ? ((x.why || []).length ? openText(x, h) : notSeenYet(x) || openText(x, h)) : noteText(x.reason, { harness: h, pid: pid && pid.pid, cause: pid && pid.cause })])
+      rows.push([h, CAPTURED(x), needsSetup(h) ? 'set up first: trocar install' : x.captured === true ? notSeenYet(x) : x.captured === null ? ((x.why || []).length ? openText(x, h) : notSeenYet(x) || openText(x, h)) : noteText(x.reason, { harness: h, pid: pid && pid.pid, cause: pid && pid.cause })])
     }
     lines.push(...columns(rows, { width: WIDTH - 2 }).map((l) => `  ${l}`))
   }
