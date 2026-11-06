@@ -21,9 +21,9 @@ export const DISK_GROUPS = Object.freeze(['records', 'sealed', 'index', 'logs', 
 // rebuildable segment index, and the journals and event logs. No rule names one file of one product.
 export function groupOf(rel) {
   if (rel.startsWith('logs/') || /(^|\/)flows\//.test(rel) || /(^|\/)journal\.jsonl$/.test(rel)) return 'logs'; // events, the raw journal, the change log
+  if (rel.startsWith('index/')) return 'index'; // first: the index keeps .ndjson files of its own (context projections, fold logs), never records (1.6 C.5)
   if (/\.sealed$/.test(rel)) return 'sealed';
   if (/\.ndjson$/.test(rel)) return 'records';
-  if (rel.startsWith('index/')) return 'index';
   return 'other';
 }
 
