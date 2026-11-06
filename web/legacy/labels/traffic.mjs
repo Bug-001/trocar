@@ -66,6 +66,9 @@ export const OLD_REDACTED = '<redacted>'
 export const CLIPPED = (shown, total) => `Display truncated · first ${shown} of ${total} characters`
 export const REST_IN_SOURCE = 'The rest is in the source record'
 export const VERBATIM_BYTES = (n) => `verbatim · ${n} bytes`
+// a body shown decompressed is derived text, never captioned verbatim (invariant 4); its wire bytes stay in the record
+export const DECOMPRESSED_CHARS = (enc, n) => `decompressed from ${enc} · ${n} characters`
+export const DECOMPRESSED_FROM = (enc) => `decompressed from ${enc}`
 export const PARSED_JSON = 'Parsed JSON (re-indented by object)'
 export const PARSED_JSON_CHARS = (n) => `parsed JSON · ${n} characters`
 export const BINARY_LABEL = (n) => `binary · ${n} bytes · stored verbatim as base64`

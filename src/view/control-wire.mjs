@@ -22,7 +22,7 @@
 // in the detail form too; ctl.omitted names them whenever the record has them.
 // Envelope fields only — no provider knowledge, no host or endpoint literal (invariant 3). Pure over the record.
 import { captureLabelsOf, bodyRetentionOf, reqIncompleteOf, isLogOnly } from '../dissect/capture-labels.mjs';
-import { requestEncodingOf } from '../dissect/request-body.mjs';
+import { nonIdentityEncoding, requestEncodingOf } from '../dissect/request-body.mjs';
 import { headerOf } from '../dissect/harnesses.mjs';
 import { isSecretHeader } from '../capture/redact.mjs';
 
@@ -93,7 +93,10 @@ function respView(rec) {
   if (r.verbatim === false) return { kind: 'length-only', bytes: finite(r.raw_chars) ?? wire };
   // a body cut at the capture cap (resp.truncated + body_bytes): `bytes` is the whole reply on the wire, the text only its stored prefix
   const cut = (part, v) => (part.truncated === true ? { ...v, truncated: true, stored_bytes: finite(part.body_bytes) } : v);
-  const bodyOf = (part) => {
+  // a body shown decompressed says from what (2.6 text / sse): the same rule the writer keeps wire_b64 by; one that did not decode is `undecoded`
+  const enc = (part) => !part.encoding_error && nonIdentityEncoding((part.headers || r.headers || {})['content-encoding']);
+  const bodyOf = (part) => { const v = shown(part), e = enc(part); return e && v.kind !== 'empty' && v.kind !== 'none' && v.kind !== 'ws' ? { ...v, decoded_from: e } : v; };
+  const shown = (part) => {
     if (part.kind === 'ws' && Array.isArray(part.messages)) return textBody('ws', part.messages.map(messageText).join('\n'), wire ?? undefined);
     if (typeof part.raw === 'string') return cut(part, textBody(part.kind === 'sse' ? 'sse' : 'text', part.raw, wire ?? undefined));
     if (typeof part.raw_b64 === 'string') return part.encoding_error ? { kind: 'undecoded', encoding: part.encoding_error, bytes: wire ?? b64Bytes(part.raw_b64), ...base } : cut(part, { kind: 'binary', bytes: wire ?? b64Bytes(part.raw_b64), hex: hexOfB64(part.raw_b64) });
