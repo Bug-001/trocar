@@ -16,6 +16,7 @@ import { parseTextRef } from '../raw/refs.mjs';
 import { reduce, NO_FILE } from '../view/reduce.mjs';
 import { openProjection } from './projection.mjs';
 import { mapUsage } from '../model/schema.mjs';
+import { boardDissectorOf } from '../dissect/registry.mjs';
 import { recordsAt } from './records.mjs';
 import { isModelCall, sessionGroups, indexRows } from './rows.mjs';
 import { indexDir, readIndex, tailMark, usability, storeIndex, segmentSource, plainMark, sealedMark, segStamp } from './index-build.mjs';
@@ -27,10 +28,11 @@ export const USAGE_CHUNK_BYTES = 4 << 20; // stored bytes of model calls read ba
 
 export const usageFile = (home, segment) => path.join(indexDir(home), `${segment}.usage.json`);
 
-// The provider usage a call row carries (x.facts.usage on the anthropic wire, x.nu on a flat one), in 3.2's canonical form by the
-// wire it arrived in and the vendor that answered; null when the reply reported none, or in a wire format no mapping exists for.
+// The provider usage a call row carries (its wire dissector's usageOf, else x.nu as a flat wire has it), in 3.2's canonical form by
+// the wire it arrived in and the vendor that answered; null when the reply reported none, or in a wire format no mapping exists for.
 function usageOf(x) {
-  const raw = x.format === 'anthropic' ? x.facts && x.facts.usage : x.nu;
+  const d = boardDissectorOf(x.format);
+  const raw = d && d.usageOf ? d.usageOf(x) : x.nu;
   if (!raw || typeof raw !== 'object' || !Object.keys(raw).length || !x.wire) return null;
   try { return mapUsage(x.format, raw, { vendor: x.wire.vendor }); } catch { return null; }
 }
