@@ -185,7 +185,8 @@ import { runStatusCli } from '../../src/cli/status.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { absentSpawn } from '../helpers/no-real-os.mjs'
 
-const run = runStatus
+// these cases are about the harnesses trocar's records know: no other harness is on this machine (the rows of the ones present: status-setup-linux.test.mjs)
+const run = (s, argv, o = {}) => runStatus(s, argv, { ...o, deps: { presentForms: async () => ({}), ...o.deps } })
 
 test('the daemon answers: each agent is captured or says why, and the exit code is 1 while one is not; every agent captured is exit 0', async () => {
   const s = await installedHome()

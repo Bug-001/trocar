@@ -17,6 +17,9 @@ export async function netFactsDeps({ arch = null, harnesses = null, platform = p
   return { harnesses: harnesses || (await loadHarnesses()), archFacts: A && A.netFacts ? A.netFacts : null }
 }
 
-/** The forms of this OS present on this machine, per harness (proxy mode; 1.6 §3.5, 4.11 P5): the arch's reader, loaded only when asked. */
-export async function presentForms(o) { return (await import('./arch/model-backends.mjs')).presentForms(o) }
+/** The forms of this OS present on this machine, per harness (1.6 §3.5, 4.11 P5): proxy mode's arch reader, else driver mode's (4.6), loaded only when asked. */
+export async function presentForms(o) {
+  if ((await import('./model-install.mjs')).isModelOs(o.os)) return (await import('./arch/model-backends.mjs')).presentForms(o)
+  return (await import('./driver-setup.mjs')).driverPresent(o)
+}
 export async function formPrograms(o) { return (await import('./arch/model-backends.mjs')).formPrograms(o) }

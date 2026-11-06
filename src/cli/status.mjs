@@ -172,19 +172,19 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
     negatives.get(n.pid).push({ host: n.host ?? null, cause: n.cause ?? null, retry_at: Number.isFinite(n.retry_at) ? new Date(n.retry_at).toISOString() : null })
   }
   const tableOf = new Map((table || []).map((p) => [p.pid, p]))
-  // proxy mode: which forms of each harness are on this machine (4.11 `present`); null = it could not be read. A harness with none is not captured (4.11 P5)
+  // which forms of each harness are on this machine (4.11 `present`, 4.6); null = it could not be read. A harness with none is not captured (4.11 P5)
   let here = null, hereError = null, programs = null
-  if (isProxyMode(platform) && desc.value) {
+  if (desc.value) {
     try { here = await (deps.presentForms || (await import('../collector/net-deps.mjs')).presentForms)({ os: platform, home, env, harnesses: desc.value, fs }) } catch (e) { rethrowSandbox(e); hereError = `which harnesses are on this machine could not be read (${errMessage(e)})` }
-    try { programs = await (deps.formPrograms || (await import('../collector/net-deps.mjs')).formPrograms)({ os: platform, home, env, harnesses: desc.value }) } catch (e) { rethrowSandbox(e); programs = null }
+    if (isProxyMode(platform)) try { programs = await (deps.formPrograms || (await import('../collector/net-deps.mjs')).formPrograms)({ os: platform, home, env, harnesses: desc.value }) } catch (e) { rethrowSandbox(e); programs = null }
   }
   // a form a process can be on: of a host-program form only the host's own processes (its `hosts.processes`, D51 names); of a form carried by the
   // install-folder wrapper only its program, at its place or moved aside (4.11 P8). An exe not known, or programs not known, rules nothing out
   const fileKey = (x) => (platform === 'win32' ? String(x).replace(/\\/g, '/').toLowerCase() : String(x))
   const holds = (x, p) => (x.hosts && x.hosts.processes ? hostsProcess(x, p) : !programs || !programs[x.id] || !p.exe || programs[x.id].some((file) => fileKey(file) === fileKey(p.exe)))
   // with no names, every harness with a form present on this machine gets a row too, besides the ones trocar's records know (1.6 §3.5, D65④):
-  // the row is where Set up and the board's on / off appear for a harness installed after trocar. Proxy mode only; `on` / `off` do not read this list.
-  if (!names && isProxyMode(platform) && desc.value && daemonMayStart(m)) { // with trocar not installed there is nothing to set up or turn on: the summary says so
+  // the row is where Set up and the board's on / off appear for a harness installed after trocar. Every mode; `on` / `off` do not read this list.
+  if (!names && desc.value && daemonMayStart(m)) { // with trocar not installed there is nothing to set up or turn on: the summary says so
     if (here) wanted = [...new Set([...wanted, ...Object.keys(here).filter((h) => here[h].length)])].sort((a, b) => order(a) - order(b) || a.localeCompare(b))
     else f.identity_error = f.identity_error || hereError
   }
@@ -475,14 +475,11 @@ function boardOf(f) {
   return say(b.state === 'port-taken' ? 'port-taken' : 'not-running', b.reason || `the daemon says the board is ${b.state}`)
 }
 
-/** C.3 `harnesses[h].setup` (4.11 P4b, D65④): the model's one judgement, read with the forms; driver mode (Linux) does not judge it, and what was not read is
- *  `unknown` with its reason, never `ready` (D38). */
+/** C.3 `harnesses[h].setup` (4.11 P4b, 4.6, D65④): the one judgement, read with the network facts; what was not read is `unknown` with its reason, never `ready` (D38). */
 function setupDocOf(f, id) {
   const hf = f.facts && f.facts.harnesses && f.facts.harnesses[id]
   if (hf && hf.setup) return hf.setup
-  const why = f.platform === 'linux' || (f.facts && f.facts.routing === 'driver') ? 'driver mode (Linux) does not judge setup per form; trocar on works as before'
-    : `the setup of ${id} could not be read${f.topology_error ? ` (${f.topology_error})` : ''}`
-  return { state: 'unknown', missing: [], reason: why }
+  return { state: 'unknown', missing: [], reason: `the setup of ${id} could not be read${f.topology_error ? ` (${f.topology_error})` : ''}` }
 }
 
 /** C.3 `health`: captureHealth's verdict over the collector and the raw layer, with only the keys C.3 names that have a value; absent when the health could not be read (1.5 K-28). */

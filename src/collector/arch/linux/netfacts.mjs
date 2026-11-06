@@ -6,6 +6,7 @@
 // Routing is `driver` (the eBPF redirector). The system proxy (gsettings / kioslaverc) is not read: no harness is known to follow it on Linux (`proxy.measured.linux` is `inferred`). Imports no harness: the
 // descriptors arrive in `ctx.harnesses` (their `proxy.env` names the keys of a process's environment that count) and their data in `settings` and in `status`.
 import { execTool } from '../../../off/exec.mjs'
+import { driverSetup } from '../../driver-setup.mjs'
 import { readExe } from '../../../off/proc.mjs'
 import { settingSha, redactProxyUrl, parseProxyUrl } from '../../../netenv/redact.mjs'
 import { noProxyNames } from '../../../netenv/noproxy.mjs'
@@ -61,7 +62,8 @@ function startSettingOf({ proc, current, adopted, startedAt, keys }) {
 
 /**
  * Linux's NetFacts part. `ctx` = what gatherNetFacts hands every platform ({ status, settings, adopted, env, … }); `deps`: `exec` (the runner of `ss` and `ip`: spawnSync-shaped; execTool refuses a real
- * one under npm test), `procRoot`. → { routing: 'driver', listeners, procs: { <h>: [proc] }, unknowns }.
+ * one under npm test), `procRoot`. → { routing: 'driver', listeners, procs: { <h>: [proc] }, setup: { <h>: setup }, unknowns }; `setup` = each listed harness's
+ * setup judged as installs see it (4.6 「这个 harness 装好了没有」, 4.11 P4b), over the install manifest status read.
  */
 export async function linuxNetFacts(ctx, deps = {}) {
   const { status, settings = {}, adopted = null, env = process.env, harnesses = [] } = ctx
@@ -92,5 +94,8 @@ export async function linuxNetFacts(ctx, deps = {}) {
   const ss = run('ss', ['-ltnpH'])
   if (ss.code === 0) listeners = parseSs(ss.out).map((l) => (l.pid ? { addr: l.addr, port: l.port, pid: l.pid, exe: readExe(l.pid, { root }) || l.comm } : { addr: l.addr, port: l.port, unknown: { reason: 'owner-unreadable', detail: 'ss lists no process for it: it is another user\'s, or ss was not allowed to see it' } }))
   else unknowns.push({ fact: 'listeners', reason: REASON(ss), detail: `ss -ltnpH: ${ss.err || `exit ${ss.code}`}` })
-  return { routing: 'driver', listeners, procs, unknowns }
+  const mf = status.manifest || {}, manifest = mf.error ? { error: mf.error } : mf.value || null
+  const setup = {}
+  for (const h of ctx.home ? status.harnesses : []) { const d = harnesses.find((x) => x.name === h.id); if (d) setup[h.id] = driverSetup(d, { os: 'linux', home: ctx.home, env, manifest, ...(ctx.fs ? { fs: ctx.fs } : {}) }) }
+  return { routing: 'driver', listeners, procs, setup, unknowns }
 }
