@@ -113,7 +113,8 @@ export function resourceUnits(s) {
       ? W.compactRow(at(atStep), n.from != null ? String(n.from) : '—', n.to != null ? String(n.to) : '—') + (e.inferred ? ` · ${W.GUESS}` : '')
       : W.summarizeRow(at(atStep), e.out != null ? kf(e.out) : '—')
     return `<div class="navsub" data-navstep="${atStep}"><span class="nsl" title="${esc(word)}">${esc(word)}</span></div>` }
-  const comps = events.filter((e) => e && (e.type === 'compaction' || e.type === 'summarize'))
+  // the new desk (no raw panel) has none: its Overview's chapter heads carry each compaction and its numbers (2.4, 2.5)
+  const comps = s.rawPanelGone ? [] : events.filter((e) => e && (e.type === 'compaction' || e.type === 'summarize'))
   const others = res.filter((r) => !['file', 'scaffold', 'skill', 'capability', 'dir', 'link'].includes(r.kind))
   // others keeps EVERY unknown kind (even one without segments — 2.4 Edge cases: 不丢); an undated row shows no step
   // number and carries no data-navstep (there is no enter to locate)
