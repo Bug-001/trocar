@@ -18,7 +18,6 @@ const LOOPBACK = new Set(['127.0.0.1', '::1', 'localhost'])
 const VIA = { http: 'proxy-http', https: 'proxy-https', socks4: 'proxy-socks', socks5: 'proxy-socks', socks5h: 'proxy-socks' }
 const ID_PREFIX = { agent: 'a', 'trocar-engine': 'e', 'trocar-forwarder': 'f', 'legacy-mitm': 'm', proxy: 'p', upstream: 'u', egress: 'x', unknown: 'q' }
 const drop = (o) => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined && v !== null))
-const base = (p) => String(p).split(/[\\/]/).pop()
 const errorOf = (e) => (e && e.code) || String((e && e.message) || e)
 
 /** The nodes and edges of one harness. A node is the same node when its kind and what names it are the same (`intern`), so the path with trocar and the path without share their common hops. */
@@ -39,13 +38,13 @@ function graph() {
   return { nodes, edges, node, edge }
 }
 
-/** The proxy a setting names, as a node (D49: trocar does not know products): who listens on that port here (named by its executable), or a proxy on another machine. */
+/** The proxy a setting names, as a node: the address, with the pid of who listens on that port here, or a proxy on another machine. Never the listener's program name: a proxy's program is its product (D49 ③④). */
 function proxyNode(g, F, host, port) {
   if (!LOOPBACK.has(host)) return g.node({ kind: 'proxy', name: `${host}:${port}`, addr: host, port, remote: true })
   const l = F.listeners.find((x) => x.port === port)
   const name = `${host}:${port}`
   if (l && l.unknown) return g.node({ kind: 'proxy', name, addr: host, port, unknown: l.unknown })
-  if (l) return g.node({ kind: 'proxy', name: l.exe ? base(l.exe) : name, addr: host, port, pid: l.pid })
+  if (l) return g.node({ kind: 'proxy', name, addr: host, port, pid: l.pid })
   const gone = F.unknowns.find((u) => u.fact === 'listeners' || u.fact === 'arch') // the listeners could not be read (alone, or with the whole platform part): that is why nobody is named, not that nobody listens
   return g.node({ kind: 'proxy', name, addr: host, port, ...(gone ? { unknown: { reason: gone.reason, detail: gone.detail } } : { down: true }) })
 }
