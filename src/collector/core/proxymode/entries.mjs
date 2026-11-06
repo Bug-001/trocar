@@ -47,7 +47,7 @@ const readText = (ctx, f) => { try { const d = decodeText(ctx.fs.readFileSync(f)
 const parse = (t) => { if (t === undefined) return undefined; try { return t === null ? {} : parseJsonText(t) ?? {} } catch { return undefined } } // undefined: undecodable or unparsable
 const isSet = (v) => v !== undefined && v !== null && v !== ''
 const where = (file, keys) => `${file}#${keys.join('.')}`
-const base = (ctx) => ({ dir: ctx.dir, manifest: ctx.manifest, harness: ctx.harness, phase: 'on', home: ctx.home, door: ctx.door ?? null, route: ctx.routeId ?? null, defer: ctx.deferResult === true, now: ctx.now ? ctx.now() : new Date(), fs: ctx.fs }) // the door and the route ride in the record from its intent on: saveManifest seals the door, and a crashed intent names its route for off
+const base = (ctx) => ({ dir: ctx.dir, manifest: ctx.manifest, harness: ctx.harness, phase: 'on', home: ctx.home, door: ctx.door ?? null, route: ctx.routeId ?? null, defer: ctx.deferResult === true, now: ctx.now ? ctx.now() : new Date(), fs: ctx.fs }) // the door and the route ride in the record from its intent on: saveManifest seals the door, and a crashed intent names its route for the next on (recordsOf: a moved door rewrites that route only)
 const noProxy = (ctx, values) => mergeNoProxy({ userValues: values, persistent: ctx.persistentEnv ? ctx.persistentEnv(['NO_PROXY']) : {} })
 
 // P5: a value in the file that is one of trocar's doors (src/off/door-value.mjs, the judge off uses: loopback on a port ingress.json records) is no prior
@@ -207,8 +207,9 @@ export function routeEntry(kind) {
       let res
       try { res = w({ ...ctx, door }, door) } catch (e) { takeBack(); throw e }
       if (!res.ok) { takeBack(); return res }
-      // every record the journal wrote carries the route from its intent on, and the journal saved after its last change: what is left to save is a
-      // record of an older run — one without the tag, or one holding its door in clear, which the save seals (a save is two fsyncs, D62①)
+      // every record the journal wrote carries the route from its intent on; its last change is saved by the journal, or under defer by the next save
+      // (flushResults at the end of on). What is left to save here is a record of an older run — one without the tag, or one holding its door in
+      // clear, which the save seals (a save is two fsyncs, D62①)
       const saved = JSON.stringify(ctx.manifest)
       for (const x of res.records) if (x) x.route = ctx.routeId
       if (JSON.stringify(ctx.manifest) !== saved || recordsOf(ctx.manifest, ctx.harness, ctx.routeId).some((x) => typeof x.door === 'string')) saveManifest(ctx.dir, ctx.manifest, ctx.fs)
