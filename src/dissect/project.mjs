@@ -16,6 +16,11 @@ export function projectOf(rec) {
   const body = bodyOf(rec);
   if (!body) return null;
   for (const rule of row.cwd) {
+    if (rule.key) {
+      const v = rule.key.reduce((o, k) => (o == null ? o : o[k]), body);
+      if (typeof v === 'string' && valid(v.trim())) return v.trim();
+      continue;
+    }
     for (const text of rule.in === 'system' ? [...systemPartsOf(body), ...systemItemsOf(body)] : userTextsOf(body)) {
       const m = rule.re.exec(text);
       if (m && valid(m[1].trim())) return m[1].trim();

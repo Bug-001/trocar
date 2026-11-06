@@ -18,6 +18,8 @@ const BUILD = {
     messages: [{ role: 'user', content: 'q0' }, { role: 'system', content: [{ type: 'text', text: `# Environment\nYou have been invoked in the following environment: \n - Primary working directory: ${p}\n - Is a git repository: true\nEnd.` }] }] }),
   codex: (p) => ({ instructions: 'You are Codex.', input: [envUser(p), { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'q0' }] }] }),
   opencode: (p) => ({ messages: [{ role: 'system', content: `You are opencode.\n<env>\n  Working directory: ${p}\n  Is directory a git repo: yes\n</env>` }, { role: 'user', content: 'q0' }] }),
+  kimi: (p) => ({ messages: [{ role: 'system', content: `You are Kimi.\nThe current working directory is \`${p}\`.\nEnd.` }, { role: 'user', content: 'q0' }] }),
+  dsh: (p) => ({ dsh_session_log: { session: { cwd: p } }, system: 'You are dsh.', messages: [{ role: 'user', content: 'q0' }] }),
   hermes: (p) => ({ messages: [{ role: 'system', content: `You are Hermes.\nCurrent working directory: ${p}\nEnd.` }, { role: 'user', content: 'q0' }] }),
   zcode: (p) => ({ system: [{ type: 'text', text: `# Environment\n - Primary working directory: ${p}\n` }], messages: [{ role: 'user', content: 'q0' }] }),
   pi: (p) => ({ system: [{ type: 'text', text: `You are pi.\nWhen asked, answer with a line like:\nWorking directory: /w/decoy\nA note quoting <cwd>/w/decoy</cwd> in a line.\n<cwd>\n${p}\n</cwd>\n` }],
@@ -39,6 +41,11 @@ test('3.4 #8 every harness with cwd rules reads the absolute path its request st
     assert.equal(projectOf(rec('cc', sub)), '/w/project', line);
   }
 });
+
+test('3.4 #8 dsh without its field reads its system text; a field that is no path states none', () => {
+  for (const p of ['/w/project', '/w/my project/é']) for (const end of ['', '.']) assert.equal(projectOf(rec('dsh', { system: `You are dsh.\nYour working directory is ${p}${end}\nEnd.`, messages: [] })), p)
+  assert.equal(projectOf(rec('dsh', { dsh_session_log: { session: { cwd: 7 } }, system: 'x', messages: [] })), null)
+})
 
 test('3.4 #8 a person quoting a cwd line in a prompt names no project; the system text still does', () => {
   for (const quote of ['Working directory: /w/decoy', ' - Primary working directory: /w/decoy', 'why does it say\n - Primary working directory: /w/decoy\nhere?']) {
@@ -68,9 +75,3 @@ test('3.4 #8 decoys lose: a tool result, a later environment context, a quoted i
   assert.equal(projectOf(rec('pi', { system: [{ type: 'text', text: 'You are pi.\nWorking directory: /w/p\n' }], messages: [] })), null);
 });
 
-test('3.4 #8 a harness with no cwd rules states none, whatever its text says', () => {
-  const none = HARNESSES.filter((h) => !h.cwd.length && h.agents.length);
-  assert.ok(none.length > 0);
-  const body = { system: 'Working directory: /w/p', messages: [{ role: 'system', content: 'Working directory: /w/p' }, { role: 'user', content: 'Working directory: /w/p' }] };
-  for (const h of none) assert.equal(projectOf(rec(h.id, body)), null, h.id);
-});
