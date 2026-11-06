@@ -204,14 +204,14 @@ const pair = (a, b, cause = 'content-changed', idx = 1, row1 = {}) => desk1([a, 
 // the item after the change line (its removed list between) is the request row at `idx`
 const afterLine = (items) => { const i = items.findIndex((it) => it.type === 'chline'); return i < 0 ? null : items.slice(i + 1).find((it) => it.type !== 'removed') }
 
-test('1.4 #11: no request → ⑦ alone; unparsed → ⑥ with errMsg as a technical detail (its own item, Call details\' tech rows) and on no other item', () => {
+test('1.4 #11: no request → ⑦ alone; unparsed → ⑥, its errMsg only in Call details\' tech rows and on no other item', () => {
   const desk = desk1([[blk()], [blk()]], [{ rec: null }, { unparsed: true, errMsg: 'ERR-unparse-zz' }])
   const none = windowItems(stateOf(desk, 0))
   assert.equal(none.state, 'noreq'); assert.deepEqual(none.items.filter((it) => it.type !== 'fid').map((it) => it.type), ['noreq'])
   const bad = windowItems(stateOf(desk, 1))
-  assert.equal(bad.state, 'unparsed'); assert.equal(ofType(bad.items, 'unparsed')[0].errMsg, 'ERR-unparse-zz')
+  assert.equal(bad.state, 'unparsed'); assert.equal(ofType(bad.items, 'unparsed').length, 1)
   assert.ok(ofType(bad.items, 'details')[0].tech.some(([k, v]) => k === 'errMsg' && v === 'ERR-unparse-zz'), 'Call details\' tech rows carry errMsg (2.6 §A)')
-  for (const it of bad.items.filter((x) => x.type !== 'unparsed')) assert.ok(!JSON.stringify(it.type === 'details' ? { ...it, tech: [] } : it).includes('ERR-unparse-zz'), `${it.type} carries the reason`)
+  for (const it of bad.items) assert.ok(!JSON.stringify(it.type === 'details' ? { ...it, tech: [] } : it).includes('ERR-unparse-zz'), `${it.type} carries the reason`)
 })
 
 test('2.3 #7 · 1.4 #3 #11: the change line iff the cause is not quiet, right before row cacheBreak.idx, naming the reference step, no byte offset; the structural hint iff no block declares cc', () => {

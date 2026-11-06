@@ -178,8 +178,7 @@ const Win = ({ it }: { it: Item }) => <div className="cwwin"><Half />{' ' + W.WI
 const FoldAll = ({ acts }: { acts: Acts }) => <div className="cwfoldall">
   <button type="button" className="foldallbtn" data-foldall="open" title={W.FOLD_ALL_OPEN_TIP} onClick={() => acts.foldAll(true)}>{W.FOLD_ALL_OPEN}</button>
   <button type="button" className="foldallbtn" data-foldall="close" title={W.FOLD_ALL_CLOSE_TIP} onClick={() => acts.foldAll(false)}>{W.FOLD_ALL_CLOSE}</button></div>
-const Unparsed = ({ it }: { it: Item }) => <div className="cwunparsed"><div className="cwuhd">{W.UNPARSED_TITLE}</div><div className="cwub">{W.UNPARSED_KEEP}</div>
-  {it.errMsg ? <Tech rows={[['errMsg', it.errMsg]]} /> : null}</div>
+const Unparsed = () => <div className="cwunparsed"><div className="cwuhd">{W.UNPARSED_TITLE}</div><div className="cwub">{W.UNPARSED_KEEP}</div></div>
 // ⑧ no text, no control: the frames of a step whose lane is not held (2.3 §车道未到手)
 const Frames = ({ it }: { it: Item }) => <div className="cwbusy" aria-busy="true">{it.frames.map((f: any) => <div key={f.sec} className="cwframe" data-sec={f.sec} style={{ '--fr': f.fr } as React.CSSProperties} />)}</div>
 const Busy = ({ n = 0 }: { n?: number }) => <div className="cwbusy" aria-busy="true" style={n > 0 ? { '--n': n } as React.CSSProperties : undefined} />
@@ -198,7 +197,7 @@ function ItemView({ it, acts, hl, bv }: { it: Item, acts: Acts, hl: boolean, bv:
     case 'win': return <Win it={it} />
     case 'foldall': return <FoldAll acts={acts} />
     case 'noreq': return <div className="cwnoreq">{W.NO_REQUEST}</div>
-    case 'unparsed': return <Unparsed it={it} />
+    case 'unparsed': return <Unparsed />
     case 'frames': return <Frames it={it} />
     default: return null
   }

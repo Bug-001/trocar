@@ -147,7 +147,7 @@ export function windowItems(s) {
   const fid = facts.length ? [{ key: 'fid', type: 'fid', facts, tech }] : []
   if (!call.rec) return { state: 'noreq', items: [...fid, { key: 'noreq', type: 'noreq' }] }
   const st = s.desk ? stepOf(s.desk, call.rid) : null
-  if (call.unparsed) return { state: 'unparsed', items: [...fid, { key: 'unparsed', type: 'unparsed', errMsg: call.errMsg }, ...detailsOf(s, call, st)] }
+  if (call.unparsed) return { state: 'unparsed', items: [...fid, { key: 'unparsed', type: 'unparsed' }, ...detailsOf(s, call, st)] }
   if (!st || !st.held) return { state: 'frames', items: [...fid, { key: 'frames', type: 'frames', frames: framesOf(call) }] }
   const flat = st.flat
   const refFlat = s.desk ? refList(s).flat : null // its lane not held: no 「新」, no removed list
