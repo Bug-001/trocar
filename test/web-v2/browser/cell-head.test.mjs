@@ -54,7 +54,12 @@ async function headCase(chromium) {
     }, row)
     assert.ok(first.text >= first.head, `the body starts below the head: ${first.text} / ${first.head}`)
 
-    // the middle of the block
+    // the middle of the block, once the list has measured the opened row: a box moved into the row before that is, to the list, past the
+    // row's end, and the row's growth then carries the box on down by the same amount
+    await page.waitForFunction((row) => {
+      const it = document.querySelector(row).closest('.cwit'), next = it.nextElementSibling
+      return !next || next.getBoundingClientRect().top >= it.getBoundingClientRect().bottom
+    }, row)
     await page.evaluate((row) => {
       const W = document.querySelector('#ctxwin'), r = document.querySelector(row).getBoundingClientRect()
       W.scrollTop += r.top - W.getBoundingClientRect().top + r.height / 2
