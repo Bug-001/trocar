@@ -65,7 +65,7 @@ export const daemonMayStart = (m) => installUsable(m)
 export const itemsOfPhase = (m, phase) => [...(Array.isArray(m && m.entries) ? m.entries : []), ...(Array.isArray(m && m.files) ? m.files : [])].filter((x) => isPlainObject(x) && x.phase === phase)
 
 // a path as a shell would want it in a command a person types: bare when it is plain, single-quoted otherwise
-const shellWord = (p) => (/^[\w@%+=:,./-]+$/.test(p) ? p : `'${String(p).replace(/'/g, "'\\''")}'`)
+export const shellWord = (p) => (/^[\w@%+=:,./-]+$/.test(p) ? p : `'${String(p).replace(/'/g, "'\\''")}'`)
 
 /** One sentence: what to do by hand, with no node, to take this item out (R3). What the item's writer recorded in `undo_by_hand` is used for
  *  a kind this build does not know; for a `legacy-*` kind the writer is expected to record its own, and the fallback only says where. */

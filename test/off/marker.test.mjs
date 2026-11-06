@@ -66,7 +66,7 @@ test('undoByMarker takes trocar out of each file and nothing else: blocks and li
   assert.equal(read(s.sh.files['kimi-code'][0]), s.original[s.sh.files['kimi-code'][0]], 'a line')
   assert.deepEqual(JSON.parse(read(cc)), { model: 'x', env: { NODE_EXTRA_CA_CERTS: s.sh.corp }, theme: 'dark' }, 'the user\'s value is back from the backup and the edit made since stays: one key, never the whole file')
   assert.equal(by('claude-code', 'json-value').restored_from, backupsOf({ home: s.home, file: cc }).at(-1))
-  assert.deepEqual(JSON.parse(read(s.sh.files['z-code'][0])), { model: 'lab/m', network: {} }, 'a key trocar added, with no backup of a value, just goes')
+  assert.deepEqual(JSON.parse(read(s.sh.files['z-code'][0])), JSON.parse(s.original[s.sh.files['z-code'][0]]), 'a key trocar added, with no backup of a value, just goes, and the object the backup shows trocar made to hold it')
   assert.ok(!fs.existsSync(s.sh.files['deepseek-dsh'][0]), 'the dsh patch file held only trocar\'s row (it was `[]`): dsh does not start on an empty file, so it is removed')
   for (const gone of ['.config/opencode/plugins', '.trocar/collector/bin', '.trocar/collector/plugins']) assert.ok(!fs.existsSync(path.join(s.home, gone)), `${gone} is gone, the directory too`)
   assert.ok(fs.existsSync(path.join(s.home, '.trocar', 'collector', 'ca', 'trocar-ca.pem')), 'the CA is trocar\'s, not an entry: marker undo leaves it for uninstall')
