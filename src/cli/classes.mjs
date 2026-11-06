@@ -4,7 +4,7 @@
 // A bad class name, regex or rule number is exit 2 with one line and nothing written (edit throws before it touches a file).
 import { EXIT, newReceipt } from './schema.mjs'
 import { printJson, errorDoc } from './json.mjs'
-import { columns, colors, size, tilde, ago, wrap } from './text.mjs'
+import { columns, colors, size, tilde, tildeText, ago, wrap } from './text.mjs'
 import { usageLine, commandNamed } from './commands.mjs'
 import { resolveHarnesses } from '../off/harness-names.mjs'
 import { trocarHome } from '../off/paths.mjs'
@@ -130,7 +130,7 @@ export function classesChange(op, { home, source = 'cli', dryRun = false }) {
 export async function run(argv, { io, json, args, home, deps = {} }) {
   const refuse = (code, message, { exit = EXIT.usage, usage = false } = {}) => {
     if (json) printJson(io, errorDoc('classes', code, message))
-    else { for (const line of wrap(message)) io.err(line); if (usage) io.err(usageLine(commandNamed('classes'))) } // §1.1⑥: folded, never ragged past 80 columns
+    else { for (const line of wrap(tildeText(message, home))) io.err(line); if (usage) io.err(usageLine(commandNamed('classes'))) } // §1.1⑥: folded, never ragged past 80 columns
     return exit
   }
   const op = opOf(args.positionals, args.flags)
@@ -155,7 +155,7 @@ export async function run(argv, { io, json, args, home, deps = {} }) {
   if (json) { printJson(io, doc); return EXIT.ok }
   const now = (deps.ms || Date.now)()
   for (const line of name === undefined ? classesTable(doc, { home, colors: c }) : classDetail(doc, name, { now, colors: c })) io.out(line)
-  for (const e of doc.errors) io.err(`Could not read ${e.where}: ${e.reason}`)
+  for (const e of doc.errors) io.err(tildeText(`Could not read ${e.where}: ${e.reason}`, home)) // §1.1⑤: the file the reason names, as ~/…
   // §4.1: the exit code says whether a document could be given, not whether it was whole — the document above was given,
   // its `errors` are on stderr, so this is 0 in both modes (a macOS test machine 2026-10-18: the text form exited 1, `--json` 0).
   return EXIT.ok
