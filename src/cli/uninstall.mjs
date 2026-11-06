@@ -319,7 +319,10 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
       const ing = removeIngressConfig({ dir: w.dir, fs })
       if (!ing.removed) noted.push({ kind: 'residue-not-removed', code: 'residue-not-removed', path: path.join(w.dir, 'ingress.json'), reason: `${path.join(w.dir, 'ingress.json')} could not be removed (${ing.reason}); remove it by hand` })
     }
-    for (const n of noted) if (!receipt.notes.includes(n.reason)) receipt.notes.push(n.reason) // the command prints every one of them
+    // a file undone by trocar's mark is already a row of the receipt: one note says how they were found, never the row again (each stays an event)
+    const byMark = noted.filter((n) => n.kind === CODE_OFF.undoneByMarker)
+    if (byMark.length) receipt.notes.push("there was no install record, so the files above were found by trocar's marks")
+    for (const n of noted) if (n.kind !== CODE_OFF.undoneByMarker && !receipt.notes.includes(n.reason)) receipt.notes.push(n.reason) // the command prints every one of them
     // then the data the operator asked to drop — also after an earlier plain uninstall left the captures behind. `--purge-data` is "nothing of the captures stays", so the
     // collector's own machine goes with it: the kernel's copy (kernel/) and its verified-archive cache (kernel-archive/), the kernel's config and home with the controller
     // secret and tokens (forwarder/) — the endpoint files control.json and ingress.json went above, with every uninstall — a plain uninstall
@@ -410,7 +413,7 @@ async function strayPlan(w, m) {
 function unseenNote(names, platform) {
   if (!names.length) return []
   const cmd = (n) => (platform === 'win32' ? `cmd /c "set ${n}=<your certificate file>&& trocar uninstall"` : `${n}=<your certificate file> trocar uninstall`)
-  return [[`trocar may have added a marked certificate block to the end of a certificate file of your own, named by ${names.join(' or ')} when trocar was installed. ${names.length === 1 ? 'That variable is' : 'None of them is'} set now, so trocar could not look in the file. To take the block out, run this with the file the variable named, or delete the block between trocar's marks by hand:`,
+  return [[`trocar may have added a marked certificate block to the end of a certificate file of your own, named by ${names.join(' or ')} when trocar was installed. ${names.length === 1 ? 'That variable is not' : 'None of them is'} set now, so trocar could not look in the file. To take the block out, run this with the file the variable named, or delete the block between trocar's marks by hand:`,
     ...names.map((n) => `${COMMAND_INDENT}${cmd(n)}`)].join('\n')]
 }
 
