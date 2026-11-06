@@ -1,6 +1,6 @@
 // test/web-v2/board-real.test.mjs — LOCAL ONLY: the board's rules over real captured sessions (the T1 gate the board's spec units name).
 // `TROCAR_BOARD_REAL=<a trocar home>`; without it every case is skipped and says why, so a fresh clone stays green. The home is only read
-// (test/helpers/real-home.mjs). Only shapes and counts are asserted; no real content reaches an assertion message.
+// (test/helpers/real-home.mjs), but its raw/ is linked as given: point it at an APFS clone of raw (`cp -c -R`), never at a live trocar home. Only shapes and counts are asserted; no real content reaches an assertion message.
 //   2.2 #18: on the main lane of 8 real sessions, every cache break is one of rows 4–7; failed and no-usage steps are never breaks; a step
 //   whose cause is not quiet is row 6 below LOW_HIT and row 6′ (not a break) at or above it — usage wins (3.3).
 import test from 'node:test'
