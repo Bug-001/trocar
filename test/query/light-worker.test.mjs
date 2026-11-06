@@ -102,6 +102,7 @@ test('MA14 on macOS the main role is started in the utility class and the light 
   const on = { platform: 'darwin', execPath: '/n' }
   assert.equal(forkOptions('', on).execPath, '/usr/sbin/taskpolicy')
   assert.equal(forkOptions('light', on).execPath, undefined)
+  assert.equal(forkOptions('control', on).execPath, '/usr/sbin/taskpolicy')
 })
 
 test('3.5 #57: a lane in flight on a real daemon does not hold status up', { timeout: 60_000 }, async () => {

@@ -28,7 +28,7 @@
 import { fork } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { QUERY_PATH, QUERY_NAMES, WINDOW_PARAMS, paramsOf } from './client.mjs'
-import { LIGHT_MEMORY_MB, heapFlags, workerEnv } from './warm.mjs'
+import { CONTROL_MEMORY_MB, LIGHT_MEMORY_MB, heapFlags, workerEnv } from './warm.mjs'
 import { lowFork } from '../low-priority.mjs'
 import { QUERY_WAIT_PROBLEMS } from '../health/codes.mjs'
 import { SCHEMA_VERSION } from '../off/schema.mjs'
@@ -92,8 +92,9 @@ const NO_WORKER = JSON.stringify({ error: 'no warm query worker in this daemon y
 const SERVE_ORDER = Object.freeze(['block', 'status', 'sessions', 'lane', 'session'])
 const rank = (name) => { const i = SERVE_ORDER.indexOf(name); return i < 0 ? SERVE_ORDER.length : i }
 
-/** forkOptions(role) → how a worker of `role` starts. The main role stays low (`lowFork`, 4.9 §4); the light one follows the daemon, so `status` answers under load (3.5 §谁执行它). */
-export const forkOptions = (role, o) => (role === 'light' ? { execArgv: heapFlags(LIGHT_MEMORY_MB) } : lowFork(heapFlags(), o))
+/** forkOptions(role) → how a worker of `role` starts. The main and control roles stay low (`lowFork`, 4.9 §4); the light one follows the daemon, so `status`
+ *  answers under load (3.5 §谁执行它). Each role's heap is its own constant (warm.mjs). */
+export const forkOptions = (role, o) => (role === 'light' ? { execArgv: heapFlags(LIGHT_MEMORY_MB) } : lowFork(heapFlags(role === 'control' ? CONTROL_MEMORY_MB : undefined), o))
 /** `argv` after the home is the worker's own: the deps path ('' for none) and the role. */
 export const forkWorker = (home, ...argv) => fork(WORKER, [home, ...argv], { stdio: ['pipe', 'pipe', 'pipe', 'ipc'], ...forkOptions(argv[1]), env: workerEnv() })
 
@@ -433,9 +434,11 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
    *  (4.4 §答案文件), sent with no ETag: the worker's version tag is not the file's tag. */
   const relay = ({ name, params = {}, res, gzip = false, etag = null, file = null, rows = false }) => answer(lineOf(name, params, 0, gzip, etag, rows), res, deadlineMs, name, subjectOf(name, params), file)
 
-  /** The board's `/control/<verb>` (4.4 §控制面): the same queue and frame path as `relay`, so a control verb waits its turn behind a query and the
-   *  worker runs the CLI's own function (src/control/board.mjs). The caller checked the verb and parsed the small request body. */
+  /** The board's `/control/<verb>` (4.4 §控制面): the same queue and frame path as `relay`, on the control role (src/query/router.mjs), so a verb
+   *  waits only behind another control verb, and the worker runs the CLI's own function (src/control/board.mjs). The caller checked the verb and
+   *  parsed the small request body. A worker that exits or falls silent may have run part of the verb: it is reported, never run again. */
   const control = ({ verb, body = {}, res }) => answer(JSON.stringify({ control: verb, body }) + '\n', res, controlDeadlineMs, `control/${verb}`, subjectOf(`control/${verb}`, body))
+    .catch((e) => { throw new Error(`control verb ${verb} did not finish (${e.message}); it may have partly run and is not run again`, { cause: e }) })
 
   /** The daemon is about to hand out the stored answer of (name, params) (4.4 §存下的答案「刷新」): true while a refresh of `name` is
    *  queued or running (nothing more is queued), or when there is no worker, its rows are unread or a request is in flight on it (one refresh of
