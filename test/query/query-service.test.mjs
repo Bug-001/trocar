@@ -14,7 +14,7 @@ import { isCode, isWhere } from '../../src/health/codes.mjs'
 import { rawHome } from './raw-home.mjs'
 import { handWorld, recorder } from './hand-world.mjs'
 import { workerFork } from '../helpers/worker-fork.mjs'
-import { within } from '../helpers/bounded.mjs'
+import { whileMoving, within } from '../helpers/bounded.mjs'
 import fs from 'node:fs'
 import { PassThrough, Writable } from 'node:stream'
 import zlib from 'node:zlib'
@@ -363,13 +363,19 @@ test('the real worker reports progress while it folds a session, and the fold is
   const svc = createQueryService({ home, fork: (h) => { const c = workerFork(h); c.on('message', (m) => { if (m && m.progress === true) ticks.push(Date.now()) }); return c } })
   try {
     await within(svc.relay({ name: 'segments', params: {}, res: recorder() }), 60_000, 'the worker is up')
+    const ask = async () => {
+      const res = recorder()
+      await within(svc.relay({ name: 'session', params: { id: s.id }, res }), 60_000, 'the session is answered')
+      assert.equal(res.status, 200)
+      return JSON.parse(res.text())
+    }
+    const first = await ask()
+    assert.equal(first.command, 'session')
+    assert.ok(first.pending, 'a request answers one slice of a fold of 16 MB, and the fold goes on behind it')
+    // A slice of a request is shorter than the worker's report interval, and the tick before it can hold its one report back: what must
+    // report is the fold, so ticks count from its first answer, and on a channel of their own they may land after the last answer.
     ticks.length = 0
-    const res = recorder()
-    await within(svc.relay({ name: 'session', params: { id: s.id }, res }), 60_000, 'the session is answered')
-    assert.equal(res.status, 200)
-    const doc = JSON.parse(res.text())
-    assert.equal(doc.command, 'session')
-    assert.ok(ticks.length >= 1, 'a fold of 16 MB said it was still working')
+    await whileMoving(async () => !(await ask()).pending && ticks.length >= 1, () => ticks.length, 'the fold')
   } finally { svc.stop() }
 })
 
