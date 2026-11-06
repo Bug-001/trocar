@@ -112,7 +112,7 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
   {
     if (!model) return await linuxInstall({ io, env, home, platform, deps, flags, json, say, fs, locked })
     const { backendsFor, sourcesCtx, ownsBy } = await import('../collector/arch/model-backends.mjs')
-    const { runInstall, planInstall } = await import('../collector/model-install.mjs')
+    const { runInstall, planInstall, custodyPreflight } = await import('../collector/model-install.mjs')
     const { renderHook } = await import('../collector/harness/templates/index.mjs')
     const b = deps.backends || await backendsFor({ os: platform, home, run: deps.exec || null, env, fs })
     const harnesses = deps.harnesses || await (await import('../collector/harness/index.mjs')).loadHarnesses()
@@ -157,8 +157,10 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
       if (json || !isInteractive(io)) return needsYes(io, json, planned, left)
       if (!(await confirm({ ...io, prompt: io.stdout }, 'Proceed?'))) { io.err('You said no: nothing was changed'); return EXIT.incomplete }
     }
-    const r = await locked(async () => {
-      const r = await runInstall({ os: platform, home, env, harnesses, custody: b.custody, rootStore: b.rootStore, installHelper: b.installHelper, interactive: isInteractive(io),
+    // a custody that cannot be used refuses before the lock and the first write: the HOME stays as it was
+    const pre = await custodyPreflight({ os: platform, custody: b.custody })
+    const r = pre.refusal ? { refused: true, fp256: null, items: [], carriers: [], pending: [pre.refusal], problems: [], notes: [], exit: 1 } : await locked(async () => {
+      const r = await runInstall({ os: platform, home, env, harnesses, custody: b.custody, rootStore: b.rootStore, installHelper: b.installHelper, interactive: isInteractive(io), has: pre.has,
         wrapperKit: b.wrapperKit, facts: b.facts, ctx, unit: only ? null : unit, only, code: codeId(root), owns: deps.owns || ownsBy({ os: platform, home, fs }), renderHook, fs, ...(deps.now ? { now: deps.now } : {}) })
       const { row } = await boardPortRow(home, fs) // before the daemon starts below: it reads the port, never picks one
       if (row) { r.pending.push(row); r.exit = 1 }
@@ -168,7 +170,7 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
     if (!r) return EXIT.incomplete
     // D61: the login registration and the daemon, through the one seam every command uses (ensureDaemonUp, src/collector/install.mjs)
     // Set up (only): the login entry is not in its plan, so it is neither rewritten above nor registered here (4.4 #13); the daemon asking is up, this only reads it
-    const dmn = unit ? await (await import('../collector/install.mjs')).ensureDaemonUp({ osName: platform, dir: path.join(home, '.trocar', 'collector'), env, fs, unit, register: !only, ...(deps.request ? { request: deps.request } : {}), ...(deps.sleep ? { pause: deps.sleep } : {}) }) : { up: false, started: false, notes: [], problems: [] }
+    const dmn = unit && !r.refused ? await (await import('../collector/install.mjs')).ensureDaemonUp({ osName: platform, dir: path.join(home, '.trocar', 'collector'), env, fs, unit, register: !only, ...(deps.request ? { request: deps.request } : {}), ...(deps.sleep ? { pause: deps.sleep } : {}) }) : { up: false, started: false, notes: [], problems: [] }
     r.problems.push(...dmn.problems)
     const dmnNotes = dmn.notes.filter((n) => !r.problems.includes(n)) // 附录 C.1: `problems` is the failure channel; what trocar could not do but said is `notes` (M-2)
     if (dmn.problems.length) r.exit = 1
@@ -178,11 +180,11 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
     if (rep) { dmnNotes.push(...rep.notes); if (!rep.replaced) r.exit = 1 }
     // a refusal carries `error: {code, message}` (附录 C.1): the first pending item that named a code is why install could not go on
     const refusal = r.pending.find((p) => p.code)
-    const receipt = { ...newReceipt('install'), ok: r.exit === 0, undo: UNDO_LINE.install, fp256: r.fp256, items: r.items, carriers: r.carriers, pending: only ? r.pending.map((p) => ({ ...p, command: 'trocar install' })) : r.pending, problems: r.problems, notes: [...r.notes, ...dmnNotes], standalone: standalonePath(home), residual_risk: RISK, daemon: daemonRow(dmn, rep), ...(unit && !only ? { autostart: { entry: platform === 'win32' ? '\\trocar\\collector' : unit.path, enabled: !dmn.unitFailed } } : {}),
+    const receipt = { ...newReceipt('install'), ok: r.exit === 0, undo: UNDO_LINE.install, fp256: r.fp256, items: r.items, carriers: r.carriers, pending: only ? r.pending.map((p) => ({ ...p, command: 'trocar install' })) : r.pending, problems: r.problems, notes: [...r.notes, ...dmnNotes], standalone: standalonePath(home), residual_risk: RISK, daemon: daemonRow(dmn, rep), ...(unit && !only && !r.refused ? { autostart: { entry: platform === 'win32' ? '\\trocar\\collector' : unit.path, enabled: !dmn.unitFailed } } : {}),
       ...(refusal ? { error: { code: refusal.code, message: refusal.reason } } : {}),
       ...(r.path && r.path.rec ? { path_item: r.path.rec } : {}),
       planned, ...(left.length ? { left } : {}), commands: ['trocar on', 'trocar off', 'trocar status', 'trocar uninstall'] }
-    try { appendEvent(dir, { event: EVENT.installNote, where: 'install', kind: 'result', outcome: receipt.ok ? 'installed' : 'partial', reason: `install: root ${r.fp256 || 'not made'}; ${r.carriers.length} carrier row(s); ${r.pending.length} pending` }) } catch (e) { r.problems.push(`the install-note could not be written (${e.message})`) }
+    if (!r.refused) try { appendEvent(dir, { event: EVENT.installNote, where: 'install', kind: 'result', outcome: receipt.ok ? 'installed' : 'partial', reason: `install: root ${r.fp256 || 'not made'}; ${r.carriers.length} carrier row(s); ${r.pending.length} pending` }) } catch (e) { r.problems.push(`the install-note could not be written (${e.message})`) }
     // §1.1: no two rows of a receipt are the same line. One carrier reached through five forms of one agent was five identical rows (a Windows test machine
     // 2026-10-18: `codex root` five times): the rows are the DISTINCT (agent, carrier, state, file) facts, and when the forms of an
     // agent do not all share one, the row names the forms it is about, in words (formWords).
