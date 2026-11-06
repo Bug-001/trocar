@@ -182,6 +182,9 @@ function agentTech(row, h) {
     }
     if (t.routing === 'proxy') tech.push(pair('VPN', `if your VPN routes by process, it sees trocar as the source, not ${harnessName(row.harness)}`))
   }
+  // 1.9 §保真边界: its routes send loopback direct (status's loopback-direct form note, 1.6 §3.3), so requests to this computer are not captured
+  const forms = list(Object.entries((h && h.harnesses) || {}).find(([k]) => harnessKey(k) === row.harness)?.[1]?.forms)
+  for (const s of new Set(forms.flatMap((f) => list(f && f.notes)).filter((n) => n && n.code === 'loopback-direct').map((n) => String(n.text)))) tech.push(pair('local requests', s))
   const cmds = commandsFor(h, { row })
   const undos = new Set(ownChanges(h, row.harness).filter((e) => e.undo).map((e) => String(e.undo)))
   for (const u of undos) if (!cmds.some(([, c]) => c === u)) tech.push(pair('undo', M(u)))

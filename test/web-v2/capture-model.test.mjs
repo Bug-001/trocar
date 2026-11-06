@@ -198,3 +198,17 @@ test('M9: the conditions the collector folds land on their agent row or in the s
   assert.ok(m.service.conds.some((s) => s.includes(UNKNOWN_REASON)))
   assert.ok(m.service.tech.some((p) => plain(p.v) === 'made-up-kind-3f2a'))
 })
+
+// 1.9 §保真边界 · invariant 4: a harness whose form notes carry loopback-direct (its routes send loopback direct, 1.6 §3.3) says in its
+// technical details that requests to this computer are not captured — the status note's own words, once; one without that note says nothing of it
+test('1.9 §保真边界: the loopback-direct form note shows once in that agent\'s technical details, and only there', () => {
+  const text = 'requests to localhost, 127.0.0.1, ::1 are not captured (planted)'
+  const d = doc({ hs: { codex: {}, 'kimi-code': {} } })
+  const note = { code: 'loopback-direct', text }
+  d.harnesses.codex.forms = [{ form: 'codex.cli', notes: [note] }, { form: 'codex.app', notes: [note, { code: 'harness-note', text: 'another note' }] }]
+  d.harnesses['kimi-code'].forms = [{ form: 'kimi-code.cli', notes: [{ code: 'harness-note', text: 'another note' }] }]
+  const m = model(d)
+  const said = (id) => rowOf(m, id).tech.filter((p) => JSON.stringify(p.v).includes(text)).length
+  assert.equal(said('codex'), 1)
+  assert.equal(said('kimi-code'), 0)
+})
