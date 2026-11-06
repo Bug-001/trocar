@@ -23,7 +23,7 @@ const atRest = (page, when) => page.waitForFunction((tok) => {
   return z.quiet >= 30
 }, ++rests, { timeout: 10000, polling: 'raf' }).catch(() => assert.fail(`${when}, the window kept adding and removing nodes for 10 s`))
 
-// 2.3 #35 (新台): the list estimates every item at its real height, so from the top to the bottom, half a window at a time, #ctxwin's
+// 2.3 #35: the list estimates every item at its real height, so from the top to the bottom, half a window at a time, #ctxwin's
 // scrollHeight never changes and an item in view before a scroll moves on screen by exactly the scroll distance; after the step is
 // drawn and after each scroll the window comes to rest (30 frames without a node added or removed). The same world, both themes, a
 // width where a row's head is one line and one where its label takes a line of its own.

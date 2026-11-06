@@ -160,7 +160,7 @@ test('1.4: a late 内容对比步 lands the step on its first 「新」 row; a r
     })
   }
 })
-// 2.3 #28 · rule 4 (新台): the virtual list holds only the items within one window height above and below the visible box, and the
+// 2.3 #28 · rule 4: the virtual list holds only the items within one window height above and below the visible box, and the
 // pinned ones (the change line #cachebrk, the reply, the item holding focus, the item holding the selection); no aria-busy group; and
 // the visible box has no gap (harness gapInPage). Settled at the newest step and half way down, and on the first animation frame after
 // each of 20 ←/→ presses: a keydown capture listener arms one requestAnimationFrame, which runs after the step's synchronous commit and
