@@ -10,7 +10,7 @@ import tls from 'node:tls'
 import { collectorHome } from '../paths.mjs'
 import { caPaths } from './core/tls/ca-store.mjs'
 import { ROOT, checkProfile, certPem, pemToDer } from './core/tls/cert.mjs'
-import { rootIdOf, ROOT_SUBJECT, sameRoot } from '../off/root-store.mjs'
+import { rootIdOf, ROOT_SUBJECT, strayRoots } from '../off/root-store.mjs'
 import { readManifest, saveManifest, newManifest, applyJsonKey, applyTextEntry, writeOwnedFile, judgeOwned, sha256 } from './core/trust/journal.mjs'
 import { codeId } from '../version.mjs'
 import { installComplete, itemsOfPhase, undoByHand, OFF_VERSION } from '../off/manifest.mjs'
@@ -51,12 +51,10 @@ const UNREADABLE = 'unreadable' // 1.6 附录 C.1: both are ERROR_CODES (src/cli
 /** 4.11 §3 ㉔: one trocar root per user. The trocar roots the user's store holds (P3 `list`, by subject) that manifest `m` does not list → null
  *  (none), or the refusal { code, reason }: `stray-root`, naming each by its fingerprint; `unreadable` when the store cannot be listed (never
  *  read as none, D38). Asked before install writes anything, and by its plan. */
-export async function strayRootRefusal({ os, m, rootStore }) {
-  let r
-  try { r = await rootStore.list() } catch (e) { r = { error: errText(e) } }
-  if (!r || r.error || !Array.isArray(r.roots)) return { code: UNREADABLE, reason: `your user trust store could not be read (${(r && r.error) || 'no answer'}), so whether it already holds a trocar root is not known; nothing was changed. Run trocar install again once it can be read` }
-  const listed = ((m && m.entries) || []).filter((e) => e && e.kind === 'system-root' && e.store === STORE[os]).map((e) => ({ fp256: e.fp256, sha1: e.thumbprint }))
-  const stray = r.roots.filter((x) => !listed.some((e) => sameRoot(x, e)))
+export async function strayRootRefusal({ m, rootStore }) {
+  const r = await strayRoots(rootStore, m)
+  if (r.error) return { code: UNREADABLE, reason: `your user trust store could not be read (${r.error}), so whether it already holds a trocar root is not known; nothing was changed. Run trocar install again once it can be read` }
+  const stray = r.roots
   if (!stray.length) return null
   const names = stray.map((x) => (x.fp256 ? `SHA-256 ${x.fp256}` : `thumbprint ${x.sha1}`)).join(', ')
   return { code: STRAY_ROOT, reason: `your user trust store already holds a trocar root that trocar's install record does not list (${names}), and trocar never trusts a second one beside it; nothing was changed. Run trocar uninstall first (it removes every trocar root), then trocar install` }
