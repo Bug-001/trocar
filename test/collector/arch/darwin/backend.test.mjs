@@ -89,6 +89,10 @@ test('proc readers: parentOf → the parent pid and the PARENT\'s start time (th
   assert.equal(calls.length, 2, 'one ps for the pid, one for its parent; the second ask is a cache hit')
   assert.deepEqual(calls[0].args, ['-p', '42', '-o', 'ppid=,lstart='])
   assert.equal(parentOf(5, { exec: run, cache }), null, 'a gone pid')
+  assert.equal(parentOf(100, { exec: run, cache }), null, 'the root: no parent')
+  for (const [why, answer] of [['a ps that did not answer', { status: null, stdout: '', error: new Error('spawnSync ps ETIMEDOUT') }], ['a row of another shape', { status: 0, stdout: 'not a row\n' }]]) {
+    assert.throws(() => parentOf(42, { exec: () => answer, cache: new Map() }), Error, `${why}: unread, not the chain's end (D38)`)
+  }
 })
 
 test('policy: the per-user plist first, then the computer-wide one; only the declared key, via plutil -extract <key> json', () => {

@@ -167,12 +167,15 @@ export function metaOf(pid, opts = {}) {
 const META = Object.freeze([':exe', ':cwd'])
 
 /** parentOf(pid, { startedAt, exec }) → { ppid, startedAt } of the PARENT (its start time keys the next step up the chain), or
- *  null when either is gone. Two `ps` asks per process life: the pid's own row, then its parent's start time. */
+ *  null when either is gone or the pid is the root; throws when a `ps` did not answer or printed a row it cannot read — unread is no end of the
+ *  chain (D38). Two `ps` asks per process life: the pid's own row, then its parent's start time. */
 export function parentOf(pid, { startedAt = null, exec = null, env = process.env, cache = procCache, psTimeoutMs = PS_TIMEOUT_MS } = {}) {
   const row = (p) => then(execTool('ps', ['-p', String(p), '-o', 'ppid=,lstart='], { run: exec, env: psEnv(env), timeoutMs: psTimeoutMs }), (r) => {
+    if (r.code !== 0 && r.code !== null && r.out === '') return null // ps -p of a gone pid: no row, exit 1
     const m = r.code === 0 && /^\s*(\d+)\s+(\w{3}\s+\w{3}\s+\d+\s+\d\d:\d\d:\d\d\s+\d{4})\s*$/.exec(String(r.out).split('\n')[0] || '')
     const at = m ? new Date(m[2].replace(/\s+/g, ' ')).getTime() : NaN
-    return m && Number.isFinite(at) ? { ppid: Number(m[1]), startedAt: at } : null
+    if (!m || !Number.isFinite(at)) throw new Error(r.code === null ? r.err || `ps -p ${p} did not answer within ${psTimeoutMs} ms` : `ps -p ${p} printed no row it can read (exit ${r.code})`)
+    return { ppid: Number(m[1]), startedAt: at }
   })
   return cached(cache, 'parent', pid, startedAt, () => then(row(pid), (self) => {
     if (!self || self.ppid <= 0) return null

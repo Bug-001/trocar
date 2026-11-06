@@ -33,6 +33,7 @@ import { proxyFileValues } from '../../../netenv/adopt.mjs'
 
 const untracked = (reason, unread) => ({ not_captured: 'untracked', reason, ...(unread ? { unread } : {}) })
 const split = (g) => { const i = String(g).lastIndexOf(':'); return { harness: g.slice(0, i), routeId: g.slice(i + 1) } }
+const UNREAD = Symbol('unread'), GONE = Symbol('gone') // agentAt's two answers that are no harness
 const safe = async (f) => { try { return (await f()) ?? null } catch { return null } }
 const ISSUER_CODES = new Set([CODE.certIntermediateUnavailable, CODE.certKeyMissing]) // verdicts on the issuer's state, which changes (P2)
 const CACHE_MAX = 4096 // every per-process map is bounded, the oldest entry goes first (the arch's caches' bound)
@@ -158,17 +159,20 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     return of(p, start)
   }
 
-  /** The harness a process is by the D51 name list, or null (not one, another user's, another life of the pid): once per pid + start (⑥'s ancestor walk;
-   *  an answer whose start time is unknown, or whose facts did not read, is asked again). */
+  /** The harness a process is by the D51 name list, or null (not one, another user's), GONE (another life of the pid: the process asked about left),
+   *  UNREAD (its facts did not read, or the registry answers `pending`: no answer yet, D38): once per pid + start (⑥'s ancestor walk); UNREAD and an
+   *  answer whose start time is unknown are asked again (4.8 W78). */
   const acache = new Map()
   async function agentAt(q, s) {
     const k = `${q}\0${s ?? ''}`
     if (acache.has(k)) return acache.get(k)
     const f = await safe(() => factsOf && factsOf(q, {}))
-    const life = f && (s == null || f.startedAt == null || f.startedAt === s) && !(f.uid != null && ownUid != null && f.uid !== ownUid)
-    const m = life ? identify(f) || {} : {}
+    if (!f) return UNREAD
+    if (s != null && f.startedAt != null && f.startedAt !== s) return GONE
+    const m = f.uid != null && ownUid != null && f.uid !== ownUid ? {} : identify(f) || {}
+    if (m.reason === 'pending') return UNREAD
     const agent = m.reason === 'match' && byName.has(m.agent) ? m.agent : null
-    if (f && s != null) keep(acache, k, agent)
+    if (s != null) keep(acache, k, agent)
     return agent
   }
 
@@ -233,16 +237,21 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     const bound = (f) => ({ ...f, parentOf: async () => { const up = await ask('waiting for a parent process', f.parentOf(), null); return up && bound(up) } }) // a copy: pcache's answer is every connection's
     const read = async (q, s, of) => bound(await ask('waiting for the process env and cwd', procFacts(q, s, of), { pid: q, start: s, env: null, cwd: null, parentOf: async () => null }))
     let pid0 = { pid: id.pid, start } // whose own proxy files step 3 reads: the process's, or the ancestor's it runs for
-    /** ⑥: the nearest named ancestor of an unidentified process, read as the door's agent when its harness is on (null otherwise, or when the parent
-     *  chain ends — the readers answer null alike for the root, a parent gone and one unread — or passes MAX_DEPTH). Asked only when step 3 runs. */
+    /** ⑥: the nearest named ancestor of an unidentified process whose harness is on, or is the door's own (a door kept after off, P12), read as the
+     *  door's agent; an agent of another harness that is off is walked past. Null when the chain ends (the root, a parent gone) or passes MAX_DEPTH;
+     *  a parent or an ancestor's facts that did not read is facts with no env: step 3 answers `unknown`, recorded (D38). Asked only when step 3 runs. */
     const ancestor = async () => {
+      const unread = (q, s) => ({ pid: q, start: s, env: null, cwd: null, parentOf: async () => null })
       let q = id.pid, s = start
       for (let depth = 0; depth < MAX_DEPTH; depth++) {
-        const up = await ask('waiting for a parent process', safe(() => proc.parentOf && proc.parentOf(q, s != null ? { startedAt: s } : {})), null)
+        let up
+        try { up = await ask('waiting for a parent process', Promise.resolve().then(() => proc.parentOf ? proc.parentOf(q, s != null ? { startedAt: s } : {}) : null), null) } catch { return unread(q, s) }
         if (!up || up.ppid == null) return null
         q = up.ppid; s = up.startedAt ?? null
         const agent = await ask('waiting for the process facts', agentAt(q, s), null)
-        if (agent) return onSet.has(agent) ? (pid0 = { pid: q, start: s }, read(q, s, desc)) : null
+        if (agent === UNREAD) return unread(q, s)
+        if (agent === GONE) return null
+        if (agent && (onSet.has(agent) || agent === d.harness)) return (pid0 = { pid: q, start: s }, read(q, s, desc))
       }
       return null
     }

@@ -47,7 +47,7 @@ async function rig({ desc, os = 'darwin', custody = stub, rootPem = STUB_PEM, w 
   const records = [], ctx = { os, home: '/h', dirs: {}, join: path.posix.join, readFile: (p) => w.ctx.readFile(p), readdir: (d) => w.ctx.readdir(d), exists: (p) => w.ctx.exists(p), policy: (s) => w.ctx.policy(s) }
   w.ctx ||= ctxOf(newWorld(os))
   const c = createModelCollector({ harnesses: [desc, ...others], dir, ctx, custody, rootPem, proxyOf, bypassOf, upstreamRoots, templates: TEMPLATES, ownUid: 501, timers, doorHangMs, record: (r) => records.push(r),
-    identify: (f) => (f.agent ? { reason: 'match', agent: f.agent } : { reason: 'no-match' }), ownerOf: async () => { await gate('ownerOf'); return { pid: w.pid, source: 'socket-table', ms: 1, ...(w.owner || {}) } }, factsOf: async (q, o) => { await gate('factsOf', q); const f = of(w.factsBy, q, w.facts); if (f == null && w.factsWhy && o && o.onUnread) o.onUnread(w.factsWhy); return f },
+    identify: (f) => (f.pending ? { reason: 'pending' } : f.agent ? { reason: 'match', agent: f.agent } : { reason: 'no-match' }), ownerOf: async () => { await gate('ownerOf'); return { pid: w.pid, source: 'socket-table', ms: 1, ...(w.owner || {}) } }, factsOf: async (q, o) => { await gate('factsOf', q); const f = of(w.factsBy, q, w.facts); if (f == null && w.factsWhy && o && o.onUnread) o.onUnread(w.factsWhy); return f },
     proc: { envOf: async (q, names) => { await gate('envOf', q); w.envCalls = (w.envCalls || 0) + 1; const e = of(w.envBy, q, w.env); return e == null ? null : (w.asked && w.asked.push(...names), Object.fromEntries(Object.entries(e).filter(([k]) => names.includes(k)))) }, cwdOf: async (q) => (await gate('cwdOf', q), w.cwd ?? null), parentOf: async (q) => (await gate('parentOf', q), w.parent ? w.parent(q) : null) }, systemProxy: () => w.sp ?? null, hostsOf: () => w.hostSet ?? null,
     readState: () => w.state, readIngress: () => ingress || { groupPorts: {}, listenerToken: TOKEN }, readManifest: () => { if (w.manifestErr) throw w.manifestErr; return w.manifest || manifestOf(desc.name) }, procTable: async () => w.procs || [], clock: () => w.now ?? INSTALLED + 5, ...(forget ? { forget } : {}), ...(holds ? { holds } : {}) })
   c.bindDoors({ open: async (l) => { for (const x of l) { if (taken.has(x.port)) throw Object.assign(new Error('listen EADDRINUSE'), { code: 'EADDRINUSE' }); opened.push(x) } }, close: async (ids) => { opened.push(...ids.map((id) => ({ closed: id }))) } })
@@ -221,7 +221,7 @@ test('CM20 / ⑥ · an unidentified process at a credentialed door (an agent\'s 
 // the agent's proxy and NO_PROXY. Generated over each credentialed darwin form × the walk's shapes; the oracle is the rule (the ancestor's value, its
 // NO_PROXY direct) or, where it does not apply, the answer without an ancestor. The row stays the child's: untracked · not-an-agent, nothing in status.
 test('⑥ · an unidentified child dials its nearest routed agent ancestor\'s upstream, that ancestor\'s NO_PROXY direct; anything else is as before', async () => {
-  const CORP = { kind: 'http', host: 'proxy.corp', port: 3128 }, AT = INSTALLED + 1, C = 7000, S = 7100, A = 7200
+  const CORP = { kind: 'http', host: 'proxy.corp', port: 3128 }, AT = INSTALLED + 1, C = 7000, S = 7100, A = 7200, B = 7300
   const plain = { exe: '/bin/sh', uid: 501, agent: null, startedAt: AT }
   for (const d of descs.filter((x) => x.proxyMode.forms.some((f) => f.os.includes('darwin') && x.proxyMode.routes[f.route]?.auth !== false))) {
     const f = d.proxyMode.forms.find((x) => x.os.includes('darwin') && d.proxyMode.routes[x.route]?.auth !== false)
@@ -236,7 +236,10 @@ test('⑥ · an unidentified child dials its nearest routed agent ancestor\'s up
       ['the agent two levels up', { parent: links(C, S, A), factsBy: { [S]: plain, [A]: agentOf(d.name) }, envBy: { [A]: agentEnv } }, 'ancestor'],
       ['no agent above', { parent: links(C, S), factsBy: { [S]: plain }, envBy: { [S]: agentEnv } }, 'before'],
       ['the agent above is not on', { parent: links(C, A), factsBy: { [A]: agentOf(other.name) }, envBy: { [A]: agentEnv } }, 'before'],
-      ['the parent unread', { parent: () => null, factsBy: { [A]: agentOf(d.name) }, envBy: { [A]: agentEnv } }, 'before'],
+      ['an agent on above an agent off', { parent: links(C, B, A), factsBy: { [B]: agentOf(other.name), [A]: agentOf(d.name) }, envBy: { [B]: { [d.proxy.env[0]]: door }, [A]: agentEnv } }, 'ancestor'],
+      ['the chain ends at the root', { parent: () => null, factsBy: { [A]: agentOf(d.name) }, envBy: { [A]: agentEnv } }, 'before'],
+      ['the parent unread', { parent: () => { throw new Error('ps timed out') }, factsBy: { [A]: agentOf(d.name) }, envBy: { [A]: agentEnv } }, 'unknown'],
+      ['an ancestor\'s facts unread', { parent: links(C, S, A), factsBy: { [S]: null, [A]: agentOf(d.name) }, envBy: { [A]: agentEnv } }, 'unknown'],
       ['the agent past the walk\'s limit', { parent: links(C, ...deep, A), factsBy: { ...Object.fromEntries(deep.map((q) => [q, plain])), [A]: agentOf(d.name) }, envBy: { [A]: agentEnv } }, 'before'],
       ['a recorded prior', { parent: links(C, A), factsBy: { [A]: agentOf(d.name) }, envBy: { [A]: agentEnv }, prior: 'http://prior.corp:3' }, 'prior'],
       ['the agent\'s environment unread', { parent: links(C, A), factsBy: { [A]: agentOf(d.name) }, envBy: { [A]: null } }, 'unknown'],
@@ -257,6 +260,43 @@ test('⑥ · an unidentified child dials its nearest routed agent ancestor\'s up
       c.close()
     }
   }
+})
+
+// ⑥ with the registry's `pending` (a wide name whose command line is not read yet, 4.8 W78): the ancestor is unread, not "not an agent" — that
+// connection is unknown (recorded), and the answer is not kept, so the next connection of the same pid + start reads the agent's proxy.
+test('⑥ · a pending ancestor is unread and asked again: the next connection gets that agent\'s upstream', async () => {
+  const AT = INSTALLED + 1, C = 7000, A = 7200
+  const d = descs.find((x) => x.proxyMode.forms.some((f) => f.os.includes('darwin') && x.proxyMode.routes[f.route]?.auth !== false))
+  const f = d.proxyMode.forms.find((x) => x.os.includes('darwin') && d.proxyMode.routes[x.route]?.auth !== false), g = `${d.name}:${f.route}`
+  const w = { pid: C, facts: { exe: '/bin/sh', uid: 501, agent: null, startedAt: AT }, env: { [d.proxy.env[0]]: `http://${g}:${TOKEN}@127.0.0.1:18105` }, parent: (q) => (q === C ? { ppid: A, startedAt: AT } : null),
+    factsBy: { [A]: { exe: '/bin/agent', uid: 501, agent: d.name, startedAt: AT, pending: true } }, envBy: { [A]: { [d.proxy.env[0]]: 'http://proxy.corp:3128' } } }
+  const { c, records } = await rig({ desc: d, w })
+  await c.on({ harnesses: [d.name], groups: { [g]: 18105 } })
+  const first = await c.lookupIngress({ peer: PEER, user: g, target: { address: 'api.example', port: 443 } })
+  assert.deepEqual([first.upstream, records.map((r) => r.code)], [{ kind: 'direct' }, ['prior-proxy-unknown']])
+  w.factsBy[A] = { ...w.factsBy[A], pending: false }
+  const second = await c.lookupIngress({ peer: PEER, user: g, target: { address: 'api.example', port: 443 } })
+  assert.deepEqual(second.upstream, { kind: 'http', host: 'proxy.corp', port: 3128 })
+  c.close()
+})
+
+// P12 / ⑥: after off a door stays for a live agent; a tool that agent starts inherits the door and still dials the agent's own proxy.
+test('⑥ · a door kept after off: the agent\'s child still dials the agent\'s upstream', async () => {
+  const AT = INSTALLED + 1, C = 7000, A = 7200
+  const d = descs.find((x) => x.proxyMode.forms.some((f) => f.os.includes('darwin') && x.proxyMode.routes[f.route]?.auth !== false))
+  const f = d.proxyMode.forms.find((x) => x.os.includes('darwin') && d.proxyMode.routes[x.route]?.auth !== false), g = `${d.name}:${f.route}`
+  const w = { pid: A, facts: { exe: '/bin/sh', uid: 501, agent: null, startedAt: AT }, env: { [d.proxy.env[0]]: `http://${g}:${TOKEN}@127.0.0.1:18105` }, parent: (q) => (q === C ? { ppid: A, startedAt: AT } : null),
+    factsBy: { [A]: { exe: '/bin/agent', uid: 501, agent: d.name, startedAt: AT } }, envBy: { [A]: { [d.proxy.env[0]]: 'http://proxy.corp:3128' } }, procs: [{ pid: A, startedAt: AT }] }
+  const { c } = await rig({ desc: d, w })
+  await c.on({ harnesses: [d.name], groups: { [g]: 18105 } })
+  await c.lookupIngress({ peer: PEER, user: g, target: { address: 'api.example', port: 443 } })
+  w.manifest = manifestOf(d.name, { liveness: { [d.name]: { on_at: iso(INSTALLED) } } })
+  w.now = INSTALLED + 10
+  assert.equal((await c.off({ harnesses: [d.name] })).holders, 1)
+  w.pid = C
+  const m = await c.lookupIngress({ peer: PEER, user: g, target: { address: 'api.example', port: 443 } })
+  assert.deepEqual([m.upstream, m.skip], [{ kind: 'http', host: 'proxy.corp', port: 3128 }, { not_captured: 'untracked', reason: 'not-an-agent' }])
+  c.close()
 })
 
 test('CM20 · X-Trocar-Upstream counts only from a form whose hook sends it; from anyone else it is ignored and recorded without its value', async () => {

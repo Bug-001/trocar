@@ -11,7 +11,8 @@
 //   facts         { pid, start, env, parentOf } of the identified process, or null when identity failed: then only steps 2, 4 and 5 run (decision #12).
 //                 `{ pid, start, env, hookOnly: true }`: a process the door cannot identify that presented its credentials (a tool subprocess that
 //                 inherited an in-process hook's env): step 1 reads its env; its env unread with no recorded prior is `unknown` (D38). Its `ancestor()`
-//                 → the facts of its nearest named ancestor whose harness is on (the caller's bounded walk), or null: step 3 runs for that process, and
+//                 → the facts of its nearest named ancestor on the way (its harness on, or the door's own; the caller's bounded walk), facts with no env when a
+//                 parent or an ancestor did not read (then `unknown`), or null: step 3 runs for that process, and
 //                 a value found there carries the found process's NO_PROXY (both spellings) as its bypass — what the child inherited without trocar (⑥).
 //                 `env` is an object or a Map (null / undefined = could not be read); `parentOf()` → the parent's facts, or null when it is gone.
 //   recordedPrior the `prior_value` recorded by `on` for this form's entry (null: the user had none)
