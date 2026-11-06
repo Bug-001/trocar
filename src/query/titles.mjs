@@ -83,10 +83,11 @@ function firstMain({ home, fs, calls, steps, from, progress }) {
     catch (e) { return { unread: String((e && e.message) || e).split('\n')[0] }; } // one session's fold, not the list's or its `session`'s (3.5 #41)
     if (lost || errs.some((e) => e.io)) return { unread: errs[0] ? errs[0].reason : 'a record is missing' };
     const main = head.find((r) => (facts.get(String(r.id)) || {}).lane === 'main');
-    if (main) return { t: facts.get(String(main.id)).ask ?? null, r: main.id, c: head.length, p: proj.get(String(main.id)) ?? null };
+    const p = head.map((r) => proj.get(String(r.id))).find((x) => x != null) ?? null; // a first call is often a small one with no environment (3.4 §工作目录)
+    if (main) return { t: facts.get(String(main.id)).ask ?? null, r: main.id, c: head.length, p };
     if (end >= steps.length) {
       const sub = head.map((r) => facts.get(String(r.id))).find((f) => f && f.lane === 'subagent');
-      return { t: sub ? sub.ask : null, r: null, c: steps.length, p: sub ? proj.get(String(sub.id)) ?? null : null };
+      return { t: sub ? sub.ask : null, r: null, c: steps.length, p };
     }
   }
 }
