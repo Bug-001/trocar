@@ -1,6 +1,6 @@
 // test/web-v2/session-head.test.mjs — the session head and the step navigation over the desk model: one previous / one next
 // control on the whole desk, the step position in one element, 1.2 #16's numbering (stepRef on rids), the head built only from
-// 1.2 §会话头's parts, the read-state line (pending), and the 会话保真行's facts. String level: the desk's skeleton +
+// 1.2 §会话头's parts, the read-state line (pending), and the 会话保真行's facts. String level:
 // sessionHeadHtml + stepBarHtml over generated desks (desk-world.mjs) and over the real face.
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -12,7 +12,6 @@ import { createDesk, applySession } from '../../web/legacy/replay/model.mjs'
 import { sessionHeadHtml, readStateHtml } from '../../web/legacy/replay/header.mjs'
 import { FOLD_STOPS } from '../../src/health/codes.mjs'
 import { stepBarHtml } from '../../web/legacy/replay/stepbar.mjs'
-import { SKELETON } from '../../web/legacy/replay/replay.mjs'
 import * as W from '../../web/legacy/labels/replay.mjs'
 
 const SEEDS = [1, 7, 19, 42]
@@ -28,7 +27,7 @@ async function realDesk() {
 const deskHtml = (desk, playhead) => {
   const lanes = buildLanes(desk), anchor = anchorLane(lanes)
   const s = { desk, meta: desk.meta, lanes, anchor, playhead, pricing: null, pricingErr: null, diffRef: null }
-  return { anchor, h: SKELETON + sessionHeadHtml({ meta: desk.meta, lanes, follow: false, libraryHash: '#/sessions' }) + stepBarHtml(s) }
+  return { anchor, h: sessionHeadHtml({ meta: desk.meta, lanes, follow: false, libraryHash: '#/sessions' }) + stepBarHtml(s) }
 }
 
 // the top-level elements of an HTML string: [{tag, cls}] (void elements close themselves)

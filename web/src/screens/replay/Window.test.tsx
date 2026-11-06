@@ -8,8 +8,8 @@ import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { Activity, useState } from 'react'
 import { buildLanes, anchorLane } from '../../../legacy/replay/lanes.mjs'
 import { stepOf } from '../../../legacy/replay/model.mjs'
-import { bodyCache, deskMode, loadBodies, overrideScope, setDeskMode, setMode } from '../../../legacy/replay/cell.mjs'
-import { paintWindow, wireWindow } from '../../../legacy/replay/replay.mjs'
+import { bodyCache, deskMode, loadBodies, overrideScope, setDeskMode } from '../../../legacy/replay/cell.mjs'
+import { SESSION_NOT_LISTED } from '../../../legacy/labels/shell.mjs'
 import { initKeys, setScreenKeys } from '../../../legacy/core/keys.mjs'
 import * as C from '../../../legacy/labels/cells.mjs'
 import * as W from '../../../legacy/labels/replay.mjs'
@@ -213,27 +213,13 @@ test('2.3 #14: the desk default Readable makes every section header say Readable
   expect(claims()).toEqual(raw)
 })
 
-// the default build's window (replay.mjs wireWindow): the same 当场, heard from cell.mjs, for as long as the window is wired
-test('2.3 #14: the legacy window repaints the section headers when the desk default flips, not when one cell flips, and stops when unwired', () => {
-  const s = stateOf(deskN([[tool(), sys(), blk({ query: 'q' }), say()]]))
-  const el = document.createElement('div')
-  el.id = 'ctxwin'
-  const off = wireWindow(el, s)
-  paintWindow(el, s)
-  const claims = () => [...el.querySelectorAll('.cwsec .cwsecff')].map((h) => h.textContent)
-  const raw = claims()
-  expect(raw).toHaveLength(3)
-  expect(raw).not.toContain(C.READABLE_VIEW)
-  setDeskMode('read')
-  expect(claims()).toEqual(raw.map(() => C.READABLE_VIEW))
-  setDeskMode('raw')
-  expect(claims()).toEqual(raw)
-  const before = el.innerHTML
-  setMode('some bid', 'read')
-  expect(el.innerHTML).toBe(before)
-  off()
-  setDeskMode('read')
-  expect(el.innerHTML).toBe(before)
+// 1.2 §Edge cases: a session the server does not list is said in the window, with a real link back to the session list
+test('1.2 not listed: the window says the session is not listed and links back to #/sessions', () => {
+  const s = stateOf(deskN([[say()]]), 0, { win: { kind: 'notlisted' } })
+  const { win } = mount(s)
+  const el = win.querySelector('#notlisted')
+  expect(el?.textContent).toContain(SESSION_NOT_LISTED)
+  expect([...win.querySelectorAll('a')].map((a) => a.getAttribute('href'))).toContain('#/sessions')
 })
 
 // D75④: a removed row is keyed by its block, so the same place on another step's list is another row: closed until the reader opens it

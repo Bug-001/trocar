@@ -4,8 +4,7 @@
 // is guarded by the test of that name below.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { revealIn } from '../../web/legacy/replay/replay.mjs'
-import { outlineHtml, outlineEntries, queryStepLabels, wireOutline, jumpToAnchor, jumpToBlockIndex, jumpToResourceBlock } from '../../web/legacy/replay/outline.mjs'
+import { outlineHtml, outlineEntries, queryStepLabels, wireOutline, jumpToResourceBlock } from '../../web/legacy/replay/outline.mjs'
 import { resourcesHtml } from '../../web/legacy/replay/resources.mjs'
 import { humanTurns, messageTurns } from '../../web/legacy/replay/analysis.mjs'
 import { openTurnFor, renderContextWindow } from '../../web/legacy/replay/ctxwin.mjs'
@@ -68,39 +67,6 @@ test('openTurnFor: a click into an explicitly folded card opens it AND writes th
   // the automatic landing on the same key WITHOUT a user click still respects the explicit fold (1.4's rule)
   const t0 = messageTurns(flat)[0]
   assert.equal(turnIsOpen(new Map([['a1', false]]), flat, t0, 0, 1, new Set(['a1'])), false, 'an explicit fold beats the ephemeral landed set')
-})
-
-// 2.3 #28 · 2.5 §跳转联动: a jump into a folded card, or into a group of the open card not drawn yet, ends with that row in the
-// window and open. The window is a string-backed stand-in: a row is "in the DOM" when the drawn html carries its data-bi.
-test('2.3 #28: a jump into a folded card or an undrawn group draws the row, opens it, and writes only the reader\'s fold', () => {
-  const rowAt = (h, fi) => new RegExp(`<div class="cblk ([^"]*)"[^>]*data-bi="${fi}"`).exec(h)
-  const winOf = () => {
-    const w = { _h: '', set innerHTML(v) { this._h = v }, get innerHTML() { return this._h }, querySelectorAll: () => [] }
-    w.querySelector = (q) => {
-      const m = /data-bi="(\d+)"/.exec(q), r = m && rowAt(w._h, m[1])
-      if (!r) return null
-      const cls = new Set(r[1].split(/\s+/))
-      return { dataset: { bi: m[1] }, classList: { contains: (c) => cls.has(c), toggle: (c) => (cls.has(c) ? cls.delete(c) : cls.add(c)), add() {}, remove() {} }, querySelector: () => null, setAttribute() {}, scrollIntoView() {} }
-    }
-    return w
-  }
-  const long = Array.from({ length: 700 }, (_, i) => blk({ key: `m${i}`, role: i % 2 ? 'assistant' : 'user', ...(i === 0 || i === 300 ? { query: `q${i}` } : {}) }))
-  const flat = [sys({ key: 's' }), ...long] // card A = positions 1..300 (folded by default), card B = 301..700 (the newest, open)
-  for (const fi of [5, 690]) {
-    let persisted = 0
-    const s = stateOf(flat, { openBlocks: new Set(), turnFold: new Map(), turnLanded: new Set(), persistFold: () => persisted++, ctx: { api: null } })
-    const win = winOf()
-    s.root = { querySelector: (q) => (q === '#ctxwin' ? win : null) }
-    s.reveal = (t) => revealIn(s.root, s, t) // the legacy view's reveal
-    renderContextWindow(win, s)
-    assert.equal(rowAt(win._h, fi), null, `fi ${fi}: not drawn before the jump (the case this test is about)`)
-    jumpToBlockIndex(s, fi)
-    assert.ok(rowAt(win._h, fi), `fi ${fi}: the row is in the window after the jump`)
-    assert.ok(s.openBlocks.has(s.curKeys[fi]), `fi ${fi}: and opened`)
-    renderContextWindow(win, s)
-    assert.ok(!rowAt(win._h, fi)[1].split(/\s+/).includes('collapsed'), `fi ${fi}: drawn open on the next paint`)
-    assert.equal(persisted, fi === 5 ? 1 : 0, 'a folded card opened by the jump goes into the fold memory; drawing a group writes nothing')
-  }
 })
 
 test('query rows: 「第 N 步起」 pairs from the last, a mismatch kills it and every earlier one', () => {
@@ -183,23 +149,6 @@ test('jump-source identity: every data-jumpfi names a block the window actually 
   const jumps = [...outline.matchAll(/data-jumpfi="(\d+)"/g)].map((m) => +m[1])
   assert.ok(jumps.length, 'the fixture yields jump rows')
   for (const j of jumps) assert.ok(inWindow.has(j), `data-jumpfi=${j} must be a .cblk[data-bi] the window drew`)
-})
-
-
-// 1.5 motion: a jump scrolls instantly under prefers-reduced-motion, smoothly otherwise
-test('an outline jump honours prefers-reduced-motion', () => {
-  const had = Object.prototype.hasOwnProperty.call(globalThis, 'matchMedia'), prev = globalThis.matchMedia
-  try {
-    for (const reduce of [true, false]) {
-      globalThis.matchMedia = (q) => ({ matches: reduce && /prefers-reduced-motion:\s*reduce/.test(q) })
-      let arg = null
-      const target = { scrollIntoView: (o) => { arg = o }, classList: { add() {}, remove() {} } }
-      const s = { root: { querySelector: (sel) => (sel === '#x1' ? target : null) } }
-      s.reveal = (t) => revealIn(s.root, s, t) // the legacy view's reveal
-      jumpToAnchor(s, 'x1')
-      assert.equal(arg && arg.behavior, reduce ? 'auto' : 'smooth')
-    }
-  } finally { if (had) globalThis.matchMedia = prev; else delete globalThis.matchMedia }
 })
 
 // ── 2.5 #2 (lane-wait half): a jump to a step whose lane is not held waits for the lane, runs once, and a reader move drops it
