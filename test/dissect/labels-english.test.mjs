@@ -32,6 +32,7 @@ const HTTP_AXES = {
   respNotJson: { resp: { status: 200, kind: 'text', raw: 'oops' } },
   respEmpty: { resp: { status: 200, kind: 'empty' } },
   respUnparsed: { resp: { status: 200, kind: 'sse', raw: SSE, unparsed_events: 2 } },
+  respDecodedOnly: { resp: { status: 200, kind: 'sse', raw: SSE, headers: { 'content-encoding': 'gzip' } } },
   respReserialized: { body_wire_bytes: undefined, resp: { status: 200, kind: 'json', body: { content: [], usage: {} } } },
   reqUndecoded: { req_body: null, req_body_b64: 'AAEC', req_content_encoding: 'zstd', req_encoding_error: 'bad zstd' },
   proxy: { capture: 'proxy' },
@@ -83,7 +84,7 @@ test('2.6 / D58 — no capture label, label text or observer effect the board re
   // the table reaches every producer: a label from each id the board can receive
   const ids = new Set(said.map(([w]) => w.split(' ')[2]).filter(Boolean))
   for (const id of ['resp-truncated', 'resp-partial', 'resp-undecoded', 'ws-truncated', 'req-undecoded', 'capture-routing', 'trocar-added',
-    'retention-log', 'retention-legacy-meta', 'resp-json-reserialized', 'req-incomplete', 'reply-unread']) assert.ok(ids.has(id), `no variant reached ${id}`)
+    'retention-log', 'retention-legacy-meta', 'resp-json-reserialized', 'resp-decoded-only', 'req-incomplete', 'reply-unread']) assert.ok(ids.has(id), `no variant reached ${id}`)
   const cjk = said.filter(([, s]) => CJK.test(s))
   assert.deepEqual(cjk, [], 'labels with CJK')
 })
