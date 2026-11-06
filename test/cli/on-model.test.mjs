@@ -388,7 +388,7 @@ test('1.6 §3.3 (darwin): an on that wrote NO_PROXY notes once that loopback req
     const notes = local(both)
     assert.equal(notes.length, 1, `said once, not per harness: ${JSON.stringify(both.io.json().notes)}`)
     assert.deepEqual([...notes[0].hosts].sort(), [...hosts].sort())
-    assert.equal(notes[0].harness, null)
+    assert.equal(notes[0].harness, undefined, "a note of the run, not of one harness: no harness field")
     const text = await on(w, 'darwin', ['codex', 'opencode', '--yes'])
     const lines = text.io.text().split('\n').filter((l) => hosts.every((h) => l.includes(h)))
     assert.equal(lines.length, 1, text.io.text())
