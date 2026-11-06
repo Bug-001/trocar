@@ -12,7 +12,7 @@ import { scanJson, spanAt } from './json-scan.mjs';
 // SSE text → its events, each its lines up to and including the blank line that ends it. `start` = offset of its first
 // line, `end` = offset after the terminating blank line (or the text end), `data` = the joined `data:` payload or null,
 // `dataAt` = where `data` stands in the text when it is one `data:` line (else null).
-function sseEvents(text) {
+export function sseEvents(text) {
   const out = [];
   const s = typeof text === 'string' ? text : '';
   let cur = null;

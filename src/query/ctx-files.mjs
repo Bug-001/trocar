@@ -226,7 +226,7 @@ export function packsOf(s) {
 
 // ── The writer (3.5 §谁执行它「答案文件」): the query worker only, after each slice ─────────────────────────────────────────────────
 /** packFile / tailFile (home, id, …) → a pack's and a tail's file in the session's directory. */
-const packFile = (home, id, n, part) => path.join(sessionDir(home, id), `p${n}.${part}.ndjson.gz`);
+export const packFile = (home, id, n, part) => path.join(sessionDir(home, id), `p${n}.${part}.ndjson.gz`);
 export const tailFile = (home, id, part) => path.join(sessionDir(home, id), `open.${part}.ndjson`);
 const PARTS = ['main', 'rest'];
 const sha = (t) => createHash('sha1').update(t).digest('hex');
