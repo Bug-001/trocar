@@ -26,9 +26,9 @@ const LEGACY_SESSION_KEYS = [H('x-claude-code-session-id'), H('x-session-id', 'm
 // record. A harness with no entries is not a loss: its calls are `other`, kept in full (4.1 Edge cases).
 // `cwd` (3.4 §工作目录): where a call states its working directory — rules {in: 'system'|'user', re}, capture 1 the path, read by
 // src/dissect/project.mjs only. [] = this harness states none that is read.
-// main lane: a ` - Primary working directory:` list item in a user text; a subagent prompt: a bare line in system
-const CC_LINE = /^[ \t]*(?:[-*][ \t]+)?(?:Primary working|Working) directory:[ \t]*([^\n]+)$/m;
-const CC_CWD = [{ in: 'system', re: CC_LINE }, { in: 'user', re: CC_LINE }];
+// system: a subagent prompt's bare line. user: only the list under the main lane's `# Environment` heading, as anyone can type a line like it in a prompt
+const CC_CWD = [{ in: 'system', re: /^[ \t]*(?:[-*][ \t]+)?(?:Primary working|Working) directory:[ \t]*([^\n]+)$/m },
+  { in: 'user', re: /^# Environment\n(?:[^\n]*\n){0,3}?[ \t]*- Primary working directory:[ \t]*([^\n]+)$/m }];
 const ROW = { ua: null, parentKeys: [], lane: [], compaction: [], requestKind: null, observerEffects: [], traffic: [], cwd: [] };
 const T = (host, cls, pathSource) => ({ host, class: cls, ...(pathSource ? { path: pathSource } : {}) });
 // 4.8 §5.6: injected trust changes the agent the same way in both modes; a legacy MITM / reverse-proxy capture still never carries one. `captures` scopes an
