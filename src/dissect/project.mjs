@@ -4,7 +4,7 @@
 // process cwd is never a fallback: the envelope names pid / exe / agent only, and one daemon serves many sessions. Leaf module.
 import { createHash } from 'node:crypto';
 import { harnessOf, bodyOf } from './harnesses.mjs';
-import { systemPartsOf, userTextsOf } from './synth-key.mjs';
+import { systemPartsOf, systemItemsOf, userTextsOf } from './synth-key.mjs';
 
 const ABSOLUTE = /^(?:\/|[A-Za-z]:[\\/]|\\\\)/;
 const valid = (p) => ABSOLUTE.test(p) && p.length <= 1024 && !/[\x00-\x1f\x7f]/.test(p);
@@ -16,7 +16,7 @@ export function projectOf(rec) {
   const body = bodyOf(rec);
   if (!body) return null;
   for (const rule of row.cwd) {
-    for (const text of rule.in === 'system' ? systemPartsOf(body) : userTextsOf(body)) {
+    for (const text of rule.in === 'system' ? [...systemPartsOf(body), ...systemItemsOf(body)] : userTextsOf(body)) {
       const m = rule.re.exec(text);
       if (m && valid(m[1].trim())) return m[1].trim();
     }

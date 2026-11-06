@@ -49,6 +49,9 @@ export const userTextsOf = (body) => {
   const items = [...(Array.isArray(b.messages) ? b.messages : []), ...(Array.isArray(b.input) ? b.input : [])];
   return items.filter((x) => x && x.role === 'user').map((x) => textOf(x.content));
 };
+/** The text of every system or developer item in `messages` / `input`, whatever else the body has: the anchor above takes the first place only. */
+export const systemItemsOf = (body) => [...(Array.isArray(body?.messages) ? body.messages : []), ...(Array.isArray(body?.input) ? body.input : [])]
+  .filter((x) => x && (x.role === 'system' || x.role === 'developer')).map((x) => textOf(x.content));
 // polynomial rolling hash over UTF-16 units, mod 2^32
 const BASE = 0x01000193, TOP = (() => { let p = 1; for (let i = 1; i < WIN; i++) p = Math.imul(p, BASE); return p; })();
 function fingerprints(texts, cap) {

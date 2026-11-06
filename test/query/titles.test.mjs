@@ -438,7 +438,7 @@ function projectHome() {
       const b = JSON.parse(h.body(sid, t))
       const m = b.messages?.[0]
       if (h.harness === 'opencode' && t === 0) { /* a first call that is a small one: no environment, the next call states it */ }
-      else if (h.harness === 'cc') { if (typeof m.content === 'string') m.content += env(h, p); else m.content[0].text += env(h, p) } // Claude Code's main lane: a user text
+      else if (h.harness === 'cc') b.messages.push({ role: 'system', content: [{ type: 'text', text: env(h, p) }] }) // Claude Code's main lane: a system-role message
       else if (Array.isArray(b.system)) b.system[0].text += env(h, p)
       else if (typeof b.system === 'string') b.system += env(h, p)
       else m.content += env(h, p)
