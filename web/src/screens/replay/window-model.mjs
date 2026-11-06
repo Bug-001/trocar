@@ -1,6 +1,6 @@
 // web/src/screens/replay/window-model.mjs — the window's rules, framework-free (2.3 §读与画「长对话的窗口」 · 1.4 ①–⑨): the
 // playhead step's context window as keyed items in drawing order, drawn by both desks (legacy ctxwin.mjs maps them to units).
-// The proof rule (2.3 §保真标) and the reply rule (2.3 §这一步的回复) live here; blocks.mjs and rawpanel.mjs re-export them.
+// The proof rule (2.3 §保真标) and the reply rule (2.3 §这一步的回复) live here; blocks.mjs re-exports them.
 import { bodyCache, cellOf, isAddressed, bodyVersion, deskMode, modeOf, modeVersion, viewIn } from '../../../legacy/replay/cell.mjs'
 import { messageTurns, keyDiff, refPending, refRowOf, hasChangeLine, callFacts } from '../../../legacy/replay/analysis.mjs'
 import { turnAnchorKey, turnIsOpen } from '../../../legacy/replay/fold.mjs'

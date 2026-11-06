@@ -1,7 +1,7 @@
 // replay/stepbar.mjs — the step head (2.2 §步头): the middle column's first row. 「‹ 第 N / M 步 › · 第 K 次提问 · 时间 · 模型 ·
 // ◐ · 对比 (menu) · 缓存 · 组成 · ≈ $」 and nothing else — the numbers and the verdicts live behind the three buttons' popovers
-// , computed by core/metrics.mjs alone. The cost cell trio (costCellHtml / usageLineHtml / priceStateNote)
-// moved here from rawpanel.mjs: usage is shown in ONE place (the 缓存 button), the cost in ONE place (the ≈ $ button).
+// , computed by core/metrics.mjs alone. The cost cell trio (costCellHtml / usageLineHtml / priceStateNote) lives here:
+// usage is shown in ONE place (the 缓存 button), the cost in ONE place (the ≈ $ button).
 //   stepBarHtml(s)  the row (popovers inline, hidden)      wireStepBar(el, s)  the actions
 import { esc, kf, usd, bytes, fmtTime } from '../core/fmt.mjs'
 import { popover, menuButton, mark } from '../core/ui.mjs'
@@ -16,7 +16,7 @@ const modelOf = (c) => (c && c.rec && c.rec.request && c.rec.request.model) || n
 // a failed call's reason, whatever shape the server sent it in (a string, or an object with a message)
 const errMsgOf = (c) => { const e = c && c.error; if (!e) return ''; return typeof e === 'string' ? e : (e.message || e.msg || '') }
 
-// ── the cost cell trio (from rawpanel.mjs; D14 — a LOCAL estimate, never a wire fact) ───────────────────────────────
+// ── the cost cell trio (D14 — a LOCAL estimate, never a wire fact) ───────────────────────────────────────────────
 // the state of the price table itself, when there is no table to look a price up in: a failed read names its reason; an
 // unanswered one says nothing (no "loading" word anywhere, 2.3:173). Empty when the table is there.
 export const priceStateNote = (table, err) => (table || !err ? '' : `The price table could not be read: ${err}`)

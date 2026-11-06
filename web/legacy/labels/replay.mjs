@@ -348,7 +348,7 @@ export const UNPARSED_LINE = 'The request body could not be parsed'
 // ── the resource explorer (2.4) ──────────────────────────────────────────────────────────────────────────────────────
 export const RES_SECTION = 'Resources · whole session'
 export const RES_GRP = Object.freeze({
-  file: 'Files read', seen: 'Names seen only', load: 'Instruction files loaded', cap: 'Tools and capabilities', dl: 'Directories and links', comp: 'Compaction', other: 'Other resources', runtime: 'Path known only at run time',
+  file: 'Files read', seen: 'Names seen only', load: 'Instruction files loaded', cap: 'Tools and capabilities', dl: 'Directories and links', other: 'Other resources', runtime: 'Path known only at run time',
 })
 // why a shell read's path stays as written, one sentence per `runtime` code (2.4 fidelity boundary item 6)
 export const RUNTIME_WHY = Object.freeze({
@@ -372,8 +372,6 @@ export const NO_LEDGER = 'This agent\'s records have no resource information'
 export const NO_RESOURCES = 'No resource records (this agent may not provide them)'
 export const DIR_WORD = 'directory'
 export const LINK_WORD = 'link'
-export const compactRow = (at, from, to) => `${at} · compaction: ${from} → ${to} messages`
-export const summarizeRow = (at, out) => `${at} · summary (${out} output tokens)`
 export const ONLY_CALLS = 'call seen only'
 export const ONLY_CALLS_TIP = 'The call was seen; the resident content is not in the captured context'
 export const viewNameTip = (name) => `View the content of ${name}`

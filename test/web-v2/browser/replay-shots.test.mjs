@@ -62,13 +62,11 @@ const layout = (page) => page.evaluate(() => {
   const untitled = [...document.querySelectorAll('#content *')].filter((e) => e.getClientRects().length && getComputedStyle(e).textOverflow === 'ellipsis' && e.scrollWidth > e.clientWidth + 0.5 && !e.closest('[title]'))
     .map((e) => `${e.tagName}.${e.className}: ${e.textContent.slice(0, 40)}`)
   const h = (s) => { const e = q(s); return e && e.getClientRects().length ? e.getBoundingClientRect().height : 0 }
-  const rp = q('#rightpage'), raw = q('#rawpanel')
   return {
     clipped, untitled,
     ctxwin: h('#ctxwin'),
     avail: innerHeight - h('#deskhead') - h('#rpbar') - h('.deskside.bottom'), // the head + its fidelity row; the bottom row only where it is drawn
     hscroll: document.documentElement.scrollWidth > innerWidth || document.body.scrollWidth > innerWidth,
-    rawGap: raw && raw.getClientRects().length && rp.getClientRects().length ? rp.getBoundingClientRect().bottom - raw.getBoundingClientRect().bottom : null,
   }
 })
 
@@ -87,7 +85,6 @@ for (const width of [1440, 1280, 1024, 800]) {
           ...L.untitled.map((x) => `ellipsis without a title: ${x}`),
           ...(L.ctxwin >= 0.5 * L.avail ? [] : [`#ctxwin ${L.ctxwin}px < half of the available ${L.avail}px`]),
           ...(L.hscroll ? ['the document scrolls sideways'] : []),
-          ...(L.rawGap == null || L.rawGap <= 8 ? [] : [`the raw panel stops ${L.rawGap}px above the right page's bottom`]),
         ]
         await shoot(b.page, 'replay-desk', { width, theme })
         if (width === 1280 && theme === 'light') { // 1.5 #16 on the desk: a block row opened, then the cache popover, then the session info

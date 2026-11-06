@@ -204,7 +204,7 @@ function clickName(lane, { playhead = 0, step, resKey = 'file:a' }) {
   Object.assign(s, { reveal: (x) => got.reveal.push(x), jumpTo: (t, j) => got.jumpTo.push([t, j]), noBlock: () => { got.noBlock++ }, setPlayhead: (t) => got.playhead.push(t) })
   let onClick = null
   wireResources({ addEventListener: (_, f) => { onClick = f }, removeEventListener() {} }, s)
-  const name = { dataset: { view: resKey, viewstep: String(step), viewlabel: 'a' } }
+  const name = { dataset: { view: resKey, viewstep: String(step) } }
   onClick({ target: { closest: (q) => (q === '[data-view]' ? name : null) }, stopPropagation() {} })
   return { s, got }
 }

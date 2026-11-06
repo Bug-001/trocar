@@ -10,7 +10,7 @@ import { slimBlock } from '../../src/view/blockmeta.mjs';
 // answered "what did the model ask for" under a heading that promises "what did the model see".
 //
 // The board resolves a resource card to a block by resKey; this is its exact selector
-// (src/web/index.html renderResourceView): prefer a non-tool_use block carrying the same resKey,
+// (web/legacy/replay/resources.mjs revealResource): prefer a non-tool_use block carrying the same resKey,
 // else fall back to the tool_use. Before the fix NOTHING but the tool_use ever carried a file::
 // resKey, so the fallback always fired and the request JSON was shown as if it were the file.
 const pick = (flat, rk) =>
