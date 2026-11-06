@@ -258,6 +258,9 @@ holds the detail):
   the wire (gzip); this is the exact decompressed text** — its blocks are the text after decompression, not the
   wire bytes. **Compressed request not decoded** then means trocar could not decode it either (e.g. zstd on a
   Node without zstd).
+- **Compressed reply: decompressed text only**: the reply arrived compressed and the record keeps only its
+  decompressed text, not the compressed bytes that were on the wire. Records captured since trocar keeps those
+  bytes do not carry it.
 - **N records no parser can read; not drawn** (in the session's own fidelity line): records no dissector reads are
   counted, never drawn as something else — also when only some records of a session are unrecognized. One
   session may mix wire formats; each call is read by its own.
