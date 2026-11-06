@@ -93,9 +93,10 @@ const NO_WORKER = JSON.stringify({ error: 'no warm query worker in this daemon y
 const SERVE_ORDER = Object.freeze(['block', 'status', 'sessions', 'lane', 'session'])
 const rank = (name) => { const i = SERVE_ORDER.indexOf(name); return i < 0 ? SERVE_ORDER.length : i }
 
-/** forkOptions(role) → how a worker of `role` starts. Its heap cap comes from `ROLES[role]` (warm.mjs), the one place that sizes a role. The light
- *  role follows the daemon, so `status` answers under load; the main and control roles stay low (`lowFork`, 4.9 §4; 3.5 §谁执行它). */
-export const forkOptions = (role, o) => { const cap = heapFlags((ROLES[role] || ROLES.main).capMb); return role === 'light' ? { execArgv: cap } : lowFork(cap, o) }
+/** forkOptions(role) → how a worker of `role` starts. Its heap cap comes from `ROLES[role]` (warm.mjs), the one place that sizes a role. An absent
+ *  role is the main role (as in `worker.mjs`); an unknown role throws, the same on both sides. The light role follows the daemon, so `status`
+ *  answers under load; the main and control roles stay low (`lowFork`, 4.9 §4; 3.5 §谁执行它). */
+export const forkOptions = (role, o) => { const cap = heapFlags(ROLES[role || 'main'].capMb); return role === 'light' ? { execArgv: cap } : lowFork(cap, o) }
 /** `argv` after the home is the worker's own: the deps path ('' for none) and the role. */
 export const forkWorker = (home, ...argv) => fork(WORKER, [home, ...argv], { stdio: ['pipe', 'pipe', 'pipe', 'ipc'], ...forkOptions(argv[1]), env: workerEnv() })
 

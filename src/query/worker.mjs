@@ -215,7 +215,8 @@ const notIdle = () => {
 async function background() {
   if (busy || !rowsRead || sweeping) return
   // `progress`: the segment index read before the first slice is background work too, reported per segment and chunk (3.5 后台抽取与归约)
-  const ctx = { home, fs: nodeFs, writer: true, persist, once, progress }
+  // `writer: writes` not a bare true: ROLES is the one place that says who writes (background() only runs where it does, but the ctx says so too)
+  const ctx = { home, fs: nodeFs, writer: writes, persist, once, progress }
   if (kicked.size) {
     try { await kickedSessions(ctx) } catch (e) { say(e) }
     if (busy) return // a request came during the look: it goes first, and kicks when it is answered
