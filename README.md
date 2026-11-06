@@ -602,12 +602,14 @@ Whether Desktop's own model calls come out decrypted verbatim is not claimed her
 - **DeepSeek's cache semantics on its Anthropic endpoint are not settled.** `dsh` (that endpoint) and
   DeepSeek's Chat Completions API are read like any other wire, but calls to the Anthropic endpoint show
   **What this provider's cache numbers mean is not certain** until a real capture settles them (3.3 OPEN).
-- **Some sessions are grouped by guess.** Hermes on a custom endpoint, and Kimi without a body key, send
-  no session id at all; their calls are grouped by the system prompt and a 30-minute gap (never by process
-  or connection), and the session is marked **session boundary inferred**. The rule is provisional until checked on a real capture.
-  A keyless summary request (pi's, for one) is not grouped this way when it shares the user's text with a session
-  of the same agent that was active in the last 30 minutes: it joins that session as a compaction. A session with an id
-  stays unmarked; a session that was itself grouped by guess stays marked inferred.
+- **Some sessions are grouped by guess.** pi on the Anthropic Messages and Chat Completions APIs, Hermes on a custom
+  endpoint, and Kimi without a body key send no session id at all. Each of their calls joins the conversation whose
+  history it continues (never by process or connection), so each agent is its own session; calls whose system prompt
+  changes between turns stay separate sessions. A compaction stays in the session it compacts when the agent's own
+  compaction signal is present: a keyless summary request (pi's, for one) joins the session whose user text it shares,
+  and Hermes's compaction marker is read the same way. A history rewritten without such a signal starts a new session.
+  These sessions are marked **session boundary inferred**; a session with an id stays unmarked. The rule is provisional
+  until checked on a real capture.
 - **A session's project is what its requests state.** It is the working directory written in the session's first
   calls; a session whose first calls state none shows no project.
 - **On captures without process identity the harness is a guess.** Sessions recorded by the MITM or
