@@ -260,7 +260,7 @@ export async function check(ctx) {
   // a hidden tab reads nothing (4.4:49-51): following is held to the growth only from the later of the growth and the return
   const shownAt = Math.max(grownAt ?? 0, ...hidden.map((h) => h.to ?? Infinity))
   if (desk && follow && grownAt != null && truth && shownAt !== Infinity) {
-    let w = v, m = await truth()
+    let m = await truth(), w = await viewOf(page) // truth() can wait out a read: the view it is held to is the one after it
     while (!(w.step === m && w.of === m && w.reply) && Date.now() < shownAt + LIMITS.followMs) {
       await page.waitForTimeout(250); w = await viewOf(page); m = await truth()
     }
