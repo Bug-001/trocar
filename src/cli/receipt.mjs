@@ -39,6 +39,16 @@ export const carrierWords = (kind) => CARRIER_WORDS[kind] || String(kind ?? '').
 // 1.6 §3.3: what an `on` plan row says changes in its file, by the route's kind (C.2 `planned[].kind`; the keys are the item's `keys`)
 const ROUTE_WORDS = Object.freeze({ 'json-key': 'its proxy setting', 'dotenv-block': "trocar's proxy block", 'plugin-file': "trocar's routing plug-in", 'switch-file': "trocar's switch file" })
 export const routeWords = (p) => ROUTE_WORDS[p.kind] || String(p.kind ?? '').replace(/-/g, ' ')
+// 1.6 §1.1: why an `on` route was not written (4.11 §3 ③, P5: its `reason` in the JSON), in words; a reason outside the table is never printed as its code
+const NOT_ROUTED_WORDS = Object.freeze({
+  'system-pac': 'the system proxy is a PAC script, which trocar does not run',
+  'own-egress': 'a proxy setting of yours is already there', blocker: 'a setting of yours keeps it off any entry trocar can use',
+  'credentialed-own-leg': 'the proxy it would go through needs a login, which this entry cannot carry',
+  absent: 'the file does not exist, and trocar does not create it', 'no-path': 'trocar found no entry for it', 'no-applied-entry': 'trocar found no entry for it',
+  unreadable: 'trocar cannot read it', 'blocker-unreadable': 'trocar cannot read a setting that decides it',
+})
+/** An `on` route row's reason: a not-routed reason in words, else the text the route gave (an undo that could not be done says its own sentence). */
+export const routeReason = (r) => (r.code === 'not-routed' ? NOT_ROUTED_WORDS[r.reason] || 'there is no entry trocar can use' : String(r.reason || r.code || ''))
 /** 1.6 §3.2: what an install plan row (planInstall's) says changes in its file — a config key by its key, a plug-in loaded from that file by the line
  *  that loads it, any other carrier in carrierWords' words; a row install changes nothing at (`state`, printed under "Left as they are:") says why. */
 export const planWords = (r) => (r.state === 'rule-u' ? 'this agent already names a certificate file of your own'
