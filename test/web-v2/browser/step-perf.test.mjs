@@ -71,7 +71,7 @@ test('D64②: 20 step changes by click and 20 by ←/→ send no request; a live
   } finally { await b.stop() }
 })
 
-test('1.2 §键盘: Tab reaches the step bar and the brush, and each shows an outline', { skip }, async () => {
+test('1.2 §键盘: Tab reaches the step bar and the overview strip (the old desk: its brush), and each shows an outline', { skip }, async () => {
   const b = await withBoard({ bytes: BYTES, chromium: gate.chromium })
   try {
     await openSession(b.page, null)
@@ -80,7 +80,7 @@ test('1.2 §键盘: Tab reaches the step bar and the brush, and each shows an ou
       await b.page.keyboard.press('Tab')
       const hit = await b.page.evaluate(() => {
         const a = document.activeElement
-        const where = a && a.closest('#stepbar') ? 'stepbar' : a && a.id === 'ovstrip' ? 'strip' : null
+        const where = a && a.closest('#stepbar') ? 'stepbar' : a && (a.id === 'ovstrip' || a.id === 'ovbrush') ? 'strip' : null // the new desk's strip, the old desk's brush
         return where && { where, outline: getComputedStyle(a).outlineStyle }
       })
       if (hit && !seen.has(hit.where)) { assert.notEqual(hit.outline, 'none', `${hit.where} has a focus ring`); seen.add(hit.where) }
