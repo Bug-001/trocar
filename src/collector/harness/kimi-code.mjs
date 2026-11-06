@@ -10,7 +10,7 @@
 // URL name of its provider type); KIMI_CODE_BASE_URL (managed provider), KIMI_WEB_SEARCH / FETCH_BASE_URL.
 // Trust (D37④): plain Node, NODE_EXTRA_CA_CERTS read at start, no app-level CA. trocar's launch shim <collector>/bin/kimi
 // sets it and execs ~/.kimi-code/bin/kimi (same pid); `kimi` resolves to the shim through one sentinel PATH line
-// after the kimi installer's own PATH line, in each shell rc that has one. Installed only when the binary and such a
+// at the end of each shell rc that holds the kimi installer's own PATH line. Installed only when the binary and such a
 // line exist; otherwise an install note `shim-not-on-path`. A CA the user already gives kimi (install shell, running
 // kimi) is carried over into extra-kimi.pem, as for Claude Code (4.6).
 // The marker entry (2026-10-12, the kimi gap found on a macOS test machine): an OS that never lets the collector read another process's

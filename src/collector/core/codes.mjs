@@ -42,7 +42,7 @@ export const TRUST_REASON = Object.freeze({
 export const CODE = Object.freeze({
   configUnreadable: 'config-unreadable', // a config file the resolver needs exists but cannot be read (errno in reason)
   configUnparsable: 'config-unparsable', // … or does not parse
-  shimNotOnPath: 'shim-not-on-path', // a launch shim was not installed, or is not what `kimi` resolves to
+  shimNotOnPath: 'shim-not-on-path', // a launch shim was not installed (a kimi that did not start through an installed one is kimi-not-via-shim)
   certNotMerged: 'cert-not-merged', // a block of a user CA file that is not a CERTIFICATE block was left out
   sourceUnreadable: 'source-unreadable', // a user CA file named in the agent's config could not be read
   relativePath: 'relative-path', // a user CA path that is relative was not carried over
