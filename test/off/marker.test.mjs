@@ -483,6 +483,47 @@ for (const { h, id, r } of DOOR_KINDS) {
   }
 }
 
+// An entry `select` created beside a meta file of the user's (no selecting key, or one naming an entry that is gone): the meta's backup gives the user's
+// bytes back and the entry goes; when that backup cannot be read, neither file is touched and both are named — the entry is never deleted under a meta
+// still selecting it (the next off could no longer find it).
+for (const { h, id, r } of DOOR_KINDS.filter((x) => x.r.select)) {
+  for (const os of ['darwin', 'win32']) {
+    for (const [state, metaText] of [['no selecting key', '{\n  "other": 2\n}\n'], ['naming a gone entry', `{\n  "other": 2,\n  "${r.select.idKey}": "gone"\n}\n`]]) {
+      for (const backup of ['readable', 'unreadable']) {
+        test(`${h.name} · ${id} · ${os} · meta ${state}, its backup ${backup}: the created entry and the meta key undo together or not at all`, () => {
+          const w = world({ os })
+          if (os === 'win32') Object.assign(w.ctx.env, { APPDATA: path.join(w.root, 'roaming'), LOCALAPPDATA: path.join(w.root, 'local') })
+          w.ctx.dirs = dirsFor(os, w.home, w.ctx.env)
+          const ctx = { ...w.ctx, harness: h.name, routeId: id, route: r }
+          const dir = resolveLoc(r.select.dir, ctx)[0]
+          if (!dir) return
+          const meta = path.join(dir, r.select.meta)
+          fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(meta, metaText)
+          putIngress(w.dir, PORT)
+          const res = routeEntry('json-key').write(ctx, door(PORT))
+          assert.ok(res.ok, JSON.stringify(res))
+          const entry = res.records.map((x) => x.path).find((f) => f !== meta)
+          assert.ok(entry && fs.existsSync(entry))
+          fs.rmSync(manifestPath(w.dir), { force: true })
+          if (backup === 'unreadable') for (const b of backupsOf({ home: w.home, file: meta })) fs.writeFileSync(b, '{ not json')
+          const onEntry = read(entry), onMeta = read(meta)
+          const results = undoByMarker(planByMarker({ home: w.home, env: w.ctx.env, platform: os, ids: [h.name] }), { home: w.home })
+          if (backup === 'readable') {
+            assert.ok(results.every((x) => x.result === 'undone-by-marker'), JSON.stringify(results))
+            assert.equal(fs.existsSync(entry), false)
+            assert.equal(read(meta), metaText)
+          } else {
+            const left = results.filter((x) => x.result === 'left-unreadable')
+            assert.equal(left.length, 1, JSON.stringify(results))
+            assert.deepEqual([fs.existsSync(entry) && read(entry), read(meta)], [onEntry, onMeta])
+            assert.ok(left[0].reason.includes(entry) && left[0].reason.includes(meta), left[0].reason)
+          }
+        })
+      }
+    }
+  }
+}
+
 // the receipt counts files: a file holding several of on's keys is one planned row, one changed row
 test('off with the manifest gone: a file holding several door keys is one row of the plan and of the receipt', async () => {
   const { runOff } = await import('../../src/off/orchestrate.mjs')

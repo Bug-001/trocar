@@ -266,11 +266,14 @@ function undoOne(item, home, fs) {
     for (const k of [...mine, ...(route.noProxyKeys || [])]) for (let d = k.length - 1; d > 0; d--) { const c = getPath(now(), k.slice(0, d)); if (isEmptyObject(c) && was(k.slice(0, d)) === undefined) restore(k.slice(0, d), undefined) }
   }
   // a door file left `{}` with no backup at all is one trocar created: it goes, and with it the meta key that selects it
+  // (the meta is judged before either file is written: when its backup cannot be read, both stay as they are)
   if (door && !pre.any && isEmptyObject(now())) {
-    fs.rmSync(file, { force: true })
     const meta = route.select ? unselect(item.path, route.select, home, fs) : null
+    if (meta && meta.result) return meta
+    fs.rmSync(file, { force: true })
+    if (meta) meta.apply()
     removeEmptyDirs([path.dirname(item.path)], fs)
-    return meta || done({ removed: true, deleted: true })
+    return done({ removed: true, deleted: true })
   }
   if (out !== t) put(out)
   const prior = mine.length === 1 && typeof was(mine[0]) === 'string' ? was(mine[0]) : null
@@ -292,7 +295,8 @@ function before(file, home, fs, isOn) {
 }
 
 // the entry trocar created is gone: the meta file's key that selects it comes back from the meta's backup (none there → it goes); a meta file left `{}`
-// with no backup is trocar's too and goes. → null, or a left-unreadable result when the backup that may hold the user's choice cannot be read
+// with no backup is trocar's too and goes. Nothing is written here: → null (nothing to do), { apply } (writes the meta), or a left-unreadable result,
+// naming both files, when the backup that may hold the user's choice cannot be read
 function unselect(entry, sel, home, fs) {
   const meta = path.join(path.dirname(entry), sel.meta), id = path.basename(entry, '.json'), k = [sel.idKey]
   const buf = readOrNull(fs, meta), r = buf == null ? null : readText(buf)
@@ -301,11 +305,14 @@ function unselect(entry, sel, home, fs) {
   if (!doc || getPath(doc, k) !== id) return null // gone, unreadable or no longer pointing at it: the user's choice now
   const pre = before(meta, home, fs, (d) => getPath(d, k) === id)
   const was = pre.doc ? getPath(pre.doc, k) : undefined
-  if (pre.unread.length && typeof was !== 'string') return { result: 'left-unreadable', reason: `${meta}: ${sel.idKey} was left pointing at the entry trocar created: trocar could not read the backups that may hold the value it replaced: ${pre.unread.map((u) => `${u.path} (${u.why})`).join('; ')}`, backups: pre.unread.map((u) => u.path) }
+  if (pre.unread.length && typeof was !== 'string') return { result: 'left-unreadable', reason: `${entry} and ${meta} were left as they are (${sel.idKey} still points at the entry trocar created): trocar could not read the backups that may hold the value it replaced: ${pre.unread.map((u) => `${u.path} (${u.why})`).join('; ')}`, backups: pre.unread.map((u) => u.path), meta }
   const out = typeof was === 'string' ? setKey(r.text, k, was).text : removeKey(r.text, k).text
-  if (!pre.any && isEmptyObject(parseJsonText(out))) fs.rmSync(meta, { force: true })
-  else writeDurable(meta, encodeText(out, r.charset), fs.statSync(meta).mode & 0o777, fs)
-  return null
+  return {
+    apply: () => {
+      if (!pre.any && isEmptyObject(parseJsonText(out))) fs.rmSync(meta, { force: true })
+      else writeDurable(meta, encodeText(out, r.charset), fs.statSync(meta).mode & 0o777, fs)
+    },
+  }
 }
 
 /** Undoes a plan from planByMarker, item by item; one that fails does not stop the rest. → [{ harness, path, how, result, … }] with `result`
