@@ -107,7 +107,7 @@ export function tipTable() {
 
 let named = null; // the query core, imported on the first /api request (it is most of a cold start)
 
-export function createServer({ home, token, query, tips, uid = process.getuid?.(), platform = process.platform, fs, now, env, webDir = WEB_DIR } = {}) {
+export function createServer({ home, token, query, tips, uid = process.getuid?.(), fs, now, env, webDir = WEB_DIR } = {}) {
   const files = loadStatic(webDir);
   const want = Buffer.from(String(token ?? ''));
   const tokenOk = (got) => {
@@ -127,8 +127,8 @@ export function createServer({ home, token, query, tips, uid = process.getuid?.(
       'GET status': ({ res }) => query.control({ verb: 'status', res }),
       'POST classes': post('classes'),
       'POST harness': post('harness'),
-      // Set up is install's own carriers step (4.11 P4b), which is macOS / Windows only: on Linux the row is absent, so 405
-      ...(platform === 'darwin' || platform === 'win32' ? { 'POST setup': post('setup') } : {}),
+      // Set up is install's own carriers step for one harness (4.11 P4b; driver mode: 4.6 「这个 harness 装好了没有」), on every platform
+      'POST setup': post('setup'),
     };
 
   /** ⑤ GET /api/d/<f>?id= (4.4 §答案文件). One open, fstat, read and close: the bytes and the tag are of one file even while the worker
