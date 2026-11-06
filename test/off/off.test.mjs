@@ -921,6 +921,17 @@ test('1.6 §3.1 · D62 ⑥: a nameless off in proxy mode reads the routing back 
   assert.deepEqual([good.receipt.routing.confirmed, good.receipt.daemon], [true, { pid: 4242, state: 'running' }])
 })
 
+test('1.6 §1.1 --now: in proxy mode, off --now after a plain off still asks the running daemon to cut, and the receipt carries what it cut', async () => {
+  const s = await installedHome({ names: ['claude-code'], daemon: { pid: 4242 } })
+  const asked = []
+  const deps = { platform: 'darwin', request: async (q) => { if (q.path !== '/off') return s.sys.daemon.request(q); asked.push(q.body); return { actual: 'off', confirmed: true, relayed: q.body.now ? { closing: 0, waiting: 0, cut: 1 } : { closing: 1, waiting: 0, cut: 0 }, pid: 4242 } } }
+  assert.equal((await s.off({ deps })).exit, 0)
+  const cut = await s.off({ now: true, deps })
+  assert.equal(cut.exit, 0, JSON.stringify(cut.receipt.problems))
+  assert.deepEqual(asked, [{}, { now: true }], 'everything already off: the daemon is still asked, with now')
+  assert.equal(cut.receipt.relayed.cut, 1)
+})
+
 test('the text receipt says a changed file once, as it says a removed file once: two entries of one file that ended the same way are one row; two that ended differently are two', () => {
   const file = path.join('/h', 'Library', 'Application Support', 'Code', 'User', 'settings.json') // one file, two json entries (a proxy key and an array item)
   const rows = (changed) => formatOffReceipt({ command: 'off', ok: true, outcome: 'done', changed, removed: [] }, { home: '/h' }).split('\n').filter((l) => l.includes('settings.json')).length
