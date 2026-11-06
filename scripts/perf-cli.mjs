@@ -125,15 +125,16 @@ async function cores({ home, names, vars, runs }) {
   const nearby = []
   if (vars.session) {
     const open = await timed('session', { id: vars.session })
-    const page = open.doc?.page || {}
+    const oldest = (open.doc?.calls || [])[0]?.rid // a page is the newest rows; the next one ends before its oldest (3.5 §会话读 --before)
     const steps = (open.doc?.records || []).map((r) => r.ref || r.text_ref).filter(Boolean)
     const seq = [
-      ['session page 2', 'session', { id: vars.session, after: page.next ?? '1', limit: String(page.limit ?? 50) }],
+      ['session page 2', 'session', oldest ? { id: vars.session, before: oldest, limit: '50' } : null],
       ['block of another step', 'block', { ref: steps[1] || vars.ref }],
       ['calls of this session', 'calls', { session: vars.session }],
       ['sessions (the list again)', 'sessions', {}],
     ]
     for (const [label, name, params] of seq) {
+      if (!params) continue // nothing to page to
       const ms = []
       let err = null
       for (let i = 0; i < runs; i++) { const r = await timed(name, params); ms.push(r.ms); err = err || r.error }
