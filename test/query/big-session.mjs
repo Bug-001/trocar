@@ -51,6 +51,7 @@ import path from 'node:path'
 import { replyOf } from '../helpers/cc-threads.mjs'
 import { buildWsEnvelope } from '../../src/collector/core/record/envelope.mjs'
 import { sealSegment } from '../../src/raw/seal.mjs'
+import { taskOf } from '../../src/view/blockmeta.mjs'
 
 const MODEL = 'claude-opus-4-8'
 export function rng(seed) {
@@ -276,7 +277,7 @@ export function firstAskOf(rec, records = []) {
     const parts = typeof m.content === 'string' ? [m.content] : (m.content || []).filter((p) => p && typeof p.text === 'string').map((p) => p.text)
     for (const t of parts) {
       const h = t.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').replace(/\s+/g, ' ').trim()
-      if (h) return h.slice(0, 80)
+      if (h) return taskOf(h) // the prompt is this file's to find; the cap is blockmeta's (tested in lane-task.test.mjs)
     }
   }
   return null
