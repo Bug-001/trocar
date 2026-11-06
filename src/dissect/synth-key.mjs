@@ -10,7 +10,6 @@ import { createHash } from 'node:crypto';
 import { harnessOf, sessionKeyOf, bodyOf, hintsOf } from './harnesses.mjs';
 
 export const SYNTH_GAP_MS = 30 * 60 * 1000;
-export const SYNTH_RULE = 'sha256(first system text) + a 30-minute gap (3.4 合成键, gate G11)';
 
 const partsOf = (c) => (typeof c === 'string' ? [c]
   : Array.isArray(c) ? c.map((p) => (p && typeof p === 'object' ? (typeof p.text === 'string' ? p.text : '') : String(p ?? ''))) : []);

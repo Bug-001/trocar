@@ -123,7 +123,7 @@ export function resourceRef(block) {
   return '';
 }
 // a short label for the (single) Codex instructions block.
-export function sysLabel(text) {
+function sysLabel(text) {
   const t = text || '';
   if (/^You are Codex/.test(t)) return 'Codex instructions';
   if (/<skills_instructions>|<plugins_instructions>/.test(t)) return 'developer instructions';
@@ -228,7 +228,7 @@ const chatText = (content) => {
 };
 // one chat message → [{role, block, sub}] (a message may fan out: assistant text + several tool_calls).
 // `sub` = the JSON path of the block's bytes within the message (the board's text_ref locator).
-export function chatMessageToBlocks(m) {
+function chatMessageToBlocks(m) {
   if (!m || typeof m !== 'object') return [{ role: 'user', block: { type: 'text', text: String(m ?? '') }, sub: [] }];
   const role = m.role || 'user';
   if (role === 'tool') return [{ role: 'tool', block: { type: 'tool_result', tool_use_id: m.tool_call_id || '', content: chatText(m.content) }, sub: ['content'] }];
@@ -260,7 +260,7 @@ export function chatMessageToBlocks(m) {
   if (!out.length) out.push({ role, block: { type: 'text', text: '' }, sub: [] });
   return out;
 }
-export function boardFlatChat(req) {
+function boardFlatChat(req) {
   const flat = [];
   const tools = Array.isArray(req && req.tools) ? req.tools : [];
   tools.forEach((t, i) => {
@@ -336,7 +336,6 @@ export function normRespChat(rec) {
 
 // ── shape-dispatched entry points (the shared view layer calls THESE, never a per-shape branch) ────
 export function boardFlatFor(shape, req) { return shape === 'chat' ? boardFlatChat(req) : boardFlat(req); }
-export function normRespFor(shape, rec) { return shape === 'chat' ? normRespChat(rec) : normResp(rec); }
 // derived per-call counts the board header reads, per wire shape (Responses: input[]/instructions;
 // Chat: messages[] with the leading system messages as the system text).
 export function reqCountsFor(shape, req) {
