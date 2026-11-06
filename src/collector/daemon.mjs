@@ -44,9 +44,7 @@ import { DAEMON_READ_VERBS } from '../off/daemon-read.mjs'
 import { runAsync } from '../off/exec.mjs'
 import { driftCheck, newDriftState } from '../netenv/adopt.mjs'
 import { classesHook, wsTerminalHook } from './engine-data.mjs'
-import { isModelOs, backendsFor, doorPartsFor, sourcesCtx } from './arch/model-backends.mjs'
-import { createModelCollector, replacesDaemon } from './core/proxymode/collector.mjs'
-import { TEMPLATES } from './harness/templates/index.mjs'
+import { isProxyMode as isModelOs } from '../off/mode.mjs' // arch/model-backends.mjs's isModelOs, the same fact (test/off/mode.test.mjs): the model's graph is loaded by runModelDaemon alone (D62)
 import { readStateFile } from '../off/state.mjs'
 
 export { loadArch } // the CLI reaches arch only through this file (layering rule 5)
@@ -772,7 +770,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
         const names = namesOf(body)
         if (b.exit === true && names) throw Object.assign(new Error('"exit" stops the whole daemon: it takes no harness names (leave them out)'), { status: 400 })
         const by = stopByOf(b)
-        const swap = replacesDaemon({ exit: b.exit === true, by })
+        const swap = b.exit === true && by ? (await import('./core/proxymode/collector.mjs')).replacesDaemon({ exit: true, by }) : false // only an exit some command asks for can be a swap: the model's module is loaded for it alone
         if (swap) leaving = true
         const r = swap ? { unwatched: [], unwatch_failed: [] } : await sw.off({ harnesses: names })
         const relayed = engine.drain({ agents: names ? new Set(names) : null, now: b.now === true, ...drainBy(by) })
@@ -846,6 +844,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
 // { backends: { custody, dirs, policy }, parts: doorPartsFor's shape, or io: doorPartsFor's OS readers alone, routes: (routes) => routes, a test's stand-in
 // for an earlier build's handler of a route } — the endpoint, the control server and the engine are always the real ones.
 async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failure, identity, lockRefreshMs, stopGraceMs, foreground, upstreamCa, model, fork, queryIdleMs, code }) {
+  const [{ backendsFor, doorPartsFor, sourcesCtx }, { createModelCollector }, { TEMPLATES }] = await Promise.all([import('./arch/model-backends.mjs'), import('./core/proxymode/collector.mjs'), import('./harness/templates/index.mjs')])
   const list = harnesses || (await loadHarnesses())
   const nextAgentList = agentListWatch({ home, write: (rec) => failure.write(rec) })
   let agents = (nextAgentList() || { entries: [] }).entries
