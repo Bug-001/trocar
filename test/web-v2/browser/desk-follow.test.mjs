@@ -49,10 +49,10 @@ test('2.3 跟随: the step head and the session head show the newest step by 150
     const shown = async () => (await seen()).find((x) => x.n === newest && x.rs == null)
     for (const t0 = Date.now(); !(await shown()) && Date.now() - t0 < 3000;) await page.waitForTimeout(20)
     const fetches = (await page.evaluate(() => globalThis.__fetches)).filter((e) => e.t0 >= since)
-    // the answer: the first round's two tail reads after the grant, landed when the later of them was in
+    // the answer: the first round's two tail reads after the grant, landed when the earlier of them was in
     const tails = fetches.filter((e) => e.url.startsWith('/api/d/open.')).slice(0, 2), out = fetches.filter((e) => e.url.startsWith('/api/block?'))
     assert.equal(tails.length, 2, 'the answer\'s tails were read')
-    const landed = Math.max(...tails.map((e) => e.t1)), at = await shown()
+    const landed = Math.min(...tails.map((e) => e.t1)), at = await shown()
     assert.ok(out.length && out.every((e) => e.t1 == null), `the followed step's body read went out and is held (${out.length})`)
     assert.ok(at, `the step head and the session head showed step ${newest} while its body read was held (seen ${JSON.stringify((await seen()).at(-1))})`)
     t.diagnostic(`step ${newest} and the session head drawn ${Math.round(at.t - landed)} ms after the answer landed`)

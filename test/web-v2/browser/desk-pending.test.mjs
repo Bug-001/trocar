@@ -195,6 +195,7 @@ test('2.3 读者优先: a redraw already on its way when the tick is pressed wai
       assert.equal(await stepN(), n0, 'the press holds the redraw past its wait')
       for (const r of held) await r.fallback()
       await page.waitForTimeout(400) // the bodies in, the redraw free to go, the pointer still down
+      assert.equal(await stepN(), n0, 'the press holds the redraw until the release, its bodies in')
       await page.mouse.up()
       await until((n0) => { const h = window.__head(); return !!h && h.n !== n0 && !!document.querySelector('#detail.open') }, n0, `the tick let go at step ${n0} did not move the step`)
       await drawn()
