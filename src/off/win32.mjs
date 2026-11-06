@@ -1,24 +1,27 @@
 // win32.mjs (src/off) — what `trocar off` and `trocar uninstall` do on Windows that no other OS needs (RFC 4.8 §4.2, §7; 1.6 R3, R7). It imports Node's own modules and files of src/off and nothing else: the standalone `trocar-off`
 // is made of the files of this directory alone, so it cannot reach the helper, the collector or the source tree (0.1 §2). Today this file holds the elevation check; the Windows undo (`undoWin32`) joins it.
 //
-// R7 on Windows (4.8 §7): trocar never runs with an elevated token or as SYSTEM, so `on`, `daemon`, `off` and `uninstall` refuse to. All four ask `whoami /groups` through execTool (`on` and `daemon`
+// R7 on Windows (4.8 §7): trocar never runs with an elevated token or as SYSTEM, so `on`, `daemon`, `off` and `uninstall` refuse to. All four ask `whoami /user /groups` through execTool (`on` and `daemon`
 // by arch/win32/autostart.mjs `refuseElevated`, which calls elevationByWhoami): a helper started for the question cost on 1.2 s (2026-10-17), and off has to work when trocar is broken. The SIDs are the same in every language of Windows, so the check reads
-// SIDs, never group names: the integrity label is `S-1-16-<rid>` (High is 12288, System 16384) and SYSTEM is `S-1-5-18`.
+// SIDs, never names: the integrity label is `S-1-16-<rid>` (High is 12288, System 16384) and SYSTEM is the user SID `S-1-5-18`. A SYSTEM token lists no S-1-5-18 group, so
+// SYSTEM is either of two signals, the user SID or a System label, and it is decided before the unsplit-token exception, which lets High through and never SYSTEM.
 import nodeFs from 'node:fs'
 import nodePath from 'node:path'
 import { execTool } from './exec.mjs'
 
 const HIGH_RID = 12288
+const SYSTEM_RID = 16384
 
 /** → `{ elevated: false }` · `{ elevated: true, why: 'high-integrity' | 'system' }` · `{ elevated: null, reason }` (R11: not readable is not "no", and `reason` says why). `run` is the injected runner (execTool's). */
 export function elevationByWhoami({ run = null, env = process.env } = {}) {
-  const r = execTool('whoami', ['/groups', '/fo', 'csv', '/nh'], { run, env })
-  if (r.code !== 0) return { elevated: null, reason: `whoami /groups ${r.code === null ? `did not run (${r.err || 'no reason given'})` : `failed (exit ${r.code})`}` }
+  const r = execTool('whoami', ['/user', '/groups', '/fo', 'csv', '/nh'], { run, env })
+  if (r.code !== 0) return { elevated: null, reason: `whoami ${r.code === null ? `did not run (${r.err || 'no reason given'})` : `failed (exit ${r.code})`}` }
+  const user = /^"[^"\r\n]*","(S-1-[\d-]+)"\r?$/m.exec(r.out)?.[1] ?? null // the user row is the one with two fields
   const rids = [...r.out.matchAll(/\bS-1-16-(\d+)\b/g)].map((m) => Number(m[1]))
-  if (/\bS-1-5-18\b/.test(r.out)) return { elevated: true, why: 'system' }
-  if (!rids.length) return { elevated: null, reason: 'whoami /groups gave no mandatory label (S-1-16-…)' }
+  if (/\bS-1-5-18\b(?!-)/.test(r.out) || Math.max(...rids) >= SYSTEM_RID) return { elevated: true, why: 'system' }
+  if (!rids.length) return { elevated: null, reason: 'whoami gave no mandatory label (S-1-16-…)' }
   if (Math.max(...rids) < HIGH_RID) return { elevated: false }
-  return unsplitByReg({ run, env }) ? { elevated: false, why: 'unsplit' } : { elevated: true, why: 'high-integrity' }
+  return unsplitByReg({ user, run, env }) ? { elevated: false, why: 'unsplit' } : { elevated: true, why: 'high-integrity' }
 }
 
 // R7's unsplit-token exception (1.6 R7, D53③): with no split token every shell of the account is High, so `on` and `off` share one token. whoami cannot see a
@@ -30,10 +33,9 @@ const regDword = (name, { run, env }) => {
   const m = r.code === 0 && new RegExp(`\\b${name}\\s+REG_DWORD\\s+0x([0-9a-f]+)`, 'i').exec(r.out)
   return m ? parseInt(m[1], 16) : r.code === 1 ? 'absent' : null
 }
-function unsplitByReg({ run, env }) {
+function unsplitByReg({ user, run, env }) {
   if (regDword('EnableLUA', { run, env }) === 0) return true
-  const u = execTool('whoami', ['/user', '/fo', 'csv', '/nh'], { run, env })
-  if (u.code !== 0 || !/"S-1-5-21-[\d-]+-500"/.test(u.out)) return false
+  if (!/^S-1-5-21-[\d-]+-500$/.test(user ?? '')) return false
   const f = regDword('FilterAdministratorToken', { run, env })
   return f === 0 || f === 'absent'
 }

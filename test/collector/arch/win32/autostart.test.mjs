@@ -11,7 +11,7 @@ import { spawn } from 'node:child_process'
 import { tmpDir } from '../../../helpers/tmp.mjs'
 import { assertEnglish } from '../../../helpers/english.mjs'
 import { refuseElevated, nodePreflight, NODE_MIN_MAJOR, taskXml, taskUser, userUnit, directStartEnv, register, daemonCommandLine, readRunValue, runKeyFallback, removeRunValue, TASK_NAME, TASK_FILE, RUN_KEY, superviseChild, runSupervisor, lockHolderAlive, supervisorBackoff, SUPERVISOR_LOCK, SUPERVISE_CAP_MS, SUPERVISE_STABLE_MS } from '../../../../src/collector/arch/win32/autostart.mjs'
-import { elevationByWhoami, refuseElevatedByWhoami } from '../../../../src/off/win32.mjs'
+import { elevationByWhoami, refuseElevatedByWhoami, elevatedRefusal } from '../../../../src/off/win32.mjs'
 import { checkRecord } from '../../../../src/health/codes.mjs'
 import { controlEndpoint, readControlEndpoint, CONTROL_FILE, PIPE_PREFIX } from '../../../../src/collector/arch/win32/control-path.mjs'
 import { autostartBlock } from '../../../../src/collector/install.mjs' // D61: the refusal `registered()` feeds
@@ -145,13 +145,13 @@ test('W26 a second server on a live endpoint is refused, and the first one is no
 const WHOAMI = (label, extra = '') => `"Everyone","Well-known group","S-1-1-0","Mandatory group, Enabled by default, Enabled group"\n"BUILTIN\\Users","Alias","S-1-5-32-545","Mandatory group, Enabled by default, Enabled group"\n${extra}"${label}","Label","S-1-16-${{ medium: 8192, high: 12288, system: 16384, low: 4096 }[label.split('\\')[1].split(' ')[0].toLowerCase()] ?? 8192}",""\n`
 const runner = (out, code = 0, calls = []) => (file, args) => { calls.push([file, ...args]); return { status: code, stdout: out, stderr: '' } }
 
-test('W25 off and uninstall (no helper, no source): the check is `whoami /groups` through execTool, High mandatory level or SYSTEM refuses, Medium and Low do not', () => {
+test('W25 off and uninstall (no helper, no source): the check is `whoami /user /groups` through execTool, High mandatory level or SYSTEM refuses, Medium and Low do not', () => {
   const calls = []
   assert.deepEqual(elevationByWhoami({ run: runner(WHOAMI('Mandatory Label\\Medium Mandatory Level'), 0, calls) }), { elevated: false })
-  assert.deepEqual(calls, [['whoami', '/groups', '/fo', 'csv', '/nh']], 'one fixed command, nothing else asked')
+  assert.deepEqual(calls, [['whoami', '/user', '/groups', '/fo', 'csv', '/nh']], 'one fixed command, nothing else asked')
   assert.deepEqual(elevationByWhoami({ run: runner(WHOAMI('Mandatory Label\\Low Mandatory Level')) }), { elevated: false })
   assert.deepEqual(elevationByWhoami({ run: runner(WHOAMI('Mandatory Label\\High Mandatory Level')) }), { elevated: true, why: 'high-integrity' })
-  assert.deepEqual(elevationByWhoami({ run: runner(WHOAMI('Mandatory Label\\System Mandatory Level')) }), { elevated: true, why: 'high-integrity' }, 'System integrity is above High')
+  assert.deepEqual(elevationByWhoami({ run: runner(WHOAMI('Mandatory Label\\System Mandatory Level')) }), { elevated: true, why: 'system' }, 'a System label is SYSTEM')
   assert.deepEqual(elevationByWhoami({ run: runner(WHOAMI('Mandatory Label\\Medium Mandatory Level', '"NT AUTHORITY\\SYSTEM","User","S-1-5-18","Mandatory group, Enabled by default, Enabled group"\n')) }), { elevated: true, why: 'system' }, 'SYSTEM by its own SID')
   assert.deepEqual(elevationByWhoami({ run: runner(WHOAMI('强制性标签\\High Mandatory Level')) }), { elevated: true, why: 'high-integrity' }, 'a localised label name does not matter: the SID decides')
   const r = refuseElevatedByWhoami({ run: runner(WHOAMI('Mandatory Label\\High Mandatory Level')) })
@@ -174,7 +174,7 @@ test('W25 off and uninstall never block on a token they cannot read: whoami fail
   }
 })
 
-test('W25 on and the daemon ask the same `whoami /groups` as off and uninstall (one question, no helper: its C# compile cost on 1.2 s, Windows test machine 2026-10-17): High or SYSTEM refuses with the closed-set record, Medium and Low do not, an unreadable token is said and not refused', async () => {
+test('W25 on and the daemon ask the same `whoami /user /groups` as off and uninstall (one question, no helper: its C# compile cost on 1.2 s, Windows test machine 2026-10-17): High or SYSTEM refuses with the closed-set record, Medium and Low do not, an unreadable token is said and not refused', async () => {
   for (const [what, out, refused, token] of [
     ['elevated (the Administrator token, UAC accepted)', WHOAMI('Mandatory Label\\High Mandatory Level'), true, { elevated: true, system: false, integrity: 'high' }],
     ['SYSTEM', WHOAMI('Mandatory Label\\System Mandatory Level', '"NT AUTHORITY\\SYSTEM","User","S-1-5-18","Mandatory group, Enabled by default, Enabled group"\n'), true, { elevated: true, system: true, integrity: 'system' }],
@@ -183,7 +183,7 @@ test('W25 on and the daemon ask the same `whoami /groups` as off and uninstall (
   ]) {
     const calls = [], unknown = []
     const r = await refuseElevated({ run: runner(out, 0, calls), onUnknown: (why) => unknown.push(why) })
-    assert.deepEqual(calls[0], ['whoami', '/groups', '/fo', 'csv', '/nh'], `${what}: whoami first`)
+    assert.deepEqual(calls[0], ['whoami', '/user', '/groups', '/fo', 'csv', '/nh'], `${what}: whoami first`)
     assert.ok(calls.every(([f]) => f === 'whoami' || f === 'reg'), `${what}: whoami and the UAC settings only, nothing started: ${JSON.stringify(calls)}`)
     assert.deepEqual(unknown, [])
     if (!refused) { assert.equal(r, null, what); continue }
@@ -194,7 +194,7 @@ test('W25 on and the daemon ask the same `whoami /groups` as off and uninstall (
   }
   const unknown = []
   assert.equal(await refuseElevated({ run: runner('', 1), onUnknown: (why) => unknown.push(why) }), null, 'whoami failing is not a refusal')
-  assert.match(unknown.join('\n'), /whoami \/groups failed \(exit 1\)/)
+  assert.match(unknown.join('\n'), /whoami failed \(exit 1\)/)
   assert.equal(await refuseElevated({ run: runner('<html>') }), null, 'onUnknown is optional')
 })
 
@@ -1054,16 +1054,17 @@ const REG = (name, v) => `\r\nHKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\
 const answers = (map, calls = []) => (file, args) => { calls.push([file, ...args]); const k = Object.keys(map).find((x) => [file, ...args].join(' ').includes(x)); return k ? (typeof map[k] === 'string' ? { status: 0, stdout: map[k], stderr: '' } : map[k]) : { status: 1, stdout: '', stderr: 'ERROR: The system was unable to find the specified registry key or value.' } }
 const HIGH = WHOAMI('Mandatory Label\\High Mandatory Level')
 const USER = (rid) => `"pc\\\\me","S-1-5-21-1-2-3-${rid}"\r\n`
+const HIGH_AS = (rid) => USER(rid) + '\r\n' + HIGH // `whoami /user /groups`: the user row, then the groups
 
 test('R7 unsplit token (off / uninstall, whoami): High with EnableLUA = 0, or the built-in Administrator with FilterAdministratorToken not 1, is let through; a split token\'s High and SYSTEM are not', () => {
-  assert.equal(refuseElevatedByWhoami({ run: answers({ '/groups': HIGH, EnableLUA: REG('EnableLUA', '0x0'), '/user': USER(1001) }) }), null, 'UAC off: every token is unsplit')
-  assert.equal(refuseElevatedByWhoami({ run: answers({ '/groups': HIGH, EnableLUA: REG('EnableLUA', '0x1'), '/user': USER(500) }) }), null, 'the built-in Administrator, FilterAdministratorToken absent (its default, 0)')
-  assert.equal(refuseElevatedByWhoami({ run: answers({ '/groups': HIGH, EnableLUA: REG('EnableLUA', '0x1'), '/user': USER(500), FilterAdministratorToken: REG('FilterAdministratorToken', '0x0') }) }), null)
+  assert.equal(refuseElevatedByWhoami({ run: answers({ '/groups': HIGH_AS(1001), EnableLUA: REG('EnableLUA', '0x0') }) }), null, 'UAC off: every token is unsplit')
+  assert.equal(refuseElevatedByWhoami({ run: answers({ '/groups': HIGH_AS(500), EnableLUA: REG('EnableLUA', '0x1') }) }), null, 'the built-in Administrator, FilterAdministratorToken absent (its default, 0)')
+  assert.equal(refuseElevatedByWhoami({ run: answers({ '/groups': HIGH_AS(500), EnableLUA: REG('EnableLUA', '0x1'), FilterAdministratorToken: REG('FilterAdministratorToken', '0x0') }) }), null)
   for (const [why, map] of [
-    ['a split token run as administrator', { '/groups': HIGH, EnableLUA: REG('EnableLUA', '0x1'), '/user': USER(1001) }],
-    ['the built-in Administrator under Admin Approval Mode', { '/groups': HIGH, EnableLUA: REG('EnableLUA', '0x1'), '/user': USER(500), FilterAdministratorToken: REG('FilterAdministratorToken', '0x1') }],
-    ['EnableLUA unreadable: not known to be unsplit', { '/groups': HIGH, '/user': USER(1001) }],
-    ['SYSTEM, whatever UAC says', { '/groups': WHOAMI('Mandatory Label\\System Mandatory Level', '"NT AUTHORITY\\SYSTEM","User","S-1-5-18",""\n'), EnableLUA: REG('EnableLUA', '0x0'), '/user': USER(1001) }],
+    ['a split token run as administrator', { '/groups': HIGH_AS(1001), EnableLUA: REG('EnableLUA', '0x1') }],
+    ['the built-in Administrator under Admin Approval Mode', { '/groups': HIGH_AS(500), EnableLUA: REG('EnableLUA', '0x1'), FilterAdministratorToken: REG('FilterAdministratorToken', '0x1') }],
+    ['EnableLUA unreadable: not known to be unsplit', { '/groups': HIGH_AS(1001) }],
+    ['SYSTEM, whatever UAC says', { '/groups': '"nt authority\\\\system","S-1-5-18"\r\n\r\n' + WHOAMI('Mandatory Label\\System Mandatory Level'), EnableLUA: REG('EnableLUA', '0x0') }],
   ]) assert.equal(refuseElevatedByWhoami({ run: answers(map) })?.code, 'elevated-token', why)
   const calls = []
   refuseElevatedByWhoami({ run: answers({ '/groups': WHOAMI('Mandatory Label\\Medium Mandatory Level') }, calls) })
@@ -1072,8 +1073,7 @@ test('R7 unsplit token (off / uninstall, whoami): High with EnableLUA = 0, or th
 
 test('R7 unsplit token (on / daemon, whoami as off): High with UAC off or the built-in Administrator unfiltered is let through; High otherwise and SYSTEM are refused (D53③)', async () => {
   const world = ({ label, system = false, lua = '0x1', user = 'S-1-5-21-1-2-3-1001', filter = null }) => (file, args) => {
-    if (file === 'whoami' && args[0] === '/groups') return { status: 0, stdout: WHOAMI(label, system ? '"NT AUTHORITY\\SYSTEM","User","S-1-5-18","x"\n' : ''), stderr: '' }
-    if (file === 'whoami' && args[0] === '/user') return { status: 0, stdout: `"pc\\u","${user}"\n`, stderr: '' }
+    if (file === 'whoami') return { status: 0, stdout: `"pc\\u","${system ? 'S-1-5-18' : user}"\n\n` + WHOAMI(label), stderr: '' }
     const v = args.at(-1) === 'EnableLUA' ? lua : filter
     return v == null ? { status: 1, stdout: '', stderr: '' } : { status: 0, stdout: `    ${args.at(-1)}    REG_DWORD    ${v}\n`, stderr: '' }
   }
@@ -1084,6 +1084,47 @@ test('R7 unsplit token (on / daemon, whoami as off): High with UAC off or the bu
   assert.equal((await ask({ label: HIGH, user: 'S-1-5-21-1-2-3-500', filter: '0x1' }))?.code, 'elevated-token', 'Admin Approval Mode on: split')
   assert.equal((await ask({ label: HIGH }))?.code, 'elevated-token', 'an elevated shell of a split account')
   assert.equal((await ask({ label: 'Mandatory Label\\System Mandatory Level', system: true, lua: '0x0' }))?.code, 'elevated-token', 'SYSTEM is refused whatever UAC says')
+})
+
+
+// R7 / W25 on real whoami shapes: `whoami /user /groups /fo csv /nh` answers one user row ("name","SID") and the group rows, CRLF, names in the
+// language of Windows. A SYSTEM token lists no S-1-5-18 group: SYSTEM is its user SID, and its label is System (S-1-16-16384). The runner answers
+// each table only when asked for it, so a check that asks for less sees less, as on Windows.
+const SHAPE = {
+  en: { label: { 8192: 'Mandatory Label\\Medium Mandatory Level', 12288: 'Mandatory Label\\High Mandatory Level', 16384: 'Mandatory Label\\System Mandatory Level' }, kind: 'Label', admins: 'BUILTIN\\Administrators', alias: 'Alias', nta: 'NT AUTHORITY' },
+  de: { label: { 8192: 'Verbindliche Beschriftung\\Mittlere Verbindlichkeitsstufe', 12288: 'Verbindliche Beschriftung\\Hohe Verbindlichkeitsstufe', 16384: 'Verbindliche Beschriftung\\Systemverbindlichkeitsstufe' }, kind: 'Bezeichnung', admins: 'VORDEFINIERT\\Administratoren', alias: 'Alias', nta: 'NT-AUTORITÄT' },
+  zh: { label: { 8192: 'Mandatory Label\\Medium Mandatory Level', 12288: '强制标签\\高强制级别', 16384: '强制标签\\系统强制级别' }, kind: '标签', admins: 'BUILTIN\\Administrators', alias: '别名', nta: 'NT AUTHORITY' },
+}
+const WHO = {
+  user: { sid: 'S-1-5-21-111-222-333-1001', rid: 8192, admins: null },
+  admin: { sid: 'S-1-5-21-111-222-333-1002', rid: 12288, admins: 'Mandatory group, Enabled by default, Enabled group, Owner' },
+  'admin-filtered': { sid: 'S-1-5-21-111-222-333-1002', rid: 8192, admins: 'Group used for deny only' },
+  system: { sid: 'S-1-5-18', rid: 16384, admins: 'Enabled by default, Enabled group, Group owner' },
+}
+const machine = ({ who, uac, lang }) => (file, args) => {
+  const t = SHAPE[lang], w = WHO[who]
+  if (file === 'reg') return args.at(-1) === 'EnableLUA' ? { status: 0, stdout: `\r\nHKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System\r\n    EnableLUA    REG_DWORD    ${uac ? '0x1' : '0x0'}\r\n\r\n`, stderr: '' } : { status: 1, stdout: '', stderr: 'ERROR' }
+  const rows = []
+  if (args.includes('/user')) rows.push(`"${who === 'system' ? `${t.nta.toLowerCase()}\\system` : 'desktop-7q\\ada'}","${w.sid}"`, '')
+  if (args.includes('/groups')) rows.push('"Everyone","Well-known group","S-1-1-0","Mandatory group, Enabled by default, Enabled group"',
+    ...(w.admins ? [`"${t.admins}","${t.alias}","S-1-5-32-544","${w.admins}"`] : []),
+    ...(who === 'system' ? [] : [`"${t.nta}\\INTERACTIVE","Well-known group","S-1-5-4","Mandatory group, Enabled by default, Enabled group"`]),
+    `"${t.nta}\\Authenticated Users","Well-known group","S-1-5-11","Mandatory group, Enabled by default, Enabled group"`,
+    `"${t.label[w.rid]}","${t.kind}","S-1-16-${w.rid}",""`)
+  return { status: 0, stdout: rows.join('\r\n') + '\r\n', stderr: '' }
+}
+
+test('R7 / W25 the token on real whoami shapes (UAC on / off × user / elevated administrator / SYSTEM, CRLF, localised names): SYSTEM is refused as SYSTEM whatever UAC says, the elevated half of a split token is refused, the rest go on', async () => {
+  for (const lang of Object.keys(SHAPE)) for (const uac of [true, false]) for (const [who, want] of [['user', null], ['admin-filtered', null], ['admin', uac ? 'high' : null], ['system', 'system']]) {
+    if (!uac && who === 'admin-filtered') continue // with UAC off an administrator has no filtered half
+    const what = `${who}, UAC ${uac ? 'on' : 'off'}, ${lang}`, run = machine({ who, uac, lang })
+    const off = refuseElevatedByWhoami({ run }), on = await refuseElevated({ run })
+    if (!want) { assert.equal(off, null, `${what}: off / uninstall go on`); assert.equal(on, null, `${what}: on / daemon go on`); continue }
+    assert.equal(off?.code, 'elevated-token', `${what}: off / uninstall refuse`)
+    assert.equal(on?.code, 'elevated-token', `${what}: on / daemon refuse`)
+    assert.equal(on.token.system, want === 'system', `${what}: the record says ${want === 'system' ? 'SYSTEM' : 'not SYSTEM'}`)
+    assert.equal(off.reason, elevatedRefusal(want === 'system').reason, `${what}: off says what on says`)
+  }
 })
 
 // W39 (moved from the old wiring.test.mjs, which went with the old win32 collector): the arch the CLI and daemon reach through loadArch.
