@@ -45,26 +45,6 @@ test('#10 bad data degrades, never throws: unknown kinds land in 其他资源 wi
   assert.ok(dated && /data-navstep="2"/.test(dated[0]), 'a dated unknown row locates its enter step')
 })
 
-test('the < 1200 px fold line: N is the file group\'s own count; no ledger or nothing countable → no number', () => {
-  const barOf = (anchor) => {
-    const bar = { textContent: '' }
-    const el = { innerHTML: '' }
-    renderResources(el, stateOf(anchor, { root: { querySelector: (sel) => (sel === '#rpbar' ? bar : null) } }))
-    return { bar, h: el.innerHTML }
-  }
-  for (const a of [{}, { resources: [] }]) {
-    assert.ok(!/\d/.test(barOf(anchorOf(a)).bar.textContent), 'nothing countable: no number, never a 0 standing in')
-  }
-  const mixed = barOf(anchorOf({ resources: [
-    { kind: 'file', label: '/w/a.mjs', segments: [{ enter: R(0), evict: null }] },
-    { kind: 'file', label: '/w/b.mjs', segments: [{ enter: R(1), evict: R(2) }] },
-    { kind: 'file', label: '/w/c.mjs' },                                        // unusable segments: neither the group nor the bar counts it
-    { kind: 'capability', label: 'srv', segments: [{ enter: R(0), evict: null }] },
-  ] }))
-  assert.match(mixed.bar.textContent, /\b2\b/)
-  assert.equal(grpCount(mixed.h, W.RES_GRP.file), 2, 'the fold line and the group header count the same hasSeg-filtered set')
-})
-
 test('#1 the five groups count their own entries, and compactions make no group (one constructed lane)', () => {
   const anchor = anchorOf({
     resources: [

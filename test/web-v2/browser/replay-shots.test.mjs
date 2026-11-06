@@ -65,7 +65,7 @@ const layout = (page) => page.evaluate(() => {
   return {
     clipped, untitled,
     ctxwin: h('#ctxwin'),
-    avail: innerHeight - h('#deskhead') - h('#rpbar') - h('.deskside.bottom'), // the head + its fidelity row; the bottom row only where it is drawn
+    avail: innerHeight - h('#deskhead') - h('.deskside.bottom'), // the head + its fidelity row; the bottom row only where it is drawn
     hscroll: document.documentElement.scrollWidth > innerWidth || document.body.scrollWidth > innerWidth,
   }
 })

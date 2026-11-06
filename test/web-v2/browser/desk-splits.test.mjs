@@ -13,7 +13,7 @@ async function open(page, M) {
   await page.evaluate((m) => { location.hash = `#/replay/p/S?step=${m}` }, M)
   await page.waitForFunction((m) => {
     const x = /(\d+)\s*\/\s*(\d+)/.exec(document.querySelector('#stepbar .sb-no')?.textContent || '')
-    return !!x && +x[1] === m && !document.querySelector('#ctxwin .cwload') && !!document.querySelector('#rightpage, #desk-side')
+    return !!x && +x[1] === m && !document.querySelector('#ctxwin .cwload') && !!document.querySelector('#desk-side')
   }, M, { timeout: 30000, polling: 'raf' })
 }
 

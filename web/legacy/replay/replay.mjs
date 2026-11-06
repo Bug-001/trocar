@@ -836,7 +836,7 @@ function openDesk(ctx, route0, makeView) {
   // a hidden page starts none of the step's reads (2.3 §正文预取); back in view: read now, not a tick later
   const stepsByPage = () => (document.hidden ? steps.pause() : steps.resume())
   const onVis = () => { stepsByPage(); if (!document.hidden) poll() }
-  // the lane's width changes with the window and with the right-page divider: watch both. Only a window that no longer fits is touched.
+  // the lane's width changes with the window and with the panes' boundaries: watch both. Only a window that no longer fits is touched.
   const refit = () => { if (alive() && fitView()) { view.saw(); drawRails(); view.overview() } }
   const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(refit) : null
   let unwireDetail = null, scrolls = []
