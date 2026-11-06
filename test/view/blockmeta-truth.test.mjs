@@ -95,7 +95,7 @@ function expectedText({ sec, src }) {
 // Who is speaking, and what kind of turn it is — the two strings the collapsed row leads with.
 function expectedRoleTag({ sec, role, src }) {
   if (sec === 'tools') return { role: 'tool', tag: 'def' };
-  if (sec === 'system') return { role: 'system', tag: null };   // tag is the server's section label
+  if (sec === 'system') return { role: 'system', tag: null };   // tag: the closed-set test below
   if (src.type === 'thinking' || src.type === 'redacted_thinking') return { role: 'assistant', tag: 'thinking' };
   if (src.type === 'tool_use' || src.type === 'server_tool_use') return { role: 'assistant', tag: `action · ${src.name}` };
   if (src.type === 'tool_result') return { role, tag: 'observation' };
