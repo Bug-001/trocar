@@ -20,7 +20,7 @@ import { laneStepper, weigh } from './named/lane.mjs';
 /** The answer files' format version (3.5 `v`). */
 export const CTX_V = 3;
 /** The lane headers a head lists at most, the axis lane first, then the most recently active (3.5 `lanes`, SHOULD 64). */
-export const HEAD_LANES = 64;
+const HEAD_LANES = 64;
 // cells of `cols` at most (3.5 `bucket`), failed members `errors` names at most, tier-0 time buckets at most
 const CELLS = 32_768, FAILED_SHOWN = 64, BUCKETS = 240;
 
@@ -140,7 +140,7 @@ const spanOf = (s, rid) => { const p = s.pos(rid); return p < 0 ? -1 : Math.floo
 const isRow = (cols, rid) => { const k = cols.slotOf(rid); return k !== undefined && cols.ts[k] !== undefined; };
 /** axisSpans(s) → [s0, s1] per span 0..sealedOf(s): the axis steps its members cover (smallest, largest + 1); a span with none
  *  covers the empty range at the count of axis steps in the spans before it. */
-export const axisSpans = (s) => spansOf(s, axisSteps(s));
+const axisSpans = (s) => spansOf(s, axisSteps(s));
 // the span of each axis step, in step order; `sp` (the writer's, of the last slice) is kept below place `j`: the axis rows before it
 // did not move (dirtyOf), so a slice looks at the axis steps from its first changed one only
 function axisSteps(s, sp = [], j = 0) {
@@ -226,7 +226,7 @@ export function packsOf(s) {
 
 // ── The writer (3.5 §谁执行它「答案文件」): the query worker only, after each slice ─────────────────────────────────────────────────
 /** packFile / tailFile (home, id, …) → a pack's and a tail's file in the session's directory. */
-export const packFile = (home, id, n, part) => path.join(sessionDir(home, id), `p${n}.${part}.ndjson.gz`);
+const packFile = (home, id, n, part) => path.join(sessionDir(home, id), `p${n}.${part}.ndjson.gz`);
 export const tailFile = (home, id, part) => path.join(sessionDir(home, id), `open.${part}.ndjson`);
 const PARTS = ['main', 'rest'];
 const sha = (t) => createHash('sha1').update(t).digest('hex');

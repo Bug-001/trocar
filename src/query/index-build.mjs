@@ -36,7 +36,7 @@ import { expandRequestBody } from '../dissect/request-body.mjs';
 import { createHash, randomBytes } from 'node:crypto';
 import { fpRanges, readRangeSync } from './source.mjs';
 import { openSealed } from '../raw/reader.mjs';
-import { R, FLAG_NL, FLAG_UNPARSEABLE } from '../raw/format.mjs';
+import { R, FLAG_UNPARSEABLE } from '../raw/format.mjs';
 import { trocarHome, collectorHome } from '../paths.mjs';
 import { readDaemonLock } from '../off/daemon-stop.mjs';
 import { statKey, warmCache, fsTag } from './warm.mjs';
