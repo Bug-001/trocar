@@ -49,9 +49,11 @@ const KEPT_BECAUSE = {
 const UNTIL_VALUES = ['restart', 'next-connection', 'next-handshake', 'session-end']
 
 const known = (item) => KNOWN_KINDS.includes(item.kind)
-// step 4's owned files: trocar-only content goes whatever it holds now (a changed one is said); a config-library entry the agent writes the user's
-// settings into goes only while unchanged (4.11 P5 / CM18, D48②); a wrapper is put back by its own rule
-const OWNED_UNDO = { plugin: removeOwnedFile, shim: removeOwnedFile, switch: removeOwnedFile, 'config-entry': (f, fs) => removeOwnedFile(f, fs, { unlessChanged: true }), wrapper: undoWrapper }
+// step 4's owned files go only while their bytes are the ones the manifest recorded (4.11 §4): a damaged manifest never costs the user a file. A changed
+// one is left and said (D38); a config-library entry the agent writes the user's settings into is the user's then and leaves the manifest (4.11 P5 / CM18,
+// D48②); a wrapper is put back by its own rule
+const unlessChanged = (f, fs) => removeOwnedFile(f, fs, { unlessChanged: true })
+const OWNED_UNDO = { plugin: unlessChanged, shim: unlessChanged, switch: unlessChanged, 'config-entry': unlessChanged, wrapper: undoWrapper }
 // what `install` wrote (D55①: phase 'install' — the root's key, its CA file, the certificate carriers: config keys, bundles, pem-blocks, wrappers, plugins and
 // their loader lines): `off` lists them and leaves them (1.6 §1.1 「证书一项不碰」), `uninstall` undoes them (the key last: undoRootKeys, after the trust
 // store's root). The phase, never a list of kinds: a carrier of a new kind is spared by the same rule.
@@ -324,6 +326,7 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
     try {
       const r = OWNED_UNDO[f.role](f, fs)
       if (r.result === 'error') { fail(f, r.reason); continue }
+      if (r.result === 'kept-changed' && f.role !== 'config-entry') { fail(f, `${f.path}, trocar's ${f.role}, is not what trocar wrote (its bytes differ from the install manifest's record${f.sha256 ? '' : ', which holds none'}), so it was left as it is; delete it by hand if it is not yours, then run it again`); continue }
       if (r.result === 'kept-changed') out.notes.push(`${f.path}, the ${f.role} trocar created, was changed while trocar was on: it holds the user's settings now, so it is kept (trocar's own key in it was undone by its entry)`)
       if (r.result === 'removed') out.removed.push(r.path)
       if (r.changed) out.changed.push({ harness: f.harness, path: f.path, role: f.role }) // not what trocar wrote: removed all the same, and said

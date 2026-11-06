@@ -134,7 +134,11 @@ function undo(ctx, records) {
   const ents = records.filter((x) => x.kind !== 'owned-file').reverse(), files = records.filter((x) => x.kind === 'owned-file').reverse()
   const drop = (list, x) => { const i = list.indexOf(x); if (i >= 0) list.splice(i, 1) }
   for (const e of ents) { const r = undoEntry(e, { fs }); results.push(r); if (!KEEP(r.result)) drop(m.entries, e) }
-  for (const f of files) { results.push(removeOwnedFile(f, fs, { unlessChanged: f.role === 'config-entry' })); drop(m.files, f) }
+  for (const f of files) { // only while it is what trocar wrote (4.11 §4); a changed config-library entry is the user's, any other changed file stays listed
+    const r = removeOwnedFile(f, fs, { unlessChanged: true })
+    if (r.result === 'kept-changed' && f.role !== 'config-entry') results.push({ ...r, result: 'left-changed' })
+    else { results.push(r); drop(m.files, f) }
+  }
   saveManifest(ctx.dir, m, fs)
   return { ok: !results.some((r) => KEEP(r.result)), results }
 }
