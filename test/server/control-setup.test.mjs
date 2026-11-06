@@ -22,7 +22,7 @@ import { createServer } from '../../src/server.mjs'
 import { createQueryService } from '../../src/query/service.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
 import { VERBS } from '../../src/control/board.mjs'
-import { driverSetup } from '../../src/collector/driver-setup.mjs'
+import { driverSetup, driverCtx } from '../../src/collector/driver-setup.mjs'
 import { planOn } from '../../src/collector/install.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 import { installedHome, ROOTS } from '../off/fixtures/off-ctx.mjs'
@@ -255,8 +255,12 @@ for (const h of ['claude-code', 'codex', 'hermes', 'kimi-code', 'z-code']) for (
     const ctx = { home: path.join(s.home, '.trocar'), deps: linuxSetupDeps(s) }
     const record = () => fs.readFileSync(manifestPath(s.dir), 'utf8')
     const recorded = record()
+    // which way it must go, from the data: does the harness's inject still give items on the damaged HOME (4.6: none → refuse, never guess)
+    const given = desc.inject(driverCtx({ os: 'linux', home: s.home, env: s.sh.env })) || {}
+    const places = [...(given.entries || []), ...(given.owned || []), ...(given.files || [])].length > 0
     const p = await VERBS.setup({ harness: h }, ctx)
-    if (p.doc.ok === false) {
+    assert.equal(p.doc.ok !== false, places, JSON.stringify(p.doc))
+    if (!places) {
       assert.equal(p.doc.error.code, 'setup-needed', JSON.stringify(p.doc))
       assert.deepEqual([left(), record()], [userLeft, recorded], 'a refused Set up writes nothing')
       assert.equal(judged().state, 'needed')
