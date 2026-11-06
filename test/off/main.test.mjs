@@ -3,6 +3,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
+import crypto from 'node:crypto'
 import path from 'node:path'
 import http from 'node:http'
 import os from 'node:os'
@@ -137,7 +138,7 @@ test('R6 · 附录 C.2: the dry run plans every file off takes out by its role: 
   const file = path.join(s.home, '.codex', 'switch'), manifest = path.join(s.dir, 'install-manifest.json')
   fs.writeFileSync(file, 'trocar')
   const m = JSON.parse(fs.readFileSync(manifest))
-  fs.writeFileSync(manifest, JSON.stringify({ ...m, files: [...m.files, { path: file, role: 'switch', phase: 'on', harness: 'codex' }] }))
+  fs.writeFileSync(manifest, JSON.stringify({ ...m, files: [...m.files, { path: file, role: 'switch', phase: 'on', harness: 'codex', sha256: crypto.createHash('sha256').update('trocar').digest('hex') }] }))
   const dry = fakeIo()
   assert.equal(await runOffCli(['--dry-run', '--json'], ctx(s, dry)), 0)
   const d = dry.json()
