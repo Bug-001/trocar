@@ -160,6 +160,7 @@ export const FAILURE_WORDS = Object.freeze({
   'bundle-kept': 'a certificate bundle still in use is kept for now',
   'residue-not-removed': "files the agent wrote because of trocar's plugin are kept; reported, not deleted",
   'collectors-online': 'uninstall was refused: capture is still on for an agent, or a program may still be using trocar',
+  'home-mismatch': "install or uninstall was refused: HOME is not your account's home, which the login entry uses",
   // failure events that carry no code of their own (the group's code is the event)
   failure: 'a problem was recorded',
   'agent-untrusted': "a running agent does not trust trocar's certificate yet",

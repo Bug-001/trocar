@@ -17,7 +17,7 @@ import { rootStore, sameRoot } from '../off/root-store.mjs'
 import { disableAutostart, unitFilePath, removeWantsLinks } from '../off/autostart.mjs'
 import { undoAutostart, plistFilePath } from '../off/darwin.mjs'
 import { findingFor } from '../netenv/findings.mjs'
-import { standaloneFiles, backupDir, opLockFile, trocarHome, appDir, launcherPath, COLLECTOR_STATE_FILES } from '../off/paths.mjs'
+import { standaloneFiles, backupDir, opLockFile, trocarHome, appDir, launcherPath, COLLECTOR_STATE_FILES, homeMismatch, accountHomeOf } from '../off/paths.mjs'
 import { rawHome, indexHome, classesLog, collectorHome } from '../paths.mjs' // D60: the records are segments under ~/.trocar/raw, the index trocar builds from them under ~/.trocar/index
 import { netenvFile } from '../netenv/index.mjs'
 import { dropBackup, orphanBackups } from '../off/backup.mjs'
@@ -30,7 +30,7 @@ import { channelOf, packageRoot, setupHelperCommand } from '../version.mjs'
 import { DEFAULT_REDIRECTOR_BIN } from '../collector/arch/linux/redirector-client.mjs'
 import { confirm, isInteractive } from '../off/io.mjs'
 import { CODE_OFF } from '../off/names.mjs'
-import { formatUninstallReceipt } from './receipt.mjs'
+import { formatUninstallReceipt, fit } from './receipt.mjs'
 import { removeIngressConfig } from '../collector/core/ingress-config.mjs'
 import { refuseElevatedByWhoami, disableScheduledTask, TASK_NAME } from '../off/win32.mjs'
 import { holdersOf } from '../off/holders.mjs'
@@ -507,6 +507,9 @@ export async function runUninstallCli(argv, { io, env = process.env, home = node
   }
   const json = flags.has('--json')
   if ((deps.getuid || processUid)() === 0) { io.err('trocar uninstall: run this as your own user, not as root.'); return EXIT.usage }
+  // 1.6 §1.5 (V126): under a HOME that is not the account's, this run would undo that home while the login entry and its daemon are the account's
+  const away = homeMismatch({ home, account: deps.accountHome ? deps.accountHome() : accountHomeOf(home), platform: deps.platform || platform, fs: deps.fs })
+  if (away) { if (json) printJson(io, { ...newReceipt('uninstall'), ok: false, error: { code: away.code, message: away.message }, notes: [away.message] }); else io.err(fit([`trocar uninstall: ${away.message}`]).join('\n')); return EXIT.usage }
   try {
     // a platform without a collector reaches runUninstall the same way and finds nothing to undo (D39⑥ executed 2026-10-11: the old capture's own uninstall went with it)
     // the root's key goes last through its custody (4.11 P13): the platform's backend unless a test hands one in

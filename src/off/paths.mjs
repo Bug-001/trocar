@@ -10,6 +10,22 @@ import { CONTROL_FILE } from './control-client.mjs'
 
 /** ~/.trocar (D27; the v0 prototype's ~/.atrace is read, never written, and is not here). */
 export const trocarHome = (home = os.homedir()) => path.join(home, '.trocar')
+/** 1.6 §1.5: the login entry (launchd, systemd --user, the scheduled task) starts the daemon with the account's own home — the user record's,
+ *  the profile directory — never this shell's HOME / USERPROFILE. → that home, or null when it cannot be read or `home` is not the one the
+ *  environment gave this process (a caller's sandbox HOME is not asked about). */
+export function accountHomeOf(home) {
+  if (home !== os.homedir()) return null
+  try { return os.userInfo().homedir || null } catch { return null }
+}
+/** `install` and `uninstall` before they read or write anything (1.6 §1.5, V126): this run's home and the account's (`account`, null = not
+ *  known: no refusal) compared as real paths, without case on Windows. → null, or `{ code: 'home-mismatch', message }`. */
+export function homeMismatch({ home, account, platform = process.platform, fs = nodeFs }) {
+  if (!account) return null
+  const real = (p) => { let r; try { r = fs.realpathSync(p) } catch { r = path.resolve(p) } return platform === 'win32' ? r.toLowerCase() : r }
+  if (real(home) === real(account)) return null
+  const v = platform === 'win32' ? 'USERPROFILE' : 'HOME'
+  return { code: 'home-mismatch', message: `${v} is ${home}, but the collector that starts at login uses your account's home, ${account}. Nothing was changed. Run it again with ${v} unset, or set to that home.` }
+}
 /** ~/.trocar/collector: the manifest, state.json, the lock, the CA, the daemon's records. */
 export const collectorDir = (home = os.homedir()) => collectorIn(trocarHome(home))
 /** The same directory named from the TROCAR home instead of the user's (whoever already holds ~/.trocar: the board's
