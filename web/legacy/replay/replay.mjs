@@ -36,7 +36,7 @@ import { partsOf, placeWindow, anchorSpan } from '../../src/screens/replay/strip
 import { setScreenKeys } from '../core/keys.mjs'
 import { openModal } from '../core/dom.mjs'
 import { keyAction } from './keymap.mjs'
-import { buildLanes, anchorLane, stepsOf, nearestByTs, placeOf } from './lanes.mjs'
+import { buildLanes, anchorLane, stepsOf, nearestByTs, placeOf, stepOfMark } from './lanes.mjs'
 import { createDesk, readLedger, applyLedger, indexOf, ridAt, stepOf as deskStep } from './model.mjs'
 import { lineSlices, applyFile, applyHead } from './packs.mjs'
 import { get, getText } from '../core/http.mjs'
@@ -47,7 +47,7 @@ import { createLoader } from './loader.mjs'
 import { createPoller, INTERVAL } from '../core/poll.mjs'
 import { createPace } from './pace.mjs'
 import { problemSteps, barsThatFit, fitWindow, capWindow, chapterHere } from './timeline.mjs'
-import { renderRails, wireRails, highlightRange, reviewing } from './rails.mjs'
+import { renderRails, wireRails, highlightRange, reviewing, selectTick } from './rails.mjs'
 import { arrived, refWaits, rowKeys } from '../../src/screens/replay/window-model.mjs'
 import { jumpToAnchor, jumpToResourceBlock, jumpToBlockIndex, jumpToLastPrompt } from './outline.mjs'
 import { createJumpQueue } from './jump.mjs'
@@ -56,7 +56,7 @@ import { wireResources } from './resources.mjs'
 import { openDetail, closeDetail, wireDetail } from './detail.mjs'
 import { captureGap, behindOf } from './header.mjs'
 import { loadBodies, bodyCache, clearOverrides, drawAhead, idle as whenIdle, overrideScope, isRetryable } from './cell.mjs'
-import { KEYS_TITLE, KEY_LIST, THIS_SESSION, UNPARSED_LINE, NO_REQUEST, RES_NOT_FOUND, moreLanes } from '../labels/replay.mjs'
+import { KEYS_TITLE, KEY_LIST, THIS_SESSION, UNPARSED_LINE, NO_REQUEST, RES_NOT_FOUND, CALL_NOT_HERE, moreLanes } from '../labels/replay.mjs'
 import { readFailure, toast } from '../core/ui.mjs'
 
 const POLL_MS = INTERVAL.session
@@ -149,6 +149,8 @@ function openDesk(ctx, route0, makeView) {
   })
   const s = {
     ctx: { ...ctx, api: areaApi }, dead: false, project: route0.project, id: route0.id, initialStep: hasStep(route0) ? stepParam(route0.params.step).step : null,
+    initialCall: null, // a `call=` link's record id not landed yet (nameCall); callAt: {rid, at} the call it landed on, while the reader has not moved
+    callAt: null,
     ...fresh(), headFollow: null, health: null,
     openBlocks: new Set(), turnLanded: new Set(), // open rows by key (bid#n, rp:bid): they survive a step change while the bid stays
     reads, // aborted when the desk is disposed (evicted from the session cache)
@@ -246,10 +248,28 @@ function openDesk(ctx, route0, makeView) {
     const rid = ridAt(s.desk, a.id, Math.max(1, Math.min(M, s.initialStep)) - 1), i = rid == null ? undefined : a.ridLocal.get(rid)
     return i ?? -1
   }
+  // the desk still shows what a `call=` link landed on: the reader has not moved the playhead, turned follow on, or left its drawer
+  const stillAtCall = () => !!s.callAt && s.callAt.at === s.playRid && !s.follow && (s.selTick === s.callAt.rid || !!s.anchor && s.anchor.ridLocal.has(s.callAt.rid))
+  let callDrawer = null // another lane's call a `call=` link landed on: its drawer opens once the desk is drawn
   // the playhead from its rid: its call's place in the anchor lane; a call that left the lane → the anchor call nearest in time. A named
   // step lands directly once it is here; until then a drawn desk keeps its step and a desk that never drew stays ⑧ (no playhead)
   function placePlayhead(prevRow) {
     const a = s.anchor, N = a.calls.length
+    // a landed call the reader has not moved from is placed again as rows come: the nearest step may be in a pack still on its way
+    const landed = stillAtCall() ? s.callAt.rid : null
+    const rid = s.initialCall ?? landed, i = rid == null ? -1 : stepOfMark(s, rid) // its step, or the anchor step nearest in time for another lane's call
+    if (i >= 0) {
+      const was = s.playRid
+      if ((s.initialCall != null || a.calls[i].rid !== was) && placeOf([a], rid) == null) { s.selTick = rid; callDrawer = rid } // its drawer opens once the desk is drawn (settle)
+      s.playhead = i; s.follow = false; s.followLanding = false; s.initialCall = null
+      s.playRid = a.calls[i].rid; s.callAt = { rid, at: s.playRid }
+      return s.playRid !== was
+    }
+    if (s.initialCall != null) {
+      // said only once every row of the session is here (2.3 §点名的一步不在手里: what is still coming may hold it)
+      if (allRows()) { s.initialCall = null; s.initialStep = 1; toast(CALL_NOT_HERE) } else if (s.playRid == null) return false
+      else s.follow = false
+    }
     if (s.initialStep != null) {
       const i = namedAt()
       if (i >= 0) {
@@ -373,7 +393,8 @@ function openDesk(ctx, route0, makeView) {
   // difference (every write counts toward WebKit's limit; our own write comes back through update() as a no-op), replacing history
   function syncUrl() {
     const n = shownStep(), r = s.ctx.router.current()
-    if (n == null || s.initialStep != null || !alive() || r.screen !== 'replay' || r.id !== s.id || r.project !== s.project) return // a named step not landed yet keeps its URL
+    if (s.callAt && !stillAtCall()) s.callAt = null // the reader moved: the URL names the drawn step from now
+    if (n == null || s.initialStep != null || s.initialCall != null || s.callAt || !alive() || r.screen !== 'replay' || r.id !== s.id || r.project !== s.project) return // a named step not landed yet keeps its URL
     const want = s.follow ? { step: null, call: null } : { step: String(n) }, have = r.params
     if (Object.entries(want).some(([k, v]) => (have[k] ?? null) !== v)) s.ctx.router.setParams(want, { replace: true })
   }
@@ -384,7 +405,7 @@ function openDesk(ctx, route0, makeView) {
     s.viewPin = null // scrubbing returns the panel to the call raw
     s.followLanding = followLanding
     jumps.clear() // a move by the reader ends any jump still waiting for its lane (jumpTo queues its own after this)
-    s.initialStep = null // and any named step still waiting to land
+    s.initialStep = null; s.initialCall = null // and any named step or call still waiting to land
     brushTarget = null; s.brushed = false // and the strip goes back to following the playhead
     const N = s.anchor.calls.length, np = Math.max(0, Math.min(N - 1, i | 0))
     if (np !== s.playhead) s.turnLanded.clear() // a different call: no landing turn lingers; open rows stay by bid (1.4:114)
@@ -440,7 +461,7 @@ function openDesk(ctx, route0, makeView) {
   // 跟随最新 turned on (f, the chip): the playhead goes to the newest call and its window lands on the reply; the poll reads now
   function followOn() {
     const N = s.anchor ? s.anchor.calls.length : 0
-    if (N) setPlayhead(N - 1, true, true); else { s.follow = true; s.followLanding = true; s.initialStep = null } // a named step still on its way no longer lands
+    if (N) setPlayhead(N - 1, true, true); else { s.follow = true; s.followLanding = true; s.initialStep = null; s.initialCall = null } // a named step or call still on its way no longer lands
     s.follow = true
     renderHeader()
     poll()
@@ -572,7 +593,7 @@ function openDesk(ctx, route0, makeView) {
         let parsed = null
         try { parsed = r.ok && r.status === 200 ? await parseSliced(r.text, undefined, pace) : null } catch { /* not the file's lines: a failure like any other */ }
         if (gone()) break
-        if (!parsed) { packFailed = true; if (s.playRid == null && s.initialStep != null) readFailed(r.ok ? { status: r.status, error: 'not the file\'s lines' } : r); break }
+        if (!parsed) { packFailed = true; if (s.playRid == null && (s.initialStep != null || s.initialCall != null)) readFailed(r.ok ? { status: r.status, error: 'not the file\'s lines' } : r); break }
         // held once the desk holds it: a part whose apply threw, or never ran, is read again
         applies.push(serial(() => { if (gone()) return; keep(`p${p.n}.${part}`, r.text.length); const ch = applyParsed({ kind: 'pack', n: p.n, part }, parsed); got.push(part); return { ch } })
           .then((x) => { if (x) redraw(x.ch).catch((e) => console.error(e)) })) // the redraw is paced: the pack's slot does not wait for it
@@ -582,6 +603,7 @@ function openDesk(ctx, route0, makeView) {
     const applied = Promise.allSettled(applies).then((rs) => {
       if (got.length) packHeld.set(p.n, { tag, parts: new Set([...had, ...got]) })
       packing.delete(p.n)
+      if (got.length && s.initialCall != null && !gone()) redraw(new Set()).catch((e) => console.error(e)) // the last pack may say the call is not here
       const bad = rs.find((x) => x.status === 'rejected')
       if (bad) throw bad.reason
     })
@@ -621,12 +643,17 @@ function openDesk(ctx, route0, makeView) {
   }
   // name step `n` (1-based): lands at once when it is here; otherwise the desk stays as it is and its pack is read first
   function nameStep(n) {
-    s.initialStep = n; s.follow = false
+    s.initialStep = n; s.initialCall = null; s.follow = false
     const i = namedAt()
     if (i >= 0) { setPlayhead(i, false); return }
     s.brushed = false; if (placeWin()) { view.saw(); drawRails() }
     renderHeader(); if (s.playRid != null) namedRows(); else renderRough()
     fill()
+  }
+  // a `call=` link (1.2 §路由): it lands in placePlayhead once its row is here, the playhead staying as it is until then
+  function nameCall(rid) {
+    s.initialCall = rid; s.initialStep = null; s.callAt = null; s.follow = false
+    if (s.anchor) redraw(new Set()).catch((e) => console.error(e)); else renderHeader()
   }
   // the playhead's rid changed: its reads go out once it rests (createStepReads)
   function aim() { if (s.playRid != null && s.playRid !== targeted) { targeted = s.playRid; steps.target(s.playRid); fill() } }
@@ -680,6 +707,11 @@ function openDesk(ctx, route0, makeView) {
   // (416 naming a smaller size) or when what came is not its lines. A relayed answer carries no generation tag: none, or the named
   // query's version, which the next If-Range does not match (200 whole). → {ok, anchor} | a failed answer
   const tails = new Map() // part → {n, used, tag}
+  // every row of the session is here: each sealed pack whole at the head's tag and each open tail read
+  function allRows() {
+    const h = s.desk.head
+    return !!h && (h.packs || []).every((p) => heldParts(p.n, p.tag).size === PARTS.length) && (!h.open || PARTS.every((k) => tails.has(k)))
+  }
   async function readTail(part, n, signal, whole = false) {
     const t = tails.get(part), from = whole || !t || t.n !== n || !t.tag ? null : t.used
     const r = await getText(`/api/d/open.${part}`, { id: s.id }, { range: from, tag: from == null ? null : t.tag, signal })
@@ -788,6 +820,7 @@ function openDesk(ctx, route0, makeView) {
     }
     placeWin(true)
     renderAll()
+    if (callDrawer != null) { const p = placeOf(s.lanes, callDrawer); callDrawer = null; if (p) selectTick(s, p.lane, p.i) }
     refreshDrawer()
     chainLedger()
     fill()
@@ -878,7 +911,8 @@ function openDesk(ctx, route0, makeView) {
     window.addEventListener('resize', refit)
     if (E) frameIn()
     poller.start() // the desk keeps reading on the poller's one schedule; 「跟随最新」 only decides whether the playhead follows growth
-    if (hasStep(route)) update(route)
+    if (!route.params.call) s.callAt = null // back without the link: the URL names the drawn step again
+    if (hasStep(route) || route.params.call) update(route)
     catchUp()
     stepsByPage(); chainLedger(); fill() // what a leave paused goes on (a desk that holds every pack reads nothing here)
     poll() // the first open, or one round: the head If-None-Match, a Range on each tail
@@ -917,9 +951,13 @@ function openDesk(ctx, route0, makeView) {
   // the same session's route moved (our own URL writes land here too, and are no-ops). No step and no call = follow the newest (1.2:91)
   function update(route) {
     if (host && !root.isConnected) host.replaceChildren(root) // something wrote over the screen: hang the desk back
-    if (!hasStep(route)) { if (route.params.call == null && !s.follow) followOn(); return }
+    if (!hasStep(route)) {
+      const call = route.params.call || null
+      if (call == null) { if (!s.follow) followOn() } else if (!(s.callAt && s.callAt.rid === call) && s.initialCall !== call) nameCall(call)
+      return
+    }
     // no lane yet (a first open, a session still being extracted): the step waits to land, and follow is off from now (1.2:91)
-    if (!s.anchor) { s.initialStep = stepParam(route.params.step).step; if (s.follow) { s.follow = false; renderHeader() } return }
+    if (!s.anchor) { s.initialStep = stepParam(route.params.step).step; s.initialCall = null; if (s.follow) { s.follow = false; renderHeader() } return }
     // a named step pins it with follow off; the move is not the reader's, so landing on the newest call does not turn follow on
     const p = stepParam(route.params.step, s.anchor.count ?? s.anchor.calls.length)
     if (s.playRid != null && p.step === shownStep() && !p.rewrite && !s.follow) return
