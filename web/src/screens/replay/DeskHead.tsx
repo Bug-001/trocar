@@ -11,19 +11,21 @@ import { CopyButton } from '../../ui/CopyButton'
 import { HarnessIcon } from '../../ui/HarnessIcon'
 import { InfoButton } from '../../ui/InfoButton'
 import { TechDetails } from '../../ui/TechDetails'
-import { sessionHeadModel } from './models.mjs'
+import { backOf, sessionHeadModel } from './models.mjs'
 import { useDeskModel } from './useDesk'
 import type { DeskState, DeskView } from './view'
 
 type Head = NonNullable<ReturnType<typeof sessionHeadModel>>
-const headOf = (s: DeskState) => sessionHeadModel(s, { libraryHash: s.ctx && s.ctx.store ? s.ctx.store.get().libraryHash : '' })
+const libraryHashOf = (s: DeskState) => (s.ctx && s.ctx.store ? s.ctx.store.get().libraryHash : '')
+const headOf = (s: DeskState) => sessionHeadModel(s, { libraryHash: libraryHashOf(s) })
 const html = (h: string) => ({ __html: h })
 const pairsOf = (tech: string[][]) => tech.map(([k, v]) => [k, { text: v }] as [string, { text: string }])
 const copyOf = (tech: string[][]) => tech.map(([k, v]) => `${k}: ${v}`).join('\n')
 
 export function DeskHead({ desk }: { desk: DeskView }) {
   const m = useDeskModel(desk, 'head', headOf)
-  if (!m) return <div id="deskhead" />
+  // before the session answer: the way back alone, so the frame is never without words (1.2 不留空白屏) and the row keeps its place
+  if (!m) { const b = backOf(libraryHashOf(desk.s)); return <div id="deskhead"><div className="sesshead"><a className="sh-back" href={b.href}>{b.text}</a></div></div> }
   return (
     <div id="deskhead">
       <Row m={m} s={desk.s} />

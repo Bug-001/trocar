@@ -50,7 +50,9 @@ function compShares(comp) {
  *   start: {ts: string, text: string, tip: string}|null, follow: {on: boolean, paused: boolean, text: string, tip: string|null},
  *   read: object|null, stale: {since: any, r: any}|null, facts: {items: Fact[], tech: string[][]}, info: () => InfoRow[]}} SessionHead
  */
-/** @returns {SessionHead|null} null while no session answer is here (the head stays empty rather than guessing) */
+// the way back to the library: the one part of the head that needs no answer, so the frame has it from its first paint
+export const backOf = (libraryHash = '') => ({ href: libraryHash || '#/sessions', text: W.BACK })
+/** @returns {SessionHead|null} null while no session answer is here (the head holds only the way back rather than guessing) */
 export function sessionHeadModel(s, { libraryHash = '', now = Date.now() } = {}) {
   const meta = s.meta
   if (!meta) return null
@@ -59,7 +61,7 @@ export function sessionHeadModel(s, { libraryHash = '', now = Date.now() } = {})
   const hs = Array.isArray(meta.harnesses) ? meta.harnesses : null // the `sessions` multi-harness field; provider:'mixed' is never this signal (D37 ①)
   const hk = meta.harness != null ? harnessKey(meta.harness) : null
   return {
-    back: { href: libraryHash || '#/sessions', text: W.BACK },
+    back: backOf(libraryHash),
     // the title never borrows the id or the start time (the start is its own part)
     title: { text: meta.title ?? null, fallback: meta.title == null ? W.UNTITLED : null, id: meta.session_id || '',
       sourceTip: meta.title == null ? W.TITLE_UNTITLED_NEXT_TIP : W.TITLE_FROM_WIRE }, // a title always comes from the wire (4.4)
