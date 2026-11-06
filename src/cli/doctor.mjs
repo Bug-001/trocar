@@ -127,7 +127,7 @@ async function doctorDocOf({ names, home, env, platform, deps }) {
   const capture = deps.capture || import('./doctor-deps.mjs')
   // 4.11 §3 ㉔: a trocar root no install record lists (macOS / Windows; Linux keeps its root in no trust store). One store for the command: on
   // Windows `status`'s has and this list read one certutil listing (1.6 §3.7)
-  const listsRoots = platform === 'darwin' || platform === 'win32'
+  const listsRoots = platform === 'darwin' || platform === 'win32' // not proxy mode: the OSes whose root sits in a user trust store
   if (listsRoots && !deps.rootStore) deps = { ...deps, rootStore: (deps.backends && deps.backends.rootStore) || userRootStore({ platform, run: deps.exec || null, home, env, fs, once: true }) }
   // the capture files and what `status` reads are independent: the disk walk and the OS questions run together (D62 task E). The listing is a
   // synchronous OS tool, so it is started last, after the daemon request and the file reads are on their way
