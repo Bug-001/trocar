@@ -56,7 +56,8 @@ export function writeDurable(file, data, mode, fs = nodeFs) {
 // route plans uses, so a later run that spells a recorded path otherwise (another case, an 8.3 short name, a linked directory, `\` for `/`)
 // finds the same entry. The nearest existing ancestor of the file is replaced by what the file system says it is (realpath.native: expands
 // short names, follows junctions and directory links), the rest is appended as written; win32 keys use `/`; win32 and darwin fold case
-// (NTFS / APFS are case-insensitive by default) and darwin also folds Unicode normalisation (APFS looks names up without regard to it).
+// (NTFS / APFS are case-insensitive by default) unless the volume says otherwise: when that ancestor is not found under its case flipped,
+// its volume is case-sensitive and the key keeps case. darwin also folds Unicode normalisation (APFS looks names up without regard to it).
 // No branch for any one spelling: the file system decides. `realpath` is how it is asked (a function of a directory; null: not at all, the key
 // is the path resolved and folded); left out, the host's realpath.native is asked only when it is the platform being keyed: a win32 path keyed on a
 // Mac is not a Mac path.
@@ -64,20 +65,28 @@ export function pathKey(p, { platform = process.platform, realpath } = {}) {
   const P = platform === 'win32' ? path.win32 : path.posix
   const ask = realpath !== undefined ? realpath : platform === process.platform ? (d) => nodeFs.realpathSync.native(d) : null
   let key = P.resolve(String(p))
+  let folds = platform === 'win32' || platform === 'darwin' // not proxy mode: the OSes whose file names are case-insensitive by default
   if (ask) {
     const rest = []
     for (let d = P.dirname(key), b = P.basename(key); ; b = P.basename(d), d = P.dirname(d)) {
       rest.unshift(b)
       let real = null
       try { real = ask(d) } catch { /* not there: try its parent */ }
-      if (real) { key = P.join(real, ...rest); break }
+      if (real) { key = P.join(real, ...rest); folds &&= caseInsensitive(real, ask); break }
       if (P.dirname(d) === d) break
     }
   }
   if (platform === 'win32') key = key.replace(/\\/g, '/')
   if (platform === 'darwin') key = key.normalize('NFC')
-  if (platform === 'win32' || platform === 'darwin') key = key.toLowerCase() // not proxy mode: the OSes whose file names are case-insensitive
+  if (folds) key = key.toLowerCase()
   return key
+}
+// Is `real` (an existing directory, as the file system spells it) on a case-insensitive volume? It is when it is still found with its case flipped.
+// A path with no letter to flip says nothing: the platform's default stands.
+function caseInsensitive(real, ask) {
+  const flipped = real.replace(/\p{L}/gu, (c) => (c === c.toLowerCase() ? c.toUpperCase() : c.toLowerCase()))
+  if (flipped === real) return true
+  try { return Boolean(ask(flipped)) } catch { return false }
 }
 
 // Is `p` strictly inside `root`? `..` and a symlinked parent directory are followed (a path that only looks like it is inside is not); `root` itself is not inside. What `off` /
