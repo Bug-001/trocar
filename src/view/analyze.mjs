@@ -27,7 +27,6 @@ import { compactionVerdict, hasCompactionPreamble } from '../identity/session-id
 // on real captures — so go through the shared helper, never the raw key.
 import { respOf } from '../dissect/record-fields.mjs'
 import { HEAD, taskOf, shorten } from './blockmeta.mjs'
-import { ANTHROPIC } from '../dissect/anthropic-board.mjs'
 import { num52, numTable } from '../query/projection.mjs'
 import { mapUsage } from '../model/schema.mjs'
 export { sysLabel } // re-exported for back-compat (was defined here before the D25 extraction)
@@ -84,7 +83,6 @@ export function normResp(r) {
     thinking: rs.thinking, tools: rs.tool_calls || [], stop_reason: rs.stop_reason,
   }
 }
-export const replyPartsAnthropic = ANTHROPIC.replyParts
 
 // Pull a short readable label from a tool call's input.
 export function toolArg(name, input = {}) {

@@ -8,7 +8,8 @@ import { fileURLToPath } from 'node:url';
 
 const SRC = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'src');
 const ROOTS = ['view', 'query'];
-const BRANCH = /[!=]==?\s*(['"`])anthropic\1|(['"`])anthropic\2\s*[!=]==?/;
+// a comparison either way, a `case`, or a table keyed by the name (`{ anthropic: … }`, `'anthropic': …`)
+const BRANCH = /[!=]==?\s*(['"`])anthropic\1|(['"`])anthropic\2\s*[!=]==?|\bcase\s+(['"`])anthropic\3|[{,]\s*(['"`]?)anthropic\4\s*:/;
 
 const walk = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
   const p = path.join(dir, e.name);

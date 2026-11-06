@@ -11,7 +11,7 @@ import { makeSseReconstructor } from '../../src/capture/sse-reconstruct.mjs';
 import { fieldTextOf } from '../../src/dissect/record-fields.mjs';
 import { RESPONSES, CHAT, itemToBlocks, normRespChat } from '../../src/dissect/openai.mjs';
 import { RESPONSES_WS } from '../../src/dissect/openai-ws.mjs';
-import { replyPartsAnthropic } from '../../src/view/analyze.mjs';
+import { ANTHROPIC } from '../../src/dissect/anthropic-board.mjs';
 
 const TEXTS = ['plain ascii', 'multibyte 你好 — 😀 é'];
 const EOLS = ['\n', '\r\n'];
@@ -93,7 +93,7 @@ test('every reply span, resolved, reassembles to the normalised reply block (Ant
       // Anthropic: text, thinking, tool_use, server_tool_use, a *_tool_result
       const ab = [anth.thinking(0, t), anth.text(1, t), anth.tool('tool_use')(2, t), anth.tool('server_tool_use')(3, t), anth.result(4)];
       const ar = rec(stored(sseOf(anthStream(ab), eol)));
-      assertParts(ar, replyPartsAnthropic(ar), ar.resp.content_blocks, anthRecon);
+      assertParts(ar, ANTHROPIC.replyParts(ar), ar.resp.content_blocks, anthRecon);
       assert.ok(ar.resp.content_blocks.length === ab.length);
       // Chat SSE
       const cr = rec(stored(chatSse(chatGroups(t).flat(), eol)));
@@ -106,7 +106,7 @@ test('a reply block whose events interleave with another block has no event-rang
   const zip = (a, b) => { const out = []; for (let i = 0; i < Math.max(a.length, b.length); i++) out.push(...(a[i] ? [a[i]] : []), ...(b[i] ? [b[i]] : [])); return out; };
   const a = stored(sseOf(anthStream([zip(anth.text(0, 'left side'), anth.tool('tool_use')(1, 'right'))]), '\n'));
   const c = stored(chatSse(zip(chatGroups('ab')[2], chatGroups('ab')[3]), '\n'));
-  for (const parts of [replyPartsAnthropic(rec(a)), CHAT.replyParts(rec(c))]) {
+  for (const parts of [ANTHROPIC.replyParts(rec(a)), CHAT.replyParts(rec(c))]) {
     assert.ok(parts.length >= 2);
     for (const p of parts) {
       assert.equal(p.span, null);

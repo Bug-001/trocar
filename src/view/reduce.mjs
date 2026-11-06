@@ -15,7 +15,7 @@ import { createAnalyzer, stepOrder, OrderBound, breakOf, blockDiff, compactionMe
 import { callRow, itemsView } from './board.mjs';
 import { compareStep } from './step-order.mjs';
 import { compactionVerdict } from '../identity/session-identity.mjs';
-import { boardDissectorOf } from '../dissect/registry.mjs';
+import { boardDissectorOf as dOf } from '../dissect/registry.mjs';
 import { askOf, COMP_KEYS, departer, departs, taskOf, HEAD } from './blockmeta.mjs';
 import { posCmp, lru, num52, numTable } from '../query/projection.mjs';
 import { materializeAttrs } from './extract.mjs';
@@ -70,7 +70,6 @@ const FOLDS = {
   tree: { fold: anthropicFold, lane: (kind) => ({ kind, ...laneMeta(kind) }), perKind: false },
   flat: { fold: flatFold, lane: (kind) => FLAT_LANES[kind], perKind: true },
 };
-const dOf = (fmt) => boardDissectorOf(fmt);
 
 const CPS = 256; // the lane states a reduction keeps of its last takes, for a late call to go back to (pushOf)
 const KEYFRAME = 32; // a materialised list kept every KEYFRAME links of a base chain
