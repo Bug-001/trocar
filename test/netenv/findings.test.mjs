@@ -133,6 +133,13 @@ test('V49 every trust reason is a finding (the restart ones expected, the rest f
   }
 })
 
+// 4.11 P11 rule 2: a host the form lists as forward-only is forwarded by design; the form itself is verified, so it is not `not-verified`
+test('forward-only-host: a Claude Desktop process forwarded for one of its own hosts is an expected finding of its own, never not-verified', () => {
+  const f = pfacts('claude-code', form('claude-code.desktop', { procs: [proc(6100, { name: 'Claude', trusted: false, reason: 'forward-only-host' })] }), fwForm(17993))
+  const got = findingsOf(f).filter((x) => x.harness === 'claude-code' && ['forward-only-host', 'not-verified'].includes(x.code))
+  assert.deepEqual(got.map((x) => [x.code, x.class]), [['forward-only-host', 'expected']])
+})
+
 test('V49 each finding: what, why and verify say something; a problem or an expected finding has a command (a note may have none); the commands are whole lines with no <…> left; trocar\'s own come first where the catalogue says so; it validates', () => {
   const all = [...Object.values(SETS), ...TRUST_REASONS.map((r) => ({ facts: facts('claude-code', {}, { procs: [proc(4121, { watched: 'no-decrypt', trusted: false, reason: r })] }) }))]
   const seen = new Set()

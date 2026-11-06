@@ -106,7 +106,8 @@ export const FAILURE_WORDS = Object.freeze({
   'flow/group-off': 'connections of agents still running after off, passed on unread',
   'flow/outside-host-set': 'connections of agents to hosts trocar does not read for them, passed on unread',
   'flow/other-user': "connections of another user's programs, passed on unread",
-  'flow/not-verified': 'connections of agent forms or hosts not verified for capture yet, passed on unread',
+  'flow/not-verified': 'connections of agent forms not verified for capture yet, passed on unread',
+  'flow/forward-only-host': 'connections of agents to hosts trocar forwards by design, passed on unread',
   'flow/policy': 'connections to hosts trocar does not read, passed on unread',
   'flow/not-trust-path': "connections an agent makes without reading trocar's certificate, passed on unread",
   'flow/https-proxy': "connections through a proxy the agent did not set itself, passed on unread",
@@ -267,6 +268,7 @@ export function statusReason(code, { harness = '', pid = null, cause = null } = 
     'shim-not-on-path': [`${h} did not start through the program trocar installed`],
     'form-unsupported': [`this form of ${h} cannot be captured with the proxy it is set to use`],
     'outside-host-set': [`${h} talked to a host outside the ones trocar reads for it, so that traffic is only forwarded`],
+    'forward-only-host': [`${h} talked to a host trocar forwards by design without reading it`],
     'chromium-child': [`a helper process of ${h} that makes no model calls; it is never decrypted`],
     'hook-inherited': [`this ${h} process got trocar's proxy from its parent but did not load trocar's plugin, so it is only forwarded`, `start ${h} on its own, with its plugins loaded`],
     // the trust resolver's generic reasons (src/collector/core/trust)
