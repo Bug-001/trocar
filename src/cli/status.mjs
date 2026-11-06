@@ -265,7 +265,7 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   if (platform === 'linux') {
     let read
     try {
-      read = deps.lingerRead ? await deps.lingerRead() : deps.linger ? { state: await deps.linger() } : (await (deps.parts || await (await (deps.daemon || import('../collector/daemon.mjs'))).loadParts({ env }))).lingerRead()
+      read = deps.lingerRead ? await deps.lingerRead() : deps.linger ? { state: await deps.linger() } : (await (deps.parts || await (await (deps.daemon || import('../collector/net-deps.mjs'))).loadParts({ env }))).lingerRead()
     } catch (e) { rethrowSandbox(e); read = { state: null, error: errMessage(e) } }
     f.linger = read.state === true || read.state === false ? { linger: read.state } : { linger: 'unknown', linger_reason: read.error || 'the linger state could not be read' }
   }

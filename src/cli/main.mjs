@@ -10,6 +10,7 @@
 //               what a command runs (a test's spy: what was dispatched, not what it does)
 //   The command gets `(argv, ctx)`; `ctx.args` is the parsed form of argv ({ positionals, flags }) and `ctx.json` whether `--json` was asked.
 import os from 'node:os'
+import { createRequire } from 'node:module'
 import { makeIo, hidingIo, asOneDocument } from '../off/io.mjs'
 import { commandNamed, printHelp } from './commands.mjs'
 import { parseArgs } from './args.mjs'
@@ -20,6 +21,7 @@ import { codeId, selfCommand } from '../version.mjs'
 import { recordUserPath } from '../off/user-path.mjs'
 import { COMMAND_INDENT } from '../off/receipt.mjs'
 
+process.getBuiltinModule ??= createRequire(import.meta.url) // 22.3 brought it; the floor is older, and src/off/control-client.mjs loads node:http with it
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
 const helpWord = (a) => a === '--help' || a === '-h'
 const REPORT = 'Please report it with what you ran: https://github.com/Bug-001/trocar/issues'

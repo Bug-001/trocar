@@ -16,6 +16,7 @@ import { createIndexKeeper } from './index-keeper.mjs'
 import { loadArch } from './arch/index.mjs'
 import { loadHarnesses } from './harness/index.mjs'
 import { createRegistry } from './core/registry.mjs'
+import { loadParts } from './net-deps.mjs'
 import { createTrustChecker } from './core/trust/confirm.mjs'
 import { readManifest, installedAt } from './core/trust/journal.mjs'
 import { daemonMayStart } from '../off/manifest.mjs'
@@ -50,22 +51,10 @@ import { readStateFile } from '../off/state.mjs'
 
 export { loadArch } // the CLI reaches arch only through this file (layering rule 5)
 
-// What install / uninstall need from arch and harness, without starting anything: the descriptors, the OS key,
-// and the process table (`scan` reads /proc; it does not need the helper).
-export async function loadParts({ arch = null, harnesses = null, env = process.env, agentList = [], platform = process.platform } = {}) {
-  const A = arch || (await loadArch(platform)) // the CLI's platform (V14: a platform with no collector is refused here, by loadArch's own error)
-  const list = harnesses || (await loadHarnesses())
-  // darwin / win32 run the collector model (runModelDaemon): no redirector here, and this parts view answers an empty process table
-  // the registry judges by name on every OS (D51) and is built FIRST: the doors ask it (identify), the redirector does not feed it
-  const registry = createRegistry(list, { agentList }) // agentList: readAgentList's entries (the user's ~/.trocar/agents.json, D51③); the daemon swaps them in place
-  const redirector = isModelOs(A.os) ? null : await A.createRedirector({ env }) // awaited: a test's arch may answer async
-  // linger: whether the OS keeps this user's daemon after logout (true / false; null = not readable) — `trocar on` says so (1.6 §1.1), it never enables it (R8)
-  return { arch: A, os: A.os, harnesses: list, registry, scan: () => (redirector ? redirector.scan() : []), match: (f) => registry.match(f), linger: () => (redirector && typeof redirector.linger === 'function' ? redirector.linger() : null), lingerRead: () => (redirector && typeof redirector.lingerRead === 'function' ? redirector.lingerRead() : { state: null, error: 'this platform has no reader of the linger state' }) }
-}
-
 /** What `trocar status` and `doctor` need to draw the network topology (1.6 §9.7). It lives in ./net-deps.mjs — the small arch-facing entry, so a
  *  read-only command does not load this module's whole graph (89 ms on a Windows test machine; D62) — and is re-exported here for the callers that have it. */
 export { netFactsDeps } from './net-deps.mjs'
+export { loadParts } // and `install` / `on`'s parts view, for what starts the daemon anyway
 
 export const collectorPaths = (dir = collectorHome(trocarHome())) => ({ dir, caDir: path.join(dir, 'ca'), state: path.join(dir, 'state.json'), lock: path.join(dir, 'lock'), markers: path.join(dir, 'run', 'trust') })
 const errText = (e) => String((e && e.message) || e)

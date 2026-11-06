@@ -20,9 +20,9 @@ function fakeIo() {
 }
 // `registered()` is a READ (1.6 §3.3: `on` asks before it writes) — the login entry install made is there; nothing of it may be changed
 const neverStarts = { path: '/nowhere/unit', text: () => '', registered: () => ({ state: 'present' }), enable: () => { throw new Error('the unit must not be touched') }, start: () => { throw new Error('the unit must not be touched') }, startNow: () => { throw new Error('the unit must not be touched') } }
-const on = (w, os, argv, unit = neverStarts) => {
+const on = (w, os, argv, unit = neverStarts, backends = {}) => {
   const io = fakeIo()
-  const deps = { getuid: () => 501, backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: { os, harnesses: w.harnesses, arch: { unit: { userUnit: () => unit } } } }
+  const deps = { getuid: () => 501, backends: { dirs: w.ctx.dirs, ...backends }, harnesses: w.harnesses, which: w.ctx.which, parts: { os, harnesses: w.harnesses, arch: { unit: { userUnit: () => unit } } } }
   return runOnCli(argv, { io, env: w.env, home: w.home, platform: os, deps }).then((exit) => ({ exit, io }))
 }
 
@@ -172,6 +172,9 @@ test('1.6 §1.6 (darwin): the first on records the files said yes to; an on over
     const before = fs.statSync(file).ino
     assert.equal((await on(w, 'darwin', ['--yes'])).exit, 0)
     assert.equal(fs.statSync(file).ino, before, 'the file was not replaced')
+    w.store.calls.length = 0
+    assert.equal((await on(w, 'darwin', ['--yes'], neverStarts, { rootStore: w.store })).exit, 0)
+    assert.deepEqual(w.store.calls, ['has'], 'one on asks the root store once: the question starts OS tools')
   } finally { await server.close() }
 })
 

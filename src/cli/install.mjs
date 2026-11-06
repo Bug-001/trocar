@@ -225,7 +225,7 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
   const { writeStandalone, standaloneDue } = await import('../off/standalone.mjs')
   const { formatPlan, changeLines } = await import('./receipt.mjs')
   const { OFF_VERSION } = await import('../off/manifest.mjs')
-  const parts = deps.parts || await (await import('../collector/daemon.mjs')).loadParts({ env, agentList: readAgentList({ home, fs }).entries })
+  const parts = deps.parts || await (await import('../collector/net-deps.mjs')).loadParts({ env, agentList: readAgentList({ home, fs }).entries })
   const inst = await import('../collector/install.mjs')
   // D61: the login entry is install's — written here and enabled with `--now`, so the daemon is up from install until uninstall
   const unit = deps.unit !== undefined ? deps.unit : (!parts.arch || !parts.arch.unit || !parts.arch.unit.userUnit ? null : parts.arch.unit.userUnit({ home, node: process.execPath, script: deps.script || process.argv[1], run: deps.exec || null, env, ...(deps.spawn ? { spawn: deps.spawn } : {}) }))
