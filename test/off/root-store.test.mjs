@@ -175,6 +175,13 @@ test('CM40 list: none in the keychain (errSecItemNotFound, exit 44) is none; any
     for (const platform of ['darwin', 'win32']) assert.match(rootStore({ platform, run: () => ({ status, stderr: 'boom' }), home }).list().error, /failed/, `${platform} ${status}`)
   }
 })
+test('CM40 win32 list: a certificate the root issued is not the root, whatever the labels are in this language', () => {
+  const [d] = trocarRoots(1)
+  const issued = { sha1: rootIdOf(trocarRoots(1)[0]).sha1, subject: 'CN=someone else', issuer: `CN=${ROOT_SUBJECT}` }
+  const m = certutilModel({ store: [{ sha1: rootIdOf(d).sha1, subject: `CN=${ROOT_SUBJECT}` }, issued] })
+  assert.deepEqual(rootStore({ platform: 'win32', run: m.run, home: tmpDir('trocar-rs-') }).list().roots.map((r) => r.sha1), [rootIdOf(d).sha1.toUpperCase()])
+})
+
 test('CM40 win32 list: the root the store took is listed by the thumbprint remove takes it out by', () => {
   const m = certutilModel()
   const store = rootStore({ platform: 'win32', run: m.run, home: tmpDir('trocar-rs-') })

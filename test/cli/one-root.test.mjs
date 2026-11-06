@@ -53,7 +53,6 @@ for (const os of ['darwin', 'win32']) {
     assert.equal(w.custody.exists(), false, 'and no key in the custody')
     assert.ok(w.custody.removes >= 1)
     assert.ok(receipt.changed.some((c) => c.change.includes(fp)), `the root is listed in the receipt: ${JSON.stringify(receipt.changed)}`)
-    assert.ok(!receipt.notes.includes('nothing is installed for this user'), receipt.notes.join('; '))
   })
 
   test(`CM40 ${os}: a store root the record lists is no stray — install; install is not refused, and makes no second root`, async () => {

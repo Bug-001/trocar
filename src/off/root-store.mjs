@@ -12,8 +12,8 @@
 //           has     certutil -user -store Root (the user's own store, listed), matched by thumbprint: a lookup's exit is not a fact —
 //                   `-store Root <absent thumbprint>` exits 0, CRYPT_E_NOT_FOUND or NTE_NOT_FOUND by caller (a Windows test machine, 2026-10-17)
 //           remove  certutil -user -delstore Root <thumbprint>
-//           list    certutil -user -store Root, one section per certificate (split at its ==== lines): a section with a line whose value (after
-//                   its localized label and colon) is exactly CN=<ROOT_SUBJECT> is one, its thumbprint the section's last 40-hex value, spaces out
+//           list    certutil -user -store Root, one section per certificate (split at its ==== lines): a section with two lines whose value (after
+//                   its localized label and colon) is exactly CN=<ROOT_SUBJECT>, issuer and subject of a self-signed root, is one, its thumbprint the section's last 40-hex value, spaces out
 // A root is named by rootIdOf(der) = { fp256 (node's AB:CD:… form), sha1 (the thumbprint, hex) }: Windows looks a certificate up by its
 // SHA-1 thumbprint only. The certificate file `security` / `certutil` read is written under ~/.trocar/collector and removed after.
 import crypto from 'node:crypto'
@@ -137,7 +137,7 @@ export function rootStore({ platform, run = null, home, env = process.env, fs = 
         for (const sec of r.out.split(/^=+[^\r\n]*=+[ \t]*$/m)) {
           const lines = sec.split(/\r?\n/).filter((l) => l.includes(':'))
           const hash = lines.map((l) => value(l).replace(/\s+/g, '')).filter((v) => /^[0-9a-f]{40}$/i.test(v)).at(-1)
-          if (hash && lines.some((l) => value(l) === `CN=${ROOT_SUBJECT}`)) roots.push({ sha1: hash.toUpperCase() })
+          if (hash && lines.filter((l) => value(l) === `CN=${ROOT_SUBJECT}`).length >= 2) roots.push({ sha1: hash.toUpperCase() }) // a root names itself as issuer and subject; the labels are localized, so one such line can be a certificate it merely issued
         }
         return { roots }
       },

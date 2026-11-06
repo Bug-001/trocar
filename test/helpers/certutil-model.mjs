@@ -10,8 +10,9 @@ export const NTE_NOT_FOUND = 0x80090011
 
 export function certutilModel({ store = [], spaced = false } = {}) {
   const subjects = new Map(store.map((t) => (typeof t === 'string' ? [t.toUpperCase(), 'CN=x'] : [t.sha1.toUpperCase(), t.subject])))
+  const issuers = new Map(store.filter((t) => t.issuer).map((t) => [t.sha1.toUpperCase(), t.issuer]))
   const have = new Set(subjects.keys()), calls = []
-  const entry = (t, i) => [`================ Certificate ${i} ================`, 'Serial Number: 1f2e3d4c', `Issuer: ${subjects.get(t) || 'CN=x'}`, `Subject: ${subjects.get(t) || 'CN=x'}`, `Cert Hash(sha1): ${spaced ? t.toLowerCase().match(/../g).join(' ') : t.toLowerCase()}`, 'No key provider information'].join('\r\n')
+  const entry = (t, i) => [`================ Certificate ${i} ================`, 'Serial Number: 1f2e3d4c', `Issuer: ${issuers.get(t) || subjects.get(t) || 'CN=x'}`, `Subject: ${subjects.get(t) || 'CN=x'}`, `Cert Hash(sha1): ${spaced ? t.toLowerCase().match(/../g).join(' ') : t.toLowerCase()}`, 'No key provider information'].join('\r\n')
   const listing = () => ['Root "Trusted Root Certification Authorities"', ...[...have].map(entry), 'CertUtil: -store command completed successfully.'].join('\r\n')
   const run = (file, args) => {
     calls.push([file, ...args])
