@@ -64,6 +64,7 @@ test('agent-list: a custom name added while the daemon runs is judged as its har
   const s = await sandbox(); const p = fakeProc(); const { arch, clients } = fakeArch(p)
   const d = await start(s, arch)
   try {
+    await req(s, 'POST', '/on', {}) // the helper that reports exec runs only while a harness is on (4.6 §开关语义)
     await spawnFake(p, clients, 4301, NIGHTLY_EXE, ['claude-nightly', '-p', 'hi'])
     await settle()
     assert.equal(await agentOf(s, 4301), null, 'claude-nightly is on no preset list')
@@ -91,6 +92,7 @@ test('agent-list: a bad item is one agent-list-invalid with its index and code, 
   const s = await sandbox(); const p = fakeProc(); const { arch, clients } = fakeArch(p)
   const d = await start(s, arch)
   try {
+    await req(s, 'POST', '/on', {}) // the helper that reports exec runs only while a harness is on (4.6 §开关语义)
     await spawnFake(p, clients, 4303, NIGHTLY_EXE, ['claude-nightly'])
     writeList(s, { version: 1, agents: [{ harness: 'no-such-harness', name: 'x' }, { harness: 'claude-code', name: 'claude-nightly' }] })
     assert.equal(await until(async () => agentOf(s, 4303)), 'claude-code', 'the good item applies')

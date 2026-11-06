@@ -124,7 +124,7 @@ test('V1: off with the daemon gone (its lock left, its helper dead): every certi
   assert.deepEqual(s.installItems(), installed, 'every phase-install item: still in the manifest, its file byte for byte')
   assert.deepEqual(receipt.routing, { confirmed: true, state: 'stale', how: 'no-daemon' })
   assert.deepEqual([receipt.daemon, receipt.relayed], [{ pid: null, state: 'none' }, { closing: 0, waiting: 0, cut: 0 }], 'no daemon: nothing is relayed, said as a fact')
-  assert.deepEqual(execFrom(s, calls), ['systemctl --user is-active trocar-collector.service'], 'D61: the only OS tool run is the question whether systemd is about to restart the daemon — off never disables the login entry (it says inactive here): no start, no stop, no restart')
+  assert.deepEqual(execFrom(s, calls), [], 'D61 · D62 ⑥: off runs no OS tool here: it never stops, starts or disables the daemon or its login entry')
   assert.deepEqual(s.sys.daemon.calls.slice(asked).filter((c) => c.startsWith('POST')), [], 'and no daemon was asked for anything, let alone started')
   assert.deepEqual(Object.values(s.state().harnesses).map((h) => h.desired), ALL_HARNESSES.map(() => 'off'), 'every harness is off in state.json')
   assert.deepEqual(readManifest(s.dir).entries, entries, 'and the manifest keeps them for uninstall')
@@ -142,44 +142,16 @@ function restartingSystemd(s, { stubborn = false } = {}) {
   return { run, state }
 }
 
-test('semantics 4 / 1.6 §1.4: a killed daemon that systemd is about to restart (Restart=on-failure) is stopped by an off with no names — stop, reset-failed, is-active, so no daemon comes back; nothing is relayed, exit 0', async () => {
-  const s = await installedHome({ names: ['claude-code', 'codex'] }), installed = s.installItems()
-  s.sys.daemon.state.up = false
-  writeDaemonLock(s)
-  const sd = restartingSystemd(s)
-  const from = s.sys.exec.calls.length
-  const { receipt, exit } = await s.off({ deps: { alive: () => false, exec: sd.run } })
-  assert.equal(exit, 0, JSON.stringify(receipt.problems))
-  const cmds = execFrom(s, from)
-  assert.deepEqual(cmds.filter((c) => !/ is-active /.test(c)), ['systemctl --user stop trocar-collector.service', 'systemctl --user reset-failed trocar-collector.service'], 'D61: the unit is stopped and its failure reset, and NEVER disabled — the next login must bring the daemon back. The unit is stopped and its failed state cleared; the registration is untouched')
-  assert.ok(cmds.every((c) => !/ disable /.test(c)), 'D61: no off disables the autostart — on and off are the same across a reboot')
-  assert.deepEqual(receipt.relayed, { closing: 0, waiting: 0, cut: 0 }, 'there was no engine: nothing was relayed')
-  assert.deepEqual(receipt.daemon, { pid: null, state: 'none' })
-  assert.equal(receipt.routing.confirmed, true)
-  assert.deepEqual(validateReceipt(receipt), [])
-  assert.deepEqual(s.installItems(), installed, 'and every certificate item stays (D55①)')
-  const events = flowEvents(s.dir)
-  assert.ok(events.some((e) => e.kind === 'daemon-stop' && e.stopped === true && /about to restart/.test(e.reason)), 'the stop is on the record')
-})
-
-test('semantics 4: a unit systemd keeps up after the stop is not "off": exit 1 with the command to run, and the certificate items stay all the same', async () => {
-  const s = await installedHome({ names: ['claude-code'] }), installed = s.installItems()
-  s.sys.daemon.state.up = false
-  const sd = restartingSystemd(s, { stubborn: true })
-  const { receipt, exit } = await s.off({ deps: { alive: () => false, exec: sd.run } })
-  assert.equal(exit, 1)
-  assert.match(receipt.problems.join('\n'), /systemctl --user stop trocar-collector\.service/)
-  assert.deepEqual(s.installItems(), installed, 'off never touches a certificate item (D55①); desired is off, so a daemon that comes back attaches nothing')
-})
-
-test('semantics 4: off with names does not touch the unit — only an off with no names takes the daemon away', async () => {
-  const s = await installedHome({ names: ['claude-code', 'codex'] })
-  s.sys.daemon.state.up = false
-  const sd = restartingSystemd(s)
-  const from = s.sys.exec.calls.length
-  const { exit } = await s.off({ ids: ['codex'], deps: { alive: () => false, exec: sd.run } })
-  assert.equal(exit, 0)
-  assert.deepEqual(execFrom(s, from).filter((c) => / (stop|disable|reset-failed|is-active) /.test(c)), [], 'no systemctl question or command for a named off')
+test('semantics 4 · D62 ⑥: no off touches the unit — a killed daemon systemd is about to restart is left to it, since desired is off; only uninstall stops the unit', async () => {
+  for (const ids of [null, ['codex']]) {
+    const s = await installedHome({ names: ['claude-code', 'codex'] })
+    s.sys.daemon.state.up = false
+    const sd = restartingSystemd(s)
+    const from = s.sys.exec.calls.length
+    const { exit } = await s.off({ ids, deps: { alive: () => false, exec: sd.run } })
+    assert.equal(exit, 0)
+    assert.deepEqual(execFrom(s, from).filter((c) => / (stop|disable|reset-failed|is-active) /.test(c)), [], `${ids}: no systemctl question or command`)
+  }
 })
 
 test('semantics 5: with no autostart unit managing it the way out names the pid to kill (the daemon\'s own reply, else the lock\'s); with none on record, how to find it', async () => {
@@ -313,15 +285,15 @@ test('1.6 §1.5: the routing is confirmed BEFORE one entry is touched — a daem
   assert.deepEqual(flowEvents(s.dir).at(-1).kind, 'result')
 })
 
-test('1.6 §1.4 第 2 步: an off with no names asks the daemon to exit once drained and reports what is left of the connections; --now is passed on; an error answer (a 400) is a failure, not a stuck daemon', async () => {
+test('1.6 §1.4 第 2 步: an off with no names switches the daemon off without asking it to exit and reports what is left of the connections; --now is passed on; an error answer (a 400) is a failure, not a stuck daemon', async () => {
   const s = await installedHome({ names: ['claude-code'], daemon: { relayed: { closing: 2, waiting: 1, cut: 0 }, exitOnOff: false } })
   const r = await s.off({ now: false })
   assert.equal(r.exit, 0, JSON.stringify(r.receipt.problems))
-  assert.deepEqual(s.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), ['POST /off {"exit":true}'])
-  assert.deepEqual([r.receipt.relayed, r.receipt.daemon], [{ closing: 2, waiting: 1, cut: 0 }, { pid: 4242, state: 'draining', exits_after: 2 }], 'appendix C.2: the daemon says what it exits after')
+  assert.deepEqual(s.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), ['POST /off {}'])
+  assert.deepEqual([r.receipt.relayed, r.receipt.daemon], [{ closing: 2, waiting: 1, cut: 0 }, { pid: 4242, state: 'running' }], 'appendix C.2: the daemon keeps running (D62 ⑥)')
   const t = await installedHome({ names: ['claude-code'], daemon: { relayed: { closing: 0, waiting: 0, cut: 3 }, exitOnOff: false } })
   const cut = await t.off({ now: true })
-  assert.deepEqual(t.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), ['POST /off {"now":true,"exit":true}'])
+  assert.deepEqual(t.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), ['POST /off {"now":true}'])
   assert.equal(cut.receipt.relayed.cut, 3)
   const u = await installedHome({ names: ['claude-code'] }); const before = u.userFiles()
   const bad = await u.off({ deps: { request: async (q) => { if (q.path === '/off') throw Object.assign(new Error('400: unknown harness: nope'), { status: 400 }); return u.sys.daemon.request(q) } } })
@@ -493,7 +465,7 @@ test('V24: with the install manifest gone and no terminal, off takes the routing
   assert.deepEqual(first.receipt.pending.map((p) => [p.path, p.how]), [[sw, 'owned-file']], 'what on wrote; the Kimi shim and rc line are install\'s')
   assert.match(first.receipt.problems.join('\n'), /record of what it wrote is missing[\s\S]*trocar off --yes/)
   assert.deepEqual(Object.values(s.state().harnesses).map((h) => h.desired), ['off', 'off', 'off'], 'desired off for every harness')
-  assert.deepEqual([first.receipt.routing.confirmed, s.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), first.receipt.autostart], [true, ['POST /off {"exit":true}'], undefined], 'the routing is off, the daemon was asked to exit, and the receipt carries no autostart key (D61: off touches no registration) — none of it needs the manifest')
+  assert.deepEqual([first.receipt.routing.confirmed, s.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), first.receipt.autostart], [true, ['POST /off {}'], undefined], 'the routing is off, the daemon was asked to switch off (D62 ⑥: never to exit), and the receipt carries no autostart key (D61: off touches no registration) — none of it needs the manifest')
   assert.deepEqual([flowEvents(s.dir).at(-1).kind, flowEvents(s.dir).at(-1).outcome], ['result', 'partial'])
   const second = await s.off({ yes: true })
   assert.equal(second.exit, 0, JSON.stringify(second.receipt.problems))

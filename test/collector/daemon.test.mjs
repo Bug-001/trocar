@@ -122,10 +122,11 @@ test('daemon: CC trusted through the installed settings key is decrypted and rec
   const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], env: { ...process.env, HOME: s.home }, upstreamCa: up.ca.certPem })
   try {
     const lock = JSON.parse(fs.readFileSync(path.join(s.collector, 'lock'), 'utf8'))
-    assert.deepEqual([lock.pid, lock.engine_port, lock.helper_pid, lock.segment, fs.statSync(path.join(s.collector, 'lock')).mode & 0o777], [process.pid, d.port, clients[0]._child.pid, null, 0o600], 'no record yet: no segment is open')
+    assert.deepEqual([lock.pid, lock.engine_port, lock.segment, fs.statSync(path.join(s.collector, 'lock')).mode & 0o777], [process.pid, d.port, null, 0o600], 'no record yet: no segment is open')
     assert.equal((await req(s.sock, 'GET', '/status')).desired, 'off')
     const on = await req(s.sock, 'POST', '/on', {})
     assert.deepEqual([on.desired, on.actual, on.recording], ['on', 'on', true])
+    assert.equal(JSON.parse(fs.readFileSync(path.join(s.collector, 'lock'), 'utf8')).helper_pid, clients[0]._child.pid, 'the lock names the helper on started')
 
     p.add(4242, { uid: UID, exe: CC_EXE, argv: ['claude', '-p', 'hi'], cwd: s.home, env: { HOME: s.home }, startTicks: nowTicks(p) })
     await clients[0].raw({ op: '__emit', ev: 'exec', tgid: 4242, pid: 4242, comm: 'claude', filename: CC_EXE, ts_ns: 1 })
@@ -493,6 +494,7 @@ test('daemon: a helper death is degraded and on reports why; a protocol mismatch
     const second = fakeArch(p)
     await assert.rejects(startDaemon({ dir: s.collector, socketPath: s.sock, arch: second.arch, harnesses: [cc] }), /another collector daemon/)
     assert.equal(second.clients.length, 0)
+    await req(s.sock, 'POST', '/on', {}) // the helper runs only while a harness is on
     clients[0]._child.kill('SIGKILL')
     const st = await until(async () => { const r = await req(s.sock, 'GET', '/status'); return r.degraded ? r : null })
     assert.deepEqual([st.actual, st.helper.down !== null], ['off', true])
@@ -521,6 +523,7 @@ test('daemon: a helper that exits at start leaves nothing listening; the next st
   const port = probe.address().port; await new Promise((r) => probe.close(r))
   try {
     await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [cc], freePort: async () => port })
+    fs.writeFileSync(path.join(s.collector, 'state.json'), JSON.stringify({ version: 1, desired: 'on', updated_at: 'T0' })) // a harness on: the start spawns the helper
     await assert.rejects(startDaemon({ dir: s.collector, socketPath: s.sock, arch: fakeArch(p, {}, { args: ['-e', 'process.exit(6)'] }).arch, harnesses: [cc] }))
     const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: fakeArch(p).arch, harnesses: [cc] })
     try {
@@ -540,10 +543,11 @@ test('daemon: with no helper at its path it starts, answers and steers nothing (
   const arch = { os: 'linux', createRedirector: () => createLinuxRedirector({ makeClient, procRoot: p.root, uid: UID }) }
   const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc] })
   try {
-    const st = await req(s.sock, 'GET', '/status')
-    assert.deepEqual([st.actual, typeof st.helper.down], ['off', 'string'])
+    assert.equal((await req(s.sock, 'GET', '/status')).helper.down, null, 'nothing on at start: no helper is asked for')
+    const missing = await req(s.sock, 'POST', '/on', {})
+    assert.deepEqual([missing.actual, typeof missing.helper.down], ['off', 'string'])
     assert.ok(flowsOf(s).some((f) => f.event === 'helper-down' && f.reason), 'the reason is on disk (D38)')
-    assert.ok(st.health.collector.conditions.some((c) => c.kind === 'degraded'), 'and the board says so')
+    assert.ok((await req(s.sock, 'GET', '/status')).health.collector.conditions.some((c) => c.kind === 'degraded'), 'and the board says so')
     fs.mkdirSync(path.dirname(bin), { recursive: true })
     fs.writeFileSync(bin, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(FAKE)} "$@"\n`, { mode: 0o755 })
     const on = await req(s.sock, 'POST', '/on', {})
@@ -553,6 +557,58 @@ test('daemon: with no helper at its path it starts, answers and steers nothing (
     assert.deepEqual(after.filter((c) => c.kind === 'degraded'), [], 'the board no longer says the helper is down')
   } finally { await d.stop(); p.done(); s.done() }
 })
+
+const helperExited = (c) => c._child.exitCode !== null || c._child.signalCode !== null
+
+// 4.6 S20 a/d, D61: a start with no harness on spawns no helper; with none running the actual state is off, and nothing is down or degraded
+test('daemon: started with no harness on it spawns no helper, and status is off with nothing down (4.6 S20)', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  const { arch, clients } = fakeArch(p)
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc] })
+  try {
+    assert.equal(clients.length, 0)
+    const st = await req(s.sock, 'GET', '/status')
+    assert.deepEqual([st.actual, st.helper.down, st.helper.ok === false, st.degraded], ['off', null, false, null])
+  } finally { await d.stop(); p.done(); s.done() }
+})
+
+test('daemon: a helper that fails to configure at /on is dropped, so the next /on starts a fresh one and attaches (4.6 S20)', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  const clients = []
+  const makeClient = () => {
+    const c = createRedirectorClient({ binary: process.execPath, args: [FAKE], env: { ...process.env, TROCAR_FAKE_LOADER: '1' }, autoHeartbeatMs: 0 })
+    if (!clients.length) c.configure = async () => { throw new Error('configure refused') } // the first helper starts and then fails to configure
+    clients.push(c); return c
+  }
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: { os: 'linux', createRedirector: () => createLinuxRedirector({ makeClient, procRoot: p.root, uid: UID }) }, harnesses: [cc] })
+  try {
+    await req(s.sock, 'POST', '/on', {}).catch(() => {})
+    await until(() => helperExited(clients[0]))
+    const on = await req(s.sock, 'POST', '/on', {})
+    assert.deepEqual([on.actual, clients.length], ['on', 2])
+  } finally { await d.stop(); p.done(); s.done() }
+})
+
+// 4.6 S20 a/b: an off that leaves no harness on ends the helper once nothing is relayed; the daemon stays and answers, no helper death is
+// recorded, and the next on starts a new helper and attaches
+for (const body of [{}, { harnesses: [cc.name] }]) {
+  test(`daemon: /off ${JSON.stringify(body)} leaving no harness on ends the helper — no helper-down, the daemon answers on — and the next /on starts a new one (4.6 S20)`, async () => {
+    const s = sandbox(); const p = fakeProc()
+    await install(s)
+    const { arch, clients } = fakeArch(p)
+    const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc] })
+    try {
+      await req(s.sock, 'POST', '/on', {})
+      await req(s.sock, 'POST', '/off', body)
+      await until(async () => helperExited(clients[0]) && (await req(s.sock, 'GET', '/status')).helper.pid === null)
+      assert.deepEqual(flowsOf(s).filter((f) => f.event === 'helper-down' || f.event === 'daemon-stop'), [])
+      const on = await req(s.sock, 'POST', '/on', {})
+      assert.deepEqual([on.actual, clients.length, on.degraded], ['on', 2, null])
+    } finally { await d.stop(); p.done(); s.done() }
+  })
+}
 
 test('daemon: the install-time engine port held by another process → start fails with the reason, no helper spawned, nothing steered (G3)', async () => {
   const s = sandbox(); const p = fakeProc()
@@ -579,6 +635,7 @@ test('daemon: a control request that arrives while the daemon is still wiring wa
   let release
   const held = new Promise((r) => { release = r })
   const slow = { os: arch.os, createRedirector: (o) => { const r = arch.createRedirector(o); const start = r.start.bind(r); r.start = async () => { await held; return start() }; return r } }
+  fs.writeFileSync(path.join(s.collector, 'state.json'), JSON.stringify({ version: 1, desired: 'on', updated_at: 'T0' })) // a harness on: the start spawns the helper
   const starting = startDaemon({ dir: s.collector, socketPath: s.sock, arch: slow, harnesses: [cc] })
   try {
     await until(() => fs.existsSync(s.sock))
@@ -588,7 +645,7 @@ test('daemon: a control request that arrives while the daemon is still wiring wa
     assert.equal(answered, false, 'no answer while the helper is not started')
     release()
     const st = await early
-    assert.deepEqual([st.desired, typeof st.engine.port, st.helper.ok], ['off', 'number', true])
+    assert.deepEqual([st.desired, typeof st.engine.port, st.helper.ok], ['on', 'number', true])
   } finally { release(); await (await starting).stop(); p.done(); s.done() }
 })
 
@@ -627,6 +684,7 @@ test('daemon: failures it owns leave a durable record with a reason, also when i
   const fails = (where) => flowsOf(s).filter((f) => f.event === 'failure' && f.where === where)
   let stopped = false
   try {
+    await req(s.sock, 'POST', '/on', {}) // the helper runs only while a harness is on
     assert.match(fails('daemon')[0].reason, /previous daemon \(pid 999999\) ended without a clean stop.*connections then in flight through its engine were cut \(how many is not known\)/)
     // engine: a connection steered to it whose original destination is unknown is closed — recorded, folded within 10 s
     for (let i = 0; i < 2; i++) { const c = net.connect(d.port, '127.0.0.1'); await once(c, 'close') }
@@ -1488,17 +1546,16 @@ test('V30 unit half: a 3 s event-loop stall while state.json turns a harness off
     assert.deepEqual(last, ['unwatch 4545', 'detach'], 'unwatch, then detach, and not one more heartbeat')
     const off = await req(s.sock, 'GET', '/status')
     assert.deepEqual([off.desired, off.actual, off.links, off.recording], ['off', 'off', [], false])
-    assert.deepEqual(await watched(clients[0]), {})
+    await until(() => helperExited(clients[0])) // none left on: the helper goes, and the watch table with it (4.6 §开关语义)
 
     // the file never attaches: writing claude-code on again changes nothing until an `on` request
-    await clients[0].raw({ op: '__mark', name: 'again' })
     rewriteState(s, (x) => { x.harnesses['claude-code'].desired = 'on' })
     await new Promise((r) => setTimeout(r, 600)) // several 5 s checks' worth at checkMs 150, and no heartbeat timer to carry a reload either
-    assert.deepEqual([await afterMark(clients[0], 'again'), (await req(s.sock, 'GET', '/status')).harnesses['claude-code'].desired], [[], 'off'])
+    assert.deepEqual([clients.length, (await req(s.sock, 'GET', '/status')).harnesses['claude-code'].desired], [1, 'off'])
     const back = await req(s.sock, 'POST', '/on', { harnesses: ['claude-code'] })
     assert.deepEqual([back.desired, back.actual, back.harnesses['claude-code'].desired, back.harnesses.codex.desired], ['on', 'on', 'on', 'off'])
     assert.deepEqual(back.agents.map((a) => [a.pid, !!a.off]), [[4242, false], [4343, false], [4444, false], [4545, true]], 'the rescan behind on judges the harness again')
-    assert.deepEqual(Object.keys(await watched(clients[0])).sort(), ['4242', '4343', '4444'])
+    assert.deepEqual(Object.keys(await watched(clients.at(-1))).sort(), ['4242', '4343', '4444'])
     assert.equal(flowsOf(s).filter((f) => f.event === 'failure' && f.where === 'switch').length, 0, 'no state-mismatch on the way')
   } finally { await d.stop(); p.done(); s.done() }
 })
@@ -1697,9 +1754,47 @@ async function withSplice(fn) {
     await clients[0].raw({ op: '__inject_port', port: raw.localPort, family: 4, dst: { address: '127.0.0.1', port: echo.address().port, family: 4 }, pid: 4242, decrypt: 0 })
     raw.write('ZZZZ not a protocol the engine knows\n') // classified unknown: passed through, never framed
     await once(raw, 'data')
-    await fn({ s, d, raw, flows: () => flowsOf(s) })
+    await fn({ s, d, raw, clients, flows: () => flowsOf(s) })
   } finally { echo.close(); await d.stop(); p.done(); s.done() }
 }
+
+// 4.6 S20 c (V36 daemon half): the helper outlives the off while a connection is still relayed, and goes once it closes; an /on meanwhile keeps it;
+// with now the cut connection lets it go within 1 s
+test('daemon: /off with a splice open keeps the helper until the splice closes, then it exits (4.6 S20)', async () => {
+  await withSplice(async ({ s, raw, clients }) => {
+    await req(s.sock, 'POST', '/off', {})
+    await new Promise((r) => setTimeout(r, 300))
+    assert.deepEqual([(await req(s.sock, 'GET', '/status')).relayed.waiting, helperExited(clients[0])], [1, false])
+    raw.destroy()
+    await until(() => helperExited(clients[0]))
+  })
+})
+// the helper gone, no exit of the agent reaches the daemon: status does not keep listing a pid it can no longer follow (D38); the next on rescans
+test('daemon: once the helper exits after off, status lists none of the agents it followed, and the next /on finds the live ones again (4.6 S20)', async () => {
+  await withSplice(async ({ s, raw, clients }) => {
+    await req(s.sock, 'POST', '/off', {})
+    raw.destroy()
+    await until(() => helperExited(clients[0]))
+    await until(async () => !(await req(s.sock, 'GET', '/status')).agents.some((a) => a.pid === 4242))
+    await req(s.sock, 'POST', '/on', {})
+    await until(async () => (await req(s.sock, 'GET', '/status')).agents.find((a) => a.pid === 4242 && !a.off))
+  })
+})
+test('daemon: /on before the splice closes keeps the helper it has: no second one, still on (4.6 S20)', async () => {
+  await withSplice(async ({ s, raw, clients }) => {
+    await req(s.sock, 'POST', '/off', {})
+    await req(s.sock, 'POST', '/on', {})
+    raw.destroy()
+    await new Promise((r) => setTimeout(r, 400))
+    assert.deepEqual([clients.length, helperExited(clients[0]), (await req(s.sock, 'GET', '/status')).actual], [1, false, 'on'])
+  })
+})
+test('daemon: /off {now:true} cuts the splice and the helper exits within 1 s (4.6 S20)', async () => {
+  await withSplice(async ({ s, clients }) => {
+    await req(s.sock, 'POST', '/off', { now: true })
+    await until(() => helperExited(clients[0]), 1000)
+  })
+})
 
 test('daemon: POST /off {exit:true} with a spliced connection open: the reply says 1 waiting and the daemon\'s pid, it stays up, status counts the connection, and it stops (daemon-stop, reason off) once the connection closes by itself (V36 daemon half, 1.6 §1.4 5)', async () => {
   await withSplice(async ({ s, d, raw, flows }) => {

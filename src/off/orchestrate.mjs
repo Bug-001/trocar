@@ -8,7 +8,7 @@
 //      that cannot be stopped: its entries are undone all the same (the new connections are direct by its stale heartbeat), exit 1, the pid is given
 //   4  the entries: by the manifest (undoHarnesses), or, with no readable manifest, by trocar's own marks (planByMarker) after a yes (R3);
 //      5.1's held requests through `deps.releaseHeld` (5.1 is not built: a seam)
-//   5  with no names: the daemon was asked to exit once drained (step 3) and nothing else — the login registration is install's and off never touches it (D61),
+//   5  nothing: the daemon is never asked to exit (D62 ⑥) and stays, idle; the login registration is install's and off never touches it (D61),
 //      so `on` and `off` are the same after a reboot as before it
 //   6  the receipt (R1) and the `off-note` lines of `flows/`, the last of them `kind:'result'`; exit 0 only when the routing is confirmed off and every
 //      entry is undone (connections that are still draining do not count against it)
@@ -187,7 +187,7 @@ export async function switchRoutingOff(w, { ids = null, now = false, exit = fals
       r.daemon = { pid: Number.isInteger(reply && reply.pid) ? reply.pid : (lock && lock.pid) ?? null, state: exit ? 'draining' : 'running' }
       r.confirmed = ids === null ? reply.actual === 'off' && reply.confirmed !== false : reply.confirmed === true // 1.6 §3.1: a nameless off takes the whole routing off and reads it back (`actual`), whether or not the daemon was asked to exit
       r.how = 'daemon-reply'
-      if (!r.confirmed) fail('state-mismatch', `the daemon did not confirm that ${isProxyMode(w.platform) ? `its doors are shut${exit ? ' and it is exiting' : ''}` : `the kernel's watch table${exit ? ' and links' : ''} are off`} (actual: ${reply && reply.actual}, confirmed: ${reply && reply.confirmed}); the entries are left as they are. ${wayOut(w, r.daemon.pid)}`)
+      if (!r.confirmed) fail('state-mismatch', `the daemon did not confirm that ${isProxyMode(w.platform) ? `its doors are shut${exit ? ' and it is exiting' : ''}` : `the kernel's watch table and links are off`} (actual: ${reply && reply.actual}, confirmed: ${reply && reply.confirmed}); the entries are left as they are. ${wayOut(w, r.daemon.pid)}`)
     } catch (e) {
       if (e && e.status) { r.refused = { status: e.status, message: errMessage(e) }; fail('control-error', `the daemon refused the off request (${errMessage(e)}); the entries are left as they are. ${wayOut(w, lock && lock.pid)}`) }
       else await stopIt(`did not answer the off request (${errMessage(e)})`)
@@ -488,7 +488,7 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
     if (manifest && manifest.unsupported) receipt.notes.push(`the install manifest is version ${JSON.stringify(manifest.version)}, which this build does not read: no entry would be touched`)
     else if (!manifest) receipt.notes.push(`there is no usable install manifest${manifestError ? ` (${errMessage(manifestError)})` : ''}: ${marks.length ? `${marks.length} file(s) would be undone by trocar's own marks, after a yes` : 'no file holds trocar\'s marks'}`)
     for (const id of ids || []) if (manifest && !installed.includes(id)) receipt.skipped.push({ what: id, reason: 'trocar has nothing on its path (it was never set up, or it is already off)' })
-    receipt.daemon = { pid: null, state: ids === null && !isProxyMode(w.platform) ? 'draining' : 'running' } // D62 ⑥: proxy mode's daemon keeps running
+    receipt.daemon = { pid: null, state: 'running' } // D62 ⑥: off never asks the daemon to exit
     if (!hadAnything && !receipt.changed.length && !receipt.removed.length) { receipt.nothing_installed = true; receipt.log = null } // said as it is; nothing would be written, so there is no log to point at
     return { receipt: shapeReceipt(receipt), exit: EXIT.ok }
   }
@@ -529,12 +529,12 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
     if (w.deps.releaseHeld) await w.deps.releaseHeld(ids) // 5.1: held requests are released unchanged (a seam; 5.1 is not built)
 
     // 3 · the routing
-    // D62 ⑥: only driver mode's daemon is asked to exit by an `off` with no names — there the exit IS what takes the kernel's watch table and links off.
-    // In proxy mode the doors are the whole of it: the daemon idles on (one state, the one D61's login start already leaves), and the next `on` asks it
-    // directly instead of waiting out launchd's ThrottleInterval. `uninstall` passes `exit: true` itself, on either mode.
-    const routing = await switchRoutingOff(w, { ids, now, exit: ids === null && !isProxyMode(w.platform) })
+    // D62 ⑥: off never asks the daemon to exit, in either mode. Proxy mode closes its doors; driver mode takes the watch table and links off, and the
+    // helper exits on its own once no harness is on and the drain is done (4.6). The daemon idles on (the state D61's login start already leaves), and
+    // the next `on` asks it directly. `uninstall` and `update` pass `exit: true` themselves.
+    const routing = await switchRoutingOff(w, { ids, now })
     receipt.routing = { confirmed: routing.confirmed, state: routing.state, how: routing.how }
-    receipt.daemon = routing.daemon && routing.daemon.state === 'draining' ? { ...routing.daemon, exits_after: routing.relayed && routing.relayed !== 'unknown' ? routing.relayed.closing : null } : routing.daemon // C.2 `daemon:{state, pid, exits_after}`
+    receipt.daemon = routing.daemon // C.2 `daemon:{pid, state}`
     receipt.relayed = routing.relayed
     if (routing.relayed_reason) receipt.relayed_reason = routing.relayed_reason
     if (routing.stop) receipt.daemon_stop = { how: routing.stop.how, signals: routing.stop.signals, stopped: routing.stop.stopped }
@@ -566,11 +566,9 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
       // (The Windows kernel arm that stood here — a daemon that did not answer left the kernel preferring its dead engine, so the standalone off made it
       // forward-only or stopped it through its controller — went with the kernel itself, D47's win32 twin: the engine's doors die with the daemon, nothing
       // outlives them to be steered, and uninstall's purge list still cleans kernel-era residue: kernel\, kernel-archive\, forwarder\.)
-      // 5 · the login registration is NOT touched (D61): `on` rewrote the agents' config files, so a machine that came
-      // up without the daemon left every harness that was on unable to reach anything. In driver mode the daemon was asked in step 3 to exit once drained
-      // and exits 0 (systemd's Restart=on-failure and launchd's KeepAlive {SuccessfulExit: false} leave a clean exit down); in proxy mode it was not asked
-      // at all (D62 ⑥) and goes on idling with every door shut. Either way the next login starts it and it opens the doors the persisted desired state asks
-      // for (none, after this off). `install` registers it, `uninstall` takes it out.
+      // 5 · the login registration is NOT touched (D61): `on` rewrote the agents' config files, so a machine that came up without the daemon left
+      // every harness that was on unable to reach anything. The daemon was not asked to exit (D62 ⑥) and idles on with nothing routed; the next login
+      // starts it and it routes what the persisted desired state asks for (nothing, after this off). `install` registers it, `uninstall` takes it out.
     } else outcome = 'failed'
     let list = []
     try { list = await w.procs() } catch (e) { receipt.notes.push(`the process table could not be read (${errMessage(e)}), so the trocar processes you started yourself are not listed`) }

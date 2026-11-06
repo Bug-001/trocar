@@ -53,6 +53,7 @@ test('cli: `collector status` is the one `trocar status` (src/cli/status.mjs: it
   assert.match(tf.o.join('\n'), /No problems in the last 24 hours\.\n\nExpected\n/, '\u00a73.5: `--failures` prints the problems of the last 24 hours, folded, then Expected')
   // the daemon's own answer, word for word (D46 R11): every agent it reported, why each is not captured, and the processes it could not judge
   const all = formatStatus(STATUS)
+  assertEnglish(formatStatus({ ...STATUS, agents: [], unjudged: null, helper: { pid: null, proto: null, build: null, ok: null, down: null, expected_proto: 3 } }), 'an idle helper (no harness is on, 4.6)') // V73: no `null` reaches a person
   assert.match(all, /2 decrypted/)
   assert.match(all, /  11 claude-code not captured: var-missing/)
   assert.match(all, /  12 opencode \(started by claude-code\) captured\n    not captured \(it did not read trocar's certificate\): models\.dev \(before-plugin\)/)
