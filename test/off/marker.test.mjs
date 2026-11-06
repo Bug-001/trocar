@@ -139,7 +139,7 @@ test('on Linux, install\'s certificate block in a CODEX_HOME other than ~/.codex
 
 // Every install-phase carrier at the place its writer put it, through the harness's own home variable (1.6 R3: the variable resolved in the environment
 // uninstall runs in, a leading ~/ expanded, Hermes' profiles): generated from MARKER_PATHS — each home-based place with a variable — over the variable
-// unset, absolute, `~/`, and (a place with profiles) naming a profile. Install writes, the manifest goes, the marker undo brings every byte back.
+// unset, absolute, `~/`, (a place with profiles) naming a profile, and set only since install (the default place). Install writes, the manifest goes, the marker undo brings every byte back.
 const HOME_VARS = Object.entries(MARKER_PATHS).flatMap(([h, specs]) => {
   const seen = new Set()
   return specs.flatMap((spec) => {
@@ -152,8 +152,12 @@ const HOME_VARS = Object.entries(MARKER_PATHS).flatMap(([h, specs]) => {
 })
 const filesUnder = (d) => { try { return fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? filesUnder(path.join(d, e.name)) : [path.join(d, e.name)])) } catch { return [] } }
 for (const { h, loc, homes } of HOME_VARS) {
-  const variants = [['unset'], ['absolute', (home) => path.join(home, 'elsewhere', loc.env)], ['~/', () => `~/elsewhere/${loc.env}`], ...(homes ? [['profile', (home) => path.join(home, 'elsewhere', loc.env, homes, 'p')]] : [])]
-  for (const [name, value] of variants) {
+  const abs = (home) => path.join(home, 'elsewhere', loc.env)
+  const tilde = () => `~/elsewhere/${loc.env}`
+  // `late`: install ran with the variable unset, uninstall runs with it set — the default place is searched too
+  const variants = [['unset'], ['absolute', abs], ['~/', tilde], ...(homes ? [['profile', (home) => path.join(home, 'elsewhere', loc.env, homes, 'p')]] : []),
+    ['set since install, absolute', abs, true], ['set since install, ~/', tilde, true]]
+  for (const [name, value, late] of variants) {
     test(`on Linux, ${h} · ${loc.env} ${name}: install's carriers are found where install wrote them and undone by their marks with the manifest gone`, async () => {
       const home = tmpDir('trocar-marker-homevar-')
       const sh = sevenHomes(home)
@@ -162,7 +166,7 @@ for (const { h, loc, homes } of HOME_VARS) {
       const own = { 'claude-code': `{\n  "model": "x",\n  "env": {\n    "NODE_EXTRA_CA_CERTS": ${JSON.stringify(sh.corp)}\n  }\n}\n`, 'deepseek-dsh': '- insert: [{ name: mine }]\n' }
       if (own[h]) fs.writeFileSync(sh.files[h][0], own[h])
       const env = { HOME: home }
-      if (value) {
+      if (value && !late) {
         const target = path.join(home, 'elsewhere', loc.env)
         fs.mkdirSync(path.dirname(target), { recursive: true })
         fs.renameSync(path.join(home, loc.dir), target)
@@ -173,8 +177,9 @@ for (const { h, loc, homes } of HOME_VARS) {
       await installCollector({ home, env, osName: 'linux', harnesses: (await loadHarnesses()).filter((d) => d.name === h), freePort: async () => 47011, scan: async () => [], roots })
       const dir = path.join(home, '.trocar', 'collector')
       const recorded = [...new Set(itemsOfPhase(readManifest(dir), 'install').filter((x) => x.harness === h).map((x) => x.path))].filter((p) => !p.startsWith(path.join(dir, 'ca') + path.sep))
-      if (value) assert.ok(recorded.some((p) => p.startsWith(path.join(home, 'elsewhere') + path.sep)), JSON.stringify(recorded))
+      if (value && !late) assert.ok(recorded.some((p) => p.startsWith(path.join(home, 'elsewhere') + path.sep)), JSON.stringify(recorded))
       fs.rmSync(manifestPath(dir))
+      if (late) env[loc.env] = value(home)
       const offPlan = planByMarker({ home, env, ids: [h], platform: 'linux', phases: ['on'] })
       assert.deepEqual(offPlan.filter((x) => recorded.includes(x.path)), [], 'off never plans install\'s carriers (D55①)')
       const plan = planByMarker({ home, env, ids: [h], ...UNINSTALL })

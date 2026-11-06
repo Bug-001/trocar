@@ -13,7 +13,8 @@
 // The certificate carriers among them (`phase: 'install'`) are install's (D55①): `off` never looks at them, `uninstall` does (planByMarker `phases`).
 // Nothing else is touched, and no byte of a file outside those marks changes. The result says `undone-by-marker` (the code `off` records and the
 // receipt shows, 1.6 R3). Not done here, said in the docs: a combined bundle (no manifest, so nobody can say who holds it — `uninstall` removes it with the
-// CA). Every place is resolved as its writer resolved it, by the one <loc> resolver (loc.mjs): a `route` place (what `on` writes on macOS / Windows) with
+// CA); a home install used under a variable value since cleared or changed (only the manifest knew that value). Every place is resolved as its
+// writer resolved it, by the one <loc> resolver (loc.mjs): a `route` place (what `on` writes on macOS / Windows) with
 // its variable (XDG_CONFIG_HOME, CODEX_HOME, HERMES_HOME) and the per-user folders (loc.mjs dirsFor) followed, and a `home` place (HOME_PLACES: the
 // harness's home, by its variable and by its default place, and Hermes' profiles under it). Imports only node:* and src/off.
 import nodeFs from 'node:fs'
