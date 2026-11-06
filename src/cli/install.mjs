@@ -11,7 +11,7 @@ import { refuseOldManifest, readManifest, saveManifest } from '../off/manifest.m
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
 import { opLockFile, standalonePath, standaloneFiles, launcherPath, standaloneCommand, collectorDir, backupDir } from '../off/paths.mjs'
 import { isInteractive, confirm } from '../off/io.mjs'
-import { fit, tilde, planItems, formWords, carrierWords, planWords, commandLine, UNDO_WORDS, asDir } from './receipt.mjs'
+import { fit, tilde, planItems, formWords, carrierWords, planWords, commandLine, formatRefusal, UNDO_WORDS, asDir } from './receipt.mjs'
 import { pairs, wrap } from './text.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
 import { EVENT, CODE } from '../collector/core/codes.mjs'
@@ -232,7 +232,13 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
   const args = { home, env, osName: parts.os, harnesses: parts.harnesses, scan: parts.scan, match: parts.match, arch: parts.arch || null, roots: deps.roots || null, unit, fs, ...(deps.freePort ? { freePort: deps.freePort } : {}), ...(deps.now ? { now: deps.now } : {}), ...(deps.request ? { request: deps.request } : {}), ...(deps.sleep ? { sleep: deps.sleep } : {}) } // request / sleep: installCollector's ensureDaemonUp seam (D61), so a test's daemon is the one asked
   let plan
   const ingressPath = path.join(home, '.trocar', 'collector', 'ingress.json')
-  try { plan = await inst.planOn(args) } catch (e) { io.err(`trocar install: the plan could not be made (${String((e && e.message) || e)}). Nothing was changed`); return EXIT.incomplete } // a plan that cannot be made (an OS bundle that cannot be read, D38) is said, never a stack
+  try { plan = await inst.planOn(args) } catch (e) {
+    if (e && e.code === inst.MARKED_WITHOUT_RECORD) { // 1.6 §3.2: refused before anything is written; every such file named, and the one line that takes the text out
+      const r = { ...newReceipt('install'), ok: false, error: { code: e.code, message: e.message, command: UNDO_LINE.install }, problems: e.paths.map((f) => `${f} holds trocar's text, and no install record lists it`) }
+      if (json) printJson(io, r); else io.err(formatRefusal(r, { home }).join('\n'))
+      return EXIT.incomplete
+    }
+    io.err(`trocar install: the plan could not be made (${String((e && e.message) || e)}). Nothing was changed`); return EXIT.incomplete } // a plan that cannot be made (an OS bundle that cannot be read, D38) is said, never a stack
   if (plan.created && (await import('../collector/core/ingress-config.mjs')).readIngressConfig({ dir: path.dirname(ingressPath), fs }).boardPort === undefined) plan.created.push(ingressPath) // the board's port, recorded below (V85: the plan names what the run writes)
   // trocar-off (R3) is install's: named in the plan and the dry run when this run would write it, i.e. when it is not already what src/off generates
   const stdPath = standalonePath(home)

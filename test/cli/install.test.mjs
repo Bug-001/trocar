@@ -14,6 +14,8 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { ERROR_CODES } from '../../src/cli/json.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
 import { BOARD_RANGE } from '../../src/collector/core/ingress-config.mjs'
+import { onCtx, snapshot } from './fixtures/on-ctx.mjs'
+import { BLOCK_OPEN, BLOCK_END } from '../../src/off/text-edit.mjs'
 
 function fakeIo({ tty = false } = {}) {
   const out = [], err = []
@@ -327,3 +329,21 @@ for (const platform of ['darwin', 'win32']) {
     for (const f of standaloneFiles(w.home, platform)) assert.ok(words.includes(tilde(f, w.home)), `${f} is named: ${words}`)
   })
 }
+
+// 1.6 §3.2 「标记却没有记录」: the install record is gone and files still hold trocar's marked text — install refuses before it writes anything,
+// exit 1, `error.code` marked-without-record, `error.command` the uninstall that takes such text out by its marks, and every such file in `problems`
+test('1.6 §3.2 (linux): marked text no record lists, in two files → refused, both named, the command given, the home byte for byte as it was', async () => {
+  const home = tmpDir('trocar-mwr-')
+  const env = (dir) => ({ name: dir, runtime: 'rust', processes: { names: [{ name: dir }] }, hosts: [], trust: { chain: [{ var: 'EXTRA_CA', semantic: 'append' }] },
+    inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, `.${dir}`, '.env'), vars: { EXTRA_CA: path.join(ctx.collectorDir, 'ca', 'trocar-ca.pem') }, semantic: 'append' }] }) })
+  const files = ['a', 'b'].map((d) => path.join(home, `.${d}`, '.env'))
+  for (const f of files) { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, `${BLOCK_OPEN}\nSSL_CERT_FILE=/x\n${BLOCK_END}\nKEY=1\n`) }
+  const before = snapshot(home)
+  const io = fakeIo()
+  const exit = await runInstallCli(['--yes', '--json'], onCtx(home, io, { harnesses: [env('a'), env('b')] }))
+  const doc = io.json()
+  assert.deepEqual([exit, doc.error && doc.error.code, doc.error && doc.error.command], [1, 'marked-without-record', 'trocar uninstall'])
+  for (const f of files) assert.ok(doc.problems.some((p) => p.includes(f)), `${f} is named: ${JSON.stringify(doc.problems)}`)
+  assert.deepEqual(validateReceipt(doc), [])
+  assert.deepEqual(snapshot(home), before, 'nothing was written')
+})

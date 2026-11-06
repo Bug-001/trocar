@@ -266,10 +266,11 @@ export function applyJsonArrayItem({ dir, manifest, harness, phase, file, keys, 
 // under an install this manifest does not list is refused: a second block or row would only be undone once. `joined` (the
 // caller has checked the manifest lists the block for this harness) is the only way past that refusal, and only into the
 // existing block (text-edit.mjs joinDotenvBlock); the default stays the refusal, so nothing joins by accident.
+export const MARKED_WITHOUT_RECORD = 'marked-without-record' // 1.6 §3.2: the refusal's code, which install's plan collects over every file
 function editText(file, text, edit, { joined = false, phase = 'install' } = {}) {
   if (text != null && (text.includes(BLOCK_OPEN) || (edit.line && holdsMarked(text, edit.line)))) { // the marker's fixed part: what any release wrote (4.6「标记的字」)
     if (!(joined && text.includes(BLOCK_OPEN) && edit.format === 'dotenv-block')) {
-      throw new Error(`${file} already holds trocar's text from an install this manifest does not list; take it out, then install again`)
+      throw Object.assign(new Error(`${file} already holds trocar's text from an install this manifest does not list; take it out, then install again`), { code: MARKED_WITHOUT_RECORD, path: file })
     }
   }
   try {
