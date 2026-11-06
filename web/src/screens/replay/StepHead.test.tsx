@@ -1,4 +1,4 @@
-// web/src/screens/replay/StepHead.test.tsx — the new desk's step head (2.2 §步头) over hand-made desks (desk-world.mjs deskOf): the
+// web/src/screens/replay/StepHead.test.tsx — the desk's step head (2.2 §步头) over hand-made desks (desk-world.mjs deskOf): the
 // step number reads N / M with the model's numbers and the model · time line beside it (not in it), the head is one row of the
 // table's parts with no popover row while closed and no prompt ordinal (2.2 #19), the three read-outs are keyboard popovers (2.2 #17),
 // 上下文 shows its calibre sentence when opened (2.2 #7), 对比 is a menu button whose choice renames it and × resets (2.2 #16), and the

@@ -216,7 +216,7 @@ test('3.5 §手里车道的页: the anchor lane reads its ledger chain to the en
     })
     await page.evaluate(() => { location.hash = '#/replay/p/S' })
     await page.waitForSelector('#ctxwin .cblk', { state: 'attached' })
-    // the new desk draws the explorer only while Resources is the sidebar's current tab (1.2 §回放台布局: 不是当前标签时不画)
+    // the desk draws the explorer only while Resources is the sidebar's current tab (1.2 §回放台布局: 不是当前标签时不画)
     await page.locator('.deskside [role=tab]').nth(1).click()
     const mine = () => log.filter((q) => q.get('lane') === main)
     await page.waitForFunction(() => window.__chainEnd === true, null, { timeout: 30000 }).catch(() => {})

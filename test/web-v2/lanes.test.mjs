@@ -134,10 +134,10 @@ test('2.1 #16: stepOfMark finds the step of a call now: its place in the anchor 
 
 // ── what can fold: the gutter and the Tracks menu read one list (2.1 ⑥) ─────────────────────────────────────────────────────────────────────
 const lane = (id, kind, n) => ({ id, kind, calls: Array.from({ length: n }, (_, i) => ({ rid: `${id}-${i}`, ts: iso(T0 + (i + 1) * 1000), ctx: 10 })), peakCtx: 10 })
-function railDesk({ subs, bgs, tc, subgroupOpen = false, bgOpen = false, railsFolded }) {
+function railDesk({ subs, bgs, tc, subgroupOpen = false, bgOpen = false }) {
   const main = lane('main', 'main', 3)
   const lanes = [main, ...Array.from({ length: subs }, (_, i) => lane(`sub${i}`, 'subagent', i + 1)), ...Array.from({ length: bgs }, (_, i) => lane(`bg${i}`, i % 2 ? 'notify' : 'monitor', i + 2)), ...(tc ? [lane('token-count', 'token-count', 2)] : [])]
-  return { lanes, anchor: main, anchorTs: main.calls.map((c) => Date.parse(c.ts)), view: { lo: 0, hi: 3 }, selTick: null, collapsedRails: new Set(), subSeeded: new Set(), subgroupOpen, bgOpen, railsFolded }
+  return { lanes, anchor: main, anchorTs: main.calls.map((c) => Date.parse(c.ts)), view: { lo: 0, hi: 3 }, selTick: null, collapsedRails: new Set(), subSeeded: new Set(), subgroupOpen, bgOpen }
 }
 const railWorlds = function* () {
   for (const subs of [0, 1, 2, 3]) for (const bgs of [0, 1, 2]) for (const tc of [false, true]) for (const subgroupOpen of [false, true]) for (const bgOpen of [false, true]) {
@@ -189,15 +189,15 @@ test('2.1 #17: flipRail flips that row and no other, and the gutter click leaves
   }
 })
 
-test('2.1 #17: renderRails writes no fold row, at any width and whatever s.railsFolded holds', () => {
+test('2.1 #17: renderRails writes no fold row, at any width', () => {
   const had = Object.getOwnPropertyDescriptor(globalThis, 'matchMedia')
   try {
     for (const narrow of [false, true]) {
       globalThis.matchMedia = () => ({ matches: narrow })
-      for (const { axes, where } of railWorlds()) for (const railsFolded of [undefined, false, true]) {
+      for (const { axes, where } of railWorlds()) {
         const el = {}
-        renderRails(el, railDesk({ ...axes, railsFolded }))
-        assert.doesNotMatch(el.innerHTML, /data-railunfold/, `${where} narrow=${narrow} folded=${railsFolded}`)
+        renderRails(el, railDesk(axes))
+        assert.doesNotMatch(el.innerHTML, /data-railunfold/, `${where} narrow=${narrow}`)
       }
     }
   } finally {

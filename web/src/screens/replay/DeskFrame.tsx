@@ -1,4 +1,4 @@
-// web/src/screens/replay/DeskFrame.tsx — the new desk's frame (1.2 §回放台布局), drawn into the desk's own root (DeskHost's portal): the
+// web/src/screens/replay/DeskFrame.tsx — the desk's frame (1.2 §回放台布局), drawn into the desk's own root (DeskHost's portal): the
 // session head, then the main area beside the right sidebar. The main area stacks the scope (#saw, with #rails in it) over the reading
 // column #midcol, which holds only the step head and the context window (1.4 中栏). The two boundaries are react-resizable-panels'
 // (D80①); neither Group has an id: the library keeps mounted groups in a module-level table by id, and two cached desks would collide.

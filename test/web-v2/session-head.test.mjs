@@ -61,7 +61,7 @@ test('K-20: the unreadable-records fact appears iff unknown.records > 0; reason 
   }
 })
 
-// ── the new desk's session head as data (web/src/screens/replay/models.mjs : sessionHeadModel) ─────────────────────────
+// ── the desk's session head as data (web/src/screens/replay/models.mjs : sessionHeadModel) ─────────────────────────
 
 const PRICES = { m: [3, 15, 3.75, 0.3] }
 const U = (read, create, fresh, out = 10) => ({ read, create, fresh, out })

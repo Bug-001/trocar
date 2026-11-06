@@ -168,7 +168,7 @@ test('a slice the sentinel appended survives an unrelated re-render of the paren
   expect(bytesOf(leaf)).toBe(grown)
 })
 
-// the same cell drawn by each of the two builds' drawers: the new desk's React cell and the legacy cell, in a wired host of its own
+// the same cell drawn by each of the two builds' drawers: the desk's React cell and the legacy cell, in a wired host of its own
 function bothDraws(cell: any): Array<[string, HTMLElement]> {
   const host = document.createElement('div')
   host.innerHTML = cellBodyHtml(cell, modeOf(cell.bid))

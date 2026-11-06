@@ -120,7 +120,7 @@ test('at 1280 × 800 the step bar is one row, the window holds half the height, 
     await everyType(b)
     await openBusiest(b)
     const L = await layout(b.page)
-    // 1.3 §排布: a step with every content type keeps the main track's row; no gutter glyph is cut (the new desk lists each share)
+    // 1.3 §排布: a step with every content type keeps the main track's row; no gutter glyph is cut (the desk lists each share)
     const shares = await b.page.evaluate(() => document.querySelectorAll('#sawgut .gshare').length)
     assert.ok(shares === 0 || shares === CT_ORDER.length, `${shares} shares in the gutter`)
     assert.deepEqual((await layoutFaults(b.page, '#saw')).cut, [])

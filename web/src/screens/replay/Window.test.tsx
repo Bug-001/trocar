@@ -1,4 +1,4 @@
-// web/src/screens/replay/Window.test.tsx — the new desk's context window (2.3 §读与画「长对话的窗口」 · §block 卡 · §这一步的回复, 1.4 ①–⑨ ·
+// web/src/screens/replay/Window.test.tsx — the desk's context window (2.3 §读与画「长对话的窗口」 · §block 卡 · §这一步的回复, 1.4 ①–⑨ ·
 // §打开一步时落在哪, 1.2 格的键, D75④⑤): what the virtual list draws from the window model, its keys, its pins and landing band, who
 // asks for bodies, the landing through the scroll position, reveal and the cell keys. Every expected value comes from windowItems or
 // the list. jsdom has no layout: #ctxwin gets a client box and a scrollTo that moves scrollTop (as LibraryScreen.test.tsx), and an
@@ -130,11 +130,11 @@ test('1.4 #8: the items after the reply run reply, impact, details; a no-request
   const types = (s: B, ...of: string[]) => [...drawnRoots(mount(s).win)].filter((c) => of.includes(c))
   const d = deskN(rows.map(() => [sys()]), rows, { details: rows.map(() => detail) })
   const tail = ['cwreply', 'cwunparsed', 'cwnoreq', 'cwimpact', 'cwdetails']
-  expect(types(stateOf(d, 0, { rawPanelGone: true }), ...tail)).toEqual(['cwreply', 'cwimpact', 'cwdetails'])
-  expect(types(stateOf(d, 1, { rawPanelGone: true }), ...tail)).toEqual(['cwunparsed', 'cwimpact', 'cwdetails'])
-  expect(types(stateOf(d, 2, { rawPanelGone: true }), ...tail)).toEqual(['cwnoreq'])
+  expect(types(stateOf(d, 0), ...tail)).toEqual(['cwreply', 'cwimpact', 'cwdetails'])
+  expect(types(stateOf(d, 1), ...tail)).toEqual(['cwunparsed', 'cwimpact', 'cwdetails'])
+  expect(types(stateOf(d, 2), ...tail)).toEqual(['cwnoreq'])
   const frames = deskN([[sys()]], [{}], { held: false, details: [detail] })
-  expect(types(stateOf(frames, 0, { rawPanelGone: true }), ...tail)).toEqual([])
+  expect(types(stateOf(frames, 0), ...tail)).toEqual([])
 })
 
 test('D75④: a row inserted before keeps every unchanged row\'s DOM node (an index-keyed copy of the list does not)', () => {
@@ -393,7 +393,7 @@ test('2.3 #38 · 1.2 §点击与选中文字②: an open row holds the controls 
 })
 
 // a redraw that puts the window back as it first opened is what a reader loses their place to
-test('2.3 #14: flipping one cell on the new desk leaves the window as the reader had it: its scroll, the focus, the other rows and what is open inside them', () => {
+test('2.3 #14: flipping one cell on the desk leaves the window as the reader had it: its scroll, the focus, the other rows and what is open inside them', () => {
   const tree = { top: { mid: { deep: { leaf: 'the words at the bottom' } } } }
   const s = stateOf(deskN([[sys(), blk({ query: 'q' }), say(), say(), say()]]))
   const rowOf = (bi: number) => itemsOf(s).find((it) => it.type === 'row' && it.bi === bi)!
@@ -479,7 +479,7 @@ test('2.3 #13: Assembled from the stream closes the reply once while an open row
 
 test('2.6 #17: an opened Call details row reads its bytes once into a Raw cell whose text minus .lay is the bytes, Copy bytes gives them all, v leaves that Raw-only cell Raw, and the open keys outlive the step', async () => {
   const ref = 's/m#R::2-7', bytes = '{"a":1,\n  "b":[2, "x\\ty"]}', detail = { respRefs: [], nonBlockKeys: [{ key: 'metadata', chars: bytes.length, ref }], extraMessages: [], wire: null }
-  const s = stateOf(deskN([[sys()], [sys()]], [{}, {}], { details: [detail, detail] }), 0, { rawPanelGone: true })
+  const s = stateOf(deskN([[sys()], [sys()]], [{}, {}], { details: [detail, detail] }), 0)
   s.ctx.api.get.mockImplementation(async () => ({ ok: true, status: 200, data: { blocks: [{ ref, bytes, fidelity: { verbatim: true } }] } }))
   const writes: string[] = []
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (t: string) => { writes.push(t) } } })

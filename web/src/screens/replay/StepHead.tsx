@@ -1,4 +1,4 @@
-// web/src/screens/replay/StepHead.tsx — the step head (2.2 §步头) in the new desk: it renders stepHeadModel (models.mjs), recomputed on
+// web/src/screens/replay/StepHead.tsx — the step head (2.2 §步头) in the desk: it renders stepHeadModel (models.mjs), recomputed on
 // each `step`, `rough` and `empty` paint (the model reads the state: an emptied desk has none, a rough page has its label, a drawn
 // step its head). One row: ‹ [N / M over model · time] › · ◐ · Compare ▾ · three read-outs (Context / Cache / Estimate), each an
 // InfoButton whose face is two lines, the name over the value; their rows are worked out when the layer opens. The rough page's

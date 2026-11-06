@@ -1,4 +1,4 @@
-// web/src/screens/replay/Scope.tsx — the scope (1.3) in the new desk, drawn from models.mjs : scopeModel(s, K). Top to bottom (1.3 §排布):
+// web/src/screens/replay/Scope.tsx — the scope (1.3) in the desk, drawn from models.mjs : scopeModel(s, K). Top to bottom (1.3 §排布):
 // the chapter row, only with a compaction (a header on the bars' grid, not a track: replay.css .chaprow) · the legend row, with the Tracks button for a narrow desk (TracksMenu.tsx) · the axis with the playhead's step tag · the problem lane · the main track · the cache trace · the
 // prompts lane · #rails (rails.mjs draws it; React renders it empty and never touches what is inside) · the whole-session strip (Strip.tsx).
 // Every track is a .tkrow (.tgut + .tlane) on one --gut; one --cursor line runs through the detail rows.

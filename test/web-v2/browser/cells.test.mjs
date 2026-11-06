@@ -23,7 +23,7 @@ async function openBusiest(b) {
   await b.page.waitForLoadState('networkidle')
 }
 
-// the next closed row not tried: looked up and clicked in one task of the page, so a redraw cannot take it away in between (the new desk
+// the next closed row not tried: looked up and clicked in one task of the page, so a redraw cannot take it away in between (the desk
 // draws only the rows around the box, and an opened row growing pushes the next one out). None drawn: the box moves on down; at the list's end, 'end'
 const openNext = async (page, tried) => (await page.waitForFunction((t) => {
   const W = document.querySelector('#ctxwin'), e = [...W.querySelectorAll('.cblk.collapsed[data-bi]')].find((x) => x.getClientRects().length && !t.includes(x.dataset.bi))
@@ -118,7 +118,7 @@ async function copyCase(chromium) {
         window.__copied = null
         Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (t) => { window.__copied = t } } })
       })
-      // the row's: the new desk holds the controls in the row head, outside the cell
+      // the row's: the desk holds the controls in the row head, outside the cell
       await b.page.locator(`#ctxwin .cblk:has(.cell[data-ref="${ref.replace(/"/g, '\\"')}"]) [data-cellcopy]`).first().click()
       await b.page.waitForFunction(() => window.__copied != null, null, { timeout: 5000 })
       assert.equal(await b.page.evaluate(() => window.__copied), bytes, `Copy bytes copies the whole body of ${ref}`)

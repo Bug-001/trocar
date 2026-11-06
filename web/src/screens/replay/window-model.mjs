@@ -135,7 +135,7 @@ const MEMO = new WeakMap()
 const sigOf = (x) => (x instanceof Set ? [...x].join('\n') : x instanceof Map ? [...x].map(([k, v]) => k + '\t' + JSON.stringify(v)).join('\n') : null)
 
 /** The window of the playhead's step as keyed items, in 1.4's order ① fid · ② win · ③ sec / foldall / row / card with ④ chline
- * and its removed list before row `cacheBreak.idx` · ⑨ reply · ⑩⑪ Call details (s.rawPanelGone only: the legacy desk draws no such kind);
+ * and its removed list before row `cacheBreak.idx` · ⑨ reply · ⑩⑪ Call details;
  * ⑥–⑧ (unparsed · noreq · frames) stand in for ③④⑨, and ⑩⑪ follow ⑥ once the lane is held. The rows of
  * an open turn follow its turn item; a folded turn has its head only. Pure but for the desk's scratch it sets: s.curFlat,
  * s.curKeys, s.curReply (when the reply has parts), s.curRemoved.
@@ -161,7 +161,7 @@ export function windowItems(s) {
   if (memo) MEMO.set(flat, { key: memo, out })
   return scratch(s, out)
 }
-const detailsOf = (s, call, st) => (s.rawPanelGone && st && st.held ? callDetailItems(call, st, s) : [])
+const detailsOf = (s, call, st) => (st && st.held ? callDetailItems(call, st, s) : [])
 function scratch(s, out) {
   s.curFlat = out.flat; s.curKeys = out.keys; s.curRemoved = out.removed
   if (out.reply) s.curReply = out.reply

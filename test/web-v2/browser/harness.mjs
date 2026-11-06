@@ -158,8 +158,7 @@ export const measure = (page, name, startMark) => page.evaluate(([n, s]) => perf
 
 /** In the page (no closure; also sent as source): the largest stretch (px) of #ctxwin's visible box that no drawn item covers, from the
  *  box's top to the nearer of its bottom and the last item's bottom (empty space below a short window is no gap), and one
- *  --cblk-pitch in px: { gap, pitch }. Drawn items are the window's units (2.3 §读与画, 1.4 白名单) and the legacy desk's group
- *  placeholder (rule 4 旧台, a drawn stand-in). A gap is a stretch taller than one pitch (row margins are smaller). No drawn item in
+ *  --cblk-pitch in px: { gap, pitch }. Drawn items are the window's units (2.3 §读与画, 1.4 白名单). A gap is a stretch taller than one pitch (row margins are smaller). No drawn item in
  *  the box: the whole box is the gap. No #ctxwin: an infinite gap. */
 export function gapInPage() {
   const W = document.querySelector('#ctxwin')
@@ -170,7 +169,7 @@ export function gapInPage() {
   if (!W) return { gap: Infinity, pitch }
   const box = W.getBoundingClientRect(), top = box.top + W.clientTop, bottom = top + W.clientHeight
   const sel = ['.cwfline', '.cwwin', '.cwsec', '.cwfoldall', '.chline', '.cwremoved', '.cwturn > .cwturnhd', '.cblk', '.cwreply', '.cwbusy',
-    '.cwframe', '.cwnoreq', '.cwunparsed', '.empty', '.cwgroup[aria-busy]'].join(', ')
+    '.cwframe', '.cwnoreq', '.cwunparsed', '.empty'].join(', ')
   const rs = [...W.querySelectorAll(sel)].map((e) => e.getBoundingClientRect()).filter((r) => r.height > 0)
   const end = Math.min(bottom, Math.max(...rs.map((r) => r.bottom)))
   const seen = rs.filter((r) => r.bottom > top && r.top < end).sort((a, b) => a.top - b.top)

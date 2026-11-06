@@ -303,7 +303,7 @@ export const COMP_LEGEND = 'colour = content type (estimated from content size)'
 export const COST_LEGEND = 'bar height = estimated cost of the step (usage × unit price) · hatched = cannot be computed'
 // a part by the compaction before it (k = its index); the strip's label says where the pointer is on it
 export const partWord = (k) => (k ? `Since compaction ${k}` : 'Before the first compaction')
-// the new desk's chapter row (1.3 §章): the part the bars show, its steps, and what of it the window shows when it is narrower
+// the desk's chapter row (1.3 §章): the part the bars show, its steps, and what of it the window shows when it is narrower
 const stepsAB = (a, b) => (a === b ? `step ${a}` : `steps ${a}–${b}`)
 export const partLabel = (k, a, b, shown, inferred) => `${partWord(k)}${inferred ? ' (inferred)' : ''} · ${stepsAB(a, b)}${shown ? ` · showing ${shown[0] === shown[1] ? shown[0] : `${shown[0]}–${shown[1]}`}` : ''}`
 export const compactionAt = (dir, k, n, at) => `${dir < 0 ? 'Previous' : 'Next'} compaction: compaction ${k} · step ${n}${at ? ` · ${at}` : ''}`
@@ -443,10 +443,10 @@ export const KEY_LIST = Object.freeze([
   ['?', 'This list'],
 ])
 
-// ── the new desk's models (web/src/screens/replay/models.mjs): the words its session head, step head and scope read ──
+// ── the desk's models (web/src/screens/replay/models.mjs): the words its session head, step head and scope read ──
 // 1.2 §会话头 开始时间: the word is START_LINE; the tip gives the full moment
 export const startTip = (stamp) => `First step at ${stamp}`
-// the new desk's untitled head carries no start time beside 「Untitled」 (the start time has its own word), so its tip does not explain one
+// the desk's untitled head carries no start time beside 「Untitled」 (the start time has its own word), so its tip does not explain one
 export const TITLE_UNTITLED_NEXT_TIP = 'No usable title was recorded for this session'
 // 1.3 §提问刻度: the prompts row's name — K and P known · only P · only K · neither
 export const askRowName = (k, p) => (k != null && p != null ? `Prompt ${k} / ${p}` : p != null ? count(p, 'prompt') : k != null ? `Prompt ${k}` : 'Prompts')

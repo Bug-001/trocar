@@ -142,7 +142,7 @@ function openDesk(ctx, route0, makeView) {
     followLanding: false, // the playhead was last moved by 跟随最新, not by the reader: the window lands on the reply (1.4 §打开一步时落在哪)
     landedFor: null, landWait: null, replyFor: null, // the window's landing ran for that rid, or waits ({rid, top}: landingFor); the reply rows' open state belongs to that rid
     navOpen: new Set(['sys', 'life-file', 'life-load']), navSeenExpanded: false, collapsedRails: new Set(), subSeeded: new Set(), subgroupOpen: false, bgOpen: false,
-    railsFolded: typeof matchMedia === 'function' && matchMedia('(max-width: 900px)').matches, rpOpen: false, reviewRange: null,
+    rpOpen: false, reviewRange: null,
     gap: null, totals: null, lastPhSig: null, unheld: null, notListed: false, goodKey: null, goodAt: null, staleErr: null,
     bodyFail: new Map(), // a body read that failed: ref → its failed body (2.3 §读失败)
     win: { kind: 'empty', msg: '', err: null }, // what the context window shows (the header's interface)
@@ -183,7 +183,7 @@ function openDesk(ctx, route0, makeView) {
   })
   s.jumpTo = (step, jump) => { setPlayhead(step, true); jumps.queue(s.playhead, jump) }
   s.queueJump = (jump) => jumps.queue(s.playhead, jump)
-  // a resource name is never a dead click (2.4): the new desk says why its block is not in this step
+  // a resource name is never a dead click (2.4): the desk says why its block is not in this step
   s.noBlock = () => { const c = curCall(); toast(c && c.unparsed ? UNPARSED_LINE : c && !c.rec ? NO_REQUEST : RES_NOT_FOUND) }
   // the drawer as drawn: the selected call's row object and whether its step is held (refreshDrawer redraws on a change only)
   let drawnDetail = null
@@ -803,7 +803,7 @@ function openDesk(ctx, route0, makeView) {
 
   // ── the desk's own listeners (inside its root): wired once its frame is there, kept while it is detached, dropped by dispose() ──
   const onRp = () => { s.rpOpen = !s.rpOpen; view.frame() }
-  s.toggleRise = onRp // the bottom panel on a narrow new desk (1.2 §窄屏); Escape lowers it through onEscape
+  s.toggleRise = onRp // the bottom panel on a narrow desk (1.2 §窄屏); Escape lowers it through onEscape
   const offs = []
   // the scope's rows, the session head and the step head are the view's own (Scope.tsx, DeskHead.tsx, StepHead.tsx): not wired here
   function wire() {

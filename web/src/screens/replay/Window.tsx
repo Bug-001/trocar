@@ -1,4 +1,4 @@
-// web/src/screens/replay/Window.tsx — the new desk's context window (2.3 §读与画「长对话的窗口」, 1.4 中栏): one virtual list (D75⑤) over the
+// web/src/screens/replay/Window.tsx — the desk's context window (2.3 §读与画「长对话的窗口」, 1.4 中栏): one virtual list (D75⑤) over the
 // window model's items (window-model.mjs windowItems), each keyed by the model's key (D75④), rows drawn with the decision-4 head and the
 // React cell (Cell.tsx). It owns #ctxwin and everything in it but each open cell's body leaf (R2 decision 13).
 //   · The DOM holds the items within one window height of the visible box, plus the pins (withPins): the change line, the reply, the

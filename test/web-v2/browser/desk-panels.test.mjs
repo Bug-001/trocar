@@ -27,7 +27,7 @@ test('2.3 #31: a step adds, removes or changes at most 64 nodes in the resource 
       return !!x && +x[1] === n && !document.querySelector('#ctxwin .cwload') && !!res && res.children.length > 1 && !res.querySelector('[aria-busy]')
     }, n, { timeout: 30000, polling: 'raf' }).then(() => page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))))
     await page.evaluate((m) => { location.hash = `#/replay/p/S?step=${m}` }, mid)
-    // the new desk draws the explorer only while Resources is the sidebar's current tab (1.2 §回放台布局: 不是当前标签时不画)
+    // the desk draws the explorer only while Resources is the sidebar's current tab (1.2 §回放台布局: 不是当前标签时不画)
     await page.locator('.deskside [role=tab]').nth(1).click()
     await drawn(mid)
     for (const t0 = Date.now(); new Set(b.requests.filter((r) => /^\/api\/d\/p\d/.test(r.url) && r.status === 200).map((r) => r.url)).size < files && Date.now() - t0 < 30000;) await page.waitForTimeout(100)
@@ -36,7 +36,7 @@ test('2.3 #31: a step adds, removes or changes at most 64 nodes in the resource 
       const head = page.locator(`#resexp [data-navtoggle="${g}"]`)
       if (!(await head.count())) continue
       await head.first().click()
-      // open once its head is drawn open: the new desk draws a toggle on its sidebar's deferred render (Sidebar.tsx)
+      // open once its head is drawn open: the desk draws a toggle on its sidebar's deferred render (Sidebar.tsx)
       await page.waitForSelector(`#resexp [data-navtoggle="${g}"].open`)
     }
     const rows = await page.evaluate(() => document.querySelectorAll('#resexp [data-navres], #resexp .navchip').length)

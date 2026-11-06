@@ -1,4 +1,4 @@
-// web/src/screens/replay/DeskHead.test.tsx — the new desk's session head (1.2 §会话头 · §会话保真行) rendered from a plain desk state:
+// web/src/screens/replay/DeskHead.test.tsx — the desk's session head (1.2 §会话头 · §会话保真行) rendered from a plain desk state:
 // the chip is one DOM shape for every registry harness (1.2 #2 / harness seam), the head is only the table's parts (1.2 #3), the
 // fidelity row exists iff a fact does (1.2 #14), 「several agents」 iff the multi-harness field has more than one (1.2 #15), the start
 // time iff the head has a first chapter (1.2 #17), the read-state line exists iff the desk is pending or behind and carries no control
