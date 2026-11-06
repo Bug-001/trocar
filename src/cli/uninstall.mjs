@@ -20,7 +20,7 @@ import { findingFor } from '../netenv/findings.mjs'
 import { standaloneFiles, backupDir, opLockFile, trocarHome, appDir, launcherPath, COLLECTOR_STATE_FILES } from '../off/paths.mjs'
 import { rawHome, indexHome, classesLog, collectorHome } from '../paths.mjs' // D60: the records are segments under ~/.trocar/raw, the index trocar builds from them under ~/.trocar/index
 import { netenvFile } from '../netenv/index.mjs'
-import { dropBackup, orphanBackups } from '../off/backup.mjs'
+import { backupsOf, dropBackup, orphanBackups } from '../off/backup.mjs'
 import { removeOwnedFile } from '../off/journal.mjs'
 import { flowFile } from '../off/events.mjs'
 import { removeEmptyDirs, sweepTemps, strictlyInside } from '../off/fsutil.mjs'
@@ -269,7 +269,9 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
         })
       }
       receipt.dropped_backups.push(...u.dropped_backups)
-      for (const b of orphanBackups({ home, manifest: m, fs })) { try { if (dropBackup(b, fs)) receipt.dropped_backups.push(b) } catch (err) { noted.push({ kind: 'residue-not-removed', code: 'residue-not-removed', path: b, reason: `${b} could not be removed (${errText(err)}); remove it by hand` }) } }
+      // a file left not undone keeps its backups, named or not (with no manifest every backup is an orphan): the receipt points at them for the next run or a hand fix
+      const leftBackups = new Set(u.left.flatMap((l) => (l.path ? backupsOf({ home, file: l.path, fs }) : [])))
+      for (const b of orphanBackups({ home, manifest: m, fs }).filter((x) => !leftBackups.has(x))) { try { if (dropBackup(b, fs)) receipt.dropped_backups.push(b) } catch (err) { noted.push({ kind: 'residue-not-removed', code: 'residue-not-removed', path: b, reason: `${b} could not be removed (${errText(err)}); remove it by hand` }) } }
       removeEmptyDirs([backupDir(home)], fs)
       // the unit file and its links (4.6 order: after the entries, before the CA key); systemd is told it is gone
       if (unitFile || fs.existsSync(unitFilePath(home))) {

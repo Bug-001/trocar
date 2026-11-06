@@ -177,7 +177,7 @@ const proxyMode = {
       systemProxy: { http: true, ws: true } }, // the app (Electron) follows the OS proxy; the CLI forms do not (the harness's `proxy.systemProxy`)
   ],
   routes: {
-    settings: { kind: 'json-key', ...ROUTES.settings, format: 'json', noProxyKeys: [['env', 'NO_PROXY'], ['env', 'no_proxy']], value: 'door-url', absent: 'create', takesEffect: 'takes effect the next time you start claude (it reads the proxy setting once, at start)' },
+    settings: { kind: 'json-key', ...ROUTES.settings, format: 'json', value: 'door-url', absent: 'create', takesEffect: 'takes effect the next time you start claude (it reads the proxy setting once, at start)' },
     library: { kind: 'json-key', ...ROUTES.library, format: 'json', ownKeys: [['egressProxyUrl'], ['egressProxyPacUrl']], value: 'pac-url', auth: false, absent: 'create', takesEffect: 'takes effect the next time you start the Claude desktop app; no administrator needed' },
   },
   certs: {
