@@ -11,7 +11,7 @@ import { stepOf } from '../../web/legacy/replay/model.mjs'
 import { segTax } from '../../web/legacy/replay/analysis.mjs'
 import { costOf, priceMatch, hitRatio, QUIET_CAUSES } from '../../web/legacy/core/metrics.mjs'
 import { usd } from '../../web/legacy/core/fmt.mjs'
-import { priceStateNote } from '../../web/legacy/replay/stepbar.mjs'
+import { priceStateNote, cachePopoverHtml } from '../../web/legacy/replay/stepbar.mjs'
 import * as W from '../../web/legacy/labels/replay.mjs'
 
 const U = (read, create, fresh, out = 10) => ({ read, create, fresh, out })
@@ -56,6 +56,15 @@ test('2.2 · 缓存 popover: each of the verdict\'s cache labels is a row in the
   assert.deepEqual(labels.map((l) => rows.find((r) => r.key === l.id)?.text), ['A', 'B'])
   const bare = rowsOf(head([{ usage: U(0, 10, 1), cacheBreak: { cause: 'append' } }]), 'cacheRows')
   for (const l of labels) assert.ok(!bare.some((r) => r.key === l.id), l.id)
+})
+
+test('2.2 · 缓存 popover (the shipped legacy html): a label is a pp-note row by its server word; none drawn without labels', () => {
+  // cachePopoverHtml is the popover built into replay.js; it draws call.cacheBreak.labels (not wire.labels, which lights the fidelity ◐)
+  const call = { usage: U(0, 10, 1), cacheBreak: { cause: 'append', labels: [{ id: 'cache-best-effort', label: 'Best-effort cache' }, { id: 'cache-below-minimum', label: 'Below the minimum' }] } }
+  const html = cachePopoverHtml(call, null, {})
+  for (const l of call.cacheBreak.labels) assert.ok(html.includes(`<div class="pp-note">${l.label}</div>`), l.id)
+  const bare = cachePopoverHtml({ usage: U(0, 10, 1), cacheBreak: { cause: 'append' } }, null, {})
+  assert.ok(!/cache-best-effort|Best-effort|Below the minimum/.test(bare), 'no label row without labels')
 })
 
 test('2.2 #4 · 缓存 popover: the four numbers are usage.read / create / fresh / out; NULL is — with its tip; no usage writes no row and no 0%', () => {
