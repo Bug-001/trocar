@@ -48,10 +48,11 @@ const isDone = (home, id) => { const h = readHead(home, id); return !!h && h.tie
 const rereads = (home, id) => fs.existsSync(rereadFile(home, id))
 const answerNames = (home, id) => fs.readdirSync(sessionDir(home, id)).filter((n) => /^(p\d+\.\w+\.ndjson\.gz|open\.\w+\.ndjson|head(\.pending)?\.json\.gz)$/.test(n)).sort()
 // every answer file, by the sha1 of its bytes
-const filesOf = (home, id) => Object.fromEntries(answerNames(home, id).map((n) => [n, createHash('sha1').update(fs.readFileSync(path.join(sessionDir(home, id), n))).digest('hex')]))
+const filesOf = (home, id, take = () => true) => Object.fromEntries(answerNames(home, id).filter(take).map((n) => [n, createHash('sha1').update(fs.readFileSync(path.join(sessionDir(home, id), n))).digest('hex')]))
 const packsOf = (home, id) => Object.fromEntries(Object.entries(filesOf(home, id)).filter(([n]) => n.startsWith('p')))
 // the old answer as a re-read keeps it: every pack and tail by its bytes, the head but for `pending`
-const oldAnswer = (home, id) => ({ files: Object.fromEntries(Object.entries(filesOf(home, id)).filter(([n]) => !n.startsWith('head'))), head: { ...readHead(home, id), pending: null } })
+// by name first: the worker renames head.pending away when the fold ends, between a listing and a read of it
+const oldAnswer = (home, id) => ({ files: filesOf(home, id, (n) => !n.startsWith('head')), head: { ...readHead(home, id), pending: null } })
 const CONTRACT = JSON.parse(fs.readFileSync(new URL('../fixtures/session-read-contract.json', import.meta.url), 'utf8'))
 const inWorker = (home, f = fs) => ({ home, fs: f, writer: true })
 const toTheEnd = async (ctx, id) => { await drain(() => extendSession(ctx, id, 1_000)) }
