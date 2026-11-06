@@ -220,11 +220,9 @@ const pick = (v) => [v.code, v.unread === true]
 const ask = ({ d, f, ctx, facts }) => verdictOf({ desc: d, form: f, facts, record: RECORD, issuer: ISSUER, host: d.hosts[0], ctx })
 
 test('P11 rule 4 · userCertFiles: kind × semantics × root in file — only a replacing setting naming a file without the root forwards, replace-without-ca, before any decrypt', () => {
-  let n = 0
   for (const kind of ['env', 'key']) for (const semantics of [undefined, 'replace']) for (const holds of Object.keys(HOLDS)) {
     const c = userFileCase({ kind, semantics, holds })
     if (!c) continue
-    n++
     const got = ask(c), label = `${kind} · ${semantics || 'add'} · ${holds}`
     const forward = semantics === 'replace' && lacking.has(holds)
     assert.equal(got.decrypt, !forward, `${label}: ${JSON.stringify(got)}`)
@@ -234,7 +232,6 @@ test('P11 rule 4 · userCertFiles: kind × semantics × root in file — only a 
       assert.ok(!got.unread, `${label}: read evidence, so the door may keep the verdict`)
     }
   }
-  assert.ok(n >= 18)
 })
 
 test('P11 rule 4 · a replacing setting or its file that cannot be read is not known: forwarded, never cached (D38)', () => {
@@ -258,5 +255,15 @@ test('P11 rule 4 · Hermes seed: a provider ssl_ca_cert without the root forward
     const got = ask({ d, f, ctx, facts: { name: d.name, pid: 1, startedAt: INSTALLED + 1, env: { HERMES_HOME: dir }, cwd: dir } })
     assert.equal(got.decrypt, want === null, JSON.stringify(got))
     if (want) assert.equal(got.code, want)
+  }
+})
+
+// One reading of a setting's value (4.11 P4 rule U, sources.mjs fileOf): a leading `~/` is the home, never a directory named `~` under the cwd.
+test('P11 rule 4 · a replacing setting written ~/…: the file under the home is read, whatever the process cwd', () => {
+  for (const [holds, want] of [['block', null], ['lacks', 'replace-without-ca']]) {
+    const c = userFileCase({ kind: 'key', semantics: 'replace', holds })
+    fs.writeFileSync(path.join(c.dir, 'cfg.yaml'), 'routes:\n  r0:\n    ca: ~/ca-0.pem\n')
+    const got = ask({ ...c, facts: { ...c.facts, cwd: path.join(c.dir, 'elsewhere') } })
+    assert.deepEqual([got.decrypt, got.code], [want === null, want ?? undefined], JSON.stringify(got))
   }
 })

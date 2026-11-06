@@ -9,7 +9,7 @@
 //            hosts in the extension's own settings, the operator's extra_hosts; 4.8 OPEN 22); absent → desc.hosts.
 //   issuer = makeIssuer()'s object, or null; ctx = the sources.mjs ctx (os, home, dirs, readFile, readdir, policy, join).
 import path from 'node:path'
-import { readSrc } from './sources.mjs'
+import { readSrc, fileOf } from './sources.mjs'
 import { certBlocks } from '../../../off/pem.mjs'
 import { itemsOfPhase } from '../../../off/manifest.mjs'
 import { HOOK_PID_ENV } from './chain.mjs'
@@ -20,7 +20,6 @@ const notRead = (r) => fwd(r.code, why(r), { unread: true })
 const hex = (fp) => String(fp || '').replace(/:/g, '').toLowerCase()
 const ms = (t) => (t == null ? NaN : typeof t === 'number' ? t : new Date(t).getTime())
 const absent = (e) => e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')
-const isAbs = (p) => path.posix.isAbsolute(p) || path.win32.isAbsolute(p)
 
 /** A <src> read against the process: the first set leaf in precedence, or { error, code } when a leaf it reaches cannot be read (the process env
  *  or cwd unknown, a file unreadable or unparsable) — never "unset" (D38). */
@@ -55,11 +54,10 @@ function trustVerdict(t, ctx, facts, record, inProcess) {
 }
 
 /** The file a set setting { value, where } names, read for the trocar root → { holds, file } (no such file: holds false), or the forward verdict when it
- *  cannot be read (D38). A relative path resolves under the process's cwd. */
+ *  cannot be read (D38). fileOf reads the value: `~/` is the home, a relative path is under the process's cwd. */
 function rootIn({ value, where }, ctx, facts, record) {
-  const v = String(value)
-  if (!isAbs(v) && facts.cwd == null) return fwd('config-unreadable', `${where} names a relative path and the process working directory is not known`, { unread: true })
-  const file = isAbs(v) ? v : (ctx.join || path.join)(facts.cwd, v)
+  const file = fileOf(value, { home: ctx.home, cwd: facts.cwd, join: ctx.join || path.join })
+  if (file == null) return fwd('config-unreadable', `${where} names a relative path and the process working directory is not known`, { unread: true })
   try { return { file, holds: certBlocks(ctx.readFile(file)).some((b) => hex(b.fp) === hex(record.rootFp256)) } } catch (e) {
     return absent(e) ? { file, holds: false } : fwd('file-unreadable', `${where} names ${file}: ${(e && e.code) || e}`, { unread: true })
   }
