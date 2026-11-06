@@ -124,7 +124,7 @@ function readCall(rec, { d, format }) {
 export function requestBlocks(rec, wire, read = readCall(rec, wire)) {
   const base = rawRefOf(rec), body = spanBody(rec);
   if (wire.format === 'anthropic') {
-    const flat = anthropicFlat(read.h.request, null);
+    const flat = anthropicFlat(read.h.request);
     let spans = null;
     if (body != null) try { spans = blockSpans(read.h); } catch { spans = null; }
     return { flat, at: flat.map((_, i) => locate(base, body, spans && spans[i])) };
@@ -795,8 +795,8 @@ export function nonBlockKeysOf(rec, format) {
 // the browser → invariant 3). opaque = encrypted/redacted reasoning replayed as signature-only, no plaintext on the wire
 // (thinking/redacted_thinking with a signature but empty text). The board renders a badge off b.faithfulness so nobody
 // mistakes ciphertext for verbatim content (invariant 4). (1.4:52)
-export function anthropicFlat(request, keyMemo) {
-  const flat = linearContext(request, keyMemo);
+export function anthropicFlat(request) {
+  const flat = linearContext(request);
   for (const b of flat) {
     const bl = b.block || {};
     if ((b.kind === 'thinking' || b.kind === 'redacted_thinking') && bl.signature && !(bl.thinking || bl.text)) b.faithfulness = 'opaque';
