@@ -961,3 +961,14 @@ test('the text receipt says what it says about files an agent wrote because of t
   const bare = lines.map((l) => paths.reduce((s, p) => s.replace(p.replace('/h', '~'), ''), l)).filter((l) => l.trim())
   assert.deepEqual(bare.filter((l, i) => bare.indexOf(l) !== i), [], 'no sentence is said twice')
 })
+
+test('off by trocar\'s marks keeps the backups no record names, and its receipt names them under ~ (1.6 §1.1⑤)', async () => {
+  const s = await installedHome({ names: ['codex'], seed: (home) => fs.writeFileSync(path.join(home, '.codex', '.env'), 'SSL_CERT_FILE=/corp/ca.pem\n') })
+  onSwitch(s, 'codex')
+  fs.rmSync(path.join(s.dir, 'install-manifest.json'))
+  const { receipt } = await s.off({ yes: true })
+  assert.ok(receipt.orphan_backups.length > 0 && receipt.orphan_backups.every((b) => fs.existsSync(b)), JSON.stringify(receipt.orphan_backups))
+  const text = formatOffReceipt(receipt, { home: s.home })
+  assert.ok(receipt.orphan_backups.every((b) => text.includes(`~${b.slice(s.home.length)}`)), text)
+  assert.ok(!text.includes(s.home), text)
+})

@@ -14,6 +14,7 @@ import * as win32Wrapper from '../../src/collector/arch/win32/wrapper.mjs'
 import { runUninstall } from '../../src/cli/uninstall.mjs'
 import { manifestPath } from '../../src/off/manifest.mjs'
 import { recordingExec } from './fixtures/on-ctx.mjs'
+import { formatUninstallReceipt } from '../../src/cli/receipt.mjs'
 
 const MACHO = Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 1, 2, 3, 4])
 const USER_PEM = `${tls.rootCertificates[2].trim()}\n`
@@ -32,7 +33,7 @@ const files = (home) => {
   return out
 }
 
-async function world(os) {
+async function world(os, { keepRecord = false } = {}) {
   const w = await modelWorld({ os, commands: ['codex', 'dsh', 'pi'], env: (home) => ({ SSL_CERT_FILE: path.join(home, 'certs', 'mine.pem') }) })
   fs.mkdirSync(path.join(w.home, 'certs'), { recursive: true }); fs.writeFileSync(w.env.SSL_CERT_FILE, USER_PEM)
   const exe = os === 'win32' ? '.exe' : '' // the program's file name as the OS names it (the arch's platform facts)
@@ -45,8 +46,8 @@ async function world(os) {
   const r = await w.install({ wrapperKit: KITS[os], facts: { exeSuffix: exe } })
   assert.equal(r.exit, 0, JSON.stringify(r.carriers))
   for (const k of ['wrapper', 'plugin', 'pem-block']) assert.ok(r.carriers.some((c) => c.carrier === k && c.state === 'placed'), `install placed a ${k}: ${JSON.stringify(r.carriers)}`)
-  fs.rmSync(manifestPath(w.dir)) // the record is lost
-  const uninstall = () => runUninstall({ home: w.home, env: w.env, yes: true, deps: { platform: os, exec: recordingExec().run, custody: w.custody, rootStore: w.store, procs: async () => [], sleep: async () => {}, drainMs: 0, getuid: () => 501, harnesses: w.harnesses } })
+  if (!keepRecord) fs.rmSync(manifestPath(w.dir)) // the record is lost
+  const uninstall = ({ env = w.env, exec = recordingExec().run } = {}) => runUninstall({ home: w.home, env, yes: true, deps: { platform: os, exec, custody: w.custody, rootStore: w.store, procs: async () => [], sleep: async () => {}, drainMs: 0, getuid: () => 501, harnesses: w.harnesses } })
   return { ...w, kimi, real: path.join(path.dirname(kimi), '.trocar-real', path.basename(kimi)), before, uninstall }
 }
 
@@ -94,4 +95,56 @@ for (const os of ['darwin', 'win32']) {
       assert.equal(fs.readFileSync(w.env.SSL_CERT_FILE, 'utf8'), USER_PEM)
     })
   }
+}
+
+// the environment uninstall runs in, without the certificate variable install saw (the user set it in the shell install ran in, not this one)
+const without = (env, name) => Object.fromEntries(Object.entries(env).filter(([k]) => k !== name))
+// a runner whose `launchctl getenv <name>` answers `vars[name]` (unset: exit 1, as launchctl does) and every other tool exits 0 with nothing
+const launchd = (vars) => (file, args) => (file === 'launchctl' && args[0] === 'getenv' ? (vars[args[1]] ? { status: 0, stdout: `${vars[args[1]]}\n`, stderr: '' } : { status: 1, stdout: '', stderr: '' }) : { status: 0, stdout: '', stderr: '' })
+const mentions = (notes, name) => notes.some((n) => n.includes(`${name}=`) && n.includes('trocar uninstall'))
+
+test('darwin: the certificate variable is only in launchd now → its file is found there and the marked block comes out; no note about a lost block', async () => {
+  const w = await world('darwin')
+  const { receipt, exit } = await w.uninstall({ env: without(w.env, 'SSL_CERT_FILE'), exec: launchd({ SSL_CERT_FILE: w.env.SSL_CERT_FILE }) })
+  assert.equal(fs.readFileSync(w.env.SSL_CERT_FILE, 'utf8'), USER_PEM)
+  assert.deepEqual([exit, mentions(receipt.notes, 'SSL_CERT_FILE')], [0, false])
+})
+
+for (const os of ['darwin', 'win32']) {
+  test(`${os}: the certificate variable is only in the agent's own config → the marked block comes out`, async () => {
+    const w = await world(os)
+    const dotenv = path.join(w.home, '.codex', '.env')
+    fs.mkdirSync(path.dirname(dotenv), { recursive: true }); fs.writeFileSync(dotenv, `SSL_CERT_FILE=${w.env.SSL_CERT_FILE}\n`)
+    const { exit } = await w.uninstall({ env: without(w.env, 'SSL_CERT_FILE'), exec: launchd({}) })
+    assert.deepEqual([exit, fs.readFileSync(w.env.SSL_CERT_FILE, 'utf8')], [0, USER_PEM])
+  })
+
+  test(`${os}: the certificate variable is nowhere now → the receipt says a block may be left in the user's file, with the command that takes it out`, async () => {
+    const w = await world(os)
+    const { receipt } = await w.uninstall({ env: without(w.env, 'SSL_CERT_FILE'), exec: launchd({}) })
+    assert.ok(mentions(receipt.notes, 'SSL_CERT_FILE'), JSON.stringify(receipt.notes))
+  })
+
+  test(`${os}: uninstall with no record: the backups it deletes are not also said to be left in place`, async () => {
+    const w = await world(os)
+    const { receipt } = await w.uninstall()
+    assert.ok(receipt.dropped_backups.length > 0, 'install kept backups, and uninstall deletes them')
+    for (const b of receipt.dropped_backups) assert.ok(!fs.existsSync(b))
+    assert.deepEqual(receipt.notes.filter((n) => receipt.dropped_backups.some((b) => n.includes(b) || n.includes(path.dirname(b)))), [])
+  })
+
+  test(`${os}: with the record, the real program put back in place of the wrapper is a changed row`, async () => {
+    const w = await world(os, { keepRecord: true })
+    const { receipt, exit } = await w.uninstall()
+    assert.equal(exit, 0, JSON.stringify(receipt.problems))
+    assert.deepEqual(fs.readFileSync(w.kimi), MACHO)
+    assert.ok(receipt.changed.some((c) => c.path === w.kimi && c.change), JSON.stringify(receipt.changed))
+  })
+
+  test(`${os}: the receipt text of an uninstall with no record: every line within 80 columns, or one token alone on its line from the item's column (1.6 §1.1)`, async () => {
+    const w = await world(os)
+    const { receipt } = await w.uninstall()
+    const long = formatUninstallReceipt(receipt, { home: w.home, platform: os }).split('\n').filter((l) => l.length > 80 && !/^ {0,2}\S+$/.test(l))
+    assert.deepEqual(long, [])
+  })
 }

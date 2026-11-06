@@ -324,9 +324,10 @@ function hookOf(desc, c, dir, renderHook) {
  *  this OS, present or not (the agent may be gone since), each carrier resolved as install resolves it (`ctx.facts` for a wrapper's file name) →
  *  places for src/off/marker.mjs planByMarker: a config key's value under ~/.trocar (json-value), the wrapper and the real program it runs (wrapper),
  *  a plug-in by the bytes install writes (owned-file `exact`) and the row that loads it by its mark and the plug-in's path (line `names`), and rule U's
- *  files by the marked block (pem-block). Reads nothing but the settings rule U reads. */
+ *  files by the marked block (pem-block). Reads nothing but the settings rule U reads. → { places, unseen }: `unseen`, the variables (by the
+ *  descriptors) that may have named a rule U file at install and name none now, of each harness on this OS none of whose settings names one. */
 export function carrierPlaces({ os, harnesses, ctx, home, owns, renderHook, fs = nodeFs }) {
-  const dir = collectorHome(path.join(home, '.trocar')), out = []
+  const dir = collectorHome(path.join(home, '.trocar')), out = [], unseen = new Set()
   for (const desc of harnesses.filter((d) => d.proxyMode)) {
     const h = desc.name, pm = desc.proxyMode, forms = pm.forms.filter((f) => f.os.includes(os))
     for (const c of [...new Set(forms.map((f) => pm.certs[f.cert]).filter(Boolean))]) {
@@ -341,10 +342,15 @@ export function carrierPlaces({ os, harnesses, ctx, home, owns, renderHook, fs =
       if (loader) out.push({ harness: h, how: 'line', file: loader, yaml: true, names: [JSON.stringify(file)] })
     }
     // rule U's file once, whichever harness names it first (SSL_CERT_FILE, NODE_EXTRA_CA_CERTS are read by more than one): the receipt counts files (1.6 §3.4)
-    if (forms.length) for (const { file } of ruleUFiles(desc, ctx, { home, owns, fs })) if (!out.some((p) => p.how === 'pem-block' && p.file === file)) out.push({ harness: h, how: 'pem-block', file })
+    const files = forms.length ? ruleUFiles(desc, ctx, { home, owns, fs }) : []
+    for (const { file } of files) if (!out.some((p) => p.how === 'pem-block' && p.file === file)) out.push({ harness: h, how: 'pem-block', file })
+    if (forms.length && !files.length) for (const n of certVars(desc)) unseen.add(n)
   }
-  return out
+  return { places: out, unseen: [...unseen] }
 }
+
+/** The environment variables a harness's `userCertFiles` reads (4.11 P4), in the descriptor's order. */
+export const certVars = (desc) => [...new Set(((desc.proxyMode && desc.proxyMode.userCertFiles) || []).flat().filter((s) => s && typeof s.env === 'string').map((s) => s.env))]
 
 // the base64 of a root, and whether a pem-block record holds it: how a block of this root is told from one of an older root (㉒; the Set up plan, too)
 export const pemBody = (pem) => pem.replace(/-----[A-Z ]+-----|\s/g, '')
