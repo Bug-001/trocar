@@ -43,11 +43,13 @@ export async function modelWorld({ os = 'darwin', env = {}, commands = [], cwd =
   return { home, dir, env: fullEnv, custody, store, ctx, harnesses, owns, install }
 }
 
-/** Rule U's shared file (4.11 P4): Claude Code (bundled store) and Kimi Code (its native program) present, NODE_EXTRA_CA_CERTS naming one user
- *  certificate file holding `userPem` — both harnesses' settings name it, so install places one block, recorded under the first. → world + { file } */
-export async function sharedCertFileWorld({ userPem }) {
-  const w = await modelWorld({ commands: ['claude', 'kimi'], env: (home) => ({ CLAUDE_CODE_CERT_STORE: 'bundled', NODE_EXTRA_CA_CERTS: path.join(home, 'certs', 'mine.pem') }) })
-  const file = w.env.NODE_EXTRA_CA_CERTS
+/** Rule U's shared file (4.11 P4): by default Claude Code (bundled store) and Kimi Code (its native program) present, NODE_EXTRA_CA_CERTS naming one
+ *  user certificate file holding `userPem` — both harnesses' settings name it, so install places one block, recorded under the first. `variable`,
+ *  `commands`, `env`, `dirs` give another pair the same shape (SSL_CERT_FILE for Codex and Hermes). → world + { file } */
+export async function sharedCertFileWorld({ userPem, variable = 'NODE_EXTRA_CA_CERTS', commands = ['claude', 'kimi'], env = { CLAUDE_CODE_CERT_STORE: 'bundled' }, dirs = [] }) {
+  const w = await modelWorld({ commands, env: (home) => ({ ...env, [variable]: path.join(home, 'certs', 'mine.pem') }) })
+  const file = w.env[variable]
+  for (const d of dirs) fs.mkdirSync(path.join(w.home, d), { recursive: true }) // a harness home a form's presence needs
   fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, userPem)
   const kimi = path.join(w.home, '.kimi-code', 'bin', 'kimi')
   fs.mkdirSync(path.dirname(kimi), { recursive: true }); fs.writeFileSync(kimi, Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 0, 0, 0, 0])) // a Mach-O header: the wrapper's precondition

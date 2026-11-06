@@ -10,7 +10,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { createModelCollector } from '../../../../src/collector/core/proxymode/collector.mjs'
 import { HOLDER_POLL_MS } from '../../../../src/collector/core/proxymode/holders.mjs'
-import { verdictOf } from '../../../../src/collector/core/proxymode/verdict.mjs'
+import { verdictOf, judgedForms } from '../../../../src/collector/core/proxymode/verdict.mjs'
 import { upstreamFor, MAX_DEPTH } from '../../../../src/collector/core/proxymode/chain.mjs'
 import { translateBypass } from '../../../../src/collector/arch/darwin/upstream.mjs'
 import { certPem } from '../../../../src/collector/core/tls/cert.mjs'
@@ -78,6 +78,7 @@ for (const { d, f, os } of CASES) {
       const meta = await r.c.lookupIngress({ peer: PEER, user: g, target: { address: cs.host, port: 443 } })
       const want = verdictOf({ desc, form, facts: { ...facts, pid }, record: { carrierInstalledAt: INSTALLED, rootFp256: STUB_FP }, issuer: cs.issuer ? ready : null, host: cs.host, hostSet: cs.hostSet, ctx: r.w.ctx })
       assert.equal(meta.decrypt, want.decrypt, `${f.id} · ${os} · ${JSON.stringify(over)}: ${JSON.stringify(want)}`)
+      if (!want.decrypt && cs.known) assert.equal(meta.skip && meta.skip.reason, want.code, `${f.id} · ${os} · ${JSON.stringify(over)}: the forward-only row carries P11's code`) // off the list: the door's own class, before P11
     }
     for (const r of Object.values(rigs)) { for (const x of r.records) assert.deepEqual(checkRecord(x), [], JSON.stringify(x)); r.c.close() }
   })
@@ -877,6 +878,29 @@ test('4.8 §5.5 · a key the engine no longer holds anything under is dropped: n
   assert.deepEqual([reads, pending.length, forgot], [0, 0, []], 'nothing held under the key: no table read, no timer, nothing to forget')
   r.c.close()
 })
+
+// 4.11 P4 rule U · P11 rule 3: one block in a user certificate file serves every harness whose setting names that file, but is recorded under the
+// first. For each shipped harness with an env setting among its userCertFiles, the block is recorded under another harness, later than this harness's
+// own items: a process started between the two is config-after-start; one started after both is not. Over the descriptors as they ship, darwin.
+for (const d of await loadHarnesses()) {
+  const v = (d.proxyMode && d.proxyMode.userCertFiles || []).find((s) => typeof s.env === 'string')
+  const f = v && judgedForms(d, 'darwin')[0]
+  if (!f) continue
+  for (const by of ['another-harness', d.name]) test(`rule U · ${d.name}, block recorded under ${by}: the shared block's install time is its carrier time too`, async () => {
+    const file = '/h/certs/mine.pem', g = `${d.name}:${f.route}`
+    const manifest = { ...manifestOf(d.name), entries: [...manifestOf(d.name).entries, { phase: 'install', harness: by, kind: 'text', format: 'pem-block', path: file, installed_at: iso(INSTALLED + 10) }] }
+    const r = await rig({ desc: d, os: 'darwin', w: { pid: 7070, manifest, env: { [v.env]: file }, cwd: '/' } })
+    await r.c.on({ harnesses: [d.name], groups: Object.fromEntries([...new Set(d.proxyMode.forms.map((x) => x.route))].map((rt, i) => [`${d.name}:${rt}`, 18600 + i])) })
+    for (const [start, late] of [[INSTALLED + 5, false], [INSTALLED + 20, true]]) {
+      Object.assign(r.w, { pid: r.w.pid + 1, facts: { exe: '/bin/x', uid: 501, agent: d.name, startedAt: start }, now: INSTALLED + 30 })
+      const meta = await r.c.lookupIngress({ peer: PEER, user: g, target: { address: d.hosts[0], port: 443 } })
+      const why = meta.skip && meta.skip.reason
+      if (late) assert.notEqual(why, 'config-after-start', `${d.name}: started after the block`)
+      else assert.equal(why, 'config-after-start', `${d.name}: started after its own items, before the shared block: ${JSON.stringify(meta.skip)}`)
+    }
+    r.c.close()
+  })
+}
 
 // ---- forwarding by design is no failure event; the switch is the in-memory one (4.6 §连接行 · §开关) -------------------------------------
 test('4.6 §连接行 · a not-verified verdict writes no failure event (the row carries it); config-after-start writes one, once', async () => {
