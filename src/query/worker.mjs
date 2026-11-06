@@ -51,6 +51,7 @@ import { pathToFileURL } from 'node:url'
 import { LOCAL_ENV } from './client.mjs'
 import { QUERIES } from './named/index.mjs'
 import { answer } from './answers.mjs'
+import { ROLES } from './warm.mjs'
 import { lowerPriority } from '../low-priority.mjs'
 import { READING_MS, extendSession, heapHasRoom, indexed, openSessions, rereadingNow, saveIndexes, sealParts } from './named/session.mjs'
 import { indexRows, sessionGroups } from './rows.mjs'
@@ -64,6 +65,7 @@ const home = process.argv[2]
 // The daemon passes no deps: argv[3] is absent, or '' before a role; a test fork names an ES module whose default export is that `deps` object. `beforeRows`, `beforeTitles`
 // and `beforeServe`, a test's alone, are awaited before the row pass starts, before the title pass behind it and before a query is answered.
 const role = process.argv[4] || 'main', light = role === 'light'
+const writes = ROLES[role].writes // the one place that says which role writes answer files (warm.mjs ROLES)
 const depsP = process.argv[3] ? import(pathToFileURL(process.argv[3]).href).then((m) => m.default) : Promise.resolve({})
 // What the CLI's own environment may change about an answer goes local (client.mjs LOCAL_ENV); this worker serves
 // every caller, so it answers as a clean environment would and never as the daemon's happened to be.
@@ -115,7 +117,7 @@ async function serve(line) {
       const deps = await depsP;
       await deps.beforeServe?.(name);
       ({ status, bytes, enc, tag } = await answer({ name, params: params || {}, indent, gzip: wants === true, etag: typeof etag === 'string' ? etag : null },
-        { home, fs: nodeFs, writer: !light, warmOnly: light, persist, progress, later: (fn) => after.push(fn), userHome: path.dirname(home), env: deps.env || process.env, platform: deps.platform || process.platform, deps }))
+        { home, fs: nodeFs, writer: writes, warmOnly: light, persist, progress, later: (fn) => after.push(fn), userHome: path.dirname(home), env: deps.env || process.env, platform: deps.platform || process.platform, deps }))
     }
   } catch (e) { // a line that is not a request
     status = 500
