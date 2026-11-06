@@ -41,7 +41,7 @@ function sendJson(res, status, obj) {
 // 127.0.0.1, and the browser then treats http://evil.example:<port>/api/session as same-origin — so CORS never engages
 // and the whole verbatim corpus is readable by that page. The loopback Host allowlist is the defense.
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1']);
-export function guard(req) {
+function guard(req) {
   const host = String(req.headers.host || '').replace(/:\d+$/, '').replace(/^\[|\]$/g, '');
   if (!LOOPBACK.has(host)) return 'forbidden: non-loopback Host (anti DNS-rebind)';
   const o = req.headers.origin;

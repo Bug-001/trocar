@@ -27,7 +27,6 @@ const iso = (t) => (typeof t === 'number' && Number.isFinite(t) ? new Date(t).to
  * `adopted` is what `~/.trocar/netenv.json` holds (`readNetenv`): the settings `on` found and the drift is measured against.
  */
 export async function gatherNetFacts({ platform = process.platform, home, env = process.env, harnesses, status, archFacts = null, adopted = null, now = Date.now, fs = nodeFs, deps = {} }) {
-  const unknowns = []
   // 4.11 §3 ㉓: only the harnesses this build has a descriptor for, in the order of `status`'s rows
   const byName = new Map(harnesses.map((d) => [d.name, d]))
   const rows = status.harnesses.filter((h) => byName.has(h.id)).map((h) => [byName.get(h.id), h])
