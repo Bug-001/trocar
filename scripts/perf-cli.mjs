@@ -125,7 +125,7 @@ async function cores({ home, names, vars, runs }) {
   const nearby = []
   if (vars.session) {
     const open = await timed('session', { id: vars.session })
-    const oldest = (open.doc?.calls || [])[0]?.rid // a page is the newest rows; the next one ends before its oldest (3.5 §会话读 --before)
+    const oldest = open.doc?.more ? (open.doc.calls || [])[0]?.rid : null // a page is the newest rows; the next ends before its oldest (3.5 §会话读 --before)
     const steps = (open.doc?.records || []).map((r) => r.ref || r.text_ref).filter(Boolean)
     const seq = [
       ['session page 2', 'session', oldest ? { id: vars.session, before: oldest, limit: '50' } : null],
