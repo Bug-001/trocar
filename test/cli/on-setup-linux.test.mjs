@@ -7,6 +7,9 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { installedHome, snapshot, flowEvents } from '../off/fixtures/off-ctx.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
+import { runOnCli } from '../../src/cli/on.mjs'
+import { formatOnReceipt } from '../../src/cli/receipt.mjs'
+import { onCtx, fakeIo } from './fixtures/on-ctx.mjs'
 
 const ZC = 'z-code', CC = 'claude-code'
 /** Claude Code installed and on; Z Code installed after trocar (present, never set up: carrier-absent). */
@@ -70,4 +73,47 @@ test('V91-O5 · the flows/ result line of that on names z-code in refused', asyn
   await s.on({ ids: [ZC, CC] })
   const result = flowEvents(s.dir).filter((e) => e.event === 'install-note' && e.kind === 'result').at(-1)
   assert.deepEqual(result.refused, [ZC])
+})
+
+test('V91-O6 · a refused harness whose own file cannot be read for writing (not JSON) stops nothing else: bare on refuses it, claude-code is on', async () => {
+  const s = await zcodeLate()
+  fs.writeFileSync(path.join(s.home, '.zcode', 'cli', 'config.json'), '{not json')
+  const before = under(s, '.zcode')
+  const r = await s.on({ ids: null })
+  assert.equal(r.exit, 1)
+  assert.deepEqual(r.receipt.refused.map((x) => x.harness), [ZC])
+  assert.ok(r.receipt.harnesses.includes(CC))
+  assert.equal(s.state().harnesses[CC].desired, 'on')
+  assert.deepEqual(under(s, '.zcode'), before)
+})
+
+test('V91-O7 · on z-code alone, refused → nothing written for it, yet the run leaves its result line (1.6 §1) and its receipt names the log', async () => {
+  const s = await zcodeLate()
+  const before = under(s, '.zcode')
+  const r = await s.on({ ids: [ZC] })
+  assert.equal(r.exit, 1)
+  assert.equal(r.receipt.error.code, 'setup-needed')
+  assert.deepEqual(r.receipt.harnesses, [])
+  assert.deepEqual(under(s, '.zcode'), before)
+  assert.notEqual(r.receipt.log, null)
+  const result = flowEvents(s.dir).filter((e) => e.event === 'install-note' && e.kind === 'result').at(-1)
+  assert.deepEqual([result.harnesses, result.refused], [[], [ZC]])
+  assert.deepEqual(validateReceipt(r.receipt), [])
+  const dry = await s.on({ ids: [ZC], dryRun: true })
+  assert.deepEqual([dry.exit, dry.receipt.blocked.map((b) => b.what)], [0, [ZC]])
+})
+
+test('V91-O8 · trocar on --json (real and --dry-run): `planned` has no row for the refused harness; the text names who is captured', async () => {
+  const s = await zcodeLate()
+  const zcPath = path.join(s.home, '.zcode')
+  for (const argv of [[ZC, '--json', '--yes'], [ZC, '--dry-run', '--json'], [ZC, CC, '--json', '--yes']]) {
+    const io = fakeIo()
+    const ctx = onCtx(s.home, io, { harnesses: s.descs, daemon: s.sys.daemon, exec: s.sys.exec, env: s.sh.env })
+    ctx.deps.parts.os = 'linux'
+    await runOnCli(argv, ctx)
+    const doc = JSON.parse(io.stdoutText())
+    assert.deepEqual(doc.refused.map((x) => x.harness), [ZC], argv.join(' '))
+    assert.ok(!(doc.planned || []).some((p) => JSON.stringify(p).includes(zcPath)), `${argv.join(' ')}: ${JSON.stringify(doc.planned)}`)
+    if (argv.includes(CC)) assert.match(formatOnReceipt(doc, { home: s.home }).split('\n')[0], new RegExp(CC))
+  }
 })
