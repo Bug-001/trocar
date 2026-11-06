@@ -37,7 +37,7 @@ export const namesStamp = (home, fs) => { try { return fs.readdirSync(path.join(
 const PART_HEAP = 450, OPEN_HEAP = 105, SESSION_HEAP = 260, POSITION_HEAP = 12, FP_HEAP = 28;
 const lists = warmCache({ max: 4, cost: (v) => v.heap, steady: true });
 const copyOpen = (open) => new Map([...open].map(([k, v]) => [k, { ...v }])); // the rule moves `lastMs` in place (and replaces `fp`)
-// the index keeps a call's kinship fingerprints as one space-joined string (index-build.mjs `kin_fp` / `kin_probe`)
+// the index keeps a call's kinship fingerprints as one space-joined string (index-build.mjs `kin_fp` / `kin_probe`; `kin_chain` the same way)
 const fpOf = (s) => (s == null ? null : s ? s.split(' ').map(Number) : []);
 const lineOf = (id) => Number(String(id).split(':').pop());
 
@@ -90,7 +90,7 @@ function rowList(segs, old) {
     for (let k = k0; k < view.length; k++) {
       const r = view.at(k);
       const got = r.synth_hash != null || r.kin_fp != null ? assign({ harness: r.harness_id, ms: Date.parse(r.ts || ''), key: r.session_key,
-        hash: r.synth_hash, fp: fpOf(r.kin_fp), probe: fpOf(r.kin_probe) }) : null;
+        hash: r.synth_hash, fp: fpOf(r.kin_fp), probe: fpOf(r.kin_probe), chain: r.kin_chain ? r.kin_chain.split(' ') : [], mark: r.kin_mark === true }) : null;
       const sid = r.session_key ?? (got && got.key) ?? null;
       derived.push({ session_id: sid, synthesized: !!got && !got.kin });
       if (sid) place(sid, start + k); // a row with no session id is in no group (sessionGroups)
