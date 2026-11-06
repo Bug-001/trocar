@@ -96,7 +96,7 @@ test('2.2 #8 · 组成 growth: against the content ref, following the compare pi
   assert.ok(c.some((r) => r.text === W.COMPACTION_REWRITE) && !c.some((r) => r.key === 'growth'))
 })
 
-test('2.2 #13 · 缓存 label: failed · — · N%? · N%', () => {
+test('2.2 #13 · 缓存 label: call failed · — · N%? · N%', () => {
   const u = U(70, 20, 10)
   const pct = Math.round(hitRatio(u) * 100)
   assert.equal(head([{ error: 'x', usage: u }]).cache.label, W.CACHE_CELL_FAILED)

@@ -27,8 +27,8 @@ export function hitRatio(u) {
   return tot > 0 ? (u.read || 0) / tot : null
 }
 export function hitPct(u) { const r = hitRatio(u); return r == null ? null : Math.round(r * 100) }
-export const hitTier = (r) => (r >= 0.7 ? 'hi' : r >= 0.3 ? 'mid' : 'lo')
 export const LOW_HIT = 0.3
+export const hitTier = (r) => (r >= 0.7 ? 'hi' : r >= LOW_HIT ? 'mid' : 'lo')
 
 // ── the cache predicate ─────────────────────────────────────────────────────────────────────────────────────────────
 // The causes that say nothing changed in the cache prefix. ONE list: the predicate below and the 变化线 in the context window both

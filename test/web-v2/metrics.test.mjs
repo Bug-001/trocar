@@ -63,7 +63,7 @@ test('a failed step carrying gt:provider-contradiction is failed, not a break; a
 })
 test('the quiet causes are one list, and any other cause is a change', () => {
   assert.deepEqual([...QUIET_CAUSES].sort(), ['append', 'first-call', 'volatile-nonce-only'])
-  for (const cause of QUIET_CAUSES) assert.notEqual(cacheState(step(cause, U(90, 0, 10))).state, 'changed', cause)
+  for (const cause of QUIET_CAUSES) assert.ok(!['changed', 'changed-hit'].includes(cacheState(step(cause, U(90, 0, 10))).state), cause)
   for (const cause of ['content-changed', 'compaction', 'tool-array-reorder', 'json-key-reorder', 'a-cause-this-board-has-never-seen']) {
     assert.equal(cacheState(step(cause, U(10, 0, 90))).state, 'changed', cause)
     assert.equal(cacheState(step(cause, U(90, 0, 10))).state, 'changed-hit', cause)

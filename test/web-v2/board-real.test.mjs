@@ -14,7 +14,7 @@ import { cacheState, isBreak, refOf, hitRatio, usageOf, QUIET_CAUSES, LOW_HIT } 
 
 const REAL = process.env.TROCAR_BOARD_REAL
 const skip = REAL ? (fs.existsSync(path.join(REAL, 'raw')) ? false : `TROCAR_BOARD_REAL has no raw/: ${REAL}`)
-  : 'TROCAR_BOARD_REAL is not set (a trocar home to read; the board\'s merge gate counts this skip as a failure)'
+  : 'TROCAR_BOARD_REAL is not set (a trocar home to read)'
 const SESSIONS = 8, POLL_MS = 1500, BUILD_MS = 10 * 60_000
 // the sessions read: the most calls first, among those small enough to build within BUILD_MS (one bound for a local run)
 const MAX_BYTES = 64 * 2 ** 20
@@ -44,7 +44,13 @@ test('2.2 #18 · T1: real main-lane breaks are rows 4–7 only; failed and no-us
       }
       const main = doc.lanes.find((l) => l.kind === 'main')
       if (!main) continue
-      const calls = doc.calls.filter((c) => c.lane === main.lane)
+      // the whole session: the newest page, then each earlier page (3.5 §会话读 `before`) in front of it
+      let rows = doc.calls
+      for (let more = doc.more; more && rows.length;) {
+        const page = await get(`session?${new URLSearchParams({ id: g.id, before: rows[0].rid })}`)
+        rows = [...page.calls, ...rows]; more = page.more && page.calls.length > 0
+      }
+      const calls = rows.filter((c) => c.lane === main.lane)
       calls.forEach((c, i) => {
         const st = cacheState(c, refOf(calls, i)), where = `session ${k + 1} main step ${i + 1}`
         seen.steps++
@@ -61,5 +67,6 @@ test('2.2 #18 · T1: real main-lane breaks are rows 4–7 only; failed and no-us
   } finally { face.close() }
   console.log(`# T1 2.2 #18 over ${groups.length} sessions: ${JSON.stringify(seen)}`)
   assert.ok(seen.steps > 0, 'the sessions have main-lane steps')
+  assert.ok(seen.changedHit > 0, 'no step of row 6′ in these sessions: the case would guard nothing')
   assert.deepEqual(failed, [], 'no query failed and no worker died')
 })
