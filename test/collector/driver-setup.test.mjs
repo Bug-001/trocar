@@ -122,6 +122,7 @@ test('V91-L4 · 4.11 present: a { command } resolves over the PATH recorded in u
 
 test('4.6 presence on the real descriptors: none is there over an empty HOME', async () => {
   const harnesses = await loadHarnesses()
-  const got = driverPresent({ os: OS, home: tmpDir('trocar-driver-setup-'), env: {}, harnesses })
+  const home = tmpDir('trocar-driver-setup-'), inHome = { ...fs, existsSync: (f) => String(f).startsWith(home) && fs.existsSync(f) } // the host's own /opt never answers
+  const got = driverPresent({ os: OS, home, env: {}, harnesses, fs: inHome })
   for (const d of harnesses.filter((x) => typeof x.inject === 'function')) assert.deepEqual(got[d.name], [], d.name)
 })

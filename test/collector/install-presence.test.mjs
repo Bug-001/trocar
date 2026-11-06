@@ -77,7 +77,8 @@ test('4.6 absent: install writes no file of an absent harness, no manifest item 
 test('4.6 empty HOME, the real descriptors: every new path is under .trocar, install.harnesses is empty, no harness item in the manifest', async () => {
   const home = tmpDir('trocar-presence-empty-')
   const b = { home, env: { HOME: home }, dir: path.join(home, '.trocar', 'collector') }
-  await install(b, REAL)
+  // an `abs` place is outside the temp HOME: the host's own (an /opt install on a Linux machine) would answer, so it is left out here (present-data covers it)
+  await install(b, REAL.map((d) => ({ ...d, present: d.present.filter((p) => p.base !== 'abs') })))
   for (const p of Object.keys(snapshot(home))) assert.ok(p.startsWith('.trocar'), p)
   const m = readManifest(b.dir)
   assert.deepEqual(m.install.harnesses, [])

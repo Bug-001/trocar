@@ -11,7 +11,8 @@ import { driverCtx } from '../../../src/collector/driver-setup.mjs'
 import { isPresent, resolveLoc } from '../../../src/collector/core/proxymode/sources.mjs'
 
 const withInject = (await loadHarnesses()).filter((d) => typeof d.inject === 'function')
-const ctxFor = (env = {}) => driverCtx({ os: 'linux', home: tmpDir('trocar-present-'), env })
+// an empty machine: nothing outside the test's temp dirs exists (an `abs` place is read through ctx.exists, so the host's own /opt never answers)
+const ctxFor = (env = {}) => { const ctx = driverCtx({ os: 'linux', home: tmpDir('trocar-present-'), env }); ctx.exists = (f) => f.startsWith(path.dirname(ctx.home)) && fs.existsSync(f); return ctx }
 const make = (p) => fs.mkdirSync(p, { recursive: true })
 
 for (const d of withInject) {
