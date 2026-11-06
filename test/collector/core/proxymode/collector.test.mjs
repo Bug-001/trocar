@@ -41,7 +41,7 @@ const ready = { state: () => 'ready' }
 const manifestOf = (h, { on = [], liveness = {} } = {}) => ({ ...newManifest(), entries: [{ phase: 'install', harness: h, kind: 'json-key', path: '/x', installed_at: iso(INSTALLED) }, { phase: 'install', harness: null, kind: 'system-root', installed_at: iso(INSTALLED) }, ...on], liveness })
 
 /** One collector over one harness: `w` is what the injected readers answer now (facts, env, cwd, verdict ctx, manifest, process table). */
-async function rig({ desc, os = 'darwin', custody = stub, rootPem = STUB_PEM, w = {}, opened = [], taken = new Set(), timers, ingress, upstreamRoots = null, others = [], forget, holds, doorHangMs, dir = tmpDir() } = {}) {
+async function rig({ desc, os = 'darwin', custody = stub, rootPem = STUB_PEM, w = {}, opened = [], taken = new Set(), timers, ingress, upstreamRoots = null, others = [], forget, holds, drain, doorHangMs, dir = tmpDir() } = {}) {
   const asked = {}, gate = (q, x) => w.wait?.(q, x, asked[`${q}\0${x}`] = (asked[`${q}\0${x}`] ?? 0) + 1) // w.wait(question, pid, nth of that question of that pid): a promise holds it
   const of = (by, q, all) => (by && Object.hasOwn(by, q) ? by[q] : all) // a reader's answer for one pid (w.factsBy / w.envBy), else the world's one answer
   const records = [], ctx = { os, home: '/h', dirs: {}, join: path.posix.join, readFile: (p) => w.ctx.readFile(p), readdir: (d) => w.ctx.readdir(d), exists: (p) => w.ctx.exists(p), policy: (s) => w.ctx.policy(s) }
@@ -49,7 +49,7 @@ async function rig({ desc, os = 'darwin', custody = stub, rootPem = STUB_PEM, w 
   const c = createModelCollector({ harnesses: [desc, ...others], dir, ctx, custody, rootPem, proxyOf, bypassOf, upstreamRoots, templates: TEMPLATES, ownUid: 501, timers, doorHangMs, record: (r) => records.push(r),
     identify: (f) => (f.pending ? { reason: 'pending' } : f.agent ? { reason: 'match', agent: f.agent } : { reason: 'no-match' }), ownerOf: async () => { await gate('ownerOf'); return { pid: w.pid, source: 'socket-table', ms: 1, ...(w.owner || {}) } }, factsOf: async (q, o) => { await gate('factsOf', q); const f = of(w.factsBy, q, w.facts); if (f == null && w.factsWhy && o && o.onUnread) o.onUnread(w.factsWhy); return f },
     proc: { envOf: async (q, names) => { await gate('envOf', q); w.envCalls = (w.envCalls || 0) + 1; const e = of(w.envBy, q, w.env); return e == null ? null : (w.asked && w.asked.push(...names), Object.fromEntries(Object.entries(e).filter(([k]) => names.includes(k)))) }, cwdOf: async (q) => (await gate('cwdOf', q), w.cwd ?? null), parentOf: async (q) => (await gate('parentOf', q), w.parent ? w.parent(q) : null) }, systemProxy: () => w.sp ?? null, hostsOf: () => w.hostSet ?? null,
-    readState: () => w.state, readIngress: () => ingress || { groupPorts: {}, listenerToken: TOKEN }, readManifest: () => { if (w.manifestErr) throw w.manifestErr; return w.manifest || manifestOf(desc.name) }, procTable: async () => w.procs || [], clock: () => w.now ?? INSTALLED + 5, ...(forget ? { forget } : {}), ...(holds ? { holds } : {}) })
+    readState: () => w.state, readIngress: () => ingress || { groupPorts: {}, listenerToken: TOKEN }, readManifest: () => { if (w.manifestErr) throw w.manifestErr; return w.manifest || manifestOf(desc.name) }, procTable: async () => w.procs || [], clock: () => w.now ?? INSTALLED + 5, ...(forget ? { forget } : {}), ...(holds ? { holds } : {}), ...(drain ? { drain } : {}) })
   c.bindDoors({ open: async (l) => { for (const x of l) { if (taken.has(x.port)) throw Object.assign(new Error('listen EADDRINUSE'), { code: 'EADDRINUSE' }); opened.push(x) } }, close: async (ids) => { opened.push(...ids.map((id) => ({ closed: id }))) } })
   await c.start()
   return { c, w, records }
@@ -605,6 +605,23 @@ for (const by of ['uninstall', null]) {
     c.close()
   })
 }
+
+// ---- 1.6 §1.1: off --now after a plain off cuts what the first off left draining -------------------------------------------------------------------
+test('a nameless off --now after a plain off cuts the connections the first off left draining', async () => {
+  const { d } = rootForm
+  const flows = [{ agent: d.name, state: 'open' }] // one streaming connection of the harness, as the engine holds it
+  const drain = async ({ harnesses, now }) => { // the engine's drain: the connections of those harnesses (null: every one) are asked to close, or cut on now
+    const out = { closing: 0, waiting: 0, cut: 0 }
+    for (const x of flows) if ((!harnesses || harnesses.includes(x.agent)) && x.state !== 'cut') { x.state = now ? 'cut' : 'closing'; out[x.state]++ }
+    return out
+  }
+  const { c } = await rig({ desc: d, drain })
+  await c.on({ harnesses: [d.name], groups: { [`${d.name}:${rootForm.f.route}`]: 18109 } })
+  assert.deepEqual((await c.off({})).relayed, { closing: 1, waiting: 0, cut: 0 })
+  assert.equal((await c.off({ now: true })).relayed.cut, 1, 'the second off cuts the stream the first one let run')
+  assert.deepEqual((await c.off({ now: true })).relayed, { closing: 0, waiting: 0, cut: 0 }, 'nothing left relayed: nothing to cut, no error')
+  c.close()
+})
 
 // ---- the door's durable record (P12 「门的持久记录」) ------------------------------------------------------------------------------------
 const doorRows = (dir) => readDoorSeen({ dir }).rows

@@ -76,6 +76,9 @@ export async function runDaemonCli(argv, { io, env = process.env, home = os.home
     // and exits 0, because the platform retries a non-zero exit for as long as the other daemon lives — launchd's KeepAlive {SuccessfulExit: false} every
     // ThrottleInterval, the Windows supervisor on its backoff (4.8 §7: 0 = it was asked to stop, do not re-pull) — which is a loop nobody sees.
     if (e && e[DAEMON_ALREADY_UP]) return EXIT.ok
+    // The Node floor (4.9 §7) is the same loop: a relaunch runs on the same Node and is refused again. startDaemon wrote the one record (D38); exit 0 so
+    // neither launchd nor the supervisor re-pulls it before the next login or `on`.
+    if (e && e.code === 'node-too-old') return EXIT.ok
     // An endpoint held by something that does NOT answer is the opposite case (D38): exiting 0 here would leave the machine with no working collector
     // until the next login, and no record of why. One failure record naming the pid the lock claims, then a non-zero exit, so the platform retries at
     // its own throttle and `trocar status` / `trocar doctor` show it.

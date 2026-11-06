@@ -25,6 +25,7 @@ export const FAILURE_WORDS = Object.freeze({
   'query-failed': 'a query worker failed; the query was answered another way',
   'projection-write-failed': 'a session could not be saved to disk for faster reading; its answers are unchanged',
   'root-refused': 'refused: it was run as root',
+  'node-too-old': 'refused: the Node it runs on is too old',
   'root-token': 'refused: it was run as root',
   'elevated-token': 'refused: it was run elevated',
   // records and the raw layer (sealing, indexing, reading capture files)
@@ -147,6 +148,7 @@ export const FAILURE_WORDS = Object.freeze({
   'install-error': 'the install step failed',
   'install-pending': 'an install step is still waiting',
   'setup-needed': 'an agent needs setting up before capture can be turned on',
+  'stopped-by-off': 'an on stopped because an off came while it ran',
   'uninstall-error': 'the uninstall step failed',
   'left-unparsable': 'an uninstall left an item behind',
   'left-link': 'a change is a link and was not undone automatically',

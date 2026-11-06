@@ -70,7 +70,7 @@ export async function runOn({ io, env = process.env, home = os.homedir(), platfo
     if (model) { const warm = Promise.all([import('../collector/model-on.mjs'), import('../collector/arch/model-backends.mjs'), import('../collector/harness/templates/index.mjs'), import('../collector/install.mjs')]); warm.catch(() => {}) }
     // The Node floor (4.8 §7, W24: the daemon is pulled up by THIS Node at every login, so an older one cannot run the collector): the arch's own read of
     // process.versions, asked first because it is free — ok:false refuses with the doctor line, before anything is touched. No flows record: the receipt
-    // is it (nothing of trocar's may exist yet, and the closed sets hold no code for this). Linux's arch has no nodePreflight and nothing here changes.
+    // is it (nothing of trocar's may exist yet; the daemon's own refusal is the `node-too-old` record). Linux's arch has no nodePreflight and nothing here changes.
     if (parts.arch && typeof parts.arch.nodePreflight === 'function') {
       const pf = parts.arch.nodePreflight()
       if (pf && pf.ok === false) {
