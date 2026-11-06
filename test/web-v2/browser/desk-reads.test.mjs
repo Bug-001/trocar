@@ -5,7 +5,7 @@
 // keeps the drawn window (2.3 §读失败); the anchor lane's ledger chain (3.5 §手里车道的页). Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard, serveWorld } from './harness.mjs'
+import { probe, withBoard, serveWorld, DESK_NEXT } from './harness.mjs'
 import { world } from '../desk-world.mjs'
 import { QUERIES } from '../../../src/query/named/index.mjs'
 import { INTERVAL } from '../../../web/legacy/core/poll.mjs'
@@ -216,6 +216,8 @@ test('3.5 §手里车道的页: the anchor lane reads its ledger chain to the en
     })
     await page.evaluate(() => { location.hash = '#/replay/p/S' })
     await page.waitForSelector('#ctxwin .cblk', { state: 'attached' })
+    // the new desk draws the explorer only while Resources is the sidebar's current tab (1.2 §回放台布局: 不是当前标签时不画)
+    if (DESK_NEXT) await page.locator('.deskside [role=tab]').nth(1).click()
     const mine = () => log.filter((q) => q.get('lane') === main)
     await page.waitForFunction(() => window.__chainEnd === true, null, { timeout: 30000 }).catch(() => {})
     const exact = await page.waitForFunction(() => window.__exact === true, null, { timeout: 10000 }).then(() => true, () => false)
