@@ -395,7 +395,6 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
     // nothing was measured on a failed call or one with no usage (1.3 服务端补充): its zeros say nothing about the provider (invariant 4)
     const raw = x.facts ? x.facts.usage : x.nu;
     brk.gt = x.error || !raw || !Object.keys(raw).length ? null : realGroundTruth(same, usage.read, usage.create);
-    brk.gtReal = true;
     if (base) brk.refRid = base.rid; // the 缓存对比步 (2.3): the call this one's break is taken against
     return brk;
   }
