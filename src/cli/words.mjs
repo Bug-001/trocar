@@ -5,13 +5,13 @@
 // stands for stay in the technical details (the board) and after the sentence (`trocar status --failures`).
 const ERRNO = /^(E[A-Z0-9_]+|Z_[A-Z_]+|ERR_[A-Z0-9_]+)$/ // Node's own error codes (errno, ERR_*, zlib's Z_*), as src/health/codes.mjs spells them
 
+/** 1.6 §3.3 · 1.9 §保真边界: the note of a route that sends loopback direct, naming the hosts it carries (4.11 P6). */
+export const loopbackWords = (hosts) => `requests to ${hosts.join(', ')} (a model or relay on this computer) do not go through trocar and are not captured`
+
 /** One short English sentence per failure code trocar's writers can put into a log (src/health/codes.mjs's closed sets, the raw layer's journal
  *  outcomes and segment problems): the one catalog the CLI and the board word a failure group from (0.1 §2, D58②: no code on screen). A key is
  *  a bare `code`, or `where/code` where one code means two things under two `where`s (that key wins). A code that is also a status reason and
  *  has no key here reads statusReason's clause (below), so the two catalogs never word one code twice. */
-/** 1.6 §3.3 · 1.9 §保真边界: the note of a route that sends loopback direct, naming the hosts it carries (4.11 P6). */
-export const loopbackWords = (hosts) => `requests to ${hosts.join(', ')} (a model or relay on this computer) do not go through trocar and are not captured`
-
 export const FAILURE_WORDS = Object.freeze({
   // the background process (daemon) and its start
   'daemon/start-failed': 'the background process would not start',

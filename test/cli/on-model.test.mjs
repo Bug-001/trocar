@@ -317,3 +317,23 @@ test('1.6 §3.3 (darwin): an on that wrote NO_PROXY notes once that loopback req
     assertEnglish(text.io.text(), 'the receipt of on')
   } finally { await server.close() }
 })
+
+// 1.6 §3.3: the note is said only for a route in place after this on; a route on did not write (not-routed: Hermes's .env absent) says nothing of it
+test('1.6 §3.3 (darwin): an on whose loopback-direct route is not routed gives no loopback note', async () => {
+  const w = await modelWorld({ os: 'darwin', commands: ['hermes'] })
+  fs.mkdirSync(path.join(w.home, '.hermes'), { recursive: true }) // the Hermes home exists (the form is present), its .env does not
+  assert.equal((await w.install()).exit, 0)
+  const sock = path.join(w.home, 'c.sock'), token = 't'.repeat(32)
+  fs.writeFileSync(path.join(w.dir, 'control.json'), JSON.stringify({ path: sock, token }))
+  const server = await startControlServer({ socketPath: sock, token, routes: {
+    'GET /status': async () => ({ doors: {} }),
+    'POST /on': async ({ body }) => ({ doors: Object.fromEntries(Object.entries(body.groups).map(([g, port]) => [g, `http://127.0.0.1:${port}`])) }),
+  } })
+  try {
+    const r = await on(w, 'darwin', ['hermes', '--yes', '--json'])
+    const j = r.io.json()
+    assert.ok(j.routes.some((x) => x.harness === 'hermes' && x.ok === false && x.code === 'not-routed'), JSON.stringify(j.routes))
+    assert.deepEqual(j.notes.filter((n) => n && n.code === 'loopback-direct'), [])
+    assert.equal(fs.existsSync(path.join(w.home, '.hermes', '.env')), false)
+  } finally { await server.close() }
+})

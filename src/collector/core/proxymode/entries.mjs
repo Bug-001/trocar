@@ -31,8 +31,11 @@ const hostTreeNote = (form) => `${form} runs inside another program: every other
 // P6 · P9 · P10: a route that sends loopback direct — a class 1 entry with its NO_PROXY, a plugin hook rendered with the agent's NO_PROXY
 // names (the route's own plugin file, or the switch file of forms whose carrier is a plugin), a PAC. The P8 wrapper sends loopback to the door.
 const plugin = (desc, f) => ((desc.proxyMode.certs || {})[f.cert] || {}).kind === 'plugin'
-const loopbackDirect = (desc, r, forms) => (r.noProxyKeys || []).length > 0 || r.value === 'pac-url'
-  || (noProxyNames(desc).length > 0 && (r.kind === 'plugin-file' || (r.kind === 'switch-file' && forms.every((f) => plugin(desc, f)))))
+// `p` is a planned route ({ route, forms: [form id] })
+export const loopbackDirect = (desc, { route: r, forms }) => (r.noProxyKeys || []).length > 0 || r.value === 'pac-url'
+  || (noProxyNames(desc).length > 0 && (r.kind === 'plugin-file' || (r.kind === 'switch-file' && desc.proxyMode.forms.filter((f) => forms.includes(f.id)).every((f) => plugin(desc, f)))))
+// 1.6 §3.3: no harness of its own — the receipt says it once for the whole run
+export const loopbackNote = () => ({ code: CODE.loopbackDirect, harness: null, hosts: [...LOOPBACK], text: loopbackWords(LOOPBACK) })
 const ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/ // an entry id that names a file in the library and nothing outside it
 
 /** P6: loopback ∪ the user's values at the entry place (both spellings) ∪ the persistent env's NO_PROXY; case-insensitive dedupe, first spelling kept, order kept. */
@@ -230,7 +233,7 @@ export function routeEntry(kind) {
  *  to write, the descriptor's `effects` (CM32) and `notes` (CM38) come back as harness-notes.
  *  → { routes: [{ id, route, forms }], notRouted: [{ form, code, reason, at }], notes: [harness-note] } */
 export function planRoutes(desc, ctx) {
-  const pm = desc.proxyMode, routes = new Map(), blocked = [], notes = [], seen = {}
+  const pm = desc.proxyMode, routes = new Map(), blocked = [], notes = []
   for (const f of pm.forms.filter((x) => x.os.includes(ctx.os) && isPresent(x, ctx))) {
     const hit = (pm.blockers || []).filter((b) => !b.forms || b.forms.includes(f.id)).map((b) => {
       const r = readSrc(b.at, ctx)
@@ -240,13 +243,10 @@ export function planRoutes(desc, ctx) {
     if (hit) { blocked.push({ form: f.id, code: 'not-routed', ...hit }); continue }
     if (!routes.has(f.route)) routes.set(f.route, { id: f.route, route: pm.routes[f.route], forms: [] })
     routes.get(f.route).forms.push(f.id)
-    seen[f.route] = [...(seen[f.route] || []), f]
     if (f.hostTree) notes.push({ code: CODE.harnessNote, form: f.id, text: hostTreeNote(f.id) })
   }
   if (routes.size) for (const e of pm.effects || []) notes.push({ code: CODE.harnessNote, id: e.id, paths: e.paths.flatMap((p) => resolveLoc(p, ctx)), text: e.when })
   if (routes.size) for (const n of pm.notes || []) notes.push({ code: CODE.harnessNote, id: n.id, text: n.text }) // CM38: a launch that skips the hook
-  // 1.6 §3.3: no harness of its own — the receipt says it once for the whole run
-  if ([...routes.values()].some((r) => loopbackDirect(desc, r.route, seen[r.id]))) notes.push({ code: CODE.loopbackDirect, harness: null, hosts: [...LOOPBACK], text: loopbackWords(LOOPBACK) })
   return { routes: [...routes.values()], notRouted: blocked, notes }
 }
 
@@ -259,5 +259,7 @@ export function writeRoutes(desc, ctx, doorOf) {
       return { route: id, ok: false, code: (e && e.code) || 'entry-refused', reason: String((e && e.message) || e), ...(e && e.path ? { at: e.path } : {}) }
     }
   })
-  return { results, notRouted: plan.notRouted, notes: plan.notes }
+  // 1.6 §3.3: said when a loopback-direct route is in place after this on (written now, or already in place); not-routed or refused, not
+  const inPlace = plan.routes.some((p, i) => results[i].ok && loopbackDirect(desc, p))
+  return { results, notRouted: plan.notRouted, notes: inPlace ? [...plan.notes, loopbackNote()] : plan.notes }
 }
