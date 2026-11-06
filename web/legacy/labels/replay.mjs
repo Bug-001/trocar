@@ -293,6 +293,10 @@ export const cacheCellPct = (p) => `cache ${p}%`
 export const cacheCellUnknown = (p) => `cache ${p}%?`
 export const CACHE_LEGEND = 'high = hit, middle = partial, low = none, dashed = no usage'
 export const CACHE_LEGEND_UNK = 'meaning not certain'
+// the cache legend's hover: what each cell style means
+export const CACHE_LEGEND_TIP = 'Each cell is drawn from the cache verdict: high = cache hit ≥70%, middle = partial ≥30%, low = cold or broken <30%; dashed = no usage; a separate style outside the four levels = what this provider\'s cache numbers mean is not certain; failed steps draw no level'
+// 1.3: the whole-session strip's row name
+export const OVERVIEW_ROW = 'Whole session'
 export const VIEW_CTX = 'Context size'
 export const VIEW_COST = 'Cost'
 export const COMP_LEGEND = 'colour = content type (estimated from content size)'

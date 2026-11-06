@@ -6,7 +6,7 @@
 // rid (D75④), so a move re-renders the two bars whose .cur flips and the cursor. The bars row's grid column reports the lane's capacity
 // (view.setCapacity); the rough page reports itself drawn (view.roughDrawn).
 import { memo, useLayoutEffect, useMemo, useRef, useSyncExternalStore, type CSSProperties, type MouseEvent } from 'react'
-import { SKELETON, laneCapacity } from '../../../legacy/replay/replay.mjs'
+import { laneCapacity } from '../../../legacy/replay/replay.mjs'
 import { BAR_KEYS, problemGo } from '../../../legacy/replay/timeline.mjs'
 import { stepOfMark } from '../../../legacy/replay/lanes.mjs'
 import { hasRails } from '../../../legacy/replay/rails.mjs'
@@ -32,16 +32,6 @@ const BACKDROP: Area[] = ['overview', 'rough', 'empty'] // the paints that read 
 // the controller's state is plain JS the renderers share: the view switch writes through here, not on a value React tracks
 const put = (s: DeskState, k: string, v: unknown) => { s[k] = v }
 const pct = (f: number) => `${(f * 100).toFixed(3)}%`
-
-// the row names the legacy skeleton carries and the labels do not (one source until the legacy desk retires)
-let words: { ctx: string, ovw: string, cacheTip: string } | null = null
-function skel() {
-  if (words) return words
-  const t = document.createElement('template')
-  t.innerHTML = SKELETON
-  const g = t.content.querySelector('.tkrow-ovw .tgut')!, c = t.content.querySelector('.cachelegend')!
-  return (words = { ctx: t.content.querySelector('#sawgut')!.textContent!, ovw: g.textContent!, cacheTip: c.getAttribute('title') || '' })
-}
 
 // the playhead's step tag on the axis: the step's own global number (1.2 §编号)
 function tagOf(m: any) {
@@ -141,10 +131,10 @@ export function Scope({ desk }: { desk: DeskView }) {
   }
   const setView = (v: 'ctx' | 'cost') => { if (s.sawView !== v) { put(s, 'sawView', v); desk.saw() } }
 
-  const w = skel(), lg = m?.legend, ch = m?.chapters, pr = m?.problems, items = new Map<number, Item>((pr?.items || []).map((p: Item) => [p.col, p]))
+  const lg = m?.legend, ch = m?.chapters, pr = m?.problems, items = new Map<number, Item>((pr?.items || []).map((p: Item) => [p.col, p]))
   const ticks = new Map<number, any>((m?.asks?.ticks || []).map((t: any) => [t.col, t]))
   const paths = tracePaths(m ? m.trace : [])
-  const gutName = cost ? W.VIEW_COST : !m || rough || s.anchor?.kind === 'main' ? w.ctx : W.laneWord(s.anchor.kind)
+  const gutName = cost ? W.VIEW_COST : !m || rough || s.anchor?.kind === 'main' ? W.CTX_BTN : W.laneWord(s.anchor.kind)
   // the bars the window draws, which every detail lane (and #rails, inside #saw) narrows to: the model's window (1.3 §窗内步少时收窄)
   const nb = m ? { '--nbars': String(Math.max(1, m.view.hi - m.view.lo)) } as CSSProperties : undefined
   return <div id="saw" ref={el} style={nb}>
@@ -159,7 +149,7 @@ export function Scope({ desk }: { desk: DeskView }) {
       <span id="viewswitch">{m && !rough ? (['ctx', 'cost'] as const).map((v) => <button key={v} type="button" className={`segbtn${(v === 'cost') === cost ? ' on' : ''}`} data-view={v} aria-pressed={(v === 'cost') === cost} onClick={() => setView(v)}>{v === 'cost' ? W.VIEW_COST : W.VIEW_CTX}</button>) : null}</span>
       {m && !rough && (pr?.n || hasRails(s)) ? <TracksMenu desk={desk} /> : null}
       <span id="complegend">{lg ? cost && !rough ? <span>{W.COST_LEGEND}</span> : <><span>{lg.estimate}</span><span className="barlegend">{(BAR_KEYS as Array<[string, string]>).map(([c, word]) => <span key={c}><i className={`ct-${c}`} />{word}</span>)}</span></> : null}</span>
-      {lg ? <span className="cachelegend" title={w.cacheTip}><i className="tracekey" aria-hidden="true" />{lg.cache[0]} · <i className="tracekey unk" aria-hidden="true" />{lg.cache[1]}</span> : null}
+      {lg ? <span className="cachelegend" title={W.CACHE_LEGEND_TIP}><i className="tracekey" aria-hidden="true" />{lg.cache[0]} · <i className="tracekey unk" aria-hidden="true" />{lg.cache[1]}</span> : null}
       {lg?.sampled ? <span className="sampled" title={W.SAMPLED_TIP}>{L.SAMPLED}</span> : null}
       <span id="nomain" style={m?.noMain ? undefined : { display: 'none' }} title={m?.noMain || undefined}>{m?.noMain || ''}</span>
     </div>
@@ -192,6 +182,6 @@ export function Scope({ desk }: { desk: DeskView }) {
       <div id="rails" />
       {f != null ? <div className="scur" aria-hidden="true" style={{ '--f': f } as CSSProperties} /> : null}
     </div>
-    <div className="tkrow tkrow-ovw"><div className="tgut" title={W.STRIP_TIP}>{w.ovw}</div><div className="tlane"><Strip desk={desk} m={m} ov={ov} /></div></div>
+    <div className="tkrow tkrow-ovw"><div className="tgut" title={W.STRIP_TIP}>{W.OVERVIEW_ROW}</div><div className="tlane"><Strip desk={desk} m={m} ov={ov} /></div></div>
   </div>
 }
