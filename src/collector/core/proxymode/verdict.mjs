@@ -9,17 +9,14 @@
 //            hosts in the extension's own settings, the operator's extra_hosts; 4.8 OPEN 22); absent → desc.hosts.
 //   issuer = makeIssuer()'s object, or null; ctx = the sources.mjs ctx (os, home, dirs, readFile, readdir, policy, join).
 import path from 'node:path'
-import { readSrc, fileOf } from './sources.mjs'
-import { certBlocks } from '../../../off/pem.mjs'
+import { readSrc, fileOf, rootHeldIn } from './sources.mjs'
 import { itemsOfPhase } from '../../../off/manifest.mjs'
 import { HOOK_PID_ENV } from './chain.mjs'
 
 const fwd = (code, detail, extra) => ({ decrypt: false, code, detail, ...extra })
 // a verdict from evidence that could not be read (the process env or cwd, a file): `unread`, so the door judges again on a later connection (4.11 P11, D38)
 const notRead = (r) => fwd(r.code, why(r), { unread: true })
-const hex = (fp) => String(fp || '').replace(/:/g, '').toLowerCase()
 const ms = (t) => (t == null ? NaN : typeof t === 'number' ? t : new Date(t).getTime())
-const absent = (e) => e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')
 
 /** A <src> read against the process: the first set leaf in precedence, or { error, code } when a leaf it reaches cannot be read (the process env
  *  or cwd unknown, a file unreadable or unparsable) — never "unset" (D38). */
@@ -58,9 +55,7 @@ function trustVerdict(t, ctx, facts, record, inProcess) {
 function rootIn({ value, where }, ctx, facts, record) {
   const file = fileOf(value, { home: ctx.home, cwd: facts.cwd, join: ctx.join || path.join })
   if (file == null) return fwd('config-unreadable', `${where} names a relative path and the process working directory is not known`, { unread: true })
-  try { return { file, holds: certBlocks(ctx.readFile(file)).some((b) => hex(b.fp) === hex(record.rootFp256)) } } catch (e) {
-    return absent(e) ? { file, holds: false } : fwd('file-unreadable', `${where} names ${file}: ${(e && e.code) || e}`, { unread: true })
-  }
+  try { return { file, holds: rootHeldIn(file, ctx.readFile, record.rootFp256) } } catch (e) { return fwd('file-unreadable', `${where} names ${file}: ${(e && e.code) || e}`, { unread: true }) }
 }
 
 /** Rule 4's user files: every file a `semantics: 'replace'` userCertFiles setting names must hold the root, whatever the form's trust — each match, as

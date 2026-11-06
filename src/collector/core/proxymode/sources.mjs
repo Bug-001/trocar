@@ -16,6 +16,7 @@ import path from 'node:path'
 import { parseJsonText } from '../../../off/json-text.mjs'
 import { parseDotenv, expandHome } from '../config-read.mjs'
 import { resolveLoc } from '../../../off/loc.mjs'
+import { certBlocks } from '../../../off/pem.mjs'
 
 const get = (env, k) => (env instanceof Map ? env.get(k) : env ? env[k] : undefined)
 const isSet = (v) => v !== undefined && v !== null && v !== ''
@@ -69,12 +70,19 @@ export function readSrc(src, ctx) {
 
 /** Whether a <cond> holds: true, false, or { error } (a source that cannot be read never counts as "does not hold"). */
 /** The files a harness's `userCertFiles` settings name now (every match of each, as fileOf reads them), read against `ctx` (rule U, 4.11 P4), in the
- *  descriptor's order → { files, unread }: `unread` is the first setting that could not be read ({ error, where }), or one naming a relative path with no cwd, or null — such a setting names a file not known, never none (D38). */
+ *  descriptor's order → { files, replacing, unread }: `replacing` the files a `semantics: 'replace'` setting names; `unread` is the first setting that could not be read ({ error, where }), or one naming a relative path with no cwd, or null — such a setting names a file not known, never none (D38). */
 export function userCertFilesOf(desc, ctx) {
-  const rs = (desc.proxyMode.userCertFiles || []).map((src) => readSrc(src, ctx))
-  const named = rs.flatMap((r) => (r.set ? r.all : []).filter((x) => typeof x.value === 'string').map((x) => ({ where: x.where, file: fileOf(x.value, ctx) }))) // every match: one key may name a file per route
+  const srcs = desc.proxyMode.userCertFiles || [], rs = srcs.map((src) => readSrc(src, ctx))
+  const named = rs.flatMap((r, i) => (r.set ? r.all : []).filter((x) => typeof x.value === 'string').map((x) => ({ where: x.where, file: fileOf(x.value, ctx), replace: srcs[i].semantics === 'replace' }))) // every match: one key may name a file per route
   const lost = named.find((x) => x.file == null)
-  return { files: [...new Set(named.map((x) => x.file).filter(Boolean))], unread: rs.find((r) => r.error) || (lost ? { error: 'names a relative path and the working directory is not known', where: lost.where } : null) }
+  return { files: [...new Set(named.map((x) => x.file).filter(Boolean))], replacing: new Set(named.filter((x) => x.replace && x.file).map((x) => x.file)), unread: rs.find((r) => r.error) || (lost ? { error: 'names a relative path and the working directory is not known', where: lost.where } : null) }
+}
+
+const hex = (fp) => String(fp || '').replace(/:/g, '').toLowerCase()
+/** Whether `file` holds the trocar root `fp256` in any certificate block, marked or not (P11 rule 4: the door and `status` read it this one way): no such
+ *  file → false; throws when it cannot be read (D38). */
+export function rootHeldIn(file, readFile, fp256) {
+  try { return certBlocks(readFile(file)).some((b) => hex(b.fp) === hex(fp256)) } catch (e) { if (absent(e)) return false; throw e }
 }
 
 const isAbs = (p) => path.posix.isAbsolute(p) || path.win32.isAbsolute(p)

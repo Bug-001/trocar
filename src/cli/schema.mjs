@@ -166,7 +166,7 @@ function validateInstallCert({ install: i, cert: c }) {
 }
 
 const CARRIERS = Object.freeze(['root', 'config-key', 'wrapper', 'plugin', null])
-const USER_FILE_STATES = Object.freeze(['intact', 'changed', 'not-users-file', 'unknown'])
+const USER_FILE_STATES = Object.freeze(['intact', 'changed', 'not-users-file', 'without-root', 'unknown'])
 // `user_file`: null, or { path, state } — `unknown` (the file or a setting naming it not read) with its reason, its path null when the setting was the one
 const userFileOk = (u) => u === null || (isObject(u) && USER_FILE_STATES.includes(u.state) && (u.state === 'unknown' ? isString(u.reason) && u.reason !== '' && (u.path === null || isString(u.path)) : isString(u.path)))
 // `in_effect`: true · false (with its code and command) · null = not known (D38), with the code saying why (null only when a root carrier's store could not be read) and no command

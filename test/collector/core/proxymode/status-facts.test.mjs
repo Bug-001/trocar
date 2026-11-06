@@ -181,3 +181,41 @@ test('rule U · two routes, each its own ssl_ca_cert file: install blocks both; 
   for (const c of await facts()) assert.deepEqual([c.in_effect, c.code, c.user_file && c.user_file.path], [false, 'entry-changed', b], JSON.stringify(c))
   for (const v of door()) assert.deepEqual([v.decrypt, v.code], [false, 'replace-without-ca'], JSON.stringify(v))
 })
+
+// 4.11 P4 rule U · 1.6 §9.4 `user_file` · P11 rule 4: a file a setting names, generated over the setting's semantics (replace-marked or not) × where the
+// trocar root sits in it (in trocar's block / outside one / absent) × whether the install record holds its block. A replacing file with no block on record
+// reads as the door reads it — the root anywhere in it is in effect, none is replace-without-ca (without-root), never not-users-file; status and door agree.
+test('rule U · a replace-marked file with no block on record reads as the door does: root anywhere in effect, none replace-without-ca; an append file stays not-users-file', async () => {
+  const userPem = `${tls.rootCertificates[1].trim()}\n`
+  for (const replace of [true, false]) {
+    const w = await modelWorld({ commands: ['hermes'] })
+    const file = path.join(w.home, 'certs', 'mine.pem')
+    fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, userPem)
+    fs.mkdirSync(path.join(w.home, '.hermes'), { recursive: true })
+    if (replace) fs.writeFileSync(path.join(w.home, '.hermes', 'config.yaml'), `providers:\n  one:\n    ssl_ca_cert: ${file}\n`)
+    else fs.writeFileSync(path.join(w.home, '.hermes', '.env'), `SSL_CERT_FILE=${file}\n`)
+    const r = await w.install()
+    assert.equal(r.exit, 0, JSON.stringify(r.carriers))
+    const blocked = fs.readFileSync(file, 'utf8')
+    const rootPem = blocked.match(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g).at(-1)
+    const d = w.harnesses.find((x) => x.name === 'hermes')
+    for (const [where, bytes] of [['in-block', blocked], ['outside', `${userPem}${rootPem}\n`], ['absent', userPem]]) {
+      for (const entry of [true, false]) {
+        fs.writeFileSync(file, bytes)
+        const m = readManifest(w.dir)
+        if (!entry) m.entries = m.entries.filter((e) => !(e.kind === 'text' && e.format === 'pem-block'))
+        const certs = (await modelFormFacts({ harnesses: w.harnesses, os: 'darwin', manifest: m, root: ROOT_OK, rootFp256: r.fp256, ctx: w.ctx }))[d.name].map((x) => x.certificate)
+        const want = entry ? (where === 'in-block' ? [true, null, 'intact'] : [false, 'entry-changed', 'changed'])
+          : !replace ? [false, 'not-users-file', 'not-users-file'] : where === 'absent' ? [false, 'replace-without-ca', 'without-root'] : [true, null, null]
+        const tag = `${replace ? 'replace' : 'append'} · root ${where} · ${entry ? 'block on record' : 'no record'}`
+        assert.ok(certs.length, `${tag}: a present form`)
+        for (const c of certs) assert.deepEqual([c.in_effect, c.code, c.user_file && c.user_file.state], want, `${tag}: ${JSON.stringify(c)}`)
+        if (want[1] !== 'replace-without-ca') continue
+        for (const f of judgedForms(d, 'darwin')) { // the door, for a process of that harness started after the carrier, says the same
+          const v = verdictOf({ desc: d, form: f, facts: { name: d.name, pid: 1, startedAt: Date.now() + 60e3, env: {}, cwd: '/' }, record: { carrierInstalledAt: carrierAt(m, d, f, () => userCertFilesOf(d, w.ctx)), rootFp256: r.fp256 }, issuer: { state: () => 'ready' }, host: d.hosts[0], ctx: w.ctx })
+          assert.deepEqual([v.decrypt, v.code], [false, 'replace-without-ca'], `${tag} · door ${f.id}: ${JSON.stringify(v)}`)
+        }
+      }
+    }
+  }
+})
