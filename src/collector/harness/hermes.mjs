@@ -168,16 +168,22 @@ const proxyMode = {
   blockers: [],
 }
 
+const ENTRY = '(hermes_cli\\.main|acp_adapter\\.entry)'
+
 export default {
   name: 'hermes',
   runtime: 'python',
-  // Which processes are Hermes (D51 preset, every OS): python (any version: the normalizer folds python3.N into python) running its bootstrap
-  // isolated (`-I … -c "import hermes_bootstrap; … hermes_cli.main | acp_adapter.entry"`, the code may span lines), the Windows launcher's
+  // Which processes are Hermes (D51 preset, every OS): python (any version: the normalizer folds python3.N into python) whose `-c` code
+  // loads the entry module `hermes_cli.main` / `acp_adapter.entry` (after `import hermes_bootstrap`, as `from <module> import`, or through
+  // `runpy.run_module('<module>'`), whatever interpreter flags come first (the installer's bootstrap runs `-I`, the prebuilt desktop app's backend
+  // and its bundled launcher `-P`; measured macOS 2026-11-06); the code may span lines; a bare `import hermes_cli.main` probe or a string that only
+  // names the module is not Hermes, a `from <module> import` inside a string is (the matcher reads text, not Python). The Windows launcher's
   // script (`hermes.exe` / `hermes-acp.exe` exec `python.exe -I <that exe> …`, which runs the zip appended to it, and that may run itself
-  // again as `-I -c "import sys, runpy; …; runpy.run_path('<that exe>', …)"`; measured win 2026-10-14), or its TUI gateway module. Other
+  // again as `-I -c "import sys, runpy; …; runpy.run_path('<that exe>', …)"`; measured win 2026-10-14), the console script a pip install
+  // puts on PATH (`#!<venv>/bin/python`, so the kernel runs `python <…>/hermes …`; measured Linux 2026-11-06), or its TUI gateway module. Other
   // python is not Hermes, its package-manager workers (`hermes-agent/pm/worker.py`) included: they are forwarded.
   processes: {
-    names: [{ name: 'python', args: '(^| )-I( -\\S+)* -c [\\s\\S]*\\bhermes_bootstrap\\b[\\s\\S]*\\b(hermes_cli\\.main|acp_adapter\\.entry)\\b' }, { name: 'python', entry: '/hermes(-acp)?\\.exe$' }, { name: 'python', args: '(^| )-I( -\\S+)* -c [\\s\\S]*\\brunpy\\.run_path\\(\\s*[\'"]?[^\'",)]*/hermes(-acp)?\\.exe(?![\\w.-])' }, { name: 'python', args: '(^| )-m tui_gateway\\.(entry|slash_worker)( |$)' },
+    names: [{ name: 'python', args: `(^| )-[a-z]*c [\\s\\S]*(\\bhermes_bootstrap\\b[\\s\\S]*\\b${ENTRY}\\b|\\bfrom\\s+${ENTRY}\\s+import\\b|\\brun_module\\(\\s*'?${ENTRY}\\b)` }, { name: 'python', entry: '/hermes(-acp)?(\\.exe)?$' }, { name: 'python', args: '(^| )-I( -\\S+)* -c [\\s\\S]*\\brunpy\\.run_path\\(\\s*[\'"]?[^\'",)]*/hermes(-acp)?\\.exe(?![\\w.-])' }, { name: 'python', args: '(^| )-m tui_gateway\\.(entry|slash_worker)( |$)' },
       // the measured shapes only: the gateway service runs the CLI module with `gateway run` (the same
       // agent on every OS: a Linux one in this shape turns from args-mismatch into hermes, Linux run UNT); the desktop source build's backend is a
       // base64 bootstrap that hermes.cmd starts with `serve --host 127.0.0.1` (a loopback web service: any 127.x, so the guard reads no version; another b64 one-liner is not Hermes)
