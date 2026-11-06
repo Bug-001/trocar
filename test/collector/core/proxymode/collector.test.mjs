@@ -801,9 +801,9 @@ for (const d of await loadHarnesses()) {
   const v = (d.proxyMode && d.proxyMode.userCertFiles || []).find((s) => typeof s.env === 'string')
   const f = v && judgedForms(d, 'darwin')[0]
   if (!f) continue
-  test(`rule U · ${d.name}: the shared block's install time is its carrier time too, whichever harness it is recorded under`, async () => {
+  for (const by of ['another-harness', d.name]) test(`rule U · ${d.name}, block recorded under ${by}: the shared block's install time is its carrier time too`, async () => {
     const file = '/h/certs/mine.pem', g = `${d.name}:${f.route}`
-    const manifest = { ...manifestOf(d.name), entries: [...manifestOf(d.name).entries, { phase: 'install', harness: 'another-harness', kind: 'text', format: 'pem-block', path: file, installed_at: iso(INSTALLED + 10) }] }
+    const manifest = { ...manifestOf(d.name), entries: [...manifestOf(d.name).entries, { phase: 'install', harness: by, kind: 'text', format: 'pem-block', path: file, installed_at: iso(INSTALLED + 10) }] }
     const r = await rig({ desc: d, os: 'darwin', w: { pid: 7070, manifest, env: { [v.env]: file }, cwd: '/' } })
     await r.c.on({ harnesses: [d.name], groups: Object.fromEntries([...new Set(d.proxyMode.forms.map((x) => x.route))].map((rt, i) => [`${d.name}:${rt}`, 18600 + i])) })
     for (const [start, late] of [[INSTALLED + 5, false], [INSTALLED + 20, true]]) {
