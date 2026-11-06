@@ -34,7 +34,7 @@ export const sameRoot = (a, b) => !!((a.fp256 && b.fp256 && a.fp256 === b.fp256)
 export async function strayRoots(store, m) {
   const listed = ((m && !m.unsupported && m.entries) || []).filter((e) => e && e.kind === 'system-root').map((e) => ({ fp256: e.fp256, sha1: e.thumbprint }))
   let r
-  try { r = await store.list() } catch (e) { r = { error: String((e && e.message) || e) } }
+  try { r = await store.list() } catch (e) { if (e && e.code === 'ESANDBOX') throw e; r = { error: String((e && e.message) || e) } } // the test guard's refusal is never "the tool failed" (src/off/exec.mjs)
   return !r || r.error || !Array.isArray(r.roots) ? { error: (r && r.error) || 'no answer' } : { roots: r.roots.filter((x) => !listed.some((e) => sameRoot(x, e))) }
 }
 
