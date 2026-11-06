@@ -19,6 +19,7 @@ import { unpricedModels } from '../../../legacy/settings/prices.mjs'
 import { controlFor } from '../../../legacy/core/harness-switch.mjs'
 import { failureBrief, failureWord } from '../../../../src/cli/words.mjs'
 import * as W from '../../../legacy/labels/overview.mjs'
+import { redactUrlCredentials as hide } from '../../../legacy/core/sensitive.mjs'
 import { WINDOW_LABEL, UNTITLED, READ_FAIL, TITLE_PENDING, TITLE_PENDING_TIP } from '../../../legacy/labels/common.mjs'
 
 const DAY = 24 * 3600e3
@@ -44,7 +45,8 @@ const QUIET = ['ok', 'off', 'not-installed'] // the capture states that need no 
 export function overviewItems(s, now) {
   const all = []
   const H = s.caph && s.caph.data ? s.caph.data : null
-  const push = (cls, key, o) => all.push({ cls, key, ...o })
+  // a reason may carry a proxy address: its user and password never reach the board (1.9 §保真边界)
+  const push = (cls, key, o) => all.push({ cls, key, ...o, ...(o.text != null ? { text: hide(o.text) } : {}), ...(o.subject != null ? { subject: hide(o.subject) } : {}) })
 
   // ── O1 · an agent with a problem, worded as its 采集 page row (agentVerdicts); the net-blocked ones lead the table ──
   if (H) {
@@ -233,7 +235,7 @@ export function readFail(what, answer) {
   const obj = answer != null && typeof answer === 'object'
   const status = obj && typeof answer.status === 'number' ? answer.status : null
   const why = obj ? answer.error : answer
-  return { line: READ_FAIL(what, status), pairs: [...(status != null ? [['status', String(status)]] : []), ['error', why == null || why === '' ? '—' : String(why)]] }
+  return { line: READ_FAIL(what, status), pairs: [...(status != null ? [['status', String(status)]] : []), ['error', why == null || why === '' ? '—' : hide(String(why))]] }
 }
 
 // the page head's window links (the window is a route param, 1.2 §路由)
@@ -247,7 +249,7 @@ export function capCard(caph, now) {
   const subs = []
   if (v.readErrors > 0) subs.push(W.READ_FILES_FAIL(v.readErrors))
   if (hs && hs.length) subs.push(W.AGENTS_ON(hs.filter((x) => x && x.desired === 'on').length, hs.length))
-  return { cls: v.cls, text: v.text, subs, tech: v.state === 'unreadable' ? [['reason', v.reason]] : null }
+  return { cls: v.cls, text: v.text, subs, tech: v.state === 'unreadable' ? [['reason', hide(v.reason)]] : null }
 }
 
 const MORE_HREF = { O3: '#/capture/log', O4: '#/capture/log', O6: '#/settings/storage', O9: '#/traffic' } // the rest: #/capture

@@ -7,7 +7,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import {
-  overviewItems, recentRows, firstUse, capCard, itemsCard, statsCard, recentCard, agentRows,
+  overviewItems, recentRows, firstUse, capCard, itemsCard, statsCard, recentCard, agentRows, readFail,
 } from '../../web/src/screens/overview/model.mjs'
 import { capHealthPatch, captureVerdict } from '../../web/legacy/core/capture-verdict.mjs'
 import { INTERVAL } from '../../web/legacy/core/poll.mjs'
@@ -345,5 +345,22 @@ test('an agent row with no session and no model call links to its traffic, not t
     const by = (h) => agents.find((a) => a.chip === h)
     assert.equal(by(B).trafficOnly, true); assert.equal(by(B).href, `#/traffic?h=${encodeURIComponent(B)}&window=${w}`)
     assert.equal(by(A).href, `#/sessions?h=${encodeURIComponent(A)}&window=${w}`)
+  }
+})
+
+test('a proxy address in a reason reaches the overview with its user and password hidden (1.9 §保真边界)', () => {
+  const R = 'upstream http://alice:s3cret@proxy.example:8080 refused'
+  const p = capHealthPatch({ ok: true, status: 200, data: { errors: [{ where: 'capture health', reason: R }] } }, NOW)
+  const s = stateOf(quiet())
+  s.caph.data.health = { state: 'unknown', reason: R }; s.caph.data.daemon.error = R
+  s.caph.data.critical = [{ kind: 'k', reason: R }]
+  s.caph.data.cert.root = { state: 'bad', code: 'ca-invalid', reason: R }
+  s.caph.data.agent_list.problems = [{ code: 'bad-json', reason: R }]
+  s.caph.data.failures.groups = [group({ where: 'zz-new', code: 'zz-new', reason: R })]
+  const out = [capCard({ data: p.capH, okAt: p.capHOkAt, err: null, ok: true }, NOW), overviewItems(s, NOW), itemsCard(s, NOW), readFail('x', { status: 502, error: R }), readFail('x', R)]
+  for (const o of out) {
+    const j = JSON.stringify(o)
+    assert.doesNotMatch(j, /alice|s3cret/, j)
+    assert.match(j, /proxy\.example/, j)
   }
 })
