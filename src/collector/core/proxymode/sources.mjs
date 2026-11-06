@@ -13,7 +13,7 @@
 // <cond> { src, equals? } — without `equals`: "is set".
 // A file that exists but cannot be read or parsed is { error }, never "unset" (D38).
 import { parseJsonText } from '../../../off/json-text.mjs'
-import { parseDotenv } from '../config-read.mjs'
+import { parseDotenv, expandHome } from '../config-read.mjs'
 import { resolveLoc } from '../../../off/loc.mjs'
 
 const get = (env, k) => (env instanceof Map ? env.get(k) : env ? env[k] : undefined)
@@ -67,11 +67,21 @@ export function readSrc(src, ctx) {
 }
 
 /** Whether a <cond> holds: true, false, or { error } (a source that cannot be read never counts as "does not hold"). */
-/** The files a harness's `userCertFiles` settings name now, read against `ctx` (rule U, 4.11 P4), in the descriptor's order → { files, unread }: `unread`
- *  is the first setting that could not be read ({ error, where }) or null — such a setting names a file not known, never none (D38). */
+/** The files a harness's `userCertFiles` settings name now (every match of each, as fileOf reads them), read against `ctx` (rule U, 4.11 P4), in the
+ *  descriptor's order → { files, unread }: `unread` is the first setting that could not be read ({ error, where }), or one naming a relative path with no cwd, or null — such a setting names a file not known, never none (D38). */
 export function userCertFilesOf(desc, ctx) {
   const rs = (desc.proxyMode.userCertFiles || []).map((src) => readSrc(src, ctx))
-  return { files: rs.filter((r) => r.set && typeof r.value === 'string').map((r) => r.value), unread: rs.find((r) => r.error) || null }
+  const named = rs.flatMap((r) => (r.set ? r.all : []).filter((x) => typeof x.value === 'string').map((x) => ({ where: x.where, file: fileOf(x.value, ctx) }))) // every match: one key may name a file per route
+  const lost = named.find((x) => x.file == null)
+  return { files: [...new Set(named.map((x) => x.file).filter(Boolean))], unread: rs.find((r) => r.error) || (lost ? { error: 'names a relative path and the working directory is not known', where: lost.where } : null) }
+}
+
+const isAbs = (p) => path.posix.isAbsolute(p) || path.win32.isAbsolute(p)
+/** The file a setting's value names, one reading for install, status and the door (4.11 P4 rule U): a leading `~/` is the home, a relative path is
+ *  under `cwd`; null when it is relative and `cwd` is not known (D38). */
+export function fileOf(value, { home, cwd, join = path.join }) {
+  const v = expandHome(String(value), home)
+  return isAbs(v) ? v : cwd == null ? null : join(cwd, v)
 }
 
 export function holds(cond, ctx) {

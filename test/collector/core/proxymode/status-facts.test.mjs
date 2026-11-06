@@ -7,7 +7,10 @@ import { modelFormFacts } from '../../../../src/collector/core/proxymode/status-
 import { MODEL as all, OSES, PRIOR, SYS, ROOT_OK, ctxOf, world } from '../../../netenv/fixtures/model-rows.mjs'
 import fs from 'node:fs'
 import tls from 'node:tls'
-import { sharedCertFileWorld } from '../../../helpers/model-world.mjs'
+import path from 'node:path'
+import { sharedCertFileWorld, modelWorld } from '../../../helpers/model-world.mjs'
+import { verdictOf, judgedForms, carrierAt } from '../../../../src/collector/core/proxymode/verdict.mjs'
+import { userCertFilesOf } from '../../../../src/collector/core/proxymode/sources.mjs'
 import { renderWrapper } from '../../../../src/collector/arch/darwin/wrapper.mjs'
 import { readManifest } from '../../../../src/off/manifest.mjs'
 
@@ -156,4 +159,27 @@ test('rule U · the user file or a setting naming it cannot be read: in_effect n
     if (settingFiles(h).length) assert.ok(unknownWith(c, 'config-unreadable', null), `${h}: ${JSON.stringify(c)}`)
     else assert.deepEqual([c.in_effect, c.user_file && c.user_file.state], [true, 'intact'], `${h}: no setting of it was unread`)
   }
+})
+
+// 4.11 P4 rule U × P11 rule 4: a setting that matches several places names several files — Hermes's ssl_ca_cert, one per provider route (one written
+// `~/…`, so install, status and the door read it one way). install appends a block to each; status reads each in effect and the door decrypts; one
+// file losing its block → status not in effect for it (the worst file reported) and the door forwards (replace-without-ca).
+test('rule U · two routes, each its own ssl_ca_cert file: install blocks both; status in effect and the door decrypts; one block gone → not in effect, forwarded', async () => {
+  const userPem = `${tls.rootCertificates[1].trim()}\n`
+  const w = await modelWorld({ commands: ['hermes'] })
+  const a = path.join(w.home, 'certs', 'a.pem'), b = path.join(w.home, 'certs', 'b.pem')
+  fs.mkdirSync(path.dirname(a), { recursive: true }); fs.writeFileSync(a, userPem); fs.writeFileSync(b, userPem)
+  fs.mkdirSync(path.join(w.home, '.hermes'), { recursive: true })
+  fs.writeFileSync(path.join(w.home, '.hermes', 'config.yaml'), `providers:\n  one:\n    ssl_ca_cert: ${a}\n  two:\n    ssl_ca_cert: ~/certs/b.pem\n`)
+  const r = await w.install()
+  assert.equal(r.exit, 0, JSON.stringify(r.carriers))
+  assert.deepEqual(r.carriers.filter((c) => c.carrier === 'pem-block' && c.state === 'placed').map((c) => c.path).sort(), [a, b])
+  const d = w.harnesses.find((x) => x.name === 'hermes')
+  const facts = async () => (await modelFormFacts({ harnesses: w.harnesses, os: 'darwin', manifest: readManifest(w.dir), root: ROOT_OK, ctx: w.ctx }))[d.name].map((x) => x.certificate)
+  const door = () => judgedForms(d, 'darwin').map((f) => verdictOf({ desc: d, form: f, facts: { name: d.name, pid: 1, startedAt: Date.now() + 60e3, env: {}, cwd: '/' }, record: { carrierInstalledAt: carrierAt(readManifest(w.dir), d, f, () => userCertFilesOf(d, w.ctx)), rootFp256: r.fp256 }, issuer: { state: () => 'ready' }, host: d.hosts[0], ctx: w.ctx }))
+  for (const c of await facts()) assert.deepEqual([c.in_effect, c.code], [true, null], JSON.stringify(c))
+  for (const v of door()) assert.equal(v.decrypt, true, JSON.stringify(v))
+  fs.writeFileSync(b, userPem) // the user took the second file's block out
+  for (const c of await facts()) assert.deepEqual([c.in_effect, c.code, c.user_file && c.user_file.path], [false, 'entry-changed', b], JSON.stringify(c))
+  for (const v of door()) assert.deepEqual([v.decrypt, v.code], [false, 'replace-without-ca'], JSON.stringify(v))
 })

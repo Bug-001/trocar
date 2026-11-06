@@ -8,11 +8,14 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import path from 'node:path'
+import fs from 'node:fs'
+import { tmpDir } from '../../../helpers/tmp.mjs'
+import { pemBlock } from '../../../../src/off/text-edit.mjs'
 import { verdictOf } from '../../../../src/collector/core/proxymode/verdict.mjs'
 import { isCode } from '../../../../src/health/codes.mjs'
 import { resolveLoc } from '../../../../src/collector/core/proxymode/sources.mjs'
 import eighth from '../../harness/fixtures/eighth.mjs'
-import { INSTALLED, RECORD, ISSUER, CWD, descs, leaves, locOf, newWorld, rctx, setLeaf, fileOfLeaf, ctxOf, policyKey, combos, worldOf } from './verdict-world.mjs'
+import { ROOT, OTHER, INSTALLED, RECORD, ISSUER, CWD, descs, leaves, locOf, newWorld, rctx, setLeaf, fileOfLeaf, ctxOf, policyKey, combos, worldOf } from './verdict-world.mjs'
 
 // ---- the rule list, over the declared world -----------------------------------------------------------------------------------------------------
 /** A leaf's declared state: { set, value } | { error: code }. */
@@ -60,6 +63,9 @@ function expected(c, d, f, w) {
     if (!pluginCarrier && first && w.ca[first.value] !== 'root') return 'ca-not-in-file' // lacks the root, or no such file
     if (!pluginCarrier && applies && !first && (t.sources.some((s) => s.required) || t.base === 'node')) return 'var-missing'
   }
+  // ... "every file a userCertFiles setting marked replace names must hold the root (replace-without-ca); a setting not read forwards uncached"
+  // (this world never sets them, so only a setting that cannot be read answers here; the file axes are the userCertFiles test below)
+  for (const s of (d.proxyMode.userCertFiles || []).filter((x) => x.semantics === 'replace')) { const r = firstOf(w, s); if (r.error) return r.error }
   if (!c.issuer) return 'cert-intermediate-unavailable'
   for (const b of d.proxyMode.blockers) {
     if (b.forms && !b.forms.includes(f.id)) continue
@@ -180,5 +186,84 @@ test('CM22 · plugin carrier, trust root, no blockers: env unreadable → enviro
     assert.deepEqual([unread.decrypt, unread.code, unread.unread], [false, 'environ-unreadable', true], os)
     assert.equal(run(d, f, os, { hookPid: 'other' }).code, 'hook-inherited', os)
     assert.equal(run(d, f, os, { hookPid: 'own' }).decrypt, true, os)
+  }
+})
+
+// Rule 4's user files (4.11 P11 rule 4, P4 rule U): a userCertFiles setting marked `semantics: 'replace'` makes the agent trust only the file it names, so
+// that file must hold the trocar root before the first decrypt, whatever the form's trust; an add setting never forwards for want of the root (the
+// form's own trust still applies). Axes: source kind (env / config key) × semantics (add / replace) × what the named file holds (install's marked
+// block at the end, the root bare among other certificates, none, no such file, one route's file with it and another's without). Real files in a tmp dir.
+const OWN = (dir) => (p) => { if (!p.startsWith(dir)) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); return fs.readFileSync(p, 'utf8') }
+const HOLDS = {
+  block: () => [pemBlock(OTHER.pem, ROOT.pem).text],
+  bare: () => [OTHER.pem + ROOT.pem],
+  lacks: () => [OTHER.pem],
+  missing: () => [null],
+  'one-route-lacks': () => [pemBlock(OTHER.pem, ROOT.pem).text, OTHER.pem],
+}
+const lacking = new Set(['lacks', 'missing', 'one-route-lacks'])
+function userFileCase({ kind, semantics, holds }) {
+  const dir = tmpDir('trocar-replace-ca-')
+  const src = kind === 'env' ? { env: 'USER_CA' } : { file: { base: 'home', path: 'cfg.yaml' }, format: 'yaml', keys: ['routes', '*', 'ca'] }
+  const d = { ...eighth, proxyMode: { ...eighth.proxyMode, userCertFiles: [{ ...src, ...(semantics ? { semantics } : {}) }] } }
+  const f = d.proxyMode.forms.find((x) => x.id === 'eighth.folder')
+  const files = HOLDS[holds]().map((text, i) => { const p = path.join(dir, `ca-${i}.pem`); if (text != null) fs.writeFileSync(p, text); return p })
+  const env = {}
+  if (kind === 'env') env.USER_CA = files[0]
+  else fs.writeFileSync(path.join(dir, 'cfg.yaml'), `routes:\n${files.map((p, i) => `  r${i}:\n    ca: ${p}\n`).join('')}`)
+  if (kind === 'env' && files.length > 1) return null // an env var names one file
+  const ctx = { os: 'darwin', home: dir, dirs: {}, env: {}, join: path.join, readFile: OWN(dir), readdir: () => [], policy: () => ({ set: false }) }
+  const facts = { name: d.name, pid: 4242, startedAt: INSTALLED + 1, env, cwd: dir }
+  return { d, f, ctx, facts, dir, files }
+}
+const pick = (v) => [v.code, v.unread === true]
+const ask = ({ d, f, ctx, facts }) => verdictOf({ desc: d, form: f, facts, record: RECORD, issuer: ISSUER, host: d.hosts[0], ctx })
+
+test('P11 rule 4 · userCertFiles: kind × semantics × root in file — only a replacing setting naming a file without the root forwards, replace-without-ca, before any decrypt', () => {
+  for (const kind of ['env', 'key']) for (const semantics of [undefined, 'replace']) for (const holds of Object.keys(HOLDS)) {
+    const c = userFileCase({ kind, semantics, holds })
+    if (!c) continue
+    const got = ask(c), label = `${kind} · ${semantics || 'add'} · ${holds}`
+    const forward = semantics === 'replace' && lacking.has(holds)
+    assert.equal(got.decrypt, !forward, `${label}: ${JSON.stringify(got)}`)
+    if (forward) {
+      assert.equal(got.code, 'replace-without-ca', label)
+      assert.ok(isCode(got.code))
+      assert.ok(!got.unread, `${label}: read evidence, so the door may keep the verdict`)
+    }
+  }
+})
+
+test('P11 rule 4 · a replacing setting or its file that cannot be read is not known: forwarded, never cached (D38)', () => {
+  const env = userFileCase({ kind: 'env', semantics: 'replace', holds: 'block' })
+  assert.deepEqual(pick(ask({ ...env, facts: { ...env.facts, env: null } })), ['environ-unreadable', true])
+  const file = userFileCase({ kind: 'key', semantics: 'replace', holds: 'block' })
+  const deny = (p) => { if (p === file.files[0]) throw Object.assign(new Error('EACCES'), { code: 'EACCES' }); return OWN(file.dir)(p) }
+  assert.deepEqual(pick(ask({ ...file, ctx: { ...file.ctx, readFile: deny } })), ['file-unreadable', true])
+  fs.writeFileSync(path.join(file.dir, 'cfg.yaml'), 'routes: [unclosed\n')
+  assert.deepEqual(pick(ask(file)), ['config-unreadable', true])
+})
+// A regression seed, Hermes on macOS as measured: a provider's ssl_ca_cert names the user's bundle. Without trocar's block → forward before the first
+// decrypt; with the block install appends there → decrypt (the setup the macOS cell runs).
+test('P11 rule 4 · Hermes seed: a provider ssl_ca_cert without the root forwards (replace-without-ca); with install\'s block it decrypts', () => {
+  const d = descs.find((x) => x.name === 'hermes'), f = d.proxyMode.forms.find((x) => x.id === 'hermes.cli')
+  for (const [text, want] of [[OTHER.pem, 'replace-without-ca'], [pemBlock(OTHER.pem, ROOT.pem).text, null]]) {
+    const dir = tmpDir('trocar-hermes-ca-'), ca = path.join(dir, 'corp.pem')
+    fs.writeFileSync(ca, text)
+    fs.writeFileSync(path.join(dir, 'config.yaml'), `providers:\n  corp:\n    ssl_ca_cert: ${ca}\n`)
+    const ctx = { os: 'darwin', home: '/nowhere', dirs: {}, env: {}, join: path.join, readFile: OWN(dir), readdir: () => [], policy: () => ({ set: false }) }
+    const got = ask({ d, f, ctx, facts: { name: d.name, pid: 1, startedAt: INSTALLED + 1, env: { HERMES_HOME: dir }, cwd: dir } })
+    assert.equal(got.decrypt, want === null, JSON.stringify(got))
+    if (want) assert.equal(got.code, want)
+  }
+})
+
+// One reading of a setting's value (4.11 P4 rule U, sources.mjs fileOf): a leading `~/` is the home, never a directory named `~` under the cwd.
+test('P11 rule 4 · a replacing setting written ~/…: the file under the home is read, whatever the process cwd', () => {
+  for (const [holds, want] of [['block', null], ['lacks', 'replace-without-ca']]) {
+    const c = userFileCase({ kind: 'key', semantics: 'replace', holds })
+    fs.writeFileSync(path.join(c.dir, 'cfg.yaml'), 'routes:\n  r0:\n    ca: ~/ca-0.pem\n')
+    const got = ask({ ...c, facts: { ...c.facts, cwd: path.join(c.dir, 'elsewhere') } })
+    assert.deepEqual([got.decrypt, got.code], [want === null, want ?? undefined], JSON.stringify(got))
   }
 })

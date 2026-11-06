@@ -6,7 +6,7 @@
 import nodeFs from 'node:fs'
 import { itemsOfPhase } from '../../../off/manifest.mjs'
 import { judgeEntry, judgeOwned } from '../trust/journal.mjs'
-import { isPresent, holds, presentPaths, userCertFilesOf as userFilesOf } from './sources.mjs'
+import { isPresent, holds, presentPaths, userCertFilesOf } from './sources.mjs'
 import { planRoutes, priorRecordOf, loopbackDirect, loopbackNote } from './entries.mjs'
 import { upstreamFor, isTrocarDoorUrl } from './chain.mjs'
 import { pacLeg } from './pac.mjs'
@@ -15,6 +15,8 @@ import { CODE } from '../codes.mjs'
 import { checkWrapper } from './hooks/wrapper.mjs'
 import { sha256, readOrNull } from '../../../off/fsutil.mjs'
 
+// status has no process: a relative path a setting names reads as install reads it, under the home (4.11 P4 rule U)
+const userFilesOf = (desc, ctx) => userCertFilesOf(desc, { ...ctx, cwd: ctx.home })
 const CARRIER = { 'config-key': 'config-key', wrapper: 'wrapper', plugin: 'plugin', 'plugin-file': 'plugin' } // 1.6 §9.4 `carrier` from the descriptor's cert kind
 const HOOKS = new Set(['wrapper', 'plugin']) // a carrier that also applies the route (the switch file is read through it): its drift takes the form off the path (1.6 §9.3 row 31)
 const INSTALL = 'trocar install'
@@ -28,7 +30,7 @@ export const intactOf = (m, e, fs) => { try { return (e.kind === 'owned-file' ? 
 
 /** The install items that carry a harness's certificate: its own, and the pem-block in a user file its settings name that another harness's entry holds —
  *  one block per file, recorded once (4.11 P4 rule U, shared_with), yet it serves both. */
-const itemsFor = (desc, inst, ctx) => { const { files } = userFilesOf(desc, ctx); return inst.filter((i) => i.harness === desc.name || (i.kind === 'text' && i.format === 'pem-block' && files.includes(i.path))) }
+const itemsFor = (desc, inst, ctx) => { const { files } = userCertFilesOf(desc, ctx); return inst.filter((i) => i.harness === desc.name || (i.kind === 'text' && i.format === 'pem-block' && files.includes(i.path))) }
 
 /** Whether the install items that carry a harness's certificate are all there and unchanged → null | 'carrier-absent' | 'carrier-overwritten'. What install
  *  placed (m.install.items) must still be on record: an item whose record is gone is as absent as its file. Throws when a file cannot be read. */
@@ -64,7 +66,7 @@ export function setupOf(desc, { os, manifest: m, ctx, root = null, fs = nodeFs }
       const c = f.cert === 'root' ? null : (pm.certs || {})[f.cert]
       if (!c || (c.when && holds(c.when, ctx) === false)) continue // the root carries it: nothing per form, whether install saw the harness or not
       // a carrier of its own: install's items for it (none when install never saw the harness, unless rule U's shared block carries it)
-      const unread = lost === undefined && userFilesOf(desc, ctx).unread // a setting that may name rule U's file, not read: whose block carries it is not known
+      const unread = lost === undefined && userCertFilesOf(desc, ctx).unread // a setting that may name rule U's file, not read: whose block carries it is not known
       if (unread) throw new Error(`${unread.where}: ${unread.error}`)
       if (lost === undefined) lost = carrierLoss(m || {}, desc, itemsFor(desc, itemsOfPhase(m, 'install'), ctx), fs)
       if (lost) missing.push({ form: f.id, what: lost })
@@ -74,19 +76,19 @@ export function setupOf(desc, { os, manifest: m, ctx, root = null, fs = nodeFs }
   return missing.length ? { state: 'needed', missing } : { state: 'ready', missing: [] }
 }
 
-/** The user's own certificate file a `userCertFiles` key names (1.6 §9.4 `user_file`): trocar appended to it (intact / changed), or it is not one trocar could
+/** The user's own certificate file a `userCertFiles` key names (1.6 §9.4 `user_file`; of several, the worst): trocar appended to it (intact / changed), or it is not one trocar could
  *  append to; `unknown` with the read code when the file, or a setting that may name it, cannot be read (D38: never `changed`, never none). */
 function userFileOf(desc, { m, ctx, fs, own }) {
-  const { files, unread } = userFilesOf(desc, ctx)
+  const { files, unread } = userCertFilesOf(desc, ctx)
   if (unread) return { path: null, state: 'unknown', reason: `${unread.where}: ${unread.error}`, code: CODE.configUnreadable }
-  for (const file of files) {
-    if (own.some((i) => i.path === file && i.kind === 'owned-file')) continue // trocar's own bundle: not the user's file
+  const rows = files.filter((file) => !own.some((i) => i.path === file && i.kind === 'owned-file')).map((file) => { // trocar's own bundle: not the user's file
     const e = own.find((i) => i.path === file && i.kind !== 'owned-file')
     if (!e) return { path: file, state: CODE.notUsersFile }
     try { readOrNull(fs, file) } catch (err) { return { path: file, state: 'unknown', reason: `${file}: ${(err && err.code) || err}`, code: 'file-unreadable' } }
     return { path: file, state: intactOf(m, e, fs) ? 'intact' : 'changed' }
-  }
-  return null
+  })
+  const rank = (x) => ['intact', 'unknown'].indexOf(x.state) // the worst file is the one reported: not in effect (-1), then not known, then intact
+  return rows.sort((x, y) => rank(x) - rank(y))[0] || null
 }
 
 /** The setting the agent has without trocar, from the prior trocar recorded (null when the user had none): the topology's off path. `e` is the item the

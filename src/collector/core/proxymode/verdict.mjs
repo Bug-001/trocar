@@ -9,7 +9,7 @@
 //            hosts in the extension's own settings, the operator's extra_hosts; 4.8 OPEN 22); absent → desc.hosts.
 //   issuer = makeIssuer()'s object, or null; ctx = the sources.mjs ctx (os, home, dirs, readFile, readdir, policy, join).
 import path from 'node:path'
-import { readSrc } from './sources.mjs'
+import { readSrc, fileOf } from './sources.mjs'
 import { certBlocks } from '../../../off/pem.mjs'
 import { itemsOfPhase } from '../../../off/manifest.mjs'
 import { HOOK_PID_ENV } from './chain.mjs'
@@ -20,7 +20,6 @@ const notRead = (r) => fwd(r.code, why(r), { unread: true })
 const hex = (fp) => String(fp || '').replace(/:/g, '').toLowerCase()
 const ms = (t) => (t == null ? NaN : typeof t === 'number' ? t : new Date(t).getTime())
 const absent = (e) => e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')
-const isAbs = (p) => path.posix.isAbsolute(p) || path.win32.isAbsolute(p)
 
 /** A <src> read against the process: the first set leaf in precedence, or { error, code } when a leaf it reaches cannot be read (the process env
  *  or cwd unknown, a file unreadable or unparsable) — never "unset" (D38). */
@@ -50,15 +49,33 @@ function trustVerdict(t, ctx, facts, record, inProcess) {
     // Node's own roots never hold trocar's root, nor does a process whose required source is unset
     return t.base === 'node' || t.sources.some((s) => s.required) ? fwd('var-missing', `none of ${t.sources.length} trust source(s) is set for this process`) : null
   }
-  const value = String(hit.value)
-  if (!isAbs(value) && facts.cwd == null) return fwd('config-unreadable', `${hit.where} names a relative path and the process working directory is not known`, { unread: true })
-  const file = isAbs(value) ? value : (ctx.join || path.join)(facts.cwd, value)
-  let text
-  try { text = ctx.readFile(file) } catch (e) {
-    if (absent(e)) return inProcess ? null : fwd('ca-not-in-file', `${hit.where} names ${file}, which does not exist`)
-    return fwd('file-unreadable', `${hit.where} names ${file}: ${(e && e.code) || e}`, { unread: true })
+  const h = rootIn(hit, ctx, facts, record)
+  return h.code ? h : inProcess || h.holds ? null : fwd('ca-not-in-file', `${hit.where} names ${h.file}, which does not hold the trocar root (or does not exist)`)
+}
+
+/** The file a set setting { value, where } names, read for the trocar root → { holds, file } (no such file: holds false), or the forward verdict when it
+ *  cannot be read (D38). fileOf reads the value: `~/` is the home, a relative path is under the process's cwd. */
+function rootIn({ value, where }, ctx, facts, record) {
+  const file = fileOf(value, { home: ctx.home, cwd: facts.cwd, join: ctx.join || path.join })
+  if (file == null) return fwd('config-unreadable', `${where} names a relative path and the process working directory is not known`, { unread: true })
+  try { return { file, holds: certBlocks(ctx.readFile(file)).some((b) => hex(b.fp) === hex(record.rootFp256)) } } catch (e) {
+    return absent(e) ? { file, holds: false } : fwd('file-unreadable', `${where} names ${file}: ${(e && e.code) || e}`, { unread: true })
   }
-  return inProcess || certBlocks(text).some((b) => hex(b.fp) === hex(record.rootFp256)) ? null : fwd('ca-not-in-file', `${hit.where} names ${file}, which does not hold the trocar root`)
+}
+
+/** Rule 4's user files: every file a `semantics: 'replace'` userCertFiles setting names must hold the root, whatever the form's trust — each match, as
+ *  the door cannot tell which route (one key per route) a connection takes. Read before the first decrypt, so no client handshake breaks to learn it. */
+function replaceVerdict(pm, ctx, facts, record) {
+  for (const src of (pm.userCertFiles || []).filter((s) => s.semantics === 'replace')) {
+    const r = read(src, ctx, facts)
+    if (r.error) return notRead(r)
+    for (const x of (r.set && r.all) || []) {
+      const h = rootIn(x, ctx, facts, record)
+      if (h.code) return h
+      if (!h.holds) return fwd('replace-without-ca', `${x.where} names ${h.file}, which replaces the trusted roots and does not hold the trocar root (or does not exist)`)
+    }
+  }
+  return null
 }
 
 /** The forms a process of `desc` may be on `os` (on a door of route `routeId`, or any): of its forms here, the verified ones when any is — D51 names
@@ -114,6 +131,8 @@ export function verdictOf({ desc, form, facts = {}, record = {}, issuer, host, h
   if (hookPid !== '' && hookPid !== String(facts.pid)) return fwd('hook-inherited', `pid ${facts.pid} inherited the door from its parent (pid ${hookPid}) and did not run the hook itself, so it holds no trocar root`)
   const t = trustVerdict(form.trust !== 'root' && pm.trusts && pm.trusts[form.trust], pctx, facts, record, inProcess)
   if (t) return t
+  const u = replaceVerdict(pm, pctx, facts, record)
+  if (u) return u
   if (!issuer || (issuer.state && issuer.state() !== 'ready')) return issuer && issuer.state() === 'key-missing' ? fwd('cert-key-missing', 'the root key is not in its custody: nothing signs leaves') : fwd('cert-intermediate-unavailable', 'no intermediate certificate to sign leaves with')
   for (const b of pm.blockers || []) {
     if (b.forms && !b.forms.includes(form.id)) continue

@@ -17,7 +17,7 @@ import { installComplete, itemsOfPhase, undoByHand, OFF_VERSION } from '../off/m
 import { writeStandalone } from '../off/standalone.mjs'
 import { standaloneFiles, switchFileIn } from '../off/paths.mjs'
 import { missingDirs, pathKey } from '../off/fsutil.mjs'
-import { resolveLoc, readSrc, holds, isPresent } from './core/proxymode/sources.mjs'
+import { resolveLoc, readSrc, holds, isPresent, fileOf } from './core/proxymode/sources.mjs'
 import { noProxyNames } from './core/proxymode/entries.mjs'
 import { placeWrapper, managedTree, targetOf } from './core/proxymode/hooks/wrapper.mjs'
 import { lineComment, removeTrocarText } from '../off/text-edit.mjs'
@@ -368,16 +368,19 @@ function keyIsUsers(c, ctx, home) {
   return c.semantics === 'add' && !!readSrc({ env: c.keys.at(-1) }, ctx).set
 }
 
-/** Rule U's files (4.11 P4) for one harness, from its `userCertFiles` settings as they are now: each file one names, once, in the descriptor's order,
+/** Rule U's files (4.11 P4) for one harness, from its `userCertFiles` settings as they are now: each file one names (every match), once, in the descriptor's order,
  *  outside trocar's own tree → [{ file, why }] (`why`: not this user's own file — said, never written). The one list install acts on and its plan
  *  names (1.6 V85: the plan names every file install changes). */
 export function ruleUFiles(desc, ctx, { home, owns, fs = nodeFs }) {
   const out = []
   for (const src of desc.proxyMode.userCertFiles || []) {
     const r = readSrc(src, ctx)
-    if (r.error || !r.set || typeof r.value !== 'string') continue
-    const file = path.isAbsolute(r.value) ? r.value : path.resolve(home, r.value)
-    if (!inTrocar(file, home, ctx.os) && !out.some((x) => x.file === file)) out.push({ file, why: usersFileWhy(file, { fs, owns }) })
+    if (r.error || !r.set) continue
+    for (const { value } of r.all) { // every match: one key may name a file per route (4.11 P4)
+      if (typeof value !== 'string') continue
+      const file = fileOf(value, { home, cwd: home }) // install has no process: a relative path under the home
+      if (!inTrocar(file, home, ctx.os) && !out.some((x) => x.file === file)) out.push({ file, why: usersFileWhy(file, { fs, owns }) })
+    }
   }
   return out
 }

@@ -163,8 +163,9 @@ const proxyMode = {
   certs: {},
   trusts: {},
   // rule U: a CA file the user already named (a route's own ssl_ca_cert replaces the roots for that route: the providers map, the custom_providers
-  // list and the inline model block, as the Linux reader above; SSL_CERT_FILE for the rest)
-  userCertFiles: [...[['providers', '*', 'ssl_ca_cert'], ['custom_providers', '*', 'ssl_ca_cert'], ['model', 'ssl_ca_cert']].map((keys) => ({ file: HOME('config.yaml'), format: 'yaml', keys })), { file: HOME('.env'), format: 'dotenv', keys: ['SSL_CERT_FILE'] }, { env: 'SSL_CERT_FILE' }],
+  // list and the inline model block, as the Linux reader above; SSL_CERT_FILE for the rest). SSL_CERT_FILE is not marked replace: the main build
+  // appends it and a release build replaces with it (the Linux chain above), and the door cannot tell the build here
+  userCertFiles: [...[['providers', '*', 'ssl_ca_cert'], ['custom_providers', '*', 'ssl_ca_cert'], ['model', 'ssl_ca_cert']].map((keys) => ({ file: HOME('config.yaml'), format: 'yaml', keys, semantics: 'replace' })), { file: HOME('.env'), format: 'dotenv', keys: ['SSL_CERT_FILE'] }, { env: 'SSL_CERT_FILE' }],
   blockers: [],
 }
 
