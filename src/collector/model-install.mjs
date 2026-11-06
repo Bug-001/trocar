@@ -342,7 +342,8 @@ export function carrierPlaces({ os, harnesses, ctx, home, owns, renderHook, fs =
       const loader = c.loader ? resolveLoc(c.loader.file, ctx)[0] : null
       if (loader) out.push({ harness: h, how: 'line', file: loader, yaml: true, names: [JSON.stringify(file)] })
     }
-    if (forms.length) for (const { file } of ruleUFiles(desc, ctx, { home, owns, fs })) out.push({ harness: h, how: 'pem-block', file })
+    // rule U's file once, whichever harness names it first (SSL_CERT_FILE, NODE_EXTRA_CA_CERTS are read by more than one): the receipt counts files (1.6 §3.4)
+    if (forms.length) for (const { file } of ruleUFiles(desc, ctx, { home, owns, fs })) if (!out.some((p) => p.how === 'pem-block' && p.file === file)) out.push({ harness: h, how: 'pem-block', file })
   }
   return out
 }

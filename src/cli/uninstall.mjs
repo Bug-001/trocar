@@ -9,7 +9,7 @@
 import nodeOs from 'node:os'
 import path from 'node:path'
 import { newReceipt, EXIT, UNDO_LINE } from '../off/schema.mjs'
-import { offWorld, desiredOff, drainDaemon, undoSide, harnessIdsOf, flowWriter, OFF_LOCK_WAIT_MS, MARKER_TEXT } from '../off/orchestrate.mjs'
+import { offWorld, desiredOff, drainDaemon, undoSide, harnessIdsOf, flowWriter, OFF_LOCK_WAIT_MS, MARKER_TEXT, perFile } from '../off/orchestrate.mjs'
 import { planByMarker } from '../off/marker.mjs'
 import { userProcessesOf } from '../off/user-procs.mjs'
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
@@ -105,8 +105,8 @@ function planUninstall(w, m, purgeData = false, root = packageRoot(), places = [
   const entries = usable ? m.entries.filter((e) => e.kind === 'json-key' || e.kind === 'text') : []
   return {
     changed: [...entries.map((e) => ({ path: e.path, change: `${e.kind === 'text' ? "trocar's own lines" : (e.keys || []).join('.')} taken out`, backup: e.backup ?? null, ...(typeof e.harness === 'string' ? { harness: e.harness } : {}) })),
-      ...(usable && m.path_item && !held ? [{ path: m.path_item.path, change: 'the PATH item taken out', backup: m.path_item.backup ?? null }] : []), ...marks.filter((p) => p.how !== 'owned-file').map(markRow)],
-    removed: [...marks.filter((p) => p.how === 'owned-file').map((p) => p.path), ...(usable ? m.files.map((f) => f.path) : []), ...COLLECTOR_STATE_FILES.map((n) => path.join(w.dir, n)).filter((p) => w.fs.existsSync(p)), ...(w.fs.existsSync(path.join(w.dir, 'ingress.json')) ? [path.join(w.dir, 'ingress.json')] : []), backupDir(w.home), ...standaloneFiles(w.home, w.platform), ...(w.fs.existsSync(netenvFile(w.home)) ? [netenvFile(w.home)] : []), ...(purgeData && !held ? keptOf(w.home, w.fs).map((k) => k.path) : []), ...(m && !held ? [manifestPath(w.dir)] : []), ...(script ? [launcherPath(w.home, w.platform), appDir(w.home)] : [])],
+      ...(usable && m.path_item && !held ? [{ path: m.path_item.path, change: 'the PATH item taken out', backup: m.path_item.backup ?? null }] : []), ...perFile(marks.filter((p) => p.how !== 'owned-file').map(markRow))],
+    removed: [...new Set(marks.filter((p) => p.how === 'owned-file').map((p) => p.path)), ...(usable ? m.files.map((f) => f.path) : []), ...COLLECTOR_STATE_FILES.map((n) => path.join(w.dir, n)).filter((p) => w.fs.existsSync(p)), ...(w.fs.existsSync(path.join(w.dir, 'ingress.json')) ? [path.join(w.dir, 'ingress.json')] : []), backupDir(w.home), ...standaloneFiles(w.home, w.platform), ...(w.fs.existsSync(netenvFile(w.home)) ? [netenvFile(w.home)] : []), ...(purgeData && !held ? keptOf(w.home, w.fs).map((k) => k.path) : []), ...(m && !held ? [manifestPath(w.dir)] : []), ...(script ? [launcherPath(w.home, w.platform), appDir(w.home)] : [])],
     kept: purgeData && !held ? [] : keptOf(w.home, w.fs),
     notes: usable || !m ? [] : [`the install manifest is version ${JSON.stringify(m.version)}, which this build does not read: no entry would be touched`],
     autostart: { planned: true },

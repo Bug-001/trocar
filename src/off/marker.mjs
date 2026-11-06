@@ -29,6 +29,7 @@ import { writeDurable, editTarget, removeEmptyDirs, readOrNull } from './fsutil.
 import { backupsOf } from './backup.mjs'
 import { trocarHome, collectorIn, switchFileIn } from './paths.mjs'
 import { CODE_OFF } from './names.mjs'
+import { shellWord } from './manifest.mjs'
 import { decodeText, encodeText, CHARSETS, WHY_TEXT } from './text-codec.mjs'
 import { resolveLoc, dirsFor } from './loc.mjs'
 import { doorPorts, isDoorValue, loopbackUrl, LOOPBACK_HOSTS } from './door-value.mjs'
@@ -229,7 +230,7 @@ function undoOne(item, home, fs) {
   if (item.how === 'owned-file') {
     const keep = !!(item.detail || {}).keep
     if (!((item.detail || {}).exact ? t === item.detail.exact : t.includes(SENTINEL))) { // not trocar's (any more): a plan is never trusted over the file
-      return keep ? { result: 'left-text', reason: `${item.path} has the name trocar gives its file there, but not the bytes trocar writes (edited, or written by another trocar); trocar left it: delete it by hand if it is not yours` } : { result: 'already-clean' }
+      return keep ? { result: 'left-text', reason: `${item.path} has the name trocar gives its file there, but not the bytes trocar writes (edited, or written by another trocar); trocar left it: if it is not yours, delete it`, command: `rm ${shellWord(item.path)}` } : { result: 'already-clean' }
     }
     fs.rmSync(file, { force: true })
     if (keep) return done({ removed: true }) // the folder is the agent's, not trocar's
@@ -329,9 +330,9 @@ function undoWrapperByMarker(item, fs) {
     return { result: CODE_OFF.undoneByMarker, restored: true }
   }
   if (!ours && !hasReal) return { result: 'already-clean' }
-  return { result: 'left-text', reason: ours
-    ? `${item.path} is trocar's wrapper, but the real program it runs (${real}) is gone; trocar left the wrapper: reinstall the agent`
-    : `${real} holds a program trocar moved aside, but ${item.path} is no longer trocar's wrapper (the agent was updated or reinstalled); trocar left both: delete ${path.dirname(real)} by hand once ${item.path} runs` }
+  return ours
+    ? { result: 'left-text', reason: `${item.path} is trocar's wrapper, but the real program it runs (${real}) is gone; trocar left the wrapper: reinstall the agent` }
+    : { result: 'left-text', reason: `${real} holds a program trocar moved aside, but ${item.path} is no longer trocar's wrapper (the agent was updated or reinstalled); trocar left both: once ${item.path} runs, delete ${path.dirname(real)}`, command: `rm -r ${shellWord(path.dirname(real))}` }
 }
 
 const isEmptyObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v) && !Object.keys(v).length

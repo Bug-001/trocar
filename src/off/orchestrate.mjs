@@ -234,7 +234,7 @@ const withHarness = (h) => (typeof h === 'string' ? { harness: h } : {})
 export const markerListing = (plan, home) => [...textLines("There is no install record to go by. By trocar's own marks, these would be undone:", home),
   ...labelLines(perFile(plan.map((p) => ({ path: p.path, change: MARKER_TEXT[p.how], harness: p.harness }))).map((p) => [p.harness, `${p.path}: ${p.change}`]), home)].join('\n')
 // one row per file (1.6 §3.4: the receipt counts files, not keys or marks): rows of the same path become the first, their changes joined
-const perFile = (rows) => {
+export const perFile = (rows) => {
   const by = new Map()
   for (const r of rows) { const x = by.get(r.path); if (!x) by.set(r.path, { ...r }); else if (r.change && !x.change.split('; ').includes(r.change)) x.change = `${x.change}; ${r.change}` }
   return [...by.values()]
@@ -408,7 +408,7 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
       else u.changed.push({ path: r.path, change: MARKER_TEXT[r.how], backup: r.restored_from || r.backup || null, result: r.result, ...(r.prior_left ? { prior_left: r.prior_left } : {}), ...withHarness(r.harness) })
       u.events.push({ kind: CODE_OFF.undoneByMarker, code: CODE_OFF.undoneByMarker, ...withHarness(r.harness), path: r.path, reason: `${r.path}: ${MARKER_TEXT[r.how]} (found by trocar's mark; there is no manifest to say what it was before)` })
     } else if (r.result === 'already-clean') u.skipped.push({ what: r.path, reason: "trocar's mark is no longer in this file" })
-    else { u.left.push({ path: r.path, result: r.result, reason: r.reason || `${r.path}: ${r.result}`, ...withHarness(r.harness) }); u.failures.push({ code: r.result === 'left-unparsable' ? 'left-unparsable' : 'entry-not-undone', ...withHarness(r.harness), path: r.path, reason: r.reason || `${r.path}: trocar cannot read it; trocar's value may still be in it` }) }
+    else { u.left.push({ path: r.path, result: r.result, reason: r.reason || `${r.path}: ${r.result}`, ...(r.command ? { command: r.command } : {}), ...withHarness(r.harness) }); u.failures.push({ code: r.result === 'left-unparsable' ? 'left-unparsable' : 'entry-not-undone', ...withHarness(r.harness), path: r.path, reason: r.reason || `${r.path}: trocar cannot read it; trocar's value may still be in it` }) }
   }
   u.changed = perFile(u.changed)
   u.removed = [...new Set(u.removed)]
