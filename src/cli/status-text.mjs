@@ -26,12 +26,14 @@ function daemonClause(d, now) {
 
 const CAPTURED = (h) => (h.captured === true ? 'yes' : h.desired === 'off' ? 'off' : h.captured === false ? 'no' : 'unknown')
 
+/** `on` would refuse it (§3.3 前提) for a carrier of its own; the root missing from the store is one row for the whole machine (Certificate), never one per harness. */
+const needsSetup = (x) => x.setup?.state === 'needed' && (x.setup.missing || []).some((m) => m.what !== 'root-missing')
+
 /** The one-screen summary of `trocar status` (§3.5). `doc` is the 附录 C.3 document. */
 export function statusSummary(doc, { now = Date.now(), colors: c = noColor() } = {}) {
   const names = Object.keys(doc.harnesses || {})
   const installed = (doc.install && doc.install.harnesses) || []
-  const needsSetup = (h) => doc.harnesses[h].setup?.state === 'needed' // on would refuse it (§3.2 前提): the row says so first
-  const shown = names.filter((h) => installed.length === 0 || installed.includes(h) || needsSetup(h))
+  const shown = names.filter((h) => installed.length === 0 || installed.includes(h) || needsSetup(doc.harnesses[h]))
   const on = shown.filter((h) => doc.harnesses[h].desired === 'on')
   const captured = shown.filter((h) => doc.harnesses[h].captured === true)
   if (!shown.length) return [c.bold('No harness is set up for capture yet.'), '', ...readErrorLines(doc), 'Next: trocar install']
@@ -43,7 +45,7 @@ export function statusSummary(doc, { now = Date.now(), colors: c = noColor() } =
     for (const h of shown) {
       const x = doc.harnesses[h]
       const pid = (x.processes || []).find((p) => p.captured === false) || null
-      rows.push([h, CAPTURED(x), needsSetup(h) ? 'set up first: trocar install' : x.captured === true ? notSeenYet(x) : x.captured === null ? ((x.why || []).length ? openText(x, h) : notSeenYet(x) || openText(x, h)) : noteText(x.reason, { harness: h, pid: pid && pid.pid, cause: pid && pid.cause })])
+      rows.push([h, CAPTURED(x), needsSetup(x) && x.captured !== true ? 'set up first: trocar install' : x.captured === true ? notSeenYet(x) : x.captured === null ? ((x.why || []).length ? openText(x, h) : notSeenYet(x) || openText(x, h)) : noteText(x.reason, { harness: h, pid: pid && pid.pid, cause: pid && pid.cause })])
     }
     lines.push(...columns(rows, { width: WIDTH - 2 }).map((l) => `  ${l}`))
   }
@@ -105,7 +107,8 @@ export function statusDetail(doc, h, { finding = null, now = Date.now(), colors:
     if (finding.why) rows.push(['', finding.why])
     finding.commands.forEach((cmd, i) => rows.push([i ? '' : 'Fix', cmd.run]))
     rows.push(['Check', finding.verify])
-  } else if (x.captured === true && !notSeenYet(x)) rows.push(['Why', (x.processes || []).length ? 'every running process of it is captured' : 'no process of it is running; new ones will be captured']) // never claims processes that are not there
+  } else if (needsSetup(x) && x.captured !== true) rows.push(['Why', `${h} has no trocar certificate in place yet`], ['Fix', 'trocar install'], ['', `trocar on ${h}`])
+  else if (x.captured === true && !notSeenYet(x)) rows.push(['Why', (x.processes || []).length ? 'every running process of it is captured' : 'no process of it is running; new ones will be captured']) // never claims processes that are not there
   if (rows.length) lines.push(...rows.flatMap(([l, v]) => wrap(v, WIDTH - 9).map((t, i) => `  ${(i ? '' : l).padEnd(5)}  ${t}`)), '')
   const forms = x.forms || []
   if (forms.length) {
