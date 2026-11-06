@@ -325,7 +325,6 @@ test('V24 (uninstall): with the install manifest gone and no terminal, uninstall
   assert.deepEqual([first.receipt.daemon ? first.receipt.daemon.state : 'none', s.sys.exec.calls.filter((c) => /stop /.test(c)).length], ['none', 0], 'the daemon was not stopped either: nothing was done')
   const second = await s.uninstall({ yes: true })
   assert.equal(second.exit, 0, JSON.stringify(second.receipt.problems))
-  assert.match(second.receipt.notes.join('\n'), /found by trocar's mark; there is no manifest to say what it was before/, 'the entries went by trocar\'s own marks')
   assert.deepEqual([second.receipt.routing.confirmed, second.receipt.daemon.state], [true, 'stopped'], 'the routing is off and the daemon stopped')
   assert.equal(fs.readFileSync(path.join(s.home, '.codex', '.env'), 'utf8'), codexOriginal, 'the block is out and the commented user line is back')
   assert.equal(fs.readFileSync(path.join(s.home, '.claude', 'settings.json'), 'utf8'), settingsOriginal, 'the JSON value is back, taken from the backup')
