@@ -112,9 +112,13 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
   {
     if (!model) return await linuxInstall({ io, env, home, platform, deps, flags, json, say, fs, locked })
     const { backendsFor, sourcesCtx, ownsBy } = await import('../collector/arch/model-backends.mjs')
-    const { runInstall, planInstall } = await import('../collector/model-install.mjs')
+    const { runInstall, planInstall, strayRootRefusal } = await import('../collector/model-install.mjs')
     const { renderHook } = await import('../collector/harness/templates/index.mjs')
     const b = deps.backends || await backendsFor({ os: platform, home, run: deps.exec || null, env, fs })
+    // 4.11 §3 ㉔: a trocar root the record does not list refuses the plan, the dry run and the run alike, before anything is written
+    const refuse = (x) => { if (json) printJson(io, { ...newReceipt('install'), ok: false, error: { code: x.code, message: x.reason }, notes: [x.reason] }); else io.err(fit([`trocar install: ${x.reason}`], { home }).join('\n')); return EXIT.incomplete }
+    const stray = await strayRootRefusal({ os: platform, m: (await import('../collector/core/trust/journal.mjs')).readManifest(path.join(home, '.trocar', 'collector'), fs), rootStore: b.rootStore })
+    if (stray) return refuse(stray)
     const harnesses = deps.harnesses || await (await import('../collector/harness/index.mjs')).loadHarnesses()
     const ctx = sourcesCtx({ os: platform, home, env, dirs: b.dirs, policy: b.policy, which: deps.which || null, fs })
     const need = await missingOf(only, { platform, harnesses, ctx, home, rootStore: b.rootStore, fs })
@@ -160,12 +164,14 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
     const r = await locked(async () => {
       const r = await runInstall({ os: platform, home, env, harnesses, custody: b.custody, rootStore: b.rootStore, installHelper: b.installHelper, interactive: isInteractive(io),
         wrapperKit: b.wrapperKit, facts: b.facts, ctx, unit: only ? null : unit, only, code: codeId(root), owns: deps.owns || ownsBy({ os: platform, home, fs }), renderHook, fs, ...(deps.now ? { now: deps.now } : {}) })
+      if (r.refusal) return r // ㉔ under the lock: nothing was written, and nothing more is
       const { row } = await boardPortRow(home, fs) // before the daemon starts below: it reads the port, never picks one
       if (row) { r.pending.push(row); r.exit = 1 }
       if (pathItem) { r.path = await placePath({ home, env, platform, fs, deps }); if (r.path.problem) { r.problems.push(r.path.problem); r.exit = 1 } }
       return r
     })
     if (!r) return EXIT.incomplete
+    if (r.refusal) return refuse(r.refusal)
     // D61: the login registration and the daemon, through the one seam every command uses (ensureDaemonUp, src/collector/install.mjs)
     // Set up (only): the login entry is not in its plan, so it is neither rewritten above nor registered here (4.4 #13); the daemon asking is up, this only reads it
     const dmn = unit ? await (await import('../collector/install.mjs')).ensureDaemonUp({ osName: platform, dir: path.join(home, '.trocar', 'collector'), env, fs, unit, register: !only, ...(deps.request ? { request: deps.request } : {}), ...(deps.sleep ? { pause: deps.sleep } : {}) }) : { up: false, started: false, notes: [], problems: [] }

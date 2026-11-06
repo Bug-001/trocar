@@ -191,6 +191,10 @@ trocar uninstall               # removes all of trocar's changes; keeps your rec
 trocar uninstall --purge-data  # also deletes the records and their index (asks first)
 ```
 
+On macOS and Windows, `uninstall` takes every trocar root out of your user trust store, also one an earlier install left
+without a record. `install` keeps you to one trocar root: if your trust store already holds one that trocar's install
+record does not list, it changes nothing, names that root, and asks you to run `trocar uninstall` first.
+
 On Linux the machine's capability helper is one more step, with `sudo`. Installed from npm, run it after `uninstall`:
 `sudo "$(command -v node)" "$(command -v trocar)" setup-helper --remove`.
 

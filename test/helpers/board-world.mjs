@@ -56,6 +56,7 @@ export function sharedTrust(state) {
       write('store.json', { ...s, held: [...s.held, rootIdOf(der).fp256] }); return { ok: true }
     },
     remove: (id) => { call('remove'); const s = store(); write('store.json', { ...s, held: s.held.filter((f) => f !== id.fp256) }); return { ok: true } },
+    list: () => ({ roots: store().held.map((fp256) => ({ fp256 })) }), // only trocar's roots are ever held here
   }
   return { custody, rootStore, calls: () => { try { return fs.readFileSync(at('calls.log'), 'utf8').split('\n').filter(Boolean) } catch { return [] } }, setStore: (v) => write('store.json', v) }
 }
