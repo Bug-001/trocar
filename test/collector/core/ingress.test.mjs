@@ -65,11 +65,11 @@ async function lab(t, { meta = {}, timing = {}, connectUpstream, redirector = cr
     store: { envelope: (e) => { envelopes.push(e); return true }, flow: (f) => { flows.push(structuredClone(f)); return true } },
     onFailure: (f) => failures.push(f), ...(noToken ? {} : { ingressToken: TOKEN }), ...(onHeld ? { onHeld } : {}),
   })
-  const { ingressPort } = await engine.listen({ ingress: { port: 0 } })
+  const { port: transparentPort, ingressPort } = await engine.listen({ ingress: { port: 0 } })
   const made = []
   t.after(async () => { for (const c of made) c.sock.destroy(); echo.close(); for (const s of upConns) s.destroy(); await closeWithin(engine) })
   const settled = async (n) => { for (let i = 0; i < 400 && flows.length < n; i++) await sleep(10) }
-  return { engine, ingressPort, echo, echoPort, upConns, dials, flows, failures, envelopes, redirector, settled, client: () => { const c = client(ingressPort); made.push(c); return c } }
+  return { engine, transparentPort, ingressPort, echo, echoPort, upConns, dials, flows, failures, envelopes, redirector, settled, client: () => { const c = client(ingressPort); made.push(c); return c } }
 }
 
 test('W13 CONNECT with the right credentials: the upstream is dialled, then 200; the agent\'s bytes go through; the row says how it came and carries no prelude', T, async (t) => {
@@ -471,6 +471,30 @@ test('W15 a direct upstream, decrypted: one dial for the whole flow (the wrapper
   assert.deepEqual(L.dials, [{ address: '127.0.0.1', port: o.port }], 'one upstream dial for one agent connection'); assert.equal(o.conns.length, 1)
   assert.deepEqual(L.envelopes.map((e) => [e.host, e.proc.pid, e.proc.agent, e.scheme]), [['upstream.test', 4242, 'claude-code', 'https']])
   assert.deepEqual([L.flows[0].decision, L.flows[0].not_captured ?? null, L.flows[0].upstream, 'prelude' in L.flows[0]], ['decrypt', null, { kind: 'direct' }, false])
+  assert.deepEqual(L.failures, [])
+})
+
+// 4.8 §5.2: a call that came through the proxy entry is recorded in the same format as one the transparent path steered — only the fields that
+// say how it came (and per-flow ids and times) may differ
+test('one call, two ways in: through the transparent path and through the proxy entry, the envelopes and the direct-upstream connection rows are the same', T, async (t) => {
+  const o = await origin(t)
+  const L = await lab(t, { upstreamCa: privCa.certPem, meta: { decrypt: true } })
+  const sock = net.connect(L.transparentPort, '127.0.0.1'); sock.on('error', () => {})
+  await new Promise((r) => sock.once('connect', r))
+  L.redirector.set(sock.localPort, { dst: { address: '127.0.0.1', port: o.port, family: 4 }, pid: 4242, agent: 'claude-code', decrypt: true })
+  assert.equal((await talk(sock, trocarCa.certPem)).got, RESP)
+  await L.settled(1)
+  assert.equal((await talk((await tunnel(L.ingressPort, `127.0.0.1:${o.port}`)).sock, trocarCa.certPem)).got, RESP)
+  await L.settled(2)
+  assert.deepEqual([L.flows[0].ingress, typeof L.flows[1].ingress], [undefined, 'object'], 'the first came the transparent way, the second through the entry')
+  assert.equal(L.envelopes.length, 2)
+  // besides the fields the spec names: duration_ms, a measured time like ts*; on the row bytes_up / bytes_down, which count the TLS handshake
+  // (its signature's DER length varies per connection); the call's own bytes are on the envelope (body_wire_bytes) and compared there
+  const drop = (x, keys) => { const y = structuredClone(x); for (const k of Object.keys(y)) if (keys.includes(k) || k.startsWith('ts')) delete y[k]; return y }
+  const env = (e) => { const y = drop(e, ['id', 'flow_id', 'seq', 'capture', 'dst', 'duration_ms']); if (y.proc) { delete y.proc.pid; delete y.proc.exe } return y }
+  assert.deepEqual(env(L.envelopes[1]), env(L.envelopes[0]))
+  const row = (f) => drop(f, ['id', 'flow_id', 'seq', 'capture', 'dst', 'ingress', 'pid_source', 'pid_ms', 'unread', 'facts_ms', 'held_ms', 'upstream', 'duration_ms', 'bytes_up', 'bytes_down'])
+  assert.deepEqual(row(L.flows[1]), row(L.flows[0]))
   assert.deepEqual(L.failures, [])
 })
 
