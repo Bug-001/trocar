@@ -59,7 +59,8 @@ console.log(JSON.stringify({ calls, truncated, retained, blocks }))`
 // single-threaded: a concurrent compile job still in flight holds a closure and its context across the read's last GCs (+1.33 MB on
 // one read in about two at live(0.12)), a V8 artefact that is not what the read keeps. No bytecode flushing: on node 26 the bytecode
 // compiled before the baseline is flushed by the read's GCs in some reads and not in others (the 2N read measured 1.07 MB apart with
-// heap snapshots that differ by 0.14 MB, all of it bytecode: 933 against 576 B a call), so the baseline is code the read may give back
+// heap snapshots that differ by 0.14 MB, all of it bytecode: 933 against 576 B a call), so the baseline is code the read may give back.
+// The flag isolates the data the read retains, which is what the budget is about: the product runs without it
 const cold = (home, id) => once(['--require', NO_REAL_OS, '--expose-gc', '--single-threaded', '--no-flush-bytecode', ...heapFlags(), '--input-type=module', '-e', READ, home, id], 'a cold read')
 const read = async (opts, calls) => {
   const home = path.join(tmpDir('trocar-spine-'), '.trocar'), s = bigSession({ home, ...opts })
