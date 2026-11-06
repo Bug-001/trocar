@@ -14,8 +14,8 @@ const rec = (id, body, over = {}) => ({
 
 const envUser = (p) => ({ type: 'message', role: 'user', content: [{ type: 'input_text', text: `<environment_context>\n  <cwd>${p}</cwd>\n  <shell>zsh</shell>\n</environment_context>` }] });
 const BUILD = {
-  cc: (p) => ({ system: [{ type: 'text', text: 'You are Claude Code.' }, { type: 'text', text: 'Be brief.' }],
-    messages: [{ role: 'user', content: [{ type: 'text', text: `# Environment\nYou have been invoked in the following environment: \n - Primary working directory: ${p}\n - Is a git repository: true\nEnd.` }, { type: 'text', text: 'q0' }] }] }),
+  cc: (p) => ({ system: [{ type: 'text', text: 'You are Claude Code.' }, { type: 'text', text: 'Be brief.' }], // the list sits past the anchor, in a system-role message
+    messages: [{ role: 'user', content: 'q0' }, { role: 'system', content: [{ type: 'text', text: `# Environment\nYou have been invoked in the following environment: \n - Primary working directory: ${p}\n - Is a git repository: true\nEnd.` }] }] }),
   codex: (p) => ({ instructions: 'You are Codex.', input: [envUser(p), { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'q0' }] }] }),
   opencode: (p) => ({ messages: [{ role: 'system', content: `You are opencode.\n<env>\n  Working directory: ${p}\n  Is directory a git repo: yes\n</env>` }, { role: 'user', content: 'q0' }] }),
   hermes: (p) => ({ messages: [{ role: 'system', content: `You are Hermes.\nCurrent working directory: ${p}\nEnd.` }, { role: 'user', content: 'q0' }] }),
@@ -35,17 +35,16 @@ test('3.4 #8 every harness with cwd rules reads the absolute path its request st
   // cc subagent prompt: a bare line, with or without list markers
   for (const line of ['Working directory: /w/project', '  Working directory: /w/project', '* Primary working directory: /w/project']) {
     const sub = BUILD.cc('/w/x');
-    sub.system[1].text = `Here is useful information.\n<env>\n${line}\n</env>`;
+    sub.system[1].text = `Here is useful information.\n<env>\n${line}\n</env>`; sub.messages.pop();
     assert.equal(projectOf(rec('cc', sub)), '/w/project', line);
   }
 });
 
-test('3.4 #8 a person quoting a cwd line in a prompt names no project; the environment list after it does', () => {
-  const said = (...texts) => ({ system: [{ type: 'text', text: 'You are Claude Code.' }], messages: texts.map((text) => ({ role: 'user', content: text })) })
-  const env = BUILD.cc('/w/real').messages[0].content[0].text
+test('3.4 #8 a person quoting a cwd line in a prompt names no project; the system text still does', () => {
   for (const quote of ['Working directory: /w/decoy', ' - Primary working directory: /w/decoy', 'why does it say\n - Primary working directory: /w/decoy\nhere?']) {
-    assert.equal(projectOf(rec('cc', said(quote))), null, quote)
-    assert.equal(projectOf(rec('cc', said(quote, env))), '/w/real', quote)
+    assert.equal(projectOf(rec('cc', { system: [{ type: 'text', text: 'You are Claude Code.' }], messages: [{ role: 'user', content: quote }] })), null, quote)
+    const body = BUILD.cc('/w/real'); body.messages[0].content = quote
+    assert.equal(projectOf(rec('cc', body)), '/w/real', quote)
   }
 })
 
