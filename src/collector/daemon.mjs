@@ -275,19 +275,22 @@ function boardFor({ P, failure, query, tips, log = () => {} }) {
     const cfg = readIngressConfig({ dir: P.dir })
     if (cfg.boardPort === undefined) { if (cfg.error) st = { ...st, reason: `${cfg.error}: run trocar install` }; return }
     const port = cfg.boardPort
+    const fail = (e) => {
+      st = { port, state: 'port-taken', reason: `the board could not listen on 127.0.0.1:${port} (${(e && e.code) || errText(e)}); capture goes on` }
+      failure('daemon', coded(e, 'start-failed'), { port })
+    }
     try {
       token = boardToken(P.dir)
-      const s = createBoard({ home: path.dirname(P.dir), token, query, tips }).server
+      const b = createBoard({ home: path.dirname(P.dir), token, query, tips }), s = b.server
       s.on('clientError', (e, sock) => sock.destroy())
       await new Promise((resolve, reject) => { s.once('error', reject); s.listen(port, '127.0.0.1', resolve) })
       s.on('error', (e) => log('board', e)) // after the listen: the board never takes the daemon down
       if (stopped) { s.close(); return } // the daemon stopped while it was listening
       server = s
       st = { port, state: 'serving', reason: null }
-    } catch (e) {
-      st = { port, state: 'port-taken', reason: `the board could not listen on 127.0.0.1:${port} (${(e && e.code) || errText(e)}); capture goes on` }
-      failure('daemon', coded(e, 'start-failed'), { port })
-    }
+      // the static plane is read now, while `on` is answered: a walk that fails takes the board down and is said, as a failed listen is
+      b.statics().catch((e) => { if (stopped) return; if (server === s) { s.close(); server = null }; fail(e) })
+    } catch (e) { fail(e) }
   }
   const tokenAnswer = async () => { await started; return { ...st, token } }
   return {

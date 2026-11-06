@@ -13,6 +13,8 @@ import { fileURLToPath } from 'node:url';
 import { CONTROL_TOKEN_HEADER } from '../../src/off/token-header.mjs';
 import { rawHome, writeSegment } from '../query/raw-home.mjs';
 import { serveFace, request as req, withToken } from './face.mjs';
+import { createServer } from '../../src/server.mjs';
+import { tmpDir } from '../helpers/tmp.mjs';
 
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'src');
 
@@ -103,3 +105,19 @@ test('the static plane: the build in src/web/board from memory, nothing else (4.
   } finally { f.close(); }
 });
 
+
+// D62 ①: mounting the face reads none of the static plane, so the daemon's start never waits on that walk; the first read of it
+// (the daemon asks for it once the board listens, or the first page) is what the plane serves from then on, and a walk that fails is
+// handed back to the one who asked, never thrown at the mount.
+test('the static plane is read after the face is mounted, not by mounting it; a walk that fails is a rejection, not a throw', async () => {
+  const webDir = path.join(tmpDir('trocar-gate-web-'), 'board');
+  const f = await serve({ webDir });
+  try {
+    nodeFs.mkdirSync(webDir);
+    nodeFs.writeFileSync(path.join(webDir, 'index.html'), '<!doctype html><p>board</p>');
+    const r = await req(f.port, '/');
+    assert.deepEqual([r.status, r.body], [200, '<!doctype html><p>board</p>']);
+  } finally { f.close(); }
+  const { statics } = createServer({ home: rawHome('trocar-gate-'), token: 'x', query: {}, webDir: path.join(tmpDir('trocar-gate-web-'), 'none') });
+  await assert.rejects(statics(), { code: 'ENOENT' });
+});
