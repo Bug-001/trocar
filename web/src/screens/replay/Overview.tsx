@@ -1,6 +1,7 @@
 // web/src/screens/replay/Overview.tsx — the sidebar's Overview tab (2.5): one row per chapter, and in an open chapter its tools, system
-// prompt, prompts and sub-agents, each row a jump. Only the versions are read in the step move's commit: the model runs after
-// useDeferredValue, in a memo on the deferred versions. The chapter and group state lives on the desk (s.partFlips, s.navOpen); a toggle
+// prompt, prompts and sub-agents, each row a jump. It is drawn on the 'nav' channel alone: the controller bumps it once the step's frame
+// is out and the reader has stopped (2.3 §归约前沿), so a step move never runs the model; the drawing itself is deferred
+// (useDeferredValue) behind anything urgent. The chapter and group state lives on the desk (s.partFlips, s.navOpen); a toggle
 // redraws this tree alone. The rows are drawn from overview-model.mjs and carry data-ovjump: `<step>:<block | prompt | change>`, `agent:<lane>`.
 import { memo, useDeferredValue, useEffect, useLayoutEffect, useReducer, useRef, type PointerEvent, type ReactNode, type Ref } from 'react'
 import { Button, Disclosure, DisclosurePanel } from 'react-aria-components'
@@ -22,11 +23,12 @@ type Ctx = { s: DeskState, redraw: () => void }
 
 function toggle(set: Set<unknown>, k: unknown) { if (!set.delete(k)) set.add(k) }
 // a label's title exists only while the label is cut off (2.5 §只做导航): set after each drawing, so a keyboard reader has it too, and
-// again on pointer-over, since dragging the sidebar wider or narrower cuts labels without a drawing
-const tip = (t: HTMLElement) => { t.title = t.scrollWidth > t.clientWidth ? t.textContent! : '' }
+// again on pointer-over, since dragging the sidebar wider or narrower cuts labels without a drawing. All widths are read before any title
+// is written: one layout for the tree
+const tips = (ls: HTMLElement[]) => { const cut = ls.map((t) => t.scrollWidth > t.clientWidth); ls.forEach((t, i) => { t.title = cut[i] ? t.textContent! : '' }) }
 function tipIfCut(e: PointerEvent) {
   const t = (e.target as HTMLElement).closest<HTMLElement>('.ovlbl')
-  if (t) tip(t)
+  if (t) tips([t])
 }
 
 const Row = ({ jump, go, label, current, children }: { jump: string, go: () => void, label: string, current?: boolean, children?: ReactNode }) =>
@@ -95,20 +97,20 @@ function PartRow({ c, p, here }: { c: Ctx, p: Part, here: Ref<HTMLButtonElement>
   </Disclosure>
 }
 
-// nav, step: the deferred versions this tree is drawn for
-const Tree = memo(function Tree({ desk }: { desk: DeskView, nav: number, step: number }) {
+// nav: the deferred version this tree is drawn for
+const Tree = memo(function Tree({ desk }: { desk: DeskView, nav: number }) {
   const [, redraw] = useReducer((n: number) => n + 1, 0)
   const here = useRef<HTMLButtonElement>(null)
   const { single, parts } = overviewModel(desk.s), c = { s: desk.s, redraw }
   const current = parts.find((p: Part) => p.current)?.k, root = useRef<HTMLDivElement>(null)
   useEffect(() => { here.current?.scrollIntoView({ block: 'nearest' }) }, [current])
-  useLayoutEffect(() => { root.current!.querySelectorAll<HTMLElement>('.ovlbl').forEach(tip) })
+  useLayoutEffect(() => { tips([...root.current!.querySelectorAll<HTMLElement>('.ovlbl')]) })
   return <div ref={root} className="ovw" onPointerOver={tipIfCut}>
     {single ? (parts[0] ? <Items c={c} p={parts[0]} /> : null) : parts.map((p: Part) => <PartRow key={p.k} c={c} p={p} here={p.current ? here : undefined} />)}
   </div>
 })
 
 export function Overview({ desk }: { desk: DeskView }) {
-  const nav = useDeferredValue(useDeskVersion(desk, 'nav')), step = useDeferredValue(useDeskVersion(desk, 'step'))
-  return <Tree desk={desk} nav={nav} step={step} />
+  const nav = useDeferredValue(useDeskVersion(desk, 'nav'))
+  return nav ? <Tree desk={desk} nav={nav} /> : <div className="ovw" /> // the rough page has no Overview (2.3 §大致页面)
 }
