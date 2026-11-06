@@ -23,7 +23,7 @@ test('a WebSocket reply counts as in flight while it is written, and drops back 
   assert.equal((await done.events()).at(-1).type, 'response.completed')
   assert.ok(await until(async () => (await inflight(mock)) === 0), 'back to 0 once it completed, the connection still open')
 
-  const cut = await wsConnect(mock.port, { headers: { 'X-Mock-Scenario': 'long-drip' } })
+  const cut = await wsConnect(mock.port, { headers: { 'X-Mock-Scenario': 'stall-after-first' } }) // held until the client goes (30 s stall)
   cut.sendText(create)
   assert.ok(await until(async () => (await inflight(mock)) === 1))
   cut.sock.destroy()
