@@ -12,7 +12,7 @@ import { startDaemon } from '../../src/collector/daemon.mjs'
 import { loadIngressConfig, INGRESS_FILE } from '../../src/collector/core/ingress-config.mjs'
 import { tmpDir } from './tmp.mjs'
 
-const NOBODY = { ownerOf: async () => null, factsOf: async () => null, proc: {}, proxyOf: () => null, systemProxy: () => null, procTable: async () => [], close: () => {} }
+const NOBODY = { ownerOf: async () => null, factsOf: async () => null, proc: {}, proxyOf: () => null, bypassOf: () => [], systemProxy: () => null, procTable: async () => [], close: () => {} }
 
 /** Can this host serve `platform`'s control endpoint for real? A platform whose endpoint is a pipe name (its control-path exports PIPE_PREFIX) is
  *  served everywhere: on a POSIX host as a relative unix socket (withScratchCwd). A platform whose endpoint is a unix socket in the tmp directory

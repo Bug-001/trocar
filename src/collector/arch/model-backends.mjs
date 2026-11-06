@@ -120,13 +120,14 @@ export async function systemProxyWatch({ up, read, io = {}, changes = null, fail
 
 /** The door's readers of the world for the model collector (4.11 §1, createModelCollector): who owns a socket and that pid's facts, its env / cwd /
  *  parent (P7), how a proxy address is dialled, the system proxy now (a watcher's last read), the process table (P12). → { ownerOf, factsOf, proc,
- *  proxyOf, systemProxy, procTable, close }. Read-only, as the arch's own modules are. `io`: the OS readers only (a test's seam, 0.1 §3; the daemon's
+ *  proxyOf, bypassOf, systemProxy, procTable, close }. Read-only, as the arch's own modules are. `io`: the OS readers only (a test's seam, 0.1 §3; the daemon's
  *  `model.io`) — `exec`, a spawnSync-shaped runner of ps / socktable / procenv (darwin) and of the process table (both); `helper`, startHelper's
  *  { spawn, exe, args } (win32). Everything above them stays this function's own. */
 export async function doorPartsFor({ os, env = process.env, event = () => {}, failure = () => {}, io = {} }) {
   if (!isModelOs(os)) throw new Error(`the collector model runs on macOS and Windows, not ${os}`)
   const [up, { listProcs, psTableVia }] = await Promise.all([import(`./${os}/upstream.mjs`), import('../../off/proc.mjs')])
   const proxyOf = (text) => { const p = up.parseProxyText(text); return p && p.ok ? { kind: p.kind, host: p.host, port: p.port, ...(p.credentialed ? { auth: up.proxyAuthOf(text) } : {}) } : null }
+  const bypassOf = (text) => up.translateBypass(text, 'no-proxy').bypass // an agent ancestor's NO_PROXY, read as the agent's own libraries read it (4.11 ⑥)
   let parts, watch, winHelper = null, runner = null
   if (os === 'darwin') {
     const [{ ownerOfSocket, createTableReader }, procinfo, { execTool, runAsync }] = await Promise.all([import('./darwin/socktable.mjs'), import('./darwin/procinfo.mjs'), import('../../off/exec.mjs')])
@@ -153,7 +154,7 @@ export async function doorPartsFor({ os, env = process.env, event = () => {}, fa
   const procTable = winHelper
     ? () => psTableVia(winHelper, { timeoutMs: 10000 })
     : () => listProcs({ platform: os, env, exec: runner })
-  return { ...parts, proxyOf, systemProxy: watch.now, procTable, helper: winHelper, close: () => { watch.stop(); parts.close() } }
+  return { ...parts, proxyOf, bypassOf, systemProxy: watch.now, procTable, helper: winHelper, close: () => { watch.stop(); parts.close() } }
 }
 
 /** The proxy-mode half of status's facts on macOS / Windows (1.6 §9.7, 4.11 CM21): the model's per-form reader over this user's install manifest, the daemon's

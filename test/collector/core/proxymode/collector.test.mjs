@@ -11,7 +11,8 @@ import path from 'node:path'
 import { createModelCollector } from '../../../../src/collector/core/proxymode/collector.mjs'
 import { HOLDER_POLL_MS } from '../../../../src/collector/core/proxymode/holders.mjs'
 import { verdictOf } from '../../../../src/collector/core/proxymode/verdict.mjs'
-import { upstreamFor } from '../../../../src/collector/core/proxymode/chain.mjs'
+import { upstreamFor, MAX_DEPTH } from '../../../../src/collector/core/proxymode/chain.mjs'
+import { translateBypass } from '../../../../src/collector/arch/darwin/upstream.mjs'
 import { certPem } from '../../../../src/collector/core/tls/cert.mjs'
 import { TEMPLATES } from '../../../../src/collector/harness/templates/index.mjs'
 import { loadIngressConfig } from '../../../../src/collector/core/ingress-config.mjs'
@@ -31,6 +32,7 @@ const TOKEN = 'ab'.repeat(16)
 const iso = (ms) => new Date(ms).toISOString()
 const PEER = { address: '127.0.0.1', port: 50000 }
 const proxyOf = (u) => { const x = new URL(u); return { kind: x.protocol.startsWith('socks') ? 'socks5' : 'http', host: x.hostname, port: Number(x.port) } }
+const bypassOf = (t) => translateBypass(t, 'no-proxy').bypass
 const dialOf = (up, host) => (up.url == null || (up.bypass || []).some((b) => b.value === host) ? { kind: 'direct' } : proxyOf(up.url))
 const stub = custodyStub(); stub.create()
 const STUB_PEM = certPem(stub.rootDer)
@@ -41,11 +43,12 @@ const manifestOf = (h, { on = [], liveness = {} } = {}) => ({ ...newManifest(), 
 /** One collector over one harness: `w` is what the injected readers answer now (facts, env, cwd, verdict ctx, manifest, process table). */
 async function rig({ desc, os = 'darwin', custody = stub, rootPem = STUB_PEM, w = {}, opened = [], taken = new Set(), timers, ingress, upstreamRoots = null, others = [], forget, holds, doorHangMs, dir = tmpDir() } = {}) {
   const asked = {}, gate = (q, x) => w.wait?.(q, x, asked[`${q}\0${x}`] = (asked[`${q}\0${x}`] ?? 0) + 1) // w.wait(question, pid, nth of that question of that pid): a promise holds it
+  const of = (by, q, all) => (by && Object.hasOwn(by, q) ? by[q] : all) // a reader's answer for one pid (w.factsBy / w.envBy), else the world's one answer
   const records = [], ctx = { os, home: '/h', dirs: {}, join: path.posix.join, readFile: (p) => w.ctx.readFile(p), readdir: (d) => w.ctx.readdir(d), exists: (p) => w.ctx.exists(p), policy: (s) => w.ctx.policy(s) }
   w.ctx ||= ctxOf(newWorld(os))
-  const c = createModelCollector({ harnesses: [desc, ...others], dir, ctx, custody, rootPem, proxyOf, upstreamRoots, templates: TEMPLATES, ownUid: 501, timers, doorHangMs, record: (r) => records.push(r),
-    identify: (f) => (f.agent ? { reason: 'match', agent: f.agent } : { reason: 'no-match' }), ownerOf: async () => { await gate('ownerOf'); return { pid: w.pid, source: 'socket-table', ms: 1, ...(w.owner || {}) } }, factsOf: async (q, o) => { await gate('factsOf', q); if (w.facts == null && w.factsWhy && o && o.onUnread) o.onUnread(w.factsWhy); return w.facts },
-    proc: { envOf: async (q, names) => (await gate('envOf', q), w.envCalls = (w.envCalls || 0) + 1, w.env == null ? null : (w.asked && w.asked.push(...names), Object.fromEntries(Object.entries(w.env).filter(([k]) => names.includes(k))))), cwdOf: async (q) => (await gate('cwdOf', q), w.cwd ?? null), parentOf: async (q) => (await gate('parentOf', q), w.parent ? w.parent(q) : null) }, systemProxy: () => w.sp ?? null, hostsOf: () => w.hostSet ?? null,
+  const c = createModelCollector({ harnesses: [desc, ...others], dir, ctx, custody, rootPem, proxyOf, bypassOf, upstreamRoots, templates: TEMPLATES, ownUid: 501, timers, doorHangMs, record: (r) => records.push(r),
+    identify: (f) => (f.pending ? { reason: 'pending' } : f.agent ? { reason: 'match', agent: f.agent } : { reason: 'no-match' }), ownerOf: async () => { await gate('ownerOf'); return { pid: w.pid, source: 'socket-table', ms: 1, ...(w.owner || {}) } }, factsOf: async (q, o) => { await gate('factsOf', q); const f = of(w.factsBy, q, w.facts); if (f == null && w.factsWhy && o && o.onUnread) o.onUnread(w.factsWhy); return f },
+    proc: { envOf: async (q, names) => { await gate('envOf', q); w.envCalls = (w.envCalls || 0) + 1; const e = of(w.envBy, q, w.env); return e == null ? null : (w.asked && w.asked.push(...names), Object.fromEntries(Object.entries(e).filter(([k]) => names.includes(k)))) }, cwdOf: async (q) => (await gate('cwdOf', q), w.cwd ?? null), parentOf: async (q) => (await gate('parentOf', q), w.parent ? w.parent(q) : null) }, systemProxy: () => w.sp ?? null, hostsOf: () => w.hostSet ?? null,
     readState: () => w.state, readIngress: () => ingress || { groupPorts: {}, listenerToken: TOKEN }, readManifest: () => { if (w.manifestErr) throw w.manifestErr; return w.manifest || manifestOf(desc.name) }, procTable: async () => w.procs || [], clock: () => w.now ?? INSTALLED + 5, ...(forget ? { forget } : {}), ...(holds ? { holds } : {}) })
   c.bindDoors({ open: async (l) => { for (const x of l) { if (taken.has(x.port)) throw Object.assign(new Error('listen EADDRINUSE'), { code: 'EADDRINUSE' }); opened.push(x) } }, close: async (ids) => { opened.push(...ids.map((id) => ({ closed: id }))) } })
   await c.start()
@@ -225,6 +228,88 @@ test('CM20 / ⑥ · an unidentified process at a credentialed door (an agent\'s 
       c.close()
     }
   }
+})
+
+// ⑥ / invariant 6: curl run by an agent whose proxy is only in the shell it was started from inherits the door; without trocar it would have inherited
+// the agent's proxy and NO_PROXY. Generated over each credentialed darwin form × the walk's shapes; the oracle is the rule (the ancestor's value, its
+// NO_PROXY direct) or, where it does not apply, the answer without an ancestor. The row stays the child's: untracked · not-an-agent, nothing in status.
+test('⑥ · an unidentified child dials its nearest routed agent ancestor\'s upstream, that ancestor\'s NO_PROXY direct; anything else is as before', async () => {
+  const CORP = { kind: 'http', host: 'proxy.corp', port: 3128 }, AT = INSTALLED + 1, C = 7000, S = 7100, A = 7200, B = 7300
+  const plain = { exe: '/bin/sh', uid: 501, agent: null, startedAt: AT }
+  for (const d of descs.filter((x) => x.proxyMode.forms.some((f) => f.os.includes('darwin') && x.proxyMode.routes[f.route]?.auth !== false))) {
+    const f = d.proxyMode.forms.find((x) => x.os.includes('darwin') && d.proxyMode.routes[x.route]?.auth !== false)
+    const g = `${d.name}:${f.route}`, door = `http://${g}:${TOKEN}@127.0.0.1:18105`
+    const other = descs.find((x) => x.name !== d.name)
+    const agentOf = (name) => ({ exe: '/bin/agent', uid: 501, agent: name, startedAt: AT })
+    const agentEnv = { [d.proxy.env[0]]: 'http://proxy.corp:3128', NO_PROXY: '.intra.corp' }
+    const links = (...pids) => (q) => { const i = pids.indexOf(q); return i >= 0 && i + 1 < pids.length ? { ppid: pids[i + 1], startedAt: AT } : null }
+    const deep = Array.from({ length: MAX_DEPTH + 1 }, (_, i) => S + i)
+    for (const [label, w, want] of [
+      ['the parent is the agent', { parent: links(C, A), factsBy: { [A]: agentOf(d.name) }, envBy: { [A]: agentEnv } }, 'ancestor'],
+      ['the agent two levels up', { parent: links(C, S, A), factsBy: { [S]: plain, [A]: agentOf(d.name) }, envBy: { [A]: agentEnv } }, 'ancestor'],
+      ['no agent above', { parent: links(C, S), factsBy: { [S]: plain }, envBy: { [S]: agentEnv } }, 'before'],
+      ['the agent above is not on', { parent: links(C, A), factsBy: { [A]: agentOf(other.name) }, envBy: { [A]: agentEnv } }, 'before'],
+      ['an agent on above an agent off', { parent: links(C, B, A), factsBy: { [B]: agentOf(other.name), [A]: agentOf(d.name) }, envBy: { [B]: { [d.proxy.env[0]]: door }, [A]: agentEnv } }, 'ancestor'],
+      ['the chain ends at the root', { parent: () => null, factsBy: { [A]: agentOf(d.name) }, envBy: { [A]: agentEnv } }, 'before'],
+      ['the parent unread', { parent: () => { throw new Error('ps timed out') }, factsBy: { [A]: agentOf(d.name) }, envBy: { [A]: agentEnv } }, 'unknown'],
+      ['an ancestor\'s facts unread', { parent: links(C, S, A), factsBy: { [S]: null, [A]: agentOf(d.name) }, envBy: { [A]: agentEnv } }, 'unknown'],
+      ['the agent past the walk\'s limit', { parent: links(C, ...deep, A), factsBy: { ...Object.fromEntries(deep.map((q) => [q, plain])), [A]: agentOf(d.name) }, envBy: { [A]: agentEnv } }, 'before'],
+      ['a recorded prior', { parent: links(C, A), factsBy: { [A]: agentOf(d.name) }, envBy: { [A]: agentEnv }, prior: 'http://prior.corp:3' }, 'prior'],
+      ['the agent\'s environment unread', { parent: links(C, A), factsBy: { [A]: agentOf(d.name) }, envBy: { [A]: null } }, 'unknown'],
+      ['the child\'s own hook value', { parent: links(C, A), factsBy: { [A]: agentOf(d.name) }, envBy: { [A]: agentEnv }, env: { TROCAR_PRIOR_PROXY: 'http://hooked.corp:9' } }, 'hook'],
+    ]) {
+      const on = w.prior ? [{ phase: 'on', harness: d.name, route: f.route, kind: 'json-key', prior_value: w.prior }] : []
+      const { c, records } = await rig({ desc: d, others: [other], w: { pid: C, facts: plain, env: { [d.proxy.env[0]]: door }, ...w, manifest: manifestOf(d.name, { on }) } })
+      await c.on({ harnesses: [d.name], groups: { [g]: 18105 } })
+      const dial = async (host) => c.lookupIngress({ peer: PEER, user: g, target: { address: host, port: 443 } })
+      const api = await dial('api.example'), intra = await dial('svc.intra.corp')
+      const before = await upstreamFor({ desc: d, facts: { pid: C, start: AT, env: w.env || { [d.proxy.env[0]]: door }, hookOnly: true }, recordedPrior: w.prior || null })
+      const expect = { ancestor: [CORP, { kind: 'direct' }], before: [dialOf(before, 'api.example'), dialOf(before, 'svc.intra.corp')], prior: [proxyOf(w.prior || 'http://x:1'), proxyOf(w.prior || 'http://x:1')], unknown: [{ kind: 'direct' }, { kind: 'direct' }], hook: [proxyOf('http://hooked.corp:9'), proxyOf('http://hooked.corp:9')] }[want]
+      assert.deepEqual([api.upstream, intra.upstream], expect, `${d.name} · ${label}`)
+      for (const m of [api, intra]) assert.deepEqual([m.decrypt, m.skip], [false, { not_captured: 'untracked', reason: 'not-an-agent' }], `${d.name} · ${label}: the row is the child's`)
+      assert.deepEqual(c.upstreams()[g] || [], [], `${d.name} · ${label}: status lists no answer for a process it could not tell`)
+      assert.deepEqual(records.map((r) => r.code), want === 'unknown' ? ['prior-proxy-unknown'] : [], `${d.name} · ${label}: ${JSON.stringify(records)}`)
+      for (const x of records) assert.deepEqual(checkRecord(x), [], JSON.stringify(x))
+      c.close()
+    }
+  }
+})
+
+// ⑥ with the registry's `pending` (a wide name whose command line is not read yet, 4.8 W78): the ancestor is unread, not "not an agent" — that
+// connection is unknown (recorded), and the answer is not kept, so the next connection of the same pid + start reads the agent's proxy.
+test('⑥ · a pending ancestor is unread and asked again: the next connection gets that agent\'s upstream', async () => {
+  const AT = INSTALLED + 1, C = 7000, A = 7200
+  const d = descs.find((x) => x.proxyMode.forms.some((f) => f.os.includes('darwin') && x.proxyMode.routes[f.route]?.auth !== false))
+  const f = d.proxyMode.forms.find((x) => x.os.includes('darwin') && d.proxyMode.routes[x.route]?.auth !== false), g = `${d.name}:${f.route}`
+  const w = { pid: C, facts: { exe: '/bin/sh', uid: 501, agent: null, startedAt: AT }, env: { [d.proxy.env[0]]: `http://${g}:${TOKEN}@127.0.0.1:18105` }, parent: (q) => (q === C ? { ppid: A, startedAt: AT } : null),
+    factsBy: { [A]: { exe: '/bin/agent', uid: 501, agent: d.name, startedAt: AT, pending: true } }, envBy: { [A]: { [d.proxy.env[0]]: 'http://proxy.corp:3128' } } }
+  const { c, records } = await rig({ desc: d, w })
+  await c.on({ harnesses: [d.name], groups: { [g]: 18105 } })
+  const first = await c.lookupIngress({ peer: PEER, user: g, target: { address: 'api.example', port: 443 } })
+  assert.deepEqual([first.upstream, records.map((r) => r.code)], [{ kind: 'direct' }, ['prior-proxy-unknown']])
+  w.factsBy[A] = { ...w.factsBy[A], pending: false }
+  const second = await c.lookupIngress({ peer: PEER, user: g, target: { address: 'api.example', port: 443 } })
+  assert.deepEqual(second.upstream, { kind: 'http', host: 'proxy.corp', port: 3128 })
+  c.close()
+})
+
+// P12 / ⑥: after off a door stays for a live agent; a tool that agent starts inherits the door and still dials the agent's own proxy.
+test('⑥ · a door kept after off: the agent\'s child still dials the agent\'s upstream', async () => {
+  const AT = INSTALLED + 1, C = 7000, A = 7200
+  const d = descs.find((x) => x.proxyMode.forms.some((f) => f.os.includes('darwin') && x.proxyMode.routes[f.route]?.auth !== false))
+  const f = d.proxyMode.forms.find((x) => x.os.includes('darwin') && d.proxyMode.routes[x.route]?.auth !== false), g = `${d.name}:${f.route}`
+  const w = { pid: A, facts: { exe: '/bin/sh', uid: 501, agent: null, startedAt: AT }, env: { [d.proxy.env[0]]: `http://${g}:${TOKEN}@127.0.0.1:18105` }, parent: (q) => (q === C ? { ppid: A, startedAt: AT } : null),
+    factsBy: { [A]: { exe: '/bin/agent', uid: 501, agent: d.name, startedAt: AT } }, envBy: { [A]: { [d.proxy.env[0]]: 'http://proxy.corp:3128' } }, procs: [{ pid: A, startedAt: AT }] }
+  const { c } = await rig({ desc: d, w })
+  await c.on({ harnesses: [d.name], groups: { [g]: 18105 } })
+  await c.lookupIngress({ peer: PEER, user: g, target: { address: 'api.example', port: 443 } })
+  w.manifest = manifestOf(d.name, { liveness: { [d.name]: { on_at: iso(INSTALLED) } } })
+  w.now = INSTALLED + 10
+  assert.equal((await c.off({ harnesses: [d.name] })).holders, 1)
+  w.pid = C
+  const m = await c.lookupIngress({ peer: PEER, user: g, target: { address: 'api.example', port: 443 } })
+  assert.deepEqual([m.upstream, m.skip], [{ kind: 'http', host: 'proxy.corp', port: 3128 }, { not_captured: 'untracked', reason: 'not-an-agent' }])
+  c.close()
 })
 
 test('CM20 · X-Trocar-Upstream counts only from a form whose hook sends it; from anyone else it is ignored and recorded without its value', async () => {
@@ -614,7 +699,7 @@ test('4.11 ① · on / off / restore / lookup write none of state, ingress or th
     if (typeof fn !== 'function' || !/write|rename|mkdir|unlink|rm|copy|chmod|append|truncate|symlink|utimes/i.test(String(k))) return fn
     return (...a) => { writes.push(typeof a[0] === 'string' ? a[0] : fds.get(a[0]) ?? `fd ${a[0]}`); return fn.apply(t, a) }
   } })
-  const c = createModelCollector({ harnesses: [d], dir, fs: rec, ctx: { os: 'darwin', home: '/h', dirs: {}, readFile: () => { throw Object.assign(new Error('x'), { code: 'ENOENT' }) }, readdir: () => [] }, custody: 'unavailable', proxyOf,
+  const c = createModelCollector({ harnesses: [d], dir, fs: rec, ctx: { os: 'darwin', home: '/h', dirs: {}, readFile: () => { throw Object.assign(new Error('x'), { code: 'ENOENT' }) }, readdir: () => [] }, custody: 'unavailable', proxyOf, bypassOf,
     identify: () => ({ reason: 'match', agent: d.name }), ownerOf: async () => ({ pid: 9 }), factsOf: async () => ({ startedAt: INSTALLED + 1 }) })
   c.bindDoors({ open: async () => {}, close: async () => {} })
   const port = JSON.parse(fs.readFileSync(path.join(dir, 'ingress.json'), 'utf8')).groupPorts[g]
