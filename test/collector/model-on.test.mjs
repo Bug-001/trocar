@@ -370,3 +370,37 @@ test('1.6 §1.6: a harness on at lock time and off by the time on writes → sto
     assert.deepEqual(fs.existsSync(env) ? fs.readFileSync(env) : null, was, 'no entry written')
   } finally { await d.close() }
 })
+
+// 4.6 §代理模式的门 · 4.11 §3 ①: a recorded port that is held is `engine-port-taken` only when it is not trocar's own door. When the running daemon does not
+// answer GET /status (starting, stuck) while its lock says it lives, the held ports are its doors as far as on can tell: kept, recorded `door-unconfirmed`;
+// with no daemon alive, a held port is another program's: moved, `engine-port-taken`.
+test('a held door port while the live daemon does not answer GET /status is door-unconfirmed and kept; with no daemon alive it is engine-port-taken and moved', async () => {
+  const { checkRecord } = await import('../../src/health/codes.mjs')
+  const flows = (w) => { const d = path.join(w.dir, 'flows'); return fs.existsSync(d) ? fs.readdirSync(d).flatMap((f) => fs.readFileSync(path.join(d, f), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))) : [] }
+  const ports = (w) => JSON.parse(fs.readFileSync(path.join(w.dir, 'ingress.json'), 'utf8')).groupPorts
+  for (const alive of [true, false]) {
+    const w = await modelWorld({ commands: ['codex'] })
+    assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+    const d = await daemon(w)
+    try { assert.equal((await on(w)).exit, 0) } finally { await d.close() }
+    const was = ports(w), seen = flows(w).length
+    if (alive) fs.writeFileSync(path.join(w.dir, 'lock'), JSON.stringify({ pid: process.pid, engine_port: null, socket: path.join(w.home, 'c.sock') }))
+    fs.writeFileSync(path.join(w.dir, 'control.json'), JSON.stringify({ path: path.join(w.home, 'c.sock'), token: TOKEN }))
+    const request = async ({ method, body }) => {
+      if (method === 'GET') throw Object.assign(new Error('the daemon did not answer within 2000 ms'), { code: 'ETIMEDOUT' })
+      return { doors: Object.fromEntries(Object.entries(body.groups).map(([g, p]) => [g, `http://127.0.0.1:${p}`])) }
+    }
+    const r = await on(w, { request, isFree: async (p) => !Object.values(was).includes(p) })
+    const recs = flows(w).slice(seen).filter((x) => x.event === 'failure' && x.where === 'ingress')
+    assert.ok(recs.every((x) => checkRecord(x).length === 0), JSON.stringify(recs.map(checkRecord)))
+    const at = `daemon alive: ${alive}`
+    if (alive) {
+      assert.deepEqual(ports(w), was, `${at}: the ports are kept`)
+      assert.deepEqual(recs.map((x) => x.code), Object.keys(was).map(() => 'door-unconfirmed'), at)
+      assert.ok(!r.notes.some((n) => n.code === 'engine-port-taken'), at)
+    } else {
+      assert.ok(Object.keys(was).every((g) => ports(w)[g] !== was[g]), `${at}: every held port moved`)
+      assert.deepEqual(recs.map((x) => x.code), Object.keys(was).map(() => 'engine-port-taken'), at)
+    }
+  }
+})

@@ -21,6 +21,7 @@ import { controlEndpointFor } from '../off/control-client.mjs'
 import { CODE } from './core/codes.mjs'
 import { appendEvent } from './core/events.mjs'
 import { retriedNote } from '../cli/words.mjs'
+import { lockState } from '../health/read.mjs'
 
 const INSTALL_HINT = 'trocar install'
 // 1.6 §1.1: what a `setup.missing[].what` means, in words (the code stays in the JSON)
@@ -117,11 +118,22 @@ export async function turnOnModel({ os, home, env = process.env, ids = null, har
   const groups = planned.flatMap(({ h, plan }) => plan.routes.map((r) => groupOf(h, r.id)))
   const ep = controlEndpointFor({ platform: os, dir, env, fs })
   const ask = request || ep.request
-  let doorsNow = {}
-  try { doorsNow = ep.socketPath ? ((await ask({ socketPath: ep.socketPath, method: 'GET', path: '/status', timeoutMs: 2000 })).doors || {}) : {} } catch { doorsNow = {} }
+  let doorsNow = {}, unanswered = false
+  try { doorsNow = ep.socketPath ? ((await ask({ socketPath: ep.socketPath, method: 'GET', path: '/status', timeoutMs: 2000 })).doors || {}) : {} } catch { doorsNow = {}; unanswered = true }
+  // a daemon that lives (its lock) but did not answer (starting, stuck): a held recorded port is its own door as far as on can tell — kept, not engine-port-taken
+  const ownDaemon = unanswered && ['running', 'unresponsive'].includes(lockState({ file: path.join(dir, 'lock'), fs }).state)
   const was = await loadIngressConfig({ dir, groups, isFree, fs })
+  const unconfirmed = []
   // 4.11 §3 ㉓: a group of an id outside the table is another copy's — its port is never moved (the picker still avoids it)
-  const cfg = await rebindTaken(was, async (port, g) => !byName.has(g.split(':')[0]) || doorsNow[g] === port || isFree(port), { dir, isFree, fs })
+  const cfg = await rebindTaken(was, async (port, g) => {
+    if (!byName.has(g.split(':')[0]) || doorsNow[g] === port || await isFree(port)) return true
+    if (ownDaemon) unconfirmed.push(g)
+    return ownDaemon
+  }, { dir, isFree, fs })
+  for (const g of unconfirmed) {
+    const reason = `trocar's background process did not answer, so its local proxy port ${was.groupPorts[g]} for ${g} was kept as its own door`
+    try { appendEvent(dir, { event: 'failure', where: 'ingress', code: CODE.doorUnconfirmed, door: g, port: was.groupPorts[g], reason, ...(source ? { source } : {}) }) } catch { /* the daemon's answer to POST /on says the rest */ }
+  }
   // a door group whose port or token is new (P12): when every group of h moved, the earlier windows lead nowhere now — they go and the history
   // restarts here (`since`); when some moved, `door_since` marks those groups, and a process from an earlier window may have read the old value
   const changed = new Set(was.created ? groups : [...was.added, ...cfg.rebound])
