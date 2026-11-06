@@ -25,7 +25,7 @@ import { createTracker } from './core/tracker.mjs'
 import { createSwitch, readState } from './core/switch.mjs'
 import { startControlServer, controlSocketPath } from './core/control.mjs'
 import { createQueryService } from '../query/service.mjs'
-import { createServer as createBoard, tipTable } from '../server.mjs'
+import { tipTable } from '../query/tips.mjs' // the board itself (src/server.mjs, most of this graph) is loaded once the control endpoint listens: boardFor
 import { readIngressConfig } from './core/ingress-config.mjs'
 import { readCa } from './core/tls/ca-store.mjs'
 import { tryOpLock } from '../off/lock.mjs'
@@ -270,7 +270,8 @@ function boardToken(dir) {
  *  `GET /board` answers `{port, state, reason, token}` for `trocar board`. start() once the daemon is ready; stop() before the control server closes. */
 function boardFor({ P, failure, query, tips, log = () => {} }) {
   let st = { port: null, state: 'no-port', reason: 'no board port recorded: run trocar install' }
-  let server = null, token = null, started = Promise.resolve(), stopped = false
+  let server = null, token = null, started = Promise.resolve(), stopped = false, mod = null
+  const load = () => (mod ??= import('../server.mjs').catch((e) => { mod = null; throw e })) // D62: off the path to the first listen; warm() starts it as soon as the control endpoint listens
   async function listen() {
     const cfg = readIngressConfig({ dir: P.dir })
     if (cfg.boardPort === undefined) { if (cfg.error) st = { ...st, reason: `${cfg.error}: run trocar install` }; return }
@@ -281,6 +282,7 @@ function boardFor({ P, failure, query, tips, log = () => {} }) {
     }
     try {
       token = boardToken(P.dir)
+      const { createServer: createBoard } = await load()
       const b = createBoard({ home: path.dirname(P.dir), token, query, tips }), s = b.server
       s.on('clientError', (e, sock) => sock.destroy())
       await new Promise((resolve, reject) => { s.once('error', reject); s.listen(port, '127.0.0.1', resolve) })
@@ -294,6 +296,7 @@ function boardFor({ P, failure, query, tips, log = () => {} }) {
   }
   const tokenAnswer = async () => { await started; return { ...st, token } }
   return {
+    warm() { load().catch(() => {}) }, // a load that fails is said by listen(), which loads it again
     start() { started = listen(); return started },
     state: () => ({ ...st }),
     tokenAnswer,
@@ -344,6 +347,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
   const query = queryRouteFor({ P, failure, fork, queryIdleMs })
   const board = boardFor({ P, failure, query: query.svc, tips: query.tips.of, log })
   const control = await startControlServer({ socketPath: sock, ...(ep ? { token: ep.token } : {}), routes: board.routes({ 'GET /status': gate('status'), 'POST /on': gate('on'), 'POST /off': gate('off'), ...query.routes }) }) // throws if another daemon answers
+  board.warm()
 
   let redirector = null, engine = null, seal = null // what a failed start closes again (below)
   try {
@@ -927,6 +931,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
       return r
     }),
   })) })
+  board.warm()
   // only now: the control server refuses a start while another daemon answers, so a lock read before it may be a live daemon's (runDaemon's order)
   noteUncleanStop(P.lock, failure)
   seal.start() // only now (the gate claimed the collector): the lock read before this could have been a live daemon's
