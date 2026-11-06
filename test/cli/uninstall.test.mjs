@@ -266,9 +266,11 @@ test('uninstall: the drain is polled on the socket that answered — with XDG_RU
 
 test('1.6 §1.5: a daemon that does not confirm the routing off leaves every entry and every file as it is, exit 1 (the same rule as off)', async () => {
   const s = await installedHome({ names: ['claude-code'], daemon: { onOff: async () => ({ desired: 'off', actual: 'on', confirmed: false, relayed: { closing: 0, waiting: 0, cut: 0 }, pid: 4242, unwatched: [], agents: [], helper: { ok: true } }) } })
-  const before = s.userFiles()
+  const before = s.userFiles(), unitFile = path.join(s.home, '.config', 'systemd', 'user', 'trocar-collector.service'), unit = fs.readFileSync(unitFile)
+  const from = s.sys.exec.calls.length
   const r = await s.uninstall({ yes: true })
   assert.equal(r.exit, 1)
+  assert.deepEqual([fs.existsSync(unitFile) && fs.readFileSync(unitFile).equals(unit), s.sys.exec.calls.slice(from).filter((c) => /systemctl .*(disable|stop|mask)/.test(c))], [true, []], 'invariant 5: the agents still point at the door, so the autostart and the daemon stay')
   assert.match(r.receipt.problems[0], /did not confirm/)
   assert.match(r.receipt.problems[0], /To go on, stop the daemon \(systemctl --user stop trocar-collector\.service\).*then run the command again/, 'semantics 5: an uninstall that stops here says how to get past it')
   assert.deepEqual([s.userFiles(), trocarFiles(s).includes('install-manifest.json')], [before, true])

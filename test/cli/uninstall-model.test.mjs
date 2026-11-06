@@ -15,6 +15,7 @@ import { startControlServer } from '../../src/collector/core/control.mjs'
 import { readManifest, saveManifest } from '../../src/off/manifest.mjs'
 import { recordingExec } from './fixtures/on-ctx.mjs'
 import { DOOR_SEEN_FILE } from '../../src/off/door-seen.mjs'
+import { flowEvents } from '../off/fixtures/off-ctx.mjs'
 import { USER_PATH_FILE } from '../../src/off/paths.mjs'
 
 const MACHO = Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 1, 2, 3, 4])
@@ -361,3 +362,26 @@ test('4.9 §4 · uninstall on macOS notes the launchd override it cannot remove;
   const r = await uninstall(win, { platform: 'win32' })
   assert.deepEqual(overrideNote(r.receipt), [], JSON.stringify(r.receipt.notes))
 })
+// invariant 5 (1.6 §3.6 「活着却不应答的,算作没关,拒绝」, §3.4 次序): the daemon does not confirm its doors shut (state-mismatch, or a refused request),
+// so the agents' entries still point at its doors: the autostart stays registered and the daemon is not stopped, exit 1, the code says why
+for (const os of ['darwin', 'win32']) {
+  for (const [why, off] of [['state-mismatch', async () => ({ desired: 'off', actual: 'on', confirmed: false, pid: 4242 })], ['control-error', async () => { throw Object.assign(new Error('busy'), { status: 503 }) }]]) {
+    test(`invariant 5 · ${os} · ${why}: the routing not confirmed off leaves the autostart and the daemon, exit 1`, async () => {
+      const w = await modelWorld({ os, commands: ['codex'] })
+      assert.equal((await w.install()).exit, 0)
+      const sock = os === 'win32' ? '\\\\.\\pipe\\trocar-test' : path.join(w.home, 'c.sock')
+      const request = async (q) => (q.path === '/holders' ? { count: 0, holders: [] } : q.path === '/off' ? off() : {})
+      const exec = recordingExec()
+      let stopped = 0
+      const plist = path.join(w.home, 'Library', 'LaunchAgents', 'com.trocar.collector.plist'), had = fs.existsSync(plist)
+      const { receipt, exit } = await runUninstall({ home: w.home, env: w.env, yes: true, deps: { platform: os, exec: exec.run, request, socketPath: sock, procs: async () => [], sleep: async () => {}, drainMs: 0, getuid: () => 501, stopDaemon: async () => { stopped++; return { stopped: true, how: 'test', pid: 4242, signals: [] } } } })
+      assert.equal(exit, 1)
+      assert.deepEqual(exec.calls.filter((c) => /launchctl|schtasks|reg(\.exe)? delete/i.test(c)), [], 'the autostart is not touched')
+      assert.deepEqual([stopped, fs.existsSync(plist)], [0, had], 'the daemon is not stopped')
+      assert.ok(receipt.routing && receipt.routing.confirmed === false)
+      assert.ok(fs.existsSync(path.join(w.dir, 'install-manifest.json')), 'the install stays for the next run')
+      assert.ok(!receipt.autostart || receipt.autostart.disabled !== true)
+      assert.ok(flowEvents(w.dir).some((e) => e.event === 'failure' && e.code === why), 'the record names why (D38)')
+    })
+  }
+}
