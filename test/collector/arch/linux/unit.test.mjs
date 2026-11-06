@@ -11,6 +11,10 @@ test('unit: absolute quoted ExecStart, restart on failure, no capability-strippi
   const t = unitText({ program: ['/usr/bin/node', '/opt/my "trocar"/bin/trocar.mjs'] })
   assert.match(t, /^ExecStart="\/usr\/bin\/node" "\/opt\/my \\"trocar\\"\/bin\/trocar\.mjs" daemon$/m)
   assert.match(t, /^Restart=on-failure$/m)
+  // the log files live under ~/.trocar/collector (D46): with that directory gone, systemd cannot open them and the start ends with 209 before node runs.
+  // Relaunching cannot make the directory appear (only install does), so 209 is not restarted (1.6 §5.2: 0 = a relaunch cannot help, here systemd's own code)
+  const logged = unitText({ program: ['/usr/bin/node', '/s/trocar.mjs'], logs: { out: '/h/.trocar/collector/logs/daemon-out.log', err: '/h/.trocar/collector/logs/daemon-err.log' } })
+  assert.ok(/^RestartPreventExitStatus=(.* )?209( .*)?$/m.test(logged), logged)
   assert.match(t, /^KillMode=mixed$/m, 'a stop signals the daemon alone; it closes its helper itself (4.6 F3(h))')
   assert.match(t, /^WantedBy=default\.target$/m)
   assert.doesNotMatch(t, /NoNewPrivileges|CapabilityBoundingSet/)
