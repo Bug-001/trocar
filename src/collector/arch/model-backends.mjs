@@ -69,8 +69,8 @@ export async function formPrograms({ os, home, env = process.env, harnesses }) {
 
 /** The places install's certificate carriers would be at on this machine (model-install.mjs carrierPlaces), resolved with this OS's folders and
  *  platform facts, as install resolves them: what `uninstall` looks at when the install record is lost. Paths and the bytes install writes; reads only. */
-export async function carrierPlacesFor({ os, home, env = process.env, harnesses, fs = nodeFs }) {
-  const [{ dirsOf, platformFacts }, { carrierPlaces }, { renderHook }] = await Promise.all([os === 'darwin' ? import('./darwin/policy.mjs') : import('./win32/policy.mjs'), import('../model-install.mjs'), import('../harness/templates/index.mjs')])
+export async function carrierPlacesFor({ os, home, env = process.env, harnesses, renderHook, fs = nodeFs }) { // renderHook: the caller's (an arch part never imports the harness layer)
+  const [{ dirsOf, platformFacts }, { carrierPlaces }] = await Promise.all([os === 'darwin' ? import('./darwin/policy.mjs') : import('./win32/policy.mjs'), import('../model-install.mjs')])
   const ctx = { ...sourcesCtx({ os, home, env, dirs: dirsOf(home, env), fs }), facts: typeof platformFacts === 'function' ? platformFacts({ env }) : platformFacts }
   return carrierPlaces({ os, harnesses, ctx, home, owns: ownsBy({ os, home, fs }), renderHook, fs })
 }
