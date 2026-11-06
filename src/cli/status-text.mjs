@@ -101,6 +101,8 @@ const DESIRED = { on: 'on', off: 'off' }
 export function statusDetail(doc, h, { finding = null, now = Date.now(), colors: c = noColor(), home = null } = {}) {
   const x = doc.harnesses[h]
   if (!x) return [`${h}: ${unknown('it is not set up on this machine')}`]
+  // here only as forms trocar does not capture, and in no install record: nothing to turn on or fix, only why (4.6 「不采的形态」)
+  if (x.present === false && !((doc.install && doc.install.harnesses) || []).includes(h) && uncapturedText(x, home).length) return [c.bold(`${h}: not captured on this machine`), '', ...uncapturedText(x, home).flatMap((s) => wrap(`Note: ${s}`, WIDTH - 2, '      ').map((t) => `  ${t}`))]
   const verdict = x.captured === true ? ['captured', notSeenYet(x)].filter(Boolean).join(', ') : x.captured === null ? openText(x, h, unknown) : x.desired === 'off' ? 'capture is off' : 'not captured'
   const lines = [c.bold(`${h}: ${DESIRED[x.desired] || unknown('its on/off state could not be read')}, ${verdict}`), '']
   const rows = []

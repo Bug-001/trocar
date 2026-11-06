@@ -23,6 +23,8 @@ const exec = () => ({ status: 0, stdout: '', stderr: '' })
 const deps = { exec, netFactsDeps: async () => ({ harnesses: all, archFacts: linuxNetFacts }) }
 const flat = (t) => t.replace(/\s+/g, ' ')
 const notesFor = (d, u, notes) => notes.filter((n) => n.startsWith(`${d.name}: `) && n.includes(u.why))
+/** The harness's own footprint taken away (the fixture's home layout may carry it). */
+const unseed = (d, home, env) => { for (const p of d.present.filter((x) => x.base === 'home')) for (const f of resolveLoc(p, { os: 'linux', home, env, readdir: listDir })) fs.rmSync(f, { recursive: true, force: true }) }
 const listDir = (d) => { try { return fs.readdirSync(d) } catch { return [] } }
 /** Each place of the form made there: a glob place gets one entry it matches. → the paths made. */
 const seedPlaces = (u, home, env) => u.present.filter((p) => p.base === 'home').map((p) => {
@@ -59,6 +61,7 @@ for (const d of withUncaptured) {
       }
       const j = JSON.parse((await runStatus(s, ['--json', d.name], { deps })).text)
       assert.deepEqual(j.harnesses[d.name].setup.uncaptured, [{ form: u.form, why: u.why, paths: made }])
+      assert.equal(j.harnesses[d.name].present, true)
       assert.ok(flat((await runStatus(s, [d.name], { deps })).text).includes(u.why))
       assert.ok(flat((await runStatus(s, [], { deps })).text).includes(u.why))
     })
@@ -74,17 +77,20 @@ for (const d of withUncaptured) {
       assert.equal(notesFor(d, u, JSON.parse(io.text()).notes).length, 1)
       let s
       const before = (x) => flowEvents(x.dir).filter((e) => e.code === 'harness-note' && e.reason.includes(u.why)).length
-      s = await installedHome({ names: ['claude-code'], seed: (h, sh) => { made.splice(0, made.length, ...seedPlaces(u, h, sh.env)) } })
+      s = await installedHome({ names: ['claude-code'], seed: (h, sh) => { unseed(d, h, sh.env); made.splice(0, made.length, ...seedPlaces(u, h, sh.env)) } })
       const n = before(s)
       await s.install({ harnesses: [...s.descs, d] }) // nothing to write: the already-installed run records it too
       assert.equal(before(s), n + 1)
       const r = await s.on({ ids: [d.name], harnesses: [...s.descs, d] })
       assert.equal(notesFor(d, u, r.receipt.notes).length, 1)
+      assert.ok(r.exit !== 0 && !r.receipt.harnesses.includes(d.name), 'on claims nothing for it')
       const j = JSON.parse((await runStatus(s, ['--json'], { deps })).text)
       assert.ok(d.name in j.harnesses, 'listed with no name given')
+      assert.equal(j.harnesses[d.name].present, false)
       assert.deepEqual(j.harnesses[d.name].setup.uncaptured, [{ form: u.form, why: u.why, paths: made }])
       const text = flat((await runStatus(s, [d.name], { deps })).text)
       assert.ok(text.includes(u.why) && !text.includes(s.home), 'paths under HOME print with ~')
+      assert.ok(!text.includes(`trocar on ${d.name}`), 'no fix that cannot work')
     })
   }
 }
