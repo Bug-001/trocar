@@ -1,5 +1,5 @@
 # spec-paths.debt — paths the spec named that did not resolve when test/ci/spec-paths.test.mjs came, one `<unit> <path>` a line.
-# Clear a unit by pointing each path at its file, writing 「待写 `test/…`」 before a planned test or 「已删 `…`」 before a file that must stay gone, or dropping the clause; then delete its lines. New lines are refused at review.
+# Clear a unit by pointing each path at its file, writing 「待写 `test/…`」 before a planned test, or rewriting or dropping the clause; then delete its lines. New lines are refused at review.
 0.0-overview.md test/server.test.mjs
 0.1-engineering-rules.md src/cli/legacy-commands.mjs
 0.1-engineering-rules.md src/raw/closed.mjs
