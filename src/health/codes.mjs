@@ -130,8 +130,9 @@ export const ROUTE_WHERE = Object.freeze(['routing', 'ingress']) // the choice a
 export const ROUTE_EVENTS = Object.freeze(['route-applied']) // a state change, not a failure
 /** `code` of a failure event, by the `where` the §12 table gives it. Every row of the table is the class 失败, so the next list is this one. */
 export const ROUTE_CODES = Object.freeze([
-  'ingress-auth-failed', 'ingress-unknown', 'ingress-challenge-unanswered', 'engine-port-taken', 'upstream-unavailable', // ingress (`upstream-unavailable`: the group's upstream cannot be dialled at all, no login to dial it with or none to dial: the lookup refused, the agent got a 502)
+  'ingress-auth-failed', 'ingress-unknown', 'ingress-challenge-unanswered', 'engine-port-taken', 'door-unconfirmed', 'upstream-unavailable', // ingress (`door-unconfirmed`: on kept a held door port because our daemon was there (control endpoint or lock) and did not answer, so it may be trocar's own door; `upstream-unavailable`: the group's upstream cannot be dialled at all, no login to dial it with or none to dial: the lookup refused, the agent got a 502)
   'socktable-unavailable', 'helper-start-failed', // helper
+  'system-proxy-unreadable', // netenv: the door's system proxy watcher could not read it — not a change, no netenv-change; the doors keep the last one read (4.7)
   'task-register-failed', // install: `on` still succeeds, through the HKCU Run fallback (4.8 §7)
   'launchd-register-failed', // install, darwin: the LaunchAgent would not register (4.9 §4) — launchd is the only autostart, so `on`'s receipt says it; no fallback exists to succeed through
   'elevated-token', // start

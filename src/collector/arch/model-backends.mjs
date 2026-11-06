@@ -107,23 +107,29 @@ export async function systemProxyWatch({ up, read, io = {}, changes = null, fail
   const initial = await read(io).catch(() => null)
   const watch = up.watchSystemProxy({ ...io, read, initial, onError: failure, ...(changes ? { changes } : {}) })
   // 1.6 §9.5 (D49 ⑤) · 4.7「变了 = 归一后的那一句话变了」: a change of the system proxy is one `netenv-change` (`netenv-changed`, captured: the door follows it per
-  // connection), zero failures. from / to: the chain's answer as one word (the url without credentials, `pac`, `off`, or why it cannot be followed). The raw
-  // readings move more than the word does: a difference the word does not carry is no event (`off -> off`), and one reading that could not be read, between
-  // two readings that say the same, is no event either — it is held for `holdMs` and only said if the state is still that then (the mac machine 2026-10-19
-  // wrote `off -> off` and `off -> system-proxy-unreadable -> off` several times a minute).
+  // connection), zero failures. from / to: the chain's answer as one word (the url without credentials, `pac`, `off`). The raw readings move more than the word
+  // does: a difference the word does not carry is no event (`off -> off`). A reading that could not be read is no change at all (D38: not absent, not changed):
+  // it is held for `holdMs` and, if the state is still unreadable then, said as one `system-proxy-unreadable` failure per run of them; the door keeps the last
+  // reading that was read, and the next one read is compared with it (the mac machine 2026-10-19 wrote `off -> system-proxy-unreadable -> off` several times a minute).
   const word = (raw) => { const c = up.chainSystemProxy(raw); return c == null ? 'off' : c.url ? redactProxyUrl(c.url) : c.pac ? 'pac' : (c.why || 'unreadable') }
   const readable = (raw) => { const c = up.chainSystemProxy(raw); return !(c && c.ok === false) }
-  let said = word(initial), held = null, good = readable(initial) ? initial : null // the last reading that could be read: what the door dials while an unreadable one is held
-  const say = (to) => { if (to === said) return; const from = said; said = to; recordDrift({ drift: { code: 'netenv-changed', from, to, captured: true }, h: null, desired: null, appendEvent: event }) }
+  let good = readable(initial) ? initial : null, said = good ? word(good) : null, held = null, failed = false // `good`: the last reading that could be read, what the door dials
+  const say = (to) => { if (said === null || to === said) { said = to; return } const from = said; said = to; recordDrift({ drift: { code: 'netenv-changed', from, to, captured: true }, h: null, desired: null, appendEvent: event }) }
+  const unread = () => {
+    if (failed) return
+    failed = true
+    const raw = watch.last() || {}
+    try { event({ event: 'failure', where: 'netenv', code: 'system-proxy-unreadable', reason: `the system proxy could not be read (${[raw.reason, raw.detail].filter(Boolean).join(': ') || 'no reason given'}); the doors keep the last one read`, ...(said ? { last: said } : {}) }) } catch { /* the event writer's own failure: nothing left to tell */ }
+  }
   const drop = () => { if (held) { timers.clearTimeout(held); held = null } }
   watch.on('change', ({ after }) => {
     drop()
-    if (readable(after)) { good = after; return say(word(after)) }
-    held = timers.setTimeout(() => { held = null; say(word(watch.last())) }, holdMs)
+    if (readable(after)) { good = after; failed = false; return say(word(after)) }
+    held = timers.setTimeout(() => { held = null; if (!readable(watch.last())) unread() }, holdMs)
     if (held && typeof held.unref === 'function') held.unref()
   })
-  // `now`: while one unreadable reading is held, the last good one: one read that failed does not send the door direct around the user's proxy
-  return { now: () => up.chainSystemProxy(held && good ? good : watch.last()), poll: () => watch.poll(), stop: () => { const pending = !!held; drop(); if (pending) say(word(watch.last())); watch.stop() } } // a daemon that goes down inside the hold window still says the state it was holding (D38: no read that failed is left unsaid)
+  // `now`: while the reading cannot be read, the last good one: a read that failed does not send the door direct around the user's proxy, nor recompute it
+  return { now: () => up.chainSystemProxy(good && !readable(watch.last()) ? good : watch.last()), poll: () => watch.poll(), stop: () => { const pending = !!held; drop(); if (pending && !readable(watch.last())) unread(); watch.stop() } } // a daemon that goes down inside the hold window still says the read that failed (D38: none is left unsaid)
 }
 
 /** The door's readers of the world for the model collector (4.11 §1, createModelCollector): who owns a socket and that pid's facts, its env / cwd /
