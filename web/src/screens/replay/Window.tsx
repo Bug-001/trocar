@@ -203,7 +203,7 @@ function ItemView({ it, acts, hl, bv }: { it: Item, acts: Acts, hl: boolean, bv:
     default: return null
   }
 }
-// ── the actions (wireCtxWin's semantics): mutate the desk's state, then re-render ─────────────────────────────────────
+// ── the actions: a reader's open, fold or flip mutates the desk's state, then re-renders ─────────────────────────────────────
 function makeActs(s: DeskState, bump: () => void) {
   // the window asks for a body: once per ref in flight (cell.mjs joins a second ask); a retryable failure is kept in s.bodyFail, so
   // the poll asks again and the row says why (2.3 §读失败)
