@@ -97,6 +97,7 @@ export const FAILURE_WORDS = Object.freeze({
   'malformed-hello': "a program's handshake message could not be read",
   'ingress-auth-failed': 'a program did not answer the proxy challenge',
   'ingress-unknown': 'a program spoke something other than a proxy request to trocar',
+  'ingress-challenge-unanswered': "a program was asked for trocar's proxy password and never came back with it, so its connection was not made",
   'engine-port-taken': "trocar's port is taken",
   'upstream-unavailable': 'the upstream could not be dialled',
   // a connection row forwarded by design (4.6 §记录「连接行」的预期类; `where` is the row's 'flow'): the reason when the reason decided the class, else not_captured

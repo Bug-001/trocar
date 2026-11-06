@@ -210,7 +210,7 @@ test('D39 src/off/names.mjs is the same list as the closed set (src/off cannot i
 // The table below is the spec's §12 table written out by hand (code, where, class), not read back from the module, so a name
 // added, dropped or moved in codes.mjs and not in the RFC turns this red.
 const SPEC_12_FAILURES = [
-  ['ingress-auth-failed', 'ingress'], ['ingress-unknown', 'ingress'], ['engine-port-taken', 'ingress'], ['upstream-unavailable', 'ingress'],
+  ['ingress-auth-failed', 'ingress'], ['ingress-unknown', 'ingress'], ['ingress-challenge-unanswered', 'ingress'], ['engine-port-taken', 'ingress'], ['upstream-unavailable', 'ingress'],
   // the kernel family (fallback-active, forwarder-*) retired with the kernel on both arches (D47 and its win32 twin): no producer anywhere
   ['socktable-unavailable', 'helper'], ['helper-start-failed', 'helper'],
   ['task-register-failed', 'install'], ['launchd-register-failed', 'install'], // the darwin autostart (4.9 §11)

@@ -129,7 +129,7 @@ export const ROUTE_WHERE = Object.freeze(['routing', 'ingress']) // the choice a
 export const ROUTE_EVENTS = Object.freeze(['route-applied']) // a state change, not a failure
 /** `code` of a failure event, by the `where` the §12 table gives it. Every row of the table is the class 失败, so the next list is this one. */
 export const ROUTE_CODES = Object.freeze([
-  'ingress-auth-failed', 'ingress-unknown', 'engine-port-taken', 'upstream-unavailable', // ingress (`upstream-unavailable`: the group's upstream cannot be dialled at all, no login to dial it with or none to dial: the lookup refused, the agent got a 502)
+  'ingress-auth-failed', 'ingress-unknown', 'ingress-challenge-unanswered', 'engine-port-taken', 'upstream-unavailable', // ingress (`upstream-unavailable`: the group's upstream cannot be dialled at all, no login to dial it with or none to dial: the lookup refused, the agent got a 502)
   'socktable-unavailable', 'helper-start-failed', // helper
   'task-register-failed', // install: `on` still succeeds, through the HKCU Run fallback (4.8 §7)
   'launchd-register-failed', // install, darwin: the LaunchAgent would not register (4.9 §4) — launchd is the only autostart, so `on`'s receipt says it; no fallback exists to succeed through
