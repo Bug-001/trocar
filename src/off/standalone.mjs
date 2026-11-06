@@ -1,12 +1,14 @@
 // standalone.mjs (src/off) — the single file ~/.trocar/bin/trocar-off, made of this directory (RFC 1.6 R3; V2, V11, V35). `trocar off` and the copy run the same code: when trocar
-// is broken — the repository gone, node_modules gone, the daemon dead — the copy still takes trocar out of the agents' path. `trocar on` writes it every time (it costs a few
-// milliseconds and keeps it equal to what is installed); `trocar doctor` checks it (checkStandalone).
+// is broken — the repository gone, node_modules gone, the daemon dead — the copy still takes trocar out of the agents' path. `trocar on` looks at it every time and writes it when
+// it is due, so it stays equal to what is installed; `trocar doctor` checks it (checkStandalone).
 //   buildStandalone   src/off/*.mjs, from main.mjs, in dependency order, as one file: the relative imports and the `export` keywords are dropped, the `node:*` imports are made
 //                     one load per built-in, and a call of runOffCli ends it. It refuses what would make a wrong file instead of writing it: two modules declaring one top-level
 //                     name, an import that is not `node:*` or a file of the directory, a cycle, an `export default` / `export { }` / `export *`, a renamed import of a module of the
 //                     directory (a bundle has one scope, so a name is the same name everywhere), a top-level destructuring.
-//   standaloneDue     the files a write would change (the plan names them); writeStandalone writes those, atomic and durable, 0700, and returns them. On Windows the same
-//                     for trocar-off.cmd (STANDALONE_CMD): the files are paths.mjs standaloneFiles, the one list that is written, checked, listed and removed
+//   standaloneDue     the files a write would change (the plan names them), told without building the text: the copy's digest line (D62①, 1.6 §3.2 step 1) is a SHA-256 of the
+//                     version, the bytes of src/off and the rest of the copy, so a copy that was edited, or that other sources would make otherwise, does not match it.
+//                     writeStandalone writes those, atomic and durable, 0700, and returns them. On Windows the same for trocar-off.cmd (STANDALONE_CMD): the files are
+//                     paths.mjs standaloneFiles, the one list that is written, checked, listed and removed
 //   checkStandalone   `ok` only when the file is what buildStandalone says right now (the version on its first lines, its bytes, executable) and, on Windows, the .cmd is
 //                     STANDALONE_CMD; `found` is the version it carries
 // The file has no ES module syntax: no `import`, no `export`, no top-level `await`. It has no extension, and which kind of module Node takes such a file for is up to the Node
@@ -16,6 +18,7 @@
 // Reading the sources is a scan, not a parse: blankOut() empties comments, strings, template-literal text and regular expressions (offsets and lines kept), and what is left is
 // read line by line at bracket depth 0 — the way every file here is written (one declaration per name, at the start of a line). The tests build the real directory and run the file.
 // Imports only node:* and src/off.
+import crypto from 'node:crypto'
 import nodeFs from 'node:fs'
 import nodeOs from 'node:os'
 import path from 'node:path'
@@ -40,6 +43,7 @@ const SOURCE_DIR = path.dirname(fileURLToPath(import.meta.url))
 const LOADER = '__trocarLoad'
 const RESERVED_NAMES = new Set(['module', 'exports', 'require', '__filename', '__dirname', LOADER]) // what the CommonJS wrapper (and the file's own first line) already binds
 const VERSION_LINE = /^\/\/ trocar-off (\S+) — generated from src\/off by trocar on; do not edit$/m
+const DIGEST_LINE = /^((?:.*\n){3})\/\/ digest ([0-9a-f]{64})\n/ // the fourth line of the copy
 const REGEX_AFTER = new Set(['return', 'typeof', 'case', 'do', 'else', 'in', 'of', 'void', 'delete', 'throw', 'new', 'instanceof', 'yield', 'await'])
 const WORD = /[\w$]/
 
@@ -152,7 +156,16 @@ function readModule(name, text) {
   return { name, imports, decls, exported, body: out }
 }
 
-/** The text of the single file for `srcDir` (default: this directory), which carries `version` on its second line. Throws what the header lists, naming the file and the name. */
+/** What the copy's text is a function of: the version and every source of the directory, this builder included. A file the bundle does not use changes the digest and costs one rewrite. */
+function inputsOf({ srcDir = SOURCE_DIR, version, fs = nodeFs }) {
+  const h = crypto.createHash('sha256').update(`${version}\0`)
+  for (const name of fs.readdirSync(srcDir).filter((n) => n.endsWith('.mjs')).sort()) h.update(`${name}\0`).update(fs.readFileSync(path.join(srcDir, name))).update('\0')
+  return h.digest()
+}
+const digestOf = (inputs, text) => crypto.createHash('sha256').update(inputs).update(text).digest('hex')
+const untouched = (text, inputs) => { const m = DIGEST_LINE.exec(text); return !!m && m[2] === digestOf(inputs, m[1] + text.slice(m[0].length)) }
+
+/** The text of the single file for `srcDir` (default: this directory), which carries `version` on its third line. Throws what the header lists, naming the file and the name. */
 export function buildStandalone({ srcDir = SOURCE_DIR, version, fs = nodeFs } = {}) {
   if (version === undefined || version === null || String(version) === '') throw new Error('buildStandalone: a version is required (it is on the first lines of the file, and `doctor` compares it)')
   const mods = new Map(), order = [], onPath = []
@@ -212,7 +225,7 @@ export function buildStandalone({ srcDir = SOURCE_DIR, version, fs = nodeFs } = 
     if (named.length) prologue.push(`const { ${named.map((b) => (b.imported === b.local ? b.local : `${b.imported}: ${b.local}`)).join(', ')} } = ${v}`)
   }
   const tidy = (s) => s.replace(/^\n+/, '').replace(/\s+$/, '')
-  return [
+  const lines = [
     // a sh / JS polyglot (D74: a script-channel machine may have no node on PATH): sh runs line 2 — the Node that ../app/current next to this file
     // names, as the launcher finds it, else the one on PATH; nothing of the writer's own Node is in the bytes. Node skips the #! line and reads line 2
     // as a string and a comment
@@ -229,18 +242,22 @@ export function buildStandalone({ srcDir = SOURCE_DIR, version, fs = nodeFs } = 
     '// ── entry ──',
     `;(async () => { process.exitCode = await ${STANDALONE_ENTRY} })().catch((e) => { process.stderr.write(\`trocar-off: \${(e && e.stack) || e}\\n\`); process.exitCode = 1 })`,
     '',
-  ].join('\n')
+  ]
+  lines.splice(3, 0, `// digest ${digestOf(inputsOf({ srcDir, version, fs }), lines.join('\n'))}`)
+  return lines.join('\n')
 }
 
 /** The files of standaloneFiles that are not what they should be: missing, other bytes, or (POSIX only: Windows reports no execute bit, checkStandalone says why)
- *  not executable. What writeStandalone writes and what a plan names (R3). Reads only. */
+ *  not executable. What writeStandalone writes and what a plan names (R3). Reads only, and builds nothing: sources that cannot be read leave the copy due, and the build says why. */
 export function standaloneDue({ home = nodeOs.homedir(), version = OFF_VERSION, srcDir, platform = process.platform, fs = nodeFs } = {}) {
-  const texts = [buildStandalone({ srcDir, version, fs }), STANDALONE_CMD]
-  return standaloneFiles(home, platform).map((file, i) => ({ file, text: texts[i] })).filter(({ file, text }) => {
+  let inputs = null
+  try { inputs = inputsOf({ srcDir, version, fs }) } catch { /* said by the build */ }
+  const good = [(text) => inputs !== null && untouched(text, inputs), (text) => text === STANDALONE_CMD]
+  return standaloneFiles(home, platform).filter((file, i) => {
     const have = readOrNull(fs, file)
     let mode = 0
     try { mode = fs.statSync(file).mode } catch { /* not there */ }
-    return !(have && have.toString('utf8') === text && (platform === 'win32' || (mode & 0o100)))
+    return !(have && good[i](have.toString('utf8')) && (platform === 'win32' || (mode & 0o100)))
   })
 }
 
@@ -248,12 +265,13 @@ export function standaloneDue({ home = nodeOs.homedir(), version = OFF_VERSION, 
  *  those), `written` whether there was any. Throws what the build or a write throws. */
 export function writeStandalone({ home = nodeOs.homedir(), version = OFF_VERSION, srcDir, platform = process.platform, fs = nodeFs } = {}) {
   const due = standaloneDue({ home, version, srcDir, platform, fs })
-  for (const { file, text } of due) {
+  for (const file of due) {
+    const text = file === standalonePath(home) ? buildStandalone({ srcDir, version, fs }) : STANDALONE_CMD
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
     sweepTemps(file, fs)
     writeDurable(file, text, 0o700, fs)
   }
-  return { path: standalonePath(home), written: due.length > 0, files: due.map((d) => d.file) }
+  return { path: standalonePath(home), written: due.length > 0, files: due }
 }
 
 /** Is the copy on disk what `trocar on` would write now? → `{ ok, path, found, expected, reason? }`: `found` is the version on its first lines (null: none, or no file), `expected` the
