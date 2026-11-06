@@ -1,7 +1,8 @@
-// test/web-v2/browser/replay-shots.test.mjs — the replay desk's layout at 1280 and 1024 × light / dark on the real face (1.2 §会话头
-// 让位次序, §回放台 B 布局 上下文窗的高度, §窄屏): no head or step-bar part clipped, every ellipsis carries a title, #ctxwin holds at
-// least half the available height at 900 px, the document never scrolls sideways, and the raw panel reaches the right page's
-// bottom. Shots: the replay, the bottom sheet open at 1024, the cost view. Runs only under `npm run test:browser`.
+// test/web-v2/browser/replay-shots.test.mjs — the replay desk's layout at 1440 / 1280 / 1024 / 800 × light / dark on the real face
+// (1.2 §会话头让位次序, §回放台 B 布局 上下文窗的高度, §窄屏): no head or step-bar part clipped, every ellipsis carries a title,
+// the window holds at least half the available height, the document never scrolls sideways, and the narrow table holds at
+// every width. Shots: the replay, the cost view, a few-step session, Files read, a failed first read, the narrow layout and
+// the bottom sheet. Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { probe, withBoard, shoot, layoutFaults } from './harness.mjs'
