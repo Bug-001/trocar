@@ -237,6 +237,8 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     if (!known) return { ...base, skip: untracked(id.why || 'not-an-agent', id.unresolved) }
     if (!onSet.has(d.harness)) return { ...base, skip: untracked('group-off') } // a door kept for its holders: forward only
     if (!onSet.has(id.agent)) return { ...base, skip: untracked('harness-off') }
+    // a bypass-list host came as the PAC's `PROXY <door>; DIRECT`: on the door its DIRECT no longer applies, so it is forwarded only, never decrypted (P10)
+    if (!d.auth && bypassHit(up.bypass, target.address)) return { ...base, skip: { not_captured: 'untrusted', reason: 'bypass-listed' } }
     const v = await ask('waiting for the verdict', judge(id, d, String(target.address).toLowerCase()), null)
     if (late()) return { ...base, skip: untracked('door-deadline', asking) } // a verdict past the limit is the next connection's, kept by judge if it may be
     return { ...base, decrypt: v.decrypt === true, ...(v.upstreamTrust ? { upstreamTrust: v.upstreamTrust } : {}), ...(v.decrypt === true ? {} : { skip: { not_captured: 'untrusted', reason: v.code } }) } // P11's closed code on the row (D38)

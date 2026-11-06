@@ -581,8 +581,9 @@ Desktop ignores `settings.json`, and its model traffic runs in the Chromium netw
 environment variable. On macOS and Windows the model covers it without anything of its own: the user-level root from
 `install` is what Desktop trusts, and `on` sets `egressProxyPacUrl` in the entry in effect of Desktop's user-level
 config library (creating a one-key entry when none is in effect; `off` removes it and restores the entry in effect). The
-PAC is served by the daemon on loopback: loopback and your bypass list go direct, the rest goes through the door, and
-when the door does not answer, the way Desktop would go without trocar: your system proxy, or direct when none is set.
+PAC is served by the daemon on loopback: loopback goes direct; hosts on your bypass list go through the door, which
+only forwards them, unread, straight to the host (one that wants a client certificate keeps working); the rest goes
+through the door, and when the door does not answer, the way Desktop would go without trocar: your system proxy, or direct when none is set.
 The door itself also leaves through your system proxy, and follows it when you change it. A process trocar cannot
 confirm is yours still gets a PAC, with your system proxy and no door; one that leaves before trocar could tell is
 only counted, never reported as refused. It takes effect at the next start of the app;
