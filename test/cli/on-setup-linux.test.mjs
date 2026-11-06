@@ -134,7 +134,7 @@ const homePlaces = (d, home, env) => d.present.filter((p) => p && p.base === 'ho
 const LATE = {
   'kimi-code': { keep: ['.kimi-code', '.bashrc'], seed: (home) => fs.writeFileSync(path.join(home, '.bashrc'), "alias ll='ls -l'\n") },
   codex: {
-    keep: ['bin', '.codex'],
+    keep: ['bin', '.codex'], // .codex stays absent: codex is there by bin/codex on the recorded PATH alone
     seed: (home) => { fs.mkdirSync(path.join(home, 'bin')); fs.writeFileSync(path.join(home, 'bin', 'codex'), '#!/bin/sh\n', { mode: 0o755 }) },
     after: (home) => fs.writeFileSync(path.join(collectorDir(home), USER_PATH_FILE), JSON.stringify({ PATH: path.join(home, 'bin') })),
   },
@@ -144,7 +144,7 @@ test('V91-O9 · 4.6 Q5: a harness present by its footprint with no carrier is re
   for (const [h, shape] of Object.entries(LATE)) {
     const s = await installedHome({ names: [CC], seed: (home, sh) => {
       for (const d of ALL) if (d.name !== CC && d.name !== h) for (const f of homePlaces(d, home, sh.env)) fs.rmSync(f, { recursive: true, force: true })
-      if (h !== 'codex') fs.rmSync(path.join(home, '.codex'), { recursive: true, force: true })
+      fs.rmSync(path.join(home, '.codex'), { recursive: true, force: true })
       shape.seed(home)
     } })
     if (shape.after) shape.after(s.home)

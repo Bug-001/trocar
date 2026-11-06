@@ -234,12 +234,15 @@ test('Linux · 4.4 #13 · 4.6: Set up on a HOME without an install record is cer
 })
 
 // 4.11 P4b · 4.6 (V67 / V91): what the judge calls `needed` is what install places again. Axes: every harness with an install-phase config item ×
-// the item's file rewritten without trocar's text (its own update): a `needed` setup is `ready` after Set up, and `on <h>` turns it on.
+// the item's file deleted / rewritten without trocar's text (its own update): the harness is still there, so setup is `needed`; Set up either
+// places it again (→ `ready`, and `on <h>` turns it on) or, when its inject has nothing to place it from, refuses with setup-needed and changes
+// no byte — never "nothing to set up" (4.6 「这个 harness 装好了没有」).
 const DAMAGE = {
+  deleted: (x) => fs.rmSync(x.path),
   overwritten: (x) => { const t = fs.readFileSync(x.path, 'utf8'); fs.writeFileSync(x.path, x.kind === 'json-key' ? setKey(t, x.keys, '/elsewhere/ca.pem').text : removeTrocarText(t, x.ops).text) },
 }
 for (const h of ['claude-code', 'codex', 'hermes', 'kimi-code', 'z-code']) for (const [how, damage] of Object.entries(DAMAGE)) {
-  test(`Linux · V67 · V91: ${h}'s certificate item ${how} → setup needed; Set up places it again → ready, and on ${h} turns it on`, async () => {
+  test(`Linux · V67 · V91: ${h}'s certificate item ${how} → setup needed; Set up places it again (→ ready, on ${h} turns it on) or refuses with setup-needed, writing nothing`, async () => {
     const s = await installedHome({ names: [h] })
     const desc = s.descs[0], judged = () => driverSetup(desc, { os: 'linux', home: s.home, env: s.sh.env, manifest: s.manifest() })
     const items = s.manifest().entries.filter((e) => e.harness === h && e.phase === 'install')
@@ -248,16 +251,24 @@ for (const h of ['claude-code', 'codex', 'hermes', 'kimi-code', 'z-code']) for (
     const userLeft = left()
     assert.equal(judged().state, 'needed')
     const ctx = { home: path.join(s.home, '.trocar'), deps: linuxSetupDeps(s) }
+    const record = () => fs.readFileSync(manifestPath(s.dir), 'utf8')
+    const recorded = record()
     const p = await VERBS.setup({ harness: h }, ctx)
-    assert.equal(p.status, 409, JSON.stringify(p.doc))
-    assert.ok(p.doc.plan.length > 0, JSON.stringify(p.doc))
-    const r = await VERBS.setup({ harness: h, confirm: p.doc.plan_id }, ctx)
-    assert.equal(r.status, 200, JSON.stringify(r.doc))
-    assert.equal(r.doc.ok, true)
-    assert.deepEqual([judged().state, judged().missing], ['ready', []])
-    const on = await s.on({ ids: [h] })
-    assert.equal(on.exit, 0, JSON.stringify(on.receipt))
-    assert.ok(on.receipt.harnesses.includes(h) && !on.receipt.refused.length)
+    if (p.doc.ok === false) {
+      assert.equal(p.doc.error.code, 'setup-needed', JSON.stringify(p.doc))
+      assert.deepEqual([left(), record()], [userLeft, recorded], 'a refused Set up writes nothing')
+      assert.equal(judged().state, 'needed')
+    } else {
+      assert.equal(p.status, 409, JSON.stringify(p.doc))
+      assert.ok(p.doc.plan.length > 0, JSON.stringify(p.doc))
+      const r = await VERBS.setup({ harness: h, confirm: p.doc.plan_id }, ctx)
+      assert.equal(r.status, 200, JSON.stringify(r.doc))
+      assert.equal(r.doc.ok, true)
+      assert.deepEqual([judged().state, judged().missing], ['ready', []])
+      const on = await s.on({ ids: [h] })
+      assert.equal(on.exit, 0, JSON.stringify(on.receipt))
+      assert.ok(on.receipt.harnesses.includes(h) && !on.receipt.refused.length)
+    }
     const un = await s.uninstall({ yes: true })
     assert.equal(un.exit, 0, JSON.stringify(un.receipt && un.receipt.problems))
     assert.deepEqual(left(), userLeft, 'uninstall puts back what the user left, byte for byte (invariant 5)')
