@@ -1,6 +1,6 @@
 // test/web-v2/resources.test.mjs — the resource explorer's own suite (2.4): bad data degrades instead of throwing
-// (#10: unknown kinds land in 「其他资源」 with the kind on hover, undated rows carry no step), the five display groups
-// and the 「其他 N 项」 wrapper count their own entries, with no compaction group (#1), the fidelity annotations of 只见到名字
+// (#10: unknown kinds land in 「其他资源」 with the kind on hover, undated rows carry no step), the six display groups
+// and the 「其他 N 项」 wrapper count their own entries, compactions leaving the group on the chapter axis (#1), the fidelity annotations of 只见到名字
 // (#3: no data-view, 「推测」 on the group, the ⓘ text), and the < 1200 px fold
 // line's N is the 读过的文件 group's own count — never a "0" standing in for absent records (1.2 §窄屏, invariant 4).
 // String level over desk-model states: the ledger is the anchor lane's `lane` answer as the desk holds it (desk-world.mjs).
@@ -8,7 +8,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { resourcesHtml, renderResources, wireResources } from '../../web/legacy/replay/resources.mjs'
 import * as W from '../../web/legacy/labels/replay.mjs'
-import { esc } from '../../web/legacy/core/fmt.mjs'
+import { esc, kf } from '../../web/legacy/core/fmt.mjs'
 import { relPath } from '../../web/legacy/replay/analysis.mjs'
 import { buildLanes, anchorLane } from '../../web/legacy/replay/lanes.mjs'
 import { deskOf } from './desk-world.mjs'
@@ -18,13 +18,14 @@ import { applyLane, applyLedger, seenFiles } from '../../web/legacy/replay/model
 const R = (i) => `R0-${i}`
 const anchorOf = ({ resources = [], ...ledger } = {}) => ({ kind: 'main', rows: Array.from({ length: 6 }, () => ({})), blocks: Array.from({ length: 6 }, () => []),
   resources: resources.map((r) => ({ key: `${r.kind}:${r.label}`, ...r })), ...ledger })
-const ALL_OPEN = ['life-file', 'life-load', 'life-others', 'life-seen', 'life-cap', 'life-dl', 'life-other']
+const ALL_OPEN = ['life-file', 'life-load', 'life-others', 'life-seen', 'life-cap', 'life-dl', 'life-comp', 'life-other']
 const stateOf = (lane, extra = {}) => {
   const desk = deskOf([lane]), lanes = buildLanes(desk), anchor = anchorLane(lanes)
   return { desk, lanes, anchor, anchorTs: anchor.calls.map((c) => Date.parse(c.ts)), view: { lo: 0, hi: anchor.calls.length }, playhead: 0, sawView: 'ctx', collapsedRails: new Set(), subSeeded: new Set(), subgroupOpen: false, bgOpen: false, meta: { project_path: '/w/p' }, navOpen: new Set(ALL_OPEN), navSeenExpanded: false, ...extra }
 }
 // a group header's count, the way navGroup writes it: <span class="navlbl">label</span><span class="navct">N</span>
-const labelsOf = (h) => [...h.matchAll(/<span class="navlbl">([^<]*)<\/span>/g)].map((m) => m[1])
+// the desk with the head's chapter axis on `axis` (the main lane's key R0-0 = the anchor here; another key = an off-axis anchor)
+const axisDesk = (lane, axis = R(0)) => { const s = stateOf(lane); s.desk.head = { axis, chapters: [{ k: 0, s0: 0, s1: 6 }] }; return s }
 const grpCount = (h, label) => { const m = h.match(new RegExp(`navlbl">${label}</span><span class="navct">(\\d+)</span>`)); return m ? +m[1] : null }
 
 test('#10 bad data degrades, never throws: unknown kinds land in 其他资源 with the kind on hover; undated rows carry no step', () => {
@@ -45,7 +46,7 @@ test('#10 bad data degrades, never throws: unknown kinds land in 其他资源 wi
   assert.ok(dated && /data-navstep="2"/.test(dated[0]), 'a dated unknown row locates its enter step')
 })
 
-test('#1 the five groups count their own entries, and compactions make no group (one constructed lane)', () => {
+test('#1 the six groups count their own entries; on the chapter axis compactions leave the group (one constructed lane)', () => {
   const anchor = anchorOf({
     resources: [
       { kind: 'file', label: '/w/p/a.mjs', segments: [{ enter: R(0), evict: null }] },
@@ -67,15 +68,19 @@ test('#1 the five groups count their own entries, and compactions make no group 
   assert.equal(grpCount(h, W.RES_GRP.cap), 2, 'skill + capability together')
   assert.equal(grpCount(h, W.RES_GRP.dl), 2, 'dir + link together')
   assert.equal(grpCount(h, W.RES_GRP.other), 1)
-  // the Overview's chapter heads carry the compactions (2.4 §分组): the heads are these groups and no other, and N leaves the events out
-  const want = [W.RES_GRP.file, W.RES_GRP.load, W.OTHERS_ROW(3 + 2 + 2 + 1), `${W.RES_GRP.seen} · ${W.GUESS}`, W.RES_GRP.cap, W.RES_GRP.dl, W.RES_GRP.other]
-  assert.deepEqual(labelsOf(h).sort(), want.map(esc).sort())
-})
-
-test('#7 an empty ledger says so, and a compaction event draws no group beside it', () => {
-  const h = resourcesHtml(stateOf(anchorOf({ resources: [], events: [{ type: 'compaction', rid: R(2), from: 10, to: 3 }, { type: 'summarize', rid: R(3), out: 9 }] })))
-  assert.ok(h.includes(esc(W.NO_RESOURCES)))
-  assert.deepEqual(labelsOf(h), [])
+  assert.equal(grpCount(h, W.RES_GRP.comp), 2, 'no chapter table: compaction + summarize events')
+  assert.ok(h.includes(`navlbl">${W.OTHERS_ROW(3 + 2 + 2 + 2 + 1)}</span>`), 'N more sums the folded groups')
+  // on the chapter axis: the Overview's chapter heads carry the compaction, so only the summary stays and N drops one
+  const d = resourcesHtml(axisDesk(anchor))
+  assert.equal(grpCount(d, W.RES_GRP.comp), 1, 'the summary stays: the Overview does not show it')
+  assert.ok(d.includes(esc(W.summarizeRow('', kf(1200)))), 'the summary row')
+  assert.ok(!d.includes(esc(W.compactRow('', '10', '—'))), 'no compaction row on the axis')
+  assert.ok(d.includes(`navlbl">${W.OTHERS_ROW(3 + 2 + 2 + 1 + 1)}</span>`), 'N more leaves the compaction event out')
+  // an anchor off the chapter axis has no chapter heads: its compaction numbers live only here
+  const off = resourcesHtml(axisDesk(anchor, 'R9-0'))
+  assert.equal(grpCount(off, W.RES_GRP.comp), 2, 'off the axis both rows stay')
+  assert.ok(off.includes(esc(W.compactRow('', '10', '—'))), 'the compaction row with its numbers')
+  for (const g of [W.RES_GRP.file, W.RES_GRP.load, W.RES_GRP.cap, W.RES_GRP.dl, W.RES_GRP.other]) assert.equal(grpCount(d, g), grpCount(h, g), g)
 })
 
 test('#3 a names-only chip never opens content and locates its first step', () => {
@@ -84,6 +89,24 @@ test('#3 a names-only chip never opens content and locates its first step', () =
   const chip = h.match(/<span class="navchip[^"]*"[^>]*>/)[0]
   assert.ok(!/data-view/.test(chip), 'a names-only chip has no view affordance — there is no content behind it')
   assert.match(chip, /data-navstep="1"/)
+})
+
+test('#7 the compaction group still draws with an empty ledger', () => {
+  const comps = [{ type: 'compaction', rid: R(2), from: 10, to: 3 }]
+  const empty = resourcesHtml(stateOf(anchorOf({ resources: [], events: comps })))
+  assert.equal(grpCount(empty, W.RES_GRP.comp), 1, 'compaction events still draw with an empty ledger')
+  assert.equal(grpCount(empty, W.RES_GRP.file), null, 'no empty groups are drawn')
+  const desk = resourcesHtml(axisDesk(anchorOf({ resources: [], events: comps })))
+  assert.equal(grpCount(desk, W.RES_GRP.comp), null, 'on the chapter axis no compaction group is drawn')
+  assert.equal(grpCount(resourcesHtml(axisDesk(anchorOf({ resources: [], events: comps }), 'R9-0')), W.RES_GRP.comp), 1, 'off the axis it does')
+  assert.ok(desk.includes(esc(W.NO_RESOURCES)), 'the empty ledger still says so')
+})
+
+test('2.4 压缩行: a marked compaction shows its landing\'s numbers, and the landing is no row of its own', () => {
+  const events = [{ type: 'compaction', rid: R(2), from: 10, to: 11, inferred: false }, { type: 'compaction-landed', rid: R(4), from: 12, to: 3 }]
+  const h = resourcesHtml(stateOf(anchorOf({ events })))
+  assert.equal(grpCount(h, W.RES_GRP.comp), 1)
+  assert.ok(h.includes(W.compactRow('', 12, 3)))
 })
 
 // 2.4 element table: a long path is cut in the middle — the base name stays whole, the length fits unless the base

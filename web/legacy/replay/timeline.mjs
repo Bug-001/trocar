@@ -63,10 +63,12 @@ function startsOf(no, N, chs) {
 // the positions found, per anchor lane object and chapter table: a lane object is rebuilt when its calls change (lanes.mjs), so each
 // chapter's position is searched once per answer that changed the lane, not per paint
 const POS = new WeakMap()
+// the anchor is the head's axis lane with a chapter table: only then does the desk (and the Overview's chapter heads) cut chapters
+export const onChapterAxis = (s) => { const head = s.desk && s.desk.head; return !!(head && head.chapters && head.chapters.length && s.anchor && s.anchor.id === head.axis) }
 export function chapterHere(s) {
   const a = s.anchor, N = a ? a.calls.length : 0, head = s.desk && s.desk.head, no = a && a.no ? (i) => a.no(i) : (i) => i
   const end = N ? no(N - 1) + 1 : 0
-  const table = head && head.chapters && head.chapters.length && a && a.id === head.axis
+  const table = onChapterAxis(s)
   const chs = table ? head.chapters : [{ s0: 0, s1: end, ts0: null, inferred: false }]
   let at = null
   if (table && N) { const m = POS.get(a); if (m && m.chs === chs) at = m.at; else POS.set(a, { chs, at: at = startsOf(no, N, chs) }) }

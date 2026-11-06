@@ -1,21 +1,22 @@
 // replay/resources.mjs — the resource explorer on the right page (2.4): what entered the context across the WHOLE
 // session, and where each of it stands at the playhead (not yet · live · evicted) — one lifecycle sentence per row, in
-// words. Five groups keyed by the resource kind (a render-time projection, never a schema enum); the first two are open by
-// default, the rest live behind one 「其他 N 项」 row. No compaction group: the Overview's chapter heads carry each one (2.4).
+// words. Six groups keyed by the resource kind (a render-time projection, never a schema enum); the first two are open by
+// default, the rest live behind one 「其他 N 项」 row. On the chapter axis the compaction group leaves out the compactions the Overview's chapter heads carry (2.4).
 // The ledger is the anchor lane's `lane` answer (resources, seen, events; 3.5 §会话读) as the desk holds it: nothing is said
 // until that lane is held; an empty ledger has its own sentence (this agent may not provide one — never "no resources").
 // The key of a resource is the server's `resKey` / `key`, else kind::label. `el` is #resexp; `s` is the replay desk's state.
-import { esc } from '../core/fmt.mjs'
+import { esc, kf } from '../core/fmt.mjs'
 import { resState } from './lanes.mjs'
 import { relPath, midClip } from './analysis.mjs'
 import { navGroup, jumpToStepAndBlock, jumpToBlockIndex } from './outline.mjs'
 import { blockJump } from './jump.mjs'
+import { onChapterAxis } from './timeline.mjs'
 import { KIDS, serialize, keyed, patchInto } from '../core/units.mjs'
 import * as W from '../labels/replay.mjs'
-import { resKeyOf, laneEvents, seenFiles, ledgerDone, stepOf, carriesRes } from './model.mjs'
+import { resKeyOf, laneEvents, seenFiles, ledgerDone, compactionNumbers, stepOf, carriesRes } from './model.mjs'
 
 const SEEN_CAP = 40
-// a resource is datable (has a lifecycle to speak of) only with a usable segment list; the five display groups and the
+// a resource is datable (has a lifecycle to speak of) only with a usable segment list; the six display groups and the
 // < 1200 px fold line's N count the same set (1.2 §窄屏). An UNKNOWN kind is never dropped (2.4 Edge cases): it renders
 // in 「其他资源」, undated when it has no usable segments. A known kind without usable segments joins no counted group.
 const hasSeg = (r) => !!(r && r.segments && r.segments.length)
@@ -105,6 +106,16 @@ export function resourceUnits(s) {
     return `<div class="navsub" data-navstep="${l.enter}"><span class="nsl" title="${esc(r.label)}">${esc(r.kind === 'dir' ? W.DIR_WORD : W.LINK_WORD)} ${rp(r.label)}</span><button type="button" class="navlife" data-navstep="${l.enter}" aria-label="${esc(W.jumpStepTip(at(l.enter)))}">${esc(W.lifeSeen(at(l.enter)))}</button></div>` }
   const dl = [...of('dir'), ...of('link')]
   const runtimeRow = (r) => { const why = Object.hasOwn(W.RUNTIME_WHY, r.runtime) ? W.RUNTIME_WHY[r.runtime] : r.runtime; return fileRow(r).replace(/<\/div>$/, `<span class="nsx" title="${esc(why)}">${esc(why)}</span></div>`) }
+  const numbers = compactionNumbers(events, (e) => L(e.rid))
+  const compRow = (e) => {
+    const atStep = L(e.rid), n = numbers.get(e)
+    const word = e.type === 'compaction'
+      ? W.compactRow(at(atStep), n.from != null ? String(n.from) : '—', n.to != null ? String(n.to) : '—') + (e.inferred ? ` · ${W.GUESS}` : '')
+      : W.summarizeRow(at(atStep), e.out != null ? kf(e.out) : '—')
+    return `<div class="navsub" data-navstep="${atStep}"><span class="nsl" title="${esc(word)}">${esc(word)}</span></div>` }
+  // on the chapter axis the Overview's chapter heads carry each compaction and its numbers, so the group leaves them out (2.4, 2.5)
+  const dropComp = onChapterAxis(s)
+  const comps = events.filter((e) => e && ((e.type === 'compaction' && !dropComp) || e.type === 'summarize'))
   const others = res.filter((r) => !['file', 'scaffold', 'skill', 'capability', 'dir', 'link'].includes(r.kind))
   // others keeps EVERY unknown kind (even one without segments — 2.4 Edge cases: 不丢); an undated row shows no step
   // number and carries no data-navstep (there is no enter to locate)
@@ -122,10 +133,11 @@ export function resourceUnits(s) {
     ...seenBlock,
     ...(skills.length || caps.length ? navGroup(s, 'life-cap', W.RES_GRP.cap, ct(skills.length + caps.length), rowsOf([...skills, ...caps], capRow)) : []),
     ...(dl.length ? navGroup(s, 'life-dl', W.RES_GRP.dl, ct(dl.length), rowsOf(dl, dlRow)) : []),
+    ...(comps.length ? navGroup(s, 'life-comp', W.RES_GRP.comp, comps.length, keyed(comps.map((e) => ({ key: `${e.type}:${e.rid}`, html: compRow(e) })))) : []),
     ...(others.length ? navGroup(s, 'life-other', W.RES_GRP.other, ct(others.length), rowsOf(others, otherRow)) : []),
   ]
   if (inner.length) {
-    const nOthers = runtime.length + seen.length + skills.length + caps.length + dl.length + others.length
+    const nOthers = runtime.length + seen.length + skills.length + caps.length + dl.length + comps.length + others.length
     // a session with nothing above: the groups stand on their own — a lone 「N more」 row would hide the only content.
     // N holds ledger counts: while the chain is unread the row says 「more」 with the busy box in the count's place
     if (!out.length) out.push(...inner)
