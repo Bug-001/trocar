@@ -124,7 +124,7 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
     if (child) child.stdout.resume()
   }
 
-  /** What a silent worker was asked, for the D38 record (3.5 读不全不静默): the query and its parameters by name, no value; a name the caller made up is left out too. */
+  /** What a silent worker was asked, for the D38 record (3.5 读不全不静默): the query and its parameters by name, no value. A name is only shape-checked: the query core refuses an undeclared one, unless the worker hung before it read the line. */
   const askedOf = ({ name, line }) => {
     let asked = {}
     try { const q = JSON.parse(line); asked = q.params || q.body || {} } catch { /* the name alone says enough */ }
