@@ -55,7 +55,7 @@ async function world(t) {
     readState: () => null, readIngress: () => ({ groupPorts: {}, listenerToken: TOKEN }),
     readManifest: () => ({ ...newManifest(), liveness: Object.fromEntries(pair.map((d) => [d.name, { on_at: iso(INSTALLED) }])) }),
     procTable: async () => [...facts].map(([pid, f]) => ({ pid, startedAt: f.startedAt })), clock: () => INSTALLED + 5,
-    drain: ({ harnesses: hs, now }) => engine.drain({ agents: hs ? new Set(hs) : null, now }), // as the daemon wires it
+    drain: ({ harnesses: hs, now }) => engine.drain({ agents: hs ? new Set(hs) : null, now }), // as runModelDaemon (src/collector/daemon.mjs) wires the collector's drain
   })
   c.bindDoors({ open: (l) => engine.listen({ groups: l }), close: (ids) => Promise.resolve(engine.closeGroups(ids)) })
   await c.start()
@@ -108,6 +108,8 @@ test('two harnesses on, off of one: only its door closes; the other\'s door, its
   const upstreamA = W.c.upstreams()[gA]
   assert.ok(upstreamA && upstreamA.length, 'A\'s door answered an upstream for its process')
   await W.c.off({ harnesses: [B.name] })
+  // A's connection is spliced (no boundary to see): an off that reached it would leave it waiting, and it would still relay
+  assert.deepEqual(W.engine.relayed({ agents: new Set([A.name]) }), { closing: 0, waiting: 0 }, 'off of B asked none of A\'s connections to close')
   assert.deepEqual(W.c.doors(), { [gA]: ports[gA] }, 'B\'s door is gone, A\'s is on its port')
   assert.deepEqual([await canConnect(ports[gA]), await canConnect(ports[gB])], [true, false], 'A\'s door listens, B\'s does not')
   assert.deepEqual(W.c.upstreams()[gA], upstreamA, 'A\'s upstream answer is unchanged')

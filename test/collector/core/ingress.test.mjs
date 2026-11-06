@@ -488,8 +488,8 @@ test('one call, two ways in: through the transparent path and through the proxy 
   await L.settled(2)
   assert.deepEqual([L.flows[0].ingress, typeof L.flows[1].ingress], [undefined, 'object'], 'the first came the transparent way, the second through the entry')
   assert.equal(L.envelopes.length, 2)
-  // besides the fields the spec names: duration_ms, a measured time like ts*; on the row bytes_up / bytes_down, which count the TLS handshake
-  // (its signature's DER length varies per connection); the call's own bytes are on the envelope (body_wire_bytes) and compared there
+  // the row's bytes_up / bytes_down go too: they count the TLS handshake, whose signature length varies per connection; that the CONNECT and
+  // the 200 are not counted is asserted by the W13 CONNECT and SOCKS5 tests above, and the call's own bytes are compared on the envelope
   const drop = (x, keys) => { const y = structuredClone(x); for (const k of Object.keys(y)) if (keys.includes(k) || k.startsWith('ts')) delete y[k]; return y }
   const env = (e) => { const y = drop(e, ['id', 'flow_id', 'seq', 'capture', 'dst', 'duration_ms']); if (y.proc) { delete y.proc.pid; delete y.proc.exe } return y }
   assert.deepEqual(env(L.envelopes[1]), env(L.envelopes[0]))

@@ -49,6 +49,7 @@ function outside(w) {
   walk(w.home)
   return out
 }
+const switches = (w) => { try { return fs.readdirSync(path.join(w.dir, 'switch')) } catch { return [] } }
 const on = (w, over = {}) => turnOnModel({ os: 'darwin', home: w.home, env: w.env, harnesses: w.harnesses, ctx: w.ctx, isFree: async () => true, renderHook, ...over })
 
 // V85 (on): the files `on` writes outside ~/.trocar are the ones its plan names — a plug-in route's own file included
@@ -68,24 +69,23 @@ test('V85: on writes outside ~/.trocar only the paths its plan names', async () 
 
 // 4.8 §3 (on <h>): the command line writes an entry only once the daemon has opened the door and answered it back; a door that does not open
 // leaves no entry and `on` fails; an `on` cut off after the door opened and before any entry is completed by the next `on`
-test('on writes no entry before the daemon has opened the door and read it back', async () => {
-  const w = await modelWorld({ commands: ['codex'] })
-  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+test('on writes no entry and no switch file before the daemon has opened the door and read it back', async () => {
+  const w = await installed() // codex (an entry in its own config), dsh and kimi (switch files)
   const before = outside(w), atDoor = []
-  const d = await daemon(w, { onPost: (body) => { atDoor.push(outside(w)); return { doors: Object.fromEntries(Object.entries(body.groups).map(([g, port]) => [g, `http://127.0.0.1:${port}`])) } } })
-  try { assert.equal((await on(w, { ids: ['codex'] })).exit, 0) } finally { await d.close() }
-  assert.deepEqual(atDoor, [before], 'nothing outside ~/.trocar was written while the door was being opened')
+  const d = await daemon(w, { onPost: (body) => { atDoor.push([outside(w), switches(w)]); return { doors: Object.fromEntries(Object.entries(body.groups).map(([g, port]) => [g, `http://127.0.0.1:${port}`])) } } })
+  try { assert.equal((await on(w)).exit, 0) } finally { await d.close() }
+  assert.deepEqual(atDoor, [[before, []]], 'nothing outside ~/.trocar and no switch file was written while the door was being opened')
   assert.notDeepEqual(outside(w), before, 'the entries were written after the door answered')
+  assert.ok(switches(w).length > 0, 'and the switch files')
 })
 
-test('a door that cannot open (its port taken): on writes no entry and exits 1', async () => {
-  const w = await modelWorld({ commands: ['codex'] })
-  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+test('a door that cannot open (its port taken): on writes no entry and no switch file, and exits 1', async () => {
+  const w = await installed()
   const before = outside(w)
   const d = await daemon(w, { onPost: (body) => ({ doors: {}, skipped: Object.keys(body.groups).map((g) => ({ g, reason: 'engine-port-taken' })) }) })
-  try { assert.equal((await on(w, { ids: ['codex'] })).exit, 1) } finally { await d.close() }
+  try { assert.equal((await on(w)).exit, 1) } finally { await d.close() }
   assert.deepEqual(outside(w), before, 'no entry written')
-  assert.equal(fs.existsSync(path.join(w.dir, 'switch', 'codex')), false, 'no switch file')
+  assert.deepEqual(switches(w), [], 'no switch file')
 })
 
 test('an on cut off after the door opened and before any entry: the next on completes, its entries lead to the doors', async () => {

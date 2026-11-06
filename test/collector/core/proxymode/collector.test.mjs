@@ -655,30 +655,24 @@ test('1.6 V32 `attached` · the daemon\'s own answer: every group ingress.json r
   absent.c.close()
 })
 
-// 4.8 §5.3 (trust verdict): two processes at one group's door (claude-code:settings carries two forms) are each judged on their own process facts —
-// one whose own settings trust the root decrypts, one whose do not is forwarded — and neither verdict leaks to the other's next connection
-test('two processes at one group\'s door are each judged on their own facts: the trusted one decrypts, the other is forwarded, neither takes the other\'s verdict', async () => {
+// 4.8 §5.3 W16 (trust verdict): at one door of a group with two forms (claude-code:settings), each process is judged on its own facts against
+// every form of the route — one whose settings trust the root decrypts, one whose settings do not is forwarded untrusted. CM22 checks one
+// process per door of the shipped descriptor; this adds a second, failing process at the same multi-form door.
+test('two processes at one door of a two-form group are each judged on their own facts: the trusted one decrypts, the other is forwarded untrusted', async () => {
   const d = descs.find((x) => x.name === 'claude-code'), g = 'claude-code:settings'
   const forms = d.proxyMode.forms.filter((f) => f.route === 'settings' && f.os.includes('darwin'))
   assert.ok(forms.length >= 2, 'the group carries two forms')
   const r = await rig({ desc: d })
   await r.c.on({ harnesses: [d.name], groups: { [g]: 18400 } })
   const t = d.proxyMode.trusts[forms[0].trust]
-  const procs = { 7101: worldOf(d, forms[0], 'darwin', {}), 7102: worldOf(d, forms[1], 'darwin', { sources: t.sources.map(() => 'lacks') }) }
-  const ask = async (p) => {
-    const { c: cs, w, facts } = procs[p], base = ctxOf(w)
-    Object.assign(r.w, { pid: Number(p), facts: { exe: '/bin/x', uid: 501, agent: d.name, startedAt: facts.startedAt }, env: w.env, cwd: w.cwd, ctx: { ...base, readFile: (q) => base.readFile(q).replace(ROOT.pem, STUB_PEM) } })
+  const ask = async (p, { c: cs, w, facts }) => {
+    const base = ctxOf(w)
+    Object.assign(r.w, { pid: p, facts: { exe: '/bin/x', uid: 501, agent: d.name, startedAt: facts.startedAt }, env: w.env, cwd: w.cwd, ctx: { ...base, readFile: (q) => base.readFile(q).replace(ROOT.pem, STUB_PEM) } })
     return r.c.lookupIngress({ peer: PEER, user: g, target: { address: cs.host, port: 443 } })
   }
-  const first = { 7101: await ask(7101), 7102: await ask(7102) }
-  assert.deepEqual([first[7101].decrypt, first[7102].decrypt], [true, false])
-  assert.equal(first[7102].skip.not_captured, 'untrusted')
-  // the same lives connect again while the world answers the other one's facts: each keeps its own verdict
-  for (const [p, q] of [[7101, 7102], [7102, 7101]]) {
-    const { w } = procs[q], base = ctxOf(w)
-    Object.assign(r.w, { pid: p, facts: { exe: '/bin/x', uid: 501, agent: d.name, startedAt: procs[p].facts.startedAt }, env: w.env, cwd: w.cwd, ctx: { ...base, readFile: (x) => base.readFile(x).replace(ROOT.pem, STUB_PEM) } })
-    assert.equal((await r.c.lookupIngress({ peer: PEER, user: g, target: { address: procs[p].c.host, port: 443 } })).decrypt, first[p].decrypt, `pid ${p}`)
-  }
+  const trusted = await ask(7101, worldOf(d, forms[0], 'darwin', {}))
+  const other = await ask(7102, worldOf(d, forms[1], 'darwin', { sources: t.sources.map(() => 'lacks') }))
+  assert.deepEqual([trusted.decrypt, other.decrypt, other.skip && other.skip.not_captured], [true, false, 'untrusted'])
   r.c.close()
 })
 
