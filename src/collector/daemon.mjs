@@ -275,19 +275,22 @@ function boardFor({ P, failure, query, tips, log = () => {} }) {
     const cfg = readIngressConfig({ dir: P.dir })
     if (cfg.boardPort === undefined) { if (cfg.error) st = { ...st, reason: `${cfg.error}: run trocar install` }; return }
     const port = cfg.boardPort
+    const fail = (e) => {
+      st = { port, state: 'port-taken', reason: `the board could not listen on 127.0.0.1:${port} (${(e && e.code) || errText(e)}); capture goes on` }
+      failure('daemon', coded(e, 'start-failed'), { port })
+    }
     try {
       token = boardToken(P.dir)
-      const s = createBoard({ home: path.dirname(P.dir), token, query, tips }).server
+      const b = createBoard({ home: path.dirname(P.dir), token, query, tips }), s = b.server
       s.on('clientError', (e, sock) => sock.destroy())
       await new Promise((resolve, reject) => { s.once('error', reject); s.listen(port, '127.0.0.1', resolve) })
       s.on('error', (e) => log('board', e)) // after the listen: the board never takes the daemon down
       if (stopped) { s.close(); return } // the daemon stopped while it was listening
       server = s
       st = { port, state: 'serving', reason: null }
-    } catch (e) {
-      st = { port, state: 'port-taken', reason: `the board could not listen on 127.0.0.1:${port} (${(e && e.code) || errText(e)}); capture goes on` }
-      failure('daemon', coded(e, 'start-failed'), { port })
-    }
+      // the static plane is read now, while `on` is answered: a walk that fails takes the board down and is said, as a failed listen is
+      b.statics().catch((e) => { if (stopped) return; if (server === s) { s.close(); server = null }; fail(e) })
+    } catch (e) { fail(e) }
   }
   const tokenAnswer = async () => { await started; return { ...st, token } }
   return {
@@ -312,7 +315,8 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
   if (!A0) { try { A0 = await loadArch() } catch { A0 = null } } // a platform with no collector has no part of its own (netFactsDeps' pattern)
   if (A0 && typeof A0.nodePreflight === 'function') { // macOS / Windows (4.9 §7, 4.8 §7): the Node floor `on` holds, asked first because it is free; Linux's arch has none
     const pf = A0.nodePreflight()
-    if (pf && pf.ok === false) throw Object.assign(new Error(pf.doctor), { code: 'node-too-old' }) // startDaemon's catch writes the {where:'start'} record with doctor's fix; nothing was claimed
+    // not `on`'s doctor line: the login entry names this fixed Node, and only `install` rewrites the entry (`on` never does). startDaemon's catch writes the {where:'start'} record; nothing was claimed
+    if (pf && pf.ok === false) throw Object.assign(new Error(`the background process runs on Node ${pf.have || '(version unreadable)'} at ${process.execPath}, and trocar needs Node ${pf.min} or newer: update that Node, or run trocar install with a newer Node so the login entry starts that one`), { code: 'node-too-old' })
   }
   if (A0 && typeof A0.refuseElevated === 'function') { // win32 (4.8 §7, W25, R7): the daemon does not run on an elevated or SYSTEM token
     const r = await A0.refuseElevated({ env, onUnknown: (why) => log('daemon', new Error(why)) }) // a token that cannot be read is not a refusal (R11): said, and the start goes on

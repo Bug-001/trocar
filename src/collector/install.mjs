@@ -25,6 +25,7 @@ import { RESTART_REASONS } from '../health/codes.mjs'
 import { controlRequest, controlEndpointFor } from '../off/control-client.mjs'
 import { readText, readTextOrError } from './core/config-read.mjs'
 import { appendEvent } from './core/events.mjs'
+import { readFlows } from '../health/flows.mjs'
 import { runEventWriter } from '../off/events.mjs'
 import { hideUserinfoIn } from '../off/userinfo.mjs'
 import { backupDir, opLockFile, standalonePath, standaloneFiles } from '../off/paths.mjs'
@@ -114,6 +115,8 @@ export function daemonEnv(env, dir) {
 //   installCollector   the install half alone, as the harness and lab tests set an agent up (no state.json, no daemon, no confirmation)
 
 const OP_LOCK_WAIT_MS = 10_000 // 1.6 R12: another state-changing command (an `off`, say) is waited for at most this long
+// start failures a relaunch cannot fix (the same Node, the same token): any other one may clear when the OS starts the daemon again, so the wait goes on
+const REFUSED_START = new Set(['node-too-old', 'elevated-token', 'root-token', 'root-refused'])
 const SLOW_START_MS = 1000 // D62: a start call that blocks longer than this is the OS holding the job back, not trocar working — said in the receipt (D38)
 const nodeFs = fs
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
@@ -667,8 +670,14 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = nul
         }
         notes.push(unitFailed); problems.push(unitFailed)
       } else if (!was.up) {
-        for (let i = 0; i < 60 && !up && !halt; i++) { up = (await probe()).up; if (!up) { await pause(250); if (halted()) halt = true } } // an off that lands while the daemon starts is seen within a poll, not after 15 s (R12)
-        if (!up && !halt) {
+        // asked every 25 ms for the first 0.5 s (a daemon is often up within it, D62 ①), then every 250 ms: about 15 s in all
+        // a daemon that refuses to start (node-too-old, elevated-token, root-token) writes its own {where:'start'} record and exits 0, so nothing will answer:
+        // one read of the newest flows tail per poll, and its reason is the problem (D38: the daemon's words, no start-failed on top). Unreadable = keep polling.
+        const refusedSince = () => { try { return readFlows({ dir, fs, maxBytes: 64 * 1024 }).records.find((r) => r.event === EVENT.failure && r.where === 'start' && REFUSED_START.has(r.code) && Date.parse(r.ts) >= startAt) || null } catch { return null } }
+        let refusal = null
+        for (let i = 0; i < 78 && !up && !halt; i++) { up = (await probe()).up; if (!up && (refusal = refusedSince())) break; if (!up) { await pause(i < 20 ? 25 : 250); if (halted()) halt = true } } // an off that lands while the daemon starts is seen within a poll, not after 15 s (R12)
+        if (refusal) problems.push(refusal.reason || refusal.code)
+        else if (!up && !halt) {
           const where = osName === 'darwin' ? 'launchctl print gui/$(id -u)/com.trocar.collector' : osName === 'win32' ? 'schtasks /Query /TN \\trocar\\collector (and "trocar status" for the daemon)' : `systemctl --user status ${UNIT_NAME_HINT}` // the autostart's own status question, in the platform's words (4.9 §4: the LaunchAgent, not a systemd unit; 4.8 §7: the task, not a unit)
           const why = `the collector was started${sock ? ` but does not answer on ${sock}` : ', but it does not answer yet'}; look at "${where}" and the capture health on the board` // never "answers on null": an endpoint that is not known yet is not named (1.6 §1.1)
           problems.push(why); put({ event: EVENT.failure, where: 'start', code: 'start-failed', reason: why })

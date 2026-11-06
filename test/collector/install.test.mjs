@@ -30,6 +30,7 @@ import { fakeSystem, recordingExec, fakeDaemon, ROOTS } from '../cli/fixtures/on
 import { installedHome } from '../off/fixtures/off-ctx.mjs'
 import { standalonePath } from '../../src/off/paths.mjs'
 import { envelopesOf } from '../helpers/record-store.mjs'
+import { appendEvent } from '../../src/collector/core/events.mjs'
 
 function box() {
   const home = tmpDir('trocar-inst-')
@@ -668,6 +669,56 @@ test('ensureDaemonUp: a start call the OS held back is said in the notes with th
   assertEnglish(slow.notes.join('\n'), 'the slow-start note', { width: false }) // D58: English, ASCII (no em dash), nothing a reader cannot act on
   const fast = await run(20)
   assert.deepEqual([fast.up, fast.notes], [true, []], 'a start that did not block says nothing')
+})
+
+// R12 / D62: while the daemon starts, `on` asks it again and again until a deadline of about 15 s; an `off` that lands meanwhile stops the wait.
+// The clock is the pauses themselves, so this asserts what is found, never how fast.
+test('ensureDaemonUp: a daemon that answers late in the wait is found, one that never answers is a start failure, and an off seen meanwhile halts', async () => {
+  const run = async ({ upAt = Infinity, haltAfter = Infinity } = {}) => {
+    let clock = 0, polls = 0
+    const unit = { path: '/u/com.trocar.collector.plist', registered: () => ({ state: 'present' }), startNow: () => ({ code: 0 }) }
+    return ensureDaemonUp({
+      osName: 'darwin', dir: '/nope/collector', env: {}, unit, socketPath: '/tmp/trocar-test.sock',
+      request: async () => { if (clock < upAt) throw Object.assign(new Error('not there'), { code: 'ENOENT' }); return { doors: {} } },
+      pause: async (ms) => { clock += ms }, ms: () => clock, halted: () => ++polls > haltAfter,
+    })
+  }
+  const late = await run({ upAt: 14_000 })
+  assert.deepEqual([late.up, late.started, late.problems], [true, true, []])
+  const soon = await run({ upAt: 1 })
+  assert.deepEqual([soon.up, soon.problems], [true, []])
+  const never = await run()
+  assert.deepEqual([never.up, never.problems.length], [false, 1])
+  const halted = await run({ haltAfter: 3 })
+  assert.deepEqual([halted.up, halted.halt, halted.problems], [false, true, []])
+})
+
+// A daemon that refuses to start (node-too-old, elevated-token, root-token) writes its own {where:'start'} record and exits 0, so nothing ever answers. The poll reads
+// the start records written since the start was asked and stops on one, its reason the problem (D38: the daemon's words), with no start-failed on top.
+// A start record from before this start is not this start's answer, and a daemon that only never answers ends as before.
+test('ensureDaemonUp: a start the daemon refused ends the poll with the daemon\'s own reason and no second record; one that never answers still ends in start-failed', async () => {
+  const boxes = []
+  try {
+    const run = async (refuse, code = 'node-too-old') => {
+      const b = box(); boxes.push(b) // a box per run: the first run's refusal is not the second's, even within one millisecond
+      appendEvent(b.dir, { event: 'failure', where: 'start', code: 'node-too-old', reason: 'AN OLDER REFUSAL' }, { now: new Date(Date.now() - 3600e3) })
+      let polls = 0
+      const put = []
+      const unit = { path: '/Users/ada/Library/LaunchAgents/com.trocar.collector.plist', registered: () => ({ state: 'present' }), startNow: () => { if (refuse) appendEvent(b.dir, { event: 'failure', where: 'start', code, reason: 'THE DAEMON SAYS WHY' }); return { code: 0 } } }
+      const out = await ensureDaemonUp({ osName: 'darwin', dir: b.dir, env: {}, unit, socketPath: '/tmp/trocar-test.sock', put: (e) => put.push(e),
+        request: async () => { polls++; throw Object.assign(new Error('not there'), { code: 'ENOENT' }) }, pause: async () => {} })
+      return { ...out, polls, put }
+    }
+    const refused = await run(true)
+    assert.deepEqual([refused.up, refused.problems, refused.put], [false, ['THE DAEMON SAYS WHY'], []], 'the daemon\'s reason, nothing written on top')
+    assert.ok(refused.polls <= 3, `the poll stops at the record, not after 15 s: ${refused.polls} probes`)
+    // a start failure the OS's next start may clear (the endpoint held, say) is no answer yet: the wait goes on to its end
+    const passing = await run(true, 'control-endpoint-held')
+    assert.ok(passing.polls > 3 && passing.put.some((e) => e.code === 'start-failed'), `a failure a relaunch may clear does not end the wait: ${passing.polls} probes`)
+    const silent = await run(false)
+    assert.deepEqual([silent.up, silent.problems.length, silent.put.map((e) => [e.where, e.code])], [false, 1, [['start', 'start-failed']]], 'no answer and no refusal: start-failed as before')
+    assert.ok(!silent.problems[0].includes('AN OLDER REFUSAL'), 'a refusal from before this start is not its answer')
+  } finally { for (const b of boxes) b.done() }
 })
 
 // A Windows test machine, tested 2026-10-20 (`trocar update`): right after the daemon was stopped, the first probe on the named pipe came back `write EPIPE` --
