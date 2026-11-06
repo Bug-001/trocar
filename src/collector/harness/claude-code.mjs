@@ -17,6 +17,7 @@ import { parseJsonc } from '../core/config-read.mjs'
 import { envHosts, argAfter, isOwnPath, perOs } from './_common.mjs'
 import { chromiumRole, NETWORK_SERVICE_ARG } from '../../off/chromium.mjs'
 import { DOOR_ROUTES } from '../../off/marker.mjs'
+import { resolveLoc } from '../../off/loc.mjs'
 
 const BASE_URL_KEYS = ['ANTHROPIC_BASE_URL', 'ANTHROPIC_BEDROCK_BASE_URL', 'ANTHROPIC_VERTEX_BASE_URL', 'ANTHROPIC_FOUNDRY_BASE_URL', 'ANTHROPIC_BEDROCK_MANTLE_BASE_URL']
 const HOST_MANAGED_DROPS = new Set(['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'NO_PROXY', 'no_proxy', 'NODE_EXTRA_CA_CERTS', 'NODE_TLS_REJECT_UNAUTHORIZED'])
@@ -98,7 +99,7 @@ const CA_VAR = 'NODE_EXTRA_CA_CERTS'
 // ~/.claude.json, user settings, managed settings. trocar's own values (under the collector dir) do not count.
 function inject(ctx) {
   const cfgDir = ctx.env.get('CLAUDE_CONFIG_DIR')
-  const settings = path.join(cfgDir || path.join(ctx.home, '.claude'), 'settings.json')
+  const [settings] = resolveLoc(DOOR_ROUTES['claude-code'].settings.file, { home: ctx.home, env: ctx.env }) // the place the marker undo looks too
   const seen = new Set()
   const see = (v) => { if (typeof v === 'string' && v !== '' && !isOwnPath(ctx, v)) seen.add(v) }
   see(ctx.env.get(CA_VAR))

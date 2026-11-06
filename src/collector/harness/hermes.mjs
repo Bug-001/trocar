@@ -22,7 +22,8 @@ import path from 'node:path'
 import { hostOf, expandHome, parseDotenv } from '../core/config-read.mjs'
 import { CODE } from '../core/codes.mjs'
 import { envProxies, argAfter, dotenvLayer, perOs } from './_common.mjs'
-import { ROUTE_PLACES } from '../../off/marker.mjs'
+import { ROUTE_PLACES, HOME_PLACES } from '../../off/marker.mjs'
+import { homeRoot } from '../../off/loc.mjs'
 
 const MANAGED = { linux: '/etc/hermes' }
 const FALSEY = /^(false|0|no|off)$/i
@@ -35,11 +36,7 @@ const CUTOFF = releaseDay(LAST_CA_BUNDLE_RELEASE)
 const COVERED = ['SSL_CERT_FILE', 'HERMES_CA_BUNDLE'] // what trocar's block sets over the launch env and the user's lines
 
 // The root of the Hermes data dirs (HERMES_HOME may name a profile under it) and the active home of this process.
-function hermesRoot(env, home) {
-  const h = expandHome(env.get('HERMES_HOME') || '', home)
-  if (!h) return path.join(home, '.hermes')
-  return path.basename(path.dirname(h)) === 'profiles' ? path.dirname(path.dirname(h)) : h
-}
+const hermesRoot = (env, home) => homeRoot(HOME_PLACES.hermes, { home, env }) // the place the marker undo looks too
 function hermesHome(ctx) {
   const envHome = expandHome(ctx.environ.get('HERMES_HOME') || '', ctx.home)
   const root = hermesRoot(ctx.environ, ctx.home)

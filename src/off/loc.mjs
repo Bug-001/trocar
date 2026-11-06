@@ -20,6 +20,14 @@ export function resolveLoc(loc, ctx) {
   return ctx.readdir(at).filter((n) => re.test(n)).sort().map((n) => join(at, n))
 }
 
+/** The home a HOME_PLACES place (marker.mjs) names here: resolveLoc of its `dir`; when `homes` is set and the variable names one of the homes under the
+ *  root (`<root>/<homes>/<n>`), the root. null when the place names nothing here. */
+export function homeRoot(place, ctx) {
+  const h = resolveLoc(place.dir, ctx)[0]
+  if (!h) return null
+  return place.homes && path.basename(path.dirname(h)) === place.homes ? path.dirname(path.dirname(h)) : h
+}
+
 /** resolveLoc's ctx.dirs on this OS: `appSupport` is the per-user roaming app-data folder (Electron's appData: ~/Library/Application Support,
  *  %APPDATA%), `localAppData` the local one (%LOCALAPPDATA%, none on macOS); each Windows one falls back to its default place under the home. One copy,
  *  read by the collector's policies and by the marker undo. */
