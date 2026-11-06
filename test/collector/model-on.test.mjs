@@ -10,7 +10,7 @@ import { modelWorld } from '../helpers/model-world.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { renderHook } from '../../src/collector/harness/templates/index.mjs'
 import { turnOnModel } from '../../src/collector/model-on.mjs'
-import { startControlServer } from '../../src/collector/core/control.mjs'
+import { startControlServer, controlEndpointFor } from '../../src/collector/core/control.mjs'
 import { daemonMayStart, readManifest } from '../../src/off/manifest.mjs'
 import { undoHarnesses } from '../../src/off/undo.mjs'
 import { sha256 } from '../../src/off/fsutil.mjs'
@@ -32,15 +32,22 @@ async function installed({ kimiOnly = false } = {}) {
 }
 
 /** A real control server at the endpoint the resolver gives for this HOME: control.json names a socket in the tmp HOME, with a token. */
-async function daemon(w) {
+async function daemon(w, { onPost = null } = {}) {
   const sock = path.join(w.home, 'c.sock')
   fs.writeFileSync(path.join(w.dir, 'control.json'), JSON.stringify({ path: sock, token: TOKEN }))
   const asked = []
   const server = await startControlServer({ socketPath: sock, token: TOKEN, routes: {
     'GET /status': async () => ({ doors: {} }),
-    'POST /on': async ({ body }) => { asked.push(body); return { doors: Object.fromEntries(Object.entries(body.groups).map(([g, port]) => [g, `http://127.0.0.1:${port}`])) } },
+    'POST /on': async ({ body }) => { asked.push(body); if (onPost) return onPost(body); return { doors: Object.fromEntries(Object.entries(body.groups).map(([g, port]) => [g, `http://127.0.0.1:${port}`])) } },
   } })
   return { asked, close: () => server.close() }
+}
+/** Every file under HOME outside ~/.trocar, path → bytes (base64): where an agent's entries live. */
+function outside(w) {
+  const out = {}
+  const walk = (d) => { for (const n of fs.readdirSync(d)) { const p = path.join(d, n); const st = fs.lstatSync(p); if (st.isDirectory()) { if (p !== path.join(w.home, '.trocar')) walk(p) } else if (st.isFile()) out[p] = fs.readFileSync(p, 'base64') } }
+  walk(w.home)
+  return out
 }
 const on = (w, over = {}) => turnOnModel({ os: 'darwin', home: w.home, env: w.env, harnesses: w.harnesses, ctx: w.ctx, isFree: async () => true, renderHook, ...over })
 
@@ -49,7 +56,7 @@ test('V85: on writes outside ~/.trocar only the paths its plan names', async () 
   const w = await modelWorld({ commands: ['codex', 'opencode'] })
   assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
   const paths = (await on(w, { dryRun: true })).planned.flatMap((p) => p.paths)
-  const mine = () => { const out = {}; const walk = (d) => { for (const n of fs.readdirSync(d)) { const p = path.join(d, n); const st = fs.lstatSync(p); if (st.isDirectory()) walk(p); else if (st.isFile()) out[p] = fs.readFileSync(p, 'base64') } }; walk(w.home); return Object.fromEntries(Object.entries(out).filter(([k]) => !k.startsWith(path.join(w.home, '.trocar') + path.sep))) }
+  const mine = () => outside(w)
   const before = mine()
   const d = await daemon(w)
   try { assert.equal((await on(w)).exit, 0) } finally { await d.close() }
@@ -57,6 +64,50 @@ test('V85: on writes outside ~/.trocar only the paths its plan names', async () 
   const written = [...new Set([...Object.keys(before), ...Object.keys(after)])].filter((k) => before[k] !== after[k])
   assert.ok(written.length >= 2, JSON.stringify(written))
   assert.deepEqual(written.filter((f) => !paths.some((p) => f === p || f.startsWith(p + path.sep))), [], 'written but not in the plan')
+})
+
+// 4.8 §3 (on <h>): the command line writes an entry only once the daemon has opened the door and answered it back; a door that does not open
+// leaves no entry and `on` fails; an `on` cut off after the door opened and before any entry is completed by the next `on`
+test('on writes no entry before the daemon has opened the door and read it back', async () => {
+  const w = await modelWorld({ commands: ['codex'] })
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  const before = outside(w), atDoor = []
+  const d = await daemon(w, { onPost: (body) => { atDoor.push(outside(w)); return { doors: Object.fromEntries(Object.entries(body.groups).map(([g, port]) => [g, `http://127.0.0.1:${port}`])) } } })
+  try { assert.equal((await on(w, { ids: ['codex'] })).exit, 0) } finally { await d.close() }
+  assert.deepEqual(atDoor, [before], 'nothing outside ~/.trocar was written while the door was being opened')
+  assert.notDeepEqual(outside(w), before, 'the entries were written after the door answered')
+})
+
+test('a door that cannot open (its port taken): on writes no entry and exits 1', async () => {
+  const w = await modelWorld({ commands: ['codex'] })
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  const before = outside(w)
+  const d = await daemon(w, { onPost: (body) => ({ doors: {}, skipped: Object.keys(body.groups).map((g) => ({ g, reason: 'engine-port-taken' })) }) })
+  try { assert.equal((await on(w, { ids: ['codex'] })).exit, 1) } finally { await d.close() }
+  assert.deepEqual(outside(w), before, 'no entry written')
+  assert.equal(fs.existsSync(path.join(w.dir, 'switch', 'codex')), false, 'no switch file')
+})
+
+test('an on cut off after the door opened and before any entry: the next on completes, its entries lead to the doors', async () => {
+  const w = await modelWorld({ commands: ['codex'] })
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  const before = outside(w)
+  const d = await daemon(w)
+  try {
+    const ep = controlEndpointFor({ platform: 'darwin', dir: w.dir, env: w.env })
+    // the daemon opens the door and answers; the command line dies before it reads the answer
+    const cut = async (q) => { const r = await ep.request(q); if (q.method === 'POST') throw new Error('killed'); return r }
+    assert.equal((await on(w, { ids: ['codex'], request: cut })).exit, 1)
+    assert.equal(d.asked.length, 1, "the daemon took the cut run's request: its door is open")
+    assert.deepEqual(outside(w), before, 'the cut run wrote no entry')
+    const r = await on(w, { ids: ['codex'] })
+    assert.equal(r.exit, 0, JSON.stringify(r))
+    const doors = Object.values(r.doors)
+    assert.ok(doors.length > 0)
+    const written = Object.entries(outside(w)).filter(([k, v]) => before[k] !== v).map(([, v]) => Buffer.from(v, 'base64').toString('utf8'))
+    assert.ok(written.length > 0, 'entries written')
+    for (const u of doors) assert.ok(written.some((t) => t.includes(new URL(u).host)), `an entry leads to ${u}`)
+  } finally { await d.close() }
 })
 
 test('1.6 §1.1: on without an install record refuses with cert-not-installed, exit 1, and writes nothing', async () => {
@@ -195,6 +246,26 @@ test('1.6 §1.1: an install record with no root on record (the custody was unrea
   assert.equal(daemonMayStart(m), false)
   const r = await on(w)
   assert.deepEqual([r.code, r.exit], ['cert-not-installed', 1])
+})
+
+// 4.8 §3 (on / off <h>): turning one harness off takes that harness's entries only; every other harness's entries and switch files stay byte for byte
+test('off of one harness takes only its own entries: the other harnesses\' entries stay on record and byte for byte', async () => {
+  const w = await installed()
+  const d = await daemon(w)
+  try { assert.equal((await on(w)).exit, 0) } finally { await d.close() }
+  const onItems = (h) => { const m = readManifest(w.dir); return [...m.entries, ...m.files].filter((x) => x.phase === 'on' && (h == null || x.harness === h)) }
+  const others = () => onItems().filter((x) => x.harness !== 'codex').map((x) => ({ ...x, bytes: x.path && fs.existsSync(x.path) ? fs.readFileSync(x.path, 'base64') : null }))
+  const codexPaths = new Set(onItems('codex').map((x) => x.path))
+  assert.ok(codexPaths.size > 0 && others().length > 0, 'codex and another harness both wrote entries')
+  const before = { others: others(), outside: outside(w) }
+  const off = await undoHarnesses({ dir: w.dir, home: w.home, manifest: readManifest(w.dir), ids: ['codex'], procs: async () => [] })
+  assert.deepEqual(off.left, [])
+  assert.deepEqual(onItems('codex'), [], 'codex\'s entries are taken')
+  assert.deepEqual(others(), before.others, 'every other harness\'s entry is on record and its file unchanged')
+  const after = outside(w)
+  const changed = [...new Set([...Object.keys(before.outside), ...Object.keys(after)])].filter((k) => before.outside[k] !== after[k])
+  assert.ok(changed.length > 0)
+  assert.deepEqual(changed.filter((k) => !codexPaths.has(k)), [], 'outside ~/.trocar only codex\'s files changed')
 })
 
 // the review of T20, item 1, on the model: install, on, off (undoHarnesses as off runs it: phase on only), then on again with no install — every byte
