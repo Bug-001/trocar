@@ -237,7 +237,7 @@ export async function check(ctx) {
   // the world grew since the baseline: what the route draws grew with the data, so the baseline is taken again (not a leak)
   if (first && grownAt != null && grownAt > first.at) { base.delete(route); first = undefined }
   while (first && s.inflight > first.inflight && Date.now() < deadline) { await page.waitForTimeout(100); s = await probeSnap(page) }
-  const now = { window: s.listeners.window, document: s.listeners.document, intervals: s.intervals, inflight: s.inflight, dom: v.dom, heap: await heapUsed(page), at: Date.now() }
+  const now = { window: s.listeners.window, document: s.listeners.document, intervals: s.intervals, inflight: s.inflight, dom: v.dom, heap: await heapUsed(page), read: s.deskRead, at: Date.now() }
   // a visit with a failed read drew a failure state; one with reads in flight, or hidden for a while (reads paused, 4.4), has not
   // drawn yet: no baseline (a later clean visit is)
   let visit = visits.get(page)
@@ -253,8 +253,11 @@ export async function check(ctx) {
     if (more.length) bad('I-leak', more.map((k) => `${k} ${first[k]} → ${now[k]}`).join(', '))
     if (now.dom > LIMITS.memRatio * first.dom) bad('I-mem', `elements ${first.dom} → ${now.dom}`)
     // a first visit's heap is a cold page's (no store, no caches yet): the heap's baseline is the route's first revisit
-    if (first.warm == null) first.warm = now.heap
-    else if (now.heap > LIMITS.memRatio * first.warm + LIMITS.memSlackBytes) bad('I-heap', `heap ${first.warm} → ${now.heap}`)
+    if (first.warm == null) { first.warm = now.heap; first.warmRead = now.read }
+    // what the desks read since stays in the heap whatever route is on screen: the session cache keeps it, within its own bound (1.2
+    // §路由「离开再回来」, 0.2 §5), so it counts as baseline. A reload starts the page's count over.
+    // shortcut: an evicted desk's bytes stay counted, so a leak after an eviction has that much more room; upgrade if the probe can see the cache
+    else if (now.heap > LIMITS.memRatio * (first.warm + Math.max(0, now.read - first.warmRead)) + LIMITS.memSlackBytes) bad('I-heap', `heap ${first.warm} → ${now.heap}`)
   }
   if (now.heap > LIMITS.memCapBytes) pending.push({ id: 'I-memcap', value: now.heap, pointer: PENDING.get('I-memcap') })
 
