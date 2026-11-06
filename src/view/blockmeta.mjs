@@ -139,9 +139,6 @@ function blockHead(b) {
   return { role: r, tag, label: shorten(txt) };
 }
 
-/** 短预览 for the row body — distinct from head.label, which previews the tool ARGUMENT. */
-const blockPreview = (b) => shorten(bodyTextOf(b));
-
 // ── composition: what this call's context is MADE OF, in nine buckets ────────────────────────────
 //
 // Ported verbatim from the browser's COMP_KIND / COMP_ROLE / compBucket / callComp (index.html:916).
@@ -198,8 +195,8 @@ function queryOf(b, raw, max = PREVIEW_MAX) {
 }
 // How long a lane's task is (4.4 §看板 v2 需要的补充 `lanes[].task`; the session title is the main lane's), and how much of a lane's first
 // prompt is kept to tell sibling sub-agents apart (their prompts often share a long preamble: a workflow's own instructions).
-export const TASK_MAX = 80;
-export const TASK_HEAD = 16384;
+const TASK_MAX = 80;
+const TASK_HEAD = 16384;
 /** taskOf(text) → the text squashed (whitespace runs → one space, trimmed), ≤ TASK_MAX characters, or null. */
 export const taskOf = (text) => (text ? shorten(text, TASK_MAX) || null : null);
 /** firstHuman(flat) → the first human prompt of a context (blockQuery's rule: a user text block, <system-reminder> stripped, not empty),

@@ -24,7 +24,7 @@ import { CODE } from '../codes.mjs'
 import { loopbackWords } from '../../../cli/words.mjs'
 import { unseal, doorFp } from '../../../off/seal.mjs'
 
-export const LOOPBACK = LOOPBACK_HOSTS
+const LOOPBACK = LOOPBACK_HOSTS
 export const PAC_PATH = '/trocar.pac' // P10: the daemon serves the PAC here on the PAC group's door
 // a hostTree form's note (CM31): it names the form, since status prints it under the harness, beside forms that run on their own
 const hostTreeNote = (form) => `${form} runs inside another program: every other extension there connects through trocar too, and trocar passes those connections on without capturing them`

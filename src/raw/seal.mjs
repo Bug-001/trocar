@@ -29,7 +29,7 @@ const CHUNK = 8 << 20;
 // The segment the live daemon is appending to, from its lock (4.6 §控制面 `lock`), or null when there is no readable
 // lock. A lock that cannot be read never licenses a seal: `sealOne` only compares, and an unknown live segment leaves
 // every segment sealable — which is why the queue's scan passes the live name it already knows as well.
-export function liveSegment(lockFile, { fs = nodeFs } = {}) {
+function liveSegment(lockFile, { fs = nodeFs } = {}) {
   try { return JSON.parse(fs.readFileSync(lockFile, 'utf8')).segment || null; } catch { return null; }
 }
 
@@ -140,7 +140,7 @@ function* readLines(fs, fd) {
 // Decode every record (the reader checks each line's sha256 against the index, which was computed from the source
 // line), then rebuild the whole segment in line order and compare its length and sha256 with what was read. Any gap,
 // duplicate or mismatch throws.
-export function verifySealed(fs, sealed, { name, sum, length, lines }) {
+function verifySealed(fs, sealed, { name, sum, length, lines }) {
   const f = openSealed(sealed, { fs });
   try {
     const whole = createHash('sha256');

@@ -45,7 +45,7 @@ export const UNFOLDED_CODES = Object.freeze(['negative-cache', 'trust-rejected']
 export const LEVELS = Object.freeze(['critical'])
 
 /** The part of trocar a record comes from. */
-export const WHERE = Object.freeze(['start', 'daemon', 'control', 'record', 'events', 'watch', 'harness', 'tracker', 'engine', 'ws', 'helper', 'heartbeat', 'state', 'switch', 'kernel', 'ca', 'bundle', 'install', 'uninstall',
+const WHERE = Object.freeze(['start', 'daemon', 'control', 'record', 'events', 'watch', 'harness', 'tracker', 'engine', 'ws', 'helper', 'heartbeat', 'state', 'switch', 'kernel', 'ca', 'bundle', 'install', 'uninstall',
   // the old capture (RFC 4.1 过渡期, ~/.trocar/logs/mitm-events.ndjson; deleted with it)
   'mitm', 'proxy', 'sink', 'autostart', 'steer', 'shard',
   // the raw layer's sealer (D35 · D60②, RFC 4.2 §自动封存): the daemon's seal queue reports a segment it could not seal
@@ -165,7 +165,7 @@ const NET_STATUS_REASONS = Object.freeze(['not-routed', 'local-upstream', 'proxy
 
 // What `trocar status` says of an agent that is not captured (RFC 1.6 §2 / V32, 4.6 §记录「事件与码的名字」): one name from this closed set, whatever the reason. trocar's own, then every trust
 // reason above (the resolver's and the harnesses' own). A block of its own, as the ones above are. The Windows collector's reasons (ROUTE_STATUS_REASONS: what a form that is not captured says; ROUTE_TRUST_REASONS: why a running agent is not trusted) are part of it. `negative-cache` is also a code of the engine.
-export const STATUS_OWN_REASONS = Object.freeze(['desired-off', 'entry-missing', 'entry-changed', 'link-missing', 'daemon-not-running', 'daemon-not-responding', 'helper-missing', 'negative-cache', 'not-seen',
+const STATUS_OWN_REASONS = Object.freeze(['desired-off', 'entry-missing', 'entry-changed', 'link-missing', 'daemon-not-running', 'daemon-not-responding', 'helper-missing', 'negative-cache', 'not-seen',
   'cert-not-installed', 'cert-root-pending', 'cert-root-declined', 'cert-root-missing', 'cert-key-missing', 'cert-intermediate-unavailable', 'not-users-file']) // the cert group's status reasons that have a producer (1.6 §9.7, 4.11 §3 ⑱)
 export const STATUS_REASONS = Object.freeze([...new Set([...STATUS_OWN_REASONS, ...NET_STATUS_REASONS, ...ROUTE_STATUS_REASONS, ...TRUST_REASONS, ...ROUTE_TRUST_REASONS])])
 

@@ -8,13 +8,13 @@ import { isModelOs } from '../model-install.mjs'
 import { redactProxyUrl } from '../../netenv/redact.mjs'
 import { recordDrift } from '../../netenv/adopt.mjs'
 import { userPathEnv } from '../../off/user-path.mjs'
-export { MODEL_OS, isModelOs } from '../model-install.mjs' // the one list of the OSes the model runs on
+export { isModelOs } from '../model-install.mjs' // the one list of the OSes the model runs on
 
 /** The installed signing helper the darwin custody runs (4.11 P1): under ~/.trocar/bin, beside trocar-off. */
 export const signHelperPath = (home, name) => path.join(home, '.trocar', 'bin', name)
 
 /** `which(command)` over the user's PATH (the install env): the first <dir>/<command><suffix> that exists, or null. */
-export function whichIn(env, { os, exists = nodeFs.existsSync } = {}) {
+function whichIn(env, { os, exists = nodeFs.existsSync } = {}) {
   const get = (k) => (env instanceof Map ? env.get(k) : env && env[k])
   const dirs = String(get('PATH') || get('Path') || '').split(os === 'win32' ? ';' : ':').filter(Boolean)
   const exts = os === 'win32' ? String(get('PATHEXT') || '.EXE;.CMD;.BAT').split(';').filter(Boolean).concat(['']) : ['']

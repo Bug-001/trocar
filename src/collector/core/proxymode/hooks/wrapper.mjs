@@ -23,7 +23,7 @@ const SMART_APP_CONTROL = 'smart-app-control'
 export const PACKAGE_MANAGER_TREES = Object.freeze(['node_modules', '.npm', '.npm-global', '.pnpm', 'pnpm', '.yarn', '.bun', '.volta', '.nvm', '.fnm', 'nvm', 'Cellar', 'Caskroom', 'homebrew', 'linuxbrew', 'scoop', 'chocolatey', 'WinGet', '.cargo', '.local/pipx', 'pipx'])
 // System trees: the OS's and the system package managers' own folders, matched as a path prefix (case-folded, either slash). A file there is never
 // this user's to edit, whoever its owner is (rule U, P8).
-export const SYSTEM_TREES = Object.freeze(['/etc', '/usr', '/bin', '/sbin', '/System', '/Library', '/private/etc', '/opt/homebrew', '/opt/local', 'C:/Windows', 'C:/Program Files', 'C:/Program Files (x86)', 'C:/ProgramData'])
+const SYSTEM_TREES = Object.freeze(['/etc', '/usr', '/bin', '/sbin', '/System', '/Library', '/private/etc', '/opt/homebrew', '/opt/local', 'C:/Windows', 'C:/Program Files', 'C:/Program Files (x86)', 'C:/ProgramData'])
 
 /** The package-manager or system tree `file` is inside, or null (one judge for the wrapper and rule U). */
 export function managedTree(file) {

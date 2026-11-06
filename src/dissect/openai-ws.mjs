@@ -24,7 +24,7 @@ const parse = (s) => { if (typeof s !== 'string') return null; try { const v = J
 const bodyOf = (rec) => { const v = storedRequestBody(rec); return v && typeof v === 'object' ? v : null; }; // the record's one parse of its first client message
 // The server messages of a call, in order; an error envelope keeps them under resp.partial (same numbering as
 // ws_raw's m slices and as the text_ref field resp.messages.<j>).
-export function serverMessages(rec) {
+function serverMessages(rec) {
   const r = (rec && rec.resp) || {};
   const m = r.kind === 'ws' ? r.messages : (r.partial && r.partial.messages);
   return Array.isArray(m) ? m : [];
@@ -47,7 +47,7 @@ const hasClientDataFrame = (rec) => (Array.isArray(rec.ws_raw) ? rec.ws_raw : []
   const h = Buffer.from(f.h, 'base64');
   return h.length > 0 && (h[0] & 0x0f) <= 2;
 });
-export function unstoredRequestOf(rec) {
+function unstoredRequestOf(rec) {
   if (!rec || rec.transport !== 'ws' || rec.req_body != null || typeof rec.req_body_b64 === 'string' || !hasClientDataFrame(rec)) return null;
   const why = [];
   if (rec.ws_truncated === true) why.push('it was over the per-call size cap (ws_truncated: its frames keep only their headers)');
@@ -178,7 +178,7 @@ export function normRespWs(rec) {
 // of (one item = one message of a successor's context). An item no message closed is read from response.completed, item by item
 // (another item of the same reply may have been closed): there the path starts at the item's node in that message's output, and
 // the items stand in output order. Each message is scanned once.
-export function replyPartsWs(rec) {
+function replyPartsWs(rec) {
   const msgs = serverMessages(rec), held = []; // [output_index, j, item, path]
   let keyed = true;
   msgs.forEach((m, j) => {

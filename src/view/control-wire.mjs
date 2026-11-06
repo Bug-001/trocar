@@ -24,7 +24,7 @@ import { requestEncodingOf } from '../dissect/request-body.mjs';
 import { headerOf } from '../dissect/harnesses.mjs';
 import { isSecretHeader } from '../capture/redact.mjs';
 
-export const BODY_SHOW_CHARS = 1 << 20; // the most of one body's text a record carries to the browser
+const BODY_SHOW_CHARS = 1 << 20; // the most of one body's text a record carries to the browser
 const HEX_SHOW_BYTES = 4096;     // the most of a binary body shown as hex
 export const CONTROL_DETAIL_RECORDS = 80; // how many of a class's newest records /api/control sends with their bodies (the page lists and opens 80)
 

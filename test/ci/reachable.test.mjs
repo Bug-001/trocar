@@ -27,7 +27,6 @@ const ENTRIES = ['bin/trocar.mjs', 'src/off/main.mjs']
  *  became reachable or no longer exists fails below, so it gets removed here. */
 export const UNREACHED = Object.freeze({
   'src/collector/core/redirector.mjs': 'the Redirector contract (4.6:333) plus createStaticRedirector, which only tests use',
-  'src/collector/core/engine/codes.mjs': 'regrouping of src/health/codes.mjs that only tests use',
 })
 
 const walk = (dir) => fs.existsSync(dir) ? fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => e.isDirectory() ? walk(path.join(dir, e.name)) : [path.join(dir, e.name)]) : []

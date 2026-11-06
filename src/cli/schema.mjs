@@ -2,7 +2,7 @@
 // are src/off/schema.mjs (the undo side prints receipts too and may import nothing outside src/off); this adds validateReceipt.
 import { SCHEMA_VERSION, EXIT, RECEIPT_KEYS, UNDO_LINE, newReceipt } from '../off/schema.mjs'
 import { HARNESS_IDS } from '../off/harness-names.mjs'
-import { STATUS_REASONS, NET_CODES } from '../health/codes.mjs'
+import { STATUS_REASONS } from '../health/codes.mjs'
 import { FINDING_CODES } from '../netenv/findings.mjs' // the finding codes' own closed list: the cross-platform catalogue's, the Windows table's (4.8 §10.4) and the trust reasons' — one list, one place
 
 export { SCHEMA_VERSION, EXIT, RECEIPT_KEYS, UNDO_LINE, newReceipt }
@@ -195,9 +195,9 @@ export const TOPOLOGY_KINDS = Object.freeze(['agent', 'proxy', 'trocar-engine', 
 export const TOPOLOGY_VIA = Object.freeze(['direct', 'proxy-http', 'proxy-socks', 'proxy-https', 'system-proxy', 'ebpf', 'forward', 'egress', 'unknown'])
 /** Why a hop is 「不知道」 (R11: a hop that could not be read is said, with its reason, never left out and never 「无」). */
 export const UNKNOWN_REASONS = Object.freeze(['denied', 'timeout', 'absent', 'unparseable', 'owner-unreadable', 'pac', 'kernel-filter-invisible', 'env-unreadable'])
-export const BRANCH_NAMES = Object.freeze(['all', 'http', 'ws'])
+const BRANCH_NAMES = Object.freeze(['all', 'http', 'ws'])
 /** What a running process's line says about it: it still goes by the setting it started with, or trocar is not on its path. */
-export const RUNNING_NOTES = Object.freeze(['start-time-settings', 'not-steered'])
+const RUNNING_NOTES = Object.freeze(['start-time-settings', 'not-steered'])
 export const FINDING_CLASSES = Object.freeze(['problem', 'expected', 'note']) // 附录 B
 
 const TRI = [true, false, null]
@@ -267,7 +267,7 @@ export function validateTopology(t) {
   return bad
 }
 
-export const SHELLS = Object.freeze(['sh', 'powershell', 'gui'])
+const SHELLS = Object.freeze(['sh', 'powershell', 'gui'])
 /** Problems with one finding of `doctor --json` (1.6 附录 B, V49; `[]` = valid): a code, a class, a what and a why that say something, every command a whole line with its shell and no `<…>` left to fill in, a verify.
  *  A failure or an expected finding has at least one command; a hint may have none. */
 export function validateFinding(f) {

@@ -55,7 +55,7 @@ export function watchDirNames(dir, onName, onWatchError = () => {}, watch = fs.w
 }
 // A pid that still exists (EPERM: it exists, it is someone else's). OS-neutral: Node's signal 0.
 const pidAlive = (pid) => { try { process.kill(pid, 0); return true } catch (e) { return !!e && e.code === 'EPERM' } }
-export const usesMarker = (d) => !!(d && d.trust && d.trust.chain.some((e) => e.var === MARKER_VAR))
+const usesMarker = (d) => !!(d && d.trust && d.trust.chain.some((e) => e.var === MARKER_VAR))
 // what a trust file is now: a rewrite (new inode), an edit (size, mtime) or its removal changes it (D-26)
 const statKeyOf = (f) => { try { const st = fs.statSync(f); return `${st.ino}:${st.size}:${st.mtimeMs}` } catch (e) { return `gone:${(e && e.code) || 'error'}` } }
 

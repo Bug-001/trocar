@@ -145,7 +145,7 @@ export function autostartBlock({ unit, osName }) {
 }
 
 /** What the receipt says an entry did, in one phrase — the same words in the dry run (from the preview) and in the real run (from the entry). */
-export function changeText(e, prior = null) {
+function changeText(e, prior = null) {
   if (e.kind === 'text') {
     if (e.vars) return `trocar block added at the top (${Object.keys(e.vars).join(', ')})${prior ? `; your own ${Object.keys(prior).join(', ')} commented out` : ''}`
     return `one line added (${shortLine(e.line)})`

@@ -2,7 +2,6 @@
 //
 // Stat only: the raw/ name list and `statKey` of each file, never a byte of a record and never through a warm cache
 // (a cache would answer with what IT last saw, and the point of a stamp is to notice that the disk moved).
-import path from 'node:path';
 import { statKey } from './warm.mjs';
 import { segStamp } from './index-build.mjs';
 import { namesStamp } from './rows.mjs';

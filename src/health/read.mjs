@@ -53,7 +53,7 @@ export function lockState({ file, now = Date.now(), alive = pidAlive, identity =
 const errText = (e) => String((e && e.message) || e)
 const DAEMON = { none: 'not-running', stale: 'not-running', unresponsive: 'not-responding', running: 'running', unknown: 'unknown' }
 // how bad each state is (1.5: `?` unreadable > ✗ > ⚠ > `?` unknown > ○ > ✓ > –); the top bar shows the worst part
-export const RANK = { unreadable: 8, 'not-running': 7, 'not-responding': 7, failing: 6, unknown: 5, off: 4, ok: 3, residue: 2, 'not-installed': 1 }
+const RANK = { unreadable: 8, 'not-running': 7, 'not-responding': 7, failing: 6, unknown: 5, off: 4, ok: 3, residue: 2, 'not-installed': 1 }
 const latest = (...ts) => ts.filter(Boolean).sort().at(-1) || null
 
 function readJson(file, fs) {

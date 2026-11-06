@@ -30,7 +30,6 @@ import { HEAD, taskOf, shorten } from './blockmeta.mjs'
 import { streamParts } from '../dissect/sse-spans.mjs'
 import { num52, numTable } from '../query/projection.mjs'
 import { mapUsage } from '../model/schema.mjs'
-export { sysLabel } // re-exported for back-compat (was defined here before the D25 extraction)
 
 const FILE_OPS = new Set(['Read', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit'])
 const DIR_OPS = new Set(['Glob', 'Grep', 'LS'])
@@ -98,7 +97,7 @@ const ANTHROPIC_REPLY = {
 export const replyPartsAnthropic = (rec) => streamParts(rec, ANTHROPIC_REPLY)
 
 // Pull a short readable label from a tool call's input.
-export function toolArg(name, input = {}) {
+function toolArg(name, input = {}) {
   if (input.file_path || input.path || input.notebook_path)
     return String(input.file_path || input.path || input.notebook_path)
   if (name === 'Bash' && input.command) return String(input.command)
@@ -866,9 +865,8 @@ export function createAnalyzer({ keep = true, from = null } = {}) {
   return { push, pushView, finish, drop, ask, snapshot, save, rewind, laneOf: (step) => laneOfStep.get(step), calls: () => [...steps.values()], firstText: (s) => state.get(s).firstText }
 }
 
-/** laneMeta(kind) → {icon, label, note?} of an analyzer lane's kind; eventOnly(kind): no ReAct events, resources or seen paths. */
+/** laneMeta(kind) → {icon, label, note?} of an analyzer lane's kind. */
 export const laneMeta = (kind) => LANE_META[kind]
-export const eventOnly = (kind) => EVENT_ONLY_KINDS.has(kind)
 /** replayLedger(steps, after?, maps?, touch?) → {resources, seen} of a lane from its steps' ledger deltas (`step.ld` of a keep:false
  *  analyzer), `steps` [[n, ld]] in the lane's order (n increasing): what the analyzer's own ledger holds then, a step named by its `n`.
  *  `after(n, resources, seen)`: called after each step with the ledger's maps as they stand then (resources by `kind::label`, seen by

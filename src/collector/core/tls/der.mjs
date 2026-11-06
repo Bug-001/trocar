@@ -59,8 +59,6 @@ export function oid(dotted) {
 }
 
 export const utf8 = (s) => tlv(0x0c, Buffer.from(s, 'utf8'))       // UTF8String
-export const printable = (s) => tlv(0x13, Buffer.from(s, 'ascii')) // PrintableString
-export const ia5 = (s) => tlv(0x16, Buffer.from(s, 'ascii'))       // IA5String
 export const bitString = (buf) => tlv(0x03, Buffer.concat([Buffer.from([0]), buf])) // 0 unused bits
 export const octet = (buf) => tlv(0x04, buf)                        // OCTET STRING
 export const bool = (b) => tlv(0x01, Buffer.from([b ? 0xff : 0x00]))// BOOLEAN

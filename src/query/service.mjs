@@ -50,7 +50,7 @@ const keyOf = (name, params = {}, skip = []) => `${name} ${JSON.stringify(Object
 const subjectOf = (name, params = {}) => keyOf(name, params, WINDOW_PARAMS)
 /** A worker asked nothing this long leaves and gives its memory back: the board polls every 1.5 s while it is open, so it stays
  *  warm while anyone is looking; the next query after an idle exit forks a new one (3.5 谁执行它). */
-export const QUERY_IDLE_MS = 120_000
+const QUERY_IDLE_MS = 120_000
 const STDERR_HEAD = 4000, STDERR_TAIL = 1000 // V8 prints its FATAL ERROR line after a few GC lines, then the native stack
 /** A control verb may run install's root steps (the board's Set up, 4.4 §控制面): the OS's root prompt, then its read-back, each up to OS_PROMPT_MS,
  *  and the rest of install. A worker killed while the dialog is open would leave no receipt and the carriers unplaced. */

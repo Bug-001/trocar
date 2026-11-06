@@ -38,7 +38,7 @@ const errText = (e) => String((e && e.message) || e)
 // The key custody is a native program (4.11 P1): 'unavailable' is a VALUE, but it can also FAIL outright — a HOME with no login keychain answers
 // "A default keychain could not be found" (a macOS test machine 2026-10-18, where install exited 70 with a stack at the person). A failure is a stated
 // refusal: `install` says what happened and what to do, carries `error.code` and exits 1.
-export const CUSTODY_FAILED = 'key-custody-failed'
+const CUSTODY_FAILED = 'key-custody-failed'
 const CUSTODY_ADVICE = Object.freeze({
   darwin: 'trocar needs the login keychain of this user: log in to this Mac at its own desktop once (that is where the keychain is made), then run trocar install again there',
   win32: 'run trocar install again from a terminal of your own desktop session',

@@ -9,7 +9,7 @@
 import path from 'node:path'
 
 /** The daemon's log places under a collector directory (`~/.trocar/collector`): `{ dir, out, err }`. Pure. The one place the two names live. */
-export const daemonLogsIn = (collectorDir) => { const dir = path.join(collectorDir, 'logs'); return { dir, out: path.join(dir, 'daemon-out.log'), err: path.join(dir, 'daemon-err.log') } }
+const daemonLogsIn = (collectorDir) => { const dir = path.join(collectorDir, 'logs'); return { dir, out: path.join(dir, 'daemon-out.log'), err: path.join(dir, 'daemon-err.log') } }
 
 /** The daemon's log places of `home`: `{ dir, out, err }`. Pure. */
 export const daemonLogPaths = (home) => daemonLogsIn(path.join(home, '.trocar', 'collector'))
