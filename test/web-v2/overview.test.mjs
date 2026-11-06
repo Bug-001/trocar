@@ -187,6 +187,14 @@ test('#5 the hit carries the 「?」 mark when a main row\'s cache figures are n
   assert.ok(card.asOf.includes(fmtWhen(Date.parse(doc.as_of), NOW)), 'the card says 截至 <as_of>')
 })
 
+test('#5 no price table yet: no model is said to lack a unit price (that is not known before the table is read)', () => {
+  const doc = { as_of: iso(H), sessions: { total: 1 }, calls: { llm: 3 }, harnesses: [{ harness: A, sessions: 1, calls: 3, last_ts: iso(H) }],
+    usage: { rows: [{ harness: A, model: 'zz-unpriced-model', lane: 'main', sessions: 1, calls: 3, failed: 0, no_usage: 0, input: 10, output: 5, cache_read: 30, cache_write: 10, cache_known: true }], coverage: { sessions_read: 1, sessions_in_window: 1 } } }
+  const loading = statsCard(stateOf(quiet(), { stats: statsOk(doc), pricing: { data: null, ok: null, err: null } }), NOW)
+  assert.equal(loading.unpriced, null); assert.equal(loading.cost.text, '≈ —')
+  assert.ok(statsCard(stateOf(quiet(), { stats: statsOk(doc) }), NOW).unpriced, 'with the table read, the unpriced model is named')
+})
+
 test('#6 the coverage line names the agents with sessions in the window that the overview document lacks, and only those', () => {
   const stats = statsOk({ as_of: iso(H), sessions: { total: 1 }, calls: { llm: 1 }, harnesses: [{ harness: HARNESS_ORDER[2], sessions: 1, calls: 1, last_ts: iso(H) }], usage: { rows: [], coverage: {} } })
   const sessions = ok({ sessions: [session(1, { harness: A }), session(30, { harness: B }), session(2, { harness: HARNESS_ORDER[2] })], errors: [] })

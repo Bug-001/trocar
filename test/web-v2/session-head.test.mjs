@@ -115,6 +115,7 @@ test('1.2 §信息弹出层 row 1: no price table yet, or an unreadable one: ≈
   for (const [extra, why] of [[{ pricing: null }, W.PRICES_LOADING], [{ pricing: null, pricingErr: 'E-read' }, priceStateNote(null, 'E-read')]]) {
     const c = costOf(extra)
     assert.equal(c.usd, null); assert.deepEqual(c.notes, [why], JSON.stringify(extra))
+    assert.ok(!c.text.includes(W.COST_FROM), 'nothing priced: no "from"')
     assert.ok(c.buckets.every((b) => b.usd == null))
   }
   assert.ok(costOf({}).usd > 0, 'with the table the session is priced')
