@@ -7,7 +7,7 @@
 // (view.setCapacity); the rough page reports itself drawn (view.roughDrawn).
 import { memo, useLayoutEffect, useMemo, useRef, useSyncExternalStore, type CSSProperties, type MouseEvent } from 'react'
 import { SKELETON, laneCapacity } from '../../../legacy/replay/replay.mjs'
-import { BAR_KEYS, problemJump } from '../../../legacy/replay/timeline.mjs'
+import { BAR_KEYS, problemGo } from '../../../legacy/replay/timeline.mjs'
 import { stepOfMark } from '../../../legacy/replay/lanes.mjs'
 import { L } from '../../../legacy/core/labels.mjs'
 import * as W from '../../../legacy/labels/replay.mjs'
@@ -137,11 +137,6 @@ export function Scope({ desk }: { desk: DeskView }) {
     const i = stepOfMark(s, t.dataset.rid)
     if (i >= 0) s.setPlayhead(i, true)
   }
-  const probGo = (dir: number) => {
-    if (!s.anchor) return
-    const j = problemJump(s.anchor.calls, s.problems || [], s.playhead, dir)
-    if (j) s.jumpTo(j.t, j.jump) // lands on the 变化线 when that problem step has one; a failed step just moves the playhead
-  }
   const setView = (v: 'ctx' | 'cost') => { if (s.sawView !== v) { put(s, 'sawView', v); desk.saw() } }
 
   const w = skel(), lg = m?.legend, ch = m?.chapters, pr = m?.problems, items = new Map<number, Item>((pr?.items || []).map((p: Item) => [p.col, p]))
@@ -172,8 +167,8 @@ export function Scope({ desk }: { desk: DeskView }) {
         <span id="sawend">{m?.axis?.end || ''}</span>
       </div></div></div>
       <div className="tkrow tkrow-problem"><div className="tgut tgut-prob" id="probnav">{pr ? <>{pr.name}{pr.n ? <>
-        {' '}<button type="button" className="pgbtn" id="probPrev" aria-label={W.PROBLEM_PREV} title={W.PROBLEM_PREV} onClick={() => probGo(-1)}>‹</button>
-        <button type="button" className="pgbtn" id="probNext" aria-label={W.PROBLEM_NEXT} title={W.PROBLEM_NEXT} onClick={() => probGo(1)}>›</button></> : null}</> : W.PROBLEM_ROW}</div>
+        {' '}<button type="button" className="pgbtn" id="probPrev" aria-label={W.PROBLEM_PREV} title={W.PROBLEM_PREV} onClick={() => problemGo(s, -1)}>‹</button>
+        <button type="button" className="pgbtn" id="probNext" aria-label={W.PROBLEM_NEXT} title={W.PROBLEM_NEXT} onClick={() => problemGo(s, 1)}>›</button></> : null}</> : W.PROBLEM_ROW}</div>
         <div className="tlane"><div className="probrow" id="probrow">{pr ? bars.map((b, col) => { const p = items.get(col); return p ? <ProblemMark key={keyAt(col)} p={p} /> : <span key={keyAt(col)} className="pcell" /> }) : null}</div></div></div>
       <div className="tkrow tkrow-bars"><div className="tgut tgut-ctx" id="sawgut" title={m?.gutterTip || undefined}><span className="ghead">{gutName} <b title={m?.peak.tip || undefined}>{m?.peak.text || ''}</b></span>
         {!cost && m?.gutter.length ? <span className="gshares">{m.gutter.map((x: { ct: string, share: string }) => <span key={x.ct} className="gshare"><i className={`ct-${x.ct}`} />{x.share}</span>)}</span> : null}</div>

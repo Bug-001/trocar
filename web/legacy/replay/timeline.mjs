@@ -191,6 +191,12 @@ export function problemJump(calls, probs, playhead, dir) {
   if (t == null || !calls || !calls[t]) return null
   return { t, jump: isFailed(calls[t]) ? null : anchorJump('cachebrk') }
 }
+// one step of the pager, from either desk's buttons and the Tracks menu's
+export function problemGo(s, dir) {
+  if (!s.anchor) return
+  const j = problemJump(s.anchor.calls, s.problems || [], s.playhead, dir)
+  if (j) s.jumpTo(j.t, j.jump) // lands on the 变化线 when that problem step has one; a failed step just moves the playhead
+}
 
 // ── the cache band: one cell per bar, drawn by cacheState's own order ───────────────────────────────────────────────
 function cacheCell(c, i, s) {
@@ -438,10 +444,7 @@ export function wireTimeline(el, s) {
     const btn = e.target.closest('button')
     if (btn && (btn.id === 'chapPrev' || btn.id === 'chapNext')) { if (btn.dataset.to != null) s.chapterGo(+btn.dataset.to); return } // works on the rough page too
     if (!btn || !s.anchor) return
-    if (btn.id === 'probPrev' || btn.id === 'probNext') {
-      const j = problemJump(s.anchor.calls, s.problems || [], s.playhead, btn.id === 'probNext' ? 1 : -1)
-      if (j) s.jumpTo(j.t, j.jump) // lands on the 变化线 when that problem step has one; a failed step just moves the playhead
-    }
+    if (btn.id === 'probPrev' || btn.id === 'probNext') problemGo(s, btn.id === 'probNext' ? 1 : -1)
   }
   el.addEventListener('click', onClick)
   return () => el.removeEventListener('click', onClick)
