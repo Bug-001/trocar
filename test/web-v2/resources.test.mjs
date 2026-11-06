@@ -87,6 +87,12 @@ test('#1 the six groups count their own entries (one constructed lane)', () => {
   assert.equal(grpCount(h, W.RES_GRP.dl), 2, 'dir + link together')
   assert.equal(grpCount(h, W.RES_GRP.comp), 2, 'compaction + summarize events')
   assert.equal(grpCount(h, W.RES_GRP.other), 1)
+  assert.ok(h.includes(`navlbl">${W.OTHERS_ROW(3 + 2 + 2 + 2 + 1)}</span>`), 'N more sums the folded groups')
+  // the new desk: the Overview's chapter heads carry the compactions, so Resources has no such group and N drops them
+  const d = resourcesHtml(stateOf(anchor, { rawPanelGone: true }))
+  assert.equal(grpCount(d, W.RES_GRP.comp), null)
+  assert.ok(d.includes(`navlbl">${W.OTHERS_ROW(3 + 2 + 2 + 1)}</span>`), 'N more leaves the compaction events out')
+  for (const g of [W.RES_GRP.file, W.RES_GRP.load, W.RES_GRP.cap, W.RES_GRP.dl, W.RES_GRP.other]) assert.equal(grpCount(d, g), grpCount(h, g), g)
 })
 
 test('#3 a names-only chip never opens content and locates its first step', () => {
@@ -102,6 +108,9 @@ test('#7 the compaction group still draws with an empty ledger', () => {
   const empty = resourcesHtml(stateOf(anchorOf({ resources: [], events: comps })))
   assert.equal(grpCount(empty, W.RES_GRP.comp), 1, 'compaction events still draw with an empty ledger')
   assert.equal(grpCount(empty, W.RES_GRP.file), null, 'no empty groups are drawn')
+  const desk = resourcesHtml(stateOf(anchorOf({ resources: [], events: comps }), { rawPanelGone: true }))
+  assert.equal(grpCount(desk, W.RES_GRP.comp), null, 'the new desk draws no compaction group')
+  assert.ok(desk.includes(esc(W.NO_RESOURCES)), 'the empty ledger still says so')
 })
 
 test('2.4 压缩行: a marked compaction shows its landing\'s numbers, and the landing is no row of its own', () => {
