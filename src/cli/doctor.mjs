@@ -20,7 +20,7 @@ import { serveSource } from '../paths.mjs'
 import { formatInstallNotes } from './status-text.mjs'
 import { trocarHome, backupDir, collectorDir } from '../off/paths.mjs'
 import { readManifest, manifestPath } from '../off/manifest.mjs'
-import { rootStore as userRootStore, strayRoots } from '../off/root-store.mjs'
+import { rootName, rootStore as userRootStore, strayRoots } from '../off/root-store.mjs'
 import { readIngressConfig } from '../collector/core/ingress-config.mjs'
 import { memoProcQuestions, daemonProcReader } from '../off/proc.mjs'
 import { printJson } from './json.mjs'
@@ -127,7 +127,7 @@ async function doctorDocOf({ names, home, env, platform, deps }) {
   const capture = deps.capture || import('./doctor-deps.mjs')
   // 4.11 §3 ㉔: a trocar root no install record lists (macOS / Windows; Linux keeps its root in no trust store). One store for the command: on
   // Windows `status`'s has and this list read one certutil listing (1.6 §3.7)
-  const listsRoots = platform === 'darwin' || platform === 'win32'
+  const listsRoots = platform === 'darwin' || platform === 'win32' // not proxy mode: the OSes whose root sits in a user trust store
   if (listsRoots && !deps.rootStore) deps = { ...deps, rootStore: (deps.backends && deps.backends.rootStore) || userRootStore({ platform, run: deps.exec || null, home, env, fs, once: true }) }
   // the capture files and what `status` reads are independent: the disk walk and the OS questions run together (D62 task E). The listing is a
   // synchronous OS tool, so it is started last, after the daemon request and the file reads are on their way
@@ -143,7 +143,7 @@ async function doctorDocOf({ names, home, env, platform, deps }) {
   else findingsError = f.topology_error || 'the network facts could not be read on this platform'
   // what `doctor` looks at besides the network: the files only you may read, the copy of the undo program, the backups no install record names
   const extra = []
-  if (s && s.roots && s.roots.length) extra.push({ code: 'stray-root', class: 'problem', what: `Your trust store holds a trocar root no install record lists: ${s.roots.map((x) => (x.sha1 ? `thumbprint ${x.sha1}` : `SHA-256 ${x.fp256}`)).join(', ')}.`, why: 'trocar trusts one root per user; trocar uninstall removes every trocar root.', commands: [{ run: 'trocar uninstall', shell: 'sh' }, { run: 'trocar install', shell: 'sh' }], verify: 'trocar doctor' })
+  if (s && s.roots && s.roots.length) extra.push({ code: 'stray-root', class: 'problem', what: `Your trust store holds a trocar root no install record lists: ${s.roots.map(rootName).join(', ')}.`, why: 'trocar trusts one root per user; trocar uninstall removes every trocar root.', commands: [{ run: 'trocar uninstall', shell: 'sh' }, { run: 'trocar install', shell: 'sh' }], verify: 'trocar doctor' })
   for (const bad of res.q4b.bad) extra.push({ code: 'file-readable-by-others', class: 'problem', what: `${bad.file} (mode ${bad.mode}) can be read by someone else, and captured files hold live credentials.`, why: 'Only you may read what trocar captured.', commands: [{ run: `chmod 600 ${shq(bad.file)}`, shell: 'sh' }], verify: 'trocar doctor' })
   // the copy of the undo program is `install`'s; a machine where nothing was installed has nothing to check (§3.7)
   const installed = !!(status.install && status.install.state)

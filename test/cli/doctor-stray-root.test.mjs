@@ -25,7 +25,7 @@ for (const os of ['darwin', 'win32']) {
   test(`V125 · ${os}: doctor reports a trocar root no install record lists, says nothing of a listed one, and cannot judge a store it cannot list`, async () => {
     const w = await modelWorld({ os })
     await w.install()
-    const { sha1 } = w.store.list().roots[0]
+    const { sha1, fp256 } = w.store.list().roots[0]
     const listed = await doctor(w, os, w.store)
     assert.deepEqual(strays(listed.doc), [], 'the root the record lists is no stray')
 
@@ -35,7 +35,7 @@ for (const os of ['darwin', 'win32']) {
     assert.equal(f.length, 1, JSON.stringify(r.doc.findings))
     assert.equal(f[0].class, 'problem')
     assert.deepEqual(f[0].commands.map((c) => c.run), ['trocar uninstall', 'trocar install'])
-    assert.ok(f[0].what.toLowerCase().includes(sha1.toLowerCase()), `the root is named by its thumbprint: ${f[0].what}`)
+    assert.ok(f[0].what.toLowerCase().includes((fp256 || sha1).toLowerCase()), `the root is named as install and uninstall name it: ${f[0].what}`)
     assert.equal(r.exit, 1)
 
     const blind = await doctor(w, os, { ...w.store, has: (id) => w.store.has(id), list: () => ({ error: 'security find-certificate failed (exit 1)' }) })
