@@ -176,6 +176,19 @@ test('V-mem the DOM inflated across a revisit', { skip }, async () => {
   assert.ok(ids(await check(ctx())).includes('I-mem'))
 })
 
+test('V-heap 40 MB more held across a revisit; what the page read for its desks may stay', { skip }, async () => {
+  const hold = () => b.page.evaluate(() => { window.__held = Array.from({ length: 5e6 }, (_, i) => i + 0.5) }) // 8 bytes each
+  const warm = async () => { await fresh(); await check(ctx()); await revisit(); await check(ctx()) } // the first visit, then the heap's baseline
+  await warm()
+  await hold(); await revisit()
+  assert.ok(ids(await check(ctx())).includes('I-heap'), 'a page that read nothing')
+  await warm()
+  await b.page.route('**/api/block?ref=seq-read', (r) => r.fulfill({ body: Buffer.alloc(30 * 2 ** 20) }))
+  try { await b.page.evaluate(() => fetch('/api/block?ref=seq-read').then((r) => r.arrayBuffer())) } finally { await b.page.unroute('**/api/block?ref=seq-read') }
+  await hold(); await revisit()
+  assert.ok(!ids(await check(ctx())).includes('I-heap'), 'a page that read 30 MB for its desks')
+})
+
 test('V-follow following, the session grows and its reads are aborted', { skip }, async () => {
   await fresh()
   await b.page.route('**/api/d/**', (r) => r.abort())
