@@ -155,6 +155,36 @@ test('V104 proxy (darwin): the daemon opens doors for the first harness only →
   } finally { await server.close() }
 })
 
+// V104 · D38: the last save of a run can fail with the entries already in their files. The run is failed and says what failed, and its result line still names what it turned on
+test('V104 proxy (darwin): the manifest cannot be saved once an entry is written → exit 1, a problem, the result line and the receipt name the harness', async () => {
+  const w = await modelWorld({ os: 'darwin', commands: ['codex'] })
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  const sock = path.join(w.home, 'c.sock'), token = 't'.repeat(32), manifest = path.join(w.dir, 'install-manifest.json'), trocar = path.join(w.home, '.trocar')
+  fs.writeFileSync(path.join(w.dir, 'control.json'), JSON.stringify({ path: sock, token }))
+  let wrote = false
+  const full = new Proxy(fs, { get(t, k) {
+    if (k === 'renameSync') return (a, b) => { if (wrote && b === manifest) throw Object.assign(new Error('no space left on device'), { code: 'ENOSPC' }); const r = t.renameSync(a, b); if (!b.startsWith(trocar)) wrote = true; return r }
+    return typeof t[k] === 'function' ? t[k].bind(t) : t[k]
+  } })
+  const server = await startControlServer({ socketPath: sock, token, routes: {
+    'GET /status': async () => ({ doors: {} }),
+    'POST /on': async ({ body }) => ({ doors: Object.fromEntries(Object.entries(body.groups).map(([g, port]) => [g, `http://127.0.0.1:${port}`])) }),
+  } })
+  try {
+    const deps = { fs: full, getuid: () => 501, backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: { os: 'darwin', harnesses: w.harnesses, arch: { unit: { userUnit: () => neverStarts } } } }
+    const io = fakeIo()
+    const exit = await runOn({ io, env: w.env, home: w.home, platform: 'darwin', deps, ids: null, flags: new Set(['--yes']), json: true })
+    assert.equal(wrote, true)
+    assert.equal(exit, 1, io.text())
+    const receipt = io.json()
+    assert.equal(receipt.ok, false)
+    assert.ok(receipt.problems.length >= 1, io.text())
+    const last = fs.readdirSync(path.join(w.dir, 'flows')).flatMap((n) => fs.readFileSync(path.join(w.dir, 'flows', n), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))).filter((l) => l.event === 'install-note' && l.kind === 'result').at(-1)
+    assert.equal(last.outcome, 'failed', JSON.stringify(last))
+    assert.deepEqual(last.harnesses, ['codex'], JSON.stringify(last))
+  } finally { await server.close() }
+})
+
 // D62①: confirmed_paths is saved when it grew; an on over the same files has nothing to add to it
 test('1.6 §1.6 (darwin): the first on records the files said yes to; an on over the same files does not save the manifest again', async () => {
   const w = await modelWorld({ os: 'darwin', commands: ['codex'] })

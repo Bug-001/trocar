@@ -72,6 +72,25 @@ test('after on, every record on disk is finished: each of the on records has its
 })
 
 // V85 (on): the files `on` writes outside ~/.trocar are the ones its plan names — a plug-in route's own file included
+// the save at the end of the run runs in a finally: when it fails too, the error that stopped the run is the one the caller gets, with what turned on before it
+test('a run stopped by an error, whose last save fails too: the original error goes on, carrying the harness turned on before it', async () => {
+  const w = await modelWorld({ commands: ['codex', 'opencode'] })
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  const d = await daemon(w)
+  const manifest = path.join(w.dir, 'install-manifest.json'), trocar = path.join(w.home, '.trocar')
+  let wrote = false
+  const full = new Proxy(fs, { get(t, k) {
+    if (k === 'renameSync') return (a, b) => { if (wrote && b === manifest) throw Object.assign(new Error('no space left on device'), { code: 'ENOSPC' }); const r = t.renameSync(a, b); if (!b.startsWith(trocar)) wrote = true; return r }
+    return typeof t[k] === 'function' ? t[k].bind(t) : t[k]
+  } })
+  const boom = new Error('the plan broke')
+  // the second harness of the run throws at its plan, after the first one's entries are in their files
+  const harnesses = w.harnesses.map((h) => (h.name === 'opencode' ? Object.defineProperty({ ...h }, 'proxyMode', { get() { if (wrote) throw boom; return h.proxyMode } }) : h))
+  try {
+    await assert.rejects(on(w, { harnesses, fs: full, ctx: { ...w.ctx, fs: full }, ids: ['codex', 'opencode'] }), (e) => e === boom && e.turnedOn.includes('codex') && !e.turnedOn.includes('opencode'))
+  } finally { await d.close() }
+})
+
 test('V85: on writes outside ~/.trocar only the paths its plan names', async () => {
   const w = await modelWorld({ commands: ['codex', 'opencode'] })
   assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)

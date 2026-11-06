@@ -143,7 +143,10 @@ export async function turnOnModel({ os, home, env = process.env, ids = null, har
         for (const n of w.notRouted) out.routes.push({ harness: h, ok: false, ...n })
         out.notes.push(...w.notes.map((n) => ({ harness: h, ...n })))
       }
-    } catch (e) { if (e && typeof e === 'object') e.turnedOn = turned(); throw e } finally { flushResults(dir, m, fs) } // the last route's result (wctx.deferResult)
+    } catch (e) { if (e && typeof e === 'object') e.turnedOn = turned(); throw e } finally {
+      // the last route's result (wctx.deferResult). In a finally it must not throw: that would replace the error on its way out, or drop this receipt with the entries already written (V104)
+      try { flushResults(dir, m, fs) } catch (e) { out.problems.push(`the entries were written but trocar could not save its record of them (${errText(e)}); trocar off still undoes them; fix that, then run trocar on again`) }
+    }
   }
   out.turnedOn = turned()
   out.exit = !refused.length && !pending.length && doors && out.routes.every((r) => r.ok) && !out.problems.length ? 0 : 1
