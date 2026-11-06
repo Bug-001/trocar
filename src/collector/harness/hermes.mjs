@@ -155,7 +155,7 @@ const proxyMode = {
     form('hermes.gateway', []),
     form('hermes.dashboard', []),
     form('hermes.desktop', []), // the source build (D51② names above); the prebuilt DMG and MSIX are the next form
-    form('hermes.desktop-prebuilt', [], { darwin: { reason: 'not-measured' }, win32: { reason: 'not-measured' } }),
+    form('hermes.desktop-prebuilt', [], { darwin: true, win32: { reason: 'not-measured' } }),
   ],
   routes: {
     env: { kind: 'dotenv-block', file: HOME('.env'), proxyKeys: ['HTTPS_PROXY', 'https_proxy'], noProxyKeys: ['NO_PROXY', 'no_proxy'], value: 'door-url', absent: 'not-routed', takesEffect: 'takes effect once you restart Hermes; restart its gateway and dashboard too' },
