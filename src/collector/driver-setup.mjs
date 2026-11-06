@@ -1,6 +1,6 @@
 // driver-setup.mjs — driver mode's (Linux) side of the one setup judgement (4.11 P4b, 4.6 「这个 harness 装好了没有」, D65④): one form per harness,
 // named by the harness, present when any place of the descriptor's own footprint (top-level `present`) is there — a `{ command }` over the user's recorded
-// PATH, so whoever asks gets one answer; the carriers are the install-phase manifest items, judged by setupOf. No root in a trust store here: no root-missing.
+// PATH and a moved place by the recorded variables, so whoever asks gets one answer; the carriers are the install-phase manifest items, judged by setupOf. No root in a trust store here: no root-missing.
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { readText, readTextOrError } from './core/config-read.mjs'
@@ -8,13 +8,13 @@ import { collectorHome } from '../paths.mjs'
 import { caPaths } from './core/tls/ca-store.mjs'
 import { setupOf } from './core/proxymode/status-facts.mjs'
 import { isPresent } from './core/proxymode/sources.mjs'
-import { userWhich } from '../off/user-path.mjs'
+import { userWhich, userFootprintEnv } from '../off/user-path.mjs'
 
 /** The ctx a descriptor's `inject` reads (the shape install's planOn hands it), plus what the proxy-mode readers (readSrc) need. */
 export function driverCtx({ os, home, env = process.env, fs = nodeFs, running = [] }) {
   const collectorDir = collectorHome(path.join(home, '.trocar'))
   return {
-    os, home, env: new Map(Object.entries(env || {}).filter(([, v]) => typeof v === 'string')), running,
+    os, home, env: userFootprintEnv({ home, env, fs }), running, // a moved footprint place resolves by the recorded values, as `which` by the recorded PATH
     readText: (f) => readText(f), readTextOrError: (f) => readTextOrError(f),
     readBytes: (f) => { try { return fs.readFileSync(f) } catch { return null } },
     listDir: (d) => { try { return fs.readdirSync(d) } catch { return [] } },

@@ -11,6 +11,8 @@ import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 import { newManifest, saveManifest, readManifest, writeOwnedFile, applyJsonKey } from '../../src/collector/core/trust/journal.mjs'
 import { collectorHome } from '../../src/paths.mjs'
 import { collectorDir, USER_PATH_FILE } from '../../src/off/paths.mjs'
+import { recordUserPath, presentEnvNames } from '../../src/off/user-path.mjs'
+import { resolveLoc } from '../../src/off/loc.mjs'
 import { installedHome } from '../off/fixtures/off-ctx.mjs'
 
 const OS = 'linux'
@@ -118,6 +120,27 @@ test('V91-L4 · 4.11 present: a { command } resolves over the PATH recorded in u
     assert.deepEqual(listed(home, bin), [d.name], d.name)
   }
   assert.ok(withCmd.some((d) => d.name === 'codex'))
+})
+
+// 4.6 「谁问都一样」: a footprint place a variable moves resolves by the value the terminal recorded, whichever env the asker (CLI, or the daemon
+// started by the login service without the user's shell variables) has. Axes: every `present` <loc> with `env` × where the variable is set.
+test('V91-L5 · 4.6 present: a place moved by a variable gives one answer to the terminal and to the daemon, by the recorded value', async () => {
+  const all = (await loadHarnesses()).filter((d) => typeof d.inject === 'function')
+  const moved = all.flatMap((d) => d.present.filter((p) => p && typeof p.env === 'string').map((p) => [d, p]))
+  for (const [d, p] of moved) {
+    for (const setIn of ['terminal', 'daemon']) {
+      const home = tmpDir('trocar-driver-setup-'), to = path.join(home, 'moved-place')
+      fs.mkdirSync(path.join(resolveLoc(p, { os: OS, home, cwd: home, env: { [p.env]: to } })[0]), { recursive: true }) // the agent's footprint, at the moved place only
+      saveManifest(collectorOf(home), newManifest()) // installed: a terminal command records
+      const terminal = { PATH: '', ...(setIn === 'terminal' ? { [p.env]: to } : {}) }, daemon = { PATH: '', ...(setIn === 'daemon' ? { [p.env]: to } : {}) }
+      recordUserPath({ home, env: terminal, names: presentEnvNames(all) })
+      const inHome = { ...fs, existsSync: (f) => String(f).startsWith(home) && fs.existsSync(f) }
+      const ask = (env) => driverPresent({ os: OS, home, env, harnesses: [d], fs: inHome })[d.name]
+      const want = setIn === 'terminal' ? [d.name] : [] // the user's own shell is the truth
+      assert.deepEqual([ask(terminal), ask(daemon)], [want, want], `${d.name} ${p.env} set in the ${setIn}`)
+    }
+  }
+  assert.ok(moved.length > 0)
 })
 
 test('4.6 presence on the real descriptors: none is there over an empty HOME', async () => {
