@@ -9,7 +9,7 @@ import * as W from '../labels/replay.mjs'
 import { HALF } from '../core/icons.mjs'
 import * as C from '../labels/cells.mjs'
 import { layout } from './jsonlay.mjs'
-import { renderKind, jsonNodeHtml, get, textOf, noteOf } from './kinds.mjs'
+import { renderKind, jsonNodeHtml, get, textOf, noteOf, hasMarkdown } from './kinds.mjs'
 import { cellKey } from './keymap.mjs'
 import { isTyping } from '../core/keys.mjs'
 import { BODY } from '../../../src/view/render-kind.mjs'
@@ -256,7 +256,8 @@ export function entryOf(cell, mode, got, upto = 0) {
 // a body drawn ahead of the step it belongs to, at rest: the key press onto that step only sets what is drawn here (2.3 §正文预取)
 export function drawAhead(x) {
   const cell = cellOf(x), got = cell && gotOf(cell)
-  if (got?.status === 'ok') entryOf(cell, onlyMode(cell, got) ?? modeOf(cell.bid), got)
+  const mode = got?.status === 'ok' ? onlyMode(cell, got) ?? modeOf(cell.bid) : null
+  if (mode && (mode !== 'read' || hasMarkdown())) entryOf(cell, mode, got) // a Readable drawn before the renderer came would stay text
 }
 export const clipLine = (shown, total, copy) => shown >= total ? '' : shown >= CELL_CAP ? C.atCap(shown, total, copy) : C.showing(shown, total)
 const lines = (chars) => Math.max(1, Math.min(20, Math.ceil((Number(chars) || 0) / 100)))

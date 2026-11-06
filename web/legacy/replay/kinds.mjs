@@ -124,6 +124,7 @@ function json(r, b, v, o) {
 // least one, `more` is null when all is drawn. With nothing registered, or nothing left to spend, it is text. ─────────────────
 let md = null
 export function setMarkdown(fn) { md = fn }
+export const hasMarkdown = () => md != null
 function markdown(r, b, v, o) {
   if (typeof b !== 'string') fail()
   if (!md || o.budget <= 0) return { as: 'text' }

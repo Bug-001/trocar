@@ -16,6 +16,7 @@
 // through it (DeskHost's routes, this view's framed and setCapacity).
 import { flushSync } from 'react-dom'
 import { keyOf } from '../../../legacy/replay/replay.mjs'
+import { loadMarkdown } from './md-load'
 
 let depth = 0
 export function during<T>(f: () => T): T { depth++; try { return f() } finally { depth-- } }
@@ -58,6 +59,7 @@ export function reactView(s: DeskState, framed: (E: Els) => void, gone: () => vo
       if (marked || reported.size < 2) return
       marked = true
       if (typeof performance !== 'undefined') performance.mark('desk-rough')
+      void loadMarkdown() // the rough page draws none of it (D71①); here it is there before the playhead's pack is
     },
     // the controller's side
     els: () => E,
