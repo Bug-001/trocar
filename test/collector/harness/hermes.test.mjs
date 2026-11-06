@@ -62,6 +62,9 @@ test('hermes: python -c whose code loads the entry module is Hermes, whatever th
   yes(MAC, [MAC, '-P', '-c', site('hermes_cli.main'), '-z', 'hi'], 'the bundled launcher')
   const split = [MAC, '-P', '-c', site('hermes_cli.main'), 'serve', '--host', '127.0.0.1', '--port', '0'].join(' ').split(' ')
   assert.equal(matchOf([hermes], { ...facts({ os: 'darwin', exe: MAC, argv: split }), argvSplit: true }).agent, 'hermes', 'the backend as a ps line')
+  // darwin's `ps` prints a line break in the code as a literal \\012, and `rest` turns the backslash into a slash: a load on a later line is still a load
+  const psLine = [MAC, '-P', '-c', 'import os\\012from hermes_cli.main import main\\012main()', 'serve', '--host', '127.0.0.1'].join(' ').split(' ')
+  assert.equal(matchOf([hermes], { ...facts({ os: 'darwin', exe: MAC, argv: psLine }), argvSplit: true }).agent, 'hermes', 'a load on a later line, as ps prints it')
   // axis: flags before -c × load form × entry module
   const loads = (m) => [`from ${m} import main\nmain()`, `import os, sys; import hermes_bootstrap; import ${m} as e; e.main()`, `import runpy; runpy.run_module('${m}', run_name='__main__')`, site(m)]
   for (const flags of [[], ['-I'], ['-P'], ['-E'], ['-s'], ['-I', '-P'], ['-E', '-s', '-P'], ['-X', 'utf8', '-I'], ['-W', 'ignore', '-B', '-s'], ['-IPc']]) {
