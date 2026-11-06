@@ -53,6 +53,7 @@ export const CODE = Object.freeze({
   bundleKept: 'bundle-kept', // a combined bundle kept (without the trocar CA) for processes that loaded it
   residue: 'residue-not-removed', // files an agent wrote because of trocar's plugin; reported, never deleted
   harnessNote: 'harness-note', // anything else a descriptor's inject() says the user should know
+  loopbackDirect: 'loopback-direct', // a route on writes sends loopback direct (4.11 P6 · P9 · P10): requests to this computer are not captured, said with the hosts (1.6 §3.3)
   unitNotEnabled: 'unit-not-enabled', // the autostart unit is written but the OS service manager refused to enable it
   unitNotDisabled: 'unit-not-disabled', // uninstall: systemd refused to disable the unit, or its wants link could not be removed
   unitEnvNotCarried: 'unit-env-not-carried', // the install shell's NODE_EXTRA_CA_CERTS could not be given to the autostart unit

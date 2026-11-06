@@ -61,9 +61,11 @@ for (const os of OSES) {
       const out = await modelFormFacts({ harnesses: all, os, manifest: m, reply: { doors }, root: ROOT_OK, ctx: ctxOf(os, home) })
       for (const x of out[desc.name]) {
         const f = forms.find((y) => y.id === x.id)
-        assert.equal(x.notes.length, (desc.proxyMode.effects || []).length + (desc.proxyMode.notes || []).length + (f.hostTree ? 1 : 0), `${x.id}: its hostTree note, the effects and the notes, nothing else`)
+        assert.equal(x.notes.filter((n) => n.code === 'harness-note').length, (desc.proxyMode.effects || []).length + (desc.proxyMode.notes || []).length + (f.hostTree ? 1 : 0), `${x.id}: its hostTree note, the effects and the notes, nothing else`)
         for (const e of desc.proxyMode.effects || []) assert.ok(x.notes.some((n) => n.code === 'harness-note' && n.text === e.when && n.paths.length > 0), `${x.id}: effect ${e.id}`)
         for (const n of desc.proxyMode.notes || []) assert.ok(x.notes.some((y) => y.code === 'harness-note' && y.text === n.text), `${x.id}: note ${n.id}`)
+        // 1.6 §3.3: the loopback note only on a form whose route is in place, at most once
+        assert.ok(x.notes.filter((n) => n.code === 'loopback-direct').length <= (x.proxy.entry_intact ? 1 : 0), x.id)
       }
     })
     test(`1.6 §9.4 ${os} ${desc.name}: the certificate per form — its carrier, in effect, or the code and command the user acts on`, async () => {
