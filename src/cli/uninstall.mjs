@@ -133,12 +133,14 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
   receipt.harnesses = harnessIdsOf(m)
   // §1.4 / appendix C: the plan itself is a key of the JSON document — every file by its full path and what would happen to it
   const plannedItems = (p) => [...p.changed.map((c) => ({ path: c.path, change: c.change, harness: c.harness ?? null })), ...p.removed.map((x) => ({ path: x, change: 'removed' }))]
-  const plan = () => { const p = planUninstall(w, m, purgeData, deps.root); return Object.assign(receipt, { dry_run: true }, p, { planned: plannedItems(p) }) }
+  const stray = dryRun || !yes ? await strayPlan(w, m) : null // 4.11 §3 ㉔: the roots the run would sweep, read once, so the plan the user agrees to names them (1.6 §1.4)
+  const planOf = () => { const p = planUninstall(w, m, purgeData, deps.root); return { ...p, changed: [...p.changed, ...stray.changed], removed: [...p.removed, ...stray.removed], notes: [...p.notes, ...stray.notes] } }
+  const plan = () => { const p = planOf(); return Object.assign(receipt, { dry_run: true }, p, { planned: plannedItems(p) }) }
   if (dryRun) { plan(); return { receipt, exit: EXIT.ok } }
   // §3.6: uninstall always prints its plan and asks — it takes certificates out of your trust settings and removes files of yours. Not a terminal
   // and no --yes: the plan only, nothing changed, exit 2 (§1.4).
   if (!yes) {
-    if (say) say(formatUninstallReceipt({ ...receipt, ...planUninstall(w, m, purgeData, deps.root), notes: [] }, { home, platform: w.platform, tense: 'future' }))
+    if (say) say(formatUninstallReceipt({ ...receipt, ...planOf(), notes: stray.notes }, { home, platform: w.platform, tense: 'future' }))
     const ok = interactive && io ? await confirm(io, purgeData ? 'This also deletes every captured record, for good. Proceed?' : 'Proceed?') : null
     if (ok !== true) {
       plan()
@@ -370,22 +372,41 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
 /** 4.11 §3 ㉔ (1.6 §3.6): after the record's own items, every trocar root the user's store still holds that the record did not list (P3 `list`, by
  *  subject) is removed too — with a record or without — and checked gone by a second listing; then, when the record names no root key any more, the
  *  custody's one key (P1: one key, under a fixed name). What could not be read, removed or confirmed is a left row and a problem (D38). */
+const storeOf = (w) => w.deps.rootStore || rootStore({ platform: w.platform, run: w.exec, home: w.home, env: w.env, fs: w.fs })
+const storeWhere = (w) => (w.platform === 'win32' ? 'Cert:\\CurrentUser\\Root' : path.join(w.home, 'Library', 'Keychains', 'login.keychain-db'))
+const ask = async (fn) => { try { return (await fn()) || { error: 'no answer' } } catch (e) { return { error: errText(e) } } }
+const nameOf = (id) => (id.fp256 ? `SHA-256 ${id.fp256}` : `thumbprint ${id.sha1}`)
+const strayChange = (id) => `a trocar root no install record listed (${nameOf(id)}) taken out of your trust store` // no tense: the plan and the receipt say it alike
+const recordKeyed = (m) => !!(m && !m.unsupported && m.entries.some((e) => e.kind === 'root-key'))
+const custodyKey = (c) => `${(c && c.kind) || 'custody'}:?`
+/** The trocar roots the store holds that the record `m` does not list → { roots } | { error }. */
+async function strayRoots(w, m) {
+  const listed = ((m && !m.unsupported && m.entries) || []).filter((e) => e && e.kind === 'system-root').map((e) => ({ fp256: e.fp256, sha1: e.thumbprint }))
+  const r = await ask(() => storeOf(w).list())
+  return r.error || !Array.isArray(r.roots) ? { error: r.error || 'no list' } : { roots: r.roots.filter((x) => !listed.some((e) => sameRoot(x, e))) }
+}
+/** What the sweep below would do, for the plan and --dry-run (1.6 §1.4: the same receipt as the run): one changed row per stray root, the key when the
+ *  record names none; a store that cannot be listed is a note, never an empty plan. Reads the store once and writes nothing. */
+async function strayPlan(w, m) {
+  if (!isModelOs(w.platform) || (m && m.unsupported)) return { changed: [], removed: [], notes: [] }
+  const s = await strayRoots(w, m)
+  if (s.error) return { changed: [], removed: [], notes: [`whether your trust store holds a trocar root no install record lists could not be read (${s.error}); the run reads it again and takes out every one it finds`] }
+  return { changed: s.roots.map((id) => ({ path: storeWhere(w), change: strayChange(id), backup: null })), removed: s.roots.length && !recordKeyed(m) ? [custodyKey(w.deps.custody)] : [], notes: [] }
+}
+
 async function everyTrocarRoot(w, m, receipt, failed) {
-  const store = w.deps.rootStore || rootStore({ platform: w.platform, run: w.exec, home: w.home, env: w.env, fs: w.fs })
-  const where = w.platform === 'win32' ? 'Cert:\\CurrentUser\\Root' : path.join(w.home, 'Library', 'Keychains', 'login.keychain-db')
-  const ask = async (fn) => { try { return (await fn()) || { error: 'no answer' } } catch (e) { return { error: errText(e) } } }
-  const nameOf = (id) => (id.fp256 ? `SHA-256 ${id.fp256}` : `thumbprint ${id.sha1}`)
+  const store = storeOf(w), where = storeWhere(w)
   const leave = (reason, code = 'entry-not-undone') => { receipt.left.push({ path: where, result: 'failed', reason }); receipt.problems.push(reason); failed.push({ code, path: where, reason }) }
   const notOut = (id, why) => {
     const command = undoByHand({ kind: 'system-root', store: STORE[w.platform], fp256: id.fp256 ?? null, thumbprint: id.sha1 ?? null })
     receipt.still_trusting.push({ what: 'root', store: STORE[w.platform], fp256: id.fp256 ?? null, reason: why, command })
     leave(`a trocar root no install record listed (${nameOf(id)}) was NOT taken out of your trust store: ${why}. By hand: ${command}`, 'root-not-removed')
   }
-  const listed = ((m && !m.unsupported && m.entries) || []).filter((e) => e && e.kind === 'system-root').map((e) => ({ fp256: e.fp256, sha1: e.thumbprint }))
-  const first = await ask(() => store.list())
-  if (first.error || !Array.isArray(first.roots)) return leave(`whether your trust store holds another trocar root could not be read (${first.error}); run trocar uninstall again once it can be`)
+  const first = await strayRoots(w, m)
+  if (first.error) return leave(`whether your trust store holds another trocar root could not be read (${first.error}); run trocar uninstall again once it can be`)
   const gone = []
-  for (const id of first.roots.filter((x) => !listed.some((e) => sameRoot(x, e)))) {
+  let out = 0
+  for (const id of first.roots) {
     const r = await ask(() => store.remove(id))
     if (r.ok) gone.push(id); else notOut(id, r.reason || r.error)
   }
@@ -394,10 +415,11 @@ async function everyTrocarRoot(w, m, receipt, failed) {
   for (const id of gone) {
     if (after.error || !Array.isArray(after.roots)) notOut(id, `whether it is still there could not be read (${after.error})`)
     else if (after.roots.some((x) => sameRoot(x, id))) notOut(id, 'it is still in your trust store: removing a root asks you first, and that question was not answered with yes')
-    else receipt.changed.push({ path: where, change: `a trocar root no install record listed (${nameOf(id)}) removed from your trust store`, result: 'restored' })
+    else { out++; receipt.changed.push({ path: where, change: strayChange(id), result: 'restored' }) }
   }
-  if (m && !m.unsupported && m.entries.some((e) => e.kind === 'root-key')) return // the record's key: its own removal said what happened
-  const c = w.deps.custody || null, key = `${(c && c.kind) || 'custody'}:?`
+  // the key goes only once every stray root is confirmed out: while one is still trusted, the next uninstall sweeps it and the key then
+  if (out < first.roots.length || recordKeyed(m)) return // the record's key: its own removal said what happened
+  const c = w.deps.custody || null, key = custodyKey(c)
   try {
     if (!c || typeof c.remove !== 'function') throw new Error('this trocar has no custody backend to remove it with')
     const k = await c.remove({ kind: c.kind })
