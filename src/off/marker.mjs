@@ -46,7 +46,7 @@ export const HOME_PLACES = Object.freeze({
 /** The class-1 routes `on` writes on macOS / Windows whose bytes carry trocar's sentinel (4.11 P5): a plugin-file route's folder (`dir`, a <loc>, loc.mjs)
  *  and file `name`, a dotenv-block route's `file` (a <loc>). The descriptor's route takes its place from here, so the marker undo looks where `on`
  *  wrote — one copy of the place, and the copy trocar-off needs no collector tree to know it. */
-const HERMES_ENV = { perOs: { darwin: { base: 'home', dir: '.hermes', env: 'HERMES_HOME', path: '.env' }, win32: { base: 'localAppData', dir: 'hermes', env: 'HERMES_HOME', path: '.env' } } }
+const HERMES_ENV = { perOs: { darwin: { ...HOME_PLACES.hermes.dir, path: '.env' }, win32: { base: 'localAppData', dir: 'hermes', env: 'HERMES_HOME', path: '.env' } } }
 export const ROUTE_PLACES = Object.freeze({
   opencode: Object.freeze({ dir: Object.freeze({ ...HOME_PLACES.opencode.dir, path: 'opencode/plugins' }), name: 'trocar.js' }),
   codex: Object.freeze({ file: Object.freeze({ base: 'home', dir: '.codex', env: 'CODEX_HOME', path: '.env' }) }),

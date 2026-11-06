@@ -49,10 +49,10 @@ function layers(ctx) {
 
 function settingsLayers(ctx) {
   const cfgDir = ctx.environ.get('CLAUDE_CONFIG_DIR')
-  const userDir = cfgDir || path.join(ctx.home, '.claude')
+  const userDir = path.dirname(resolveLoc(DOOR_ROUTES['claude-code'].settings.file, { home: ctx.home, env: ctx.environ })[0]) // the one place, ~/ expanded as install and the marker undo do
   const managed = MANAGED_DIR[ctx.os]
   const sources = [
-    ['global config env', cfgDir ? path.join(cfgDir, '.claude.json') : path.join(ctx.home, '.claude.json'), 'user'],
+    ['global config env', cfgDir ? path.join(userDir, '.claude.json') : path.join(ctx.home, '.claude.json'), 'user'],
     ['user settings env', path.join(userDir, 'settings.json'), 'user'],
     ['project settings env', path.join(ctx.cwd, '.claude', 'settings.json'), 'project'],
     ['local settings env', path.join(ctx.cwd, '.claude', 'settings.local.json'), 'local'],
@@ -104,7 +104,7 @@ function inject(ctx) {
   const see = (v) => { if (typeof v === 'string' && v !== '' && !isOwnPath(ctx, v)) seen.add(v) }
   see(ctx.env.get(CA_VAR))
   for (const env of ctx.running) see(env.get(CA_VAR))
-  const files = [cfgDir ? path.join(cfgDir, '.claude.json') : path.join(ctx.home, '.claude.json'), settings]
+  const files = [cfgDir ? path.join(path.dirname(settings), '.claude.json') : path.join(ctx.home, '.claude.json'), settings] // .claude.json sits in the same (expanded) dir
   const managed = MANAGED_DIR[ctx.os]
   if (managed) {
     files.push(path.join(managed, 'managed-settings.json'))
