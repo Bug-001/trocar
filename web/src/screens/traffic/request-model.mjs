@@ -93,6 +93,7 @@ function reqMarks(b) {
 function respMarks(ctl, b) {
   const out = []
   if (labelBy(ctl.labels, 'resp-json-reserialized')) out.push({ text: W.RESP_RESERIALIZED })
+  if (labelBy(ctl.labels, 'resp-decoded-only')) out.push({ text: W.RESP_DECODED_ONLY })
   if (b && b.kind === 'undecoded') out.push({ text: W.RESP_UNDECODED(b.encoding || '?') })
   if (b && b.error) out.push({ text: `Response: ${b.error}` })
   else if (b && b.interrupted) out.push({ text: W.RESP_PARTIAL })

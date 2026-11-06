@@ -8,7 +8,7 @@
 //     on disk is what arrived before that.
 // These are NOT the top-level `partial` (a connection's earlier messages are missing — context, not bytes).
 // Envelope fields only, no wire knowledge, so the board and the ETL can both use it. Leaf module.
-import { requestEncodingOf, storedRequestBody } from './request-body.mjs';
+import { nonIdentityEncoding, requestEncodingOf, storedRequestBody } from './request-body.mjs';
 import { harnessOf } from './harnesses.mjs';
 const PARTIAL = {
   'early-response': 'never finished uploading: the upstream answered (e.g. 413 / 401) before it was fully sent',
@@ -165,6 +165,13 @@ export function captureLabelsOf(rec) {
   // carries body_wire_bytes and keeps resp.raw whenever the two differ, so a parsed reply without either is the old kind (the shape alone says so)
   if (r.kind === 'json' && r.body !== undefined && typeof r.raw !== 'string' && !rec.body_wire_bytes) out.push({ id: 'resp-json-reserialized', label: 'Re-serialized JSON, not the wire bytes',
     text: 'the reply is stored as the parsed JSON and was written back out: whitespace, key order, integers past 2^53 and duplicated keys may differ from what was on the wire (this capture predates the verbatim reply text)' });
+  // 4.1 保真边界 ②: a reply that decoded from a content-encoding keeps its wire bytes in resp.wire_b64; one that came compressed, decoded,
+  // and has no wire_b64 is the old kind (the shape alone says so). What arrived of an unfinished reply is judged the same way, under resp.partial
+  const b = r.kind === 'error' && r.partial && typeof r.partial === 'object' ? r.partial : r;
+  if (rec.transport !== 'ws' && !isLogOnly(rec) && b.kind !== 'empty' && b.kind !== 'error' && b.verbatim !== false
+    && nonIdentityEncoding(b.headers?.['content-encoding']) && !b.encoding_error && !b.wire_b64) out.push({ id: 'resp-decoded-only',
+    label: 'Compressed reply: decompressed text only',
+    text: 'the reply arrived compressed and only its decompressed text is stored; the compressed bytes on the wire are not in this record (it predates keeping them)' });
   return out;
 }
 

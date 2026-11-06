@@ -131,3 +131,17 @@ test('ctl.traffic_class is the record\'s own traffic_class, or null when it has 
   }
   assert.equal(controlRecordWire(bare).ctl.traffic_class, null)
 })
+
+// 4.1 #13: the compressed wire bytes of a reply (up to 64 MiB) stay in the source record; no query document carries them, and it says they were left behind
+test('resp.wire_b64 and resp.partial.wire_b64 never reach a query document, detail or slim, and are named in ctl.omitted', () => {
+  const W1 = 'H4sIAAAAAAAAA-wire-bytes-of-the-reply', W2 = 'H4sIAAAAAAAAA-wire-bytes-of-the-partial'
+  const rec = { ...SEED, resp: { ...SEED.resp, headers: { 'content-encoding': 'gzip' }, content_encoding: 'gzip', wire_b64: W1,
+    partial: { kind: 'sse', raw: 'event: ping\n\n', content_encoding: 'gzip', wire_b64: W2 } } }
+  for (const opts of [undefined, { detail: false }]) {
+    const out = controlRecordWire(rec, opts)
+    const s = JSON.stringify(out)
+    assert.ok(!s.includes(W1) && !s.includes(W2), `detail=${opts ? 'false' : 'true'}`)
+    assert.ok(out.ctl.omitted.includes('resp.wire_b64'))
+    assert.ok(out.ctl.omitted.includes('resp.partial.wire_b64'))
+  }
+})

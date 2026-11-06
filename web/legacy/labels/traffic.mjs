@@ -83,6 +83,7 @@ export const RESP_TRUNCATED = 'Response: truncated; only a prefix was stored'
 export const REQ_PARTIAL = 'Request: incomplete, not fully transferred'
 export const RESP_PARTIAL = 'Response: incomplete, not fully transferred'
 export const RESP_RESERIALIZED = 'The response is reserialized JSON, not the wire bytes'
+export const RESP_DECODED_ONLY = 'Response: compressed on the wire; only the decompressed text is stored'
 export const RESP_UNDECODED = (enc) => `Response: not decompressed (${enc}); the bytes are still in the source record`
 export const TROCAR_ADDED = 'added by trocar'
 export const THIS_REQUEST = 'This request'
