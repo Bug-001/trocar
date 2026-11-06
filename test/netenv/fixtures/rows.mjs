@@ -186,7 +186,7 @@ row({ n: 23, title: 'Windows: a kernel-level filter this user cannot see is said
 // Row 24 is not in the spec's table of §9.3 as an example of its own: it is the case the table's rows left out, found by running the real binary (a proxy whose owner is a readable process). D49: the hop is its address
 // and port with the owner's pid; the owner's program name is never said (a proxy's program is its product).
 export const SCRIPT_PROXY = { addr: '127.0.0.1', port: 38743, pid: 898, exe: '/usr/bin/node' }
-row({ n: 24, title: 'the proxy port is owned by a process trocar can read (a script, ssh -D, squid, a VPN client …): the hop is its port with that process's pid, nothing is guessed about what it is, and the exit is just the exit', h: 'claude-code',
+row({ n: 24, title: 'the proxy port is owned by a process trocar can read (a script, ssh -D, squid, a VPN client …): the hop is its port with that process\'s pid, nothing is guessed about what it is, and the exit is just the exit', h: 'claude-code',
   facts: facts('claude-code', { listeners: [SCRIPT_PROXY] }, { setting: proxyOf('http://127.0.0.1:38743') }),
   kinds: [['agent', 'trocar-engine', 'proxy', 'egress']], on_path: true, captured: true, reason: null,
   compact: ['claude (pid 4121) -> [ebpf] trocar :47123 -> [CONNECT passed on as it is] :38743 -> internet'], findings: [] })
