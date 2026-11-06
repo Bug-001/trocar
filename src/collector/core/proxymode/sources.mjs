@@ -92,6 +92,12 @@ export function presentPaths(form, ctx) {
   })
 }
 
+/** The forms of a harness present on this machine that trocar does not capture, each with why and where (4.6 「不采的形态」) → [{ form, why, paths }]:
+ *  the one reader every surface (install, on, status) asks, whatever the OS. Its source is the descriptor's `uncaptured` list. */
+export function uncapturedOf(desc, ctx) {
+  return (desc.uncaptured || []).map((u) => ({ form: u.form, why: u.why, paths: presentPaths(u, ctx) })).filter((u) => u.paths.length)
+}
+
 /** The API hosts the agent's own config names (descriptor `configHosts`, 4.11 §2.3): files only — cwd = home, no env, no argv — so every asker
  *  reads the same answer. → { hosts: [lowercase, once each], errors: [text] }; a file there but unreadable or unparsable is an error (D38), never "none". */
 export function configuredHosts(desc, { home, os, readFile, readdir }) {

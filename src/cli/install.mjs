@@ -275,7 +275,7 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
   const h = helperState ? await helperState() : null
   const sudoHelper = h && h.ok === false ? setupHelperCommand([], { root }) : null
   const helperNote = sudoHelper ? `the capability helper is not installed (${h.reason || 'not usable'}): the collector runs and captures nothing until it is.` : null
-  const notes = [...(r.plan ? r.plan.notes : []), ...(rep ? rep.notes : [])]
+  const notes = [...(r.plan ? r.plan.notes : plan.uncaptured), ...(rep ? rep.notes : [])]
   const receipt = { ...newReceipt('install'), ok: !board && !problems.length, ...(problems.length ? { problems } : {}), ...(board || sudoHelper ? { pending: [...(board ? [board] : []), ...(sudoHelper ? [{ what: 'the capability helper', reason: helperNote, command: sudoHelper }] : [])] } : {}), undo: UNDO_LINE.install, harnesses: r.manifest.install ? r.manifest.install.harnesses.filter((h) => args.harnesses.some((d) => d.name === h)) : [], /* ㉓: this copy's own */ skipped: plan.skipped, /* what has nothing to place here, with its reason (4.6 「这个 harness 装好了没有」) */ changed: r.already ? [] : plan.changed.map((c) => ({ ...c, backup: (r.manifest.entries.find((e) => e.path === c.path) || {}).backup ?? null })), created: [...new Set([...stdl.files, ...(r.already ? [] : plan.created), ...(written ? [ingressPath] : [])])], standalone: standalonePath(home), ...(done.path && done.path.rec ? { path_item: done.path.rec } : {}), planned, commands: ['trocar on', 'trocar off', 'trocar status', 'trocar uninstall'], notes, // the helper is a pending row with its command (C.2), not a sentence that carries one
     // `enabled` is the entry asked again after the run (1.6 §3.3: no claim without evidence), not "nothing failed": ensureDaemonUp asks it at the end of every
     // registering run and makes any answer but present its unitFailed, so a run that halted on a stuck daemon (and enabled nothing) says false here too
@@ -313,7 +313,7 @@ async function linuxSetup({ io, home, platform, flags, json, say, fs, locked, in
     const [{ driverSetup }, { SETUP_WHY }] = await Promise.all([import('../collector/driver-setup.mjs'), import('./words.mjs')])
     const desc = (args.harnesses || []).find((d) => d.name === only)
     const s = !skip && desc ? driverSetup(desc, { os: args.osName, home, env: args.env, manifest: m, fs }) : null
-    const why = plan.notes.filter((n) => typeof n === 'string' && n.startsWith(`${only}: `)).map((n) => n.slice(only.length + 2))
+    const why = plan.notes.filter((n) => typeof n === 'string' && n.startsWith(`${only}: `) && !plan.uncaptured.includes(n)).map((n) => n.slice(only.length + 2))
     if (skip || (s && s.state === 'needed')) return refuse(CODE.setupNeeded, `${only} cannot be set up: ${skip ? skip.reason : (why.length ? why : s.missing.map((x) => SETUP_WHY[x.what])).join('; ')}. Nothing was changed`)
   }
   say(fit([planned.length ? `trocar install will set up ${only}:` : `${only} has every certificate carrier it needs: there is nothing to set up.`, ...pairs(planned.map((p) => [p.what, p.detail]), { home })], { home }).join('\n'))
@@ -327,7 +327,7 @@ async function linuxSetup({ io, home, platform, flags, json, say, fs, locked, in
   if (!r) return EXIT.incomplete
   const receipt = { ...newReceipt('install'), ok: true, undo: UNDO_LINE.install, harnesses: r.manifest.install ? r.manifest.install.harnesses.filter((h) => h === only) : [],
     changed: r.already ? [] : plan.changed.map((c) => ({ ...c, backup: (r.manifest.entries.find((e) => e.path === c.path) || {}).backup ?? null })), created: r.already ? [] : plan.created,
-    standalone: standalonePath(home), planned, commands: ['trocar on', 'trocar off', 'trocar status', 'trocar uninstall'], notes: r.plan ? r.plan.notes : [] }
+    standalone: standalonePath(home), planned, commands: ['trocar on', 'trocar off', 'trocar status', 'trocar uninstall'], notes: r.plan ? r.plan.notes : plan.uncaptured }
   if (json) printJson(io, receipt)
   else io.out(fit([r.already ? `${only} was set up already. Nothing was changed.` : `${only} is set up.`, ...(r.already ? [] : changeLines(receipt, { home })), ...receipt.notes.map((n) => `Note: ${n}`), 'Next: trocar on'], { home }).join('\n'))
   return EXIT.ok

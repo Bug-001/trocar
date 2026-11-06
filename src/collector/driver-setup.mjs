@@ -7,7 +7,7 @@ import { readText, readTextOrError } from './core/config-read.mjs'
 import { collectorHome } from '../paths.mjs'
 import { caPaths } from './core/tls/ca-store.mjs'
 import { setupOf } from './core/proxymode/status-facts.mjs'
-import { isPresent } from './core/proxymode/sources.mjs'
+import { isPresent, uncapturedOf } from './core/proxymode/sources.mjs'
 import { userWhich, userFootprintEnv } from '../off/user-path.mjs'
 
 /** The ctx a descriptor's `inject` reads (the shape install's planOn hands it), plus what the proxy-mode readers (readSrc) need. */
@@ -32,7 +32,7 @@ export function driverForms(desc, ctx) {
 /** setupOf for one harness in driver mode. */
 export function driverSetup(desc, { os, home, env, manifest, fs = nodeFs }) {
   const ctx = driverCtx({ os, home, env, fs })
-  return setupOf(desc, { os, manifest, ctx, root: null, fs, forms: driverForms(desc, ctx) })
+  return { ...setupOf(desc, { os, manifest, ctx, root: null, fs, forms: driverForms(desc, ctx) }), uncaptured: uncapturedOf(desc, ctx) }
 }
 
 /** { <harness>: [its form] | [] } for every descriptor with an inject. */

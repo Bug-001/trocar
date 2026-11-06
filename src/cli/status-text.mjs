@@ -24,6 +24,9 @@ function daemonClause(d, now) {
   return `Daemon: ${unknown(d.error || 'its state could not be read')}.`
 }
 
+/** A driver-mode form trocar cannot capture whose places are here (1.6 §3.5, 4.6 「不采的形态」): its reason and where it is, from the descriptor's data. */
+const uncapturedText = (x) => ((x.setup && x.setup.uncaptured) || []).map((u) => `${u.why} (${u.paths.join(', ')})`)
+
 const CAPTURED = (h) => (h.captured === true ? 'yes' : h.desired === 'off' ? 'off' : h.captured === false ? 'no' : 'unknown')
 
 /** The one-screen summary of `trocar status` (§3.5). `doc` is the 附录 C.3 document. */
@@ -48,6 +51,8 @@ export function statusSummary(doc, { now = Date.now(), colors: c = noColor() } =
   }
   const missing = names.filter((h) => !shown.includes(h))
   if (missing.length) lines.push(`  not installed: ${missing.sort().join(', ')}`)
+  const unseen = names.flatMap((h) => uncapturedText(doc.harnesses[h]).map((t) => `Note: ${h}: ${t}`))
+  if (unseen.length) lines.push('', ...unseen.flatMap((t) => wrap(t, WIDTH)))
   lines.push('', ...pairs(summaryPairs(doc, now)))
   const first = on.find((h) => doc.harnesses[h].captured !== true) || shown[0]
   lines.push('', `More: ${[first ? `trocar status ${first}` : null, 'trocar status --failures', 'trocar doctor'].filter(Boolean).join('   ')}`)
@@ -122,6 +127,8 @@ export function statusDetail(doc, h, { finding = null, now = Date.now(), colors:
     for (const s of said) lines.push(...wrap(`Note: ${s}`, WIDTH - 2, '      ').map((t) => `  ${t}`))
     lines.push('')
   }
+  const unseen = uncapturedText(x)
+  if (unseen.length) lines.push(...unseen.flatMap((s) => wrap(`Note: ${s}`, WIDTH - 2, '      ').map((t) => `  ${t}`)), '')
   const t = doc.topology && doc.topology[h]
   if (t) lines.push(...renderRoutes(t), '', ...routeNotes(t).map((s) => `  ${s}`))
   else if (doc.topology_error) lines.push(`  Routes: ${unknown(doc.topology_error)}`)
