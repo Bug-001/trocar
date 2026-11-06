@@ -25,7 +25,7 @@ import { holdersRoute } from '../control.mjs'
 import { makeIssuer } from '../tls/issuer.mjs'
 import { bypassHit } from '../upstream-shape.mjs'
 import { hostSetOf } from '../host-agent.mjs'
-import { configuredHosts } from './sources.mjs'
+import { configuredHosts, userCertFilesOf } from './sources.mjs'
 import { priorRecordOf } from './entries.mjs'
 import { CODE } from '../codes.mjs'
 import { agentTrustSet, createAgentTrust, CERT_VARS } from './upstream-trust.mjs'
@@ -172,8 +172,10 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     const facts = { name: id.agent, pid: id.pid, startedAt: id.facts.startedAt ?? null, env: pf.env, cwd: pf.cwd }
     const forms = judgedForms(desc, ctx.os, id.agent === d.harness ? d.routeId : null)
     let v = forms.length ? { decrypt: true } : { decrypt: false, code: 'not-verified', detail: `${id.agent} has no form on ${ctx.os}` }
+    let named = null
+    const files = () => (named ||= userCertFilesOf(desc, { ...ctx, env: pf.env || {}, cwd: pf.cwd ?? undefined })) // the user files this process's settings name (rule U)
     for (const f of forms) {
-      const r = verdictOf({ desc, form: f, facts, record: { carrierInstalledAt: carrierAt(manifest(), desc, f), rootFp256 }, issuer: iss ? issuer : null, host, hostSet: hostSetFor(f) || undefined, ctx })
+      const r = verdictOf({ desc, form: f, facts, record: { carrierInstalledAt: carrierAt(manifest(), desc, f, files), rootFp256 }, issuer: iss ? issuer : null, host, hostSet: hostSetFor(f) || undefined, ctx })
       if (!r.decrypt) { v = r; break }
     }
     if (!v.decrypt && notCapturedClass('untrusted', v.code) !== 'expected' && once(`${k}\0${v.code}`)) { fail(v.code, `pid ${id.pid} (${id.agent}) at ${host} is forwarded, not decrypted: ${v.detail}`, { harness: id.agent, pid: id.pid, door: d.g }) }

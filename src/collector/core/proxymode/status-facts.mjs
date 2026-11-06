@@ -6,7 +6,7 @@
 import nodeFs from 'node:fs'
 import { itemsOfPhase } from '../../../off/manifest.mjs'
 import { judgeEntry, judgeOwned } from '../trust/journal.mjs'
-import { isPresent, readSrc, holds, presentPaths } from './sources.mjs'
+import { isPresent, holds, presentPaths, userCertFilesOf as userFilesOf } from './sources.mjs'
 import { planRoutes, priorRecordOf } from './entries.mjs'
 import { upstreamFor, isTrocarDoorUrl } from './chain.mjs'
 import { pacLeg } from './pac.mjs'
@@ -26,8 +26,6 @@ const latest = (items) => { const t = items.map((i) => Date.parse(i.installed_at
 export const writtenOf = (x) => x.door ?? ([x.value, ...Object.values(x.vars || {}), x.line].map((v) => typeof v === 'string' && /[a-z][a-z0-9+.-]*:\/\/[^\s"']+/i.exec(v)).find(Boolean) || [null])[0]
 export const intactOf = (m, e, fs) => { try { return (e.kind === 'owned-file' ? judgeOwned({ manifest: m, file: e.path, fs }) : judgeEntry({ manifest: m, planned: e, fs })).action === 'skip-intact' } catch { return false } }
 
-/** The files a harness's `userCertFiles` keys name now, in the descriptor's order. */
-const userFilesOf = (desc, ctx) => (desc.proxyMode.userCertFiles || []).map((src) => readSrc(src, ctx)).filter((r) => r.set && typeof r.value === 'string').map((r) => r.value)
 /** The install items that carry a harness's certificate: its own, and the pem-block in a user file its settings name that another harness's entry holds —
  *  one block per file, recorded once (4.11 P4 rule U, shared_with), yet it serves both. */
 const itemsFor = (desc, inst, ctx) => { const files = userFilesOf(desc, ctx); return inst.filter((i) => i.harness === desc.name || (i.kind === 'text' && i.format === 'pem-block' && files.includes(i.path))) }
