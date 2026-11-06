@@ -215,6 +215,10 @@ holds a door, it changes nothing, exits 1 with `error.code` `collectors-online` 
 If the system's prompt to remove trocar's root certificate is not answered, `uninstall` exits 1, names the
 certificate and the command to remove it by hand, and the next `trocar uninstall` tries again.
 
+On macOS, `launchctl print-disabled gui/$(id -u)` still lists `"com.trocar.collector" => enabled` after
+`uninstall`: `launchctl` has no command that removes such an entry. It is harmless: with the LaunchAgent file gone,
+it starts nothing. The receipt says so in a note.
+
 ## What you see
 
 No ETL, no database, no build step — the board reads the raw segments directly. The collector daemon

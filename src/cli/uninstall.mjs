@@ -16,7 +16,7 @@ import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
 import { readManifest, saveManifest, manifestPath, refuseOldManifest, undoByHand, PHASES } from '../off/manifest.mjs'
 import { rootName, rootStore, sameRoot, strayRoots as strayRootsOf } from '../off/root-store.mjs'
 import { disableAutostart, unitFilePath, removeWantsLinks } from '../off/autostart.mjs'
-import { undoAutostart, plistFilePath } from '../off/darwin.mjs'
+import { undoAutostart, plistFilePath, AGENT_LABEL } from '../off/darwin.mjs'
 import { findingFor } from '../netenv/findings.mjs'
 import { standaloneFiles, backupDir, opLockFile, trocarHome, appDir, launcherPath, COLLECTOR_STATE_FILES, homeMismatch, accountHomeOf } from '../off/paths.mjs'
 import { rawHome, indexHome, classesLog, collectorHome } from '../paths.mjs' // D60: the records are segments under ~/.trocar/raw, the index trocar builds from them under ~/.trocar/index
@@ -212,6 +212,8 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     else if (w.platform === 'darwin') {
       const u = undoAutostart({ home, exec: w.exec, env, fs })
       receipt.autostart = { disabled: u.code === 0, removed: u.plist === 'removed' ? [plistFilePath(home)] : [], ...(u.code !== 0 ? { error: u.err || `the LaunchAgent was ${u.agent} and the plist ${u.plist}` } : {}) }
+      // launchctl has no verb that drops the override `install`'s `enable` wrote (4.9 §4): it stays listed, harmless with no plist to load
+      if (u.code === 0 && (u.agent === 'booted-out' || u.plist === 'removed')) receipt.notes.push(`launchctl print-disabled still lists "${AGENT_LABEL}" => enabled. macOS has no command to remove that entry; with no LaunchAgent file it starts nothing`)
     }
     else receipt.autostart = disableAutostart({ home, exec: w.exec, env, fs })
     receipt.removed.push(...(receipt.autostart.removed || []))
