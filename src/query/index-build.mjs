@@ -125,6 +125,7 @@ export function indexEntryOf(env, { segment, lineNo, storedBytes, offset = null 
     // a keyless call's message chain (3.4 合成键): its history's last cumulative hashes, space-joined ('' when it has none), and
     // whether it carries its harness's compaction marker: hashes and a flag, never message text
     kin_chain: synth && synth.chain ? synth.chain.join(' ') : null,
+    kin_items: synth && synth.items ? synth.items.join(' ') : null,
     kin_late: synth && synth.late != null ? synth.late : null, // how many of kin_fp come from user texts after the first
     kin_mark: !!(synth && synth.mark),
     offset,  // where this line starts in the plaintext segment, so one record is read by seek (null: sealed)

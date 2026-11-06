@@ -75,22 +75,25 @@ function fingerprints(texts, cap) {
 // array, else a string `input`. A call extends a chain when the chain's tail (its last call's whole history) is among the hashes kept:
 // the last TAIL positions, and before them the turn boundaries — where the model's output starts (an item with role `assistant`, or a
 // Responses `reasoning` / `*_call` item, after one that is not): a previous call ends there however many items its turn returned
-// (one assistant message and N parallel tool results), so a turn costs one hash. At most CHAIN_K, oldest first.
-const CHAIN_K = 12, TAIL = 4, CHAIN_CAP = 32;
+// (one assistant message and N parallel tool results), so a turn costs one hash. At most CHAIN_K, oldest first. `items`: the last RECENT
+// items each by its own hash: a harness edits older items in place or drops turns, which breaks every cumulative hash after it; the items it
+// did not touch stay as they were. It may be the tool results or the model's messages that change, so all count (step 3).
+const CHAIN_K = 12, TAIL = 4, CHAIN_CAP = 32, RECENT = 12, MIN_ITEMS = 2;
 const h16 = (s) => createHash('sha256').update(s, 'utf8').digest('hex').slice(0, 16);
 const bare = (k, v) => (k === 'cache_control' ? undefined : v);
 const fromModel = (it) => !!it && (it.role === 'assistant' || it.type === 'reasoning' || /_call$/.test(it.type ?? ''));
 function chainOf(body) {
   const b = body || {};
   const items = Array.isArray(b.messages) ? b.messages : Array.isArray(b.input) ? b.input : typeof b.input === 'string' ? [b.input] : [];
-  const out = [];
+  const out = [], recent = [];
   let c = null;
   items.forEach((it, i) => {
     const j = JSON.stringify(it, bare) ?? 'null';
     c = h16(c == null ? j : c + '\n' + j);
     if (i >= items.length - TAIL || (fromModel(items[i + 1]) && !fromModel(it))) out.push(c);
+    if (it?.role !== 'system' && it?.role !== 'developer') recent.push(h16(j).slice(0, 8)); // every agent of the group has those
   });
-  return out.slice(-CHAIN_K);
+  return { chain: out.slice(-CHAIN_K), items: recent.slice(-RECENT) };
 }
 
 export function createSynthKeys({ gapMs = SYNTH_GAP_MS } = {}) {
@@ -98,9 +101,9 @@ export function createSynthKeys({ gapMs = SYNTH_GAP_MS } = {}) {
   return { keyOf: (rec) => { const got = assign(synthFactsOf(rec)); return got ? got.key : null; } };
 }
 
-/** What a call brings to the rule, or null when it takes no part in it. Keyless → {harness, ms, hash, fp, probe, late, chain, mark}: `fp` is the
+/** What a call brings to the rule, or null when it takes no part in it. Keyless → {harness, ms, hash, fp, probe, late, chain, items, mark}: `fp` is the
  *  fingerprints its session is recognized by, `probe` the ones it looks for its session with when it is the harness's
- *  compaction request, else null; `chain` its history's last cumulative hashes (chainOf); `mark` whether it carries its harness's
+ *  compaction request, else null; `chain` its history's last cumulative hashes and `items` its last items' own (chainOf); `mark` whether it carries its harness's
  *  compaction text marker without being the compaction request (Hermes's call after a compaction). Keyed (a `synth: true` harness only) → {harness, ms, key, fp}, with NO hash: a keyed call never opens or moves a synthesized group. A reader that cannot afford the body later (the
  *  segment index, 1.6 §4.1) stores these and asks the assigner below with them. */
 export function synthFactsOf(rec) {
@@ -123,7 +126,7 @@ function factsOf(rec) {
   const probe = compactionRequest(rec, h.row) ? fingerprints(texts, PROBE_CAP) : null;
   // `late`: how many of `fp` (a prefix: the texts are taken newest first) come from user texts after the first one
   return { harness: h.id, ms, hash: createHash('sha256').update(systemTextOf(body), 'utf8').digest('hex'), fp, probe,
-    late: fingerprints([...texts.slice(1)].reverse(), FP_CAP).length, chain: chainOf(body), mark: !probe && hintsOf(rec).compactionMarker === true };
+    late: fingerprints([...texts.slice(1)].reverse(), FP_CAP).length, ...chainOf(body), mark: !probe && hintsOf(rec).compactionMarker === true };
 }
 
 // The call that is the compaction request: a header / request-kind hint, or its harness's text marker in one block of its own system
@@ -189,7 +192,7 @@ export function createSynthAssigner({ gapMs = SYNTH_GAP_MS, open = new Map() } =
     const live = [];
     for (const [g, e] of open) if (g.startsWith(own) && Math.abs(ms - e.lastMs) <= gapMs) live.push(e);
     const join = (e) => {
-      e.tail = chain.length ? chain[chain.length - 1] : null; e.lastMs = Math.max(e.lastMs, ms); e.fp = grow(e.fp, facts.fp); e.pending = false;
+      e.tail = chain.length ? chain[chain.length - 1] : null; e.items = facts.items; e.lastMs = Math.max(e.lastMs, ms); e.fp = grow(e.fp, facts.fp); e.pending = false;
       return { key: e.key, kin: false };
     };
     let best = null, bestAt = -1;
@@ -203,7 +206,14 @@ export function createSynthAssigner({ gapMs = SYNTH_GAP_MS, open = new Map() } =
       e.lastMs = Math.max(e.lastMs, ms); e.fp = grow(e.fp, facts.fp);
       return { key: e.key, kin: false };
     }
-    let bestN = 0;
+    // older items edited, or the history rewritten with recent items kept: it still holds what the chain's last call ended with
+    let bestN = MIN_ITEMS - 1;
+    for (const e of live) {
+      const had = new Set(e.items || []), n = new Set((facts.items || []).filter((x) => had.has(x))).size;
+      if (n > bestN || (best && n === bestN && e.lastMs > best.lastMs)) { best = e; bestN = n; }
+    }
+    if (best) return join(best);
+    bestN = 0;
     const evidence = facts.mark ? facts.fp : (facts.fp || []).slice(0, facts.late || 0);
     for (const e of live) {
       if (!e.pending && !facts.mark) continue;
@@ -218,7 +228,7 @@ export function createSynthAssigner({ gapMs = SYNTH_GAP_MS, open = new Map() } =
     let oldest = null, count = 0;
     for (const [g, e] of open) if (g.startsWith(own)) { count++; if (!oldest || e.lastMs < oldest[1].lastMs) oldest = [g, e]; }
     if (count >= CHAIN_CAP) open.delete(oldest[0]);
-    open.set(own + key, { key, lastMs: ms, fp: grow(null, facts.fp), tail: chain.length ? chain[chain.length - 1] : null, pending: false });
+    open.set(own + key, { key, lastMs: ms, fp: grow(null, facts.fp), tail: chain.length ? chain[chain.length - 1] : null, items: facts.items, pending: false });
     return { key, kin: false };
   };
 }

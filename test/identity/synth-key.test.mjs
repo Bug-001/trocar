@@ -448,8 +448,11 @@ test('chains: a compaction stays in the session of the chain it rewrites and is 
         } else {
           const before = sidsOf(m, home, by[0].slice(0, by[0].indexOf(rewritten)))
           assert.equal(before.size, 1, `${at}: one session before the rewrite`)
-          assert.equal(before.has(m.get(ridOf(home, rewritten))[0]), false, `${at}: the rewrite opens another session`)
-          assert.deepEqual(flagged, [], `${at}: no compaction`)
+          if (shape === 'pi') assert.equal(x.size, 1, `${at}: it kept items, so it is the same conversation`)
+          else {
+            assert.equal(before.has(m.get(ridOf(home, rewritten))[0]), false, `${at}: nothing kept and no evidence: another session`)
+            assert.deepEqual(flagged, [], `${at}: no compaction`)
+          }
         }
         for (const rs of by.slice(1)) {
           const s = sidsOf(m, home, rs)
@@ -459,6 +462,60 @@ test('chains: a compaction stays in the session of the chain it rewrites and is 
       }
     }
   }
+})
+
+// real Hermes shapes: older items rewritten in place between calls, tool results or the model's own (the prefix breaks far back or at the
+// first item), and a compaction that drops every user text and rewrites the tool results it keeps
+const cleared = (it) => (it.role === 'tool' ? { ...it, content: '[old output cleared]' } : it)
+const stripped = (it) => (it.role === 'assistant' ? { ...it, reasoning_content: null } : it)
+test('chains: older items edited in place stay in the session, beside a concurrent agent, and are no compaction', async () => {
+  for (const [edit, change] of [['first', cleared], ['all-but-recent', cleared], ['model, all-but-recent', stripped]]) {
+    for (const others of [0, 2]) {
+      const at = `${edit}/others=${others}`, n = others + 1, by = Array.from({ length: n }, () => []), recs = []
+      const hist = by.map((_, a) => [{ role: 'user', content: userText('en', 8100 + a) }])
+      let ms = T0
+      for (let t = 0; t < 8; t++) for (let a = 0; a < n; a++) {
+        if (t) hist[a] = [...hist[a], ...toolTurn('chat', a, t, 1)]
+        if (t === 6 && a === 0) {
+          const keep = edit === 'first' ? hist[0].length - 3 : 6, firstTool = hist[0].findIndex((x) => x.role === 'tool')
+          hist[0] = hist[0].map((it, i) => (edit === 'first' ? (i === firstTool ? change(it) : it) : i < hist[0].length - keep ? change(it) : it))
+        }
+        const rec = toolCall('chat', hist[a], (ms += 5_000)); by[a].push(rec); recs.push(rec)
+      }
+      const home = homeOf([[SEG1, recs]]), m = await membership(home), ids = by.map((rs) => sidsOf(m, home, rs))
+      for (const x of ids) assert.equal(x.size, 1, `${at}: one session per agent`)
+      assert.equal(new Set(ids.flatMap((x) => [...x])).size, n, `${at}: an agent's session of its own`)
+      const { compaction } = await sessionsOf(home)
+      assert.deepEqual(recs.filter((r) => compaction.get(ridOf(home, r))), [], `${at}: no compaction`)
+    }
+  }
+})
+
+test('chains: a compaction that keeps recent items and no user text stays in its session, beside a concurrent agent', async () => {
+  for (const mark of [true, false]) {
+    const at = `mark=${mark}`, by = [[], []], recs = [], hist = [0, 1].map((a) => [{ role: 'user', content: userText('en', 8200 + a) }])
+    let ms = T0
+    const step = (a) => { const rec = toolCall('chat', hist[a], (ms += 5_000)); by[a].push(rec); recs.push(rec); return rec }
+    for (let t = 0; t < 8; t++) for (const a of [0, 1]) { if (t) hist[a] = [...hist[a], ...toolTurn('chat', a, t, 1)]; step(a) }
+    hist[0] = [{ role: 'user', content: `${mark ? MARK + ' ' : ''}${userText('en', 8300)}` }, ...hist[0].slice(-6).map(cleared)]
+    step(0)
+    hist[0] = [...hist[0], ...toolTurn('chat', 0, 9, 1)]; step(0)
+    step(1)
+    const home = homeOf([[SEG1, recs]]), m = await membership(home), ids = by.map((rs) => sidsOf(m, home, rs))
+    for (const x of ids) assert.equal(x.size, 1, `${at}: one session per agent`)
+    assert.notEqual([...ids[0]][0], [...ids[1]][0], `${at}: two agents, two sessions`)
+  }
+})
+
+test('chains: agents that share a first message and nothing recent are not one conversation', async () => {
+  const opening = userText('en', 8400), by = [[], []], recs = [], hist = [0, 1].map(() => [{ role: 'user', content: opening }])
+  let ms = T0
+  for (let t = 0; t < 5; t++) for (const a of [0, 1]) {
+    if (t) hist[a] = [...hist[a], ...toolTurn('chat', a, t, 1)]
+    const rec = toolCall('chat', hist[a], (ms += 5_000)); by[a].push(rec); recs.push(rec)
+  }
+  const home = homeOf([[SEG1, recs]]), m = await membership(home), ids = by.map((rs) => sidsOf(m, home, rs.slice(1)))
+  assert.notEqual([...ids[0]][0], [...ids[1]][0])
 })
 
 test('chains: a call with no readable history joins the group\'s latest chain and leaves its tail as it was; alone it opens one', () => {
