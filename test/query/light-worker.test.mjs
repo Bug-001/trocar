@@ -1,4 +1,4 @@
-// test/query/light-worker.test.mjs — the light worker role and the bound on `102` (RFC 3.5 §谁执行它「两个角色」, §行表先读; 验收 #57–#61; D78 ②). The real
+// test/query/light-worker.test.mjs — the light worker role and the bound on `102` (RFC 3.5 §谁执行它「三个角色」, §行表先读; 验收 #57–#61; D78 ②). The real
 // router over real worker forks, or a real daemon on a model world with only the worker's fork the test one; worker-rows-deps.mjs forces what comes first.
 import test from 'node:test'
 import assert from 'node:assert/strict'

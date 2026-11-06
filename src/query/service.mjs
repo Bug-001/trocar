@@ -7,7 +7,8 @@
 // class (SERVE_ORDER: block, status, sessions, lane, session, then every other name), first come first served within a class, and one whose caller
 // left before its turn is skipped, never written to the worker (3.5 §服务队列). A worker that cannot answer yet says `102`: the request waits AGAIN_MS
 // off the queue, so what is behind it goes first, and is asked again (3.5 §行表先读), until AGAIN_LIMIT_MS after its first `102`: then it ends, a caller getting 503.
-// `handsOff` (the light role, src/query/router.mjs): a `102` is not parked, the job fails flagged `again` and the router hands it to the main role.
+// `handsOff` (the light and control roles, src/query/router.mjs): a `102` is not parked, the job fails flagged `again`; the router hands a light job to the
+// main role, and never a control one (a verb is not run twice).
 // A worker that crashes or says nothing within DEADLINE_MS is a D38 failure (`where:'daemon'`, `query-failed`) and
 // is dropped; the next request forks a new one, and a caller whose request died gets a 500 and answers locally.
 // Failures are kept per SUBJECT (the name and its parameters without client.mjs WINDOW_PARAMS): the first one opens an
