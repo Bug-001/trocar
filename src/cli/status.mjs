@@ -578,9 +578,9 @@ export async function statusRun(argv, { io, env = process.env, home = nodeOs.hom
     detail.forEach((h, i) => {
       if (i) io.out('')
       const finding = found.find((x) => x.harness === h && x.class !== 'note') || null
-      for (const l of statusDetail(doc, h, { finding, now, colors: c })) io.out(l)
+      for (const l of statusDetail(doc, h, { finding, now, colors: c, home })) io.out(l)
     })
-  } else for (const l of statusSummary(doc, { now, colors: c })) io.out(l)
+  } else for (const l of statusSummary(doc, { now, colors: c, home })) io.out(l)
   if (failures) { io.out(''); for (const l of failuresBlock(doc.failures, effectiveHealth(f).health, { now })) io.out(l) }
   return { exit, f }
 }

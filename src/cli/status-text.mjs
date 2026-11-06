@@ -1,7 +1,7 @@
 // status-text.mjs — the words of `trocar status` (RFC 1.6 §3.5) and the two formatters `--failures` prints (formatStatus, formatHealth) plus the
 // install notes `doctor` prints (formatInstallNotes), which used to live in src/collector/cli.mjs. English, ASCII, 80 columns, conclusion first (D58).
 // Everything here renders from the status document (附录 C.3) and the facts it was built from; nothing is computed twice and nothing is written.
-import { columns, pairs, wrap, unknown, ago, noColor, WIDTH } from './text.mjs'
+import { columns, pairs, wrap, unknown, ago, noColor, tilde, WIDTH } from './text.mjs'
 import { renderRoutes, routeNotes } from '../netenv/topology-text.mjs'
 import { briefText, failureBrief, failureWord, squashed, statusNote } from './words.mjs'
 import { carrierWords } from './receipt.mjs'
@@ -25,12 +25,12 @@ function daemonClause(d, now) {
 }
 
 /** A driver-mode form trocar cannot capture whose places are here (1.6 §3.5, 4.6 「不采的形态」): its reason and where it is, from the descriptor's data. */
-const uncapturedText = (x) => ((x.setup && x.setup.uncaptured) || []).map((u) => `${u.why} (${u.paths.join(', ')})`)
+const uncapturedText = (x, home) => ((x.setup && x.setup.uncaptured) || []).map((u) => `${u.why} (${u.paths.map((p) => tilde(p, home)).join(', ')})`)
 
 const CAPTURED = (h) => (h.captured === true ? 'yes' : h.desired === 'off' ? 'off' : h.captured === false ? 'no' : 'unknown')
 
 /** The one-screen summary of `trocar status` (§3.5). `doc` is the 附录 C.3 document. */
-export function statusSummary(doc, { now = Date.now(), colors: c = noColor() } = {}) {
+export function statusSummary(doc, { now = Date.now(), colors: c = noColor(), home = null } = {}) {
   const names = Object.keys(doc.harnesses || {})
   const installed = (doc.install && doc.install.harnesses) || []
   const shown = names.filter((h) => installed.length === 0 || installed.includes(h))
@@ -51,7 +51,7 @@ export function statusSummary(doc, { now = Date.now(), colors: c = noColor() } =
   }
   const missing = names.filter((h) => !shown.includes(h))
   if (missing.length) lines.push(`  not installed: ${missing.sort().join(', ')}`)
-  const unseen = names.flatMap((h) => uncapturedText(doc.harnesses[h]).map((t) => `Note: ${h}: ${t}`))
+  const unseen = names.flatMap((h) => uncapturedText(doc.harnesses[h], home).map((t) => `Note: ${h}: ${t}`))
   if (unseen.length) lines.push('', ...unseen.flatMap((t) => wrap(t, WIDTH)))
   lines.push('', ...pairs(summaryPairs(doc, now)))
   const first = on.find((h) => doc.harnesses[h].captured !== true) || shown[0]
@@ -98,7 +98,7 @@ function summaryPairs(doc, now) {
 const DESIRED = { on: 'on', off: 'off' }
 
 /** One named harness's section. `finding` is the problem (or expected) finding that explains it, from the one catalogue (附录 B). */
-export function statusDetail(doc, h, { finding = null, now = Date.now(), colors: c = noColor() } = {}) {
+export function statusDetail(doc, h, { finding = null, now = Date.now(), colors: c = noColor(), home = null } = {}) {
   const x = doc.harnesses[h]
   if (!x) return [`${h}: ${unknown('it is not set up on this machine')}`]
   const verdict = x.captured === true ? ['captured', notSeenYet(x)].filter(Boolean).join(', ') : x.captured === null ? openText(x, h, unknown) : x.desired === 'off' ? 'capture is off' : 'not captured'
@@ -127,7 +127,7 @@ export function statusDetail(doc, h, { finding = null, now = Date.now(), colors:
     for (const s of said) lines.push(...wrap(`Note: ${s}`, WIDTH - 2, '      ').map((t) => `  ${t}`))
     lines.push('')
   }
-  const unseen = uncapturedText(x)
+  const unseen = uncapturedText(x, home)
   if (unseen.length) lines.push(...unseen.flatMap((s) => wrap(`Note: ${s}`, WIDTH - 2, '      ').map((t) => `  ${t}`)), '')
   const t = doc.topology && doc.topology[h]
   if (t) lines.push(...renderRoutes(t), '', ...routeNotes(t).map((s) => `  ${s}`))

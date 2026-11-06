@@ -145,7 +145,7 @@ export default {
   // no { command }: after install the first `kimi` on PATH is trocar's shim; npm kimi has no carrier on Linux
   present: [{ base: 'home', path: '.kimi-code/bin/kimi' }],
   // its VS Code extension runs in VS Code's extension host, whose fetch trusts a fixed CA list only the login environment widens (D56⑨): no carrier (4.6 「不采的形态」)
-  uncaptured: [{ form: 'kimi-code.vscode', present: editorExtension(EXTENSION), why: "its VS Code extension's calls are not captured on Linux: VS Code uses its own certificate list there, which only your login environment can extend, and trocar does not change that environment" }],
+  uncaptured: [{ form: 'kimi-code.vscode', os: ['linux'], present: editorExtension(EXTENSION), why: "its VS Code extension's calls are not captured on Linux, because VS Code uses its own certificate list there, which only your login environment can extend, and trocar does not change that environment" }],
   inject,
   trust: {
     // the marker first (dsh's ordering): on an OS whose judge cannot read the environment, the shim's launch marker is
