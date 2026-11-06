@@ -956,7 +956,7 @@ function openDesk(ctx, route0, makeView = legacyView) {
     // the followed step's open reply bodies in one read before it is drawn, so its newest reply shows with its bytes; the same read
     // carries the ±NEAR prefetch, so the rest after it finds nothing left and a delta stays one `block` (4.4 live-poll: 「每个增量最多一次」;
     // 2.3 §读与画 takes the followed step out of the rest's own-then-near reads)
-    if (s.follow && moved && !first && host) {
+    if (s.follow && moved && !first && host && !idle()) {
       const refs = openRefs(s.playRid)
       if (refs.length) { await loadBodies({ get: (n, p, o) => via(0, n, p, o) }, [...refs, ...nearRefs(s.playRid)], { signal }); await pace.calm(); if (s.dead || key !== sessionKey()) return; drawNear(s.playRid) } // a press during the read is not redrawn away either
     }
@@ -1027,7 +1027,9 @@ function openDesk(ctx, route0, makeView = legacyView) {
   }
   // popovers and menus close themselves first and stop the key (core/keys.mjs); here: the call drawer, then the bottom row
   const onEscape = () => { if (E && E.detail.classList.contains('open')) closeDetail(E.detail, s); else if (s.rpOpen) onRp() }
-  const onVis = () => { if (!document.hidden) poll() } // back in view: read now, not a tick later
+  // a hidden page starts none of the step's reads (2.3 §正文预取); back in view: read now, not a tick later
+  const stepsByPage = () => (document.hidden ? steps.pause() : steps.resume())
+  const onVis = () => { stepsByPage(); if (!document.hidden) poll() }
   // the lane's width changes with the window and with the right-page divider: watch both. Only a window that no longer fits is touched.
   const refit = () => { if (alive() && fitView()) { view.saw(); drawRails(); view.overview() } }
   const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(refit) : null
@@ -1075,7 +1077,7 @@ function openDesk(ctx, route0, makeView = legacyView) {
     poller.start() // the desk keeps reading on the poller's one schedule; 「跟随最新」 only decides whether the playhead follows growth
     if (hasStep(route)) update(route)
     catchUp()
-    steps.resume(); chainLedger(); fill() // what a leave paused goes on (a desk that holds every pack reads nothing here)
+    stepsByPage(); chainLedger(); fill() // what a leave paused goes on (a desk that holds every pack reads nothing here)
     poll() // the first open, or one round: the head If-None-Match, a Range on each tail
   }
   // leave the page: the poll stops, every listener outside the root goes, the reads in flight finish into the desk's state (drawn on

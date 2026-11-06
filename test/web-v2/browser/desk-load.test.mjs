@@ -121,6 +121,26 @@ test('2.3 #30: a step named in another pack is that pack\'s first read and lands
   }
 })
 
+test('2.3 §正文预取 · 4.4: a hidden page starts no body read; on becoming visible the step\'s reads go out', { skip }, async () => {
+  const w = world(5, { calls: 60, page: 100, talk: { pre: 3, len: 30, every: 6, tail: 4 } })
+  const b = await withBoard({ bytes: 1e5, chromium: gate.chromium })
+  const hide = (v) => b.page.evaluate((h) => { Object.defineProperty(document, 'hidden', { configurable: true, value: h }); document.dispatchEvent(new Event('visibilitychange')) }, v)
+  try {
+    const { page } = b
+    const blocks = []
+    page.on('request', (r) => { if (new URL(r.url()).pathname === '/api/block') blocks.push(r.url()) })
+    await serveWorld(page, w, { latency: 50 })
+    await hide(true)
+    await page.evaluate(() => { location.hash = '#/replay/p/S' })
+    await page.waitForSelector('#stepbar .sb-no')
+    await page.waitForTimeout(800)
+    assert.deepEqual(blocks, [], 'no block read while hidden')
+    await hide(false)
+    assert.ok(await until(page, async () => blocks.length > 0, 5000), 'the step\'s reads went out on becoming visible')
+    assert.deepEqual(b.errors, [])
+  } finally { await b.stop() }
+})
+
 test('2.3 #32: a rest of 100 ms reads the step\'s own bodies, then the reply bodies of the anchor lane\'s ±8 held steps in one more read; stepping there draws them at once', { skip }, async () => {
   const w = world(5, { calls: 60, page: 100, talk: { pre: 3, len: 30, every: 6, tail: 4 } }), R = 8
   const main = w.full().lanes.find((h) => h.kind === 'main').lane
