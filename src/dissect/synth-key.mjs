@@ -18,7 +18,7 @@ const textOf = (c) => partsOf(c).join('');
 // The task anchor: the first system text of whichever wire the call used (Anthropic `system`, Responses
 // `instructions`, else the first system / developer item of its `input`; Chat's leading system / developer
 // message), block by block ([] when there is none).
-function systemPartsOf(body) {
+export function systemPartsOf(body) {
   const b = body || {};
   if (b.system != null) return partsOf(b.system);
   if (typeof b.instructions === 'string') return [b.instructions];
@@ -43,7 +43,7 @@ const FACTS = new WeakMap();
 // falls on the sample (h % SAMPLE === 0) — the same rule on both sides, so a long enough shared fragment yields shared fingerprints
 // when it falls within what both sides keep (the caps below; else the call falls back to its synthesized key). Character windows, not words: CJK has no spaces. A fingerprint is stored as h / SAMPLE (a small integer).
 const WIN = 32, SAMPLE = 8, FP_CAP = 64, PROBE_CAP = 1024, STATE_CAP = 4096, MIN_SHARED = 2;
-const userTextsOf = (body) => {
+export const userTextsOf = (body) => {
   const b = body || {};
   if (typeof b.input === 'string') return [b.input];
   const items = [...(Array.isArray(b.messages) ? b.messages : []), ...(Array.isArray(b.input) ? b.input : [])];

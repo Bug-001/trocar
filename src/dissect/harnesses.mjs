@@ -24,7 +24,9 @@ const LEGACY_SESSION_KEYS = [H('x-claude-code-session-id'), H('x-session-id', 'm
 // querystring; the first entry that matches wins. Nothing matches → the shared third-party hosts (src/dissect/traffic.mjs),
 // then `other`. The class table (src/classes/table.mjs) compiles these entries; the collector applies it when it writes a
 // record. A harness with no entries is not a loss: its calls are `other`, kept in full (4.1 Edge cases).
-const ROW = { ua: null, parentKeys: [], lane: [], compaction: [], requestKind: null, observerEffects: [], traffic: [] };
+// `cwd` (3.4 §工作目录): where a call states its working directory — rules {in: 'system'|'user', re}, capture 1 the path, read by
+// src/dissect/project.mjs only. [] = this harness states none that is read.
+const ROW = { ua: null, parentKeys: [], lane: [], compaction: [], requestKind: null, observerEffects: [], traffic: [], cwd: [] };
 const T = (host, cls, pathSource) => ({ host, class: cls, ...(pathSource ? { path: pathSource } : {}) });
 // 4.8 §5.6: injected trust changes the agent the same way in both modes; a legacy MITM / reverse-proxy capture still never carries one. `captures` scopes an
 // effect to the mode whose entry causes it: 'transparent' is Linux's driver mode, 'proxy' the door of macOS / Windows (D47) — what trocar writes differs (4.11)
@@ -37,6 +39,7 @@ const ROWS = [
     // a background call (progress summary, suggestion) is aux even when it carries its subagent's agent-id (3.4)
     lane: [{ header: 'x-claude-code-request-class', equals: 'auxiliary', lane: 'aux' }, { header: 'x-claude-code-agent-id', lane: 'subagent', key: true }],
     compaction: [{ header: 'x-cc-compaction-request' }],
+    cwd: [{ in: 'system', re: /^[ \t]*(?:Primary working|Working) directory:[ \t]*([^\n]+)$/m }],
     observerEffects: [effect('cc-gzip-off', 'NODE_EXTRA_CA_CERTS in settings env',
       'Claude Code sends request bodies uncompressed while a custom CA is set')],
     // the endpoints measured on the live capture (2026-10-07): remote-session sync, telemetry, uploads,
@@ -55,12 +58,14 @@ const ROWS = [
     sessionKeys: [H('session-id'), H('thread-id')], // over WebSocket these come from the upgrade request (4.6)
     parentKeys: [H('x-codex-parent-thread-id')],    // a THREAD id; resolved through aliases later (gate G4)
     lane: [{ header: 'x-openai-subagent', lane: 'subagent' }],
+    cwd: [{ in: 'user', re: /<environment_context>[\s\S]*?<cwd>\s*([^\n<]+?)\s*<\/cwd>/ }],
     requestKind: { header: 'x-codex-turn-metadata', jsonKey: 'request_kind', lanes: { prewarm: 'probe' }, compaction: ['compaction'] },
     observerEffects: [effect('codex-rustls-h2', 'SSL_CERT_FILE in $CODEX_HOME/.env',
       'model HTTP switched from native-tls to rustls; ALPN offers [h2, http/1.1]', LINUX)] }, // macOS / Windows trust the root in the store: no .env (4.11 codex forms)
   { ...ROW, id: 'opencode', ua: /opencode/,
     sessionKeys: [H('x-opencode-session-id'), H('session-id'), H('x-session-affinity'), H('x-session-id')],
     parentKeys: [H('x-opencode-parent-session-id')],
+    cwd: [{ in: 'system', re: /^[ \t]*Working directory:[ \t]*([^\n]+)$/m }], // indented inside <env>
     observerEffects: [
       effect('opencode-plugin', 'trocar trust plugin',
         'trocar code runs inside the agent process; the first run adds one npm registry fetch of @opencode-ai/plugin', LINUX),
@@ -91,6 +96,7 @@ const ROWS = [
     // send none → synthesized (src/dissect/synth-key.mjs, gate G11)
     sessionKeys: [H('session_id'), H('session-id'), B(['prompt_cache_key'])],
     synth: true,
+    cwd: [{ in: 'system', re: /<cwd>\s*([^\n<]+?)\s*<\/cwd>/ }], // system only: pi's system text also quotes `Working directory:` lines, never read
     // the summary request (same endpoint, no tools, one user message) starts its system prompt with this sentence; a JSON string's start
     compaction: [{ marker: /(?<!\\)"You are a context summarization assistant\./ }],
     observerEffects: [
