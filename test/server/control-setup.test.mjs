@@ -289,7 +289,8 @@ test('Linux · 4.11 P4b · D38: a carrier file that cannot be read judges `unkno
     const j = driverSetup(s.descs[0], { os: 'linux', home: s.home, env: s.sh.env, manifest: s.manifest() })
     assert.equal(j.state, 'unknown', JSON.stringify(j)); assert.ok(j.reason)
     const on = await s.on({ ids: ['claude-code'] })
-    assert.deepEqual(on.receipt.refused, [], JSON.stringify(on.receipt))
+    assert.deepEqual([on.exit, on.receipt.refused, on.receipt.harnesses], [0, [], ['claude-code']], JSON.stringify(on.receipt))
+    assert.ok(on.receipt.notes.some((n) => n.includes(x.path)), 'the note says which file was not read')
   } finally { fs.chmodSync(x.path, 0o600) }
 })
 

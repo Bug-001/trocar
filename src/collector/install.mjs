@@ -340,6 +340,7 @@ async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePo
     if (j.action === 'skip-intact') { written.intact.push(e.path); continue }
     const step = entrySteps[i]
     const again = certs && replaceable(j) && !!step && step.harness === e.harness && step.path === e.path && step.action === 'rewrite' // this very item, as the plan said
+    if (!certs && j.unreadable) continue // on writes no certificate item: one it cannot read is setup `unknown` (4.11 P4b), said by the plan's note, not "changed"
     if (j.action === 'skip-user-changed' && !again) { written.userChanged.push({ path: e.path, why: j.why }); continue }
     if (certItem(e.path)) continue
     guard()
