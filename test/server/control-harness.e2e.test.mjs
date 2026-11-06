@@ -18,6 +18,7 @@ import { snapshot } from '../query/raw-home.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { loadIngressConfig } from '../../src/collector/core/ingress-config.mjs'
 import { CONTROL_TOKEN_HEADER } from '../../src/off/token-header.mjs'
+import { manifestPath } from '../../src/off/manifest.mjs'
 import { createServer } from '../../src/server.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
 import { checkRecord } from '../../src/health/codes.mjs'
@@ -91,6 +92,19 @@ for (const platform of ['darwin', 'win32']) {
       const p3 = await post({ harness: 'codex', on: false })
       assert.equal(p3.status, 409, p3.body)
       assert.deepEqual([p3.json.receipt.command, p3.json.receipt.dry_run], ['off', true])
+      assert.deepEqual(p3.json.plan, p3.json.receipt.planned)
+      assert.ok(p3.json.plan.some((x) => x.path === envFile && x.harness === 'codex' && x.how && x.change), `an off with an install record has real rows: ${p3.body}`)
+      // the install record changes between the two requests: the plan_id of the old plan is stale → a new plan naming the new file, still nothing written
+      const manifestFile = manifestPath(w.dir), manifestBytes = fs.readFileSync(manifestFile)
+      const record = JSON.parse(manifestBytes), other = path.join(w.home, '.codex', 'other.env')
+      fs.writeFileSync(manifestFile, JSON.stringify({ ...record, entries: [...record.entries, { ...record.entries.find((e) => e.path === envFile), path: other }] }))
+      home0 = snapshot(w.home)
+      const p3b = await post({ harness: 'codex', on: false, confirm: p3.json.plan_id })
+      assert.equal(p3b.status, 409, p3b.body)
+      assert.notEqual(p3b.json.plan_id, p3.json.plan_id)
+      assert.ok(p3b.json.plan.some((x) => x.path === other), p3b.body)
+      assert.deepEqual(snapshot(w.home), home0, 'a stale confirm of an off wrote nothing')
+      fs.writeFileSync(manifestFile, manifestBytes)
       const off = await post({ harness: 'codex', on: false, confirm: p3.json.plan_id })
       assert.equal(off.status, 200, off.body)
       assert.deepEqual([off.json.command, off.json.ok], ['off', true], off.body)
