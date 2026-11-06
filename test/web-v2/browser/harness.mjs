@@ -230,7 +230,7 @@ export async function timed(page, cond, arg, act) {
  *  the test's steps rather than the board's poll timer. `latency`: every answer waits that many ms first. → { left(), more(n) }: the
  *  members not reached yet; grant n more moves. */
 export async function serveWorld(page, w, { from = w.marks.length - 1, grow = 0, latency = 0, pack = 32, paced = false } = {}) {
-  const last = w.marks.length - 1
+  const last = w.marks.length - 1, webkit = page.context().browser()?.browserType().name() === 'webkit'
   let k = Math.min(from, last), at = null, f = null, granted = paced ? 0 : Infinity
   // every answer: `latency` ms, then the one fulfill of what `fn` makes of the request, returned to Playwright. Routes dropped while it
   // waited (stop's closeQuietly) leave Playwright to continue the request itself; the late fulfill then rejects ("Route is already
@@ -258,7 +258,8 @@ export async function serveWorld(page, w, { from = w.marks.length - 1, grow = 0,
     if (name === 'head') {
       if (at != null && granted > 0) { granted--; k = Math.min(last, k + grow) }
       const body = JSON.stringify(now().head), etag = `"${createHash('sha1').update(body).digest('hex').slice(0, 16)}"`
-      if (req.headers()['if-none-match'] === etag) return { status: 304, headers: { etag } }
+      // Playwright's WebKit refuses to fulfill any 3xx: there the board takes the whole answer, which it reads like any new head
+      if (req.headers()['if-none-match'] === etag && !webkit) return { status: 304, headers: { etag } }
       return { status: 200, contentType: 'application/json', headers: { etag }, body }
     }
     const pk = /^p(\d+)\.(main|rest)$/.exec(name), op = /^open\.(main|rest)$/.exec(name)
