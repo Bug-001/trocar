@@ -470,9 +470,9 @@ export function handleFlow(client, meta, ctx) {
   // step-aside and the D37 rejection rule live here, so every path that terminates TLS gets both.
   function terminate(buf, cSock, uSock, sni, host, isTunnel, key, onSecure) {
     // the OS store ∪ Node's roots ∪ NODE_EXTRA_CA_CERTS (+ upstreamCa), one context (tls/roots.mjs)
-    if (!ctx.upstreamTrust) ctx.upstreamTrust = createUpstreamTrust({ extra: ctx.upstreamCa })
-    // a proxy-mode door hands the agent's own set (4.11 §3 ⑭, proxymode/upstream-trust.mjs) on the connection's meta; else the union above
-    const trust = (meta && meta.upstreamTrust) || ctx.upstreamTrust
+    // — the engine's is a function that reads it at the first handshake that needs it (engine.mjs); a proxy-mode door hands the agent's own
+    // set (4.11 §3 ⑭, proxymode/upstream-trust.mjs) on the connection's meta, and then the union is not read for this connection
+    const trust = (meta && meta.upstreamTrust) || (typeof ctx.upstreamTrust === 'function' ? ctx.upstreamTrust() : (ctx.upstreamTrust ||= createUpstreamTrust({ extra: ctx.upstreamCa })))
     // rejectUnauthorized:false only so the two upstream failures can be told apart: an 'error' before
     // 'secureConnect' is a network / protocol failure (the client is closed); a 'secureConnect' that is
     // not `authorized` (Node still checks chain and hostname) is a certificate that did not verify

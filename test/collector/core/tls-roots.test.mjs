@@ -4,6 +4,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path'
 import tls from 'node:tls'
+import net from 'node:net'
 import { fileURLToPath } from 'node:url'
 import { systemRoots, nodeRoots, createUpstreamTrust, bundleRoots, SYSTEM_BUNDLES } from '../../../src/collector/core/tls/roots.mjs'
 import { osRootsFor } from '../../../src/off/os-roots.mjs'
@@ -16,6 +17,7 @@ import { createStaticRedirector } from '../../../src/collector/core/redirector.m
 import { createRecordStore } from '../../../src/collector/core/record/store.mjs'
 import { createFailureRecorder } from '../../../src/collector/core/events.mjs'
 import { within, closeWithin } from '../../helpers/bounded.mjs'
+import { tmpDir } from '../../helpers/tmp.mjs'
 
 const a = createCa({ commonName: 'system store CA' }), b = createCa({ commonName: 'bundle file CA' }), x = createCa({ commonName: 'extra CA' })
 
@@ -153,4 +155,47 @@ test('engine: an upstream signed by a CA only the (injected) system store holds 
   const partial = await run(corp, trocarCa.certPem, { certs: [corp.certPem], errors: ['/etc/ssl/certs/ca-certificates.crt: EACCES: permission denied'] })
   assert.match(partial.issuer, /trocar collector CA/, 'what was read is still used')
   assert.deepEqual(partial.failures.map((f) => [f.code, f.reason]), [['trust-store-error', '/etc/ssl/certs/ca-certificates.crt: EACCES: permission denied']], 'an unreadable source is not silent')
+})
+
+// The OS store is read when the first handshake that verifies an upstream needs it, not while the engine starts (4.6 §引擎 5): the doors accept
+// before it is read; handshakes that arrive together share the one read; a read that finds nothing is recorded when it happens, as before.
+test('engine: the upstream trust set is read at the first handshake that needs it, once, and its failures are recorded then', { timeout: 60_000 }, async (t) => {
+  const corp = createCa({ commonName: 'corporate inspection CA' }), trocarCa = createCa()
+  const dir = tmpDir('trocar-roots-lazy-')
+  const up = tls.createServer({ SNICallback: (s, cb) => cb(null, createLeafIssuer(loadCa(corp)).secureContextFor(s)) }, (s) => { s.on('error', () => {}); s.on('data', () => s.end('pong')) })
+  await new Promise((r) => up.listen(0, '127.0.0.1', r))
+  t.after(() => up.close())
+  const readFailures = (root) => { const d = path.join(root, 'flows'); return fs.existsSync(d) ? fs.readdirSync(d).flatMap((f) => fs.readFileSync(path.join(d, f), 'utf8').trim().split('\n').map((l) => JSON.parse(l))).filter((r) => r.event === 'failure') : [] }
+  const start = async (name, roots) => {
+    let reads = 0
+    const root = path.join(dir, name), store = createRecordStore({ root, raw: root })
+    const engine = createEngine({ redirector: createStaticRedirector({ dst: { address: '127.0.0.1', port: up.address().port, family: 4 }, pid: 3, agent: 'cc', decrypt: true }),
+      issuer: createLeafIssuer(loadCa(trocarCa)), store, systemCa: () => { reads++; return roots }, onFailure: createFailureRecorder(root).event, onError: () => {} })
+    t.after(async () => { await closeWithin(engine); store.close() })
+    const { port } = await engine.listen({})
+    return { root, port, reads: () => reads }
+  }
+  const handshake = (port, ca) => {
+    let c
+    return within(new Promise((resolve) => {
+      c = tls.connect({ port, host: '127.0.0.1', servername: 'api.anthropic.com', ca }, () => { const i = c.getPeerX509Certificate().issuer; c.on('end', () => resolve(i)); c.resume(); c.write('ping') })
+      c.on('error', (e) => resolve(e.code))
+    }), 10_000, 'the client never finished its handshake and exchange', () => c.destroy())
+  }
+
+  const ok = await start('ok', { certs: [corp.certPem], sources: ['test'], errors: [] })
+  const plain = net.connect(ok.port, '127.0.0.1')
+  await within(new Promise((r, j) => { plain.once('connect', r); plain.once('error', j) }), 5_000, 'the door did not accept a connection')
+  plain.destroy()
+  assert.equal(ok.reads(), 0, 'the engine is up and its door accepts, and the OS store has not been read')
+  const issuers = await Promise.all([handshake(ok.port, trocarCa.certPem), handshake(ok.port, trocarCa.certPem)])
+  for (const i of issuers) assert.match(String(i), /trocar collector CA/, 'decrypted against the roots read at the first handshake')
+  await handshake(ok.port, trocarCa.certPem)
+  assert.equal(ok.reads(), 1, 'read once: the handshakes that came together and the one after all used the same set')
+
+  const none = await start('none', { certs: [], sources: [], errors: ['/etc/ssl/certs/ca-certificates.crt: EACCES: permission denied'] })
+  assert.deepEqual(readFailures(none.root), [], 'nothing is read, so nothing is recorded, before a handshake needs the set')
+  await handshake(none.port, corp.certPem)
+  assert.deepEqual(readFailures(none.root).filter((f) => f.code !== 'negative-cache').map((f) => [f.where, f.code, f.code === 'trust-store-error' ? f.reason : typeof f.reason]),
+    [['engine', 'trust-store-error', '/etc/ssl/certs/ca-certificates.crt: EACCES: permission denied'], ['engine', 'system-roots-unavailable', 'string']], 'recorded when the set is read, with the same codes and reasons')
 })
