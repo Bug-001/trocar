@@ -147,6 +147,7 @@ export const FAILURE_WORDS = Object.freeze({
   'install-error': 'the install step failed',
   'install-pending': 'an install step is still waiting',
   'setup-needed': 'an agent needs setting up before capture can be turned on',
+  'stopped-by-off': 'an on stopped because an off came while it ran',
   'uninstall-error': 'the uninstall step failed',
   'left-unparsable': 'an uninstall left an item behind',
   'left-link': 'a change is a link and was not undone automatically',
