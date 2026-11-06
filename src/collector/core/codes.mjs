@@ -36,7 +36,6 @@ export const TRUST_REASON = Object.freeze({
   'hook-inherited': "this process inherited trocar's proxy from its parent but did not load trocar's plugin itself, so it holds no trocar CA and is only forwarded; start it directly, with its plugins loaded",
   'not-verified': 'this process, its form on this OS, or this host is not verified for decryption on this platform; forwarded only',
   'outside-host-set': 'a host program carrying the agent talked to a host outside the form\'s host set; forwarded only',
-  'bypass-listed': "a host on the user's proxy bypass list, reached through the PAC door; forwarded only",
 })
 
 // trocar-named failure / note codes (`code` of failure, install-note and uninstall-note events).

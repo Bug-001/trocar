@@ -313,34 +313,6 @@ test('CM19 / P10 · the PAC door dials the own leg its PAC names: a bypass-list 
   }
 })
 
-// P10 at the door: a bypass-list host reaches the PAC door as `PROXY <door>; DIRECT`, but once the tunnel is on the door DIRECT no longer applies, so
-// the door only forwards it (`untrusted`·`bypass-listed`, by bypassHit as its dial): an internal host that wants a client certificate keeps working.
-// Any other host at the PAC door, and a bypass-list host at any other door, is the verdict's as before.
-test('CM19 / P10 · the PAC door forwards a bypass-list host unread (bypass-listed); other hosts, and other doors, keep the verdict', async () => {
-  const sp = { url: 'http://sys.corp:8080', bypass: [{ kind: 'domain-suffix', value: 'corp.example' }] }
-  const pacRoute = Object.entries(pacDesc.proxyMode.routes).find(([, r]) => r.auth === false)[0]
-  const other = descs.flatMap((d) => d.proxyMode.forms.filter((f) => f.os.includes('darwin') && d.proxyMode.routes[f.route].auth !== false && !f.hostTree).map((f) => ({ d, f })))[0]
-  const cases = [{ d: pacDesc, f: pacDesc.proxyMode.forms.find((f) => f.os.includes('darwin') && f.route === pacRoute), pac: true }, { ...other, pac: false }]
-  for (const { d, f, pac } of cases) {
-    const desc = { ...d, proxyMode: { ...d.proxyMode, forms: [f] } }, g = `${d.name}:${f.route}`
-    const { c: cs, w: world, form, facts } = worldOf(d, f, 'darwin', {})
-    desc.proxyMode.forms[0] = form
-    const base = ctxOf(world)
-    const { c, w, records } = await rig({ desc, w: { pid: ++pid, facts: { exe: '/bin/x', uid: 501, agent: d.name, startedAt: facts.startedAt }, env: world.env, cwd: world.cwd, sp,
-      ctx: { ...base, readFile: (p) => base.readFile(p).replace(ROOT.pem, STUB_PEM) } } })
-    await c.on({ harnesses: [d.name], groups: { [g]: 18106 } })
-    const want = (host) => verdictOf({ desc, form, facts: { ...facts, pid }, record: { carrierInstalledAt: INSTALLED, rootFp256: STUB_FP }, issuer: ready, host, ctx: w.ctx })
-    const at = (address) => c.lookupIngress({ peer: PEER, user: g, target: { address, port: 443 } })
-    assert.equal(want(cs.host).decrypt, true, `${f.id}: the world decrypts`)
-    assert.equal((await at(cs.host)).decrypt, true, `${f.id}: a host off the bypass list is decrypted as the verdict says`)
-    const byp = await at('GW.corp.example')
-    if (pac) assert.deepEqual([byp.decrypt, byp.skip, byp.upstream], [false, { not_captured: 'untrusted', reason: 'bypass-listed' }, { kind: 'direct' }], 'a bypass-list host at the PAC door: forwarded only, dialled direct')
-    else assert.equal(byp.decrypt, want('gw.corp.example').decrypt, `${f.id}: another door keeps the verdict for a bypass-list host`)
-    for (const x of records) assert.deepEqual(checkRecord(x), [], JSON.stringify(x))
-    c.close()
-  }
-})
-
 // D51⑥ at the door: a process the name list names for a harness that is off, at the door of one that is on, is forwarded `harness-off` and never judged
 test('harness-off · another harness\'s agent at an on harness\'s door, its own harness off: forwarded with its harness named, never judged', async () => {
   const [d, other] = descs.filter((x) => x.proxyMode.forms.some((f) => f.os.includes('darwin')))
