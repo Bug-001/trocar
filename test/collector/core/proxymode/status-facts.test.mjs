@@ -106,3 +106,23 @@ test('rule U · one user file named by Claude Code and Kimi Code: both certifica
   const gone = await facts()
   for (const h of pair) for (const c of certs(gone, h)) assert.deepEqual([c.in_effect, c.code, c.user_file.state], [false, 'entry-changed', 'changed'], h)
 })
+
+// 4.11 P4 rule U for root-carrier forms: SSL_CERT_FILE replaces the system roots for Codex and Hermes, so the root in the user's store does not carry
+// them while it names a user file — the block in that file does. The block gone → not in effect, and the reason said (entry-changed, user_file changed).
+test('rule U · one SSL_CERT_FILE named by Codex and Hermes (root carriers): in effect with the block; the block gone, not in effect with the reason', async () => {
+  const w = await sharedCertFileWorld({ userPem: `${tls.rootCertificates[1].trim()}\n`, variable: 'SSL_CERT_FILE', commands: ['codex', 'hermes'], env: {}, dirs: ['.codex', '.hermes'] })
+  const r = await w.install({ wrapperKit: { renderWrapper } })
+  assert.equal(r.exit, 0, JSON.stringify(r.carriers))
+  const pair = ['codex', 'hermes']
+  assert.deepEqual(r.carriers.filter((c) => c.carrier === 'pem-block').map((c) => c.harness).sort(), pair)
+  const facts = async () => modelFormFacts({ harnesses: w.harnesses, os: 'darwin', manifest: readManifest(w.dir), root: ROOT_OK, ctx: w.ctx })
+  const certs = (out, h) => out[h].map((x) => x.certificate)
+  const out = await facts()
+  for (const h of pair) {
+    assert.ok(certs(out, h).length, `${h}: a present form`)
+    for (const c of certs(out, h)) assert.deepEqual([c.in_effect, c.code], [true, null], `${h}: ${JSON.stringify(c)}`)
+  }
+  fs.writeFileSync(w.file, `${tls.rootCertificates[1].trim()}\n`) // the user took the block out
+  const gone = await facts()
+  for (const h of pair) for (const c of certs(gone, h)) assert.deepEqual([c.in_effect, c.code, c.user_file && c.user_file.state], [false, 'entry-changed', 'changed'], `${h}: ${JSON.stringify(c)}`)
+})

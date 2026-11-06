@@ -117,8 +117,9 @@ export async function modelFormFacts({ harnesses, os, manifest: m, reply = null,
       const r = root || {}
       const bad = carrier === 'root' ? (r.state === 'in-place' ? null : { reason: root ? r.code ?? null : CODE.certNotInstalled, command: r.command || INSTALL }) // a root status could not read (no code): not known, never a made-up code
         : d || (own.length ? null : { reason: 'entry-missing', command: INSTALL })
-      const certificate = { in_effect: !bad, carrier, user_file: carrier === 'root' ? null : uf, since: latest(carrier === 'root' ? inst.filter((i) => i.kind === 'system-root') : own), code: bad ? bad.reason : null, command: bad ? bad.command || INSTALL : null }
-      if (certificate.in_effect && uf && uf.state !== 'intact' && carrier !== 'root') Object.assign(certificate, { in_effect: false, code: uf.state === 'changed' ? 'entry-changed' : CODE.notUsersFile, command: INSTALL })
+      const certificate = { in_effect: !bad, carrier, user_file: uf, since: latest(carrier === 'root' ? inst.filter((i) => i.kind === 'system-root') : own), code: bad ? bad.reason : null, command: bad ? bad.command || INSTALL : null }
+      // the user file a setting names carries the form whatever its carrier: a root form's file replaces the system roots (rule U, SSL_CERT_FILE)
+      if (certificate.in_effect && uf && uf.state !== 'intact') Object.assign(certificate, { in_effect: false, code: uf.state === 'changed' ? 'entry-changed' : CODE.notUsersFile, command: INSTALL })
       const g = `${h}:${f.route}`, route = pm.routes[f.route] || {}
       const es = on.filter((i) => i.harness === h && i.route === f.route)
       const main = es.find((i) => i.door_sha256 || i.door) || es[0] || null
