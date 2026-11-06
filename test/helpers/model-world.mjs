@@ -1,24 +1,27 @@
 // test/helpers/model-world.mjs — a tmp-HOME world for the collector model's install / on / uninstall (plan T20): the stub custody, an in-memory
 // user root store (an add can be declined or left pending), the sources ctx over the real tmp fs with an injected `which`, and runInstall bound to
 // it; sharedCertFileWorld adds rule U's one file two harnesses name. Nothing here touches a keychain, a trust store or the user's real HOME. Exports only.
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { tmpDir } from './tmp.mjs'
 import { custodyStub } from './custody-stub.mjs'
-import { rootIdOf } from '../../src/off/root-store.mjs'
+import { rootIdOf, ROOT_SUBJECT } from '../../src/off/root-store.mjs'
 import { runInstall } from '../../src/collector/model-install.mjs'
 import { sourcesCtx } from '../../src/collector/arch/model-backends.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 import { renderHook } from '../../src/collector/harness/templates/index.mjs'
 
-/** An in-memory root store: `answer` is what an add says ('ok' | 'declined' | 'pending'); `calls` records every verb. */
+/** An in-memory root store: `answer` is what an add says ('ok' | 'declined' | 'pending'); `calls` records every verb. `list` answers the held
+ *  certificates whose subject is trocar's (a fingerprint put in `held` by hand counts as one). */
 export function rootStoreStub({ answer = 'ok' } = {}) {
-  const held = new Set(), calls = []
+  const held = new Set(), ders = new Map(), calls = []
   return {
     held, calls, set answer(a) { answer = a },
     has: (id) => { calls.push('has'); return { present: held.has(id.fp256) } },
-    add: (der) => { calls.push('add'); if (answer !== 'ok') return { ok: false, state: answer, reason: `the OS prompt was ${answer}` }; held.add(rootIdOf(der).fp256); return { ok: true } },
+    add: (der) => { calls.push('add'); if (answer !== 'ok') return { ok: false, state: answer, reason: `the OS prompt was ${answer}` }; const { fp256 } = rootIdOf(der); held.add(fp256); ders.set(fp256, der); return { ok: true } },
     remove: (id) => { calls.push('remove'); held.delete(id.fp256); return { ok: true } },
+    list: () => ({ roots: [...held].filter((fp) => !ders.has(fp) || new crypto.X509Certificate(ders.get(fp)).subject === `CN=${ROOT_SUBJECT}`).map((fp) => (ders.has(fp) ? rootIdOf(ders.get(fp)) : { fp256: fp })) }),
   }
 }
 
