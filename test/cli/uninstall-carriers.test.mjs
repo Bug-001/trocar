@@ -61,6 +61,7 @@ for (const os of ['darwin', 'win32']) {
     for (const p of [w.kimi, w.env.SSL_CERT_FILE, path.join(w.home, '.dsh', 'cordis.patch.yml')]) assert.ok(out.includes(p), `the receipt names ${p}: ${JSON.stringify(out)}`)
     assert.equal(new Set(out).size, out.length, `one row per file (1.6 §3.4): ${JSON.stringify(out)}`)
     assert.deepEqual(receipt.skipped.filter((s) => out.includes(s.what)), [], 'no file is both undone and skipped')
+    assert.deepEqual(receipt.notes.filter((n) => out.some((p) => n.startsWith(`${p}:`))), [], 'a file the receipt lists as undone is not said again as a note')
   })
 
   test(`${os}: the plan of an uninstall with no record names the carriers it would take out`, async () => {
