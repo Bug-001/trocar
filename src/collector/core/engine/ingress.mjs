@@ -31,14 +31,15 @@ import { absTarget, forwardHttp, withCredential } from './forward.mjs'
 const HEAD_MAX = 16 * 1024        // no opener or proxy reply head is longer
 const HOLD_MAX = 256 * 1024       // what a client may send while the upstream is being dialled
 const sha = (s) => crypto.createHash('sha256').update(s).digest()
-// The unanswered challenge's specifics for a person (1.6 §1.1, 4.8 §5.1): who, which agent's proxy, how often, how long, what came instead. The
-// headline (words.mjs) already says it was asked and did not answer; never a credential.
+// The unanswered challenge's specifics for a person (1.6 §1.1, 4.8 §5.1): which agent's proxy, how often, how long, what came instead. The
+// headline (words.mjs) already says it was asked and did not answer, and status prints the program and pid from the record's own fields;
+// the agent is the group id's harness part (`<harness>:<route>`, the record's `user` keeps the id). Never a credential.
 const SENT_WORDS = { 'no-credentials': 'no password', 'not-basic': 'a login of another kind than a password', 'malformed-basic': 'a password it could not read' }
 const plural = (n, one) => `${n} ${one}${n === 1 ? '' : 's'}`
-function challengeReason({ pid, process, count, sent }, group, ms) {
-  const who = pid == null ? 'program not known' : process ? `${printable(process)} (pid ${pid})` : `pid ${pid}`
-  const times = count === 1 ? 'once' : count === 2 ? 'twice' : `${count} times`, wait = ms % 1000 ? `${ms} ms` : plural(ms / 1000, 'second')
-  return `${who}${group ? ` at ${group}'s proxy` : ''}, ${times} in ${wait}; it sent ${[...sent].map((x) => SENT_WORDS[x] || 'something else').join(' and ')}`
+function challengeReason({ count, sent }, group, ms) {
+  const at = group ? ` at ${group.split(':')[0]}'s proxy` : '', wait = ms % 1000 ? `${ms} ms` : plural(ms / 1000, 'second')
+  const asked = count === 1 ? `asked once${at} and not answered within ${wait}` : `asked ${count === 2 ? 'twice' : `${count} times`}${at} in ${wait}, never answered`
+  return `${asked}; it sent ${[...sent].map((x) => SENT_WORDS[x] || 'something else').join(' and ')}`
 }
 const printable = (s, n = 80) => String(s).replace(/[^\x20-\x7e]/g, '?').slice(0, n)
 const ROUTE_NAME = /^[\w-]+\.[\w.-]+$/ // the user an trocar-written route or block authenticates as: <route>.<group>

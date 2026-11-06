@@ -161,8 +161,9 @@ for (const [kind, header] of SENT) {
     assert.equal(got.length, 1)
     assert.deepEqual([got[0].event, got[0].where, got[0].pid, got[0].challenges, got[0].sent], ['failure', 'ingress', 4242, 1, [kind]])
     assert.deepEqual(checkRecord(got[0]), []); assert.equal(isFailure(got[0]), true)
-    // the reason is for a person (1.6 §1.1): it names the program and its pid, and no closed code of what was sent
-    assert.ok(got[0].reason.includes('Code Helper') && got[0].reason.includes('4242'), got[0].reason)
+    // the program and its pid are the record's fields (status prints them); the reason is for a person (1.6 §1.1): neither again, and no closed code of what was sent
+    assert.deepEqual([got[0].pid, got[0].process], [4242, 'Code Helper'])
+    assert.equal(got[0].reason.includes('Code Helper') || got[0].reason.includes('4242'), false, got[0].reason)
     assert.equal(got[0].reason.includes(kind), false, got[0].reason)
     const all = JSON.stringify(L.failures)
     for (const secret of ['abc.def-secret', '!!not*base64%%', TOKEN]) assert.equal(all.includes(secret), false, 'no credential value in any record')
@@ -200,7 +201,7 @@ test('W13 an unanswered challenge at a group door: the group id as user, the own
   const records = [], open = new Map() // the client's local port → its socket, while it is open
   const ownerOfPeer = async (peer) => { await sleep(50); const s = open.get(peer.port); return s && !s.destroyed ? { pid: 777, process: 'curl' } : { pid: null, why: 'no-row' } }
   const ing = createIngress({ token: TOKEN, timing: { ingressChallengeMs: CHALLENGE_MS }, ownerOfPeer, failure: (r) => records.push(r), handleFlow: () => {}, connectUpstream: () => { throw new Error('no upstream in this test') }, lookupIngress: async () => null })
-  const srv = net.createServer((s) => ing.connection(s, { user: 'claude-code', token: TOKEN, open: false }))
+  const srv = net.createServer((s) => ing.connection(s, { user: 'claude-code:settings', token: TOKEN, open: false }))
   await new Promise((r) => srv.listen(0, '127.0.0.1', r)); t.after(() => new Promise((r) => srv.close(r)))
   const s = net.connect(srv.address().port, '127.0.0.1'); s.on('error', () => {})
   await new Promise((r) => s.once('connect', r)); open.set(s.localPort, s)
@@ -209,9 +210,11 @@ test('W13 an unanswered challenge at a group door: the group id as user, the own
   assert.match(await within(got, 2000, 'the 407'), /^HTTP\/1\.1 407 /)
   await sleep(CHALLENGE_MS * 3)
   const [rec, ...more] = records.filter((f) => f.code === 'ingress-challenge-unanswered')
-  assert.deepEqual([rec && rec.user, rec && rec.pid, rec && rec.process, more.length], ['claude-code', 777, 'curl', 0])
+  assert.deepEqual([rec && rec.user, rec && rec.pid, rec && rec.process, more.length], ['claude-code:settings', 777, 'curl', 0])
   assert.equal(JSON.stringify(records).includes('(not a route name)'), false)
-  assert.ok(rec.reason.includes('claude-code') && rec.reason.includes('777'), rec.reason)
+  // the reason names the agent (the group id's harness part), not the group id, and not the program or pid the record's fields carry
+  assert.ok(rec.reason.includes('claude-code'), rec.reason)
+  for (const x of [':settings', '777', 'curl']) assert.equal(rec.reason.includes(x), false, rec.reason)
   const runs = (s, n = 4) => { const w = s.toLowerCase().split(/[\s,;:]+/).filter(Boolean); return w.slice(n - 1).map((_, i) => w.slice(i, i + n).join(' ')) }
   const headline = new Set(runs(failureWord('ingress', 'ingress-challenge-unanswered')))
   assert.deepEqual(runs(rec.reason).filter((x) => headline.has(x)), [], `the reason does not say the headline again: ${rec.reason}`)
