@@ -47,7 +47,7 @@ const readText = (ctx, f) => { try { const d = decodeText(ctx.fs.readFileSync(f)
 const parse = (t) => { if (t === undefined) return undefined; try { return t === null ? {} : parseJsonText(t) ?? {} } catch { return undefined } } // undefined: undecodable or unparsable
 const isSet = (v) => v !== undefined && v !== null && v !== ''
 const where = (file, keys) => `${file}#${keys.join('.')}`
-const base = (ctx) => ({ dir: ctx.dir, manifest: ctx.manifest, harness: ctx.harness, phase: 'on', home: ctx.home, door: ctx.door ?? null, route: ctx.routeId ?? null, now: ctx.now ? ctx.now() : new Date(), fs: ctx.fs }) // the door and the route ride in the record from its intent on: saveManifest seals the door, and a crashed intent names its route for off
+const base = (ctx) => ({ dir: ctx.dir, manifest: ctx.manifest, harness: ctx.harness, phase: 'on', home: ctx.home, door: ctx.door ?? null, route: ctx.routeId ?? null, defer: ctx.deferResult === true, now: ctx.now ? ctx.now() : new Date(), fs: ctx.fs }) // the door and the route ride in the record from its intent on: saveManifest seals the door, and a crashed intent names its route for off
 const noProxy = (ctx, values) => mergeNoProxy({ userValues: values, persistent: ctx.persistentEnv ? ctx.persistentEnv(['NO_PROXY']) : {} })
 
 // P5: a value in the file that is one of trocar's doors (src/off/door-value.mjs, the judge off uses: loopback on a port ingress.json records) is no prior

@@ -59,6 +59,18 @@ test('an on that finds every route in place does not save the install manifest',
   } finally { await d.close() }
 })
 
+// D62①: one route's result is saved with the next one's intent, so the last route's result is what the run saves at its end
+test('after on, every record on disk is finished: each of the on records has its post_sha256', async () => {
+  const w = await modelWorld({ commands: ['codex'] })
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  const d = await daemon(w)
+  try { assert.equal((await on(w)).exit, 0) } finally { await d.close() }
+  const m = JSON.parse(fs.readFileSync(path.join(w.dir, 'install-manifest.json'), 'utf8'))
+  const ons = m.entries.filter((x) => x.phase === 'on')
+  assert.ok(ons.length >= 1, JSON.stringify(m.entries.map((x) => x.path)))
+  assert.deepEqual(ons.filter((x) => typeof x.post_sha256 !== 'string').map((x) => x.path), [])
+})
+
 // V85 (on): the files `on` writes outside ~/.trocar are the ones its plan names — a plug-in route's own file included
 test('V85: on writes outside ~/.trocar only the paths its plan names', async () => {
   const w = await modelWorld({ commands: ['codex', 'opencode'] })
