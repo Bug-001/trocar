@@ -34,7 +34,8 @@ export const namesStamp = (home, fs) => { try { return fs.readdirSync(path.join(
 // part's end 83 B; a session in the index 208 B (its Map entry and positions array); a position 8.8 B on average, charged at the
 // 12 B a slot holds right after its array grew (1.5× its length); a kinship fingerprint in an open keyed session's set 22.5 B
 // (2026-10-30, node 22; charged once per part that holds the set, even when parts share it).
-const PART_HEAP = 450, OPEN_HEAP = 105, SESSION_HEAP = 260, POSITION_HEAP = 12, FP_HEAP = 28;
+// OPEN_HEAP: an open chain with its tail and its items, measured about 664 B (a keyed entry holds neither and is charged the same).
+const PART_HEAP = 450, OPEN_HEAP = 640, SESSION_HEAP = 260, POSITION_HEAP = 12, FP_HEAP = 28;
 const lists = warmCache({ max: 4, cost: (v) => v.heap, steady: true });
 const copyOpen = (open) => new Map([...open].map(([k, v]) => [k, { ...v }])); // the rule moves `lastMs` in place (and replaces `fp`)
 // the index keeps a call's kinship fingerprints as one space-joined string (index-build.mjs `kin_fp` / `kin_probe`; `kin_chain` the same way)
