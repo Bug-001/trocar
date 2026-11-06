@@ -25,7 +25,7 @@ import { createTracker } from './core/tracker.mjs'
 import { createSwitch, readState } from './core/switch.mjs'
 import { startControlServer, controlSocketPath } from './core/control.mjs'
 import { createQueryService } from '../query/service.mjs'
-import { tipTable } from '../query/tips.mjs' // the board itself (src/server.mjs, most of this graph) is loaded once the control endpoint listens: boardFor
+import { createServer as createBoard, tipTable } from '../server.mjs'
 import { readIngressConfig } from './core/ingress-config.mjs'
 import { readCa } from './core/tls/ca-store.mjs'
 import { tryOpLock } from '../off/lock.mjs'
@@ -44,7 +44,9 @@ import { DAEMON_READ_VERBS } from '../off/daemon-read.mjs'
 import { runAsync } from '../off/exec.mjs'
 import { driftCheck, newDriftState } from '../netenv/adopt.mjs'
 import { classesHook, wsTerminalHook } from './engine-data.mjs'
-import { isProxyMode as isModelOs } from '../off/mode.mjs' // arch/model-backends.mjs's isModelOs, the same fact (test/off/mode.test.mjs): the model's graph is loaded by runModelDaemon alone (D62)
+import { isModelOs, backendsFor, doorPartsFor, sourcesCtx } from './arch/model-backends.mjs'
+import { createModelCollector, replacesDaemon } from './core/proxymode/collector.mjs'
+import { TEMPLATES } from './harness/templates/index.mjs'
 import { readStateFile } from '../off/state.mjs'
 
 export { loadArch } // the CLI reaches arch only through this file (layering rule 5)
@@ -268,8 +270,7 @@ function boardToken(dir) {
  *  `GET /board` answers `{port, state, reason, token}` for `trocar board`. start() once the daemon is ready; stop() before the control server closes. */
 function boardFor({ P, failure, query, tips, log = () => {} }) {
   let st = { port: null, state: 'no-port', reason: 'no board port recorded: run trocar install' }
-  let server = null, token = null, started = Promise.resolve(), stopped = false, mod = null
-  const load = () => (mod ??= import('../server.mjs').catch((e) => { mod = null; throw e })) // D62: off the path to the first listen; warm() starts it as soon as the control endpoint listens
+  let server = null, token = null, started = Promise.resolve(), stopped = false
   async function listen() {
     const cfg = readIngressConfig({ dir: P.dir })
     if (cfg.boardPort === undefined) { if (cfg.error) st = { ...st, reason: `${cfg.error}: run trocar install` }; return }
@@ -280,7 +281,6 @@ function boardFor({ P, failure, query, tips, log = () => {} }) {
     }
     try {
       token = boardToken(P.dir)
-      const { createServer: createBoard } = await load()
       const b = createBoard({ home: path.dirname(P.dir), token, query, tips }), s = b.server
       s.on('clientError', (e, sock) => sock.destroy())
       await new Promise((resolve, reject) => { s.once('error', reject); s.listen(port, '127.0.0.1', resolve) })
@@ -294,7 +294,6 @@ function boardFor({ P, failure, query, tips, log = () => {} }) {
   }
   const tokenAnswer = async () => { await started; return { ...st, token } }
   return {
-    warm() { load().catch(() => {}) }, // a load that fails is said by listen(), which loads it again
     start() { started = listen(); return started },
     state: () => ({ ...st }),
     tokenAnswer,
@@ -345,7 +344,6 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
   const query = queryRouteFor({ P, failure, fork, queryIdleMs })
   const board = boardFor({ P, failure, query: query.svc, tips: query.tips.of, log })
   const control = await startControlServer({ socketPath: sock, ...(ep ? { token: ep.token } : {}), routes: board.routes({ 'GET /status': gate('status'), 'POST /on': gate('on'), 'POST /off': gate('off'), ...query.routes }) }) // throws if another daemon answers
-  board.warm()
 
   let redirector = null, engine = null, seal = null // what a failed start closes again (below)
   try {
@@ -770,7 +768,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
         const names = namesOf(body)
         if (b.exit === true && names) throw Object.assign(new Error('"exit" stops the whole daemon: it takes no harness names (leave them out)'), { status: 400 })
         const by = stopByOf(b)
-        const swap = b.exit === true && by ? (await import('./core/proxymode/collector.mjs')).replacesDaemon({ exit: true, by }) : false // only an exit some command asks for can be a swap: the model's module is loaded for it alone
+        const swap = replacesDaemon({ exit: b.exit === true, by })
         if (swap) leaving = true
         const r = swap ? { unwatched: [], unwatch_failed: [] } : await sw.off({ harnesses: names })
         const relayed = engine.drain({ agents: names ? new Set(names) : null, now: b.now === true, ...drainBy(by) })
@@ -844,7 +842,6 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
 // { backends: { custody, dirs, policy }, parts: doorPartsFor's shape, or io: doorPartsFor's OS readers alone, routes: (routes) => routes, a test's stand-in
 // for an earlier build's handler of a route } — the endpoint, the control server and the engine are always the real ones.
 async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failure, identity, lockRefreshMs, stopGraceMs, foreground, upstreamCa, model, fork, queryIdleMs, code }) {
-  const [{ backendsFor, doorPartsFor, sourcesCtx }, { createModelCollector }, { TEMPLATES }] = await Promise.all([import('./arch/model-backends.mjs'), import('./core/proxymode/collector.mjs'), import('./harness/templates/index.mjs')])
   const list = harnesses || (await loadHarnesses())
   const nextAgentList = agentListWatch({ home, write: (rec) => failure.write(rec) })
   let agents = (nextAgentList() || { entries: [] }).entries
@@ -930,7 +927,6 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
       return r
     }),
   })) })
-  board.warm()
   // only now: the control server refuses a start while another daemon answers, so a lock read before it may be a live daemon's (runDaemon's order)
   noteUncleanStop(P.lock, failure)
   seal.start() // only now (the gate claimed the collector): the lock read before this could have been a live daemon's

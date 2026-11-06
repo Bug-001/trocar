@@ -21,7 +21,7 @@ export async function netFactsDeps({ arch = null, harnesses = null, platform = p
 // What install / uninstall need from arch and harness, without starting anything: the descriptors, the OS key,
 // and the process table (`scan` reads /proc; it does not need the helper).
 export async function loadParts({ arch = null, harnesses = null, env = process.env, agentList = [], platform = process.platform } = {}) {
-  const [{ createRegistry }, { isProxyMode: isModelOs }] = await Promise.all([import('./core/registry.mjs'), import('../off/mode.mjs')])
+  const [{ createRegistry }, { isModelOs }] = await Promise.all([import('./core/registry.mjs'), import('./model-install.mjs')])
   const A = arch || (await loadArch(platform)) // the CLI's platform (V14: a platform with no collector is refused here, by loadArch's own error)
   const list = harnesses || (await loadHarnesses())
   // darwin / win32 run the collector model (runModelDaemon): no redirector here, and this parts view answers an empty process table
