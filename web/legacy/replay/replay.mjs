@@ -953,11 +953,12 @@ function openDesk(ctx, route0, makeView = legacyView) {
     const moved = placePlayhead(prevRow)
     arrived(s, s.playRid)
     if (s.playRid == null) { renderRough(); chainLedger(); fill(); return } // the rough page until the named step is here
-    // the followed step's open reply bodies in one read before it is drawn, so its newest reply shows with its bytes. The ±NEAR
-    // prefetch stays with the rest that follows (2.3 §正文预取): what is drawn now does not wait for its neighbours
+    // the followed step's open reply bodies in one read before it is drawn, so its newest reply shows with its bytes; the same read
+    // carries the ±NEAR prefetch, so the rest after it finds nothing left and a delta stays one `block` (4.4 live-poll: 「每个增量最多一次」;
+    // 2.3 §读与画 takes the followed step out of the rest's own-then-near reads)
     if (s.follow && moved && !first && host) {
       const refs = openRefs(s.playRid)
-      if (refs.length) { await loadBodies({ get: (n, p, o) => via(0, n, p, o) }, refs, { signal }); await pace.calm(); if (s.dead || key !== sessionKey()) return } // a press during the read is not redrawn away either
+      if (refs.length) { await loadBodies({ get: (n, p, o) => via(0, n, p, o) }, [...refs, ...nearRefs(s.playRid)], { signal }); await pace.calm(); if (s.dead || key !== sessionKey()) return; drawNear(s.playRid) } // a press during the read is not redrawn away either
     }
     // brush window: a new session starts on the whole of it when that fits the lane, else on the last steps that fit — or, when the
     // URL named an earlier step, on the ones around it. On live growth keep the reader's window, extending it when parked at the end.
