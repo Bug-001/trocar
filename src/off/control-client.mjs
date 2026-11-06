@@ -6,7 +6,6 @@
 // stays in core/control.mjs. The facts both sides share (CONTROL_FILE, PIPE_PREFIX, the pipe shape) live HERE once: the
 // daemon (core/control.mjs, arch/*/control-path.mjs) imports them — core may import src/off (0.1 §2), src/off cannot import core.
 import nodeFs from 'node:fs'
-import nodeHttp from 'node:http'
 import path from 'node:path'
 // The header a token-guarded request carries lives in token-header.mjs (import-free, so the board's page can load it); imported, not
 // re-exported: standalone.mjs's bundle refuses `export { }`.
@@ -63,6 +62,10 @@ export function controlEndpointFor({ platform = process.platform, dir, env = pro
   return { socketPath, request: controlRequest, why: socketPath ? null : why }
 }
 
+// By name, not by an `import`: an ES import of node:http builds its ES view, that reads http.WebSocket, and that loads undici, the largest built-in a cold command would load (D62①).
+// The single file has its own loader (standalone.mjs, V11). src/cli/main.mjs gives a Node older than 22.3 the function.
+const httpModule = () => (typeof __trocarLoad === 'function' ? __trocarLoad('node:http') : process.getBuiltinModule('node:http'))
+
 /** One request → the parsed JSON reply. A non-2xx reply rejects with `status`; a socket that is absent / refuses has `code` ENOENT / ECONNREFUSED;
  *  no answer within `timeoutMs` rejects with code ETIMEDOUT. `token`: the secret a token-guarded endpoint (a Windows pipe) expects in
  *  CONTROL_TOKEN_HEADER; null (the Linux unix socket) sends none. A Windows pipe path reaches Node's http through the same `socketPath`.
@@ -73,7 +76,7 @@ export function controlRequest({ socketPath, method = 'GET', path: p = '/status'
     const payload = body == null ? null : JSON.stringify(body)
     const headers = payload ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) } : {}
     if (token != null) headers[CONTROL_TOKEN_HEADER] = token
-    const req = nodeHttp.request({ socketPath, method, path: p, headers }, (res) => {
+    const req = httpModule().request({ socketPath, method, path: p, headers }, (res) => {
       const chunks = []
       res.on('data', (c) => chunks.push(c))
       res.on('end', () => {

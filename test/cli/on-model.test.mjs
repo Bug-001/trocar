@@ -155,6 +155,26 @@ test('V104 proxy (darwin): the daemon opens doors for the first harness only →
   } finally { await server.close() }
 })
 
+// D62①: confirmed_paths is saved when it grew; an on over the same files has nothing to add to it
+test('1.6 §1.6 (darwin): the first on records the files said yes to; an on over the same files does not save the manifest again', async () => {
+  const w = await modelWorld({ os: 'darwin', commands: ['codex'] })
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  const sock = path.join(w.home, 'c.sock'), token = 't'.repeat(32), file = path.join(w.dir, 'install-manifest.json')
+  fs.writeFileSync(path.join(w.dir, 'control.json'), JSON.stringify({ path: sock, token }))
+  const server = await startControlServer({ socketPath: sock, token, routes: {
+    'GET /status': async () => ({ doors: {} }),
+    'POST /on': async ({ body }) => ({ doors: Object.fromEntries(Object.entries(body.groups).map(([g, port]) => [g, `http://127.0.0.1:${port}`])) }),
+  } })
+  try {
+    assert.equal((await on(w, 'darwin', ['--yes'])).exit, 0)
+    const { readManifest } = await import('../../src/off/manifest.mjs')
+    assert.ok(readManifest(w.dir).confirmed_paths.some((p) => p.endsWith('.env')))
+    const before = fs.statSync(file).ino
+    assert.equal((await on(w, 'darwin', ['--yes'])).exit, 0)
+    assert.equal(fs.statSync(file).ino, before, 'the file was not replaced')
+  } finally { await server.close() }
+})
+
 // 1.6 §3.3: a copy that cannot be written stops on and changes nothing — through the CLI, whose own write after turnOnModel (confirmed_paths) is part of the run
 test('1.6 §3.3 (darwin): the undo copy cannot be written → on exits 1, undo null, no harness named, HOME byte for byte unchanged', async () => {
   const w = await modelWorld({ os: 'darwin', commands: ['codex'] })

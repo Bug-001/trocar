@@ -13,7 +13,7 @@ import path from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { tmpDir } from '../helpers/tmp.mjs'
-import { buildStandalone, writeStandalone, checkStandalone, STANDALONE_ENTRY, STANDALONE_CMD } from '../../src/off/standalone.mjs'
+import { buildStandalone, writeStandalone, checkStandalone, standaloneDue, STANDALONE_ENTRY, STANDALONE_CMD } from '../../src/off/standalone.mjs'
 import { OFF_VERSION, MANIFEST_VERSION, readManifest, saveManifest, manifestPath, KNOWN_KINDS, FILE_ENTRY_KINDS } from '../../src/off/manifest.mjs'
 import { standalonePath, standaloneFiles } from '../../src/off/paths.mjs'
 import { sha256 } from '../../src/off/fsutil.mjs'
@@ -367,6 +367,42 @@ test('V35: the check reports a copy that is stale, missing or not what src/off g
   fs.rmSync(file); fs.mkdirSync(file)
   const dir = checkStandalone({ home })
   assert.deepEqual([dir.ok, dir.found], [false, null]); assert.match(dir.reason, /EISDIR|cannot be read/)
+})
+
+// 1.6 §3.2 step 1: whether the copy is due is told from its digest line, and what is written when it is due is the build, byte for byte
+test('1.6 §3.2 step 1: a copy that is lost, edited, of another version or made from other sources is due, and is written as the build; one that is current is not touched', () => {
+  const home = tmpDir('trocar-due-'), srcDir = tmpDir('trocar-due-src-')
+  fs.cpSync(path.join(REPO, 'src', 'off'), srcDir, { recursive: true })
+  const file = standalonePath(home), args = { home, version: OFF_VERSION, srcDir, platform: 'linux' }
+  const build = (version = OFF_VERSION) => buildStandalone({ version, srcDir })
+  const dueThenWritten = (why, version = OFF_VERSION) => {
+    assert.deepEqual(standaloneDue({ ...args, version }), [file], why)
+    assert.deepEqual(writeStandalone({ ...args, version }).files, [file], why)
+    assert.equal(fs.readFileSync(file, 'utf8'), build(version), `${why}: the build, byte for byte`)
+    assert.deepEqual(standaloneDue({ ...args, version }), [], `${why}: nothing left to do`)
+  }
+  dueThenWritten('no copy')
+  const before = fs.statSync(file)
+  assert.deepEqual(writeStandalone(args), { path: file, written: false, files: [] })
+  const after = fs.statSync(file)
+  assert.deepEqual([after.ino, after.mtimeMs], [before.ino, before.mtimeMs], 'a current copy is not written')
+  fs.rmSync(file); dueThenWritten('a lost copy')
+  const good = fs.readFileSync(file, 'utf8')
+  const spoil = (text, why) => { fs.writeFileSync(file, text, { mode: 0o700 }); dueThenWritten(why) }
+  spoil(good.replace('function', 'Function'), 'one word of the code changed')
+  spoil(`${good}// a line added\n`, 'a line added at the end')
+  spoil(good.replace(/\/\/ digest [0-9a-f]{64}\n/, ''), 'a copy with no digest line (an older trocar wrote it)')
+  spoil(good.replace(/digest ([0-9a-f])/, (m, c) => `digest ${c === '0' ? '1' : '0'}`), 'the digest line changed')
+  fs.chmodSync(file, 0o600); dueThenWritten('not executable')
+  dueThenWritten('another version', 'other')
+  writeStandalone(args)
+  fs.appendFileSync(path.join(srcDir, 'paths.mjs'), '// a changed source\n')
+  dueThenWritten('another source under the same version')
+  const copy = fs.readFileSync(file)
+  fs.rmSync(path.join(srcDir, 'main.mjs'))
+  assert.deepEqual(standaloneDue(args), [file], 'a source gone: due')
+  assert.throws(() => writeStandalone(args), /main\.mjs cannot be read/, 'and the build says why')
+  assert.deepEqual(fs.readFileSync(file), copy, 'the copy stays as it was')
 })
 
 test('1.6 §3.2 step 1: on win32 trocar-off.cmd is written, checked and rewritten with trocar-off as one list; its bytes hold no Node path; elsewhere it is not written', () => {

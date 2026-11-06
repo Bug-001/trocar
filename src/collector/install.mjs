@@ -22,7 +22,7 @@ import { patternsOf } from '../off/signature.mjs'
 import { readManifest, saveManifest, newManifest, missingDirs, applyJsonKey, previewJsonKey, applyTextEntry, previewTextEntry, writeOwnedFile, manifestPath, describeEntry, judgeEntry, judgeOwned, sha256 } from './core/trust/journal.mjs'
 import { EVENT, CODE } from './core/codes.mjs'
 import { RESTART_REASONS } from '../health/codes.mjs'
-import { controlRequest, controlEndpointFor } from './core/control.mjs'
+import { controlRequest, controlEndpointFor } from '../off/control-client.mjs'
 import { readText, readTextOrError } from './core/config-read.mjs'
 import { appendEvent } from './core/events.mjs'
 import { runEventWriter } from '../off/events.mjs'
@@ -463,7 +463,7 @@ export async function turnOn(opts = {}) {
     if (!isModelOs(osName) && !installComplete(plan._.prior)) { const message = 'certificates are not installed. Run: trocar install'; return { receipt: unwritten({ ...fresh(), ok: false, error: { code: CODE.certNotInstalled, message }, notes: [message] }), manifest: plan._.prior, plan, exit: 1 } }
     // the copy of the undo side that needs no source tree (R3) is one more file trocar writes: listed in the plan and the dry run when it is missing or not what src/off generates now
     let due
-    try { due = standaloneDue({ home, version: OFF_VERSION, platform: osName, fs }).map((d) => d.file) } catch { due = standaloneFiles(home, osName) } // a build that fails is said by the write below
+    try { due = standaloneDue({ home, version: OFF_VERSION, platform: osName, fs }) } catch { due = standaloneFiles(home, osName) } // a copy that cannot be read is said by the write below
     if (due.length) { plan.created = [...plan.created, ...due]; plan.standalone = due } // every file of it (standaloneFiles), each a plan row
     // A version 1 file (what `collector on|off` wrote before D39) is read for the harnesses installed before and the ones this run turns on, the same set
     // the guard below reads it for — and is written back as version 2 here, before the first guard: the guard must never see a file the daemon's reader
