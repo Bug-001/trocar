@@ -357,7 +357,7 @@ test('a proxy address in a reason reaches the overview with its user and passwor
   s.caph.data.cert.root = { state: 'bad', code: 'ca-invalid', reason: R }
   s.caph.data.agent_list.problems = [{ code: 'bad-json', reason: R }]
   s.caph.data.failures.groups = [group({ where: 'zz-new', code: 'zz-new', reason: R })]
-  const out = [capCard({ data: p.capH, okAt: p.capHOkAt, err: null, ok: true }, NOW), overviewItems(s, NOW), itemsCard(s, NOW), readFail('x', { status: 502, error: R }), readFail('x', R)]
+  const out = [capCard({ data: p.capH, okAt: p.capHOkAt, err: null, ok: true }, NOW), capCard({ data: { health: { state: 'unknown', reason: R } }, okAt: NOW, err: null, ok: true }, NOW), overviewItems(s, NOW), itemsCard(s, NOW), readFail('x', { status: 502, error: R }), readFail('x', R)]
   for (const o of out) {
     const j = JSON.stringify(o)
     assert.doesNotMatch(j, /alice|s3cret/, j)

@@ -249,7 +249,7 @@ export function capCard(caph, now) {
   const subs = []
   if (v.readErrors > 0) subs.push(W.READ_FILES_FAIL(v.readErrors))
   if (hs && hs.length) subs.push(W.AGENTS_ON(hs.filter((x) => x && x.desired === 'on').length, hs.length))
-  return { cls: v.cls, text: v.text, subs, tech: v.state === 'unreadable' ? [['reason', hide(v.reason)]] : null }
+  return { cls: v.cls, text: hide(v.text), subs, tech: v.state === 'unreadable' ? [['reason', hide(v.reason)]] : null }
 }
 
 const MORE_HREF = { O3: '#/capture/log', O4: '#/capture/log', O6: '#/settings/storage', O9: '#/traffic' } // the rest: #/capture
