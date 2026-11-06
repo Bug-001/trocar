@@ -28,9 +28,9 @@ export function mapUsage(provider, raw = {}, opts = {}) {
 }
 
 // The board's usage {read, create, fresh, out}: a projection of mapUsage's output, never a second mapping (3.2).
-// An unreported write shows as 0 on the board; the canonical NULL stays in mapUsage's output.
+// An unreported write is NULL here too, never a 0 a reader would take as reported (3.2).
 export function boardUsage(c) {
-  return { read: c.cache_read, create: c.cache_write ?? 0, fresh: c.input_uncached, out: c.output };
+  return { read: c.cache_read, create: c.cache_write, fresh: c.input_uncached, out: c.output };
 }
 
 // OpenAI Responses: input_tokens is the TOTAL input (cached included); input_tokens_details.cached_tokens
