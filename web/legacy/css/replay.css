@@ -284,7 +284,6 @@
      An open row or card off screen keeps the closed size until it is first shown, then remembers its own (auto) */
   :root{--cbh-line:calc(var(--lh) + 2px);--cblk-ih:calc(var(--cbh-line) + 8px);--cblk-pitch:calc(var(--cblk-ih) + 6px);--cwturn-ih:calc(var(--cbh-line) + 12px);}
   @media(max-width:600px){:root{--cblk-ih:calc(2 * var(--cbh-line) + 8px);}}
-  .cblk.cwreal,.cwturn.cwreal{content-visibility:visible;} /* real sizes around the landing's target (ctxwin.mjs realBand) */
   .cwgroup{display:contents;} .cwgroup[aria-busy]{display:block;height:calc(var(--n) * var(--cblk-pitch));}
   /* D12 全展/全折 便捷键 */
   .cwfoldall{display:flex;gap:6px;justify-content:flex-end;margin:-2px 0 5px;}
