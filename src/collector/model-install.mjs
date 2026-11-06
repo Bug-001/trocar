@@ -33,7 +33,7 @@ export const MODEL_OS = Object.freeze(['darwin', 'win32'])
 export const isModelOs = (os) => MODEL_OS.includes(os)
 
 const STORE = Object.freeze({ darwin: 'darwin-user-trust', win32: 'win-currentuser-root' }) // the store the user root goes into (src/off/root-store.mjs removes it on uninstall)
-const ROOT_SUBJECT = 'trocar local root' // the subject a reset uses to recognise trocar's own certificate
+export const ROOT_SUBJECT = 'trocar local root' // the subject a reset uses to recognise trocar's own certificate
 const NOT_USERS = CODE.notUsersFile
 const errText = (e) => String((e && e.message) || e)
 // The key custody is a native program (4.11 P1): 'unavailable' is a VALUE, but it can also FAIL outright — a HOME with no login keychain answers
