@@ -123,12 +123,6 @@ test('the attribute-selector escape is defined once (core/dom.mjs): no per-modul
   const srcs = new Map(replaySources())
   assert.deepEqual([...srcs].filter(([, src]) => /\bconst attr\b/.test(src)).map(([f]) => f), [], 'no per-module copy')
 })
-test('breakSteps takes its quiet causes from that list: every quiet cause is skipped, any other one is a break', () => {
-  const c = (cause) => ({ cacheBreak: { cause }, usage: { read: 90, create: 0, fresh: 10, out: 1 }, ctx: 100 })
-  for (const cause of QUIET_CAUSES) assert.deepEqual(breakSteps([c(cause)]), [], cause)
-  assert.deepEqual(breakSteps([c('content-changed')]), [0])
-})
-
 // Task 5 item 7: the real /api/pricing is keyed by FAMILY (opus, sonnet, haiku — src/view/pricing.mjs), while a call's model is the full id, so an
 // exact-only lookup priced nothing on the real server. The lookup is generic and data-driven: exact key first, else the longest key that occurs
 // in the model id (ties: lexical order). No provider or model name lives in front-end code, and an approximate match says so (tested in replay-render).

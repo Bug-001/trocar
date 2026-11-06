@@ -45,13 +45,14 @@ export function cacheSentence(st, o = {}) {
     case 'changed': return st.cause === 'compaction'
       ? `Compaction${o.inferred ? ' (inferred)' : ''}: the whole context was written again` + (o.attrW ? ` · ${o.attrW}` : '')
       : `Cache break at this step: ${o.causeW || 'cause unknown'}` + (o.attrW ? ` · ${o.attrW}` : '')
+    case 'changed-hit': return `Changed before this step: ${o.causeW || 'cause unknown'}${st.cause === 'compaction' && o.inferred ? ' (inferred)' : ''}; the cache still hit ${o.hitPct}%`
     case 'low-hit': return o.hitPct != null ? `The prefix did not change, but the cache hit only ${o.hitPct}%` : 'The prefix did not change, but there was no cache hit'
     case 'reused': return st.quiet === 'volatile-nonce-only' ? 'Only blocks that change every call changed; the cache is not affected' : 'Reused the earlier cache'
     default: return 'No request was captured for this step, so there is nothing to compare the cache with' // unjudged: no captured request to compare a prefix from
   }
 }
 // the states whose verdict stands on a block-structure comparison (2.2 MUST: they carry the visible 结构估计 mark)
-export const STRUCT_STATES = new Set(['ttl-rebuild', 'provider-contradiction', 'changed', 'low-hit'])
+export const STRUCT_STATES = new Set(['ttl-rebuild', 'provider-contradiction', 'changed', 'changed-hit', 'low-hit'])
 export const isStructState = (st) => STRUCT_STATES.has(st && st.state) || (st && st.state === 'reused' && st.quiet === 'volatile-nonce-only')
 
 // the server's cause closed set (CAUSE_META) in plain words; anything else is 原因未知 and the raw value goes to 技术细节
@@ -241,7 +242,7 @@ export const HIT_UNMEASURED = 'cannot be computed (no usage returned)'
 export const BREAKS_LINE = (n) => `${count(n, 'cache break')} (${L.STRUCT_EST})`
 export const BREAK_COST_LINE = '≈ extra cost'
 export const BREAK_COST_SOME = (n) => `${n} of them cannot be computed`
-export const WORST_AT = (n) => `Most expensive at step ${n} ›`
+export const WORST_AT = (n) => `Costliest break at step ${n} ›` // the break with the most ≈ extra cost, not the dearest step
 export const FAILED_LINE = (n) => `${count(n, 'failed call')} ›`
 export const COMPACTION_LINE = (n) => `${n} compactions`
 export const COUNTS_LINE = { sub: (n) => count(n, 'sub-agent'), bg: (n) => count(n, 'background call'), probe: (n) => count(n, 'token count') }
@@ -265,7 +266,7 @@ export const failTip = (n, msg) => `Call failed at step ${n}${msg ? ` (${msg})` 
 export const COMPACT_WORD = 'compaction'
 export const compactTip = (n, inferred) => `Compaction at step ${n}: the history was rewritten and the whole context written again${inferred ? ' (inferred)' : ''}`
 // the cache band's four hover shapes, in the predicate's own order
-export const CACHE_CELL_FAILED = 'cache failed'
+export const CACHE_CELL_FAILED = 'call failed' // the call failed; its cache is not a finding
 export const CACHE_CELL_NONE = 'cache —'
 export const CACHE_CELL_NONE_TIP = 'No usage returned, so this cannot be computed (not 0%)'
 export const cacheCellPct = (p) => `cache ${p}%`
