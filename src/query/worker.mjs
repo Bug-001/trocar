@@ -38,9 +38,11 @@
 // (a stop, an update, a crash) may cut a slice, which leaves at most a torn last line that the next open cuts off (4.3 §上下文投影),
 // and loses at most the fold since the last checkpoint (session.mjs CHECKPOINT_MS).
 //
-// THE LIGHT ROLE (argv[4] === 'light', 3.5 §谁执行它「两个角色」): the same wire, for the names `rowFree` in QUERIES only (src/query/router.mjs). It writes
+// THE THREE ROLES (argv[4]: absent or 'main', 'light', 'control'; 3.5 §谁执行它「三个角色」). THE LIGHT ROLE: the same wire, for the names `rowFree` in QUERIES only (src/query/router.mjs). It writes
 // nothing and never reads the rows, so `rowsRead` stays false: background() never runs, a name that needs the rows and a line with `rows: true` are
 // answered `102`, and so is a `block` of a segment whose index it may not build (`warmOnly`, 3.5 §行表先读).
+// THE CONTROL ROLE (argv[4] === 'control'): the board's control verbs (`{control, body}`) only. It never reads the rows and writes nothing
+// under index/; a query line is the caller's mistake and is answered `500`, never `102`.
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { promisify } from 'node:util'
@@ -61,7 +63,7 @@ const home = process.argv[2]
 // The board's control verbs (`{control, body}`, 4.4 §控制面) run the CLI's own functions, which take `deps` for what they ask of the machine.
 // The daemon passes no deps: argv[3] is absent, or '' before a role; a test fork names an ES module whose default export is that `deps` object. `beforeRows`, `beforeTitles`
 // and `beforeServe`, a test's alone, are awaited before the row pass starts, before the title pass behind it and before a query is answered.
-const light = process.argv[4] === 'light'
+const role = process.argv[4] || 'main', light = role === 'light'
 const depsP = process.argv[3] ? import(pathToFileURL(process.argv[3]).href).then((m) => m.default) : Promise.resolve({})
 // What the CLI's own environment may change about an answer goes local (client.mjs LOCAL_ENV); this worker serves
 // every caller, so it answers as a clean environment would and never as the daemon's happened to be.
@@ -94,6 +96,7 @@ async function serve(line) {
   const after = [], cpu0 = process.cpuUsage()
   try {
     const { name, params, indent, control, body, gzip: wants, etag, rows } = JSON.parse(line)
+    if (role === 'control' && !control) throw new Error(`the control worker answers control verbs only, not the query ${JSON.stringify(name)}`)
     if (!rowsRead && !control && Object.hasOwn(QUERIES, name) && (!QUERIES[name].rowFree || rows)) { await write(102, Buffer.alloc(0), '-', 0, '-'); return null } // ask again: the daemon does (3.5 §行表先读)
     asked = { name, params }
     if (control) { // one JSON line, the bytes `trocar <command> --json` prints into a pipe; the verb says the status (src/control/board.mjs)
@@ -348,6 +351,6 @@ async function readRows() {
     await saveTitles({ home, fs: nodeFs })
   } catch (e) { say(e) } finally { sweeping = false; kick() } // the first idle period: the sweep
 }
-if (!light) readRows()
+if (role === 'main') readRows()
 process.stdin.on('end', () => process.exit(0))
 process.on('disconnect', () => process.exit(0)) // the daemon is gone: so is the reason to be here
