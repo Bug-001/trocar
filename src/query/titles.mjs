@@ -18,7 +18,7 @@ import { fsTag, statKey } from './warm.mjs';
 import { trocarHome } from '../paths.mjs';
 import { projectOf, projectFields } from '../dissect/project.mjs';
 
-export const TITLE_V = 2;
+export const TITLE_V = 3;
 export const TITLE_BUDGET_MS = 100; // how long a `sessions` in the worker computes titles before it says ask again (3.5 §访问模式)
 /** Thrown by titleOf past its `deadline`: the answer is a `102`, what was computed stays in the table. */
 export class TitlesPending extends Error {}
