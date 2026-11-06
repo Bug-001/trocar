@@ -6,7 +6,7 @@
 // `trocar uninstall` — is src/off/ (the entries, the daemon stop, the lock) and src/cli/uninstall.mjs (1.6 §1.4, R3).
 import { retriedNote, SETUP_WHY } from '../cli/words.mjs'
 import { UNDO_WORDS, setupBlocked, setupError } from '../cli/receipt.mjs'
-import { driverSetup } from './driver-setup.mjs'
+import { driverSetup, driverCtx } from './driver-setup.mjs'
 import { isModelOs } from './model-install.mjs' // macOS / Windows: their on is turnOnModel (src/cli/on-model.mjs); this turnOn is Linux's
 import fs from 'node:fs'
 import net from 'node:net'
@@ -24,7 +24,6 @@ import { readManifest, saveManifest, newManifest, missingDirs, applyJsonKey, pre
 import { EVENT, CODE } from './core/codes.mjs'
 import { RESTART_REASONS } from '../health/codes.mjs'
 import { controlRequest, controlEndpointFor } from './core/control.mjs'
-import { readText, readTextOrError } from './core/config-read.mjs'
 import { appendEvent } from './core/events.mjs'
 import { runEventWriter } from '../off/events.mjs'
 import { hideUserinfoIn } from '../off/userinfo.mjs'
@@ -37,7 +36,6 @@ import { writeStandalone, standaloneDue } from '../off/standalone.mjs'
 import { codeId, setupHelperCommand } from '../version.mjs'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-const listDir = (d) => { try { return fs.readdirSync(d) } catch { return [] } }
 
 // An engine port that is free on both loopback families now (4.6 OPEN「按实例分配」, gate G3): recorded in the
 // manifest, the daemon listens there on every start. A port whose [::1] side is taken is skipped (the daemon would
@@ -182,11 +180,7 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
   const descs = asked.filter((d) => !held.has(d.name))
   const ca = caPaths(path.join(dir, 'ca'))
   const facts = await scan()
-  const envMap = new Map(Object.entries(env).filter(([, v]) => typeof v === 'string'))
-  const ctxFor = (d) => ({
-    os: osName, home, env: envMap, running: facts.filter((f) => match(f).agent === d.name).map((f) => f.env || new Map()),
-    readText: (f) => readText(f), readTextOrError: (f) => readTextOrError(f), readBytes: (f) => { try { return fs.readFileSync(f) } catch { return null } }, listDir, collectorDir: dir, caPem: ca.pem,
-  })
+  const ctxFor = (d) => driverCtx({ os: osName, home, env, fs, running: facts.filter((f) => match(f).agent === d.name).map((f) => f.env || new Map()) }) // the one inject ctx (status and on's setup judgement read the same)
   const R = roots || await bundleRoots(arch)
   const draft = planTrust({ descriptors: descs, ctxFor, caCertPem: null, collectorDir: dir, roots: R })
   const daemon = unit ? daemonEnv(env, dir) : null
@@ -292,7 +286,7 @@ async function writeInstall(args) {
   const written = { entries: [], files: [], owned: [], unit: null, caCreated: false, intact: [], userChanged: [], needInstall: [] }
   try { return await writeInstallSteps(args, written) } catch (e) { if (e && e.stopsRun) e.written = written; throw e } // what was done before the stop is said
 }
-async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePort, now, fs, guard = () => {}, confirmed = false, certs = true }, written) {
+async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePort, now, fs, guard = () => {}, confirmed = false, certs = true, keepCode = false }, written) {
   const { ca, descs, ctxFor, R, daemon, draft, unit } = plan._
   const body = () => JSON.stringify(m)
   let saved = body()
@@ -363,7 +357,7 @@ async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePo
   // D55: install's own record (before P10 the `on` that writes the certificates sets it): kept as it is once complete, so a second `on` saves nothing (D54).
   // `code` is the code that ran install (1.6 §5.5: an npm copy's update finishes until it is this code): install (certs) writes it, `on` keeps install's
   const names = [...new Set([...((m.install && m.install.harnesses) || []), ...descs.map((d) => d.name)])].sort()
-  const ran = certs ? codeId() : installComplete(m) ? m.install.code : undefined
+  const ran = certs && !keepCode ? codeId() : installComplete(m) ? m.install.code : undefined // keepCode: the board's Set up is not an install run (4.6)
   if (!installComplete(m) || JSON.stringify(names) !== JSON.stringify(m.install.harnesses) || ran !== m.install.code) m.install = { state: 'complete', at: installComplete(m) ? m.install.at : now().toISOString(), pending: [], harnesses: names, ...(ran ? { code: ran } : {}) }
   if (confirmed) m.confirmed_paths = [...new Set([...(m.confirmed_paths || []), ...final.paths, ...(unit ? [unit.path] : [])])] // what the operator was shown and said yes to (1.6 §1.6)
   save()
@@ -403,13 +397,13 @@ export async function installCollector({ home = os.homedir(), ...opts } = {}) {
       // a run that put the entry back or started the daemon changed something: its result is on record like any install's (1.6 §1.2)
       if (dmn && (dmn.started || (entryBefore && entryBefore !== 'present'))) put({ event: EVENT.installNote, where: 'install', kind: 'result', outcome: dmn.problems.length ? 'partial' : 'installed', reason: `the certificates were in place; the login entry was ${entryBefore}${dmn.started ? ' and the collector was started' : ''}${dmn.problems.length ? `; not done: ${dmn.problems.join('; ')}` : ''}` })
       // nothing to write but the record of which code ran install, when that is another code (1.6 §5.5): an npm copy's update finishes until it says this one
-      if (plan._.prior.install.code !== codeId()) { plan._.prior.install = { ...plan._.prior.install, code: codeId() }; saveManifest(dir, plan._.prior, fs) }
+      if (!opts.keepCode && plan._.prior.install.code !== codeId()) { plan._.prior.install = { ...plan._.prior.install, code: codeId() }; saveManifest(dir, plan._.prior, fs) }
       return { already: true, entryBefore, manifest: plan._.prior, plan: null, daemon: dmn }
     }
     const onPlan = opts.onPlan || (() => {})
     onPlan(plan)
     const m = openManifest({ dir, plan, now, fs })
-    const { manifest, final, written } = await writeInstall({ dir, home, plan, m, osName: opts.osName, harnesses: opts.harnesses, freePort: opts.freePort || freeEnginePort, now, fs })
+    const { manifest, final, written } = await writeInstall({ dir, home, plan, m, osName: opts.osName, harnesses: opts.harnesses, freePort: opts.freePort || freeEnginePort, now, fs, keepCode: !!opts.keepCode })
     const put = noteRun({ dir, run, final, written, notes: final.notes, fs })
     const dmn = await register(put, written.unit === 'rewrite')
     if (dmn) for (const n of dmn.notes) if (!final.notes.includes(n) && !dmn.problems.includes(n)) final.notes.push(n) // a problem is said once, as a problem (附录 C.1)

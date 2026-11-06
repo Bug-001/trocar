@@ -21,6 +21,9 @@ import { setupOf } from '../../src/collector/core/proxymode/status-facts.mjs'
 import { createServer } from '../../src/server.mjs'
 import { createQueryService } from '../../src/query/service.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
+import { VERBS } from '../../src/control/board.mjs'
+import { driverSetup } from '../../src/collector/driver-setup.mjs'
+import { installedHome, ROOTS } from '../off/fixtures/off-ctx.mjs'
 
 const A = 'codex', B = 'z-code' // B: its CLI form is present when ~/.zcode is, and carries the root through a config key (a carrier of its own)
 const HELPER = { close: async () => {}, call: async (verb) => { if (verb === 'ps') return { procs: [] }; throw Object.assign(new Error(`not in this stand-in: ${verb}`), { code: 'helper-verb-error' }) } }
@@ -161,15 +164,69 @@ for (const platform of ['darwin', 'win32']) {
   })
 }
 
-test('4.4 #13 · 4.11 P4b: on Linux the board has no Set up — POST /control/setup is 405 and nothing is written', async () => {
-  const home = tmpDir('trocar-setup-linux-')
-  fs.mkdirSync(path.join(home, '.trocar'))
+test('4.4 #13 · 4.11 P4b: Set up is mounted on Linux too — POST /control/setup reaches the control verb; a root daemon mounts it nowhere', async () => {
+  for (const uid of [501, 0]) {
+    const seen = []
+    const control = ({ verb, res }) => { seen.push(verb); res.writeHead(200, { 'content-type': 'application/json' }); res.end('{}') }
+    const { server } = createServer({ home: tmpDir('trocar-setup-linux-'), token: 't', uid, platform: 'linux', query: { relay: () => assert.fail('relayed'), control, warm: () => {} } })
+    server.listen(0, '127.0.0.1'); await once(server, 'listening')
+    try {
+      const r = await request(server.address().port, '/control/setup', { method: 'POST', headers: { 'content-type': 'application/json', [CONTROL_TOKEN_HEADER]: 't' }, body: JSON.stringify({ harness: B }) })
+      if (uid === 0) assert.equal(r.status, 405)
+      else { assert.notEqual(r.status, 405); assert.deepEqual(seen, ['setup']) }
+    } finally { server.close() }
+  }
+})
+
+/** Linux (driver mode): VERBS.setup over a HOME where install and on ran for Claude Code, and Z Code arrived after (4.6 「这个 harness 装好了没有」). */
+const linuxSetupDeps = (s) => ({ platform: 'linux', env: s.sh.env, parts: { os: 'linux', harnesses: s.descs, scan: async () => [], match: () => ({ agent: null }), arch: null }, roots: ROOTS, exec: s.sys.exec.run, request: s.sys.daemon.request, getuid: () => 1000, helperState: () => ({ ok: true }) })
+const outside = (snap) => Object.fromEntries(Object.entries(snap).filter(([k]) => !k.startsWith('.trocar/')))
+
+test('Linux · 4.4 #13 · V67: Set up places only the harness\'s missing carriers, keeps install.code, and a second Set up changes nothing', async () => {
+  const s = await installedHome({ names: ['claude-code', B], seed: (home) => fs.rmSync(path.join(home, '.zcode'), { recursive: true, force: true }) })
+  const zc = path.join(s.home, '.zcode', 'cli', 'config.json')
+  fs.mkdirSync(path.dirname(zc), { recursive: true }); fs.writeFileSync(zc, '{\n  "model": "lab/m"\n}\n')
+  const ctx = { home: path.join(s.home, '.trocar'), deps: linuxSetupDeps(s) }
+  const setup = (body) => VERBS.setup(body, ctx)
+  // (a)
+  assert.equal((await setup({ harness: 'nope' })).status, 400)
+  // (b)
+  const m0 = s.manifest(); m0.install.code = 'another-copy'; saveManifest(s.dir, m0) // install ran from another code: Set up is not an install run and keeps it
+  const home0 = snapshot(s.home), claude0 = fs.readFileSync(path.join(s.home, '.claude', 'settings.json')), code0 = s.manifest().install.code
+  const p = await setup({ harness: B })
+  assert.equal(p.status, 409, JSON.stringify(p.doc))
+  assert.equal(p.doc.need, 'confirm')
+  assert.ok(p.doc.plan.length > 0 && p.doc.plan.every((r) => r.what === B), JSON.stringify(p.doc.plan))
+  assert.deepEqual(snapshot(s.home), home0, 'the plan wrote nothing')
+  // (c)
+  const r = await setup({ harness: B, confirm: p.doc.plan_id })
+  assert.equal(r.status, 200, JSON.stringify(r.doc))
+  assert.deepEqual(validateReceipt(r.doc), [])
+  assert.equal(r.doc.command, 'install')
+  const home1 = snapshot(s.home), a = outside(home0), b = outside(home1)
+  assert.deepEqual([...new Set([...Object.keys(a), ...Object.keys(b)])].filter((k) => a[k] !== b[k]), ['.zcode/cli/config.json'])
+  assert.deepEqual(fs.readFileSync(path.join(s.home, '.claude', 'settings.json')), claude0)
+  assert.equal(s.manifest().install.code, code0)
+  const desc = s.descs.find((d) => d.name === B)
+  const after = driverSetup(desc, { os: 'linux', home: s.home, env: s.sh.env, manifest: s.manifest() })
+  assert.deepEqual([after.state, after.missing], ['ready', []])
+  // (d)
+  const p2 = await setup({ harness: B })
+  assert.equal(p2.status, 409, JSON.stringify(p2.doc))
+  assert.deepEqual(p2.doc.plan, [])
+  assert.equal((await setup({ harness: B, confirm: p2.doc.plan_id })).status, 200)
+  assert.deepEqual(quiet(snapshot(s.home)), quiet(home1))
+  assert.equal(s.manifest().install.code, code0)
+})
+
+test('Linux · 4.4 #13 · 4.6: Set up on a HOME without an install record is cert-not-installed and writes nothing', async () => {
+  const s = await installedHome({ names: [B] })
+  const home = tmpDir('trocar-setup-bare-')
+  const zc = path.join(home, '.zcode', 'cli', 'config.json')
+  fs.mkdirSync(path.dirname(zc), { recursive: true }); fs.writeFileSync(zc, '{}\n')
   const home0 = snapshot(home)
-  const { server } = createServer({ home: path.join(home, '.trocar'), token: 't', uid: 501, platform: 'linux', query: { relay: () => assert.fail('relayed'), control: () => assert.fail('relayed'), warm: () => {} } })
-  server.listen(0, '127.0.0.1'); await once(server, 'listening')
-  try {
-    const r = await request(server.address().port, '/control/setup', { method: 'POST', headers: { 'content-type': 'application/json', [CONTROL_TOKEN_HEADER]: 't' }, body: JSON.stringify({ harness: B }) })
-    assert.equal(r.status, 405)
-  } finally { server.close() }
+  const r = await VERBS.setup({ harness: B, confirm: 'x' }, { home: path.join(home, '.trocar'), deps: { ...linuxSetupDeps(s), env: { HOME: home } } })
+  assert.equal(r.doc.ok, false, JSON.stringify(r.doc))
+  assert.equal(r.doc.error.code, 'cert-not-installed')
   assert.deepEqual(snapshot(home), home0)
 })
