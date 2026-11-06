@@ -217,6 +217,8 @@ const HARNESS_OWN = new Set(['settings-ignored-managed-by-host', 'settings-ignor
   'kimi-not-via-shim', 'kimi-npm-no-shim', 'shim-not-on-path', 'desktop-ca-override'])
 
 /** `trocar on`'s note for a harness whose paused hosts it made trocar try again (POST /on's `retried`, 4.11 §1 on/off, D54②). */
+// 1.6 §1.1: what a `setup.missing[].what` means, in words (the code stays in the JSON); `on` says it in both modes (4.11 P4b, 4.6)
+export const SETUP_WHY = Object.freeze({ 'carrier-absent': 'trocar has not set up its certificate for it (installed after trocar, or what trocar placed is gone)', 'carrier-overwritten': 'its own update overwrote what trocar placed for its certificate', 'root-missing': "trocar's root certificate is no longer trusted" })
 export const retriedNote = (h, hosts) => `trocar decrypts ${hosts.join(', ')} again from ${h}'s next connection; that traffic had been passed on unread after a TLS failure`
 
 /** The reason an agent is not captured (RFC 1.6 §3.5 NOTE column, D38): the one catalog, a clause for every code of

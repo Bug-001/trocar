@@ -118,8 +118,10 @@ export async function runOn({ io, env = process.env, home = os.homedir(), platfo
       onPlan: (p) => say(planText(p)),
       request: deps.request, now: deps.now, getuid: deps.getuid, helperState, linger: deps.linger || parts.linger || null, lingerRead: deps.lingerRead || (deps.linger ? null : parts.lingerRead || null), sleep: deps.sleep, user: deps.user, fs: deps.fs,
     })
+    // 1.6 §3.3: a run whose only shortfall is a harness refused for setup turned the others on: their proxies are recorded as on any done run
+    const onlyRefused = (x) => !!x.error && x.error.code === 'setup-needed' && !(x.problems || []).length
     if (adoption && adoption.error) receipt.notes.push(adoption.error)
-    else if (adoption && receipt.harnesses && receipt.harnesses.length && receipt.ok !== false && !receipt.dry_run && !receipt.planned && !receipt.declined) {
+    else if (adoption && receipt.harnesses && receipt.harnesses.length && (receipt.ok !== false || onlyRefused(receipt)) && !receipt.dry_run && !receipt.planned && !receipt.declined) {
       const rec = await recordAdoption({ adoption, routing, targets: receipt.harnesses, home, env, now: deps.now ? () => deps.now().getTime() : Date.now, fs: deps.fs })
       receipt.adopted = rec.adopted
       if (rec.wrote) receipt.created.push(rec.wrote)

@@ -4,8 +4,9 @@
 // harness or an OS: the descriptors declare their entries (`inject`), the caller passes `scan` / `match` (the
 // process table) from daemon.mjs. Install lists every file before touching one. The way back — `trocar off` and
 // `trocar uninstall` — is src/off/ (the entries, the daemon stop, the lock) and src/cli/uninstall.mjs (1.6 §1.4, R3).
-import { retriedNote } from '../cli/words.mjs'
-import { UNDO_WORDS } from '../cli/receipt.mjs'
+import { retriedNote, SETUP_WHY } from '../cli/words.mjs'
+import { UNDO_WORDS, setupBlocked, setupError } from '../cli/receipt.mjs'
+import { driverSetup } from './driver-setup.mjs'
 import { isModelOs } from './model-install.mjs' // macOS / Windows: their on is turnOnModel (src/cli/on-model.mjs); this turnOn is Linux's
 import fs from 'node:fs'
 import net from 'node:net'
@@ -430,7 +431,7 @@ export async function turnOn(opts = {}) {
   const dir = collectorHome(path.join(home, '.trocar'))
   const stateF = path.join(dir, 'state.json')
   const username = (() => { try { return user || os.userInfo().username } catch { return String(env.USER || '') } })()
-  const fresh = () => ({ ...newReceipt('on'), user: username, relayed: { closing: 0, waiting: 0, cut: 0 }, undo: UNDO_LINE.on, standalone: standalonePath(home), commands: ['trocar on', 'trocar off', 'trocar status', 'trocar uninstall'], log: path.join(dir, 'flows') }) // on relays nothing: zeros on purpose; `undo` is the ONE line that undoes an on (C.1), and the four commands are what V29 asks the first receipt to carry
+  const fresh = () => ({ ...newReceipt('on'), refused: [], user: username, relayed: { closing: 0, waiting: 0, cut: 0 }, undo: UNDO_LINE.on, standalone: standalonePath(home), commands: ['trocar on', 'trocar off', 'trocar status', 'trocar uninstall'], log: path.join(dir, 'flows') }) // on relays nothing: zeros on purpose; `undo` is the ONE line that undoes an on (C.1), and the four commands are what V29 asks the first receipt to carry
   // A receipt of a run that wrote nothing and could not go on: no change, no file made, and no way to undo or log to point at — what is not there (R1: the receipt is what was done).
   // `commands` (the four a user types) stay: they are true whether or not this run wrote anything.
   const unwritten = (r) => { const { standalone: _unwritten, ...rest } = r; return { ...rest, changed: [], created: [], undo: null, log: null } }
@@ -457,10 +458,27 @@ export async function turnOn(opts = {}) {
     return v === true || v === false ? { linger: v } : { linger: 'unknown', linger_reason: linger ? 'the linger state could not be read (/var/lib/systemd/linger)' : 'nothing reads it here' }
   } catch (e) { return { linger: 'unknown', linger_reason: String((e && e.message) || e) } } }
   return recorded(dir, 'install', async (run) => {
-    const plan = await planOn({ home, env, ids, osName, harnesses, scan, match, arch, roots, unit: null, fs, now }) // D61: the login entry is `install`'s and `on` never writes it, so the writing side is handed no unit at all
+    const planArgs = { home, env, ids, osName, harnesses, scan, match, arch, roots, unit: null, fs, now }
+    let plan = await planOn(planArgs) // D61: the login entry is `install`'s and `on` never writes it, so the writing side is handed no unit at all
     // D55⑥ / override #15: `on` never writes a certificate, so it never installs silently — no install record, no on (macOS / Windows: turnOnModel)
     // 附录 C.1: the refusal's code lives in `error`, the one place a client looks (never a top-level `code`)
     if (!isModelOs(osName) && !installComplete(plan._.prior)) { const message = 'certificates are not installed. Run: trocar install'; return { receipt: unwritten({ ...fresh(), ok: false, error: { code: CODE.certNotInstalled, message }, notes: [message] }), manifest: plan._.prior, plan, exit: 1 } }
+    // 1.6 §3.3 前提 ⑪ (D65④, 4.6「这个 harness 装好了没有」): a target whose setup is needed is refused alone — planned again without it, so not one byte
+    // is written for it (no desired on, not in POST /on); the judgement reads the manifest planOn read, as `status` does (V91). `unknown` goes on with a note.
+    const refused = [], setupNotes = []
+    for (const h of isModelOs(osName) ? [] : plan.targets) { // macOS / Windows judge it in turnOnModel
+      const s = driverSetup(plan._.descs.find((d) => d.name === h), { os: osName, home, env, manifest: plan._.prior, fs })
+      if (s.state === 'needed') refused.push({ harness: h, reason: CODE.setupNeeded, why: [...new Set(s.missing.map((x) => SETUP_WHY[x.what]))].join('; '), command: 'trocar install' })
+      else if (s.state === 'unknown') setupNotes.push(`whether ${h} is set up could not be told (${s.reason})`)
+    }
+    const setupBlk = setupBlocked({ refused })
+    if (refused.length) {
+      const rest = plan.targets.filter((h) => !refused.some((x) => x.harness === h))
+      if (!rest.length) return { receipt: unwritten({ ...fresh(), ok: !!dryRun, harnesses: [], refused, blocked: setupBlk, notes: setupNotes, ...(dryRun ? { dry_run: true } : { error: setupError(setupBlk) }) }), manifest: plan._.prior, plan, exit: dryRun ? 0 : 1 }
+      const first = plan
+      plan = await planOn({ ...planArgs, ids: rest })
+      plan.skipped = [...first.skipped.filter((x) => first._.descs.some((d) => d.name === x.what) && !first.targets.includes(x.what)), ...plan.skipped] // the harnesses with nothing to install stay said
+    }
     // the copy of the undo side that needs no source tree (R3) is one more file trocar writes: listed in the plan and the dry run when it is missing or not what src/off generates now
     let due
     try { due = standaloneDue({ home, version: OFF_VERSION, platform: osName, fs }).map((d) => d.file) } catch { due = standaloneFiles(home, osName) } // a build that fails is said by the write below
@@ -473,7 +491,7 @@ export async function turnOn(opts = {}) {
     const stateRead = (() => { try { return { ...readState(), error: null } } catch (e) { return { state: emptyState(), from: null, error: e } } })()
     const need = plan.targets.filter((id) => !(stateRead.state.harnesses[id] && stateRead.state.harnesses[id].desired === 'on'))
     const stateWrite = need.length > 0 || stateRead.from === 1 // an unreadable file is `need` too: every target is not on
-    const r = { ...fresh(), ...(osName === 'win32' || osName === 'darwin' ? {} : lingerNow()), harnesses: plan.targets, changed: plan.changed, created: [...plan.created, ...(stateWrite ? [stateF] : [])], skipped: [...plan.skipped], restart: plan.restart, unchanged: plan.unchanged, notes: [...plan.notes] }
+    const r = { ...fresh(), ...(osName === 'win32' || osName === 'darwin' ? {} : lingerNow()), harnesses: plan.targets, refused, changed: plan.changed, created: [...plan.created, ...(stateWrite ? [stateF] : [])], skipped: [...plan.skipped], restart: plan.restart, unchanged: plan.unchanged, notes: [...plan.notes, ...setupNotes] }
     if (stateRead.error) r.notes.push(`${stateF} could not be read (${String(stateRead.error.message || stateRead.error)}); it is written again`)
     if (!plan.targets.length) return { receipt: unwritten({ ...r, ok: false, notes: [...r.notes, 'no agent trocar can capture was found: nothing was changed. Install one, then run trocar on again'] }), manifest: plan._.prior, plan, exit: 1 }
     const named = !!ids && plan.skipped.some((s) => ids.includes(s.what)) // a harness asked for by name that has nothing to install: not done
@@ -482,7 +500,7 @@ export async function turnOn(opts = {}) {
     if (edited.length) r.notes.push(...edited.map((e) => `you changed the proxy setting of ${e.harness}: ${e.where || 'the proxy field'} is now ${e.now ?? 'empty'} (trocar left ${e.was ?? 'empty'} there); on takes that as the upstream and points the setting back at trocar`))
     if (dryRun) {
       const blk = autostartBlock({ unit, osName })
-      return { receipt: { ...r, dry_run: true, ok: !named, ...(blk || helperBlock ? { blocked: [...(blk ? [{ what: 'trocar on', reason: blk }] : []), ...(helperBlock ? [helperStop] : [])], notes: [...r.notes, ...(blk ? [`${blk} (a real trocar on stops there)`] : []), ...(helperBlock ? [`${helperBlock} (a real trocar on stops there). Install it with the line below, then run trocar on again`] : [])] } : {}) }, manifest: plan._.prior, plan, exit: named ? 1 : 0 }
+      return { receipt: { ...r, dry_run: true, ok: !named, ...(blk || helperBlock || setupBlk.length ? { blocked: [...(blk ? [{ what: 'trocar on', reason: blk }] : []), ...(helperBlock ? [helperStop] : []), ...setupBlk], notes: [...r.notes, ...(blk ? [`${blk} (a real trocar on stops there)`] : []), ...(helperBlock ? [`${helperBlock} (a real trocar on stops there). Install it with the line below, then run trocar on again`] : [])] } : {}) }, manifest: plan._.prior, plan, exit: named ? 1 : 0 }
     }
     if (plan.writing || stateWrite || edited.length) onPlan({ ...plan, state: stateWrite ? stateF : null, edited })
     if (plan.first || plan.newPaths.length || edited.length) {
@@ -533,12 +551,13 @@ export async function turnOn(opts = {}) {
       created: [...(plan._.prior ? [] : [manifestPath(dir)]), ...(stateWrite ? [stateF] : []), ...standalone.files, ...(written && written.caCreated ? plan._.ca ? [plan._.ca.key, plan._.ca.pem] : [] : []), ...(written ? [...written.files, ...written.owned] : [])],
       unchanged: written ? written.intact : [],
     }
-    // the result line is the one proxy mode writes (1.6 §1): `harnesses` = the ones this run turned on (the daemon up and the run not halted), `refused` = none
-    // (driver mode refuses no single harness)
+    // the result line is the one proxy mode writes (1.6 §1): `harnesses` = the ones this run turned on (the daemon up and the run not halted), `refused` = the
+    // ones refused for setup (1.6 §3.3), which make the run not done (exit 1) while the others went on
+    if (refused.length) Object.assign(receipt, { blocked: setupBlk, error: setupError(setupBlk) })
     const finish = (outcome, reason, on = []) => {
-      receipt.ok = !problems.length && !named && !(written && written.userChanged.length) // an entry the user changed is left, and not in effect: not "done"
+      receipt.ok = !problems.length && !named && !refused.length && !(written && written.userChanged.length) // an entry the user changed is left, and not in effect: not "done"
       const counts = { entries: m.entries.length, changed: receipt.changed.length, notes: notes.length + problems.length }
-      put({ event: EVENT.installNote, where: 'install', kind: 'result', outcome, harnesses: on, refused: [], counts, reason }) // before the notes are taken: a result line that cannot be written adds its own "not recorded" (R11)
+      put({ event: EVENT.installNote, where: 'install', kind: 'result', outcome, harnesses: on, refused: refused.map((x) => x.harness), counts, reason }) // before the notes are taken: a result line that cannot be written adds its own "not recorded" (R11)
       receipt.notes = [...notes, ...problems]
       receipt.problems = problems // the renderer labels exactly these 问题: — a failed run's SUCCESS notes (the kernel's "downloaded and both digests
       // verified") must not wear the problem label, which is what a whole-receipt ok===false test did (seen on a macOS test machine, 2026-10-11)
