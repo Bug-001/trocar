@@ -23,7 +23,7 @@ import { collectorDir, stateFile, opLockFile } from './paths.mjs'
 import { readStateFile, setDesired, writeStateAtomic, emptyState } from './state.mjs'
 import { acquireOpLock, LOCK_BUSY } from './lock.mjs'
 import { readManifest, refuseOldManifest, unknownItems, undoByHand, MANIFEST_VERSION, OFF_VERSION, PHASES } from './manifest.mjs'
-import { undoHarnesses, undoRootKeys } from './undo.mjs'
+import { undoHarnesses, undoRootKeys, OWNED_ROLES } from './undo.mjs'
 import { planByMarker, undoByMarker } from './marker.mjs'
 import { daemonState, stopDaemon, helperGone, isRedirectorHelper, clearStaleSupervisorLock } from './daemon-stop.mjs'
 import { controlRequest, controlEndpointFor } from './control-client.mjs'
@@ -487,7 +487,7 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
   if (dryRun) { // R6: the same receipt in the future tense, nothing written, nothing asked of the daemon, exit 0
     const mine = (x) => x.phase === 'on' && (ids == null || ids.includes(x.harness)) // off spares what install wrote (D55①), so its plan does too
     const items = manifest && !manifest.unsupported ? manifest : { entries: [], files: [] }
-    const gone = items.files.filter((f) => mine(f) && ['plugin', 'shim', 'bundle', 'trust-file'].includes(f.role)).map((f) => f.path)
+    const gone = items.files.filter((f) => mine(f) && [...OWNED_ROLES, 'bundle', 'trust-file'].includes(f.role)).map((f) => f.path)
     const marks = manifest && !manifest.unsupported ? [] : planByMarker({ home, ids, fs: w.fs, env: w.env, platform: w.platform, notes: receipt.notes })
     receipt.dry_run = true
     receipt.changed = [...items.entries.filter((e) => mine(e) && (e.kind === 'json-key' || e.kind === 'text')).map((e) => ({ path: e.path, change: offChangeText(e), backup: e.backup ?? null, ...withHarness(e.harness) })), ...perFile(marks.filter((p) => p.how !== 'owned-file').map((p) => ({ path: p.path, change: MARKER_TEXT[p.how], backup: null, ...withHarness(p.harness) })))]

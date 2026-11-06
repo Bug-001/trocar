@@ -132,6 +132,24 @@ test('V82: `off` leaves ~/.trocar/classes.json and logs/classes.ndjson byte for 
   assert.deepEqual(io.json().changed.filter((c) => /classes/.test(c.path)), [], 'the receipt names neither of them')
 })
 
+test('R6 · 附录 C.2: the dry run plans every file off takes out by its role: a switch file is a row of `planned`, is in `removed`, and is gone after the real run', async () => {
+  const s = await installedHome({ names: ['codex'] })
+  const file = path.join(s.home, '.codex', 'switch'), manifest = path.join(s.dir, 'install-manifest.json')
+  fs.writeFileSync(file, 'trocar')
+  const m = JSON.parse(fs.readFileSync(manifest))
+  fs.writeFileSync(manifest, JSON.stringify({ ...m, files: [...m.files, { path: file, role: 'switch', phase: 'on', harness: 'codex' }] }))
+  const dry = fakeIo()
+  assert.equal(await runOffCli(['--dry-run', '--json'], ctx(s, dry)), 0)
+  const d = dry.json()
+  assert.deepEqual(validateReceipt(d), [])
+  assert.ok(d.planned.some((x) => x.path === file && x.harness === 'codex' && x.how && x.change), JSON.stringify(d.planned))
+  assert.ok(d.removed.includes(file), JSON.stringify(d.removed))
+  assert.ok(fs.existsSync(file), 'a dry run deletes nothing')
+  const real = fakeIo()
+  assert.equal(await runOffCli(['--now', '--json'], ctx(s, real)), 0)
+  assert.ok(!fs.existsSync(file) && real.json().removed.includes(file), real.stdoutText())
+})
+
 test('§1.2 · R6: with no install manifest and --json, off asks nothing and writes no stderr at all — stdout is one document whose `planned` holds the plan, exit 1; the same on a terminal', async () => {
   for (const tty of [false, true]) { // on a terminal the plan used to go to stderr and the run waited on stdin, with --json (review 2026-10-18)
     const s = await installedHome({ names: ['kimi-code'] }); fs.rmSync(path.join(s.dir, 'install-manifest.json'))
