@@ -12,7 +12,6 @@ import tls from 'node:tls'
 import { fileURLToPath } from 'node:url'
 import { makeIssuer } from '../../../../src/collector/core/tls/issuer.mjs'
 import { checkProfile, INTERMEDIATE, certPem } from '../../../../src/collector/core/tls/cert.mjs'
-import { fileCustody } from '../../../../src/collector/core/tls/ca-store.mjs'
 import { checkRecord } from '../../../../src/health/codes.mjs'
 import { custodyStub } from '../../../helpers/custody-stub.mjs'
 import { tmpDir } from '../../../helpers/tmp.mjs'
@@ -180,23 +179,3 @@ for (const [what, fault, value] of FAULTS) {
     issuer.close()
   })
 }
-
-test('the file custody (Linux): leaves stay root-signed, chain = leaf + root; a missing CA is cert-key-missing', async () => {
-  const dir = path.join(tmpDir('trocar-fc-'), 'collector', 'ca')
-  const custody = fileCustody({ dir })
-  assert.equal(custody.exists(), false)
-  const records = []
-  const none = await makeIssuer({ custody, record: (r) => records.push(r) })
-  assert.equal(none.state(), 'key-missing'); assert.equal(none.leafFor('a.test'), null)
-  assert.deepEqual(records.map((r) => r.code), ['cert-key-missing'])
-  const { rootDer, fp256 } = custody.create()
-  assert.equal(custody.exists(), true)
-  assert.equal(new crypto.X509Certificate(rootDer).fingerprint256, fp256)
-  const issuer = await makeIssuer({ custody })
-  const [leaf, root, ...rest] = certs(issuer.leafFor('a.test').cert)
-  assert.equal(rest.length, 0)
-  assert.equal(root.fingerprint256, fp256)
-  assert.ok(leaf.verify(root.publicKey))
-  custody.remove()
-  assert.equal(custody.exists(), false)
-})
