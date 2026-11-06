@@ -45,7 +45,7 @@ export async function rootOf({ dir, m, rootStore, fs }) {
 const groupOf = (harness, routeId) => `${harness}:${routeId}`
 
 /** 1.6 §1.6 (R12): the receipt's code of an on that stopped because an off wrote desired off while it ran (src/cli/json.mjs ERROR_CODES). */
-export const STOPPED_BY_OFF = 'stopped-by-off'
+export const STOPPED_BY_OFF = CODE.stoppedByOff
 /** Which of `ids` the state file no longer says are on — off's mark, read with the reader off writes it for (src/off/state.mjs). A file that cannot
  *  be read names them all: whether an off was asked is not known, and off wins (R12). One read, no fsync: it runs before each harness (D62). */
 export function offSince(stateF, ids, { fs = nodeFs, now = new Date() } = {}) {

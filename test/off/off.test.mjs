@@ -615,6 +615,7 @@ test('R12: while `on` holds the op lock (it waits for its daemon to come up) an 
   const on = await s.on({ request: never, sleep })
   assert.deepEqual(meanwhile, { entry: true, desired: 'off', lock: true }, 'the entry install wrote is there and on holds the lock; off had already written desired off')
   assert.equal(on.exit, 1); assert.match(on.receipt.notes.join('\n'), /turned off while this on ran/)
+  assert.equal(on.receipt.error && on.receipt.error.code, 'stopped-by-off', '1.6 §3.1: the code of an on an off stopped, on Linux as on macOS / Windows')
   assert.ok(pauses < 8, `on stopped at its next poll (${pauses} pauses), not after 60`)
   const off = await offRun
   assert.equal(off.exit, 0, JSON.stringify(off.receipt.problems))
