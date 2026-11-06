@@ -681,3 +681,71 @@ test('2.3 §kinds · D71①: a step reached before the markdown renderer keeps t
     expect(win.scrollTop).toBe(yOf(wrapOf(win, 'chline')!))
   } finally { setMarkdown(draw) }
 })
+
+test('1.4 #2: 全部展开 and 全部折叠 write every card anchor of the step into the fold memory, open and closed', () => {
+  const flat = [sys(), blk({ query: 'one', key: 'q1' }), say(), blk({ query: 'two', key: 'q2' }), say(), blk({ query: 'three', key: 'q3' }), say()]
+  const s = stateOf(deskN([flat]))
+  const { win } = mount(s)
+  const anchors = itemsOf(s).filter((x) => x.type === 'card').map((x) => x.anchor)
+  expect(anchors.length).toBe(3)
+  for (const [how, want] of [['open', true], ['close', false], ['open', true]] as const) {
+    s.persistFold.mockClear()
+    act(() => { fireEvent.click(win.querySelector(`.foldallbtn[data-foldall="${how}"]`)!) })
+    expect(anchors.map((a) => s.turnFold.get(a))).toEqual(anchors.map(() => want))
+    expect(s.persistFold).toHaveBeenCalled()
+    expect(itemsOf(s).filter((x) => x.type === 'card').map((x) => x.open)).toEqual(anchors.map(() => want))
+  }
+})
+
+test('2.3 #13: a reply row the reader flipped stays flipped on a repaint of its step, and the next step starts from the defaults', () => {
+  const s = stateOf(deskN([[sys(), blk({ query: 'q' })], [sys(), blk({ query: 'q' })]], undefined, { replies: [[rp('text'), rp('tool_use')], [rp('text'), rp('tool_use')]] }))
+  s.ctx.api.get.mockReturnValue(new Promise(() => {}))
+  const { win, paint } = mount(s)
+  const second = () => win.querySelectorAll<HTMLElement>('.cwreply .cblk[data-rp]')[1]
+  expect(second().classList.contains('collapsed')).toBe(false)
+  act(() => { fireEvent.click(second().querySelector('.cbtog')!) })
+  expect(second().classList.contains('collapsed')).toBe(true)
+  paint()
+  expect(second().classList.contains('collapsed')).toBe(true)
+  s.playhead = 1
+  paint({ kind: 'step', busy: false })
+  expect(second().classList.contains('collapsed')).toBe(false)
+})
+
+// what an item root says, without the ids a mount makes up (useId)
+const sigOf = (el: Element) => [el.className, ...[el, ...el.querySelectorAll('*')].map((e) => [...e.attributes].filter((a) => a.name.startsWith('data-') || a.name === 'class' || a.name === 'aria-expanded').map((a) => `${a.name}=${a.value}`).join(' ')), el.textContent].join('\n')
+function rng(seed: number) { let a = seed >>> 0 || 1; return () => ((a = Math.imul(a ^ (a >>> 13), 0x5bd1e995) + 0x9e3779b9 >>> 0) / 4294967296) }
+
+test('2.3 #22 · 1.4:114: across random steps the patched window equals a fresh mount of the step, and an item whose key stays keeps its element', async () => {
+  let kept = 0, compared = 0
+  for (const seed of [1, 2, 3, 4]) {
+    const desk = await deskFrom(world(seed).get(), 'S'), r = rng(seed)
+    for (const lane of buildLanes(desk)) {
+      const n = lane.calls.length, s = stateOf(desk, Math.floor(r() * n), { anchor: lane })
+      s.ctx.api.get.mockReturnValue(new Promise(() => {}))
+      const { win, paint } = mount(s)
+      for (let k = 0; k < 12; k++) {
+        const before = new Map([...win.querySelectorAll<HTMLElement>('.cwit')].map((w) => [w.dataset.key!, w.firstElementChild]))
+        // a neighbour most of the time (a scrub), a jump otherwise; the reader opens rows and pins a compare step now and then
+        s.playhead = r() < 0.7 ? Math.max(0, Math.min(n - 1, s.playhead + (r() < 0.5 ? -1 : 1))) : Math.floor(r() * n)
+        if (r() < 0.3 && s.curKeys && s.curKeys.length) s.openBlocks.add(s.curKeys[Math.floor(r() * s.curKeys.length)])
+        if (r() < 0.1) s.diffRef = r() < 0.5 ? null : Math.floor(r() * n)
+        const top = win.scrollTop
+        paint({ kind: 'step', busy: false })
+        // a landing that moved the box drew the new list at the old position first: what left that range was let go (the virtual
+        // list); with the box where it was, the step is one commit and every key drawn on both sides is the same element
+        if (win.scrollTop === top) for (const w of win.querySelectorAll<HTMLElement>('.cwit')) {
+          const was = before.get(w.dataset.key!)
+          if (was) { expect(w.firstElementChild, `seed ${seed} ${w.dataset.key}`).toBe(was); kept++ }
+        }
+        act(() => { win.scrollTo({ top: 0 }) }) // the fresh mount starts at the top
+        const fresh = render(<Window desk={reactView(s, () => {}, () => {})} />), fwin = fresh.container.querySelector('#ctxwin') as HTMLElement
+        expect(drawn(win), `seed ${seed} step ${s.playhead}`).toEqual(drawn(fwin))
+        for (const key of drawn(win)) { expect(sigOf(wrapOf(win, key)!.firstElementChild!), key).toBe(sigOf(wrapOf(fwin, key)!.firstElementChild!)); compared++ }
+        fresh.unmount()
+      }
+      cleanup()
+    }
+  }
+  expect(kept).toBeGreaterThan(0); expect(compared).toBeGreaterThan(0)
+})

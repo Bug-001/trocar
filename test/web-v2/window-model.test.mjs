@@ -4,10 +4,13 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { buildLanes, anchorLane } from '../../web/legacy/replay/lanes.mjs'
 import { stepOf } from '../../web/legacy/replay/model.mjs'
-import { setDeskMode, loadBodies } from '../../web/legacy/replay/cell.mjs'
+import { setDeskMode, loadBodies, bodyCache } from '../../web/legacy/replay/cell.mjs'
 import { arrived, windowItems, landed, landingFor } from '../../web/src/screens/replay/window-model.mjs'
-import { refPending } from '../../web/legacy/replay/analysis.mjs'
+import { refPending, QUIET_CAUSES } from '../../web/legacy/replay/analysis.mjs'
+import { cacheBreak } from '../../src/view/analyze.mjs'
+import * as W from '../../web/legacy/labels/replay.mjs'
 import { deskOf, world, deskFrom } from './desk-world.mjs'
+import { boardHome, serveBoard } from './real-face.mjs'
 
 let rn = 0
 const blk = (o = {}) => ({ sec: 'messages', role: 'user', kind: 'text', head: { role: 'user', tag: 'user', label: 'b' }, preview: 'p', chars: 5, bytes: 5, ref: `s/m#R::${rn++}-9`, ...o })
@@ -19,7 +22,7 @@ const stateOf = (desk, playhead = 0, extra = {}) => {
   const lanes = buildLanes(desk)
   return { desk, lanes, anchor: anchorLane(lanes), playhead, diffRef: null, navOpen: new Set(['cwremoved']), openBlocks: new Set(), turnFold: new Map(), turnLanded: new Set(), ctx: {}, ...extra }
 }
-const desk1 = (blocks, rows = blocks.map(() => ({})), extra = {}) => deskOf([{ kind: 'main', rows: rows.map((r) => ({ rec: { request: { model: 'm' } }, ...r })), blocks: extra.held === false ? undefined : blocks, replies: extra.replies }])
+const desk1 = (blocks, rows = blocks.map(() => ({})), extra = {}) => deskOf([{ kind: 'main', rows: rows.map((r) => ({ rec: { request: { model: 'm' } }, ...r })), blocks: extra.held === false ? undefined : blocks, replies: extra.replies, details: extra.details }])
 const flatOf = (s) => stepOf(s.desk, s.anchor.calls[s.playhead].rid).flat
 const ALL_OPEN = { has: () => true, get: () => true } // a fold memory that holds every turn open
 // every step of the generated desks, as a state at its playhead
@@ -191,3 +194,184 @@ test('2.3 #13: a reply row says what its definition\'s head says, a server-side 
   const reply = windowItems(stateOf(desk1([[sys(), blk()]], undefined, { replies: [parts] }))).items.find((it) => it.type === 'reply')
   assert.deepEqual(reply.rows.map((r) => r.tag), parts.map((d) => d.head.tag))
 })
+
+// ── the window's items over constructed steps (1.4 #3 #5 #11 · 2.2 #1 · 2.3 #3 #6 #7 #13) ─────────────────────────────────
+const open = (s) => windowItems({ ...s, turnFold: ALL_OPEN }).items
+const ofType = (items, t) => items.filter((it) => it.type === t)
+// a lane of two steps: step 1's list against step 0 as its 缓存对比步; `cause` on step 1
+const pair = (a, b, cause = 'content-changed', idx = 1, row1 = {}) => desk1([a, b], [{}, { cacheBreak: { cause, idx, firstCall: false, refRid: 'R0-0' }, ...row1 }])
+// the item after the change line (its removed list between) is the request row at `idx`
+const afterLine = (items) => { const i = items.findIndex((it) => it.type === 'chline'); return i < 0 ? null : items.slice(i + 1).find((it) => it.type !== 'removed') }
+
+test('1.4 #11: no request → ⑦ alone; unparsed → ⑥ with errMsg on its own item and on no other item', () => {
+  const desk = desk1([[blk()], [blk()]], [{ rec: null }, { unparsed: true, errMsg: 'ERR-unparse-zz' }])
+  const none = windowItems(stateOf(desk, 0))
+  assert.equal(none.state, 'noreq'); assert.deepEqual(none.items.filter((it) => it.type !== 'fid').map((it) => it.type), ['noreq'])
+  const bad = windowItems(stateOf(desk, 1))
+  assert.equal(bad.state, 'unparsed'); assert.equal(ofType(bad.items, 'unparsed')[0].errMsg, 'ERR-unparse-zz')
+  for (const it of bad.items.filter((x) => x.type !== 'unparsed')) assert.ok(!JSON.stringify(it).includes('ERR-unparse-zz'), `${it.type} carries the reason`)
+})
+
+test('2.3 #7 · 1.4 #3 #11: the change line iff the cause is not quiet, right before row cacheBreak.idx, naming the reference step, no byte offset; the structural hint iff no block declares cc', () => {
+  const a = [sys({ key: 's' }), blk({ key: 'm1' })], b = [sys({ key: 's' }), blk({ key: 'm2' }), blk({ key: 'm3' })]
+  for (const cause of ['first-call', 'append', 'volatile-nonce-only', 'compaction', 'tool-array-reorder', 'json-key-reorder', 'content-changed']) {
+    const items = open(stateOf(pair(a, b, cause), 1)), line = ofType(items, 'chline')
+    assert.equal(line.length, QUIET_CAUSES.has(cause) ? 0 : 1, cause)
+    if (!line.length) continue
+    assert.equal(afterLine(items).type, 'row'); assert.equal(afterLine(items).bi, 1, `${cause}: before block idx`)
+    assert.equal(line[0].k, 1, `${cause}: the reference step R0-0 is step 1`)
+    assert.equal(line[0].cause, cause); assert.equal(line[0].compaction, cause === 'compaction')
+    assert.ok(!('byteOffset' in line[0]) && !('byteContext' in line[0]), 'no byte offset on the line')
+    assert.equal(line[0].auto, true, 'no cc: the structural hint')
+  }
+  assert.equal(ofType(open(stateOf(pair(a, [b[0], { ...b[1], cc: { type: 'ephemeral' } }, b[2]]), 1)), 'chline')[0].auto, false, 'cc: no hint')
+  assert.equal(ofType(open(stateOf(pair(a, b, 'content-changed', 1, { error: 'boom', status: 500 }), 1)), 'chline').length, 1, 'a failed step keeps its line')
+})
+
+test('1.4 #3 · 2.3 #3: two steps differing in a volatile block alone reduce to volatile-nonce-only: no change line, the volatile row has its mark and no 「新」; cc → the cache mark', () => {
+  const a = [sys({ key: 's', cc: { type: 'ephemeral' } }), blk({ key: 'v1', volatile: true }), blk({ key: 'q' })]
+  const b = [a[0], blk({ key: 'v2', volatile: true }), a[2]]
+  const brk = cacheBreak(a, b)
+  assert.equal(brk.cause, 'volatile-nonce-only')
+  const items = open(stateOf(desk1([a, b], [{}, { cacheBreak: { ...brk, refRid: 'R0-0' } }]), 1)), rows = ofType(items, 'row')
+  assert.deepEqual(ofType(items, 'chline'), [])
+  for (const r of rows) {
+    assert.equal(!!r.marks.cacheMark, !!r.b.cc, `bi ${r.bi}: the cache mark iff cc`)
+    assert.equal(r.marks.volatile, !!r.b.volatile)
+    if (r.b.volatile) assert.equal(r.marks.isNew, false, 'a volatile row is never 「新」')
+  }
+  assert.ok(rows.some((r) => r.marks.volatile) && rows.some((r) => r.marks.cacheMark))
+})
+
+test('2.3 #6: 「新」 = fh not in the reference list; the removed list = the reference fh not here; a pinned step moves them; quiet or unheld reference: none', () => {
+  const ref = [sys({ key: 's' }), blk({ key: 'x' }), blk({ key: 'gone' })], cur = [sys({ key: 's' }), blk({ key: 'x' }), blk({ key: 'added' })]
+  const items = open(stateOf(pair(ref, cur, 'content-changed', 2), 1))
+  const newBis = (its) => ofType(its, 'row').filter((r) => r.marks.isNew).map((r) => r.bi)
+  assert.deepEqual(newBis(items), [2])
+  assert.deepEqual(ofType(items, 'removed').flatMap((r) => r.blocks.map((b) => b.key)), ['gone'])
+  // a step that is not the previous one, pinned: the marks follow it; the default is the 缓存对比步 (refRid)
+  const d3 = desk1([[blk({ key: 'only0' })], ref, cur], [{}, {}, { cacheBreak: { cause: 'content-changed', idx: 0, firstCall: false, refRid: 'R0-1' } }])
+  assert.deepEqual(newBis(open(stateOf(d3, 2, { diffRef: 0 }))), [0, 1, 2])
+  assert.deepEqual(newBis(open(stateOf(d3, 2))), [2])
+  // no change line → no removed list; a quiet step still marks its new block
+  const q = open(stateOf(pair(ref, cur, 'append', 2), 1))
+  assert.deepEqual(ofType(q, 'removed'), []); assert.deepEqual(newBis(q), [2])
+  // the reference step's lane not held: no 「新」, no removed list
+  const split = deskOf([{ kind: 'main', rows: [{ rec: {} }, { rec: {}, cacheBreak: { cause: 'content-changed', idx: 0, firstCall: false, refRid: 'R1-0' } }], blocks: [cur, cur] }, { kind: 'subagent', rows: [{ rec: {} }] }])
+  const s = stateOf(split, 1)
+  s.anchor = { ...s.anchor, calls: [split.rows.get('R1-0'), split.rows.get('R0-1')], ridLocal: new Map([['R1-0', 0], ['R0-1', 1]]) }
+  const u = open(s)
+  assert.deepEqual(newBis(u), []); assert.deepEqual(ofType(u, 'removed'), [])
+  // only where cache_control sits differs (the bids differ, the fh are equal): no 「新」, no removed list
+  const ca = [sys({ key: 's' }), blk({ key: 'm', cc: { type: 'ephemeral' } }), blk({ key: 'n' })], cb = [sys({ key: 's' }), blk({ key: 'm' }), blk({ key: 'n', cc: { type: 'ephemeral' } })]
+  const cdesk = pair(ca, cb, 'content-changed', 1)
+  assert.notDeepEqual(stepOf(cdesk, 'R0-0').flat.map((x) => x.bid), stepOf(cdesk, 'R0-1').flat.map((x) => x.bid))
+  const c = open(stateOf(cdesk, 1))
+  assert.deepEqual(newBis(c), []); assert.deepEqual(ofType(c, 'removed'), [])
+})
+
+test('1.4 #5: a compaction step\'s change line stands before the first conversation block, or at cacheBreak.idx when the first prompt stays; never in tools or system; its removed list; one lane', () => {
+  const before = [tool({ key: 't' }), sys({ key: 's' }), blk({ key: 'q1', query: 'first' }), say({ key: 'a1' }), blk({ key: 'q2', query: 'second' }), say({ key: 'a2' })]
+  const rewritten = [before[0], before[1], blk({ key: 'sum' }), blk({ key: 'q3', query: 'third' })]
+  const kept = [before[0], before[1], before[2], blk({ key: 'sum' }), blk({ key: 'q3', query: 'third' })]
+  for (const [cur, idx] of [[rewritten, 2], [kept, 3]]) {
+    const desk = pair(before, cur, 'compaction', idx), items = open(stateOf(desk, 1)), at = items.findIndex((it) => it.type === 'chline')
+    assert.equal(items[at].compaction, true)
+    assert.equal(afterLine(items).bi, idx); assert.equal(afterLine(items).b.sec, 'messages')
+    assert.ok(!items.slice(at).some((it) => it.type === 'row' && it.b.sec !== 'messages'), 'tools and system rows come before the line')
+    assert.ok(ofType(items, 'removed')[0].blocks.length > 0, 'the rewritten history is in the removed list')
+    assert.equal(buildLanes(desk).length, 1, 'no fork')
+  }
+})
+
+test('2.2 #1: a card head carries its preview (≤ 90, a prefix of the prompt), its action summary iff it has actions, its block count, and no prompt when it continues the previous one', () => {
+  const long = 'a  prompt\nthat runs on '.repeat(12)
+  const flat = [sys(), say({ key: 'c' }), blk({ key: 'q', query: long }), say({ kind: 'tool_use' }), say({ kind: 'tool_use' }), say({ kind: 'thinking' }), blk({ kind: 'tool_result' }), blk({ key: 'q2', query: 'just this' })]
+  const cards = ofType(open(stateOf(desk1([flat]))), 'card')
+  assert.deepEqual(cards.map((c) => c.query), [false, true, true], 'the first card continues the previous prompt')
+  assert.deepEqual(cards.map((c) => c.n), [1, 5, 1], 'each card counts its blocks')
+  const folded = long.replace(/\s+/g, ' ').trim()
+  assert.ok(cards[1].label.length <= 90 && folded.startsWith(cards[1].label) && cards[1].label.length < folded.length)
+  assert.equal(cards[2].label, 'just this')
+  assert.ok(cards[1].acts, 'tool calls, thinking and a tool result: an action summary'); assert.equal(cards[2].acts, '', 'a lone prompt: none')
+})
+
+const replyDesk = (replies, rows) => desk1(replies.map(() => [sys({ key: 's' }), blk({ key: 'q', query: 'q' })]), rows || replies.map(() => ({})),
+  { replies, details: replies.map(() => ({ norm: { stop_reason: 'STOP-q' } })) })
+const replyOfS = (s) => ofType(windowItems(s).items, 'reply')[0]
+
+test('2.3 #13: the reply item — a row per definition with its own mark, the stop reason on the reply and the last row; parsed without a span; partial changes no row; no parts; unproven body; opaque closed; assembled; failed', () => {
+  const parts = [rp('thinking'), rp('text', { ref: 's/m#R::10-20' }), rp('tool_use'), rp('thinking', { ff: { faithfulness: 'opaque' } })]
+  const r = replyOfS(stateOf(replyDesk([parts])))
+  assert.equal(r.rows.length, parts.length); assert.equal(r.stop, 'STOP-q')
+  assert.deepEqual(r.rows.map((x) => x.last), parts.map((_, i) => i === parts.length - 1))
+  assert.deepEqual(r.rows.map((x) => x.mark), ['verbatim', 'parsed', 'verbatim', 'opaque'], 'on its resp span: proven; no span: parsed; a known value: that value')
+  assert.deepEqual(r.rows.map((x) => x.open), [true, true, true, false], 'every row opens but a no-plaintext one')
+  assert.equal(r.rows[3].hideChars, true); assert.ok(r.rows.slice(0, 3).every((x) => !x.hideChars))
+  assert.ok(r.rows.every((x) => x.key.startsWith('rp:') && !('bi' in x)))
+  // a reader's flip is its key in openBlocks
+  const s = stateOf(replyDesk([[rp('text'), rp('tool_use')]]))
+  s.openBlocks.add(replyOfS(s).rows[1].key)
+  assert.deepEqual(replyOfS(s).rows.map((x) => x.open), [true, false])
+  // partial bytes: no row changes its mark; no parts: rows [] with the stop, empty only when the bytes are whole
+  assert.deepEqual(replyOfS(stateOf(replyDesk([[rp('text')]], [{ respIncomplete: { truncated: true } }]))).rows.map((x) => x.mark), ['verbatim'])
+  const none = replyOfS(stateOf(replyDesk([[]])))
+  assert.deepEqual([none.rows, none.stop, none.empty], [[], 'STOP-q', 'empty'])
+  assert.equal(replyOfS(stateOf(replyDesk([[]], [{ respIncomplete: { undecoded: true } }]))).empty, 'unread')
+  // a failed step: no rows, its reason on the item
+  const failed = replyOfS(stateOf(replyDesk([[rp('text')]], [{ error: 'ERR-boom-q', status: 500 }])))
+  assert.deepEqual([failed.rows, failed.failed.reason], [[], 'ERR-boom-q'])
+  // an opened row whose body came back unproven keeps that mark on every call
+  const ref = 's/m#R::resp.raw::9001-9', u = stateOf(replyDesk([[rp('text', { ref })]]))
+  bodyCache.set(ref, { status: 'absent' })
+  try { for (let k = 0; k < 2; k++) assert.equal(replyOfS(u).rows[0].mark, 'notfetched') } finally { bodyCache.delete(ref) }
+  // assembled from the stream: only while an open row reads stream events in Readable
+  const aref = 's/m#R::resp.raw::9100-9', view = { r: { as: 'text', f: { body: ['text'] } }, body: { text: 'text' } }
+  const assembled = () => replyOfS(stateOf(replyDesk([[rp('text', { ref: aref }), rp('tool_use')]]))).assembled
+  try {
+    setDeskMode('read', { storage: null })
+    bodyCache.set(aref, { status: 'ok', text: 'text', view })
+    assert.equal(assembled(), false, 'no events')
+    bodyCache.set(aref, { status: 'ok', text: 'text', view: { ...view, events: 3 } })
+    assert.equal(assembled(), true)
+    setDeskMode('raw', { storage: null })
+    assert.equal(assembled(), false, 'Raw shows the bytes')
+  } finally { bodyCache.delete(aref); setDeskMode('raw', { storage: null }) }
+})
+
+// the real face: the demo session through the real server
+async function demoDesk(fn) {
+  const face = await serveBoard(boardHome())
+  try {
+    const id = (await face.get('sessions')).doc.sessions[0].session_id
+    await fn(await deskFrom((n, p) => face.get(n, p).then((r) => r.doc), id))
+  } finally { await face.close() }
+}
+
+test('1.4 #1 · 2.3 #13 the real face: every main step of the demo session keeps whitelist order, one reply row per reply definition', () => demoDesk((desk) => {
+  const s = stateOf(desk)
+  for (let p = 0; p < s.anchor.calls.length; p++) {
+    s.playhead = p
+    const items = windowItems(s).items, st = stepOf(desk, s.anchor.calls[p].rid)
+    whitelist(items, `step ${p + 1}`)
+    if (st.held && !s.anchor.calls[p].error) assert.equal(ofType(items, 'reply')[0].rows.length, st.reply.length)
+  }
+}))
+
+// 2.3 §保真标 证明规则 over the real wire: a definition says its fidelity in `ff.faithfulness` (3.5 §会话读)
+test('2.3 #2 the real face: each request row\'s fidelity is what its definition sends, never unknown for a known value', () => demoDesk((desk) => {
+  const s = stateOf(desk, 0, { turnFold: ALL_OPEN }), KNOWN = new Set(Object.keys(W.FF_WORD))
+  let seen = 0
+  for (let p = 0; p < s.anchor.calls.length; p++) {
+    s.playhead = p
+    const st = stepOf(desk, s.anchor.calls[p].rid)
+    if (!st.held) continue
+    for (const r of ofType(windowItems(s).items, 'row')) {
+      const d = st.flat[r.bi], v = d.ff && d.ff.faithfulness
+      seen++
+      assert.equal(r.marks.ff === 'unknown', v != null && !KNOWN.has(v), `step ${p + 1} row ${r.bi}: ff ${JSON.stringify(d.ff)} gave ${r.marks.ff}`)
+      if (d.ref && (v == null || v === 'verbatim')) assert.equal(r.marks.ff, 'verbatim', `step ${p + 1} row ${r.bi} (${d.sec})`)
+    }
+  }
+  assert.ok(seen > 0)
+}))

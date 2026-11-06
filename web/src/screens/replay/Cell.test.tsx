@@ -417,3 +417,14 @@ test('D71③: a grown leaf survives its <Activity> being hidden and shown', asyn
   expect(leaf.firstChild).toBe(node)
   expect(bytesOf(leaf)).toBe(grown)
 })
+
+test('2.3 #40: a tool definition with no description or schema on the wire and no metadata fidelity says no schema was dropped', () => {
+  const cell = cellOf({ sec: 'tools', kind: 'tool', bid: 'W40', name: 'web_search', ff: { unaddressable: 'inline' }, inline: {} })
+  for (const mode of ['raw', 'read'] as const) {
+    setDeskMode(mode)
+    const { container } = render(<Cell cell={cell} api={noApi} />)
+    expect(container.textContent, mode).not.toContain(W.SCHEMA_NOT_KEPT)
+    expect(container.textContent, mode).not.toContain(W.TOOL_METADATA_ONLY)
+    cleanup()
+  }
+})
