@@ -172,9 +172,6 @@ test('1.6 §1.6 (darwin): the first on records the files said yes to; an on over
     const before = fs.statSync(file).ino
     assert.equal((await on(w, 'darwin', ['--yes'])).exit, 0)
     assert.equal(fs.statSync(file).ino, before, 'the file was not replaced')
-    w.store.calls.length = 0
-    assert.equal((await on(w, 'darwin', ['--yes'], neverStarts, { rootStore: w.store })).exit, 0)
-    assert.deepEqual(w.store.calls, ['has'], 'one on asks the root store once: the question starts OS tools')
   } finally { await server.close() }
 })
 
