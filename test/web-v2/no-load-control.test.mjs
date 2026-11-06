@@ -1,17 +1,16 @@
 // test/web-v2/no-load-control.test.mjs — 2.3 #10 #21 #24 · 1.4 ⑧: no state of the replay desk has a load control. Over
 // generated session worlds (desk-world.mjs) × {held, unheld at 0 ms / 200 ms, lane landed} × {pending first, pending later, none}
-// × {truncated or not} × {reply body in flight, failed, read}, the window, the step bar, the session head and the raw panel are
-// rendered as the desk renders them: no [data-load-step]; nothing a reader can press inside an aria-busy frame or the read-state
-// line; an unheld step keeps the window drawn before it for 150 ms (frameFor), then shows its row's step bar and empty busy frames;
-// an open row whose bytes are on the way is the sized preview box; the read-state line is there exactly while `pending` is.
+// × {truncated or not}, the step bar and the session head are rendered as the desk renders
+// them: no [data-load-step]; nothing a reader can press inside an aria-busy frame or the read-state line; an unheld step keeps what
+// was drawn for 150 ms (frameFor), then shows its row's step bar; the read-state line is there exactly while `pending` is. The
+// window's half is the React window's DOM: Window.test.tsx '2.3 #10' (an unheld step's frames: aria-busy, nothing to press) and
+// Cell.test.tsx '2.3 #21' (a body on the way is its sized preview box with no control).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { buildLanes, anchorLane } from '../../web/legacy/replay/lanes.mjs'
 import { stepOf } from '../../web/legacy/replay/model.mjs'
-import { ctxWindowUnits, ctxWindowHtml, renderContextWindow } from '../../web/legacy/replay/ctxwin.mjs'
 import { stepBarHtml } from '../../web/legacy/replay/stepbar.mjs'
 import { renderSessionHead } from '../../web/legacy/replay/header.mjs'
-import { bodyCache } from '../../web/legacy/replay/cell.mjs'
 import { frameFor } from '../../web/legacy/replay/replay.mjs'
 import { world, deskFrom, readLane } from './desk-world.mjs'
 
@@ -44,7 +43,6 @@ function noControl(html, what) {
   assert.ok(!/data-load-step/.test(html), `${what}: a load-step control`)
   for (const r of [...regions(html, BUSY_ATTR), ...regions(html, READ_STATE)]) assert.ok(!PRESSABLE.test(r), `${what}: something to press inside a busy frame or the read-state line: ${r}`)
 }
-const text = (html) => html.replace(/<[^>]*>/g, '').trim()
 
 async function variants(seed) {
   const w = world(seed), get = w.get(), held = await deskFrom(get, 'S')
@@ -54,63 +52,38 @@ async function variants(seed) {
   return { held, unheld, landed, key }
 }
 
-test('2.3 #10 #21 #24 · 1.4 ⑧: no load control in any desk state; unheld keeps 150 ms, then row + empty busy frames; in-flight bodies are sized boxes; read-state iff pending', async () => {
-  let unheldSeen = 0, boxes = 0
+test('2.3 #10 #21 #24 · 1.4 ⑧: no load control in any desk state; unheld keeps 150 ms, then the row\'s step bar; read-state iff pending', async () => {
+  let unheldSeen = 0
   for (const seed of SEEDS) {
     const v = await variants(seed)
     const n = buildLanes(v.held).find((l) => l.id === v.key).calls.length
     for (const playhead of [0, Math.floor(n / 2), n - 1])
       for (const pending of [{ done: 2, total: 9 }, 'later', null])
-        for (const truncated of [null, { shown: 3, total: 9, file_mb: 12 }])
-          for (const body of ['flight', 'failed', 'read']) {
+        for (const truncated of [null, { shown: 3, total: 9, file_mb: 12 }]) {
             const fix = (d) => {
               const x = structuredClone(d)
               x.pending = pending === 'later' ? { done: 7, total: 9 } : pending; x.firstPending = pending !== 'later'; x.truncated = truncated
               return x
             }
-            // the reply bodies of the playhead's step: on the way (nothing cached), failed, or read
-            const cache = (s) => {
-              const st = stepOf(s.desk, s.anchor.calls[s.playhead].rid)
-              for (const d of st.reply || []) {
-                bodyCache.delete(d.ref)
-                if (body === 'failed') bodyCache.set(d.ref, { status: 'error', error: 'HTTP 503' })
-                if (body === 'read') bodyCache.set(d.ref, { status: 'ok', text: 'bytes', verbatim: true, fidelity: 'verbatim' })
-              }
-              return st
-            }
             for (const which of ['held', 'unheld', 'landed']) {
               const s = state(fix(v[which]), playhead), call = s.anchor.calls[s.playhead]
-              const st = cache(s)
-              const what = `seed ${seed} step ${s.playhead} ${which} pending=${JSON.stringify(pending)} trunc=${!!truncated} body=${body}`
+              const st = stepOf(s.desk, call.rid)
+              const what = `seed ${seed} step ${s.playhead} ${which} pending=${JSON.stringify(pending)} trunc=${!!truncated}`
               const head = fake(); renderSessionHead(head, s)
-              const win = ctxWindowHtml(s), bar = stepBarHtml(s)
-              for (const [h, part] of [[win, 'window'], [bar, 'step bar'], [head.innerHTML, 'session head']]) noControl(h, `${what} ${part}`)
+              const bar = stepBarHtml(s)
+              for (const [h, part] of [[bar, 'step bar'], [head.innerHTML, 'session head']]) noControl(h, `${what} ${part}`)
               assert.equal(READ_STATE.test(head.innerHTML), pending != null, `${what}: the read-state line is there exactly while pending`)
               if (which === 'unheld') {
                 unheldSeen++
-                // < 150 ms: what was drawn stays (the previous step's window units are not replaced)
+                // < 150 ms: what was drawn stays; ≥ 150 ms: the step bar is the new row's (the window's busy frames: Window.test.tsx 2.3 #10)
                 assert.equal(frameFor({ held: st.held, since: 1000, now: 1000 }), 'keep', what)
-                const prev = state(v.held, Math.max(0, s.playhead - 1)), drawn = ctxWindowUnits(prev), el = fake({ __units: drawn })
-                renderContextWindow(el, s)
-                assert.equal(el.__units, drawn, `${what}: the window changed before 150 ms`)
-                // ≥ 150 ms: the step bar is the new row's; the rows are aria-busy frames with no text
                 assert.equal(frameFor({ held: st.held, since: 1000, now: 1000 + BUSY + 50 }), 'busy', what)
-                renderContextWindow(el, s, { busy: true })
                 assert.ok(bar.includes(call.ts), `${what}: the step bar is not the new row's`)
-                const frames = regions(el.innerHTML, BUSY_ATTR)
-                assert.ok(frames.length > 0, `${what}: no busy frame`)
-                for (const f of frames) assert.equal(text(f), '', `${what}: a busy frame says something`)
                 continue
               }
               assert.equal(frameFor({ held: st.held, since: 0, now: 0 }), 'rows', what)
-              // an open reply row whose bytes are on the way: the preview box, sized by its height style
-              if (body === 'flight' && /data-rp=/.test(win)) {
-                boxes++
-                assert.match(win, /<pre class="cellpend"[^>]*style="--cl:\d+"/, `${what}: no sized preview box`)
-              }
-              if (body !== 'flight') assert.ok(!/class="cellpend"/.test(win), `${what}: a preview box for a body that answered`)
             }
           }
   }
-  assert.ok(unheldSeen > 0 && boxes > 0, 'the generated states cover unheld steps and bodies in flight')
+  assert.ok(unheldSeen > 0, 'the generated states cover unheld steps')
 })

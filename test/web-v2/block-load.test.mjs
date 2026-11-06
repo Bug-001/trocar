@@ -1,10 +1,10 @@
-// test/web-v2/block-load.test.mjs — fetching a block's bytes (replay/blocks.mjs · ctxwin.mjs). What is cached, and what is asked
-// again: a definitive answer (the bytes; a 404 "no such record") stays, a failure of the transport or the server does not, and a row
-// whose fetch failed is not "filled" — collapsing and reopening it asks again. No DOM: the elements are minimal fakes.
+// test/web-v2/block-load.test.mjs — fetching a block's bytes (replay/blocks.mjs · cell.mjs). What is cached, and what is asked
+// again: a definitive answer (the bytes; a 404 "no such record") stays, a failure of the transport or the server does not, and a
+// drawer row whose fetch failed is not "filled" — collapsing and reopening it asks again (the window's own reopen: Window.test.tsx
+// 2.3 §读失败). No DOM: the elements are minimal fakes.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { blockGot, bodyCache, loadBody, fillBody, isRetryable, noteBodyFidelity } from '../../web/legacy/replay/blocks.mjs'
-import { toggleCtxBlock } from '../../web/legacy/replay/ctxwin.mjs'
+import { blockGot, bodyCache, loadBody, fillBody, isRetryable } from '../../web/legacy/replay/blocks.mjs'
 
 const REF = 'sess-a/main#rec1::0-40'
 const blockB = { sec: 'messages', kind: 'text', role: 'user', text_ref: REF } // addressed: no inline body
@@ -16,14 +16,10 @@ function fakeApi(...answers) {
   const api = { calls: 0, get: async (name) => { assert.equal(name, 'block'); api.calls++; return answers.length > 1 ? answers.shift() : answers[0] } }
   return api
 }
-// the part of an element fillBody / toggleCtxBlock touch
+// the part of an element fillBody touches
 function fakeBody() {
   const el = { innerHTML: '', dataset: {}, isConnected: true, querySelector: (sel) => (sel === 'pre[data-ref]' && el.innerHTML.includes('data-ref=') ? {} : null) }
   return el
-}
-function fakeRow(bc) {
-  const cls = new Set(['collapsed'])
-  return { dataset: { bi: '0' }, classList: { contains: (c) => cls.has(c), toggle: (c) => (cls.has(c) ? cls.delete(c) : cls.add(c)) }, querySelector: (sel) => (sel === '.cbc' ? bc : null) }
 }
 const fresh = () => bodyCache.clear()
 
@@ -68,28 +64,6 @@ test('fillBody: a failed fetch is shown but leaves the body un-"filled"; bytes a
   assert.equal(bc.dataset.filled, '1', 'absent is a final answer')
 })
 
-test('toggleCtxBlock: reopening a row whose fetch failed asks again; a row that came back (or is absent) does not', async () => {
-  const open = async (api) => { // open, let the fetch settle, collapse, reopen, let it settle
-    const bc = fakeBody(), row = fakeRow(bc), s = { openBlocks: new Set(), curFlat: [blockB], ctx: { api } }
-    toggleCtxBlock(s, row); await new Promise((r) => setImmediate(r))
-    toggleCtxBlock(s, row) // collapse
-    toggleCtxBlock(s, row); await new Promise((r) => setImmediate(r)) // reopen
-    return { bc, s }
-  }
-  fresh(); let api = fakeApi(FAIL(500), OK)
-  let r = await open(api)
-  assert.equal(api.calls, 2, 'failed once, so the reopen asked again'); assert.match(r.bc.innerHTML, /the bytes/); assert.equal(r.bc.dataset.filled, '1')
-
-  fresh(); api = fakeApi(OK)
-  await open(api); assert.equal(api.calls, 1, 'a row that came back is not fetched again')
-
-  fresh(); api = fakeApi(FAIL(404, 'no such record'))
-  r = await open(api); assert.equal(api.calls, 1, 'absent is cached and final')
-
-  fresh(); api = fakeApi(FAIL(0, 'Failed to fetch'))
-  r = await open(api); assert.equal(api.calls, 2, 'a network failure retries on every open'); assert.match(r.bc.innerHTML, /Failed to fetch/)
-})
-
 test('the drawer: a row whose fetch failed asks again when it is reopened', async () => {
   const { wireDetail } = await import('../../web/legacy/replay/detail.mjs')
   const run = async (api) => {
@@ -106,16 +80,4 @@ test('the drawer: a row whose fetch failed asks again when it is reopened', asyn
   let body = await run(api); assert.equal(api.calls, 2); assert.match(body.innerHTML, /the bytes/)
   fresh(); api = fakeApi(OK); await run(api); assert.equal(api.calls, 1)
   fresh(); api = fakeApi(FAIL(404)); await run(api); assert.equal(api.calls, 1)
-})
-
-
-// 2.3 §保真标: a proven row's opened body that comes back unproven gets its visible mark on the spot, and the row stops telling a
-// screen reader "verbatim". The row as fillBody / showBody touch it: a head holding its spans as markup
-test('noteBodyFidelity: an unproven body upgrades the row and takes back its screen-reader verbatim', () => {
-  const head = { html: '<span class="cbrole">user</span><span class="sr-only">,verbatim</span>',
-    insertAdjacentHTML(_, h) { this.html += h },
-    querySelector(sel) { return /sr-only/.test(sel) && this.html.includes('sr-only') ? { remove: () => { this.html = this.html.replace(/<span class="sr-only">[^<]*<\/span>/, '') } } : null } }
-  const blk = { classList: {}, isConnected: true, dataset: { ff: 'verbatim' }, querySelector: (sel) => (/cbh/.test(sel) ? head : null), closest: () => null }
-  noteBodyFidelity(blk, { status: 'absent' })
-  assert.equal(blk.dataset.ff, 'notfetched'); assert.ok(head.html.includes('ffbadge')); assert.ok(!head.html.includes('sr-only'))
 })

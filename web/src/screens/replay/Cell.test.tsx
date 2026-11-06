@@ -11,7 +11,7 @@ import { renderKind } from '../../../legacy/replay/kinds.mjs'
 import * as C from '../../../legacy/labels/cells.mjs'
 import * as W from '../../../legacy/labels/replay.mjs'
 import { stepOf } from '../../../legacy/replay/model.mjs'
-import { deskFrom, world } from '../../../../test/web-v2/desk-world.mjs'
+import { deskFrom, deskOf, world } from '../../../../test/web-v2/desk-world.mjs'
 import { Cell, CellBar } from './Cell'
 
 type Seen = { cb: IntersectionObserverCallback, els: Set<Element> }
@@ -426,5 +426,20 @@ test('2.3 #40: a tool definition with no description or schema on the wire and n
     expect(container.textContent, mode).not.toContain(W.SCHEMA_NOT_KEPT)
     expect(container.textContent, mode).not.toContain(W.TOOL_METADATA_ONLY)
     cleanup()
+  }
+})
+
+test('2.3 #2: an opaque block opens on a placeholder in Readable, never on empty text, in the spec the wire brings and in the older one', () => {
+  const block = { type: 'thinking', thinking: '', signature: 'SIG-q' }
+  for (const r of [{ as: 'opaque', f: { body: ['block'] } }, { as: 'text' }]) {
+    // a definition as the lane wire sends it with no byte range: the reason at the top and in ff, the body inline
+    const d = { bid: 'OPQ', sec: 'messages', role: 'assistant', kind: 'thinking', head: { role: 'assistant', tag: 'thinking', label: 'thinking' }, preview: 'thinking', chars: 0, bytes: 0, r,
+      ref: null, unaddressable: 'no span', ff: { faithfulness: 'opaque', unaddressable: 'no span' }, inline: { block } }
+    const desk = deskOf([{ kind: 'main', rows: [{}], blocks: [[d]] }]), [rid] = [...desk.held.values()][0].steps.keys()
+    const b = stepOf(desk, rid).flat[0]
+    setDeskMode('read')
+    const { container, unmount } = render(<Cell cell={cellOf(b)} api={noApi} />)
+    expect(container.querySelector('.cell > .cellread')!.textContent!.trim(), JSON.stringify(r)).not.toBe('')
+    unmount()
   }
 })

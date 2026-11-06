@@ -7,7 +7,7 @@ import assert from 'node:assert/strict'
 import { outlineHtml, outlineEntries, queryStepLabels, wireOutline, jumpToResourceBlock } from '../../web/legacy/replay/outline.mjs'
 import { resourcesHtml } from '../../web/legacy/replay/resources.mjs'
 import { humanTurns, messageTurns } from '../../web/legacy/replay/analysis.mjs'
-import { openTurnFor, renderContextWindow } from '../../web/legacy/replay/ctxwin.mjs'
+import { windowItems } from '../../web/src/screens/replay/window-model.mjs'
 import { turnIsOpen } from '../../web/legacy/replay/fold.mjs'
 import { buildLanes, anchorLane } from '../../web/legacy/replay/lanes.mjs'
 import { stepOf, createDesk, applySession } from '../../web/legacy/replay/model.mjs'
@@ -48,23 +48,9 @@ test('「跳到变化处」 appears iff the window draws the 变化线 (the one 
   assert.ok(!J.test(outlineHtml(mk({ ...changed, rec: null }, false))), 'no request: nothing to land on')
 })
 
-// ── the jump into a folded turn (2.5 验收 #2 second half: a reader's click writes the fold memory) ───────────────────
-test('openTurnFor: a click into an explicitly folded card opens it AND writes the D12 memory; the automatic landing still loses to an explicit fold', () => {
-  const qA = blk({ query: '第一问', key: 'a1' }), midA = blk({ role: 'assistant', kind: 'text', key: 'a2' }), qB = blk({ query: '第二问', key: 'b1' })
-  const flat = [sys({ key: 's' }), qA, midA, qB, blk({ key: 'b2' })]
-  let persisted = 0
-  const s = stateOf(flat, { openBlocks: new Set(), turnFold: new Map([['a1', false]]), turnLanded: new Set(), persistFold: () => persisted++ })
-  const el = { _h: '', set innerHTML(v) { this._h = v }, get innerHTML() { return this._h }, querySelector: () => null, querySelectorAll: () => [] }
-  renderContextWindow(el, s) // the desk has already painted this step and run its landing
-  assert.match(el._h, /class="cwturn collapsed" data-anchor="a1"/, 'the reader folded the first card; the fold memory keeps it shut')
-  assert.equal(openTurnFor(el, s, 1), true, 'fi 1 (第一问) lives in that folded card: the outline click opens it')
-  assert.equal(s.turnFold.get('a1'), true, 'the open is written to the D12 fold memory (2.5 §跳转联动), not the ephemeral set')
-  assert.equal(persisted, 1, 'and persisted')
-  assert.equal(s.turnLanded.size, 0, 'the ephemeral set stays for the automatic landing only')
-  assert.match(el._h, /class="cwturn " data-anchor="a1"/, 'the window repainted with the card open — the block can be scrolled to')
-  assert.equal(openTurnFor(el, s, 3), false, 'a block in the (default-open) latest card: nothing to open')
-  assert.equal(persisted, 1, 'and nothing further persisted')
-  // the automatic landing on the same key WITHOUT a user click still respects the explicit fold (1.4's rule)
+// ── the fold memory (2.5 验收 #2: the window's reveal into a folded turn writes it — Window.test.tsx 2.3 #28) ───────────
+test('an explicit fold beats the automatic landing\'s ephemeral set', () => {
+  const flat = [sys({ key: 's' }), blk({ query: '第一问', key: 'a1' }), blk({ role: 'assistant', kind: 'text', key: 'a2' }), blk({ query: '第二问', key: 'b1' })]
   const t0 = messageTurns(flat)[0]
   assert.equal(turnIsOpen(new Map([['a1', false]]), flat, t0, 0, 1, new Set(['a1'])), false, 'an explicit fold beats the ephemeral landed set')
 })
@@ -139,13 +125,11 @@ test('every interactive outline row is focusable and Enter/Space route through t
 })
 
 // ── the jump-source identity (2.5 验收 #2: 点条必落对块 — data-jumpfi ⊆ the window's data-bi) ─────────────────────────
-test('jump-source identity: every data-jumpfi names a block the window actually drew (.cblk[data-bi])', () => {
+test('jump-source identity: every data-jumpfi names a row the window draws (.cblk[data-bi])', () => {
   const flat = [tool(), tool({ name: 'grep' }), sys(), blk({ query: '第一问' }), blk({ role: 'assistant', kind: 'text', query: null })]
   const s = stateOf(flat, { openBlocks: new Set(), turnFold: new Map(), turnLanded: new Set(), diffRef: null })
   const outline = outlineHtml(s)
-  const win = { _h: '', set innerHTML(v) { this._h = v }, get innerHTML() { return this._h }, querySelector: () => null, querySelectorAll: () => [] }
-  renderContextWindow(win, s)
-  const inWindow = new Set([...win.innerHTML.matchAll(/data-bi="(\d+)"/g)].map((m) => +m[1]))
+  const inWindow = new Set(windowItems(s).items.filter((it) => it.type === 'row').map((it) => it.bi)) // the rows Window.tsx draws as .cblk[data-bi]
   const jumps = [...outline.matchAll(/data-jumpfi="(\d+)"/g)].map((m) => +m[1])
   assert.ok(jumps.length, 'the fixture yields jump rows')
   for (const j of jumps) assert.ok(inWindow.has(j), `data-jumpfi=${j} must be a .cblk[data-bi] the window drew`)

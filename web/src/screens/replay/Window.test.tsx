@@ -573,6 +573,7 @@ test('2.3 #10: a step whose lane is not held is frames: aria-busy, no button, li
   expect(busy.getAttribute('aria-busy')).toBe('true')
   expect(busy.querySelectorAll('.cwframe[data-sec]').length).toBe(itemsOf(s).find((x) => x.type === 'frames')!.frames.length)
   expect(busy.querySelector('button, a, [tabindex]')).toBeNull()
+  expect(win.querySelector('[data-load-step]')).toBeNull() // 2.3 #24: no load control
 })
 
 test('2.3 #3: the cache mark iff the block declares one, the volatile mark iff it is volatile, never 「新」 on a volatile row', () => {
