@@ -24,7 +24,7 @@ const latest = (items) => { const t = items.map((i) => Date.parse(i.installed_at
 export const intactOf = (m, e, fs) => { try { return (e.kind === 'owned-file' ? judgeOwned({ manifest: m, file: e.path, fs }) : judgeEntry({ manifest: m, planned: e, fs })).action === 'skip-intact' } catch { return false } }
 
 /** The files a harness's `userCertFiles` keys name now, in the descriptor's order. */
-const userFilesOf = (desc, ctx) => (desc.proxyMode.userCertFiles || []).map((src) => readSrc(src, ctx)).filter((r) => r.set && typeof r.value === 'string').map((r) => r.value)
+const userFilesOf = (desc, ctx) => ((desc.proxyMode || {}).userCertFiles || []).map((src) => readSrc(src, ctx)).filter((r) => r.set && typeof r.value === 'string').map((r) => r.value)
 /** The install items that carry a harness's certificate: its own, and the pem-block in a user file its settings name that another harness's entry holds —
  *  one block per file, recorded once (4.11 P4 rule U, shared_with), yet it serves both. */
 const itemsFor = (desc, inst, ctx) => { const files = userFilesOf(desc, ctx); return inst.filter((i) => i.harness === desc.name || (i.kind === 'text' && i.format === 'pem-block' && files.includes(i.path))) }
@@ -44,28 +44,30 @@ function carrierLoss(m, desc, own, fs) {
   return null
 }
 
+/** The ids of this OS's present forms whose certificate needs a carrier of their own (not the root, its `when` holding): proxy mode's forms. */
+const carriedForms = (pm, os, ctx) => pm.forms.filter((f) => f.os.includes(os) && isPresent(f, ctx)).filter((f) => {
+  const c = f.cert === 'root' ? null : (pm.certs || {})[f.cert]
+  return c && !(c.when && holds(c.when, ctx) === false) // the root carries it: nothing per form, whether install saw the harness or not
+}).map((f) => f.id)
+
 /**
- * setupOf(desc, { os, manifest, ctx, root, fs }) → { state: 'ready' | 'needed' | 'unknown', missing: [{ form, what }], reason? } — 4.11 P4b, the ONE judgement
+ * setupOf(desc, { os, manifest, ctx, root, fs, forms }) → { state: 'ready' | 'needed' | 'unknown', missing: [{ form, what }], reason? } — 4.11 P4b, the ONE judgement
  * behind `status`'s `harnesses[h].setup` and `on`'s precondition ⑪ (D65④). Per present form of this OS whose carrier is not the root: its install items
  * (its own, and rule U's shared pem-block) absent → `carrier-absent`, changed → `carrier-overwritten`; the root gone from the user's store (`root.state`
  * 'missing'; pending / declined are install's own to-do, not setup) → one `{ form: null, what: 'root-missing' }`. `manifest` null = nothing installed;
  * `{ error }` = it could not be read → `unknown`, and so is a file that cannot be read (D38): never `ready`. Reads only; no OS question of its own.
+ * `forms`: those form ids handed in by driver mode (4.6: one per harness); null → read from the descriptor's proxyMode.
  */
-export function setupOf(desc, { os, manifest: m, ctx, root = null, fs = nodeFs }) {
+export function setupOf(desc, { os, manifest: m, ctx, root = null, fs = nodeFs, forms = null }) {
   const unknown = (reason) => ({ state: 'unknown', missing: [], reason })
   if (m && (m.error || m.unsupported)) return unknown(`the install record could not be read${m.error ? ` (${m.error})` : ''}`)
-  if (!desc || !desc.proxyMode) return unknown(`${desc ? desc.name : 'this harness'} has no proxy-mode description in this build`)
+  if (forms == null && (!desc || !desc.proxyMode)) return unknown(`${desc ? desc.name : 'this harness'} has no proxy-mode description in this build`)
   const missing = []
   try {
-    const pm = desc.proxyMode
-    let lost
-    for (const f of pm.forms.filter((x) => x.os.includes(os) && isPresent(x, ctx))) {
-      const c = f.cert === 'root' ? null : (pm.certs || {})[f.cert]
-      if (!c || (c.when && holds(c.when, ctx) === false)) continue // the root carries it: nothing per form, whether install saw the harness or not
-      // a carrier of its own: install's items for it (none when install never saw the harness, unless rule U's shared block carries it)
-      if (lost === undefined) lost = carrierLoss(m || {}, desc, itemsFor(desc, itemsOfPhase(m, 'install'), ctx), fs)
-      if (lost) missing.push({ form: f.id, what: lost })
-    }
+    const ids = forms == null ? carriedForms(desc.proxyMode, os, ctx) : forms
+    // a carrier of its own: install's items for it (none when install never saw the harness, unless rule U's shared block carries it)
+    const lost = ids.length ? carrierLoss(m || {}, desc, itemsFor(desc, itemsOfPhase(m, 'install'), ctx), fs) : null
+    if (lost) for (const id of ids) missing.push({ form: id, what: lost })
   } catch (e) { return unknown(String((e && e.message) || e)) }
   if (root && root.state === 'missing') missing.push({ form: null, what: 'root-missing' })
   return missing.length ? { state: 'needed', missing } : { state: 'ready', missing: [] }
