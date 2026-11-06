@@ -37,6 +37,7 @@ export function undoWrapper(item, fs = nodeFs) {
     return { path: item.path, result: 'restored' }
   }
   if (real == null) { dirGone(); return { path: item.path, result: 'already-removed' } }
+  if (sha256(real) !== item.real_sha256) return { path: item.real, result: 'error', reason: `${item.real} is not the program trocar moved there (its bytes differ from the install manifest's record), so it was left as it is; delete it by hand if it is not yours` }
   fs.rmSync(item.real, { force: true }); dirGone()
   return { path: item.real, result: 'removed', changed: true }
 }

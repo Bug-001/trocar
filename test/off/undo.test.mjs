@@ -136,7 +136,7 @@ test('P13 json-array-item, switch and config-entry are undone by off; wrapper an
   const at = new Date(0).toISOString()
   m.entries.push({ phase: 'on', kind: 'json-array-item', harness: 'aa', path: arr, keys: ['list'], item: 'http.proxy', created_array: false, existed_before: true, mode: 0o644, pre_sha256: 'x', post_sha256: 'y', ops: [], backup: null, installed_at: at },
     { phase: 'install', kind: 'root-key', harness: null, path: 'keychain:trocar-root', custody: { kind: 'keychain', id: 'trocar-root' }, fp256: 'AB:CD', installed_at: at })
-  m.files.push({ phase: 'on', kind: 'owned-file', role: 'switch', harness: 'aa', path: sw }, { phase: 'on', kind: 'owned-file', role: 'config-entry', harness: 'aa', path: cfg, sha256: sha(cfg) },
+  m.files.push({ phase: 'on', kind: 'owned-file', role: 'switch', harness: 'aa', path: sw, sha256: sha(sw) }, { phase: 'on', kind: 'owned-file', role: 'config-entry', harness: 'aa', path: cfg, sha256: sha(cfg) },
     { phase: 'install', kind: 'owned-file', role: 'wrapper', harness: 'aa', path: bin, real, sha256: sha(bin), real_sha256: sha(real) })
   const removed = [], installed = m.entries.concat(m.files).filter((x) => x.phase === 'install'), bytes = () => installed.filter((x) => x.path && fs.existsSync(x.path)).map((x) => [x.path, sha(x.path)])
   const before = bytes()
@@ -161,7 +161,7 @@ test('off reports no process as still trusting, nor a harness whose trust it can
   const s = await setup((b) => [repH(b, 'aa'), jsonH(b)])
   const m = readManifest(s.b.dir)
   delete m.liveness.aa.identity
-  for (const h of ['aa', 'jj']) m.files.push({ phase: 'on', kind: 'owned-file', role: 'switch', harness: h, path: write(s.b, `.trocar/collector/switch/${h}`, 'http://127.0.0.1:47011\n') })
+  for (const h of ['aa', 'jj']) { const sw = write(s.b, `.trocar/collector/switch/${h}`, 'http://127.0.0.1:47011\n'); m.files.push({ phase: 'on', kind: 'owned-file', role: 'switch', harness: h, path: sw, sha256: sha(sw) }) }
   const off = await s.run({ manifest: m, phases: ['on'], procs: async () => [proc(6, '/x/jj', { startedAt: 1 }), proc(7, '/x/aa')] })
   assert.deepEqual([off.left, off.still_trusting, off.trust_unknown], [[], [], []])
 })
@@ -248,15 +248,14 @@ test('an entry of a kind this build does not know is left alone, and so is a man
   await assert.rejects(undoHarnesses({ dir: s.b.dir, home: s.b.home, manifest: { version: 3, unsupported: true, entries: [], files: [] }, ids: null }), /version 3.*nothing was changed/)
 })
 
-test('residue and changed plugins are reported, not deleted: a path the agent wrote because of the plugin; a plugin file edited since install (removed all the same)', async () => {
+test('residue and changed plugins are reported, not deleted: a path the agent wrote because of the plugin; a plugin file edited since install is left, listed with its reason (4.11 §4)', async () => {
   const s = await setup((b) => [plugH(b)])
   fs.mkdirSync(path.join(s.b.home, '.config', 'plug', 'node_modules', 'sdk'), { recursive: true })
   const plugin = path.join(s.b.home, '.config', 'plug', 'plugins', 'trocar-ca.js'); fs.appendFileSync(plugin, '// edited\n')
   const r = await s.run()
   assert.deepEqual(r.residue, [{ harness: 'plug', path: path.join(s.b.home, '.config', 'plug', 'node_modules'), why: 'plug installs its SDK on first run' }])
   assert.ok(fs.existsSync(path.join(s.b.home, '.config', 'plug', 'node_modules', 'sdk')), 'never deleted')
-  assert.deepEqual([r.changed, r.removed.includes(plugin), fs.existsSync(plugin)], [[{ harness: 'plug', path: plugin, role: 'plugin' }], true, false])
-  assert.deepEqual(r.manifest.watched, [], 'reported once: the harness has nothing left')
+  assert.deepEqual([r.removed.includes(plugin), fs.existsSync(plugin), r.left.some((x) => x.path === plugin)], [false, true, true])
 })
 
 test('bundle: a process of the harness that started after install, one that re-reads its entry, or a child whose environ names it keeps the bundle without the trocar CA; one from before install does not; the next run removes it', async () => {
@@ -551,3 +550,38 @@ for (const removed of [true, false]) {
     assert.deepEqual([k.removed, k.left, readManifest(s.b.dir).entries.filter((e) => e.kind === 'root-key')], [['keychain:trocar-root'], [], []])
   })
 }
+
+// 4.11 §4: an owned file goes only while its bytes are the ones the manifest recorded, so a damaged manifest never costs the user a file. Generated over
+// role × bytes: trocar's go; changed, unreadable or with no recorded hash they stay, listed under `left` with the record kept for the next run (D38) — but a
+// changed config-library entry is the user's settings now and leaves the manifest with a note (D48②)
+for (const role of ['plugin', 'shim', 'switch', 'config-entry']) {
+  for (const bytes of ['trocar', 'changed', 'unreadable', 'no-record']) {
+    test(`owned file guard · ${role} · ${bytes}`, async () => {
+      const s = await setup((b) => [repH(b, 'aa')])
+      const m = readManifest(s.b.dir)
+      const f = write(s.b, `.aa/owned/${role}`, 'trocar wrote this\n'), rec = sha(f)
+      m.files.push({ phase: 'on', kind: 'owned-file', role, harness: 'aa', path: f, ...(bytes === 'no-record' ? {} : { sha256: rec }) })
+      if (bytes === 'changed') fs.writeFileSync(f, 'the user wrote this\n')
+      const want = fs.readFileSync(f)
+      if (bytes === 'unreadable') fs.chmodSync(f, 0)
+      const off = await s.run({ manifest: m })
+      if (bytes === 'unreadable') fs.chmodSync(f, 0o600)
+      const userOwns = role === 'config-entry' && bytes !== 'unreadable' // a changed config-library entry, or one with no hash to judge it by
+      assert.equal(fs.existsSync(f), bytes !== 'trocar', 'only trocar\'s own bytes are deleted')
+      if (bytes !== 'trocar') assert.deepEqual(fs.readFileSync(f), want, 'a file left is byte for byte as it was')
+      const left = bytes !== 'trocar' && !userOwns
+      assert.equal(off.left.some((x) => x.path === f), left, 'left, with its reason, when it stays and is not the user\'s')
+      assert.equal(readManifest(s.b.dir).files.some((x) => x.path === f), left, 'its record stays for the next run exactly when it is left')
+    })
+  }
+}
+
+test('owned file guard · wrapper: a moved real program whose bytes are not the ones trocar recorded is left, not deleted', async () => {
+  const s = await setup((b) => [repH(b, 'aa')])
+  const m = readManifest(s.b.dir)
+  const bin = write(s.b, 'bin/aa', '#!/bin/dash\nexec real\n'), real = write(s.b, 'bin/.trocar-real/aa', 'REAL PROGRAM')
+  m.files.push({ phase: 'install', kind: 'owned-file', role: 'wrapper', harness: 'aa', path: bin, real, sha256: sha(bin), real_sha256: sha(real) })
+  fs.writeFileSync(bin, 'an update replaced the wrapper'); fs.writeFileSync(real, 'SOMETHING ELSE')
+  const un = await s.run({ manifest: m, dropCa: true })
+  assert.deepEqual([fs.readFileSync(real, 'utf8'), un.left.some((x) => x.path === real || x.path === bin)], ['SOMETHING ELSE', true])
+})
