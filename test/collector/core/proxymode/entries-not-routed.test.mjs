@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
-import { routeEntry, writeRoutes } from '../../../../src/collector/core/proxymode/entries.mjs'
+import { routeEntry, writeRoutes, planRoutes } from '../../../../src/collector/core/proxymode/entries.mjs'
 import { resolveLoc } from '../../../../src/collector/core/proxymode/sources.mjs'
 import { undoEntry } from '../../../../src/off/journal.mjs'
 import { world, put } from './fixtures/entries-ctx.mjs'
@@ -93,6 +93,60 @@ for (const h of harnesses) for (const os of OSES) {
       }
       off(w)
       for (const rid of blocked) assert.deepEqual(holding(w.root, portOf(rid)), [], `${rid}: after off`)
+    })
+  }
+}
+
+// a door the take-back cannot undo (the file and its folder read-only): on goes on, the route's result says entry-not-undone where, and the record stays
+// for off to try again (invariant 4, D38) — on the not-routed path of a written route and on the path of a route no planned form uses
+const lock = (t, list) => {
+  const dirs = [...new Set(list.map((p) => path.dirname(p)))]
+  for (const p of list) fs.chmodSync(p, 0o444)
+  for (const d of dirs) fs.chmodSync(d, 0o555)
+  t.after(() => { for (const d of dirs) fs.chmodSync(d, 0o755); for (const p of list) fs.chmodSync(p, 0o644) })
+}
+const notUndone = (res, rid) => res.results.filter((x) => x.route === rid && x.ok === false && x.code === 'entry-not-undone')
+const recordsLeft = (w, h, rid) => w.ctx.manifest.entries.concat(w.ctx.manifest.files).filter((x) => x.harness === h.name && x.route === rid)
+
+for (const { h, id, r } of pacRoutes) for (const os of OSES) {
+  test(`P5 ${h.name}.${id} · ${os} · not-routed system-pac with the door's file unwritable: on returns, the route says entry-not-undone, the record stays`, (t) => {
+    const w = world({ os })
+    for (const f of h.proxyMode.forms.filter((x) => x.os.includes(os) && x.route === id)) w.present(f)
+    ingress(w, [18002])
+    const ctx = { ...w.ctx, harness: h.name, route: r, routeId: id }
+    if (r.select) put(path.join(resolveLoc(r.select.dir, ctx)[0], r.select.meta), JSON.stringify({ [r.select.idKey]: 'u1' }))
+    const first = writeRoutes(h, w.ctx, () => door(18002))
+    if (!first.results.some((x) => x.route === id && x.ok)) { t.skip(`no form of ${id} on ${os}`); return }
+    const held = holding(w.root, 18002)
+    lock(t, held)
+    w.ctx.systemProxy = { pac: true }
+    const second = writeRoutes(h, w.ctx, () => door(18002))
+    assert.ok(second.results.some((x) => x.route === id && x.code === 'not-routed'), 'the not-routed reason is still said')
+    const left = notUndone(second, id)
+    assert.ok(left.length && left.every((x) => typeof x.reason === 'string' && x.reason && typeof x.at === 'string'), 'entry-not-undone, with a reason and where')
+    assert.ok(recordsLeft(w, h, id).length, 'the record stays for off')
+  })
+}
+
+for (const h of harnesses) for (const os of OSES) {
+  const forms = h.proxyMode.forms.filter((f) => f.os.includes(os))
+  for (const [i, b] of (h.proxyMode.blockers || []).entries()) {
+    test(`P5 ${h.name} · ${os} · blocker ${i} set after an on, the door's file unwritable: on returns, the blocked route says entry-not-undone, the record stays`, (t) => {
+      const w = world({ os })
+      for (const f of forms) w.present(f)
+      const ids = Object.keys(h.proxyMode.routes), portOf = (rid) => 18100 + ids.indexOf(rid)
+      ingress(w, ids.map(portOf))
+      const first = writeRoutes(h, w.ctx, (rid) => door(portOf(rid)))
+      if (!w.plant(b.at)) { t.skip(`the blocker names nothing on ${os}`); return }
+      const blocked = first.results.filter((x) => x.ok && !planRoutes(h, w.ctx).routes.some((y) => y.id === x.route)).map((x) => x.route)
+      if (!blocked.length) { t.skip('the blocker leaves every written route a form'); return }
+      lock(t, blocked.flatMap((rid) => holding(w.root, portOf(rid))))
+      const second = writeRoutes(h, w.ctx, (rid) => door(portOf(rid)))
+      for (const rid of blocked) {
+        const left = notUndone(second, rid)
+        assert.ok(left.length && left.every((x) => typeof x.reason === 'string' && x.reason && typeof x.at === 'string'), `${rid}: entry-not-undone, with a reason and where`)
+        assert.ok(recordsLeft(w, h, rid).length, `${rid}: the record stays for off`)
+      }
     })
   }
 }
