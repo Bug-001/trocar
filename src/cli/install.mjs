@@ -306,12 +306,15 @@ async function linuxSetup({ io, home, platform, flags, json, say, fs, locked, in
   const planned = planItems(plan, { home, platform }).filter((r) => r.what === only) // the harness's rows only: trocar's own records are not Set up's (1.6 §3.2, V85)
   const left = plan.steps.filter((s) => s.harness === only && s.action === 'skip-user-changed') // a carrier install cannot place again: setup stays needed, said (D38)
   if (left.length) return refuse(CODE.setupNeeded, `${only} cannot be set up: ${left.map((s) => s.why).join('; ')}. Nothing was changed`)
-  if (!planned.length) { // judged needed with nothing for install to place (its inject gives no item here): refused with inject's reason, never "nothing to set up" (4.6)
+  // nothing for install to place while Set up is asked (4.6): the harness is not here (`skipped`), or it is and `needed` while its inject gives no item.
+  // Refused with the reason, never "nothing to set up"
+  const skip = plan.skipped.find((x) => x.what === only)
+  if (skip || !planned.length) {
     const [{ driverSetup }, { SETUP_WHY }] = await Promise.all([import('../collector/driver-setup.mjs'), import('./words.mjs')])
     const desc = (args.harnesses || []).find((d) => d.name === only)
-    const s = desc ? driverSetup(desc, { os: args.osName, home, env: args.env, manifest: m, fs }) : null
+    const s = !skip && desc ? driverSetup(desc, { os: args.osName, home, env: args.env, manifest: m, fs }) : null
     const why = plan.notes.filter((n) => typeof n === 'string' && n.startsWith(`${only}: `)).map((n) => n.slice(only.length + 2))
-    if (s && s.state === 'needed') return refuse(CODE.setupNeeded, `${only} cannot be set up: ${(why.length ? why : s.missing.map((x) => SETUP_WHY[x.what])).join('; ')}. Nothing was changed`)
+    if (skip || (s && s.state === 'needed')) return refuse(CODE.setupNeeded, `${only} cannot be set up: ${skip ? skip.reason : (why.length ? why : s.missing.map((x) => SETUP_WHY[x.what])).join('; ')}. Nothing was changed`)
   }
   say(fit([planned.length ? `trocar install will set up ${only}:` : `${only} has every certificate carrier it needs: there is nothing to set up.`, ...pairs(planned.map((p) => [p.what, p.detail]), { home })], { home }).join('\n'))
   if (flags.has('--dry-run')) { if (json) printJson(io, { ...newReceipt('install'), dry_run: true, planned, ...(planned.length ? {} : { notes: [`${only}: nothing to set up`] }) }); return EXIT.ok }

@@ -23,6 +23,8 @@ import { createQueryService } from '../../src/query/service.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
 import { VERBS } from '../../src/control/board.mjs'
 import { driverSetup } from '../../src/collector/driver-setup.mjs'
+import { planOn } from '../../src/collector/install.mjs'
+import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 import { installedHome, ROOTS } from '../off/fixtures/off-ctx.mjs'
 import { setKey } from '../../src/off/json-text.mjs'
 import { removeTrocarText } from '../../src/off/text-edit.mjs'
@@ -272,6 +274,30 @@ for (const h of ['claude-code', 'codex', 'hermes', 'kimi-code', 'z-code']) for (
     const un = await s.uninstall({ yes: true })
     assert.equal(un.exit, 0, JSON.stringify(un.receipt && un.receipt.problems))
     assert.deepEqual(left(), userLeft, 'uninstall puts back what the user left, byte for byte (invariant 5)')
+  })
+}
+
+// 4.6 「这个 harness 装好了没有」: Set up has nothing to place — the agent is here but its inject gives no item (q5: never installed; lost: its carrier
+// gone too), or it is not here at all (absent) → setup-needed with install's reason, no byte written, install.code kept. Each harness gets a
+// footprint the test controls; STRIP takes away what its inject reads.
+const STRIP = { codex: '.codex', 'kimi-code': '.bashrc' }
+for (const h of Object.keys(STRIP)) for (const cell of ['q5', 'absent', 'lost']) {
+  test(`Linux · 4.6: Set up ${h} (${cell}) with nothing to place → setup-needed with install's reason, nothing written`, async () => {
+    const s = await installedHome({ names: cell === 'lost' ? ['claude-code', h] : ['claude-code'] })
+    const real = (await loadHarnesses()).find((d) => d.name === h)
+    const fp = { ...real, present: [{ base: 'home', dir: `.fp-${h}` }] }
+    const descs = [...s.descs.filter((d) => d.name !== h), fp]
+    if (cell !== 'absent') { fs.mkdirSync(path.join(s.home, `.fp-${h}`)); fs.rmSync(path.join(s.home, STRIP[h]), { recursive: true, force: true }) }
+    const plan = await planOn({ home: s.home, env: s.sh.env, osName: 'linux', harnesses: descs, roots: ROOTS })
+    const skip = plan.skipped.find((x) => x.what === h)
+    assert.equal(!!skip, cell !== 'lost', JSON.stringify(plan.skipped))
+    const home0 = outside(snapshot(s.home)), code0 = s.manifest().install.code
+    const r = await VERBS.setup({ harness: h, confirm: 'x' }, { home: path.join(s.home, '.trocar'), deps: linuxSetupDeps({ ...s, descs }) })
+    assert.equal(r.doc.ok, false, JSON.stringify(r.doc))
+    assert.equal(r.doc.error.code, 'setup-needed')
+    if (skip) assert.ok(skip.reason && r.doc.error.message.includes(skip.reason), JSON.stringify(r.doc.error))
+    assert.deepEqual(outside(snapshot(s.home)), home0)
+    assert.equal(s.manifest().install.code, code0)
   })
 }
 
