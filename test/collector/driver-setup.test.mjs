@@ -17,7 +17,7 @@ const jsonOf = (home) => path.join(home, 'fx.json')
 const KEYS = ['env', 'CA']
 
 // a harness whose certificate is one file trocar owns and one key in the agent's config, for as long as the agent's directory is there
-const FX = { name: 'fx', inject: (ctx) => (fs.existsSync(path.join(ctx.home, '.fx'))
+const FX = { name: 'fx', present: [{ base: 'home', dir: '.fx' }], inject: (ctx) => (fs.existsSync(path.join(ctx.home, '.fx'))
   ? { owned: [{ path: ownedOf(ctx.home), role: 'plugin', data: 'trocar plugin\n' }], entries: [{ kind: 'json-key', path: jsonOf(ctx.home), keys: KEYS, value: path.join(ctx.collectorDir, 'ca', 'trocar-ca.pem') }] }
   : { notes: ['fx has not run for this user'] }) }
 

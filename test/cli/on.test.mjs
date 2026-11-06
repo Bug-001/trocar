@@ -8,6 +8,7 @@ import path from 'node:path'
 import { turnOn, installCollector } from '../../src/collector/install.mjs'
 import { userUnit } from '../../src/collector/arch/linux/unit.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
+import { seedFootprint } from '../helpers/footprint.mjs'
 import { readManifest, PHASES } from '../../src/off/manifest.mjs'
 import { undoHarnesses } from '../../src/off/undo.mjs'
 import { readStateFile, setDesired, writeStateAtomic } from '../../src/off/state.mjs'
@@ -31,6 +32,7 @@ const SOCK = '/x/collector.sock'
 async function sandbox({ installed = true } = {}) {
   const home = tmpDir('trocar-on-')
   const sh = sevenHomes(home)
+  seedFootprint(home, descs, sh.env) // the six are installed (4.6: presence is each one's own footprint)
   const dir = path.join(home, '.trocar', 'collector')
   const sys = fakeSystem()
   const unit = (script = '/repo/bin/trocar.mjs') => userUnit({ home, node: '/usr/bin/node', script, run: sys.exec.run, spawn: fakeSpawn(sys.daemon) })
@@ -326,7 +328,7 @@ test('on: the linger line — false says how to enable it and never runs loginct
 
 test('on: named harnesses only — on codex writes codex\'s files and turns on codex alone; a named harness with nothing to install is skipped with the descriptor\'s reason and is not "done"', async () => {
   const all = await loadHarnesses()
-  const s = await sandbox({ installed: false }); fs.rmSync(path.join(s.home, '.hermes'), { recursive: true }) // Hermes is not installed here; the first run installs what it names
+  const s = await sandbox({ installed: false }); for (const p of ['.hermes', '.local/bin/hermes']) fs.rmSync(path.join(s.home, p), { recursive: true }) // Hermes is not installed here; the first run installs what it names
   const r = await s.run({ ids: ['codex', 'hermes'], harnesses: all })
   assert.equal(JSON.parse(fs.readFileSync(path.join(s.home, '.claude', 'settings.json'), 'utf8')).env, undefined, 'claude-code is not touched')
   assert.deepEqual(r.receipt.harnesses, ['codex'])
@@ -335,7 +337,7 @@ test('on: named harnesses only — on codex writes codex\'s files and turns on c
   assert.equal(r.exit, 1, 'a harness that was asked for and could not be done: not done')
   assert.deepEqual(Object.keys(readStateFile(path.join(s.dir, 'state.json')).state.harnesses), ['codex'])
   assert.deepEqual(s.sys.daemon.calls.filter((c) => c.startsWith('POST /on')), ['POST /on {"harnesses":["codex"]}'])
-  const t = await sandbox({ installed: false }); fs.rmSync(path.join(t.home, '.hermes'), { recursive: true }); await t.install(); const before = snapshot(t.home)
+  const t = await sandbox({ installed: false }); for (const p of ['.hermes', '.local/bin/hermes']) fs.rmSync(path.join(t.home, p), { recursive: true }); await t.install(); const before = snapshot(t.home)
   const none = await t.run({ ids: ['hermes'], harnesses: all })
   assert.deepEqual([none.exit, none.receipt.ok], [1, false])
   assert.deepEqual(snapshot(t.home), before, 'nothing to turn on: nothing written, not even the manifest')

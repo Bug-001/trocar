@@ -36,6 +36,7 @@ import { writeNetenv } from '../../src/netenv/index.mjs'
 import { settingSha } from '../../src/netenv/redact.mjs'
 import { readManifest, saveManifest, PHASES } from '../../src/off/manifest.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { seedFootprint } from '../helpers/footprint.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
 import { harnessOf } from '../../src/dissect/harnesses.mjs'
 import { workerFork } from '../helpers/worker-fork.mjs'
@@ -64,7 +65,7 @@ function fakeArch(p, extraEnv = {}, clientOpts = {}) {
 }
 function sandbox() {
   const root = tmpDir('as-d-') // short: unix socket paths are length-limited
-  const home = path.join(root, 'home'); fs.mkdirSync(home)
+  const home = path.join(root, 'home'); fs.mkdirSync(home); seedFootprint(home, [cc]) // Claude Code is installed (4.6: its own footprint)
   return { root, home, collector: path.join(home, '.trocar', 'collector'), sock: path.join(root, 'run', 'c.sock'), done: () => fs.rmSync(root, { recursive: true, force: true }) }
 }
 const req = (sock, method, p, body) => controlRequest({ socketPath: sock, method, path: p, body })
@@ -809,7 +810,7 @@ test('daemon: combined bundles follow the roots — rebuilt at start when the OS
   const corp = createCa({ commonName: 'corp' }); fs.writeFileSync(path.join(s.home, 'corp.pem'), corp.certPem)
   const dir = s.collector
   const rep = { name: 'rep', runtime: 'rust', hosts: [], processes: { names: [{ name: 'rep' }] }, trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }] },
-    inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, '.rep.env'), vars: { SSL_CERT_FILE: path.join(dir, 'ca', 'combined-rep.pem') }, semantic: 'replace' }], files: [{ path: path.join(dir, 'ca', 'combined-rep.pem'), bundle: true, certsFrom: [path.join(ctx.home, 'corp.pem')] }] }) }
+    present: [{ base: 'home' }], inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, '.rep.env'), vars: { SSL_CERT_FILE: path.join(dir, 'ca', 'combined-rep.pem') }, semantic: 'replace' }], files: [{ path: path.join(dir, 'ca', 'combined-rep.pem'), bundle: true, certsFrom: [path.join(ctx.home, 'corp.pem')] }] }) }
   await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [rep], freePort: async () => 0, arch: { osRoots: fileRoots(osRoots) } })
   writeStateAtomic(path.join(dir, 'state.json'), setDesired(emptyState(), ['rep'], 'on')) // the daemon rebuilds the bundles of the harnesses whose desired state is on only (4.6 「合并包」, D39)
   const bundle = path.join(dir, 'ca', 'combined-rep.pem')
@@ -844,7 +845,7 @@ test('daemon: the Linux arch\'s OS roots — none on the machine is a bundle fai
   const osRoots = () => linux.osRoots({ read })
   const dir = s.collector
   const rep = { name: 'rep', runtime: 'rust', hosts: [], processes: { names: [{ name: 'rep' }] }, trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }] },
-    inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, '.rep.env'), vars: { SSL_CERT_FILE: path.join(dir, 'ca', 'combined-rep.pem') }, semantic: 'replace' }], files: [{ path: path.join(dir, 'ca', 'combined-rep.pem'), bundle: true, certsFrom: [] }] }) }
+    present: [{ base: 'home' }], inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, '.rep.env'), vars: { SSL_CERT_FILE: path.join(dir, 'ca', 'combined-rep.pem') }, semantic: 'replace' }], files: [{ path: path.join(dir, 'ca', 'combined-rep.pem'), bundle: true, certsFrom: [] }] }) }
   const first = osRoots()
   await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [rep], freePort: async () => 0, roots: { node: [...tls.rootCertificates], osText: first.pem, missing: first.missing } })
   writeStateAtomic(path.join(dir, 'state.json'), setDesired(emptyState(), ['rep'], 'on'))
@@ -884,7 +885,7 @@ test('daemon: OS roots the reader dropped as unparsable, or a roots source that 
   let answer = { pem: root.certPem, dropped: 0, tried: [] }, asked = 0
   const osRoots = async () => { asked++; return answer }
   const rep = { name: 'rep', runtime: 'rust', hosts: [], processes: { names: [{ name: 'rep' }] }, trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }] },
-    inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, '.rep.env'), vars: { SSL_CERT_FILE: path.join(dir, 'ca', 'combined-rep.pem') }, semantic: 'replace' }], files: [{ path: path.join(dir, 'ca', 'combined-rep.pem'), bundle: true, certsFrom: [] }] }) }
+    present: [{ base: 'home' }], inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, '.rep.env'), vars: { SSL_CERT_FILE: path.join(dir, 'ca', 'combined-rep.pem') }, semantic: 'replace' }], files: [{ path: path.join(dir, 'ca', 'combined-rep.pem'), bundle: true, certsFrom: [] }] }) }
   await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [rep], freePort: async () => 0, arch: { osRoots } })
   writeStateAtomic(path.join(dir, 'state.json'), setDesired(emptyState(), ['rep'], 'on'))
   const bundle = path.join(dir, 'ca', 'combined-rep.pem')
@@ -922,7 +923,7 @@ test('daemon: the daily bundle rebuild never writes the trocar CA back into a bu
   fs.writeFileSync(path.join(s.home, 'corp.pem'), createCa({ commonName: 'corp' }).certPem)
   const dir = s.collector
   const repOf = (name) => ({ name, runtime: 'rust', hosts: [], processes: { names: [{ name }] }, trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }] },
-    inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, `.${name}.env`), vars: { SSL_CERT_FILE: path.join(dir, 'ca', `combined-${name}.pem`) }, semantic: 'replace' }], files: [{ path: path.join(dir, 'ca', `combined-${name}.pem`), bundle: true, certsFrom: [path.join(ctx.home, 'corp.pem')] }] }) })
+    present: [{ base: 'home' }], inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, `.${name}.env`), vars: { SSL_CERT_FILE: path.join(dir, 'ca', `combined-${name}.pem`) }, semantic: 'replace' }], files: [{ path: path.join(dir, 'ca', `combined-${name}.pem`), bundle: true, certsFrom: [path.join(ctx.home, 'corp.pem')] }] }) })
   const list = [repOf('stay'), repOf('gone'), repOf('idle')]
   await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: list, freePort: async () => 0, arch: { osRoots: fileRoots(osRoots) } })
   writeStateAtomic(path.join(dir, 'state.json'), setDesired(emptyState(), ['stay', 'gone'], 'on')) // idle was never turned on
@@ -954,7 +955,7 @@ test('daemon: the bundle rebuild runs under the op lock (1.6 R12) — while anot
   const osRoots = path.join(s.root, 'os-roots.pem'); fs.writeFileSync(osRoots, '')
   const dir = s.collector
   const rep = { name: 'rep', runtime: 'rust', hosts: [], processes: { names: [{ name: 'rep' }] }, trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }] },
-    inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, '.rep.env'), vars: { SSL_CERT_FILE: path.join(dir, 'ca', 'combined-rep.pem') }, semantic: 'replace' }], files: [{ path: path.join(dir, 'ca', 'combined-rep.pem'), bundle: true, certsFrom: [], role: 'bundle' }] }) }
+    present: [{ base: 'home' }], inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, '.rep.env'), vars: { SSL_CERT_FILE: path.join(dir, 'ca', 'combined-rep.pem') }, semantic: 'replace' }], files: [{ path: path.join(dir, 'ca', 'combined-rep.pem'), bundle: true, certsFrom: [], role: 'bundle' }] }) }
   await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [rep], freePort: async () => 0, arch: { osRoots: fileRoots(osRoots) } })
   writeStateAtomic(path.join(dir, 'state.json'), setDesired(emptyState(), ['rep'], 'on'))
   const bundle = path.join(dir, 'ca', 'combined-rep.pem'), lock = path.join(dir, 'op.lock')

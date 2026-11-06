@@ -16,6 +16,7 @@ import { formatOffReceipt } from '../../src/off/receipt.mjs'
 import { certBlocks, SYSTEM_BUNDLES } from '../../src/off/pem.mjs'
 import { HARNESS_IDS } from '../../src/off/harness-names.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { seedFootprint } from '../helpers/footprint.mjs'
 import { sevenHomes, USER_CA } from './fixtures/seven-homes.mjs'
 import { readStateFile } from '../../src/off/state.mjs'
 import { checkRecord } from '../../src/health/codes.mjs'
@@ -33,9 +34,11 @@ const proc = (pid, exe, argv, { startedAt = Date.now() + 5000, env = {} } = {}) 
 async function sevenInstalled() {
   const home = tmpDir('trocar-off-')
   const sh = sevenHomes(home)
+  const harnesses = await loadHarnesses()
+  seedFootprint(home, harnesses.filter((d) => HARNESS_IDS.includes(d.name)), sh.env) // the seven are installed (4.6: presence is each one's own footprint)
   const before = snapshot(home)
   const beforeDirs = new Set(dirsOf(home))
-  await installCollector({ home, env: sh.env, osName: 'linux', harnesses: await loadHarnesses(), freePort: async () => 47011, scan: async () => [], roots })
+  await installCollector({ home, env: sh.env, osName: 'linux', harnesses, freePort: async () => 47011, scan: async () => [], roots })
   const dir = path.join(home, '.trocar', 'collector')
   const ca = (n) => path.join(dir, 'ca', n)
   // install wrote every item here (phase install), which off spares (D55①): V15 / V25 drive the undo rules over both phases, as uninstall runs them

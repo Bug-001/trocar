@@ -18,6 +18,7 @@ import { checkRecord } from '../../src/health/codes.mjs'
 import { captureHealth } from '../../src/health/read.mjs'
 import { HARNESS_IDS } from '../../src/off/harness-names.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { seedFootprint } from '../helpers/footprint.mjs'
 
 const FAKE = fileURLToPath(new URL('./arch/linux/fixtures/fake-loader.mjs', import.meta.url))
 const UID = process.getuid()
@@ -31,7 +32,7 @@ function fakeArch(p) {
 }
 async function sandbox() {
   const root = tmpDir('as-al-')
-  const home = path.join(root, 'home'); fs.mkdirSync(home)
+  const home = path.join(root, 'home'); fs.mkdirSync(home); seedFootprint(home, [cc]) // Claude Code is installed (4.6: its own footprint)
   const s = { root, home, collector: path.join(home, '.trocar', 'collector'), sock: path.join(root, 'run', 'c.sock'), list: path.join(home, '.trocar', 'agents.json') }
   await installCollector({ home, env: { HOME: home }, osName: 'none', harnesses: [cc], freePort: async () => 0 })
   return s
