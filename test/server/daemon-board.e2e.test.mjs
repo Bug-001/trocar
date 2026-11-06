@@ -41,6 +41,7 @@ for (const platform of ['darwin', 'win32']) {
     await withScratchCwd(platform, async () => {
       const { box, ask } = await daemonOf(w, platform)
       try {
+        await ask('/status') // what install's wait for the daemon asks: once it answers, install is done and the board must answer (#12)
         const file = path.join(w.dir, 'board.token')
         const token = fs.readFileSync(file, 'utf8')
         assert.match(token, /^[A-Za-z0-9_-]{43}$/)
