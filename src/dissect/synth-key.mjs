@@ -78,7 +78,7 @@ function fingerprints(texts, cap) {
 // (one assistant message and N parallel tool results), so a turn costs one hash. At most CHAIN_K, oldest first. `items`: the last RECENT
 // items each by its own hash: a harness edits older items in place or drops turns, which breaks every cumulative hash after it; the items it
 // did not touch stay as they were. It may be the tool results or the model's messages that change, so all count (step 3).
-const CHAIN_K = 12, TAIL = 4, CHAIN_CAP = 32, RECENT = 12, MIN_ITEMS = 2;
+const CHAIN_K = 12, TAIL = 4, CHAIN_CAP = 32, RECENT = 12, MIN_ITEMS = 2, ENDS = 2;
 const h16 = (s) => createHash('sha256').update(s, 'utf8').digest('hex').slice(0, 16);
 const bare = (k, v) => (k === 'cache_control' ? undefined : v);
 const fromModel = (it) => !!it && (it.role === 'assistant' || it.type === 'reasoning' || /_call$/.test(it.type ?? ''));
@@ -206,11 +206,18 @@ export function createSynthAssigner({ gapMs = SYNTH_GAP_MS, open = new Map() } =
       e.lastMs = Math.max(e.lastMs, ms); e.fp = grow(e.fp, facts.fp);
       return { key: e.key, kin: false };
     }
-    // older items edited, or the history rewritten with recent items kept: it still holds what the chain's last call ended with
+    // older items edited, or the history rewritten with some kept (3.4 合成键 step 3). It must hold how the chain's last call ended, which a
+    // fork does not; an item another chain of the group holds too ("Done.") says nothing, a chain past the gap counts as another.
     let bestN = MIN_ITEMS - 1;
-    for (const e of live) {
-      const had = new Set(e.items || []), n = new Set((facts.items || []).filter((x) => had.has(x))).size;
-      if (n > bestN || (best && n === bestN && e.lastMs > best.lastMs)) { best = e; bestN = n; }
+    if (facts.items?.length) {
+      const holders = new Map();
+      for (const [g, e] of open) if (g.startsWith(own)) for (const x of new Set(e.items || [])) holders.set(x, (holders.get(x) || 0) + 1);
+      for (const e of live) {
+        const had = e.items || [];
+        if (!had.slice(-ENDS).some((x) => facts.items.includes(x))) continue;
+        const n = new Set(facts.items.filter((x) => had.includes(x) && holders.get(x) === 1)).size;
+        if (n > bestN || (best && n === bestN && e.lastMs > best.lastMs)) { best = e; bestN = n; }
+      }
     }
     if (best) return join(best);
     bestN = 0;

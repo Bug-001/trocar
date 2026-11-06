@@ -518,6 +518,33 @@ test('chains: agents that share a first message and nothing recent are not one c
   assert.notEqual([...ids[0]][0], [...ids[1]][0])
 })
 
+test('chains: items other agents hold too tie nothing: two agents with the same short replies, back after the gap, stay apart', async () => {
+  const task = [0, 1].map((a) => [0, 1, 2, 3, 4].map((t) => userText('en', 8500 + a * 10 + t))), by = [[], []], recs = []
+  let ms = T0
+  const step = (a, t) => { const rec = agentCall('keyless', msgs(task[a].slice(0, t + 1)), (ms += 5_000)); by[a].push(rec); recs.push(rec) }
+  for (let t = 0; t < 3; t++) for (const a of [0, 1]) step(a, t)
+  ms += SYNTH_GAP_MS + 60_000
+  for (const t of [3, 4]) for (const a of [0, 1]) step(a, t)
+  const home = homeOf([[SEG1, recs]]), m = await membership(home), after = by.map((rs) => sidsOf(m, home, rs.slice(3)))
+  for (const x of after) assert.equal(x.size, 1, 'one session per agent after the gap')
+  assert.notEqual([...after[0]][0], [...after[1]][0], 'two agents, two sessions')
+})
+
+test('chains: a fork is its own session and leaves the session it forked from alone', async () => {
+  const task = [0, 1, 2, 3, 4, 5, 6].map((t) => userText('en', 8600 + t)), other = [0, 1, 2].map((t) => userText('en', 8700 + t)), forked = [], orig = [], recs = []
+  let ms = T0
+  const step = (to, users) => { const rec = agentCall('keyless', msgs(users), (ms += 5_000)); to.push(rec); recs.push(rec) }
+  for (const t of [0, 1, 2, 3, 4]) step(orig, task.slice(0, t + 1))
+  for (const t of [0, 1, 2]) { // from two turns back: a fork of the very last turn is an edit of its last message, as far as the bytes go (3.4 step 3)
+    step(forked, [...task.slice(0, 3), ...other.slice(0, t + 1)])
+    if (t < 2) step(orig, task.slice(0, t + 6))
+  }
+  const home = homeOf([[SEG1, recs]]), m = await membership(home), o = sidsOf(m, home, orig), f = sidsOf(m, home, forked)
+  assert.equal(o.size, 1, 'the original stays one session')
+  assert.equal(f.size, 1, 'the fork is one session')
+  assert.notEqual([...o][0], [...f][0], 'of its own')
+})
+
 test('chains: a call with no readable history joins the group\'s latest chain and leaves its tail as it was; alone it opens one', () => {
   const assign = createSynthAssigner(), f = (ms, chain) => ({ harness: 'hermes', ms, hash: 'h'.repeat(64), fp: [], chain })
   assert.equal(assign(f(1000, [])).key, assign(f(2000, [])).key, 'no chain open yet, then one')
