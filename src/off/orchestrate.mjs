@@ -232,7 +232,13 @@ const withHarness = (h) => (typeof h === 'string' ? { harness: h } : {})
 /** What a marker-only off asks about (R3), as the off receipt lays text out (1.6 §1.1②⑥): a sentence, then each file an item, its harness the label and the path
  *  with what would be done to it the value (labelLines: one value column, folds in it, past the command column), HOME as ~. */
 export const markerListing = (plan, home) => [...textLines("There is no install record to go by. By trocar's own marks, these would be undone:", home),
-  ...labelLines(plan.map((p) => [p.harness, `${p.path}: ${MARKER_TEXT[p.how]}`]), home)].join('\n')
+  ...labelLines(perFile(plan.map((p) => ({ path: p.path, change: MARKER_TEXT[p.how], harness: p.harness }))).map((p) => [p.harness, `${p.path}: ${p.change}`]), home)].join('\n')
+// one row per file (1.6 §3.4: the receipt counts files, not keys or marks): rows of the same path become the first, their changes joined
+const perFile = (rows) => {
+  const by = new Map()
+  for (const r of rows) { const x = by.get(r.path); if (!x) by.set(r.path, { ...r }); else if (r.change && !x.change.split('; ').includes(r.change)) x.change = `${x.change}; ${r.change}` }
+  return [...by.values()]
+}
 // The roots a gone bundle is rebuilt from (4.6 撤销顺序 第 2 步): Node's and this platform's OS roots, read by the reader the collector composes the bundles with
 // (os-roots.mjs osRootsFor — darwin: Node's set, the keychain's anchors and Apple's export, never /etc/ssl/cert.pem, 4.9 §6.2; win32: the system store, with no helper
 // here, 4.8 §6.2; Linux: the first OS PEM bundle of the one list). undo.mjs asks only for a bundle it rebuilds, once. None read → `missing`, a source that could not be read →
@@ -383,7 +389,7 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
   u.orphan_backups = orphanBackups({ home: w.home, manifest: null, fs: w.fs })
   if (!plan.length) { u.mode = manifestError ? 'marker' : 'none'; return u }
   u.mode = 'marker'
-  const items = plan.map((p) => ({ path: p.path, how: p.how, change: MARKER_TEXT[p.how], ...withHarness(p.harness) }))
+  const items = perFile(plan.map((p) => ({ path: p.path, how: p.how, change: MARKER_TEXT[p.how], ...withHarness(p.harness) })))
   const listing = markerListing(plan, w.home)
   let go = yes
   if (!go && interactive && io) { (say || io.out)(listing); go = await confirm(io, 'Proceed?') }
@@ -396,12 +402,14 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
   for (const r of undoByMarker(plan, { home: w.home, fs: w.fs })) {
     if (r.result === CODE_OFF.undoneByMarker) {
       u.undone_by_marker = true
-      if (r.how === 'owned-file') u.removed.push(r.path)
+      if (r.how === 'owned-file' || r.deleted) u.removed.push(r.path) // a file trocar created, deleted
       else u.changed.push({ path: r.path, change: MARKER_TEXT[r.how], backup: r.restored_from || r.backup || null, result: r.result, ...(r.prior_left ? { prior_left: r.prior_left } : {}), ...withHarness(r.harness) })
       u.events.push({ kind: CODE_OFF.undoneByMarker, code: CODE_OFF.undoneByMarker, ...withHarness(r.harness), path: r.path, reason: `${r.path}: ${MARKER_TEXT[r.how]} (found by trocar's mark; there is no manifest to say what it was before)` })
     } else if (r.result === 'already-clean') u.skipped.push({ what: r.path, reason: "trocar's mark is no longer in this file" })
     else { u.left.push({ path: r.path, result: r.result, reason: r.reason || `${r.path}: ${r.result}`, ...withHarness(r.harness) }); u.failures.push({ code: r.result === 'left-unparsable' ? 'left-unparsable' : 'entry-not-undone', ...withHarness(r.harness), path: r.path, reason: r.reason || `${r.path}: trocar cannot read it; trocar's value may still be in it` }) }
   }
+  u.changed = perFile(u.changed)
+  u.removed = [...new Set(u.removed)]
   if (u.orphan_backups.length) u.notes.push(`the backups of the files above (JSON values taken back from them), and any others, are left in place: ${u.orphan_backups.join(', ')}`)
   return u
 }
@@ -482,7 +490,7 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
     const gone = items.files.filter((f) => mine(f) && ['plugin', 'shim', 'bundle', 'trust-file'].includes(f.role)).map((f) => f.path)
     const marks = manifest && !manifest.unsupported ? [] : planByMarker({ home, ids, fs: w.fs, env: w.env, platform: w.platform, notes: receipt.notes })
     receipt.dry_run = true
-    receipt.changed = [...items.entries.filter((e) => mine(e) && (e.kind === 'json-key' || e.kind === 'text')).map((e) => ({ path: e.path, change: offChangeText(e), backup: e.backup ?? null, ...withHarness(e.harness) })), ...marks.filter((p) => p.how !== 'owned-file').map((p) => ({ path: p.path, change: MARKER_TEXT[p.how], backup: null, ...withHarness(p.harness) }))]
+    receipt.changed = [...items.entries.filter((e) => mine(e) && (e.kind === 'json-key' || e.kind === 'text')).map((e) => ({ path: e.path, change: offChangeText(e), backup: e.backup ?? null, ...withHarness(e.harness) })), ...perFile(marks.filter((p) => p.how !== 'owned-file').map((p) => ({ path: p.path, change: MARKER_TEXT[p.how], backup: null, ...withHarness(p.harness) })))]
     receipt.removed = [...gone, ...marks.filter((p) => p.how === 'owned-file').map((p) => p.path)]
     if (manifest && manifest.unsupported) receipt.notes.push(`the install manifest is version ${JSON.stringify(manifest.version)}, which this build does not read: no entry would be touched`)
     else if (!manifest) receipt.notes.push(`there is no usable install manifest${manifestError ? ` (${errMessage(manifestError)})` : ''}: ${marks.length ? `${marks.length} file(s) would be undone by trocar's own marks, after a yes` : 'no file holds trocar\'s marks'}`)

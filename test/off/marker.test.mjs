@@ -287,15 +287,15 @@ for (const { h, id, r } of (await loadHarnesses()).flatMap((d) => Object.entries
       const s = setup(own)
       if (!s) return
       putIngress(s.w.dir, PORT)
+      const pre = read(s.file)
       const res = routeEntry('json-key').write(s.ctx, door(PORT))
       assert.ok(res.ok, JSON.stringify(res))
-      const on = read(s.file)
       const plan = planByMarker({ home: s.w.home, env: s.w.ctx.env, platform: os, ids: [h.name] }).filter((x) => x.path === s.file)
-      assert.equal(plan.length, r.proxyKeys.length, 'each door key of the file is found')
+      assert.deepEqual(plan.map((x) => x.detail.keys), [r.proxyKeys], 'each door key of the file is found, the file once')
       assert.deepEqual(undoByMarker(plan, { home: s.w.home }).map((x) => x.result), plan.map(() => 'undone-by-marker'))
       const out = read(s.file), doc = parseJsonText(out)
       r.proxyKeys.forEach((k, i) => assert.equal(valueAt(doc, k), i === 0 && own ? own : undefined, k.join('.')))
-      assert.equal(without(out, r.proxyKeys), without(on, r.proxyKeys), 'only the door keys changed')
+      assert.equal(out, pre, 'the file is byte for byte as before on')
     })
     test(`${h.name} · ${id} (json-key) · ${os}: a loopback proxy of the user's own (no door port) stays, and with ingress.json unreadable no value is guessed a door`, () => {
       const s = setup(null)
@@ -437,3 +437,92 @@ for (const rcName of MARKER_PATHS['kimi-code'].filter((x) => x.how === 'line').m
     assert.deepEqual([read(rc), fs.existsSync(shim)], [original, false])
   })
 }
+
+// Everything `on` writes beside a door key, with the manifest gone (1.6 §3.4): the NO_PROXY keys (loopback + the user's value, P6), the `arrayItems`
+// element, the objects and arrays made to hold them, an entry `select` created and the meta key that selects it. Generated from each json-key door
+// route × the user's file before `on` (none; theirs, with a value at each such key; theirs, with the containers already there and empty): after
+// the marker undo every file is byte for byte as before `on` (absent when it was absent), and the plan counts each file once.
+const DOOR_KINDS = (await loadHarnesses()).flatMap((d) => Object.entries((d.proxyMode && d.proxyMode.routes) || {}).map(([id, r]) => ({ h: d, id, r }))).filter((x) => x.r.kind === 'json-key' && ['door-url', 'pac-url'].includes(x.r.value))
+const plant = (doc, keys, v) => { let at = doc; keys.slice(0, -1).forEach((k) => { at = at[k] = at[k] || {} }); at[keys.at(-1)] = v }
+const userStates = (r) => ({
+  none: null,
+  own: (() => { const d = { keep: 1 }; for (const k of r.noProxyKeys || []) plant(d, k, 'corp.example'); for (const a of r.arrayItems || []) plant(d, a.keys, ['editor.fontSize']); return d })(),
+  empty: (() => { const d = { keep: 1 }; for (const k of [...r.proxyKeys, ...(r.noProxyKeys || [])]) if (k.length > 1) plant(d, k.slice(0, -1), {}); for (const a of r.arrayItems || []) plant(d, a.keys, []); for (const k of r.proxyKeys) if (k.length > 1) { let at = d; k.slice(0, -1).forEach((x) => { at = at[x] }); delete at[k.at(-1)] } return d })(),
+})
+for (const { h, id, r } of DOOR_KINDS) {
+  for (const os of ['darwin', 'win32']) {
+    for (const [state, doc] of Object.entries(userStates(r))) {
+      test(`${h.name} · ${id} · ${os} · user file ${state}: with the manifest gone, every file on wrote is byte for byte as before on, each counted once`, () => {
+        const w = world({ os })
+        if (os === 'win32') Object.assign(w.ctx.env, { APPDATA: path.join(w.root, 'roaming'), LOCALAPPDATA: path.join(w.root, 'local') })
+        w.ctx.dirs = dirsFor(os, w.home, w.ctx.env)
+        const ctx = { ...w.ctx, harness: h.name, routeId: id, route: r }
+        const pre = new Map() // the user's files before on; a file on wrote that is not here was not there
+        const put = (f, t) => { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, t); pre.set(f, t) }
+        let file
+        if (r.select) {
+          const dir = resolveLoc(r.select.dir, ctx)[0]
+          if (!dir) return
+          file = path.join(dir, 'mine.json')
+          if (doc) put(path.join(dir, r.select.meta), `{\n  "other": 2,\n  "${r.select.idKey}": "mine"\n}\n`)
+        } else { file = resolveLoc(r.file, ctx)[0]; if (!file) return }
+        if (doc) put(file, `${JSON.stringify(doc, null, 2)}\n`)
+        putIngress(w.dir, PORT)
+        const res = routeEntry('json-key').write(ctx, door(PORT))
+        assert.ok(res.ok, JSON.stringify(res))
+        const touched = [...new Set(res.records.map((x) => x.path))]
+        const before = Object.fromEntries(touched.map((f) => [f, pre.get(f) ?? null]))
+        fs.rmSync(manifestPath(w.dir), { force: true })
+        const plan = planByMarker({ home: w.home, env: w.ctx.env, platform: os, ids: [h.name] })
+        assert.equal(new Set(plan.map((x) => x.path)).size, plan.length, 'one plan item per file')
+        const results = undoByMarker(plan, { home: w.home })
+        assert.ok(results.every((x) => x.result === 'undone-by-marker'), JSON.stringify(results))
+        for (const f of touched) assert.equal(fs.existsSync(f) ? read(f) : null, before[f], f)
+      })
+    }
+  }
+}
+
+// the receipt counts files: a file holding several of on's keys is one planned row, one changed row
+test('off with the manifest gone: a file holding several door keys is one row of the plan and of the receipt', async () => {
+  const { runOff } = await import('../../src/off/orchestrate.mjs')
+  const { h, id, r } = DOOR_KINDS.find((x) => x.r.proxyKeys.length > 1)
+  const w = world({ os: 'darwin' })
+  const ctx = { ...w.ctx, env: { HOME: w.home }, dirs: dirsFor('darwin', w.home, { HOME: w.home }), harness: h.name, routeId: id, route: r }
+  putIngress(w.dir, PORT)
+  assert.ok(routeEntry('json-key').write(ctx, door(PORT)).ok)
+  fs.rmSync(manifestPath(w.dir), { force: true })
+  const off = (o) => runOff({ home: w.home, env: { HOME: w.home }, ids: [h.name], ...o, deps: quietDeps('darwin') })
+  const paths = (rows) => rows.map((x) => x.path)
+  const dry = (await off({})).receipt
+  assert.ok(dry.planned.length > 0)
+  assert.equal(new Set(paths(dry.planned)).size, dry.planned.length, JSON.stringify(dry.planned))
+  const done = (await off({ yes: true })).receipt
+  const changed = done.harnesses ? paths(done.changed || []) : []
+  assert.equal(new Set(changed).size, changed.length, JSON.stringify(done.changed))
+})
+
+// what cannot be told is left and said (D38): a NO_PROXY the user changed while on is theirs; a door file whose only backup cannot be read is not touched
+test('with the manifest gone: a NO_PROXY the user set while on stays; a door file whose backup cannot be read is left byte for byte and named', () => {
+  const { h, id, r } = DOOR_KINDS.find((x) => (x.r.noProxyKeys || []).length)
+  const w = world({ os: 'darwin' })
+  const ctx = { ...w.ctx, env: { HOME: w.home }, dirs: dirsFor('darwin', w.home, { HOME: w.home }), harness: h.name, routeId: id, route: r }
+  const file = resolveLoc(r.file, ctx)[0]
+  fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, '{ "keep": 1 }\n')
+  putIngress(w.dir, PORT)
+  assert.ok(routeEntry('json-key').write(ctx, door(PORT)).ok)
+  fs.rmSync(manifestPath(w.dir), { force: true })
+  const [k] = r.noProxyKeys
+  const edited = JSON.parse(read(file)); plant(edited, k, 'mine.example'); fs.writeFileSync(file, JSON.stringify(edited)) // the user's edit while on
+  const plan = planByMarker({ home: w.home, env: ctx.env, platform: 'darwin', ids: [h.name] })
+  assert.deepEqual(undoByMarker(plan, { home: w.home }).map((x) => x.result), ['undone-by-marker'])
+  assert.equal(valueAt(parseJsonText(read(file)), k), 'mine.example')
+  // again on, the backup it took made unreadable
+  assert.ok(routeEntry('json-key').write({ ...ctx, manifest: (w.ctx.manifest.entries = [], w.ctx.manifest) }, door(PORT)).ok)
+  for (const b of backupsOf({ home: w.home, file })) fs.writeFileSync(b, '{ not json')
+  const on = read(file)
+  const [res] = undoByMarker(planByMarker({ home: w.home, env: ctx.env, platform: 'darwin', ids: [h.name] }), { home: w.home })
+  assert.equal(res.result, 'left-unreadable')
+  assert.ok(res.backups.length > 0)
+  assert.equal(read(file), on)
+})

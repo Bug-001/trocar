@@ -17,16 +17,17 @@
 // resolved it: its variable (XDG_CONFIG_HOME, CODEX_HOME, HERMES_HOME) and the per-user folders (loc.mjs dirsFor) followed. Imports only node:* and src/off.
 import nodeFs from 'node:fs'
 import path from 'node:path'
+import { isDeepStrictEqual } from 'node:util'
 import { SENTINEL, BLOCK_OPEN, BLOCK_END, LINE_MARK, restoreOffLines } from './text-edit.mjs'
 import { foldsEnvNames } from './env-names.mjs'
-import { getPath, setKey, removeKey, parseJsonText, unreadableJson, markLen } from './json-text.mjs'
+import { getPath, setKey, removeKey, removeItem, parseJsonText, unreadableJson, markLen } from './json-text.mjs'
 import { writeDurable, editTarget, removeEmptyDirs, readOrNull } from './fsutil.mjs'
 import { backupsOf } from './backup.mjs'
 import { trocarHome, collectorIn, switchFileIn } from './paths.mjs'
 import { CODE_OFF } from './names.mjs'
 import { decodeText, encodeText, CHARSETS, WHY_TEXT } from './text-codec.mjs'
 import { resolveLoc, dirsFor } from './loc.mjs'
-import { doorPorts, isDoorValue, loopbackUrl } from './door-value.mjs'
+import { doorPorts, isDoorValue, loopbackUrl, LOOPBACK_HOSTS } from './door-value.mjs'
 
 const RC_FILES = ['.bashrc', '.bash_profile', '.bash_login', '.profile', '.zshrc', '.zshenv', '.zprofile', '.zlogin'] // where the Kimi installer's PATH line, and so trocar's, can be
 const PLUGIN_MANIFEST = '{"type":"module"}\n' // the anonymous package.json of trocar's dsh plugin directory (collector/harness/_plugins.mjs: ANONYMOUS_MODULE_MANIFEST)
@@ -41,16 +42,17 @@ export const ROUTE_PLACES = Object.freeze({
   hermes: Object.freeze({ file: Object.freeze(HERMES_ENV) }),
 })
 /** The json-key routes `on` writes a door into on macOS / Windows (4.11 §2.3): the file (`file`, a <loc>; or `select`: the entry a meta file's `idKey`
- *  names in the directory `dir`) and the keys that hold the door (`proxyKeys`). The descriptor's route takes these from here, so the marker undo looks
+ *  names in the directory `dir`), the keys that hold the door (`proxyKeys`), and what `on` writes beside them: the NO_PROXY keys (`noProxyKeys`, P6)
+ *  and an element it adds to an array (`arrayItems`). The descriptor's route takes these from here, so the marker undo looks
  *  where `on` wrote, at the keys it wrote — one copy of each. */
 const CC_SETTINGS = { base: 'home', dir: '.claude', env: 'CLAUDE_CONFIG_DIR', path: 'settings.json' }
 const CLAUDE_3P = (base) => ({ base, path: 'Claude-3p/configLibrary' })
 export const DOOR_ROUTES = Object.freeze({
   'claude-code': Object.freeze({
-    settings: Object.freeze({ file: CC_SETTINGS, proxyKeys: [['env', 'HTTPS_PROXY'], ['env', 'https_proxy'], ['env', 'HTTP_PROXY'], ['env', 'http_proxy']] }), // every proxy variable it reads: its children inherit this env, and their plain http goes to the door too (4.8 §5.1)
+    settings: Object.freeze({ file: CC_SETTINGS, proxyKeys: [['env', 'HTTPS_PROXY'], ['env', 'https_proxy'], ['env', 'HTTP_PROXY'], ['env', 'http_proxy']], noProxyKeys: [['env', 'NO_PROXY'], ['env', 'no_proxy']] }), // every proxy variable it reads: its children inherit this env, and their plain http goes to the door too (4.8 §5.1)
     library: Object.freeze({ select: { dir: { perOs: { darwin: CLAUDE_3P('appSupport'), win32: CLAUDE_3P('localAppData') } }, meta: '_meta.json', idKey: 'appliedId', createIfNone: true }, proxyKeys: [['egressProxyPacUrl']] }),
   }),
-  'kimi-code': Object.freeze({ vscode: Object.freeze({ file: { base: 'appSupport', path: 'Code/User/settings.json' }, proxyKeys: [['http.proxy']] }) }),
+  'kimi-code': Object.freeze({ vscode: Object.freeze({ file: { base: 'appSupport', path: 'Code/User/settings.json' }, proxyKeys: [['http.proxy']], arrayItems: [{ keys: ['settingsSync.ignoredSettings'], value: 'http.proxy' }] }) }),
   'z-code': Object.freeze({ 'cli-config': Object.freeze({ file: { base: 'home', path: '.zcode/cli/config.json' }, proxyKeys: [['network', 'httpProxy']] }) }),
 })
 const URL_IN_TEXT = /https?:\/\/[^\s"'`,{}[\]\\]+/g // the URLs in a text that does not parse as JSON, each judged as a value would be
@@ -168,11 +170,13 @@ export function planByMarker({ home, ids = null, fs = nodeFs, env = process.env,
           else if (ports.why && urls.some(loopbackUrl)) unknown('the file')
           continue
         }
+        const doors = [] // one item per file, whatever number of its keys hold a door (the receipt counts files); the value itself is not kept: a door URL holds its token
         for (const keys of spec.route.proxyKeys) {
           const v = getPath(doc, keys)
-          if (ports.ports && isDoorValue(v, ports.ports)) add({ keys, door: true }) // the value itself is not kept: a door URL holds its token
+          if (ports.ports && isDoorValue(v, ports.ports)) doors.push(keys)
           else if (ports.why && loopbackUrl(v)) unknown(keys.join('.'))
         }
+        if (doors.length) add({ keys: doors, door: true, route: spec.route })
       } else if (spec.how === 'owned-file' && (spec.ours || (spec.exact ? t === spec.exact : t.includes(SENTINEL)))) add(spec.ours ? { ours: true } : spec.exact ? { exact: spec.exact } : {})
     }
   }
@@ -226,30 +230,82 @@ function undoOne(item, home, fs) {
     put(out)
     return done({ lines: hits.length })
   }
-  // json-value: the value trocar replaced comes back from the newest backup of this file, this key only; none there → the key goes
-  const keys = item.detail.keys, at = keys ? keys.join('.') : 'its proxy keys' // null: found in a file that did not parse, key unknown
+  // json-value. A trust key: the value trocar replaced comes back from the newest backup of this file, this key only; none there → the key goes. A door
+  // file: the file before `on` is the newest backup in which no door key holds a door; from it come back the door keys and what `on` wrote beside them (1.6 §3.4)
+  const door = !!item.detail.door, route = item.detail.route || {}
+  const keyList = item.detail.keys == null ? null : door ? item.detail.keys : [item.detail.keys] // null: found in a file that did not parse, key unknown
+  const at = keyList ? keyList.map((k) => k.join('.')).join(', ') : 'its proxy keys'
   let ours = (v) => under(v, root)
-  if (item.detail.door) { const p = doorPorts(collectorIn(root), fs); if (!p.ports) return { result: 'error', reason: `${item.path}: ${at} was not undone: ${p.why}` }; ours = (v) => isDoorValue(v, p.ports) }
+  if (door) { const p = doorPorts(collectorIn(root), fs); if (!p.ports) return { result: 'error', reason: `${item.path}: ${at} was not undone: ${p.why}` }; ours = (v) => isDoorValue(v, p.ports) }
   let doc
   try { doc = parseJsonText(t) } catch (e) { return { result: 'left-unparsable', reason: unreadableJson(item.path, t, e, `trocar's value under ${at}`) } }
-  if (!keys) return { result: 'error', reason: `${item.path} changed while off read it: run off again` } // planned as not parsing, parses now: judged key by key next time
-  if (!ours(getPath(doc, keys))) return { result: 'already-clean' }
-  // the newest backup whose value here is not trocar's own (`on` saves the file before each key it writes, so a newer one can hold trocar's first key).
-  // A backup that cannot be read (the read fails, its bytes prove no encoding, it is not JSON) is skipped, never taken for "no value": an older one is looked at
-  let saved = null, prior = null
-  const unread = []
-  for (const b of backupsOf({ home, file: item.path, fs }).reverse()) {
-    let v
-    try { const s = readText(readOrNull(fs, b)); if (s.why) throw new Error(WHY_TEXT[s.why]); v = getPath(parseJsonText(s.text), keys) } catch (e) { unread.push({ path: b, why: String((e && e.message) || e) }); continue }
-    if (typeof v === 'string' && ours(v)) continue
-    saved = b
-    if (typeof v === 'string') prior = v
-    break
+  if (!keyList) return { result: 'error', reason: `${item.path} changed while off read it: run off again` } // planned as not parsing, parses now: judged key by key next time
+  const mine = keyList.filter((k) => ours(getPath(doc, k)))
+  if (!mine.length) return { result: 'already-clean' }
+  const pre = before(item.path, home, fs, (d) => mine.some((k) => { const v = getPath(d, k); return typeof v === 'string' && ours(v) }))
+  const was = (k) => (pre.doc ? getPath(pre.doc, k) : undefined)
+  // a value not found while a backup was skipped: the user's value may be in that one, so the file stays as it is and is said not undone (D38)
+  if (pre.unread.length && mine.some((k) => typeof was(k) !== 'string')) return { result: 'left-unreadable', reason: `${item.path}: ${at} was left with trocar's value: trocar could not read ${pre.unread.length === 1 ? 'the backup' : 'the backups'} that may hold the value it replaced: ${pre.unread.map((u) => `${u.path} (${u.why})`).join('; ')}`, backups: pre.unread.map((u) => u.path) }
+  let out = t
+  const now = () => parseJsonText(out)
+  const restore = (k, v) => { out = typeof v === 'string' ? setKey(out, k, v).text : (removeKey(out, k) || { text: out }).text }
+  for (const k of mine) restore(k, was(k))
+  if (door) {
+    for (const k of route.noProxyKeys || []) { // trocar's NO_PROXY starts with the loopback hosts (P6); with no backup the rest is the user's and stays
+      const v = getPath(now(), k), items = typeof v === 'string' ? v.split(',').map((x) => x.trim()) : []
+      if (!LOOPBACK_HOSTS.every((h, i) => (items[i] || '').toLowerCase() === h)) continue
+      restore(k, pre.doc ? was(k) : items.slice(LOOPBACK_HOSTS.length).filter(Boolean).join(',') || undefined)
+    }
+    for (const a of route.arrayItems || []) {
+      const had = was(a.keys)
+      if (!(Array.isArray(had) && had.some((x) => isDeepStrictEqual(x, a.value)))) out = (removeItem(out, a.keys, a.value) || { text: out }).text
+      const v = getPath(now(), a.keys)
+      if (Array.isArray(v) && !v.length && had === undefined) restore(a.keys, undefined)
+    }
+    // the objects trocar made to hold these keys, left empty: out, unless the file before `on` had them
+    for (const k of [...mine, ...(route.noProxyKeys || [])]) for (let d = k.length - 1; d > 0; d--) { const c = getPath(now(), k.slice(0, d)); if (isEmptyObject(c) && was(k.slice(0, d)) === undefined) restore(k.slice(0, d), undefined) }
   }
-  // no value found while a backup was skipped: the user's value may be in that one, so the key stays as it is and the file is said not undone (D38)
-  if (prior == null && unread.length) return { result: 'left-unreadable', reason: `${item.path}: ${at} was left with trocar's value: trocar could not read ${unread.length === 1 ? 'the backup' : 'the backups'} that may hold the value it replaced: ${unread.map((u) => `${u.path} (${u.why})`).join('; ')}`, backups: unread.map((u) => u.path) }
-  put(prior != null ? setKey(t, keys, prior).text : removeKey(t, keys).text)
-  return done(prior != null ? { restored_from: saved, value: prior } : { removed: true, ...(saved ? { backup: saved } : {}) })
+  // a door file left `{}` with no backup at all is one trocar created: it goes, and with it the meta key that selects it
+  if (door && !pre.any && isEmptyObject(now())) {
+    fs.rmSync(file, { force: true })
+    const meta = route.select ? unselect(item.path, route.select, home, fs) : null
+    removeEmptyDirs([path.dirname(item.path)], fs)
+    return meta || done({ removed: true, deleted: true })
+  }
+  if (out !== t) put(out)
+  const prior = mine.length === 1 && typeof was(mine[0]) === 'string' ? was(mine[0]) : null
+  return done(prior != null ? { restored_from: pre.saved, value: prior } : { removed: true, ...(pre.saved ? { backup: pre.saved } : {}) })
+}
+
+const isEmptyObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v) && !Object.keys(v).length
+
+// the file as it was before `on`: the newest backup `isOn` does not say holds trocar's value. A backup that cannot be read (the read fails, its bytes prove no
+// encoding, it is not JSON) is skipped, never taken for "no value": an older one is looked at. → { doc (null: none), saved, unread: [{ path, why }], any }
+function before(file, home, fs, isOn) {
+  const all = backupsOf({ home, file, fs }), unread = []
+  for (const b of [...all].reverse()) {
+    let d
+    try { const s = readText(readOrNull(fs, b)); if (s.why) throw new Error(WHY_TEXT[s.why]); d = parseJsonText(s.text) } catch (e) { unread.push({ path: b, why: String((e && e.message) || e) }); continue }
+    if (!isOn(d)) return { doc: d, saved: b, unread, any: true }
+  }
+  return { doc: null, saved: null, unread, any: all.length > 0 }
+}
+
+// the entry trocar created is gone: the meta file's key that selects it comes back from the meta's backup (none there → it goes); a meta file left `{}`
+// with no backup is trocar's too and goes. → null, or a left-unreadable result when the backup that may hold the user's choice cannot be read
+function unselect(entry, sel, home, fs) {
+  const meta = path.join(path.dirname(entry), sel.meta), id = path.basename(entry, '.json'), k = [sel.idKey]
+  const buf = readOrNull(fs, meta), r = buf == null ? null : readText(buf)
+  let doc
+  try { doc = r && !r.why ? parseJsonText(r.text) : undefined } catch { doc = undefined }
+  if (!doc || getPath(doc, k) !== id) return null // gone, unreadable or no longer pointing at it: the user's choice now
+  const pre = before(meta, home, fs, (d) => getPath(d, k) === id)
+  const was = pre.doc ? getPath(pre.doc, k) : undefined
+  if (pre.unread.length && typeof was !== 'string') return { result: 'left-unreadable', reason: `${meta}: ${sel.idKey} was left pointing at the entry trocar created: trocar could not read the backups that may hold the value it replaced: ${pre.unread.map((u) => `${u.path} (${u.why})`).join('; ')}`, backups: pre.unread.map((u) => u.path) }
+  const out = typeof was === 'string' ? setKey(r.text, k, was).text : removeKey(r.text, k).text
+  if (!pre.any && isEmptyObject(parseJsonText(out))) fs.rmSync(meta, { force: true })
+  else writeDurable(meta, encodeText(out, r.charset), fs.statSync(meta).mode & 0o777, fs)
+  return null
 }
 
 /** Undoes a plan from planByMarker, item by item; one that fails does not stop the rest. → [{ harness, path, how, result, … }] with `result`

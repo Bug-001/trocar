@@ -13,7 +13,7 @@ import { randomUUID } from 'node:crypto'
 import { applyJsonKey, applyJsonKeys, applyTextEntry, writeOwnedFile, judgeOwned, saveManifest, undoEntry, removeOwnedFile, sha256 } from '../trust/journal.mjs'
 import { parseJsonText, getPath, removeKey } from '../../../off/json-text.mjs'
 import { decodeText } from '../../../off/text-codec.mjs'
-import { doorPorts, isDoorValue } from '../../../off/door-value.mjs'
+import { doorPorts, isDoorValue, LOOPBACK_HOSTS } from '../../../off/door-value.mjs'
 import { editTarget } from '../../../off/fsutil.mjs'
 import { BLOCK_OPEN } from '../../../off/text-edit.mjs'
 import { switchFileIn } from '../../../off/paths.mjs'
@@ -23,7 +23,7 @@ import { entryGate } from '../entry-forms.mjs'
 import { CODE } from '../codes.mjs'
 import { unseal, doorFp } from '../../../off/seal.mjs'
 
-export const LOOPBACK = Object.freeze(['localhost', '127.0.0.1', '::1'])
+export const LOOPBACK = LOOPBACK_HOSTS
 export const PAC_PATH = '/trocar.pac' // P10: the daemon serves the PAC here on the PAC group's door
 // a hostTree form's note (CM31): it names the form, since status prints it under the harness, beside forms that run on their own
 const hostTreeNote = (form) => `${form} runs inside another program: every other extension there connects through trocar too, and trocar passes those connections on without capturing them`
