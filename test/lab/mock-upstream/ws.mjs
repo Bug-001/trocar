@@ -220,7 +220,8 @@ export function serve(conn, req, { deflate }, state, record) {
     if (m.opcode === 2) return fail(1003, 'the Responses socket takes text messages only')
     let text
     try { text = utf8.decode(data) } catch { return fail(1007, 'text message is not UTF-8') }
-    chain = chain.then(() => respond(text)).catch((e) => { record({ type: 'ws_message', ts: iso(), conn_id: conn.id, dir: 'in', text, error: String(e?.stack || e) }); conn.raw.destroy() })
+    // in flight like an HTTP reply (server.mjs): GET /__mock/state counts it until it completes or the client is gone
+    chain = chain.then(async () => { state.inflight = (state.inflight || 0) + 1; try { await respond(text) } finally { state.inflight-- } }).catch((e) => { record({ type: 'ws_message', ts: iso(), conn_id: conn.id, dir: 'in', text, error: String(e?.stack || e) }); conn.raw.destroy() })
   }
 
   return {
