@@ -29,8 +29,10 @@ import { CODE } from '../core/codes.mjs'
 import { lineComment } from '../../off/text-edit.mjs'
 import { normalizeName } from '../../off/identity.mjs'
 import { MARKER_VAR } from '../core/trust/confirm.mjs'
-import { envValues, envProxies, perOs } from './_common.mjs'
+import { envValues, envProxies, perOs, editorExtension } from './_common.mjs'
 import { renderShim } from './_plugins.mjs'
+
+const EXTENSION = 'moonshot-ai.kimi-code' // the VS Code extension id (its dir is `<id>-<version>[-<target>]`)
 
 const CA_VAR = 'NODE_EXTRA_CA_CERTS'
 // POSIX shell rc files the kimi installer may have put its PATH line in (trocar's line is an `export`, not for fish)
@@ -106,7 +108,7 @@ const proxyMode = {
     { id: 'kimi-code.cli', os: ['darwin', 'win32'], route: 'switch', cert: 'wrapper', trust: 'node', present: [NATIVE], verified: both },
     { id: 'kimi-code.acp', os: ['darwin', 'win32'], route: 'switch', cert: 'wrapper', trust: 'node', present: [NATIVE], verified: both },
     { id: 'kimi-code.web', os: ['darwin', 'win32'], route: 'switch', cert: 'wrapper', trust: 'node', present: [NATIVE], verified: { darwin: true, win32: { reason: 'not-measured' } } },
-    { id: 'kimi-code.vscode', os: ['darwin', 'win32'], route: 'vscode', cert: 'root', trust: 'root', present: [{ base: 'home', path: '.vscode/extensions', glob: 'moonshot-ai.kimi-code-*' }], verified: both, hostTree: true,
+    { id: 'kimi-code.vscode', os: ['darwin', 'win32'], route: 'vscode', cert: 'root', trust: 'root', present: editorExtension(EXTENSION, ['desktop']), verified: both, hostTree: true,
       hosts: { processes: ['code', 'code helper (plugin)'] } }, // the host program, by D51 normalized name: VS Code (Code.exe) and its macOS extension host (Code Helper (Plugin))
     { id: 'kimi-code.desktop', os: ['darwin', 'win32'], route: 'switch', cert: 'wrapper', trust: 'node', // D56⑥: out of scope (no door within D43)
       present: [perOs({ darwin: { base: 'abs', path: '/Applications/Kimi Code.app' }, win32: { base: 'localAppData', path: 'Programs/Kimi' } })], verified: { darwin: { reason: 'out-of-scope' }, win32: { reason: 'out-of-scope' } } },

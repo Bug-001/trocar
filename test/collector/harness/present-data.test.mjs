@@ -29,6 +29,9 @@ for (const d of withInject) {
       const ctx = ctxFor()
       if (el.glob) { // the dir with no match is absent; one entry the glob matches makes it present
         const dir = resolveLoc({ ...el, glob: undefined }, ctx)[0]
+        make(path.dirname(dir)); fs.writeFileSync(dir, '')
+        assert.equal(isPresent(only, ctx), false, `present[${i}]: ${dir} is a file, not a dir`)
+        fs.rmSync(dir)
         make(path.join(dir, `not-${el.glob.replace(/\*/g, '1')}`))
         assert.equal(isPresent(only, ctx), false, `present[${i}]: nothing in ${dir} matches ${el.glob}`)
         make(path.join(dir, el.glob.replace(/\*/g, '1.0.0')))
