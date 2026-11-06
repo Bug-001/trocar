@@ -46,13 +46,13 @@ export function rootIdOf(cert) {
 
 const rsTool = (r, what) => (r.code === 0 ? null : `${what} failed (exit ${r.code ?? 'none'}${r.err ? `: ${r.err.slice(0, 200)}` : ''})`)
 
-/** rootStore({ platform, run, home, env, fs }) → { add(rootDer), has(id), remove(id), list() }. add / remove → { ok: true, absent? } |
+/** rootStore({ platform, run, home, env, fs, once }) → { add(rootDer), has(id), remove(id), list() }. add / remove → { ok: true, absent? } |
  *  { ok: false, reason }; has → { present } | { error }; list → { roots: [{ fp256?, sha1 }] } (every trocar root, ROOT_SUBJECT) | { error }.
- *  `run` is execTool's injected runner. */
+ *  `run` is execTool's injected runner. `once` (read-only use: no add or remove after it): Windows lists the store at most once for has and list. */
 /** How long a root-store verb may wait on the OS: it may show its prompt, and a person may be slow to answer it. */
 export const OS_PROMPT_MS = 120_000
 
-export function rootStore({ platform, run = null, home, env = process.env, fs = nodeFs }) {
+export function rootStore({ platform, run = null, home, env = process.env, fs = nodeFs, once = false }) {
   const opts = { run, env, timeoutMs: OS_PROMPT_MS }
   const tmp = path.join(home, '.trocar', 'collector', 'root-store-tmp.pem')
   const withFile = (pem, fn) => {
@@ -126,9 +126,12 @@ export function rootStore({ platform, run = null, home, env = process.env, fs = 
     // the whole user store listed: present iff a line, spaces taken out (older certutil prints `Cert Hash(sha1): ab cd …`), holds the
     // thumbprint; the labels are localized, the hex is not. A listing that did not succeed (a spawn failure, a timeout: code null, any
     // other exit) is an error, never a silent "absent" (D38).
+    // `once`: a read-only command (doctor) asks has and list of one store; both read this listing, so it is run once (D62)
+    let listed = null
+    const listStore = () => { if (listed) return listed; const r = execTool('certutil', ['-user', '-store', 'Root'], opts); if (once) listed = r; return r }
     const find = (id) => {
       const t = thumb(id).toLowerCase()
-      const r = execTool('certutil', ['-user', '-store', 'Root'], opts)
+      const r = listStore()
       if (r.code !== 0) return { error: rsTool(r, 'certutil -user -store') }
       return { present: r.out.split(/\r?\n/).some((l) => l.replace(/\s+/g, '').toLowerCase().includes(t)) }
     }
@@ -139,7 +142,7 @@ export function rootStore({ platform, run = null, home, env = process.env, fs = 
       }),
       has: (id) => { const f = find(id); return f.error ? { error: f.error } : { present: f.present } },
       list: () => {
-        const r = execTool('certutil', ['-user', '-store', 'Root'], opts)
+        const r = listStore()
         if (r.code !== 0) return { error: rsTool(r, 'certutil -user -store') }
         const value = (l) => l.slice(l.indexOf(':') + 1).trim()
         const roots = []

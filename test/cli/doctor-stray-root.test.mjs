@@ -8,6 +8,7 @@ import path from 'node:path'
 import { modelWorld } from '../helpers/model-world.mjs'
 import { runDoctor } from '../../src/cli/doctor.mjs'
 import { manifestPath } from '../../src/off/manifest.mjs'
+import { rootIdOf } from '../../src/off/root-store.mjs'
 import { fakeIo, recordingExec } from './fixtures/on-ctx.mjs'
 import { down, SOCK } from './fixtures/status-ctx.mjs'
 import { absentSpawn } from '../helpers/no-real-os.mjs'
@@ -45,3 +46,25 @@ for (const os of ['darwin', 'win32']) {
     assert.equal(threw.exit, 3, 'a listing that throws is not none either')
   })
 }
+
+// D62 (1.6 §3.7): on Windows the listing and the question `status` asks (is the recorded root there?) read the same `certutil -user -store Root`
+// output, so doctor starts it once. The store is the real one (src/off/root-store.mjs) over an injected runner that answers a listing.
+test('V125 · win32: doctor answers both root questions from one certutil listing of the user store', async () => {
+  const w = await modelWorld({ os: 'win32' })
+  await w.install()
+  const pem = fs.readFileSync(path.join(w.dir, 'ca', 'trocar-ca.pem'))
+  const { sha1 } = rootIdOf(pem)
+  const listing = ['Root "Trusted Root Certification Authorities"', '================ Certificate 0 ================', 'Serial Number: 01', 'Issuer: CN=trocar local root', 'Subject: CN=trocar local root', `Cert Hash(sha1): ${sha1.toLowerCase()}`, 'CertUtil: -store command completed successfully.'].join('\r\n')
+  for (const recorded of [true, false]) {
+    if (!recorded) fs.rmSync(manifestPath(w.dir))
+    const lists = []
+    const exec = (file, args) => { if (file === 'certutil' && args.join(' ') === '-user -store Root') { lists.push(args); return { status: 0, stdout: listing, stderr: '' } } return { status: 0, stdout: '', stderr: '' } }
+    const io = fakeIo()
+    const deps = { spawn: absentSpawn, has: () => true, request: down(), procs: async () => [], lingerRead: () => ({ state: true }), socketPath: SOCK, user: 'alice', exec, netFactsDeps: async () => ({ harnesses: w.harnesses, archFacts: null }) }
+    await runDoctor(['--json'], { io, home: w.home, platform: 'win32', env: { ...w.env, TROCAR_SOURCE: path.join(w.home, 'none') }, deps })
+    const doc = JSON.parse(io.stdoutText())
+    assert.equal(doc.status.cert.root.state, 'in-place', JSON.stringify(doc.status.cert))
+    assert.equal(strays(doc).length, recorded ? 0 : 1, JSON.stringify(doc.findings))
+    assert.equal(lists.length, 1, 'one listing of the user store per doctor run')
+  }
+})
