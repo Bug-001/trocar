@@ -24,7 +24,7 @@ function standIn({ hangLaunch = false, answers = false } = {}) {
       if (hangLaunch) return hang() // the launch itself never answers
       if (answers) { // a browser that answers until it is killed
         const page = { on() {}, addInitScript: async () => {}, goto: async () => {}, close: async () => {} }
-        const context = { newPage: async () => page, on() {}, pages: () => [page], close: async () => {}, unrouteAll: async () => {} }
+        const context = { newPage: async () => page, addInitScript: async () => {}, on() {}, pages: () => [page], close: async () => {}, unrouteAll: async () => {} }
         return { newContext: async () => context, contexts: () => [context], close: async () => {}, on() {} }
       }
       return { newContext: hang, contexts: () => [], close: async () => {}, on() {} }
