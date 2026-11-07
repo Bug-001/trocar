@@ -39,7 +39,7 @@ const firstOf = (w, src) => leaves(src).map((s) => stateOf(w, s)).find((r) => r.
 function expected(c, d, f, w) {
   if (!c.known) return 'not-verified'
   if (c.verified !== true) return 'not-verified'
-  if ((f.forwardOnlyHosts || []).includes(c.host)) return 'not-verified'
+  if ((f.forwardOnlyHosts || []).includes(c.host)) return 'forward-only-host' // forwarded by design, the form is verified (P11 rule 2)
   if (f.hostTree && !(c.hostSet || d.hosts).includes(c.host)) return 'outside-host-set'
   if (c.start === 'unknown') return 'start-time-unknown'
   if (c.start === 'before') return 'config-after-start'

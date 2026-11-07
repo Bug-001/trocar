@@ -178,6 +178,8 @@ export const FINDINGS = {
     commands: (c) => [gui(`Point ${c.h}'s certificate setting at a file you own`), trocar(c, 'trocar install')], verify: (c) => `trocar status ${c.h}` },
   'not-trocars-file': { cls: 'problem', trocarFirst: false, what: (c) => `${c.h}: a file that is not trocar's is where trocar puts its own; trocar left it alone.`, why: () => 'trocar never writes over a file it did not write.',
     commands: (c) => [gui('Move that file away if you do not need it there'), trocar(c, 'trocar install')], verify: (c) => `trocar status ${c.h}` },
+  'forward-only-host': { cls: 'expected', trocarFirst: false, what: (c) => `${c.h} talked to a host trocar forwards by design without reading it.`, why: () => 'trocar does not decrypt the hosts this form lists as forward-only (its own sign-in, update and download hosts).',
+    commands: (c) => [gui(`No action needed: ${c.h} keeps working, and its connections to these hosts are not decrypted`)], verify: (c) => `trocar status ${c.h}` },
   'not-verified': { cls: 'expected', trocarFirst: false, what: (c) => `This form of ${c.h} is not verified on this platform yet; it is forwarded only.`, why: () => 'trocar only decrypts the forms it has verified.',
     commands: (c) => [gui(`No action needed: ${c.h} keeps working, and these connections are not decrypted`)], verify: (c) => `trocar status ${c.h}` },
   // 4.11 P6: the API hosts its config names (status's `hosts`) are all on this machine, and loopback never reaches the door

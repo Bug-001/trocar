@@ -66,7 +66,7 @@ export const TRUST_REASONS = Object.freeze([
   'var-missing', 'env-frozen', 'config-after-start', 'start-time-unknown', 'file-unreadable', 'ca-not-in-file', 'replace-without-ca', 'shadowed',
   'verify-disabled', 'marker-stale', 'marker-pending', 'no-marker', 'ca-unusable', 'environ-unreadable', 'config-unreadable',
   'settings-unparsable', 'settings-unreadable', 'chromium-child', 'hook-inherited',
-  'not-verified', 'outside-host-set', // proxy mode's verdict (4.11 P11): the form or host is not verified for decryption; a hostTree form's host program talking off its host set (the door's untracked reason, the same word)
+  'not-verified', 'forward-only-host', 'outside-host-set', // proxy mode's verdict (4.11 P11): the process or form is not verified for decryption; a host the form forwards by design; a hostTree form's host program talking off its host set (the door's untracked reason, the same word)
   // a harness's own
   'settings-ignored-managed-by-host', 'settings-ignored-restricted', 'settings-ignored-setting-sources', 'dsh-use-openssl-ca', 'dsh-node-too-old',
   'kimi-not-via-shim', 'kimi-npm-no-shim', 'shim-not-on-path', 'desktop-ca-override',
@@ -185,10 +185,10 @@ export const isEvent = (e) => sets.event.has(e) // the sets checkRecord() judges
 export const isWhere = (w) => sets.where.has(w)
 
 /** The `reason`s that make an `untracked` / `untrusted` row expected: the connection is forwarded by design, not lost (4.6 §记录「连接行」;
- *  4.6 §连接行怎么落码 and 4.8 §5.2 for the door's untracked reasons, 1.6 附录 for `not-verified`). Every other reason, and none, stays a failure. */
+ *  4.6 §连接行怎么落码 and 4.8 §5.2 for the door's untracked reasons, 1.6 附录 for `not-verified` and `forward-only-host`). Every other reason, and none, stays a failure. */
 export const NOT_CAPTURED_BY_DESIGN = Object.freeze({
   untracked: Object.freeze(['not-an-agent', 'agent-helper', 'harness-off', 'group-off', 'outside-host-set', 'other-user']),
-  untrusted: Object.freeze(['not-verified', 'outside-host-set']),
+  untrusted: Object.freeze(['not-verified', 'forward-only-host', 'outside-host-set']),
 })
 const byDesign = Object.fromEntries(Object.entries(NOT_CAPTURED_BY_DESIGN).map(([k, v]) => [k, new Set(v)]))
 
