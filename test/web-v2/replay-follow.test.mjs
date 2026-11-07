@@ -206,4 +206,21 @@ test('loadBodies (3.5 block): one read for the refs not held; each item fills by
   await loadBodies(api, [okItem.ref]); assert.equal(asked.length, 1, 'a held body is not asked again')
 })
 
+// a read aborted before it answers (its step was left) no longer stands for its refs: the next ask of one of them sends a read and gets
+// the body, instead of sharing the cancelled read's answer
+test('loadBodies: refs of a read aborted before it answers are asked again by the next need, not answered as cancelled', async () => {
+  bodyCache.clear()
+  const asked = [], ac = new AbortController()
+  const api = { get: (name, p, { signal } = {}) => { asked.push(p.ref.join()); return new Promise((res) => {
+    if (!signal) return res({ ok: true, data: { blocks: p.ref.map((ref) => ({ ref, bytes: 'b', encoding: 'utf8' })), errors: [] } })
+    signal.addEventListener('abort', () => setTimeout(() => res({ ok: false, status: 0, error: 'cancelled' }), 20), { once: true }) // a queued read answers on its turn
+  }) } }
+  const left = loadBodies(api, ['r1', 'r2'], { signal: ac.signal })
+  ac.abort()
+  const [r2] = await loadBodies(api, ['r2'])
+  assert.deepEqual(asked, ['r1,r2', 'r2'])
+  assert.equal(r2.status, 'ok', 'the body, not the cancelled answer')
+  assert.equal((await left)[0].status, 'error', 'the left read itself still answers as cancelled')
+})
+
 // Hold every lane of `w` at mark M (session, then each lane whole).
