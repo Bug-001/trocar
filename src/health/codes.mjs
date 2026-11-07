@@ -36,7 +36,7 @@ export const STATE_EVENTS = Object.freeze(['switch', 'daemon-start', 'daemon-sto
 /** The `reason` of a door's `untracked` row (4.8 §5.2 · §5.3, 4.6 §连接行怎么落码): why the door could not vouch for the connection's process. */
 export const UNTRACKED_REASONS = Object.freeze(['pid-unresolved', 'facts-unavailable', 'other-user', 'outside-host-set', 'agent-helper', 'cmdline-pending', 'not-an-agent', 'ambiguous', 'harness-off', 'group-off', 'door-deadline'])
 
-/** Failure codes the failure recorder never folds by where + code: the reader folds each of them into a condition per
+/** Failure codes the failure recorder never folds by where + code + harness: the reader folds each of them into a condition per
  *  (pid, host), so a folded line would make the pairs folded into it vanish (4.6 §事件与码, D1-1). Bounded: a (pid,
  *  host) is written at most once in the process's life. */
 export const UNFOLDED_CODES = Object.freeze(['negative-cache', 'trust-rejected'])
