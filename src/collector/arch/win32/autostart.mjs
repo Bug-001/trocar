@@ -307,7 +307,7 @@ export function userUnit({ home, node, script, run = null, env = process.env, fs
       const why = errOf(c)
       const f = runKeyFallback({ command: daemonCommandLine({ program, conhost }), run, env, record })
       if (!f.ok) {
-        const reason = `schtasks /Create was refused (${why}) and the HKCU Run entry ${RUN_KEY.name} could not be written either (${f.reason}): trocar does not start at login`
+        const reason = `schtasks /Create was refused (${why}) and the HKCU Run entry ${RUN_KEY.name} could not be written either (${f.reason}): trocar does not start at login; put that right, then run trocar install again`
         return { code: c.code ?? 1, out: '', err: `${why}; the Run-key fallback failed too: ${f.reason}`, via: 'task', ...(f.entry ? { ledger: f.entry } : {}), event: { event: 'failure', where: 'install', code: 'task-register-failed', reason } }
       }
       const event = { event: 'failure', where: 'install', code: 'task-register-failed', reason: `schtasks /Create was refused (${why}); trocar starts at login through the HKCU Run entry ${RUN_KEY.name} instead, with the supervisor parent restarting the daemon` }

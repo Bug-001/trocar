@@ -12,7 +12,8 @@ import { runInstallCli } from '../../src/cli/install.mjs'
 import { runUninstall } from '../../src/cli/uninstall.mjs'
 import { statusDoc } from '../../src/cli/status.mjs'
 import { readManifest, saveManifest, manifestPath } from '../../src/off/manifest.mjs'
-import { acquireOpLock } from '../../src/off/lock.mjs'
+import { acquireOpLock, tryOpLock } from '../../src/off/lock.mjs'
+import { autostartBlock } from '../../src/collector/install.mjs'
 import { opLockFile } from '../../src/off/paths.mjs'
 import { controlEndpoint } from '../../src/collector/arch/win32/control-path.mjs'
 
@@ -86,6 +87,21 @@ test('4.8 §7: a later install whose /Create is accepted takes the Run value out
   assert.equal(w.runKeys().length, 0, 'the record holds no run-key entry once the task is the login entry')
   assert.deepEqual(win.value, { kind: 'REG_EXPAND_SZ', value: '%USERPROFILE%\\mine.exe' }, 'the user\'s value is back')
   assert.equal(b.doc.autostart.entry, TASK_NAME)
+})
+
+// D38 · 1.6 §3.3: a Run value that cannot be recorded (here: another command holds op.lock) is not written, and trocar then has no login entry:
+// install says so with exit 1 and the way out, and on's precondition (the one question every on asks) refuses with the same way out
+test('D38: a Run value that cannot be recorded is not written; install exits 1 naming trocar install, and on refuses autostart-missing', async () => {
+  const win = windows()
+  const w = await world(win)
+  const enable = w.unit.enable
+  w.unit.enable = (o) => { const held = tryOpLock({ file: opLockFile(w.home) }); try { return enable(o) } finally { held.lock.release() } }
+  const r = await w.install()
+  const doc = r.io.json()
+  assert.deepEqual([r.exit, doc.ok, win.value, w.runKeys().length], [1, false, null, 0], r.io.text())
+  assert.ok(doc.problems.some((p) => p.includes('trocar install')), `the problem gives the way out: ${JSON.stringify(doc.problems)}`)
+  const blk = autostartBlock({ unit: w.unit, osName: 'win32' })
+  assert.ok(blk && blk.includes('trocar install'), `on refuses before it writes anything: ${blk}`)
 })
 
 // 1.6 R12: off waits at most 10 s for op.lock, and the OS may hold the collector's start longer (launchd's 10 s throttle, the 15 s wait for the
