@@ -752,7 +752,6 @@ function openDesk(ctx, route0, makeView) {
   }
   async function redrawNow(changed) {
     if (s.dead) return
-    railsHold.start() // a draw of the reader's from here to this redraw's paint shows the lanes before their window: the paint is not held then
     const desk = s.desk, keepPins = pin(), prevRow = curCall()
     s.meta = desk.meta
     s.lanes = buildLanes(desk, { count: desk.probes || 0, series: [] }, { prev: s.lanes, changed })
