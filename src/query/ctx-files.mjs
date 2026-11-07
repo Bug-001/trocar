@@ -489,7 +489,11 @@ function* sealing(s, { home, fs, ax, memo, uses }, n, spans, kept, k) {
 function* appendTails(s, W, d, N, upTo, fs, fileOf, fresh) {
   const { cols, log } = s.V, ax = W.ax, add = { main: [], rest: [] }, partOf = (key) => (key === ax ? 'main' : 'rest');
   const steppers = new Map(), defs = lru(DEF_BYTES), push = (part, ...os) => { add[part].push(Buffer.concat(os.map(lineBytes))); };
-  for (const h of d.lanes) push(partOf(h.lane), { l: h });
+  // in the lanes' order, by first step (V.lanes, a fresh tail's): the log's order of change follows how the fold was sliced, and a
+  // reader adds a lane it has not seen in the order its header comes (3.5 §会话读 --tail)
+  const firstAt = (h) => (isRow(cols, h.first) ? cols.ts[cols.slotOf(h.first)] : null); // a lane's key is its first rid: no two tie
+  const lanes = [...d.lanes].sort((a, b) => compareStep(firstAt(a), a.first, firstAt(b), b.first));
+  for (const h of lanes) push(partOf(h.lane), { l: h });
   const calls = [...d.opens].filter((rid) => isRow(cols, rid)).sort((x, y) => compareStep(cols.ts[cols.slotOf(x)], x, cols.ts[cols.slotOf(y)], y));
   for (const rid of calls) {
     const key = log.read(...log.latest(rid)).r.lane, S = steppers.get(key) || steppers.set(key, laneStepper(s, key, W.memo, defs)).get(key), i = placeIn(cols, S.L, rid);
