@@ -358,6 +358,14 @@ test('a daemon that does not answer is daemon-not-responding; --json is one docu
   assert.equal(j.io.stderrText(), '', 'stdout carries the one JSON, nothing leaks to stderr')
 })
 
+// 1.6 附录 C: Linux has no key custody (4.11 P1: it reads its CA files), so cert.key names none
+test('Linux: cert.key.custody is null and the key state is still said', async () => {
+  const s = await installedHome()
+  const key = (await run(s, ['--json'])).io.json().cert.key
+  assert.equal(key.custody, null)
+  assert.ok(['present', 'missing'].includes(key.state), JSON.stringify(key))
+})
+
 test('status writes nothing at all (§3.5), and usage errors (an unknown harness, an unknown option) exit 2 before anything is read', async () => {
   const s = await installedHome()
   const before = snapshot(s.home)

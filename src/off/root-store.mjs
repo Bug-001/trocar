@@ -120,5 +120,5 @@ export function rootStore({ platform, run = null, home, env = process.env, fs = 
       },
     }
   }
-  throw new Error(`no user root store for ${platform}: Linux keeps the file custody's root (4.11 P1)`)
+  throw new Error(`no user root store for ${platform}: Linux reads its root from its CA files (4.11 P1)`)
 }

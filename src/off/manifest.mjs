@@ -43,7 +43,7 @@ export const OFF_VERSION = 25 // 25: the copy knows a marker by its fixed part (
  *  An item of any other kind is left alone by `off` and listed (unknownItems). No vpn-* kinds (D43). */
 export const KNOWN_KINDS = Object.freeze(['json-key', 'text', 'owned-file', 'legacy-clash-block', 'legacy-launch-agent', 'legacy-env', 'legacy-ca', 'legacy-cc-steer',
   'proxy-entry', 'trust-entry', 'forwarder-binary', 'scheduled-task', 'run-key',
-  'system-root', 'json-array-item', 'root-key']) // D55: the CA in the user's OS store (by fingerprint), one element trocar added to a JSON array (P5), the root's private key in its custody backend (4.11 P13: `custody` {kind: 'keychain' | 'cng' | 'file', id} and `fp256`; uninstall takes it out last, through the injected custody's remove).
+  'system-root', 'json-array-item', 'root-key']) // D55: the CA in the user's OS store (by fingerprint), one element trocar added to a JSON array (P5), the root's private key in its custody backend (4.11 P13: `custody` {kind: 'keychain' | 'cng', id} and `fp256`; uninstall takes it out last, through the injected custody's remove).
 /** The kinds undone by the file rule (journal.mjs undoEntry): they carry the same shape as json-key / text (path, pre_sha256, ops). */
 export const FILE_ENTRY_KINDS = Object.freeze(['json-key', 'text', 'proxy-entry', 'trust-entry', 'json-array-item'])
 // The `owned-file` roles 4.11 P13 adds: `switch` (the route switch file) and `config-entry` (a config-library entry trocar created) are removed like a plugin;
@@ -93,7 +93,7 @@ export function undoByHand(e) {
   }
   if (e.kind === 'root-key') {
     const c = isPlainObject(e.custody) ? e.custody : {}
-    const how = c.kind === 'file' ? `rm ${shellWord(String(c.id))}` : c.kind === 'cng' ? `run: certutil -user -csp "Microsoft Software Key Storage Provider" -delkey ${JSON.stringify(String(c.id))}` : `open Keychain Access and delete the private key ${JSON.stringify(String(c.id ?? 'trocar'))} from your login keychain`
+    const how = c.kind === 'cng' ? `run: certutil -user -csp "Microsoft Software Key Storage Provider" -delkey ${JSON.stringify(String(c.id))}` : `open Keychain Access and delete the private key ${JSON.stringify(String(c.id ?? 'trocar'))} from your login keychain`
     return `${how} (the private key of the trocar root with SHA-256 ${e.fp256 ?? 'unknown'}; remove the root from your trust store first)`
   }
   if (e.kind === 'json-array-item') return `edit ${where}: remove ${JSON.stringify(e.item)} from the list ${(e.keys || []).join('.')}${e.created_array ? ', then delete the list if it is now empty (trocar created it)' : ''}`

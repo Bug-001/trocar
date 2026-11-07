@@ -2,7 +2,7 @@
 // and timers. CM4: an intermediate at start, the next at 6 days, a leaf never outlives its intermediate, no key file, the leaf
 // cache emptied on rotation. CM5: a real TLS handshake on 127.0.0.1 — a client trusting only the root succeeds; the leaf without
 // the intermediate is refused. CM6: a failing custody — unavailable / key missing at start, a re-issue failure kept, retried
-// hourly, forward-only at expiry. The file custody (Linux) stays root-signed.
+// hourly, forward-only at expiry.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import crypto from 'node:crypto'
