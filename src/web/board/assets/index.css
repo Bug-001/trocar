@@ -990,7 +990,8 @@ a.ovtr:hover { background: var(--hover); }
 .desk.next #saw .sawrow{height:calc(var(--barh) + 2px);}
 /* the main track's gutter never grows its row (1.3 §排布: #ctxwin's half comes first): its name and peak on one line as every gutter
    title (replay.css .tgut), the shares wrapped under it. Every line is 1lh and the gutter a whole number of them, so when the shares do
-   not all fit their box shrinks to whole lines and the rest is not drawn, never half a line; the gutter's title lists them all.
+   not all fit their box shrinks to whole lines and the rest is not drawn, never half a line; the last line drawn says "+N more" (the
+   smallest shares, Scope.tsx fitShares) and the gutter's title lists them all.
    1.4 lh keeps a glyph's box inside its line, so the first line not drawn has no pixel inside the box. */
 .desk.next #saw #sawgut{white-space:normal;align-self:stretch;display:flex;flex-direction:column;align-items:flex-end;justify-content:flex-end;
   line-height:1.4;max-height:round(down, calc(var(--barh) + 2px), 1lh);}
