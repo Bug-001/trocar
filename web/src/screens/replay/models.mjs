@@ -178,26 +178,34 @@ function infoRows(s) {
 }
 
 // ── the step head (2.2 §步头) ─────────────────────────────────────────────────────────────────────────────────────
+// 1.2 §编号: a first read's {done, total} (the head carries pending and none without it has come since the open), else null
+function firstRead(desk) {
+  const p = desk && desk.firstPending && desk.pending
+  return p ? { done: Number(p.done) || 0, total: Number(p.total) || 0 } : null
+}
+
 /**
- * @typedef {{rough: true, n: number, m: number, label: string}} RoughStepHead
- * @typedef {{rough: false, n: number|null, k: number|null, m: number, laneWord: string|null, label: string, model: string|null,
+ * @typedef {{done: number, total: number}|null} FirstRead
+ * @typedef {{rough: true, n: number, m: number, read: FirstRead, label: string}} RoughStepHead
+ * @typedef {{rough: false, n: number|null, k: number|null, m: number, read: FirstRead, laneWord: string|null, label: string, model: string|null,
  *   ts: string|null, time: string, half: {tip: string|null}|null, compare: {sel: number|null, cacheRefK: number|null, M: number}|null,
  *   ctx: {word: string, value: number|null, comp: Array<[string, number]>|null}, cache: {word: string, label: string},
  *   cost: {word: string, label: string}, cacheRows: () => object[], compRows: () => object[]|'busy', costRows: () => object[]}} StepHead
  */
 /** @returns {StepHead|RoughStepHead|null} */
 export function stepHeadModel(s) {
-  const call = rowAt(s)
+  const call = rowAt(s), read = firstRead(s.desk)
   if (!call) {
     const at = roughAt(s), h = s.desk && s.desk.head
-    return at != null && h.tier ? { rough: true, n: at + 1, m: h.steps, label: W.stepNo(at + 1, h.steps) } : null
+    return at != null && h.tier ? { rough: true, n: at + 1, m: h.steps, read, label: read ? W.stepRead(at + 1, read.done, read.total) : W.stepNo(at + 1, h.steps) } : null
   }
   const main = s.anchor.kind === 'main', r = stepRef(s.lanes, call.rid)
   const no = r ? (r.step ? r.n : r.k) : s.playhead + 1, m = r ? r.m : s.anchor.calls.length
   const ref = refRowOf(s.anchor, s.playhead), fid = callFacts(call), model = modelOf(call)
   return {
-    rough: false, n: main ? no : null, k: main ? null : no, m, laneWord: main ? null : W.laneWord(s.anchor.kind),
-    label: main ? W.stepNo(no, m) : W.callNo(W.laneWord(s.anchor.kind), no, m),
+    rough: false, n: main ? no : null, k: main ? null : no, m, read, laneWord: main ? null : W.laneWord(s.anchor.kind),
+    label: read ? (main ? W.stepRead(no, read.done, read.total) : W.callRead(W.laneWord(s.anchor.kind), no, read.done, read.total))
+      : main ? W.stepNo(no, m) : W.callNo(W.laneWord(s.anchor.kind), no, m),
     model, ts: call.ts || null, time: fmtTime(call.ts) || '—',
     half: fid.facts.length ? { tip: fid.tech.map((p) => p[1]).filter(Boolean).join('\n') || null } : null,
     compare: main ? { sel: s.diffRef != null && s.anchor.calls[s.diffRef] ? localNo(s, s.anchor.calls[s.diffRef]) : null, cacheRefK: ref ? localNo(s, ref) : null, M: m } : null,

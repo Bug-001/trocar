@@ -120,6 +120,11 @@ export const STEP_PREV = 'Previous step'
 export const STEP_NEXT = 'Next step'
 export const stepNo = (n, m) => `Step ${n} / ${m}`
 export const callNo = (laneW, k, m) => `${laneW} · call ${k} / ${m}`
+// 1.2 §编号: during a first read the head's step count is the snapshot's, so the step head counts the calls read instead
+const grp = (n) => Number(n).toLocaleString('en-US')
+export const callsRead = (done, total) => `${grp(done)} of ${grp(total)} calls read`
+export const stepRead = (n, done, total) => `Step ${n} · ${callsRead(done, total)}`
+export const callRead = (laneW, k, done, total) => `${laneW} · call ${k} · ${callsRead(done, total)}`
 export const askNo = (k) => `Prompt ${k}`
 
 // ── the session head (1.2 §会话头) ────────────────────────────────────────────────────────────────────────────────────
