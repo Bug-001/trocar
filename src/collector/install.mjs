@@ -6,7 +6,7 @@
 // `trocar uninstall` — is src/off/ (the entries, the daemon stop, the lock) and src/cli/uninstall.mjs (1.6 §1.4, R3).
 import { retriedNote } from '../cli/words.mjs'
 import { UNDO_WORDS } from '../cli/receipt.mjs'
-import { entryWords, entryState } from './net-deps.mjs' // the login entry in the platform's own words: status says it the same way (D61)
+import { entryWords, entryState, AUTOSTART_MISSING } from './net-deps.mjs' // the login entry in the platform's own words: status says it the same way (D61)
 import { isModelOs } from './model-install.mjs' // macOS / Windows: their on is turnOnModel (src/cli/on-model.mjs); this turnOn is Linux's
 import fs from 'node:fs'
 import net from 'node:net'
@@ -121,8 +121,7 @@ const processUid = () => (typeof process.getuid === 'function' ? process.getuid(
 const act = (a) => a !== 'skip-intact' && a !== 'skip-user-changed'
 const shortLine = (l) => String(l).split(' # ')[0].trim()
 const DAEMON_CMD = 'trocar daemon' // 1.6 §2: the autostart unit's ExecStart is this command (units written before the rename run its alias `collector start`)
-/** 附录 C.1: the code of the refusal below (one place, mirrored by src/cli/json.mjs's ERROR_CODES). */
-export const AUTOSTART_MISSING = 'autostart-missing'
+export { AUTOSTART_MISSING } // 附录 C.1: the code of the refusal below (defined in net-deps.mjs with the entry's words; mirrored by src/cli/json.mjs's ERROR_CODES)
 /** D61 / 1.6 §3.3: the login entry is `install`'s and `on` never touches it, so an `on` whose entry is not registered would leave the agents'
  *  rewritten configs pointing at doors that nobody opens after the next login (without it nothing starts after a reboot and no agent can reach a door).
  *  One question per OS, asked of the arch's own autostart unit (`registered()`: launchctl print · schtasks /Query · systemctl --user is-enabled),

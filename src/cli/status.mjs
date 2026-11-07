@@ -13,6 +13,7 @@ import { HARNESS_IDS, resolveHarnesses } from '../off/harness-names.mjs'
 import { collectorDir, stateFile, trocarHome } from '../off/paths.mjs'
 import { readStateFile } from '../off/state.mjs'
 import { readManifest, itemsOfPhase, daemonMayStart } from '../off/manifest.mjs'
+import { statKey } from '../query/warm.mjs'
 import { readIngressConfig } from '../collector/core/ingress-config.mjs'
 import { holdersOf, judgeLife } from '../off/holders.mjs'
 import { readDoorSeen, validRow } from '../off/door-seen.mjs'
@@ -123,8 +124,9 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   if (f.manifest.value && f.manifest.value.unsupported) { f.manifest.error = `${path.join(dir, 'install-manifest.json')} is version ${JSON.stringify(f.manifest.value.version)}, which this trocar does not read`; f.manifest.value = null }
   const m = f.manifest.value
   f.boardPort = readIngressConfig({ dir, fs }).boardPort ?? null // the board's url (C.3 `board`): install's record, read only
-  // D61 / 1.6 §3.5: the login entry, asked as `on` asks it (the arch unit's registered()); only of an install — with none there is nothing to ask
-  const autostartP = daemonMayStart(m) ? import('../collector/net-deps.mjs').then((nd) => nd.loginEntry({ platform, home, env, run: deps.exec || null, unit: deps.unit })).catch((e) => { rethrowSandbox(e); return { entry: null, state: 'unknown', reason: `the login entry could not be read (${errMessage(e)})` } }) : null
+  // D61 / 1.6 §3.5: the login entry, asked as `on` asks it (the arch unit's registered()); only of an install — with none there is nothing to ask.
+  // `deps.loginCache`: the query worker's (src/query/worker.mjs) — it keeps the answer while the files trocar's own commands write are unchanged
+  const autostartP = daemonMayStart(m) ? import('../collector/net-deps.mjs').then((nd) => nd.loginEntry({ platform, home, env, run: deps.exec || null, script: deps.script || process.argv[1], unit: deps.unit, now: ms, stamp: deps.loginCache ? `${statKey(path.join(dir, 'install-manifest.json'), fs)}|${statKey(stateF, fs)}` : null })).catch((e) => { rethrowSandbox(e); return { entry: null, state: 'unknown', reason: `the login entry could not be read (${errMessage(e)})` } }) : null
   const certP = installCertOf({ f, m, dir, fs, platform, home, env, deps }) // the certificate axis: its root-store read and its own import run while the harnesses are judged
   const installedIds = m ? [...new Set([...(m.entries || []), ...(m.files || [])].map((x) => x.harness).filter((h) => typeof h === 'string'))] : []
   let state = null
@@ -479,8 +481,7 @@ function boardOf(f) {
 }
 
 /** C.3 `autostart` (D61): the login entry as registered() answered; null when trocar is not installed or the platform has no autostart unit. */
-const autostartOf = (f) => { const a = f.autostart; if (!a) return null; const missing = a.state !== 'present' && a.state !== 'unknown'; return { entry: a.entry, state: a.state, code: missing ? AUTOSTART_MISSING : null, command: a.state === 'present' ? null : 'trocar install', reason: a.reason } }
-const AUTOSTART_MISSING = 'autostart-missing' // 附录 B; the same code `on` refuses with (src/cli/json.mjs ERROR_CODES)
+const autostartOf = (f) => { const a = f.autostart; if (!a) return null; return { entry: a.entry, state: a.state, code: a.code || null, command: a.state === 'present' ? null : 'trocar install', reason: a.reason } }
 
 /** C.3 `harnesses[h].setup` (4.11 P4b, D65④): the model's one judgement, read with the forms; driver mode (Linux) does not judge it, and what was not read is
  *  `unknown` with its reason, never `ready` (D38). */

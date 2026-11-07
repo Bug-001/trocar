@@ -6,7 +6,9 @@ import assert from 'node:assert/strict'
 import { installedHome } from '../off/fixtures/off-ctx.mjs'
 import { runStatus, reply, asDaemon, SOCK } from './fixtures/status-ctx.mjs'
 import { fakeIo } from './fixtures/on-ctx.mjs'
-import { runStatusCli } from '../../src/cli/status.mjs'
+import fs from 'node:fs'
+import path from 'node:path'
+import { runStatusCli, statusDoc } from '../../src/cli/status.mjs'
 import { runDoctor } from '../../src/cli/doctor.mjs'
 import { absentSpawn } from '../helpers/no-real-os.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -62,4 +64,36 @@ test('D61: doctor shows autostart-missing with trocar install when the entry is 
     assert.deepEqual(f[0].commands.map((c) => c.run), ['trocar install'])
   }
   assert.deepEqual(await doc({ state: 'present' }), [])
+})
+
+test('D61 / D38: status <harness> exits 1 / 3 for the login entry and its detail says why, with trocar install', async () => {
+  const s = await installedHome()
+  for (const q of [{ state: 'absent' }, { state: 'unknown', err: 'launchctl print did not run (timeout)' }]) {
+    const t = await runStatus(s, ['codex'], { request: asDaemon(reply()), deps: { unit: unitAnswering(q) } })
+    const at = t.text.search(/^\s*Login\b/m)
+    assert.ok(at >= 0, `the detail has the Login row (${q.state}):\n${t.text}`)
+    const block = t.text.slice(at).replace(/\s+/g, ' ')
+    assert.ok(block.includes('trocar install'), t.text)
+    if (q.err) assert.ok(block.includes(q.err), t.text)
+  }
+})
+
+test('1.6 §3.5: the worker asks registered() once and again when the install record changes or after 60 s; the CLI asks every time', async () => {
+  const s = await installedHome()
+  let asked = 0, now = Date.parse('2026-11-07T12:00:00Z')
+  const unit = { name: 'trocar-collector.service', registered: () => { asked++; return { state: 'present' } } }
+  const deps = (o = {}) => ({ request: asDaemon(reply()), socketPath: SOCK, procs: async () => [], lingerRead: () => ({ state: true }), user: 'alice', exec: s.sys.exec.run, unit, ms: () => now, platform: 'linux', ...o })
+  const worker = () => statusDoc({ home: s.home, env: { ...s.sh.env }, platform: 'linux', deps: deps({ loginCache: true }) })
+  await worker(); await worker()
+  assert.equal(asked, 1, 'two worker polls, one question')
+  const man = path.join(s.dir, 'install-manifest.json')
+  fs.utimesSync(man, new Date(now), new Date(now + 5000))
+  await worker()
+  assert.equal(asked, 2, 'the install record changed: asked again')
+  now += 61_000
+  await worker()
+  assert.equal(asked, 3, '60 s later: asked again (an outside change)')
+  asked = 0
+  await statusDoc({ home: s.home, env: { ...s.sh.env }, platform: 'linux', deps: deps() }); await statusDoc({ home: s.home, env: { ...s.sh.env }, platform: 'linux', deps: deps() })
+  assert.equal(asked, 2, 'the CLI asks each time')
 })
