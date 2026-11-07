@@ -187,7 +187,7 @@ test('§3.5 exit codes: 0 every harness that is on is captured, 1 one of them is
 
 test('附录 B · §3.7: every code in the catalogue renders as English sentences with Fix and Check, every value filled in, inside 80 columns', () => {
   const ctx = { platform: 'linux', h: 'codex', hf: { behaviour: { fileKeys: [{ path: '/home/alice/.codex/.env', key: 'HTTPS_PROXY', format: 'dotenv' }], restart: {} }, procs: [], forms: [] },
-    t: { nodes: [], edges: [], branches: [] }, F: { routing: 'proxy', harnesses: {}, desired: {} }, user: 'alice', setting: { scheme: 'socks5', host: '127.0.0.1', port: 1080 },
+    t: { nodes: [], edges: [], branches: [] }, F: { routing: 'proxy', harnesses: {}, desired: {}, autostart: { entry: 'the systemd user unit trocar-collector.service', state: 'absent', reason: 'the systemd user unit trocar-collector.service is not registered' } }, user: 'alice', setting: { scheme: 'socks5', host: '127.0.0.1', port: 1080 },
     dead: { addr: '127.0.0.1', port: 7890 }, u: { name: 'node', pid: 42 }, listPath: '/home/alice/.trocar/agents.json', file: { path: '/home/alice/.trocar/agents.json', state: 'ok', problems: [{ index: 1, code: 'wide-name-needs-args', detail: 'this name needs an args pattern' }] }, pid: 5530, port: 17992, upPort: 7890 }
   for (const code of FINDING_CODES) {
     const found = findingFor(code, ctx)

@@ -171,6 +171,9 @@ export const FINDINGS = {
       : `Add ${JSON.stringify({ harness: c.h, name: c.u.name })} to the agents list in ${c.listPath} (create it as {"version":1,"agents":[...]} if it is not there); no restart needed`)], verify: (c) => `trocar status ${c.h}` },
   'agent-list-invalid': { cls: 'problem', trocarFirst: false, what: (c) => `${c.file.path} has ${c.file.problems.length} bad entr${c.file.problems.length === 1 ? 'y' : 'ies'}; the rest is still used.`, why: (c) => (c.file.state === 'ok' ? 'A bad entry does not apply; the others do.' : 'The whole file does not apply, so only the built-in names are used.'),
     commands: (c) => c.file.problems.map((p) => gui(`${p.index == null ? `Fix ${c.file.path}` : `Fix or remove entry ${p.index + 1} of ${c.file.path}`}: ${p.detail}`)), verify: () => 'trocar status' },
+  // D61: the login entry is install's; without it nothing of trocar starts after the next login (status's read of registered(), the question on asks)
+  'autostart-missing': { cls: 'problem', trocarFirst: true, what: (c) => (c.F.autostart.state === 'unknown' ? 'Whether trocar\'s login entry is registered could not be read, so trocar may not start after the next login.' : 'trocar\'s login entry is not registered or is switched off, so trocar does not start after the next login.'),
+    why: (c) => `${c.F.autostart.reason.replace(/^./, (m) => m.toUpperCase())}; without it the agents trocar points at cannot connect after a restart.`, commands: (c) => [trocar(c, 'trocar install')], verify: () => 'trocar status' },
   'cert-key-missing': { cls: 'problem', trocarFirst: true, what: () => 'The key for trocar\'s root is gone, so trocar only forwards.', why: () => 'It was removed from your keychain or key store.', commands: (c) => [trocar(c, 'trocar install')], verify: () => 'trocar status' },
   'cert-intermediate-unavailable': { cls: 'problem', trocarFirst: false, what: () => 'trocar cannot sign certificates right now, so it only forwards.', why: () => 'There is no desktop login session, or your keychain is locked.',
     commands: (c) => [gui('Log in to the desktop session on this machine and unlock your keychain'), trocar(c, 'trocar status')], verify: () => 'trocar status' },
@@ -277,6 +280,7 @@ export function diagnose({ facts: F, topology: T, harnesses = null, user = null 
   if (!named) {
     const host = { F, h: null, hf: null, t: null, user, sh, platform: F.platform }
     if (F.linger === false) out.push(make('linger-off', host))
+    if (F.autostart && F.autostart.state !== 'present') out.push(make('autostart-missing', host))
     if (F.cert && F.cert.key === 'missing') out.push(make('cert-key-missing', host)) // the daemon's issuer (its /status `cert`, 4.11 P2): the key first, it explains the intermediate
     else if (F.cert && F.cert.intermediate === 'unavailable') out.push(make('cert-intermediate-unavailable', host))
     if (F.otherRedirector === true) out.push(make('other-redirector', host))

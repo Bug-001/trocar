@@ -20,3 +20,22 @@ export async function netFactsDeps({ arch = null, harnesses = null, platform = p
 /** The forms of this OS present on this machine, per harness (proxy mode; 1.6 §3.5, 4.11 P5): the arch's reader, loaded only when asked. */
 export async function presentForms(o) { return (await import('./arch/model-backends.mjs')).presentForms(o) }
 export async function formPrograms(o) { return (await import('./arch/model-backends.mjs')).formPrograms(o) }
+
+/** The login entry in the platform's own words (a Windows user told to run `systemctl` has been handed nothing; tested on Windows 2026-10-11 and macOS 2026-10-18). */
+export const entryWords = (osName, unit) => (osName === 'win32' ? 'the scheduled task \\trocar\\collector' : osName === 'darwin' ? `the LaunchAgent ${(unit && unit.name) || 'com.trocar.collector'}` : 'the systemd user unit trocar-collector.service')
+/** `registered()`'s answer in one phrase: `on`'s refusal, install's read-back of the entry it registered and `status` say it the same way. */
+export const entryState = (osName, unit, q) => `${entryWords(osName, unit)} ${q.state === 'absent' ? 'is not registered' : q.state === 'disabled' ? 'is registered but switched off' : `could not be read (${q.err || 'no reason given'})`}`
+
+/** D61 / 1.6 §3.5: the login entry as `status` reports it — the arch unit's `registered()`, the question `on` asks (one question per OS, no platform
+ *  branch here). `unit`: a test's (0.1 §3), else this platform's. → { entry, state, reason } (reason null when present), or null: no autostart unit on this platform. */
+export async function loginEntry({ platform = process.platform, home, env, run = null, unit }) {
+  let u = unit
+  if (u === undefined) {
+    let A = null
+    try { A = await loadArch(platform) } catch { A = null }
+    u = A && A.unit && A.unit.userUnit ? A.unit.userUnit({ home, node: process.execPath, script: process.argv[1], run, env }) : null
+  }
+  if (!u) return null
+  const q = u.registered()
+  return { entry: entryWords(platform, u), state: q.state, reason: q.state === 'present' ? null : entryState(platform, u, q) }
+}
