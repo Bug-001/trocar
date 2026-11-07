@@ -13,11 +13,13 @@
 // marker. It adds nothing on Node < 22.19 (no tls.setDefaultCACertificates) or under --use-openssl-ca; the reason is
 // derived here from the exe's Node release and the process's flags (4.6: the plugin itself stays silent).
 import path from 'node:path'
-import { hostOf, expandHome, versionAtLeast } from '../core/config-read.mjs'
+import { hostOf, versionAtLeast } from '../core/config-read.mjs'
 import { MARKER_VAR } from '../core/trust/confirm.mjs'
 import { lineComment } from '../../off/text-edit.mjs'
 import { envValues, envProxies, argAfter, dotenvLayer, perOs } from './_common.mjs'
 import { renderPlugin, ANONYMOUS_MODULE_MANIFEST } from './_plugins.mjs'
+import { HOME_PLACES } from '../../off/marker.mjs'
+import { homeRoot } from '../../off/loc.mjs'
 
 const ENTRY = /(^|\/)dsh$|\/@deepseek-ai\/dsh\/lib\/bin\.js$/
 // dsh-app-boot BOOTSTRAP_NAMES / _PREFIXES: names no .env file may set (dsh aborts its start when one does)
@@ -26,7 +28,7 @@ const PROXY_NAMES = new Set(['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY
 const bootstrapOnly = (k) => { const u = k.toUpperCase(); return BOOTSTRAP.has(u) || ['DSH_', 'XDG_', 'DYLD_', 'BASH_FUNC_'].some((p) => u.startsWith(p)) }
 const MIN_NODE = '22.19.0' // tls.setDefaultCACertificates
 
-const dshHome = (env, home) => expandHome(env.get('DSH_HOME'), home) || path.join(home, '.dsh')
+const dshHome = (env, home) => homeRoot(HOME_PLACES['deepseek-dsh'], { home, env }) // the place the marker undo looks too
 function profileOf(argv) {
   const at = argv.findIndex((a, i) => i > 0 && ENTRY.test(a))
   return argAfter(argv.slice(at + 1), ['--profile']) || argv.slice(at + 1).find((a) => /^[a-z][a-z0-9-]*$/.test(a)) || null
@@ -79,7 +81,7 @@ const proxy = {
 
 // Proxy mode, macOS and Windows (spec 4.11 §2.3, plan A.4): data only. Measured facts — a plugin loaded by one
 // cordis.patch.yml row wraps dsh's own dispatcher and reads the switch file per request (live), and adds the CA in process (R3-M6, R3-W3); every form.
-const DSH = (path) => ({ base: 'home', dir: '.dsh', env: 'DSH_HOME', path })
+const DSH = (path) => ({ ...HOME_PLACES['deepseek-dsh'].dir, path })
 const DESKTOP = perOs({ darwin: { base: 'abs', path: '/Applications/DeepSeek Harness.app' } })
 const form = (id, present) => ({ id, os: ['darwin', 'win32'], route: 'switch', cert: 'plugin', trust: 'node', present: [...present, DSH()], verified: { darwin: true, win32: true } })
 const proxyMode = {

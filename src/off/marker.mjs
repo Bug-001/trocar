@@ -4,13 +4,19 @@
 //   block        a sentinel block `# >>> trocar collector >>> … # <<< trocar collector <<<` in a dotenv file; the user's lines trocar put out of effect
 //                with `#trocar-collector-off# ` come back key by key, as the journal's undo does (D48②: a key the user set while on keeps their value)
 //   line         a line with the sentinel comment `# trocar collector: …` that points under ~/.trocar (the Kimi PATH line, the dsh patch row)
-//   json-value   a JSON string that points under ~/.trocar (a CC / Z-Code trust key): the value trocar replaced comes back from the NEWEST backup of that
-//                file (R2), one key at a time — never the whole file (1.6 R2); no value in the backup, the key goes
-//   owned-file   a plugin or shim trocar wrote (its sentinel in it, or exactly trocar's own plugin manifest)
+//   json-value   a JSON string that points under ~/.trocar (a CC / Z-Code trust key), or, at a proxy key `on` writes on macOS / Windows (DOOR_ROUTES),
+//                one of trocar's doors (door-value.mjs: a loopback URL on a door port ingress.json records; that record unreadable, none is judged a
+//                door and a note says so): the value trocar replaced comes back from the NEWEST backup of that file (R2), one key at a time — never the
+//                whole file (1.6 R2); no value in the backup, the key goes
+//   owned-file   a plugin or shim trocar wrote (its sentinel in it, or exactly trocar's own plugin manifest), or a switch file `on` wrote for a harness
+//                (paths.mjs switchFileIn: in trocar's own tree, so trocar's by where it is, whatever it holds; a link there goes, never what it points at)
+// The certificate carriers among them (`phase: 'install'`) are install's (D55①): `off` never looks at them, `uninstall` does (planByMarker `phases`).
 // Nothing else is touched, and no byte of a file outside those marks changes. The result says `undone-by-marker` (the code `off` records and the
 // receipt shows, 1.6 R3). Not done here, said in the docs: a combined bundle (no manifest, so nobody can say who holds it — `uninstall` removes it with the
-// CA), and an install-phase entry at a home the default places do not name. A `route` place (what `on` writes on macOS / Windows) is resolved as `on`
-// resolved it: its variable (XDG_CONFIG_HOME, CODEX_HOME, HERMES_HOME) and the per-user folders (loc.mjs dirsFor) followed. Imports only node:* and src/off.
+// CA); a home install used under a variable value since cleared or changed (only the manifest knew that value). Every place is resolved as its
+// writer resolved it, by the one <loc> resolver (loc.mjs): a `route` place (what `on` writes on macOS / Windows) with
+// its variable (XDG_CONFIG_HOME, CODEX_HOME, HERMES_HOME) and the per-user folders (loc.mjs dirsFor) followed, and a `home` place (HOME_PLACES: the
+// harness's home, by its variable and by its default place, and Hermes' profiles under it). Imports only node:* and src/off.
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { SENTINEL, BLOCK_OPEN, BLOCK_END, LINE_MARK, restoreOffLines } from './text-edit.mjs'
@@ -18,35 +24,66 @@ import { foldsEnvNames } from './env-names.mjs'
 import { getPath, setKey, removeKey, parseJsonText, unreadableJson, markLen } from './json-text.mjs'
 import { writeDurable, editTarget, removeEmptyDirs, readOrNull } from './fsutil.mjs'
 import { backupsOf } from './backup.mjs'
-import { trocarHome } from './paths.mjs'
+import { trocarHome, collectorIn, switchFileIn } from './paths.mjs'
 import { CODE_OFF } from './names.mjs'
 import { decodeText, encodeText, CHARSETS, WHY_TEXT } from './text-codec.mjs'
-import { resolveLoc, dirsFor } from './loc.mjs'
+import { resolveLoc, dirsFor, homeRoot } from './loc.mjs'
+import { doorPorts, isDoorValue, loopbackUrl } from './door-value.mjs'
 
 const RC_FILES = ['.bashrc', '.bash_profile', '.bash_login', '.profile', '.zshrc', '.zshenv', '.zprofile', '.zlogin'] // where the Kimi installer's PATH line, and so trocar's, can be
 const PLUGIN_MANIFEST = '{"type":"module"}\n' // the anonymous package.json of trocar's dsh plugin directory (collector/harness/_plugins.mjs: ANONYMOUS_MODULE_MANIFEST)
 
+/** The home each harness keeps its files in, where install writes its certificate carriers and the descriptors read (`dir`, a <loc>: the default place
+ *  and the variable that moves it; `homes`: the folder of further homes under it, a variable naming one of them names the root two levels up, loc.mjs
+ *  homeRoot). One copy: the writers and the marker undo resolve it alike. */
+export const HOME_PLACES = Object.freeze({
+  'claude-code': Object.freeze({ dir: Object.freeze({ base: 'home', dir: '.claude', env: 'CLAUDE_CONFIG_DIR' }) }),
+  'deepseek-dsh': Object.freeze({ dir: Object.freeze({ base: 'home', dir: '.dsh', env: 'DSH_HOME' }) }),
+  hermes: Object.freeze({ dir: Object.freeze({ base: 'home', dir: '.hermes', env: 'HERMES_HOME' }), homes: 'profiles' }),
+  opencode: Object.freeze({ dir: Object.freeze({ base: 'home', dir: '.config', env: 'XDG_CONFIG_HOME' }) }),
+  pi: Object.freeze({ dir: Object.freeze({ base: 'home', dir: '.pi/agent', env: 'PI_CODING_AGENT_DIR' }) }),
+})
 /** The class-1 routes `on` writes on macOS / Windows whose bytes carry trocar's sentinel (4.11 P5): a plugin-file route's folder (`dir`, a <loc>, loc.mjs)
  *  and file `name`, a dotenv-block route's `file` (a <loc>). The descriptor's route takes its place from here, so the marker undo looks where `on`
  *  wrote — one copy of the place, and the copy trocar-off needs no collector tree to know it. */
-const HERMES_ENV = { perOs: { darwin: { base: 'home', dir: '.hermes', env: 'HERMES_HOME', path: '.env' }, win32: { base: 'localAppData', dir: 'hermes', env: 'HERMES_HOME', path: '.env' } } }
+const HERMES_ENV = { perOs: { darwin: { ...HOME_PLACES.hermes.dir, path: '.env' }, win32: { base: 'localAppData', dir: 'hermes', env: 'HERMES_HOME', path: '.env' } } }
 export const ROUTE_PLACES = Object.freeze({
-  opencode: Object.freeze({ dir: Object.freeze({ base: 'home', dir: '.config', env: 'XDG_CONFIG_HOME', path: 'opencode/plugins' }), name: 'trocar.js' }),
+  opencode: Object.freeze({ dir: Object.freeze({ ...HOME_PLACES.opencode.dir, path: 'opencode/plugins' }), name: 'trocar.js' }),
   codex: Object.freeze({ file: Object.freeze({ base: 'home', dir: '.codex', env: 'CODEX_HOME', path: '.env' }) }),
   hermes: Object.freeze({ file: Object.freeze(HERMES_ENV) }),
 })
+/** The json-key routes `on` writes a door into on macOS / Windows (4.11 §2.3): the file (`file`, a <loc>; or `select`: the entry a meta file's `idKey`
+ *  names in the directory `dir`) and the keys that hold the door (`proxyKeys`). The descriptor's route takes these from here, so the marker undo looks
+ *  where `on` wrote, at the keys it wrote — one copy of each. */
+const CC_SETTINGS = { ...HOME_PLACES['claude-code'].dir, path: 'settings.json' }
+const CLAUDE_3P = (base) => ({ base, path: 'Claude-3p/configLibrary' })
+export const DOOR_ROUTES = Object.freeze({
+  'claude-code': Object.freeze({
+    settings: Object.freeze({ file: CC_SETTINGS, proxyKeys: [['env', 'HTTPS_PROXY'], ['env', 'https_proxy'], ['env', 'HTTP_PROXY'], ['env', 'http_proxy']] }), // every proxy variable it reads: its children inherit this env, and their plain http goes to the door too (4.8 §5.1)
+    library: Object.freeze({ select: { dir: { perOs: { darwin: CLAUDE_3P('appSupport'), win32: CLAUDE_3P('localAppData') } }, meta: '_meta.json', idKey: 'appliedId', createIfNone: true }, proxyKeys: [['egressProxyPacUrl']] }),
+  }),
+  'kimi-code': Object.freeze({ vscode: Object.freeze({ file: { base: 'appSupport', path: 'Code/User/settings.json' }, proxyKeys: [['http.proxy']] }) }),
+  'z-code': Object.freeze({ 'cli-config': Object.freeze({ file: { base: 'home', path: '.zcode/cli/config.json' }, proxyKeys: [['network', 'httpProxy']] }) }),
+})
+const URL_IN_TEXT = /https?:\/\/[^\s"'`,{}[\]\\]+/g // the URLs in a text that does not parse as JSON, each judged as a value would be
+const doorAt = (h) => Object.values(DOOR_ROUTES[h]).map((route) => ({ how: 'json-value', route, door: true, os: ['darwin', 'win32'] }))
 
-/** Where each harness's entries are, relative to HOME (`route`: a ROUTE_PLACES place, resolved against the environment and per-user folders off runs in). `how` says what trocar's mark looks like there (see the header); `eachDir` + `file`: the file in
- *  every subdirectory of a directory (Hermes profiles). The plan of 1.6 / 4.6 §身份与信任 is the authority; a harness not listed here has no marker undo. */
+/** Where each harness's entries are: `file` relative to HOME, or to the harness's home (`home`: a HOME_PLACES place, resolved against the environment off
+ *  runs in and at its default place, each further home under it included); `route`: a ROUTE_PLACES place, resolved against the environment and per-user
+ *  folders off runs in. `how` says what trocar's mark looks like there (see the header); `os`: only there. `phase: 'install'`: a certificate carrier `install` writes (a certificate block, a
+ *  certificate key's value, a trust plugin and its loader row, the Kimi launch shim and its rc PATH line): it is `install`'s (D55①), so only a run that undoes install's items (`uninstall`) looks at it,
+ *  never `off` (4.6 §安装清单与卸载). The plan of 1.6 / 4.6 §身份与信任 is the authority; a harness not listed here has no marker undo. */
+const INSTALLS = { phase: 'install' }
+const ROUTED = ['darwin', 'win32'] // where `on` writes class-1 routes (on Linux a block in the same file is install's certificate block, at every CODEX_HOME in use)
 export const MARKER_PATHS = Object.freeze({
-  'claude-code': [{ how: 'json-value', file: '.claude/settings.json', keys: ['env', 'NODE_EXTRA_CA_CERTS'] }],
-  codex: [{ how: 'block', file: '.codex/.env' }, { how: 'block', route: ROUTE_PLACES.codex }],
-  hermes: [{ how: 'block', file: '.hermes/.env' }, { how: 'block', route: ROUTE_PLACES.hermes }, { how: 'block', eachDir: '.hermes/profiles', file: '.env' }],
-  opencode: [{ how: 'owned-file', file: '.config/opencode/plugins/trocar-ca.js' }, { how: 'owned-file', route: ROUTE_PLACES.opencode }],
-  'deepseek-dsh': [{ how: 'line', file: '.dsh/cordis.patch.yml', yaml: true }, { how: 'owned-file', file: '.trocar/collector/plugins/dsh/index.js' }, { how: 'owned-file', file: '.trocar/collector/plugins/dsh/package.json', exact: PLUGIN_MANIFEST }],
-  'kimi-code': [...RC_FILES.map((f) => ({ how: 'line', file: f })), { how: 'owned-file', file: '.trocar/collector/bin/kimi' }],
-  'z-code': [{ how: 'json-value', file: '.zcode/cli/config.json', keys: ['network', 'caCertFile'] }],
-  pi: [{ how: 'owned-file', file: '.pi/agent/extensions/trocar-ca.js' }],
+  'claude-code': [{ how: 'json-value', home: HOME_PLACES['claude-code'], file: 'settings.json', keys: ['env', 'NODE_EXTRA_CA_CERTS'], ...INSTALLS }, ...doorAt('claude-code')],
+  codex: [{ how: 'block', file: '.codex/.env', ...INSTALLS }, { how: 'block', route: ROUTE_PLACES.codex, os: ['linux'], ...INSTALLS }, { how: 'block', route: ROUTE_PLACES.codex, os: ROUTED }],
+  hermes: [{ how: 'block', home: HOME_PLACES.hermes, file: '.env', ...INSTALLS }, { how: 'block', route: ROUTE_PLACES.hermes, os: ROUTED }],
+  opencode: [{ how: 'owned-file', home: HOME_PLACES.opencode, file: 'opencode/plugins/trocar-ca.js', ...INSTALLS }, { how: 'owned-file', route: ROUTE_PLACES.opencode }],
+  'deepseek-dsh': [{ how: 'line', home: HOME_PLACES['deepseek-dsh'], file: 'cordis.patch.yml', yaml: true, ...INSTALLS }, { how: 'owned-file', file: '.trocar/collector/plugins/dsh/index.js', ...INSTALLS }, { how: 'owned-file', file: '.trocar/collector/plugins/dsh/package.json', exact: PLUGIN_MANIFEST, ...INSTALLS }],
+  'kimi-code': [...RC_FILES.map((f) => ({ how: 'line', file: f, ...INSTALLS })), { how: 'owned-file', file: '.trocar/collector/bin/kimi', ...INSTALLS }, ...doorAt('kimi-code')],
+  'z-code': [{ how: 'json-value', file: '.zcode/cli/config.json', keys: ['network', 'caCertFile'], ...INSTALLS }, ...doorAt('z-code')],
+  pi: [{ how: 'owned-file', home: HOME_PLACES.pi, file: 'extensions/trocar-ca.js', ...INSTALLS }],
 })
 
 const under = (v, root) => typeof v === 'string' && v.startsWith(root + path.sep)
@@ -77,32 +114,52 @@ function blocksIn(t, root) {
   }
   return out
 }
+// whether a YAML text still holds content (a line that is not blank and not only a comment), read as insertLine reads a yaml-list
+const yamlItems = (t) => t.split('\n').some((l) => l.replace(/\r$/, '').replace(/(^|\s)#.*$/, '').trim() !== '')
 const lineHits = (t, root) => linesOf(t).filter((l) => l.line.includes(LINE_MARK) && l.line.includes(root + path.sep))
 
-// the candidate files of a spec for this home, each file once (a route place and a fixed path can name the same one): [{ file, spec }]
-function candidates(home, harness, fs, env, platform) {
+// the entry a select route names: <dir>/<id>.json, id = the meta file's idKey (one plain file name, nothing outside the directory); none → []
+function selected(sel, ctx, fs) {
+  const dir = resolveLoc(sel.dir, ctx)[0]
+  if (!dir) return []
+  let id
+  try { const r = readText(readOrNull(fs, path.join(dir, sel.meta))); id = (parseJsonText(r.text) || {})[sel.idKey] } catch { return [] }
+  return typeof id === 'string' && id !== '' && !/^\.+$/.test(id) && path.basename(id) === id && !/[\\/]/.test(id) ? [path.join(dir, `${id}.json`)] : []
+}
+
+// the candidate files of a spec for this home, each file once per kind of mark (a route place and a fixed path can name the same one; a door key
+// and a trust key can share a file): [{ file, spec }]
+function candidates(home, harness, fs, env, platform, phases) {
   const out = [], seen = new Set()
   const ctx = { os: platform, home, env, dirs: dirsFor(platform, home, env) }
-  const push = (file, spec) => { if (!seen.has(file)) { seen.add(file); out.push({ file, spec }) } }
+  const push = (file, spec) => { const k = `${spec.door ? 'door' : ''}\0${file}`; if (!seen.has(k)) { seen.add(k); out.push({ file, spec }) } }
   for (const spec of MARKER_PATHS[harness]) {
-    if (spec.route) for (const at of spec.route.dir ? resolveLoc(spec.route.dir, ctx).map((d) => path.join(d, spec.route.name)) : resolveLoc(spec.route.file, ctx)) push(at, spec)
-    else if (spec.eachDir) {
-      let names = []
-      try { names = fs.readdirSync(path.join(home, spec.eachDir)).sort() } catch { /* no such directory */ }
-      for (const n of names) push(path.join(home, spec.eachDir, n, spec.file), spec)
+    if ((spec.os && !spec.os.includes(platform)) || !phases.includes(spec.phase || 'on')) continue
+    if (spec.route) for (const at of spec.route.select ? selected(spec.route.select, ctx, fs) : spec.route.dir ? resolveLoc(spec.route.dir, ctx).map((d) => path.join(d, spec.route.name)) : resolveLoc(spec.route.file, ctx)) push(at, spec)
+    else if (spec.home) {
+      for (const root of new Set([homeRoot(spec.home, ctx), homeRoot(spec.home, { ...ctx, env: {} })].filter(Boolean))) { // trocar's marks are its own anywhere: the default home too
+        push(path.join(root, spec.file), spec)
+        if (!spec.home.homes) continue
+        let names = []
+        try { names = fs.readdirSync(path.join(root, spec.home.homes)).sort() } catch { /* no such directory */ }
+        for (const n of names) push(path.join(root, spec.home.homes, n, spec.file), spec)
+      }
     } else push(path.join(home, spec.file), spec)
   }
+  push(switchFileIn(collectorIn(trocarHome(home)), harness), { how: 'owned-file', ours: true }) // every harness: only one on a switch-file route ever has one
   return out
 }
 
-/** What trocar's own marks say it changed for these harnesses (`ids` null: all), without a manifest: `[{ harness, path, how, detail }]`, in the order to
- *  undo them (values and blocks, then lines, then plugins and shims). Reads only; a file it cannot read or parse is planned only if a mark is in it. */
-export function planByMarker({ home, ids = null, fs = nodeFs, env = process.env, platform = process.platform }) {
+/** What trocar's own marks say it changed for these harnesses (`ids` null: all) in the commands `phases` names (`off` ['on'], the default; `uninstall` both), without a manifest: `[{ harness, path, how, detail }]`, in the order to
+ *  undo them (values and blocks, then lines, then plugins and shims). Reads only; a file it cannot read or parse is planned only if a mark is in it.
+ *  `notes` gets a sentence for each loopback proxy value it could not judge (ingress.json unreadable): left, and said. */
+export function planByMarker({ home, ids = null, fs = nodeFs, env = process.env, platform = process.platform, phases = ['on'], notes = [] }) {
   const root = trocarHome(home)
   const plan = []
+  let ports // the door ports, read once when a door key is looked at
   for (const harness of Object.keys(MARKER_PATHS)) {
     if (ids && !ids.includes(harness)) continue
-    for (const { file, spec } of candidates(home, harness, fs, env, platform)) {
+    for (const { file, spec } of candidates(home, harness, fs, env, platform, phases)) {
       let b
       try { b = readOrNull(fs, file) } catch { continue }
       if (b == null) continue
@@ -119,10 +176,23 @@ export function planByMarker({ home, ids = null, fs = nodeFs, env = process.env,
         const hits = lineHits(t, root)
         if (hits.length) add({ lines: hits.map((h) => h.line), yaml: !!spec.yaml })
       } else if (spec.how === 'json-value') {
-        let v
-        try { v = getPath(parseJsonText(t), spec.keys) } catch { continue }
-        if (under(v, root)) add({ keys: spec.keys, value: v })
-      } else if (spec.how === 'owned-file' && (spec.exact ? t === spec.exact : t.includes(SENTINEL))) add(spec.exact ? { exact: spec.exact } : {})
+        let doc
+        try { doc = parseJsonText(t) } catch { doc = undefined }
+        if (!spec.door) { if (doc !== undefined) { const v = getPath(doc, spec.keys); if (under(v, root)) add({ keys: spec.keys, value: v }) } continue }
+        ports = ports || doorPorts(collectorIn(root), fs)
+        const unknown = (where) => notes.push(`${file}: ${where} names a loopback proxy, and trocar cannot tell whether it is one of its doors (${ports.why}); it was left as it is`)
+        if (doc === undefined) { // no longer parses: a door URL anywhere in the text plans it, and the undo leaves it and says so (R3: exit 1)
+          const urls = t.match(URL_IN_TEXT) || []
+          if (ports.ports && urls.some((u) => isDoorValue(u, ports.ports))) add({ keys: null, door: true })
+          else if (ports.why && urls.some(loopbackUrl)) unknown('the file')
+          continue
+        }
+        for (const keys of spec.route.proxyKeys) {
+          const v = getPath(doc, keys)
+          if (ports.ports && isDoorValue(v, ports.ports)) add({ keys, door: true }) // the value itself is not kept: a door URL holds its token
+          else if (ports.why && loopbackUrl(v)) unknown(keys.join('.'))
+        }
+      } else if (spec.how === 'owned-file' && (spec.ours || (spec.exact ? t === spec.exact : t.includes(SENTINEL)))) add(spec.ours ? { ours: true } : spec.exact ? { exact: spec.exact } : {})
     }
   }
   const rank = { 'json-value': 0, block: 0, line: 1, 'owned-file': 2 }
@@ -133,6 +203,12 @@ export function planByMarker({ home, ids = null, fs = nodeFs, env = process.env,
 function undoOne(item, home, fs) {
   const root = trocarHome(home)
   const done = (extra = {}) => ({ result: CODE_OFF.undoneByMarker, ...extra })
+  if ((item.detail || {}).ours) { // the switch file: the path itself goes (a link, not what it names); nothing in it is read
+    try { fs.lstatSync(item.path) } catch { return { result: 'already-clean' } }
+    fs.rmSync(item.path, { force: true })
+    removeEmptyDirs([path.dirname(item.path)], fs)
+    return done({ removed: true })
+  }
   let file
   try { file = editTarget(item.path, fs) } catch (e) { return { result: 'error', reason: String((e && e.message) || e) } }
   const buf = readOrNull(fs, file)
@@ -163,20 +239,34 @@ function undoOne(item, home, fs) {
   if (item.how === 'line') {
     const hits = lineHits(t, root).reverse()
     if (!hits.length) return { result: 'already-clean' }
-    let out = t
-    for (const h of hits) out = out.slice(0, h.at) + out.slice(h.next)
+    const drop = (text) => hits.reduce((o, h) => o.slice(0, h.at) + o.slice(h.next), text) // hits run bottom-up: earlier offsets stay valid
+    // a YAML list whose only item was trocar's row stays a list: `[]` where the topmost row was, its line end kept (install replaced a `[]` there, so
+    // that is byte-exact), the user's comments and blank lines as they were; dsh will not start on a patch file with no list in it (4.6)
+    const top = hits[hits.length - 1], rest = drop(t)
+    const asList = (item.detail || {}).yaml && rest !== '' && !yamlItems(rest) // nothing at all left (a file install created): deleted below
+    const out = !asList ? rest : hits.reduce((o, h) => (h === top ? o.slice(0, h.at) + (h.line.endsWith('\r') ? '[]\r' : '[]') + o.slice(h.at + h.line.length) : o.slice(0, h.at) + o.slice(h.next)), t)
     if ((item.detail || {}).yaml && out.trim() === '') { fs.rmSync(file, { force: true }); removeEmptyDirs([path.dirname(item.path)], fs); return done({ lines: hits.length, deleted: true }) } // dsh will not start on an empty patch file; with no row there is nothing to read
     put(out)
     return done({ lines: hits.length })
   }
   // json-value: the value trocar replaced comes back from the newest backup of this file, this key only; none there → the key goes
-  const keys = item.detail.keys
+  const keys = item.detail.keys, at = keys ? keys.join('.') : 'its proxy keys' // null: found in a file that did not parse, key unknown
+  let ours = (v) => under(v, root)
+  if (item.detail.door) { const p = doorPorts(collectorIn(root), fs); if (!p.ports) return { result: 'error', reason: `${item.path}: ${at} was not undone: ${p.why}` }; ours = (v) => isDoorValue(v, p.ports) }
   let doc
-  try { doc = parseJsonText(t) } catch (e) { return { result: 'left-unparsable', reason: unreadableJson(item.path, t, e, `trocar's value under ${keys.join('.')}`) } }
-  if (!under(getPath(doc, keys), root)) return { result: 'already-clean' }
-  const saved = backupsOf({ home, file: item.path, fs }).at(-1) || null
-  let prior = null
-  if (saved) { try { const s = readText(readOrNull(fs, saved)); const v = s.why ? undefined : getPath(parseJsonText(s.text), keys); if (typeof v === 'string' && !under(v, root)) prior = v } catch { /* a backup that is not JSON holds no value */ } }
+  try { doc = parseJsonText(t) } catch (e) { return { result: 'left-unparsable', reason: unreadableJson(item.path, t, e, `trocar's value under ${at}`) } }
+  if (!keys) return { result: 'error', reason: `${item.path} changed while off read it: run off again` } // planned as not parsing, parses now: judged key by key next time
+  if (!ours(getPath(doc, keys))) return { result: 'already-clean' }
+  // the newest backup whose value here is not trocar's own (`on` saves the file before each key it writes, so a newer one can hold trocar's first key)
+  let saved = null, prior = null
+  for (const b of backupsOf({ home, file: item.path, fs }).reverse()) {
+    let v
+    try { const s = readText(readOrNull(fs, b)); v = s.why ? undefined : getPath(parseJsonText(s.text), keys) } catch { /* a backup that is not JSON holds no value */ }
+    if (typeof v === 'string' && ours(v)) continue
+    saved = b
+    if (typeof v === 'string') prior = v
+    break
+  }
   put(prior != null ? setKey(t, keys, prior).text : removeKey(t, keys).text)
   return done(prior != null ? { restored_from: saved, value: prior } : { removed: true, ...(saved ? { backup: saved } : {}) })
 }

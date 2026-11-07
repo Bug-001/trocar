@@ -10,6 +10,7 @@ import { loadHarnesses } from '../../../src/collector/harness/index.mjs'
 import { runOff } from '../../../src/off/orchestrate.mjs'
 import { runUninstall } from '../../../src/cli/uninstall.mjs'
 import { readManifest } from '../../../src/off/manifest.mjs'
+import { switchFileIn } from '../../../src/off/paths.mjs'
 import { HARNESS_IDS } from '../../../src/off/harness-names.mjs'
 import { tmpDir } from '../../helpers/tmp.mjs'
 import { seedFootprint } from '../../helpers/footprint.mjs'
@@ -52,6 +53,14 @@ export async function installedHome({ names = ['claude-code', 'codex'], seed = n
   const first = await s.on()
   if (first.exit !== 0) throw new Error(`the fixture's first on failed: ${JSON.stringify(first.receipt.notes)}`)
   return s
+}
+
+/** The switch file `on` writes for a harness on macOS / Windows (4.11 P5), put where `on` puts it: the Linux `on` writes nothing `off` finds by a mark
+ *  (Kimi's shim and rc line are install's, 4.6), so a test of `off` by marker in this Linux sandbox gives it this to undo. → its path */
+export function onSwitch(s, harness) {
+  const f = switchFileIn(s.dir, harness)
+  fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, 'http://127.0.0.1:47012\n')
+  return f
 }
 
 /** A lock file as the daemon writes it, for a test that wants a daemon the lock names. */

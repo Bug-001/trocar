@@ -28,6 +28,7 @@ import { hostsProcess } from '../collector/core/host-agent.mjs'
 import { sha256, readOrNull } from '../off/fsutil.mjs'
 import { getPath } from '../off/json-text.mjs'
 import { removeTrocarText, SENTINEL } from '../off/text-edit.mjs'
+import { unseal } from '../off/seal.mjs'
 import { userProcessesOf } from '../off/user-procs.mjs' // its own small file on purpose: through ./orchestrate.mjs this one function pulled the whole undo machinery into `status`'s module load (D62)
 
 import { judgeHarness, certOfForms } from '../netenv/verdict.mjs'
@@ -68,6 +69,7 @@ export function entryState(e, fs = nodeFs) {
     if (e.post_sha256 == null) return { state: 'missing', why: `${file}: the install of this entry did not finish` }
     if (sha256(cur) === e.post_sha256) return { state: 'intact' }
     const text = cur.toString('utf8')
+    e = unseal(e, text)
     if (e.kind === 'text') return removeTrocarText(text, e.ops || []).found ? { state: 'intact' } : text.includes(SENTINEL) ? { state: 'changed', why: `trocar's block in ${file} is not what trocar wrote` } : { state: 'missing', why: `trocar's text is gone from ${file}` }
     let value
     try { value = JSON.parse(text) } catch { return { state: 'changed', why: `${file} no longer parses as JSON` } }

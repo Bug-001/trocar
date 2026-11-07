@@ -16,6 +16,8 @@ import path from 'node:path'
 import { parseJsonc } from '../core/config-read.mjs'
 import { envHosts, argAfter, isOwnPath, perOs } from './_common.mjs'
 import { chromiumRole, NETWORK_SERVICE_ARG } from '../../off/chromium.mjs'
+import { DOOR_ROUTES } from '../../off/marker.mjs'
+import { resolveLoc } from '../../off/loc.mjs'
 
 const BASE_URL_KEYS = ['ANTHROPIC_BASE_URL', 'ANTHROPIC_BEDROCK_BASE_URL', 'ANTHROPIC_VERTEX_BASE_URL', 'ANTHROPIC_FOUNDRY_BASE_URL', 'ANTHROPIC_BEDROCK_MANTLE_BASE_URL']
 const HOST_MANAGED_DROPS = new Set(['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'NO_PROXY', 'no_proxy', 'NODE_EXTRA_CA_CERTS', 'NODE_TLS_REJECT_UNAUTHORIZED'])
@@ -47,10 +49,10 @@ function layers(ctx) {
 
 function settingsLayers(ctx) {
   const cfgDir = ctx.environ.get('CLAUDE_CONFIG_DIR')
-  const userDir = cfgDir || path.join(ctx.home, '.claude')
+  const userDir = path.dirname(resolveLoc(DOOR_ROUTES['claude-code'].settings.file, { home: ctx.home, env: ctx.environ })[0]) // the one place, ~/ expanded as install and the marker undo do
   const managed = MANAGED_DIR[ctx.os]
   const sources = [
-    ['global config env', cfgDir ? path.join(cfgDir, '.claude.json') : path.join(ctx.home, '.claude.json'), 'user'],
+    ['global config env', cfgDir ? path.join(userDir, '.claude.json') : path.join(ctx.home, '.claude.json'), 'user'],
     ['user settings env', path.join(userDir, 'settings.json'), 'user'],
     ['project settings env', path.join(ctx.cwd, '.claude', 'settings.json'), 'project'],
     ['local settings env', path.join(ctx.cwd, '.claude', 'settings.local.json'), 'local'],
@@ -97,12 +99,12 @@ const CA_VAR = 'NODE_EXTRA_CA_CERTS'
 // ~/.claude.json, user settings, managed settings. trocar's own values (under the collector dir) do not count.
 function inject(ctx) {
   const cfgDir = ctx.env.get('CLAUDE_CONFIG_DIR')
-  const settings = path.join(cfgDir || path.join(ctx.home, '.claude'), 'settings.json')
+  const [settings] = resolveLoc(DOOR_ROUTES['claude-code'].settings.file, { home: ctx.home, env: ctx.env }) // the place the marker undo looks too
   const seen = new Set()
   const see = (v) => { if (typeof v === 'string' && v !== '' && !isOwnPath(ctx, v)) seen.add(v) }
   see(ctx.env.get(CA_VAR))
   for (const env of ctx.running) see(env.get(CA_VAR))
-  const files = [cfgDir ? path.join(cfgDir, '.claude.json') : path.join(ctx.home, '.claude.json'), settings]
+  const files = [cfgDir ? path.join(path.dirname(settings), '.claude.json') : path.join(ctx.home, '.claude.json'), settings] // .claude.json sits in the same (expanded) dir
   const managed = MANAGED_DIR[ctx.os]
   if (managed) {
     files.push(path.join(managed, 'managed-settings.json'))
@@ -153,7 +155,8 @@ const proxy = {
 // Proxy mode, macOS and Windows (spec 4.11 §2.3, plan A.4): data only. Facts: measured, plus a census of the Desktop app.
 // The settings file CLAUDE_CONFIG_DIR moves; trust sources are in Claude Code's own precedence
 // (project-local settings, project settings, user settings env, then the process env: settings env is applied over the process env).
-const SETTINGS = { base: 'home', dir: '.claude', env: 'CLAUDE_CONFIG_DIR', path: 'settings.json' }
+const ROUTES = DOOR_ROUTES['claude-code'] // where `on` writes the door and at which keys, the place the marker undo looks too
+const SETTINGS = ROUTES.settings.file
 const PROJECT_LOCAL = { base: 'cwd', path: '.claude/settings.local.json' }
 const PROJECT = { base: 'cwd', path: '.claude/settings.json' }
 const settingsEnv = (file, name) => ({ file, format: 'json', keys: ['env', name] })
@@ -175,8 +178,8 @@ const proxyMode = {
       systemProxy: { http: true, ws: true } }, // the app (Electron) follows the OS proxy; the CLI forms do not (the harness's `proxy.systemProxy`)
   ],
   routes: {
-    settings: { kind: 'json-key', file: SETTINGS, format: 'json', proxyKeys: [['env', 'HTTPS_PROXY'], ['env', 'https_proxy']], noProxyKeys: [['env', 'NO_PROXY'], ['env', 'no_proxy']], value: 'door-url', absent: 'create', takesEffect: 'takes effect the next time you start claude (it reads the proxy setting once, at start)' },
-    library: { kind: 'json-key', select: { dir: perOs({ darwin: { base: 'appSupport', path: 'Claude-3p/configLibrary' }, win32: { base: 'localAppData', path: 'Claude-3p/configLibrary' } }), meta: '_meta.json', idKey: 'appliedId', createIfNone: true }, format: 'json', proxyKeys: [['egressProxyPacUrl']], ownKeys: [['egressProxyUrl'], ['egressProxyPacUrl']], value: 'pac-url', auth: false, absent: 'create', takesEffect: 'takes effect the next time you start the Claude desktop app; no administrator needed' },
+    settings: { kind: 'json-key', ...ROUTES.settings, format: 'json', noProxyKeys: [['env', 'NO_PROXY'], ['env', 'no_proxy']], value: 'door-url', absent: 'create', takesEffect: 'takes effect the next time you start claude (it reads the proxy setting once, at start)' },
+    library: { kind: 'json-key', ...ROUTES.library, format: 'json', ownKeys: [['egressProxyUrl'], ['egressProxyPacUrl']], value: 'pac-url', auth: false, absent: 'create', takesEffect: 'takes effect the next time you start the Claude desktop app; no administrator needed' },
   },
   certs: {
     // only when CLAUDE_CODE_CERT_STORE=bundled is set (then the root is hidden): trocar-ca.pem into the settings env, if neither the settings nor the install env set it
