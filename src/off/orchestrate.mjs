@@ -149,8 +149,8 @@ async function waitForDrain(w, first, boundMs, socketPath) {
  *  until its pid has exited, so the stop that follows never lands inside its barrier. `uninstall` and `update`'s daemon replacement both go through this, naming themselves in `by` (the daemon's rows and daemon-stop say which command stopped it, §5.2) — the caller stops it
  *  afterwards (`routing.stop` when switchRoutingOff already had to). → `{ routing (switchRoutingOff's), drained ({rel, gone}, null when no
  *  daemon answered) }`. The socket is the one that answered: `w.socketPath` is null with $XDG_RUNTIME_DIR unset. */
-export async function drainDaemon(w, { drainMs = DRAIN_MS, by } = {}) {
-  const routing = await switchRoutingOff(w, { ids: null, now: false, exit: true, by })
+export async function drainDaemon(w, { drainMs = DRAIN_MS, by, keepUnanswering = false } = {}) {
+  const routing = await switchRoutingOff(w, { ids: null, now: false, exit: true, by, keepUnanswering })
   if (!(routing.confirmed && routing.how === 'daemon-reply')) return { routing, drained: null }
   const drained = await waitForDrain(w, routing.relayed, drainMs, routing.socket)
   const pid = routing.daemon.pid
@@ -169,13 +169,19 @@ export async function drainDaemon(w, { drainMs = DRAIN_MS, by } = {}) {
  *  how, socket (the control socket a daemon was found on, or the one that was to be asked), daemon: {pid, state}, relayed, relayed_reason?, stop?, refused? ({status, message}:
  *  the daemon answered the request with an error status and changed nothing), problems: [],
  *  notes: [], failures: [{code, reason}], events: [{kind, reason, …}] }`. */
-export async function switchRoutingOff(w, { ids = null, now = false, exit = false, by = null } = {}) {
+export async function switchRoutingOff(w, { ids = null, now = false, exit = false, by = null, keepUnanswering = false } = {}) {
   const r = { confirmed: false, unstoppable: false, state: null, how: null, socket: null, daemon: { pid: null, state: 'none' }, relayed: 'unknown', problems: [], notes: [], failures: [], events: [] }
   const st = await w.daemonState()
   r.state = st.state
   r.socket = st.socket || w.socketPath || null // the one a daemon was found on (the lock names it when XDG_RUNTIME_DIR is unset): the caller asks the same one again
   const lock = st.lock || null
   const fail = (code, reason) => { r.problems.push(reason); r.failures.push({ code, reason }) }
+  // `keepUnanswering` (uninstall, 1.6 §3.6): a daemon alive that does not answer is not off, so it is left running and the routing is not confirmed
+  const stopUnanswering = async (why) => {
+    if (!keepUnanswering) return stopIt(why)
+    r.daemon = { pid: lock && lock.pid, state: 'unresponsive' }
+    fail('collectors-online', `the daemon (pid ${lock && lock.pid}) ${why}, so capture is not known to be off; it was left running. Run: trocar off`)
+  }
   const stopIt = async (why) => {
     const s = await w.stopDaemon({ unitManaged: w.unitManaged() })
     r.stop = s; r.how = s.how
@@ -199,9 +205,9 @@ export async function switchRoutingOff(w, { ids = null, now = false, exit = fals
       if (!r.confirmed) fail('state-mismatch', `the daemon did not confirm that ${isProxyMode(w.platform) ? `its doors are shut${exit ? ' and it is exiting' : ''}` : `the kernel's watch table and links are off`} (actual: ${reply && reply.actual}, confirmed: ${reply && reply.confirmed}); the entries are left as they are. ${wayOut(w, r.daemon.pid)}`)
     } catch (e) {
       if (e && e.status) { r.refused = { status: e.status, message: errMessage(e) }; fail('control-error', `the daemon refused the off request (${errMessage(e)}); the entries are left as they are. ${wayOut(w, lock && lock.pid)}`) }
-      else await stopIt(`did not answer the off request (${errMessage(e)})`)
+      else await stopUnanswering(`did not answer the off request (${errMessage(e)})`)
     }
-  } else if (st.state === 'unresponsive' || st.state === 'starting') await stopIt(st.reason || 'does not answer')
+  } else if (st.state === 'unresponsive' || st.state === 'starting') await stopUnanswering(st.reason || 'does not answer')
   else if (st.state === 'none' || st.state === 'stale') {
     r.relayed = { closing: 0, waiting: 0, cut: 0 } // there is no engine: nothing is relayed
     if (st.state === 'stale' && !lock && st.reason) { r.notes.push(st.reason); r.events.push({ kind: 'note', reason: st.reason }) } // a lock cut short: said, not hidden

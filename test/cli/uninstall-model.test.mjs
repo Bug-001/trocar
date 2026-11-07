@@ -366,7 +366,7 @@ test('4.9 §4 · uninstall on macOS notes the launchd override it cannot remove;
 // invariant 5 (1.6 §3.6 「活着却不应答的,算作没关,拒绝」, §3.4 次序): the daemon does not confirm its doors shut (state-mismatch, or a refused request),
 // so the agents' entries still point at its doors: the autostart stays registered and the daemon is not stopped, exit 1, the code says why
 for (const os of ['darwin', 'win32']) {
-  for (const [why, off] of [['state-mismatch', async () => ({ desired: 'off', actual: 'on', confirmed: false, pid: 4242 })], ['control-error', async () => { throw Object.assign(new Error('busy'), { status: 503 }) }]]) {
+  for (const [why, off] of [['state-mismatch', async () => ({ desired: 'off', actual: 'on', confirmed: false, pid: 4242 })], ['control-error', async () => { throw Object.assign(new Error('busy'), { status: 503 }) }], ['collectors-online', async () => { throw Object.assign(new Error('control request timed out'), { code: 'ETIMEDOUT' }) }]]) {
     test(`invariant 5 · ${os} · ${why}: the routing not confirmed off leaves the autostart and the daemon, exit 1`, async () => {
       const w = await modelWorld({ os, commands: ['codex'] })
       assert.equal((await w.install()).exit, 0)
@@ -383,6 +383,28 @@ for (const os of ['darwin', 'win32']) {
       assert.ok(fs.existsSync(path.join(w.dir, 'install-manifest.json')), 'the install stays for the next run')
       assert.ok(!receipt.autostart || receipt.autostart.disabled !== true)
       assert.ok(flowEvents(w.dir).some((e) => e.event === 'failure' && e.code === why), 'the record names why (D38)')
+      if (why === 'collectors-online') assert.equal(receipt.error && receipt.error.code, why, 'a daemon that stops answering at the off request is refused with the code (appendix C.1)')
+    })
+  }
+}
+
+// 1.6 §3.6 「活着却不应答的,算作没关,拒绝」: the lock names a live daemon and its control endpoint times out (stuck) or refuses (still starting):
+// uninstall refuses before it writes anything — no autostart call, no stop — the manifest and every file stay, exit 1, a failure record with the code
+for (const os of ['darwin', 'win32']) {
+  for (const [why, fail] of [['times out', () => Object.assign(new Error('control request timed out'), { code: 'ETIMEDOUT' })], ['refuses', () => Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' })]]) {
+    test(`1.6 §3.6 · ${os}: a daemon alive whose control endpoint ${why} is not off: uninstall refuses, stops nothing, changes nothing, exit 1`, async () => {
+      const w = await modelWorld({ os, commands: ['codex'] })
+      assert.equal((await w.install()).exit, 0)
+      const sock = os === 'win32' ? '\\\\.\\pipe\\trocar-test' : path.join(w.home, 'c.sock')
+      fs.writeFileSync(path.join(w.dir, 'lock'), JSON.stringify({ pid: 4242, start_time: '111', boot_id: 'boot-1', socket: sock }) + '\n')
+      const exec = recordingExec()
+      let stopped = 0
+      const before = tree(w.home)
+      const { receipt, exit } = await runUninstall({ home: w.home, env: w.env, yes: true, deps: { platform: os, exec: exec.run, socketPath: sock, request: async () => { throw fail() }, alive: (pid) => pid === 4242, identity: () => ({ start_time: '111', boot_id: 'boot-1' }), procs: async () => [], sleep: async () => {}, drainMs: 0, getuid: () => 501, stopDaemon: async () => { stopped++; return { stopped: true, how: 'test', pid: 4242, signals: [] } } } })
+      assert.deepEqual([exit, receipt.error && receipt.error.code], [1, 'collectors-online'])
+      assert.deepEqual([stopped, exec.calls.filter((c) => /launchctl|schtasks|reg(\.exe)? delete|taskkill/i.test(c))], [0, []], 'no stop, the autostart is not touched')
+      assert.deepEqual(tree(w.home), before, 'not one file changed')
+      assert.ok(flowEvents(w.dir).some((e) => e.event === 'failure' && e.code === 'collectors-online'), 'the record names why (D38)')
     })
   }
 }
