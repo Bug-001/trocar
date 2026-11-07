@@ -53,9 +53,11 @@ function inject(ctx) {
 
 // Which processes are OpenCode (D51 preset, every OS): its Bun binary (npm's .opencode, ~/.opencode/bin, the desktop's opencode-cli core). Bun
 // re-executing itself as plain bun (BUN_BE_BUN=1, Linux reads the env) is not the agent; the Node launcher (node …/bin/opencode) is not either.
+// The desktop app's main process (OpenCode.app/Contents/MacOS/OpenCode, also `opencode` once normalized) only talks to its `opencode-cli serve`
+// sidecar, which makes every model call: nothing but where its executable sits tells it from the CLI, so this exclude item reads the exe (measured, desktop 2.0.32 on macOS).
 const processes = {
   names: [{ name: 'opencode' }, { name: '.opencode' }, { name: 'opencode-cli' }],
-  exclude: [{ name: ['opencode', '.opencode', 'opencode-cli'], env: { BUN_BE_BUN: '1' } }],
+  exclude: [{ name: ['opencode', '.opencode', 'opencode-cli'], env: { BUN_BE_BUN: '1' } }, { name: 'opencode', exe: /\/OpenCode\.app\/Contents\/MacOS\/OpenCode$/ }],
   longLived: [{ args: '^(-\\S+ )*(serve|web)( |$)' }], // the subcommand, not an argument that says serve
 }
 
