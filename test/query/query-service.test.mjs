@@ -354,6 +354,20 @@ test(`the deadline measures silence: a worker that ${what} (3.5:42)`, async () =
   } finally { svc.stop() }
 })
 
+test('a silent worker\'s D38 record says which query it was, its parameters by name, none of their values', async () => {
+  const said = [], secret = 'do-not-repeat-this-value'
+  const svc = createQueryService({ home: rawHome('trocar-qsvc-'), deadlineMs: 300, failure: (w, e) => said.push(e.message), fork: ipcFake('', []) })
+  try {
+    await within(svc.relay({ name: 'segments', params: {}, res: recorder() }).catch(() => {}), 5000, 'the first read settles')
+    said.length = 0
+    await within(svc.relay({ name: 'block', params: { ref: secret, [`${secret} y`]: '1' }, res: recorder() }).catch(() => {}), 5000, 'the read settles')
+    assert.equal(said.length, 1)
+    assert.match(said[0], /\bblock\b/)
+    assert.match(said[0], /\bref\b/)
+    assert.equal(said[0].includes(secret), false, said[0])
+  } finally { svc.stop() }
+})
+
 test('the real worker reports progress while it folds a session, and the fold is answered whole (3.5:42)', { timeout: 120_000 }, async () => {
   const home = path.join(tmpDir('trocar-qsvc-prog-'), '.trocar')
   fs.mkdirSync(path.join(home, 'raw'), { recursive: true, mode: 0o700 })

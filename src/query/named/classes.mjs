@@ -44,7 +44,7 @@ export async function run({ home, fs, now, errors, progress = null }) {
       rules: entry ? entry.rules || [] : [], counts: c, ...(entry ? {} : { in_table: false }) };
   });
 
-  const du = await diskUsage({ home, fs: fs.promises || undefined });
+  const du = await diskUsage({ home, fs: fs.promises || undefined, progress });
   for (const u of du.unreadable) errors.push({ where: u.path, reason: u.error });
   // Every `disk` number is what the file system says, out of the ONE walk (src/query/disk.mjs): the plaintext
   // records, their sealed copies, the whole home. A segment that still has its plaintext beside a sealed copy

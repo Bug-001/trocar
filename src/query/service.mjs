@@ -145,6 +145,13 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
     if (child) child.stdout.resume()
   }
 
+  /** What a silent worker was asked, for the D38 record (3.5 读不全不静默): the query and its parameters by name, no value. A name is only shape-checked: the query core refuses an undeclared one, unless the worker hung before it read the line. */
+  const askedOf = ({ name, line }) => {
+    let asked = {}
+    try { const q = JSON.parse(line); asked = q.params || q.body || {} } catch { /* the name alone says enough */ }
+    const names = Object.keys(asked).filter((k) => /^[\w-]{1,32}$/.test(k))
+    return `${name}${names.length ? ` (${names.join(', ')})` : ''}`
+  }
   /** The deadline measures the worker's SILENCE: armed while it owes bytes, re-armed by every byte and every progress message
    *  (a fold still reading records), and off while the response is full and the worker is paused for it — a slow reader of a
    *  large body is not a wedged worker, nor is a long fold. */
@@ -153,7 +160,7 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
     p.timer = setTimeout(() => {
       // Still the deadline when the caller is gone (a silent worker must not hold the queue), but then it is not a
       // failure anyone asked about: no D38 record.
-      const why = `the query worker did not answer within ${p.ms} ms`
+      const why = `the query worker did not answer ${askedOf(p)} within ${p.ms} ms`
       if (!p.quiet) fault(p.subject, why)
       drop(why)
     }, p.ms)
