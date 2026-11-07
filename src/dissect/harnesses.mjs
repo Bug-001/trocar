@@ -28,7 +28,7 @@ const LEGACY_SESSION_KEYS = [H('x-claude-code-session-id'), H('x-session-id', 'm
 // src/dissect/project.mjs only. [] = this harness states none that is read.
 // main lane: a ` - Primary working directory:` list item in a system-role message; a subagent prompt: a bare line
 const CC_CWD = [{ in: 'system', re: /^[ \t]*(?:[-*][ \t]+)?(?:Primary working|Working) directory:[ \t]*([^\n]+)$/m }];
-const ROW = { ua: null, parentKeys: [], lane: [], compaction: [], requestKind: null, observerEffects: [], traffic: [], cwd: [], entry: [] };
+const ROW = { ua: null, parentKeys: [], forkKeys: [], lane: [], compaction: [], requestKind: null, observerEffects: [], traffic: [], cwd: [], entry: [] };
 const DESKTOP = { is: 'desktop', re: /desktop/ }, CLI = { is: 'cli', re: /cli/ };
 const T = (host, cls, pathSource) => ({ host, class: cls, ...(pathSource ? { path: pathSource } : {}) });
 // 4.8 §5.6: injected trust changes the agent the same way in both modes; a legacy MITM / reverse-proxy capture still never carries one. `captures` scopes an
@@ -61,7 +61,9 @@ const ROWS = [
   { ...ROW, id: 'codex', ua: /codex/,
     entry: [DESKTOP, { is: 'cli', re: /cli|exec/ }],
     sessionKeys: [H('session-id'), H('thread-id')], // over WebSocket these come from the upgrade request (4.6)
-    parentKeys: [H('x-codex-parent-thread-id')],    // a THREAD id; resolved through aliases later (gate G4)
+    // a fork is a new session (3.4 关键区分); the declared thread id is kept verbatim, never resolved to a captured session (3.4 §血缘)
+    forkKeys: [{ ...H('x-codex-turn-metadata'), json: 'forked_from_thread_id' },
+      { ...B(['client_metadata', 'x-codex-turn-metadata'], 'high'), json: 'forked_from_thread_id' }], // the same JSON as the header, in the body
     lane: [{ header: 'x-openai-subagent', lane: 'subagent' }],
     cwd: [{ in: 'user', re: /<environment_context>[\s\S]*?<cwd>\s*([^\n<]+?)\s*<\/cwd>/ }],
     requestKind: { header: 'x-codex-turn-metadata', jsonKey: 'request_kind', lanes: { prewarm: 'probe' }, compaction: ['compaction'] },
@@ -70,7 +72,7 @@ const ROWS = [
   { ...ROW, id: 'opencode', ua: /opencode/,
     entry: [DESKTOP],
     sessionKeys: [H('x-opencode-session-id'), H('session-id'), H('x-session-affinity'), H('x-session-id')],
-    parentKeys: [H('x-opencode-parent-session-id')],
+    parentKeys: [H('x-opencode-parent-session-id'), H('x-parent-session-id')],
     cwd: [{ in: 'system', re: /^[ \t]*Working directory:[ \t]*([^\n]+)$/m }], // indented inside <env>
     observerEffects: [
       effect('opencode-plugin', 'trocar trust plugin',
@@ -166,8 +168,10 @@ export function bodyOf(rec) {
   return v && typeof v === 'object' ? v : null;
 }
 const at = (obj, path) => path.reduce((o, k) => (o && typeof o === 'object' ? o[k] : undefined), obj);
+// `json`: the value found (a header's, or a body field's) is itself a JSON string; the key is that object's `json` field
 function valueOf(rec, key) {
-  const v = key.from === 'header' ? headerOf(rec, key.name) : at(bodyOf(rec), key.path);
+  let v = key.from === 'header' ? headerOf(rec, key.name) : at(bodyOf(rec), key.path);
+  if (key.json) { try { const j = typeof v === 'string' ? JSON.parse(v) : null; v = j && typeof j === 'object' ? j[key.json] : null; } catch { v = null; } }
   if (typeof v === 'number') return String(v);
   return typeof v === 'string' && v.trim() ? v.trim() : null;
 }
@@ -217,13 +221,12 @@ export function sessionKeyOf(rec, { headersOnly = false } = {}) {
 }
 
 export function hintsOf(rec) {
-  const out = { lane: null, laneKey: null, compaction: null, compactionMarker: false, parent: null, requestKind: null };
+  const out = { lane: null, laneKey: null, compaction: null, compactionMarker: false, parent: null, fork: null, requestKind: null };
   const { row } = harnessOf(rec);
   if (!row) return out;
   if (row.requestKind) {
     const rk = row.requestKind;
-    let kind = null;
-    try { const j = JSON.parse(headerOf(rec, rk.header)); kind = j && typeof j[rk.jsonKey] === 'string' ? j[rk.jsonKey] : null; } catch { kind = null; }
+    const kind = valueOf(rec, { from: 'header', name: rk.header, json: rk.jsonKey });
     out.requestKind = kind;
     if (kind && rk.lanes[kind]) out.lane = rk.lanes[kind];
     if (kind && rk.compaction.includes(kind)) out.compaction = true;
@@ -244,6 +247,10 @@ export function hintsOf(rec) {
   for (const p of row.parentKeys) {
     const v = valueOf(rec, p);
     if (v != null) { out.parent = { id: v, confidence: p.confidence }; break; }
+  }
+  for (const f of row.forkKeys) {
+    const v = valueOf(rec, f);
+    if (v != null) { out.fork = { id: v, confidence: f.confidence }; break; }
   }
   return out;
 }

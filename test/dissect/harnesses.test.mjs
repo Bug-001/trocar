@@ -99,6 +99,40 @@ test('hints: lane, request kind, compaction and parent per 3.4', () => {
   assert.equal(hintsOf(rec({ agent: 'codex', headers: { 'x-codex-turn-metadata': 'not json' } })).requestKind, null, 'a malformed hint is ignored, never thrown');
 });
 
+// one record carrying `id` under one declared key, built from the key's own shape (header, body path; its value JSON when the key says `json`)
+const declaring = (agent, key, id, extra = {}) => {
+  const v = key.json ? JSON.stringify({ [key.json]: id }) : id;
+  if (key.from === 'header') return { ...rec({ agent, headers: { [key.name]: v } }), ...extra };
+  const body = {};
+  key.path.reduce((o, k, i) => (o[k] = i === key.path.length - 1 ? v : {}), body);
+  return { ...rec({ agent, body }), ...extra };
+};
+
+test('hints: every declared parent / fork key gives its id; none is guessed', () => {
+  let n = 0;
+  for (const h of HARNESSES) for (const [which, keys] of [['parent', h.parentKeys], ['fork', h.forkKeys]]) for (const key of keys) {
+    const id = `${h.id}-${which}-${n++}`, got = hintsOf(declaring(h.agents[0], key, id));
+    assert.deepEqual(got[which], { id, confidence: key.confidence }, `${h.id} ${which} ${key.name}`);
+    assert.equal(got[which === 'parent' ? 'fork' : 'parent'], null, `${h.id}: a ${which} key fills only ${which}`);
+    if (key.json) assert.equal(hintsOf({ ...declaring(h.agents[0], { ...key, json: null }, '{not json') })[which], null, 'malformed JSON → null, never thrown');
+    if (key.from === 'body') assert.equal(hintsOf(declaring(h.agents[0], key, id, { is_llm_call: false }))[which], null, 'a body key is read on inference calls only');
+  }
+  assert.ok(n >= 5, 'OpenCode (2), dsh (1) and Codex (2) declare lineage');
+  // the wire facts behind the rows: Codex declares a fork, in the header JSON and in the body client_metadata (itself JSON)
+  const fork = JSON.stringify({ forked_from_thread_id: 'T-1', request_kind: 'turn' });
+  assert.equal(hintsOf(rec({ agent: 'codex', headers: { 'x-codex-turn-metadata': fork } })).fork.id, 'T-1');
+  assert.equal(hintsOf(rec({ agent: 'codex', body: { client_metadata: { 'x-codex-turn-metadata': fork } } })).fork.id, 'T-1');
+  assert.equal(hintsOf(rec({ agent: 'codex', headers: { 'x-codex-turn-metadata': '{"request_kind":"turn"}' } })).fork, null);
+  for (const r of [rec({ agent: 'z-code', headers: { 'x-zcode-session-type': 'subagent', 'x-session-id': 'z' } }),
+    rec({ agent: 'claude-code', headers: { 'x-claude-code-session-id': 's', 'x-claude-code-agent-id': 'a1' } }),
+    // a subagent call's own signals and its metadata.user_id (session_id, no parent id): nothing matched or guessed into a parent
+    rec({ agent: 'claude-code', headers: { 'x-claude-code-session-id': 's', 'x-claude-code-request-class': 'subagent', 'x-claude-code-parent-agent-id': 'a0' },
+      body: { system: 'cc_is_subagent=true', metadata: { user_id: JSON.stringify({ device_id: 'd', account_uuid: 'u', session_id: 'p' }) } } })]) {
+    const got = hintsOf(r);
+    assert.deepEqual([got.parent, got.fork], [null, null], 'Z-Code and Claude Code declare no lineage');
+  }
+});
+
 test('observer effects follow the 3.1 table: five harnesses carry one, Hermes and Kimi none; legacy captures never (R5 control group)', () => {
   const ids = (agent) => (observerEffectsOf(rec({ agent })) || []).map((e) => e.id);
   assert.deepEqual(ids('claude-code'), ['cc-gzip-off']);
