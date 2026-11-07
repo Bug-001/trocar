@@ -308,7 +308,6 @@ export const laneTimes = (word, n) => `${word} · ${count(n, 'call')}`
 export const callsWord = (n) => count(n, 'call')
 export const TC_SAMPLED_TIP = (m, n) => `${m} of ${n} drawn; clicking anywhere opens the nearest one`
 export const TC_NO_SIZE = (j) => `${j} of them returned no size and are not drawn`
-export const FLAGGED_WORD = 'flagged a problem' // S13 landed: flagged === true draws a mark on the collapsed 后台调用 row
 export const REVIEW_TIP = (k) => `Inferred from timing: when this call was sent, the main thread was at step ${k}`
 
 // ── the outline (2.5) ────────────────────────────────────────────────────────────────────────────────────────────────
