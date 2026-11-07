@@ -83,7 +83,7 @@ export async function daemonFor(w) {
   const server = await startControlServer({ socketPath: sock, token: TOKEN, routes: {
     'GET /status': seen('GET /status', async () => ({ doors })),
     'GET /holders': seen('GET /holders', async () => ({ count: 0, holders: [] })),
-    'POST /on': async ({ body }) => { for (const [g, port] of Object.entries(body.groups)) doors[g] = port; return { doors: Object.fromEntries(Object.entries(body.groups).map(([g, port]) => [g, `http://127.0.0.1:${port}`])) } },
+    'POST /on': seen('POST /on', async ({ body }) => { for (const [g, port] of Object.entries(body.groups)) doors[g] = port; return { doors: Object.fromEntries(Object.entries(body.groups).map(([g, port]) => [g, `http://127.0.0.1:${port}`])) } }),
     'POST /off': seen('POST /off', async () => ({ confirmed: true, relayed: 0, actual: 'off', exited: false })),
   } })
   return { close: () => server.close(), sock, asked }

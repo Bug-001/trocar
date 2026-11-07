@@ -171,6 +171,7 @@ async function drive(spec, harnesses) {
     const endpoint = controlEndpointFor({ platform: spec.os, dir: w.dir, env: w.env })
     try {
       const on = await w.cmd.on([spec.h])
+      const askedOn = [...d.asked]
       bad('on')
       const s2 = snapshot(w)
       await w.cmd.on([spec.h])
@@ -179,6 +180,7 @@ async function drive(spec, harnesses) {
       const edited = applyEdit(spec, file, format, route)
       const sE = snapshot(w)
       const off = await w.cmd.off([spec.h])
+      const askedOff = d.asked.slice(askedOn.length)
       bad('off')
       const s4 = snapshot(w)
       const off2 = await w.cmd.off([])
@@ -187,7 +189,7 @@ async function drive(spec, harnesses) {
       const un = await w.cmd.uninstall()
       bad('uninstall')
       const s6 = snapshot(w)
-      return { w, c, on, ins, off, off2, un, s0, s1, s2, s3, sE, s4, s5, s6, edited, file, format, route, endpoint, asked: [...d.asked] }
+      return { w, c, on, ins, off, off2, un, s0, s1, s2, s3, sE, s4, s5, s6, edited, file, format, route, endpoint, asked: [...d.asked], askedOn, askedOff }
     } finally { await d.close() }
   })()
 }
