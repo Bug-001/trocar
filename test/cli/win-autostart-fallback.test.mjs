@@ -27,8 +27,9 @@ function windows({ refuse = true, value = null } = {}) {
     w.calls.push(cmd)
     const ok = (stdout = '') => ({ status: 0, stdout, stderr: '' })
     if (file === 'schtasks') {
-      if (args[0] === '/Create') { if (w.refuse) return { status: 1, stdout: '', stderr: 'ERROR: Access is denied.' }; w.task = true; return ok() }
-      if (args[0] === '/Query') return w.task ? ok(args.includes('/XML') ? TASK_XML : '') : { status: 1, stdout: '', stderr: '' }
+      // a registered task prints back the XML /Create was given (trocar's own); one there before install is someone else's (TASK_XML: no action of trocar's)
+      if (args[0] === '/Create') { if (w.refuse) return { status: 1, stdout: '', stderr: 'ERROR: Access is denied.' }; w.task = true; w.xml = fs.readFileSync(args[args.indexOf('/XML') + 1]).toString('utf16le').replace(/^\uFEFF/, ''); return ok() }
+      if (args[0] === '/Query') return w.task ? ok(args.includes('/XML') ? Buffer.from(w.xml || TASK_XML, 'utf16le').toString('utf8') : '') : { status: 1, stdout: '', stderr: '' }
       if (args[0] === '/Delete') { w.task = false; return ok() }
       return ok()
     }
@@ -171,11 +172,11 @@ for (const task of [false, true]) {
     const win = windows()
     const w = await world(win)
     await install1(w)
-    win.task = task
+    win.task = task // a task Windows still holds under trocar's name, which trocar did not register (its /Create was refused): someone else's
     const r = await uninstallWin(w, win)
     assert.ok(win.calls.some((c) => c.startsWith(`reg delete ${RUN} /v ${RUN_KEY.name}`)), `reg delete issued: ${JSON.stringify([r.receipt.problems, r.receipt.left])}`)
     assert.equal(win.value, null, 'no Run value left')
-    assert.equal(win.task, false, 'no task left')
+    assert.equal(win.task, task, 'a task that is not trocar\'s is left as it is (4.8 §7)')
     assert.equal(fs.existsSync(path.join(w.dir, 'install-manifest.json')), false, `the record is gone: ${JSON.stringify(r.receipt.left)} ${r.receipt.problems}`)
   })
 }
