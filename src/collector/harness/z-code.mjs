@@ -175,6 +175,8 @@ const proxyMode = {
   userCertFiles: [CA_KEY],
   blockers: [
     { at: { file: DESKTOP, format: 'json', keys: ['httpProxy'] }, forms: ['z-code.desktop'] },
+    // the desktop CA setting reaches the app-server as ZCODE_AGENT_CA_CERT, under which Z-Code ignores the config's httpProxy and goes direct (macOS measured)
+    { at: DESKTOP_CA, forms: ['z-code.desktop'] },
     { at: { env: 'ZCODE_HTTP_PROXY' } },
     { at: { env: 'ZCODE_AGENT_CA_CERT' } },
   ],

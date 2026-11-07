@@ -167,6 +167,8 @@ function formVerdict(F, h, hf, fm, fwf) {
   // the plan gated off still has its ledger records, and the entry edge they give it (`intact` unknown until checkEntries lands) would mask the verdict the same way the entry checks used to
   // mask the drain window — through the real facts path the form-unsupported verdict was unreachable and `doctor` could never emit its row.
   if (fm.route && fm.route.reason === 'form-unsupported') return none(false, false, 'form-unsupported')
+  // a blocker the plan found for this form (4.11 ⑩): the entry a sibling form shares (one config file, one route) does not reach it
+  if (fm.route && fm.route.reason === 'blocker') return none(false, false, 'not-routed')
   if (fm.hook) return none(false, false, fm.hook) // the wrapper / plugin that applies the route was replaced or is gone: the agent runs without it (1.6 §9.3 row 31; its command is `trocar install`)
   if (!fm.entry) return none(false, false, 'not-routed') // anything else the plan left unwired is not-routed, the why on the form's `route`
   if (fm.entry.intact === null) return none(null, null, null)
