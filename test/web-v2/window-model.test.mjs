@@ -6,7 +6,7 @@ import { buildLanes, anchorLane } from '../../web/legacy/replay/lanes.mjs'
 import { stepOf } from '../../web/legacy/replay/model.mjs'
 import { setDeskMode, loadBodies } from '../../web/legacy/replay/cell.mjs'
 import { arrived, windowItems, landed, landingFor } from '../../web/src/screens/replay/window-model.mjs'
-import { refPending } from '../../web/legacy/replay/analysis.mjs'
+import { refPending, hasChangeLine } from '../../web/legacy/replay/analysis.mjs'
 import { deskOf, world, deskFrom } from './desk-world.mjs'
 
 let rn = 0
@@ -183,4 +183,10 @@ test('2.3 #2: an open row whose body comes back unproven gets a non-verbatim mar
   const after = windowItems(s).items
   assert.notEqual(rowOf(after).marks.ff, 'verbatim')
   assert.notEqual(secOf(after).claim, 'verbatim')
+})
+
+test('2.3 · 变化线: a model switch over a pure append (prefixChanged false) draws no change line; a changed block still does', () => {
+  const call = (b) => ({ rec: {}, flat: [{}, {}, {}], cacheBreak: { cause: 'model-or-route-change', idx: 2, ...b } })
+  assert.equal(hasChangeLine(call({ prefixChanged: false })), false)
+  assert.equal(hasChangeLine(call({})), true)
 })

@@ -80,7 +80,7 @@ const noRawUsage = (norm) => !!norm && typeof norm === 'object' && 'usage' in no
 // closed set of 3.5:59 (absent fields left out; no verdict / flagged: those ride the lane's events), lane headers that of 3.5:60.
 const ROW = ['ts', 'ctx', 'comp', 'usage', 'tools', 'status', 'error', 'errMsg', 'unparsed', 'rec', 'compaction', 'compactionInferred', 'gt',
   'probe', 'reqIncomplete', 'wsIncomplete', 'respIncomplete', 'wire', 'cacheBreak'];
-const ROW_BREAK = ['cause', 'attribution', 'idx', 'refRid', 'gt', 'firstCall', 'labels'];
+const ROW_BREAK = ['cause', 'attribution', 'idx', 'refRid', 'gt', 'firstCall', 'labels', 'prefixChanged'];
 export function callRow(c, lane) {
   const out = { rid: String(c.id), lane, ...pick(c, ROW) };
   if (noRawUsage(c.norm)) out.usage = null;

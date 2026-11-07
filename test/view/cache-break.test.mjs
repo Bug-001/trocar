@@ -76,6 +76,8 @@ for (const [pair, opts, plain] of [
   test(`model switch over ${pair} ${JSON.stringify(opts)} → ${switched}`, () => {
     check(cacheBreak(...PAIRS[pair], { ...opts }), plain);
     check(cacheBreak(...PAIRS[pair], { ...opts, modelChanged: true }), switched);
+    // only the refined append keeps every earlier block: the board draws no change line for it
+    assert.equal(cacheBreak(...PAIRS[pair], { ...opts, modelChanged: true }).prefixChanged, plain === 'append' && switched !== plain ? false : undefined);
   });
 }
 
@@ -103,6 +105,7 @@ test('a model switch in a session: the new cache carries no ground truth', async
   ], 's-model');
   assert.equal(c2.cacheBreak.refRid, c1.rid, 'call #2 is compared against call #1');
   assert.equal(c2.cacheBreak.cause, 'model-or-route-change');
+  assert.equal(c2.cacheBreak.prefixChanged, false, 'a pure append: no earlier block changed');
   assert.equal(c2.gt ?? null, null);
   assert.equal(c2.cacheBreak.gt ?? null, null);
 });

@@ -124,7 +124,7 @@ export function refPending(lane, i) {
 export function hasChangeLine(call, flat = call && call.flat) {
   const b = call && call.cacheBreak
   return !!(b && !b.firstCall && b.cause && !QUIET.has(b.cause) && !call.unparsed
-    && call.rec && Array.isArray(flat) && b.idx < flat.length)
+    && call.rec && Array.isArray(flat) && b.idx < flat.length && b.prefixChanged !== false)
 }
 
 // the flags of one *Incomplete object → its closed-set words, joined; an unknown flag set falls back to 「<请求/消息/回复>没采全」

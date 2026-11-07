@@ -1162,7 +1162,10 @@ export function breakOf(prev, cur, opts = {}) {
   }
   // a model or vendor switch (opts.modelChanged) refines only a bare content change or an append that read nothing (usage first):
   // compaction and the reorders stand
-  if (opts.modelChanged && (out.cause === 'content-changed' || (out.cause === 'append' && opts.read === 0))) out.cause = 'model-or-route-change'
+  if (opts.modelChanged && (out.cause === 'content-changed' || (out.cause === 'append' && opts.read === 0))) {
+    if (out.cause === 'append') out.prefixChanged = false // the base's blocks all stand: no change line, no jump to one
+    out.cause = 'model-or-route-change'
+  }
   const meta = CAUSE_META[out.cause] || CAUSE_META['content-changed']
   out.causeLabel = meta.label; out.attribution = meta.attr; out.fixHint = meta.fix
   return out
