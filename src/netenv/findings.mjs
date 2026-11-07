@@ -177,6 +177,9 @@ export const FINDINGS = {
     commands: (c) => [gui('Log in to the desktop session on this machine and unlock your keychain'), trocar(c, 'trocar status')], verify: () => 'trocar status' },
   'bundle-lacks-ca': { cls: 'problem', trocarFirst: true, what: (c) => `${c.h}'s certificate bundle lacks a CA your settings add now, so it cannot verify hosts signed by that CA.`, why: () => 'trocar merged the CAs your settings named when you ran install; one you added since is not in the bundle.',
     commands: (c) => installFix(c) || [trocar(c, 'trocar install')], verify: (c) => `trocar status ${c.h}` },
+  // the steps `on`'s refusal and the form's certificate command read too (4.11 P4b): uninstall refuses while a harness is on, so off comes first
+  'marked-without-record': { cls: 'problem', trocarFirst: true, what: (c) => `A file trocar sets up for ${c.h}'s certificate still holds trocar's text from an earlier install whose record is gone, so install skipped it.`, why: () => 'Install skips it the same way every time. Uninstall takes that text out, and it runs only once capture is off.',
+    commands: (c) => [trocar(c, 'trocar off'), trocar(c, 'trocar uninstall'), trocar(c, 'trocar install')], verify: (c) => `trocar status ${c.h}` },
   'not-users-file': { cls: 'expected', trocarFirst: false, what: (c) => `${c.h} points at a certificate file that is not yours; trocar left it alone.`, why: () => 'trocar only appends to files you own.',
     commands: (c) => [gui(`Point ${c.h}'s certificate setting at a file you own`), trocar(c, 'trocar install')], verify: (c) => `trocar status ${c.h}` },
   'forward-only-host': { cls: 'expected', trocarFirst: false, what: (c) => `${c.h} talked to a host trocar forwards by design without reading it.`, why: () => 'trocar does not decrypt the hosts this form lists as forward-only (its own sign-in, update and download hosts).',

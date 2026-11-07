@@ -176,7 +176,7 @@ for (const [name, drift] of Object.entries(DRIFTS)) {
     const d = await daemon(w)
     try {
       const r = await on(w)
-      assert.deepEqual(r.refused.map((x) => [x.harness, x.reason, x.command]), [['kimi-code', 'setup-needed', 'trocar install']])
+      assert.deepEqual(r.refused.map((x) => [x.harness, x.reason, x.commands]), [['kimi-code', 'setup-needed', ['trocar install']]])
       assert.ok(r.on.includes('deepseek-dsh') && r.on.includes('codex') && !r.on.includes('kimi-code'))
       assert.equal(fs.existsSync(path.join(w.dir, 'switch', 'kimi-code')), false)
       assert.ok(fs.existsSync(path.join(w.dir, 'switch', 'deepseek-dsh')))
@@ -218,7 +218,7 @@ test('CM28 · ⑪: every item install placed, its record dropped from the manife
         const r = await on(w)
         // P4b: a form no longer on this machine is not counted (the file was its only `present` place): nothing to set up, so not refused
         const present = w.harnesses.find((d) => d.name === h).proxyMode.forms.some((f) => f.os.includes('darwin') && isPresent(f, w.ctx))
-        assert.deepEqual(r.refused.map((x) => [x.harness, x.reason, x.command]), present ? [[h, 'setup-needed', 'trocar install']] : [], `${h} ${p.kind} ${p.path} (file too: ${fileToo})`)
+        assert.deepEqual(r.refused.map((x) => [x.harness, x.reason, x.commands]), present ? [[h, 'setup-needed', ['trocar install']]] : [], `${h} ${p.kind} ${p.path} (file too: ${fileToo})`)
         assert.ok(present ? !r.on.includes(h) && r.on.length > 0 : r.on.length > 0)
       } finally { await d.close() }
     }

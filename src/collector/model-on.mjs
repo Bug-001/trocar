@@ -13,7 +13,7 @@ import { installUsable, OFF_VERSION } from '../off/manifest.mjs'
 import { writeStandalone } from '../off/standalone.mjs'
 import { readStateFile, setDesired, writeStateAtomic } from '../off/state.mjs'
 import { WINDOWS_MAX } from '../off/holders.mjs'
-import { setupOf } from './core/proxymode/status-facts.mjs'
+import { setupOf, setupSteps } from './core/proxymode/status-facts.mjs'
 import { planRoutes, writeRoutes, noProxyNames } from './core/proxymode/entries.mjs'
 import { resolveLoc } from './core/proxymode/sources.mjs'
 import { loadIngressConfig, rebindTaken, freeOnLoopback } from './core/ingress-config.mjs'
@@ -25,7 +25,7 @@ import { lockState } from '../health/read.mjs'
 
 const INSTALL_HINT = 'trocar install'
 // 1.6 §1.1: what a `setup.missing[].what` means, in words (the code stays in the JSON)
-const SETUP_WHY = { 'carrier-absent': 'trocar has not set up its certificate for it (installed after trocar, or what trocar placed is gone)', 'carrier-overwritten': 'its own update overwrote what trocar placed for its certificate', 'bundle-lacks-ca': 'its certificate bundle lacks a CA you added after install', 'root-missing': "trocar's root certificate is no longer trusted" }
+const SETUP_WHY = { 'carrier-absent': 'trocar has not set up its certificate for it (installed after trocar, or what trocar placed is gone)', 'carrier-overwritten': 'its own update overwrote what trocar placed for its certificate', 'bundle-lacks-ca': 'its certificate bundle lacks a CA you added after install', 'marked-without-record': "a file trocar sets up for its certificate still holds trocar's text from an earlier install whose record is gone, so install skipped it", 'root-missing': "trocar's root certificate is no longer trusted" }
 const errText = (e) => String((e && e.message) || e)
 /** The root's state the way `status` reads it (cert.root.state, 1.6 §9.4): trocar-ca.pem asked of the user's store through the injected reader — the one
  *  store question `on` asks, so ⑪'s root-missing is status's (4.11 P4b). Pending / declined / unreadable → not `missing`: not setup work, or not known. */
@@ -71,7 +71,7 @@ export async function turnOnModel({ os, home, env = process.env, ids = null, har
   const unsure = [], root = rootAsked !== undefined ? rootAsked : await rootOf({ dir, m, rootStore, fs }) // the plan's answer, when its run hands it on: the question starts OS tools (D62①)
   for (const h of wanted) { // precondition ⑪ = status's `setup` (4.11 P4b, one judgement): only a harness that needs setup is refused, nothing written for it
     const s = setupOf(byName.get(h), { os, manifest: m, ctx, root, fs })
-    if (s.state === 'needed') refused.push({ harness: h, reason: CODE.setupNeeded, why: [...new Set(s.missing.map((x) => SETUP_WHY[x.what]))].join('; '), command: INSTALL_HINT })
+    if (s.state === 'needed') refused.push({ harness: h, reason: CODE.setupNeeded, why: [...new Set(s.missing.map((x) => SETUP_WHY[x.what]))].join('; '), commands: s.missing.map((x) => setupSteps(x.what)).reduce((a, c) => (c.length > a.length ? c : a)) }) // the longest: install is every list's last step
     // a file that could not be read is said in 1.6 A.1's words; its errno stays the note's `code`
     else { on.push(h); if (s.state === 'unknown') unsure.push(s.path ? { harness: h, code: s.code, text: `whether ${h} is set up could not be told (${s.path}: ${errnoWords(s)})` } : { harness: h, text: `whether ${h} is set up could not be told (${s.reason})` }) }
   }

@@ -21,7 +21,7 @@ import nodeFs from 'node:fs'
 import { isDeepStrictEqual } from 'node:util'
 import path from 'node:path'
 import { setKey, addItem, getPath, reverseOps, parseJsonText } from '../../../off/json-text.mjs'
-import { dotenvBlock, joinDotenvBlock, insertLine, pemBlock, removeTrocarText, BLOCK_OPEN, SENTINEL, sameMarked, holdsMarked } from '../../../off/text-edit.mjs'
+import { dotenvBlock, joinDotenvBlock, insertLine, pemBlock, removeTrocarText, BLOCK_OPEN, SENTINEL, LINE_MARK, sameMarked, holdsMarked } from '../../../off/text-edit.mjs'
 import { sha256, readOrNull, writeDurable, missingDirs, editTarget, pathKey, strictlyInside } from '../../../off/fsutil.mjs'
 import { saveManifest, undoByHand, PHASES } from '../../../off/manifest.mjs'
 import { writeBackup } from '../../../off/backup.mjs'
@@ -328,8 +328,8 @@ function refuseMarked(file, text, edit, joined = false) {
   }
 }
 /** Why a text entry into `file` would be refused for trocar's marked text no record lists, or null: what a plan says of a write the run refuses
- *  (1.6 §1.4). Any other trouble with the file is the run's to report. */
-export function markedWithoutRecord({ file, edit, fs = nodeFs }) {
+ *  (1.6 §1.4). Any other trouble with the file is the run's to report. No `edit`: any marked block or line of trocar's (setup's question, 4.11 P4b). */
+export function markedWithoutRecord({ file, edit = { line: LINE_MARK }, fs = nodeFs }) {
   try { refuseMarked(file, readUserText(file, readOrNull(fs, editTarget(file, fs))).text, edit) } catch (e) { return e && e.code === MARKED_WITHOUT_RECORD ? e.message : null }
   return null
 }

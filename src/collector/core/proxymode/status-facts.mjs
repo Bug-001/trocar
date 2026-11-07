@@ -6,13 +6,14 @@
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { itemsOfPhase } from '../../../off/manifest.mjs'
-import { judgeEntry, judgeOwned } from '../trust/journal.mjs'
+import { judgeEntry, judgeOwned, markedWithoutRecord, samePath } from '../trust/journal.mjs'
 import { isPresent, holds, presentPaths, userCertFilesOf, rootHeldIn, readSrc, inTrocar } from './sources.mjs'
 import { planRoutes, priorRecordOf, loopbackDirect, loopbackNote } from './entries.mjs'
 import { upstreamFor, isTrocarDoorUrl } from './chain.mjs'
 import { pacLeg } from './pac.mjs'
 import { redactProxyUrl, parseProxyUrl } from '../../../netenv/redact.mjs'
 import { CODE } from '../codes.mjs'
+import { FINDINGS, findingFor } from '../../../netenv/findings.mjs'
 import { checkWrapper } from './hooks/wrapper.mjs'
 import { sha256, readOrNull } from '../../../off/fsutil.mjs'
 import { certBlocks } from '../../../off/pem.mjs'
@@ -76,10 +77,14 @@ function bundleGap(desc, c, inst, ctx, fs) {
   return null
 }
 
+/** The commands that fix a `setup.missing[].what`, in order (4.11 P4b): its finding's steps when the catalogue has one (1.6 附录 B), else install writes what is missing. */
+export const setupSteps = (what) => (Object.hasOwn(FINDINGS, what) ? findingFor(what).commands.map((c) => c.run) : [INSTALL])
+
 /**
  * setupOf(desc, { os, manifest, ctx, root, fs }) → { state: 'ready' | 'needed' | 'unknown', missing: [{ form, what }], reason? } — 4.11 P4b, the ONE judgement
  * behind `status`'s `harnesses[h].setup` and `on`'s precondition ⑪ (D65④). Per present form of this OS whose carrier is not the root: its install items
- * (its own, and rule U's shared pem-block) absent → `carrier-absent`, changed → `carrier-overwritten`, a merged bundle that lacks a CA its sources hold now → `bundle-lacks-ca`; the root gone from the user's store (`root.state`
+ * (its own, and rule U's shared pem-block) absent → `carrier-absent`, changed → `carrier-overwritten`, a merged bundle that lacks a CA its sources hold now → `bundle-lacks-ca`, skipped by install (`install.skipped`, its file still holding the marked text) → that skip's
+ * code (`marked-without-record`, fixed by setupSteps' commands); the root gone from the user's store (`root.state`
  * 'missing'; pending / declined are install's own to-do, not setup) → one `{ form: null, what: 'root-missing' }`. `manifest` null = nothing installed;
  * `{ error }` = it could not be read → `unknown`, and so is a file that cannot be read (D38), with its errno as `code` and the file as `path`: never `ready`.
  * Reads only; no OS question of its own.
@@ -93,13 +98,17 @@ export function setupOf(desc, { os, manifest: m, ctx, root = null, fs = nodeFs }
     const pm = desc.proxyMode
     let lost
     const gap = {}
+    // a skip counts while its file still holds the marked text no record lists (install's own judgement); gone, the carrier is judged as below
+    const skips = [((m && m.install && m.install.skipped) || {})[desc.name]].flat().filter((x) => x && typeof x.code === 'string' && typeof x.path === 'string'
+      && !((m && m.entries) || []).some((e) => samePath(e.path, x.path, fs)) && markedWithoutRecord({ file: x.path, fs }))
     for (const f of pm.forms.filter((x) => x.os.includes(os) && isPresent(x, ctx))) {
       const c = f.cert === 'root' ? null : (pm.certs || {})[f.cert]
       if (!c || (c.when && holds(c.when, ctx) === false)) continue // the root carries it: nothing per form, whether install saw the harness or not
       // a carrier of its own: install's items for it (none when install never saw the harness, unless rule U's shared block carries it)
       const unread = lost === undefined && userFilesOf(desc, ctx).unread // a setting that may name rule U's file, not read: whose block carries it is not known
       if (unread) throw new Error(`${unread.where}: ${unread.error}`)
-      if (lost === undefined) lost = carrierLoss(m || {}, desc, itemsFor(desc, itemsOfPhase(m, 'install'), ctx), fs)
+      // install's own skip of this harness's carrier (`install.skipped`, marked text no record lists) is the cause, not an absent carrier: install repeats it
+      if (lost === undefined) lost = skips.length ? skips[0].code : carrierLoss(m || {}, desc, itemsFor(desc, itemsOfPhase(m, 'install'), ctx), fs)
       const what = lost || (c.semantics === 'replace' && Array.isArray(c.merges) ? (gap[f.cert] ??= bundleGap(desc, c, itemsOfPhase(m, 'install'), ctx, fs)) : null)
       if (what) missing.push({ form: f.id, what })
     }
