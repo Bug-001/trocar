@@ -14,7 +14,8 @@ import { bigSession, firstAskOf, rng } from './big-session.mjs'
 import { runQuery, stampOf } from '../../src/query/named/index.mjs'
 import { extendSession } from '../../src/query/named/session.mjs'
 import { readHead, writeHead } from '../../src/query/ctx-files.mjs'
-import { TITLE_BUDGET_MS, TITLE_V, titlesFile } from '../../src/query/titles.mjs'
+import { TITLE_BUDGET_MS, TITLE_V, titlesFile, titleOf } from '../../src/query/titles.mjs'
+import { indexRows } from '../../src/query/rows.mjs'
 import { answer } from '../../src/query/answers.mjs'
 import { fillUsage, usageFile } from '../../src/query/usage.mjs'
 import { indexDir, segmentIndex } from '../../src/query/index-build.mjs'
@@ -490,4 +491,42 @@ test('3.5 #63: a session\'s project is the working directory its request states,
     await within(new Promise((ok) => { k = setInterval(() => (readHead(home, oc)?.meta || {}).project_path === STATED.opencode && (clearInterval(k), ok()), 50) }), 30_000, 'the sweep put the project on the old head', () => clearInterval(k))
   } finally { w.kill() }
   assert.deepEqual(projectOfDoc(readHead(home, oc).meta), want(STATED.opencode))
+})
+
+// Kimi: one prompt_cache_key holds the main conversation and the agents it opens, each with its own system text (3.4 带键会话里的消息链)
+const KIMI = { host: 'api.moonshot.ai', path: '/v1/chat/completions', agent: 'kimi', headers: () => ({}) }
+const kimiCall = (sys, prompt, n, i) => envelope(KIMI, null, JSON.stringify({ model: 'kimi', prompt_cache_key: 'kimi-title',
+  messages: [{ role: 'system', content: sys }, ...Array.from({ length: n - 1 }, (_, j) => ({ role: j % 2 ? 'assistant' : 'user', content: j ? `${prompt} turn ${j}` : prompt }))] }),
+replyTo({ wire: 'chat' }, i), stamp(i))
+// titleOf over the session's index rows, counting the records it reads
+async function kimiTitle(home) {
+  const members = [...await indexRows({ home, fs: cold(), errors: [] })].filter((r) => r.session_id === 'kimi-title')
+  let reads = 0
+  const got = titleOf({ home, fs: cold(), id: 'kimi-title', members, progress: () => { reads++ } })
+  return { title: got.title, reads, calls: members.length }
+}
+
+test('4.2 §标题表: a chain-split session whose agent leads early ends with the main prompt as its title', async () => {
+  // main at 2 messages, then an agent of another system text at 2, 4, 6, then main grows past it
+  const calls = [['You are Kimi.', 'main prompt', 2], ['You are an explorer.', 'agent task', 2], ['You are an explorer.', 'agent task', 4],
+    ['You are an explorer.', 'agent task', 6], ['You are Kimi.', 'main prompt', 8], ['You are Kimi.', 'main prompt', 10]]
+  const whole = homeOf()
+  append(whole, calls.map(([sys, prompt, k], i) => kimiCall(sys, prompt, k, i)))
+  assert.equal((await kimiTitle(whole)).title, 'main prompt', 'read at once')
+  // and as it grows, with the table kept between reads
+  const grown = homeOf(), warm = cold()
+  for (const [i, [sys, prompt, k]] of calls.entries()) {
+    append(grown, [kimiCall(sys, prompt, k, i)])
+    if (i >= 2) await saved(grown, { fs: warm }) // first saved while the agent leads
+  }
+  assert.equal((await listOf(grown, { fs: warm })).sessions.find((s) => s.session_id === 'kimi-title').title, 'main prompt')
+})
+
+test('4.2 §标题表: a long chain-split session is not read whole for its title', async () => {
+  const home = homeOf()
+  append(home, Array.from({ length: 80 }, (_, i) => kimiCall('You are Kimi.', 'main prompt', 2 + 2 * i, i)))
+  const { title, reads, calls } = await kimiTitle(home)
+  assert.equal(title, 'main prompt')
+  // the main text leads from the first call: that call and the 32 after it (4.2 §标题表), not the whole session
+  assert.ok(reads <= 33 && reads < calls, `${reads} records read of ${calls}`)
 })

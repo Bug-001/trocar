@@ -21,17 +21,19 @@ import { projectOf, projectFields } from '../dissect/project.mjs';
 import { HARNESSES, hintsOf, bodyOf } from '../dissect/harnesses.mjs';
 import { reqIncompleteOf } from '../dissect/capture-labels.mjs';
 
-export const TITLE_V = 5;
+export const TITLE_V = 6;
 export const TITLE_BUDGET_MS = 100; // how long a `sessions` in the worker computes titles before it says ask again (3.5 §访问模式)
 /** Thrown by titleOf past its `deadline`: the answer is a `102`, what was computed stays in the table. */
 export class TitlesPending extends Error {}
 const FIRST_READ = 4, GROWTH = 4; // model calls read at first, and how many times more each next read takes in (3.5 §访问模式: 4, 16, 64 …)
+// in a session whose harness row has `chainLane`: how many calls the main system text must stay main for before its title is final (4.2 §标题表)
+const LEAD_RUN = 32;
 
 export const titlesFile = (home) => path.join(indexDir(home), 'titles.json');
 
 const byStep = (a, b) => compareStep(a.ts, a.id, b.ts, b.id);
 
-// The table as this process holds it, per home: session id → {t, r, c, p, s, l, a, k, m}. An entry's `m` moves in memory as new members are checked, so
+// The table as this process holds it, per home: session id → {t, r, c, p, s, l, a, k, w, m}. An entry's `m` moves in memory as new members are checked, so
 // a warm answer looks at the new rows only; `dirty` says a kept key (KEYS) changed since the file was written, and a dirty table is not reloaded.
 const tables = new Map();
 const tableKey = (home, fs) => `${fsTag(fs)}\n${home}`;
@@ -58,7 +60,8 @@ function check(was, members) {
   if (!fresh.length) return { keep: true };
   const first = was.s != null && members.find((r) => r.id === was.s); // a call before it changes the lineage (3.4 §血缘)
   if (first && fresh.some((r) => byStep(r, first) < 0)) return { from: 0 };
-  if (was.r == null) return fresh.length * 8 >= was.c ? { from: was.c } : { keep: true, waits: true }; // at c*9/8 calls (4.2 §标题表)
+  // no main call yet, or one whose system text may still lose main: at c*9/8 calls (4.2 §标题表)
+  if (was.r == null || was.w) return fresh.length * 8 >= was.c ? { from: was.c } : { keep: true, waits: true };
   const at = members.find((r) => r.id === was.r);
   return at && !fresh.some((r) => byStep(r, at) < 0) ? { keep: true } : { from: 0 }; // `t` null with a main call found is final too
 }
@@ -81,9 +84,10 @@ function firstMain({ home, fs, calls, steps, from, progress }) {
     lin = unknown(h.parent, row.parentKeys) || unknown(h.fork, row.forkKeys) ? { l: 'unread' }
       : { l: 'wire', a: h.parent ? h.parent.id : null, k: h.fork ? h.fork.id : null };
   };
-  let end = FIRST_READ;
+  let end = row && row.chainLane ? LEAD_RUN + 1 : FIRST_READ; // a chain-split session's title takes LEAD_RUN calls after its main text's start
   while (end <= from) end *= GROWTH;
-  for (;; end *= GROWTH) {
+  for (let next; ; end = next) {
+    next = end * GROWTH;
     const head = steps.slice(0, end), held = new Set(head), errs = [], proj = new Map();
     let lost = false;
     // the project of each call read, a short string: the heap still holds one record (recordsAt drops an unread one: no pairing then, the call is `unread`)
@@ -101,12 +105,38 @@ function firstMain({ home, fs, calls, steps, from, progress }) {
     const main = head.find((r) => (facts.get(String(r.id)) || {}).lane === 'main');
     const p = head.map((r) => proj.get(String(r.id))).find((x) => x != null) ?? null; // a first call is often a small one with no environment (3.4 §工作目录)
     const s = first ? first.id : null;
-    if (main) return { t: facts.get(String(main.id)).ask ?? null, r: main.id, c: head.length, p, s, ...lin };
+    if (main) {
+      const got = { t: facts.get(String(main.id)).ask ?? null, r: main.id, c: head.length, p, s, ...lin };
+      if (!row || !row.chainLane) return got;
+      // a keyed session split by chains: early on another agent's history can be the longest, so its call is "main" there (3.4)
+      const at = leadAt(calls, held, facts);
+      if (head.length - 1 - at >= LEAD_RUN) return got;
+      if (end >= steps.length) return { ...got, w: true }; // every call read and the run still short: not final (`w`)
+      next = Math.min(next, at + 1 + LEAD_RUN);
+      continue;
+    }
     if (end >= steps.length) {
       const sub = head.map((r) => facts.get(String(r.id))).find((f) => f && f.lane === 'subagent');
       return { t: sub ? sub.ask : null, r: null, c: steps.length, p, s, ...lin };
     }
   }
+}
+
+// The place, among the calls read in write order (the fold's), where the main system text last moved (3.4 带键会话里的消息链: the
+// text of the call with the most messages, a tie to the first; a call the fold failed gives no fact and does not count).
+function leadAt(calls, held, facts) {
+  const max = new Map();
+  let main = null, at = 0, i = -1;
+  for (const r of calls) {
+    if (!held.has(r)) continue;
+    i++;
+    const f = facts.get(String(r.id));
+    if (!f || f.text == null) continue;
+    const m = Math.max(max.get(f.text) ?? -1, f.msgs);
+    max.set(f.text, m);
+    if (main == null || (f.text !== main && m > max.get(main))) { main = f.text; at = i; }
+  }
+  return at;
 }
 
 // The request body as the model got it is all in the record: one stored at all, not cut or partly received, and not a WebSocket message
@@ -123,7 +153,7 @@ export const lineageKnown = ({ home = trocarHome(), fs = nodeFs, id }) => !!tabl
 /** withLineage(meta, said) → `meta` with the lineage `said` says and no other lineage key left behind. */
 export const withLineage = (meta, said) => { const { lineage_source, parent_session_id, fork_of_session_id, ...rest } = meta; return { ...rest, ...lineageFields(said) }; };
 const said = (e) => ({ title: e.t, title_source: e.t != null ? 'wire' : null, ...projectFields(e.p ?? null), ...lineageOf(e) });
-const KEYS = ['t', 'r', 'c', 'p', 's', 'l', 'a', 'k'];
+const KEYS = ['t', 'r', 'c', 'p', 's', 'l', 'a', 'k', 'w'];
 
 /** titleOf({home, fs, id, members, errors, progress, deadline}) → {title, title_source, project_slug, project_path, lineage_source, parent_session_id?,
  *  fork_of_session_id?} (1.6 C.5). `title_source`: 'wire', null (no prompt in its
