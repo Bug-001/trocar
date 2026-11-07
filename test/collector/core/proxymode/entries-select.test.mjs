@@ -11,6 +11,7 @@ import { routeEntry, mergeNoProxy, pacPath } from '../../../../src/collector/cor
 import { resolveLoc } from '../../../../src/collector/core/proxymode/sources.mjs'
 import { encodeText, decodeBytes } from '../../../helpers/file-shapes.mjs'
 import { world, put, bytesOf } from './fixtures/entries-ctx.mjs'
+import { applyJsonKey } from '../../../../src/collector/core/trust/journal.mjs'
 
 const harnesses = await loadHarnesses()
 const withSelect = harnesses.flatMap((h) => Object.entries(h.proxyMode.routes).filter(([, r]) => r.select).map(([id, r]) => ({ h, id, r })))
@@ -156,19 +157,27 @@ for (const os of ['darwin', 'win32']) test(`P10 ${os} — on over trocar's own e
   assert.equal(again.ok, true, `a new key over trocar's recorded address: ${JSON.stringify(again)}`)
   assert.equal(read(f)[L.key], PAC2)
   assert.ok(L.w.ctx.manifest.entries.some((e) => e.door === PAC2), 'the record names the address it wrote, so the next key change is seen')
-  // a record an earlier version left, tagged with the door alone (no key in what it names): trocar's, undone and written with the key
-  for (const e of L.w.ctx.manifest.entries) if (e.door === PAC2) e.door = DOOR
+  routeEntry('json-key').undo(L.ctx, L.w.ctx.manifest.entries.filter((e) => e.harness === L.ctx.harness))
+  assert.equal(read(f)[L.key], undefined)
+  // the record an earlier version wrote: the address with no key in it, tagged with the door (what its on wrote). Its tag is not the address on
+  // writes now: undone (the entry still holds that value), and the keyed address written
+  const old = applyJsonKey({ dir: L.w.ctx.dir, manifest: L.w.ctx.manifest, harness: L.ctx.harness, phase: 'on', home: L.w.ctx.home, fs, file: f, keys: L.r.proxyKeys[0], value: `${DOOR}/trocar.pac` })
+  Object.assign(old, { route: L.ctx.routeId, door: DOOR })
   assert.equal(routeEntry('json-key').write({ ...L.ctx, pacToken: KEY2 }, DOOR).ok, true)
   assert.equal(read(f)[L.key], PAC2)
-  assert.ok(L.w.ctx.manifest.entries.some((e) => e.door === PAC2))
-  // the user (or anyone) put an earlier address of trocar's door there by hand: a change of the user's, kept and said so — not taken for their egress
-  fs.writeFileSync(f, JSON.stringify({ ...read(f), [L.key]: `${DOOR}/trocar.pac` }, null, 2) + '\n')
-  let refused = null
-  try { const r = routeEntry('json-key').write({ ...L.ctx, pacToken: KEY2 }, DOOR); refused = r.ok ? null : r } catch (e) { refused = e }
-  assert.ok(refused && !/own-egress/.test(JSON.stringify(refused.reason ?? refused.message)), `kept, with the reason a changed value gets: ${refused && (refused.reason || refused.message)}`)
-  assert.equal(read(f)[L.key], `${DOOR}/trocar.pac`, 'kept')
-  routeEntry('json-key').undo(L.ctx, L.w.ctx.manifest.entries.filter((e) => e.harness === L.ctx.harness))
-  fs.writeFileSync(f, JSON.stringify({ ...read(f), [L.key]: 'http://proxy.corp.example/proxy.pac' }, null, 2) + '\n')
-  assert.equal(routeEntry('json-key').write({ ...L.ctx, pacToken: KEY2 }, DOOR).code, 'not-routed', 'the user\'s own PAC address: own-egress, nothing written')
-  assert.equal(read(f)[L.key], 'http://proxy.corp.example/proxy.pac')
+  assert.deepEqual(L.w.ctx.manifest.entries.filter((e) => e.harness === L.ctx.harness).map((e) => e.door), [PAC2], 'one record, naming the keyed address')
+  // a value put there by hand, whatever it looks like (an address of trocar's door, or another): it differs from what the record says was written, so it
+  // is the user's change — kept and refused with that reason, never taken for the user's egress
+  for (const hand of [`${DOOR}/trocar.pac`, 'http://proxy.corp.example/proxy.pac']) {
+    fs.writeFileSync(f, JSON.stringify({ ...read(f), [L.key]: hand }, null, 2) + '\n')
+    let refused = null
+    try { const r = routeEntry('json-key').write({ ...L.ctx, pacToken: KEY2 }, DOOR); refused = r.ok ? null : r } catch (e) { refused = e }
+    assert.ok(refused && !/own-egress/.test(JSON.stringify(refused.reason ?? refused.message)), `${hand}: kept, with the reason a changed value gets: ${refused && (refused.reason || refused.message)}`)
+    assert.equal(read(f)[L.key], hand, 'kept')
+  }
+  // the user's own PAC address in an entry trocar holds no record of: their egress, nothing written
+  const U = lib(os, { meta: { appliedId: 'u1', entries: [{ id: 'u1', name: 'mine' }] }, entries: { u1: { [L.key]: 'http://proxy.corp.example/proxy.pac' } } })
+  const r = routeEntry('json-key').write(U.ctx, DOOR)
+  assert.deepEqual([r.code, r.reason], ['not-routed', 'own-egress'])
+  assert.deepEqual(U.snap(), U.before)
 })
