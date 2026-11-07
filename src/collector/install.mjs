@@ -626,7 +626,7 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = nul
   }
   const notes = [], problems = []
   const was = await probe(true)
-  let up = was.up, started = false, unitFailed = null, halt = false
+  let up = was.up, started = false, unitFailed = null, halt = false, loginEntryName = null
   if (was.stuck) { problems.push(`a daemon holds the control socket but does not answer (${was.stuck}); run "trocar off", then "trocar on" (off stops a stuck daemon, 1.6 §1.4)`); halt = true }
   else if (unit) {
     if (halted()) halt = true
@@ -634,7 +634,8 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = nul
       if (reload && typeof unit.reload === 'function') unit.reload() // a unit file rewritten under a loaded unit
       // `install` registers and starts (enable); `on` only starts, through the OS mechanism, and itself when that refuses — the reason said, never dropped (D38)
       const startAt = ms()
-      let rr = register ? unit.enable({ now: !was.up }) : (was.up ? null : unit.startNow())
+      const held = register ? loginEntry(dir, fs) : null
+      let rr = register ? unit.enable({ now: !was.up, prior: held && held.entry ? held.entry.prior ?? null : null }) : (was.up ? null : unit.startNow())
       if (!register && rr && rr.code !== 0 && typeof unit.start === 'function') {
         const direct = unit.start(daemonEnv(env, dir)) // the direct start carries what the login entry's Environment= would carry
         if (direct.code === 0) { notes.push(`the collector could not be started through ${entryWords(osName, unit)} (${rr.err || `exit ${rr.code}`}); trocar started it directly this run; the login entry starts it at the next login`); rr = direct }
@@ -648,6 +649,13 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = nul
       // code is what install replaces (drain, stop, enable({now: true}), 1.6 §3.2 step 5, src/cli/replace-daemon.mjs).
       const startMs = ms() - startAt
       if (startMs >= SLOW_START_MS) notes.push(`${entryWords(osName, unit)} held the collector's start for ${startMs} ms; trocar waited on the OS, not on work of its own${osName === 'darwin' ? ' (launchd spawns a job at most once every ThrottleInterval seconds, 10 s by default)' : ''}`)
+      // 4.8 §7: a login entry the arch used instead of its own (Windows' Run value when /Create is refused) is an install item, recorded once; one it took out leaves the record
+      if (register && rr && (rr.ledger || ['removed', 'restored'].includes(rr.runKey))) {
+        const why = recordLoginEntry(dir, fs, rr, ms)
+        if (why) { notes.push(why); problems.push(why) }
+      }
+      if (rr && rr.code === 0 && rr.ledger) loginEntryName = `${rr.ledger.hive}\\${rr.ledger.key}\\${rr.ledger.name}` // what the receipt names as the login entry (1.6 C.2)
+      if (rr && rr.code === 0 && rr.event) { notes.push(rr.event.reason); put(rr.event) } // the fallback worked, and why it was needed is a failure all the same (D38)
       if (rr && rr.code === 0 && rr.warn) notes.push(rr.warn) // the arch's own `warn` reaches the receipt (4.8 §7: what it could not do is the caller's to say) — the Run-value it could not take out, the daemon it started directly because /Run's SUCCESS was a lie
       if (rr && rr.code !== 0) {
         // the flip checklist ③ (4.9 §4 末): the arch's own failure record, verbatim, when enable() carries one (the darwin LaunchAgent's `launchd-register-failed` —
@@ -688,7 +696,28 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = nul
   }
   // the receipts' `daemon.state` (1.6 C.2), said here once for install, update and on: a daemon that holds the socket and does not answer is
   // not-responding, as `trocar status` says it (C.3), never not-running
-  return { up, state: up ? 'running' : was.stuck ? 'not-responding' : 'not-running', started: started && up, sock, ask, unitFailed, notes, problems, halt }
+  return { up, state: up ? 'running' : was.stuck ? 'not-responding' : 'not-running', started: started && up, sock, ask, unitFailed, notes, problems, halt, entry: loginEntryName }
+}
+// the install record's login entry of the fallback (kind run-key, the one kind an arch's `enable` ledgers): { m, at, entry } or null when there is no record to read
+function loginEntry(dir, fs) {
+  let m = null
+  try { m = readManifest(dir, fs) } catch { return null }
+  if (!m || m.unsupported) return null
+  const at = m.entries.findIndex((e) => e.kind === 'run-key')
+  return { m, at, entry: at >= 0 ? m.entries[at] : null }
+}
+// → null, or why the record could not be put right. A value that was trocar's already (`ours`) keeps the prior the record has.
+function recordLoginEntry(dir, fs, rr, ms) {
+  const held = loginEntry(dir, fs)
+  const what = rr.ledger ? `the login entry ${rr.ledger.hive}\\${rr.ledger.key}\\${rr.ledger.name}` : 'the login entry trocar took out'
+  if (!held) return `${what} could not be recorded: the install record could not be read; trocar uninstall still takes it out`
+  const { m, at, entry } = held
+  if (rr.ledger) {
+    const e = { ...rr.ledger, harness: null, phase: 'install', prior: rr.ours && entry ? entry.prior ?? null : rr.ledger.prior, installed_at: new Date(ms()).toISOString() }
+    if (at >= 0) m.entries[at] = e; else m.entries.push(e)
+  } else if (at >= 0) m.entries.splice(at, 1)
+  else return null
+  try { saveManifest(dir, m, fs); return null } catch (err) { return `${what} could not be recorded (${(err && err.message) || err}); trocar uninstall still takes it out` }
 }
 function readLockPid(dir, fs) { try { return JSON.parse(fs.readFileSync(path.join(dir, 'lock'), 'utf8')).pid ?? null } catch { return null } }
 

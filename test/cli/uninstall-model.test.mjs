@@ -324,3 +324,14 @@ for (const [what, store] of Object.entries(KEPT_ROOT)) {
     assert.match(formatUninstallReceipt(receipt, { home: w.home }), /trust store/)
   })
 }
+
+test('1.6 §3.6 · uninstall deletes a backup no entry names, and its receipt does not offer it to the user to keep', async () => {
+  const { writeBackup } = await import('../../src/off/backup.mjs')
+  const w = await installed()
+  const orphan = writeBackup({ home: w.home, file: path.join(w.home, 'gone.json'), data: Buffer.from('{}\n') })
+  const { receipt, exit } = await uninstall(w)
+  assert.equal(exit, 0, JSON.stringify({ p: receipt.problems, l: receipt.left }))
+  assert.equal(fs.existsSync(orphan), false, 'the backup is gone')
+  assert.ok(receipt.dropped_backups.includes(orphan), 'the receipt lists it as dropped')
+  assert.ok(!receipt.notes.some((n) => n.includes(orphan)), `no note names a backup this run deleted: ${receipt.notes.join(' | ')}`)
+})
