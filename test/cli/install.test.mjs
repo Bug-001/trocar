@@ -421,6 +421,26 @@ for (const os of ['darwin', 'win32']) {
   })
 }
 
+// 4.11 P4b: install.skipped is rewritten only for the harnesses a run judged the carriers of (an install that stops before them keeps it), and a skip
+// counts only while its file still holds the marked text no record lists
+for (const os of ['darwin', 'win32']) {
+  test(`4.11 P4b · ${os}: a skip survives an install that stops before the carriers, and stops counting once the marked text is gone`, async () => {
+    const w = await modelWorld({ os, commands: ['dsh'] })
+    const patch = path.join(w.home, '.dsh', 'cordis.patch.yml')
+    fs.mkdirSync(path.dirname(patch), { recursive: true }); fs.writeFileSync(patch, `${BLOCK_OPEN}\n- insert: []\n${BLOCK_END}\n`)
+    assert.equal((await w.install()).exit, 1)
+    const dsh = w.harnesses.find((d) => d.name === 'deepseek-dsh')
+    const what = () => [...new Set(setupOf(dsh, { os, manifest: readManifest(w.dir), ctx: w.ctx }).missing.map((x) => x.what))]
+    assert.deepEqual(what(), ['marked-without-record'])
+    w.custody.switches.failed = true // the key custody fails: install stops before any carrier
+    assert.equal((await w.install()).exit, 1)
+    assert.deepEqual(what(), ['marked-without-record'], 'the stopped install kept the skip')
+    w.custody.switches.failed = false
+    fs.writeFileSync(patch, '- insert: []\n') // the user took trocar's text out
+    assert.ok(!what().includes('marked-without-record'), JSON.stringify(what()))
+  })
+}
+
 // 1.6 §3.2 (macOS / Windows), through the CLI: the record is gone and the root with it, while the user's files still hold trocar's marked text (rule U's
 // block in the certificate file NODE_EXTRA_CA_CERTS names, dsh's loader row). Install skips each such carrier and installs the rest, and the receipt
 // is the refusal's: `error.code` marked-without-record, `error.command` the uninstall that takes the text out by its marks, every such file in

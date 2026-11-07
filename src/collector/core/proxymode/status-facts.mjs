@@ -5,7 +5,7 @@
 // the daemon answered for a process of that door (its `upstreams`). Names no OS and no harness; every reader is injected (ctx, fs, drift).
 import nodeFs from 'node:fs'
 import { itemsOfPhase } from '../../../off/manifest.mjs'
-import { judgeEntry, judgeOwned } from '../trust/journal.mjs'
+import { judgeEntry, judgeOwned, markedWithoutRecord, samePath } from '../trust/journal.mjs'
 import { isPresent, readSrc, holds, presentPaths } from './sources.mjs'
 import { planRoutes, priorRecordOf } from './entries.mjs'
 import { upstreamFor, isTrocarDoorUrl } from './chain.mjs'
@@ -54,7 +54,7 @@ export const setupSteps = (what) => (Object.hasOwn(FINDINGS, what) ? findingFor(
 /**
  * setupOf(desc, { os, manifest, ctx, root, fs }) → { state: 'ready' | 'needed' | 'unknown', missing: [{ form, what }], reason? } — 4.11 P4b, the ONE judgement
  * behind `status`'s `harnesses[h].setup` and `on`'s precondition ⑪ (D65④). Per present form of this OS whose carrier is not the root: its install items
- * (its own, and rule U's shared pem-block) absent → `carrier-absent`, changed → `carrier-overwritten`, skipped by install (`install.skipped`) → that skip's
+ * (its own, and rule U's shared pem-block) absent → `carrier-absent`, changed → `carrier-overwritten`, skipped by install (`install.skipped`, its file still holding the marked text) → that skip's
  * code (`marked-without-record`, fixed by setupSteps' commands); the root gone from the user's store (`root.state`
  * 'missing'; pending / declined are install's own to-do, not setup) → one `{ form: null, what: 'root-missing' }`. `manifest` null = nothing installed;
  * `{ error }` = it could not be read → `unknown`, and so is a file that cannot be read (D38): never `ready`. Reads only; no OS question of its own.
@@ -67,7 +67,9 @@ export function setupOf(desc, { os, manifest: m, ctx, root = null, fs = nodeFs }
   try {
     const pm = desc.proxyMode
     let lost
-    const skips = [((m && m.install && m.install.skipped) || {})[desc.name]].flat().filter((x) => x && typeof x.code === 'string')
+    // a skip counts while its file still holds the marked text no record lists (install's own judgement); gone, the carrier is judged as below
+    const skips = [((m && m.install && m.install.skipped) || {})[desc.name]].flat().filter((x) => x && typeof x.code === 'string' && typeof x.path === 'string'
+      && !((m && m.entries) || []).some((e) => samePath(e.path, x.path, fs)) && markedWithoutRecord({ file: x.path, fs }))
     for (const f of pm.forms.filter((x) => x.os.includes(os) && isPresent(x, ctx))) {
       const c = f.cert === 'root' ? null : (pm.certs || {})[f.cert]
       if (!c || (c.when && holds(c.when, ctx) === false)) continue // the root carries it: nothing per form, whether install saw the harness or not
