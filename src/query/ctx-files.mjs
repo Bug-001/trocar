@@ -496,6 +496,7 @@ function* appendTails(s, W, d, N, upTo, fs, fileOf, fresh) {
     let p = -1;
     for (let t = i - 1; t >= 0 && t >= i - 64; t--) if (spanOf(s, S.rids[t]) >= N) { p = t; break; }
     push(partOf(key), ...stepLines(S, key, i, p, W.tails[partOf(key)].defs, W.memo));
+    S.release(i);
     yield;
   }
   const axV = ax == null ? -2 : cols.keys.get(ax);
