@@ -48,10 +48,15 @@ export function sourcesCtx({ os, home, env = process.env, cwd = process.cwd(), d
  *  { <harness>: [form id] } — an empty list = none of them is installed. With no names `status` lists the harnesses with one beside the ones trocar's
  *  own records know (1.6 §3.5); a harness with none is not captured (4.11 P5). Reads only. */
 export async function presentForms({ os, home, env = process.env, harnesses, fs = nodeFs }) {
-  const [{ dirsOf }, { isPresent }] = await Promise.all([os === 'darwin' ? import('./darwin/policy.mjs') : import('./win32/policy.mjs'), import('../core/proxymode/sources.mjs')])
+  const [{ dirsOf }, { formsHere }] = await Promise.all([os === 'darwin' ? import('./darwin/policy.mjs') : import('./win32/policy.mjs'), import('../core/proxymode/sources.mjs')])
   const ctx = sourcesCtx({ os, home, env, dirs: dirsOf(home, env), fs })
-  const here = (d) => d.proxyMode.forms.filter((f) => f.os.includes(os))
-  return Object.fromEntries(harnesses.filter((d) => d.proxyMode && here(d).length).map((d) => [d.name, here(d).filter((f) => isPresent(f, ctx)).map((f) => f.id)]))
+  return Object.fromEntries(harnesses.filter((d) => d.proxyMode && d.proxyMode.forms.some((f) => f.os.includes(os))).map((d) => [d.name, formsHere(d.proxyMode, os, ctx).map((f) => f.id)]))
+}
+
+/** 4.11 CM43, C.3 `out_of_scope`: the out-of-scope forms status names on this machine (sources.mjs scopeNamed). Reads only. */
+export async function outOfScopeForms({ os, home, env = process.env, harnesses, fs = nodeFs }) {
+  const [{ dirsOf }, { scopeNamed }] = await Promise.all([os === 'darwin' ? import('./darwin/policy.mjs') : import('./win32/policy.mjs'), import('../core/proxymode/sources.mjs')])
+  return scopeNamed(harnesses, os, sourcesCtx({ os, home, env, dirs: dirsOf(home, env), fs }))
 }
 
 /** The program files a process of a form runs, for each form of this OS whose certificate carrier is the install-folder wrapper (4.11 P8: one native

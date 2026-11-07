@@ -642,3 +642,14 @@ test('V97: the code the collector reports on its control channel is read over a 
     assert.deepEqual(asked, [['GET', '/status']])
   } finally { await new Promise((resolve) => server.close(resolve)) }
 })
+
+// 4.11 CM43: step 1 switched the harness off, and `on` refuses one with no covered form here that is not on: naming it would stop every later update
+test('CM43: a harness with no covered form left is not switched on again, and the update finishes', async () => {
+  const s = sandbox({ on: ['codex'] })
+  fs.writeFileSync(path.join(s.dir, 'update.json'), JSON.stringify({ from: '0.1.0+0000000', on: ['codex', 'hermes'] }) + '\n')
+  const t = ctx(s, { platform: 'darwin', deps: { presentForms: async () => ({ codex: ['codex.cli'], hermes: [] }), harnesses: [] } })
+  assert.equal(await runUpdateCli(['--yes', '--json'], t.c), EXIT.ok, t.io.text())
+  assert.deepEqual(t.calls.on.map((a) => a.filter((x) => !x.startsWith('--'))), [['codex']])
+  assert.ok(JSON.parse(t.io.stdoutText ? t.io.stdoutText() : t.io.text()).notes.some((n) => n.includes('hermes')))
+  assert.equal(s.handover(), null, 'the update is done')
+})

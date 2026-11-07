@@ -15,7 +15,7 @@ import { readStateFile, setDesired, writeStateAtomic } from '../off/state.mjs'
 import { WINDOWS_MAX } from '../off/holders.mjs'
 import { setupOf, setupSteps } from './core/proxymode/status-facts.mjs'
 import { planRoutes, writeRoutes, noProxyNames } from './core/proxymode/entries.mjs'
-import { resolveLoc } from './core/proxymode/sources.mjs'
+import { resolveLoc, formsHere, scopeNamed } from './core/proxymode/sources.mjs'
 import { loadIngressConfig, rebindTaken, freeOnLoopback } from './core/ingress-config.mjs'
 import { controlEndpointFor } from '../off/control-client.mjs'
 import { CODE } from './core/codes.mjs'
@@ -67,9 +67,20 @@ export async function turnOnModel({ os, home, env = process.env, ids = null, har
   if (!installUsable(m)) return { code: CODE.certNotInstalled, on: [], refused: [], routes: [], notes: [], problems: [`trocar is not installed for this user (no install record with a root): run ${INSTALL_HINT} first`], exit: 1 }
   const byName = new Map(harnesses.map((d) => [d.name, d]))
   const wanted = ids || harnesses.map((d) => d.name).filter((h) => m.install.harnesses.includes(h)) // 4.11 §3 ㉓: this copy's table, in its order
-  const refused = [], on = []
+  const refused = [], on = [], skipped = []
+  // 4.11 CM43, 1.6 §3.3: no covered form on this machine, nothing to write and nothing to say "capturing" about. Named and not on: refused. On (the form went
+  // away after on): it stays as it is, status judges it, off undoes it. `update` asks first, and does not name one (update.mjs noFormHere)
+  const stateNow = (() => { try { return readStateFile(path.join(dir, 'state.json'), { fs, installed: wanted, now: now() }).state } catch { return null } })()
+  const named = scopeNamed(harnesses, os, ctx)
+  const noFormWhy = (h) => { const n = named.find((x) => x.harness === h); return n ? `${n.what} is on this machine, and trocar does not cover it` : 'it is not on this machine; install it with its own installer, then run trocar install' }
   const unsure = [], root = rootAsked !== undefined ? rootAsked : await rootOf({ dir, m, rootStore, fs }) // the plan's answer, when its run hands it on: the question starts OS tools (D62①)
   for (const h of wanted) { // precondition ⑪ = status's `setup` (4.11 P4b, one judgement): only a harness that needs setup is refused, nothing written for it
+    const pm = byName.get(h) && byName.get(h).proxyMode
+    if (pm && !formsHere(pm, os, ctx).length) {
+      if (ids && !(stateNow && stateNow.harnesses[h] && stateNow.harnesses[h].desired === 'on')) refused.push({ harness: h, reason: 'not-routed', why: noFormWhy(h) })
+      else skipped.push(h)
+      continue
+    }
     const s = setupOf(byName.get(h), { os, manifest: m, ctx, root, fs })
     if (s.state === 'needed') refused.push({ harness: h, reason: CODE.setupNeeded, why: [...new Set(s.missing.map((x) => SETUP_WHY[x.what]))].join('; '), commands: s.missing.map((x) => setupSteps(x.what)).reduce((a, c) => (c.length > a.length ? c : a)) }) // the longest: install is every list's last step
     // a file that could not be read is said in 1.6 A.1's words; its errno stays the note's `code`
@@ -78,8 +89,9 @@ export async function turnOnModel({ os, home, env = process.env, ids = null, har
   // what install left pending (the root store declined or not answered, the custody unreachable): on goes on — the forms the root cannot reach go through
   // their doors forwarding only (D51④) — and says each one, with the command, forward only (1.6 §1.1)
   const pending = (Array.isArray(m.install.pending) ? m.install.pending : []).map((p) => ({ harness: null, code: CODE.installPending, item: p.item, state: p.state, why: p.reason, command: INSTALL_HINT }))
-  const out = { on, refused, routes: [], notes: [...pending, ...unsure], problems: [], doors: {}, planned: [], root, exit: 1 }
-  if (!on.length) return out
+  const said = [...new Set([...skipped, ...(ids ? [] : named.map((x) => x.harness))])].filter((h) => !refused.some((x) => x.harness === h)).map((h) => ({ harness: h, code: CODE.harnessNote, text: `not captured: ${noFormWhy(h)}` }))
+  const out = { on, refused, routes: [], notes: [...pending, ...unsure, ...said], problems: [], doors: {}, planned: [], root, exit: 1 }
+  if (!on.length) return { ...out, exit: refused.length || pending.length ? 1 : 0 } // nothing to turn on: nothing here failed unless one was refused or left pending
   const render = (tpl, { door, harness }) => { const d = byName.get(harness), p = (d.proxy || {}).env || []; return renderHook(tpl, { DOOR: door, PROXY_ENV: p, PROXY_NAMES: p, NO_PROXY_ENV: noProxyNames(d) }).text }
   const wctx = { ...ctx, dir, home, manifest: m, fs, now, persistentEnv, systemProxy, render, deferResult: true, ...(newId ? { newId } : {}) } // deferResult: a route's result is saved with the next route's intent (D62①)
   const planned = on.map((h) => ({ h, plan: planRoutes(byName.get(h), wctx) }))

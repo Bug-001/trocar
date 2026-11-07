@@ -30,13 +30,17 @@ const CAPTURED = (h) => (h.captured === true ? 'yes' : h.desired === 'off' ? 'of
 const needsSetup = (x) => x.setup?.state === 'needed' && (x.setup.missing || []).some((m) => m.what !== 'root-missing')
 
 /** The one-screen summary of `trocar status` (§3.5). `doc` is the 附录 C.3 document. */
+/** C.3 `out_of_scope` (4.11 CM43): why an app on this machine is not captured. */
+const outOfScopeLines = (doc, h = null) => (doc.out_of_scope || []).filter((o) => !h || o.harness === h).map((o) => `  out of scope: ${o.what} (${o.harness} is not captured)`)
+
 export function statusSummary(doc, { now = Date.now(), colors: c = noColor() } = {}) {
   const names = Object.keys(doc.harnesses || {})
   const installed = (doc.install && doc.install.harnesses) || []
   const shown = names.filter((h) => installed.length === 0 || installed.includes(h) || needsSetup(doc.harnesses[h]))
   const on = shown.filter((h) => doc.harnesses[h].desired === 'on')
   const captured = shown.filter((h) => doc.harnesses[h].captured === true)
-  if (!shown.length) return [c.bold('No harness is set up for capture yet.'), '', ...readErrorLines(doc), 'Next: trocar install']
+  // only an app trocar does not cover: install cannot help, so it is not the next step
+  if (!shown.length) return [c.bold('No harness is set up for capture yet.'), ...outOfScopeLines(doc), '', ...readErrorLines(doc), ...((doc.out_of_scope || []).length ? [] : ['Next: trocar install'])]
   const unknown = shown.filter((h) => doc.harnesses[h].captured === null).length // never counted as not capturing (1.6 §2)
   const head = `Capturing ${captured.length} of ${shown.length} installed harness${shown.length === 1 ? '' : 'es'}${unknown ? `; ${unknown} not known yet` : ''}.`
   const daemon = daemonClause(doc.daemon, now)
@@ -52,6 +56,7 @@ export function statusSummary(doc, { now = Date.now(), colors: c = noColor() } =
   }
   const missing = names.filter((h) => !shown.includes(h))
   if (missing.length) lines.push(`  not installed: ${missing.sort().join(', ')}`)
+  lines.push(...outOfScopeLines(doc))
   lines.push('', ...pairs(summaryPairs(doc, now)))
   const first = on.find((h) => doc.harnesses[h].captured !== true) || shown[0]
   lines.push('', `More: ${[first ? `trocar status ${first}` : null, 'trocar status --failures', 'trocar doctor'].filter(Boolean).join('   ')}`)
@@ -104,9 +109,9 @@ const DESIRED = { on: 'on', off: 'off' }
 /** One named harness's section. `finding` is the problem (or expected) finding that explains it, from the one catalogue (附录 B). */
 export function statusDetail(doc, h, { finding = null, now = Date.now(), colors: c = noColor() } = {}) {
   const x = doc.harnesses[h]
-  if (!x) return [`${h}: ${unknown('it is not set up on this machine')}`]
+  if (!x) return [`${h}: ${unknown('it is not set up on this machine')}`, ...outOfScopeLines(doc, h)]
   const verdict = x.captured === true ? ['captured', notSeenYet(x)].filter(Boolean).join(', ') : x.captured === null ? openText(x, h, unknown) : x.desired === 'off' ? 'capture is off' : 'not captured'
-  const lines = [c.bold(`${h}: ${DESIRED[x.desired] || unknown('its on/off state could not be read')}, ${verdict}`), '']
+  const lines = [c.bold(`${h}: ${DESIRED[x.desired] || unknown('its on/off state could not be read')}, ${verdict}`), ...outOfScopeLines(doc, h), '']
   const rows = []
   if (finding) {
     rows.push(['Why', finding.what])

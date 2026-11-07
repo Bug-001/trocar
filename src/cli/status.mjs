@@ -181,6 +181,7 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   let here = null, hereError = null, programs = null
   if (isProxyMode(platform) && desc.value) {
     try { here = await (deps.presentForms || (await import('../collector/net-deps.mjs')).presentForms)({ os: platform, home, env, harnesses: desc.value, fs }) } catch (e) { rethrowSandbox(e); hereError = `which harnesses are on this machine could not be read (${errMessage(e)})` }
+    if (daemonMayStart(m)) try { f.outOfScope = await (deps.outOfScopeForms || (await import('../collector/net-deps.mjs')).outOfScopeForms)({ os: platform, home, env, harnesses: desc.value, fs }) } catch (e) { rethrowSandbox(e); f.outOfScope = [] } // it only says more: not knowing it changes no verdict
     try { programs = await (deps.formPrograms || (await import('../collector/net-deps.mjs')).formPrograms)({ os: platform, home, env, harnesses: desc.value }) } catch (e) { rethrowSandbox(e); programs = null }
   }
   // a form a process can be on: of a host-program form only the host's own processes (its `hosts.processes`, D51 names); of a form carried by the
@@ -535,6 +536,7 @@ export function statusDocOf(f) {
     // a harness's topology says its verdict, the one `harnesses[h]` says (1.6 C.3), never one branch's
     ...(f.topology ? { topology: Object.fromEntries(Object.entries(f.topology).map(([h, x]) => { const j = f.harnesses.find((y) => y.id === h); return [h, j ? { ...x, captured: j.judged.captured, reason: reasonOf(j.judged) } : x] })) } : {}), ...(f.topology_error ? { topology_error: f.topology_error } : {}),
     board: boardOf(f), autostart: autostartOf(f),
+    ...(f.outOfScope && f.outOfScope.length ? { out_of_scope: f.outOfScope } : {}),
     install: f.install, cert: f.cert, holders: f.holders, relayed: f.relayed, ...(f.relayed === 'unknown' ? { relayed_reason: f.relayed_reason } : {}),
     connections: f.connections, ...(f.connections === 'unknown' ? { connections_reason: f.connections_reason } : {}),
     ...(f.linger ? f.linger : {}), user: f.user, agent_list: f.agent_list, restart: restartOf(f), critical: criticalOf(f), failures, errors,

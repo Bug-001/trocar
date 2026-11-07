@@ -34,6 +34,7 @@ export async function loadParts({ arch = null, harnesses = null, env = process.e
 
 /** The forms of this OS present on this machine, per harness (proxy mode; 1.6 §3.5, 4.11 P5): the arch's reader, loaded only when asked. */
 export async function presentForms(o) { return (await import('./arch/model-backends.mjs')).presentForms(o) }
+export async function outOfScopeForms(o) { return (await import('./arch/model-backends.mjs')).outOfScopeForms(o) }
 export async function formPrograms(o) { return (await import('./arch/model-backends.mjs')).formPrograms(o) }
 
 /** The login entry in the platform's own words (a Windows user told to run `systemctl` has been handed nothing; tested on Windows 2026-10-11 and macOS 2026-10-18). */
