@@ -49,3 +49,35 @@ test('drainDaemon: a status without the in-memory marker (the old daemon an upda
   assert.ok(offs[1].at >= 30_000, `{exit, now} was sent at ${offs[1].at} ms of fake time, before the drain time was up`)
   assert.deepEqual(r.drained.rel, { closing: 1, waiting: 0, cut: 0 }, 'the counts kept are the POST /off reply\'s')
 })
+
+// 1.6 §3.6 / §5.2 (V125): the wait for the asked daemon's pid is bounded by silence. A daemon sealing its last segment writes the progress into its lock's
+// `sealing`; every change starts the wait again, and each change is handed to `onSealing`. A daemon that says nothing is waited on for the bound only.
+function sealingWorld({ goneAt, progressEvery = null }) {
+  const { w, now } = world([{ closing: 0, waiting: 0, scope: 'memory' }])
+  const lock = () => ({ pid: 1, segment: '20261107T100000Z', ...(progressEvery && now() > 0 ? { sealing: { segment: '20261107T100000Z', step: 'encode', done: Math.floor(now() / progressEvery) * 8, total: 1000 } } : {}) })
+  Object.assign(w, { lockFile: '/lock', alive: () => now() < goneAt, fs: { readFileSync: (f) => { if (f !== '/lock' || now() >= goneAt) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); return JSON.stringify(lock()) } } })
+  return { w, now }
+}
+
+test('drainDaemon: a daemon that reports sealing progress is waited for past the exit wait, and every change reaches onSealing', async () => {
+  const { w, now } = sealingWorld({ goneAt: 60_000, progressEvery: 4000 })
+  const seen = []
+  const r = await drainDaemon(w, { drainMs: 30_000, by: 'uninstall', onSealing: (s) => seen.push(s.done) })
+  assert.ok(now() >= 60_000, `the wait ended at ${now()} ms, while the daemon was still sealing`)
+  assert.equal(r.segment, '20261107T100000Z', 'the segment the daemon was writing, read from its lock before it was asked to go')
+  assert.ok(seen.length >= 10 && seen.every((d, i) => i === 0 || d > seen[i - 1]), `each change once, in order: ${seen}`)
+})
+
+test('drainDaemon: a daemon that says nothing is waited on for the exit wait only, as before', async () => {
+  const { w, now } = sealingWorld({ goneAt: Infinity })
+  const seen = []
+  await drainDaemon(w, { drainMs: 30_000, by: 'uninstall', onSealing: (s) => seen.push(s) })
+  assert.ok(now() >= 10_000 && now() < 12_000, `the wait ended at ${now()} ms`)
+  assert.deepEqual(seen, [])
+})
+
+test('drainDaemon: an uninstall that purges asks the daemon not to seal (seal:false on both exit requests)', async () => {
+  const { w, asks } = world([{ closing: 0, waiting: 0, scope: 'memory' }])
+  await drainDaemon(w, { drainMs: 30_000, by: 'uninstall', seal: false })
+  assert.deepEqual(asks.filter((a) => a.path === '/off').map((a) => a.body), [{ exit: true, by: 'uninstall', seal: false }, { exit: true, now: true, by: 'uninstall', seal: false }])
+})
