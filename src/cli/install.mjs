@@ -157,18 +157,20 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
       if (json || !isInteractive(io)) return needsYes(io, json, planned, left)
       if (!(await confirm({ ...io, prompt: io.stdout }, 'Proceed?'))) { io.err('You said no: nothing was changed'); return EXIT.incomplete }
     }
-    const r = await locked(async () => {
+    const done = await locked(async () => {
       const r = await runInstall({ os: platform, home, env, harnesses, custody: b.custody, rootStore: b.rootStore, installHelper: b.installHelper, interactive: isInteractive(io),
         wrapperKit: b.wrapperKit, facts: b.facts, ctx, unit: only ? null : unit, only, code: codeId(root), owns: deps.owns || ownsBy({ os: platform, home, fs }), renderHook, fs, ...(deps.now ? { now: deps.now } : {}) })
       const { row } = await boardPortRow(home, fs) // before the daemon starts below: it reads the port, never picks one
       if (row) { r.pending.push(row); r.exit = 1 }
       if (pathItem) { r.path = await placePath({ home, env, platform, fs, deps }); if (r.path.problem) { r.problems.push(r.path.problem); r.exit = 1 } }
-      return r
+      // D61: the login registration and the daemon, through the one seam every command uses (ensureDaemonUp, src/collector/install.mjs), under the lock: it records a fallback login entry (R12, 4.8 §7)
+      // Set up (only): the login entry is not in its plan, so it is neither rewritten above nor registered here (4.4 #13); the daemon asking is up, this only reads it
+      // a failure record that cannot be written is a problem of the run (D38: a failure is never silent)
+      const dmn = unit ? await (await import('../collector/install.mjs')).ensureDaemonUp({ osName: platform, dir: path.join(home, '.trocar', 'collector'), env, fs, unit, register: !only, put: (e) => { try { appendEvent(path.join(home, '.trocar', 'collector'), e) } catch (err) { r.problems.push(`a failure record could not be written (${err.message}): ${e.reason}`); r.exit = 1 } }, ...(deps.request ? { request: deps.request } : {}), ...(deps.sleep ? { pause: deps.sleep } : {}) }) : { up: false, started: false, notes: [], problems: [] }
+      return { r, dmn }
     })
-    if (!r) return EXIT.incomplete
-    // D61: the login registration and the daemon, through the one seam every command uses (ensureDaemonUp, src/collector/install.mjs)
-    // Set up (only): the login entry is not in its plan, so it is neither rewritten above nor registered here (4.4 #13); the daemon asking is up, this only reads it
-    const dmn = unit ? await (await import('../collector/install.mjs')).ensureDaemonUp({ osName: platform, dir: path.join(home, '.trocar', 'collector'), env, fs, unit, register: !only, put: (e) => { try { appendEvent(path.join(home, '.trocar', 'collector'), e) } catch (err) { r.problems.push(`a failure record could not be written (${err.message}): ${e.reason}`) } }, ...(deps.request ? { request: deps.request } : {}), ...(deps.sleep ? { pause: deps.sleep } : {}) }) : { up: false, started: false, notes: [], problems: [] }
+    if (!done) return EXIT.incomplete
+    const { r, dmn } = done
     r.problems.push(...dmn.problems)
     const dmnNotes = dmn.notes.filter((n) => !r.problems.includes(n)) // 附录 C.1: `problems` is the failure channel; what trocar could not do but said is `notes` (M-2)
     if (dmn.problems.length) r.exit = 1

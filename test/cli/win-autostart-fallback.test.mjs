@@ -11,7 +11,9 @@ import { userUnit, RUN_KEY, TASK_NAME } from '../../src/collector/arch/win32/aut
 import { runInstallCli } from '../../src/cli/install.mjs'
 import { runUninstall } from '../../src/cli/uninstall.mjs'
 import { statusDoc } from '../../src/cli/status.mjs'
-import { readManifest } from '../../src/off/manifest.mjs'
+import { readManifest, saveManifest, manifestPath } from '../../src/off/manifest.mjs'
+import { acquireOpLock } from '../../src/off/lock.mjs'
+import { opLockFile } from '../../src/off/paths.mjs'
 import { controlEndpoint } from '../../src/collector/arch/win32/control-path.mjs'
 
 const RUN = `${RUN_KEY.hive}\\${RUN_KEY.key}`
@@ -31,7 +33,7 @@ function windows({ refuse = true, value = null } = {}) {
     }
     if (file === 'reg') {
       if (args[0] === 'query') return w.value ? ok(`\r\nHKEY_CURRENT_USER\\${RUN_KEY.key}\r\n    ${RUN_KEY.name}    ${w.value.kind}    ${w.value.value}\r\n`) : { status: 1, stdout: '', stderr: 'ERROR: The system was unable to find the specified registry key or value.' }
-      if (args[0] === 'add') { w.value = { kind: args[args.indexOf('/t') + 1], value: args[args.indexOf('/d') + 1] }; return ok() }
+      if (args[0] === 'add') { if (w.onAdd) w.onAdd(); w.value = { kind: args[args.indexOf('/t') + 1], value: args[args.indexOf('/d') + 1] }; return ok() }
       if (args[0] === 'delete') { w.value = null; return ok() }
     }
     if (file === 'whoami') return { status: null, stdout: '', stderr: 'not here' } // the token is not read: no refusal (4.8 §7)
@@ -45,9 +47,9 @@ async function world(win) {
   const w = await modelWorld({ os: 'win32', commands: ['codex'] })
   controlEndpoint({ dir: w.dir }) // the endpoint a daemon publishes: without it the CLI has no pipe to ask
   const unit = userUnit({ home: w.home, node: 'C:\\node\\node.exe', script: 'C:\\trocar\\bin\\trocar.mjs', run: win.run, env: { USERDOMAIN: 'PC', USERNAME: 'ada' }, spawn: () => ({ pid: 77, unref() {}, on() {} }) })
-  const install = async (args = ['--yes', '--json']) => {
+  const install = async (args = ['--yes', '--json'], extra = {}) => {
     let probes = 0 // nothing answers until enable started the daemon, then it answers
-    const deps = { getuid: () => 501, exec: win.run, unit, request: async () => { if (probes++ === 0) throw Object.assign(new Error('nothing answers yet'), { code: 'ENOENT' }); return {} }, sleep: async () => {}, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '.exe' }, dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns }
+    const deps = { getuid: () => 501, exec: win.run, unit, request: async () => { if (probes++ === 0) throw Object.assign(new Error('nothing answers yet'), { code: 'ENOENT' }); return {} }, sleep: async () => {}, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '.exe' }, dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, ...extra }
     const io = fakeIo()
     const exit = await runInstallCli(args, { io, env: w.env, home: w.home, platform: 'win32', deps })
     return { exit, io }
@@ -84,6 +86,55 @@ test('4.8 §7: a later install whose /Create is accepted takes the Run value out
   assert.equal(w.runKeys().length, 0, 'the record holds no run-key entry once the task is the login entry')
   assert.deepEqual(win.value, { kind: 'REG_EXPAND_SZ', value: '%USERPROFILE%\\mine.exe' }, 'the user\'s value is back')
   assert.equal(b.doc.autostart.entry, TASK_NAME)
+})
+
+test('R12: the run-key entry is recorded under op.lock: another command that saves the install record while install registers keeps its entry', async () => {
+  const win = windows()
+  const w = await world(win)
+  const foreign = { kind: 'text', path: path.join(w.home, 'foreign.txt'), harness: 'codex', phase: 'on' }
+  const lockFile = opLockFile(w.home)
+  // another command, as every writer of the record behaves: it holds op.lock while it reads and saves. It saves at the moment install reads the
+  // record after the registration; while install holds the lock, it waits for it and saves after.
+  let armed = false, other = null
+  const save = () => { const m = readManifest(w.dir); m.entries.push({ ...foreign }); saveManifest(w.dir, m) }
+  const pfs = { ...fs, readFileSync(file, ...rest) {
+    const b = fs.readFileSync(file, ...rest)
+    if (armed && file === manifestPath(w.dir)) {
+      armed = false
+      if (fs.existsSync(lockFile)) other = (async () => { const l = await acquireOpLock({ file: lockFile, waitMs: 5000 }); try { save() } finally { l.release() } })()
+      else save()
+    }
+    return b
+  } }
+  const enable = w.unit.enable
+  w.unit.enable = (o) => { armed = true; return enable(o) }
+  const r = await w.install(undefined, { fs: pfs })
+  await other
+  assert.equal(r.exit, 0, r.io.text())
+  const m = readManifest(w.dir)
+  assert.ok(m.entries.some((e) => e.path === foreign.path), 'the other command\'s entry is kept')
+  assert.equal(w.runKeys().length, 1, 'and the run-key entry is recorded')
+})
+
+test('4.8 §7 W24: the user\'s prior Run value is in the install record before trocar writes its own value', async () => {
+  const win = windows({ value: { kind: 'REG_SZ', value: 'C:\\mine.exe' } })
+  const w = await world(win)
+  const seen = []
+  win.onAdd = () => seen.push(w.runKeys().map((e) => e.prior))
+  await install1(w)
+  assert.deepEqual(seen[0], [{ kind: 'REG_SZ', value: 'C:\\mine.exe' }], 'recorded before reg add')
+})
+
+test('D38: a task-register-failed record that cannot be written makes the run not ok, exit 1', async () => {
+  const win = windows()
+  const w = await world(win)
+  fs.rmSync(path.join(w.dir, 'flows'), { recursive: true, force: true })
+  fs.writeFileSync(path.join(w.dir, 'flows'), 'not a directory') // every failure record write fails
+  const r = await w.install()
+  const doc = r.io.json()
+  assert.ok(doc.problems.some((p) => p.includes('task-register-failed') || p.includes('Access is denied')), JSON.stringify(doc.problems))
+  assert.equal(doc.ok, false)
+  assert.notEqual(r.exit, 0)
 })
 
 for (const task of [false, true]) {

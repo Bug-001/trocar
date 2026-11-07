@@ -635,7 +635,9 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = nul
       // `install` registers and starts (enable); `on` only starts, through the OS mechanism, and itself when that refuses — the reason said, never dropped (D38)
       const startAt = ms()
       const held = register ? loginEntry(dir, fs) : null
-      let rr = register ? unit.enable({ now: !was.up, prior: held && held.entry ? held.entry.prior ?? null : null }) : (was.up ? null : unit.startNow())
+      // R12 · 4.8 §7: a caller that registers holds op.lock, and a login entry the arch uses instead of its own is recorded (with the user's prior) before it is written
+      const record = (ledger, ours) => recordLoginEntry(dir, fs, { ledger, ours }, ms)
+      let rr = register ? unit.enable({ now: !was.up, prior: held && held.entry ? held.entry.prior ?? null : null, record }) : (was.up ? null : unit.startNow())
       if (!register && rr && rr.code !== 0 && typeof unit.start === 'function') {
         const direct = unit.start(daemonEnv(env, dir)) // the direct start carries what the login entry's Environment= would carry
         if (direct.code === 0) { notes.push(`the collector could not be started through ${entryWords(osName, unit)} (${rr.err || `exit ${rr.code}`}); trocar started it directly this run; the login entry starts it at the next login`); rr = direct }
@@ -649,8 +651,8 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = nul
       // code is what install replaces (drain, stop, enable({now: true}), 1.6 §3.2 step 5, src/cli/replace-daemon.mjs).
       const startMs = ms() - startAt
       if (startMs >= SLOW_START_MS) notes.push(`${entryWords(osName, unit)} held the collector's start for ${startMs} ms; trocar waited on the OS, not on work of its own${osName === 'darwin' ? ' (launchd spawns a job at most once every ThrottleInterval seconds, 10 s by default)' : ''}`)
-      // 4.8 §7: a login entry the arch used instead of its own (Windows' Run value when /Create is refused) is an install item, recorded once; one it took out leaves the record
-      if (register && rr && (rr.ledger || ['removed', 'restored'].includes(rr.runKey))) {
+      // 4.8 §7: a login entry the arch took out (the Run value, once the task is registered) leaves the record
+      if (register && rr && ['removed', 'restored'].includes(rr.runKey)) {
         const why = recordLoginEntry(dir, fs, rr, ms)
         if (why) { notes.push(why); problems.push(why) }
       }
@@ -710,14 +712,15 @@ function loginEntry(dir, fs) {
 function recordLoginEntry(dir, fs, rr, ms) {
   const held = loginEntry(dir, fs)
   const what = rr.ledger ? `the login entry ${rr.ledger.hive}\\${rr.ledger.key}\\${rr.ledger.name}` : 'the login entry trocar took out'
-  if (!held) return `${what} could not be recorded: the install record could not be read; trocar uninstall still takes it out`
+  const after = rr.ledger ? 'so it was not written' : 'trocar uninstall still takes it out' // a new entry is recorded before it is written (4.8 §7 W24)
+  if (!held) return `${what} could not be recorded: the install record could not be read; ${after}`
   const { m, at, entry } = held
   if (rr.ledger) {
     const e = { ...rr.ledger, harness: null, phase: 'install', prior: rr.ours && entry ? entry.prior ?? null : rr.ledger.prior, installed_at: new Date(ms()).toISOString() }
     if (at >= 0) m.entries[at] = e; else m.entries.push(e)
   } else if (at >= 0) m.entries.splice(at, 1)
   else return null
-  try { saveManifest(dir, m, fs); return null } catch (err) { return `${what} could not be recorded (${(err && err.message) || err}); trocar uninstall still takes it out` }
+  try { saveManifest(dir, m, fs); return null } catch (err) { return `${what} could not be recorded (${(err && err.message) || err}); ${after}` }
 }
 function readLockPid(dir, fs) { try { return JSON.parse(fs.readFileSync(path.join(dir, 'lock'), 'utf8')).pid ?? null } catch { return null } }
 
