@@ -1,4 +1,4 @@
-// bundle-gap.test.mjs — CM40 (4.11 P4b, 1.6 附录 B / C.3 `setup.missing.what`): a merged bundle (a replace key with `merges`) holds the CAs its sources
+// bundle-gap.test.mjs — CM42 (4.11 P4b, 1.6 附录 B / C.3 `setup.missing.what`): a merged bundle (a replace key with `merges`) holds the CAs its sources
 // named at install; a CA added to a source since makes `setup` needed (`bundle-lacks-ca`), the form's certificate not in effect with `trocar install`,
 // and install clears it. A CA the bundle holds, a CA taken out of the source, an unreadable source and an older record without `user_fps` say nothing.
 // Generated over every harness whose descriptor has a merged bundle, never one named harness.
@@ -39,10 +39,10 @@ async function worldFor({ desc, v }) {
 
 const quiet = (s, why) => assert.deepEqual([s.setup.state, s.setup.missing], ['ready', []], why)
 
-test('CM40: at least one harness has a merged bundle on this OS (the cases below are generated over them)', () => assert.ok(merged.length > 0))
+test('CM42: at least one harness has a merged bundle on this OS (the cases below are generated over them)', () => assert.ok(merged.length > 0))
 
 for (const h of merged) {
-  test(`CM40 · ${h.desc.name}: a CA added to a merged source after install → needed, bundle-lacks-ca, the certificate not in effect with trocar install; install again clears it`, async () => {
+  test(`CM42 · ${h.desc.name}: a CA added to a merged source after install → needed, bundle-lacks-ca, the certificate not in effect with trocar install; install again clears it`, async () => {
     const { w, src, status } = await worldFor(h)
     fs.writeFileSync(src, newCa('user ca one'))
     assert.equal((await w.install()).exit, 0)
@@ -63,7 +63,7 @@ for (const h of merged) {
     quiet(await status(), 'after install again')
   })
 
-  test(`CM40 · ${h.desc.name}: a CA the bundle holds, a CA taken out of the source, an unreadable source and a record without user_fps say nothing`, async () => {
+  test(`CM42 · ${h.desc.name}: a CA the bundle holds, a CA taken out of the source, an unreadable source and a record without user_fps say nothing`, async () => {
     const { w, src, status } = await worldFor(h)
     const one = newCa('user ca one')
     fs.writeFileSync(src, one)
