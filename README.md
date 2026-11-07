@@ -43,7 +43,8 @@ from the previous one, classifies *why* — tools array reordered · JSON keys r
 rewrote history · a shared-prefix block changed in place — and attributes it: **yours**, **the
 harness**, or **provider-excluded**. Each cause carries a fix hint and the character offset inside the
 diverging block's rebuilt text. The cause is a structural estimate from comparing the two calls' blocks, not the
-provider's real boundary — `usage` stays the numeric truth. "Emit the tools array in a stable order" is a one-line
+provider's real boundary — `usage` stays the numeric truth: a call whose prefix changed but still read at least 30% of its
+input from the cache is shown as changed, not as a cache break. "Emit the tools array in a stable order" is a one-line
 fix you cannot find without seeing the wire.
 
 **"My prefix looked identical — why was I billed a miss?"** trocar checks the reusable prefix block by block

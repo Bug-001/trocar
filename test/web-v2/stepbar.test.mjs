@@ -96,7 +96,7 @@ test('2.2 #8 · 组成 growth: against the content ref, following the compare pi
   assert.ok(c.some((r) => r.text === W.COMPACTION_REWRITE) && !c.some((r) => r.key === 'growth'))
 })
 
-test('2.2 #13 · 缓存 label: failed · — · N%? · N%', () => {
+test('2.2 #13 · 缓存 label: call failed · — · N%? · N%', () => {
   const u = U(70, 20, 10)
   const pct = Math.round(hitRatio(u) * 100)
   assert.equal(head([{ error: 'x', usage: u }]).cache.label, W.CACHE_CELL_FAILED)
@@ -105,12 +105,12 @@ test('2.2 #13 · 缓存 label: failed · — · N%? · N%', () => {
   assert.equal(head([{ usage: u, cacheBreak: { cause: 'append' } }]).cache.label, W.cacheCellPct(pct))
 })
 
-test('2.2 #14 · 缓存 popover: a structural sentence carries 结构估计 (states 4–7 and volatile-nonce-only); 1–3 and append do not', () => {
+test('2.2 #14 · 缓存 popover: a structural sentence carries 结构估计 (states 4–7, 6′ and volatile-nonce-only); 1–3 and append do not', () => {
   const u = U(0, 50, 10)
   const cases = [
     [{ error: 'x', usage: u }, false], [{ usage: null }, false], [{ usage: u, cacheBreak: { firstCall: true } }, false],
     [{ usage: u, gt: 'ttl-rebuild', cacheBreak: { cause: 'append' } }, true], [{ usage: u, gt: 'provider-contradiction', cacheBreak: { cause: 'append' } }, true],
-    [{ usage: u, cacheBreak: { cause: 'tool-array-reorder' } }, true], [{ usage: u, cacheBreak: { cause: 'append' } }, true],
+    [{ usage: u, cacheBreak: { cause: 'tool-array-reorder' } }, true], [{ usage: U(90, 5, 5), cacheBreak: { cause: 'tool-array-reorder' } }, true], [{ usage: u, cacheBreak: { cause: 'append' } }, true],
     [{ usage: U(90, 5, 5), cacheBreak: { cause: 'volatile-nonce-only' } }, true], [{ usage: U(90, 5, 5), cacheBreak: { cause: 'append' } }, false],
   ]
   for (const [row, struct] of cases) {
@@ -127,6 +127,16 @@ test('2.2 多花 · no price table yet, or an unreadable one: the extra cost row
     const r = rowsOf(head([{ usage: U(0, 100, 10) }, { usage: U(0, 100, 10), cacheBreak: { cause: 'content-changed' } }], { at: 1, ...extra }), 'cacheRows').find((x) => x.key === 'extra')
     assert.equal(r.usd, null); assert.ok(r.text.includes(why) && r.text !== W.BREAK_COST_WHY['no-price'], JSON.stringify(extra))
   }
+})
+
+test('2.2 row 6′ · 缓存 popover: a changed prefix still mostly read says so, with no ≈ extra cost; below LOW_HIT it is a break with one', () => {
+  const blocks = [[blk('system', 'system', 10)], [blk('system', 'system', 10), blk('messages', 'user', 5)]]
+  const keys = (u) => rowsOf(head([{ usage: U(0, 10, 1) }, { usage: u, cacheBreak: { cause: 'content-changed', idx: 1 } }], { blocks, at: 1 }), 'cacheRows')
+  const hit = keys(U(90, 5, 5)), miss = keys(U(5, 5, 90))
+  assert.equal(hit[0].text, W.cacheSentence({ state: 'changed-hit', cause: 'content-changed' }, { causeW: W.causeWord('content-changed'), hitPct: 90 }))
+  assert.ok(!hit.some((r) => r.key === 'extra'), 'no ≈ extra cost: not a break')
+  assert.ok(hit.some((r) => r.key === 'jump') && miss.some((r) => r.key === 'jump'), 'the change is still there to jump to')
+  assert.ok(miss.some((r) => r.key === 'extra'), 'a break below LOW_HIT carries its extra cost row')
 })
 
 test('2.2 #15 · 跳到变化处 only when the cause is outside QUIET_CAUSES (a failed step too) and the step\'s blocks reach the change', () => {

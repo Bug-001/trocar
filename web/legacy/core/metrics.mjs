@@ -27,15 +27,15 @@ export function hitRatio(u) {
   return tot > 0 ? (u.read || 0) / tot : null
 }
 export function hitPct(u) { const r = hitRatio(u); return r == null ? null : Math.round(r * 100) }
-export const hitTier = (r) => (r >= 0.7 ? 'hi' : r >= 0.3 ? 'mid' : 'lo')
-const LOW_HIT = 0.3
+export const LOW_HIT = 0.3
+export const hitTier = (r) => (r >= 0.7 ? 'hi' : r >= LOW_HIT ? 'mid' : 'lo')
 
 // ── the cache predicate ─────────────────────────────────────────────────────────────────────────────────────────────
 // The causes that say nothing changed in the cache prefix. ONE list: the predicate below and the 变化线 in the context window both
 // read it, so "the trace flags this step" and "the window says the prefix changed" can never disagree.
 export const QUIET_CAUSES = new Set(['append', 'first-call', 'volatile-nonce-only'])
 
-export const CACHE_STATES = Object.freeze(['failed', 'no-usage', 'first', 'ttl-rebuild', 'provider-contradiction', 'changed', 'low-hit', 'reused', 'unjudged'])
+export const CACHE_STATES = Object.freeze(['failed', 'no-usage', 'first', 'ttl-rebuild', 'provider-contradiction', 'changed', 'changed-hit', 'low-hit', 'reused', 'unjudged'])
 const BREAK_STATES = new Set(['ttl-rebuild', 'provider-contradiction', 'changed', 'low-hit'])
 
 // the call failed: the row's `error` is the call-row failed verdict (3.5 §访问模式 ②, failedOf)
@@ -51,7 +51,9 @@ export function refOf(calls, i) {
 }
 
 // What state a step is in. Evaluated in this order; the first match wins (plan P2.4):
-//   failed · no-usage · first · ttl-rebuild · provider-contradiction · changed · low-hit · reused
+//   failed · no-usage · first · ttl-rebuild · provider-contradiction · changed · changed-hit · low-hit · reused
+// changed-hit (2.2 row 6′): the prefix changed after the part that was cached, so the cache was still mostly read — usage wins over
+// the structure (3.3), and it is not a break. changed and low-hit then say the same thing: the cache was mostly not read.
 // `unjudged` is the one addition: the step's request was never captured, so there is no comparison to read a cause from — the step
 // is neither a break nor "reused". `ref` is the 缓存对比步 (see refOf); the verdict itself is the server's (cacheBreak, gt), computed
 // against it, so `ref` only names the step the answer is about — breakCost is where it is read.
@@ -74,7 +76,7 @@ export function cacheState(step, ref = null) {
   const gt = gtOf(step)
   if (gt === 'ttl-rebuild') return mk('ttl-rebuild', { hit })
   if (gt === 'provider-contradiction') return mk('provider-contradiction', { hit })
-  if (b.cause && !QUIET_CAUSES.has(b.cause)) return mk('changed', { hit })
+  if (b.cause && !QUIET_CAUSES.has(b.cause)) return mk(hit < LOW_HIT ? 'changed' : 'changed-hit', { hit })
   if (hit != null && hit < LOW_HIT) return mk('low-hit', { hit })
   return mk('reused', { hit, quiet: b.cause === 'volatile-nonce-only' ? 'volatile-nonce-only' : 'append' })
 }
