@@ -23,10 +23,10 @@ const NEEDS_YES = 'Nothing was changed. Read the plan above, then run it again w
 const planLine = (p, home) => [p.harness, p.paths.length ? `${p.paths.map((x) => tilde(x, home)).join(', ')}: ${routeWords(p)}` : `no file of yours: trocar hands ${p.harness} the setting as it starts`] // 1.6 §3.3: path: what changes there
 const noteLine = (n) => (n.code === 'install-pending' ? `Not done yet: ${n.item} is ${n.state} (${n.why}). Run again: ${n.command}` : `Note: ${n.harness ? `${n.harness}: ` : ''}${n.text || n.why || n.code}${n.paths && n.paths.length ? ` (${n.paths.join(', ')})` : ''}`)
 // 1.6 §3.3: a harness that needs setup — the fix is two commands, never the code (§1.1)
-const refusedLine = (r) => `${r.harness} was not turned on: ${r.why}. Run: ${r.command}, then: trocar on ${r.harness}`
+const refusedLine = (r) => `${r.harness} was not turned on: ${r.why}. Run: ${r.command}${r.command === 'trocar install' ? '' : ', then: trocar install'}, then: trocar on ${r.harness}` // uninstall takes install's skip out: install follows it
 /** 1.6 §3.3 (D65④): the harnesses `on` refused because their setup is needed — `blocked` of a dry run, `error` of a real one (exit 1). */
 const setupBlocked = (r) => r.refused.filter((x) => x.reason === 'setup-needed').map((x) => ({ what: x.harness, reason: x.why }))
-const setupError = (b) => ({ code: 'setup-needed', message: `${b.map((x) => x.what).join(', ')} ${b.length === 1 ? 'is' : 'are'} not set up for capture; run trocar install, then trocar on again` })
+const setupError = (b, r) => { const fix = r.refused.find((x) => x.reason === 'setup-needed' && x.command !== 'trocar install'); return { code: 'setup-needed', message: `${b.map((x) => x.what).join(', ')} ${b.length === 1 ? 'is' : 'are'} not set up for capture; run ${fix ? `${fix.command}, then trocar install` : 'trocar install'}, then trocar on again` } }
 
 /** → the exit code. `source`: added to each flows/ record this run writes (the board's 'board'). `parts` is loadParts' view (its arch's unit); `deps`: backends, harnesses, which, exec, now, sleep, fs (0.1 §3). */
 export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, json, source }) {
@@ -95,7 +95,7 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
     ...pairs(plan.planned.map((p) => { const [h, v] = planLine(p, home); return [h, isNew(p) ? `${v} (new since you last said yes)` : v] }), { home })], { home }).join('\n'))
   const blockedSetup = setupBlocked(plan)
   if (flags.has('--dry-run')) return out(receiptOf({ ...plan, exit: 0 }, { dry_run: true, planned: plan.planned, ...(blockedSetup.length ? { blocked: blockedSetup } : {}) }), EXIT.ok)
-  if (!plan.on.length && blockedSetup.length) return done(receiptOf(plan, { blocked: blockedSetup, error: setupError(blockedSetup) }), EXIT.incomplete) // nothing to turn on: no daemon started
+  if (!plan.on.length && blockedSetup.length) return done(receiptOf(plan, { blocked: blockedSetup, error: setupError(blockedSetup, plan) }), EXIT.incomplete) // nothing to turn on: no daemon started
   if (fresh.length && !flags.has('--yes')) {
     if (json || !isInteractive(io)) { if (json) printJson(io, { ...receiptOf({ ...plan, exit: 2 }), ok: false, planned: plan.planned, needs_yes: true, notes: [NEEDS_YES] }); else io.err(NEEDS_YES); return EXIT.usage }
     if (!(await ask({ ...io, prompt: io.stdout }, 'Proceed?'))) { io.err('You said no: nothing was changed'); return EXIT.incomplete }
@@ -116,7 +116,7 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
     if (up.up) r.notes.push(...up.notes.map((text) => ({ harness: null, text })))
     if (r.on.length && up.up) { const now = readManifest(dir, fs); now.confirmed_paths = [...new Set([...(now.confirmed_paths || []), ...plan.planned.flatMap((p) => p.paths)])]; saveManifest(dir, now, fs) }
     const b = setupBlocked(r)
-    return done(receiptOf(r, { planned: plan.planned, daemon: { state: up.state, started: up.started }, ...(b.length ? { blocked: b, error: setupError(b), ...(r.on.length && up.up ? { undo: UNDO_LINE.on } : {}) } : {}) }), r.exit, up.up ? (r.turnedOn || []) : [])
+    return done(receiptOf(r, { planned: plan.planned, daemon: { state: up.state, started: up.started }, ...(b.length ? { blocked: b, error: setupError(b, r), ...(r.on.length && up.up ? { undo: UNDO_LINE.on } : {}) } : {}) }), r.exit, up.up ? (r.turnedOn || []) : [])
   } catch (e) { // a throw under the lock is a failed run too: its result line names what turned on before the throw (turnOnModel attaches it; none when it is not known), then the error goes on
     put({ event: 'install-note', where: 'install', kind: 'result', outcome: 'failed', harnesses: Array.isArray(e && e.turnedOn) ? e.turnedOn : [], refused: [], reason: `on did not finish: ${errText(e)}` })
     throw e

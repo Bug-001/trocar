@@ -264,6 +264,7 @@ export function statusReason(code, { harness = '', pid = null, cause = null } = 
     'cert-tier-unreachable': [`this form of ${h} has no way to reach a certificate`],
     'not-verified': [`this form of ${h} is not verified yet, so trocar passes its traffic on without reading it`],
     'not-users-file': [`${h} points at a certificate file that is not yours`],
+    'marked-without-record': [`${h}'s certificate file holds trocar's text from an earlier install whose record is gone`, null, 'trocar uninstall'],
     'not-trocars-file': [`trocar cannot tell the file where it puts its own for ${h} is its own`],
     'shim-not-on-path': [`${h} did not start through the program trocar installed`],
     'form-unsupported': [`this form of ${h} cannot be captured with the proxy it is set to use`],

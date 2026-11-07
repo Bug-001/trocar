@@ -15,7 +15,11 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { ERROR_CODES } from '../../src/cli/json.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
 import { BOARD_RANGE } from '../../src/collector/core/ingress-config.mjs'
-import { onCtx, snapshot } from './fixtures/on-ctx.mjs'
+import { onCtx, snapshot, recordingExec } from './fixtures/on-ctx.mjs'
+import { runUninstall } from '../../src/cli/uninstall.mjs'
+import { readManifest } from '../../src/off/manifest.mjs'
+import { setupOf } from '../../src/collector/core/proxymode/status-facts.mjs'
+import { findingFor } from '../../src/netenv/findings.mjs'
 import { BLOCK_OPEN, BLOCK_END } from '../../src/off/text-edit.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
 import { formatRefusal, markedRefusal } from '../../src/cli/receipt.mjs'
@@ -442,5 +446,21 @@ for (const os of ['darwin', 'win32']) {
     assert.equal(await runInstallCli(['--yes'], { io: text, env: w.env, home: w.home, platform: os, deps }), 1)
     const lines = text.text().split('\n').map((l) => l.trim())
     for (const f of marked) assert.ok(lines.includes(path.join('~', path.relative(w.home, f))), `${f} prints whole on a line of its own:\n${text.text()}`)
+    // 4.11 P4b: status and on judge a skipped harness by install's own skip, whose fix is uninstall (install again repeats the skip); the rest read ready
+    const setup = (h) => setupOf(w.harnesses.find((d) => d.name === h), { os, manifest: readManifest(w.dir), ctx: w.ctx })
+    const skipped = [...new Set(doc.carriers.filter((c) => c.code === 'marked-without-record').map((c) => c.harness))]
+    const placed = [...new Set(doc.carriers.filter((c) => c.carrier !== 'root' && c.state && c.state !== 'skipped').map((c) => c.harness))].filter((h) => !doc.carriers.some((c) => c.harness === h && c.state === 'skipped'))
+    assert.ok(skipped.includes('claude-code') && placed.length, JSON.stringify(doc.carriers))
+    for (const h of skipped) {
+      const s = setup(h)
+      assert.deepEqual([s.state, [...new Set(s.missing.map((x) => x.what))]], ['needed', ['marked-without-record']], `${h}: ${JSON.stringify(s)}`)
+      assert.equal(findingFor(s.missing[0].what, { platform: os, h }).commands[0].run, 'trocar uninstall')
+    }
+    for (const h of placed) assert.equal(setup(h).state, 'ready', h)
+    // uninstall takes the marked text out by its marks; a fresh install then writes the carrier, and the skip is gone with it
+    const u = await runUninstall({ home: w.home, env: w.env, yes: true, deps: { platform: os, exec: recordingExec().run, custody: w.custody, rootStore: w.store, harnesses: w.harnesses, procs: async () => [], sleep: async () => {}, drainMs: 0, getuid: () => 501 } })
+    assert.equal(u.exit, 0, JSON.stringify(u.receipt.problems))
+    assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+    for (const h of [...skipped, ...placed]) assert.equal(setup(h).state, 'ready', h)
   })
 }

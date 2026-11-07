@@ -222,7 +222,12 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
     // `code`: the code that ran install (1.6 §5.5: an npm copy's update finishes until it is this code). A Set up (only) is not an install: it keeps
     // the code the last install wrote, so an update after `npm i -g` still runs install and `on` on the new code (4.6 清单)
     const code = only ? (m.install && typeof m.install.code === 'string' ? m.install.code : null) : ran
-    const next = { state, at: installComplete(m) && state === 'complete' ? m.install.at : now().toISOString(), pending, harnesses: names, items: placed, ...(code ? { code } : {}) }
+    // 4.11 P4b: the carriers this run skipped for marked text no record lists — install again repeats the skip, so setup names it with uninstall as the fix.
+    // Rewritten every run; a Set up (only) rewrites its own harness's alone
+    const kept = only && m.install && m.install.skipped ? Object.fromEntries(Object.entries(m.install.skipped).filter(([h]) => h !== only)) : {}
+    const skips = Object.entries(Object.groupBy(carriers.filter((x) => x.code === MARKED_WITHOUT_RECORD), (x) => x.harness)).map(([h, xs]) => [h, xs.map((x) => ({ path: x.path ?? null, code: x.code }))])
+    const skippedRec = { ...kept, ...Object.fromEntries(skips) }
+    const next = { state, at: installComplete(m) && state === 'complete' ? m.install.at : now().toISOString(), pending, harnesses: names, items: placed, ...(Object.keys(skippedRec).length ? { skipped: skippedRec } : {}), ...(code ? { code } : {}) }
     if (JSON.stringify(next) !== JSON.stringify(m.install)) m.install = next
     if (JSON.stringify(m) !== before) save()
     const skipped = carriers.filter((x) => x.state === 'skipped').length + items.filter((x) => x.state === 'skipped').length

@@ -67,6 +67,7 @@ const SETS = {
   'cert-key-missing': { h: null, facts: facts('claude-code', { cert: { key: 'missing', intermediate: 'key-missing' } }), codes: ['cert-key-missing'] },
   'cert-intermediate-unavailable': { h: null, facts: facts('claude-code', { cert: { key: 'unknown', intermediate: 'unavailable' } }), codes: ['cert-intermediate-unavailable'] },
   'not-users-file': { h: 'codex', facts: pfacts('codex', form('codex.cli', { procs: [proc(5530, { name: 'codex app-server', trusted: false, reason: 'not-users-file' })] }), fwForm(17992)), codes: ['not-users-file'] },
+  'marked-without-record': { h: 'claude-code', facts: pfacts('claude-code', form('claude-code.cli', { certificate: { in_effect: false, carrier: 'config-key', user_file: null, since: null, code: 'marked-without-record', command: 'trocar uninstall' } }), fwForm(17992)), codes: ['marked-without-record'] }, // 4.11 P4b: install skipped its carrier for marked text no record lists
   'local-upstream': { h: 'opencode', facts: localRelay(), codes: ['local-upstream'] }, // 4.11 P6: its config names only hosts on this machine (a local relay)
   'not-verified': { h: 'codex', facts: pfacts('codex', form('codex.cli', { procs: [proc(5530, { name: 'codex app-server', trusted: false, reason: 'not-verified' })] }), fwForm(17992)), codes: ['not-verified'] },
   'prior-proxy-unknown': { h: 'codex', facts: pfacts('codex', form('codex.cli', { procs: [proc(5530, { name: 'codex app-server' })] }), fwForm(17992, { source: 'unknown' })), codes: ['prior-proxy-unknown'] },
@@ -74,7 +75,7 @@ const SETS = {
 }
 // D51③⑤ (1.6 附录 B): the name list's two findings — a state event of the door and a failure code of the harness part, both in health/codes.mjs's closed sets
 const IDENTITY_CODES = ['process-unknown', 'agent-list-invalid']
-const CERT_CODES = ['cert-key-missing', 'cert-intermediate-unavailable', 'not-users-file'] // 1.6 §9.7's cert group, as findings
+const CERT_CODES = ['cert-key-missing', 'cert-intermediate-unavailable', 'not-users-file', 'marked-without-record'] // 1.6 §9.7's cert group, as findings
 const REFUSAL_CODES = ['collectors-online'] // a command's refusal (uninstall), rendered by findingFor, not by diagnose
 const STATUS_REASONS_IN_CATALOGUE = ['config-after-start', 'daemon-not-running', 'daemon-not-responding', 'helper-missing', 'link-missing', 'entry-missing', 'entry-changed', 'desired-off', 'negative-cache', 'not-seen', 'local-upstream']
 

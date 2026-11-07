@@ -47,10 +47,14 @@ function carrierLoss(m, desc, own, fs) {
   return null
 }
 
+/** The command that fixes a `setup.missing[].what` (4.11 P4b): install writes what is missing, except a carrier install itself skipped for marked text. */
+export const setupFix = (what) => (what === 'marked-without-record' ? 'trocar uninstall' : INSTALL)
+
 /**
  * setupOf(desc, { os, manifest, ctx, root, fs }) → { state: 'ready' | 'needed' | 'unknown', missing: [{ form, what }], reason? } — 4.11 P4b, the ONE judgement
  * behind `status`'s `harnesses[h].setup` and `on`'s precondition ⑪ (D65④). Per present form of this OS whose carrier is not the root: its install items
- * (its own, and rule U's shared pem-block) absent → `carrier-absent`, changed → `carrier-overwritten`; the root gone from the user's store (`root.state`
+ * (its own, and rule U's shared pem-block) absent → `carrier-absent`, changed → `carrier-overwritten`, skipped by install (`install.skipped`) → that skip's
+ * code (`marked-without-record`, fixed by setupFix's command); the root gone from the user's store (`root.state`
  * 'missing'; pending / declined are install's own to-do, not setup) → one `{ form: null, what: 'root-missing' }`. `manifest` null = nothing installed;
  * `{ error }` = it could not be read → `unknown`, and so is a file that cannot be read (D38): never `ready`. Reads only; no OS question of its own.
  */
@@ -62,11 +66,13 @@ export function setupOf(desc, { os, manifest: m, ctx, root = null, fs = nodeFs }
   try {
     const pm = desc.proxyMode
     let lost
+    const skips = [((m && m.install && m.install.skipped) || {})[desc.name]].flat().filter((x) => x && typeof x.code === 'string')
     for (const f of pm.forms.filter((x) => x.os.includes(os) && isPresent(x, ctx))) {
       const c = f.cert === 'root' ? null : (pm.certs || {})[f.cert]
       if (!c || (c.when && holds(c.when, ctx) === false)) continue // the root carries it: nothing per form, whether install saw the harness or not
       // a carrier of its own: install's items for it (none when install never saw the harness, unless rule U's shared block carries it)
-      if (lost === undefined) lost = carrierLoss(m || {}, desc, itemsFor(desc, itemsOfPhase(m, 'install'), ctx), fs)
+      // install's own skip of this harness's carrier (`install.skipped`, marked text no record lists) is the cause, not an absent carrier: install repeats it
+      if (lost === undefined) lost = skips.length ? skips[0].code : carrierLoss(m || {}, desc, itemsFor(desc, itemsOfPhase(m, 'install'), ctx), fs)
       if (lost) missing.push({ form: f.id, what: lost })
     }
   } catch (e) { return unknown(String((e && e.message) || e)) }
