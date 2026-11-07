@@ -38,8 +38,8 @@ for (const theme of ['light', 'dark']) for (const width of WIDTHS) {
       await serveWorld(page, w)
       await page.evaluate((m) => { location.hash = `#/replay/p/S?step=${m}` }, M)
       await page.waitForFunction((m) => {
-        const x = /(\d+)\s*\/\s*(\d+)/.exec(document.querySelector('#stepbar .sb-no')?.textContent || '')
-        return !!x && +x[1] === m && !document.querySelector('#ctxwin .cwload') && !!document.querySelector('#ctxwin .cblk')
+        const x = window.__stepNo()
+        return !!x && x.n === m && !document.querySelector('#ctxwin .cwload') && !!document.querySelector('#ctxwin .cblk')
       }, M, { timeout: 30000, polling: 'raf' })
       await atRest(page, 'after the step was drawn')
       const sh0 = await page.evaluate(() => document.querySelector('#ctxwin').scrollHeight) // before any scroll: nothing above the landing was measured yet

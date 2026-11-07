@@ -9,7 +9,7 @@
 // `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard, serveWorld, gapInPage, windowGap } from './harness.mjs'
+import { probe, withBoard, serveWorld, gapInPage, windowGap, stepKey } from './harness.mjs'
 import { world } from '../desk-world.mjs'
 
 const gate = await probe()
@@ -20,7 +20,6 @@ const keysOf = (list) => { const seen = new Map(); return list.map((b) => { cons
 const delta = (a, b) => { const A = keysOf(a), B = keysOf(b); let d = 0; for (let i = 0; i < Math.max(A.length, B.length); i++) if (A[i] !== B[i]) d++; return d }
 function rng(seed) { let a = seed >>> 0 || 1; return () => ((a = Math.imul(a ^ (a >>> 13), 0x5bd1e995) + 0x9e3779b9 >>> 0) / 4294967296) }
 
-const NO = /(\d+)\s*\/\s*(\d+)/
 // the board serving world `w`, with: go(k) = the main lane's step k by name, drawn and settled; count(key) = the nodes added +
 // removed under #ctxwin from the key press until two frames after the step head changed and the window drew
 async function onBoard(w, fn) {
@@ -30,14 +29,14 @@ async function onBoard(w, fn) {
     await serveWorld(page, w)
     const go = async (k) => {
       await page.evaluate((k) => { location.hash = `#/replay/p/S?step=${k}` }, k)
-      await page.waitForFunction(([k, re]) => {
-        const x = new RegExp(re).exec(document.querySelector('#stepbar .sb-no')?.textContent || '')
-        return !!x && +x[1] === k && !document.querySelector('#ctxwin .cwload')
-      }, [k, NO.source], { timeout: 30000, polling: 'raf' })
+      await page.waitForFunction((k) => {
+        const x = window.__stepNo()
+        return !!x && x.n === k && !document.querySelector('#ctxwin .cwload')
+      }, k, { timeout: 30000, polling: 'raf' })
       await page.waitForTimeout(400)
     }
     const count = async (key) => {
-      const was = await page.evaluate((re) => new RegExp(re).exec(document.querySelector('#stepbar .sb-no')?.textContent || '')?.[1] ?? null, NO.source)
+      const was = await page.evaluate(() => window.__stepNo()?.n ?? null)
       await page.evaluate(() => {
         window.__written = () => [...document.querySelectorAll('#ctxwin [data-rp] .cellread, #ctxwin [data-rp] .cellraw')].reduce((n, leaf) => n + leaf.childNodes.length, 0)
         window.__wrote = window.__written()
@@ -46,21 +45,21 @@ async function onBoard(w, fn) {
         window.__mo.observe(document.querySelector('#ctxwin'), { subtree: true, childList: true })
       })
       await page.keyboard.press(key)
-      return page.evaluate(([was, re]) => new Promise((resolve, reject) => {
+      return page.evaluate((was) => new Promise((resolve, reject) => {
         const t0 = performance.now(), raf = () => new Promise((r) => requestAnimationFrame(r))
         const tick = async () => {
-          const x = new RegExp(re).exec(document.querySelector('#stepbar .sb-no')?.textContent || '')
-          if (x && x[1] !== was && !document.querySelector('#ctxwin .cwload')) {
+          const x = window.__stepNo()
+          if (x && x.n !== was && !document.querySelector('#ctxwin .cwload')) {
             await raf(); await raf()
             for (const r of window.__mo.takeRecords()) window.__mut += r.addedNodes.length + r.removedNodes.length
             window.__mo.disconnect()
-            return resolve({ n: window.__mut, from: +was, to: +x[1], written: window.__wrote + window.__written(), h: document.querySelector('#ctxwin').clientHeight })
+            return resolve({ n: window.__mut, from: +was, to: x.n, written: window.__wrote + window.__written(), h: document.querySelector('#ctxwin').clientHeight })
           }
           if (performance.now() - t0 > 10000) return reject(new Error(`step not drawn in 10 s after ${was}`))
           requestAnimationFrame(tick)
         }
         tick()
-      }), [was, NO.source])
+      }), was)
     }
     await fn({ page, go, count: async (key) => ({ ...(await count(key)), pitch: (await windowGap(page)).pitch }) })
     assert.deepEqual(b.errors, [])
@@ -188,12 +187,12 @@ test('2.3 #28: the rendered window holds only the items within one window height
     const mid = await atRest()
     // the first frame after each press
     await page.evaluate(`window.__gaps = []; addEventListener('keydown', () => requestAnimationFrame(() => window.__gaps.push((${gapInPage})())), true)`)
-    const no = () => page.evaluate(() => document.querySelector('#stepbar .sb-no')?.textContent)
+    const no = () => stepKey(page)
     const presses = [...Array(10).fill('ArrowLeft'), ...Array(10).fill('ArrowRight')]
     for (const key of presses) {
       const was = await no()
       await page.keyboard.press(key)
-      await page.waitForFunction((was) => document.querySelector('#stepbar .sb-no')?.textContent !== was, was, { timeout: 10000, polling: 'raf' })
+      await page.waitForFunction((was) => { const x = window.__stepNo(); return (x ? `${x.n}/${x.m}` : null) !== was }, was, { timeout: 10000, polling: 'raf' })
       await page.waitForTimeout(100)
     }
     const first = await page.evaluate(() => window.__gaps)

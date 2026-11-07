@@ -33,8 +33,8 @@ async function fresh() {
 async function settledDesk() {
   const m = await mainCount(b.get, id)
   await b.page.waitForFunction((k) => {
-    const x = /(\d+)\s*\/\s*(\d+)/.exec(document.querySelector('#stepbar .sb-no')?.textContent || ''), s = window.__seq.snap()
-    return !!x && +x[2] === k && s.inflight === 0 && Date.now() - Math.max(0, ...s.fetchLog.map((e) => e.end ?? Infinity)) >= 500
+    const x = window.__stepNo(), s = window.__seq.snap()
+    return !!x && x.m === k && s.inflight === 0 && Date.now() - Math.max(0, ...s.fetchLog.map((e) => e.end ?? Infinity)) >= 500
   }, m, { timeout: 20000, polling: 100 })
 }
 // the desk follows the newest step of the settled session: its step bar shows m / m (m = the server's main-lane count) with
@@ -43,8 +43,8 @@ async function settledDesk() {
 async function following() {
   const m = await mainCount(b.get, id)
   await b.page.waitForFunction((k) => {
-    const x = /(\d+)\s*\/\s*(\d+)/.exec(document.querySelector('#stepbar .sb-no')?.textContent || '')
-    return !!x && +x[1] === k && +x[2] === k && document.querySelector('.sh-follow')?.getAttribute('aria-pressed') === 'true' &&
+    const x = window.__stepNo()
+    return !!x && x.n === k && x.m === k && document.querySelector('.sh-follow')?.getAttribute('aria-pressed') === 'true' &&
       !new URLSearchParams(location.hash.split('?')[1] || '').has('step')
   }, m, { timeout: 20000 })
 }
@@ -215,7 +215,7 @@ test('V-hold not following, growth and an unrecorded step key', { skip }, async 
 test('V-url the hash names another step than the one shown', { skip }, async () => {
   await fresh(); await settledDesk()
   await b.page.evaluate(() => {
-    const n = +/(\d+)\s*\//.exec(document.querySelector('#stepbar .sb-no').textContent)[1]
+    const n = window.__stepNo().n
     const [route, q] = location.hash.split('?'), p = new URLSearchParams(q || '')
     p.set('step', String(n === 1 ? 2 : 1)); history.replaceState(null, '', `${route}?${p}`)
   })
