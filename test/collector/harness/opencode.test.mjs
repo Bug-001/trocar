@@ -39,10 +39,12 @@ test('opencode desktop on macOS: the sidecar `opencode-cli serve` is opencode, o
     assert.deepEqual([
       agentOf(`${app}/OpenCode`, []), // as a person starts it
       agentOf(`${app}/OpenCode`, ['--remote-debugging-port=9222']), // as the measurement started it
+      agentOf(`${home}/Applications/OpenCode.app/Contents/MacOS/OpenCode`, []), // another install location
+      agentOf('/Volumes/Tools/OpenCode 2.app/Contents/MacOS/OpenCode', []), // a renamed bundle elsewhere
       agentOf(`${app}/../Frameworks/OpenCode Helper.app/Contents/MacOS/OpenCode Helper`, ['--type=gpu-process']),
       agentOf(`${app}/../Frameworks/OpenCode Helper.app/Contents/MacOS/OpenCode Helper`, ['--type=utility', '--utility-sub-type=network.mojom.NetworkService']),
       agentOf(`${app}/../Frameworks/OpenCode Helper (Renderer).app/Contents/MacOS/OpenCode Helper (Renderer)`, ['--type=renderer']),
-    ], [null, null, null, null, null])
+    ], [null, null, null, null, null, null, null])
     const sidecar = mac(cli, ['serve', '--service'])
     assert.equal(matchOf([oc], sidecar).agent, 'opencode')
     assert.equal(createRegistry([oc]).isLongLived(oc, sidecar), true)
