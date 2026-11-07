@@ -663,6 +663,22 @@ test('chains: across a pause, the same membership in one pass, cut across two se
   }
 })
 
+test('chains: an older segment that changes: the list read again is the one a fresh read gives', async () => {
+  // one chain through 20 segments; segment 3 or 17 then grows: the rule resumes there from a state replayed (src/query/rows.mjs stateAt)
+  const N = 20, task = story(9400, N), at = (s) => T0 + (s + 1) * 60_000
+  const segs = Array.from({ length: N }, (_, s) => [`20261018T10${String(s).padStart(2, '0')}00Z`, [agentCall('keyless', msgs(task.slice(0, s + 1)), at(s))]])
+  for (const s of [3, 17]) {
+    const home = homeOf(segs)
+    await membership(home)
+    const extra = agentCall('keyless', msgs(story(9500 + s, 1)), at(s) + 1000)
+    writeSegment(home, segs[s][0], lines([extra]))
+    const fresh = await membership(homeOf(segs.map(([g, r], k) => [g, k === s ? [...r, extra] : r])))
+    const again = await membership(home)
+    assert.deepEqual(again, fresh, `segment ${s}`)
+    assert.equal(sidsOf(again, home, segs.map(([, [r]]) => r)).size, 1, 'the chain is one session')
+  }
+})
+
 test('chains: a call with no readable history joins the group\'s latest chain and leaves its tail as it was; alone it opens one', () => {
   const assign = createSynthAssigner(), f = (ms, chain) => ({ harness: 'hermes', ms, hash: 'h'.repeat(64), fp: [], chain })
   assert.equal(assign(f(1000, [])).key, assign(f(2000, [])).key, 'no chain open yet, then one')
