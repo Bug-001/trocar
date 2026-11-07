@@ -220,10 +220,11 @@ test('rule U · a replace-marked file with no block on record reads as the door 
   }
 })
 
-// 4.11 P11 / ⑩: a blocked form's blocker reaches, in status as at the door, the forms whose program file the door cannot tell from it (`exe`). The
-// Z-Code desktop's CA setting: on macOS its agent is the app's Helper, so no other form reads it; on Windows the CLI is the same ZCode.exe, so the
-// CLI reads it too (`plan.via`), and the Node CLI, a node process, never does.
-for (const [os, together] of [['darwin', []], ['win32', ['z-code.cli']]]) test(`4.11 P11 · ${os}: the Z-Code desktop's CA setting reaches the forms the door cannot tell from the desktop: ${together.join(', ') || 'none'}`, async () => {
+// 4.11 P11 / ⑩: a blocked form's blocker reaches, in status as at the door, the forms the door cannot tell from it (its program file `exe`, then
+// a word of its command line `argv`). The Z-Code desktop's CA setting: on macOS its agent is the app's Helper, so no other form reads it; on Windows
+// the CLI is the same ZCode.exe but runs `-p` where the desktop's agent runs `app-server`, so it does not either (`plan.via` would say it); the Node
+// CLI, a node process, never does.
+for (const [os, together] of [['darwin', []], ['win32', []]]) test(`4.11 P11 · ${os}: the Z-Code desktop's CA setting reaches the forms the door cannot tell from the desktop: ${together.join(', ') || 'none'}`, async () => {
   const w = await modelWorld({ os })
   const app = os === 'darwin' ? '/Applications/ZCode.app' : path.join(w.home, 'AppData', 'Local', 'Programs', 'ZCode')
   const inner = w.ctx.exists
