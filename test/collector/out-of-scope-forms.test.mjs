@@ -160,12 +160,12 @@ describe('P5: a form not measured on this system, alone on the machine', { concu
       if (measured.length) return // it shares its place with a measured form: that one is what is on the machine
       alone++
       await w.cmd.install()
+      assert.ok(!readManifest(w.dir).install.harnesses.includes(d.name), 'install does not count the harness')
       const s1 = snapshot(w)
       const daemon = await daemonFor(w)
       try {
         const named = await w.cmd.on([d.name])
         assert.deepEqual([named.on, named.refused.map((x) => [x.harness, x.reason]), named.exit], [[], [[d.name, 'not-routed']], 1])
-        assert.ok(named.refused[0].why.includes(f.id) || named.refused[0].why.includes('not measured'), named.refused[0].why)
       } finally { await daemon.close() }
       assert.deepEqual(outside(s1, snapshot(w)), [], 'on wrote no entry')
       assert.equal(desiredOn(w, d.name), false)

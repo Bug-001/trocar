@@ -73,7 +73,7 @@ export async function turnOnModel({ os, home, env = process.env, ids = null, har
   const stateNow = (() => { try { return readStateFile(path.join(dir, 'state.json'), { fs, installed: wanted, now: now() }).state } catch { return null } })()
   const named = scopeNamed(harnesses, os, ctx)
   const noFormWhy = (h) => { const n = named.find((x) => x.harness === h), u = byName.get(h) ? formsHere(byName.get(h).proxyMode, os, ctx).map((f) => f.id) : []
-    if (u.length) return `${h} is installed here in a way trocar has not measured on this system yet, so it writes no entry for it` // 4.11 P5
+    if (u.length) return `trocar has not been tested with ${h} installed this way on this system yet, so it does not set ${h} up` // 4.11 P5
     return n ? `${n.what} is on this machine, and trocar does not cover it` : 'it is not on this machine; install it with its own installer, then run trocar install' }
   const unsure = [], root = rootAsked !== undefined ? rootAsked : await rootOf({ dir, m, rootStore, fs }) // the plan's answer, when its run hands it on: the question starts OS tools (D62①)
   for (const h of wanted) { // precondition ⑪ = status's `setup` (4.11 P4b, one judgement): only a harness that needs setup is refused, nothing written for it

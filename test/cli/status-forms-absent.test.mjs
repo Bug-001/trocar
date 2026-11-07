@@ -175,10 +175,11 @@ test('4.11 P5 · CM44: a form not measured on this system, alone here beside mea
     const f = d.proxyMode.forms.find((x) => x.os.includes(os) && x.verified[os] === true)
     const marked = all.map((x) => (x !== d ? x : { ...d, proxyMode: { ...d.proxyMode, forms: d.proxyMode.forms.map((y) => (y === f ? { ...y, verified: { ...y.verified, [os]: { reason: 'not-measured' } } } : y)) } }))
     const w = await world(os, d.name)
-    const dj = (await status(w, os, d.name, [], runDoctor, { harnesses: marked, netFactsDeps: async () => ({ harnesses: marked, archFacts: darwinNetFacts }), presentForms: async () => ({ [d.name]: [f.id] }) })).j
-    assert.equal(dj.harnesses ? dj.harnesses[d.name].reason : 'not-routed', 'not-routed', d.name)
-    const x = (dj.findings || []).find((y) => y.code === 'not-routed' && y.harness === d.name)
-    assert.ok(x && /not measured/.test(x.why), `${d.name}: ${JSON.stringify(x)}`)
+    const more = (present) => ({ harnesses: marked, netFactsDeps: async () => ({ harnesses: marked, archFacts: darwinNetFacts }), presentForms: async () => ({ [d.name]: present }) })
+    assert.equal((await status(w, os, d.name, [], runStatusCli, more([f.id]))).j.harnesses[d.name].reason, 'not-routed', d.name)
+    const finding = async (present) => ((await status(w, os, d.name, [], runDoctor, more(present))).j.findings || []).find((y) => y.code === 'not-routed' && y.harness === d.name)
+    const [x, none] = [await finding([f.id]), await finding([])]
+    assert.ok(x && none && x.why !== none.why, `${d.name}: an unmeasured form here is told apart from none here: ${JSON.stringify([x, none])}`)
     n++
   }
   assert.ok(n > 0)

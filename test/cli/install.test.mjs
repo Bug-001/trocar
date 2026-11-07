@@ -37,8 +37,8 @@ function fakeLaunchctl() {
   const calls = []
   return { calls, run: (file, args) => { calls.push([file, ...args].join(' ')); return { status: 0, stdout: '', stderr: '' } } }
 }
-async function cli(argv, { tty = false, over = {}, setup = null } = {}) {
-  const w = await modelWorld({ commands: ['codex'] })
+async function cli(argv, { tty = false, over = {}, setup = null, commands = ['codex'] } = {}) {
+  const w = await modelWorld({ commands })
   if (setup) setup(w)
   const io = fakeIo({ tty })
   const launchctl = fakeLaunchctl()
@@ -663,4 +663,15 @@ test('1.6 §3.2: a damaged record moved aside as the refusal says: install no lo
   const { io } = await cli(['--dry-run', '--json'], { setup: (w) => { fs.mkdirSync(w.dir, { recursive: true }); fs.writeFileSync(path.join(w.dir, path.basename(to)), '{ not json') } }) // what is left once it is moved
   assert.equal(io.json().error, undefined, io.text())
   assert.ok(io.json().planned.length > 0)
+})
+
+// 4.11 P5: with no agent here that trocar sets up on this system, `trocar on` has nothing to capture, so the receipt does not name it as the next step
+test('install with no agent trocar sets up here: exit 0, and the receipt does not send the user to trocar on', async () => {
+  const some = await cli(['--yes'])
+  assert.equal(some.exit, 0, some.io.text())
+  assert.ok(some.io.text().includes('trocar on'), 'with an agent here, on is the next step')
+  const none = await cli(['--yes'], { commands: [], setup: (w) => { w.harnesses.length = 0 } }) // hermetic: no descriptor, so nothing of this machine's /Applications is an agent here
+  assert.equal(none.exit, 0, none.io.text())
+  assert.deepEqual(readManifest(none.w.dir).install.harnesses, [], 'no agent here')
+  assert.ok(!none.io.text().includes('trocar on'), none.io.text())
 })

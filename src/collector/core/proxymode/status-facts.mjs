@@ -7,7 +7,7 @@ import nodeFs from 'node:fs'
 import path from 'node:path'
 import { itemsOfPhase } from '../../../off/manifest.mjs'
 import { judgeEntry, judgeOwned, markedWithoutRecord, samePath } from '../trust/journal.mjs'
-import { formsHere, holds, presentPaths, userCertFilesOf, rootHeldIn, readSrc, inTrocar } from './sources.mjs'
+import { routedForms, holds, presentPaths, userCertFilesOf, rootHeldIn, readSrc, inTrocar } from './sources.mjs'
 import { planRoutes, priorRecordOf, loopbackDirect, loopbackNote } from './entries.mjs'
 import { upstreamFor, isTrocarDoorUrl } from './chain.mjs'
 import { pacLeg } from './pac.mjs'
@@ -101,7 +101,7 @@ export function setupOf(desc, { os, manifest: m, ctx, root = null, fs = nodeFs }
     // a skip counts while its file still holds the marked text no record lists (install's own judgement); gone, the carrier is judged as below
     const skips = [((m && m.install && m.install.skipped) || {})[desc.name]].flat().filter((x) => x && typeof x.code === 'string' && typeof x.path === 'string'
       && !((m && m.entries) || []).some((e) => samePath(e.path, x.path, fs)) && markedWithoutRecord({ file: x.path, fs }))
-    for (const f of formsHere(pm, os, ctx)) {
+    for (const f of routedForms(pm, os, ctx)) {
       const c = f.cert === 'root' ? null : (pm.certs || {})[f.cert]
       if (!c || (c.when && holds(c.when, ctx) === false)) continue // the root carries it: nothing per form, whether install saw the harness or not
       // a carrier of its own: install's items for it (none when install never saw the harness, unless rule U's shared block carries it)
@@ -160,7 +160,7 @@ export async function modelFormFacts({ harnesses, os, manifest: m, reply = null,
     const plan = planRoutes(desc, ctx), d = drift(h), own = itemsFor(desc, inst, ctx)
     const { code: ufCode, ...uf } = userFileOf(desc, { m, ctx, fs, own, rootFp256 }) || {}
     const forms = []
-    for (const f of formsHere(pm, os, ctx)) {
+    for (const f of routedForms(pm, os, ctx)) {
       const c = f.cert === 'root' ? null : (pm.certs || {})[f.cert]
       const carrier = !c || (c.when && holds(c.when, ctx) === false) ? 'root' : CARRIER[c.kind] ?? null
       const r = root || {}
