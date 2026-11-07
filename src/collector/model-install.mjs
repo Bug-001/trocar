@@ -28,6 +28,7 @@ import { CODE, EVENT } from './core/codes.mjs'
 import { runEventWriter } from '../off/events.mjs'
 import { writeBackup } from '../off/backup.mjs'
 import { certBlocks, certsOf, composeBundle } from '../off/pem.mjs'
+import { errnoWords } from '../cli/words.mjs'
 
 /** The OSes the collector model (4.11) runs on — the one list `install`, `on`, `uninstall` and the arch backends ask. */
 export const MODEL_OS = Object.freeze(['darwin', 'win32'])
@@ -36,6 +37,8 @@ export const isModelOs = (os) => MODEL_OS.includes(os)
 export const STORE = Object.freeze({ darwin: 'darwin-user-trust', win32: 'win-currentuser-root' }) // the store the user root goes into (src/off/root-store.mjs removes it on uninstall)
 const NOT_USERS = CODE.notUsersFile
 const errText = (e) => String((e && e.message) || e)
+// a write that failed: a file error (Node's, with a syscall) is its file in 1.6 A.1's words, its errno left to the item's `code`; any other error its own text
+const writeErrText = (e) => (e && e.syscall ? `${e.path ? `${e.path}: ` : ''}${errnoWords(e, 'write')}` : errText(e))
 // The key custody is a native program (4.11 P1): 'unavailable' is a VALUE, but it can also FAIL outright — a HOME with no login keychain answers
 // "A default keychain could not be found" (a macOS test machine 2026-10-18, where install exited 70 with a stack at the person). A failure is a stated
 // refusal: `install` says what happened and what to do, carries `error.code` and exits 1.
@@ -76,7 +79,7 @@ function usersFileWhy(file, { fs = nodeFs, owns }) {
   try { real = fs.realpathSync(file) } catch { return `${file} does not exist` }
   const tree = managedTree(real)
   if (tree) return `${real} is inside ${tree}, which a package manager or the system rewrites`
-  try { if (!fs.statSync(real).isFile()) return `${real} is not a file` } catch (e) { return `${real} cannot be read (${e.code || e.message})` }
+  try { if (!fs.statSync(real).isFile()) return `${real} is not a file` } catch (e) { return `${real}: ${errnoWords(e)}` }
   const o = owns(real)
   if (o !== true) return o === false ? `${real} belongs to another user` : `who owns ${real} cannot be told`
   try { fs.accessSync(real, nodeFs.constants.W_OK) } catch { return `${real} is read-only for this user` }
@@ -287,10 +290,10 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
       }
       return { state: 'skipped', code: 'not-routed', why: `no carrier kind ${c.kind}` }
     } catch (e) {
-      if (e.code !== MARKED_WITHOUT_RECORD) problems.push(`${desc.name}: ${errText(e)}`) // a marked file is the receipt's own refusal, one problem per file (src/cli/install.mjs)
+      if (e.code !== MARKED_WITHOUT_RECORD) problems.push(`${desc.name}: ${writeErrText(e)}`) // a marked file is the receipt's own refusal, one problem per file (src/cli/install.mjs)
       // 4.11 P4: a file that is not trocar's at a path it writes its own to — left alone, and on record (D38)
-      if (e.code === CODE.notTrocarsFile) runEventWriter({ dir, base: { run: now().toISOString() }, notes, fs })({ event: EVENT.failure, where: 'install', code: e.code, harness: desc.name, path: e.path, reason: errText(e) })
-      return { state: 'skipped', code: e.code || 'install-error', ...(e.path ? { path: e.path } : {}), why: errText(e) }
+      if (e.code === CODE.notTrocarsFile) runEventWriter({ dir, base: { run: now().toISOString() }, notes, fs })({ event: EVENT.failure, where: 'install', code: e.code, harness: desc.name, path: e.path, reason: writeErrText(e) })
+      return { state: 'skipped', code: e.code || 'install-error', ...(e.path ? { path: e.path } : {}), why: writeErrText(e) }
     }
   }
 
@@ -303,7 +306,7 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
       if (!path.isAbsolute(file)) { notes.push(`${desc.name}: ${where} (${file || typeof value}) is not an absolute path; its certificates are not in trocar's bundle`); return [] }
       if (inTrocar(file, home, ctx.os)) return []
       let buf
-      try { buf = fs.readFileSync(file) } catch (e) { notes.push(`${desc.name}: ${file} (${where}) is unreadable (${e.code || errText(e)}); its certificates are not in trocar's bundle`); return [] }
+      try { buf = fs.readFileSync(file) } catch (e) { notes.push(`${desc.name}: ${file} (${where}): ${errnoWords(e)}; its certificates are not in trocar's bundle`); return [] }
       const got = certsOf(file, buf)
       for (const k of got.skipped) notes.push(`${desc.name}: ${file}: ${k.type ? `block ${k.index} (${k.type})` : 'the file'} is not carried into trocar's bundle: ${k.why}`)
       return [{ file, certs: got.certs }]
@@ -328,7 +331,7 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
       if (shared) { carriers.push({ harness: desc.name, carrier: 'pem-block', path: file, state: 'intact', shared_with: shared.harness }); return }
       const e = applyTextEntry({ dir, manifest: m, harness: desc.name, phase: 'install', file, edit: { format: 'pem-block', pem: rootPem }, home, now: now(), fs })
       carriers.push({ harness: desc.name, carrier: 'pem-block', path: file, state: e ? 'placed' : 'intact' })
-    } catch (e) { carriers.push({ harness: desc.name, carrier: 'pem-block', path: file, state: 'skipped', code: e.code || NOT_USERS, why: errText(e) }) }
+    } catch (e) { carriers.push({ harness: desc.name, carrier: 'pem-block', path: file, state: 'skipped', code: e.code || NOT_USERS, why: writeErrText(e) }) }
   }
 }
 

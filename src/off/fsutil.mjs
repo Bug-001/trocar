@@ -59,12 +59,13 @@ function renameRetrying(fs, from, to) {
 }
 export function writeDurable(file, data, mode, fs = nodeFs) {
   const tmp = `${file}${TMP_MARK}${process.pid}`
-  const fd = fs.openSync(tmp, 'w', mode)
   try {
+    const fd = fs.openSync(tmp, 'w', mode)
     try { fs.writeSync(fd, data); fs.fchmodSync(fd, mode); fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
     renameRetrying(fs, tmp, file)
   } catch (e) {
     try { fs.rmSync(tmp, { force: true }) } catch { /* the error to report is the write's */ }
+    if (e && e.path === tmp) e.path = file // the error names the user's file, not trocar's temp file next to it
     throw e
   }
   fsyncDir(fs, path.dirname(file))
