@@ -725,7 +725,7 @@ export const LEDGER_BYTES = 8 << 20;
  *  every entry in the ledger's order. With `base` (a step's place): only the entries new after it or whose bytes differ from the
  *  ledger's at it (3.5 §会话读 `lane`). `kept: {maps, step}`: the replay's maps at `step` of these same steps (its rids up to it
  *  unchanged), with `base` -1 or `step`: only the steps after it are replayed, its maps going on in place. The `kept` returned: the
- *  maps at the last step (null for a lane of no step). `none`: a step of the lane has a null delta (a wire that keeps no ledger). */
+ *  maps at the last step (null for a lane of no step). `note`: null, or `no-ledger` when every step's delta is null (a wire that keeps no ledger), `partial-ledger` when some are. */
 export function laneLedger(rids, deltaOf, base = -1, kept = null) {
   const at = (n) => (n == null ? n : rids[n]);
   const res = ({ segments, loads, ...r }) => ({ ...r, segments: segments.map((g) => ({ enter: at(g.enter), evict: at(g.evict) })),
@@ -736,16 +736,16 @@ export function laneLedger(rids, deltaOf, base = -1, kept = null) {
   let was = null;
   const touched = kept && base >= 0 ? (was = { r: new Map(), s: new Map() }) : null;
   const snap = (m, wire) => new Map([...m].map(([k, v]) => [k, JSON.stringify(wire(v))]));
-  // a step whose delta is null is of a wire that keeps no ledger: the lane's ledger is then not known, never the part the other steps
-  // kept (`none`, kept with the maps so a page that goes on from them knows it too)
-  const steps = function* () { for (let i = from; i < rids.length; i++) { const d = deltaOf(i); if (d === null) maps.none = true; yield [i, d || []]; } };
+  // a step whose delta is null is of a wire that keeps no ledger; what the steps were is kept with the maps, so a page that goes on
+  // from them knows it too (`note`: every step such → no-ledger, some → partial-ledger: the list is not the lane's whole)
+  const steps = function* () { for (let i = from; i < rids.length; i++) { const d = deltaOf(i); if (d === null) maps.unkept = true; else maps.kept = true; yield [i, d || []]; } };
   replayLedger(steps(), touched ? null : (n, r, s) => { if (n === base) was = { r: snap(r, res), s: snap(s, see) }; }, maps,
     touched && ((kind, key, e) => { if (!touched[kind].has(key)) touched[kind].set(key, e ? JSON.stringify(kind === 'r' ? res(e) : see(e)) : null); }));
   const out = { kept: rids.length ? { maps, step: rids.length - 1 } : null };
   const resources = [], seen = [];
   for (const [k, r] of maps.resources) { const w = res(r); if (!was || (touched ? touched.r.has(k) : true) && was.r.get(k) !== JSON.stringify(w)) resources.push(w); }
   for (const [k, f] of maps.seen) { const w = see(f); if (!was || (touched ? touched.s.has(k) : true) && was.s.get(k) !== JSON.stringify(w)) seen.push(w); }
-  return { ...out, resources, seen, none: !!maps.none };
+  return { ...out, resources, seen, note: !maps.unkept ? null : maps.kept ? 'partial-ledger' : 'no-ledger' };
 }
 /** ledgerWeight(kept) → the heap a kept ledger (laneLedger's `kept`) is weighed at: its entries (counted as the replay changes them)
  *  × LEDGER_UNIT_BYTES. */

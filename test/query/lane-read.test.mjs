@@ -314,6 +314,7 @@ function closedSets(p, sample) {
     assert.equal(d.ref === null, 'unaddressable' in d, `${d.bid}: an unaddressable block has ref null and says why`)
   }
   assert.equal(p.resources === null, p.resources_note === 'no-ledger', 'resources is null exactly when the note says no-ledger')
+  assert.ok(!('resources_note' in p) || ['no-ledger', 'partial-ledger'].includes(p.resources_note), 'resources_note is a closed-set code')
   for (const r of p.resources || []) {
     for (const g of r.segments || []) subset(g, ['enter', 'evict'], 'resource segment')
     for (const l of r.loads || []) subset(l, ['rid', 'range', 'via'], 'resource load')
@@ -536,12 +537,14 @@ test('2.4 没有资源账本的 lane: a flat-wire lane answers resources and see
   }
 })
 
-test('2.4 没有资源账本的 lane: a lane with any step of a wire that keeps no ledger is not known as a whole, never the part the other steps kept; a kept ledger goes on knowing it', () => {
+test('2.4 Edge cases 多种线格式: a lane with some steps of a wire that keeps no ledger gives the kept part, named partial; every step such is no-ledger; a kept ledger goes on knowing it', () => {
   const op = ['r', 'file', 'a.txt', 'read', null]
-  const deltas = [[op], null, []]
-  const whole = laneLedger(['r0', 'r1', 'r2'], (i) => deltas[i])
-  assert.equal(whole.none, true)
-  const firstTwo = laneLedger(['r0', 'r1'], (i) => deltas[i]), after = laneLedger(['r0', 'r1', 'r2'], (i) => deltas[i], 1, firstTwo.kept)
-  assert.equal(after.none, true, 'gone on from a kept ledger')
-  assert.equal(laneLedger(['r0', 'r2'], (i) => [[op], []][i]).none, false, 'no null step: the ledger is whole')
+  const deltas = [[op], null, []], rids = ['r0', 'r1', 'r2']
+  const mixed = laneLedger(rids, (i) => deltas[i])
+  assert.equal(mixed.note, 'partial-ledger', 'neither the whole nor none')
+  assert.deepEqual(mixed.resources.map((r) => r.label), ['a.txt'], 'the kept part is given')
+  const firstTwo = laneLedger(rids.slice(0, 2), (i) => deltas[i]), after = laneLedger(rids, (i) => deltas[i], 1, firstTwo.kept)
+  assert.equal(after.note, 'partial-ledger', 'gone on from a kept ledger')
+  assert.equal(laneLedger(rids.slice(0, 2), (i) => [null, null][i]).note, 'no-ledger')
+  assert.equal(laneLedger(['r0', 'r2'], (i) => [[op], []][i]).note, null, 'no null step: the ledger is whole')
 })
