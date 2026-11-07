@@ -261,18 +261,24 @@ test('4.4 §答案文件 代标签: a Range read with a held tag sends it as If-
 })
 
 test('K-30: a latched page reloads when a #t= link lands in its tab; another fragment does not, and an open page never listens', async () => {
-  const winOf = (hash = '#/overview') => { const w = { on: [], reloads: 0, location: { hash, reload: () => { w.reloads++ } }, addEventListener: (k, fn) => { if (k === 'hashchange') w.on.push(fn) } }; return w }
-  const open = await freshHttp(), w0 = winOf()
-  open.watchNewToken(w0)
-  assert.equal(w0.on.length, 0, 'no latch, no listener')
-  const shut = await freshHttp()
-  await withFetch(() => json({ error: 'x' }, 403), async () => assert.equal((await shut.get('/api/sessions')).status, 403))
-  const w = winOf()
-  shut.watchNewToken(w)
-  w.location.hash = '#/sessions'; for (const fn of w.on) fn()
-  assert.equal(w.reloads, 0, 'a route change is not a token')
-  w.location.hash = '#t=new-token'; for (const fn of w.on) fn()
-  assert.equal(w.reloads, 1, 'a pasted link with a token reopens the page')
+  const saved = ['addEventListener', 'location'].map((k) => [k, Object.getOwnPropertyDescriptor(globalThis, k)])
+  const on = [], loc = { hash: '#/overview', reloads: 0, reload() { loc.reloads++ } }
+  Object.defineProperty(globalThis, 'addEventListener', { configurable: true, writable: true, value: (k, fn) => { if (k === 'hashchange') on.push(fn) } })
+  Object.defineProperty(globalThis, 'location', { configurable: true, writable: true, value: loc })
+  try {
+    const open = await freshHttp()
+    await withFetch(() => json({ sessions: [] }), async () => assert.equal((await open.get('/api/sessions')).ok, true))
+    assert.equal(on.length, 0, 'an open page never listens')
+    const shut = await freshHttp()
+    await withFetch(() => json({ error: 'x' }, 403), async () => assert.equal((await shut.get('/api/sessions')).status, 403))
+    assert.equal(on.length, 1, 'the 403 arms one listener')
+    loc.hash = '#/sessions'; for (const fn of on) fn()
+    assert.equal(loc.reloads, 0, 'a route change is not a token')
+    loc.hash = '#t=new-token'; for (const fn of on) fn()
+    assert.equal(loc.reloads, 1, 'a pasted link with a token reopens the page')
+  } finally {
+    for (const [k, d] of saved) { if (d) Object.defineProperty(globalThis, k, d); else delete globalThis[k] }
+  }
 })
 
 test('K-30: after a 403 no request is sent, every read is {ok:false, status:403}, onForbidden fires once', async () => {

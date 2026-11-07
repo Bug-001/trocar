@@ -66,15 +66,11 @@ function latched(r) {
   // the token this page sent is wrong: drop the kept copy, unless another tab has since kept a newer one (4.4 §每用户口令)
   try { if (token != null && kept && kept.getItem(TOKEN_KEY) === token) kept.removeItem(TOKEN_KEY) } catch { /* storage blocked: nothing kept */ }
   for (const fn of onForbid) try { fn() } catch (e) { console.error('onForbidden failed', e) }
-  watchNewToken()
+  // a latched page reopens when a link with a token lands in its tab (1.5 K-30): pasting `trocar board`'s link only changes the
+  // fragment, which the browser does not reload for, and the latch is this page's state — so a #t= fragment reloads the page, which
+  // boots with it (bootToken)
+  if (typeof globalThis.addEventListener === 'function') globalThis.addEventListener('hashchange', () => { if (String(globalThis.location.hash || '').startsWith('#t=')) globalThis.location.reload() })
   return true
-}
-
-// a latched page reopens when a link with a token lands in its tab (1.5 K-30): pasting `trocar board`'s link only changes the fragment,
-// which the browser does not reload for, and the latch is this page's state — so a #t= fragment reloads the page, which boots with it
-export function watchNewToken(win = globalThis) {
-  if (!forbidden || !win || typeof win.addEventListener !== 'function') return
-  win.addEventListener('hashchange', () => { if (String(win.location.hash || '').startsWith('#t=')) win.location.reload() })
 }
 
 // early(path, params): a read sent before the screen that wants it exists (core/first.mjs, 1.2 #24). Its answer is kept by full URL and
