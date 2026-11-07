@@ -96,11 +96,6 @@ function chainOf(body) {
   return { chain: out.slice(-CHAIN_K), items: recent.slice(-RECENT) };
 }
 
-export function createSynthKeys({ gapMs = SYNTH_GAP_MS } = {}) {
-  const assign = createSynthAssigner({ gapMs });
-  return { keyOf: (rec) => { const got = assign(synthFactsOf(rec)); return got ? got.key : null; } };
-}
-
 /** What a call brings to the rule, or null when it takes no part in it. Keyless → {harness, ms, hash, fp, probe, late, chain, items, mark}: `fp` is the
  *  fingerprints its session is recognized by, `probe` the ones it looks for its session with when it is the harness's
  *  compaction request, else null; `chain` its history's last cumulative hashes and `items` its last items' own (chainOf); `mark` whether it carries its harness's
