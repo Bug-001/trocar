@@ -53,7 +53,7 @@ test('sessions / session / block / pricing 的顶层键照 C.5', async () => {
   const home = homeWithData()
   const sessions = await runQuery('sessions', {}, { home })
   assert.deepEqual(Object.keys(sessions).sort(), ['as_of', 'command', 'errors', 'has_more', 'next', 'ok', 'schema', 'sessions'])
-  assert.deepEqual(Object.keys(sessions.sessions[0]).sort(), ['calls', 'entrypoint', 'harness', 'harness_inferred', 'has_subagent', 'last_ts', 'logged', 'other', 'probes', 'project_path', 'project_slug', 'provider', 'session_id', 'session_synthesized', 'title', 'title_source'])
+  assert.deepEqual(Object.keys(sessions.sessions[0]).sort(), ['calls', 'entrypoint', 'harness', 'harness_inferred', 'has_subagent', 'last_ts', 'logged', 'other', 'probes', 'project_path', 'project_slug', 'provider', 'session_id', 'session_synthesized', 'title', 'title_source', 'lineage_source', 'parent_session_id', 'fork_of_session_id'].sort())
   assert.deepEqual([sessions.sessions[0].session_id, sessions.sessions[0].calls], [SID, 1])
 
   const session = await runQuery('session', { id: SID }, { home })
