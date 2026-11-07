@@ -12,7 +12,7 @@ import { normalizeRecord } from '../raw/ingest.mjs';
 import { expandRequestBody } from '../dissect/request-body.mjs';
 import { openSealed, createLineCache } from '../raw/reader.mjs';
 import { R } from '../raw/format.mjs';
-import { segmentIndex, segmentSource } from './index-build.mjs';
+import { plainWentSealed, segmentIndex, segmentSource } from './index-build.mjs';
 import { trocarHome } from '../paths.mjs';
 import { warmCache, fsTag, HEAP_PER_STORED } from './warm.mjs';
 
@@ -27,7 +27,7 @@ const NL = 0x0a;
 
 /** Every stored line of one segment file as [lineNo, text] — sealed or plain, the line numbers it was written with.
  *  The lines that were not JSON when they were sealed are kept too: the index row names them, and the reader decides. */
-function* lines(file, fs) {
+function* lines(file, fs, open = file) {
   if (file.endsWith('.sealed')) {
     const sf = openSealed(file, { fs });
     try {
@@ -39,7 +39,7 @@ function* lines(file, fs) {
       }
     } finally { sf.close(); }
   } else {
-    const parts = fs.readFileSync(file, 'utf8').split('\n');
+    const parts = fs.readFileSync(open, 'utf8').split('\n');
     if (parts[parts.length - 1] !== '') parts.pop(); // a half line at the end is still being written (4.6 §记录)
     for (let i = 0; i < parts.length; i++) if (parts[i]) yield [i + 1, parts[i]];
   }
@@ -97,15 +97,13 @@ function readRows({ home, fs, rows }) {
   rows.forEach((r, k) => { if (!bySegment.has(r.segment)) bySegment.set(r.segment, []); bySegment.get(r.segment).push(k); });
   const out = new Array(rows.length);
   for (const [segment, ks] of bySegment) {
-    const file = segmentFile({ home, fs, segment });
-    const stream = path.basename(file);
     let read;
-    try { read = file.endsWith('.sealed') ? sealedReader(file, fs) : plainReader(file, fs); }
+    try { read = readerOf({ home, fs, segment }); }
     catch (e) { for (const k of ks) errors.push(failedRead(rows[k].id, `cannot be read: ${String((e && e.message) || e)}`, true)); continue; }
     try {
       for (const k of ks) {
         const r = rows[k];
-        try { out[k] = recordOf(read(r), segment, r.lineNo, read.stream ? read.stream(r) : stream); }
+        try { out[k] = recordOf(read(r), segment, r.lineNo, read.stream(r)); }
         catch (e) { errors.push(failedRead(r.id, `cannot be read back: ${String((e && e.message) || e)}`, !(e instanceof SyntaxError))); }
       }
     } finally { read.close(); }
@@ -118,7 +116,7 @@ function plainReader(file, fs) {
   const fd = fs.openSync(file, 'r');
   let all = null;
   const scan = (r) => {
-    if (!all) all = [...lines(file, fs)];
+    if (!all) all = [...lines(file, fs, fd)]; // by the fd: the name may be gone by now, its bytes are not
     const hit = all.find(([no]) => no === r.lineNo);
     if (!hit) throw new Error(`line ${r.lineNo} is not in ${path.basename(file)}`);
     return hit[1];
@@ -133,6 +131,7 @@ function plainReader(file, fs) {
     if (n !== len || buf[len - 1] !== NL || (r.offset > 0 && buf[0] !== NL)) return scan(r);
     return buf.toString('utf8', r.offset - from, r.offset - from + r.stored_bytes);
   };
+  read.stream = () => path.basename(file);
   read.close = () => fs.closeSync(fd);
   return read;
 }
@@ -217,9 +216,15 @@ export async function readRecord({ home = trocarHome(), fs = nodeFs, segment, li
   const { records } = await segmentIndex({ home, segment, fs, progress, warmOnly });
   const row = records.find((r) => r.id === recordId(segment, lineNo));
   if (!row) return null;
-  const file = segmentFile({ home, fs, segment });
-  const read = file.endsWith('.sealed') ? sealedReader(file, fs) : plainReader(file, fs);
+  const read = readerOf({ home, fs, segment });
   try { return expandRequestBody(JSON.parse(read({ ...row, lineNo }))); } finally { read.close(); }
+}
+
+// A reader of the segment's bytes; a plaintext unlinked between the look and the open is read from its sealed copy (4.2 读者与封存并发).
+function readerOf({ home, fs, segment }) {
+  const open = (f) => (f.endsWith('.sealed') ? sealedReader(f, fs) : plainReader(f, fs));
+  const file = segmentFile({ home, fs, segment });
+  try { return open(file); } catch (e) { if (!plainWentSealed(home, segment, fs, file)) throw e; return open(segmentFile({ home, fs, segment })); }
 }
 
 /** The file a segment's bytes are in (segmentSource: the plaintext while it exists, 4.2:30 明文为准), or throws
@@ -241,8 +246,11 @@ function segmentFile({ home, fs, segment }) {
  * what made `trocar raw <seg:N>` on a sealed segment 5× slower than on the plaintext one (D62 A1).
  */
 export function* segmentLines({ home = trocarHome(), fs = nodeFs, segment, from = 1, to = Infinity } = {}) {
-  const file = segmentFile({ home, fs, segment });
-  if (file.endsWith('.sealed')) {
+  let file = segmentFile({ home, fs, segment }), buf = null;
+  if (!file.endsWith('.sealed')) {
+    try { buf = fs.readFileSync(file); } catch (e) { if (!plainWentSealed(home, segment, fs, file)) throw e; file = segmentFile({ home, fs, segment }); }
+  }
+  if (!buf) {
     const sf = openSealed(file, { fs });
     try {
       for (let i = 0; i < sf.count; i++) {
@@ -253,7 +261,6 @@ export function* segmentLines({ home = trocarHome(), fs = nodeFs, segment, from 
     } finally { sf.close(); }
     return;
   }
-  const buf = fs.readFileSync(file);
   for (let start = 0, no = 1; start < buf.length; no++) {
     const nl = buf.indexOf(NL, start), end = nl === -1 ? buf.length : nl + 1;
     if (no >= from && no <= to) yield [no, buf.subarray(start, end)];
