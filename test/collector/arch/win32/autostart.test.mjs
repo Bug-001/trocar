@@ -1169,6 +1169,15 @@ test('W24 a task whose action is not the one install wrote is not started and is
     assert.doesNotMatch(r.err, /s3cret/)
     assert.equal(run.calls.filter((c) => c[1] === '/Run').length, 0, `${label}: it was not run`)
   }
+  // trocar's own task under a profile whose path is not ASCII, or holds `&`, as schtasks prints it back: still ours. With a second action beside it: not
+  for (const user of ['张三', 'Zoë', 'R&D']) {
+    const h = withHome(), home = path.join(h.home, user), o = { ...h, home, script: path.join(home, 'trocar', 'bin', 'trocar.mjs') }
+    const text = userUnit(o).text({})
+    const u = installed(userUnit({ ...o, run: taskThatAnswers(asSchtasksPrintsIt(text)) }))
+    assert.equal(u.registered().state, 'present', `${user}: trocar's own task`)
+    const twice = installed(userUnit({ ...o, run: taskThatAnswers(asSchtasksPrintsIt(text.replace('</Exec>', '</Exec><Exec><Command>calc.exe</Command></Exec>'))) }))
+    assert.equal(twice.registered().state, 'absent', `${user}: a second action makes it not trocar's`)
+  }
   // the task install wrote, as schtasks prints it back: it is ours, and it is run
   const run = taskThatAnswers(asSchtasksPrintsIt(TASK_XML(true)))
   const u = installed(userUnit({ ...withHome(), run }))

@@ -9,10 +9,10 @@ import path from 'node:path'
 import { spawn as nodeSpawn } from 'node:child_process'
 import { execTool } from '../../../off/exec.mjs'
 import { collectorHome } from '../../../paths.mjs'
-import { elevationByWhoami, elevatedRefusal } from '../../../off/win32.mjs'
+import { elevationByWhoami, elevatedRefusal, TASK_FILE, taskAction, sameTask } from '../../../off/win32.mjs'
 
 export const TASK_NAME = '\\trocar\\collector' // the scheduled task, in the \trocar folder of the Task Scheduler
-export const TASK_FILE = 'trocar-collector.task.xml' // the task's XML, an owned file of the install manifest, beside the collector's other files
+export { TASK_FILE } // the task's XML, an owned file of the install manifest, beside the collector's other files (src/off/win32.mjs: off reads it too)
 /** The login start-up entry that stands in when the Task Scheduler refuses the task (4.8 §7): one value of the user's own Run key. */
 export const RUN_KEY = Object.freeze({ hive: 'HKCU', key: 'Software\\Microsoft\\Windows\\CurrentVersion\\Run', name: 'trocar-collector' })
 const RUN_PATH = `${RUN_KEY.hive}\\${RUN_KEY.key}`
@@ -52,15 +52,6 @@ const plain = (name, v, { quoted = false } = {}) => {
   return v
 }
 const xmlText = (v) => v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-const xmlUnescape = (v) => v.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&')
-/** A task XML's action: `{ command, args }` from its `<Exec>`, or null. */
-const execOf = (xml) => {
-  const m = /<Exec>([\s\S]*?)<\/Exec>/.exec(String(xml).replace(/\u0000/g, ''))
-  if (!m) return null
-  const el = (tag) => { const x = new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`).exec(m[1]); return x ? xmlUnescape(x[1]).trim() : '' }
-  return { command: el('Command'), args: el('Arguments') }
-}
-
 const daemonArgs = (program) => {
   if (!Array.isArray(program) || !program.length) throw new TypeError(`task: program is a non-empty array, got ${JSON.stringify(program)}`)
   return `--headless ${program.map((v, i) => `"${plain(`program[${i}]`, v, { quoted: true })}"`).join(' ')} daemon --supervise`
@@ -286,10 +277,10 @@ export function userUnit({ home, node, script, run = null, env = process.env, fs
   // Is the task under trocar's name the one install wrote? Its action against the task file install wrote and registered (no file: no record of a task, so it is
   // not trocar's). Running it would run whatever someone registered there; only its program is said, never its arguments (they can carry anything).
   const foreignOf = (xml) => {
-    let own = null
-    try { own = execOf(fs.readFileSync(file, 'utf8')) } catch { /* no task file: none of trocar's */ }
-    const reg = execOf(xml)
-    if (own && reg && own.command.toLowerCase() === reg.command.toLowerCase() && own.args === reg.args) return null
+    let written = null
+    try { written = fs.readFileSync(file, 'utf8') } catch { /* no task file: none of trocar's */ }
+    if (sameTask(xml, written)) return null
+    const reg = taskAction(xml)
     return { state: 'absent', how: 'foreign', program: (reg && reg.command) || 'no program' }
   }
   const runNow = () => {
