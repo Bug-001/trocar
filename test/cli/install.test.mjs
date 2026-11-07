@@ -177,7 +177,20 @@ for (const platform of ['darwin', 'win32']) {
     const io = fakeIo()
     assert.equal(await runInstallCli(['--yes', '--json'], { io, env: w.env, home: w.home, platform, deps }), 1, io.text())
     assert.equal(io.json().error.code, CUSTODY_FAILED)
+    assert.deepEqual(validateReceipt(io.json()), [])
+    assert.equal(io.json().undo, null, 'nothing was installed, so there is nothing to undo')
+    for (const k of ['standalone', 'residual_risk']) assert.equal(k in io.json(), false, `${k}: about an install that did not happen`)
     assert.deepEqual(snapshot(w.home), before, 'the HOME is byte for byte as it was')
+    // a dry run says the run's refusal in `blocked` (C.2), and no plan is offered for a run that would refuse: without --yes it is the run's receipt
+    const d = fakeIo()
+    assert.equal(await runInstallCli(['--dry-run', '--json'], { io: d, env: w.env, home: w.home, platform, deps }), 0, d.text())
+    assert.equal(d.json().error.code, CUSTODY_FAILED)
+    assert.ok(d.json().blocked.length, d.text())
+    assert.deepEqual(validateReceipt(d.json()), [])
+    const p = fakeIo()
+    assert.equal(await runInstallCli(['--json'], { io: p, env: w.env, home: w.home, platform, deps }), 1, p.text())
+    assert.equal(p.json().error.code, CUSTODY_FAILED)
+    assert.deepEqual(snapshot(w.home), before, 'the plan and the dry run wrote nothing either')
   })
 }
 
