@@ -105,7 +105,7 @@ const proxyMode = {
   forms: [
     { id: 'kimi-code.cli', os: ['darwin', 'win32'], route: 'switch', cert: 'wrapper', trust: 'node', present: [NATIVE], verified: both },
     { id: 'kimi-code.acp', os: ['darwin', 'win32'], route: 'switch', cert: 'wrapper', trust: 'node', present: [NATIVE], verified: both },
-    { id: 'kimi-code.web', os: ['darwin', 'win32'], route: 'switch', cert: 'wrapper', trust: 'node', present: [NATIVE], verified: { darwin: true, win32: { reason: 'not-measured' } } },
+    { id: 'kimi-code.web', os: ['darwin', 'win32'], route: 'switch', cert: 'wrapper', trust: 'node', present: [NATIVE], verified: both },
     { id: 'kimi-code.vscode', os: ['darwin', 'win32'], route: 'vscode', cert: 'root', trust: 'root', present: [{ base: 'home', path: '.vscode/extensions', glob: 'moonshot-ai.kimi-code-*' }], verified: both, hostTree: true,
       hosts: { processes: ['code', 'code helper (plugin)'] } }, // the host program, by D51 normalized name: VS Code (Code.exe) and its macOS extension host (Code Helper (Plugin))
     { id: 'kimi-code.desktop', os: ['darwin', 'win32'], route: 'switch', cert: 'wrapper', trust: 'node', // D56⑥: out of scope (no door within D43)
