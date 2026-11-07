@@ -22,10 +22,11 @@ import { darwinNetFacts } from '../../src/collector/arch/darwin/netfacts.mjs'
 const APP = '/Applications/ZCode.app' // the desktop app's place on macOS (the descriptor's `present`): the one path outside HOME this world says is there
 const SETTING = (home) => path.join(home, '.zcode', 'v2', 'setting.json')
 
-async function zcodeWorld(setting) {
+async function zcodeWorld(setting, { app = true } = {}) {
   const w = await modelWorld({ os: 'darwin' })
   const inner = w.ctx.exists
-  w.ctx.exists = (p) => p === APP || inner(p)
+  w.app = app
+  w.ctx.exists = (p) => (app && p === APP) || inner(p)
   fs.mkdirSync(path.join(w.home, '.zcode', 'cli'), { recursive: true })
   assert.equal((await w.install()).exit, 0)
   fs.writeFileSync(path.join(w.dir, 'control.json'), JSON.stringify({ path: path.join(w.home, 'c.sock'), token: 'k'.repeat(32) }))
@@ -39,7 +40,7 @@ async function zcodeWorld(setting) {
 async function status(w, argv) {
   const r = { pid: 99, doors: {}, harnesses: { 'z-code': { desired: 'on', attached: true } }, holders: null, agents: [], negatives: [], cert: { key: 'present', intermediate: 'ready', expires: '2026-12-22T09:00:02Z' }, engine: {} }
   const io = fakeIo()
-  const fsx = { ...fs, existsSync: (p) => p === APP || (String(p).startsWith(w.home + path.sep) && fs.existsSync(p)) }
+  const fsx = { ...fs, existsSync: (p) => (w.app && p === APP) || (String(p).startsWith(w.home + path.sep) && fs.existsSync(p)) }
   await runStatusCli(argv, { io, home: w.home, platform: 'darwin', env: w.env, deps: { request: async (q) => (q.path === '/status' ? r : assert.fail(q.path)), socketPath: SOCK, procs: async () => [], spawn: absentSpawn, exec: () => ({ status: 0, stdout: '', stderr: '' }), identity: () => ({ start_time: '111', boot_id: 'b' }), alive: () => true, netFactsDeps: async () => ({ harnesses: w.harnesses, archFacts: darwinNetFacts }), rootStore: w.store, user: 'alice', fs: fsx } })
   return io.stdoutText()
 }
@@ -70,13 +71,26 @@ for (const [shape, s] of Object.entries(SHAPES)) {
       const together = judgedForms(desc, 'darwin', 'cli-config').map((f) => f.id)
       assert.ok(together.length > 1, `the CLI forms share the desktop's route: ${together}`)
       for (const f of x.forms) assert.equal(f.route && f.route.reason, together.includes(f.form) ? s.reason : undefined, `${f.form}: ${JSON.stringify(f.route)}`)
+      for (const f of x.forms.filter((y) => y.form !== 'z-code.desktop' && y.route)) assert.equal(f.route.form, 'z-code.desktop', 'a co-judged form names the form whose blocker it is')
       const text = await status(w, ['z-code'])
       assert.doesNotMatch(text.split('\n')[0], /, captured$/, text.split('\n')[0])
       const block = text.slice(text.indexOf('  Forms'), text.indexOf('  Routes'))
-      const desktop = block.slice(block.indexOf('z-code.desktop')).split('\n')[0]
+      const desktop = block.split('\n').find((l) => l.startsWith('  z-code.desktop'))
       assert.match(desktop, s.reason === 'blocker' ? /route\s+not routed/ : /route\s+unknown/, desktop) // the blocked form's own line leads with the route verdict
       assert.doesNotMatch(block, /points at trocar/, 'never "points at trocar" for a form the door splices')
+      const cli = block.split('\n').find((l) => l.startsWith('  z-code.cli '))
+      if (s.reason === 'blocker') assert.match(block.slice(block.indexOf(cli)).replace(/\s+/g, ' '), /cannot tell it from z-code\.desktop/, 'a co-judged form says why')
       assert.ok(!block.includes(w.home), 'HOME paths print as ~')
     } finally { try { fs.chmodSync(SETTING(w.home), 0o600) } catch {} }
   })
 }
+
+// the door judges the route's verified forms whether or not their programs are here: an npm-only Z-Code (no app, only ~/.zcode) with the desktop's
+// setting left behind is spliced too, so status says so (until the door judges absent forms no more)
+test('4.11 ⑩ · status: with the desktop app absent, the desktop setting still keeps the form that is here from being decrypted, and status says so', async () => {
+  const w = await zcodeWorld(SHAPES.set.write, { app: false })
+  const x = JSON.parse(await status(w, ['--json', 'z-code'])).harnesses['z-code']
+  assert.deepEqual(x.forms.map((f) => f.form), ['z-code.cli-node'], 'only the Node CLI is here')
+  assert.deepEqual([x.forms[0].route && x.forms[0].route.reason, x.forms[0].route && x.forms[0].route.form], ['blocker', 'z-code.desktop'])
+  assert.equal(x.captured, false)
+})

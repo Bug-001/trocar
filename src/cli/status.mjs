@@ -374,7 +374,7 @@ export async function gatherTopology(f, { home, env, platform, deps = {} }) {
     // command starts no PowerShell of its own for the process snapshot, the socket table and Internet Settings (4.8 §1; D62). Without a daemon
     // the platform's part starts and closes one itself, as it did.
     const warm = deps.daemonReader && f.daemon && f.daemon.state === 'running' ? deps.daemonReader : null
-    const facts = await gatherNetFacts({ platform, home, env, harnesses: nd.harnesses, status: f, archFacts: nd.archFacts, adopted: readAdopted(home, { fs }), now: deps.ms || Date.now, fs, deps: { exec: deps.exec || null, ...(warm ? { helper: warm } : {}), ...(deps.procRoot ? { procRoot: deps.procRoot } : {}), ...(deps.spawn ? { spawn: deps.spawn } : {}) } })
+    const facts = await gatherNetFacts({ platform, home, env, harnesses: nd.harnesses, status: f, archFacts: nd.archFacts, adopted: readAdopted(home, { fs }), now: deps.ms || Date.now, fs, deps: { exec: deps.exec || null, fs /* the platform's facts read the files status reads: one fs */, ...(warm ? { helper: warm } : {}), ...(deps.procRoot ? { procRoot: deps.procRoot } : {}), ...(deps.spawn ? { spawn: deps.spawn } : {}) } })
     const topology = buildTopology(facts)
     // the codes `doctor` would give, on the topology of each harness (the board reads them there); the commands and the text are `doctor`'s
     let diagnosed = null
@@ -404,7 +404,7 @@ function formsOf(f) {
   const out = {}
   for (const [h, hf] of Object.entries((f.facts && f.facts.harnesses) || {})) {
     const l = (hf.forms || []).filter((x) => x.certificate && x.proxy)
-    if (l.length) out[h] = l.map((x) => ({ form: x.id, certificate: x.certificate, proxy: x.proxy, ...(x.route ? { route: { reason: x.route.reason, at: x.route.at ?? null } } : {}), ...(x.notes && x.notes.length ? { notes: x.notes } : {}) }))
+    if (l.length) out[h] = l.map((x) => ({ form: x.id, certificate: x.certificate, proxy: x.proxy, ...(x.route ? { route: { reason: x.route.reason, at: x.route.at ?? null, ...(x.route.via ? { form: x.route.via } : {}) } } : {}), ...(x.notes && x.notes.length ? { notes: x.notes } : {}) }))
   }
   return Object.keys(out).length ? out : null
 }

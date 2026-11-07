@@ -223,14 +223,19 @@ export function routeEntry(kind) {
 /** Which routes `on` writes for a harness (spec 4.11 §3, CM31): only routes a present form uses; a form a blocker matches gets none. With a route
  *  to write, the descriptor's `effects` (CM32) and `notes` (CM38) come back as harness-notes.
  *  → { routes: [{ id, route, forms }], notRouted: [{ form, code, reason, at }], notes: [harness-note] } */
+/** The first blocker of form `f` that holds (or cannot be read) in `ctx`: { reason: 'blocker' | 'blocker-unreadable', at } | null. `on` and `status` ask it. */
+export function blockerOf(desc, f, ctx) {
+  return (desc.proxyMode.blockers || []).filter((b) => !b.forms || b.forms.includes(f.id)).map((b) => {
+    const r = readSrc(b.at, ctx)
+    if (r.error) return { reason: 'blocker-unreadable', at: r.where }
+    return r.set && (!b.when || holds(b.when, ctx) === true) ? { reason: 'blocker', at: r.where } : null
+  }).find(Boolean) || null
+}
+
 export function planRoutes(desc, ctx) {
   const pm = desc.proxyMode, routes = new Map(), blocked = [], notes = []
   for (const f of pm.forms.filter((x) => x.os.includes(ctx.os) && isPresent(x, ctx))) {
-    const hit = (pm.blockers || []).filter((b) => !b.forms || b.forms.includes(f.id)).map((b) => {
-      const r = readSrc(b.at, ctx)
-      if (r.error) return { reason: 'blocker-unreadable', at: r.where }
-      return r.set && (!b.when || holds(b.when, ctx) === true) ? { reason: 'blocker', at: r.where } : null
-    }).find(Boolean)
+    const hit = blockerOf(desc, f, ctx)
     if (hit) { blocked.push({ form: f.id, code: 'not-routed', ...hit }); continue }
     if (!routes.has(f.route)) routes.set(f.route, { id: f.route, route: pm.routes[f.route], forms: [] })
     routes.get(f.route).forms.push(f.id)
