@@ -45,14 +45,18 @@ const CUSTODY_ADVICE = Object.freeze({
   win32: 'run trocar install again from a terminal of your own desktop session',
 })
 /** A custody verb that threw, as the refusal install carries in `pending` (its `code` becomes the receipt's `error.code`). */
-// the log-in advice answers the keychain's own failure (the helper's error word 'failed', with its OSStatus); a helper that did not run at all is another matter
+// the log-in advice answers the keychain's own failure (the helper's error word 'failed', with its OSStatus) and a session that cannot make a key ('unavailable'); a helper that did not run at all is another matter
 const ADVICE_HELPER = 'trocar\'s own signing helper could not be run, so this copy of trocar is incomplete: install trocar again, then run trocar install'
 const custodyFailed = (os, verb, e) => ({ item: 'root-key', state: 'failed', code: CUSTODY_FAILED,
-  reason: `the key that signs certificates could not be ${verb === 'create' ? 'made' : 'read'} (${errText(e)}). ${os === 'darwin' && !(e && e.code === 'failed') ? ADVICE_HELPER : CUSTODY_ADVICE[os] || CUSTODY_ADVICE.win32}` })
+  reason: `the key that signs certificates could not be ${verb === 'create' ? 'made' : 'read'} (${errText(e)}). ${os === 'darwin' && !(e && (e.code === 'failed' || e.code === 'unavailable')) ? ADVICE_HELPER : CUSTODY_ADVICE[os] || CUSTODY_ADVICE.win32}` })
 /** Asked before install prints its plan, takes its lock or writes anything: does the custody answer at all? → `{}` or `{ refusal }` (the pending item):
  *  a custody that cannot be used leaves the HOME as it was. Only a gate: runInstall asks exists() again under the lock, where another install may have made the key since. */
 export async function custodyPreflight({ os, custody }) {
-  try { await custody.exists(); return {} } catch (e) { return { refusal: custodyFailed(os, 'exists', e) } }
+  let has
+  try { has = await custody.exists() } catch (e) { return { refusal: custodyFailed(os, 'exists', e) } }
+  // a missing key is looked up without a GUI, but made only with one (4.11 P1): ask whether this session can make it
+  if (!has && typeof custody.canCreate === 'function') try { await custody.canCreate() } catch (e) { return { refusal: custodyFailed(os, 'create', e) } }
+  return {}
 }
 // an OS prompt that was not answered (timeout, no GUI session) is pending; one the user answered no is declined (1.6 §1.6)
 const promptState = (r) => r.state || (/time[d ]?out|no gui|interaction|session|unavailable/i.test(String(r.reason || '')) ? 'pending' : 'declined')
