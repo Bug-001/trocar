@@ -105,7 +105,8 @@ function Info({ m, s }: { m: Head, s: DeskState }) {
   return <div className="sipb">{rows.map((r) => (
     <div key={r.key} className={r.key === 'truncated' ? 'sir trunc' : r.narrow ? 'sir sir-narrow' : 'sir'} data-row={r.key}>
       {r.key === 'failed' && r.jump ? <button type="button" className="sijump" onClick={() => jump(r.jump)}>{r.text}</button>
-        : r.key === 'id' ? <>{r.text} <span className="sirmono">{r.id}</span> <CopyButton text={r.id} label={r.copy} /></> : r.text}
+        : r.key === 'id' ? <>{r.text} <span className="sirmono">{r.id}</span> <CopyButton text={r.id} label={r.copy} /></>
+        : r.href ? <>{r.text} <a className="sirmono" href={r.href}>{r.id}</a></> : r.text}
       {r.buckets && <span className="sirsub">{r.buckets.map((b: any) => `${b.word} ${b.usd != null ? usd(b.usd) : '—'}`).join(' · ')}</span>}
       {(r.notes || []).map((n: string) => <span key={n} className="sirsub">{n}</span>)}
       {r.prices && <a href={r.prices.href}>{r.prices.text}</a>}

@@ -72,7 +72,7 @@ const headState = (lanes, answer = {}, extra = {}) => {
 }
 const mainRows = () => [{ usage: U(0, 100, 10), cacheBreak: { firstCall: true } }, { usage: U(0, 120, 10), cacheBreak: { cause: 'content-changed' } }, { error: 'boom', usage: null }, { usage: U(100, 30, 5), cacheBreak: { cause: 'append' } }]
 const HEAD_PARTS = ['back', 'title', 'chip', 'entry', 'project', 'start', 'follow', 'read', 'stale', 'facts', 'info'] // 1.2 §会话头's table + the 保真行 + ⓘ
-const INFO_KEYS = new Set(['truncated', 'cost', 'hit', 'breaks', 'failed', 'compactions', 'counts', 'duration', 'id', 'project', 'calls']) // 1.2 §信息弹出层
+const INFO_KEYS = new Set(['truncated', 'cost', 'hit', 'breaks', 'failed', 'compactions', 'counts', 'duration', 'parent', 'fork', 'lineage', 'id', 'project', 'calls']) // 1.2 §信息弹出层
 
 test('1.2 #17 · model: the title falls back to 未命名会话 only; the start is chapters[0].ts0 and absent at tier 0; a title always comes from the wire (4.4 §人类标题的来源)', () => {
   const chapters = [{ k: 0, s0: 0, s1: 4, ts0: '2026-10-07T00:00:00.000Z', inferred: false }]
@@ -136,3 +136,26 @@ test('1.2 #18 · model: background calls = the server lanes outside main and sub
   assert.equal(c.probe, probes.count)
   assert.equal(c.sub, 1)
 })
+
+// 1.2 §信息弹出层 row 8 · 3.4 §血缘: a line per declared id, linked through #/session/<id>; a null never reads as "no parent";
+// no-keys and unread say so in words; an answer without lineage_source draws nothing
+test('1.2 #7 · model: the declared parent and fork, each its own line linked by id; null, absent and other sources never draw an id', () => {
+  const ids = [null, 'P-1', 'a/b c']
+  const rowsOf = (meta) => sessionHeadModel({ meta: { session_id: 'S', ...meta }, desk: {}, lanes: [] }).info().filter((r) => ['parent', 'fork', 'lineage'].includes(r.key))
+  for (const parent of ids) for (const fork of ids) {
+    const rows = rowsOf({ lineage_source: 'wire', parent_session_id: parent, fork_of_session_id: fork })
+    const want = [parent && ['parent', parent], fork && ['fork', fork]].filter(Boolean)
+    assert.deepEqual(rows.map((r) => [r.key, r.id]), want, `${parent} / ${fork}`)
+    for (const r of rows) assert.equal(r.href, `#/session/${encodeURIComponent(r.id)}`)
+    assert.ok(rows.every((r) => !/\bno\b/i.test(r.text)), 'a null never reads as no parent')
+  }
+  for (const src of ['no-keys', 'unread']) {
+    const rows = rowsOf({ lineage_source: src, parent_session_id: 'P-1', fork_of_session_id: 'F-1' }) // keys the server never sends there
+    assert.deepEqual(rows.map((r) => [r.key, r.id, r.href]), [['lineage', undefined, undefined]], src)
+    assert.equal(rows[0].text, W.LINEAGE_LINE[src])
+  }
+  assert.deepEqual(rowsOf({}), [], 'no lineage_source: nothing')
+  assert.deepEqual(rowsOf({ lineage_source: 'wire' }), [], 'wire without the keys: nothing')
+  assert.deepEqual(rowsOf({ lineage_source: 'other', parent_session_id: 'P-1' }), [], 'a source not in the closed set: nothing')
+})
+
