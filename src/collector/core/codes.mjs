@@ -65,6 +65,7 @@ export const CODE = Object.freeze({
   certIntermediateUnavailable: 'cert-intermediate-unavailable', // the custody backend did not issue an intermediate: once per failure streak, retried hourly (4.11 P2)
   enginePortTaken: 'engine-port-taken', // the engine's recorded port is held by another socket at daemon start: recorded, no other port picked (decision #16)
   priorProxyUnknown: 'prior-proxy-unknown', // a door's upstream: the proxy the agent had in its process env could not be recovered (parent gone, env unreadable): the system proxy, else direct (4.11 P7)
+  notTrocarsFile: 'not-trocars-file', // install left a file alone: one not trocar's is already where trocar writes its own (4.11 P4)
   notUsersFile: 'not-users-file', // install skipped a P8 install-folder wrapper: the target is not one native program in a folder this user owns, outside package-manager trees, with the layout declared (4.11 P8)
   certNotInstalled: 'cert-not-installed', // on refused: no install record with a root — run trocar install first (1.6 §1.1, D55⑥)
   setupNeeded: 'setup-needed', // on refused one harness: its setup is needed (a form's certificate carrier absent or overwritten, or the root gone; 4.11 P4b, D65④); the others go on

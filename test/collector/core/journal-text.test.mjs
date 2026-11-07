@@ -145,21 +145,22 @@ test('journal json: a member that is not there is never added, a config key neve
 })
 
 // 4.11 P4 「trocar 拥有的文件不写在别人的上面」: a path the manifest does not list, with a file already there — written over only when the file is
-// trocar's (inside its tree, or carrying its sentinel); a file that is not trocar's, or that cannot be read, is refused, byte for byte as it was, unrecorded
-for (const where of ['outside', 'inside']) {
+// trocar's (in a subfolder of its collector directory, or carrying its sentinel); a file that is not trocar's, or that cannot be read, is refused, byte for byte
+// as it was, unrecorded. `top`: a file directly in the collector directory is one of its settings or state files the user may edit, not trocar's by place
+for (const where of ['outside', 'inside', 'top']) {
   for (const [at, seed] of [['none', null], ['ours', '// trocar collector: trust plugin, an earlier one\n'], ['foreign', '// the user\'s own plugin\n'], ['unreadable', 'x\n']]) {
     test(`writeOwnedFile · ${where} trocar's tree · ${at} at the path`, () => {
       const b = box()
       try {
-        const file = where === 'inside' ? path.join(b.dir, 'ca', 'combined-x.pem') : path.join(b.root, '.agent', 'plugins', 'trocar-ca.js')
+        const file = where === 'inside' ? path.join(b.dir, 'ca', 'combined-x.pem') : where === 'top' ? path.join(b.dir, 'settings.json') : path.join(b.root, '.agent', 'plugins', 'trocar-ca.js')
         if (seed != null) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, seed) }
         const sealed = { ...fs, readFileSync: (f, ...a) => { if (at === 'unreadable' && f === file) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }); return fs.readFileSync(f, ...a) } }
         const m = newManifest()
         const data = '// trocar collector: new\n'
-        const refused = where === 'outside' && (at === 'foreign' || at === 'unreadable')
+        const refused = where !== 'inside' && (at === 'foreign' || at === 'unreadable')
         const write = () => writeOwnedFile({ phase: 'install', dir: b.dir, manifest: m, harness: 'h', role: 'plugin', file, data, mode: 0o644, fs: sealed })
         if (refused) {
-          assert.throws(write, (e) => e.code === 'not-users-file' && e.path === file)
+          assert.throws(write, (e) => e.code === 'not-trocars-file' && e.path === file)
           assert.equal(fs.readFileSync(file, 'utf8'), seed, 'left byte for byte')
           assert.deepEqual(m.files.filter((f) => f.path === file), [], 'no record of it')
         } else {

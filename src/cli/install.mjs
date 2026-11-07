@@ -9,12 +9,12 @@ import path from 'node:path'
 import { EXIT, newReceipt, UNDO_LINE } from '../off/schema.mjs'
 import { refuseOldManifest, readManifest, saveManifest } from '../off/manifest.mjs'
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
-import { opLockFile, standalonePath, standaloneFiles, launcherPath, standaloneCommand } from '../off/paths.mjs'
+import { opLockFile, standalonePath, standaloneFiles, launcherPath, standaloneCommand, collectorDir, backupDir } from '../off/paths.mjs'
 import { isInteractive, confirm } from '../off/io.mjs'
 import { fit, tilde, planItems, formWords, carrierWords, planWords, commandLine, UNDO_WORDS, asDir } from './receipt.mjs'
 import { pairs, wrap } from './text.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
-import { EVENT } from '../collector/core/codes.mjs'
+import { EVENT, CODE } from '../collector/core/codes.mjs'
 import { codeId, packageRoot, channelOf, setupHelperCommand } from '../version.mjs'
 import { CUT, daemonCode, replaceDaemon } from './replace-daemon.mjs'
 import { printJson } from './json.mjs'
@@ -60,7 +60,7 @@ const daemonRow = (dmn, rep) => ({ state: rep && rep.stopped ? (rep.restarted ? 
 async function pathPlan({ root, home, env, platform, fs }) {
   if (channelOf(root, { home, fs }) !== 'script') return null
   let m = null
-  try { m = readManifest(path.join(home, '.trocar', 'collector'), fs) } catch { /* unreadable: the run says so itself */ }
+  try { m = readManifest(collectorDir(home), fs) } catch { /* unreadable: the run says so itself */ }
   if (m && m.path_item) return null
   const { pathItemTarget } = await import('../off/path-item.mjs')
   const t = pathItemTarget({ platform, env, home })
@@ -113,12 +113,12 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
     if (!model) return await linuxInstall({ io, env, home, platform, deps, flags, json, say, fs, locked })
     const { backendsFor, sourcesCtx, ownsBy } = await import('../collector/arch/model-backends.mjs')
     const { runInstall, planInstall } = await import('../collector/model-install.mjs')
-    const { renderHook } = await import('../collector/harness/templates/index.mjs')
+    const { renderHook, hookFile } = await import('../collector/harness/templates/index.mjs')
     const b = deps.backends || await backendsFor({ os: platform, home, run: deps.exec || null, env, fs })
     const harnesses = deps.harnesses || await (await import('../collector/harness/index.mjs')).loadHarnesses()
     const ctx = sourcesCtx({ os: platform, home, env, dirs: b.dirs, policy: b.policy, which: deps.which || null, fs })
     const need = await missingOf(only, { platform, harnesses, ctx, home, rootStore: b.rootStore, fs })
-    const rows = planInstall({ os: platform, harnesses, ctx, home, owns: deps.owns || ownsBy({ os: platform, home, fs }), fs }).filter(need.row)
+    const rows = planInstall({ os: platform, harnesses, ctx, home, owns: deps.owns || ownsBy({ os: platform, home, fs }), hookFile, fs }).filter(need.row)
     // the login entry is install's (D61: registered AND started here, 4.11 §1 install 7; 4.9 §4, 4.8 §7): the arch's unit, or the test's `deps.unit`
     const unit = deps.unit !== undefined ? deps.unit : (await (await import('../collector/daemon.mjs')).loadArch(platform)).unit.userUnit({ home, node: process.execPath, script: deps.script || process.argv[1], run: deps.exec || null, env, ...(deps.spawn ? { spawn: deps.spawn } : {}) })
     const root = deps.root || packageRoot()
@@ -141,7 +141,7 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
       // D61 (1.6 §3.2 step 5, 4.11 §1 install 7): the login entry is a file of YOURS outside trocar's tree, so it is its own line (V85), and the plan says a daemon runs from now on
       ...staleItem(stale, root),
       ...(pathItem ? [pathItem] : []),
-      ...(unit && !only ? [{ what: 'autostart', detail: `${platform === 'win32' ? 'the scheduled task \\trocar\\collector' : tilde(unit.path, home)}: a collector daemon starts at every login from now on, and is started now (trocar uninstall takes it out again)` }] : []),
+      ...(unit && !only ? [{ what: 'autostart', detail: `${platform === 'win32' ? 'the scheduled task \\trocar\\collector' : tilde(unit.path, home)}: a collector daemon starts at every login from now on, and is started now (trocar uninstall takes it out again)${platform !== 'win32' && unit.path && fs.existsSync(unit.path) && !recordsPath(home, unit.path, fs) ? `; it replaces the one already there under trocar's name, whose bytes are kept in ${tilde(backupDir(home), home)}` : ''}` }] : []),
     ]
     // 1.6 §3.2 / V85: what install records and changes nothing at (a key that stays yours, a file that is not yours) is said too, apart from the
     // changes: `planned` is only what the run changes (the board's Set up confirms exactly that list, 4.4 #13), `left` the rest
@@ -178,7 +178,7 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
     if (rep) { dmnNotes.push(...rep.notes); if (!rep.replaced) r.exit = 1 }
     // a refusal carries `error: {code, message}` (附录 C.1): the first pending item that named a code is why install could not go on
     const refusal = r.pending.find((p) => p.code)
-    const receipt = { ...newReceipt('install'), ok: r.exit === 0, undo: UNDO_LINE.install, fp256: r.fp256, items: r.items, carriers: r.carriers, pending: only ? r.pending.map((p) => ({ ...p, command: 'trocar install' })) : r.pending, problems: r.problems, notes: [...r.notes, ...dmnNotes], standalone: standalonePath(home), residual_risk: RISK, daemon: daemonRow(dmn, rep), ...(unit && !only ? { autostart: { entry: platform === 'win32' ? '\\trocar\\collector' : unit.path, enabled: !dmn.unitFailed } } : {}),
+    const receipt = { ...newReceipt('install'), ok: r.exit === 0, skipped: r.carriers.filter((c) => c.code === CODE.notTrocarsFile && c.path).map((c) => ({ what: c.path, reason: c.why })), undo: UNDO_LINE.install, fp256: r.fp256, items: r.items, carriers: r.carriers, pending: only ? r.pending.map((p) => ({ ...p, command: 'trocar install' })) : r.pending, problems: r.problems, notes: [...r.notes, ...dmnNotes], standalone: standalonePath(home), residual_risk: RISK, daemon: daemonRow(dmn, rep), ...(unit && !only ? { autostart: { entry: platform === 'win32' ? '\\trocar\\collector' : unit.path, enabled: !dmn.unitFailed } } : {}),
       ...(refusal ? { error: { code: refusal.code, message: refusal.reason } } : {}),
       ...(r.path && r.path.rec ? { path_item: r.path.rec } : {}),
       planned, ...(left.length ? { left } : {}), commands: ['trocar on', 'trocar off', 'trocar status', 'trocar uninstall'] }
@@ -319,3 +319,6 @@ async function boardPortRow(home, fs) {
   const b = await ensureBoardPort({ dir: path.join(home, '.trocar', 'collector'), fs })
   return b.error ? { row: { item: 'board', state: 'pending', reason: b.error }, written: false } : { row: null, written: b.created }
 }
+
+// 4.11 P4: does the install record list this path? (the autostart entry the record does not know is replaced, and the plan says so)
+function recordsPath(home, file, fs) { try { const m = readManifest(path.join(home, '.trocar', 'collector'), fs); return !!m && m.files.some((f) => f.path === file) } catch { return false } }

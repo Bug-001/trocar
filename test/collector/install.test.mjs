@@ -747,7 +747,7 @@ test('uninstall step 5: only a process that may have read the entry is reported 
   } finally { b.done() }
 })
 
-test('install: an autostart unit file already there is refused before anything is written (review 4 #7); uninstall records a disable systemd refused and a link it could not remove (D38, review 4 #9)', async () => {
+test('install (4.11 P4): an autostart unit under trocar\'s name the record does not list is backed up and replaced, and the plan says it replaces it; uninstall records a disable systemd refused and a link it could not remove (D38, review 4 #9)', async () => {
   const b = box()
   try {
     const unitDir = path.join(b.home, '.config', 'systemd', 'user')
@@ -755,10 +755,12 @@ test('install: an autostart unit file already there is refused before anything i
     fs.mkdirSync(path.dirname(unitFile), { recursive: true }); fs.writeFileSync(unitFile, '[Service]\nExecStart=/usr/bin/false\n')
     let listed = false
     const unit = { path: unitFile, links: [], text: () => '[Unit]\n', registered: () => ({ state: 'present' }), enable: () => ({ code: 0 }), disable: () => ({ code: 0 }), stop: () => {}, removeWants: () => [] }
-    await assert.rejects(installCollector(base(b, { unit, onPlan: () => { listed = true } })), /trocar-collector\.service already exists/)
-    assert.deepEqual([listed, fs.existsSync(b.dir)], [false, false], 'refused before the plan is printed and before the CA or the manifest exist')
-    fs.rmSync(unitFile)
-    await installCollector(base(b, { unit }))
+    await installCollector(base(b, { unit, onPlan: (p) => { listed = p.steps.find((x) => x.kind === 'unit') } }))
+    assert.ok(listed && listed.action === 'write' && /replaces/.test(listed.why), `the plan says the unit is replaced: ${JSON.stringify(listed)}`)
+    assert.equal(fs.readFileSync(unitFile, 'utf8'), '[Unit]\n', 'replaced')
+    const bk = path.join(b.home, '.trocar', 'backup')
+    assert.ok(fs.readdirSync(bk).some((n) => fs.readFileSync(path.join(bk, n), 'utf8') === '[Service]\nExecStart=/usr/bin/false\n'), 'the bytes that were there are kept')
+    assert.ok(readManifest(b.dir).files.some((f) => f.path === unitFile && f.role === 'unit'), 'and recorded as trocar\'s')
     const link = path.join(unitDir, 'default.target.wants', 'trocar-collector.service')
     fs.mkdirSync(path.dirname(link)); fs.symlinkSync(unitFile, link)
     const refuses = { ...fs, rmSync: (f, o) => { if (f === link) throw Object.assign(new Error('EACCES'), { code: 'EACCES' }); return fs.rmSync(f, o) } }
@@ -1187,7 +1189,7 @@ for (const [at, seed] of [['none', null], ['ours', '// trocar collector: an earl
         assert.equal(fs.readFileSync(file, 'utf8'), seed, 'left byte for byte')
         assert.deepEqual(m.files.filter((f) => f.path === file), [], 'no record of it')
         assert.ok(r.skipped.some((s) => s.what === file && typeof s.reason === 'string'), JSON.stringify(r.skipped))
-        assert.ok(readEvents(b.dir).some((e) => e.event === 'failure' && e.code === 'not-users-file' && e.path === file), 'on record (D38)')
+        assert.ok(readEvents(b.dir).some((e) => e.event === 'failure' && e.code === 'not-trocars-file' && e.path === file), 'on record (D38)')
       } else {
         assert.equal(fs.readFileSync(file, 'utf8'), '// trocar collector: trust plugin\n')
         assert.equal(m.files.filter((f) => f.path === file).length, 1)
@@ -1195,3 +1197,22 @@ for (const [at, seed] of [['none', null], ['ours', '// trocar collector: an earl
     } finally { b.done() }
   })
 }
+
+// 4.11 P4 (Linux `on`): the only harness asked for is left off a file that is not trocar's — the receipt does not say no agent was found: `skipped`
+// names the file, the run's failure line is in flows/ (D38), the file is byte for byte, exit 1
+test('on (Linux) · 4.11 P4: the only harness left off a file that is not trocar\'s is named as skipped, on record, not "no agent found"', async () => {
+  const b = box()
+  try {
+    await installCollector({ ...onBase(b), unit: null })
+    const file = path.join(b.home, '.plug', 'plugins', 'trocar-ca.js')
+    fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, '// the user\'s own plugin\n')
+    const plug = { name: 'plug', runtime: 'node', processes: { names: [{ name: 'plug' }] }, hosts: [], trust: { chain: [{ var: 'X', semantic: 'append' }] },
+      inject: () => ({ owned: [{ path: file, role: 'plugin', data: '// trocar collector: trust plugin\n', mode: 0o644 }] }) }
+    const r = await turnOn(onBase(b, { harnesses: [cc, plug], ids: ['plug'], socketPath: path.join(b.home, 'run', 'c.sock'), request: async () => ({ desired: 'on', actual: 'on' }), unit: null }))
+    assert.equal(r.exit, 1)
+    assert.equal(fs.readFileSync(file, 'utf8'), '// the user\'s own plugin\n')
+    assert.ok(r.receipt.skipped.some((s) => s.what === file), JSON.stringify(r.receipt.skipped))
+    assert.doesNotMatch(r.receipt.notes.join('\n'), /no agent trocar can capture was found/)
+    assert.ok(readEvents(b.dir).some((e) => e.event === 'failure' && e.code === 'not-trocars-file' && e.path === file), 'on record (D38)')
+  } finally { b.done() }
+})

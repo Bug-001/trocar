@@ -69,11 +69,12 @@ const needHome = (what, home) => { if (!home) throw new TypeError(`${what}: home
 // D55①: every item says which command wrote it — `off` undoes phase 'on', `uninstall` the rest; a writer that forgets fails here, before anything is written
 const needPhase = (what, phase) => { if (!PHASES.includes(phase)) throw new TypeError(`${what}: phase is required (${PHASES.join(' | ')}), got ${JSON.stringify(phase)}`) }
 
-// 4.11 P4: is the file already at a path the manifest does not list someone else's? A file inside trocar's own tree (`dir`) is trocar's by its
-// place; elsewhere only a file carrying trocar's sentinel is (every owned file trocar puts in an agent's folder has it, plan.mjs). → null (nothing
+// 4.11 P4: is the file already at a path the manifest does not list someone else's? A file in a subfolder of trocar's collector directory (`dir`,
+// collectorHome's: where install writes its bundles and logs) is trocar's by its place — not one directly in it: those are settings and state the user
+// may edit (ingress.json, state.json); elsewhere only a file carrying trocar's sentinel is (every owned file trocar puts in an agent's folder has it, plan.mjs). → null (nothing
 // there, or trocar's: it may be written over) or the reason it is left alone: not trocar's, or unreadable, so whether it is trocar's is not known.
 export function notTrocars({ dir, file, fs = nodeFs }) {
-  if (strictlyInside(dir, file, fs)) return null
+  if (strictlyInside(dir, path.dirname(file), fs)) return null
   let bytes
   try { bytes = readOrNull(fs, file) } catch (e) { return `${file} is already there and cannot be read (${e.code || e.message}), so whether it is trocar's is not known; trocar left it alone` }
   return bytes == null || bytes.toString('latin1').includes(SENTINEL) ? null : `${file} is already there and holds no trocar mark, so it is not trocar's; trocar left it alone`
@@ -82,14 +83,16 @@ export function notTrocars({ dir, file, fs = nodeFs }) {
 // A file trocar owns (a trust file of certificate blocks, a trust plugin, a launch shim): listed before it is written,
 // with the directories its write creates. `sources` names the user files a trust file carries certificates from
 // (paths, never contents), so the merge stays auditable. A path the manifest does not list is written only when the file there is trocar's
-// (notTrocars, 4.11 P4): someone else's is refused, code not-users-file, before anything is written, so the caller skips that carrier (D38).
+// (notTrocars, 4.11 P4): someone else's is refused, code not-trocars-file, before anything is written, so the caller skips that carrier (D38).
 // The autostart entry is trocar's by its fixed name in the OS's autostart folder (a plist has no comment for a sentinel). A record for a path the
 // manifest already lists is replaced, not added (a second one would be undone twice), and the directories the first attempt made stay listed.
-export function writeOwnedFile({ dir, manifest, harness = null, role, phase, file, data, sources = null, mode = 0o600, extra = {}, now = new Date(), fs = nodeFs }) {
+export function writeOwnedFile({ dir, manifest, harness = null, role, phase, file, data, sources = null, mode = 0o600, extra = {}, home = null, now = new Date(), fs = nodeFs }) {
   needPhase('writeOwnedFile', phase)
   const known = manifest.files.find((f) => samePath(f.path, file, fs))
   const foreign = known || role === 'unit' ? null : notTrocars({ dir, file, fs })
-  if (foreign) throw Object.assign(new Error(foreign), { code: CODE.notUsersFile, path: file })
+  if (foreign) throw Object.assign(new Error(foreign), { code: CODE.notTrocarsFile, path: file })
+  // 4.11 P4: the autostart entry under trocar's fixed name is trocar's and is replaced; the bytes that were there go to the backup folder first
+  if (role === 'unit' && !known && fs.existsSync(file)) { needHome('writeOwnedFile (unit)', home); writeBackup({ home, file, data: fs.readFileSync(file), now, fs }) }
   const created = [...new Set([...((known && known.created_dirs) || []), ...missingDirs(path.dirname(file), fs)])]
   const item = { kind: 'owned-file', path: file, role, harness, phase, sha256: sha256(Buffer.from(data)), mode, created_dirs: created, installed_at: now.toISOString(), ...(sources ? { sources } : {}), ...extra }
   item.undo_by_hand = undoByHand(item)
