@@ -235,7 +235,7 @@ export const COST_LINE = '≈ cost'
 export const BUCKETS = Object.freeze({ main: 'main thread', sub: 'sub-agents', bg: 'background calls' })
 export const COST_FROM = 'from'
 export const noPriceCalls = (n) => `${count(n, 'model call has', 'model calls have')} no unit price`
-export const NO_ANY_PRICE = 'No unit price for these models'
+export const noUsageCalls = (n) => `${count(n, 'model call', 'model calls')} returned no usage`
 export const HIT_LINE = 'Main thread cache hit'
 export const HIT_MAIN_ONLY = 'main thread only'
 export const HIT_UNMEASURED = 'cannot be computed (no usage returned)'
