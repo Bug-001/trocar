@@ -11,7 +11,7 @@ import { collectorHome } from '../paths.mjs'
 import { caPaths } from './core/tls/ca-store.mjs'
 import { ROOT, checkProfile, certPem, pemToDer } from './core/tls/cert.mjs'
 import { rootIdOf, rootName, ROOT_SUBJECT, strayRoots } from '../off/root-store.mjs'
-import { readManifest, saveManifest, newManifest, applyJsonKey, applyTextEntry, writeOwnedFile, notTrocars, judgeOwned, sha256, samePath } from './core/trust/journal.mjs'
+import { readManifest, saveManifest, newManifest, applyJsonKey, applyTextEntry, writeOwnedFile, notTrocars, judgeOwned, sha256, samePath, markedWithoutRecord, MARKED_WITHOUT_RECORD } from './core/trust/journal.mjs'
 import { codeId } from '../version.mjs'
 import { installComplete, itemsOfPhase, undoByHand, OFF_VERSION } from '../off/manifest.mjs'
 import { writeStandalone } from '../off/standalone.mjs'
@@ -282,7 +282,7 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
         const file = path.join(pdir, hook.name), text = hook.text
         owned(file, 'plugin', desc.name, text, 0o644)
         if (!c.loader) return { state: 'placed' }
-        const e = applyTextEntry({ dir, manifest: m, harness: desc.name, phase: 'install', file: loader, edit: { format: 'yaml-list', line: `- ${c.loader.keys.at(-1)}: [{ name: ${JSON.stringify(file)} }] ${lineComment("loads trocar's CA trust plugin")}` }, home, now: now(), fs })
+        const e = applyTextEntry({ dir, manifest: m, harness: desc.name, phase: 'install', file: loader, edit: loaderEdit(c, file), home, now: now(), fs })
         said('plugin-loader', e ? 'written' : 'intact', { path: loader, harness: desc.name })
         return { state: 'placed' }
       }
@@ -412,6 +412,8 @@ const pick = (o, keys) => Object.fromEntries(keys.filter((k) => o && o[k] != nul
 // directory and its loader, a wrapper's bin directory) resolved the way `on` and `install` resolve it — so the plan names the file it will change
 // (1.6 §1.4「计划写全」) instead of a kind alone. A carrier whose place cannot be resolved on this machine says so, and why.
 const carrierLoc = (c) => c.file || c.dir || c.binDir || null
+// the line a plug-in's loader file gets: the run writes it, the plan previews it
+const loaderEdit = (c, file) => ({ format: 'yaml-list', line: `- ${c.loader.keys.at(-1)}: [{ name: ${JSON.stringify(file)} }] ${lineComment("loads trocar's CA trust plugin")}` })
 const carrierKeys = (c) => c.keys || (c.file && c.file.keys) || null
 
 export function planInstall({ os, harnesses, ctx, home, owns, hookFile = null, fs = nodeFs }) {
@@ -426,6 +428,13 @@ export function planInstall({ os, harnesses, ctx, home, owns, hookFile = null, f
     const why = file && judgeOwned({ manifest: m, file, fs }).action === 'write' ? notTrocars({ dir, file, fs }) : null
     return why ? { file, why } : null
   }
+  // 1.6 §3.2: trocar's marked text in a loader file no record lists — the run's applyTextEntry refuses it and skips the carrier, so the plan says so
+  const markedLoader = (c) => {
+    const pdir = hookFile && c.loader && resolveLoc(c.dir, ctx)[0], loader = pdir && resolveLoc(c.loader.file, ctx)[0]
+    if (!loader || (m && m.entries.some((e) => samePath(e.path, loader, fs)))) return null
+    const why = markedWithoutRecord({ file: loader, edit: loaderEdit(c, path.join(pdir, hookFile(c.template))), fs })
+    return why ? { file: loader, why } : null
+  }
   for (const desc of harnesses.filter((d) => d.proxyMode)) {
     const forms = desc.proxyMode.forms.filter((x) => x.os.includes(os) && isPresent(x, ctx))
     for (const f of forms) {
@@ -437,13 +446,17 @@ export function planInstall({ os, harnesses, ctx, home, owns, hookFile = null, f
       // a plug-in is two places when a file loads it: its folder (the plug-in file goes there) and the loader file (a line that loads it)
       const foreign = carrier === 'plugin' ? foreignPlugin(c) : null
       if (foreign) { rows.push({ harness: desc.name, form: f.id, carrier, paths: [foreign.file], keys: null, state: 'skipped', code: CODE.notTrocarsFile, why: foreign.why }); continue }
+      const marked = carrier === 'plugin' ? markedLoader(c) : null
+      if (marked) { rows.push({ harness: desc.name, form: f.id, carrier, paths: [marked.file], keys: null, state: 'skipped', code: MARKED_WITHOUT_RECORD, why: marked.why }); continue }
       const places = carrier === 'root' ? [{ loc: null }] : c.kind === 'plugin' && c.loader ? [{ loc: c.dir }, { loc: c.loader.file, keys: c.loader.keys, loader: true }] : [{ loc: carrierLoc(c), keys: carrierKeys(c) }]
       for (const { loc, keys = null, loader } of places) rows.push({ harness: desc.name, form: f.id, carrier, paths: loc ? resolveLoc(loc, ctx) : [], keys: keys || null, ...(loader ? { loader } : {}) })
     }
     // rule U, as install runs it: one block per file, placed by the first harness whose settings name it (the next finds it there); a file that is
     // not this user's is a row too, with its why, as install records it skipped
     if (forms.length) for (const { file, why } of ruleUFiles(desc, ctx, { home, owns, fs })) {
-      if (why) rows.push({ harness: desc.name, form: null, carrier: 'pem-block', paths: [file], keys: null, state: 'skipped', code: NOT_USERS, why })
+      // a file already holding trocar's marked text no record lists: the run refuses the block (1.6 §3.2), so the plan says so
+      const marked = !why && !(m && m.entries.some((e) => e.format === 'pem-block' && samePath(e.path, file, fs))) ? markedWithoutRecord({ file, edit: { format: 'pem-block' }, fs }) : null
+      if (why || marked) rows.push({ harness: desc.name, form: null, carrier: 'pem-block', paths: [file], keys: null, state: 'skipped', code: why ? NOT_USERS : MARKED_WITHOUT_RECORD, why: why || marked })
       else if (!rows.some((r) => r.carrier === 'pem-block' && !r.state && r.paths[0] === file)) rows.push({ harness: desc.name, form: null, carrier: 'pem-block', paths: [file], keys: null })
     }
   }
