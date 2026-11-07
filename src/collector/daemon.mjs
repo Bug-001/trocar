@@ -23,7 +23,7 @@ import { rewriteBundles } from './core/trust/bundle.mjs'
 import { createTracker } from './core/tracker.mjs'
 import { createSwitch, readState } from './core/switch.mjs'
 import { startControlServer, controlSocketPath } from './core/control.mjs'
-import { createQueryService } from '../query/service.mjs'
+import { createQueryRouter } from '../query/router.mjs'
 import { createServer as createBoard, tipTable } from '../server.mjs'
 import { readIngressConfig } from './core/ingress-config.mjs'
 import { readCa } from './core/tls/ca-store.mjs'
@@ -259,7 +259,7 @@ export function lockKeeper({ file, fields, segmentOf = () => null }) {
  *  never computes an answer; the worker exits by itself when nobody queries. `stop()` belongs in the stop, before the control server
  *  closes, so a worker a stop cuts off is not left behind. */
 function queryRouteFor({ P, failure, fork, queryIdleMs }) {
-  const svc = createQueryService({ home: path.dirname(P.dir), failure, fork, idleMs: queryIdleMs })
+  const svc = createQueryRouter({ home: path.dirname(P.dir), failure, fork, idleMs: queryIdleMs })
   return { routes: { 'GET /query': svc.route }, stop: svc.stop, svc, tips: tipTable() }
 }
 

@@ -121,12 +121,13 @@ export const askNo = (k) => `Prompt ${k}`
 
 // ── the session head (1.2 §会话头) ────────────────────────────────────────────────────────────────────────────────────
 export const BACK = '‹ Sessions'
-export const UNTITLED = 'Untitled session'
+export const UNTITLED = 'No prompt captured'
+export { PROMPT_UNREAD, PROMPT_UNREAD_TIP } from './common.mjs'
 export const FOLLOW = 'Follow latest'
 export const SESSION_INFO_LABEL = 'About this session'
 export const MULTIPLE_AGENTS = 'several agents'
 export const TITLE_FROM_WIRE = 'The title is taken from the captured requests'
-export const TITLE_UNTITLED_TIP = 'No usable title; the start time comes from the record of the first step'
+export const TITLE_UNTITLED_TIP = 'The captured requests of this session hold no main-conversation prompt'
 export const MULTIPLE_AGENTS_TIP = 'Records of several agents share this session id'
 export const PROJECT = 'project'
 export const GUESS = 'inferred'
@@ -228,7 +229,11 @@ export const THIS_SESSION = 'This session'
 export const notRefreshed = (t, why) => `Not refreshed since ${t} · ${why}`
 // 1.2 §会话头 读取状态: the server is still extracting this session (first read: share done; later: calls still to catch up)
 export const readingFirst = (pct) => `Reading this session for the first time · ${pct} %`
-export const catchingUp = (n) => `Catching up · ${n} new calls`
+export const catchingUp = (n) => `Catching up · ${n === 1 ? '1 new call' : `${n} new calls`}`
+export const updatingTo = (pct, calls) => `Updating to this version · ${pct}%${calls > 0 ? ` · ${calls === 1 ? '1 new call appears' : `${calls} new calls appear`} when it finishes` : ''}`
+// 2.4 还在读: what stands where the empty list's line would while the ledger is answered behind the fold
+export const FILES_UPDATING = 'Updating to this version · files so far'
+export const FILES_READING = 'Still reading this session · files so far'
 // 1.5 K-31: the server's background read of this session stopped (the head's pending.stopped), one line per code of
 // src/health/codes.mjs FOLD_STOPS (the board does not import it); the code and the reason are in the technical details
 export const FOLD_STOPPED = Object.freeze({
@@ -418,8 +423,7 @@ export const KEY_LIST = Object.freeze([
 // ── the new desk's models (web/src/screens/replay/models.mjs): the words its session head, step head and scope read ──
 // 1.2 §会话头 开始时间: the word is START_LINE; the tip gives the full moment
 export const startTip = (stamp) => `First step at ${stamp}`
-// the new desk's untitled head carries no start time beside 「Untitled」 (the start time has its own word), so its tip does not explain one
-export const TITLE_UNTITLED_NEXT_TIP = 'No usable title was recorded for this session'
+export const TITLE_UNTITLED_NEXT_TIP = TITLE_UNTITLED_TIP
 // 1.3 §提问刻度: the prompts row's name — K and P known · only P · only K · neither
 export const askRowName = (k, p) => (k != null && p != null ? `Prompt ${k} / ${p}` : p != null ? count(p, 'prompt') : k != null ? `Prompt ${k}` : 'Prompts')
 // 2.2 §步头: the upper word of the three read-out buttons (the cache one is CACHE_TITLE)

@@ -19,6 +19,8 @@ export const PROJECTION_NOTES = Object.freeze(['projection-rebuilt', 'projection
 /** The codes of an unreadable ref in a `block` read's errors (src/query/named/block.mjs; 3.5 §会话读, 1.6 C.5). */
 export const BLOCK_PROBLEMS = Object.freeze(['record-missing', 'record-unreadable', 'field-missing'])
 
+/** The codes of a query the daemon ended before a worker answered it (src/query/service.mjs; 3.5 §行表先读, 1.6 C.5). */
+export const QUERY_WAIT_PROBLEMS = Object.freeze(['still-reading'])
 /** The codes of a `session` read's own errors (src/query/named/session.mjs; 3.5 §会话读): no such session, a member that did not read back or extract. */
 export const SESSION_PROBLEMS = Object.freeze(['session-unknown', 'record-unreadable', 'record-unparseable',
   'record-missing', 'field-missing']) // a member whose block the reduction could not read back (3.5 §读不全不静默)

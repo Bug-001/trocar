@@ -5,7 +5,9 @@ import type { ReactNode } from 'react'
 import { Button } from 'react-aria-components'
 import { harnessName, UNIDENTIFIED } from '../../../legacy/core/chips.mjs'
 import { SWITCH_WORD } from '../../../legacy/labels/capture.mjs'
-import { READING } from '../../../legacy/labels/common.mjs'
+import { LIST_WAIT, READING } from '../../../legacy/labels/common.mjs'
+import { LIST_WAIT_MS } from '../../../legacy/library/logic.mjs'
+import { useAfter } from '../../ui/useAfter'
 import * as W from '../../../legacy/labels/overview.mjs'
 import { TechDetails, type TechValue } from '../../ui/TechDetails'
 import { HarnessIcon } from '../../ui/HarnessIcon'
@@ -23,7 +25,7 @@ export type StatsModel = { kind: 'reading' } | { kind: 'failed', fail: Fail } | 
   agents: Array<{ id: string, chip: string | null, trafficOnly: boolean, href: string | null, sessions: unknown, calls: unknown, cost: Tip, hit: Tip, last: string }>,
 }
 export type RecentModel = { kind: 'reading' } | { kind: 'none' } | { kind: 'failed', fail: Fail } | {
-  kind: 'shown', rows: Array<{ id: string, harness: string, inferred: boolean, title: string, pending: boolean, titleTip: string, calls: Tip, when: string, href: string }>,
+  kind: 'shown', rows: Array<{ id: string, harness: string, inferred: boolean, title: string, untitled: boolean, titleTip: string, calls: Tip, when: string, href: string }>,
 }
 export type AgentRowM = { id: string, harness: string, desired: string, control: ControlModel, commands: Array<[string, string]> | null }
 
@@ -38,8 +40,9 @@ export const Chip = ({ id }: { id: string }) => <><HarnessIcon id={id} /><span c
 const tipOf = (t: string | null | undefined) => t || undefined
 
 // a card whose first answer has not come yet: its name and 「Reading…」 (1.5 覆盖), never a blank space
-export const Reading = ({ cls, title }: { cls: string, title: string }) => (
-  <section className={`ovcard ${cls} reading`} aria-label={title} aria-busy="true"><h2 className="ovh">{title}</h2><p className="ovsay">{READING}</p></section>
+export const Reading = ({ cls, title, long = false }: { cls: string, title: string, long?: boolean }) => (
+  <section className={`ovcard ${cls} reading`} aria-label={title} aria-busy="true"><h2 className="ovh">{title}</h2>
+    {long ? <p className="ovsay" data-list-wait="">{LIST_WAIT}</p> : <p className="ovsay">{READING}</p>}</section>
 )
 
 // a card whose read failed before any answer: what and the cause class, Retry for its group, the status and reason in the details
@@ -125,7 +128,8 @@ export function StatsCard({ m, onRetry }: { m: StatsModel, onRetry: Retry }) {
 }
 
 export function RecentCard({ m, onRetry }: { m: RecentModel, onRetry: Retry }) {
-  if (m.kind === 'reading') return <Reading cls="recent" title={W.CARD.recent} />
+  const long = useAfter(LIST_WAIT_MS, m.kind === 'reading')
+  if (m.kind === 'reading') return <Reading cls="recent" title={W.CARD.recent} long={long} />
   if (m.kind === 'failed') return <Failed what="Session list" fail={m.fail} group="sessions" onRetry={onRetry} />
   if (m.kind === 'none') return null // no session at all is the first-use page
   return (
@@ -135,7 +139,7 @@ export function RecentCard({ m, onRetry }: { m: RecentModel, onRetry: Retry }) {
         <a className="ovitem" key={r.id} href={r.href}>
           <HarnessIcon id={r.harness} />
           <span className="ovnm">{harnessName(r.harness)}{r.inferred ? <> <span className="ovmark" title="agent inferred from the request headers">(inferred)</span></> : null}</span>
-          <span className={r.pending ? 'ovtx pend' : 'ovtx'} title={r.titleTip}>{r.title}</span>
+          <span className={r.untitled ? 'ovtx none' : 'ovtx'} title={r.titleTip}>{r.title}</span>
           <span className="ovnum">{r.calls.tip ? <span title={r.calls.tip}>{r.calls.text}</span> : r.calls.text}</span>
           <span className="ovwhen">{r.when}</span>
         </a>

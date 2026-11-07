@@ -42,7 +42,8 @@ test('1.8 (17): the stored list paints at once with the refreshing fact; the fre
     const before = await b.page.$$eval('.lrow[data-key]', (as) => as.map((a) => a.dataset.key))
     assert.ok(!before.some((k) => keyId(k) === NEW_ID))
 
-    // a new session arrives after it; the worker goes
+    // a new session arrives after it; the worker goes (the open page goes first: its polls would fork the two roles again, so none gone at once)
+    await b.page.goto('about:blank')
     const ts = '2099-01-01T00:00:00.000Z'
     writeSegment(home.home, '20990101T000000Z', [JSON.stringify({ ts, endpoint: '/v1/messages', method: 'POST', req_headers: { 'content-type': 'application/json', 'x-claude-code-session-id': NEW_ID }, req_body: '{"model":"m"}', resp: { status: 200, kind: 'json' }, id: 'req_later', ts_request: ts, is_llm_call: true, capture: 'transparent', host: 'api.anthropic.com', traffic_class: 'llm', proc: { pid: 7, exe: '/x', agent: 'claude-code' } })])
     b.face.killWorker()
@@ -66,5 +67,21 @@ test('1.8 (17): the stored list paints at once with the refreshing fact; the fre
       assert.equal(await page.evaluate(() => window.__loads), 1, 'no reload')
       assert.deepEqual(errors, [])
     } finally { await context.close() }
+  } finally { await b.stop() }
+})
+
+test('1.8 (18): with no stored answer a first read held past 3 s says what is going on, shows no failure, then the rows', { skip, timeout: 120_000 }, async () => {
+  const b = await withBoard({ chromium: gate.chromium, setup: async (page) => {
+    await page.route('**/api/sessions*', async (route) => { await new Promise((d) => setTimeout(d, 3500)); await route.continue().catch(() => { /* the screen left: the read was cancelled */ }) })
+    await page.addInitScript(() => {
+      new MutationObserver(() => { if (document.querySelector('[data-read-fail]')) window.__failed = true }).observe(document, { subtree: true, childList: true })
+    })
+  } })
+  try {
+    await b.page.evaluate(() => { location.hash = '#/sessions' })
+    await b.page.waitForSelector('[data-list-wait]', { timeout: 10_000 })
+    await b.page.waitForSelector('.lrow[data-key]', { timeout: 60_000 })
+    assert.equal(await b.page.$('[data-list-wait]'), null, 'the rows took the words away')
+    assert.equal(await b.page.evaluate(() => window.__failed === true), false, 'no failure state at any point')
   } finally { await b.stop() }
 })

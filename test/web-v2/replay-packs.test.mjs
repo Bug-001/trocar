@@ -11,8 +11,9 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { createDesk, listOf, stepOf, indexOf, ridAt, laneEvents } from '../../web/legacy/replay/model.mjs'
 import { parseLines, applyFile, applyHead } from '../../web/legacy/replay/packs.mjs'
-import { behindOf } from '../../web/legacy/replay/header.mjs'
+import { behindOf, readStateHtml } from '../../web/legacy/replay/header.mjs'
 import { world } from './desk-world.mjs'
+import { drain } from '../helpers/bounded.mjs'
 
 const fx = JSON.parse(fs.readFileSync(new URL('../fixtures/session-read-contract.json', import.meta.url), 'utf8'))
 const text = (lines) => lines.map((l) => JSON.stringify(l)).join('\n') + '\n'
@@ -305,6 +306,17 @@ test('3.5 §会话读 {l}: a held tail\'s lane header wins over the head\'s, the
   assert.equal(desk.lanes.get('A').count, 7, 'tail 1\'s header')
 })
 
+// 1.5 K-31 / K-33 · 1.2 §会话头 读取状态: `pending.seen` says a whole answer stands under it, so no first read; `read` says a version's re-read
+test('1.5 K-31, K-33: the three states from the head alone: plain pending reads, seen catches up, read updates, and no pending ends it', () => {
+  for (const [pending, first, state] of [[{ done: 1, total: 4, seen: true, calls: 3, read: 2 }, false, 'updating'], [{ done: 1, total: 4, seen: true, calls: 3 }, false, 'catching-up'],
+    [{ done: 1, total: 4, seen: true, calls: 0 }, false, null], [{ done: 1, total: 4, calls: 3 }, true, 'reading'], [null, false, null]]) {
+    const desk = createDesk()
+    applyHead(desk, { mark: 'S:1', lanes: [], pending })
+    assert.equal(desk.firstPending, first, J(pending))
+    assert.equal(readStateHtml(desk).match(/data-read-state="([^"]+)"/)?.[1] ?? null, state, J(pending))
+  }
+})
+
 // 1.5 K-32: the calls behind are the tip ids after the newest member the desk holds — the head's mark, or a held `{r}` id past it.
 test('1.5 K-32: a call a held tail brought is not counted behind; one past it is', () => {
   const desk = createDesk(), r = (id) => ({ r: { id, ts_request: null, is_llm_call: true, response: { status: 200 } } })
@@ -326,7 +338,7 @@ test('3.5 答案文件 head: an older head of the open span with the same packs 
   const home = path.join(tmpDir('trocar-oldhead-'), '.trocar')
   const s = bigSession({ home, id: 'eeee-0000-4a1b-9c2d-000000000006', growth: 300, subEvery: 4, subLanes: 2, subLen: 1e9 })
   const ctx = { home, writer: true }, dir = sessionDir(home, s.id), read = (f) => fs.readFileSync(path.join(dir, f))
-  const fold = async () => { while (await extendSession(ctx, s.id, Infinity)); }
+  const fold = async () => { await drain(() => extendSession(ctx, s.id, Infinity)) }
   s.append(520) // pack 0 sealed, the open span begun
   await fold()
   const older = JSON.parse(gunzipSync(read('head.json.gz')).toString('utf8'))

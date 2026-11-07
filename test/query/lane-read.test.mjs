@@ -286,7 +286,7 @@ test('3.5 lane: a ledger past PAGE_BYTES goes by ledger_next — every answer fi
 })
 
 // ── 3.5 #28 (the lane part): the closed sets, on a session of each harness shape ─────────────────────────────────────────────────
-const TOP = ['schema', 'command', 'ok', 'errors', 'lane', 'base', 'mark', 'steps', 'defs', 'resources', 'seen', 'events', 'prev', 'next', 'ledger_next']
+const TOP = ['schema', 'command', 'ok', 'errors', 'lane', 'base', 'mark', 'pending', 'steps', 'defs', 'resources', 'seen', 'events', 'prev', 'next', 'ledger_next']
 const STEP = ['rid', 'parent', 'ops', 'reply', 'attrs', 'detail']
 const DETAIL = ['norm', 'respRefs', 'nonBlockKeys', 'extraMessages', 'wire']
 const NORM = ['stop_reason', 'usage']
@@ -299,7 +299,7 @@ const contract = JSON.parse(fs.readFileSync(new URL('../fixtures/session-read-co
 const subset = (o, closed, what) => { for (const k of Object.keys(o)) assert.ok(closed.includes(k), `${what}: ${k} is not in the 3.5 closed set`) }
 const covers = (o, sample, what) => { for (const k of Object.keys(sample)) assert.ok(k in o, `${what}: ${k} (the contract's) is missing`) }
 function closedSets(p, sample) {
-  subset(p, TOP, 'answer'); covers(p, sample, 'answer')
+  subset(p, TOP, 'answer'); covers(p, Object.fromEntries(Object.entries(sample).filter(([k]) => k !== 'pending')), 'answer') // 3.5 `pending?`
   for (const st of p.steps) {
     subset(st, STEP, 'step'); covers(st, sample.steps[0], 'step')
     subset(st.detail, DETAIL, 'detail'); covers(st.detail, sample.steps[0].detail, 'detail')

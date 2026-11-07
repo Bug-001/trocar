@@ -1,4 +1,4 @@
-// replay/loader.mjs — the replay desk's loader (2.3 §读与画 加载器): every read of the desk but the poll's own `session --since`
+// replay/loader.mjs — the replay desk's loader (2.3 §读与画 加载器): every read of the desk but the poll's own head and tails
 // runs here. Pure, no DOM, no timers: a read that ends starts the next one waiting at once, never on the poll's beat.
 //
 // createLoader({max}) → {run(pri, fn), clear()}

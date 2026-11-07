@@ -8,7 +8,7 @@ import assert from 'node:assert/strict'
 import { probe, withBoard } from '../harness.mjs'
 import { makeWorld, mainCount } from './world.mjs'
 import { installProbe, snap } from './probe.mjs'
-import { check } from './invariants.mjs'
+import { check, rateFaults } from './invariants.mjs'
 import { ACTIONS } from './actions.mjs'
 
 const gate = await probe()
@@ -133,6 +133,14 @@ test('V-rate ten timer-less reads of status in a row', { skip }, async () => {
   await fresh()
   await b.page.evaluate(async () => { for (let i = 0; i < 10; i++) await fetch('/api/status').catch(() => {}) })
   assert.ok(ids(await check(ctx())).includes('I-rate'))
+})
+
+// the tails start once the round's head has answered, so a slow first round puts them closer than the rounds are: the rounds are what is paced
+test('V-rate an open tail is paced by its round, not by how long the head before it took', () => {
+  const round = (t, tail) => [{ method: 'GET', url: '/api/d/head?id=s', start: t, end: t + 5, status: 200 }, { method: 'GET', url: '/api/d/open.main?id=s', start: tail, end: tail + 5, status: 200 }]
+  assert.deepEqual(rateFaults([...round(0, 500), ...round(1500, 1560)]), [], 'rounds 1500 ms apart, tails 1060 ms apart')
+  assert.equal(rateFaults([...round(0, 10), ...round(1000, 1010)]).filter((x) => x.startsWith('d/open.main')).length, 1, 'rounds too close')
+  assert.equal(rateFaults([...round(0, 10), ...round(1500, 1510), { method: 'GET', url: '/api/d/open.main?id=s', start: 1520, end: 1525, status: 200 }, { method: 'GET', url: '/api/d/open.main?id=s', start: 1530, end: 1535, status: 200 }]).length > 0, true, 'a tail read a third time in its round')
 })
 
 // a lane's ledger chain (`ledger=`) is one read after another by design (3.5 §手里车道的页), not paced; the same chain
