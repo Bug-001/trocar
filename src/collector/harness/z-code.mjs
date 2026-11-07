@@ -26,6 +26,7 @@ import { urlHostsDeep, dotenvLayer, isOwnPath, perOs } from './_common.mjs'
 import { NETWORK_SERVICE_ARG } from '../../off/chromium.mjs'
 import { DOOR_ROUTES } from '../../off/marker.mjs'
 
+const SERVER_WORDS = ['app-server', 'agent-server'] // the desktop's agent runs as one of these (its server modes); the CLI never does
 const ZCJS = '/glm/zcode\\.cjs$' // the bundle, as an `entry` pattern: the program the exe runs as Node (D51)
 
 // the model fetch follows only ZCODE_HTTP_PROXY / network.httpProxy (HTTP(S)_PROXY is web-fetch only)
@@ -163,7 +164,7 @@ const proxyMode = {
   forms: [
     form('z-code.cli', [APP], { darwin: ['zcode'], win32: ['zcode'] }, { win32: ['-p'] }),
     form('z-code.cli-node', [{ base: 'home', path: '.zcode' }], { darwin: ['node'], win32: ['node'] }),
-    form('z-code.desktop', [APP], { darwin: ['zcode helper'], win32: ['zcode'] }, { win32: ['app-server'] }),
+    form('z-code.desktop', [APP], { darwin: ['zcode helper'], win32: ['zcode'] }, { win32: SERVER_WORDS }),
     form('z-code.web', [APP], undefined, undefined, { darwin: { reason: 'out-of-scope' }, win32: { reason: 'out-of-scope' } }), // the shipped build has no web mode
   ],
   routes: {
@@ -195,7 +196,7 @@ export default {
     names: [{ name: 'zcode-cli' }, { name: 'zcode', entry: ZCJS }, { name: 'zcode helper', entry: ZCJS }, { name: 'node', entry: ZCJS }, { name: 'zcode', args: NETWORK_SERVICE_ARG }],
     // on Linux (the one OS that reads another process's environment) the app's exe is the agent only as Node (ELECTRON_RUN_AS_NODE=1): without it, the GUI
     exclude: [{ name: 'zcode', env: { ELECTRON_RUN_AS_NODE: null } }, { name: ['zcode', 'zcode helper', 'node'], args: '(^| )__zcode-(plugin-host|dwf-child)( |$)' }, { name: 'zcode helper', args: NETWORK_SERVICE_ARG }],
-    longLived: [{ args: '(^| )(app|agent)-server( |$)' }],
+    longLived: [{ args: `(^| )(${SERVER_WORDS.join('|')})( |$)` }],
   },
   proxyMode,
   hosts: ['api.z.ai', 'open.bigmodel.cn', 'zcode.z.ai', 'api.moonshot.cn', 'api.minimaxi.com', 'api.deepseek.com', 'dashscope.aliyuncs.com', 'dashscope-intl.aliyuncs.com', 'api.xiaomimimo.com', 'api.openai.com', 'api.anthropic.com', 'api.x.ai', 'openrouter.ai', 'opencode.ai'],
@@ -204,7 +205,7 @@ export default {
   // 不经信任路径: the CDN's plugin marketplace and assets trust ZCODE_AGENT_CA_CERT only, never caCertFile (every process);
   // the CLI's provider refresh reaches its origin by plain fetch. Another CDN address the origin returns is not known
   // beforehand: under `all` it is decrypted, that refresh fails once, then the (pid, host) negative cache (review 3 #5).
-  bypass: (ctx) => [{ host: CDN_HOST, reason: 'not-via-trust-path' }, ...(ctx.argv.some((a) => /^(app|agent)-server$/.test(a)) ? [] : [{ host: originHost(ctx.env), reason: 'not-via-trust-path' }])],
+  bypass: (ctx) => [{ host: CDN_HOST, reason: 'not-via-trust-path' }, ...(ctx.argv.some((a) => SERVER_WORDS.includes(a)) ? [] : [{ host: originHost(ctx.env), reason: 'not-via-trust-path' }])],
   proxy,
   proxies: (ctx) => PROXY_SOURCES.filter(([k]) => (ctx.env.get(k) || '') !== '').map(([k, source]) => ({ url: ctx.env.get(k), source })),
   inject,

@@ -113,7 +113,7 @@ for (const d of descs) for (const os of ['darwin', 'win32']) {
 
 // 4.11 P11, the forms a process may be: of its route's forms, those whose `exe` names the process's program file (on macOS both Z-Code forms
 // retitle to zcode-cli before they connect, so argv tells nothing there, ZCode 3.14.4), then on Windows, where both are ZCode.exe and the command
-// line stays the one they were spawned with, those whose `args` match it (the desktop's app-server, the CLI's -p, ZCode 3.14.5); none matching →
+// line stays the one they were spawned with, those whose `argv` words match it (the desktop's app-server, the CLI's -p, ZCode 3.14.5); none matching →
 // all of them (forwarded rather than broken). The desktop's CA setting blocks z-code.desktop only: a process the door can tell is not the desktop
 // decrypts, one it cannot (the interactive CLI on Windows, with neither word) is forwarded.
 const ZC = descs.find((d) => d.name === 'z-code')
@@ -127,7 +127,8 @@ const ZC_EXE = { // [program file, argv, decrypt]
     [WIN_EXE, [WIN_EXE, WIN_CJS], false], // the interactive CLI: neither word, judged with the desktop
     [WIN_EXE, [WIN_EXE, WIN_CJS, 'app-server', '-p', 'x'], false], // both words: both forms
     [WIN_EXE, null, false], // a command line not read: both forms
-    ['C:\\Program Files\\nodejs\\node.exe', ['node', WIN_CJS, '-p', 'hi'], true], ['C:\\x\\x.exe', TITLE, false]],
+    ['C:\\Program Files\\nodejs\\node.exe', ['node', WIN_CJS, '-p', 'hi'], true], ['C:\\x\\x.exe', TITLE, false],
+    ['C:\\x\\x.exe', ['x', WIN_CJS, '-p', 'hi'], false]], // a program file no form names: every form, its -p notwithstanding
 }
 for (const os of ['darwin', 'win32']) test(`4.11 P11 · z-code · ${os}: the desktop's CA setting keeps off only the processes the door cannot tell from the desktop, by the program file and on Windows its command line`, async () => {
   const r = await rig({ desc: ZC, os, upstreamRoots: { os: async () => STUB_PEM, node: [STUB_PEM], extra: [] } })

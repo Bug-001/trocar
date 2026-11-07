@@ -77,17 +77,18 @@ function replaceVerdict(pm, ctx, facts, record) {
 /** The forms a process of `desc` may be on `os` (on a door of route `routeId`, or any): of its forms here, the verified ones when any is — an
  *  unmeasured sibling must not veto the verified ones —, of those the ones whose `exe` names the process's program file `exe` (a form with no
  *  `exe` names any), and when a word of some form's `argv` is among the process's arguments `argv` (argv[1..]), only those forms and the ones
- *  with no `argv` (no word present, or a command line not read: the step keeps all); none at the exe step → all of them: forwarded rather than
- *  broken (4.11 P11). The door judges every one of them; `status` asks the same. */
+ *  with no `argv` (no word present, or a command line not read: the step keeps all); none at the exe step → all of them, whatever the command
+ *  line says: forwarded rather than broken (4.11 P11). The door judges every one of them; `status` asks the same. */
 export function judgedForms(desc, os, routeId = null, exe = null, argv = null) {
   const all = desc.proxyMode.forms.filter((f) => f.os.includes(os) && (routeId == null || f.route === routeId))
   const ok = all.filter((f) => f.verified && f.verified[os] === true), may = ok.length ? ok : all
   const name = exe == null ? null : normalizeName(exe)
-  const byExe = name ? may.filter((f) => !f.exe || !f.exe[os] || f.exe[os].includes(name)) : may, pool = byExe.length ? byExe : may
-  if (!Array.isArray(argv)) return pool
+  const byExe = name ? may.filter((f) => !f.exe || !f.exe[os] || f.exe[os].includes(name)) : may
+  if (!byExe.length) return may // a program file no form names: every form, whatever its command line says
+  if (!Array.isArray(argv)) return byExe
   const words = new Set(argv.slice(1).map(String)), said = (f) => f.argv && f.argv[os]
-  const hit = pool.filter((f) => said(f) && said(f).some((w) => words.has(w))) // a word is positive evidence only: its absence selects no other form
-  return hit.length ? pool.filter((f) => !said(f) || hit.includes(f)) : pool
+  const hit = byExe.filter((f) => said(f) && said(f).some((w) => words.has(w))) // a word is positive evidence only: its absence selects no other form
+  return hit.length ? byExe.filter((f) => !said(f) || hit.includes(f)) : byExe
 }
 
 /** The forms the door judges together with form `f` (its route; for each program file `f` names, with the words `f`'s command line has, the forms
