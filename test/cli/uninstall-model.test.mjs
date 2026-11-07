@@ -346,7 +346,11 @@ for (const os of ['darwin', 'win32']) {
       assert.ok(fs.existsSync(path.join(w.dir, 'install-manifest.json')), 'the install stays for the next run')
       assert.ok(!receipt.autostart || receipt.autostart.disabled !== true)
       assert.ok(flowEvents(w.dir).some((e) => e.event === 'failure' && e.code === why), 'the record names why (D38)')
-      if (why === 'collectors-online') assert.equal(receipt.error && receipt.error.code, why, 'a daemon that stops answering at the off request is refused with the code (appendix C.1)')
+      if (why === 'collectors-online') {
+        assert.equal(receipt.error && receipt.error.code, why, 'a daemon that stops answering at the off request is refused with the code (appendix C.1)')
+        assert.equal(receipt.daemon && receipt.daemon.state, 'left-running', 'left running on purpose, not one that could not be stopped (appendix C)')
+        assert.doesNotMatch(formatUninstallReceipt(receipt, { home: w.home, platform: os }), /kill -9/, 'the next step is trocar off, not a kill that leaves the entries at a dead door')
+      }
     })
   }
 }
@@ -366,6 +370,8 @@ for (const os of ['darwin', 'win32']) {
       const { receipt, exit } = await runUninstall({ home: w.home, env: w.env, yes: true, deps: { platform: os, exec: exec.run, socketPath: sock, request: async () => { throw fail() }, alive: (pid) => pid === 4242, identity: () => ({ start_time: '111', boot_id: 'boot-1' }), procs: async () => [], sleep: async () => {}, drainMs: 0, getuid: () => 501, stopDaemon: async () => { stopped++; return { stopped: true, how: 'test', pid: 4242, signals: [] } } } })
       assert.deepEqual([exit, receipt.error && receipt.error.code], [1, 'collectors-online'])
       assert.deepEqual([stopped, exec.calls.filter((c) => /launchctl|schtasks|reg(\.exe)? delete|taskkill/i.test(c))], [0, []], 'no stop, the autostart is not touched')
+      assert.deepEqual(receipt.daemon, { pid: 4242, state: 'left-running' }, 'left running on purpose (appendix C)')
+      assert.doesNotMatch(formatUninstallReceipt(receipt, { home: w.home, platform: os }), /kill -9/, 'the next step is trocar off')
       assert.deepEqual(tree(w.home), before, 'not one file changed')
       assert.ok(flowEvents(w.dir).some((e) => e.event === 'failure' && e.code === 'collectors-online'), 'the record names why (D38)')
     })

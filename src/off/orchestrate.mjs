@@ -170,7 +170,7 @@ export async function switchRoutingOff(w, { ids = null, now = false, exit = fals
   // `keepUnanswering` (uninstall, 1.6 §3.6): a daemon alive that does not answer is not off, so it is left running and the routing is not confirmed
   const stopUnanswering = async (why) => {
     if (!keepUnanswering) return stopIt(why)
-    r.daemon = { pid: lock && lock.pid, state: 'unresponsive' }
+    r.daemon = { pid: lock && lock.pid, state: 'left-running' } // not 'unresponsive': nothing tried to stop it, and its next step is `trocar off`, not a kill (附录 C)
     fail('collectors-online', `the daemon (pid ${lock && lock.pid}) ${why}, so capture is not known to be off; it was left running. Run: trocar off`)
   }
   const stopIt = async (why) => {

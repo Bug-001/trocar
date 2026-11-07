@@ -159,7 +159,10 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
   // 1.6 §3.6: a daemon alive that does not answer (stuck, or still starting) is not off: the agents' entries may still point at its doors, so
   // it is not stopped (invariant 5) — refused before anything is written, the desired-off a waiting lock writes included (a refusal changes nothing); `trocar off` stops it and confirms the routing off
   const ds = await w.daemonState()
-  if (ds.state === 'unresponsive' || ds.state === 'starting') return refuse(`the daemon (pid ${ds.lock && ds.lock.pid}) is running but does not answer (${ds.reason}), so capture is not known to be off. Nothing was changed`)
+  if (ds.state === 'unresponsive' || ds.state === 'starting') {
+    receipt.daemon = { pid: ds.lock ? ds.lock.pid : null, state: 'left-running' } // 附录 C: left on purpose, its next step `trocar off`
+    return refuse(`the daemon (pid ${ds.lock && ds.lock.pid}) is running but does not answer (${ds.reason}), so capture is not known to be off. Nothing was changed`)
+  }
   const tryOff = () => { try { return { r: desiredOff(w, null, harnessIdsOf(m)), error: null } } catch (e) { return { r: null, error: e } } }
   let early = null, lock = null
   if (fs.existsSync(w.dir)) {
