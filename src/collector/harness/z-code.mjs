@@ -216,7 +216,7 @@ export default {
     rereadsEntry: true, // every new or resumed session reads caCertFile again: a live Z-Code may load the bundle
     afterUninstall: 'session-end',
     hints: {
-      'desktop-ca-override': 'the Z-Code desktop CA setting (httpProxyCaCertPath) overrides ~/.zcode/cli/config.json; its CA is in combined-z-code.pem, so the setting can be cleared',
+      'desktop-ca-override': 'the Z-Code desktop CA setting (httpProxyCaCertPath in ~/.zcode/v2/setting.json) overrides ~/.zcode/cli/config.json; its CA is in combined-z-code.pem, so the setting can be cleared, or trocar install adds trocar\'s certificate to the file it names',
       shadowed: 'ZCODE_AGENT_CA_CERT (set, or empty) or a project zcode.json / .zcode/config.json overrides the user caCertFile',
     },
   },

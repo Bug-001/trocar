@@ -9,6 +9,7 @@ import { trustReasonText } from '../collector/core/codes.mjs'
 import { TRUST_REASONS, ROUTE_TRUST_REASONS, RESTART_REASONS } from '../health/codes.mjs'
 import { FINDINGS_WIN32 } from './findings-win32.mjs'
 import { ago } from '../cli/text.mjs'
+import { statusReason } from '../cli/words.mjs'
 import { setupHelperCommand } from '../version.mjs'
 
 const BY_CLASS = { problem: 0, expected: 1, note: 2 }
@@ -191,8 +192,13 @@ export const FINDINGS = {
 }
 // the trust reasons not listed above (a variable missing, a file unreadable, …): the daemon's own hint says what to do about this agent
 const TRUST = { cls: (c) => (RESTART_REASONS.includes(c.code) ? 'expected' : 'problem'), trocarFirst: false, what: (c) => `${c.h} is not captured${RESTART_REASONS.includes(c.code) ? `${c.pid ? `: pid ${c.pid} started` : ': it started'} before capture was on.` : `${c.pid ? `: pid ${c.pid}` : ''}.`}`,
-  why: (c) => c.hint || trustReasonText(c.code) || 'Certificates are read when a program starts.',
-  commands: (c) => (RESTART_REASONS.includes(c.code) ? restartSteps(c) : [trocar(c, `trocar status ${c.h}`), gui(c.hint || trustReasonText(c.code) || `Follow ${c.h}'s own instructions`)]), verify: (c) => `trocar status ${c.h}` }
+  why: (c) => c.hint || trustReasonText(c.code) || statusReason(c.code, { harness: c.h })?.text || 'Certificates are read when a program starts.',
+  commands: (c) => {
+    if (RESTART_REASONS.includes(c.code)) return restartSteps(c)
+    const own = statusReason(c.code, { harness: c.h }) // a reason with its own way out (words.mjs) says it, rather than pointing back at status
+    if (own && (own.fix || own.command)) return [...(own.command ? [trocar(c, own.command)] : []), ...(own.fix ? [gui(own.fix)] : [])]
+    return [trocar(c, `trocar status ${c.h}`), gui(c.hint || trustReasonText(c.code) || `Follow ${c.h}'s own instructions`)]
+  }, verify: (c) => `trocar status ${c.h}` }
 
 /** Every code a finding may carry: the cross-platform catalogue's, the Windows table's (4.8 §10.4) and the trust reasons' — the Windows collector's own trust reasons (ROUTE_TRUST_REASONS, 4.8 §12) included,
  *  for the same reason TRUST_REASONS is: they are the codes of `agent-untrusted` a form's verdict can carry. The schema validates against this list. */

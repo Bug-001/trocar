@@ -133,6 +133,19 @@ test('V49 every trust reason is a finding (the restart ones expected, the rest f
   }
 })
 
+test('V49 a trust reason with its own way out (statusReason fix / command) gives that as the Fix, with or without the daemon\'s hint, never a pointer back at status (desktop-ca-override)', () => {
+  for (const hint of [undefined, 'the daemon\'s own words']) {
+    const f = facts('z-code', {}, { procs: [proc(4121, { watched: 'no-decrypt', trusted: false, reason: 'desktop-ca-override', hint })] })
+    const [found] = findingsOf(f).filter((x) => x.code === 'desktop-ca-override')
+    const runs = found.commands.map((c) => c.run)
+    const want = statusReason('desktop-ca-override', { harness: 'z-code' })
+    assert.ok(runs.includes(want.command) && runs.includes(want.fix), JSON.stringify(runs))
+    assert.ok(!runs.includes('trocar status z-code'), JSON.stringify(runs))
+  }
+  const w = statusReason('desktop-ca-override', { harness: 'z-code' })
+  assert.match(w.fix, /httpProxyCaCertPath/); assert.match(w.fix, /~\/\.zcode\/v2\/setting\.json/)
+})
+
 test('V49 each finding: what, why and verify say something; a problem or an expected finding has a command (a note may have none); the commands are whole lines with no <…> left; trocar\'s own come first where the catalogue says so; it validates', () => {
   const all = [...Object.values(SETS), ...TRUST_REASONS.map((r) => ({ facts: facts('claude-code', {}, { procs: [proc(4121, { watched: 'no-decrypt', trusted: false, reason: r })] }) }))]
   const seen = new Set()
