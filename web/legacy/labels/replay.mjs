@@ -358,6 +358,8 @@ export const TOOL_METADATA_ONLY = 'Metadata only: the full JSON schema (paramete
 // the pinned panel's honest fallbacks
 // a `call=` link whose record id is in none of the session's rows (1.2 §路由)
 export const CALL_NOT_HERE = 'This call is not in this session'
+// the same on a truncated session: only the part shown is known (invariant 4)
+export const CALL_NOT_SHOWN = 'This call is not in the part of the session shown'
 export const RES_NOT_FOUND = 'No single matching block in the context of this step: it may have been read earlier or already removed. Click the step number on this row to jump to the step that read it.'
 
 // ── the raw panel (2.6 §A) ───────────────────────────────────────────────────────────────────────────────────────────
