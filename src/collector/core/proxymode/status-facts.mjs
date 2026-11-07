@@ -6,7 +6,7 @@
 import nodeFs from 'node:fs'
 import { itemsOfPhase } from '../../../off/manifest.mjs'
 import { judgeEntry, judgeOwned } from '../trust/journal.mjs'
-import { formsHere, readSrc, holds, presentPaths } from './sources.mjs'
+import { routedForms, readSrc, holds, presentPaths } from './sources.mjs'
 import { planRoutes } from './entries.mjs'
 import { upstreamFor, isTrocarDoorUrl } from './chain.mjs'
 import { pacLeg } from './pac.mjs'
@@ -59,7 +59,7 @@ export function setupOf(desc, { os, manifest: m, ctx, root = null, fs = nodeFs }
   try {
     const pm = desc.proxyMode
     let lost
-    for (const f of formsHere(pm, os, ctx)) {
+    for (const f of routedForms(pm, os, ctx)) {
       const c = f.cert === 'root' ? null : (pm.certs || {})[f.cert]
       if (!c || (c.when && holds(c.when, ctx) === false)) continue // the root carries it: nothing per form, whether install saw the harness or not
       // a carrier of its own: install's items for it (none when install never saw the harness, unless rule U's shared block carries it)
@@ -107,7 +107,7 @@ export async function modelFormFacts({ harnesses, os, manifest: m, reply = null,
     const plan = planRoutes(desc, ctx), d = drift(h), own = itemsFor(desc, inst, ctx)
     const uf = userFileOf(desc, { m, ctx, fs, own })
     const forms = []
-    for (const f of formsHere(pm, os, ctx)) {
+    for (const f of routedForms(pm, os, ctx)) {
       const c = f.cert === 'root' ? null : (pm.certs || {})[f.cert]
       const carrier = !c || (c.when && holds(c.when, ctx) === false) ? 'root' : CARRIER[c.kind] ?? null
       const r = root || {}

@@ -9,7 +9,7 @@
 //            hosts in the extension's own settings, the operator's extra_hosts; 4.8 OPEN 22); absent → desc.hosts.
 //   issuer = makeIssuer()'s object, or null; ctx = the sources.mjs ctx (os, home, dirs, readFile, readdir, policy, join).
 import path from 'node:path'
-import { readSrc } from './sources.mjs'
+import { readSrc, measuredOn } from './sources.mjs'
 import { certBlocks } from '../../../off/pem.mjs'
 import { itemsOfPhase } from '../../../off/manifest.mjs'
 import { HOOK_PID_ENV } from './chain.mjs'
@@ -65,7 +65,7 @@ function trustVerdict(t, ctx, facts, record, inProcess) {
  *  a harness, not a form, so an unmeasured sibling must not veto the verified ones. The door judges every one of them; `status` asks the same. */
 export function judgedForms(desc, os, routeId = null) {
   const all = desc.proxyMode.forms.filter((f) => f.os.includes(os) && (routeId == null || f.route === routeId))
-  const ok = all.filter((f) => f.verified && f.verified[os] === true)
+  const ok = all.filter((f) => measuredOn(f, os))
   return ok.length ? ok : all
 }
 

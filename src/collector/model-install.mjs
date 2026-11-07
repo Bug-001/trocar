@@ -17,7 +17,7 @@ import { installComplete, itemsOfPhase, undoByHand, OFF_VERSION } from '../off/m
 import { writeStandalone } from '../off/standalone.mjs'
 import { standaloneFiles } from '../off/paths.mjs'
 import { missingDirs, pathKey } from '../off/fsutil.mjs'
-import { resolveLoc, readSrc, holds, formsHere } from './core/proxymode/sources.mjs'
+import { resolveLoc, readSrc, holds, routedForms } from './core/proxymode/sources.mjs'
 import { noProxyNames } from './core/proxymode/entries.mjs'
 import { placeWrapper, managedTree } from './core/proxymode/hooks/wrapper.mjs'
 import { lineComment, removeTrocarText } from '../off/text-edit.mjs'
@@ -167,7 +167,7 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
   // c · the carriers of every present form (P4) — of one harness's only, for the board's Set up (4.4 §控制面); the others' stay as they are
   for (const desc of harnesses.filter((d) => d.proxyMode && (!only || d.name === only))) {
     const pm = desc.proxyMode
-    const forms = formsHere(pm, os, ctx)
+    const forms = routedForms(pm, os, ctx)
     if (!forms.length) continue
     installedHarnesses.push(desc.name)
     const done = new Map()
@@ -343,7 +343,7 @@ const carrierKeys = (c) => c.keys || (c.file && c.file.keys) || null
 export function planInstall({ os, harnesses, ctx, home, owns, fs = nodeFs }) {
   const rows = []
   for (const desc of harnesses.filter((d) => d.proxyMode)) {
-    const forms = formsHere(desc.proxyMode, os, ctx)
+    const forms = routedForms(desc.proxyMode, os, ctx)
     for (const f of forms) {
       const c = f.cert === 'root' ? null : desc.proxyMode.certs[f.cert]
       const when = c && c.when ? holds(c.when, ctx) : true

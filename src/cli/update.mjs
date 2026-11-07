@@ -390,7 +390,7 @@ const noFormHere = async (ids, { platform, home, env, fs = nodeFs, deps }) => {
     return ids.filter((h) => here[h] && !routed(h).length)
   } catch { return [] }
 }
-const goneWords = (gone) => `${gone.join(', ')}: no form trocar covers is on this machine any more, so capture is not switched on again for ${gone.length > 1 ? 'them' : 'it'}`
+const goneWords = (gone) => `${gone.join(', ')}: no form trocar sets up on this system is on this machine any more, so capture is not switched on again for ${gone.length > 1 ? 'them' : 'it'}`
 
 /** Step 1 undone with the code that wrote it (§5.5): the harnesses it switched off are switched on again. */
 const reOn = async (ids, ctx) => {

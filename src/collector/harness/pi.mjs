@@ -58,7 +58,8 @@ const proxy = {
 // Proxy mode, macOS and Windows (spec 4.11 §2.3): data only. The install-time extension in pi's extensions dir carries the root and reads
 // the switch file once at import (so a pi started while on is a holder, P12); every form has it. Verified: the official install's pi accepted a
 // leaf chained to the root with only the extension adding it (fetch, WebSocket and node:https; both test machines). npm's and rpc mode were
-// measured with the root in NODE_EXTRA_CA_CERTS only; the door judges them by their verified sibling (one door, D51) until measured themselves.
+// measured with the root in NODE_EXTRA_CA_CERTS only; until measured themselves they get no entry where a sibling is measured (4.11 P5), and a pi of
+// theirs started beside the official one rides its switch-file route.
 const PI = (p) => ({ base: 'home', dir: '.pi/agent', env: 'PI_CODING_AGENT_DIR', path: p })
 const NOT_MEASURED = { reason: 'not-measured' }
 const form = (id, present, verified = NOT_MEASURED) => ({ id, os: ['darwin', 'win32'], route: 'switch', cert: 'ext', trust: 'node', present, verified: { darwin: verified, win32: verified } })

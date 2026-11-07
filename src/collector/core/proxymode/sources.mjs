@@ -91,9 +91,10 @@ export const formsHere = (pm, os, ctx) => pm.forms.filter((f) => f.os.includes(o
 
 /** The forms `on` writes entries for (4.11 P5): of the forms here, the ones measured on this system when the harness has any measured there; a form never
  *  measured where a measured sibling exists gets no entry (writing an agent's config for it can break it). `status` judges the same set (verdict.mjs judgedForms). */
+export const measuredOn = (f, os) => !!(f && f.verified && f.verified[os] === true)
 export const routes = (pm, os) => {
-  const measured = (f) => !!(f && f.verified && f.verified[os] === true), any = pm.forms.some((f) => f.os.includes(os) && measured(f))
-  return (f) => !any || measured(f)
+  const any = pm.forms.some((f) => f.os.includes(os) && measuredOn(f, os))
+  return (f) => !any || measuredOn(f, os)
 }
 export const routedForms = (pm, os, ctx) => formsHere(pm, os, ctx).filter(routes(pm, os))
 
