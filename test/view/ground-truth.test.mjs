@@ -56,7 +56,8 @@ test('a flat wire: a failed call with no usage has no ground truth, a successful
     req_headers: { 'session-id': 's-flat', 'user-agent': 'codex_cli_rs/1.0' }, req_body: JSON.stringify({ model: 'gpt-5', instructions: 'You are a coding agent.', input }), resp })
   const u = (t) => ({ type: 'message', role: 'user', content: [{ type: 'input_text', text: t }] })
   const ok = (usage) => shapeResponse({ status: 200, headers: [['content-type', 'text/event-stream']], body: Buffer.from(`event: response.completed\ndata: ${JSON.stringify({ type: 'response.completed', response: { id: 'r', output: [], usage } })}\n\n`) })
-  const zeros = { input_tokens: 0, input_tokens_details: { cached_tokens: 0 }, output_tokens: 0 }
+  // the write reported as 0, not left out: a write not reported proves nothing (3.3 `provider-contradiction`)
+  const zeros = { input_tokens: 0, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 }, output_tokens: 0 }
   const two = [u('first question'), { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'first answer' }] }, u('second question')]
   const asked = async (resp) => (await sessionDoc([flat(1, [u('first question')], ok(zeros)), flat(2, two, resp)], 's-flat')).calls
   const [, failed] = await asked({ status: 500, kind: 'json', body: { error: { message: 'boom' } } })
