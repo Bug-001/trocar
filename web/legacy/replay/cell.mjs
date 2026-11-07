@@ -85,7 +85,10 @@ export function loadBodies(api, refs, { signal } = {}) {
       }
       return out
     })
-    for (const ref of want) asking.set(ref, read.then((m) => m.get(ref)).finally(() => asking.delete(ref)))
+    const mine = new Map(want.map((ref) => [ref, read.then((m) => m.get(ref)).finally(() => { if (asking.get(ref) === mine.get(ref)) asking.delete(ref) })]))
+    for (const [ref, p] of mine) asking.set(ref, p)
+    // a read aborted before it answers (its step was left) no longer stands for its refs: the next ask reads them, not a cancelled one
+    if (signal) signal.addEventListener('abort', () => { for (const [ref, p] of mine) if (asking.get(ref) === p) asking.delete(ref) }, { once: true })
   }
   return Promise.all(refs.map((ref) => asking.get(ref) ?? bodyCache.get(ref)))
 }
