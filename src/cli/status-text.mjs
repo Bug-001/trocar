@@ -12,7 +12,7 @@ export const noteText = (code, opts = {}) => (code ? statusNote(code, opts) ?? u
 /** A captured harness whose other processes the door has not seen yet (1.6 §2 判词): the count of its rows not known, from the rows ('' when none). */
 const notSeenYet = (x) => { const n = (x.processes || []).filter((p) => p.captured === null).length; return n ? `${n} not seen yet` : '' }
 /** A harness not known: what could not be read, else its rows' own reason (only `not-seen` processes; `said` wraps it where no column says unknown), else that it could not be read. */
-const openText = (x, h, said = (t) => t) => ((x.why || []).length ? unknown(x.why.join('; ')) : x.reason ? said(noteText(x.reason, { harness: h, pid: ((x.processes || []).find((p) => p.reason === x.reason) || {}).pid ?? null })) : unknown('it could not be read'))
+const openText = (x, h, said = (t) => t) => { const mine = (x.processes || []).filter((p) => p.reason === x.reason); return (x.why || []).length ? unknown(x.why.join('; ')) : x.reason ? said(noteText(x.reason, { harness: h, pid: mine.length === 1 ? mine[0].pid ?? null : null })) : unknown('it could not be read') } // a pid only when it is the one row with that reason
 
 const upFor = (since, now) => { const t = Date.parse(since); if (!Number.isFinite(t)) return null; const s = Math.max(0, Math.round((now - t) / 1000)); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return h ? `${h}h ${m}m` : `${m}m` }
 
