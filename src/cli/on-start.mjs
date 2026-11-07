@@ -16,10 +16,13 @@ let early = null
 export function startEarly({ argv, platform = process.platform, env = process.env, home, uid, run = runAsync, fs = nodeFs, ms = Date.now }) {
   const words = argv.filter((a) => a !== '--json')
   if (platform !== 'linux' || words[0] !== 'on' || uid === 0 || words.some((a) => a === '--dry-run' || a === '--help' || a === '-h')) return null
-  try { if (!daemonMayStart(readManifest(collectorDir(home), fs)) || !fs.existsSync(wantsLink(home)) || fs.existsSync(controlSocketPath({ env }))) return null } catch { return null }
-  const startAt = ms()
-  early = Promise.resolve(systemctl(['start', UNIT_NAME], { run, env })).then((rr) => ({ was: { up: false }, rr, startAt, startMs: ms() - startAt }))
-  return early
+  // any throw here (no record, no runtime dir, a spawn refused) leaves the start to kickDaemon, as before
+  try {
+    if (!daemonMayStart(readManifest(collectorDir(home), fs)) || !fs.existsSync(wantsLink(home)) || fs.existsSync(controlSocketPath({ env }))) return null
+    const startAt = ms()
+    early = Promise.resolve(systemctl(['start', UNIT_NAME], { run, env })).then((rr) => ({ was: { up: false }, rr, startAt, startMs: ms() - startAt }))
+    return early
+  } catch { return null }
 }
 
 /** The early start's answer, taken once: null when none was asked. */

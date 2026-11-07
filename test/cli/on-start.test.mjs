@@ -40,6 +40,15 @@ test('on (linux): the start is asked of systemd at once when trocar is installed
   } finally { fs.rmSync(w.root, { recursive: true, force: true }) }
 })
 
+test('on (linux): a start that cannot be asked leaves it to kickDaemon, and `on` goes on', async () => {
+  const w = await world()
+  try {
+    const early = startEarly({ argv: ['on'], platform: 'linux', env: w.env, home: w.home, uid: 501, run: () => { throw new Error('spawn refused') } })
+    assert.equal(early, null)
+    assert.equal(takeEarly(), null)
+  } finally { fs.rmSync(w.root, { recursive: true, force: true }) }
+})
+
 test('on (linux): no early start where the start is not this run\'s to ask', async () => {
   const w = await world()
   try {
