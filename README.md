@@ -292,7 +292,8 @@ holds the detail):
 - **Kimi Code**: one session key holds the main conversation and the agents it opens, and no call says whose it is.
   The calls whose system prompt is the one of the longest history in the session are the main conversation, also
   after Kimi compacts that history; each history of another system prompt is a background lane of its own, so a short
-  side call no longer reads as a compaction of the main conversation.
+  side call no longer reads as a compaction of the main conversation. On Kimi's Anthropic-compatible API every call
+  still sits in the main lane.
 
 Reading the records across sessions is `trocar query <name>` — the one core that reads data, of which
 the board is the HTTP shell (D59); there is no separate ETL step and no database to load. Both go through the
