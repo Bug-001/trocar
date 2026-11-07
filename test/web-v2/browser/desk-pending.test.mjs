@@ -174,7 +174,7 @@ test('2.3 读者优先: a tick the pointer rests on stays while an answer is dra
     const { page, grant, drawn, until } = d
     // the board's reads in flight: a pack read that lands after the pointer is on the rows is held too, and its timer is not the answer's
     let inFlight = 0
-    const isRead = (r) => new URL(r.url()).pathname.startsWith('/api/')
+    const isRead = (r) => { const u = new URL(r.url()); return u.pathname.startsWith('/api/') && u.pathname !== '/api/d/head' } // a head read waits for the next grant (paced)
     page.on('request', (r) => { if (isRead(r)) inFlight++ })
     for (const ev of ['requestfinished', 'requestfailed']) page.on(ev, (r) => { if (isRead(r)) inFlight-- })
     const settled = async () => { for (let calm = 0, t = Date.now(); calm < 300; await page.waitForTimeout(50)) { calm = inFlight ? 0 : calm + 50; assert.ok(Date.now() - t < 20000, 'the board\'s reads never settled') } }

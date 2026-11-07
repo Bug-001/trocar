@@ -36,6 +36,10 @@ test('2.3 读者优先: not over the rows, an answer draws at once; over them it
   f.h.over(true); f.h.answer(); f.advance(900); f.h.press(true); f.advance(500)
   assert.deepEqual(f.draws, [], 'the time is up while the pointer is down: the paint waits for it to come up')
   f.h.press(false); assert.deepEqual(f.draws, [1400], 'and comes when it does')
+  const g = rig()
+  g.h.over(true); g.h.start(); g.advance(100); g.h.reader(); g.advance(100); g.h.answer()
+  assert.deepEqual(g.draws, [100, 200], 'a reader\'s draw inside an answer\'s redraw: the answer\'s paint is not held')
+  g.h.start(); g.h.answer(); assert.deepEqual(g.draws, [100, 200], 'the next answer is held again')
 })
 
 test('2.3 读者优先: over any sequence, a held paint never waits past HOLD_RAILS_MS and the last answer is always drawn', () => {
@@ -52,7 +56,7 @@ test('2.3 读者优先: over any sequence, a held paint never waits past HOLD_RA
     const quiet = (b, what) => { if (down) assert.equal(n0(), b, `run ${run}: ${what} painted the rows under a pressed pointer`) }
     for (let k = 0; k < 40; k++) {
       const x = rnd(), before = n0()
-      if (x < 0.3) { if (since == null) since = r.now(); r.h.answer(); quiet(before, 'an answer') } else if (x < 0.4) r.h.reader()
+      if (x < 0.3) { if (rnd() < 0.5) r.h.start(); if (since == null) since = r.now(); r.h.answer(); quiet(before, 'an answer') } else if (x < 0.4) r.h.reader()
       else if (x < 0.55) { r.h.over(rnd() < 0.5); quiet(before, 'a move') } else if (x < 0.7) { down = rnd() < 0.5; r.h.press(down); if (down) quiet(before, 'a press') }
       else {
         // time passes in small steps, so the bound is read at every timer
