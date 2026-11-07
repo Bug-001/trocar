@@ -26,6 +26,7 @@ const noteLine = (n) => (n.code === 'install-pending' ? `Not done yet: ${n.item}
 const refusedLine = (r) => `${r.harness} was not turned on: ${r.why}.${r.command ? ` Run: ${r.command}, then: trocar on ${r.harness}` : ''}`
 /** 1.6 §3.3 (D65④): the harnesses `on` refused because their setup is needed — `blocked` of a dry run, `error` of a real one (exit 1). */
 const setupBlocked = (r) => r.refused.filter((x) => x.reason === 'setup-needed').map((x) => ({ what: x.harness, reason: x.why }))
+const noFormError = (r) => { const x = r.refused.find((y) => y.reason === 'not-routed'); return x ? { code: 'not-routed', message: `${x.harness} was not turned on: ${x.why}` } : null }
 const setupError = (b) => ({ code: 'setup-needed', message: `${b.map((x) => x.what).join(', ')} ${b.length === 1 ? 'is' : 'are'} not set up for capture; run trocar install, then trocar on again` })
 
 /** → the exit code. `source`: added to each flows/ record this run writes (the board's 'board'). `parts` is loadParts' view (its arch's unit); `deps`: backends, harnesses, which, exec, now, sleep, fs (0.1 §3). */
@@ -69,6 +70,8 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
   const receiptOf = (r, extra = {}) => ({ ...newReceipt('on'), ok: r.exit === 0, ...(extra.dry_run || r.code || extra.error ? {} : { undo: UNDO_LINE.on }), harnesses: r.on, refused: r.refused, routes: r.routes, notes: r.notes, problems: r.problems, ...extra })
   const { autostartBlock, AUTOSTART_MISSING, ensureDaemonUp } = await import('../collector/install.mjs')
   const plan = await turnOnModel({ ...args, dryRun: true })
+  // nothing to turn on and nothing to set up (4.11 CM43): nothing is written and no daemon started, so the login entry is not this run's question
+  if (!plan.code && !plan.on.length && !flags.has('--dry-run') && !setupBlocked(plan).length) { const error = noFormError(plan); return done(receiptOf(plan, { undo: null, ...(error ? { error } : {}) }), plan.exit) }
   const unit = !parts.arch || !parts.arch.unit || !parts.arch.unit.userUnit ? null : parts.arch.unit.userUnit({ home, node: process.execPath, script: deps.script || process.argv[1], run: deps.exec || null, env, ...(deps.spawn ? { spawn: deps.spawn } : {}) })
   // 附录 C.2: a `--dry-run` goes as expected even when the real run would stop before writing — it exits 0, and what would stop it is `blocked`
   // (a Windows test machine 2026-10-18: with nothing installed it exited 1 with a top-level `code` and no `planned`)
@@ -97,7 +100,6 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
   const blockedSetup = setupBlocked(plan)
   if (flags.has('--dry-run')) return out(receiptOf({ ...plan, exit: 0 }, { dry_run: true, planned: plan.planned, ...(blockedSetup.length ? { blocked: blockedSetup } : {}) }), EXIT.ok)
   if (!plan.on.length && blockedSetup.length) return done(receiptOf(plan, { blocked: blockedSetup, error: setupError(blockedSetup) }), EXIT.incomplete) // nothing to turn on: no daemon started
-  if (!plan.on.length) return done(receiptOf(plan, { undo: null }), plan.exit) // the same, with no setup to do (4.11 CM43)
   if (fresh.length && !flags.has('--yes')) {
     if (json || !isInteractive(io)) { if (json) printJson(io, { ...receiptOf({ ...plan, exit: 2 }), ok: false, planned: plan.planned, needs_yes: true, notes: [NEEDS_YES] }); else io.err(NEEDS_YES); return EXIT.usage }
     if (!(await ask({ ...io, prompt: io.stdout }, 'Proceed?'))) { io.err('You said no: nothing was changed'); return EXIT.incomplete }

@@ -32,6 +32,7 @@ import { replaceDaemon, daemonCode, entryStartsThisCopy, CUT } from './replace-d
 import { runPlaceCli } from './place.mjs'
 import { PS_FILE_ARGS } from '../collector/arch/win32/custody.mjs'
 import { printJson } from './json.mjs'
+import { isProxyMode } from '../off/mode.mjs'
 
 const USAGE = usageLine(commandNamed('update'))
 const FLAGS = new Set(['--yes', '--dry-run', '--json'])
@@ -111,6 +112,8 @@ async function update({ io, env, home, platform, deps, flags }) {
   const pending = async () => readHandover(handover, fs, deps.harnessIds || (await (await import('../collector/harness/index.mjs')).loadHarnesses()).map((h) => h.name))
   const resume = async (waiting) => {
     if (waiting.dropped.length) r.notes.push(`${waiting.dropped.join(', ')}: this update's note names ${waiting.dropped.length > 1 ? 'agents' : 'an agent'} this trocar has no descriptor for, so capture is not switched on for ${waiting.dropped.length > 1 ? 'them' : 'it'}`)
+    const gone = await noFormHere(waiting.on, { platform, home, env, fs, deps })
+    if (gone.length) { waiting.on = waiting.on.filter((h) => !gone.includes(h)); r.notes.push(goneWords(gone)) }
     const to = codeId(root)
     r.from = waiting.from || r.from; r.to = to; r.harnesses = waiting.on // C.2: the receipt of the plan says what the finish does, --dry-run and a refused question included
     const replaced = (await daemonCode({ platform, dir, env, fs, deps })) !== to // as replaceDaemon judges it: a collector on this code is left running
@@ -374,8 +377,23 @@ function reasonOf(doc) {
   return (doc.error && typeof doc.error.message === 'string' && doc.error.message) || [...rows('problems'), ...rows('pending'), ...skipped, ...rows('notes')].map(text).find((x) => typeof x === 'string' && x) || null
 }
 
+/** 4.11 CM43: the ones of `ids` with no covered form on this machine. `on` refuses a harness that is not on, and step 1 has just switched it off, so turning it on
+ *  again would stop this update for good. Not known = none: `on` still judges each. */
+const noFormHere = async (ids, { platform, home, env, fs = nodeFs, deps }) => {
+  if (!ids.length || !isProxyMode(platform)) return []
+  try {
+    const harnesses = deps.harnesses || await (await import('../collector/harness/index.mjs')).loadHarnesses()
+    const here = await (deps.presentForms || (await import('../collector/net-deps.mjs')).presentForms)({ os: platform, home, env, harnesses, fs })
+    return ids.filter((h) => here[h] && !here[h].length)
+  } catch { return [] }
+}
+const goneWords = (gone) => `${gone.join(', ')}: no form trocar covers is on this machine any more, so capture is not switched on again for ${gone.length > 1 ? 'them' : 'it'}`
+
 /** Step 1 undone with the code that wrote it (§5.5): the harnesses it switched off are switched on again. */
-const reOn = (ids, ctx) => (ids.length ? step(ctx.deps.on || runOnCli, [...ids, '--yes', '--json'], ctx) : Promise.resolve({ exit: EXIT.ok, doc: null }))
+const reOn = async (ids, ctx) => {
+  const gone = await noFormHere(ids, ctx), left = ids.filter((h) => !gone.includes(h))
+  return left.length ? step(ctx.deps.on || runOnCli, [...left, '--yes', '--json'], ctx) : { exit: EXIT.ok, doc: null }
+}
 
 /** The version the code being updated TO says it is: `package.json` as the upstream has it (a commit that changes the version would make the
  *  old file's number a wrong promise). What cannot be read falls back to the version on disk — the commit in `to` is the fact either way. */

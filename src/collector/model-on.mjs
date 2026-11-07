@@ -53,7 +53,7 @@ export async function turnOnModel({ os, home, env = process.env, ids = null, har
   const wanted = ids || harnesses.map((d) => d.name).filter((h) => m.install.harnesses.includes(h)) // 4.11 §3 ㉓: this copy's table, in its order
   const refused = [], on = [], skipped = []
   // 4.11 CM43, 1.6 §3.3: no covered form on this machine, nothing to write and nothing to say "capturing" about. Named and not on: refused. On (the form went
-  // away after on; update turns those on again): it stays as it is, status judges it, off undoes it
+  // away after on): it stays as it is, status judges it, off undoes it. `update` asks first, and does not name one (update.mjs noFormHere)
   const stateNow = (() => { try { return readStateFile(path.join(dir, 'state.json'), { fs, installed: wanted, now: now() }).state } catch { return null } })()
   const named = scopeNamed(harnesses, os, ctx)
   const noFormWhy = (h) => { const n = named.find((x) => x.harness === h); return n ? `${n.what} is on this machine, and trocar does not cover it` : 'it is not on this machine; install it with its own installer, then run trocar install' }
@@ -72,7 +72,7 @@ export async function turnOnModel({ os, home, env = process.env, ids = null, har
   // what install left pending (the root store declined or not answered, the custody unreachable): on goes on — the forms the root cannot reach go through
   // their doors forwarding only (D51④) — and says each one, with the command, forward only (1.6 §1.1)
   const pending = (Array.isArray(m.install.pending) ? m.install.pending : []).map((p) => ({ harness: null, code: CODE.installPending, item: p.item, state: p.state, why: p.reason, command: INSTALL_HINT }))
-  const said = [...new Set([...skipped, ...named.map((x) => x.harness)])].filter((h) => !refused.some((x) => x.harness === h)).map((h) => ({ harness: h, code: CODE.harnessNote, text: `not captured: ${noFormWhy(h)}` }))
+  const said = [...new Set([...skipped, ...(ids ? [] : named.map((x) => x.harness))])].filter((h) => !refused.some((x) => x.harness === h)).map((h) => ({ harness: h, code: CODE.harnessNote, text: `not captured: ${noFormWhy(h)}` }))
   const out = { on, refused, routes: [], notes: [...pending, ...unsure, ...said], problems: [], doors: {}, planned: [], exit: 1 }
   if (!on.length) return { ...out, exit: refused.length || pending.length ? 1 : 0 } // nothing to turn on: nothing here failed unless one was refused or left pending
   const render = (tpl, { door, harness }) => { const d = byName.get(harness), p = (d.proxy || {}).env || []; return renderHook(tpl, { DOOR: door, PROXY_ENV: p, PROXY_NAMES: p, NO_PROXY_ENV: noProxyNames(d) }).text }

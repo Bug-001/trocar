@@ -176,7 +176,7 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   let here = null, hereError = null, programs = null
   if (isProxyMode(platform) && desc.value) {
     try { here = await (deps.presentForms || (await import('../collector/net-deps.mjs')).presentForms)({ os: platform, home, env, harnesses: desc.value, fs }) } catch (e) { rethrowSandbox(e); hereError = `which harnesses are on this machine could not be read (${errMessage(e)})` }
-    try { f.outOfScope = await (deps.outOfScopeForms || (await import('../collector/net-deps.mjs')).outOfScopeForms)({ os: platform, home, env, harnesses: desc.value, fs }) } catch (e) { rethrowSandbox(e); f.outOfScope = [] } // it only says more: not knowing it changes no verdict
+    if (daemonMayStart(m)) try { f.outOfScope = await (deps.outOfScopeForms || (await import('../collector/net-deps.mjs')).outOfScopeForms)({ os: platform, home, env, harnesses: desc.value, fs }) } catch (e) { rethrowSandbox(e); f.outOfScope = [] } // it only says more: not knowing it changes no verdict
     try { programs = await (deps.formPrograms || (await import('../collector/net-deps.mjs')).formPrograms)({ os: platform, home, env, harnesses: desc.value }) } catch (e) { rethrowSandbox(e); programs = null }
   }
   // a form a process can be on: of a host-program form only the host's own processes (its `hosts.processes`, D51 names); of a form carried by the

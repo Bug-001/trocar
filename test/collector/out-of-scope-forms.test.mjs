@@ -117,15 +117,30 @@ describe('CM43: trocar on, the command', { concurrency: 1 }, () => {
       const on = async (argv) => { const out = []; const io = { out: (s) => out.push(s), err: (s) => out.push(s), stdin: { isTTY: false }, stdout: { isTTY: false }, stderr: {} }; return { exit: await runOnCli(argv, { io, env: w.env, home: w.home, platform: os, deps }), text: out.join('\n') } }
       const all = await on(['--yes'])
       assert.equal(all.exit, 0, all.text)
-      assert.doesNotMatch(all.text, /Capturing|did not finish/, 'no word of capture, no failure')
       if (f.scopeWhat) assert.ok(all.text.includes(f.scopeWhat), `it says what is not captured: ${all.text}`)
       const j = JSON.parse((await on(['--yes', '--json'])).text)
-      assert.deepEqual([j.ok, j.harnesses, j.refused, j.undo], [true, [], [], null])
-      const one = await on([d.name, '--yes'])
+      assert.deepEqual([j.ok, j.harnesses, j.refused, j.undo, j.error ?? null], [true, [], [], null, null])
+      const one = await on([d.name, '--yes', '--json'])
       assert.equal(one.exit, 1, one.text)
-      assert.doesNotMatch(one.text, /Capturing/)
-      assert.ok(one.text.includes(`${d.name} was not turned on`), one.text)
+      const r = JSON.parse(one.text)
+      assert.deepEqual([r.ok, r.harnesses, r.refused.map((x) => x.harness), r.error.code], [false, [], [d.name], 'not-routed'])
       assert.deepEqual(outside(before, snapshot(w)), [], 'nothing written')
     })
   }
+})
+
+// An older record: a covered form was on the machine at install and is gone now, with only the out-of-scope app left. What that install wrote still comes out.
+describe('CM43: a record from before', { concurrency: 1 }, () => {
+  it('uninstall undoes what install wrote, the block in the user\'s own certificate file included', async () => {
+    const d = harnesses.find((x) => x.name === 'kimi-code'), f = d.proxyMode.forms.find((x) => x.scopeWhat), cli = d.proxyMode.forms.find((x) => x.id === 'kimi-code.cli')
+    const w = await world('win32', d, f)
+    w.place(placesOf(cli, w.ctx)[0])
+    const mine = path.join(w.home, 'certs', 'mine.pem')
+    await w.cmd.install()
+    assert.notEqual(fs.readFileSync(mine, 'utf8'), USER_PEM, 'install added its block')
+    fs.rmSync(path.join(w.home, '.kimi-code'), { recursive: true })
+    assert.deepEqual(formsHere(d.proxyMode, 'win32', w.ctx), [])
+    const un = await w.cmd.uninstall()
+    assert.equal(fs.readFileSync(mine, 'utf8'), USER_PEM, JSON.stringify(un.receipt.problems))
+  })
 })
