@@ -4,6 +4,8 @@
 //   entry = { kind: 'json-key', path, keys, value, semantic: 'append'|'replace' }   a key in a user file
 //         | { kind: 'text', path, format: 'dotenv-block', vars, semantic }   a sentinel block (text-edit.mjs)
 //         | { kind: 'text', path, format: 'line'|'yaml-list', line, after? }   one sentinel line / YAML row
+//         | { kind: 'text', path, format: 'pem-block' }   trocar's root as a marked block at the end of the user's own CA file
+//           (4.11 rule U: the descriptor names only a file the user owns; the plan adds the root, `pem`)
 //   file  = { path, certsFrom: string[], bundle? }   an trocar-owned trust file: the CERTIFICATE blocks of the user's
 //           CA files + the trocar CA, nothing else (never a private key, never a copy of a user file); `bundle: true`
 //           makes it a combined bundle (bundle.mjs: Node roots + OS roots first), the only file a replace-semantics
@@ -87,8 +89,10 @@ export function planTrust({ descriptors, ctxFor, caCertPem, collectorDir, roots 
         if (inLogin && !(e.format === 'line' && shimPathLine(collectorDir).test(e.line) && e.after)) {
           throw new Error(`${where}: a login-environment file only ever gets the launch-shim PATH line, placed after the agent installer's own (D37④)`)
         }
+      } else if (e.kind === 'text' && e.format === 'pem-block') {
+        if (inLogin || under(e.path)) throw new Error(`${where}: a certificate block goes only into the user's own CA file`)
       } else throw new Error(`${where}: unknown entry kind ${e.kind}${e.format ? ` / format ${e.format}` : ''}`)
-      entries.push({ harness: d.name, ...e })
+      entries.push({ harness: d.name, ...e, ...(e.format === 'pem-block' ? { pem: caCertPem } : {}) })
     }
     for (const o of out.owned || []) {
       const where = `${d.name}: ${o.path}`
