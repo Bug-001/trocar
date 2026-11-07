@@ -145,7 +145,7 @@ test('2.3 归约前沿 · D64②: step p95 within the line while the session gro
 
 // 2.3 读者优先: a redraw between a press and its release takes the pressed node away, and the browser then sends no click. A tick held
 // down while answers land still jumps there when let go: the step moved and the call's drawer opened (following alone opens nothing).
-test('2.3 读者优先: a tick held down while an answer lands moves the step when it is let go', { skip }, async () => {
+test('2.3 读者优先: a tick held down while an answer lands moves the step when it is let go, the focus on a button or not', { skip }, async () => {
   const w = world(12, { calls: 30000, page: 1500, files: 600, compact: 0.02 })
   await growingDesk(w, async (d) => {
     const { page, growth, grant, drawn, stepN, until } = d
@@ -155,6 +155,8 @@ test('2.3 读者优先: a tick held down while an answer lands moves the step wh
       await page.keyboard.press('Escape') // the last jump's drawer
       await until(() => !document.querySelector('#detail.open'), undefined, 'Escape did not close the drawer')
       const pt = await aimOlder(d, j), n0 = await stepN()
+      // from round 1 a button has the focus, so the press moves it: that element's blur is not the pointer coming up
+      if (j > 0) assert.ok(await page.evaluate(() => { const b = [...document.querySelectorAll('button')].find((x) => x.offsetParent && !x.closest('#rails')); b?.focus(); return !!b && document.activeElement === b }), 'a button took the focus')
       await page.mouse.move(pt.x, pt.y)
       await page.mouse.down()
       growth.more(1) // not waited for: a round already in flight waits for the release like its redraw, and the press is let go in time
