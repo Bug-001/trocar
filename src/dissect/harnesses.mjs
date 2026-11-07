@@ -28,7 +28,8 @@ const LEGACY_SESSION_KEYS = [H('x-claude-code-session-id'), H('x-session-id', 'm
 // src/dissect/project.mjs only. [] = this harness states none that is read.
 // main lane: a ` - Primary working directory:` list item in a system-role message; a subagent prompt: a bare line
 const CC_CWD = [{ in: 'system', re: /^[ \t]*(?:[-*][ \t]+)?(?:Primary working|Working) directory:[ \t]*([^\n]+)$/m }];
-const ROW = { ua: null, parentKeys: [], lane: [], compaction: [], requestKind: null, observerEffects: [], traffic: [], cwd: [] };
+const ROW = { ua: null, parentKeys: [], lane: [], compaction: [], requestKind: null, observerEffects: [], traffic: [], cwd: [], entry: [] };
+const DESKTOP = { is: 'desktop', re: /desktop/ }, CLI = { is: 'cli', re: /cli/ };
 const T = (host, cls, pathSource) => ({ host, class: cls, ...(pathSource ? { path: pathSource } : {}) });
 // 4.8 §5.6: injected trust changes the agent the same way in both modes; a legacy MITM / reverse-proxy capture still never carries one. `captures` scopes an
 // effect to the mode whose entry causes it: 'transparent' is Linux's driver mode, 'proxy' the door of macOS / Windows (D47) — what trocar writes differs (4.11)
@@ -37,6 +38,7 @@ const effect = (id, cause, what, captures = BOTH) => ({ id, captures, cause, wha
 
 const ROWS = [
   { ...ROW, id: 'cc', ua: /claude-cli|claude-code/,
+    entry: [DESKTOP, CLI],
     sessionKeys: [H('x-claude-code-session-id')], // gate G3: body metadata.user_id not added until verified
     // a background call (progress summary, suggestion) is aux even when it carries its subagent's agent-id (3.4)
     lane: [{ header: 'x-claude-code-request-class', equals: 'auxiliary', lane: 'aux' }, { header: 'x-claude-code-agent-id', lane: 'subagent', key: true }],
@@ -57,6 +59,7 @@ const ROWS = [
       T('downloads.claude.ai', 'files'),
     ] },
   { ...ROW, id: 'codex', ua: /codex/,
+    entry: [DESKTOP, { is: 'cli', re: /cli|exec/ }],
     sessionKeys: [H('session-id'), H('thread-id')], // over WebSocket these come from the upgrade request (4.6)
     parentKeys: [H('x-codex-parent-thread-id')],    // a THREAD id; resolved through aliases later (gate G4)
     lane: [{ header: 'x-openai-subagent', lane: 'subagent' }],
@@ -65,6 +68,7 @@ const ROWS = [
     observerEffects: [effect('codex-rustls-h2', 'SSL_CERT_FILE in $CODEX_HOME/.env',
       'model HTTP switched from native-tls to rustls; ALPN offers [h2, http/1.1]', LINUX)] }, // macOS / Windows trust the root in the store: no .env (4.11 codex forms)
   { ...ROW, id: 'opencode', ua: /opencode/,
+    entry: [DESKTOP],
     sessionKeys: [H('x-opencode-session-id'), H('session-id'), H('x-session-affinity'), H('x-session-id')],
     parentKeys: [H('x-opencode-parent-session-id')],
     cwd: [{ in: 'system', re: /^[ \t]*Working directory:[ \t]*([^\n]+)$/m }], // indented inside <env>
@@ -74,6 +78,7 @@ const ROWS = [
       effect('opencode-route-plugin', 'trocar route plugin',
         'trocar code runs inside the agent process; OpenCode 1.x\'s first run with a plugin adds one npm registry fetch of @opencode-ai/plugin', DOOR)] },
   { ...ROW, id: 'kimi',
+    entry: [CLI],
     cwd: [{ in: 'system', re: /urrent working directory is `([^`\n]+)`/ }],
     sessionKeys: [B(['prompt_cache_key']), B(['metadata', 'user_id'])],
     synth: true }, // without a body key → a synthesized key (src/dissect/synth-key.mjs, gate G11)
@@ -176,6 +181,15 @@ export function harnessOf(rec) {
   const ua = String(headerOf(rec, 'user-agent') || headerOf(rec, 'originator') || '').toLowerCase();
   if (ua) for (const row of UA_ORDER) if (row.ua.test(ua)) return { id: row.id, row: row.legacy ? null : row, inferred: true, agent: null };
   return { id: null, row: null, inferred: false, agent: null };
+}
+
+/** entrypointOf(rec) → 'cli' | 'desktop' | null: the first of its harness's `entry` rules (3.4) over `x-app` and the user agent. */
+export function entrypointOf(rec) {
+  const { row } = harnessOf(rec);
+  if (!row || !row.entry || !row.entry.length) return null;
+  const text = `${headerOf(rec, 'x-app') || ''} ${headerOf(rec, 'user-agent') || headerOf(rec, 'originator') || ''}`.toLowerCase();
+  const hit = row.entry.find((r) => r.re.test(text));
+  return hit ? hit.is : null;
 }
 
 // headersOnly: only the row's header keys are candidates — the sharder's rule (3.4:21, D35: it never reads a

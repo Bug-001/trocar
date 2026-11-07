@@ -29,7 +29,7 @@
 import nodeFs from 'node:fs';
 import path from 'node:path';
 import { parseSegment, recordId } from '../collector/core/record/segments.mjs';
-import { harnessOf, sessionKeyOf, headerOf } from '../dissect/harnesses.mjs';
+import { harnessOf, sessionKeyOf, headerOf, entrypointOf } from '../dissect/harnesses.mjs';
 import { synthFactsOf } from '../dissect/synth-key.mjs';
 import { isLogOnly } from '../dissect/capture-labels.mjs';
 import { expandRequestBody } from '../dissect/request-body.mjs';
@@ -44,7 +44,7 @@ import { rowTable, isRowTable, heapOf } from './row-table.mjs';
 
 const rawDir = (home = trocarHome()) => path.join(home, 'raw');
 export const indexDir = (home = trocarHome()) => path.join(home, 'index');
-const INDEX_V = 7;
+const INDEX_V = 9;
 const CHUNK = 1 << 20;
 /** How long a scan that was given `ease` holds the event loop at most, give or take a chunk or EASE_EVERY records (3.5 §行表先读). */
 const EASE_MS = 50, EASE_EVERY = 64;
@@ -67,12 +67,6 @@ const finite = (v) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v
 // What a session is made of, per record, so `sessions` never reads a record back (1.6 §4.1 速度目标 ≤ 1 s).
 // Each is a fact of THIS record; the grouping and the counting are the read side's (src/query/rows.mjs), and
 // the session key is the ONE table's answer (3.4, body keys included), not a header list of this file's own.
-const entrypointOf = (e) => {
-  const app = String(headerOf(e, 'x-app') || '').toLowerCase(), ua = String(headerOf(e, 'user-agent') || headerOf(e, 'originator') || '').toLowerCase();
-  if (app === 'desktop' || /desktop/.test(ua)) return 'desktop';
-  if (app === 'cli' || /cli|sdk-cli/.test(ua)) return 'cli';
-  return null;
-};
 
 // ── one line → one index record ───────────────────────────────────────────
 // A line that is not JSON can never be indexed (its bytes are still on disk and `raw cat` still prints
@@ -128,6 +122,12 @@ export function indexEntryOf(env, { segment, lineNo, storedBytes, offset = null 
     // keyless call that is its harness's compaction request → the ones it looks with. Space-joined strings ('' when none): a scalar row.
     kin_fp: synth && synth.fp ? synth.fp.join(' ') : null,
     kin_probe: synth && synth.probe ? synth.probe.join(' ') : null,
+    // a keyless call's message chain (3.4 合成键): its history's last cumulative hashes, space-joined ('' when it has none), and
+    // whether it carries its harness's compaction marker: hashes and a flag, never message text
+    kin_chain: synth && synth.chain ? synth.chain.join(' ') : null,
+    kin_items: synth && synth.items ? synth.items.join(' ') : null,
+    kin_late: synth && synth.late != null ? synth.late : null, // how many of kin_fp come from user texts after the first
+    kin_mark: !!(synth && synth.mark),
     offset,  // where this line starts in the plaintext segment, so one record is read by seek (null: sealed)
   };
 }
@@ -205,9 +205,9 @@ async function scanSealed(fs, file, segment, problems, ease = null) {
   } finally { sf.close(); }
 }
 
-// ── the index document: append-only NDJSON (INDEX_V 7; 4.2 §段索引) ────────
+// ── the index document: append-only NDJSON (INDEX_V 8; 4.2 §段索引) ────────
 // One file per segment, one line per fact: an entry (a record, bare), a problem (`{"p":…}`), or a mark
-// (`{"m":…,"v":7}` = "the index covers this segment up to m.end"). A pass APPENDS its new entries and problems and
+// (`{"m":…,"v":8}` = "the index covers this segment up to m.end"). A pass APPENDS its new entries and problems and
 // then one mark; a reader takes everything up to the LAST complete mark and ignores what follows it (a torn batch).
 // That is what makes keeping the index current cost the NEW records, never the whole segment: the whole-document
 // format this replaces (v3) rewrote ≈ e·N²/2 bytes per segment, and real traffic gives nearly every record a pass of
