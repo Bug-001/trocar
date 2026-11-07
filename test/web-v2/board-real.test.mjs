@@ -133,6 +133,7 @@ test('1.2 #21 · T1: the session head is its parts only; M = the main lane\'s ro
   let mains = 0
   for (const [k, g] of picks.entries()) {
     const r = await w.read(g), where = `session ${k + 1}`
+    if (!r.anchor) continue // no lane to stand on (only token counts): no session head to read
     const m = sessionHeadModel(stateOf(r, w.pricing))
     assert.deepEqual(new Set(Object.keys(m)), new Set(HEAD_PARTS), `${where}: the head's parts`)
     const info = m.info(), by = Object.fromEntries(info.map((x) => [x.key, x]))
