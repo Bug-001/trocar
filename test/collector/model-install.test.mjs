@@ -8,6 +8,7 @@ import path from 'node:path'
 import tls from 'node:tls'
 import { modelWorld, sharedCertFileWorld } from '../helpers/model-world.mjs'
 import { planInstall, ruleUFiles } from '../../src/collector/model-install.mjs'
+import { BLOCK_OPEN, BLOCK_END } from '../../src/off/text-edit.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { readManifest } from '../../src/off/manifest.mjs'
 import { codeId } from '../../src/version.mjs'
@@ -381,6 +382,22 @@ for (const [at, seed] of [['none', null], ['ours', '// trocar collector: an earl
 
 // 4.11 P4 (macOS / Windows): the plug-in file install would place where a file that is not trocar's already is — the plan lists that carrier as skipped,
 // the run leaves the file byte for byte and unrecorded, its carrier row says not-trocars-file, and flows/ has the failure line (D38); exit 1
+// 1.6 §3.2 / §1.4 (macOS / Windows): the plan says what the run does — a loader file holding trocar's marked text that no record lists skips
+// that carrier in the plan, with marked-without-record and the file, as the run skips it
+for (const os of ['darwin', 'win32']) {
+  test(`1.6 §3.2 · ${os}: the plan skips a carrier whose loader holds marked text no record lists, as the run does`, async () => {
+    const w = await modelWorld({ os, commands: ['dsh'] })
+    const loader = planInstall({ os, harnesses: w.harnesses, ctx: w.ctx, home: w.home, owns: w.owns, hookFile }).find((r) => r.carrier === 'plugin' && r.loader)
+    assert.ok(loader && loader.paths[0])
+    const file = loader.paths[0]
+    fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, `${BLOCK_OPEN}\n- insert: []\n${BLOCK_END}\n`)
+    const rows = planInstall({ os, harnesses: w.harnesses, ctx: w.ctx, home: w.home, owns: w.owns, hookFile }).filter((r) => r.harness === loader.harness && r.carrier === 'plugin')
+    assert.deepEqual([...new Set(rows.map((r) => JSON.stringify([r.state, r.code, r.paths[0]])))], [JSON.stringify(['skipped', 'marked-without-record', file])])
+    const r = await w.install({ wrapperKit: { renderWrapper } })
+    assert.ok(r.carriers.some((c) => c.harness === loader.harness && c.state === 'skipped' && c.code === 'marked-without-record'), JSON.stringify(r.carriers))
+  })
+}
+
 for (const os of ['darwin', 'win32']) {
   test(`4.11 P4 · ${os}: a plug-in file that is not trocar's is skipped in the plan and the run, and on record`, async () => {
     const w = await modelWorld({ os, commands: ['dsh'] })
