@@ -2,7 +2,8 @@
 // Its board path folds lanes into a tree (fold: 'tree'); the parts of that path that must stay in src/view
 // (the multi-lane analyzer) are looked up there by `fold`, so this row carries only leaf-safe data and hooks.
 // Leaf module.
-import { CC_SECTIONS, resourceRef } from './cc.mjs';
+import { CC_SECTIONS, resourceRef, replyEnd } from './cc.mjs';
+import { respOf } from './record-fields.mjs';
 import { CC_THREADS } from './cc-threads.mjs';
 import { streamParts } from './sse-spans.mjs';
 
@@ -30,4 +31,5 @@ export const ANTHROPIC = Object.freeze({
   tsOf: (x) => (x.facts || {}).ts_request, // a call row's own ts on this wire
   usageOf: (x) => x.facts && x.facts.usage, // the provider usage a call row carries
   spawns: true, monitors: true, // its lanes have sub-agent spawns and a security monitor
+  ended: (norm, rec) => replyEnd(respOf(rec)), // the reply's own terminal (3.1 `ended`), read from the stored reply: this row has no normResp
 });

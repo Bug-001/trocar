@@ -131,14 +131,17 @@ export function bodyUnparsedOf(rec) {
 // The other incompleteness labels (4.6 §记录 「不完整的标注,各说一件事」), one per thing that happened, from
 // envelope fields only. None of them changes context_state (3.1): they say which BYTES of this record are
 // not all there, or not decoded; the request-body labels above stay with reqIncompleteOf, so nothing is
-// shown twice. → [{ id, label, text }]
-export function captureLabelsOf(rec) {
+// shown twice. `closed`: the record is a reply the agent closed after its own success terminal (registry.mjs closedAfterEnd), whole,
+// so it says that instead of resp-partial. → [{ id, label, text }]
+export function captureLabelsOf(rec, closed = false) {
   const out = [];
   if (!rec) return out;
   const r = rec.resp || rec.response || {};
   if (r.truncated === true) out.push({ id: 'resp-truncated', label: 'Reply cut at the capture cap',
     text: `the reply was cut at the capture cap: only its first ${Number(r.body_bytes) || 0} bytes are stored` });
-  if (r.kind === 'error' && r.partial) out.push({ id: 'resp-partial', label: 'Reply never finished',
+  if (closed) out.push({ id: 'resp-closed-early', label: 'Agent closed the connection after the reply',
+    text: 'the reply arrived whole, up to its own last event; the agent then closed the connection before the server ended the exchange' });
+  else if (r.kind === 'error' && r.partial) out.push({ id: 'resp-partial', label: 'Reply never finished',
     text: 'the response stopped before it finished; what arrived is kept under resp.partial' });
   if (r.encoding_error) out.push({ id: 'resp-undecoded', label: 'Reply not decoded',
     text: `the reply could not be decoded (${r.encoding_error}); its bytes are kept as base64 in the record, so no reply text is shown` });
