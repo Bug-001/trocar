@@ -584,14 +584,16 @@ export async function statusRun(argv, { io, env = process.env, home = nodeOs.hom
   const c = colors(io) // zero ANSI bytes when stdout is not a TTY or NO_COLOR is set (src/cli/text.mjs)
   const now = (deps.ms || Date.now)()
   const detail = named.ids || []
+  // HOME paths as ~ in every string BEFORE the text is laid out, so a line wraps at the width it is printed with (1.6 §1.1⑤⑥); the JSON keeps them whole
+  const tildeAll = (x) => (typeof x === 'string' ? tildeText(x, home) : Array.isArray(x) ? x.map(tildeAll) : x && typeof x === 'object' ? Object.fromEntries(Object.entries(x).map(([k, v]) => [k, tildeAll(v)])) : x)
   if (detail.length) {
-    const found = findingsFor(f, detail)
+    const found = tildeAll(findingsFor(f, detail)), shown = tildeAll(doc)
     detail.forEach((h, i) => {
       if (i) io.out('')
       const finding = found.find((x) => x.harness === h && x.class !== 'note') || null
-      for (const l of statusDetail(doc, h, { finding, now, colors: c })) io.out(tildeText(l, home)) // HOME paths as ~ (1.6 §1.1⑤)
+      for (const l of statusDetail(shown, h, { finding, now, colors: c })) io.out(l)
     })
-  } else for (const l of statusSummary(doc, { now, colors: c })) io.out(tildeText(l, home))
+  } else for (const l of statusSummary(tildeAll(doc), { now, colors: c })) io.out(l)
   if (failures) { io.out(''); for (const l of failuresBlock(doc.failures, effectiveHealth(f).health, { now })) io.out(l) }
   return { exit, f }
 }
