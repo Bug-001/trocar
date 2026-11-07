@@ -242,7 +242,8 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
   const root = deps.root || packageRoot()
   const stale = unit ? await staleDaemon({ platform, home, env, fs, deps, root }) : null // 1.6 §3.2 step 5, as on macOS / Windows
   const pathItem = await pathPlan({ root, home, env, platform, fs })
-  const daemonItem = [...staleItem(stale, root), ...(pathItem ? [pathItem] : [])]
+  const maskItem = unit && unit.masked && unit.masked() ? [{ what: 'autostart', path: unit.path, detail: `${tilde(unit.path, home)}: your unit is masked (a link to /dev/null), and trocar replaces it with its own` }] : []
+  const daemonItem = [...maskItem, ...staleItem(stale, root), ...(pathItem ? [pathItem] : [])]
   const planned = [...planItems({ ...plan, standalone: due }, { home, platform }), ...daemonItem]
   say([formatPlan({ ...plan, standalone: due }, { home, platform, command: 'install' }), ...pairs(daemonItem.map((p) => [p.what, p.detail]), { home }), ...wrap(COST), ...(stale ? wrap(CUT) : [])].join('\n'))
   if (flags.has('--dry-run')) { if (json) printJson(io, { ...newReceipt('install'), dry_run: true, planned, harnesses: plan.targets, changed: plan.changed, created: [...due, ...plan.created] }); return EXIT.ok }

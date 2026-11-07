@@ -60,6 +60,8 @@ export function userUnit({ home, node, script, run = null, env = process.env, sp
   const startDirect = (carry) => startDaemonDirect({ home, env, carry, command: program[0], argv: [...program.slice(1), 'daemon'], spawn, fs: nodeFs })
   return {
     name: UNIT_NAME, path: unitPath(home), links: [wantsLink(home)],
+    // a mask of this unit is the file replaced by a link to /dev/null: `systemctl --user mask` refuses while trocar's file is there, so it was made by hand
+    masked: () => { try { return nodeFs.readlinkSync(unitPath(home)) === '/dev/null' } catch { return false } },
     text: (e) => unitText({ program, env: e, logs: daemonLogPaths(home) }),
     // D46: the daemon's log files, made at unit-write time and listed in the manifest (install calls these); never rewritten by a later on
     logFiles: () => { const { out, err } = daemonLogPaths(home); return [{ path: out }, { path: err }] },
@@ -78,8 +80,7 @@ export function userUnit({ home, node, script, run = null, env = process.env, sp
       const r = sc(['is-enabled', UNIT_NAME])
       if (r.code === 0 && r.out !== 'enabled-runtime') return { state: 'present' }
       if (r.code === null || !r.out) return { state: 'unknown', err: `${r.code === null ? 'systemctl did not run' : 'no systemd --user answered'}: ${r.err || 'no reason given'}` }
-      // masked is someone's deliberate no, and `enable` refuses it: trocar names the way out and does not take it
-      return { state: r.out === 'not-found' ? 'absent' : 'disabled', ...(r.out.startsWith('masked') ? { how: 'masked', first: `systemctl --user unmask ${UNIT_NAME}` } : {}) }
+      return { state: r.out === 'not-found' ? 'absent' : 'disabled', ...(r.out === 'masked' ? { how: 'masked' } : {}) } // masked: install replaces the link, and says so
     },
     start: (carry = null) => startDirect(carry),
     reload: () => sc(['daemon-reload']),

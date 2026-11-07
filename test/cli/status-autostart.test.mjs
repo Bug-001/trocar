@@ -22,15 +22,16 @@ const CASES = [
   [{ state: 'unknown', err: 'no systemd --user answered: Failed to connect to bus' }, { code: null, command: 'trocar install' }, 3],
 ]
 
-test('D61: a masked unit: the way out is named, before trocar install, in the document, the Login line and on\'s words', async () => {
+test('D61: a masked unit: one way out, trocar install, which says it replaces the mask', async () => {
   const s = await installedHome()
-  const q = { state: 'disabled', how: 'masked', first: 'systemctl --user unmask trocar-collector.service' }
+  const q = { state: 'disabled', how: 'masked' }
   const r = await runStatus(s, ['--json'], { request: asDaemon(reply()), deps: { unit: unitAnswering(q) } })
   const a = r.io.json().autostart
-  assert.deepEqual([a.state, a.code, a.first, a.command], ['disabled', 'autostart-missing', q.first, 'trocar install'])
-  assert.ok(a.reason.includes(q.first), a.reason)
-  assert.ok(entryState('linux', null, q).includes(q.first), 'on and install say it the same way')
-  assert.equal(entryState('linux', null, { state: 'disabled' }).includes('unmask'), false)
+  assert.deepEqual([a.state, a.code, a.command, 'first' in a], ['disabled', 'autostart-missing', 'trocar install', false])
+  assert.match(a.reason, /masked/)
+  assert.doesNotMatch(a.reason, /unmask/)
+  assert.match(entryState('linux', null, q), /masked/)
+  assert.doesNotMatch(entryState('linux', null, { state: 'disabled' }), /masked/)
 })
 
 test('D61: status --json says the login entry as registered() answers it; absent / disabled are a problem fixed by trocar install, unknown keeps its reason', async () => {

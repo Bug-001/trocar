@@ -481,7 +481,7 @@ function boardOf(f) {
 }
 
 /** C.3 `autostart` (D61): the login entry as registered() answered; null when trocar is not installed or the platform has no autostart unit. */
-const autostartOf = (f) => { const a = f.autostart; if (!a) return null; return { entry: a.entry, state: a.state, code: a.code || null, command: a.state === 'present' ? null : 'trocar install', ...(a.first ? { first: a.first } : {}), reason: a.reason } }
+const autostartOf = (f) => { const a = f.autostart; if (!a) return null; return { entry: a.entry, state: a.state, code: a.code || null, command: a.state === 'present' ? null : 'trocar install', reason: a.reason } }
 
 /** C.3 `harnesses[h].setup` (4.11 P4b, D65④): the model's one judgement, read with the forms; driver mode (Linux) does not judge it, and what was not read is
  *  `unknown` with its reason, never `ready` (D38). */

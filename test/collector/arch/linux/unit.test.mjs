@@ -60,13 +60,9 @@ test('unit: registered() reads is-enabled — enabled, not-found, switched off, 
   assert.equal(answering(4, 'not-found\n').state, 'absent')
   for (const off of ['disabled', 'masked', 'linked']) assert.equal(answering(1, `${off}\n`).state, 'disabled', `${off}: the file is there, the entry is off`)
   assert.equal(answering(0, 'enabled-runtime\n').state, 'disabled', 'enabled only until the next boot: not the login entry')
-  // masked is someone's deliberate no: trocar names the way out and does not take it, because `enable` refuses a masked unit
-  for (const masked of ['masked', 'masked-runtime']) {
-    const q = answering(1, `${masked}\n`)
-    assert.equal(q.state, 'disabled')
-    assert.match(q.first, /^systemctl --user unmask trocar-collector\.service$/)
-  }
-  for (const off of ['disabled', 'linked']) assert.equal(answering(1, `${off}\n`).first, undefined, `${off}: enable is enough`)
+  // the one way out is `trocar install`, which replaces the link: nothing to run first
+  assert.equal(answering(1, 'masked\n').how, 'masked')
+  for (const off of ['disabled', 'linked']) assert.equal(answering(1, `${off}\n`).how, undefined, off)
   const noBus = answering(1, '', 'Failed to connect to bus: No such file or directory\n')
   assert.equal(noBus.state, 'unknown', 'no manager answered: nothing was asked')
   assert.match(noBus.err, /Failed to connect to bus/, 'with systemctl\'s own reason')

@@ -36,6 +36,10 @@ import { OFF_VERSION, installComplete } from '../off/manifest.mjs'
 import { writeStandalone, standaloneDue } from '../off/standalone.mjs'
 import { codeId, setupHelperCommand } from '../version.mjs'
 
+// an entry under trocar's name: replaced, never silently (1.6 §3.5 Login)
+const isMasked = (unit) => !!(unit && unit.masked && unit.masked())
+const MASKED_NOTE = 'your unit was masked (a link to /dev/null); trocar replaces it with its own, so the collector starts at login again'
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const listDir = (d) => { try { return fs.readdirSync(d) } catch { return [] } }
 
@@ -182,6 +186,7 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
   const draft = planTrust({ descriptors: descs, ctxFor, caCertPem: null, collectorDir: dir, roots: R })
   const daemon = unit ? daemonEnv(env, dir) : null
   if (daemon && daemon.note) draft.notes.push(daemon.note)
+  if (isMasked(unit)) draft.notes.push(MASKED_NOTE)
 
   // per item: written, intact, resumed, or changed by the user since (R9)
   const steps = []
@@ -204,7 +209,7 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
     return j
   })
   const unitJ = unit ? judgeOwned({ manifest: prior, file: unit.path, planned: sha256(Buffer.from(unit.text(daemon.env))), fs }) : null
-  if (unitJ && unitJ.action === 'write' && fs.existsSync(unit.path)) throw new Error(`${unit.path} already exists; trocar will not write over it (left by an earlier install whose manifest is gone? remove it, then install again)`) // before anything is written (review 4 #7)
+  if (unitJ && unitJ.action === 'write' && fs.existsSync(unit.path) && !isMasked(unit)) throw new Error(`${unit.path} already exists; trocar will not write over it (left by an earlier install whose manifest is gone? remove it, then install again)`) // before anything is written (review 4 #7)
   if (unitJ) steps.push({ harness: null, path: unit.path, kind: 'unit', action: unitJ.action, ...(unitJ.why ? { why: unitJ.why } : {}) })
 
   // who is on, and who has nothing to do here (no entry, no file, not installed before): said, with the descriptor's own reason
@@ -296,6 +301,7 @@ async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePo
   if (m.engine_port == null) m.engine_port = await freePort()
   const final = planTrust({ descriptors: descs, ctxFor, caCertPem: certPem, collectorDir: dir, roots: R })
   if (daemon && daemon.note) { final.notes.push(daemon.note); final.records.push({ code: CODE.unitEnvNotCarried, reason: daemon.note }) }
+  if (isMasked(unit)) final.notes.push(MASKED_NOTE)
   if (JSON.stringify(final.paths) !== JSON.stringify(draft.paths)) throw new Error(`the files to change moved while installing (${draft.paths.join(', ')} → ${final.paths.join(', ')}); only the CA was written; run "trocar uninstall", then "trocar on"`)
   m.planned = final.paths
   // what `off` needs to judge, from this manifest alone, which live process may hold what trocar wrote for a harness (4.6 撤销顺序): written before any user
@@ -343,6 +349,7 @@ async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePo
   if (unit) {
     const text = unit.text(daemon.env)
     const j = judgeOwned({ manifest: m, file: unit.path, planned: sha256(Buffer.from(text)), fs })
+    if (isMasked(unit)) fs.rmSync(unit.path) // the link, not what it points at
     if (j.action !== 'skip-intact') { guard(); writeOwnedFile({ dir, manifest: m, role: 'unit', phase: 'install', file: unit.path, data: text, mode: 0o644, exclusive: j.action === 'write', now: now(), fs }); written.unit = j.action }
     // D46: the daemon's own log sinks the unit names — directory 0700, two files 0600, made here at unit-write time and listed in the manifest like
     // every file trocar owns; NEVER rewritten afterwards (a later on only lists what the manifest does not know yet, so no log line is ever truncated)
