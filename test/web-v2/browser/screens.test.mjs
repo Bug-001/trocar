@@ -3,7 +3,7 @@
 // relaxed, D64⑥). Shots: every screen × 1280 / 1024 × light / dark. Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard, stats, shoot, layoutFaults, timed, timerReads } from './harness.mjs'
+import { probe, withBoard, stats, shoot, layoutFaults, timed, timerReads, stepKey } from './harness.mjs'
 import { typeFaults } from './type-inventory.mjs'
 import { BOARD_LINES } from '../perf-lines.mjs'
 import { COMMANDS } from '../../../web/legacy/labels/capture.mjs'
@@ -77,7 +77,7 @@ async function driveEveryScreen(b, { width, theme }) {
       const [n, m] = await pos()
       if (n === 1) dir = 1
       if (n === m) dir = -1
-      const prev = await page.textContent('#stepbar .sb-no')
+      const prev = await stepKey(page)
       const act = by === 'click'
         ? () => page.click(`#stepbar .sbbtn[data-step="${dir < 0 ? 'prev' : 'next'}"]`)
         : () => page.keyboard.press(dir < 0 ? 'ArrowLeft' : 'ArrowRight')

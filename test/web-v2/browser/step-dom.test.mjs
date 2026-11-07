@@ -9,7 +9,7 @@
 // `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard, serveWorld, gapInPage, windowGap } from './harness.mjs'
+import { probe, withBoard, serveWorld, gapInPage, windowGap, stepKey } from './harness.mjs'
 import { world } from '../desk-world.mjs'
 
 const gate = await probe()
@@ -187,12 +187,12 @@ test('2.3 #28: the rendered window holds only the items within one window height
     const mid = await atRest()
     // the first frame after each press
     await page.evaluate(`window.__gaps = []; addEventListener('keydown', () => requestAnimationFrame(() => window.__gaps.push((${gapInPage})())), true)`)
-    const no = () => page.evaluate(() => document.querySelector('#stepbar .sb-no')?.textContent)
+    const no = () => stepKey(page)
     const presses = [...Array(10).fill('ArrowLeft'), ...Array(10).fill('ArrowRight')]
     for (const key of presses) {
       const was = await no()
       await page.keyboard.press(key)
-      await page.waitForFunction((was) => document.querySelector('#stepbar .sb-no')?.textContent !== was, was, { timeout: 10000, polling: 'raf' })
+      await page.waitForFunction((was) => { const x = window.__stepNo(); return (x ? `${x.n}/${x.m}` : null) !== was }, was, { timeout: 10000, polling: 'raf' })
       await page.waitForTimeout(100)
     }
     const first = await page.evaluate(() => window.__gaps)

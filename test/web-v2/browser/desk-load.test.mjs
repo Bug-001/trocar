@@ -179,7 +179,7 @@ test('2.3 #32: a rest of 100 ms reads the step\'s own bodies, then the reply bod
     // (2) each of the 17 steps, reached by ←/→ and rested on ≥ 150 ms, shows its open reply part with its bytes, no placeholder
     const t1 = Date.now()
     const at = async (n) => {
-      assert.match(await page.textContent('#stepbar .sb-no'), new RegExp(`(^|\\D)${n}\\s*/`), `on step ${n}`)
+      assert.equal(await page.evaluate(() => window.__stepNo()?.n), n, `on step ${n}`)
       const reply = await page.evaluate(() => { const r = document.querySelector('#ctxwin .cwreply'); return r && { waiting: r.querySelectorAll('pre[data-ref]').length, text: r.textContent } })
       const refs = replyRefs.get(rids[n - 1])
       if (!refs.length || failed.has(rids[n - 1])) return

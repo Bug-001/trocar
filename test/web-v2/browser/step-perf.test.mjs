@@ -3,7 +3,7 @@
 // D64⑥: acceptance numbers come from the test machines, not this one). Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard, serveWorld, stats, timed, timerReads } from './harness.mjs'
+import { probe, withBoard, serveWorld, stats, timed, timerReads, stepKey } from './harness.mjs'
 import { world } from '../desk-world.mjs'
 import { INTERVAL } from '../../../web/legacy/core/poll.mjs'
 import { BOARD_LINES } from '../perf-lines.mjs'
@@ -35,7 +35,7 @@ async function stepOnce(page, by, bounce) {
   if (m === 1) return null
   if (n === 1) bounce.dir = 1
   if (n === m) bounce.dir = -1
-  const prev = await page.textContent('#stepbar .sb-no')
+  const prev = await stepKey(page)
   const act = by === 'click'
     ? () => page.click(`#stepbar .sbbtn[data-step="${bounce.dir < 0 ? 'prev' : 'next'}"]`)
     : () => page.keyboard.press(bounce.dir < 0 ? 'ArrowLeft' : 'ArrowRight')
@@ -144,7 +144,7 @@ test('2.3 #43 · D64②: ←/→ onto a step whose reply is 20,000 characters of
     const go = async (key, n) => {
       await page.waitForTimeout(150) // the rest
       await page.waitForLoadState('networkidle')
-      const prev = await page.textContent('#stepbar .sb-no'), press = () => page.keyboard.press(key)
+      const prev = await stepKey(page), press = () => page.keyboard.press(key)
       if (word.has(n)) samples.longReply.push(await timed(page, 'reply', [prev, word.get(n)], press))
       else await timed(page, 'step', prev, press)
     }

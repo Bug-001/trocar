@@ -154,6 +154,8 @@ export async function withBoard({ bytes, home, base, idleMs, token = true, width
   return { url: face ? face.base : ext.origin, get, face, page, stop, requests, errors, missing }
 }
 
+// the step head's place as 'n/m' from its data attributes (window.__stepNo), for timed()'s 'step' / 'reply' conds: they wait for it to change
+export const stepKey = (page) => page.evaluate(() => { const x = window.__stepNo(); return x ? `${x.n}/${x.m}` : null })
 export const mark = (page, name) => page.evaluate((n) => { performance.mark(n) }, name)
 /** ms from `startMark` to now, recorded as measure `name`. */
 export const measure = (page, name, startMark) => page.evaluate(([n, s]) => performance.measure(n, s).duration, [name, startMark])
@@ -201,13 +203,14 @@ export async function timed(page, cond, arg, act) {
   return page.evaluate(`(${([cond, a], gapOf) => new Promise((resolve, reject) => {
     const q = (s) => document.querySelector(s)
     const filled = () => { const g = gapOf(); return g.gap <= g.pitch }
+    const key = () => { const x = window.__stepNo(); return x ? `${x.n}/${x.m}` : null }
     const holds = {
       replay: () => location.hash.startsWith('#/replay/') && !!q('#stepbar .sb-no') && !!q('#ctxwin') && !q('#ctxwin .cwload'),
-      step: () => !!q('#stepbar .sb-no') && q('#stepbar .sb-no').textContent !== a && !q('#ctxwin .cwload') && filled(),
+      step: () => !!q('#stepbar .sb-no') && key() !== a && !q('#ctxwin .cwload') && filled(),
       n: () => !!q('#stepbar .sb-no') && +q('#stepbar .sb-no').dataset.n !== a && !q('#ctxwin .cwload') && filled(),
       sel: () => !!q(a),
       // a step's reply wholly drawn: the step head moved (a[0], as 'step'), the visible box is filled, and a table of the reply holds a[1]
-      reply: () => !!q('#stepbar .sb-no') && q('#stepbar .sb-no').textContent !== a[0] && !q('#ctxwin .cwload') && filled()
+      reply: () => !!q('#stepbar .sb-no') && key() !== a[0] && !q('#ctxwin .cwload') && filled()
         && [...document.querySelectorAll('#ctxwin .cwreply .md-table')].some((t) => t.textContent.includes(a[1])),
     }[cond]
     const t0 = performance.now()
