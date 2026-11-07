@@ -78,7 +78,7 @@ export const FAILURE_WORDS = Object.freeze({
   'negative-cache/upstream-handshake': "a host refused trocar's handshake (it likely wants a client certificate), so trocar passes the program's traffic to it on unread",
   'trust-rejected': "a program refused trocar's certificate under TLS, so that host is not captured",
   'client-rejected-leaf': "a connection whose program refused trocar's certificate",
-  'client-closed-no-data': 'a connection its program closed before sending anything, while trocar was slow or after the program had already accepted its certificate',
+  'client-closed-no-data': 'a connection its program closed before sending anything, while trocar was slow',
   'upstream-slow': 'the upstream was slow',
   'leaf-error': 'a certificate could not be issued',
   'framer-error': 'a request could not be parsed',
@@ -101,6 +101,7 @@ export const FAILURE_WORDS = Object.freeze({
   'upstream-unavailable': 'the upstream could not be dialled',
   // a connection row forwarded by design (4.6 §记录「连接行」的预期类; `where` is the row's 'flow'): the reason when the reason decided the class, else not_captured
   'flow/not-an-agent': 'connections of programs that are not agents, passed on unread',
+  'flow/trusted-before': "connections a program closed unused, after it had already accepted trocar's certificate",
   'flow/agent-helper': "connections of an agent's helper programs, passed on unread",
   'flow/harness-off': 'connections of agents that are turned off, passed on unread',
   'flow/group-off': 'connections of agents still running after off, passed on unread',

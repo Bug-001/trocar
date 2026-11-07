@@ -6,7 +6,7 @@
 //     closed or reset with zero application data before or within the rejection window after our handshake; accepted = its
 //     first byte of data (used), or still open when the window elapsed (counted then, not at close). An unused connection can
 //     still be closed inside the window (Go drops an extra dial at once when its idle pool is full), so only `threshold`
-//     consecutive rejections (default 2) make the key negative; an acceptance resets the count.
+//     consecutive rejections (default 2; TRUSTED_THRESHOLD on a key that has sent data) make the key negative; an acceptance resets the count.
 //   mark — a single decisive answer (the upstream's certificate did not verify, a certificate alert): negative at once.
 // Lifetime: entries live in memory only. Each carries retry_at = at + min(base · 2^renewals, max); renewals = how many times this
 // key was made negative before. base / max are NEG_BACKOFF's row for what a retry costs (4.6 §引擎 5): `free` when trocar steps aside
@@ -23,15 +23,19 @@ const whoOf = (meta) => String(meta.negKey ?? meta.pid)
 export const negKey = (meta, host) => `${whoOf(meta)}|${host}`
 export const NEG_BACKOFF = Object.freeze({ free: Object.freeze({ base: 30_000, max: 300_000 }), costly: Object.freeze({ base: 600_000, max: 3_600_000 }) })
 
+// A key that has sent application data takes this many in a row (4.6 §引擎 5): a process exit closes its idle connections in one instant
+export const TRUSTED_THRESHOLD = 5
+
 export function createNegativeCache({ threshold = 2, now = () => Date.now(), backoff = NEG_BACKOFF, trustedMax = 4096 } = {}) {
   const strikes = new Map()   // key → {negKey, n}: consecutive rejections so far
   const negative = new Map()  // key → entry (see add)
   const history = new Map()   // key → {negKey, n}: how many times the key was made negative; outlives expiry
   const trusted = new Map()   // key → who, insertion order, at most trustedMax
+  const need = (key) => (trusted.has(key) ? TRUSTED_THRESHOLD : threshold)
   const live = (key) => {
     const e = negative.get(key)
     if (!e || now() < e.retry_at) return e ?? null
-    negative.delete(key); strikes.set(key, { negKey: e.negKey, n: threshold - 1 })
+    negative.delete(key); strikes.set(key, { negKey: e.negKey, n: need(key) - 1 })
     return null
   }
   const add = (key, cause, meta, host, rejections, alert = null, free = false) => {
@@ -66,7 +70,7 @@ export function createNegativeCache({ threshold = 2, now = () => Date.now(), bac
       if (live(key)) return false
       const n = (strikes.get(key)?.n || 0) + 1
       strikes.set(key, { negKey: whoOf(meta), n })
-      return n >= threshold && add(key, 'client-rejected-leaf', meta, host, n)
+      return n >= need(key) && add(key, 'client-rejected-leaf', meta, host, n)
     },
     /** mark(key, {cause, meta, host, alert, free}) → true when the key was not negative before. free = a retry costs the agent nothing. */
     mark(key, { cause, meta, host, alert = null, free = false }) {

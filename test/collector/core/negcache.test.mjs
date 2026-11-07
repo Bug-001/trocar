@@ -1,7 +1,7 @@
 // negcache.test.mjs — the (pid, host) negative cache (RFC 4.6 §引擎 5 负缓存, D37).
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createNegativeCache, negKey, NEG_BACKOFF } from '../../../src/collector/core/engine/negcache.mjs'
+import { createNegativeCache, negKey, NEG_BACKOFF, TRUSTED_THRESHOLD } from '../../../src/collector/core/engine/negcache.mjs'
 
 test('negative cache: CONSECUTIVE leaf rejections per (pid, host), a used connection resets the count; an upstream-cert failure is negative at once', () => {
   const n = createNegativeCache({ now: () => 42 })
@@ -105,7 +105,8 @@ test('W22d negative cache: application data after a renewal clears the history a
   assert.equal(n.trusts(k), false)
   n.observe(k, { rejected: false, used: true, meta, host })
   assert.equal(n.trusts(k), true); assert.equal(n.trusts(negKey(meta, 'other.test')), false); assert.equal(n.trusts(negKey({ pid: 10 }, host)), false)
-  reject(n); assert.equal(reject(n), true, 'the strikes were cleared: two rejections again')
+  for (let i = 1; i < TRUSTED_THRESHOLD; i++) assert.equal(reject(n), false, 'a key that sent data takes more than two')
+  assert.equal(reject(n), true, 'the strikes were cleared: the whole count again')
   const e = n.get(k)
   assert.equal(e.renewals, 0); assert.equal(e.retry_at - e.at, NEG_BACKOFF.costly.base)
   n.forgetKey(meta.pid)
