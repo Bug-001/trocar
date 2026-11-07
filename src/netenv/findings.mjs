@@ -176,8 +176,6 @@ export const FINDINGS = {
     commands: (c) => [gui('Log in to the desktop session on this machine and unlock your keychain'), trocar(c, 'trocar status')], verify: () => 'trocar status' },
   'not-users-file': { cls: 'expected', trocarFirst: false, what: (c) => `${c.h} points at a certificate file that is not yours; trocar left it alone.`, why: () => 'trocar only appends to files you own.',
     commands: (c) => [gui(`Point ${c.h}'s certificate setting at a file you own`), trocar(c, 'trocar install')], verify: (c) => `trocar status ${c.h}` },
-  'not-trocars-file': { cls: 'problem', trocarFirst: false, what: (c) => `${c.h}: a file is where trocar puts its own, and trocar cannot tell it is its own; trocar left it alone.`, why: () => 'trocar never writes over a file it cannot tell is its own.',
-    commands: (c) => [gui('Move that file away or delete it'), trocar(c, 'trocar install')], verify: (c) => `trocar status ${c.h}` },
   'not-verified': { cls: 'expected', trocarFirst: false, what: (c) => `This form of ${c.h} is not verified on this platform yet; it is forwarded only.`, why: () => 'trocar only decrypts the forms it has verified.',
     commands: (c) => [gui(`No action needed: ${c.h} keeps working, and these connections are not decrypted`)], verify: (c) => `trocar status ${c.h}` },
   // 4.11 P6: the API hosts its config names (status's `hosts`) are all on this machine, and loopback never reaches the door
