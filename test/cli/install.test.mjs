@@ -55,9 +55,9 @@ async function cli(argv, { tty = false, over = {}, setup = null } = {}) {
 }
 
 test('0.1 §3: what is installed is asked of the world the test gives, never of the machine under the test', async () => {
-  const app = '/Applications/Kimi Code.app'
+  const app = '/Applications/DeepSeek Harness.app' // an app in scope: one out of scope is no form on the machine (4.11 CM43)
   const { io } = await cli(['--dry-run', '--json'], { setup: (w) => { const { exists } = w.ctx; w.ctx.exists = (p) => p === app || exists(p) } })
-  assert.ok(io.json().planned.some((r) => r.harness === 'kimi-code'))
+  assert.ok(io.json().planned.some((r) => r.harness === 'deepseek-dsh'))
 })
 
 test('install is a command of its own (and the hidden `collector install` alias is gone, 1.6 §2: one feature, one name)', () => {

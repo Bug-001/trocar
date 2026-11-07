@@ -65,7 +65,7 @@ async function captureOnline(w, m, notes = []) {
     if (!w.socketPath) throw Object.assign(new Error('no endpoint'), { code: 'ENOENT' })
     const r = await w.request({ socketPath: w.socketPath, method: 'GET', path: '/holders', timeoutMs: 2000 })
     // a holder's pid and name reach a printed command: an integer pid of a harness this copy knows, nothing else
-    if (r && Array.isArray(r.holders)) holders = r.holders.filter((h) => h && Number.isInteger(h.pid) && h.pid > 0 && harnessIdsOf(m).includes(h.harness)); else unknown = 'the daemon does not know its holders yet'
+    if (r && Array.isArray(r.holders)) holders = r.holders.filter((h) => h && Number.isInteger(h.pid) && h.pid > 0 && [...((m && m.install && m.install.harnesses) || []), ...Object.keys((m && m.liveness) || {})].includes(h.harness)); else unknown = 'the daemon does not know its holders yet'
     // the daemon's answer is its last poll's (every 10 s, HOLDER_POLL_MS): a holder that has quit since is no holder. The table is read afresh
     // (src/off/proc.mjs); a life still in it — the same pid with a start within what two readers of one process's start differ by, or the same pid
     // when either start is not known (D50: one holder too many, never one too few) — still holds (4.11 §1 uninstall)
