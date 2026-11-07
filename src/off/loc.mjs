@@ -20,6 +20,9 @@ export function resolveLoc(loc, ctx) {
   return ctx.readdir(at).filter((n) => re.test(n)).sort().map((n) => join(at, n))
 }
 
+/** Does the route's place read an environment variable on `os` (a <loc> with `env`)? Then where a process reads it depends on that process's environment. */
+export const routeReadsEnv = (route, os) => [route.file, route.dir, route.select && route.select.dir].some((loc) => { const l = loc && loc.perOs ? loc.perOs[os] : loc; return !!(l && l.env) })
+
 /** resolveLoc's ctx.dirs on this OS: `appSupport` is the per-user roaming app-data folder (Electron's appData: ~/Library/Application Support,
  *  %APPDATA%), `localAppData` the local one (%LOCALAPPDATA%, none on macOS); each Windows one falls back to its default place under the home. One copy,
  *  read by the collector's policies and by the marker undo. */
