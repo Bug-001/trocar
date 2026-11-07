@@ -217,7 +217,11 @@ export function saveManifestAt(file, m, fs = nodeFs) {
     if (typeof it.door === 'string') sealRecord(it) // the one seal site (4.6「日志」): the door password never reaches the disk, a clear record of an older build included
   }
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
-  writeDurable(file, JSON.stringify(m, null, 2) + '\n', 0o600, fs)
+  const text = JSON.stringify(m, null, 2) + '\n'
+  let same = false
+  try { same = fs.readFileSync(file).equals(Buffer.from(text)) } catch { /* not there or not readable: written as before */ }
+  if (same) return // the same bytes are there already: a run that changed nothing leaves the record untouched
+  writeDurable(file, text, 0o600, fs)
 }
 
 /** Writes the install manifest in `dir`. */

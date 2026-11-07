@@ -279,6 +279,23 @@ test('D55① · model: after install → on → off, every phase-install item is
   } finally { await d.close() }
 })
 
+// a second off with nothing left to undo writes nothing: the install record keeps its bytes and its mtime
+test('off · model: an off right after an off leaves the install manifest unwritten', async () => {
+  const w = await installed()
+  const mf = path.join(w.dir, 'install-manifest.json')
+  const d = await daemon(w)
+  try {
+    assert.equal((await on(w)).exit, 0)
+    const off = () => undoHarnesses({ dir: w.dir, home: w.home, manifest: readManifest(w.dir), ids: null, procs: async () => [] })
+    await off()
+    const old = new Date(Date.now() - 3600e3)
+    fs.utimesSync(mf, old, old)
+    const before = [sha256(fs.readFileSync(mf)), fs.statSync(mf).mtimeMs]
+    assert.deepEqual((await off()).left, [])
+    assert.deepEqual([sha256(fs.readFileSync(mf)), fs.statSync(mf).mtimeMs], before)
+  } finally { await d.close() }
+})
+
 // 4.11 P12: `on` writes the history fields over a real run — the first on starts the history (`since`); an on that moves some door groups of h
 // marks them (`door_since`) and keeps the windows, so a process from an earlier window is still a holder; one that moves every group restarts the
 // history there, and a process from before is not a holder. Generic over the harness's groups: the test reads them from the run, never names one.
