@@ -86,6 +86,11 @@ test('kinship by reply: a reply under 256 collapsed chars, or a request quoting 
   }
 })
 
+test('kinship by reply: the latest reply at the end of a long request is still seen', () => {
+  const r = prose(12, 600), filler = prose(13, 200_000)
+  assert.equal(run([turn('responses', 0, 0, r, T0), summary('responses', [filler, r], T0 + MIN)])[1].key, 'sid-0')
+})
+
 test('kinship by reply: a reply past SYNTH_TTL_MS names no session; within it, past the fingerprint window, it does', () => {
   const r = prose(11, 800)
   assert.equal(run([turn('responses', 0, 0, r, T0), summary('responses', [r], T0 + SYNTH_TTL_MS - MIN)])[1].key, 'sid-0', 'within the TTL')

@@ -53,7 +53,7 @@ const FACTS = new WeakMap();
 const WIN = 32, SAMPLE = 8, FP_CAP = 64, PROBE_CAP = 1024, STATE_CAP = 4096, MIN_SHARED = 2;
 // Replies (3.4 按内容认亲, 有界): a compaction request carries earlier replies whole, which the user-text fingerprints never see. An
 // item is a text by its sampled windows only (the same WIN and SAMPLE, a 64-bit hash each): their count n, the first and last
-// ENDS_W, and a 64-bit digest of the whole list; a call carries the windows of its user texts, in order, at most HEAD_CAP. A reply of
+// ENDS_W, and a 64-bit digest of the whole list; a call carries the windows of its user texts, in order, the last HEAD_CAP (a compaction request's latest replies are at its end). A reply of
 // REPLY_MIN collapsed chars has about 28 windows; one with fewer than MIN_WIN is not kept. REPLY_CAP: twice the most replies one
 // harness kept in any 24 h of a real capture, rounded up to a power of two; OWNERS: the sessions one reply text is kept under, the latest.
 const REPLY_MIN = 256, MIN_WIN = 6, ENDS_W = 3, HEAD_CAP = 8192, REPLY_CAP = 4096, OWNERS = 8;
@@ -201,7 +201,7 @@ function factsOf(rec, memo) {
   if (key) return { harness: h.id, ms, key, fp, reply, hash, chain, items };
   const asks = compactionRequest(rec, h.row, hint), probe = asks ? fingerprints(texts, PROBE_CAP) : null;
   // `late`: how many of `fp` (a prefix: the texts are taken newest first) come from user texts after the first one
-  return { harness: h.id, ms, hash, fp, probe, reply, heads: asks ? windowsOf(collapse(texts.join(' ')), HEAD_CAP) : null,
+  return { harness: h.id, ms, hash, fp, probe, reply, heads: asks ? windowsOf(collapse(texts.join(' ')), Infinity).slice(-HEAD_CAP) : null,
     late: fingerprints([...texts.slice(1)].reverse(), FP_CAP).length, chain, items, mark: !probe && hint.compactionMarker === true };
 }
 
