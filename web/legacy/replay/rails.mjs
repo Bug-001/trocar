@@ -145,6 +145,8 @@ export function renderRails(el, s) {
   }
   for (const l of tcs) html += tcRailHtml(l, s)
   el.innerHTML = html || `<div class="railsonly">${esc(ONLY_MAIN)}</div>`
+  // the x mapping these rows were drawn with: a paint held while answers land (rails-hold.mjs) keeps it, so a click finds what it drew
+  s.railsDrawn = { anchorTs: s.anchorTs, view: { ...s.view } }
   if (s.selTick) { const t = el.querySelector(`[data-rid="${attrSel(s.selTick)}"]`); if (t) t.classList.add('sel') }
 }
 
@@ -173,16 +175,19 @@ export function selectTick(s, lane, i) {
 export function wireRails(el, s) {
   const laneOf = (id) => s.lanes.find((l) => l.id === id)
   const fracOf = (body, e) => { const r = body.getBoundingClientRect(); return (e.clientX - r.left) / Math.max(1, r.width) }
+  // x on the rows as they are drawn: their paint can wait while answers land (2.3 读者优先), the model does not
+  const nearest = (lane, body, e) => { const d = s.railsDrawn || s; return nearestByX(lane, d.anchorTs, d.view, fracOf(body, e)) }
+  const redraw = () => (s.drawRails ? s.drawRails() : renderRails(el, s))
   const onClick = (e) => {
     const gt = e.target.closest('[data-grouptoggle]')
-    if (gt) { flipRail(s, 'group:' + gt.dataset.grouptoggle); renderRails(el, s); return }
+    if (gt) { flipRail(s, 'group:' + gt.dataset.grouptoggle); redraw(); return }
     const tg = e.target.closest('[data-toggle]')
-    if (tg) { flipRail(s, tg.dataset.toggle); renderRails(el, s); return }
+    if (tg) { flipRail(s, tg.dataset.toggle); redraw(); return }
     const t = e.target.closest('.tick, .pbar')
     if (t) { const p = placeOf(s.lanes, t.dataset.rid); if (p) selectTick(s, p.lane, p.i); return }
     // anywhere on an open rail picks the nearest call IN the window, so every call is reachable, not just the drawn ticks
     const body = e.target.closest('.railbody[data-lane]')
-    if (body) { const lane = laneOf(body.dataset.lane); if (lane && lane.calls.length) selectTick(s, lane, nearestByX(lane, s.anchorTs, s.view, fracOf(body, e))) }
+    if (body) { const lane = laneOf(body.dataset.lane); if (lane && lane.calls.length) selectTick(s, lane, nearest(lane, body, e)) }
   }
   const onMove = (e) => {
     const body = e.target.closest && e.target.closest('.railbody[data-lane]')
@@ -190,7 +195,7 @@ export function wireRails(el, s) {
     const lane = laneOf(body.dataset.lane)
     if (!lane || !lane.calls.length || !reviewing(lane)) return
     const t = e.target.closest('.tick, .pbar')
-    highlightRange(s, lane, t ? lane.ridLocal.get(t.dataset.rid) : nearestByX(lane, s.anchorTs, s.view, fracOf(body, e)))
+    highlightRange(s, lane, t ? lane.ridLocal.get(t.dataset.rid) : nearest(lane, body, e))
   }
   const onLeave = () => { if (!s.selTick) clearRange(s) }
   el.addEventListener('click', onClick)

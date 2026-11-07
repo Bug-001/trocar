@@ -4,7 +4,7 @@
 // lies in [lo, hi).
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { stepPos, windowCalls, buildLanes, anchorLane, turnsReviewed, nearestByTs, stepOfMark } from '../../web/legacy/replay/lanes.mjs'
+import { stepPos, windowCalls, buildLanes, anchorLane, turnsReviewed, nearestByTs, stepOfMark, nearestByX } from '../../web/legacy/replay/lanes.mjs'
 import { renderTicks, renderRails, railToggles, flipRail, wireRails, hasRails } from '../../web/legacy/replay/rails.mjs'
 import { wireDetail } from '../../web/legacy/replay/detail.mjs'
 import { deskOf } from './desk-world.mjs'
@@ -106,6 +106,29 @@ test('2.1 #16: a tick whose call moved to another lane opens it there; one whose
   moveOn(s, deskOf([{ kind: 'main', rows: [2, 4, 6, 8].map((t) => ({ rid: `m${t}`, ts: iso(T0 + t * 1000) })) }, { kind: 'monitor', rows: [{ rid: 'w7', ts: iso(T0 + 7000) }] }, { kind: 'aux', rows: [{ rid: 'w3', ts: iso(T0 + 3000) }] }]))
   rails.click(a); assert.deepEqual(s.rec.opened, ['w3'])
   rails.click(b); assert.deepEqual(s.rec.opened, ['w3'], 'w5 is no more')
+})
+
+// 2.3 读者优先: the rows' paint can wait while answers land and the window moves; a click on empty rail finds the call nearest where the
+// rows were drawn, not where the moved window would put them. Every x across the body, for every later window of the lane.
+test('2.1 #16: a click on empty rail picks the call nearest in the rows as drawn, whatever window the model moved to since', () => {
+  const s = { ...markedDesk(marked(false)), subSeeded: new Set(), collapsedRails: new Set(), subgroupOpen: false, bgOpen: true, selTick: null }
+  renderRails({ innerHTML: '', querySelector: () => null }, s)
+  const drawn = { anchorTs: s.anchorTs, view: { ...s.view } }, monitor = s.lanes.find((l) => l.kind === 'monitor')
+  const on = {}
+  wireRails({ addEventListener: (k, f) => { on[k] = f }, removeEventListener() {} }, s)
+  const body = { dataset: { lane: monitor.id }, getBoundingClientRect: () => ({ left: 0, width: 100 }) }
+  const press = (x) => on.click({ clientX: x, target: { closest: (sel) => (sel === '.railbody[data-lane]' ? body : null) } })
+  let differs = 0
+  for (const view of [{ lo: 1, hi: 4 }, { lo: 2, hi: 4 }, { lo: 0, hi: 2 }]) {
+    s.view = view // the model moved on; the rows were not drawn again
+    for (let x = 0; x <= 100; x += 5) {
+      press(x)
+      const want = monitor.calls[nearestByX(monitor, drawn.anchorTs, drawn.view, x / 100)].rid
+      assert.equal(s.rec.opened.at(-1), want, `x ${x}, window ${view.lo}–${view.hi}`)
+      if (monitor.calls[nearestByX(monitor, s.anchorTs, view, x / 100)].rid !== want) differs++
+    }
+  }
+  assert.ok(differs > 0, 'the moved windows would pick other calls: the case guards the drawn mapping')
 })
 
 // the clicks of the drawer's back button, read off what was drawn before the lanes moved on

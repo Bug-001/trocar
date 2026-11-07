@@ -46,6 +46,7 @@ import { landPlayhead, createStepReads, packOrder } from './follow.mjs'
 import { createLoader } from './loader.mjs'
 import { createPoller, INTERVAL } from '../core/poll.mjs'
 import { createPace } from './pace.mjs'
+import { createRailsHold } from './rails-hold.mjs'
 import { problemSteps, barsThatFit, fitWindow, capWindow, chapterHere } from './timeline.mjs'
 import { renderRails, wireRails, highlightRange, reviewing } from './rails.mjs'
 import { arrived, refWaits, rowKeys } from '../../src/screens/replay/window-model.mjs'
@@ -285,7 +286,9 @@ function openDesk(ctx, route0, makeView) {
   // long session is the window's thousands of nodes plus the ledger's lists, and one task drew both. Several paints before it runs
   // draw these once, for the playhead then, once its frame is out and the reader has stopped. A tick's drawer opens in that task too, after them
   let sideDue = false, sidesWanted = false, detailDue = null
-  const drawRails = () => onEls(() => { renderRails(E.rails, s); watchRails() })
+  // an answer's paint of the overlay rows waits while the pointer is on them (2.3 读者优先, rails-hold.mjs); a draw the reader causes does not
+  const rails = createRailsHold({ setTimer: (f, ms) => setTimeout(f, ms), clearTimer: clearTimeout, draw: () => { if (!s.dead) onEls(() => { renderRails(E.rails, s); watchRails() }) } })
+  const drawRails = () => rails.reader()
   s.drawRails = drawRails // the Tracks menu flips a row from outside this closure
   const nextTask = () => {
     if (sideDue) return
@@ -326,12 +329,12 @@ function openDesk(ctx, route0, makeView) {
     jumps.settle() // a jump that was waiting for this step's lane lands now that the window shows it
     aim()
   }
-  function renderAll() {
+  function renderAll(answer = false) {
     if (!host || !E) { missed = true; return }
     if (!s.anchor || s.playRid == null) { renderRough(); return }
     renderHeader()
     if (!namedRows()) { view.saw(); view.overview() }
-    drawRails()
+    if (answer) rails.answer(); else drawRails()
     paintPlayhead()
     restoreSelection()
   }
@@ -787,7 +790,7 @@ function openDesk(ctx, route0, makeView) {
       s.view.hi = Math.min(N, s.view.hi || N); s.view.lo = Math.max(0, Math.min(s.view.lo, N - 1)); if (s.view.hi <= s.view.lo) s.view.hi = Math.min(N, s.view.lo + 1)
     }
     placeWin(true)
-    renderAll()
+    renderAll(true)
     refreshDrawer()
     chainLedger()
     fill()
@@ -865,7 +868,10 @@ function openDesk(ctx, route0, makeView) {
 
   // hang the desk in `el` as it was left; the URL decides the view only when it names a step (1.2 §路由「离开再回来」)
   // the reader's inputs, heard before anything acts on them, while the desk is on the page (the pace of its background work)
-  const INPUTS = [['keydown', () => pace.input()], ['pointerdown', () => pace.press(true)], ...['pointerup', 'pointercancel', 'blur'].map((k) => [k, () => pace.press(false)])]
+  const onRails = (e) => rails.over(!!E && e.target instanceof Node && E.rails.contains(e.target))
+  const offPage = (e) => { if (!e.relatedTarget) rails.over(false) }
+  const INPUTS = [['keydown', () => pace.input()], ['pointerdown', () => pace.press(true)], ...['pointerup', 'pointercancel', 'blur'].map((k) => [k, () => pace.press(false)]),
+    ['pointerover', onRails], ['pointerout', offPage], ['blur', () => rails.over(false)]]
   function attach(el, ctx, route) {
     host = el
     for (const [k, f] of INPUTS) window.addEventListener(k, f, true)
@@ -897,6 +903,7 @@ function openDesk(ctx, route0, makeView) {
     document.removeEventListener('visibilitychange', onVis)
     window.removeEventListener('resize', refit)
     for (const [k, f] of INPUTS) window.removeEventListener(k, f, true)
+    rails.over(false) // a paint held for the pointer is drawn before the desk leaves
     if (ro) ro.disconnect()
     if (io) io.disconnect()
     if (E) { closeDetail(E.detail, s); E.detail.innerHTML = '' }
