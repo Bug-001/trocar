@@ -254,7 +254,6 @@ export function foldFlows(records, { now = Date.now(), windowMs = WINDOW_MS } = 
     const agent = r.agent || r.harness || (r.proc && r.proc.agent) || null
     if (isFailure(r)) {
       const key = groupKey(r), slot = `${key}\u0000${agent}` // C.3: one group is one harness, so a count and a name belong together
-      // shortcut: the daemon folds failure events per where + code within 10 s (core/events.mjs), so a folded line's suppressed count goes to the harness it names; split that fold if a burst mixes harnesses visibly
       const g = groups.get(slot) || { key, count: 0, first_ts: null, last_ts: null, last: null }
       // `last` stays the newest record written (the resolution rules above read it); the times are a span over the records' times
       g.count += weight(r); widen(g, iso); g.last = pick(r); delete g.resolved
