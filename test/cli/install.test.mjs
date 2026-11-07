@@ -327,3 +327,17 @@ for (const platform of ['darwin', 'win32']) {
     for (const f of standaloneFiles(w.home, platform)) assert.ok(words.includes(tilde(f, w.home)), `${f} is named: ${words}`)
   })
 }
+
+// 4.11 P4 (Windows): the scheduled task under trocar's name is no file under HOME — the run asks the unit what is registered (registeredBytes) and
+// backs it up before it replaces it, so the plan asks the same seam and says where the old bytes go; with nothing registered it says no replacement
+test('4.11 P4 · win32: the plan asks what is registered under trocar\'s task name and says where its bytes go', async () => {
+  for (const registered of [Buffer.from('<Task>an older one</Task>'), null]) {
+    const w = await modelWorld({ os: 'win32', commands: ['codex'] })
+    const unit = { path: path.join(w.dir, 'task.xml'), text: () => '<Task>trocar</Task>', registeredBytes: () => registered }
+    const io = fakeIo()
+    const exit = await runInstallCli(['--dry-run', '--json'], { io, env: w.env, home: w.home, platform: 'win32', deps: { getuid: () => 501, unit, backends: { custody: w.custody, rootStore: w.store, installHelper: null, dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns } })
+    assert.equal(exit, 0, io.text())
+    const row = JSON.parse(io.text()).planned.find((p) => p.what === 'autostart')
+    assert.equal(row.detail.includes(path.win32.join('~', '.trocar', 'backup')) || row.detail.includes(path.join('~', '.trocar', 'backup')), registered !== null, JSON.stringify(row))
+  }
+})

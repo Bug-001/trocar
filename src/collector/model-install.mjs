@@ -11,7 +11,7 @@ import { collectorHome } from '../paths.mjs'
 import { caPaths } from './core/tls/ca-store.mjs'
 import { ROOT, checkProfile, certPem, pemToDer } from './core/tls/cert.mjs'
 import { rootIdOf } from '../off/root-store.mjs'
-import { readManifest, saveManifest, newManifest, applyJsonKey, applyTextEntry, writeOwnedFile, notTrocars, judgeOwned, sha256 } from './core/trust/journal.mjs'
+import { readManifest, saveManifest, newManifest, applyJsonKey, applyTextEntry, writeOwnedFile, notTrocars, judgeOwned, sha256, samePath } from './core/trust/journal.mjs'
 import { codeId } from '../version.mjs'
 import { installComplete, itemsOfPhase, undoByHand, OFF_VERSION } from '../off/manifest.mjs'
 import { writeStandalone } from '../off/standalone.mjs'
@@ -189,7 +189,7 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
     const d = daemonEnv(env, dir)
     if (d.note) { notes.push(d.note); runEventWriter({ dir, base: { run: now().toISOString() }, notes, fs })({ event: EVENT.installNote, where: 'install', kind: 'note', code: CODE.unitEnvNotCarried, reason: d.note }) }
     // 4.11 P4: a registration under trocar's name the record does not list (one the unit file does not hold: a scheduled task) is backed up before it is replaced
-    const prior = !m.files.some((x) => x.path === unit.path) && typeof unit.registeredBytes === 'function' ? unit.registeredBytes() : null
+    const prior = !m.files.some((x) => samePath(x.path, unit.path, fs)) && typeof unit.registeredBytes === 'function' ? unit.registeredBytes() : null
     if (prior) writeBackup({ home, file: unit.path, data: prior, now: now(), fs })
     owned(unit.path, 'unit', null, unit.text(d.env), 0o644)
   }
