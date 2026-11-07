@@ -429,7 +429,6 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
     return u
   }
   takeByMarker(w, u, plan)
-  if (u.orphan_backups.length) u.notes.push(`the backups of the files above (JSON values taken back from them), and any others, are left in place: ${u.orphan_backups.join(', ')}`)
   return u
 }
 
