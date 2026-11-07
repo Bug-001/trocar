@@ -99,7 +99,7 @@ const steeredOf = (p) => (p.watched === 'decrypt' ? true : p.watched === 'unknow
 /** `status`'s verdict on the harness, from the same facts and the same function: { captured, reason, rows }. */
 function judged(F, h, hf) {
   const j = judgeHarness({
-    desired: F.desired[h] ?? null, entryIntact: entryIntact(hf), entryWhy: hf.entry.state === 'changed' ? 'entry-changed' : 'entry-missing', attached: F.link.attached, helper: F.link.helper || 'ok', daemon: F.daemon.state,
+    desired: F.desired[h] ?? null, entryIntact: entryIntact(hf), entryWhy: hf.entry.code || (hf.entry.state === 'changed' ? 'entry-changed' : 'entry-missing'), attached: F.link.attached, helper: F.link.helper || 'ok', daemon: F.daemon.state,
     procs: hf.procs.map((p) => ({ pid: p.pid, startedAt: p.startedAt, trusted: p.trusted, reason: p.reason, negative: p.negative, start: p.start })), installedAt: hf.installedAt, formsHere: hf.formsHere ?? true,
   })
   return { captured: j.captured, reason: (j.rows.find((r) => r.reason) || {}).reason ?? null, rows: j.rows }

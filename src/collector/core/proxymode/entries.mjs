@@ -22,6 +22,8 @@ export const LOOPBACK = Object.freeze(['localhost', '127.0.0.1', '::1'])
 /** P10: where the daemon serves the PAC on the PAC group's door — a path carrying the install's key, derived from the doors' token (ingress.json
  *  `listenerToken`): the PAC is a capability that only this user, who can read the entry holding it, has. */
 export const pacPath = (token) => `/${createHmac('sha256', String(token)).update('trocar.pac').digest('hex').slice(0, 32)}/trocar.pac`
+/** The PAC address `on` writes for a door: the door's origin, the install's key in its path (P10). Also what its records are tagged with. */
+export const pacAddress = (token, door) => new URL(pacPath(token), door).href
 // a hostTree form's note (CM31): it names the form, since status prints it under the harness, beside forms that run on their own
 const hostTreeNote = (form) => `${form} runs inside another program: every other extension there connects through trocar too, and trocar passes those connections on without capturing them`
 const ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/ // an entry id that names a file in the library and nothing outside it
@@ -78,7 +80,7 @@ function selectTarget(ctx) {
 function writeJson(ctx, door) {
   const r = ctx.route, b = base(ctx), out = []
   if (r.value === 'pac-url' && !ctx.pacToken) throw Object.assign(new Error('the PAC address needs the install\'s key, and trocar on was given none'), { code: 'entry-refused' })
-  const value = r.value === 'pac-url' ? new URL(pacPath(ctx.pacToken), door).href : door
+  const value = r.value === 'pac-url' ? pacAddress(ctx.pacToken, door) : door
   let file, create = null
   if (r.select) { const t = selectTarget(ctx); if (t.code) return t; file = t.file; create = t.create || null } else file = resolveLoc(r.file, ctx)[0]
   if (!file) return notRouted('no-path')
@@ -168,7 +170,7 @@ export function routeEntry(kind) {
     write(ctx, door) {
       // what this route's records say was written: the door, or for a PAC route the PAC address (its key in it). A record of another door or key, or
       // of an earlier version that wrote the address with no key, is trocar's stale value: undone (its prior back), then written anew (invariant 5)
-      const mark = ctx.route && ctx.route.value === 'pac-url' && ctx.pacToken ? new URL(pacPath(ctx.pacToken), door).href : door
+      const mark = ctx.route && ctx.route.value === 'pac-url' && ctx.pacToken ? pacAddress(ctx.pacToken, door) : door
       const old = recordsOf(ctx.manifest, ctx.harness, ctx.routeId)
       if (old.some((x) => x.door !== mark)) undo(ctx, old)
       // all or nothing: a route refused partway (its last key or item, the select meta) takes back what this call already wrote, so no record without
