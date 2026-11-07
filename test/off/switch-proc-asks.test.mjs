@@ -105,7 +105,7 @@ test('D62: with the daemon dead, the same `off codex` asks the OS instead — ON
   assert.deepEqual(cold.envAfter, cold.pre, 'codex\'s own file is byte for byte back, whichever side answered')
   const why = cold.receipt.notes.filter((n) => /could not answer a read question/.test(n))
   assert.equal(why.length, 1, 'the fallback is never silent (D38)')
-  assert.match(why[0], /ECONNREFUSED/, 'and the reason says which reader could not answer, and why')
+  assert.ok(why[0].includes(DEAD), 'and the reason says which reader could not answer, and why')
   const same = (r, home) => JSON.parse(JSON.stringify({ ...r, notes: r.notes.filter((n) => !/could not answer a read question/.test(n)), log: null, at: null }).split(JSON.stringify(home).slice(1, -1)).join('<home>'))
   assert.deepEqual(same(cold.receipt, cold.home), same(hot.receipt, hot.home), 'the receipt is otherwise the same document')
 })

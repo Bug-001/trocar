@@ -58,3 +58,21 @@ test('4.8 §7: a verb outside the subset is refused by the client before anythin
   }
   assert.deepEqual(calls, [], 'nothing was sent, so the refusal cannot depend on the daemon')
 })
+
+// D58: what a reader failed at reaches a receipt as a note, so it is in words: not the verb's name, not a raw system code. The code stays on the error.
+test('D58: a read that failed says which and why in words', async () => {
+  const failing = (code) => daemonReader({ dir: '/nowhere', socketPath: '/s', request: async () => { throw Object.assign(new Error('x'), { code }) } })
+  for (const code of ['ETIMEDOUT', 'ECONNREFUSED', 'ENOENT', 'EPIPE']) {
+    await assert.rejects(failing(code).call('ps', {}), (e) => {
+      assert.equal(e.code, 'daemon-read-failed')
+      assert.doesNotMatch(e.reason, /\bps\b|\bE[A-Z]{3,}\b/, e.reason)
+      assert.match(e.reason, /process list/, e.reason)
+      return true
+    })
+  }
+})
+
+test('D58: a helper failure the daemon reports carries its code apart, and the reader says it in words', async () => {
+  const r = daemonReader({ dir: '/nowhere', socketPath: '/s', request: async () => ({ ok: false, error: 'ps: spawnSync powershell.exe ETIMEDOUT', error_code: 'ETIMEDOUT' }) })
+  await assert.rejects(r.call('ps', {}), (e) => { assert.doesNotMatch(e.reason, /\bps\b|\bE[A-Z]{3,}\b/, e.reason); assert.match(e.reason, /no answer in time/); return true })
+})
