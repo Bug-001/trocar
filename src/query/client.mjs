@@ -8,11 +8,12 @@
 //
 // The query core is imported lazily, so the daemon path does not load it (that import is most of the CLI's floor).
 import { controlEndpointFor } from '../off/control-client.mjs'
+import { VERDICT_COMMANDS } from '../off/schema.mjs'
 
 /** The control plane's read route (4.6 §控制面). */
 export const QUERY_PATH = '/query'
 /** Names that read the machine as it is right now, not the captured corpus: they stay in the asking process (D63④). */
-export const LOCAL_ONLY = Object.freeze(['status', 'doctor'])
+export const LOCAL_ONLY = VERDICT_COMMANDS // the two that read the machine are the two whose ok is a verdict (off/schema.mjs)
 /** Every query name there is (src/query/named/index.mjs QUERIES, which this list is checked against by
  *  test/query/docs.test.mjs — the query core is most of a CLI's load time, so the daemon must be able to refuse an
  *  unknown name without importing it, and before forking a worker for it). */
