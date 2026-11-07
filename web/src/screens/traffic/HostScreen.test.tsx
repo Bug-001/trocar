@@ -140,6 +140,16 @@ test('d1 #21: Show reads that one header once, shows it alone, and keeps Technic
   expect(showButton(p.container, 'x-api-key')).not.toBeNull()
 })
 
+test('1.10 列头: the header row names every column a request row has, the marks column included', async () => {
+  answerOf = (q) => (q.ref ? ok(refDoc(String(q.ref))) : ok(page(null, 'telemetry')))
+  const p = mount(hostHash(''))
+  await waitFor(() => expect(p.$('#hlist .hrow')).not.toBeNull())
+  const heads = [...p.$('.hhead')!.children], row = p.$('#hlist .hrow')!
+  const cells = [...row.querySelector('a.hmain')!.children, ...[...row.children].filter((c) => c.tagName !== 'A')]
+  expect(heads.length).toBe(cells.length)
+  for (const h of heads) expect(h.textContent!.trim()).not.toBe('')
+})
+
 test('d2 #12: the end of the list reads after=next; the focused and the selected rows stay the same nodes; no read once next is null', async () => {
   let page2 = held()
   answerOf = (q) => (q.after ? page2.p : q.ref ? ok(refDoc(String(q.ref))) : ok(page(null, 'telemetry')))
