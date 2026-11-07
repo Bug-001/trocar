@@ -153,6 +153,23 @@ test('1.8 #18: a read still out says what is going on from 3 s until the rows co
   expect(p.row(key(sess('s1', 1, 1)))).not.toBeNull()
 })
 
+test('1.8 #18: a page that answers 503 still-reading and then 200 is never a failure: the wait stays until the rows come', async () => {
+  const pending: Array<(r: unknown) => void> = []
+  onlySessions(() => new Promise((res) => { pending.push(res) }))
+  const p = await mount()
+  await tick(LIST_WAIT_MS)
+  for (let i = 0; i < 2; i++) { // the daemon's 503 after its own wait: the same page is asked again at once
+    await act(async () => { pending.shift()!({ ok: false, status: 503, error: 'still reading', code: 'still-reading' }) })
+    await settle()
+    expect(p.list.querySelector('[data-read-fail]')).toBeNull()
+    expect(p.list.querySelector('[data-list-wait]')).not.toBeNull()
+  }
+  await act(async () => { pending.shift()!({ ok: true, status: 200, data: { schema: 2, command: 'sessions', ok: true, errors: [], as_of: iso(0), next: null, sessions: [sess('s1', 1, 1)] } }) })
+  await settle()
+  expect(p.list.querySelector('[data-read-fail]')).toBeNull()
+  expect(p.row(key(sess('s1', 1, 1)))).not.toBeNull()
+})
+
 test('V1: across polls that add sessions above and change counts, a session keeps its row node, the highlight and the scroll', async () => {
   lists = [growing]
   const selKey = key(sess('s3', 0, 0))

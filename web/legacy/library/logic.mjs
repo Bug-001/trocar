@@ -2,6 +2,7 @@
 // project and id. The Sessions page (web/src/screens/library/) polls it; the overview, the traffic page and #/session/<id>
 // read it through freshSessions. The page's own logic lives in web/src/screens/library/model.mjs.
 import { INTERVAL } from '../core/poll.mjs'
+import { QUERY_WAIT_PROBLEMS } from '../../../src/health/codes.mjs'
 
 export const sessionKey = (s) => `${s.project_slug}::${s.session_id}`
 // every page of `sessions` (C.5: paged, `next` → `after` until null). → {ok:true, data:{sessions, errors, as_of, stored}} or the
@@ -16,6 +17,9 @@ export async function loadSessions(api, { limit = 500 } = {}) {
   let after = null, as_of = null, stored = null
   for (;;) {
     const r = await api.get('sessions', { limit, after }, { deadlineMs: listed ? undefined : FIRST_LIST_DEADLINE_MS })
+    // a 503 still-reading: the list is still being built, so the same page is asked again at once (1.8 §数据与刷新); a read whose signal
+    // was aborted answers status 0, which ends the loop
+    if (r && !r.ok && r.status === 503 && QUERY_WAIT_PROBLEMS.includes(r.code)) continue
     if (!r || !r.ok) return r || { ok: false, error: 'no answer' }
     const d = r.data || {}
     for (const s of d.sessions || []) { const k = sessionKey(s); if (!seen.has(k)) { seen.add(k); sessions.push(s) } }

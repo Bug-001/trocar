@@ -54,11 +54,13 @@ export function flattenSessions(data) {
 }
 const lastMs = (s) => { const t = Date.parse(s.last_ts); return Number.isNaN(t) ? null : t }
 
-// ── the title rule (1.8 §标题规则): `title` as it is, else `title_source: 'unread'` says the read failed, else 没有采到提问
-export const titleText = (s) => (s.title != null ? String(s.title) : s.title_source === 'unread' ? W.PROMPT_UNREAD : W.UNTITLED)
+// ── the title rule (1.8 §标题规则): `title` as it is; `title_source: 'unread'` says the read failed; `null` is 没有采到提问; any other
+// value, or none (a list stored by the release before says 'pending'), is a title not read yet, not a fact about the session
+const titleCase = (s) => (s.title != null ? 'title' : s.title_source === 'unread' ? 'unread' : s.title_source === null ? 'none' : 'pending')
+export const titleText = (s) => ({ title: () => String(s.title), unread: () => W.PROMPT_UNREAD, none: () => W.UNTITLED, pending: () => W.TITLE_PENDING })[titleCase(s)]()
 export function titleTipOf(s) {
-  const id = s.session_id
-  if (s.title == null) return s.title_source === 'unread' ? W.titleUnread(id) : W.titleNoKey(id)
+  const id = s.session_id, c = titleCase(s)
+  if (c !== 'title') return c === 'unread' ? W.titleUnread(id) : c === 'none' ? W.titleNoKey(id) : W.titlePending(id)
   return W.titleFromWire(id) // a title always comes from the wire (4.4 §人类标题的来源)
 }
 

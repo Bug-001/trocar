@@ -11,9 +11,10 @@ import * as W from '../../web/legacy/labels/library.mjs'
 const NOW = new Date(2026, 9, 20, 12, 0, 0).getTime()
 const S = (o = {}) => ({ session_id: 'sess-1', project_slug: '_unresolved', project_path: null, harness: 'codex', harness_inferred: false, session_synthesized: false, title: null, title_source: null, entrypoint: null, calls: 3, probes: 0, logged: 0, has_subagent: false, last_ts: new Date(NOW - 60e3).toISOString(), ...o })
 
-test('(2) title rules: the hover follows title_source and carries the id, a null title is the untitled word; the title never carries the id', () => {
+test('(2) title rules: the hover follows title_source and carries the id, a null source is the untitled word, any other or none is not read yet; the title never carries the id', () => {
   const tips = new Set()
-  for (const [title, title_source, wantTip, wantText] of [['Fix the queue', 'wire', W.titleFromWire, 'Fix the queue'], [null, 'unread', W.titleUnread, W.PROMPT_UNREAD], [null, null, W.titleNoKey, W.UNTITLED]]) {
+  for (const [title, title_source, wantTip, wantText] of [['Fix the queue', 'wire', W.titleFromWire, 'Fix the queue'], [null, 'unread', W.titleUnread, W.PROMPT_UNREAD], [null, null, W.titleNoKey, W.UNTITLED],
+    [null, 'pending', W.titlePending, W.TITLE_PENDING], [null, 'a-value-from-a-later-release', W.titlePending, W.TITLE_PENDING], [null, undefined, W.titlePending, W.TITLE_PENDING]]) {
     for (const harness_inferred of [false, true]) {
       const s = S({ title, title_source, harness_inferred }), tip = titleTipOf(s), why = JSON.stringify({ title_source, harness_inferred })
       assert.equal(tip, wantTip(s.session_id), why); assert.equal(titleText(s), wantText, why)
@@ -22,7 +23,7 @@ test('(2) title rules: the hover follows title_source and carries the id, a null
       tips.add(tip)
     }
   }
-  assert.equal(tips.size, 3, 'one distinct hover per title_source')
+  assert.equal(tips.size, 4, 'one distinct hover per case: wire, unread, none, not read yet')
 })
 
 test('(3)(4)(5) row marks follow their fields, table-driven; nothing marks a false or absent field; probe-only is dim', () => {
@@ -202,3 +203,21 @@ test('(17) loadSessions: a list with a stored page carries the oldest stored at;
     assert.deepEqual(d.sessions.map((s) => s.session_id).sort(), ['a', 'b', 'c'])
   }
 })
+
+// 1.8 §数据与刷新 · 1.5 K-29: a 503 whose first error code is still-reading is the list still being built: the same page is asked again,
+// never a failed list; any other 503, or an aborted read (status 0), ends the read as it came
+test('(18) a page that answers 503 still-reading is asked again until it answers; another 503 or an aborted read ends the read', async () => {
+  const page = { sessions: [S({ session_id: 'a' })], errors: [], next: null }
+  const wait = { ok: false, status: 503, error: 'still reading', code: 'still-reading' }
+  for (const [answers, ok, n] of [[[wait, wait, { ok: true, status: 200, data: page }], true, 3], [[wait, { ok: false, status: 503, error: 'worker crashed', code: 'worker-exit' }], false, 2],
+    [[wait, { ok: false, status: 0, error: 'aborted' }], false, 2], [[{ ok: false, status: 503, error: 'x' }], false, 1]]) {
+    const asked = []
+    const api = { get: async (name, params) => { asked.push(params.after); return answers[asked.length - 1] } }
+    const r = await loadSessions(api)
+    assert.equal(r.ok, ok, JSON.stringify(answers.map((a) => a.code ?? a.status)))
+    assert.equal(asked.length, n)
+    assert.ok(asked.every((a) => a == null), 'the same page each time')
+    if (!ok) assert.deepEqual(r, answers.at(-1), 'the failure as it came')
+  }
+})
+

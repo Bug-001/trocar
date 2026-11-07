@@ -2,7 +2,7 @@
 // (entrypoint cli/desktop, window 24h/7d/all, sort calls): a harness-defined code never keys a word here — agent
 // names and icons come from core/chips.mjs (invariant 3). Nothing in this file is data.
 
-import { WINDOW_LABEL, UNTITLED, PROMPT_UNREAD, PROMPT_UNREAD_TIP } from './common.mjs'
+import { WINDOW_LABEL, UNTITLED, PROMPT_UNREAD, PROMPT_UNREAD_TIP, TITLE_PENDING, TITLE_PENDING_TIP } from './common.mjs'
 
 // ── the page head's scope control: the same words as the overview's ─────────────────────────────────────────────────
 export const WINDOWS = WINDOW_LABEL
@@ -40,7 +40,8 @@ export const COL_LAST = 'Last active'
 export const GROUPS = Object.freeze({ today: 'Today', yesterday: 'Yesterday', none: 'No time' })
 
 // ── the title rule's two steps and their hover words (the session id rides along) ─────────────────────────────────
-export { UNTITLED, PROMPT_UNREAD }
+export { UNTITLED, PROMPT_UNREAD, TITLE_PENDING }
+export const titlePending = (id) => `${TITLE_PENDING_TIP} · session ${id}`
 export const titleFromWire = (id) => `The title is taken from the captured requests · session ${id}`
 export const titleUnread = (id) => `${PROMPT_UNREAD_TIP} · session ${id}`
 export const titleNoKey = (id) => `The captured requests hold no main-conversation prompt · session ${id}`
