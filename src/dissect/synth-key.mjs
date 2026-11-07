@@ -183,11 +183,11 @@ export function createSynthAssigner({ gapMs = SYNTH_GAP_MS, open = new Map() } =
   // Set, replaced, never mutated, so a shallow copy of an entry is a snapshot). A caller that resumes the rule part-way
   // (src/query/rows.mjs) hands in the state it saved.
   const mine = (g, harness) => g.startsWith(harness + '\0') || g.startsWith('\u0001' + harness + '\0') || g.startsWith('\u0002' + harness + '\0');
-  // past 2 × gapMs a chain keeps only what step 2 reads (its tail), until SYNTH_TTL_MS; a keyed entry goes
+  // past 2 × gapMs a chain keeps only what step 2 reads (its tail), until SYNTH_TTL_MS; a keyed entry goes, and a chain with no tail
   const prune = (harness, ms) => {
     for (const [g, e] of open) {
       if (!mine(g, harness) || ms - e.lastMs <= 2 * gapMs) continue;
-      if (!('tail' in e) || ms - e.lastMs > SYNTH_TTL_MS) open.delete(g);
+      if (e.tail == null || ms - e.lastMs > SYNTH_TTL_MS) open.delete(g);
       else if (e.items || e.fp) open.set(g, { key: e.key, lastMs: e.lastMs, tail: e.tail });
     }
   };

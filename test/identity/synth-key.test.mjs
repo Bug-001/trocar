@@ -635,6 +635,14 @@ test('chains: SYNTH_CAP counts the keyless chains and the chains of keyed sessio
   assert.equal(after(SYNTH_CAP), false, 'one more: the keyed session\'s chain, the oldest, is pushed out')
 })
 
+test('chains: a chain stripped with no tail is dropped: it holds no SYNTH_CAP slot', () => {
+  const assign = createSynthAssigner(), c0 = assign(ff(T0, ['c0'])).key
+  assign(ff(T0 + 1000, [], { hash: 'n'.repeat(64) })) // a chain with no tail, in another group of the harness
+  for (let i = 1; i < SYNTH_CAP - 1; i++) assign(ff(T0 + 2 * HOUR + i, [`c${i}`])) // the first one's prune strips both
+  assign(ff(T0 + 2 * HOUR + SYNTH_CAP, ['last'])) // SYNTH_CAP chains with the tailless one: c0, the oldest, would go
+  assert.equal(assign(ff(T0 + 3 * HOUR, ['c0', 'c0+'])).key, c0, 'the oldest chain with a tail is still open')
+})
+
 test('chains: across a pause, the same membership in one pass, cut across two segments, and as the live segment grows', async () => {
   const task = story(9200, 5), other = story(9300, 3), recs = []
   let ms = T0
