@@ -161,6 +161,12 @@ for (const os of ['darwin', 'win32']) test(`P10 ${os} — on over trocar's own e
   assert.equal(routeEntry('json-key').write({ ...L.ctx, pacToken: KEY2 }, DOOR).ok, true)
   assert.equal(read(f)[L.key], PAC2)
   assert.ok(L.w.ctx.manifest.entries.some((e) => e.door === PAC2))
+  // the user (or anyone) put an earlier address of trocar's door there by hand: a change of the user's, kept and said so — not taken for their egress
+  fs.writeFileSync(f, JSON.stringify({ ...read(f), [L.key]: `${DOOR}/trocar.pac` }, null, 2) + '\n')
+  let refused = null
+  try { const r = routeEntry('json-key').write({ ...L.ctx, pacToken: KEY2 }, DOOR); refused = r.ok ? null : r } catch (e) { refused = e }
+  assert.ok(refused && !/own-egress/.test(JSON.stringify(refused.reason ?? refused.message)), `kept, with the reason a changed value gets: ${refused && (refused.reason || refused.message)}`)
+  assert.equal(read(f)[L.key], `${DOOR}/trocar.pac`, 'kept')
   routeEntry('json-key').undo(L.ctx, L.w.ctx.manifest.entries.filter((e) => e.harness === L.ctx.harness))
   fs.writeFileSync(f, JSON.stringify({ ...read(f), [L.key]: 'http://proxy.corp.example/proxy.pac' }, null, 2) + '\n')
   assert.equal(routeEntry('json-key').write({ ...L.ctx, pacToken: KEY2 }, DOOR).code, 'not-routed', 'the user\'s own PAC address: own-egress, nothing written')

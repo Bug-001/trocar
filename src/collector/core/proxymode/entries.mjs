@@ -48,10 +48,12 @@ const base = (ctx) => ({ dir: ctx.dir, manifest: ctx.manifest, harness: ctx.harn
 const noProxy = (ctx, values) => mergeNoProxy({ userValues: values, persistent: ctx.persistentEnv ? ctx.persistentEnv(['NO_PROXY']) : {} })
 
 // ruling ③: a PAC route is not written over a system PAC, an applied entry with its own egress, or an own leg that needs credentials (the PAC door takes none)
+// a PAC address on trocar's own door (another key, or none) is trocar's address, never the user's egress: the journal judges whose value it is
+const onDoor = (v, value) => { try { const a = new URL(v), b = new URL(value); return a.origin === b.origin && /\/trocar\.pac$/.test(a.pathname) } catch { return false } }
 function pacGate(ctx, doc, file, value) {
   const r = ctx.route
   if (ctx.systemProxy && ctx.systemProxy.pac) return notRouted('system-pac')
-  for (const k of r.ownKeys || r.proxyKeys || []) { const v = getPath(doc, k); if (isSet(v) && v !== value) return notRouted('own-egress', where(file, k)) }
+  for (const k of r.ownKeys || r.proxyKeys || []) { const v = getPath(doc, k); if (isSet(v) && v !== value && !onDoor(v, value)) return notRouted('own-egress', where(file, k)) }
   let cred = false
   try { const u = ctx.systemProxy && ctx.systemProxy.url ? new URL(ctx.systemProxy.url) : null; cred = !!(u && (u.username || u.password)) } catch { /* not a URL: no credentials in it */ }
   return entryGate({ auth: r.auth }, { upstreamCredentialed: cred }).ok ? null : notRouted('credentialed-own-leg')
