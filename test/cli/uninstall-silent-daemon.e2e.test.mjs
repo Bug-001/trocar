@@ -41,7 +41,9 @@ test('1.6 §3.6 e2e: a real daemon stopped with SIGSTOP — uninstall refuses wi
     process.kill(child.pid, 'SIGSTOP')
     const before = snapshot(w.home)
     const refused = await runUninstall({ home: w.home, env: w.env, yes: true, deps: { platform, ...deps } })
-    assert.deepEqual([refused.exit, refused.receipt.error && refused.receipt.error.code], [1, 'collectors-online'], JSON.stringify(refused.receipt.problems))
+    // codex is still desired-on, so the capture-on check alone would refuse with the same code: `daemon` (the silent daemon left running on
+    // purpose) is what only the silent-daemon check puts on the refusal
+    assert.deepEqual([refused.exit, refused.receipt.error && refused.receipt.error.code, refused.receipt.daemon], [1, 'collectors-online', { pid: child.pid, state: 'left-running' }], JSON.stringify(refused.receipt.problems))
     assert.deepEqual(noFlows(snapshot(w.home)), noFlows(before), 'not one byte changed')
 
     const o2 = io()
