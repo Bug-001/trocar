@@ -10,7 +10,7 @@ export const SCHEMA_VERSION = 2
 /** R4. `unknown` (3) is for `status` / `doctor` only: it must never be read as `ok`. `crash` is `trocar daemon`'s (src/collector/cli.mjs). */
 export const EXIT = Object.freeze({ ok: 0, incomplete: 1, usage: 2, unknown: 3, crash: 70 })
 
-/** The commands whose `ok` is their own verdict (C.3 / C.4), never "did not finish" (also the query core's LOCAL_ONLY, src/query/client.mjs). */
+/** The commands whose `ok` is their own verdict (C.3 / C.4), never "did not finish". */
 export const VERDICT_COMMANDS = Object.freeze(['status', 'doctor'])
 
 /** R5: the top-level keys every receipt carries, in the order `newReceipt` writes them. */
