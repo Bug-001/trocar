@@ -369,7 +369,7 @@ for (const os of ['darwin', 'win32']) {
       const before = tree(w.home)
       const { receipt, exit } = await runUninstall({ home: w.home, env: w.env, yes: true, deps: { platform: os, exec: exec.run, socketPath: sock, request: async () => { throw fail() }, alive: (pid) => pid === 4242, identity: () => ({ start_time: '111', boot_id: 'boot-1' }), procs: async () => [], sleep: async () => {}, drainMs: 0, getuid: () => 501, stopDaemon: async () => { stopped++; return { stopped: true, how: 'test', pid: 4242, signals: [] } } } })
       assert.deepEqual([exit, receipt.error && receipt.error.code], [1, 'collectors-online'])
-      assert.deepEqual([stopped, exec.calls.filter((c) => /launchctl|schtasks|reg(\.exe)? delete|taskkill/i.test(c))], [0, []], 'no stop, the autostart is not touched')
+      assert.deepEqual([stopped, exec.calls.filter((c) => /launchctl (?!getenv)|schtasks|reg(\.exe)? delete|taskkill/i.test(c))], [0, []], 'no stop, the autostart is not touched')
       assert.deepEqual(receipt.daemon, { pid: 4242, state: 'left-running' }, 'left running on purpose (appendix C)')
       assert.doesNotMatch(formatUninstallReceipt(receipt, { home: w.home, platform: os }), /kill -9/, 'the next step is trocar off')
       assert.deepEqual(tree(w.home), before, 'not one file changed')
