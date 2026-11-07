@@ -12,7 +12,7 @@ import { samePath } from '../collector/core/trust/journal.mjs'
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
 import { opLockFile, standalonePath, standaloneFiles, launcherPath, standaloneCommand, collectorDir, backupDir } from '../off/paths.mjs'
 import { isInteractive, confirm } from '../off/io.mjs'
-import { fit, tilde, planItems, formWords, carrierWords, planWords, commandLine, formatRefusal, UNDO_WORDS, asDir } from './receipt.mjs'
+import { fit, tilde, planItems, formWords, carrierWords, planWords, commandLine, formatRefusal, markedRefusal, UNDO_WORDS, asDir } from './receipt.mjs'
 import { pairs, wrap } from './text.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
 import { EVENT, CODE } from '../collector/core/codes.mjs'
@@ -235,8 +235,8 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
   const ingressPath = path.join(home, '.trocar', 'collector', 'ingress.json')
   try { plan = await inst.planOn(args) } catch (e) {
     if (e && e.code === inst.MARKED_WITHOUT_RECORD) { // 1.6 §3.2: refused before anything is written; every such file named, and the one line that takes the text out
-      const r = { ...newReceipt('install'), ok: false, error: { code: e.code, message: e.message, command: UNDO_LINE.install }, problems: e.paths.map((f) => `${f} holds trocar's text, and no install record lists it`) }
-      if (json) printJson(io, r); else io.err(formatRefusal(r, { home }).join('\n'))
+      const r = markedRefusal('install', e)
+      if (json) printJson(io, r); else io.err(formatRefusal(r, { home, paths: e.paths }).join('\n'))
       return EXIT.incomplete
     }
     io.err(`trocar install: the plan could not be made (${String((e && e.message) || e)}). Nothing was changed`); return EXIT.incomplete } // a plan that cannot be made (an OS bundle that cannot be read, D38) is said, never a stack

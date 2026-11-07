@@ -8,6 +8,7 @@ import { standaloneCommand, appDir } from '../off/paths.mjs'
 import { COMMAND_INDENT, isCommandLine, foldHang } from '../off/receipt.mjs'
 import { noColor, WIDTH, wrap, pairs, size, tildeText, escRe } from './text.mjs'
 import { HARNESS_IDS } from '../off/harness-names.mjs'
+import { newReceipt, UNDO_LINE } from '../off/schema.mjs'
 import { fitCompact } from '../netenv/topology-text.mjs'
 
 /** `/home/alice/.claude/x` → `~/.claude/x` when `p` is under `home`. */
@@ -213,7 +214,11 @@ export function formatOnReceipt(r, { tense = 'past', home = null, platform = 'li
  *  reached the agents through the certificate settings install gave them (4.6), so that is what is said gone. The one place this line is decided. */
 /** A refusal that names files and the one line that gets past it (1.6 §1.1⑥): the sentence, each file on a line of its own (each problem
  *  starts with its path), then `error.command` whole on a line of its own. → lines */
-export const formatRefusal = (r, { home = null } = {}) => fit([`trocar ${r.command}: ${r.error.message}`, ...(r.problems || []).map((p) => `  ${tilde(p, home)}`), ...(r.error.command ? [commandLine(r.error.command)] : [])], { home })
+// `paths`: each file alone on its line (the sentence above says what they are), printed whole (§1.1⑥)
+export const formatRefusal = (r, { home = null, paths = null } = {}) => fit([`trocar ${r.command}: ${r.error.message}`, ...(paths || r.problems || []).map((p) => wholeLine(`  ${p}`)), ...(r.error.command ? [commandLine(r.error.command)] : [])], { home }) // a path prints whole (§1.1⑥)
+/** 1.6 §3.2 「标记却没有记录」: the refusal document of `install` or `on` (`command`) from the plan's error (`code`, `paths`): every file named, and
+ *  `error.command` the uninstall that takes the text out by trocar's marks. */
+export const markedRefusal = (command, e) => ({ ...newReceipt(command), ok: false, error: { code: e.code, message: e.message, command: UNDO_LINE.install }, problems: e.paths.map((f) => `${f} holds trocar's text, and no install record lists it`) })
 
 export function uninstallHeadline({ platform = process.platform, past = true } = {}) {
   const linux = platform === 'linux'

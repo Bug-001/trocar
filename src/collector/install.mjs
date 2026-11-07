@@ -185,6 +185,12 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
   })
   const R = roots || await bundleRoots(arch)
   let draft = planTrust({ descriptors: descs, ctxFor, caCertPem: null, collectorDir: dir, roots: R })
+  // marked text no record lists (1.6 §3.2), over every harness's files BEFORE any harness is dropped below, so the refusal names them all;
+  // any other per-file refusal is left to the preview further down, which throws it for the harnesses still planned
+  const marked = [...new Set(draft.entries.filter((e) => judgeEntry({ manifest: prior, planned: e, fs }).action === 'write').map((e) => {
+    try { if (e.kind === 'text') previewTextEntry({ file: e.path, edit: e, fs }); else previewJsonKey({ file: e.path, keys: e.keys, value: e.value, fs }); return null } catch (err) { return err && err.code === MARKED_WITHOUT_RECORD ? err.path : null }
+  }).filter(Boolean))]
+  if (marked.length) throw Object.assign(new Error(`${marked.length === 1 ? 'this file holds' : 'these files hold'} trocar's text from an earlier install whose record is gone, so nothing was changed. The line below takes it out by trocar's own marks; then run this command again.`), { code: MARKED_WITHOUT_RECORD, paths: marked })
   // 4.11 P4: an owned file the manifest does not list that would land on someone else's file (notTrocars) skips its harness whole, before
   // anything is written (D38); the plan is made again without it, so nothing of that harness is written, the other harnesses are
   const foreign = draft.owned.filter((o) => judgeOwned({ manifest: prior, file: o.path, fs }).action === 'write').map((o) => ({ harness: o.harness, what: o.path, reason: notTrocars({ dir, file: o.path, fs }) })).filter((x) => x.reason)
@@ -203,17 +209,7 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
     return j
   })
   // every per-file refusal too, for what is to be written (a dangling link, a file that is not JSON, a patch file that is not a list) — before onPlan, before any write
-  // marked text no record lists (1.6 §3.2) is collected over every file, so the refusal names them all, not the first
-  const marked = []
-  const preview = draft.entries.map((e, i) => {
-    if (entryJ[i].action !== 'write') return null
-    try { return e.kind === 'text' ? previewTextEntry({ file: e.path, edit: e, fs }) : previewJsonKey({ file: e.path, keys: e.keys, value: e.value, fs }) } catch (err) {
-      if (!err || err.code !== MARKED_WITHOUT_RECORD) throw err
-      if (!marked.includes(err.path)) marked.push(err.path)
-      return null
-    }
-  })
-  if (marked.length) throw Object.assign(new Error(`${marked.length === 1 ? 'this file holds' : 'these files hold'} trocar's text from an earlier install whose record is gone, so nothing was changed. Take it out by trocar's own marks with the line below, then run trocar install again.`), { code: MARKED_WITHOUT_RECORD, paths: marked })
+  const preview = draft.entries.map((e, i) => (entryJ[i].action !== 'write' ? null : e.kind === 'text' ? previewTextEntry({ file: e.path, edit: e, fs }) : previewJsonKey({ file: e.path, keys: e.keys, value: e.value, fs })))
   const fileJ = draft.files.map((f) => {
     const j = judgeOwned({ manifest: prior, file: f.path, fs })
     steps.push({ harness: f.harness, path: f.path, kind: f.role, action: j.action, ...(j.why ? { why: j.why } : {}) })
