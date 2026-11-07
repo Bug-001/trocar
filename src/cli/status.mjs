@@ -39,7 +39,7 @@ import { diagnose } from '../netenv/findings.mjs'
 import { captureHealth } from '../health/read.mjs'
 import { trustReasonText } from '../collector/core/codes.mjs'
 import { formatStatus, formatHealth, failuresBlock, statusSummary, statusDetail } from './status-text.mjs'
-import { colors, noColor, unknown as unknownText2 } from './text.mjs'
+import { colors, noColor, tildeText, unknown as unknownText2 } from './text.mjs'
 import { squashed } from './words.mjs'
 import { tilde } from './receipt.mjs'
 import { isProxyMode } from '../off/mode.mjs' // proxy mode or driver mode (D47), decided in ONE place (src/cli may import src/off; the collector's copy is isModelOs)
@@ -589,9 +589,9 @@ export async function statusRun(argv, { io, env = process.env, home = nodeOs.hom
     detail.forEach((h, i) => {
       if (i) io.out('')
       const finding = found.find((x) => x.harness === h && x.class !== 'note') || null
-      for (const l of statusDetail(doc, h, { finding, now, colors: c })) io.out(l)
+      for (const l of statusDetail(doc, h, { finding, now, colors: c })) io.out(tildeText(l, home)) // HOME paths as ~ (1.6 §1.1⑤)
     })
-  } else for (const l of statusSummary(doc, { now, colors: c })) io.out(l)
+  } else for (const l of statusSummary(doc, { now, colors: c })) io.out(tildeText(l, home))
   if (failures) { io.out(''); for (const l of failuresBlock(doc.failures, effectiveHealth(f).health, { now })) io.out(l) }
   return { exit, f }
 }

@@ -66,8 +66,10 @@ for (const [shape, s] of Object.entries(SHAPES)) {
       const text = await status(w, ['z-code'])
       assert.doesNotMatch(text.split('\n')[0], /, captured$/, text.split('\n')[0])
       const block = text.slice(text.indexOf('  Forms'), text.indexOf('  Routes'))
-      const deskRows = block.slice(block.indexOf('z-code.desktop')).split('\n').slice(0, 4).join('\n')
-      assert.doesNotMatch(deskRows.slice(deskRows.indexOf('proxy')), /^proxy\s+points at trocar/, deskRows)
+      const desktop = block.slice(block.indexOf('z-code.desktop')).split('\n')[0]
+      assert.match(desktop, s.reason === 'blocker' ? /route\s+not routed/ : /route\s+unknown/, desktop) // the blocked form's own line leads with the route verdict
+      assert.doesNotMatch(block.slice(block.indexOf('z-code.desktop')), /points at trocar/, 'never "points at trocar" for the blocked form')
+      assert.ok(!block.includes(w.home), 'HOME paths print as ~')
     } finally { try { fs.chmodSync(SETTING(w.home), 0o600) } catch {} }
   })
 }
