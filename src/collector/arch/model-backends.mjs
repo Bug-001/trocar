@@ -4,7 +4,7 @@
 import nodeFs from 'node:fs'
 import path from 'node:path'
 
-import { isModelOs } from '../model-install.mjs'
+import { isModelOs, ruleUFiles } from '../model-install.mjs'
 import { redactProxyUrl } from '../../netenv/redact.mjs'
 import { recordDrift } from '../../netenv/adopt.mjs'
 import { userPathEnv } from '../../off/user-path.mjs'
@@ -29,6 +29,10 @@ export const ownsBy = ({ os, home, uid = typeof process.getuid === 'function' ? 
   if (os === 'win32') return path.resolve(p).toLowerCase().startsWith(`${path.resolve(home).toLowerCase()}${path.sep}`) ? true : null
   try { return uid == null ? null : fs.statSync(p).uid === uid } catch { return null }
 }
+
+/** Rule U on Linux (4.11 P4): the files the settings `srcs` (descriptor data) name now, each with why it is not the user's own file — the model's one
+ *  finder and judge (model-install.mjs ruleUFiles), for a descriptor's inject. */
+export const userFilesFor = ({ os, home, env, fs = nodeFs }) => (srcs) => ruleUFiles({ proxyMode: { userCertFiles: srcs } }, sourcesCtx({ os, home, env, fs, which: () => null }), { home, owns: ownsBy({ os, home, fs }), fs })
 
 /** The sources ctx (sources.mjs header) for this machine and user. A `{ command }` resolves against the user's recorded PATH (4.11 `present`), never
  *  the asking process's own once one is recorded: the daemon and its worker run with the login service's PATH, the CLI with the shell's. */

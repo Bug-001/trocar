@@ -7,7 +7,6 @@
 import { retriedNote } from '../cli/words.mjs'
 import { UNDO_WORDS } from '../cli/receipt.mjs'
 import { isModelOs, ruleUFiles } from './model-install.mjs'
-import { ownsBy, sourcesCtx } from './arch/model-backends.mjs' // macOS / Windows: their on is turnOnModel (src/cli/on-model.mjs); this turnOn is Linux's
 import fs from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
@@ -145,10 +144,6 @@ export function autostartBlock({ unit, osName }) {
   return `${entryState(osName, unit, q)}: the collector would not start at the next login, ${after}. Nothing was changed. Run: trocar install`
 }
 
-/** Rule U on Linux (4.11 P4): the files the settings `srcs` (descriptor data) name now, each with why it is not the user's own file — the model's one
- *  finder and judge (model-install.mjs ruleUFiles), for a descriptor's inject. */
-export const userFilesFor = ({ os, home, env, fs = nodeFs }) => (srcs) => ruleUFiles({ proxyMode: { userCertFiles: srcs } }, sourcesCtx({ os, home, env, fs, which: () => null }), { home, owns: ownsBy({ os, home, fs }), fs })
-
 // the plan asks only whether the file takes a block; the root's bytes exist once the CA is made (a fresh install), so the preview places a block's shape
 const PEM_SHAPE = '-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----'
 
@@ -172,7 +167,7 @@ const stop = (message, code = null) => Object.assign(new Error(message), { stops
  *  `_` is what the writing needs (the manifest as read, the draft, the roots). `ids`: the harness code ids named, or null for every one found.
  *  The combined bundles' roots are `roots` when given (a test's, an embedder's), else the arch's (tls/roots.mjs bundleRoots: `missing` is said per
  *  bundle by planTrust; a read that fails throws here, before anything is written). */
-export async function planOn({ home = os.homedir(), env = process.env, ids = null, osName, harnesses, scan = async () => [], match = () => ({ agent: null }), arch = null, roots = null, unit = null, fs = nodeFs, now = () => new Date() } = {}) {
+export async function planOn({ home = os.homedir(), env = process.env, ids = null, osName, harnesses, scan = async () => [], match = () => ({ agent: null }), arch = null, roots = null, unit = null, userFilesFor = null, fs = nodeFs, now = () => new Date() } = {}) {
   const dir = collectorHome(path.join(home, '.trocar'))
   let prior
   try { prior = readManifest(dir, fs) } catch (e) { // not written over: it is the only list of what trocar changed; `off` has the way back by trocar's own marks (R3)
@@ -194,7 +189,7 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
   const ctxFor = (d) => ({
     os: osName, home, env: envMap, running: facts.filter((f) => match(f).agent === d.name).map((f) => f.env || new Map()),
     readText: (f) => readText(f), readTextOrError: (f) => readTextOrError(f), readBytes: (f) => { try { return fs.readFileSync(f) } catch { return null } }, listDir, collectorDir: dir, caPem: ca.pem,
-    userFiles: userFilesFor({ os: osName, home, env: envMap, fs }),
+    userFiles: userFilesFor ? userFilesFor({ os: osName, home, env: envMap, fs }) : null, // rule U's finder (arch/model-backends.mjs), handed in by the caller
   })
   const R = roots || await bundleRoots(arch)
   const draft = planTrust({ descriptors: descs, ctxFor, caCertPem: null, collectorDir: dir, roots: R })
@@ -438,7 +433,7 @@ export async function installCollector({ home = os.homedir(), ...opts } = {}) {
  *    arch       the arch, asked for the combined bundles' OS roots (planOn)   roots  overrides them
  *  → { receipt, manifest, plan, exit }. */
 export async function turnOn(opts = {}) {
-  const { home = os.homedir(), env = process.env, ids = null, osName, harnesses, scan, match, arch = null, roots = null, unit = null, freePort = freeEnginePort, onPlan = () => {}, confirm = null, dryRun = false, networkEdited = null, request = null, now = () => new Date(), fs = nodeFs, getuid, helperState = null, linger = null, lingerRead = null, socketPath = null, sleep: pause = sleep, user = null, lockWaitMs = OP_LOCK_WAIT_MS } = opts
+  const { home = os.homedir(), env = process.env, ids = null, osName, harnesses, scan, match, arch = null, roots = null, unit = null, userFilesFor = null, freePort = freeEnginePort, onPlan = () => {}, confirm = null, dryRun = false, networkEdited = null, request = null, now = () => new Date(), fs = nodeFs, getuid, helperState = null, linger = null, lingerRead = null, socketPath = null, sleep: pause = sleep, user = null, lockWaitMs = OP_LOCK_WAIT_MS } = opts
   refuseRoot('on', getuid)
   const dir = collectorHome(path.join(home, '.trocar'))
   const stateF = path.join(dir, 'state.json')
@@ -470,7 +465,7 @@ export async function turnOn(opts = {}) {
     return v === true || v === false ? { linger: v } : { linger: 'unknown', linger_reason: linger ? 'the linger state could not be read (/var/lib/systemd/linger)' : 'nothing reads it here' }
   } catch (e) { return { linger: 'unknown', linger_reason: String((e && e.message) || e) } } }
   return recorded(dir, 'install', async (run) => {
-    const plan = await planOn({ home, env, ids, osName, harnesses, scan, match, arch, roots, unit: null, fs, now }) // D61: the login entry is `install`'s and `on` never writes it, so the writing side is handed no unit at all
+    const plan = await planOn({ home, env, ids, osName, harnesses, scan, match, arch, roots, unit: null, userFilesFor, fs, now }) // D61: the login entry is `install`'s and `on` never writes it, so the writing side is handed no unit at all
     // D55⑥ / override #15: `on` never writes a certificate, so it never installs silently — no install record, no on (macOS / Windows: turnOnModel)
     // 附录 C.1: the refusal's code lives in `error`, the one place a client looks (never a top-level `code`)
     if (!isModelOs(osName) && !installComplete(plan._.prior)) { const message = 'certificates are not installed. Run: trocar install'; return { receipt: unwritten({ ...fresh(), ok: false, error: { code: CODE.certNotInstalled, message }, notes: [message] }), manifest: plan._.prior, plan, exit: 1 } }

@@ -11,7 +11,8 @@ import { X509Certificate } from 'node:crypto'
 import zcode from '../../../src/collector/harness/z-code.mjs'
 import { createRegistry } from '../../../src/collector/core/registry.mjs'
 import { planTrust } from '../../../src/collector/core/trust/plan.mjs'
-import { installCollector, userFilesFor } from '../../../src/collector/install.mjs'
+import { installCollector } from '../../../src/collector/install.mjs'
+import { userFilesFor } from '../../../src/collector/arch/model-backends.mjs'
 import { uninstallCollector } from '../../helpers/uninstall.mjs'
 import { createCa } from '../../../src/collector/core/tls/ca.mjs'
 import { sandbox, ctxFor, facts, judge, matchOf, CA, OTHER } from './_ctx.mjs'
@@ -157,7 +158,7 @@ test('z-code: the desktop setting httpProxyCaCertPath names the user\'s CA file 
     const desk = s.put('certs/relay-ca.pem', DESK.certPem)
     const setting = s.put('.zcode/v2/setting.json', JSON.stringify({ recentProjects: [], locale: 'zh-CN', terminalInheritSystemProfile: true, httpProxyCaCertPath: desk, closeToTrayOnWindows: true }, null, 2))
     const settingBefore = fs.readFileSync(setting)
-    await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [zcode], freePort: async () => 47016, roots: { node: [], osText: '' } })
+    await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [zcode], userFilesFor, freePort: async () => 47016, roots: { node: [], osText: '' } })
     const root = fs.readFileSync(path.join(s.home, '.trocar', 'collector', 'ca', 'trocar-ca.pem'), 'utf8')
     const text = fs.readFileSync(desk, 'utf8')
     assert.ok(text.startsWith(DESK.certPem), 'the user\'s bytes first, as they were')
@@ -177,7 +178,7 @@ test('z-code: the desktop setting httpProxyCaCertPath names the user\'s CA file 
   try {
     const managed = t.put('.npm-global/lib/certs/ca.pem', OTHER.certPem)
     t.put('.zcode/v2/setting.json', JSON.stringify({ httpProxyCaCertPath: managed }, null, 2))
-    const r = await installCollector({ home: t.home, env: { HOME: t.home }, osName: 'none', harnesses: [zcode], freePort: async () => 47016, roots: { node: [], osText: '' } })
+    const r = await installCollector({ home: t.home, env: { HOME: t.home }, osName: 'none', harnesses: [zcode], userFilesFor, freePort: async () => 47016, roots: { node: [], osText: '' } })
     assert.equal(fs.readFileSync(managed, 'utf8'), OTHER.certPem, 'a file a package manager rewrites is never appended to')
     assert.ok(r.plan.records.some((x) => x.code === 'harness-note' && x.reason.includes(managed)), 'the skipped file is named in a note')
   } finally { t.done() }
