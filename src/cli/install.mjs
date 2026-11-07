@@ -7,7 +7,8 @@ import nodeOs from 'node:os'
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { EXIT, newReceipt, UNDO_LINE } from '../off/schema.mjs'
-import { refuseOldManifest, readManifest, saveManifest } from '../off/manifest.mjs'
+import { refuseOldManifest, readManifest, saveManifest, manifestPath } from '../off/manifest.mjs'
+import { COMMAND_INDENT } from '../off/receipt.mjs'
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
 import { opLockFile, standalonePath, standaloneFiles, launcherPath, standaloneCommand } from '../off/paths.mjs'
 import { isInteractive, confirm } from '../off/io.mjs'
@@ -98,6 +99,15 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
   const fs = deps.fs || nodeFs
   const old = refuseOldManifest({ home, platform, fs })
   if (old) { if (json) printJson(io, { ...newReceipt('install'), ok: false, error: { code: 'older-install', message: old.message }, notes: [old.message] }); else io.err(fit([`trocar install: ${old.message}`], { home }).join('\n')); return EXIT.incomplete }
+  // 1.6 §3.2: a record that cannot be read: installing over it would lose what it lists, and uninstall takes that out by trocar's marks
+  try { readManifest(path.join(home, '.trocar', 'collector'), fs) } catch (e) {
+    const file = manifestPath(path.join(home, '.trocar', 'collector')), reason = String((e && e.message) || e).replace(file, 'it').replace(/\s+/g, ' ')
+    const message = [`the install record ${file} cannot be read, so trocar changed nothing. Uninstall takes out what trocar put in by its marks, then install again:`, `${COMMAND_INDENT}trocar uninstall`, `${COMMAND_INDENT}trocar install`].join('\n')
+    const dry = flags.has('--dry-run')
+    if (json) printJson(io, { ...newReceipt('install'), ok: false, ...(dry ? { dry_run: true, planned: [], blocked: [{ what: file, reason }] } : { notes: [message, reason] }), error: { code: 'manifest-unreadable', message, command: 'trocar uninstall' } })
+    else io.err(fit([`trocar install: ${message}`], { home }).join('\n'))
+    return dry ? EXIT.ok : EXIT.incomplete
+  }
   const { isModelOs } = await import('../collector/model-install.mjs')
   const model = isModelOs(platform)
   // R12: the writes run under op.lock, taken after the yes (a plan that is only printed takes nothing and writes nothing)

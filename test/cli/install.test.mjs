@@ -308,3 +308,23 @@ for (const platform of ['darwin', 'win32']) {
     for (const f of standaloneFiles(w.home, platform)) assert.ok(words.includes(tilde(f, w.home)), `${f} is named: ${words}`)
   })
 }
+
+// 1.6 §3.2: a record that cannot be read is refused before the plan, whatever the OS: installing over it would lose what it lists, and uninstall takes it out by marks
+for (const platform of ['darwin', 'win32', 'linux']) {
+  for (const [what, bytes] of [['not JSON', '{ not json'], ['a list', '[]']]) {
+    test(`1.6 §3.2 · ${platform}: an install record that is ${what} refuses: manifest-unreadable, the command, the file named, nothing written`, async () => {
+      const home = tmpDir(), dir = path.join(home, '.trocar', 'collector'), file = path.join(dir, 'install-manifest.json')
+      fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(file, bytes)
+      for (const [flags, code] of [[['--yes', '--json'], 1], [['--json'], 1], [['--dry-run', '--json'], 0]]) { // §1.4: a dry run exits 0 and says what stops the run
+        const io = fakeIo()
+        const exit = await runInstallCli(flags, { io, env: {}, home, platform, deps: { getuid: () => 501 } })
+        const doc = io.json()
+        assert.equal(exit, code, io.text())
+        assert.deepEqual([doc.ok, doc.error.code, doc.error.command], [false, 'manifest-unreadable', 'trocar uninstall'])
+        assert.ok(doc.error.message.includes(file), doc.error.message)
+        assert.deepEqual(validateReceipt(doc), [])
+      }
+      assert.deepEqual([fs.readdirSync(path.join(home, '.trocar')), fs.readdirSync(dir), fs.readFileSync(file, 'utf8')], [['collector'], ['install-manifest.json'], bytes], 'nothing was written')
+    })
+  }
+}
