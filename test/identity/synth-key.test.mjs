@@ -582,6 +582,8 @@ test('chainOf: the facts equal 3.4\'s encoding', () => {
   for (const n of [1, 12, 200]) {
     for (const seed of [0, 1, 2]) {
       const items = Array.from({ length: n }, (_, i) => i === 0 && n > 1 ? { role: 'system', content: 'sys', cache_control: cc } : shapes[(i * (seed + 2) + seed) % shapes.length](i))
+      // a system and a developer item among the last 12: never an own hash, whatever the window
+      if (n > 12) { items[n - 3] = { role: 'developer', content: 'dev' }; items[n - 7] = { role: 'system', content: 'late sys' } }
       const rec = { ...call({ agent: 'hermes', host: 'llm.internal.test', path: '/v1/chat/completions', ms: T0, body: {} }), req_body: { model: 'm', messages: items } }
       const f = synthFactsOf(rec), want = reference(items)
       assert.ok(f && f.chain.length > 0, `${n}/${seed}: keyless facts`)
