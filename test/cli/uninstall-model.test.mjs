@@ -362,3 +362,18 @@ test('1.6 §3.6 · darwin: the record lost, then install again — one uninstall
   assert.ok(noTrocarRow(w.patch), 'dsh\'s loader row is gone')
   assert.ok(fs.readFileSync(w.kimi).equals(MACHO), 'the real kimi is back under its own name')
 })
+test('4.11 ㉔ · darwin: the record lost while its root is still trusted — install makes no second root, and uninstall with no record takes out the root and every carrier', async () => {
+  const w = await macShape()
+  fs.rmSync(path.join(w.dir, 'install-manifest.json'))
+  const roots = [...w.store.held]
+  assert.equal(roots.length, 1)
+  const again = await w.install({ wrapperKit: { renderWrapper } })
+  assert.equal(again.exit, 1, 'install stops at the root its record does not list')
+  assert.deepEqual([...w.store.held], roots, 'no second root is made or trusted')
+  const { receipt, exit } = await uninstall(w, { rootStore: w.store }) // the user trust store the run sweeps for trocar's roots
+  assert.equal(exit, 0, JSON.stringify({ p: receipt.problems, l: receipt.left }))
+  assert.deepEqual([...w.store.held], [], 'the root is out of the trust store')
+  assert.equal(fs.readFileSync(w.file, 'utf8'), USER_PEM, 'the user\'s certificate file byte for byte')
+  assert.ok(noTrocarRow(w.patch), 'dsh\'s loader row is gone')
+  assert.ok(fs.readFileSync(w.kimi).equals(MACHO), 'the real kimi is back under its own name')
+})
