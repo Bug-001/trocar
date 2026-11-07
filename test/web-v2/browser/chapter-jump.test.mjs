@@ -22,12 +22,13 @@ const CALLS = 1_700
 const TIP = 'trocar.token' // core/http.mjs: the board's token slot (4.4 §每用户口令)
 
 let world = null
-async function folded() {
-  if (world) return world
+// ms: this test's budget for the shared board (its timeout less a margin, renewed as each test starts; 0.1 §3 约定 13)
+async function folded(ms) {
+  if (world) { world.b.renew(ms); return world }
   const userHome = tmpDir('trocar-chap-'), home = path.join(userHome, '.trocar')
   fs.mkdirSync(path.join(home, 'raw'), { recursive: true, mode: 0o700 })
   const s = bigSession({ home, ...SHAPE }); s.append(CALLS)
-  const b = await withBoard({ home: { userHome, home }, chromium: gate.chromium })
+  const b = await withBoard({ home: { userHome, home }, chromium: gate.chromium, deadline: ms })
   const until = Date.now() + 240_000
   let head = null
   for (;;) {
@@ -91,7 +92,7 @@ async function jump(c, chs, g, dir, act) {
 }
 
 test('1.3 §章 · 18: ‹ › clicked and [ ] pressed paint the next / previous chapter within BOARD_LINES.chapterJump (p95)', { skip, timeout: 600_000 }, async () => {
-  const w = await folded(), chs = w.head.chapters, last = chs.length - 1
+  const w = await folded(570_000), chs = w.head.chapters, last = chs.length - 1
   const c = await fresh(w)
   try {
     await open(w, c, 1)
@@ -120,7 +121,7 @@ test('1.3 §章 · 18: ‹ › clicked and [ ] pressed paint the next / previous
 })
 
 test('1.3 §章 · 18: a jump into a chapter whose packs are not here paints from the head within the line; its rows fill, bar for bar, when they land', { skip, timeout: 300_000 }, async () => {
-  const w = await folded(), chs = w.head.chapters, [p0, p1] = w.head.packs
+  const w = await folded(270_000), chs = w.head.chapters, [p0, p1] = w.head.packs
   // chapter A ends past the first pack, its next chapter B starts inside the second: open on A's first step with only the first pack
   // let through, then › to B, whose rows are held back
   const a = chapterAt(chs, p0.s1 - 1), b = chs[a + 1]
@@ -148,7 +149,7 @@ test('1.3 §章 · 18: a jump into a chapter whose packs are not here paints fro
 })
 
 test('1.3 · 22: a drag on the strip moves the bars to another part and stops following, never the step; go back brings them to it; [ ] count from the bars\' part', { skip, timeout: 300_000 }, async () => {
-  const w = await folded(), chs = w.head.chapters, last = chs.length - 1, N = w.head.steps
+  const w = await folded(270_000), chs = w.head.chapters, last = chs.length - 1, N = w.head.steps
   const c = await fresh(w)
   try {
     await open(w, c)

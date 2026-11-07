@@ -3,6 +3,7 @@
 // node --test runs every .mjs, so nothing here runs at import. The browser suite runs only under `npm run test:browser`
 // (TROCAR_PLAYWRIGHT=1); anywhere else probe() says why it is not ok and the cases skip with that reason.
 import fs from 'node:fs'
+import { ChildProcess } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -37,13 +38,20 @@ const LOCAL_STATE = { password_manager: { os_password_blank: false, os_password_
  *  exit (at 'disconnected' Windows Chrome still holds profile files), never into the run's temp directory, which leak-guard checks; what
  *  is still held then, or a browser never closed, goes when the process exits (tmpDir). Closing the browser, any context or any page of
  *  it first drops the routes on what closes (closeQuietly). */
-export async function launchChrome(chromium) {
+export async function launchChrome(chromium, pids = []) {
   const tmp = tmpDir('trocar-chrome-')
   const profile = path.join(tmp, 'profile')
   fs.mkdirSync(profile)
   fs.writeFileSync(path.join(profile, 'Local State'), JSON.stringify(LOCAL_STATE))
-  // a `{ launch }` stand-in (the WebKit cases') has no Chrome profile to seed: it is launched as is
-  const browser = chromium.launchPersistentContext ? (await chromium.launchPersistentContext(profile, { ...CHANNEL, env: { ...process.env, TMP: tmp, TEMP: tmp, TMPDIR: tmp } })).browser() : await chromium.launch()
+  // a `{ launch }` stand-in (the WebKit cases') has no Chrome profile to seed: it is launched as is. The pids of what it starts go into
+  // `pids` as they start, so a launch that hangs can be killed too (withBoard's deadline)
+  // launches never overlap (one test at a time, one launch per board); overlapping ones would restore out of order
+  const spawn = ChildProcess.prototype.spawn
+  ChildProcess.prototype.spawn = function (...a) { const r = spawn.apply(this, a); if (this.pid) pids.push(this.pid); return r }
+  let browser
+  try {
+    browser = chromium.launchPersistentContext ? (await chromium.launchPersistentContext(profile, { ...CHANNEL, env: { ...process.env, TMP: tmp, TEMP: tmp, TMPDIR: tmp } })).browser() : await chromium.launch()
+  } finally { ChildProcess.prototype.spawn = spawn }
   const close = browser.close.bind(browser)
   browser.close = async (...a) => {
     try { return await close(...a) } finally {
@@ -105,7 +113,19 @@ export async function timerReads(b) {
  *  `home`: a prebuilt {userHome, home} served instead of boardHome({bytes}). `base`: an external board's URL carrying `#t=<token>` — no
  *  face is started (`face` is null) and `get` reads that board with the token header.
  *  `requests` logs every /api (the answer files /api/d/* too) and /control response as {url, method, body (the request's post data, or null), range (its Range header, or null), status, start (ms epoch the request began), t (ms epoch it answered)}; `errors` collects pageerrors; `get(name, params)` reads the face directly (no page, no request log). Always `await stop()`. */
-export async function withBoard({ bytes, home, base, idleMs, token = true, width = 1280, height = 900, theme = 'light', chromium, setup } = {}) {
+// 0.1 §3 约定 13: how long a board's browser may go on in one test, under the run's per-test timeout. A board shared by several tests is
+// given each test's budget with renew(ms) when that test starts; a test whose own timeout is longer passes its own (a little under it)
+export const BOARD_DEADLINE_MS = 270_000
+// the browser's processes gone at once: their group where there are groups (Playwright starts Chrome in one of its own, with its renderers
+// and GPU process), else the process itself
+function killBrowser(pids) {
+  for (const pid of pids) {
+    // a recorded pid that leads no group (a worker the face forked during the launch, the face's to end) or is gone is left alone: a pid
+    // gone may be another process's by now
+    try { process.kill(process.platform === 'win32' ? pid : -pid, 'SIGKILL') } catch (e) { if (e.code === 'EPERM') try { process.kill(pid, 'SIGKILL') } catch { /* gone */ } }
+  }
+}
+export async function withBoard({ bytes, home, base, idleMs, token = true, width = 1280, height = 900, theme = 'light', chromium, setup, deadline = BOARD_DEADLINE_MS } = {}) {
   chromium ||= (await import('playwright-core')).chromium
   const face = base ? null : await serveBoard({ ...(home || boardHome({ bytes })), idleMs })
   const ext = base && new URL(base), extToken = ext && new URLSearchParams(ext.hash.slice(1)).get('t')
@@ -119,16 +139,29 @@ export async function withBoard({ bytes, home, base, idleMs, token = true, width
   const requests = []
   const errors = []
   const missing = []
-  let browser, context, page
+  let browser, context, page, dead = null
+  // the hard deadline (0.1 §3 约定 13): the browser's processes are killed, which rejects whatever call waits on it; stop() then fails
+  const pids = []
+  let timer = null
+  const renew = (ms = deadline) => {
+    clearTimeout(timer)
+    timer = setTimeout(() => { dead = new Error(`browser did not answer in ${Math.round(ms / 1000)} s`); killBrowser(pids) }, ms)
+    timer.unref()
+  }
+  renew()
   const stop = async () => {
-    try { await page?.close() } finally {
-      try { await context?.close() } finally {
-        try { await browser?.close() } finally { await face?.close() }
+    clearTimeout(timer)
+    try {
+      try { await page?.close() } finally {
+        try { await context?.close() } finally {
+          try { await browser?.close() } finally { await face?.close() }
+        }
       }
-    }
+    } catch (e) { if (!dead) throw e }
+    if (dead) throw dead
   }
   try {
-    browser = await launchChrome(chromium)
+    browser = await launchChrome(chromium, pids)
     context = await browser.newContext({ viewport: { width, height }, colorScheme: theme })
     page = await context.newPage()
     page.on('pageerror', (e) => errors.push(String(e)))
@@ -149,7 +182,7 @@ export async function withBoard({ bytes, home, base, idleMs, token = true, width
     const t = token === true ? face?.token : token
     await page.goto(face ? `${face.base}/${t ? `#t=${encodeURIComponent(t)}` : ''}` : base, { waitUntil: 'load' })
   } catch (e) { await stop(); throw e }
-  return { url: face ? face.base : ext.origin, get, face, page, stop, requests, errors, missing }
+  return { url: face ? face.base : ext.origin, get, face, page, stop, renew, requests, errors, missing }
 }
 
 export const mark = (page, name) => page.evaluate((n) => { performance.mark(n) }, name)
