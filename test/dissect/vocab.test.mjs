@@ -65,7 +65,7 @@ test('additional_tools: tool definitions of the tools section, each its own byte
   const tools = defs.filter((d) => d.sec === 'tools');
   assert.deepEqual(tools.map((d) => d.name), ['functions', 'exec', 'apply_patch', 'clock', 'exec']);
   assert.ok(tools.every((d) => d.kind === 'tool'));
-  const entries = [OFFER.tools[0], OFFER.tools[0].tools[0], OFFER.tools[0].tools[1], OFFER.tools[1], OFFER.tools[1].tools[0]];
+  const entries = [OFFER.tools[0].description, OFFER.tools[0].tools[0], OFFER.tools[0].tools[1], OFFER.tools[1].description, OFFER.tools[1].tools[0]];
   tools.forEach((d, i) => { const { start, end } = parseTextRef(d.ref); assert.deepEqual(JSON.parse(body.slice(start, end).replace(/ ,  /g, ',')), entries[i], d.name); });
   const msgs = defs.filter((d) => d.sec === 'messages');
   assert.equal(msgs.length, 1);
@@ -75,7 +75,7 @@ test('additional_tools: tool definitions of the tools section, each its own byte
 });
 
 test('additional_tools: a tool list of no known shape stays a json block, never dropped', async () => {
-  for (const tools of ['x', [1], null]) {
+  for (const tools of ['x', [1], null, []]) {
     const flat = await messageDefs(JSON.stringify({ model: 'm', input: [{ ...OFFER, tools }, SAY] }));
     assert.deepEqual(flat.map((d) => d.kind), ['json', 'text'], JSON.stringify(tools));
   }

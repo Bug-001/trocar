@@ -176,14 +176,16 @@ export function itemToBlocks(item) {
 const isObj = (x) => !!x && typeof x === 'object' && !Array.isArray(x);
 const isToolList = (x) => Array.isArray(x) && x.every(isObj);
 // Codex offers tools in an `additional_tools` item of input[]: tool definitions, not a conversation item. A tool list of another shape stays a json block.
-const isToolsItem = (it) => isObj(it) && it.type === 'additional_tools' && isToolList(it.tools);
+const isToolsItem = (it) => isObj(it) && it.type === 'additional_tools' && isToolList(it.tools) && it.tools.length > 0;
 // every tool entry of a Responses request and where it stands: tools[], then each additional_tools item. A `namespace` entry is one
 // (its name and description); its tools follow, each one of its own.
 function toolEntries(req) {
   const out = [];
   const walk = (list, path) => list.forEach((t, i) => {
     const at = [...path, i], inner = isObj(t) && isToolList(t.tools) ? t.tools : null;
-    out.push({ t, at, inner });
+    // a namespace's block is its own words (description, else name): its tools' bytes are theirs, never counted twice
+    const own = inner ? (typeof t.description === 'string' ? [...at, 'description'] : typeof t.name === 'string' ? [...at, 'name'] : at) : at;
+    out.push({ t, at: own, inner });
     if (inner) walk(inner, [...at, 'tools']);
   });
   if (Array.isArray(req && req.tools)) walk(req.tools, ['tools']);
@@ -195,7 +197,7 @@ function toolEntries(req) {
 export function boardFlat(req) {
   const flat = [];
   for (const { t, at, inner } of toolEntries(req)) {
-    const name = t.name || t.type || ('tool_' + at[at.length - 1]);         // built-in tools (tool_search/web_search) have no name
+    const name = t.name || t.type || ('tool_' + at.filter((x) => typeof x === 'number').pop());         // built-in tools (tool_search/web_search) have no name
     // a namespace's tools are blocks of their own, not its bytes twice
     const schema = t.parameters !== undefined ? t.parameters : inner ? { ...t, tools: undefined } : t;
     const desc = typeof t.description === 'string' ? t.description : '';
