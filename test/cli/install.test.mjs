@@ -111,6 +111,25 @@ test('install: a daemon that does not answer stops the run before the login entr
   assert.deepEqual(validateReceipt(r), [])
 })
 
+// 4.11 P4: the LaunchAgent plist under trocar's label is trocar's by its place; one no record lists, holding someone else's bytes, is replaced —
+// the plan says so, and the bytes that were there are kept in the backup folder first, byte for byte
+test('4.11 P4 · darwin: a plist under trocar\'s label that no record lists is backed up byte for byte, then replaced, and the plan says it replaces it', async () => {
+  const old = Buffer.from('<?xml version="1.0"?>\n<plist><dict><key>Label</key><string>someone else</string></dict></plist>\n')
+  const plist = (w) => path.join(w.home, 'Library', 'LaunchAgents', 'com.trocar.collector.plist')
+  const setup = (w) => { fs.mkdirSync(path.dirname(plist(w)), { recursive: true }); fs.writeFileSync(plist(w), old) }
+  const backups = (w) => { const d = path.join(w.home, '.trocar', 'backup'); return fs.existsSync(d) ? fs.readdirSync(d).map((n) => fs.readFileSync(path.join(d, n))) : [] }
+  const dry = await cli(['--dry-run', '--json'], { setup })
+  const row = dry.io.json().planned.find((p) => p.what === 'autostart')
+  assert.ok(row && row.detail.includes(path.join('~', '.trocar', 'backup')), `the plan names where the old bytes go: ${JSON.stringify(row)}`)
+  assert.ok(fs.readFileSync(plist(dry.w)).equals(old), 'the dry run wrote nothing')
+  const { w, io, exit } = await cli(['--yes', '--json'], { setup })
+  assert.equal(exit, 0, io.text())
+  assert.ok(backups(w).some((b) => b.equals(old)), 'the old bytes are in the backup folder')
+  const now = fs.readFileSync(plist(w))
+  assert.ok(!now.equals(old) && now.includes('<string>com.trocar.collector</string>'), 'the plist is trocar\'s')
+  assert.ok(JSON.parse(fs.readFileSync(path.join(w.dir, 'install-manifest.json'), 'utf8')).files.some((f) => f.path === plist(w) && f.role === 'unit'), 'and the record lists it')
+})
+
 // the documented order — install, then on — through the CLI: install writes the root, its carriers and
 // the inert autostart unit; on enables the unit, which starts the REAL daemon (test/helpers/model-daemon.mjs), asks it for the doors and writes the entries.
 for (const platform of ['darwin', 'win32']) {
