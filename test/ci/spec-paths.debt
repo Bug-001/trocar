@@ -71,7 +71,6 @@
 4.1-capture-sources.md test/query/named.test.mjs
 4.1-capture-sources.md test/capture/response-decode-limit.test.mjs
 4.2-storage-etl.md test/collector/record-store.test.mjs
-4.4-server.md test/query/concurrent.test.mjs
 4.6-process-collector.md test/collector/switch-contract.test.mjs
 4.6-process-collector.md test/query/compressed-request.test.mjs
 4.6-process-collector.md test/capture/non-llm-verbatim.test.mjs
