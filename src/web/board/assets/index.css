@@ -1593,6 +1593,8 @@ a.rmark{color:var(--action);}
   .hhead .cell.recv,.hrow .cell.recv{display:none;}
   .hhead .cell.class{grid-column:2;grid-row:2;}
   /* the two lines fill the row's fixed-height slot (1.10 行高固定; the slot is the list's .vrow) */
-  .hrow{min-height:0;height:100%;grid-template-rows:auto auto;align-content:center;line-height:18px;}
+  /* two lines, two line heights: each cell sits at its line's start (one baseline is the wide row's, 1.10 §请求列表), else the class
+     line is pushed to row 1's baseline and out of the slot */
+  .hrow{min-height:0;height:100%;grid-template-rows:auto auto;align-content:center;align-items:start;line-height:18px;}
   .hrow .cell.class{grid-column:2;grid-row:2;line-height:14px;}
 }
