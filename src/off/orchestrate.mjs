@@ -230,6 +230,11 @@ const MARKER_TEXT = { block: "trocar's block removed", line: 'the line trocar ad
 const SKIP_REASON = { 'already-restored': 'already as it was before install', missing: 'the file is gone; nothing of trocar is in it', 'left-user-value': 'this key now holds a value you set, so it was left as it is', 'already-removed': "trocar's text is no longer in this file" }
 const SKIP_CODE = { 'already-restored': 'already-restored', missing: 'missing', 'left-user-value': 'left-user-value' } // the results that are in the closed set of codes (src/health/codes.mjs)
 const withHarness = (h) => (typeof h === 'string' ? { harness: h } : {})
+/** 1.6 §3.6 「记录没列的标记」: the marked files at planByMarker's places that none of `listed` (the record's paths) names — what uninstall undoes by marks
+ *  beside the record, and so what its plan names (§1.4 「计划写全」). */
+export const marksNotListed = (w, listed) => { const keys = new Set([...listed].map(pathKey)); return planByMarker({ home: w.home, fs: w.fs, env: w.env, platform: w.platform }).filter((p) => !keys.has(pathKey(p.path))) }
+/** A marker plan as plan rows: a file trocar created is `removed`, any other `changed` — the rows the run's receipt puts them in. */
+export const markRows = (plan) => ({ changed: plan.filter((p) => p.how !== 'owned-file').map((p) => ({ path: p.path, change: MARKER_TEXT[p.how], backup: null, ...withHarness(p.harness) })), removed: plan.filter((p) => p.how === 'owned-file').map((p) => p.path) })
 /** What a marker-only off asks about (R3), as the off receipt lays text out (1.6 §1.1②⑥): a sentence, then each file an item, its harness the label and the path
  *  with what would be done to it the value (labelLines: one value column, folds in it, past the command column), HOME as ~. */
 export const markerListing = (plan, home) => [...textLines("There is no install record to go by. By trocar's own marks, these would be undone:", home),
@@ -295,8 +300,7 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
     }
     // 1.6 §3.6 「记录没列的标记」: uninstall also takes out, by trocar's marks, what the record does not list — only at the places planByMarker reads
     if (dropCa && ids == null && !stopped) {
-      const listed = (p) => [...manifestPaths].some((x) => pathKey(x) === pathKey(p))
-      const extra = planByMarker({ home: w.home, fs: w.fs, env: w.env, platform: w.platform }).filter((p) => !listed(p.path))
+      const extra = marksNotListed(w, manifestPaths)
       if (extra.length) takeByMarker(w, u, extra)
     }
     const note = (code, extra, reason) => u.events.push({ kind: code, code, ...extra, reason }) // `kind` = `code`: one line per thing the operator should know (4.6 安装 / 卸载不静默)
@@ -496,8 +500,9 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
     const gone = items.files.filter((f) => mine(f) && ['plugin', 'shim', 'bundle', 'trust-file'].includes(f.role)).map((f) => f.path)
     const marks = manifest && !manifest.unsupported ? [] : planByMarker({ home, ids, fs: w.fs, env: w.env, platform: w.platform })
     receipt.dry_run = true
-    receipt.changed = [...items.entries.filter((e) => mine(e) && (e.kind === 'json-key' || e.kind === 'text')).map((e) => ({ path: e.path, change: offChangeText(e), backup: e.backup ?? null, ...withHarness(e.harness) })), ...marks.filter((p) => p.how !== 'owned-file').map((p) => ({ path: p.path, change: MARKER_TEXT[p.how], backup: null, ...withHarness(p.harness) }))]
-    receipt.removed = [...gone, ...marks.filter((p) => p.how === 'owned-file').map((p) => p.path)]
+    const rows = markRows(marks)
+    receipt.changed = [...items.entries.filter((e) => mine(e) && (e.kind === 'json-key' || e.kind === 'text')).map((e) => ({ path: e.path, change: offChangeText(e), backup: e.backup ?? null, ...withHarness(e.harness) })), ...rows.changed]
+    receipt.removed = [...gone, ...rows.removed]
     if (manifest && manifest.unsupported) receipt.notes.push(`the install manifest is version ${JSON.stringify(manifest.version)}, which this build does not read: no entry would be touched`)
     else if (!manifest) receipt.notes.push(`there is no usable install manifest${manifestError ? ` (${errMessage(manifestError)})` : ''}: ${marks.length ? `${marks.length} file(s) would be undone by trocar's own marks, after a yes` : 'no file holds trocar\'s marks'}`)
     for (const id of ids || []) if (manifest && !installed.includes(id)) receipt.skipped.push({ what: id, reason: 'trocar has nothing on its path (it was never set up, or it is already off)' })
