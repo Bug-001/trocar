@@ -135,7 +135,7 @@ export async function turnOnModel({ os, home, env = process.env, ids = null, har
     try {
       for (const { h } of planned) {
         const doorOf = (rid) => { const u = doors[groupOf(h, rid)]; if (!u) throw Object.assign(new Error(`the daemon opened no door for ${groupOf(h, rid)}`), { code: 'not-routed' }); return u }
-        const w = writeRoutes(byName.get(h), { ...wctx, harness: h }, doorOf)
+        const w = writeRoutes(byName.get(h), { ...wctx, harness: h, pacToken: cfg.config.listenerToken }, doorOf)
         for (const r of w.results) out.routes.push({ harness: h, ...r })
         for (const n of w.notRouted) out.routes.push({ harness: h, ok: false, ...n })
         out.notes.push(...w.notes.map((n) => ({ harness: h, ...n })))
