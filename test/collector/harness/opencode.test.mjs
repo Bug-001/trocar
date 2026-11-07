@@ -54,6 +54,20 @@ test('opencode desktop on macOS: the sidecar `opencode-cli serve` is opencode, o
   } finally { removeTmp(home) }
 })
 
+// Windows: the app's file is OpenCode.exe under any folder, and its Electron helpers are the same file with --type; every CLI build is lowercase (measured, the npm channel)
+test('opencode desktop on Windows: the file named OpenCode.exe and its helpers are not opencode, wherever they sit; the CLI builds and the sidecar are', () => {
+  const win = (exe, argv) => matchOf([oc], facts({ os: 'win32', exe, argv: [exe, ...argv], env: null })).agent
+  const apps = ['C:\\Users\\u\\AppData\\Local\\Programs\\@opencodedesktop\\OpenCode.exe', 'D:\\Tools\\anywhere\\OpenCode.exe']
+  for (const exe of apps) {
+    for (const argv of [[], ['--type=gpu-process'], ['--type=renderer'], ['--type=utility', '--utility-sub-type=network.mojom.NetworkService'], ['--type=crashpad-handler']]) {
+      assert.equal(win(exe, argv), null, `${exe} ${argv.join(' ')}`)
+    }
+  }
+  const npm = 'C:\\Users\\u\\AppData\\Roaming\\npm\\node_modules'
+  for (const exe of [`${npm}\\opencode-ai\\bin\\opencode.exe`, `${npm}\\opencode-windows-x64\\bin\\opencode.exe`, `${npm}\\opencode-windows-x64-baseline\\bin\\opencode.exe`, 'C:\\Users\\u\\.opencode\\bin\\opencode.exe']) assert.equal(win(exe, ['run', 'hi']), 'opencode', exe)
+  assert.equal(win('C:\\Users\\u\\AppData\\Roaming\\ai.opencode.desktop\\cli\\2.0.27\\opencode-cli.exe', ['serve']), 'opencode')
+})
+
 test('opencode: relay hosts from the global, OPENCODE_CONFIG, project and inline layers (JSONC, {env:X} substituted)', () => {
   const s = sandbox()
   try {
