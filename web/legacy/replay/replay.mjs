@@ -903,7 +903,9 @@ function openDesk(ctx, route0, makeView) {
 
   // hang the desk in `el` as it was left; the URL decides the view only when it names a step (1.2 §路由「离开再回来」)
   // the reader's inputs, heard before anything acts on them, while the desk is on the page (the pace of its background work)
-  const INPUTS = [['keydown', () => pace.input()], ['pointerdown', () => pace.press(true)], ...['pointerup', 'pointercancel', 'blur'].map((k) => [k, () => pace.press(false)])]
+  // heard in capture on the window, so an element's blur reaches here too (a press moves the focus): only the window's own blur lets go
+  const INPUTS = [['keydown', () => pace.input()], ['pointerdown', () => pace.press(true)], ...['pointerup', 'pointercancel'].map((k) => [k, () => pace.press(false)]),
+    ['blur', (e) => { if (e.target === window) pace.press(false) }]]
   function attach(el, ctx, route) {
     host = el
     for (const [k, f] of INPUTS) window.addEventListener(k, f, true)
