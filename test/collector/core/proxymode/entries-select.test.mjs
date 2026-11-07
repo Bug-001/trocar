@@ -144,3 +144,25 @@ test('P6 mergeNoProxy: loopback first, then the user\'s values (both spellings),
   assert.equal(mergeNoProxy({ userValues: ['*.corp, LOCALHOST', undefined, '.corp.example,*.CORP'], persistent: { NO_PROXY: '.internal,::1' } }), 'localhost,127.0.0.1,::1,*.corp,.corp.example,.internal')
   assert.equal(mergeNoProxy({ userValues: [], persistent: ['10.0.0.0/8'] }), 'localhost,127.0.0.1,::1,10.0.0.0/8')
 })
+
+// P10 · invariant 5: a PAC address trocar wrote before (an earlier key, or the address an earlier version wrote, with no key) is trocar's own stale
+// value, not the user's egress: on writes the current address over it. An address of the user's own still stops it (own-egress)
+for (const os of ['darwin', 'win32']) test(`P10 ${os} — on over trocar's own earlier PAC address (another key, or none) writes the keyed one; over the user's own it stops`, () => {
+  const L = lib(os, { meta: { appliedId: 'u1', entries: [{ id: 'u1', name: 'mine' }] }, entries: { u1: { inferenceProvider: 'gateway' } } })
+  const f = path.join(L.dir, 'u1.json')
+  assert.equal(routeEntry('json-key').write(L.ctx, DOOR).ok, true)
+  const KEY2 = 'cd'.repeat(16), PAC2 = `${DOOR}${pacPath(KEY2)}`
+  const again = routeEntry('json-key').write({ ...L.ctx, pacToken: KEY2 }, DOOR)
+  assert.equal(again.ok, true, `a new key over trocar's recorded address: ${JSON.stringify(again)}`)
+  assert.equal(read(f)[L.key], PAC2)
+  assert.ok(L.w.ctx.manifest.entries.some((e) => e.door === PAC2), 'the record names the address it wrote, so the next key change is seen')
+  // a record an earlier version left, tagged with the door alone (no key in what it names): trocar's, undone and written with the key
+  for (const e of L.w.ctx.manifest.entries) if (e.door === PAC2) e.door = DOOR
+  assert.equal(routeEntry('json-key').write({ ...L.ctx, pacToken: KEY2 }, DOOR).ok, true)
+  assert.equal(read(f)[L.key], PAC2)
+  assert.ok(L.w.ctx.manifest.entries.some((e) => e.door === PAC2))
+  routeEntry('json-key').undo(L.ctx, L.w.ctx.manifest.entries.filter((e) => e.harness === L.ctx.harness))
+  fs.writeFileSync(f, JSON.stringify({ ...read(f), [L.key]: 'http://proxy.corp.example/proxy.pac' }, null, 2) + '\n')
+  assert.equal(routeEntry('json-key').write({ ...L.ctx, pacToken: KEY2 }, DOOR).code, 'not-routed', 'the user\'s own PAC address: own-egress, nothing written')
+  assert.equal(read(f)[L.key], 'http://proxy.corp.example/proxy.pac')
+})

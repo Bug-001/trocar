@@ -163,8 +163,11 @@ export function routeEntry(kind) {
   if (!w) throw new TypeError(`no route writer for kind ${JSON.stringify(kind)}`)
   return {
     write(ctx, door) {
+      // what this route's records say was written: the door, or for a PAC route the PAC address (its key in it). A record of another door or key, or
+      // of an earlier version that wrote the address with no key, is trocar's stale value: undone (its prior back), then written anew (invariant 5)
+      const mark = ctx.route && ctx.route.value === 'pac-url' && ctx.pacToken ? new URL(pacPath(ctx.pacToken), door).href : door
       const old = recordsOf(ctx.manifest, ctx.harness, ctx.routeId)
-      if (old.some((x) => x.door !== door)) undo(ctx, old)
+      if (old.some((x) => x.door !== mark)) undo(ctx, old)
       // all or nothing: a route refused partway (its last key or item, the select meta) takes back what this call already wrote, so no record without
       // a route tag is left for off to miss (invariant 5)
       const m = ctx.manifest, had = new Set([...m.entries, ...m.files])
@@ -172,7 +175,7 @@ export function routeEntry(kind) {
       let res
       try { res = w(ctx, door) } catch (e) { takeBack(); throw e }
       if (!res.ok) { takeBack(); return res }
-      for (const x of res.records) if (x) Object.assign(x, { route: ctx.routeId, door })
+      for (const x of res.records) if (x) Object.assign(x, { route: ctx.routeId, door: mark })
       saveManifest(ctx.dir, ctx.manifest, ctx.fs)
       return { ok: true, records: recordsOf(ctx.manifest, ctx.harness, ctx.routeId) }
     },
