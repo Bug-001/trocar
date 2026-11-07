@@ -55,6 +55,8 @@ export async function launchChrome(chromium) {
   browser.newContext = async (...a) => {
     const c = await newContext(...a)
     c.on('page', (p) => closeQuietly(p, () => [p]))
+    // the step head's numbers for the tests, from its data attributes (its words are the reader's and change, 1.2 §编号): {n, m} or null
+    await c.addInitScript(() => { window.__stepNo = () => { const e = document.querySelector('#stepbar .sb-no'); return e ? { n: +e.dataset.n, m: +e.dataset.m } : null } })
     closeQuietly(c, () => [c, ...c.pages()])
     return c
   }

@@ -16,14 +16,14 @@ const last = w.marks.length - 1
 const mainAt = (k) => w.full(w.marks[k]).lanes.find((l) => l.kind === 'main').count
 // what the reader sees: the step bar's two numbers, the follow chip, the URL's step
 const view = (page) => page.evaluate(() => {
-  const x = /(\d+)\s*\/\s*(\d+)/.exec(document.querySelector('#stepbar .sb-no')?.textContent || '')
-  return { n: x ? +x[1] : null, m: x ? +x[2] : null, follow: document.querySelector('.sh-follow')?.getAttribute('aria-pressed') ?? null,
+  const x = window.__stepNo()
+  return { n: x ? x.n : null, m: x ? x.m : null, follow: document.querySelector('.sh-follow')?.getAttribute('aria-pressed') ?? null,
     step: new URLSearchParams(location.hash.split('?')[1] || '').get('step') }
 })
 const until = (page, fn, arg) => page.waitForFunction(fn, arg, { timeout: 20000, polling: 'raf' })
 const bar = (page, n, m) => until(page, ([a, b]) => {
-  const x = /(\d+)\s*\/\s*(\d+)/.exec(document.querySelector('#stepbar .sb-no')?.textContent || '')
-  return !!x && +x[1] === a && (b == null || +x[2] === b) && !!document.querySelector('.sh-follow')
+  const x = window.__stepNo()
+  return !!x && x.n === a && (b == null || x.m === b) && !!document.querySelector('.sh-follow')
 }, [n, m])
 
 async function desk(opts) {

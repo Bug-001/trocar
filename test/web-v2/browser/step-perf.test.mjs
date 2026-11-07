@@ -14,7 +14,7 @@ const skip = gate.ok ? false : gate.reason
 const BYTES = 5e6
 const samples = { stepClick: [], stepKey: [], longReply: [] }
 
-const stepNo = async (page) => (await page.textContent('#stepbar .sb-no')).match(/(\d+)\s*\/\s*(\d+)/).slice(1).map(Number)
+const stepNo = (page) => page.evaluate(() => { const x = window.__stepNo(); return [x.n, x.m] })
 
 // open a session from the library by a real click; `id` = that session, or the first row
 async function openSession(page, id) {

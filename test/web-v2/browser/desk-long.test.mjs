@@ -41,8 +41,8 @@ for (const [name, shape] of SHAPES) {
       const longTasks = () => page.evaluate(() => window.__lt.splice(0))
       const step = () => page.textContent('#stepbar .sb-no')
       const at = (n) => page.waitForFunction((n) => {
-        const x = /(\d+)\s*\/\s*(\d+)/.exec(document.querySelector('#stepbar .sb-no')?.textContent || '')
-        return !!x && +x[1] === n && !document.querySelector('#ctxwin .cwload')
+        const x = window.__stepNo()
+        return !!x && x.n === n && !document.querySelector('#ctxwin .cwload')
       }, n, { timeout: 30000, polling: 'raf' })
       await page.evaluate((m) => { location.hash = `#/replay/p/S?step=${m}` }, M)
       await at(M)

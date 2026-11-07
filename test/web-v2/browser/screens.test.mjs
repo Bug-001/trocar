@@ -69,7 +69,7 @@ async function driveEveryScreen(b, { width, theme }) {
   assert.deepEqual(await layoutFaults(page), { overlap: [], cut: [], untitled: [], emptyIcons: [] }, 'replay: layout')
 
   // step change ×20 by click, ×20 by arrow key (D64②); bounce between the first and the last step
-  const pos = async () => (await page.textContent('#stepbar .sb-no')).match(/(\d+)\s*\/\s*(\d+)/).slice(1).map(Number)
+  const pos = () => page.evaluate(() => { const x = window.__stepNo(); return [x.n, x.m] })
   const tStep = Date.now()
   for (const [kind, by] of [['stepClick', 'click'], ['stepKey', 'key']]) {
     let dir = -1

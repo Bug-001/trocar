@@ -21,8 +21,8 @@ const sampleSteps = (page) => page.evaluate(() => {
   window.__steps = []
   let last = null
   const tick = () => {
-    const x = /(\d+)\s*\/\s*\d+/.exec(document.querySelector('#stepbar .sb-no')?.textContent || '')
-    const n = x ? +x[1] : null
+    const x = window.__stepNo()
+    const n = x ? x.n : null
     if (n !== last) { last = n; if (n != null) window.__steps.push({ n, t: performance.timeOrigin + performance.now() }) }
     requestAnimationFrame(tick)
   }

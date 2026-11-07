@@ -92,7 +92,7 @@ test('4.4 live-poll: a following desk shows each new call after it lands, read b
     await page.waitForSelector('#stepbar .sb-no')
     const first = await total()
     for (const t0 = Date.now(); growth.left() > 0 && Date.now() - t0 < 30000;) await page.waitForTimeout(100)
-    await page.waitForFunction((n) => +((document.querySelector('#stepbar .sb-no')?.textContent.match(/(\d+)\s*\/\s*(\d+)/) || [])[1] || 0) === n, steps(w.marks.length - 1), { timeout: 10000 })
+    await page.waitForFunction((n) => (window.__stepNo()?.n || 0) === n, steps(w.marks.length - 1), { timeout: 10000 })
     const shown = await page.evaluate(() => document.querySelector('#stepbar .sb-no').textContent)
     assert.ok(first < (await total()), `the step count grew from ${first} (${shown})`)
     assert.equal(await page.evaluate(() => new URLSearchParams(location.hash.split('?')[1] || '').get('step')), null, 'still following')

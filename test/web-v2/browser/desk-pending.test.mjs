@@ -23,7 +23,7 @@ function instrument() {
   try { new PerformanceObserver((l) => { for (const x of l.getEntries()) window.__lt.push(x.duration) }).observe({ type: 'longtask', buffered: true }) } catch { /* no long-task timing here */ }
   window.__press = []
   for (const k of ['pointerdown', 'pointerup', 'click']) addEventListener(k, (e) => window.__press.push(`${k} ${e.target.className || e.target.nodeName}${e.target.isConnected ? '' : ' (gone)'}`), true)
-  window.__head = () => { const e = document.querySelector('#stepbar .sb-no'), m = e && /\/\s*(\d+)/.exec(e.textContent); return e && m ? { n: +e.dataset.n, m: +m[1] } : null }
+  window.__head = () => window.__stepNo()
 }
 
 // In the page, in one task: a tick of the overlay rows more than a bar left of the playhead, as a point hit-checked there (a node or an
