@@ -675,3 +675,16 @@ test('install with no agent trocar sets up here: exit 0, and the receipt does no
   assert.deepEqual(readManifest(none.w.dir).install.harnesses, [], 'no agent here')
   assert.ok(!none.io.text().includes('trocar on'), none.io.text())
 })
+
+// 4.8 §7: the plan is said before the Task Scheduler answers, so it names both login entries install may leave (a Windows test machine: the plan
+// named the task while the Run value was what install used)
+test('install plan · win32: the autostart row names the task and the Run value that stands in for it', async () => {
+  const { RUN_KEY } = await import('../../src/collector/arch/win32/autostart.mjs')
+  const w = await modelWorld({ os: 'win32', commands: ['codex'] })
+  const unit = { path: path.join(w.dir, 'task.xml'), text: () => '<Task>trocar</Task>' }
+  const io = fakeIo()
+  const exit = await runInstallCli(['--dry-run', '--json'], { io, env: w.env, home: w.home, platform: 'win32', deps: { getuid: () => 501, unit, backends: { custody: w.custody, rootStore: w.store, installHelper: null, dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns } })
+  assert.equal(exit, 0, io.text())
+  const row = JSON.parse(io.text()).planned.find((p) => p.what === 'autostart')
+  assert.ok(row && row.detail.includes(RUN_KEY.name), JSON.stringify(row))
+})

@@ -145,11 +145,13 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
     if (FILE_ENTRY_KINDS.includes(e.kind)) return undoEntry(e, { fs })
     if (e.kind === 'run-key') {
       const r = undoRunKey({ prior: e.prior ?? null, run: exec, env })
-      return { path: `${e.hive ?? 'HKCU'}\\${e.key ?? ''}\\${e.name ?? ''}`, harness: e.harness, result: r.ok ? (r.result === 'absent' ? 'already-restored' : 'restored') : 'error', ...(r.result === 'left' ? { result: 'left-user-value' } : {}), ...(r.ok ? {} : { reason: r.reason }) }
+      // what the receipt row says it lost: a registry value is no file of lines (a Windows test machine: "trocar's lines removed" over a value set back)
+      const change = r.result === 'restored' ? 'set back to the value that was there before' : 'removed'
+      return { path: `${e.hive ?? 'HKCU'}\\${e.key ?? ''}\\${e.name ?? ''}`, harness: e.harness, change, gone: r.result === 'removed', result: r.ok ? (r.result === 'absent' ? 'already-restored' : 'restored') : 'error', ...(r.result === 'left' ? { result: 'left-user-value' } : {}), ...(r.ok ? {} : { reason: r.reason }) }
     }
     if (e.kind === 'scheduled-task') {
       const r = undoScheduledTask({ uninstall: dropCa, prior: e.prior ?? null, run: exec, env, file: path.join(dir, TASK_FILE), fs })
-      return { path: e.path ?? '\\trocar\\collector', harness: e.harness, ...(r.why ? { why: r.why } : {}), result: r.ok ? (r.task === 'absent' ? 'already-restored' : r.task === 'not-trocars' ? 'left-user-value' : 'restored') : 'error', ...(r.ok ? {} : { reason: [r.reason, r.runKeyReason].filter(Boolean).join('; ') }) }
+      return { path: e.path ?? '\\trocar\\collector', harness: e.harness, ...(r.why ? { why: r.why } : {}), change: r.task === 'deleted' ? 'the task deleted' : 'the task switched off', gone: r.task === 'deleted', result: r.ok ? (r.task === 'absent' ? 'already-restored' : r.task === 'not-trocars' ? 'left-user-value' : 'restored') : 'error', ...(r.ok ? {} : { reason: [r.reason, r.runKeyReason].filter(Boolean).join('; ') }) }
     }
     if (e.kind === 'forwarder-binary') { // uninstall only (the entries filter keeps it out of an `off`)
       const file = e.path || e.real_path
