@@ -5,7 +5,7 @@
 //     desired: { <h>: 'on' | 'off' }, daemon: { state, pid, enginePort }, link: { attached: true | false | null, helper: 'ok' | 'missing', ids: [number] },
 //     listeners: [ { addr, port, pid, exe } | { addr, port, unknown: { reason, detail } } ],
 //     forwarder: null | { pid, up, forms: { <form>: { h, port, state: 'on' | 'forward-only', upstream, source, clients: [pid] } } },   // proxy mode: trocar's local proxy hop, which is the engine's own door (D47; 4.8 §10.1)
-//     harnesses: { <h>: { installed, entry: { state }, installedAt, setting, fileSetting (the same read of the files alone: drift is measured on it), systemProxy: null | { value, pac } | { unknown },
+//     harnesses: { <h>: { installed, entry: { state, code? }, installedAt, setting, fileSetting (the same read of the files alone: drift is measured on it), systemProxy: null | { value, pac } | { unknown },
 //                         behaviour: { env, follows: { http, ws }, schemes, unsupported, branches, measured, restart, files, fileKeys }, procs: [ { pid, name, exe, version, startedAt, watched, trusted, reason, negative,
 //                         startSetting: null | setting, elevated } ], negatives: [ { pid, host, reason, cause } ], apiHosts, localUpstream (status's: they are all loopback, 4.11 P6), noProxy: [the API hosts the NO_PROXY of this shell covers], adopted: null | { at, routing, chain, source, sha256 }, forms: null | [ … ] } },
 //     identity: { <h>: { names, ignored, unknown } } | null (status's name list, D51③⑤), agentList: { path, state, problems } | null (the file, once),
@@ -59,7 +59,7 @@ export async function gatherNetFacts({ platform = process.platform, home, env = 
     const pr = d.proxy, setting = settings[h.id]
     const procs = (part.procs && part.procs[h.id]) || []
     f.harnesses[h.id] = {
-      installed: h.installed, formsHere: h.formsHere ?? true, entry: { state: h.entry.state }, installedAt: iso(h.installedAt), setting, fileSetting: fileSettings[h.id],
+      installed: h.installed, formsHere: h.formsHere ?? true, entry: { state: h.entry.state, ...(h.entry.code ? { code: h.entry.code } : {}) }, installedAt: iso(h.installedAt), setting, fileSetting: fileSettings[h.id],
       // every place it holds a proxy address now (not only the one that wins): the places a finding names for the user to remove by hand (1.6 附录 B)
       proxyPlaces: proxyPlaces(d, { home, env, fs }),
       // the places trocar itself wrote for it (its on-phase manifest items): a finding never asks the user to edit one of them (1.6 附录 B)

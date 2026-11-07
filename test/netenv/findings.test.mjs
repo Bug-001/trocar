@@ -46,6 +46,7 @@ const SETS = {
   'link-missing': { h: 'claude-code', facts: facts('claude-code', { link: { attached: false, helper: 'ok', ids: [] } }), codes: ['link-missing'] },
   'entry-missing': { h: 'claude-code', facts: facts('claude-code', {}, { entry: { state: 'missing' }, procs: [] }), codes: ['entry-missing'] },
   'entry-changed': { h: 'claude-code', facts: facts('claude-code', {}, { entry: { state: 'changed' }, procs: [] }), codes: ['entry-changed'] },
+  'pac-address-stale': { h: 'claude-code', facts: facts('claude-code', {}, { entry: { state: 'changed', code: 'pac-address-stale' }, procs: [] }), codes: ['pac-address-stale'] },
   'not-routed': { h: 'codex', facts: row(11).facts, codes: row(11).findings },
   'system-proxy-pac': { h: 'codex', facts: row(22).facts, codes: row(22).findings },
   'route-loop': { h: 'codex', facts: pfacts('codex', form('codex.cli', { routeLoop: true, entry: null, procs: [proc(5530, { name: 'codex app-server' })] }), fwForm(17992)), codes: ['route-loop'] },
@@ -76,7 +77,7 @@ const SETS = {
 const IDENTITY_CODES = ['process-unknown', 'agent-list-invalid']
 const CERT_CODES = ['cert-key-missing', 'cert-intermediate-unavailable', 'not-users-file'] // 1.6 §9.7's cert group, as findings
 const REFUSAL_CODES = ['collectors-online'] // a command's refusal (uninstall), rendered by findingFor, not by diagnose
-const STATUS_REASONS_IN_CATALOGUE = ['config-after-start', 'daemon-not-running', 'daemon-not-responding', 'helper-missing', 'link-missing', 'entry-missing', 'entry-changed', 'desired-off', 'negative-cache', 'not-seen', 'local-upstream']
+const STATUS_REASONS_IN_CATALOGUE = ['config-after-start', 'daemon-not-running', 'daemon-not-responding', 'helper-missing', 'link-missing', 'entry-missing', 'entry-changed', 'pac-address-stale', 'desired-off', 'negative-cache', 'not-seen', 'local-upstream']
 
 for (const [code, set] of Object.entries(SETS)) {
   test(`V49 ${code}: its facts call for exactly ${JSON.stringify([...set.codes].sort())}`, () => {
