@@ -11,7 +11,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { trocarHome, collectorHome, rawHome } from '../paths.mjs'
 import { codeId, setupHelperCommand } from '../version.mjs'
-import { startSealing } from './seal-queue.mjs'
+import { startSealing, forkSealer } from './seal-queue.mjs'
 import { createIndexKeeper } from './index-keeper.mjs'
 import { loadArch } from './arch/index.mjs'
 import { loadHarnesses } from './harness/index.mjs'
@@ -162,8 +162,8 @@ function noteUncleanStop(lock, failure) {
  *  query ever pays for a cold index build; it hands a segment over to the sealer's child when the segment closes.
  *    `seal.start()` MUST come after the control server claimed the collector (before that the lock may be a LIVE
  *  daemon's, and the start scan clears the lock's `segment`); `seal.stop()` belongs at the top of the stop, before
- *  store.close(): the segment the stop closes is sealed by the next start's scan, not by a worker the stop cuts off,
- *  and nothing of trocar's writes anything after the stop (the tail the stop closes is indexed by that next start's
+ *  store.close(): the segment the stop closes is sealed by the next start's scan, not by a worker the stop cuts off
+ *  (a stop by `uninstall` has no next start: `seal.last()` seals it before the daemon exits), and nothing of trocar's writes anything after the stop (the tail the stop closes is indexed by that next start's
  *  sealer, and until then a query resumes it from the last indexed byte). */
 function storeWithSealing({ P, failure, query }) {
   const home = path.dirname(P.dir)
@@ -179,6 +179,15 @@ function storeWithSealing({ P, failure, query }) {
     // after store.close(): the segment the stop just closed is indexed to its last byte, so the daemon leaves behind
     // the index of everything it wrote; only then does the keeper write nothing more (D62)
     async settle() { try { await keeper.idle() } finally { await keeper.stop() } },
+    // after settle(), only when `uninstall` stops the daemon (4.2 §自动封存): no next start will seal the segment the stop closed, so the queue's
+    // worker seals it now, at normal priority, and its progress goes into the lock's `sealing` for the uninstall that waits (1.6 §3.6). A
+    // failure is said as the queue's are (D38) and keeps the plaintext; a daemon killed meanwhile takes the worker with it (the crash path).
+    async last(segment, lock) {
+      if (!segment) return
+      const file = path.join(rawHome(home), `${segment}.ndjson`)
+      const r = await forkSealer(file, { lockFile: P.lock, normal: true, onProgress: (p) => { try { lock.name({ sealing: { segment, ...p } }) } catch { /* a lock not rewritten costs the uninstall one silent interval */ } } })
+      if (r.code !== 0) failure('raw', Object.assign(new Error(`sealing ${file} failed (${r.reason || `the sealer exited with ${r.code}`}); its plaintext is kept and is sealed when trocar runs again`), { code: 'seal-failed' }), { file })
+    },
   }
   return { store, seal, keeper }
 }
@@ -198,8 +207,11 @@ function stopByOf(b) {
   if (b.by === undefined) return null
   if (typeof b.by !== 'string' || !COMMAND_NAME.test(b.by) || b.by === 'off') throw Object.assign(new Error('"by" names the command stopping the daemon: lower-case letters, digits and hyphens, at most 32, and not off (an exit request without by is off\'s)'), { status: 400 })
   if (b.exit !== true) throw Object.assign(new Error('"by" goes with "exit": it names who stops the whole daemon'), { status: 400 })
+  if (b.seal !== undefined && typeof b.seal !== 'boolean') throw Object.assign(new Error('"seal" must be true or false'), { status: 400 })
   return b.by
 }
+// Does this exit request's stop seal the segment it closes (4.2 §自动封存)? Only `uninstall`'s, and not with seal:false (--purge-data deletes the data after).
+const sealsLast = (b, by) => by === 'uninstall' && b.seal !== false
 const drainBy = (by) => (by ? { by: 'stop', who: by } : {}) // engine.drain's: the stop's own label, with the command that asked
 // GET /status's connection counts (1.6 §1.3, §5.2): the connections of the harnesses off in THIS daemon's memory, not state.json's (`scope: 'memory'` says so, and
 // only such a count may end the drain's wait: an older daemon's status lacks it). A daemon being replaced keeps its harnesses on, so the off set would read 0, the
@@ -213,15 +225,17 @@ function retryNow(engine, failure, names) {
   return gone.map((g) => ({ harness: g.agent, neg_key: g.neg_key, pid: g.pid, hosts: g.hosts }))
 }
 
-async function stopTail({ engine, graceMs, store, seal, failure, lock, signal, reason, who = null, before = async () => {}, after = async () => {} }) {
+async function stopTail({ engine, graceMs, store, seal, failure, lock, signal, reason, who = null, sealLast = false, before = async () => {}, after = async () => {} }) {
   const failed = []
   const step = async (where, fn) => { try { await fn() } catch (e) { failed.push(where); failure(where, Object.assign(new Error(`while stopping: ${errText(e)}`), { code: (e && e.code) || 'stop-failed' })) } }
   await before(step)
   let relayed = null
   await step('engine', async () => { relayed = await engine.close({ graceMs, ...(who ? { who } : {}) }) })
   await after(step)
+  const closing = store.currentSegment // the segment store.close() closes now
   await step('record', () => store.close())
   await step('raw', () => seal.settle()) // the index of what this daemon wrote, including the segment just closed (D62)
+  if (sealLast) await step('raw', () => seal.last(closing, lock))
   failure.flush()
   failure.write({ event: 'daemon-stop', pid: process.pid, ...(signal ? { signal } : { reason: reason || 'stop requested' }), ...(relayed ? { relayed } : {}), ...(failed.length ? { failed } : {}) })
   failure.final()
@@ -758,7 +772,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
         const r = swap ? { unwatched: [], unwatch_failed: [] } : await sw.off({ harnesses: names })
         const relayed = engine.drain({ agents: names ? new Set(names) : null, now: b.now === true, ...drainBy(by) })
         const st = await status()
-        if (b.exit === true) exitWhenDrained(b.now === true, by)
+        if (b.exit === true) exitWhenDrained(b.now === true, by, sealsLast(b, by))
         return { ...st, ...(swap ? { actual: 'off' } : {}), ...(r.noop ? { noop: true } : {}), unwatched: r.unwatched, confirmed: r.unwatch_failed.length === 0 && (swap || sw.anyOn() || st.actual === 'off'), relayed, pid: process.pid }
       },
     })
@@ -780,20 +794,20 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     // meanwhile talks to this daemon (`on` starts one only when none is running). `exitAsked` counts the requests; /on and a newer /off {exit} both
     // bump it, so only the latest request may stop the daemon, and never while some harness is on — an exit would leave state.json saying on with
     // nothing attached and, being a clean exit, no supervisor to restart it.
-    function exitWhenDrained(now, by = null) {
+    function exitWhenDrained(now, by = null, seal = false) {
       const mine = ++exitAsked
       const left = engine.drained({ agents: null })
       const ready = now ? Promise.race([left, new Promise((r) => setTimeout(r, 500))]) : left
-      ready.then(() => new Promise((r) => setTimeout(r, 50))).then(() => { if (mine === exitAsked && (leaving || !sw.anyOn())) return stop({ reason: by || 'off', who: by }) }).catch((e) => failure('daemon', coded(e, 'stop-failed')))
+      ready.then(() => new Promise((r) => setTimeout(r, 50))).then(() => { if (mine === exitAsked && (leaving || !sw.anyOn())) return stop({ reason: by || 'off', who: by, seal }) }).catch((e) => failure('daemon', coded(e, 'stop-failed')))
     }
-    async function doStop({ signal = null, reason = null, who = null } = {}) {
-      seal.stop() // the segment store.close() closes below is sealed by the next start's scan, not by a worker this stop cuts off
+    async function doStop({ signal = null, reason = null, who = null, seal: sealLast = false } = {}) {
+      seal.stop() // the segment store.close() closes below is sealed by the next start's scan, not by a worker this stop cuts off — or, by uninstall, by seal.last() in stopTail
       board.stop(); query.stop()
       clearInterval(lockTimer); clearInterval(caTimer); clearInterval(checkTimer); clearTimeout(bundleRetry)
       if (!helperDown) { try { const s = await redirector.status(); if (s && s.drops) lastDrops = s.drops } catch { /* the helper is going: what was last read is written */ } }
       noteDrops({ force: true }) // drops not yet reported are written, not lost
       failure.flush() // folded counts are written, not lost
-      return stopTail({ engine, graceMs: stopGraceMs, store, seal, failure, lock, signal, reason, who,
+      return stopTail({ engine, graceMs: stopGraceMs, store, seal, failure, lock, signal, reason, who, sealLast,
         before: async (step) => {
           await step('control', () => control.close())
           clearInterval(bundleTimer)
@@ -897,7 +911,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
       const r = await collector.off({ ...b, by })
       if (b.exit === true) {
         const mine = ++exitAsked; clearInterval(exitTimer)
-        const go = () => { if (mine === exitAsked) { clearInterval(exitTimer); stop({ reason: by || 'off', who: by }) } }
+        const go = () => { if (mine === exitAsked) { clearInterval(exitTimer); stop({ reason: by || 'off', who: by, seal: sealsLast(b, by) }) } }
         if (b.now === true) Promise.race([engine.drained({ agents: null }), new Promise((res) => setTimeout(res, 500))]).then(() => new Promise((res) => setTimeout(res, 50))).then(go)
         else exitTimer = setInterval(() => { if (collector.mayExit()) go() }, 250)
       }
@@ -925,11 +939,11 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
     failure.write({ event: 'daemon-start', pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, version: code, foreground: !!foreground, upstream_ca: env.NODE_EXTRA_CA_CERTS || null, linger: null })
     let stopping = null, markExited
     const exited = new Promise((r) => { markExited = r })
-    const doStop = async ({ signal = null, reason = null, who = null } = {}) => {
-      seal.stop() // as in runDaemon: the last segment is left to the next start's scan
+    const doStop = async ({ signal = null, reason = null, who = null, seal: sealLast = false } = {}) => {
+      seal.stop() // as in runDaemon: the last segment is left to the next start's scan (uninstall's: seal.last() in stopTail)
       board.stop(); query.stop()
       clearInterval(lockTimer); clearInterval(listTimer); clearInterval(exitTimer)
-      return stopTail({ engine, graceMs: stopGraceMs, store, seal, failure, lock, signal, reason, who,
+      return stopTail({ engine, graceMs: stopGraceMs, store, seal, failure, lock, signal, reason, who, sealLast,
         before: (step) => step('control', () => control.close()),
         after: async (step) => { collector.close(); await step('helper', () => parts.close && parts.close()) } })
     }
