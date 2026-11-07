@@ -187,7 +187,7 @@ a clone of this repo and `trocar install`. Nothing the old name left is read or 
 
 ```sh
 trocar off                     # first: uninstall refuses while capture is on
-trocar uninstall               # removes all of trocar's changes; keeps your records (~/.trocar/raw, ~/.trocar/collector/flows)
+trocar uninstall               # removes all of trocar's changes; keeps your records (~/.trocar/raw, ~/.trocar/collector/flows), the last ones sealed first
 trocar uninstall --purge-data  # also deletes the records and their index (asks first)
 ```
 

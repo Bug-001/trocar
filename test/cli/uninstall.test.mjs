@@ -644,3 +644,58 @@ test('formatUninstallReceipt (win32): the scheduled task it deleted is not print
   assert.ok(rows.some((l) => l.includes(task)), `the task is said:\n${text}`)
   for (const l of rows) assert.ok(!/^ {2}\\(?!\\)/.test(l), `no Removed row starts with a drive-relative path: ${l}`)
 })
+
+// 1.6 §3.6 「封最后一段」 (V127): the daemon uninstall stops seals the segment it was writing (its lock's `segment`) before it exits; the receipt says what
+// came of it — the sealed row with the sizes of the journal's seal line, or that the segment stays unsealed — and --purge-data asks it not to seal.
+const SEG = '20261107T100000Z'
+async function sealingUninstall({ seals, argv = [] }) {
+  const s = await installedHome({ names: ['claude-code'] })
+  writeDaemonLock(s, { segment: SEG })
+  const raw = path.join(s.home, '.trocar', 'raw'); fs.mkdirSync(raw, { recursive: true })
+  fs.writeFileSync(path.join(raw, `${SEG}.ndjson`), '{"id":"r1"}\n')
+  const t = procTable(DAEMON_ROWS), offs = []
+  const asked = () => offs.length > 0
+  const request = async (q) => {
+    if (q.method === 'POST' && q.path === '/off') {
+      if (seals && !asked()) { // what the daemon does before it exits: the sealed file in place, then the plaintext gone, then the journal line
+        fs.writeFileSync(path.join(raw, `${SEG}.sealed`), 'sealed'); fs.rmSync(path.join(raw, `${SEG}.ndjson`))
+        fs.appendFileSync(path.join(raw, 'journal.jsonl'), JSON.stringify({ op: 'seal', outcome: 'ok', segment: SEG, bytes: 3 * 2 ** 20, sealedBytes: 2 ** 19 }) + '\n')
+      }
+      offs.push(q.body)
+    }
+    return s.sys.daemon.request(q)
+  }
+  const { exit, io } = await cli(s, argv, { deps: { request, alive: (pid) => !asked() && t.alive(pid), identity: t.identity, isHelper: t.isHelper, kill: t.kill, ...fakeClock() } })
+  return { s, exit, io, offs, raw }
+}
+
+test('uninstall: the segment the daemon sealed before it exited is a row of the receipt, with its sizes (V127)', async () => {
+  const { exit, io } = await sealingUninstall({ seals: true, argv: ['--json'] })
+  assert.equal(exit, 0, io.text())
+  const r = io.json()
+  assert.deepEqual(r.sealed, [{ segment: SEG, bytes: 3 * 2 ** 20, sealed_bytes: 2 ** 19 }])
+  assert.deepEqual(validateReceipt(r), [], 'sealed is a key of the uninstall receipt (附录 C.2)')
+})
+
+test('uninstall: a segment the daemon did not seal stays plaintext, and the receipt says it stays unsealed until trocar runs again (V127)', async () => {
+  const { exit, io, raw } = await sealingUninstall({ seals: false, argv: ['--json'] })
+  assert.equal(exit, 0, io.text())
+  const r = io.json()
+  assert.equal(r.sealed, undefined)
+  assert.ok(r.notes.some((n) => n.includes(`${SEG} stays unsealed until trocar runs again`)), JSON.stringify(r.notes))
+  assert.equal(fs.readFileSync(path.join(raw, `${SEG}.ndjson`), 'utf8'), '{"id":"r1"}\n', 'its bytes are intact')
+})
+
+test('uninstall --purge-data asks the daemon not to seal, and says nothing of the segment it deletes (V127)', async () => {
+  const { exit, io, offs } = await sealingUninstall({ seals: false, argv: ['--purge-data', '--json'] })
+  assert.equal(exit, 0, io.text())
+  assert.ok(offs.length && offs.every((b) => b.seal === false), JSON.stringify(offs))
+  assert.ok(!io.json().notes.some((n) => n.includes(SEG)))
+})
+
+test('uninstall: a sealed segment never hides how to stop a daemon that did not answer (1.6 §3.6)', async () => {
+  const { io } = await sealingUninstall({ seals: true, argv: ['--json'] })
+  const r = { ...io.json(), daemon: { state: 'unresponsive', pid: 4321 } }
+  assert.ok(r.sealed && r.sealed.length)
+  assert.match(formatUninstallReceipt(r, {}), /kill -9 4321/)
+})
