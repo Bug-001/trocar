@@ -185,7 +185,7 @@ function toolEntries(req) {
     const at = [...path, i], inner = isObj(t) && isToolList(t.tools) ? t.tools : null;
     // a namespace's block is its own words (description, else name): its tools' bytes are theirs, never counted twice
     const own = inner ? (typeof t.description === 'string' ? [...at, 'description'] : typeof t.name === 'string' ? [...at, 'name'] : at) : at;
-    out.push({ t, at: own, inner });
+    out.push({ t, at: own, inner, input: path[0] === 'input' });
     if (inner) walk(inner, [...at, 'tools']);
   });
   if (Array.isArray(req && req.tools)) walk(req.tools, ['tools']);
@@ -196,7 +196,7 @@ function toolEntries(req) {
 // desc/schema/text/block — identical to CC — so Codex renders with ZERO board changes.
 export function boardFlat(req) {
   const flat = [];
-  for (const { t, at, inner } of toolEntries(req)) {
+  for (const { t, at, inner, input } of toolEntries(req)) {
     const name = t.name || t.type || ('tool_' + at.filter((x) => typeof x === 'number').pop());         // built-in tools (tool_search/web_search) have no name
     // a namespace's tools are blocks of their own, not its bytes twice
     const schema = t.parameters !== undefined ? t.parameters : inner ? { ...t, tools: undefined } : t;
@@ -207,7 +207,7 @@ export function boardFlat(req) {
       sec: 'tools', kind: 'tool', role: 'tool', name, ttype: t.type || 'function',
       props, descChars: desc.length, cc: null, mcp, verbatim: true,
       desc, schema, resKey: mcp ? 'mcp::' + (name.split(/[._]/)[1] || name) : '',
-      key: 'T:' + name + ':' + desc.length + ':' + props.length, path: at,
+      key: 'T:' + name + ':' + desc.length + ':' + props.length, path: at, ...(input ? { input: true } : {}),
     });
   }
   const instr = typeof (req && req.instructions) === 'string' ? req.instructions : (req && req.instructions != null ? JSON.stringify(req.instructions) : '');

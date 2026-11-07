@@ -4,6 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { homeWith, query } from '../helpers/session-doc.mjs';
+import { buildWsEnvelope } from '../../src/collector/core/record/envelope.mjs';
 import { parseTextRef } from '../../src/raw/refs.mjs';
 import { compBucket, slimBlock } from '../../src/view/blockmeta.mjs';
 import { reqCountsFor, RESPONSES } from '../../src/dissect/openai.mjs';
@@ -72,6 +73,28 @@ test('additional_tools: tool definitions of the tools section, each its own byte
   assert.equal(msgs[0].kind, 'text');
   const { start, end } = parseTextRef(msgs[0].ref);
   assert.ok(say.includes(body.slice(start, end)), 'the message still slices its own bytes');
+});
+
+// a Codex WebSocket chain: a continuation (previous_response_id) sends only its new input; the server keeps the rest, the offer included
+const upgrade = { req: { head: { raw: Buffer.from('GET /v1/responses HTTP/1.1\r\nsession-id: S\r\n\r\n', 'latin1'), method: 'GET', target: '/v1/responses',
+  headers: [['Host', 'api.openai.com'], ['Upgrade', 'websocket'], ['session-id', 'S'], ['Sec-WebSocket-Key', 'k1']] } },
+  resp: { head: { raw: Buffer.from('HTTP/1.1 101 Switching Protocols\r\n\r\n', 'latin1'), headers: [['Upgrade', 'websocket']] } } };
+const wsCall = (n, input, prev) => {
+  const id = `r${n}`, ts = `2026-10-06T00:00:0${n}.000Z`, body = { type: 'response.create', model: 'm', instructions: 'i', tools: [], input, ...(prev ? { previous_response_id: prev } : {}) };
+  const server = [{ type: 'response.created', response: { id } }, { type: 'response.completed', response: { id, status: 'completed', output: [], usage: { input_tokens: 9, output_tokens: 1 } } }].map((m) => JSON.stringify(m));
+  return buildWsEnvelope({ id: `w${n}`, seq: n, wsRaw: [], flow: { id: 'F1', host: 'api.openai.com', scheme: 'https', dst: { address: '127.0.0.1', port: 443 }, proc: { pid: 7, exe: '/x/codex', agent: 'codex' } },
+    upgrade, call: { client: [JSON.stringify(body)], server, tsStart: ts, tsRespStart: ts, tsEnd: ts, partial: [], truncated: false } });
+};
+test('additional_tools over WebSocket: a continuation keeps the offer it did not send again, once; no cache break for it', async () => {
+  for (const resend of [false, true]) {
+    const recs = [wsCall(1, [OFFER, SAY]), wsCall(2, resend ? [OFFER, SAY] : [SAY], 'r1'), wsCall(3, [SAY], 'r2')];
+    const home = homeWith(recs), { calls } = await query(home, 'session', { id: 'S' }), { steps, defs } = await query(home, 'lane', { id: 'S', lane: calls[0].lane });
+    const sec = new Map(Object.values(defs).map((d) => [d.bid, d.sec]));
+    const toolsOf = (st) => st.ops.flatMap((op) => (op[0] === 1 ? op.slice(1) : [])).filter((b) => sec.get(b) === 'tools').length;
+    assert.equal(toolsOf(steps[0]), 5, 'the first call defines the offer');
+    assert.deepEqual(calls.slice(1).map((c) => c.cacheBreak?.cause ?? null).filter((c) => c !== 'append' && c !== null), [], `resend ${resend}: ${JSON.stringify(calls.map((c) => c.cacheBreak))}`);
+    for (const st of steps.slice(1)) assert.ok(st.ops.some((op) => op[0] === 0 && op[1] === 0 && op[2] >= 5), `resend ${resend}: the offer is kept from the first place: ${JSON.stringify(st.ops)}`);
+  }
 });
 
 test('additional_tools: a tool list of no known shape stays a json block, never dropped', async () => {

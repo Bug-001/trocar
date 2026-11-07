@@ -421,12 +421,15 @@ export function extract(rec, ctx) {
   const pred = st && st.cont ? ctx.linked(st.scope, st.prev) : null;
   // what a continuation inherits of its predecessor's messages and reply, as they stand there: block ids, attributes and message
   // starts by position from the first message (no object a position)
+  let tin = own.tools.filter((e) => e.b.input).length
   let tools = own.tools, system = own.system, inh = { bids: [], attrs: {}, starts: [] }, predX = null, base = null, state = null;
   if (pred) {
     predX = pred.x;
     const P = ctx.listsOf(pred.rid), [pt, ps] = predX.secs, lo = pt + ps;
     const ent = (from, to) => P.list.slice(from, to).map((bid, k) => ({ bid, a: P.attrs[from + k] || null }));
     if (st.inherit.tools !== 'own') tools = ent(0, pt);
+    // tools defined in the input (openai.mjs, additional_tools) are input the server keeps: a continuation that does not send them again has them
+    else if (predX.tin && !tin) { tools = [...own.tools, ...ent(pt - predX.tin, pt)]; tin = predX.tin; }
     if (st.inherit.system === 'inherit') system = ent(pt, lo);
     else if (st.inherit.system === 'patch') system = patchSystem(ent(pt, lo), own.system, (e) => !!(e.a && e.a.volatile));
     inh = { bids: P.list.slice(lo).concat(pred.reply), attrs: {}, starts: P.mb.filter((i) => i >= lo).map((i) => i - lo) };
@@ -475,6 +478,7 @@ export function extract(rec, ctx) {
     stitchedFacts(x, { rec, st, predX, state, tools: tools.length, ownMsgs: (read.h.request && read.h.request.messages) || null });
   }
   x.secs = [tools.length, system.length];
+  if (tin) x.tin = tin; // how many of the section's last tools came in the input
   x.hint = laneHintOf(rec, wire.format, x.lane);
   if (!pred) { const prev = ctx.prevOf(x.hint); base = prev && prev.depth < KEYFRAME ? prev : null; }
   const d = delta(base && base.list, list);
