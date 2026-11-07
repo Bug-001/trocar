@@ -454,3 +454,13 @@ test('1.6 §3.6 · darwin: the record lost, then install again — one uninstall
   assert.ok(noTrocarRow(w.patch), 'dsh\'s loader row is gone')
   assert.ok(fs.readFileSync(w.kimi).equals(MACHO), 'the real kimi is back under its own name')
 })
+test('1.6 §3.6 · uninstall deletes a backup no entry names, and its receipt does not offer it to the user to keep', async () => {
+  const { writeBackup } = await import('../../src/off/backup.mjs')
+  const w = await installed()
+  const orphan = writeBackup({ home: w.home, file: path.join(w.home, 'gone.json'), data: Buffer.from('{}\n') })
+  const { receipt, exit } = await uninstall(w)
+  assert.equal(exit, 0, JSON.stringify({ p: receipt.problems, l: receipt.left }))
+  assert.equal(fs.existsSync(orphan), false, 'the backup is gone')
+  assert.ok(receipt.dropped_backups.includes(orphan), 'the receipt lists it as dropped')
+  assert.ok(!receipt.notes.some((n) => n.includes(orphan)), `no note names a backup this run deleted: ${receipt.notes.join(' | ')}`)
+})

@@ -212,9 +212,10 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
     })
     if (!r) return EXIT.incomplete
     if (r.refusal) return refuse(r.refusal)
-    // D61: the login registration and the daemon, through the one seam every command uses (ensureDaemonUp, src/collector/install.mjs)
+    // D61: the login registration and the daemon, through the one seam every command uses (ensureDaemonUp, src/collector/install.mjs), after the lock: the OS can hold the start longer than off waits for the lock (R12)
     // Set up (only): the login entry is not in its plan, so it is neither rewritten above nor registered here (4.4 #13); the daemon asking is up, this only reads it
-    const dmn = unit && !r.refused ? await (await import('../collector/install.mjs')).ensureDaemonUp({ osName: platform, dir: path.join(home, '.trocar', 'collector'), env, fs, unit, register: !only, ...(deps.request ? { request: deps.request } : {}), ...(deps.sleep ? { pause: deps.sleep } : {}) }) : { up: false, started: false, notes: [], problems: [] }
+    // a failure record that cannot be written is a problem of the run (D38: a failure is never silent)
+    const dmn = unit && !r.refused ? await (await import('../collector/install.mjs')).ensureDaemonUp({ osName: platform, dir: path.join(home, '.trocar', 'collector'), env, fs, unit, register: !only, put: (e) => { try { appendEvent(path.join(home, '.trocar', 'collector'), e) } catch (err) { r.problems.push(`a failure record could not be written (${err.message}): ${e.reason}`); r.exit = 1 } }, ...(deps.request ? { request: deps.request } : {}), ...(deps.sleep ? { pause: deps.sleep } : {}) }) : { up: false, started: false, notes: [], problems: [] }
     r.problems.push(...dmn.problems)
     const dmnNotes = dmn.notes.filter((n) => !r.problems.includes(n)) // 附录 C.1: `problems` is the failure channel; what trocar could not do but said is `notes` (M-2)
     if (dmn.problems.length) r.exit = 1
@@ -228,7 +229,7 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
     const marked = [...new Set(r.carriers.filter((c) => c.code === MARKED_WITHOUT_RECORD && c.path).map((c) => c.path))]
     const mwr = marked.length ? markedRefusal('install', { code: MARKED_WITHOUT_RECORD, message: `${marked.length === 1 ? 'this file holds' : 'these files hold'} trocar's text from an earlier install whose record is gone, so trocar left ${marked.length === 1 ? 'it' : 'them'} and installed the rest. The line below takes that text out by trocar's own marks; then run trocar install again.`, paths: marked }) : null
     if (mwr) r.problems.push(...mwr.problems)
-    const receipt = { ...newReceipt('install'), ok: r.exit === 0, skipped: r.carriers.filter((c) => c.code === CODE.notTrocarsFile && c.path).map((c) => ({ what: c.path, reason: c.why })), undo: r.refused ? null : UNDO_LINE.install, fp256: r.fp256, items: r.items, carriers: r.carriers, pending: only ? r.pending.map((p) => ({ ...p, command: 'trocar install' })) : r.pending, problems: r.problems, notes: [...r.notes, ...dmnNotes], ...(r.refused ? {} : { standalone: standalonePath(home), residual_risk: RISK }), daemon: daemonRow(dmn, rep), ...(unit && !only && !r.refused ? { autostart: { entry: platform === 'win32' ? '\\trocar\\collector' : unit.path, enabled: !dmn.unitFailed } } : {}),
+    const receipt = { ...newReceipt('install'), ok: r.exit === 0, skipped: r.carriers.filter((c) => c.code === CODE.notTrocarsFile && c.path).map((c) => ({ what: c.path, reason: c.why })), undo: r.refused ? null : UNDO_LINE.install, fp256: r.fp256, items: r.items, carriers: r.carriers, pending: only ? r.pending.map((p) => ({ ...p, command: 'trocar install' })) : r.pending, problems: r.problems, notes: [...r.notes, ...dmnNotes], ...(r.refused ? {} : { standalone: standalonePath(home), residual_risk: RISK }), daemon: daemonRow(dmn, rep), ...(unit && !only && !r.refused ? { autostart: { entry: dmn.entry || (platform === 'win32' ? '\\trocar\\collector' : unit.path), enabled: !dmn.unitFailed } } : {}),
       ...(refusal ? { error: { code: refusal.code, message: refusal.reason } } : mwr ? { error: mwr.error } : {}),
       ...(r.path && r.path.rec ? { path_item: r.path.rec } : {}),
       planned, ...(left.length ? { left } : {}), commands: ['trocar on', 'trocar off', 'trocar status', 'trocar uninstall'] }
