@@ -240,7 +240,7 @@ test('darwin: a first install on a clean HOME is not refused for the custody: th
   const run = (file, args) => {
     if (!fs.existsSync(file)) throw Object.assign(new Error(`spawn ${file} ENOENT`), { code: 'ENOENT', errno: -2, syscall: `spawn ${file}`, path: file })
     asked.push(file)
-    return { status: 0, stdout: JSON.stringify({ exists: false }), stderr: '' }
+    return { status: 0, stdout: JSON.stringify(args[0] === 'session' ? { graphic: true } : { exists: false }), stderr: '' }
   }
   const real = await backendsFor({ os: 'darwin', home: w.home, run, env: w.env })
   assert.equal(fs.existsSync(path.join(w.home, '.trocar')), false, 'a clean HOME')
@@ -259,6 +259,32 @@ test('darwin: a custody helper that cannot be run is refused without the advice 
   assert.equal(refusal.code, CUSTODY_FAILED)
   assert.doesNotMatch(refusal.reason, /log in/)
 })
+
+// macOS: looking up a missing key needs no graphical session, making one does. With no key the gate also asks whether this
+// session can make it (the helper's `session`); with a key it does not ask, since signing with an existing key needs no prompt
+for (const [key, graphic, refused] of [[false, false, true], [false, true, false], [true, false, false]]) {
+  test(`darwin: key ${key ? 'present' : 'absent'}, graphical session ${graphic}: the custody gate ${refused ? 'refuses and writes nothing' : 'lets install go on'}`, async () => {
+    const w = await modelWorld({ os: 'darwin', commands: ['codex'] })
+    const asked = []
+    const run = (file, args) => {
+      asked.push(args[0])
+      return { status: 0, stdout: JSON.stringify(args[0] === 'session' ? { graphic } : { exists: key }), stderr: '' }
+    }
+    const real = await backendsFor({ os: 'darwin', home: w.home, run, env: w.env })
+    const deps = { getuid: () => 501, backends: { ...real, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, unit: null }
+    const before = snapshot(w.home)
+    const io = fakeIo()
+    if (refused) {
+      assert.equal(await runInstallCli(['--yes', '--json'], { io, env: w.env, home: w.home, platform: 'darwin', deps }), 1, io.text())
+      assert.equal(io.json().error.code, CUSTODY_FAILED)
+      assert.deepEqual(snapshot(w.home), before, 'the HOME is byte for byte as it was')
+    } else {
+      assert.equal(await runInstallCli(['--dry-run', '--json'], { io, env: w.env, home: w.home, platform: 'darwin', deps }), 0, io.text())
+      assert.equal(io.json().error, undefined, io.text())
+    }
+    assert.equal(asked.includes('session'), !key, `asked: ${asked}`)
+  })
+}
 
 test('an install that waited behind another reads the key again under the lock: the root and record the first one made stay', async () => {
   const w = await modelWorld({ commands: ['codex'] })

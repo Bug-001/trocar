@@ -25,6 +25,7 @@ import(${JSON.stringify(CERT)}).then(({ rootCertDer, intermediateCertDer }) => {
   const sign = (k) => (tbs) => crypto.sign('sha256', tbs, k)
   const DAY = 86400e3, now = Date.now()
   if (a[0] === 'exists') out({ exists: fs.existsSync(keyFile) })
+  if (a[0] === 'session') out({ graphic: mode !== 'no-graphic' })
   if (a[0] === 'remove') { const had = fs.existsSync(keyFile); fs.rmSync(keyFile, { force: true }); out({ removed: had }) }
   if (a[0] === 'create') {
     const k = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' })
@@ -79,6 +80,13 @@ test('CM3: the helper\'s unavailable exit is the value \'unavailable\' on every 
   assert.throws(() => c.issueIntermediate({ spkiDer: p256(), serial: Buffer.from([1]), notBefore: new Date() }), { code: 'no-key' })
   h.mode('crash')
   assert.throws(() => c.exists(), (e) => e.code === 'helper-failed' && /boom/.test(e.message))
+})
+
+test('canCreate: asks the helper\'s session; no graphic access (or the unavailable exit) throws code unavailable, the keychain untouched', () => {
+  const h = stubHelper(), c = keychainCustody({ helperPath: h.helperPath })
+  c.canCreate()
+  for (const m of ['no-graphic', 'unavailable']) { h.mode(m); assert.throws(() => c.canCreate(), { code: 'unavailable' }) }
+  assert.deepEqual(h.argv().map((a) => a[0]), ['session', 'session', 'session'])
 })
 
 test('CM3: an injected runner sees the same argv (the runner seam the daemon uses)', () => {
