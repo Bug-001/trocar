@@ -132,6 +132,12 @@ test('4.11 P4 · darwin: a plist under trocar\'s label that no record lists is b
   const now = fs.readFileSync(plist(w))
   assert.ok(!now.equals(old) && now.includes('<string>com.trocar.collector</string>'), 'the plist is trocar\'s')
   assert.ok(JSON.parse(fs.readFileSync(path.join(w.dir, 'install-manifest.json'), 'utf8')).files.some((f) => f.path === plist(w) && f.role === 'unit'), 'and the record lists it')
+  // the whole cycle: the replaced bytes were an older trocar's entry, so uninstall drops that backup with every other one (1.6 §3.6) and leaves no plist
+  const { runUninstall } = await import('../../src/cli/uninstall.mjs')
+  const { recordingExec } = await import('./fixtures/on-ctx.mjs')
+  const u = await runUninstall({ home: w.home, env: w.env, yes: true, deps: { platform: 'darwin', exec: recordingExec().run, custody: w.custody, procs: async () => [], sleep: async () => {}, drainMs: 0, getuid: () => 501 } })
+  assert.equal(u.exit, 0, JSON.stringify(u.receipt))
+  assert.deepEqual([backups(w), fs.existsSync(plist(w))], [[], false], 'no backup and no plist at trocar\'s path after uninstall')
 })
 
 // the documented order — install, then on — through the CLI: install writes the root, its carriers and

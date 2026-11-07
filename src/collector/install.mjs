@@ -28,6 +28,7 @@ import { appendEvent } from './core/events.mjs'
 import { runEventWriter } from '../off/events.mjs'
 import { hideUserinfoIn } from '../off/userinfo.mjs'
 import { backupDir, opLockFile, standalonePath, standaloneFiles } from '../off/paths.mjs'
+import { replacedNote } from '../off/backup.mjs'
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
 import { readStateFile, emptyState, setDesired, writeStateAtomic } from '../off/state.mjs'
 import { newReceipt, UNDO_LINE } from '../off/schema.mjs'
@@ -222,7 +223,7 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
   })
   const unitJ = unit ? judgeOwned({ manifest: prior, file: unit.path, planned: sha256(Buffer.from(unit.text(daemon.env))), fs }) : null
   // 4.11 P4: a unit under trocar's fixed name the record does not list is trocar's: replaced, its bytes backed up first (writeOwnedFile)
-  const unitWhy = unitJ && unitJ.action === 'write' && fs.existsSync(unit.path) ? `replaces the ${unit.path} already there; its bytes are kept in the backup folder` : unitJ && unitJ.why
+  const unitWhy = unitJ && unitJ.action === 'write' && fs.existsSync(unit.path) ? `${unit.path}: ${replacedNote(backupDir(home))}` : unitJ && unitJ.why
   if (unitJ) steps.push({ harness: null, path: unit.path, kind: 'unit', action: unitJ.action, ...(unitWhy ? { why: unitWhy } : {}) })
 
   // who is on, and who has nothing to do here (no entry, no file, not installed before): said, with the descriptor's own reason

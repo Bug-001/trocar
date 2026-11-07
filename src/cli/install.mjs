@@ -9,6 +9,7 @@ import path from 'node:path'
 import { EXIT, newReceipt, UNDO_LINE } from '../off/schema.mjs'
 import { refuseOldManifest, readManifest, saveManifest } from '../off/manifest.mjs'
 import { samePath } from '../collector/core/trust/journal.mjs'
+import { replacedNote } from '../off/backup.mjs'
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
 import { opLockFile, standalonePath, standaloneFiles, launcherPath, standaloneCommand, collectorDir, backupDir } from '../off/paths.mjs'
 import { isInteractive, confirm } from '../off/io.mjs'
@@ -142,7 +143,7 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
       // D61 (1.6 §3.2 step 5, 4.11 §1 install 7): the login entry is a file of YOURS outside trocar's tree, so it is its own line (V85), and the plan says a daemon runs from now on
       ...staleItem(stale, root),
       ...(pathItem ? [pathItem] : []),
-      ...(unit && !only ? [{ what: 'autostart', detail: `${platform === 'win32' ? 'the scheduled task \\trocar\\collector' : tilde(unit.path, home)}: a collector daemon starts at every login from now on, and is started now (trocar uninstall takes it out again)${unit.path && !recordsPath(home, unit.path, fs) && (fs.existsSync(unit.path) || (typeof unit.registeredBytes === 'function' && unit.registeredBytes() != null)) ? `; it replaces the one already there under trocar's name, whose bytes are kept in ${tilde(backupDir(home), home)}` : ''}` }] : []),
+      ...(unit && !only ? [{ what: 'autostart', detail: `${platform === 'win32' ? 'the scheduled task \\trocar\\collector' : tilde(unit.path, home)}: a collector daemon starts at every login from now on, and is started now (trocar uninstall takes it out again)${unit.path && !recordsPath(home, unit.path, fs) && (fs.existsSync(unit.path) || (typeof unit.registeredBytes === 'function' && unit.registeredBytes() != null)) ? `; ${replacedNote(tilde(backupDir(home), home))}` : ''}` }] : []),
     ]
     // 1.6 §3.2 / V85: what install records and changes nothing at (a key that stays yours, a file that is not yours) is said too, apart from the
     // changes: `planned` is only what the run changes (the board's Set up confirms exactly that list, 4.4 #13), `left` the rest
