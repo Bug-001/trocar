@@ -25,6 +25,7 @@ import { acquireOpLock, LOCK_BUSY } from './lock.mjs'
 import { readManifest, refuseOldManifest, unknownItems, undoByHand, MANIFEST_VERSION, OFF_VERSION } from './manifest.mjs'
 import { undoHarnesses, undoRootKeys } from './undo.mjs'
 import { planByMarker, undoByMarker } from './marker.mjs'
+import { pathKey } from './fsutil.mjs'
 import { daemonState, stopDaemon, helperGone, isRedirectorHelper, clearStaleSupervisorLock } from './daemon-stop.mjs'
 import { controlRequest, controlEndpointFor } from './control-client.mjs'
 import { unitFilePath, UNIT_FILE_NAME } from './autostart.mjs'
@@ -280,6 +281,7 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
     const at = w.clock()
     const label = (e) => { try { return `${e.harness}\0${e.path}\0${describeEntry(e)}` } catch { return `${e.harness}\0${e.path}` } }
     const before = new Map(manifest.entries.map((e) => [label(e), { ...e }]))
+    const manifestPaths = new Set([...manifest.entries, ...manifest.files].map((e) => e && e.path).filter(Boolean)) // before the undo drops what it took out
     let out, stopped = null
     try {
       const roots = w.deps.roots || (manifest.files.some((f) => f.role === 'bundle') ? () => rebuildRoots(w) : null)
@@ -290,6 +292,12 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
         return u
       }
       out = e.partial; stopped = e // it stopped after the files were changed (the last write of the manifest): what it did is in the receipt all the same, below
+    }
+    // 1.6 §3.6 「记录没列的标记」: uninstall also takes out, by trocar's marks, what the record does not list — only at the places planByMarker reads
+    if (dropCa && ids == null && !stopped) {
+      const listed = (p) => [...manifestPaths].some((x) => pathKey(x) === pathKey(p))
+      const extra = planByMarker({ home: w.home, fs: w.fs, env: w.env, platform: w.platform }).filter((p) => !listed(p.path))
+      if (extra.length) takeByMarker(w, u, extra)
     }
     const note = (code, extra, reason) => u.events.push({ kind: code, code, ...extra, reason }) // `kind` = `code`: one line per thing the operator should know (4.6 安装 / 卸载不静默)
     u.raw = out // what the undo did, for a receipt if what follows throws (undoSide)
@@ -393,17 +401,23 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
     u.problems.push(`trocar's own record of what it wrote ${manifestError ? 'cannot be read' : 'is missing'}, so the ${items.length} file${items.length === 1 ? '' : 's'} above ${items.length === 1 ? 'was' : 'were'} left as ${items.length === 1 ? 'it is' : 'they are'}.`, `Undo ${items.length === 1 ? 'it' : 'them'} by the marks trocar left in ${items.length === 1 ? 'it' : 'them'}: trocar off --yes`)
     return u
   }
+  takeByMarker(w, u, plan)
+  if (u.orphan_backups.length) u.notes.push(`the backups of the files above (JSON values taken back from them), and any others, are left in place: ${u.orphan_backups.join(', ')}`)
+  return u
+}
+
+/** Undoes a planByMarker plan and puts each result in the receipt `u`: a file undone is `changed` (`result: undone-by-marker`, `prior_left` for a value
+ *  that could not be put back) or `removed`, one no longer marked `skipped`, one that could not be undone `left` with its failure. */
+function takeByMarker(w, u, plan) {
   for (const r of undoByMarker(plan, { home: w.home, fs: w.fs })) {
     if (r.result === CODE_OFF.undoneByMarker) {
       u.undone_by_marker = true
       if (r.how === 'owned-file') u.removed.push(r.path)
       else u.changed.push({ path: r.path, change: MARKER_TEXT[r.how], backup: r.restored_from || r.backup || null, result: r.result, ...(r.prior_left ? { prior_left: r.prior_left } : {}), ...withHarness(r.harness) })
-      u.events.push({ kind: CODE_OFF.undoneByMarker, code: CODE_OFF.undoneByMarker, ...withHarness(r.harness), path: r.path, reason: `${r.path}: ${MARKER_TEXT[r.how]} (found by trocar's mark; there is no manifest to say what it was before)` })
+      u.events.push({ kind: CODE_OFF.undoneByMarker, code: CODE_OFF.undoneByMarker, ...withHarness(r.harness), path: r.path, reason: `${r.path}: ${MARKER_TEXT[r.how]} (found by trocar's mark; no install record lists it to say what it was before)` })
     } else if (r.result === 'already-clean') u.skipped.push({ what: r.path, reason: "trocar's mark is no longer in this file" })
     else { u.left.push({ path: r.path, result: r.result, reason: r.reason || `${r.path}: ${r.result}`, ...withHarness(r.harness) }); u.failures.push({ code: r.result === 'left-unparsable' ? 'left-unparsable' : 'entry-not-undone', ...withHarness(r.harness), path: r.path, reason: r.reason || `${r.path}: trocar cannot read it; trocar's value may still be in it` }) }
   }
-  if (u.orphan_backups.length) u.notes.push(`the backups of the files above (JSON values taken back from them), and any others, are left in place: ${u.orphan_backups.join(', ')}`)
-  return u
 }
 
 /** The writer of a run's `flows/` lines: `put(rec)` appends `{ts, event, where, run, …rec}` (a rec may bring its own `event`, e.g. 'failure'); a line that cannot be

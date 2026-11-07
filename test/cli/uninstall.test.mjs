@@ -307,6 +307,29 @@ test('R12: an uninstall that cannot get the op lock has written desired off firs
   assert.equal(flowEvents(s.dir).at(-1).outcome, 'failed')
 })
 
+// 1.6 §3.6 「记录没列的标记」: the record lists codex's file and not Claude Code's settings (marked by trocar, its value backed up): one uninstall takes
+// both out — the unlisted one by trocar's marks at the places planByMarker reads, its old value from the backup — and the receipt names it as undone by marker
+test('§3.6: uninstall also takes out a marked file the record does not list, by its marks, the value from its backup; one run clears both', async () => {
+  const codexOriginal = 'SSL_CERT_FILE=/corp/ca.pem\nOPENAI_API_KEY=sk-test\n'
+  const s = await installedHome({ names: ['claude-code', 'codex'], seed: (home, sh) => {
+    fs.writeFileSync(path.join(home, '.codex', '.env'), codexOriginal)
+    fs.writeFileSync(path.join(home, '.claude', 'settings.json'), `{\n  "env": { "NODE_EXTRA_CA_CERTS": "${sh.corp}" }\n}\n`)
+  } })
+  const settings = path.join(s.home, '.claude', 'settings.json')
+  const settingsOriginal = `{\n  "env": { "NODE_EXTRA_CA_CERTS": "${s.sh.corp}" }\n}\n`
+  assert.notEqual(fs.readFileSync(settings, 'utf8'), settingsOriginal, 'trocar\'s value is in')
+  const mf = path.join(s.dir, 'install-manifest.json')
+  const m = JSON.parse(fs.readFileSync(mf, 'utf8'))
+  m.entries = m.entries.filter((e) => e.path !== settings); m.files = m.files.filter((f) => f.path !== settings)
+  fs.writeFileSync(mf, JSON.stringify(m))
+  const r = await s.uninstall({ yes: true })
+  assert.equal(r.exit, 0, JSON.stringify(r.receipt.problems))
+  assert.equal(fs.readFileSync(settings, 'utf8'), settingsOriginal, 'the unlisted file: trocar\'s value out, the old one back from the backup')
+  assert.equal(fs.readFileSync(path.join(s.home, '.codex', '.env'), 'utf8'), codexOriginal, 'the listed file: undone by the record')
+  assert.ok(r.receipt.changed.some((c) => c.path === settings && c.result === 'undone-by-marker'), JSON.stringify(r.receipt.changed))
+  assert.deepEqual(trocarFiles(s), [])
+})
+
 test('V24 (uninstall): with the install manifest gone and no terminal, uninstall takes the routing off, stops the daemon, undoes nothing, removes nothing of trocar\'s and exits 1; with --yes it undoes the entries by their marks and removes trocar\'s own files by name — the CA, the unit, the state, every backup', async () => {
   const codexOriginal = 'SSL_CERT_FILE=/corp/ca.pem\nOPENAI_API_KEY=sk-test\n'
   const s = await installedHome({ names: ['claude-code', 'codex'], seed: (home, sh) => {
@@ -324,7 +347,7 @@ test('V24 (uninstall): with the install manifest gone and no terminal, uninstall
   assert.deepEqual([first.receipt.daemon ? first.receipt.daemon.state : 'none', s.sys.exec.calls.filter((c) => /stop /.test(c)).length], ['none', 0], 'the daemon was not stopped either: nothing was done')
   const second = await s.uninstall({ yes: true })
   assert.equal(second.exit, 0, JSON.stringify(second.receipt.problems))
-  assert.match(second.receipt.notes.join('\n'), /found by trocar's mark; there is no manifest to say what it was before/, 'the entries went by trocar\'s own marks')
+  assert.ok(second.receipt.changed.some((c) => c.result === 'undone-by-marker'), 'the entries went by trocar\'s own marks')
   assert.deepEqual([second.receipt.routing.confirmed, second.receipt.daemon.state], [true, 'stopped'], 'the routing is off and the daemon stopped')
   assert.equal(fs.readFileSync(path.join(s.home, '.codex', '.env'), 'utf8'), codexOriginal, 'the block is out and the commented user line is back')
   assert.equal(fs.readFileSync(path.join(s.home, '.claude', 'settings.json'), 'utf8'), settingsOriginal, 'the JSON value is back, taken from the backup')
