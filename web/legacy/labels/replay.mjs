@@ -20,7 +20,7 @@ export const LANE_KIND = Object.freeze({
   suggest: { word: 'Next-prompt suggestion', row: 'bg', bucket: 'bg', hint: 'The agent copies the whole session and asks the model what the next prompt might be; the reply is only a hint in the input box and does not enter the session' },
   websearch: { word: 'Web search', row: 'bg', bucket: 'bg', hint: 'A model call the search tool makes on its own' },
   webfetch: { word: 'Web page summary', row: 'bg', bucket: 'bg', hint: 'A small model answers from one fetched page' },
-  aux: { word: 'Unnamed background call', row: 'bg', bucket: 'bg', hint: 'A call outside the main conversation whose agent doesn\'t say what it is' },
+  aux: { word: 'Unnamed background call', row: 'bg', bucket: 'bg', hint: 'A call outside the main thread whose agent doesn\'t say what it is' },
   probe: { word: 'warm-up request', row: 'bg', bucket: 'bg', hint: 'A warm-up request the agent marked itself: it writes the cache ahead of time; not a step of the main thread' },
   'token-count': { word: 'token count', row: 'tc', bucket: null, hint: 'Token count: generates no reply and is not billed' },
 })
