@@ -15,6 +15,7 @@ import { unitPath, UNIT_NAME } from '../../src/collector/arch/linux/unit.mjs'
 import { X509Certificate } from 'node:crypto'
 import zcode from '../../src/collector/harness/z-code.mjs'
 import { createCa } from '../../src/collector/core/tls/ca.mjs'
+import { validateReceipt } from '../../src/cli/schema.mjs'
 
 const fps = (text) => (String(text).match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g) || []).map((p) => new X509Certificate(p).fingerprint256)
 const certBytes = (home) => Object.fromEntries(Object.entries(snapshot(home)).filter(([k]) => k.startsWith('.trocar/collector/ca/') || k === '.claude/settings.json'))
@@ -253,6 +254,7 @@ test('Linux install over a masked unit: replaced, and said in the plan and the r
     assert.equal(await runInstallCli(['--yes', '--json'], ctx(io)), 0, io.text())
     const done = io.json()
     const row = done.changed.find((c) => c.path === unit)
+    assert.deepEqual(validateReceipt(done), [], 'the receipt keeps the schema, why_no_backup included')
     assert.ok(row && row.backup === null && !done.created.includes(unit), `${seeded}: the receipt lists the link as changed, not as trocar's own file: ${JSON.stringify([done.changed, done.created])}`)
     assert.equal(fs.lstatSync(unit).isSymbolicLink(), false, `${seeded}: the link is replaced`)
     assert.match(fs.readFileSync(unit, 'utf8'), /\[Service\]/)
