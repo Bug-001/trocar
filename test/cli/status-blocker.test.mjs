@@ -85,12 +85,13 @@ for (const [shape, s] of Object.entries(SHAPES)) {
   })
 }
 
-// the door judges the route's verified forms whether or not their programs are here: an npm-only Z-Code (no app, only ~/.zcode) with the desktop's
-// setting left behind is spliced too, so status says so (until the door judges absent forms no more)
-test('4.11 ⑩ · status: with the desktop app absent, the desktop setting still keeps the form that is here from being decrypted, and status says so', async () => {
+// a form's blockers hold only where the form is installed (4.11 ⑩): an npm-only Z-Code (no app, only ~/.zcode) with the desktop's setting left behind is
+// not kept off the door, so the Node CLI is routed and status says so: the door decrypts it (verdict.test.mjs, the `absent` axis)
+test('4.11 ⑩ · status: with the desktop app absent, a desktop setting left behind keeps nothing off trocar', async () => {
   const w = await zcodeWorld(SHAPES.set.write, { app: false })
   const x = JSON.parse(await status(w, ['--json', 'z-code'])).harnesses['z-code']
   assert.deepEqual(x.forms.map((f) => f.form), ['z-code.cli-node'], 'only the Node CLI is here')
-  assert.deepEqual([x.forms[0].route && x.forms[0].route.reason, x.forms[0].route && x.forms[0].route.form], ['blocker', 'z-code.desktop'])
-  assert.equal(x.captured, false)
+  assert.equal(x.forms[0].route, undefined, JSON.stringify(x.forms[0].route))
+  assert.notEqual(x.captured, false, `${x.captured} ${x.reason}`)
+  assert.match((await status(w, ['z-code'])).replace(/\s+/g, ' '), /z-code\.cli-node .*points at trocar/)
 })

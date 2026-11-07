@@ -9,7 +9,7 @@
 //            hosts in the extension's own settings, the operator's extra_hosts; 4.8 OPEN 22); absent → desc.hosts.
 //   issuer = makeIssuer()'s object, or null; ctx = the sources.mjs ctx (os, home, dirs, readFile, readdir, policy, join).
 import path from 'node:path'
-import { readSrc, fileOf, rootHeldIn } from './sources.mjs'
+import { readSrc, fileOf, rootHeldIn, presenceOf } from './sources.mjs'
 import { itemsOfPhase } from '../../../off/manifest.mjs'
 import { HOOK_PID_ENV } from './chain.mjs'
 
@@ -129,7 +129,8 @@ export function verdictOf({ desc, form, facts = {}, record = {}, issuer, host, h
   const u = replaceVerdict(pm, pctx, facts, record)
   if (u) return u
   if (!issuer || (issuer.state && issuer.state() !== 'ready')) return issuer && issuer.state() === 'key-missing' ? fwd('cert-key-missing', 'the root key is not in its custody: nothing signs leaves') : fwd('cert-intermediate-unavailable', 'no intermediate certificate to sign leaves with')
-  for (const b of pm.blockers || []) {
+  const here = presenceOf(form, ctx) !== false // a form not on this machine has no process to keep off the door: its blockers do not hold (⑩)
+  for (const b of here ? pm.blockers || [] : []) {
     if (b.forms && !b.forms.includes(form.id)) continue
     if (b.when) { const w = read(b.when.src, pctx, facts); if (w.error) return notRead(w); if (!w.set || ('equals' in b.when && w.value !== b.when.equals)) continue }
     const r = read(b.at, pctx, facts)

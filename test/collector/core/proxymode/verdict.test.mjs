@@ -2,7 +2,8 @@
 // generated over every loaded descriptor's proxyMode forms plus the eighth fixture, on each OS a form names, along every axis of the rule list: name known /
 // unknown; verified true / { reason }; host in / out of forwardOnlyHosts; hostTree host in / out of desc.hosts; start before / after the carrier's installed_at
 // (and unknown); every state of every trust source (unset, a file holding the root, lacking it, missing, unreadable, its settings file unparsable or unreadable) in every
-// combination, so every precedence permutation of set / unset; `when` true / false; the process env unreadable; issuer null / present; each blocker hit / miss.
+// combination, so every precedence permutation of set / unset; `when` true / false; the process env unreadable; issuer null / present; each blocker hit / miss,
+// with the form installed and not.
 // The world is in memory (no real OS). The expected verdict is computed below from the rule list over the declared world: it never parses a file and never
 // calls the implementation's reader or its loop.
 import test from 'node:test'
@@ -67,7 +68,9 @@ function expected(c, d, f, w) {
   // (this world never sets them, so only a setting that cannot be read answers here; the file axes are the userCertFiles test below)
   for (const s of (d.proxyMode.userCertFiles || []).filter((x) => x.semantics === 'replace')) { const r = firstOf(w, s); if (r.error) return r.error }
   if (!c.issuer) return 'cert-intermediate-unavailable'
-  for (const b of d.proxyMode.blockers) {
+  // ... "a form's blockers hold only when the form is here, or whether it is cannot be told (no `present`): a form not installed has no process to keep off"
+  const here = !(f.present || []).length || w.here.size + w.commands.size > 0
+  for (const b of here ? d.proxyMode.blockers : []) {
     if (b.forms && !b.forms.includes(f.id)) continue
     const r = firstOf(w, b.at)
     if (r.error) return r.error
@@ -125,6 +128,7 @@ for (const { d, f, os } of CASES) {
     d.proxyMode.blockers.forEach((b, i) => {
       const got = run(d, f, os, { blocker: i })
       if (!got.decrypt && got.code === 'not-routed') assert.ok(got.at, 'a blocker verdict names where')
+      run(d, f, os, { blocker: i, absent: true }) // the setting left behind by a form that is not installed
     })
     if (t && t.sources.length) for (const when of t.when ? [true, false] : [true]) for (const sources of combos(t)) run(d, f, os, { when, sources })
   })

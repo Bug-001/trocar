@@ -101,11 +101,18 @@ export function holds(cond, ctx) {
 }
 
 /** Whether a form is installed: any of its `present` places exists, or a `{ command }` resolves through ctx.which. */
-export function isPresent(form, ctx) {
-  return (form.present || []).some((p) => {
-    if (p && 'command' in p) return !!ctx.which(p.command)
-    try { return resolveLoc(p, ctx).some((f) => ctx.exists(f)) } catch { return false }
-  })
+export const isPresent = (form, ctx) => presenceOf(form, ctx) === true
+
+/** Whether a form is here, for its blockers (4.11 ⑩): true | false | null, null = not known (no `present` declared, or a place that cannot be resolved),
+ *  which counts as maybe here. shortcut: ctx.exists cannot tell a place it may not read from an absent one; give ctx a stat when a case needs it. */
+export function presenceOf(form, ctx) {
+  if (!(form.present || []).length) return null
+  let unknown = false
+  for (const p of form.present) {
+    if (p && 'command' in p) { if (!ctx.which) unknown = true; else if (ctx.which(p.command)) return true; continue }
+    try { if (resolveLoc(p, ctx).some((f) => ctx.exists(f))) return true } catch (e) { if (!absent(e)) unknown = true } // a glob's folder not there: not here
+  }
+  return unknown ? null : false
 }
 
 /** The places of a form that are there now (its `present` places, a `{ command }` as the path it resolves to): which form a running process belongs to is

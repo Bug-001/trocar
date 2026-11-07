@@ -149,8 +149,8 @@ export async function modelFormFacts({ harnesses, os, manifest: m, reply = null,
         upstream = { url_redacted: red(u.url), source: u.source, ...(u.pac ? { pac: true } : {}) }
       }
       if (upstream.source === 'unknown') upstream.code = CODE.priorProxyUnknown
-      // the door judges a process on a route against every verified form of that route (judgedForms), present or not, so a blocker on any of them splices
-      // them all: each form reads the first one, naming the form whose blocker it is when that is another (4.11 ⑩)
+      // the door judges a process on a route against every verified form of that route (judgedForms), so a blocker of any of them that is here (or may be)
+      // splices them all: each form reads the first one, naming the form whose blocker it is when that is another (4.11 ⑩)
       const mine = plan.notRouted.find((n) => n.form === f.id)
       const blocked = mine || judgedForms(desc, os, f.route).filter((g) => g.id !== f.id).map((g) => { const b = blockerOf(desc, g, ctx); return b && { ...b, code: 'not-routed', via: g.id } }).find(Boolean) || null
       forms.push({

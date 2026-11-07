@@ -18,7 +18,7 @@ import { editTarget } from '../../../off/fsutil.mjs'
 import { BLOCK_OPEN } from '../../../off/text-edit.mjs'
 import { switchFileIn } from '../../../off/paths.mjs'
 import { parseDotenv } from '../config-read.mjs'
-import { resolveLoc, readSrc, holds, isPresent } from './sources.mjs'
+import { resolveLoc, readSrc, holds, isPresent, presenceOf } from './sources.mjs'
 import { entryGate } from '../entry-forms.mjs'
 import { CODE } from '../codes.mjs'
 import { unseal, doorFp } from '../../../off/seal.mjs'
@@ -223,8 +223,10 @@ export function routeEntry(kind) {
 /** Which routes `on` writes for a harness (spec 4.11 §3, CM31): only routes a present form uses; a form a blocker matches gets none. With a route
  *  to write, the descriptor's `effects` (CM32) and `notes` (CM38) come back as harness-notes.
  *  → { routes: [{ id, route, forms }], notRouted: [{ form, code, reason, at }], notes: [harness-note] } */
-/** The first blocker of form `f` that holds (or cannot be read) in `ctx`: { reason: 'blocker' | 'blocker-unreadable', at } | null. `on` and `status` ask it. */
+/** The first blocker of form `f` that holds (or cannot be read) in `ctx`: { reason: 'blocker' | 'blocker-unreadable', at } | null; none for a form
+ *  not on this machine (presenceOf false), as the door judges (4.11 ⑩). `on` and `status` ask it. */
 export function blockerOf(desc, f, ctx) {
+  if (presenceOf(f, ctx) === false) return null
   return (desc.proxyMode.blockers || []).filter((b) => !b.forms || b.forms.includes(f.id)).map((b) => {
     const r = readSrc(b.at, ctx)
     if (r.error) return { reason: 'blocker-unreadable', at: r.where }

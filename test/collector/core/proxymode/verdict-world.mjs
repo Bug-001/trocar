@@ -26,8 +26,9 @@ export const leaves = (src) => (Array.isArray(src) ? src.flatMap(leaves) : [src]
 export const locOf = (src, os) => (src.file && src.file.perOs ? src.file.perOs[os] : src.file)
 
 // ---- the world: declared states, and the in-memory machine built from them --------------------------------------------------------------------
-// world = { os, env: {} | null, cwd: string | null, docs: { path: object }, broken: Set(path), unreadable: Set(path), ca: { path: 'root'|'lacks'|'unreadable' }, policy: { key: value } }
-export const newWorld = (os) => ({ os, env: {}, cwd: CWD, docs: {}, broken: new Set(), unreadable: new Set(), ca: {}, policy: {} })
+// world = { os, env: {} | null, cwd: string | null, docs: { path: object }, broken: Set(path), unreadable: Set(path), ca: { path: 'root'|'lacks'|'unreadable' }, policy: { key: value },
+//   here: Set(path) and commands: Set(name), the form's `present` places that are on the machine }
+export const newWorld = (os) => ({ os, env: {}, cwd: CWD, docs: {}, broken: new Set(), unreadable: new Set(), ca: {}, policy: {}, here: new Set(), commands: new Set() })
 export const rctx = (w) => ({ os: w.os, home: HOME, cwd: w.cwd ?? undefined, env: w.env || {}, dirs: { appSupport: '/as', localAppData: '/la' }, readdir: () => [], join: path.posix.join })
 export const policyKey = (src, os) => JSON.stringify(src.policy[os])
 /** Put a value at a leaf source (an env name, a file key path, a policy key); a glob file gets one matching entry. */
@@ -42,7 +43,7 @@ export function setLeaf(w, src, value) {
 }
 export const fileOfLeaf = (w, src) => resolveLoc(src.file, rctx(w))[0]
 export function ctxOf(w) {
-  const files = () => new Set([...Object.keys(w.docs), ...w.broken, ...w.unreadable, ...Object.keys(w.ca)])
+  const files = () => new Set([...Object.keys(w.docs), ...w.broken, ...w.unreadable, ...Object.keys(w.ca), ...w.here])
   const fail = (code) => { throw Object.assign(new Error(code), { code }) }
   const text = (p, kind) => (kind === 'dotenv' ? Object.entries(w.docs[p]).map(([k, v]) => `${k}=${v}`).join('\n') : JSON.stringify(w.docs[p]))
   return {
@@ -58,12 +59,13 @@ export function ctxOf(w) {
     },
     readdir: (d) => { const n = [...files()].filter((p) => path.posix.dirname(p) === d).map((p) => path.posix.basename(p)); return n.length ? n : fail('ENOENT') },
     exists: (p) => files().has(p),
+    which: (c) => (w.commands.has(c) ? `/bin/${c}` : null),
     policy: (spec) => { const v = w.policy[JSON.stringify(spec)]; return v === undefined ? { set: false } : { set: true, value: v, where: `policy:${JSON.stringify(spec)}` } },
   }
 }
 
 export const STATES = ['unset', 'root', 'lacks', 'missing', 'unreadable', 'broken']
-export const BASE = { known: true, verified: true, host: null, start: 'after', when: true, sources: null, issuer: true, blocker: null, envNull: false, cwdNull: false, hookPid: null }
+export const BASE = { known: true, verified: true, host: null, start: 'after', when: true, sources: null, issuer: true, blocker: null, absent: false, envNull: false, cwdNull: false, hookPid: null }
 /** The declared world of one case: the descriptor form on `os` with the axes `over` set (BASE otherwise) → { c, w, form, facts }. */
 export function worldOf(d, f, os, over) {
   const c = { ...BASE, host: d.hosts[0], ...over }
@@ -79,6 +81,11 @@ export function worldOf(d, f, os, over) {
     setLeaf(w, from, ca)
     if (s !== 'missing') w.ca[ca] = s
   })
+  if (!c.absent) for (const p of f.present || []) { // the form is installed: each of its places is there (a glob's: one matching entry)
+    const l = p.perOs ? p.perOs[os] : p
+    if ('command' in p) w.commands.add(p.command)
+    else if (l) for (const x of resolveLoc({ ...l, glob: undefined }, rctx(w))) w.here.add(l.glob ? path.posix.join(x, l.glob.replace('*', 'x')) : x)
+  }
   if (c.blocker !== null) setLeaf(w, leaves(d.proxyMode.blockers[c.blocker].at)[0], 'http://blocked.corp:3128')
   if (c.hookPid) w.env[HOOK_PID_ENV] = c.hookPid === 'own' ? '4242' : '4141' // the pid an in-process hook wrote: this process's own (facts.pid below), or a parent's
   if (c.envNull) w.env = null
