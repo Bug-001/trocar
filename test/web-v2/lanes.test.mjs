@@ -8,6 +8,7 @@ import { stepPos, windowCalls, buildLanes, anchorLane, turnsReviewed, nearestByT
 import { renderTicks, renderRails, railToggles, flipRail, wireRails, hasRails } from '../../web/legacy/replay/rails.mjs'
 import { wireDetail } from '../../web/legacy/replay/detail.mjs'
 import { deskOf } from './desk-world.mjs'
+import { applySession } from '../../web/legacy/replay/model.mjs'
 import { LANE_KIND } from '../../web/legacy/labels/replay.mjs'
 import { laneMeta, eventOnly } from '../../src/view/analyze.mjs'
 import { HARNESSES } from '../../src/dissect/harnesses.mjs'
@@ -205,14 +206,17 @@ test('2.1 #17: renderRails writes no fold row, at any width', () => {
   }
 })
 
-test('1.3 §叠加轨: lanes are drawn in step order of their first call, whatever order their headers arrived in', () => {
-  const desk = deskOf([{ kind: 'main', rows: [{}, {}] }, { kind: 'subagent', rows: [{}] }, { kind: 'subagent', rows: [{}] }, { kind: 'monitor', rows: [{}] }])
-  const want = buildLanes(desk, null).map((l) => l.id)
-  // the same headers, arrived in another order (a late tail append adds a lane after the ones already held)
-  for (const order of [[3, 0, 2, 1], [2, 1, 3, 0]]) {
-    const hs = [...desk.lanes.values()]
-    desk.lanes = new Map(order.map((i) => [hs[i].lane, hs[i]]))
-    assert.deepEqual(buildLanes(desk, null).map((l) => l.id), want, String(order))
-  }
-  assert.deepEqual(want, ['R0-0', 'R1-0', 'R2-0', 'R3-0'], 'step order of the first call')
+test('1.3 §叠加轨: a lane that arrives late lands in step order of its first call; the server\'s order and the anchor stay', () => {
+  // the server lists four lanes by first step; a fifth whose first call is between the first two arrives in a delta
+  const desk = deskOf([{ kind: 'subagent', rows: [{}, {}] }, { kind: 'subagent', rows: [{}] }, { kind: 'monitor', rows: [{}] }])
+  const before = buildLanes(desk, null).map((l) => l.id), anchor = anchorLane(buildLanes(desk, null)).id
+  const ts = (rid) => desk.rows.get(rid).ts, mid = new Date((Date.parse(ts('R0-0')) + Date.parse(ts('R1-0'))) / 2).toISOString()
+  applySession(desk, { base: desk.mark, mark: 'L-0', calls: [{ rid: 'L-0', lane: 'L-0', ts: mid, ctx: 1, rec: { request: { model: 'm' } } }], gone: [], events: [],
+    lanes: [{ lane: 'L-0', kind: 'subagent', first: 'L-0', last: 'L-0', count: 1 }] })
+  const after = buildLanes(desk, null).map((l) => l.id)
+  assert.deepEqual(after, [before[0], 'L-0', ...before.slice(1)], 'placed by its first call among the held lanes')
+  assert.equal(anchorLane(buildLanes(desk, null)).id, anchor, 'a session with no main lane keeps its anchor')
+  // a header for a lane whose first call is not held (an unread page) goes last, and a header already held keeps its place
+  applySession(desk, { base: desk.mark, mark: desk.mark, calls: [], gone: [], events: [], lanes: [{ lane: 'R9-0', kind: 'monitor', first: 'R9-0', count: 4 }, { lane: before[0], kind: 'subagent', first: before[0], count: 3 }] })
+  assert.deepEqual(buildLanes(desk, null).map((l) => l.id), [...after, 'R9-0'])
 })

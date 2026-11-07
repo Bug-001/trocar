@@ -1,7 +1,6 @@
 // replay/lanes.mjs — lane objects over the desk model and the shared time axis. Pure: the anchor lane's call times (`anchorTs`,
 // epoch ms, one per anchor call) and the brush window (`view = {lo, hi}`, step indices) are arguments, never module state.
 import { indexOf } from './model.mjs'
-import { compareStep } from '../../../src/view/step-order.mjs'
 
 // A lane object for the renderers: the lane header (3.5 §会话读) + its skeleton rows in step order (`calls`), `ridLocal`
 // (rid → index in `calls`), `base` (rows of this lane older than the loaded ones: the header's `count` is the full truth) and
@@ -16,10 +15,7 @@ function laneObject(desk, h) {
 }
 export function buildLanes(desk, probes, { prev = null, changed = null } = {}) {
   const old = new Map((prev || []).map((l) => [l.id, l]))
-  // lanes in step order of their first call (1.3 §叠加轨 行内的次序), whatever order their headers arrived in
-  const firstTs = (h) => desk.rows.get(h.first ?? h.lane)?.ts ?? ''
-  const heads = [...desk.lanes.values()].sort((a, b) => compareStep(firstTs(a), a.first ?? a.lane, firstTs(b), b.first ?? b.lane))
-  const ls = heads.map((h) => (changed && !changed.has(h.lane) && old.get(h.lane)) || laneObject(desk, h))
+  const ls = [...desk.lanes.values()].map((h) => (changed && !changed.has(h.lane) && old.get(h.lane)) || laneObject(desk, h))
   const series = (probes && probes.series) || []
   if (series.length) {
     // a count_tokens measurement is a ruler, not a conversation and not a lane of the server's: its own row key
