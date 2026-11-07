@@ -622,10 +622,14 @@ function openDesk(ctx, route0, makeView = legacyView) {
       onBodies: (rid, got, refs) => {
         if (!mine()) return
         refs.forEach((ref, i) => { if (isRetryable(got[i])) s.bodyFail.set(ref, got[i]); else s.bodyFail.delete(ref) })
-        if (rid !== s.playRid || !s.anchor) return
-        if (host && E) { view.window({ kind: 'step', busy: false }); s.renderRaw() } else { s.lastPhSig = null; missed = true }
+        bodiesIn(rid)
       },
     })
+  }
+  // bodies came for step `rid`: its window and raw panel take them if it is still the one drawn
+  function bodiesIn(rid) {
+    if (rid !== s.playRid || !s.anchor) return
+    if (host && E) { view.window({ kind: 'step', busy: false }); s.renderRaw() } else { s.lastPhSig = null; missed = true }
   }
   const steps = makeStepReads()
 
@@ -798,7 +802,7 @@ function openDesk(ctx, route0, makeView = legacyView) {
   const tails = new Map() // part → {n, used, tag}
   async function readTail(part, n, signal, whole = false) {
     const t = tails.get(part), from = whole || !t || t.n !== n || !t.tag ? null : t.used
-    const r = await getText(`/api/d/open.${part}`, { id: s.id }, { range: from, tag: from == null ? null : t.tag, signal })
+    const r = await getText(`/api/d/open.${part}`, { id: s.id }, { range: from, tag: from == null ? null : t.tag, signal }), at = nowMs()
     if (!r.ok) return r
     if (r.status === 416) { const size = Number((/\/(\d+)/.exec(r.range || '') || [])[1]); return size === from ? { ok: true } : readTail(part, n, signal, true) }
     let parsed
@@ -809,7 +813,7 @@ function openDesk(ctx, route0, makeView = legacyView) {
       tails.set(part, { n, used, tag: r.etag }); keep(`t.${part}`, used)
       const ch = applyParsed({ kind: 'tail', n, part, whole: r.status !== 206 }, parsed)
       return { ch, anchor: !!ch && !!s.anchor && parsed.lines.some((l) => l.s && l.s.lane === s.anchor.id) }
-    }).then(({ ch, anchor }) => redraw(ch).then((x) => ({ ok: true, anchor, x })))
+    }).then(({ ch, anchor }) => redraw(ch, at).then((x) => ({ ok: true, anchor, x })))
   }
 
   // a poll round: the head (If-None-Match), then each open tail by Range; a newly sealed or changed pack is read by the loader (fill)
@@ -851,19 +855,19 @@ function openDesk(ctx, route0, makeView = legacyView) {
 
   // after a file or a head: the lanes it changed (null = every lane, false = nothing applied) rebuilt, the playhead found again by its
   // rid (or a named step landed), the redraw — in a task of its own on `serial`, after the apply (2.3 §归约前沿: 解析、应用、画之间让出).
-  // Applies queued before it runs share it: it redraws the union of their lanes.
+  // Applies queued before it runs share it: it redraws the union of their lanes. `at`: when the answer behind it landed (the earliest of them).
   let redrawDue = null
-  function redraw(changed) {
+  function redraw(changed, at = nowMs()) {
     if (changed === false || s.dead) return Promise.resolve()
     const d = redrawDue
-    if (d) { d.changed = d.changed === null || changed === null ? null : new Set([...d.changed, ...changed]); return d.p }
-    const due = redrawDue = { changed }
+    if (d) { d.changed = d.changed === null || changed === null ? null : new Set([...d.changed, ...changed]); d.at = Math.min(d.at, at); return d.p }
+    const due = redrawDue = { changed, at }
     // calm again at its turn: a press since the pace let it through is not redrawn away (2.3 读者优先), and it comes before buildLanes, so
     // the rows under the pointer and the lanes a click reads stay one drawing
-    due.p = yieldNow().then(() => pace.redraw()).then(() => serial(async () => { await pace.calm(); if (redrawDue === due) redrawDue = null; pace.drew(); return redrawNow(due.changed) }))
+    due.p = yieldNow().then(() => pace.redraw()).then(() => serial(async () => { await pace.calm(); if (redrawDue === due) redrawDue = null; pace.drew(); return redrawNow(due.changed, due.at) }))
     return due.p
   }
-  async function redrawNow(changed) {
+  async function redrawNow(changed, at) {
     if (s.dead) return
     const desk = s.desk, keepPins = pin(), prevRow = curCall()
     s.meta = desk.meta
@@ -880,19 +884,25 @@ function openDesk(ctx, route0, makeView = legacyView) {
       renderRough(); return
     }
     if (s.anchor !== prevAnchor) { s.anchorTs = s.anchor.calls.map((c) => Date.parse(c.ts)); s.breaks = breakSteps(s.anchor.calls); s.problems = problemSteps(s.anchor) }
-    return settle(keepPins, prevRow)
+    return settle(keepPins, prevRow, at)
   }
-  async function settle(keepPins, prevRow) {
+  async function settle(keepPins, prevRow, at) {
     const desk = s.desk, key = sessionKey(), first = s.viewSig !== key, signal = s.reads.signal
     unpin(keepPins)
     const moved = placePlayhead(prevRow)
     arrived(s, s.playRid)
     if (s.playRid == null) { renderRough(); chainLedger(); fill(); return } // the rough page until the named step is here
     // the followed step's open reply bodies in one read before it is drawn, so its newest reply shows with its bytes; the same
-    // read carries the ±NEAR prefetch (2.3 §正文预取), so the rest after it finds nothing left and a delta stays one `block` (4.4:52)
+    // read carries the ±NEAR prefetch (2.3 §正文预取), so the rest after it finds nothing left and a delta stays one `block` (4.4:52).
+    // The wait is 车道未到手's BUSY_MS from the answer landing (2.3 快速拖动): past it the step is drawn and this read fills its rows.
     if (s.follow && moved && !first && host) {
-      const refs = openRefs(s.playRid)
-      if (refs.length) { await loadBodies({ get: (n, p, o) => via(0, n, p, o) }, [...refs, ...nearRefs(s.playRid)], { signal }); await pace.calm(); if (s.dead || key !== sessionKey()) return } // a press during the read is not redrawn away either
+      const rid = s.playRid, refs = openRefs(rid)
+      if (refs.length) {
+        const got = loadBodies({ get: (n, p, o) => via(0, n, p, o) }, [...refs, ...nearRefs(rid)], { signal })
+        const late = await Promise.race([got.then(() => false), new Promise((r) => setTimeout(r, BUSY_MS - (nowMs() - at), true))])
+        if (late) got.then(() => { if (!s.dead && key === sessionKey()) bodiesIn(rid) }, () => {})
+        await pace.calm(); if (s.dead || key !== sessionKey()) return // a press during the wait is not redrawn away either
+      }
     }
     // brush window: a new session starts on the whole of it when that fits the lane, else on the last steps that fit — or, when the
     // URL named an earlier step, on the ones around it. On live growth keep the reader's window, extending it when parked at the end.
