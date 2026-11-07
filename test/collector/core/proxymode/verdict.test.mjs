@@ -271,3 +271,15 @@ test('P11 rule 4 · a replacing setting written ~/…: the file under the home i
     assert.deepEqual([got.decrypt, got.code], [want === null, want ?? undefined], JSON.stringify(got))
   }
 })
+
+// ⑩'s fail-open side: a form whose presence cannot be read (a glob folder that may not be listed) may be installed, so its blockers hold (D31, D38)
+test('4.11 ⑩ · a form whose presence cannot be read keeps its blockers', () => {
+  const d = descs.find((x) => x.proxyMode.blockers.length && x.proxyMode.forms.some((f) => (f.present || []).some((p) => !('command' in p) && (p.perOs ? p.perOs.darwin : p)?.glob)))
+  assert.ok(d, 'a harness with a blocker and a glob presence')
+  const f = d.proxyMode.forms.find((x) => (x.present || []).some((p) => (p.perOs ? p.perOs.darwin : p)?.glob))
+  const i = d.proxyMode.blockers.findIndex((b) => !b.forms || b.forms.includes(f.id))
+  const { w, form, facts } = worldOf(d, f, 'darwin', { blocker: i, absent: true })
+  const ctx = { ...ctxOf(w), readdir: () => { throw Object.assign(new Error('EACCES'), { code: 'EACCES' }) } }
+  const got = verdictOf({ desc: d, form, facts, record: RECORD, issuer: ISSUER, host: d.hosts[0], ctx })
+  assert.equal(got.code, 'not-routed', JSON.stringify(got))
+})
