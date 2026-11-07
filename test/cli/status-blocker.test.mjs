@@ -12,7 +12,6 @@ import { turnOnModel } from '../../src/collector/model-on.mjs'
 import { renderHook } from '../../src/collector/harness/templates/index.mjs'
 import { runStatusCli } from '../../src/cli/status.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
-import { judgedWith } from '../../src/collector/core/proxymode/verdict.mjs'
 import { emptyState, setDesired, writeStateAtomic } from '../../src/off/state.mjs'
 import { fakeIo } from './fixtures/on-ctx.mjs'
 import { SOCK } from './fixtures/status-ctx.mjs'
@@ -61,8 +60,7 @@ for (const [shape, s] of Object.entries(SHAPES)) {
       const j = JSON.parse(await status(w, ['--json', 'z-code']))
       assert.deepEqual(validateReceipt(j), [], 'the document validates')
       const x = j.harnesses['z-code']
-      const desc = w.harnesses.find((d) => d.name === 'z-code')
-      const together = judgedWith(desc, 'darwin', desc.proxyMode.forms.find((f) => f.id === 'z-code.desktop')).map((f) => f.id)
+      const together = ['z-code.desktop'] // on macOS the desktop's agent is the app's Helper, the CLI forms other program files (ZCode 3.14.4 measured): judged alone
       // a setting not read leaves the desktop not known; a form judged with it is forwarded either way, so then the harness is not captured
       assert.equal(x.captured, s.captured === null && together.length > 1 ? false : s.captured, `harness verdict: ${JSON.stringify([x.captured, x.reason])}`)
       const desk = x.forms.find((f) => f.form === 'z-code.desktop')
@@ -120,3 +118,4 @@ test('4.11 P11 · status: with the desktop app absent, a desktop setting left be
   assert.notEqual(x.captured, false, `${x.captured} ${x.reason}`)
   assert.match((await status(w, ['z-code'])).replace(/\s+/g, ' '), /z-code\.cli-node .*points at trocar/)
 })
+

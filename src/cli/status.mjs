@@ -205,7 +205,8 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
     const forms = dsc ? judgedForms(dsc, platform) : []
     const present = forms.length ? (here ? here[id] || [] : null) : undefined // undefined: no form on this OS to be present (Linux; a harness with none here)
     if (present === null && hereError) why.push(hereError)
-    const formsOf = (p) => (present ? forms.filter((x) => present.includes(x.id) && holds(x, p)) : forms) // the forms a process can be on: those that are here and can hold it
+    // the forms a process can be on: those its program file may be (the door's rule, judgedForms with its exe), here, and able to hold it
+    const formsOf = (p) => { const may = new Set(judgedForms(dsc, platform, null, p.exe ?? null).map((x) => x.id)); return (present ? forms.filter((x) => present.includes(x.id) && holds(x, p)) : forms).filter((x) => may.has(x.id)) }
     // the forms each process can be on, by the one predicate (formsOf): carried on its row, so the topology draws it on the same forms (status-facts netFormsOf)
     const onForms = (p) => (forms.length ? { forms: formsOf(p).map((x) => x.id) } : {})
     const startOf = (p) => {

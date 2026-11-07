@@ -162,7 +162,7 @@ const proxyMode = {
     form('z-code.cli', [APP], { darwin: ['zcode'], win32: ['zcode'] }),
     form('z-code.cli-node', [{ base: 'home', path: '.zcode' }], { darwin: ['node'], win32: ['node'] }),
     form('z-code.desktop', [APP], { darwin: ['zcode helper'], win32: ['zcode'] }),
-    form('z-code.web', [APP], { darwin: ['zcode'], win32: ['zcode'] }, { darwin: { reason: 'out-of-scope' }, win32: { reason: 'out-of-scope' } }), // the shipped build has no web mode
+    form('z-code.web', [APP], undefined, { darwin: { reason: 'out-of-scope' }, win32: { reason: 'out-of-scope' } }), // the shipped build has no web mode
   ],
   routes: {
     'cli-config': { kind: 'json-key', ...DOOR_ROUTES['z-code']['cli-config'], format: 'jsonc', value: 'door-url', rereads: true, absent: 'create', takesEffect: 'takes effect for your next session; no restart needed' },
