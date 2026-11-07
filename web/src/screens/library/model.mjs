@@ -26,6 +26,7 @@ export function parseFilters(params = {}) {
     window: has(WINDOWS, p.window) ? p.window : 'all', // junk → the default
     sort: p.sort === 'calls' ? 'calls' : 'recent',      // 「最近」 is the default; `calls` is the only other value
     sel: p.sel || '',
+    bg: p.bg === '1', // the background-only sessions listed (1.8 §一行): hidden by default
   }
 }
 // only what differs from the defaults is written, so a fresh library has a clean URL
@@ -37,6 +38,7 @@ export function filtersToParams(f) {
   if (f.window !== 'all') out.window = f.window
   if (f.sort === 'calls') out.sort = 'calls'
   if (f.sel) out.sel = f.sel
+  if (f.bg) out.bg = '1'
   return out
 }
 export const hasFilters = (f) => !!(f.q.trim() || f.h.length || f.project || f.window !== 'all')
@@ -54,17 +56,22 @@ export function flattenSessions(data) {
 }
 const lastMs = (s) => { const t = Date.parse(s.last_ts); return Number.isNaN(t) ? null : t }
 
-// ── the title rule (1.8 §标题规则): `title` as it is, else `title_source: 'unread'` says the read failed, else 没有采到提问
-export const titleText = (s) => (s.title != null ? String(s.title) : s.title_source === 'unread' ? W.PROMPT_UNREAD : W.UNTITLED)
+// ── the title rule (1.8 §标题规则): `title` as it is; `title_source: 'unread'` says the read failed; `null` is 没有采到提问; any other
+// value, or none (a list stored by the release before says 'pending'), is a title not read yet, not a fact about the session
+const titleCase = (s) => (s.title != null ? 'title' : s.title_source === 'unread' ? 'unread' : s.title_source === null ? 'none' : 'pending')
+export const titleText = (s) => ({ title: () => String(s.title), unread: () => W.PROMPT_UNREAD, none: () => W.UNTITLED, pending: () => W.TITLE_PENDING })[titleCase(s)]()
 export function titleTipOf(s) {
-  const id = s.session_id
-  if (s.title == null) return s.title_source === 'unread' ? W.titleUnread(id) : W.titleNoKey(id)
+  const id = s.session_id, c = titleCase(s)
+  if (c !== 'title') return c === 'unread' ? W.titleUnread(id) : c === 'none' ? W.titleNoKey(id) : W.titlePending(id)
   return W.titleFromWire(id) // a title always comes from the wire (4.4 §人类标题的来源)
 }
 
 function matches(s, f, now, title) {
   const q = f.q.trim().toLowerCase()
   if (q && ![title, s.project_name, s.session_id].some((x) => x != null && String(x).toLowerCase().includes(q))) return false
+  // a session of background calls alone is not listed unless asked for, or a search finds it by its id (1.8); only `true` hides: an
+  // absent key (a list stored by the release before) is not known to be one
+  if (!f.bg && s.background_only === true && !(q && String(s.session_id).toLowerCase().includes(q))) return false
   if (f.project && s.project_slug !== f.project) return false
   if (f.window !== 'all') { const t = lastMs(s); if (t == null || now - t > WINDOWS[f.window]) return false } // no time → only in 全部; boundary inclusive
   return true
@@ -161,7 +168,7 @@ export function rowModel(s, now) {
     key: sessionKey(s),
     href: formatHash({ area: 'replay', screen: 'replay', project: s.project_slug, id: s.session_id, params: {} }),
     harnessId: s.harness, harnessName: hn, harnessRaw: harnessRaw(s.harness),
-    title: s.title ?? null, titleSource: s.title_source ?? null, untitled: s.title == null, titleText: titleText(s), titleTip: titleTipOf(s),
+    title: s.title ?? null, untitled: s.title == null, titleText: titleText(s), titleTip: titleTipOf(s),
     dim: !s.calls && s.probes > 0, calls: s.calls || 0, probes: s.probes || 0,
     logged, subagent, inferred, synthesized, multi, multiNames, entry, entryTip, project,
     when: relTime(s.last_ts, now), whenTip: s.last_ts ? fmtStamp(s.last_ts) : '',
@@ -175,7 +182,7 @@ export function rowModel(s, now) {
 //   top    — a filter changed after the first paint: the new result starts at the top
 //   index  — bring row `index` into view: the first paint after mount, or a key press that moved the highlight
 //   keep   — anything else (a poll): the scroll position stays
-export const filterSignature = (f) => JSON.stringify([f.q, f.h, f.project, f.window, f.sort])
+export const filterSignature = (f) => JSON.stringify([f.q, f.h, f.project, f.window, f.sort, f.bg])
 export function scrollDecision({ prevSig, sig, selKey, selIndex, prevSelKey }) {
   const hasSel = selKey != null && selIndex >= 0
   if (prevSig === null) return hasSel ? { kind: 'index', index: selIndex } : { kind: 'top' }

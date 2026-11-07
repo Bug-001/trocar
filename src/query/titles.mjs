@@ -21,7 +21,7 @@ import { projectOf, projectFields } from '../dissect/project.mjs';
 import { HARNESSES, hintsOf, bodyOf } from '../dissect/harnesses.mjs';
 import { reqIncompleteOf } from '../dissect/capture-labels.mjs';
 
-export const TITLE_V = 5;
+export const TITLE_V = 6;
 export const TITLE_BUDGET_MS = 100; // how long a `sessions` in the worker computes titles before it says ask again (3.5 §访问模式)
 /** Thrown by titleOf past its `deadline`: the answer is a `102`, what was computed stays in the table. */
 export class TitlesPending extends Error {}
@@ -31,7 +31,7 @@ export const titlesFile = (home) => path.join(indexDir(home), 'titles.json');
 
 const byStep = (a, b) => compareStep(a.ts, a.id, b.ts, b.id);
 
-// The table as this process holds it, per home: session id → {t, r, c, p, s, l, a, k, m}. An entry's `m` moves in memory as new members are checked, so
+// The table as this process holds it, per home: session id → {t, r, c, p, s, l, a, k, b, m}. An entry's `m` moves in memory as new members are checked, so
 // a warm answer looks at the new rows only; `dirty` says a kept key (KEYS) changed since the file was written, and a dirty table is not reloaded.
 const tables = new Map();
 const tableKey = (home, fs) => `${fsTag(fs)}\n${home}`;
@@ -64,7 +64,7 @@ function check(was, members) {
 }
 
 // The first main-lane call of the model calls (`calls` in write order, `steps` in step order), past the first `from` known to hold none.
-// → {t, r, c, p} (`p`: the working directory the call giving `t` states), or {unread} when a record could not be read or the fold threw. Each read folds the calls from the first one on, in write order, as `session`
+// → {t, r, c, p, s, l, a, k, b?} (`p`: the working directory the call giving `t` states), or {unread} when a record could not be read or the fold threw. Each read folds the calls from the first one on, in write order, as `session`
 // does: a call may be told by the one it continues (4 16 64 … of them, so about a third more reads than calls); a later part folded alone
 // would read a subagent's continuation as the main lane. Whatever sorts into the part read before is in the next read too. The records
 // are read one at a time, so a long read holds one record and the fold. With every call read and no main one, `t` is the first subagent
@@ -103,8 +103,10 @@ function firstMain({ home, fs, calls, steps, from, progress }) {
     const s = first ? first.id : null;
     if (main) return { t: facts.get(String(main.id)).ask ?? null, r: main.id, c: head.length, p, s, ...lin };
     if (end >= steps.length) {
-      const sub = head.map((r) => facts.get(String(r.id))).find((f) => f && f.lane === 'subagent');
-      return { t: sub ? sub.ask : null, r: null, c: steps.length, p, s, ...lin };
+      const seen = head.map((r) => facts.get(String(r.id))), sub = seen.find((f) => f && f.lane === 'subagent');
+      // `b`: background calls alone; a wire with no dissector places no call in a lane, and is not called background (invariant 4)
+      const b = !sub && seen.some((f) => f && f.lane != null);
+      return { t: sub ? sub.ask : null, r: null, c: steps.length, p, s, ...lin, ...(b ? { b } : null) };
     }
   }
 }
@@ -123,7 +125,10 @@ export const lineageKnown = ({ home = trocarHome(), fs = nodeFs, id }) => !!tabl
 /** withLineage(meta, said) → `meta` with the lineage `said` says and no other lineage key left behind. */
 export const withLineage = (meta, said) => { const { lineage_source, parent_session_id, fork_of_session_id, ...rest } = meta; return { ...rest, ...lineageFields(said) }; };
 const said = (e) => ({ title: e.t, title_source: e.t != null ? 'wire' : null, ...projectFields(e.p ?? null), ...lineageOf(e) });
-const KEYS = ['t', 'r', 'c', 'p', 's', 'l', 'a', 'k'];
+/** backgroundOnly({home, fs, id}) → whether the table's entry says every model call of the session was read, at least one was placed in a
+ *  lane and none in a main or subagent one (`b`, 4.2 §标题表). Ask after titleOf: no entry is false. */
+export const backgroundOnly = ({ home = trocarHome(), fs = nodeFs, id }) => !!tableOf(home, fs).titles.get(String(id))?.b;
+const KEYS = ['t', 'r', 'c', 'p', 's', 'l', 'a', 'k', 'b'];
 
 /** titleOf({home, fs, id, members, errors, progress, deadline}) → {title, title_source, project_slug, project_path, lineage_source, parent_session_id?,
  *  fork_of_session_id?} (1.6 C.5). `title_source`: 'wire', null (no prompt in its

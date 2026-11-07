@@ -13,7 +13,7 @@
 // titles get TITLE_BUDGET_MS from the first read on, so each ask computes at least one, then titleOf throws TitlesPending: a `102`.
 // `stored`: the unwindowed list (only `limit` / `after`) is the answer the worker keeps on disk (3.5 §谁执行它「存下的答案」).
 import { sessionMetaOfFacts } from '../../view/board.mjs';
-import { TITLE_BUDGET_MS, titleOf, saveTitles } from '../titles.mjs';
+import { TITLE_BUDGET_MS, titleOf, saveTitles, backgroundOnly } from '../titles.mjs';
 import { asOf, indexRows, sessionGroups, sessionFactsOf } from '../rows.mjs';
 import { listOf, paginate, tsFilter } from './index.mjs';
 import { HARNESS, PAGE, WINDOW } from './about.mjs';
@@ -46,6 +46,10 @@ export async function run({ home, fs, now, params: p, errors, later = null, prog
   if (later) later(() => saveTitles({ home, fs }));
   let deadline = null;
   const reading = () => { if (writer === true) deadline ??= performance.now() + TITLE_BUDGET_MS; if (progress) progress(); };
-  const sessions = items.map((f) => sessionMetaOfFacts({ ...f, ...titleOf({ home, fs, id: f.session_id, members: whole.get(f.session_id), errors, progress: reading, deadline }) }));
+  const sessions = items.map((f) => {
+    const row = sessionMetaOfFacts({ ...f, ...titleOf({ home, fs, id: f.session_id, members: whole.get(f.session_id), errors, progress: reading, deadline }) });
+    // present only when true: absent is "not known to be", the board lists the row (1.6 C.5)
+    return backgroundOnly({ home, fs, id: f.session_id }) ? { ...row, background_only: true } : row;
+  });
   return { as_of: asOf(index), sessions, next, has_more };
 }

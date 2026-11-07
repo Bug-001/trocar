@@ -153,6 +153,40 @@ test('1.8 #18: a read still out says what is going on from 3 s until the rows co
   expect(p.row(key(sess('s1', 1, 1)))).not.toBeNull()
 })
 
+test('1.8 #18: a page that answers 503 still-reading and then 200 is never a failure: the wait stays until the rows come', async () => {
+  const pending: Array<(r: unknown) => void> = []
+  onlySessions(() => new Promise((res) => { pending.push(res) }))
+  const p = await mount()
+  await tick(LIST_WAIT_MS)
+  for (let i = 0; i < 2; i++) { // the daemon's 503 after its own wait: the same page is asked again at once
+    await act(async () => { pending.shift()!({ ok: false, status: 503, error: 'still reading', code: 'still-reading' }) })
+    await settle()
+    expect(p.list.querySelector('[data-read-fail]')).toBeNull()
+    expect(p.list.querySelector('[data-list-wait]')).not.toBeNull()
+  }
+  await act(async () => { pending.shift()!({ ok: true, status: 200, data: { schema: 2, command: 'sessions', ok: true, errors: [], as_of: iso(0), next: null, sessions: [sess('s1', 1, 1)] } }) })
+  await settle()
+  expect(p.list.querySelector('[data-read-fail]')).toBeNull()
+  expect(p.row(key(sess('s1', 1, 1)))).not.toBeNull()
+})
+
+test('1.8 只有后台调用的会话: the list ends with how many background-only sessions are hidden; Show writes bg=1 and lists them; a list of only those is not the no-match state', async () => {
+  for (const [list, n] of [[[sess('m1', 3, 1), sess('b1', 1, 2, { background_only: true }), sess('b2', 1, 3, { background_only: true })], 2], [[sess('b1', 1, 2, { background_only: true })], 1]] as const) {
+    lists = [() => [...list]]
+    const p = await mount()
+    const foot = () => p.list.querySelector<HTMLElement>('[data-bg-hidden]')
+    expect(foot()?.getAttribute('data-bg-hidden')).toBe(String(n))
+    expect(p.row(key(sess('b1', 1, 2)))).toBeNull()
+    expect(p.list.textContent).not.toContain(W.FILTERED_EMPTY)
+    await act(async () => { fireEvent.click(foot()!.querySelector('button')!) })
+    await settle()
+    expect(p.sets.at(-1)).toEqual({ bg: '1' })
+    expect(p.row(key(sess('b1', 1, 2)))).not.toBeNull()
+    expect(foot()).toBeNull()
+    cleanup()
+  }
+})
+
 test('V1: across polls that add sessions above and change counts, a session keeps its row node, the highlight and the scroll', async () => {
   lists = [growing]
   const selKey = key(sess('s3', 0, 0))

@@ -1,1 +1,1 @@
-import{bt as e,i as t,vt as n,yt as r}from"./router.js";var i=location.hash||``,a=t(i);a.screen===`replay`&&!i.startsWith(`#t=`)&&(r({token:n()}),e(`/api/d/head`,{id:a.id},{hold:!1}));
+import{St as e,bt as t,i as n,xt as r}from"./router.js";var i=location.hash||``,a=n(i);a.screen===`replay`&&!i.startsWith(`#t=`)&&(r({token:t()}),e(`/api/d/head`,{id:a.id},{hold:!1}));

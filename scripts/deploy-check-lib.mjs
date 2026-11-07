@@ -88,3 +88,12 @@ export function verdict(lines, measured, failures) {
   }
   return { pass: !out.length, failures: out }
 }
+
+/** The `sessions` page's rows → {sessions: the counts reported, failures}. A title_source other than wire, unread or none fails, unless
+ *  the answer is a stored one: a stored answer of the release before may say `pending` (3.5 §存下的答案), counted, not a failure. */
+export function listCheck(list) {
+  const rows = (list && list.sessions) || [], of = (v) => rows.filter((s) => s.title_source === v).length
+  const failures = rows.length ? [] : ['the session list is empty']
+  if (!(list && list.stored)) for (const s of rows) if (![null, undefined, 'wire', 'unread'].includes(s.title_source)) failures.push(`title_source ${JSON.stringify(s.title_source)}`)
+  return { sessions: { listed: rows.length, titled: rows.filter((s) => s.title != null).length, unread: of('unread'), pending: of('pending') }, failures }
+}
