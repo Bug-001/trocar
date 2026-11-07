@@ -104,7 +104,7 @@ test('failure recorder: a burst across harnesses keeps each one: its own line an
     rec.flush()
     const count = (who) => lines().filter((l) => (l.agent ?? l.harness) === who).reduce((n, l) => n + (l.folded ? 0 : 1) + (l.suppressed || 0), 0)
     assert.deepEqual(['codex', 'hermes', 'kimi-code'].map(count), [3, 1, 1], JSON.stringify(lines()))
-  } finally { rec.flush() }
+  } finally { rec.flush(); b.done() }
 })
 
 test('failure recorder: negative-cache writes are never folded — every (pid, host) inside one window is its own line and its own condition (D1-1)', () => {
