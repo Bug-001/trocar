@@ -136,8 +136,8 @@ export function taskState({ run = null, env = process.env } = {}) {
 /** The task off the login path AND trocar's Run value taken out, the two as one undo whatever an earlier `on` used (§7: exactly one login mechanism is
  *  left live; arch's undoScheduledTask, the Run value half inlined with it): `/Change /DISABLE` for an `off`, `/Delete /F` for an `uninstall`. →
  *  `{ ok, task: 'disabled'|'deleted'|'absent'|'failed', runKey: 'removed'|'restored'|'left'|'absent'|'failed', reason?, runKeyReason? }`. */
-export function undoScheduledTask({ uninstall = false, prior = null, run = null, env = process.env, file = null, fs = nodeFs } = {}) {
-  const t = disableScheduledTask({ uninstall, run, env, file, fs })
+export function undoScheduledTask({ uninstall = false, prior = null, run = null, env = process.env, file = null, ours = null, fs = nodeFs } = {}) {
+  const t = disableScheduledTask({ uninstall, run, env, file, ours, fs })
   const k = undoRunKey({ prior, run, env })
   return { ok: t.ok && k.ok, ...t, runKey: k.result, ...(k.ok ? {} : { runKeyReason: k.reason }) }
 }
