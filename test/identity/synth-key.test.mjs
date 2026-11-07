@@ -2,7 +2,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { createSynthKeys, createSynthAssigner, synthFactsOf, SYNTH_GAP_MS } from '../../src/dissect/synth-key.mjs'
+import { createSynthKeys, createSynthAssigner, synthFactsOf, SYNTH_GAP_MS, SYNTH_TTL_MS, SYNTH_CAP } from '../../src/dissect/synth-key.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
 import { rawHome, writeSegment } from '../query/raw-home.mjs'
 import fs from 'node:fs'
@@ -55,7 +55,7 @@ test('systemTextOf: the first system / developer item of a Responses input is th
   }
 })
 
-test('synthesized keys: consecutive keyless calls of one task form one session; a new system prompt or a 30-minute gap starts another; never by pid', async () => {
+test('synthesized keys: consecutive keyless calls of one task form one session, across a pause too; a new system prompt starts another; never by pid', async () => {
   // keyless Hermes chat calls on a custom endpoint
   const hermes = (prompt, ms, pid) => call({ agent: 'hermes', host: 'llm.internal.test', path: '/v1/chat/completions', ms, pid,
     body: { model: 'm', messages: [{ role: 'system', content: prompt }, { role: 'user', content: 'turn' }] } })
@@ -70,7 +70,7 @@ test('synthesized keys: consecutive keyless calls of one task form one session; 
         const p = `You are Hermes. Task ${i++}.`
         const a = hermes(p, base, 7)
         const b = hermes(samePrompt ? p : `${p} Another.`, base + gap, samePid ? 7 : 8)
-        pairs.push({ a, b, together: samePrompt && gap <= SYNTH_GAP_MS })
+        pairs.push({ a, b, together: samePrompt }) // b's history is a's: step 2, which no window cuts
         recs.push(a, b)
         base += 3 * SYNTH_GAP_MS
       }
@@ -550,6 +550,76 @@ test('chains: a fork is its own session and leaves the session it forked from al
   assert.equal(o.size, 1, 'the original stays one session')
   assert.equal(f.size, 1, 'the fork is one session')
   assert.notEqual([...o][0], [...f][0], 'of its own')
+})
+
+// 3.4 合成键 step 2 has no time window: a history that holds a chain's whole latest history continues it however long the pause,
+// while the chain is open (SYNTH_TTL_MS; at most SYNTH_CAP chains per harness); steps 3, 3b and kinship keep SYNTH_GAP_MS
+const HOUR = 3_600_000
+const titled = async (home) => { const l = await runQuery('sessions', { limit: '500' }, { home }); assert.deepEqual(l.errors, []); return l.sessions }
+const story = (seed, n) => Array.from({ length: n }, (_, t) => userText('en', seed + t))
+test('chains: a call that extends a chain after a 2-hour pause joins it, titled by its first prompt; one that does not still splits', async () => {
+  const task = story(8800, 4), other = story(8900, 2), recs = [], later = []
+  let ms = T0
+  for (const t of [0, 1]) recs.push(agentCall('keyless', msgs(task.slice(0, t + 1)), (ms += 5_000)))
+  const before = (await titled(homeOf([[SEG1, recs]])))[0].title
+  ms += 2 * HOUR
+  for (const t of [2, 3]) recs.push(agentCall('keyless', msgs(task.slice(0, t + 1)), (ms += 5_000)))
+  ms += 2 * HOUR // the same system text, a history that extends nothing
+  for (const t of [0, 1]) { const r = agentCall('keyless', msgs(other.slice(0, t + 1)), (ms += 5_000)); recs.push(r); later.push(r) }
+  const home = homeOf([[SEG1, recs]]), m = await membership(home), mine = sidsOf(m, home, recs.slice(0, 4)), theirs = sidsOf(m, home, later)
+  assert.equal(mine.size, 1, 'one session across the pause')
+  assert.equal(theirs.size, 1)
+  assert.notEqual([...mine][0], [...theirs][0], 'a history that extends nothing is another session')
+  const list = await titled(home)
+  assert.equal(list.length, 2)
+  assert.equal(list.find((x) => x.session_id === [...mine][0]).title, before, 'the title is the first prompt\'s, not a later one\'s')
+})
+
+test('chains: two calls that extend one tail after a pause: the first continues the chain, the second is a session of its own', async () => {
+  const task = story(9000, 2), [x, y] = story(9100, 2), recs = []
+  let ms = T0
+  for (const t of [0, 1]) recs.push(agentCall('keyless', msgs(task.slice(0, t + 1)), (ms += 5_000)))
+  const e1 = agentCall('keyless', msgs([...task, x]), (ms += 2 * HOUR)), e2 = agentCall('keyless', msgs([...task, y]), (ms += 2 * HOUR))
+  recs.push(e1, e2)
+  const home = homeOf([[SEG1, recs]]), m = await membership(home), id = (r) => m.get(ridOf(home, r))[0]
+  assert.equal(id(e1), id(recs[0]), 'the first extender continues the chain')
+  assert.notEqual(id(e2), id(recs[0]), 'the chain\'s tail is now the first extender\'s: the second extends nothing')
+})
+
+test('chains: a chain past SYNTH_TTL_MS, or pushed out by SYNTH_CAP, is no longer extended', () => {
+  assert.ok(SYNTH_TTL_MS >= 2 * SYNTH_GAP_MS && Number.isInteger(SYNTH_CAP) && SYNTH_CAP > 1)
+  const f = (ms, chain, hash = 'a') => ({ harness: 'hermes', ms, hash: hash.repeat(64), fp: [], chain })
+  let assign = createSynthAssigner()
+  const a = assign(f(T0, ['a1'])).key
+  assert.equal(assign(f(T0 + SYNTH_TTL_MS - 60_000, ['a1', 'a2'])).key, a, 'within the TTL')
+  assert.notEqual(assign(f(T0 + 2 * SYNTH_TTL_MS, ['a1', 'a2', 'a3'])).key, a, 'past it')
+  // SYNTH_CAP + 1 chains of one harness, over two system texts: the oldest is pushed out; the cap is the harness's, not a group's
+  assign = createSynthAssigner()
+  const keys = Array.from({ length: SYNTH_CAP + 1 }, (_, i) => assign(f(T0 + i * 1000, [`c${i}`], i % 2 ? 'b' : 'a')).key)
+  assert.equal(new Set(keys).size, SYNTH_CAP + 1)
+  const back = T0 + 2 * HOUR
+  assert.equal(assign(f(back, ['c1', 'c1+'], 'b')).key, keys[1], 'the second oldest is still open')
+  assert.notEqual(assign(f(back + 1000, ['c0', 'c0+'], 'a')).key, keys[0], 'the oldest was pushed out')
+})
+
+test('chains: across a pause, the same membership in one pass, cut across two segments, and as the live segment grows', async () => {
+  const task = story(9200, 5), other = story(9300, 3), recs = []
+  let ms = T0
+  for (let t = 0; t < 5; t++) {
+    if (t === 2) ms += 3 * HOUR
+    recs.push(agentCall('keyless', msgs(task.slice(0, t + 1)), (ms += 5_000)))
+    if (t < 3) recs.push(agentCall('keyless', msgs(other.slice(0, t + 1)), (ms += 5_000)))
+  }
+  const byRec = async (home) => { const m = await membership(home); return new Map(recs.map((r) => [r.id, m.get(ridOf(home, r))[0]])) }
+  const one = await byRec(homeOf([[SEG1, recs]]))
+  assert.equal(new Set(one.values()).size, 2, 'two conversations, each one session across the pause')
+  for (let c = 1; c < recs.length; c++) {
+    assert.deepEqual(await byRec(homeOf([[SEG1, recs.slice(0, c)], [SEG2, recs.slice(c)]])), one, `cut at ${c}`)
+    const grown = homeOf([[SEG1, recs.slice(0, c)], [SEG2, recs.slice(c, c + 1)]])
+    await membership(grown)
+    writeSegment(grown, SEG2, lines(recs.slice(c + 1)))
+    assert.deepEqual(await byRec(grown), one, `grown after ${c}`)
+  }
 })
 
 test('chains: a call with no readable history joins the group\'s latest chain and leaves its tail as it was; alone it opens one', () => {
