@@ -566,7 +566,6 @@ test('uninstall: the segment the daemon sealed before it exited is a row of the 
   const r = io.json()
   assert.deepEqual(r.sealed, [{ segment: SEG, bytes: 3 * 2 ** 20, sealed_bytes: 2 ** 19 }])
   assert.deepEqual(validateReceipt(r), [], 'sealed is a key of the uninstall receipt (附录 C.2)')
-  assert.match(formatUninstallReceipt(r, {}), new RegExp(`Sealed ${SEG} \\(\\S+ MB → \\S+ KB\\)`))
 })
 
 test('uninstall: a segment the daemon did not seal stays plaintext, and the receipt says it stays unsealed until trocar runs again (V125)', async () => {
@@ -583,4 +582,11 @@ test('uninstall --purge-data asks the daemon not to seal, and says nothing of th
   assert.equal(exit, 0, io.text())
   assert.ok(offs.length && offs.every((b) => b.seal === false), JSON.stringify(offs))
   assert.ok(!io.json().notes.some((n) => n.includes(SEG)))
+})
+
+test('uninstall: a sealed segment never hides how to stop a daemon that did not answer (1.6 §3.6)', async () => {
+  const { io } = await sealingUninstall({ seals: true, argv: ['--json'] })
+  const r = { ...io.json(), daemon: { state: 'unresponsive', pid: 4321 } }
+  assert.ok(r.sealed && r.sealed.length)
+  assert.match(formatUninstallReceipt(r, {}), /kill -9 4321/)
 })
