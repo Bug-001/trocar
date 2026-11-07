@@ -212,11 +212,13 @@ export default {
     // Z-Code takes its network settings as one group, from the environment or from the config files (4.11 Z-Code, mac / win measured): with
     // ZCODE_HTTP_PROXY set — the user's own, or the desktop's from its proxy setting — caCertFile is not read, only what the environment gives
     variants: [{ name: 'network settings from the environment (ZCODE_HTTP_PROXY)', when: 'ZCODE_HTTP_PROXY', chain: [{ var: 'ZCODE_AGENT_CA_CERT', semantic: 'replace', emptyStops: true }, { var: 'NODE_EXTRA_CA_CERTS', semantic: 'append' }] }],
-    refine: (r, env) => (r.var === 'ZCODE_AGENT_CA_CERT' && env.get('zcode:desktop:caPath') && (env.get('ZCODE_AGENT_CA_CERT') || '').trim() === env.get('zcode:desktop:caPath') ? 'desktop-ca-override' : null),
+    refine: (r, env) => (r.var === 'ZCODE_AGENT_CA_CERT' && env.get('zcode:desktop:caPath') && (env.get('ZCODE_AGENT_CA_CERT') || '').trim() === env.get('zcode:desktop:caPath') ? 'desktop-ca-override'
+      : r.reason === 'var-missing' && (env.get('ZCODE_HTTP_PROXY') || '') !== '' ? 'zcode-env-network' : null), // the variant's: install's caCertFile is not read here
     rereadsEntry: true, // every new or resumed session reads caCertFile again: a live Z-Code may load the bundle
     afterUninstall: 'session-end',
     hints: {
       'desktop-ca-override': 'the Z-Code desktop CA setting (httpProxyCaCertPath in ~/.zcode/v2/setting.json) overrides ~/.zcode/cli/config.json; its CA is in combined-z-code.pem, so the setting can be cleared, or trocar install adds trocar\'s certificate to the file it names',
+      'zcode-env-network': 'this Z-Code was started with ZCODE_HTTP_PROXY, so it takes its network settings from the environment and does not read network.caCertFile in ~/.zcode/cli/config.json; start it without ZCODE_HTTP_PROXY, or point ZCODE_AGENT_CA_CERT in that environment at a file that holds trocar\'s certificate',
       shadowed: 'ZCODE_AGENT_CA_CERT (set, or empty) or a project zcode.json / .zcode/config.json overrides the user caCertFile',
     },
   },

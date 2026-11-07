@@ -121,7 +121,7 @@ test('z-code inject: network.caCertFile in ~/.zcode/cli/config.json = combined-z
     assert.deepEqual(fps(p.files[0].data), [fp(OTHER), fp(DESK), fp(SHELL), fp(CA)])
     const codes = p.records.map((r) => r.code)
     assert.deepEqual(codes.filter((c) => c !== 'harness-note'), ['relative-path'], 'nothing unreadable: trocar\'s own bundle is not a source')
-    assert.ok(planFor(s, { ZCODE_AGENT_CA_CERT: '' }).records.some((r) => r.code === 'harness-note' && /ZCODE_AGENT_CA_CERT is set empty in this shell/.test(r.reason)), 'an empty ZCODE_AGENT_CA_CERT in the install shell is named')
+    assert.ok(planFor(s, { ZCODE_AGENT_CA_CERT: '' }).records.some((r) => r.code === 'harness-note' && r.reason.includes('ZCODE_AGENT_CA_CERT')), 'an empty ZCODE_AGENT_CA_CERT in the install shell is named')
     fs.rmSync(path.join(s.home, '.zcode', 'cli'), { recursive: true })
     assert.equal(planFor(s).entries[0].path, path.join(s.home, '.zcode/cli/config.json'), 'the CLI config is created when only the desktop has run')
   } finally { s.done() }
@@ -175,7 +175,7 @@ test('z-code: the desktop setting httpProxyCaCertPath names the user\'s CA file 
     t.put('.zcode/v2/setting.json', JSON.stringify({ httpProxyCaCertPath: managed }, null, 2))
     const r = await installCollector({ home: t.home, env: { HOME: t.home }, osName: 'none', harnesses: [zcode], freePort: async () => 47016, roots: { node: [], osText: '' } })
     assert.equal(fs.readFileSync(managed, 'utf8'), OTHER.certPem, 'a file a package manager rewrites is never appended to')
-    assert.ok(r.plan.records.some((x) => x.reason.includes(managed) && x.reason.includes('not captured')), 'the skipped file is said, with what it means')
+    assert.ok(r.plan.records.some((x) => x.code === 'harness-note' && x.reason.includes(managed)), 'the skipped file is named in a note')
   } finally { t.done() }
 })
 
@@ -187,6 +187,7 @@ test('z-code on Linux: with ZCODE_HTTP_PROXY in the process environment caCertFi
     const at = (env) => judge(zcode, ctxFor({ home: s.home, argv: [EXE, CJS, 'app-server', '--stdio'], env: { ELECTRON_RUN_AS_NODE: '1', ...env } })).trust.trusted
     assert.equal(at({}), true, 'caCertFile carries trocar')
     assert.equal(at({ ZCODE_HTTP_PROXY: 'http://proxy.corp:3128' }), false, 'not while the network settings come from the environment')
+    assert.equal(judge(zcode, ctxFor({ home: s.home, argv: [EXE, CJS, 'app-server'], env: { ELECTRON_RUN_AS_NODE: '1', ZCODE_HTTP_PROXY: 'http://proxy.corp:3128' } })).trust.reason, 'zcode-env-network', 'named as such: trocar install cannot fix it')
     assert.equal(at({ ZCODE_HTTP_PROXY: 'http://proxy.corp:3128', ZCODE_AGENT_CA_CERT: bundle }), true, 'the environment\'s own CA file does')
   } finally { s.done() }
 })

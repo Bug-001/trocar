@@ -22,6 +22,7 @@ import { certsOf, composeBundle } from './bundle.mjs'
 import { SENTINEL } from '../../../off/text-edit.mjs'
 import { CODE } from '../codes.mjs'
 import { rootsLeftOut } from '../tls/roots.mjs'
+import { managedTree } from '../proxymode/hooks/wrapper.mjs'
 
 // Login-environment locations: a CA variable there makes every program of the user trust trocar (vetoed, D37④).
 const LOGIN_ENV = [/\/\.config\/environment\.d\//, /\/\.(profile|bash_profile|bash_login|bashrc|zshrc|zshenv|zprofile|zlogin|pam_environment)$/, /\/\.config\/fish\//, /^\/etc\//]
@@ -90,7 +91,8 @@ export function planTrust({ descriptors, ctxFor, caCertPem, collectorDir, roots 
           throw new Error(`${where}: a login-environment file only ever gets the launch-shim PATH line, placed after the agent installer's own (D37④)`)
         }
       } else if (e.kind === 'text' && e.format === 'pem-block') {
-        if (inLogin || under(e.path)) throw new Error(`${where}: a certificate block goes only into the user's own CA file`)
+        // rule U (4.11 P4): the descriptor names a file the user owns; never a login file, trocar's own tree, or one a package manager or the system rewrites
+        if (inLogin || e.path.startsWith(path.dirname(collectorDir) + path.sep) || managedTree(e.path)) throw new Error(`${where}: a certificate block goes only into the user's own CA file`)
       } else throw new Error(`${where}: unknown entry kind ${e.kind}${e.format ? ` / format ${e.format}` : ''}`)
       entries.push({ harness: d.name, ...e, ...(e.format === 'pem-block' ? { pem: caCertPem } : {}) })
     }
