@@ -91,6 +91,8 @@ test('1.3 #19: the legend is the first row; #rails comes after the prompts row a
     const shares = $$('#sawgut .gshare')
     expect(shares, `step ${at}`).toHaveLength(comp ? Object.values(comp).filter((v) => v > 0).length : 0)
     for (const g of shares) expect(g.textContent).toContain('≈')
+    const pcts = shares.map((g) => Number(/(\d+)%/.exec(g.textContent || '')![1]))
+    expect(pcts, `step ${at} largest first`).toEqual([...pcts].sort((x, y) => y - x))
     expect(($('#sawgut')!.getAttribute('title') || '').split('≈').length - 1, `step ${at} hover`).toBe(shares.length) // every share, shown or not
     act(() => { s.sawView = 'cost'; desk.saw() })
     expect($$('#sawgut .gshare'), `step ${at} cost view`).toHaveLength(0)

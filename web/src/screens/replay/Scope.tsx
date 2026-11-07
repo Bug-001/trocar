@@ -32,6 +32,22 @@ const BACKDROP: Area[] = ['overview', 'rough', 'empty'] // the paints that read 
 // the controller's state is plain JS the renderers share: the view switch writes through here, not on a value React tracks
 const put = (s: DeskState, k: string, v: unknown) => { s[k] = v }
 const pct = (f: number) => `${(f * 100).toFixed(3)}%`
+// the gutter's shares that fit its whole lines stay; the rest (the smallest: the list is largest first) give way to one "+N more" line
+// that says how many are not drawn (1.3 §排布, invariant 4). Every box is read before the next write; at most one pass per share.
+function fitShares(saw: HTMLElement) {
+  const box = saw.querySelector<HTMLElement>('#sawgut .gshares'), more = box?.querySelector<HTMLElement>('.gmore')
+  if (!box || !more) return
+  const list = [...box.querySelectorAll<HTMLElement>('.gshare')]
+  for (const e of list) e.hidden = false
+  more.hidden = true
+  const r = box.getBoundingClientRect(), fits = (e: HTMLElement) => { const q = e.getBoundingClientRect(); return q.top >= r.top - 0.5 && q.bottom <= r.bottom + 0.5 }
+  if (list.every(fits)) return
+  more.hidden = false
+  let k = list.length
+  while (k > 0 && !(fits(more) && list.slice(0, k).every(fits))) list[--k].hidden = true
+  more.dataset.n = String(list.length - k)
+  more.textContent = W.moreShares(list.length - k)
+}
 
 // the playhead's step tag on the axis: the step's own global number (1.2 §编号)
 function tagOf(m: any) {
@@ -99,7 +115,7 @@ export function Scope({ desk }: { desk: DeskView }) {
   // the lane's capacity: measured on the bars row's grid column, on mount and on every resize
   useLayoutEffect(() => {
     const saw = el.current!
-    const fit = () => desk.setCapacity(laneCapacity(saw))
+    const fit = () => { desk.setCapacity(laneCapacity(saw)); fitShares(saw) }
     fit()
     const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(fit) : null
     ro?.observe(saw.querySelector('#sawrow')!.closest('.tkrow')!)
@@ -115,6 +131,7 @@ export function Scope({ desk }: { desk: DeskView }) {
     const qs = ends.map((e) => e.getBoundingClientRect()), cut = card ? card.getBoundingClientRect().right > saw.getBoundingClientRect().right : false
     ends.forEach((e, i) => { const q = qs[i]; e.toggleAttribute('data-covered', !!r && r.width > 0 && q.width > 0 && r.left < q.right + 4 && q.left < r.right + 4) })
     if (card) card.hidden = cut
+    fitShares(saw)
   }, [m])
 
   const cost = s.sawView === 'cost', rough = !!m?.rough, bars: Bar[] = m ? m.bars : [], n = Math.max(1, bars.length)
@@ -164,7 +181,7 @@ export function Scope({ desk }: { desk: DeskView }) {
         <button type="button" className="pgbtn" id="probNext" aria-label={W.PROBLEM_NEXT} title={W.PROBLEM_NEXT} onClick={() => problemGo(s, 1)}>›</button></> : null}</> : W.PROBLEM_ROW}</div>
         <div className="tlane"><div className="probrow" id="probrow">{pr ? bars.map((b, col) => { const p = items.get(col); return p ? <ProblemMark key={keyAt(col)} p={p} /> : <span key={keyAt(col)} className="pcell" /> }) : null}</div></div></div>
       <div className="tkrow tkrow-bars"><div className="tgut tgut-ctx" id="sawgut" title={m?.gutterTip || undefined}><span className="ghead">{gutName} <b title={m?.peak.tip || undefined}>{m?.peak.text || ''}</b></span>
-        {!cost && m?.gutter.length ? <span className="gshares">{m.gutter.map((x: { ct: string, share: string }) => <span key={x.ct} className="gshare"><i className={`ct-${x.ct}`} />{x.share}</span>)}</span> : null}</div>
+        {!cost && m?.gutter.length ? <span className="gshares">{m.gutter.map((x: { ct: string, share: string }) => <span key={x.ct} className="gshare"><i className={`ct-${x.ct}`} />{x.share}</span>)}<span className="gmore" hidden /></span> : null}</div>
         <div className="tlane"><div className="sawrow" id="sawrow">
           <div id="reviewbracket" style={m?.review ? { display: 'block', width: pct(m.review.width) } : { display: 'none' }} title={m?.review?.tip}><span className="rbend" aria-hidden="true">{W.GUESS}</span></div>
           {bars.map((b, col) => <BarView key={keyAt(col)} b={b} cost={cost && !rough} />)}
