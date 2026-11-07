@@ -637,3 +637,115 @@ test('chains: the same membership in one pass, cut across two segments, and as t
   const bytes = fs.readFileSync(path.join(indexDir(home), `${SEG1}.json`), 'utf8')
   for (const t of [...texts, 'Done with step 0.']) assert.equal(bytes.includes(t), false, `no message text in the index: ${t.slice(0, 40)}`)
 })
+
+// ── keyed chains (3.4 带键会话里的消息链): Kimi's row says `chainLane: 'aux'`; one prompt_cache_key holds the main conversation and the
+// agents it opens, each with its own system text
+const KMAIN = 'You are Kimi Code. The main conversation.', KSIDE = 'You are an explore agent.', KOTHER = 'You are a coder agent.'
+const kimi = (sys, msgs, ms, key = 'K') => call({ agent: 'kimi', host: 'api.moonshot.ai', path: '/v1/chat/completions', ms,
+  body: { model: 'kimi', prompt_cache_key: key, messages: [{ role: 'system', content: sys }, ...msgs] } })
+const hist = (tag, n) => Array.from({ length: n }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: `${tag} turn ${i}` }))
+const ided = (recs) => recs.map((r, i) => ({ ...r, id: `k${i}` }))
+const ridAt = (i) => `${SEG1}:${i + 1}`
+// the session document over records in one segment: per record (in order), its lane kind and whether it is a compaction
+async function lanesOf(home, id) {
+  const doc = await runQuery('session', { id }, { home })
+  assert.deepEqual(doc.errors || [], [])
+  const kind = new Map(doc.lanes.map((l) => [l.lane, l.kind]))
+  return { doc, at: (i) => { const c = doc.calls.find((x) => x.rid === ridAt(i)); return c && { kind: kind.get(c.lane), compaction: !!c.compaction } } }
+}
+
+test('keyed chains: another system text is a lane of its own; the main text stays main after a rewrite', async () => {
+  let ms = T0
+  const recs = ided([
+    ...[3, 5, 7, 9].map((n) => kimi(KMAIN, hist('main', n), (ms += 10_000))),
+    kimi(KSIDE, hist('side', 3), (ms += 10_000)), kimi(KSIDE, hist('side', 5), (ms += 10_000)),
+    kimi(KMAIN, [{ role: 'user', content: 'The conversation so far has been compacted.' }], (ms += 10_000)), // the harness's own compaction: 10 -> 2
+  ])
+  const home = homeOf([[SEG1, recs]])
+  const { at } = await lanesOf(home, 'K')
+  for (const i of [0, 1, 2, 3, 6]) assert.equal(at(i).kind, 'main', `call ${i}: the main text is main, the rewrite too`)
+  for (const i of [4, 5]) assert.equal(at(i).kind, 'aux', `call ${i}: another text is the row's lane`)
+  assert.deepEqual(recs.map((_, i) => at(i).compaction), [false, false, false, false, false, false, true], 'the rewrite only; no drop at the side chain')
+})
+
+test('keyed chains: two fresh histories of one text are two lanes', async () => {
+  let ms = T0
+  const recs = ided([
+    ...[3, 5, 7].map((n) => kimi(KMAIN, hist('main', n), (ms += 10_000))),
+    kimi(KSIDE, hist('first', 1), (ms += 10_000)), kimi(KSIDE, hist('first', 3), (ms += 10_000)),
+    kimi(KSIDE, hist('second', 1), (ms += 10_000)), kimi(KSIDE, hist('second', 3), (ms += 10_000)),
+  ])
+  const rows = [...await indexRows({ home: homeOf([[SEG1, recs]]), errors: [] })]
+  const lane = (i) => rows.find((r) => r.id === ridAt(i)).lane_key
+  for (const r of rows) assert.equal(r.session_id, 'K', 'one session: the key')
+  assert.ok(lane(3) && lane(5), 'each chain is named')
+  assert.equal(lane(4), lane(3), 'an extended history stays on its chain')
+  assert.equal(lane(6), lane(5))
+  assert.notEqual(lane(5), lane(3), 'a fresh history is another chain')
+})
+
+test('keyed chains: the main text moves to a text whose history grows longer', async () => {
+  let ms = T0
+  const recs = ided([
+    ...[3, 5].map((n) => kimi(KMAIN, hist('first', n), (ms += 10_000))),
+    ...[1, 3, 5, 7, 9].map((n) => kimi(KOTHER, hist('long', n), (ms += 10_000))),
+    kimi(KMAIN, hist('first', 7), (ms += 10_000)),
+  ])
+  const want = ['aux', 'aux', 'main', 'main', 'main', 'main', 'main', 'aux']
+  const kinds = async (home) => { const { at } = await lanesOf(home, 'K'); return recs.map((_, i) => at(i).kind) }
+  assert.deepEqual(await kinds(homeOf([[SEG1, recs]])), want, 'read at once')
+  for (const c of [3, 5]) { // read as the session grows: the switch comes after the fold took the first calls as main
+    const home = homeOf([[SEG1, recs.slice(0, c)]])
+    await kinds(home).catch(() => null)
+    writeSegment(home, SEG1, lines(recs.slice(c)))
+    assert.deepEqual(await kinds(home), want, `grown after ${c}`)
+  }
+})
+
+test('keyed chains: a row without chainLane is untouched', async () => {
+  let ms = T0
+  const pi = (sys, msgs) => call({ agent: 'pi', host: 'api.example.com', path: '/v1/chat/completions', ms: (ms += 10_000), headers: { session_id: 'P' },
+    body: { model: 'm', messages: [{ role: 'system', content: sys }, ...msgs] } })
+  const recs = ided([pi('You are pi.', hist('main', 3)), pi('You are pi.', hist('main', 5)), pi('Another text.', hist('side', 1))])
+  const home = homeOf([[SEG1, recs]])
+  for (const r of await indexRows({ home, errors: [] })) assert.equal(r.lane_key ?? null, null, 'no chain for a row without chainLane')
+  const { at } = await lanesOf(home, 'P')
+  assert.deepEqual(recs.map((_, i) => at(i).kind), ['main', 'main', 'main'])
+})
+
+test('keyed chains: a Kimi-shaped session has main and aux lanes and one compaction', async () => {
+  let ms = T0
+  const main = Array.from({ length: 21 }, (_, i) => kimi(KMAIN, hist('main', 4 + i), (ms += 10_000))) // 5 .. 25 messages
+  const recs = ided([
+    ...main.slice(0, 10),
+    kimi(KSIDE, hist('side', 3), (ms += 10_000)), kimi(KSIDE, hist('side', 5), (ms += 10_000)), // 4 -> 6, another system text
+    ...main.slice(10),
+    kimi(KMAIN, [{ role: 'user', content: 'The conversation so far has been compacted.' }, ...hist('kept', 4)], (ms += 10_000)), // 25 -> 6
+  ])
+  const home = homeOf([[SEG1, recs]])
+  await fillUsage({ home, segments: [SEG1] })
+  const { doc, at } = await lanesOf(home, 'K')
+  assert.deepEqual([...new Set(doc.lanes.map((l) => l.kind))].sort(), ['aux', 'main'])
+  const comps = recs.map((_, i) => i).filter((i) => at(i).compaction)
+  assert.deepEqual(comps, [recs.length - 1], 'the 25 -> 6 rewrite only, none where the side chain starts')
+  assert.equal(at(recs.length - 1).kind, 'main')
+  const list = await runQuery('sessions', { limit: '50' }, { home })
+  const item = list.sessions.find((s) => s.session_id === 'K')
+  assert.equal(item.has_subagent, false)
+  assert.equal(item.session_synthesized, false)
+})
+
+test('gemini: contents and systemInstruction anchor the chain; two unrelated conversations are two sessions', () => {
+  let ms = T0
+  const gem = (texts) => call({ agent: 'pi', host: 'generativelanguage.googleapis.com', path: '/v1beta/models/gemini-2.5-pro:streamGenerateContent?alt=sse', ms: (ms += 60_000),
+    body: { systemInstruction: { parts: [{ text: 'You are pi.' }] },
+      contents: texts.map((text, i) => ({ role: i % 2 ? 'model' : 'user', parts: [{ text }] })) } })
+  const a1 = gem(['fix the build']), b1 = gem(['write a poem']), a2 = gem(['fix the build', 'done', 'now test it'])
+  const f = synthFactsOf(a1)
+  assert.equal(f.hash, createHash('sha256').update('You are pi.', 'utf8').digest('hex'), 'the system text is systemInstruction')
+  assert.ok(f.chain.length > 0, 'the history is contents')
+  const { keyOf } = createSynthKeys()
+  const [ka1, kb1, ka2] = [a1, b1, a2].map(keyOf)
+  assert.notEqual(kb1, ka1, 'an unrelated conversation is another session')
+  assert.equal(ka2, ka1, 'a conversation that extends stays one session')
+})

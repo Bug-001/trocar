@@ -27,7 +27,7 @@ export const namesStamp = (home, fs) => { try { return fs.readdirSync(path.join(
 // first segment whose warm index entry is not the one it was built from (the live segment is the last, so usually only its rows),
 // with the synthesized-key rule resumed from the state it had after the segment before; nothing moved → the SAME row list, so the
 // session groups below hold too. A list holds no row object (3.5 §内存有界 `steady`): per segment, its warm index view
-// (src/query/row-table.mjs) and a column store of the same kind with what the list derives (`session_id`, `synthesized`); a row is
+// (src/query/row-table.mjs) and a column store of the same kind with what the list derives (`session_id`, `synthesized`, `lane_key`); a row is
 // a read-only flyweight over the two. Its session index (session id → positions in the list) is built and grown with it.
 // What a list holds in the V8 heap beside its column stores (heapOf), each measured with liveHeap() on generated homes (forced GC
 // before and after, divided by the count; 2026-10-23, node 22) × 1.25: a segment's part 350 B; an open synthesized key copied at a
@@ -44,7 +44,7 @@ const lineOf = (id) => Number(String(id).split(':').pop());
 
 /**
  * indexRows({home, fs, errors, progress, ease}) → a read-only row list (length, at, iteration, find, filter / map / slice → arrays) of
- * {…index row, segment, lineNo, session_id, synthesized}, oldest segment first, capture order inside a segment — the order the
+ * {…index row, segment, lineNo, session_id, synthesized, lane_key}, oldest segment first, capture order inside a segment — the order the
  * synthesized keys (3.4 合成键) are assigned in, the same order the board stamps them in, so both name a session the same. It is
  * shared by every reader until a segment moves. What a segment could not say goes into `errors` (D38), never silently missing — on
  * every call. `progress` is called after every segment and every chunk of raw bytes a cold segment's scan reads: the query worker
@@ -93,7 +93,8 @@ function rowList(segs, old) {
       const got = r.synth_hash != null || r.kin_fp != null ? assign({ harness: r.harness_id, ms: Date.parse(r.ts || ''), key: r.session_key,
         hash: r.synth_hash, fp: fpOf(r.kin_fp), probe: fpOf(r.kin_probe), late: r.kin_late, chain: r.kin_chain ? r.kin_chain.split(' ') : [], items: r.kin_items ? r.kin_items.split(' ') : [], mark: r.kin_mark === true }) : null;
       const sid = r.session_key ?? (got && got.key) ?? null;
-      derived.push({ session_id: sid, synthesized: !!got && !got.kin });
+      // a keyed call's chain (3.4 带键会话里的消息链) is no synthesized key: the session stays as it was
+      derived.push({ session_id: sid, synthesized: !!got && got.key != null && !got.kin, lane_key: (got && got.lane) ?? null });
       if (sid) place(sid, start + k); // a row with no session id is in no group (sessionGroups)
     }
     parts.push({ segment, entry, view, d: was ? was.d.concat(derived) : rowTable(derived), start, end: start + view.length, open });
@@ -116,7 +117,7 @@ const byKeys = new Map(), classes = new WeakMap();
 const LISTED = { toJSON() { return { ...this }; } };
 function listRow(p, k) {
   const x = wholeAt(p.view, k);
-  if (x) return Object.freeze(Object.assign(Object.create(LISTED), x, { segment: p.segment, lineNo: lineOf(x.id), session_id: cellAt(p.d, 0, k), synthesized: cellAt(p.d, 1, k) }));
+  if (x) return Object.freeze(Object.assign(Object.create(LISTED), x, { segment: p.segment, lineNo: lineOf(x.id), session_id: cellAt(p.d, 0, k), synthesized: cellAt(p.d, 1, k), lane_key: cellAt(p.d, 2, k) }));
   const keys = keysOf(p.view);
   let Row = classes.get(keys);
   if (!Row) {
@@ -133,13 +134,14 @@ function rowClass(keys) {
     static cell(r, c) { if (r.#c !== c) { r.#v = cellAt(r.#p.view, c, r.#k); r.#c = c; } return r.#v; }
     get segment() { return this.#p.segment; }
     get lineNo() { return lineOf(this.id); }
-    // the derived columns, in the order rowList writes them: session_id, synthesized (always scalars, so never a row kept whole)
+    // the derived columns, in the order rowList writes them: session_id, synthesized, lane_key (always scalars, so never a row kept whole)
     get session_id() { return cellAt(this.#p.d, 0, this.#k); }
     get synthesized() { return cellAt(this.#p.d, 1, this.#k); }
+    get lane_key() { return cellAt(this.#p.d, 2, this.#k); }
     toJSON() {
       const o = {};
       for (const key of keys) o[key] = this[key];
-      return Object.assign(o, { segment: this.segment, lineNo: this.lineNo, session_id: this.session_id, synthesized: this.synthesized });
+      return Object.assign(o, { segment: this.segment, lineNo: this.lineNo, session_id: this.session_id, synthesized: this.synthesized, lane_key: this.lane_key });
     }
   }
   keys.forEach((key, c) => Object.defineProperty(Row.prototype, key, { get() { return Row.cell(this, c); } }));

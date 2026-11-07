@@ -17,11 +17,13 @@ const partsOf = (c) => (typeof c === 'string' ? [c]
 const textOf = (c) => partsOf(c).join('');
 // The task anchor: the first system text of whichever wire the call used (Anthropic `system`, Responses
 // `instructions`, else the first system / developer item of its `input`; Chat's leading system / developer
-// message), block by block ([] when there is none).
+// message; Gemini's `systemInstruction` parts), block by block ([] when there is none).
 export function systemPartsOf(body) {
   const b = body || {};
   if (b.system != null) return partsOf(b.system);
   if (typeof b.instructions === 'string') return [b.instructions];
+  const si = b.systemInstruction ?? b.system_instruction;
+  if (si && Array.isArray(si.parts)) return partsOf(si.parts);
   const item = Array.isArray(b.input) ? b.input.find((x) => x && (x.role === 'system' || x.role === 'developer')) : null;
   if (item) return partsOf(item.content);
   const first = Array.isArray(b.messages) ? b.messages[0] : null;
@@ -46,8 +48,8 @@ const WIN = 32, SAMPLE = 8, FP_CAP = 64, PROBE_CAP = 1024, STATE_CAP = 4096, MIN
 export const userTextsOf = (body) => {
   const b = body || {};
   if (typeof b.input === 'string') return [b.input];
-  const items = [...(Array.isArray(b.messages) ? b.messages : []), ...(Array.isArray(b.input) ? b.input : [])];
-  return items.filter((x) => x && x.role === 'user').map((x) => textOf(x.content));
+  const items = [...(Array.isArray(b.messages) ? b.messages : []), ...(Array.isArray(b.input) ? b.input : []), ...(Array.isArray(b.contents) ? b.contents : [])];
+  return items.filter((x) => x && x.role === 'user').map((x) => textOf(x.content ?? x.parts));
 };
 /** The text of every system or developer item in `messages` / `input`, whatever else the body has: the anchor above takes the first place only. */
 export const systemItemsOf = (body) => [...(Array.isArray(body?.messages) ? body.messages : []), ...(Array.isArray(body?.input) ? body.input : [])]
@@ -72,8 +74,8 @@ function fingerprints(texts, cap) {
 // ── chains (3.4 合成键) ───────────────────────────────────────────────────────────────────────────────────────────────────────
 // A call's history as cumulative hashes: c_1 = h(item_1), c_i = h(c_{i-1} + '\n' + item_i), h = the first 16 hex of SHA-256, each item
 // JSON with every `cache_control` key dropped (it moves between calls on real wires). History items: `messages`, else an `input`
-// array, else a string `input`. A call extends a chain when the chain's tail (its last call's whole history) is among the hashes kept:
-// the last TAIL positions, and before them the turn boundaries — where the model's output starts (an item with role `assistant`, or a
+// array, else a string `input`, else Gemini's `contents`. A call extends a chain when the chain's tail (its last call's whole history) is among the hashes kept:
+// the last TAIL positions, and before them the turn boundaries — where the model's output starts (an item with role `assistant` or `model`, or a
 // Responses `reasoning` / `*_call` item, after one that is not): a previous call ends there however many items its turn returned
 // (one assistant message and N parallel tool results), so a turn costs one hash. At most CHAIN_K, oldest first. `items`: the last RECENT
 // items each by its own hash: a harness edits older items in place or drops turns, which breaks every cumulative hash after it; the items it
@@ -83,13 +85,13 @@ const h16 = (s) => createHash('sha256').update(s, 'utf8').digest('hex').slice(0,
 const bare = (k, v) => (k === 'cache_control' ? undefined : v);
 // the replacer's bytes, paid only when the key is there: a key always serializes as `"cache_control"`; a string holding it is a false hit, re-encoded
 const enc = (it) => { const j = JSON.stringify(it) ?? 'null'; return j.includes('"cache_control"') ? JSON.stringify(it, bare) ?? 'null' : j; };
-const fromModel = (it) => !!it && (it.role === 'assistant' || it.type === 'reasoning' || /_call$/.test(it.type ?? ''));
+const fromModel = (it) => !!it && (it.role === 'assistant' || it.role === 'model' || it.type === 'reasoning' || /_call$/.test(it.type ?? ''));
 // `prev` ({js, cs}: the group's previous call's item encodings and cumulative hashes, or null): while this call's items are byte-equal
 // to its first ones, its cumulative hash there is the same and is taken, not recomputed (an agent resends its whole history each call).
 // → also `memo`: this call's, for the next call of the group.
 function chainOf(body, prev = null) {
   const b = body || {};
-  const items = Array.isArray(b.messages) ? b.messages : Array.isArray(b.input) ? b.input : typeof b.input === 'string' ? [b.input] : [];
+  const items = Array.isArray(b.messages) ? b.messages : Array.isArray(b.input) ? b.input : typeof b.input === 'string' ? [b.input] : Array.isArray(b.contents) ? b.contents : [];
   const out = [], js = new Array(items.length), cs = new Array(items.length);
   let c = null, same = !!prev;
   items.forEach((it, i) => {
@@ -116,7 +118,8 @@ export function createSynthKeys({ gapMs = SYNTH_GAP_MS } = {}) {
 /** What a call brings to the rule, or null when it takes no part in it. Keyless → {harness, ms, hash, fp, probe, late, chain, items, mark}: `fp` is the
  *  fingerprints its session is recognized by, `probe` the ones it looks for its session with when it is the harness's
  *  compaction request, else null; `chain` its history's last cumulative hashes and `items` its last items' own (chainOf); `mark` whether it carries its harness's
- *  compaction text marker without being the compaction request (Hermes's call after a compaction). Keyed (a `synth: true` harness only) → {harness, ms, key, fp}, with NO hash: a keyed call never opens or moves a synthesized group. A reader that cannot afford the body later (the
+ *  compaction text marker without being the compaction request (Hermes's call after a compaction). Keyed (a `synth: true` harness only) → {harness, ms, key, fp}: a keyed call never opens or moves a synthesized group;
+ *  where its row has `chainLane` and it declares no lane, also {hash, chain, items}, for its chain inside its keyed session. A reader that cannot afford the body later (the
  *  segment index, 1.6 §4.1) stores these and asks the assigner below with them. `memo` (a Map, optional): the last keyless call of
  *  each group (harness, system-text hash) as chainOf left it, so a reader of many calls in order (one segment's build) hashes each
  *  history's shared prefix once; the caller drops it when done. The facts are the same with or without it. */
@@ -136,11 +139,14 @@ function factsOf(rec, memo) {
   if (!Number.isFinite(ms)) return null; // no time, no window: the call stays keyless (and is shown as such)
   const key = sessionKeyOf(rec).key;
   const body = bodyOf(rec), texts = userTextsOf(body), fp = fingerprints([...texts].reverse(), FP_CAP);
-  if (key) return { harness: h.id, ms, key, fp };
-  const hint = hintsOf(rec), probe = compactionRequest(rec, h.row, hint) ? fingerprints(texts, PROBE_CAP) : null;
+  const hint = hintsOf(rec);
+  // a keyed call brings its chain only where its row splits a keyed session by chains (3.4 带键会话里的消息链) and it declares no lane
+  if (key && (!h.row.chainLane || hint.lane != null)) return { harness: h.id, ms, key, fp };
   const hash = createHash('sha256').update(systemTextOf(body), 'utf8').digest('hex'), group = h.id + '\0' + hash;
   const { chain, items, memo: mine } = chainOf(body, memo ? memo.get(group) : null);
   if (memo) memo.set(group, mine);
+  if (key) return { harness: h.id, ms, key, fp, hash, chain, items };
+  const probe = compactionRequest(rec, h.row, hint) ? fingerprints(texts, PROBE_CAP) : null;
   // `late`: how many of `fp` (a prefix: the texts are taken newest first) come from user texts after the first one
   return { harness: h.id, ms, hash, fp, probe,
     late: fingerprints([...texts.slice(1)].reverse(), FP_CAP).length, chain, items, mark: !probe && hint.compactionMarker === true };
@@ -157,8 +163,9 @@ function compactionRequest(rec, row, hint) {
   return row.compaction.some((c) => c.marker && blocks.some((b) => c.marker.test(b)));
 }
 
-/** The rule itself (gate G11), over those facts in the order the calls were captured → {key, kin} | null. Every call adds its
- *  fingerprints to its session's entry; a keyed call gets nothing else (null). A keyless call, among the open chains of its
+/** The rule itself (gate G11), over those facts in the order the calls were captured → {key, kin, lane?} | null. Every call adds its
+ *  fingerprints to its session's entry; a keyed call gets nothing else (null), except one with a hash: steps 2-4 below, among the
+ *  chains of its key and system-prompt hash, give its chain's name as `lane` ({key: null, kin: false, lane}; 3.4 带键会话里的消息链). A keyless call, among the open chains of its
  *  harness and system-prompt hash last seen within `gapMs`:
  *  1. with a probe, joins the session of its harness — keyed, or a chain of another system-prompt group — that shares the most
  *     fingerprints with it (at least MIN_SHARED; a tie → the later last call) — kin: true; a chain so found is `pending`;
@@ -168,10 +175,11 @@ function compactionRequest(rec, row, hint) {
  *     marker only the `late` fingerprints count: a new agent's first user text (one system text, a shared brief) is no rewrite;
  *  4. else a new chain, a new session (at most CHAIN_CAP per group: the oldest goes). */
 export function createSynthAssigner({ gapMs = SYNTH_GAP_MS, open = new Map() } = {}) {
-  // `${harness}\0${hash}\0${key}` → { key, lastMs, fp, tail, pending }; `\u0001${harness}\0${key}` → { key, lastMs, fp } (fp: a
+  // `${harness}\0${hash}\0${key}` → { key, lastMs, fp, tail, pending }; `\u0001${harness}\0${key}` → { key, lastMs, fp }; a keyed
+  // session's chains `\u0002${harness}\0${session key}\0${hash}\0${chain}` as the first, without fp (fp: a
   // Set, replaced, never mutated, so a shallow copy of an entry is a snapshot). A caller that resumes the rule part-way
   // (src/query/rows.mjs) hands in the state it saved.
-  const mine = (g, harness) => g.startsWith(harness + '\0') || g.startsWith('\u0001' + harness + '\0');
+  const mine = (g, harness) => g.startsWith(harness + '\0') || g.startsWith('\u0001' + harness + '\0') || g.startsWith('\u0002' + harness + '\0');
   const prune = (harness, ms) => { for (const [g, e] of open) if (mine(g, harness) && ms - e.lastMs > 2 * gapMs) open.delete(g); };
   const grow = (fp, add) => {
     let next = fp || new Set();
@@ -187,15 +195,16 @@ export function createSynthAssigner({ gapMs = SYNTH_GAP_MS, open = new Map() } =
       const cur = open.get(g);
       if (!cur) prune(harness, ms);
       open.set(g, { key: facts.key, lastMs: Math.max(cur ? cur.lastMs : ms, ms), fp: grow(cur && cur.fp, facts.fp) });
-      return null;
+      if (facts.hash == null) return null;
+      return { key: null, kin: false, lane: chainIn('\u0002' + harness + '\0' + facts.key + '\0' + facts.hash + '\0', { ...facts, fp: null, mark: false }).key };
     }
     if (facts.hash == null) return null;
-    const own = harness + '\0' + facts.hash + '\0', chain = facts.chain || [];
+    const own = harness + '\0' + facts.hash + '\0';
     if (facts.probe && facts.probe.length) {
       prune(harness, ms);
       let best = null, bestN = 0;
       for (const [g, e] of open) {
-        if (g.startsWith(own) || !mine(g, harness) || Math.abs(ms - e.lastMs) > gapMs) continue;
+        if (g[0] === '\u0002' || g.startsWith(own) || !mine(g, harness) || Math.abs(ms - e.lastMs) > gapMs) continue;
         const n = shared(e, facts.probe);
         if (n >= MIN_SHARED && (n > bestN || (n === bestN && e.lastMs > best.lastMs))) { best = e; bestN = n; }
       }
@@ -205,6 +214,11 @@ export function createSynthAssigner({ gapMs = SYNTH_GAP_MS, open = new Map() } =
         return { key: best.key, kin: true };
       }
     }
+    return chainIn(own, facts);
+  };
+  // steps 2-4 among the chains whose entry names start with `own`
+  function chainIn(own, facts) {
+    const { harness, ms } = facts, chain = facts.chain || [];
     const live = [];
     for (const [g, e] of open) if (g.startsWith(own) && Math.abs(ms - e.lastMs) <= gapMs) live.push(e);
     const join = (e) => {
@@ -253,5 +267,5 @@ export function createSynthAssigner({ gapMs = SYNTH_GAP_MS, open = new Map() } =
     if (count >= CHAIN_CAP) open.delete(oldest[0]);
     open.set(own + key, { key, lastMs: ms, fp: grow(null, facts.fp), tail: chain.length ? chain[chain.length - 1] : null, items: facts.items, pending: false });
     return { key, kin: false };
-  };
+  }
 }

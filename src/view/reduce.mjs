@@ -71,7 +71,7 @@ const KEYFRAME = 32; // a materialised list kept every KEYFRAME links of a base 
 // its figure (src/query/projection.mjs lru)
 const LIST_BYTES = 2 << 20, FACTS_BYTES = 2 << 20;
 /** The shape of reduction().snapshot(): one more whenever what it holds changes. */
-export const REDUCE_V = 1;
+export const REDUCE_V = 2;
 /** What a store's reduction caches hold at most beside its block columns (src/query/named/session.mjs counts it with the store's). */
 export const REDUCE_HEAP = 2 * (LIST_BYTES + FACTS_BYTES);
 
@@ -276,8 +276,8 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
   // are equal), the digest of its latest line (NaN: none yet; 0: an item); failed rid → its line's offset; the item lines' offsets;
   // lane key → its header line's digest; spawn → the child lane its call line names
   const st = from || { ts: [], cts: [], dig: new Float64Array(1024).fill(NaN), failed: new Map(), items: [], heads: new Map(), written: new Map(),
-    inStep: false, last: -1, top: null, n: 0, F: null };
-  const { ts, cts, failed, items, heads, written } = st;
+    inStep: false, last: -1, top: null, n: 0, F: null, chains: { max: new Map(), main: null } };
+  const { ts, cts, failed, items, heads, written, chains } = st;
   let { dig, inStep, last, top, n } = st;
   const ridAt = (k) => store.rows.keyAt(k), slotOf = (rid) => store.rows.slotOf(rid);
   const found = new Map(); // break details worked out by this reduction, written as `brk` lines once an add is done
@@ -344,7 +344,7 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
     const it = (store.rows.get(rid) || {}).x;
     put(k, { c: rid, r: callRow(call, key), e, d: ld, rc: recFacts(it && it.item) });
   }
-  const K = { B, cacheOf, pushOf, emit, newSub, at: (rid, row) => L.at(rid, rowOf, row), baseOf, lastOf, int: slotOf };
+  const K = { B, cacheOf, pushOf, emit, newSub, at: (rid, row) => L.at(rid, rowOf, row), baseOf, lastOf, int: slotOf, main: () => chains.main };
   function push(rid, row, reader) {
     rowOf = reader;
     const k = slotOf(rid), x = row.x || {};
@@ -463,15 +463,25 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
       return null;
     }
     n++;
+    if (x.chain && isCall(row)) noteChain(x.chain.hash, x.msgCount || 0);
     ts[k] = x.item ? x.item.ts_request : null;
     const c = !isCall(row) ? ts[k] : x.format === 'anthropic' ? (x.facts || {}).ts_request : x.ts; // the call's own ts (its step order)
     cts[k] = c === ts[k] ? ts[k] : c;
     return row;
   }
+  // a keyed session split by chains (3.4 带键会话里的消息链): the main system text is that of the call with the most messages so far
+  // (a tie keeps it); when it moves, what was folded under the one before is folded again (`redo`)
+  let redo = false;
+  function noteChain(hash, count) {
+    const m = Math.max(chains.max.get(hash) || 0, count);
+    chains.max.set(hash, m);
+    if (chains.main == null) chains.main = hash;
+    else if (hash !== chains.main && m > chains.max.get(chains.main)) { chains.main = hash; if (last >= 0) redo = true; }
+  }
   const folded = () => { const out = []; ts.forEach((t, k) => { const rid = ridAt(k); if (!failed.has(rid)) out.push(rid); }); return out; };
   // from scratch over everything added, each row read again
   function again() {
-    F = fold(); last = -1; reader = (rid) => store.rows.get(rid);
+    F = fold(); last = -1; redo = false; reader = (rid) => store.rows.get(rid);
     const all = folded().sort(posCmp);
     for (const rid of inStep ? all.sort(byStep) : all) step(rid, store.rows.get(rid));
   }
@@ -497,6 +507,7 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
         if (!next.length) { /* only failures */ } else if (inStep && last >= 0 && byStep(next[0], ridAt(last)) > 0) for (const rid of next) step(rid, held.get(rid));
         else again();
       }
+      if (redo) again();
       break;
     } catch (e) {
       if (e instanceof BlockUnread && e.rid != null && !failed.has(e.rid)) {
@@ -658,7 +669,7 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
     snapshot() {
       if (pend.length || found.size) throw new Error('a reduction is snapshotted between adds only');
       const { flat, firstText, an, inc, ...rest } = F;
-      return { v: REDUCE_V, store: store.id, rows: store.rows.size, ts, cts, dig, failed, items, heads, written, inStep, last, top, n,
+      return { v: REDUCE_V, store: store.id, rows: store.rows.size, ts, cts, dig, failed, items, heads, written, inStep, last, top, n, chains,
         F: { ...rest, flat: [...flat].map(([fmt, f]) => [fmt, f.snapshot()]) } };
     },
     members: () => [...folded(), ...failed.keys()],
@@ -796,14 +807,17 @@ function anthropicFold({ at, B, cacheOf, pushOf, emit, newSub, baseOf, lastOf, i
     snapshot: () => ({ an: an.snapshot() }) };
 }
 
-// A flat-lane wire's fold over rows: a lane per agent (a subagent named by the harness's agent id or the
-// wire's own, the rest by lane kind), each call's compaction verdict on the dissector's message count, its cache break against its
+// A flat-lane wire's fold over rows: a lane per agent (a subagent named by the harness's agent id or the wire's own; in a keyed
+// session split by chains, a chain of a system text other than the main one, `K.main`), the rest by lane kind; each call's
+// compaction verdict on the dissector's message count, its cache break against its
 // lane's last call that did not fail; the document names lanes by kind: one doc lane per kind.
-function flatFold(d, { at, B, cacheOf, pushOf, emit, newSub, baseOf, lastOf, int }, F, from) {
+function flatFold(d, { at, B, cacheOf, pushOf, emit, newSub, baseOf, lastOf, int, main }, F, from) {
   const lanes = from ? from.lanes : new Map();
   function take(rid, row) {
     const x = row.x, e = at(rid, row), list = e.list, attrs = e.attrs, h = x.hints || {}, k = int(rid);
-    const kind = x.lane, agent = kind === 'subagent' ? h.laneKey ?? x.agent ?? null : null;
+    // a call with a chain in a keyed session: main when its system text is the session's main one, else its row's lane, one per chain
+    const ch = x.chain, kind = ch ? (ch.hash === main() ? 'main' : ch.lane) : x.lane;
+    const agent = ch ? (kind === 'main' ? null : ch.key) : kind === 'subagent' ? h.laneKey ?? x.agent ?? null : null;
     const lk = agent == null ? kind : `${kind}\n${agent}`;
     let S = lanes.get(lk);
     if (!S) { S = newSub(d.id, kind, kind); lanes.set(lk, S); F.subs.set(`${d.id}\n${lk}`, S); }

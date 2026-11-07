@@ -22,7 +22,7 @@ import { fieldTextOf, respOf, headersOf } from '../dissect/record-fields.mjs';
 import { composeTextRef, mintRawRef } from '../raw/refs.mjs';
 import { V0_CONVERTED } from '../raw/ingest.mjs';
 import { boardDissectorFor, wireFormatOf, flatLaneOf, contextStateOf, blockKeysOf, MULTI_LANE_CONTEXT } from '../dissect/registry.mjs';
-import { hintsOf, sessionKeyOf, observerEffectsOf } from '../dissect/harnesses.mjs';
+import { hintsOf, sessionKeyOf, observerEffectsOf, harnessOf } from '../dissect/harnesses.mjs';
 import { vendorOf } from '../dissect/vendors.mjs';
 import { failedOf } from '../dissect/endpoints.mjs';
 import { mapUsage, boardUsage } from '../model/schema.mjs';
@@ -521,7 +521,7 @@ function callX(rec, { d, format }, { h, req, unparsed }) {
   }
   const norm = d.normResp(rec);
   // `agent`: the wire's own agent (a WebSocket connection), what a subagent's lane is folded by when the harness names none
-  return jsonClean({ ...common, lane: flatLaneOf(d, rec), hints: hintsOf(rec), msgCount: d.messageCount ? d.messageCount(req) : (req.message_count || 0),
+  return jsonClean({ ...common, lane: flatLaneOf(d, rec), hints: hintsOf(rec), chain: rec._chain, msgCount: d.messageCount ? d.messageCount(req) : (req.message_count || 0),
     agent: d.agentOf ? d.agentOf(rec) ?? undefined : undefined, rq: slimRec(h).request, ctx: d.ctxTokens(norm), nu: norm.usage,
     reqIncomplete: reqIncompleteOf(rec), wsIncomplete: wsIncompleteOf(rec), respIncomplete: respIncompleteOf(rec),
     model: req.model, unparsed, error: failedOf({ status: st, ws: rec.transport === 'ws', error: !!rec.error || unparsed || !!(d.failed && d.failed(norm, rec)) }), wire: wireOf(rec, d.id, null, norm), usage: boardUsage(mapUsage(format, norm.usage || {}, { vendor: vendorOf(rec) })),
@@ -560,7 +560,7 @@ export function extractSeed(store) {
  * rows come after the first `t` line, so what a later open reads is the rows and definitions of one pass over a prefix. What extraction holds is one record at a time, a chunk's rows until its append, the store's indexes and the
  * context's per-lane / per-link ids: not the rows (4.3 §4). frontier: the largest rid such that every member up to it has a row;
  * done: the members up to it (the cursor the next call goes on from); total: the members. A keyless record gets the session's
- * synthesized key (3.4 合成键), as the query does. The work is by the members from the cursor on, never by the members before it.
+ * synthesized key (3.4 合成键), as the query does, and a call with a chain in a keyed session its chain (`lane_key`). The work is by the members from the cursor on, never by the members before it.
  */
 export function extractMembers({ store, members, recordsAt, sessionId = null, budgetMs = Infinity, clock = () => performance.now(), errors = undefined, from = 0 }) {
   const t0 = clock(), spent = () => clock() - t0 >= budgetMs, idOf = (i) => String(members[i].id), has = (i) => store.rows.has(idOf(i));
@@ -585,6 +585,8 @@ export function extractMembers({ store, members, recordsAt, sessionId = null, bu
       if (spent() && (rows.length || held.length)) { i = k; break; }
       const rid = idOf(k), rec = (recordsAt([members[k]]) || []).find((r) => r && String(r.id) === rid);
       if (rec && sessionId != null && sessionKeyOf(rec).key == null) Object.defineProperty(rec, '_synthKey', { value: sessionId, enumerable: false, configurable: true, writable: true });
+      // its chain in a keyed session (3.4 带键会话里的消息链): the fold decides which system text is the main one
+      if (rec && members[k].lane_key != null) Object.defineProperty(rec, '_chain', { value: { hash: members[k].synth_hash, key: members[k].lane_key, lane: harnessOf(rec).row.chainLane }, enumerable: false, configurable: true, writable: true });
       let out = null, why = rec ? null : 'the record did not read back';
       if (rec) try { out = extract(rec, ctx); } catch (e) { why = `extraction failed: ${e && e.message ? e.message : e}`; }
       if (!out) ctx.held = true;
