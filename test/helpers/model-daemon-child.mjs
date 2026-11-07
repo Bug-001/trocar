@@ -16,7 +16,7 @@ export async function forkModelDaemon({ platform, w }) {
   return child
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (process.argv[1] === fileURLToPath(import.meta.url) && process.argv[2] && process.send) { // forked by forkModelDaemon; `node --test` also loads every file under test/ and must find nothing to run
   const { platform, home, dir, env, dirs } = JSON.parse(process.argv[2])
   const { startDaemon } = await import('../../src/collector/daemon.mjs')
   const { controlEndpoint } = await import(`../../src/collector/arch/${platform}/control-path.mjs`)
