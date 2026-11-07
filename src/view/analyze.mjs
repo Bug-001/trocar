@@ -27,7 +27,6 @@ import { compactionVerdict, hasCompactionPreamble } from '../identity/session-id
 // on real captures — so go through the shared helper, never the raw key.
 import { respOf } from '../dissect/record-fields.mjs'
 import { HEAD, taskOf, shorten } from './blockmeta.mjs'
-import { streamParts } from '../dissect/sse-spans.mjs'
 import { num52, numTable } from '../query/projection.mjs'
 import { mapUsage } from '../model/schema.mjs'
 export { sysLabel } // re-exported for back-compat (was defined here before the D25 extraction)
@@ -84,18 +83,6 @@ export function normResp(r) {
     thinking: rs.thinking, tools: rs.tool_calls || [], stop_reason: rs.stop_reason,
   }
 }
-// The reply's blocks as addressable parts (sse-spans.mjs): the wire key is content_block_*'s `index`; the block is the
-// collector's own reconstruction (content_blocks: one per started index, in index order), a JSON reply's content as given.
-const ANTHROPIC_REPLY = {
-  keysOf: (e) => (/^content_block_/.test(e.type || '') && Number.isInteger(e.index) ? [String(e.index)] : []),
-  build: (k, evts, all, part) => {
-    const started = [...new Set(all.filter((e) => e && e.type === 'content_block_start' && Number.isInteger(e.index)).map((e) => e.index))].sort((a, b) => a - b)
-    const b = Array.isArray(part.content_blocks) ? part.content_blocks[started.indexOf(Number(k))] : undefined
-    return b ? [b] : 'the stream has no start event for this block, so the collector did not rebuild it'
-  },
-  jsonBlocks: (body) => (Array.isArray(body.content) ? body.content : []),
-}
-export const replyPartsAnthropic = (rec) => streamParts(rec, ANTHROPIC_REPLY)
 
 // Pull a short readable label from a tool call's input.
 export function toolArg(name, input = {}) {

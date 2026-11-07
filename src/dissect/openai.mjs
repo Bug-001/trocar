@@ -122,6 +122,8 @@ export function resourceRef(block) {
   if ((block.name || '').startsWith('mcp')) return 'mcp::' + (String(block.name).split(/[._]/)[1] || block.name);
   return '';
 }
+// the board's per-block rules for a reply on the OpenAI wires (resource links, faithfulness)
+export const REPLY_RULES = Object.freeze({ resourceRef, faith: (bl) => (bl.type === 'thinking' ? faithfulness(bl) : undefined) });
 // a short label for the (single) Codex instructions block.
 export function sysLabel(text) {
   const t = text || '';
@@ -444,7 +446,7 @@ const CHAT_REPLY = {
 };
 
 export const RESPONSES = Object.freeze({
-  id: 'openai-responses', provider: 'openai', blockKeys: ['tools', 'instructions', 'input'],
+  id: 'openai-responses', provider: 'openai', blockKeys: ['tools', 'instructions', 'input'], fold: 'flat', rules: REPLY_RULES,
   boardFlat: (req) => boardFlat(req), normResp: (rec) => normResp(rec),
   reqCounts: (req) => reqCountsFor('responses', req), ctxTokens,
   // the stream's terminal says the response failed, or an `error` event arrived with no terminal (normEvents)
@@ -453,7 +455,7 @@ export const RESPONSES = Object.freeze({
   messageCount: (req) => (Array.isArray(req && req.input) ? req.input.length : typeof (req && req.input) === 'string' ? 1 : 0),
 });
 export const CHAT = Object.freeze({
-  id: 'openai-chat', provider: 'openai', blockKeys: ['tools', 'messages'],
+  id: 'openai-chat', provider: 'openai', blockKeys: ['tools', 'messages'], fold: 'flat', rules: REPLY_RULES,
   boardFlat: (req) => boardFlatChat(req), normResp: (rec) => normRespChat(rec),
   reqCounts: (req) => reqCountsFor('chat', req), ctxTokens,
   replyParts: (rec) => streamParts(rec, CHAT_REPLY),
