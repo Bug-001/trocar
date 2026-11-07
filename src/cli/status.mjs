@@ -40,6 +40,7 @@ import { captureHealth } from '../health/read.mjs'
 import { failuresBlock, statusSummary, statusDetail } from './status-text.mjs'
 import { colors } from './text.mjs'
 import { squashed } from './words.mjs'
+import { routeReadsEnv } from '../off/loc.mjs'
 import { isProxyMode } from '../off/mode.mjs' // proxy mode or driver mode (D47), decided in ONE place (src/cli may import src/off; the collector's copy is isModelOs)
 import { printJson } from './json.mjs'
 
@@ -217,6 +218,9 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
       if (j.state === 'door') return j.row.kind === 'accept' && 'decrypt' in j.row ? { trusted: j.row.decrypt === true, reason: j.row.decrypt === true ? null : j.row.reason ?? null } : { start: null }
       const certain = startVerdict(p.startedAt, carrier)
       if (certain) return { start: certain }
+      // 4.11 P11 status step 4: an on-window start read the entry only where `on` wrote it; a place that reads an env var depends on the process's own
+      // environment, which this OS's process table never shows, so the door judges it at its first connection
+      if (j.state === 'read' && mine.some((x) => routeReadsEnv(dsc.proxyMode.routes[x.route] || {}, platform))) return { start: 'not-seen' }
       return { start: { door: null, read: null, maybe: 'not-seen', 'not-read': 'config-after-start', 'start-unknown': 'start-time-unknown' }[j.state] }
     }
     if (reply) {
