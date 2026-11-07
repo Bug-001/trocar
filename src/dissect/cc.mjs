@@ -151,6 +151,11 @@ export function dissectBlocks(req) {
 // The reply's own terminal (3.1 `ended`) on the Anthropic wire, from a reply (`resp`, or an error envelope's `partial`): the event types
 // of its stream (a JSON reply: its body's type) over a closed list. Its home is this wire's board object once the wire has one.
 const ANTHROPIC_ENDS = Object.freeze({ ok: ['message_stop'], failed: ['error'] });
+// What a reply's own error event says (its message, else its type): the reason a failed call shows. null when it has none.
+export function replyError(resp) {
+  const e = resp && Array.isArray(resp.raw_sse) ? resp.raw_sse.find((x) => x && x.type === 'error') : resp && resp.body && resp.body.type === 'error' ? resp.body : null;
+  return e ? String((e.error && (e.error.message || e.error.type)) || 'error event') : null;
+}
 export function replyEnd(resp) {
   if (!resp || typeof resp !== 'object') return null;
   const seen = Array.isArray(resp.raw_sse) ? resp.raw_sse.map((e) => e && e.type) : resp.body && typeof resp.body === 'object' ? [resp.body.type] : [];

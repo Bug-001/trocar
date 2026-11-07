@@ -42,8 +42,11 @@ export const TOKEN_COUNT_ENDPOINT_PATHS = pathsOf('token-count')
  * status and fails inside its reply — when its HTTP status is absent or ≥ 400. The index row passes only {status, ws}; the call row
  * adds `error` = the record's error or an unparsed request, and `ended` = the dissector's hook (3.1 `ended`; null keeps the rest).
  */
-export const failedOf = ({ status, ws = false, error = false, ended = null }) =>
-  ended === 'failed' || (!!error && ended !== 'ok') || (!ws && (status == null || status >= 400))
+// A record the collector wrote as cut (an error envelope), or the reply of one read as itself (registry.mjs closedAfterEnd): the
+// only records whose `error` a named success ending can lift.
+export const cutOf = (rec) => !!rec && (((rec.resp || rec.response) || {}).kind === 'error' || rec._closed === true);
+export const failedOf = ({ status, ws = false, error = false, ended = null, cut = false }) =>
+  ended === 'failed' || (!!error && !(cut && ended === 'ok')) || (!ws && (status == null || status >= 400))
 // A reply's own terminal from the endings it names (`seen`), over a wire's closed lists (data in each dissector): any named failure →
 // 'failed', else any named success → 'ok', else null.
 export const endOf = (ends, seen) => (seen.some((v) => ends.failed.includes(v)) ? 'failed' : seen.some((v) => ends.ok.includes(v)) ? 'ok' : null)

@@ -5,6 +5,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { shapeResponse } from '../../src/collector/core/record/body.mjs'
 import { replyEndOf, closedAfterEnd } from '../../src/dissect/registry.mjs'
+import { failedOf, cutOf } from '../../src/dissect/endpoints.mjs'
 
 const sse = (events) => events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join('')
 const shaped = (events, o = {}) => shapeResponse({ status: o.status ?? 200, headers: [['content-type', 'text/event-stream'], ...(o.headers || [])], body: o.body ?? Buffer.from(sse(events)), truncated: !!o.truncated })
@@ -52,4 +53,13 @@ test('3.5 ②: only a cut after a named success is read as that reply; a status 
   assert.ok(undecoded.encoding_error)
   assert.equal(closedAfterEnd(cut(A, undecoded)), null, 'not decoded')
   assert.equal(closedAfterEnd(rec(A, shaped(stop))), null, 'a whole record is itself')
+})
+
+test('3.5 ②: a named success lifts the error of a cut record only; a whole record that carries error stays failed', () => {
+  const whole = { ...rec(A, shaped([{ type: 'message_start', message: { id: 'm' } }, { type: 'message_stop' }])), error: true }
+  assert.equal(cutOf(whole), false)
+  assert.equal(failedOf({ status: 200, error: true, ended: 'ok', cut: cutOf(whole) }), true)
+  const closed = closedAfterEnd(cut(A, shaped([{ type: 'message_start', message: { id: 'm' } }, { type: 'message_stop' }])))
+  assert.equal(cutOf(closed), true)
+  assert.equal(failedOf({ status: 200, error: true, ended: 'ok', cut: cutOf(closed) }), false)
 })

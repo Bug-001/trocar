@@ -24,7 +24,7 @@ import { V0_CONVERTED } from '../raw/ingest.mjs';
 import { boardDissectorFor, wireFormatOf, flatLaneOf, contextStateOf, blockKeysOf, MULTI_LANE_CONTEXT, closedAfterEnd } from '../dissect/registry.mjs';
 import { hintsOf, sessionKeyOf, observerEffectsOf } from '../dissect/harnesses.mjs';
 import { vendorOf } from '../dissect/vendors.mjs';
-import { failedOf } from '../dissect/endpoints.mjs';
+import { failedOf, cutOf } from '../dissect/endpoints.mjs';
 import { mapUsage, boardUsage } from '../model/schema.mjs';
 import { CC_THREADS, replyIdOf, patchSystem } from '../dissect/cc-threads.mjs';
 import { hasCompactionPreamble } from '../identity/session-identity.mjs';
@@ -528,7 +528,7 @@ function callX(rec, { d, format }, { h, req, unparsed }, closed = false) {
   return jsonClean({ ...common, lane: flatLaneOf(d, rec), hints: hintsOf(rec), msgCount: d.messageCount ? d.messageCount(req) : (req.message_count || 0),
     agent: d.agentOf ? d.agentOf(rec) ?? undefined : undefined, rq: slimRec(h).request, ctx: d.ctxTokens(norm), nu: norm.usage,
     reqIncomplete: reqIncompleteOf(rec), wsIncomplete: wsIncompleteOf(rec), respIncomplete: respIncompleteOf(rec),
-    model: req.model, unparsed, error: failedOf({ status: st, ws: rec.transport === 'ws', error: !!rec.error || unparsed, ended: d.ended ? d.ended(norm, rec) : null }), wire: wireOf(rec, d.id, null, norm, closed), usage: boardUsage(mapUsage(format, norm.usage || {}, { vendor: vendorOf(rec) })),
+    model: req.model, unparsed, error: failedOf({ status: st, ws: rec.transport === 'ws', error: !!rec.error || unparsed, ended: d.ended ? d.ended(norm, rec) : null, cut: cutOf(rec) }), wire: wireOf(rec, d.id, null, norm, closed), usage: boardUsage(mapUsage(format, norm.usage || {}, { vendor: vendorOf(rec) })),
     stop_reason: norm.stop_reason, replyId: norm.id ?? null });
 }
 

@@ -97,7 +97,7 @@ function replyGap(pred) {
   const id = `record ${pred.id ?? '(no id)'}`;
   const r = (pred.resp || pred.response) || {};
   // a reply the agent closed after its own success terminal arrived whole (3.5 §访问模式 ②): it hands on a whole context
-  if (r.kind === 'error' && failedOf({ status: r.status, error: true, ended: replyEnd(r.partial) })) return `the reply of ${id} ended in an error: only what arrived before it is known`;
+  if (r.kind === 'error' && failedOf({ status: r.status, error: true, ended: replyEnd(r.partial), cut: true })) return `the reply of ${id} ended in an error: only what arrived before it is known`;
   const inc = respIncompleteOf(pred);
   if (inc) return `the reply of ${id} is incomplete (${inc.text})`;
   if (!replyContent(pred)) return `the reply of ${id} has no content blocks, so what the model answered is not known`;

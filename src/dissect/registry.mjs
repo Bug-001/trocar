@@ -71,9 +71,9 @@ export function replyEndOf(rec) {
 export function closedAfterEnd(rec) {
   const r = respOf(rec);
   if (!r || r.kind !== 'error' || !r.partial || typeof r.partial !== 'object') return null;
-  const copy = sharesBody({ ...rec, resp: r.partial }, rec);
+  const copy = sharesBody({ ...rec, resp: r.partial, _closed: true }, rec); // `_closed`: read as the reply of an error envelope
   if (rec._stream) Object.defineProperty(copy, '_stream', { value: rec._stream, enumerable: false, configurable: true });
-  return failedOf({ status: r.status, ws: rec.transport === 'ws', error: true, ended: replyEndOf(copy) }) ? null : copy;
+  return failedOf({ status: r.status, ws: rec.transport === 'ws', error: true, ended: replyEndOf(copy), cut: true }) ? null : copy;
 }
 
 // The lane of a call on a flat-lane wire (the OpenAI wires), ONE rule for the board and the ETL: the dissector's

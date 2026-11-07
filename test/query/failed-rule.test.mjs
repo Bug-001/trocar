@@ -108,6 +108,7 @@ test('3.5 ② the reply\'s own terminal: a cut after a named success reads whole
     if (!!r.error !== x.failed) bad.push(`${x.at}: failed ${!!r.error}`)
     if (x.closed && (r.usage && r.usage.out) !== 3) bad.push(`${x.at}: usage ${JSON.stringify(r.usage)}`)
     if (ids.includes('resp-closed-early') !== x.closed || ids.includes('resp-partial') !== x.partial) bad.push(`${x.at}: labels ${ids}`)
+    if (x.failed && /^anthropic failure/.test(x.at) && r.errMsg !== 'Overloaded') bad.push(`${x.at}: errMsg ${r.errMsg}`) // the event's own message says why
   }
   assert.deepEqual(bad, [])
   // the overview's usage rows count failed by the call row's verdict

@@ -15,11 +15,11 @@
 // D25: the CC block model (assembly-order walk, volatile rule, resource linking, system labels,
 // bash-read parsing) lives in ONE dissector — src/dissect/cc.mjs — shared with the ETL adapter.
 // linearContext (below) is now just the board's PROJECTION of that dissector's canonical spine.
-import { dissectBlocks, sysLabel, parseBashReads, replyEnd } from '../dissect/cc.mjs'
+import { dissectBlocks, sysLabel, parseBashReads, replyEnd, replyError } from '../dissect/cc.mjs'
 import { reqIncompleteOf, wsIncompleteOf, respIncompleteOf } from '../dissect/capture-labels.mjs'
 import { hintsOf } from '../dissect/harnesses.mjs'
 import { sharesBody } from '../dissect/request-body.mjs'
-import { failedOf } from '../dissect/endpoints.mjs'
+import { failedOf, cutOf } from '../dissect/endpoints.mjs'
 import { compareStep } from './step-order.mjs'
 import { compactionVerdict, hasCompactionPreamble } from '../identity/session-identity.mjs'
 // Envelope drift guard (R1): the D10 envelope stores the response under `resp`, demo v0 under
@@ -390,7 +390,7 @@ export function callFacts(r) {
     status, failed,
     reqIncomplete, wsIncomplete: wsIncompleteOf(r), respIncomplete: respIncompleteOf(r),
     errMsg: r._unparsed ? unparsedErrMsg(reqIncomplete)
-      : !failed ? null : (rs.error?.message || (r.error ? String(r.error.message || r.error) : null)
+      : !failed ? null : (replyError(rs.kind === 'error' ? rs.partial : rs) || rs.error?.message || (r.error ? String(r.error.message || r.error) : null)
         || (status == null ? 'no HTTP status' : status >= 400 ? `HTTP ${status}` : null)),
     ctx: mapUsage('anthropic', u || {}).total_input,
     usage: u,
@@ -466,7 +466,7 @@ export const unparsedErrMsg = (reqIncomplete) => (reqIncomplete
   : 'unrenderable: req_body could not be parsed (truncated / corrupt capture)')
 // The call-row failed rule (3.5 §访问模式 ②, endpoints.mjs failedOf): an error key, an unparsed sentinel (`_unparsed` = already
 // stubbed by admission), or an HTTP status that is absent or ≥ 400 on a call that is not a WebSocket logical call.
-const failedCall = (r) => failedOf({ status: respOf(r)?.status, ws: r.transport === 'ws', error: !!r.error || !!r._unparsed || isUnparsed(r), ended: replyEnd(respOf(r)) })
+const failedCall = (r) => failedOf({ status: respOf(r)?.status, ws: r.transport === 'ws', error: !!r.error || !!r._unparsed || isUnparsed(r), ended: replyEnd(respOf(r)), cut: cutOf(r) })
 
 // analyze()'s step order (ts_request, then id): every assembler folds a session in it, so a session's global step index is one sort
 // whichever wires it mixes.
