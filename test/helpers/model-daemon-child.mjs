@@ -21,7 +21,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url) && process.argv[2] && pro
   const { startDaemon } = await import('../../src/collector/daemon.mjs')
   const { controlEndpoint } = await import(`../../src/collector/arch/${platform}/control-path.mjs`)
   const helper = { close: async () => {}, call: async (verb) => { if (verb === 'ps') return { procs: [] }; throw Object.assign(new Error(`not in this stand-in: ${verb}`), { code: 'helper-verb-error' }) } }
-  const parts = { ownerOf: async () => null, factsOf: async () => null, proc: {}, proxyOf: () => null, systemProxy: () => null, procTable: async () => [], close: () => {}, helper }
+  const { NOBODY } = await import('./model-daemon.mjs')
+  const parts = { ...NOBODY, helper }
   await startDaemon({ dir, env, home, arch: { os: platform, controlEndpoint }, getuid: () => 501, identity: () => CHILD_IDENTITY, model: { backends: { custody: 'unavailable', dirs }, parts } })
   process.send({ ready: process.pid })
 }
