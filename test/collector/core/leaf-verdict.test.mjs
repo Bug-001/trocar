@@ -148,6 +148,15 @@ test('4.6 W21(b): a fast engine — a client of a trusted (pid, host) that refus
   assert.equal(s.critical().length, 1)
 })
 
+test('4.6 W21(b): a client refusing our leaf beside a busy one, data before every refusal → the tenth is client-rejected-leaf, negative, one trust-rejected', T, async (t) => {
+  const s = await rig(t)
+  let n = 0
+  for (let i = 0; i < 10; i++) { await s.used(); await s.settled(++n); assert.deepEqual(s.engine.negatives(), [], `before refusal ${i + 1}`); await s.rejecting(); await s.settled(++n) }
+  assert.deepEqual(s.flows.filter((f) => f.not_captured).map((f) => f.reason), [...Array(9).fill('trusted-before'), 'client-rejected-leaf'])
+  assert.deepEqual(s.engine.negatives().map((e) => [e.host, e.cause]), [['h.test', 'client-rejected-leaf']])
+  assert.equal(s.critical().length, 1)
+})
+
 // 4.6 §引擎 5: a process exit closes its idle connections in one instant; a process that already sent data on our leaf has answered for it
 for (const door of ['transparent', 'ingress']) {
   test(`4.6 W21(c) (${door}): a process that sent data closes two unused connections → trusted-before, no entry, no critical, not a failure`, T, async (t) => {
