@@ -94,7 +94,7 @@ function chainOf(body, prev = null) {
   let c = null, same = !!prev;
   items.forEach((it, i) => {
     const j = (js[i] = enc(it));
-    if (same && i < prev.js.length && j === prev.js[i]) c = prev.cs[i];
+    if (same && j === prev.js[i]) c = prev.cs[i];
     else {
       same = false;
       const h = createHash('sha256'); // streamed: the same digest as of `c + '\n' + j`, without the copy
