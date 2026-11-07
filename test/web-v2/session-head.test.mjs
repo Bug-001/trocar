@@ -72,10 +72,18 @@ const headState = (lanes, answer = {}, extra = {}) => {
   return { desk, meta: desk.meta, lanes: buildLanes(desk, desk.probes), pricing: PRICES, follow: false, ...extra }
 }
 const mainRows = () => [{ usage: U(0, 100, 10), cacheBreak: { firstCall: true } }, { usage: U(0, 120, 10), cacheBreak: { cause: 'content-changed' } }, { error: 'boom', usage: null }, { usage: U(100, 30, 5), cacheBreak: { cause: 'append' } }]
+test('1.2 #17 · title_source unread: the fixed word and its own tip on the desk head; a title never reads it', () => {
+  const unread = { session_id: 'S-1', title: null, title_source: 'unread' }
+  const m = sessionHeadModel(headState([{ kind: 'main', rows: mainRows() }], { meta: unread }))
+  assert.equal(m.title.text, null); assert.equal(m.title.fallback, W.PROMPT_UNREAD); assert.equal(m.title.sourceTip, W.PROMPT_UNREAD_TIP)
+  const plain = sessionHeadModel(headState([{ kind: 'main', rows: mainRows() }], { meta: { session_id: 'S-1', title: null, title_source: null } }))
+  assert.equal(plain.title.fallback, W.UNTITLED)
+})
+
 const HEAD_PARTS = ['back', 'title', 'chip', 'entry', 'project', 'start', 'follow', 'read', 'stale', 'facts', 'info'] // 1.2 §会话头's table + the 保真行 + ⓘ
 const INFO_KEYS = new Set(['truncated', 'cost', 'hit', 'breaks', 'failed', 'compactions', 'counts', 'duration', 'parent', 'fork', 'lineage', 'id', 'project', 'calls']) // 1.2 §信息弹出层
 
-test('1.2 #17 · model: the title falls back to 未命名会话 only; the start is chapters[0].ts0 and absent at tier 0; a title always comes from the wire (4.4 §人类标题的来源)', () => {
+test('1.2 #17 · model: the title falls back to 没有采到提问 only; the start is chapters[0].ts0 and absent at tier 0; a title always comes from the wire (4.4 §人类标题的来源)', () => {
   const chapters = [{ k: 0, s0: 0, s1: 4, ts0: '2026-10-07T00:00:00.000Z', inferred: false }]
   for (const [meta, tier, want] of [[{ session_id: 'S-1' }, 1, W.TITLE_UNTITLED_NEXT_TIP], [{ session_id: 'S-1', title: 'T', title_source: 'wire' }, 1, W.TITLE_FROM_WIRE], [{ session_id: 'S-1', title: 'T', title_source: null }, 0, W.TITLE_FROM_WIRE]]) {
     const s = headState([{ kind: 'main', rows: mainRows() }], { meta })

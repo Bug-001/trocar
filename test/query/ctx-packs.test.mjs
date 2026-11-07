@@ -37,17 +37,20 @@ const ERR = ['where', 'code', 'reason']
 const DRIVER = `
 await import(${at('../../src/query/named/index.mjs')})
 const { extendSession, saveIndexes } = await import(${at('../../src/query/named/session.mjs')})
+const { drain } = await import(${at('../helpers/bounded.mjs')})
 const { rng } = await import(${at('./big-session.mjs')})
 const [home, id, ms, kill, seed, rounds] = [process.argv[1], process.argv[2], Number(process.argv[3]), Number(process.argv[4]), Number(process.argv[5]), Number(process.argv[6])]
 const r = rng(seed)
 let k = 0
 for (let round = 0; round < rounds; round++) {
   if (round) { process.stdout.write('folded\\n'); await new Promise((ok) => process.stdin.once('data', ok)) }
-  while (await extendSession({ home, writer: true }, id, ms ? 1 + r() * ms : 1e9)) {
+  await drain(async () => {
+    if (!(await extendSession({ home, writer: true }, id, ms ? 1 + r() * ms : 1e9))) return false
     if (r() < 0.2) saveIndexes()
     if (++k === kill) process.kill(process.pid, 'SIGKILL')
     await new Promise((ok) => setImmediate(ok))
-  }
+    return true
+  })
   saveIndexes()
 }
 process.exit(0)`
@@ -271,6 +274,7 @@ test('3.5 §会话读 contract: every line kind and key is in the closed sets; r
 const FOLLOWER = `
 await import(${at('../../src/query/named/index.mjs')})
 const { extendSession, saveIndexes } = await import(${at('../../src/query/named/session.mjs')})
+const { drain } = await import(${at('../helpers/bounded.mjs')})
 const { rng } = await import(${at('./big-session.mjs')})
 const home = process.argv[1], id = process.argv[2]
 let buf = ''
@@ -280,7 +284,12 @@ process.stdin.on('data', async (b) => {
     const [ms, seed, kill] = buf.slice(0, i).split(' ').map(Number), r = rng(seed)
     buf = buf.slice(i + 1)
     let k = 0
-    while (await extendSession({ home, writer: true }, id, 1 + r() * ms)) { if (r() < 0.1) saveIndexes(); if (++k === kill) process.kill(process.pid, 'SIGKILL') }
+    await drain(async () => {
+      if (!(await extendSession({ home, writer: true }, id, 1 + r() * ms))) return false
+      if (r() < 0.1) saveIndexes()
+      if (++k === kill) process.kill(process.pid, 'SIGKILL')
+      return true
+    })
     saveIndexes() // the round over: the worker's idle period (its save writes a head a slice left behind)
     process.stdout.write('done\\n')
   }

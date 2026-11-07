@@ -184,11 +184,14 @@ const SCALARS = ['mark', 'pending', 'truncated', 'meta', 'stats', 'logged', 'pro
 export function applyHead(desk, head) {
   changed(desk)
   const touched = new Set([...(desk.head?.lanes || []), ...(head.lanes || [])].map((h) => h.lane))
+  // a pack rewritten under its number: the ledger was read over the old text, so it is walked again (2.4); a new pack only adds to it
+  const tags = new Map((desk.head?.packs || []).map((p) => [p.n, p.tag]))
+  if ((head.packs || []).some((p) => tags.has(p.n) && tags.get(p.n) !== p.tag)) for (const h of desk.held.values()) { h.ledgered = false; h.cursors = new Set() }
   desk.head = head
   held(desk, head.mark)
   for (const k of SCALARS) desk[k] = head[k] ?? null
   desk.logged = head.logged ?? 0; desk.probes = head.probes ?? 0
-  if (!head.pending) desk.firstPending = false
+  if (!head.pending || head.pending.seen) desk.firstPending = false
   desk.errors = [...(head.errors || []), ...desk.errors.filter((x) => FAILS.has(x))]
   mergeHeads(desk, touched)
 }

@@ -23,7 +23,7 @@ import { rewriteBundles } from './core/trust/bundle.mjs'
 import { createTracker } from './core/tracker.mjs'
 import { createSwitch, readState } from './core/switch.mjs'
 import { startControlServer, controlSocketPath } from './core/control.mjs'
-import { createQueryService } from '../query/service.mjs'
+import { createQueryRouter } from '../query/router.mjs'
 import { createServer as createBoard, tipTable } from '../server.mjs'
 import { readIngressConfig } from './core/ingress-config.mjs'
 import { readCa } from './core/tls/ca-store.mjs'
@@ -156,7 +156,7 @@ function noteUncleanStop(lock, failure) {
 
 /** The ONE place a daemon's record store, its sealer and its index keeper are wired (the platform-seam rule: no per-platform
  *  copy), so BOTH entries — Linux's runDaemon and the model OSes' runModelDaemon — seal AND keep the index current:
- *  `seal.start()` does the upgrade rename and the last run's leftovers, then every segment this run closes, one at a
+ *  `seal.start()` does the last run's leftovers, then every segment this run closes, one at a
  *  time in a forked child, so this event loop never encodes or hashes (4.2 §自动封存).
  *    The keeper (D62, index-keeper.mjs) indexes the bytes this daemon just appended, debounced and in chunks, so no
  *  query ever pays for a cold index build; it hands a segment over to the sealer's child when the segment closes.
@@ -259,7 +259,7 @@ export function lockKeeper({ file, fields, segmentOf = () => null }) {
  *  never computes an answer; the worker exits by itself when nobody queries. `stop()` belongs in the stop, before the control server
  *  closes, so a worker a stop cuts off is not left behind. */
 function queryRouteFor({ P, failure, fork, queryIdleMs }) {
-  const svc = createQueryService({ home: path.dirname(P.dir), failure, fork, idleMs: queryIdleMs })
+  const svc = createQueryRouter({ home: path.dirname(P.dir), failure, fork, idleMs: queryIdleMs })
   return { routes: { 'GET /query': svc.route }, stop: svc.stop, svc, tips: tipTable() }
 }
 

@@ -32,7 +32,7 @@ import { parseRecordId } from '../collector/core/record/segments.mjs';
 import { trocarHome } from '../paths.mjs';
 import { lineFile } from './line-file.mjs';
 
-export const PROJ_V = 14;
+export const PROJ_V = 21; // 18: a reply the agent closed after its own success terminal is read as that reply (3.5 §访问模式 ②); 19: a keyed session's chains are lanes; 20: a keyed chain's stored key can change with step 2's reach; 21: those with the merged definition shape and the parsed block views
 const CAP_BYTES = 512 << 20; // the total's ceiling (gcProjections)
 const SHARE_DEPTH = 3, SHARE_MIN = 48;
 // rows and shared values read back are kept by what they weigh in the heap (a row grows with its context: a count let a long
@@ -410,12 +410,33 @@ export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = 
     },
     /** Whether its sidecar covers every line it holds (saveIndex wrote it, or nothing grew since): none while it holds `t` rows. */
     get indexed() { return lines.settled && !heldRows && lines.bytes > 0 && lines.bytes === savedAt; },
+    /** Whether it holds `t` rows, which the next open cuts off. */
+    get held() { return heldRows; },
     /** What the sidecar this open loaded carried besides the indexes ({name: array}), or null (saveIndex). */
     get saved() { return saved; },
     /** The header's id (taken now when the file is made or rebuilt); `bytes`: the length of the whole lines it holds. */
     get id() { return id; },
     get bytes() { return lines.bytes; },
   };
+}
+
+/** staleHeader({home, fs, key, name, v}) → whether the session's line file `name` holds a first line that is not of version `v` (one
+ *  that does not parse, or a file that is not one line file, is not): the first line alone, the file not opened as a store. No file:
+ *  false. projectionStale({home, fs, key}): the projection's (3.5 §访问模式「版本变更的重读」). */
+export function staleHeader({ home = trocarHome(), fs = nodeFs, key, name, v }) {
+  const lf = lineFile({ fs, base: path.join(sessionDir(home, key), name), write: false });
+  try {
+    for (const l of lf.scan(0)) { const o = parse(l.text); return !o || o.v !== v; }
+    return lf.unreadable != null;
+  } finally { lf.close(); }
+}
+export const projectionStale = (o) => staleHeader({ ...o, name: 'extract', v: PROJ_V });
+/** dirUse(dir, fs) → {size, t}: the sum of a session directory's file sizes and the newest of their mtimes (opening touches the
+ *  projection: 4.3 §4 回收, the re-read queue's order too). */
+export function dirUse(dir, fs = nodeFs) {
+  const u = { size: 0, t: 0 };
+  try { for (const f of fs.readdirSync(dir)) { const st = fs.statSync(path.join(dir, f)); u.size += st.size; u.t = Math.max(u.t, st.mtimeMs); } } catch { /* gone meanwhile */ }
+  return u;
 }
 
 /** gcProjections({home, fs, liveKeys, keepKeys, capBytes, capOnly}) → {deleted: [path]}: by session directory (4.3 §4 回收; its size = the
@@ -437,8 +458,7 @@ export function gcProjections({ home = trocarHome(), fs = nodeFs, liveKeys, keep
     if (!h || keep.has(h)) continue;
     if (m) { if (!live.has(h) && !capOnly) drop(p); continue; }
     if (!live.has(h) && !capOnly) { drop(p, { recursive: true }); continue; }
-    const u = { p, size: 0, t: 0 };
-    try { for (const f of fs.readdirSync(p)) { const st = fs.statSync(path.join(p, f)); u.size += st.size; u.t = Math.max(u.t, st.mtimeMs); } } catch { /* gone meanwhile */ }
+    const u = { p, ...dirUse(p, fs) };
     total += u.size; kept.push(u);
   }
   for (const u of kept.sort((a, b) => a.t - b.t)) {

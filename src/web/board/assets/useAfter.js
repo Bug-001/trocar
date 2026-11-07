@@ -1,0 +1,1 @@
+import{pt as e,ut as t}from"./useButton.js";var n=e(t(),1);function r(e,t=!0){let[r,i]=(0,n.useState)(!1);return(0,n.useEffect)(()=>{if(!t)return;let n=setTimeout(()=>i(!0),e);return()=>{clearTimeout(n),i(!1)}},[e,t]),t&&r}export{r as t};

@@ -67,7 +67,7 @@ function diskRead(home, argv) {
 }
 
 // ── what is measured ──────────────────────────────────────────────────────────────────────────────
-// $session / $ref / $harness come from a discovery run, so the script works on any dataset.
+// $session / $ref / $harness / $host / $class come from a discovery run, so the script works on any dataset.
 const CMDS = [
   ['pricing', ['query', 'pricing'], { core: ['pricing', {}] }],
   ['segments', ['query', 'segments'], { core: ['segments', {}] }],
@@ -75,6 +75,12 @@ const CMDS = [
   ['sessions', ['query', 'sessions'], { core: ['sessions', {}] }],
   ['session', ['query', 'session', '--id', '$session'], { core: ['session', { id: '$session' }] }],
   ['calls', ['query', 'calls'], { core: ['calls', {}] }],
+  // without --class / --host / --ref `calls` is only the class table; these three list calls
+  ['calls-class', ['query', 'calls', '--class', '$class'], { core: ['calls', { class: '$class' }] }],
+  ['calls-host', ['query', 'calls', '--host', '$host'], { core: ['calls', { host: '$host' }] }],
+  ['calls-ref', ['query', 'calls', '--ref', '$ref'], { core: ['calls', { ref: '$ref' }] }],
+  ['traffic', ['query', 'traffic'], { core: ['traffic', {}] }],
+  ['overview', ['query', 'overview'], { core: ['overview', {}] }],
   ['block', ['query', 'block', '--ref', '$ref'], { core: ['block', { ref: '$ref' }] }],
   ['raw', ['raw', '$ref'], { json: false }],
   ['status', ['status'], { core: ['status', {}] }],
@@ -120,15 +126,16 @@ async function cores({ home, names, vars, runs }) {
   const nearby = []
   if (vars.session) {
     const open = await timed('session', { id: vars.session })
-    const page = open.doc?.page || {}
+    const oldest = open.doc?.more ? (open.doc.calls || [])[0]?.rid : null // a page is the newest rows; the next ends before its oldest (3.5 §会话读 --before)
     const steps = (open.doc?.records || []).map((r) => r.ref || r.text_ref).filter(Boolean)
     const seq = [
-      ['session page 2', 'session', { id: vars.session, after: page.next ?? '1', limit: String(page.limit ?? 50) }],
+      ['session page 2', 'session', oldest ? { id: vars.session, before: oldest, limit: '50' } : null],
       ['block of another step', 'block', { ref: steps[1] || vars.ref }],
       ['calls of this session', 'calls', { session: vars.session }],
       ['sessions (the list again)', 'sessions', {}],
     ]
     for (const [label, name, params] of seq) {
+      if (!params) continue // nothing to page to
       const ms = []
       let err = null
       for (let i = 0; i < runs; i++) { const r = await timed(name, params); ms.push(r.ms); err = err || r.error }
@@ -157,12 +164,17 @@ export async function measure({ home, runs = DEFAULT_RUNS, only = null }) {
   const buildMs = Number(process.hrtime.bigint() - t0) / 1e6
   const segDoc = run(home, ['query', 'segments'])
   const sesDoc = run(home, ['query', 'sessions'])
+  const top = (rows, n) => [...rows].sort((a, b) => n(b) - n(a))[0]
+  const host = top(run(home, ['query', 'traffic']).doc?.hosts || [], (h) => h.requests)
+  const cls = host ? top(Object.entries(host.classes), ([, n]) => n) : null
   const big = (segDoc.doc?.segments || []).filter((s) => s.records > 0).sort((a, b) => a.bytes - b.bytes).pop()
   const { HARNESS_IDS } = await import('../src/off/harness-names.mjs')  // one fact, one place (0.1 §2)
   const vars = {
     session: (sesDoc.doc?.sessions || [])[0]?.session_id ?? null,
     ref: big ? `${big.segment}:${big.records}` : null,
     harness: HARNESS_IDS[0],
+    host: host?.host ?? null,
+    class: cls ? cls[0] : null,
   }
   const dataset = { segments: (segDoc.doc?.segments || []).length, records: (segDoc.doc?.segments || []).reduce((n, s) => n + s.records, 0),
     bytes: (segDoc.doc?.segments || []).reduce((n, s) => n + (s.bytes || 0), 0), index_build_ms: Math.round(buildMs) }
@@ -384,7 +396,10 @@ async function main(argv) {
     return
   }
   if (!args.home) { console.error('usage: node scripts/perf-cli.mjs --home <HOME> [--runs 7] [--only a,b] [--json out.json]\n       node scripts/perf-cli.mjs --idle <pid> [--seconds 60] [--json out.json]\n       node scripts/perf-cli.mjs --write-amp <HOME> [--records 200] [--json out.json]'); process.exit(2) }
-  const out = await measure({ home: args.home, runs: args.runs ? Number(args.runs) : undefined, only: args.only ? args.only.split(',') : null })
+  const only = args.only ? args.only.split(',') : null
+  const known = CMDS.map(([n]) => n), unknown = (only || []).filter((n) => !known.includes(n))
+  if (unknown.length) { console.error(`perf-cli: --only names no command: ${unknown.join(', ')} (known: ${known.join(', ')})`); process.exit(2) }
+  const out = await measure({ home: args.home, runs: args.runs ? Number(args.runs) : undefined, only })
   print(out)
   if (args.json) fs.writeFileSync(args.json, JSON.stringify(out, null, 2))
 }

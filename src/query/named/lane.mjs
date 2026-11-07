@@ -11,7 +11,7 @@
 // the kept ledgers, LEDGER_BYTES): an answer reads the lines of the steps it covers and of the steps the replay goes over. The ledger
 // entries an answer owes go in key order into the room its page leaves; the rest are named by `ledger_next`, a cursor `--ledger`
 // goes on from (3.5 `resources` 与 `seen`).
-import { sessionState, markOn, files, version as sessionVersion } from './session.mjs';
+import { sessionState, markOn, files, stands, version as sessionVersion } from './session.mjs';
 import { listOf, laneLedger, ledgerWeight, LEDGER_BYTES } from '../../view/reduce.mjs';
 import { lru } from '../projection.mjs';
 import { BODY, renderOf } from '../../view/render-kind.mjs';
@@ -19,7 +19,7 @@ import { PAGE_BYTES, laneOf, placeIn } from '../session-doc.mjs';
 import { compareStep } from '../../view/step-order.mjs';
 import { QueryArgError } from './index.mjs';
 import nodeFs from 'node:fs';
-import { renderSpan, sealedOf, tailFile } from '../ctx-files.mjs';
+import { listedText, renderSpan, sealedOf, tailFile } from '../ctx-files.mjs';
 import { trocarHome } from '../../paths.mjs';
 
 export const about = Object.freeze({
@@ -79,8 +79,9 @@ function opsOf(P, C) {
 // The kept lane ledgers of a session's fold log (its state's): lane key → {maps, step, rid, off} = laneLedger's maps at the lane's
 // step `step` (rid `rid`), as the log stood at byte `off` (its frontier then). Weighed by ledgerWeight, LEDGER_BYTES in all.
 const ledgers = new WeakMap();
-// the definitions a lane stepper keeps read (bytes, about)
-const DEF_BYTES = 8 << 20;
+/** The definitions a lane stepper keeps read (bytes, weighed as `weigh` weighs; 3.5 §内存有界): one cache, which a caller may share across
+ *  its steppers (ctx-files.mjs: one per rendered part), since a definition is a function of its bid. */
+export const DEF_BYTES = 8 << 20;
 // a kept ledger still good for the lane `lane` now: its step holds the same rid and no row of the lane at or before it changed since
 // (one that moved in or out of the lane before it moves its step's rid)
 function keptOf(cols, log, lane, e) {
@@ -95,14 +96,15 @@ function keptOf(cols, log, lane, e) {
 
 /** weigh(v) → what a kept step or definition holds in the heap, about: its JSON's bytes (every field) and the entry. */
 export const weigh = (v) => 96 + (v ? 2 * JSON.stringify(v).length : 0);
-/** laneStepper(st, key, uses) → the steps of the lane `key` of a session state (sessionState): {L, n, rids, lines, lineAt(i), eventsAt(i),
+/** laneStepper(st, key, uses, defs) → the steps of the lane `key` of a session state (sessionState): {L, n, rids, lines, lineAt(i), eventsAt(i),
  *  listAt(i), replyAt(i), step(i, prev), defOf(bid, list), release(keep)}. step(i, prev) = step i with its ops against step `prev`'s list (−1: a
  *  keyframe, every position added), parent = step `prev`'s rid (null for −1); defOf = a definition on the wire, its `reads` joined from
  *  the tool_use of the list `list` (a listAt(i); the first it is asked with: cached by bid). Lists, lines and definitions are read once each; `uses`
  *  (an lru by bid: a block's tool_use id and the `reads` it extracted, 0 for a block that is no tool_use; a function
  *  of its bid) may be one kept across steppers (ctx-files.mjs, the writer's memo), so a list's blocks are not read again at every
- *  slice, and what it keeps is these few fields, never the definitions. */
-export function laneStepper(st, key, uses = lru(DEF_BYTES)) {
+ *  slice, and what it keeps is these few fields, never the definitions. `defs` (an lru by bid: the stored definition) may be one
+ *  shared across steppers too, so a block every lane holds is read once. */
+export function laneStepper(st, key, uses = lru(DEF_BYTES), defs = lru(DEF_BYTES)) {
   const { store } = st, { cols, log } = st.V, L = laneOf(cols, key), { rids, slots } = L;
   const lines = new Map(), lineAt = (i) => { if (!lines.has(i)) lines.set(i, log.read(...log.latest(rids[i]))); return lines.get(i); };
   // the `user` events before step i (3.5: every `user` event's `k` is its place among the lane's, 1-based), walked from the last place
@@ -110,8 +112,7 @@ export function laneStepper(st, key, uses = lru(DEF_BYTES)) {
   let bi = 0, bs = 0;
   const before = (i) => { for (; bi < i; bi++) bs += cols.uc[slots[bi]]; for (; bi > i; bi--) bs -= cols.uc[slots[bi - 1]]; return bs; };
   const eventsAt = (i) => { let j = before(i); return lineAt(i).e.map((e) => (e.type === 'user' ? { ...e, k: ++j } : e)); };
-  // the definitions read, by bytes about (their strings: a tool's name can be tens of KB), the least recently used out
-  const lists = new Map(), defs = lru(DEF_BYTES), wires = new Map();
+  const lists = new Map(), wires = new Map();
   const rowOf = (i) => store.rows.get(rids[i]);
   const listAt = (i) => {
     if (!lists.has(i)) {
@@ -124,7 +125,7 @@ export function laneStepper(st, key, uses = lru(DEF_BYTES)) {
   const defOf = (bid) => {
     if (defs.has(bid)) return defs.get(bid);
     const d = store.readDef(bid) || null;
-    defs.set(bid, d, 128 + (d ? 2 * ((d.preview || '').length + (d.toolName || '').length + (d.label || '').length + (d.ref || '').length) : 0));
+    defs.set(bid, d, weigh(d)); // every field: an unaddressable definition carries its body (BODY)
     return d;
   };
   // a tool_result reads as its tool_use says (render-kind.mjs readsOf): the tool_use of the same id in the list it is first seen in
@@ -183,7 +184,8 @@ export async function run(ctx) {
   if ([from, to, ledger].filter((x) => x != null).length > 1) throw new QueryArgError('trocar query lane: give at most one of --from, --to and --ledger');
   const after = ledger == null ? null : cursorOf(ledger);
   const st = await sessionState(ctx, id);
-  const empty = (mark) => ({ lane: key, base: null, mark, steps: [], defs: [], resources: [], seen: [], events: [], prev: null, next: null, ledger_next: null });
+  const reading = st && st.pending ? { pending: st.pending } : null; // 3.5 `pending?`: this answer stops at the frontier
+  const empty = (mark) => ({ lane: key, base: null, mark, ...reading, steps: [], defs: [], resources: [], seen: [], events: [], prev: null, next: null, ledger_next: null });
   if (!st) {
     errors.push({ where: `session/${id}`, code: 'session-unknown', reason: 'no session with this id among the captured records' });
     return empty(null);
@@ -253,7 +255,7 @@ export async function run(ctx) {
   let e = keptOf(cols, log, L, cache.get(key));
   if (e && b >= 0 && e.step !== b) e = null;
   cache.delete(key); // gone on from in place below
-  const { resources, seen, kept } = laneLedger(rids, (i) => (lines.has(i) ? lines.get(i) : log.peek(...log.latest(rids[i]))).d, b, e);
+  const { resources, seen, kept, note } = laneLedger(rids, (i) => (lines.has(i) ? lines.get(i) : log.peek(...log.latest(rids[i]))).d, b, e);
   if (kept) {
     const w = ledgerWeight(kept);
     if (w <= LEDGER_BYTES) cache.set(key, { ...kept, rid: rids[kept.step], off: log.frontier }, w);
@@ -261,7 +263,7 @@ export async function run(ctx) {
   const wireDefs = [...fresh.keys()].map((b) => wireDef(b, listAt(fresh.get(b)))).filter(Boolean);
   // the entries owed (at --ledger: those after its cursor) in key order, into the room the page leaves (a --ledger answer takes one
   // at least); `ledger_next` names the last one shipped when some are left
-  const owed = [resources, seen].flatMap((list, j) => list.map((e) => [j, keyOf[j](e), e]))
+  const none = note === 'no-ledger', owed = (none ? [] : [resources, seen]).flatMap((list, j) => list.map((e) => [j, keyOf[j](e), e]))
     .filter(([j, kk]) => !after || j > after[0] || (j === after[0] && kk > after[1]))
     .sort((a, b) => a[0] - b[0] || cmp(a[1], b[1]));
   const out = [[], []];
@@ -273,14 +275,16 @@ export async function run(ctx) {
   }
   const last = i > 0 ? owed[i - 1] : [0, ''];
   return {
-    lane: key, base, mark: markOn(st.plan, st.mark), steps, defs: wireDefs, resources: out[0], seen: out[1], events,
+    lane: key, base, mark: markOn(st.plan, st.mark), ...reading, steps, defs: wireDefs,
+    ...(none ? { resources: null, seen: null } : { resources: out[0], seen: out[1] }), ...(note ? { resources_note: note } : null), events,
     prev: lo > 0 && steps.length ? rids[lo] : null, next: hi < n && steps.length ? rids[hi - 1] : null,
     ledger_next: i < owed.length ? Buffer.from(JSON.stringify([LISTS[last[0]], last[1]])).toString('base64url') : null,
   };
 }
 
 // `--pack <n>.<part>` / `--tail <part>` (3.5 §会话读): the NDJSON text of a sealed pack or of the open tail, as `{$text}` (named/index.mjs
-// runQuery hands it on as the answer's bytes). Both render from the state (ctx-files.mjs renderSpan); the worker's tail is its file.
+// runQuery hands it on as the answer's bytes). Both render from the state (ctx-files.mjs renderSpan); the worker's tail is its file, and
+// while the answer on disk stands (session.mjs stands) so is every file the head on disk lists, whatever the frontier: it answers the head's tags.
 async function fileAnswer(ctx, id, others) {
   const { pack, tail } = ctx.params;
   if (others || (pack != null && tail != null)) throw new QueryArgError('trocar query lane: --pack and --tail go with --id only, one of them at a time');
@@ -288,7 +292,9 @@ async function fileAnswer(ctx, id, others) {
   if (!m) throw new QueryArgError(pack != null ? 'trocar query lane: --pack takes <n>.<part>: a pack number, a dot, and main or rest' : 'trocar query lane: --tail takes main or rest');
   const st = await sessionState(ctx, id);
   if (!st) { ctx.errors.push({ where: `session/${id}`, code: 'session-unknown', reason: 'no session with this id among the captured records' }); return {}; }
-  const sealed = sealedOf(st), part = m[2];
+  const part = m[2], listed = stands(ctx, st) ? listedText(ctx.home ?? trocarHome(), id, pack == null ? null : Number(m[1]), part, ctx.fs || nodeFs) : null;
+  if (listed != null) return { $text: listed };
+  const sealed = sealedOf(st);
   files(ctx, st); // the worker's files at this state
   if (pack == null) {
     if (ctx.writer === true && st.files) try { return { $text: (ctx.fs || nodeFs).readFileSync(tailFile(ctx.home ?? trocarHome(), id, part), 'utf8') }; } catch { /* rendered */ }

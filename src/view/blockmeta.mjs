@@ -122,7 +122,8 @@ function argPreview(bl) {
 function blockHead(b) {
   if (!b) return { role: '', tag: '', label: '' };
   if (b.sec === 'tools') return { role: 'tool', tag: 'def' + (b.mcp ? ' · MCP' : ''), label: b.name || '' };
-  if (b.sec === 'system') return { role: 'system', tag: b.label || '', label: '' };
+  // the tag is harness-free and closed (2.3 块头 tag 的词): instructions, or a reminder; the harness's own name for the block is the label
+  if (b.sec === 'system') return b.label === 'system-reminder' ? { role: 'system', tag: 'system-reminder', label: '' } : { role: 'system', tag: 'def', label: b.label || '' };
   const r = b.role, k = b.kind, bl = b.block;
   if (k === 'thinking' || k === 'redacted_thinking') return { role: 'assistant', tag: 'thinking', label: '' };
   if (k === 'tool_use' || k === 'server_tool_use') return { role: 'assistant', tag: 'action · ' + (b.toolName || ''), label: shorten(argPreview(bl)) };
@@ -212,7 +213,31 @@ export function firstHuman(flat) {
   }
   return null;
 }
-/** A lane's first prompt (firstHuman of its first call), kept on the lane under a symbol key: no document carries it. */
+// A wrapper (4.4 `lanes[].task`): a whole span <name …>…</name> at the very start of a text, by shape: any name, closed by the first </name>.
+const OPENS = /^<([A-Za-z][\w:.-]*)(\s[^>]*)?>/;
+function unwrapped(text) {
+  let rest = text, attached = null;
+  for (let m; (m = OPENS.exec(rest));) {
+    const end = rest.indexOf(`</${m[1]}>`, m[0].length);
+    if (end < 0) break; // unclosed within the text kept (TASK_HEAD): not a wrapper
+    if (attached == null && m[2] && m[2].trim()) attached = rest.slice(m[0].length, end).trim() || null;
+    rest = rest.slice(end + m[1].length + 3).trimStart();
+  }
+  return { rest, attached };
+}
+/** askOf(humans) → a lane's question from its first call's human texts (iterable, firstHuman's form): the first with text left past its
+ *  wrappers; all wrapped: the inner text of the first span with attributes, else the first text as it was; none: null. */
+export function askOf(humans) {
+  let attached = null, raw = null;
+  for (const h of humans) {
+    const u = unwrapped(h);
+    if (u.rest) return u.rest;
+    attached ??= u.attached;
+    raw ??= h;
+  }
+  return attached ?? raw;
+}
+/** A lane's first prompt (askOf over its first call), kept on the lane under a symbol key: no document carries it. */
 export const HEAD = Symbol('first prompt');
 // A sub-agent's first text often opens with what a workflow tells all its sub-agents (4.4 §看板 v2 需要的补充 `lanes[].task`): a line
 // SHARED_LANES lanes of a session hold says nothing of any of them, whatever the harness. Lines are trimmed; a lane counts a line once.

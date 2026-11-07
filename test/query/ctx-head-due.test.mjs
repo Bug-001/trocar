@@ -15,6 +15,7 @@ import { extendSession, saveIndexes } from '../../src/query/named/session.mjs'
 import { sessionDir } from '../../src/query/projection.mjs'
 import { homeWith, SEGMENT } from '../helpers/session-doc.mjs'
 import { laneOf, SID } from '../helpers/compaction-lane.mjs'
+import { drain } from '../helpers/bounded.mjs'
 
 const J = JSON.stringify, PACK = 512 // 3.5 §会话读 `lane --pack`: pack n = the members at write positions [512n, 512(n+1))
 
@@ -24,7 +25,7 @@ test('3.5 #36: only a slice that seals a pack or starts a chapter rewrites the h
   const s = bigSession({ home, id: 'eeee-0000-4a1b-9c2d-000000000005', growth: 300, subEvery: 4, subLanes: 2, subLen: 1e9, compactAt: 30_000 })
   const ctx = { home, writer: true }, file = path.join(sessionDir(home, s.id), 'head.json.gz')
   const onDisk = () => gunzipSync(fs.readFileSync(file)).toString('utf8')
-  const fold = async () => { while (await extendSession(ctx, s.id, Infinity)); }
+  const fold = async () => { await drain(() => extendSession(ctx, s.id, Infinity)) }
   let members = 40
   s.append(members)
   await fold()

@@ -7,9 +7,10 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { api } from '../../../legacy/core/api.mjs'
+import { LIST_WAIT_MS } from '../../../legacy/library/logic.mjs'
 import { INTERVAL, backoffMs } from '../../../legacy/core/poll.mjs'
 import { TIP_MS } from '../../../legacy/core/ui.mjs'
-import { HEALTH_READ, TITLE_PENDING } from '../../../legacy/labels/common.mjs'
+import { HEALTH_READ, TITLE_PENDING, UNTITLED } from '../../../legacy/labels/common.mjs'
 import { parseHash } from '../../../legacy/core/router.mjs'
 import { store } from '../../../legacy/core/store.mjs'
 import { ALIASES, HARNESS_ORDER, harnessKey } from '../../../legacy/core/chips.mjs'
@@ -158,6 +159,13 @@ test('O2: a selection in a recent row\'s title survives a changed sessions answe
   expect(p.readAt()).not.toBe(at)
 })
 
+test('1.7 #11: a recent row with no title is muted, read failed or not; a row with one is not', async () => {
+  answer.sessions = () => ok({ sessions: [sess('said', 1), { ...sess('none', 2), title: null, title_source: null }, { ...sess('lost', 3), title: null, title_source: 'unread' }] })
+  const p = mount(); await settle()
+  const muted = (id: string) => p.link(replay(id))!.querySelector('.ovtx')!.classList.contains('none')
+  expect(['said', 'none', 'lost'].map(muted)).toEqual([false, true, true])
+})
+
 test('O3: the focused recent-row link keeps focus and its href when a newer session arrives at the top', async () => {
   answer.sessions = (n) => ok({ sessions: n ? [sess('b', 1), sess('a', 60)] : [sess('a', 60)] })
   const p = mount(); await settle()
@@ -269,14 +277,6 @@ test('O5: every card is drawn before any answer; a window change moves the tab a
   expect(new Set(calls.map((c) => c.name).filter((n) => SLOW.includes(n)))).toEqual(new Set(SLOW))
 })
 
-test('#11: a recent row whose title is not read yet says so in the weakened style, not as an untitled session', async () => {
-  answer.sessions = () => ok({ sessions: [{ ...sess('a', 60), title: null, title_source: 'pending' }] })
-  const p = mount(); await settle()
-  const t = p.link(replay('a'))!.querySelector('.ovtx')!
-  expect(t.textContent).toBe(TITLE_PENDING)
-  expect(t.classList.contains('pend')).toBe(true)
-})
-
 test('O6: with no session the page is capture + one control per agent + start, writes nothing, and turns into the normal page in place at the first session', async () => {
   answer.sessions = (n) => ok({ sessions: n ? [sess('a', 1)] : [] })
   answer.status = (n) => ok(statusDoc(n, { state: 'needed', missing: [] }))
@@ -320,6 +320,42 @@ test('O7b: opened in a hidden tab, the slow reads wait until the tab is visible,
   setVisible(true); await settle()
   for (let t = 0; t < 5e3; t += 500) await tick(500)
   for (const name of SLOW) expect(asked(name).length, name).toBeGreaterThan(0)
+})
+
+test('1.8 #18: the recent card says what is going on from 3 s of a read still out until the rows come', async () => {
+  let out: (a: Ans) => void = () => {}
+  answer.sessions = () => new Promise((res) => { out = res })
+  const p = mount(); await settle() // settle() has run 3 ms of the wait
+  const wait = () => p.region(W.CARD.recent)!.querySelector('[data-list-wait]')
+  await tick(LIST_WAIT_MS - 103)
+  expect(wait()).toBeNull()
+  await tick(100)
+  expect(wait()).not.toBeNull()
+  out(ok({ sessions: [sess('a', 60)] })); await settle()
+  expect(wait()).toBeNull()
+  expect(p.link(replay('a'))).not.toBeNull()
+})
+
+test('1.8 #18 · 1.7: while the list answers 503 still-reading the recent card stays in its wait, never a failure; then the rows come', async () => {
+  const outs: Array<(a: Ans) => void> = []
+  answer.sessions = () => new Promise((res) => { outs.push(res) })
+  const p = mount(); await settle()
+  await tick(LIST_WAIT_MS)
+  const card = () => p.region(W.CARD.recent)!
+  for (let i = 0; i < 2; i++) {
+    outs.shift()!({ ok: false, status: 503, data: null, error: 'still reading', code: 'still-reading' } as Ans); await settle()
+    expect(p.c.querySelector('.ovsay.warn')).toBeNull() // the card's failed state (Cards.tsx Failed)
+    expect(card().querySelector('[data-list-wait]')).not.toBeNull()
+  }
+  outs.shift()!(ok({ sessions: [sess('a', 60)] })); await settle()
+  expect(p.link(replay('a'))).not.toBeNull()
+})
+
+test('1.8 §标题规则: a recent row whose title_source the board does not know, or which has none, reads not read yet; null is no prompt captured', async () => {
+  answer.sessions = () => ok({ sessions: [{ ...sess('old', 1), title: null, title_source: 'pending' }, { ...sess('bare', 2), title: null, title_source: undefined }, { ...sess('none', 3), title: null, title_source: null }] })
+  const p = mount(); await settle()
+  const text = (id: string) => p.link(replay(id))!.querySelector('.ovtx')!.textContent
+  expect(['old', 'bare', 'none'].map(text)).toEqual([TITLE_PENDING, TITLE_PENDING, UNTITLED])
 })
 
 test('O8: a sessions answer that carries `stored` is never shown; the fresh one after it is, on the same rows', async () => {

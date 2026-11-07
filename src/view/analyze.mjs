@@ -15,12 +15,12 @@
 // D25: the CC block model (assembly-order walk, volatile rule, resource linking, system labels,
 // bash-read parsing) lives in ONE dissector — src/dissect/cc.mjs — shared with the ETL adapter.
 // linearContext (below) is now just the board's PROJECTION of that dissector's canonical spine.
-import { dissectBlocks, sysLabel } from '../dissect/cc.mjs'
+import { dissectBlocks, sysLabel, replyEnd, replyError } from '../dissect/cc.mjs'
 import { parseBashReads } from '../dissect/shell-reads.mjs'
 import { reqIncompleteOf, wsIncompleteOf, respIncompleteOf } from '../dissect/capture-labels.mjs'
 import { auxKindOf, hintsOf, pathContext } from '../dissect/harnesses.mjs'
 import { sharesBody } from '../dissect/request-body.mjs'
-import { failedOf } from '../dissect/endpoints.mjs'
+import { failedOf, cutOf } from '../dissect/endpoints.mjs'
 import { compareStep } from './step-order.mjs'
 import { compactionVerdict, compactionBaseline, hasCompactionPreamble } from '../identity/session-identity.mjs'
 // Envelope drift guard (R1): the D10 envelope stores the response under `resp`, demo v0 under
@@ -28,7 +28,6 @@ import { compactionVerdict, compactionBaseline, hasCompactionPreamble } from '..
 // on real captures — so go through the shared helper, never the raw key.
 import { respOf } from '../dissect/record-fields.mjs'
 import { HEAD, TASK_HEAD, taskOf, shorten } from './blockmeta.mjs'
-import { streamParts } from '../dissect/sse-spans.mjs'
 import { num52, numTable } from '../query/projection.mjs'
 import { mapUsage } from '../model/schema.mjs'
 export { sysLabel } // re-exported for back-compat (was defined here before the D25 extraction)
@@ -37,14 +36,15 @@ const FILE_OPS = new Set(['Read', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit'])
 const DIR_OPS = new Set(['Glob', 'Grep', 'LS'])
 const SPAWN_OPS = new Set(['Agent', 'Task'])
 
-function hash(s) {
-  let h = 0
-  for (let i = 0; i < s.length; i++) h = (Math.imul(31, h) + s.charCodeAt(i)) | 0
-  return (h >>> 0).toString(16).padStart(8, '0')
-}
 const sysText = (r) => (r.request?.system || []).map((b) => b.text || '').join('\n')
 const isSub = (sys) => /cc_is_subagent=true/.test(sys)
 const isMonitor = (sys) => /you are a security monitor/i.test(sys)
+// What a monitor's reply says, read the way the agent reads it (Claude Code's own parser): no <thinking>, a cut-off one included, then
+// the first <block>yes|no. true = it blocks, false = it allows, null = it says neither.
+const monitorFlag = (text) => {
+  const m = /<block>(yes|no)\b/i.exec(text.replace(/<thinking>[\s\S]*?<\/thinking>/g, '').replace(/<thinking>[\s\S]*$/, ''))
+  return m ? m[1].toLowerCase() === 'yes' : null
+}
 
 // Unify the two response shapes: streamed SSE (already reconstructed into
 // response.{usage,text,tool_calls}) and non-streaming JSON (raw body in response.body). The reply's tool calls leave
@@ -69,28 +69,6 @@ export function normResp(r) {
     thinking: rs.thinking, tools: rs.tool_calls || [], stop_reason: rs.stop_reason,
   }
 }
-// The reply's blocks as addressable parts (sse-spans.mjs): the wire key is content_block_*'s `index`; the block is the block
-// its start event carried under the collector's own reconstruction (content_blocks: one per started index, in index order),
-// which keeps only some types' fields, plus what only this key's deltas hold: citations, and streamed input of any block type
-// (the reconstruction spoils it for a type it does not know). A JSON reply's content is as given.
-const parsedInput = (json) => { try { return json ? JSON.parse(json) : {} } catch { return { _unparsed: json } } }
-const ANTHROPIC_REPLY = {
-  keysOf: (e) => (/^content_block_/.test(e.type || '') && Number.isInteger(e.index) ? [String(e.index)] : []),
-  build: (k, evts, all, part) => {
-    const started = [...new Set(all.filter((e) => e && e.type === 'content_block_start' && Number.isInteger(e.index)).map((e) => e.index))].sort((a, b) => a - b)
-    const b = Array.isArray(part.content_blocks) ? part.content_blocks[started.indexOf(Number(k))] : undefined
-    if (!b) return 'the stream has no start event for this block, so the collector did not rebuild it'
-    const out = { ...evts.find((e) => e.type === 'content_block_start').content_block, ...b }
-    const deltas = evts.flatMap((e) => (e.type === 'content_block_delta' && e.delta ? [e.delta] : []))
-    const cited = deltas.filter((d) => d.type === 'citations_delta').map((d) => d.citation)
-    if (cited.length) out.citations = [...(out.citations || []), ...cited]
-    const json = deltas.filter((d) => d.type === 'input_json_delta')
-    if (json.length) out.input = parsedInput(json.map((d) => d.partial_json || '').join(''))
-    return [out]
-  },
-  jsonNodes: (body) => (Array.isArray(body.content) ? body.content : []).map((block, i) => ({ block, path: ['content', i] })),
-}
-export const replyPartsAnthropic = (rec) => streamParts(rec, ANTHROPIC_REPLY)
 
 // Pull a short readable label from a tool call's input.
 export function toolArg(name, input = {}) {
@@ -374,7 +352,7 @@ const defined = (o) => { for (const k of Object.keys(o)) if (o[k] === undefined)
 // status and labels, its usage, and its reply's events — never a block's text.
 export function callFacts(r) {
   const req = r.request, rs = respOf(r) || {}, nr = normResp(r), h = hintsOf(r)
-  const status = rs.status ?? null
+  const status = rs.status ?? null, failed = failedCall(r)
   const reqIncomplete = reqIncompleteOf(r)
   const sys = sysText(r), sub = h.lane === 'subagent' || isSub(sys), monitor = isMonitor(sys)
   const u = nr.usage, text = nr.text || ''
@@ -388,11 +366,11 @@ export function callFacts(r) {
     aux: h.lane === 'aux' || req.message_count <= 2 ? auxKindOf(r) : undefined,
     continued: !!(r._ctx && r._ctx.continued), lineage: r._ctx ? r._ctx.lineage : undefined,
     ctxPartial: !!(r._ctx && r._ctx.contextState === 'partial'),
-    status, failed: failedCall(r),
+    status, failed,
     reqIncomplete, wsIncomplete: wsIncompleteOf(r), respIncomplete: respIncompleteOf(r),
     errMsg: r._unparsed ? unparsedErrMsg(reqIncomplete)
-      : (rs.error?.message || (r.error ? String(r.error.message || r.error) : null)
-        || (!failedCall(r) ? null : status == null ? 'no HTTP status' : status >= 400 ? `HTTP ${status}` : null)),
+      : !failed ? null : (replyError(rs.kind === 'error' ? rs.partial : rs) || rs.error?.message || (r.error ? String(r.error.message || r.error) : null)
+        || (status == null ? 'no HTTP status' : status >= 400 ? `HTTP ${status}` : null)),
     ctx: mapUsage('anthropic', u || {}).total_input,
     usage: u,
     preamble: hasCompactionPreamble(req.messages),
@@ -404,6 +382,7 @@ export function callFacts(r) {
       tools: (nr.tools || []).map((c) => defined({ id: c.id, name: c.name, input: c.input })),
       summarize: /^\s*<analysis>/.test(text),
       verdict: monitor ? text.replace(/<\/?block>/g, '').trim() : undefined,
+      flagged: monitor ? monitorFlag(text) : undefined,
       seen: seenRuns(text),
     }),
   })
@@ -476,7 +455,7 @@ export const unparsedErrMsg = (reqIncomplete) => (reqIncomplete
   : 'unrenderable: req_body could not be parsed (truncated / corrupt capture)')
 // The call-row failed rule (3.5 §访问模式 ②, endpoints.mjs failedOf): an error key, an unparsed sentinel (`_unparsed` = already
 // stubbed by admission), or an HTTP status that is absent or ≥ 400 on a call that is not a WebSocket logical call.
-const failedCall = (r) => failedOf({ status: respOf(r)?.status, ws: r.transport === 'ws', error: !!r.error || !!r._unparsed || isUnparsed(r) })
+const failedCall = (r) => failedOf({ status: respOf(r)?.status, ws: r.transport === 'ws', error: !!r.error || !!r._unparsed || isUnparsed(r), ended: replyEnd(respOf(r)), cut: cutOf(r) })
 
 // analyze()'s step order (ts_request, then id): every assembler folds a session in it, so a session's global step index is one sort
 // whichever wires it mixes.
@@ -681,7 +660,7 @@ export function createAnalyzer({ keep = true, from = null } = {}) {
       if (step.error) { E.push({ type: 'error', step: step.at, streamId: s.id, msg: step.errMsg }); return }
       if (s.kind === 'monitor') {
         const v = reply.verdict
-        step.flagged = !/^no\b/i.test(v)
+        step.flagged = reply.flagged
         step.verdict = v
         E.push({ type: 'monitor', step: step.at, streamId: s.id, verdict: v, flagged: step.flagged })
       } else {
@@ -922,61 +901,26 @@ export function replayLedger(steps, after, maps = {}, touch = null) {
 // an SDK detail and is irrelevant to the model. What the model actually reads top-to-bottom — and
 // what the Anthropic prompt cache uses as its prefix — is tools, then system, then messages.
 // So THIS is "the original order of the context", not the JSON key order.
-// The block's canonical text for hashing/diffing. `cap` BOUNDS IT WHILE IT IS BUILT, because the
-// block key below is hash(text.slice(0, cap)): building a 200 KB tool_result (or JSON.stringify-ing a
-// whole tool input) only to throw all but its first 4 096 chars away is the "O(1) per block" claim
-// being false. Capping produces the SAME chars — every branch below is a prefix-stable concatenation,
-// so slicing a part before joining and slicing the join after it are the same string.
-function blkHashText(b, cap = Infinity) {
-  if (typeof b === 'string') return b.slice(0, cap)
-  if (!b || typeof b !== 'object') return String(b).slice(0, cap)
-  if (b.type === 'text') return (b.text || '').slice(0, cap)
-  if (b.type === 'thinking') return (b.thinking || '').slice(0, cap)
+// The block's canonical text for hashing/diffing: whole (D19, the break key is the sha-256 of all of it).
+function blkHashText(b) {
+  if (typeof b === 'string') return b
+  if (!b || typeof b !== 'object') return String(b)
+  if (b.type === 'text') return b.text || ''
+  if (b.type === 'thinking') return b.thinking || ''
   if (b.type === 'redacted_thinking') return 'redacted_thinking'
-  if (b.type === 'tool_use' || b.type === 'server_tool_use') {
-    const head = (b.name || '') + '::'
-    return head.length >= cap ? head.slice(0, cap) : (head + JSON.stringify(b.input || {})).slice(0, cap)
-  }
+  if (b.type === 'tool_use' || b.type === 'server_tool_use') return (b.name || '') + '::' + JSON.stringify(b.input || {})
   if (b.type === 'tool_result') {
-    const head = (b.tool_use_id || '') + '::'
-    if (head.length >= cap) return head.slice(0, cap)
     const c = b.content
-    let t
-    if (typeof c === 'string') t = c.slice(0, cap)
-    else if (Array.isArray(c)) { t = ''; for (let i = 0; i < c.length && t.length < cap; i++) t += (i ? '\n' : '') + (c[i].text || `[${c[i].type}]`) }
-    else t = JSON.stringify(c)
-    return (head + t + (b.is_error ? '::ERR' : '')).slice(0, cap)
+    const t = typeof c === 'string' ? c : Array.isArray(c) ? c.map((x) => x.text || `[${x.type}]`).join('\n') : JSON.stringify(c)
+    return (b.tool_use_id || '') + '::' + t + (b.is_error ? '::ERR' : '')
   }
   if (b.type === 'image') return 'image:' + (b.source?.media_type || b.source?.type || '')
   if (b.type === 'document') return 'document:' + (b.source?.media_type || b.title || '')
-  return JSON.stringify(b).slice(0, cap)
-}
-// hash a bounded prefix — plenty to distinguish blocks, and O(1) per block regardless of size
-const BLK_KEY_CAP = 4096
-// `memo` (get / set, from the caller: one per lane of a session assembly) is NOT a cache of results across queries: an
-// append-only conversation re-sends its whole context every turn, so one session asks for the key of the
-// SAME block text once per call — measured 17 594 block keys over 494 distinct contents. Hashing the 17 100
-// repeats was 89 ms of a 115-call session's 305 ms. Same text in, same key out; the map dies with the call.
-// A block OBJECT's hash is also kept by the object itself (a WeakMap: a stitched context hands the same parsed block to every call of
-// its chain, and the text would be built again for each); the per-lane text memo stays for the contents that arrive as new objects.
-// A memo's `null` is a miss, as `undefined` is: the fold's lane memo answers `null` for a lane with no baseline yet
-// (`keys.get(t) ?? (was && was.get(t))`), and a key must be the block's hash, whichever fold asked first.
-const keyOfBlock = new WeakMap()
-const blkKey = (prefix, b, memo) => {
-  const obj = b && typeof b === 'object'
-  let h = obj ? keyOfBlock.get(b) : undefined
-  if (h === undefined) {
-    const t = blkHashText(b, BLK_KEY_CAP)
-    if (!memo) h = hash(t)
-    else if ((h = memo.get(t)) == null) memo.set(t, (h = hash(t)))
-    if (obj) keyOfBlock.set(b, h)
-  }
-  return prefix + h
+  return JSON.stringify(b)
 }
 
 // Flatten a captured request into ordered block descriptors — the board's PROJECTION of the shared
-// CC dissector's canonical spine (src/dissect/cc.mjs · D25). Each descriptor carries a stable content
-// `key` (for prefix-diffing vs the previous call), its `cache_control` if Claude Code set one, and
+// CC dissector's canonical spine (src/dissect/cc.mjs · D25). Each descriptor carries its `cache_control` if Claude Code set one, and
 // enough metadata for the view to render + link it to the resource ledger. sysLabel / resourceRef /
 // the volatile rule now come from the dissector, so board & ETL never drift.
 // A tool_result's own truncation notice, QUOTED from the harness — never inferred. Claude Code /
@@ -993,7 +937,7 @@ function truncNote(text) {
 // A tools / system entry's parsed source item, the key of the per-block memos (blockBytes, flatBlockText). NON-enumerable: flat entries
 // ship inside page bodies, and the item must never serialize with them. A bare string has no identity to key by: it is left out.
 const withSrc = (d, src) => (src && typeof src === 'object' ? Object.defineProperty(d, 'src', { value: src }) : d)
-export function linearContext(request, keyMemo = null, ctx = {}) {
+export function linearContext(request, ctx = {}) {
   const flat = []
   // ── resource ↔ RESULT linking ────────────────────────────────────────
   // The 📂 resource explorer promises "the bytes that entered the context". The dissector keys a
@@ -1031,22 +975,19 @@ export function linearContext(request, keyMemo = null, ctx = {}) {
         props, descChars, cc: t.cache_control || null, mcp,
         verbatim, desc: hasDesc ? t.description : undefined, schema: hasSchema ? t.input_schema : undefined,
         resKey: mcp ? 'mcp::' + (String(t.name).split('__')[1] || '') : '',
-        key: 'T:' + (t.name || e.path.i) + ':' + descChars + ':' + props.length,
       }, t))
     } else if (e.section === 'system') {
       const b = e.parsed, text = b?.text || ''
-      flat.push(withSrc({ sec: 'system', kind: 'system', role: 'system', si: e.path.i, label: sysLabel(text), text, chars: text.length, volatile: e.volatile, cc: b?.cache_control || null, key: blkKey('S:', { type: 'text', text }, keyMemo) }, b))
+      flat.push(withSrc({ sec: 'system', kind: 'system', role: 'system', si: e.path.i, label: sysLabel(text), text, chars: text.length, volatile: e.volatile, cc: b?.cache_control || null }, b))
     } else {
       const b = e.parsed, type = typeof b === 'string' ? 'text' : (b?.type || 'text')
       const d = {
         sec: 'messages', kind: type, role: e.role, mi: e.path.mi, bi: e.path.bi, block: b,
         toolName: type === 'tool_use' || type === 'server_tool_use' ? (b.name || '') : '',
         cc: (b && b.cache_control) || null,
-        resKey: e.resourceRef, key: blkKey('M:' + e.role + ':' + type + ':', b, keyMemo),
+        resKey: e.resourceRef,
       }
       if (e.resourceRefs) d.resKeys = e.resourceRefs
-      // `key` above is UNCHANGED — the cache-prefix chain diffs on it, so the linking below only
-      // ever ADDS descriptive fields.
       if (type === 'tool_use' && d.resKey && d.resKey.startsWith('file::')) {
         d.resRole = 'request'
         // No sibling result in THIS request: the call that ISSUED the tool_use gets its result in
@@ -1115,9 +1056,8 @@ function keyReorder(prev, cur) {
   return JSON.stringify(canonJSON(pj)) === JSON.stringify(canonJSON(cj))
 }
 // canonical divergence_cause → display label + attribution + fix hint (RFC 3.3 分叉成因分类 table).
-// attribution: harmless | provider-excluded | harness | yours | review. Only the causes cleanly
-// detectable from two flat block sequences are emitted here; provider/usage/model-dependent causes
-// (breakpoint-out-of-window, mid-turn-retry, model-or-route-change) are left to the product's adapter.
+// attribution: harmless | provider-excluded | harness | yours | review. Every cause is decided here (breakOf), from the two
+// block sequences and the hints the reduction passes (compaction verdict, model or vendor change, cache read); none is left to an adapter.
 const CAUSE_META = {
   'first-call': { label: 'first captured call', attr: 'harmless', fix: '' },
   'append': { label: 'normal append', attr: 'harmless', fix: '' },
@@ -1126,6 +1066,7 @@ const CAUSE_META = {
   'tool-array-reorder': { label: 'tools array reordered', attr: 'yours', fix: 'emit the tools array in a stable order (kill the nondeterminism)' },
   'json-key-reorder': { label: 'JSON keys reordered', attr: 'yours', fix: 'serialize JSON object keys in a stable order' },
   'content-changed': { label: 'a shared-prefix block changed in place', attr: 'review', fix: 'a historical block changed — check for in-place edits / nondeterministic serialization' },
+  'model-or-route-change': { label: 'the model or the provider changed', attr: 'harness', fix: 'a new model or provider starts a new cache; keep one model and route within a session to reuse it' },
 }
 
 // Where does this call's context first diverge from the previous call's? Everything before the
@@ -1141,18 +1082,14 @@ const CAUSE_META = {
 // `opts.compaction` = analyze()'s authoritative compaction verdict (message-count drop): a real
 // compaction can PRESERVE the first user turn and rewrite the middle, so the structural break lands
 // mid-history — the hint makes the cause say "compaction" while byteOffset still localizes the rewrite.
-export function cacheBreak(prevFlat, curFlat, opts = {}) {
-  const seq = (f) => f && { n: f.length, key: (i) => f[i].key, vol: (i) => !!f[i].volatile, sec: (i) => f[i].sec, name: (i) => f[i].name }
-  return breakOf(seq(prevFlat), seq(curFlat), { ...opts, detail: (i) => blockDiff(prevFlat[i], curFlat[i]) })
-}
-// What cacheBreak reads of two blocks that diverge at the same place: whether only their JSON key order differs, and the first
+// What breakOf reads of two blocks that diverge at the same place: whether only their JSON key order differs, and the first
 // differing character of their frames with the text from it on. A function of the two blocks' bytes alone (src/view/reduce.mjs
 // keeps it per pair of block ids).
 export function blockDiff(prev, cur) {
   const curText = flatBlockText(cur), off = firstDiffOffset(flatBlockText(prev), curText)
   return { reorder: keyReorder(prev, cur), byteOffset: off >= 0 ? off : null, byteContext: off >= 0 ? own(curText.slice(off, off + 48)) : '' }
 }
-// cacheBreak over two block sequences given by accessors: { n, key(i), vol(i), sec(i), name(i) }; `opts.detail(i)` → blockDiff of
+// The break over two block sequences given by accessors: { n, key(i), vol(i), sec(i), name(i) }; `opts.detail(i)` → blockDiff of
 // the blocks at the break (asked only when the break is inside both sequences).
 export function breakOf(prev, cur, opts = {}) {
   if (!prev || !prev.n)
@@ -1190,22 +1127,10 @@ export function breakOf(prev, cur, opts = {}) {
     // user turn breaks mid-history; without the hint that reads as 'content-changed'.
     if (opts.compaction) out.cause = 'compaction'
   }
+  // a model or vendor switch (opts.modelChanged) refines only a bare content change or an append that read nothing (usage first):
+  // compaction and the reorders stand
+  if (opts.modelChanged && (out.cause === 'content-changed' || (out.cause === 'append' && opts.read === 0))) out.cause = 'model-or-route-change'
   const meta = CAUSE_META[out.cause] || CAUSE_META['content-changed']
   out.causeLabel = meta.label; out.attribution = meta.attr; out.fixHint = meta.fix
   return out
-}
-
-// ── D17④ ground-truth verification (RFC 3.3 地面真相验证) ──
-// With a reusable structural prefix (idx>0), cross-check what the provider's usage actually credited:
-//   read>0            → prefix genuinely reused              → null (normal)
-//   read=0 & write>0  → cache entry expired (TTL), re-cached → 'ttl-rebuild' (not a contradiction)
-//   read=0 & write=0  → prefix was reusable yet NEITHER read NOR written → suspect PROVIDER
-//                       mis-cache/mis-bill (research pain #9: SHA256-identical prefix, cached_tokens=0)
-// The prefix match here is STRUCTURAL (content_hash sequence — demo proxy). The product proves it with
-// an independent `prefix_sha256` over verbatim source bytes (RFC 3.3); the claim is strictly "MY
-// outbound prefix is identical ⇒ the suspicion points at the provider" — never "the provider is wrong".
-export function groundTruth(brk, read, create) {
-  if (!brk || brk.firstCall || brk.idx <= 0) return null // no reusable prefix to reason about
-  if (read > 0) return null
-  return create > 0 ? 'ttl-rebuild' : 'provider-contradiction'
 }

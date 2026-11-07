@@ -76,7 +76,7 @@
     "errors": [],
     "base": null,
     "mark": "20261021T101500Z:13",
-    "pending": {"done": 2, "total": 8, "work": 5},
+    "pending": {"done": 2, "total": 8, "work": 5, "calls": 6},
     "truncated": null,
     "more": false,
     "meta": {"session_id": "s1", "harness": "claude-code", "title": "Fix the failing test"},
@@ -136,7 +136,7 @@
     "tier": 0,
     "mark": null,
     "markTs": null,
-    "pending": {"done": 0, "total": 6},
+    "pending": {"done": 0, "total": 6, "calls": 6},
     "truncated": null,
     "failed": 0,
     "meta": {"session_id": "s1", "harness": "claude-code", "title": null},
@@ -199,6 +199,7 @@
     "lane": "20261021T101500Z:12",
     "base": "20261021T101500Z:14",
     "mark": "20261021T101500Z:17",
+    "pending": {"done": 6, "total": 8, "work": 6, "calls": 2},
     "steps": [
       {"rid": "20261021T101500Z:16", "parent": "20261021T101500Z:14", "ops": [[0, 0, 6]], "reply": ["ouyK2sf9JLS3qO3YnQaZBQ"], "attrs": {}, "detail": {"norm": {"stop_reason": "tool_use", "usage": {"input": 1360, "output": 80, "cache_read": 1000, "cache_write": 100}}, "respRefs": ["s1/main#20261021T101500Z:16::resp.raw::300-700"], "nonBlockKeys": {"model": "s1/x#20261021T101500Z:16::10-38"}, "extraMessages": [], "wire": {"reqEncoding": "identity"}}},
       {"rid": "20261021T101500Z:17", "parent": "20261021T101500Z:16", "ops": [[0, 0, 5], [1, "kM3pZ7cWq1vTn8xRb2sLdA", "RTnktIiQecKgCv6uC_wUOQ", "ovGmijz3urFCRbo05qNItg"]], "reply": ["XrJCrraFUoYpE9YCz_Nt6w"], "attrs": {}, "detail": {"norm": {"stop_reason": "end_turn", "usage": {"input": 1370, "output": 80, "cache_read": 1000, "cache_write": 100}}, "respRefs": ["s1/main#20261021T101500Z:17::resp.raw::300-620"], "nonBlockKeys": {"model": "s1/x#20261021T101500Z:17::10-38"}, "extraMessages": [], "wire": {"reqEncoding": "identity"}}}

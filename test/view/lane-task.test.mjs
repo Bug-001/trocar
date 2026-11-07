@@ -9,6 +9,7 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession, firstAskOf, firstPromptOf, rng } from '../query/big-session.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
 import { SEGMENT, homeWith, query, sessionDoc } from '../helpers/session-doc.mjs'
+import { askOf } from '../../src/view/blockmeta.mjs'
 
 // Every sub-agent's first prompt opens with these lines, more of them than the lanes' own: only the lanes' own lines say a task.
 const PREAMBLE = Array.from({ length: 40 }, (_, i) => `[workflow] shared instruction ${i}: work only in the given worktree and report back.`).join('\n')

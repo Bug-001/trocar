@@ -11,7 +11,7 @@ import { makeSseReconstructor } from '../../src/capture/sse-reconstruct.mjs';
 import { fieldTextOf } from '../../src/dissect/record-fields.mjs';
 import { RESPONSES, CHAT, itemToBlocks, normRespChat } from '../../src/dissect/openai.mjs';
 import { RESPONSES_WS } from '../../src/dissect/openai-ws.mjs';
-import { replyPartsAnthropic } from '../../src/view/analyze.mjs';
+import { ANTHROPIC } from '../../src/dissect/anthropic-board.mjs';
 
 const TEXTS = ['plain ascii', 'multibyte 你好 — 😀 é'];
 const EOLS = ['\n', '\r\n'];
@@ -98,7 +98,7 @@ test('every reply span, resolved, reassembles to the normalised reply block (Ant
       // Anthropic: text, thinking, tool_use, server_tool_use, a *_tool_result
       const ab = [anth.thinking(0, t), anth.text(1, t), anth.tool('tool_use')(2, t), anth.tool('server_tool_use')(3, t), anth.result(4)];
       const ar = rec(stored(sseOf(anthStream(ab), eol)));
-      assertParts(ar, replyPartsAnthropic(ar), anthRecon(fieldTextOf(ar, 'resp.raw').text), anthRecon);
+      assertParts(ar, ANTHROPIC.replyParts(ar), anthRecon(fieldTextOf(ar, 'resp.raw').text), anthRecon);
       assert.ok(ar.resp.content_blocks.length === ab.length);
       // Chat SSE
       const cr = rec(stored(chatSse(chatGroups(t).flat(), eol)));
@@ -111,7 +111,7 @@ test('a reply block whose events interleave with another block has no event-rang
   const zip = (a, b) => { const out = []; for (let i = 0; i < Math.max(a.length, b.length); i++) out.push(...(a[i] ? [a[i]] : []), ...(b[i] ? [b[i]] : [])); return out; };
   const a = stored(sseOf(anthStream([zip(anth.text(0, 'left side'), anth.tool('tool_use')(1, 'right'))]), '\n'));
   const c = stored(chatSse(zip(chatGroups('ab')[2], chatGroups('ab')[3]), '\n'));
-  for (const parts of [replyPartsAnthropic(rec(a)), CHAT.replyParts(rec(c))]) {
+  for (const parts of [ANTHROPIC.replyParts(rec(a)), CHAT.replyParts(rec(c))]) {
     assert.ok(parts.length >= 2);
     for (const p of parts) {
       assert.equal(p.span, null);
@@ -146,7 +146,7 @@ test('a streamed Anthropic block keeps its start block, its citations and any st
   ];
   for (const eol of EOLS) {
     const r = rec(stored(sseOf(anthStream(groups), eol)));
-    const parts = replyPartsAnthropic(r);
+    const parts = ANTHROPIC.replyParts(r);
     assert.deepEqual(parts.map((p) => p.block), want);
     parts.forEach((p, i) => {
       assert.ok(p.span, `${p.kind} has a span`);
@@ -155,7 +155,7 @@ test('a streamed Anthropic block keeps its start block, its citations and any st
     });
     // the same reply kept as raw_sse, without resp.raw: the events are still this key's own
     const kept = makeSseReconstructor(true); kept.push(Buffer.from(sseOf(anthStream(groups), eol)));
-    assert.deepEqual(replyPartsAnthropic(rec({ kind: 'sse', status: 200, ...kept.finish() })).map((p) => p.block), want);
+    assert.deepEqual(ANTHROPIC.replyParts(rec({ kind: 'sse', status: 200, ...kept.finish() })).map((p) => p.block), want);
   }
 });
 
@@ -243,7 +243,7 @@ test('a Responses reply block\'s span is exactly its own JSON node, one per cont
 test('spec 3.1 #9: an Anthropic block counts its own content_block_* events, the pings between them not', () => {
   const ping = { type: 'ping' }
   const groups = [anth.text(0, 'first'), anth.tool('tool_use')(1, 'second')].map((g) => g.flatMap((e) => [e, ping]))
-  const parts = replyPartsAnthropic(rec(stored(sseOf(anthStream(groups), '\n'))))
+  const parts = ANTHROPIC.replyParts(rec(stored(sseOf(anthStream(groups), '\n'))))
   assert.deepEqual(parts.map((p) => p.events), groups.map((g) => g.filter((e) => e !== ping).length))
 })
 test('spec 3.1 #9: a Responses block held whole in one event is a JSON node, with no events', () => {

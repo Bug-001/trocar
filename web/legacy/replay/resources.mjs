@@ -27,11 +27,12 @@ const stepWordOf = (s) => {
   return (localIdx) => (isMain ? `step ${no(localIdx) + 1}` : `call ${no(localIdx) + 1}`)
 }
 // the anchor lane's ledger as the desk holds it; null while that lane is not held. `seen` is 2.4's 只见到名字 (seenFiles:
-// the opened files taken out); `done` = its ledger_next chain is read to the end, so the ledger's counts are exact (2.4:67)
+// the opened files taken out); `done` = its ledger_next chain is read to the end, so the ledger's counts are exact (2.4:67);
+// `pending` = its last lane answer stood behind the fold, so what it lacks says nothing yet (2.4 还在读)
 function ledgerOf(s) {
   const h = s.desk && s.anchor && s.desk.held.get(s.anchor.id)
   return h ? { res: [...h.resources.values()], seen: seenFiles(s.desk, s.anchor.id), events: laneEvents(s.desk, s.anchor.id), done: ledgerDone(s.desk, s.anchor.id),
-    note: h.note, noLedger: h.noLedger } : null
+    note: h.note, noLedger: h.noLedger, pending: h.pending } : null
 }
 
 // a read file's visible name is cut in the middle past this many characters; the hover keeps the full path (2.4)
@@ -41,6 +42,7 @@ const NAME_MAX = 48
 // (navGroup); a row's html depends on the playhead only through its state, so a step redraws just the rows it moved across
 const BUSY = { key: 'busy', html: '<div class="navsub busy" aria-busy="true"></div>' } // the lane is on its way: a sized empty row, no words
 const EMPTY = () => ({ key: 'empty', html: `<div class="navsub empty">${esc(W.NO_RESOURCES)}</div>` })
+const SO_FAR = (s) => ({ key: 'so-far', html: `<div class="navsub empty">${esc(s.desk.pending?.read != null ? W.FILES_UPDATING : W.FILES_READING)}</div>` })
 export function resourceUnits(s) {
   const a = s.anchor
   if (!a) return []
@@ -49,7 +51,8 @@ export function resourceUnits(s) {
   const rp = (p) => esc(midClip(relPath(cwd, p), NAME_MAX))
   const ledger = ledgerOf(s)
   if (!ledger) return [BUSY]
-  const { res, seen, events, done, note, noLedger } = ledger
+  const { res, seen, events, done, note, noLedger, pending } = ledger
+  const none = () => (pending ? SO_FAR(s) : EMPTY())
   // a count the ledger gives is not known until its chain is read: an empty busy box, never a digit (2.4:67, invariant 4)
   const ct = (n) => (done ? n : null)
   const N = a.calls.length
@@ -77,10 +80,11 @@ export function resourceUnits(s) {
   const out = []
   const rowsOf = (rs, row) => keyed(rs.map((r) => ({ key: resKeyOf(r), html: row(r) })))
   // the ledger statement sits at the TOP of the list (2.4 element table) and is about the LEDGER, not a fallback for
-  // "nothing rendered": an existing-but-empty ledger (or no key) with nothing tracked says so (#7)
+  // "nothing rendered": an existing-but-empty ledger (or no key) with nothing tracked says so (#7); a lane answer still behind the
+  // fold says what it holds so far (2.4 还在读)
   // the ledger cannot be known (2.4 没有资源信息): that sentence alone, a code other than 'no-ledger' on hover; only part of it kept: a line on top
   if (noLedger) out.push({ key: 'empty', html: `<div class="navsub empty"${note && note !== 'no-ledger' ? ` title="${esc(note)}"` : ''}>${esc(W.NO_LEDGER)}</div>` })
-  else if (done && !res.length && !seen.length) out.push(EMPTY())
+  else if ((done || pending) && !res.length && !seen.length) out.push(none())
   if (!noLedger && note === 'partial-ledger') out.push({ key: 'partial', html: `<div class="navsub empty">${esc(W.PARTIAL_LEDGER)}</div>` })
   const top = out.length // the lines above are about the ledger, not groups: the quiet groups still stand on their own after them
 
@@ -149,7 +153,7 @@ export function resourceUnits(s) {
     else out.push(...(done ? navGroup(s, 'life-others', W.OTHERS_ROW(nOthers), '', inner) : navGroup(s, 'life-others', W.OTHERS_ROW('').trim(), null, inner)))
   }
   // entries exist but none renderable: never a blank page; a ledger still on its way is a sized empty row, not "none"
-  if (!out.length) out.push(done ? EMPTY() : BUSY)
+  if (!out.length) out.push(done || pending ? none() : BUSY)
   return out
 }
 export const resourcesHtml = (s) => serialize(resourceUnits(s))

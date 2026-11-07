@@ -68,6 +68,14 @@ test('1.2 §编号: during a first read .sb-no counts the calls read instead of 
   expect(no.getAttribute('title')).toBe(W.stepNo(m.n, m.m))
 })
 
+// a version's re-read (pending.read; `seen` ends the first read, replay/model.mjs) is not a first read either: N / M stays
+test('1.2 §编号: a re-read after an update keeps N / M', () => {
+  const { s, view, bar, model } = step({ at: 1 })
+  s.desk.firstPending = false; s.desk.pending = { done: 2, total: 9, seen: true, read: 2, calls: 0 }; act(() => view.step())
+  const m = model()
+  expect(bar().querySelector('.sb-no')!.getAttribute('title')).toBe(W.stepNo(m.n, m.m))
+})
+
 // a catch-up (a head with pending after a head without it) is not a first read: N / M stays
 test('1.2 §编号: a catch-up after the first read keeps N / M', () => {
   const { s, view, bar, model } = step({ at: 1 })

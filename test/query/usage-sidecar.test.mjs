@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url'
 import { fork } from 'node:child_process'
 import { rawHome, writeSegment, envLine } from './raw-home.mjs'
 import { segmentIndex } from '../../src/query/index-build.mjs'
-import { usageFile, readUsage, fillUsage } from '../../src/query/usage.mjs'
+import { usageFile, readUsage, fillUsage, USAGE_V } from '../../src/query/usage.mjs'
 import { runQuery, OVERVIEW_USAGE_BYTES } from '../../src/query/named/index.mjs'
 
 const SEG = '20261018T100000Z'
@@ -41,7 +41,7 @@ const docOf = (home, seg = SEG) => fs.readFileSync(usageFile(home, seg), 'utf8')
 const callsOf = (home) => docOf(home).filter((o) => 'line' in o)
 const appendRaw = (home, lines) => fs.appendFileSync(path.join(home, 'raw', `${SEG}.ndjson`), lines.join('\n') + '\n')
 
-test('4.2:53-55 format: one call line per model call, the 3.2 mapping, ask on the main lane, a v4 mark to the last line', async () => {
+test('4.2:53-55 format: one call line per model call, the 3.2 mapping, ask on the main lane, a USAGE_V mark to the last line', async () => {
   const home = await homeWith(BASE)
   await fillUsage({ home, segments: [SEG] })
   assert.equal(fs.statSync(usageFile(home, SEG)).mode & 0o777, 0o600)
@@ -49,9 +49,7 @@ test('4.2:53-55 format: one call line per model call, the 3.2 mapping, ask on th
   const calls = doc.filter((o) => 'line' in o)
   assert.deepEqual(calls.map((c) => c.line).sort(), [1, 2, 3], 'the LLM lines that are not log-only')
   const KEYS = ['line', 'lane', 'model', 'failed', 'cache_known', 'usage']
-  for (const c of calls) assert.deepEqual(Object.keys(c), c.lane === 'main' ? [...KEYS, 'ask'] : KEYS, 'ask on main-lane calls only')
-  const main = (await runQuery('session', { id: 'a' }, { home })).lanes.find((l) => l.kind === 'main')
-  for (const c of calls.filter((x) => x.lane === 'main')) assert.equal(c.ask, main.task, 'ask = the main lane\'s task')
+  for (const c of calls) assert.deepEqual(Object.keys(c), KEYS)
   const by = new Map(calls.map((c) => [c.line, c]))
   assert.equal(by.get(3).failed, true)
   assert.equal(by.get(3).usage, null)
@@ -60,7 +58,7 @@ test('4.2:53-55 format: one call line per model call, the 3.2 mapping, ask on th
   assert.equal(by.get(1).model, JSON.parse(SEED[0].req_body).model)
   assert.equal(by.get(2).usage[3], null, 'a vendor that reports no write counter: null, never 0')
   const last = doc[doc.length - 1]
-  assert.equal(last.v, 4)
+  assert.equal(last.v, USAGE_V)
   assert.equal(last.m.lines, BASE.length)
 })
 
@@ -68,7 +66,7 @@ test('4.2:53 a sidecar of another version is not read, and the next fill rebuild
   const home = await homeWith(BASE)
   await fillUsage({ home, segments: [SEG] })
   const v2 = fs.readFileSync(usageFile(home, SEG), 'utf8')
-  const v1 = v2.split('\n').filter(Boolean).map((l) => { const { ask, ...o } = JSON.parse(l); if ('v' in o) o.v = 1; return JSON.stringify(o) }).join('\n') + '\n'
+  const v1 = v2.split('\n').filter(Boolean).map((l) => { const o = JSON.parse(l); if ('v' in o) o.v = 1; return JSON.stringify(o) }).join('\n') + '\n'
   fs.writeFileSync(usageFile(home, SEG), v1)
   assert.equal(readUsage({ home, segment: SEG }), null)
   await fillUsage({ home, segments: [SEG] })
@@ -158,15 +156,17 @@ test('3.5:93 #10 through the real worker: after it fills, coverage is whole and 
     child.stdout.on('data', (d) => {
       buf = Buffer.concat([buf, d])
       for (let nl; (nl = buf.indexOf(10)) >= 0;) {
-        const len = Number(buf.subarray(0, nl).toString().split(' ')[1])
+        const [status, size] = buf.subarray(0, nl).toString().split(' '), len = Number(size)
         if (buf.length < nl + 1 + len) return
         const body = buf.subarray(nl + 1, nl + 1 + len).toString()
         buf = buf.subarray(nl + 1 + len)
-        waiting.shift()(JSON.parse(body))
+        if (status === '102') setTimeout(line, 5) // the rows are still being read: ask again, as the daemon does
+        else waiting.shift()(JSON.parse(body))
       }
     })
+    const line = () => child.stdin.write('{"name":"overview","params":{}}\n')
     const ask = () => Promise.race([
-      new Promise((r) => { waiting.push(r); child.stdin.write('{"name":"overview","params":{}}\n') }),
+      new Promise((r) => { waiting.push(r); line() }),
       new Promise((_, no) => setTimeout(() => no(new Error('the worker did not answer within 30 s')), 30_000).unref()),
     ])
     const first = await ask()

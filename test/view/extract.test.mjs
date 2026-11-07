@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import { extract, createExtractContext, materialize, materializeAttrs, anthropicFlat, replyBlocks, definition } from '../../src/view/extract.mjs';
 import { RESPONSES, CHAT } from '../../src/dissect/openai.mjs';
+import { ANTHROPIC } from '../../src/dissect/anthropic-board.mjs';
 import { parseTextRef } from '../../src/raw/refs.mjs';
 import { fieldTextOf } from '../../src/dissect/record-fields.mjs';
 import { shapeResponse } from '../../src/collector/core/record/body.mjs';
@@ -98,7 +99,7 @@ test('(a) every definition resolves to the bytes its bid hashes; a block with no
 // 3.1 回复块也回源 · 普通 JSON 回复: each block's span is its own JSON node of the wire text, however the wire spaced or escaped it. `nodes`
 // are those nodes by the spec's paths: Anthropic content[i]; Responses a message's parts, an item with no parts whole; Chat a choice's fields.
 const JSON_WIRES = {
-  anthropic: { wire: { format: 'anthropic' }, body: { id: 'm', content: [{ type: 'thinking', thinking: '想 "q"', signature: 's' }, { type: 'text', text: '你好\n' }, { type: 'tool_use', id: 't', name: 'Read', input: { p: 1 } }] },
+  anthropic: { wire: { d: ANTHROPIC, format: 'anthropic' }, body: { id: 'm', content: [{ type: 'thinking', thinking: '想 "q"', signature: 's' }, { type: 'text', text: '你好\n' }, { type: 'tool_use', id: 't', name: 'Read', input: { p: 1 } }] },
     nodes: (b) => b.content },
   responses: { wire: { d: RESPONSES, format: RESPONSES.id }, body: { id: 'r', output: [{ type: 'reasoning', id: 'a', summary: [{ type: 'summary_text', text: '想' }] },
     { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '你好' }, { type: 'output_text', text: 'two' }] }, { type: 'function_call', call_id: 'c', name: 'shell', arguments: '{"cmd":"ls"}' }] },
@@ -345,7 +346,7 @@ test('(d) a member that does not read back is held with every row after it; the 
 test('reasoning with no plaintext on the wire is opaque on both sides of a call: signature only, or a redacted block', () => {
   const blocks = [{ type: 'redacted_thinking', data: 'ciphertext' }, { type: 'thinking', thinking: '', signature: 's' }, { type: 'thinking', thinking: 'seen', signature: 's' }];
   const want = ['opaque', 'opaque', undefined];
-  assert.deepEqual(anthropicFlat({ messages: [{ role: 'assistant', content: blocks }] }, null).map((b) => b.faithfulness), want);
+  assert.deepEqual(anthropicFlat({ messages: [{ role: 'assistant', content: blocks }] }).map((b) => b.faithfulness), want);
   const events = [{ type: 'message_start', message: { id: 'm', type: 'message', role: 'assistant', content: [] } },
     ...blocks.flatMap(({ thinking, signature, ...start }, index) => [{ type: 'content_block_start', index, content_block: { ...start, ...(thinking === undefined ? null : { thinking: '' }) } },
       ...(thinking ? [{ type: 'content_block_delta', index, delta: { type: 'thinking_delta', thinking } }] : []),
@@ -353,5 +354,5 @@ test('reasoning with no plaintext on the wire is opaque on both sides of a call:
       { type: 'content_block_stop', index }]), { type: 'message_stop' }];
   const sse = events.map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join('');
   const resp = shapeResponse({ status: 200, headers: [['content-type', 'text/event-stream']], body: Buffer.from(sse) });
-  assert.deepEqual(replyBlocks({ resp }, { format: 'anthropic' }).map((x) => x.b.faithfulness), want);
+  assert.deepEqual(replyBlocks({ resp }, { d: ANTHROPIC, format: 'anthropic' }).map((x) => x.b.faithfulness), want);
 });

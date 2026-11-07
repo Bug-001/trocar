@@ -17,6 +17,7 @@ import { classifyFidelity } from '../source.mjs';
 import { recordReader, stampRecord } from '../records.mjs';
 import { blockAt } from '../../view/extract.mjs';
 import { viewOf } from '../../view/render-kind.mjs';
+import { IndexPending } from '../index-build.mjs';
 import { QueryArgError } from './index.mjs';
 
 export const about = Object.freeze({
@@ -35,7 +36,7 @@ const NOTE = {
   reserialized: 'the capture stored this as parsed JSON: these bytes were re-serialized from it, not taken off the wire',
 };
 
-export async function run({ home, fs, params: p, errors, progress = null }) {
+export async function run({ home, fs, params: p, errors, progress = null, warmOnly = false }) {
   const refs = (Array.isArray(p.ref) ? p.ref : [p.ref]).filter((r) => r != null && r !== '').map(String);
   if (!refs.length) throw new QueryArgError('trocar query block: --ref is required (a block\'s ref, as `trocar query lane` gives it)');
   // a record with its parsed tables weighs several times its stored bytes: one record at a time, let go before the next (3.5 §会话读 `block`)
@@ -45,7 +46,7 @@ export async function run({ home, fs, params: p, errors, progress = null }) {
     if (!byRecord.has(item.recordId)) byRecord.set(item.recordId, []);
     byRecord.get(item.recordId).push(item);
   });
-  const blocks = new Array(refs.length), read = recordReader({ home, fs, progress });
+  const blocks = new Array(refs.length), read = recordReader({ home, fs, progress, warmOnly });
   for (const group of byRecord.values()) await readGroup({ read, errors, progress }, group, blocks);
   return { blocks };
 }
@@ -65,7 +66,10 @@ async function readGroup({ read, errors, progress }, group, blocks) {
   try {
     raw = await read(at);
     if (!raw) unread = ['record-missing', `no record ${recordId} in this home's raw segments`];
-  } catch (e) { unread = ['record-unreadable', `record ${recordId} could not be read back: ${String((e && e.message) || e)}`]; }
+  } catch (e) {
+    if (e instanceof IndexPending) throw e; // the light worker may not build this segment's index: the main role reads it
+    unread = ['record-unreadable', `record ${recordId} could not be read back: ${String((e && e.message) || e)}`];
+  }
   let rec = null; // stamped on the first view asked for, inside viewAt's try: a record that will not stamp costs the views alone
   const recOf = () => (rec ??= stampRecord(raw, { ...at, stream: raw._stream }));
   for (const item of group) {

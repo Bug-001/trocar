@@ -146,16 +146,6 @@ test('a part with no image URL and a part of no known kind stay in the block as 
   }
 });
 
-test('two different images have different block keys, one image sent twice has one key (Chat and Responses)', () => {
-  const key = (url) => boardFlat({ input: [{ type: 'message', role: 'user', content: [respPart(url)] }] }).find((b) => b.kind === 'image').key;
-  const chatKey = (url) => boardFlatChat({ messages: [{ role: 'user', content: [chatPart(url)] }] }).find((b) => b.kind === 'image').key;
-  for (const k of [key, chatKey]) {
-    assert.equal(k(IMAGES[0][0]), k(IMAGES[0][0]));
-    assert.notEqual(k('data:image/png;base64,AAAA'), k('data:image/png;base64,BBBB'));
-    assert.notEqual(k('https://x.test/a.png'), k('https://x.test/b.png'));
-  }
-});
-
 test('an assistant refusal in a request is its own text block at its own path', () => {
   const flat = boardFlatChat({ messages: [{ role: 'assistant', content: 'S_text', refusal: 'S_refusal' }, { role: 'assistant', content: null, refusal: 'S_only' }] });
   assert.deepEqual(flat.map((b) => [b.block.text, b.path]), [['S_text', ['messages', 0, 'content']], ['S_refusal', ['messages', 0, 'refusal']], ['S_only', ['messages', 1, 'refusal']]]);

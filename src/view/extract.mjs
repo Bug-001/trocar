@@ -10,23 +10,22 @@
 // depends on the block's place in a call (a turn boundary, a volatile block, the links between a file's tool_use and its result) is
 // the row's `attrs`, by list position.
 import { createHash } from 'node:crypto';
-import { admitted, flatBlockText, blockFacts, callFacts, normResp, replyPartsAnthropic, linearContext } from './analyze.mjs';
+import { admitted, flatBlockText, blockFacts, callFacts, normResp, linearContext } from './analyze.mjs';
 import { slimBlock, compBucket, firstHuman, blockQuery } from './blockmeta.mjs';
 import { BODY, readsOf } from './render-kind.mjs';
 import { blockSpans } from '../dissect/cc-spans.mjs';
-import { resourceRef as ccResourceRef, resourceRefs as ccResourceRefs } from '../dissect/cc.mjs';
-import { resourceRef as oaResourceRef, faithfulness as oaFaithfulness } from '../dissect/openai.mjs';
+import { sealedThinking } from '../dissect/anthropic-board.mjs';
 import { scanJson, spanAt } from '../dissect/json-scan.mjs';
 import { scannedRequestBody, sharesBody, parsedRequestBody, storedRequestBody, requestEncodingOf } from '../dissect/request-body.mjs';
 import { fieldTextOf, reserializedReply, respOf, headersOf } from '../dissect/record-fields.mjs';
 import { composeTextRef, mintRawRef } from '../raw/refs.mjs';
 import { V0_CONVERTED } from '../raw/ingest.mjs';
-import { boardDissectorFor, wireFormatOf, flatLaneOf, contextStateOf, blockKeysOf, MULTI_LANE_CONTEXT } from '../dissect/registry.mjs';
-import { hintsOf, sessionKeyOf, observerEffectsOf, pathContext } from '../dissect/harnesses.mjs';
+import { boardDissectorFor, flatLaneOf, contextStateOf, blockKeysOf, MULTI_LANE_CONTEXT, closedAfterEnd } from '../dissect/registry.mjs';
+import { hintsOf, sessionKeyOf, observerEffectsOf, harnessOf, pathContext } from '../dissect/harnesses.mjs';
 import { vendorOf } from '../dissect/vendors.mjs';
-import { failedOf } from '../dissect/endpoints.mjs';
+import { failedOf, cutOf } from '../dissect/endpoints.mjs';
 import { mapUsage, boardUsage } from '../model/schema.mjs';
-import { CC_THREADS, replyIdOf, patchSystem } from '../dissect/cc-threads.mjs';
+import { replyIdOf, patchSystem } from '../dissect/cc-threads.mjs';
 import { hasCompactionPreamble } from '../identity/session-identity.mjs';
 import { posCmp, num52, numTable } from '../query/projection.mjs';
 import { bodyRetentionOf, retentionLabelOf, reqIncompleteOf, wsIncompleteOf, respIncompleteOf, isLogOnly, captureLabelsOf } from '../dissect/capture-labels.mjs';
@@ -107,34 +106,64 @@ export function definition(b, ref, exact, why = null, bid = bidFor(b, ref, exact
 }
 
 // ── what a record's own bytes hold ──────────────────────────────────────────────────────────────────────────────────────────────
-// The wire a call is read on: a flat-lane dissector, the Anthropic wire, or null (no call: counted, never guessed at).
+// The wire a call is read on: its board dissector (a flat-lane wire or the tree-folded Anthropic wire), or null (no call: counted,
+// never guessed at).
 export function callWireOf(r) {
   if (!r || !r.is_llm_call || isLogOnly(r)) return null; // D40: a call kept as a log line is no step (the session's `logged`)
   let d = boardDissectorFor(r);
   if (d && d.admits && !d.admits(r)) d = null;
-  if (d) return { d, format: d.id };
-  return wireFormatOf(r) === 'anthropic' ? { d: null, format: 'anthropic' } : null;
+  return d ? { d, format: d.id } : null;
 }
 const NO_STREAM = 'the record carries no id or stream to address';
+// The record a call is read as (3.5 §访问模式 ②): a reply the agent closed after its own success terminal is read as that reply (its
+// `error` kept: registry.mjs closedAfterEnd); every other record is itself. Only the call's reading and facts take it; its refs to the
+// stored bytes and its reply blocks keep the stored record.
+export const replied = (rec) => closedAfterEnd(rec) || rec;
 
-// The call read once: the Anthropic wire's hydrated record (`h`), or a flat-lane wire's parsed request (`req`, `unparsed`).
-function readCall(rec, { d, format }) {
-  if (format === 'anthropic') return { h: admitted(hydrateForBoard(rec, null)) };
-  const copy = sharesBody({ ...rec }, rec); // flatRequest sets `request` on the record it is given: the caller's record stays as it was
-  return { h: copy, ...flatRequest(d, copy, null) };
-}
+// The board path's per-fold steps, keyed by the dissector's `fold` (3.1): `read` the call once (a tree wire's hydrated record `h`,
+// or a flat-lane wire's parsed request `req`, `unparsed`); its request `blocks`; its `call` facts (callX below).
+const FOLD_PATHS = {
+  tree: {
+    read: (rec) => ({ h: admitted(hydrateForBoard(rec, null)) }),
+    blocks: (rec, wire, read, base, body, paths) => {
+      const flat = anthropicFlat(read.h.request, paths);
+      let spans = null;
+      if (body != null) try { spans = blockSpans(read.h); } catch { spans = null; }
+      return { flat, at: flat.map((_, i) => locate(base, body, spans && spans[i])) };
+    },
+    call: (rec, { format }, { h }, common, st, closed) => {
+      const facts = callFacts(h);
+      const lane = facts.sub ? 'subagent' : facts.monitor ? 'monitor' : hintsOf(rec).lane || 'main';
+      return jsonClean({ ...common, facts, lane, wire: wireOf(h, format, null, null, closed), rq: slimRec(h).request,
+        usage: boardUsage(mapUsage(format, facts.usage || {}, { vendor: vendorOf(h) })),
+        error: !!facts.failed, replyId: replyIdOf(rec), stop_reason: normResp(h).stop_reason ?? null });
+    },
+  },
+  flat: {
+    read: (rec, d) => {
+      const copy = sharesBody({ ...rec }, rec); // flatRequest sets `request` on the record it is given: the caller's record stays as it was
+      return { h: copy, ...flatRequest(d, copy, null) };
+    },
+    blocks: (rec, wire, read, base, body) => {
+      const flat = wire.d.boardFlat(read.req, read.h);
+      const root = body != null ? scannedRequestBody(rec) : null;
+      return { flat, at: flat.map((b) => locate(base, body, root && Array.isArray(b.path) ? spanAt(root, b.path) : null)) };
+    },
+    call: (rec, { d, format }, { h, req, unparsed }, common, st, closed) => {
+      const norm = d.normResp(rec);
+      // `agent`: the wire's own agent (a WebSocket connection), what a subagent's lane is folded by when the harness names none
+      return jsonClean({ ...common, lane: flatLaneOf(d, rec), hints: hintsOf(rec), chain: rec._chain, msgCount: d.messageCount ? d.messageCount(req) : (req.message_count || 0),
+        agent: d.agentOf ? d.agentOf(rec) ?? undefined : undefined, rq: slimRec(h).request, ctx: d.ctxTokens(norm), nu: norm.usage,
+        reqIncomplete: reqIncompleteOf(rec), wsIncomplete: wsIncompleteOf(rec), respIncomplete: respIncompleteOf(rec),
+        model: req.model, unparsed, error: failedOf({ status: st, ws: rec.transport === 'ws', error: !!rec.error || unparsed, ended: d.ended ? d.ended(norm, rec) : null, cut: cutOf(rec) }), wire: wireOf(rec, d.id, null, norm, closed), usage: boardUsage(mapUsage(format, norm.usage || {}, { vendor: vendorOf(rec) })),
+        stop_reason: norm.stop_reason, replyId: norm.id ?? null });
+    },
+  },
+};
+const readCall = (rec, wire) => FOLD_PATHS[wire.d.fold].read(rec, wire.d);
 /** requestBlocks(rec, wire, read?) → { flat, at: [{ref, exact, why}] } — the request's blocks, each with the exact text its ref names. */
 export function requestBlocks(rec, wire, read = readCall(rec, wire), paths = pathContext(rec)) {
-  const base = rawRefOf(rec), body = spanBody(rec);
-  if (wire.format === 'anthropic') {
-    const flat = anthropicFlat(read.h.request, null, paths);
-    let spans = null;
-    if (body != null) try { spans = blockSpans(read.h); } catch { spans = null; }
-    return { flat, at: flat.map((_, i) => locate(base, body, spans && spans[i])) };
-  }
-  const flat = wire.d.boardFlat(read.req, read.h);
-  const root = body != null ? scannedRequestBody(rec) : null;
-  return { flat, at: flat.map((b) => locate(base, body, root && Array.isArray(b.path) ? spanAt(root, b.path) : null)) };
+  return FOLD_PATHS[wire.d.fold].blocks(rec, wire, read, rawRefOf(rec), spanBody(rec), paths);
 }
 const locate = (base, text, span, field = null) => {
   if (!span || text == null) return { ref: null, exact: null, why: null };
@@ -142,17 +171,11 @@ const locate = (base, text, span, field = null) => {
   return { ref: composeTextRef(base, span, field), exact: text.slice(span[0], span[1]), why: null, span };
 };
 
-// reasoning with no plaintext on the wire: a thinking block with its signature only, a redacted block with its data
-const sealedThinking = (bl) => (bl.type === 'redacted_thinking' || (bl.type === 'thinking' && bl.signature)) && !(bl.thinking || bl.text);
-// a reply part as a flat entry of the same vocabulary (section messages, role assistant)
-const WIRE_RULES = {
-  anthropic: { links: true, resourceRef: ccResourceRef, resourceRefs: ccResourceRefs, faith: (bl) => (sealedThinking(bl) ? 'opaque' : undefined) },
-  openai: { resourceRef: oaResourceRef, faith: (bl) => (bl.type === 'thinking' ? oaFaithfulness(bl) : undefined) },
-};
+// a reply part as a flat entry of the same vocabulary (section messages, role assistant), by the dissector's `rules`
 /** replyBlocks(rec, wire) → [{ b, ref, exact, why }] in reply order: the call's own reply blocks (a part with no block has none). */
-export function replyBlocks(rec, { d, format }, paths = pathContext(rec)) {
-  const parts = format === 'anthropic' ? replyPartsAnthropic(rec) : d && d.replyParts ? d.replyParts(rec) : [];
-  const rules = WIRE_RULES[format === 'anthropic' ? 'anthropic' : 'openai'], base = rawRefOf(rec);
+export function replyBlocks(rec, { d }, paths = pathContext(rec)) {
+  const parts = d && d.replyParts ? d.replyParts(rec) : [];
+  const rules = d.rules, base = rawRefOf(rec);
   const out = [], texts = new Map(); // a parsed JSON reply's text is written out per read: once per field, not per block
   const textOf = (field) => { if (!texts.has(field)) texts.set(field, fieldTextOf(rec, field).text ?? null); return texts.get(field); };
   const rewritten = reserializedReply(rec); // resp.raw is the parsed body written out here, not the wire's text: a span of it proves nothing
@@ -418,11 +441,11 @@ export function extract(rec, ctx) {
     local.add(bid); defs.push(def);
     return { bid, query };
   };
-  const rules = WIRE_RULES[wire.format === 'anthropic' ? 'anthropic' : 'openai'];
+  const rules = wire.d.rules;
   const rp = replyBlocks(rec, wire, paths), reply = rp.map((p) => take(p.b, p).bid);
   const rmb = rp.flatMap((p, j) => (j === 0 || p.unit !== rp[j - 1].unit ? [j] : []));
-  const read = readCall(rec, wire), x = callX(rec, wire, read);
-  const linker = wire.format === 'anthropic' ? CC_THREADS : wire.d;
+  const rr = replied(rec), read = readCall(rr, wire), x = callX(rr, wire, read, rr !== rec);
+  const linker = wire.d.linker || wire.d;
   const st = linker && linker.stitchOf ? linker.stitchOf(rec) : null;
   // the call's own blocks, by section
   const { flat, at } = requestBlocks(rec, wire, read, paths);
@@ -437,12 +460,15 @@ export function extract(rec, ctx) {
   const pred = st && st.cont ? ctx.linked(st.scope, st.prev) : null;
   // what a continuation inherits of its predecessor's messages and reply, as they stand there: block ids, attributes and message
   // starts by position from the first message (no object a position)
+  let tin = own.tools.filter((e) => e.b.input).length
   let tools = own.tools, system = own.system, inh = { bids: [], attrs: {}, starts: [] }, predX = null, base = null, state = null;
   if (pred) {
     predX = pred.x;
     const P = ctx.listsOf(pred.rid), [pt, ps] = predX.secs, lo = pt + ps;
     const ent = (from, to) => P.list.slice(from, to).map((bid, k) => ({ bid, a: P.attrs[from + k] || null }));
     if (st.inherit.tools !== 'own') tools = ent(0, pt);
+    // tools defined in the input (openai.mjs, additional_tools) are input the server keeps: a continuation that does not send them again has them
+    else if (predX.tin && !tin) { tools = [...own.tools, ...ent(pt - predX.tin, pt)]; tin = predX.tin; }
     if (st.inherit.system === 'inherit') system = ent(pt, lo);
     else if (st.inherit.system === 'patch') system = patchSystem(ent(pt, lo), own.system, (e) => !!(e.a && e.a.volatile));
     inh = { bids: P.list.slice(lo).concat(pred.reply), attrs: {}, starts: P.mb.filter((i) => i >= lo).map((i) => i - lo) };
@@ -491,6 +517,7 @@ export function extract(rec, ctx) {
     stitchedFacts(x, { rec, st, predX, state, tools: tools.length, ownMsgs: (read.h.request && read.h.request.messages) || null });
   }
   x.secs = [tools.length, system.length];
+  if (tin) x.tin = tin; // how many of the section's last tools came in the input
   x.hint = laneHintOf(rec, wire.format, x.lane);
   if (!pred) { const prev = ctx.prevOf(x.hint); base = prev && prev.depth < KEYFRAME ? prev : null; }
   const d = delta(base && base.list, list);
@@ -524,24 +551,11 @@ function stitchedFacts(x, { rec, st, predX, state, tools, ownMsgs }) {
 
 // x: the per-call facts (3.5 §会话读), all from this record. `nonBlockKeys`: the request's top-level keys that are no block
 // (refs into the body and short scalars, never a body: nonBlockKeysOf below), what a lane answer's step detail ships (3.5 §会话读).
-function callX(rec, { d, format }, { h, req, unparsed }) {
+function callX(rec, wire, read, closed = false) {
   const st = (respOf(rec) || {}).status ?? null;
-  const common = { item: itemFacts(rec), format, respRefs: respRefsOf(rec), ...(extraMessagesOf(rec) || {}), ts: rec.ts_request || rec.ts || '', status: st,
-    nonBlockKeys: nonBlockKeysOf(rec, format) };
-  if (format === 'anthropic') {
-    const facts = callFacts(h);
-    const lane = facts.sub ? 'subagent' : facts.monitor ? 'monitor' : hintsOf(rec).lane || 'main';
-    return jsonClean({ ...common, facts, lane, wire: wireOf(h, format, null), rq: slimRec(h).request,
-      usage: boardUsage(mapUsage(format, facts.usage || {}, { vendor: vendorOf(h) })),
-      error: !!rec.error || !!facts.failed, replyId: replyIdOf(rec), stop_reason: normResp(h).stop_reason ?? null });
-  }
-  const norm = d.normResp(rec);
-  // `agent`: the wire's own agent (a WebSocket connection), what a subagent's lane is folded by when the harness names none
-  return jsonClean({ ...common, lane: flatLaneOf(d, rec), hints: hintsOf(rec), msgCount: d.messageCount ? d.messageCount(req) : (req.message_count || 0),
-    agent: d.agentOf ? d.agentOf(rec) ?? undefined : undefined, rq: slimRec(h).request, ctx: d.ctxTokens(norm), nu: norm.usage,
-    reqIncomplete: reqIncompleteOf(rec), wsIncomplete: wsIncompleteOf(rec), respIncomplete: respIncompleteOf(rec),
-    model: req.model, unparsed, error: failedOf({ status: st, ws: rec.transport === 'ws', error: !!rec.error || unparsed || !!(d.failed && d.failed(norm, rec)) }), wire: wireOf(rec, d.id, null, norm), usage: boardUsage(mapUsage(format, norm.usage || {}, { vendor: vendorOf(rec) })),
-    stop_reason: norm.stop_reason, replyId: norm.id ?? null });
+  const common = { item: itemFacts(rec), format: wire.format, respRefs: respRefsOf(rec), ...(extraMessagesOf(rec) || {}), ts: rec.ts_request || rec.ts || '', status: st,
+    nonBlockKeys: nonBlockKeysOf(rec, wire.format) };
+  return FOLD_PATHS[wire.d.fold].call(rec, wire, read, common, st, closed);
 }
 
 // ── the build driver ────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -572,11 +586,11 @@ export function extractSeed(store) {
  * unit, so a budget spent before it still moves the frontier: 3.5 后台抽取与归约), then until `budgetMs` of `clock` is spent, appending
  * each chunk's definitions and rows; `errors`: the answering request's (where a store note goes). A member that fails to extract gets
  * a row { x: { unparsed: reason } } appended as held (a `t` line the next open cuts off), so the next open tries it again (4.3 §3); so
- * are the rows extracted after it (one that continues it, or is written against it, would otherwise be stored without it), so what
- * a later open reads is the rows of one pass over a prefix. What extraction holds is one record at a time, a chunk's rows until its append, the store's indexes and the
+ * are the rows extracted after it (one that continues it, or is written against it, would otherwise be stored without it), and the definitions of those
+ * rows come after the first `t` line, so what a later open reads is the rows and definitions of one pass over a prefix. What extraction holds is one record at a time, a chunk's rows until its append, the store's indexes and the
  * context's per-lane / per-link ids: not the rows (4.3 §4). frontier: the largest rid such that every member up to it has a row;
  * done: the members up to it (the cursor the next call goes on from); total: the members. A keyless record gets the session's
- * synthesized key (3.4 合成键), as the query does. The work is by the members from the cursor on, never by the members before it.
+ * synthesized key (3.4 合成键), as the query does, and a call with a chain in a keyed session its chain (`lane_key`). The work is by the members from the cursor on, never by the members before it.
  */
 export function extractMembers({ store, members, recordsAt, sessionId = null, budgetMs = Infinity, clock = () => performance.now(), errors = undefined, from = 0 }) {
   const t0 = clock(), spent = () => clock() - t0 >= budgetMs, idOf = (i) => String(members[i].id), has = (i) => store.rows.has(idOf(i));
@@ -596,19 +610,22 @@ export function extractMembers({ store, members, recordsAt, sessionId = null, bu
     // each member's record is read just before it is extracted, so a slice that runs out leaves no read record behind (the next
     // slice would read it again); within one slice the reads share one stretch's caches
     const ctx = contexts.get(store);
-    const defs = [], rows = [], held = [];
+    const defs = [], rows = [], held = [], heldDefs = [];
     for (const k of part) {
       if (spent() && (rows.length || held.length)) { i = k; break; }
       const rid = idOf(k), rec = (recordsAt([members[k]]) || []).find((r) => r && String(r.id) === rid);
       if (rec && sessionId != null && sessionKeyOf(rec).key == null) Object.defineProperty(rec, '_synthKey', { value: sessionId, enumerable: false, configurable: true, writable: true });
+      // its chain in a keyed session (3.4 带键会话里的消息链): the fold decides which system text is the main one
+      if (rec && members[k].lane_key != null) Object.defineProperty(rec, '_chain', { value: { hash: members[k].synth_hash, key: members[k].lane_key, lane: harnessOf(rec).row.chainLane }, enumerable: false, configurable: true, writable: true });
       let out = null, why = rec ? null : 'the record did not read back';
       if (rec) try { out = extract(rec, ctx); } catch (e) { why = `extraction failed: ${e && e.message ? e.message : e}`; }
       if (!out) ctx.held = true;
-      if (out) defs.push(...out.defs);
+      if (out) (ctx.held ? heldDefs : defs).push(...out.defs);
       (ctx.held ? held : rows).push(out ? out.row : { rid, pos: rid, x: { unparsed: why, code: rec ? 'record-unparseable' : 'record-unreadable' } });
     }
     store.append({ defs, rows }, { errors });
     if (held.length) store.append({ rows: held }, { held: true, errors });
+    if (heldDefs.length) store.append({ defs: heldDefs }, { errors }); // past the first `t` line: the next open cuts them with it
     ctx.flushed();
   }
   settle();
@@ -720,6 +737,19 @@ function cacheSemanticsKnown(vendor, wireFormat) {
   const only = VERIFIED_WIRES[vendor];
   return !(only && wireFormat != null && !only.includes(wireFormat));
 }
+// 3.3 Edge cases: what a reported zero cache read means on a vendor whose cache row says so
+const CACHE_ZERO_READ = { deepseek: { bestEffort: true }, openai: { minTokens: 1024 } };
+// The labels a reported zero cache read earns on a call's vendor: what the provider's cache numbers mean, so they ride the cache verdict
+// (cacheBreak.labels, read by the cache popover), not wire.labels, the call's fidelity facts.
+export function cacheLabelsOf(wire, usage) {
+  const row = wire && wire.cacheSemanticsKnown ? CACHE_ZERO_READ[wire.vendor] : null;
+  const input = usage ? (usage.read || 0) + (usage.create || 0) + (usage.fresh || 0) : 0;
+  if (!row || !usage || usage.read !== 0 || !(input > 0)) return [];
+  const out = [];
+  if (row.bestEffort) out.push({ id: 'cache-best-effort', label: 'Best-effort cache: the same prefix can miss' });
+  if (row.minTokens && input < row.minTokens) out.push({ id: 'cache-below-minimum', label: 'Below the minimum cacheable length' });
+  return out;
+}
 
 // Canonical wire facts per call (3.2:131-133), baked HERE so the page only reads them (invariant 3):
 // format, vendor, whether that vendor's cache semantics are known on this wire (3.3:89: false for
@@ -728,8 +758,8 @@ function cacheSemanticsKnown(vendor, wireFormat) {
 // incompleteness labels (4.6 §记录 「不完整的标注」 — shown on the call, never dropped). Cheap: no body parse.
 // A cross-record context (ctx, from the dissector) brings its own state and, when partial, what is missing;
 // `norm.unread` counts reply messages the dissector could not read (D38: never skipped without a trace).
-export function wireOf(rec, format, ctx = null, norm = null) {
-  const labels = captureLabelsOf(rec);
+export function wireOf(rec, format, ctx = null, norm = null, closed = false) {
+  const labels = captureLabelsOf(rec, closed);
   const unread = norm && norm.unread;
   if (unread) labels.push({ id: 'reply-unread', label: `${unread} reply message${unread > 1 ? 's' : ''} not read`,
     text: `${unread} server message${unread > 1 ? 's' : ''} of this call are not JSON text (binary, past the size cap, or not decodable); the reply shown is read from the others` });
@@ -809,8 +839,8 @@ export function nonBlockKeysOf(rec, format) {
 // The blocks of an Anthropic-wire request, tagged with their faithfulness SERVER-SIDE (reads provider block shape here, not in
 // the browser → invariant 3). opaque = encrypted/redacted reasoning, no plaintext on the wire (sealedThinking). The board renders
 // a badge off b.faithfulness so nobody mistakes ciphertext for verbatim content (invariant 4). (1.4:52)
-export function anthropicFlat(request, keyMemo, ctx = {}) {
-  const flat = linearContext(request, keyMemo, ctx);
+export function anthropicFlat(request, ctx = {}) {
+  const flat = linearContext(request, ctx);
   for (const b of flat) {
     if (sealedThinking(b.block || {})) b.faithfulness = 'opaque';
   }

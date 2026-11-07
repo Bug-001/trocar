@@ -22,6 +22,7 @@ import { extendSession, saveIndexes, sessionState, version } from '../../src/que
 import { PAGE_BYTES } from '../../src/query/session-doc.mjs'
 import { openProjection } from '../../src/query/projection.mjs'
 import { segmentIndex } from '../../src/query/index-build.mjs'
+import { drain } from '../helpers/bounded.mjs'
 
 const BASE = { growth: 2_000, compactAt: 20_000, subEvery: 4, subLanes: 3, late: 2 }
 const LEDGERS = { small: { ...BASE, paths: 4 }, page: { ...BASE, paths: 80, pathPool: 20_000 } }
@@ -70,10 +71,10 @@ async function workAt(calls, opts) {
   }
   const ctxOf = (rows) => ({ home, fs: own, writer: true, once: { index: { rows, errors: [] } } })
   const count = async (work) => { touched.clear(); facts.clear(); bytes = fold = idx = 0; tsReads = 0; counting = true; try { await work() } finally { counting = false } return { rows: touched.size, bytes, fold, facts: facts.size, idx, ts: tsReads } }
-  const slices = (at) => count(async () => { while (await extendSession(ctxOf(at.rows), s.id, 50)); })
+  const slices = (at) => count(async () => { await drain(() => extendSession(ctxOf(at.rows), s.id, 50)) })
 
   let at = await index()
-  while (await extendSession(ctxOf(at.rows), s.id, Infinity));
+  await drain(() => extendSession(ctxOf(at.rows), s.id, Infinity))
   const doc = await runQuery('session', { id: s.id }, ctxOf(at.rows))
   assert.equal(doc.pending, undefined, 'the session was folded whole')
   const main = doc.lanes.find((l) => l.kind === 'main').lane
@@ -138,7 +139,7 @@ async function workAt(calls, opts) {
   // state, its background driven until it says no more work; beside it, what opening the projection alone reads (its sidecar and
   // the break lines it names, by the breaks: 4.3 §4 旁索引)
   saveIndexes()
-  const again = { ...own }, reopen = await count(async () => { while (await extendSession({ home, fs: again, writer: true, once: { index: { rows: at.rows, errors: [] } } }, s.id, Infinity)); })
+  const again = { ...own }, reopen = await count(async () => { await drain(() => extendSession({ home, fs: again, writer: true, once: { index: { rows: at.rows, errors: [] } } }, s.id, Infinity)) })
   const open = await count(async () => openProjection({ home, fs: { ...own }, key: s.id, write: false }).close())
   // the segment's index as the daemon keeps it (4.2 谁写哪一笔 ①): a pass after each new call; `session --since` with nothing
   // pre-built (its version, its rows) read it after the call before; one new call later, what it reads of that file (4.2:49)
