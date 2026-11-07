@@ -716,7 +716,7 @@ test('one `status` asks the OS each question once: on Windows the whole process 
   assert.equal(calls.filter((c) => /Win32_Process \| ForEach-Object/.test(c)).length, 1, 'the process table: one question for the whole command')
   assert.equal(calls.filter((c) => /Win32_Process -Filter/.test(c)).length, 0, 'and not one identity question of its own: the table\'s answer carries the pid\'s creation time and the machine\'s boot time')
   assert.deepEqual([doc.daemon.running, doc.daemon.responding], [null, false], 'the identity the table gave matched the lock byte for byte: a daemon that holds the lock and does not answer (a mismatch would read as a stale lock, [false, null])')
-  assert.deepEqual(doc.errors.filter((e) => /read question/.test(e.reason)), [], 'and with no daemon answering, the read it could not answer is NOT an error of the user\'s machine: a control.json left behind by a stopped daemon is the normal no-daemon state')
+  assert.deepEqual(doc.errors.filter((e) => e.where === 'the process table'), [], 'and with no daemon answering, the read it could not answer is NOT an error of the user\'s machine: a control.json left behind by a stopped daemon is the normal no-daemon state')
   assert.equal(exit, EXIT.ok, io.stdoutText())
 })
 

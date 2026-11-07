@@ -212,7 +212,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
       stop = await w.stopDaemon({ unitManaged: w.unitManaged() })
       if (stop.signals.length || !stop.stopped) put({ kind: 'daemon-stop', how: stop.how, signals: stop.signals, stopped: stop.stopped, pid: stop.pid, reason: stop.stopped ? `the daemon was stopped (${stop.signals.join(', ') || 'it had exited'})` : `the daemon was NOT stopped${stop.error ? `: ${stop.error}` : ''}` })
       // nothing to stop (no lock, no unit that was running, no pid known from the daemon's own reply) is not "the daemon (pid null) was stopped": the receipt says no daemon was there
-      receipt.daemon = !stop.stopped ? { pid: stop.pid, state: 'unresponsive' } : (!stop.signals.length || (stop.pid == null && routing.daemon.pid == null)) && (routing.state === 'none' || routing.state === 'stale') ? { pid: null, state: 'none' } : { pid: stop.pid ?? routing.daemon.pid, state: 'stopped' }
+      receipt.daemon = !stop.stopped ? { pid: stop.pid, state: 'unresponsive' } : (routing.state === 'none' || routing.state === 'stale') ? { pid: null, state: 'none' } : { pid: stop.pid ?? routing.daemon.pid, state: 'stopped' }
       if (!stop.stopped) { receipt.problems.push(`the daemon (pid ${stop.pid}) could not be stopped${stop.error ? ` (${stop.error})` : ''}; stop it by hand: kill -9 ${stop.pid}, then run trocar uninstall again`); failed.push({ code: 'stop-failed', reason: receipt.problems.at(-1) }) }
       else if (routing.relayed !== 'unknown') { // what the daemon was still holding went with it, counted (1.6 §1.1)
         const last = drained && drained.rel ? drained.rel : routing.relayed

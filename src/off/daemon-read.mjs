@@ -57,7 +57,7 @@ export function daemonReader({ platform = process.platform, dir, env = process.e
       throw fatal(askWords(verb, e))
     }
     if (r && r.self && Number.isInteger(r.self.pid)) self = { pid: r.self.pid, start_time: r.self.start_time ?? null, boot_id: r.self.boot_id ?? null }
-    if (!r || r.ok !== true) throw fatal(`${VERB_WORDS[verb] || verb}: ${String((r && r.error) || 'the reply does not say it worked').replace(`${verb}: `, '')}`)
+    if (!r || r.ok !== true) throw fatal(r && r.error_code ? askWords(verb, { code: r.error_code, message: String(r.error || '').replace(`${verb}: `, '') }) : `${VERB_WORDS[verb] || verb}: ${String((r && r.error) || 'the reply does not say it worked').replace(`${verb}: `, '')}`)
     answers.set(key, r.data)
     return r.data
   }

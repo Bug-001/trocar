@@ -71,3 +71,8 @@ test('D58: a read that failed says which and why in words', async () => {
     })
   }
 })
+
+test('D58: a helper failure the daemon reports carries its code apart, and the reader says it in words', async () => {
+  const r = daemonReader({ dir: '/nowhere', socketPath: '/s', request: async () => ({ ok: false, error: 'ps: spawnSync powershell.exe ETIMEDOUT', error_code: 'ETIMEDOUT' }) })
+  await assert.rejects(r.call('ps', {}), (e) => { assert.doesNotMatch(e.reason, /\bps\b|\bE[A-Z]{3,}\b/, e.reason); assert.match(e.reason, /no answer in time/); return true })
+})
