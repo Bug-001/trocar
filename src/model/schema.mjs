@@ -27,6 +27,26 @@ export function mapUsage(provider, raw = {}, opts = {}) {
   return { input_uncached, cache_read, cache_write, output, reasoning, total_input };
 }
 
+// The leaf keys of a reply's usage this step's mapping does not read, as [dotted key, value] (3.1 未映射字段 MUST 可见, 2.6 §A).
+// A key is read when changing its value moves mapUsage's output, so no second list of key names is kept here; a wire with no
+// mapping reads none of them.
+export function unmappedUsage(provider, raw, opts = {}) {
+  if (!raw || typeof raw !== 'object') return [];
+  const leaves = [];
+  const walk = (o, at) => { for (const [k, v] of Object.entries(o)) v && typeof v === 'object' && !Array.isArray(v) ? walk(v, [...at, k]) : leaves.push([...at, k]); };
+  walk(raw, []);
+  let base;
+  try { base = JSON.stringify(mapUsage(provider, raw, opts)); } catch { base = null; }
+  const valueAt = (o, at) => at.reduce((x, k) => x[k], o);
+  const read = (at) => {
+    if (base == null) return false;
+    const copy = structuredClone(raw), v = valueAt(copy, at.slice(0, -1)), k = at.at(-1);
+    v[k] = typeof v[k] === 'number' ? v[k] + 1 : v[k] === 1 ? 2 : 1;
+    return JSON.stringify(mapUsage(provider, copy, opts)) !== base;
+  };
+  return leaves.filter((at) => !read(at)).map((at) => { const v = valueAt(raw, at); return [at.join('.'), typeof v === 'string' ? v : JSON.stringify(v)]; });
+}
+
 // The board's usage {read, create, fresh, out}: a projection of mapUsage's output, never a second mapping (3.2).
 // An unreported write shows as 0 on the board; the canonical NULL stays in mapUsage's output.
 export function boardUsage(c) {

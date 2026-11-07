@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mapUsage } from '../../src/model/schema.mjs';
+import { mapUsage, unmappedUsage } from '../../src/model/schema.mjs';
 
 test('mapUsage maps Anthropic usage into canonical roles', () => {
   const raw = {
@@ -62,4 +62,28 @@ test('openai-chat: DeepSeek hit/miss wins over cached_tokens; cache_write NULL',
     completion_tokens_details: { reasoning_tokens: 3 } });
   assert.deepEqual([oa.cache_read, oa.input_uncached, oa.cache_write, oa.reasoning, oa.total_input], [384, 116, null, 3, 500]);
   assert.equal(mapUsage('openai-chat', { prompt_tokens: 9, cached_tokens: 4 }).cache_read, 4, 'Kimi names it at the top level');
+});
+
+// 2.6 #18: what Call details lists as not in the counts. The keys each wire's mapping reads are 3.2's table, written here from the spec
+const READ = {
+  anthropic: ['input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens', 'output_tokens', 'output_tokens_details.thinking_tokens'],
+  'openai-responses': ['input_tokens', 'input_tokens_details.cached_tokens', 'input_tokens_details.cache_write_tokens', 'output_tokens', 'output_tokens_details.reasoning_tokens'],
+  'openai-chat': ['prompt_cache_hit_tokens', 'prompt_cache_miss_tokens', 'completion_tokens', 'completion_tokens_details.reasoning_tokens'],
+};
+const EXTRA = ['service_tier', 'cache_creation.ephemeral_5m_input_tokens', 'vendor_probe_tokens', 'relay.note'];
+const nest = (pairs) => { const o = {}; for (const [k, v] of pairs) { const at = k.split('.'); at.slice(0, -1).reduce((x, p) => (x[p] ??= {}), o)[at.at(-1)] = v; } return o; };
+test('2.6 #18 unmappedUsage: the keys 3.2 reads are never listed; every other leaf is, with its value; a change to a listed one moves no count', () => {
+  for (const [format, read] of Object.entries(READ)) {
+    const raw = nest([...read.map((k, i) => [k, 10 + i]), ...EXTRA.map((k, i) => [k, k === 'service_tier' ? 'standard' : k === 'relay.note' ? 'via x' : 3 + i])]);
+    const listed = unmappedUsage(format, raw, { vendor: null });
+    assert.deepEqual(listed.map(([k]) => k).sort(), [...EXTRA].sort(), format);
+    assert.deepEqual(Object.fromEntries(listed).service_tier, 'standard');
+    for (const [k] of listed) {
+      const moved = nest([...read.map((x, i) => [x, 10 + i]), ...EXTRA.map((x) => [x, x === k ? 999 : 1])]);
+      const same = nest([...read.map((x, i) => [x, 10 + i]), ...EXTRA.map((x) => [x, 1])]);
+      assert.deepEqual(mapUsage(format, moved, { vendor: null }), mapUsage(format, same, { vendor: null }), `${format} ${k}`);
+    }
+  }
+  assert.deepEqual(unmappedUsage('no-such-wire', { a: 1, b: { c: 'x' } }), [['a', '1'], ['b.c', 'x']], 'a wire with no mapping lists every key');
+  assert.deepEqual(unmappedUsage('anthropic', null), []);
 });

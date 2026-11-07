@@ -505,6 +505,21 @@ test('2.6 #17: an opened Call details row reads its bytes once into a Raw cell w
   expect(row().querySelector('.cell')).not.toBeNull()
 })
 
+test('2.6 #18: Call details draws each unmapped usage key under its group head, key and value as given; no keys, no head', () => {
+  const usage = { input_tokens: 5, output_tokens: 2, vendor_probe_tokens: 7, relay: { note: 'via x' } }
+  const detail = { norm: { stop_reason: null, usage }, respRefs: [], nonBlockKeys: [], extraMessages: [], wire: { format: 'anthropic', vendor: null } }
+  for (const [d, want] of [[detail, [['vendor_probe_tokens', '7'], ['relay.note', 'via x']]], [{ ...detail, norm: { stop_reason: null, usage: { input_tokens: 5 } } }, []]] as const) {
+    const s = stateOf(deskN([[sys()]], [{}], { details: [d] }), 0)
+    const { win } = mount(s)
+    act(() => { fireEvent.click(win.querySelector<HTMLElement>('.cwdetails .disc-t')!) })
+    const heads = [...win.querySelectorAll('.cwdetails .cdgrp')].map((e) => e.textContent)
+    expect(heads.includes(W.USAGE_UNMAPPED)).toBe(want.length > 0)
+    const rows = [...win.querySelectorAll('.cwdetails .cdline')].map((e) => [e.querySelector('.cbrole')!.textContent, e.querySelector('.cdval')?.textContent])
+    for (const w of want) expect(rows).toContainEqual([...w])
+    cleanup()
+  }
+})
+
 test('2.3 #28: reveal into a folded turn opens it into the D12 memory; reveal of a row not drawn returns it drawn and open', () => {
   const { desk, brk } = longDesk(300, 200)
   const s = stateOf(desk, 1, { landedFor: 'R0-1' }) // no landing: the window stays at its top
