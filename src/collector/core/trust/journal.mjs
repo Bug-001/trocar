@@ -35,7 +35,7 @@ import { unseal } from '../../../off/seal.mjs'
 
 // One file under two spellings is one file (X18): every path the journal compares goes through pathKey (src/off/fsutil.mjs).
 const realOf = (fs) => (d) => fs.realpathSync.native(d) // the file system the journal is handed decides what a path is (pathKey)
-const samePath = (a, b, fs) => a === b || (typeof a === 'string' && typeof b === 'string' && pathKey(a, { realpath: realOf(fs) }) === pathKey(b, { realpath: realOf(fs) }))
+export const samePath = (a, b, fs) => a === b || (typeof a === 'string' && typeof b === 'string' && pathKey(a, { realpath: realOf(fs) }) === pathKey(b, { realpath: realOf(fs) }))
 
 export { sha256, missingDirs } from '../../../off/fsutil.mjs'
 export { undoEntry, removeOwnedFile, describeEntry } from '../../../off/journal.mjs'
@@ -85,7 +85,7 @@ export function notTrocars({ dir, file, fs = nodeFs }) {
   if (strictlyInside(dir, path.dirname(file), fs)) return null
   let bytes
   try { bytes = readOrNull(fs, file) } catch (e) { return `${file} is already there and cannot be read (${e.code || e.message}), so whether it is trocar's is not known; trocar left it alone` }
-  return bytes == null || bytes.toString('latin1').includes(SENTINEL) ? null : `${file} is already there and holds no trocar mark, so it is not trocar's; trocar left it alone`
+  return bytes == null || bytes.toString('latin1').includes(SENTINEL) ? null : `${file} is already there and trocar cannot tell it is its own; trocar left it alone`
 }
 
 // A file trocar owns (a trust file of certificate blocks, a trust plugin, a launch shim): listed before it is written,
