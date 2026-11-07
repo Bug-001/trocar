@@ -6,7 +6,8 @@
 // `trocar uninstall` — is src/off/ (the entries, the daemon stop, the lock) and src/cli/uninstall.mjs (1.6 §1.4, R3).
 import { retriedNote } from '../cli/words.mjs'
 import { UNDO_WORDS } from '../cli/receipt.mjs'
-import { isModelOs } from './model-install.mjs' // macOS / Windows: their on is turnOnModel (src/cli/on-model.mjs); this turnOn is Linux's
+import { isModelOs, ruleUFiles } from './model-install.mjs'
+import { ownsBy, sourcesCtx } from './arch/model-backends.mjs' // macOS / Windows: their on is turnOnModel (src/cli/on-model.mjs); this turnOn is Linux's
 import fs from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
@@ -145,9 +146,17 @@ export function autostartBlock({ unit, osName }) {
   return `${entryState(osName, unit, q)}: the collector would not start at the next login, ${after}. Nothing was changed. Run: trocar install`
 }
 
+/** Rule U on Linux (4.11 P4): the files the settings `srcs` (descriptor data) name now, each with why it is not the user's own file — the model's one
+ *  finder and judge (model-install.mjs ruleUFiles), for a descriptor's inject. */
+export const userFilesFor = ({ os, home, env, fs = nodeFs }) => (srcs) => ruleUFiles({ proxyMode: { userCertFiles: srcs } }, sourcesCtx({ os, home, env, fs, which: () => null }), { home, owns: ownsBy({ os, home, fs }), fs })
+
+// the plan asks only whether the file takes a block; the root's bytes exist once the CA is made (a fresh install), so the preview places a block's shape
+const PEM_SHAPE = '-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----'
+
 /** What the receipt says an entry did, in one phrase — the same words in the dry run (from the preview) and in the real run (from the entry). */
 function changeText(e, prior = null) {
   if (e.kind === 'text') {
+    if (e.format === 'pem-block') return "trocar's certificate block added at the end"
     if (e.vars) return `trocar block added at the top (${Object.keys(e.vars).join(', ')})${prior ? `; your own ${Object.keys(prior).join(', ')} commented out` : ''}`
     return `one line added (${shortLine(e.line)})`
   }
@@ -186,6 +195,7 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
   const ctxFor = (d) => ({
     os: osName, home, env: envMap, running: facts.filter((f) => match(f).agent === d.name).map((f) => f.env || new Map()),
     readText: (f) => readText(f), readTextOrError: (f) => readTextOrError(f), readBytes: (f) => { try { return fs.readFileSync(f) } catch { return null } }, listDir, collectorDir: dir, caPem: ca.pem,
+    userFiles: userFilesFor({ os: osName, home, env: envMap, fs }),
   })
   const R = roots || await bundleRoots(arch)
   let draft = planTrust({ descriptors: descs, ctxFor, caCertPem: null, collectorDir: dir, roots: R })
@@ -213,7 +223,7 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
     return j
   })
   // every per-file refusal too, for what is to be written (a dangling link, a file that is not JSON, a patch file that is not a list) — before onPlan, before any write
-  const preview = draft.entries.map((e, i) => (entryJ[i].action !== 'write' ? null : e.kind === 'text' ? previewTextEntry({ file: e.path, edit: e, fs }) : previewJsonKey({ file: e.path, keys: e.keys, value: e.value, fs })))
+  const preview = draft.entries.map((e, i) => (entryJ[i].action !== 'write' ? null : e.kind === 'text' ? previewTextEntry({ file: e.path, edit: e.format === 'pem-block' && !e.pem ? { ...e, pem: PEM_SHAPE } : e, fs }) : previewJsonKey({ file: e.path, keys: e.keys, value: e.value, fs })))
   const fileJ = draft.files.map((f) => {
     const j = judgeOwned({ manifest: prior, file: f.path, fs })
     steps.push({ harness: f.harness, path: f.path, kind: f.role, action: j.action, ...(j.why ? { why: j.why } : {}) })

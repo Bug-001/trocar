@@ -69,7 +69,7 @@ export const TRUST_REASONS = Object.freeze([
   'not-verified', 'forward-only-host', 'outside-host-set', // proxy mode's verdict (4.11 P11): the process or form is not verified for decryption; a host the form forwards by design; a hostTree form's host program talking off its host set (the door's untracked reason, the same word)
   // a harness's own
   'settings-ignored-managed-by-host', 'settings-ignored-restricted', 'settings-ignored-setting-sources', 'dsh-use-openssl-ca', 'dsh-node-too-old',
-  'kimi-not-via-shim', 'kimi-npm-no-shim', 'shim-not-on-path', 'desktop-ca-override',
+  'kimi-not-via-shim', 'kimi-npm-no-shim', 'shim-not-on-path', 'desktop-ca-override', 'zcode-env-network',
 ])
 
 /** The reasons a restart of the agent fixes (「重启后才会被采集」, 1.6 §1.1): `on`'s restart list, `status`'s, and doctor's expected class read this one list. */

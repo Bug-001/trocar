@@ -9,6 +9,7 @@ import { trustReasonText } from '../collector/core/codes.mjs'
 import { TRUST_REASONS, ROUTE_TRUST_REASONS, RESTART_REASONS } from '../health/codes.mjs'
 import { FINDINGS_WIN32 } from './findings-win32.mjs'
 import { ago } from '../cli/text.mjs'
+import { statusReason } from '../cli/words.mjs'
 import { setupHelperCommand } from '../version.mjs'
 
 const BY_CLASS = { problem: 0, expected: 1, note: 2 }
@@ -138,7 +139,7 @@ export const FINDINGS = {
   'negative-cache': { cls: 'problem', trocarFirst: true, what: (c) => NEG[negCause(c)].what(negOf(c)), why: (c) => NEG[negCause(c)].why(negOf(c)), commands: (c) => NEG[negCause(c)].commands(c), verify: (c) => `trocar status ${c.h}` },
   // 4.11 P11 status 4–5: the door has not seen this life and history cannot tell — a note with no restart step (1.6 附录 B, §2 判词)
   'not-seen': { cls: 'note', trocarFirst: false, what: (c) => `trocar has not seen ${c.pid ? `pid ${c.pid}` : c.h} use its proxy yet; its next connection is judged.`, why: () => 'When it started does not tell whether it read trocar\'s setting.', commands: () => [], verify: (c) => `trocar status ${c.h}` },
-  'not-routed': { cls: 'problem', trocarFirst: false, what: (c) => `New connections from ${c.h} do not go through trocar.`, why: (c) => notRoutedOf(c).why, commands: (c) => notRoutedOf(c).commands, verify: (c) => `trocar status ${c.h}` },
+  'not-routed': { cls: 'problem', trocarFirst: false, what: (c) => `New connections from ${c.h}${c.fm && c.fm.id ? ` (${c.fm.id})` : ''} do not go through trocar.`, why: (c) => notRoutedOf(c).why, commands: (c) => notRoutedOf(c).commands, verify: (c) => `trocar status ${c.h}` },
   'route-loop': { cls: 'problem', trocarFirst: true, what: (c) => `trocar's upstream for ${c.h} would be trocar itself.`, why: () => 'The proxy setting trocar read already points at one of trocar\'s own ports, so trocar did not connect this form.', commands: (c) => [trocar(c, `trocar off ${c.h}`), gui(setAt(c.h, placeOf(c.hf, c.setting), c.old || unknownValue('proxy address', 'absent'))), trocar(c, `trocar on ${c.h}`)], verify: (c) => `trocar doctor ${c.h}` },
   'proxy-dead': { cls: 'problem', trocarFirst: false, what: (c) => `Nothing is listening on ${c.dead.addr}:${c.dead.port}, the proxy ${c.h} is set to use.`, why: () => 'Your proxy is not running; trocar did not write this setting.',
     places: userPlaces, commands: (c) => [gui(`Start your proxy, so that it listens on ${c.dead.addr}:${c.dead.port}`), ...removeSteps(c), portCheck(c, c.dead.port)], verify: (c) => `trocar status ${c.h}` },
@@ -193,8 +194,13 @@ export const FINDINGS = {
 }
 // the trust reasons not listed above (a variable missing, a file unreadable, …): the daemon's own hint says what to do about this agent
 const TRUST = { cls: (c) => (RESTART_REASONS.includes(c.code) ? 'expected' : 'problem'), trocarFirst: false, what: (c) => `${c.h} is not captured${RESTART_REASONS.includes(c.code) ? `${c.pid ? `: pid ${c.pid} started` : ': it started'} before capture was on.` : `${c.pid ? `: pid ${c.pid}` : ''}.`}`,
-  why: (c) => c.hint || trustReasonText(c.code) || 'Certificates are read when a program starts.',
-  commands: (c) => (RESTART_REASONS.includes(c.code) ? restartSteps(c) : [trocar(c, `trocar status ${c.h}`), gui(c.hint || trustReasonText(c.code) || `Follow ${c.h}'s own instructions`)]), verify: (c) => `trocar status ${c.h}` }
+  why: (c) => c.hint || trustReasonText(c.code) || statusReason(c.code, { harness: c.h })?.text || 'Certificates are read when a program starts.',
+  commands: (c) => {
+    if (RESTART_REASONS.includes(c.code)) return restartSteps(c)
+    const own = statusReason(c.code, { harness: c.h }) // a reason with its own way out (words.mjs) says it, rather than pointing back at status
+    if (own && (own.fix || own.command)) return [...(own.command ? [trocar(c, own.command)] : []), ...(own.fix ? [gui(own.fix)] : [])]
+    return [trocar(c, `trocar status ${c.h}`), gui(c.hint || trustReasonText(c.code) || `Follow ${c.h}'s own instructions`)]
+  }, verify: (c) => `trocar status ${c.h}` }
 
 /** Every code a finding may carry: the cross-platform catalogue's, the Windows table's (4.8 §10.4) and the trust reasons' — the Windows collector's own trust reasons (ROUTE_TRUST_REASONS, 4.8 §12) included,
  *  for the same reason TRUST_REASONS is: they are the codes of `agent-untrusted` a form's verdict can carry. The schema validates against this list. */
@@ -205,7 +211,9 @@ export const FINDING_CODES = Object.freeze([...new Set([...Object.keys(FINDINGS)
  *  does not have defines every field itself. A code neither catalogue names falls to the trust entry: the reasons the tracker can set are data, not caller bugs (the closed sets live in
  *  health/codes.mjs, held by its tests — a runtime throw here would take `doctor` down with a proxy-mode state like `smart-app-control`). */
 function make(code, ctx) {
-  const w = ctx.platform === 'win32' ? FINDINGS_WIN32[code] : null
+  // not-routed for a reason the route plan gave (a blocker, an absent entry file, …: 4.11 §3) reads the same on every OS; the Windows row words the system-proxy causes (route.why)
+  const planSaid = code === 'not-routed' && ctx.fm && ctx.fm.route && ctx.fm.route.reason && !ctx.fm.route.why
+  const w = ctx.platform === 'win32' && !planSaid ? FINDINGS_WIN32[code] : null
   const def = FINDINGS[code] || TRUST
   const c = { ...ctx, code }
   c.removeOwn = userPlaces(c).map((p) => gui(removeAt(c.h, p))) // the user's own places, as steps: both catalogues name them (1.6 附录 B)

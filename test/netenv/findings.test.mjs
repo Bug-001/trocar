@@ -140,6 +140,17 @@ test('forward-only-host: a Claude Desktop process forwarded for one of its own h
   assert.deepEqual(got.map((x) => [x.code, x.class]), [['forward-only-host', 'expected']])
 })
 
+test('V49 a trust reason with its own way out (statusReason fix / command) gives that as the Fix, with or without the daemon\'s hint, never a pointer back at status (desktop-ca-override)', () => {
+  for (const hint of [undefined, 'the daemon\'s own words']) {
+    const f = facts('z-code', {}, { procs: [proc(4121, { watched: 'no-decrypt', trusted: false, reason: 'desktop-ca-override', hint })] })
+    const [found] = findingsOf(f).filter((x) => x.code === 'desktop-ca-override')
+    const runs = found.commands.map((c) => c.run)
+    const want = statusReason('desktop-ca-override', { harness: 'z-code' })
+    assert.ok(runs.includes(want.command) && runs.includes(want.fix), JSON.stringify(runs))
+    assert.ok(!runs.includes('trocar status z-code'), JSON.stringify(runs))
+  }
+})
+
 test('V49 each finding: what, why and verify say something; a problem or an expected finding has a command (a note may have none); the commands are whole lines with no <…> left; trocar\'s own come first where the catalogue says so; it validates', () => {
   const all = [...Object.values(SETS), ...TRUST_REASONS.map((r) => ({ facts: facts('claude-code', {}, { procs: [proc(4121, { watched: 'no-decrypt', trusted: false, reason: r })] }) }))]
   const seen = new Set()
@@ -535,4 +546,23 @@ test('§1.1⑥ renderFindings: a GUI step folds inside 80 columns, hanging two d
   assert.ok(hosts.every((h) => lines.join(' ').includes(h)), 'nothing of the step is dropped')
   assert.ok(lines[step + 1].startsWith(' '.repeat(at + 2)) && lines[step + 1][at + 2] !== ' ', `the fold hangs two deeper:\n${lines.join('\n')}`)
   assert.ok(lines.some((l) => l.trim() === cmd), 'the command is whole on its own line')
+})
+
+for (const platform of ['darwin', 'win32']) for (const reason of ['blocker', 'blocker-unreadable']) test(`4.11 ⑩ · ${platform} · ${reason}: a form a blocker keeps unwired is never captured and draws no trocar hop, though a sibling form wrote the shared entry; the finding names the place; the sibling stays captured`, () => {
+  const at = '/Users/u/.zcode/v2/setting.json#httpProxyCaCertPath'
+  const entry = { where: '/Users/u/.zcode/cli/config.json#network.httpProxy', trocar: true, opt_in: false, intact: true }
+  const cli = form('codex.cli', { entry, procs: [proc(5530)] })
+  const blocked = form('codex.desktop', { entry, route: { reason, at, code: 'not-routed' }, procs: [proc(5531)] })
+  const F = pfacts('codex', cli, fwForm(17992), { platform })
+  F.harnesses.codex.forms.push(blocked); F.harnesses.codex.procs.push(...blocked.procs); F.forwarder.forms[blocked.id] = fwForm(17992)
+  const t = buildTopology(F).codex
+  const by = (id) => t.branches.find((b) => b.form === id)
+  const b = by('codex.desktop')
+  assert.deepEqual([b.captured, b.reason], [reason === 'blocker' ? false : null, 'not-routed'], JSON.stringify(t.branches.map((x) => [x.form, x.captured, x.reason])))
+  const kinds = (br) => br.path.map((id) => (t.nodes.find((n) => n.id === id) || {}).kind)
+  assert.ok(kinds(by('codex.cli')).some((k) => /^trocar-/.test(k)), 'the sibling goes through trocar')
+  assert.ok(!kinds(b).some((k) => /^trocar-/.test(k)), `no trocar hop on the blocked form's path: ${kinds(b)}`)
+  assert.equal(by('codex.cli').captured, true)
+  const f = findingsOf(F).find((x) => x.code === 'not-routed')
+  assert.ok(f && f.why.includes(at) && f.commands.some((c) => c.run.includes(at)), JSON.stringify(f))
 })

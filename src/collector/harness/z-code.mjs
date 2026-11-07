@@ -14,7 +14,8 @@
 // Not via the trust path: the CLI refreshes its built-in providers by plain fetch from the Z-Code origin (and the CDN
 // it names), so a CLI's origin host is passed through (an app-server does not refresh).
 // Injection (D37④): network.caCertFile in ~/.zcode/cli/config.json = trocar's bundle-z-code.pem (written only while the key
-// is unset; a caCertFile the user set takes trocar's block at its end instead, rule U). The bundle carries the CAs named by
+// is unset; a caCertFile the user set takes trocar's block at its end instead, rule U). On Linux the file the desktop setting names takes
+// trocar's block too (rule U), so the desktop agent it reaches as ZCODE_AGENT_CA_CERT trusts trocar. The bundle carries the CAs named by
 // `merges` in the install shell and the desktop setting: NODE_EXTRA_CA_CERTS, which the key makes ineffective; ZCODE_AGENT_CA_CERT
 // and httpProxyCaCertPath, which override the key while set and are carried so the bundle stays whole once they are unset.
 // Running Z-Code processes' environments are not read (4.11 没覆盖的: re-run install).
@@ -116,10 +117,17 @@ function inject(ctx) {
   see(desk)
   for (const env of [ctx.env, ...ctx.running]) { see(env.get('NODE_EXTRA_CA_CERTS')); see(env.get('ZCODE_AGENT_CA_CERT')) }
   const notes = [...seen].filter((v) => !path.isAbsolute(v)).map((v) => ({ code: CODE.relativePath, text: `${v} is a relative CA path; its certificates are not carried over into ${path.basename(bundle)}` }))
-  if (typeof desk === 'string' && desk.trim()) notes.push({ code: CODE.harnessNote, text: `the Z-Code desktop setting httpProxyCaCertPath (${desk.trim()}, in ${deskFile}) reaches the desktop agent as ZCODE_AGENT_CA_CERT and wins over trocar's caCertFile, so the desktop is not captured while it is set; its CA is merged into ${path.basename(bundle)}, so it can be cleared` })
-  if (ctx.env.has('ZCODE_AGENT_CA_CERT')) notes.push({ code: CODE.harnessNote, text: `ZCODE_AGENT_CA_CERT is set in this shell; a Z-Code started with it ignores trocar's caCertFile and is not captured` })
+  // rule U (4.11 P4), the one finder and judge install's model uses: the desktop setting reaches the desktop agent as ZCODE_AGENT_CA_CERT and replaces
+  // caCertFile (measured on Linux), as the variable does in the install shell, so each file they name takes trocar's marked block at its end — only the user's
+  // own file; the setting itself is never written (it would widen the renderer's trust, 4.6)
+  const blocks = []
+  for (const { file, why } of ctx.userFiles ? ctx.userFiles([DESKTOP_CA, { env: 'ZCODE_AGENT_CA_CERT' }]) : []) {
+    if (why) notes.push({ code: CODE.harnessNote, text: `${file}, named by the Z-Code desktop setting httpProxyCaCertPath (${deskFile}) or ZCODE_AGENT_CA_CERT, takes no trocar block: ${why}; a Z-Code given it ignores trocar's caCertFile, so it is not captured` })
+    else blocks.push({ kind: 'text', format: 'pem-block', path: file })
+  }
+  if (ctx.env.has('ZCODE_AGENT_CA_CERT') && !(ctx.env.get('ZCODE_AGENT_CA_CERT') || '').trim()) notes.push({ code: CODE.harnessNote, text: `ZCODE_AGENT_CA_CERT is set empty in this shell; a Z-Code started with it ignores trocar's caCertFile and is not captured` })
   return {
-    entries: [{ kind: 'json-key', path: cfg, keys: ['network', 'caCertFile'], value: bundle, semantic: 'replace' }],
+    entries: [{ kind: 'json-key', path: cfg, keys: ['network', 'caCertFile'], value: bundle, semantic: 'replace' }, ...blocks],
     files: [{ path: bundle, bundle: true, certsFrom: [...seen].filter((v) => path.isAbsolute(v)) }],
     notes,
   }
@@ -144,6 +152,7 @@ const proxy = {
 const CLI_CONFIG = DOOR_ROUTES['z-code']['cli-config'].file // where `on` writes the door, the place the marker undo looks too
 const CA_KEY = { file: CLI_CONFIG, format: 'jsonc', keys: ['network', 'caCertFile'] }
 const DESKTOP = { base: 'home', env: 'ZCODE_DESKTOP_HOME_DIR', path: '.zcode/v2/setting.json' }
+const DESKTOP_CA = { file: DESKTOP, format: 'json', keys: ['httpProxyCaCertPath'] } // the desktop CA setting, as rule U reads it (Linux inject)
 const APP = perOs({ darwin: { base: 'abs', path: '/Applications/ZCode.app' }, win32: { base: 'localAppData', path: 'Programs/ZCode' } })
 const form = (id, present, verified = { darwin: true, win32: true }) => ({ id, os: ['darwin', 'win32'], route: 'cli-config', cert: 'bundle', trust: 'node', present, verified })
 const proxyMode = {
@@ -166,6 +175,8 @@ const proxyMode = {
   userCertFiles: [CA_KEY],
   blockers: [
     { at: { file: DESKTOP, format: 'json', keys: ['httpProxy'] }, forms: ['z-code.desktop'] },
+    // the desktop CA setting reaches the app-server as ZCODE_AGENT_CA_CERT, under which Z-Code ignores the config's httpProxy and goes direct (macOS measured)
+    { at: DESKTOP_CA, forms: ['z-code.desktop'] },
     { at: { env: 'ZCODE_HTTP_PROXY' } },
     { at: { env: 'ZCODE_AGENT_CA_CERT' } },
   ],
@@ -200,11 +211,16 @@ export default {
       { var: 'zcode:user:caCertFile', semantic: 'replace', list: true },
       { var: 'NODE_EXTRA_CA_CERTS', semantic: 'append' },
     ],
-    refine: (r, env) => (r.var === 'ZCODE_AGENT_CA_CERT' && env.get('zcode:desktop:caPath') && (env.get('ZCODE_AGENT_CA_CERT') || '').trim() === env.get('zcode:desktop:caPath') ? 'desktop-ca-override' : null),
+    // Z-Code takes its network settings as one group, from the environment or from the config files (4.11 Z-Code, mac / win measured): with
+    // ZCODE_HTTP_PROXY set — the user's own, or the desktop's from its proxy setting — caCertFile is not read, only what the environment gives
+    variants: [{ name: 'network settings from the environment (ZCODE_HTTP_PROXY)', when: 'ZCODE_HTTP_PROXY', chain: [{ var: 'ZCODE_AGENT_CA_CERT', semantic: 'replace', emptyStops: true }, { var: 'NODE_EXTRA_CA_CERTS', semantic: 'append' }] }],
+    refine: (r, env) => (r.var === 'ZCODE_AGENT_CA_CERT' && env.get('zcode:desktop:caPath') && (env.get('ZCODE_AGENT_CA_CERT') || '').trim() === env.get('zcode:desktop:caPath') ? 'desktop-ca-override'
+      : r.reason === 'var-missing' && (env.get('ZCODE_HTTP_PROXY') || '') !== '' ? 'zcode-env-network' : null), // the variant's: install's caCertFile is not read here
     rereadsEntry: true, // every new or resumed session reads caCertFile again: a live Z-Code may load the bundle
     afterUninstall: 'session-end',
     hints: {
-      'desktop-ca-override': 'the Z-Code desktop CA setting (httpProxyCaCertPath) overrides ~/.zcode/cli/config.json; its CA is in combined-z-code.pem, so the setting can be cleared',
+      'desktop-ca-override': 'the Z-Code desktop CA setting (httpProxyCaCertPath in ~/.zcode/v2/setting.json) overrides ~/.zcode/cli/config.json; its CA is in combined-z-code.pem, so the setting can be cleared, or trocar install adds trocar\'s certificate to the file it names',
+      'zcode-env-network': 'this Z-Code was started with ZCODE_HTTP_PROXY, so it takes its network settings from the environment and does not read network.caCertFile in ~/.zcode/cli/config.json; start it without ZCODE_HTTP_PROXY, or point ZCODE_AGENT_CA_CERT in that environment at a file that holds trocar\'s certificate',
       shadowed: 'ZCODE_AGENT_CA_CERT (set, or empty) or a project zcode.json / .zcode/config.json overrides the user caCertFile',
     },
   },

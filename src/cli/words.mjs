@@ -232,7 +232,7 @@ function brief(g, max) {
 /** The status reasons a single harness defines (its descriptor's trust hints and entry checks; the 「a harness's own」 part of
  *  src/health/codes.mjs TRUST_REASONS and kimi's shim checks). Their own words come with the data; the clause here is the fallback. */
 const HARNESS_OWN = new Set(['settings-ignored-managed-by-host', 'settings-ignored-restricted', 'settings-ignored-setting-sources', 'dsh-use-openssl-ca', 'dsh-node-too-old',
-  'kimi-not-via-shim', 'kimi-npm-no-shim', 'shim-not-on-path', 'desktop-ca-override'])
+  'kimi-not-via-shim', 'kimi-npm-no-shim', 'shim-not-on-path', 'desktop-ca-override', 'zcode-env-network'])
 
 /** `trocar on`'s note for a harness whose paused hosts it made trocar try again (POST /on's `retried`, 4.11 §1 on/off, D54②). */
 export const retriedNote = (h, hosts) => `trocar decrypts ${hosts.join(', ')} again from ${h}'s next connection; that traffic had been passed on unread after a TLS failure`
@@ -290,15 +290,15 @@ export function statusReason(code, { harness = '', pid = null, cause = null } = 
     'chromium-child': [`a helper process of ${h} that makes no model calls; it is never decrypted`],
     'hook-inherited': [`this ${h} process got trocar's proxy from its parent but did not load trocar's plugin, so it is only forwarded`, `start ${h} on its own, with its plugins loaded`],
     // the trust resolver's generic reasons (src/collector/core/trust)
-    'var-missing': ["this process's environment has no trocar trust entry in effect", null, 'trocar install'],
+    'var-missing': ["this process's environment has no trocar trust entry in effect", `restart ${h} after trocar install`, 'trocar install'], // the entry is read at start
     'file-unreadable': ['the certificate file the trust entry points to could not be read', `fix the read permission of that file, then restart ${h}`],
-    'ca-not-in-file': ["the certificate file in effect does not hold trocar's certificate", null, 'trocar install'],
-    'replace-without-ca': ["a setting that replaces the root certificates points to a bundle without trocar's certificate", null, 'trocar install'],
-    shadowed: ["a higher-priority setting without trocar's certificate overrides trocar's entry", 'change that setting', 'trocar install'],
+    'ca-not-in-file': ["the certificate file in effect does not hold trocar's certificate", `restart ${h} after trocar install`, 'trocar install'],
+    'replace-without-ca': ["a setting that replaces the root certificates points to a bundle without trocar's certificate", `restart ${h} after trocar install`, 'trocar install'],
+    shadowed: ["a higher-priority setting without trocar's certificate overrides trocar's entry", `change that setting, or run trocar install; then restart ${h}`, 'trocar install'],
     'verify-disabled': [`${h} turned off certificate checks on a connection itself, so trocar does not decrypt it`, 'turn the checks back on to have that connection recorded'],
     'marker-stale': ["the trust plugin's marker belongs to an earlier process with the same pid", `restart ${h} once`],
     'marker-pending': ["waiting for this process's trust plugin to report (up to tens of seconds after start)", 'this updates itself'],
-    'ca-unusable': ["trocar's capture certificate cannot be used", null, 'trocar install'],
+    'ca-unusable': ["trocar's capture certificate cannot be used", `restart ${h} after trocar install`, 'trocar install'],
     'environ-unreadable': ["this process's environment could not be read, so its trust entry cannot be judged", `restart ${h} once`],
     'config-unreadable': ['one of its config files could not be read, so the trust entry in it does not count', `fix the read permission of that file, then restart ${h}`],
     'settings-unparsable': ['one of its settings files could not be parsed, so the trust entry in it does not count', `fix that file, then restart ${h}`],
@@ -310,7 +310,8 @@ export function statusReason(code, { harness = '', pid = null, cause = null } = 
     'dsh-use-openssl-ca': [`${h} runs with --use-openssl-ca, under which trocar cannot add its certificate`, 'start it without that flag'],
     'dsh-node-too-old': [`${h} runs on a Node too old to add a certificate while running`, 'run it on a newer Node'],
     'kimi-npm-no-shim': [`this is the npm build of ${h}; trocar sets up only the build from its own installer`],
-    'desktop-ca-override': [`the desktop certificate setting of ${h} overrides the one trocar wrote`],
+    'desktop-ca-override': [`the desktop certificate setting of ${h} overrides the one trocar wrote`, "trocar install adds trocar's certificate to the file that the app's httpProxyCaCertPath setting (its setting.json) names; then restart the app (or clear that setting instead)", 'trocar install'],
+    'zcode-env-network': [`${h} was started with ZCODE_HTTP_PROXY, so it does not read the certificate setting trocar wrote`, 'start it without ZCODE_HTTP_PROXY, or point ZCODE_AGENT_CA_CERT in that environment at a file that holds trocar\'s certificate'],
     'smart-app-control': [`Smart App Control is on, so trocar could not set up the install folder of ${h}`],
     // the rest of doctor's findings (1.6 附录 B, src/netenv/findings.mjs FINDING_CODES): the catalogue's "what" sentence, without the values a clause is not given
     'egress-differs': [`some of ${h}'s connections now leave through a different hop`, `to keep the old path, turn capture off for ${h}`, `trocar off ${h}`],
