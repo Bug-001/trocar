@@ -164,6 +164,33 @@ test('2.3 读者优先: a tick held down while an answer lands moves the step wh
   })
 })
 
+// 2.3 读者优先, the aim: a tick the pointer rests on is not redrawn away while answers land, so the press lands on the tick aimed at; the rows
+// redraw once the pointer leaves them, rests or has held them HOVER_MS (pace.mjs). The pointer keeps moving by a pixel on the tick, as a hand
+// aiming does.
+test('2.3 读者优先: a tick the pointer rests on stays drawn while an answer lands; the rows redraw once it rests or leaves', { skip }, async () => {
+  const w = world(12, { calls: 30000, page: 1500, files: 600, compact: 0.02 })
+  await growingDesk(w, async (d) => {
+    const { page, grant, drawn } = d
+    await grant(2); await drawn()
+    for (let j = 0; j < 3; j++) {
+      await toEnd(d)
+      const pt = await aimOlder(d, j)
+      await page.mouse.move(pt.x, pt.y)
+      await page.evaluate(([x, y]) => { window.__aimed = document.elementFromPoint(x, y) }, [pt.x, pt.y])
+      let aiming = true
+      const hand = (async () => { for (let k = 0; aiming; k++) { await page.mouse.move(pt.x + (k % 2), pt.y); await page.waitForTimeout(100) } })()
+      try {
+        await grant(1) // taken by a head read; its redraw would rewrite the rows
+        await page.waitForTimeout(700) // the answer applied and its redraw held: at most HOVER_MS (pace.mjs) from when it was due
+        assert.ok(await page.evaluate(() => !!window.__aimed && window.__aimed.isConnected && window.__aimed.matches('.tick')), `round ${j}: the tick under the pointer was redrawn away`)
+      } finally { aiming = false; await hand }
+      await page.mouse.move(pt.x, pt.y - 400) // off the rows
+      await drawn()
+      assert.ok(await page.evaluate(() => !window.__aimed.isConnected), `round ${j}: the rows never redrew after the pointer left`)
+    }
+  })
+})
+
 // The other half of the same rule: a redraw already past the pace when the pointer goes down. The followed step's bodies hold it between
 // its turn and the drawing of the lanes; pressed there and let go after they come, the tick still jumps, and to the call pressed: the
 // lanes already hold the answer's rows and the drawn ticks do not, so a place read off a tick names another call (2.3 §播放头是调用). The

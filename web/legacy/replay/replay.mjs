@@ -742,9 +742,10 @@ function openDesk(ctx, route0, makeView) {
     const d = redrawDue
     if (d) { d.changed = d.changed === null || changed === null ? null : new Set([...d.changed, ...changed]); return d.p }
     const due = redrawDue = { changed }
-    // calm again at its turn: a press since the pace let it through is not redrawn away (2.3 读者优先), and it comes before buildLanes, so
-    // the rows under the pointer and the lanes a click reads stay one drawing
-    due.p = yieldNow().then(() => pace.redraw()).then(() => serial(async () => { await pace.calm(); if (redrawDue === due) redrawDue = null; pace.drew(); return redrawNow(due.changed) }))
+    // held again at its turn: a press or an aim since the pace let it through is not redrawn away (2.3 读者优先), and it comes before
+    // buildLanes, so the rows under the pointer and the lanes a click reads stay one drawing. The aim's part is bounded (HOVER_MS), so
+    // the answers queued behind it wait at most that long
+    due.p = yieldNow().then(() => pace.redraw()).then(() => serial(async () => { await pace.hold(); if (redrawDue === due) redrawDue = null; pace.drew(); return redrawNow(due.changed) }))
     return due.p
   }
   async function redrawNow(changed) {
@@ -865,7 +866,8 @@ function openDesk(ctx, route0, makeView) {
 
   // hang the desk in `el` as it was left; the URL decides the view only when it names a step (1.2 §路由「离开再回来」)
   // the reader's inputs, heard before anything acts on them, while the desk is on the page (the pace of its background work)
-  const INPUTS = [['keydown', () => pace.input()], ['pointerdown', () => pace.press(true)], ...['pointerup', 'pointercancel', 'blur'].map((k) => [k, () => pace.press(false)])]
+  const INPUTS = [['keydown', () => pace.input()], ['pointerdown', () => pace.press(true)], ...['pointerup', 'pointercancel', 'blur'].map((k) => [k, () => pace.press(false)]),
+    ['pointermove', (e) => pace.hover(!!(e.target && e.target.closest && e.target.closest('#rails')))]]
   function attach(el, ctx, route) {
     host = el
     for (const [k, f] of INPUTS) window.addEventListener(k, f, true)
