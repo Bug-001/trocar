@@ -248,6 +248,10 @@ export const COMPACTION_LINE = (n) => `${n} compactions`
 export const COUNTS_LINE = { sub: (n) => count(n, 'sub-agent'), bg: (n) => count(n, 'background call'), probe: (n) => count(n, 'token count') }
 export const DURATION_WORD = 'Duration'
 export const SESSION_ID = 'Session id'
+// the declared lineage (1.2 §信息弹出层 row 8): a line per declared id, or one line when the agent declares none or it is not known
+export const PARENT_LINE = 'Parent session'
+export const FORK_LINE = 'Forked from'
+export const LINEAGE_LINE = { 'no-keys': "Parent or fork: this agent doesn't say", unread: 'Parent or fork: not known' }
 export const COPY = 'Copy'
 export const TRUNCATED_NOTE = (shown) => `Counts only the ${count(shown, 'call')} shown`
 export const MODEL_CALLS = (n) => count(n, 'model call')

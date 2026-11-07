@@ -14,6 +14,7 @@ import { chapterAt, chapterJump, problemSteps, problemTarget, landing, OVW_BARCA
 import { railToggles } from '../../../legacy/replay/rails.mjs'
 import { cacheLabel, costLabel, contentRefOf, contentRefKOf, priceStateNote } from '../../../legacy/replay/stepbar.mjs'
 import { totalsOf } from '../../../legacy/replay/header.mjs'
+import { formatHash } from '../../../legacy/core/router.mjs'
 import { FLAG, cellsOf } from '../../../../src/view/head-cols.mjs'
 import { ENTRY, ENTRY_TIP } from '../../../legacy/labels/library.mjs'
 import { stepCount, partsOf, stepAt, placeSpan } from './strip-layout.mjs'
@@ -136,7 +137,7 @@ function factsOf(desk, gap, harness) {
   return { items, tech }
 }
 
-// 1.2 §信息弹出层: only statistics, in the table's order; a 0 or absent row is not there. Every number is sessionTotals()'s.
+// 1.2 §信息弹出层: the statistics, then the session's lineage and id, in the table's order; a 0 or absent row is not there. Every number is sessionTotals()'s.
 function infoRows(s) {
   const lanes = s.lanes || [], meta = s.meta || {}, desk = s.desk || {}
   const t = totalsOf(s), rows = []
@@ -176,6 +177,14 @@ function infoRows(s) {
   const t0 = a && (row(a.first) || a.calls[0]), t1 = a && (row(a.last) || a.calls.at(-1))
   const ms = t0 && t1 ? Date.parse(t1.ts) - Date.parse(t0.ts) : NaN
   if (Number.isFinite(ms)) rows.push({ key: 'duration', ms, text: `${W.DURATION_WORD} ${fmtUp(ms)}` })
+  // 8: only a declared id draws a line, linked through #/session/<id> (resolved there, or said to be not in the list); a null draws nothing
+  const own = (k) => Object.hasOwn(meta, k) ? meta[k] : null
+  if (meta.lineage_source === 'wire') {
+    for (const [key, k, text] of [['parent', 'parent_session_id', W.PARENT_LINE], ['fork', 'fork_of_session_id', W.FORK_LINE]]) {
+      const id = own(k)
+      if (typeof id === 'string' && id) rows.push({ key, id, text, href: formatHash({ screen: 'session-link', id }) })
+    }
+  } else if (Object.hasOwn(W.LINEAGE_LINE, meta.lineage_source)) rows.push({ key: 'lineage', text: W.LINEAGE_LINE[meta.lineage_source] })
   if (meta.session_id) rows.push({ key: 'id', id: meta.session_id, text: W.SESSION_ID, copy: W.COPY })
   if (meta.project_slug && meta.project_slug !== '_unresolved') rows.push({ key: 'project', narrow: true, text: `${W.PROJECT} ${meta.project_path ? String(meta.project_path).split('/').filter(Boolean).pop() : meta.project_slug}` })
   if (!stats) rows.push({ key: 'calls', n: meta.calls || 0, text: W.MODEL_CALLS(meta.calls || 0) }) // nothing to count: never blank
