@@ -72,6 +72,7 @@ export function validateReceipt(r) {
     }
     if (!isString(c.change)) bad.push(`${at}.change: not a string`)
     if (!(c.backup === null || isString(c.backup))) bad.push(`${at}.backup: neither a path nor null`)
+    if ('why_no_backup' in c && !(c.backup === null && isString(c.why_no_backup))) bad.push(`${at}.why_no_backup: a string, only beside a null backup`)
   })
   listOf(r, 'created', bad, stringOrObject(bad))
   listOf(r, 'removed', bad, stringOrObject(bad))
