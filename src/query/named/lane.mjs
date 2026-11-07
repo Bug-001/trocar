@@ -80,8 +80,9 @@ function opsOf(P, C) {
 // The kept lane ledgers of a session's fold log (its state's): lane key → {maps, step, rid, off} = laneLedger's maps at the lane's
 // step `step` (rid `rid`), as the log stood at byte `off` (its frontier then). Weighed by ledgerWeight, LEDGER_BYTES in all.
 const ledgers = new WeakMap();
-// the definitions a lane stepper keeps read (bytes, about)
-const DEF_BYTES = 8 << 20;
+/** The definitions a lane stepper keeps read (bytes, weighed as `weigh` weighs; 3.5 §内存有界): one cache, which a caller may share across
+ *  its steppers (ctx-files.mjs: one per rendered part), since a definition is a function of its bid. */
+export const DEF_BYTES = 8 << 20;
 // a kept ledger still good for the lane `lane` now: its step holds the same rid and no row of the lane at or before it changed since
 // (one that moved in or out of the lane before it moves its step's rid)
 function keptOf(cols, log, lane, e) {
@@ -96,14 +97,15 @@ function keptOf(cols, log, lane, e) {
 
 /** weigh(v) → what a kept step or definition holds in the heap, about: its JSON's bytes (every field) and the entry. */
 export const weigh = (v) => 96 + (v ? 2 * JSON.stringify(v).length : 0);
-/** laneStepper(st, key, uses) → the steps of the lane `key` of a session state (sessionState): {L, n, rids, lines, lineAt(i), eventsAt(i),
+/** laneStepper(st, key, uses, defs) → the steps of the lane `key` of a session state (sessionState): {L, n, rids, lines, lineAt(i), eventsAt(i),
  *  listAt(i), replyAt(i), step(i, prev), defOf(bid, list), release(keep)}. step(i, prev) = step i with its ops against step `prev`'s list (−1: a
  *  keyframe, every position added), parent = step `prev`'s rid (null for −1); defOf = a definition on the wire, its render joined with
  *  the tool_use of the list `list` (a listAt(i); the first it is asked with: cached by bid). Lists, lines and definitions are read once each; `uses`
  *  (an lru by bid: a block's tool_use id and the render a tool_result inherits from it, 0 for a block that is no tool_use; a function
  *  of its bid) may be one kept across steppers (ctx-files.mjs, the writer's memo), so a list's blocks are not read again at every
- *  slice, and what it keeps is these few fields, never the definitions. */
-export function laneStepper(st, key, uses = lru(DEF_BYTES)) {
+ *  slice, and what it keeps is these few fields, never the definitions. `defs` (an lru by bid: the stored definition) may be one
+ *  shared across steppers too, so a block every lane holds is read once. */
+export function laneStepper(st, key, uses = lru(DEF_BYTES), defs = lru(DEF_BYTES)) {
   const { store } = st, { cols, log } = st.V, L = laneOf(cols, key), { rids, slots } = L;
   const lines = new Map(), lineAt = (i) => { if (!lines.has(i)) lines.set(i, log.read(...log.latest(rids[i]))); return lines.get(i); };
   // the `user` events before step i (3.5: every `user` event's `k` is its place among the lane's, 1-based), walked from the last place
@@ -111,8 +113,7 @@ export function laneStepper(st, key, uses = lru(DEF_BYTES)) {
   let bi = 0, bs = 0;
   const before = (i) => { for (; bi < i; bi++) bs += cols.uc[slots[bi]]; for (; bi > i; bi--) bs -= cols.uc[slots[bi - 1]]; return bs; };
   const eventsAt = (i) => { let j = before(i); return lineAt(i).e.map((e) => (e.type === 'user' ? { ...e, k: ++j } : e)); };
-  // the definitions read, by bytes about (their strings: a tool's name can be tens of KB), the least recently used out
-  const lists = new Map(), defs = lru(DEF_BYTES), wires = new Map();
+  const lists = new Map(), wires = new Map();
   const rowOf = (i) => store.rows.get(rids[i]);
   const listAt = (i) => {
     if (!lists.has(i)) {
@@ -125,7 +126,7 @@ export function laneStepper(st, key, uses = lru(DEF_BYTES)) {
   const defOf = (bid) => {
     if (defs.has(bid)) return defs.get(bid);
     const d = store.readDef(bid) || null;
-    defs.set(bid, d, 128 + (d ? 2 * ((d.preview || '').length + (d.toolName || '').length + (d.label || '').length + (d.ref || '').length) : 0));
+    defs.set(bid, d, weigh(d)); // every field: an unaddressable definition carries its body (BODY)
     return d;
   };
   // a tool_result whose own sniff is plain text takes its render from its tool_use's (render-kind.mjs inheritedRender): the tool_use

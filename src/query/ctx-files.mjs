@@ -15,7 +15,7 @@ import { HEAD_FILES } from './ctx-key.mjs';
 import { lru, sessionDir } from './projection.mjs';
 import { isModelCall, sessionFactsOf } from './rows.mjs';
 import { laneOf, placeIn, recOf, FLAG } from './session-doc.mjs';
-import { laneStepper, weigh } from './named/lane.mjs';
+import { DEF_BYTES, laneStepper, weigh } from './named/lane.mjs';
 
 /** The answer files' format version (3.5 `v`). */
 export const CTX_V = 3;
@@ -212,7 +212,8 @@ function stepLines(S, key, i, p, wrote, memo = null) {
 }
 // the `{l}` lines of a tail: every lane header of its part (they follow the doc-head line); a pack has none (3.5 `{l}`)
 const headsOf = (s, part) => { const ax = axisOf(s.V); return s.V.lanes.filter((h) => (h.lane === ax) === (part === 'main')).map((h) => ({ l: h })); };
-const textOf = (lines) => lines.map((o) => `${JSON.stringify(o)}\n`).join('');
+// a line made into bytes at once (outside the heap): a span's text, rendered or appended, can be tens of MB
+const lineBytes = (o) => Buffer.from(`${JSON.stringify(o)}\n`, 'utf8');
 /** renderSpan(s, n, part, tail) → the NDJSON text of pack n's `part` (`main` = the axis lane's, `rest` = the rest), or of the open
  *  tail when `tail`: the doc-head line; a tail's `{l}` for every lane of the part; per call of the part in step order its row, the definitions not yet in the file, its step against
  *  the previous step of its lane in this file (none: a keyframe); `{r}` for the part's members in write order; `{x}` (rest) for
@@ -222,20 +223,21 @@ export const renderSpan = (s, n, part, tail = false) => drain(rendering(s, n, pa
 const drain = (it) => { for (;;) { const r = it.next(); if (r.done) return r.value; } };
 // a span's doc-head line
 const docLine = (s, n, part, tail, [s0, s1] = axisSpans(s)[n]) => docOf(errorsOf(s.indexErrors, []), { id: s.id, ...(tail ? { tail: { n, part, s0 } } : { pack: { n, part, s0, s1 } }) }, 'lane');
-// → {buf, wrote}: the span's text, rendered a call at a time (it yields after each: the writer's unit, 3.5 后台抽取与归约)
-function* rendering(s, n, part, tail, memo = null, spans = axisSpans(s)) {
+// → {buf, wrote}: the span's text, rendered a call at a time (it yields after each: the writer's unit, 3.5 后台抽取与归约). Its lane steppers
+// share one definitions cache and one tool_use cache (`uses`: the memo's, else the writer's own, else one of this call), so a block
+// every lane holds is read once a call, and what they keep does not grow with the lanes (3.5 §内存有界).
+function* rendering(s, n, part, tail, memo = null, spans = axisSpans(s), uses = memo || lru(DEF_BYTES)) {
   const V = s.V, { cols, log } = V, ax = axisOf(V), main = part === 'main', a = n * PACK_MEMBERS;
   const axV = ax == null ? -2 : cols.keys.get(ax), onAxis = (rid) => isRow(cols, rid) && cols.ln[cols.slotOf(rid)] === axV;
   const members = s.plan.members.slice(a, Math.min(a + PACK_MEMBERS, upToOf(s))).filter((r) => s.cut(r)), [s0, s1] = spans[n];
-  // each line made into bytes at once (outside the heap): a span's text can be tens of MB
-  const chunks = [], out = { push: (...os) => { for (const o of os) chunks.push(Buffer.from(`${JSON.stringify(o)}\n`, 'utf8')); } };
+  const chunks = [], out = { push: (...os) => { chunks.push(Buffer.concat(os.map(lineBytes))); } }, defs = lru(DEF_BYTES);
   out.push(docLine(s, n, part, tail, spans[n]));
   if (tail) out.push(...headsOf(s, part));
   const calls = members.map((r) => String(r.id)).filter((rid) => isRow(cols, rid) && onAxis(rid) === main);
   calls.sort((x, y) => compareStep(cols.ts[cols.slotOf(x)], x, cols.ts[cols.slotOf(y)], y));
   const steppers = new Map(), prev = new Map(), wrote = new Set();
   for (const rid of calls) {
-    const key = log.read(...log.latest(rid)).r.lane, S = steppers.get(key) || steppers.set(key, laneStepper(s, key, memo || undefined)).get(key), i = placeIn(cols, S.L, rid);
+    const key = log.read(...log.latest(rid)).r.lane, S = steppers.get(key) || steppers.set(key, laneStepper(s, key, uses, defs)).get(key), i = placeIn(cols, S.L, rid);
     out.push(...stepLines(S, key, i, prev.has(key) ? prev.get(key) : -1, wrote, memo));
     prev.set(key, i);
     S.release(i);
@@ -336,7 +338,7 @@ export function listedText(home, id, n, part, fs = nodeFs) {
 }
 const same = (a, b) => !!a && a.equals(b);
 // a file's text begins with the doc-head line `o`
-const headed = (t, o) => { const h = Buffer.from(textOf([o]), 'utf8'); return !!t && t.subarray(0, h.length).equals(h); };
+const headed = (t, o) => { const h = lineBytes(o); return !!t && t.subarray(0, h.length).equals(h); };
 // The tail `part` of span n a worker before this one wrote, carried on by appends: whole, of the size its checkpoint says (nothing
 // was written to it after the checkpoint), its doc-head line the one a render now writes (same v, span, s0, errors); the definitions
 // it holds read back from its `{d}` lines. Else (a line that does not parse too) null: it is written afresh (a fresh render is as
@@ -442,7 +444,7 @@ function* writing(ctx, s) {
   for (let n = 0; n < N; n++) {
     const k = W.packs[n];
     if (k && !d.packs.has(n) && k.s0 === spans[n][0] && k.s1 === spans[n][1]) continue; // its rows and its doc head as written
-    W.packs[n] = yield* sealing(s, { home, fs, ax, memo: n >= W.open ? W.memo : null }, n, spans, c && c.ax === ax && !d.packs.has(n), k);
+    W.packs[n] = yield* sealing(s, { home, fs, ax, memo: n >= W.open ? W.memo : null, uses: W.memo }, n, spans, c && c.ax === ax && !d.packs.has(n), k);
   }
   // a tail written afresh → its {size, defs}
   const fresh = function* (part) {
@@ -463,7 +465,7 @@ function* writing(ctx, s) {
   return W.files;
 }
 // pack n's files brought to the state `s` (`kept`: its files may be taken as they are) → its W.packs entry
-function* sealing(s, { home, fs, ax, memo }, n, spans, kept, k) {
+function* sealing(s, { home, fs, ax, memo, uses }, n, spans, kept, k) {
   const files = PARTS.map((p) => packFile(home, s.id, n, p));
   // a pack sealed before this worker and unchanged since, its files written under this axis (a pack's main / rest split is the
   // axis's): its files, when whole and their doc head ([s0, s1]) the one a render now writes
@@ -471,7 +473,7 @@ function* sealing(s, { home, fs, ax, memo }, n, spans, kept, k) {
   if (kept) { texts = files.map((f, i) => { const t = readText(fs, f, true); return headed(t, docLine(s, n, PARTS[i], false, spans[n])) ? t : null; }); yield; }
   if (!texts || texts.includes(null)) {
     texts = [];
-    for (const p of PARTS) texts.push((yield* rendering(s, n, p, false, memo, spans)).buf);
+    for (const p of PARTS) texts.push((yield* rendering(s, n, p, false, memo, spans, uses)).buf);
     for (let i = 0; i < PARTS.length; i++) {
       const t = texts[i], due = k ? k.h[i] !== sha(t) : !same(readText(fs, files[i], true), t);
       yield;
@@ -486,31 +488,31 @@ function* sealing(s, { home, fs, ax, memo }, n, spans, kept, k) {
 // written (torn, removed, replaced, or not carried on from the last worker) is written afresh instead.
 function* appendTails(s, W, d, N, upTo, fs, fileOf, fresh) {
   const { cols, log } = s.V, ax = W.ax, add = { main: [], rest: [] }, partOf = (key) => (key === ax ? 'main' : 'rest');
-  for (const h of d.lanes) add[partOf(h.lane)].push({ l: h });
+  const steppers = new Map(), defs = lru(DEF_BYTES), push = (part, ...os) => { add[part].push(Buffer.concat(os.map(lineBytes))); };
+  for (const h of d.lanes) push(partOf(h.lane), { l: h });
   const calls = [...d.opens].filter((rid) => isRow(cols, rid)).sort((x, y) => compareStep(cols.ts[cols.slotOf(x)], x, cols.ts[cols.slotOf(y)], y));
-  const steppers = new Map();
   for (const rid of calls) {
-    const key = log.read(...log.latest(rid)).r.lane, S = steppers.get(key) || steppers.set(key, laneStepper(s, key, W.memo)).get(key), i = placeIn(cols, S.L, rid);
+    const key = log.read(...log.latest(rid)).r.lane, S = steppers.get(key) || steppers.set(key, laneStepper(s, key, W.memo, defs)).get(key), i = placeIn(cols, S.L, rid);
     let p = -1;
     for (let t = i - 1; t >= 0 && t >= i - 64; t--) if (spanOf(s, S.rids[t]) >= N) { p = t; break; }
-    add[partOf(key)].push(...stepLines(S, key, i, p, W.tails[partOf(key)].defs, W.memo));
+    push(partOf(key), ...stepLines(S, key, i, p, W.tails[partOf(key)].defs, W.memo));
     yield;
   }
   const axV = ax == null ? -2 : cols.keys.get(ax);
   for (let q = W.rec; q < upTo; q++) {
     const r = s.plan.members[q], rid = String(r.id);
-    if (s.cut(r)) add[isRow(cols, rid) && cols.ln[cols.slotOf(rid)] === axV ? 'main' : 'rest'].push({ r: recOf(r) });
+    if (s.cut(r)) push(isRow(cols, rid) && cols.ln[cols.slotOf(rid)] === axV ? 'main' : 'rest', { r: recOf(r) });
   }
-  for (const f of d.fails) add.rest.push({ x: { where: f.id, code: f.code, reason: f.reason } });
-  for (const [rid, part] of d.gone) add[part].push({ g: rid });
+  for (const f of d.fails) push('rest', { x: { where: f.id, code: f.code, reason: f.reason } });
+  for (const [rid, part] of d.gone) push(part, { g: rid });
   for (const part of PARTS) {
     const file = fileOf(part);
     let size = -1;
     try { size = fs.statSync(file).size; } catch { /* gone */ }
     if (size !== W.tails[part].size) { W.tails[part] = yield* fresh(part); continue; }
     if (!add[part].length) continue;
-    const t = textOf(add[part]);
+    const t = Buffer.concat(add[part]);
     fs.appendFileSync(file, t);
-    W.tails[part].size += Buffer.byteLength(t);
+    W.tails[part].size += t.length;
   }
 }
