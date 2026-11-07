@@ -116,15 +116,19 @@ export const CHROMES = [
 // --window-size leaves the viewport an inset short of the window in headless Chrome 156, so the page is driven over the DevTools
 // pipe (fd 3 in, fd 4 out, NUL-delimited JSON) with an explicit viewport instead of --screenshot.
 function cdpShot(bin, tmp, url, w, h, out) {
-  const chrome = spawn(bin, ['--headless=new', '--disable-gpu', '--hide-scrollbars', '--remote-debugging-pipe', `--user-data-dir=${tmp}/p`],
+  const chrome = spawn(bin, ['--headless=new', '--disable-gpu', '--hide-scrollbars', '--use-mock-keychain', '--remote-debugging-pipe', `--user-data-dir=${tmp}/p`],
     { stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'] })
   let id = 0, buf = '', err = '', onLoad
   const waiting = new Map()
   chrome.stderr.on('data', (d) => { err = (err + d).slice(-2000) })
+  chrome.stdio[3].on('error', () => {}) // a Chrome that died at start: its exit below says why, not an EPIPE
+  chrome.stdio[4].setEncoding('utf8') // a character split across two chunks stays whole
   chrome.stdio[4].on('data', (d) => {
     const parts = (buf + d).split('\0')
     buf = parts.pop()
-    for (const m of parts.map((p) => JSON.parse(p))) {
+    let msgs
+    try { msgs = parts.map((p) => JSON.parse(p)) } catch (e) { err += `\nunreadable DevTools message: ${e.message}`; chrome.kill(); return }
+    for (const m of msgs) {
       if (m.method === 'Page.loadEventFired') onLoad?.()
       const p = waiting.get(m.id)
       if (p) { waiting.delete(m.id); m.error ? p.reject(new Error(`chrome: ${m.error.message}`)) : p.resolve(m.result) }
@@ -142,6 +146,11 @@ function cdpShot(bin, tmp, url, w, h, out) {
     const loaded = new Promise((r) => { onLoad = r })
     await send('Page.navigate', { url }, sessionId)
     await loaded
+    // the page this load was for, and how tall it really is: a line the row count missed (a tab, a glyph wider than the grid) is shown, not cut
+    const { result } = await send('Runtime.evaluate', { expression: 'JSON.stringify([location.href, document.documentElement.scrollHeight])', returnByValue: true }, sessionId)
+    const [href, tall] = JSON.parse(result.value)
+    if (href !== url) throw new Error(`chrome loaded ${href}, not the page to shoot`)
+    if (tall > h) await send('Emulation.setDeviceMetricsOverride', { width: w, height: tall, deviceScaleFactor: 2, mobile: false }, sessionId)
     const { data } = await send('Page.captureScreenshot', { format: 'png' }, sessionId)
     fs.writeFileSync(out, Buffer.from(data, 'base64'))
   }
@@ -154,7 +163,9 @@ function cdpShot(bin, tmp, url, w, h, out) {
   return Promise.race([run(), died]).finally(() => {
     clearTimeout(timer)
     chrome.kill() // our own child, by its handle
-    return new Promise((r) => (chrome.exitCode !== null || chrome.signalCode ? r() : chrome.once('exit', r)))
+    const hard = setTimeout(() => chrome.kill('SIGKILL'), 5000) // one that ignores SIGTERM does not hold the script
+    hard.unref()
+    return new Promise((r) => (chrome.exitCode !== null || chrome.signalCode ? r() : chrome.once('exit', r))).finally(() => clearTimeout(hard))
   })
 }
 
@@ -165,6 +176,8 @@ async function shoot({ doc, w, h, out }) {
     const b = await chromium.launch()
     const page = await b.newPage({ viewport: { width: w, height: h }, deviceScaleFactor: 2 })
     await page.setContent(doc)
+    const tall = await page.evaluate(() => document.documentElement.scrollHeight)
+    if (tall > h) await page.setViewportSize({ width: w, height: tall })
     await page.screenshot({ path: out })
     await b.close()
     return

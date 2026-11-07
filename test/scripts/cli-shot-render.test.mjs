@@ -31,6 +31,7 @@ function decode(buf) {
   const raw = zlib.inflateSync(Buffer.concat(idat)), stride = w * ch, px = Buffer.alloc(h * stride)
   for (let y = 0; y < h; y++) {
     const f = raw[y * (stride + 1)], src = raw.subarray(y * (stride + 1) + 1, (y + 1) * (stride + 1))
+    assert.ok(f <= 4, `row ${y}: filter type ${f} is not one of PNG's five`)
     for (let x = 0; x < stride; x++) {
       const a = x >= ch ? px[y * stride + x - ch] : 0, b = y ? px[(y - 1) * stride + x] : 0, c = x >= ch && y ? px[(y - 1) * stride + x - ch] : 0
       const p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c)
@@ -55,7 +56,7 @@ function bands({ w, h, ch, px }) {
 
 function shot(lines) {
   const dir = tmpDir('trocar-shot-test-'), txt = path.join(dir, 'in.txt'), png = path.join(dir, 'out.png')
-  fs.writeFileSync(txt, Array.from({ length: lines }, (_, i) => `line ${i + 1} ${'x'.repeat(i % 40)}`).join('\n') + '\n')
+  fs.writeFileSync(txt, (typeof lines === 'string' ? lines : Array.from({ length: lines }, (_, i) => `line ${i + 1} ${'x'.repeat(i % 40)}`).join('\n')) + '\n')
   const r = spawnSync(process.execPath, [SCRIPT, '--text', txt, '--out', png], { encoding: 'utf8', timeout: 90000 })
   assert.equal(r.status, 0, r.stderr)
   return decode(fs.readFileSync(png))
@@ -69,3 +70,10 @@ for (const n of [3, 30]) {
     assert.ok(img.h - b.at(-1)[1] < 2 * pitch, `last band ends at ${b.at(-1)[1]} of ${img.h}`)
   })
 }
+
+// a tab is 1 cell to the row count and 8 on the page: a line of tabs that wraps on the page is shown whole, and the line after it too
+test('a text the row count undercounts (tabs) is shown to its last line, not cut', { skip }, () => {
+  const img = shot(`${'x\t'.repeat(30)}x\nend`), b = bands(img)
+  assert.ok(b.length >= 3, JSON.stringify(b)) // the tab line wraps on the page, then `end`
+  assert.ok(img.h - b.at(-1)[1] >= 16, `the last line keeps its bottom padding, not cut at the edge: last band ends at ${b.at(-1)[1]} of ${img.h}`)
+})
