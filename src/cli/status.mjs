@@ -317,7 +317,7 @@ async function installCertOf({ f, m, dir, fs, platform, home, env, deps }) {
         : has && has.error ? { store, ...unknown(`the root store could not be read (${has.error})`) } : { store, ...notInstalled }
   }
   const down = reply && reply.cert ? null : f.daemon.state === 'running' ? 'the daemon\'s reply has no issuer block' : `the daemon is ${f.daemon.state}${f.daemon.reason ? ` (${f.daemon.reason})` : ''}: only it holds the issuer`
-  const custody = model ? ((items.find((e) => e.kind === 'root-key') || {}).custody || {}).kind || null : 'file'
+  const custody = model ? ((items.find((e) => e.kind === 'root-key') || {}).custody || {}).kind || null : null // Linux has no custody: it reads its CA files (4.11 P1)
   const keyFile = !model && items.find((e) => e.role === 'ca-key'), keyThere = !!keyFile && (() => { try { return fs.statSync(keyFile.path).isFile() } catch (e) { rethrowSandbox(e); return false } })()
   const key = !model ? { custody, state: keyThere ? 'present' : 'missing', code: keyThere ? null : 'cert-key-missing' }
     : down ? { custody, state: 'unknown', code: null, reason: down }
