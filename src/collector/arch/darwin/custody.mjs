@@ -8,7 +8,7 @@
 import crypto from 'node:crypto'
 import nodeFs from 'node:fs'
 import path from 'node:path'
-import { cliCall, cliCustody } from '../../core/tls/custody-cli.mjs'
+import { cliCall, cliCustody, UNAVAILABLE } from '../../core/tls/custody-cli.mjs'
 import { NATIVE, nativePath, pins, sha256 } from './native.mjs'
 
 /** The helper may show the keychain's prompt (interactive install): the same wait the root store gives the OS's own. */
@@ -25,7 +25,7 @@ export const keychainCustody = ({ helperPath, run = null, env = process.env }) =
     ...cliCustody({ kind: 'keychain', ...program }),
     canCreate() {
       const o = call(['session'])
-      if (o === 'unavailable' || o.graphic !== true) throw Object.assign(new Error(`${NATIVE.signHelper} session: this session has no graphical access, so the login keychain cannot make a key here`), { code: 'unavailable' })
+      if (o === 'unavailable' || o.graphic !== true) throw Object.assign(new Error(`${NATIVE.signHelper} session: this session has no graphical access, so the login keychain cannot make a key here`), { code: UNAVAILABLE })
     },
   }
 }
