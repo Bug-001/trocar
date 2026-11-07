@@ -10,7 +10,7 @@ import { bigSession } from './big-session.mjs'
 import { SEVEN } from '../helpers/seven-shapes.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
 import { openProjection } from '../../src/query/projection.mjs'
-import { listOf } from '../../src/view/reduce.mjs'
+import { laneLedger, listOf } from '../../src/view/reduce.mjs'
 import { compareStep } from '../../src/view/step-order.mjs'
 import { PAGE_BYTES } from '../../src/query/session-doc.mjs'
 import { BLOCK_PROBLEMS } from '../../src/health/codes.mjs'
@@ -47,19 +47,19 @@ function absorb(H, p, rids) {
     kept.splice(at < 0 ? kept.length : at, 0, ...list)
     H.events.set(rid, kept)
   }
-  for (const r of p.resources) H.res.set(resKey(r), r)
-  for (const f of p.seen) H.seen.set(f.path, f)
+  for (const r of p.resources || []) H.res.set(resKey(r), r)
+  for (const f of p.seen || []) H.seen.set(f.path, f)
   if (rids) { const keep = new Set(rids); for (const rid of H.events.keys()) if (!keep.has(rid)) H.events.delete(rid) }
   return H
 }
 // The rule, on one answer: its events are its steps', but for a base:null page's compaction and summarize events; an answer of more
 // than one step or ledger entry ships ≤ PAGE_BYTES of steps, definitions, events, resources and seen.
 const CS = (e) => e.type === 'compaction' || e.type === 'summarize'
-const bytes = (list) => list.reduce((a, x) => a + Buffer.byteLength(JSON.stringify(x)), 0)
+const bytes = (list) => (list || []).reduce((a, x) => a + Buffer.byteLength(JSON.stringify(x)), 0)
 function pageRule(p) {
   const own = new Set(p.steps.map((st) => st.rid))
   for (const e of p.events) assert.ok(own.has(e.rid) || (p.base == null && CS(e)), `${e.type} ${e.rid}: an event of a step of the page`)
-  if (p.steps.length + p.resources.length + p.seen.length > 1) {
+  if (p.steps.length + (p.resources || []).length + (p.seen || []).length > 1) {
     assert.ok(bytes(p.steps) + bytes(p.defs) + bytes(p.events) + bytes(p.resources) + bytes(p.seen) <= PAGE_BYTES, 'an answer of more than one step or entry fits PAGE_BYTES')
   }
 }
@@ -69,8 +69,8 @@ function pageRule(p) {
 function sends(p, H, atTip) {
   pageRule(p)
   if (!atTip) return
-  for (const r of p.resources) assert.notDeepEqual(r, H.res.get(resKey(r)), `${resKey(r)}: sent only when new or changed`)
-  for (const f of p.seen) assert.notDeepEqual(f, H.seen.get(f.path), `${f.path}: sent only when new or changed`)
+  for (const r of p.resources || []) assert.notDeepEqual(r, H.res.get(resKey(r)), `${resKey(r)}: sent only when new or changed`)
+  for (const f of p.seen || []) assert.notDeepEqual(f, H.seen.get(f.path), `${f.path}: sent only when new or changed`)
 }
 // The rule, on a lane read whole: every base:null page carries the lane's compaction and summarize events; its user events' k run
 // 1..n in step order.
@@ -88,7 +88,7 @@ async function chain(home, id, lane, p, ctx) {
   for (let c = p.ledger_next; c != null; c = out.at(-1).ledger_next) {
     const L = await q('lane', home, { id, lane, ledger: c }, ctx)
     pageRule(L)
-    assert.ok(L.resources.length + L.seen.length > 0, 'a --ledger answer takes one entry at least')
+    assert.ok((L.resources || []).length + (L.seen || []).length > 0, 'a --ledger answer takes one entry at least')
     assert.deepEqual([L.base, L.steps, L.defs, L.events, L.prev, L.next], [null, [], [], [], null, null], 'a --ledger answer holds no step')
     out.push(L)
   }
@@ -286,7 +286,7 @@ test('3.5 lane: a ledger past PAGE_BYTES goes by ledger_next — every answer fi
 })
 
 // ── 3.5 #28 (the lane part): the closed sets, on a session of each harness shape ─────────────────────────────────────────────────
-const TOP = ['schema', 'command', 'ok', 'errors', 'lane', 'base', 'mark', 'pending', 'steps', 'defs', 'resources', 'seen', 'events', 'prev', 'next', 'ledger_next']
+const TOP = ['schema', 'command', 'ok', 'errors', 'lane', 'base', 'mark', 'pending', 'steps', 'defs', 'resources', 'resources_note', 'seen', 'events', 'prev', 'next', 'ledger_next']
 const STEP = ['rid', 'parent', 'ops', 'reply', 'attrs', 'detail']
 const DETAIL = ['norm', 'respRefs', 'nonBlockKeys', 'extraMessages', 'wire']
 const NORM = ['stop_reason', 'usage']
@@ -313,11 +313,14 @@ function closedSets(p, sample) {
     assert.match(d.bid, /^[A-Za-z0-9_-]{22}$/); assert.match(d.fh, /^[A-Za-z0-9_-]{22}$/)
     assert.equal(d.ref === null, 'unaddressable' in d, `${d.bid}: an unaddressable block has ref null and says why`)
   }
-  for (const r of p.resources) {
+  assert.equal(p.resources === null, p.resources_note === 'no-ledger', 'resources is null exactly when the note says no-ledger')
+  assert.ok(!('resources_note' in p) || ['no-ledger', 'partial-ledger'].includes(p.resources_note), 'resources_note is a closed-set code')
+  for (const r of p.resources || []) {
     for (const g of r.segments || []) subset(g, ['enter', 'evict'], 'resource segment')
     for (const l of r.loads || []) subset(l, ['rid', 'range', 'via'], 'resource load')
   }
-  for (const s of p.seen) subset(s, SEEN, 'seen')
+  assert.equal(p.seen === null, p.resources === null, 'seen is null with resources')
+  for (const s of p.seen || []) subset(s, SEEN, 'seen')
   for (const e of p.events) { assert.ok('rid' in e && 'lane' in e && !('step' in e) && !('streamId' in e), 'event: rid and lane, no step / streamId') }
   const user = (sample.events || []).find((e) => e.type === 'user')
   for (const e of p.events.filter((x) => x.type === 'user')) { if (user) covers(e, user, 'user event'); assert.ok(Number.isInteger(e.k) && e.k >= 1, 'a user event carries k') }
@@ -517,4 +520,31 @@ test('lane: an older capture\'s metadata-only tool definition says ff.faithfulne
   assert.ok(tool('OldTool') && tool('NewTool'), JSON.stringify(tail.defs.map((d) => [d.sec, d.name])))
   assert.equal(tool('OldTool').ff.faithfulness, 'metadata')
   assert.notEqual(tool('NewTool').ff.faithfulness, 'metadata')
+})
+
+// 2.4 · invariant 4: a wire that keeps no resource ledger says so, never an empty ledger; one with nothing in it stays `[]`
+test('2.4 没有资源账本的 lane: a flat-wire lane answers resources and seen null + no-ledger on every kind of page; an Anthropic lane with no resources answers [] and no note', async () => {
+  for (const [wire, none] of [['chat', true], ['ws', true], ['http', false]]) {
+    const home = homeOf('trocar-no-ledger-'), s = bigSession({ home, wire, growth: 150, subEvery: 0 })
+    s.append(6)
+    const doc = await q('session', home, { id: s.id }), lane = doc.lanes[0].lane
+    const tail = await q('lane', home, { id: s.id, lane }), from = await q('lane', home, { id: s.id, lane, from: tail.steps[0].rid })
+    for (const p of [tail, from]) {
+      if (none) assert.deepEqual([p.resources, p.resources_note, p.seen], [null, 'no-ledger', null], `${wire}: not known, never none`)
+      else { assert.deepEqual(p.resources, [], `${wire}: an empty ledger`); assert.ok(!('resources_note' in p), `${wire}: no note`) }
+    }
+    if (none) assert.equal(tail.ledger_next, null, `${wire}: nothing owed`)
+  }
+})
+
+test('2.4 Edge cases 多种线格式: a lane with some steps of a wire that keeps no ledger gives the kept part, named partial; every step such is no-ledger; a kept ledger goes on knowing it', () => {
+  const op = ['r', 'file', 'a.txt', 'read', null]
+  const deltas = [[op], null, []], rids = ['r0', 'r1', 'r2']
+  const mixed = laneLedger(rids, (i) => deltas[i])
+  assert.equal(mixed.note, 'partial-ledger', 'neither the whole nor none')
+  assert.deepEqual(mixed.resources.map((r) => r.label), ['a.txt'], 'the kept part is given')
+  const firstTwo = laneLedger(rids.slice(0, 2), (i) => deltas[i]), after = laneLedger(rids, (i) => deltas[i], 1, firstTwo.kept)
+  assert.equal(after.note, 'partial-ledger', 'gone on from a kept ledger')
+  assert.equal(laneLedger(rids.slice(0, 2), (i) => [null, null][i]).note, 'no-ledger')
+  assert.equal(laneLedger(['r0', 'r2'], (i) => [[op], []][i]).note, null, 'no null step: the ledger is whole')
 })
