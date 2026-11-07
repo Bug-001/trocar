@@ -117,8 +117,16 @@ test('2.3 归约前沿 · D64②: a session growing by 1,000 members an answer �
     for (let j = 0; j < 10; j++) {
       await toEnd(d)
       if (j % 2 === 1) await grant(1)
-      const pt = await aimOlder(d, j)
-      await input(`lane jump ${j}`, () => page.mouse.click(pt.x, pt.y))
+      // the tick is hit-checked in one task and pressed in the next: a redraw between them can leave empty rail under the point, and
+      // a press there moves nothing (a reader's miss, not the board's). That one is aimed again; a press on a tick that moves nothing stays red
+      for (let k = 0; ; k++) {
+        const pt = await aimOlder(d, j)
+        const n0 = await stepN(), r = await timed(page, 'n', n0, () => page.mouse.click(pt.x, pt.y)).catch((e) => e)
+        if (!(r instanceof Error)) { samples.push(r); break }
+        const onTick = await page.evaluate(() => !!window.__in?.node?.closest?.('.tick'))
+        if (onTick || k === 2) { r.message = `lane jump ${j}: ${r.message}`; throw r }
+        console.log(`# lane jump ${j}: the press landed off the tick, aimed again`)
+      }
     }
     await drawn()
     seen.lanes = await longTasks()
