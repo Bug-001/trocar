@@ -75,9 +75,10 @@ export function judgeHarness({ desired, entryIntact = null, entryWhy = 'entry-mi
 }
 
 /** A harness's `blocked` for judgeHarness from its forms' route verdict (status-facts `plan`, carried as the facts' `route`, 4.11 ⑩): { <form>: false } for a
- *  form a blocker keeps off the route, { <form>: null } for one whose blocker could not be read. */
+ *  form a blocker keeps off the route or the door forwards for one (`via`), { <form>: null } for one whose own blocker could not be read. */
 export function routeOfForms(forms) {
-  return Object.fromEntries((forms || []).filter((x) => x.route && ['blocker', 'blocker-unreadable'].includes(x.route.reason)).map((x) => [x.id, x.route.reason === 'blocker' ? false : null]))
+  // a form judged with a blocked one (`via`) reaches the door, which forwards it whether the blocker held or could not be read: not captured either way
+  return Object.fromEntries((forms || []).filter((x) => x.route && ['blocker', 'blocker-unreadable'].includes(x.route.reason)).map((x) => [x.id, x.route.reason === 'blocker' || x.route.via ? false : null]))
 }
 
 /** A harness's `cert` for judgeHarness (V32) from its forms' `certificate` (1.6 §9.4, proxy mode): true when every present form's is in effect (or none says), else the code of the first

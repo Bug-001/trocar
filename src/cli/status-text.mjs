@@ -115,8 +115,9 @@ export function statusDetail(doc, h, { finding = null, now = Date.now(), colors:
       // a form a blocker keeps off the route (4.11 ⑩): that leads, and its certificate and proxy rows would read as fine, so they are not drawn
       if (f.route) {
         const setting = `a setting of yours${f.route.at ? ` (${f.route.at})` : ''}`, place = f.route.at || 'a setting it needs'
-        const text = f.route.reason !== 'blocker' ? unknown(`trocar cannot read ${place}`)
-          : f.route.form ? `not routed: trocar cannot tell it from ${f.route.form}, which ${setting} keeps off trocar` : `not routed: ${setting} keeps it off trocar`
+        // a form the door cannot tell from the blocked one reaches trocar and is forwarded unread, whether the setting held or could not be read (1.6 附录 C)
+        const text = f.route.form ? `forwarded only: ${f.route.reason === 'blocker' ? `trocar cannot tell it from ${f.route.form}, which ${setting} keeps off trocar` : `trocar cannot read ${place}, so it cannot tell it from ${f.route.form}`}`
+          : f.route.reason !== 'blocker' ? unknown(`trocar cannot read ${place}`) : `not routed: ${setting} keeps it off trocar`
         lines.push(...columns([[String(f.form).padEnd(w), 'route'.padEnd('certificate'.length), text]], { width: WIDTH - 2 }).map((l) => `  ${l}`))
         continue
       }

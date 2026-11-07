@@ -169,8 +169,10 @@ function formVerdict(F, h, hf, fm, fwf) {
   if (fm.route && fm.route.reason === 'form-unsupported') return none(false, false, 'form-unsupported')
   // a blocker the plan found for this form (4.11 ⑩): the entry a sibling form shares (one config file, one route) does not reach it; a blocker it could not read
   // leaves that unknown (D38) — never captured either way
-  if (fm.route && fm.route.reason === 'blocker') return none(false, false, 'not-routed')
-  if (fm.route && fm.route.reason === 'blocker-unreadable') return none(null, null, 'not-routed')
+  // a form the door cannot tell from a blocked one (`via`, same route) has its entry: it reaches the door, which forwards it unread (below)
+  const co = !!(fm.route && fm.route.via)
+  if (!co && fm.route && fm.route.reason === 'blocker') return none(false, false, 'not-routed')
+  if (!co && fm.route && fm.route.reason === 'blocker-unreadable') return none(null, null, 'not-routed')
   if (fm.hook) return none(false, false, fm.hook) // the wrapper / plugin that applies the route was replaced or is gone: the agent runs without it (1.6 §9.3 row 31; its command is `trocar install`)
   if (!fm.entry) return none(false, false, 'not-routed') // anything else the plan left unwired is not-routed, the why on the form's `route`
   if (fm.entry.intact === null) return none(null, null, null)
@@ -178,6 +180,7 @@ function formVerdict(F, h, hf, fm, fwf) {
   if (!F.forwarder || F.forwarder.up === false || !fwf || fwf.down) return none(true, false, 'forwarder-down')
   if (main) return none(true, false, 'elevated-agent')
   if (F.daemon.state === 'not-running' || F.daemon.state === 'not-responding') return none(true, false, `daemon-${F.daemon.state}`)
+  if (co) return none(true, false, 'not-routed') // the door forwards it: trocar on the path, forwarded only, never captured (4.11 ⑩)
   if (fwf.upstream_error) return { on: true, captured: false, reason: 'upstream-unreachable', engine: true } // the engine could not dial the upstream (the platform's last 60 s of it)
   const j = judgeHarness({ localUpstream: hf.localUpstream === true, desired: 'on', entryIntact: entryIntact(hf), entryWhy: 'entry-missing', attached: fwf.state === 'on', helper: 'ok', daemon: F.daemon.state, procs: fm.procs.map((p) => ({ pid: p.pid, startedAt: p.startedAt, trusted: p.trusted, reason: p.reason, negative: p.negative, start: p.start })), installedAt: hf.installedAt, cert: certOfForms([fm]) })
   const reason = (j.rows.find((r) => r.reason) || {}).reason ?? null
@@ -207,7 +210,7 @@ function proxyTopology(F, h, hf) {
     // file is the user's own again — the agent's live connection to the group's port (row k). In the drain the edge names no entry: the file no longer points here; the agent holds the address it
     // read at startup, and the note says what restart ends it.
     const wired = !!(fwf
-      && (F.desired[h] === 'off' ? (fwf.clients || []).length > 0 : !fm.hook && fm.entry && fm.entry.intact === true && vd.reason !== 'local-upstream' && vd.reason !== 'not-routed'))
+      && (F.desired[h] === 'off' ? (fwf.clients || []).length > 0 : !fm.hook && fm.entry && fm.entry.intact === true && vd.reason !== 'local-upstream' && (vd.reason !== 'not-routed' || !!(fm.route && fm.route.via))))
     const hfSys = { ...hf, systemProxy: fm.systemProxy }
     const split = (hf.behaviour.branches || []).join() === 'http,ws' && fm.systemProxy
     if (vd.reason === 'desired-off' && fwf && (fwf.clients || []).length) notes.push(`${fwf.clients.length} process(es) are still connected through trocar, forwarded only; trocar exits once they do`)

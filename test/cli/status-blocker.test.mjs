@@ -30,7 +30,8 @@ async function zcodeWorld(setting, { app = true } = {}) {
   fs.mkdirSync(path.join(w.home, '.zcode', 'cli'), { recursive: true })
   assert.equal((await w.install()).exit, 0)
   fs.writeFileSync(path.join(w.dir, 'control.json'), JSON.stringify({ path: path.join(w.home, 'c.sock'), token: 'k'.repeat(32) }))
-  const opens = async (q) => (q.path === '/on' ? { doors: Object.fromEntries(Object.entries(q.body.groups).map(([g, p]) => [g, `http://127.0.0.1:${p}`])) } : { doors: {} })
+  w.doors = {} // the doors `on` opened, which the daemon then reports listening
+  const opens = async (q) => { if (q.path === '/on') Object.assign(w.doors, q.body.groups); return q.path === '/on' ? { doors: Object.fromEntries(Object.entries(q.body.groups).map(([g, p]) => [g, `http://127.0.0.1:${p}`])) } : { doors: {} } }
   setting(w)
   await turnOnModel({ os: 'darwin', home: w.home, env: w.env, ids: ['z-code'], harnesses: w.harnesses, ctx: w.ctx, isFree: async () => true, renderHook, request: opens })
   writeStateAtomic(path.join(w.dir, 'state.json'), setDesired(emptyState(), ['z-code'], 'on'))
@@ -38,7 +39,7 @@ async function zcodeWorld(setting, { app = true } = {}) {
 }
 
 async function status(w, argv) {
-  const r = { pid: 99, doors: {}, harnesses: { 'z-code': { desired: 'on', attached: true } }, holders: null, agents: [], negatives: [], cert: { key: 'present', intermediate: 'ready', expires: '2026-12-22T09:00:02Z' }, engine: {} }
+  const r = { pid: 99, doors: w.doors, harnesses: { 'z-code': { desired: 'on', attached: true } }, holders: null, agents: [], negatives: [], cert: { key: 'present', intermediate: 'ready', expires: '2026-12-22T09:00:02Z' }, engine: {} }
   const io = fakeIo()
   const fsx = { ...fs, existsSync: (p) => (w.app && p === APP) || (String(p).startsWith(w.home + path.sep) && fs.existsSync(p)) }
   await runStatusCli(argv, { io, home: w.home, platform: 'darwin', env: w.env, deps: { request: async (q) => (q.path === '/status' ? r : assert.fail(q.path)), socketPath: SOCK, procs: async () => [], spawn: absentSpawn, exec: () => ({ status: 0, stdout: '', stderr: '' }), identity: () => ({ start_time: '111', boot_id: 'b' }), alive: () => true, netFactsDeps: async () => ({ harnesses: w.harnesses, archFacts: darwinNetFacts }), rootStore: w.store, user: 'alice', fs: fsx } })
@@ -49,7 +50,7 @@ const SHAPES = {
   // the setting names a CA file: the desktop's agent goes direct (measured), its siblings stay on the shared route
   set: { write: (w) => { fs.mkdirSync(path.dirname(SETTING(w.home)), { recursive: true }); fs.writeFileSync(SETTING(w.home), JSON.stringify({ httpProxyCaCertPath: path.join(w.home, 'ca.pem') })) }, captured: false, reason: 'blocker' },
   // the setting file cannot be read: whether the desktop goes direct is not known
-  unreadable: { write: (w) => { fs.mkdirSync(path.dirname(SETTING(w.home)), { recursive: true }); fs.writeFileSync(SETTING(w.home), '{}'); fs.chmodSync(SETTING(w.home), 0o000) }, captured: null, reason: 'blocker-unreadable' },
+  unreadable: { write: (w) => { fs.mkdirSync(path.dirname(SETTING(w.home)), { recursive: true }); fs.writeFileSync(SETTING(w.home), '{}'); fs.chmodSync(SETTING(w.home), 0o000) }, captured: false, reason: 'blocker-unreadable' },
 }
 
 for (const [shape, s] of Object.entries(SHAPES)) {
@@ -72,6 +73,14 @@ for (const [shape, s] of Object.entries(SHAPES)) {
       assert.ok(together.length > 1, `the CLI forms share the desktop's route: ${together}`)
       for (const f of x.forms) assert.equal(f.route && f.route.reason, together.includes(f.form) ? s.reason : undefined, `${f.form}: ${JSON.stringify(f.route)}`)
       for (const f of x.forms.filter((y) => y.form !== 'z-code.desktop' && y.route)) assert.equal(f.route.form, 'z-code.desktop', 'a co-judged form names the form whose blocker it is')
+      // a co-judged form's entry is written: its connections reach the door, which forwards them unread (the CLI's flows on a macOS test machine: splice,
+      // not-routed), so its branch has trocar on the path, forwarded only, and is not captured; the blocked desktop itself goes direct (measured)
+      const t = j.topology['z-code'], node = new Map(t.nodes.map((n) => [n.id, n]))
+      for (const b of t.branches) {
+        const via = b.path.map((id) => node.get(id)).filter((n) => n.trocar)
+        if (b.form === 'z-code.desktop') { assert.equal(via.length, 0, `the desktop has no trocar hop: ${JSON.stringify(b)}`); continue }
+        assert.deepEqual([b.on_path, b.captured, via.map((n) => n.mode)], [true, false, ['forward-only']], `${b.form}: ${JSON.stringify(b)}`)
+      }
       const text = await status(w, ['z-code'])
       assert.doesNotMatch(text.split('\n')[0], /, captured$/, text.split('\n')[0])
       const block = text.slice(text.indexOf('  Forms'), text.indexOf('  Routes'))
@@ -80,6 +89,11 @@ for (const [shape, s] of Object.entries(SHAPES)) {
       assert.doesNotMatch(block, /points at trocar/, 'never "points at trocar" for a form the door splices')
       const cli = block.split('\n').find((l) => l.startsWith('  z-code.cli '))
       if (s.reason === 'blocker') assert.match(block.slice(block.indexOf(cli)).replace(/\s+/g, ' '), /cannot tell it from z-code\.desktop/, 'a co-judged form says why')
+      assert.match(block.slice(block.indexOf(cli)).replace(/\s+/g, ' '), /^ ?z-code\.cli route forwarded only/, 'its row says what the door does')
+      const routes = text.slice(text.indexOf('  Routes')).split('\n'), route = (f) => { const i = routes.findIndex((l) => l.includes(`new processes (${f})`)); return /->/.test(routes[i]) ? routes[i] : routes[i + 1] } // a long path folds under its label
+      assert.match(route('z-code.cli'), /z-code -> trocar :\d+ \(forwarded only\) -> /)
+      assert.doesNotMatch(route('z-code.desktop'), /trocar/)
+      assert.match(text.slice(0, text.indexOf('  Fix')).replace(/\s+/g, ' '), /forwarded only/, 'the Why says the connections reach trocar')
       assert.ok(!block.includes(w.home), 'HOME paths print as ~')
       // §1.1⑥ over the Why value (Fix and Check list one step a line): a line is laid out at the width it is printed with, so within a sentence the next line's first word never fits after it
       const head = text.slice(0, text.indexOf('  Fix')).split('\n'), col = head[2].search(/\S/) + head[2].trimStart().search(/\s{2,}\S/) + head[2].trimStart().match(/\s{2,}/)[0].length
