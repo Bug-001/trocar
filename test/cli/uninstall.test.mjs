@@ -536,7 +536,7 @@ test('the text receipt says a file once: two entries of one file with the same c
   assert.equal(rows({ removed: [file, file] }), 1)
 })
 
-// 1.6 §3.6 「封最后一段」 (V125): the daemon uninstall stops seals the segment it was writing (its lock's `segment`) before it exits; the receipt says what
+// 1.6 §3.6 「封最后一段」 (V127): the daemon uninstall stops seals the segment it was writing (its lock's `segment`) before it exits; the receipt says what
 // came of it — the sealed row with the sizes of the journal's seal line, or that the segment stays unsealed — and --purge-data asks it not to seal.
 const SEG = '20261107T100000Z'
 async function sealingUninstall({ seals, argv = [] }) {
@@ -560,7 +560,7 @@ async function sealingUninstall({ seals, argv = [] }) {
   return { s, exit, io, offs, raw }
 }
 
-test('uninstall: the segment the daemon sealed before it exited is a row of the receipt, with its sizes (V125)', async () => {
+test('uninstall: the segment the daemon sealed before it exited is a row of the receipt, with its sizes (V127)', async () => {
   const { exit, io } = await sealingUninstall({ seals: true, argv: ['--json'] })
   assert.equal(exit, 0, io.text())
   const r = io.json()
@@ -568,7 +568,7 @@ test('uninstall: the segment the daemon sealed before it exited is a row of the 
   assert.deepEqual(validateReceipt(r), [], 'sealed is a key of the uninstall receipt (附录 C.2)')
 })
 
-test('uninstall: a segment the daemon did not seal stays plaintext, and the receipt says it stays unsealed until trocar runs again (V125)', async () => {
+test('uninstall: a segment the daemon did not seal stays plaintext, and the receipt says it stays unsealed until trocar runs again (V127)', async () => {
   const { exit, io, raw } = await sealingUninstall({ seals: false, argv: ['--json'] })
   assert.equal(exit, 0, io.text())
   const r = io.json()
@@ -577,7 +577,7 @@ test('uninstall: a segment the daemon did not seal stays plaintext, and the rece
   assert.equal(fs.readFileSync(path.join(raw, `${SEG}.ndjson`), 'utf8'), '{"id":"r1"}\n', 'its bytes are intact')
 })
 
-test('uninstall --purge-data asks the daemon not to seal, and says nothing of the segment it deletes (V125)', async () => {
+test('uninstall --purge-data asks the daemon not to seal, and says nothing of the segment it deletes (V127)', async () => {
   const { exit, io, offs } = await sealingUninstall({ seals: false, argv: ['--purge-data', '--json'] })
   assert.equal(exit, 0, io.text())
   assert.ok(offs.length && offs.every((b) => b.seal === false), JSON.stringify(offs))

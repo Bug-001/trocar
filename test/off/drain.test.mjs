@@ -50,7 +50,7 @@ test('drainDaemon: a status without the in-memory marker (the old daemon an upda
   assert.deepEqual(r.drained.rel, { closing: 1, waiting: 0, cut: 0 }, 'the counts kept are the POST /off reply\'s')
 })
 
-// 1.6 §3.6 / §5.2 (V125): the wait for the asked daemon's pid is bounded by silence. A daemon sealing its last segment writes the progress into its lock's
+// 1.6 §3.6 / §5.2 (V127): the wait for the asked daemon's pid is bounded by silence. A daemon sealing its last segment writes the progress into its lock's
 // `sealing`; every change starts the wait again, and each change is handed to `onSealing`. A daemon that says nothing is waited on for the bound only.
 function sealingWorld({ goneAt, progressEvery = null }) {
   const { w, now } = world([{ closing: 0, waiting: 0, scope: 'memory' }])

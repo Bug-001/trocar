@@ -182,11 +182,11 @@ test('daemon: CC trusted through the installed settings key is decrypted and rec
   } finally { await d.stop(); up.close(); p.done(); s.done() }
 })
 
-// 4.2 §自动封存 · 1.6 §3.6 (V125): after `uninstall` there is no next start, so the daemon it stops seals the segment its stop closes before it exits;
+// 4.2 §自动封存 · 1.6 §3.6 (V127): after `uninstall` there is no next start, so the daemon it stops seals the segment its stop closes before it exits;
 // a stop by `off`, and an uninstall's with seal:false (--purge-data), leave it for the next start. A real daemon captures one call into a real segment,
 // then the exit request goes over the real control socket.
 for (const [what, body, sealed] of [['uninstall', { exit: true, by: 'uninstall' }, true], ['off', { exit: true }, false], ['uninstall --purge-data', { exit: true, by: 'uninstall', seal: false }, false]]) {
-  test(`daemon: a whole-daemon stop by ${what} ${sealed ? 'seals the segment it closes before it exits' : 'leaves the segment it closes for the next start'} (V125)`, { timeout: 30_000 }, async () => {
+  test(`daemon: a whole-daemon stop by ${what} ${sealed ? 'seals the segment it closes before it exits' : 'leaves the segment it closes for the next start'} (V127)`, { timeout: 30_000 }, async () => {
     const s = sandbox(); const p = fakeProc(); const up = await relay()
     const relayCa = path.join(s.home, 'relay-ca.pem'); fs.writeFileSync(relayCa, up.ca.certPem)
     fs.mkdirSync(path.join(s.home, '.claude'))
@@ -225,7 +225,7 @@ for (const [what, body, sealed] of [['uninstall', { exit: true, by: 'uninstall' 
 
 // D38: a segment the uninstall stop could not seal keeps its plaintext, is said as a seal-failed failure, and daemon-stop names `raw` among the steps
 // that failed. A directory under a segment's name is a plaintext segment the sealer refuses.
-test('daemon: an uninstall stop whose seal fails says so in daemon-stop (failed: raw) (V125, D38)', { timeout: 30_000 }, async () => {
+test('daemon: an uninstall stop whose seal fails says so in daemon-stop (failed: raw) (V127, D38)', { timeout: 30_000 }, async () => {
   const s = sandbox(); const p = fakeProc()
   await install(s)
   const rawDir = path.join(s.home, '.trocar', 'raw'); fs.mkdirSync(path.join(rawDir, '20261002T000000Z.ndjson'), { recursive: true })

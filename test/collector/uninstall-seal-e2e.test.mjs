@@ -1,4 +1,4 @@
-// test/collector/uninstall-seal-e2e.test.mjs — V125 (RFC 1.6 §3.6, 4.2 §自动封存): the uninstall ↔ daemon seam for real. The daemon is a REAL child
+// test/collector/uninstall-seal-e2e.test.mjs — V127 (RFC 1.6 §3.6, 4.2 §自动封存): the uninstall ↔ daemon seam for real. The daemon is a REAL child
 // process at its real control endpoint (as in model-replace-drain-e2e); uninstall's drainDaemon runs over the real lock file and control socket,
 // with its default request and pid check (only the lock identity is answered, as the child's is). A closed segment the seal queue never got is
 // in raw/: the stop seals it at normal priority, the progress reaches onSealing through the lock, and the wait ends only once the pid has exited.
@@ -22,7 +22,7 @@ const SEG = '20261003T000000Z'
 const until = async (ok, ms, what) => within((async () => { for (;;) { const v = ok(); if (v) return v; await new Promise((r) => setTimeout(r, 25)) } })(), ms, what)
 
 for (const platform of ['darwin', 'win32']) {
-  test(`V125 · ${platform}: uninstall's drain waits while the real daemon seals, hears its progress, and returns once the pid has exited`, { skip: await unservable(platform), timeout: 90_000 }, async () => {
+  test(`V127 · ${platform}: uninstall's drain waits while the real daemon seals, hears its progress, and returns once the pid has exited`, { skip: await unservable(platform), timeout: 90_000 }, async () => {
     const w = await modelWorld({ os: platform, commands: ['codex'] })
     const desc = w.harnesses.find((h) => h.name === 'codex')
     const a = agentOf({ w, name: desc.processes.names[0].name, env: {} })

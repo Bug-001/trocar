@@ -82,7 +82,7 @@ for (const platform of ['darwin', 'win32']) {
   })
 }
 
-// 4.2 §自动封存 (V125): the model entry wires the uninstall stop's seal too — an exit request by uninstall seals the closed segment the queue never got.
+// 4.2 §自动封存 (V127): the model entry wires the uninstall stop's seal too — an exit request by uninstall seals the closed segment the queue never got.
 for (const platform of ['darwin', 'win32']) {
   test(`${platform}: the model daemon's uninstall stop seals what is still plaintext before it exits`, { timeout: 30_000 }, async () => {
     const w = await modelWorld({ os: platform, commands: ['codex'] })
