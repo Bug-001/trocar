@@ -133,9 +133,11 @@ export function planItems(p, { home = null, platform = 'linux' } = {}) {
   else if (p.events) add('record', p.events, `${t(p.events)}: what each run did`)
   // V85 / §1.4「计划写全」: trocar's own tree is ONE line, as it is in the model install's plan — every run of trocar keeps its record, its
   // desired state and its own logs there, and `trocar uninstall` takes all of it back. Every file of YOURS is its own line, above.
-  if (home) add('trocar', path.join(home, '.trocar'), `${asDir(t(path.join(home, '.trocar')), platform)}: trocar's own files (its install record, what is turned on, its logs); trocar uninstall takes all of it back`)
+  if (home) items.push(ownTreeItem(home, platform))
   return items
 }
+/** The one plan item for trocar's own tree (V85): `on`'s plan on every OS ends with it. */
+export const ownTreeItem = (home, platform) => ({ what: 'trocar', path: path.join(home, '.trocar'), detail: `${asDir(tilde(path.join(home, '.trocar'), home), platform)}: trocar's own files (its install record, what is turned on, its logs); trocar uninstall takes all of it back` })
 
 /** Every file `on` (or Linux `install`) would write or change, before it writes any (§1.4): the count first, then every file by full path and key. */
 export function formatPlan(p, { home = null, platform = 'linux', command = 'on', colors: c = noColor() } = {}) {
