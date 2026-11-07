@@ -12,6 +12,8 @@ import { unservable } from '../helpers/model-daemon.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { ERROR_CODES } from '../../src/cli/json.mjs'
+import { CUSTODY_FAILED } from '../../src/collector/model-install.mjs'
+import { snapshot } from './fixtures/on-ctx.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
 import { BOARD_RANGE } from '../../src/collector/core/ingress-config.mjs'
 import { onCtx, snapshot } from './fixtures/on-ctx.mjs'
@@ -188,6 +190,23 @@ for (const platform of ['darwin', 'win32']) {
     assert.ok(ERROR_CODES.includes(doc.error.code), `error.code is in the closed set: ${JSON.stringify(doc.error)}`)
     assert.ok(doc.error.message.includes('trocar install'), doc.error.message)
     assert.equal(doc.fp256, null, 'no root was made')
+  })
+}
+
+// the refusal is asked before the first write: a custody that cannot be used leaves the HOME as it was — no trocar-off, no record, no login entry
+for (const platform of ['darwin', 'win32']) {
+  test(`${platform}: an install whose key custody cannot be used writes nothing, with the same exit and error.code`, async () => {
+    const w = await modelWorld({ os: platform, commands: ['codex'] })
+    w.custody.switches.failed = true
+    const exec = fakeLaunchctl()
+    const { userUnit } = await import(`../../src/collector/arch/${platform}/autostart.mjs`)
+    const unit = userUnit({ home: w.home, node: process.execPath, script: '/repo/bin/trocar.mjs', run: exec.run, env: w.env, spawn: () => assert.fail('nothing is started') })
+    const deps = { getuid: () => 501, exec: exec.run, request: async () => { throw Object.assign(new Error('nothing answers'), { code: 'ENOENT' }) }, sleep: async () => {}, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, unit }
+    const before = snapshot(w.home)
+    const io = fakeIo()
+    assert.equal(await runInstallCli(['--yes', '--json'], { io, env: w.env, home: w.home, platform, deps }), 1, io.text())
+    assert.equal(io.json().error.code, CUSTODY_FAILED)
+    assert.deepEqual(snapshot(w.home), before, 'the HOME is byte for byte as it was')
   })
 }
 
