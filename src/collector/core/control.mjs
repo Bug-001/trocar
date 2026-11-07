@@ -5,12 +5,13 @@
 // A live answer on the socket means another daemon owns this user's collector → refuse to start.
 import { createHash, timingSafeEqual } from 'node:crypto'
 import fs from 'node:fs'
-import http from 'node:http'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { isPipePath } from '../../off/control-client.mjs'
 import { CONTROL_TOKEN_HEADER } from '../../off/token-header.mjs'
+// By name, not by an `import`: an ES import of node:http builds its ES view, which reads http.WebSocket and loads undici (D62①, as in src/off/control-client.mjs)
+const http = () => process.getBuiltinModule('node:http')
 
 // The client side (controlSocketPath, controlRequest, controlEndpointFor) is src/off/control-client.mjs: `trocar off` asks the daemon without this directory (1.6 R3).
 export { controlSocketPath, controlRequest, controlEndpointFor } from '../../off/control-client.mjs'
@@ -34,7 +35,7 @@ async function probe(socketPath, token) {
   // its own connection (`agent: false`): a pooled one would be kept for this path and handed to a later request on it, after this endpoint is gone.
   // Any status counts — a 401 is a daemon of this user's with another secret, a 404 one that does not know this route: both SERVE.
   return await new Promise((resolve) => {
-    const req = http.request({ socketPath, method: 'GET', path: '/status', agent: false, headers: token == null ? {} : { [CONTROL_TOKEN_HEADER]: token } }, (res) => { res.resume(); resolve('live') })
+    const req = http().request({ socketPath, method: 'GET', path: '/status', agent: false, headers: token == null ? {} : { [CONTROL_TOKEN_HEADER]: token } }, (res) => { res.resume(); resolve('live') })
     req.setTimeout(PROBE_MS, () => req.destroy(new Error('the control endpoint did not answer')))
     req.on('error', () => resolve('busy'))
     req.end()
@@ -76,7 +77,7 @@ export async function startControlServer({ socketPath, routes, maxBody = 64 * 10
   if (state === 'busy') throw Object.assign(new Error(`the control endpoint ${socketPath} is held by something that does not answer`), { [DAEMON_ENDPOINT_BUSY]: true })
   if (state === 'stale' && !pipe) fs.rmSync(socketPath, { force: true })
 
-  const server = http.createServer((req, res) => {
+  const server = http().createServer((req, res) => {
     if (token !== null && !sameToken(token, req.headers[CONTROL_TOKEN_HEADER])) { req.resume(); return send(res, 401, { error: 'the control token is missing or wrong' }) }
     const url = new URL(req.url, 'http://collector')
     const handler = routes[`${req.method} ${url.pathname}`]

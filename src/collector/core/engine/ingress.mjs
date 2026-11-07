@@ -21,7 +21,6 @@
 // The ingress never records an envelope itself and never forwards a byte it has not been asked to.
 import crypto from 'node:crypto'
 import net from 'node:net'
-import { STATUS_CODES } from 'node:http'
 import { parseHead } from './sniff.mjs'
 import { SLOW_ENGINE_MS, wentBy } from './flow.mjs'
 import { socks5Greeting, socks5Request } from './socks.mjs'
@@ -535,7 +534,8 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
     if (!res) return socket.destroy()
     const body = Buffer.from(res.body || '')
     const head = Object.entries({ ...(res.headers || {}), 'content-length': body.length, connection: 'close' }).map(([k, v]) => `${k}: ${v}\r\n`).join('')
-    say(Buffer.concat([Buffer.from(`HTTP/1.1 ${res.status || 200} ${STATUS_CODES[res.status || 200] || ''}\r\n${head}\r\n`), body]))
+    // node:http by name, not imported: an ES import of it loads undici (D62①, src/off/control-client.mjs)
+    say(Buffer.concat([Buffer.from(`HTTP/1.1 ${res.status || 200} ${process.getBuiltinModule('node:http').STATUS_CODES[res.status || 200] || ''}\r\n${head}\r\n`), body]))
     socket.end()
   }
 

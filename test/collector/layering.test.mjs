@@ -79,6 +79,20 @@ test('what `trocar on` can load leaves the daemon out, and node:http comes by na
   assert.deepEqual([...seen].filter((f) => specsOf(fs.readFileSync(path.join(REPO, f), 'utf8')).includes('node:http')), [])
 })
 
+// D62①, the daemon's half: `on` from a stopped daemon waits for its control socket, and an ES import of node:http anywhere in the daemon's static
+// graph loads undici first (21 ms of a 160 ms start, profiled on a Linux test machine)
+test('what the daemon can load takes node:http by name', () => {
+  const seen = new Set()
+  const visit = (rel) => {
+    if (seen.has(rel)) return
+    seen.add(rel)
+    for (const target of importsOf(fs.readFileSync(path.join(REPO, rel), 'utf8'), path.join(REPO, rel), REPO)) if (target.startsWith('src/')) visit(target)
+  }
+  visit('src/collector/daemon.mjs')
+  assert.ok(seen.has('src/collector/core/control.mjs') && seen.has('src/server.mjs'), [...seen].length)
+  assert.deepEqual([...seen].filter((f) => specsOf(fs.readFileSync(path.join(REPO, f), 'utf8')).includes('node:http')), [])
+})
+
 test('layering: the real tree has no violations, and the walk sees src/netenv (W39: not a tree the scan misses)', () => {
   assert.deepEqual(checkLayering(REPO), [])
   const netenv = walk(path.join(REPO, 'src', 'netenv')).filter((f) => /\.(m|c)?js$/.test(f)).map((f) => path.relative(REPO, f))

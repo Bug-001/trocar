@@ -7,7 +7,6 @@
 // ⑤ hand out the answer files the worker wrote, `GET /api/d/<f>?id=` (4.4 §答案文件): stat, read, bytes as stored — no parse, no encode.
 // Gate order on every request (4.4 §门的次序): Host / Origin → token (on the data and control planes) → name → method → params;
 // nothing is read before the first two pass.
-import http from 'node:http';
 import nodeFs from 'node:fs';
 import nodeOs from 'node:os';
 import path from 'node:path';
@@ -260,7 +259,8 @@ export function createServer({ home, token, query, tips, uid = process.getuid?.(
     res.end(req.method === 'HEAD' ? undefined : buf);
   }
 
-  const server = http.createServer(async (req, res) => {
+  // node:http by name: an ES import of it builds its ES view, which reads http.WebSocket and loads undici (D62①, src/off/control-client.mjs)
+  const server = process.getBuiltinModule('node:http').createServer(async (req, res) => {
     try {
       const url = new URL(req.url, 'http://127.0.0.1');
       const denied = guard(req);
