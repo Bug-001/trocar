@@ -94,16 +94,19 @@ const keptOf = (home, fs) => KEEPS.map(([dir, what]) => ({ what, path: dir(troca
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
 const errText = (e) => String((e && e.message) || e)
 
-/** 1.6 §3.6 「封最后一段」: the segment the daemon was writing is sealed now (its journal line gives the sizes: `sealed`), or it is still plaintext and
- *  stays so until a daemon starts again (a note, D38); a segment that never got a file is nothing to say. */
-function lastSegment(segment, raw, fs, receipt) {
-  if (fs.existsSync(path.join(raw, `${segment}.ndjson`))) { receipt.notes.push(`${segment} stays unsealed until trocar runs again`); return }
+/** 1.6 §3.6 「封最后一段」: the plaintext segments in raw/ before the daemon is asked to go (what an uninstall stop seals). */
+const plaintextIn = (raw, fs) => { try { return fs.readdirSync(raw).filter((n) => /\.ndjson$/.test(n)).sort() } catch { return [] } }
+/** What came of each of them: sealed now (its last ok journal line gives the sizes: `sealed[]`), or still plaintext, which stays so until a daemon
+ *  starts again (a note, D38); a file gone without a seal line is nothing to say. */
+function sealedOf(names, raw, fs, receipt) {
+  const ok = new Map()
   let lines = []
-  try { lines = fs.readFileSync(path.join(raw, 'journal.jsonl'), 'utf8').trim().split('\n') } catch { return } // no journal: nothing was sealed
-  for (const l of lines.reverse()) {
-    let e = null
-    try { e = JSON.parse(l) } catch { continue }
-    if (e && e.op === 'seal' && e.outcome === 'ok' && e.segment === segment) { receipt.sealed = { segment, bytes: e.bytes, sealed_bytes: e.sealedBytes }; return }
+  try { lines = fs.readFileSync(path.join(raw, 'journal.jsonl'), 'utf8').trim().split('\n') } catch { /* no journal: nothing was sealed */ }
+  for (const l of lines) { try { const e = JSON.parse(l); if (e && e.op === 'seal' && e.outcome === 'ok') ok.set(e.segment, e) } catch { /* a torn line */ } }
+  for (const n of names) {
+    const segment = n.replace(/\.ndjson$/, ''), e = ok.get(segment)
+    if (fs.existsSync(path.join(raw, n))) receipt.notes.push(`${segment} stays unsealed until trocar runs again`)
+    else if (e) (receipt.sealed ||= []).push({ segment, bytes: e.bytes, sealed_bytes: e.sealedBytes })
   }
 }
 
@@ -201,7 +204,8 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     // the one drain-then-stop path; `update`'s daemon replacement takes it too (D67①). The daemon seals the segment it was writing before it exits (not when
     // the data is purged after), and says how far it is: the wait lasts while it does (1.6 §3.6)
     const sealing = (x) => `${x.step === 'verify' ? 'checking' : 'sealing'} ${x.segment}: ${Number.isFinite(x.total) ? `${size(x.done)} of ${size(x.total)}` : x.step === 'index' ? 'indexing it' : 'writing it out'}`
-    const { routing, drained, segment } = await drainDaemon(w, { drainMs: deps.drainMs, by: 'uninstall', seal: !purgeData, onSealing: (x) => { if (say) say(sealing(x)) } })
+    const raw = rawHome(trocarHome(home)), plain = purgeData ? [] : plaintextIn(raw, fs) // what the daemon is to seal before it exits
+    const { routing, drained } = await drainDaemon(w, { drainMs: deps.drainMs, by: 'uninstall', seal: !purgeData, onSealing: (x) => { if (say) say(sealing(x)) } })
     receipt.routing = { confirmed: routing.confirmed, state: routing.state, how: routing.how }
     receipt.daemon = routing.daemon; receipt.relayed = routing.relayed
     if (routing.relayed_reason) receipt.relayed_reason = routing.relayed_reason
@@ -237,7 +241,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
       }
     }
     const gone = routing.confirmed && (!stop || stop.stopped)
-    if (segment && !purgeData) lastSegment(segment, rawHome(trocarHome(home)), fs, receipt) // what came of the seal of the daemon's last segment (D38)
+    sealedOf(plain, raw, fs, receipt) // what came of the seal of each plaintext segment (D38)
     if (!routing.confirmed && !routing.unstoppable) {
       for (const f of failed) put({ event: 'failure', ...f })
       put({ kind: 'result', outcome: 'failed', reason: `uninstall stopped: ${routing.problems[0] || 'the routing was not confirmed off'}` })

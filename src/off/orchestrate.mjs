@@ -139,14 +139,13 @@ async function waitForDrain(w, first, boundMs, socketPath) {
  *  on until what it can see the end of is closed; one still there then is asked to go at once (`now`: what it relays is cut) and waited on
  *  until its pid has exited, so the stop that follows never lands inside its barrier. `uninstall` and `update`'s daemon replacement both go through this, naming themselves in `by` (the daemon's rows and daemon-stop say which command stopped it, §5.2) — the caller stops it
  *  afterwards (`routing.stop` when switchRoutingOff already had to). → `{ routing (switchRoutingOff's), drained ({rel, gone}, null when no
- *  daemon answered), segment (the one its lock named before it was asked: what an `uninstall` stop seals) }`. The socket is the one that answered: `w.socketPath` is null with $XDG_RUNTIME_DIR unset.
+ *  daemon answered) }`. The socket is the one that answered: `w.socketPath` is null with $XDG_RUNTIME_DIR unset.
  *  The wait for the pid is bounded by silence (1.6 §3.6): each change of the lock's `sealing` progress starts it again and goes to `onSealing`. `seal: false`
  *  (uninstall --purge-data) asks an uninstall stop not to seal. */
 export async function drainDaemon(w, { drainMs = DRAIN_MS, by, seal = true, onSealing = () => {} } = {}) {
   const lockOf = () => { try { return JSON.parse(w.fs.readFileSync(w.lockFile, 'utf8')) || {} } catch { return {} } } // gone or unreadable: nothing said
-  const segment = lockOf().segment || null
   const routing = await switchRoutingOff(w, { ids: null, now: false, exit: true, by, seal })
-  if (!(routing.confirmed && routing.how === 'daemon-reply')) return { routing, drained: null, segment }
+  if (!(routing.confirmed && routing.how === 'daemon-reply')) return { routing, drained: null }
   const drained = await waitForDrain(w, routing.relayed, drainMs, routing.socket)
   const pid = routing.daemon.pid
   if (!drained.gone) {
@@ -165,7 +164,7 @@ export async function drainDaemon(w, { drainMs = DRAIN_MS, by, seal = true, onSe
       if (key && key !== said) { said = key; end = w.ms() + EXIT_WAIT_MS; onSealing(s) }
     }
   }
-  return { routing, drained, segment }
+  return { routing, drained }
 }
 
 /** Step 3: take the routing off and confirm it (see the header). `exit`: the whole daemon is to go once drained (no names). → `{ confirmed, unstoppable, state,

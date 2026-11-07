@@ -207,10 +207,14 @@ for (const [what, body, sealed] of [['uninstall', { exit: true, by: 'uninstall' 
       c.write(`POST /v1/messages HTTP/1.1\r\nhost: relay.asight.test:${up.port}\r\nanthropic-version: 2023-06-01\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(msg)}\r\n\r\n${msg}`)
       const seg = await until(() => (fs.existsSync(rawDir) ? fs.readdirSync(rawDir) : []).find((n) => n.endsWith('.ndjson') && fs.readFileSync(path.join(rawDir, n), 'utf8').includes('trocar-seal-at-stop')))
       const bytes = await until(() => { const b = fs.readFileSync(path.join(rawDir, seg)); return b.length && b[b.length - 1] === 0x0a && b })
+      // a closed segment the queue never got, and the temp file of an interrupted seal: nothing of them may outlive the uninstall
+      const stray = '20261001T000000Z.ndjson', temp = `.20261001T000000Z.4242-deadbeef.tmp`
+      fs.writeFileSync(path.join(rawDir, stray), '{"id":"req_stray"}\n', { mode: 0o600 }); fs.writeFileSync(path.join(rawDir, temp), 'half', { mode: 0o600 })
       await req(s.sock, 'POST', '/off', body)
       await d.exited
       const names = fs.readdirSync(rawDir).filter((n) => n.startsWith(seg.replace(/\.ndjson$/, '')))
       if (!sealed) { assert.deepEqual(names, [seg], 'the plaintext is left for the next start'); return }
+      assert.deepEqual(fs.readdirSync(rawDir).filter((n) => n.endsWith('.ndjson') || n.endsWith('.tmp')), [], 'every plaintext segment sealed, no temp left')
       assert.deepEqual(names, [seg.replace(/\.ndjson$/, '.sealed')], 'sealed, and the plaintext is gone')
       const f = openSealed(path.join(rawDir, names[0]))
       try { assert.deepEqual(Buffer.concat([...f.lines()].map((x) => x.line)), bytes, 'the sealed file rebuilds the segment byte for byte') } finally { f.close() }

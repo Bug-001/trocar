@@ -33,12 +33,12 @@ export const forkSealer = (file, { lockFile, journal, normal = false, onProgress
 
 export function createSealQueue({ raw, lockFile, journal = undefined, fs = nodeFs, fork: run = forkSealer, onFailure = () => {} }) {
   const queued = [], failed = new Set() // failed: not sealed again before the next start (no retry loop)
-  let running = null, idlePromise = null, markIdle = null, stopping = false
+  let running = null, idlePromise = null, markIdle = null, stopping = false, hear = null // hear: who is told the running worker's progress (idle's)
 
   function pump() {
     if (running || !queued.length) { if (!running && markIdle) { markIdle(); idlePromise = null; markIdle = null } return }
     const file = running = queued.shift()
-    Promise.resolve(run(file, { lockFile, journal })).then((r) => r, (e) => ({ code: -1, reason: e.message })).then(({ code, reason }) => {
+    Promise.resolve(run(file, { lockFile, journal, onProgress: (p) => { if (hear) hear(file, p) } })).then((r) => r, (e) => ({ code: -1, reason: e.message })).then(({ code, reason }) => {
       if (code !== 0 && code !== WORKER_GONE_EXIT && !stopping) {
         failed.add(file)
         onFailure({ file, reason: reason || `the sealer exited with ${code}` }) // the worker wrote the journal line; this is the collector-side `failure` (D38)
@@ -60,9 +60,9 @@ export function createSealQueue({ raw, lockFile, journal = undefined, fs = nodeF
     clearLockSegment()
     let names
     try { names = fs.readdirSync(raw) } catch { return [] } // no raw/ yet: nothing was ever written
+    dropTemps(names)
     const took = []
     for (const n of names.sort()) {
-      if (TEMP.test(n)) { try { fs.unlinkSync(path.join(raw, n)) } catch { /* gone */ } continue }
       const seg = parseSegment(n)
       // a plaintext segment that is not the live one is closed — even with a sealed file beside it (an interrupted
       // seal between rename and unlink): the plaintext wins and is sealed again over that file
@@ -86,8 +86,15 @@ export function createSealQueue({ raw, lockFile, journal = undefined, fs = nodeF
     catch { try { fs.unlinkSync(tmp) } catch { /* never written */ } }
   }
 
-  /** Resolves once nothing is queued or running. */
-  function idle() {
+  /** Drop the temps interrupted seals left in raw/ (at the start scan, and after an uninstall stop's wait: no worker runs then). */
+  function dropTemps(names = null) {
+    try { names = names || fs.readdirSync(raw) } catch { return } // no raw/: nothing was ever written
+    for (const n of names) if (TEMP.test(n)) { try { fs.unlinkSync(path.join(raw, n)) } catch { /* gone */ } }
+  }
+
+  /** Resolves once nothing is queued or running; `onProgress(file, progress)` hears the running worker meanwhile. */
+  function idle({ onProgress = null } = {}) {
+    hear = onProgress
     if (!running && !queued.length) return Promise.resolve()
     if (!idlePromise) idlePromise = new Promise((r) => { markIdle = r })
     return idlePromise
@@ -97,7 +104,7 @@ export function createSealQueue({ raw, lockFile, journal = undefined, fs = nodeF
    *  worker this stop cuts off is not a failure (4.2 §自动封存). */
   function stop() { stopping = true }
 
-  return { add, scan, idle, stop }
+  return { add, scan, idle, stop, dropTemps }
 }
 
 /** What the daemon calls once at start: scan (temps and leftovers), then seal every segment the store closes. This

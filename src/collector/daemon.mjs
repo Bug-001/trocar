@@ -13,6 +13,7 @@ import { trocarHome, collectorHome, rawHome } from '../paths.mjs'
 import { codeId, setupHelperCommand } from '../version.mjs'
 import { startSealing, forkSealer } from './seal-queue.mjs'
 import { createIndexKeeper } from './index-keeper.mjs'
+import { parseSegment } from './core/record/segments.mjs'
 import { loadArch } from './arch/index.mjs'
 import { loadHarnesses } from './harness/index.mjs'
 import { createRegistry } from './core/registry.mjs'
@@ -179,14 +180,25 @@ function storeWithSealing({ P, failure, query }) {
     // after store.close(): the segment the stop just closed is indexed to its last byte, so the daemon leaves behind
     // the index of everything it wrote; only then does the keeper write nothing more (D62)
     async settle() { try { await keeper.idle() } finally { await keeper.stop() } },
-    // after settle(), only when `uninstall` stops the daemon (4.2 §自动封存): no next start will seal the segment the stop closed, so the queue's
-    // worker seals it now, at normal priority, and its progress goes into the lock's `sealing` for the uninstall that waits (1.6 §3.6). A
-    // failure is said as the queue's are (D38) and keeps the plaintext; a daemon killed meanwhile takes the worker with it (the crash path).
-    async last(segment, lock) {
-      if (!segment) return
-      const file = path.join(rawHome(home), `${segment}.ndjson`)
-      const r = await forkSealer(file, { lockFile: P.lock, normal: true, onProgress: (p) => { try { lock.name({ sealing: { segment, ...p } }) } catch { /* a lock not rewritten costs the uninstall one silent interval */ } } })
-      if (r.code !== 0) failure('raw', Object.assign(new Error(`sealing ${file} failed (${r.reason || `the sealer exited with ${r.code}`}); its plaintext is kept and is sealed when trocar runs again`), { code: 'seal-failed' }), { file })
+    // after settle(), only when `uninstall` stops the daemon (4.2 §自动封存): no next start will seal what is still plaintext, so the queue first
+    // finishes what it holds, then the temps of interrupted seals go (the start scan's step), then every plaintext segment left — the one the stop
+    // closed, and any this run failed on — is sealed once at normal priority. Every worker's progress goes into the lock's `sealing` for the uninstall
+    // that waits (1.6 §3.6). A failure is said as the queue's are (D38) and keeps the plaintext → false; a daemon killed meanwhile takes the worker
+    // with it (the crash path).
+    async last(lock) {
+      const say = (file, p) => { try { lock.name({ sealing: { segment: path.basename(file).replace(/\.ndjson$/, ''), ...p } }) } catch { /* a lock not rewritten costs the uninstall one silent interval */ } }
+      if (queue) { await queue.idle({ onProgress: say }); queue.dropTemps() }
+      let names = []
+      try { names = fs.readdirSync(rawHome(home)).sort() } catch { /* no raw/: nothing was written */ }
+      let ok = true
+      for (const n of names) {
+        const seg = parseSegment(n)
+        if (!seg || seg.sealed) continue
+        const file = path.join(rawHome(home), n)
+        const r = await forkSealer(file, { lockFile: P.lock, normal: true, onProgress: (p) => say(file, p) })
+        if (r.code !== 0) { ok = false; failure('raw', Object.assign(new Error(`sealing ${file} failed (${r.reason || `the sealer exited with ${r.code}`}); its plaintext is kept and is sealed when trocar runs again`), { code: 'seal-failed' }), { file }) }
+      }
+      return ok
     },
   }
   return { store, seal, keeper }
@@ -232,10 +244,9 @@ async function stopTail({ engine, graceMs, store, seal, failure, lock, signal, r
   let relayed = null
   await step('engine', async () => { relayed = await engine.close({ graceMs, ...(who ? { who } : {}) }) })
   await after(step)
-  const closing = store.currentSegment // the segment store.close() closes now
   await step('record', () => store.close())
   await step('raw', () => seal.settle()) // the index of what this daemon wrote, including the segment just closed (D62)
-  if (sealLast) await step('raw', () => seal.last(closing, lock))
+  if (sealLast) await step('raw', () => seal.last(lock))
   failure.flush()
   failure.write({ event: 'daemon-stop', pid: process.pid, ...(signal ? { signal } : { reason: reason || 'stop requested' }), ...(relayed ? { relayed } : {}), ...(failed.length ? { failed } : {}) })
   failure.final()

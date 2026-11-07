@@ -62,9 +62,8 @@ function sealingWorld({ goneAt, progressEvery = null }) {
 test('drainDaemon: a daemon that reports sealing progress is waited for past the exit wait, and every change reaches onSealing', async () => {
   const { w, now } = sealingWorld({ goneAt: 60_000, progressEvery: 4000 })
   const seen = []
-  const r = await drainDaemon(w, { drainMs: 30_000, by: 'uninstall', onSealing: (s) => seen.push(s.done) })
+  await drainDaemon(w, { drainMs: 30_000, by: 'uninstall', onSealing: (s) => seen.push(s.done) })
   assert.ok(now() >= 60_000, `the wait ended at ${now()} ms, while the daemon was still sealing`)
-  assert.equal(r.segment, '20261107T100000Z', 'the segment the daemon was writing, read from its lock before it was asked to go')
   assert.ok(seen.length >= 10 && seen.every((d, i) => i === 0 || d > seen[i - 1]), `each change once, in order: ${seen}`)
 })
 

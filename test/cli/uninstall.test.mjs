@@ -564,7 +564,7 @@ test('uninstall: the segment the daemon sealed before it exited is a row of the 
   const { exit, io } = await sealingUninstall({ seals: true, argv: ['--json'] })
   assert.equal(exit, 0, io.text())
   const r = io.json()
-  assert.deepEqual(r.sealed, { segment: SEG, bytes: 3 * 2 ** 20, sealed_bytes: 2 ** 19 })
+  assert.deepEqual(r.sealed, [{ segment: SEG, bytes: 3 * 2 ** 20, sealed_bytes: 2 ** 19 }])
   assert.deepEqual(validateReceipt(r), [], 'sealed is a key of the uninstall receipt (附录 C.2)')
   assert.match(formatUninstallReceipt(r, {}), new RegExp(`Sealed ${SEG} \\(\\S+ MB → \\S+ KB\\)`))
 })
