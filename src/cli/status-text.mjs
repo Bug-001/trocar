@@ -34,7 +34,8 @@ export function statusSummary(doc, { now = Date.now(), colors: c = noColor() } =
   const on = shown.filter((h) => doc.harnesses[h].desired === 'on')
   const captured = shown.filter((h) => doc.harnesses[h].captured === true)
   if (!shown.length) return [c.bold('No harness is set up for capture yet.'), '', ...readErrorLines(doc), 'Next: trocar install']
-  const head = `Capturing ${captured.length} of ${shown.length} installed harness${shown.length === 1 ? '' : 'es'}.`
+  const unknown = shown.filter((h) => doc.harnesses[h].captured === null).length // never counted as not capturing (1.6 §2)
+  const head = `Capturing ${captured.length} of ${shown.length} installed harness${shown.length === 1 ? '' : 'es'}${unknown ? `; ${unknown} not known yet` : ''}.`
   const daemon = daemonClause(doc.daemon, now)
   const lines = head.length + 1 + daemon.length <= WIDTH ? [c.bold(`${head} ${daemon}`), ''] : [c.bold(head), ...wrap(daemon, WIDTH), '']
   if (shown.length) {

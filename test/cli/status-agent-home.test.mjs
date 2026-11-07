@@ -12,6 +12,7 @@ import { renderHook } from '../../src/collector/harness/templates/index.mjs'
 import { runStatusCli } from '../../src/cli/status.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
 import { fakeIo } from './fixtures/on-ctx.mjs'
+import { statusSummary } from '../../src/cli/status-text.mjs'
 import { SOCK } from './fixtures/status-ctx.mjs'
 import { absentSpawn } from '../helpers/no-real-os.mjs'
 
@@ -50,6 +51,10 @@ test('every process of a harness not seen yet: a waiting state, no restart step 
   assert.deepEqual([x.captured, x.reason, x.processes.map((p) => p.reason)], [null, 'not-seen', ['not-seen', 'not-seen']])
   assert.deepEqual(doc.restart, [])
   assert.deepEqual(doc.critical.filter((c) => c.harness === 'codex'), [])
+  // invariant 4: the summary's first line does not read an unknown as a harness that is not capturing
+  const first = (d) => statusSummary(d)[0]
+  const no = { ...doc, harnesses: { ...doc.harnesses, codex: { ...x, captured: false } } }
+  assert.notEqual(first(doc), first(no))
 })
 
 test('the location reads no variable: started inside the on window still means it read the entry', async () => {
