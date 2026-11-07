@@ -27,6 +27,7 @@ import { controlEndpointFor } from '../../src/off/control-client.mjs'
 import { segmentIndex } from '../../src/query/index-build.mjs'
 import { PID, BODY, reqOf, REPLY, agentOf, darwinExec, win32Io, flowsOf, freePort, doorOpen, through, statusDoc } from '../helpers/model-io.mjs'
 import { listenLocalhost } from '../helpers/localhost.mjs'
+import { TRUSTED_THRESHOLD } from '../../src/collector/core/engine/negcache.mjs'
 
 
 for (const platform of ['darwin', 'win32']) {
@@ -84,10 +85,10 @@ for (const platform of ['darwin', 'win32']) {
         await kept.end()
         fs.writeFileSync(stateF, stateWas)
 
-        // D51④ / 4.8 §5.5: a client of this process that refuses the leaf twice (the threshold, 4.6 #9) → trust-rejected keyed by the process life
+        // D51④ / 4.8 §5.5: a client of this process, which has sent data here, that refuses the leaf in a row up to the threshold (4.6 §引擎 5) → trust-rejected keyed by the process life
         // "<pid>@<start>", and status reads the process as not captured (1.6 negative-cache); the key is cleared (negative-cache-cleared, same
         // neg_key) once the process leaves the table — below, after off
-        for (let i = 0; i < 2; i++) {
+        for (let i = 0; i < TRUSTED_THRESHOLD; i++) {
           a.ports.add(await freePort()); win?.write()
           await assert.rejects(through({ door, auth, target, localPort: [...a.ports].at(-1), ca: [upCa.certPem], req: REQ, open }))
         }
