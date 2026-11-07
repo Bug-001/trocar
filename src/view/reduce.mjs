@@ -463,20 +463,27 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
       return null;
     }
     n++;
-    if (x.chain && isCall(row)) noteChain(x.chain.hash, x.msgCount || 0);
+    if (x.chain && isCall(row)) noteChain(rid, x.chain.hash, x.msgCount || 0);
     ts[k] = x.item ? x.item.ts_request : null;
     const c = !isCall(row) ? ts[k] : x.format === 'anthropic' ? (x.facts || {}).ts_request : x.ts; // the call's own ts (its step order)
     cts[k] = c === ts[k] ? ts[k] : c;
     return row;
   }
   // a keyed session split by chains (3.4 带键会话里的消息链): the main system text is that of the call with the most messages so far
-  // (a tie keeps it); when it moves, what was folded under the one before is folded again (`redo`)
+  // (a tie keeps it); when it moves, what was folded under the one before is folded again (`redo`). Per text its largest count and the
+  // first call (posCmp) that has it, so the main text is the one whose count is largest, a tie to the one that got there first: the same
+  // whatever order the calls arrive in. A call that fails after it was counted is taken out by counting the rest again (`recount`).
   let redo = false;
-  function noteChain(hash, count) {
-    const m = Math.max(chains.max.get(hash) || 0, count);
-    chains.max.set(hash, m);
-    if (chains.main == null) chains.main = hash;
-    else if (hash !== chains.main && m > chains.max.get(chains.main)) { chains.main = hash; if (last >= 0) redo = true; }
+  function noteChain(rid, hash, count) {
+    const e = chains.max.get(hash);
+    if (e && (count < e.m || (count === e.m && posCmp(rid, e.at) >= 0))) return;
+    chains.max.set(hash, { m: count, at: rid });
+    const M = chains.main == null ? null : chains.max.get(chains.main);
+    if (hash !== chains.main && (!M || count > M.m || (count === M.m && posCmp(rid, M.at) < 0))) { chains.main = hash; if (last >= 0) redo = true; }
+  }
+  function recount() {
+    chains.max.clear(); chains.main = null;
+    for (const rid of folded()) { const row = store.rows.get(rid), x = row.x || {}; if (x.chain && isCall(row)) noteChain(rid, x.chain.hash, x.msgCount || 0); }
   }
   const folded = () => { const out = []; ts.forEach((t, k) => { const rid = ridAt(k); if (!failed.has(rid)) out.push(rid); }); return out; };
   // from scratch over everything added, each row read again
@@ -513,6 +520,7 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
       if (e instanceof BlockUnread && e.rid != null && !failed.has(e.rid)) {
         const k = slotOf(e.rid);
         failed.set(e.rid, -1); n--; newFailed.push({ x: e.rid, reason: e.message, code: e.code });
+        if (((store.rows.get(e.rid) || {}).x || {}).chain) recount();
         if (dig[k] > 0 || dig[k] < 0) put(k, { g: e.rid }); // it had a call line: it is no call now
       } else if (!(e instanceof OrderBound) || inStep) throw e;
       else inStep = true; // sub-agents told apart only by order: from scratch, in step order

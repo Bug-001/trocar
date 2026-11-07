@@ -10,6 +10,13 @@ import path from 'node:path'
 import { indexRows } from '../../src/query/rows.mjs'
 import { fillUsage } from '../../src/query/usage.mjs'
 import { segmentIndex, indexDir } from '../../src/query/index-build.mjs'
+import { reduction, skeletonDoc, memoryLog, BlockUnread } from '../../src/view/reduce.mjs'
+import { extractMembers, blockAt } from '../../src/view/extract.mjs'
+import { openProjection } from '../../src/query/projection.mjs'
+import { parseTextRef } from '../../src/raw/refs.mjs'
+import { tmpDir } from '../helpers/tmp.mjs'
+import { openFoldLog } from '../../src/query/fold-log.mjs'
+import v8 from 'node:v8'
 
 const T0 = Date.parse('2026-10-18T10:00:00.000Z')
 const sha12 = (s) => createHash('sha256').update(s, 'utf8').digest('hex').slice(0, 12)
@@ -671,17 +678,20 @@ test('keyed chains: another system text is a lane of its own; the main text stay
 test('keyed chains: two fresh histories of one text are two lanes', async () => {
   let ms = T0
   const recs = ided([
-    ...[3, 5, 7].map((n) => kimi(KMAIN, hist('main', n), (ms += 10_000))),
-    kimi(KSIDE, hist('first', 1), (ms += 10_000)), kimi(KSIDE, hist('first', 3), (ms += 10_000)),
+    ...[3, 5, 9].map((n) => kimi(KMAIN, hist('main', n), (ms += 10_000))),
+    kimi(KSIDE, hist('first', 1), (ms += 10_000)), kimi(KSIDE, hist('first', 7), (ms += 10_000)),
     kimi(KSIDE, hist('second', 1), (ms += 10_000)), kimi(KSIDE, hist('second', 3), (ms += 10_000)),
   ])
-  const rows = [...await indexRows({ home: homeOf([[SEG1, recs]]), errors: [] })]
+  const home = homeOf([[SEG1, recs]]), rows = [...await indexRows({ home, errors: [] })]
   const lane = (i) => rows.find((r) => r.id === ridAt(i)).lane_key
   for (const r of rows) assert.equal(r.session_id, 'K', 'one session: the key')
   assert.ok(lane(3) && lane(5), 'each chain is named')
   assert.equal(lane(4), lane(3), 'an extended history stays on its chain')
   assert.equal(lane(6), lane(5))
   assert.notEqual(lane(5), lane(3), 'a fresh history is another chain')
+  // and the session document folds each chain on its own: the second history's start is no drop after the first's
+  const { at } = await lanesOf(home, 'K')
+  assert.deepEqual(recs.map((_, i) => at(i).compaction), recs.map(() => false), 'no compaction where a chain starts')
 })
 
 test('keyed chains: the main text moves to a text whose history grows longer', async () => {
@@ -692,13 +702,18 @@ test('keyed chains: the main text moves to a text whose history grows longer', a
     kimi(KMAIN, hist('first', 7), (ms += 10_000)),
   ])
   const want = ['aux', 'aux', 'main', 'main', 'main', 'main', 'main', 'aux']
-  const kinds = async (home) => { const { at } = await lanesOf(home, 'K'); return recs.map((_, i) => at(i).kind) }
+  // before the switch: the first text leads, at 5 the other ties it and the first stays
+  const early = { 3: ['main', 'main', 'aux'], 5: ['main', 'main', 'aux', 'aux', 'aux'] }
+  const kinds = async (home, n = recs.length) => { const { at } = await lanesOf(home, 'K'); return recs.slice(0, n).map((_, i) => at(i).kind) }
   assert.deepEqual(await kinds(homeOf([[SEG1, recs]])), want, 'read at once')
   for (const c of [3, 5]) { // read as the session grows: the switch comes after the fold took the first calls as main
     const home = homeOf([[SEG1, recs.slice(0, c)]])
-    await kinds(home).catch(() => null)
+    assert.deepEqual(await kinds(home, c), early[c], `before it grew, at ${c}`)
     writeSegment(home, SEG1, lines(recs.slice(c)))
     assert.deepEqual(await kinds(home), want, `grown after ${c}`)
+  }
+  for (const c of [3, 5, 7]) { // the reduction snapshotted after the first c calls and resumed from that state (REDUCE_V) for the rest
+    assert.deepEqual(await chainKinds(recs, { batches: [recs.slice(0, c).map((_, i) => ridAt(i)), recs.slice(c).map((_, i) => ridAt(c + i))], resume: true }), want, `resumed after ${c}`)
   }
 })
 
@@ -748,4 +763,50 @@ test('gemini: contents and systemInstruction anchor the chain; two unrelated con
   const [ka1, kb1, ka2] = [a1, b1, a2].map(keyOf)
   assert.notEqual(kb1, ka1, 'an unrelated conversation is another session')
   assert.equal(ka2, ka1, 'a conversation that extends stays one session')
+  // calls not seen between (three model turns at once): the earlier call ends where a `model` turn starts, so it is still extended
+  const c1 = gem(['plan the release']), c2 = gem(['plan the release', 'planned', 'tag it', 'tagged', 'and notes', 'written', 'ship it', 'shipped', 'thanks'])
+  const kc1 = keyOf(c1)
+  assert.equal(keyOf(c2), kc1, 'an extension past several model turns stays one session')
+})
+
+// the reduction itself over a Kimi-shaped session (3.4 带键会话里的消息链): records extracted into a projection with the members the index gives,
+// then added in the batches given; `fail`: a call whose block does not read back live (BlockUnread), or that the fold log already names failed (`cold`)
+async function chainKinds(recs, { batches = null, fail = null, cold = false, resume = false } = {}) {
+  const home = homeOf([[SEG1, recs]]), members = [...await indexRows({ home, errors: [] })]
+  const byId = new Map(recs.map((r, i) => [ridAt(i), Object.defineProperty({ ...r, id: ridAt(i) }, '_stream', { value: `${SEG1}.ndjson`, enumerable: false })]))
+  const at = tmpDir('trocar-chains-')
+  let store = openProjection({ home: at, key: 'K' })
+  extractMembers({ store, members, sessionId: 'K', recordsAt: (ms) => ms.map((m) => byId.get(m.id)).filter(Boolean) })
+  // resume: a fold log on disk; after each batch the state snapshotted, serialised and resumed over a store and log opened afresh
+  const logOf = (st) => (resume ? openFoldLog({ home: at, key: 'K', projection: { id: st.id, bytes: st.bytes }, errors: [] }) : memoryLog(st))
+  const resolve = (ref) => { const id = parseTextRef(ref).recordId; if (id === fail && !cold) throw new BlockUnread('record-missing', 'gone'); return blockAt(byId.get(id), ref) }
+  const failedBefore = cold ? (rid) => (rid === fail ? { reason: 'gone', code: 'record-missing' } : null) : null
+  let log = logOf(store), R = reduction(store, { log, resolve, failedBefore })
+  for (const b of batches || [recs.map((_, i) => ridAt(i))]) {
+    R.add(b)
+    if (!resume) continue
+    const from = v8.deserialize(v8.serialize(R.snapshot()))
+    log.close(); store.close()
+    store = openProjection({ home: at, key: 'K' }); log = logOf(store); R = reduction(store, { log, resolve, failedBefore, from })
+  }
+  const doc = skeletonDoc(R), kind = new Map(doc.lanes.map((l) => [l.lane, l.kind]))
+  return recs.map((_, i) => { const r = doc.rows.find((x) => x.rid === ridAt(i)); return r ? kind.get(r.lane) : 'failed' })
+}
+
+test('keyed chains: a call that failed holds no count: live and cold give the same main', async () => {
+  let ms = T0
+  // the other text's call has the most messages, and its block does not read back
+  const recs = [...[3, 5].map((n) => kimi(KMAIN, hist('main', n), (ms += 10_000))), kimi(KOTHER, hist('other', 9), (ms += 10_000)), kimi(KMAIN, hist('main', 7), (ms += 10_000))]
+  const fail = ridAt(2)
+  const live = await chainKinds(recs, { fail }), cold = await chainKinds(recs, { fail, cold: true })
+  assert.deepEqual(live, ['main', 'main', 'failed', 'main'])
+  assert.deepEqual(cold, live)
+})
+
+test('keyed chains: a tie keeps the text that got there first, whatever order the calls arrive in', async () => {
+  let ms = T0
+  const recs = [kimi(KMAIN, hist('main', 5), (ms += 10_000)), kimi(KOTHER, hist('other', 5), (ms += 10_000)), kimi(KOTHER, hist('other', 3), (ms += 10_000))]
+  const want = ['main', 'aux', 'aux']
+  for (const batches of [[[ridAt(0)], [ridAt(1)], [ridAt(2)]], [[ridAt(1)], [ridAt(0)], [ridAt(2)]], [[ridAt(2), ridAt(1)], [ridAt(0)]]])
+    assert.deepEqual(await chainKinds(recs, { batches }), want, JSON.stringify(batches))
 })
