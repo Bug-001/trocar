@@ -35,11 +35,6 @@ const FILE_OPS = new Set(['Read', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit'])
 const DIR_OPS = new Set(['Glob', 'Grep', 'LS'])
 const SPAWN_OPS = new Set(['Agent', 'Task'])
 
-function hash(s) {
-  let h = 0
-  for (let i = 0; i < s.length; i++) h = (Math.imul(31, h) + s.charCodeAt(i)) | 0
-  return (h >>> 0).toString(16).padStart(8, '0')
-}
 const sysText = (r) => (r.request?.system || []).map((b) => b.text || '').join('\n')
 const isSub = (sys) => /cc_is_subagent=true/.test(sys)
 const isMonitor = (sys) => /you are a security monitor/i.test(sys)
@@ -896,61 +891,26 @@ export function replayLedger(steps, after, maps = {}, touch = null) {
 // an SDK detail and is irrelevant to the model. What the model actually reads top-to-bottom — and
 // what the Anthropic prompt cache uses as its prefix — is tools, then system, then messages.
 // So THIS is "the original order of the context", not the JSON key order.
-// The block's canonical text for hashing/diffing. `cap` BOUNDS IT WHILE IT IS BUILT, because the
-// block key below is hash(text.slice(0, cap)): building a 200 KB tool_result (or JSON.stringify-ing a
-// whole tool input) only to throw all but its first 4 096 chars away is the "O(1) per block" claim
-// being false. Capping produces the SAME chars — every branch below is a prefix-stable concatenation,
-// so slicing a part before joining and slicing the join after it are the same string.
-function blkHashText(b, cap = Infinity) {
-  if (typeof b === 'string') return b.slice(0, cap)
-  if (!b || typeof b !== 'object') return String(b).slice(0, cap)
-  if (b.type === 'text') return (b.text || '').slice(0, cap)
-  if (b.type === 'thinking') return (b.thinking || '').slice(0, cap)
+// The block's canonical text for hashing/diffing: whole (D19, the break key is the sha-256 of all of it).
+function blkHashText(b) {
+  if (typeof b === 'string') return b
+  if (!b || typeof b !== 'object') return String(b)
+  if (b.type === 'text') return b.text || ''
+  if (b.type === 'thinking') return b.thinking || ''
   if (b.type === 'redacted_thinking') return 'redacted_thinking'
-  if (b.type === 'tool_use' || b.type === 'server_tool_use') {
-    const head = (b.name || '') + '::'
-    return head.length >= cap ? head.slice(0, cap) : (head + JSON.stringify(b.input || {})).slice(0, cap)
-  }
+  if (b.type === 'tool_use' || b.type === 'server_tool_use') return (b.name || '') + '::' + JSON.stringify(b.input || {})
   if (b.type === 'tool_result') {
-    const head = (b.tool_use_id || '') + '::'
-    if (head.length >= cap) return head.slice(0, cap)
     const c = b.content
-    let t
-    if (typeof c === 'string') t = c.slice(0, cap)
-    else if (Array.isArray(c)) { t = ''; for (let i = 0; i < c.length && t.length < cap; i++) t += (i ? '\n' : '') + (c[i].text || `[${c[i].type}]`) }
-    else t = JSON.stringify(c)
-    return (head + t + (b.is_error ? '::ERR' : '')).slice(0, cap)
+    const t = typeof c === 'string' ? c : Array.isArray(c) ? c.map((x) => x.text || `[${x.type}]`).join('\n') : JSON.stringify(c)
+    return (b.tool_use_id || '') + '::' + t + (b.is_error ? '::ERR' : '')
   }
   if (b.type === 'image') return 'image:' + (b.source?.media_type || b.source?.type || '')
   if (b.type === 'document') return 'document:' + (b.source?.media_type || b.title || '')
-  return JSON.stringify(b).slice(0, cap)
-}
-// hash a bounded prefix — plenty to distinguish blocks, and O(1) per block regardless of size
-const BLK_KEY_CAP = 4096
-// `memo` (get / set, from the caller: one per lane of a session assembly) is NOT a cache of results across queries: an
-// append-only conversation re-sends its whole context every turn, so one session asks for the key of the
-// SAME block text once per call — measured 17 594 block keys over 494 distinct contents. Hashing the 17 100
-// repeats was 89 ms of a 115-call session's 305 ms. Same text in, same key out; the map dies with the call.
-// A block OBJECT's hash is also kept by the object itself (a WeakMap: a stitched context hands the same parsed block to every call of
-// its chain, and the text would be built again for each); the per-lane text memo stays for the contents that arrive as new objects.
-// A memo's `null` is a miss, as `undefined` is: the fold's lane memo answers `null` for a lane with no baseline yet
-// (`keys.get(t) ?? (was && was.get(t))`), and a key must be the block's hash, whichever fold asked first.
-const keyOfBlock = new WeakMap()
-const blkKey = (prefix, b, memo) => {
-  const obj = b && typeof b === 'object'
-  let h = obj ? keyOfBlock.get(b) : undefined
-  if (h === undefined) {
-    const t = blkHashText(b, BLK_KEY_CAP)
-    if (!memo) h = hash(t)
-    else if ((h = memo.get(t)) == null) memo.set(t, (h = hash(t)))
-    if (obj) keyOfBlock.set(b, h)
-  }
-  return prefix + h
+  return JSON.stringify(b)
 }
 
 // Flatten a captured request into ordered block descriptors — the board's PROJECTION of the shared
-// CC dissector's canonical spine (src/dissect/cc.mjs · D25). Each descriptor carries a stable content
-// `key` (for prefix-diffing vs the previous call), its `cache_control` if Claude Code set one, and
+// CC dissector's canonical spine (src/dissect/cc.mjs · D25). Each descriptor carries its `cache_control` if Claude Code set one, and
 // enough metadata for the view to render + link it to the resource ledger. sysLabel / resourceRef /
 // the volatile rule now come from the dissector, so board & ETL never drift.
 // A tool_result's own truncation notice, QUOTED from the harness — never inferred. Claude Code /
@@ -967,7 +927,7 @@ function truncNote(text) {
 // A tools / system entry's parsed source item, the key of the per-block memos (blockBytes, flatBlockText). NON-enumerable: flat entries
 // ship inside page bodies, and the item must never serialize with them. A bare string has no identity to key by: it is left out.
 const withSrc = (d, src) => (src && typeof src === 'object' ? Object.defineProperty(d, 'src', { value: src }) : d)
-export function linearContext(request, keyMemo = null) {
+export function linearContext(request) {
   const flat = []
   // ── resource ↔ RESULT linking ────────────────────────────────────────
   // The 📂 resource explorer promises "the bytes that entered the context". The dissector keys a
@@ -1004,21 +964,18 @@ export function linearContext(request, keyMemo = null) {
         props, descChars, cc: t.cache_control || null, mcp,
         verbatim, desc: hasDesc ? t.description : undefined, schema: hasSchema ? t.input_schema : undefined,
         resKey: mcp ? 'mcp::' + (String(t.name).split('__')[1] || '') : '',
-        key: 'T:' + (t.name || e.path.i) + ':' + descChars + ':' + props.length,
       }, t))
     } else if (e.section === 'system') {
       const b = e.parsed, text = b?.text || ''
-      flat.push(withSrc({ sec: 'system', kind: 'system', role: 'system', si: e.path.i, label: sysLabel(text), text, chars: text.length, volatile: e.volatile, cc: b?.cache_control || null, key: blkKey('S:', { type: 'text', text }, keyMemo) }, b))
+      flat.push(withSrc({ sec: 'system', kind: 'system', role: 'system', si: e.path.i, label: sysLabel(text), text, chars: text.length, volatile: e.volatile, cc: b?.cache_control || null }, b))
     } else {
       const b = e.parsed, type = typeof b === 'string' ? 'text' : (b?.type || 'text')
       const d = {
         sec: 'messages', kind: type, role: e.role, mi: e.path.mi, bi: e.path.bi, block: b,
         toolName: type === 'tool_use' || type === 'server_tool_use' ? (b.name || '') : '',
         cc: (b && b.cache_control) || null,
-        resKey: e.resourceRef, key: blkKey('M:' + e.role + ':' + type + ':', b, keyMemo),
+        resKey: e.resourceRef,
       }
-      // `key` above is UNCHANGED — the cache-prefix chain diffs on it, so the linking below only
-      // ever ADDS descriptive fields.
       if (type === 'tool_use' && d.resKey && d.resKey.startsWith('file::')) {
         d.resRole = 'request'
         // No sibling result in THIS request: the call that ISSUED the tool_use gets its result in
@@ -1111,18 +1068,14 @@ const CAUSE_META = {
 // `opts.compaction` = analyze()'s authoritative compaction verdict (message-count drop): a real
 // compaction can PRESERVE the first user turn and rewrite the middle, so the structural break lands
 // mid-history — the hint makes the cause say "compaction" while byteOffset still localizes the rewrite.
-export function cacheBreak(prevFlat, curFlat, opts = {}) {
-  const seq = (f) => f && { n: f.length, key: (i) => f[i].key, vol: (i) => !!f[i].volatile, sec: (i) => f[i].sec, name: (i) => f[i].name }
-  return breakOf(seq(prevFlat), seq(curFlat), { ...opts, detail: (i) => blockDiff(prevFlat[i], curFlat[i]) })
-}
-// What cacheBreak reads of two blocks that diverge at the same place: whether only their JSON key order differs, and the first
+// What breakOf reads of two blocks that diverge at the same place: whether only their JSON key order differs, and the first
 // differing character of their frames with the text from it on. A function of the two blocks' bytes alone (src/view/reduce.mjs
 // keeps it per pair of block ids).
 export function blockDiff(prev, cur) {
   const curText = flatBlockText(cur), off = firstDiffOffset(flatBlockText(prev), curText)
   return { reorder: keyReorder(prev, cur), byteOffset: off >= 0 ? off : null, byteContext: off >= 0 ? own(curText.slice(off, off + 48)) : '' }
 }
-// cacheBreak over two block sequences given by accessors: { n, key(i), vol(i), sec(i), name(i) }; `opts.detail(i)` → blockDiff of
+// The break over two block sequences given by accessors: { n, key(i), vol(i), sec(i), name(i) }; `opts.detail(i)` → blockDiff of
 // the blocks at the break (asked only when the break is inside both sequences).
 export function breakOf(prev, cur, opts = {}) {
   if (!prev || !prev.n)
