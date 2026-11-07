@@ -258,7 +258,7 @@ export async function run(ctx) {
   const wireDefs = [...fresh.keys()].map((b) => wireDef(b, listAt(fresh.get(b)))).filter(Boolean);
   // the entries owed (at --ledger: those after its cursor) in key order, into the room the page leaves (a --ledger answer takes one
   // at least); `ledger_next` names the last one shipped when some are left
-  const owed = [none ? [] : resources, seen].flatMap((list, j) => list.map((e) => [j, keyOf[j](e), e]))
+  const owed = (none ? [] : [resources, seen]).flatMap((list, j) => list.map((e) => [j, keyOf[j](e), e]))
     .filter(([j, kk]) => !after || j > after[0] || (j === after[0] && kk > after[1]))
     .sort((a, b) => a[0] - b[0] || cmp(a[1], b[1]));
   const out = [[], []];
@@ -271,7 +271,7 @@ export async function run(ctx) {
   const last = i > 0 ? owed[i - 1] : [0, ''];
   return {
     lane: key, base, mark: markOn(st.plan, st.mark), ...reading, steps, defs: wireDefs,
-    ...(none ? { resources: null, resources_note: 'no-ledger' } : { resources: out[0] }), seen: out[1], events,
+    ...(none ? { resources: null, resources_note: 'no-ledger', seen: null } : { resources: out[0], seen: out[1] }), events,
     prev: lo > 0 && steps.length ? rids[lo] : null, next: hi < n && steps.length ? rids[hi - 1] : null,
     ledger_next: i < owed.length ? Buffer.from(JSON.stringify([LISTS[last[0]], last[1]])).toString('base64url') : null,
   };
