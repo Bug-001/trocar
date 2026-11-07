@@ -71,13 +71,13 @@ const finite = (v) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v
 // ── one line → one index record ───────────────────────────────────────────
 // A line that is not JSON can never be indexed (its bytes are still on disk and `raw cat` still prints
 // them): it is reported, and it keeps its line number so every later record's id stays what it was.
-function recordOf(lineBuf, segment, lineNo, problems, offset = null) {
+function recordOf(lineBuf, segment, lineNo, problems, offset = null, memo = null) {
   let e;
   try { e = JSON.parse(lineBuf.toString('utf8')); } catch (err) {
     problems.push({ code: 'record-unparseable', reason: `${recordId(segment, lineNo)} is not JSON (${err.message}); it is left out of the index` });
     return null;
   }
-  return indexEntryOf(e, { segment, lineNo, storedBytes: lineBuf.length, offset });
+  return indexEntryOf(e, { segment, lineNo, storedBytes: lineBuf.length, offset, memo });
 }
 
 /**
@@ -88,13 +88,14 @@ function recordOf(lineBuf, segment, lineNo, problems, offset = null) {
  * holds that, and test/collector/index-keeper-entries.test.mjs holds it for the keeper's path specifically.
  *   storedBytes: the line's bytes WITHOUT its newline (what `lineBuf.length` is above).
  *   offset: where the line starts in the plaintext segment (null: sealed).
+ *   memo: a scan's synthFactsOf memo (one per scan of one segment, dropped with it); the entry is the same without it.
  */
-export function indexEntryOf(env, { segment, lineNo, storedBytes, offset = null }) {
+export function indexEntryOf(env, { segment, lineNo, storedBytes, offset = null, memo = null }) {
   // the body as the board reads it: a request body stored compressed (req_body null + req_body_b64) still carries its session key
   const e = expandRequestBody(env);
   const wire = e.body_wire_bytes || {};
   const h = harnessOf(e);
-  const synth = synthFactsOf(e);
+  const synth = synthFactsOf(e, memo);
   return {
     id: recordId(segment, lineNo),
     ts: e.ts_request ?? e.ts ?? null,
@@ -143,11 +144,11 @@ async function scanNdjson(fs, file, from, firstLine, segment, problems, maxBytes
   try {
     const st = fs.fstatSync(fd);
     const buf = Buffer.allocUnsafe(CHUNK);
-    const records = [], breathe = easing(ease);
+    const records = [], breathe = easing(ease), memo = new Map();
     let pos = from, lineStart = from, lineNo = firstLine - 1, pending = Buffer.alloc(0);
     const take = (lineBuf) => {
       lineNo++;
-      if (lineBuf.length) { const r = recordOf(lineBuf, segment, lineNo, problems, lineStart); if (r) records.push(r); }
+      if (lineBuf.length) { const r = recordOf(lineBuf, segment, lineNo, problems, lineStart, memo); if (r) records.push(r); }
       lineStart += lineBuf.length + 1;
     };
     while (pos < st.size && (lineStart === from || pos - from < maxBytes)) {
@@ -189,7 +190,7 @@ async function scanSealed(fs, file, segment, problems, ease = null) {
     return { records: [], mark: { size: fs.statSync(file).size, sealed: true }, bytesRead: 0, done: true };
   }
   try {
-    const records = [], breathe = easing(ease);
+    const records = [], breathe = easing(ease), memo = new Map();
     for (let i = 0; i < sf.count; i++) {
       if (breathe && i % EASE_EVERY === 0) await breathe();
       const r = sf.records[i], lineNo = Number(r[R.lineNo]) + 1;
@@ -198,7 +199,7 @@ async function scanSealed(fs, file, segment, problems, ease = null) {
       try { line = sf.lineAt(i); } catch (e) { problems.push({ code: 'record-unreadable', reason: `${recordId(segment, lineNo)}: ${String((e && e.message) || e)}` }); continue; }
       if (line.length && line[line.length - 1] === NL) line = line.subarray(0, line.length - 1);
       if (!line.length) continue;
-      const rec = recordOf(line, segment, lineNo, problems);
+      const rec = recordOf(line, segment, lineNo, problems, null, memo);
       if (rec) records.push(rec);
     }
     return { records, mark: sealedMark(fs, file), bytesRead: fs.statSync(file).size, done: true };

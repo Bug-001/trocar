@@ -81,34 +81,48 @@ function fingerprints(texts, cap) {
 const CHAIN_K = 12, TAIL = 4, CHAIN_CAP = 32, RECENT = 12, MIN_ITEMS = 2, ENDS = 2;
 const h16 = (s) => createHash('sha256').update(s, 'utf8').digest('hex').slice(0, 16);
 const bare = (k, v) => (k === 'cache_control' ? undefined : v);
+// the replacer's bytes, paid only when the key is there: a key always serializes as `"cache_control"`; a string holding it is a false hit, re-encoded
+const enc = (it) => { const j = JSON.stringify(it) ?? 'null'; return j.includes('"cache_control"') ? JSON.stringify(it, bare) ?? 'null' : j; };
 const fromModel = (it) => !!it && (it.role === 'assistant' || it.type === 'reasoning' || /_call$/.test(it.type ?? ''));
-function chainOf(body) {
+// `prev` ({js, cs}: the group's previous call's item encodings and cumulative hashes, or null): while this call's items are byte-equal
+// to its first ones, its cumulative hash there is the same and is taken, not recomputed (an agent resends its whole history each call).
+// → also `memo`: this call's, for the next call of the group.
+function chainOf(body, prev = null) {
   const b = body || {};
   const items = Array.isArray(b.messages) ? b.messages : Array.isArray(b.input) ? b.input : typeof b.input === 'string' ? [b.input] : [];
-  const out = [], recent = [];
-  let c = null;
+  const out = [], js = new Array(items.length), cs = new Array(items.length);
+  let c = null, same = !!prev;
   items.forEach((it, i) => {
-    const j = JSON.stringify(it, bare) ?? 'null';
-    c = h16(c == null ? j : c + '\n' + j);
+    const j = (js[i] = enc(it));
+    if (same && j === prev.js[i]) c = prev.cs[i];
+    else {
+      same = false;
+      const h = createHash('sha256'); // streamed: the same digest as of `c + '\n' + j`, without the copy
+      c = (c == null ? h : h.update(c).update('\n')).update(j, 'utf8').digest('hex').slice(0, 16);
+    }
+    cs[i] = c;
     if (i >= items.length - TAIL || (fromModel(items[i + 1]) && !fromModel(it))) out.push(c);
-    if (it?.role !== 'system' && it?.role !== 'developer') recent.push(h16(j).slice(0, 8)); // every agent of the group has those
   });
-  return { chain: out.slice(-CHAIN_K), items: recent.slice(-RECENT) };
+  const recent = []; // own hashes of the last RECENT items only; system / developer items left out: every agent of the group has those
+  for (let i = items.length - 1; i >= 0 && recent.length < RECENT; i--) if (items[i]?.role !== 'system' && items[i]?.role !== 'developer') recent.push(h16(js[i]).slice(0, 8));
+  return { chain: out.slice(-CHAIN_K), items: recent.reverse(), memo: { js, cs } };
 }
 
 /** What a call brings to the rule, or null when it takes no part in it. Keyless → {harness, ms, hash, fp, probe, late, chain, items, mark}: `fp` is the
  *  fingerprints its session is recognized by, `probe` the ones it looks for its session with when it is the harness's
  *  compaction request, else null; `chain` its history's last cumulative hashes and `items` its last items' own (chainOf); `mark` whether it carries its harness's
  *  compaction text marker without being the compaction request (Hermes's call after a compaction). Keyed (a `synth: true` harness only) → {harness, ms, key, fp}, with NO hash: a keyed call never opens or moves a synthesized group. A reader that cannot afford the body later (the
- *  segment index, 1.6 §4.1) stores these and asks the assigner below with them. */
-export function synthFactsOf(rec) {
+ *  segment index, 1.6 §4.1) stores these and asks the assigner below with them. `memo` (a Map, optional): the last keyless call of
+ *  each group (harness, system-text hash) as chainOf left it, so a reader of many calls in order (one segment's build) hashes each
+ *  history's shared prefix once; the caller drops it when done. The facts are the same with or without it. */
+export function synthFactsOf(rec, memo = null) {
   if (!rec || typeof rec !== 'object') return null;
   if (FACTS.has(rec)) return FACTS.get(rec);
-  const f = factsOf(rec);
+  const f = factsOf(rec, memo);
   FACTS.set(rec, f);
   return f;
 }
-function factsOf(rec) {
+function factsOf(rec, memo) {
   // a call kept as a log line only (D40) has no system text to anchor a task by: it stays keyless, and is shown as such
   if (rec.is_llm_call !== true || rec.body_retention === 'log') return null;
   const h = harnessOf(rec);
@@ -118,18 +132,20 @@ function factsOf(rec) {
   const key = sessionKeyOf(rec).key;
   const body = bodyOf(rec), texts = userTextsOf(body), fp = fingerprints([...texts].reverse(), FP_CAP);
   if (key) return { harness: h.id, ms, key, fp };
-  const probe = compactionRequest(rec, h.row) ? fingerprints(texts, PROBE_CAP) : null;
+  const hint = hintsOf(rec), probe = compactionRequest(rec, h.row, hint) ? fingerprints(texts, PROBE_CAP) : null;
+  const hash = createHash('sha256').update(systemTextOf(body), 'utf8').digest('hex'), group = h.id + '\0' + hash;
+  const { chain, items, memo: mine } = chainOf(body, memo ? memo.get(group) : null);
+  if (memo) memo.set(group, mine);
   // `late`: how many of `fp` (a prefix: the texts are taken newest first) come from user texts after the first one
-  return { harness: h.id, ms, hash: createHash('sha256').update(systemTextOf(body), 'utf8').digest('hex'), fp, probe,
-    late: fingerprints([...texts.slice(1)].reverse(), FP_CAP).length, ...chainOf(body), mark: !probe && hintsOf(rec).compactionMarker === true };
+  return { harness: h.id, ms, hash, fp, probe,
+    late: fingerprints([...texts.slice(1)].reverse(), FP_CAP).length, chain, items, mark: !probe && hint.compactionMarker === true };
 }
 
 // The call that is the compaction request: a header / request-kind hint, or its harness's text marker in one block of its own system
 // text (pi's summary request; on the Anthropic OAuth wire pi's prompt is the second block, after Claude Code's identity block), each
 // block read as a JSON string so a marker anchored on a string's start holds. A marker in the history (Hermes
 // keeps one in every later call) marks a turn of the session it is in, not a call looking for one (3.4 按内容认亲).
-function compactionRequest(rec, row) {
-  const hint = hintsOf(rec);
+function compactionRequest(rec, row, hint) {
   if (hint.compaction === true) return true;
   if (!hint.compactionMarker) return false;
   const blocks = systemPartsOf(bodyOf(rec)).map((t) => JSON.stringify(t));

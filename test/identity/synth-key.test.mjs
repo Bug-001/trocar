@@ -557,6 +557,70 @@ test('chains: a call with no readable history joins the group\'s latest chain an
   assert.equal(assign(f(6000, ['b1', 'b2'])).key, b, 'the tail stands')
 })
 
+// 3.4's chain facts computed afresh, no reuse: an item = its JSON with every `cache_control` key dropped; `chain` = the cumulative hashes
+// (`c + "\n" + item`) at the last 4 positions and the turn boundaries, at most 12; `items` = the own hashes of the last 12 items that are not system / developer
+const h16 = (s) => createHash('sha256').update(s, 'utf8').digest('hex').slice(0, 16)
+const enc = (it) => JSON.stringify(it, (k, v) => (k === 'cache_control' ? undefined : v)) ?? 'null'
+const model = (it) => !!it && (it.role === 'assistant' || it.type === 'reasoning' || /_call$/.test(it.type ?? ''))
+const reference = (items) => {
+  let c = null
+  const cum = items.map((it) => (c = h16(c == null ? enc(it) : c + '\n' + enc(it))))
+  return { chain: cum.filter((_, i) => i >= items.length - 4 || (model(items[i + 1]) && !model(items[i]))).slice(-12),
+    items: items.filter((it) => it?.role !== 'system' && it?.role !== 'developer').map((it) => h16(enc(it)).slice(0, 8)).slice(-12) }
+}
+
+test('chainOf: the facts equal 3.4\'s encoding', () => {
+  const cc = { type: 'ephemeral' }
+  const shapes = [
+    (i) => ({ role: 'user', content: `ask ${i}`, cache_control: cc }), // depth 0
+    (i) => ({ role: 'user', content: [{ type: 'text', text: `ask ${i}`, cache_control: cc }] }), // depth 2, in an array
+    (i) => ({ role: 'assistant', content: [[{ cache_control: cc, x: i }], undefined, 'é'] }), // nested arrays, undefined in one
+    (i) => ({ role: 'tool', content: `the "cache_control": key ${i}`, note: 'cache_control' }), // the name as text and as a value
+    (i) => ({ role: 'assistant', content: `中文 ${i} 🙂 \u2028` }),
+    (i) => ({ type: 'reasoning', summary: [] }),
+    (i) => ({ type: 'function_call', name: 'f', arguments: `{"cache_control":${i}}` }),
+    (i) => ({ role: 'user', content: `plain ${i}` }),
+    () => undefined,
+  ]
+  for (const n of [1, 12, 200]) {
+    for (const seed of [0, 1, 2]) {
+      const items = Array.from({ length: n }, (_, i) => i === 0 && n > 1 ? { role: 'system', content: 'sys', cache_control: cc } : shapes[(i * (seed + 2) + seed) % shapes.length](i))
+      // a system and a developer item among the last 12: never an own hash, whatever the window
+      if (n > 12) { items[n - 3] = { role: 'developer', content: 'dev' }; items[n - 7] = { role: 'system', content: 'late sys' } }
+      const rec = { ...call({ agent: 'hermes', host: 'llm.internal.test', path: '/v1/chat/completions', ms: T0, body: {} }), req_body: { model: 'm', messages: items } }
+      const f = synthFactsOf(rec), want = reference(items)
+      assert.ok(f && f.chain.length > 0, `${n}/${seed}: keyless facts`)
+      assert.deepEqual({ chain: f.chain, items: f.items }, want, `${n} items, seed ${seed}`)
+    }
+  }
+})
+
+test('chainOf with a memo: each call of a group reuses only what is byte-equal to the group\'s previous call', () => {
+  // two groups (two system texts) interleave; per group: k+1 extends k, an early item rewritten at the same length, items dropped
+  const rec = (system, messages) => ({ ...call({ agent: 'hermes', host: 'llm.internal.test', path: '/v1/chat/completions', ms: T0, body: {} }),
+    req_body: { model: 'm', system, messages } })
+  const turn = (g, i) => [{ role: 'user', content: `${g} ask ${i}` }, { role: 'assistant', content: `${g} done ${i}`, cache_control: { type: 'ephemeral' } }]
+  const story = (g) => {
+    const h = []
+    const out = []
+    for (let i = 0; i < 4; i++) { h.push(...turn(g, i)); out.push(h.slice()) }            // k+1 extends k
+    const edited = h.slice(); edited[1] = { ...edited[1], content: `${g} dXne 0` }         // same length, inside the shared prefix
+    out.push(edited, [...edited, ...turn(g, 9)])
+    const cut = [edited[0], ...edited.slice(5)]; out.push(cut, [...cut, ...turn(g, 10)])  // a compaction drops items, then extends
+    out.push(cut.slice(0, 3))                                                              // shorter than the previous, a prefix of it
+    return out
+  }
+  const a = story('A'), b = story('B')
+  const memo = new Map()
+  for (let k = 0; k < a.length; k++) {
+    for (const [sys, hist] of [['sys A', a[k]], ['sys B', b[k]]]) {
+      const f = synthFactsOf(rec(sys, hist), memo)
+      assert.deepEqual({ chain: f.chain, items: f.items }, reference(hist), `${sys}, call ${k}`)
+    }
+    assert.equal(memo.size, 2, 'one entry per group: the last call of each')
+  }
+})
+
 test('chains: the same membership in one pass, cut across two segments, and as the live segment grows; the index holds no message text', async () => {
   const pi = compacting('pi', 2, true, 9100), he = compacting('hermes', 2, true, 9500)
   const recs = [...pi.recs, ...he.recs], texts = [...pi.texts, ...he.texts]
