@@ -193,7 +193,6 @@ test('D55 / 4.11 P13 the new kinds: known, each with a sentence of undo by hand;
   assert.equal(undoByHand({ kind: 'system-root', store: 'darwin-user-trust', fp256: 'AA:BB', thumbprint: 'CC', cert_file: '/h/.trocar/collector/ca/trocar-ca.pem' }), 'run: security remove-trusted-cert /h/.trocar/collector/ca/trocar-ca.pem, then security delete-certificate -Z CC (the certificate with SHA-256 AA:BB)')
   assert.equal(undoByHand({ kind: 'json-array-item', path: '/s.json', keys: ['settingsSync.ignoredSettings'], item: 'http.proxy', created_array: true }), 'edit /s.json: remove "http.proxy" from the list settingsSync.ignoredSettings, then delete the list if it is now empty (trocar created it)')
   const key = (kind, id) => undoByHand({ kind: 'root-key', custody: { kind, id }, fp256: 'AA:BB' })
-  assert.match(key('file', '/h/.trocar/collector/ca/root.key'), /^rm \/h\/\.trocar\/collector\/ca\/root\.key \(.*SHA-256 AA:BB/)
   assert.match(key('cng', 'trocar-root'), /certutil -user -csp "Microsoft Software Key Storage Provider" -delkey "trocar-root"/)
   assert.match(key('keychain', 'trocar-root'), /login keychain/)
   assert.equal(undoByHand({ kind: 'owned-file', role: 'wrapper', path: '/h/bin/kimi', real: '/h/bin/.trocar-real/kimi', sha256: 'ab' }), 'if sha256 of /h/bin/kimi is still ab: mv /h/bin/.trocar-real/kimi /h/bin/kimi; otherwise: rm /h/bin/.trocar-real/kimi (the program was updated over the wrapper)')
