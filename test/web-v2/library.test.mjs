@@ -229,3 +229,17 @@ test('(18) a page that answers 503 still-reading is asked again until it answers
   assert.deepEqual([gone.code, asked.length], ['still-reading', 2])
 })
 
+// 1.8 §一行 只有后台调用的会话: a row with background_only true is not listed by default; a search that finds it by id lists it; bg=1 lists
+// them all; only true hides (absent is not known to be one); bg=1 round-trips through the route params
+test('(6) background-only sessions: hidden unless asked for or found by id; only true hides; bg round-trips', () => {
+  const list = [S({ session_id: 'main-1', last_ts: new Date(NOW - 1e3).toISOString() }), S({ session_id: 'bg-77', background_only: true, last_ts: new Date(NOW - 2e3).toISOString() }),
+    S({ session_id: 'old-3', last_ts: new Date(NOW - 3e3).toISOString() }), S({ session_id: 'nope-4', background_only: false, last_ts: new Date(NOW - 4e3).toISOString() })]
+  const ids = (p) => applyFilters(list, parseFilters(p), NOW).map((s) => s.session_id)
+  assert.deepEqual(ids({}), ['main-1', 'old-3', 'nope-4'])
+  assert.deepEqual(ids({ bg: '1' }), ['main-1', 'bg-77', 'old-3', 'nope-4'])
+  assert.deepEqual(ids({ q: 'bg-7' }), ['bg-77'], 'found by id')
+  assert.deepEqual(ids({ q: 'title' }), [], 'a search that does not match its id keeps it hidden')
+  assert.deepEqual(filtersToParams(parseFilters({ bg: '1' })), { bg: '1' })
+  assert.deepEqual(filtersToParams(parseFilters({})), {})
+})
+

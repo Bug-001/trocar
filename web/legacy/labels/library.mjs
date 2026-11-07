@@ -67,5 +67,8 @@ export const CAPTURING_HINT = 'Capture is on. Run an agent once and its session 
 export const AS_OF = 'as of'
 export const GO_CAPTURE = 'Go to capture'
 export const FILTERED_EMPTY = 'No sessions match the filters'
+// 1.8 §一行 只有后台调用的会话: the list's last line while such sessions are hidden (n under the current filters)
+export const bgHidden = (n) => `${n} background-only session${n === 1 ? '' : 's'} hidden`
+export const SHOW = 'Show'
 export const agentNotCaptured = (name) => `${name} is not capturing`
 export const CAPTURE_HEALTH = 'Capture health' // the 空态's second line when the health read failed (K-29)

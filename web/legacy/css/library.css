@@ -61,6 +61,8 @@
 /* the states that stand in for the table: loading, 读不出, 还没有会话, nothing matches */
 .libempty{max-width:640px;margin:0 auto;padding:44px 24px;text-align:center;color:var(--ink-2);line-height:2;}
 .libempty a{color:var(--action);}
+/* the list's last line while background-only sessions are hidden (1.8): quiet, one line, its Show a link button */
+.libbg{padding:12px var(--s2);color:var(--ink-2);}
 .dimline{color:var(--ink-3);}
 
 /* narrow screens: the agent column narrows, its name always stays (ending in … at worst), the marks still end in … (1.8 §窄屏) */

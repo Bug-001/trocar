@@ -26,6 +26,7 @@ export function parseFilters(params = {}) {
     window: has(WINDOWS, p.window) ? p.window : 'all', // junk → the default
     sort: p.sort === 'calls' ? 'calls' : 'recent',      // 「最近」 is the default; `calls` is the only other value
     sel: p.sel || '',
+    bg: p.bg === '1', // the background-only sessions listed (1.8 §一行): hidden by default
   }
 }
 // only what differs from the defaults is written, so a fresh library has a clean URL
@@ -37,6 +38,7 @@ export function filtersToParams(f) {
   if (f.window !== 'all') out.window = f.window
   if (f.sort === 'calls') out.sort = 'calls'
   if (f.sel) out.sel = f.sel
+  if (f.bg) out.bg = '1'
   return out
 }
 export const hasFilters = (f) => !!(f.q.trim() || f.h.length || f.project || f.window !== 'all')
@@ -67,6 +69,9 @@ export function titleTipOf(s) {
 function matches(s, f, now, title) {
   const q = f.q.trim().toLowerCase()
   if (q && ![title, s.project_name, s.session_id].some((x) => x != null && String(x).toLowerCase().includes(q))) return false
+  // a session of background calls alone is not listed unless asked for, or a search finds it by its id (1.8); only `true` hides: an
+  // absent key (a list stored by the release before) is not known to be one
+  if (!f.bg && s.background_only === true && !(q && String(s.session_id).toLowerCase().includes(q))) return false
   if (f.project && s.project_slug !== f.project) return false
   if (f.window !== 'all') { const t = lastMs(s); if (t == null || now - t > WINDOWS[f.window]) return false } // no time → only in 全部; boundary inclusive
   return true

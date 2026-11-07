@@ -170,6 +170,23 @@ test('1.8 #18: a page that answers 503 still-reading and then 200 is never a fai
   expect(p.row(key(sess('s1', 1, 1)))).not.toBeNull()
 })
 
+test('1.8 只有后台调用的会话: the list ends with how many background-only sessions are hidden; Show writes bg=1 and lists them; a list of only those is not the no-match state', async () => {
+  for (const [list, n] of [[[sess('m1', 3, 1), sess('b1', 1, 2, { background_only: true }), sess('b2', 1, 3, { background_only: true })], 2], [[sess('b1', 1, 2, { background_only: true })], 1]] as const) {
+    lists = [() => [...list]]
+    const p = await mount()
+    const foot = () => p.list.querySelector<HTMLElement>('[data-bg-hidden]')
+    expect(foot()?.getAttribute('data-bg-hidden')).toBe(String(n))
+    expect(p.row(key(sess('b1', 1, 2)))).toBeNull()
+    expect(p.list.textContent).not.toContain(W.FILTERED_EMPTY)
+    await act(async () => { fireEvent.click(foot()!.querySelector('button')!) })
+    await settle()
+    expect(p.sets.at(-1)).toEqual({ bg: '1' })
+    expect(p.row(key(sess('b1', 1, 2)))).not.toBeNull()
+    expect(foot()).toBeNull()
+    cleanup()
+  }
+})
+
 test('V1: across polls that add sessions above and change counts, a session keeps its row node, the highlight and the scroll', async () => {
   lists = [growing]
   const selKey = key(sess('s3', 0, 0))
