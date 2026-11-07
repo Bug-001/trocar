@@ -154,13 +154,15 @@ const CA_KEY = { file: CLI_CONFIG, format: 'jsonc', keys: ['network', 'caCertFil
 const DESKTOP = { base: 'home', env: 'ZCODE_DESKTOP_HOME_DIR', path: '.zcode/v2/setting.json' }
 const DESKTOP_CA = { file: DESKTOP, format: 'json', keys: ['httpProxyCaCertPath'] } // the desktop CA setting, as rule U reads it (Linux inject)
 const APP = perOs({ darwin: { base: 'abs', path: '/Applications/ZCode.app' }, win32: { base: 'localAppData', path: 'Programs/ZCode' } })
-const form = (id, present, verified = { darwin: true, win32: true }) => ({ id, os: ['darwin', 'win32'], route: 'cli-config', cert: 'bundle', trust: 'node', present, verified })
+const form = (id, present, exe, verified = { darwin: true, win32: true }) => ({ id, os: ['darwin', 'win32'], route: 'cli-config', cert: 'bundle', trust: 'node', present, exe, verified })
+// Which program file each form's processes are (4.11 P11 `exe`; both retitle to zcode-cli before they connect, so only the file tells, ZCode 3.14.4
+// measured on macOS): the desktop's agent is the app's Helper on macOS, the CLI the app's own exe; on Windows both are ZCode.exe, so the door judges them together
 const proxyMode = {
   forms: [
-    form('z-code.cli', [APP]),
-    form('z-code.cli-node', [{ base: 'home', path: '.zcode' }]),
-    form('z-code.desktop', [APP]),
-    form('z-code.web', [APP], { darwin: { reason: 'out-of-scope' }, win32: { reason: 'out-of-scope' } }), // the shipped build has no web mode
+    form('z-code.cli', [APP], { darwin: ['zcode'], win32: ['zcode'] }),
+    form('z-code.cli-node', [{ base: 'home', path: '.zcode' }], { darwin: ['node'], win32: ['node'] }),
+    form('z-code.desktop', [APP], { darwin: ['zcode helper'], win32: ['zcode'] }),
+    form('z-code.web', [APP], { darwin: ['zcode'], win32: ['zcode'] }, { darwin: { reason: 'out-of-scope' }, win32: { reason: 'out-of-scope' } }), // the shipped build has no web mode
   ],
   routes: {
     'cli-config': { kind: 'json-key', ...DOOR_ROUTES['z-code']['cli-config'], format: 'jsonc', value: 'door-url', rereads: true, absent: 'create', takesEffect: 'takes effect for your next session; no restart needed' },

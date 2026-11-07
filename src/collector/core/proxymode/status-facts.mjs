@@ -7,7 +7,7 @@ import nodeFs from 'node:fs'
 import { itemsOfPhase } from '../../../off/manifest.mjs'
 import { judgeEntry, judgeOwned } from '../trust/journal.mjs'
 import { isPresent, holds, presentPaths, userCertFilesOf, rootHeldIn } from './sources.mjs'
-import { judgedForms } from './verdict.mjs'
+import { judgedWith } from './verdict.mjs'
 import { planRoutes, priorRecordOf, blockerOf } from './entries.mjs'
 import { upstreamFor, isTrocarDoorUrl } from './chain.mjs'
 import { pacLeg } from './pac.mjs'
@@ -149,10 +149,10 @@ export async function modelFormFacts({ harnesses, os, manifest: m, reply = null,
         upstream = { url_redacted: red(u.url), source: u.source, ...(u.pac ? { pac: true } : {}) }
       }
       if (upstream.source === 'unknown') upstream.code = CODE.priorProxyUnknown
-      // the door judges a process on a route against every verified form of that route (judgedForms), present or not, so a blocker on any of them splices
-      // them all: each form reads the first one, naming the form whose blocker it is when that is another (4.11 ⑩)
+      // the door judges a process on a route against the verified forms of that route its program file may be (judgedWith), present or not, so a blocker
+      // on any of them splices them all: each form reads the first one, naming the form whose blocker it is when that is another (4.11 ⑩)
       const mine = plan.notRouted.find((n) => n.form === f.id)
-      const blocked = mine || judgedForms(desc, os, f.route).filter((g) => g.id !== f.id).map((g) => { const b = blockerOf(desc, g, ctx); return b && { ...b, code: 'not-routed', via: g.id } }).find(Boolean) || null
+      const blocked = mine || judgedWith(desc, os, f).filter((g) => g.id !== f.id).map((g) => { const b = blockerOf(desc, g, ctx); return b && { ...b, code: 'not-routed', via: g.id } }).find(Boolean) || null
       forms.push({
         id: f.id, route: f.route, certificate,
         proxy: { connected: intact && door_up, entry_intact: intact, door_up, upstream, written: main ? red(writtenOf(main)) : null, prior: red(priorRaw) },
