@@ -31,7 +31,7 @@ import { confirm, isInteractive } from '../off/io.mjs'
 import { CODE_OFF } from '../off/names.mjs'
 import { formatUninstallReceipt } from './receipt.mjs'
 import { removeIngressConfig } from '../collector/core/ingress-config.mjs'
-import { refuseElevatedByWhoami, disableScheduledTask, TASK_NAME } from '../off/win32.mjs'
+import { refuseElevatedByWhoami, disableScheduledTask, TASK_NAME, TASK_FILE } from '../off/win32.mjs'
 import { holdersOf } from '../off/holders.mjs'
 import { readDoorSeen, msOf } from '../off/door-seen.mjs'
 import { readStateFile } from '../off/state.mjs'
@@ -195,7 +195,11 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     // Windows' task is DELETED here by the uninstall itself (the registration survives any manifest, so claiming it without asking schtasks left
     // the task registered at every login while the receipt said otherwise; the Run value stays a ledger entry), Linux disables the systemd unit
     if (w.platform === 'win32') {
-      const t = disableScheduledTask({ uninstall: true, run: w.exec, env })
+      // the task this copy would write: what decides, with no task file, whether the task under trocar's name is trocar's
+      let ours = null
+      try { ours = (deps.unit !== undefined ? deps.unit : (await (await import('../collector/daemon.mjs')).loadArch('win32')).unit.userUnit({ home, node: process.execPath, script: deps.script || process.argv[1], run: w.exec, env })).text({}) } catch { /* no answer: the task file alone decides */ }
+      const t = disableScheduledTask({ uninstall: true, run: w.exec, env, file: path.join(collectorHome(path.join(home, '.trocar')), TASK_FILE), ours, fs })
+      if (t.task === 'not-trocars') receipt.notes.push(t.why)
       // what it did, in the keys C.2 names: the task is DELETED here, so the entry belongs in `removed` the way macOS puts its plist there (a Windows test machine 2026-10-19 read `removed: []` as "nothing was taken away")
       receipt.autostart = { disabled: t.ok, removed: t.task === 'deleted' ? [TASK_NAME] : [], ...(t.ok ? {} : { error: t.reason || `the task is ${t.task}` }) }
     }

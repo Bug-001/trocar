@@ -104,15 +104,16 @@ export const sameTask = (registered, written) => {
  *  manifest entry and goes with the rest): `/Change /DISABLE` for an `off` (it does not end a running instance — the supervisor is stopped first, 4.8 §4.2),
  *  `/Delete /F` for an `uninstall`. A task that is not there is already as asked; a query that cannot tell changes nothing on a guess. → `{ ok, task:
  *  'disabled'|'deleted'|'absent'|'failed', reason? }`. */
-export function disableScheduledTask({ uninstall = false, run = null, env = process.env, file = null, fs = nodeFs } = {}) {
+export function disableScheduledTask({ uninstall = false, run = null, env = process.env, file = null, ours = null, fs = nodeFs } = {}) {
   const q = taskState({ run, env })
-  if (q.state === 'present' && !uninstall && file) {
-    // on / off touch only trocar's own things: a task under trocar's name that is not the one install wrote is left as it is, and said
+  if (q.state === 'present' && (file || ours)) {
+    // trocar never switches off or deletes what is not its own: a task under trocar's name is trocar's when its action is the task file's install wrote, or,
+    // with no file (no record), the one this copy of trocar would write (`ours`: its daemon by path); any other is left as it is, and said
     const x = execTool('schtasks', ['/Query', '/TN', TASK_NAME, '/XML'], { run, env })
     if (x.code !== 0) return { ok: false, task: 'failed', reason: `whether the task ${TASK_NAME} is the one trocar wrote could not be read (schtasks /Query /XML: ${x.err || (x.code === null ? 'it did not run' : `exit ${x.code}`)}); nothing was changed on a guess` }
     let written = null
-    try { written = fs.readFileSync(file, 'utf8') } catch { /* no task file: none of trocar's */ }
-    if (!sameTask(x.out, written)) { const a = taskAction(x.out); return { ok: true, task: 'not-trocars', why: `the task ${TASK_NAME} is not the one trocar wrote (it runs ${(a && a.command) || 'no program'}), so it was left as it is` } }
+    try { written = file ? fs.readFileSync(file, 'utf8') : null } catch { /* no task file: no record */ }
+    if (!sameTask(x.out, written ?? ours)) { const a = taskAction(x.out); return { ok: true, task: 'not-trocars', why: `the task ${TASK_NAME} is not the one trocar wrote (it runs ${(a && a.command) || 'no program'}), so it was left as it is` } }
   }
   if (q.state === 'present') {
     const r = execTool('schtasks', [uninstall ? '/Delete' : '/Change', '/TN', TASK_NAME, ...(uninstall ? ['/F'] : ['/DISABLE'])], { run, env })

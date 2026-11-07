@@ -353,3 +353,22 @@ test('1.6 §3.6: an uninstall that deletes a file trocar made for its key or lin
   const rows = formatUninstallReceipt(receipt, { home: w.home, platform: 'darwin' }).split('\n')
   for (const p of yours) assert.ok(rows.some((l) => l.trim().startsWith(`${tilde(p, w.home)}: `)), `${p}: what was taken out is said: ${rows.join('\n')}`)
 })
+
+// 4.8 §7: uninstall deletes the task under trocar's name only when it is trocar's (the task file install wrote, or with no file, the one this copy would
+// write); any other is left, and the receipt says so naming its program only
+test('win32 uninstall: a task under trocar\'s name that is not trocar\'s is left and said; trocar\'s own is deleted', async () => {
+  const task = (cmd, args) => `<Task><Actions><Exec><Command>${cmd}</Command><Arguments>${args}</Arguments></Exec></Actions></Task>`
+  const ours = task('conhost.exe', '--headless "C:\\trocar.cmd" daemon --supervise')
+  for (const [registered, deleted] of [[task('C:\\evil.exe', '/secret'), false], [ours, true]]) {
+    const w = await modelWorld({ os: 'win32' })
+    await w.install()
+    const calls = []
+    const exec = (file, args) => { calls.push([file, ...args].join(' ')); return { status: 0, stdout: file === 'schtasks' && args.includes('/XML') ? registered : '', stderr: '' } }
+    const { exit, receipt } = await runUninstall({ home: w.home, env: w.env, yes: true, deps: { platform: 'win32', exec, custody: w.custody, procs: async () => [], sleep: async () => {}, drainMs: 0, getuid: () => 501, unit: { text: () => ours } } })
+    assert.equal(exit, 0, JSON.stringify(receipt.problems))
+    assert.equal(calls.some((c) => c.startsWith('schtasks /Delete')), deleted)
+    assert.deepEqual(receipt.autostart.removed.length > 0, deleted)
+    assert.equal(receipt.notes.some((n) => n.includes('C:\\evil.exe')), !deleted, 'the program is named when it is left')
+    assert.ok(!JSON.stringify(receipt).includes('/secret'), 'never its arguments')
+  }
+})
