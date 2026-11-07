@@ -612,8 +612,8 @@ Whether Desktop's own model calls come out decrypted verbatim is not claimed her
   history it continues (never by process or connection), so each agent is its own session, also across a pause of up
   to a day; calls whose system prompt
   changes between turns stay separate sessions. A compaction stays in the session it compacts when the agent's own
-  compaction signal is present: a keyless summary request (pi's, for one) joins the session whose user text it shares,
-  and Hermes's compaction marker is read the same way. A history rewritten without such a signal starts a new session.
+  compaction signal is present: a keyless summary request (pi's, for one) joins the session of an earlier reply it
+  carries whole, else the session whose user text it shares, and Hermes's compaction marker is read the same way. A history rewritten without such a signal starts a new session.
   These sessions are marked **session boundary inferred**; a session with an id stays unmarked. The rule is provisional
   until checked on a real capture.
 - **A session's project is what its requests state.** It is the working directory written in the session's first

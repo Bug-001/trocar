@@ -44,7 +44,7 @@ import { rowTable, isRowTable, heapOf } from './row-table.mjs';
 
 const rawDir = (home = trocarHome()) => path.join(home, 'raw');
 export const indexDir = (home = trocarHome()) => path.join(home, 'index');
-const INDEX_V = 10;
+const INDEX_V = 11;
 const CHUNK = 1 << 20;
 /** How long a scan that was given `ease` holds the event loop at most, give or take a chunk or EASE_EVERY records (3.5 §行表先读). */
 const EASE_MS = 50, EASE_EVERY = 64;
@@ -130,6 +130,10 @@ export function indexEntryOf(env, { segment, lineNo, storedBytes, offset = null,
     kin_items: synth && synth.items ? synth.items.join(' ') : null,
     kin_late: synth && synth.late != null ? synth.late : null, // how many of kin_fp come from user texts after the first
     kin_mark: !!(synth && synth.mark),
+    // replies as kinship evidence (3.4 按内容认亲): the reply's sampled windows as one item (count, first, last, digest), and a
+    // compaction request's user-text windows, space-joined: hashes, never text
+    kin_reply: (synth && synth.reply) ?? null,
+    kin_heads: synth && synth.heads ? synth.heads.join(' ') : null,
     offset,  // where this line starts in the plaintext segment, so one record is read by seek (null: sealed)
   };
 }

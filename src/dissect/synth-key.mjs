@@ -6,9 +6,12 @@
 // the chain the compaction was tied to; otherwise it opens a new one. pid and connection are NOT inputs (3.4 关键区分:
 // one Hermes gateway serves many tasks). Callers feed records in file order; the board and the ETL both read the
 // capture files in sorted order, so they assign the same keys. A keyless call that is its harness's compaction request is first
-// matched to an open session of the same harness, keyed or synthesized, by the user text both carry (3.4 按内容认亲; pi's summary request). Leaf module.
+// matched to an open session of the same harness, keyed or synthesized, by an earlier reply it carries whole, else by the user text both carry
+// (3.4 按内容认亲; pi's summary request).
 import { createHash } from 'node:crypto';
 import { harnessOf, sessionKeyOf, bodyOf, hintsOf } from './harnesses.mjs';
+import { boardDissectorFor } from './registry.mjs';
+import { normResp as anthropicResp } from '../view/analyze.mjs';
 
 export const SYNTH_GAP_MS = 30 * 60 * 1000;
 // step 2 (extension) has no window: a chain stays open for it SYNTH_TTL_MS after its last call, at most SYNTH_CAP chains per harness
@@ -48,6 +51,12 @@ const FACTS = new WeakMap();
 // falls on the sample (h % SAMPLE === 0) — the same rule on both sides, so a long enough shared fragment yields shared fingerprints
 // when it falls within what both sides keep (the caps below; else the call falls back to its synthesized key). Character windows, not words: CJK has no spaces. A fingerprint is stored as h / SAMPLE (a small integer).
 const WIN = 32, SAMPLE = 8, FP_CAP = 64, PROBE_CAP = 1024, STATE_CAP = 4096, MIN_SHARED = 2;
+// Replies (3.4 按内容认亲, 有界): a compaction request carries earlier replies whole, which the user-text fingerprints never see. An
+// item is a text by its sampled windows only (the same WIN and SAMPLE, a 64-bit hash each): their count n, the first and last
+// ENDS_W, and a 64-bit digest of the whole list; a call carries the windows of its user texts, in order, at most HEAD_CAP. A reply of
+// REPLY_MIN collapsed chars has about 28 windows; one with fewer than MIN_WIN is not kept. REPLY_CAP: twice the most replies one
+// harness kept in any 24 h of a real capture, rounded up to a power of two; OWNERS: the sessions one reply text is kept under, the latest.
+const REPLY_MIN = 256, MIN_WIN = 6, ENDS_W = 3, HEAD_CAP = 8192, REPLY_CAP = 4096, OWNERS = 8;
 export const userTextsOf = (body) => {
   const b = body || {};
   if (typeof b.input === 'string') return [b.input];
@@ -73,6 +82,46 @@ function fingerprints(texts, cap) {
   }
   return [...out];
 }
+const BASE2 = 0x5bd1e995, TOP2 = (() => { let p = 1; for (let i = 1; i < WIN; i++) p = Math.imul(p, BASE2); return p; })();
+const hex8 = (x) => (x >>> 0).toString(16).padStart(8, '0');
+const collapse = (t) => t.replace(/\s+/g, ' ').trim();
+// the sampled windows of one collapsed text, in order: kept where the fingerprint rule keeps one, as two 32-bit rolling hashes
+function windowsOf(t, cap) {
+  const out = [];
+  let h = 0, g = 0;
+  for (let i = 0; i < t.length && out.length < cap; i++) {
+    const c = t.charCodeAt(i);
+    if (i >= WIN) { const o = t.charCodeAt(i - WIN); h = (h - Math.imul(o, TOP)) | 0; g = (g - Math.imul(o, TOP2)) | 0; }
+    h = (Math.imul(h, BASE) + c) | 0; g = (Math.imul(g, BASE2) + c) | 0;
+    if (i >= WIN - 1 && (h >>> 0) % SAMPLE === 0) out.push(hex8(h) + hex8(g));
+  }
+  return out;
+}
+const digestOf = (ws) => createHash('sha256').update(ws.join(' '), 'utf8').digest('hex').slice(0, 16);
+/** A text as an item: `n head… tail… digest` (one string, so the index keeps it as a scalar), or null when it is too short to tell. */
+function itemOf(text) {
+  const t = collapse(text);
+  if (t.length < REPLY_MIN) return null;
+  const ws = windowsOf(t, Infinity);
+  return ws.length < MIN_WIN ? null : [ws.length, ...ws.slice(0, ENDS_W), ...ws.slice(-ENDS_W), digestOf(ws)].join(' ');
+}
+const unpack = (s) => { const a = s.split(' '); return { n: Number(a[0]), head: a.slice(1, 1 + ENDS_W).join(' '), tail: a.slice(1 + ENDS_W, 1 + 2 * ENDS_W).join(' '), dig: a[1 + 2 * ENDS_W] }; };
+// where each run of ENDS_W windows starts in a call's list
+function runsOf(ws) {
+  const at = new Map();
+  for (let i = 0; i + ENDS_W <= ws.length; i++) { const k = ws.slice(i, i + ENDS_W).join(' '), a = at.get(k); if (a) a.push(i); else at.set(k, [i]); }
+  return at;
+}
+// whether the call's windows hold the item whole: a run that starts with its first windows, ends n later with its last, and hashes to its digest
+function holds(ws, at, it) {
+  for (const p of at.get(it.head) || []) {
+    const q = p + it.n - ENDS_W;
+    if (q + ENDS_W <= ws.length && ws.slice(q, q + ENDS_W).join(' ') === it.tail && digestOf(ws.slice(p, p + it.n)) === it.dig) return true;
+  }
+  return false;
+}
+// the reply as the product reads it (the board's text), whatever the wire
+const replyOf = (rec) => { const d = boardDissectorFor(rec), r = d ? d.normResp(rec) : anthropicResp(rec); return itemOf((r && r.text) || ''); };
 
 // ── chains (3.4 合成键) ───────────────────────────────────────────────────────────────────────────────────────────────────────
 // A call's history as cumulative hashes: c_1 = h(item_1), c_i = h(c_{i-1} + '\n' + item_i), h = the first 16 hex of SHA-256, each item
@@ -118,10 +167,10 @@ export function createSynthKeys({ gapMs = SYNTH_GAP_MS } = {}) {
   return { keyOf: (rec) => { const got = assign(synthFactsOf(rec)); return got ? got.key : null; } };
 }
 
-/** What a call brings to the rule, or null when it takes no part in it. Keyless → {harness, ms, hash, fp, probe, late, chain, items, mark}: `fp` is the
+/** What a call brings to the rule, or null when it takes no part in it. Keyless → {harness, ms, hash, fp, probe, reply, heads, late, chain, items, mark}: `fp` is the
  *  fingerprints its session is recognized by, `probe` the ones it looks for its session with when it is the harness's
- *  compaction request, else null; `chain` its history's last cumulative hashes and `items` its last items' own (chainOf); `mark` whether it carries its harness's
- *  compaction text marker without being the compaction request (Hermes's call after a compaction). Keyed (a `synth: true` harness only) → {harness, ms, key, fp}: a keyed call never opens or moves a synthesized group;
+ *  compaction request, else null; `reply` its reply as an item (itemOf) or null, `heads` a compaction request's user-text windows; `chain` its history's last cumulative hashes and `items` its last items' own (chainOf); `mark` whether it carries its harness's
+ *  compaction text marker without being the compaction request (Hermes's call after a compaction). Keyed (a `synth: true` harness only) → {harness, ms, key, fp, reply}: a keyed call never opens or moves a synthesized group;
  *  where its row has `chainLane` and it declares no lane, also {hash, chain, items}, for its chain inside its keyed session. A reader that cannot afford the body later (the
  *  segment index, 1.6 §4.1) stores these and asks the assigner below with them. `memo` (a Map, optional): the last keyless call of
  *  each group (harness, system-text hash) as chainOf left it, so a reader of many calls in order (one segment's build) hashes each
@@ -144,14 +193,15 @@ function factsOf(rec, memo) {
   const body = bodyOf(rec), texts = userTextsOf(body), fp = fingerprints([...texts].reverse(), FP_CAP);
   const hint = hintsOf(rec);
   // a keyed call brings its chain only where its row splits a keyed session by chains (3.4 带键会话里的消息链) and it declares no lane
-  if (key && (!h.row.chainLane || hint.lane != null)) return { harness: h.id, ms, key, fp };
+  const reply = replyOf(rec);
+  if (key && (!h.row.chainLane || hint.lane != null)) return { harness: h.id, ms, key, fp, reply };
   const hash = createHash('sha256').update(systemTextOf(body), 'utf8').digest('hex'), group = h.id + '\0' + hash;
   const { chain, items, memo: mine } = chainOf(body, memo ? memo.get(group) : null);
   if (memo) memo.set(group, mine);
-  if (key) return { harness: h.id, ms, key, fp, hash, chain, items };
-  const probe = compactionRequest(rec, h.row, hint) ? fingerprints(texts, PROBE_CAP) : null;
+  if (key) return { harness: h.id, ms, key, fp, reply, hash, chain, items };
+  const asks = compactionRequest(rec, h.row, hint), probe = asks ? fingerprints(texts, PROBE_CAP) : null;
   // `late`: how many of `fp` (a prefix: the texts are taken newest first) come from user texts after the first one
-  return { harness: h.id, ms, hash, fp, probe,
+  return { harness: h.id, ms, hash, fp, probe, reply, heads: asks ? windowsOf(collapse(texts.join(' ')), HEAD_CAP) : null,
     late: fingerprints([...texts.slice(1)].reverse(), FP_CAP).length, chain, items, mark: !probe && hint.compactionMarker === true };
 }
 
@@ -170,23 +220,58 @@ function compactionRequest(rec, row, hint) {
  *  fingerprints to its session's entry; a keyed call gets nothing else (null), except one with a hash: steps 2-4 below, among the
  *  chains of its key and system-prompt hash, give its chain's name as `lane` ({key: null, kin: false, lane}; 3.4 带键会话里的消息链). A keyless call, among the open chains of its
  *  harness and system-prompt hash last seen within `gapMs` (step 2: within SYNTH_TTL_MS):
- *  1. with a probe, joins the session of its harness — keyed, or a chain of another system-prompt group — that shares the most
- *     fingerprints with it (at least MIN_SHARED; a tie → the later last call) — kin: true; a chain so found is `pending`;
+ *  1. with a probe, joins the session one of the replies its user texts hold whole names (byReplies; any call's reply is kept under its
+ *     session, a probe's only when it found one), else the session of its harness — keyed, or a chain of another system-prompt group — that
+ *     shares the most fingerprints with it (at least MIN_SHARED; a tie → the later last call) — kin: true; a chain so found is `pending`;
  *  2. else the chain whose tail sits latest in its own chain (a tie → the later last call), however long ago its last call;
  *  3. else, among the `pending` chains (and every chain when it carries its harness's marker), the one sharing the most
  *     fingerprints (at least MIN_SHARED; a tie → the later last call): its rewritten history replaces the chain's tail. Without the
  *     marker only the `late` fingerprints count: a new agent's first user text (one system text, a shared brief) is no rewrite;
  *  4. else a new chain, a new session (at most SYNTH_CAP chains per harness: the oldest goes). */
+const REPLY = '\u0003';
 export function createSynthAssigner({ gapMs = SYNTH_GAP_MS, open = new Map() } = {}) {
   // `${harness}\0${hash}\0${key}` → { key, lastMs, fp, tail, pending }; `\u0001${harness}\0${key}` → { key, lastMs, fp }; a keyed
   // session's chains `\u0002${harness}\0${session key}\0${hash}\0${chain}` as the first, without fp (fp: a
   // Set, replaced, never mutated, so a shallow copy of an entry is a snapshot). A caller that resumes the rule part-way
   // (src/query/rows.mjs) hands in the state it saved.
-  const mine = (g, harness) => g.startsWith(harness + '\0') || g.startsWith('\u0001' + harness + '\0') || g.startsWith('\u0002' + harness + '\0');
-  // past 2 × gapMs a chain keeps only what step 2 reads (its tail), until SYNTH_TTL_MS; a keyed entry goes, and a chain with no tail
+  // a reply kept for kinship `\u0003${harness}\0${digest}` → { lastMs, n, head, tail, dig, owners }: the session keys it was kept under (an
+  // array, replaced, never mutated), the latest last; the entries in the order they were last kept, so the first is the oldest
+  const mine = (g, harness) => g.startsWith(harness + '\0') || g.startsWith('\u0001' + harness + '\0') || g.startsWith('\u0002' + harness + '\0') || g.startsWith(REPLY + harness + '\0');
+  let counts = null; // harness → how many replies it keeps, from `open` the first time it is asked
+  const count = (harness, d = 0) => {
+    if (!counts) { counts = new Map(); for (const g of open.keys()) if (g[0] === REPLY) { const x = g.slice(1, g.indexOf('\0')); counts.set(x, (counts.get(x) || 0) + 1); } }
+    const n = (counts.get(harness) || 0) + d;
+    counts.set(harness, n);
+    return n;
+  };
+  const keep = (harness, item, key, ms) => {
+    if (!item || key == null) return;
+    const pre = REPLY + harness + '\0', it = unpack(item), g = pre + it.dig, cur = open.get(g);
+    if (cur) open.delete(g);
+    else if (count(harness, 1) > REPLY_CAP) for (const x of open.keys()) if (x.startsWith(pre)) { open.delete(x); count(harness, -1); break; }
+    const owners = !cur ? [key] : cur.owners[cur.owners.length - 1] === key ? cur.owners : [...cur.owners.filter((k) => k !== key), key].slice(-OWNERS);
+    open.set(g, { ...it, lastMs: Math.max(cur ? cur.lastMs : ms, ms), owners });
+  };
+  // the session the replies a compaction request carries name (3.4 按内容认亲): the latest kept of them, when one session kept it;
+  // kept under several, the one of those holding the most of the replies; else none
+  const byReplies = (harness, ws, ms) => {
+    if (!ws || ws.length < MIN_WIN) return null;
+    const at = runsOf(ws), pre = REPLY + harness + '\0', hits = [];
+    for (const [g, e] of open) if (g.startsWith(pre) && ms - e.lastMs <= SYNTH_TTL_MS && holds(ws, at, e)) hits.push(e);
+    if (!hits.length) return null;
+    const last = hits[hits.length - 1].owners;
+    if (last.length === 1) return last[0];
+    const n = new Map(last.map((k) => [k, 0]));
+    for (const e of hits) for (const k of e.owners) if (n.has(k)) n.set(k, n.get(k) + 1);
+    const top = Math.max(...n.values()), won = [...n].filter(([, c]) => c === top);
+    return won.length === 1 ? won[0][0] : null;
+  };
+  // past 2 × gapMs a chain keeps only what step 2 reads (its tail), until SYNTH_TTL_MS; a keyed entry goes, and a chain with no tail;
+  // a reply stays until SYNTH_TTL_MS after it was last kept
   const prune = (harness, ms) => {
     for (const [g, e] of open) {
       if (!mine(g, harness) || ms - e.lastMs <= 2 * gapMs) continue;
+      if (g[0] === REPLY) { if (ms - e.lastMs > SYNTH_TTL_MS) { open.delete(g); count(harness, -1); } continue; }
       if (e.tail == null || ms - e.lastMs > SYNTH_TTL_MS) open.delete(g);
       else if (e.items || e.fp) open.set(g, { key: e.key, lastMs: e.lastMs, tail: e.tail });
     }
@@ -205,16 +290,28 @@ export function createSynthAssigner({ gapMs = SYNTH_GAP_MS, open = new Map() } =
       const cur = open.get(g);
       if (!cur) prune(harness, ms);
       open.set(g, { key: facts.key, lastMs: Math.max(cur ? cur.lastMs : ms, ms), fp: grow(cur && cur.fp, facts.fp) });
+      keep(harness, facts.reply, facts.key, ms);
       if (facts.hash == null) return null;
       return { key: null, kin: false, lane: chainIn('\u0002' + harness + '\0' + facts.key + '\0' + facts.hash + '\0', { ...facts, fp: null, mark: false }).key };
     }
     if (facts.hash == null) return null;
-    const own = harness + '\0' + facts.hash + '\0';
+    const got = keyless(facts);
+    // the reply of a compaction request that found no session is kept under none
+    if (got && !(facts.probe && !got.kin)) keep(harness, facts.reply, got.key, ms);
+    return got;
+  };
+  function keyless(facts) {
+    const { harness, ms } = facts, own = harness + '\0' + facts.hash + '\0';
+    if (facts.probe) prune(harness, ms);
+    const named = facts.probe ? byReplies(harness, facts.heads, ms) : null;
+    if (named != null) {
+      for (const [g, e] of open) if (g[0] !== REPLY && g[0] !== '\u0002' && e.key === named && mine(g, harness)) { e.lastMs = Math.max(e.lastMs, ms); if ('tail' in e) e.pending = true; break; }
+      return { key: named, kin: true };
+    }
     if (facts.probe && facts.probe.length) {
-      prune(harness, ms);
       let best = null, bestN = 0;
       for (const [g, e] of open) {
-        if (g[0] === '\u0002' || g.startsWith(own) || !mine(g, harness) || Math.abs(ms - e.lastMs) > gapMs) continue;
+        if (g[0] === '\u0002' || g[0] === REPLY || g.startsWith(own) || !mine(g, harness) || Math.abs(ms - e.lastMs) > gapMs) continue;
         const n = shared(e, facts.probe);
         if (n >= MIN_SHARED && (n > bestN || (n === bestN && e.lastMs > best.lastMs))) { best = e; bestN = n; }
       }
@@ -225,7 +322,7 @@ export function createSynthAssigner({ gapMs = SYNTH_GAP_MS, open = new Map() } =
       }
     }
     return chainIn(own, facts);
-  };
+  }
   // steps 2-4 among the chains whose entry names start with `own`
   function chainIn(own, facts) {
     const { harness, ms } = facts, chain = facts.chain || [];
