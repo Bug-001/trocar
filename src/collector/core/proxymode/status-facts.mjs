@@ -7,7 +7,7 @@ import nodeFs from 'node:fs'
 import path from 'node:path'
 import { itemsOfPhase } from '../../../off/manifest.mjs'
 import { judgeEntry, judgeOwned, markedWithoutRecord, samePath } from '../trust/journal.mjs'
-import { routedForms, holds, presentPaths, userCertFilesOf, rootHeldIn, readSrc, inTrocar } from './sources.mjs'
+import { formsHere, routedForms, holds, presentPaths, userCertFilesOf, rootHeldIn, readSrc, inTrocar } from './sources.mjs'
 import { planRoutes, priorRecordOf, loopbackDirect, loopbackNote } from './entries.mjs'
 import { upstreamFor, isTrocarDoorUrl } from './chain.mjs'
 import { pacLeg } from './pac.mjs'
@@ -160,7 +160,7 @@ export async function modelFormFacts({ harnesses, os, manifest: m, reply = null,
     const plan = planRoutes(desc, ctx), d = drift(h), own = itemsFor(desc, inst, ctx)
     const { code: ufCode, ...uf } = userFileOf(desc, { m, ctx, fs, own, rootFp256 }) || {}
     const forms = []
-    for (const f of routedForms(pm, os, ctx)) {
+    for (const f of formsHere(pm, os, ctx)) { // every form here is drawn, an unmeasured one too (on writes it no entry of its own, 4.11 P5)
       const c = f.cert === 'root' ? null : (pm.certs || {})[f.cert]
       const carrier = !c || (c.when && holds(c.when, ctx) === false) ? 'root' : CARRIER[c.kind] ?? null
       const r = root || {}
