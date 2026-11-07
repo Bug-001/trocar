@@ -500,3 +500,23 @@ test('the standalone undo (undoAutostart) is the same undo the arch module\'s di
   const g = offDarwin.undoAutostart({ home, exec: fakeTools({ 'launchctl print': { status: 0 } }), fs: refusing, uid: 501 })
   assert.deepEqual([g.code, g.agent, g.plist], [1, 'booted-out', 'failed'])
 })
+
+// D61, 1.6 §3.3: a job `launchctl disable` switched off stays loaded and running now (`print` exits 0), and launchd will not load it at the next login. The
+// output is what launchctl prints on a macOS machine for this label; only the label's own line counts.
+test('registered(): a job that is loaded and disabled is not the login entry; only its own line in print-disabled says so', () => {
+  const asked = (printDisabled) => { const run = fakeTools({ 'launchctl print-disabled': printDisabled }); return [userUnit({ ...withHome(), run, uid: 501 }).registered(), run.calls] }
+  const line = (label, v) => `\t"${label}" => ${v}\n`
+  const out = (...lines) => ({ status: 0, stdout: `disabled services = {\n${lines.join('')}}\nlogin item associations = {\n}\n` })
+  assert.equal(asked(out(line('com.trocar.collector', 'disabled')))[0].state, 'disabled')
+  assert.equal(asked(out(line('com.trocar.collector', 'enabled')))[0].state, 'present')
+  assert.equal(asked(out())[0].state, 'present', 'a job launchctl has no line for was never disabled')
+  assert.equal(asked(out(line('com.trocar.collector.other', 'disabled'), line('x.com.trocar.collector', 'disabled'), line('com.trocar.collector', 'enabled')))[0].state, 'present', 'another label with this one in its name')
+  const failed = asked({ status: 1, stderr: 'Bad request.' })[0]
+  assert.equal(failed.state, 'unknown', 'not known is not present')
+  assert.ok(failed.err, 'and it says why')
+  assert.equal(asked({ status: null, error: Object.assign(new Error('spawnSync launchctl ETIMEDOUT'), { code: 'ETIMEDOUT' }) })[0].state, 'unknown')
+  assert.deepEqual(asked(out())[1].map((c) => c.join(' ')), ['launchctl print gui/501/com.trocar.collector', 'launchctl print-disabled gui/501'], 'two questions, in this order, on the path where the job is there')
+  const gone = fakeTools({ 'launchctl print': { status: 113, stderr: 'Bad request.' } })
+  assert.equal(userUnit({ ...withHome(), run: gone, uid: 501 }).registered().state, 'absent')
+  assert.deepEqual(gone.calls.map((c) => c.join(' ')), ['launchctl print gui/501/com.trocar.collector'], 'a job that is not there costs one question')
+})

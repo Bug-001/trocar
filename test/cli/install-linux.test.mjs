@@ -230,3 +230,26 @@ test('Linux install: the CA file Z-Code\'s desktop setting names gets trocar\'s 
   assert.ok(text.startsWith(own), 'the user\'s bytes first, as they were')
   assert.deepEqual(fps(text), [...fps(own), ...fps(root)], 'trocar\'s root appended once')
 })
+
+// A mask of this unit is the unit file replaced by a link to /dev/null: `systemctl --user mask` itself refuses while trocar's file is there (measured on Linux), so it is
+// made by hand. install writes over it, as over any entry under trocar's name, and the plan and the receipt say so.
+test('Linux install over a masked unit: replaced, and said in the plan and the receipt', async () => {
+  for (const seeded of ['after an install', 'with no record']) {
+    const home = tmpDir('trocar-mask-')
+    seedClaude(home)
+    const sys = fakeSystem({ up: false })
+    const ctx = (io) => ({ ...onCtx(home, io, { exec: sys.exec, daemon: sys.daemon }), platform: 'linux' })
+    if (seeded === 'after an install') assert.equal(await runInstallCli(['--yes'], ctx(fakeIo())), 0)
+    const unit = unitPath(home)
+    fs.mkdirSync(path.dirname(unit), { recursive: true }); fs.rmSync(unit, { force: true }); fs.symlinkSync('/dev/null', unit)
+    const dry = fakeIo()
+    assert.equal(await runInstallCli(['--dry-run', '--json'], ctx(dry)), 0, dry.text())
+    assert.ok(JSON.stringify(dry.json()).includes('masked'), `${seeded}: the plan says it`)
+    assert.equal(fs.lstatSync(unit).isSymbolicLink(), true, 'a dry run leaves it')
+    const io = fakeIo()
+    assert.equal(await runInstallCli(['--yes', '--json'], ctx(io)), 0, io.text())
+    assert.ok(io.json().notes.some((n) => /masked/.test(n)), `${seeded}: the receipt says it`)
+    assert.equal(fs.lstatSync(unit).isSymbolicLink(), false, `${seeded}: the link is replaced`)
+    assert.match(fs.readFileSync(unit, 'utf8'), /\[Service\]/)
+  }
+})
