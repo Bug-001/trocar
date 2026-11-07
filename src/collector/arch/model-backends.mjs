@@ -153,7 +153,7 @@ export async function doorPartsFor({ os, env = process.env, event = () => {}, fa
   const procTable = winHelper
     ? () => psTableVia(winHelper, { timeoutMs: 10000 })
     : () => listProcs({ platform: os, env, exec: runner })
-  return { ...parts, proxyOf, systemProxy: watch.now, procTable, helper: winHelper, close: () => { watch.stop(); parts.close() } }
+  return { ...parts, proxyOf, systemProxy: watch.now, procTable, helper: winHelper, close: () => { watch.stop(); return parts.close() } }
 }
 
 /** The proxy-mode half of status's facts on macOS / Windows (1.6 §9.7, 4.11 CM21): the model's per-form reader over this user's install manifest, the daemon's
