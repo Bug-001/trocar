@@ -223,6 +223,22 @@ for (const [what, body, sealed] of [['uninstall', { exit: true, by: 'uninstall' 
   })
 }
 
+// D38: a segment the uninstall stop could not seal keeps its plaintext, is said as a seal-failed failure, and daemon-stop names `raw` among the steps
+// that failed. A directory under a segment's name is a plaintext segment the sealer refuses.
+test('daemon: an uninstall stop whose seal fails says so in daemon-stop (failed: raw) (V125, D38)', { timeout: 30_000 }, async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  const rawDir = path.join(s.home, '.trocar', 'raw'); fs.mkdirSync(path.join(rawDir, '20261002T000000Z.ndjson'), { recursive: true })
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: fakeArch(p).arch, harnesses: [cc], env: { ...process.env, HOME: s.home } })
+  try {
+    await req(s.sock, 'POST', '/off', { exit: true, by: 'uninstall' })
+    await d.exited
+    const f = flowsOf(s)
+    assert.deepEqual(f.filter((x) => x.event === 'daemon-stop').map((x) => x.failed), [['raw']])
+    assert.ok(f.some((x) => x.code === 'seal-failed'), 'the failed seal is said')
+  } finally { await d.stop(); p.done(); s.done() }
+})
+
 // 3.5 #32 (§后台抽取与归约 kick, D63 ①): a session is folded as it is captured. The real daemon records LLM calls of one session and
 // nobody queries; the index keeper kicks the query service with the session's key, the worker it forks folds each call into the
 // session's fold log, and leaves once the kicks stop (its idle clock is the daemon's, restarted by every kick).

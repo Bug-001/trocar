@@ -185,20 +185,23 @@ function storeWithSealing({ P, failure, query }) {
     // closed, and any this run failed on — is sealed once at normal priority. Every worker's progress goes into the lock's `sealing` for the uninstall
     // that waits (1.6 §3.6). A failure is said as the queue's are (D38) and keeps the plaintext → false; a daemon killed meanwhile takes the worker
     // with it (the crash path).
-    async last(lock) {
-      const say = (file, p) => { try { lock.name({ sealing: { segment: path.basename(file).replace(/\.ndjson$/, ''), ...p } }) } catch { /* a lock not rewritten costs the uninstall one silent interval */ } }
-      if (queue) { await queue.idle({ onProgress: say }); queue.dropTemps() }
-      let names = []
-      try { names = fs.readdirSync(rawHome(home)).sort() } catch { /* no raw/: nothing was written */ }
-      let ok = true
-      for (const n of names) {
-        const seg = parseSegment(n)
-        if (!seg || seg.sealed) continue
-        const file = path.join(rawHome(home), n)
-        const r = await forkSealer(file, { lockFile: P.lock, normal: true, onProgress: (p) => say(file, p) })
-        if (r.code !== 0) { ok = false; failure('raw', Object.assign(new Error(`sealing ${file} failed (${r.reason || `the sealer exited with ${r.code}`}); its plaintext is kept and is sealed when trocar runs again`), { code: 'seal-failed' }), { file }) }
-      }
-      return ok
+    async last(lock, beatMs) {
+      const beat = setInterval(() => { try { lock.refresh() } catch { /* the next beat tries again */ } }, beatMs) // the stop cleared the lock's timer: still alive to a reader (4.6 §控制面)
+      try {
+        const say = (file, p) => { try { lock.name({ sealing: { segment: path.basename(file).replace(/\.ndjson$/, ''), ...p } }) } catch { /* a lock not rewritten costs the uninstall one silent interval */ } }
+        if (queue) { await queue.idle({ onProgress: say }); queue.dropTemps() }
+        let names = []
+        try { names = fs.readdirSync(rawHome(home)).sort() } catch { /* no raw/: nothing was written */ }
+        let ok = true
+        for (const n of names) {
+          const seg = parseSegment(n)
+          if (!seg || seg.sealed) continue
+          const file = path.join(rawHome(home), n)
+          const r = await forkSealer(file, { lockFile: P.lock, normal: true, onProgress: (p) => say(file, p) })
+          if (r.code !== 0) { ok = false; failure('raw', Object.assign(new Error(`sealing ${file} failed (${r.reason || `the sealer exited with ${r.code}`}); its plaintext is kept and is sealed when trocar runs again`), { code: 'seal-failed' }), { file }) }
+        }
+        return ok
+      } finally { clearInterval(beat) }
     },
   }
   return { store, seal, keeper }
@@ -237,7 +240,7 @@ function retryNow(engine, failure, names) {
   return gone.map((g) => ({ harness: g.agent, neg_key: g.neg_key, pid: g.pid, hosts: g.hosts }))
 }
 
-async function stopTail({ engine, graceMs, store, seal, failure, lock, signal, reason, who = null, sealLast = false, before = async () => {}, after = async () => {} }) {
+async function stopTail({ engine, graceMs, store, seal, failure, lock, signal, reason, who = null, sealLast = false, lockRefreshMs, before = async () => {}, after = async () => {} }) {
   const failed = []
   const step = async (where, fn) => { try { await fn() } catch (e) { failed.push(where); failure(where, Object.assign(new Error(`while stopping: ${errText(e)}`), { code: (e && e.code) || 'stop-failed' })) } }
   await before(step)
@@ -246,7 +249,7 @@ async function stopTail({ engine, graceMs, store, seal, failure, lock, signal, r
   await after(step)
   await step('record', () => store.close())
   await step('raw', () => seal.settle()) // the index of what this daemon wrote, including the segment just closed (D62)
-  if (sealLast) await step('raw', () => seal.last(lock))
+  if (sealLast) await step('raw', async () => { if (!(await seal.last(lock, lockRefreshMs))) failed.push('raw') }) // a failed seal was said by last(); daemon-stop names the step too
   failure.flush()
   failure.write({ event: 'daemon-stop', pid: process.pid, ...(signal ? { signal } : { reason: reason || 'stop requested' }), ...(relayed ? { relayed } : {}), ...(failed.length ? { failed } : {}) })
   failure.final()
@@ -818,7 +821,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       if (!helperDown) { try { const s = await redirector.status(); if (s && s.drops) lastDrops = s.drops } catch { /* the helper is going: what was last read is written */ } }
       noteDrops({ force: true }) // drops not yet reported are written, not lost
       failure.flush() // folded counts are written, not lost
-      return stopTail({ engine, graceMs: stopGraceMs, store, seal, failure, lock, signal, reason, who, sealLast,
+      return stopTail({ engine, graceMs: stopGraceMs, store, seal, failure, lock, signal, reason, who, sealLast, lockRefreshMs,
         before: async (step) => {
           await step('control', () => control.close())
           clearInterval(bundleTimer)
@@ -954,7 +957,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
       seal.stop() // as in runDaemon: the last segment is left to the next start's scan (uninstall's: seal.last() in stopTail)
       board.stop(); query.stop()
       clearInterval(lockTimer); clearInterval(listTimer); clearInterval(exitTimer)
-      return stopTail({ engine, graceMs: stopGraceMs, store, seal, failure, lock, signal, reason, who, sealLast,
+      return stopTail({ engine, graceMs: stopGraceMs, store, seal, failure, lock, signal, reason, who, sealLast, lockRefreshMs,
         before: (step) => step('control', () => control.close()),
         after: async (step) => { collector.close(); await step('helper', () => parts.close && parts.close()) } })
     }
