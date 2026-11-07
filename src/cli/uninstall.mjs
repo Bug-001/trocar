@@ -200,7 +200,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     // 2 · 3 · 4: the daemon is asked to go and drains, the autostart is disabled, the daemon is stopped, the link is confirmed gone
     // the one drain-then-stop path; `update`'s daemon replacement takes it too (D67①). The daemon seals the segment it was writing before it exits (not when
     // the data is purged after), and says how far it is: the wait lasts while it does (1.6 §3.6)
-    const sealing = (x) => (x.step === 'encode' ? `sealing ${x.segment}: ${size(x.done)} of ${size(x.total)}` : `sealing ${x.segment}: ${x.step === 'verify' ? 'checking the sealed copy' : 'indexing it'}`)
+    const sealing = (x) => `${x.step === 'verify' ? 'checking' : 'sealing'} ${x.segment}: ${Number.isFinite(x.total) ? `${size(x.done)} of ${size(x.total)}` : x.step === 'index' ? 'indexing it' : 'writing it out'}`
     const { routing, drained, segment } = await drainDaemon(w, { drainMs: deps.drainMs, by: 'uninstall', seal: !purgeData, onSealing: (x) => { if (say) say(sealing(x)) } })
     receipt.routing = { confirmed: routing.confirmed, state: routing.state, how: routing.how }
     receipt.daemon = routing.daemon; receipt.relayed = routing.relayed

@@ -90,7 +90,9 @@ async function sealOne(file, { lockFile, fs, frameBytes, onPhase, onProgress }) 
       }
     } finally { fs.closeSync(src); }
     const sum = whole.digest('hex');
+    await onProgress({ step: 'finish' });
     const stats = writer.finish([{ name, sha256: sum, length, lines, path: name, dev: st0.dev, ino: st0.ino, mtimeMs: st0.mtimeMs }]);
+    await onProgress({ step: 'fsync' });
     fs.fsyncSync(fd); fs.closeSync(fd); fd = null;
     await onPhase('written');
 
@@ -99,7 +101,7 @@ async function sealOne(file, { lockFile, fs, frameBytes, onPhase, onProgress }) 
     const changed = () => { const s = fs.statSync(file); return s.size !== st0.size || s.mtimeMs !== st0.mtimeMs || s.ino !== st0.ino ? s : null; };
     let st1 = changed();
     if (st1) throw new SealRefused(`refusing to finish sealing ${file}: it changed while being sealed (size ${st0.size} → ${st1.size})`);
-    verifySealed(fs, tmp, { name, sum, length, lines });
+    await verifySealed(fs, tmp, { name, sum, length, lines, onProgress });
     await onPhase('verified');
     fs.renameSync(tmp, out);          // a sealed file an interrupted earlier run left is superseded by this verified one
     renamed = true;
@@ -141,13 +143,17 @@ function* readLines(fs, fd) {
 
 // Decode every record (the reader checks each line's sha256 against the index, which was computed from the source
 // line), then rebuild the whole segment in line order and compare its length and sha256 with what was read. Any gap,
-// duplicate or mismatch throws.
-export function verifySealed(fs, sealed, { name, sum, length, lines }) {
+// duplicate or mismatch throws. The bytes checked so far go to `onProgress` about every VERIFY_EVERY bytes: a check of a whole segment
+// is long, and an uninstall waiting on a sealer that says nothing stops it (1.6 §3.6).
+const VERIFY_EVERY = 8 * 2 ** 20;
+export async function verifySealed(fs, sealed, { name, sum, length, lines, onProgress = () => {} }) {
   const f = openSealed(sealed, { fs });
   try {
     const whole = createHash('sha256');
-    let total = 0, want = 0;
+    let total = 0, want = 0, said = 0;
+    await onProgress({ step: 'verify', done: 0, total: length });
     for (const { line, entry } of f.lines()) {
+      if (total - said >= VERIFY_EVERY) { said = total; await onProgress({ step: 'verify', done: total, total: length }); }
       if (entry.lineNo !== want) throw new Error(`verification failed: line ${want} of ${name} is not the next record (${entry.lineNo})`);
       if (entry.stream !== name || entry.shard !== 0) throw new Error(`verification failed: line ${want} carries the wrong source`);
       whole.update(line); total += line.length; want++;

@@ -33,7 +33,8 @@ async function reindex() {
 }
 
 await new Promise(setImmediate) // one turn of the loop first: a parent that went while this child was loading is noticed before any file is touched
-sealSegment(file, { lockFile, ...(journal ? { journal } : {}), onProgress: say, onPhase: (ph) => (ph === 'written' ? say({ step: 'verify' }) : undefined) }).then(
-  () => say({ step: 'index' }).then(reindex).then(() => process.exit(0)),
+// the uninstall stop's seal (`normal`) does not reindex: the index is a projection the next read rebuilds, and nobody is to wait for it (4.2 §自动封存)
+sealSegment(file, { lockFile, ...(journal ? { journal } : {}), onProgress: say }).then(
+  () => Promise.resolve(priority === 'normal' ? null : say({ step: 'index' }).then(reindex)).then(() => process.exit(0)),
   (e) => { try { process.stderr.write(String((e && e.message) || e)) } catch { /* stderr gone with the parent */ } process.exit(1) },
 )

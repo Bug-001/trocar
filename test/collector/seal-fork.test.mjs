@@ -49,14 +49,20 @@ test('a worker whose parent disconnects exits, and leaves the plaintext whole', 
 })
 
 // 4.2 §自动封存: the uninstall stop's seal is the same worker in a real child, at normal priority, reporting its progress over IPC as it goes
-// ({step, done, total} in bytes: the encode pass ends at the segment's size, then the check and the index say they started).
-test('the sealer forked at normal priority reports its progress and seals the segment', async () => {
-  const b = box({ lines: 50 })
+// ({step, done, total} in bytes). No phase is silent for long: the check of a big segment reports as it goes (an uninstall stops a daemon that
+// says nothing for its exit wait, and a sealer cut mid-check leaves the plaintext and a temp file), and this seal does not reindex.
+test('the sealer forked at normal priority reports every phase, the check included, and seals the segment', { timeout: 60_000 }, async () => {
+  const b = box({ lines: 1 })
+  const line = (i) => Buffer.from(JSON.stringify({ id: `req_${i}`, ts: '2026-10-05T10:00:00.000Z', req_body: `${i} `.repeat(400) }) + '\n')
+  const ls = Array.from({ length: 9000 }, (_, i) => line(i)) // ~ 2 × the 8 MB between two reports of the check
+  fs.writeFileSync(b.file, Buffer.concat(ls))
+  const size = fs.statSync(b.file).size
   const seen = []
   const r = await forkSealer(b.file, { lockFile: b.lock, journal: b.journal, normal: true, onProgress: (p) => seen.push(p) })
   assert.equal(r.code, 0, r.reason)
   assert.equal(fs.existsSync(b.file), false, 'the plaintext is gone')
-  const size = b.ls.reduce((n, l) => n + l.length, 0)
-  assert.ok(seen.some((p) => p.step === 'encode' && p.done === size && p.total === size), JSON.stringify(seen))
-  assert.deepEqual([...new Set(seen.map((p) => p.step))], ['encode', 'verify', 'index'])
+  assert.ok(seen.some((p) => p.step === 'encode' && p.done === size && p.total === size), JSON.stringify(seen.slice(-5)))
+  assert.deepEqual([...new Set(seen.map((p) => p.step))], ['encode', 'finish', 'fsync', 'verify'])
+  const checks = seen.filter((p) => p.step === 'verify')
+  assert.ok(checks.length >= 2 && checks.every((p) => p.total === size && p.done <= size), JSON.stringify(checks))
 })
