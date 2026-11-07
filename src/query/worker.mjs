@@ -20,7 +20,8 @@
 // and its last byte this process does nothing else, so that work can neither delay the answer nor, if it fails or runs the heap
 // out, cost the caller the answer it was already sent.
 //
-// THE WRITER (4.3 §4 写者): this process alone writes the context projections (`writer: true` on every answer's ctx). BACKGROUND
+// THE WRITER (4.3 §4 写者): the role whose `ROLES[role].writes` (warm.mjs) is true writes the context projections (its answers' ctx carry
+// `writer` as that says; it is the main role, the one that reads the rows and runs the background). BACKGROUND
 // WORK (3.5 后台抽取), one scheduler: from boot it reads the rows, then every session's title (readRows, 3.5 §行表先读; until the rows are read a
 // request that needs them is answered `102`, ask again, and until the titles are done no slice runs); then, while no request line is waiting or being answered (the last frame written whole), it runs
 // slices of ≤ SLICE_MS — the members of the session last answered (session / lane) extracted until none is left, then those of the
@@ -215,7 +216,7 @@ const notIdle = () => {
 async function background() {
   if (busy || !rowsRead || sweeping) return
   // `progress`: the segment index read before the first slice is background work too, reported per segment and chunk (3.5 后台抽取与归约)
-  // `writer: writes` not a bare true: ROLES is the one place that says who writes (background() only runs where it does, but the ctx says so too)
+  // `writer: writes`: ROLES says who writes (background() runs only in the main role, which reads the rows)
   const ctx = { home, fs: nodeFs, writer: writes, persist, once, progress }
   if (kicked.size) {
     try { await kickedSessions(ctx) } catch (e) { say(e) }

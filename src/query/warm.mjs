@@ -53,10 +53,12 @@ export const LIGHT_MEMORY_MB = 128
  *  configs that grow by themselves (an agent's own state file can pass 16 MB) and that run is not measured, so the role keeps the 384 MB the verbs had on
  *  the main role: no verb gets less room than before. */
 export const CONTROL_MEMORY_MB = 384
-/** Every query role (3.5 §内存有界 · §谁执行它「三角色」): its heap cap and whether it writes answer files. THE single place that says which
- *  role writes — forkOptions takes every cap from here, and the worker writes iff `ROLES[role].writes`. So the writer's heap bound is
- *  asserted against exactly the caps whose role writes, and a future writing role is covered without editing worker.mjs or the test. */
+/** Every query role (3.5 §内存有界 · §谁执行它「三个角色」): its heap cap and whether it writes answer files. forkOptions (and the tests' fork)
+ *  take every cap from here, the worker passes `writer` as `ROLES[role].writes`, and the writer's heap bound is asserted against every cap
+ *  whose role writes. A new writing role still needs worker.mjs: it reads the rows, and so runs the background slices that write, only
+ *  for `main`. No prototype: a role named like an Object method is unknown, and throws. */
 export const ROLES = Object.freeze({
+  __proto__: null,
   main: { capMb: WORKER_MEMORY_MB, writes: true },
   light: { capMb: LIGHT_MEMORY_MB, writes: false },
   control: { capMb: CONTROL_MEMORY_MB, writes: false },
