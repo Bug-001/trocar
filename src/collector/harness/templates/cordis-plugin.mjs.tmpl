@@ -8,8 +8,16 @@
 //           whose CONNECT carries X-Trocar-Upstream = the proxy dsh itself would use for this origin (its environment, after dsh read its
 //           .env), or `none` when dsh would go direct (no proxy set, its bypass list matches, or a scheme dsh does not take); absent → the
 //           prior dispatcher, exactly what dsh would have done. A changed door closes the old agent, so a switch takes effect on the next request.
+//           node:http / node:https (not undici: dsh's telemetry exporter, any node:https client) the same way, per connection: createConnection
+//           on the http and https Agent prototypes, so every agent (the default one, one of the caller's own, agent:false) takes it. Switch
+//           present and the host not loopback → a socket to the door, CONNECT host:port with the door's credentials and X-Trocar-Upstream (the
+//           proxy node:http itself would use: the proxy variables only under NODE_USE_ENV_PROXY=1, else none), then the original connection
+//           on that tunnel (TLS for https); absent → Node's own connection. A request with its own createConnection option is not seen.
 // It reads and changes no request or response bytes, connects nowhere but the door, writes no file and no agent config, never throws.
 import tls from 'node:tls'
+import net from 'node:net'
+import http from 'node:http'
+import https from 'node:https'
 import fs from 'node:fs'
 import path from 'node:path'
 import { createRequire } from 'node:module'
@@ -89,6 +97,55 @@ if (rooted) try {
   }
   u.setGlobalDispatcher(new TrocarSwitch())
 } catch { /* a plugin never stops its host: dsh keeps its own dispatcher */ }
+
+// node:http(s): one connection through the door, by the switch file the undici path reads (the same door, the same header)
+function readDoor() { try { return fs.readFileSync(SWITCH, 'utf8').split(/\r?\n/)[0] || null } catch { return null } }
+function tunnel(door, host, port, upstream, done) {
+  let d
+  try { d = new URL(door) } catch (e) { done(e); return }
+  const auth = d.username ? `Proxy-Authorization: Basic ${Buffer.from(`${decodeURIComponent(d.username)}:${decodeURIComponent(d.password)}`).toString('base64')}\r\n` : ''
+  const target = net.isIPv6(host) ? `[${host}]:${port}` : `${host}:${port}`
+  const sock = net.connect(Number(d.port), d.hostname)
+  let head = Buffer.alloc(0), settled = false
+  const fail = (e) => { if (settled) return; settled = true; sock.destroy(); done(e) }
+  sock.once('error', fail)
+  sock.once('connect', () => sock.write(`CONNECT ${target} HTTP/1.1\r\nHost: ${target}\r\n${auth}X-Trocar-Upstream: ${upstream}\r\n\r\n`))
+  const onData = (chunk) => {
+    head = Buffer.concat([head, chunk])
+    const end = head.indexOf('\r\n\r\n')
+    if (end < 0) { if (head.length > 16384) fail(new Error('the door sent no answer to CONNECT')); return }
+    sock.removeListener('data', onData)
+    const status = Number((/^HTTP\/1\.[01] (\d{3})/.exec(head.subarray(0, end).toString('latin1')) || [])[1])
+    if (!(status >= 200 && status < 300)) { fail(new Error(`the door answered CONNECT ${target} with ${status || 'no status'}`)); return }
+    settled = true; sock.removeListener('error', fail)
+    const rest = head.subarray(end + 4)
+    if (rest.length) sock.unshift(rest)
+    done(null, sock)
+  }
+  sock.on('data', onData)
+}
+const nodeUpstream = (scheme, host) => (process.env.NODE_USE_ENV_PROXY === '1' ? ownProxy(new URL(`${scheme}://${net.isIPv6(host) ? `[${host}]` : host}`)) : 'none')
+if (rooted) try {
+  const wrap = (proto, scheme, secure) => {
+    const own = proto.createConnection
+    proto.createConnection = function trocarConnection(...args) {
+      const o = (args[0] && typeof args[0] === 'object') ? args[0] : {}
+      const host = String(o.host || o.hostname || 'localhost').replace(/^\[|\]$/g, ''), port = Number(o.port) || (secure ? 443 : 80)
+      const cb = typeof args.at(-1) === 'function' ? args.at(-1) : null
+      const d = !o.socketPath && !LOOPBACK.test(host) ? readDoor() : null
+      if (!d || !cb) return own.apply(this, args)
+      tunnel(d, host, port, nodeUpstream(scheme, host), (e, sock) => {
+        if (e) { cb(e); return }
+        if (!secure) { cb(null, sock); return }
+        const s = tls.connect({ ...o, socket: sock, servername: o.servername || (net.isIP(host) ? undefined : host) })
+        s.once('secureConnect', () => cb(null, s)); s.once('error', (err) => cb(err))
+      })
+      return undefined
+    }
+  }
+  wrap(http.Agent.prototype, 'http', false)
+  wrap(https.Agent.prototype, 'https', true)
+} catch { /* a plugin never stops its host: node:http keeps its own connections */ }
 
 // a cordis plugin must export apply (lab round 1, mac finding 4)
 export const name = 'trocar'
