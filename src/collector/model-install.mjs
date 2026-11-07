@@ -47,10 +47,10 @@ const CUSTODY_ADVICE = Object.freeze({
 /** A custody verb that threw, as the refusal install carries in `pending` (its `code` becomes the receipt's `error.code`). */
 const custodyFailed = (os, verb, e) => ({ item: 'root-key', state: 'failed', code: CUSTODY_FAILED,
   reason: `the key that signs certificates could not be ${verb === 'create' ? 'made' : 'read'} (${errText(e)}). ${CUSTODY_ADVICE[os] || CUSTODY_ADVICE.win32}` })
-/** Asked before install takes its lock or writes anything: does the custody answer at all? → `{ has }` (exists()'s answer, handed to runInstall) or
- *  `{ refusal }` (the pending item): a custody that cannot be used leaves the HOME as it was. */
+/** Asked before install prints its plan, takes its lock or writes anything: does the custody answer at all? → `{}` or `{ refusal }` (the pending item):
+ *  a custody that cannot be used leaves the HOME as it was. Only a gate: runInstall asks exists() again under the lock, where another install may have made the key since. */
 export async function custodyPreflight({ os, custody }) {
-  try { return { has: await custody.exists() } } catch (e) { return { refusal: custodyFailed(os, 'exists', e) } }
+  try { await custody.exists(); return {} } catch (e) { return { refusal: custodyFailed(os, 'exists', e) } }
 }
 // an OS prompt that was not answered (timeout, no GUI session) is pending; one the user answered no is declined (1.6 §1.6)
 const promptState = (r) => r.state || (/time[d ]?out|no gui|interaction|session|unavailable/i.test(String(r.reason || '')) ? 'pending' : 'declined')
@@ -83,9 +83,8 @@ function usersFileWhy(file, { fs = nodeFs, owns }) {
   return null
 }
 
-/** runInstall({ os, home, env, harnesses, custody, rootStore, ctx, owns, has, … }) → { manifest, fp256, items, carriers, pending, problems, exit }. See the header.
- *  `has`: custodyPreflight's answer to exists(), so the custody is not asked twice. */
-export async function runInstall({ os, home, env = process.env, harnesses, custody, rootStore, ctx, owns, installHelper = null, interactive = false, wrapperKit = null, renderHook = null, facts = {}, unit = null, only = null, has: known = undefined, code: ran = codeId(), nodeRoots = tls.rootCertificates, fs = nodeFs, now = () => new Date() }) {
+/** runInstall({ os, home, env, harnesses, custody, rootStore, ctx, owns, … }) → { manifest, fp256, items, carriers, pending, problems, exit }. See the header. */
+export async function runInstall({ os, home, env = process.env, harnesses, custody, rootStore, ctx, owns, installHelper = null, interactive = false, wrapperKit = null, renderHook = null, facts = {}, unit = null, only = null, code: ran = codeId(), nodeRoots = tls.rootCertificates, fs = nodeFs, now = () => new Date() }) {
   const dir = collectorHome(path.join(home, '.trocar'))
   const ca = caPaths(path.join(dir, 'ca'))
   const m = readManifest(dir, fs) || newManifest(now())
@@ -114,7 +113,7 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
       return null
     }
   }
-  const has = known !== undefined ? known : await ask('exists')
+  const has = await ask('exists') // under the lock: another install may have made the key since the preflight asked
   if (custodyWhy) return finish()
   if (has === 'unavailable') { pending.push({ item: 'root-key', state: 'pending', reason: 'the key custody is not reachable (macOS: no graphical login session); run trocar install again in a terminal of that session' }) }
   else if (rec && has === true && fs.existsSync(ca.pem)) { rootDer = pemToDer(fs.readFileSync(ca.pem, 'utf8')); said('root-key', 'intact', { fp256: rec.fp256 }) }

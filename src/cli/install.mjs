@@ -159,20 +159,26 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
     // changes: `planned` is only what the run changes (the board's Set up confirms exactly that list, 4.4 #13), `left` the rest
     const left = byPlace(rows.filter((r) => r.state))
     const planned = changes
-    say(fit([`trocar install will change ${changes.length} thing${changes.length === 1 ? '' : 's'}:`,
+    // a custody that cannot be used refuses before the plan, the lock and the first write: no plan is offered for a run that would refuse, and the HOME
+    // stays as it was; a dry run says it in `blocked` (1.6 §3.2). Only a gate: runInstall asks the custody again under the lock
+    const { refusal: refused } = await custodyPreflight({ os: platform, custody: b.custody })
+    if (!refused || flags.has('--dry-run')) say(fit([`trocar install will change ${changes.length} thing${changes.length === 1 ? '' : 's'}:`,
       ...pairs(changes.map((p) => [p.what, p.detail]), { home }),
       ...(left.length ? ['Left as they are:', ...pairs(left.map((p) => [p.what, p.detail]), { home })] : []),
       ...(only ? (changes.length ? [] : [left.length ? `There is nothing that install can set up for ${only}.` : `${only} has every certificate carrier it needs: there is nothing to set up.`]) : rows.length ? [] : ['No agent was found on this machine: only the root is installed.']),
       ...wrap(COST), ...wrap(RISK), ...(stale ? wrap(CUT) : [])], { home }).join('\n'))
-    if (flags.has('--dry-run')) { if (json) printJson(io, { ...newReceipt('install'), dry_run: true, planned, ...(left.length ? { left } : {}), ...(only && !changes.length ? { notes: [`${only}: nothing to set up`] } : {}) }); return EXIT.ok }
-    if (!flags.has('--yes')) {
+    if (flags.has('--dry-run')) {
+      const stop = refused ? { ok: false, blocked: [{ what: 'trocar install', reason: refused.reason }], error: { code: refused.code, message: refused.reason } } : {}
+      if (json) printJson(io, { ...newReceipt('install'), dry_run: true, planned, ...(left.length ? { left } : {}), ...(only && !changes.length ? { notes: [`${only}: nothing to set up`] } : {}), ...stop })
+      else if (refused) say(fit([`trocar install would stop before writing anything: ${refused.reason}`], { home }).join('\n'))
+      return EXIT.ok
+    }
+    if (!refused && !flags.has('--yes')) {
       if (json || !isInteractive(io)) return needsYes(io, json, planned, left)
       if (!(await confirm({ ...io, prompt: io.stdout }, 'Proceed?'))) { io.err('You said no: nothing was changed'); return EXIT.incomplete }
     }
-    // a custody that cannot be used refuses before the lock and the first write: the HOME stays as it was
-    const pre = await custodyPreflight({ os: platform, custody: b.custody })
-    const r = pre.refusal ? { refused: true, fp256: null, items: [], carriers: [], pending: [pre.refusal], problems: [], notes: [], exit: 1 } : await locked(async () => {
-      const r = await runInstall({ os: platform, home, env, harnesses, custody: b.custody, rootStore: b.rootStore, installHelper: b.installHelper, interactive: isInteractive(io), has: pre.has,
+    const r = refused ? { refused: true, fp256: null, items: [], carriers: [], pending: [refused], problems: [], notes: [], exit: 1 } : await locked(async () => {
+      const r = await runInstall({ os: platform, home, env, harnesses, custody: b.custody, rootStore: b.rootStore, installHelper: b.installHelper, interactive: isInteractive(io),
         wrapperKit: b.wrapperKit, facts: b.facts, ctx, unit: only ? null : unit, only, code: codeId(root), owns: deps.owns || ownsBy({ os: platform, home, fs }), renderHook, fs, ...(deps.now ? { now: deps.now } : {}) })
       if (r.refusal) return r // ㉔ under the lock: nothing was written, and nothing more is
       const { row } = await boardPortRow(home, fs) // before the daemon starts below: it reads the port, never picks one
@@ -198,7 +204,7 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
     const marked = [...new Set(r.carriers.filter((c) => c.code === MARKED_WITHOUT_RECORD && c.path).map((c) => c.path))]
     const mwr = marked.length ? markedRefusal('install', { code: MARKED_WITHOUT_RECORD, message: `${marked.length === 1 ? 'this file holds' : 'these files hold'} trocar's text from an earlier install whose record is gone, so trocar left ${marked.length === 1 ? 'it' : 'them'} and installed the rest. The line below takes that text out by trocar's own marks; then run trocar install again.`, paths: marked }) : null
     if (mwr) r.problems.push(...mwr.problems)
-    const receipt = { ...newReceipt('install'), ok: r.exit === 0, skipped: r.carriers.filter((c) => c.code === CODE.notTrocarsFile && c.path).map((c) => ({ what: c.path, reason: c.why })), undo: UNDO_LINE.install, fp256: r.fp256, items: r.items, carriers: r.carriers, pending: only ? r.pending.map((p) => ({ ...p, command: 'trocar install' })) : r.pending, problems: r.problems, notes: [...r.notes, ...dmnNotes], standalone: standalonePath(home), residual_risk: RISK, daemon: daemonRow(dmn, rep), ...(unit && !only && !r.refused ? { autostart: { entry: platform === 'win32' ? '\\trocar\\collector' : unit.path, enabled: !dmn.unitFailed } } : {}),
+    const receipt = { ...newReceipt('install'), ok: r.exit === 0, skipped: r.carriers.filter((c) => c.code === CODE.notTrocarsFile && c.path).map((c) => ({ what: c.path, reason: c.why })), undo: r.refused ? null : UNDO_LINE.install, fp256: r.fp256, items: r.items, carriers: r.carriers, pending: only ? r.pending.map((p) => ({ ...p, command: 'trocar install' })) : r.pending, problems: r.problems, notes: [...r.notes, ...dmnNotes], ...(r.refused ? {} : { standalone: standalonePath(home), residual_risk: RISK }), daemon: daemonRow(dmn, rep), ...(unit && !only && !r.refused ? { autostart: { entry: platform === 'win32' ? '\\trocar\\collector' : unit.path, enabled: !dmn.unitFailed } } : {}),
       ...(refusal ? { error: { code: refusal.code, message: refusal.reason } } : mwr ? { error: mwr.error } : {}),
       ...(r.path && r.path.rec ? { path_item: r.path.rec } : {}),
       planned, ...(left.length ? { left } : {}), commands: ['trocar on', 'trocar off', 'trocar status', 'trocar uninstall'] }
