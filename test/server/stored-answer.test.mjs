@@ -104,7 +104,7 @@ test('3.5 #38: the last release\'s stored list, its rows short of keys added sin
   const file = path.join(home, 'index', 'stored', `sessions.${createHash('sha1').update(JSON.stringify([['limit', '500']])).digest('hex').slice(0, 16)}.json.gz`)
   const row = { session_id: 'from-before', project_slug: '_unresolved', project_path: null, entrypoint: null, harness: 'claude-code', harness_inferred: false,
     session_synthesized: false, provider: 'anthropic', title: null, title_source: 'pending', calls: 1, logged: 0, probes: 0, other: 0, has_subagent: false, last_ts: '2020-01-01T00:00:00.000Z' }
-  const bytes = gzipSync(Buffer.from(JSON.stringify({ as_of: '2020-01-01T00:00:00.000Z', sessions: [row], next: null, has_more: false, errors: [], stored: { at: '2020-01-01T00:00:00.000Z' } })))
+  const bytes = gzipSync(Buffer.from(JSON.stringify({ schema: 1, command: 'sessions', ok: true, as_of: '2020-01-01T00:00:00.000Z', sessions: [row], next: null, has_more: false, errors: [], stored: { at: '2020-01-01T00:00:00.000Z' } })))
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
   fs.writeFileSync(file, bytes, { mode: 0o600 })
   const b = await serveBoard({ userHome, home })

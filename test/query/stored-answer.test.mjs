@@ -89,7 +89,7 @@ test('the rotation counts files of other names too, and they go first: they are 
 // Sound for a key removed or renamed; NOT for a value whose meaning or vocabulary changes, which only the spec rule and review catch.
 const FROZEN = {
   'sessions.': {
-    top: ['as_of', 'sessions', 'next', 'has_more', 'errors'],
+    top: ['schema', 'command', 'ok', 'as_of', 'sessions', 'next', 'has_more', 'errors'],
     row: ['session_id', 'project_slug', 'project_path', 'entrypoint', 'harness', 'harness_inferred', 'session_synthesized', 'provider', 'title',
       'title_source', 'calls', 'logged', 'probes', 'other', 'has_subagent', 'last_ts'],
   },
