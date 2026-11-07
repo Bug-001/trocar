@@ -209,7 +209,9 @@ export const FINDING_CODES = Object.freeze([...new Set([...Object.keys(FINDINGS)
  *  does not have defines every field itself. A code neither catalogue names falls to the trust entry: the reasons the tracker can set are data, not caller bugs (the closed sets live in
  *  health/codes.mjs, held by its tests — a runtime throw here would take `doctor` down with a proxy-mode state like `smart-app-control`). */
 function make(code, ctx) {
-  const w = ctx.platform === 'win32' ? FINDINGS_WIN32[code] : null
+  // not-routed for a reason the route plan gave (a blocker, an absent entry file, …: 4.11 §3) reads the same on every OS; the Windows row words the system-proxy causes (route.why)
+  const planSaid = code === 'not-routed' && ctx.fm && ctx.fm.route && ctx.fm.route.reason && !ctx.fm.route.why
+  const w = ctx.platform === 'win32' && !planSaid ? FINDINGS_WIN32[code] : null
   const def = FINDINGS[code] || TRUST
   const c = { ...ctx, code }
   c.removeOwn = userPlaces(c).map((p) => gui(removeAt(c.h, p))) // the user's own places, as steps: both catalogues name them (1.6 附录 B)

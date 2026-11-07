@@ -541,17 +541,17 @@ test('§1.1⑥ renderFindings: a GUI step folds inside 80 columns, hanging two d
   assert.ok(lines.some((l) => l.trim() === cmd), 'the command is whole on its own line')
 })
 
-test('4.11 ⑩: a form a blocker keeps unwired is not captured, though a sibling form wrote the shared entry; the finding names the setting; the sibling stays captured', () => {
+for (const platform of ['darwin', 'win32']) test(`4.11 ⑩ · ${platform}: a form a blocker keeps unwired is not captured, though a sibling form wrote the shared entry; the finding names the setting; the sibling stays captured`, () => {
   const at = '/Users/u/.zcode/v2/setting.json#httpProxyCaCertPath'
   const entry = { where: '/Users/u/.zcode/cli/config.json#network.httpProxy', trocar: true, opt_in: false, intact: true }
   const cli = form('codex.cli', { entry, procs: [proc(5530)] })
   const blocked = form('codex.desktop', { entry, route: { reason: 'blocker', at, code: 'not-routed' }, procs: [proc(5531)] })
-  const F = pfacts('codex', cli, fwForm(17992), { platform: 'darwin' }) // the cross-platform not-routed row reads the plan's reason (the Windows table's own row does not yet)
+  const F = pfacts('codex', cli, fwForm(17992), { platform })
   F.harnesses.codex.forms.push(blocked); F.harnesses.codex.procs.push(...blocked.procs); F.forwarder.forms[blocked.id] = fwForm(17992)
   const t = buildTopology(F).codex
   const by = (id) => t.branches.find((b) => b.form === id)
   assert.deepEqual([by('codex.desktop').captured, by('codex.desktop').reason], [false, 'not-routed'], JSON.stringify(t.branches.map((b) => [b.form, b.captured, b.reason])))
   assert.equal(by('codex.cli').captured, true)
   const f = findingsOf(F).find((x) => x.code === 'not-routed')
-  assert.ok(f && f.why.includes(at), JSON.stringify(f))
+  assert.ok(f && f.why.includes(at) && f.commands.some((c) => c.run.includes(at)), JSON.stringify(f))
 })
