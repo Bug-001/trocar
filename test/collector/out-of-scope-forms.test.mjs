@@ -21,12 +21,12 @@ const harnesses = (await loadHarnesses()).filter((d) => d.proxyMode)
 const USER_PEM = '-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n'
 
 /** One world per form: only that form placed, and the user's own certificate file set where the harness reads one (a user file install must not touch). */
-async function world(os, d, f) {
+async function world(os, d, f, list = harnesses) {
   const names = (d.proxyMode.userCertFiles || []).filter((u) => u.env).map((u) => u.env)
   const w = await contractWorld({ os, env: (home) => Object.fromEntries(names.map((n) => [n, path.join(home, 'certs', 'mine.pem')])) })
-  w.harnesses = harnesses
+  w.harnesses = list
   const own = w.install
-  w.install = (o) => own({ ...o, harnesses })
+  w.install = (o) => own({ ...o, harnesses: list })
   if (names.length) { fs.mkdirSync(path.join(w.home, 'certs')); fs.writeFileSync(path.join(w.home, 'certs', 'mine.pem'), USER_PEM) }
   w.place(placesOf(f, w.ctx)[0])
   return w
@@ -147,15 +147,24 @@ describe('CM43: a record from before', { concurrency: 1 }, () => {
 
 // 4.11 P5: where a harness has forms measured on this system, one that is not (verified `not-measured`) gets no entry: writing an agent's config for a form never
 // measured there can break it. Generated: every harness × OS with a measured form and an unmeasured one that can be on the machine alone.
+// generated over the descriptors, not over today's measurements: per harness and system with two measured forms, the first one with a place of its own is
+// marked not measured (the shipped unmeasured forms ride with it), so the rule is driven whatever is measured when this runs
+const NOT_MEASURED = { reason: 'not-measured' }
 const unmeasured = ['darwin', 'win32'].flatMap((os) => harnesses.flatMap((d) => {
-  const here = d.proxyMode.forms.filter((f) => f.os.includes(os) && !outOfScope(f, os))
-  return here.some((f) => f.verified && f.verified[os] === true) ? here.filter((f) => !(f.verified && f.verified[os] === true)).map((f) => ({ os, d, f })) : []
+  const here = d.proxyMode.forms.filter((f) => f.os.includes(os) && !outOfScope(f, os)), ok = (f) => f.verified && f.verified[os] === true
+  if (here.filter(ok).length < 2) return []
+  const place = (f) => JSON.stringify(f.present[0] && f.present[0].perOs ? f.present[0].perOs[os] : f.present[0])
+  const own = here.find((f) => ok(f) && here.filter((y) => place(y) === place(f)).length === 1)
+  const shipped = here.filter((f) => !ok(f)).map((f) => ({ os, d, f, list: harnesses }))
+  if (!own) return shipped
+  const md = { ...d, proxyMode: { ...d.proxyMode, forms: d.proxyMode.forms.map((y) => (y === own ? { ...y, verified: { ...y.verified, [os]: NOT_MEASURED } } : y)) } }
+  return [...shipped, { os, d: md, f: md.proxyMode.forms.find((y) => y.id === own.id), list: harnesses.map((x) => (x === d ? md : x)) }]
 }))
 describe('P5: a form not measured on this system, alone on the machine', { concurrency: 1 }, () => {
   let alone = 0
-  for (const { os, d, f } of unmeasured) {
-    it(`${os} ${f.id}`, async () => {
-      const w = await world(os, d, f)
+  for (const { os, d, f, list } of unmeasured) {
+    it(`${os} ${f.id}${list === harnesses ? '' : ' (marked)'}`, async () => {
+      const w = await world(os, d, f, list)
       const measured = formsHere(d.proxyMode, os, w.ctx).filter((x) => x.verified && x.verified[os] === true)
       if (measured.length) return // it shares its place with a measured form: that one is what is on the machine
       alone++
