@@ -221,7 +221,7 @@ test('3.5 §谁执行它: a head written before lineage, of any tier, is stamped
   } finally { w.kill() }
 })
 
-test('3.5 §谁执行它: the sweep brings a head to the table only when the table knows: `unread` is written over nothing, the table learning `wire` reaches the head, and the next sweep writes nothing', { timeout: 180_000 }, async () => {
+test('3.5 §谁执行它: the sweep brings a head to the table\'s verdict: lineage not computed writes nothing, `wire` learned reaches the head, a call with a hidden body landing first brings a `wire` head down to `unread`, and the next sweep writes nothing', { timeout: 180_000 }, async () => {
   const dsh = (id, t, parent, cwd) => call({ harness: 'dsh', headers: { 'x-deepseek-harness-session-id': id }, t, body: { dsh_session_log: { session: { ...(parent ? { parentSession: parent } : {}), ...(cwd ? { cwd } : {}) } } } })
   const home = homeWith([
     recast(dsh('ds-late', 10), { req_body: null }), // the first call's body is not kept: the table says `unread`
@@ -269,11 +269,15 @@ test('3.5 §谁执行它: the sweep brings a head to the table only when the tab
     assert.deepEqual({ ...readHead(home, 'ds-late'), meta: null }, { ...old, meta: null }, 'nothing else in the head moved')
     assert.deepEqual(rows['ds-keep'], { lineage_source: 'unread' })
     assert.equal(readHead(home, 'ds-keep').meta.project_path, '/work/keep', 'the tier-0 head was rewritten, for its project')
-    assert.deepEqual(lin(readHead(home, 'ds-keep').meta), wire('ds-keep-up', null), 'a known tier-0 head rewritten for its project is not brought down to `unread`')
+    // its first call is no longer the one that declared: "declares none" or the old id would be a guess about a call that is not first
+    assert.deepEqual(lin(readHead(home, 'ds-keep').meta), { lineage_source: 'unread' }, 'a tier-0 head and its row both say `unread`')
     assert.deepEqual(rows['ds-down'], { lineage_source: 'unread' })
-    assert.deepEqual(stat('ds-down'), down, 'a known head past tier 0 is not written over with `unread`')
-    const known = stat('ds-late')
+    assert.notDeepEqual(stat('ds-down'), down, 'the head past tier 0 was written')
+    const dd = readHead(home, 'ds-down')
+    assert.deepEqual(lin(dd.meta), { lineage_source: 'unread' }, 'a head past tier 0 and its row both say `unread`')
+    for (const k of KEYS.slice(1)) assert.ok(!Object.hasOwn(dd.meta, k), `no ${k} left behind`)
+    const known = ['ds-late', 'ds-keep', 'ds-down'].map(stat)
     await again()
-    assert.deepEqual(stat('ds-late'), known, 'the next sweep wrote nothing')
+    assert.deepEqual(['ds-late', 'ds-keep', 'ds-down'].map(stat), known, 'the next sweep wrote nothing')
   } finally { w.kill() }
 })

@@ -43,7 +43,7 @@ import { warmCache, fsTag, heapBudget, heapCeiling, hold, liveHeap, usedHeap, yi
 import { parseTextRef } from '../../raw/refs.mjs';
 import { QueryArgError } from './index.mjs';
 import { columns, dumpColumns, loadColumns, sync, viewOf, pageOf, deltaOf, limitOf, markOf } from '../session-doc.mjs';
-import { lineageFields, titleOf } from '../titles.mjs';
+import { lineageKnown, titleOf, withLineage } from '../titles.mjs';
 import { projectFields } from '../../dissect/project.mjs';
 import { clearReread, endReread, setMtimes, filesAt, filesParts, filesReach, forget, hasHead, hasReread, headDoc, markDone, markReread, packsOf, pendingHead, readHead, seenOf, tailsReach, tier0Doc, writeFiles, writeHead, writeInFlight, memoBytes, CTX_V, PACK_MEMBERS } from '../ctx-files.mjs';
 
@@ -766,10 +766,12 @@ function reachOf(ctx, id, log, members) {
   if (!tailReach.has(k)) tailReach.set(k, tailsReach(home, id, members, fs));
   return tailReach.get(k);
 }
-// What a head says of the title and lineage: titleOf's. `unread` alone changes no head: the head on disk's stands (4.4 §人类标题的来源).
+// What a head says of the title and lineage: titleOf's. A title `unread` changes no head, nor does lineage the table holds no verdict
+// on: the head on disk's stands (4.4 §人类标题的来源, 3.4 §血缘).
 function headTitle(ctx, id, said) {
-  const m = said.title_source === 'unread' && readHead(ctx.home ?? trocarHome(), id, ctx.fs || nodeFs)?.meta;
-  return m ? { title: m.title, title_source: m.title_source, ...projectFields(m.project_path ?? null), ...lineageFields(m) } : said;
+  const home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs, keep = said.title_source === 'unread', known = lineageKnown({ home, fs, id });
+  const m = (keep || !known) && readHead(home, id, fs)?.meta;
+  return m ? withLineage(keep ? { title: m.title, title_source: m.title_source, ...projectFields(m.project_path ?? null) } : said, keep || !known ? m : said) : said;
 }
 
 /** sessionState(ctx, id) → null (no such session) | {id, rows, store, mark, pending, truncated, V, failed, errors, plan}: the

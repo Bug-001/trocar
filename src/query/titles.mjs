@@ -117,6 +117,9 @@ const bodyWhole = (rec) => { const b = bodyOf(rec); return !!b && !reqIncomplete
 const lineageOf = (e) => (e && e.l === 'wire' ? { lineage_source: 'wire', parent_session_id: e.a, fork_of_session_id: e.k } : { lineage_source: (e && e.l) || 'unread' });
 /** lineageFields(meta) → the lineage keys of a document's meta, the same closed shape (a head written before them: `unread`). */
 export const lineageFields = (m) => lineageOf({ l: m.lineage_source, a: m.parent_session_id ?? null, k: m.fork_of_session_id ?? null });
+/** lineageKnown({home, fs, id}) → whether the table holds a verdict on the session's lineage: its entry has an `l`, `unread` included
+ *  (a body not wholly kept, no harness row: that record's verdict). No entry, or no `l`, is not computed, and moves no head. */
+export const lineageKnown = ({ home = trocarHome(), fs = nodeFs, id }) => !!tableOf(home, fs).titles.get(String(id))?.l;
 /** withLineage(meta, said) → `meta` with the lineage `said` says and no other lineage key left behind. */
 export const withLineage = (meta, said) => { const { lineage_source, parent_session_id, fork_of_session_id, ...rest } = meta; return { ...rest, ...lineageFields(said) }; };
 const said = (e) => ({ title: e.t, title_source: e.t != null ? 'wire' : null, ...projectFields(e.p ?? null), ...lineageOf(e) });
