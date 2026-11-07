@@ -49,9 +49,11 @@ const CUSTODY_ADVICE = Object.freeze({
 })
 /** A custody verb that threw, as the refusal install carries in `pending` (its `code` becomes the receipt's `error.code`). */
 // the log-in advice answers the keychain's own failure (the helper's error word 'failed', with its OSStatus) and a session that cannot make a key ('unavailable'); a helper that did not run at all is another matter
+// 'unavailable': the keychain is there but this session cannot use it (an ssh login has no access to the desktop's, even while the user is logged in there; or it is locked)
+const ADVICE_SESSION = 'Run trocar install from a Terminal in your desktop session: an ssh login cannot use the login keychain, even while you are logged in at the desktop'
 const ADVICE_HELPER = 'trocar\'s own signing helper could not be run, so this copy of trocar is incomplete: install trocar again, then run trocar install'
 const custodyFailed = (os, verb, e) => ({ item: 'root-key', state: 'failed', code: CUSTODY_FAILED,
-  reason: `the key that signs certificates could not be ${verb === 'create' ? 'made' : 'read'} (${errText(e)}). ${os === 'darwin' && !(e && (e.code === 'failed' || e.code === 'unavailable')) ? ADVICE_HELPER : CUSTODY_ADVICE[os] || CUSTODY_ADVICE.win32}` })
+  reason: `the key that signs certificates could not be ${verb === 'create' ? 'made' : 'read'} (${errText(e)}). ${os !== 'darwin' ? CUSTODY_ADVICE[os] || CUSTODY_ADVICE.win32 : e && e.code === 'unavailable' ? ADVICE_SESSION : e && e.code === 'failed' ? CUSTODY_ADVICE.darwin : ADVICE_HELPER}` })
 /** Asked before install prints its plan, takes its lock or writes anything: does the custody answer at all? → `{}` or `{ refusal }` (the pending item):
  *  a custody that cannot be used leaves the HOME as it was. Only a gate: runInstall asks exists() again under the lock, where another install may have made the key since. */
 export async function custodyPreflight({ os, custody }) {
