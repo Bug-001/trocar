@@ -43,6 +43,7 @@ function fitShares(saw: HTMLElement) {
   const r = box.getBoundingClientRect(), fits = (e: HTMLElement) => { const q = e.getBoundingClientRect(); return q.top >= r.top - 0.5 && q.bottom <= r.bottom + 0.5 }
   if (list.every(fits)) return
   more.hidden = false
+  more.textContent = W.moreShares(list.length) // measured with its widest text: an empty span fits anywhere
   let k = list.length
   while (k > 0 && !(fits(more) && list.slice(0, k).every(fits))) list[--k].hidden = true
   more.dataset.n = String(list.length - k)
