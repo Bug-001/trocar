@@ -64,7 +64,8 @@ async function captureOnline(w, m, notes = []) {
   try {
     if (!w.socketPath) throw Object.assign(new Error('no endpoint'), { code: 'ENOENT' })
     const r = await w.request({ socketPath: w.socketPath, method: 'GET', path: '/holders', timeoutMs: 2000 })
-    if (r && Array.isArray(r.holders)) holders = r.holders; else unknown = 'the daemon does not know its holders yet'
+    // a holder's pid and name reach a printed command: an integer pid of a harness this copy knows, nothing else
+    if (r && Array.isArray(r.holders)) holders = r.holders.filter((h) => h && Number.isInteger(h.pid) && h.pid > 0 && harnessIdsOf(m).includes(h.harness)); else unknown = 'the daemon does not know its holders yet'
     // the daemon's answer is its last poll's (every 10 s, HOLDER_POLL_MS): a holder that has quit since is no holder. The table is read afresh
     // (src/off/proc.mjs); a life still in it — the same pid with a start within what two readers of one process's start differ by, or the same pid
     // when either start is not known (D50: one holder too many, never one too few) — still holds (4.11 §1 uninstall)
@@ -175,11 +176,13 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
       return { receipt, exit: ok === null ? EXIT.usage : EXIT.incomplete }
     }
   }
-  const refuse = (why) => {
+  const refuse = (why, who = {}) => {
     // 附录 C.1: the refusal's code lives in `error` and nowhere else; `message` is the sentence the text form prints
     receipt.ok = false; receipt.error = { code: 'collectors-online', message: why }; receipt.purge_data = false; receipt.kept = keptOf(home, fs) // nothing changed: --purge-data deleted nothing either
     // the doctor's own steps for the code (1.6 附录 B), each command on a line of its own (§1.1⑥)
-    receipt.problems.push([why, 'Run, in order:', ...findingFor('collectors-online', { platform: w.platform }).commands.map((c) => `${COMMAND_INDENT}${c.run}`)].join('\n'))
+    // a step to do in an application is prose at the margin; only a command to copy sits in the command column (§1.1⑥)
+    const steps = findingFor('collectors-online', { platform: w.platform, ...who }).commands
+    receipt.problems.push([why, steps.some((c) => c.shell === 'gui') ? 'In order:' : 'Run, in order:', ...steps.map((c) => (c.shell === 'gui' ? c.run : `${COMMAND_INDENT}${c.run}`))].join('\n'))
     put({ event: 'failure', code: 'collectors-online', reason: why })
     put({ kind: 'result', outcome: 'failed', reason: `uninstall refused: ${why}` })
     return { receipt, exit: EXIT.incomplete }
@@ -211,7 +214,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     const online = isModelOs(w.platform) && m && !m.unsupported ? await captureOnline(w, m, receipt.notes) : null
     if (online) {
       const why = [online.on.length ? `capture is still on for ${online.on.join(', ')}` : null, online.holders.length ? `these processes still have trocar in their environment: ${online.holders.map((x) => `${x.harness} (pid ${x.pid})`).join(', ')}${online.stale ? ` (trocar's last check, which may be out of date: the process table could not be read just now: ${online.stale})` : ''}` : null, online.unknown ? `whether any process still has trocar in its environment is unknown (${online.unknown})` : null].filter(Boolean).join('; ') + '. Nothing was changed' // the next step is the doctor's line below, said once (1.6 §1.1③)
-      return refuse(why)
+      return refuse(why, { ...(online.on.length ? { online: online.on.join(', ') } : {}), holders: online.holders })
     }
     // 1 · the desired state
     const again = tryOff()
