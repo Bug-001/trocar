@@ -38,7 +38,7 @@ export async function gatherNetFacts({ platform = process.platform, home, env = 
   }
   let part = { routing: 'unknown', unknowns: [] }
   if (archFacts) {
-    try { part = { ...part, ...(await archFacts({ status, harnesses, settings, env, home, adopted, deps })) } } catch (e) {
+    try { part = { ...part, ...(await archFacts({ status, harnesses, settings, env, home, adopted, fs, deps })) } } catch (e) {
       rethrowSandbox(e)
       part = { routing: 'unknown', unknowns: [{ fact: 'arch', reason: 'denied', detail: `the platform's network facts could not be read (${errText(e)})` }] }
     }

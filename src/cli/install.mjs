@@ -14,7 +14,7 @@ import { isInteractive, confirm } from '../off/io.mjs'
 import { fit, tilde, planItems, formWords, carrierWords, planWords, commandLine, UNDO_WORDS, asDir } from './receipt.mjs'
 import { pairs, wrap } from './text.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
-import { EVENT } from '../collector/core/codes.mjs'
+import { EVENT, CODE } from '../collector/core/codes.mjs'
 import { codeId, packageRoot, channelOf, setupHelperCommand } from '../version.mjs'
 import { CUT, daemonCode, replaceDaemon } from './replace-daemon.mjs'
 import { printJson } from './json.mjs'
@@ -110,7 +110,7 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
     try { return await fn() } finally { lock.release() }
   }
   {
-    if (!model) return await linuxInstall({ io, env, home, platform, deps, flags, json, say, fs, locked })
+    if (!model) return await linuxInstall({ io, env, home, platform, deps, flags, json, say, fs, locked, only })
     const { backendsFor, sourcesCtx, ownsBy } = await import('../collector/arch/model-backends.mjs')
     const { runInstall, planInstall } = await import('../collector/model-install.mjs')
     const { renderHook } = await import('../collector/harness/templates/index.mjs')
@@ -220,16 +220,17 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
 // Linux (override #15; 1.6 §3.2 steps): the CA (ca/ca.key, 0600, made here and nowhere else), trocar's own files (trocar-ca.pem, the combined bundles, the
 // (d)-level plugins) and the (c)-level config keys — every item phase 'install', as `on` wrote them before — plus trocar-off and the liveness record.
 // No unit, no state, no daemon: those are `on`'s. The plan printed is the one `on` used to print (formatPlan) with D55's cost line.
-async function linuxInstall({ io, env, home, platform, deps, flags, json, say, fs, locked }) {
+async function linuxInstall({ io, env, home, platform, deps, flags, json, say, fs, locked, only }) {
   const { readAgentList } = await import('../off/identity.mjs')
   const { writeStandalone, standaloneDue } = await import('../off/standalone.mjs')
   const { formatPlan, changeLines } = await import('./receipt.mjs')
   const { OFF_VERSION } = await import('../off/manifest.mjs')
   const parts = deps.parts || await (await import('../collector/daemon.mjs')).loadParts({ env, agentList: readAgentList({ home, fs }).entries })
   const inst = await import('../collector/install.mjs')
-  // D61: the login entry is install's — written here and enabled with `--now`, so the daemon is up from install until uninstall
-  const unit = deps.unit !== undefined ? deps.unit : (!parts.arch || !parts.arch.unit || !parts.arch.unit.userUnit ? null : parts.arch.unit.userUnit({ home, node: process.execPath, script: deps.script || process.argv[1], run: deps.exec || null, env, ...(deps.spawn ? { spawn: deps.spawn } : {}) }))
-  const args = { home, env, osName: parts.os, harnesses: parts.harnesses, scan: parts.scan, match: parts.match, arch: parts.arch || null, roots: deps.roots || null, unit, fs, ...(deps.freePort ? { freePort: deps.freePort } : {}), ...(deps.now ? { now: deps.now } : {}), ...(deps.request ? { request: deps.request } : {}), ...(deps.sleep ? { sleep: deps.sleep } : {}) } // request / sleep: installCollector's ensureDaemonUp seam (D61), so a test's daemon is the one asked
+  // D61: the login entry is install's — written here and enabled with `--now` (not Set up's: `only` has none), so the daemon is up from install until uninstall
+  const unit = only ? null : deps.unit !== undefined ? deps.unit : (!parts.arch || !parts.arch.unit || !parts.arch.unit.userUnit ? null : parts.arch.unit.userUnit({ home, node: process.execPath, script: deps.script || process.argv[1], run: deps.exec || null, env, ...(deps.spawn ? { spawn: deps.spawn } : {}) }))
+  const args = { home, env, osName: parts.os, harnesses: parts.harnesses, scan: parts.scan, match: parts.match, arch: parts.arch || null, roots: deps.roots || null, unit, certs: true, fs, ...(deps.freePort ? { freePort: deps.freePort } : {}), ...(deps.now ? { now: deps.now } : {}), ...(deps.request ? { request: deps.request } : {}), ...(deps.sleep ? { sleep: deps.sleep } : {}) } // request / sleep: installCollector's ensureDaemonUp seam (D61), so a test's daemon is the one asked
+  if (only) return await linuxSetup({ io, home, platform, flags, json, say, fs, locked, inst, args: { ...args, ids: [only], unit: null }, only })
   let plan
   const ingressPath = path.join(home, '.trocar', 'collector', 'ingress.json')
   try { plan = await inst.planOn(args) } catch (e) { io.err(`trocar install: the plan could not be made (${String((e && e.message) || e)}). Nothing was changed`); return EXIT.incomplete } // a plan that cannot be made (an OS bundle that cannot be read, D38) is said, never a stack
@@ -289,6 +290,37 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
     ...(problems.length ? [] : sudoHelper ? ['Next: install the capability helper with this line, then run trocar on:', commandLine(sudoHelper)] : ['Next: trocar on']), // on refuses without the login entry (1.6 §3.3) or the helper (§3.8): neither is a next step until it is there
     ...breakGlass(home, platform)], { home }).join('\n'))
   return board || problems.length ? EXIT.incomplete : EXIT.ok
+}
+
+// Set up (only) in driver mode (4.6 「这个 harness 装好了没有」, D65④): install's certificate plan for that one harness — its carrier rows and
+// nothing of install's own (no CA, login entry, trocar-off, PATH item, daemon replacement or helper row), `install.code` kept, no sudo. A HOME
+// without an install record is install's own run (cert-not-installed); every refusal is the one --json document.
+async function linuxSetup({ io, home, platform, flags, json, say, fs, locked, inst, args, only }) {
+  const [{ installComplete }, { changeLines }] = await Promise.all([import('../off/manifest.mjs'), import('./receipt.mjs')])
+  const refuse = (code, message) => { if (json) printJson(io, { ...newReceipt('install'), ok: false, error: { code, message }, notes: [message] }); else io.err(`trocar install: ${message}`); return EXIT.incomplete }
+  let m
+  try { m = readManifest(path.join(home, '.trocar', 'collector'), fs) } catch { /* unreadable: planOn says so below */ }
+  if (m !== undefined && !installComplete(m)) return refuse('cert-not-installed', 'Certificates are not installed on this machine. Run: trocar install')
+  let plan
+  try { plan = await inst.planOn(args) } catch (e) { return refuse('failed', `the plan could not be made (${String((e && e.message) || e)}). Nothing was changed`) }
+  const planned = planItems(plan, { home, platform }).filter((r) => r.what === only) // the harness's rows only: trocar's own records are not Set up's (1.6 §3.2, V85)
+  const left = plan.steps.filter((s) => s.harness === only && s.action === 'skip-user-changed') // a carrier install cannot place again: setup stays needed, said (D38)
+  if (left.length) return refuse(CODE.setupNeeded, `${only} cannot be set up: ${left.map((s) => s.why).join('; ')}. Nothing was changed`)
+  say(fit([planned.length ? `trocar install will set up ${only}:` : `${only} has every certificate carrier it needs: there is nothing to set up.`, ...pairs(planned.map((p) => [p.what, p.detail]), { home })], { home }).join('\n'))
+  if (flags.has('--dry-run')) { if (json) printJson(io, { ...newReceipt('install'), dry_run: true, planned, ...(planned.length ? {} : { notes: [`${only}: nothing to set up`] }) }); return EXIT.ok }
+  if (plan.writing && !flags.has('--yes')) {
+    if (json || !isInteractive(io)) return needsYes(io, json, planned)
+    if (!(await confirm({ ...io, prompt: io.stdout }, 'Proceed?'))) { io.err('You said no: nothing was changed'); return EXIT.incomplete }
+  }
+  let r
+  try { r = await locked(() => inst.installCollector({ ...args, onPlan: () => {}, keepCode: true })) } catch (e) { return refuse('failed', String((e && e.message) || e)) }
+  if (!r) return EXIT.incomplete
+  const receipt = { ...newReceipt('install'), ok: true, undo: UNDO_LINE.install, harnesses: r.manifest.install ? r.manifest.install.harnesses.filter((h) => h === only) : [],
+    changed: r.already ? [] : plan.changed.map((c) => ({ ...c, backup: (r.manifest.entries.find((e) => e.path === c.path) || {}).backup ?? null })), created: r.already ? [] : plan.created,
+    standalone: standalonePath(home), planned, commands: ['trocar on', 'trocar off', 'trocar status', 'trocar uninstall'], notes: r.plan ? r.plan.notes : [] }
+  if (json) printJson(io, receipt)
+  else io.out(fit([r.already ? `${only} was set up already. Nothing was changed.` : `${only} is set up.`, ...(r.already ? [] : changeLines(receipt, { home })), ...receipt.notes.map((n) => `Note: ${n}`), 'Next: trocar on'], { home }).join('\n'))
+  return EXIT.ok
 }
 
 /** 1.6 §3.2 / §1.1⑥: the undo that needs no source tree, as on prints it — the command on a line of its own, whole (standaloneCommand: the .cmd beside it on Windows). */

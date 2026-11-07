@@ -137,14 +137,14 @@ function writtenBy(x, text) {
  *    resume              an entry that is only an intent (a crash between the record and the end of the write): the file is still as it was
  *                        before, or already written (`adopt`: only `post_sha256` is missing)
  *    skip-user-changed   it has, but the key or block is gone or holds another value, or the intent cannot be told from a user's edit: the user
- *                        changed it after trocar did. Reported, left (`trocar off`, then `trocar on`, writes it again)
+ *                        changed it after trocar did. Reported, left (`trocar off`, then `trocar on`, writes it again; an install item: install places it again, `replaceable`)
  *  `entry` is the manifest's. A path that cannot be resolved (a link now dangling) is skip-user-changed with the reason. A file whose bytes are not
  *  trocar's own and prove no encoding throws entry-refused with its `why` (as previewTextEntry does for a new entry), before anything is written. */
 export function judgeEntry({ manifest, planned, fs = nodeFs }) {
   const x = entryOf(manifest, planned, fs)
   if (!x) return { action: 'write', entry: null }
   let cur
-  try { cur = readOrNull(fs, editTarget(x.path, fs)) } catch (e) { return { action: 'skip-user-changed', entry: x, why: String((e && e.message) || e) } }
+  try { cur = readOrNull(fs, editTarget(x.path, fs)) } catch (e) { return { action: 'skip-user-changed', entry: x, why: String((e && e.message) || e), ...(e && e.code ? { unreadable: true } : {}) } } // an errno (EACCES, EIO …): not read; editTarget's refusals (a link to nothing) carry none
   if (x.post_sha256 != null && sha256(cur) === x.post_sha256) return { action: 'skip-intact', entry: x }
   // past the byte checks, what is in the file is read as text: bytes that prove no encoding are refused with their why (4.6:216, entry-refused),
   // never judged as "the user changed it" — the block may well still be there, in bytes trocar cannot read back
@@ -155,6 +155,25 @@ export function judgeEntry({ manifest, planned, fs = nodeFs }) {
   if (x.existed_before ? sha256(cur) === x.pre_sha256 : cur == null) return { action: 'resume', entry: x }
   if (writtenBy(x, text)) return { action: 'resume', entry: x, adopt: true }
   return { action: 'skip-user-changed', entry: x, why: `${x.path} changed after an earlier run recorded its intent to change it, and is not what that run would have written` }
+}
+/** install's carrier item that is gone or no longer holds trocar's text (a finished write, phase install): install places it again (4.11 P4b, 4.6
+ *  「这个 harness 装好了没有」), it never stays `needed`. A half-done intent is not: its undo is still the only record of that write. */
+export const replaceable = (j) => j.action === 'skip-user-changed' && !j.unreadable && !!j.entry && j.entry.phase === 'install' && j.entry.post_sha256 != null
+/** The record of a replaceable entry leaves the manifest before it is written again (a fresh entry: its `prior_value` and backup are of the file as it
+ *  is now, so undo puts back what the harness or the user left there); the old entry's backup, if any, is kept and named (1.6 R2). */
+export function retireEntry({ dir, manifest, entry, now = new Date(), fs = nodeFs }) {
+  manifest.entries.splice(manifest.entries.indexOf(entry), 1)
+  if (entry.backup && fs.existsSync(entry.backup)) manifest.kept_backups = [...(manifest.kept_backups || []), { path: entry.path, backup: entry.backup, reason: 'trocar placed its certificate item there again after it was changed', at: now.toISOString() }]
+  saveManifest(dir, manifest, fs)
+  return entry
+}
+/** A file trocar created (and the directories it made for it) that is gone and placed again: the new entry still owns those directories, so
+ *  uninstall takes them away as it would have (invariant 5: nothing left behind). Only when the new write created the file too. */
+export function inheritDirs({ dir, manifest, entry, from, fs = nodeFs }) {
+  if (entry.existed_before || from.existed_before !== false || !(from.created_dirs || []).length) return
+  entry.created_dirs = [...new Set([...from.created_dirs, ...entry.created_dirs])]
+  entry.undo_by_hand = undoByHand(entry)
+  saveManifest(dir, manifest, fs)
 }
 const refuseChanged = (j) => new Error(`${j.entry.path}: ${j.why}; trocar leaves it as it is — run "trocar off", then "trocar on", to write the entry again`)
 const makeDirs = (entry, fs) => { for (const d of entry.created_dirs) if (!fs.existsSync(d)) fs.mkdirSync(d, { mode: 0o700 }) }
