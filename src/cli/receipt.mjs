@@ -125,7 +125,7 @@ export function planItems(p, { home = null, platform = 'linux' } = {}) {
   for (const f of p.files || []) add(f.harness, f.path, `${t(f.path)}: ${f.sources.length ? `the certificates of ${f.sources.map((x) => String(x).split(/[\\/]/).pop()).join(', ')} plus trocar's` : "trocar's certificate"}`)
   for (const o of p.owned || []) add(o.harness, o.path, `${t(o.path)}: trocar's ${o.role}`)
   for (const e of p.entries || []) add(e.harness, e.path, `${t(e.path)}${e.real_path ? ` -> ${t(e.real_path)}` : ''}: ${e.what || e.keys.join('.')}`)
-  if (p.unit) add('autostart', p.unit.path, `${t(p.unit.path)}: starts the collector at login`)
+  if (p.unit) add('autostart', p.unit.path, p.unit.masked ? `${t(p.unit.path)}: your unit is masked (a link to /dev/null); trocar replaces it with its own, which starts the collector at login` : `${t(p.unit.path)}: starts the collector at login`)
   // §1.4「计划写全」: the symlink `enable` makes is a file of the user's too, so it is named as well
   if (p.unit) for (const l of p.unit.links || []) add('autostart', l, `${t(l)}: the link that enables it`)
   for (const l of p.logs || []) add('log', l, `${t(l)}: the collector's own output`)
@@ -173,7 +173,7 @@ export function changeLines(r, { past = true, home = null } = {}) {
   const lines = []
   if (r.changed.length) {
     lines.push(past ? 'Changed:' : 'Will change:')
-    lines.push(...pairs(r.changed.map((x) => [t(x.path), `${x.change}${x.backup ? ` (backup ${t(x.backup)})` : past ? ' (trocar made this file; there was nothing to back up)' : ' (a copy is kept first)'}`]), { home }))
+    lines.push(...pairs(r.changed.map((x) => [t(x.path), `${x.change}${x.backup ? ` (backup ${t(x.backup)})` : x.why_no_backup ? ` (no backup: ${x.why_no_backup})` : past ? ' (trocar made this file; there was nothing to back up)' : ' (a copy is kept first)'}`]), { home }))
   } else lines.push(past ? 'No file of yours was changed.' : 'No file of yours will be changed.')
   if (r.created.length) lines.push(...pathList(past ? "trocar's own files:" : 'trocar will make:', r.created, home))
   return lines
