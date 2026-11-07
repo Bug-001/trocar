@@ -117,7 +117,10 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
     const b = deps.backends || await backendsFor({ os: platform, home, run: deps.exec || null, env, fs })
     // 4.11 §3 ㉔: a trocar root the record does not list refuses the plan, the dry run and the run alike, before anything is written
     const refuse = (x) => { if (json) printJson(io, { ...newReceipt('install'), ok: false, error: { code: x.code, message: x.reason }, notes: [x.reason] }); else io.err(fit([`trocar install: ${x.reason}`], { home }).join('\n')); return EXIT.incomplete }
-    const stray = await strayRootRefusal({ os: platform, m: (await import('../collector/core/trust/journal.mjs')).readManifest(path.join(home, '.trocar', 'collector'), fs), rootStore: b.rootStore })
+    // a record that cannot be read is not this check's (as refuseOldManifest): the run's own read of it says so
+    let rec = null
+    try { rec = { m: (await import('../collector/core/trust/journal.mjs')).readManifest(path.join(home, '.trocar', 'collector'), fs) } } catch { /* unreadable: no stray check */ }
+    const stray = rec && await strayRootRefusal({ os: platform, m: rec.m, rootStore: b.rootStore })
     if (stray) return refuse(stray)
     const harnesses = deps.harnesses || await (await import('../collector/harness/index.mjs')).loadHarnesses()
     const ctx = sourcesCtx({ os: platform, home, env, dirs: b.dirs, policy: b.policy, which: deps.which || null, fs })
