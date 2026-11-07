@@ -167,19 +167,20 @@ test('engine: a lookup miss and a listener error after listen are failure record
 // "no original destination for undefined:undefined" with peer {}): nothing to look up and nothing forwarded. The record says the peer is not known
 // (peer null, D38) and why; the redirector is never asked about an address that is not one.
 test('engine: a connection whose client is gone before its address can be read is a failure record with peer null and its reason; no lookup (D38)', T, async () => {
-  const failures = [], asked = []
+  const failures = [], asked = [], errors = []
   const made = []; const orig = net.createServer
   net.createServer = (...a) => { const s = orig(...a); made.push(s); return s }
   let engine
   try {
     const redirector = { ...createStaticRedirector(), lookup: async (p) => { asked.push(p); return null } }
-    engine = createEngine({ redirector, issuer: createLeafIssuer(loadCa(createCa())), store: { envelope() {}, flow() {} }, onFailure: (f) => failures.push(f), onError: () => {} })
+    engine = createEngine({ redirector, issuer: createLeafIssuer(loadCa(createCa())), store: { envelope() {}, flow() {} }, onFailure: (f) => failures.push(f), onError: (e) => errors.push(e.code) })
     await engine.listen({})
     const gone = new net.Socket() // never connected: no remote address, as an accepted socket whose client already closed
     made[0].emit('connection', gone)
     await within((async () => { while (!failures.length) await new Promise((r) => setTimeout(r, 10)) })(), 2000, 'the failure record')
     assert.deepEqual([failures[0].where, failures[0].code, failures[0].peer], ['engine', 'lookup-miss', null])
-    assert.doesNotMatch(failures[0].reason, /undefined/)
+    assert.deepEqual(errors, ['lookup-miss'])
+    assert.equal(engine.stats().lookupMisses, 1)
     assert.deepEqual(asked, [], 'no lookup for an address that is not one')
     assert.ok(gone.destroyed)
   } finally { net.createServer = orig; if (engine) await closeWithin(engine) }

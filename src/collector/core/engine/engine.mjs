@@ -91,7 +91,7 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
       onError(Object.assign(new Error(reason), { code: 'lookup-miss' }))
     }
     // a client already gone leaves no address to ask about: not looked up, peer null
-    if (!socket.remoteAddress || !Number.isInteger(socket.remotePort)) return miss(null, 'a steered connection closed by its client before trocar could read its address; nothing was forwarded')
+    if (!socket.remoteAddress || !Number.isInteger(socket.remotePort)) return miss(null, 'a connection closed by its client before trocar could read its address; nothing was forwarded')
     const peer = { address: socket.remoteAddress, port: socket.remotePort }
     let meta = null
     try { meta = await redirector.lookup(peer) }
