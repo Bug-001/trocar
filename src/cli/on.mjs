@@ -113,6 +113,7 @@ export async function runOn({ io, env = process.env, home = os.homedir(), platfo
     // install's bundles carry them — not only the daemon's next rebuild — and a read that fails stops the on before one file of the agents' is touched (D38); `deps.roots` overrides them.
     let { receipt, exit, plan } = await install.turnOn({
       home, env, ids: named.ids, osName: parts.os, harnesses: parts.harnesses, scan: parts.scan, match: parts.match, arch: parts.arch || null,
+      userFilesFor: (await import('../collector/arch/model-backends.mjs')).userFilesFor, // rule U's finder, handed in (collector layering rule 5)
       roots: deps.roots || null, unit, freePort: deps.freePort, dryRun: flags.has('--dry-run'), confirm,
       networkEdited: async (targets) => editedFields({ adoption, routing, targets, home, env, fs: deps.fs }),
       onPlan: (p) => say(planText(p)),

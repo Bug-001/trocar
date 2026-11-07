@@ -255,7 +255,8 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
   const inst = await import('../collector/install.mjs')
   // D61: the login entry is install's — written here and enabled with `--now`, so the daemon is up from install until uninstall
   const unit = deps.unit !== undefined ? deps.unit : (!parts.arch || !parts.arch.unit || !parts.arch.unit.userUnit ? null : parts.arch.unit.userUnit({ home, node: process.execPath, script: deps.script || process.argv[1], run: deps.exec || null, env, ...(deps.spawn ? { spawn: deps.spawn } : {}) }))
-  const args = { home, env, osName: parts.os, harnesses: parts.harnesses, scan: parts.scan, match: parts.match, arch: parts.arch || null, roots: deps.roots || null, unit, fs, ...(deps.freePort ? { freePort: deps.freePort } : {}), ...(deps.now ? { now: deps.now } : {}), ...(deps.request ? { request: deps.request } : {}), ...(deps.sleep ? { sleep: deps.sleep } : {}) } // request / sleep: installCollector's ensureDaemonUp seam (D61), so a test's daemon is the one asked
+  const { userFilesFor } = await import('../collector/arch/model-backends.mjs') // rule U's finder: the CLI hands it in (collector layering rule 5)
+  const args = { home, env, osName: parts.os, harnesses: parts.harnesses, scan: parts.scan, match: parts.match, arch: parts.arch || null, roots: deps.roots || null, unit, userFilesFor, fs, ...(deps.freePort ? { freePort: deps.freePort } : {}), ...(deps.now ? { now: deps.now } : {}), ...(deps.request ? { request: deps.request } : {}), ...(deps.sleep ? { sleep: deps.sleep } : {}) } // request / sleep: installCollector's ensureDaemonUp seam (D61), so a test's daemon is the one asked
   let plan
   const ingressPath = path.join(home, '.trocar', 'collector', 'ingress.json')
   try { plan = await inst.planOn(args) } catch (e) {
