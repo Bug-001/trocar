@@ -2,7 +2,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { createSynthKeys, createSynthAssigner, SYNTH_GAP_MS } from '../../src/dissect/synth-key.mjs'
+import { createSynthKeys, createSynthAssigner, synthFactsOf, SYNTH_GAP_MS } from '../../src/dissect/synth-key.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
 import { rawHome, writeSegment } from '../query/raw-home.mjs'
 import fs from 'node:fs'
@@ -553,6 +553,41 @@ test('chains: a call with no readable history joins the group\'s latest chain an
   const b = assign(f(4000, ['b1'])).key
   assert.equal(assign(f(5000, [])).key, b)
   assert.equal(assign(f(6000, ['b1', 'b2'])).key, b, 'the tail stands')
+})
+
+test('chainOf: the facts equal 3.4\'s encoding', () => {
+  // 3.4: an item = its JSON with every `cache_control` key dropped; `chain` = the cumulative hashes (`c + "\n" + item`) at the last 4
+  // positions and the turn boundaries, at most 12; `items` = the own hashes of the last 12 items that are not system / developer
+  const h16 = (s) => createHash('sha256').update(s, 'utf8').digest('hex').slice(0, 16)
+  const enc = (it) => JSON.stringify(it, (k, v) => (k === 'cache_control' ? undefined : v)) ?? 'null'
+  const model = (it) => !!it && (it.role === 'assistant' || it.type === 'reasoning' || /_call$/.test(it.type ?? ''))
+  const reference = (items) => {
+    let c = null
+    const cum = items.map((it) => (c = h16(c == null ? enc(it) : c + '\n' + enc(it))))
+    return { chain: cum.filter((_, i) => i >= items.length - 4 || (model(items[i + 1]) && !model(items[i]))).slice(-12),
+      items: items.filter((it) => it?.role !== 'system' && it?.role !== 'developer').map((it) => h16(enc(it)).slice(0, 8)).slice(-12) }
+  }
+  const cc = { type: 'ephemeral' }
+  const shapes = [
+    (i) => ({ role: 'user', content: `ask ${i}`, cache_control: cc }), // depth 0
+    (i) => ({ role: 'user', content: [{ type: 'text', text: `ask ${i}`, cache_control: cc }] }), // depth 2, in an array
+    (i) => ({ role: 'assistant', content: [[{ cache_control: cc, x: i }], undefined, 'é'] }), // nested arrays, undefined in one
+    (i) => ({ role: 'tool', content: `the "cache_control": key ${i}`, note: 'cache_control' }), // the name as text and as a value
+    (i) => ({ role: 'assistant', content: `中文 ${i} 🙂 \u2028` }),
+    (i) => ({ type: 'reasoning', summary: [] }),
+    (i) => ({ type: 'function_call', name: 'f', arguments: `{"cache_control":${i}}` }),
+    (i) => ({ role: 'user', content: `plain ${i}` }),
+    () => undefined,
+  ]
+  for (const n of [1, 12, 200]) {
+    for (const seed of [0, 1, 2]) {
+      const items = Array.from({ length: n }, (_, i) => i === 0 && n > 1 ? { role: 'system', content: 'sys', cache_control: cc } : shapes[(i * (seed + 2) + seed) % shapes.length](i))
+      const rec = { ...call({ agent: 'hermes', host: 'llm.internal.test', path: '/v1/chat/completions', ms: T0, body: {} }), req_body: { model: 'm', messages: items } }
+      const f = synthFactsOf(rec), want = reference(items)
+      assert.ok(f && f.chain.length > 0, `${n}/${seed}: keyless facts`)
+      assert.deepEqual({ chain: f.chain, items: f.items }, want, `${n} items, seed ${seed}`)
+    }
+  }
 })
 
 test('chains: the same membership in one pass, cut across two segments, and as the live segment grows; the index holds no message text', async () => {
