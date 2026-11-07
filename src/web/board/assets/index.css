@@ -996,7 +996,7 @@ a.ovtr:hover { background: var(--hover); }
   line-height:1.4;max-height:round(down, calc(var(--barh) + 2px), 1lh);}
 .desk.next #saw .ghead{flex:none;max-width:100%;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}
 .desk.next #saw .gshares{overflow:hidden;display:flex;flex-wrap:wrap;justify-content:flex-end;gap:0 6px;color:var(--dimmer);}
-.desk.next #saw .gshare{white-space:nowrap;}
+.desk.next #saw .gshare,.desk.next #saw .gmore{white-space:nowrap;}
 .desk.next #saw .gshare i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:3px;vertical-align:middle;}
 /* the cache trace: a line on three levels, dashed where there is no usage, its own style where the meaning is not certain, a gap where
    the call failed; each column is a transparent hover target on the bars' /N axis */
