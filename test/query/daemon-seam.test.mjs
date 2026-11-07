@@ -22,7 +22,7 @@ import { within } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { apply, canon } from '../helpers/session-apply.mjs'
 import { generate } from '../../scripts/gen-dataset.mjs'
-import { run as runQueryCli } from '../../src/cli/query.mjs'
+import { cli } from './query-cli.mjs'
 import { commandNamed } from '../../src/cli/commands.mjs'
 import { parseArgs } from '../../src/cli/args.mjs'
 import { EXIT } from '../../src/cli/schema.mjs'
@@ -33,17 +33,6 @@ import { controlEndpointFor } from '../../src/off/control-client.mjs'
 import { CONTROL_TOKEN_HEADER } from '../../src/off/token-header.mjs'
 
 const QUERY = commandNamed('query')
-
-/** `trocar query <argv>` as the command line runs it → { out, exit }: the flags are what the real parser makes of argv (a repeated
- *  option reaches the command as the list of its values), one document on stdout, nothing injected. */
-async function cli(argv, { home, env, platform }) {
-  const out = [], err = []
-  const io = { out: (s) => out.push(s), err: (s) => { out.push(s); err.push(s) }, stdout: { isTTY: false }, stderr: {}, stdin: { isTTY: false } }
-  const args = parseArgs(QUERY, argv)
-  assert.equal(args.error, null, `${argv.join(' ')} parses`)
-  const exit = await runQueryCli(argv, { io, json: !!args.flags.json, args, home, env, platform, deps: {} })
-  return { out: out.join('\n'), err: err.join('\n'), exit }
-}
 
 /** The id of the session with the most records in a generated corpus. */
 const biggestSession = (doc) => JSON.parse(doc).sessions.slice().sort((a, b) => b.calls - a.calls)[0].session_id
@@ -133,13 +122,6 @@ test('darwin: a read goes through the real daemon and gives the very bytes the l
       const d = await within((async () => { for (;;) { const r = await cli(argv, { home: w.home, env: w.env, platform: 'darwin' }); if (r.exit || !JSON.parse(r.out).pending) return r } })(), 30_000, `${argv.join(' ')} answered without pending`)
       const l = await local(argv)
       assert.equal(d.exit, 0, d.out)
-      // a session's title comes from the usage sidecar the worker fills after it answered (4.4 §人类标题的来源); the one-shot CLI
-      // never fills one, so the two paths may honestly differ in `title` / `title_source` and in nothing else
-      if (argv[0] === 'sessions') {
-        const bare = (out) => JSON.stringify(JSON.parse(out), (k, v) => (k === 'title' || k === 'title_source' ? undefined : v))
-        assert.equal(bare(d.out), bare(l.out), 'sessions: the same document but for the titles')
-        continue
-      }
       assert.equal(d.out === l.out, true, `the daemon path and the local path print the same bytes for ${argv.join(' ')}:\n  daemon ${d.out.length} B\n  local  ${l.out.length} B`)
     }
 

@@ -556,8 +556,8 @@ export function extractSeed(store) {
  * unit, so a budget spent before it still moves the frontier: 3.5 后台抽取与归约), then until `budgetMs` of `clock` is spent, appending
  * each chunk's definitions and rows; `errors`: the answering request's (where a store note goes). A member that fails to extract gets
  * a row { x: { unparsed: reason } } appended as held (a `t` line the next open cuts off), so the next open tries it again (4.3 §3); so
- * are the rows extracted after it (one that continues it, or is written against it, would otherwise be stored without it), so what
- * a later open reads is the rows of one pass over a prefix. What extraction holds is one record at a time, a chunk's rows until its append, the store's indexes and the
+ * are the rows extracted after it (one that continues it, or is written against it, would otherwise be stored without it), and the definitions of those
+ * rows come after the first `t` line, so what a later open reads is the rows and definitions of one pass over a prefix. What extraction holds is one record at a time, a chunk's rows until its append, the store's indexes and the
  * context's per-lane / per-link ids: not the rows (4.3 §4). frontier: the largest rid such that every member up to it has a row;
  * done: the members up to it (the cursor the next call goes on from); total: the members. A keyless record gets the session's
  * synthesized key (3.4 合成键), as the query does. The work is by the members from the cursor on, never by the members before it.
@@ -580,7 +580,7 @@ export function extractMembers({ store, members, recordsAt, sessionId = null, bu
     // each member's record is read just before it is extracted, so a slice that runs out leaves no read record behind (the next
     // slice would read it again); within one slice the reads share one stretch's caches
     const ctx = contexts.get(store);
-    const defs = [], rows = [], held = [];
+    const defs = [], rows = [], held = [], heldDefs = [];
     for (const k of part) {
       if (spent() && (rows.length || held.length)) { i = k; break; }
       const rid = idOf(k), rec = (recordsAt([members[k]]) || []).find((r) => r && String(r.id) === rid);
@@ -588,11 +588,12 @@ export function extractMembers({ store, members, recordsAt, sessionId = null, bu
       let out = null, why = rec ? null : 'the record did not read back';
       if (rec) try { out = extract(rec, ctx); } catch (e) { why = `extraction failed: ${e && e.message ? e.message : e}`; }
       if (!out) ctx.held = true;
-      if (out) defs.push(...out.defs);
+      if (out) (ctx.held ? heldDefs : defs).push(...out.defs);
       (ctx.held ? held : rows).push(out ? out.row : { rid, pos: rid, x: { unparsed: why, code: rec ? 'record-unparseable' : 'record-unreadable' } });
     }
     store.append({ defs, rows }, { errors });
     if (held.length) store.append({ rows: held }, { held: true, errors });
+    if (heldDefs.length) store.append({ defs: heldDefs }, { errors }); // past the first `t` line: the next open cuts them with it
     ctx.flushed();
   }
   settle();

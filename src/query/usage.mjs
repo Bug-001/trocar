@@ -35,34 +35,40 @@ function usageOf(x) {
   try { return mapUsage(x.format, raw, { vendor: x.wire.vendor }); } catch { return null; }
 }
 
-/** usageFacts({rows, records}) → [{id, lane, model, failed, cache_known, usage, ask?}] — one per call `session` reduces from these
- *  records (`rows`: their index rows), by the same extraction (view/extract.mjs) and reduction (view/reduce.mjs). A session is the
- *  segment index's `session_id`; its store is held in memory for this call only. Items and failed members give no line. */
-export function usageFacts({ rows, records }) {
-  const byId = new Map(records.map((r) => [String(r.id), r]));
+/** foldFacts({rows, read}) → [{id, lane, model, failed, cache_known, usage, ask?}] (`ask`: a main or subagent lane call's lane task) — one per call `session` reduces from
+ *  these rows (index rows), by the same extraction (view/extract.mjs) and reduction (view/reduce.mjs). `read(rows)` → their records, asked for one at a time as the
+ *  fold reaches them, so the fold holds no more than one. A session is the segment index's `session_id`; its store is held in memory for this call only. Items and failed members give no line. */
+export function foldFacts({ rows, read }) {
+  const byId = new Map(rows.map((r) => [String(r.id), r]));
   const out = [];
-  for (const [sid, own] of sessionGroups(rows.filter((r) => byId.has(String(r.id))))) {
+  for (const [sid, own] of sessionGroups(rows)) {
     const store = openProjection({ home: '/', fs: NO_FILE, key: sid, write: false, errors: [] });
     try {
-      extractMembers({ store, members: own, sessionId: sid, recordsAt: (rs) => rs.map((r) => byId.get(String(r.id))).filter(Boolean) });
+      extractMembers({ store, members: own, sessionId: sid, recordsAt: read });
       // a cache-break detail's block text, from these records (the members' own; one that is not among them: BlockUnread, a failed member)
-      const resolve = (ref) => { const rec = byId.get(parseTextRef(ref).recordId); return rec ? blockAt(rec, ref) : null; };
+      const resolve = (ref) => { const row = byId.get(parseTextRef(ref).recordId), rec = row && read([row])[0]; return rec ? blockAt(rec, ref) : null; };
       const doc = reduce(store, own, { resolve }), kinds = new Map(doc.lanes.map((h) => [h.lane, h]));
       for (const row of doc.rows) {
         const x = store.rows.get(row.rid).x, h = kinds.get(row.lane) || {}, failed = !!row.error, u = failed ? null : usageOf(x);
         out.push({ id: row.rid, lane: h.kind, model: (row.rec && row.rec.request && row.rec.request.model) ?? null, failed,
           cache_known: !!(row.wire && row.wire.cacheSemanticsKnown), usage: u ? [u.input_uncached, u.output, u.cache_read, u.cache_write] : null,
-          // the main lane's task rides on its calls: `sessions` takes the earliest one's as the title (4.2 §用量旁注 `ask`)
-          ...(h.kind === 'main' ? { ask: h.task ?? null } : null) });
+          // a main or subagent lane's task rides on its calls: the title table takes the earliest one's (src/query/titles.mjs); no sidecar line holds it
+          ...(h.kind === 'main' || h.kind === 'subagent' ? { ask: h.task ?? null } : null) });
       }
     } finally { store.close(); }
   }
   return out;
 }
 
+/** usageFacts({rows, records}) → foldFacts over records already read; a row whose record is not among them is left out. */
+export function usageFacts({ rows, records }) {
+  const byId = new Map(records.map((r) => [String(r.id), r]));
+  return foldFacts({ rows: rows.filter((r) => byId.has(String(r.id))), read: (rs) => rs.map((r) => byId.get(String(r.id))).filter(Boolean) });
+}
+
 // WARM like the index rows (D63 ①): kept against the segment's files and the sidecar's own, so never stale.
 const read = warmCache({ cost: (v) => (v ? v.facts.size * 160 : 0) });
-/** readUsage({home, segment}) → { lines, facts: Map<lineNo, {lane, model, failed, cache_known, usage, ask?}>, problems } | null
+/** readUsage({home, segment}) → { lines, facts: Map<lineNo, {lane, model, failed, cache_known, usage}>, problems } | null
  *  `lines`: the calls of lines 1..lines are all in `facts` (Infinity: a sealed segment, whole). null: no usable sidecar. */
 export const readUsage = ({ home = trocarHome(), segment, fs = nodeFs } = {}) =>
   read.get(`${fsTag(fs)}\n${home}\n${segment}`, `${segStamp(home, segment, fs)}|${statKey(usageFile(home, segment), fs)}`, () => {
@@ -74,8 +80,7 @@ export const readUsage = ({ home = trocarHome(), segment, fs = nodeFs } = {}) =>
   });
 
 const tick = () => new Promise((r) => setImmediate(r));
-const callLine = ({ line, lane, model, failed, cache_known, usage, ask }) =>
-  `${JSON.stringify({ line, lane, model, failed, cache_known, usage, ...(ask !== undefined ? { ask } : null) })}\n`;
+const callLine = ({ line, lane, model, failed, cache_known, usage }) => `${JSON.stringify({ line, lane, model, failed, cache_known, usage })}\n`;
 const problemLine = (p) => `${JSON.stringify({ p })}\n`;
 const markLine = (m) => `${JSON.stringify({ m, v: USAGE_V })}\n`;
 const lineOf = (id) => Number(String(id).split(':').pop());

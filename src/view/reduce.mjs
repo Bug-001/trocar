@@ -16,7 +16,7 @@ import { callRow, itemsView } from './board.mjs';
 import { compareStep } from './step-order.mjs';
 import { compactionVerdict } from '../identity/session-identity.mjs';
 import { boardDissectorOf } from '../dissect/registry.mjs';
-import { COMP_KEYS, departer, departs, taskOf, HEAD } from './blockmeta.mjs';
+import { askOf, COMP_KEYS, departer, departs, taskOf, HEAD } from './blockmeta.mjs';
 import { posCmp, lru, num52, numTable } from '../query/projection.mjs';
 import { materializeAttrs } from './extract.mjs';
 import { openFoldLog } from '../query/fold-log.mjs';
@@ -254,7 +254,8 @@ export function reduce(store, members, { mark = undefined, resolve = null, error
  * input), what it did to its lane's ledger (analyze.mjs replayLedger), its record's facts. A line is appended only when its bytes
  * differ from the rid's latest (an 8-byte digest per rid). After each add, in order: the lines of calls whose lane key or spawned
  * lane changed, lane header lines that changed (3.5 lane-header closed set), lane-gone lines, item lines (members that are no call),
- * failed lines, and one frontier line `{f: the last rid in write order, n: members folded, pb: the projection's bytes, st: stats}`.
+ * failed lines, and one frontier line `{f: the last rid in write order, n: members folded, pb: the projection's bytes, h: 1 while it
+ * holds `t` rows, st: stats}`.
  *   The heap keeps per member, by its row's slot in the store, its step-order ts and its latest line's digest; per lane its calls'
  * slots in step order, its base and last call (their lists through the bounded list cache), last composition, first prompt, the
  * sums its header and the stats read, and the analyzer's state (its lane ledgers among it); the spawns' 60-character prompt
@@ -536,7 +537,7 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
     if (all) { const keys = new Set(now.map((h) => h.lane)); for (const key of [...heads.keys()]) if (!keys.has(key)) { heads.delete(key); lines.push({ lg: key }); } }
     for (const k of newItems) { const x = store.rows.get(ridAt(k)).x || {}; lines.push({ i: ridAt(k), it: x.item || null, ...(x.unknown ? { u: x.unknown } : null) }); }
     lines.push(...newFailed);
-    if (top != null) lines.push({ f: top, n, pb: store.bytes, st: stats() });
+    if (top != null) lines.push({ f: top, n, pb: store.bytes, ...(store.held ? { h: 1 } : null), st: stats() });
     flush();
     if (lines.length) {
       const offs = log.append(lines, { errors });
@@ -835,11 +836,9 @@ function flatFold(d, { at, B, cacheOf, pushOf, emit, newSub, baseOf, lastOf, int
   return { push: pushOf(take, () => {}), snapshot: () => ({ lanes }) };
 }
 
-// The first human prompt of a list (blockmeta firstHuman, from each user text's `human` fact).
-function firstHumanOf(list, B) {
-  for (const k of list) { const f = B.f(k); if (f && f.human) return f.human; }
-  return null;
-}
+// A list's question (blockmeta askOf, over each user text's `human` fact, read only as far as the rule needs).
+function* humansOf(list, B) { for (const k of list) { const f = B.f(k); if (f && f.human) yield f.human; } }
+function firstHumanOf(list, B) { return askOf(humansOf(list, B)); }
 // The composition: the lane's previous call's, minus its blocks after the shared prefix, plus this call's.
 function compOf(last, list, B) {
   const c = {};

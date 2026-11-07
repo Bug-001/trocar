@@ -6,14 +6,15 @@
 // cost 4.5 s on the 1 GB dataset on Windows and 7.0 s on macOS).
 // Membership is one function for this query and for `session` (src/query/rows.mjs), and the document shape
 // is the board's own (src/view/board.mjs sessionMetaOfFacts), so the list and a replay cannot disagree.
-// The TITLE is the main lane's first prompt (4.4 §人类标题的来源), which lives in a request body the index does not parse (D20):
-// it comes from the usage sidecar (4.2 §用量旁注 `ask`); while a call up to the first main call is not covered yet the title is
-// not known (title_source 'pending'). With `later` (the daemon's query worker), a page's segments without a sidecar are filled
-// after the answer, as `overview` does; the one-shot CLI with no daemon fills nothing, so its answer stays pending (C.5).
+// The TITLE is the main lane's first prompt, or the first subagent lane's task where a session has no main call (4.4 §人类标题的来源), which lives in a request body the index does not parse (D20): it comes
+// from the title table (src/query/titles.mjs), and a session the table does not have is computed on the spot, so the list always knows
+// it (3.5 §访问模式, D78 ①). A title is the whole session's, whatever the window: the window only picks which sessions are listed. With
+// `later` (the daemon's query worker) the table is written after the answer; the one-shot CLI writes nothing. In the worker a page's
+// titles get TITLE_BUDGET_MS from the first read on, so each ask computes at least one, then titleOf throws TitlesPending: a `102`.
 // `stored`: the unwindowed list (only `limit` / `after`) is the answer the worker keeps on disk (3.5 §谁执行它「存下的答案」).
 import { sessionMetaOfFacts } from '../../view/board.mjs';
-import { readUsage, fillUsage } from '../usage.mjs';
-import { asOf, indexRows, isModelCall, sessionGroups, sessionFactsOf } from '../rows.mjs';
+import { TITLE_BUDGET_MS, titleOf, saveTitles } from '../titles.mjs';
+import { asOf, indexRows, sessionGroups, sessionFactsOf } from '../rows.mjs';
 import { listOf, paginate, tsFilter } from './index.mjs';
 import { HARNESS, PAGE, WINDOW } from './about.mjs';
 
@@ -28,7 +29,7 @@ export const about = Object.freeze({
 export const params = Object.freeze(Object.keys(about.params));
 export const stored = (p) => Object.keys(p).every((k) => k === 'limit' || k === 'after');
 
-export async function run({ home, fs, now, params: p, errors, later = null, progress = null }) {
+export async function run({ home, fs, now, params: p, errors, later = null, progress = null, writer = false }) {
   const keep = tsFilter(p, now), harness = listOf(p.harness);
   const index = await indexRows({ home, fs, errors, progress });
   const rows = p.since == null && p.until == null ? index : index.filter((r) => keep(r.ts)); // no window: the list and its session index
@@ -39,29 +40,12 @@ export async function run({ home, fs, now, params: p, errors, later = null, prog
     .filter((f) => !harness || harness.has(f.harness))
     .sort((a, b) => String(b.last_ts).localeCompare(String(a.last_ts)));
   const { items, next, has_more } = paginate(all, p);
-  const notes = new Map(), toFill = new Set(); // segment → its sidecar (or null), read once per answer
-  const note = (segment) => {
-    if (!notes.has(segment)) {
-      const n = readUsage({ home, segment, fs });
-      notes.set(segment, n);
-      if (n) for (const { where, reason } of n.problems) errors.push({ where, reason }); // said by every reader (D38)
-    }
-    return notes.get(segment);
-  };
-  // → {title, title_pending}: a call not yet covered by the sidecar up to the first main-lane call leaves the title not known yet
-  // (4.4 §人类标题的来源: title_source 'pending', never said as "no title", invariant 4)
-  const titleOf = (id) => {
-    const calls = rowsOf.get(id).filter(isModelCall).sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : a.lineNo - b.lineNo));
-    let title = null, found = false, pending = false;
-    for (const r of calls) {
-      const n = note(r.segment), covered = !!n && r.lineNo <= n.lines, f = covered ? n.facts.get(r.lineNo) : null;
-      if (!covered) { toFill.add(r.segment); if (!found) pending = true; }
-      if (!found && !pending && f && f.lane === 'main') { title = f.ask ?? null; found = true; }
-    }
-    return { title, title_pending: pending };
-  };
-  const sessions = items.map((f) => sessionMetaOfFacts({ ...f, ...titleOf(f.session_id) }));
+  const whole = rows === index ? rowsOf : sessionGroups(index);
   // After the answer is written, and only where there is a next query (the worker's `later`): the one-shot CLI never writes one.
-  if (later && toFill.size) later(() => fillUsage({ home, fs, segments: [...toFill] }));
+  // Asked before the titles, so a page that gives way still saves what it computed.
+  if (later) later(() => saveTitles({ home, fs }));
+  let deadline = null;
+  const reading = () => { if (writer === true) deadline ??= performance.now() + TITLE_BUDGET_MS; if (progress) progress(); };
+  const sessions = items.map((f) => sessionMetaOfFacts({ ...f, ...titleOf({ home, fs, id: f.session_id, members: whole.get(f.session_id), errors, progress: reading, deadline }) }));
   return { as_of: asOf(index), sessions, next, has_more };
 }

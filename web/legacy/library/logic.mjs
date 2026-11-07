@@ -8,28 +8,32 @@ export const sessionKey = (s) => `${s.project_slug}::${s.session_id}`
 // first failed read as it came. The pages are one list, so a session is never missing because it sat past page one. A page
 // may be the daemon's stored answer (4.4 §存下的答案): the list is stored when any page is, as of the oldest `stored.at`; pages
 // answered at two moments may overlap at their boundary, so a session is kept once, as first seen (1.8 §数据与刷新).
+export const FIRST_LIST_DEADLINE_MS = 5 * 60_000 // no list held yet: a list built from scratch takes minutes, which is no failure (1.8 §数据与刷新)
+export const LIST_WAIT_MS = 3_000 // a read out this long is one the page says something about (1.8 §载入)
+let listed = false // a whole list came back in this page's life; every screen's read of the list is this one place
 export async function loadSessions(api, { limit = 500 } = {}) {
   const sessions = [], errors = [], seen = new Set()
   let after = null, as_of = null, stored = null
   for (;;) {
-    const r = await api.get('sessions', { limit, after })
+    const r = await api.get('sessions', { limit, after }, { deadlineMs: listed ? undefined : FIRST_LIST_DEADLINE_MS })
     if (!r || !r.ok) return r || { ok: false, error: 'no answer' }
     const d = r.data || {}
     for (const s of d.sessions || []) { const k = sessionKey(s); if (!seen.has(k)) { seen.add(k); sessions.push(s) } }
     errors.push(...(d.errors || [])); as_of = as_of || d.as_of || null
     const at = d.stored && d.stored.at
     if (at && (stored == null || Date.parse(at) < Date.parse(stored))) stored = at
-    if (d.next == null || d.next === after) return { ok: true, data: { sessions, errors, as_of, stored } }
+    if (d.next == null || d.next === after) { listed = true; return { ok: true, data: { sessions, errors, as_of, stored } } }
     after = d.next
   }
 }
 /** freshSessions(api, {alive}) → a `sessions` answer without `stored`: loadSessions, read again INTERVAL.session after every answer that
- *  carries `stored` (the worker's last, older list, 4.4 §存下的答案) while `alive()`. For a screen that draws a conclusion from the
+ *  carries `stored` (the worker's last, older list, 4.4 §存下的答案) while `alive()`, once the page shows. For a screen that draws a conclusion from the
  *  list (the traffic page's coverage note, the overview, #/session/<id>); the Sessions page shows the stored list itself (1.8). */
 export async function freshSessions(api, { alive = () => true } = {}) {
   let r = await loadSessions(api)
   while (r && r.ok && r.data.stored && alive()) {
-    await new Promise((d) => setTimeout(d, INTERVAL.session))
+    do await new Promise((d) => setTimeout(d, INTERVAL.session))
+    while (alive() && typeof document !== 'undefined' && document.hidden) // a hidden page reads nothing (1.7)
     if (!alive()) break
     r = await loadSessions(api)
   }

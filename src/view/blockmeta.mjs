@@ -209,7 +209,31 @@ export function firstHuman(flat) {
   }
   return null;
 }
-/** A lane's first prompt (firstHuman of its first call), kept on the lane under a symbol key: no document carries it. */
+// A wrapper (4.4 `lanes[].task`): a whole span <name …>…</name> at the very start of a text, by shape: any name, closed by the first </name>.
+const OPENS = /^<([A-Za-z][\w:.-]*)(\s[^>]*)?>/;
+function unwrapped(text) {
+  let rest = text, attached = null;
+  for (let m; (m = OPENS.exec(rest));) {
+    const end = rest.indexOf(`</${m[1]}>`, m[0].length);
+    if (end < 0) break; // unclosed within the text kept (TASK_HEAD): not a wrapper
+    if (attached == null && m[2] && m[2].trim()) attached = rest.slice(m[0].length, end).trim() || null;
+    rest = rest.slice(end + m[1].length + 3).trimStart();
+  }
+  return { rest, attached };
+}
+/** askOf(humans) → a lane's question from its first call's human texts (iterable, firstHuman's form): the first with text left past its
+ *  wrappers; all wrapped: the inner text of the first span with attributes, else the first text as it was; none: null. */
+export function askOf(humans) {
+  let attached = null, raw = null;
+  for (const h of humans) {
+    const u = unwrapped(h);
+    if (u.rest) return u.rest;
+    attached ??= u.attached;
+    raw ??= h;
+  }
+  return attached ?? raw;
+}
+/** A lane's first prompt (askOf over its first call), kept on the lane under a symbol key: no document carries it. */
 export const HEAD = Symbol('first prompt');
 // Sub-agents a spawn does not name are told apart by their first prompts (4.4 §看板 v2 需要的补充 `lanes[].task`): a lane's task starts at the
 // line where its prompt departs from the sibling it shares the longest prefix with (an identical prompt is no sibling to depart from).

@@ -11,7 +11,7 @@
 // the kept ledgers, LEDGER_BYTES): an answer reads the lines of the steps it covers and of the steps the replay goes over. The ledger
 // entries an answer owes go in key order into the room its page leaves; the rest are named by `ledger_next`, a cursor `--ledger`
 // goes on from (3.5 `resources` 与 `seen`).
-import { sessionState, markOn, files, version as sessionVersion } from './session.mjs';
+import { sessionState, markOn, files, stands, version as sessionVersion } from './session.mjs';
 import { listOf, laneLedger, ledgerWeight, LEDGER_BYTES } from '../../view/reduce.mjs';
 import { lru } from '../projection.mjs';
 import { inheritedRender } from '../../view/render-kind.mjs';
@@ -19,7 +19,7 @@ import { PAGE_BYTES, laneOf, placeIn } from '../session-doc.mjs';
 import { compareStep } from '../../view/step-order.mjs';
 import { QueryArgError } from './index.mjs';
 import nodeFs from 'node:fs';
-import { renderSpan, sealedOf, tailFile } from '../ctx-files.mjs';
+import { listedText, renderSpan, sealedOf, tailFile } from '../ctx-files.mjs';
 import { trocarHome } from '../../paths.mjs';
 
 export const about = Object.freeze({
@@ -179,7 +179,8 @@ export async function run(ctx) {
   if ([from, to, ledger].filter((x) => x != null).length > 1) throw new QueryArgError('trocar query lane: give at most one of --from, --to and --ledger');
   const after = ledger == null ? null : cursorOf(ledger);
   const st = await sessionState(ctx, id);
-  const empty = (mark) => ({ lane: key, base: null, mark, steps: [], defs: [], resources: [], seen: [], events: [], prev: null, next: null, ledger_next: null });
+  const reading = st && st.pending ? { pending: st.pending } : null; // 3.5 `pending?`: this answer stops at the frontier
+  const empty = (mark) => ({ lane: key, base: null, mark, ...reading, steps: [], defs: [], resources: [], seen: [], events: [], prev: null, next: null, ledger_next: null });
   if (!st) {
     errors.push({ where: `session/${id}`, code: 'session-unknown', reason: 'no session with this id among the captured records' });
     return empty(null);
@@ -269,14 +270,15 @@ export async function run(ctx) {
   }
   const last = i > 0 ? owed[i - 1] : [0, ''];
   return {
-    lane: key, base, mark: markOn(st.plan, st.mark), steps, defs: wireDefs, resources: out[0], seen: out[1], events,
+    lane: key, base, mark: markOn(st.plan, st.mark), ...reading, steps, defs: wireDefs, resources: out[0], seen: out[1], events,
     prev: lo > 0 && steps.length ? rids[lo] : null, next: hi < n && steps.length ? rids[hi - 1] : null,
     ledger_next: i < owed.length ? Buffer.from(JSON.stringify([LISTS[last[0]], last[1]])).toString('base64url') : null,
   };
 }
 
 // `--pack <n>.<part>` / `--tail <part>` (3.5 §会话读): the NDJSON text of a sealed pack or of the open tail, as `{$text}` (named/index.mjs
-// runQuery hands it on as the answer's bytes). Both render from the state (ctx-files.mjs renderSpan); the worker's tail is its file.
+// runQuery hands it on as the answer's bytes). Both render from the state (ctx-files.mjs renderSpan); the worker's tail is its file, and
+// while the answer on disk stands (session.mjs stands) so is every file the head on disk lists, whatever the frontier: it answers the head's tags.
 async function fileAnswer(ctx, id, others) {
   const { pack, tail } = ctx.params;
   if (others || (pack != null && tail != null)) throw new QueryArgError('trocar query lane: --pack and --tail go with --id only, one of them at a time');
@@ -284,7 +286,9 @@ async function fileAnswer(ctx, id, others) {
   if (!m) throw new QueryArgError(pack != null ? 'trocar query lane: --pack takes <n>.<part>: a pack number, a dot, and main or rest' : 'trocar query lane: --tail takes main or rest');
   const st = await sessionState(ctx, id);
   if (!st) { ctx.errors.push({ where: `session/${id}`, code: 'session-unknown', reason: 'no session with this id among the captured records' }); return {}; }
-  const sealed = sealedOf(st), part = m[2];
+  const part = m[2], listed = stands(ctx, st) ? listedText(ctx.home ?? trocarHome(), id, pack == null ? null : Number(m[1]), part, ctx.fs || nodeFs) : null;
+  if (listed != null) return { $text: listed };
+  const sealed = sealedOf(st);
   files(ctx, st); // the worker's files at this state
   if (pack == null) {
     if (ctx.writer === true && st.files) try { return { $text: (ctx.fs || nodeFs).readFileSync(tailFile(ctx.home ?? trocarHome(), id, part), 'utf8') }; } catch { /* rendered */ }

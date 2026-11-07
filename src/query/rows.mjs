@@ -34,28 +34,32 @@ export const namesStamp = (home, fs) => { try { return fs.readdirSync(path.join(
 // part's end 83 B; a session in the index 208 B (its Map entry and positions array); a position 8.8 B on average, charged at the
 // 12 B a slot holds right after its array grew (1.5× its length); a kinship fingerprint in an open keyed session's set 22.5 B
 // (2026-10-30, node 22; charged once per part that holds the set, even when parts share it).
-const PART_HEAP = 450, OPEN_HEAP = 105, SESSION_HEAP = 260, POSITION_HEAP = 12, FP_HEAP = 28;
+// OPEN_HEAP: an open chain with its tail and its items, measured about 664 B (a keyed entry holds neither and is charged the same).
+const PART_HEAP = 450, OPEN_HEAP = 640, SESSION_HEAP = 260, POSITION_HEAP = 12, FP_HEAP = 28;
 const lists = warmCache({ max: 4, cost: (v) => v.heap, steady: true });
 const copyOpen = (open) => new Map([...open].map(([k, v]) => [k, { ...v }])); // the rule moves `lastMs` in place (and replaces `fp`)
-// the index keeps a call's kinship fingerprints as one space-joined string (index-build.mjs `kin_fp` / `kin_probe`)
+// the index keeps a call's kinship fingerprints as one space-joined string (index-build.mjs `kin_fp` / `kin_probe`; `kin_chain` the same way)
 const fpOf = (s) => (s == null ? null : s ? s.split(' ').map(Number) : []);
 const lineOf = (id) => Number(String(id).split(':').pop());
 
 /**
- * indexRows({home, fs, errors}) → a read-only row list (length, at, iteration, find, filter / map / slice → arrays) of
+ * indexRows({home, fs, errors, progress, ease}) → a read-only row list (length, at, iteration, find, filter / map / slice → arrays) of
  * {…index row, segment, lineNo, session_id, synthesized}, oldest segment first, capture order inside a segment — the order the
  * synthesized keys (3.4 合成键) are assigned in, the same order the board stamps them in, so both name a session the same. It is
  * shared by every reader until a segment moves. What a segment could not say goes into `errors` (D38), never silently missing — on
  * every call. `progress` is called after every segment and every chunk of raw bytes a cold segment's scan reads: the query worker
- * reports that work, so the daemon's idle clock does not end it in the middle of a long read (3.5 后台抽取与归约).
+ * reports that work, so the daemon's idle clock does not end it in the middle of a long read (3.5 后台抽取与归约). `ease`, an async
+ * function, is awaited after every segment and inside a long scan (index-build.mjs `easing`), so a read of every segment leaves the
+ * event loop to others (3.5 §行表先读); the rows are the same with it or without.
  */
-export async function indexRows({ home = trocarHome(), fs = nodeFs, errors = [], progress = null } = {}) {
+export async function indexRows({ home = trocarHome(), fs = nodeFs, errors = [], progress = null, ease = null } = {}) {
   const segs = [];
   for (const [segment, at] of segmentFiles(home, fs, errors)) {
-    const { records, problems } = await warmSegmentIndex({ home, segment, fs, at, progress });
+    const { records, problems } = await warmSegmentIndex({ home, segment, fs, at, progress, ease });
     if (progress) progress();
     for (const pr of problems) errors.push(problemEntry(`segments/${segment}`, pr));
     segs.push({ segment, records, entry: recordsId(records) });
+    if (ease) await ease();
   }
   const stamp = segs.map((s) => `${s.segment}#${s.entry}`).join('\n');
   return lists.get(`${fsTag(fs)}\n${home}`, stamp, (old) => rowList(segs, old)).rows;
@@ -87,7 +91,7 @@ function rowList(segs, old) {
     for (let k = k0; k < view.length; k++) {
       const r = view.at(k);
       const got = r.synth_hash != null || r.kin_fp != null ? assign({ harness: r.harness_id, ms: Date.parse(r.ts || ''), key: r.session_key,
-        hash: r.synth_hash, fp: fpOf(r.kin_fp), probe: fpOf(r.kin_probe) }) : null;
+        hash: r.synth_hash, fp: fpOf(r.kin_fp), probe: fpOf(r.kin_probe), late: r.kin_late, chain: r.kin_chain ? r.kin_chain.split(' ') : [], items: r.kin_items ? r.kin_items.split(' ') : [], mark: r.kin_mark === true }) : null;
       const sid = r.session_key ?? (got && got.key) ?? null;
       derived.push({ session_id: sid, synthesized: !!got && !got.kin });
       if (sid) place(sid, start + k); // a row with no session id is in no group (sessionGroups)

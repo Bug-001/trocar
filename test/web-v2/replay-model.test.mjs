@@ -5,11 +5,20 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { createDesk, applySession, applyLane, listOf, stepOf, laneEvents, askOrdinal, applyLedger, ledgerAsk, ledgerDone,
-  readLedger, seenFiles } from '../../web/legacy/replay/model.mjs'
+  readLedger, seenFiles, newHeld } from '../../web/legacy/replay/model.mjs'
+import { applyHead } from '../../web/legacy/replay/packs.mjs'
 import { world, readLane, deskFrom } from './desk-world.mjs'
 
 const fx = JSON.parse(fs.readFileSync(new URL('../fixtures/session-read-contract.json', import.meta.url), 'utf8'))
 const SEEDS = Array.from({ length: 40 }, (_, i) => i + 1)
+
+test('1.5 K-31: a session answer with pending.seen is not a first read; plain pending is, and no pending ends it', () => {
+  for (const [pending, first] of [[{ done: 1, total: 4, seen: true }, false], [{ done: 1, total: 4 }, true], [null, false]]) {
+    const desk = createDesk()
+    applySession(desk, { ...fx.session_full, pending })
+    assert.equal(desk.firstPending, first, JSON.stringify(pending))
+  }
+})
 
 test('2.3 #22: lane pages materialise to lists whose every bid is defined and whose copies stay in the parent', async () => {
   const desk = createDesk()
@@ -225,6 +234,35 @@ test('2.4 #1 #9: seenFiles = the lane\'s seen minus the files it opened (any spe
     }
   }
   assert.ok(saw.dropped > 0 && saw.kept > 0, `absolute spellings dropped ${saw.dropped}, same name elsewhere kept ${saw.kept}`)
+})
+
+test('2.4 还在读: a ledger answered behind the fold is not done, whichever way it came; the next answer without pending is', () => {
+  const pending = { done: 1, total: 4, calls: 0 }
+  const page = (o) => ({ lane: 'L', base: null, prev: null, next: null, steps: [], defs: [], resources: [], seen: [], events: [], ledger_next: null, ...o })
+  for (const apply of [(d, a) => applyLane(d, a), (d, a) => applyLedger(d, 'L', null, a)]) {
+    const desk = createDesk()
+    desk.held.set('L', newHeld())
+    apply(desk, page({ pending }))
+    assert.equal(ledgerDone(desk, 'L'), false)
+    apply(desk, page())
+    assert.equal(ledgerDone(desk, 'L'), true)
+  }
+})
+
+test('2.4: a pack whose tag moved starts the ledger over; a head that only adds a pack does not', () => {
+  const heads = (...tags) => ({ mark: 'S:1', lanes: [], packs: tags.map((tag, n) => ({ n, s0: n * 512, s1: (n + 1) * 512, tag })) })
+  const desk = createDesk()
+  desk.held.set('L', newHeld())
+  applyHead(desk, heads('a'))
+  applyLedger(desk, 'L', null, { base: null, resources: [], seen: [], events: [], ledger_next: null })
+  applyHead(desk, heads('a'))
+  applyHead(desk, heads('a', 'b'))
+  assert.equal(ledgerDone(desk, 'L'), true, 'the same tags and a new pack leave it')
+  applyLedger(desk, 'L', null, { base: null, resources: [], seen: [], events: [], ledger_next: 'c1' })
+  assert.deepEqual(ledgerAsk(desk, 'L'), { lane: 'L', ledger: 'c1' })
+  applyHead(desk, heads('a2', 'b'))
+  assert.equal(ledgerDone(desk, 'L'), false)
+  assert.equal(ledgerAsk(desk, 'L'), null, 'a cursor of the old ledger is not read on')
 })
 
 test('3.5 ledger_next: the chain gives the whole ledger at mark, ledgerDone turns true only at its end, a ledger page touches no step', async () => {
