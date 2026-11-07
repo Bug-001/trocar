@@ -119,7 +119,7 @@ export function closeDetail(el, s) {
 
 export function wireDetail(el, s) {
   const onClick = (e) => {
-    if (e.target.closest('#dclose')) { closeDetail(el, s); return }
+    if (e.target.closest('#dclose')) { closeDetail(el, s); s.syncUrl?.(); return }
     const bk = e.target.closest('[data-back]')
     if (bk) { const i = stepOfMark(s, bk.dataset.back); if (i >= 0) s.jumpTo(i, null); return } // the playhead moves; the drawer stays open (2.6 §B)
     const h = e.target.closest('.dbh')
