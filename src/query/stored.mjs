@@ -11,7 +11,7 @@ import { indexDir } from './index-build.mjs';
 /** How many stored answers the directory keeps: every `after` value leaves one, this bounds them. */
 export const STORED_MAX = 64;
 /** The version of the document's shape, in the file's name: a file of another version is not there for the daemon, and ages out of the rotation. */
-export const STORED_V = 1;
+export const STORED_V = 2;
 
 const dirOf = (home) => path.join(indexDir(home), 'stored');
 const canonical = (params) => Object.keys(params).sort().map((k) => [k, Array.isArray(params[k]) ? params[k].map(String) : String(params[k])]);

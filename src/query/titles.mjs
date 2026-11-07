@@ -2,6 +2,7 @@
 //
 // A title is the main lane's first prompt, `session`'s own `meta.title`; until a session has a main call, its first subagent lane's task.
 // The project is the working directory the call that gives the title states (3.4 §工作目录, projectOf), kept beside it as `p`.
+// The declared lineage (3.4 §血缘) is read off the session's first model call in the same pass, kept as `s` (that call), `l` `a` `k`.
 // It lives in a request body the segment index does not parse (D20), and only a session's first calls hold it, so `sessions` reads it
 // from one small table: `index/titles.json`, a projection like
 // the index (invariant 2). A session the table does not have is computed on the spot from its first model calls in step order, so the
@@ -17,8 +18,10 @@ import { indexDir } from './index-build.mjs';
 import { fsTag, statKey } from './warm.mjs';
 import { trocarHome } from '../paths.mjs';
 import { projectOf, projectFields } from '../dissect/project.mjs';
+import { HARNESSES, hintsOf, bodyOf } from '../dissect/harnesses.mjs';
+import { reqIncompleteOf } from '../dissect/capture-labels.mjs';
 
-export const TITLE_V = 3;
+export const TITLE_V = 5;
 export const TITLE_BUDGET_MS = 100; // how long a `sessions` in the worker computes titles before it says ask again (3.5 §访问模式)
 /** Thrown by titleOf past its `deadline`: the answer is a `102`, what was computed stays in the table. */
 export class TitlesPending extends Error {}
@@ -28,8 +31,8 @@ export const titlesFile = (home) => path.join(indexDir(home), 'titles.json');
 
 const byStep = (a, b) => compareStep(a.ts, a.id, b.ts, b.id);
 
-// The table as this process holds it, per home: session id → {t, r, c, p, m}. An entry's `m` moves in memory as new members are checked, so
-// a warm answer looks at the new rows only; `dirty` says t, r, c or p changed since the file was written, and a dirty table is not reloaded.
+// The table as this process holds it, per home: session id → {t, r, c, p, s, l, a, k, m}. An entry's `m` moves in memory as new members are checked, so
+// a warm answer looks at the new rows only; `dirty` says a kept key (KEYS) changed since the file was written, and a dirty table is not reloaded.
 const tables = new Map();
 const tableKey = (home, fs) => `${fsTag(fs)}\n${home}`;
 function readTable(home, fs) {
@@ -53,6 +56,8 @@ function check(was, members) {
   if (!was || members.length < was.m) return { from: 0 };
   const fresh = members.slice(was.m).filter(isModelCall);
   if (!fresh.length) return { keep: true };
+  const first = was.s != null && members.find((r) => r.id === was.s); // a call before it changes the lineage (3.4 §血缘)
+  if (first && fresh.some((r) => byStep(r, first) < 0)) return { from: 0 };
   if (was.r == null) return fresh.length * 8 >= was.c ? { from: was.c } : { keep: true, waits: true }; // at c*9/8 calls (4.2 §标题表)
   const at = members.find((r) => r.id === was.r);
   return at && !fresh.some((r) => byStep(r, at) < 0) ? { keep: true } : { from: 0 }; // `t` null with a main call found is final too
@@ -65,6 +70,17 @@ function check(was, members) {
 // are read one at a time, so a long read holds one record and the fold. With every call read and no main one, `t` is the first subagent
 // lane's task and `r` stays null: a main call found later replaces it.
 function firstMain({ home, fs, calls, steps, from, progress }) {
+  const first = steps[0] || null, row = first && HARNESSES.find((h) => h.id === first.harness_id);
+  // the lineage of the first call: read off the record the fold reads anyway; a row that declares no keys reads nothing, a call with
+  // no row is not known to declare nothing (3.4 §血缘)
+  let lin = !first ? {} : !row ? { l: 'unread' } : row.parentKeys.length || row.forkKeys.length ? null : { l: 'no-keys' };
+  const lineage = (rec) => {
+    const h = hintsOf(rec), hidden = !bodyWhole(rec);
+    // a kind with nothing found that a body key could have declared, in a body not wholly here: unknown, never "declares none"
+    const unknown = (found, keys) => !found && hidden && keys.some((key) => key.from === 'body');
+    lin = unknown(h.parent, row.parentKeys) || unknown(h.fork, row.forkKeys) ? { l: 'unread' }
+      : { l: 'wire', a: h.parent ? h.parent.id : null, k: h.fork ? h.fork.id : null };
+  };
   let end = FIRST_READ;
   while (end <= from) end *= GROWTH;
   for (;; end *= GROWTH) {
@@ -74,7 +90,7 @@ function firstMain({ home, fs, calls, steps, from, progress }) {
     const read = (rs) => {
       progress();
       const got = recordsAt({ home, fs, rows: rs, errors: errs, remember: false });
-      if (got.length === rs.length) rs.forEach((r, i) => proj.set(String(r.id), projectOf(got[i])));
+      if (got.length === rs.length) rs.forEach((r, i) => { proj.set(String(r.id), projectOf(got[i])); if (r === first && !lin) lineage(got[i]); });
       else lost = true;
       return got;
     };
@@ -84,17 +100,30 @@ function firstMain({ home, fs, calls, steps, from, progress }) {
     if (lost || errs.some((e) => e.io)) return { unread: errs[0] ? errs[0].reason : 'a record is missing' };
     const main = head.find((r) => (facts.get(String(r.id)) || {}).lane === 'main');
     const p = head.map((r) => proj.get(String(r.id))).find((x) => x != null) ?? null; // a first call is often a small one with no environment (3.4 §工作目录)
-    if (main) return { t: facts.get(String(main.id)).ask ?? null, r: main.id, c: head.length, p };
+    const s = first ? first.id : null;
+    if (main) return { t: facts.get(String(main.id)).ask ?? null, r: main.id, c: head.length, p, s, ...lin };
     if (end >= steps.length) {
       const sub = head.map((r) => facts.get(String(r.id))).find((f) => f && f.lane === 'subagent');
-      return { t: sub ? sub.ask : null, r: null, c: steps.length, p };
+      return { t: sub ? sub.ask : null, r: null, c: steps.length, p, s, ...lin };
     }
   }
 }
 
-const said = (e) => ({ title: e.t, title_source: e.t != null ? 'wire' : null, ...projectFields(e.p ?? null) });
+// The request body as the model got it is all in the record: one stored at all, not cut or partly received, and not a WebSocket message
+// kept as its size or undecoded bytes (4.6 §记录).
+const bodyWhole = (rec) => { const b = bodyOf(rec); return !!b && !reqIncompleteOf(rec) && !('omitted_bytes' in b) && !('b64' in b); };
 
-/** titleOf({home, fs, id, members, errors, progress, deadline}) → {title, title_source, project_slug, project_path} (the project: 1.6 C.5). `title_source`: 'wire', null (no prompt in its
+// Lineage, by construction never read as "none" when not known: the id keys exist only with `wire` (3.4 §血缘).
+const lineageOf = (e) => (e && e.l === 'wire' ? { lineage_source: 'wire', parent_session_id: e.a, fork_of_session_id: e.k } : { lineage_source: (e && e.l) || 'unread' });
+/** lineageFields(meta) → the lineage keys of a document's meta, the same closed shape (a head written before them: `unread`). */
+export const lineageFields = (m) => lineageOf({ l: m.lineage_source, a: m.parent_session_id ?? null, k: m.fork_of_session_id ?? null });
+/** withLineage(meta, said) → `meta` with the lineage `said` says and no other lineage key left behind. */
+export const withLineage = (meta, said) => { const { lineage_source, parent_session_id, fork_of_session_id, ...rest } = meta; return { ...rest, ...lineageFields(said) }; };
+const said = (e) => ({ title: e.t, title_source: e.t != null ? 'wire' : null, ...projectFields(e.p ?? null), ...lineageOf(e) });
+const KEYS = ['t', 'r', 'c', 'p', 's', 'l', 'a', 'k'];
+
+/** titleOf({home, fs, id, members, errors, progress, deadline}) → {title, title_source, project_slug, project_path, lineage_source, parent_session_id?,
+ *  fork_of_session_id?} (1.6 C.5). `title_source`: 'wire', null (no prompt in its
  *  calls), or 'unread': a record that could not be read back, or a fold that threw, and no title to stand in; either leaves one `errors` entry (D38)
  *  and the table as it was, an old title standing. `members`: the WHOLE session, in write order. `progress`: called at each read.
  *  `deadline`: a performance.now() time; past it, a title that needs a read throws TitlesPending. */
@@ -106,9 +135,9 @@ export function titleOf({ home = trocarHome(), fs = nodeFs, id, members, errors 
   const got = firstMain({ home, fs, calls, steps: [...calls].sort(byStep), from: state.from, progress });
   if (got.unread) {
     errors.push({ where: `session/${id}`, code: 'record-unreadable', reason: got.unread });
-    return was && was.t != null ? said(was) : { title: null, title_source: 'unread', ...projectFields(was ? was.p ?? null : null) };
+    return was && was.t != null ? said(was) : { title: null, title_source: 'unread', ...projectFields(was ? was.p ?? null : null), ...lineageOf(was) };
   }
-  if (!was || was.t !== got.t || was.r !== got.r || was.c !== got.c || was.p !== got.p) table.dirty = true;
+  if (!was || KEYS.some((k) => was[k] !== got[k])) table.dirty = true;
   table.titles.set(id, { ...got, m: members.length });
   return said(got);
 }

@@ -43,7 +43,7 @@ import { warmCache, fsTag, heapBudget, heapCeiling, hold, liveHeap, usedHeap, yi
 import { parseTextRef } from '../../raw/refs.mjs';
 import { QueryArgError } from './index.mjs';
 import { columns, dumpColumns, loadColumns, sync, viewOf, pageOf, deltaOf, limitOf, markOf } from '../session-doc.mjs';
-import { titleOf } from '../titles.mjs';
+import { lineageFields, titleOf } from '../titles.mjs';
 import { projectFields } from '../../dissect/project.mjs';
 import { clearReread, endReread, setMtimes, filesAt, filesParts, filesReach, forget, hasHead, hasReread, headDoc, markDone, markReread, packsOf, pendingHead, readHead, seenOf, tailsReach, tier0Doc, writeFiles, writeHead, writeInFlight, memoBytes, CTX_V, PACK_MEMBERS } from '../ctx-files.mjs';
 
@@ -650,7 +650,7 @@ const sigOf = (s) => JSON.stringify([s.mark, s.pending && s.pending.done, s.trun
 // the parts only the head carries, in O(packs): tier, axis, the packs (with their tags) and the open span, the compactions (a new
 // chapter on the axis; one on another lane too), the cut, pending's presence, the failures and the index's codes, and the meta the
 // board takes from the head alone (web/legacy/replay/header.mjs) — never a count that grows with each call
-const META = ['title', 'title_source', 'session_id', 'harness', 'harnesses', 'project_slug', 'project_path'];
+const META = ['title', 'title_source', 'session_id', 'harness', 'harnesses', 'project_slug', 'project_path', 'lineage_source', 'parent_session_id', 'fork_of_session_id'];
 function shapeOf(s) {
   if (s.mark == null) return JSON.stringify([0, s.indexErrors.map((e) => e.code), s.title]);
   const V = s.V, ax = V.lanes.find((l) => l.kind === 'main') || V.lanes[0] || null, meta = { ...V.meta, ...s.title };
@@ -766,10 +766,10 @@ function reachOf(ctx, id, log, members) {
   if (!tailReach.has(k)) tailReach.set(k, tailsReach(home, id, members, fs));
   return tailReach.get(k);
 }
-// What a head says of the title: titleOf's. `unread` alone changes no head: the head on disk's stands (4.4 §人类标题的来源).
+// What a head says of the title and lineage: titleOf's. `unread` alone changes no head: the head on disk's stands (4.4 §人类标题的来源).
 function headTitle(ctx, id, said) {
   const m = said.title_source === 'unread' && readHead(ctx.home ?? trocarHome(), id, ctx.fs || nodeFs)?.meta;
-  return m ? { title: m.title, title_source: m.title_source, ...projectFields(m.project_path ?? null) } : said;
+  return m ? { title: m.title, title_source: m.title_source, ...projectFields(m.project_path ?? null), ...lineageFields(m) } : said;
 }
 
 /** sessionState(ctx, id) → null (no such session) | {id, rows, store, mark, pending, truncated, V, failed, errors, plan}: the
@@ -794,7 +794,8 @@ function stateAt(ctx, r, id, reading = false) {
   let above = ex.done < ex.total;
   for (let i = done; !above && i < members.length; i++) above = inCut(plan, members[i]);
   const home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs, said = titleOf({ home, fs, id, members, errors });
-  V.meta = { ...V.meta, ...said };
+  const { parent_session_id: _p, fork_of_session_id: _f, ...was } = V.meta; // the id keys go with the lineage said now, never an older one's
+  V.meta = { ...was, ...said };
   const seen = above || reading ? seenOf(readHead(home, id, fs), reading) : null; // `read` goes with it: with no head to keep this is a first read
   const pending = above || reading ? { done, total: members.length, work: st.store.work, ...seen, calls: callsPast(plan, reachOf(ctx, id, st.log, members)), ...(reading && seen ? { read: done } : null) } : null;
   return { id, rows: members, store: st.store, mark, pending,
