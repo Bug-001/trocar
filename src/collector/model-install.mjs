@@ -11,7 +11,7 @@ import { collectorHome } from '../paths.mjs'
 import { caPaths } from './core/tls/ca-store.mjs'
 import { ROOT, checkProfile, certPem, pemToDer } from './core/tls/cert.mjs'
 import { rootIdOf } from '../off/root-store.mjs'
-import { readManifest, saveManifest, newManifest, applyJsonKey, applyTextEntry, writeOwnedFile, notTrocars, judgeOwned, sha256, samePath, previewTextEntry, MARKED_WITHOUT_RECORD } from './core/trust/journal.mjs'
+import { readManifest, saveManifest, newManifest, applyJsonKey, applyTextEntry, writeOwnedFile, notTrocars, judgeOwned, sha256, samePath, markedWithoutRecord, MARKED_WITHOUT_RECORD } from './core/trust/journal.mjs'
 import { codeId } from '../version.mjs'
 import { installComplete, itemsOfPhase, undoByHand, OFF_VERSION } from '../off/manifest.mjs'
 import { writeStandalone } from '../off/standalone.mjs'
@@ -367,7 +367,8 @@ export function planInstall({ os, harnesses, ctx, home, owns, hookFile = null, f
   const markedLoader = (c) => {
     const pdir = hookFile && c.loader && resolveLoc(c.dir, ctx)[0], loader = pdir && resolveLoc(c.loader.file, ctx)[0]
     if (!loader || (m && m.entries.some((e) => samePath(e.path, loader, fs)))) return null
-    try { previewTextEntry({ file: loader, edit: loaderEdit(c, path.join(pdir, hookFile(c.template))), fs }); return null } catch (e) { return e && e.code === MARKED_WITHOUT_RECORD ? { file: loader, why: errText(e) } : null }
+    const why = markedWithoutRecord({ file: loader, edit: loaderEdit(c, path.join(pdir, hookFile(c.template))), fs })
+    return why ? { file: loader, why } : null
   }
   for (const desc of harnesses.filter((d) => d.proxyMode)) {
     const forms = desc.proxyMode.forms.filter((x) => x.os.includes(os) && isPresent(x, ctx))
@@ -388,7 +389,9 @@ export function planInstall({ os, harnesses, ctx, home, owns, hookFile = null, f
     // rule U, as install runs it: one block per file, placed by the first harness whose settings name it (the next finds it there); a file that is
     // not this user's is a row too, with its why, as install records it skipped
     if (forms.length) for (const { file, why } of ruleUFiles(desc, ctx, { home, owns, fs })) {
-      if (why) rows.push({ harness: desc.name, form: null, carrier: 'pem-block', paths: [file], keys: null, state: 'skipped', code: NOT_USERS, why })
+      // a file already holding trocar's marked text no record lists: the run refuses the block (1.6 §3.2), so the plan says so
+      const marked = !why && !(m && m.entries.some((e) => e.format === 'pem-block' && samePath(e.path, file, fs))) ? markedWithoutRecord({ file, edit: { format: 'pem-block' }, fs }) : null
+      if (why || marked) rows.push({ harness: desc.name, form: null, carrier: 'pem-block', paths: [file], keys: null, state: 'skipped', code: why ? NOT_USERS : MARKED_WITHOUT_RECORD, why: why || marked })
       else if (!rows.some((r) => r.carrier === 'pem-block' && !r.state && r.paths[0] === file)) rows.push({ harness: desc.name, form: null, carrier: 'pem-block', paths: [file], keys: null })
     }
   }
