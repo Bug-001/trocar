@@ -698,6 +698,8 @@ test('uninstall: a sealed segment never hides how to stop a daemon that did not 
   const r = { ...io.json(), daemon: { state: 'unresponsive', pid: 4321 } }
   assert.ok(r.sealed && r.sealed.length)
   assert.match(formatUninstallReceipt(r, {}), /kill -9 4321/)
+})
+
 // A daemon `off` already stopped leaves its lock when it could not remove it (a forced end on Windows): this uninstall stopped nothing and must not say it did.
 test('1.6 §3.6: a lock left by a daemon already gone is no daemon stopped', async () => {
   const s = await installedHome()
