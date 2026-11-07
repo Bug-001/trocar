@@ -78,14 +78,15 @@ export async function daemonFor(w) {
   const sock = w.os === 'win32' ? `\\\\.\\pipe\\trocar-contract-${path.basename(w.home)}` : path.join(tmpDir('trocar-sock-'), 'c.sock')
   fs.mkdirSync(w.dir, { recursive: true })
   fs.writeFileSync(path.join(w.dir, 'control.json'), JSON.stringify({ path: sock, token: TOKEN }))
-  const doors = {}
+  const doors = {}, asked = [] // what reached this daemon, as `METHOD /path`: a caller that resolved the endpoint wrong never gets here
+  const seen = (k, f) => async (q) => { asked.push(k); return f(q) }
   const server = await startControlServer({ socketPath: sock, token: TOKEN, routes: {
-    'GET /status': async () => ({ doors }),
-    'GET /holders': async () => ({ count: 0, holders: [] }),
+    'GET /status': seen('GET /status', async () => ({ doors })),
+    'GET /holders': seen('GET /holders', async () => ({ count: 0, holders: [] })),
     'POST /on': async ({ body }) => { for (const [g, port] of Object.entries(body.groups)) doors[g] = port; return { doors: Object.fromEntries(Object.entries(body.groups).map(([g, port]) => [g, `http://127.0.0.1:${port}`])) } },
-    'POST /off': async () => ({ confirmed: true, relayed: 0, actual: 'off', exited: false }),
+    'POST /off': seen('POST /off', async () => ({ confirmed: true, relayed: 0, actual: 'off', exited: false })),
   } })
-  return { close: () => server.close(), sock }
+  return { close: () => server.close(), sock, asked }
 }
 
 /** HOME as { path: { bytes?, mode, uid, mtime?, dir?, link? } } plus the OS-tool calls and trust-store verbs seen so far. */

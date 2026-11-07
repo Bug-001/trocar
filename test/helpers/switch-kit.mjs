@@ -5,6 +5,7 @@ import path from 'node:path'
 import fs from 'node:fs'
 import tls from 'node:tls'
 import { contractWorld, daemonFor, placesOf, snapshot } from './contract-world.mjs'
+import { controlEndpointFor } from '../../src/off/control-client.mjs'
 import { seeds, userEdits, readDotenv, readJsonc, PROXY_NAMES } from './file-shapes.mjs'
 import { resolveLoc } from '../../src/collector/core/proxymode/sources.mjs'
 
@@ -166,6 +167,8 @@ async function drive(spec, harnesses) {
     bad('install')
     const s1 = snapshot(w)
     const d = await daemonFor(w)
+    // the endpoint as the product resolves it for this OS (the one resolver off and uninstall use), while the daemon names it; `asked` is what reached it
+    const endpoint = controlEndpointFor({ platform: spec.os, dir: w.dir, env: w.env })
     try {
       const on = await w.cmd.on([spec.h])
       bad('on')
@@ -184,7 +187,7 @@ async function drive(spec, harnesses) {
       const un = await w.cmd.uninstall()
       bad('uninstall')
       const s6 = snapshot(w)
-      return { w, c, on, ins, off, off2, un, s0, s1, s2, s3, sE, s4, s5, s6, edited, file, format, route }
+      return { w, c, on, ins, off, off2, un, s0, s1, s2, s3, sE, s4, s5, s6, edited, file, format, route, endpoint, asked: [...d.asked] }
     } finally { await d.close() }
   })()
 }
