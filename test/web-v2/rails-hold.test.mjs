@@ -32,6 +32,10 @@ test('2.3 读者优先: not over the rows, an answer draws at once; over them it
   d.advance(2000); assert.deepEqual(d.draws, [200], 'and ends the hold')
   const e = rig()
   e.h.over(true); e.h.over(false); e.advance(2000); assert.deepEqual(e.draws, [], 'leaving with nothing held draws nothing')
+  const f = rig()
+  f.h.over(true); f.h.answer(); f.advance(900); f.h.press(true); f.advance(500)
+  assert.deepEqual(f.draws, [], 'the time is up while the pointer is down: the paint waits for it to come up')
+  f.h.press(false); assert.deepEqual(f.draws, [1400], 'and comes when it does')
 })
 
 test('2.3 读者优先: over any sequence, a held paint never waits past HOLD_RAILS_MS and the last answer is always drawn', () => {
@@ -43,18 +47,22 @@ test('2.3 读者优先: over any sequence, a held paint never waits past HOLD_RA
     const check = () => { if (since != null) assert.ok(r.now() - since <= HOLD_RAILS_MS, `run ${run}: an answer waited ${r.now() - since} ms`) }
     const drawn = () => { since = null }
     const n0 = () => r.draws.length
+    let down = false
+    // the bound holds whenever the pointer is up; while it is down, nothing but the reader's own draw paints the rows
+    const quiet = (b, what) => { if (down) assert.equal(n0(), b, `run ${run}: ${what} painted the rows under a pressed pointer`) }
     for (let k = 0; k < 40; k++) {
       const x = rnd(), before = n0()
-      if (x < 0.35) { if (since == null) since = r.now(); r.h.answer() } else if (x < 0.5) r.h.reader()
-      else if (x < 0.7) r.h.over(rnd() < 0.5)
+      if (x < 0.3) { if (since == null) since = r.now(); r.h.answer(); quiet(before, 'an answer') } else if (x < 0.4) r.h.reader()
+      else if (x < 0.55) { r.h.over(rnd() < 0.5); quiet(before, 'a move') } else if (x < 0.7) { down = rnd() < 0.5; r.h.press(down); if (down) quiet(before, 'a press') }
       else {
         // time passes in small steps, so the bound is read at every timer
-        for (let left = Math.floor(rnd() * 1500); left > 0; left -= 50) { const b = n0(); r.advance(Math.min(50, left)); if (n0() > b) drawn(); check() }
+        for (let left = Math.floor(rnd() * 1500); left > 0; left -= 50) { const b = n0(); r.advance(Math.min(50, left)); quiet(b, 'the timer'); if (n0() > b) drawn(); if (!down) check() }
         continue
       }
       if (n0() > before) drawn()
-      check()
+      if (!down) check()
     }
+    down = false; r.h.press(false)
     r.h.over(false); if (since != null) assert.ok(r.draws.length > 0 && r.draws.at(-1) === r.now(), `run ${run}: leaving drew the last answer`)
   }
 })

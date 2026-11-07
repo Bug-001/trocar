@@ -172,17 +172,26 @@ test('2.3 读者优先: a tick the pointer rests on stays while an answer is dra
   const w = world(12, { calls: 30000, page: 1500, files: 600, compact: 0.02 })
   await growingDesk(w, async (d) => {
     const { page, grant, drawn, until } = d
+    // the board's reads in flight: a pack read that lands after the pointer is on the rows is held too, and its timer is not the answer's
+    let inFlight = 0
+    const isRead = (r) => new URL(r.url()).pathname.startsWith('/api/')
+    page.on('request', (r) => { if (isRead(r)) inFlight++ })
+    for (const ev of ['requestfinished', 'requestfailed']) page.on(ev, (r) => { if (isRead(r)) inFlight-- })
+    const settled = async () => { for (let calm = 0, t = Date.now(); calm < 300; await page.waitForTimeout(50)) { calm = inFlight ? 0 : calm + 50; assert.ok(Date.now() - t < 20000, 'the board\'s reads never settled') } }
     await grant(2); await drawn()
     for (let j = 0; j < 3; j++) {
       await toEnd(d)
       const pt = await aimOlder(d, j)
+      await settled()
       await page.mouse.move(pt.x, pt.y)
       await page.evaluate(([x, y]) => { window.__aimed = document.elementFromPoint(x, y) }, [pt.x, pt.y])
       await grant(1); await drawn()
       const t0 = Date.now()
       assert.ok(await page.evaluate(() => window.__aimed.isConnected && window.__aimed.matches('.tick')), `round ${j}: the tick under the pointer was painted away`)
+      const t1 = Date.now()
       if (j < 2) await page.mouse.move(pt.x, pt.y - 400) // off the rows
       await until(() => !window.__aimed.isConnected, undefined, `round ${j}: the rows were not painted ${j < 2 ? 'on leaving' : 'with the pointer resting'}`)
+      if (j < 2) assert.ok(Date.now() - t1 <= 300, `round ${j}: the rows were painted ${Date.now() - t1} ms after the pointer left`)
       // the hold began when the answer was applied, before drawn(): from here it has at most HOLD_RAILS_MS left, plus a frame or two
       if (j === 2) assert.ok(Date.now() - t0 <= 1000 + 300, `round ${j}: the rows were painted ${Date.now() - t0} ms after the answer was drawn`)
     }

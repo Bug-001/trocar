@@ -221,7 +221,7 @@ function openDesk(ctx, route0, makeView) {
     view.empty(msg)
     onEls(() => {
       view.window({ kind: 'empty', msg, err })
-      E.rails.innerHTML = ''; E.resexp.innerHTML = ''
+      railsHold.drop(); E.rails.innerHTML = ''; E.resexp.innerHTML = ''
       view.nav()
     })
     view.problems() // no problems: the row name stops quoting the last session's count and ‹ › disappear
@@ -287,8 +287,8 @@ function openDesk(ctx, route0, makeView) {
   // draw these once, for the playhead then, once its frame is out and the reader has stopped. A tick's drawer opens in that task too, after them
   let sideDue = false, sidesWanted = false, detailDue = null
   // an answer's paint of the overlay rows waits while the pointer is on them (2.3 读者优先, rails-hold.mjs); a draw the reader causes does not
-  const rails = createRailsHold({ setTimer: (f, ms) => setTimeout(f, ms), clearTimer: clearTimeout, draw: () => { if (!s.dead) onEls(() => { renderRails(E.rails, s); watchRails() }) } })
-  const drawRails = () => rails.reader()
+  const railsHold = createRailsHold({ setTimer: (f, ms) => setTimeout(f, ms), clearTimer: clearTimeout, draw: () => { if (!s.dead) onEls(() => { renderRails(E.rails, s); watchRails() }) } })
+  const drawRails = () => railsHold.reader()
   s.drawRails = drawRails // the Tracks menu flips a row from outside this closure
   const nextTask = () => {
     if (sideDue) return
@@ -334,7 +334,7 @@ function openDesk(ctx, route0, makeView) {
     if (!s.anchor || s.playRid == null) { renderRough(); return }
     renderHeader()
     if (!namedRows()) { view.saw(); view.overview() }
-    if (answer) rails.answer(); else drawRails()
+    if (answer) railsHold.answer(); else drawRails()
     paintPlayhead()
     restoreSelection()
   }
@@ -348,7 +348,7 @@ function openDesk(ctx, route0, makeView) {
     const at = Math.max(0, Math.min(head.steps, s.initialStep ?? head.steps) - 1), K = sawCapacity()
     emptied = null
     onEls(() => {
-      renderRails(E.rails, s); watchRails()
+      railsHold.drop(); renderRails(E.rails, s); watchRails() // the rough page has no step to aim at: its rows draw at once
       if (head.lanesMore) E.rails.insertAdjacentHTML('beforeend', `<div class="railsmore" data-more="${head.lanesMore}">${esc(moreLanes(head.lanesMore))}</div>`)
       view.window({ kind: 'rough', n: head.last ? head.last.n : 0 })
     })
@@ -868,10 +868,12 @@ function openDesk(ctx, route0, makeView) {
 
   // hang the desk in `el` as it was left; the URL decides the view only when it names a step (1.2 §路由「离开再回来」)
   // the reader's inputs, heard before anything acts on them, while the desk is on the page (the pace of its background work)
-  const onRails = (e) => rails.over(!!E && e.target instanceof Node && E.rails.contains(e.target))
-  const offPage = (e) => { if (!e.relatedTarget) rails.over(false) }
-  const INPUTS = [['keydown', () => pace.input()], ['pointerdown', () => pace.press(true)], ...['pointerup', 'pointercancel', 'blur'].map((k) => [k, () => pace.press(false)]),
-    ['pointerover', onRails], ['pointerout', offPage], ['blur', () => rails.over(false)]]
+  const onRails = (e) => railsHold.over(!!E && e.target instanceof Node && E.rails.contains(e.target))
+  const offPage = (e) => { if (!e.relatedTarget) railsHold.over(false) }
+  // the pointer up: its own events, or the window losing focus (an element's blur, heard here in capture as a press moves focus, is not one)
+  const up = () => { pace.press(false); railsHold.press(false) }
+  const INPUTS = [['keydown', () => pace.input()], ['pointerdown', () => { pace.press(true); railsHold.press(true) }], ['pointerup', up], ['pointercancel', up],
+    ['blur', (e) => { if (e.target === window) { up(); railsHold.over(false) } }], ['pointerover', onRails], ['pointerout', offPage]]
   function attach(el, ctx, route) {
     host = el
     for (const [k, f] of INPUTS) window.addEventListener(k, f, true)
@@ -903,7 +905,7 @@ function openDesk(ctx, route0, makeView) {
     document.removeEventListener('visibilitychange', onVis)
     window.removeEventListener('resize', refit)
     for (const [k, f] of INPUTS) window.removeEventListener(k, f, true)
-    rails.over(false) // a paint held for the pointer is drawn before the desk leaves
+    railsHold.press(false); railsHold.over(false) // a paint held for the pointer is drawn before the desk leaves
     if (ro) ro.disconnect()
     if (io) io.disconnect()
     if (E) { closeDetail(E.detail, s); E.detail.innerHTML = '' }
