@@ -73,6 +73,9 @@ for (const h of merged) {
     fs.writeFileSync(src, '')
     quiet(await status(), 'a CA taken out of the source')
     quiet(await status({ ...w.env, [h.v]: path.join(w.home, 'certs', 'gone.pem') }), 'a source that cannot be read')
+    const own = path.join(w.dir, 'elsewhere.pem') // a file under ~/.trocar: install never merges those (they are trocar's), so it is not judged either
+    fs.writeFileSync(own, newCa('a file of trocar\'s own'))
+    quiet(await status({ ...w.env, [h.v]: own }), 'a source under ~/.trocar')
     fs.mkdirSync(path.join(w.home, 'certs', 'adir'))
     quiet(await status({ ...w.env, [h.v]: path.join(w.home, 'certs', 'adir') }), 'a source that is a directory')
     fs.writeFileSync(src, `${one}\n${newCa('user ca two')}`)

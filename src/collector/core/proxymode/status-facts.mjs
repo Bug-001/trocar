@@ -7,7 +7,7 @@ import nodeFs from 'node:fs'
 import path from 'node:path'
 import { itemsOfPhase } from '../../../off/manifest.mjs'
 import { judgeEntry, judgeOwned } from '../trust/journal.mjs'
-import { isPresent, readSrc, holds, presentPaths } from './sources.mjs'
+import { isPresent, readSrc, holds, presentPaths, inTrocar } from './sources.mjs'
 import { planRoutes } from './entries.mjs'
 import { upstreamFor, isTrocarDoorUrl } from './chain.mjs'
 import { pacLeg } from './pac.mjs'
@@ -60,7 +60,7 @@ function bundleGap(desc, c, inst, ctx, fs) {
     try { r = readSrc(src, ctx) } catch { continue }
     for (const { value } of r.set && !r.error ? r.all : []) {
       const file = typeof value === 'string' ? value.trim() : ''
-      if (!path.isAbsolute(file)) continue
+      if (!path.isAbsolute(file) || inTrocar(file, ctx.home, ctx.os)) continue // install merges no file of trocar's own (model-install.mjs userCertsOf)
       let text
       try { text = fs.readFileSync(file, 'latin1') } catch { continue } // unreadable now: not known, never a false alarm
       for (const { fp } of certBlocks(text)) {
