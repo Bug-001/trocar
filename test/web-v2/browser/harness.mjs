@@ -45,6 +45,7 @@ export async function launchChrome(chromium, pids = []) {
   fs.writeFileSync(path.join(profile, 'Local State'), JSON.stringify(LOCAL_STATE))
   // a `{ launch }` stand-in (the WebKit cases') has no Chrome profile to seed: it is launched as is. The pids of what it starts go into
   // `pids` as they start, so a launch that hangs can be killed too (withBoard's deadline)
+  // launches never overlap (one test at a time, one launch per board); overlapping ones would restore out of order
   const spawn = ChildProcess.prototype.spawn
   ChildProcess.prototype.spawn = function (...a) { const r = spawn.apply(this, a); if (this.pid) pids.push(this.pid); return r }
   let browser
@@ -112,13 +113,16 @@ export async function timerReads(b) {
  *  `home`: a prebuilt {userHome, home} served instead of boardHome({bytes}). `base`: an external board's URL carrying `#t=<token>` — no
  *  face is started (`face` is null) and `get` reads that board with the token header.
  *  `requests` logs every /api (the answer files /api/d/* too) and /control response as {url, method, body (the request's post data, or null), range (its Range header, or null), status, start (ms epoch the request began), t (ms epoch it answered)}; `errors` collects pageerrors; `get(name, params)` reads the face directly (no page, no request log). Always `await stop()`. */
-// 0.1 §3 约定 13: how long a board's browser may live. A test whose own timeout is longer passes its own `deadline` (a little under it)
+// 0.1 §3 约定 13: how long a board's browser may go on in one test, under the run's per-test timeout. A board shared by several tests is
+// given each test's budget with renew(ms) when that test starts; a test whose own timeout is longer passes its own (a little under it)
 export const BOARD_DEADLINE_MS = 270_000
 // the browser's processes gone at once: their group where there are groups (Playwright starts Chrome in one of its own, with its renderers
 // and GPU process), else the process itself
 function killBrowser(pids) {
   for (const pid of pids) {
-    try { process.kill(process.platform === 'win32' ? pid : -pid, 'SIGKILL') } catch { try { process.kill(pid, 'SIGKILL') } catch { /* gone */ } }
+    // a recorded pid that leads no group (a worker the face forked during the launch, the face's to end) or is gone is left alone: a pid
+    // gone may be another process's by now
+    try { process.kill(process.platform === 'win32' ? pid : -pid, 'SIGKILL') } catch (e) { if (e.code === 'EPERM') try { process.kill(pid, 'SIGKILL') } catch { /* gone */ } }
   }
 }
 export async function withBoard({ bytes, home, base, idleMs, token = true, width = 1280, height = 900, theme = 'light', chromium, setup, deadline = BOARD_DEADLINE_MS } = {}) {
@@ -138,8 +142,13 @@ export async function withBoard({ bytes, home, base, idleMs, token = true, width
   let browser, context, page, dead = null
   // the hard deadline (0.1 §3 约定 13): the browser's processes are killed, which rejects whatever call waits on it; stop() then fails
   const pids = []
-  const timer = setTimeout(() => { dead = new Error(`browser did not answer in ${Math.round(deadline / 1000)} s`); killBrowser(pids) }, deadline)
-  timer.unref()
+  let timer = null
+  const renew = (ms = deadline) => {
+    clearTimeout(timer)
+    timer = setTimeout(() => { dead = new Error(`browser did not answer in ${Math.round(ms / 1000)} s`); killBrowser(pids) }, ms)
+    timer.unref()
+  }
+  renew()
   const stop = async () => {
     clearTimeout(timer)
     try {
@@ -173,7 +182,7 @@ export async function withBoard({ bytes, home, base, idleMs, token = true, width
     const t = token === true ? face?.token : token
     await page.goto(face ? `${face.base}/${t ? `#t=${encodeURIComponent(t)}` : ''}` : base, { waitUntil: 'load' })
   } catch (e) { await stop(); throw e }
-  return { url: face ? face.base : ext.origin, get, face, page, stop, requests, errors, missing }
+  return { url: face ? face.base : ext.origin, get, face, page, stop, renew, requests, errors, missing }
 }
 
 export const mark = (page, name) => page.evaluate((n) => { performance.mark(n) }, name)

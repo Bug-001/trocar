@@ -12,7 +12,7 @@ after(() => { for (const pid of groups) try { process.kill(-pid, 'SIGKILL') } ca
 
 // the stand-in: launch() starts a child (and a grandchild, as Chrome's renderers are) and resolves; every later call waits until the
 // child is gone, then rejects as Playwright does for a closed browser
-function standIn({ hangLaunch = false } = {}) {
+function standIn({ hangLaunch = false, answers = false } = {}) {
   const kids = []
   return {
     kids,
@@ -22,6 +22,11 @@ function standIn({ hangLaunch = false } = {}) {
       const gone = new Promise((resolve) => child.once('exit', resolve))
       const hang = () => gone.then(() => { throw new Error('Target page, context or browser has been closed') })
       if (hangLaunch) return hang() // the launch itself never answers
+      if (answers) { // a browser that answers until it is killed
+        const page = { on() {}, addInitScript: async () => {}, goto: async () => {}, close: async () => {} }
+        const context = { newPage: async () => page, on() {}, pages: () => [page], close: async () => {}, unrouteAll: async () => {} }
+        return { newContext: async () => context, contexts: () => [context], close: async () => {}, on() {} }
+      }
       return { newContext: hang, contexts: () => [], close: async () => {}, on() {} }
     },
   }
@@ -38,4 +43,16 @@ for (const hangLaunch of [false, true]) test(`0.1 约定 13: a browser that neve
   const groupLeft = () => { try { process.kill(-child.pid, 0); return true } catch (e) { return e.code !== 'ESRCH' } }
   for (const t1 = Date.now(); groupLeft() && Date.now() - t1 < 3000;) await new Promise((r) => setTimeout(r, 50))
   assert.ok(child.pid && !groupLeft(), 'a process of the browser\'s group is left')
+})
+
+test('0.1 约定 13: a board shared by several tests is renewed as each starts, and killed only when one test outruns its budget', { skip: process.platform === 'win32' && 'process groups are POSIX', timeout: 20_000 }, async () => {
+  const chromium = standIn({ answers: true })
+  const b = await withBoard({ base: 'http://127.0.0.1:9/#t=x', chromium, deadline: 800 })
+  const [child] = chromium.kids, alive = () => { try { process.kill(child.pid, 0); return true } catch { return false } }
+  await new Promise((r) => setTimeout(r, 500)); b.renew(800) // the next test starts
+  await new Promise((r) => setTimeout(r, 600))
+  assert.ok(alive(), 'a renewed board lives past its first deadline')
+  await new Promise((r) => setTimeout(r, 600))
+  const err = await b.stop().then(() => null, (e) => e)
+  assert.match(String(err?.message), /browser did not answer in 1 s/, 'a test that outran its budget fails saying so')
 })
