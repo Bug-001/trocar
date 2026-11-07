@@ -362,6 +362,7 @@ const MONITOR_REPLIES = [
   ['<BLOCK>YES</BLOCK>', true],
   ['<block>no', false],
   ['<block>maybe</block>', null],
+  ['<block>nope</block><block>yes</block>', true],
   ['no', null],
   ['nothing to say', null],
   ['', null],
