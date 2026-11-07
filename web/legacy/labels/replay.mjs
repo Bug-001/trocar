@@ -17,7 +17,7 @@ export const LANE_KIND = Object.freeze({
   notify: { word: 'notification summary', row: 'bg', bucket: 'bg', hint: 'The agent asks the model to sum up recent activity in a one-line notification' },
   titlegen: { word: 'title generation', row: 'bg', bucket: 'bg', hint: 'The agent asks the model to give the session a title' },
   quota: { word: 'keep-alive check', row: 'bg', bucket: 'bg', hint: 'A check call with a tiny reply limit; the reply is not used' },
-  aux: { word: 'other background call', row: 'bg', bucket: 'bg', hint: 'Any other helper call outside the main thread and the sub-agents' },
+  aux: { word: 'other background call', row: 'bg', bucket: 'bg', hint: 'A call outside the main conversation whose agent doesn\'t say what it is' },
   probe: { word: 'warm-up request', row: 'bg', bucket: 'bg', hint: 'A warm-up request the agent marked itself: it writes the cache ahead of time; not a step of the main thread' },
   'token-count': { word: 'token count', row: 'tc', bucket: null, hint: 'Token count: generates no reply and is not billed' },
 })
