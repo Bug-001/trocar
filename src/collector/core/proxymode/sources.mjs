@@ -17,11 +17,17 @@ import { parseJsonText } from '../../../off/json-text.mjs'
 import { parseDotenv, expandHome } from '../config-read.mjs'
 import { resolveLoc } from '../../../off/loc.mjs'
 import { certBlocks } from '../../../off/pem.mjs'
+import { pathKey } from '../../../off/fsutil.mjs'
 
 const get = (env, k) => (env instanceof Map ? env.get(k) : env ? env[k] : undefined)
 const isSet = (v) => v !== undefined && v !== null && v !== ''
 const absent = (e) => e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')
 const why = (e) => `${(e && e.code) || 'error'}: ${(e && e.message) || e}`
+
+
+// Compared as the OS compares paths (pathKey: no case on Windows and macOS), so another spelling of trocar's own file is still trocar's (4.11 rule U)
+/** Is `file` under ~/.trocar? */
+export const inTrocar = (file, home, os) => { const k = (p) => pathKey(p, { platform: os, realpath: null }); return k(path.resolve(home, file)).startsWith(`${k(path.join(home, '.trocar'))}/`) }
 
 export { resolveLoc } // the one resolver, shared with the marker undo (src/off/loc.mjs)
 

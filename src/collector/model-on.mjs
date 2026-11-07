@@ -25,7 +25,7 @@ import { lockState } from '../health/read.mjs'
 
 const INSTALL_HINT = 'trocar install'
 // 1.6 §1.1: what a `setup.missing[].what` means, in words (the code stays in the JSON)
-const SETUP_WHY = { 'carrier-absent': 'trocar has not set up its certificate for it (installed after trocar, or what trocar placed is gone)', 'carrier-overwritten': 'its own update overwrote what trocar placed for its certificate', 'root-missing': "trocar's root certificate is no longer trusted" }
+const SETUP_WHY = { 'carrier-absent': 'trocar has not set up its certificate for it (installed after trocar, or what trocar placed is gone)', 'carrier-overwritten': 'its own update overwrote what trocar placed for its certificate', 'bundle-lacks-ca': 'its certificate bundle lacks a CA you added after install', 'root-missing': "trocar's root certificate is no longer trusted" }
 const errText = (e) => String((e && e.message) || e)
 /** The root's state the way `status` reads it (cert.root.state, 1.6 §9.4): trocar-ca.pem asked of the user's store through the injected reader — the one
  *  store question `on` asks, so ⑪'s root-missing is status's (4.11 P4b). Pending / declined / unreadable → not `missing`: not setup work, or not known. */
