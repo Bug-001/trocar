@@ -53,17 +53,19 @@ async function growingDesk(w, fn) {
     const until = (fn, arg, what) => page.waitForFunction(fn, arg, { timeout: 30000, polling: 'raf' }).catch(async (e) => {
       throw new Error(`${what} (now ${JSON.stringify(await page.evaluate(() => ({ head: window.__head(), drawer: !!document.querySelector('#detail.open'), pressed: window.__press })))}): ${e.message}`)
     })
+    const paces = [] // ms from a grant until head reads took it, per answer: the poll's pace
     const grant = async (n) => {
-      const to = growth.left() - n * 1000
+      const to = growth.left() - n * 1000, t0 = Date.now()
       growth.more(n)
       for (let left = growth.left(), t = Date.now(); growth.left() > to; await page.waitForTimeout(50)) {
         if (growth.left() !== left) { left = growth.left(); t = Date.now() }
         assert.ok(Date.now() - t < 20000, `no head read took the granted answers: ${left} members still to come, ${to} asked for`)
       }
+      paces.push((Date.now() - t0) / n)
     }
     const drawn = () => until((a) => window.__head()?.m === a, w.files(w.marks[w.marks.length - 1 - growth.left()], 512).head.steps, 'the answers taken were not drawn')
     await grant(1); await drawn()
-    await fn({ page, growth, grant, drawn, stepN, until })
+    await fn({ page, growth, grant, drawn, stepN, until, paces })
     assert.deepEqual(b.errors, [])
   } finally { await b.stop() }
 }
@@ -91,7 +93,7 @@ let growing = null // the first case's step samples, for the line's own case
 test('2.3 归约前沿 · D64②: a session growing by 1,000 members an answer — following, scrubbing and lane jumps move the step and run no long task', { skip }, async () => {
   const w = world(12, { calls: 30000, page: 1500, files: 600, compact: 0.02 }) // wide chapters: the window after End holds many steps
   await growingDesk(w, async (d) => {
-    const { page, growth, grant, drawn, stepN } = d, longTasks = () => page.evaluate(() => window.__lt.splice(0))
+    const { page, growth, grant, drawn, stepN, paces } = d, longTasks = () => page.evaluate(() => window.__lt.splice(0))
     const left0 = growth.left()
     await longTasks() // the open is D64①'s, not this case's
     const seen = { follow: [], scrub: [], lanes: [] }, samples = []
@@ -124,7 +126,7 @@ test('2.3 归约前沿 · D64②: a session growing by 1,000 members an answer �
     seen.lanes = await longTasks()
 
     const { p50, p95 } = growing = stats(samples)
-    console.log(`# pending growth: ${growth.left()} members still to come; long tasks follow [${seen.follow.map(Math.round)}] scrub [${seen.scrub.map(Math.round)}] lanes [${seen.lanes.map(Math.round)}]; step n=${samples.length} p50=${p50.toFixed(1)} ms p95=${p95.toFixed(1)} ms (scrub ${stats(samples.slice(0, 60)).p95.toFixed(1)}, lane jumps ${stats(samples.slice(60)).p95.toFixed(1)}) line=${BOARD_LINES.stepClick} ms`)
+    console.log(`# pending growth: ${growth.left()} members still to come; long tasks follow [${seen.follow.map(Math.round)}] scrub [${seen.scrub.map(Math.round)}] lanes [${seen.lanes.map(Math.round)}]; step n=${samples.length} p50=${p50.toFixed(1)} ms p95=${p95.toFixed(1)} ms (scrub ${stats(samples.slice(0, 60)).p95.toFixed(1)}, lane jumps ${stats(samples.slice(60)).p95.toFixed(1)}) line=${BOARD_LINES.stepClick} ms; poll: an answer taken ${stats(paces).p50.toFixed(0)} ms after it was granted (p50), ${Math.max(...paces).toFixed(0)} ms at most`)
     assert.equal(growth.left(), left0 - 23 * 1000, 'the growth moved by the answers asked, no more')
     assert.ok(growth.left() > 0, 'the session was still pending through every phase')
     for (const [phase, ms] of Object.entries(seen)) assert.ok(Math.max(0, ...ms) <= LIMITS.longtaskMs, `${phase}: a long task of ${Math.round(Math.max(...ms))} ms`)
@@ -160,6 +162,29 @@ test('2.3 读者优先: a tick held down while an answer lands moves the step wh
       await page.mouse.up()
       await until((n0) => { const h = window.__head(); return !!h && h.n !== n0 && !!document.querySelector('#detail.open') }, n0, `the tick let go at step ${n0} did not move the step`)
       await drawn()
+    }
+  })
+})
+
+// 2.3 读者优先, the aim: a tick the pointer rests on is not painted away while an answer lands (only the rows' paint waits, rails-hold.mjs);
+// leaving the rows paints them, and so does resting HOLD_RAILS_MS. drawn() is the proof the answer's redraw ran: the step head counts it.
+test('2.3 读者优先: a tick the pointer rests on stays while an answer is drawn; the rows are painted on leaving, or after 1 s', { skip }, async () => {
+  const w = world(12, { calls: 30000, page: 1500, files: 600, compact: 0.02 })
+  await growingDesk(w, async (d) => {
+    const { page, grant, drawn, until } = d
+    await grant(2); await drawn()
+    for (let j = 0; j < 3; j++) {
+      await toEnd(d)
+      const pt = await aimOlder(d, j)
+      await page.mouse.move(pt.x, pt.y)
+      await page.evaluate(([x, y]) => { window.__aimed = document.elementFromPoint(x, y) }, [pt.x, pt.y])
+      await grant(1); await drawn()
+      const t0 = Date.now()
+      assert.ok(await page.evaluate(() => window.__aimed.isConnected && window.__aimed.matches('.tick')), `round ${j}: the tick under the pointer was painted away`)
+      if (j < 2) await page.mouse.move(pt.x, pt.y - 400) // off the rows
+      await until(() => !window.__aimed.isConnected, undefined, `round ${j}: the rows were not painted ${j < 2 ? 'on leaving' : 'with the pointer resting'}`)
+      // the hold began when the answer was applied, before drawn(): from here it has at most HOLD_RAILS_MS left, plus a frame or two
+      if (j === 2) assert.ok(Date.now() - t0 <= 1000 + 300, `round ${j}: the rows were painted ${Date.now() - t0} ms after the answer was drawn`)
     }
   })
 })
