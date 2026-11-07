@@ -57,6 +57,7 @@ test('CM24 · daemon up: a holder the daemon names (GET /holders over its real e
     const lines = formatUninstallReceipt(receipt, { home: w.home }).split('\n')
     const steps = lines.filter((l) => /^\s+(trocar|kill) /.test(l)).map((l) => l.trim())
     assert.deepEqual(steps, ['kill 4242', 'trocar uninstall'], `1.6 §1.1⑥: each command whole on a line of its own: ${lines.join(' | ')}`)
+    assert.ok(lines.some((l) => /^Quit codex/.test(l)), `a step in an application is prose at the margin, not in the command column: ${lines.join(' | ')}`)
     assert.ok(!lines.some((l) => l.startsWith('Problem:') && /trocar (off|uninstall)/.test(l)), 'not inside a Problem line')
     assert.match(receipt.problems.join('\n'), /codex \(pid 4242\)/)
     assert.deepEqual(tree(w.home), before, 'not one file changed')
