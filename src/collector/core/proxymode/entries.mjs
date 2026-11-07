@@ -9,7 +9,7 @@
 // goes through src/off/journal.mjs: key by key, block by block; a key the user changed during on stays (D48②), bytes are compared whole only when
 // nothing changed. Records carry `route` (the route id: one entry group) and the door written (sealed at save: `door_sha256`, src/off/seal.mjs), so a moved door rewrites that route only.
 import path from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { randomUUID, createHmac } from 'node:crypto'
 import { applyJsonKey, applyJsonKeys, applyTextEntry, writeOwnedFile, judgeOwned, saveManifest, undoEntry, removeOwnedFile, sha256 } from '../trust/journal.mjs'
 import { parseJsonText, getPath, removeKey } from '../../../off/json-text.mjs'
 import { decodeText } from '../../../off/text-codec.mjs'
@@ -25,7 +25,9 @@ import { loopbackWords, errnoWords } from '../../../cli/words.mjs'
 import { unseal, doorFp } from '../../../off/seal.mjs'
 
 const LOOPBACK = LOOPBACK_HOSTS
-export const PAC_PATH = '/trocar.pac' // P10: the daemon serves the PAC here on the PAC group's door
+/** P10: where the daemon serves the PAC on the PAC group's door — a path carrying the install's key, derived from the doors' token (ingress.json
+ *  `listenerToken`): the PAC is a capability that only this user, who can read the entry holding it, has. */
+export const pacPath = (token) => `/${createHmac('sha256', String(token)).update('trocar.pac').digest('hex').slice(0, 32)}/trocar.pac`
 // a hostTree form's note (CM31): it names the form, since status prints it under the harness, beside forms that run on their own
 const hostTreeNote = (form) => `${form} runs inside another program: every other extension there connects through trocar too, and trocar passes those connections on without capturing them`
 // P6 · P9 · P10: a route that sends loopback direct — a class 1 entry with its NO_PROXY, a plugin hook rendered with the agent's NO_PROXY
@@ -109,7 +111,8 @@ function selectTarget(ctx) {
 
 function writeJson(ctx, door) {
   const r = ctx.route, b = base(ctx), out = []
-  const value = r.value === 'pac-url' ? new URL(PAC_PATH, door).href : door
+  if (r.value === 'pac-url' && !ctx.pacToken) throw Object.assign(new Error('the PAC address needs the install\'s key, and trocar on was given none'), { code: 'entry-refused' })
+  const value = r.value === 'pac-url' ? new URL(pacPath(ctx.pacToken), door).href : door
   let file, create = null
   if (r.select) { const t = selectTarget(ctx); if (t.code) return t; file = t.file; create = t.create || null } else file = resolveLoc(r.file, ctx)[0]
   if (!file) return notRouted('no-path')

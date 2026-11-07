@@ -7,7 +7,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
-import { routeEntry, mergeNoProxy } from '../../../../src/collector/core/proxymode/entries.mjs'
+import { routeEntry, mergeNoProxy, pacPath } from '../../../../src/collector/core/proxymode/entries.mjs'
 import { resolveLoc } from '../../../../src/collector/core/proxymode/sources.mjs'
 import { encodeText, decodeBytes } from '../../../helpers/file-shapes.mjs'
 import { world, put, bytesOf } from './fixtures/entries-ctx.mjs'
@@ -16,7 +16,8 @@ const harnesses = await loadHarnesses()
 const withSelect = harnesses.flatMap((h) => Object.entries(h.proxyMode.routes).filter(([, r]) => r.select).map(([id, r]) => ({ h, id, r })))
 const withArray = harnesses.flatMap((h) => Object.entries(h.proxyMode.routes).filter(([, r]) => r.arrayItems).map(([id, r]) => ({ h, id, r })))
 const DOOR = 'http://127.0.0.1:18002' // a PAC door takes no credentials
-const PAC = `${DOOR}/trocar.pac`
+const KEY = 'ab'.repeat(16)
+const PAC = `${DOOR}${pacPath(KEY)}` // the PAC address carries the install's key (P10)
 const SHAPES = [['utf8', false, '\n'], ['utf8', true, '\r\n'], ['utf16le', true, '\n']]
 const json = (o, eol) => JSON.stringify(o, null, 2).replace(/\n/g, eol) + eol
 const read = (f) => JSON.parse(decodeBytes(fs.readFileSync(f)).text)
@@ -24,7 +25,7 @@ const read = (f) => JSON.parse(decodeBytes(fs.readFileSync(f)).text)
 function lib(os, { meta = undefined, entries = {}, shape = SHAPES[0], ...opts } = {}) {
   const w = world({ os, ...opts })
   const { h, id, r } = withSelect[0]
-  const ctx = { ...w.ctx, harness: h.name, route: r, routeId: id }
+  const ctx = { ...w.ctx, harness: h.name, route: r, routeId: id, pacToken: KEY }
   const dir = resolveLoc(r.select.dir, ctx)[0]
   const enc = (o) => encodeText(json(o, shape[2]), shape[0], shape[1])
   if (meta !== undefined) put(path.join(dir, r.select.meta), enc(meta))

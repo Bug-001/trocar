@@ -11,6 +11,7 @@ import path from 'node:path'
 import { createModelCollector } from '../../../../src/collector/core/proxymode/collector.mjs'
 import { HOLDER_POLL_MS } from '../../../../src/collector/core/proxymode/holders.mjs'
 import { verdictOf, judgedForms } from '../../../../src/collector/core/proxymode/verdict.mjs'
+import { pacPath } from '../../../../src/collector/core/proxymode/entries.mjs'
 import { upstreamFor, MAX_DEPTH } from '../../../../src/collector/core/proxymode/chain.mjs'
 import { translateBypass } from '../../../../src/collector/arch/darwin/upstream.mjs'
 import { certPem } from '../../../../src/collector/core/tls/cert.mjs'
@@ -344,7 +345,7 @@ test('CM19 / CM33 · the PAC door: this user\'s process gets the PAC (door leg w
   for (const address of ['127.0.0.1', 'LocalHost', 'door.localhost', '127.0.0.2', '::1']) assert.equal(await c.lookupIngress({ peer: PEER, user: pacG, target: { address, port: 18103 } }), null, `${address}: a loop through the door (chain.mjs isLoopbackHost), not a flow`)
   // what one servePac call recorded (P10: a refusal and a door-less answer are one record each, with the requester's peer; a door PAC is none)
   const wrote = async (req) => { const n = records.length, res = await c.servePac(req); const got = records.slice(n); for (const x of got) assert.deepEqual(checkRecord(x), [], JSON.stringify(x)); return { res, got } }
-  const pacReq = { peer: PEER, user: pacG, path: '/trocar.pac' }
+  const pacReq = { peer: PEER, user: pacG, path: pacPath(TOKEN) }
   const { res: on, got: onRec } = await wrote(pacReq)
   assert.deepEqual(onRec, [], 'this user\'s process gets the door PAC: nothing to record')
   assert.equal(on.status, 200); assert.match(on.body, /PROXY 127\.0\.0\.1:18103; PROXY sys\.corp:8080/)
@@ -357,6 +358,15 @@ test('CM19 / CM33 · the PAC door: this user\'s process gets the PAC (door leg w
   assert.equal(other && other.refuse && other.refuse.code, 'pac-peer-refused', 'a CONNECT from another user is refused — an answer of its own, not null (null is "unknown user": 407)')
   assert.equal(records.length, n0, 'the lookup writes nothing itself: the ingress writes the one record of that connection')
   w.pid = null // the owner could not be read
+  // P10: the PAC is a capability, not an owner check. Without the install's key (another user cannot read the entry that holds it) a requester whose
+  // owner cannot be read — which on macOS is how another user's process looks — is refused, recorded, and gets no byte of the owner's way out
+  for (const path of ['/trocar.pac', `/${'0'.repeat(32)}/trocar.pac`, `${pacPath(TOKEN)}x`, pacPath(TOKEN).replace('/trocar.pac', '')]) {
+    const stranger = await wrote({ ...pacReq, path })
+    assert.equal(stranger.res, null, `${path}: refused`)
+    assert.deepEqual(stranger.got.map((r) => [r.event, r.code, r.peer]), [['failure', 'pac-peer-refused', PEER]], `${path}: one refusal, with the peer`)
+    assert.ok(!JSON.stringify(stranger.got).includes('sys.corp'), 'nothing of the way out in the record')
+  }
+  assert.notEqual(pacPath(TOKEN), pacPath(`${TOKEN.slice(1)}0`), 'the key is the install\'s own')
   const { res: unread, got: unreadRec } = await wrote(pacReq)
   assert.deepEqual(unreadRec.map((r) => [r.event, r.code, r.peer]), [['failure', 'pac-owner-unread', PEER]], 'exactly one record that the PAC was served without the door, with the peer')
   assert.equal(unread.status, 200); assert.doesNotMatch(unread.body, /18103/, 'no door'); assert.match(unread.body, /return "PROXY sys\.corp:8080"/, 'the app keeps the user\'s system proxy')
@@ -386,11 +396,11 @@ test('CM19 / CM33 · the PAC door: this user\'s process gets the PAC (door leg w
   w.facts = { uid: 501, agent: pacDesc.name, startedAt: INSTALLED + 1 }
   w.manifest = manifestOf(pacDesc.name, { liveness: { [pacDesc.name]: { on_at: iso(INSTALLED), off_at: iso(INSTALLED + 10) } } })
   w.procs = [{ pid: 77, startedAt: INSTALLED + 1 }]
-  await c.servePac({ peer: PEER, user: pacG, path: '/trocar.pac' }) // the app took the PAC: it read the entry, a holder after off (P12)
+  await c.servePac({ peer: PEER, user: pacG, path: pacPath(TOKEN) }) // the app took the PAC: it read the entry, a holder after off (P12)
   await c.off({ harnesses: [pacDesc.name] })
-  const after = await c.servePac({ peer: PEER, user: pacG, path: '/trocar.pac' })
+  const after = await c.servePac({ peer: PEER, user: pacG, path: pacPath(TOKEN) })
   assert.match(after.body, /return "PROXY sys\.corp:8080"/, 'after off only the app\'s own way')
-  assert.equal((await c.servePac({ peer: PEER, user: pacG, path: '/other' })).status, 404)
+  assert.equal(await c.servePac({ peer: PEER, user: pacG, path: '/other' }), null, 'any other path is refused, this user\'s process too')
   c.close()
 })
 
@@ -406,7 +416,7 @@ test('CM19 / P10 · the PAC door dials the own leg its PAC names: a bypass-list 
     assert.deepEqual(await dial('gw.corp.example'), { kind: 'direct' }, `${agent}: a bypass-list host is dialled direct, never through the env's proxy`)
     assert.deepEqual(await dial('api.example'), proxyOf(sp.url), `${agent}: any other host through the user's fixed system proxy, the PAC's own leg`)
     if (agent) assert.equal(c.upstreams()[pacG][0].source, 'system-proxy', 'status reads the same answer')
-    const pac = (await c.servePac({ peer: PEER, user: pacG, path: '/trocar.pac' })).body
+    const pac = (await c.servePac({ peer: PEER, user: pacG, path: pacPath(TOKEN) })).body
     assert.match(pac, /corp\.example/); assert.match(pac, /"PROXY 127\.0\.0\.1:18104; PROXY sys\.corp:8080"/)
     w.sp = null
     assert.deepEqual(await dial('api.example'), { kind: 'direct' }, 'no system proxy: direct, as the PAC then says')
@@ -697,7 +707,7 @@ test('PAC GETs are counted per life: two from one life are one kind:\'pac\' row 
   const dir = tmpDir(), S1 = INSTALLED + 1, S2 = INSTALLED + 500
   const { c, w } = await rig({ desc: pacDesc, dir, w: { pid: 81, facts: { agent: pacDesc.name, uid: 501, startedAt: S1 }, now: INSTALLED + 10 } })
   await c.on({ harnesses: [pacDesc.name], groups: { [pacG]: 18113 } })
-  const get = () => c.servePac({ peer: PEER, user: pacG, path: '/trocar.pac' })
+  const get = () => c.servePac({ peer: PEER, user: pacG, path: pacPath(TOKEN) })
   await get(); w.now = INSTALLED + 20; await get()
   w.facts = { ...w.facts, startedAt: S2 }; w.now = INSTALLED + 600; await get()
   c.close()
@@ -1126,7 +1136,7 @@ test('MA17 · the PAC file: an owner or facts question that hangs takes the pac-
     const { c, w, records } = await rig({ desc: pacDesc, doorHangMs: HANG_MS, w: { pid: 77, facts: { uid: 501, startedAt: INSTALLED + 1 }, sp: { url: 'http://sys.corp:8080', bypass: [] } } })
     await c.on({ harnesses: [pacDesc.name], groups: { [pacG]: 18109 } })
     w.wait = (x) => (x === q ? NEVER : undefined)
-    const res = await c.servePac({ peer: PEER, user: pacG, path: '/trocar.pac' })
+    const res = await c.servePac({ peer: PEER, user: pacG, path: pacPath(TOKEN) })
     assert.equal(res.status, 200); assert.doesNotMatch(res.body, /18109/, 'no door')
     assert.deepEqual(records.filter((r) => r.code === 'pac-owner-unread').map((r) => r.peer), [PEER], q)
     c.close()
@@ -1138,7 +1148,7 @@ test('MA17 · the PAC file: its limit runs from the accept too', async () => {
   await c.on({ harnesses: [pacDesc.name], groups: { [pacG]: 18111 } })
   w.wait = (x) => (x === 'ownerOf' ? NEVER : undefined)
   const t0 = performance.now()
-  await c.servePac({ peer: PEER, user: pacG, path: '/trocar.pac', acceptedAt: INSTALLED + 5 - limit * 0.9 })
+  await c.servePac({ peer: PEER, user: pacG, path: pacPath(TOKEN), acceptedAt: INSTALLED + 5 - limit * 0.9 })
   assert.ok(performance.now() - t0 < limit / 2, 'the time left, not the whole limit')
   assert.equal(records.filter((r) => r.code === 'pac-owner-unread').length, 1)
   c.close()
