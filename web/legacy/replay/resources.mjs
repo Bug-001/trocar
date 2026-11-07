@@ -82,6 +82,7 @@ export function resourceUnits(s) {
   if (noLedger) out.push({ key: 'empty', html: `<div class="navsub empty"${note && note !== 'no-ledger' ? ` title="${esc(note)}"` : ''}>${esc(W.NO_LEDGER)}</div>` })
   else if (done && !res.length && !seen.length) out.push(EMPTY())
   if (!noLedger && note === 'partial-ledger') out.push({ key: 'partial', html: `<div class="navsub empty">${esc(W.PARTIAL_LEDGER)}</div>` })
+  const top = out.length // the lines above are about the ledger, not groups: the quiet groups still stand on their own after them
 
   const fileRow = (r) => { const l = life(r)
     return `<div class="navsub ${l.cls}" data-navstep="${l.enter}" data-navres="${esc(resKeyOf(r))}">` +
@@ -144,7 +145,7 @@ export function resourceUnits(s) {
     const nOthers = runtime.length + seen.length + skills.length + caps.length + dl.length + comps.length + others.length
     // a session with nothing above: the groups stand on their own — a lone 「N more」 row would hide the only content.
     // N holds ledger counts: while the chain is unread the row says 「more」 with the busy box in the count's place
-    if (!out.length) out.push(...inner)
+    if (out.length === top) out.push(...inner)
     else out.push(...(done ? navGroup(s, 'life-others', W.OTHERS_ROW(nOthers), '', inner) : navGroup(s, 'life-others', W.OTHERS_ROW('').trim(), null, inner)))
   }
   // entries exist but none renderable: never a blank page; a ledger still on its way is a sized empty row, not "none"

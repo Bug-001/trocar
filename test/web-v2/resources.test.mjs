@@ -6,7 +6,7 @@
 // String level over desk-model states: the ledger is the anchor lane's `lane` answer as the desk holds it (desk-world.mjs).
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { resourcesHtml, renderResources, wireResources } from '../../web/legacy/replay/resources.mjs'
+import { resourcesHtml, renderResources, wireResources, resourceUnits } from '../../web/legacy/replay/resources.mjs'
 import * as W from '../../web/legacy/labels/replay.mjs'
 import { esc, kf } from '../../web/legacy/core/fmt.mjs'
 import { relPath } from '../../web/legacy/replay/analysis.mjs'
@@ -270,9 +270,20 @@ test('2.4 #14: a ledger that cannot be known says so alone, and a --from null cl
   // a tail page that is only part of the lane: the line on top, the groups as usual; a later page without the code drops the line
   applyLane(s.desk, page({ resources_note: 'partial-ledger' }))
   h = resourcesHtml(s)
-  assert.ok(h.indexOf(esc(W.PARTIAL_LEDGER)) >= 0 && h.indexOf(esc(W.PARTIAL_LEDGER)) < h.indexOf('navlbl'), 'the partial line sits on top')
+  assert.equal(resourceUnits(s)[0].key, 'partial', 'the partial line sits on top')
   assert.equal(grpCount(h, W.RES_GRP.file), 1)
   assert.ok(!h.includes(esc(W.NO_LEDGER)))
+  // only quiet groups kept (names seen, no file): they still stand on their own, not behind 「N more」
+  applyLane(s.desk, page({ resources: [], resources_note: 'partial-ledger' }))
+  assert.equal(grpCount(resourcesHtml(s), `${W.RES_GRP.seen} · ${W.GUESS}`), 1)
+  assert.ok(!resourceUnits(s).some((u) => u.key === 'h:life-others'), 'no 「N more」 row hides the only groups')
   applyLane(s.desk, page({}))
   assert.ok(!resourcesHtml(s).includes(esc(W.PARTIAL_LEDGER)))
+  // the live path: the ledger head read (applyLedger) and a whole no-ledger page say the same
+  for (const read of [(x) => applyLedger(s.desk, key, null, { base: R(5), ...x }), (x) => applyLane(s.desk, page(x))]) {
+    applyLane(s.desk, page({}))
+    read({ resources: null, seen: null, resources_note: 'no-ledger' })
+    const h = resourcesHtml(s)
+    assert.ok(h.includes(esc(W.NO_LEDGER)) && !text(h).includes('a.mjs'))
+  }
 })
