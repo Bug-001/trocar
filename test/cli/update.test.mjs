@@ -17,6 +17,7 @@ import { validateReceipt, newReceipt } from '../../src/cli/schema.mjs'
 import { codeId, codeIdOf } from '../../src/version.mjs'
 import { writeStateAtomic, setDesired, emptyState } from '../../src/off/state.mjs'
 import { newManifest, saveManifest } from '../../src/off/manifest.mjs'
+import { recentFailures } from '../../src/collector/core/events.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { fakeIo } from './fixtures/on-ctx.mjs'
 import { assertEnglish } from '../helpers/english.mjs'
@@ -441,6 +442,26 @@ test('V96: the collector on another code is asked to drain and exit before it is
   assert.deepEqual(asked.find(([m]) => m === 'POST'), ['POST', '/off', { exit: true, by: 'update' }], 'drained first: POST /off, the whole daemon, not now, naming the update')
   assert.equal(stopped.length, 1, 'and stopped once after that')
   assert.deepEqual([t.io.json().restarted, daemon], [true, codeId(s.root)])
+})
+
+test('D38: a login entry the replaced collector came back through by a fallback writes its failure record once, and says it once', async () => {
+  const s = sandbox()
+  const sock = path.join(s.base, 'control.sock')
+  let daemon = '0.1.0+0000000'
+  const event = { event: 'failure', where: 'install', code: 'task-register-failed', reason: 'schtasks /Create was refused (Access is denied); trocar starts at login through the HKCU Run entry instead' }
+  const t = ctx(s, {
+    daemonCode: () => daemon,
+    deps: {
+      daemonState: async () => ({ state: 'running', socket: sock, lock: { pid: 4242 } }),
+      request: async () => ({ actual: 'off', confirmed: true, pid: 4242, relayed: { closing: 0, waiting: 0, cut: 0 } }),
+      stopDaemon: async () => ({ stopped: true, pid: 4242, signals: ['SIGTERM'] }),
+      unit: { path: '/login/entry', registered: () => ({ state: 'present' }), enable: () => { daemon = codeId(s.root); return { code: 0, via: 'run-key', event } } },
+      socketPath: sock, drainMs: 0,
+    },
+  })
+  assert.equal(await runUpdateCli(['--yes', '--json'], t.c), EXIT.ok, t.io.text())
+  assert.equal(recentFailures(s.dir).filter((f) => f.code === 'task-register-failed').length, 1, 'the failure record is in flows/')
+  assert.equal(t.io.json().notes.filter((n) => n === event.reason).length, 1, 'and said once')
 })
 
 test('V96: a collector that refuses the off request is not named by a null pid', async () => {
