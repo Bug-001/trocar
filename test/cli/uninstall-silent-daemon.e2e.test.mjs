@@ -28,6 +28,7 @@ test('1.6 §3.6 e2e: a real daemon stopped with SIGSTOP — uninstall refuses wi
   fs.mkdirSync(path.dirname(envFile), { recursive: true }); fs.writeFileSync(envFile, '# the user\'s own\nOPENAI_BASE_URL=https://relay.example\n')
   const userBytes = fs.readFileSync(envFile)
   const child = await forkModelDaemon({ platform, w })
+  let sock = null
   const identity = (pid) => (pid === child.pid ? CHILD_IDENTITY : { start_time: null, boot_id: null })
   const kill = (pid, sig) => { assert.equal(pid, child.pid, 'only the daemon is signalled'); process.kill(pid, sig) } // the test's own child: the real signal
   const deps = { getuid: () => 501, procs: async () => [], identity, kill, exec, custody: w.custody, rootStore: w.store }
@@ -36,6 +37,7 @@ test('1.6 §3.6 e2e: a real daemon stopped with SIGSTOP — uninstall refuses wi
     const parts = { os: platform, harnesses: w.harnesses, arch: { unit: { userUnit: () => unit } } }
     const o = io()
     assert.equal(await runOnCli(['--yes'], { io: o, env: w.env, home: w.home, platform, deps: { ...deps, backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts } }), 0, o.text())
+    sock = JSON.parse(fs.readFileSync(path.join(w.dir, 'control.json'), 'utf8')).path // the daemon is killed at the end, so its socket is this test's to remove
     assert.notDeepEqual(fs.readFileSync(envFile), userBytes, 'the agent points at the daemon\'s door')
 
     process.kill(child.pid, 'SIGSTOP')
@@ -57,5 +59,6 @@ test('1.6 §3.6 e2e: a real daemon stopped with SIGSTOP — uninstall refuses wi
   } finally {
     try { process.kill(child.pid, 'SIGCONT') } catch {}
     child.kill('SIGKILL')
+    if (sock) fs.rmSync(sock, { force: true })
   }
 })
