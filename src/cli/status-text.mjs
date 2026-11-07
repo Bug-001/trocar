@@ -87,11 +87,16 @@ function summaryPairs(doc, now) {
   rows.push(['Problems', !fl ? unknown(errorReason(doc, 'capture health') || 'capture health could not be read') : fl.problem === 0 ? 'none in the last 24 hours' : `${fl.problem} in the last 24 hours, latest ${ago(fl.latest, now)}`])
   const b = doc.board // §3.5: the address without the token; `trocar board` prints the one with it
   if (b) rows.push(['Board', b.state === 'serving' ? `${b.url}  open it with: trocar board` : b.state === 'unknown' ? unknown(b.reason) : `not running: ${b.reason}`])
+  const login = loginRow(doc.autostart)
+  if (login) rows.push(login)
   // V39 (§1.1): logging out stops the daemon unless linger is on — the command is printed, never run; a state that could not be read is said with its reason, never taken for "on"
   if (doc.linger === false) rows.push(['Logging out', `capture stops when you log out; run: loginctl enable-linger ${doc.user || '<your user name>'}`])
   else if (doc.linger === 'unknown') rows.push(['Logging out', unknown(doc.linger_reason || 'the linger state could not be read')])
   return rows
 }
+
+/** D61: the login entry's row, said only when it is not proven there (the summary and `status <harness>`, which exit on it too: D38). */
+const loginRow = (a) => (a && a.state !== 'present' ? ['Login', a.state === 'unknown' ? `${unknown(a.reason)}; run: ${a.command}` : `${a.reason}, so trocar does not start after the next login; run: ${a.command}`] : null)
 
 // ── the detail of `status <harness>` (§3.5) ───────────────────────────────────────────────────────────────────────
 const DESIRED = { on: 'on', off: 'off' }
@@ -110,6 +115,8 @@ export function statusDetail(doc, h, { finding = null, now = Date.now(), colors:
     rows.push(['Check', finding.verify])
   } else if (needsSetup(x) && x.captured !== true) rows.push(['Why', `${h} has no trocar certificate in place yet`], ['Fix', 'trocar install'], ['', `trocar on ${h}`])
   else if (x.captured === true && !notSeenYet(x)) rows.push(['Why', (x.processes || []).length ? 'every running process of it is captured' : 'no process of it is running; new ones will be captured']) // never claims processes that are not there
+  const login = loginRow(doc.autostart)
+  if (login) rows.push(login)
   if (rows.length) lines.push(...rows.flatMap(([l, v]) => wrap(v, WIDTH - 9).map((t, i) => `  ${(i ? '' : l).padEnd(5)}  ${t}`)), '')
   const forms = x.forms || []
   if (forms.length) {

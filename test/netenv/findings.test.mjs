@@ -64,6 +64,7 @@ const SETS = {
   'cause-unknown': { h: 'claude-code', facts: facts('claude-code'), names: ['claude-code'], codes: ['cause-unknown'] },
   'process-unknown': { h: 'claude-code', facts: facts('claude-code', { identity: idOf('claude-code', { unknown: [{ name: 'claude-canary', wide: false, pid: 7002, door: 'claude-code.settings' }] }) }), codes: ['process-unknown'] },
   // 4.11 §3 ⑱: the issuer from the daemon's /status `cert`, the trust verdicts the proxy-mode verdict gives a process, the window's proxy the door could not recover (the forwarder form's source)
+  'autostart-missing': { h: null, facts: facts('claude-code', { autostart: { entry: 'the systemd user unit trocar-collector.service', state: 'disabled', reason: 'the systemd user unit trocar-collector.service is registered but switched off' } }), codes: ['autostart-missing'] },
   'cert-key-missing': { h: null, facts: facts('claude-code', { cert: { key: 'missing', intermediate: 'key-missing' } }), codes: ['cert-key-missing'] },
   'cert-intermediate-unavailable': { h: null, facts: facts('claude-code', { cert: { key: 'unknown', intermediate: 'unavailable' } }), codes: ['cert-intermediate-unavailable'] },
   'not-users-file': { h: 'codex', facts: pfacts('codex', form('codex.cli', { procs: [proc(5530, { name: 'codex app-server', trusted: false, reason: 'not-users-file' })] }), fwForm(17992)), codes: ['not-users-file'] },
@@ -77,6 +78,7 @@ const SETS = {
 // D51③⑤ (1.6 附录 B): the name list's two findings — a state event of the door and a failure code of the harness part, both in health/codes.mjs's closed sets
 const IDENTITY_CODES = ['process-unknown', 'agent-list-invalid']
 const CERT_CODES = ['cert-key-missing', 'cert-intermediate-unavailable', 'not-users-file', 'bundle-lacks-ca', 'marked-without-record'] // 1.6 §9.7's cert group, as findings
+const MACHINE_CODES = ['autostart-missing'] // status's read of the login entry (D61), a finding of the machine
 const REFUSAL_CODES = ['collectors-online'] // a command's refusal (uninstall), rendered by findingFor, not by diagnose
 const STATUS_REASONS_IN_CATALOGUE = ['config-after-start', 'daemon-not-running', 'daemon-not-responding', 'helper-missing', 'link-missing', 'entry-missing', 'entry-changed', 'desired-off', 'negative-cache', 'not-seen', 'local-upstream']
 
@@ -89,7 +91,7 @@ for (const [code, set] of Object.entries(SETS)) {
 }
 
 test('V49 both directions: every code of the closed sets (§9.7 net codes, the status reasons §9.6 uses) has a fact set, and the catalogue defines no code outside them', () => {
-  const closed = new Set([...NET_CODES, ...STATUS_REASONS_IN_CATALOGUE, ...IDENTITY_CODES, ...CERT_CODES])
+  const closed = new Set([...NET_CODES, ...STATUS_REASONS_IN_CATALOGUE, ...IDENTITY_CODES, ...CERT_CODES, ...MACHINE_CODES])
   const EVENT_ONLY = ['netenv-changed'] // D49: the system-proxy watcher's event code, not a finding: diagnose never gives it
   for (const code of closed) if (!EVENT_ONLY.includes(code) && !(TRUST_REASONS.includes(code) && !FINDINGS[code])) assert.ok(SETS[code], `${code} has a fact set`)
   for (const code of ['opt-in-needed', 'needs-admin', 'not-via-entry']) assert.ok(!closed.has(code) && !FINDINGS[code] && !FINDINGS_WIN32[code], `${code} went with named items (D57, 4.11 §3 ⑱)`)

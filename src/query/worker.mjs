@@ -62,7 +62,8 @@ const home = process.argv[2]
 // The daemon passes no deps: argv[3] is absent, or '' before a role; a test fork names an ES module whose default export is that `deps` object. `beforeRows`, `beforeTitles`
 // and `beforeServe`, a test's alone, are awaited before the row pass starts, before the title pass behind it and before a query is answered.
 const light = process.argv[4] === 'light'
-const depsP = process.argv[3] ? import(pathToFileURL(process.argv[3]).href).then((m) => m.default) : Promise.resolve({})
+// `loginCache`: the board asks status every 1.5 s, so this worker keeps the login entry's answer (1.6 §3.5 Login; src/cli/status.mjs); the CLI asks each time.
+const depsP = (process.argv[3] ? import(pathToFileURL(process.argv[3]).href).then((m) => m.default) : Promise.resolve({})).then((d) => ({ ...d, loginCache: true }))
 // What the CLI's own environment may change about an answer goes local (client.mjs LOCAL_ENV); this worker serves
 // every caller, so it answers as a clean environment would and never as the daemon's happened to be.
 for (const k of LOCAL_ENV) delete process.env[k]

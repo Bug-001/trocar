@@ -277,6 +277,7 @@ export function statusReason(code, { harness = '', pid = null, cause = null } = 
     'cert-root-missing': ["trocar's root certificate is no longer trusted", null, 'trocar install'],
     'cert-root-pending': ["trocar's root certificate is not trusted yet", null, 'trocar install'],
     'cert-root-declined': ["you declined trocar's root certificate"],
+    'autostart-missing': ["trocar's login entry is not registered or is switched off", null, 'trocar install'],
     'cert-key-missing': ["the key for trocar's root is gone"],
     'cert-intermediate-unavailable': ['trocar cannot sign certificates right now, so it only forwards'],
     'cert-bundle-missing': [`${h}'s certificate file no longer holds trocar's root`],

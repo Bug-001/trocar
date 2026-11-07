@@ -107,7 +107,8 @@ test('④b covers ~/.trocar/backup/: a backup of a user\'s file that others can 
 
 // the network reads of the topology (1.6 §9.7, V50): `ss` and `ip` only read; the tests below are about what doctor starts, stops or changes, so these are set aside
 const NET_READ = /^(ss -ltnpH|ip -j (route get 1\.1\.1\.1|-d link show dev \S+))$/
-const ranBesides = (s, from = 0) => s.sys.exec.calls.slice(from).filter((c) => !NET_READ.test(c))
+const ENTRY_READ = /^systemctl --user is-enabled \S+$/ // the login entry's read (D61, 1.6 §3.5): the question `on` asks, a read
+const ranBesides = (s, from = 0) => s.sys.exec.calls.slice(from).filter((c) => !NET_READ.test(c) && !ENTRY_READ.test(c))
 
 // P7 (Windows test machine 2026-10-18): there is ONE check for 「is trocar's root trusted」 — the collector's root store, the one `status` and `install` use.
 // doctor used to run a second, half-built one of its own and printed its exception at the reader: "win32 TrustStoreInstaller not implemented
@@ -119,7 +120,7 @@ for (const platform of ['darwin', 'win32']) {
     const w = await modelWorld({ os: platform })
     await w.install()
     const src = path.join(w.home, 'src'); capture(src)
-    const run = (rootStore) => doctor({ home: w.home, sh: { env: w.env }, sys: { exec: recordingExec() } }, [], { platform, source: src, deps: { rootStore, netFactsDeps: async () => ({ harnesses: w.harnesses, archFacts: null }) } })
+    const run = (rootStore) => doctor({ home: w.home, sh: { env: w.env }, sys: { exec: recordingExec() } }, [], { platform, source: src, deps: { rootStore, unit: { registered: () => ({ state: 'present' }) }, netFactsDeps: async () => ({ harnesses: w.harnesses, archFacts: null }) } }) // the login entry install registered (its read: status-autostart.test.mjs)
     const judged = await run(w.store)
     assert.notEqual(judged.exit, 3, judged.text)
     assert.doesNotMatch(judged.out, /trust store/i, 'a store it could read is not \u300ccould not judge\u300d')

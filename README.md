@@ -405,7 +405,9 @@ direct connection, with the value trocar wrote beside your own. A program an age
 start history is incomplete, is `not-seen`: never a reason to call the agent not captured, and no restart is asked
 (`yes` with "N not seen yet" beside captured ones, `unknown` when it is all there is). So is a process started after `on`
 whose config place depends on an environment variable (Codex's `CODEX_HOME`): macOS and Windows do not show another
-process's environment, so trocar cannot tell whether it read the file `on` wrote. A certificate block says whether the root is installed,
+process's environment, so trocar cannot tell whether it read the file `on` wrote. A `Login` line appears when the
+login entry `install` registered is gone, switched off or cannot be read (`autostart-missing`, fix: `trocar install`),
+since without it nothing of trocar starts after the next restart. A certificate block says whether the root is installed,
 its key is still in custody and the daemon could make its intermediate (`cert-not-installed`, `cert-key-missing`,
 `cert-intermediate-unavailable`), and which certificate files trocar did not append to because they are not yours
 (`not-users-file`). `trocar status <harness>` prints these per form (a `certificate:` and a `proxy:` line, then trocar's value beside

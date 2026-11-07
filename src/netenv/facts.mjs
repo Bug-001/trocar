@@ -52,6 +52,7 @@ export async function gatherNetFacts({ platform = process.platform, home, env = 
     linger: status.linger && typeof status.linger.linger === 'boolean' ? status.linger.linger : null, otherRedirector: typeof part.otherRedirector === 'boolean' ? part.otherRedirector : null,
     identity: status.identity || null, // the name list per harness (status's `identity`, D51③⑤): the doctor's process-unknown reads it
     agentList: status.agent_list || null, // agents.json itself (status's `agent_list`): the doctor's agent-list-invalid, and the path process-unknown's line names
+    autostart: status.autostart || null, // the login entry (status's registered() read, D61): doctor's autostart-missing
     cert: reply && reply.cert && typeof reply.cert === 'object' ? reply.cert : null, // the daemon's issuer (proxy mode, 4.11 P2): { key, intermediate } — doctor's cert-key-missing / cert-intermediate-unavailable
   }
   for (const [d, h] of rows) {
