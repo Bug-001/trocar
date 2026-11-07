@@ -253,15 +253,18 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     // the install's key first, whoever asks (P10): the PAC is a capability, since an owner that cannot be read may be another user's (macOS, no root)
     let at = null
     try { at = pacPath(tokenOf().listenerToken) } catch { /* no ingress.json to read: no key, nothing served */ }
-    if (!at || new URL(p, 'http://door').pathname !== at) {
-      record({ event: 'failure', where: 'ingress', code: CODE.pacPeerRefused, peer, reason: "a request for trocar's proxy settings file (PAC) was refused: it did not carry this install's key" })
-      return null
-    }
+    const keyed = !!at && new URL(p, 'http://door').pathname === at
     const { pid: q, why: ownerWhy, sameUser } = await within(ident.owningPid(peer), { pid: null })
     const read = q != null ? await within(ident.factsCached(q), null) : null
     const facts = read || (sameUser ? { sameUser: true } : null) // the socket table's own-user proof stands when the pid's facts cannot be read (P10)
     const why = late() ? 'door-deadline' : ownerWhy || (q != null && !read ? (ident.cache.get(q) || {}).unread || null : null)
     const a = peerAllowed({ ...(facts || {}), pid: q }, self), mine = a.ok
+    // no key: refused whoever asks; the owner only names the reason (D38) — this user's own app at an address from before the key is not a stranger
+    if (!keyed) {
+      record(mine ? { event: 'failure', where: 'ingress', code: CODE.pacAddressStale, peer, reason: "your program asked for trocar's proxy settings file (PAC) at an address without this install's key, written before it; it was refused, so the app has no PAC. Run: trocar update" }
+        : { event: 'failure', where: 'ingress', code: CODE.pacPeerRefused, peer, reason: "a request for trocar's proxy settings file (PAC) was refused: it did not carry this install's key" })
+      return null
+    }
     if (!mine && !a.unread) { // another user's, for certain: refused (P10)
       record({ event: 'failure', where: 'ingress', code: a.code, peer, reason: `a request for trocar's proxy settings file (PAC) was refused: ${a.detail}` })
       return null

@@ -247,11 +247,18 @@ test('CM19 / CM33 · the PAC door: this user\'s process gets the PAC (door leg w
   const pacReq = { peer: PEER, user: pacG, path: pacPath(TOKEN) }
   const { res: on, got: onRec } = await wrote(pacReq)
   assert.deepEqual(onRec, [], 'this user\'s process gets the door PAC: nothing to record')
+  // P10 · D38: this user's own app asking at an address without the key (written by an earlier version, before an update that did not turn capture off and
+  // on) is refused too, but filed under its own code with its way out — not as a stranger
+  const stale = await wrote({ ...pacReq, path: '/trocar.pac' })
+  assert.equal(stale.res, null, 'refused: no compatibility path')
+  assert.deepEqual(stale.got.map((r) => [r.event, r.code, r.peer]), [['failure', 'pac-address-stale', PEER]], 'this user\'s program: its own code')
+  assert.match(stale.got[0].reason, /trocar update/, 'with the way out')
   assert.equal(on.status, 200); assert.match(on.body, /PROXY 127\.0\.0\.1:18103; PROXY sys\.corp:8080/)
   w.facts = { uid: 502, startedAt: INSTALLED + 1 }
   const refused = await wrote(pacReq)
   assert.equal(refused.res, null, 'another user, for certain: refused')
   assert.deepEqual(refused.got.map((r) => [r.event, r.code, r.peer]), [['failure', 'pac-peer-refused', PEER]], 'exactly one pac-peer-refused, with the peer')
+  assert.deepEqual((await wrote({ ...pacReq, path: '/trocar.pac' })).got.map((r) => r.code), ['pac-peer-refused'], 'another user without the key: a stranger, not a stale address')
   const n0 = records.length
   const other = await c.lookupIngress({ peer: PEER, user: pacG, target: { address: 'api.example', port: 443 } })
   assert.equal(other && other.refuse && other.refuse.code, 'pac-peer-refused', 'a CONNECT from another user is refused — an answer of its own, not null (null is "unknown user": 407)')
