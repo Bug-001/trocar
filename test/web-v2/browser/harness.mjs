@@ -226,7 +226,7 @@ export async function timed(page, cond, arg, act) {
  *  `pending: {done, total}`. `paced`: a head read moves k on only while a move granted by more(n) is left, so the growth follows
  *  the test's steps rather than the board's poll timer. `latency`: every answer waits that many ms first. → { left(), more(n) }: the
  *  members not reached yet; grant n more moves. */
-export async function serveWorld(page, w, { from = w.marks.length - 1, grow = 0, latency = 0, pack = 32, paced = false } = {}) {
+export async function serveWorld(page, w, { from = w.marks.length - 1, grow = 0, latency = 0, pack = 32, paced = false, truncated = null } = {}) {
   const last = w.marks.length - 1, webkit = page.context().browser()?.browserType().name() === 'webkit'
   let k = Math.min(from, last), at = null, f = null, granted = paced ? 0 : Infinity
   // every answer: `latency` ms, then the one fulfill of what `fn` makes of the request, returned to Playwright. Routes dropped while it
@@ -235,7 +235,7 @@ export async function serveWorld(page, w, { from = w.marks.length - 1, grow = 0,
   // floating would instead fail whichever case is stopping. A request the page gave up on takes the fulfill without error.
   const answer = (pattern, fn) => page.route(pattern, async (route) => { await new Promise((r) => setTimeout(r, latency)); return route.fulfill(fn(route.request())) })
   const json = (doc) => ({ status: 200, contentType: 'application/json', body: JSON.stringify(doc) })
-  const now = () => { if (at !== k) { at = k; f = w.files(w.marks[k], pack); if (k < last) f.head = { ...f.head, pending: { done: k + 1, total: last + 1 } } } return f }
+  const now = () => { if (at !== k) { at = k; f = w.files(w.marks[k], pack); if (k < last) f.head = { ...f.head, pending: { done: k + 1, total: last + 1 } }; if (truncated) f.head = { ...f.head, truncated } } return f }
   const tails = new Map() // part → {n, text, last: Map(id → its lines' JSON)}
   function tail(part) {
     const { head, docHead, open } = now(), n = head.open.n

@@ -8,7 +8,7 @@ import { probe, withBoard, serveWorld } from './harness.mjs'
 import { world } from '../desk-world.mjs'
 import { WRITE_GAP_MS } from '../../../web/legacy/core/router.mjs'
 import { compareStep } from '../../../src/view/step-order.mjs'
-import { CALL_NOT_HERE } from '../../../web/legacy/labels/replay.mjs'
+import { CALL_NOT_HERE, CALL_NOT_SHOWN } from '../../../web/legacy/labels/replay.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
@@ -162,6 +162,45 @@ test('1.2 #13 call= naming no row of the session lands on step 1 with the note, 
     await until(page, () => window.__packsAtNote != null)
     assert.deepEqual(await page.evaluate(() => window.__packsAtNote), [], 'every pack had been read when the note came')
     assert.equal((await view(page)).follow, 'false')
+  } finally { await b.stop() }
+})
+
+test('1.2 #13 call= naming no row of a truncated session says the call is not in the part shown, never that it is not in the session', { skip }, async () => {
+  const { b } = await desk({ from: last, pack: 2, truncated: { shown: 40, total: 400, kept_mb: 1, file_mb: 10 } }) // the cut: 3.5 session head
+  try {
+    const { page } = b
+    await page.evaluate(() => {
+      window.__notes = []
+      new MutationObserver(() => { for (const e of document.querySelectorAll('.toast')) if (!window.__notes.includes(e.textContent)) window.__notes.push(e.textContent) })
+        .observe(document.body, { childList: true, subtree: true })
+      location.hash = '#/replay/p/S?call=no-such-call'
+    })
+    await bar(page, 1, M0)
+    await until(page, (note) => window.__notes.includes(note), CALL_NOT_SHOWN)
+    assert.ok(!(await page.evaluate(() => window.__notes)).includes(CALL_NOT_HERE))
+  } finally { await b.stop() }
+})
+
+test('1.2 #13 a drawer closed while the rows still come stays closed, and the URL holds the step', { skip }, async () => {
+  const c = rows.filter((r) => r.lane !== mainKey)[1]
+  const packs = w.files(w.marks[last], 2).head.packs.flatMap((p) => [`p${p.n}.main`, `p${p.n}.rest`])
+  const { b } = await desk({ from: last, pack: 2, latency: 150 })
+  try {
+    const { page } = b
+    await page.evaluate(() => performance.setResourceTimingBufferSize(100000))
+    await page.evaluate((r) => { location.hash = `#/replay/p/S?call=${encodeURIComponent(r)}` }, c.rid)
+    await until(page, () => !!document.querySelector('#detail.open'))
+    const unread = (names) => {
+      const done = new Set(performance.getEntriesByType('resource').map((e) => (/\/api\/d\/(p\d+\.(?:main|rest))/.exec(e.name) || [])[1]).filter(Boolean))
+      return names.filter((x) => !done.has(x)).length
+    }
+    const left = await page.evaluate(([names, f]) => { document.querySelector('#dclose').click(); return new Function('names', `return (${f})(names)`)(names) }, [packs, unread.toString()])
+    assert.ok(left > 0, 'closed while pack parts were still to come')
+    await until(page, ([names, f]) => new Function('names', `return (${f})(names)`)(names) === 0, [packs, unread.toString()])
+    await page.waitForTimeout(WRITE_GAP_MS * 2 + 500) // the last pack placed
+    assert.equal(await page.evaluate(() => !!document.querySelector('#detail.open')), false, `closed with ${left} pack parts still to come`)
+    const u = await urlOf(page)
+    assert.equal(u.call, null); assert.ok(u.step != null)
   } finally { await b.stop() }
 })
 
