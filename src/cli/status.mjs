@@ -31,7 +31,7 @@ import { removeTrocarText, SENTINEL } from '../off/text-edit.mjs'
 import { unseal } from '../off/seal.mjs'
 import { userProcessesOf } from '../off/user-procs.mjs' // its own small file on purpose: through ./orchestrate.mjs this one function pulled the whole undo machinery into `status`'s module load (D62)
 
-import { judgeHarness, certOfForms } from '../netenv/verdict.mjs'
+import { judgeHarness, certOfForms, routeOfForms } from '../netenv/verdict.mjs'
 import { gatherNetFacts } from '../netenv/facts.mjs'
 import { readAdopted } from '../netenv/adopt.mjs'
 import { buildTopology } from '../netenv/topology.mjs'
@@ -242,8 +242,8 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
     const read = hd ? configuredHosts(hd, { home, os: platform, readFile: (p) => fs.readFileSync(p, 'utf8'), readdir: (p) => fs.readdirSync(p) }) : { hosts: [], errors: [] }
     const hosts = read.errors.length ? [] : read.hosts
     const localUpstream = isProxyMode(platform) && hosts.length > 0 && hosts.every(isLoopbackHost)
-    const judge = (cert = true) => {
-      const j = judgeHarness({ desired, entryIntact: entry.state === 'intact' ? true : entry.state === 'unknown' ? null : false, entryWhy: entry.state === 'changed' ? 'entry-changed' : 'entry-missing', attached: att.attached, helper: f.link.helper, daemon: f.daemon.state, procs, installedAt, deadDoor: isProxyMode(platform), formsHere, cert, localUpstream })
+    const judge = (cert = true, blocked = {}) => {
+      const j = judgeHarness({ desired, entryIntact: entry.state === 'intact' ? true : entry.state === 'unknown' ? null : false, entryWhy: entry.state === 'changed' ? 'entry-changed' : 'entry-missing', attached: att.attached, helper: f.link.helper, daemon: f.daemon.state, procs, installedAt, deadDoor: isProxyMode(platform), formsHere, cert, localUpstream, blocked })
       if (merged) j.rows = j.rows.map((r) => { const name = r.pid != null ? hitName(tableOf.get(r.pid), merged[id]) : null; return name ? { ...r, name } : r }) // the name the process matched (1.6 §9.7)
       return j
     }
@@ -282,8 +282,10 @@ function judgeCertificates(f) {
     const forms = f.facts && f.facts.harnesses && f.facts.harnesses[h.id] && f.facts.harnesses[h.id].forms
     if (!(forms && forms.length && h.judge)) continue
     const cert = certOfForms(forms)
-    h.judged = h.judge(cert)
+    h.judged = h.judge(cert, routeOfForms(forms)) // the route verdict too: a form a blocker keeps off the route is not captured (4.11 ⑩)
     // a certificate not known (D38) says what could not be read, once
+    // a blocker not read (4.11 ⑩) says which setting, once
+    if (h.judged.captured === null && Array.isArray(h.why)) for (const x of forms) { const w = x.route && x.route.reason === 'blocker-unreadable' && `could not read ${x.route.at}`; if (w && !h.why.includes(w)) h.why.push(w) }
     if (cert === null && Array.isArray(h.why)) for (const x of forms) { const u = x.certificate && x.certificate.in_effect === null && x.certificate.user_file, w = u && u.reason && `could not read ${u.reason}`; if (w && !h.why.includes(w)) h.why.push(w) }
   }
 }
@@ -402,7 +404,7 @@ function formsOf(f) {
   const out = {}
   for (const [h, hf] of Object.entries((f.facts && f.facts.harnesses) || {})) {
     const l = (hf.forms || []).filter((x) => x.certificate && x.proxy)
-    if (l.length) out[h] = l.map((x) => ({ form: x.id, certificate: x.certificate, proxy: x.proxy, ...(x.notes && x.notes.length ? { notes: x.notes } : {}) }))
+    if (l.length) out[h] = l.map((x) => ({ form: x.id, certificate: x.certificate, proxy: x.proxy, ...(x.route ? { route: { reason: x.route.reason, at: x.route.at ?? null } } : {}), ...(x.notes && x.notes.length ? { notes: x.notes } : {}) }))
   }
   return Object.keys(out).length ? out : null
 }

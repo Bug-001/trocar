@@ -113,7 +113,7 @@ export function statusDetail(doc, h, { finding = null, now = Date.now(), colors:
     for (const f of forms) {
       const k = f.certificate || {}, p = f.proxy || {}
       const rows = [[String(f.form).padEnd(w), 'certificate', k.in_effect ? `in effect (${k.carrier ? carrierWords(k.carrier) : 'unknown carrier'})` : k.in_effect === null && k.user_file && k.user_file.reason ? unknown(`could not read ${k.user_file.reason}`) : noteText(k.code, { harness: h }) || unknown('your trust store could not be read')],
-        ['', 'proxy', p.written ? `points at trocar ${portOf(p.written)}` : p.connected ? 'connected' : 'not connected']]
+        ['', 'proxy', f.route ? (f.route.reason === 'blocker' ? `not routed: a setting of yours (${f.route.at}) keeps it off trocar` : unknown(`trocar cannot read ${f.route.at}`)) : p.written ? `points at trocar ${portOf(p.written)}` : p.connected ? 'connected' : 'not connected']]
       if (p.prior) rows.push(['', '', `(was: ${p.prior})`]) // only a value `on` recorded: no record is not "none"
       lines.push(...columns(rows, { width: WIDTH - 2 }).map((l) => `  ${l}`))
     }

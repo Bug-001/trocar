@@ -20,13 +20,14 @@ const NOT_SEEN = 'not-seen' // 4.11 P11 status 4–5: the door has not seen this
  *                certificate carrier of its can apply and what runs under its name does not go through trocar (`not-routed`, before the entry: an entry is written only for a form that is there)
  *   localUpstream  proxy mode: its config names only API hosts on this machine (4.11 P6): loopback never reaches the door, so a process the door has not judged, and the
  *                harness's own row, are not captured (`local-upstream`); a process the door judged keeps the door's word (what was observed beats what the config says)
+ *   blocked      { <form id>: false | null } — proxy mode: forms a blocker keeps off trocar's route (false) or whose blocker could not be read (null), routeOfForms below
  *   cert         true | null | a code — the certificate the harness's agents check trocar's leaves with is in effect (true; also where nothing says otherwise, Linux), not known (null), or not
  *                in effect and why (the 1.6 附录 B `cert-*` code of the form's `certificate`, certOfForms below). Like the entry, it decides only a process the daemon has not judged, and the harness's own row
  * → { captured: true | false | null, rows: [{ pid?, captured, reason }] }; `reason` is one of STATUS_REASONS, null when captured or not known. With no process the one row has no pid and is
  * the harness's own: 「link 已挂、入口完好且证书生效」(§1.5, V32). The order of the reasons: desired off · the daemon · the helper · the link · (for a process, its own verdict first) · only API hosts on this machine · no form here · the entry · the certificate · (a process) its start time.
  * The harness is not captured when any row is not; captured when every row is, or some are and every other is `not-seen`; else not known.
  */
-export function judgeHarness({ desired, entryIntact = null, entryWhy = 'entry-missing', attached = null, helper = 'ok', daemon = 'unknown', procs = [], installedAt = null, deadDoor = false, formsHere = true, cert = true, localUpstream = false }) {
+export function judgeHarness({ desired, entryIntact = null, entryWhy = 'entry-missing', attached = null, helper = 'ok', daemon = 'unknown', procs = [], installedAt = null, deadDoor = false, formsHere = true, cert = true, localUpstream = false, blocked = {} }) {
   const world = (() => {
     if (desired === 'off') return verdict(false, 'desired-off')
     if (desired !== 'on') return verdict(null)
@@ -40,10 +41,13 @@ export function judgeHarness({ desired, entryIntact = null, entryWhy = 'entry-mi
   })()
   const local = localUpstream ? verdict(false, 'local-upstream') : null
   const absent = formsHere === true ? null : verdict(formsHere === null ? null : false, formsHere === null ? null : 'not-routed')
+  // a form a blocker keeps off the route (4.11 ⑩): not captured; one whose blocker could not be read, not known. `ids` = the forms in question (null: every form here)
+  const notRouted = (ids) => { const v = Object.entries(blocked).filter(([f]) => !ids || ids.includes(f)).map(([, x]) => x); return v.includes(false) ? verdict(false, 'not-routed') : v.includes(null) ? verdict(null) : null }
+  const off = notRouted(null)
   const entry = entryIntact === true ? null : entryIntact === false ? verdict(false, entryWhy) : verdict(null)
   const certificate = cert === true ? null : verdict(cert === null ? null : false, cert) // V32: after the entry (a broken entry is fixed first), before the start time (a restart does not bring a certificate)
   if (!procs.length) {
-    const v = world || local || absent || entry || certificate || verdict(true)
+    const v = world || local || absent || off || entry || certificate || verdict(true)
     return { captured: v.captured, rows: [v] }
   }
   const installed = at(installedAt)
@@ -54,6 +58,8 @@ export function judgeHarness({ desired, entryIntact = null, entryWhy = 'entry-mi
     if (p.trusted === true) return row(p.negative ? { ...verdict(false, 'negative-cache'), ...(p.cause ? { cause: p.cause } : {}), ...(p.negatives ? { negatives: p.negatives } : {}) } : verdict(true)) // the engine's cause picks the words (1.6 附录 B)
     if (local) return row(local)
     if (absent) return row(absent)
+    const own = Array.isArray(p.forms) && p.forms.length ? (p.forms.every((f) => f in blocked) ? notRouted(p.forms) : null) : null // on blocked forms only
+    if (own) return row(own)
     if (entry) return row(entry)
     if (certificate) return row(certificate)
     if (p.start !== undefined) return row(p.start === null ? verdict(true) : p.start === NOT_SEEN ? verdict(null, NOT_SEEN) : verdict(false, p.start)) // proxy mode: the door's own rule, judged by the caller (4.11 P11 status)
@@ -66,6 +72,12 @@ export function judgeHarness({ desired, entryIntact = null, entryWhy = 'entry-mi
   const open = rows.filter((r) => r.captured === null)
   const captured = rows.some((r) => r.captured === false) ? false : rows.some((r) => r.captured === true) && open.every((r) => r.reason === NOT_SEEN) ? true : open.length ? null : true
   return { captured, rows }
+}
+
+/** A harness's `blocked` for judgeHarness from its forms' route verdict (status-facts `plan`, carried as the facts' `route`, 4.11 ⑩): { <form>: false } for a
+ *  form a blocker keeps off the route, { <form>: null } for one whose blocker could not be read. */
+export function routeOfForms(forms) {
+  return Object.fromEntries((forms || []).filter((x) => x.route && ['blocker', 'blocker-unreadable'].includes(x.route.reason)).map((x) => [x.id, x.route.reason === 'blocker' ? false : null]))
 }
 
 /** A harness's `cert` for judgeHarness (V32) from its forms' `certificate` (1.6 §9.4, proxy mode): true when every present form's is in effect (or none says), else the code of the first

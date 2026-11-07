@@ -182,6 +182,7 @@ function validateForms(forms) {
     if (!isObject(x) || !isId(x.form)) return bad.push(`${at}: not {form, certificate, proxy}`)
     if (!isObject(c) || !inEffectOk(c) || !CARRIERS.includes(c.carrier) || !isCodeOrNull(c.code) || !userFileOk(c.user_file)) bad.push(`${at}.certificate: not in the closed sets`)
     if (!isObject(p) || !['connected', 'entry_intact', 'door_up'].every((k) => typeof p[k] === 'boolean') || !isObject(u) || !UPSTREAM_SOURCES.includes(u.source) || ![u.url_redacted, p.written, p.prior].every(redacted)) bad.push(`${at}.proxy: not in the closed sets, or a URL not redacted`)
+    if ('route' in x && !(isObject(x.route) && ['blocker', 'blocker-unreadable'].includes(x.route.reason) && (x.route.at === null || typeof x.route.at === 'string'))) bad.push(`${at}.route: not {reason: blocker | blocker-unreadable, at}`)
   })
   return bad
 }
