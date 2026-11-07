@@ -776,6 +776,9 @@ function openDesk(ctx, route0, makeView) {
     // carries the ±NEAR prefetch, so the rest after it finds nothing left and a delta stays one `block` (4.4 live-poll: 「每个增量最多一次」;
     // 2.3 §读与画 takes the followed step out of the rest's own-then-near reads)
     if (s.follow && moved && !first && host && !idle()) {
+      // the step reads follow the playhead now, not when it is drawn: the left step's read still waiting in the loader is aborted
+      // before its turn, so a delta stays one `block` read (4.4 live-poll)
+      if (s.playRid !== targeted) { targeted = s.playRid; steps.target(s.playRid) }
       const refs = openRefs(s.playRid)
       if (refs.length) { await loadBodies({ get: (n, p, o) => via(0, n, p, o) }, [...refs, ...nearRefs(s.playRid)], { signal }); await pace.calm(); if (s.dead || key !== sessionKey()) return; drawNear(s.playRid) } // a press during the read is not redrawn away either
     }

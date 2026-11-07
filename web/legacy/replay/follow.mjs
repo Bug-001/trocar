@@ -50,8 +50,10 @@ export function createStepReads({ get: get0, setTimer = setTimeout, clearTimer =
   let want = null, timer = null, lastLane = null, slot = null, waited = false, paused = false, owed = false, tried = new Set()
   const out = { lane: null, block: null } // the read in flight of each kind: {rid, ac, p}
   const join = (a, b) => (a && b ? AbortSignal.any([a, b]) : a || b)
-  // a read still queued in the loader when the desk leaves is held back when its slot frees: it is not sent and asks again on resume
-  const get = (f, name, p, o = {}) => (loader ? loader.run(name === 'block' ? 0 : 1, (sig) => paused ? (f.held = true, Promise.resolve({ ok: false, status: 0, error: 'cancelled' }))
+  // a read still queued in the loader when the desk leaves is held back when its slot frees: it is not sent and asks again on resume.
+  // One aborted while it waited (the playhead moved on) is not sent either: a read sent and then aborted is still a request (4.4 live-poll)
+  const get = (f, name, p, o = {}) => (loader ? loader.run(name === 'block' ? 0 : 1, (sig) => o.signal?.aborted ? Promise.resolve({ ok: false, status: 0, error: 'cancelled' })
+    : paused ? (f.held = true, Promise.resolve({ ok: false, status: 0, error: 'cancelled' }))
     : get0(name, p, { ...o, signal: join(o.signal, sig) })) : get0(name, p, o))
   function start(kind, rid, what) {
     const ac = new AbortController(), f = { rid, ac }, api = { get: (...a) => get(f, ...a) }

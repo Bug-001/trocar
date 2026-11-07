@@ -167,6 +167,31 @@ test('1.2 #23: a step read queued in the loader when the desk leaves does not st
   for (const pauseAt of [120, 150, 199]) await pausedRun({ pauseAt, loader: createLoader({ max: 1 }), hold: 200 })
 })
 
+// 4.4 live-poll (one block read per delta) · 2.3 §读与画: a step read that waits in the loader while the playhead moves on is aborted by the
+// new target before its turn; when its turn comes it is never sent (a read sent and aborted is still a request the server answers)
+test('2.3 · 4.4: a step read queued in the loader and aborted before its turn is never sent', async () => {
+  for (const moveAt of [110, 150, 199]) {
+    bodyCache.clear()
+    const clk = clock(), sent = [], loader = createLoader({ max: 1 })
+    const get = (name, p, { signal }) => {
+      sent.push([name, (p.ref || []).join(), clk.now()])
+      return new Promise((res) => {
+        const id = clk.setTimer(() => res({ ok: true, data: { blocks: p.ref.map((ref) => ({ ref, bytes: 'b', encoding: 'utf8' })), errors: [] } }), 50)
+        signal.addEventListener('abort', () => { clk.clearTimer(id); res({ ok: false, status: 0, error: 'cancelled' }) }, { once: true })
+      })
+    }
+    loader.run(5, () => new Promise((res) => clk.setTimer(res, 200))) // a slow read holds the one slot
+    const refs = { s1: ['a1', 'a2'], s2: ['b1'] }
+    const sr = createStepReads({ get, setTimer: clk.setTimer, clearTimer: clk.clearTimer, loader, need: (rid, tried) => ({ lane: null, refs: refs[rid].filter((r) => !tried.has(r)) }),
+      onLane: () => {}, onBodies: () => {} })
+    sr.target('s1') // rests 100 ms, then queues its block read behind the slow one
+    await clk.advance(moveAt)
+    sr.target('s2') // the playhead moved on before the slot freed
+    await clk.advance(1000)
+    assert.deepEqual(sent.map(([n, r]) => r), ['b1'], `moved at ${moveAt}: only the new step's read went out`)
+  }
+})
+
 test('loadBodies (3.5 block): one read for the refs not held; each item fills by its ref; bytes:null takes its errors entry', async () => {
   bodyCache.clear()
   const [okItem, nullItem] = fx.block_multi.blocks
