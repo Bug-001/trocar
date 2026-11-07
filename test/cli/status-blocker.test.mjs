@@ -81,6 +81,12 @@ for (const [shape, s] of Object.entries(SHAPES)) {
       const cli = block.split('\n').find((l) => l.startsWith('  z-code.cli '))
       if (s.reason === 'blocker') assert.match(block.slice(block.indexOf(cli)).replace(/\s+/g, ' '), /cannot tell it from z-code\.desktop/, 'a co-judged form says why')
       assert.ok(!block.includes(w.home), 'HOME paths print as ~')
+      // §1.1⑥ over the Why value (Fix and Check list one step a line): a line is laid out at the width it is printed with, so within a sentence the next line's first word never fits after it
+      const head = text.slice(0, text.indexOf('  Fix')).split('\n'), col = head[2].search(/\S/) + head[2].trimStart().search(/\s{2,}\S/) + head[2].trimStart().match(/\s{2,}/)[0].length
+      for (let i = 2; i + 1 < head.length; i++) {
+        const next = head[i + 1].slice(col), word = next.trimStart().split(' ')[0]
+        if (!head[i + 1].slice(0, col).trim() && next && !/^\s/.test(next) && !/[.:]$/.test(head[i])) assert.ok(head[i].length + 1 + word.length > 80, `"${word}" fits after "${head[i].trim()}"`)
+      }
     } finally { try { fs.chmodSync(SETTING(w.home), 0o600) } catch {} }
   })
 }
