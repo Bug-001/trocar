@@ -1,7 +1,8 @@
 // test/cli/status-blocker.test.mjs — 4.11 ⑩ in `status`: a form a blocker keeps off trocar's route is not captured, and the document and the text say so —
 // the harness's verdict (the headline) and the form's own row read the one route verdict the topology and the findings read. A blocker that cannot be read
-// is not known, never captured (D38). The seed: on a macOS test machine Z-Code's desktop CA setting (`httpProxyCaCertPath`) kept the desktop off the door
-// while `status` said "on, captured" and the desktop form "points at trocar". Every OS fact is injected (0.1 §3).
+// is not known, never captured (D38). A form the door cannot tell apart from a blocked one on the same route (it judges a process against every form it
+// may be) is spliced too, so it reads the same. The seed: on a macOS test machine Z-Code's desktop CA setting (`httpProxyCaCertPath`) kept the desktop off
+// the door, and the door spliced the CLI with not-routed, while `status` said "on, captured" and both forms "points at trocar". Every OS fact is injected (0.1 §3).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -11,6 +12,7 @@ import { turnOnModel } from '../../src/collector/model-on.mjs'
 import { renderHook } from '../../src/collector/harness/templates/index.mjs'
 import { runStatusCli } from '../../src/cli/status.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
+import { judgedForms } from '../../src/collector/core/proxymode/verdict.mjs'
 import { emptyState, setDesired, writeStateAtomic } from '../../src/off/state.mjs'
 import { fakeIo } from './fixtures/on-ctx.mjs'
 import { SOCK } from './fixtures/status-ctx.mjs'
@@ -62,13 +64,18 @@ for (const [shape, s] of Object.entries(SHAPES)) {
       assert.ok(desk, JSON.stringify(x.forms.map((f) => f.form)))
       assert.equal(desk.route && desk.route.reason, s.reason)
       assert.ok(String(desk.route.at).includes('setting.json'), JSON.stringify(desk.route))
-      for (const f of x.forms.filter((y) => y.form !== 'z-code.desktop')) assert.equal(f.route, undefined, `${f.form} stays on the route`)
+      // the door judges a process on a route against every verified form it may be (collector.mjs judge → judgedForms), so a blocker on one of them
+      // keeps them all from being decrypted: status says so for each, never "points at trocar" beside a door that splices (mac test machine, z-code CLI)
+      const desc = w.harnesses.find((d) => d.name === 'z-code')
+      const together = judgedForms(desc, 'darwin', 'cli-config').map((f) => f.id)
+      assert.ok(together.length > 1, `the CLI forms share the desktop's route: ${together}`)
+      for (const f of x.forms) assert.equal(f.route && f.route.reason, together.includes(f.form) ? s.reason : undefined, `${f.form}: ${JSON.stringify(f.route)}`)
       const text = await status(w, ['z-code'])
       assert.doesNotMatch(text.split('\n')[0], /, captured$/, text.split('\n')[0])
       const block = text.slice(text.indexOf('  Forms'), text.indexOf('  Routes'))
       const desktop = block.slice(block.indexOf('z-code.desktop')).split('\n')[0]
       assert.match(desktop, s.reason === 'blocker' ? /route\s+not routed/ : /route\s+unknown/, desktop) // the blocked form's own line leads with the route verdict
-      assert.doesNotMatch(block.slice(block.indexOf('z-code.desktop')), /points at trocar/, 'never "points at trocar" for the blocked form')
+      assert.doesNotMatch(block, /points at trocar/, 'never "points at trocar" for a form the door splices')
       assert.ok(!block.includes(w.home), 'HOME paths print as ~')
     } finally { try { fs.chmodSync(SETTING(w.home), 0o600) } catch {} }
   })

@@ -7,6 +7,7 @@ import nodeFs from 'node:fs'
 import { itemsOfPhase } from '../../../off/manifest.mjs'
 import { judgeEntry, judgeOwned } from '../trust/journal.mjs'
 import { isPresent, holds, presentPaths, userCertFilesOf, rootHeldIn } from './sources.mjs'
+import { judgedForms } from './verdict.mjs'
 import { planRoutes, priorRecordOf } from './entries.mjs'
 import { upstreamFor, isTrocarDoorUrl } from './chain.mjs'
 import { pacLeg } from './pac.mjs'
@@ -148,7 +149,9 @@ export async function modelFormFacts({ harnesses, os, manifest: m, reply = null,
         upstream = { url_redacted: red(u.url), source: u.source, ...(u.pac ? { pac: true } : {}) }
       }
       if (upstream.source === 'unknown') upstream.code = CODE.priorProxyUnknown
-      const blocked = plan.notRouted.find((n) => n.form === f.id) || null
+      // the door judges a process on a route against every form it may be (judgedForms), so a blocker on one of them splices them all: each reads it (4.11 ⑩)
+      const together = judgedForms(desc, os, f.route).map((x) => x.id)
+      const blocked = plan.notRouted.find((n) => n.form === f.id || (together.includes(f.id) && together.includes(n.form))) || null
       forms.push({
         id: f.id, route: f.route, certificate,
         proxy: { connected: intact && door_up, entry_intact: intact, door_up, upstream, written: main ? red(writtenOf(main)) : null, prior: red(priorRaw) },
