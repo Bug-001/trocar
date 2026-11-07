@@ -23,7 +23,7 @@ export const OPENAI_SECTIONS = [
 ];
 
 import { parsedRequestBody } from './request-body.mjs';
-import { endpointOf } from './endpoints.mjs';
+import { endpointOf, endOf } from './endpoints.mjs';
 import { streamParts } from './sse-spans.mjs';
 
 // ── detection ───────────────────────────────────────────────────────────────────────────────
@@ -304,10 +304,11 @@ export function normRespChat(rec) {
   const events = Array.isArray(resp.raw_sse) ? resp.raw_sse : [];
   const body = resp.body && typeof resp.body === 'object' ? resp.body : null;
   const frames = events.length ? events : (body ? [body] : []);
-  let text = '', thinking = '', model = null, id = null, stop = null, usage = {};
+  let text = '', thinking = '', model = null, id = null, stop = null, usage = {}, error = false;
   const acc = new Map();                                       // tool_calls arrive split across deltas
   for (const e of frames) {
     if (!e || typeof e !== 'object') continue;
+    if (e.error) error = true;                                // an error chunk: the stream's own failure
     if (e.usage) usage = e.usage;
     if (e.model) model = e.model;
     if (e.id) id = e.id;
@@ -331,7 +332,7 @@ export function normRespChat(rec) {
     }
   }
   const tools = [...acc.values()].map((t) => ({ id: t.id, name: t.name, input: safeJson(t.args) }));
-  return { model, id, stop_reason: stop, usage, text, thinking: thinking || undefined, tools };
+  return { model, id, stop_reason: stop, usage, text, thinking: thinking || undefined, tools, ...(error ? { error } : {}) };
 }
 
 // ── shape-dispatched entry points (the shared view layer calls THESE, never a per-shape branch) ────
@@ -362,7 +363,7 @@ export function reqCountsFor(shape, req) {
 // arrive as one server message each. A terminal response.completed / .incomplete / .failed carries the
 // output and usage; an `error` event with no terminal response is stop_reason 'error'. (Before the split an HTTP
 // stream ending in response.failed or an `error` event read as stop_reason null; it now says 'failed' / 'error',
-// and the `failed` hook below makes such a call an error step that is never a cache baseline — as on WebSocket.)
+// and the `ended` hook below makes such a call an error step that is never a cache baseline — as on WebSocket.)
 export function normEvents(events) {
   let completed = null;
   for (const e of events || []) if (e && /^response\.(completed|incomplete|failed)$/.test(e.type)) completed = e.response || completed;
@@ -443,12 +444,15 @@ const CHAT_REPLY = {
   jsonBlocks: (body) => (Array.isArray(body.choices) ? body.choices : []).flatMap((c) => (c && c.message ? chatMessageToBlocks(c.message).map((x) => x.block) : [])),
 };
 
+// The reply's own terminal (3.1 `ended`), a closed list per wire: anything not named is null and keeps the rest of the failed rule.
+const RESPONSES_ENDS = Object.freeze({ ok: ['completed', 'incomplete'], failed: ['failed', 'error'] }); // normEvents: 'error' = an error event, no terminal
+const CHAT_ENDS = Object.freeze({ ok: ['stop', 'length', 'tool_calls', 'function_call', 'content_filter'], failed: [] }); // a failure is an error chunk
+export const responsesEnded = (norm) => endOf(RESPONSES_ENDS, [norm.stop_reason]);
 export const RESPONSES = Object.freeze({
   id: 'openai-responses', provider: 'openai', blockKeys: ['tools', 'instructions', 'input'],
   boardFlat: (req) => boardFlat(req), normResp: (rec) => normResp(rec),
   reqCounts: (req) => reqCountsFor('responses', req), ctxTokens,
-  // the stream's terminal says the response failed, or an `error` event arrived with no terminal (normEvents)
-  failed: (norm) => norm.stop_reason === 'failed' || norm.stop_reason === 'error',
+  ended: responsesEnded,
   replyParts: (rec) => streamParts(rec, RESPONSES_REPLY),
   messageCount: (req) => (Array.isArray(req && req.input) ? req.input.length : typeof (req && req.input) === 'string' ? 1 : 0),
 });
@@ -456,6 +460,7 @@ export const CHAT = Object.freeze({
   id: 'openai-chat', provider: 'openai', blockKeys: ['tools', 'messages'],
   boardFlat: (req) => boardFlatChat(req), normResp: (rec) => normRespChat(rec),
   reqCounts: (req) => reqCountsFor('chat', req), ctxTokens,
+  ended: (norm) => (norm.error ? 'failed' : endOf(CHAT_ENDS, [norm.stop_reason])),
   replyParts: (rec) => streamParts(rec, CHAT_REPLY),
   messageCount: (req) => (Array.isArray(req && req.messages) ? req.messages.length : 0),
 });

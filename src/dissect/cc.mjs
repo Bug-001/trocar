@@ -8,7 +8,7 @@
 // ETL projections stay put. "唯有 block 是统一的" — block is the only cross-provider unit (D25).
 
 import { parsedRequestBody } from './request-body.mjs';
-import { endpointOf } from './endpoints.mjs';
+import { endpointOf, endOf } from './endpoints.mjs';
 
 // ── declarative block categories + layout ───────────────────────────────────────────────────
 // Assembly order = what the model reads top-to-bottom = the Anthropic prompt-cache prefix order:
@@ -146,6 +146,15 @@ export function dissectBlocks(req) {
     }
   }
   return spine;
+}
+
+// The reply's own terminal (3.1 `ended`) on the Anthropic wire, from a reply (`resp`, or an error envelope's `partial`): the event types
+// of its stream (a JSON reply: its body's type) over a closed list. Its home is this wire's board object once the wire has one.
+const ANTHROPIC_ENDS = Object.freeze({ ok: ['message_stop'], failed: ['error'] });
+export function replyEnd(resp) {
+  if (!resp || typeof resp !== 'object') return null;
+  const seen = Array.isArray(resp.raw_sse) ? resp.raw_sse.map((e) => e && e.type) : resp.body && typeof resp.body === 'object' ? [resp.body.type] : [];
+  return endOf(ANTHROPIC_ENDS, seen);
 }
 
 // 3.2:52 context_state 'server_edited': the RESPONSE reports that the server edited the context it was

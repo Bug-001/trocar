@@ -21,7 +21,7 @@ import { scannedRequestBody, sharesBody, parsedRequestBody, storedRequestBody, r
 import { fieldTextOf, respOf, headersOf } from '../dissect/record-fields.mjs';
 import { composeTextRef, mintRawRef } from '../raw/refs.mjs';
 import { V0_CONVERTED } from '../raw/ingest.mjs';
-import { boardDissectorFor, wireFormatOf, flatLaneOf, contextStateOf, blockKeysOf, MULTI_LANE_CONTEXT } from '../dissect/registry.mjs';
+import { boardDissectorFor, wireFormatOf, flatLaneOf, contextStateOf, blockKeysOf, MULTI_LANE_CONTEXT, closedAfterEnd } from '../dissect/registry.mjs';
 import { hintsOf, sessionKeyOf, observerEffectsOf } from '../dissect/harnesses.mjs';
 import { vendorOf } from '../dissect/vendors.mjs';
 import { failedOf } from '../dissect/endpoints.mjs';
@@ -113,6 +113,10 @@ export function callWireOf(r) {
   return wireFormatOf(r) === 'anthropic' ? { d: null, format: 'anthropic' } : null;
 }
 const NO_STREAM = 'the record carries no id or stream to address';
+// The record a call is read as (3.5 §访问模式 ②): a reply the agent closed after its own success terminal is read as that reply (its
+// `error` kept: registry.mjs closedAfterEnd); every other record is itself. Only the call's reading and facts take it; its refs to the
+// stored bytes and its reply blocks keep the stored record.
+export const replied = (rec) => closedAfterEnd(rec) || rec;
 
 // The call read once: the Anthropic wire's hydrated record (`h`), or a flat-lane wire's parsed request (`req`, `unparsed`).
 function readCall(rec, { d, format }) {
@@ -405,7 +409,7 @@ export function extract(rec, ctx) {
   const rules = WIRE_RULES[wire.format === 'anthropic' ? 'anthropic' : 'openai'];
   const rp = replyBlocks(rec, wire), reply = rp.map((p) => take(p.b, p).bid);
   const rmb = rp.flatMap((p, j) => (j === 0 || p.unit !== rp[j - 1].unit ? [j] : []));
-  const read = readCall(rec, wire), x = callX(rec, wire, read);
+  const rr = replied(rec), read = readCall(rr, wire), x = callX(rr, wire, read, rr !== rec);
   const linker = wire.format === 'anthropic' ? CC_THREADS : wire.d;
   const st = linker && linker.stitchOf ? linker.stitchOf(rec) : null;
   // the call's own blocks, by section
@@ -508,23 +512,23 @@ function stitchedFacts(x, { rec, st, predX, state, tools, ownMsgs }) {
 
 // x: the per-call facts (3.5 §会话读), all from this record. `nonBlockKeys`: the request's top-level keys that are no block
 // (refs into the body and short scalars, never a body: nonBlockKeysOf below), what a lane answer's step detail ships (3.5 §会话读).
-function callX(rec, { d, format }, { h, req, unparsed }) {
+function callX(rec, { d, format }, { h, req, unparsed }, closed = false) {
   const st = (respOf(rec) || {}).status ?? null;
   const common = { item: itemFacts(rec), format, respRefs: respRefsOf(rec), ...(extraMessagesOf(rec) || {}), ts: rec.ts_request || rec.ts || '', status: st,
     nonBlockKeys: nonBlockKeysOf(rec, format) };
   if (format === 'anthropic') {
     const facts = callFacts(h);
     const lane = facts.sub ? 'subagent' : facts.monitor ? 'monitor' : hintsOf(rec).lane || 'main';
-    return jsonClean({ ...common, facts, lane, wire: wireOf(h, format, null), rq: slimRec(h).request,
+    return jsonClean({ ...common, facts, lane, wire: wireOf(h, format, null, null, closed), rq: slimRec(h).request,
       usage: boardUsage(mapUsage(format, facts.usage || {}, { vendor: vendorOf(h) })),
-      error: !!rec.error || !!facts.failed, replyId: replyIdOf(rec), stop_reason: normResp(h).stop_reason ?? null });
+      error: !!facts.failed, replyId: replyIdOf(rec), stop_reason: normResp(h).stop_reason ?? null });
   }
   const norm = d.normResp(rec);
   // `agent`: the wire's own agent (a WebSocket connection), what a subagent's lane is folded by when the harness names none
   return jsonClean({ ...common, lane: flatLaneOf(d, rec), hints: hintsOf(rec), msgCount: d.messageCount ? d.messageCount(req) : (req.message_count || 0),
     agent: d.agentOf ? d.agentOf(rec) ?? undefined : undefined, rq: slimRec(h).request, ctx: d.ctxTokens(norm), nu: norm.usage,
     reqIncomplete: reqIncompleteOf(rec), wsIncomplete: wsIncompleteOf(rec), respIncomplete: respIncompleteOf(rec),
-    model: req.model, unparsed, error: failedOf({ status: st, ws: rec.transport === 'ws', error: !!rec.error || unparsed || !!(d.failed && d.failed(norm, rec)) }), wire: wireOf(rec, d.id, null, norm), usage: boardUsage(mapUsage(format, norm.usage || {}, { vendor: vendorOf(rec) })),
+    model: req.model, unparsed, error: failedOf({ status: st, ws: rec.transport === 'ws', error: !!rec.error || unparsed, ended: d.ended ? d.ended(norm, rec) : null }), wire: wireOf(rec, d.id, null, norm, closed), usage: boardUsage(mapUsage(format, norm.usage || {}, { vendor: vendorOf(rec) })),
     stop_reason: norm.stop_reason, replyId: norm.id ?? null });
 }
 
@@ -712,8 +716,8 @@ function cacheSemanticsKnown(vendor, wireFormat) {
 // incompleteness labels (4.6 §记录 「不完整的标注」 — shown on the call, never dropped). Cheap: no body parse.
 // A cross-record context (ctx, from the dissector) brings its own state and, when partial, what is missing;
 // `norm.unread` counts reply messages the dissector could not read (D38: never skipped without a trace).
-export function wireOf(rec, format, ctx = null, norm = null) {
-  const labels = captureLabelsOf(rec);
+export function wireOf(rec, format, ctx = null, norm = null, closed = false) {
+  const labels = captureLabelsOf(rec, closed);
   const unread = norm && norm.unread;
   if (unread) labels.push({ id: 'reply-unread', label: `${unread} reply message${unread > 1 ? 's' : ''} not read`,
     text: `${unread} server message${unread > 1 ? 's' : ''} of this call are not JSON text (binary, past the size cap, or not decodable); the reply shown is read from the others` });
