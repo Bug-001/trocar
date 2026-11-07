@@ -17,6 +17,7 @@ import { parseDotenv } from '../config-read.mjs'
 import { resolveLoc, readSrc, holds, isPresent } from './sources.mjs'
 import { entryGate } from '../entry-forms.mjs'
 import { CODE } from '../codes.mjs'
+import { errnoWords } from '../../../cli/words.mjs'
 
 export const LOOPBACK = Object.freeze(['localhost', '127.0.0.1', '::1'])
 export const PAC_PATH = '/trocar.pac' // P10: the daemon serves the PAC here on the PAC group's door
@@ -205,7 +206,7 @@ export function writeRoutes(desc, ctx, doorOf) {
   const plan = planRoutes(desc, ctx)
   const results = plan.routes.map(({ id, route }) => {
     try { const r = routeEntry(route.kind).write({ ...ctx, harness: desc.name, route, routeId: id }, doorOf(id)); return { route: id, ...(r.ok ? { ok: true } : { ok: false, ...r }) } } catch (e) {
-      return { route: id, ok: false, code: (e && e.code) || 'entry-refused', reason: String((e && e.message) || e), ...(e && e.path ? { at: e.path } : {}) }
+      return { route: id, ok: false, code: (e && e.code) || 'entry-refused', reason: e && e.syscall ? errnoWords(e, 'write') : String((e && e.message) || e), ...(e && e.path ? { at: e.path } : {}) }
     }
   })
   return { results, notRouted: plan.notRouted, notes: plan.notes }

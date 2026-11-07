@@ -182,6 +182,13 @@ const UNKNOWN_WORDS = Object.freeze({ denied: 'not allowed to read', timeout: 't
   pac: 'a PAC script trocar does not run', 'kernel-filter-invisible': 'a kernel filter it cannot see', 'env-unreadable': 'environment not readable' })
 /** An `unknown.reason` code in words; a code outside the set is read out as its own words, never printed as a code. */
 export const unknownWords = (reason) => UNKNOWN_WORDS[reason] || String(reason ?? '').replace(/-/g, ' ')
+/** A file error as 附录 C's `unknown.reason`: EACCES / EPERM (Windows' denial) → denied, ENOENT → absent, any other → null. */
+export const errnoReason = (e) => { const c = e && e.code; return c === 'EACCES' || c === 'EPERM' ? 'denied' : c === 'ENOENT' ? 'absent' : null }
+/** The same error in 1.6 A.1's words, never its errno or Node's message (D58③); `verb` 'write' for a file that could not be written. */
+export const errnoWords = (e, verb = 'read') => {
+  const r = errnoReason(e)
+  return r === 'denied' && verb !== 'read' ? `not allowed to ${verb}` : r ? unknownWords(r) : `could not be ${verb === 'write' ? 'written' : 'read'}`
+}
 
 /** One line out of many: newlines and runs of whitespace become one space (a launchctl stderr with line breaks must not break the digest's alignment). */
 export const squashed = (s) => String(s ?? '').replace(/\s+/g, ' ').trim()
