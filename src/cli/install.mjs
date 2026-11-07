@@ -149,7 +149,7 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
     const planned = changes
     // a custody that cannot be used refuses before the plan, the lock and the first write: no plan is offered for a run that would refuse, and the HOME
     // stays as it was; a dry run says it in `blocked` (1.6 §3.2). Only a gate: runInstall asks the custody again under the lock
-    const { refusal: refused } = await custodyPreflight({ os: platform, custody: b.custody })
+    const { refusal: refused } = await custodyPreflight({ os: platform, custody: b.gateCustody || b.custody })
     if (!refused || flags.has('--dry-run')) say(fit([`trocar install will change ${changes.length} thing${changes.length === 1 ? '' : 's'}:`,
       ...pairs(changes.map((p) => [p.what, p.detail]), { home }),
       ...(left.length ? ['Left as they are:', ...pairs(left.map((p) => [p.what, p.detail]), { home })] : []),

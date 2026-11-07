@@ -12,7 +12,8 @@ import { unservable } from '../helpers/model-daemon.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { ERROR_CODES } from '../../src/cli/json.mjs'
-import { CUSTODY_FAILED } from '../../src/collector/model-install.mjs'
+import { CUSTODY_FAILED, custodyPreflight } from '../../src/collector/model-install.mjs'
+import { backendsFor } from '../../src/collector/arch/model-backends.mjs'
 import { snapshot } from './fixtures/on-ctx.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
 import { BOARD_RANGE } from '../../src/collector/core/ingress-config.mjs'
@@ -196,6 +197,34 @@ for (const platform of ['darwin', 'win32']) {
 
 // two installs that overlap (update's install and the user's, or the board's Set up): the answer asked before the lock is only a gate. B asks first and
 // sees no key, A then runs to its end (key made, root added, record written), then B goes on under the lock: it must read the key again, and remove nothing
+// macOS: the custody's helper is one of the things install places. The gate before any write asks the copy trocar ships with, through the
+// real backends on a clean HOME, with a runner that answers only for a file that is really there (a stand-in that answers for any path hid this)
+test('darwin: a first install on a clean HOME is not refused for the custody: the gate asks the helper trocar ships, not the one install has yet to place', async () => {
+  const w = await modelWorld({ os: 'darwin', commands: ['codex'] })
+  const asked = []
+  const run = (file, args) => {
+    if (!fs.existsSync(file)) throw Object.assign(new Error(`spawn ${file} ENOENT`), { code: 'ENOENT', errno: -2, syscall: `spawn ${file}`, path: file })
+    asked.push(file)
+    return { status: 0, stdout: JSON.stringify({ exists: false }), stderr: '' }
+  }
+  const real = await backendsFor({ os: 'darwin', home: w.home, run, env: w.env })
+  assert.equal(fs.existsSync(path.join(w.home, '.trocar')), false, 'a clean HOME')
+  const deps = { getuid: () => 501, backends: { ...real, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which }
+  const io = fakeIo()
+  assert.equal(await runInstallCli(['--dry-run', '--json'], { io, env: w.env, home: w.home, platform: 'darwin', deps }), 0, io.text())
+  assert.equal(io.json().error, undefined, io.text())
+  assert.ok(asked.length > 0 && asked.every((f) => !f.startsWith(w.home)), `the shipped helper was asked: ${asked}`)
+})
+
+// the advice to log in at the desktop is for the keychain's own failure; a helper that could not be run at all is not that
+test('darwin: a custody helper that cannot be run is refused without the advice to log in', async () => {
+  const run = (file) => { throw Object.assign(new Error(`spawn ${file} ENOENT`), { code: 'ENOENT' }) }
+  const real = await backendsFor({ os: 'darwin', home: tmpDir(), run, env: {} })
+  const { refusal } = await custodyPreflight({ os: 'darwin', custody: real.custody })
+  assert.equal(refusal.code, CUSTODY_FAILED)
+  assert.doesNotMatch(refusal.reason, /log in/)
+})
+
 test('an install that waited behind another reads the key again under the lock: the root and record the first one made stay', async () => {
   const w = await modelWorld({ commands: ['codex'] })
   const run = async (custody) => {
