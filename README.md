@@ -40,7 +40,7 @@ own. Everything below is about capturing your own traffic.
 
 **"Why did my prompt cache break?"** trocar finds the first block where this call's context diverged
 from the previous one, classifies *why* — tools array reordered · JSON keys reordered · compaction
-rewrote history · a shared-prefix block changed in place — and attributes it: **yours**, **the
+rewrote history · a shared-prefix block changed in place · the model or the provider changed — and attributes it: **yours**, **the
 harness**, or **provider-excluded**. Each cause carries a fix hint and the character offset inside the
 diverging block's rebuilt text. The cause is a structural estimate from comparing the two calls' blocks, not the
 provider's real boundary — `usage` stays the numeric truth. "Emit the tools array in a stable order" is a one-line
@@ -53,7 +53,8 @@ schema that differs only in whitespace or number spelling does not, and neither 
 own in the request (it is never called identical). The board then cross-checks that against what the provider's
 `usage` actually credited.
 `read=0, write>0` is labelled a TTL rebuild, not a bug; `read=0, write=0` on a byte-identical prefix is
-flagged as a provider contradiction. The structural guess and the numeric truth are shown separately
+flagged as a provider contradiction only when the provider reported the zero write (a write it does not report
+proves nothing), its cache numbers are understood, and the model and provider did not change. The structural guess and the numeric truth are shown separately
 and never conflated.
 
 **"What did the model actually see at step 40?"** Scrub to call 40 and read the exact context —

@@ -102,7 +102,7 @@ const pair = (a, b, cause = 'content-changed', idx = 1, row1 = {}) => desk1([a, 
 
 test('2.3 #7 · 1.4 #11: the change line iff the cause is not quiet, before block idx, naming the reference step; the structural hint iff no block declares cc', () => {
   const a = [sys({ key: 's' }), blk({ key: 'm1' })], b = [sys({ key: 's' }), blk({ key: 'm2' }), blk({ key: 'm3' })]
-  for (const cause of ['first-call', 'append', 'volatile-nonce-only', 'compaction', 'tool-array-reorder', 'json-key-reorder', 'content-changed']) {
+  for (const cause of ['first-call', 'append', 'volatile-nonce-only', 'compaction', 'tool-array-reorder', 'json-key-reorder', 'content-changed', 'model-or-route-change']) {
     const h = ctxWindowHtml(stateOf(pair(a, b, cause), 1))
     assert.equal(h.includes('id="cachebrk"'), !QUIET_CAUSES.has(cause), cause)
     if (QUIET_CAUSES.has(cause)) continue

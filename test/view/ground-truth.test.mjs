@@ -8,16 +8,16 @@ import { shapeResponse } from '../../src/collector/core/record/body.mjs';
 
 const TOOLS = [{ name: 'Read', description: 'Read a file', input_schema: { type: 'object', properties: { p: { type: 'string' } } } }];
 const SYS = [{ type: 'text', text: 'You are a coding assistant.' }];
-const mk = (i, messages, usage) => ({
-  id: `req_${i}`, ts_request: `2026-07-16T00:00:0${i}Z`, endpoint: '/v1/messages', host: 'api.anthropic.com',
+const mk = (i, messages, usage, host = 'api.anthropic.com') => ({
+  id: `req_${i}`, ts_request: `2026-07-16T00:00:0${i}Z`, endpoint: '/v1/messages', host,
   req_headers: { 'x-claude-code-session-id': 's-gt', 'user-agent': 'claude-cli/1.2' },
   req_body: JSON.stringify({ model: 'claude-opus-4', system: SYS, tools: TOOLS, messages }),
   resp: { status: 200, kind: 'json', body: { content: [{ type: 'text', text: 'ok' }], usage } },
 });
 // call #2 = call #1's context, verbatim, + an assistant turn and a new user turn
-const rows = async (usage2) => (await sessionDoc([
-  mk(1, [{ role: 'user', content: 'first question' }], { input_tokens: 100, output_tokens: 10 }),
-  mk(2, [{ role: 'user', content: 'first question' }, { role: 'assistant', content: 'first answer' }, { role: 'user', content: 'second question' }], usage2),
+const rows = async (usage2, host) => (await sessionDoc([
+  mk(1, [{ role: 'user', content: 'first question' }], { input_tokens: 100, output_tokens: 10 }, host),
+  mk(2, [{ role: 'user', content: 'first question' }, { role: 'assistant', content: 'first answer' }, { role: 'user', content: 'second question' }], usage2, host),
 ], 's-gt')).calls;
 
 for (const [read, write, gt] of [[0, 0, 'provider-contradiction'], [0, 90, 'ttl-rebuild'], [90, 0, null]]) {
@@ -66,3 +66,11 @@ test('a flat wire: a failed call with no usage has no ground truth, a successful
   assert.equal(zero.gt ?? null, 'provider-contradiction')
 })
 
+// a reported zero write proves a contradiction only where the vendor's cache semantics are known: DeepSeek on the Anthropic wire is not
+test('D17④: byte-identical prefix + read=0 & write=0 on a vendor of unknown cache semantics → no ground truth', async () => {
+  const [, c2] = await rows({ input_tokens: 120, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 5 }, 'api.deepseek.com');
+  assert.ok(c2.cacheBreak.idx > 0, 'call #2 reuses a prefix of call #1');
+  assert.equal(c2.cacheBreak.cause, 'append');
+  assert.equal(c2.gt ?? null, null);
+  assert.equal(c2.cacheBreak.gt ?? null, null);
+});

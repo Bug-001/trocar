@@ -1042,9 +1042,8 @@ function keyReorder(prev, cur) {
   return JSON.stringify(canonJSON(pj)) === JSON.stringify(canonJSON(cj))
 }
 // canonical divergence_cause → display label + attribution + fix hint (RFC 3.3 分叉成因分类 table).
-// attribution: harmless | provider-excluded | harness | yours | review. Only the causes cleanly
-// detectable from two flat block sequences are emitted here; provider/usage/model-dependent causes
-// (breakpoint-out-of-window, mid-turn-retry, model-or-route-change) are left to the product's adapter.
+// attribution: harmless | provider-excluded | harness | yours | review. Every cause is decided here (breakOf), from the two
+// block sequences and the hints the reduction passes (compaction verdict, model or vendor change, cache read); none is left to an adapter.
 const CAUSE_META = {
   'first-call': { label: 'first captured call', attr: 'harmless', fix: '' },
   'append': { label: 'normal append', attr: 'harmless', fix: '' },
@@ -1053,6 +1052,7 @@ const CAUSE_META = {
   'tool-array-reorder': { label: 'tools array reordered', attr: 'yours', fix: 'emit the tools array in a stable order (kill the nondeterminism)' },
   'json-key-reorder': { label: 'JSON keys reordered', attr: 'yours', fix: 'serialize JSON object keys in a stable order' },
   'content-changed': { label: 'a shared-prefix block changed in place', attr: 'review', fix: 'a historical block changed — check for in-place edits / nondeterministic serialization' },
+  'model-or-route-change': { label: 'the model or the provider changed', attr: 'harness', fix: 'a new model or provider starts a new cache; keep one model and route within a session to reuse it' },
 }
 
 // Where does this call's context first diverge from the previous call's? Everything before the
@@ -1113,22 +1113,10 @@ export function breakOf(prev, cur, opts = {}) {
     // user turn breaks mid-history; without the hint that reads as 'content-changed'.
     if (opts.compaction) out.cause = 'compaction'
   }
+  // a model or vendor switch (opts.modelChanged) refines only a bare content change or an append that read nothing (usage first):
+  // compaction and the reorders stand
+  if (opts.modelChanged && (out.cause === 'content-changed' || (out.cause === 'append' && opts.read === 0))) out.cause = 'model-or-route-change'
   const meta = CAUSE_META[out.cause] || CAUSE_META['content-changed']
   out.causeLabel = meta.label; out.attribution = meta.attr; out.fixHint = meta.fix
   return out
-}
-
-// ── D17④ ground-truth verification (RFC 3.3 地面真相验证) ──
-// With a reusable structural prefix (idx>0), cross-check what the provider's usage actually credited:
-//   read>0            → prefix genuinely reused              → null (normal)
-//   read=0 & write>0  → cache entry expired (TTL), re-cached → 'ttl-rebuild' (not a contradiction)
-//   read=0 & write=0  → prefix was reusable yet NEITHER read NOR written → suspect PROVIDER
-//                       mis-cache/mis-bill (research pain #9: SHA256-identical prefix, cached_tokens=0)
-// The prefix match here is STRUCTURAL (content_hash sequence — demo proxy). The product proves it with
-// an independent `prefix_sha256` over verbatim source bytes (RFC 3.3); the claim is strictly "MY
-// outbound prefix is identical ⇒ the suspicion points at the provider" — never "the provider is wrong".
-export function groundTruth(brk, read, create) {
-  if (!brk || brk.firstCall || brk.idx <= 0) return null // no reusable prefix to reason about
-  if (read > 0) return null
-  return create > 0 ? 'ttl-rebuild' : 'provider-contradiction'
 }

@@ -53,6 +53,7 @@ export const isStructState = (st) => STRUCT_STATES.has(st && st.state) || (st &&
 export const CAUSE_WORD = Object.freeze({
   compaction: 'compaction', 'tool-array-reorder': 'the order of the tool list changed', 'json-key-reorder': 'the order of JSON keys in the request changed',
   'content-changed': 'the content of an earlier block changed',
+  'model-or-route-change': 'the model or the provider changed',
 })
 export const causeWord = (cause) => CAUSE_WORD[cause] || 'cause unknown'
 // the five attribution values, five words (2.2 §缓存判定)

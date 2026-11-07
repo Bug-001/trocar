@@ -18,15 +18,17 @@ import { compactionVerdict } from '../identity/session-identity.mjs';
 import { boardDissectorOf as dOf } from '../dissect/registry.mjs';
 import { askOf, COMP_KEYS, departer, departs, taskOf, HEAD } from './blockmeta.mjs';
 import { posCmp, lru, num52, numTable } from '../query/projection.mjs';
-import { materializeAttrs } from './extract.mjs';
+import { materializeAttrs, cacheLabelsOf } from './extract.mjs';
 import { openFoldLog } from '../query/fold-log.mjs';
 
 // Ground-truth from PROVEN byte-identity (not the structural proxy). Strict wording per 3.3:73 — the
-// claim is only "MY outbound prefix is byte-identical", never "the provider is wrong".
-export function realGroundTruth(prefixByteIdentical, read, create) {
+// claim is only "MY outbound prefix is byte-identical", never "the provider is wrong". `create` NULL = the write was not
+// reported, which proves nothing; `known` = the vendor's cache semantics are known on this wire (wire.cacheSemanticsKnown).
+export function realGroundTruth(prefixByteIdentical, read, create, known) {
   if (!prefixByteIdentical) return null;             // no proven byte-identical reusable prefix
   if (read > 0) return null;                          // genuinely reused → normal
-  return create > 0 ? 'ttl-rebuild' : 'provider-contradiction';
+  if (create > 0) return 'ttl-rebuild';
+  return known && create === 0 ? 'provider-contradiction' : null;
 }
 
 // No dissector claimed these bytes. Report that IN PLACE (invariant 4) and COUNT them (3.1:44 — an
@@ -200,7 +202,8 @@ function listsOf(store) {
     if (!e && !path.length) return null;
     for (let i = path.length - 1; i >= 0; i--) {
       const r = path[i], from = r.base != null ? e : null;
-      e = { rid: r.rid, list: apply(from && from.list, r, int), mb: apply(from && from.mb, r.mb || {}, same), attrs: materializeAttrs(from && from.attrs, { k: r.k, attrs: r.attrs || {} }), depth: from ? from.depth + 1 : 0 };
+      e = { rid: r.rid, list: apply(from && from.list, r, int), mb: apply(from && from.mb, r.mb || {}, same), attrs: materializeAttrs(from && from.attrs, { k: r.k, attrs: r.attrs || {} }), depth: from ? from.depth + 1 : 0,
+        model: r.x && r.x.rq ? r.x.rq.model : undefined, vendor: r.x && r.x.wire ? r.x.wire.vendor : undefined };
       if (e.depth % KEYFRAME === 0) keep(e);
     }
     return keep(e);
@@ -381,7 +384,7 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
   }
   const seq = (list, attrs) => ({ n: list.length, key: (i) => B.key(list[i]), vol: (i) => !!(attrs[i] && attrs[i].volatile), sec: (i) => B.sec(list[i]), name: (i) => B.name(list[i]) });
   // a lane's base (its last call that chained a prefix) and last call, from their rows and the list cache
-  function baseOf(k) { if (k < 0) return null; const rid = ridAt(k); const e = L.at(rid, rowOf); return { rid, list: e.list, attrs: e.attrs }; }
+  function baseOf(k) { if (k < 0) return null; const rid = ridAt(k); const e = L.at(rid, rowOf); return { rid, list: e.list, attrs: e.attrs, model: e.model, vendor: e.vendor }; }
   function lastOf(S) { return S.last < 0 ? null : { list: L.at(ridAt(S.last), rowOf).list, comp: S.comp }; }
   // a call's cache break against its lane's base, and the byte-identity of the prefix before it (3.3:75, acceptance #12): no claim
   // over a context shown in part or edited by the server; else each position of [0, idx) holds, on both sides, a block whose
@@ -389,7 +392,10 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
   // slice (vh null) proves nothing, so the flag is false
   function cacheOf(base, list, attrs, x, compaction, usage) {
     const P = base ? seq(base.list, base.attrs) : null, C = seq(list, attrs);
-    const brk = breakOf(P, C, { compaction, detail: (i) => detail(base.list[i], list[i]) });
+    // a model or vendor switch against the base (both sides known) starts a new cache (3.3 model-or-route-change)
+    const differs = (a, b) => a != null && b != null && a !== b;
+    const modelChanged = !!base && (differs(base.model, x.rq && x.rq.model) || differs(base.vendor, x.wire.vendor));
+    const brk = breakOf(P, C, { compaction, modelChanged, read: usage.read, detail: (i) => detail(base.list[i], list[i]) });
     const blind = x.wire.contextState === 'partial' || x.wire.contextState === 'server_edited';
     let same = brk.idx > 0 && !blind && !!P;
     for (let i = 0; same && i < brk.idx; i++) {
@@ -398,9 +404,12 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
       same = a != null && a === (C.vol(i) ? null : B.vh(list[i]));
     }
     brk.prefixByteIdentical = same;
-    // nothing was measured on a failed call or one with no usage (1.3 服务端补充): its zeros say nothing about the provider (invariant 4)
+    // nothing was measured on a failed call or one with no usage (1.3 服务端补充): its zeros say nothing about the provider (invariant 4); a model or route change is not the provider's fault either (3.3)
     const raw = x.facts ? x.facts.usage : x.nu;
-    brk.gt = x.error || !raw || !Object.keys(raw).length ? null : realGroundTruth(same, usage.read, usage.create);
+    brk.gt = brk.cause === 'model-or-route-change' || x.error || !raw || !Object.keys(raw).length ? null : realGroundTruth(same, usage.read, usage.create, x.wire.cacheSemanticsKnown === true);
+    brk.gtReal = true;
+    const labels = cacheLabelsOf(x.wire, x.error ? null : usage);
+    if (labels.length) brk.labels = labels;
     if (base) brk.refRid = base.rid; // the 缓存对比步 (2.3): the call this one's break is taken against
     return brk;
   }

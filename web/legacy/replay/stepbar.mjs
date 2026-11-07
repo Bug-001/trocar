@@ -69,6 +69,7 @@ export function cachePopoverHtml(call, ref, { laneW = 'main thread', priceRow = 
   }
   if (hasChange) rows.push(`<div class="pp-link"><button type="button" class="jumpbtn" data-jump="change">${W.JUMP_TO_CHANGE}</button></div>`)
   if (call && call.wire && call.wire.cacheSemanticsKnown === false) rows.push(`<div class="pp-note">${esc(W.CACHE_SEMANTICS_UNKNOWN)}</div>`)
+  for (const l of b.labels || []) rows.push(`<div class="pp-note">${esc(l.label)}</div>`)
   return rows.join('')
 }
 
