@@ -76,6 +76,18 @@ test('validateReceipt: the C.3 status document validates; a status changed item 
   assert.ok(bad[0].includes('changed[0].undo'))
 })
 
+// C.3: a wait on an upstream loses nothing and has no command, so its group is kept as a note; another failure beside it is still a problem
+test('C.3 failures.groups: upstream-slow groups stay at level note and count as no problem', async () => {
+  const s = await installedHome()
+  const slow = { ts: ago(2000), event: 'failure', where: 'engine', code: 'upstream-slow', agent: 'codex', host: 'walled.test', phase: 'tls', waited_ms: 5000, reason: 'walled.test has not answered' }
+  const alone = await docOf(s, { request: down(), deps: { captureHealth: () => healthOf([slow, { ...slow, ts: ago(1000) }]) } })
+  assert.deepEqual(alone.failures.groups.filter((g) => g.code === 'upstream-slow').map((g) => [g.level, g.count, g.harness]), [['note', 2, 'codex']], 'kept, with its count and its harness')
+  assert.equal(alone.failures.problem, 0)
+  const beside = await docOf(s, { request: down(), deps: { captureHealth: () => healthOf([slow, { ts: ago(1000), event: 'failure', where: 'engine', code: 'leaf-error', reason: 'no leaf' }]) } })
+  assert.deepEqual(beside.failures.groups.map((g) => [g.code, g.level]).sort(), [['leaf-error', 'problem'], ['upstream-slow', 'note']])
+  assert.equal(beside.failures.problem, 1)
+})
+
 // C.3「已解决的组」: each failure and the ok event that ends its condition (one record shape per pair, as the daemon writes them)
 const ENDED = [
   [{ event: 'helper-down', where: 'helper', reason: 'no helper at /usr/local/libexec/trocar/redirector' }, { event: 'helper-ok' }],
