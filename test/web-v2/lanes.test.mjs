@@ -204,3 +204,15 @@ test('2.1 #17: renderRails writes no fold row, at any width', () => {
     if (had) Object.defineProperty(globalThis, 'matchMedia', had); else delete globalThis.matchMedia
   }
 })
+
+test('1.3 §叠加轨: lanes are drawn in step order of their first call, whatever order their headers arrived in', () => {
+  const desk = deskOf([{ kind: 'main', rows: [{}, {}] }, { kind: 'subagent', rows: [{}] }, { kind: 'subagent', rows: [{}] }, { kind: 'monitor', rows: [{}] }])
+  const want = buildLanes(desk, null).map((l) => l.id)
+  // the same headers, arrived in another order (a late tail append adds a lane after the ones already held)
+  for (const order of [[3, 0, 2, 1], [2, 1, 3, 0]]) {
+    const hs = [...desk.lanes.values()]
+    desk.lanes = new Map(order.map((i) => [hs[i].lane, hs[i]]))
+    assert.deepEqual(buildLanes(desk, null).map((l) => l.id), want, String(order))
+  }
+  assert.deepEqual(want, ['R0-0', 'R1-0', 'R2-0', 'R3-0'], 'step order of the first call')
+})
