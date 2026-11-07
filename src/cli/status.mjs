@@ -430,13 +430,12 @@ function failuresOf(f) {
   ]
   const by = new Map()
   for (const p of parts) {
-    const k = `${p.level}\u0000${p.where}\u0000${p.code}`, g = by.get(k)
     const harness = HARNESS_IDS.includes(p.agent) ? p.agent : null
+    const k = `${p.level}\u0000${p.where}\u0000${p.code}\u0000${harness}`, g = by.get(k)
     if (!g) { by.set(k, { level: p.level, where: p.where, code: p.code, count: p.count, first_ts: p.first_ts, last_ts: p.last_ts, harness, ...procOf(p), reason: p.reason }); continue }
     g.count += p.count
     if (String(p.first_ts) < String(g.first_ts)) g.first_ts = p.first_ts
     if (String(p.last_ts) >= String(g.last_ts)) { g.last_ts = p.last_ts; g.reason = p.reason; delete g.process; delete g.pid; Object.assign(g, procOf(p)) }
-    if (g.harness !== harness) g.harness = null // one group from more than one harness: the group names none
   }
   const all = [...by.values()].map(({ harness, ...g }) => (harness ? { ...g, harness } : g)).sort((a, b) => (String(a.last_ts) < String(b.last_ts) ? 1 : String(a.last_ts) > String(b.last_ts) ? -1 : 0))
   // C.3: the three counts are one unit, records — a note is the sum of the note groups' counts (a standing condition is one record)
