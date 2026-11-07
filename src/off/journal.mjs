@@ -45,12 +45,12 @@ export function undoWrapper(item, fs = nodeFs) {
 // receipts and in the manifest's kept backups: a URL's password is never in it (1.6 §1.2「不印凭据」); the entry itself keeps the value undo needs.
 export const describeEntry = (e) => hideUserinfo(entryText(e))
 const entryText = (e) => {
+  if (e.format === 'pem-block') return 'certificate block'
   if (e.kind === 'text' || (e.kind === 'trust-entry' && e.vars)) return e.vars ? `block with ${Object.entries(e.vars).map(([k, v]) => `${k}=${v}`).join(', ')}` : `line ${JSON.stringify(e.line)}`
   if (e.kind === 'run-key') return `the Run value ${e.name ?? 'trocar-collector'} (${e.hive ?? 'HKCU'}\\${e.key ?? ''})`
   if (e.kind === 'scheduled-task') return `the scheduled task ${e.task ?? '\\trocar\\collector'}`
   if (e.kind === 'forwarder-binary') return `the kernel's copy ${e.path ?? ''}`
   if (e.kind === 'json-array-item') return `${JSON.stringify(e.item)} in ${e.keys.join('.')}`
-  if (e.format === 'pem-block') return 'certificate block'
   return `${e.keys.join('.')} = ${e.value}`
 }
 

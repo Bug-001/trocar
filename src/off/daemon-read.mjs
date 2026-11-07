@@ -23,6 +23,9 @@ export const DAEMON_READ_VERBS = Object.freeze(['ps', 'tcp-table', 'reg-read', '
 export const DAEMON_READ_MS = 1200
 export const DAEMON_READ_CAP = 2 * DAEMON_READ_MS
 
+// D58: a reason reaches a receipt, so it says what was asked and what happened, not the verb's name or a raw system code (the error's `code` stays for code)
+const VERB_WORDS = { ps: 'the process list', 'tcp-table': 'the connection table', 'reg-read': 'a registry value', 'net-if': 'the network interfaces', route: 'the routes', version: 'its version' }
+const askWords = (verb, e) => `${VERB_WORDS[verb] || verb}: ${e && e.code === 'ETIMEDOUT' ? 'no answer in time' : ['ECONNREFUSED', 'ENOENT', 'ECONNRESET', 'EPIPE'].includes(e && e.code) ? 'it could not be reached' : String((e && e.message) || e)}`
 const err = (reason, code = 'daemon-read-failed') => Object.assign(new Error(`the daemon did not answer the read question: ${reason}`), { code, reason })
 
 /** daemonReader({ platform, dir, env, fs, request, socketPath, timeoutMs }) → { call, ready, close, self() } | null when no endpoint is known.
@@ -46,15 +49,15 @@ export function daemonReader({ platform = process.platform, dir, env = process.e
   const fatal = (reason) => { if (!dead) dead = reason; return err(reason) }
   async function call(verb, args = {}, { timeoutMs: ms = timeoutMs } = {}) {
     if (!DAEMON_READ_VERBS.includes(verb)) throw err(`${JSON.stringify(verb)} is not one of the daemon's read verbs`, 'daemon-read-unknown-verb')
-    if (dead) throw err(`${verb}: the daemon already failed a read of this command (${dead}), so it is not asked again`)
+    if (dead) throw err(`${VERB_WORDS[verb] || verb}: the daemon already failed a read of this command (${dead}), so it is not asked again`)
     const key = `${verb}|${JSON.stringify(args ?? {})}`
     if (answers.has(key)) return answers.get(key)
     let r
     try { r = await ask({ socketPath: sock, method: 'POST', path: '/helper', body: { verb, args }, timeoutMs: Math.min(ms, DAEMON_READ_CAP) }) } catch (e) {
-      throw fatal(`${verb}: ${String((e && (e.code || e.message)) || e)}`)
+      throw fatal(askWords(verb, e))
     }
     if (r && r.self && Number.isInteger(r.self.pid)) self = { pid: r.self.pid, start_time: r.self.start_time ?? null, boot_id: r.self.boot_id ?? null }
-    if (!r || r.ok !== true) throw fatal(String((r && r.error) || `${verb}: the reply does not say it worked`))
+    if (!r || r.ok !== true) throw fatal(`${VERB_WORDS[verb] || verb}: ${String((r && r.error) || 'the reply does not say it worked').replace(`${verb}: `, '')}`)
     answers.set(key, r.data)
     return r.data
   }

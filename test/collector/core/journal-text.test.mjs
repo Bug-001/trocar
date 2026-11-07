@@ -144,3 +144,10 @@ test('journal json: a member that is not there is never added, a config key neve
   assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { network: { HttpProxy: 'x', httpProxy: 'http://127.0.0.1:1' }, env: { https_proxy: 'y' } })
   assert.equal(m.entries.length, 1)
 })
+
+// A receipt describes every kind of entry a text edit leaves, in words: a certificate block has no `line`, and the user read "trocar's line undefined".
+test('describeEntry: no shape install writes reads undefined', () => {
+  const shapes = [{ kind: 'text', format: 'pem-block' }, { kind: 'text', format: 'line', line: 'x' }, { kind: 'text', format: 'dotenv-block', vars: { A: 'b' } }, { kind: 'text', format: 'yaml-list', line: '- x' },
+    { kind: 'json-array-item', item: 'x', keys: ['a'] }, { kind: 'json-key', keys: ['a'], value: 'b' }, { kind: 'run-key' }, { kind: 'scheduled-task' }]
+  for (const e of shapes) assert.doesNotMatch(describeEntry(e), /undefined/, JSON.stringify(e))
+})

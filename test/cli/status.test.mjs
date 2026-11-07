@@ -763,9 +763,9 @@ test('D62 (4.8 §1 §7): with the daemon answering, one `status` starts no Power
   const cold = await once(false)
   assert.equal(cold.verbs[0], 'ps', 'the daemon was asked')
   assert.deepEqual(cold.shells.map((c) => (/ForEach-Object/.test(c) ? 'table' : 'identity')), ['table'], 'and when it cannot answer that read, the one local question is asked — once, and no identity question of its own')
-  const asked = cold.doc.errors.filter((e) => /did not answer the read question/.test(e.reason))
+  const asked = cold.doc.errors.filter((e) => e.where === 'the process table')
   assert.deepEqual(asked.map((e) => e.where), ['the process table'], 'the fallback is never silent (D38), under the closed-set name of the question (src/health/codes.mjs DOC_WHERE)')
-  assert.match(asked[0].reason, /ps: helper down: it exited with code 1$/, 'and the prose — which reader could not answer, and why — is the reason')
+  assert.match(asked[0].reason, /the process list: helper down: it exited with code 1$/, 'and the prose — which reader could not answer, and why — is the reason')
   const sameSide = (d) => [d.daemon, d.holders, d.harnesses]
   assert.deepEqual(sameSide(cold.doc), sameSide(hot.doc), 'and what the table decides — the daemon\'s verdict, the holders, the harnesses — is the same, whichever side answered')
 
