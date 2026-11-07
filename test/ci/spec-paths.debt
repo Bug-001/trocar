@@ -54,7 +54,6 @@
 2.4-resource-explorer.md test/web-v2/replay-render.test.mjs
 2.4-resource-explorer.md test/web-v2/board-real.test.mjs
 2.4-resource-explorer.md test/web-v2/board-v2-in-browser.test.mjs
-2.4-resource-explorer.md test/server-session-lanes.test.mjs
 2.4-resource-explorer.md src/index.js
 2.4-resource-explorer.md test/index.js
 2.4-resource-explorer.md test/web-v2/mock-sessions.test.mjs
