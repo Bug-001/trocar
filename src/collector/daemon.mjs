@@ -164,7 +164,7 @@ function noteUncleanStop(lock, failure) {
  *    `seal.start()` MUST come after the control server claimed the collector (before that the lock may be a LIVE
  *  daemon's, and the start scan clears the lock's `segment`); `seal.stop()` belongs at the top of the stop, before
  *  store.close(): the segment the stop closes is sealed by the next start's scan, not by a worker the stop cuts off
- *  (a stop by `uninstall` has no next start: `seal.last()` seals it before the daemon exits), and nothing of trocar's writes anything after the stop (the tail the stop closes is indexed by that next start's
+ *  (a stop by `uninstall` has no next start: `seal.last()` seals it, and whatever else is still plaintext, before the daemon exits), and nothing of trocar's writes anything after the stop (the tail the stop closes is indexed by that next start's
  *  sealer, and until then a query resumes it from the last indexed byte). */
 function storeWithSealing({ P, failure, query }) {
   const home = path.dirname(P.dir)

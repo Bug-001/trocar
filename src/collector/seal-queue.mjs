@@ -21,7 +21,7 @@ export const WORKER_GONE_EXIT = 75
 export const BEFORE_SEAL_MS = 5_000
 
 /** Seal `file` in a child process → { code, reason }. The child exits as soon as this parent disconnects. Low priority, except `normal`
- *  (the uninstall stop's last segment, 4.2 §自动封存); `onProgress({step, done, total})` hears the child's progress. */
+ *  (an uninstall stop's seals of what is still plaintext, 4.2 §自动封存); `onProgress({step, done, total})` hears the child's progress. */
 export const forkSealer = (file, { lockFile, journal, normal = false, onProgress = () => {} }) => new Promise((resolve) => {
   const child = fork(WORKER, [file, lockFile, journal || '', ...(normal ? ['normal'] : [])], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'], ...(normal ? { execArgv: process.execArgv } : lowFork(process.execArgv)) })
   let reason = ''
