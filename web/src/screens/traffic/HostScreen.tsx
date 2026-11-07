@@ -166,7 +166,7 @@ export default function HostScreen({ route, router }: ScreenProps) {
       </div>
       <div className="hhead colhead" aria-hidden="true">
         <span className="cell">Time</span><span className="cell-endpoint">Endpoint</span><span className="cell class">Class</span>
-        <span className="cell num sent">{W.COL.sent}</span><span className="cell num recv">{W.COL.recv}</span><span className="cell marks"></span>
+        <span className="cell num sent">{W.COL.sent}</span><span className="cell num recv">{W.COL.recv}</span><span className="cell marks">{W.COL.marks}</span>
       </div>
       <div className="hlist" id="hlist" role="list" aria-label="Requests" ref={listRef} style={{ position: 'relative', height: virt.getTotalSize() }}>
         {items.map((it) => {
