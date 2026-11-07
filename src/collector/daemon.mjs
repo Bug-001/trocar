@@ -156,7 +156,7 @@ function noteUncleanStop(lock, failure) {
 
 /** The ONE place a daemon's record store, its sealer and its index keeper are wired (the platform-seam rule: no per-platform
  *  copy), so BOTH entries — Linux's runDaemon and the model OSes' runModelDaemon — seal AND keep the index current:
- *  `seal.start()` does the upgrade rename and the last run's leftovers, then every segment this run closes, one at a
+ *  `seal.start()` does the last run's leftovers, then every segment this run closes, one at a
  *  time in a forked child, so this event loop never encodes or hashes (4.2 §自动封存).
  *    The keeper (D62, index-keeper.mjs) indexes the bytes this daemon just appended, debounced and in chunks, so no
  *  query ever pays for a cold index build; it hands a segment over to the sealer's child when the segment closes.
