@@ -77,7 +77,7 @@ export function notTrocars({ dir, file, fs = nodeFs }) {
   if (strictlyInside(dir, path.dirname(file), fs)) return null
   let bytes
   try { bytes = readOrNull(fs, file) } catch (e) { return `${file} is already there and cannot be read (${e.code || e.message}), so whether it is trocar's is not known; trocar left it alone` }
-  return bytes == null || bytes.toString('latin1').includes(SENTINEL) ? null : `${file} is already there and holds no trocar mark, so it is not trocar's; trocar left it alone`
+  return bytes == null || bytes.toString('latin1').includes(SENTINEL) ? null : `${file} is already there and trocar cannot tell it is its own; trocar left it alone`
 }
 
 // A file trocar owns (a trust file of certificate blocks, a trust plugin, a launch shim): listed before it is written,
