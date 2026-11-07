@@ -24,6 +24,7 @@ import { createRedirectorClient } from '../../src/collector/arch/linux/redirecto
 import { createLinuxRedirector } from '../../src/collector/arch/linux/redirector.mjs'
 import cc from '../../src/collector/harness/claude-code.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { seedFootprint } from '../helpers/footprint.mjs'
 import { spawnStandin } from '../helpers/standin.mjs'
 import { fakeProc } from './arch/linux/fixtures/fake-proc.mjs'
 import { fakeSystem, recordingExec, fakeDaemon, ROOTS } from '../cli/fixtures/on-ctx.mjs'
@@ -33,6 +34,7 @@ import { envelopesOf } from '../helpers/record-store.mjs'
 
 function box() {
   const home = tmpDir('trocar-inst-')
+  seedFootprint(home, [cc]) // Claude Code is installed (4.6: its own footprint)
   return { home, dir: path.join(home, '.trocar', 'collector'), done: () => fs.rmSync(home, { recursive: true, force: true }) }
 }
 const base = (b, o = {}) => ({ home: b.home, env: { HOME: b.home }, osName: 'none', harnesses: [cc], freePort: async () => 47011, ...o })
@@ -199,7 +201,7 @@ test('a refused plan entry or a non-JSON settings file leaves every user file un
   const b = box()
   try {
     const bashrc = path.join(b.home, '.bashrc'); fs.writeFileSync(bashrc, 'export X=1\n')
-    const loginEnv = { name: 'login-env', inject: () => ({ entries: [{ kind: 'json-key', path: bashrc, keys: ['env', 'NODE_EXTRA_CA_CERTS'], value: path.join(b.dir, 'ca', 'trocar-ca.pem'), semantic: 'append' }] }) }
+    const loginEnv = { name: 'login-env', present: [{ base: 'home' }], inject: () => ({ entries: [{ kind: 'json-key', path: bashrc, keys: ['env', 'NODE_EXTRA_CA_CERTS'], value: path.join(b.dir, 'ca', 'trocar-ca.pem'), semantic: 'append' }] }) }
     await assert.rejects(installCollector(base(b, { harnesses: [cc, loginEnv] })), /login-environment/)
     assert.ok(!fs.existsSync(settingsOf(b)), "CC's entry, planned first, was not written: the whole plan is checked before any file changes")
     assert.ok(!fs.existsSync(path.join(b.home, '.trocar')), 'a refused plan writes nothing at all, not even the manifest or the CA')
@@ -385,7 +387,7 @@ async function plugHarness(b) {
   const dir = path.join(b.home, '.trocar', 'collector')
   return {
     name: 'plug', runtime: 'node', processes: { names: [{ name: 'plug' }] }, hosts: [], trust: { chain: [{ var: 'trocar:marker', semantic: 'append' }] },
-    inject: (ctx) => ({
+    present: [{ base: 'home' }], inject: (ctx) => ({
       owned: [
         { path: path.join(ctx.home, '.config', 'plug', 'plugins', 'trocar-ca.js'), role: 'plugin', data: '// trocar collector: trust plugin\n', mode: 0o644 },
         { path: path.join(dir, 'plugins', 'plug', 'index.js'), role: 'plugin', data: 'export {}\n', mode: 0o644 },
@@ -454,7 +456,7 @@ test('an entry uninstall cannot undo stays in the manifest; install refuses unti
 // A synthetic replace-semantics harness: a dotenv block naming its combined bundle (Codex / Hermes shape).
 const repHarness = (dir, extra = {}) => ({
   name: 'rep', runtime: 'rust', processes: { names: [{ name: 'rep' }] }, hosts: [], trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }], ...extra },
-  inject: (ctx) => ({
+  present: [{ base: 'home' }], inject: (ctx) => ({
     entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, '.rep', '.env'), vars: { SSL_CERT_FILE: path.join(dir, 'ca', 'combined-rep.pem') }, semantic: 'replace' }],
     files: [{ path: path.join(dir, 'ca', 'combined-rep.pem'), bundle: true, certsFrom: [path.join(ctx.home, 'corp.pem')] }],
   }),
@@ -725,7 +727,7 @@ test('uninstall step 5: only a process that may have read the entry is reported 
   try {
     // plugin-only harness: its install time is its owned file's; a harness whose afterUninstall is a function of the process
     const plug = { name: 'plug', runtime: 'node', processes: { names: [{ name: 'plug' }] }, hosts: [], trust: { chain: [{ var: 'X', semantic: 'append' }] },
-      inject: (ctx) => ({ owned: [{ path: path.join(ctx.home, '.plug', 'plugins', 'trocar-ca.js'), role: 'plugin', data: '// trocar collector: trust plugin\n', mode: 0o644 }] }) }
+      present: [{ base: 'home' }], inject: (ctx) => ({ owned: [{ path: path.join(ctx.home, '.plug', 'plugins', 'trocar-ca.js'), role: 'plugin', data: '// trocar collector: trust plugin\n', mode: 0o644 }] }) }
     const picky = { ...repHarness(b.dir), name: 'picky', processes: { names: [{ name: 'picky' }] },
       inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, '.picky', '.env'), vars: { SSL_CERT_FILE: path.join(b.dir, 'ca', 'combined-picky.pem') }, semantic: 'replace' }], files: [{ path: path.join(b.dir, 'ca', 'combined-picky.pem'), bundle: true, certsFrom: [] }] }),
       trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }], afterUninstall: 'next-connection', untilEnviron: 'VIA' } }
@@ -1033,7 +1035,7 @@ const until = async (fn, ms = 3000) => { const end = Date.now() + ms; for (;;) {
 const pause = (ms) => new Promise((r) => setTimeout(r, ms))
 
 test('V16 (unit half): a Claude Code started while its harness was off, then on again, is config-after-start — passed through with no client error, listed under restart by the on receipt, trusted only after it restarts (1.6 §1.1, R9)', async () => {
-  const root = tmpDir('as-v16-'); const home = path.join(root, 'home'); fs.mkdirSync(home)
+  const root = tmpDir('as-v16-'); const home = path.join(root, 'home'); fs.mkdirSync(home); seedFootprint(home, [cc])
   const b = { home, dir: path.join(home, '.trocar', 'collector') }
   const sock = path.join(root, 'run', 'c.sock')
   const p = fakeProc(); const up = await relay()

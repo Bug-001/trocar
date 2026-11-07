@@ -276,7 +276,7 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
   const sudoHelper = h && h.ok === false ? setupHelperCommand([], { root }) : null
   const helperNote = sudoHelper ? `the capability helper is not installed (${h.reason || 'not usable'}): the collector runs and captures nothing until it is.` : null
   const notes = [...(r.plan ? r.plan.notes : []), ...(rep ? rep.notes : [])]
-  const receipt = { ...newReceipt('install'), ok: !board && !problems.length, ...(problems.length ? { problems } : {}), ...(board || sudoHelper ? { pending: [...(board ? [board] : []), ...(sudoHelper ? [{ what: 'the capability helper', reason: helperNote, command: sudoHelper }] : [])] } : {}), undo: UNDO_LINE.install, harnesses: r.manifest.install ? r.manifest.install.harnesses.filter((h) => args.harnesses.some((d) => d.name === h)) : [], /* ㉓: this copy's own */ changed: r.already ? [] : plan.changed.map((c) => ({ ...c, backup: (r.manifest.entries.find((e) => e.path === c.path) || {}).backup ?? null })), created: [...new Set([...stdl.files, ...(r.already ? [] : plan.created), ...(written ? [ingressPath] : [])])], standalone: standalonePath(home), ...(done.path && done.path.rec ? { path_item: done.path.rec } : {}), planned, commands: ['trocar on', 'trocar off', 'trocar status', 'trocar uninstall'], notes, // the helper is a pending row with its command (C.2), not a sentence that carries one
+  const receipt = { ...newReceipt('install'), ok: !board && !problems.length, ...(problems.length ? { problems } : {}), ...(board || sudoHelper ? { pending: [...(board ? [board] : []), ...(sudoHelper ? [{ what: 'the capability helper', reason: helperNote, command: sudoHelper }] : [])] } : {}), undo: UNDO_LINE.install, harnesses: r.manifest.install ? r.manifest.install.harnesses.filter((h) => args.harnesses.some((d) => d.name === h)) : [], /* ㉓: this copy's own */ skipped: plan.skipped, /* what has nothing to place here, with its reason (4.6 「这个 harness 装好了没有」) */ changed: r.already ? [] : plan.changed.map((c) => ({ ...c, backup: (r.manifest.entries.find((e) => e.path === c.path) || {}).backup ?? null })), created: [...new Set([...stdl.files, ...(r.already ? [] : plan.created), ...(written ? [ingressPath] : [])])], standalone: standalonePath(home), ...(done.path && done.path.rec ? { path_item: done.path.rec } : {}), planned, commands: ['trocar on', 'trocar off', 'trocar status', 'trocar uninstall'], notes, // the helper is a pending row with its command (C.2), not a sentence that carries one
     // `enabled` is the entry asked again after the run (1.6 §3.3: no claim without evidence), not "nothing failed": ensureDaemonUp asks it at the end of every
     // registering run and makes any answer but present its unitFailed, so a run that halted on a stuck daemon (and enabled nothing) says false here too
     ...(r.daemon ? { daemon: daemonRow(dmn, rep), autostart: { entry: args.unit.path, enabled: !dmn.unitFailed } } : {}) }
@@ -306,6 +306,16 @@ async function linuxSetup({ io, home, platform, flags, json, say, fs, locked, in
   const planned = planItems(plan, { home, platform }).filter((r) => r.what === only) // the harness's rows only: trocar's own records are not Set up's (1.6 §3.2, V85)
   const left = plan.steps.filter((s) => s.harness === only && s.action === 'skip-user-changed') // a carrier install cannot place again: setup stays needed, said (D38)
   if (left.length) return refuse(CODE.setupNeeded, `${only} cannot be set up: ${left.map((s) => s.why).join('; ')}. Nothing was changed`)
+  // nothing for install to place while Set up is asked (4.6): the harness is not here (`skipped`), or it is and `needed` while its inject gives no item.
+  // Refused with the reason, never "nothing to set up"
+  const skip = plan.skipped.find((x) => x.what === only)
+  if (skip || !planned.length) {
+    const [{ driverSetup }, { SETUP_WHY }] = await Promise.all([import('../collector/driver-setup.mjs'), import('./words.mjs')])
+    const desc = (args.harnesses || []).find((d) => d.name === only)
+    const s = !skip && desc ? driverSetup(desc, { os: args.osName, home, env: args.env, manifest: m, fs }) : null
+    const why = plan.notes.filter((n) => typeof n === 'string' && n.startsWith(`${only}: `)).map((n) => n.slice(only.length + 2))
+    if (skip || (s && s.state === 'needed')) return refuse(CODE.setupNeeded, `${only} cannot be set up: ${skip ? skip.reason : (why.length ? why : s.missing.map((x) => SETUP_WHY[x.what])).join('; ')}. Nothing was changed`)
+  }
   say(fit([planned.length ? `trocar install will set up ${only}:` : `${only} has every certificate carrier it needs: there is nothing to set up.`, ...pairs(planned.map((p) => [p.what, p.detail]), { home })], { home }).join('\n'))
   if (flags.has('--dry-run')) { if (json) printJson(io, { ...newReceipt('install'), dry_run: true, planned, ...(planned.length ? {} : { notes: [`${only}: nothing to set up`] }) }); return EXIT.ok }
   if (plan.writing && !flags.has('--yes')) {

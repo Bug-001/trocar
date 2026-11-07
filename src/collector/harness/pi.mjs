@@ -121,6 +121,8 @@ export default {
   proxy,
   proxyMode,
   proxies: (ctx) => envProxies(ctx.env, proxy.env),
+  // `pi` is also the name of other programs: one of those on PATH counts as pi, and install writes pi's idle extension
+  present: [{ base: 'home', dir: '.pi/agent', env: 'PI_CODING_AGENT_DIR' }, { command: 'pi' }],
   inject,
   trust: {
     // the marker first: when it is there, a failure names it, not a CA file the user exported for pi

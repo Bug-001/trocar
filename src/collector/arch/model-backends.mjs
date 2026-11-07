@@ -7,22 +7,11 @@ import path from 'node:path'
 import { isModelOs } from '../model-install.mjs'
 import { redactProxyUrl } from '../../netenv/redact.mjs'
 import { recordDrift } from '../../netenv/adopt.mjs'
-import { userPathEnv } from '../../off/user-path.mjs'
+import { userWhich } from '../../off/user-path.mjs'
 export { MODEL_OS, isModelOs } from '../model-install.mjs' // the one list of the OSes the model runs on
 
 /** The installed signing helper the darwin custody runs (4.11 P1): under ~/.trocar/bin, beside trocar-off. */
 export const signHelperPath = (home, name) => path.join(home, '.trocar', 'bin', name)
-
-/** `which(command)` over the user's PATH (the install env): the first <dir>/<command><suffix> that exists, or null. */
-export function whichIn(env, { os, exists = nodeFs.existsSync } = {}) {
-  const get = (k) => (env instanceof Map ? env.get(k) : env && env[k])
-  const dirs = String(get('PATH') || get('Path') || '').split(os === 'win32' ? ';' : ':').filter(Boolean)
-  const exts = os === 'win32' ? String(get('PATHEXT') || '.EXE;.CMD;.BAT').split(';').filter(Boolean).concat(['']) : ['']
-  return (command) => {
-    for (const d of dirs) for (const x of exts) { const f = path.join(d, `${command}${x.toLowerCase()}`); if (exists(f)) return f }
-    return null
-  }
-}
 
 /** Whether this user owns `p` (rule U, P8): the uid on POSIX; on Windows a path under the profile counts (the owner SID is not read here). */
 export const ownsBy = ({ os, home, uid = typeof process.getuid === 'function' ? process.getuid() : null, fs = nodeFs }) => (p) => {
@@ -36,7 +25,7 @@ export function sourcesCtx({ os, home, env = process.env, cwd = process.cwd(), d
   return {
     os, home, cwd, env, dirs: dirs || {},
     readFile: (p) => fs.readFileSync(p, 'utf8'), exists: (p) => fs.existsSync(p), readdir: (p) => fs.readdirSync(p),
-    which: which || whichIn(userPathEnv({ home, env, fs }), { os, exists: (p) => fs.existsSync(p) }), policy: policy || (() => ({ set: false })),
+    which: which || userWhich({ home, env, os, fs }), policy: policy || (() => ({ set: false })),
   }
 }
 

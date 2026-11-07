@@ -10,6 +10,8 @@ import { linuxNetFacts } from '../../src/collector/arch/linux/netfacts.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 import { VERBS } from '../../src/control/board.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { seedFootprint } from '../helpers/footprint.mjs'
+import { resolveLoc } from '../../src/off/loc.mjs'
 
 const all = await loadHarnesses()
 const exec = () => ({ status: 0, stdout: '', stderr: '' }) // `ss`: no listener
@@ -53,19 +55,27 @@ test('V91-S2: an unreadable install manifest gives setup unknown with a reason, 
   }
 })
 
-test('1.6 §3.5 listing: with no names a harness present on this machine is listed; named it always is; trocar not installed adds none', async () => {
-  const s = await world()
-  assert.ok(!('z-code' in (await json(s)).harnesses))
-  assert.ok('z-code' in (await json(s, ['z-code'])).harnesses)
-  fs.mkdirSync(path.join(s.home, '.zcode', 'cli'), { recursive: true })
-  fs.writeFileSync(path.join(s.home, '.zcode', 'cli', 'config.json'), '{}\n')
-  assert.ok('z-code' in (await json(s)).harnesses)
-  assert.ok('z-code' in (await json(s, ['z-code'])).harnesses)
+const homePlaces = (d, home, env) => d.present.filter((p) => p && p.base === 'home').flatMap((p) => resolveLoc(p, { os: 'linux', home, env }))
+const unseed = (d, home, env) => { for (const f of homePlaces(d, home, env)) fs.rmSync(f, { recursive: true, force: true }) }
+
+test('1.6 §3.5 listing over harness × footprint: with no names a harness is listed when present or known to the install record; named it always is; trocar not installed adds none', async () => {
+  const s = await installedHome({ names: ['claude-code'], seed: (home, sh) => { for (const d of all) if (d.name !== 'claude-code') unseed(d, home, sh.env) } })
+  const deps = { exec, netFactsDeps: async () => ({ harnesses: all, archFacts: linuxNetFacts }) }
+  const get = async (names = []) => JSON.parse((await runStatus(s, ['--json', ...names], { deps })).text).harnesses
+  for (const d of all.filter((x) => x.name !== 'claude-code')) {
+    assert.ok(!(d.name in await get()), `${d.name} absent`)
+    assert.ok(d.name in await get([d.name]), `${d.name} absent, named`)
+    seedFootprint(s.home, [d], s.sh.env)
+    assert.ok(d.name in await get(), `${d.name} present`)
+    unseed(d, s.home, s.sh.env)
+  }
+  unseed(all.find((x) => x.name === 'claude-code'), s.home, s.sh.env)
+  const cc = (await get())['claude-code']
+  assert.deepEqual({ state: cc.setup.state, missing: cc.setup.missing }, { state: 'ready', missing: [] })
 
   const bare = { home: tmpDir('trocar-st-bare-'), sh: { env: {} }, sys: { exec: { run: exec } } }
-  fs.mkdirSync(path.join(bare.home, '.claude'), { recursive: true })
-  fs.writeFileSync(path.join(bare.home, '.claude', 'settings.json'), '{}\n')
-  assert.deepEqual(Object.keys((await json(bare)).harnesses), [])
+  seedFootprint(bare.home, all)
+  assert.deepEqual(Object.keys(JSON.parse((await runStatus(bare, ['--json'], { deps })).text).harnesses), [])
 })
 
 test('V91-S3: GET /control/status gives the very setup status --json gives (4.4 §控制面)', async () => {

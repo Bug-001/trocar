@@ -17,7 +17,7 @@ import { wrap, WIDTH } from './text.mjs'
 import { printJson, errorDoc } from './json.mjs'
 import { EXIT, SCHEMA_VERSION } from './schema.mjs'
 import { codeId, selfCommand } from '../version.mjs'
-import { recordUserPath } from '../off/user-path.mjs'
+import { recordUserPath, presentEnvNames } from '../off/user-path.mjs'
 import { COMMAND_INDENT } from '../off/receipt.mjs'
 
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
@@ -61,8 +61,17 @@ export async function runCli(argv, { io = makeIo({ stdin: process.stdin, stdout:
   // what `install` just installed), so every asker resolves a form's command alike — but not one whose table row says `recordsPath: false` (`daemon`:
   // the login service's PATH is not the user's; `uninstall`: it deletes that file). A command `deps.commands` replaces does nothing of its own, so it
   // records nothing either. A failure to record never changes the answer.
-  const remember = () => { if (mutates && cmd.recordsPath !== false && run === cmd.run) try { recordUserPath({ home, env, ...(deps.fs ? { fs: deps.fs } : {}) }) } catch { /* the next command records it */ } }
-  remember()
+  // With the PATH, the variables that move a footprint place (presentEnvNames), for the same reason.
+  let names = null
+  const remember = async () => {
+    if (!(mutates && cmd.recordsPath !== false && run === cmd.run)) return
+    try {
+      // only driver mode (Linux) judges presence by footprint places: elsewhere no descriptor is loaded for this (it costs `on` / `off` ~50 ms)
+      names = names || (platform === 'linux' ? presentEnvNames(deps.harnesses || await (await import('../collector/harness/index.mjs')).loadHarnesses().catch(() => [])) : [])
+      recordUserPath({ home, env, names, ...(deps.fs ? { fs: deps.fs } : {}) })
+    } catch { /* the next command records it */ }
+  }
+  await remember()
   try {
     const body = (cmdIo) => run(rest, { io: cmdIo, env, home, platform, uid, json, args, deps: { getuid: () => uid, ...deps } })
     return await (json ? asOneDocument(cio, cmd.name, body) : body(cio)) // §1.2: a refusal the command only says on stderr still answers with a document
@@ -72,5 +81,5 @@ export async function runCli(argv, { io = makeIo({ stdin: process.stdin, stdout:
     if (json) { printJson(cio, errorDoc(cmd.name, 'internal', message, (e && e.stack) || String(e))); return EXIT.crash }
     cio.err(message); cio.err(REPORT)
     return EXIT.crash
-  } finally { remember() }
+  } finally { await remember() }
 }

@@ -22,6 +22,7 @@ import { matchHarness } from '../helpers/one-harness.mjs'
 import { SEEDS } from '../helpers/proc-seeds.mjs'
 import { variantsOf } from '../helpers/proc-variants.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { seedFootprint } from '../helpers/footprint.mjs'
 import { darwinTools } from './fixtures/darwin-tools.mjs'
 import { fakeSystem } from '../cli/fixtures/on-ctx.mjs'
 
@@ -219,6 +220,7 @@ for (const osName of Object.keys(CLAUDE)) {
     fs.writeFileSync(path.join(home, 'relay-ca.pem'), corp.certPem)
     fs.mkdirSync(path.join(home, '.claude'), { recursive: true })
     fs.writeFileSync(path.join(home, '.claude', 'settings.json'), '{\n  "model": "x"\n}\n')
+    seedFootprint(home, HARNESSES.filter((d) => d.name === 'claude-code')) // Claude Code is installed (4.6: its own footprint)
     const env = { HOME: home, USERPROFILE: home, NODE_EXTRA_CA_CERTS: path.join(home, 'relay-ca.pem') } // the user's own CA: Claude Code gets an extra-cc.pem
     await installCollector({ home, env, ids: ['claude-code'], osName: installOs(osName), arch: await loadArch(installOs(osName)), harnesses: HARNESSES, freePort: async () => 47011, scan: async () => [], roots })
     const dir = path.join(home, '.trocar', 'collector'), extra = path.join(dir, 'ca', 'extra-cc.pem')

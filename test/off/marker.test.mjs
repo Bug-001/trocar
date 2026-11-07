@@ -15,6 +15,7 @@ import { planByMarker, undoByMarker, MARKER_PATHS } from '../../src/off/marker.m
 import { backupsOf, writeBackup } from '../../src/off/backup.mjs'
 import { manifestPath } from '../../src/off/manifest.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { seedFootprint } from '../helpers/footprint.mjs'
 import { sevenHomes } from './fixtures/seven-homes.mjs'
 import { world, door } from '../collector/core/proxymode/fixtures/entries-ctx.mjs'
 import { routeEntry, noProxyNames } from '../../src/collector/core/proxymode/entries.mjs'
@@ -33,7 +34,9 @@ async function lostManifest() {
   fs.writeFileSync(cc, `{\n  "model": "x",\n  "env": {\n    "NODE_EXTRA_CA_CERTS": ${JSON.stringify(sh.corp)}\n  }\n}\n`)
   fs.writeFileSync(hermes, `OPENAI_API_KEY=sk-test-hermes\nSSL_CERT_FILE=${sh.corp}\n`)
   const original = Object.fromEntries(Object.values(sh.files).flat().map((f) => [f, read(f)]))
-  await installCollector({ home, env: { HOME: home }, osName: 'linux', harnesses: await loadHarnesses(), freePort: async () => 47011, scan: async () => [], roots })
+  const harnesses = await loadHarnesses()
+  seedFootprint(home, harnesses.filter((d) => d.name in sh.files)) // the seven are installed (4.6: presence is each one's own footprint)
+  await installCollector({ home, env: { HOME: home }, osName: 'linux', harnesses, freePort: async () => 47011, scan: async () => [], roots })
   const dir = path.join(home, '.trocar', 'collector')
   fs.rmSync(manifestPath(dir))
   return { home, sh, original, dir, rel: (p) => path.relative(home, p) }
