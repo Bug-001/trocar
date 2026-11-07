@@ -1,6 +1,6 @@
 // schema.mjs — what `--json` prints (RFC 1.6 R5), and the check V9 runs over every command's output. The keys and the exit codes
 // are src/off/schema.mjs (the undo side prints receipts too and may import nothing outside src/off); this adds validateReceipt.
-import { SCHEMA_VERSION, EXIT, RECEIPT_KEYS, UNDO_LINE, newReceipt } from '../off/schema.mjs'
+import { SCHEMA_VERSION, EXIT, RECEIPT_KEYS, UNDO_LINE, newReceipt, VERDICT_COMMANDS } from '../off/schema.mjs'
 import { HARNESS_IDS } from '../off/harness-names.mjs'
 import { STATUS_REASONS, NET_CODES } from '../health/codes.mjs'
 import { FINDING_CODES } from '../netenv/findings.mjs' // the finding codes' own closed list: the cross-platform catalogue's, the Windows table's (4.8 §10.4) and the trust reasons' — one list, one place
@@ -296,7 +296,7 @@ export function validateFinding(f) {
 
 /** `status` and `doctor`: `ok` is the command's own verdict (1.6 §3.5, §3.7 — nothing is wrong), not 「everything was read」. For every
  *  other name a thing it could not read (an `errors` entry without `level`; a `level:'note'` one is not that, C.5) is the only reason a document is not ok. */
-const VERDICT = Object.freeze(['status', 'doctor'])
+const VERDICT = VERDICT_COMMANDS
 
 /** Problems with a `query` document against 附录 C.5 (`[]` = valid): every document, whatever the name, has
  *  `schema` · `command` · `ok` · `errors:[{where, reason}]`, and one paged by `--after` (it says `has_more`) has `next` agreeing with it;
