@@ -31,9 +31,11 @@ export function mapUsage(provider, raw = {}, opts = {}) {
 // A key is read when changing its value moves mapUsage's output, so no second list of key names is kept here; a wire with no
 // mapping reads none of them.
 export function unmappedUsage(provider, raw, opts = {}) {
-  if (!raw || typeof raw !== 'object') return [];
+  if (raw == null) return [];
+  if (typeof raw !== 'object' || Array.isArray(raw)) return [['usage', JSON.stringify(raw)]];
   const leaves = [];
-  const walk = (o, at) => { for (const [k, v] of Object.entries(o)) v && typeof v === 'object' && !Array.isArray(v) ? walk(v, [...at, k]) : leaves.push([...at, k]); };
+  const nested = (v) => v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length;
+  const walk = (o, at) => { for (const [k, v] of Object.entries(o)) nested(v) ? walk(v, [...at, k]) : leaves.push([...at, k]); };
   walk(raw, []);
   let base;
   try { base = JSON.stringify(mapUsage(provider, raw, opts)); } catch { base = null; }
@@ -41,7 +43,7 @@ export function unmappedUsage(provider, raw, opts = {}) {
   const read = (at) => {
     if (base == null) return false;
     const copy = structuredClone(raw), v = valueAt(copy, at.slice(0, -1)), k = at.at(-1);
-    v[k] = typeof v[k] === 'number' ? v[k] + 1 : v[k] === 1 ? 2 : 1;
+    v[k] = (Number(v[k]) || 0) + 1; // a value num() reads (a number, "1", true) always moves
     return JSON.stringify(mapUsage(provider, copy, opts)) !== base;
   };
   return leaves.filter((at) => !read(at)).map((at) => { const v = valueAt(raw, at); return [at.join('.'), typeof v === 'string' ? v : JSON.stringify(v)]; });
