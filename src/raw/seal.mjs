@@ -37,12 +37,12 @@ export function liveSegment(lockFile, { fs = nodeFs } = {}) {
  *  A segment whose file is gone (ENOENT) is nothing to do: `{ gone: true }`, no journal line. */
 // The journal lies beside the segment it speaks of: the raw/ that holds the segment, never a home derived from the
 // environment (a test sealing in a temp dir wrote 146 lines into the developer's real ~/.trocar/raw/journal.jsonl, 2026-10-18).
-export async function sealSegment(file, { lockFile, journal = path.join(path.dirname(file), 'journal.jsonl'), fs = nodeFs, frameBytes = FRAME_BYTES, onPhase = () => {} } = {}) {
+export async function sealSegment(file, { lockFile, journal = path.join(path.dirname(file), 'journal.jsonl'), fs = nodeFs, frameBytes = FRAME_BYTES, onPhase = () => {}, onProgress = () => {} } = {}) {
   if (!lockFile) throw new Error('sealSegment: lockFile is required — the live segment must be refused, not guessed');
   const seg = parseSegment(path.basename(file));
   const t0 = Date.now();
   try {
-    const res = await sealOne(file, { lockFile, fs, frameBytes, onPhase });
+    const res = await sealOne(file, { lockFile, fs, frameBytes, onPhase, onProgress });
     // `segment` and `took_ms` are what 附录 D.2 自动封存 asks of every sealed segment (how long each took); the
     // journal is the only place it is recorded, so a report that leaves them out has nothing to read (mac run P2).
     if (!res.gone) appendJournal({ op: 'seal', outcome: 'ok', format: VERSION, file, segment: seg && seg.segment, took_ms: Date.now() - t0, records: res.records, bytes: res.bytes, sha256: res.sha256, sealed: res.sealed, sealedBytes: res.sealedBytes }, { journal, fs });
@@ -54,7 +54,7 @@ export async function sealSegment(file, { lockFile, journal = path.join(path.dir
   }
 }
 
-async function sealOne(file, { lockFile, fs, frameBytes, onPhase }) {
+async function sealOne(file, { lockFile, fs, frameBytes, onPhase, onProgress }) {
   const dir = path.dirname(file), seg = parseSegment(path.basename(file));
   if (!seg || seg.sealed) throw new SealRefused(`refusing to seal ${file}: it is not a plaintext segment of the raw layer`);
   if (seg.segment === liveSegment(lockFile, { fs })) throw new SealRefused(`refusing to seal ${file}: the daemon's lock ${lockFile} names it as the segment being appended to`);
@@ -73,6 +73,7 @@ async function sealOne(file, { lockFile, fs, frameBytes, onPhase }) {
     const src = fs.openSync(file, 'r');
     try {
       for (const line of readLines(fs, src)) {
+        if (typeof line === 'number') { await onProgress({ step: 'encode', done: line, total: st0.size }); continue; } // a chunk read: said, and the loop gets a turn
         whole.update(line); length += line.length;
         const nl = line.length && line[line.length - 1] === 0x0a;
         // The same parse names the record's stream group: trocar's own envelope host + endpoint path (query cut off),
@@ -118,7 +119,7 @@ async function sealOne(file, { lockFile, fs, frameBytes, onPhase }) {
 }
 
 // Every line of the segment as its own Buffer, "\n" included (CR stays part of the line); the last line may lack its
-// "\n". One chunk plus the current line in memory.
+// "\n". One chunk plus the current line in memory. After each chunk's lines, the bytes read so far (a number), for the progress.
 function* readLines(fs, fd) {
   const buf = Buffer.allocUnsafe(CHUNK);
   let pos = 0, pending = [], pendLen = 0;
@@ -133,6 +134,7 @@ function* readLines(fs, fd) {
       pending = []; pendLen = 0; from = i + 1;
     }
     if (from < n) { pending.push(Buffer.from(buf.subarray(from, n))); pendLen += n - from; }
+    yield pos;
   }
   if (pendLen) yield Buffer.concat(pending, pendLen);
 }

@@ -7,7 +7,7 @@ import path from 'node:path'
 import { fork } from 'node:child_process'
 import { once } from 'node:events'
 import { fileURLToPath } from 'node:url'
-import { createSealQueue, WORKER_GONE_EXIT } from '../../src/collector/seal-queue.mjs'
+import { createSealQueue, WORKER_GONE_EXIT, forkSealer } from '../../src/collector/seal-queue.mjs'
 import { openSealed } from '../../src/raw/reader.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 
@@ -46,4 +46,17 @@ test('a worker whose parent disconnects exits, and leaves the plaintext whole', 
   const [code] = await once(child, 'exit')
   assert.equal(code, WORKER_GONE_EXIT, 'the sealer does not outlive the daemon that owns the queue, and says so with its own exit code (never counted as seal-failed)')
   assert.deepEqual(fs.readFileSync(b.file), before, 'the plaintext is byte for byte what it was')
+})
+
+// 4.2 §自动封存: the uninstall stop's seal is the same worker in a real child, at normal priority, reporting its progress over IPC as it goes
+// ({step, done, total} in bytes: the encode pass ends at the segment's size, then the check and the index say they started).
+test('the sealer forked at normal priority reports its progress and seals the segment', async () => {
+  const b = box({ lines: 50 })
+  const seen = []
+  const r = await forkSealer(b.file, { lockFile: b.lock, journal: b.journal, normal: true, onProgress: (p) => seen.push(p) })
+  assert.equal(r.code, 0, r.reason)
+  assert.equal(fs.existsSync(b.file), false, 'the plaintext is gone')
+  const size = b.ls.reduce((n, l) => n + l.length, 0)
+  assert.ok(seen.some((p) => p.step === 'encode' && p.done === size && p.total === size), JSON.stringify(seen))
+  assert.deepEqual([...new Set(seen.map((p) => p.step))], ['encode', 'verify', 'index'])
 })

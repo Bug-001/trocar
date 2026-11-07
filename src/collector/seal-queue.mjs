@@ -20,16 +20,18 @@ export const WORKER_GONE_EXIT = 75
 /** How long a closed segment waits for the index keeper's catch-up before it is sealed anyway (see startSealing). */
 export const BEFORE_SEAL_MS = 5_000
 
-/** Seal `file` in a child process → { code, reason }. The child exits as soon as this parent disconnects. */
-const forkWorker = (file, { lockFile, journal }) => new Promise((resolve) => {
-  const child = fork(WORKER, [file, lockFile, ...(journal ? [journal] : [])], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'], ...lowFork(process.execArgv) })
+/** Seal `file` in a child process → { code, reason }. The child exits as soon as this parent disconnects. Low priority, except `normal`
+ *  (the uninstall stop's last segment, 4.2 §自动封存); `onProgress({step, done, total})` hears the child's progress. */
+export const forkSealer = (file, { lockFile, journal, normal = false, onProgress = () => {} }) => new Promise((resolve) => {
+  const child = fork(WORKER, [file, lockFile, journal || '', ...(normal ? ['normal'] : [])], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'], ...(normal ? { execArgv: process.execArgv } : lowFork(process.execArgv)) })
   let reason = ''
   child.stderr.on('data', (d) => { reason += d })
+  child.on('message', (m) => { if (m && m.progress) onProgress(m.progress) })
   child.on('error', (e) => resolve({ code: -1, reason: e.message }))
   child.on('exit', (code, signal) => resolve({ code: code === 0 ? 0 : code === null ? -1 : code, reason: reason.trim() || (signal ? `the sealer was killed (${signal})` : '') }))
 })
 
-export function createSealQueue({ raw, lockFile, journal = undefined, fs = nodeFs, fork: run = forkWorker, onFailure = () => {} }) {
+export function createSealQueue({ raw, lockFile, journal = undefined, fs = nodeFs, fork: run = forkSealer, onFailure = () => {} }) {
   const queued = [], failed = new Set() // failed: not sealed again before the next start (no retry loop)
   let running = null, idlePromise = null, markIdle = null, stopping = false
 
