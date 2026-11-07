@@ -57,7 +57,7 @@ for (const os of ['darwin', 'win32']) {
   test(`1.6 §3.3 (${os}): every on plan row is "path: what changes there"`, async () => {
     const w = await modelWorld({ os, commands: ['codex', 'opencode'] })
     assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
-    const planned = (await on(w, os, ['--dry-run', '--json'])).io.json().planned
+    const planned = (await on(w, os, ['--dry-run', '--json'])).io.json().planned.filter((p) => p.route) // the route items; trocar's own tree is the one other (附录 C.2)
     const text = (await on(w, os, ['--dry-run'])).io.text()
     assert.ok(planned.length >= 2 && planned.every((p) => p.paths.length), JSON.stringify(planned))
     for (const f of planned.flatMap((p) => p.paths)) assert.match(text, new RegExp(`${f.replace(w.home, '~').replace(/[\\^$.*+?()[\]{}|]/g, '\\$&')}: \\S`), `${f}: the row says what changes there\n${text}`)

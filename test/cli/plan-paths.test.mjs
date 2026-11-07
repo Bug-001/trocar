@@ -27,7 +27,8 @@ const diff = (a, b) => [...new Set([...Object.keys(a), ...Object.keys(b)])].filt
 const OWN = ['backup', 'flows', 'index', 'logs']
 const own = (rel) => OWN.some((d) => rel.split(path.sep).includes(d))
 
-// win32 runs install and uninstall only: the model `on` asks the daemon at the pipe control.json names, and a pipe is no socket on another OS
+// win32 runs install and uninstall only: the model `on` asks the daemon at the pipe control.json names, a pipe is no socket on another OS, and
+// the model `on` has no `request` seam to stand in for it (none is added for a test); its half of V85 is owed to a run on Windows
 const COMMANDS = { linux: ['install', 'on', 'uninstall'], darwin: ['install', 'on', 'uninstall'], win32: ['install', 'uninstall'] }
 for (const platform of Object.keys(COMMANDS)) {
   test(`V85 (${platform}) · the paths in the install / on / uninstall plan are the paths the run with --yes then writes`, async () => {
