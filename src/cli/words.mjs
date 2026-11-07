@@ -261,6 +261,7 @@ export function statusReason(code, { harness = '', pid = null, cause = null } = 
     'cert-key-missing': ["the key for trocar's root is gone"],
     'cert-intermediate-unavailable': ['trocar cannot sign certificates right now, so it only forwards'],
     'cert-bundle-missing': [`${h}'s certificate file no longer holds trocar's root`],
+    'bundle-lacks-ca': [`${h}'s certificate bundle lacks a CA your settings add now`, null, 'trocar install'],
     'cert-tier-unreachable': [`this form of ${h} has no way to reach a certificate`],
     'not-verified': [`this form of ${h} is not verified yet, so trocar passes its traffic on without reading it`],
     'not-users-file': [`${h} points at a certificate file that is not yours`],

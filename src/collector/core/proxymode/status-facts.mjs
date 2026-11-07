@@ -4,6 +4,7 @@
 // written, `prior_value`) and the daemon's doors. The upstream is the door's own rule (chain.mjs upstreamFor) with no process (steps 2, 4, 5), unless
 // the daemon answered for a process of that door (its `upstreams`). Names no OS and no harness; every reader is injected (ctx, fs, drift).
 import nodeFs from 'node:fs'
+import path from 'node:path'
 import { itemsOfPhase } from '../../../off/manifest.mjs'
 import { judgeEntry, judgeOwned } from '../trust/journal.mjs'
 import { isPresent, readSrc, holds, presentPaths } from './sources.mjs'
@@ -14,6 +15,7 @@ import { redactProxyUrl, parseProxyUrl } from '../../../netenv/redact.mjs'
 import { CODE } from '../codes.mjs'
 import { checkWrapper } from './hooks/wrapper.mjs'
 import { sha256, readOrNull } from '../../../off/fsutil.mjs'
+import { certBlocks } from '../../../off/pem.mjs'
 
 const CARRIER = { 'config-key': 'config-key', wrapper: 'wrapper', plugin: 'plugin', 'plugin-file': 'plugin' } // 1.6 §9.4 `carrier` from the descriptor's cert kind
 const HOOKS = new Set(['wrapper', 'plugin']) // a carrier that also applies the route (the switch file is read through it): its drift takes the form off the path (1.6 §9.3 row 31)
@@ -44,10 +46,37 @@ function carrierLoss(m, desc, own, fs) {
   return null
 }
 
+/** Whether the merged bundle install placed for a replace key with `merges` lacks a CA the files those settings name now hold → null | 'bundle-lacks-ca'
+ *  (4.11 P4b). The sources are read as install reads them (readSrc over the caller's sources ctx); a source that cannot be read, a relative path, and a
+ *  record with no `user_fps` are not judged. Fingerprints, never paths: a CA not among `user_fps` is looked for in the bundle itself (trocar's root, a
+ *  CA that is also a Node root), read only then. Never throws. */
+function bundleGap(desc, c, inst, ctx, fs) {
+  const b = inst.find((i) => i.harness === desc.name && i.role === 'bundle')
+  if (!b || !Array.isArray(b.user_fps)) return null
+  const had = new Set(b.user_fps)
+  let inBundle
+  for (const src of c.merges) {
+    let r
+    try { r = readSrc(src, ctx) } catch { continue }
+    for (const { value } of r.set && !r.error ? r.all : []) {
+      const file = typeof value === 'string' ? value.trim() : ''
+      if (!path.isAbsolute(file)) continue
+      let text
+      try { text = fs.readFileSync(file, 'latin1') } catch { continue } // unreadable now: not known, never a false alarm
+      for (const { fp } of certBlocks(text)) {
+        if (had.has(fp)) continue
+        if (inBundle === undefined) { try { inBundle = new Set(certBlocks(fs.readFileSync(b.path, 'latin1')).map((x) => x.fp)) } catch { inBundle = null } }
+        if (inBundle && !inBundle.has(fp)) return 'bundle-lacks-ca'
+      }
+    }
+  }
+  return null
+}
+
 /**
  * setupOf(desc, { os, manifest, ctx, root, fs }) → { state: 'ready' | 'needed' | 'unknown', missing: [{ form, what }], reason? } — 4.11 P4b, the ONE judgement
  * behind `status`'s `harnesses[h].setup` and `on`'s precondition ⑪ (D65④). Per present form of this OS whose carrier is not the root: its install items
- * (its own, and rule U's shared pem-block) absent → `carrier-absent`, changed → `carrier-overwritten`; the root gone from the user's store (`root.state`
+ * (its own, and rule U's shared pem-block) absent → `carrier-absent`, changed → `carrier-overwritten`, a merged bundle that lacks a CA its sources hold now → `bundle-lacks-ca`; the root gone from the user's store (`root.state`
  * 'missing'; pending / declined are install's own to-do, not setup) → one `{ form: null, what: 'root-missing' }`. `manifest` null = nothing installed;
  * `{ error }` = it could not be read → `unknown`, and so is a file that cannot be read (D38): never `ready`. Reads only; no OS question of its own.
  */
@@ -59,12 +88,14 @@ export function setupOf(desc, { os, manifest: m, ctx, root = null, fs = nodeFs }
   try {
     const pm = desc.proxyMode
     let lost
+    const gap = {}
     for (const f of pm.forms.filter((x) => x.os.includes(os) && isPresent(x, ctx))) {
       const c = f.cert === 'root' ? null : (pm.certs || {})[f.cert]
       if (!c || (c.when && holds(c.when, ctx) === false)) continue // the root carries it: nothing per form, whether install saw the harness or not
       // a carrier of its own: install's items for it (none when install never saw the harness, unless rule U's shared block carries it)
       if (lost === undefined) lost = carrierLoss(m || {}, desc, itemsFor(desc, itemsOfPhase(m, 'install'), ctx), fs)
-      if (lost) missing.push({ form: f.id, what: lost })
+      const what = lost || (c.semantics === 'replace' && Array.isArray(c.merges) ? (gap[f.cert] ??= bundleGap(desc, c, itemsOfPhase(m, 'install'), ctx, fs)) : null)
+      if (what) missing.push({ form: f.id, what })
     }
   } catch (e) { return unknown(String((e && e.message) || e)) }
   if (root && root.state === 'missing') missing.push({ form: null, what: 'root-missing' })

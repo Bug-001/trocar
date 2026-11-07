@@ -174,6 +174,8 @@ export const FINDINGS = {
   'cert-key-missing': { cls: 'problem', trocarFirst: true, what: () => 'The key for trocar\'s root is gone, so trocar only forwards.', why: () => 'It was removed from your keychain or key store.', commands: (c) => [trocar(c, 'trocar install')], verify: () => 'trocar status' },
   'cert-intermediate-unavailable': { cls: 'problem', trocarFirst: false, what: () => 'trocar cannot sign certificates right now, so it only forwards.', why: () => 'There is no desktop login session, or your keychain is locked.',
     commands: (c) => [gui('Log in to the desktop session on this machine and unlock your keychain'), trocar(c, 'trocar status')], verify: () => 'trocar status' },
+  'bundle-lacks-ca': { cls: 'problem', trocarFirst: true, what: (c) => `${c.h}'s certificate bundle lacks a CA your settings add now, so it cannot verify hosts signed by that CA.`, why: () => 'trocar merged the CAs your settings named when you ran install; one you added since is not in the bundle.',
+    commands: (c) => installFix(c) || [trocar(c, 'trocar install')], verify: (c) => `trocar status ${c.h}` },
   'not-users-file': { cls: 'expected', trocarFirst: false, what: (c) => `${c.h} points at a certificate file that is not yours; trocar left it alone.`, why: () => 'trocar only appends to files you own.',
     commands: (c) => [gui(`Point ${c.h}'s certificate setting at a file you own`), trocar(c, 'trocar install')], verify: (c) => `trocar status ${c.h}` },
   'not-verified': { cls: 'expected', trocarFirst: false, what: (c) => `This form of ${c.h} is not verified on this platform yet; it is forwarded only.`, why: () => 'trocar only decrypts the forms it has verified.',
