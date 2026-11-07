@@ -549,13 +549,15 @@ export function handleFlow(client, meta, ctx) {
         // A certificate alert is an answer whoever sends it. A zero-data close while the engine was the slow side and before our handshake
         // completed may be a give-up or a Node refusal (whose Finished never leaves): by a (who, host) that has sent data on our leaf it is a
         // give-up and counts for nothing; otherwise it counts toward the entry but never writes trust-rejected. A close on a fast engine is
-        // judged as a rejection, trusted before or not: another client of the same process may refuse our leaf there (§引擎 5)
-        const alert = certAlert(e), gaveUp = !alert && slow && !secured
-        if (gaveUp && ctx.negCache.trusts(key)) { notCaptured('client-closed-no-data', 'trusted-before'); if (!rec.error) rec.error = how; return }
+        // judged as a rejection. By a (who, host) that has sent data it is most likely a spare closed unused (a process exit closes them all at once), so
+        // it takes TRUSTED_THRESHOLD in a row, not an exemption: another client of the same process may refuse our leaf there (§引擎 5)
+        const alert = certAlert(e), gaveUp = !alert && slow && !secured, proven = !alert && ctx.negCache.trusts(key)
+        if (!rec.error) rec.error = how
+        if (gaveUp && proven) return notCaptured('client-closed-no-data', 'trusted-before')
+        const made = alert ? ctx.negCache.mark(key, { cause: 'client-rejected-leaf', meta, host, alert: e.code }) : ctx.negCache.observe(key, { rejected: true, meta, host })
+        if (proven && !made) return notCaptured('client-closed-no-data', 'trusted-before')
         if (gaveUp) notCaptured('client-closed-no-data', 'engine-slow')
         else notCaptured('client-rejected-leaf', 'client-rejected-leaf')
-        if (!rec.error) rec.error = how
-        const made = alert ? ctx.negCache.mark(key, { cause: 'client-rejected-leaf', meta, host, alert: e.code }) : ctx.negCache.observe(key, { rejected: true, meta, host })
         if (gaveUp) return
         // D51④: the process was judged trusting trocar and is not — a critical failure when this rejection makes the (pid, host) negative
         // for the first time in its life (4.6 §事件与码 #9): a renewal after retry_at is the same answer again, so once per (pid, host)
