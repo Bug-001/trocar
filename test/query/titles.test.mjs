@@ -5,6 +5,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
+import { createHash } from 'node:crypto'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { drain, within } from '../helpers/bounded.mjs'
 import { workerFork } from '../helpers/worker-fork.mjs'
@@ -12,7 +13,7 @@ import { SEVEN } from '../helpers/seven-shapes.mjs'
 import { bigSession, firstAskOf, rng } from './big-session.mjs'
 import { runQuery, stampOf } from '../../src/query/named/index.mjs'
 import { extendSession } from '../../src/query/named/session.mjs'
-import { readHead } from '../../src/query/ctx-files.mjs'
+import { readHead, writeHead } from '../../src/query/ctx-files.mjs'
 import { TITLE_BUDGET_MS, TITLE_V, titlesFile } from '../../src/query/titles.mjs'
 import { answer } from '../../src/query/answers.mjs'
 import { fillUsage, usageFile } from '../../src/query/usage.mjs'
@@ -424,4 +425,69 @@ test('4.4 §条件 GET: the sessions stamp moves when the title table is written
   assert.equal(stampOf('sessions', {}, ctx), before)
   await saved(home, { fs: ctx.fs })
   assert.notEqual(stampOf('sessions', {}, ctx), before)
+})
+
+// One session per harness, each call's system text stating a working directory as the harness writes it; kimi's row has no rule (3.4 §工作目录).
+const STATED = { cc: '/w/project one', opencode: '/w/oc', kimi: null }
+function projectHome() {
+  const home = homeOf(), lines = [], env = (h, p) => h.harness === 'cc' ? `\n# Environment\nYou have been invoked in the following environment: \n - Primary working directory: ${p}\n - Is a git repository: true` : `\n<env>\nWorking directory: ${p}\n</env>`
+  let i = 0
+  for (const h of SEVEN.filter((x) => x.harness in STATED)) {
+    const sid = `proj-${h.harness}-4a1b-9c2d-000000000001`, p = STATED[h.harness] ?? '/w/kimi'
+    for (let t = 0; t < 3; t++) {
+      const b = JSON.parse(h.body(sid, t))
+      const m = b.messages?.[0]
+      if (h.harness === 'opencode' && t === 0) { /* a first call that is a small one: no environment, the next call states it */ }
+      else if (h.harness === 'cc') b.messages.push({ role: 'system', content: [{ type: 'text', text: env(h, p) }] }) // Claude Code's main lane: a system-role message
+      else if (Array.isArray(b.system)) b.system[0].text += env(h, p)
+      else if (typeof b.system === 'string') b.system += env(h, p)
+      else m.content += env(h, p)
+      lines.push(envelope(h, sid, JSON.stringify(b), replyTo(h, t), stamp(i++)))
+    }
+  }
+  append(home, lines)
+  return home
+}
+const projectOfDoc = ({ project_slug, project_path }) => ({ project_slug, project_path })
+const want = (p) => (p == null ? { project_slug: '_unresolved', project_path: null } : { project_slug: createHash('sha256').update(p, 'utf8').digest('hex').slice(0, 12), project_path: p })
+
+test('3.5 #63: a session\'s project is the working directory its request states, the same on `sessions`, `session`, the tier-0 and tier-1 heads; without the table or with another version, the same; an old tier-0 head gets it at the next sweep', { timeout: 120_000 }, async () => {
+  const home = projectHome(), byH = (doc) => new Map(doc.sessions.map((s) => [s.harness, s]))
+  const listed = byH(await listOf(home))
+  for (const [h, p] of Object.entries(STATED)) {
+    const s = listed.get(h)
+    assert.deepEqual(projectOfDoc(s), want(p), h)
+    assert.deepEqual(projectOfDoc(await metaOf(home, s.session_id)), want(p), h)
+  }
+  // heads: a tier-0 head (the projection could not be read), then the session folded to tier 1
+  const tier0 = async (sid) => {
+    let fail = true
+    const failing = Object.assign(cold(), { openSync: (f, ...a) => { if (fail && String(f).includes(`${path.sep}ctx${path.sep}`)) { fail = false; throw new Error('injected: the projection could not be read') } return fs.openSync(f, ...a) } })
+    await assert.rejects(extendSession({ home, fs: failing, writer: true }, sid, 10))
+    assert.equal(readHead(home, sid).tier, 0)
+  }
+  const cc = listed.get('cc').session_id, oc = listed.get('opencode').session_id
+  await tier0(cc)
+  assert.deepEqual(projectOfDoc(readHead(home, cc).meta), want(STATED.cc))
+  await drain(() => extendSession({ home, fs: cold(), writer: true }, cc, 1_000))
+  assert.equal(readHead(home, cc).tier, 1)
+  assert.deepEqual(projectOfDoc(readHead(home, cc).meta), want(STATED.cc))
+  // the table: gone, or of another version with a wrong `p`: the answer is the same
+  await saved(home)
+  const t = table(home)
+  fs.unlinkSync(titlesFile(home))
+  for (const [h, p] of Object.entries(STATED)) assert.deepEqual(projectOfDoc(byH(await listOf(home)).get(h)), want(p), h)
+  fs.writeFileSync(titlesFile(home), JSON.stringify({ v: TITLE_V - 1, titles: Object.fromEntries(Object.entries(t.titles).map(([id, e]) => [id, { ...e, p: '/w/bogus' }])) }))
+  for (const [h, p] of Object.entries(STATED)) assert.deepEqual(projectOfDoc(byH(await listOf(home)).get(h)), want(p), h)
+  // an old tier-0 head with no project: the worker's sweep writes it with one
+  await tier0(oc)
+  const d = readHead(home, oc)
+  writeHead(home, oc, { ...d, meta: { ...d.meta, project_slug: '_unresolved', project_path: null } })
+  const w = workerFork(home)
+  try {
+    w.send({ sweep: true })
+    let k
+    await within(new Promise((ok) => { k = setInterval(() => (readHead(home, oc)?.meta || {}).project_path === STATED.opencode && (clearInterval(k), ok()), 50) }), 30_000, 'the sweep put the project on the old head', () => clearInterval(k))
+  } finally { w.kill() }
+  assert.deepEqual(projectOfDoc(readHead(home, oc).meta), want(STATED.opencode))
 })

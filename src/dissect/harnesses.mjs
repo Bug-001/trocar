@@ -24,7 +24,11 @@ const LEGACY_SESSION_KEYS = [H('x-claude-code-session-id'), H('x-session-id', 'm
 // querystring; the first entry that matches wins. Nothing matches → the shared third-party hosts (src/dissect/traffic.mjs),
 // then `other`. The class table (src/classes/table.mjs) compiles these entries; the collector applies it when it writes a
 // record. A harness with no entries is not a loss: its calls are `other`, kept in full (4.1 Edge cases).
-const ROW = { ua: null, parentKeys: [], lane: [], compaction: [], requestKind: null, observerEffects: [], traffic: [] };
+// `cwd` (3.4 §工作目录): where a call states its working directory — rules {in: 'system'|'user', re}, capture 1 the path, read by
+// src/dissect/project.mjs only. [] = this harness states none that is read.
+// main lane: a ` - Primary working directory:` list item in a system-role message; a subagent prompt: a bare line
+const CC_CWD = [{ in: 'system', re: /^[ \t]*(?:[-*][ \t]+)?(?:Primary working|Working) directory:[ \t]*([^\n]+)$/m }];
+const ROW = { ua: null, parentKeys: [], lane: [], compaction: [], requestKind: null, observerEffects: [], traffic: [], cwd: [] };
 const T = (host, cls, pathSource) => ({ host, class: cls, ...(pathSource ? { path: pathSource } : {}) });
 // 4.8 §5.6: injected trust changes the agent the same way in both modes; a legacy MITM / reverse-proxy capture still never carries one. `captures` scopes an
 // effect to the mode whose entry causes it: 'transparent' is Linux's driver mode, 'proxy' the door of macOS / Windows (D47) — what trocar writes differs (4.11)
@@ -37,6 +41,7 @@ const ROWS = [
     // a background call (progress summary, suggestion) is aux even when it carries its subagent's agent-id (3.4)
     lane: [{ header: 'x-claude-code-request-class', equals: 'auxiliary', lane: 'aux' }, { header: 'x-claude-code-agent-id', lane: 'subagent', key: true }],
     compaction: [{ header: 'x-cc-compaction-request' }],
+    cwd: CC_CWD, // main: ` - Primary working directory:` list item; subagent: bare `Working directory:`
     observerEffects: [effect('cc-gzip-off', 'NODE_EXTRA_CA_CERTS in settings env',
       'Claude Code sends request bodies uncompressed while a custom CA is set')],
     // the endpoints measured on the live capture (2026-10-07): remote-session sync, telemetry, uploads,
@@ -55,32 +60,38 @@ const ROWS = [
     sessionKeys: [H('session-id'), H('thread-id')], // over WebSocket these come from the upgrade request (4.6)
     parentKeys: [H('x-codex-parent-thread-id')],    // a THREAD id; resolved through aliases later (gate G4)
     lane: [{ header: 'x-openai-subagent', lane: 'subagent' }],
+    cwd: [{ in: 'user', re: /<environment_context>[\s\S]*?<cwd>\s*([^\n<]+?)\s*<\/cwd>/ }],
     requestKind: { header: 'x-codex-turn-metadata', jsonKey: 'request_kind', lanes: { prewarm: 'probe' }, compaction: ['compaction'] },
     observerEffects: [effect('codex-rustls-h2', 'SSL_CERT_FILE in $CODEX_HOME/.env',
       'model HTTP switched from native-tls to rustls; ALPN offers [h2, http/1.1]', LINUX)] }, // macOS / Windows trust the root in the store: no .env (4.11 codex forms)
   { ...ROW, id: 'opencode', ua: /opencode/,
     sessionKeys: [H('x-opencode-session-id'), H('session-id'), H('x-session-affinity'), H('x-session-id')],
     parentKeys: [H('x-opencode-parent-session-id')],
+    cwd: [{ in: 'system', re: /^[ \t]*Working directory:[ \t]*([^\n]+)$/m }], // indented inside <env>
     observerEffects: [
       effect('opencode-plugin', 'trocar trust plugin',
         'trocar code runs inside the agent process; the first run adds one npm registry fetch of @opencode-ai/plugin', LINUX),
       effect('opencode-route-plugin', 'trocar route plugin',
         'trocar code runs inside the agent process; OpenCode 1.x\'s first run with a plugin adds one npm registry fetch of @opencode-ai/plugin', DOOR)] },
   { ...ROW, id: 'kimi',
+    cwd: [{ in: 'system', re: /urrent working directory is `([^`\n]+)`/ }],
     sessionKeys: [B(['prompt_cache_key']), B(['metadata', 'user_id'])],
     synth: true }, // without a body key → a synthesized key (src/dissect/synth-key.mjs, gate G11)
   { ...ROW, id: 'dsh',
+    cwd: [{ key: ['dsh_session_log', 'session', 'cwd'] }, { in: 'system', re: /^Your working directory is ([^\n]+?)\.?$/m }],
     sessionKeys: [H('x-deepseek-harness-session-id')],
     parentKeys: [B(['dsh_session_log', 'session', 'parentSession'], 'high')],
     lane: [{ body: ['dsh_session_log', 'session', 'origin'], equals: 'subagent', lane: 'subagent' }],
     compaction: [{ header: 'x-deepseek-harness-compact', equals: '1' }],
     observerEffects: [effect('dsh-plugin', 'trocar trust plugin', 'trocar code runs inside the agent process')] },
   { ...ROW, id: 'hermes',
+    cwd: [{ in: 'system', re: /(?:^|\s)Current working directory:[ \t]*([^\n]+)$/m }],
     sessionKeys: [B(['session_id']), B(['prompt_cache_key'])], // custom endpoints carry neither → synthesized
     synth: true, // (src/dissect/synth-key.mjs, gate G11)
     // a text marker (medium). Hermes is Python, so the em dash may arrive JSON-escaped.
     compaction: [{ marker: /\[CONTEXT COMPACTION (?:—|\\u2014) REFERENCE ONLY\]/ }] },
   { ...ROW, id: 'zcode',
+    cwd: CC_CWD,
     sessionKeys: [H('x-session-id')],
     lane: [{ header: 'x-zcode-session-type', equals: 'subagent', lane: 'subagent' }], // values not yet seen live
     observerEffects: [effect('zcode-node-https', 'network.caCertFile in ~/.zcode/cli/config.json',
@@ -91,6 +102,7 @@ const ROWS = [
     // send none → synthesized (src/dissect/synth-key.mjs, gate G11)
     sessionKeys: [H('session_id'), H('session-id'), B(['prompt_cache_key'])],
     synth: true,
+    cwd: [{ in: 'system', re: /^<cwd>[ \t]*\n[ \t]*([^\n<]+?)[ \t]*\n<\/cwd>/m }], // system only: pi's system text also quotes `Working directory:` lines, never read
     // the summary request (same endpoint, no tools, one user message) starts its system prompt with this sentence; a JSON string's start
     compaction: [{ marker: /(?<!\\)"You are a context summarization assistant\./ }],
     observerEffects: [
