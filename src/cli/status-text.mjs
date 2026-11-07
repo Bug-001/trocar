@@ -168,7 +168,8 @@ const expectedText = (code) => failureWord('flow', code) || code // a connection
 export function formatStatus(s) {
   const lines = [`collector: desired ${s.desired}, kernel ${s.actual}${s.recording ? ', recording' : ''}${s.degraded ? ` - degraded: ${s.degraded.reason}` : ''}`]
   if (s.engine) lines.push(`engine: ${s.engine.port ? `:${s.engine.port}` : unknown('it did not say its port')}${s.engine.v6 ? ` and :${s.engine.v6} on IPv6` : s.engine.v6_error ? ` (IPv6: ${s.engine.v6_error})` : ''} - ${s.engine.decrypted ?? 0} decrypted, ${s.engine.spliced ?? 0} passed through`)
-  if (s.helper) lines.push(`helper: ${s.helper.down ? `down (${s.helper.down})` : `pid ${s.helper.pid}`} - protocol ${s.helper.proto}${s.helper.ok === false ? ` (this trocar expects ${s.helper.expected_proto})` : ''}`)
+  if (s.helper && s.helper.pid == null && !s.helper.down) lines.push('helper: not running (no harness is on)') // 4.6: the helper runs only while a harness is on
+  else if (s.helper) lines.push(`helper: ${s.helper.down ? `down (${s.helper.down})` : `pid ${s.helper.pid}`} - protocol ${s.helper.proto}${s.helper.ok === false ? ` (this trocar expects ${s.helper.expected_proto})` : ''}`)
   const agents = s.agents || []
   lines.push(agents.length ? `agents (${agents.length}, ${s.running_untrusted} running but not captured):` : 'agents: none running')
   for (const a of agents) {

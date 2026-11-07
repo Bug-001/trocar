@@ -33,7 +33,8 @@ export function unitText({ program, env = {}, logs = null }) {
     ...(logs ? [`StandardOutput=append:${logs.out.replace(/%/g, '%%')}`, `StandardError=append:${logs.err.replace(/%/g, '%%')}`] : []),
     // KillMode=mixed: a stop sends SIGTERM to the daemon alone, which closes its helper (an orderly stop records no helper-down, 4.6 F3(h)); the
     // default sends it to the helper too, which may exit first, unasked. What is still running when the daemon is gone gets SIGKILL.
-    'Restart=on-failure', 'RestartSec=2', 'KillMode=mixed', '',
+    // 209 = systemd could not open the log files: their directory is ~/.trocar/collector, which only install makes, so a relaunch cannot help (1.6 §5.2)
+    'Restart=on-failure', ...(logs ? ['RestartPreventExitStatus=209'] : []), 'RestartSec=2', 'KillMode=mixed', '',
     '[Install]', 'WantedBy=default.target', '',
   ].join('\n')
 }

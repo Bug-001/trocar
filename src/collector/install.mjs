@@ -32,7 +32,7 @@ import { backupDir, opLockFile, standalonePath, standaloneFiles } from '../off/p
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
 import { readStateFile, emptyState, setDesired, writeStateAtomic } from '../off/state.mjs'
 import { newReceipt, UNDO_LINE } from '../off/schema.mjs'
-import { OFF_VERSION, installComplete } from '../off/manifest.mjs'
+import { OFF_VERSION, installComplete, daemonMayStart } from '../off/manifest.mjs'
 import { writeStandalone, standaloneDue } from '../off/standalone.mjs'
 import { codeId, setupHelperCommand } from '../version.mjs'
 
@@ -453,6 +453,12 @@ export async function turnOn(opts = {}) {
   // (without the login registration, a reboot after `on` leaves every agent unusable). Asked here, before the first write; a `--dry-run` goes on and carries it in `blocked`.
   const autostartBlk = dryRun ? null : autostartBlock({ unit, osName })
   if (autostartBlk) return { receipt: unwritten({ ...fresh(), ok: false, notes: [autostartBlk], blocked: [{ what: 'trocar on', reason: autostartBlk }], error: { code: AUTOSTART_MISSING, message: autostartBlk } }), manifest: null, plan: null, exit: 2 }
+  // D62 ①: the daemon is asked for now, and its start asked when nothing answers, so it comes up while the plan below is read; ensureDaemonUp
+  // takes this answer and reports the start as before. A run that stops before then leaves that daemon with what state.json already had on:
+  // the daemon a login starts (no harness on: no helper, nothing steered, 4.6 「助手还没装」)
+  // only a daemon that will run (its own gate, 1.6 §5.2): without an install record it refuses, and on refuses below with cert-not-installed
+  const mayStart = (() => { try { return daemonMayStart(readManifest(dir, fs)) } catch { return false } })()
+  const early = dryRun || !mayStart ? null : await kickDaemon({ osName, dir, env, fs, unit, socketPath, request, pause })
   // `lingerRead()` → { state, error? } (src/collector/arch/linux/redirector.mjs) says why when it cannot be read; `linger()` → true | false | null is the older form
   const lingerNow = () => { try {
     if (lingerRead) { const r = lingerRead(); return r.state === true || r.state === false ? { linger: r.state } : { linger: 'unknown', linger_reason: r.error || 'the linger state could not be read' } }
@@ -552,7 +558,7 @@ export async function turnOn(opts = {}) {
 
     // ── the unit and the daemon: started when nothing answers, never started a second time (拉起不是重启, R8) ──
     const checked = (fn) => { try { fn() } catch (e) { if (!e.stopsRun) throw e; problems.push(e.message); halt = true; if (e.code === CODE.stoppedByOff) offCame = e } }
-    const d = await ensureDaemonUp({ osName, dir, env, fs, unit, socketPath, request, pause, put, halted: () => { checked(() => guard()); return halt } })
+    const d = await ensureDaemonUp({ osName, dir, env, fs, unit, socketPath, request, pause, put, early, halted: () => { checked(() => guard()); return halt } })
     const { sock, ask, started, unitFailed } = d
     const up = d.up
     notes.push(...d.notes); problems.push(...d.problems); if (d.halt) halt = true
@@ -602,7 +608,7 @@ const GONE_PIPE = /EPIPE|ECONNRESET|socket hang up|ECONNABORTED/i
 // lands meanwhile stops the run); `put` records each failure. `register` (D61) is `install`'s arm: the login registration is made and the daemon started
 // (`unit.enable`, with `--now` only when nothing answers — 拉起不是重启, R8). Without it (`on`'s arm) the registration is NEVER touched: the daemon is
 // started through the OS mechanism install registered (`unit.startNow()`), and directly when that refuses (no systemd --user bus, a job that is not loaded).
-export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = null, register = false, reload = false, socketPath = null, request = null, pause = sleep, put = () => {}, halted = () => false, ms = Date.now }) {
+function daemonProbe({ osName, dir, env, fs, socketPath, request, pause }) {
   const resolveEndpoint = () => controlEndpointFor({ platform: osName, dir, env, fs })
   let endpoint = resolveEndpoint()
   let sock = socketPath || endpoint.socketPath
@@ -628,8 +634,25 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = nul
       return { up: false, stuck: String((e && e.message) || e) }
     }
   }
+  return { probe, sock: () => sock, ask: () => ask }
+}
+
+/** `on`'s early start (D62 ①): the daemon asked once, before the plan is read; when nothing answers (no socket, or a socket nobody listens on) its start is
+ *  asked of the OS mechanism right away, so the daemon comes up while the plan is read. ensureDaemonUp takes this answer and asks neither again: what the
+ *  start answered is reported there, as before. A daemon that answers, or holds the socket and does not, is left alone here. → `{ was, rr?, startAt?, startMs? }`. */
+export async function kickDaemon({ osName, dir, env, fs = nodeFs, unit = null, socketPath = null, request = null, pause = sleep, ms = Date.now }) {
+  const was = await daemonProbe({ osName, dir, env, fs, socketPath, request, pause }).probe(true)
+  if (was.up || was.stuck || !unit || typeof unit.startNow !== 'function') return { was }
+  const startAt = ms()
+  const rr = unit.startNow()
+  return { was, rr, startAt, startMs: ms() - startAt }
+}
+
+export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = null, register = false, reload = false, socketPath = null, request = null, pause = sleep, put = () => {}, halted = () => false, ms = Date.now, early = null }) {
+  const p = daemonProbe({ osName, dir, env, fs, socketPath, request, pause })
+  const probe = p.probe
   const notes = [], problems = []
-  const was = await probe(true)
+  const was = early ? early.was : await probe(true) // `early`: kickDaemon's answer, the probe (and the start) already asked
   let up = was.up, started = false, unitFailed = null, halt = false
   if (was.stuck) { problems.push(`a daemon holds the control socket but does not answer (${was.stuck}); run "trocar off", then "trocar on" (off stops a daemon that does not answer)`); halt = true }
   else if (unit) {
@@ -637,8 +660,8 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = nul
     else {
       if (reload && typeof unit.reload === 'function') unit.reload() // a unit file rewritten under a loaded unit
       // `install` registers and starts (enable); `on` only starts, through the OS mechanism, and itself when that refuses — the reason said, never dropped (D38)
-      const startAt = ms()
-      let rr = register ? unit.enable({ now: !was.up }) : (was.up ? null : unit.startNow())
+      const startAt = early && early.rr ? early.startAt : ms()
+      let rr = early && early.rr ? early.rr : register ? unit.enable({ now: !was.up }) : (was.up ? null : unit.startNow())
       if (!register && rr && rr.code !== 0 && typeof unit.start === 'function') {
         const direct = unit.start(daemonEnv(env, dir)) // the direct start carries what the login entry's Environment= would carry
         if (direct.code === 0) { notes.push(`the collector could not be started through ${entryWords(osName, unit)} (${rr.err || `exit ${rr.code}`}); trocar started it directly this run; the login entry starts it at the next login`); rr = direct }
@@ -650,7 +673,7 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = nul
       // gets here; this note is what says so when it does. No "run trocar install" in it: on darwin `install` rewrites the plist and calls
       // enable({now: false}), which does not reload an already loaded job (darwin/autostart.mjs enable); a running daemon on another copy's
       // code is what install replaces (drain, stop, enable({now: true}), 1.6 §3.2 step 5, src/cli/replace-daemon.mjs).
-      const startMs = ms() - startAt
+      const startMs = early && early.rr ? early.startMs : ms() - startAt
       if (startMs >= SLOW_START_MS) notes.push(`${entryWords(osName, unit)} held the collector's start for ${startMs} ms; trocar waited on the OS, not on work of its own${osName === 'darwin' ? ' (launchd spawns a job at most once every ThrottleInterval seconds, 10 s by default)' : ''}`)
       if (rr && rr.code === 0 && rr.warn) notes.push(rr.warn) // the arch's own `warn` reaches the receipt (4.8 §7: what it could not do is the caller's to say) — the Run-value it could not take out, the daemon it started directly because /Run's SUCCESS was a lie
       if (rr && rr.code !== 0) {
@@ -679,6 +702,7 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = nul
         if (refusal) problems.push(refusal.reason || refusal.code)
         else if (!up && !halt) {
           const where = osName === 'darwin' ? 'launchctl print gui/$(id -u)/com.trocar.collector' : osName === 'win32' ? 'schtasks /Query /TN \\trocar\\collector (and "trocar status" for the daemon)' : `systemctl --user status ${UNIT_NAME_HINT}` // the autostart's own status question, in the platform's words (4.9 §4: the LaunchAgent, not a systemd unit; 4.8 §7: the task, not a unit)
+          const sock = p.sock()
           const why = `the collector was started${sock ? ` but does not answer on ${sock}` : ', but it does not answer yet'}; look at "${where}" and the capture health on the board` // never "answers on null": an endpoint that is not known yet is not named (1.6 §1.1)
           problems.push(why); put({ event: EVENT.failure, where: 'start', code: 'start-failed', reason: why })
         }
@@ -698,7 +722,7 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = nul
   }
   // the receipts' `daemon.state` (1.6 C.2), said here once for install, update and on: a daemon that holds the socket and does not answer is
   // not-responding, as `trocar status` says it (C.3), never not-running
-  return { up, state: up ? 'running' : was.stuck ? 'not-responding' : 'not-running', started: started && up, sock, ask, unitFailed, notes, problems, halt }
+  return { up, state: up ? 'running' : was.stuck ? 'not-responding' : 'not-running', started: started && up, sock: p.sock(), ask: p.ask(), unitFailed, notes, problems, halt }
 }
 function readLockPid(dir, fs) { try { return JSON.parse(fs.readFileSync(path.join(dir, 'lock'), 'utf8')).pid ?? null } catch { return null } }
 

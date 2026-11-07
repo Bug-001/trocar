@@ -82,24 +82,23 @@ function rowLines(group, t, past, width) {
 // a program still connected through trocar when the doors closed: the door it uses stays open, passing its traffic on and recording nothing (P12)
 const heldOpen = (r) => (r.holders || []).length > 0
 
-// the daemon and the connections still going through trocar (§3.4's sample: 「The daemon (pid 4012) exits after 2 open responses finish.」)
+// the daemon and the connections still going through trocar (§3.4's sample: 「The daemon (pid 4012) keeps running.」)
 function daemonLines(r, past, cutNote) {
   const lines = []
   const d = r.daemon || {}
   const rel = r.relayed && r.relayed !== 'unknown' ? r.relayed : null
   const pid = d.pid == null ? '' : ` (pid ${d.pid})`
-  if (d.state === 'draining') lines.push(rel && rel.closing > 0 ? `The daemon${pid} exits after ${rel.closing} open response${rel.closing === 1 ? '' : 's'} finish${rel.closing === 1 ? 'es' : ''}.` : `The daemon${pid} exits once it has drained.`)
-  else if (d.state === 'stopped') lines.push(`The daemon${pid} was stopped.`)
-  // D62 ⑥: an off that leaves no harness on (`still_on` empty) closes the doors and leaves the daemon idling, so the next `on` just asks it. A holder keeps one door open, passing its
-  // traffic on and recording nothing of it (P12), until it exits: the receipt says which of the two it is, and never both. The pid is missing in a
-  // `--dry-run` (nothing was asked of any daemon), so this line is said without it rather than left out (item 5).
+  if (d.state === 'stopped') lines.push(`The daemon${pid} was stopped.`)
+  // D62 ⑥: off never asks the daemon to exit, so it idles on and the next `on` just asks it. A holder keeps one door open, passing its traffic on and
+  // recording nothing of it (P12), until it exits: the receipt says which of the two it is, and never both. The pid is missing in a `--dry-run`
+  // (nothing was asked of any daemon), so this line is said without it rather than left out (item 5).
   else if (d.state === 'running') lines.push(...fit((r.still_on || []).length ? `The daemon${pid} ${past ? 'keeps' : 'will keep'} serving ${r.still_on.join(', ')}.`
     : heldOpen(r) ? `The daemon${pid} ${past ? 'keeps' : 'will keep'} running, with one door still open for the connections below.`
-    : `The daemon${pid} ${past ? 'keeps' : 'will keep'} running, with no door open.`))
+    : `The daemon${pid} ${past ? 'keeps' : 'will keep'} running.`))
   else if (d.state === 'unresponsive') lines.push(`The daemon${pid} does not answer and could not be stopped.`, `Stop it by hand: kill -9 ${d.pid}`)
   if (r.relayed === 'unknown') lines.push(...fit(`Connections still going through trocar: unknown (${r.relayed_reason || 'they could not be read'}).`))
   else if (rel) {
-    if (rel.closing > 0 && d.state !== 'draining') lines.push(`${rel.closing} connection${rel.closing === 1 ? ' is' : 's are'} still going through trocar; ${rel.closing === 1 ? 'it closes' : 'they close'} when the response in flight is through.`)
+    if (rel.closing > 0) lines.push(...fit(`${rel.closing} connection${rel.closing === 1 ? ' is' : 's are'} still going through trocar; ${rel.closing === 1 ? 'it closes' : 'they close'} when the response in flight is through.`))
     if (rel.waiting > 0) {
       lines.push(...fit(`${rel.waiting} connection${rel.waiting === 1 ? '' : 's'} trocar cannot see the end of; ${rel.waiting === 1 ? 'it stays' : 'they stay'} open until the other side closes.`))
       if (!(r.holders || []).length) lines.push(`Cut ${rel.waiting === 1 ? 'it' : 'them'} now: trocar off --now`) // the holders below say it for themselves: one output gives one or two next steps (§1.1 版式 3)
@@ -151,10 +150,8 @@ export function formatOffReceipt(r, { home = null, tense = r.dry_run ? 'future' 
   else if ((r.holders || []).length) {
     const who = [...new Map(r.holders.map((x) => [x.pid, x])).values()]
     lines.push(...fit(`Still connected through trocar, which only passes their traffic on and records nothing of it: ${who.map((x) => `${x.harness} (pid ${x.pid})`).join(', ')}.`))
-    // driver mode drains and exits (the daemon IS the detach there); proxy mode's daemon stays and closes that one door when they go (D62 ⑥)
-    lines.push((r.daemon || {}).state === 'draining'
-      ? `trocar exits when ${who.length === 1 ? 'it does' : 'they do'}.`
-      : `That door closes when ${who.length === 1 ? 'it exits' : 'they exit'}; the daemon keeps running.`, 'Cut them now: trocar off --now')
+    // the daemon stays and closes that one door when they go (D62 ⑥)
+    lines.push(`That door closes when ${who.length === 1 ? 'it exits' : 'they exit'}; the daemon keeps running.`, 'Cut them now: trocar off --now')
   }
   if ((r.still_trusting || []).length) {
     const roots = r.still_trusting.filter((p) => p.what === 'root')
