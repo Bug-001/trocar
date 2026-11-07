@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { homeWith, query } from '../helpers/session-doc.mjs';
 import { parseTextRef } from '../../src/raw/refs.mjs';
 import { compBucket, slimBlock } from '../../src/view/blockmeta.mjs';
+import { reqCountsFor, RESPONSES } from '../../src/dissect/openai.mjs';
 
 const mk = (body) => ({ id: 'r1', ts_request: '2026-10-21T00:00:00Z', endpoint: '/v1/responses', host: 'api.openai.com',
   req_headers: { 'x-claude-code-session-id': 'S' }, req_body: body, resp: { status: 200, kind: 'sse', raw_sse: [] } });
@@ -47,6 +48,45 @@ test('Responses items: kind / role by the type suffix and call_id, each block a 
     assert.equal(body.slice(start, end), raw, raw);
     if (want[0] === 'json') { const h = flat[0].head; assert.notEqual(h.tag, 'say', raw); assert.ok(h.label, raw); }
   }
+});
+
+// Codex's tool offer in input[]: one `additional_tools` item, first, of namespaces of function / custom tools (real shape, 89 requests)
+const FN = (name) => ({ type: 'function', name, description: `run ${name}`, parameters: { type: 'object', properties: { q: {} } } });
+const OFFER = { type: 'additional_tools', id: 'at_1', role: 'developer', tools: [
+  { type: 'namespace', name: 'functions', description: 'the shell', tools: [FN('exec'), { type: 'custom', name: 'apply_patch', format: { type: 'text' } }] },
+  { type: 'namespace', name: 'clock', description: 'time', tools: [{ ...FN('exec'), description: 'exec again' }] }] };
+const SAY = { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hi' }] };
+const toolDefs = async (home) => { const { calls: [call] } = await query(home, 'session', { id: 'S' }), { defs } = await query(home, 'lane', { id: 'S', lane: call.lane }); return { call, defs: Object.values(defs) }; };
+
+test('additional_tools: tool definitions of the tools section, each its own bytes; no conversation item; nothing lost', async () => {
+  const raw = (x) => JSON.stringify(x).replace(/,/g, ' ,  '), say = raw(SAY);
+  const body = `{"model":"m","input":[ ${raw(OFFER)} , ${say} ]}`;
+  const { defs } = await toolDefs(homeWith([mk(body)]));
+  const tools = defs.filter((d) => d.sec === 'tools');
+  assert.deepEqual(tools.map((d) => d.name), ['functions', 'exec', 'apply_patch', 'clock', 'exec']);
+  assert.ok(tools.every((d) => d.kind === 'tool'));
+  const entries = [OFFER.tools[0], OFFER.tools[0].tools[0], OFFER.tools[0].tools[1], OFFER.tools[1], OFFER.tools[1].tools[0]];
+  tools.forEach((d, i) => { const { start, end } = parseTextRef(d.ref); assert.deepEqual(JSON.parse(body.slice(start, end).replace(/ ,  /g, ',')), entries[i], d.name); });
+  const msgs = defs.filter((d) => d.sec === 'messages');
+  assert.equal(msgs.length, 1);
+  assert.equal(msgs[0].kind, 'text');
+  const { start, end } = parseTextRef(msgs[0].ref);
+  assert.ok(say.includes(body.slice(start, end)), 'the message still slices its own bytes');
+});
+
+test('additional_tools: a tool list of no known shape stays a json block, never dropped', async () => {
+  for (const tools of ['x', [1], null]) {
+    const flat = await messageDefs(JSON.stringify({ model: 'm', input: [{ ...OFFER, tools }, SAY] }));
+    assert.deepEqual(flat.map((d) => d.kind), ['json', 'text'], JSON.stringify(tools));
+  }
+});
+
+test('additional_tools: not a message; every entry is a tool', () => {
+  const req = { model: 'm', input: [OFFER, SAY], tools: [FN('own')] };
+  assert.deepEqual(reqCountsFor('responses', req).message_count, 1);
+  assert.equal(reqCountsFor('responses', req).tool_count, 6);
+  assert.equal(RESPONSES.messageCount(req), 1);
+  assert.deepEqual(reqCountsFor('responses', { input: [SAY], tools: [FN('own')] }).tool_count, 1);
 });
 
 test('a *_tool_result block is in the tool_result bucket and heads as an observation', () => {
