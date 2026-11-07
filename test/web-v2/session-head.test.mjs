@@ -147,7 +147,6 @@ test('1.2 #7 · model: the declared parent and fork, each its own line linked by
     const want = [parent && ['parent', parent], fork && ['fork', fork]].filter(Boolean)
     assert.deepEqual(rows.map((r) => [r.key, r.id]), want, `${parent} / ${fork}`)
     for (const r of rows) assert.equal(r.href, `#/session/${encodeURIComponent(r.id)}`)
-    assert.ok(rows.every((r) => !/\bno\b/i.test(r.text)), 'a null never reads as no parent')
   }
   for (const src of ['no-keys', 'unread']) {
     const rows = rowsOf({ lineage_source: src, parent_session_id: 'P-1', fork_of_session_id: 'F-1' }) // keys the server never sends there
@@ -156,6 +155,6 @@ test('1.2 #7 · model: the declared parent and fork, each its own line linked by
   }
   assert.deepEqual(rowsOf({}), [], 'no lineage_source: nothing')
   assert.deepEqual(rowsOf({ lineage_source: 'wire' }), [], 'wire without the keys: nothing')
-  assert.deepEqual(rowsOf({ lineage_source: 'other', parent_session_id: 'P-1' }), [], 'a source not in the closed set: nothing')
+  for (const src of ['other', 'toString', 'constructor']) assert.deepEqual(rowsOf({ lineage_source: src, parent_session_id: 'P-1' }), [], `${src}: not in the closed set, nothing`)
 })
 

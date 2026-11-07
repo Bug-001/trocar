@@ -135,7 +135,7 @@ function factsOf(desk, gap, harness) {
   return { items, tech }
 }
 
-// 1.2 §信息弹出层: only statistics, in the table's order; a 0 or absent row is not there. Every number is sessionTotals()'s.
+// 1.2 §信息弹出层: the statistics, then the session's lineage and id, in the table's order; a 0 or absent row is not there. Every number is sessionTotals()'s.
 function infoRows(s) {
   const lanes = s.lanes || [], meta = s.meta || {}, desk = s.desk || {}
   const t = totalsOf(s), rows = []
@@ -178,7 +178,7 @@ function infoRows(s) {
       const id = own(k)
       if (typeof id === 'string' && id) rows.push({ key, id, text, href: formatHash({ screen: 'session-link', id }) })
     }
-  } else if (W.LINEAGE_LINE[meta.lineage_source]) rows.push({ key: 'lineage', text: W.LINEAGE_LINE[meta.lineage_source] })
+  } else if (Object.hasOwn(W.LINEAGE_LINE, meta.lineage_source)) rows.push({ key: 'lineage', text: W.LINEAGE_LINE[meta.lineage_source] })
   if (meta.session_id) rows.push({ key: 'id', id: meta.session_id, text: W.SESSION_ID, copy: W.COPY })
   if (meta.project_slug && meta.project_slug !== '_unresolved') rows.push({ key: 'project', narrow: true, text: `${W.PROJECT} ${meta.project_path ? String(meta.project_path).split('/').filter(Boolean).pop() : meta.project_slug}` })
   if (!stats) rows.push({ key: 'calls', n: meta.calls || 0, text: W.MODEL_CALLS(meta.calls || 0) }) // nothing to count: never blank
