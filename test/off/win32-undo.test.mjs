@@ -10,7 +10,7 @@ import path from 'node:path'
 import { KNOWN_KINDS, OFF_VERSION, FILE_ENTRY_KINDS, undoByHand, parseManifest, PHASES } from '../../src/off/manifest.mjs'
 import { undoHarnesses } from '../../src/off/undo.mjs'
 import { runOff } from '../../src/off/orchestrate.mjs'
-import { TASK_NAME, RUN_KEY, TASK_FILE } from '../../src/off/win32.mjs'
+import { TASK_NAME, RUN_KEY, TASK_FILE, disableScheduledTask } from '../../src/off/win32.mjs'
 import { TASK_NAME as ARCH_TASK_NAME, RUN_KEY as ARCH_RUN_KEY } from '../../src/collector/arch/win32/autostart.mjs'
 import { newManifest, applyJsonKey, applyTextEntry, saveManifest as saveCoreManifest } from '../../src/collector/core/trust/journal.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -111,9 +111,15 @@ test('a scheduled-task entry: off disables the task, uninstall deletes it, an ab
   const none = schtasks({ xml: printed(ours) })
   r = await run(false, [none, reg()])
   assert.ok(!none.calls.some((c) => c.includes('/DISABLE')), 'no task file: no record of trocar\'s task, so it is not switched off')
-  const del = schtasks()
+  fs.writeFileSync(path.join(dir, TASK_FILE), ours)
+  const del = schtasks({ xml: printed(ours) })
   r = await run(true, [del, reg()])
-  assert.deepEqual(del.calls.filter((c) => c.startsWith('schtasks')), ['schtasks /Query /TN \\trocar\\collector', 'schtasks /Delete /TN \\trocar\\collector /F'], 'an uninstall deletes')
+  assert.ok(del.calls.includes('schtasks /Delete /TN \\trocar\\collector /F'), 'an uninstall deletes trocar\'s task')
+  const kept = schtasks({ xml: printed(task('C:\\evil.exe', '/secret-arg')) })
+  r = await run(true, [kept, reg()])
+  assert.ok(!kept.calls.some((c) => c.includes('/Delete')), 'nor a task that is not trocar\'s')
+  assert.ok(!JSON.stringify(r.out).includes('secret-arg'))
+  fs.rmSync(path.join(dir, TASK_FILE))
   r = await run(false, [schtasks({ state: 'absent' }), reg({ value: 'gone' })])
   assert.equal(r.out.results[0].result, 'already-restored', 'neither the task nor the Run value is there')
   r = await run(false, [schtasks({ state: 'unknown' }), reg()])
@@ -204,3 +210,19 @@ test('the names the undo touches are the arch module\'s own (the inlined pieces 
 })
 
 const sha256of = (buf) => createHash('sha256').update(buf).digest('hex')
+
+test('uninstall and a task under trocar\'s name: with no task file (no record), it is trocar\'s only when its action is the one this copy would write', () => {
+  const dir = tmpDir('trocar-w32-uninst-')
+  const task = (args) => `<Task><Actions Context="Author"><Exec><Command>conhost.exe</Command><Arguments>${args}</Arguments></Exec></Actions></Task>`
+  const ours = task('--headless "C:\\Users\\Zoë\\.trocar\\bin\\trocar.cmd" daemon --supervise')
+  const printed = (x) => Buffer.from(x, 'utf16le').toString('utf8')
+  const go = (registered, written) => {
+    const st = schtasks({ xml: printed(registered) })
+    if (written) fs.writeFileSync(path.join(dir, TASK_FILE), written); else fs.rmSync(path.join(dir, TASK_FILE), { force: true })
+    const t = disableScheduledTask({ uninstall: true, run: execOf(st), env: {}, file: path.join(dir, TASK_FILE), ours, fs })
+    return [t.task, st.calls.some((c) => c.includes('/Delete')), JSON.stringify(t).includes('secret')]
+  }
+  assert.deepEqual(go(ours, null), ['deleted', true, false], 'no file, this copy\'s daemon: trocar\'s, deleted')
+  assert.deepEqual(go(task('--headless "C:\\elsewhere\\trocar.cmd" daemon --supervise --secret'), null), ['not-trocars', false, false], 'no file, another program: left')
+  assert.deepEqual(go(ours, task('other --secret')), ['not-trocars', false, false], 'the file decides when there is one')
+})

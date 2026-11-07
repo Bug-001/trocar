@@ -33,7 +33,7 @@ import { confirm, isInteractive } from '../off/io.mjs'
 import { CODE_OFF } from '../off/names.mjs'
 import { formatUninstallReceipt, fit } from './receipt.mjs'
 import { removeIngressConfig } from '../collector/core/ingress-config.mjs'
-import { refuseElevatedByWhoami, disableScheduledTask, undoScheduledTask, TASK_NAME, RUN_KEY } from '../off/win32.mjs'
+import { refuseElevatedByWhoami, disableScheduledTask, undoScheduledTask, TASK_NAME, RUN_KEY, TASK_FILE } from '../off/win32.mjs'
 import { holdersOf } from '../off/holders.mjs'
 import { readDoorSeen, msOf } from '../off/door-seen.mjs'
 import { readStateFile } from '../off/state.mjs'
@@ -250,8 +250,13 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     // the task registered at every login while the receipt said otherwise; a recorded Run value goes with the entries, and trocar's own one
     // that no entry records goes here, 4.8 §7), Linux disables the systemd unit
     if (w.platform === 'win32') {
+      // the task this copy would write: what decides, with no task file, whether the task under trocar's name is trocar's
+      let ours = null
+      try { ours = (deps.unit !== undefined ? deps.unit : (await (await import('../collector/daemon.mjs')).loadArch('win32')).unit.userUnit({ home, node: process.execPath, script: deps.script || process.argv[1], run: w.exec, env })).text({}) } catch { /* no answer: the task file alone decides */ }
       const recorded = m && !m.unsupported && m.entries.some((e) => e.kind === 'run-key')
-      const t = recorded ? disableScheduledTask({ uninstall: true, run: w.exec, env }) : undoScheduledTask({ uninstall: true, run: w.exec, env })
+      const own = { file: path.join(collectorHome(path.join(home, '.trocar')), TASK_FILE), ours, fs }
+      const t = recorded ? disableScheduledTask({ uninstall: true, run: w.exec, env, ...own }) : undoScheduledTask({ uninstall: true, run: w.exec, env, ...own })
+      if (t.task === 'not-trocars') receipt.notes.push(t.why)
       // what it did, in the keys C.2 names: the task is DELETED here, so the entry belongs in `removed` the way macOS puts its plist there (a Windows test machine 2026-10-19 read `removed: []` as "nothing was taken away")
       receipt.autostart = { disabled: t.ok, removed: [...(t.task === 'deleted' ? [TASK_NAME] : []), ...(t.runKey === 'removed' ? [`${RUN_KEY.hive}\\${RUN_KEY.key}\\${RUN_KEY.name}`] : [])], ...(t.ok ? {} : { error: [t.reason, t.runKeyReason].filter(Boolean).join('; ') || `the task is ${t.task}` }) }
     }
