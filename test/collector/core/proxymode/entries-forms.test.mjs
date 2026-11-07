@@ -21,7 +21,7 @@ for (const h of harnesses) for (const os of OSES) {
     test(`CM31 ${h.name} · ${os} · only ${f.id} present → only route ${f.route} is planned and touched${f.hostTree ? ', with the hostTree note' : ''}`, () => {
       const w = world({ os })
       w.present(f)
-      const out = writeRoutes(h, { ...w.ctx, pacToken: 'ab'.repeat(16) }, () => door())
+      const out = writeRoutes(h, w.ctx, () => door())
       assert.deepEqual(out.results.map((x) => x.route), [f.route])
       assert.ok(planRoutes(h, w.ctx).routes[0].forms.includes(f.id))
       for (const [id, r] of Object.entries(h.proxyMode.routes).filter(([id]) => id !== f.route)) { const p = routeFile(r, w.ctx); if (p) assert.equal(fs.existsSync(p), false, `${id} untouched`) }
@@ -36,7 +36,7 @@ for (const h of harnesses) for (const os of OSES) {
 
   test(`CM31 ${h.name} · ${os} · no form present → no route, no note, no file`, () => {
     const w = world({ os })
-    const out = writeRoutes(h, { ...w.ctx, pacToken: 'ab'.repeat(16) }, () => door())
+    const out = writeRoutes(h, w.ctx, () => door())
     assert.deepEqual([out.results, out.notRouted, out.notes], [[], [], []])
     assert.deepEqual(files(w.home), [])
   })
@@ -46,7 +46,7 @@ for (const h of harnesses) for (const os of OSES) {
       const w = world({ os })
       for (const f of forms) w.present(f)
       if (!w.plant(b.at)) { t.skip(`the blocker names nothing on ${os}`); return }
-      const out = writeRoutes(h, { ...w.ctx, pacToken: 'ab'.repeat(16) }, () => door())
+      const out = writeRoutes(h, w.ctx, () => door())
       const covered = forms.filter((f) => !b.forms || b.forms.includes(f.id)).map((f) => f.id)
       assert.deepEqual(out.notRouted.map((x) => x.form).sort(), covered.sort())
       assert.ok(out.notRouted.every((x) => x.code === 'not-routed' && x.reason === 'blocker' && typeof x.at === 'string' && x.at.length > 0))
