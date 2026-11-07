@@ -45,7 +45,7 @@ test('V91 · 1.6 §3.3: on A B, A needing setup → exit 1, error.code setup-nee
     // 1.6 §1.1⑥: the text form gives the refused harness's steps each whole on a line of its own, in order, never inside a sentence
     const t = await on([A, '--yes'])
     const lines = t.io.text().split('\n')
-    assert.deepEqual(lines.filter((l) => /^\s+trocar /.test(l)).map((l) => l.trim()), [j.refused[0].command, `trocar on ${A}`], t.io.text())
+    assert.deepEqual(lines.filter((l) => /^ {4}trocar \S/.test(l)).map((l) => l.trim()), [j.refused[0].command, `trocar on ${A}`], t.io.text())
     assert.ok(!lines.some((l) => /\S.*trocar (install|on) /.test(l) && !/^\s+trocar /.test(l) && l.includes('Run')), t.io.text())
   } finally { await server.close() }
 })
