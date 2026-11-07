@@ -38,6 +38,12 @@ const SPAWN_OPS = new Set(['Agent', 'Task'])
 const sysText = (r) => (r.request?.system || []).map((b) => b.text || '').join('\n')
 const isSub = (sys) => /cc_is_subagent=true/.test(sys)
 const isMonitor = (sys) => /you are a security monitor/i.test(sys)
+// What a monitor's reply says, read the way the agent reads it (Claude Code's own parser): no <thinking>, a cut-off one included, then
+// the first <block>yes|no. true = it blocks, false = it allows, null = it says neither.
+const monitorFlag = (text) => {
+  const m = /<block>(yes|no)\b/i.exec(text.replace(/<thinking>[\s\S]*?<\/thinking>/g, '').replace(/<thinking>[\s\S]*$/, ''))
+  return m ? m[1].toLowerCase() === 'yes' : null
+}
 const userTextOf = (r) => (r.request?.messages || [])
   .map((m) => Array.isArray(m.content) ? m.content.map((b) => (b.type === 'text' ? b.text || '' : '')).join('') : String(m.content || ''))
   .join(' ')
@@ -385,6 +391,7 @@ export function callFacts(r) {
       tools: (nr.tools || []).map((c) => defined({ id: c.id, name: c.name, input: c.input })),
       summarize: /^\s*<analysis>/.test(text),
       verdict: monitor ? text.replace(/<\/?block>/g, '').trim() : undefined,
+      flagged: monitor ? monitorFlag(text) : undefined,
       seen: seenRuns(text),
     }),
   })
@@ -653,7 +660,7 @@ export function createAnalyzer({ keep = true, from = null } = {}) {
       if (step.error) { E.push({ type: 'error', step: step.at, streamId: s.id, msg: step.errMsg }); return }
       if (s.kind === 'monitor') {
         const v = reply.verdict
-        step.flagged = !/^no\b/i.test(v)
+        step.flagged = reply.flagged
         step.verdict = v
         E.push({ type: 'monitor', step: step.at, streamId: s.id, verdict: v, flagged: step.flagged })
       } else {
