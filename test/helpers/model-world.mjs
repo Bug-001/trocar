@@ -8,6 +8,7 @@ import { custodyStub } from './custody-stub.mjs'
 import { rootIdOf } from '../../src/off/root-store.mjs'
 import { runInstall } from '../../src/collector/model-install.mjs'
 import { sourcesCtx } from '../../src/collector/arch/model-backends.mjs'
+import { dirsFor } from '../../src/off/loc.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 import { renderHook } from '../../src/collector/harness/templates/index.mjs'
 
@@ -22,6 +23,9 @@ export function rootStoreStub({ answer = 'ok' } = {}) {
   }
 }
 
+/** The per-user folders of `os`, the product's own answer (dirsFor), under this host's path rules because the files really live here. */
+export const worldDirs = (os, home) => Object.fromEntries(Object.entries(dirsFor(os, home, {})).map(([k, v]) => [k, v.replaceAll('\\', path.sep)]))
+
 /** world({ os, env (an object, or home → object), commands }) → { home, dir, env, custody, store, ctx, install(over) } — `commands` are the names `which` finds (under home/bin). */
 export async function modelWorld({ os = 'darwin', env = {}, commands = [], cwd = null } = {}) {
   const home = tmpDir('trocar-model-')
@@ -32,7 +36,7 @@ export async function modelWorld({ os = 'darwin', env = {}, commands = [], cwd =
   const custody = custodyStub()
   const store = rootStoreStub()
   const fullEnv = { HOME: home, PATH: bin, ...(typeof env === 'function' ? env(home) : env) }
-  const ctx = sourcesCtx({ os, home, env: fullEnv, cwd: cwd || home, dirs: { appSupport: path.join(home, 'Library', 'Application Support'), localAppData: path.join(home, 'AppData', 'Local') } })
+  const ctx = sourcesCtx({ os, home, env: fullEnv, cwd: cwd || home, dirs: worldDirs(os, home) })
   ctx.exists = (p) => (p === home || p.startsWith(`${home}${path.sep}`)) && fs.existsSync(p) // hermetic: the dev machine's /Applications never makes a form present
   const harnesses = await loadHarnesses()
   const owns = (p) => { try { return fs.statSync(p).uid === process.getuid() } catch { return null } }
