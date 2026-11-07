@@ -49,6 +49,8 @@ export const Details = memo(function Details({ it, acts }: { it: Item, acts: Act
           : !it.params.length ? <div className="cdnote">{W.NO_PARAMS}</div>
             : it.params.map((x: Item, i: number) => <Part key={keyOf(x, i)} x={x} label={x.key} literal none={W.NO_BYTES} acts={acts} />)}
         {it.raw.map((x: Item, i: number) => <Part key={keyOf(x, i)} x={x} label={ws ? W.rawReplyNth(i + 1) : W.RAW_REPLY} none={W.NO_RAW_REPLY} acts={acts} />)}
+        {it.usage.length ? <div className="cdgrp">{W.USAGE_UNMAPPED}</div> : null}
+        {it.usage.map(([k, v]: [string, string]) => <div key={k} className="cdline"><span className="cbrole mono">{k}</span><span className="cdval mono">{v}</span></div>)}
         {it.extra.length ? <div className="cdgrp">{W.CD_EXTRA_MSGS(it.extra.length)}</div> : null}
         {it.extra.map((x: Item, i: number) => <Part key={keyOf(x, i)} x={x} label={x.key} literal none={W.NO_BYTES} acts={acts} />)}
         {it.transport ? <div className="cdnote">{ws ? W.TRANSPORT_WS : W.TRANSPORT_HTTP}</div> : null}

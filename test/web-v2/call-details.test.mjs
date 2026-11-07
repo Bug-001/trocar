@@ -10,6 +10,7 @@ import { stepOf } from '../../web/legacy/replay/model.mjs'
 import { parseTextRef } from '../../src/raw/refs.mjs'
 import { fieldTextOf } from '../../src/dissect/record-fields.mjs'
 import { callDetailItems } from '../../web/src/screens/replay/call-details.mjs'
+import { unmappedUsage } from '../../src/model/schema.mjs'
 import { windowItems } from '../../web/src/screens/replay/window-model.mjs'
 import { deskOf, deskFrom } from './desk-world.mjs'
 import { serveBoard } from './real-face.mjs'
@@ -82,6 +83,14 @@ test('2.6 #2: no request keys · an unparsed step · a failed step · no request
   assert.deepEqual(tail(stateOf(deskWith({ rec: null }))), ['noreq'])
   assert.deepEqual(tail(stateOf(deskWith({}, detailOf(), false))), ['frames'])
   assert.deepEqual(tail(stateOf(deskWith({ unparsed: true }, detailOf(), false))), ['unparsed'], 'an unparsed step whose lane is not held has nothing yet')
+})
+
+test('2.6 #18: the reply usage keys the mapping does not read are listed with their values; none, no list', () => {
+  const usage = { input_tokens: 5, output_tokens: 2, service_tier: 'standard', cache_creation: { ephemeral_1h_input_tokens: 4 } }
+  const it = itemOf(stateOf(deskWith({}, detailOf({ norm: { stop_reason: null, usage }, wire: { format: 'anthropic', vendor: null } }))), 'details')
+  assert.deepEqual(it.usage, unmappedUsage('anthropic', usage, { vendor: null }))
+  assert.ok(it.usage.length > 0)
+  assert.deepEqual(itemOf(stateOf(deskWith()), 'details').usage, [], 'no usage, no list')
 })
 
 test('2.6 #4: each observer effect is a line of its own with no fold; none means no item', () => {

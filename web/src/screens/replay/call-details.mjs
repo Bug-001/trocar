@@ -2,6 +2,7 @@
 // facts of the step that the window says nowhere else. Drawn by CallDetails.tsx; the list and tech helpers are the legacy panel's too.
 import { ROUTING_LABELS } from '../../../legacy/replay/analysis.mjs'
 import * as W from '../../../legacy/labels/replay.mjs'
+import { unmappedUsage } from '../../../../src/model/schema.mjs'
 
 // the lane step's lists: a bare locator string is that ref; an object form `{key: ref}` is one key each
 export const refsOf = (xs) => (xs || []).map((x) => (typeof x === 'string' ? { ref: x } : x))
@@ -37,6 +38,6 @@ export function callDetailItems(call, st, s) {
   return [
     ...(fx.length ? [{ key: 'impact', type: 'impact', lines: fx.map((o, i) => ({ key: `impact:${o.id ?? i}`, text: o.text ?? o.what })) }] : []),
     { key: 'details', type: 'details', open: s.openBlocks.has('cd'), params: rows(keysOf(d.nonBlockKeys)), unparsed: !!call.unparsed,
-      raw: rows(refsOf(d.respRefs)), extra: rows(keysOf(d.extraMessages)), transport: w.transport ?? null, tech: techRows(call, d, w, st.reply || []) },
+      raw: rows(refsOf(d.respRefs)), usage: unmappedUsage(w.format, d.norm?.usage, { vendor: w.vendor ?? null }), extra: rows(keysOf(d.extraMessages)), transport: w.transport ?? null, tech: techRows(call, d, w, st.reply || []) },
   ]
 }
