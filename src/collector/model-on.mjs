@@ -20,8 +20,11 @@ import { loadIngressConfig, rebindTaken, freeOnLoopback } from './core/ingress-c
 import { controlEndpointFor } from '../off/control-client.mjs'
 import { CODE } from './core/codes.mjs'
 import { appendEvent } from './core/events.mjs'
-import { retriedNote } from '../cli/words.mjs'
+import { retriedNote, unknownWords } from '../cli/words.mjs'
 import { lockState } from '../health/read.mjs'
+
+// a file that could not be read, in 1.6 A.1's words; the errno stays the note's `code`
+const unreadWords = (code) => (code === 'EACCES' || code === 'EPERM' ? unknownWords('denied') : code === 'ENOENT' ? unknownWords('absent') : 'could not be read')
 
 const INSTALL_HINT = 'trocar install'
 // 1.6 §1.1: what a `setup.missing[].what` means, in words (the code stays in the JSON)
@@ -72,7 +75,7 @@ export async function turnOnModel({ os, home, env = process.env, ids = null, har
   for (const h of wanted) { // precondition ⑪ = status's `setup` (4.11 P4b, one judgement): only a harness that needs setup is refused, nothing written for it
     const s = setupOf(byName.get(h), { os, manifest: m, ctx, root, fs })
     if (s.state === 'needed') refused.push({ harness: h, reason: CODE.setupNeeded, why: [...new Set(s.missing.map((x) => SETUP_WHY[x.what]))].join('; '), command: INSTALL_HINT })
-    else { on.push(h); if (s.state === 'unknown') unsure.push({ harness: h, text: `whether ${h} is set up could not be told (${s.reason})` }) }
+    else { on.push(h); if (s.state === 'unknown') unsure.push(s.path ? { harness: h, code: s.code, text: `whether ${h} is set up could not be told (${s.path}: ${unreadWords(s.code)})` } : { harness: h, text: `whether ${h} is set up could not be told (${s.reason})` }) }
   }
   // what install left pending (the root store declined or not answered, the custody unreachable): on goes on — the forms the root cannot reach go through
   // their doors forwarding only (D51④) — and says each one, with the command, forward only (1.6 §1.1)
