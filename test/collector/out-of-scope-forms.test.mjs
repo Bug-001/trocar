@@ -144,3 +144,32 @@ describe('CM43: a record from before', { concurrency: 1 }, () => {
     assert.equal(fs.readFileSync(mine, 'utf8'), USER_PEM, JSON.stringify(un.receipt.problems))
   })
 })
+
+// 4.11 P5: where a harness has forms measured on this system, one that is not (verified `not-measured`) gets no entry: writing an agent's config for a form never
+// measured there can break it. Generated: every harness × OS with a measured form and an unmeasured one that can be on the machine alone.
+const unmeasured = ['darwin', 'win32'].flatMap((os) => harnesses.flatMap((d) => {
+  const here = d.proxyMode.forms.filter((f) => f.os.includes(os) && !outOfScope(f, os))
+  return here.some((f) => f.verified && f.verified[os] === true) ? here.filter((f) => !(f.verified && f.verified[os] === true)).map((f) => ({ os, d, f })) : []
+}))
+describe('P5: a form not measured on this system, alone on the machine', { concurrency: 1 }, () => {
+  let alone = 0
+  for (const { os, d, f } of unmeasured) {
+    it(`${os} ${f.id}`, async () => {
+      const w = await world(os, d, f)
+      const measured = formsHere(d.proxyMode, os, w.ctx).filter((x) => x.verified && x.verified[os] === true)
+      if (measured.length) return // it shares its place with a measured form: that one is what is on the machine
+      alone++
+      await w.cmd.install()
+      const s1 = snapshot(w)
+      const daemon = await daemonFor(w)
+      try {
+        const named = await w.cmd.on([d.name])
+        assert.deepEqual([named.on, named.refused.map((x) => [x.harness, x.reason]), named.exit], [[], [[d.name, 'not-routed']], 1])
+        assert.ok(named.refused[0].why.includes(f.id) || named.refused[0].why.includes('not measured'), named.refused[0].why)
+      } finally { await daemon.close() }
+      assert.deepEqual(outside(s1, snapshot(w)), [], 'on wrote no entry')
+      assert.equal(desiredOn(w, d.name), false)
+    })
+  }
+  it('some unmeasured form is alone on a machine', () => assert.ok(alone > 0, `of ${unmeasured.map((x) => x.f.id).join(', ')}`))
+})

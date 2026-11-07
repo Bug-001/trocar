@@ -15,7 +15,7 @@ import { tmpDir } from '../../helpers/tmp.mjs'
 import { loadHarnesses } from '../../../src/collector/harness/index.mjs'
 import { OSES, TROCAR, invariants, casesFor, seedCasesFor, run, editKept, fileOf, diff, label } from '../../helpers/switch-kit.mjs'
 import { isPipePath } from '../../../src/off/control-client.mjs'
-import { formsHere } from '../../../src/collector/core/proxymode/sources.mjs'
+import { routedForms } from '../../../src/collector/core/proxymode/sources.mjs'
 
 const harnesses = await loadHarnesses()
 // a win32 control endpoint is a pipe name, served on this host as a socket path relative to the cwd: one scratch cwd for this file's process (each
@@ -30,7 +30,7 @@ for (const spec of [...OSES.flatMap((os) => casesFor(os, harnesses)), ...seedCas
     assert.ok(spec.os === 'win32' ? isPipePath(r.endpoint.socketPath) : path.isAbsolute(r.endpoint.socketPath || ''), JSON.stringify(r.endpoint))
     // a harness refused (its setup, or no covered form here: CM43) is refused before anyone asks the daemon; a resolution gone wrong is not that refusal
     if (r.on.refused.length) assert.deepEqual(diff(r.s1, r.s2).filter(({ p }) => !TROCAR.test(p)), [], 'a refused harness has no entry')
-    if (r.on.refused.some((x) => x.reason === 'not-routed')) assert.deepEqual(formsHere(harnesses.find((d) => d.name === spec.h).proxyMode, spec.os, r.w.ctx), [], 'only a harness with no covered form here')
+    if (r.on.refused.some((x) => x.reason === 'not-routed')) assert.deepEqual(routedForms(harnesses.find((d) => d.name === spec.h).proxyMode, spec.os, r.w.ctx), [], 'only a harness with no form here on writes entries for')
     if (spec.form && !r.on.refused.length) assert.ok(r.askedOn.includes('POST /on'), `on reached the daemon through that endpoint: ${r.askedOn}`)
     assert.ok(r.askedOff.includes('POST /off'), `off reached the daemon through that endpoint: ${r.askedOff}`)
     const snaps = [r.s0, r.s1, r.s2, r.s3, r.sE, r.s4, r.s5, r.s6]

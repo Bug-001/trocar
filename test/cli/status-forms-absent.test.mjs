@@ -165,3 +165,21 @@ test('4.11 CM43: status names an out-of-scope app it is told of, and only once t
   const off = (await status(w, 'darwin', 'kimi-code', [], runStatusCli, { outOfScopeForms: async () => named })).j
   assert.equal(off.out_of_scope, undefined)
 })
+
+test('4.11 P5 · CM44: a form not measured on this system, alone here, is not-routed, and the finding says it is not measured, not that nothing is installed', async () => {
+  const { loadHarnesses } = await import('../../src/collector/harness/index.mjs')
+  let n = 0
+  for (const d of (await loadHarnesses()).filter((x) => x.proxyMode)) {
+    const os = 'darwin'
+    const here = d.proxyMode.forms.filter((f) => f.os.includes(os))
+    if (!here.some((f) => f.verified && f.verified[os] === true)) continue
+    const unmeasured = here.filter((f) => f.verified && f.verified[os] && f.verified[os].reason === 'not-measured').map((f) => f.id)
+    if (!unmeasured.length) continue
+    const w = await world(os, d.name)
+    const dj = (await status(w, os, d.name, [], runDoctor, { presentForms: async () => ({ [d.name]: unmeasured }) })).j
+    const f = (dj.findings || []).find((y) => y.code === 'not-routed' && y.harness === d.name)
+    assert.ok(f && /not measured/.test(f.why), `${d.name}: ${JSON.stringify(f)}`)
+    n++
+  }
+  assert.ok(n > 0)
+})

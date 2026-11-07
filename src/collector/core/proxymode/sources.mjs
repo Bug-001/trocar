@@ -120,6 +120,14 @@ export const outOfScope = (form, os) => !!(form.verified && form.verified[os] &&
 /** The forms of a harness that are on this machine, the one answer install, on, setup and status take. */
 export const formsHere = (pm, os, ctx) => pm.forms.filter((f) => f.os.includes(os) && !outOfScope(f, os) && isPresent(f, ctx))
 
+/** The forms `on` writes entries for (4.11 P5): of the forms here, the ones measured on this system when the harness has any measured there; a form never
+ *  measured where a measured sibling exists gets no entry (writing an agent's config for it can break it). `status` judges the same set (verdict.mjs judgedForms). */
+export const routes = (pm, os) => {
+  const measured = (f) => !!(f && f.verified && f.verified[os] === true), any = pm.forms.some((f) => f.os.includes(os) && measured(f))
+  return (f) => !any || measured(f)
+}
+export const routedForms = (pm, os, ctx) => formsHere(pm, os, ctx).filter(routes(pm, os))
+
 /** What `status` and `on` name as out of scope: of the harnesses with no covered form here, the out-of-scope forms that are present and say what they are (`scopeWhat`). */
 export const scopeNamed = (harnesses, os, ctx) => harnesses.filter((d) => d.proxyMode).flatMap((d) => {
   const named = d.proxyMode.forms.filter((f) => f.scopeWhat && f.os.includes(os) && outOfScope(f, os) && isPresent(f, ctx))
