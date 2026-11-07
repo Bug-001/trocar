@@ -68,8 +68,10 @@ test('a run-key entry: ours is deleted, ours over a prior restores it, a value t
   assert.ok(r.m.entries.length === 0, 'the entry leaves the manifest')
   const prior = { kind: 'REG_SZ', value: 'C:\\my\\own.exe at login' }
   const rg = reg()
+  const removedChange = r.out.results[0].change
   r = await run(entry(prior), [rg])
   assert.equal(r.out.results[0].result, 'restored', 'ours over a prior: the prior is put back')
+  assert.ok(r.out.results[0].change && r.out.results[0].change !== removedChange && r.out.results[0].gone === false, 'the row says the value was set back, not taken out')
   assert.ok(rg.calls.some((c) => c.startsWith('reg add') && c.includes(prior.value) && c.includes('/t REG_SZ')), 'with its kind')
   r = await run(entry(), [reg({ value: 'theirs:C:\\my\\own.exe at login' })])
   assert.equal(r.out.results[0].result, 'left-user-value', 'a value the user set: left as is')
@@ -172,6 +174,9 @@ test('the round trip: an off over a manifest of every collector kind returns eac
   assert.deepEqual(fs.readFileSync(envFile), preEnv, 'the trust entry: byte for byte back')
   assert.ok(rg.calls.some((c) => c.startsWith('reg delete')), 'the Run value taken out')
   assert.ok(st.calls.some((c) => c.includes('/Change') && c.includes('/DISABLE')), 'the task disabled')
+  // a registry value and a task are no files: a value taken out is listed as removed, a task switched off as changed, each saying what happened
+  assert.ok(receipt.removed.includes(`${RUN_KEY.hive}\\${RUN_KEY.key}\\${RUN_KEY.name}`), JSON.stringify(receipt.removed))
+  assert.ok(receipt.changed.some((c) => c.path === TASK_NAME && c.change && !/lines/.test(c.change)), JSON.stringify(receipt.changed))
   assert.ok(fs.existsSync(exe), 'the kernel copy kept while it drains')
   const after = parseManifest(fs.readFileSync(path.join(dir, 'install-manifest.json'), 'utf8'))
   assert.deepEqual(after.entries.map((e) => e.kind), ['forwarder-binary'], 'only the draining kernel copy is left in the ledger')
