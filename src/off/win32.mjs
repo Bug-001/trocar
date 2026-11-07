@@ -79,12 +79,41 @@ export function undoRunKey({ prior = null, run = null, env = process.env } = {})
   return r.code === 0 ? { ok: true, result: prior ? 'restored' : 'removed' } : { ok: false, result: 'failed', reason: `reg ${prior ? 'add' : 'delete'} failed (exit ${r.code}${r.err ? `: ${r.err.slice(0, 200)}` : ''})` }
 }
 
+export const TASK_FILE = 'trocar-collector.task.xml' // the task's XML install wrote and registered, in the collector's directory
+
+const xmlUnescape = (v) => v.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&')
+/** A task XML's action: `{ command, args }` from its one `<Exec>`, or null (no Exec, or more than one action: a second would run beside trocar's on every start). */
+export const taskAction = (xml) => {
+  const text = String(xml).replace(/\u0000/g, '')
+  const actions = text.match(/<Actions[\s>][\s\S]*?<\/Actions>/)
+  const execs = actions ? actions[0].match(/<Exec>[\s\S]*?<\/Exec>/g) || [] : []
+  if (execs.length !== 1 || /<(ComHandler|SendEmail|ShowMessage)[\s>]/.test(actions[0])) return null
+  const el = (tag) => { const x = new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`).exec(execs[0]); return x ? xmlUnescape(x[1]).trim() : '' }
+  return { command: el('Command'), args: el('Arguments') }
+}
+/** Is the task registered under trocar's name (`schtasks /Query /XML`) the one in the task file install wrote (`written`, null when there is none: then it is
+ *  not trocar's)? schtasks prints UTF-16LE and execTool decodes UTF-8, so a non-ASCII character (a user name in the program's path) comes back mangled, the
+ *  same way every time: a field matches as written, or as the same text sent through that channel. */
+export const sameTask = (registered, written) => {
+  const own = written == null ? null : taskAction(written), reg = taskAction(registered)
+  const same = (a, b, fold = (x) => x) => fold(a) === fold(b) || fold(Buffer.from(a, 'utf16le').toString('utf8').replace(/\u0000/g, '')) === fold(b)
+  return !!(own && reg && same(own.command, reg.command, (x) => x.toLowerCase()) && same(own.args, reg.args))
+}
+
 /** The task off the login path — the TASK alone, before the ledger's entries go (an `off`'s step 5 and `uninstall`'s own step call this; the Run value is a
  *  manifest entry and goes with the rest): `/Change /DISABLE` for an `off` (it does not end a running instance — the supervisor is stopped first, 4.8 §4.2),
  *  `/Delete /F` for an `uninstall`. A task that is not there is already as asked; a query that cannot tell changes nothing on a guess. → `{ ok, task:
  *  'disabled'|'deleted'|'absent'|'failed', reason? }`. */
-export function disableScheduledTask({ uninstall = false, run = null, env = process.env } = {}) {
+export function disableScheduledTask({ uninstall = false, run = null, env = process.env, file = null, fs = nodeFs } = {}) {
   const q = taskState({ run, env })
+  if (q.state === 'present' && !uninstall && file) {
+    // on / off touch only trocar's own things: a task under trocar's name that is not the one install wrote is left as it is, and said
+    const x = execTool('schtasks', ['/Query', '/TN', TASK_NAME, '/XML'], { run, env })
+    if (x.code !== 0) return { ok: false, task: 'failed', reason: `whether the task ${TASK_NAME} is the one trocar wrote could not be read (schtasks /Query /XML: ${x.err || (x.code === null ? 'it did not run' : `exit ${x.code}`)}); nothing was changed on a guess` }
+    let written = null
+    try { written = fs.readFileSync(file, 'utf8') } catch { /* no task file: none of trocar's */ }
+    if (!sameTask(x.out, written)) { const a = taskAction(x.out); return { ok: true, task: 'not-trocars', why: `the task ${TASK_NAME} is not the one trocar wrote (it runs ${(a && a.command) || 'no program'}), so it was left as it is` } }
+  }
   if (q.state === 'present') {
     const r = execTool('schtasks', [uninstall ? '/Delete' : '/Change', '/TN', TASK_NAME, ...(uninstall ? ['/F'] : ['/DISABLE'])], { run, env })
     return r.code === 0 ? { ok: true, task: uninstall ? 'deleted' : 'disabled' } : { ok: false, task: 'failed', reason: `schtasks ${uninstall ? '/Delete' : '/Change /DISABLE'} failed (${r.code === null ? `did not run (${r.err || 'no reason given'})` : `exit ${r.code}${r.err ? `: ${r.err.slice(0, 200)}` : ''}`})` }
@@ -106,8 +135,8 @@ export function taskState({ run = null, env = process.env } = {}) {
 /** The task off the login path AND trocar's Run value taken out, the two as one undo whatever an earlier `on` used (§7: exactly one login mechanism is
  *  left live; arch's undoScheduledTask, the Run value half inlined with it): `/Change /DISABLE` for an `off`, `/Delete /F` for an `uninstall`. →
  *  `{ ok, task: 'disabled'|'deleted'|'absent'|'failed', runKey: 'removed'|'restored'|'left'|'absent'|'failed', reason?, runKeyReason? }`. */
-export function undoScheduledTask({ uninstall = false, prior = null, run = null, env = process.env } = {}) {
-  const t = disableScheduledTask({ uninstall, run, env })
+export function undoScheduledTask({ uninstall = false, prior = null, run = null, env = process.env, file = null, fs = nodeFs } = {}) {
+  const t = disableScheduledTask({ uninstall, run, env, file, fs })
   const k = undoRunKey({ prior, run, env })
   return { ok: t.ok && k.ok, ...t, runKey: k.result, ...(k.ok ? {} : { runKeyReason: k.reason }) }
 }
