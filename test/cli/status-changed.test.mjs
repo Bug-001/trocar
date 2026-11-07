@@ -88,6 +88,19 @@ test('C.3 failures.groups: upstream-slow groups stay at level note and count as 
   assert.equal(beside.failures.problem, 1)
 })
 
+// C.3, D38: the same failure of several harnesses is a group each, so a count and a name always belong together
+test('C.3 failures.groups: one failure of three harnesses is three groups, each with its own count; records of no harness are a group of their own', async () => {
+  const s = await installedHome()
+  const rec = (i, who) => ({ ts: ago(5000 - i * 100), flow_id: `f${i}`, pid: 40 + i, ...(who ? { agent: who } : {}), decision: 'decrypt', host: 'h.test', reason: 'client-rejected-leaf', not_captured: 'client-rejected-leaf' })
+  const ev = (i, who) => ({ ts: ago(4000 - i * 100), event: 'failure', where: 'engine', code: 'leaf-error', ...(who ? { agent: who } : {}), reason: 'no leaf' })
+  const recs = [rec(1, 'claude-code'), rec(2, 'claude-code'), rec(3, 'claude-code'), rec(4, 'hermes'), rec(5, 'kimi-code'), rec(6, null), ev(1, 'codex'), ev(2, 'hermes')]
+  const { failures } = await docOf(s, { request: down(), deps: { captureHealth: () => healthOf(recs) } })
+  const of = (code) => failures.groups.filter((g) => g.code === code).map((g) => [g.harness ?? null, g.count]).sort()
+  assert.deepEqual(of('client-rejected-leaf'), [['claude-code', 3], ['hermes', 1], ['kimi-code', 1], [null, 1]].sort())
+  assert.deepEqual(of('leaf-error'), [['codex', 1], ['hermes', 1]])
+  assert.equal(failures.problem, 8)
+})
+
 // C.3「已解决的组」: each failure and the ok event that ends its condition (one record shape per pair, as the daemon writes them)
 const ENDED = [
   [{ event: 'helper-down', where: 'helper', reason: 'no helper at /usr/local/libexec/trocar/redirector' }, { event: 'helper-ok' }],
