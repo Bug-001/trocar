@@ -14,6 +14,7 @@ import { userProcessesOf } from '../off/user-procs.mjs'
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
 import { readManifest, saveManifest, manifestPath, refuseOldManifest, undoByHand } from '../off/manifest.mjs'
 import { rootName, rootStore, sameRoot, strayRoots as strayRootsOf } from '../off/root-store.mjs'
+import { COMMAND_INDENT } from '../off/receipt.mjs'
 import { disableAutostart, unitFilePath, removeWantsLinks } from '../off/autostart.mjs'
 import { undoAutostart, plistFilePath, AGENT_LABEL } from '../off/darwin.mjs'
 import { findingFor } from '../netenv/findings.mjs'
@@ -161,8 +162,8 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
   const refuse = (why) => {
     // 附录 C.1: the refusal's code lives in `error` and nowhere else; `message` is the sentence the text form prints
     receipt.ok = false; receipt.error = { code: 'collectors-online', message: why }; receipt.purge_data = false; receipt.kept = keptOf(home, fs) // nothing changed: --purge-data deleted nothing either
-    receipt.problems.push(why)
-    receipt.problems.push(`Run: ${findingFor('collectors-online', { platform: w.platform }).commands.map((c) => c.run).join(', then: ')}`) // the doctor's own steps for the code (1.6 附录 B)
+    // the doctor's own steps for the code (1.6 附录 B), each command on a line of its own (§1.1⑥)
+    receipt.problems.push([why, 'Run, in order:', ...findingFor('collectors-online', { platform: w.platform }).commands.map((c) => `${COMMAND_INDENT}${c.run}`)].join('\n'))
     put({ event: 'failure', code: 'collectors-online', reason: why })
     put({ kind: 'result', outcome: 'failed', reason: `uninstall refused: ${why}` })
     return { receipt, exit: EXIT.incomplete }
