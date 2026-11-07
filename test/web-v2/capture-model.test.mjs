@@ -207,12 +207,13 @@ test('the capture state lamp follows 1.5 §采集状态 on the verdict, the over
   const S15 = fs.readFileSync(new URL('../../spec/01-trocar-rfc/1.5-states-aesthetics.md', import.meta.url), 'utf8')
   const sec = S15.slice(S15.indexOf('## 采集状态'))
   const rows = sec.slice(0, sec.indexOf('\n\n', sec.indexOf('| 次序'))).split('\n').filter((l) => l.startsWith('| ') && !l.startsWith('| 次序')).map((l) => l.split('|').map((c) => c.trim()))
-  const LAMP = [['不点灯', 'none'], ['坏', 'bad'], ['注意', 'warn'], ['状态点', 'ok']]
+  const LAMP = [['不点灯', 'none'], ['坏', 'bad'], ['注意', 'warn'], ['留意', 'note'], ['状态点', 'ok']]
   const lit = (cls) => (['ok', 'warn', 'bad', 'note'].includes(cls) ? cls : 'none')
   const want = new Map()
   for (const [, , st, , lamp] of rows) {
+    if (lamp === '—') continue // the 「· 读不全」 suffix row lights nothing of its own
     const l = LAMP.find(([w]) => lamp.startsWith(w))
-    if (!l) continue // the 「· 读不全」 suffix row lights nothing of its own
+    assert.ok(l, `a lamp word this test knows: ${lamp}`)
     const name = /^`([a-z-]+)`$/.exec(st)?.[1] ?? (st.startsWith('读不出') ? 'unreadable' : st.startsWith('没见过') ? 'unrecognized' : st.includes('轮询') ? 'stale' : null)
     assert.ok(name, `a row of the table maps to a state: ${st}`)
     want.set(name, l[1])
@@ -229,6 +230,8 @@ test('the capture state lamp follows 1.5 §采集状态 on the verdict, the over
     assert.equal(v.state, state)
     assert.equal(lit(v.cls), lamp, `${state}: verdict`)
     assert.equal(lit(capCard(c, now).cls), lamp, `${state}: overview card head`)
-    assert.equal(pageModel(c.data, v).service.gut ?? 'none', lamp, `${state}: capture page gutter`)
+    const gut = pageModel(c.data, v).service.gut
+    assert.ok(gut, `${state}: the service row always draws its lamp, as the card head does`)
+    assert.equal(lit(gut), lamp, `${state}: capture page gutter`)
   }
 })

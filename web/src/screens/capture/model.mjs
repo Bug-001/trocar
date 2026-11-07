@@ -26,7 +26,8 @@ const plain = (v) => (v.parts ? v.parts.map(plain).join('') : v.mono ?? v.text)
 const copyOf = (pairs) => pairs.map(({ k, v }) => `${k}: ${plain(v)}`).join('\n')
 const diagOf = (used) => redactUrlCredentials(JSON.stringify(used, null, 2))
 const cap1 = (s) => String(s).replace(/\p{L}/u, (c) => c.toUpperCase()) // a row's sentence starts with a capital
-// a row's gutter: bad / warn lamps; the ok dot for capturing / no problems found; nothing for dim and unknown states (1.5)
+// a row's gutter: bad / warn lamps; the ok dot for capturing / no problems found; else nothing on an agent row (a normal state lights
+// nothing). The service row always has its lamp, the grey unlit dot (`dim`) included, as the overview card head does (1.5 §采集状态)
 const gutOf = (cls, fine) => (cls === 'bad' ? 'bad' : cls === 'warn' ? 'warn' : fine ? 'ok' : null)
 const inferred = mark('inf').replace(/<[^>]*>/g, '')
 // a condition's words: the CLI's failure table when the condition is a (where, code) failure, else the kind's own
@@ -94,7 +95,7 @@ function serviceOf(h, v) {
   for (const e of list(h && h.errors)) if (e) tech.push(pair('could not be read', M(`${e.where ?? '?'}: ${redactUrlCredentials(String(e.reason ?? ''))}`)))
   tech.push(...commandPairs(commandsFor(h, { service: true })))
   return {
-    id: '*service', gut: gutOf(v.cls, v.state === 'ok'),
+    id: '*service', gut: gutOf(v.cls, v.state === 'ok') ?? 'dim',
     lead: { text: v.text, cls: v.cls, toLog: v.state === 'failing' && logged },
     conds, failing, logLink: logged && v.state !== 'failing',
     lingerStop: h && h.linger === false ? 'Capture stops at logout' : null,
