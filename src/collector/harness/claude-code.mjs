@@ -161,8 +161,10 @@ const PROJECT = { base: 'cwd', path: '.claude/settings.json' }
 const settingsEnv = (file, name) => ({ file, format: 'json', keys: ['env', name] })
 const inPrecedence = (name) => [settingsEnv(PROJECT_LOCAL, name), settingsEnv(PROJECT, name), settingsEnv(SETTINGS, name), { env: name }]
 const BUNDLED = { src: inPrecedence('CLAUDE_CODE_CERT_STORE'), equals: 'bundled' }
-const managedAt = (rest) => perOs({ darwin: { base: 'abs', dir: MANAGED_DIR.darwin, ...rest }, win32: { base: 'abs', dir: 'C:/ProgramData/ClaudeCode', ...rest } })
-const managedFiles = [managedAt({ path: 'managed-settings.json' }), managedAt({ path: 'managed-settings.d', glob: '*.json' })] // read only: may be anywhere
+// Windows has two places: C:/Program Files/ClaudeCode (read from 2.0.58, the only one from 2.1.75) and C:/ProgramData/ClaudeCode (read before 2.1.75)
+const MANAGED_PLACES = [{ darwin: MANAGED_DIR.darwin, win32: 'C:/Program Files/ClaudeCode' }, { win32: 'C:/ProgramData/ClaudeCode' }]
+const managedAt = (dirs, rest) => perOs({ darwin: dirs.darwin && { base: 'abs', dir: dirs.darwin, ...rest }, win32: { base: 'abs', dir: dirs.win32, ...rest } })
+const managedFiles = MANAGED_PLACES.flatMap((dirs) => [managedAt(dirs, { path: 'managed-settings.json' }), managedAt(dirs, { path: 'managed-settings.d', glob: '*.json' })]) // read only: may be anywhere
 const CLI_FORMS = ['claude-code.cli', 'claude-code.vscode']
 const DESKTOP_POLICY = (key) => ({ policy: { darwin: { domain: 'com.anthropic.claudefordesktop', key }, win32: { key: 'HKCU\\SOFTWARE\\Policies\\Claude', value: key } } })
 const proxyMode = {
