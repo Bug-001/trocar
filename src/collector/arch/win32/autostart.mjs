@@ -321,12 +321,14 @@ export function userUnit({ home, node, script, run = null, env = process.env, fs
         return { code: c.code ?? 1, out: '', err: `${why}; the Run-key fallback failed too: ${f.reason}`, via: 'task', ...(f.entry ? { ledger: f.entry } : {}), event: { event: 'failure', where: 'install', code: 'task-register-failed', reason } }
       }
       const event = { event: 'failure', where: 'install', code: 'task-register-failed', reason: `schtasks /Create was refused (${why}); trocar starts at login through the HKCU Run entry ${RUN_KEY.name} instead, with the supervisor parent restarting the daemon` }
-      // the Run value is the one start at login now: a task an earlier `on` registered would start a second supervisor, so it is switched off (it stays registered; the undo takes it out)
-      const q = taskState(tools)
+      // the Run value is the one start at login now: an enabled task under trocar's name (trocar's own from before, or one someone else put there, which install
+      // replaces) would also run at every login, so it is switched off; when that is refused it is said, with what it runs (its program only)
+      const q = taskEnabled(tools)
       const off = q.state === 'present' ? schtasks(['/Change', '/TN', TASK_NAME, '/DISABLE'], tools) : null
       const task = off ? (off.code === 0 ? 'disabled' : 'failed') : null
-      const warn = task === 'failed' ? `the task ${TASK_NAME} of an earlier \`on\` is still registered and enabled (/Change /DISABLE: ${errOf(off)}): both it and the Run entry start trocar at login (one supervisor runs, the other leaves at once); \`trocar off\` disables both`
-        : q.state === 'unknown' ? `${q.err}: an earlier task ${TASK_NAME} may still be registered and enabled next to the Run entry (one supervisor runs, the other leaves at once); \`trocar off\` disables both` : null
+      const a = q.xml ? taskAction(q.xml) : null
+      const warn = task === 'failed' ? `the task ${TASK_NAME} (it runs ${(a && a.command) || 'no program'}) could not be switched off (/Change /DISABLE: ${errOf(off)}), so it still runs at every login beside the Run entry that starts trocar; an account allowed to change it can delete it: schtasks /Delete /TN ${TASK_NAME} /F`
+        : q.state === 'unknown' ? `${q.err}: a task ${TASK_NAME} may still run at every login beside the Run entry that starts trocar` : null
       const started = now ? startDirect() : null
       const base = { via: 'run-key', reason: why, ledger: f.entry, ours: f.ours, event, ...(task ? { task } : {}), ...(warn ? { warn } : {}) }
       return started && started.code !== 0 ? { code: started.code, out: '', err: started.err, ...base } : { ...ok, ...base, ...(started ? { pid: started.pid } : {}) }

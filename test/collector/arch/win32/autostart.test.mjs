@@ -546,7 +546,7 @@ test('W24 a /Create that schtasks refused: the Run value is written with the sam
   assert.match(r.event.reason, /Access is denied/)
   assert.match(r.event.reason, /Run/, 'the event names the entry that is used instead')
   assert.deepEqual(checkRecord(r.event), [], 'a record of the closed set')
-  assert.deepEqual(run.calls.map((c) => c.slice(0, 2).join(' ')), ['schtasks /Create', 'reg query', 'reg add', 'reg query', 'schtasks /Query'], 'create, look at the old value, write, read it back, look whether an earlier task is there to switch off; no /Run (there is no task)')
+  assert.deepEqual(run.calls.map((c) => c.slice(0, 2).join(' ')), ['schtasks /Create', 'reg query', 'reg add', 'reg query', 'schtasks /Query', 'schtasks /Query'], 'create, look at the old value, write, read it back, look whether a task is there to switch off; no /Run (there is no task)')
   assert.deepEqual(run.calls[2], ['reg', 'add', RUN_PATH, '/v', 'trocar-collector', '/t', 'REG_SZ', '/d', COMMAND, '/f'])
   assert.equal(run.reg.value.value, COMMAND)
   assert.equal(COMMAND, `conhost.exe ${inner(x2(u.text({})), 'Arguments')}`, 'the command is the task\'s action: the same supervised one')
@@ -706,11 +706,11 @@ test('W24 exactly one login mechanism is live: enable by the task takes trocar\'
   const odd = installed(userUnit({ ...withHome(), run: fakeTools({ 'reg query': { status: 0, stdout: 'garbage' } }) })).enable({ now: false })
   assert.equal(odd.runKey, 'failed')
   assert.match(odd.warn, /Run/)
-  // the other way round: the Task Scheduler refuses, the Run value is written, and an earlier task is switched off
+  // the other way round: the Task Scheduler refuses, the Run value is written, and a task under trocar's name (here one someone else put there) is switched off
   const earlier = (over = {}) => {
     const reg = fakeRegistry()
     const run = (file, args, opts) => {
-      if (file === 'schtasks' && args[0] === '/Query') return { status: 0, stdout: '', stderr: '' }
+      if (file === 'schtasks' && args[0] === '/Query') return { status: 0, stdout: args.includes('/XML') ? asSchtasksPrintsIt(TASK_XML(true, '<Command>C:\\other\\run.exe</Command><Arguments>/token s3cret</Arguments>')) : '', stderr: '' }
       if (file === 'schtasks' && args[0] === '/Change') return { stdout: '', stderr: '', ...(over.change || { status: 0 }) }
       return reg(file, args, opts)
     }
@@ -726,6 +726,7 @@ test('W24 exactly one login mechanism is live: enable by the task takes trocar\'
   assert.deepEqual([g.code, g.via, g.task], [0, 'run-key', 'failed'])
   assert.match(g.warn, /\\trocar\\collector/)
   assert.match(g.warn, /Access is denied/)
+  assert.ok(g.warn.includes('C:\\other\\run.exe') && !g.warn.includes('s3cret'), 'the task is named by its program, never its arguments')
   const none = fakeRegistry() // schtasks /Query answers 1: no task, nothing to switch off
   const h = installed(userUnit({ ...withHome(), run: none })).enable({ now: false })
   assert.deepEqual([h.code, h.via, h.task, h.warn], [0, 'run-key', undefined, undefined])
