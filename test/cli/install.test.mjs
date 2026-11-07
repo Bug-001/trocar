@@ -344,7 +344,7 @@ test('1.6 §3.2: a damaged record moved aside as the refusal says: install no lo
   await runInstallCli(['--yes', '--json'], { io: said, env: {}, home, platform: 'darwin', deps: { getuid: () => 501 } })
   const [, from, to] = said.json().error.message.split('\n').find((l) => l.trim().startsWith('mv ')).match(/^\s*mv '(.+)' '(.+)'$/)
   assert.equal(from, file)
-  const { io } = await cli(['--dry-run', '--json'], { setup: (w) => fs.writeFileSync(path.join(w.dir, path.basename(to)), '{ not json') }) // what is left once it is moved
+  const { io } = await cli(['--dry-run', '--json'], { setup: (w) => { fs.mkdirSync(w.dir, { recursive: true }); fs.writeFileSync(path.join(w.dir, path.basename(to)), '{ not json') } }) // what is left once it is moved
   assert.equal(io.json().error, undefined, io.text())
   assert.ok(io.json().planned.length > 0)
 })
