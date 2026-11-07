@@ -305,6 +305,7 @@ export function normRespChat(rec) {
   const body = resp.body && typeof resp.body === 'object' ? resp.body : null;
   const frames = events.length ? events : (body ? [body] : []);
   let text = '', thinking = '', model = null, id = null, stop = null, usage = {}, error = false;
+  const open = new Set(), done = new Set();                   // choices seen that have not finished (n > 1: each must end)
   const acc = new Map();                                       // tool_calls arrive split across deltas
   for (const e of frames) {
     if (!e || typeof e !== 'object') continue;
@@ -314,7 +315,8 @@ export function normRespChat(rec) {
     if (e.id) id = e.id;
     for (const c of Array.isArray(e.choices) ? e.choices : []) {
       if (!c || typeof c !== 'object') continue;
-      if (c.finish_reason) stop = c.finish_reason;
+      const ci = c.index ?? 0;
+      if (c.finish_reason) { stop = c.finish_reason; open.delete(ci); done.add(ci); } else if (!done.has(ci)) open.add(ci);
       if (c.usage) usage = c.usage;                             // Kimi reports usage inside the choice
       const d = c.delta || c.message || {};
       if (typeof d.reasoning_content === 'string') thinking += d.reasoning_content;
@@ -332,7 +334,7 @@ export function normRespChat(rec) {
     }
   }
   const tools = [...acc.values()].map((t) => ({ id: t.id, name: t.name, input: safeJson(t.args) }));
-  return { model, id, stop_reason: stop, usage, text, thinking: thinking || undefined, tools, ...(error ? { error } : {}) };
+  return { model, id, stop_reason: stop, usage, text, thinking: thinking || undefined, tools, ...(error ? { error } : {}), ...(open.size ? { unfinished: open.size } : {}) };
 }
 
 // ── shape-dispatched entry points (the shared view layer calls THESE, never a per-shape branch) ────
@@ -378,9 +380,9 @@ export function normEvents(events) {
   }
   // fallback: if no response.completed (interrupted), stitch text from output_text.delta events
   if (!completed) for (const e of events || []) if (e && e.type === 'response.output_text.delta') text += e.delta || '';
-  const errored = !completed && (events || []).some((e) => e && e.type === 'error');
+  const errorEvent = (events || []).some((e) => e && e.type === 'error'), errored = !completed && errorEvent;
   return { model: (completed && completed.model) || null, id: (completed && completed.id) || null,
-    stop_reason: (completed && completed.status) || (errored ? 'error' : null), usage, text, thinking: undefined, tools: toolCalls };
+    stop_reason: (completed && completed.status) || (errored ? 'error' : null), usage, text, thinking: undefined, tools: toolCalls, ...(errorEvent ? { errorEvent } : {}) };
 }
 export function normResp(rec) {
   const resp = (rec && rec.resp) || (rec && rec.response) || {};
@@ -447,7 +449,7 @@ const CHAT_REPLY = {
 // The reply's own terminal (3.1 `ended`), a closed list per wire: anything not named is null and keeps the rest of the failed rule.
 const RESPONSES_ENDS = Object.freeze({ ok: ['completed', 'incomplete'], failed: ['failed', 'error'] }); // normEvents: 'error' = an error event, no terminal
 const CHAT_ENDS = Object.freeze({ ok: ['stop', 'length', 'tool_calls', 'function_call', 'content_filter'], failed: [] }); // a failure is an error chunk
-export const responsesEnded = (norm) => endOf(RESPONSES_ENDS, [norm.stop_reason]);
+export const responsesEnded = (norm) => endOf(RESPONSES_ENDS, [norm.stop_reason, ...(norm.errorEvent ? ['error'] : [])]); // an error event anywhere fails it
 export const RESPONSES = Object.freeze({
   id: 'openai-responses', provider: 'openai', blockKeys: ['tools', 'instructions', 'input'],
   boardFlat: (req) => boardFlat(req), normResp: (rec) => normResp(rec),
@@ -460,7 +462,7 @@ export const CHAT = Object.freeze({
   id: 'openai-chat', provider: 'openai', blockKeys: ['tools', 'messages'],
   boardFlat: (req) => boardFlatChat(req), normResp: (rec) => normRespChat(rec),
   reqCounts: (req) => reqCountsFor('chat', req), ctxTokens,
-  ended: (norm) => (norm.error ? 'failed' : endOf(CHAT_ENDS, [norm.stop_reason])),
+  ended: (norm) => (norm.error ? 'failed' : norm.unfinished ? null : endOf(CHAT_ENDS, [norm.stop_reason])),
   replyParts: (rec) => streamParts(rec, CHAT_REPLY),
   messageCount: (req) => (Array.isArray(req && req.messages) ? req.messages.length : 0),
 });

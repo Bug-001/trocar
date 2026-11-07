@@ -24,11 +24,14 @@ const CASES = [
   [R, [resp('response.failed', 'failed')], 'failed'],
   [R, [{ type: 'error', message: 'x' }], 'failed'],
   [R, [resp('response.created', 'in_progress')], null],
+  [R, [resp('response.completed', 'completed'), { type: 'error', message: 'x' }], 'failed'], // an error event after the terminal still fails it
   ...['stop', 'length', 'tool_calls', 'function_call', 'content_filter'].map((f) => [C, [choice(f)], 'ok']),
   [C, [choice('stop'), { error: { message: 'x' } }], 'failed'],
   [C, [choice('error')], null],
   [C, [choice('insufficient_system_resource')], null],
   [C, [{ choices: [{ index: 0, delta: { content: 'a' } }] }], null],
+  [C, [{ choices: [{ index: 1, delta: { content: 'a' } }] }, choice('stop')], null], // n > 1: one choice still open
+  [C, [{ choices: [{ index: 0, delta: { content: 'a' } }] }, choice('stop'), { choices: [{ index: 0, delta: {} }] }], 'ok'], // a finished choice stays finished
 ]
 
 test('3.1 ended: each wire names its success and failure endings; anything else is null', () => {
