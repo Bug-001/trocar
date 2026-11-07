@@ -12,6 +12,7 @@ import { readManifest, saveManifest } from '../../src/off/manifest.mjs'
 import { codeId, selfCommand } from '../../src/version.mjs'
 import { fakeIo, fakeSystem, onCtx, seedClaude, snapshot, changedFiles } from './fixtures/on-ctx.mjs'
 import { unitPath, UNIT_NAME } from '../../src/collector/arch/linux/unit.mjs'
+import { validateReceipt } from '../../src/cli/schema.mjs'
 
 const certBytes = (home) => Object.fromEntries(Object.entries(snapshot(home)).filter(([k]) => k.startsWith('.trocar/collector/ca/') || k === '.claude/settings.json'))
 
@@ -209,4 +210,24 @@ test('Linux install: the plan names every file of the standalone undo', async ()
   assert.equal(await runInstallCli(['--dry-run', '--json'], { ...onCtx(home, io), platform: 'linux' }), 0, io.text())
   const planned = io.json().planned
   for (const f of standaloneFiles(home, 'linux')) assert.ok(planned.some((p) => p.path === f), `${f} is planned: ${JSON.stringify(planned)}`)
+})
+
+// 1.6 §1.1②: one fact once. A harness install skips is said under Skipped: in the plan, with its reason; the receipt does not say the same reason
+// again as a Note (a real Linux run listed codex and z-code both ways)
+test('Linux install: a skipped harness\'s reason is said once, not again as a note', async () => {
+  const home = tmpDir('trocar-skip-once-')
+  seedClaude(home)
+  const { loadHarnesses } = await import('../../src/collector/harness/index.mjs')
+  const io = fakeIo()
+  assert.equal(await runInstallCli(['--yes'], { ...onCtx(home, io, { harnesses: (await loadHarnesses()).filter((d) => d.trust) }), platform: 'linux' }), 0, io.text()) // the Linux descriptors: most have no home here
+  const text = io.text()
+  const skipped = (text.match(/^Skipped: (.*)$/m) || [])[1]
+  assert.ok(skipped, 'some harness is skipped in this world')
+  const notes = text.split('\n').filter((l) => l.startsWith('Note: '))
+  for (const n of notes) { const h = n.slice(6, n.indexOf(':', 6)); assert.ok(!skipped.includes(`${h} (`), `${h} is in Skipped: and in a Note: ${n}`) }
+  const js = fakeIo()
+  assert.equal(await runInstallCli(['--yes', '--json'], { ...onCtx(home, js, { harnesses: (await loadHarnesses()).filter((d) => d.trust) }), platform: 'linux' }), 0)
+  const doc = js.json()
+  assert.ok(doc.skipped.length && doc.skipped.every((x) => x.what && x.reason), 'the document keeps each skip with its reason, as skipped (C.1)')
+  assert.deepEqual(validateReceipt(doc), [])
 })
