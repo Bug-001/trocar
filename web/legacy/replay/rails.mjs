@@ -1,7 +1,7 @@
 // replay/rails.mjs — the overlay rows under the main track (1.3 §叠加轨; the track parts themselves are 2.1's): the
-// 子 agent group, the 后台调用 group (both collapsed by default — a collapsed group draws only the failed × and, since
-// S13, the flagged marks) and the token 计数 row (mini bars, open by default, at most 300 drawn). Words come from the
-// lane kind table (labels/replay.mjs) — never the server's icon or note (the note rides into the drawer's 技术细节).
+// 子 agent group, the 后台调用 group (both collapsed by default — a collapsed group draws only the failed ×) and the token
+// 计数 row (mini bars, open by default, at most 300 drawn). Words come from the lane kind table (labels/replay.mjs) — never
+// the server's icon or note (the note rides into the drawer's 技术细节).
 // Every count the rows name is the full truth; only what is drawn is windowed and sampled.
 // `el` is #rails; `s` is the replay desk's state object.
 import { esc, kf, usd } from '../core/fmt.mjs'
@@ -10,20 +10,16 @@ import { attrSel } from '../core/dom.mjs'
 import { when } from './analysis.mjs'
 import { xOf, windowCalls, nearestByX, nearestByTs, turnsReviewed, placeOf } from './lanes.mjs'
 import { usageOf, priceMatch, costOf, isFailed as failOf } from '../core/metrics.mjs'
-import { laneKind, laneWord, SUBAGENT_ROW, BG_ROW, BG_ROW_HINT, TC_ROW, laneTimes, callsWord, TC_SAMPLED_TIP, TC_NO_SIZE, FLAGGED_WORD, ONLY_MAIN } from '../labels/replay.mjs'
+import { laneKind, laneWord, SUBAGENT_ROW, BG_ROW, BG_ROW_HINT, TC_ROW, laneTimes, callsWord, TC_SAMPLED_TIP, TC_NO_SIZE, ONLY_MAIN } from '../labels/replay.mjs'
 import { L } from '../core/labels.mjs'
 
 // only the lanes that read the conversation get the review bracket (2.1 ⑤)
 export const reviewing = (lane) => lane.kind === 'monitor' || lane.kind === 'token-count'
 
 // ── ticks ──────────────────────────────────────────────────────────────────────────────────────────────────────────
-// a call a monitor verdict flagged: the verdict lives in its held lane's `events` (type monitor, 3.5 §会话读); a lane that is
-// not held says nothing per call (its header's `flagged` marks the row name)
-const flaggedOf = (s, lane, c) => { const h = s.desk && s.desk.held.get(lane.id), e = h && (h.events.get(c.rid) || []).find((x) => x.type === 'monitor'); return !!(e && e.flagged === true) }
-
 // ticks outside the brush window are culled, not piled at the edges; a tick names its call by data-rid, never by a place in the lane:
 // the lanes can move on before the tick is drawn again (2.3 §播放头是调用).
-// A failed call draws ×; a monitor verdict flagged true carries the mark.
+// A failed call draws ×. No safety-review mark until the server reads its verdicts right (2.1 §边界情况 安全审查的结论).
 export function renderTicks(lane, s) {
   const win = windowCalls(lane, s.anchorTs, s.view)
   const x = (c) => (xOf(s.anchorTs, s.view, c.ts) * 100).toFixed(2)
@@ -40,20 +36,14 @@ export function renderTicks(lane, s) {
     }).join('')
   }
   return win.map(({ c, i }) =>
-    `<span class="tick ${flaggedOf(s, lane, c) ? 'flag' : ''} ${failOf(c) ? 'errtick' : ''}" data-lane="${esc(lane.id)}" data-rid="${esc(c.rid)}" style="left:${x(c)}%" title="${esc(tip(c, i))}"></span>`).join('')
+    `<span class="tick ${failOf(c) ? 'errtick' : ''}" data-lane="${esc(lane.id)}" data-rid="${esc(c.rid)}" style="left:${x(c)}%" title="${esc(tip(c, i))}"></span>`).join('')
 }
 
-// the marks a collapsed group still draws: the failed × of every member lane, and its flagged monitor calls —
-// each one clickable, opening that call in the drawer
+// the marks a collapsed group still draws: the failed × of every member lane, each one clickable, opening that call in the drawer
 function collapsedMarks(lanes, s) {
   const x = (c) => (xOf(s.anchorTs, s.view, c.ts) * 100).toFixed(2)
-  return lanes.flatMap((l) => windowCalls(l, s.anchorTs, s.view).filter((o) => failOf(o.c) || flaggedOf(s, l, o.c)).map((o) => ({ ...o, l })))
-    .map(({ c, i, l }) => {
-      const head = `${laneWord(l.kind)} · call ${i + 1} · ${when(c.ts)}`
-      return failOf(c)
-        ? `<span class="tick errtick" data-lane="${esc(l.id)}" data-rid="${esc(c.rid)}" style="left:${x(c)}%" title="${esc(head + ' · call failed')}"></span>`
-        : `<span class="tick flag" data-lane="${esc(l.id)}" data-rid="${esc(c.rid)}" style="left:${x(c)}%" title="${esc(head + ' · ' + FLAGGED_WORD)}"></span>`
-    }).join('')
+  return lanes.flatMap((l) => windowCalls(l, s.anchorTs, s.view).filter((o) => failOf(o.c)).map((o) => ({ ...o, l })))
+    .map(({ c, i, l }) => `<span class="tick errtick" data-lane="${esc(l.id)}" data-rid="${esc(c.rid)}" style="left:${x(c)}%" title="${esc(`${laneWord(l.kind)} · call ${i + 1} · ${when(c.ts)} · call failed`)}"></span>`).join('')
 }
 
 // one lane's name. Background kinds are named by their word + the full call count; a subagent is named by its task
@@ -81,7 +71,7 @@ function railHtml(l, s, { sub = false } = {}) {
   const name = railName(l, s, sub)
   // the row name ellipsizes in the gutter; its hover carries the whole of it, the lane's own label and the kind's hint
   const lab = String(l.label || '')
-  const tip = [name, lab && !name.includes(lab) ? lab : '', l.flagged === true ? FLAGGED_WORD : '', hint].filter(Boolean).join(' · ')
+  const tip = [name, lab && !name.includes(lab) ? lab : '', hint].filter(Boolean).join(' · ')
   return `<div class="rail k-${esc(l.kind)} tkrow">` +
     `<div class="tgut railname ${col ? 'col' : ''}" data-toggle="${esc(l.id)}" title="${esc(tip)}"><span class="tw">${discChev(!col)}</span> <span class="tn">${esc(name)}</span></div>` +
     (col ? '<div class="tlane"></div>' : `<div class="tlane railbody" data-lane="${esc(l.id)}">${renderTicks(l, s)}</div>`) + `</div>`

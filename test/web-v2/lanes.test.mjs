@@ -230,3 +230,22 @@ test('1.3 §叠加轨: a lane that arrives late lands in step order of its first
   applySession(desk, { base: desk.mark, mark: desk.mark, calls: [], gone: [], events: [], lanes: [{ lane: 'R9-0', kind: 'monitor', first: 'R9-0', count: 4 }, { lane: before[0], kind: 'subagent', first: before[0], count: 3 }] })
   assert.deepEqual(buildLanes(desk, null).map((l) => l.id), [...after, 'R9-0'])
 })
+
+// 2.1 §边界情况 安全审查的结论: until the server reads its verdicts right, a verdict flagged true draws no mark and no count anywhere
+test('2.1 #12: a review call flagged true draws no mark, folded or open, and the row names no flag; a failed call still draws ×', () => {
+  const desk = deskOf([{ kind: 'main', rows: [{}, {}] }, { kind: 'monitor', rows: [{}, {}, { status: 500, error: 'overloaded_error' }], blocks: [[], [], []], head: { flagged: 3 } }])
+  const mon = [...desk.lanes.values()].find((h) => h.kind === 'monitor').lane
+  for (const rid of desk.laneRids.get(mon)) desk.held.get(mon).events.set(rid, [{ type: 'monitor', rid, lane: mon, verdict: '<block>yes</block>', flagged: true }])
+  const s = { ...markedDesk(desk), desk, railsFolded: false, subSeeded: new Set(), collapsedRails: new Set(), subgroupOpen: false, bgOpen: false, selTick: null }
+  const flag = /class="tick[^"]*\bflag\b/, el = { innerHTML: '', querySelector: () => null }
+  const lane = s.lanes.find((l) => l.kind === 'monitor')
+  assert.doesNotMatch(renderTicks(lane, s), flag)
+  assert.equal(renderTicks(lane, s).match(/errtick/g)?.length, 1)
+  renderRails(el, s)
+  assert.doesNotMatch(el.innerHTML, flag)
+  assert.deepEqual([...el.innerHTML.matchAll(/<span class="tick ([^"]*)"/g)].map((m) => m[1].trim()), ['errtick'], 'the folded row draws only the ×')
+  s.bgOpen = true
+  renderRails(el, s)
+  assert.doesNotMatch(el.innerHTML, flag)
+  assert.doesNotMatch(el.innerHTML, /flagged/i)
+})

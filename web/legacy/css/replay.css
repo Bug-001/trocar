@@ -133,7 +133,6 @@
   .rail.k-notify .tick{background:var(--green);} .rail.k-titlegen .tick{background:var(--cyan);} .rail.k-quota .tick{background:var(--dimmer);opacity:.6;}
   #detail.k-notify{border-top-color:var(--green);} #detail.k-titlegen{border-top-color:var(--cyan);} #detail.k-quota{border-top-color:var(--dimmer);}
   .tick:hover,.tick.sel{outline:2px solid var(--fg);z-index:2;}
-  .tick.flag{background:var(--red);box-shadow:0 0 6px var(--red);}
   .tick.errtick{background:var(--red)!important;opacity:.85;width:6px;height:6px;top:7px;}
   .pbar{position:absolute;bottom:0;width:2px;background:var(--cyan);opacity:.45;transform:translateX(-50%);cursor:pointer;border-radius:1px 1px 0 0;}
   .pbar:hover,.pbar.sel{opacity:1;}
