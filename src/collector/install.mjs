@@ -28,7 +28,7 @@ import { appendEvent } from './core/events.mjs'
 import { runEventWriter } from '../off/events.mjs'
 import { hideUserinfoIn } from '../off/userinfo.mjs'
 import { backupDir, opLockFile, standalonePath, standaloneFiles } from '../off/paths.mjs'
-import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
+import { acquireOpLock, tryOpLock, LOCK_BUSY } from '../off/lock.mjs'
 import { readStateFile, emptyState, setDesired, writeStateAtomic } from '../off/state.mjs'
 import { newReceipt, UNDO_LINE } from '../off/schema.mjs'
 import { OFF_VERSION, installComplete } from '../off/manifest.mjs'
@@ -635,7 +635,7 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = nul
       // `install` registers and starts (enable); `on` only starts, through the OS mechanism, and itself when that refuses — the reason said, never dropped (D38)
       const startAt = ms()
       const held = register ? loginEntry(dir, fs) : null
-      // R12 · 4.8 §7: a caller that registers holds op.lock, and a login entry the arch uses instead of its own is recorded (with the user's prior) before it is written
+      // 4.8 §7: a login entry the arch uses instead of its own is recorded (with the user's prior) before it is written
       const record = (ledger, ours) => recordLoginEntry(dir, fs, { ledger, ours }, ms)
       let rr = register ? unit.enable({ now: !was.up, prior: held && held.entry ? held.entry.prior ?? null : null, record }) : (was.up ? null : unit.startNow())
       if (!register && rr && rr.code !== 0 && typeof unit.start === 'function') {
@@ -709,10 +709,17 @@ function loginEntry(dir, fs) {
   return { m, at, entry: at >= 0 ? m.entries[at] : null }
 }
 // → null, or why the record could not be put right. A value that was trocar's already (`ours`) keeps the prior the record has.
+// R12: the read and save hold op.lock, and only they: the OS's start of the collector can outlast the 10 s an off waits for the lock (1.6 R12)
 function recordLoginEntry(dir, fs, rr, ms) {
-  const held = loginEntry(dir, fs)
   const what = rr.ledger ? `the login entry ${rr.ledger.hive}\\${rr.ledger.key}\\${rr.ledger.name}` : 'the login entry trocar took out'
   const after = rr.ledger ? 'so it was not written' : 'trocar uninstall still takes it out' // a new entry is recorded before it is written (4.8 §7 W24)
+  let got
+  try { got = tryOpLock({ file: path.join(dir, path.basename(opLockFile())), fs }) } catch (e) { return `${what} could not be recorded (${(e && e.message) || e}); ${after}` }
+  if (!got.lock) return `${what} could not be recorded: another trocar command (pid ${got.holder && got.holder.pid}) is changing the install record; ${after}`
+  try { return saveLoginEntry(dir, fs, rr, ms, what, after) } finally { got.lock.release() }
+}
+function saveLoginEntry(dir, fs, rr, ms, what, after) {
+  const held = loginEntry(dir, fs)
   if (!held) return `${what} could not be recorded: the install record could not be read; ${after}`
   const { m, at, entry } = held
   if (rr.ledger) {

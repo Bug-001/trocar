@@ -88,6 +88,19 @@ test('4.8 §7: a later install whose /Create is accepted takes the Run value out
   assert.equal(b.doc.autostart.entry, TASK_NAME)
 })
 
+// 1.6 R12: off waits at most 10 s for op.lock, and the OS may hold the collector's start longer (launchd's 10 s throttle, the 15 s wait for the
+// daemon to answer): install holds the lock for the record's save, never for the start
+test('R12: op.lock is free while install registers and starts the collector', async () => {
+  const w = await world(windows())
+  const lockFile = opLockFile(w.home)
+  let seen = null
+  const enable = w.unit.enable
+  w.unit.enable = (o) => { seen = fs.existsSync(lockFile); return enable(o) }
+  const r = await w.install()
+  assert.equal(r.exit, 0, r.io.text())
+  assert.equal(seen, false, 'no lock held when the registration starts')
+})
+
 test('R12: the run-key entry is recorded under op.lock: another command that saves the install record while install registers keeps its entry', async () => {
   const win = windows()
   const w = await world(win)
