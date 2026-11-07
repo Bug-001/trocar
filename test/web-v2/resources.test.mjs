@@ -6,7 +6,7 @@
 // String level over desk-model states: the ledger is the anchor lane's `lane` answer as the desk holds it (desk-world.mjs).
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { resourcesHtml, renderResources, wireResources } from '../../web/legacy/replay/resources.mjs'
+import { resourcesHtml, renderResources, wireResources, resourceUnits } from '../../web/legacy/replay/resources.mjs'
 import * as W from '../../web/legacy/labels/replay.mjs'
 import { esc, kf } from '../../web/legacy/core/fmt.mjs'
 import { relPath } from '../../web/legacy/replay/analysis.mjs'
@@ -249,4 +249,41 @@ test('2.4 #13: a resource with a runtime code sits in its own group, never in th
     const row = h.match(new RegExp(`<div class="navsub[^"]*"[^>]*data-navres="file:x${i}/\\$f">[\\s\\S]*?</div>`))
     assert.ok(row && row[0].includes(esc(W.RUNTIME_WHY[c])), c)
   })
+})
+
+test('2.4 #14: a ledger that cannot be known says so alone, and a --from null clears what was held; a partial ledger says so on top', () => {
+  const key = R(0)
+  const steps = Array.from({ length: 6 }, (_, i) => ({ rid: R(i), parent: null, ops: [[1]], reply: [], attrs: {}, detail: null }))
+  const res = [{ kind: 'file', label: 'src/a.mjs', segments: [{ enter: R(0), evict: null }] }].map((r) => ({ key: `${r.kind}:${r.label}`, ...r }))
+  const seen = [{ path: 'docs/x.md', count: 1, firstRid: R(1) }]
+  const page = (o) => ({ lane: key, base: null, prev: null, next: null, steps, defs: [], events: [], ledger_next: null, resources: res, seen, ...o })
+  const text = (h) => h.replace(/<[^>]*>/g, ' ')
+  const s = stateOf(anchorOf({}))
+  // a list, then a --from page whose lane has no ledger: nothing of the list stays
+  applyLane(s.desk, page({}))
+  assert.ok(text(resourcesHtml(s)).includes('a.mjs'))
+  applyLane(s.desk, page({ base: R(5), steps: [], resources: null, seen: null, resources_note: 'no-ledger' }))
+  let h = resourcesHtml(s)
+  assert.ok(h.includes(esc(W.NO_LEDGER)))
+  assert.ok(!text(h).includes('a.mjs') && !text(h).includes('x.md'), 'no earlier entry lingers')
+  assert.ok(!h.includes(esc(W.NO_RESOURCES)) && grpCount(h, W.RES_GRP.file) == null, 'no group, not the empty-list sentence')
+  // a tail page that is only part of the lane: the line on top, the groups as usual; a later page without the code drops the line
+  applyLane(s.desk, page({ resources_note: 'partial-ledger' }))
+  h = resourcesHtml(s)
+  assert.equal(resourceUnits(s)[0].key, 'partial', 'the partial line sits on top')
+  assert.equal(grpCount(h, W.RES_GRP.file), 1)
+  assert.ok(!h.includes(esc(W.NO_LEDGER)))
+  // only quiet groups kept (names seen, no file): they still stand on their own, not behind 「N more」
+  applyLane(s.desk, page({ resources: [], resources_note: 'partial-ledger' }))
+  assert.equal(grpCount(resourcesHtml(s), `${W.RES_GRP.seen} · ${W.GUESS}`), 1)
+  assert.ok(!resourceUnits(s).some((u) => u.key === 'h:life-others'), 'no 「N more」 row hides the only groups')
+  applyLane(s.desk, page({}))
+  assert.ok(!resourcesHtml(s).includes(esc(W.PARTIAL_LEDGER)))
+  // the live path: the ledger head read (applyLedger) and a whole no-ledger page say the same
+  for (const read of [(x) => applyLedger(s.desk, key, null, { base: R(5), ...x }), (x) => applyLane(s.desk, page(x))]) {
+    applyLane(s.desk, page({}))
+    read({ resources: null, seen: null, resources_note: 'no-ledger' })
+    const h = resourcesHtml(s)
+    assert.ok(h.includes(esc(W.NO_LEDGER)) && !text(h).includes('a.mjs'))
+  }
 })
