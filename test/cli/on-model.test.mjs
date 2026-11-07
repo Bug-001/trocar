@@ -12,6 +12,7 @@ import { checkRecord } from '../../src/health/codes.mjs'
 import { assertEnglish } from '../helpers/english.mjs'
 import { snapshot } from './fixtures/on-ctx.mjs'
 import { startControlServer } from '../../src/collector/core/control.mjs'
+import { standalonePath } from '../../src/off/paths.mjs'
 
 function fakeIo() {
   const out = [], err = []
@@ -152,6 +153,27 @@ test('V104 proxy (darwin): the daemon opens doors for the first harness only →
     assert.deepEqual(last.harnesses, [asked.harnesses[0]], JSON.stringify(last))
     assert.deepEqual(checkRecord(last), [])
   } finally { await server.close() }
+})
+
+// 1.6 §3.3: a copy that cannot be written stops on and changes nothing — through the CLI, whose own write after turnOnModel (confirmed_paths) is part of the run
+test('1.6 §3.3 (darwin): the undo copy cannot be written → on exits 1, undo null, no harness named, HOME byte for byte unchanged', async () => {
+  const w = await modelWorld({ os: 'darwin', commands: ['codex'] })
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  fs.rmSync(standalonePath(w.home), { force: true }); fs.mkdirSync(standalonePath(w.home), { recursive: true }) // a directory where the copy goes
+  const sock = path.join(w.home, 'c.sock'), token = 't'.repeat(32)
+  fs.writeFileSync(path.join(w.dir, 'control.json'), JSON.stringify({ path: sock, token }))
+  const mine = (h) => Object.fromEntries(Object.entries(snapshot(h)).filter(([k]) => !k.includes('collector/flows') && k !== 'c.sock'))
+  const before = mine(w.home)
+  const server = await startControlServer({ socketPath: sock, token, routes: {
+    'GET /status': async () => ({ doors: {} }),
+    'POST /on': async ({ body }) => ({ doors: Object.fromEntries(Object.entries(body.groups).map(([g, port]) => [g, `http://${encodeURIComponent(g)}:${token}@127.0.0.1:${port}`])) }),
+  } })
+  try {
+    const r = await on(w, 'darwin', ['--yes', '--json'])
+    assert.equal(r.exit, 1, r.io.text())
+    assert.deepEqual([r.io.json().undo, r.io.json().harnesses], [null, []], r.io.text())
+  } finally { await server.close() }
+  assert.deepEqual(mine(w.home), before, 'no manifest, state.json or agent file written')
 })
 
 // 1.6 §3.3 要确认时: the plan names each setting once; "since you last said yes" is said only when there was an earlier yes, on the rows it is new for

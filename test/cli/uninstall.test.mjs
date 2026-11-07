@@ -14,6 +14,7 @@ import { installedHome, writeDaemonLock, flowEvents, procTable, fakeClock, DAEMO
 import { fakeIo } from './fixtures/on-ctx.mjs'
 import { assertEnglish } from '../helpers/english.mjs'
 import { writeNetenv, netenvFile } from '../../src/netenv/index.mjs'
+import { backupsOf } from '../../src/off/backup.mjs'
 
 const BASE = new Date('2026-10-07T00:00:00Z')
 /** `trocar uninstall <argv>` over a sandbox: the exit code, and what it printed. §3.6 — uninstall always asks, so a case that is not about
@@ -369,12 +370,24 @@ test('V24 (uninstall): with the install manifest gone and no terminal, uninstall
   assert.deepEqual([first.receipt.daemon ? first.receipt.daemon.state : 'none', s.sys.exec.calls.filter((c) => /stop /.test(c)).length], ['none', 0], 'the daemon was not stopped either: nothing was done')
   const second = await s.uninstall({ yes: true })
   assert.equal(second.exit, 0, JSON.stringify(second.receipt.problems))
-  assert.ok(second.receipt.changed.some((c) => c.result === 'undone-by-marker'), 'the entries went by trocar\'s own marks')
   assert.deepEqual([second.receipt.routing.confirmed, second.receipt.daemon.state], [true, 'stopped'], 'the routing is off and the daemon stopped')
   assert.equal(fs.readFileSync(path.join(s.home, '.codex', '.env'), 'utf8'), codexOriginal, 'the block is out and the commented user line is back')
   assert.equal(fs.readFileSync(path.join(s.home, '.claude', 'settings.json'), 'utf8'), settingsOriginal, 'the JSON value is back, taken from the backup')
   assert.deepEqual(trocarFiles(s), [], 'and trocar\'s own files are gone by name')
   assert.ok(!fs.existsSync(path.join(s.home, '.trocar', 'backup')) && !fs.existsSync(path.join(s.home, '.config', 'systemd', 'user', 'trocar-collector.service')), 'with the backups and the unit file (no manifest says which directories trocar made, so empty ones stay)')
+})
+
+test('R3 (uninstall, no manifest): a file the marks cannot undo keeps its backups — here every backup that could hold the replaced value is unreadable: exit 1, the file is left, each backup still on disk and not among the dropped', async () => {
+  const s = await installedHome({ names: ['claude-code'], seed: (home, sh) => fs.writeFileSync(path.join(home, '.claude', 'settings.json'), `{\n  "env": { "NODE_EXTRA_CA_CERTS": "${sh.corp}" }\n}\n`) })
+  const file = path.join(s.home, '.claude', 'settings.json')
+  const backups = backupsOf({ home: s.home, file })
+  assert.ok(backups.length, 'install saved the file first')
+  for (const b of backups) fs.writeFileSync(b, '{ not json')
+  fs.rmSync(path.join(s.dir, 'install-manifest.json'))
+  const r = await s.uninstall({ yes: true })
+  assert.equal(r.exit, 1)
+  assert.ok(r.receipt.left.some((l) => l.path === file), JSON.stringify(r.receipt.left))
+  assert.deepEqual(backups.filter((b) => !fs.existsSync(b) || r.receipt.dropped_backups.includes(b)), [], 'its backups stay')
 })
 
 test('R3: a manifest this build does not read leaves every entry and every file alone but still takes the routing off, stops the daemon and exits 1; a manifest that cannot be parsed falls back to the marks', async () => {

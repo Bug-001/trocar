@@ -23,6 +23,7 @@ import { parseJsonc, hostOf } from '../core/config-read.mjs'
 import { CODE } from '../core/codes.mjs'
 import { urlHostsDeep, dotenvLayer, isOwnPath, perOs } from './_common.mjs'
 import { NETWORK_SERVICE_ARG } from '../../off/chromium.mjs'
+import { DOOR_ROUTES } from '../../off/marker.mjs'
 
 const ZCJS = '/glm/zcode\\.cjs$' // the bundle, as an `entry` pattern: the program the exe runs as Node (D51)
 
@@ -140,7 +141,7 @@ const proxy = {
 // Proxy mode, macOS and Windows (spec 4.11 §2.3, plan A.4): data only. Measured facts (cli, cli-node and the desktop all read
 // ~/.zcode/cli/config.json, re-read per new session; caCertFile = the merged bundle, D56⑨, since the key replaces the roots; the desktop's app-server is the
 // `zcode` + zcode.cjs name above). Blockers (ruling ⑩): a user proxy in the desktop's v2 setting.json, ZCODE_HTTP_PROXY, ZCODE_AGENT_CA_CERT.
-const CLI_CONFIG = { base: 'home', path: '.zcode/cli/config.json' }
+const CLI_CONFIG = DOOR_ROUTES['z-code']['cli-config'].file // where `on` writes the door, the place the marker undo looks too
 const CA_KEY = { file: CLI_CONFIG, format: 'jsonc', keys: ['network', 'caCertFile'] }
 const DESKTOP = { base: 'home', env: 'ZCODE_DESKTOP_HOME_DIR', path: '.zcode/v2/setting.json' }
 const APP = perOs({ darwin: { base: 'abs', path: '/Applications/ZCode.app' }, win32: { base: 'localAppData', path: 'Programs/ZCode' } })
@@ -153,7 +154,7 @@ const proxyMode = {
     form('z-code.web', [APP], { darwin: { reason: 'out-of-scope' }, win32: { reason: 'out-of-scope' } }), // the shipped build has no web mode
   ],
   routes: {
-    'cli-config': { kind: 'json-key', file: CLI_CONFIG, format: 'jsonc', proxyKeys: [['network', 'httpProxy']], value: 'door-url', rereads: true, absent: 'create', takesEffect: 'takes effect for your next session; no restart needed' },
+    'cli-config': { kind: 'json-key', ...DOOR_ROUTES['z-code']['cli-config'], format: 'jsonc', value: 'door-url', rereads: true, absent: 'create', takesEffect: 'takes effect for your next session; no restart needed' },
   },
   certs: {
     // the user CAs carried into the bundle (header); without them a private-CA host was unreachable: on (measured), off (inferred)

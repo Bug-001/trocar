@@ -28,6 +28,7 @@ import { hostOf, expandHome } from '../core/config-read.mjs'
 import { CODE } from '../core/codes.mjs'
 import { lineComment } from '../../off/text-edit.mjs'
 import { normalizeName } from '../../off/identity.mjs'
+import { DOOR_ROUTES } from '../../off/marker.mjs'
 import { MARKER_VAR } from '../core/trust/confirm.mjs'
 import { envValues, envProxies, perOs } from './_common.mjs'
 import { renderShim } from './_plugins.mjs'
@@ -113,7 +114,7 @@ const proxyMode = {
   ],
   routes: {
     switch: { kind: 'switch-file', absent: 'create', takesEffect: 'takes effect the next time you start kimi' },
-    vscode: { kind: 'json-key', file: { base: 'appSupport', path: 'Code/User/settings.json' }, format: 'jsonc', proxyKeys: [['http.proxy']], arrayItems: [{ keys: ['settingsSync.ignoredSettings'], value: 'http.proxy' }], value: 'door-url', absent: 'create', takesEffect: 'not measured, inferred from the model: takes effect once you reload the VS Code window' },
+    vscode: { kind: 'json-key', ...DOOR_ROUTES['kimi-code'].vscode, format: 'jsonc', value: 'door-url', absent: 'create', takesEffect: 'not measured, inferred from the model: takes effect once you reload the VS Code window' },
   },
   certs: {
     wrapper: { kind: 'wrapper', command: 'kimi', binDir: { base: 'home', path: '.kimi-code/bin' }, certVar: CA_VAR, layout: 'native-binary' },

@@ -57,7 +57,7 @@ for (const p of PRIMITIVES) {
     })
     if (p.marker) test(`marker words · ${p.name} · ${words} words: the marker undo (no manifest) takes it out byte for byte`, () => {
       const x = placed(p, words)
-      const plan = planByMarker({ home: x.home, ids: [p.marker], env: { HOME: x.home }, platform: 'linux' }).filter((i) => i.path === x.file)
+      const plan = planByMarker({ home: x.home, ids: [p.marker], env: { HOME: x.home }, platform: 'linux', phases: ['install', 'on'] }).filter((i) => i.path === x.file)
       assert.equal(plan.length, 1, JSON.stringify(plan))
       const [r] = undoByMarker(plan, { home: x.home })
       assert.ok(!/^left|error/.test(r.result), JSON.stringify(r))

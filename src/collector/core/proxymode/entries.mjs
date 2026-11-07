@@ -7,18 +7,23 @@
 //   newId() → a config-library entry id }.
 // Every write goes through the install journal (core/trust/journal.mjs, phase 'on'): backup first, prior_value recorded, byte-faithful edits. Every undo
 // goes through src/off/journal.mjs: key by key, block by block; a key the user changed during on stays (D48②), bytes are compared whole only when
-// nothing changed. Records carry `route` (the route id: one entry group) and `door` (the URL written), so a moved door rewrites that route only.
+// nothing changed. Records carry `route` (the route id: one entry group) and the door written (sealed at save: `door_sha256`, src/off/seal.mjs), so a moved door rewrites that route only.
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { applyJsonKey, applyJsonArrayItem, applyTextEntry, writeOwnedFile, judgeOwned, saveManifest, undoEntry, removeOwnedFile, sha256 } from '../trust/journal.mjs'
-import { parseJsonText, getPath } from '../../../off/json-text.mjs'
+import { applyJsonKey, applyJsonKeys, applyTextEntry, writeOwnedFile, judgeOwned, saveManifest, undoEntry, removeOwnedFile, sha256 } from '../trust/journal.mjs'
+import { parseJsonText, getPath, removeKey } from '../../../off/json-text.mjs'
 import { decodeText } from '../../../off/text-codec.mjs'
+import { doorPorts, isDoorValue, LOOPBACK_HOSTS } from '../../../off/door-value.mjs'
+import { editTarget } from '../../../off/fsutil.mjs'
+import { BLOCK_OPEN } from '../../../off/text-edit.mjs'
+import { switchFileIn } from '../../../off/paths.mjs'
 import { parseDotenv } from '../config-read.mjs'
 import { resolveLoc, readSrc, holds, isPresent } from './sources.mjs'
 import { entryGate } from '../entry-forms.mjs'
 import { CODE } from '../codes.mjs'
+import { unseal, doorFp } from '../../../off/seal.mjs'
 
-export const LOOPBACK = Object.freeze(['localhost', '127.0.0.1', '::1'])
+export const LOOPBACK = LOOPBACK_HOSTS
 export const PAC_PATH = '/trocar.pac' // P10: the daemon serves the PAC here on the PAC group's door
 // a hostTree form's note (CM31): it names the form, since status prints it under the harness, beside forms that run on their own
 const hostTreeNote = (form) => `${form} runs inside another program: every other extension there connects through trocar too, and trocar passes those connections on without capturing them`
@@ -42,8 +47,31 @@ const readText = (ctx, f) => { try { const d = decodeText(ctx.fs.readFileSync(f)
 const parse = (t) => { if (t === undefined) return undefined; try { return t === null ? {} : parseJsonText(t) ?? {} } catch { return undefined } } // undefined: undecodable or unparsable
 const isSet = (v) => v !== undefined && v !== null && v !== ''
 const where = (file, keys) => `${file}#${keys.join('.')}`
-const base = (ctx) => ({ dir: ctx.dir, manifest: ctx.manifest, harness: ctx.harness, phase: 'on', home: ctx.home, now: ctx.now ? ctx.now() : new Date(), fs: ctx.fs })
+const base = (ctx) => ({ dir: ctx.dir, manifest: ctx.manifest, harness: ctx.harness, phase: 'on', home: ctx.home, door: ctx.door ?? null, now: ctx.now ? ctx.now() : new Date(), fs: ctx.fs }) // the door rides in the record from its intent on: saveManifest seals it
 const noProxy = (ctx, values) => mergeNoProxy({ userValues: values, persistent: ctx.persistentEnv ? ctx.persistentEnv(['NO_PROXY']) : {} })
+
+// P5: a value in the file that is one of trocar's doors (src/off/door-value.mjs, the judge off uses: loopback on a port ingress.json records) is no prior
+// of the user's — a manifest lost left it there. The journal starts from the text without it (`base`), so the command's one write, one backup and
+// pre_sha256 are of the file with the door out (4.6「日志」, V106: no door password in a backup): the key has no prior and off takes it out. A value a
+// record of this manifest holds is trocar's own (on again, R9) and stays.
+const doorJudge = (ctx) => { const p = doorPorts(ctx.dir, ctx.fs); return (v) => !!p.ports && typeof v === 'string' && isDoorValue(v, p.ports) }
+const sameKeys = (a, b) => Array.isArray(a) && Array.isArray(b) && a.join('\0') === b.join('\0')
+// text → the json text without the door values of `keys` that no record of this manifest holds
+function jsonWithoutDoors(ctx, file, keys) {
+  const isDoor = doorJudge(ctx), m = ctx.manifest.entries || []
+  const real = editTarget(file, ctx.fs)
+  const recorded = (k) => m.some((e) => (e.path === file || e.real_path === real || e.path === real) && sameKeys(e.keys, k))
+  return (text) => {
+    const doc = parse(text)
+    if (!doc) return text
+    return keys.filter((k, i) => keys.findIndex((x) => sameKeys(x, k)) === i && isDoor(getPath(doc, k)) && !recorded(k)).reduce((t, k) => (removeKey(t, k) || { text: t }).text, text)
+  }
+}
+// text → the dotenv text without the user's lines of `names` whose value is a door; a file holding trocar's block is left to the journal (which refuses it or joins it)
+function dotenvWithoutDoors(ctx, names) {
+  const isDoor = doorJudge(ctx)
+  return (text) => (text == null || text.includes(BLOCK_OPEN) ? text : text.split(/(?<=\n)/).filter((l) => !names.some((n) => isDoor(parseDotenv(l).get(n)))).join(''))
+}
 
 // ruling ③: a PAC route is not written over a system PAC, an applied entry with its own egress, or an own leg that needs credentials (the PAC door takes none)
 function pacGate(ctx, doc, file, value) {
@@ -81,11 +109,12 @@ function writeJson(ctx, door) {
   // the empty object) disagreed with it the moment the keys went in, and status read a byte-intact entry as changed (mac 2026-10-19).
   const text = readText(ctx, file)
   if (!create && text === null && r.absent === 'not-routed') return notRouted('absent', file)
-  const doc = parse(text)
+  const noDoors = jsonWithoutDoors(ctx, file, [...(r.proxyKeys || []), ...(r.ownKeys || [])])
+  const doc = parse(text == null ? text : noDoors(text))
   if (r.value === 'pac-url' && doc) { const g = pacGate(ctx, doc, file, value); if (g) return g }
-  for (const keys of r.proxyKeys || []) out.push(applyJsonKey({ ...b, file, keys, value }))
-  if (r.noProxyKeys) { const v = noProxy(ctx, r.noProxyKeys.map((k) => (doc ? getPath(doc, k) : undefined))); for (const keys of r.noProxyKeys) out.push(applyJsonKey({ ...b, file, keys, value: v })) }
-  for (const a of r.arrayItems || []) out.push(applyJsonArrayItem({ ...b, file, keys: a.keys, item: a.value }))
+  const sets = (r.proxyKeys || []).map((keys) => ({ keys, value }))
+  if (r.noProxyKeys) { const v = noProxy(ctx, r.noProxyKeys.map((k) => (doc ? getPath(doc, k) : undefined))); for (const keys of r.noProxyKeys) sets.push({ keys, value: v }) }
+  out.push(...applyJsonKeys({ ...b, file, sets, base: noDoors, items: (r.arrayItems || []).map((a) => ({ keys: a.keys, item: a.value })) })) // one write, one backup (4.6「日志」)
   if (create) out.push(applyJsonKey({ ...b, file: create.meta, keys: [ctx.route.select.idKey], value: create.id }))
   return { ok: true, records: out }
 }
@@ -96,15 +125,16 @@ function writeDotenv(ctx, door) {
   if (!file) return notRouted('no-path')
   const text = readText(ctx, file)
   if (text === null && r.absent === 'not-routed') return notRouted('absent', file)
-  const env = parseDotenv(text || '')
+  const noDoors = dotenvWithoutDoors(ctx, r.proxyKeys || [])
+  const env = parseDotenv((text && noDoors(text)) || '')
   const vars = Object.fromEntries((r.proxyKeys || []).map((k) => [k, door]))
   if (r.noProxyKeys) { const v = noProxy(ctx, r.noProxyKeys.map((k) => env.get(k))); for (const k of r.noProxyKeys) vars[k] = v }
-  return { ok: true, records: [applyTextEntry({ ...base(ctx), file, edit: { format: 'dotenv-block', vars, at: 'end' } })] }
+  return { ok: true, records: [applyTextEntry({ ...base(ctx), file, base: noDoors, edit: { format: 'dotenv-block', vars, at: 'end' } })] }
 }
 
 function writeOwned(ctx, file, role, data) {
   const j = judgeOwned({ manifest: ctx.manifest, file, planned: sha256(Buffer.from(data)), fs: ctx.fs })
-  if (j.action !== 'skip-intact') writeOwnedFile({ ...base(ctx), role, file, data })
+  if (j.action !== 'skip-intact') writeOwnedFile({ ...base(ctx), role, file, data, extra: ctx.door ? { door: ctx.door } : {} })
   return { ok: true, records: [ctx.manifest.files.find((f) => f.path === file)] }
 }
 
@@ -116,13 +146,20 @@ const KINDS = {
     if (!dir) return notRouted('no-path')
     return writeOwned(ctx, (ctx.join || path.join)(dir, ctx.route.name), 'plugin', ctx.render(ctx.route.template, { door, harness: ctx.harness }))
   },
-  'switch-file': (ctx, door) => writeOwned(ctx, (ctx.join || path.join)(ctx.dir, 'switch', ctx.harness), 'switch', door),
+  'switch-file': (ctx, door) => writeOwned(ctx, switchFileIn(ctx.dir, ctx.harness, ctx.join || path.join), 'switch', door),
 }
 
 /** The records of one route this harness's `on` wrote (phase 'on'), entries then owned files, in the order they were written. */
 export function recordsOf(manifest, harness, routeId) {
   const mine = (x) => x && x.harness === harness && x.phase === 'on' && x.route === routeId
   return [...((manifest && manifest.entries) || []).filter(mine), ...((manifest && manifest.files) || []).filter(mine)]
+}
+
+/** The record of one route's `on` records whose prior is the user's own proxy (4.11 P7 step 2): the first string prior that is not of a NO_PROXY key (a
+ *  bypass list, never an upstream), or null. */
+export function priorRecordOf(route, records) {
+  const same = (a, b) => Array.isArray(a) && Array.isArray(b) && a.join('\0') === b.join('\0')
+  return records.find((i) => typeof i.prior_value === 'string' && !((route && route.noProxyKeys) || []).some((k) => same(k, i.keys))) ?? null
 }
 
 const KEEP = (res) => typeof res === 'string' && res.startsWith('left-') && res !== 'left-user-value' // the user's value now: nothing of trocar's left to undo
@@ -142,8 +179,9 @@ function undo(ctx, records) {
 /** check(ctx, records): does every record still hold trocar's value? → { ok, failing: [path] } */
 function check(ctx, records) {
   const failing = []
-  for (const x of records) {
-    const t = readText(ctx, x.real_path || x.path)
+  for (const r of records) {
+    const t = readText(ctx, r.real_path || r.path)
+    const x = unseal(r, t)
     let ok = false
     if (x.kind === 'owned-file') { try { ok = sha256(ctx.fs.readFileSync(x.path)) === x.sha256 } catch { ok = false } }
     else if (x.kind === 'text') { const env = parseDotenv(t || ''); ok = t != null && Object.entries(x.vars).every(([k, v]) => env.get(k) === v) }
@@ -161,15 +199,15 @@ export function routeEntry(kind) {
   return {
     write(ctx, door) {
       const old = recordsOf(ctx.manifest, ctx.harness, ctx.routeId)
-      if (old.some((x) => x.door !== door)) undo(ctx, old)
+      if (old.some((x) => doorFp(x) !== sha256(door))) undo(ctx, old)
       // all or nothing: a route refused partway (its last key or item, the select meta) takes back what this call already wrote, so no record without
       // a route tag is left for off to miss (invariant 5)
       const m = ctx.manifest, had = new Set([...m.entries, ...m.files])
       const takeBack = () => { const added = [...m.entries, ...m.files].filter((x) => !had.has(x)); if (added.length) undo(ctx, added) }
       let res
-      try { res = w(ctx, door) } catch (e) { takeBack(); throw e }
+      try { res = w({ ...ctx, door }, door) } catch (e) { takeBack(); throw e }
       if (!res.ok) { takeBack(); return res }
-      for (const x of res.records) if (x) Object.assign(x, { route: ctx.routeId, door })
+      for (const x of res.records) if (x) x.route = ctx.routeId // the door is on the record already, sealed
       saveManifest(ctx.dir, ctx.manifest, ctx.fs)
       return { ok: true, records: recordsOf(ctx.manifest, ctx.harness, ctx.routeId) }
     },

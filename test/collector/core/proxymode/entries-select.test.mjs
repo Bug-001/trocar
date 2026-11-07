@@ -110,6 +110,20 @@ test('ruling ③ — the user\'s own egress in the applied entry, a system PAC, 
   }
 })
 
+test('P5 · ruling ③ — a door value of trocar\'s in the applied entry (its manifest lost) is not the user\'s egress: on writes, off leaves no door; the user\'s loopback on another port still is', () => {
+  for (const own of ['egressProxyUrl', 'egressProxyPacUrl']) for (const [v, isDoor] of [['http://127.0.0.1:18004/trocar.pac', true], ['http://127.0.0.1:18004', true], ['http://127.0.0.1:7890', false]]) {
+    const L = lib('darwin', { meta: { appliedId: 'u1' }, entries: { u1: { [own]: v, inferenceProvider: 'gateway' } } })
+    put(path.join(L.w.dir, 'ingress.json'), JSON.stringify({ groupPorts: { 'claude-code:a': 18001, 'claude-code:b': 18002, 'claude-code:c': 18004 } }))
+    const res = routeEntry('json-key').write(L.ctx, DOOR)
+    const label = `${own}=${v}`
+    if (!isDoor) { assert.deepEqual([res.code, res.reason], ['not-routed', 'own-egress'], label); continue }
+    assert.equal(res.ok, true, label)
+    assert.ok(!JSON.stringify(res.records.map((x) => x.prior_value)).includes(':18004'), `${label}: the door is not the prior`)
+    routeEntry('json-key').undo(L.ctx, res.records)
+    assert.deepEqual(read(path.join(L.dir, 'u1.json')), { inferenceProvider: 'gateway' }, `${label}: off leaves no door`)
+  }
+})
+
 const KIMI = withArray[0]
 for (const [why, start, expectRecord] of [['the array absent', { 'http.proxy': 'http://mine:1' }, true], ['the array present', { 'settingsSync.ignoredSettings': ['editor.fontSize'] }, true], ['the array already holding the item', { 'settingsSync.ignoredSettings': ['http.proxy'] }, false], ['no file', null, true]]) {
   test(`arrayItems — ${why}: the element is added once (recorded as json-array-item${expectRecord ? '' : ': here nothing to add'}); off restores the bytes`, () => {

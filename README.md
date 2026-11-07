@@ -191,6 +191,10 @@ trocar uninstall               # removes all of trocar's changes; keeps your rec
 trocar uninstall --purge-data  # also deletes the records and their index (asks first)
 ```
 
+On macOS and Windows, `uninstall` takes every trocar root out of your user trust store, also one an earlier install left
+without a record. `install` keeps you to one trocar root: if your trust store already holds one that trocar's install
+record does not list, it changes nothing, names that root, and asks you to run `trocar uninstall` first.
+
 On Linux the machine's capability helper is one more step, with `sudo`. Installed from npm, run it after `uninstall`:
 `sudo "$(command -v node)" "$(command -v trocar)" setup-helper --remove`.
 
@@ -427,8 +431,9 @@ agent group, loopback only, no TUN, never the system proxy, nothing written into
   [Install](#install)); a copy from npm or git adds nothing there. Each harness's carrier is in its
   descriptor (`proxyMode` in `src/collector/harness/<harness>.mjs`), one entry per form.
 - `on` asks the daemon to open the doors, then writes only proxy entries: a proxy key in the agent's own config
-  (Claude Code's `settings.json`, Codex's and Hermes's `.env`, Z-Code's CLI config, an OpenCode plugin, Kimi VS Code's
-  `http.proxy`, Claude Desktop's config library) or a switch file in `~/.trocar/collector/switch/` that Kimi's wrapper,
+  (Claude Code's `settings.json` and Codex's and Hermes's `.env` get every proxy variable the agent reads, `HTTPS_PROXY`,
+  `HTTP_PROXY` and for Codex and Hermes `ALL_PROXY`, in both spellings, so the programs they start reach the door too,
+  which captures an agent and only forwards anything else; Z-Code's CLI config, an OpenCode plugin, Kimi VS Code's `http.proxy`, Claude Desktop's config library) or a switch file in `~/.trocar/collector/switch/` that Kimi's wrapper,
   dsh's plugin and pi's extension read. The door connects onward through the proxy the agent would have used without trocar.
 - `off` removes those entries and switch files; your edits to unrelated keys during `on` stay, and a proxy key you
   changed yourself keeps your value. It kills and restarts nothing: a process started while capture was on keeps its
@@ -458,8 +463,8 @@ The cost of `all`, honestly: a child process of an agent that does not trust the
 | proxy entries (`on`) | macOS / Windows: the proxy keys and switch files above; Linux: none (the helper steers) | `trocar off` |
 | autostart unit (per user) | Linux: `~/.config/systemd/user/trocar-collector.service` · macOS: `~/Library/LaunchAgents/com.trocar.collector.plist` · Windows: the scheduled task `\trocar\collector`; each runs `trocar daemon` | registered and enabled by `trocar install` (it exits 1 when it cannot, e.g. with no systemd --user on Linux, and `on` then refuses); `on` and `off` never touch it (D61), `trocar uninstall` removes it |
 | `PATH` item (install script only) | one marked line at the end of your shell's start file; Windows: one element of your user `Path` | `trocar uninstall` |
-| install manifest | `~/.trocar/collector/install-manifest.json` — every file and key it changed, never a copy of your file | removed last by `trocar uninstall` |
-| backups of your files | `~/.trocar/backup/` (0700, files 0600): the file as it was before trocar changed it — API keys included | `off` leaves them; `uninstall` deletes them all |
+| install manifest | `~/.trocar/collector/install-manifest.json` — every file and key it changed, never a copy of your file; the local proxy password only as a fingerprint | removed last by `trocar uninstall` |
+| backups of your files | `~/.trocar/backup/` (0700, files 0600): the file as it was before trocar changed it, one per file each time a command changes it — API keys included | `off` leaves them; `uninstall` deletes them all |
 | the standalone undo | `~/.trocar/bin/trocar-off`, written by `install`; `trocar doctor` checks it is current | `trocar uninstall` |
 | captures | `~/.trocar/raw/<segment>.ndjson` and its `<segment>.sealed` (0600); `~/.trocar/index/` is a deletable accelerator; `flows/` holds connection metadata and failure records | kept unless `trocar uninstall --purge-data` (which deletes `flows/` too, then records there anything it could not undo) |
 
