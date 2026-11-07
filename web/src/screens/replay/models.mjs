@@ -324,7 +324,8 @@ export function scopeModel(s, K) {
     return b
   })
   const peak = cost ? { text: costs.some((x) => x?.v != null) ? W.approxUsd(usd(maxCost)) : W.COST_NONE, tip: null } : { text: W.peakCtx(kf(pk)), tip: W.PEAK_CTX_TIP }
-  const shares = !cost && pc ? compShares(pc.comp) : null
+  // the gutter lists the shares largest first (ties in CT_ORDER), so the lines left out are always the smallest types (1.3 §排布)
+  const shares = !cost && pc ? compShares(pc.comp)?.sort((x, y) => y[1] - x[1]) ?? null : null
   return {
     view: { lo, hi, N }, at, rough,
     legend: { estimate: cost ? W.COST_LEGEND : W.COMP_LEGEND, cache: [W.CACHE_LEGEND, W.CACHE_LEGEND_UNK], sampled: N > OVW_POINTS },

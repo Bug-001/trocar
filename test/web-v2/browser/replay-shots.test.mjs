@@ -122,8 +122,18 @@ test('at 1280 × 800 the step bar is one row, the window holds half the height, 
     await openBusiest(b)
     const L = await layout(b.page)
     // 1.3 §排布: a step with every content type keeps the main track's row; no gutter glyph is cut (the desk lists each share)
-    const shares = await b.page.evaluate(() => document.querySelectorAll('#sawgut .gshare').length)
-    assert.ok(shares === 0 || shares === CT_ORDER.length, `${shares} shares in the gutter`)
+    // every type is accounted for: the shares drawn plus the "+N more" line's N (1.3 §排布)
+    const g = await b.page.evaluate(() => {
+      const vis = (e) => !e.hidden && e.getClientRects().length > 0, more = document.querySelector('#sawgut .gmore')
+      // drawn = not hidden and inside the gutter's clipped box (a clipped line counts as not drawn)
+      const box = document.querySelector('#sawgut .gshares')?.getBoundingClientRect()
+      const inBox = (e) => { const q = e.getBoundingClientRect(); return !!box && q.height > 0 && q.top >= box.top - 0.5 && q.bottom <= box.bottom + 0.5 }
+      return { drawn: [...document.querySelectorAll('#sawgut .gshare')].filter((e) => vis(e) && inBox(e)).length, all: document.querySelectorAll('#sawgut .gshare').length,
+        more: more && vis(more) ? Number(more.dataset.n) : 0, moreInBox: !more || !vis(more) || (inBox(more) && /\d/.test(more.textContent || '')) }
+    })
+    assert.ok(g.all === 0 || g.all === CT_ORDER.length, `${g.all} shares in the gutter`)
+    assert.equal(g.drawn + g.more, g.all, `${g.drawn} drawn + ${g.more} more`)
+    assert.ok(g.moreInBox, 'the "+N more" line is drawn whole inside the gutter')
     assert.deepEqual((await layoutFaults(b.page, '#saw')).cut, [])
     // one row: every drawn part's middle lies inside the arrows' box (center-aligned parts of different heights share a row)
     const off = await b.page.evaluate(() => {
