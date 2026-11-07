@@ -35,6 +35,17 @@ export function createDesk() {
 }
 
 const tsOf = (desk, rid) => desk.rows.get(rid)?.ts ?? ''
+// a lane header the desk did not hold goes where its first call falls among the held lanes whose first call is held too (1.3 §叠加轨
+// 行内的次序); a header already held keeps its place. The order is otherwise the server's (a full answer's `lanes`, by first step),
+// so a lane whose first row sits on an unread page keeps the server's place and the anchor of a session with no main lane stays put.
+export function putLane(desk, h) {
+  if (desk.lanes.has(h.lane)) { desk.lanes.set(h.lane, h); return }
+  const ts = tsOf(desk, h.first ?? h.lane), hs = [...desk.lanes.values()]
+  const at = !desk.rows.has(h.first ?? h.lane) ? hs.length
+    : hs.findIndex((x) => desk.rows.has(x.first ?? x.lane) && compareStep(ts, h.first ?? h.lane, tsOf(desk, x.first ?? x.lane), x.first ?? x.lane) < 0)
+  hs.splice(at < 0 ? hs.length : at, 0, h)
+  desk.lanes = new Map(hs.map((x) => [x.lane, x]))
+}
 
 // where rid stands (or would stand) in an array kept in step order: a binary search (the row must be in desk.rows)
 function slotOf(desk, arr, rid) {
@@ -129,7 +140,7 @@ export function applySession(desk, a, { before = false } = {}) {
   }
   setEvents(desk, (a.calls || []).map((r) => r.rid), a.events)
   for (const key of a.lanes_gone || []) { desk.lanes.delete(key); desk.held.delete(key); desk.laneRids.delete(key); touched.delete(key) }
-  for (const h of a.lanes || []) desk.lanes.set(h.lane, h)
+  for (const h of a.lanes || []) putLane(desk, h)
   return { reset: false, touched }
 }
 
