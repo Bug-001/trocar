@@ -602,6 +602,39 @@ test('chains: a chain past SYNTH_TTL_MS, or pushed out by SYNTH_CAP, is no longe
   assert.notEqual(assign(f(back + 1000, ['c0', 'c0+'], 'a')).key, keys[0], 'the oldest was pushed out')
 })
 
+// the bounds of the rule's state past the gap (3.4 合成键 有界), each step at the pause where it differs
+const ff = (ms, chain, more = {}) => ({ harness: 'hermes', ms, hash: 'a'.repeat(64), fp: [], chain, ...more })
+test('chains: a chain stripped past 2 x the gap still takes its extension, and its items again', () => {
+  const assign = createSynthAssigner(), a = assign(ff(T0, ['a1'], { items: ['i1', 'i2'] })).key
+  assign(ff(T0 + 2 * HOUR, ['b1'])) // a new chain: the prune that strips the first runs
+  assert.equal(assign(ff(T0 + 2 * HOUR + 1000, ['a1', 'a2'], { items: ['i1', 'i2', 'i3'] })).key, a, 'the tail is kept')
+  // its next call edits an older item in place: step 3 reads the items the extension brought back
+  assert.equal(assign(ff(T0 + 2 * HOUR + 2000, ['x9'], { items: ['i1', 'i2', 'i3x'] })).key, a, 'the items are back')
+})
+
+test('chains: past the gap, steps 3b and 4 open a new chain; only step 2 reaches further', () => {
+  const later = T0 + 45 * 60_000 // past SYNTH_GAP_MS, before the strip
+  let assign = createSynthAssigner()
+  const a = assign(ff(T0, ['a1'], { fp: [1, 2, 3] })).key
+  assert.notEqual(assign(ff(later, ['m1'], { fp: [1, 2, 3], mark: true })).key, a, 'step 3b: a marked rewrite past the gap')
+  assign = createSynthAssigner()
+  const b = assign(ff(T0, ['b1'])).key
+  assert.notEqual(assign(ff(later, [])).key, b, 'step 4: a call with no history past the gap')
+})
+
+test('chains: SYNTH_CAP counts the keyless chains and the chains of keyed sessions, not the keyed sessions', () => {
+  // a keyed session's chain first and oldest (its session entry is newer), then k keyless chains of the same harness
+  const lane = (assign, ms, chain) => assign({ harness: 'hermes', ms, key: 'k1', hash: 'l'.repeat(64), fp: [], chain }).lane
+  const after = (k) => {
+    const assign = createSynthAssigner(), first = lane(assign, T0, ['l1'])
+    assign({ harness: 'hermes', ms: T0 + 1, key: 'k1', fp: [] })
+    for (let i = 0; i < k; i++) assign(ff(T0 + 2 + i, [`c${i}`]))
+    return lane(assign, T0 + 3 * HOUR, ['l1', 'l2']) === first
+  }
+  assert.equal(after(SYNTH_CAP - 1), true, 'SYNTH_CAP chains in all: none pushed out')
+  assert.equal(after(SYNTH_CAP), false, 'one more: the keyed session\'s chain, the oldest, is pushed out')
+})
+
 test('chains: across a pause, the same membership in one pass, cut across two segments, and as the live segment grows', async () => {
   const task = story(9200, 5), other = story(9300, 3), recs = []
   let ms = T0
