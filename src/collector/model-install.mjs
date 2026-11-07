@@ -288,7 +288,7 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
       }
       return { state: 'skipped', code: 'not-routed', why: `no carrier kind ${c.kind}` }
     } catch (e) {
-      problems.push(`${desc.name}: ${errText(e)}`)
+      if (e.code !== MARKED_WITHOUT_RECORD) problems.push(`${desc.name}: ${errText(e)}`) // a marked file is the receipt's own refusal, one problem per file (src/cli/install.mjs)
       // 4.11 P4: a file that is not trocar's at a path it writes its own to — left alone, and on record (D38)
       if (e.code === CODE.notTrocarsFile) runEventWriter({ dir, base: { run: now().toISOString() }, notes, fs })({ event: EVENT.failure, where: 'install', code: e.code, harness: desc.name, path: e.path, reason: errText(e) })
       return { state: 'skipped', code: e.code || 'install-error', ...(e.path ? { path: e.path } : {}), why: errText(e) }

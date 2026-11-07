@@ -414,3 +414,40 @@ for (const os of ['darwin', 'win32']) {
     })
   }
 }
+// 1.6 §3.6 「记录没列的标记」 on macOS, in the shape of a real run: Claude Code and Kimi Code under NODE_EXTRA_CA_CERTS (rule U's one user file), dsh,
+// pi, Z-Code. A record that does not list some of install's carriers still gets them taken out by trocar's marks, at the places the descriptors name —
+// planned by --dry-run and done by the run: the user's certificate file byte for byte, dsh's loader row gone, the real kimi back under its name
+async function macShape() {
+  const w = await modelWorld({ commands: ['claude', 'kimi', 'dsh', 'pi'], env: (home) => ({ CLAUDE_CODE_CERT_STORE: 'bundled', NODE_EXTRA_CA_CERTS: path.join(home, 'certs', 'user-ca.pem') }) })
+  fs.mkdirSync(path.dirname(w.env.NODE_EXTRA_CA_CERTS), { recursive: true }); fs.writeFileSync(w.env.NODE_EXTRA_CA_CERTS, USER_PEM)
+  const kimi = path.join(w.home, '.kimi-code', 'bin', 'kimi')
+  fs.mkdirSync(path.dirname(kimi), { recursive: true }); fs.writeFileSync(kimi, MACHO)
+  for (const d of ['.dsh', '.zcode']) fs.mkdirSync(path.join(w.home, d), { recursive: true })
+  const patch = path.join(w.home, '.dsh', 'cordis.patch.yml')
+  const r = await w.install({ wrapperKit: { renderWrapper } })
+  assert.equal(r.exit, 0, JSON.stringify(r.carriers))
+  return { ...w, kimi, patch, file: w.env.NODE_EXTRA_CA_CERTS }
+}
+const noTrocarRow = (f) => !fs.existsSync(f) || !fs.readFileSync(f, 'utf8').includes('trocar collector')
+test('1.6 §3.6 · darwin: a record that lacks Claude Code\'s items — the dry run plans rule U\'s block by its mark, the run takes it out', async () => {
+  const w = await macShape()
+  const m = readManifest(w.dir)
+  saveManifest(w.dir, { ...m, entries: m.entries.filter((e) => e.harness !== 'claude-code'), files: m.files.filter((f) => f.harness !== 'claude-code') })
+  assert.ok(!readManifest(w.dir).entries.some((e) => e.path === w.file), 'the record no longer lists the certificate file')
+  const dry = await uninstall(w, {}, { dryRun: true })
+  assert.ok(dry.receipt.changed.some((c) => c.path === w.file), `the plan names ${w.file}: ${JSON.stringify(dry.receipt.changed)}`)
+  const { receipt, exit } = await uninstall(w)
+  assert.equal(exit, 0, JSON.stringify({ p: receipt.problems, l: receipt.left }))
+  assert.equal(fs.readFileSync(w.file, 'utf8'), USER_PEM, 'the user\'s certificate file byte for byte')
+  assert.ok(receipt.changed.some((c) => c.path === w.file), JSON.stringify(receipt.changed))
+})
+test('1.6 §3.6 · darwin: the record lost, then install again — one uninstall takes out the block, the loader row and the wrapper the new record does not list', async () => {
+  const w = await macShape()
+  fs.rmSync(path.join(w.dir, 'install-manifest.json')); w.store.held.clear() // the record lost and the root taken out by hand: only trocar's text is left
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 1, 'install skips the carriers whose files hold trocar\'s text')
+  const { receipt, exit } = await uninstall(w)
+  assert.equal(exit, 0, JSON.stringify({ p: receipt.problems, l: receipt.left }))
+  assert.equal(fs.readFileSync(w.file, 'utf8'), USER_PEM, 'the user\'s certificate file byte for byte')
+  assert.ok(noTrocarRow(w.patch), 'dsh\'s loader row is gone')
+  assert.ok(fs.readFileSync(w.kimi).equals(MACHO), 'the real kimi is back under its own name')
+})

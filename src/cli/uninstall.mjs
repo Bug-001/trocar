@@ -137,9 +137,11 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
   // §1.4 / appendix C: the plan itself is a key of the JSON document — every file by its full path and what would happen to it
   const plannedItems = (p) => [...p.changed.map((c) => ({ path: c.path, change: c.change, harness: c.harness ?? null })), ...p.removed.map((x) => ({ path: x, change: 'removed' }))]
   const stray = dryRun || !yes ? await strayPlan(w, m) : null // 4.11 §3 ㉔: the roots the run would sweep, read once, so the plan the user agrees to names them (1.6 §1.4)
-  // no install record: the places install's certificate carriers are at by the harness descriptors (macOS / Windows), looked at beside trocar's marks (1.6 R3)
-  const { places, unseen } = !m && isModelOs(w.platform) ? await carrierPlacesFor({ os: w.platform, home, env, harnesses: deps.harnesses || await (await import('../collector/harness/index.mjs')).loadHarnesses(), renderHook: (await import('../collector/harness/templates/index.mjs')).renderHook, run: w.exec, fs }) : { places: [], unseen: [] }
-  const lost = unseenNote(unseen, w.platform) // D38: a block trocar may have put in a file nothing names now is said, with the way to take it out
+  // the places install's certificate carriers are at by the harness descriptors (macOS / Windows), looked at beside trocar's marks: with no record (1.6 R3)
+  // and with one, for the carriers it does not list (§3.6 「记录没列的标记」); a record this build does not read is not undone at all
+  const found = isModelOs(w.platform) && !(m && m.unsupported) ? await carrierPlacesFor({ os: w.platform, home, env, harnesses: deps.harnesses || await (await import('../collector/harness/index.mjs')).loadHarnesses(), renderHook: (await import('../collector/harness/templates/index.mjs')).renderHook, run: w.exec, fs }) : { places: [], unseen: [] }
+  const places = found.places
+  const lost = unseenNote(m ? [] : found.unseen, w.platform) // D38: a block trocar may have put in a file nothing names now is said, with the way to take it out
   const planOf = () => { const p = planUninstall(w, m, purgeData, deps.root, places); return { ...p, changed: [...p.changed, ...stray.changed], removed: [...p.removed, ...stray.removed], notes: [...p.notes, ...stray.notes, ...lost] } }
   const plan = () => { const p = planOf(); return Object.assign(receipt, { dry_run: true }, p, { planned: plannedItems(p) }) }
   if (dryRun) { plan(); return { receipt, exit: EXIT.ok } }
