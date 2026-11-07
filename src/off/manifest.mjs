@@ -218,7 +218,10 @@ export function saveManifestAt(file, m, fs = nodeFs) {
   const text = JSON.stringify(m, null, 2) + '\n'
   let same = false
   try { same = fs.readFileSync(file).equals(Buffer.from(text)) } catch { /* not there or not readable: written as before */ }
-  if (same) return // the same bytes are there already: a run that changed nothing leaves the record untouched
+  if (same) { // the same bytes are there already: a run that changed nothing leaves the record untouched, but not at a looser mode than the write gives it
+    if (process.platform !== 'win32' && (fs.statSync(file).mode & 0o777) !== 0o600) fs.chmodSync(file, 0o600) // win32: modes do not apply
+    return
+  }
   writeDurable(file, text, 0o600, fs)
 }
 
