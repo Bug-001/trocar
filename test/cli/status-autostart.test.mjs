@@ -12,6 +12,7 @@ import { runStatusCli, statusDoc } from '../../src/cli/status.mjs'
 import { runDoctor } from '../../src/cli/doctor.mjs'
 import { absentSpawn } from '../helpers/no-real-os.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { entryState } from '../../src/collector/net-deps.mjs'
 
 const unitAnswering = (q) => ({ name: 'trocar-collector.service', registered: () => q })
 const CASES = [
@@ -20,6 +21,17 @@ const CASES = [
   [{ state: 'disabled' }, { code: 'autostart-missing', command: 'trocar install' }, 1],
   [{ state: 'unknown', err: 'no systemd --user answered: Failed to connect to bus' }, { code: null, command: 'trocar install' }, 3],
 ]
+
+test('D61: a masked unit: the way out is named, before trocar install, in the document, the Login line and on\'s words', async () => {
+  const s = await installedHome()
+  const q = { state: 'disabled', how: 'masked', first: 'systemctl --user unmask trocar-collector.service' }
+  const r = await runStatus(s, ['--json'], { request: asDaemon(reply()), deps: { unit: unitAnswering(q) } })
+  const a = r.io.json().autostart
+  assert.deepEqual([a.state, a.code, a.first, a.command], ['disabled', 'autostart-missing', q.first, 'trocar install'])
+  assert.ok(a.reason.includes(q.first), a.reason)
+  assert.ok(entryState('linux', null, q).includes(q.first), 'on and install say it the same way')
+  assert.equal(entryState('linux', null, { state: 'disabled' }).includes('unmask'), false)
+})
 
 test('D61: status --json says the login entry as registered() answers it; absent / disabled are a problem fixed by trocar install, unknown keeps its reason', async () => {
   const s = await installedHome()

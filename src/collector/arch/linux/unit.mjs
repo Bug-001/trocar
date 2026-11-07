@@ -78,7 +78,8 @@ export function userUnit({ home, node, script, run = null, env = process.env, sp
       const r = sc(['is-enabled', UNIT_NAME])
       if (r.code === 0 && r.out !== 'enabled-runtime') return { state: 'present' }
       if (r.code === null || !r.out) return { state: 'unknown', err: `${r.code === null ? 'systemctl did not run' : 'no systemd --user answered'}: ${r.err || 'no reason given'}` }
-      return { state: r.out === 'not-found' ? 'absent' : 'disabled' }
+      // masked is someone's deliberate no, and `enable` refuses it: trocar names the way out and does not take it
+      return { state: r.out === 'not-found' ? 'absent' : 'disabled', ...(r.out.startsWith('masked') ? { how: 'masked', first: `systemctl --user unmask ${UNIT_NAME}` } : {}) }
     },
     start: (carry = null) => startDirect(carry),
     reload: () => sc(['daemon-reload']),

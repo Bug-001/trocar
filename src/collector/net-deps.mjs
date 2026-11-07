@@ -24,7 +24,7 @@ export async function formPrograms(o) { return (await import('./arch/model-backe
 /** The login entry in the platform's own words (a Windows user told to run `systemctl` has been handed nothing; tested on Windows 2026-10-11 and macOS 2026-10-18). */
 export const entryWords = (osName, unit) => (osName === 'win32' ? 'the scheduled task \\trocar\\collector' : osName === 'darwin' ? `the LaunchAgent ${(unit && unit.name) || 'com.trocar.collector'}` : 'the systemd user unit trocar-collector.service')
 /** `registered()`'s answer in one phrase: `on`'s refusal, install's read-back of the entry it registered and `status` say it the same way. */
-export const entryState = (osName, unit, q) => `${entryWords(osName, unit)} ${q.state === 'absent' ? 'is not registered' : q.state === 'disabled' ? 'is registered but switched off' : `could not be read (${q.err || 'no reason given'})`}`
+export const entryState = (osName, unit, q) => `${entryWords(osName, unit)} ${q.state === 'absent' ? 'is not registered' : q.first ? `is ${q.how} (run first: ${q.first})` : q.state === 'disabled' ? 'is registered but switched off' : `could not be read (${q.err || 'no reason given'})`}`
 
 /** 附录 B / C.1: the login entry is not registered or is switched off — `on`'s refusal and `status`'s problem. */
 export const AUTOSTART_MISSING = 'autostart-missing'
@@ -47,7 +47,7 @@ export async function loginEntry({ platform = process.platform, home, env, run =
     u = A && A.unit && A.unit.userUnit ? A.unit.userUnit({ home, node: process.execPath, script, run, env }) : null
   }
   let value = null
-  if (u) { const q = u.registered(); value = { entry: entryWords(platform, u), state: q.state, code: q.state === 'absent' || q.state === 'disabled' ? AUTOSTART_MISSING : null, reason: q.state === 'present' ? null : entryState(platform, u, q) } }
+  if (u) { const q = u.registered(); value = { entry: entryWords(platform, u), state: q.state, code: q.state === 'absent' || q.state === 'disabled' ? AUTOSTART_MISSING : null, reason: q.state === 'present' ? null : entryState(platform, u, q), ...(q.first ? { first: q.first } : {}) } }
   if (stamp != null) asked.set(home, { stamp, at: now(), value })
   return value
 }
