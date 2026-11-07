@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url'
 import { fork } from 'node:child_process'
 import { rawHome, writeSegment, envLine } from './raw-home.mjs'
 import { segmentIndex } from '../../src/query/index-build.mjs'
-import { usageFile, readUsage, fillUsage } from '../../src/query/usage.mjs'
+import { usageFile, readUsage, fillUsage, USAGE_V } from '../../src/query/usage.mjs'
 import { runQuery, OVERVIEW_USAGE_BYTES } from '../../src/query/named/index.mjs'
 
 const SEG = '20261018T100000Z'
@@ -41,7 +41,7 @@ const docOf = (home, seg = SEG) => fs.readFileSync(usageFile(home, seg), 'utf8')
 const callsOf = (home) => docOf(home).filter((o) => 'line' in o)
 const appendRaw = (home, lines) => fs.appendFileSync(path.join(home, 'raw', `${SEG}.ndjson`), lines.join('\n') + '\n')
 
-test('4.2:53-55 format: one call line per model call, the 3.2 mapping, a v3 mark to the last line', async () => {
+test('4.2:53-55 format: one call line per model call, the 3.2 mapping, a USAGE_V mark to the last line', async () => {
   const home = await homeWith(BASE)
   await fillUsage({ home, segments: [SEG] })
   assert.equal(fs.statSync(usageFile(home, SEG)).mode & 0o777, 0o600)
@@ -58,7 +58,7 @@ test('4.2:53-55 format: one call line per model call, the 3.2 mapping, a v3 mark
   assert.equal(by.get(1).model, JSON.parse(SEED[0].req_body).model)
   assert.equal(by.get(2).usage[3], null, 'a vendor that reports no write counter: null, never 0')
   const last = doc[doc.length - 1]
-  assert.equal(last.v, 3)
+  assert.equal(last.v, USAGE_V)
   assert.equal(last.m.lines, BASE.length)
 })
 
