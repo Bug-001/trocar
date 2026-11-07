@@ -32,7 +32,6 @@ import { DEFAULT_REDIRECTOR_BIN } from '../collector/arch/linux/redirector-clien
 import { confirm, isInteractive } from '../off/io.mjs'
 import { CODE_OFF } from '../off/names.mjs'
 import { formatUninstallReceipt, fit } from './receipt.mjs'
-import { COMMAND_INDENT } from '../off/receipt.mjs'
 import { removeIngressConfig } from '../collector/core/ingress-config.mjs'
 import { refuseElevatedByWhoami, disableScheduledTask, TASK_NAME } from '../off/win32.mjs'
 import { holdersOf } from '../off/holders.mjs'
