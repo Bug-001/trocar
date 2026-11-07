@@ -219,5 +219,13 @@ test('(18) a page that answers 503 still-reading is asked again until it answers
     assert.ok(asked.every((a) => a == null), 'the same page each time')
     if (!ok) assert.deepEqual(r, answers.at(-1), 'the failure as it came')
   }
+  // a later page that waits is asked again with its own cursor; a caller gone (alive false) ends the wait with the 503 as it came
+  const pages = [{ sessions: [S({ session_id: 'a' })], errors: [], next: '1' }, { sessions: [S({ session_id: 'b' })], errors: [], next: null }]
+  let asked = [], n = 0
+  const r = await loadSessions({ get: async (name, { after }) => { asked.push(after); return after != null && n++ < 2 ? wait : { ok: true, status: 200, data: pages[after == null ? 0 : 1] } } })
+  assert.deepEqual([r.ok, asked], [true, [null, '1', '1', '1']])
+  asked = []
+  const gone = await loadSessions({ get: async (name, { after }) => { asked.push(after); return wait } }, { alive: () => asked.length < 2 })
+  assert.deepEqual([gone.code, asked.length], ['still-reading', 2])
 })
 

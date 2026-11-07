@@ -163,7 +163,7 @@ export function rowModel(s, now) {
     key: sessionKey(s),
     href: formatHash({ area: 'replay', screen: 'replay', project: s.project_slug, id: s.session_id, params: {} }),
     harnessId: s.harness, harnessName: hn, harnessRaw: harnessRaw(s.harness),
-    title: s.title ?? null, titleSource: s.title_source ?? null, untitled: s.title == null, titleText: titleText(s), titleTip: titleTipOf(s),
+    title: s.title ?? null, untitled: s.title == null, titleText: titleText(s), titleTip: titleTipOf(s),
     dim: !s.calls && s.probes > 0, calls: s.calls || 0, probes: s.probes || 0,
     logged, subagent, inferred, synthesized, multi, multiNames, entry, entryTip, project,
     when: relTime(s.last_ts, now), whenTip: s.last_ts ? fmtStamp(s.last_ts) : '',
