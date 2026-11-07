@@ -23,7 +23,7 @@ const NEEDS_YES = 'Nothing was changed. Read the plan above, then run it again w
 const planLine = (p, home) => [p.harness, p.paths.length ? `${p.paths.map((x) => tilde(x, home)).join(', ')}: ${routeWords(p)}` : `no file of yours: trocar hands ${p.harness} the setting as it starts`] // 1.6 §3.3: path: what changes there
 const noteLine = (n) => (n.code === 'install-pending' ? `Not done yet: ${n.item} is ${n.state} (${n.why}). Run again: ${n.command}` : `Note: ${n.harness ? `${n.harness}: ` : ''}${n.text || n.why || n.code}${n.paths && n.paths.length ? ` (${n.paths.join(', ')})` : ''}`)
 // 1.6 §3.3: a harness that needs setup — the fix is two commands, never the code (§1.1)
-const refusedLine = (r) => `${r.harness} was not turned on: ${r.why}. Run: ${r.command}, then: trocar on ${r.harness}`
+const refusedLine = (r) => `${r.harness} was not turned on: ${r.why}.${r.command ? ` Run: ${r.command}, then: trocar on ${r.harness}` : ''}`
 /** 1.6 §3.3 (D65④): the harnesses `on` refused because their setup is needed — `blocked` of a dry run, `error` of a real one (exit 1). */
 const setupBlocked = (r) => r.refused.filter((x) => x.reason === 'setup-needed').map((x) => ({ what: x.harness, reason: x.why }))
 const setupError = (b) => ({ code: 'setup-needed', message: `${b.map((x) => x.what).join(', ')} ${b.length === 1 ? 'is' : 'are'} not set up for capture; run trocar install, then trocar on again` })
@@ -42,7 +42,8 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
   const out = (receipt, exit) => {
     if (json) printJson(io, receipt)
     else io.out(fit([receipt.dry_run ? `trocar on would start capturing ${receipt.harnesses.join(', ') || 'no agent'}. Nothing was written.`
-      : exit === 0 ? `Capturing ${receipt.harnesses.join(', ') || 'no agent'}.${receipt.daemon && receipt.daemon.state === 'running' ? ' The collector is running.' : ''}`
+      : exit === 0 && !receipt.harnesses.length ? 'Nothing to capture: no agent trocar covers is set up on this machine.'
+      : exit === 0 ? `Capturing ${receipt.harnesses.join(', ')}.${receipt.daemon && receipt.daemon.state === 'running' ? ' The collector is running.' : ''}`
         : `trocar on did not finish${receipt.harnesses.length ? ` for all of ${receipt.harnesses.join(', ')}` : ''}. What stopped it is below.`,
       ...receipt.refused.map(refusedLine),
       // §1.1: no two rows the same. One agent with several routes (Claude Code's settings and its config library) said "the setting is in place"
@@ -91,11 +92,12 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
   const fresh = [...new Set(plan.planned.flatMap((p) => p.paths))].filter((p) => !seen.has(p))
   // 1.6 §3.3: each setting is one row; a row new since an earlier yes says so on itself — with no earlier yes there is no "last" to speak of
   const isNew = (p) => seen.size > 0 && p.paths.some((x) => fresh.includes(x))
-  say(fit([`trocar on will change ${plan.planned.length} setting${plan.planned.length === 1 ? '' : 's'}:`,
+  if (plan.on.length) say(fit([`trocar on will change ${plan.planned.length} setting${plan.planned.length === 1 ? '' : 's'}:`,
     ...pairs(plan.planned.map((p) => { const [h, v] = planLine(p, home); return [h, isNew(p) ? `${v} (new since you last said yes)` : v] }), { home })], { home }).join('\n'))
   const blockedSetup = setupBlocked(plan)
   if (flags.has('--dry-run')) return out(receiptOf({ ...plan, exit: 0 }, { dry_run: true, planned: plan.planned, ...(blockedSetup.length ? { blocked: blockedSetup } : {}) }), EXIT.ok)
   if (!plan.on.length && blockedSetup.length) return done(receiptOf(plan, { blocked: blockedSetup, error: setupError(blockedSetup) }), EXIT.incomplete) // nothing to turn on: no daemon started
+  if (!plan.on.length) return done(receiptOf(plan, { undo: null }), plan.exit) // the same, with no setup to do (4.11 CM43)
   if (fresh.length && !flags.has('--yes')) {
     if (json || !isInteractive(io)) { if (json) printJson(io, { ...receiptOf({ ...plan, exit: 2 }), ok: false, planned: plan.planned, needs_yes: true, notes: [NEEDS_YES] }); else io.err(NEEDS_YES); return EXIT.usage }
     if (!(await ask({ ...io, prompt: io.stdout }, 'Proceed?'))) { io.err('You said no: nothing was changed'); return EXIT.incomplete }

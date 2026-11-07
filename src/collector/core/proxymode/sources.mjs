@@ -83,6 +83,18 @@ export function isPresent(form, ctx) {
   })
 }
 
+/** A form the user put out of scope on this OS (D56⑥). It counts as not on the machine, whatever `present` finds (4.11 §2.3, CM43). */
+export const outOfScope = (form, os) => !!(form.verified && form.verified[os] && form.verified[os].reason === 'out-of-scope')
+
+/** The forms of a harness that are on this machine, the one answer install, on, setup and status take. */
+export const formsHere = (pm, os, ctx) => pm.forms.filter((f) => f.os.includes(os) && !outOfScope(f, os) && isPresent(f, ctx))
+
+/** What `status` and `on` name as out of scope: of the harnesses with no covered form here, the out-of-scope forms that are present and say what they are (`scopeWhat`). */
+export const scopeNamed = (harnesses, os, ctx) => harnesses.filter((d) => d.proxyMode).flatMap((d) => {
+  const named = d.proxyMode.forms.filter((f) => f.scopeWhat && f.os.includes(os) && outOfScope(f, os) && isPresent(f, ctx))
+  return named.length && !formsHere(d.proxyMode, os, ctx).length ? named.map((f) => ({ harness: d.name, form: f.id, what: f.scopeWhat })) : []
+})
+
 /** The places of a form that are there now (its `present` places, a `{ command }` as the path it resolves to): which form a running process belongs to is
  *  read from them (1.6 附录 B: the restart steps come from the form the process belongs to). */
 export function presentPaths(form, ctx) {

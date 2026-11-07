@@ -27,8 +27,9 @@ for (const spec of [...OSES.flatMap((os) => casesFor(os, harnesses)), ...seedCas
     // the platform seam: off and uninstall find the daemon through the product's own resolver, whose answer has the OS's native shape (a win32
     // pipe name, never a path a unix host would make); only the transport under it is this host's. A resolution gone Linux-shaped is red here
     assert.ok(spec.os === 'win32' ? isPipePath(r.endpoint.socketPath) : path.isAbsolute(r.endpoint.socketPath || ''), JSON.stringify(r.endpoint))
-    // a harness refused for its setup is refused before anyone asks the daemon; a resolution gone wrong is not that refusal
-    if (spec.form && !r.on.refused.some((x) => x.reason === 'setup-needed')) assert.ok(r.askedOn.includes('POST /on'), `on reached the daemon through that endpoint: ${r.askedOn}`)
+    // a harness refused (its setup, or no covered form here: CM43) is refused before anyone asks the daemon; a resolution gone wrong is not that refusal
+    if (r.on.refused.length) assert.deepEqual(diff(r.s1, r.s2).filter(({ p }) => !TROCAR.test(p)), [], 'a refused harness has no entry')
+    if (spec.form && !r.on.refused.length) assert.ok(r.askedOn.includes('POST /on'), `on reached the daemon through that endpoint: ${r.askedOn}`)
     assert.ok(r.askedOff.includes('POST /off'), `off reached the daemon through that endpoint: ${r.askedOff}`)
     const snaps = [r.s0, r.s1, r.s2, r.s3, r.sE, r.s4, r.s5, r.s6]
     const wrote = diff(r.s1, r.s2).some(({ p }) => !TROCAR.test(p) || /switch/.test(p))

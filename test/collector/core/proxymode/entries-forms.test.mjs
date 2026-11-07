@@ -7,7 +7,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
 import { writeRoutes, planRoutes } from '../../../../src/collector/core/proxymode/entries.mjs'
-import { resolveLoc } from '../../../../src/collector/core/proxymode/sources.mjs'
+import { resolveLoc, outOfScope } from '../../../../src/collector/core/proxymode/sources.mjs'
 import { world, door } from './fixtures/entries-ctx.mjs'
 
 const harnesses = await loadHarnesses()
@@ -16,7 +16,15 @@ const files = (dir) => (fs.existsSync(dir) ? fs.readdirSync(dir, { recursive: tr
 const routeFile = (r, ctx) => (r.file ? resolveLoc(r.file, ctx)[0] : null)
 
 for (const h of harnesses) for (const os of OSES) {
-  const forms = h.proxyMode.forms.filter((f) => f.os.includes(os))
+  const forms = h.proxyMode.forms.filter((f) => f.os.includes(os) && !outOfScope(f, os))
+  // CM43: a form out of scope is never a reason to write, whatever else its place makes present
+  for (const f of h.proxyMode.forms.filter((x) => x.os.includes(os) && outOfScope(x, os))) {
+    test(`CM43 ${h.name} · ${os} · ${f.id} present → no route is planned for it`, () => {
+      const w = world({ os })
+      w.present(f)
+      assert.ok(!planRoutes(h, w.ctx).routes.flatMap((r) => r.forms).includes(f.id))
+    })
+  }
   for (const f of forms) {
     test(`CM31 ${h.name} · ${os} · only ${f.id} present → only route ${f.route} is planned and touched${f.hostTree ? ', with the hostTree note' : ''}`, () => {
       const w = world({ os })
