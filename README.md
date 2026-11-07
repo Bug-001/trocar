@@ -293,6 +293,11 @@ holds the detail):
   stream. If an earlier call of the thread was not captured or its reply did not fully arrive, the call and the
   rest of the thread are labelled **Context incomplete** and say which call and why. Background calls (request class
   `auxiliary`) go to the background lane.
+- **Kimi Code**: one session key holds the main conversation and the agents it opens, and no call says whose it is.
+  The calls whose system prompt is the one of the longest history in the session are the main conversation, also
+  after Kimi compacts that history; each history of another system prompt is a background lane of its own, so a short
+  side call no longer reads as a compaction of the main conversation. On Kimi's Anthropic-compatible API every call
+  still sits in the main lane.
 
 Reading the records across sessions is `trocar query <name>` — the one core that reads data, of which
 the board is the HTTP shell (D59); there is no separate ETL step and no database to load. Both go through the

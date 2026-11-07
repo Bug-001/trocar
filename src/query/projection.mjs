@@ -32,7 +32,7 @@ import { parseRecordId } from '../collector/core/record/segments.mjs';
 import { trocarHome } from '../paths.mjs';
 import { lineFile } from './line-file.mjs';
 
-export const PROJ_V = 18; // 18: a reply the agent closed after its own success terminal is read as that reply (3.5 §访问模式 ②)
+export const PROJ_V = 19; // 18: a reply the agent closed after its own success terminal is read as that reply (3.5 §访问模式 ②); 19: a keyed session's chains are lanes
 const CAP_BYTES = 512 << 20; // the total's ceiling (gcProjections)
 const SHARE_DEPTH = 3, SHARE_MIN = 48;
 // rows and shared values read back are kept by what they weigh in the heap (a row grows with its context: a count let a long

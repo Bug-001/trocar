@@ -44,7 +44,7 @@ import { rowTable, isRowTable, heapOf } from './row-table.mjs';
 
 const rawDir = (home = trocarHome()) => path.join(home, 'raw');
 export const indexDir = (home = trocarHome()) => path.join(home, 'index');
-const INDEX_V = 9;
+const INDEX_V = 10;
 const CHUNK = 1 << 20;
 /** How long a scan that was given `ease` holds the event loop at most, give or take a chunk or EASE_EVERY records (3.5 §行表先读). */
 const EASE_MS = 50, EASE_EVERY = 64;
@@ -123,7 +123,8 @@ export function indexEntryOf(env, { segment, lineNo, storedBytes, offset = null,
     // keyless call that is its harness's compaction request → the ones it looks with. Space-joined strings ('' when none): a scalar row.
     kin_fp: synth && synth.fp ? synth.fp.join(' ') : null,
     kin_probe: synth && synth.probe ? synth.probe.join(' ') : null,
-    // a keyless call's message chain (3.4 合成键): its history's last cumulative hashes, space-joined ('' when it has none), and
+    // a keyless call's message chain (3.4 合成键), or a keyed one's where its row splits a keyed session by chains (`synth_hash` too):
+    // its history's last cumulative hashes, space-joined ('' when it has none), and
     // whether it carries its harness's compaction marker: hashes and a flag, never message text
     kin_chain: synth && synth.chain ? synth.chain.join(' ') : null,
     kin_items: synth && synth.items ? synth.items.join(' ') : null,
