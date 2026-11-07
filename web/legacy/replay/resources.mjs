@@ -30,7 +30,8 @@ const stepWordOf = (s) => {
 // the opened files taken out); `done` = its ledger_next chain is read to the end, so the ledger's counts are exact (2.4:67)
 function ledgerOf(s) {
   const h = s.desk && s.anchor && s.desk.held.get(s.anchor.id)
-  return h ? { res: [...h.resources.values()], seen: seenFiles(s.desk, s.anchor.id), events: laneEvents(s.desk, s.anchor.id), done: ledgerDone(s.desk, s.anchor.id) } : null
+  return h ? { res: [...h.resources.values()], seen: seenFiles(s.desk, s.anchor.id), events: laneEvents(s.desk, s.anchor.id), done: ledgerDone(s.desk, s.anchor.id),
+    note: h.note, noLedger: h.noLedger } : null
 }
 
 // a read file's visible name is cut in the middle past this many characters; the hover keeps the full path (2.4)
@@ -48,7 +49,7 @@ export function resourceUnits(s) {
   const rp = (p) => esc(midClip(relPath(cwd, p), NAME_MAX))
   const ledger = ledgerOf(s)
   if (!ledger) return [BUSY]
-  const { res, seen, events, done } = ledger
+  const { res, seen, events, done, note, noLedger } = ledger
   // a count the ledger gives is not known until its chain is read: an empty busy box, never a digit (2.4:67, invariant 4)
   const ct = (n) => (done ? n : null)
   const N = a.calls.length
@@ -77,7 +78,10 @@ export function resourceUnits(s) {
   const rowsOf = (rs, row) => keyed(rs.map((r) => ({ key: resKeyOf(r), html: row(r) })))
   // the ledger statement sits at the TOP of the list (2.4 element table) and is about the LEDGER, not a fallback for
   // "nothing rendered": an existing-but-empty ledger (or no key) with nothing tracked says so (#7)
-  if (done && !res.length && !seen.length) out.push(EMPTY())
+  // the ledger cannot be known (2.4 没有资源信息): that sentence alone, a code other than 'no-ledger' on hover; only part of it kept: a line on top
+  if (noLedger) out.push({ key: 'empty', html: `<div class="navsub empty"${note && note !== 'no-ledger' ? ` title="${esc(note)}"` : ''}>${esc(W.NO_LEDGER)}</div>` })
+  else if (done && !res.length && !seen.length) out.push(EMPTY())
+  if (!noLedger && note === 'partial-ledger') out.push({ key: 'partial', html: `<div class="navsub empty">${esc(W.PARTIAL_LEDGER)}</div>` })
 
   const fileRow = (r) => { const l = life(r)
     return `<div class="navsub ${l.cls}" data-navstep="${l.enter}" data-navres="${esc(resKeyOf(r))}">` +
