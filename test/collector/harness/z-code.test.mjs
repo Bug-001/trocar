@@ -166,6 +166,10 @@ test('z-code: the desktop setting httpProxyCaCertPath names the user\'s CA file 
     const env = { ...Object.fromEntries(AS_NODE), ZCODE_AGENT_CA_CERT: desk, NODE_EXTRA_CA_CERTS: desk }
     const r = judge(zcode, ctxFor({ home: s.home, argv: [EXE, CJS, 'app-server', '--stdio'], env }), { caCertPem: root })
     assert.deepEqual([r.trust.trusted, r.trust.var], [true, 'ZCODE_AGENT_CA_CERT'], 'the desktop agent trusts trocar through its own file')
+    // the app-server reads that file again for each new task (measured on Linux, Z-Code 3.17.2: a root appended while it ran was trusted at the next New task, same pid),
+    // so one started before install counts too
+    const before = judge(zcode, ctxFor({ home: s.home, argv: [EXE, CJS, 'app-server', '--stdio'], env, startedAt: Date.now() - 3_600_000 }), { caCertPem: root })
+    assert.equal(before.trust.trusted, true, 'started before the block was appended: trusted from its next session')
     await uninstallCollector({ home: s.home, env: {}, stop: async () => 'none', roots: { node: [], osText: '' } })
     assert.equal(fs.readFileSync(desk, 'utf8'), DESK.certPem, 'uninstall takes the block out byte for byte')
   } finally { s.done() }
