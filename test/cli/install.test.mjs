@@ -14,6 +14,10 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { ERROR_CODES } from '../../src/cli/json.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
 import { BOARD_RANGE } from '../../src/collector/core/ingress-config.mjs'
+import { onCtx, snapshot } from './fixtures/on-ctx.mjs'
+import { BLOCK_OPEN, BLOCK_END } from '../../src/off/text-edit.mjs'
+import { runOnCli } from '../../src/cli/on.mjs'
+import { formatRefusal, markedRefusal } from '../../src/cli/receipt.mjs'
 
 function fakeIo({ tty = false } = {}) {
   const out = [], err = []
@@ -115,6 +119,25 @@ test('install: a daemon that does not answer stops the run before the login entr
   assert.deepEqual([r.ok, r.autostart.enabled, r.daemon.state], [false, false, 'not-responding'])
   assert.equal(launchctl.calls.some((c) => / bootstrap /.test(c)), false, 'nothing was registered')
   assert.deepEqual(validateReceipt(r), [])
+})
+
+// 4.11 P4: the LaunchAgent plist under trocar's label is trocar's by its place; one no record lists, holding someone else's bytes, is replaced —
+// the plan says so, and the bytes that were there are kept in the backup folder first, byte for byte
+test('4.11 P4 · darwin: a plist under trocar\'s label that no record lists is backed up byte for byte, then replaced, and the plan says it replaces it', async () => {
+  const old = Buffer.from('<?xml version="1.0"?>\n<plist><dict><key>Label</key><string>someone else</string></dict></plist>\n')
+  const plist = (w) => path.join(w.home, 'Library', 'LaunchAgents', 'com.trocar.collector.plist')
+  const setup = (w) => { fs.mkdirSync(path.dirname(plist(w)), { recursive: true }); fs.writeFileSync(plist(w), old) }
+  const backups = (w) => { const d = path.join(w.home, '.trocar', 'backup'); return fs.existsSync(d) ? fs.readdirSync(d).map((n) => fs.readFileSync(path.join(d, n))) : [] }
+  const dry = await cli(['--dry-run', '--json'], { setup })
+  const row = dry.io.json().planned.find((p) => p.what === 'autostart')
+  assert.ok(row && row.detail.includes(path.join('~', '.trocar', 'backup')), `the plan names where the old bytes go: ${JSON.stringify(row)}`)
+  assert.ok(fs.readFileSync(plist(dry.w)).equals(old), 'the dry run wrote nothing')
+  const { w, io, exit } = await cli(['--yes', '--json'], { setup })
+  assert.equal(exit, 0, io.text())
+  assert.ok(backups(w).some((b) => b.equals(old)), 'the old bytes are in the backup folder')
+  const now = fs.readFileSync(plist(w))
+  assert.ok(!now.equals(old) && now.includes('<string>com.trocar.collector</string>'), 'the plist is trocar\'s')
+  assert.ok(JSON.parse(fs.readFileSync(path.join(w.dir, 'install-manifest.json'), 'utf8')).files.some((f) => f.path === plist(w) && f.role === 'unit'), 'and the record lists it')
 })
 
 // the documented order — install, then on — through the CLI: install writes the root, its carriers and
@@ -312,5 +335,67 @@ for (const platform of ['darwin', 'win32']) {
     assert.equal(await install({ io, env: w.env, home: w.home, platform, deps, flags: new Set(['--dry-run', '--json']) }), 0, io.text())
     const words = io.json().planned.map((p) => p.detail).join('\n')
     for (const f of standaloneFiles(w.home, platform)) assert.ok(words.includes(tilde(f, w.home)), `${f} is named: ${words}`)
+  })
+}
+
+// 1.6 §3.2 「标记却没有记录」: the install record is gone and files still hold trocar's marked text — install refuses before it writes anything,
+// exit 1, `error.code` marked-without-record, `error.command` the uninstall that takes such text out by its marks, and every such file in `problems`
+test('1.6 §3.2 (linux): marked text no record lists, in two files → refused, both named, the command given, the home byte for byte as it was', async () => {
+  const home = tmpDir('trocar-mwr-')
+  const env = (dir) => ({ name: dir, runtime: 'rust', processes: { names: [{ name: dir }] }, hosts: [], trust: { chain: [{ var: 'EXTRA_CA', semantic: 'append' }] },
+    inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, `.${dir}`, '.env'), vars: { EXTRA_CA: path.join(ctx.collectorDir, 'ca', 'trocar-ca.pem') }, semantic: 'append' }] }) })
+  const files = ['a', 'b'].map((d) => path.join(home, `.${d}`, '.env'))
+  for (const f of files) { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, `${BLOCK_OPEN}\nSSL_CERT_FILE=/x\n${BLOCK_END}\nKEY=1\n`) }
+  const before = snapshot(home)
+  const io = fakeIo()
+  const exit = await runInstallCli(['--yes', '--json'], onCtx(home, io, { harnesses: [env('a'), env('b')] }))
+  const doc = io.json()
+  assert.deepEqual([exit, doc.error && doc.error.code, doc.error && doc.error.command], [1, 'marked-without-record', 'trocar uninstall'])
+  for (const f of files) assert.ok(doc.problems.some((p) => p.includes(f)), `${f} is named: ${JSON.stringify(doc.problems)}`)
+  assert.deepEqual(validateReceipt(doc), [])
+  assert.deepEqual(snapshot(home), before, 'nothing was written')
+})
+
+// 1.6 §3.2 + 4.11 P4: a harness whose owned file lands on someone else's file is dropped from the plan — its marked file is still named, because the
+// marked files are gathered before any harness is dropped; `on` gives the same refusal, with the command
+test('1.6 §3.2 (linux): a marked file of a harness dropped for a foreign file is named too, by install and by on', async () => {
+  const home = tmpDir('trocar-mwr-order-')
+  const plug = path.join(home, '.p', 'plugins', 'trocar-ca.js')
+  const env = (dir, owned = false) => ({ name: dir, runtime: 'rust', processes: { names: [{ name: dir }] }, hosts: [], trust: { chain: [{ var: 'EXTRA_CA', semantic: 'append' }] },
+    inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, `.${dir}`, '.env'), vars: { EXTRA_CA: path.join(ctx.collectorDir, 'ca', 'trocar-ca.pem') }, semantic: 'append' }], ...(owned ? { owned: [{ path: plug, role: 'plugin', data: '// trocar collector: plugin\n', mode: 0o644 }] } : {}) }) })
+  const files = ['a', 'p'].map((d) => path.join(home, `.${d}`, '.env'))
+  for (const f of files) { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, `${BLOCK_OPEN}\nSSL_CERT_FILE=/x\n${BLOCK_END}\n`) }
+  fs.mkdirSync(path.dirname(plug), { recursive: true }); fs.writeFileSync(plug, '// the user\'s own plugin\n')
+  const before = snapshot(home)
+  for (const run of [runInstallCli, runOnCli]) {
+    const io = fakeIo()
+    const exit = await run(['--yes', '--json'], onCtx(home, io, { harnesses: [env('a'), env('p', true)] }))
+    const doc = io.json()
+    assert.deepEqual([exit, doc.error && doc.error.code, doc.error && doc.error.command], [1, 'marked-without-record', 'trocar uninstall'], JSON.stringify(doc))
+    for (const f of files) assert.ok(doc.problems.some((p) => p.startsWith(f)), `${f} is named: ${JSON.stringify(doc.problems)}`)
+    assert.deepEqual(validateReceipt(doc), [])
+  }
+  assert.deepEqual(snapshot(home), before, 'nothing was written')
+})
+
+// 1.6 §1.1⑥: a path in the refusal prints whole on its line, however long — never folded
+test('1.6 §1.1⑥: the refusal prints each path whole', () => {
+  const long = `/Users/someone/Library/Application Support/${'a rather long folder name/'.repeat(4)}.env` // a space, as macOS paths have: fit folds at spaces
+  const e = { code: 'marked-without-record', message: 'these files hold trocar\'s text.', paths: [long] }
+  const lines = formatRefusal(markedRefusal('install', e), { paths: e.paths })
+  assert.ok(lines.some((l) => l.includes(long)), lines.join('\n'))
+})
+
+// 1.6 §3.2 (macOS / Windows): trocar's marked text in a carrier's file and no record → that carrier is skipped with marked-without-record, the file untouched
+for (const os of ['darwin', 'win32']) {
+  test(`1.6 §3.2 · ${os}: a carrier whose file holds trocar's marked text and no record is skipped with marked-without-record`, async () => {
+    const w = await modelWorld({ os, commands: ['dsh'] })
+    const patch = path.join(w.home, '.dsh', 'cordis.patch.yml')
+    const text = `${BLOCK_OPEN}\n- insert: []\n${BLOCK_END}\n`
+    fs.mkdirSync(path.dirname(patch), { recursive: true }); fs.writeFileSync(patch, text)
+    const r = await w.install()
+    assert.equal(r.exit, 1)
+    assert.ok(r.carriers.some((c) => c.harness === 'deepseek-dsh' && c.state === 'skipped' && c.code === 'marked-without-record'), JSON.stringify(r.carriers))
+    assert.equal(fs.readFileSync(patch, 'utf8'), text)
   })
 }

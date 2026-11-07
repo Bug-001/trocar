@@ -21,12 +21,13 @@ import nodeFs from 'node:fs'
 import { isDeepStrictEqual } from 'node:util'
 import path from 'node:path'
 import { setKey, addItem, getPath, reverseOps, parseJsonText } from '../../../off/json-text.mjs'
-import { dotenvBlock, joinDotenvBlock, insertLine, pemBlock, removeTrocarText, BLOCK_OPEN, sameMarked, holdsMarked } from '../../../off/text-edit.mjs'
-import { sha256, readOrNull, writeDurable, missingDirs, editTarget, pathKey } from '../../../off/fsutil.mjs'
+import { dotenvBlock, joinDotenvBlock, insertLine, pemBlock, removeTrocarText, BLOCK_OPEN, SENTINEL, sameMarked, holdsMarked } from '../../../off/text-edit.mjs'
+import { sha256, readOrNull, writeDurable, missingDirs, editTarget, pathKey, strictlyInside } from '../../../off/fsutil.mjs'
 import { saveManifest, undoByHand, PHASES } from '../../../off/manifest.mjs'
 import { writeBackup } from '../../../off/backup.mjs'
 import { backupDir } from '../../../off/paths.mjs'
 import { CODE_OFF } from '../../../off/names.mjs'
+import { CODE } from '../codes.mjs'
 import { describeEntry } from '../../../off/journal.mjs'
 import { decodeText, encodeText, WHY_TEXT } from '../../../off/text-codec.mjs'
 import { isAlsoSetMember } from '../../../off/env-names.mjs'
@@ -76,16 +77,30 @@ const needHome = (what, home) => { if (!home) throw new TypeError(`${what}: home
 // D55①: every item says which command wrote it — `off` undoes phase 'on', `uninstall` the rest; a writer that forgets fails here, before anything is written
 const needPhase = (what, phase) => { if (!PHASES.includes(phase)) throw new TypeError(`${what}: phase is required (${PHASES.join(' | ')}), got ${JSON.stringify(phase)}`) }
 
+// 4.11 P4: is the file already at a path the manifest does not list someone else's? A file in a subfolder of trocar's collector directory (`dir`,
+// collectorHome's: where install writes its bundles and logs) is trocar's by its place — not one directly in it: those are settings and state the user
+// may edit (ingress.json, state.json); elsewhere only a file carrying trocar's sentinel is (every owned file trocar puts in an agent's folder has it, plan.mjs). → null (nothing
+// there, or trocar's: it may be written over) or the reason it is left alone: not trocar's, or unreadable, so whether it is trocar's is not known.
+export function notTrocars({ dir, file, fs = nodeFs }) {
+  if (strictlyInside(dir, path.dirname(file), fs)) return null
+  let bytes
+  try { bytes = readOrNull(fs, file) } catch (e) { return `${file} is already there and cannot be read (${e.code || e.message}), so whether it is trocar's is not known; trocar left it alone` }
+  return bytes == null || bytes.toString('latin1').includes(SENTINEL) ? null : `${file} is already there and holds no trocar mark, so it is not trocar's; trocar left it alone`
+}
+
 // A file trocar owns (a trust file of certificate blocks, a trust plugin, a launch shim): listed before it is written,
 // with the directories its write creates. `sources` names the user files a trust file carries certificates from
-// (paths, never contents), so the merge stays auditable. `exclusive`: a file already there is never written over
-// (an agent's plugin directory is the user's; trocar only adds its own file to it): `on` passes `exclusive` for a file the manifest does not list,
-// and not for one it does — that is trocar's own, written before or recorded by a run that crashed before the write (R9). A record for a path the
+// (paths, never contents), so the merge stays auditable. A path the manifest does not list is written only when the file there is trocar's
+// (notTrocars, 4.11 P4): someone else's is refused, code not-trocars-file, before anything is written, so the caller skips that carrier (D38).
+// The autostart entry is trocar's by its fixed name in the OS's autostart folder (a plist has no comment for a sentinel). A record for a path the
 // manifest already lists is replaced, not added (a second one would be undone twice), and the directories the first attempt made stay listed.
-export function writeOwnedFile({ dir, manifest, harness = null, role, phase, file, data, sources = null, mode = 0o600, exclusive = false, extra = {}, now = new Date(), fs = nodeFs }) {
+export function writeOwnedFile({ dir, manifest, harness = null, role, phase, file, data, sources = null, mode = 0o600, extra = {}, home = null, now = new Date(), fs = nodeFs }) {
   needPhase('writeOwnedFile', phase)
   const known = manifest.files.find((f) => samePath(f.path, file, fs))
-  if (exclusive && fs.existsSync(file)) throw new Error(`${file} already exists; trocar will not write over it`)
+  const foreign = known || role === 'unit' ? null : notTrocars({ dir, file, fs })
+  if (foreign) throw Object.assign(new Error(foreign), { code: CODE.notTrocarsFile, path: file })
+  // 4.11 P4: the autostart entry under trocar's fixed name is trocar's and is replaced; the bytes that were there go to the backup folder first
+  if (role === 'unit' && !known && fs.existsSync(file)) { needHome('writeOwnedFile (unit)', home); writeBackup({ home, file, data: fs.readFileSync(file), now, fs }) }
   const created = [...new Set([...((known && known.created_dirs) || []), ...missingDirs(path.dirname(file), fs)])]
   const item = { kind: 'owned-file', path: file, role, harness, phase, sha256: sha256(Buffer.from(data)), mode, created_dirs: created, installed_at: now.toISOString(), ...(sources ? { sources } : {}), ...extra }
   item.undo_by_hand = undoByHand(item)
@@ -304,10 +319,11 @@ export function applyJsonKeys({ dir, manifest, harness, phase, file, sets = [], 
 // under an install this manifest does not list is refused: a second block or row would only be undone once. `joined` (the
 // caller has checked the manifest lists the block for this harness) is the only way past that refusal, and only into the
 // existing block (text-edit.mjs joinDotenvBlock); the default stays the refusal, so nothing joins by accident.
+export const MARKED_WITHOUT_RECORD = 'marked-without-record' // 1.6 §3.2: the refusal's code, which install's plan collects over every file
 function editText(file, text, edit, { joined = false, phase = 'install' } = {}) {
   if (text != null && (text.includes(BLOCK_OPEN) || (edit.line && holdsMarked(text, edit.line)))) { // the marker's fixed part: what any release wrote (4.6「标记的字」)
     if (!(joined && text.includes(BLOCK_OPEN) && edit.format === 'dotenv-block')) {
-      throw new Error(`${file} already holds trocar's text from an install this manifest does not list; take it out, then install again`)
+      throw Object.assign(new Error(`${file} already holds trocar's text from an install this manifest does not list; take it out, then install again`), { code: MARKED_WITHOUT_RECORD, path: file })
     }
   }
   try {

@@ -11,7 +11,7 @@ import { collectorHome } from '../paths.mjs'
 import { caPaths } from './core/tls/ca-store.mjs'
 import { ROOT, checkProfile, certPem, pemToDer } from './core/tls/cert.mjs'
 import { rootIdOf, rootName, ROOT_SUBJECT, strayRoots } from '../off/root-store.mjs'
-import { readManifest, saveManifest, newManifest, applyJsonKey, applyTextEntry, writeOwnedFile, judgeOwned, sha256 } from './core/trust/journal.mjs'
+import { readManifest, saveManifest, newManifest, applyJsonKey, applyTextEntry, writeOwnedFile, notTrocars, judgeOwned, sha256 } from './core/trust/journal.mjs'
 import { codeId } from '../version.mjs'
 import { installComplete, itemsOfPhase, undoByHand, OFF_VERSION } from '../off/manifest.mjs'
 import { writeStandalone } from '../off/standalone.mjs'
@@ -26,6 +26,7 @@ import { readAgentList } from '../off/identity.mjs'
 import { unitedLiveness, daemonEnv } from './install.mjs'
 import { CODE, EVENT } from './core/codes.mjs'
 import { runEventWriter } from '../off/events.mjs'
+import { writeBackup } from '../off/backup.mjs'
 import { certBlocks, certsOf, composeBundle } from '../off/pem.mjs'
 
 /** The OSes the collector model (4.11) runs on — the one list `install`, `on`, `uninstall` and the arch backends ask. */
@@ -202,6 +203,9 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
   if (unit) {
     const d = daemonEnv(env, dir)
     if (d.note) { notes.push(d.note); runEventWriter({ dir, base: { run: now().toISOString() }, notes, fs })({ event: EVENT.installNote, where: 'install', kind: 'note', code: CODE.unitEnvNotCarried, reason: d.note }) }
+    // 4.11 P4: a registration under trocar's name the record does not list (one the unit file does not hold: a scheduled task) is backed up before it is replaced
+    const prior = !m.files.some((x) => x.path === unit.path) && typeof unit.registeredBytes === 'function' ? unit.registeredBytes() : null
+    if (prior) writeBackup({ home, file: unit.path, data: prior, now: now(), fs })
     owned(unit.path, 'unit', null, unit.text(d.env), 0o644)
   }
   const agentList = readAgentList({ home, fs }).entries
@@ -226,7 +230,7 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
   function owned(file, role, harness, data, mode, { sources = null, extra = {} } = {}) {
     const j = judgeOwned({ manifest: m, file, planned: sha256(Buffer.from(data)), fs })
     if (j.action === 'skip-intact') return said(role, 'intact', { path: file, harness })
-    writeOwnedFile({ dir, manifest: m, harness, role, phase: 'install', file, data, mode, sources, extra, now: now(), fs })
+    writeOwnedFile({ dir, manifest: m, harness, role, phase: 'install', file, data, mode, sources, extra, home, now: now(), fs })
     said(role, 'written', { path: file, harness })
   }
 
@@ -273,7 +277,12 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
         return { state: 'placed' }
       }
       return { state: 'skipped', code: 'not-routed', why: `no carrier kind ${c.kind}` }
-    } catch (e) { problems.push(`${desc.name}: ${errText(e)}`); return { state: 'skipped', code: e.code || 'install-error', why: errText(e) } }
+    } catch (e) {
+      problems.push(`${desc.name}: ${errText(e)}`)
+      // 4.11 P4: a file that is not trocar's at a path it writes its own to — left alone, and on record (D38)
+      if (e.code === CODE.notTrocarsFile) runEventWriter({ dir, base: { run: now().toISOString() }, notes, fs })({ event: EVENT.failure, where: 'install', code: e.code, harness: desc.name, path: e.path, reason: errText(e) })
+      return { state: 'skipped', code: e.code || 'install-error', ...(e.path ? { path: e.path } : {}), why: errText(e) }
+    }
   }
 
   // the CERTIFICATE blocks of the files a `merges` source names, per file: [{ file, certs }] (4.11 P4); what is not carried over is said, never silent (D38)
@@ -395,8 +404,18 @@ const pick = (o, keys) => Object.fromEntries(keys.filter((k) => o && o[k] != nul
 const carrierLoc = (c) => c.file || c.dir || c.binDir || null
 const carrierKeys = (c) => c.keys || (c.file && c.file.keys) || null
 
-export function planInstall({ os, harnesses, ctx, home, owns, fs = nodeFs }) {
+export function planInstall({ os, harnesses, ctx, home, owns, hookFile = null, fs = nodeFs }) {
   const rows = []
+  const dir = collectorHome(path.join(home, '.trocar'))
+  let m = null
+  try { m = readManifest(dir, fs) } catch { /* an unreadable record: the run refuses it, the plan has nothing to add */ }
+  // 4.11 P4: the plug-in file install would put where a file that is not trocar's already is — the run skips that carrier, so the plan says so
+  const foreignPlugin = (c) => {
+    const pdir = hookFile && resolveLoc(c.dir, ctx)[0]
+    const file = pdir && path.join(pdir, hookFile(c.template))
+    const why = file && judgeOwned({ manifest: m, file, fs }).action === 'write' ? notTrocars({ dir, file, fs }) : null
+    return why ? { file, why } : null
+  }
   for (const desc of harnesses.filter((d) => d.proxyMode)) {
     const forms = desc.proxyMode.forms.filter((x) => x.os.includes(os) && isPresent(x, ctx))
     for (const f of forms) {
@@ -406,6 +425,8 @@ export function planInstall({ os, harnesses, ctx, home, owns, fs = nodeFs }) {
       // the key stays the user's: a row that says so (install records the form as rule-u), and rule U's file below is what changes
       if (carrier === 'config-key' && keyIsUsers(c, ctx, home)) { rows.push({ harness: desc.name, form: f.id, carrier, paths: resolveLoc(c.file, ctx), keys: c.keys, state: 'rule-u' }); continue }
       // a plug-in is two places when a file loads it: its folder (the plug-in file goes there) and the loader file (a line that loads it)
+      const foreign = carrier === 'plugin' ? foreignPlugin(c) : null
+      if (foreign) { rows.push({ harness: desc.name, form: f.id, carrier, paths: [foreign.file], keys: null, state: 'skipped', code: CODE.notTrocarsFile, why: foreign.why }); continue }
       const places = carrier === 'root' ? [{ loc: null }] : c.kind === 'plugin' && c.loader ? [{ loc: c.dir }, { loc: c.loader.file, keys: c.loader.keys, loader: true }] : [{ loc: carrierLoc(c), keys: carrierKeys(c) }]
       for (const { loc, keys = null, loader } of places) rows.push({ harness: desc.name, form: f.id, carrier, paths: loc ? resolveLoc(loc, ctx) : [], keys: keys || null, ...(loader ? { loader } : {}) })
     }

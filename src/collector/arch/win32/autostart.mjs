@@ -290,6 +290,8 @@ export function userUnit({ home, node, script, run = null, env = process.env, fs
   return {
     name: 'trocar-collector', path: file, links: [],
     text: () => taskXml({ user: user || taskUser(env), program, conhost }),
+    // 4.11 P4: the task registered under trocar's name now, as its XML (null when none, or unreadable): what install backs up before it replaces an unrecorded one
+    registeredBytes() { const r = schtasks(['/Query', '/TN', TASK_NAME, '/XML'], tools); const xml = r.code === 0 ? String(r.out).replace(/\u0000/g, '') : ''; return /<Task[\s>]/.test(xml) ? Buffer.from(xml) : null },
     enable({ now = true, prior = null } = {}) {
       const c = register({ file, run, env, fs })
       if (c.code === 0) {

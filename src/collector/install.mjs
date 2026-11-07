@@ -19,7 +19,7 @@ import { planTrust } from './core/trust/plan.mjs'
 import { livenessOf } from './core/registry.mjs'
 import { readAgentList } from '../off/identity.mjs'
 import { patternsOf } from '../off/signature.mjs'
-import { readManifest, saveManifest, newManifest, missingDirs, applyJsonKey, previewJsonKey, applyTextEntry, previewTextEntry, writeOwnedFile, manifestPath, describeEntry, judgeEntry, judgeOwned, sha256 } from './core/trust/journal.mjs'
+import { readManifest, saveManifest, newManifest, missingDirs, applyJsonKey, previewJsonKey, applyTextEntry, previewTextEntry, writeOwnedFile, notTrocars, manifestPath, describeEntry, judgeEntry, judgeOwned, sha256, MARKED_WITHOUT_RECORD } from './core/trust/journal.mjs'
 import { EVENT, CODE } from './core/codes.mjs'
 import { RESTART_REASONS } from '../health/codes.mjs'
 import { controlRequest, controlEndpointFor } from '../off/control-client.mjs'
@@ -178,7 +178,7 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
   }
   if (prior && prior.pending_bundles) throw new Error(`an earlier uninstall kept combined bundles that running agents still use (${prior.files.filter((f) => f.role === 'bundle' || f.role === 'trust-file').map((f) => f.path).join(', ')}); run "trocar uninstall" again once they exit`)
   if (prior && prior.uninstall_left) throw new Error(`an earlier uninstall could not undo ${prior.uninstall_left.length} item(s) (${prior.uninstall_left.map((l) => l.path).join(', ')}); fix them, run "trocar uninstall" again, then "trocar on"`)
-  const descs = ids ? harnesses.filter((d) => ids.includes(d.name)) : harnesses
+  let descs = ids ? harnesses.filter((d) => ids.includes(d.name)) : harnesses
   const ca = caPaths(path.join(dir, 'ca'))
   const facts = await scan()
   const envMap = new Map(Object.entries(env).filter(([, v]) => typeof v === 'string'))
@@ -187,7 +187,20 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
     readText: (f) => readText(f), readTextOrError: (f) => readTextOrError(f), readBytes: (f) => { try { return fs.readFileSync(f) } catch { return null } }, listDir, collectorDir: dir, caPem: ca.pem,
   })
   const R = roots || await bundleRoots(arch)
-  const draft = planTrust({ descriptors: descs, ctxFor, caCertPem: null, collectorDir: dir, roots: R })
+  let draft = planTrust({ descriptors: descs, ctxFor, caCertPem: null, collectorDir: dir, roots: R })
+  // marked text no record lists (1.6 §3.2), over every harness's files BEFORE any harness is dropped below, so the refusal names them all;
+  // any other per-file refusal is left to the preview further down, which throws it for the harnesses still planned
+  const marked = [...new Set(draft.entries.filter((e) => judgeEntry({ manifest: prior, planned: e, fs }).action === 'write').map((e) => {
+    try { if (e.kind === 'text') previewTextEntry({ file: e.path, edit: e, fs }); else previewJsonKey({ file: e.path, keys: e.keys, value: e.value, fs }); return null } catch (err) { return err && err.code === MARKED_WITHOUT_RECORD ? err.path : null }
+  }).filter(Boolean))]
+  if (marked.length) throw Object.assign(new Error(`${marked.length === 1 ? 'this file holds' : 'these files hold'} trocar's text from an earlier install whose record is gone, so nothing was changed. The line below takes it out by trocar's own marks; then run this command again.`), { code: MARKED_WITHOUT_RECORD, paths: marked })
+  // 4.11 P4: an owned file the manifest does not list that would land on someone else's file (notTrocars) skips its harness whole, before
+  // anything is written (D38); the plan is made again without it, so nothing of that harness is written, the other harnesses are
+  const foreign = draft.owned.filter((o) => judgeOwned({ manifest: prior, file: o.path, fs }).action === 'write').map((o) => ({ harness: o.harness, what: o.path, reason: notTrocars({ dir, file: o.path, fs }) })).filter((x) => x.reason)
+  if (foreign.length) {
+    descs = descs.filter((d) => !foreign.some((x) => x.harness === d.name))
+    draft = planTrust({ descriptors: descs, ctxFor, caCertPem: null, collectorDir: dir, roots: R })
+  }
   const daemon = unit ? daemonEnv(env, dir) : null
   if (daemon && daemon.note) draft.notes.push(daemon.note)
 
@@ -207,13 +220,13 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
   })
   const ownedJ = draft.owned.map((o) => {
     const j = judgeOwned({ manifest: prior, file: o.path, fs })
-    if (j.action === 'write' && fs.existsSync(o.path)) throw new Error(`${o.harness}: ${o.path} already exists; trocar will not write over it (left by an earlier install whose manifest is gone? remove it, then install again)`)
     steps.push({ harness: o.harness, path: o.path, kind: o.role, action: j.action, ...(j.why ? { why: j.why } : {}) })
     return j
   })
   const unitJ = unit ? judgeOwned({ manifest: prior, file: unit.path, planned: sha256(Buffer.from(unit.text(daemon.env))), fs }) : null
-  if (unitJ && unitJ.action === 'write' && fs.existsSync(unit.path)) throw new Error(`${unit.path} already exists; trocar will not write over it (left by an earlier install whose manifest is gone? remove it, then install again)`) // before anything is written (review 4 #7)
-  if (unitJ) steps.push({ harness: null, path: unit.path, kind: 'unit', action: unitJ.action, ...(unitJ.why ? { why: unitJ.why } : {}) })
+  // 4.11 P4: a unit under trocar's fixed name the record does not list is trocar's: replaced, its bytes backed up first (writeOwnedFile)
+  const unitWhy = unitJ && unitJ.action === 'write' && fs.existsSync(unit.path) ? `replaces the ${unit.path} already there; its bytes are kept in the backup folder` : unitJ && unitJ.why
+  if (unitJ) steps.push({ harness: null, path: unit.path, kind: 'unit', action: unitJ.action, ...(unitWhy ? { why: unitWhy } : {}) })
 
   // who is on, and who has nothing to do here (no entry, no file, not installed before): said, with the descriptor's own reason
   const installed = new Set([...((prior && prior.entries) || []), ...((prior && prior.files) || [])].map((x) => x.harness).filter(Boolean))
@@ -221,6 +234,7 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
   const targets = descs.map((d) => d.name).filter((n) => withItems.has(n) || installed.has(n))
   const reasonOf = (name) => draft.records.filter((r) => r.harness === name).map((r) => r.reason.replace(`${name}: `, '')).join('; ') || `no ${name} configuration was found on this machine: nothing to change for it`
   const skipped = [
+    ...foreign.map((x) => ({ what: x.what, reason: x.reason })),
     ...descs.map((d) => d.name).filter((n) => !targets.includes(n)).map((n) => ({ what: n, reason: reasonOf(n) })),
     ...steps.filter((s) => s.action === 'skip-user-changed').map((s) => ({ what: s.path, reason: `${s.why}; run "trocar off", then ${isModelOs(osName) ? '"trocar on"' : '"trocar install" and "trocar on"'}, to write it again` })), // D55⑥: off then install writes a certificate item again; on never does (macOS / Windows: turnOnModel)
   ]
@@ -238,7 +252,7 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
   // D46: the daemon's log files the unit's write makes (a dry run names them too — the receipt lists every file the real run writes, V3); once they exist a later on lists none of them
   const logs = unit && typeof unit.logFiles === 'function' ? unit.logFiles().filter((f) => !fs.existsSync(f.path)).map((f) => f.path) : []
   return {
-    first, newPaths, steps, targets, skipped, restart, writing, installed: [...installed],
+    first, newPaths, steps, targets, skipped, foreign, restart, writing, installed: [...installed],
     changed: draft.entries.map((e, i) => ({ e, j: entryJ[i], i })).filter((x) => act(x.j.action)).map((x) => ({ path: x.e.path, change: changeText(x.e, x.j.entry ? x.j.entry.prior_value : preview[x.i].prior), backup: null })),
     created: [...(prior ? [] : [manifestPath(dir)]), ...(caNew ? [ca.key, ca.pem] : []), ...steps.filter((s) => act(s.action) && s.kind !== 'entry').map((s) => s.path), ...logs],
     unchanged: steps.filter((s) => s.action === 'skip-intact').map((s) => s.path),
@@ -332,7 +346,7 @@ async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePo
     if (j.action === 'skip-intact') { written.intact.push(o.path); continue }
     if (certItem(o.path)) continue
     guard()
-    writeOwnedFile({ dir, manifest: m, harness: o.harness, role: o.role, phase: 'install', file: o.path, data: o.data, mode: o.mode, exclusive: j.action === 'write', now: now(), fs })
+    writeOwnedFile({ dir, manifest: m, harness: o.harness, role: o.role, phase: 'install', file: o.path, data: o.data, mode: o.mode, now: now(), fs })
     written.owned.push(o.path)
   }
   for (const e of final.entries) {
@@ -351,7 +365,7 @@ async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePo
   if (unit) {
     const text = unit.text(daemon.env)
     const j = judgeOwned({ manifest: m, file: unit.path, planned: sha256(Buffer.from(text)), fs })
-    if (j.action !== 'skip-intact') { guard(); writeOwnedFile({ dir, manifest: m, role: 'unit', phase: 'install', file: unit.path, data: text, mode: 0o644, exclusive: j.action === 'write', now: now(), fs }); written.unit = j.action }
+    if (j.action !== 'skip-intact') { guard(); writeOwnedFile({ dir, manifest: m, role: 'unit', phase: 'install', file: unit.path, data: text, mode: 0o644, home, now: now(), fs }); written.unit = j.action }
     // D46: the daemon's own log sinks the unit names — directory 0700, two files 0600, made here at unit-write time and listed in the manifest like
     // every file trocar owns; NEVER rewritten afterwards (a later on only lists what the manifest does not know yet, so no log line is ever truncated)
     if (typeof unit.ensureLogs === 'function') { guard(); unit.ensureLogs() }
@@ -385,6 +399,12 @@ function noteRun({ dir, run, final, written, notes, fs, log = null }) {
 // `already` says every file item was in place (no onPlan, nothing written). A unit is enabled with `unit.enable()` (enable --now) on EVERY run, `already` or not:
 // a login entry switched off or never registered since (no systemd --user at the first install) is what a second install puts back — the fix line of `on`'s
 // autostart-missing (1.6 §3.2 补装, §3.3) — and a registration that fails is a problem of the run (`daemon.problems`, exit 1), never only a note.
+// 4.11 P4: the carriers left off someone else's file, each with a failure line in flows/ (D38) → the receipt's `skipped` rows
+function foreignRows(plan, put) {
+  for (const x of plan.foreign) put({ event: EVENT.failure, where: 'install', code: CODE.notTrocarsFile, harness: x.harness, path: x.what, reason: x.reason })
+  return plan.foreign.map((x) => ({ what: x.what, reason: x.reason }))
+}
+
 export async function installCollector({ home = os.homedir(), ...opts } = {}) {
   refuseRoot('install')
   const dir = collectorHome(path.join(home, '.trocar'))
@@ -403,18 +423,19 @@ export async function installCollector({ home = os.homedir(), ...opts } = {}) {
       if (dmn && (dmn.started || (entryBefore && entryBefore !== 'present'))) put({ event: EVENT.installNote, where: 'install', kind: 'result', outcome: dmn.problems.length ? 'partial' : 'installed', reason: `the certificates were in place; the login entry was ${entryBefore}${dmn.started ? ' and the collector was started' : ''}${dmn.problems.length ? `; not done: ${dmn.problems.join('; ')}` : ''}` })
       // nothing to write but the record of which code ran install, when that is another code (1.6 §5.5): an npm copy's update finishes until it says this one
       if (plan._.prior.install.code !== codeId()) { plan._.prior.install = { ...plan._.prior.install, code: codeId() }; saveManifest(dir, plan._.prior, fs) }
-      return { already: true, entryBefore, manifest: plan._.prior, plan: null, daemon: dmn }
+      return { already: true, entryBefore, manifest: plan._.prior, plan: null, daemon: dmn, skipped: foreignRows(plan, put) }
     }
     const onPlan = opts.onPlan || (() => {})
     onPlan(plan)
     const m = openManifest({ dir, plan, now, fs })
     const { manifest, final, written } = await writeInstall({ dir, home, plan, m, osName: opts.osName, harnesses: opts.harnesses, freePort: opts.freePort || freeEnginePort, now, fs })
     const put = noteRun({ dir, run, final, written, notes: final.notes, fs })
+    const skipped = foreignRows(plan, put)
     const dmn = await register(put, written.unit === 'rewrite')
     if (dmn) for (const n of dmn.notes) if (!final.notes.includes(n) && !dmn.problems.includes(n)) final.notes.push(n) // a problem is said once, as a problem (附录 C.1)
     const counts = { entries: manifest.entries.length, files: manifest.files.filter((f) => f.role === 'trust-file').length, notes: final.notes.length }
     put({ event: EVENT.installNote, where: 'install', kind: 'result', outcome: dmn && dmn.problems.length ? 'partial' : 'installed', counts, reason: `installed: ${counts.entries} trust entr${counts.entries === 1 ? 'y' : 'ies'} and ${counts.files} trust file(s) written, ${counts.notes} note(s)${dmn && dmn.problems.length ? `; not done: ${dmn.problems.join('; ')}` : ''}` })
-    return { already: false, manifest, plan: final, daemon: dmn }
+    return { already: false, manifest, plan: final, daemon: dmn, skipped }
   })
 }
 
@@ -484,7 +505,12 @@ export async function turnOn(opts = {}) {
     const stateWrite = need.length > 0 || stateRead.from === 1 // an unreadable file is `need` too: every target is not on
     const r = { ...fresh(), ...(osName === 'win32' || osName === 'darwin' ? {} : lingerNow()), harnesses: plan.targets, changed: plan.changed, created: [...plan.created, ...(stateWrite ? [stateF] : [])], skipped: [...plan.skipped], restart: plan.restart, unchanged: plan.unchanged, notes: [...plan.notes] }
     if (stateRead.error) r.notes.push(`${stateF} could not be read (${String(stateRead.error.message || stateRead.error)}); it is written again`)
-    if (!plan.targets.length) return { receipt: unwritten({ ...r, ok: false, notes: [...r.notes, 'no agent trocar can capture was found: nothing was changed. Install one, then run trocar on again'] }), manifest: plan._.prior, plan, exit: 1 }
+    if (!plan.targets.length) {
+      // 4.11 P4: a harness left off a file that is not trocar's is not "no agent": `skipped` names the file, and the run is on record (D38)
+      if (plan.foreign.length) foreignRows(plan, noteRun({ dir, run, final: { records: [] }, written: { entries: [] }, notes: r.notes, fs, log: opts.log }))
+      const why = plan.foreign.length ? `nothing was changed: ${plan.foreign.map((x) => x.reason).join('; ')}` : 'no agent trocar can capture was found: nothing was changed. Install one, then run trocar on again'
+      return { receipt: unwritten({ ...r, ok: false, notes: [...r.notes, why] }), manifest: plan._.prior, plan, exit: 1 }
+    }
     const named = !!ids && plan.skipped.some((s) => ids.includes(s.what)) // a harness asked for by name that has nothing to install: not done
     // the proxy fields the user edited since the last `on` (1.6 §9.5): asked about like an extra file (R6); a routing that owns none has none
     const edited = networkEdited && plan.targets.length ? await networkEdited(plan.targets) : []
@@ -536,6 +562,7 @@ export async function turnOn(opts = {}) {
     }
     if (written && written.needInstall.length) problems.push(`these certificate items are not in place and on does not write them: ${written.needInstall.join(', ')}; run trocar install (D55①)`)
     const put = noteRun({ dir, run, final: final || { records: [] }, written: written || { entries: [] }, notes, fs, log: opts.log })
+    foreignRows(plan, put)
     const receipt = {
       ...r,
       changed: (written ? written.entries : []).map((e) => ({ path: e.path, change: changeText(e, e.prior_value), backup: e.backup ?? null })),
@@ -545,7 +572,7 @@ export async function turnOn(opts = {}) {
     // the result line is the one proxy mode writes (1.6 §1): `harnesses` = the ones this run turned on (the daemon up and the run not halted), `refused` = none
     // (driver mode refuses no single harness)
     const finish = (outcome, reason, on = []) => {
-      receipt.ok = !problems.length && !named && !(written && written.userChanged.length) // an entry the user changed is left, and not in effect: not "done"
+      receipt.ok = !problems.length && !named && !plan.foreign.length && !(written && written.userChanged.length) // an entry the user changed is left, and not in effect: not "done"; a carrier left off someone else's file neither
       const counts = { entries: m.entries.length, changed: receipt.changed.length, notes: notes.length + problems.length }
       put({ event: EVENT.installNote, where: 'install', kind: 'result', outcome, harnesses: on, refused: [], counts, reason }) // before the notes are taken: a result line that cannot be written adds its own "not recorded" (R11)
       receipt.notes = [...notes, ...problems]
@@ -728,3 +755,5 @@ function readLockPid(dir, fs) { try { return JSON.parse(fs.readFileSync(path.joi
 
 // `trocar install` on macOS and Windows (4.11 §1, plan T20): the model's install lives beside this one; Linux keeps installCollector.
 export { runInstall } from './model-install.mjs'
+
+export { MARKED_WITHOUT_RECORD } // the plan's refusal code, for the command that prints it (src/cli/install.mjs)

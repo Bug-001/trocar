@@ -25,6 +25,7 @@ import { acquireOpLock, LOCK_BUSY } from './lock.mjs'
 import { readManifest, refuseOldManifest, unknownItems, undoByHand, MANIFEST_VERSION, OFF_VERSION, PHASES } from './manifest.mjs'
 import { undoHarnesses, undoRootKeys, OWNED_ROLES } from './undo.mjs'
 import { planByMarker, undoByMarker } from './marker.mjs'
+import { pathKey } from './fsutil.mjs'
 import { daemonState, stopDaemon, helperGone, isRedirectorHelper, clearStaleSupervisorLock } from './daemon-stop.mjs'
 import { controlRequest, controlEndpointFor } from './control-client.mjs'
 import { unitFilePath, UNIT_FILE_NAME } from './autostart.mjs'
@@ -244,6 +245,11 @@ export const MARKER_TEXT = { block: "trocar's block removed", line: 'the line tr
 const SKIP_REASON = { 'already-restored': 'already as it was before install', missing: 'the file is gone; nothing of trocar is in it', 'left-user-value': 'this key now holds a value you set, so it was left as it is', 'already-removed': "trocar's text is no longer in this file" }
 const SKIP_CODE = { 'already-restored': 'already-restored', missing: 'missing', 'left-user-value': 'left-user-value' } // the results that are in the closed set of codes (src/health/codes.mjs)
 const withHarness = (h) => (typeof h === 'string' ? { harness: h } : {})
+/** 1.6 §3.6 「记录没列的标记」: the marked files at planByMarker's places that none of `listed` (the record's paths) names — what uninstall undoes by marks
+ *  beside the record, and so what its plan names (§1.4 「计划写全」). */
+export const marksNotListed = (w, listed, places = []) => { const keys = new Set([...listed].map(pathKey)); return planByMarker({ home: w.home, fs: w.fs, env: w.env, platform: w.platform, phases: PHASES, places }).filter((p) => !keys.has(pathKey(p.path))) }
+/** A marker plan as plan rows: a file trocar created is `removed`, any other `changed` — the rows the run's receipt puts them in. */
+export const markRows = (plan) => ({ changed: perFile(plan.filter((p) => p.how !== 'owned-file').map((p) => ({ path: p.path, change: MARKER_TEXT[p.how], backup: null, ...withHarness(p.harness) }))), removed: [...new Set(plan.filter((p) => p.how === 'owned-file').map((p) => p.path))] })
 /** What a marker-only off asks about (R3), as the off receipt lays text out (1.6 §1.1②⑥): a sentence, then each file an item, its harness the label and the path
  *  with what would be done to it the value (labelLines: one value column, folds in it, past the command column), HOME as ~. */
 export const markerListing = (plan, home) => [...textLines("There is no install record to go by. By trocar's own marks, these would be undone:", home),
@@ -302,6 +308,7 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
     const at = w.clock()
     const label = (e) => { try { return `${e.harness}\0${e.path}\0${describeEntry(e)}` } catch { return `${e.harness}\0${e.path}` } }
     const before = new Map(manifest.entries.map((e) => [label(e), { ...e }]))
+    const manifestPaths = new Set([...manifest.entries, ...manifest.files].map((e) => e && e.path).filter(Boolean)) // before the undo drops what it took out
     let out, stopped = null
     try {
       const roots = w.deps.roots || (manifest.files.some((f) => f.role === 'bundle') ? () => rebuildRoots(w) : null)
@@ -312,6 +319,11 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
         return u
       }
       out = e.partial; stopped = e // it stopped after the files were changed (the last write of the manifest): what it did is in the receipt all the same, below
+    }
+    // 1.6 §3.6 「记录没列的标记」: uninstall also takes out, by trocar's marks, what the record does not list — only at the places planByMarker reads
+    if (dropCa && ids == null && !stopped) {
+      const extra = marksNotListed(w, manifestPaths, places)
+      if (extra.length) takeByMarker(w, u, extra)
     }
     const note = (code, extra, reason) => u.events.push({ kind: code, code, ...extra, reason }) // `kind` = `code`: one line per thing the operator should know (4.6 安装 / 卸载不静默)
     u.raw = out // what the undo did, for a receipt if what follows throws (undoSide)
@@ -416,18 +428,25 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
     u.problems.push(`trocar's own record of what it wrote ${manifestError ? 'cannot be read' : 'is missing'}, so the ${items.length} file${items.length === 1 ? '' : 's'} above ${items.length === 1 ? 'was' : 'were'} left as ${items.length === 1 ? 'it is' : 'they are'}.`, `Undo ${items.length === 1 ? 'it' : 'them'} by the marks trocar left in ${items.length === 1 ? 'it' : 'them'}: trocar off --yes`)
     return u
   }
+  takeByMarker(w, u, plan)
+  if (u.orphan_backups.length) u.notes.push(`the backups of the files above (JSON values taken back from them), and any others, are left in place: ${u.orphan_backups.join(', ')}`)
+  return u
+}
+
+/** Undoes a planByMarker plan and puts each result in the receipt `u`: a file undone is `changed` (`result: undone-by-marker`, `prior_left` for a value
+ *  that could not be put back) or `removed`, one no longer marked `skipped`, one that could not be undone `left` with its failure. */
+function takeByMarker(w, u, plan) {
   for (const r of undoByMarker(plan, { home: w.home, fs: w.fs })) {
     if (r.result === CODE_OFF.undoneByMarker) {
       u.undone_by_marker = true
       if (r.how === 'owned-file' || r.deleted) u.removed.push(r.path) // a file trocar created, deleted
       else u.changed.push({ path: r.path, change: MARKER_TEXT[r.how], backup: r.restored_from || r.backup || null, result: r.result, ...(r.prior_left ? { prior_left: r.prior_left } : {}), ...withHarness(r.harness) })
-      u.events.push({ kind: CODE_OFF.undoneByMarker, code: CODE_OFF.undoneByMarker, ...withHarness(r.harness), path: r.path, reason: `${r.path}: ${MARKER_TEXT[r.how]} (found by trocar's mark; there is no manifest to say what it was before)` })
+      u.events.push({ kind: CODE_OFF.undoneByMarker, code: CODE_OFF.undoneByMarker, ...withHarness(r.harness), path: r.path, reason: `${r.path}: ${MARKER_TEXT[r.how]} (found by trocar's mark; no install record lists it to say what it was before)` })
     } else if (r.result === 'already-clean') u.skipped.push({ what: r.path, reason: "trocar's mark is no longer in this file" })
     else { u.left.push({ path: r.path, result: r.result, reason: r.reason || `${r.path}: ${r.result}`, ...(r.command ? { command: r.command } : {}), ...withHarness(r.harness) }); u.failures.push({ code: r.result === 'left-unparsable' ? 'left-unparsable' : 'entry-not-undone', ...withHarness(r.harness), path: r.path, reason: r.reason || `${r.path}: trocar cannot read it; trocar's value may still be in it` }) }
   }
   u.changed = perFile(u.changed)
   u.removed = [...new Set(u.removed)]
-  return u
 }
 
 /** The writer of a run's `flows/` lines: `put(rec)` appends `{ts, event, where, run, …rec}` (a rec may bring its own `event`, e.g. 'failure'); a line that cannot be
@@ -506,8 +525,9 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
     const gone = items.files.filter((f) => mine(f) && [...OWNED_ROLES, 'bundle', 'trust-file'].includes(f.role)).map((f) => f.path)
     const marks = manifest && !manifest.unsupported ? [] : planByMarker({ home, ids, fs: w.fs, env: w.env, platform: w.platform, notes: receipt.notes })
     receipt.dry_run = true
-    receipt.changed = [...items.entries.filter((e) => mine(e) && (e.kind === 'json-key' || e.kind === 'text')).map((e) => ({ path: e.path, change: offChangeText(e), backup: e.backup ?? null, ...withHarness(e.harness) })), ...perFile(marks.filter((p) => p.how !== 'owned-file').map((p) => ({ path: p.path, change: MARKER_TEXT[p.how], backup: null, ...withHarness(p.harness) })))]
-    receipt.removed = [...gone, ...marks.filter((p) => p.how === 'owned-file').map((p) => p.path)]
+    const rows = markRows(marks)
+    receipt.changed = [...items.entries.filter((e) => mine(e) && (e.kind === 'json-key' || e.kind === 'text')).map((e) => ({ path: e.path, change: offChangeText(e), backup: e.backup ?? null, ...withHarness(e.harness) })), ...rows.changed]
+    receipt.removed = [...gone, ...rows.removed]
     // 附录 C.2: what this off would do, record or not; the board's plan is these bytes (4.4), so a record changed between its two requests makes its plan_id stale
     receipt.planned = [...items.entries.filter((e) => mine(e) && (e.kind === 'json-key' || e.kind === 'text')).map((e) => ({ path: e.path, how: e.kind, change: offChangeText(e), ...withHarness(e.harness) })),
       ...items.files.filter((f) => gone.includes(f.path)).map((f) => ({ path: f.path, how: 'owned-file', change: MARKER_TEXT['owned-file'], ...withHarness(f.harness) })),
