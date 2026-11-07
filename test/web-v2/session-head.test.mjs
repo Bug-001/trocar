@@ -123,7 +123,7 @@ test('1.2 §信息弹出层 row 1: no price table yet, or an unreadable one: ≈
 
 test('1.2 §信息弹出层 row 1: each unpriced call is under one cause, said once: no price row, or no usage returned', () => {
   const m = (model, usage) => ({ rec: { request: { model } }, usage })
-  const costOf = (rows) => sessionHeadModel(headState([{ kind: 'main', rows }], {}, {})).info().find((r) => r.key === 'cost')
+  const costOf = (rows, sub = []) => sessionHeadModel(headState([{ kind: 'main', rows }, ...(sub.length ? [{ kind: 'subagent', rows: sub }] : [])], {}, {})).info().find((r) => r.key === 'cost')
   // nothing priced: one model with no price row (2 calls), one call with no usage at all
   const none = costOf([m('x-unpriced', U(0, 50, 5)), m('x-unpriced', U(0, 50, 5)), m('x-unpriced', null)])
   assert.equal(none.usd, null)
@@ -134,6 +134,11 @@ test('1.2 §信息弹出层 row 1: each unpriced call is under one cause, said o
   assert.deepEqual(some.notes, [W.noPriceCalls(1), W.noUsageCalls(1)])
   // a call with no usage on a priced model is a usage cause, never a price one
   assert.deepEqual(costOf([...mainRows(), m('m', null)]).notes, [W.noUsageCalls(1)])
+  // the causes add up over every bucket: a sub-agent's call with no usage counts too
+  assert.deepEqual(costOf([...mainRows(), m('m', null)], [m('m', null), m('x-unpriced', U(0, 5, 1))]).notes, [W.noPriceCalls(1), W.noUsageCalls(2)])
+  // every call failed: '≈ —' with no note (the failed row says why), never a price note
+  const failed = costOf([{ error: 'boom', usage: null }, { error: 'boom', usage: null }])
+  assert.equal(failed.usd, null); assert.deepEqual(failed.notes, [])
 })
 
 test('1.2 #7 · model: every info number is core/metrics.mjs\'s on the same answer; estimates carry ≈; no field name in any word', () => {
