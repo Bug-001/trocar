@@ -181,6 +181,28 @@ for (const platform of ['darwin', 'win32']) {
   })
 }
 
+// two installs that overlap (update's install and the user's, or the board's Set up): the answer asked before the lock is only a gate. B asks first and
+// sees no key, A then runs to its end (key made, root added, record written), then B goes on under the lock: it must read the key again, and remove nothing
+test('an install that waited behind another reads the key again under the lock: the root and record the first one made stay', async () => {
+  const w = await modelWorld({ commands: ['codex'] })
+  const run = async (custody) => {
+    const io = fakeIo()
+    const deps = { getuid: () => 501, backends: { custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, unit: null }
+    return { exit: await runInstallCli(['--yes', '--json'], { io, env: w.env, home: w.home, platform: 'darwin', deps }), io }
+  }
+  let a = null
+  const b = await run({ ...w.custody, exists: async () => { const has = w.custody.exists(); if (!a) a = await run(w.custody); return has } })
+  assert.ok(a, 'A ran between B\'s first question and B\'s run')
+  const fp = a.io.json().fp256
+  assert.ok(fp, a.io.text())
+  const m = JSON.parse(fs.readFileSync(path.join(w.dir, 'install-manifest.json'), 'utf8'))
+  assert.equal(m.entries.find((e) => e.kind === 'root-key')?.fp256, fp, `A's key record stays: ${b.io.text()}`)
+  assert.ok(m.entries.some((e) => e.kind === 'system-root' && e.fp256 === fp), "A's root-store record stays")
+  assert.ok(w.store.held.has(fp), "A's root is still in the store")
+  assert.ok(!w.store.calls.includes('remove'), 'nothing was removed from the store')
+  assert.equal(w.custody.calls.filter((c) => c.verb === 'remove').length, 0, 'the key was not removed')
+})
+
 // §1.1 / D58 (macOS and Windows test machines, 2026-10-18): a receipt has no two identical rows, and it never prints trocar's own ids at a person — a form id
 // (`codex.vscode`) and a carrier kind (`config-key`) are read out in words (src/cli/receipt.mjs formWords / carrierWords, one vocabulary).
 test('the install receipt prints each (agent, carrier, file) fact once, in words — never one row per form, never a form or carrier id', async () => {

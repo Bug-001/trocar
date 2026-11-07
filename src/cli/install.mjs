@@ -160,7 +160,7 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
     // a custody that cannot be used refuses before the lock and the first write: the HOME stays as it was
     const pre = await custodyPreflight({ os: platform, custody: b.custody })
     const r = pre.refusal ? { refused: true, fp256: null, items: [], carriers: [], pending: [pre.refusal], problems: [], notes: [], exit: 1 } : await locked(async () => {
-      const r = await runInstall({ os: platform, home, env, harnesses, custody: b.custody, rootStore: b.rootStore, installHelper: b.installHelper, interactive: isInteractive(io), has: pre.has,
+      const r = await runInstall({ os: platform, home, env, harnesses, custody: b.custody, rootStore: b.rootStore, installHelper: b.installHelper, interactive: isInteractive(io),
         wrapperKit: b.wrapperKit, facts: b.facts, ctx, unit: only ? null : unit, only, code: codeId(root), owns: deps.owns || ownsBy({ os: platform, home, fs }), renderHook, fs, ...(deps.now ? { now: deps.now } : {}) })
       const { row } = await boardPortRow(home, fs) // before the daemon starts below: it reads the port, never picks one
       if (row) { r.pending.push(row); r.exit = 1 }
