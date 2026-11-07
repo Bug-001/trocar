@@ -72,7 +72,7 @@ export function VRows({ v, entries, sel, now, onOpen, onShowBg }:
           // a row is as tall as its content (one line or two); the virtualizer measures it
           <div key={it.key as string} className="vrow" data-index={it.index} ref={v.measureElement} style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${it.start}px)` }}>
             {e.s ? <Row s={e.s} on={e.key === sel} now={now} onOpen={onOpen} />
-              : e.n != null ? <div className="libbg dimline" data-bg-hidden={e.n}>{`${W.bgHidden(e.n)} · `}<button type="button" className="linkbtn" onClick={onShowBg}>{W.SHOW}</button></div>
+              : e.n != null ? <div className="libbg dimline" data-bg-hidden={e.n}>{`${W.bgHidden(e.n)} · `}<button type="button" className="linkbtn" aria-label={W.showBg(e.n)} onClick={onShowBg}>{W.SHOW}</button></div>
               : <DayHead g={e.g!} now={now} />}
           </div>
         )

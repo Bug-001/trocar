@@ -182,7 +182,7 @@ export function rowModel(s, now) {
 //   top    — a filter changed after the first paint: the new result starts at the top
 //   index  — bring row `index` into view: the first paint after mount, or a key press that moved the highlight
 //   keep   — anything else (a poll): the scroll position stays
-export const filterSignature = (f) => JSON.stringify([f.q, f.h, f.project, f.window, f.sort])
+export const filterSignature = (f) => JSON.stringify([f.q, f.h, f.project, f.window, f.sort, f.bg])
 export function scrollDecision({ prevSig, sig, selKey, selIndex, prevSelKey }) {
   const hasSel = selKey != null && selIndex >= 0
   if (prevSig === null) return hasSel ? { kind: 'index', index: selIndex } : { kind: 'top' }
