@@ -87,6 +87,9 @@ test('2.6 #18 unmappedUsage: the keys 3.2 reads are never listed; every other le
   assert.deepEqual(unmappedUsage('no-such-wire', { a: 1, b: { c: 'x' } }), [['a', '1'], ['b.c', 'x']], 'a wire with no mapping lists every key');
   assert.deepEqual(unmappedUsage('anthropic', null), []);
   assert.deepEqual(unmappedUsage('anthropic', 7), [['usage', '7']], 'a usage that is no object is one row');
+  // a mapping that throws on a changed leaf depends on it: read, never a crash (a mapping that reads an array: .map, .find)
+  const fussy = (_p, u) => ({ n: u.list.map((x) => x.n).length, m: u.m });
+  assert.deepEqual(unmappedUsage('stub', { list: [{ n: 1 }], m: 2, other: 3 }, {}, fussy), [['other', '3']]);
   assert.deepEqual(unmappedUsage('anthropic', { input_tokens: '1', output_tokens: true, cache_creation: {} }), [['cache_creation', '{}']], 'a value num() reads counts as read; an empty object is a row');
   // a fallback key the preferred one stands in front of is not used on this step: listed (DeepSeek's whole Chat usage)
   const ds = unmappedUsage('openai-chat', { prompt_tokens: 100, completion_tokens: 5, prompt_cache_hit_tokens: 60, prompt_cache_miss_tokens: 40, prompt_tokens_details: { cached_tokens: 60 } }).map(([k]) => k);
