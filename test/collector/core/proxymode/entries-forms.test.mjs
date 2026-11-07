@@ -16,10 +16,12 @@ const files = (dir) => (fs.existsSync(dir) ? fs.readdirSync(dir, { recursive: tr
 const routeFile = (r, ctx) => (r.file ? resolveLoc(r.file, ctx)[0] : null)
 
 for (const h of harnesses) for (const os of OSES) {
-  const forms = h.proxyMode.forms.filter((f) => f.os.includes(os) && !outOfScope(f, os))
-  // CM43: a form out of scope is never a reason to write, whatever else its place makes present
-  for (const f of h.proxyMode.forms.filter((x) => x.os.includes(os) && outOfScope(x, os))) {
-    test(`CM43 ${h.name} · ${os} · ${f.id} present → no route is planned for it`, () => {
+  // P5 (CM44): where the harness has a form measured on this system, one that is not is never a reason to write; CM43: nor is one out of scope
+  const measured = h.proxyMode.forms.some((f) => f.os.includes(os) && f.verified && f.verified[os] === true)
+  const routable = (f) => !outOfScope(f, os) && (!measured || (f.verified && f.verified[os] === true))
+  const forms = h.proxyMode.forms.filter((f) => f.os.includes(os) && routable(f))
+  for (const f of h.proxyMode.forms.filter((x) => x.os.includes(os) && !routable(x))) {
+    test(`CM43 · CM44 ${h.name} · ${os} · ${f.id} present → no route is planned for it`, () => {
       const w = world({ os })
       w.present(f)
       assert.ok(!planRoutes(h, w.ctx).routes.flatMap((r) => r.forms).includes(f.id))

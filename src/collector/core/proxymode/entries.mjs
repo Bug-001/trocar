@@ -14,7 +14,7 @@ import { applyJsonKey, applyJsonArrayItem, applyTextEntry, writeOwnedFile, judge
 import { parseJsonText, getPath } from '../../../off/json-text.mjs'
 import { decodeText } from '../../../off/text-codec.mjs'
 import { parseDotenv } from '../config-read.mjs'
-import { resolveLoc, readSrc, holds, formsHere } from './sources.mjs'
+import { resolveLoc, readSrc, holds, routedForms } from './sources.mjs'
 import { entryGate } from '../entry-forms.mjs'
 import { CODE } from '../codes.mjs'
 
@@ -183,7 +183,7 @@ export function routeEntry(kind) {
  *  → { routes: [{ id, route, forms }], notRouted: [{ form, code, reason, at }], notes: [harness-note] } */
 export function planRoutes(desc, ctx) {
   const pm = desc.proxyMode, routes = new Map(), blocked = [], notes = []
-  for (const f of formsHere(pm, ctx.os, ctx)) {
+  for (const f of routedForms(pm, ctx.os, ctx)) {
     const hit = (pm.blockers || []).filter((b) => !b.forms || b.forms.includes(f.id)).map((b) => {
       const r = readSrc(b.at, ctx)
       if (r.error) return { reason: 'blocker-unreadable', at: r.where }

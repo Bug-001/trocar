@@ -14,7 +14,7 @@ import { readStateFile, setDesired, writeStateAtomic } from '../off/state.mjs'
 import { WINDOWS_MAX } from '../off/holders.mjs'
 import { setupOf } from './core/proxymode/status-facts.mjs'
 import { planRoutes, writeRoutes, noProxyNames } from './core/proxymode/entries.mjs'
-import { resolveLoc, formsHere, scopeNamed } from './core/proxymode/sources.mjs'
+import { resolveLoc, formsHere, routedForms, scopeNamed } from './core/proxymode/sources.mjs'
 import { loadIngressConfig, rebindTaken, freeOnLoopback } from './core/ingress-config.mjs'
 import { controlEndpointFor } from './core/control.mjs'
 import { CODE } from './core/codes.mjs'
@@ -56,11 +56,13 @@ export async function turnOnModel({ os, home, env = process.env, ids = null, har
   // away after on): it stays as it is, status judges it, off undoes it. `update` asks first, and does not name one (update.mjs noFormHere)
   const stateNow = (() => { try { return readStateFile(path.join(dir, 'state.json'), { fs, installed: wanted, now: now() }).state } catch { return null } })()
   const named = scopeNamed(harnesses, os, ctx)
-  const noFormWhy = (h) => { const n = named.find((x) => x.harness === h); return n ? `${n.what} is on this machine, and trocar does not cover it` : 'it is not on this machine; install it with its own installer, then run trocar install' }
+  const noFormWhy = (h) => { const n = named.find((x) => x.harness === h), u = byName.get(h) ? formsHere(byName.get(h).proxyMode, os, ctx).map((f) => f.id) : []
+    if (u.length) return `${h} is installed here in a way trocar has not measured on this system yet, so it writes no entry for it` // 4.11 P5
+    return n ? `${n.what} is on this machine, and trocar does not cover it` : 'it is not on this machine; install it with its own installer, then run trocar install' }
   const unsure = [], root = await rootOf({ dir, m, rootStore, fs })
   for (const h of wanted) { // precondition ⑪ = status's `setup` (4.11 P4b, one judgement): only a harness that needs setup is refused, nothing written for it
     const pm = byName.get(h) && byName.get(h).proxyMode
-    if (pm && !formsHere(pm, os, ctx).length) {
+    if (pm && !routedForms(pm, os, ctx).length) {
       if (ids && !(stateNow && stateNow.harnesses[h] && stateNow.harnesses[h].desired === 'on')) refused.push({ harness: h, reason: 'not-routed', why: noFormWhy(h) })
       else skipped.push(h)
       continue

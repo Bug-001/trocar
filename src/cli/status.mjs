@@ -249,7 +249,9 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
     const judged = judge()
     if (f.daemon.state === 'unknown' && desired === 'on') why.push(f.daemon.reason)
     if (desired === 'on' && f.daemon.state === 'running' && f.link.helper !== 'missing' && att.attached === null) why.push(att.reason) // the path in is what the verdict waits for, and the daemon could not say
-    f.harnesses.push({ id, installed: installedIds.includes(id), desired, entry, installedAt, procs, formsHere, hosts, localUpstream, judged, judge, why: [...new Set(why.filter(Boolean))] })
+    // 4.11 P5: forms here that status does not judge (not measured on this system where a measured sibling exists) — on writes them no entry, and the finding says why
+    const unmeasured = formsHere === false && present ? present.filter((p) => !forms.some((x) => x.id === p)) : []
+    f.harnesses.push({ id, installed: installedIds.includes(id), desired, entry, installedAt, procs, formsHere, ...(unmeasured.length ? { unmeasured } : {}), hosts, localUpstream, judged, judge, why: [...new Set(why.filter(Boolean))] })
   }
   // how many connections are still relayed after an off (§1.3): the daemon says; with no daemon there is no engine, so none; with one that does not answer or does not say, not known
   const rc = reply && reply.relayed

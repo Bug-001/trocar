@@ -632,3 +632,14 @@ test('CM43: a harness with no covered form left is not switched on again, and th
   assert.ok(JSON.parse(t.io.stdoutText ? t.io.stdoutText() : t.io.text()).notes.some((n) => n.includes('hermes')))
   assert.equal(s.handover(), null, 'the update is done')
 })
+
+test('CM44: a harness whose only form here is not measured on this system, beside measured ones, is not switched on again', async () => {
+  const s = sandbox({ on: ['codex'] })
+  fs.writeFileSync(path.join(s.dir, 'update.json'), JSON.stringify({ from: '0.1.0+0000000', on: ['codex', 'pi'] }) + '\n')
+  const form = (id, darwin) => ({ id, os: ['darwin'], verified: { darwin } })
+  const pi = { name: 'pi', proxyMode: { forms: [form('pi.cli', true), form('pi.npm', { reason: 'not-measured' })] } }
+  const t = ctx(s, { platform: 'darwin', deps: { presentForms: async () => ({ codex: ['codex.cli'], pi: ['pi.npm'] }), harnesses: [pi] } })
+  assert.equal(await runUpdateCli(['--yes', '--json'], t.c), EXIT.ok, t.io.text())
+  assert.deepEqual(t.calls.on.map((a) => a.filter((x) => !x.startsWith('--'))), [['codex']])
+  assert.equal(s.handover(), null, 'the update is done')
+})
