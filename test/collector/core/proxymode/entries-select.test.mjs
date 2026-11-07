@@ -181,3 +181,21 @@ for (const os of ['darwin', 'win32']) test(`P10 ${os} — on over trocar's own e
   assert.deepEqual([r.code, r.reason], ['not-routed', 'own-egress'])
   assert.deepEqual(U.snap(), U.before)
 })
+
+// invariant 5 · the ruling: a record whose tag is not the address on writes now is trocar's stale value only while the entry still holds what it wrote.
+// A value the user put there after trocar did is kept and refused with that reason, whether trocar created the entry or found it applied — never
+// undone with the rest, never answered with a new entry made applied over it, never called the user's egress
+for (const os of ['darwin', 'win32']) for (const [kind, meta, entries] of [['an entry trocar created', undefined, {}], ['an applied entry', { appliedId: 'u1', entries: [{ id: 'u1', name: 'mine' }] }, { u1: { inferenceProvider: 'gateway' } }]]) {
+  test(`P10 ${os} — ${kind}, its value changed by hand, then a new key: kept, refused as the user's change, nothing else moved`, () => {
+    const L = lib(os, { meta, entries })
+    assert.equal(routeEntry('json-key').write(L.ctx, DOOR).ok, true)
+    const rec = L.w.ctx.manifest.entries.find((e) => e.harness === L.ctx.harness && e.keys.join('.') === L.key)
+    const f = rec.path, hand = 'http://proxy.corp.example/proxy.pac'
+    fs.writeFileSync(f, JSON.stringify({ ...read(f), [L.key]: hand }, null, 2) + '\n')
+    const before = L.snap()
+    let refused = null
+    try { const r = routeEntry('json-key').write({ ...L.ctx, pacToken: 'cd'.repeat(16) }, DOOR); refused = r.ok ? null : r } catch (e) { refused = e }
+    assert.ok(refused && !/own-egress/.test(JSON.stringify(refused.reason ?? refused.message)), `refused as the user's change: ${refused && (refused.reason || refused.message)}`)
+    assert.deepEqual(L.snap(), before, 'the entry, _meta.json and the directory as they were: no entry made applied over the user\'s')
+  })
+}

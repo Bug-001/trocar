@@ -9,7 +9,7 @@ import { modelWorld } from '../helpers/model-world.mjs'
 import { turnOnModel } from '../../src/collector/model-on.mjs'
 import { renderHook } from '../../src/collector/harness/templates/index.mjs'
 import { runStatusCli } from '../../src/cli/status.mjs'
-import { readManifest } from '../../src/collector/core/trust/journal.mjs'
+import { readManifest, saveManifest } from '../../src/collector/core/trust/journal.mjs'
 import { emptyState, setDesired, writeStateAtomic } from '../../src/off/state.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { fakeIo } from './fixtures/on-ctx.mjs'
@@ -45,6 +45,7 @@ test('P10: status names trocar\'s stale PAC address with trocar on; on rewrites 
   assert.ok(e, 'on wrote a PAC route here')
   const h = e.harness, key = e.keys
   const fileNow = () => { const r = pacs()[0]; return r.real_path || r.path } // an entry trocar created is created anew when its record is undone
+  const setValue = (file, v) => { const d = JSON.parse(fs.readFileSync(file, 'utf8')); let o = d; for (const k of key.slice(0, -1)) o = o[k]; o[key.at(-1)] = v; fs.writeFileSync(file, JSON.stringify(d, null, 2)) }
   const valueNow = () => key.reduce((o, k) => (o == null ? o : o[k]), JSON.parse(fs.readFileSync(fileNow(), 'utf8')))
   assert.notEqual((await status(w, h)).reason, 'pac-address-stale', 'just written: not stale')
 
@@ -58,13 +59,21 @@ test('P10: status names trocar\'s stale PAC address with trocar on; on rewrites 
   await on()
   assert.notEqual(valueNow(), was, 'on wrote the current address')
   assert.deepEqual([...new Set(pacs().map((r) => r.door))], [valueNow()], 'its records tagged with what it wrote')
+  const after = await statusDoc(w, h)
+  assert.notEqual(after.harnesses[h].reason, 'pac-address-stale')
+  assert.ok(!JSON.stringify(after).includes(new URL(valueNow()).pathname), 'the key is never printed (a capability, P10)')
+
+  // the record an older tip wrote: the address with no key, tagged with the door — a tag that differs like any other, the entry holding its value
+  const m = readManifest(w.dir), origin = new URL(valueNow()).origin, old = `${origin}/trocar.pac`
+  for (const r of m.entries.filter((r) => pacRoutes.has(`${r.harness}:${r.route}`))) { r.door = origin; if (r.keys.join('.') === key.join('.')) r.value = old }
+  saveManifest(w.dir, m)
+  setValue(fileNow(), old)
+  assert.equal((await status(w, h)).reason, 'pac-address-stale')
+  await on()
+  assert.notEqual(valueNow(), old, 'on wrote the keyed address over the older tip\'s')
   assert.notEqual((await status(w, h)).reason, 'pac-address-stale')
 
   // a value put there by hand, even one shaped like trocar's earlier address: the user's change, not stale
-  const file = fileNow(), hand = JSON.parse(fs.readFileSync(file, 'utf8'))
-  let o = hand
-  for (const k of key.slice(0, -1)) o = o[k]
-  o[key.at(-1)] = new URL('/trocar.pac', valueNow()).href
-  fs.writeFileSync(file, JSON.stringify(hand, null, 2))
+  setValue(fileNow(), new URL('/trocar.pac', valueNow()).href)
   assert.equal((await status(w, h)).reason, 'entry-changed')
 })

@@ -52,7 +52,7 @@ const noProxy = (ctx, values) => mergeNoProxy({ userValues: values, persistent: 
 // ruling ③: a PAC route is not written over a system PAC, an applied entry with its own egress, or an own leg that needs credentials (the PAC door takes none)
 // a key trocar still holds a record of (its stale value undone above left one only when the value is no longer what it wrote): the journal judges it, a
 // user's change kept and refused with that reason — never taken for the user's own egress
-const recordedKey = (ctx, file, k) => ((ctx.manifest && ctx.manifest.entries) || []).some((e) => e.path === file && Array.isArray(e.keys) && e.keys.join('\0') === k.join('\0'))
+const recordedKey = (ctx, file, k) => recordsOf(ctx.manifest, ctx.harness, ctx.routeId).some((e) => e.path === file && Array.isArray(e.keys) && e.keys.join('\0') === k.join('\0'))
 function pacGate(ctx, doc, file, value) {
   const r = ctx.route
   if (ctx.systemProxy && ctx.systemProxy.pac) return notRouted('system-pac')
@@ -172,7 +172,7 @@ export function routeEntry(kind) {
       // of an earlier version that wrote the address with no key, is trocar's stale value: undone (its prior back), then written anew (invariant 5)
       const mark = ctx.route && ctx.route.value === 'pac-url' && ctx.pacToken ? pacAddress(ctx.pacToken, door) : door
       const old = recordsOf(ctx.manifest, ctx.harness, ctx.routeId)
-      if (old.some((x) => x.door !== mark)) undo(ctx, old)
+      if (old.some((x) => x.door !== mark) && check(ctx, old).ok) undo(ctx, old) // not intact: a value of the user's, left for the journal to refuse and say
       // all or nothing: a route refused partway (its last key or item, the select meta) takes back what this call already wrote, so no record without
       // a route tag is left for off to miss (invariant 5)
       const m = ctx.manifest, had = new Set([...m.entries, ...m.files])
