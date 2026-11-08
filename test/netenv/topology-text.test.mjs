@@ -110,3 +110,18 @@ test('renderDetail in proxy mode: the way out says HTTP and WebSocket apart when
   assert.ok(off.includes('    note: 1 process(es) are still connected through trocar, forwarded only; trocar exits once they do'), off.join('\n'))
   assert.ok(off.some((l) => /it sees trocar/.test(l)), 'the kernel still forwards for the agent that is connected: a VPN still sees trocar')
 })
+
+// §3.5 Routes: forms of one harness that go the same way are one line (a Windows run printed one OpenCode sidecar's line once per form, five times
+// with trocar and five without). Generated over the fixture rows: every branch is copied under several forms with the same path
+test('Routes: forms that go the same way are one line, naming the forms only when some go another way', () => {
+  let n = 0
+  for (const row of ROWS) for (const [h, t0] of Object.entries(buildTopology(row.facts))) {
+    if (!t0 || !t0.branches || !t0.branches.length) continue
+    const many = (forms) => ({ ...t0, branches: forms.flatMap((form) => t0.branches.map((b) => ({ ...b, form }))) })
+    const one = renderDetail({ ...t0, branches: t0.branches.map((b) => ({ ...b, form: 'h.a' })) }).filter((l) => / -> /.test(l))
+    const same = renderDetail(many(['h.a', 'h.b', 'h.c'])).filter((l) => / -> /.test(l))
+    assert.deepEqual(same, one, `${row.n} ${h}: three forms that go the same way read as one`)
+    n++
+  }
+  assert.ok(n > 0)
+})
