@@ -64,16 +64,23 @@ function chain(t, ids, detail = false, labels = true) {
 
 // Which words a branch's line needs in front: its form when the harness has more than one, HTTP / WebSocket when the branches of its form do not all go the same way (`key`: the path with trocar, or without).
 const sameWay = (t, b, key) => new Set(t.branches.filter((x) => x.form === b.form).map((x) => x[key].join())).size === 1
-// The lines of a harness (`key`: the path with trocar, or without): branches that go the same way are one line, whatever form they belong to — the
-// forms are named only when some form goes another way (one process can stand for every form: a Windows run printed one line five times). → [{ b, prefix }]
+// The lines of a harness (`key`: the path with trocar, or without): branches that go the same way are one line, whatever form or kind they are. A
+// line is named only when the harness has another line: by the forms on it (when they are not all of them) and HTTP / WebSocket (when that form's
+// branches split by kind) — one process can stand for every form: a Windows run printed one line five times. → [{ b, prefix }]
 function linesOf(t, key = 'path') {
   const forms = new Set(t.branches.map((x) => x.form).filter(Boolean)), out = new Map()
   for (const b of t.branches) {
-    const text = sameWay(t, b, key) ? null : BRANCH_TEXT[b.name], k = `${b[key].join()}|${text || ''}`
-    if (!out.has(k)) out.set(k, { b, text, forms: [] })
-    if (b.form && !out.get(k).forms.includes(b.form)) out.get(k).forms.push(b.form)
+    const k = b[key].join(), m = { form: b.form || null, text: sameWay(t, b, key) ? null : BRANCH_TEXT[b.name] }
+    if (!out.has(k)) out.set(k, { b, members: [] })
+    const ms = out.get(k).members
+    if (!ms.some((x) => x.form === m.form && x.text === m.text)) ms.push(m)
   }
-  return [...out.values()].map(({ b, text, forms: f }) => ({ b, prefix: [forms.size > 1 && f.length < forms.size ? f.join(', ') : null, text].filter(Boolean).map((x) => `${x} `).join('') }))
+  const named = ({ members }) => {
+    const texts = new Set(members.map((x) => x.text)), on = new Set(members.map((x) => x.form).filter(Boolean))
+    if (forms.size < 2 || (on.size === forms.size && texts.size === 1)) return [...texts].filter(Boolean) // every form, one kind: the kind alone, if any
+    return members.map((x) => [x.form, x.text].filter(Boolean).join(' '))
+  }
+  return [...out.values()].map((l) => { const n = out.size > 1 ? named(l) : []; return { b: l.b, prefix: n.length ? `${n.join(', ')} ` : '' } })
 }
 
 /** Between the branches of one harness when they are said on one line (renderCompact's lines joined; `adopted.<h>.chain`, C.1). */

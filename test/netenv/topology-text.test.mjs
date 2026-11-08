@@ -4,6 +4,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { buildTopology, renderCompact, renderDetail, verdictText, firstHopAfterTrocar, firstHopOff, hopKey } from '../../src/netenv/topology.mjs'
 import { ROWS, squash, withoutVpn } from './fixtures/rows.mjs'
+import { ROWS as ROWS_WIN } from './fixtures/rows-win32.mjs'
 
 for (const row of ROWS) {
   test(`V41 row ${row.n} (text): the compact line of each branch is the chain of the spec's table`, () => {
@@ -124,4 +125,33 @@ test('Routes: forms that go the same way are one line, naming the forms only whe
     n++
   }
   assert.ok(n > 0)
+})
+
+// The other half, over the macOS / Linux and the Windows rows: a form that goes another way. Each block draws every distinct way once, and with
+// more than one way each is named — h.b takes h.a's way without trocar as its way with trocar, or all of h.b on h.a's first branch's ways (h.a split by kind, h.b not)
+test('Routes: a form that goes another way — one line per distinct way in each block, each named', () => {
+  let n = 0
+  for (const row of [...ROWS, ...ROWS_WIN]) for (const [h, t0] of Object.entries(buildTopology(row.facts))) {
+    if (!t0 || !t0.branches || !t0.branches.length) continue
+    const a = t0.branches.map((b) => ({ ...b, form: 'h.a' }))
+    // h.b: h.a's way without trocar as its way with trocar; or every branch of h.b on h.a's first branch's ways (h.a may split by kind, h.b not)
+    for (const b of [t0.branches.map((x) => ({ ...x, form: 'h.b', path: x.off_path })), t0.branches.map((x) => ({ ...x, form: 'h.b', path: t0.branches[0].path, off_path: t0.branches[0].off_path }))]) {
+    const lines = renderDetail({ ...t0, branches: [...a, ...b] })
+    const blocks = new Map()
+    let head = null
+    for (const l of lines) {
+      const inline = /^ {4}(\S.*?) {2}(\S.* -> .*)$/.exec(l) // a heading and its one way on one line
+      if (/^ {4}\S/.test(l)) head = inline ? inline[1] : l.trim()
+      const chain = inline ? inline[2] : /^ {6}\S/.test(l) && / -> /.test(l) ? l.trim() : null
+      if (chain && head) { const k = head.replace(/\s*\(.*\)$/, ''); if (!blocks.has(k)) blocks.set(k, []); blocks.get(k).push({ head, chain }) }
+    }
+    for (const [k, ls] of blocks) {
+      const chains = ls.map((x) => x.chain)
+      assert.equal(new Set(chains).size, chains.length, `${row.n} ${h} · ${k}: a way drawn twice: ${JSON.stringify(ls)}`)
+      if (ls.length > 1) for (const x of ls) assert.match(x.head, /\(.+\)$/, `${row.n} ${h} · ${k}: with more than one way, each is named (its forms, or HTTP / WebSocket when every form splits the same way): ${x.head}`)
+    }
+    n++
+    }
+  }
+  assert.ok(n > 3, 'the axis runs over the rows')
 })
