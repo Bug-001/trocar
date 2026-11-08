@@ -137,7 +137,8 @@ export function planTrust({ descriptors, ctxFor, caCertPem, collectorDir, roots 
         // composed when something is written: it parses every root, and `on` writes no certificate item (D55①), so it never asks (D62①)
         let b = null
         const bundle = () => (b ||= composeBundle({ nodeRoots: roots.node, osRootsText: roots.osText, userCerts, caPem: caCertPem }))
-        files.push({ harness: d.name, path: f.path, role: 'bundle', get data() { return bundle().data }, sources, get user_fps() { return bundle().user_fps }, get roots_fp() { return bundle().roots_fp } })
+        const want = [...new Set(userCerts.map((pem) => { try { return new X509Certificate(pem).fingerprint256 } catch { return null } }).filter(Boolean))] // what it would carry, without the roots (D62①)
+        files.push({ harness: d.name, path: f.path, role: 'bundle', get data() { return bundle().data }, sources, want_fps: want, get user_fps() { return bundle().user_fps }, get roots_fp() { return bundle().roots_fp } })
         if (roots.missing) note(d.name, CODE.systemRootsUnavailable, `${f.path} carries Node's roots only: ${roots.missing}; a CA installed system-wide (a corporate proxy's) is not in it`)
       } else {
         const seen = new Set()

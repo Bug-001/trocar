@@ -328,3 +328,57 @@ test('Linux install: codex on PATH with no Codex home is skipped, and its reason
   assert.ok(codex, JSON.stringify(doc.skipped))
   assert.ok(!(doc.notes || []).some((n) => String(n).startsWith('codex: ')), JSON.stringify(doc.notes))
 })
+
+// 4.11 P4b · invariant 4 (Linux): a replace-semantics bundle (Codex's, Hermes') is composed from the CAs the harness's own settings name, the install
+// shell's SSL_CERT_FILE among them. One that a CA added since does not hold is `bundle-lacks-ca` in status, and install — the repair — plans and makes
+// the rewrite; afterwards the bundle holds that CA and status is ready again
+const codexHome = (home) => { fs.mkdirSync(path.join(home, '.codex'), { recursive: true }); fs.writeFileSync(path.join(home, '.codex', 'config.toml'), '') } // a Codex that has run once
+for (const [name, seed] of [['codex', codexHome], ['hermes', (home) => { fs.mkdirSync(path.join(home, '.hermes', 'hermes-agent'), { recursive: true }); fs.writeFileSync(path.join(home, '.hermes', 'config.yaml'), 'model: {}\n') }]]) {
+  test(`Linux ${name}: a CA the install shell's SSL_CERT_FILE adds after install is bundle-lacks-ca; install --dry-run plans the rewrite, install makes it, status is ready`, async () => {
+    const desc = (await import(`../../src/collector/harness/${name}.mjs`)).default
+    const home = tmpDir(`trocar-bundle-${name}-`)
+    seed(home)
+    const ca = createCa({ commonName: 'relay CA' }).certPem
+    const caFile = path.join(home, 'certs', 'relay-ca.pem'); fs.mkdirSync(path.dirname(caFile), { recursive: true }); fs.writeFileSync(caFile, ca)
+    const ctx = (io, env = {}) => ({ ...onCtx(home, io, { harnesses: [desc], env }), platform: 'linux' })
+    let io = fakeIo()
+    assert.equal(await runInstallCli(['--yes'], ctx(io)), 0, io.text())
+    const bundle = path.join(home, '.trocar', 'collector', 'ca', `combined-${name}.pem`)
+    assert.ok(fs.existsSync(bundle) && !fps(fs.readFileSync(bundle, 'utf8')).includes(fps(ca)[0]), 'built without it')
+    const shell = { SSL_CERT_FILE: caFile }
+    const { runStatus } = await import('./fixtures/status-ctx.mjs')
+    const { linuxNetFacts } = await import('../../src/collector/arch/linux/netfacts.mjs')
+    const s = { home, sh: { env: { HOME: home, ...shell } }, sys: { exec: { run: () => ({ status: 0, stdout: '', stderr: '' }) } } }
+    const setupNow = async () => JSON.parse((await runStatus(s, ['--json', name], { deps: { netFactsDeps: async () => ({ harnesses: [desc], archFacts: linuxNetFacts }) } })).text).harnesses[name].setup
+    assert.deepEqual(await setupNow(), { state: 'needed', missing: [{ form: name, what: 'bundle-lacks-ca' }], uncaptured: [] })
+    io = fakeIo()
+    assert.equal(await runInstallCli(['--dry-run', '--json'], ctx(io, shell)), 0, io.text())
+    assert.ok(io.json().planned.some((p) => p.path === bundle), `the bundle's rewrite is planned: ${JSON.stringify(io.json().planned)}`)
+    io = fakeIo()
+    assert.equal(await runInstallCli(['--yes'], ctx(io, shell)), 0, io.text())
+    assert.match(io.text().replace(/\s+/g, ' '), /it lacks a CA your settings add now/) // the receipt says why (folded at 80 columns)
+    assert.ok(fps(fs.readFileSync(bundle, 'utf8')).includes(fps(ca)[0]), 'the bundle holds the CA now')
+    assert.deepEqual(await setupNow(), { state: 'ready', missing: [], uncaptured: [] })
+  })
+}
+
+// 4.11 P4b (Linux): a CA no longer named — the install shell's SSL_CERT_FILE gone — is a rewrite too: install plans it, says why, and the bundle drops it
+test('Linux codex: a CA the settings no longer name is planned out of the bundle with its reason, and install takes it out', async () => {
+  const desc = (await import('../../src/collector/harness/codex.mjs')).default
+  const home = tmpDir('trocar-bundle-rm-')
+  codexHome(home)
+  const ca = createCa({ commonName: 'old relay CA' }).certPem
+  const caFile = path.join(home, 'certs', 'old-ca.pem'); fs.mkdirSync(path.dirname(caFile), { recursive: true }); fs.writeFileSync(caFile, ca)
+  const ctx = (io, env = {}) => ({ ...onCtx(home, io, { harnesses: [desc], env }), platform: 'linux' })
+  let io = fakeIo()
+  assert.equal(await runInstallCli(['--yes'], ctx(io, { SSL_CERT_FILE: caFile })), 0, io.text())
+  const bundle = path.join(home, '.trocar', 'collector', 'ca', 'combined-codex.pem')
+  assert.ok(fps(fs.readFileSync(bundle, 'utf8')).includes(fps(ca)[0]))
+  io = fakeIo()
+  assert.equal(await runInstallCli(['--dry-run', '--json'], ctx(io)), 0, io.text())
+  assert.ok(io.json().planned.some((p) => p.path === bundle), JSON.stringify(io.json().planned))
+  io = fakeIo()
+  assert.equal(await runInstallCli(['--yes'], ctx(io)), 0, io.text())
+  assert.match(io.text().replace(/\s+/g, ' '), /it no longer matches the CAs your settings name/) // the receipt folds at 80 columns
+  assert.ok(!fps(fs.readFileSync(bundle, 'utf8')).includes(fps(ca)[0]), 'taken out')
+})

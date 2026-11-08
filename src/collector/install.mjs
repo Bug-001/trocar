@@ -40,6 +40,15 @@ import { OFF_VERSION, installComplete, daemonMayStart } from '../off/manifest.mj
 import { writeStandalone, standaloneDue } from '../off/standalone.mjs'
 import { codeId, setupHelperCommand } from '../version.mjs'
 
+// 4.11 P4b: a combined bundle holds the CAs its harness's settings name NOW (the install shell's among them): one whose recorded set differs is rewritten,
+// as macOS / Windows do by the composed bytes (model-install.mjs owned()); compared by fingerprint, so a plan need not compose it (D62①)
+function caDrift(j, f) {
+  if (j.action !== 'skip-intact' || f.role !== 'bundle' || !Array.isArray(f.want_fps) || !j.record || !Array.isArray(j.record.user_fps)) return j
+  const had = new Set(j.record.user_fps), now = new Set(f.want_fps)
+  const why = [...now].some((x) => !had.has(x)) ? 'it lacks a CA your settings add now' : [...had].some((x) => !now.has(x)) ? 'it no longer matches the CAs your settings name' : null
+  return why ? { action: 'rewrite', record: j.record, why, drift: true } : j
+}
+
 // an entry under trocar's name: replaced, never silently (1.6 §3.5 Login)
 const isMasked = (unit) => !!(unit && unit.masked && unit.masked())
 // the masked unit is the user's link, replaced: a change of a file of theirs (1.6 §3.2), with nothing to back up (a link to /dev/null holds no bytes)
@@ -241,8 +250,10 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
   })
   // every per-file refusal too, for what is to be written (a dangling link, a file that is not JSON, a patch file that is not a list) — before onPlan, before any write
   const preview = draft.entries.map((e, i) => (entryJ[i].action !== 'write' && entryJ[i].action !== 'rewrite' ? null : previewOf(e)))
+  const drift = []
   const fileJ = draft.files.map((f) => {
-    const j = judgeOwned({ manifest: prior, file: f.path, fs })
+    const j = caDrift(judgeOwned({ manifest: prior, file: f.path, fs }), f)
+    if (j.drift) drift.push(`${f.harness}: ${f.path} is written again: ${j.why}`) // said in the plan and the receipt (D38)
     steps.push({ harness: f.harness, path: f.path, kind: f.role, action: j.action, ...(j.why ? { why: j.why } : {}) })
     return j
   })
@@ -298,11 +309,11 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
     ...(unit && act(unitJ.action) ? { unit: { path: unit.path, env: daemon.env, links: unit.links || [], ...(isMasked(unit) ? { masked: true } : {}) } } : {}),
     ...(logs.length ? { logs } : {}), // D46: named in the plan's own listing (every file, R3), written by the unit's write step
     watch: draft.watch,
-    notes: draft.notes,
+    notes: [...draft.notes, ...drift],
     uncaptured: unseen.map((r) => r.reason), // said by an install that has nothing to write too
     records: path.join(dir, 'flows'), // install notes are kept here as install-note events (D38)
     events: path.join(dir, 'flows', `${day}.ndjson`), // install-note lines are appended here (D-28)
-    _: { dir, prior, ca, descs, ctxFor, R, daemon, draft, unit, unseen },
+    _: { dir, prior, ca, descs, ctxFor, R, daemon, draft, unit, unseen, drift },
   }
 }
 
@@ -336,7 +347,7 @@ async function writeInstall(args) {
   try { return await writeInstallSteps(args, written) } catch (e) { if (e && e.stopsRun) e.written = written; throw e } // what was done before the stop is said
 }
 async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePort, now, fs, guard = () => {}, confirmed = false, certs = true, keepCode = false }, written) {
-  const { ca, descs, ctxFor, R, daemon, draft, unit, unseen } = plan._
+  const { ca, descs, ctxFor, R, daemon, draft, unit, unseen, drift } = plan._
   const body = () => JSON.stringify(m)
   let saved = body()
   const save = () => { if (body() !== saved) { saveManifest(dir, m, fs); saved = body() } }
@@ -349,6 +360,7 @@ async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePo
   const final = planTrust({ descriptors: descs, ctxFor, caCertPem: certPem, collectorDir: dir, roots: R })
   if (daemon && daemon.note) { final.notes.push(daemon.note); final.records.push({ code: CODE.unitEnvNotCarried, reason: daemon.note }) }
   for (const r of unseen) { final.notes.push(r.reason); final.records.push(r) }
+  final.notes.push(...drift)
 
   if (JSON.stringify(final.paths) !== JSON.stringify(draft.paths)) throw new Error(`the files to change moved while installing (${draft.paths.join(', ')} → ${final.paths.join(', ')}); only the CA was written; run "trocar uninstall", then "trocar on"`)
   m.planned = final.paths
@@ -366,7 +378,7 @@ async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePo
   fs.mkdirSync(path.join(dir, 'run', 'trust'), { recursive: true, mode: 0o700 }) // plugins write their marker here, daemon up or not
   const certItem = (p) => { if (certs) return false; written.needInstall.push(p); return true } // on (certs:false) writes no certificate item: a missing one is install's (D55①)
   for (const f of final.files) {
-    if (judgeOwned({ manifest: m, file: f.path, fs }).action === 'skip-intact') { written.intact.push(f.path); continue }
+    if (caDrift(judgeOwned({ manifest: m, file: f.path, fs }), f).action === 'skip-intact') { written.intact.push(f.path); continue }
     if (certItem(f.path)) continue
     guard()
     writeOwnedFile({ dir, manifest: m, harness: f.harness, role: f.role, phase: 'install', file: f.path, data: f.data, sources: f.sources, extra: f.role === 'bundle' ? { user_fps: f.user_fps, roots_fp: f.roots_fp } : {}, now: now(), fs })
