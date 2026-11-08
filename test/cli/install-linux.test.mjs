@@ -314,3 +314,17 @@ test('Linux install: a skipped harness\'s reason is said once, not again as a no
   const text = flat((await run(['--yes'], d.home)).io.text())
   for (const s of dry.skipped) assert.equal(text.split(flat(s.reason)).length - 1, 1, `${s.what}: its reason said once: ${s.reason}`)
 })
+
+// the same rule for a skip whose reason is the descriptor's own note: codex on PATH with no Codex home yet is skipped with that note, said once
+test('Linux install: codex on PATH with no Codex home is skipped, and its reason is not said again as a note', async () => {
+  const { loadHarnesses } = await import('../../src/collector/harness/index.mjs')
+  const linux = (await loadHarnesses()).filter((d) => d.trust)
+  const home = tmpDir('trocar-skip-codex-')
+  seedClaude(home)
+  const bin = path.join(home, 'bin'); fs.mkdirSync(bin); fs.writeFileSync(path.join(bin, 'codex'), '#!/bin/sh\n', { mode: 0o755 })
+  const io = fakeIo()
+  assert.equal(await runInstallCli(['--yes', '--json'], { ...onCtx(home, io, { harnesses: linux, env: { PATH: bin } }), platform: 'linux' }), 0, io.text())
+  const doc = io.json(), codex = doc.skipped.find((x) => x.what === 'codex')
+  assert.ok(codex, JSON.stringify(doc.skipped))
+  assert.ok(!(doc.notes || []).some((n) => String(n).startsWith('codex: ')), JSON.stringify(doc.notes))
+})
