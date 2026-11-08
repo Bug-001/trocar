@@ -351,7 +351,7 @@ export const MARKED_WITHOUT_RECORD = 'marked-without-record' // 1.6 §3.2: the r
 function refuseMarked(file, text, edit, joined = false) {
   if (text != null && (text.includes(BLOCK_OPEN) || (edit.line && holdsMarked(text, edit.line)))) { // the marker's fixed part: what any release wrote (4.6「标记的字」)
     if (!(joined && text.includes(BLOCK_OPEN) && edit.format === 'dotenv-block')) {
-      throw Object.assign(new Error(`${file} already holds trocar's text from an install this manifest does not list; take it out, then install again`), { code: MARKED_WITHOUT_RECORD, path: file })
+      throw Object.assign(new Error(`${file} already holds trocar's text that no entry of this install record matches (an earlier version's, or an install whose record is gone); trocar off takes out what an earlier on wrote there, and trocar uninstall any trocar text by its marks; then run this command again`), { code: MARKED_WITHOUT_RECORD, path: file })
     }
   }
 }
