@@ -381,6 +381,8 @@ export const REQ_PARAMS = 'Request parameters'
 export const NO_PARAMS = 'This record has no request parameters to read back'
 export const UNPARSED_PARAMS = 'The request body could not be parsed, so no parameters can be listed'
 export const TRANSPORT_HTTP = 'Transport HTTP'
+// 2.6 §A: the reply's usage keys the canonical mapping did not read, listed as they came
+export const USAGE_UNMAPPED = 'Usage keys not in the counts'
 export const TRANSPORT_WS = 'Transport WebSocket'
 export const VENDOR_WORD = 'Vendor'
 export const FAILED_NO_REPLY = 'This call failed; there is no reply'
