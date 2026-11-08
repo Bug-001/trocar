@@ -3,7 +3,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { buildTopology } from '../../src/netenv/topology.mjs'
-import { diagnose, FINDINGS, FINDING_CODES, NEG_CAUSES, renderFindings } from '../../src/netenv/findings.mjs'
+import { diagnose, findingFor, FINDINGS, FINDING_CODES, NEG_CAUSES, renderFindings } from '../../src/netenv/findings.mjs'
 import { statusReason } from '../../src/cli/words.mjs'
 import { validateFinding, validateTopology } from '../../src/cli/schema.mjs'
 import { NET_CODES, ROUTE_CODES, ROUTE_TRUST_REASONS, STATUS_REASONS, TRUST_REASONS } from '../../src/health/codes.mjs'
@@ -524,7 +524,6 @@ test('V66 process-unknown `named` (a preset name whose args missed, e.g. the Z C
 })
 
 test('4.11 §3 ⑱ not-routed says the model plan\'s reason for the form (the route record\'s reason and place), and uninstall\'s collectors-online gives trocar off then trocar uninstall', async () => {
-  const { findingFor } = await import('../../src/netenv/findings.mjs')
   const nr = (reason, at) => findingsOf(pfacts('hermes', form('hermes.cli', { entry: null, route: { code: 'not-routed', reason, ...(at ? { at } : {}) }, procs: [] }), fwForm(17993), { platform: 'darwin' }), ['hermes']).find((f) => f.code === 'not-routed')
   const absent = nr('absent', '/Users/a/.hermes/.env')
   assert.ok(absent.commands.some((c) => c.run.includes('/Users/a/.hermes/.env')) && absent.commands.at(-1).run === 'trocar on hermes', 'Hermes: its own setup first, then trocar on')
@@ -628,11 +627,27 @@ test('V49 a setting from a variable, on win32: the step sets or removes the user
   dead.harnesses['claude-code'].proxyPlaces = [{ kind: 'env', name: 'HTTPS_PROXY', scheme: 'http', host: '127.0.0.1', port: 7890 }]
   const removeStep = gui(findingsOf(dead), 'proxy-dead')
   const cmds = (fs, code) => fs.find((f) => f.code === code).commands
-  const setCmds = cmds(findingsOf(loop), 'route-loop'), removeCmds = cmds(findingsOf(dead), 'proxy-dead')
+  const setCmds = findingFor('route-loop', { platform: 'win32', h: 'codex', hf: { behaviour: { env: ['HTTPS_PROXY'] } }, setting: null, old: 'http://127.0.0.1:7890' }).commands, removeCmds = cmds(findingsOf(dead), 'proxy-dead')
   for (const t of [setStep, removeStep]) assert.doesNotMatch(t, /\b(export|unset) /)
   // the variable's command is a line of its own (not inside a sentence), and a line after it names the variable again: where a value that still wins is set
   const own = (cs, re) => { const i = cs.findIndex((c) => c.shell !== 'gui' && re.test(c.run)); assert.ok(i > 0, cs.map((c) => c.run).join('\n')); assert.ok(cs.slice(i + 1).some((c) => c.shell === 'gui' && /\bHTTPS_PROXY\b/.test(c.run)), 'a line after it names the variable'); return cs[i].run }
-  assert.match(own(setCmds, /^setx HTTPS_PROXY \S/), /^setx HTTPS_PROXY \S+$|^setx HTTPS_PROXY ".*"$/, 'set: setx NAME value, one argument')
+  assert.match(own(setCmds, /^setx HTTPS_PROXY \S/), /^setx HTTPS_PROXY '[^']*'$/, 'set: setx NAME value, one argument')
   own(removeCmds, /^\[Environment\]::SetEnvironmentVariable\('HTTPS_PROXY',\$null,'User'\)$/)
   for (const c of [...setCmds, ...removeCmds]) assert.ok(c.shell === 'gui' || c.run.length <= 72, `a command fits 80 columns at doctor's indent: ${c.run}`)
+})
+
+test('setx on win32: the value round-trips through the printed PowerShell literal; an address trocar does not know gives no command line', () => {
+  const hf = { behaviour: { env: ['HTTPS_PROXY'] } }
+  const ctx = { platform: 'win32', h: 'codex', hf, setting: null }
+  const lines = (o) => findingFor('route-loop', { ...ctx, ...o }).commands.filter((c) => c.shell !== 'gui' && /^setx /.test(c.run)).map((c) => c.run)
+  for (const value of ["http://u'ser:p$w;d@a b:1", 'http://127.0.0.1:7890', "''", '`$x,@y']) {
+    const [line, more] = lines({ old: value })
+    assert.equal(more, undefined)
+    const m = /^setx HTTPS_PROXY '((?:[^']|'')*)'$/.exec(line)
+    assert.ok(m, line)
+    assert.equal(m[1].replace(/''/g, "'"), value)
+  }
+  assert.deepEqual(lines({ old: undefined }), [], 'route-loop with no address on record')
+  assert.deepEqual(findingFor('prior-proxy-unknown', ctx).commands.filter((c) => c.shell !== 'gui' && /^setx /.test(c.run)), [], 'prior-proxy-unknown')
+  assert.deepEqual(findingFor('proxy-unsupported', { ...ctx, setting: { scheme: 'socks5', source: [{ kind: 'env', where: 'HTTPS_PROXY' }] } }).commands.filter((c) => c.shell !== 'gui' && /^setx /.test(c.run)), [], 'proxy-unsupported with no host')
 })
