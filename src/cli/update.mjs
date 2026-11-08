@@ -309,7 +309,9 @@ async function finish({ io, env, home, platform, deps, dir, handover, root, fs, 
   }
   try { fs.rmSync(handover, { force: true }) } catch (e) { return no('handover-not-removed', `this update finished, but it could not be written off (${(e && e.message) || e})`) }
   lines.push(`trocar is now ${r.to}${waiting.from && waiting.from !== r.to ? ` (it was ${waiting.from})` : ''}.`, // no record of the code before: no "was"
-    ...pairs([[ROW.collector, r.restarted ? 'running the new code' : 'already running this code'], [ROW.again, waiting.on.join(', ') || 'nothing was being captured']]))
+    ...pairs([[ROW.collector, r.restarted ? 'running the new code' : 'already running this code'], [ROW.again, waiting.on.join(', ') || 'nothing was being captured']]),
+    // what the install it ran says is still the user's to do, and this run's own notes (D38): the update is often the only install the user sees
+    ...[...new Set([...((installed.doc && Array.isArray(installed.doc.notes)) ? installed.doc.notes : []), ...r.notes])].flatMap((n) => wrap(`Note: ${n}`)))
   return done(EXIT.ok)
 }
 
