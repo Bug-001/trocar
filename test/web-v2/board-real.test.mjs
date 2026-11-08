@@ -76,7 +76,7 @@ async function readSession(get, id) {
     rows = [...page.calls, ...rows]; more = page.more && page.calls.length > 0
   }
   const main = (doc.lanes.find((l) => l.kind === 'main') || {}).lane ?? null
-  const desk = await deskFrom(get, id), lanes = buildLanes(desk, desk.probes), anchor = anchorLane(lanes)
+  const desk = await deskFrom(get, id), lanes = buildLanes(desk, { count: desk.probes, series: [] }), anchor = anchorLane(lanes)
   return { doc, rows, main, mainRows: rows.filter((c) => c.lane === main), desk, lanes, anchor }
 }
 const stateOf = (r, pricing, extra = {}) => ({ desk: r.desk, meta: r.desk.meta, lanes: r.lanes, anchor: r.anchor, anchorTs: r.anchor.calls.map((c) => Date.parse(c.ts)),

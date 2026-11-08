@@ -318,6 +318,16 @@ test('1.5 K-31, K-33: the three states from the head alone: plain pending reads,
   }
 })
 
+// 1.2 #6 · 3.5 §会话读: the head's `probes` is the token-count calls as {count, series} (a tier-0 head may carry the bare count);
+// the desk holds the count, whichever shape came
+test('1.2 #6: the desk holds the head\'s token-count calls as a count, from {count, series} or a bare number; none is 0', () => {
+  for (const [probes, n] of [[{ count: 3, series: [{ ts: '2026-10-07T00:00:01.000Z', tokens: 10 }] }, 3], [{ count: 0, series: [] }, 0], [4, 4], [undefined, 0], [null, 0]]) {
+    const desk = createDesk()
+    applyHead(desk, { mark: 'S:1', lanes: [], probes })
+    assert.equal(desk.probes, n, J(probes))
+  }
+})
+
 // 1.5 K-32: the calls behind are the tip ids after the newest member the desk holds — the head's mark, or a held `{r}` id past it.
 test('1.5 K-32: a call a held tail brought is not counted behind; one past it is', () => {
   const desk = createDesk(), r = (id) => ({ r: { id, ts_request: null, is_llm_call: true, response: { status: 200 } } })
