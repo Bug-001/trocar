@@ -351,6 +351,19 @@ for (const [name, seed] of [['codex', codexHome], ['hermes', (home) => { fs.mkdi
     const s = { home, sh: { env: { HOME: home, ...shell } }, sys: { exec: { run: () => ({ status: 0, stdout: '', stderr: '' }) } } }
     const setupNow = async () => JSON.parse((await runStatus(s, ['--json', name], { deps: { netFactsDeps: async () => ({ harnesses: [desc], archFacts: linuxNetFacts }) } })).text).harnesses[name].setup
     assert.deepEqual(await setupNow(), { state: 'needed', missing: [{ form: name, what: 'bundle-lacks-ca' }], uncaptured: [] })
+    // whatever the capture state (the daemon says on): doctor carries the finding and exits 1; `status <harness>` names it with trocar install
+    const { asDaemon, reply } = await import('./fixtures/status-ctx.mjs')
+    const { runDoctor } = await import('../../src/cli/doctor.mjs')
+    const sdeps = { request: asDaemon(reply({ harnesses: { [name]: { desired: 'on' } } })), deps: { netFactsDeps: async () => ({ harnesses: [desc], archFacts: linuxNetFacts }) } }
+    const st = await runStatus(s, ['--json', name], sdeps)
+    assert.equal(JSON.parse(st.text).harnesses[name].desired, 'on')
+    const dio = fakeIo()
+    const dexit = await runDoctor(['--json'], { io: dio, home, platform: 'linux', env: { HOME: home, ...shell, XDG_RUNTIME_DIR: path.join(home, 'run') }, deps: { has: () => true, procs: async () => [], lingerRead: () => ({ state: true }), user: 'alice', exec: s.sys.exec.run, request: sdeps.request, socketPath: (await import('./fixtures/status-ctx.mjs')).SOCK, netFactsDeps: sdeps.deps.netFactsDeps } })
+    const found = JSON.parse(dio.stdoutText()).findings.find((f) => f.code === 'bundle-lacks-ca' && f.harness === name)
+    assert.equal(dexit, 1, dio.text())
+    assert.deepEqual(found && [found.class, found.commands.map((c) => c.run)], ['problem', ['trocar install']])
+    const t = (await runStatus(s, [name], sdeps)).text
+    assert.ok(t.includes('trocar install'), t)
     io = fakeIo()
     assert.equal(await runInstallCli(['--dry-run', '--json'], ctx(io, shell)), 0, io.text())
     assert.ok(io.json().planned.some((p) => p.path === bundle), `the bundle's rewrite is planned: ${JSON.stringify(io.json().planned)}`)
