@@ -25,8 +25,8 @@ function hopText(n, via, detail, inferred = false) {
     case 'trocar-forwarder': return `${n.name} :${n.port}${paren(n.mode === 'forward-only' ? 'forwarded only' : n.mode === 'down' ? 'nothing listening' : null)}`
     case 'legacy-mitm': return `${n.name} :${n.port}`
     case 'proxy': {
-      const at = n.port && !String(n.name).endsWith(`:${n.port}`) ? ` :${n.port}` : '' // every proxy hop has its port; a hop already named `host:port` says it once
-      const name = n.port && /^(system proxy|proxy setting|upstream)$/.test(String(n.name)) ? '' : n.name // the edge already says where it came from: a hop with no name of its own is its port
+      const name = n.port && (!n.remote || /^(system proxy|proxy setting|upstream)$/.test(String(n.name))) ? '' : n.name // a local hop is its port alone (§1.1⑤); the edge already says where it came from
+      const at = n.port && !String(name).endsWith(`:${n.port}`) ? ` :${n.port}` : '' // every proxy hop has its port; a hop already named `host:port` says it once
       return `${name}${name ? at : at.trim()}${detail && n.pid ? ` (pid ${n.pid})` : ''}${paren(n.unknown ? unknownText(n) : n.down ? 'nothing listening' : null)}`
     }
     case 'upstream': return `${n.name}${via === 'direct' ? ` (direct${inferred ? ', inferred' : ''})` : ''}`
