@@ -8,6 +8,7 @@ import { retriedNote, SETUP_WHY } from '../cli/words.mjs'
 import { UNDO_WORDS, setupBlocked, setupError } from '../cli/receipt.mjs'
 import { driverSetup, driverCtx, driverForms } from './driver-setup.mjs'
 import { uncapturedOf } from './core/proxymode/sources.mjs'
+import { takeEarly } from '../cli/on-start.mjs'
 import { isModelOs } from './model-install.mjs' // macOS / Windows: their on is turnOnModel (src/cli/on-model.mjs); this turnOn is Linux's
 import fs from 'node:fs'
 import net from 'node:net'
@@ -677,8 +678,11 @@ function daemonProbe({ osName, dir, env, fs, socketPath, request, pause }) {
 
 /** `on`'s early start (D62 ①): the daemon asked once, before the plan is read; when nothing answers (no socket, or a socket nobody listens on) its start is
  *  asked of the OS mechanism right away, so the daemon comes up while the plan is read. ensureDaemonUp takes this answer and asks neither again: what the
- *  start answered is reported there, as before. A daemon that answers, or holds the socket and does not, is left alone here. → `{ was, rr?, startAt?, startMs? }`. */
+ *  start answered is reported there, as before. A daemon that answers, or holds the socket and does not, is left alone here. → `{ was, rr?, startAt?, startMs? }`.
+ *  On Linux the CLI asked the start before its modules loaded (src/cli/on-start.mjs): that answer is this one, and no second start is asked. */
 export async function kickDaemon({ osName, dir, env, fs = nodeFs, unit = null, socketPath = null, request = null, pause = sleep, ms = Date.now }) {
+  const pre = takeEarly()
+  if (pre) return pre
   const was = await daemonProbe({ osName, dir, env, fs, socketPath, request, pause }).probe(true)
   if (was.up || was.stuck || !unit || typeof unit.startNow !== 'function') return { was }
   const startAt = ms()

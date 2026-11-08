@@ -19,6 +19,11 @@ if (process.argv[2] !== 'uninstall') {
     if (typeof mod.enableCompileCache === 'function' && fs.existsSync(stateFile())) mod.enableCompileCache(compileCacheDir());
   } catch { /* no cache: the run is the same */ }
 }
+// D62 ①: on Linux `on` asks systemd to start the daemon before the modules below load, so the daemon boots while they do (src/cli/on-start.mjs says when)
+if (process.platform === 'linux' && process.argv.includes('on')) {
+  const { startEarly } = await import('../src/cli/on-start.mjs')
+  startEarly({ argv: process.argv.slice(2), home: (await import('node:os')).homedir(), uid: process.getuid() })
+}
 const { runCli } = await import('../src/cli/main.mjs');
 
 runCli(process.argv.slice(2)).then((code) => { process.exitCode = code; }, (e) => { console.error(e); process.exit(1); });
