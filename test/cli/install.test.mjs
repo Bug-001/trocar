@@ -575,7 +575,8 @@ for (const os of ['darwin', 'win32']) {
     assert.equal(await runInstallCli(['--yes', '--json'], { io, env: w.env, home: w.home, platform: os, deps }), 1, io.text())
     const doc = io.json()
     // 附录 B: uninstall refuses while a harness is on, so the way past is the finding's steps, in order, off first
-    assert.deepEqual([doc.error && doc.error.code, doc.error && doc.error.commands], ['marked-without-record', findingFor('marked-without-record', { platform: os }).commands.map((c) => c.run)], JSON.stringify(doc.error))
+    assert.deepEqual([doc.error && doc.error.code, doc.error && doc.error.commands.slice(0, -1)], ['marked-without-record', findingFor('marked-without-record', { platform: os }).commands.map((c) => c.run)], JSON.stringify(doc.error))
+    assert.equal(doc.error.commands.at(-1), `trocar on ${[...new Set(doc.carriers.filter((c) => c.code === 'marked-without-record').map((c) => c.harness))].join(' ')}`, 'the last step turns the skipped harnesses back on, by name')
     assert.equal(doc.error.command, doc.error.commands[0])
     for (const f of marked) assert.ok(doc.problems.some((p) => p.startsWith(f)), `${f} is named: ${JSON.stringify(doc.problems)}`)
     assert.deepEqual(doc.problems.filter((p) => !marked.some((f) => p.startsWith(f))), [], 'no other file is named: a plug-in file with trocar\'s sentinel is taken over')
