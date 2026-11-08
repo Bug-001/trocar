@@ -15,11 +15,11 @@
 // D25: the CC block model (assembly-order walk, volatile rule, resource linking, system labels,
 // bash-read parsing) lives in ONE dissector — src/dissect/cc.mjs — shared with the ETL adapter.
 // linearContext (below) is now just the board's PROJECTION of that dissector's canonical spine.
-import { dissectBlocks, sysLabel, parseBashReads } from '../dissect/cc.mjs'
+import { dissectBlocks, sysLabel, parseBashReads, replyEnd, replyError } from '../dissect/cc.mjs'
 import { reqIncompleteOf, wsIncompleteOf, respIncompleteOf } from '../dissect/capture-labels.mjs'
 import { hintsOf } from '../dissect/harnesses.mjs'
 import { sharesBody } from '../dissect/request-body.mjs'
-import { failedOf } from '../dissect/endpoints.mjs'
+import { failedOf, cutOf } from '../dissect/endpoints.mjs'
 import { compareStep } from './step-order.mjs'
 import { compactionVerdict, hasCompactionPreamble } from '../identity/session-identity.mjs'
 // Envelope drift guard (R1): the D10 envelope stores the response under `resp`, demo v0 under
@@ -368,7 +368,7 @@ const defined = (o) => { for (const k of Object.keys(o)) if (o[k] === undefined)
 // status and labels, its usage, and its reply's events — never a block's text.
 export function callFacts(r) {
   const req = r.request, rs = respOf(r) || {}, nr = normResp(r), h = hintsOf(r)
-  const status = rs.status ?? null
+  const status = rs.status ?? null, failed = failedCall(r)
   const reqIncomplete = reqIncompleteOf(r)
   const sys = sysText(r), sub = h.lane === 'subagent' || isSub(sys), monitor = isMonitor(sys)
   const u = nr.usage, text = nr.text || ''
@@ -382,11 +382,11 @@ export function callFacts(r) {
     aux: h.lane === 'aux' || req.message_count <= 2 ? auxSubkind(r, userTextOf(r)) : undefined,
     continued: !!(r._ctx && r._ctx.continued), lineage: r._ctx ? r._ctx.lineage : undefined,
     ctxPartial: !!(r._ctx && r._ctx.contextState === 'partial'),
-    status, failed: failedCall(r),
+    status, failed,
     reqIncomplete, wsIncomplete: wsIncompleteOf(r), respIncomplete: respIncompleteOf(r),
     errMsg: r._unparsed ? unparsedErrMsg(reqIncomplete)
-      : (rs.error?.message || (r.error ? String(r.error.message || r.error) : null)
-        || (!failedCall(r) ? null : status == null ? 'no HTTP status' : status >= 400 ? `HTTP ${status}` : null)),
+      : !failed ? null : (replyError(rs.kind === 'error' ? rs.partial : rs) || rs.error?.message || (r.error ? String(r.error.message || r.error) : null)
+        || (status == null ? 'no HTTP status' : status >= 400 ? `HTTP ${status}` : null)),
     ctx: mapUsage('anthropic', u || {}).total_input,
     usage: u,
     preamble: hasCompactionPreamble(req.messages),
@@ -461,7 +461,7 @@ export const unparsedErrMsg = (reqIncomplete) => (reqIncomplete
   : 'unrenderable: req_body could not be parsed (truncated / corrupt capture)')
 // The call-row failed rule (3.5 §访问模式 ②, endpoints.mjs failedOf): an error key, an unparsed sentinel (`_unparsed` = already
 // stubbed by admission), or an HTTP status that is absent or ≥ 400 on a call that is not a WebSocket logical call.
-const failedCall = (r) => failedOf({ status: respOf(r)?.status, ws: r.transport === 'ws', error: !!r.error || !!r._unparsed || isUnparsed(r) })
+const failedCall = (r) => failedOf({ status: respOf(r)?.status, ws: r.transport === 'ws', error: !!r.error || !!r._unparsed || isUnparsed(r), ended: replyEnd(respOf(r)), cut: cutOf(r) })
 
 // analyze()'s step order (ts_request, then id): every assembler folds a session in it, so a session's global step index is one sort
 // whichever wires it mixes.

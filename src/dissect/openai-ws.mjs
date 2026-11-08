@@ -13,7 +13,7 @@
 // bytes carry its whole input (3.1:60). The bytes are untouched: every stitched block is located in the record
 // and field it came from (locate), so it resolves verbatim through a field-qualified text_ref (4.2:40, gate G1).
 // Leaf module.
-import { boardFlat, reqCountsFor, ctxTokens, normEvents, itemNodes } from './openai.mjs';
+import { boardFlat, reqCountsFor, ctxTokens, normEvents, itemNodes, responsesEnded } from './openai.mjs';
 import { storedRequestBody } from './request-body.mjs';
 import { storedReply, noSpanWhy, replyPart, nodeParts, scanned } from './sse-spans.mjs';
 import { isWsHandshake } from './ws-handshake.mjs'; // not ./registry.mjs: the registry imports THIS module
@@ -216,7 +216,7 @@ function stitchOf(rec) {
 }
 
 // The dissector object the board's flat-lane assembler calls (D25: the shared layer names no wire; the
-// registry registers this under 'openai-responses-ws'). prepare (→ a planner whose context(rec) stitches) / roleOf / laneOf / agentOf / failed are the hooks a
+// registry registers this under 'openai-responses-ws'). prepare (→ a planner whose context(rec) stitches) / roleOf / laneOf / agentOf / ended are the hooks a
 // wire with a cross-record context provides.
 export const RESPONSES_WS = Object.freeze({
   id: 'openai-responses-ws', provider: 'openai', blockKeys: ['tools', 'instructions', 'input'],
@@ -232,6 +232,6 @@ export const RESPONSES_WS = Object.freeze({
   replyParts: (rec) => replyPartsWs(rec),
   reqCounts: (req) => reqCountsFor('responses', req),
   ctxTokens,
-  // a call failed when its terminal says so, or when no terminal arrived at all (the connection cut it)
-  failed: (norm, rec) => norm.stop_reason === 'error' || norm.stop_reason === 'failed' || !!(rec && rec.error),
+  // the reply's own terminal, as on HTTP; a call the connection cut before it is failed by the record's error (endpoints.mjs failedOf)
+  ended: responsesEnded,
 });

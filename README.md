@@ -273,6 +273,9 @@ holds the detail):
 - **Response: compressed on the wire; only the decompressed text is stored**: the reply arrived compressed and the record keeps only its
   decompressed text, not the compressed bytes that were on the wire. Records captured since trocar keeps those
   bytes do not carry it.
+- **Agent closed the connection after the reply**: the reply arrived whole, up to its own last event, and the agent
+  then closed the connection before the server ended the exchange. The call is not failed: its reply, usage and cost
+  are read as usual. A reply that stopped before its last event says **Reply never finished** and stays failed.
 - **N records no parser can read; not drawn** (in the session's own fidelity line): records no dissector reads are
   counted, never drawn as something else — also when only some records of a session are unrecognized. One
   session may mix wire formats; each call is read by its own.
