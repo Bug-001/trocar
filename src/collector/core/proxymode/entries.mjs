@@ -195,7 +195,20 @@ function check(ctx, records) {
   return { ok: failing.length === 0, failing }
 }
 
-/** routeEntry(kind) → { write(ctx, doorUrl), undo(ctx, records), check(ctx, records) }. write → { ok, records } | { code: 'not-routed', reason, at? };
+/** P5: a route not written this time (not-routed, any reason) keeps nothing an earlier `on` wrote there: its records are undone the way off does.
+ *  Never throws: a record left in place (the file a link, unreadable, unwritable) is said → [{ code: 'entry-not-undone', reason, at }] (empty = all undone);
+ *  the record stays in the manifest, so off tries again (invariant 4, D38). */
+const dropRoute = (ctx, harness, routeId) => {
+  const left = recordsOf(ctx.manifest, harness, routeId)
+  if (!left.length) return []
+  const notUndone = (why, at) => ({ code: CODE.entryNotUndone, reason: `the setting an earlier on wrote is still there (${why}); off tries again`, ...(at ? { at } : {}) })
+  try {
+    return undo(ctx, left).results.filter((r) => KEEP(r.result)).map((r) => notUndone(r.reason || r.result, r.real_path || r.path))
+  } catch (e) { return [notUndone(String((e && e.message) || e), (e && e.path) || left[0].real_path || left[0].path)] }
+}
+
+/** routeEntry(kind) → { write(ctx, doorUrl), undo(ctx, records), check(ctx, records) }. write → { ok, records } | { code: 'not-routed', reason, at?, left? }
+ *  (left: what an earlier on wrote on this route that could not be taken out, dropRoute's list);
  *  a record of this route that holds another door is undone first (a rebound port), then the route is written again. */
 export function routeEntry(kind) {
   const w = KINDS[kind]
@@ -210,7 +223,11 @@ export function routeEntry(kind) {
       const takeBack = () => { const added = [...m.entries, ...m.files].filter((x) => !had.has(x)); if (added.length) undo(ctx, added) }
       let res
       try { res = w({ ...ctx, door }, door) } catch (e) { takeBack(); throw e }
-      if (!res.ok) { takeBack(); return res }
+      if (!res.ok) {
+        takeBack()
+        const left = res.code === 'not-routed' ? dropRoute(ctx, ctx.harness, ctx.routeId) : []
+        return left.length ? { ...res, left } : res
+      }
       // every record the journal wrote carries the route from its intent on; its last change is saved by the journal, or under defer by the next save
       // (flushResults at the end of on). What is left to save here is a record of an older run — one without the tag, or one holding its door in
       // clear, which the save seals (a save is two fsyncs, D62①)
@@ -249,10 +266,19 @@ export function planRoutes(desc, ctx) {
  *  → { results: [{ route, ok, code?, reason?, at? }], notRouted, notes } */
 export function writeRoutes(desc, ctx, doorOf) {
   const plan = planRoutes(desc, ctx)
-  const results = plan.routes.map(({ id, route }) => {
-    try { const r = routeEntry(route.kind).write({ ...ctx, harness: desc.name, route, routeId: id }, doorOf(id)); return { route: id, ...(r.ok ? { ok: true } : { ok: false, ...r }) } } catch (e) {
-      return { route: id, ok: false, code: (e && e.code) || 'entry-refused', reason: String((e && e.message) || e), ...(e && e.path ? { at: e.path } : {}) }
+  const results = plan.routes.flatMap(({ id, route }) => {
+    try {
+      const r = routeEntry(route.kind).write({ ...ctx, harness: desc.name, route, routeId: id }, doorOf(id))
+      if (r.ok) return [{ route: id, ok: true }]
+      const { left = [], ...res } = r
+      return [{ route: id, ok: false, ...res }, ...left.map((l) => ({ route: id, ok: false, ...l }))]
+    } catch (e) {
+      return [{ route: id, ok: false, code: (e && e.code) || 'entry-refused', reason: String((e && e.message) || e), ...(e && e.path ? { at: e.path } : {}) }]
     }
   })
+  // a route of the harness no planned form uses (no form present, or every one blocked) is not-routed too: what an earlier on wrote there goes (P5)
+  const planned = new Set(plan.routes.map((x) => x.id)), m = ctx.manifest
+  const stale = [...new Set([...m.entries, ...m.files].filter((x) => x.harness === desc.name && x.phase === 'on' && typeof x.route === 'string' && !planned.has(x.route)).map((x) => x.route))]
+  for (const id of stale) for (const l of dropRoute({ ...ctx, harness: desc.name }, desc.name, id)) results.push({ route: id, ok: false, ...l })
   return { results, notRouted: plan.notRouted, notes: plan.notes }
 }

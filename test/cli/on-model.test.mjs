@@ -285,3 +285,81 @@ test('1.6 §1.6 (darwin): off writes off after on wrote its first harness → on
   assert.equal(off.exit, 0, JSON.stringify(off.receipt.problems))
   assert.deepEqual(mine(w.home), before, 'off took out every entry on wrote')
 })
+
+// 4.11 §3 ③ (P5): `on` reads the system proxy (scutil, injected below the reader) when a form that follows it is present. A PAC system proxy → the
+// desktop app's library route is not-routed, and the door the last on wrote there is taken out
+test('4.11 §3 ③ (darwin): on over a PAC system proxy says the library route not-routed (system-pac) and takes the door the last on wrote out', async () => {
+  const w = await modelWorld({ commands: ['claude', 'codex'] })
+  fs.mkdirSync(path.join(w.home, 'Applications', 'Claude.app'), { recursive: true })
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  const sock = path.join(w.home, 'c.sock'), token = 't'.repeat(32)
+  fs.writeFileSync(path.join(w.dir, 'control.json'), JSON.stringify({ path: sock, token }))
+  const server = await startControlServer({ socketPath: sock, token, routes: {
+    'GET /status': async () => ({ doors: {} }),
+    'POST /on': async ({ body }) => ({ doors: Object.fromEntries(Object.entries(body.groups).map(([g, port]) => [g, `http://127.0.0.1:${port}`])) }),
+  } })
+  const box = { pac: false }
+  const exec = (file, args) => (file === 'scutil' && args[0] === '--proxy' ? { status: 0, stdout: `<dictionary> {\n${box.pac ? '  ProxyAutoConfigEnable : 1\n' : ''}}\n`, stderr: '' } : { status: 1, stdout: '', stderr: 'not here' })
+  const run = async (json) => {
+    const io = fakeIo()
+    const deps = { getuid: () => 501, exec, backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: { os: 'darwin', harnesses: w.harnesses, arch: { unit: { userUnit: () => neverStarts } } } }
+    const exit = await runOn({ io, env: w.env, home: w.home, platform: 'darwin', deps, ids: null, flags: new Set(['--yes']), json })
+    return { exit, io }
+  }
+  const library = () => fs.readdirSync(w.home, { recursive: true }).map((n) => path.join(w.home, n)).filter((p) => p.includes('configLibrary') && p.endsWith('.json') && fs.statSync(p).isFile())
+  const doorIn = () => library().filter((p) => /127\.0\.0\.1:\d+/.test(fs.readFileSync(p, 'utf8')))
+  try {
+    const first = await run(true)
+    assert.equal(first.exit, 0, first.io.text())
+    assert.ok(doorIn().length, 'the first on wrote the door into the library entry')
+    box.pac = true
+    const second = await run(true)
+    const doc = second.io.json()
+    const lib = doc.routes.filter((r) => r.harness === 'claude-code' && !r.ok)
+    assert.deepEqual(lib.map((r) => [r.code, r.reason]), [['not-routed', 'system-pac']], JSON.stringify(doc.routes))
+    assert.equal(second.exit, 1)
+    assert.deepEqual(doorIn(), [], 'no library entry holds the door any more')
+  } finally { await server.close() }
+})
+
+// 1.6 §1.1: the receipt of an on that did not finish for one harness — the headline names only the harnesses that did not finish, a row says its
+// reason in words (never the closed-set code the JSON carries), and a long path is one unbroken token within 80 columns (⑥)
+test('1.6 §1.1 (darwin): on with one route not-routed → the headline names only that harness, no reason code in the text, the path unbroken', async () => {
+  const w = await modelWorld({ commands: ['claude', 'codex'] })
+  fs.mkdirSync(path.join(w.home, 'Applications', 'Claude.app'), { recursive: true })
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  const sock = path.join(w.home, 'c.sock'), token = 't'.repeat(32)
+  fs.writeFileSync(path.join(w.dir, 'control.json'), JSON.stringify({ path: sock, token }))
+  const server = await startControlServer({ socketPath: sock, token, routes: {
+    'GET /status': async () => ({ doors: {} }),
+    'POST /on': async ({ body }) => ({ doors: Object.fromEntries(Object.entries(body.groups).map(([g, port]) => [g, `http://127.0.0.1:${port}`])) }),
+  } })
+  const exec = () => ({ status: 0, stdout: '<dictionary> {\n}\n', stderr: '' })
+  const run = async (json) => {
+    const io = fakeIo()
+    const deps = { getuid: () => 501, exec, backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: { os: 'darwin', harnesses: w.harnesses, arch: { unit: { userUnit: () => neverStarts } } } }
+    return { exit: await runOn({ io, env: w.env, home: w.home, platform: 'darwin', deps, ids: null, flags: new Set(['--yes']), json }), io }
+  }
+  try {
+    // the user's own applied library entry; after the first on they set an egress proxy of their own in it: the library route is not-routed there
+    const lib = path.join(w.home, 'Library', 'Application Support', 'Claude-3p', 'configLibrary'), entry = path.join(lib, 'u1.json')
+    fs.mkdirSync(lib, { recursive: true })
+    fs.writeFileSync(path.join(lib, '_meta.json'), JSON.stringify({ appliedId: 'u1' }))
+    fs.writeFileSync(entry, JSON.stringify({ inferenceProvider: 'gateway' }))
+    assert.equal((await run(true)).exit, 0)
+    fs.writeFileSync(entry, JSON.stringify({ ...JSON.parse(fs.readFileSync(entry, 'utf8')), egressProxyUrl: 'http://corp.example:8080' }))
+    const doc = (await run(true)).io.json()
+    const bad = doc.routes.filter((r) => !r.ok)
+    assert.ok(bad.length && bad.every((r) => r.harness === 'claude-code' && r.at), JSON.stringify(doc.routes))
+    const text = (await run(false)).io.text()
+    const lines = text.split('\n'), headAt = lines.findIndex((l, i) => i > 0 && !l.startsWith(' ')) // the plan's first line, then the receipt's
+    const head = lines.slice(headAt, lines.findIndex((l, i) => i > headAt && l.startsWith(' '))).join(' ')
+    assert.match(head, /claude-code/, text)
+    assert.doesNotMatch(head, /codex/, `the headline names only what did not finish\n${text}`)
+    for (const r of bad) assert.ok(!text.includes(`(${r.reason})`) && !new RegExp(`\\b${r.reason}\\b`).test(text), `no closed-set code in the text (${r.reason})\n${text}`)
+    const shown = bad[0].at.replace(w.home, '~').split('#')[0]
+    assert.ok(lines.some((l) => l.includes(shown)), `the path is one unbroken token\n${text}`)
+    for (const l of lines) assert.ok(l.length <= 80 || !l.trim().includes(' '), `within 80 columns, or one token alone\n${l}`)
+    assertEnglish(text, 'the receipt of on with a route not written')
+  } finally { await server.close() }
+})

@@ -4,7 +4,7 @@
 // direct. The chain never sees a raw reader answer (the bug this guards: raw scutil / registry values read as "no proxy", every follower dialled direct).
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { systemProxyWatch } from '../../../src/collector/arch/model-backends.mjs'
+import { systemProxyWatch, systemProxyNow } from '../../../src/collector/arch/model-backends.mjs'
 import * as darwin from '../../../src/collector/arch/darwin/upstream.mjs'
 import * as win32 from '../../../src/collector/arch/win32/upstream.mjs'
 import { upstreamFor } from '../../../src/collector/core/proxymode/chain.mjs'
@@ -69,6 +69,16 @@ test('the door hands the P7 chain the system proxy in its shape: on darwin and w
       if (want.unreadable) assert.equal(r.unreadable, true, at)
       if (want.notDirect) assert.notEqual(r.source, 'direct', at)
     } finally { w.stop() }
+  }
+})
+
+// 4.11 §3 ③: `on` reads the system proxy once, through the same reader and the same chain shape the door's watch hands P7 — so the PAC route's
+// gate (a PAC system proxy, an own leg with a login) judges what the door would dial
+test('systemProxyNow (on\'s one read) is the door\'s answer: the same chain shape for every setting, darwin and win32', async () => {
+  for (const os of Object.keys(OS)) for (const [s] of settings()) {
+    const { up, read, io } = OS[os](s)
+    const w = await systemProxyWatch({ up, read, io })
+    try { assert.deepEqual(await systemProxyNow({ os, io }), w.now(), JSON.stringify({ os, s })) } finally { w.stop() }
   }
 })
 
