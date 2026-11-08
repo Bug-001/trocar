@@ -47,6 +47,30 @@ const PARSE = {
   dotenv: (t) => Object.fromEntries(parseDotenv(t)),
 }
 
+// `expand: 'env'` (descriptor data): the program reads `${NAME}` in the value from its environment (`ctx.env`), as Hermes reads config.yaml. A reference
+// to a name that is not set stays as written there, names no file, and the program falls back to its default trust: that value is not in effect here
+const REF = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g
+/** Whether a value read under `expand: 'env'` names the environment (`${NAME}`): with that environment unread, its file is not known (D38). */
+export const namesEnv = (value) => typeof value === 'string' && /\$\{[A-Za-z_][A-Za-z0-9_]*\}/.test(value)
+/** The environment names the `expand: 'env'` settings of a descriptor reference now, read against `ctx` as written: what a reader asks a process for
+ *  besides the names its data declares (the door asks for only the names it needs, 4.9 §5.2). A setting that cannot be read names none. */
+export function envRefsOf(desc, ctx) {
+  const out = new Set()
+  for (const src of ((desc && desc.proxyMode) || {}).userCertFiles || []) {
+    if (src.expand !== 'env') continue
+    const r = readSrc({ ...src, expand: undefined }, ctx)
+    for (const x of (r.set && r.all) || []) if (typeof x.value === 'string') for (const m of x.value.matchAll(REF)) out.add(m[1])
+  }
+  return [...out].slice(0, MAX_REFS) // bounded: names only (`${NAME}` and nothing else of the text), at most MAX_REFS asked of a process
+}
+const MAX_REFS = 32
+const expanded = (value, env) => {
+  if (typeof value !== 'string') return value
+  let unset = false
+  const v = value.replace(REF, (m, k) => { const x = get(env, k); if (!isSet(x)) { unset = true; return m } return x })
+  return unset ? undefined : v
+}
+
 /** A setting: { set: true, value, where, all: [{ value, where }] } | { set: false } | { error, where }. */
 export function readSrc(src, ctx) {
   if (Array.isArray(src)) {
@@ -69,7 +93,10 @@ export function readSrc(src, ctx) {
     try { text = ctx.readFile(f) } catch (e) { if (absent(e)) continue; return { error: why(e), where: f } }
     let data
     try { data = PARSE[src.format](String(text)) } catch (e) { return { error: `unparsable ${src.format}: ${(e && e.message) || e}`, where: f } }
-    for (const m of walk(data, src.keys)) all.push({ value: m.value, where: `${f}#${m.keys.join('.')}` })
+    for (const m of walk(data, src.keys)) {
+      const value = src.expand === 'env' ? expanded(m.value, ctx.env) : m.value
+      if (value !== undefined) all.push({ value, where: `${f}#${m.keys.join('.')}` })
+    }
   }
   return all.length ? { set: true, value: all[0].value, where: all[0].where, all } : { set: false }
 }

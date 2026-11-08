@@ -25,7 +25,7 @@ import { holdersRoute } from '../control.mjs'
 import { makeIssuer } from '../tls/issuer.mjs'
 import { bypassHit } from '../upstream-shape.mjs'
 import { hostSetOf } from '../host-agent.mjs'
-import { configuredHosts, userCertFilesOf } from './sources.mjs'
+import { configuredHosts, userCertFilesOf, envRefsOf } from './sources.mjs'
 import { priorRecordOf, pacPath, pacStale } from './entries.mjs'
 import { CODE } from '../codes.mjs'
 import { agentTrustSet, createAgentTrust, CERT_VARS } from './upstream-trust.mjs'
@@ -142,10 +142,10 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
    *  whose start time is unknown (a pid alone can be reused), is asked again on a later connection, at most once a second (4.11 P7, D38). The start
    *  time goes to the readers too, so a later life of the pid is never answered for this one. Concurrent connections share the read in flight.
    *  `desc` null: a process no harness names, asked for the hook value alone (P7 step 1, ⑥), no cwd. */
-  function procFacts(p, start, desc) {
-    const names = desc ? envNamesOf(desc) : [HOOK_ENV]
+  function procFacts(p, start, desc, extra = []) {
+    const names = desc ? [...new Set([...envNamesOf(desc), ...extra])] : [HOOK_ENV]
     const of = (q, s) => {
-      const k = `${q}\0${s ?? ''}\0${desc ? desc.name : ''}`
+      const k = `${q}\0${s ?? ''}\0${desc ? desc.name : ''}\0${extra.join(',')}`
       const hit = pcache.get(k)
       if (hit && (hit.at == null || clock() - hit.at <= 1000)) return hit.answer
       const o = s != null ? { startedAt: s } : {}, entry = { at: null, answer: null }
@@ -188,7 +188,10 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     const k = `${id.pid}\0${id.facts.startedAt ?? ''}\0${d.g}\0${host}`
     if (vcache.has(k)) return noted(id, vcache.get(k), d.g)
     const desc = byName.get(id.agent)
-    const pf = await procFacts(id.pid, id.facts.startedAt ?? null, desc)
+    let pf = await procFacts(id.pid, id.facts.startedAt ?? null, desc)
+    // a setting the agent expands from its environment (`${NAME}`, 4.11 P4 expand) is read with the names it references asked of the process too
+    const refs = pf.env ? envRefsOf(desc, { ...ctx, env: pf.env, cwd: pf.cwd ?? undefined }).filter((n) => !envNamesOf(desc).includes(n)).sort() : []
+    if (refs.length) pf = await procFacts(id.pid, id.facts.startedAt ?? null, desc, refs)
     const facts = { name: id.agent, pid: id.pid, startedAt: id.facts.startedAt ?? null, env: pf.env, cwd: pf.cwd }
     const forms = judgedForms(desc, ctx.os, id.agent === d.harness ? d.routeId : null, id.exe ?? null, id.facts.argv ?? null) // the forms its program file and command line may be (P11)
     let v = forms.length ? { decrypt: true } : { decrypt: false, code: 'not-verified', detail: `${id.agent} has no form on ${ctx.os}` }

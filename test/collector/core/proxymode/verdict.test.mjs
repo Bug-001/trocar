@@ -258,6 +258,33 @@ test('P11 rule 4 · Hermes seed: a provider ssl_ca_cert without the root forward
   }
 })
 
+// 4.11 P4 `expand: 'env'`: Hermes reads `${NAME}` in config.yaml from its environment; an unset name stays as written, names no file, and Hermes falls back
+// to its default trust (trocar's root, once install put it there). The door reads the value the same way, from the process's environment.
+test('P11 rule 4 · Hermes ssl_ca_cert ${VAR}: set → its file is judged; unset → the setting is not in effect, decrypt', () => {
+  const d = descs.find((x) => x.name === 'hermes'), f = d.proxyMode.forms.find((x) => x.id === 'hermes.cli')
+  const dir = tmpDir('trocar-hermes-var-'), ca = path.join(dir, 'corp.pem')
+  fs.writeFileSync(ca, OTHER.pem)
+  fs.writeFileSync(path.join(dir, 'config.yaml'), 'providers:\n  corp:\n    ssl_ca_cert: ${CORP_CA}\n')
+  const ctx = { os: 'darwin', home: '/nowhere', dirs: {}, env: {}, join: path.join, readFile: OWN(dir), readdir: () => [], policy: () => ({ set: false }) }
+  for (const [env, want] of [[{ CORP_CA: ca }, 'replace-without-ca'], [{}, null]]) {
+    const got = ask({ d, f, ctx, facts: { name: d.name, pid: 1, startedAt: INSTALLED + 1, env: { HERMES_HOME: dir, ...env }, cwd: dir } })
+    assert.deepEqual([got.decrypt, got.code ?? null], [want === null, want], JSON.stringify(got))
+  }
+})
+
+// D38: with the process environment unread, a value read under `expand: 'env'` that names a variable is not known — never read as unset, which would
+// decrypt an agent that may trust only a private file; a value that names no variable is judged as written
+test('P11 rule 4 · expand env with the process environment unread: ${VAR} forwards environ-unreadable uncached; a plain path is judged', () => {
+  for (const [ref, want] of [[true, ['environ-unreadable', true]], [false, ['replace-without-ca', false]]]) {
+    const c = userFileCase({ kind: 'key', semantics: 'replace', holds: 'lacks' })
+    c.d.proxyMode.userCertFiles[0].expand = 'env'
+    c.d.proxyMode.blockers = [] // nothing else in this world reads the process environment: the setting alone answers
+    if (ref) fs.writeFileSync(path.join(c.dir, 'cfg.yaml'), 'routes:\n  r0:\n    ca: ${CORP_CA}\n')
+    const got = ask({ ...c, facts: { ...c.facts, env: null } })
+    assert.deepEqual([got.decrypt, ...pick(got)], [false, ...want], JSON.stringify(got))
+  }
+})
+
 // One reading of a setting's value (4.11 P4 rule U, sources.mjs fileOf): a leading `~/` is the home, never a directory named `~` under the cwd.
 test('P11 rule 4 · a replacing setting written ~/…: the file under the home is read, whatever the process cwd', () => {
   for (const [holds, want] of [['block', null], ['lacks', 'replace-without-ca']]) {

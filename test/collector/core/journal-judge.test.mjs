@@ -110,3 +110,16 @@ test('X18: the trust block is written to Home/Codex/.env; the proxy block joins 
   if (foldsCase(probe)) run('another case', (root) => path.join(root, 'home', 'codex', '.env'))
   run('a linked directory', (root) => path.join(root, 'link', '.env'))
 })
+
+// An earlier version's `on` wrote a proxy block with fewer names than this one plans: no entry of the record matches the planned block, so the write is
+// refused for trocar's marked text — and the refusal names the way out that works: off takes out what that on wrote (by its record), then on again
+test('a block an earlier version\'s on wrote with other names is refused, naming trocar off as the way out', () => {
+  const b = box()
+  try {
+    const file = path.join(b.root, '.codex', '.env'); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, 'A=1\n')
+    const m = newManifest()
+    applyTextEntry({ phase: 'on', dir: b.dir, home: b.root, manifest: m, harness: 'codex', file, edit: { format: 'dotenv-block', vars: { HTTPS_PROXY: 'http://127.0.0.1:1' } } })
+    assert.throws(() => applyTextEntry({ phase: 'on', dir: b.dir, home: b.root, manifest: m, harness: 'codex', file, edit: { format: 'dotenv-block', vars: { HTTPS_PROXY: 'http://127.0.0.1:1', ALL_PROXY: 'http://127.0.0.1:1' } } }),
+      (e) => e.code === 'marked-without-record' && /trocar off/.test(e.message), 'the way out is off, then the command again')
+  } finally { b.done() }
+})

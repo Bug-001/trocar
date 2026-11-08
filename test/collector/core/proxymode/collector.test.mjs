@@ -1069,6 +1069,32 @@ for (const d of (await loadHarnesses()).filter((x) => (x.proxyMode.userCertFiles
   })
 }
 
+// 4.11 P4 expand: a replacing setting written `${NAME}` is read with NAME asked of the process, which the descriptor's data does not name: set to a file
+// without the root → forwarded; not set in the process → the setting is not in effect, decrypt. A process env reader answers only the names asked.
+for (const d of (await loadHarnesses()).filter((x) => (x.proxyMode.userCertFiles || []).some((s) => s.semantics === 'replace' && s.file && s.expand === 'env'))) {
+  const s = d.proxyMode.userCertFiles.find((x) => x.semantics === 'replace' && x.file && x.expand === 'env')
+  const f = judgedForms(d, 'darwin')[0]
+  test(`P11 rule 4 at the door · ${d.name}: a \${NAME} setting is read with NAME asked of the process`, async () => {
+    for (const [set, want] of [[true, 'replace-without-ca'], [false, null]]) {
+      const dir = tmpDir('trocar-door-ref-'), ca = path.join(dir, 'corp.pem')
+      fs.writeFileSync(ca, makeRoot('a corporate root').pem)
+      const env = set ? { CORP_REF_CA: ca } : {}, loc = s.file.perOs ? s.file.perOs.darwin : s.file
+      if (loc.env) env[loc.env] = dir
+      const at = resolveLoc(s.file, { os: 'darwin', home: dir, dirs: {}, join: path.join, env, cwd: dir })[0]
+      const tree = s.keys.reduceRight((v, k) => ({ [k === '*' ? 'corp' : k]: v }), '${CORP_REF_CA}')
+      const yaml = (o, ind = '') => Object.entries(o).map(([k, v]) => (typeof v === 'object' ? `${ind}${k}:\n${yaml(v, ind + '  ')}` : `${ind}${k}: ${v}\n`)).join('')
+      fs.mkdirSync(path.dirname(at), { recursive: true }); fs.writeFileSync(at, yaml(tree))
+      const base = ctxOf(newWorld('darwin'))
+      const readFile = (p) => (p.startsWith(dir) ? fs.readFileSync(p, 'utf8') : base.readFile(p))
+      const r = await rig({ desc: d, os: 'darwin', w: { pid: 7273, env, cwd: dir, ctx: { ...base, readFile }, facts: { exe: '/bin/x', uid: 501, agent: d.name, startedAt: INSTALLED + 20 }, now: INSTALLED + 30 } })
+      await r.c.on({ harnesses: [d.name], groups: { [`${d.name}:${f.route}`]: 18701 } })
+      const meta = await r.c.lookupIngress({ peer: PEER, user: `${d.name}:${f.route}`, target: { address: d.hosts[0], port: 443 } })
+      assert.deepEqual([meta.decrypt, (meta.skip && meta.skip.reason) || null], [want === null, want], JSON.stringify(meta))
+      r.c.close()
+    }
+  })
+}
+
 // ---- forwarding by design is no failure event; the switch is the in-memory one (4.6 §连接行 · §开关) -------------------------------------
 test('4.6 §连接行 · a not-verified verdict writes no failure event (the row carries it); config-after-start writes one, once', async () => {
   const { d, f, os } = rootForm, g = `${d.name}:${f.route}`
