@@ -121,6 +121,15 @@ test('stopDaemon on win32 kills the supervisor FIRST (its start time asked and m
   assert.ok(w.calls.findIndex((c) => c.includes('Get-Process -Id 5000')) < w.calls.findIndex((c) => c.startsWith('taskkill') && c.includes('5000')), 'the supervisor\'s start time was asked before it was killed')
 })
 
+test('stopDaemon on win32 with the collector already gone (ended by hand, its supervisor\'s lock already cleared): it signals nothing — how none, no taskkill — and says stopped, so the caller knows it stopped nothing', async () => {
+  const w = winWorld(), dead = () => false
+  nodeFs.rmSync(path.join(w.dir, SUPERVISOR_LOCK)) // `off` had already removed the dead supervisor's lock
+  const r = await stopDaemon({ lockFile: w.lockFile, platform: 'win32', exec: w.exec, alive: dead, identity: identityFor({ platform: 'win32', exec: w.exec }), now: () => Date.now(), fs: nodeFs })
+  assert.deepEqual([r.stopped, r.how, r.calls], [true, 'none', undefined])
+  assert.deepEqual(w.calls.filter((c) => c.startsWith('taskkill')), [])
+  assert.ok(!r.signals.some((x) => x.startsWith('taskkill')), JSON.stringify(r.signals))
+})
+
 test('a supervisor.lock that names a reused pid (its start time no longer matches) is skipped silently — its supervisor is dead; one that cannot be read kills nothing on a guess and says so', async () => {
   const reused = winWorld({ superNowAt: SUPER_AT + 999_000 }) // pid 5000 lives, but it is another process now
   const r = await stopDaemon({ lockFile: reused.lockFile, platform: 'win32', exec: reused.exec, alive: reused.alive, identity: identityFor({ platform: 'win32', exec: reused.exec }), now: () => Date.now(), fs: nodeFs })

@@ -491,9 +491,10 @@ test('uninstall removes ~/.trocar/netenv.json with the rest of trocar\'s own fil
   assert.match(formatUninstallReceipt({ ...r, daemon: { pid: null, state: 'stopped' } }, { home: s.home }), /^The collector was stopped\.$/m, 'a stopped daemon whose pid is not known is said without one, never "(pid null)"')
   // a lock that still names a collector which had already exited (killed by hand): the stop signals nothing, so nothing was stopped and nothing is said
   const x = await installedHome({ names: ['claude-code'] }); x.sys.daemon.state.up = false
+  // what stopDaemon gives for a lock naming a pid that is gone (test/off/win32.test.mjs: nothing signalled)
   const gone = await x.uninstall({ yes: true, deps: { stopDaemon: async () => ({ stopped: true, how: 'none', pid: 8852, signals: [], helper_pid: null }) } })
   assert.equal(gone.exit, 0, JSON.stringify(gone.receipt.problems))
-  assert.equal(gone.receipt.daemon.state, 'none', JSON.stringify(gone.receipt.daemon))
+  assert.deepEqual(gone.receipt.daemon, { pid: null, state: 'none' })
   assert.ok(!/8852/.test(formatUninstallReceipt(gone.receipt, { home: x.home })), 'the receipt names no collector it did not stop')
   // a daemon that was running is still said to be stopped, with its pid
   const t = await installedHome({ names: ['claude-code'] })
