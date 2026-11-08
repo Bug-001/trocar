@@ -307,7 +307,7 @@ function undoOne(item, home, fs) {
   if (door || pre.doc) for (const k of [...mine, ...(route.noProxyKeys || [])]) for (let d = k.length - 1; d > 0; d--) { const c = getPath(now(), k.slice(0, d)); if (isEmptyObject(c) && was(k.slice(0, d)) === undefined) restore(k.slice(0, d), undefined) }
   // a file left holding nothing but empty objects, with no backup at all, is one trocar created: it goes, and with a door file the meta key that selects it
   // (the meta is judged before either file is written: when its backup cannot be read, both stay as they are)
-  if (!pre.any && emptyTree(now())) {
+  if (!pre.any && strictEmpty(out)) {
     const meta = route.select ? unselect(item.path, route.select, home, fs) : null
     if (meta && meta.result) return meta
     fs.rmSync(file, { force: true })
@@ -346,16 +346,23 @@ function before(file, home, fs, isOn, trocars = () => false) {
   const all = backupsOf({ home, file, fs }), unread = []
   let any = false
   for (const b of [...all].reverse()) {
-    let d
-    try { const s = readText(readOrNull(fs, b)); if (s.why) throw new Error(WHY_TEXT[s.why]); d = parseJsonText(s.text) } catch (e) { unread.push({ path: b, why: String((e && e.message) || e) }); any = true; continue }
+    let d, s
+    try { s = readText(readOrNull(fs, b)); if (s.why) throw new Error(WHY_TEXT[s.why]); d = parseJsonText(s.text) } catch (e) { unread.push({ path: b, why: String((e && e.message) || e) }); any = true; continue }
     // a backup holding nothing but trocar's values (in objects) is of a file trocar created — `on` saved what `install` wrote: not the user's file
-    if (onlyTrocars(d, trocars)) continue
+    if (onlyTrocars(s.text, trocars)) continue
     any = true
     if (!isOn(d)) return { doc: d, saved: b, unread, any }
   }
   return { doc: null, saved: null, unread, any }
 }
-const onlyTrocars = (d, trocars) => { let seen = false; const walk = (v) => (typeof v === 'string' ? (seen = seen || trocars(v)) && trocars(v) : !!v && typeof v === 'object' && !Array.isArray(v) && Object.values(v).every(walk)); return walk(d) && seen }
+// strict JSON only: a comment or anything but objects and trocar's strings is a byte the user may have written
+const onlyTrocars = (text, trocars) => {
+  let d, seen = false
+  try { d = JSON.parse(text) } catch { return false }
+  const walk = (v) => (typeof v === 'string' ? trocars(v) && (seen = true) : !!v && typeof v === 'object' && !Array.isArray(v) && Object.values(v).every(walk))
+  return walk(d) && seen
+}
+const strictEmpty = (text) => { try { return emptyTree(JSON.parse(text)) } catch { return false } } // a comment left in the file is the user's: it stays
 
 // the entry trocar created is gone: the meta file's key that selects it comes back from the meta's backup (none there → it goes); a meta file left `{}`
 // with no backup is trocar's too and goes. Nothing is written here: → null (nothing to do), { apply } (writes the meta), or a left-unreadable result,

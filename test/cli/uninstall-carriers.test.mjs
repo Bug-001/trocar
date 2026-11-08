@@ -70,7 +70,13 @@ for (const os of ['darwin', 'win32']) {
   // a file install created and `on` then wrote into (Z-Code's cli config: install's certificate key, on's proxy key): `on` backed up the file as install
   // left it, so its only backup holds trocar's own value — with no record it is still trocar's file, and goes once both keys are out (measured on Windows:
   // it stayed as {"network":{}}). The undo judges JSON alike on every OS; `on` on win32 asks the daemon over a named pipe, which this host has none of
-  if (os === 'darwin') test(`${os}: install created a file and on wrote into it, the record deleted, uninstall → the file is gone`, async () => {
+  // what the user wrote into it after `on` (a comment, a key of their own) is not trocar's: the file stays, with trocar's keys out
+  const AFTER = {
+    'nothing': { touch: () => {}, gone: true },
+    'a comment of the user': { touch: (f) => fs.writeFileSync(f, `// mine\n${fs.readFileSync(f, 'utf8')}`), gone: false },
+    'a key of the user': { touch: (f) => { const d = JSON.parse(fs.readFileSync(f, 'utf8')); d.theme = 'dark'; fs.writeFileSync(f, JSON.stringify(d)) }, gone: false },
+  }
+  if (os === 'darwin') for (const [what, { touch, gone }] of Object.entries(AFTER)) test(`${os}: install created a file, on wrote into it, then ${what}; the record deleted, uninstall → the file ${gone ? 'is gone' : 'stays'}`, async () => {
     const w = await world(os, { keepRecord: true })
     const zc = path.join(w.home, '.zcode', 'cli', 'config.json')
     assert.ok(!w.before[path.relative(w.home, zc)] && fs.existsSync(zc), 'install created it')
@@ -82,9 +88,11 @@ for (const os of ['darwin', 'win32']) {
     } })
     try { const r = await turnOnModel({ os, home: w.home, env: w.env, harnesses: w.harnesses, ctx: w.ctx, isFree: async () => true, renderHook }); assert.equal(r.exit, 0, JSON.stringify(r.problems || r)) } finally { await server.close() }
     assert.match(fs.readFileSync(zc, 'utf8'), /httpProxy/, 'on wrote its proxy key there')
+    touch(zc)
     fs.rmSync(manifestPath(w.dir)) // the record is lost
     const { receipt } = await w.uninstall()
-    assert.equal(fs.existsSync(zc), false, `${fs.existsSync(zc) ? fs.readFileSync(zc, 'utf8') : ''} ${JSON.stringify(receipt.left)}`)
+    assert.equal(fs.existsSync(zc), !gone, `${fs.existsSync(zc) ? fs.readFileSync(zc, 'utf8') : ''} ${JSON.stringify(receipt.left)}`)
+    if (!gone) assert.doesNotMatch(fs.readFileSync(zc, 'utf8'), /\.trocar|httpProxy/, "trocar's keys are out")
   })
 
   test(`${os}: the plan of an uninstall with no record names the carriers it would take out`, async () => {
