@@ -72,10 +72,9 @@ test('another Chromium child is chromium-child, never trusted (darwin with a cus
   }
 })
 
-test('a Chromium child is chromium-child whichever harness the name list says it is (one core rule): OpenCode Desktop and DeepSeek Harness children too', async () => {
+test('a Chromium child is chromium-child whichever harness the name list says it is (one core rule): DeepSeek Harness children too', async () => {
   const b = box()
   const procs = [
-    win(String.raw`C:\Users\u\AppData\Local\Programs\@opencodedesktop\OpenCode.exe`),
     win(String.raw`C:\Users\u\AppData\Local\Programs\DeepSeek Harness\DeepSeek Harness.exe`),
     { os: 'darwin', exe: '/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness', argv: ['/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness'], argvSplit: true },
   ]
@@ -85,6 +84,12 @@ test('a Chromium child is chromium-child whichever harness the name list says it
       assert.deepEqual([v.trusted, v.reason, v.decrypt], [false, 'chromium-child', false], `${p.exe} ${a} (${v.agent})`)
     }
   }
+})
+
+test('a child sharing a file an exe-only exclude item names is excluded like its parent, whatever its --type= (OpenCode Desktop on Windows)', () => {
+  const reg = createRegistry(ALL)
+  const exe = String.raw`C:\Users\u\AppData\Local\Programs\@opencodedesktop\OpenCode.exe`
+  for (const a of [NS, ...CHILDREN]) assert.deepEqual([reg.match(win(exe, a)).reason, reg.match(win(exe, a)).harness], ['excluded', 'opencode'], a)
 })
 
 test('the Desktop-bundled Claude Code (no --type=) is judged by the settings layer (mac F1)', async () => {

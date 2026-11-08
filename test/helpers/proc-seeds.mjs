@@ -4,7 +4,8 @@
 // on a real install, a design review of the shape, or an existing harness test's example — and `source` says which. test/helpers/proc-variants.mjs bends each one along
 // the install axes; test/collector/identity-presets.test.mjs (T4) asserts the harness of every seed and variant.
 //
-// Shape: { os, exe, argv, cmdline?, cmdlineState?, env?, harness, source }. `argv` is the process's logical argv (what Linux /proc gives and
+// Shape: { os, exe, argv, cmdline?, cmdlineState?, env?, exeCase?, harness, source }; `exeCase`: the file's own letter case is the fact an
+// exe-only exclude item reads (4.6, case-sensitive), so no case variant. `argv` is the process's logical argv (what Linux /proc gives and
 // what CommandLineToArgvW gives on Windows); `cmdline` is the raw command line where the source had one. The shapes of the samples taken from
 // test/collector/harness/{darwin,win32}-forms.test.mjs (both retired) are copied, not imported.
 const U = '/Users/u'
@@ -67,7 +68,7 @@ export const SEEDS = [
   l('/home/u/.opencode/bin/opencode', ['opencode', 'x'], null, 'test/collector/harness/opencode.test.mjs:20 (BUN_BE_BUN self-exec)', new Map([['BUN_BE_BUN', '1']])),
   w(`${W}\\AppData\\Roaming\\npm\\node_modules\\opencode-ai\\bin\\opencode.exe`, ['run', 'hi'], 'opencode', `${WF} (opencode.cli)`),
   w(`${W}\\AppData\\Local\\Programs\\OpenCode\\resources\\opencode-cli.exe`, ['serve'], 'opencode', `${P} win PS-F6 (the desktop's core)`),
-  w(`${W}\\AppData\\Local\\Programs\\@opencodedesktop\\OpenCode.exe`, [], 'opencode', 'desktop · win: OpenCode.exe is the name opencode, the same item as the CLI; the old opencode.desktop form matched it'),
+  w(`${W}\\AppData\\Local\\Programs\\@opencodedesktop\\OpenCode.exe`, [], null, 'desktop · win: the app\'s own OpenCode.exe is excluded by its file name, as the macOS app\'s main is; its core opencode-cli.exe is the agent', { exeCase: true }),
   // ── deepseek-dsh ──
   d('/usr/local/bin/node', [`${U}/.nvm/versions/node/v22.20.0/lib/node_modules/@deepseek-ai/dsh/lib/bin.js`], 'deepseek-dsh', `${DF} (deepseek-dsh.cli)`),
   d('/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness', [], 'deepseek-dsh', `${S46} (deepseek harness: the desktop main process)`),
