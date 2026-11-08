@@ -354,6 +354,7 @@ for (const [name, seed] of [['codex', codexHome], ['hermes', (home) => { fs.mkdi
     io = fakeIo()
     assert.equal(await runInstallCli(['--dry-run', '--json'], ctx(io, shell)), 0, io.text())
     assert.ok(io.json().planned.some((p) => p.path === bundle), `the bundle's rewrite is planned: ${JSON.stringify(io.json().planned)}`)
+    assert.ok((io.json().notes || []).some((n) => n.includes(bundle) && n.includes('it lacks a CA your settings add now')), 'the plan says why')
     io = fakeIo()
     assert.equal(await runInstallCli(['--yes'], ctx(io, shell)), 0, io.text())
     assert.match(io.text().replace(/\s+/g, ' '), /it lacks a CA your settings add now/) // the receipt says why (folded at 80 columns)
@@ -362,23 +363,48 @@ for (const [name, seed] of [['codex', codexHome], ['hermes', (home) => { fs.mkdi
   })
 }
 
-// 4.11 P4b (Linux): a CA no longer named — the install shell's SSL_CERT_FILE gone — is a rewrite too: install plans it, says why, and the bundle drops it
-test('Linux codex: a CA the settings no longer name is planned out of the bundle with its reason, and install takes it out', async () => {
+// 4.11 P4b (Linux): additions only — an install from a shell without the variable keeps a bundle that holds the CA, skip-intact, byte for byte (an install
+// or update from another shell must not take away what a working agent trusts; a CA no longer named stays until uninstall + install, 4.6 「合并包」)
+test('Linux codex: an install from a shell without the CA keeps the bundle that holds it, byte for byte', async () => {
   const desc = (await import('../../src/collector/harness/codex.mjs')).default
-  const home = tmpDir('trocar-bundle-rm-')
+  const home = tmpDir('trocar-bundle-keep-')
   codexHome(home)
-  const ca = createCa({ commonName: 'old relay CA' }).certPem
-  const caFile = path.join(home, 'certs', 'old-ca.pem'); fs.mkdirSync(path.dirname(caFile), { recursive: true }); fs.writeFileSync(caFile, ca)
+  const ca = createCa({ commonName: 'relay CA' }).certPem
+  const caFile = path.join(home, 'certs', 'relay-ca.pem'); fs.mkdirSync(path.dirname(caFile), { recursive: true }); fs.writeFileSync(caFile, ca)
   const ctx = (io, env = {}) => ({ ...onCtx(home, io, { harnesses: [desc], env }), platform: 'linux' })
   let io = fakeIo()
   assert.equal(await runInstallCli(['--yes'], ctx(io, { SSL_CERT_FILE: caFile })), 0, io.text())
   const bundle = path.join(home, '.trocar', 'collector', 'ca', 'combined-codex.pem')
-  assert.ok(fps(fs.readFileSync(bundle, 'utf8')).includes(fps(ca)[0]))
+  const before = fs.readFileSync(bundle)
+  assert.ok(fps(before.toString('utf8')).includes(fps(ca)[0]))
   io = fakeIo()
   assert.equal(await runInstallCli(['--dry-run', '--json'], ctx(io)), 0, io.text())
-  assert.ok(io.json().planned.some((p) => p.path === bundle), JSON.stringify(io.json().planned))
+  assert.ok(!io.json().planned.some((p) => p.path === bundle), `not planned: ${JSON.stringify(io.json().planned)}`)
   io = fakeIo()
   assert.equal(await runInstallCli(['--yes'], ctx(io)), 0, io.text())
-  assert.match(io.text().replace(/\s+/g, ' '), /it no longer matches the CAs your settings name/) // the receipt folds at 80 columns
-  assert.ok(!fps(fs.readFileSync(bundle, 'utf8')).includes(fps(ca)[0]), 'taken out')
+  assert.ok(fs.readFileSync(bundle).equals(before), 'the bundle as it was')
+})
+
+// review cases (additions only): the .env line install comments out, a source that cannot be read, and a CA added on top keep what the bundle carries
+test('Linux codex: a second install keeps the CA of the .env line the first one took over; an unreadable source keeps it; a CA added on top joins it', async () => {
+  const desc = (await import('../../src/collector/harness/codex.mjs')).default
+  const home = tmpDir('trocar-bundle-review-')
+  codexHome(home)
+  const relay = createCa({ commonName: 'relay CA' }).certPem
+  const relayFile = path.join(home, 'certs', 'relay-ca.pem'); fs.mkdirSync(path.dirname(relayFile), { recursive: true }); fs.writeFileSync(relayFile, relay)
+  fs.writeFileSync(path.join(home, '.codex', '.env'), `SSL_CERT_FILE=${relayFile}\n`)
+  const ctx = (io, env = {}) => ({ ...onCtx(home, io, { harnesses: [desc], env }), platform: 'linux' })
+  const bundle = path.join(home, '.trocar', 'collector', 'ca', 'combined-codex.pem')
+  const holds = (pem) => fps(fs.readFileSync(bundle, 'utf8')).includes(fps(pem)[0])
+  assert.equal(await runInstallCli(['--yes'], ctx(fakeIo())), 0)
+  assert.ok(holds(relay), 'the first install merges the .env line it takes over')
+  const once = fs.readFileSync(bundle)
+  assert.equal(await runInstallCli(['--yes'], ctx(fakeIo())), 0)
+  assert.ok(fs.readFileSync(bundle).equals(once), 'the second install keeps it, byte for byte')
+  fs.chmodSync(relayFile, 0)
+  try { assert.equal(await runInstallCli(['--yes'], ctx(fakeIo())), 0); assert.ok(fs.readFileSync(bundle).equals(once), 'an unreadable source takes nothing away') } finally { fs.chmodSync(relayFile, 0o644) }
+  const corp = createCa({ commonName: 'corp CA' }).certPem
+  const corpFile = path.join(home, 'certs', 'corp-ca.pem'); fs.writeFileSync(corpFile, corp)
+  assert.equal(await runInstallCli(['--yes'], ctx(fakeIo(), { SSL_CERT_FILE: corpFile })), 0)
+  assert.deepEqual([holds(relay), holds(corp)], [true, true], 'the added CA joins the one already carried')
 })

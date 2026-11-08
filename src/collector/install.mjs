@@ -33,6 +33,8 @@ import { runEventWriter } from '../off/events.mjs'
 import { hideUserinfoIn } from '../off/userinfo.mjs'
 import { backupDir, opLockFile, standalonePath, standaloneFiles } from '../off/paths.mjs'
 import { replacedNote } from '../off/backup.mjs'
+import { readOrNull } from '../off/fsutil.mjs'
+import { userCertsIn } from '../off/pem.mjs'
 import { acquireOpLock, LOCK_BUSY, tryOpLock } from '../off/lock.mjs'
 import { readStateFile, emptyState, setDesired, writeStateAtomic } from '../off/state.mjs'
 import { newReceipt, UNDO_LINE } from '../off/schema.mjs'
@@ -40,13 +42,12 @@ import { OFF_VERSION, installComplete, daemonMayStart } from '../off/manifest.mj
 import { writeStandalone, standaloneDue } from '../off/standalone.mjs'
 import { codeId, setupHelperCommand } from '../version.mjs'
 
-// 4.11 P4b: a combined bundle holds the CAs its harness's settings name NOW (the install shell's among them): one whose recorded set differs is rewritten,
-// as macOS / Windows do by the composed bytes (model-install.mjs owned()); compared by fingerprint, so a plan need not compose it (D62①)
+// 4.11 P4b: a combined bundle that lacks a CA its harness's settings name NOW (the install shell's among them) is rewritten with it; compared by fingerprint,
+// so a plan need not compose it (D62①). Additions only: a CA no longer named stays (an install from another shell must not take away what a working agent trusts)
 function caDrift(j, f) {
   if (j.action !== 'skip-intact' || f.role !== 'bundle' || !Array.isArray(f.want_fps) || !j.record || !Array.isArray(j.record.user_fps)) return j
   const had = new Set(j.record.user_fps), now = new Set(f.want_fps)
-  const why = [...now].some((x) => !had.has(x)) ? 'it lacks a CA your settings add now' : [...had].some((x) => !now.has(x)) ? 'it no longer matches the CAs your settings name' : null
-  return why ? { action: 'rewrite', record: j.record, why, drift: true } : j
+  return [...now].some((x) => !had.has(x)) ? { action: 'rewrite', record: j.record, why: 'it lacks a CA your settings add now', drift: true } : j
 }
 
 // an entry under trocar's name: replaced, never silently (1.6 §3.5 Login)
@@ -378,10 +379,13 @@ async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePo
   fs.mkdirSync(path.join(dir, 'run', 'trust'), { recursive: true, mode: 0o700 }) // plugins write their marker here, daemon up or not
   const certItem = (p) => { if (certs) return false; written.needInstall.push(p); return true } // on (certs:false) writes no certificate item: a missing one is install's (D55①)
   for (const f of final.files) {
-    if (caDrift(judgeOwned({ manifest: m, file: f.path, fs }), f).action === 'skip-intact') { written.intact.push(f.path); continue }
+    const j = caDrift(judgeOwned({ manifest: m, file: f.path, fs }), f)
+    if (j.action === 'skip-intact') { written.intact.push(f.path); continue }
     if (certItem(f.path)) continue
     guard()
-    writeOwnedFile({ dir, manifest: m, harness: f.harness, role: f.role, phase: 'install', file: f.path, data: f.data, sources: f.sources, extra: f.role === 'bundle' ? { user_fps: f.user_fps, roots_fp: f.roots_fp } : {}, now: now(), fs })
+    // a bundle that gains a CA keeps the ones it already carries (additions only): its recorded user CAs, read back from the bundle itself
+    const b = j.drift ? f.compose(userCertsIn(readOrNull(fs, f.path), j.record.user_fps)) : f.role === 'bundle' ? { data: f.data, user_fps: f.user_fps, roots_fp: f.roots_fp } : { data: f.data }
+    writeOwnedFile({ dir, manifest: m, harness: f.harness, role: f.role, phase: 'install', file: f.path, data: b.data, sources: f.sources, extra: f.role === 'bundle' ? { user_fps: b.user_fps, roots_fp: b.roots_fp } : {}, now: now(), fs })
     written.files.push(f.path)
   }
   // a plugin or shim exists before the entry that loads it (a dsh patch row naming a missing file only warns, still)
@@ -634,7 +638,7 @@ export async function turnOn(opts = {}) {
       written = e.written; halt = true; if (e.code === CODE.stoppedByOff) offCame = e
       problems.push(e.message)
     }
-    if (written && written.needInstall.length) problems.push(`these certificate items are not in place and on does not write them: ${written.needInstall.join(', ')}; run trocar install (D55①)`)
+    if (written && written.needInstall.length) problems.push(`these certificate items are not in place and on does not write them: ${written.needInstall.join(', ')}; run trocar install`)
     const put = noteRun({ dir, run, final: final || { records: [] }, written: written || { entries: [] }, notes, fs, log: opts.log })
     foreignRows(plan, put)
     const receipt = {

@@ -261,4 +261,9 @@ test('foldFlows: agent-trusted of the same pid resolves its agent-untrusted grou
   assert.deepEqual(byAgent(foldFlows(recs, { now: NOW })), { 'deepseek-dsh': true, opencode: false })
   const again = foldFlows([...recs, { ts: at(H / 2), event: 'agent-untrusted', pid: 21, agent: 'deepseek-dsh', code: 'no-marker', reason: 'no-marker' }], { now: NOW })
   assert.deepEqual(byAgent(again), { 'deepseek-dsh': false, opencode: false })
+  // the same pid after its process exited (or the daemon restarted) is another process: its trust ends nothing
+  for (const gone of [{ event: 'agent-exit', pid: 20 }, { event: 'daemon-start', pid: 3 }]) {
+    const f = foldFlows([...recs.slice(0, 3), { ts: at(1.5 * H), ...gone }, recs[3]], { now: NOW })
+    assert.equal(byAgent(f)['deepseek-dsh'], false, gone.event)
+  }
 })
