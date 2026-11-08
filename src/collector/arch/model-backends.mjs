@@ -53,7 +53,7 @@ export async function outOfScopeForms({ os, home, env = process.env, harnesses, 
  *  it) is on none of those forms (4.11 P5). Paths only, nothing is read. */
 export async function formPrograms({ os, home, env = process.env, harnesses }) {
   const [{ dirsOf, platformFacts }, { targetOf }] = await Promise.all([os === 'darwin' ? import('./darwin/policy.mjs') : import('./win32/policy.mjs'), import('../core/proxymode/hooks/wrapper.mjs')])
-  const ctx = { ...sourcesCtx({ os, home, env, dirs: dirsOf(home, env) }), facts: typeof platformFacts === 'function' ? platformFacts({ env }) : platformFacts }
+  const ctx = { ...sourcesCtx({ os, home, env, dirs: dirsOf(home, env) }), facts: platformFacts({ env }) }
   const out = {}
   for (const d of harnesses) {
     for (const f of (d.proxyMode && d.proxyMode.forms) || []) {
@@ -91,7 +91,7 @@ export async function backendsFor({ os, home, run = null, env = process.env, fs 
       // the gate before install writes anything asks the helper trocar ships: the one in ~/.trocar/bin is install's to place (1.6 §3.2)
       gateCustody: keychainCustody({ helperPath: nativePath(NATIVE.signHelper, env), run, env }), rootStore: userRootStore({ home, run, env, fs }),
       installHelper: (interactive) => installHelper({ dest: helperPath, interactive, run, env, fs }),
-      wrapperKit: { renderWrapper }, facts: pol.platformFacts, dirs: pol.dirsOf(home), policy: pol.policyReader({ run, env }),
+      wrapperKit: { renderWrapper }, facts: pol.platformFacts({ run, env }), dirs: pol.dirsOf(home), policy: pol.policyReader({ run, env }),
     }
   }
   if (os === 'win32') {

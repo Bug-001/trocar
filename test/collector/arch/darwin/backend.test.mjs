@@ -119,10 +119,15 @@ test('policy: the per-user plist first, then the computer-wide one; only the dec
   assert.ok(read({ domain: '../etc', key: 'k' }).error, 'a domain is a name, not a path')
 })
 
-test('policy: platform facts and dirs (ruling ⑤: macOS has no persistent environment)', () => {
-  assert.equal(platformFacts.envCaseInsensitive, false)
-  assert.deepEqual(platformFacts.persistentEnv(['HTTPS_PROXY']), {})
+test('policy: platform facts and dirs; the persistent environment is launchd\'s, each name read by itself (4.11 ⑤)', () => {
+  const launchd = { NO_PROXY: 'corp.example\n', no_proxy: '.wq.internal\n' }
+  const r = runner({ launchctl: (args) => (args[0] === 'getenv' && launchd[args[1]] ? { out: launchd[args[1]] } : { code: 1 }) })
+  const facts = platformFacts({ run: r.run })
+  assert.equal(facts.envCaseInsensitive, false)
+  assert.deepEqual(facts.persistentEnv(['NO_PROXY']), { NO_PROXY: 'corp.example', no_proxy: '.wq.internal' })
+  assert.deepEqual(facts.persistentEnv(['HTTPS_PROXY']), {}, 'a name launchd does not hold adds nothing')
+  assert.ok(r.calls.every((c) => c.tool === 'launchctl' && c.args[0] === 'getenv' && c.args.length === 2), 'by name only, never the whole environment')
   const home = tmpDir('trocar-pf-')
-  assert.equal(platformFacts.pathKey(path.join(home, 'a', '..', 'b')), path.join(fs.realpathSync(home), 'b').toLowerCase(), 'the real path, resolved, folded (the default APFS volume is case-insensitive)')
+  assert.equal(facts.pathKey(path.join(home, 'a', '..', 'b')), path.join(fs.realpathSync(home), 'b').toLowerCase(), 'the real path, resolved, folded (the default APFS volume is case-insensitive)')
   assert.deepEqual(dirsOf('/Users/u'), { appSupport: '/Users/u/Library/Application Support' })
 })
