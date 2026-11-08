@@ -7,7 +7,7 @@ import { stepOf } from '../../web/legacy/replay/model.mjs'
 import { setDeskMode, loadBodies, bodyCache } from '../../web/legacy/replay/cell.mjs'
 import { arrived, windowItems, landed, landingFor } from '../../web/src/screens/replay/window-model.mjs'
 import { refPending, QUIET_CAUSES } from '../../web/legacy/replay/analysis.mjs'
-import { cacheBreak } from '../../src/view/analyze.mjs'
+import { breakOf } from '../../src/view/analyze.mjs'
 import * as W from '../../web/legacy/labels/replay.mjs'
 import { deskOf, world, deskFrom } from './desk-world.mjs'
 import { boardHome, serveBoard } from './real-face.mjs'
@@ -233,7 +233,8 @@ test('2.3 #7 · 1.4 #3 #11: the change line iff the cause is not quiet, right be
 test('1.4 #3 · 2.3 #3: two steps differing in a volatile block alone reduce to volatile-nonce-only: no change line, the volatile row has its mark and no 「新」; cc → the cache mark', () => {
   const a = [sys({ key: 's', cc: { type: 'ephemeral' } }), blk({ key: 'v1', volatile: true }), blk({ key: 'q' })]
   const b = [a[0], blk({ key: 'v2', volatile: true }), a[2]]
-  const brk = cacheBreak(a, b)
+  const seq = (f) => ({ n: f.length, key: (i) => f[i].key, vol: (i) => !!f[i].volatile, sec: (i) => f[i].sec, name: (i) => f[i].name }) // the reader's accessors
+  const brk = breakOf(seq(a), seq(b))
   assert.equal(brk.cause, 'volatile-nonce-only')
   const items = open(stateOf(desk1([a, b], [{}, { cacheBreak: { ...brk, refRid: 'R0-0' } }]), 1)), rows = ofType(items, 'row')
   assert.deepEqual(ofType(items, 'chline'), [])

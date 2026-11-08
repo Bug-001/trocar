@@ -11,7 +11,8 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { createDesk, listOf, stepOf, indexOf, ridAt, laneEvents } from '../../web/legacy/replay/model.mjs'
 import { parseLines, applyFile, applyHead } from '../../web/legacy/replay/packs.mjs'
-import { behindOf, readStateHtml } from '../../web/legacy/replay/header.mjs'
+import { behindOf } from '../../web/legacy/replay/header.mjs'
+import { sessionHeadModel } from '../../web/src/screens/replay/models.mjs'
 import { world } from './desk-world.mjs'
 import { drain } from '../helpers/bounded.mjs'
 
@@ -313,7 +314,7 @@ test('1.5 K-31, K-33: the three states from the head alone: plain pending reads,
     const desk = createDesk()
     applyHead(desk, { mark: 'S:1', lanes: [], pending })
     assert.equal(desk.firstPending, first, J(pending))
-    assert.equal(readStateHtml(desk).match(/data-read-state="([^"]+)"/)?.[1] ?? null, state, J(pending))
+    assert.equal(sessionHeadModel({ desk, meta: { session_id: 'S' }, lanes: [] }).read?.state ?? null, state, J(pending))
   }
 })
 

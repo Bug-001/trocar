@@ -156,7 +156,7 @@ for (const wire of ['anthropic', 'flat']) {
       const home = homeWith(laneOf(wire, steps)), doc = await query(home, 'session', { id: SID })
       const { events, resources } = await query(home, 'lane', { id: SID, lane: doc.calls[0].lane })
       const count = (t) => events.filter((e) => e.type === t).length
-      return { doc, events, user: count('user'), observation: count('observation'), loads: resources.find((r) => r.label === READ)?.loads.length ?? 0 }
+      return { doc, events, user: count('user'), observation: count('observation'), loads: resources?.find((r) => r.label === READ)?.loads.length ?? 0 } // a flat wire keeps no ledger: resources null
     }
     for (const lane of failLanes()) {
       const steps = [lane[0], 'ask', ...lane.slice(1)], why = steps.join(' ')
