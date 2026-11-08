@@ -5,7 +5,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { revealIn } from '../../web/legacy/replay/replay.mjs'
-import { outlineHtml, outlineEntries, queryStepLabels, wireOutline, jumpToAnchor, jumpToBlockIndex } from '../../web/legacy/replay/outline.mjs'
+import { outlineHtml, outlineEntries, queryStepLabels, wireOutline, jumpToAnchor, jumpToBlockIndex, jumpToResourceBlock } from '../../web/legacy/replay/outline.mjs'
 import { resourcesHtml } from '../../web/legacy/replay/resources.mjs'
 import { humanTurns, messageTurns } from '../../web/legacy/replay/analysis.mjs'
 import { openTurnFor, renderContextWindow } from '../../web/legacy/replay/ctxwin.mjs'
@@ -246,5 +246,15 @@ test('an unheld step: the tool count is the row\'s, the other groups are busy ro
     const held = outlineHtml(deskState([{ kind: 'main', rows, blocks: [flat, flat] }], { playhead: 1, navOpen: ALL }))
     assert.ok(!/aria-busy/.test(held), 'held: no busy row')
     assert.equal((held.match(/data-jumpfi=/g) || []).length, tools + 2, 'held: every tool, the system block and the query are listed')
+  }
+})
+
+test('2.4 #13: a block reading several files is the landing for any of its resKeys', () => {
+  const keys = ['file::/a', 'file::/b', 'file::/c']
+  const curFlat = [{ resKey: 'file::/z' }, { resKey: keys[0], resKeys: keys }]
+  for (const k of keys) {
+    const hits = []
+    jumpToResourceBlock({ curFlat, reveal: (t) => hits.push(t.fi) }, k)
+    assert.deepEqual(hits, [1], k)
   }
 })

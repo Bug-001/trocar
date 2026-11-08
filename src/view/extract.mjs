@@ -20,7 +20,7 @@ import { fieldTextOf, respOf, headersOf } from '../dissect/record-fields.mjs';
 import { composeTextRef, mintRawRef } from '../raw/refs.mjs';
 import { V0_CONVERTED } from '../raw/ingest.mjs';
 import { boardDissectorFor, flatLaneOf, contextStateOf, blockKeysOf, MULTI_LANE_CONTEXT, closedAfterEnd } from '../dissect/registry.mjs';
-import { hintsOf, sessionKeyOf, observerEffectsOf, harnessOf } from '../dissect/harnesses.mjs';
+import { hintsOf, sessionKeyOf, observerEffectsOf, harnessOf, pathContext } from '../dissect/harnesses.mjs';
 import { vendorOf } from '../dissect/vendors.mjs';
 import { failedOf, cutOf } from '../dissect/endpoints.mjs';
 import { mapUsage, boardUsage } from '../model/schema.mjs';
@@ -74,29 +74,30 @@ const BODY = ['text', 'block', 'desc', 'schema'];
 // record (a regex match, a slice) keeps the whole text it was cut from alive, and a row is held for the life of the session's
 // extraction: on a real 6.6k-call session that was ~200 KB of heap per row, against ~19 KB for the same row read from disk.
 const jsonClean = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
-function factsOf(b) {
+function factsOf(b, ctx) {
   if (b.sec === 'tools') return { type: 'tool', name: b.name || '', mcp: !!b.mcp, bucket: 'tools' };
   if (b.sec === 'system') return { type: 'system', bucket: 'system' };
   const bl = b.block && typeof b.block === 'object' ? b.block : { type: 'text', text: String(b.block ?? '') };
   // `human`: a user text's human prompt (blockmeta firstHuman), what names a lane whose first call this block opens
-  return { ...blockFacts(bl), bucket: compBucket(b), human: firstHuman([b]) ?? undefined };
+  return { ...blockFacts(bl, ctx), bucket: compBucket(b), human: firstHuman([b]) ?? undefined };
 }
 
-/** definition(b, ref, exact, why, bid) → { bid, def }: `exact` the text the ref names (null: no span, `why` says why); `bid` the
- *  block's id when the caller already hashed it (4.3 §3: a block is hashed once). */
+/** definition(b, ref, exact, why, bid, ctx) → { bid, def }: `exact` the text the ref names (null: no span, `why` says why); `bid` the
+ *  block's id when the caller already hashed it (4.3 §3: a block is hashed once); `ctx` the call's pathContext. */
 // a block's id: its verbatim slice's when it has a span, its content's otherwise (3.5 §会话读)
 const bidFor = (b, ref, exact) => (ref != null && exact != null ? bidOf(b.sec, b.role, exact) : unaddressableBid(b.sec, b.role, contentOf(b)));
-export function definition(b, ref, exact, why = null, bid = bidFor(b, ref, exact)) {
+export function definition(b, ref, exact, why = null, bid = bidFor(b, ref, exact), ctx = {}) {
   const s = slimBlock(b, ref != null && exact != null ? ref : null, why);
   // vh: only of a verbatim slice. A block with no span has none, nor one whose faithfulness says its bytes are not the wire's
   // (metadata, summarized, omitted, truncated). An opaque block (signature-only reasoning) is unreadable, not unproven: its span
   // is the wire's bytes, so it keeps its vh (on a measured live Claude Code session 9,092 of 10,308 calls carry one in their prefix).
   const verbatim = ref != null && exact != null && (b.faithfulness == null || b.faithfulness === 'verbatim' || b.faithfulness === 'opaque');
   const def = { bid, fh: fhOf(b), vh: verbatim ? vhOf(exact) : null, ref: s.text_ref ?? null, sec: b.sec, role: b.role, kind: b.kind, head: s.head, preview: s.preview,
-    chars: s.chars, bytes: s.bytes, ff: jsonClean({ faithfulness: b.faithfulness, unaddressable: s.unaddressable }), r: renderOf(b), f: factsOf(b) };
+    chars: s.chars, bytes: s.bytes, ff: jsonClean({ faithfulness: b.faithfulness, unaddressable: s.unaddressable }), r: renderOf(b), f: factsOf(b, ctx) };
   for (const k of META) if (b[k] !== undefined) def[k] = b[k];
   // the block's own resource key: a tool_result's mirrored file key is its place in the call (attrs), never its own
   def.resKey = b.resRole === 'result' ? '' : (b.resKey ?? '');
+  if (b.resKeys && b.resRole !== 'result') def.resKeys = b.resKeys;
   if (s.unaddressable) for (const k of BODY) if (b[k] !== undefined) def[k] = b[k];
   return { bid, def: jsonClean(def), query: s.query };
 }
@@ -121,8 +122,8 @@ export const replied = (rec) => closedAfterEnd(rec) || rec;
 const FOLD_PATHS = {
   tree: {
     read: (rec) => ({ h: admitted(hydrateForBoard(rec, null)) }),
-    blocks: (rec, wire, read, base, body) => {
-      const flat = anthropicFlat(read.h.request);
+    blocks: (rec, wire, read, base, body, paths) => {
+      const flat = anthropicFlat(read.h.request, paths);
       let spans = null;
       if (body != null) try { spans = blockSpans(read.h); } catch { spans = null; }
       return { flat, at: flat.map((_, i) => locate(base, body, spans && spans[i])) };
@@ -158,8 +159,8 @@ const FOLD_PATHS = {
 };
 const readCall = (rec, wire) => FOLD_PATHS[wire.d.fold].read(rec, wire.d);
 /** requestBlocks(rec, wire, read?) → { flat, at: [{ref, exact, why}] } — the request's blocks, each with the exact text its ref names. */
-export function requestBlocks(rec, wire, read = readCall(rec, wire)) {
-  return FOLD_PATHS[wire.d.fold].blocks(rec, wire, read, rawRefOf(rec), spanBody(rec));
+export function requestBlocks(rec, wire, read = readCall(rec, wire), paths = pathContext(rec)) {
+  return FOLD_PATHS[wire.d.fold].blocks(rec, wire, read, rawRefOf(rec), spanBody(rec), paths);
 }
 const locate = (base, text, span, field = null) => {
   if (!span || text == null) return { ref: null, exact: null, why: null };
@@ -169,7 +170,7 @@ const locate = (base, text, span, field = null) => {
 
 // a reply part as a flat entry of the same vocabulary (section messages, role assistant), by the dissector's `rules`
 /** replyBlocks(rec, wire) → [{ b, ref, exact, why }] in reply order: the call's own reply blocks (a part with no block has none). */
-export function replyBlocks(rec, { d }) {
+export function replyBlocks(rec, { d }, paths = pathContext(rec)) {
   const parts = d && d.replyParts ? d.replyParts(rec) : [];
   const rules = d.rules, base = rawRefOf(rec);
   const out = [];
@@ -178,7 +179,9 @@ export function replyBlocks(rec, { d }) {
     if (!bl || typeof bl !== 'object') continue;
     const tool = bl.type === 'tool_use' || bl.type === 'server_tool_use';
     const b = { sec: 'messages', kind: bl.type, role: 'assistant', block: bl, toolName: tool ? bl.name || '' : '', cc: bl.cache_control || null,
-      resKey: rules.resourceRef(bl) || '', faithfulness: rules.faith(bl) };
+      resKey: rules.resourceRef(bl, paths) || '', faithfulness: rules.faith(bl) };
+    const keys = rules.resourceRefs ? rules.resourceRefs(bl, paths) : [];
+    if (keys.length > 1) b.resKeys = keys;
     const text = p.field ? fieldTextOf(rec, p.field).text ?? null : null;
     const at = p.span ? locate(base, text, p.span, p.field) : { ref: null, exact: null, why: p.why || null };
     out.push({ b, ...at, unit: p.unit ?? 0 });
@@ -371,7 +374,7 @@ const laneHintOf = (rec, format, lane) => { const h = hintsOf(rec); return h.lan
 const attrsOf = (b, query) => {
   const a = {};
   for (const k of ATTR) if (b[k]) a[k] = b[k];
-  if (b.resRole === 'result') a.resKey = b.resKey;
+  if (b.resRole === 'result') { a.resKey = b.resKey; if (b.resKeys) a.resKeys = b.resKeys; }
   if (query) a.query = query;
   return Object.keys(a).length ? a : null;
 };
@@ -379,7 +382,9 @@ const attrsOf = (b, query) => {
 // records, as linearContext links only file results to their tool_use.
 const FILE_KEY = 'file::';
 // A pending file tool_use of an earlier record, as a block linearContext links a result to: the same id, the same file.
-const linkStub = (id, key) => ({ type: 'tool_use', id, name: '', input: { file_path: key.slice(FILE_KEY.length) } });
+const linkStub = (id, key, keys) => ({ type: 'tool_use', id, name: '', input: { file_path: key.slice(FILE_KEY.length) }, ...(keys ? { resKeys: keys } : null) });
+// x.open's entry of a tool_use at `at`: [id, [at, its key, all its keys when it has several]]
+const pendingUse = (id, at, b) => [id, b.resKeys ? [at, b.resKey, b.resKeys] : [at, b.resKey]];
 const counts = (x) => x.facts || x; // where a call's msgCount is (the Anthropic wire's facts, a flat lane's x)
 /** TAIL_HEAP: the byte cap of the lane tails (K, 3.5 §内存有界): per store and lane hint, the previous request's body and, for each of
  *  its request blocks that has a span, [sec, role, from, to, bid]. A request block at the same place, of the same section and role,
@@ -419,21 +424,21 @@ export function extract(rec, ctx) {
   const rid = String(rec.id), pos = rid, wire = callWireOf(rec);
   if (!wire) return { defs: [], row: { rid, pos, x: { item: itemFacts(rec), ...(isLogOnly(rec) ? null : { unknown: jsonClean(unknownFacts(rec)) }) } } };
   // identity before definition (4.3 §3): a block the session has a definition for costs its bid and its place's query, nothing more
-  const defs = [], local = new Set(), take = (b, at, known = null) => {
+  const paths = pathContext(rec), defs = [], local = new Set(), take = (b, at, known = null) => {
     const bid = known ?? bidFor(b, at.ref, at.exact);
     if (ctx.store.hasDef(bid) || local.has(bid)) return { bid, query: blockQuery(b) };
-    const { def, query } = definition(b, at.ref, at.exact, at.why, bid);
+    const { def, query } = definition(b, at.ref, at.exact, at.why, bid, paths);
     local.add(bid); defs.push(def);
     return { bid, query };
   };
   const rules = wire.d.rules;
-  const rp = replyBlocks(rec, wire), reply = rp.map((p) => take(p.b, p).bid);
+  const rp = replyBlocks(rec, wire, paths), reply = rp.map((p) => take(p.b, p).bid);
   const rmb = rp.flatMap((p, j) => (j === 0 || p.unit !== rp[j - 1].unit ? [j] : []));
   const rr = replied(rec), read = readCall(rr, wire), x = callX(rr, wire, read, rr !== rec);
   const linker = wire.d.linker || wire.d;
   const st = linker && linker.stitchOf ? linker.stitchOf(rec) : null;
   // the call's own blocks, by section
-  const { flat, at } = requestBlocks(rec, wire, read);
+  const { flat, at } = requestBlocks(rec, wire, read, paths);
   const body = spanBody(rec), tstore = ctx.store || ctx, tail = body != null ? tails.get(tailKey(tstore, laneHintOf(rec, wire.format, x.lane))) : null;
   const own = { tools: [], system: [], messages: [] }, ownFlat = [], tailBlocks = [];
   flat.forEach((b, i) => {
@@ -471,10 +476,10 @@ export function extract(rec, ctx) {
   let open = predX && predX.open ? Object.entries(predX.open) : [];
   if (rules.links && open.length) {
     const msgs = (read.h.request && read.h.request.messages) || [];
-    const linked = linearContext({ system: [], tools: [], messages: [{ role: 'assistant', content: open.map(([id, [, key]]) => linkStub(id, key)) }, ...msgs] });
+    const linked = linearContext({ system: [], tools: [], messages: [{ role: 'assistant', content: open.map(([id, [, key, keys]]) => linkStub(id, key, keys)) }, ...msgs] });
     const stubs = linked.filter((b) => b.mi === 0), lmsg = linked.filter((b) => b.mi !== 0);
     mine = mine.map((e, k) => ({ ...e, a: attrsOf(lmsg[k] || e.b, e.a && e.a.query) }));
-    open = open.map(([id, [rel, key]], k) => [id, [rel, key], !stubs[k] || stubs[k].resPending]);
+    open = open.map(([id, use], k) => [id, use, !stubs[k] || stubs[k].resPending]);
     for (const [, [rel], pending] of open) if (rel < inh.bids.length) {
       const a = { ...(inh.attrs[rel] || {}), resRole: 'request' };
       if (pending) a.resPending = true; else delete a.resPending;
@@ -494,8 +499,8 @@ export function extract(rec, ctx) {
       lineage: !st.cont ? st.link || rid : predX ? predX.lineage : st.prev || rid });
     if (rules.links) {
       const off = I;
-      mine.forEach((e, k) => { if (e.a && e.a.resRole === 'request' && e.a.resPending) open.push([e.b.block.id, [off + k, e.b.resKey]]); });
-      rp.forEach((p, j) => { if (p.b.kind === 'tool_use' && String(p.b.resKey).startsWith(FILE_KEY)) open.push([p.b.block.id, [I + mine.length + j, p.b.resKey]]); });
+      mine.forEach((e, k) => { if (e.a && e.a.resRole === 'request' && e.a.resPending) open.push(pendingUse(e.b.block.id, off + k, e.b)); });
+      rp.forEach((p, j) => { if (p.b.kind === 'tool_use' && String(p.b.resKey).startsWith(FILE_KEY)) open.push(pendingUse(p.b.block.id, I + mine.length + j, p.b)); });
       x.open = Object.fromEntries(open);
       x.toolAdj = (predX ? predX.toolAdj || 0 : 0) + ownFlat.reduce((n, b) => n + (b.kind === 'tool_addition') - (b.kind === 'tool_removal'), 0);
     }
@@ -813,8 +818,8 @@ export function nonBlockKeysOf(rec, format) {
 // the browser → invariant 3). opaque = encrypted/redacted reasoning replayed as signature-only, no plaintext on the wire
 // (thinking/redacted_thinking with a signature but empty text). The board renders a badge off b.faithfulness so nobody
 // mistakes ciphertext for verbatim content (invariant 4). (1.4:52)
-export function anthropicFlat(request) {
-  const flat = linearContext(request);
+export function anthropicFlat(request, ctx = {}) {
+  const flat = linearContext(request, ctx);
   for (const b of flat) {
     const bl = b.block || {};
     if ((b.kind === 'thinking' || b.kind === 'redacted_thinking') && bl.signature && !(bl.thinking || bl.text)) b.faithfulness = 'opaque';

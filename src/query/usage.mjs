@@ -23,7 +23,7 @@ import { indexDir, readIndex, tailMark, usability, storeIndex, segmentSource, pl
 import { warmCache, fsTag, statKey } from './warm.mjs';
 import { trocarHome } from '../paths.mjs';
 
-export const USAGE_V = 5; // 3: the facts are the session's extraction and reduction (lane = its lane header's kind); 4: a reply closed after its success terminal is not failed; 5: a keyed session's lanes follow its message chain, Gemini bodies read
+export const USAGE_V = 6; // 6: the desk line's background kinds of 2.1 (its 4) joined; 3: the facts are the session's extraction and reduction (lane = its lane header's kind); 4: a reply closed after its success terminal is not failed; 5: a keyed session's lanes follow its message chain, Gemini bodies read
 export const USAGE_CHUNK_BYTES = 4 << 20; // stored bytes of model calls read back per chunk (4.2 §用量旁注 ④)
 
 export const usageFile = (home, segment) => path.join(indexDir(home), `${segment}.usage.json`);

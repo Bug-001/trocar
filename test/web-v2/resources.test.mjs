@@ -8,6 +8,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { resourcesHtml, resourceUnits, renderResources } from '../../web/legacy/replay/resources.mjs'
 import * as W from '../../web/legacy/labels/replay.mjs'
+import { esc } from '../../web/legacy/core/fmt.mjs'
 import { relPath } from '../../web/legacy/replay/analysis.mjs'
 import { buildLanes, anchorLane } from '../../web/legacy/replay/lanes.mjs'
 import { deskOf } from './desk-world.mjs'
@@ -122,6 +123,13 @@ test('#7 the compaction group still draws with an empty ledger', () => {
   assert.equal(grpCount(empty, W.RES_GRP.file), null, 'no empty groups are drawn')
 })
 
+test('2.4 压缩行: a marked compaction shows its landing\'s numbers, and the landing is no row of its own', () => {
+  const events = [{ type: 'compaction', rid: R(2), from: 10, to: 11, inferred: false }, { type: 'compaction-landed', rid: R(4), from: 12, to: 3 }]
+  const h = resourcesHtml(stateOf(anchorOf({ events })))
+  assert.equal(grpCount(h, W.RES_GRP.comp), 1)
+  assert.ok(h.includes(W.compactRow('', 12, 3)))
+})
+
 // 2.4 element table: a long path is cut in the middle — the base name stays whole, the length fits unless the base
 // name alone is longer
 test('midClip keeps the base name whole and fits max unless the base name alone is longer', async () => {
@@ -213,4 +221,19 @@ test('2.4 #1: seen minus opened files; ledger counts busy until the ledger chain
     const base = r.label.split('/').pop()
     assert.ok(!chips.some((t) => t.includes(base)), `${r.label}: an opened file is not a name-only chip under any spelling`)
   }
+})
+
+test('2.4 #13: a resource with a runtime code sits in its own group, never in the files read, with its code\'s reason', () => {
+  const codes = Object.keys(W.RUNTIME_WHY)
+  const anchor = anchorOf({ resources: [
+    { kind: 'file', label: '/w/p/a.mjs', segments: [{ enter: R(0), evict: null }] },
+    ...codes.map((c, i) => ({ kind: 'file', label: `x${i}/$f`, runtime: c, segments: [{ enter: R(i), evict: null }] })),
+  ] })
+  const h = resourcesHtml(stateOf(anchor, { navOpen: new Set([...ALL_OPEN, 'life-runtime']) }))
+  assert.equal(grpCount(h, W.RES_GRP.file), 1, 'only the settled path is a file read')
+  assert.equal(grpCount(h, W.RES_GRP.runtime), codes.length)
+  codes.forEach((c, i) => {
+    const row = h.match(new RegExp(`<div class="navsub[^"]*"[^>]*data-navres="file:x${i}/\\$f">[\\s\\S]*?</div>`))
+    assert.ok(row && row[0].includes(esc(W.RUNTIME_WHY[c])), c)
+  })
 })

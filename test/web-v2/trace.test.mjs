@@ -72,6 +72,15 @@ test('1.3 #5 · a compaction is a neutral mark on its step (inferred says so), n
   assert.equal(m.trace.length, plain.trace.length)
 })
 
+test('1.3 #5 · the step a marked compaction lands on draws nothing on the problem row and is no problem', () => {
+  const rows = [{ usage: U(0, 100, 10), cacheBreak: { firstCall: true } }, { usage: U(90, 20, 5), compaction: true, cacheBreak: { cause: 'append' } },
+    { usage: U(0, 200, 5), cacheBreak: { cause: 'compaction' } }, { usage: U(100, 10, 5), cacheBreak: { cause: 'append' } }]
+  const m = scope(rows)
+  assert.deepEqual(m.problems.items.map((p) => [p.i, p.kind]), [[1, 'compact']])
+  assert.equal(m.problems.n, 0)
+  assert.deepEqual(problemSteps(anchorLane(buildLanes(deskOf([{ kind: 'main', rows }])))), [])
+})
+
 test('1.3 #8 · brush left / width = lo / N, (hi − lo) / N; the pin at (playhead + 0.5) / N; sampled only past 240 steps', () => {
   for (const N of [12, 240, 241]) {
     const rows = Array.from({ length: N }, () => ({ usage: U(1, 1, 1) }))

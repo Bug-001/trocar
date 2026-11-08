@@ -15,18 +15,19 @@
 // D25: the CC block model (assembly-order walk, volatile rule, resource linking, system labels,
 // bash-read parsing) lives in ONE dissector — src/dissect/cc.mjs — shared with the ETL adapter.
 // linearContext (below) is now just the board's PROJECTION of that dissector's canonical spine.
-import { dissectBlocks, sysLabel, parseBashReads, replyEnd, replyError } from '../dissect/cc.mjs'
+import { dissectBlocks, sysLabel, replyEnd, replyError } from '../dissect/cc.mjs'
+import { parseBashReads } from '../dissect/shell-reads.mjs'
 import { reqIncompleteOf, wsIncompleteOf, respIncompleteOf } from '../dissect/capture-labels.mjs'
-import { hintsOf } from '../dissect/harnesses.mjs'
+import { auxKindOf, hintsOf, pathContext } from '../dissect/harnesses.mjs'
 import { sharesBody } from '../dissect/request-body.mjs'
 import { failedOf, cutOf } from '../dissect/endpoints.mjs'
 import { compareStep } from './step-order.mjs'
-import { compactionVerdict, hasCompactionPreamble } from '../identity/session-identity.mjs'
+import { compactionVerdict, compactionBaseline, hasCompactionPreamble } from '../identity/session-identity.mjs'
 // Envelope drift guard (R1): the D10 envelope stores the response under `resp`, demo v0 under
 // `response`. Reading `.response` directly is the bug class that silently killed every HTTP status
 // on real captures — so go through the shared helper, never the raw key.
 import { respOf } from '../dissect/record-fields.mjs'
-import { HEAD, taskOf, shorten } from './blockmeta.mjs'
+import { HEAD, TASK_HEAD, taskOf, shorten } from './blockmeta.mjs'
 import { num52, numTable } from '../query/projection.mjs'
 import { mapUsage } from '../model/schema.mjs'
 export { sysLabel } // re-exported for back-compat (was defined here before the D25 extraction)
@@ -51,22 +52,6 @@ const monitorFlag = (text, stop) => {
   }
   const said = new Set([...closed.replace(/<thinking>[\s\S]*$/, '').matchAll(/<block>(yes|no)\b/gi)].map((m) => m[1].toLowerCase()))
   return said.size === 1 ? said.has('yes') : null
-}
-const userTextOf = (r) => (r.request?.messages || [])
-  .map((m) => Array.isArray(m.content) ? m.content.map((b) => (b.type === 'text' ? b.text || '' : '')).join('') : String(m.content || ''))
-  .join(' ')
-
-// The "aux" wire (0 tools, ≤2 msgs) is really THREE utilities with different fates for their output:
-//   notify   = background activity summarizer (system: "…walked away. Read the tail…") → JSON status
-//              that drives Claude Desktop's push notifications; output consumed by the client, never shown.
-//   titlegen = "2-4 word lowercase label for this job" → becomes the session's human-readable name.
-//   quota    = max_tokens:1 "quota" ping → liveness / keep-alive; the 1-token reply is discarded.
-function auxSubkind(r, userText) {
-  const mt = r.request?.max_tokens || 0
-  if (mt <= 1 || /^\s*quota\s*$/i.test(userText)) return 'quota'
-  if (/lowercase label for this job/i.test(userText)) return 'titlegen'
-  if (/walked away|Read the tail of what the agent/i.test(sysText(r))) return 'notify'
-  return 'aux'
 }
 
 // Unify the two response shapes: streamed SSE (already reconstructed into
@@ -126,19 +111,19 @@ function rangeOf(name, input = {}) {
   return null
 }
 
-// parseBashReads (bash read-target parsing) now lives in the shared CC dissector (src/dissect/cc.mjs,
-// imported above) — a file dumped by cat/head/sed -n … IS resident in context like a Read.
+// A file dumped by cat/head/sed -n … IS resident in context like a Read (src/dissect/shell-reads.mjs).
 
-// The resources one block brings into context, as [kind, label, via, range?] (the lane adds them with addRes at the call that brought
-// the block in). Labels are strings of their own (own): a slice of a command or a text would keep it alive in the lane's ledger.
-function resourcesOf(b) {
+// The resources one block brings into context, as [kind, label, via, range?, runtime?] (the lane adds them with addRes at the call that
+// brought the block in; `runtime` only on a shell read whose path the run settles, range null when it has none). `ctx`: what a shell read
+// resolves against. Labels are strings of their own (own): a slice of a command or a text would keep it alive in the lane's ledger.
+function resourcesOf(b, ctx) {
   const out = []
-  const add = (kind, label, via, range) => out.push(range ? [kind, own(label), via, range] : [kind, own(label), via])
+  const add = (kind, label, via, range, runtime) => out.push(runtime ? [kind, own(label), via, range ?? null, runtime] : range ? [kind, own(label), via, range] : [kind, own(label), via])
   if (b.type === 'tool_use') {
     const arg = toolArg(b.name, b.input)
     if (FILE_OPS.has(b.name) && arg) add('file', arg, b.name, rangeOf(b.name, b.input))
     else if (b.name === 'Bash' && b.input?.command) {
-      for (const rd of parseBashReads(b.input.command)) add('file', rd.path, 'Bash', rd.range)
+      for (const rd of parseBashReads(b.input.command, ctx)) add('file', rd.path, 'Bash', rd.range, rd.runtime)
     } else if (DIR_OPS.has(b.name) && arg) add('dir', arg, b.name)
     else if ((b.name === 'WebFetch' || b.name === 'WebSearch') && arg) add('link', arg, b.name)
     // Skill invocation: fine-grained kind:'skill' (schema 3.2 kind enum / D8 — no `capability` umbrella).
@@ -174,7 +159,7 @@ function resourcesOf(b) {
 }
 // A label or range is a match or split piece of a block's text or a Bash command (links, skills, read paths): kept as a copy of its
 // own, else it would keep the whole text alive for the life of the spine (3.5 §内存有界).
-function addRes(map, kind, label, step, via, range) {
+function addRes(map, kind, label, step, via, range, runtime) {
   const key = kind + '::' + label
   let r = map.get(key)
   if (!r) {
@@ -185,6 +170,7 @@ function addRes(map, kind, label, step, via, range) {
     const last = r.segments[r.segments.length - 1]
     if (last.evict != null && step >= last.evict) r.segments.push({ enter: step, evict: null })
   }
+  if (runtime) r.runtime ??= runtime
   if (range) r.loads.push({ step, range: own(range), via })
 }
 
@@ -227,8 +213,6 @@ function acceptPath(p) {
 // A string the fold keeps (a seen path, a byte context, a subagent's first text) in bytes of its own: a slice of a block's text, or
 // a cons string over one, would keep that whole text alive for as long as the fold lives (3.5 §内存有界).
 const own = (s) => (' ' + s).slice(1)
-// What a subagent lane keeps of its first user text to find the spawn that opened it (finish: the spawn's prompt opens that text).
-const FIRST_TEXT_CHARS = 4096
 // ── THE ANALYZER'S FACTS (RFC 4.3 §3 · §4) ─────────────────────────────────────────────────────────────────────────────────────────
 // Everything the fold reads of a call comes from two pure producers whose results are plain JSON (the context projection persists
 // them, src/query/projection.mjs): blockFacts(block) for one message block, callFacts(record) for the call itself. The fold reads a
@@ -334,6 +318,13 @@ function userEventOf(blocks) {
   }
   return { preview: preview.slice(0, PREVIEW_CHARS), chars }
 }
+const askKey = (e) => `${e.chars}:${e.preview}`
+// A rewrite sends the history again, so of its messages only the last can be someone asking: not the summary that opens them, not the
+// prompt the lane has had (`said`, its askKey). Words of the person inside the message the summary opens are the summary's (3.4).
+function askOfRewrite(msgs, said) {
+  const texts = msgs.filter((m) => m.role === 'user' && userEventOf(m.blocks)), m = texts.at(-1)
+  return texts.length > 1 && msgs.lastIndexOf(m) > msgs.findLastIndex((x) => x.role !== 'user') && askKey(userEventOf(m.blocks)) !== said ? [m] : []
+}
 
 function textOfResult(b) {
   const c = b.content
@@ -345,7 +336,7 @@ const TEXT_OMITTED = 'derived event — full text is not shipped here; read it f
 // blockFacts(block) → the facts of one message block: its type; a tool_use's id and name; a tool_result's tool_use_id and its
 // observation text (`obs`, absent when it has none); the resources it brings in (`res`); the paths it shows (`seen`); a text's
 // user-event pieces (`u`, `ui`).
-export function blockFacts(b) {
+export function blockFacts(b, ctx = {}) {
   const f = { type: b.type }
   if (b.type === 'tool_use') { f.id = b.id; f.name = b.name }
   if (b.type === 'tool_result') {
@@ -358,7 +349,7 @@ export function blockFacts(b) {
     f.seen = seenRuns(b.text)
     Object.assign(f, userText(b.text))
   }
-  const res = resourcesOf(b)
+  const res = resourcesOf(b, ctx)
   if (res.length) f.res = res
   return defined(f)
 }
@@ -380,7 +371,7 @@ export function callFacts(r) {
     sub, monitor, small: /haiku/i.test(req.model || ''), model: req.model,
     msgCount: req.message_count, tools: req.tool_count || 0,
     // which utility a small call is (only a call that can land in an aux lane is asked)
-    aux: h.lane === 'aux' || req.message_count <= 2 ? auxSubkind(r, userTextOf(r)) : undefined,
+    aux: h.lane === 'aux' || req.message_count <= 2 ? auxKindOf(r) : undefined,
     continued: !!(r._ctx && r._ctx.continued), lineage: r._ctx ? r._ctx.lineage : undefined,
     ctxPartial: !!(r._ctx && r._ctx.contextState === 'partial'),
     status, failed,
@@ -393,7 +384,7 @@ export function callFacts(r) {
     preamble: hasCompactionPreamble(req.messages),
     mcp: (req.tools || []).filter((t) => /^mcp__/.test(t.name || '')).map((t) => 'MCP: ' + (String(t.name).split('__')[1] || t.name)),
     // a subagent's first user text, its head only: a spawn's prompt opens it (finish)
-    firstText: sub ? (firstUser ? own(textOfMessage(firstUser).replace(REMINDER, '').slice(0, FIRST_TEXT_CHARS)) : '') : undefined,
+    firstText: sub ? (firstUser ? own(textOfMessage(firstUser).replace(REMINDER, '').slice(0, TASK_HEAD)) : '') : undefined,
     reply: defined({
       text: evText(text), thinking: nr.thinking ? evText(nr.thinking) : undefined,
       tools: (nr.tools || []).map((c) => defined({ id: c.id, name: c.name, input: c.input })),
@@ -407,19 +398,25 @@ export function callFacts(r) {
 // The call view of an admitted, hydrated record: its facts, and its messages' block facts worked out only when the fold reads them
 // (it reads the blocks and the tool uses of the messages new to the lane).
 class MessageView {
-  constructor(m) {
+  constructor(m, ctx) {
+    this.ctx = ctx
     this.role = m.role
     this.content = Array.isArray(m.content) ? m.content : [{ type: 'text', text: m.content }]
     this.uses = Array.isArray(m.content) ? this.content.filter((b) => b.type === 'tool_use').map((b) => [b.id, b.name]) : []
   }
-  get blocks() { return this.memo || (this.memo = this.content.map(blockFacts)) }
+  get blocks() { return this.memo || (this.memo = this.content.map((b) => blockFacts(b, this.ctx))) }
 }
-const viewOf = (r) => ({ facts: callFacts(r), messages: r.request.messages.map((m) => new MessageView(m)) })
+const viewOf = (r) => {
+  const ctx = pathContext(r)
+  return { facts: callFacts(r), messages: r.request.messages.map((m) => new MessageView(m, ctx)) }
+}
 
 // What a compaction verdict says about itself on the board (1.5:38 / 1.5:79: the UI tells confirmed from inferred).
 // A harness header hint is the harness's own word (high, not inferred); a text marker and a count drop are inferred
-// (medium, 3.4). `preamble` only refines the wording of a drop.
+// (medium, 3.4). `preamble` only refines the wording of a drop. A verdict that `lands` a harness's request says the context was
+// rewritten here, from and to the real message counts, and nothing is counted or inferred.
 export function compactionMeta(v, preamble = false) {
+  if (v && v.lands) return { compaction: false, lands: true, evictedFrom: v.compaction_from, evictedTo: v.compaction_to }
   if (!v || !v.compaction) return { compaction: false }
   const byHint = v.basis === 'hint'
   return { compaction: true, compactionInferred: !byHint, compactionConfidence: byHint ? 'high' : 'medium',
@@ -434,13 +431,16 @@ const LANE_META = {
   notify: { icon: '📣', label: 'activity → notification' },
   titlegen: { icon: '🏷', label: 'session title-gen' },
   quota: { icon: '🔌', label: 'quota / keep-alive' },
-  aux: { icon: '⚙', label: 'other util' },
+  suggest: { icon: '💡', label: 'next-prompt suggestion' },
+  websearch: { icon: '🔎', label: 'web search' },
+  webfetch: { icon: '🌐', label: 'web page summary' },
+  aux: { icon: '⚙', label: 'unnamed background call' },
   // only a harness hint puts an inference call here (count_tokens probes are no inference call: the page draws them)
   probe: { icon: '👁', label: 'warm-up / probe requests',
     note: 'A request the harness itself marks as a warm-up or probe: it primes the cache and is not a conversation turn. Its body is kept verbatim like any call, and a later call may build on it.' },
 }
-const LANE_ORDER = { main: 0, subagent: 1, monitor: 2, notify: 3, titlegen: 4, quota: 5, aux: 6, probe: 7 }
-const AUX_KINDS = new Set(['aux', 'notify', 'titlegen', 'quota'])
+const LANE_ORDER = { main: 0, subagent: 1, monitor: 2, notify: 3, suggest: 4, titlegen: 5, quota: 6, websearch: 7, webfetch: 8, aux: 9, probe: 10 }
+const AUX_KINDS = new Set(['aux', 'notify', 'suggest', 'titlegen', 'quota', 'websearch', 'webfetch'])
 const EVENT_ONLY_KINDS = new Set(['monitor', 'probe', ...AUX_KINDS]) // one event per call, no ReAct / resource walk
 
 // ── admission (invariant 4) ──────────────────────────────────────────
@@ -519,7 +519,7 @@ export function createAnalyzer({ keep = true, from = null } = {}) {
   const laneOfStep = new WeakMap() // step → its stream
   const usageOf = new WeakMap() // step → its call's usage (callFacts)
   let n = o.n ?? 0, top = o.top ?? null, late = o.late ?? false, byOrder = o.byOrder ?? false
-  const state = o.state || new Map() // stream → { resMap, seenMap, prevCount, prevCtx, prevInfo, firstText, ask, tools }
+  const state = o.state || new Map() // stream → { resMap, seenMap, prevCount, prevCtx, prevInfo, said, firstText, ask, tools }
   // a fold that keeps nothing keeps a lane's tool names (tool use id → name) in one table of numbers for all its lanes, keyed by the
   // lane state's generation `g` and the id (num52: two ids of one number would share a name, odds about n² / 2⁵³), a name as an index
   let toolT = null, toolGen = o.toolGen ?? 0
@@ -539,7 +539,7 @@ export function createAnalyzer({ keep = true, from = null } = {}) {
   // an index whose name is none: a tool name a rewind takes back
   const none = () => { let i = toolIx.get(undefined); if (i === undefined) { i = toolNames.length; toolNames.push(undefined); toolIx.set(undefined, i) } return i }
   const getTool = (t, id) => { if (keep) return t.get(id); const i = toolT ? toolT.get(num52(t.g + id)) : undefined; return i === undefined ? undefined : toolNames[i] }
-  const fresh = () => ({ resMap: new Map(), seenMap: new Map(), prevCount: 0, prevCtx: 0, prevInfo: null, firstText: '', ask: null, tools: toolsOf() })
+  const fresh = () => ({ resMap: new Map(), seenMap: new Map(), prevCount: 0, prevCtx: 0, prevInfo: null, said: null, firstText: '', ask: null, tools: toolsOf() })
   function mkStream(kind) {
     const s = { id: 's' + streams.length, kind, calls: [], events: [], n: 0 }
     streams.push(s)
@@ -659,7 +659,7 @@ export function createAnalyzer({ keep = true, from = null } = {}) {
     // the lane's ledger, and what this step did to it (step.ld, when the fold keeps no step: replayLedger)
     const D = keep ? null : step.ld
     // a fold that keeps nothing keeps no ledger either: its deltas do not depend on it, and replayLedger rebuilds it from them
-    const addR = (kind, label, via, range) => { if (D) D.push(['r', kind, label, via, range ?? null]); else addRes(st.resMap, kind, label, step.at, via, range) }
+    const addR = (kind, label, via, range, runtime) => { if (D) D.push(runtime ? ['r', kind, label, via, range ?? null, runtime] : ['r', kind, label, via, range ?? null]); else addRes(st.resMap, kind, label, step.at, via, range, runtime) }
     const see = (s, cap) => { if (D) { if (s) D.push(['s', s, cap]) } else seeIn(st.seenMap, s, step.at, cap) }
     const f = view.facts, reply = f.reply
     // monitor + aux-family lanes: no ReAct/resource extraction — just one event per call
@@ -707,11 +707,11 @@ export function createAnalyzer({ keep = true, from = null } = {}) {
     // 3.4: a request stored in part (the collector's req_* labels, the ETL's context_state 'partial') shows what arrived,
     // not the context the model saw: its message count is no observation, so no verdict and no new baseline
     const blindCount = step.reqIncomplete || step.ctxPartial
-    const verdict = blindCount ? { compaction: false }
-      : compactionVerdict(st.prevInfo, { hint: h.compaction === true, marker, msgCount: msgs.length, preamble: hasPreamble })
-    if (!blindCount) st.prevInfo = { msgCount: msgs.length, marker, preamble: hasPreamble }
-    let newMsgs
-    if (verdict.compaction) {
+    const cur = { hint: h.compaction === true, marker, msgCount: msgs.length, preamble: hasPreamble, failed: step.error }
+    const verdict = blindCount ? { compaction: false } : compactionVerdict(st.prevInfo, cur)
+    if (!blindCount) st.prevInfo = compactionBaseline(st.prevInfo, cur, verdict)
+    let newMsgs, asked = null
+    if (verdict.compaction || verdict.lands) {
       Object.assign(step, compactionMeta(verdict, preambleNew))
       if (D) D.push(['x'])
       else for (const res of st.resMap.values()) {
@@ -719,6 +719,7 @@ export function createAnalyzer({ keep = true, from = null } = {}) {
         if (last.evict == null) last.evict = step.at
       }
       newMsgs = msgs
+      asked = verdict.basis === 'hint' ? [] : askOfRewrite(msgs, st.said) // a harness's request is the harness talking
     } else if (drop) {
       newMsgs = []
     } else {
@@ -732,18 +733,19 @@ export function createAnalyzer({ keep = true, from = null } = {}) {
         // the event travels to the UI on its own — it MUST carry the inference marker with it,
         // otherwise the timeline re-asserts as fact what the step knows is a guess (invariant 4).
         inferred: step.compactionInferred, confidence: step.compactionConfidence, basis: step.compactionBasis })
+    if (step.lands) E.push({ type: 'compaction-landed', step: step.at, streamId: s.id, from: step.evictedFrom, to: step.evictedTo })
     if (isSummarize) {
       step.summarizing = true
       E.push({ type: 'summarize', step: step.at, streamId: s.id, out: f.usage?.output_tokens })
     }
-    for (const m of newMsgs) for (const b of m.blocks) for (const e of b.res || []) addR(e[0], e[1], e[2], e[3])
+    for (const m of newMsgs) for (const b of m.blocks) for (const e of b.res || []) addR(e[0], e[1], e[2], e[3], e[4])
     // seen-but-not-opened filenames: tool-result text (bigger cap) + prose (smaller)
     for (const m of newMsgs) for (const b of m.blocks) see(b.seen, b.type === 'tool_result' ? 80 : 40)
     see(reply.seen, 40)
-    for (const m of newMsgs) {
+    for (const m of asked ?? newMsgs) {
       if (m.role !== 'user') continue
       const e = userEventOf(m.blocks)
-      if (e) E.push({ type: 'user', step: step.at, streamId: s.id, ...shown(e) })
+      if (e) { E.push({ type: 'user', step: step.at, streamId: s.id, ...shown(e) }); st.said = askKey(e) }
     }
     for (const m of newMsgs) {
       if (m.role !== 'user') continue
@@ -765,7 +767,8 @@ export function createAnalyzer({ keep = true, from = null } = {}) {
         E.push(e)
       }
     }
-    st.prevCount = msgs.length
+    // a failed call is no baseline (3.4): it only raises the count, so neither the history a retry sends again nor what it brought itself is new twice
+    st.prevCount = step.error ? Math.max(st.prevCount, msgs.length) : msgs.length
   }
 
   function finish() {
@@ -795,7 +798,7 @@ export function createAnalyzer({ keep = true, from = null } = {}) {
       const resources = EVENT_ONLY_KINDS.has(s.kind) ? [] : [...st.resMap.values()].map((r) => ({ ...r,
         segments: r.segments.map((g) => ({ enter: gi(g.enter), evict: gi(g.evict) })), loads: r.loads.map((l) => ({ ...l, step: gi(l.step) })) }))
       const out = { id, kind: s.kind, calls: [...s.calls], events, resources, parent: b ? sid.get(b.streamId) : null, spawnArg: b ? b.arg : null,
-        // a spawned lane says its spawn's argument; the rest, their first prompt, said by the reduction (src/view/reduce.mjs, blockmeta.mjs departer) once every wire's lanes are in (4.4 §看板 v2 需要的补充)
+        // a spawned lane says its spawn's argument; the rest, their first prompt, said by the reduction (src/view/reduce.mjs, blockmeta.mjs sharedLines) once every wire's lanes are in (4.4 §看板 v2 需要的补充)
         ...(b ? { task: b.arg || taskOf(st.ask) } : { task: null, [HEAD]: st.ask ?? null }) }
       if (!EVENT_ONLY_KINDS.has(s.kind)) {
         // "only seen" = matched paths minus anything actually opened. Dedupe absolute-vs-relative
@@ -854,7 +857,7 @@ export function createAnalyzer({ keep = true, from = null } = {}) {
   }
   // save(lane) → the lane's state as a push left it (its first text is set by its first push and stays: a rewind keeps that push);
   // rewind(lane, saved, undos): back to it, `undos` the steps' `undo` of every push of the lane after it, oldest first
-  const save = (s) => { const st = state.get(s); return { n: s.n, last: s._lastMsg, prevInfo: st.prevInfo, prevCount: st.prevCount, prevCtx: st.prevCtx } }
+  const save = (s) => { const st = state.get(s); return { n: s.n, last: s._lastMsg, prevInfo: st.prevInfo, prevCount: st.prevCount, prevCtx: st.prevCtx, said: st.said } }
   function rewind(s, saved, undos) {
     for (let u = undos.length - 1; u >= 0; u--) for (let i = undos[u].length - 2; i >= 0; i -= 2) toolT.set(undos[u][i], undos[u][i + 1] ?? none())
     const { n, last, ...st } = saved
@@ -880,7 +883,7 @@ export function replayLedger(steps, after, maps = {}, touch = null) {
       if (op[0] === 'r') {
         const key = op[1] + '::' + op[2], r = resMap.get(key), was = r ? r.segments.length + r.loads.length : -1
         if (touch) touch('r', key, r)
-        addRes(resMap, op[1], op[2], n, op[3], op[4] ?? undefined)
+        addRes(resMap, op[1], op[2], n, op[3], op[4] ?? undefined, op[5])
         const now = resMap.get(key)
         units += now.segments.length + now.loads.length - was
       } else if (op[0] === 's') {
@@ -942,7 +945,7 @@ function truncNote(text) {
 // A tools / system entry's parsed source item, the key of the per-block memos (blockBytes, flatBlockText). NON-enumerable: flat entries
 // ship inside page bodies, and the item must never serialize with them. A bare string has no identity to key by: it is left out.
 const withSrc = (d, src) => (src && typeof src === 'object' ? Object.defineProperty(d, 'src', { value: src }) : d)
-export function linearContext(request) {
+export function linearContext(request, ctx = {}) {
   const flat = []
   // ── resource ↔ RESULT linking ────────────────────────────────────────
   // The 📂 resource explorer promises "the bytes that entered the context". The dissector keys a
@@ -953,13 +956,13 @@ export function linearContext(request) {
   // Mirror the file resKey onto its sibling result here, and mark BOTH ends' role, so the request
   // JSON is never silently passed off as content. Scoped to `file::` on purpose: skill/mcp/scaffold
   // resources already resolve to their own verbatim body block, and stealing that is a regression.
-  const spine = dissectBlocks(request)
-  const fileKeyByUseId = new Map()  // tool_use_id → 'file::<path>'
+  const spine = dissectBlocks(request, ctx)
+  const fileUseById = new Map()     // tool_use_id → its spine entry, whose key is 'file::<path>'
   const answered = new Set()        // tool_use_ids that have a result IN THIS request
   for (const e of spine) {
     const b = e.parsed
     if (!b || typeof b !== 'object') continue
-    if (b.type === 'tool_use' && b.id && String(e.resourceRef || '').startsWith('file::')) fileKeyByUseId.set(b.id, e.resourceRef)
+    if (b.type === 'tool_use' && b.id && String(e.resourceRef || '').startsWith('file::')) fileUseById.set(b.id, e)
     else if (b.type === 'tool_result' && b.tool_use_id) answered.add(b.tool_use_id)
   }
   for (const e of spine) {
@@ -991,14 +994,19 @@ export function linearContext(request) {
         cc: (b && b.cache_control) || null,
         resKey: e.resourceRef,
       }
+      if (e.resourceRefs) d.resKeys = e.resourceRefs
+      // `key` above is UNCHANGED — the cache-prefix chain diffs on it, so the linking below only
+      // ever ADDS descriptive fields.
       if (type === 'tool_use' && d.resKey && d.resKey.startsWith('file::')) {
         d.resRole = 'request'
         // No sibling result in THIS request: the call that ISSUED the tool_use gets its result in
         // the NEXT one. The honest render is "result not in this call's context yet" — showing the
         // arguments as though they were the file is the bug this flag exists to prevent.
         d.resPending = !answered.has(b.id)
-      } else if (type === 'tool_result' && b && b.tool_use_id && fileKeyByUseId.has(b.tool_use_id)) {
-        d.resKey = fileKeyByUseId.get(b.tool_use_id)
+      } else if (type === 'tool_result' && b && b.tool_use_id && fileUseById.has(b.tool_use_id)) {
+        const use = fileUseById.get(b.tool_use_id)
+        d.resKey = use.resourceRef
+        if (use.resourceRefs) d.resKeys = use.resourceRefs
         d.resRole = 'result'
         // An error result IS what entered the context — link it, but flag it so the panel says
         // "the tool failed" instead of presenting the error text as the file's contents.

@@ -2,7 +2,7 @@
 // Its board path folds lanes into a tree (fold: 'tree'); the parts of that path that must stay in src/view
 // (the multi-lane analyzer) are looked up there by `fold`, so this row carries only leaf-safe data and hooks.
 // Leaf module.
-import { CC_SECTIONS, resourceRef } from './cc.mjs';
+import { CC_SECTIONS, resourceRef, resourceRefs } from './cc.mjs';
 import { CC_THREADS } from './cc-threads.mjs';
 import { streamParts } from './sse-spans.mjs';
 
@@ -24,7 +24,7 @@ export const ANTHROPIC = Object.freeze({
   replyParts: (rec) => streamParts(rec, REPLY),
   linker: CC_THREADS,
   rules: Object.freeze({
-    links: true, resourceRef,
+    links: true, resourceRef, resourceRefs,
     faith: (bl) => ((bl.type === 'thinking' || bl.type === 'redacted_thinking') && bl.signature && !(bl.thinking || bl.text) ? 'opaque' : undefined),
   }),
   tsOf: (x) => (x.facts || {}).ts_request, // a call row's own ts on this wire

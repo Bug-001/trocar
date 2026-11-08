@@ -32,7 +32,7 @@ import { parseRecordId } from '../collector/core/record/segments.mjs';
 import { trocarHome } from '../paths.mjs';
 import { lineFile } from './line-file.mjs';
 
-export const PROJ_V = 18; // 18: the reads line's projection (its 14) joined with the batch's (its 17); 17: Codex's additional_tools input item is tool definitions; 16: a security review's flagged is what the reply says; 15: a reply the agent closed after its own success terminal is read as that reply (3.5 §访问模式 ②)
+export const PROJ_V = 19; // 19: the desk line's projection (its 13: the background kinds and shell reads) joined; 18: the reads line's projection (its 14) joined with the batch's (its 17); 17: Codex's additional_tools input item is tool definitions; 16: a security review's flagged is what the reply says; 15: a reply the agent closed after its own success terminal is read as that reply (3.5 §访问模式 ②)
 const CAP_BYTES = 512 << 20; // the total's ceiling (gcProjections)
 const SHARE_DEPTH = 3, SHARE_MIN = 48;
 // rows and shared values read back are kept by what they weigh in the heap (a row grows with its context: a count let a long

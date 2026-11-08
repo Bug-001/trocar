@@ -17,13 +17,18 @@ export const LANE_KIND = Object.freeze({
   notify: { word: 'notification summary', row: 'bg', bucket: 'bg', hint: 'The agent asks the model to sum up recent activity in a one-line notification' },
   titlegen: { word: 'title generation', row: 'bg', bucket: 'bg', hint: 'The agent asks the model to give the session a title' },
   quota: { word: 'keep-alive check', row: 'bg', bucket: 'bg', hint: 'A check call with a tiny reply limit; the reply is not used' },
-  aux: { word: 'other background call', row: 'bg', bucket: 'bg', hint: 'A call outside the main thread whose agent doesn\'t say what it is' },
+  suggest: { word: 'Next-prompt suggestion', row: 'bg', bucket: 'bg', hint: 'The agent copies the whole session and asks the model what the next prompt might be; the reply is only a hint in the input box and does not enter the session' },
+  websearch: { word: 'Web search', row: 'bg', bucket: 'bg', hint: 'A model call the search tool makes on its own' },
+  webfetch: { word: 'Web page summary', row: 'bg', bucket: 'bg', hint: 'A small model answers from one fetched page' },
+  aux: { word: 'Unnamed background call', row: 'bg', bucket: 'bg', hint: 'A background call the board cannot name' },
   probe: { word: 'warm-up request', row: 'bg', bucket: 'bg', hint: 'A warm-up request the agent marked itself: it writes the cache ahead of time; not a step of the main thread' },
   'token-count': { word: 'token count', row: 'tc', bucket: null, hint: 'Token count: generates no reply and is not billed' },
 })
 // a kind the table does not know yet (the server grew one): its own words, the 后台调用 row, no guess about the bucket
-export const laneKind = (kind) => LANE_KIND[kind] || { word: 'other call', row: 'bg', bucket: 'bg', hint: 'The board does not know this kind of call yet' }
+export const laneKind = (kind) => LANE_KIND[kind] || { word: 'Unnamed background call', row: 'bg', bucket: 'bg', hint: 'The board does not know this kind of call yet' }
 export const laneWord = (kind) => laneKind(kind).word
+// the background group row's own hover: the row holds every 'bg' kind
+export const BG_ROW_HINT = 'Helper calls outside the main thread and the sub-agents'
 
 // ── the cache predicate's own words (2.2 §缓存判定; the states are core/metrics.mjs : CACHE_STATES) ──────────────────
 // cacheSentence(state, {laneW, causeW, attrW, hitPct, warm, inferred, errMsg, zeroInput}) → the sentence the 缓存 popover opens
@@ -331,7 +336,14 @@ export const UNPARSED_LINE = 'The request body could not be parsed'
 // ── the resource explorer (2.4) ──────────────────────────────────────────────────────────────────────────────────────
 export const RES_SECTION = 'Resources · whole session'
 export const RES_GRP = Object.freeze({
-  file: 'Files read', seen: 'Names seen only', load: 'Instruction files loaded', cap: 'Tools and capabilities', dl: 'Directories and links', comp: 'Compaction', other: 'Other resources',
+  file: 'Files read', seen: 'Names seen only', load: 'Instruction files loaded', cap: 'Tools and capabilities', dl: 'Directories and links', comp: 'Compaction', other: 'Other resources', runtime: 'Path known only at run time',
+})
+// why a shell read's path stays as written, one sentence per `runtime` code (2.4 fidelity boundary item 6)
+export const RUNTIME_WHY = Object.freeze({
+  output: 'The path comes from the output of another command or a computed value',
+  read: 'The path comes from a read loop over input',
+  earlier: 'The path uses a variable set by an earlier command',
+  cwd: 'A relative path, and the command does not change to a known directory',
 })
 export const OTHERS_ROW = (n) => `${n} more`
 // the lifecycle words take the composed step word (「step 5」, or 「call 5」 when the session has no main lane)
