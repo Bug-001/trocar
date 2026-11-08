@@ -159,14 +159,33 @@ export function itemToBlocks(item) {
 }
 
 // ── board projection: raw Responses request → flat block descriptors (same vocab as CC linearContext).
+const isObj = (x) => !!x && typeof x === 'object' && !Array.isArray(x);
+const isToolList = (x) => Array.isArray(x) && x.every(isObj);
+// Codex offers tools in an `additional_tools` item of input[]: tool definitions, not a conversation item. A tool list of another shape stays a json block.
+const isToolsItem = (it) => isObj(it) && it.type === 'additional_tools' && isToolList(it.tools) && it.tools.length > 0;
+// every tool entry of a Responses request and where it stands: tools[], then each additional_tools item. A `namespace` entry is one
+// (its name and description); its tools follow, each one of its own.
+function toolEntries(req) {
+  const out = [];
+  const walk = (list, path) => list.forEach((t, i) => {
+    const at = [...path, i], inner = isObj(t) && isToolList(t.tools) ? t.tools : null;
+    // a namespace's block is its own words (description, else name): its tools' bytes are theirs, never counted twice
+    const own = inner ? (typeof t.description === 'string' ? [...at, 'description'] : typeof t.name === 'string' ? [...at, 'name'] : at) : at;
+    out.push({ t, at: own, inner, input: path[0] === 'input' });
+    if (inner) walk(inner, [...at, 'tools']);
+  });
+  if (Array.isArray(req && req.tools)) walk(req.tools, ['tools']);
+  if (Array.isArray(req && req.input)) req.input.forEach((it, i) => { if (isToolsItem(it)) walk(it.tools, ['input', i, 'tools']); });
+  return out;
+}
 // Downstream board code (context window, callComp, flatBlockText, cacheBreak) reads sec/kind/role/name/
 // desc/schema/text/block — identical to CC — so Codex renders with ZERO board changes.
 export function boardFlat(req) {
   const flat = [];
-  const tools = Array.isArray(req && req.tools) ? req.tools : [];
-  tools.forEach((t, i) => {
-    const name = t.name || t.type || ('tool_' + i);         // built-in tools (tool_search/web_search) have no name
-    const schema = t.parameters !== undefined ? t.parameters : t;
+  for (const { t, at, inner, input } of toolEntries(req)) {
+    const name = t.name || t.type || ('tool_' + at.filter((x) => typeof x === 'number').pop());         // built-in tools (tool_search/web_search) have no name
+    // a namespace's tools are blocks of their own, not its bytes twice
+    const schema = t.parameters !== undefined ? t.parameters : inner ? { ...t, tools: undefined } : t;
     const desc = typeof t.description === 'string' ? t.description : '';
     const props = schema && schema.properties ? Object.keys(schema.properties) : [];
     const mcp = /^mcp/.test(name);
@@ -174,9 +193,9 @@ export function boardFlat(req) {
       sec: 'tools', kind: 'tool', role: 'tool', name, ttype: t.type || 'function',
       props, descChars: desc.length, cc: null, mcp, verbatim: true,
       desc, schema, resKey: mcp ? 'mcp::' + (name.split(/[._]/)[1] || name) : '',
-      key: 'T:' + name + ':' + desc.length + ':' + props.length, path: ['tools', i],
+      key: 'T:' + name + ':' + desc.length + ':' + props.length, path: at, ...(input ? { input: true } : {}),
     });
-  });
+  }
   const instr = typeof (req && req.instructions) === 'string' ? req.instructions : (req && req.instructions != null ? JSON.stringify(req.instructions) : '');
   if (instr) flat.push({ sec: 'system', kind: 'system', role: 'system', si: 0, label: sysLabel(instr), text: instr, chars: instr.length, volatile: false, cc: null, path: ['instructions'] });
   if (typeof (req && req.input) === 'string') { // the Responses API accepts a bare string input: one user block
@@ -186,6 +205,7 @@ export function boardFlat(req) {
   const input = Array.isArray(req && req.input) ? req.input : [];
   let mi = 0;
   for (const item of input) {
+    if (isToolsItem(item)) { mi++; continue } // the tools section's, above; mi stays the item's place in input[]
     let bi = 0;
     for (const { role, block, sub } of itemToBlocks(item)) {
       const type = block.type;
@@ -326,6 +346,7 @@ export function normRespChat(rec) {
 // ── shape-dispatched entry points (the shared view layer calls THESE, never a per-shape branch) ────
 export function boardFlatFor(shape, req) { return shape === 'chat' ? boardFlatChat(req) : boardFlat(req); }
 export function normRespFor(shape, rec) { return shape === 'chat' ? normRespChat(rec) : normResp(rec); }
+const messagesOf = (req) => (Array.isArray(req && req.input) ? req.input.filter((it) => !isToolsItem(it)).length : 0);
 // derived per-call counts the board header reads, per wire shape (Responses: input[]/instructions;
 // Chat: messages[] with the leading system messages as the system text).
 export function reqCountsFor(shape, req) {
@@ -337,8 +358,8 @@ export function reqCountsFor(shape, req) {
     return { message_count: Math.max(0, msgs.length - lead), tool_count: Array.isArray(req && req.tools) ? req.tools.length : 0, system_chars: sysChars };
   }
   return {
-    message_count: Array.isArray(req && req.input) ? req.input.length : 0,
-    tool_count: Array.isArray(req && req.tools) ? req.tools.length : 0,
+    message_count: messagesOf(req),
+    tool_count: toolEntries(req).length,
     system_chars: typeof (req && req.instructions) === 'string' ? req.instructions.length : 0,
   };
 }
@@ -442,7 +463,7 @@ export const RESPONSES = Object.freeze({
   reqCounts: (req) => reqCountsFor('responses', req), ctxTokens,
   ended: responsesEnded,
   replyParts: (rec) => streamParts(rec, RESPONSES_REPLY),
-  messageCount: (req) => (Array.isArray(req && req.input) ? req.input.length : typeof (req && req.input) === 'string' ? 1 : 0),
+  messageCount: (req) => (typeof (req && req.input) === 'string' ? 1 : messagesOf(req)),
 });
 export const CHAT = Object.freeze({
   id: 'openai-chat', provider: 'openai', blockKeys: ['tools', 'messages'],
