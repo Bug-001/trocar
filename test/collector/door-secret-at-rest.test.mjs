@@ -16,6 +16,7 @@ import { turnOnModel } from '../../src/collector/model-on.mjs'
 import { startControlServer } from '../../src/collector/core/control.mjs'
 import { readIngressConfig } from '../../src/collector/core/ingress-config.mjs'
 import { resolveLoc } from '../../src/collector/core/proxymode/sources.mjs'
+import { pacAddress } from '../../src/collector/core/proxymode/entries.mjs'
 import { readManifest } from '../../src/off/manifest.mjs'
 import { undoHarnesses } from '../../src/off/undo.mjs'
 import { sha256 } from '../../src/off/fsutil.mjs'
@@ -121,7 +122,8 @@ test('4.6「日志」· 1.6 V106: the door password is in ingress.json and the s
     const m = JSON.parse(fs.readFileSync(mf, 'utf8'))
     const ports = readIngressConfig({ dir: w.dir }).groupPorts
     for (const x of [...m.entries, ...m.files].filter((y) => y.door_sha256)) {
-      x.door = doorOf(`${x.harness}:${x.route}`, ports[`${x.harness}:${x.route}`])
+      const door = doorOf(`${x.harness}:${x.route}`, ports[`${x.harness}:${x.route}`]), r = ((w.harnesses.find((d) => d.name === x.harness) || {}).proxyMode || {}).routes || {}
+      x.door = (r[x.route] || {}).value === 'pac-url' ? pacAddress(T(), door) : door // a PAC route's tag is the address it wrote, the key in it (4.11 P10)
       assert.equal(sha256(x.door), x.door_sha256, 'the clear door rebuilt is the one on record')
       for (const p of (x.secret && x.secret.fields) || []) { const o = p.slice(0, -1).reduce((a, k) => a[k], x); o[p.at(-1)] = o[p.at(-1)].split('***').join(T()) }
       delete x.door_sha256; delete x.secret
