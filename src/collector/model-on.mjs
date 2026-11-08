@@ -186,7 +186,7 @@ export async function turnOnModel({ os, home, env = process.env, ids = null, har
       for (const { h } of planned) {
         if ((gone = offSince(stateF, on, { fs, now: now() })).length) break // the harnesses already written stay recorded; the next one is not started
         const doorOf = (rid) => { const u = doors[groupOf(h, rid)]; if (!u) throw Object.assign(new Error(`the daemon opened no door for ${groupOf(h, rid)}`), { code: 'not-routed' }); return u }
-        const w = writeRoutes(byName.get(h), { ...wctx, harness: h }, doorOf)
+        const w = writeRoutes(byName.get(h), { ...wctx, harness: h, pacToken: cfg.config.listenerToken }, doorOf)
         for (const r of w.results) out.routes.push({ harness: h, ...r })
         for (const n of w.notRouted) out.routes.push({ harness: h, ok: false, ...n })
         for (const n of w.notes.map((x) => ({ harness: h, ...x }))) if (n.harness != null) out.notes.push(n); else if (!out.notes.some((o) => o.harness == null && o.code === n.code && o.text === n.text)) { const { harness, ...rest } = n; out.notes.push(rest) } // a harness-less note: once per run, with no harness field (the receipt schema takes only ids there)

@@ -6,7 +6,6 @@
 // the `; …` after it never applies. The PAC door takes no
 // credentials, so at accept it forwards only a peer of this user (peerAllowed). When a PAC route is not written at all (the four not-routed
 // conditions of ruling ③) is entries.mjs's pacGate, not this file's. The handler is registered on the door.
-import { PAC_PATH } from './entries.mjs'
 import { upstreamFor } from './chain.mjs'
 import { CODE } from '../codes.mjs'
 import { bypassRuleOf } from '../upstream-shape.mjs'
@@ -66,10 +65,11 @@ export function pacText({ door = null, ownLeg = null, bypass = [] } = {}) {
   ].join('\n')
 }
 
-/** GET /trocar.pac on the door: `state()` → pacText's input (read per request: `off` changes it in place). Any other path is the door's (→ false). */
-export function pacHandler({ state }) {
+/** GET <path> on the door (`path`: entries.mjs pacPath, the install's key in it): `state()` → pacText's input (read per request: `off` changes it in place).
+ *  Any other request is the door's (→ false). */
+export function pacHandler({ state, path }) {
   return (req, res) => {
-    if (req.method !== 'GET' || new URL(req.url, 'http://door').pathname !== PAC_PATH) return false
+    if (req.method !== 'GET' || new URL(req.url, 'http://door').pathname !== path) return false
     const body = pacText(state())
     res.writeHead(200, { 'content-type': 'application/x-ns-proxy-autoconfig', 'content-length': Buffer.byteLength(body), 'cache-control': 'no-store' })
     res.end(body)

@@ -9,7 +9,7 @@
 // goes through src/off/journal.mjs: key by key, block by block; a key the user changed during on stays (D48②), bytes are compared whole only when
 // nothing changed. Records carry `route` (the route id: one entry group) and the door written (sealed at save: `door_sha256`, src/off/seal.mjs), so a moved door rewrites that route only.
 import path from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { randomUUID, createHmac } from 'node:crypto'
 import { applyJsonKey, applyJsonKeys, applyTextEntry, writeOwnedFile, judgeOwned, saveManifest, undoEntry, removeOwnedFile, sha256 } from '../trust/journal.mjs'
 import { parseJsonText, getPath, removeKey } from '../../../off/json-text.mjs'
 import { decodeText } from '../../../off/text-codec.mjs'
@@ -26,7 +26,11 @@ import { unseal, doorFp } from '../../../off/seal.mjs'
 import { errnoWords } from '../../../cli/words.mjs'
 
 export const LOOPBACK = LOOPBACK_HOSTS
-export const PAC_PATH = '/trocar.pac' // P10: the daemon serves the PAC here on the PAC group's door
+/** P10: where the daemon serves the PAC on the PAC group's door — a path carrying the install's key, derived from the doors' token (ingress.json
+ *  `listenerToken`): the PAC is a capability that only this user, who can read the entry holding it, has. */
+export const pacPath = (token) => `/${createHmac('sha256', String(token)).update('trocar.pac').digest('hex').slice(0, 32)}/trocar.pac`
+/** The PAC address `on` writes for a door: the door's origin, the install's key in its path (P10). Also what its records are tagged with. */
+export const pacAddress = (token, door) => new URL(pacPath(token), door).href
 // a hostTree form's note (CM31): it names the form, since status prints it under the harness, beside forms that run on their own
 const hostTreeNote = (form) => `${form} runs inside another program: every other extension there connects through trocar too, and trocar passes those connections on without capturing them`
 // P6 · P9 · P10: a route that sends loopback direct — a class 1 entry with its NO_PROXY, a plugin hook rendered with the agent's NO_PROXY
@@ -84,10 +88,13 @@ function dotenvWithoutDoors(ctx, names) {
 }
 
 // ruling ③: a PAC route is not written over a system PAC, an applied entry with its own egress, or an own leg that needs credentials (the PAC door takes none)
+// a key trocar still holds a record of (its stale value undone above left one only when the value is no longer what it wrote): the journal judges it, a
+// user's change kept and refused with that reason — never taken for the user's own egress
+const recordedKey = (ctx, file, k) => recordsOf(ctx.manifest, ctx.harness, ctx.routeId).some((e) => e.path === file && Array.isArray(e.keys) && e.keys.join('\0') === k.join('\0'))
 function pacGate(ctx, doc, file, value) {
   const r = ctx.route
   if (ctx.systemProxy && ctx.systemProxy.pac) return notRouted('system-pac')
-  for (const k of r.ownKeys || r.proxyKeys || []) { const v = getPath(doc, k); if (isSet(v) && v !== value) return notRouted('own-egress', where(file, k)) }
+  for (const k of r.ownKeys || r.proxyKeys || []) { const v = getPath(doc, k); if (isSet(v) && v !== value && !recordedKey(ctx, file, k)) return notRouted('own-egress', where(file, k)) }
   let cred = false
   try { const u = ctx.systemProxy && ctx.systemProxy.url ? new URL(ctx.systemProxy.url) : null; cred = !!(u && (u.username || u.password)) } catch { /* not a URL: no credentials in it */ }
   return entryGate({ auth: r.auth }, { upstreamCredentialed: cred }).ok ? null : notRouted('credentialed-own-leg')
@@ -110,7 +117,8 @@ function selectTarget(ctx) {
 
 function writeJson(ctx, door) {
   const r = ctx.route, b = base(ctx), out = []
-  const value = r.value === 'pac-url' ? new URL(PAC_PATH, door).href : door
+  if (r.value === 'pac-url' && !ctx.pacToken) throw Object.assign(new Error('the PAC address needs the install\'s key, and trocar on was given none'), { code: 'entry-refused' })
+  const value = r.value === 'pac-url' ? pacAddress(ctx.pacToken, door) : door
   let file, create = null
   if (r.select) { const t = selectTarget(ctx); if (t.code) return t; file = t.file; create = t.create || null } else file = resolveLoc(r.file, ctx)[0]
   if (!file) return notRouted('no-path')
@@ -225,14 +233,18 @@ export function routeEntry(kind) {
   if (!w) throw new TypeError(`no route writer for kind ${JSON.stringify(kind)}`)
   return {
     write(ctx, door) {
+      // what this route's records say was written: the door, or for a PAC route the PAC address (its key in it). A record of another door or key, or
+      // of an earlier version that wrote the address with no key, is trocar's stale value: undone (its prior back), then written anew (invariant 5)
+      const mark = ctx.route && ctx.route.value === 'pac-url' && ctx.pacToken ? pacAddress(ctx.pacToken, door) : door
       const old = recordsOf(ctx.manifest, ctx.harness, ctx.routeId)
-      if (old.some((x) => doorFp(x) !== sha256(door))) undo(ctx, old)
+      if (old.some((x) => doorFp(x) !== sha256(mark)) && check(ctx, old).ok) undo(ctx, old) // not intact: a value of the user's, left for the journal to refuse and say
       // all or nothing: a route refused partway (its last key or item, the select meta) takes back what this call already wrote, so no record without
       // a route tag is left for off to miss (invariant 5)
       const m = ctx.manifest, had = new Set([...m.entries, ...m.files])
       const takeBack = () => { const added = [...m.entries, ...m.files].filter((x) => !had.has(x)); if (added.length) undo(ctx, added) }
       let res
-      try { res = w({ ...ctx, door }, door) } catch (e) { takeBack(); throw e }
+      // records are tagged with what was written: the door, or the PAC address (its key in it)
+      try { res = w({ ...ctx, door: mark }, door) } catch (e) { takeBack(); throw e }
       if (!res.ok) {
         takeBack()
         const left = res.code === 'not-routed' ? dropRoute(ctx, ctx.harness, ctx.routeId) : []

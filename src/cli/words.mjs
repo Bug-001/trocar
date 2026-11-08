@@ -90,6 +90,7 @@ export const FAILURE_WORDS = Object.freeze({
   'unpaired-response': 'a response arrived with no request to pair it with',
   'prior-proxy-unknown': 'the proxy in use before trocar could not be told',
   'pac-peer-refused': "a program not shown to be yours asked for trocar's proxy settings file (PAC) and was refused",
+  'pac-address-stale': "your program asked for trocar's proxy settings file (PAC) at an address from before this install's key and was refused; run: trocar on",
   'pac-owner-unread': "trocar's proxy settings file (PAC) could not tell whose program asked, so it answered without routing through trocar",
   'client-left-held': 'a program gave up on a connection while trocar was slow to judge it',
   'client-left-queued': 'a program dropped a connection before trocar picked it up',
@@ -266,6 +267,7 @@ export function statusReason(code, { harness = '', pid = null, cause = null } = 
     'link-missing': ['trocar is not attached'],
     'entry-missing': ['the setting that points at trocar is gone', null, `trocar on ${h}`],
     'entry-changed': ['the setting that points at trocar holds something else'],
+    'pac-address-stale': [`${h}'s setting holds trocar's proxy settings address from before this install's key, which trocar refuses, so its calls are not captured`, null, `trocar on ${h}`],
     'forwarder-down': [`trocar is not listening, so ${h} cannot connect`],
     'not-routed': [`new connections from ${h} do not go through trocar`],
     'local-upstream': [`${h} sends its model calls to a program on this machine; calls to this machine do not pass through trocar`], // no fix (1.6 附录 B)

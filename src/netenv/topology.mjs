@@ -96,12 +96,14 @@ function platformUp(F, h) {
 const formRoutes = (hf) => ({ blocked: routeOfForms(hf.forms), routeOf: Object.fromEntries((hf.forms || []).filter((x) => x.routeId).map((x) => [x.id, x.routeId])) })
 const knownForms = (hf, p) => (Array.isArray(p.forms) ? p.forms.filter((id) => (hf.forms || []).some((x) => x.id === id)) : p.forms) // forms the facts carry, so every one has its route
 const entryIntact = (hf) => (hf.entry.state === 'intact' ? true : hf.entry.state === 'unknown' ? null : false)
+// what is wrong with the entry, one word for the summary and the detail alike: its own code (pac-address-stale), else changed or missing
+const entryWhy = (hf) => hf.entry.code || (hf.entry.state === 'changed' ? 'entry-changed' : 'entry-missing')
 const steeredOf = (p) => (p.watched === 'decrypt' ? true : p.watched === 'unknown' ? null : false)
 
 /** `status`'s verdict on the harness, from the same facts and the same function: { captured, reason, rows }. */
 function judged(F, h, hf) {
   const j = judgeHarness({
-    desired: F.desired[h] ?? null, entryIntact: entryIntact(hf), entryWhy: hf.entry.state === 'changed' ? 'entry-changed' : 'entry-missing', attached: F.link.attached, helper: F.link.helper || 'ok', daemon: F.daemon.state,
+    desired: F.desired[h] ?? null, entryIntact: entryIntact(hf), entryWhy: entryWhy(hf), attached: F.link.attached, helper: F.link.helper || 'ok', daemon: F.daemon.state,
     procs: hf.procs.map((p) => ({ pid: p.pid, startedAt: p.startedAt, trusted: p.trusted, reason: p.reason, negative: p.negative, start: p.start })), installedAt: hf.installedAt, formsHere: hf.formsHere ?? true,
   })
   return { captured: j.captured, reason: (j.rows.find((r) => r.reason) || {}).reason ?? null, rows: j.rows }
@@ -184,7 +186,7 @@ function formVerdict(F, h, hf, fm, fwf) {
   if (F.daemon.state === 'not-running' || F.daemon.state === 'not-responding') return none(true, false, `daemon-${F.daemon.state}`)
   if (co) return none(true, false, 'not-routed') // the door forwards it: trocar on the path, forwarded only, never captured (4.11 ⑩)
   if (fwf.upstream_error) return { on: true, captured: false, reason: 'upstream-unreachable', engine: true } // the engine could not dial the upstream (the platform's last 60 s of it)
-  const j = judgeHarness({ localUpstream: hf.localUpstream === true, desired: 'on', entryIntact: entryIntact(hf), entryWhy: 'entry-missing', attached: fwf.state === 'on', helper: 'ok', daemon: F.daemon.state, procs: fm.procs.map((p) => ({ pid: p.pid, startedAt: p.startedAt, trusted: p.trusted, reason: p.reason, negative: p.negative, start: p.start, forms: knownForms(hf, p) })), installedAt: hf.installedAt, cert: certOfForms([fm]), ...(fm.procs.length ? formRoutes(hf) : {}) }) // this form's own blocker is judged above; the others reach only its processes (the forms each may be)
+  const j = judgeHarness({ localUpstream: hf.localUpstream === true, desired: 'on', entryIntact: entryIntact(hf), entryWhy: entryWhy(hf), attached: fwf.state === 'on', helper: 'ok', daemon: F.daemon.state, procs: fm.procs.map((p) => ({ pid: p.pid, startedAt: p.startedAt, trusted: p.trusted, reason: p.reason, negative: p.negative, start: p.start, forms: knownForms(hf, p) })), installedAt: hf.installedAt, cert: certOfForms([fm]), ...(fm.procs.length ? formRoutes(hf) : {}) }) // this form's own blocker is judged above; the others reach only its processes (the forms each may be)
   const reason = (j.rows.find((r) => r.reason) || {}).reason ?? null
   if (reason === 'local-upstream' && j.captured !== true) return none(false, false, reason) // its config names only hosts on this machine: loopback never reaches the door (4.11 P6), trocar is off its path
   if (j.captured === false && reason === 'not-routed') return none(true, false, reason) // a process the door judges with a blocked form: it reaches the door, which forwards it unread (4.11 P11)
