@@ -11,7 +11,7 @@ import { collectorHome } from '../paths.mjs'
 import { caPaths } from './core/tls/ca-store.mjs'
 import { ROOT, checkProfile, certPem, pemToDer } from './core/tls/cert.mjs'
 import { rootIdOf, rootName, ROOT_SUBJECT, strayRoots } from '../off/root-store.mjs'
-import { readManifest, saveManifest, newManifest, applyJsonKey, applyTextEntry, writeOwnedFile, judgeOwned, sha256, notTrocars, samePath, markedWithoutRecord, MARKED_WITHOUT_RECORD } from './core/trust/journal.mjs'
+import { readManifest, saveManifest, newManifest, applyJsonKey, applyTextEntry, writeOwnedFile, judgeEntry, replaceable, retireEntry, inheritDirs, judgeOwned, sha256, notTrocars, samePath, markedWithoutRecord, MARKED_WITHOUT_RECORD } from './core/trust/journal.mjs'
 import { codeId } from '../version.mjs'
 import { installComplete, itemsOfPhase, undoByHand, OFF_VERSION } from '../off/manifest.mjs'
 import { writeStandalone } from '../off/standalone.mjs'
@@ -261,8 +261,17 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
     said(role, 'written', { path: file, harness })
   }
 
+  // 4.11 P4b: install's own item that is gone or no longer holds trocar's text is placed again, the one way back (on writes none, D55①): its record
+  // leaves first and the new one owns what the old one created — the same sequence as Linux's install (src/collector/install.mjs), every OS alike
+  function placed(planned, write) {
+    const j = judgeEntry({ manifest: m, planned, fs })
+    const retired = replaceable(j) ? retireEntry({ dir, manifest: m, entry: j.entry, now: now(), fs }) : null
+    const e = write()
+    if (e && retired) inheritDirs({ dir, manifest: m, entry: e, from: retired, fs })
+    return e
+  }
   function jsonKey(desc, file, keys, value) {
-    const e = applyJsonKey({ dir, manifest: m, harness: desc.name, phase: 'install', file, keys, value, home, now: now(), fs })
+    const e = placed({ harness: desc.name, kind: 'json-key', path: file, keys }, () => applyJsonKey({ dir, manifest: m, harness: desc.name, phase: 'install', file, keys, value, home, now: now(), fs }))
     said('config-key', e ? 'written' : 'intact', { path: file, keys, harness: desc.name })
   }
 
@@ -299,7 +308,8 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
         const file = path.join(pdir, hook.name), text = hook.text
         owned(file, 'plugin', desc.name, text, 0o644)
         if (!c.loader) return { state: 'placed' }
-        const e = applyTextEntry({ dir, manifest: m, harness: desc.name, phase: 'install', file: loader, edit: loaderEdit(c, file), home, now: now(), fs })
+        const edit = loaderEdit(c, file)
+        const e = placed({ harness: desc.name, kind: 'text', path: loader, format: edit.format, ...(edit.vars ? { vars: edit.vars } : { line: edit.line }) }, () => applyTextEntry({ dir, manifest: m, harness: desc.name, phase: 'install', file: loader, edit, home, now: now(), fs }))
         said('plugin-loader', e ? 'written' : 'intact', { path: loader, harness: desc.name })
         return { state: 'placed' }
       }
