@@ -19,7 +19,7 @@ import { pairs, wrap } from './text.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
 import { EVENT, CODE } from '../collector/core/codes.mjs'
 import { codeId, packageRoot, channelOf, setupHelperCommand } from '../version.mjs'
-import { CUT, daemonCode, replaceDaemon } from './replace-daemon.mjs'
+import { CUT, daemonCode, daemonSince, replaceDaemon } from './replace-daemon.mjs'
 import { printJson } from './json.mjs'
 
 const NEEDS_YES = 'Nothing was changed. Read the plan above, then run it again with --yes'
@@ -36,27 +36,38 @@ const COST = "While installed, programs you run trust certificates issued by thi
 const RISK = 'Any program running as you can ask trocar to issue a trusted certificate, but cannot copy the key. If you suspect misuse: trocar uninstall, then trocar install.'
 
 // 1.6 §3.2 step 5: why the answering collector is replaced → { from, why } | null. `why` 'code': it names another copy's code than this one's (`root`);
-// 'unit': it runs this code, but the login entry it was started from changes in this run (the environment it carries, the program it names): a daemon
-// keeps the entry it started with until it is started again. A collector that names no code is a build from before the first release (D67④) and is
-// left. Under `deps.keepDaemon` nothing is replaced: the update that runs this install replaces the collector itself right after it (§5.5 step 4)
+// 'unit': it runs this code, but not from the login entry this code renders (the environment it carries, the program it names): the entry changes in
+// this run, or it was written after the collector started (an earlier install whose replacement did not get through); a daemon keeps the entry it
+// started with until it is started again. A collector that names no code is a build from before the first release (D67④) and is left. Under
+// `deps.keepDaemon` nothing is replaced: the update that runs this install replaces the collector itself right after it (§5.5 step 4)
 async function staleDaemon({ platform, home, env, fs, deps, root, unit = null }) {
   if (deps.keepDaemon) return null
   const dir = path.join(home, '.trocar', 'collector')
   const running = await daemonCode({ platform, dir, env, fs, deps })
   if (typeof running !== 'string') return null
   if (running !== codeId(root)) return { from: running, why: 'code' }
+  const e = await entryOf({ platform, home, env, fs, deps, unit })
+  return e && (!e.current || e.newer === true) ? { from: running, why: 'unit' } : null
+}
+// the login entry on disk against the collector that answers → null (no entry, or none rendered) | { current: the bytes are what this code renders,
+// newer: written after the collector started (null when it does not say when it started) }
+async function entryOf({ platform, home, env, fs, deps, unit }) {
   if (!unit || typeof unit.text !== 'function') return null
-  let onDisk = null
-  try { onDisk = fs.readFileSync(unit.path, 'utf8') } catch { return null } // no entry on disk: the daemon was not started from one this run changes
+  const dir = path.join(home, '.trocar', 'collector')
+  let onDisk, mtime
+  try { onDisk = fs.readFileSync(unit.path, 'utf8'); mtime = fs.statSync(unit.path).mtimeMs } catch { return null } // no entry on disk: the collector was not started from one
   const { daemonEnv } = await import('../collector/install.mjs')
-  return onDisk !== unit.text(daemonEnv(env, dir).env) ? { from: running, why: 'unit' } : null
+  const since = await daemonSince({ platform, dir, env, fs, deps })
+  return { current: onDisk === unit.text(daemonEnv(env, dir).env), newer: Number.isFinite(since) ? mtime > since : null }
 }
 
 // 1.6 §3.2 step 5, after the login entry is up: the collector the plan named (`stale`) is replaced through the routine update uses; routing is not
-// touched (D61②). A collector this run started is on the new entry already. → null when it was left, else replaceDaemon's answer plus `replaced`
+// touched (D61②). A collector this run started is on the new entry already; for a changed entry, only when this run's entry is the one on disk (an
+// install that stopped before it wrote the entry leaves the collector as it is). → null when it was left, else replaceDaemon's answer plus `replaced`
 // and `why`; what went wrong is pushed on `problems` (exit 1, D38)
 async function replaceStale({ stale, dmn, platform, home, env, fs, deps, root, unit, problems }) {
   if (!stale || !dmn.up || dmn.started) return null
+  if (stale.why === 'unit') { const e = await entryOf({ platform, home, env, fs, deps, unit }); if (!e || !e.current || e.newer === false) return null }
   const before = problems.length
   const rep = await replaceDaemon({ by: 'install', env, home, platform, deps: { ...deps, unit }, dir: path.join(home, '.trocar', 'collector'), root, fs, problems, sameCode: stale.why === 'unit' })
   return { ...rep, why: stale.why, replaced: rep.restarted && !rep.elsewhere && problems.length === before }

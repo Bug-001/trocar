@@ -75,10 +75,17 @@ export async function entryStartsThisCopy({ home, env, platform, deps, fs }) {
  *  resolved the one way every caller resolves it (the 2026-10-11 incident): nothing platform-specific here. */
 export async function daemonCode({ platform, dir, env, fs, deps }) {
   if (deps.daemonCode) return await deps.daemonCode()
+  const answer = await statusOf({ platform, dir, env, fs })
+  return (answer && typeof answer.code === 'string' && answer.code) || null
+}
+/** When the answering collector started (its GET /status `since`, 1.6 C.3), as ms since the epoch; NaN when it does not say. */
+export async function daemonSince({ platform, dir, env, fs, deps }) {
+  if (deps.daemonSince) return Date.parse(await deps.daemonSince())
+  const answer = await statusOf({ platform, dir, env, fs })
+  return Date.parse(answer && answer.since)
+}
+const statusOf = async ({ platform, dir, env, fs }) => {
   const ep = controlEndpointFor({ platform, dir, env, fs })
   if (!ep.socketPath) return null
-  try {
-    const answer = await ep.request({ socketPath: ep.socketPath, method: 'GET', path: '/status', timeoutMs: 5000 })
-    return (answer && typeof answer.code === 'string' && answer.code) || null
-  } catch { return null }
+  try { return await ep.request({ socketPath: ep.socketPath, method: 'GET', path: '/status', timeoutMs: 5000 }) } catch { return null }
 }
