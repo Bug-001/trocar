@@ -50,9 +50,10 @@ export function headSha(dir) {
 export const codeIdOf = (version, sha) => (sha ? `${version}+${String(sha).slice(0, 7)}` : version)
 
 // The code itself, outside a git checkout: sha256 over every file under bin/ and src/ that ships — each file's path from `root` and its bytes, in path
-// order — leaving out dotfiles and what a `.gitignore` there names (a build's outputs: the Linux helper's objects, header and binary), so a build or
-// the OS writing beside the code never changes it. null when there is none to read. Asked once per root and process; a read that failed is the plain
+// order — leaving out dotfiles and what a `build-outputs` file there names (a build's outputs: the Linux helper's objects, header and binary; a file
+// every channel ships, where npm packs no .gitignore), and what a `.gitignore` names, so a build or the OS writing beside the code never changes it. null when there is none to read. Asked once per root and process; a read that failed is the plain
 // version for that process (an install then sees other code and replaces the collector: the safe way).
+const IGNORE_FILES = ['build-outputs', '.gitignore']
 const byName = (a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
 // a .gitignore's lines (blank and # skipped, no negation) → a test of a path relative to its directory: `*` is any run of non-slash characters
 const ignoredBy = (text) => {
@@ -60,15 +61,15 @@ const ignoredBy = (text) => {
     .map((l) => new RegExp(`^${l.replace(/^\//, '').replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*')}(/.*)?$`))
   return (rel) => res.some((re) => re.test(rel))
 }
-// the walk once, as the reads it needs: `yield ['dir', p]` → its entries (null when unreadable), `yield ['file', p]` → its bytes (a .gitignore: null
-// when there is none)
+// the walk once, as the reads it needs: `yield ['dir', p]` → its entries (null when unreadable), `yield ['file', p]` → its bytes
 function* hashSteps(root) {
   const h = crypto.createHash('sha256')
   let n = 0
   function* walk(rel, rules) {
     const ents = yield ['dir', path.join(root, rel)]
     if (!ents) return
-    const here = ents.some((e) => e.name === '.gitignore' && e.isFile()) ? [...rules, { at: rel, test: ignoredBy(yield ['file', path.join(root, rel, '.gitignore')]) }] : rules
+    let here = rules
+    for (const name of IGNORE_FILES) if (ents.some((e) => e.name === name && e.isFile())) here = [...here, { at: rel, test: ignoredBy(yield ['file', path.join(root, rel, name)]) }]
     for (const e of ents.sort(byName)) {
       const r = `${rel}/${e.name}`
       if (e.name.startsWith('.') || here.some((g) => g.test(r.slice(g.at.length + 1)))) continue
@@ -98,9 +99,11 @@ function codeHash(root) {
   hashes.set(root, out)
   return out
 }
+/** The version in the package.json at `root`; 0.0.0 when it has none. */
+const versionAt = (root) => JSON.parse(read(path.join(root, 'package.json')) || '{}').version || '0.0.0'
 /** Without holding the event loop, for a daemon that asks it as it starts (D62①): the same id codeId gives. */
 export async function codeIdAsync(root = packageRoot()) {
-  const version = JSON.parse(read(path.join(root, 'package.json')) || '{}').version || '0.0.0'
+  const version = versionAt(root)
   const dir = gitDir(root)
   const sha = dir && headSha(dir)
   if (sha || hashes.has(root)) return codeIdOf(version, sha || hashes.get(root))
@@ -121,7 +124,7 @@ export async function codeIdAsync(root = packageRoot()) {
 
 /** This code's version: `0.1.0+1a2b3c4` — HEAD in a git checkout, a hash of the code outside one; `0.1.0` when neither reads. */
 export function codeId(root = packageRoot()) {
-  const version = JSON.parse(read(path.join(root, 'package.json')) || '{}').version || '0.0.0'
+  const version = versionAt(root)
   const dir = gitDir(root)
   return codeIdOf(version, (dir && headSha(dir)) || codeHash(root))
 }

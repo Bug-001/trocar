@@ -39,10 +39,22 @@ test('outside a git checkout the code id is the version and 7 hex of the code: t
   const IGNORE = { 'src/arch/.gitignore': '# build outputs\nbpf/*.o\nbpf/vmlinux.h\nhelper\n' }
   const built = codeId(tree({ ...CODE, ...IGNORE }))
   assert.equal(codeId(tree({ ...CODE, ...IGNORE, 'src/arch/bpf/redirect.o': 'ELF', 'src/arch/bpf/vmlinux.h': '', 'src/arch/helper': 'ELF', 'src/.DS_Store': 'x', 'src/off/.a.mjs.swp': 'x' })), built, 'a build beside the code: the same id')
+  // a packed copy carries no .gitignore (npm never packs one): the outputs named in the shipped build-outputs file keep the id there too
+  const PACKED = { 'src/arch/build-outputs': 'bpf/*.o\nbpf/vmlinux.h\nhelper\n' }
+  const packed = codeId(tree({ ...CODE, ...PACKED }))
+  assert.equal(codeId(tree({ ...CODE, ...PACKED, 'src/arch/bpf/redirect.o': 'ELF', 'src/arch/bpf/vmlinux.h': '', 'src/arch/helper': 'ELF' })), packed, 'a helper build in a packed copy: the same id')
   // every file that ships counts, whatever its name: a shell shim with no extension, the board's page and styles
   for (const [rel, text] of [['src/shims/kimi', '#!/bin/sh\n'], ['src/web/index.html', '<p>'], ['src/web/a.css', 'p{}'], ['src/arch/bpf/redirect.c', 'int x;']]) {
     assert.notEqual(codeId(tree({ ...CODE, ...IGNORE, [rel]: text })), built, `${rel}: a file that ships changes the id`)
   }
+})
+
+test('every build-outputs file names what the .gitignore beside it names (one for every channel, one for git)', () => {
+  const pats = (t) => t.split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#')).sort()
+  const src = new URL('../../src/', import.meta.url)
+  const found = fs.readdirSync(src, { recursive: true }).filter((rel) => path.basename(rel) === 'build-outputs')
+  assert.ok(found.length >= 1, 'the Linux helper names its outputs')
+  for (const rel of found) assert.deepEqual(pats(fs.readFileSync(new URL(rel, src), 'utf8')), pats(fs.readFileSync(new URL(path.join(path.dirname(rel), '.gitignore'), src), 'utf8')), rel)
 })
 
 test('the daemon\'s way, without holding the event loop, gives the same id', async () => {
