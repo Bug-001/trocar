@@ -163,10 +163,12 @@ function agentTech(row, h) {
     if (t.routing) tech.push(pair('routing', has(ROUTING, t.routing) ? ROUTING[t.routing] : String(t.routing)))
     const byId = new Map(list(t.nodes).filter((n) => n && n.id != null).map((n) => [n.id, n]))
     const chains = new Map() // one row per distinct chain (adjacent repeats said once), with the forms that take it
+    // a hop is marked inferred when it is, or when the edge that reaches it is (1.6 C.3 `inferred`: the text marks it)
+    const edgeInferred = new Set(list(t.edges).filter((e) => e && e.inferred === true).map((e) => `${e.from}\u0000${e.to}`))
     for (const b of list(t.branches)) {
-      const nodes = list(b && b.path).map((id) => {
-        const n = byId.get(id)
-        return n && n.name != null ? `${redactUrlCredentials(String(n.name))}${n.inferred ? ` ${inferred}` : ''}` : `unknown${n && n.unknown && n.unknown.reason ? ` · ${n.unknown.reason}` : ''}`
+      const nodes = list(b && b.path).map((id, i, path) => {
+        const n = byId.get(id), inf = n && (n.inferred || (i > 0 && edgeInferred.has(`${path[i - 1]}\u0000${id}`)))
+        return n && n.name != null ? `${redactUrlCredentials(String(n.name))}${inf ? ` ${inferred}` : ''}` : `unknown${n && n.unknown && n.unknown.reason ? ` · ${n.unknown.reason}` : ''}`
       }).filter((x, i, a) => i === 0 || x !== a[i - 1])
       if (!nodes.length) continue
       const chain = nodes.join(' → ')

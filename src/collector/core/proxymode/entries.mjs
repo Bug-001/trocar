@@ -31,6 +31,16 @@ export const LOOPBACK = LOOPBACK_HOSTS
 export const pacPath = (token) => `/${createHmac('sha256', String(token)).update('trocar.pac').digest('hex').slice(0, 32)}/trocar.pac`
 /** The PAC address `on` writes for a door: the door's origin, the install's key in its path (P10). Also what its records are tagged with. */
 export const pacAddress = (token, door) => new URL(pacPath(token), door).href
+/** P10: a PAC route's record tagged with another address than the one `on` writes now (the key changed, or a version before the key wrote it) — trocar's
+ *  stale value while the entry still holds it. The tag is held clear (`door`) or as its fingerprint (`door_sha256`); the door's origin is in the address it
+ *  wrote. A record that wrote no address (the applied id) says nothing. One rule for `status` and the per-form facts alike. */
+export function pacStale(e, route, token) {
+  const fp = e.door_sha256 ?? (typeof e.door === 'string' ? sha256(e.door) : null)
+  if (!route || route.value !== 'pac-url' || !token || !fp) return false
+  let origin
+  try { origin = new URL(typeof e.door === 'string' ? e.door : e.value).origin } catch { return false }
+  return fp !== sha256(pacAddress(token, origin))
+}
 // a hostTree form's note (CM31): it names the form, since status prints it under the harness, beside forms that run on their own
 const hostTreeNote = (form) => `${form} runs inside another program: every other extension there connects through trocar too, and trocar passes those connections on without capturing them`
 // P6 · P9 · P10: a route that sends loopback direct — a class 1 entry with its NO_PROXY, a plugin hook rendered with the agent's NO_PROXY
