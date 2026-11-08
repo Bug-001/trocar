@@ -27,7 +27,7 @@ export const responses = {
     const usage = { input_tokens: c.total, input_tokens_details: { cached_tokens: c.cached }, output_tokens: p.outputTokens, output_tokens_details: { reasoning_tokens: 0 }, total_tokens: c.total + p.outputTokens }
     const response = (status, output, u = null) => ({ id, object: 'response', created_at, status, model: p.model, output, usage: u, error: null, incomplete_details: null })
     // Codex's remote compaction ends its input with a compaction_trigger and wants one compaction item back
-    const items = p.compaction ? [compactionItem(p)] : [p.thinking && reasoningItem(p), messageItem(p), p.tool && functionCallItem(p)].filter(Boolean)
+    const items = p.compaction ? [compactionItem(p)] : [p.thinking && reasoningItem(p), messageItem(p), ...p.calls.map(functionCallItem)].filter(Boolean)
     if (!body.stream) return jsonReply(200, response('completed', items.map((i) => i.done), usage), headers)
 
     let seq = 0
@@ -82,13 +82,13 @@ function compactionItem(p) {
   return { done, added: done, inner: () => [] }
 }
 
-function functionCallItem(p) {
-  const done = { id: rid('fc_mock_'), type: 'function_call', status: 'completed', call_id: rid('call_mock_'), name: p.tool.name, arguments: p.toolArgs }
+function functionCallItem(c) {
+  const done = { id: rid('fc_mock_'), type: 'function_call', status: 'completed', call_id: rid('call_mock_'), name: c.name, arguments: c.args }
   return {
     done, added: { ...done, status: 'in_progress', arguments: '' },
     inner: (at) => [
-      ...splitEvery(p.toolArgs, 16).map((delta) => ['response.function_call_arguments.delta', { ...at, delta }]),
-      ['response.function_call_arguments.done', { ...at, arguments: p.toolArgs }],
+      ...splitEvery(c.args, 16).map((delta) => ['response.function_call_arguments.delta', { ...at, delta }]),
+      ['response.function_call_arguments.done', { ...at, arguments: c.args }],
     ],
   }
 }
@@ -108,19 +108,19 @@ export const chat = {
     const c = prefixUsage(ctx, 'chat', body)
     const usage = { prompt_tokens: c.total, completion_tokens: p.outputTokens, total_tokens: c.total + p.outputTokens, prompt_tokens_details: { cached_tokens: c.cached }, prompt_cache_hit_tokens: c.cached, prompt_cache_miss_tokens: c.total - c.cached }
     const base = { id, created, model: p.model, system_fingerprint: 'fp_mock' }
-    const call = p.tool && { id: rid('call_mock_'), type: 'function', function: { name: p.tool.name, arguments: p.toolArgs } }
-    const finish = call ? 'tool_calls' : 'stop'
+    const calls = p.calls.map((c) => ({ id: rid('call_mock_'), type: 'function', function: { name: c.name, arguments: c.args } }))
+    const finish = calls.length ? 'tool_calls' : 'stop'
     if (!body.stream) {
       // reasoning_content is DeepSeek's (and Kimi's / GLM's) field for thinking text
-      const message = { role: 'assistant', content: p.text, ...(p.thinking ? { reasoning_content: p.thinking } : {}), ...(call ? { tool_calls: [call] } : {}) }
+      const message = { role: 'assistant', content: p.text, ...(p.thinking ? { reasoning_content: p.thinking } : {}), ...(calls.length ? { tool_calls: calls } : {}) }
       return jsonReply(200, { ...base, object: 'chat.completion', choices: [{ index: 0, message, logprobs: null, finish_reason: finish }], usage }, headers)
     }
     const chunk = (delta, finish_reason = null) => `data: ${JSON.stringify({ ...base, object: 'chat.completion.chunk', choices: [{ index: 0, delta, logprobs: null, finish_reason }] })}\n\n`
     const pieces = [chunk({ role: 'assistant', content: '' }), ...(p.thinkingParts || []).map((reasoning_content) => chunk({ reasoning_content })), ...p.parts.map((content) => chunk({ content }))]
-    if (call) {
-      pieces.push(chunk({ tool_calls: [{ index: 0, ...call, function: { name: call.function.name, arguments: '' } }] }))
-      for (const a of splitEvery(p.toolArgs, 16)) pieces.push(chunk({ tool_calls: [{ index: 0, function: { arguments: a } }] }))
-    }
+    calls.forEach((call, index) => {
+      pieces.push(chunk({ tool_calls: [{ index, ...call, function: { name: call.function.name, arguments: '' } }] }))
+      for (const a of splitEvery(call.function.arguments, 16)) pieces.push(chunk({ tool_calls: [{ index, function: { arguments: a } }] }))
+    })
     pieces.push(chunk({}, finish))
     if (body.stream_options?.include_usage) pieces.push(`data: ${JSON.stringify({ ...base, object: 'chat.completion.chunk', choices: [], usage })}\n\n`)
     pieces.push('data: [DONE]\n\n')
