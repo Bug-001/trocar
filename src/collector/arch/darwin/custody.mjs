@@ -44,7 +44,7 @@ export function installHelper({ dest, interactive, run = null, env = process.env
   let installed = null
   try { installed = sha256(fs.readFileSync(dest)) } catch (e) { if (e.code !== 'ENOENT') throw e }
   if (installed === sha256(bytes)) return { replaced: false, why: 'same' }
-  if (installed !== null && !interactive) return { replaced: false, kept: true, why: `the installed ${NATIVE.signHelper} keeps signing; replacing it makes macOS ask once to let the new one use trocar's key, so run trocar install in a terminal to replace it` }
+  if (installed !== null && !interactive) return { replaced: false, kept: true, why: `the installed ${NATIVE.signHelper} keeps signing; replacing it makes macOS ask once to let the new one use trocar's key, so run trocar install from a Terminal in your desktop session to replace it (an ssh login cannot answer it)` }
   fs.mkdirSync(path.dirname(dest), { recursive: true, mode: 0o700 })
   const put = (data) => { // <dest>.new-* renamed over dest: never an in-place overwrite
     const tmp = `${dest}.new-${crypto.randomBytes(6).toString('hex')}`
@@ -67,5 +67,5 @@ export function installHelper({ dest, interactive, run = null, env = process.env
   if (Buffer.isBuffer(r)) return { replaced: true, prompted: 'signed' }
   put(old) // the new copy cannot use the key: the old one goes back, and keeps signing
   const why = r === 'unavailable' ? 'this session cannot show the keychain\'s question (no GUI session, or the keychain is locked)' : `the keychain did not let it sign (${String((r && r.message) || r)})`
-  return { replaced: false, kept: true, why: `the new ${NATIVE.signHelper} was not given trocar's key: ${why}, so the installed one stays and keeps signing. Run trocar install in a terminal and choose Always Allow when macOS asks` }
+  return { replaced: false, kept: true, why: `the new ${NATIVE.signHelper} was not given trocar's key: ${why}, so the installed one stays and keeps signing. Run trocar install from a Terminal in your desktop session (an ssh login cannot answer it) and choose Always Allow when macOS asks` }
 }

@@ -538,8 +538,8 @@ export async function turnOn(opts = {}) {
       refused.push({ harness: d.name, reason: CODE.setupNeeded, why: [...new Set(s.missing.map((x) => SETUP_WHY[x.what]))].join('; '), command: 'trocar install' })
       return true
     }).map((d) => d.name)
-    const plan = await planOn({ home, env, ids, osName, harnesses, scan, match, arch, roots, unit: null, userFilesFor, fs, now, judge })
-    for (const x of plan.unwritable || []) refused.push({ harness: x.harness, reason: CODE.configUnreadable, why: x.reason }) // its own file cannot take the entry: refused alone // D61: the login entry is `install`'s and `on` never writes it, so the writing side is handed no unit at all
+    const plan = await planOn({ home, env, ids, osName, harnesses, scan, match, arch, roots, unit: null, userFilesFor, fs, now, judge }) // D61: the login entry is `install`'s and `on` never writes it, so the writing side is handed no unit at all
+    for (const x of plan.unwritable || []) refused.push({ harness: x.harness, reason: CODE.configUnreadable, why: x.reason }) // its own file cannot take the entry: refused alone
     // D55⑥ / override #15: `on` never writes a certificate, so it never installs silently — no install record, no on (macOS / Windows: turnOnModel)
     // 附录 C.1: the refusal's code lives in `error`, the one place a client looks (never a top-level `code`)
     if (!isModelOs(osName) && !installComplete(plan._.prior)) { const message = 'certificates are not installed. Run: trocar install'; return { receipt: unwritten({ ...fresh(), ok: false, error: { code: CODE.certNotInstalled, message }, notes: [message] }), manifest: plan._.prior, plan, exit: 1 } }

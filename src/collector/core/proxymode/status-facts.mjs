@@ -64,7 +64,7 @@ const carriedForms = (pm, os, ctx) => formsHere(pm, os, ctx).filter((f) => { // 
 /** Whether the merged bundle install placed for a replace key with `merges` lacks a CA the files those settings name now hold → null | 'bundle-lacks-ca'
  *  (4.11 P4b). The sources are read as install reads them (readSrc over the caller's sources ctx); a source that cannot be read, a relative path, and a
  *  record with no `user_fps` are not judged. Fingerprints, never paths: a CA not among `user_fps` is looked for in the bundle itself (trocar's root, a
- *  CA that is also a Node root), read only then. Never throws. */
+ *  CA that is also a Node root), read only then. A user's file never makes it throw; a fault in trocar's own code (a ReferenceError, a TypeError) does. */
 function bundleGap(desc, c, inst, ctx, fs) {
   const b = inst.find((i) => i.harness === desc.name && i.role === 'bundle')
   if (!b || !Array.isArray(b.user_fps)) return null
