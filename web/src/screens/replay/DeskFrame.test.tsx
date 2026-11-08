@@ -10,7 +10,7 @@ beforeAll(() => { globalThis.ResizeObserver = class { observe() {} unobserve() {
 afterEach(() => { cleanup(); document.body.replaceChildren(); vi.unstubAllGlobals() })
 
 function frame(state: object = {}) {
-  const s = { project: 'p', id: 'i', view: { lo: 0, hi: 0 }, ...state }
+  const s = { project: 'p', id: 'i', span: { lo: 0, hi: 0 }, ...state }
   const handed: Els[] = []
   const desk = reactView(s, (E) => { handed.push(E) }, () => {})
   document.body.append(desk.root)
