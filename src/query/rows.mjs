@@ -35,12 +35,26 @@ export const namesStamp = (home, fs) => { try { return fs.readdirSync(path.join(
 // 12 B a slot holds right after its array grew (1.5× its length); a kinship fingerprint in an open keyed session's set 22.5 B
 // (2026-10-30, node 22; charged once per part that holds the set, even when parts share it).
 // OPEN_HEAP: an open chain with its tail and its items, measured about 664 B (a keyed entry holds neither and is charged the same).
-const PART_HEAP = 450, OPEN_HEAP = 640, SESSION_HEAP = 260, POSITION_HEAP = 12, FP_HEAP = 28;
+// TAIL_HEAP: a chain held for extension only (its tail; 3.4 合成键 有界), copied at a part's end, measured 110 B (2026-11-08, node 22).
+const PART_HEAP = 450, OPEN_HEAP = 640, TAIL_HEAP = 140, SESSION_HEAP = 260, POSITION_HEAP = 12, FP_HEAP = 28;
 const lists = warmCache({ max: 4, cost: (v) => v.heap, steady: true });
 const copyOpen = (open) => new Map([...open].map(([k, v]) => [k, { ...v }])); // the rule moves `lastMs` in place (and replaces `fp`)
 // the index keeps a call's kinship fingerprints as one space-joined string (index-build.mjs `kin_fp` / `kin_probe`; `kin_chain` the same way)
 const fpOf = (s) => (s == null ? null : s ? s.split(' ').map(Number) : []);
 const lineOf = (id) => Number(String(id).split(':').pop());
+const assignRow = (assign, r) => (r.synth_hash != null || r.kin_fp != null ? assign({ harness: r.harness_id, ms: Date.parse(r.ts || ''), key: r.session_key,
+  hash: r.synth_hash, fp: fpOf(r.kin_fp), probe: fpOf(r.kin_probe), late: r.kin_late, chain: r.kin_chain ? r.kin_chain.split(' ') : [], items: r.kin_items ? r.kin_items.split(' ') : [], mark: r.kin_mark === true }) : null);
+// A part keeps the rule's state at its end (`open`) only where a build resumes: the last part (the live segment grows from its own state)
+// and the one before it (a new segment, or the live one renamed or rewritten, starts from it), and every KEEP-th part; a build that starts
+// further back replays the rule from the nearest kept state (stateAt; at most KEEP - 1 parts, read from their warm index views)
+const KEEP = 16, kept = (j, n) => j >= n - 2 || j % KEEP === KEEP - 1;
+function stateAt(parts, j) {
+  let m = j - 1;
+  while (m >= 0 && !parts[m].open) m--;
+  const open = copyOpen(m >= 0 ? parts[m].open : new Map()), assign = createSynthAssigner({ open });
+  for (let q = m + 1; q < j; q++) for (let k = 0; k < parts[q].view.length; k++) assignRow(assign, parts[q].view.at(k));
+  return open;
+}
 
 /**
  * indexRows({home, fs, errors, progress, ease}) → a read-only row list (length, at, iteration, find, filter / map / slice → arrays) of
@@ -82,27 +96,29 @@ function rowList(segs, old) {
     if (!v) { index.set(sid, (v = { a: [], n: 0 })); mine.add(v); } else if (!mine.has(v)) { index.set(sid, (v = { a: v.a.length === v.n ? v.a : v.a.slice(0, v.n), n: v.n })); mine.add(v); }
     v.a.push(at); v.n++; slots++;
   };
+  const shed = (q) => { if (q >= 0 && parts[q].open && !kept(q, segs.length)) parts[q] = { ...parts[q], open: null }; }; // a copy: the old list shares the part
   if (!extend) for (const p of parts) for (let k = 0; k < p.end - p.start; k++) { const sid = cellAt(p.d, 0, k); if (sid) place(sid, p.start + k); }
   for (let j = i; j < segs.length; j++) {
     const { segment, records: view, entry } = segs[j], was = grown && j === i ? old.parts[i] : null;
     const start = was ? was.start : j ? parts[j - 1].end : 0, k0 = was ? was.end - was.start : 0;
-    const open = copyOpen(was ? was.open : j ? parts[j - 1].open : new Map()), assign = createSynthAssigner({ open });
+    const open = was ? copyOpen(was.open) : stateAt(parts, j), assign = createSynthAssigner({ open });
     const derived = [];
     for (let k = k0; k < view.length; k++) {
       const r = view.at(k);
-      const got = r.synth_hash != null || r.kin_fp != null ? assign({ harness: r.harness_id, ms: Date.parse(r.ts || ''), key: r.session_key,
-        hash: r.synth_hash, fp: fpOf(r.kin_fp), probe: fpOf(r.kin_probe), late: r.kin_late, chain: r.kin_chain ? r.kin_chain.split(' ') : [], items: r.kin_items ? r.kin_items.split(' ') : [], mark: r.kin_mark === true }) : null;
+      const got = assignRow(assign, r);
       const sid = r.session_key ?? (got && got.key) ?? null;
       // a keyed call's chain (3.4 带键会话里的消息链) is no synthesized key: the session stays as it was
       derived.push({ session_id: sid, synthesized: !!got && got.key != null && !got.kin, lane_key: (got && got.lane) ?? null });
       if (sid) place(sid, start + k); // a row with no session id is in no group (sessionGroups)
     }
     parts.push({ segment, entry, view, d: was ? was.d.concat(derived) : rowTable(derived), start, end: start + view.length, open });
+    shed(j - 1);
   }
+  for (let q = 0; q < parts.length; q++) shed(q);
   const n = parts.length ? parts[parts.length - 1].end : 0;
   const rows = new RowList(parts, n, index);
   let heap = heapOf(...parts.map((p) => p.d)) + SESSION_HEAP * index.size + POSITION_HEAP * slots;
-  for (const p of parts) { heap += PART_HEAP + OPEN_HEAP * p.open.size; for (const v of p.open.values()) if (v.fp) heap += FP_HEAP * v.fp.size; }
+  for (const p of parts) { heap += PART_HEAP; if (p.open) for (const v of p.open.values()) heap += v.fp ? OPEN_HEAP + FP_HEAP * v.fp.size : TAIL_HEAP; }
   // the member arrays of the list before, while something holds them: a session that got no rows keeps its array (3.5:45), a grown
   // one is that array and its new members (sessionGroups below)
   const was = extend && built.get(old.rows);

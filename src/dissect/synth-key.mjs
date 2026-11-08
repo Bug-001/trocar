@@ -1,7 +1,7 @@
 // src/dissect/synth-key.mjs — synthesized session keys (RFC 3.4 Plan 合成键; the default rule is gate G11,
 // to be checked against a lab capture). For a harness whose table row says
 // `synth: true` (Hermes on a custom endpoint; Kimi without a body key), a keyless inference call joins the open message
-// chain it extends among the calls of the same harness and the same system-prompt hash within SYNTH_GAP_MS (one chain =
+// chain it extends among the calls of the same harness and the same system-prompt hash (within SYNTH_TTL_MS; its other steps SYNTH_GAP_MS) (one chain =
 // one session, so concurrent agents with one system text stay apart); a history its harness's compaction rewrote joins
 // the chain the compaction was tied to; otherwise it opens a new one. pid and connection are NOT inputs (3.4 关键区分:
 // one Hermes gateway serves many tasks). Callers feed records in file order; the board and the ETL both read the
@@ -11,6 +11,9 @@ import { createHash } from 'node:crypto';
 import { harnessOf, sessionKeyOf, bodyOf, hintsOf } from './harnesses.mjs';
 
 export const SYNTH_GAP_MS = 30 * 60 * 1000;
+// step 2 (extension) has no window: a chain stays open for it SYNTH_TTL_MS after its last call, at most SYNTH_CAP chains per harness
+// (3.4 有界): twice the most chains one harness kept open in any 24 h of a real capture (pi, 510), rounded up to a power of two
+export const SYNTH_TTL_MS = 24 * 60 * 60 * 1000, SYNTH_CAP = 1024;
 
 const partsOf = (c) => (typeof c === 'string' ? [c]
   : Array.isArray(c) ? c.map((p) => (p && typeof p === 'object' ? (typeof p.text === 'string' ? p.text : '') : String(p ?? ''))) : []);
@@ -80,7 +83,7 @@ function fingerprints(texts, cap) {
 // (one assistant message and N parallel tool results), so a turn costs one hash. At most CHAIN_K, oldest first. `items`: the last RECENT
 // items each by its own hash: a harness edits older items in place or drops turns, which breaks every cumulative hash after it; the items it
 // did not touch stay as they were. It may be the tool results or the model's messages that change, so all count (step 3).
-const CHAIN_K = 12, TAIL = 4, CHAIN_CAP = 32, RECENT = 12, MIN_ITEMS = 2, ENDS = 2;
+const CHAIN_K = 12, TAIL = 4, RECENT = 12, MIN_ITEMS = 2, ENDS = 2;
 const h16 = (s) => createHash('sha256').update(s, 'utf8').digest('hex').slice(0, 16);
 const bare = (k, v) => (k === 'cache_control' ? undefined : v);
 // the replacer's bytes, paid only when the key is there: a key always serializes as `"cache_control"`; a string holding it is a false hit, re-encoded
@@ -161,21 +164,28 @@ function compactionRequest(rec, row, hint) {
 /** The rule itself (gate G11), over those facts in the order the calls were captured → {key, kin, lane?} | null. Every call adds its
  *  fingerprints to its session's entry; a keyed call gets nothing else (null), except one with a hash: steps 2-4 below, among the
  *  chains of its key and system-prompt hash, give its chain's name as `lane` ({key: null, kin: false, lane}; 3.4 带键会话里的消息链). A keyless call, among the open chains of its
- *  harness and system-prompt hash last seen within `gapMs`:
+ *  harness and system-prompt hash last seen within `gapMs` (step 2: within SYNTH_TTL_MS):
  *  1. with a probe, joins the session of its harness — keyed, or a chain of another system-prompt group — that shares the most
  *     fingerprints with it (at least MIN_SHARED; a tie → the later last call) — kin: true; a chain so found is `pending`;
- *  2. else the chain whose tail sits latest in its own chain (a tie → the later last call);
+ *  2. else the chain whose tail sits latest in its own chain (a tie → the later last call), however long ago its last call;
  *  3. else, among the `pending` chains (and every chain when it carries its harness's marker), the one sharing the most
  *     fingerprints (at least MIN_SHARED; a tie → the later last call): its rewritten history replaces the chain's tail. Without the
  *     marker only the `late` fingerprints count: a new agent's first user text (one system text, a shared brief) is no rewrite;
- *  4. else a new chain, a new session (at most CHAIN_CAP per group: the oldest goes). */
+ *  4. else a new chain, a new session (at most SYNTH_CAP chains per harness: the oldest goes). */
 export function createSynthAssigner({ gapMs = SYNTH_GAP_MS, open = new Map() } = {}) {
   // `${harness}\0${hash}\0${key}` → { key, lastMs, fp, tail, pending }; `\u0001${harness}\0${key}` → { key, lastMs, fp }; a keyed
   // session's chains `\u0002${harness}\0${session key}\0${hash}\0${chain}` as the first, without fp (fp: a
   // Set, replaced, never mutated, so a shallow copy of an entry is a snapshot). A caller that resumes the rule part-way
   // (src/query/rows.mjs) hands in the state it saved.
   const mine = (g, harness) => g.startsWith(harness + '\0') || g.startsWith('\u0001' + harness + '\0') || g.startsWith('\u0002' + harness + '\0');
-  const prune = (harness, ms) => { for (const [g, e] of open) if (mine(g, harness) && ms - e.lastMs > 2 * gapMs) open.delete(g); };
+  // past 2 × gapMs a chain keeps only what step 2 reads (its tail), until SYNTH_TTL_MS; a keyed entry goes, and a chain with no tail
+  const prune = (harness, ms) => {
+    for (const [g, e] of open) {
+      if (!mine(g, harness) || ms - e.lastMs <= 2 * gapMs) continue;
+      if (e.tail == null || ms - e.lastMs > SYNTH_TTL_MS) open.delete(g);
+      else if (e.items || e.fp) open.set(g, { key: e.key, lastMs: e.lastMs, tail: e.tail });
+    }
+  };
   const grow = (fp, add) => {
     let next = fp || new Set();
     for (const x of add || []) if (!next.has(x)) { if (next === fp) next = new Set(fp); next.add(x); }
@@ -214,14 +224,14 @@ export function createSynthAssigner({ gapMs = SYNTH_GAP_MS, open = new Map() } =
   // steps 2-4 among the chains whose entry names start with `own`
   function chainIn(own, facts) {
     const { harness, ms } = facts, chain = facts.chain || [];
-    const live = [];
-    for (const [g, e] of open) if (g.startsWith(own) && Math.abs(ms - e.lastMs) <= gapMs) live.push(e);
+    const live = [], reach = [];
+    for (const [g, e] of open) if (g.startsWith(own) && Math.abs(ms - e.lastMs) <= SYNTH_TTL_MS) { reach.push(e); if (Math.abs(ms - e.lastMs) <= gapMs) live.push(e); }
     const join = (e) => {
       e.tail = chain.length ? chain[chain.length - 1] : null; e.items = facts.items; e.lastMs = Math.max(e.lastMs, ms); e.fp = grow(e.fp, facts.fp); e.pending = false;
       return { key: e.key, kin: false };
     };
     let best = null, bestAt = -1;
-    for (const e of live) {
+    for (const e of reach) {
       const at = e.tail == null ? -1 : chain.lastIndexOf(e.tail);
       if (at >= 0 && (at > bestAt || (at === bestAt && e.lastMs > best.lastMs))) { best = e; bestAt = at; }
     }
@@ -258,8 +268,8 @@ export function createSynthAssigner({ gapMs = SYNTH_GAP_MS, open = new Map() } =
     let key = base;
     for (let i = 2; open.has(own + key); i++) key = `${base}-${i}`;
     let oldest = null, count = 0;
-    for (const [g, e] of open) if (g.startsWith(own)) { count++; if (!oldest || e.lastMs < oldest[1].lastMs) oldest = [g, e]; }
-    if (count >= CHAIN_CAP) open.delete(oldest[0]);
+    for (const [g, e] of open) if ('tail' in e && mine(g, harness)) { count++; if (!oldest || e.lastMs < oldest[1].lastMs) oldest = [g, e]; }
+    if (count >= SYNTH_CAP) open.delete(oldest[0]);
     open.set(own + key, { key, lastMs: ms, fp: grow(null, facts.fp), tail: chain.length ? chain[chain.length - 1] : null, items: facts.items, pending: false });
     return { key, kin: false };
   }
