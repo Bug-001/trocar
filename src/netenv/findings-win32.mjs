@@ -11,6 +11,8 @@ const trocar = (c, run) => ({ run, shell: c.sh })
 const ps = (run) => ({ run, shell: 'powershell' })
 const gui = (run) => ({ run, shell: 'gui' })
 const unknownValue = (what, reason) => `unknown ${what} (${reason})`
+// turning the harness off is the other way out, not a step after `on`
+const stopInstead = (c) => gui(`Or, to stop capturing ${c.h}: trocar off ${c.h}`)
 /** The port check (4.8 §10.4: the one form, `netstat -ano -p TCP | findstr ":<端口>"`). */
 const netstat = (port) => (Number.isInteger(port) ? ps(`netstat -ano -p TCP | findstr ":${port}"`) : gui('Run netstat -ano -p TCP and look for the port; trocar status prints it'))
 const REG_QUERY_PROXY = 'reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyEnable'
@@ -58,7 +60,7 @@ export const FINDINGS_WIN32 = {
       return [
         gui(w.detail === 'credentials-in-system-proxy' ? 'Take the login out of your system proxy address' : 'Write it as http://host:port or socks5://host:port'),
         gui(setProxyText(c.h, c.fm && c.fm.entryPlace, unknownValue('proxy address', 'absent'))),
-        trocar(c, `trocar on ${c.h}`), trocar(c, `trocar off ${c.h}`),
+        trocar(c, `trocar on ${c.h}`), stopInstead(c),
       ]
     },
     verify: (c) => `trocar status ${c.h}`,
@@ -82,8 +84,8 @@ export const FINDINGS_WIN32 = {
   'engine-port-taken': {
     cls: 'problem', trocarFirst: false,
     what: () => 'Another program holds the port trocar listens on, so nothing is captured.',
-    why: () => 'trocar picks another port after a restart.',
-    commands: (c) => [netstat(c.enginePort), trocar(c, 'trocar off'), trocar(c, 'trocar on')],
+    why: () => 'trocar on gives the door another port when another program holds its own.',
+    commands: (c) => [netstat(c.enginePort), trocar(c, `trocar on${c.h ? ` ${c.h}` : ''}`)],
     verify: () => 'trocar status',
   },
   'forwarder-down': {
@@ -100,7 +102,7 @@ export const FINDINGS_WIN32 = {
   'proxy-unsupported': {
     what: (c) => `${c.h} does not support the proxy scheme ${c.protocol || (c.setting && c.setting.scheme) || unknownValue('scheme', 'unreadable')}.`,
     why: (c) => (c.protocol ? `trocar cannot use a ${c.protocol} proxy as its upstream, so it did not connect this form.` : `${c.h} cannot use the proxy scheme set in its own settings.`),
-    commands: (c) => [gui('Write it as http://host:port or socks5://host:port'), gui(setProxyText(c.h, c.fm && c.fm.entryPlace, unknownValue('proxy address', 'absent'))), trocar(c, `trocar on ${c.h}`), trocar(c, `trocar off ${c.h}`)],
+    commands: (c) => [gui('Write it as http://host:port or socks5://host:port'), gui(setProxyText(c.h, c.fm && c.fm.entryPlace, unknownValue('proxy address', 'absent'))), trocar(c, `trocar on ${c.h}`), stopInstead(c)],
     verify: (c) => `trocar status ${c.h}`,
   },
   'system-proxy-pac': { commands: () => [ps(GET_PAC)], verify: () => 'trocar status' },

@@ -605,3 +605,19 @@ test('V49 forwarder-down: the first step is `trocar on <h>`, and no `trocar off`
     assert.ok(!trocarSteps(f).some((r) => /^trocar off\b/.test(r)), `${platform}: off is not a step`)
   }
 })
+
+// the order a Fix is followed in: an off step never follows an on step, and an off / on pair names the same harness (a bare one turns every harness off or on)
+const offOnOk = (f, at) => {
+  const steps = trocarSteps(f), on = steps.findIndex((r) => /^trocar on\b/.test(r)), off = steps.findIndex((r) => /^trocar off\b/.test(r))
+  if (on >= 0) assert.ok(!steps.slice(on).some((r) => /^trocar off\b/.test(r)), `${at}: an off step after on`)
+  if (on >= 0 && off >= 0) assert.equal(steps[off].replace(/^trocar off/, ''), steps[on].replace(/^trocar on/, ''), `${at}: off and on name the same harness`)
+}
+test('V49 every Fix, on every platform: no `trocar off` step after `trocar on`, and an off / on pair names the same harness', () => {
+  for (const platform of ['linux', 'darwin', 'win32']) {
+    for (const [code, set] of Object.entries(SETS)) for (const f of findingsOf({ ...set.facts, platform }, set.names || null)) offOnOk(f, `${platform} ${code} -> ${f.code}`)
+  }
+  const ctx = { F: {}, h: 'codex', user: 'u', sh: 'powershell', platform: 'win32', enginePort: 17990, protocol: 'socks4', dead: { addr: '127.0.0.1', port: 7890 }, upPort: 7897, setting: { scheme: 'socks4' },
+    hf: { forms: [], behaviour: {}, systemProxy: null } }
+  const whys = [null, 'system-proxy-pac', 'system-proxy-unreadable', 'upstream-unparseable']
+  for (const [code, entry] of Object.entries(FINDINGS_WIN32)) for (const why of whys) offOnOk({ commands: entry.commands({ ...ctx, code, fm: { id: 'codex.app', route: { reason: 'not-routed', why }, entryPlace: null } }) }, `win32 ${code} (${why})`)
+})
