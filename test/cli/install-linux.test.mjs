@@ -15,6 +15,7 @@ import { unitPath, UNIT_NAME } from '../../src/collector/arch/linux/unit.mjs'
 import { X509Certificate } from 'node:crypto'
 import zcode from '../../src/collector/harness/z-code.mjs'
 import { createCa } from '../../src/collector/core/tls/ca.mjs'
+import { validateReceipt } from '../../src/cli/schema.mjs'
 
 const fps = (text) => (String(text).match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g) || []).map((p) => new X509Certificate(p).fingerprint256)
 const certBytes = (home) => Object.fromEntries(Object.entries(snapshot(home)).filter(([k]) => k.startsWith('.trocar/collector/ca/') || k === '.claude/settings.json'))
@@ -279,11 +280,17 @@ test('Linux install over a masked unit: replaced, and said in the plan and the r
     fs.mkdirSync(path.dirname(unit), { recursive: true }); fs.rmSync(unit, { force: true }); fs.symlinkSync('/dev/null', unit)
     const dry = fakeIo()
     assert.equal(await runInstallCli(['--dry-run', '--json'], ctx(dry)), 0, dry.text())
-    assert.ok(JSON.stringify(dry.json()).includes('masked'), `${seeded}: the plan says it`)
+    const plan = dry.json()
+    assert.equal(plan.planned.filter((p) => p.path === unit).length, 1, `${seeded}: the unit is one row of the plan: ${JSON.stringify(plan.planned)}`)
+    assert.ok(plan.planned.find((p) => p.path === unit).detail.includes('masked'), `${seeded}: and that row says it is masked`)
+    assert.equal(plan.changed.filter((c) => c.path === unit).length, 1, `${seeded}: the user's link is a change of a file of theirs`)
     assert.equal(fs.lstatSync(unit).isSymbolicLink(), true, 'a dry run leaves it')
     const io = fakeIo()
     assert.equal(await runInstallCli(['--yes', '--json'], ctx(io)), 0, io.text())
-    assert.ok(io.json().notes.some((n) => /masked/.test(n)), `${seeded}: the receipt says it`)
+    const done = io.json()
+    const row = done.changed.find((c) => c.path === unit)
+    assert.deepEqual(validateReceipt(done), [], 'the receipt keeps the schema, why_no_backup included')
+    assert.ok(row && row.backup === null && !done.created.includes(unit), `${seeded}: the receipt lists the link as changed, not as trocar's own file: ${JSON.stringify([done.changed, done.created])}`)
     assert.equal(fs.lstatSync(unit).isSymbolicLink(), false, `${seeded}: the link is replaced`)
     assert.match(fs.readFileSync(unit, 'utf8'), /\[Service\]/)
   }
