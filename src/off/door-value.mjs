@@ -5,6 +5,8 @@ import nodeFs from 'node:fs'
 import path from 'node:path'
 
 export const INGRESS_FILE = 'ingress.json'
+/** The loopback hosts `on` puts first in every NO_PROXY it writes (4.11 P6); off by marker knows trocar's NO_PROXY by them (1.6 §3.4). */
+export const LOOPBACK_HOSTS = Object.freeze(['localhost', '127.0.0.1', '::1'])
 
 /** Loopback, as the door and the PAC judge it (4.11 P10): `localhost` and every `*.localhost` name, 127.0.0.0/8, `::1`; case, IPv6 brackets and a
  *  trailing dot as a host may carry them. */
