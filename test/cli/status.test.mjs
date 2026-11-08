@@ -163,7 +163,9 @@ test('V32 the certificate step: after the world and the entry, before the start 
   const form = (in_effect, code = null, carrier = 'root') => ({ certificate: { in_effect, carrier, code } })
   assert.equal(certOfForms([form(true, null, 'config-key'), form(true)]), true)
   assert.equal(certOfForms([form(true, null, 'config-key'), form(false, 'cert-root-pending')]), 'cert-root-pending', 'one form whose certificate is not in effect is enough')
-  assert.equal(certOfForms([form(false, null)]), null, 'not in effect with no code (the root store unreadable): not known')
+  assert.equal(certOfForms([form(null, null)]), null, 'the root store unreadable (in_effect null, no code): not known')
+  assert.equal(certOfForms([form(null, 'file-unreadable', 'config-key'), form(true)]), null, 'in_effect null (a certificate file not read): not known, never in effect')
+  assert.equal(certOfForms([form(null, 'file-unreadable', 'config-key'), form(false, 'cert-root-pending')]), 'cert-root-pending', 'a form known not in effect still decides')
 })
 
 test('a process the daemon has not judged: no start time is start-time-unknown, no installed_at to compare with is 不知道, an entry that is not intact comes first (a restart would not help)', () => {

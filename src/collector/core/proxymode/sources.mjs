@@ -68,9 +68,12 @@ export function readSrc(src, ctx) {
 }
 
 /** Whether a <cond> holds: true, false, or { error } (a source that cannot be read never counts as "does not hold"). */
-/** The files a harness's `userCertFiles` settings name now, read against `ctx` (rule U, 4.11 P4), in the descriptor's order; a setting not set or not
- *  read names none. */
-export const userCertFilesOf = (desc, ctx) => ((desc.proxyMode || {}).userCertFiles || []).map((src) => readSrc(src, ctx)).filter((r) => r.set && typeof r.value === 'string').map((r) => r.value)
+/** The files a harness's `userCertFiles` settings name now, read against `ctx` (rule U, 4.11 P4), in the descriptor's order → { files, unread }: `unread`
+ *  is the first setting that could not be read ({ error, where }) or null — such a setting names a file not known, never none (D38). */
+export function userCertFilesOf(desc, ctx) {
+  const rs = ((desc.proxyMode || {}).userCertFiles || []).map((src) => readSrc(src, ctx))
+  return { files: rs.filter((r) => r.set && typeof r.value === 'string').map((r) => r.value), unread: rs.find((r) => r.error) || null }
+}
 
 export function holds(cond, ctx) {
   const r = readSrc(cond.src, ctx)

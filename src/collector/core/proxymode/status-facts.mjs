@@ -28,7 +28,7 @@ export const intactOf = (m, e, fs) => { try { return (e.kind === 'owned-file' ? 
 
 /** The install items that carry a harness's certificate: its own, and the pem-block in a user file its settings name that another harness's entry holds —
  *  one block per file, recorded once (4.11 P4 rule U, shared_with), yet it serves both. */
-const itemsFor = (desc, inst, ctx) => { const files = userFilesOf(desc, ctx); return inst.filter((i) => i.harness === desc.name || (i.kind === 'text' && i.format === 'pem-block' && files.includes(i.path))) }
+const itemsFor = (desc, inst, ctx) => { const { files } = userFilesOf(desc, ctx); return inst.filter((i) => i.harness === desc.name || (i.kind === 'text' && i.format === 'pem-block' && files.includes(i.path))) }
 
 /** Whether the install items that carry a harness's certificate are all there and unchanged → null | 'carrier-absent' | 'carrier-overwritten'. What install
  *  placed (m.install.items) must still be on record: an item whose record is gone is as absent as its file. Throws when a file cannot be read. */
@@ -71,6 +71,8 @@ export function setupOf(desc, { os, manifest: m, ctx, root = null, fs = nodeFs, 
   try {
     const ids = forms == null ? carriedForms(desc.proxyMode, os, ctx) : forms
     // a carrier of its own: install's items for it (none when install never saw the harness, unless rule U's shared block carries it)
+    const unread = ids.length > 0 && userFilesOf(desc, ctx).unread // a setting that may name rule U's file, not read: whose block carries it is not known
+    if (unread) throw new Error(`${unread.where}: ${unread.error}`)
     const lost = ids.length ? carrierLoss(m || {}, desc, itemsFor(desc, itemsOfPhase(m, 'install'), ctx), fs) : null
     if (lost) for (const id of ids) missing.push({ form: id, what: lost })
   } catch (e) { return unknown(String((e && e.message) || e)) }
@@ -78,12 +80,17 @@ export function setupOf(desc, { os, manifest: m, ctx, root = null, fs = nodeFs, 
   return missing.length ? { state: 'needed', missing } : { state: 'ready', missing: [] }
 }
 
-/** The user's own certificate file a `userCertFiles` key names (1.6 §9.4 `user_file`): trocar appended to it (intact / changed), or it is not one trocar could append to. */
+/** The user's own certificate file a `userCertFiles` key names (1.6 §9.4 `user_file`): trocar appended to it (intact / changed), or it is not one trocar could
+ *  append to; `unknown` with the read code when the file, or a setting that may name it, cannot be read (D38: never `changed`, never none). */
 function userFileOf(desc, { m, ctx, fs, own }) {
-  for (const file of userFilesOf(desc, ctx)) {
+  const { files, unread } = userFilesOf(desc, ctx)
+  if (unread) return { path: null, state: 'unknown', reason: `${unread.where}: ${unread.error}`, code: CODE.configUnreadable }
+  for (const file of files) {
     if (own.some((i) => i.path === file && i.kind === 'owned-file')) continue // trocar's own bundle: not the user's file
     const e = own.find((i) => i.path === file && i.kind !== 'owned-file')
-    return { path: file, state: !e ? CODE.notUsersFile : intactOf(m, e, fs) ? 'intact' : 'changed' }
+    if (!e) return { path: file, state: CODE.notUsersFile }
+    try { readOrNull(fs, file) } catch (err) { return { path: file, state: 'unknown', reason: `${file}: ${(err && err.code) || err}`, code: 'file-unreadable' } }
+    return { path: file, state: intactOf(m, e, fs) ? 'intact' : 'changed' }
   }
   return null
 }
@@ -112,18 +119,20 @@ export async function modelFormFacts({ harnesses, os, manifest: m, reply = null,
   for (const desc of harnesses.filter((d) => d.proxyMode && (installed.includes(d.name) || (m && m.install && on.some((i) => i.harness === d.name))))) { // one install never saw: drawn once on wrote for it (its forms ride the root)
     const pm = desc.proxyMode, h = desc.name
     const plan = planRoutes(desc, ctx), d = drift(h), own = itemsFor(desc, inst, ctx)
-    const uf = userFileOf(desc, { m, ctx, fs, own })
+    const { code: ufCode, ...uf } = userFileOf(desc, { m, ctx, fs, own }) || {}
     const forms = []
     // a form the user put out of scope (D56⑥) is not drawn as live; setupOf still reads it
     for (const f of pm.forms.filter((x) => x.os.includes(os) && !(x.verified && x.verified[os] && x.verified[os].reason === 'out-of-scope') && isPresent(x, ctx))) {
       const c = f.cert === 'root' ? null : (pm.certs || {})[f.cert]
       const carrier = !c || (c.when && holds(c.when, ctx) === false) ? 'root' : CARRIER[c.kind] ?? null
       const r = root || {}
-      const bad = carrier === 'root' ? (r.state === 'in-place' ? null : { reason: root ? r.code ?? null : CODE.certNotInstalled, command: r.command || INSTALL }) // a root status could not read (no code): not known, never a made-up code
+      const bad = carrier === 'root' ? (r.state === 'in-place' ? null : { reason: root ? r.code ?? null : CODE.certNotInstalled, command: r.command || INSTALL })
         : d || (own.length ? null : { reason: 'entry-missing', command: INSTALL })
-      const certificate = { in_effect: !bad, carrier, user_file: uf, since: latest(carrier === 'root' ? inst.filter((i) => i.kind === 'system-root') : own), code: bad ? bad.reason : null, command: bad ? bad.command || INSTALL : null }
+      const certificate = { in_effect: !bad, carrier, user_file: uf.state ? uf : null, since: latest(carrier === 'root' ? inst.filter((i) => i.kind === 'system-root') : own), code: bad ? bad.reason : null, command: bad ? bad.command || INSTALL : null }
       // the user file a setting names carries the form whatever its carrier: a root form's file replaces the system roots (rule U, SSL_CERT_FILE)
-      if (certificate.in_effect && uf && uf.state !== 'intact') Object.assign(certificate, { in_effect: false, code: uf.state === 'changed' ? 'entry-changed' : CODE.notUsersFile, command: INSTALL })
+      if (bad && bad.reason === null) Object.assign(certificate, { in_effect: null, command: null }) // the user's root store could not be read: not known (D38), never a made-up code
+      else if (certificate.in_effect && uf.state === 'unknown') Object.assign(certificate, { in_effect: null, code: ufCode, command: null }) // not known (D38)
+      else if (certificate.in_effect && uf.state && uf.state !== 'intact') Object.assign(certificate, { in_effect: false, code: uf.state === 'changed' ? 'entry-changed' : CODE.notUsersFile, command: INSTALL })
       const g = `${h}:${f.route}`, route = pm.routes[f.route] || {}
       const es = on.filter((i) => i.harness === h && i.route === f.route)
       const main = es.find((i) => i.door_sha256 || i.door) || es[0] || null

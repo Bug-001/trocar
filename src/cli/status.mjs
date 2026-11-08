@@ -281,7 +281,11 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
 function judgeCertificates(f) {
   for (const h of f.harnesses) {
     const forms = f.facts && f.facts.harnesses && f.facts.harnesses[h.id] && f.facts.harnesses[h.id].forms
-    if (forms && forms.length && h.judge) h.judged = h.judge(certOfForms(forms))
+    if (!(forms && forms.length && h.judge)) continue
+    const cert = certOfForms(forms)
+    h.judged = h.judge(cert)
+    // a certificate not known (D38) says what could not be read, once
+    if (cert === null && Array.isArray(h.why)) for (const x of forms) { const u = x.certificate && x.certificate.in_effect === null && x.certificate.user_file, w = u && u.reason && `could not read ${u.reason}`; if (w && !h.why.includes(w)) h.why.push(w) }
   }
 }
 
