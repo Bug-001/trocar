@@ -15,10 +15,11 @@ import { parseJsonc } from '../core/config-read.mjs'
 import { MARKER_VAR } from '../core/trust/confirm.mjs'
 import { envProxies, urlHostsDeep, truthy, perOs } from './_common.mjs'
 import { renderPlugin } from './_plugins.mjs'
-import { ROUTE_PLACES } from '../../off/marker.mjs'
+import { ROUTE_PLACES, HOME_PLACES } from '../../off/marker.mjs'
+import { homeRoot } from '../../off/loc.mjs'
 
 const MANAGED = { linux: '/etc/opencode/opencode.json', darwin: '/Library/Application Support/opencode/opencode.json' }
-const globalDir = (env, home) => path.join(env.get('XDG_CONFIG_HOME') || path.join(home, '.config'), 'opencode')
+const globalDir = (env, home) => path.join(homeRoot(HOME_PLACES.opencode, { home, env }), 'opencode') // the place the marker undo looks too
 
 function configDocs(ctx) {
   const dir = globalDir(ctx.environ, ctx.home)
