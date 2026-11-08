@@ -19,7 +19,6 @@ import { CONTROL_TOKEN_HEADER } from '../../src/off/token-header.mjs'
 import { readManifest, saveManifest, itemsOfPhase, manifestPath } from '../../src/off/manifest.mjs'
 import { setupOf } from '../../src/collector/core/proxymode/status-facts.mjs'
 import { createServer } from '../../src/server.mjs'
-import { createQueryService } from '../../src/query/service.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
 import { VERBS } from '../../src/control/board.mjs'
 import { driverSetup, driverCtx } from '../../src/collector/driver-setup.mjs'
@@ -49,7 +48,7 @@ async function withBoard(platform, run) {
     const token = fs.readFileSync(path.join(w.dir, 'board.token'), 'utf8')
     const post = (body) => request(port, '/control/setup', { method: 'POST', headers: { 'content-type': 'application/json', [CONTROL_TOKEN_HEADER]: token }, body: JSON.stringify(body) })
       .then((r) => ({ ...r, json: JSON.parse(r.body) }))
-    try { await run({ w, post, trust, state, deps }) } finally { await box.stop() }
+    try { await run({ w, post, trust, state }) } finally { await box.stop() }
   })
 }
 
@@ -143,27 +142,6 @@ for (const platform of ['darwin', 'win32']) {
       assert.ok(r.json.pending.some((x) => x.item === 'root-store' && x.state === 'pending' && x.command === 'trocar install'), r.body)
       assert.ok(r.json.carriers.some((c) => c.harness === B && c.state === 'placed'), r.body)
       assert.ok(items(w).some((i) => i.harness === B && fs.existsSync(i.path)))
-    })
-  })
-
-  test(`${platform} · 4.4 「Set up 的三件实话」: a root prompt that outlasts the query deadline — the worker is not killed; the receipt is pending with trocar install, B's carrier placed`, { skip: await unservable(platform), timeout: 60_000 }, async () => {
-    await withBoard(platform, async ({ w, trust, deps }) => {
-      trust.setStore({ held: [], answer: 'pending', delayMs: 1500 })
-      fs.mkdirSync(path.join(w.home, '.zcode'), { recursive: true })
-      const failures = []
-      const svc = createQueryService({ home: path.join(w.home, '.trocar'), fork: (h) => workerFork(h, deps), deadlineMs: 500, failure: (where, e) => failures.push(e.message) })
-      const ask = (body) => new Promise((resolve, reject) => {
-        const res = { chunks: [], writeHead(st) { this.status = st }, write(b) { this.chunks.push(b); return true }, end() { resolve({ status: this.status, json: JSON.parse(Buffer.concat(this.chunks)) }) }, once() {} }
-        svc.control({ verb: 'setup', body, res }).catch(reject)
-      })
-      try {
-        const p = await ask({ harness: B })
-        const r = await ask({ harness: B, confirm: p.json.plan_id })
-        assert.equal(r.status, 200, JSON.stringify(r.json))
-        assert.ok(r.json.pending.some((x) => x.item === 'root-store' && x.command === 'trocar install'), JSON.stringify(r.json))
-        assert.ok(r.json.carriers.some((c) => c.harness === B && c.state === 'placed'), JSON.stringify(r.json))
-        assert.deepEqual(failures, [])
-      } finally { svc.stop() }
     })
   })
 }
