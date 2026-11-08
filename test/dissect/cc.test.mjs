@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { dissectBlocks, resourceRef, isVolatile, sysLabel, parseBashReads, CC_SECTIONS } from '../../src/dissect/cc.mjs';
+import { dissectBlocks, resourceRef, isVolatile, sysLabel, CC_SECTIONS } from '../../src/dissect/cc.mjs';
 
 // D25 — the single CC dissector: one block model (dissectBlocks), read by the board through
 // analyze.linearContext and src/dissect/cc-spans.mjs blockSpans.
@@ -52,10 +52,4 @@ test('resourceRef links file / skill / mcp / scaffold; sysLabel names system blo
   assert.equal(resourceRef({ type: 'text', text: 'plain' }), ''); // none
   assert.equal(sysLabel('You are Claude Code, an agent'), 'identity');
   assert.equal(sysLabel('x-anthropic-billing-header cch=1'), 'billing header');
-});
-
-test('parseBashReads pulls read-targets, skips writes/flags/globs', () => {
-  assert.deepEqual(parseBashReads('cat src/app.js'), [{ path: 'src/app.js', range: 'full file' }]);
-  assert.deepEqual(parseBashReads('echo hi > out.txt'), []); // write, not read
-  assert.deepEqual(parseBashReads('head -n 20 a.txt').map((r) => r.range), ['L1–20']);
 });

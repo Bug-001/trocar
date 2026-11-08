@@ -1,4 +1,4 @@
-// web/src/screens/replay/DeskHost.tsx — the new desk's host (1.2 §路由「离开再回来」, D71③, D75①): the replay routes over the shared
+// web/src/screens/replay/DeskHost.tsx — the desk's host (1.2 §路由「离开再回来」, D71③, D75①): the replay routes over the shared
 // controller (replay.mjs deskRoutes, openDesk) with the React view (view.ts). Every desk the session cache holds is one <Activity>
 // subtree whose frame is drawn by a portal into the desk's own root; only the desk being read is visible, and only its root hangs in
 // the page (the controller attaches and detaches it). A hidden subtree keeps its nodes and state, and its effects are torn down.

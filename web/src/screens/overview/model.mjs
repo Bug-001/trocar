@@ -317,7 +317,8 @@ export function statsCard(s, now) {
   return {
     ...card,
     sessions: { text: W.SESSIONS_N(m.sessions ?? 0), href: `#/sessions?window=${s.w}` }, calls: W.CALLS_N(m.calls ?? 0),
-    cost: costOfModel(m, priceFail), unpriced: !priceFail && m.unpriced > 0 ? { text: W.UNPRICED(m.unpriced), href: '#/settings/prices' } : null,
+    cost: costOfModel(m, priceFail), unpriced: s.pricing && s.pricing.ok !== false && s.pricing.data && m.unpriced > 0 ? // no table yet: nothing is "unpriced"
+      { text: W.UNPRICED(m.unpriced), href: '#/settings/prices' } : null,
     hit: hitOf({ hit: m.hit, uncertain: m.hitUncertain, main: m.main }), agents,
   }
 }

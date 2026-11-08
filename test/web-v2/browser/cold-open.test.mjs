@@ -28,21 +28,23 @@ function atMark() {
     const n = (sel) => document.querySelectorAll(sel).length, row = document.querySelector('#sawrow')
     const cols = row ? getComputedStyle(row.closest('.tkrow')).gridTemplateColumns.split(' ') : []
     const label = document.querySelector('#stepbar [data-n]'), cw = document.querySelector('#ctxwin')
-    window.__rough = { t: r.startTime, overview: n('#ovstrip .ovbar') + n('#ovstrip polyline'), brush: n('#ovstrip #ovbrush'), bars: n('#sawrow .bar'),
+    window.__rough = { t: r.startTime, overview: n('#ovstrip rect') + n('#ovstrip polyline'), mark: n('#ovstrip #ovpin'), bars: n('#sawrow .bar'),
       width: parseFloat(cols[cols.length - 1]) || 0, label: label ? Number(label.dataset.n) : null, rails: n('#rails .railname'),
-      busy: n('#ctxwin [aria-busy="true"]'), ctxText: cw ? cw.textContent.trim() : null, ctxControls: n('#ctxwin button, #ctxwin a, #ctxwin input, #ctxwin [role="button"]') }
+      busy: n('#ctxwin [aria-busy="true"]'), ctxText: cw ? cw.textContent.trim() : null, ctxControls: n('#ctxwin button, #ctxwin a, #ctxwin input, #ctxwin [role="button"]'),
+      loaded: performance.getEntriesByType('resource').map((e) => new URL(e.name).pathname.split('/').pop()) }
     return r
   }
 }
 
 // the folded world: one session, its head file written at the frontier with ≥ 3 sealed packs, the worker gone
 let world = null
-async function folded() {
-  if (world) return world
+// ms: this test's budget for the shared board (its timeout less a margin, renewed as each test starts; 0.1 §3 约定 13)
+async function folded(ms) {
+  if (world) { world.b.renew(ms); return world }
   const userHome = tmpDir('trocar-cold-'), home = path.join(userHome, '.trocar')
   fs.mkdirSync(path.join(home, 'raw'), { recursive: true, mode: 0o700 })
   const s = bigSession({ home, ...SHAPE }); s.append(CALLS)
-  const b = await withBoard({ home: { userHome, home }, idleMs: 600, chromium: gate.chromium })
+  const b = await withBoard({ home: { userHome, home }, idleMs: 600, chromium: gate.chromium, deadline: ms })
   const until = Date.now() + 240_000
   let head = null
   for (;;) {
@@ -77,7 +79,7 @@ const chapterOf = (head, at) => head.chapters.find((c) => at >= c.s0 && at < c.s
 test.after(async () => { if (world) await world.b.stop() })
 
 test('2.3 §大致页面: a cold open paints the rough page from the head within BOARD_LINES.coldOpen (p95 of 20 new contexts)', { skip, timeout: 600_000 }, async () => {
-  const w = await folded(), { head } = w, at = head.steps - 1, ch = chapterOf(head, at)
+  const w = await folded(570_000), { head } = w, at = head.steps - 1, ch = chapterOf(head, at)
   const ms = []
   for (let i = 0; i < RUNS; i++) {
     await idle(w.b)
@@ -86,12 +88,13 @@ test('2.3 §大致页面: a cold open paints the rough page from the head within
       await c.page.goto(`${w.b.url}/#/replay/${encodeURIComponent(w.project)}/${encodeURIComponent(w.id)}`)
       const r = await rough(c.page)
       ms.push(r.t)
-      assert.ok(r.overview > 0 && r.brush === 1, 'the whole-session overview and its brush')
+      assert.ok(r.overview > 0 && r.mark === 1, 'the whole-session strip and its playhead mark')
       assert.equal(r.bars, Math.min(ch.s1 - ch.s0, barsThatFit(r.width)), 'the bars of the fitted window inside the playhead\'s chapter')
       assert.equal(r.label, head.steps, 'the step label names the playhead (following: the newest step)')
       assert.ok(r.rails > 0, 'the lane names')
       assert.ok(r.busy >= 1 && r.ctxText === '' && r.ctxControls === 0, 'the context window is an empty aria-busy frame: no text, no control')
       assert.deepEqual(c.requests.filter((q) => q.path === '/api/session'), [])
+      assert.ok(!r.loaded.includes('markdown.js'), 'the rough page draws no markdown: its renderer comes after it (2.3 §kinds)')
       assert.deepEqual(c.errors, [])
     } finally { await c.context.close() }
   }
@@ -101,7 +104,7 @@ test('2.3 §大致页面: a cold open paints the rough page from the head within
 })
 
 test('2.3 §点名的一步不在手里: a deep link into chapter 2 reads the pack holding that step first and lands on it', { skip, timeout: 300_000 }, async () => {
-  const w = await folded(), { head } = w, ch = head.chapters[2]
+  const w = await folded(270_000), { head } = w, ch = head.chapters[2]
   const k = Math.floor((ch.s0 + ch.s1) / 2) + 1, pack = head.packs.find((p) => k - 1 >= p.s0 && k - 1 < p.s1)
   assert.ok(pack, `step ${k} is in a sealed pack`)
   await idle(w.b)
@@ -122,7 +125,7 @@ test('2.3 §点名的一步不在手里: a deep link into chapter 2 reads the pa
 })
 
 test('1.5 K-32: a head behind the tip ids says so in place, with the count; 1.5 K-31: a tier-0 head says the first read', { skip, timeout: 300_000 }, async () => {
-  const w = await folded(), { head } = w
+  const w = await folded(270_000), { head } = w
   const [seg, line] = [head.mark.slice(0, head.mark.lastIndexOf(':')), Number(head.mark.slice(head.mark.lastIndexOf(':') + 1))]
   const after = [1, 2, 3, 4, 5].map((d) => `${seg}:${line + d}`)
   const doc = JSON.stringify(head)

@@ -15,6 +15,16 @@ import { laneLedger, listOf } from '../../src/view/reduce.mjs'
 import { compareStep } from '../../src/view/step-order.mjs'
 import { PAGE_BYTES } from '../../src/query/session-doc.mjs'
 import { BLOCK_PROBLEMS } from '../../src/health/codes.mjs'
+import { record, replyOf, user } from '../helpers/cc-threads.mjs'
+import { homeWith, SEGMENT } from '../helpers/session-doc.mjs'
+import { recordReader } from '../../src/query/records.mjs'
+import { parseRecordId } from '../../src/collector/core/record/segments.mjs'
+import { parseTextRef } from '../../src/raw/refs.mjs'
+import { fieldTextOf } from '../../src/dissect/record-fields.mjs'
+import { normalizeRecord } from '../../src/raw/ingest.mjs'
+import { captureLabelsOf } from '../../src/dissect/capture-labels.mjs'
+import { BODY } from '../../src/view/render-kind.mjs'
+import { compactionNumbers } from '../../web/legacy/replay/model.mjs'
 
 const homeOf = (p) => path.join(tmpDir(p), '.trocar')
 const q = (name, home, params, ctx = {}) => runQuery(name, params, { home, fs, ...ctx })
@@ -55,7 +65,7 @@ function absorb(H, p, rids) {
 }
 // The rule, on one answer: its events are its steps', but for a base:null page's compaction and summarize events; an answer of more
 // than one step or ledger entry ships ≤ PAGE_BYTES of steps, definitions, events, resources and seen.
-const CS = (e) => e.type === 'compaction' || e.type === 'summarize'
+const CS = (e) => e.type === 'compaction' || e.type === 'compaction-landed' || e.type === 'summarize'
 const bytes = (list) => (list || []).reduce((a, x) => a + Buffer.byteLength(JSON.stringify(x)), 0)
 function pageRule(p) {
   const own = new Set(p.steps.map((st) => st.rid))
@@ -229,6 +239,26 @@ for (const [wire, axes] of [['http', { late: 8, subLanes: 1, subLen: 6, paths: 4
 
 // 3.5:61-66 the rule, on a main lane of several pages with compactions: every page (whole, and a --from chain from its first step)
 // ships its own steps' events, the base:null ones the lane's compaction and summarize events too, within PAGE_BYTES; user k 1..n.
+// 3.5, 2.4: the tail page of a long lane brings the landings before it, so the compaction row has its numbers before the page that holds them.
+test('3.5 lane: a base:null answer carries the landings outside its steps, with the messages the two bodies hold, and 2.4 pairs them', async () => {
+  const home = homeOf('trocar-lane-landed-')
+  const s = bigSession({ home, growth: 300, subEvery: 0, compactAt: 40_000, paths: 4, compactMark: true })
+  s.append(600)
+  const doc = await settled(home, s.id), lane = doc.lanes.find((l) => l.kind === 'main').lane
+  const tail = await q('lane', home, { id: s.id, lane }, { writer: true })
+  const rids = doc.calls.filter((c) => c.lane === lane).map((c) => c.rid), at = (e) => rids.indexOf(e.rid), own = new Set(tail.steps.map((st) => st.rid))
+  const lines = fs.readFileSync(path.join(home, 'raw', '20261020T164737Z.ndjson'), 'utf8').trim().split('\n')
+  const sent = (rid) => JSON.parse(JSON.parse(lines[Number(rid.split(':').at(-1)) - 1]).req_body).messages.length // a rid names its line
+  const landed = tail.events.filter((e) => e.type === 'compaction-landed' && !own.has(e.rid)), numbers = compactionNumbers(tail.events, at)
+  assert.ok(landed.length > 0, 'a landing lies before the tail page')
+  for (const e of landed) {
+    assert.deepEqual([e.from, e.to], [sent(rids[at(e) - 1]), sent(e.rid)], `${e.rid}: the two bodies' messages`)
+    const request = tail.events.filter((x) => x.type === 'compaction' && at(x) < at(e)).at(-1)
+    assert.equal(at(request), at(e) - 1, `${e.rid}: its request is the call before`)
+    assert.deepEqual(numbers.get(request), { from: e.from, to: e.to }, `${e.rid}: the row of its compaction`)
+  }
+})
+
 test('3.5 lane: events are the page\'s steps\', base:null adds the lane\'s compactions, user k runs 1..n, a page fits PAGE_BYTES', async () => {
   const home = homeOf('trocar-lane-rule-')
   const s = bigSession({ home, growth: 300, subEvery: 0, compactAt: 40_000, paths: 4 })
@@ -291,10 +321,10 @@ const TOP = ['schema', 'command', 'ok', 'errors', 'lane', 'base', 'mark', 'pendi
 const STEP = ['rid', 'parent', 'ops', 'reply', 'attrs', 'detail']
 const DETAIL = ['norm', 'respRefs', 'nonBlockKeys', 'extraMessages', 'wire']
 const NORM = ['stop_reason', 'usage']
-const DEF = ['bid', 'fh', 'ref', 'sec', 'role', 'kind', 'label', 'name', 'mcp', 'cc', 'ff', 'head', 'preview', 'chars', 'bytes', 'resKey', 'r', 'unaddressable', 'inline']
+const DEF = ['bid', 'fh', 'ref', 'sec', 'role', 'kind', 'label', 'name', 'mcp', 'cc', 'ff', 'head', 'preview', 'chars', 'bytes', 'resKey', 'resKeys', 'reads', 'r', 'unaddressable', 'inline']
 const HEAD = ['role', 'tag', 'label']
-const R = ['as', 'tone', 'title', 'f']
-const ATTR = ['query', 'volatile']
+const R = ['as', 'tone', 'title', 'guess', 'f', 'kids']
+const ATTR = ['query', 'volatile', 'resKeys']
 const SEEN = ['path', 'firstRid', 'count']
 const contract = JSON.parse(fs.readFileSync(new URL('../fixtures/session-read-contract.json', import.meta.url), 'utf8'))
 const subset = (o, closed, what) => { for (const k of Object.keys(o)) assert.ok(closed.includes(k), `${what}: ${k} is not in the 3.5 closed set`) }
@@ -310,7 +340,9 @@ function closedSets(p, sample) {
   const must = Object.keys(sample.defs[0] || {}).filter((k) => DEF.includes(k) && !['label', 'name', 'mcp', 'cc', 'resKey'].includes(k))
   for (const d of p.defs) {
     subset(d, DEF, 'def'); for (const k of must) assert.ok(k in d, `def: ${k} is missing`)
-    subset(d.head, HEAD, 'def.head'); subset(d.r, R, 'def.r')
+    subset(d.head, HEAD, 'def.head')
+    assert.equal('r' in d, 'inline' in d, `${d.bid}: only a block read from its inline body comes with a render spec`)
+    if (d.r) { subset(d.r, R, 'def.r'); assert.ok(Array.isArray(d.r.f.body), `${d.bid}: r.f.body`) }
     assert.match(d.bid, /^[A-Za-z0-9_-]{22}$/); assert.match(d.fh, /^[A-Za-z0-9_-]{22}$/)
     assert.equal(d.ref === null, 'unaddressable' in d, `${d.bid}: an unaddressable block has ref null and says why`)
   }
@@ -439,10 +471,11 @@ const S_SINCE = ['schema', 'command', 'ok', 'errors', 'base', 'mark', 'pending',
 const ROW = ['rid', 'lane', 'ts', 'ctx', 'comp', 'usage', 'tools', 'status', 'error', 'errMsg', 'unparsed', 'rec', 'compaction', 'compactionInferred', 'gt', 'probe', 'reqIncomplete', 'wsIncomplete', 'respIncomplete', 'wire', 'cacheBreak']
 const ROW_WIRE = ['cacheSemanticsKnown', 'contextState', 'contextMissing', 'reqEncoding', 'labels']
 const BREAK = ['cause', 'attribution', 'idx', 'refRid', 'gt', 'firstCall']
-const LANE_HEAD = ['lane', 'kind', 'icon', 'label', 'task', 'note', 'count', 'first', 'last', 'peakCtx', 'spawnRid', 'parent', 'flagged']
+const LANE_HEAD = ['lane', 'kind', 'icon', 'label', 'task', 'note', 'count', 'first', 'last', 'peakCtx', 'spawnRid', 'parent', 'flagged', 'parts']
 const RECORD = ['id', 'ts_request', 'is_llm_call', 'response']
 const BLOCK_TOP = ['schema', 'command', 'ok', 'errors', 'blocks']
-const BLOCK_ITEM = ['ref', 'bytes', 'encoding', 'fidelity', 'truncated']
+const BLOCK_ITEM = ['ref', 'bytes', 'encoding', 'fidelity', 'truncated', 'view']
+const VIEW = ['r', 'body', 'events']
 // 3.5 marks `pending?` and `unknown?` optional; a row's fields are left out when it has none
 const OPTIONAL = ['pending', 'unknown']
 function sessionSets(d, closed, sample) {
@@ -469,9 +502,10 @@ test('3.5 #28 (session, block): full, --since and pending sessions keep the clos
   sessionSets(pend, S_FULL, contract.session_pending)
   assert.ok('pending' in pend && Number.isInteger(pend.pending.done) && pend.pending.done < pend.pending.total)
   await settled(home, big.id)
-  const refs = { req: [], reply: [] }
+  const refs = { req: [], reply: [] }, perShape = []
   const { sessions } = await q('sessions', home, {})
   for (const { session_id: id } of sessions) {
+    const shape = { req: refs.req.length, reply: refs.reply.length }
     const full = await q('session', home, { id })
     sessionSets(full, S_FULL, contract.session_full)
     assert.equal(full.base, null)
@@ -483,6 +517,7 @@ test('3.5 #28 (session, block): full, --since and pending sessions keep the clos
       for (const st of p.steps) for (const b of st.reply) { const r = byBid.get(b); if (r && r.ref && /::resp\./.test(r.ref)) refs.reply.push(r.ref) }
       for (const x of p.defs) if (x.ref && !/::resp\./.test(x.ref)) refs.req.push(x.ref)
     }
+    perShape.push(refs.req[shape.req], refs.reply[shape.reply])
   }
   assert.ok(refs.req.length && refs.reply.length, 'a request ref and a reply ref were met')
   const missing = `${refs.req[0].split('#').pop().split('::')[0].split(':')[0]}:999999`
@@ -490,13 +525,143 @@ test('3.5 #28 (session, block): full, --since and pending sessions keep the clos
   const b = await q('block', home, { ref: asked })
   subset(b, BLOCK_TOP, 'block'); covers(b, contract.block_multi, 'block')
   assert.deepEqual(b.blocks.map((x) => x.ref), asked, 'one item per ref, in the order given')
-  for (const x of b.blocks) { subset(x, BLOCK_ITEM, 'block item'); covers(x, contract.block_multi.blocks[0], 'block item') }
+  for (const x of b.blocks) { subset(x, BLOCK_ITEM, 'block item'); covers(x, contract.block_multi.blocks[1], 'block item') }
   for (const x of b.blocks) {
     const errs = b.errors.filter((e) => e.where === x.ref)
     assert.equal(x.bytes === null, errs.length > 0, `${x.ref}: bytes null ⇔ an errors entry where it`)
     for (const e of errs) assert.ok(BLOCK_PROBLEMS.includes(e.code), `${e.code} is a BLOCK_PROBLEMS code`)
   }
   assert.deepEqual(b.blocks.map((x) => typeof x.bytes), ['string', 'string', 'object'], 'the request and reply refs read; the missing record does not')
+  subset(contract.block_multi.blocks[0].view, VIEW, 'the contract\'s view')
+  // every wire shape's request and reply block: the item and its view keep the closed sets, and the bytes are the record's own
+  const shapes = perShape.filter(Boolean), seen = await q('block', home, { ref: shapes })
+  assert.deepEqual(seen.blocks.map((x) => x.ref), shapes)
+  for (const x of seen.blocks) {
+    subset(x, BLOCK_ITEM, 'block item'); subset(x.view, VIEW, 'view')
+    subset(x.view.body, BODY, 'view.body')
+    assert.equal(typeof x.view.r.as, 'string', `${x.ref}: the view says how to draw`)
+    assert.equal(x.bytes, await recordBytes(home, x.ref), `${x.ref}: the bytes are the record's own slice`)
+  }
+})
+
+// ── a block's view (3.5 §会话读 `block`): beside the bytes, never instead of them ─────────────────────────────────────────────────
+// The bytes a ref names, from the record as stored.
+async function recordBytes(home, ref) {
+  const { recordId, field, start, end } = parseTextRef(ref), raw = await recordReader({ home, fs })(parseRecordId(recordId))
+  return (field ? fieldTextOf(raw, field).text : normalizeRecord(raw).req_body).slice(start, end)
+}
+// a session's refs as its lanes define them: the request's blocks and the reply's
+async function blockRefs(home, id) {
+  await settled(home, id)
+  const out = { req: [], reply: [] }
+  for (const { lane } of (await q('session', home, { id })).lanes) {
+    for (const x of (await q('lane', home, { id, lane })).defs) if (x.ref) out[/::resp\./.test(x.ref) ? 'reply' : 'req'].push(x.ref)
+  }
+  return out
+}
+const call = (n, body = { model: 'claude-x', max_tokens: 8, messages: [user(`question ${n}`)] }) => record(`c${n}`, `2026-11-02T10:0${n}:00.000Z`, body,
+  replyOf(`m${n}`, [{ type: 'text', text: `answer ${n}` }, { type: 'tool_use', id: `tu${n}`, name: 'Read', input: { file_path: `/f${n}.md` } }]))
+const SESSION = 'sess-threads'
+const seg = (k, rest) => `${SESSION}/${SEGMENT}.ndjson#${SEGMENT}:${k}${rest}`
+
+test('3.5 block: an older capture\'s parsed request stays marked as not the wire\'s, the stamped copy beside it changes nothing (invariant 4)', async () => {
+  const { req_body, req_headers, resp, ...rest } = call(1)
+  const home = homeWith([{ ...rest, request: JSON.parse(req_body), request_headers: req_headers, response: resp }])
+  const ref = seg(1, '::0-20'), doc = await q('block', home, { ref }), [x] = doc.blocks
+  assert.deepEqual(doc.errors, [])
+  assert.equal(x.fidelity.verbatim, false)
+  assert.equal(x.bytes, await recordBytes(home, ref))
+})
+
+// 4.2 §回源指针: a JSON reply's blocks are read back like a stream's. The record says which kind of text it is: from D40 on body_wire_bytes
+// marks the written-out body as the wire's own; without it the shape alone says it was re-serialized (4.1 保真边界 ⑤).
+const JSON_BLOCKS = [{ type: 'text', text: 'answer' }, { type: 'tool_use', id: 'tu', name: 'Read', input: { file_path: '/f.md' } }]
+const jsonCall = (n, extra = {}) => ({ ...call(n), resp: { status: 200, kind: 'json', body: { id: `m${n}`, content: JSON_BLOCKS, usage: { input_tokens: 3, output_tokens: 1 } } }, ...extra })
+for (const [was, extra, verbatim] of [['from D40 on', { body_wire_bytes: { resp: 1 } }, true], ['from before D40', {}, false]]) {
+  test(`3.5 block: a JSON reply block ${was} reads back as its slice with its view, and says whether the bytes are the wire's`, async () => {
+    const home = homeWith([jsonCall(1, extra)]), { reply } = await blockRefs(home, SESSION)
+    const { blocks } = await q('block', home, { ref: reply })
+    assert.equal(blocks.length, JSON_BLOCKS.length)
+    blocks.forEach((x, i) => {
+      assert.deepEqual(JSON.parse(x.bytes), JSON_BLOCKS[i], x.ref)
+      assert.equal(x.fidelity.verbatim, verbatim, x.ref)
+      assert.deepEqual(x.view.body.block, JSON_BLOCKS[i], x.ref)
+    })
+    const raw = await recordReader({ home, fs })({ segment: SEGMENT, lineNo: 1 })
+    assert.equal(captureLabelsOf(raw).some((l) => l.id === 'resp-json-reserialized'), !verbatim)
+  })
+}
+
+// 2.3 #42: however many refs one answer holds, a segment's index is read as often as for one
+test('3.5 block: one answer reads a segment\'s index once, however many refs it holds', async () => {
+  const home = homeWith([call(1), call(2)]), { reply } = await blockRefs(home, SESSION)
+  assert.ok(reply.length >= 4)
+  const reads = async (ref) => {
+    let n = 0
+    const counting = new Proxy(fs, { get: (t, k) => (typeof t[k] !== 'function' ? t[k] : (...a) => { if (String(a[0]).endsWith(`${path.sep}index${path.sep}${SEGMENT}.json`)) n++; return t[k](...a) }) })
+    const { blocks } = await q('block', home, { ref }, { fs: counting })
+    assert.ok(blocks.every((x) => typeof x.bytes === 'string'))
+    return n
+  }
+  const one = await reads(reply[0])
+  assert.ok(one > 0, 'the index file is what is counted')
+  assert.equal(await reads(reply), one)
+})
+
+// 2.3 #42, recordsAt's rule: one record costs one seek. A scan of the plaintext is the fallback for a row with no offset, and a live segment is 100 MB
+test('3.5 block: a record of a plaintext segment is read at its offset, never by reading the file', async () => {
+  const home = homeWith([call(1), call(2)]), { reply } = await blockRefs(home, SESSION)
+  let whole = 0
+  const counting = new Proxy(fs, { get: (t, k) => (k !== 'readFileSync' ? t[k] : (...a) => { if (String(a[0]).endsWith('.ndjson')) whole++; return t[k](...a) }) })
+  const { blocks } = await q('block', home, { ref: reply }, { fs: counting })
+  assert.ok(blocks.length && blocks.every((x) => typeof x.bytes === 'string'))
+  assert.equal(whole, 0)
+})
+
+test('3.5 block: a request that cannot be parsed costs the view, not the bytes; it is a note and the answer stays ok', async () => {
+  const home = homeWith([call(1, { model: 'claude-x', messages: [null] })])
+  const ref = seg(1, '::0-20'), doc = await q('block', home, { ref })
+  const [x] = doc.blocks
+  assert.equal(x.bytes, await recordBytes(home, ref))
+  assert.ok(!('view' in x), 'no view')
+  assert.deepEqual(doc.errors.map((e) => [e.where, e.code, e.level]), [[ref, 'view-unreadable', 'note']])
+  assert.ok(BLOCK_PROBLEMS.includes('view-unreadable') && doc.ok)
+})
+
+test('3.5 block: a reply ref reads its view without the request, whatever state the request is in', async () => {
+  const { reply } = await blockRefs(homeWith([call(1)]), SESSION)
+  assert.ok(reply.length)
+  for (const req_body of ['{not json', JSON.stringify({ model: 'claude-x', messages: [null] })]) {
+    const home = homeWith([{ ...call(1), req_body }]), doc = await q('block', home, { ref: reply })
+    assert.deepEqual(doc.errors, [], req_body)
+    for (const x of doc.blocks) { assert.ok(x.view, `${x.ref}: a view over ${req_body}`); assert.equal(x.bytes, await recordBytes(home, x.ref)) }
+  }
+})
+
+test('3.5 block: what names no block has no view and no error — a span between keys, the reply taken whole', async () => {
+  const home = homeWith([call(1)]), raw = await recordReader({ home, fs })({ segment: SEGMENT, lineNo: 1 })
+  const refs = [seg(1, '::0-7'), seg(1, `::resp.raw::0-${raw.resp.raw.length}`)]
+  const doc = await q('block', home, { ref: refs })
+  assert.deepEqual(doc.errors, [])
+  for (const x of doc.blocks) { assert.equal(typeof x.bytes, 'string'); assert.ok(!('view' in x), `${x.ref}: no view`) }
+})
+
+test('3.5 block: refs of two records given in turn answer in the order given, each with its own record\'s view', async () => {
+  const home = homeWith([call(1), call(2)])
+  const { reply } = await blockRefs(home, SESSION)
+  const of = (n) => reply.filter((r) => r.includes(`${SEGMENT}:${n}::`))
+  const asked = [of(1)[0], of(2)[0], of(1)[1], of(2)[1]]
+  assert.ok(asked.every(Boolean), 'two reply blocks in each record')
+  const { blocks } = await q('block', home, { ref: asked })
+  assert.deepEqual(blocks.map((x) => x.ref), asked)
+  for (const x of blocks) assert.equal(x.bytes, await recordBytes(home, x.ref))
+  assert.deepEqual(blocks.map((x) => x.view.body.block.text ?? x.view.body.block.input.file_path), ['answer 1', 'answer 2', '/f1.md', '/f2.md'])
+})
+
+test('3.5 block: a streamed reply block\'s view says how many stream events its bytes hold', async () => {
+  const home = homeWith([call(1)]), { reply } = await blockRefs(home, SESSION)
+  const { blocks } = await q('block', home, { ref: reply })
+  for (const x of blocks) assert.equal(x.view.events, x.bytes.match(/^data:/gm).length, x.ref)
 })
 
 // 3.5 §会话读 定义 `name?` / 2.6:42: a tool call's definition carries its tool's name, on each wire's request and reply. Two calls
@@ -537,14 +702,32 @@ test('3.5 定义 name: every tool_use definition of a lane answer carries the na
     const doc = await q('session', home, { id })
     const tools = []
     for (const { lane } of doc.lanes) tools.push(...(await q('lane', home, { id, lane })).defs.filter((d) => d.kind === 'tool_use'))
-    assert.equal(tools.length, 3, `${id}: two replies' calls and one request's`)
-    assert.deepEqual(tools.map((d) => d.name).sort(), ['Edit', 'Read', 'Read'], `${id}: the names the wire gives`)
+    assert.deepEqual([...new Set(tools.map((d) => d.name))].sort(), ['Edit', 'Read'], `${id}: the names the wire gives`)
     for (const d of tools) {
-      // its own bytes: the ref read back, or (a JSON reply has no span per block) the block inlined as parsed
-      const bytes = d.ref ? (await q('block', home, { ref: d.ref })).blocks[0].bytes : JSON.stringify(d.inline.block)
+      const { bytes } = (await q('block', home, { ref: d.ref })).blocks[0]
       assert.ok(bytes.includes(JSON.stringify(d.name)), `${id}: def ${d.bid} names ${JSON.stringify(d.name)}, the name in its bytes`)
     }
   }
+})
+
+// 3.5 §会话读 `reads`: a call and its result sit in different records on the thread wire; the result's definition still says how it reads
+test('lane: a tool_result takes its reads from the tool_use of the same id, in another record', async () => {
+  const id = 'sess-threads'
+  const calls = { shell: { command: 'ls' }, doc: { filePath: '/w/notes.md' }, src: { file_path: '/w/a.mjs' }, edit: { file_path: '/w/notes.md', old_string: 'a', new_string: 'b' },
+    write: { file_path: '/w/new.md', content: '# new' } }
+  const uses = Object.entries(calls).map(([k, input]) => ({ type: 'tool_use', id: `tu_${k}`, name: 'T', input }))
+  const results = Object.keys(calls).map((k) => ({ type: 'tool_result', tool_use_id: `tu_${k}`, content: `result of ${k}` }))
+  const billing = { type: 'text', text: 'x-anthropic-billing-header: cc_version=2.1; cch=1;' }
+  const base = { model: 'claude-opus-x', max_tokens: 100, stream: true, metadata: { user_id: JSON.stringify({ device_id: 'd', session_id: id }) } }
+  const home = homeWith([
+    record('M0', '2026-10-20T00:00:01.000Z', { ...base, thread: { type: 'create' }, system: [billing, { type: 'text', text: 'You are Claude Code, the main agent.' }], tools: [{ name: 'T', description: 'd', input_schema: { type: 'object' } }], messages: [user('go')] }, replyOf('msg_0', uses)),
+    record('M1', '2026-10-20T00:00:02.000Z', { ...base, thread: { type: 'continue', previous_message_id: 'msg_0' }, system: [billing], tools: [], messages: [{ role: 'user', content: results }] }, replyOf('msg_1', [{ type: 'text', text: 'done' }]))])
+  const { lanes } = await q('session', home, { id })
+  assert.equal(lanes.length, 1, 'one thread, one lane')
+  const { defs } = await q('lane', home, { id, lane: lanes[0].lane })
+  const reads = Object.fromEntries(defs.filter((d) => d.kind === 'tool_result').map((d) => [d.preview.replace('result of ', ''), d.reads]))
+  assert.deepEqual(reads, { shell: 'code', doc: 'markdown', src: undefined, edit: undefined, write: undefined })
+  for (const d of defs) if (d.kind !== 'tool_result') assert.ok(!('reads' in d), `${d.kind}: reads is a tool_result's`)
 })
 
 // 2.3 §保真标 · 3.5 §会话读: a tool definition an older capture kept only as metadata (no description text, no schema) goes out with

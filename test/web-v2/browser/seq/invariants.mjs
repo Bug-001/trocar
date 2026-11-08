@@ -8,7 +8,7 @@ import { WRITE_GAP_MS } from '../../../../web/legacy/core/router.mjs'
 import { BOARD_LINES } from '../../perf-lines.mjs'
 
 export const IDS = Object.freeze(['I-pageerror', 'I-console', 'I-blank', 'I-keep', 'I-stack', 'I-hscroll', 'I-rate', 'I-write', 'I-leak',
-  'I-mem', 'I-heap', 'I-follow', 'I-hold', 'I-url', 'I-cjk', 'I-longtask', 'I-loadstep', 'I-chapter', 'I-pack', 'I-memcap', 'I-select', 'I-review', 'I-order'])
+  'I-mem', 'I-heap', 'I-follow', 'I-hold', 'I-url', 'I-cjk', 'I-longtask', 'I-loadstep', 'I-chapter', 'I-pack', 'I-memcap', 'I-select', 'I-review', 'I-order', 'I-jump'])
 
 export const PENDING = new Map([
   ['I-memcap', 'the page heap stays under memCapBytes (80 MB)'],
@@ -69,10 +69,10 @@ async function heapUsed(page) {
 // the replay desk as the reader sees it: the step counter's two numbers, the 跟随最新 chip and the window's request-row heads
 const viewOf = (page) => page.evaluate((sel) => {
   const no = document.querySelector('#stepbar .sb-no')
-  const m = no && /(\d+)\s*\/\s*(\d+)/.exec(no.textContent)
+  const m = no && window.__stepNo()
   return {
     hash: location.hash,
-    step: m ? +m[1] : null, of: m ? +m[2] : null, follow: document.querySelector('.sh-follow')?.getAttribute('aria-pressed') === 'true',
+    step: m ? m.n : null, of: m ? m.m : null, follow: document.querySelector('.sh-follow')?.getAttribute('aria-pressed') === 'true',
     heads: [...document.querySelectorAll('#ctxwin .cblk[data-bi]')].map((e) => `${e.dataset.bi}:${e.dataset.sec || ''}`),
     reply: !!document.querySelector('#ctxwin .cwreply'),
     // a load control (2.3 #10 · 1.2 读取状态): any [data-load-step]; on the desk, any control inside an aria-busy frame or the
@@ -204,11 +204,12 @@ function packFaults(log) {
  * check(ctx) → { violations:[{id, sig, fp, detail}], pending:[{id, value, pointer}], view }.
  * ctx: { page, requests, errors, actions:[{t,a}], faults:[{name, kind, from, to}], hidden:[{from,to}], follow, grownAt (ms of the last
  * growth, or null), truth() → the main-lane count, real, prev (the `view` of the previous check), baseline (Map, optional: per-route
- * first-visit counts; default one per page), drag ({made, changed} of a select step just run, else null), stepAt (the step's start on
+ * first-visit counts; default one per page), drag ({made, changed} of a select step just run, else null), jump ({t, jump, landed} of an
+ * Overview row click just run, else null), stepAt (the step's start on
  * the page's clock, performance.timeOrigin + now(); default: judge every long task) }. Call it when the page has settled.
  */
 export async function check(ctx) {
-  const { page, requests = [], errors = [], actions = [], faults = [], hidden = [], follow = false, grownAt = null, truth, real = false, prev = null, drag = null } = ctx
+  const { page, requests = [], errors = [], actions = [], faults = [], hidden = [], follow = false, grownAt = null, truth, real = false, prev = null, drag = null, jump = null } = ctx
   const base = ctx.baseline || baselines.get(page) || (baselines.set(page, new Map()), baselines.get(page))
   let s = await probeSnap(page)
   const v = await viewOf(page)
@@ -216,10 +217,12 @@ export async function check(ctx) {
   const violations = [], pending = []
   const bad = (id, detail) => violations.push({ id, sig: `${id}:${screen}`, fp: fingerprint(detail), detail })
 
+  const armed = (t) => faults.some((f) => t >= f.from && t <= (f.to ?? Infinity) + LIMITS.consoleGraceMs)
   // 1.2 §点击与选中文字: a drag that selected text opened or closed nothing
   if (drag?.made && drag.changed.length) bad('I-select', drag.changed.slice(0, 3).join(' | '))
+  // 2.5 #5: a click on an Overview row lands on the step and block it names; a fault armed around the click may hold the step's read
+  if (jump && !jump.landed && !armed(jump.t)) bad('I-jump', `the row ${jump.jump} did not land`)
   if (errors.length) bad('I-pageerror', errors.slice(0, 3).join(' | '))
-  const armed = (t) => faults.some((f) => t >= f.from && t <= (f.to ?? Infinity) + LIMITS.consoleGraceMs)
   const loose = s.consoleErrors.filter((c) => !armed(c.t))
   if (loose.length) bad('I-console', loose.slice(0, 3).map((c) => c.msg).join(' | '))
   if (s.blank.length) bad('I-blank', `${s.blank.length} blank frame(s), first at ${s.blank[0].hash}`)
@@ -238,7 +241,7 @@ export async function check(ctx) {
   // the world grew since the baseline: what the route draws grew with the data, so the baseline is taken again (not a leak)
   if (first && grownAt != null && grownAt > first.at) { base.delete(route); first = undefined }
   while (first && s.inflight > first.inflight && Date.now() < deadline) { await page.waitForTimeout(100); s = await probeSnap(page) }
-  const now = { window: s.listeners.window, document: s.listeners.document, intervals: s.intervals, inflight: s.inflight, dom: v.dom, heap: await heapUsed(page), at: Date.now() }
+  const now = { window: s.listeners.window, document: s.listeners.document, intervals: s.intervals, inflight: s.inflight, dom: v.dom, heap: await heapUsed(page), read: s.deskRead, at: Date.now() }
   // a visit with a failed read drew a failure state; one with reads in flight, or hidden for a while (reads paused, 4.4), has not
   // drawn yet: no baseline (a later clean visit is)
   let visit = visits.get(page)
@@ -254,8 +257,11 @@ export async function check(ctx) {
     if (more.length) bad('I-leak', more.map((k) => `${k} ${first[k]} → ${now[k]}`).join(', '))
     if (now.dom > LIMITS.memRatio * first.dom) bad('I-mem', `elements ${first.dom} → ${now.dom}`)
     // a first visit's heap is a cold page's (no store, no caches yet): the heap's baseline is the route's first revisit
-    if (first.warm == null) first.warm = now.heap
-    else if (now.heap > LIMITS.memRatio * first.warm + LIMITS.memSlackBytes) bad('I-heap', `heap ${first.warm} → ${now.heap}`)
+    if (first.warm == null) { first.warm = now.heap; first.warmRead = now.read }
+    // what the desks read since stays in the heap whatever route is on screen: the session cache keeps it, within its own bound (1.2
+    // §路由「离开再回来」, 0.2 §5), so it counts as baseline. A reload starts the page's count over.
+    // shortcut: an evicted desk's bytes stay counted, so a leak after an eviction has that much more room; upgrade if the probe can see the cache
+    else if (now.heap > LIMITS.memRatio * (first.warm + Math.max(0, now.read - first.warmRead)) + LIMITS.memSlackBytes) bad('I-heap', `heap ${first.warm} → ${now.heap}`)
   }
   if (now.heap > LIMITS.memCapBytes) pending.push({ id: 'I-memcap', value: now.heap, pointer: PENDING.get('I-memcap') })
 

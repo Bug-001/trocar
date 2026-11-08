@@ -45,7 +45,7 @@ test('2.3 #25: scrubbing the desk reads nothing before a 100 ms rest, keeps ≤ 
     // from here the page's time moves only when the test moves it
     await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000))
     await page.waitForLoadState('networkidle')
-    const n = await page.evaluate(() => +((document.querySelector('#stepbar .sb-no').textContent.match(/\/\s*(\d+)/) || [])[1]))
+    const n = await page.evaluate(() => window.__stepNo().m)
     assert.ok(n >= 6, `the world's main lane has steps to scrub (${n})`)
 
     const mark = log.length
@@ -88,11 +88,11 @@ test('4.4 live-poll: a following desk shows each new call after it lands, read b
     assert.ok(main && steps(from) < steps(w.marks.length - 1), 'the world grows its main lane after the start mark')
     const growth = await serveWorld(page, w, { from, grow: 1 })
     await page.evaluate(() => { location.hash = '#/replay/p/S' })
-    const total = () => page.evaluate(() => +((document.querySelector('#stepbar .sb-no')?.textContent.match(/\/\s*(\d+)/) || [])[1] || 0))
+    const total = () => page.evaluate(() => window.__stepNo()?.m || 0)
     await page.waitForSelector('#stepbar .sb-no')
     const first = await total()
     for (const t0 = Date.now(); growth.left() > 0 && Date.now() - t0 < 30000;) await page.waitForTimeout(100)
-    await page.waitForFunction((n) => +((document.querySelector('#stepbar .sb-no')?.textContent.match(/(\d+)\s*\/\s*(\d+)/) || [])[1] || 0) === n, steps(w.marks.length - 1), { timeout: 10000 })
+    await page.waitForFunction((n) => (window.__stepNo()?.n || 0) === n, steps(w.marks.length - 1), { timeout: 10000 })
     const shown = await page.evaluate(() => document.querySelector('#stepbar .sb-no').textContent)
     assert.ok(first < (await total()), `the step count grew from ${first} (${shown})`)
     assert.equal(await page.evaluate(() => new URLSearchParams(location.hash.split('?')[1] || '').get('step')), null, 'still following')
@@ -242,6 +242,8 @@ test('3.5 §手里车道的页: the anchor lane reads its ledger chain to the en
     })
     await page.evaluate(() => { location.hash = '#/replay/p/S' })
     await page.waitForSelector('#ctxwin .cblk', { state: 'attached' })
+    // the desk draws the explorer only while Resources is the sidebar's current tab (1.2 §回放台布局: 不是当前标签时不画)
+    await page.locator('.deskside [role=tab]').nth(1).click()
     const mine = () => log.filter((q) => q.get('lane') === main)
     await page.waitForFunction(() => window.__chainEnd === true, null, { timeout: 30000 }).catch(() => {})
     const exact = await page.waitForFunction(() => window.__exact === true, null, { timeout: 10000 }).then(() => true, () => false)

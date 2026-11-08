@@ -11,6 +11,7 @@
 //   applyLane(desk, answer) → {reset}                            a tail / reset page, an older (--to) page, a --from page
 //   listOf(desk, rid) → bid[] | null    stepOf(desk, rid) → {row, lane, held, flat, reply, attrs, detail}
 //   laneEvents(desk, key) → event[]      askOrdinal(desk, key, rid) → k | 0 | null (2.2 K)
+//   compactionNumbers(events, stepOf) → Map(compaction event → {from, to})   the numbers of 2.4's compaction row
 //   applyLedger / ledgerAsk / ledgerDone / readLedger   the `ledger_next` chain (3.5 `resources` 与 `seen`)
 //   seenFiles(desk, key) → [{path, firstRid, count}] | null   seen minus the lane's opened files (2.4:148)
 // A whole-lane read answers the tail page only; older steps come back by `prev` (`to`) pages.
@@ -34,6 +35,17 @@ export function createDesk() {
 }
 
 const tsOf = (desk, rid) => desk.rows.get(rid)?.ts ?? ''
+// a lane header the desk did not hold goes where its first call falls among the held lanes whose first call is held too (1.3 §叠加轨
+// 行内的次序); a header already held keeps its place. The order is otherwise the server's (a full answer's `lanes`, by first step),
+// so a lane whose first row sits on an unread page keeps the server's place and the anchor of a session with no main lane stays put.
+export function putLane(desk, h) {
+  if (desk.lanes.has(h.lane)) { desk.lanes.set(h.lane, h); return }
+  const ts = tsOf(desk, h.first ?? h.lane), hs = [...desk.lanes.values()]
+  const at = !desk.rows.has(h.first ?? h.lane) ? hs.length
+    : hs.findIndex((x) => desk.rows.has(x.first ?? x.lane) && compareStep(ts, h.first ?? h.lane, tsOf(desk, x.first ?? x.lane), x.first ?? x.lane) < 0)
+  hs.splice(at < 0 ? hs.length : at, 0, h)
+  desk.lanes = new Map(hs.map((x) => [x.lane, x]))
+}
 
 // where rid stands (or would stand) in an array kept in step order: a binary search (the row must be in desk.rows)
 function slotOf(desk, arr, rid) {
@@ -128,7 +140,7 @@ export function applySession(desk, a, { before = false } = {}) {
   }
   setEvents(desk, (a.calls || []).map((r) => r.rid), a.events)
   for (const key of a.lanes_gone || []) { desk.lanes.delete(key); desk.held.delete(key); desk.laneRids.delete(key); touched.delete(key) }
-  for (const h of a.lanes || []) desk.lanes.set(h.lane, h)
+  for (const h of a.lanes || []) putLane(desk, h)
   return { reset: false, touched }
 }
 
@@ -137,7 +149,7 @@ export function applySession(desk, a, { before = false } = {}) {
 // `ledgered` = a page carrying the whole ledger at its mark (a base:null lane answer) was applied: the cursors then say what is left;
 // `pending` = the last lane answer stood behind the fold, so the ledger is not whole however the cursors stand (2.4 还在读)
 export const newHeld = () => ({ steps: new Map(), rids: [], prev: null, next: null, resources: new Map(), seen: new Map(), events: new Map(), kf: new Map(),
-  cursors: new Set(), byI: null, ledgered: false, pending: false })
+  cursors: new Set(), byI: null, ledgered: false, note: null, noLedger: false, pending: false })
 
 // drop held steps from index i on, with their cached keyframes and lane events
 function cut(h, i) {
@@ -151,8 +163,15 @@ export const boardDef = (w) => ({ ...w, faithfulness: w.ff ? w.ff.faithfulness :
 
 /** A resource's identity: the server's `resKey` / `key`, else `kind::label` (3.5's ledger key). */
 export const resKeyOf = (r) => r.resKey || r.key || r.kind + '::' + r.label
+/** Does block `b` carry resource `key`: its `resKey`, or any of `resKeys` (a shell read of several files, 2.4). */
+export const carriesRes = (b, key) => b.resKey === key || (Array.isArray(b.resKeys) && b.resKeys.includes(key))
 
+// a ledger part of a lane answer. `resources: null` = the lane's ledger cannot be known (3.5 resources_note 'no-ledger'): it replaces
+// what is held, a --from page's too, so no earlier entry lingers; `resources_note` says so, or that the lists are only part of the lane
 function mergeLedger(h, a) {
+  h.note = a.resources_note ?? null
+  h.noLedger = a.resources === null
+  if (h.noLedger) { h.resources = new Map(); h.seen = new Map(); return }
   merge(h.resources, a.resources, resKeyOf)
   merge(h.seen, a.seen, (x) => x.path)
 }
@@ -211,6 +230,24 @@ export function laneEvents(desk, key) {
   if (!h) return []
   const ts = (rid) => desk.rows.get(rid)?.ts ?? h.steps.get(rid)?.ts ?? ''
   return [...h.events.keys()].sort((x, y) => compareStep(ts(x), x, ts(y), y)).flatMap((rid) => h.events.get(rid))
+}
+
+/**
+ * The numbers 2.4's compaction row shows of each compaction among `events`, walked in `stepOf` order. An inferred compaction keeps its own. A
+ * marked one still carried the whole history, so its numbers are those of the first landing after it and before the next compaction; with
+ * no landing yet, its own `from` and no `to`.
+ */
+export function compactionNumbers(events, stepOf) {
+  const out = new Map()
+  let open = null
+  const walk = events.filter((e) => e && (e.type === 'compaction' || e.type === 'compaction-landed')).sort((x, y) => stepOf(x) - stepOf(y))
+  for (const e of walk) {
+    if (e.type === 'compaction') {
+      open = e.inferred ? null : e
+      out.set(e, { from: e.from, to: e.inferred ? e.to : null })
+    } else if (open) { out.set(open, { from: e.from, to: e.to }); open = null }
+  }
+  return out
 }
 
 /**

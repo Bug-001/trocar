@@ -2,7 +2,7 @@
 // row of ACTIONS, `p` is plain JSON drawn at generation time (fractions and choices, never DOM handles), so a sequence serializes,
 // replays and shrinks. Targets are resolved when the step runs; one that is absent on the current screen is `{skipped:true}`.
 // Reader rows (real:true) are what a reader does with mouse and keys (routes 1.2:83-105, keys 1.2:262-269; the chapter row's ‹ › and
-// [ ] 1.3 §章; a deep link to a step that may sit in a sealed pack the loader has not read, 2.3 加载器); world rows (real:false)
+// [ ] 1.3 §章; a click on an Overview row, 2.5 #5; a deep link to a step that may sit in a sealed pack the loader has not read, 2.3 加载器); world rows (real:false)
 // are grow, late growth (rows landing before the tip), a fresh session opened, a worker kill mid-read and arming a route fault. No step ever clicks a control that writes (DENY), and faults.mjs aborts
 // any non-GET request anyway. Selectors are ids, classes and data attributes, never wording. Exports only: nothing runs at import.
 import { setHidden } from './probe.mjs'
@@ -13,7 +13,7 @@ import { FAULT_KINDS, killWorkerMidRead } from './faults.mjs'
 export const DENY = '[role=switch],[data-hctl],[data-keep],[data-lvl],[data-class],.v2-modal button,.v2-modal [role=button]'
 const FAULT_NAMES = ['d/head', 'd/pack', 'd/open', 'lane', 'block', 'sessions', 'status', 'overview', 'traffic', 'classes', 'pricing', 'segments', 'calls']
 const SCREENS = ['#/overview', '#/sessions', '#/capture', '#/capture/log', '#/traffic', '#/settings/storage', '#/settings/prices', '#/settings/appearance']
-const TOGGLES = { block: '#ctxwin .cblk[data-bi] > .cbh', reply: '#ctxwin .cblk[data-rp] > .cbh', turn: '#ctxwin .cwturnhd', rail: '#rails [data-toggle], #rails [data-railunfold]', tick: '#rails .tick[data-lane]', rpbar: '#rpbar', details: '#screen details > summary', row: '#screen [aria-expanded][aria-controls]' }
+const TOGGLES = { block: '#ctxwin .cblk[data-bi] > .cbh', reply: '#ctxwin .cblk[data-rp] > .cbh', turn: '#ctxwin .cwturnhd', rail: '#rails [data-toggle]', tick: '#rails .tick[data-lane]', rpbar: '#rpbar', details: '#screen details > summary', row: '#screen [aria-expanded][aria-controls]' }
 const NAV_KEYS = ['ArrowLeft', 'ArrowRight', 'Shift+ArrowLeft', 'Shift+ArrowRight', 'Home', 'End', 'step:prev', 'step:next']
 const MISC_KEYS = ['?', 'Escape', 'n', 'p']
 
@@ -93,6 +93,31 @@ async function selectDrag(ctx, p) {
     done({ made: !s.isCollapsed && key !== window.__seqSelKey, changed })
   }))))
 }
+
+// 2.5 #5: a click on an Overview row that names a step of the main lane (`<step>:<block index | prompt | change>`, Overview.tsx; a
+// sub-agent row is the overlay track's click). The landing is watched here, as a jump's flash lasts 2 s: it has landed when the row
+// is in the current part (its step is the playhead's: the part reads the playhead) — a prompt row the current one — and the window
+// highlights the named block, a prompt row's a prompt block. Sets ctx.lastJump = {t, jump, landed}.
+const OV_ROW = '.ovw [data-ovjump]:not([data-ovjump^="agent:"])'
+async function overviewJump(ctx, { f }) {
+  const { page } = ctx
+  const jump = await page.evaluate(([sel, f]) => {
+    const els = [...document.querySelectorAll(sel)].filter((e) => e.getClientRects().length)
+    return els.length ? els[Math.min(els.length - 1, Math.floor(f * els.length))].dataset.ovjump : null
+  }, [OV_ROW, f])
+  if (!jump) return SKIP
+  const t = Date.now()
+  if ((await clickIn(page, `.ovw [data-ovjump="${jump}"]`, 0))?.skipped) return SKIP
+  const landed = await page.waitForFunction((j) => {
+    const what = j.slice(j.indexOf(':') + 1)
+    const here = [...document.querySelectorAll(`.ovw [data-ovjump="${j}"]${what === 'prompt' ? '[aria-current]' : ''}`)]
+      .some((e) => { const part = e.closest('.ovpart'); return !part || !!part.querySelector('.ovph[aria-current]') })
+    const hl = what === 'change' || !!document.querySelector(`#ctxwin .cblk.hl${what === 'prompt' ? '[data-sec="messages"]' : `[data-bi="${what}"]`}`)
+    return here && hl
+  }, jump, { timeout: JUMP_MS, polling: 50 }).then(() => true, () => false)
+  ctx.lastJump = { t, jump, landed }
+}
+const JUMP_MS = 5000 // a jump into another part may wait for that step's lane read (2.5 §跳转: the jump queue)
 
 /** Press keys with no write control focused (Space / Enter never; arrows on a segmented control would move its choice). */
 async function press(page, key) {
@@ -175,6 +200,7 @@ export const ACTIONS = [
   reader('follow', 5, (r) => ({ via: pick(r, ['key', 'chip']) }), (ctx, p) =>
     p.via === 'key' ? press(ctx.page, 'f') : clickIn(ctx.page, '[data-follow]', 0)),
   reader('toggle', 11, (r) => ({ what: pick(r, Object.keys(TOGGLES)), f: frac(r) }), (ctx, p) => clickIn(ctx.page, TOGGLES[p.what], p.f)),
+  reader('ovjump', 4, (r) => ({ f: frac(r) }), overviewJump),
   reader('select', 6, (r) => ({ where: pick(r, ['body', 'head']), f: frac(r), span: frac(r) }), selectDrag),
   reader('key', 6, (r) => ({ key: pick(r, MISC_KEYS) }), (ctx, p) => press(ctx.page, p.key)),
   reader('deeplink', 5, (r) => {

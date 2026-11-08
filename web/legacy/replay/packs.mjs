@@ -18,7 +18,7 @@
 // than the head's.
 // desk.newest = the newest member the desk holds in record order (placeOf / after): the head's mark or a held `{r}` id (1.5 K-32).
 
-import { changed, addRow, removeRow, newHeld, boardDef } from './model.mjs'
+import { changed, addRow, removeRow, newHeld, boardDef, putLane } from './model.mjs'
 
 const enc = new TextEncoder(), dec = new TextDecoder()
 
@@ -176,7 +176,7 @@ function mergeHeads(desk, touched) {
     let best = null, r = -1
     for (const o of desk.files.values()) { const h = o.heads.get(lane); if (h && rank(o) > r) { best = h; r = rank(o) } }
     best ??= desk.head?.lanes?.find((h) => h.lane === lane)
-    if (best) desk.lanes.set(lane, best); else desk.lanes.delete(lane)
+    if (best) putLane(desk, best); else desk.lanes.delete(lane)
   }
 }
 

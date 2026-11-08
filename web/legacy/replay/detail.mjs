@@ -5,13 +5,13 @@
 // (AC-1); the reply is the PARSED one and is marked as such — 逐字 is only ever written for a proven block.
 // `el` is #detail (shared with the other screens); the desk wires and clears it while mounted.
 import { esc, kf } from '../core/fmt.mjs'
-import { techDetailsHtml } from '../core/ui.mjs'
+import { techDetailsHtml, mark } from '../core/ui.mjs'
 import { nearestByTs, stepOfMark } from './lanes.mjs'
 import { when } from './analysis.mjs'
 import { faithOf, FF, ffBadgeHtml, fillBody, tagWord, bodyFor } from './blocks.mjs'
 import { wireCells } from './cell.mjs'
 import { stepOf } from './model.mjs'
-import { replyOf, replyMarkHtml } from './rawpanel.mjs' // the reply's ONE fidelity mark: the same resolve rule as the raw panel (2.3)
+import { replyOf } from '../../src/screens/replay/window-model.mjs' // the reply's ONE fidelity mark: the window's resolve rule (2.3)
 import { costCellHtml } from './stepbar.mjs' // the cost cell's one home (2.2); the drawer's own words stay here
 import { clearRange } from './rails.mjs'
 import * as W from '../labels/replay.mjs'
@@ -27,7 +27,14 @@ export function costRowHtml(c, table, tableErr) {
   return `<div class="din" style="color:var(--dim)">${esc(model)} · output ${kf(c.usage.out)} tokens · ≈ ${costCellHtml(model, c.usage, table, tableErr)}</div>`
 }
 
-// the reply: the step's reply definitions, each a cell like every other body, marked by the SAME rule as the raw panel
+// the reply's ONE fidelity mark as HTML (a replyOf result)
+function replyMarkHtml(r) {
+  const m = r && r.mark
+  if (!m) return ''
+  const w = m === 'partial' ? W.REPLY_PARTIAL : W.REPLY_PARSED
+  return `<span class="rpmark">${mark('part', w)} ${esc(w)}</span>`
+}
+// the reply: the step's reply definitions, each a cell like every other body, marked by the SAME rule as the window
 // (replyOf: every part on its own span of the reply → no mark; partially stored → 「◐ 回复没采全」; else 「◐ 解析后的回复」).
 // A monitor's verdict text is shown as-is, with no mark of its own beyond that.
 function outputHtml(c, st) {
@@ -112,7 +119,7 @@ export function closeDetail(el, s) {
 
 export function wireDetail(el, s) {
   const onClick = (e) => {
-    if (e.target.closest('#dclose')) { closeDetail(el, s); return }
+    if (e.target.closest('#dclose')) { closeDetail(el, s); s.syncUrl?.(); return }
     const bk = e.target.closest('[data-back]')
     if (bk) { const i = stepOfMark(s, bk.dataset.back); if (i >= 0) s.jumpTo(i, null); return } // the playhead moves; the drawer stays open (2.6 §B)
     const h = e.target.closest('.dbh')

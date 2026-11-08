@@ -42,6 +42,7 @@ import { releaseParts } from '../line-file.mjs';
 import { warmCache, fsTag, heapBudget, heapCeiling, hold, liveHeap, usedHeap, yieldCaches } from '../warm.mjs';
 import { parseTextRef } from '../../raw/refs.mjs';
 import { QueryArgError } from './index.mjs';
+import { isMarked } from '../../view/head-cols.mjs';
 import { columns, dumpColumns, loadColumns, sync, viewOf, pageOf, deltaOf, limitOf, markOf } from '../session-doc.mjs';
 import { lineageKnown, titleOf, withLineage } from '../titles.mjs';
 import { projectFields } from '../../dissect/project.mjs';
@@ -648,13 +649,14 @@ const heads = new Map(); // session id → {sig, shape} of its last head write i
 const lagging = new Map(); // session id → {s, home, fs}: the state whose head a slice did not write (advance lets it go before a slice)
 const sigOf = (s) => JSON.stringify([s.mark, s.pending && s.pending.done, s.truncated, s.title]);
 // the parts only the head carries, in O(packs): tier, axis, the packs (with their tags) and the open span, the compactions (a new
-// chapter on the axis; one on another lane too), the cut, pending's presence, the failures and the index's codes, and the meta the
+// chapter on the axis; one on another lane too) and whether the axis ends on a marked one (its chapter opens on the step after it,
+// which counts no compaction: 1.3 §章), the cut, pending's presence, the failures and the index's codes, and the meta the
 // board takes from the head alone (web/legacy/replay/header.mjs) — never a count that grows with each call
 const META = ['title', 'title_source', 'session_id', 'harness', 'harnesses', 'project_slug', 'project_path', 'lineage_source', 'parent_session_id', 'fork_of_session_id'];
 function shapeOf(s) {
   if (s.mark == null) return JSON.stringify([0, s.indexErrors.map((e) => e.code), s.title]);
   const V = s.V, ax = V.lanes.find((l) => l.kind === 'main') || V.lanes[0] || null, meta = { ...V.meta, ...s.title };
-  return JSON.stringify([1, ax && ax.lane, s.files || null, V.stats.compactions, s.truncated, !!s.pending, s.failed.length,
+  return JSON.stringify([1, ax && ax.lane, s.files || null, V.stats.compactions, !!ax && isMarked(V.cols.fl[V.cols.slotOf(ax.last)]), s.truncated, !!s.pending, s.failed.length,
     s.indexErrors.filter((e) => !e.level).map((e) => e.code), META.map((k) => meta[k])]);
 }
 // A background fold that stopped (3.5 §会话读「`session --head`」 pending.stopped, D38②): the slice that threw writes the head at once,

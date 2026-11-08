@@ -8,7 +8,8 @@ import path from 'node:path'
 import { loadSessions } from '../../web/legacy/library/logic.mjs'
 import { rowModel } from '../../web/src/screens/library/model.mjs'
 import { harnessKey, harnessName } from '../../web/legacy/core/chips.mjs'
-import { captureGap, fidelityFacts } from '../../web/legacy/replay/header.mjs'
+import { captureGap } from '../../web/legacy/replay/header.mjs'
+import { sessionHeadModel } from '../../web/src/screens/replay/models.mjs'
 import { bodyCache, loadBody } from '../../web/legacy/replay/blocks.mjs'
 import { boardHome, serveBoard } from './real-face.mjs'
 import { deskFrom } from './desk-world.mjs'
@@ -108,7 +109,7 @@ test('K-20: a record no dissector reads → `unknown.records` ≥ 1 and the head
     try {
       const id = (await face.get('sessions')).doc.sessions[0].session_id // the demo session, the home's only one
       const desk = await deskFrom(getOf(face), id)
-      const { tech } = fidelityFacts(desk)
+      const { tech } = sessionHeadModel({ meta: desk.meta, desk, lanes: [] }).facts
       const endpoints = tech.find(([k]) => k === 'endpoints')
       if (!odd) { assert.equal(desk.unknown, null, 'no `unknown`'); assert.equal(endpoints, undefined, 'no K-20 fact'); continue }
       assert.ok(desk.unknown.records >= 1, '`unknown.records` ≥ 1')

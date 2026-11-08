@@ -12,7 +12,7 @@ import { normalizeRecord } from '../raw/ingest.mjs';
 import { expandRequestBody } from '../dissect/request-body.mjs';
 import { openSealed, createLineCache } from '../raw/reader.mjs';
 import { R } from '../raw/format.mjs';
-import { plainWentSealed, segmentIndex, segmentSource } from './index-build.mjs';
+import { plainWentSealed, warmSegmentIndex, segmentSource } from './index-build.mjs';
 import { trocarHome } from '../paths.mjs';
 import { warmCache, fsTag, HEAP_PER_STORED } from './warm.mjs';
 
@@ -45,14 +45,15 @@ function* lines(file, fs, open = file) {
   }
 }
 
-function recordOf(text, segment, lineNo, stream) {
-  const rec = normalizeRecord(expandRequestBody(JSON.parse(text)));
-  const out = { ...rec, id: recordId(segment, lineNo) };
+const stamped = (rec, stream) => Object.defineProperty(rec, '_stream', { value: stream, enumerable: false, configurable: true });
+/** stampRecord(raw, {segment, lineNo, stream}) → a new record, as a read of that place gives it to extraction: normalized, with its id
+ *  and `_stream`. `raw` stays as it was. */
+export function stampRecord(raw, { segment, lineNo, stream }) {
   // `_stream` is non-enumerable everywhere it is stamped (src/raw/ingest.mjs): it says which file the
   // bytes are in, for a block's ref, and must never appear in a shipped document.
-  Object.defineProperty(out, '_stream', { value: stream, enumerable: false, configurable: true });
-  return out;
+  return stamped({ ...normalizeRecord(raw), id: recordId(segment, lineNo) }, stream);
 }
+const recordOf = (text, segment, lineNo, stream) => stampRecord(expandRequestBody(JSON.parse(text)), { segment, lineNo, stream });
 
 /**
  * recordsAt({home, rows}) → the raw records of the given index rows (src/query/rows.mjs), in the order given.
@@ -173,7 +174,7 @@ const fsId = (fs) => { let n = fsIds.get(fs); if (n === undefined) fsIds.set(fs,
 // the reader keys its entries by its open (`<seq>:<dev>:<ino>:<n>`); the shared caches key them by the file's bytes
 const byIdentity = (cache, id) => {
   const k = (ck) => id + ck.slice(ck.lastIndexOf(':'));
-  return { get: (ck) => cache.get(k(ck)), set: (ck, v) => cache.set(k(ck), v) };
+  return { get: (ck) => cache.get(k(ck)), set: (ck, v) => cache.set(k(ck), v), max: cache.max };
 };
 
 function sharedSealed(file, fs) {
@@ -192,6 +193,14 @@ function sharedSealed(file, fs) {
   return e;
 }
 
+// A step's reply is one record in 6–8 frames: they decode off the thread first, in parallel, so the read below finds them in the
+// shared cache (2.3 #42). Before sealedReader, not inside it: an await ends the stretch, and the read that follows must be in one.
+async function warmSealed(file, fs, lineNo) {
+  const { sf, at } = sharedSealed(file, fs);
+  const i = at.get(lineNo);
+  if (i !== undefined) await sf.warm(i);
+}
+
 function sealedReader(file, fs) {
   const { sf, at } = sharedSealed(file, fs);
   const read = (r) => {
@@ -208,16 +217,27 @@ function sealedReader(file, fs) {
 }
 
 /**
- * readRecord({home, segment, lineNo, progress}) → the raw envelope of that record (decoded bodies, nothing else
- * derived), or null when the segment holds no such line. The segment index says where the record is, so
- * neither the segment nor its index is scanned for it. `progress` and `warmOnly` go to that index read (a cold scan reports per chunk).
+ * recordReader({home, progress, warmOnly}) → read({segment, lineNo}) → the raw envelope of that record (decoded bodies, nothing else
+ * derived; `_stream` says which file it is in), or null when the segment holds no such line. The segment index says where the record is,
+ * so neither the segment nor its index is scanned for it; the rows are the warm ones every list query reads, so a step's reply pays for
+ * its own record, and a segment the keeper has not caught up on is scanned once, not once per answer (2.3 #42). A reader lives for one
+ * answer: its map is one answer's. `progress` and `warmOnly` go to that index read (a cold scan reports per chunk; a light worker's read
+ * of an index it may not build throws IndexPending).
  */
-export async function readRecord({ home = trocarHome(), fs = nodeFs, segment, lineNo, progress = null, warmOnly = false } = {}) {
-  const { records } = await segmentIndex({ home, segment, fs, progress, warmOnly });
-  const row = records.find((r) => r.id === recordId(segment, lineNo));
-  if (!row) return null;
-  const read = readerOf({ home, fs, segment });
-  try { return expandRequestBody(JSON.parse(read({ ...row, lineNo }))); } finally { read.close(); }
+export function recordReader({ home = trocarHome(), fs = nodeFs, progress = null, warmOnly = false } = {}) {
+  const rows = new Map(); // segment → record id → its index row
+  return async ({ segment, lineNo }) => {
+    if (!rows.has(segment)) rows.set(segment, new Map((await warmSegmentIndex({ home, segment, fs, progress, warmOnly })).records.map((r) => [r.id, r])));
+    const row = rows.get(segment).get(recordId(segment, lineNo));
+    if (!row) return null;
+    const file = segmentFile({ home, fs, segment });
+    if (file.endsWith('.sealed')) await warmSealed(file, fs, lineNo);
+    const read = readerOf({ home, fs, segment });
+    try {
+      const at = { lineNo, offset: row.offset, stored_bytes: row.stored_bytes };
+      return stamped(expandRequestBody(JSON.parse(read(at))), read.stream(at));
+    } finally { read.close(); }
+  };
 }
 
 // A reader of the segment's bytes; a plaintext unlinked between the look and the open is read from its sealed copy (4.2 读者与封存并发).

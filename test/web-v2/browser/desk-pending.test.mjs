@@ -23,7 +23,7 @@ function instrument() {
   try { new PerformanceObserver((l) => { for (const x of l.getEntries()) window.__lt.push(x.duration) }).observe({ type: 'longtask', buffered: true }) } catch { /* no long-task timing here */ }
   window.__press = []
   for (const k of ['pointerdown', 'pointerup', 'click']) addEventListener(k, (e) => window.__press.push(`${k} ${e.target.className || e.target.nodeName}${e.target.isConnected ? '' : ' (gone)'}`), true)
-  window.__head = () => { const e = document.querySelector('#stepbar .sb-no'), m = e && /\/\s*(\d+)/.exec(e.textContent); return e && m ? { n: +e.dataset.n, m: +m[1] } : null }
+  window.__head = () => window.__stepNo()
 }
 
 // In the page, in one task: a tick of the overlay rows more than a bar left of the playhead, as a point hit-checked there (a node or an
@@ -117,8 +117,16 @@ test('2.3 归约前沿 · D64②: a session growing by 1,000 members an answer �
     for (let j = 0; j < 10; j++) {
       await toEnd(d)
       if (j % 2 === 1) await grant(1)
-      const pt = await aimOlder(d, j)
-      await input(`lane jump ${j}`, () => page.mouse.click(pt.x, pt.y))
+      // the tick is hit-checked in one task and pressed in the next: a redraw between them can leave empty rail under the point, and
+      // a press there moves nothing (a reader's miss, not the board's). That one is aimed again; a press on a tick that moves nothing stays red
+      for (let k = 0; ; k++) {
+        const pt = await aimOlder(d, j)
+        const n0 = await stepN(), r = await timed(page, 'n', n0, () => page.mouse.click(pt.x, pt.y)).catch((e) => e)
+        if (!(r instanceof Error)) { samples.push(r); break }
+        const onTick = await page.evaluate(() => !!window.__in?.node?.closest?.('.tick'))
+        if (onTick || k === 2) { r.message = `lane jump ${j}: ${r.message}`; throw r }
+        console.log(`# lane jump ${j}: the press landed off the tick, aimed again`)
+      }
     }
     await drawn()
     seen.lanes = await longTasks()
@@ -143,7 +151,7 @@ test('2.3 归约前沿 · D64②: step p95 within the line while the session gro
 
 // 2.3 读者优先: a redraw between a press and its release takes the pressed node away, and the browser then sends no click. A tick held
 // down while answers land still jumps there when let go: the step moved and the call's drawer opened (following alone opens nothing).
-test('2.3 读者优先: a tick held down while an answer lands moves the step when it is let go', { skip }, async () => {
+test('2.3 读者优先: a tick held down while an answer lands moves the step when it is let go, the focus on a button or not', { skip }, async () => {
   const w = world(12, { calls: 30000, page: 1500, files: 600, compact: 0.02 })
   await growingDesk(w, async (d) => {
     const { page, growth, grant, drawn, stepN, until } = d
@@ -153,6 +161,8 @@ test('2.3 读者优先: a tick held down while an answer lands moves the step wh
       await page.keyboard.press('Escape') // the last jump's drawer
       await until(() => !document.querySelector('#detail.open'), undefined, 'Escape did not close the drawer')
       const pt = await aimOlder(d, j), n0 = await stepN()
+      // from round 1 a button has the focus, so the press moves it: that element's blur is not the pointer coming up
+      if (j > 0) assert.ok(await page.evaluate(() => { const b = [...document.querySelectorAll('button')].find((x) => x.offsetParent && !x.closest('#rails')); b?.focus(); return !!b && document.activeElement === b }), 'a button took the focus')
       await page.mouse.move(pt.x, pt.y)
       await page.mouse.down()
       growth.more(1) // not waited for: a round already in flight waits for the release like its redraw, and the press is let go in time

@@ -5,22 +5,15 @@
 // Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
-import { probe, withBoard } from './harness.mjs'
+import { probe, withBoard, webkitGate } from './harness.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
 const PER_CELL = 60
 const CELLS = 6
 
-let webkitSkip = skip
-if (!skip) {
-  try {
-    const { webkit } = await import('playwright-core')
-    const exe = webkit.executablePath()
-    if (!exe || !fs.existsSync(exe)) webkitSkip = 'the WebKit executable is not installed (not downloaded here)'
-  } catch (e) { webkitSkip = `WebKit unavailable: ${String(e?.message || e).split('\n')[0]}` }
-}
+const webkitSkip = await webkitGate(skip)
+
 
 async function openBusiest(b) {
   const rows = (await b.get('sessions')).doc.sessions.filter((x) => x.calls > 0)
@@ -30,19 +23,37 @@ async function openBusiest(b) {
   await b.page.waitForLoadState('networkidle')
 }
 
-// open request rows until CELLS Raw cells with .lay spans are drawn; returns their refs
-async function openLaidCells(page) {
-  const laid = () => page.evaluate(() => [...document.querySelectorAll('#ctxwin .cell[data-mode="raw"][data-ref]')].filter((c) => c.querySelector('.cellraw .lay')).length)
-  const tried = new Set()
-  for (let k = 0; k < 60 && (await laid()) < CELLS; k++) {
-    const bi = await page.evaluate((t) => [...document.querySelectorAll('#ctxwin .cblk.collapsed[data-bi]')].find((e) => e.getClientRects().length && !t.includes(e.dataset.bi))?.dataset.bi, [...tried])
-    if (bi == null) break
-    tried.add(bi)
-    const head = page.locator(`#ctxwin .cblk[data-bi="${bi}"] > .cbh`)
-    await head.click()
+// the next closed row not tried: looked up and clicked in one task of the page, so a redraw cannot take it away in between (the desk
+// draws only the rows around the box, and an opened row growing pushes the next one out). None drawn: the box moves on down; at the list's end, 'end'
+const openNext = async (page, tried) => (await page.waitForFunction((t) => {
+  const W = document.querySelector('#ctxwin'), e = [...W.querySelectorAll('.cblk.collapsed[data-bi]')].find((x) => x.getClientRects().length && !t.includes(x.dataset.bi))
+  if (e) { e.scrollIntoView({ block: 'nearest' }); e.querySelector(':scope > .cbh').click(); return e.dataset.bi }
+  if (W.scrollTop + W.clientHeight >= W.scrollHeight - 1) return 'end'
+  W.scrollTop += W.clientHeight
+  return null
+}, tried)).jsonValue()
+
+// open request rows, one at a time, while `more(bi)` holds
+async function openRows(page, more) {
+  const tried = []
+  for (let bi; (bi = await openNext(page, tried)) !== 'end';) {
+    tried.push(bi)
     await page.waitForFunction((i) => !document.querySelector(`#ctxwin .cblk[data-bi="${i}"] .cellpend`), bi, { timeout: 10000 })
+    if (!(await more(bi))) return
   }
-  return page.evaluate((k) => [...document.querySelectorAll('#ctxwin .cell[data-mode="raw"][data-ref]')].filter((c) => c.querySelector('.cellraw .lay')).slice(0, k).map((c) => c.dataset.ref), CELLS)
+}
+// open request rows until `check(ref)` has run on CELLS Raw cells with .lay spans, each while its row is drawn; returns how many
+async function eachLaidCell(page, check) {
+  let done = 0
+  await openRows(page, async (bi) => {
+    const ref = await page.evaluate((i) => {
+      const c = document.querySelector(`#ctxwin .cblk[data-bi="${i}"] .cell[data-mode="raw"][data-ref]`)
+      return c?.querySelector('.cellraw .lay') ? c.dataset.ref : null
+    }, bi)
+    if (ref) { await check(ref); done++ }
+    return done < CELLS
+  })
+  return done
 }
 
 // in the page: PER_CELL random selections inside the cell's .cellraw, each copied through a ClipboardEvent carrying a DataTransfer.
@@ -92,9 +103,7 @@ async function copyCase(chromium) {
   const b = await withBoard({ chromium })
   try {
     await openBusiest(b)
-    const refs = await openLaidCells(b.page)
-    assert.ok(refs.length >= 1, 'a Raw cell with layout spans was opened')
-    for (const ref of refs) {
+    const cells = await eachLaidCell(b.page, async (ref) => {
       const bytes = (await b.get('block', { ref })).doc.blocks[0].bytes
       assert.equal(typeof bytes, 'string', `GET /api/block answered bytes for ${ref}`)
       const { out, touchedLay, shown } = await randomCopies(b.page, ref, PER_CELL)
@@ -109,11 +118,12 @@ async function copyCase(chromium) {
         window.__copied = null
         Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (t) => { window.__copied = t } } })
       })
-      const cell = b.page.locator(`#ctxwin .cell[data-ref="${ref.replace(/"/g, '\\"')}"]`).first()
-      await cell.locator('[data-cellcopy]').click()
+      // the row's: the desk holds the controls in the row head, outside the cell
+      await b.page.locator(`#ctxwin .cblk:has(.cell[data-ref="${ref.replace(/"/g, '\\"')}"]) [data-cellcopy]`).first().click()
       await b.page.waitForFunction(() => window.__copied != null, null, { timeout: 5000 })
       assert.equal(await b.page.evaluate(() => window.__copied), bytes, `Copy bytes copies the whole body of ${ref}`)
-    }
+    })
+    assert.ok(cells >= 1, 'a Raw cell with layout spans was opened')
     assert.deepEqual(b.errors, [])
   } finally { await b.stop() }
 }
@@ -133,7 +143,7 @@ test('Shift+V redraws the cells within one window height below the visible area 
   const b = await withBoard({ chromium: gate.chromium, height: 520 })
   try {
     await openBusiest(b)
-    await openLaidCells(b.page)
+    await openRows(b.page, () => b.page.evaluate((n) => document.querySelectorAll('#ctxwin .cell').length < n, 2 * CELLS))
     // scroll the window so an open cell starts half a window height below its visible bottom
     const h = await b.page.evaluate(() => {
       const sc = document.querySelector('#ctxwin'), h = sc.clientHeight
@@ -145,24 +155,24 @@ test('Shift+V redraws the cells within one window height below the visible area 
     })
     assert.ok(h, 'an open cell far enough down to start below the visible area')
     await b.page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))) // the window draws for the scroll in its own frame
+    await b.page.waitForFunction(() => { const R = document.querySelector('#ctxwin').getBoundingClientRect(); return [...document.querySelectorAll('#ctxwin .cblk')].some((x) => { const r = x.getBoundingClientRect(); return r.bottom > R.top && r.top < R.bottom }) })
     const cellsBelow = () => b.page.evaluate((h) => {
       const R = document.querySelector('#ctxwin').getBoundingClientRect()
-      return [...document.querySelectorAll('#ctxwin .cell')].map((c) => ({ bid: c.dataset.bid, mode: c.dataset.mode, below: c.getBoundingClientRect().top - R.bottom })).filter((x) => x.below > 0 && x.below < h)
+      return [...document.querySelectorAll('#ctxwin .cell')].map((c) => ({ bid: c.dataset.bid, mode: c.dataset.mode, only: c.dataset.only, below: c.getBoundingClientRect().top - R.bottom })).filter((x) => !x.only && x.below > 0 && x.below < h)
     }, h)
-    // the same cells afterwards, by their bid (a cell drawn shorter in the other mode moves the ones below it up)
+    // the same cells afterwards, by their data-bid (a cell drawn shorter in the other mode moves the ones below it up)
     const modesOf = (bids) => b.page.evaluate((bids) => bids.map((bid) => document.querySelector(`#ctxwin .cell[data-bid="${CSS.escape(bid)}"]`)?.dataset.mode ?? null), bids)
     const before = await cellsBelow()
-    assert.ok(before.length > 0 && before.every((c) => c.mode === before[0].mode), 'open cells below the visible area, one mode')
-    const want = before[0].mode === 'raw' ? 'read' : 'raw'
+    assert.ok(before.length > 0 && before.every((c) => c.mode === 'raw'), 'open cells below the visible area, in the Raw default')
     await b.page.evaluate(() => {
       const R = document.querySelector('#ctxwin').getBoundingClientRect()
       // the key goes to a visible part of a row: its head, or — when an open cell fills the visible area — that cell's body
-      const head = [...document.querySelectorAll('#ctxwin .cblk > .cbh, #ctxwin .cblk .cellraw')].find((x) => { const r = x.getBoundingClientRect(); return r.bottom > R.top && r.top < R.bottom })
+      const head = [...document.querySelectorAll('#ctxwin .cblk > .cbh, #ctxwin .cblk .cell')].find((x) => { const r = x.getBoundingClientRect(); return r.bottom > R.top && r.top < R.bottom })
       head.focus({ preventScroll: true })
       head.dispatchEvent(new KeyboardEvent('keydown', { key: 'V', shiftKey: true, bubbles: true, cancelable: true }))
     })
     await b.page.evaluate(() => new Promise((r) => { let n = 60; const f = () => (--n ? requestAnimationFrame(f) : r()); requestAnimationFrame(f) }))
-    assert.deepEqual(await modesOf(before.map((c) => c.bid)), before.map(() => want), 'every cell within one height below the visible area is redrawn')
+    assert.deepEqual(await modesOf(before.map((c) => c.bid)), before.map(() => 'read'), 'every cell within one height below the visible area is redrawn')
     assert.deepEqual(b.errors, [])
   } finally { await b.stop() }
 })
