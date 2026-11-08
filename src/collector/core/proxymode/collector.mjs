@@ -26,7 +26,7 @@ import { makeIssuer } from '../tls/issuer.mjs'
 import { bypassHit } from '../upstream-shape.mjs'
 import { hostSetOf } from '../host-agent.mjs'
 import { configuredHosts, userCertFilesOf } from './sources.mjs'
-import { priorRecordOf, pacPath } from './entries.mjs'
+import { priorRecordOf, pacPath, pacStale } from './entries.mjs'
 import { CODE } from '../codes.mjs'
 import { agentTrustSet, createAgentTrust, CERT_VARS } from './upstream-trust.mjs'
 import { redactProxyUrl } from '../../../netenv/redact.mjs'
@@ -288,6 +288,17 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
    *  be read, and every requester after off, gets only the app's own way — never an empty answer, which would send the app direct around the user's
    *  system proxy; another user's process is refused; a requester whose owner could not be read and that left while it was judged (`left()`, the
    *  ingress's) gets nothing and is recorded nothing. A question past the connection's limit is an owner that could not be read. */
+  /** P10: the way out of a stale address, read off the entry's records: tagged with the address on writes now, on already rewrote the entry and the program
+   *  holds the one it read at start; any other tag (or no record) is trocar's old value still in the entry, which on rewrites. */
+  const staleWayOut = (d) => {
+    const route = (byName.get(d.harness) || { proxyMode: { routes: {} } }).proxyMode.routes[d.routeId]
+    let token = null
+    try { token = tokenOf().listenerToken } catch { /* no key to compare with: the entry is not shown current */ }
+    const m = manifest(), recs = m ? [...m.entries, ...m.files].filter((x) => x.harness === d.harness && x.route === d.routeId && x.door_sha256) : []
+    return recs.length && token && !recs.some((x) => pacStale(x, route, token))
+      ? 'The setting already holds the current address, and the program reads it only when it starts: restart it'
+      : `Run: trocar on ${d.harness}`
+  }
   const servePac = limited(async ({ peer, user, path: p, left = async () => false }, { within, late }) => {
     const d = doors.get(user)
     if (!d || d.auth) return null
@@ -302,7 +313,7 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     const a = peerAllowed({ ...(facts || {}), pid: q }, self), mine = a.ok
     // no key: refused whoever asks; the owner only names the reason (D38) — this user's own app at an address from before the key is not a stranger
     if (!keyed) {
-      record(mine ? { event: 'failure', where: 'ingress', code: CODE.pacAddressStale, peer, reason: "your program asked for trocar's proxy settings file (PAC) at an address without this install's key, written before it; it was refused, so the app has no PAC. Run: trocar on" }
+      record(mine ? { event: 'failure', where: 'ingress', code: CODE.pacAddressStale, peer, reason: `your program asked for trocar's proxy settings file (PAC) at an address without this install's key, written before it; it was refused, so the app has no PAC. ${staleWayOut(d)}` }
         : { event: 'failure', where: 'ingress', code: CODE.pacPeerRefused, peer, reason: "a request for trocar's proxy settings file (PAC) was refused: it did not carry this install's key" })
       return null
     }
