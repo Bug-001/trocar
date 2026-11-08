@@ -445,7 +445,11 @@ agent group, loopback only, no TUN, never the system proxy, nothing written into
   marked block to that file and leaves the setting alone. Nothing needs administrator rights and no launcher is added.
   The one thing that reaches your login environment is the `PATH` item a copy from the install script adds (see
   [Install](#install)); a copy from npm or git adds nothing there. Each harness's carrier is in its
-  descriptor (`proxyMode` in `src/collector/harness/<harness>.mjs`), one entry per form.
+  descriptor (`proxyMode` in `src/collector/harness/<harness>.mjs`), one entry per form. The root's key cannot be taken,
+  but it can be used: any program running as you can have it sign (on Windows by calling the key, on macOS through
+  trocar's signing helper, as often as it asks), so a program you do not trust could make certificates your apps accept
+  until the root is replaced. If you suspect that, make a new root: `trocar off`, `trocar uninstall`, `trocar install`,
+  `trocar on`.
 - `on` asks the daemon to open the doors, then writes only proxy entries: a proxy key in the agent's own config
   (Claude Code's `settings.json` and Codex's and Hermes's `.env` get every proxy variable the agent reads, `HTTPS_PROXY`,
   `HTTP_PROXY` and for Codex and Hermes `ALL_PROXY`, in both spellings, so the programs they start reach the door too,
