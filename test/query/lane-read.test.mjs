@@ -350,8 +350,18 @@ function sevenHome() {
   return home
 }
 
-// what a security monitor's reply says: Claude Code's own reader of it (strip <thinking>, a cut-off one too; the first <block>yes|no, either case)
+// what a security monitor's reply says, read as the agent's own two parsers read it (4.4): [reply text, flagged, stop_reason]
 const MONITOR_REPLIES = [
+  ['<severity>22', false, 'stop_sequence'], // a whole real reply: the closing tag is the agent's stop sequence
+  ['<severity>72</severity><category>Data Exfiltration</category>', true], // the example the monitor's prompt gives
+  ['<severity>50', false, 'stop_sequence'],
+  ['<severity>50.5', true, 'stop_sequence'],
+  ['<thinking>weighing it</thinking>\n<severity> 80 </severity>', true],
+  ['<thinking>cut off <severity>80', null, 'stop_sequence'],
+  ['<severity>80', null, 'max_tokens'],
+  ['<severity>80</severity><severity>10</severity>', null],
+  ['<severity>high</severity>', null],
+  ['<block>yes</block><block>no</block>', null],
   ['<block>no</block>', false],
   ['<block>yes</block><reason>one short sentence</reason>', true],
   ['<thinking>weighing it</thinking><block>no</block>', false],
@@ -370,12 +380,12 @@ const MONITOR_REPLIES = [
 test('a monitor event\'s flagged is what the reply says, null when it says neither; the head counts only true', async () => {
   const home = tmpDir()
   fs.mkdirSync(path.join(home, 'raw'), { recursive: true })
-  const lines = MONITOR_REPLIES.map(([text], i) => JSON.stringify(buildTransparentEnvelope({ id: `m${i}`, seq: i + 1, class: 'llm',
+  const lines = MONITOR_REPLIES.map(([text, , stop], i) => JSON.stringify(buildTransparentEnvelope({ id: `m${i}`, seq: i + 1, class: 'llm',
     flow: { id: 'f', host: 'api.anthropic.com', scheme: 'https', dst: '10.0.0.1:443', proc: { pid: 1, exe: '/x/claude', agent: 'claude-code' } },
     req: { head: { raw: Buffer.from('POST'), headers: [['content-type', 'application/json'], ['x-claude-code-session-id', 'S-mon']], method: 'POST', target: '/v1/messages' },
       body: Buffer.from(JSON.stringify({ model: 'mock-model', system: [{ type: 'text', text: 'You are a security monitor for autonomous agents.' }], messages: [{ role: 'user', content: `Review ${i}` }] })), truncated: false, tsStart: `2026-10-22T10:00:${String(i).padStart(2, '0')}.000Z` },
     resp: { head: { raw: Buffer.from('HTTP/1.1 200'), status: 200, headers: [['content-type', 'application/json']] },
-      body: Buffer.from(JSON.stringify({ id: `msg_${i}`, model: 'mock-model', stop_reason: 'end_turn', content: [{ type: 'text', text }], usage: { input_tokens: 9, output_tokens: 2 } })), truncated: false, tsStart: `2026-10-22T10:00:${String(i).padStart(2, '0')}.100Z`, tsEnd: `2026-10-22T10:00:${String(i).padStart(2, '0')}.200Z` } })))
+      body: Buffer.from(JSON.stringify({ id: `msg_${i}`, model: 'mock-model', stop_reason: stop || 'end_turn', content: [{ type: 'text', text }], usage: { input_tokens: 9, output_tokens: 2 } })), truncated: false, tsStart: `2026-10-22T10:00:${String(i).padStart(2, '0')}.100Z`, tsEnd: `2026-10-22T10:00:${String(i).padStart(2, '0')}.200Z` } })))
   fs.writeFileSync(path.join(home, 'raw', '20261022T100000Z.ndjson'), lines.join('\n') + '\n')
   const doc = await runQuery('session', { id: 'S-mon' }, { home, fs })
   const lane = doc.lanes.find((l) => l.kind === 'monitor')
