@@ -5,7 +5,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { probe, withBoard, stats } from './harness.mjs'
+import { probe, withBoard, stats, DESK_NEXT } from './harness.mjs'
 import { BOARD_LINES } from '../perf-lines.mjs'
 import { barsThatFit } from '../../../web/legacy/replay/timeline.mjs'
 import { readHead } from '../../../src/query/ctx-files.mjs'
@@ -30,7 +30,8 @@ function atMark() {
     const label = document.querySelector('#stepbar [data-n]'), cw = document.querySelector('#ctxwin')
     window.__rough = { t: r.startTime, overview: n('#ovstrip rect') + n('#ovstrip polyline'), mark: n('#ovstrip #ovpin'), bars: n('#sawrow .bar'),
       width: parseFloat(cols[cols.length - 1]) || 0, label: label ? Number(label.dataset.n) : null, rails: n('#rails .railname'),
-      busy: n('#ctxwin [aria-busy="true"]'), ctxText: cw ? cw.textContent.trim() : null, ctxControls: n('#ctxwin button, #ctxwin a, #ctxwin input, #ctxwin [role="button"]') }
+      busy: n('#ctxwin [aria-busy="true"]'), ctxText: cw ? cw.textContent.trim() : null, ctxControls: n('#ctxwin button, #ctxwin a, #ctxwin input, #ctxwin [role="button"]'),
+      loaded: performance.getEntriesByType('resource').map((e) => new URL(e.name).pathname.split('/').pop()) }
     return r
   }
 }
@@ -92,6 +93,7 @@ test('2.3 §大致页面: a cold open paints the rough page from the head within
       assert.ok(r.rails > 0, 'the lane names')
       assert.ok(r.busy >= 1 && r.ctxText === '' && r.ctxControls === 0, 'the context window is an empty aria-busy frame: no text, no control')
       assert.deepEqual(c.requests.filter((q) => q.path === '/api/session'), [])
+      if (DESK_NEXT) assert.ok(!r.loaded.includes('markdown.js'), 'the rough page draws no markdown: its renderer comes after it (2.3 §kinds)')
       assert.deepEqual(c.errors, [])
     } finally { await c.context.close() }
   }

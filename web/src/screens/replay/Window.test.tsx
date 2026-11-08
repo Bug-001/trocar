@@ -14,6 +14,8 @@ import { initKeys, setScreenKeys } from '../../../legacy/core/keys.mjs'
 import * as C from '../../../legacy/labels/cells.mjs'
 import * as W from '../../../legacy/labels/replay.mjs'
 import { deskOf, world, deskFrom } from '../../../../test/web-v2/desk-world.mjs'
+import { draw } from './markdown.mjs'
+import { setMarkdown } from '../../../legacy/replay/kinds.mjs'
 import { windowItems } from './window-model.mjs'
 import { reactView } from './view'
 import { Window } from './Window'
@@ -675,4 +677,21 @@ test('2.3 #25: a step painted with a row already open reads nothing; the row is 
   paint({ kind: 'step', busy: false })
   expect(win.querySelector('.cblk[data-bi="2"] .cell')).not.toBeNull()
   expect(blockReads(s.ctx.api)).toBe(0)
+})
+
+test('2.3 §kinds · D71①: a step reached before the markdown renderer keeps the rough frame, with no text and no control; it arrives, and the rows and the landing follow', async () => {
+  const { desk } = longDesk(40, 20, 10)
+  setMarkdown(null)
+  try {
+    const s = stateOf(desk, 1)
+    const { win } = mount(s)
+    expect(win.querySelector('[aria-busy="true"]')).not.toBeNull()
+    expect(drawn(win)).toEqual([])
+    expect(win.textContent).toBe('')
+    expect(s.landedFor).toBeNull()
+    await act(async () => { await import('./md-load').then((m) => m.loadMarkdown()) })
+    await vi.waitFor(() => expect(wrapOf(win, 'chline')).not.toBeNull())
+    expect(win.querySelector('[aria-busy="true"]')).toBeNull()
+    expect(win.scrollTop).toBe(yOf(wrapOf(win, 'chline')!))
+  } finally { setMarkdown(draw) }
 })

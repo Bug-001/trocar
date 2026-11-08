@@ -11,6 +11,7 @@
 //     left the bounded cache, on a repaint of the step it stays on. A step painted with a row already open shows the pending cell
 //     until the step's own read paints the window again (view.window()).
 //   · A paint of the 'window' area (view.ts) re-renders it; the window's own actions mutate the desk's state and re-render it alone.
+//   · A step reached before the markdown renderer (md-load.ts) keeps the rough page's frame: its rows and its landing wait for it.
 import { flushSync } from 'react-dom'
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode } from 'react'
 import { useVirtualizer, type Range } from '@tanstack/react-virtual'
@@ -25,11 +26,13 @@ import { cellKey } from '../../../legacy/replay/keymap.mjs'
 import { setFold, turnAnchorKey } from '../../../legacy/replay/fold.mjs'
 import { stepOf } from '../../../legacy/replay/model.mjs'
 import { tagWord } from '../../../legacy/replay/blocks.mjs'
+import { hasMarkdown } from '../../../legacy/replay/kinds.mjs'
 import { TechDetails, type TechValue } from '../../ui/TechDetails'
 import { Svg } from '../../ui/Svg'
 import { Cell, CellBar, type CellModel } from './Cell'
 import { Details, Impact } from './CallDetails'
 import { faithOf, windowItems, landed, landingFor, turnsOf, turnOpen } from './window-model.mjs'
+import { loadMarkdown } from './md-load'
 import { useDeskVersion } from './useDesk'
 import type { DeskState, DeskView, Reveal } from './view'
 
@@ -273,7 +276,9 @@ export function Window({ desk }: { desk: DeskView }) {
   // the model of this render: the step's items, its landing (pure; a folded turn holding the target opens for this display)
   const w = s.win || { kind: 'empty', msg: '' }
   let items: Item[] | null = null, land: any = null
-  if (w.kind === 'step') {
+  const waiting = w.kind === 'step' && !hasMarkdown()
+  useEffect(() => { if (waiting) void loadMarkdown().then(() => bump()) }, [waiting])
+  if (w.kind === 'step' && !waiting) {
     resetReplyFlips(s)
     land = landingFor(s, boxTop)
     if (land && land.turn != null) s.turnLanded.add(land.turn)
@@ -402,6 +407,7 @@ export function Window({ desk }: { desk: DeskView }) {
       })}
     </div>
   } else if (w.kind === 'rough') body = <Busy n={w.n} />
+  else if (waiting) body = <Busy n={s.desk?.head?.last?.n ?? 0} />
   else if (w.kind === 'notlisted') body = <div className="empty" id="notlisted">{SESSION_NOT_LISTED + ' · '}<a href="#/sessions">{BACK_TO_SESSIONS}</a></div>
   else if (w.kind === 'none') body = <div className="empty">{w.msg}</div>
   else if (w.kind === 'empty' && w.msg) {
