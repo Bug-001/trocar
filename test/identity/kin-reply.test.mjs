@@ -163,3 +163,27 @@ test('kinship by reply: live = cold in three arrival orders, cut into two segmen
     }
   }
 })
+
+// past KEEP segments a build hands the rule's state from part to part (src/query/rows.mjs): the parts it keeps are copied, so a
+// later build that starts from one, after a middle segment is rewritten or a new one comes, reads what that part ended with
+test('kinship by reply: live = cold over 24 segments with replies, a middle segment rewritten, then a new one', async () => {
+  const name = (k) => `20261018T${String(k).padStart(2, '0')}0000Z`, at = (k, i) => Date.parse('2026-10-18T00:00:00.000Z') + k * HOUR + i * MIN
+  const wire = (s) => (s === 1 ? 'responses' : 'messages'), said = [[], [], []], segs = []
+  for (let k = 0; k < 25; k++) {
+    const recs = []
+    for (let s = 0; s < 3; s++) { said[s].push(prose(100 + 3 * k + s, 400)); recs.push(turn(wire(s), s, k, said[s].at(-1), at(k, recs.length))) }
+    if (k % 3 === 2) { const s = Math.floor(k / 3) % 3; recs.push(summary(wire(s), said[s].slice(-3), at(k, recs.length), prose(500 + k, 400))) }
+    segs.push(recs)
+  }
+  const lines = (recs) => recs.map((r) => JSON.stringify(r))
+  const homeOf = (n) => { const h = rawHome('trocar-kin-reply-'); segs.slice(0, n).forEach((recs, k) => writeSegment(h, name(k), lines(recs))); return h }
+  const live = homeOf(24), whole = await membership(live)
+  for (let k = 2; k < 24; k += 3) assert.equal(whole.get(segs[k][3].id), whole.get(segs[k][Math.floor(k / 3) % 3].id), `segment ${k}: the summary in its session`)
+  assert.deepEqual(whole, await membership(homeOf(24)), 'one build')
+  // segment 16 rewritten with one more call: the build starts there, from the state part 15 kept
+  segs[16].push(turn('messages', 0, 17, prose(900, 400), at(16, segs[16].length)))
+  fs.unlinkSync(path.join(live, 'raw', `${name(16)}.ndjson`)); writeSegment(live, name(16), lines(segs[16]))
+  assert.deepEqual(await membership(live), await membership(homeOf(24)), 'a middle segment rewritten')
+  writeSegment(live, name(24), lines(segs[24]))
+  assert.deepEqual(await membership(live), await membership(homeOf(25)), 'a new segment')
+})
