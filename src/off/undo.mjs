@@ -139,7 +139,7 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
   // of its own: `off` keeps it while it drains (removing it would cut agents mid-connection; a later run takes it when the drain is over),
   // `uninstall` removes it, and a Windows that holds it (EBUSY / EPERM: it is running) is reported, not papered over (4.8 §4.2).
   const undoWinItem = (e) => {
-    if (FILE_ENTRY_KINDS.includes(e.kind)) return undoEntry(e, { fs })
+    if (FILE_ENTRY_KINDS.includes(e.kind)) return undoEntry(e, { fs, firstPre: firstPre.get(e.path) ?? null })
     if (e.kind === 'run-key') {
       const r = undoRunKey({ prior: e.prior ?? null, run: exec, env })
       return { path: `${e.hive ?? 'HKCU'}\\${e.key ?? ''}\\${e.name ?? ''}`, harness: e.harness, result: r.ok ? (r.result === 'absent' ? 'already-restored' : 'restored') : 'error', ...(r.result === 'left' ? { result: 'left-user-value' } : {}), ...(r.ok ? {} : { reason: r.reason }) }
@@ -177,6 +177,9 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
   const kept = [...manifest.entries, ...manifest.files].filter((x) => spared(x) && (x.harness == null ? ids == null : inScope(x.harness))).map(keyWhere)
   out.install_items = [...new Set(kept)] // what install wrote, for `--json` (附录 C.2): §3.4's sample receipt names no count of it, so the human text says nothing here
 
+  // the file before trocar's first entry in it, by path (the manifest is in write order): a file put back to those bytes is already restored for every entry
+  const firstPre = new Map()
+  for (const e of manifest.entries) if (FILE_ENTRY_KINDS.includes(e.kind) && !firstPre.has(e.path)) firstPre.set(e.path, e.existed_before ? e.pre_sha256 ?? null : null)
   const entries = [...manifest.entries].reverse().filter((e) => inScope(e.harness) && !spared(e) && (FILE_ENTRY_KINDS.includes(e.kind) || e.kind === 'run-key' || e.kind === 'scheduled-task' || (e.kind === 'forwarder-binary' && dropCa)))
   const config = (e) => !((e.kind === 'text' || e.kind === 'trust-entry') && e.format !== 'dotenv-block') // step 1; the rest are step 4's (json-key and proxy-entry are config, a text/trust block is config only as dotenv)
   const originals = entries.filter(config) // step 1's, as they are now: undoing takes them out of the manifest, and a bundle is judged after that

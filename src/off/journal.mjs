@@ -75,14 +75,16 @@ function undoTarget(entry, fs) {
 }
 
 // A crash between the intent and the write leaves the directories it created and maybe a temp file: both go.
-export function undoEntry(entry, { fs = nodeFs } = {}) {
+/** `firstPre`: the sha256 of the file before trocar's FIRST entry in it (each later entry's own pre_sha256 is the file as the one before left it):
+ *  a file back at those bytes is as it was before trocar, whichever entry is asked about. */
+export function undoEntry(entry, { fs = nodeFs, firstPre = null } = {}) {
   const done = (result, extra = {}) => ({ path: entry.path, ...(entry.real_path ? { real_path: entry.real_path } : {}), harness: entry.harness, result, ...extra })
   const target = undoTarget(entry, fs)
   if (target.refuse) return done('left-link', { reason: `${target.refuse}; trocar did not touch it, and its ${describeEntry(entry)} may still be in ${entry.real_path || entry.path}` })
   const file = target.file
   sweepTemps(file, fs)
   const cur = readOrNull(fs, file)
-  if (entry.existed_before ? sha256(cur) === entry.pre_sha256 : cur == null) {
+  if (entry.existed_before ? sha256(cur) === entry.pre_sha256 || (firstPre != null && cur != null && sha256(cur) === firstPre) : cur == null) {
     if (!entry.existed_before) removeEmptyDirs(entry.created_dirs, fs)
     return done('already-restored')
   }

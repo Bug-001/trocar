@@ -15,7 +15,7 @@ import { sha256 } from '../../src/off/fsutil.mjs'
 import { certBlocks, composeBundle } from '../../src/off/pem.mjs'
 import { lineComment } from '../../src/off/text-edit.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
-import { applyTextEntry } from '../../src/collector/core/trust/journal.mjs'
+import { applyTextEntry, applyJsonKey, applyJsonArrayItem, saveManifest } from '../../src/collector/core/trust/journal.mjs'
 
 const ROOT = createCa({ commonName: 'undo root' }), CORP = createCa({ commonName: 'undo corp relay' }), OSROOT = createCa({ commonName: 'undo os root' })
 const roots = { node: [ROOT.certPem], osText: '' }
@@ -123,6 +123,25 @@ test('backups (R2): dropped when the file is back at its pre_sha256, kept and li
   const u = await t.run({ manifest: tm })
   assert.deepEqual(u.results.map((x) => x.result).sort(), ['already-restored', 'missing'])
   assert.deepEqual([fs.existsSync(aa.backup), u.manifest.kept_backups.map((k) => k.backup), fs.existsSync(bbBackup)], [true, [aa.backup], false])
+})
+
+// a file `on` wrote two entries into (an array item, then a key: VS Code's settings), put back by hand to its bytes before `on`: each entry's own
+// "before" is the file as the previous entry left it, but the file is as it was before trocar touched it — every entry is already restored, and
+// no backup is kept as "not what it was before"
+test('two entries in one file, the file back to its bytes before the first: both already restored, no backup kept as changed', async () => {
+  const s = await setup((b) => [repH(b, 'aa')])
+  const m = readManifest(s.b.dir)
+  const file = write(s.b, '.aa/vs/settings.json', '{\n  "editor.fontSize": 13\n}\n'), pre = fs.readFileSync(file)
+  const at = { dir: s.b.dir, manifest: m, harness: 'aa', phase: 'on', home: s.b.home, now: new Date(), fs }
+  applyJsonArrayItem({ ...at, file, keys: ['settingsSync.ignoredSettings'], item: 'http.proxy' })
+  applyJsonKey({ ...at, file, keys: ['http.proxy'], value: 'http://127.0.0.1:47011' })
+  saveManifest(s.b.dir, m, fs)
+  assert.equal(readManifest(s.b.dir).entries.filter((e) => e.path === file).length, 2)
+  fs.writeFileSync(file, pre) // put back by hand
+  const r = await s.run()
+  assert.deepEqual(r.results.filter((x) => x.path === file).map((x) => x.result), ['already-restored', 'already-restored'])
+  assert.deepEqual(r.manifest.kept_backups.filter((k) => k.path === file), [], 'no backup kept as if the file were changed')
+  assert.deepEqual(fs.readFileSync(file), pre)
 })
 
 // 4.11 P13: the kinds the collector model adds. A json-array-item is a file entry (step 1); `switch` and `config-entry` files go with the plugins; a
