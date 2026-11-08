@@ -330,7 +330,8 @@ export function createSynthAssigner({ gapMs = SYNTH_GAP_MS, open = new Map() } =
   };
   function keyless(facts) {
     const { harness, ms } = facts, own = harness + '\0' + facts.hash + '\0';
-    if (facts.probe) prune(harness, ms);
+    // a request with no fingerprints prunes nothing, as before replies: byReplies reads a reply's age itself, and step 3 counts a stale chain's items
+    if (facts.probe && facts.probe.length) prune(harness, ms);
     const named = facts.probe ? byReplies(harness, facts.heads, ms) : null;
     if (named != null) {
       for (const [g, e] of open) if (g[0] !== REPLY && g[0] !== '\u0002' && e.key === named && mine(g, harness)) { e.lastMs = Math.max(e.lastMs, ms); if ('tail' in e) e.pending = true; break; }

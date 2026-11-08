@@ -115,6 +115,18 @@ test('kinship by reply: at the reply cap, a reply expiring at a segment\'s first
   assert.equal(cold.size, live.size)
 })
 
+test('kinship by reply: a compaction request with no fingerprints picks as the fingerprint rule did, the stale chain\'s items still counted', () => {
+  const GAP = 30 * MIN, at = (ms, chain, items, more = {}) => ({ harness: 'pi', ms, hash: 'h', fp: [], probe: null, reply: null, heads: null, late: 0, chain, items, mark: false, ...more })
+  const assign = createSynthAssigner({ gapMs: GAP })
+  const s = assign(at(T0, ['c1'], ['x', 'y'])), l = assign(at(T0 + 1, ['c2'], ['p']))
+  // l extends past 2 × the gap and now holds s's items too; s is stale with its items
+  assert.equal(assign(at(T0 + 2 * GAP + 2 * MIN, ['c2', 'c3'], ['x', 'y'])).key, l.key)
+  // x and y are held by two chains: they say nothing, so the probe-less request opens a new chain
+  const got = assign(at(T0 + 2 * GAP + 3 * MIN, ['c9'], ['x', 'y'], { probe: [] }))
+  assert.equal(got.kin, false)
+  assert.ok(![s.key, l.key].includes(got.key))
+})
+
 // the same membership, read cold in one pass, cut into two segments anywhere, and as the live segment grows record by record,
 // for three arrival orders of two sessions' turns and summaries
 const membership = async (home) => {
