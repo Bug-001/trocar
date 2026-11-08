@@ -425,6 +425,23 @@ test('W25 the win32 daemon refuses an elevated or SYSTEM token before it claims 
   } finally { await d.stop(); p.done(); s.done() }
 })
 
+test('the daemon\'s Node floor (4.9 §7, 4.8 §7): an arch whose nodePreflight says no refuses before anything is claimed, with one {start, node-too-old} record naming its Node and trocar install; a yes starts as before', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  const asked = []
+  const endpoints = []
+  const floored = (pf) => ({ ...fakeArch(p).arch, nodePreflight: () => pf, refuseElevated: async () => { asked.push('token'); return null }, controlEndpoint: ({ dir }) => { endpoints.push(dir); return { path: s.sock, token: 't'.repeat(64) } } })
+  await assert.rejects(startDaemon({ dir: s.collector, arch: floored({ ok: false, have: '20.1.0', min: '22.15', doctor: 'Update Node, then run trocar on again.' }), harnesses: [cc] }), (e) => e.code === 'node-too-old')
+  const rec = flowsOf(s).filter((l) => l.event === 'failure' && l.where === 'start')
+  assert.deepEqual(rec.map((x) => x.code), ['node-too-old'], 'one record')
+  // the login entry names a fixed Node and only `install` rewrites it, so the record names that Node and `install`, not `on`'s line
+  for (const part of [process.execPath, '20.1.0', '22.15', 'trocar install']) assert.ok(rec[0].reason.includes(part), `the reason names ${part}: ${rec[0].reason}`)
+  assert.deepEqual(rec.map((x) => checkRecord(x)), [[]], 'a record the closed set takes')
+  assert.deepEqual([asked, endpoints, fs.existsSync(s.sock), fs.existsSync(path.join(s.collector, 'control.json')), fs.existsSync(path.join(s.collector, 'lock'))], [[], [], false, false, false], 'nothing asked or claimed: no token check, no endpoint, no lock')
+  const d = await startDaemon({ dir: s.collector, arch: floored({ ok: true, have: '24.0.0', min: '22.15' }), harnesses: [cc] })
+  try { assert.deepEqual(endpoints, [s.collector], 'a Node at the floor starts as before') } finally { await d.stop(); p.done(); s.done() }
+})
+
 test('daemon: refuses to start uninstalled; desired state survives a restart; on/off idempotent (S6, S9 unit)', async () => {
   const s = sandbox(); const p = fakeProc()
   try {
