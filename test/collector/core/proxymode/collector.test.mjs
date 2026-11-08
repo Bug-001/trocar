@@ -28,6 +28,7 @@ import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
 import { ROOT, INSTALLED, descs, newWorld, ctxOf, worldOf, combos, makeRoot } from './verdict-world.mjs'
 import { CERT_VARS } from '../../../../src/collector/core/proxymode/upstream-trust.mjs'
 import { resolveLoc } from '../../../../src/collector/core/proxymode/sources.mjs'
+import { pemBlock } from '../../../../src/off/text-edit.mjs'
 
 const TOKEN = 'ab'.repeat(16)
 const iso = (ms) => new Date(ms).toISOString()
@@ -960,6 +961,43 @@ for (const d of await loadHarnesses()) {
     assert.deepEqual(meta.skip, { not_captured: 'untrusted', reason: 'config-unreadable' }, JSON.stringify(meta))
     assert.ok(r.records.some((x) => x.event === 'failure' && x.code === 'config-unreadable'), 'the forward is on record')
     r.c.close()
+  })
+}
+
+// 4.11 P11 rule 4 at the door: a userCertFiles setting marked replace (as shipped: Hermes's per-route ssl_ca_cert) naming a file without the trocar root is
+// forwarded on its first connection, replace-without-ca on record, never decrypted first; the verdict is kept (its evidence was read), so a second
+// connection of that life reads nothing again. The same file with install's marked block decrypts. Real bytes in a tmp dir.
+for (const d of (await loadHarnesses()).filter((x) => (x.proxyMode.userCertFiles || []).some((s) => s.semantics === 'replace' && s.file))) {
+  const s = d.proxyMode.userCertFiles.find((x) => x.semantics === 'replace' && x.file)
+  const f = judgedForms(d, 'darwin')[0]
+  test(`P11 rule 4 at the door · ${d.name}: a replacing user certificate file without the root is forwarded before any decrypt; with install's block it decrypts`, async () => {
+    for (const [text, want] of [[makeRoot('a corporate root').pem, 'replace-without-ca'], [pemBlock(makeRoot('a corporate root').pem, STUB_PEM).text, null]]) {
+      const dir = tmpDir('trocar-door-replace-'), ca = path.join(dir, 'corp.pem')
+      fs.writeFileSync(ca, text)
+      const env = {}, loc = s.file.perOs ? s.file.perOs.darwin : s.file
+      if (loc.env) env[loc.env] = dir
+      const at = resolveLoc(s.file, { os: 'darwin', home: dir, dirs: {}, join: path.join, env, cwd: dir })[0]
+      const tree = s.keys.reduceRight((v, k) => ({ [k === '*' ? 'corp' : k]: v }), ca)
+      const yaml = (o, ind = '') => Object.entries(o).map(([k, v]) => (typeof v === 'object' ? `${ind}${k}:\n${yaml(v, ind + '  ')}` : `${ind}${k}: ${v}\n`)).join('')
+      fs.mkdirSync(path.dirname(at), { recursive: true }); fs.writeFileSync(at, yaml(tree))
+      let reads = 0
+      const base = ctxOf(newWorld('darwin'))
+      const readFile = (p) => { if (!p.startsWith(dir)) return base.readFile(p); reads++; return fs.readFileSync(p, 'utf8') }
+      const r = await rig({ desc: d, os: 'darwin', w: { pid: 7272, env, cwd: dir, ctx: { ...base, readFile }, facts: { exe: '/bin/x', uid: 501, agent: d.name, startedAt: INSTALLED + 20 }, now: INSTALLED + 30 } })
+      await r.c.on({ harnesses: [d.name], groups: { [`${d.name}:${f.route}`]: 18700 } })
+      const ask = () => r.c.lookupIngress({ peer: PEER, user: `${d.name}:${f.route}`, target: { address: d.hosts[0], port: 443 } })
+      const meta = await ask()
+      assert.equal(meta.decrypt, want === null, JSON.stringify(meta))
+      if (want) {
+        assert.equal(meta.skip && meta.skip.reason, want)
+        assert.ok(r.records.some((x) => x.event === 'failure' && x.code === want), 'the forward is on record')
+        const n = reads
+        assert.equal((await ask()).decrypt, false)
+        assert.equal(reads, n, 'the verdict from read evidence is kept: nothing read again for the same life')
+      }
+      for (const x of r.records) assert.deepEqual(checkRecord(x), [], JSON.stringify(x))
+      r.c.close()
+    }
   })
 }
 

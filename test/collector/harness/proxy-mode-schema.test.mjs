@@ -36,6 +36,7 @@ const MUTATIONS = {
   'shape (notes)': (pm) => { pm.notes = [{ id: 'launch-flag' }] },
   'shape (notes list)': (pm) => { pm.notes = 'a launch flag skips the hook' },
   'shape (effects list)': (pm) => { pm.effects = { id: 'residue' } },
+  'shape (userCertFiles semantics)': (pm) => { pm.userCertFiles = [{ env: 'USER_CA', semantics: 'add' }] }, // only replace is marked: unmarked is add
 }
 
 // The real loader over a directory of one generated module per descriptor; the module hands back an object built here (functions and all).

@@ -140,7 +140,7 @@ function proxyModeProblems(pm) {
     const hooked = forms.some((f) => f && f.route === id && certs[f.cert] && ['wrapper', 'plugin'].includes(certs[f.cert].kind))
     if (!hooked) say('switch-hook', `routes.${id} is a switch-file, but no form on it carries a wrapper or plugin cert (the hook that reads the switch)`)
   }
-  ;(Array.isArray(pm.userCertFiles) ? pm.userCertFiles : (say('shape', 'userCertFiles is not a list'), [])).forEach((s, i) => src(s, `userCertFiles[${i}]`))
+  ;(Array.isArray(pm.userCertFiles) ? pm.userCertFiles : (say('shape', 'userCertFiles is not a list'), [])).forEach((s, i) => { src(s, `userCertFiles[${i}]`); if (obj(s) && s.semantics !== undefined && s.semantics !== 'replace') say('shape', `userCertFiles[${i}].semantics is not 'replace'`) })
   ;(Array.isArray(pm.blockers) ? pm.blockers : (say('shape', 'blockers is not a list'), [])).forEach((b, i) => {
     if (!obj(b)) return say('shape', `blockers[${i}] is not { at, when?, forms? }`)
     src(b.at, `blockers[${i}].at`)

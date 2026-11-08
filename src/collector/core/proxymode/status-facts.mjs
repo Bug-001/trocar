@@ -6,7 +6,7 @@
 import nodeFs from 'node:fs'
 import { itemsOfPhase } from '../../../off/manifest.mjs'
 import { judgeEntry, judgeOwned } from '../trust/journal.mjs'
-import { isPresent, holds, presentPaths, userCertFilesOf as userFilesOf } from './sources.mjs'
+import { isPresent, holds, presentPaths, userCertFilesOf, rootHeldIn } from './sources.mjs'
 import { planRoutes, priorRecordOf, loopbackDirect, loopbackNote } from './entries.mjs'
 import { upstreamFor, isTrocarDoorUrl } from './chain.mjs'
 import { pacLeg } from './pac.mjs'
@@ -15,6 +15,8 @@ import { CODE } from '../codes.mjs'
 import { checkWrapper } from './hooks/wrapper.mjs'
 import { sha256, readOrNull } from '../../../off/fsutil.mjs'
 
+// status has no process: a relative path a setting names reads as install reads it, under the home (4.11 P4 rule U)
+const userFilesOf = (desc, ctx) => userCertFilesOf(desc, { ...ctx, cwd: ctx.home })
 const CARRIER = { 'config-key': 'config-key', wrapper: 'wrapper', plugin: 'plugin', 'plugin-file': 'plugin' } // 1.6 §9.4 `carrier` from the descriptor's cert kind
 const HOOKS = new Set(['wrapper', 'plugin']) // a carrier that also applies the route (the switch file is read through it): its drift takes the form off the path (1.6 §9.3 row 31)
 const INSTALL = 'trocar install'
@@ -80,19 +82,20 @@ export function setupOf(desc, { os, manifest: m, ctx, root = null, fs = nodeFs, 
   return missing.length ? { state: 'needed', missing } : { state: 'ready', missing: [] }
 }
 
-/** The user's own certificate file a `userCertFiles` key names (1.6 §9.4 `user_file`): trocar appended to it (intact / changed), or it is not one trocar could
- *  append to; `unknown` with the read code when the file, or a setting that may name it, cannot be read (D38: never `changed`, never none). */
-function userFileOf(desc, { m, ctx, fs, own }) {
-  const { files, unread } = userFilesOf(desc, ctx)
+/** The user's own certificate file a `userCertFiles` key names (1.6 §9.4 `user_file`; of several, the worst): trocar appended to it (intact / changed), or it is not one trocar could
+ *  append to; `unknown` with the read code when the file, or a setting that may name it, cannot be read (D38: never `changed`, never none). A file a
+ *  replacing setting names with no block on record reads as the door reads it (P11 rule 4): the root in it → no row, none → `without-root`. */
+function userFileOf(desc, { m, ctx, fs, own, rootFp256 }) {
+  const { files, replacing, unread } = userFilesOf(desc, ctx)
   if (unread) return { path: null, state: 'unknown', reason: `${unread.where}: ${unread.error}`, code: CODE.configUnreadable }
-  for (const file of files) {
-    if (own.some((i) => i.path === file && i.kind === 'owned-file')) continue // trocar's own bundle: not the user's file
+  const rows = files.filter((file) => !own.some((i) => i.path === file && i.kind === 'owned-file')).map((file) => { // trocar's own bundle: not the user's file
     const e = own.find((i) => i.path === file && i.kind !== 'owned-file')
-    if (!e) return { path: file, state: CODE.notUsersFile }
-    try { readOrNull(fs, file) } catch (err) { return { path: file, state: 'unknown', reason: `${file}: ${(err && err.code) || err}`, code: 'file-unreadable' } }
+    if (!e && !replacing.has(file)) return { path: file, state: CODE.notUsersFile }
+    try { if (!e) return rootHeldIn(file, ctx.readFile, rootFp256) ? null : { path: file, state: 'without-root' }; readOrNull(fs, file) } catch (err) { return { path: file, state: 'unknown', reason: `${file}: ${(err && err.code) || err}`, code: 'file-unreadable' } }
     return { path: file, state: intactOf(m, e, fs) ? 'intact' : 'changed' }
-  }
-  return null
+  })
+  const rank = (x) => ['intact', 'unknown'].indexOf(x.state) // the worst file is the one reported: not in effect (-1), then not known, then intact
+  return rows.filter(Boolean).sort((x, y) => rank(x) - rank(y))[0] || null
 }
 
 /** The setting the agent has without trocar, from the prior trocar recorded (null when the user had none): the topology's off path. `e` is the item the
@@ -106,11 +109,12 @@ const settingOf = (prior, e) => {
  * modelFormFacts({ harnesses, os, manifest, reply, root, systemProxy, ctx, fs, drift }) → { <h>: [FormFacts] }
  *   reply        the daemon's GET /status ({ doors: { '<h>:<route>': port }, upstreams?: { '<h>:<route>': [{ pid, source, url_redacted }] } }), or null
  *   root         status's `cert.root` ({ state, code, command }): the carrier of a root-trust form
+ *   rootFp256    status's `cert.fp256`: the trocar root a file a replacing setting names must hold (P11 rule 4)
  *   systemProxy  chain.mjs's shape (null · { url, bypass } · { pac } · { ok: false })
  *   drift(h)     precondition ⑪ for h: null, or { reason: 'entry-missing' | 'entry-changed', path, command }
  * FormFacts = { id, route, certificate, proxy, entry: { where, kind, trocar, intact } | null, plan: { reason, at, code } | null, setting, notes: [harness-note] }
  */
-export async function modelFormFacts({ harnesses, os, manifest: m, reply = null, root = null, systemProxy = null, ctx, fs = nodeFs, drift = () => null }) {
+export async function modelFormFacts({ harnesses, os, manifest: m, reply = null, root = null, rootFp256 = null, systemProxy = null, ctx, fs = nodeFs, drift = () => null }) {
   const out = {}
   const installed = (m && m.install && m.install.harnesses) || []
   const inst = itemsOfPhase(m, 'install'), on = itemsOfPhase(m, 'on')
@@ -119,7 +123,7 @@ export async function modelFormFacts({ harnesses, os, manifest: m, reply = null,
   for (const desc of harnesses.filter((d) => d.proxyMode && (installed.includes(d.name) || (m && m.install && on.some((i) => i.harness === d.name))))) { // one install never saw: drawn once on wrote for it (its forms ride the root)
     const pm = desc.proxyMode, h = desc.name
     const plan = planRoutes(desc, ctx), d = drift(h), own = itemsFor(desc, inst, ctx)
-    const { code: ufCode, ...uf } = userFileOf(desc, { m, ctx, fs, own }) || {}
+    const { code: ufCode, ...uf } = userFileOf(desc, { m, ctx, fs, own, rootFp256 }) || {}
     const forms = []
     // a form the user put out of scope (D56⑥) is not drawn as live; setupOf still reads it
     for (const f of pm.forms.filter((x) => x.os.includes(os) && !(x.verified && x.verified[os] && x.verified[os].reason === 'out-of-scope') && isPresent(x, ctx))) {
@@ -132,7 +136,7 @@ export async function modelFormFacts({ harnesses, os, manifest: m, reply = null,
       // the user file a setting names carries the form whatever its carrier: a root form's file replaces the system roots (rule U, SSL_CERT_FILE)
       if (bad && bad.reason === null) Object.assign(certificate, { in_effect: null, command: null }) // the user's root store could not be read: not known (D38), never a made-up code
       else if (certificate.in_effect && uf.state === 'unknown') Object.assign(certificate, { in_effect: null, code: ufCode, command: null }) // not known (D38)
-      else if (certificate.in_effect && uf.state && uf.state !== 'intact') Object.assign(certificate, { in_effect: false, code: uf.state === 'changed' ? 'entry-changed' : CODE.notUsersFile, command: INSTALL })
+      else if (certificate.in_effect && uf.state && uf.state !== 'intact') Object.assign(certificate, { in_effect: false, code: { changed: 'entry-changed', 'without-root': 'replace-without-ca' }[uf.state] || CODE.notUsersFile, command: INSTALL })
       const g = `${h}:${f.route}`, route = pm.routes[f.route] || {}
       const es = on.filter((i) => i.harness === h && i.route === f.route)
       const main = es.find((i) => i.door_sha256 || i.door) || es[0] || null

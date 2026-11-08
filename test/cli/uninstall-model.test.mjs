@@ -40,6 +40,21 @@ function uninstall(w, deps = {}, opts = {}) {
   const exec = recordingExec({ onRun: (cmd) => seq.push(`exec:${cmd.split(' ').slice(0, 2).join(' ')}`) })
   return runUninstall({ home: w.home, env: w.env, yes: true, ...opts, deps: { platform: 'darwin', exec: exec.run, custody, procs: async () => [], sleep: async () => {}, drainMs: 0, getuid: () => 501, ...deps } })
 }
+// 4.11 P4 rule U: a setting that matches several places (Hermes's ssl_ca_cert, one per provider route) has a block in each file; uninstall takes each
+// out by its marks and leaves the user's bytes as they were.
+test('CM24 · offline: two routes, each its own ssl_ca_cert file — uninstall takes the block out of both, the user\'s bytes as they were', async () => {
+  const w = await modelWorld({ commands: ['hermes'] })
+  const files = ['a.pem', 'b.pem'].map((n) => path.join(w.home, 'certs', n))
+  fs.mkdirSync(path.dirname(files[0]), { recursive: true }); for (const f of files) fs.writeFileSync(f, USER_PEM)
+  fs.mkdirSync(path.join(w.home, '.hermes'), { recursive: true })
+  fs.writeFileSync(path.join(w.home, '.hermes', 'config.yaml'), `providers:\n  one:\n    ssl_ca_cert: ${files[0]}\n  two:\n    ssl_ca_cert: ~/certs/b.pem\n`)
+  assert.equal((await w.install()).exit, 0)
+  for (const f of files) assert.notEqual(fs.readFileSync(f, 'utf8'), USER_PEM, `${f} holds install's block`)
+  const { receipt, exit } = await uninstall(w)
+  assert.equal(exit, 0, JSON.stringify({ p: receipt.problems, l: receipt.left }))
+  for (const f of files) assert.equal(fs.readFileSync(f, 'utf8'), USER_PEM, `${f}: the block is gone, the user's file byte for byte`)
+})
+
 async function daemonAnswering(w, holders) {
   const sock = path.join(w.home, 'c.sock')
   fs.writeFileSync(path.join(w.dir, 'control.json'), JSON.stringify({ path: sock, token: TOKEN }))
