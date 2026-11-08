@@ -88,7 +88,8 @@ let gate = null;
 /** pauseFill(fn): `fn() → Promise` is awaited before each chunk of a fill (the query worker: until no session work is pending, 3.5
  *  后台抽取与归约); null (the default): no pause. */
 export function pauseFill(fn) { gate = fn; }
-const step = async () => { await tick(); if (gate) await gate(); };
+let running = false; // a chunk of a fill is running: between its gate and the next one (what it holds may still let go)
+const step = async () => { running = false; await tick(); if (gate) await gate(); running = true; };
 const callLine = ({ line, lane, model, failed, cache_known, usage }) => `${JSON.stringify({ line, lane, model, failed, cache_known, usage })}\n`;
 const problemLine = (p) => `${JSON.stringify({ p })}\n`;
 const markLine = (m) => `${JSON.stringify({ m, v: USAGE_V })}\n`;
@@ -178,9 +179,8 @@ async function fillOne({ home, fs, segment }) {
 // SERIAL within this process (one chain), and a segment already waiting in it is not queued twice.
 let chain = Promise.resolve();
 const waiting = new Set();
-let fills = 0;
-/** filling() → whether a fill is underway in this process: what it holds may still let go. */
-export const filling = () => fills > 0;
+/** filling() → whether a chunk of a fill is running in this process, not waiting at its gate: what it holds may still let go. */
+export const filling = () => running;
 /** fillUsage({home, fs, segments}) → Promise<void>: brings each segment's sidecar up to its index. For the query
  *  worker, after it has answered (D63): it yields between chunks and segments, and runs on no timer. Never throws. */
 export function fillUsage({ home = trocarHome(), fs = nodeFs, segments = [] } = {}) {
@@ -188,9 +188,8 @@ export function fillUsage({ home = trocarHome(), fs = nodeFs, segments = [] } = 
     const key = `${fsTag(fs)}\n${home}\n${segment}`;
     if (waiting.has(key)) continue;
     waiting.add(key);
-    fills++;
     chain = chain.then(() => { waiting.delete(key); return fillOne({ home, fs, segment }); })
-      .catch((e) => noteProblem(home, fs, segment, String((e && e.message) || e))).finally(() => { fills--; });
+      .catch((e) => noteProblem(home, fs, segment, String((e && e.message) || e))).finally(() => { running = false; });
   }
   return chain;
 }

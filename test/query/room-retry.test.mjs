@@ -17,6 +17,7 @@ import { readHead } from '../../src/query/ctx-files.mjs'
 import { sessionDir } from '../../src/query/projection.mjs'
 import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
 import { recordId } from '../../src/collector/core/record/segments.mjs'
+import { usageFile } from '../../src/query/usage.mjs'
 import { workerFork } from '../helpers/worker-fork.mjs'
 import { whileMoving, reporting } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -46,8 +47,9 @@ async function homeOf(prefix, ...keys) {
   return { home, sessions: keys.map((_, i) => ({ id: groups[i], last: recordId(SEGMENT, (i + 1) * 3) })) }
 }
 
-/** A `fork` for createQueryService: the small worker with the ballast in its heap, `release()` to let it go, `tries()` the count above. */
-function ballasted(log) {
+/** A `fork` for createQueryService: the small worker with the ballast in its heap, `release()` to let it go, `tries()` the count above;
+ *  `more`: preload code run after the ballast's. */
+function ballasted(log, more = '') {
   const dir = tmpDir('trocar-ballast-'), flag = path.join(dir, 'flag'), count = path.join(dir, 'count'), preload = path.join(dir, 'ballast.cjs')
   const gcs = path.join(dir, 'gcs'), stops = path.join(dir, 'stops'), head = path.join(path.dirname(log), 'head.json.gz')
   for (const f of [count, gcs, stops]) fs.writeFileSync(f, '')
@@ -61,7 +63,7 @@ let ballast = []
 while (v8.getHeapStatistics().used_heap_size < ${BALLAST_MB * 1048576}) ballast.push(Array.from({ length: 1024 }, (_, i) => ({ i })))
 const look = setInterval(() => { if (fs.existsSync(${JSON.stringify(flag)})) { ballast = null; clearInterval(look) } }, 50)
 look.unref()
-`)
+${more}`)
   return {
     fork: (h, ...argv) => fork(WORKER, [h, ...argv], { stdio: ['pipe', 'pipe', 'pipe', 'ipc'], execArgv: ['--require', NO_REAL_OS, '--require', preload, ...heapFlags(HEAP_MB)], env: workerEnv() }),
     release: () => fs.writeFileSync(flag, ''),
@@ -195,5 +197,49 @@ test('3.5 #37: while others hold the heap, `session --head` answers the head as 
     b.release()
     await asked
     assert.equal(tail.status, 200)
+  } finally { svc.stop() }
+})
+
+// The fill's chunks stall STALL_MS each while a flag file exists (the worker's preload: the chunk's write of its sidecar, as in
+// fill-yields.test.mjs), so a fill of FILL segments, one chunk each, outlasts several of the waiting timer's turns.
+const FILL = 24, STALL_MS = 1000
+const small = (seg, n) => JSON.stringify({ ts: '2026-11-05T09:00:00.000Z', endpoint: '/v1/chat/completions', method: 'POST',
+  req_headers: { 'content-type': 'application/json' }, req_body: JSON.stringify({ model: 'm', prompt_cache_key: `fill-${seg}`, messages: [{ role: 'user', content: `ask ${n}` }] }),
+  resp: { status: 200, kind: 'json', body: { choices: [{ message: { role: 'assistant', content: `answer ${n}` } }], usage: { prompt_tokens: 10, completion_tokens: 2 } } },
+  id: `req_${seg}_${n}`, ts_request: '2026-11-05T09:00:00.000Z', is_llm_call: true, capture: 'transparent', host: 'api.example.test', traffic_class: 'llm',
+  proc: { pid: 9, exe: '/x/kimi', agent: 'kimi' } })
+test('3.5 #37 §后台抽取与归约: a user\'s session waiting for room holds the usage fill, and gets its verdict before the fill ends', { timeout: 300_000 }, async () => {
+  const { home, sessions: [s] } = await homeOf('trocar-room-fill-', 'room-a')
+  const segments = [SEGMENT]
+  for (let i = 0; i < FILL; i++) {
+    const seg = `20261105T10${String(i).padStart(2, '0')}00Z`
+    fs.writeFileSync(path.join(home, 'raw', `${seg}.ndjson`), Array.from({ length: 3 }, (_, n) => small(seg, n)).join('\n') + '\n', { mode: 0o600 })
+    segments.push(seg)
+  }
+  const flag = path.join(tmpDir('trocar-room-stall-'), 'stall')
+  const b = ballasted(foldLog(home, s), `const open1 = fs.openSync, rename1 = fs.renameSync
+const usage = (f) => /\\.usage\\.json$/.test(String(f))
+const stall = () => { if (!fs.existsSync(${JSON.stringify(flag)})) return; for (const end = Date.now() + ${STALL_MS}; Date.now() < end;); }
+fs.renameSync = (a, b) => { if (usage(b)) stall(); return rename1(a, b) }
+fs.openSync = (f, ...a) => { if (usage(f) && a[0] === 'r+') stall(); return open1(f, ...a) }
+`)
+  const r = watched(b.fork), svc = createQueryService({ home, fork: r.fork, idleMs: 120_000 })
+  const sidecars = () => segments.filter((g) => fs.existsSync(usageFile(home, g))).length, total = segments.length
+  const moving = () => r.n + r.again + sidecars()
+  try {
+    const ready = answer()
+    await svc.relay({ name: 'sessions', params: {}, res: ready })
+    assert.equal(ready.status, 200)
+    fs.writeFileSync(flag, '')
+    await svc.relay({ name: 'overview', params: {}, res: answer() }) // its answer written, the fill starts
+    const asked = svc.relay({ name: 'lane', params: { id: s.id, tail: 'main' }, res: answer() }).catch(() => {}) // asked again until the stop
+    await whileMoving(() => r.again > 0, moving, 'the lane read waited for room')
+    const c0 = sidecars()
+    await whileMoving(() => stoppedOn(home, s.id), moving, 'the stop was written')
+    const c1 = sidecars()
+    assert.ok(c1 - c0 <= 1, `the fill waited while the session waited for room: ${c0} → ${c1} of ${total}`)
+    assert.ok(c1 < total, `the verdict came before the fill ended: ${c1} of ${total}`)
+    await whileMoving(() => sidecars() === total, moving, 'the fill finished')
+    void asked
   } finally { svc.stop() }
 })

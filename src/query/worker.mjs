@@ -192,7 +192,9 @@ const waitRoom = new Map()
 /** Session work pending: a request read or in flight, or a session read for a user (a request's, a follow's, a kick's). The usage fill waits
  *  for none (3.5 后台抽取与归约); a session fully read is no longer `target` nor followed, so it holds nothing. */
 const sessionWork = () => busy > 0 || (target != null && user) || follow.size > 0
-if (role === 'main') pauseFill(async () => { while (sessionWork()) await new Promise((r) => setTimeout(r, 50)) })
+// the fill also waits while a user's session waits for heap room (a `null` entry in waitRoom): the room it is waiting for may be the fill's
+const userWaits = () => { for (const u of waitRoom.values()) if (u == null) return true; return false }
+if (role === 'main') pauseFill(async () => { while (sessionWork() || userWaits()) await new Promise((r) => setTimeout(r, 50)) })
 // The heap is looked at (a full collection, the warm entries let go) at most once per ROOM_MS while sessions wait for it, never under session
 // work nor beside a reader, whose state the look would let go (3.5 #62).
 const ROOM_MS = 2000
