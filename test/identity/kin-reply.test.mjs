@@ -97,6 +97,11 @@ test('kinship by reply: a reply among the last windows is seen however much whit
   assert.equal(run([turn('responses', 0, 0, r, T0), summary('responses', [prose(16, 100_000), r, loose], T0 + MIN)])[1].key, 'sid-0')
 })
 
+test('kinship by reply: a request is read over a bounded tail: a reply before 2 M chars that keep no window is not seen', () => {
+  const r = prose(40, 600), filler = 'abc'.repeat(700_000) // the sample keeps none of its windows
+  assert.equal(run([turn('responses', 0, 0, r, T0), summary('responses', [r, filler], T0 + MIN)])[1].kin, false)
+})
+
 test('kinship by reply: a reply past SYNTH_TTL_MS names no session; within it, past the fingerprint window, it does', () => {
   const r = prose(11, 800)
   assert.equal(run([turn('responses', 0, 0, r, T0), summary('responses', [r], T0 + SYNTH_TTL_MS - MIN)])[1].key, 'sid-0', 'within the TTL')

@@ -116,15 +116,17 @@ function itemOf(text) {
 }
 // A compaction request's last HEAD_CAP windows of its user texts (space-joined, collapsed), as base64. Walked over their end only, so
 // the work is bounded by what is kept, not by the request's length: a suffix of the raw text collapses to a suffix of the collapsed
-// text, and a window is its WIN chars alone, so the suffix's windows are the whole's last ones exactly; the suffix doubles until it
-// holds HEAD_CAP of them or is the whole text.
+// text, and a window is its WIN chars alone, so the suffix's windows are the whole's last ones exactly. Two passes at most: the last
+// HEAD_SPAN chars, and when they hold fewer than HEAD_CAP windows (a run the sample rarely keeps, or much whitespace) the last
+// 4 × HEAD_SPAN, whose windows are kept however few: at most 5 × HEAD_SPAN chars (about 390 K) are read per request, whatever its length.
+const HEAD_SPAN = HEAD_CAP * SAMPLE * 1.2;
 function headsOf(texts) {
-  for (let need = HEAD_CAP * SAMPLE * 1.2; ; need *= 2) {
+  for (const need of [HEAD_SPAN, 4 * HEAD_SPAN]) {
     const tail = [];
     let len = -1;
     for (let i = texts.length - 1; i >= 0 && len < need; i--) { tail.push(texts[i]); len += texts[i].length + 1; }
     const s = tail.reverse().join(' '), all = s.length <= need && tail.length === texts.length, w = windowsOf(collapse(all ? s : s.slice(-need)));
-    if (all || w.length >= 2 * HEAD_CAP) return bytesOf(w.subarray(-2 * HEAD_CAP)).toString('base64');
+    if (all || need > HEAD_SPAN || w.length >= 2 * HEAD_CAP) return bytesOf(w.subarray(-2 * HEAD_CAP)).toString('base64');
   }
 }
 // where each window starts in a call's list, by its first hash (a multiple of SAMPLE, so h / SAMPLE is a small integer)
