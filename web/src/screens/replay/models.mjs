@@ -147,7 +147,9 @@ function infoRows(s) {
   if (c.priced || c.unpriced || c.failed) {
     const some = c.priced > 0, table = !!s.pricing
     // no table yet (or an unreadable one): nothing is priced, and the one reason is the table's, never "no unit price" (1.2 §信息弹出层 row 1)
-    const notes = !table ? [tableWhy(s)] : [c.unpriced ? W.noPriceCalls(c.unpriced) : null, some ? null : W.NO_ANY_PRICE].filter(Boolean)
+    // one note per cause, each call under one (1.2 §信息弹出层 row 1): no price row, or no usage returned
+    const noPrice = c.unpriced - c.noUsage
+    const notes = !table ? [tableWhy(s)] : [noPrice ? W.noPriceCalls(noPrice) : null, c.noUsage ? W.noUsageCalls(c.noUsage) : null].filter(Boolean)
     rows.push({ key: 'cost', approx: true, usd: some ? c.usd : null, text: `${W.COST_LINE} ${some ? usd(c.usd) : '—'}${some && c.unpriced ? ` ${W.COST_FROM}` : ''}`,
       buckets: ['main', 'sub', 'bg'].map((k) => ({ key: k, word: W.BUCKETS[k], usd: t.cost[k] && t.cost[k].priced ? t.cost[k].usd : null })),
       notes, prices: { text: W.SEE_PRICES, href: '#/settings/prices' } })

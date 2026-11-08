@@ -147,20 +147,21 @@ export function costOf(row, u) {
 }
 const modelOf = (c) => (c && c.rec && c.rec.request && c.rec.request.model) || null
 // priceOf(model) → a price row, a priceMatch result, or null. A call priced through a non-exact match counts in `approx`, and `approxKeys` says which keys.
-// A failed call is not billed: it counts in `failed`, in neither `priced` nor `unpriced` (the latter means "no price or no usage").
+// A failed call is not billed: it counts in `failed`, in neither `priced` nor `unpriced` (the latter means "no price or no usage";
+// `noUsage` is the part of it with no usage, whatever the price).
 export function sessionCost(calls, priceOf) {
-  let usd = 0, priced = 0, unpriced = 0, approx = 0, failed = 0
+  let usd = 0, priced = 0, unpriced = 0, noUsage = 0, approx = 0, failed = 0
   const keys = new Set()
   for (const c of calls || []) {
     if (isFailed(c)) { failed++; continue }
     const p = priceOf(modelOf(c)), row = Array.isArray(p) ? p : p && p.row
-    const c$ = costOf(row, usageOf(c))
-    if (c$ == null) { unpriced++; continue }
+    const u = usageOf(c), c$ = costOf(row, u)
+    if (c$ == null) { unpriced++; if (!u) noUsage++; continue }
     usd += c$
     priced++
     if (p && !Array.isArray(p) && p.exact === false) { approx++; keys.add(p.key) }
   }
-  return { usd, priced, unpriced, failed, approx, approxKeys: [...keys].sort() }
+  return { usd, priced, unpriced, noUsage, failed, approx, approxKeys: [...keys].sort() }
 }
 
 // ── cost per bucket ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -170,7 +171,7 @@ export function sessionCost(calls, priceOf) {
 // null → the rows never name it; its calls are also probe-flagged, so billed() drops them from every bucket)
 export const bucketOf = (kind) => laneKind(kind).bucket ?? 'bg'
 const billed = (lane) => (lane.calls || []).filter((c) => c && !c.probe)
-const addCost = (a, b) => ({ usd: a.usd + b.usd, priced: a.priced + b.priced, unpriced: a.unpriced + b.unpriced, failed: a.failed + b.failed, approx: a.approx + b.approx, approxKeys: [...new Set([...a.approxKeys, ...b.approxKeys])].sort() })
+const addCost = (a, b) => ({ usd: a.usd + b.usd, priced: a.priced + b.priced, unpriced: a.unpriced + b.unpriced, noUsage: a.noUsage + b.noUsage, failed: a.failed + b.failed, approx: a.approx + b.approx, approxKeys: [...new Set([...a.approxKeys, ...b.approxKeys])].sort() })
 export function costBuckets(lanes, priceOf) {
   const by = { main: [], sub: [], bg: [] }
   for (const l of lanes || []) by[bucketOf(l.kind)].push(...billed(l))

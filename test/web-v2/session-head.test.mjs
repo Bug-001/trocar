@@ -129,6 +129,26 @@ test('1.2 §信息弹出层 row 1: no price table yet, or an unreadable one: ≈
   assert.ok(costOf({}).usd > 0, 'with the table the session is priced')
 })
 
+test('1.2 §信息弹出层 row 1: each unpriced call is under one cause, said once: no price row, or no usage returned', () => {
+  const m = (model, usage) => ({ rec: { request: { model } }, usage })
+  const costOf = (rows, sub = []) => sessionHeadModel(headState([{ kind: 'main', rows }, ...(sub.length ? [{ kind: 'subagent', rows: sub }] : [])], {}, {})).info().find((r) => r.key === 'cost')
+  // nothing priced: one model with no price row (2 calls), one call with no usage at all
+  const none = costOf([m('x-unpriced', U(0, 50, 5)), m('x-unpriced', U(0, 50, 5)), m('x-unpriced', null)])
+  assert.equal(none.usd, null)
+  assert.deepEqual(none.notes, [W.noPriceCalls(2), W.noUsageCalls(1)])
+  // priced calls beside them: the same notes, each cause once, and the row is a floor
+  const some = costOf([...mainRows(), m('x-unpriced', U(0, 50, 5)), m('x-unpriced', null)])
+  assert.ok(some.usd > 0 && some.text.includes(W.COST_FROM))
+  assert.deepEqual(some.notes, [W.noPriceCalls(1), W.noUsageCalls(1)])
+  // a call with no usage on a priced model is a usage cause, never a price one
+  assert.deepEqual(costOf([...mainRows(), m('m', null)]).notes, [W.noUsageCalls(1)])
+  // the causes add up over every bucket: a sub-agent's call with no usage counts too
+  assert.deepEqual(costOf([...mainRows(), m('m', null)], [m('m', null), m('x-unpriced', U(0, 5, 1))]).notes, [W.noPriceCalls(1), W.noUsageCalls(2)])
+  // every call failed: '≈ —' with no note (the failed row says why), never a price note
+  const failed = costOf([{ error: 'boom', usage: null }, { error: 'boom', usage: null }])
+  assert.equal(failed.usd, null); assert.deepEqual(failed.notes, [])
+})
+
 test('1.2 #7 · model: every info number is core/metrics.mjs\'s on the same answer; estimates carry ≈; no field name in any word', () => {
   const s = headState([{ kind: 'main', rows: mainRows() }, { kind: 'monitor', rows: [{ usage: U(0, 20, 5) }, { error: 'x', usage: null }] }], { meta: { session_id: 'S', calls: 6 }, truncated: { shown: 6, total: 9, file_mb: 1 } })
   const t = sessionTotals(s.lanes, (m) => priceMatch(PRICES, m)), rows = sessionHeadModel(s).info()
