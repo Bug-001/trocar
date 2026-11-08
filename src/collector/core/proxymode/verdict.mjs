@@ -131,7 +131,7 @@ export function verdictOf({ desc, form, facts = {}, record = {}, issuer, host, h
   if (facts.name !== desc.name) return fwd('not-verified', `the agent list does not name this process as ${desc.name}`)
   const v = form.verified && form.verified[ctx.os]
   if (v !== true) return fwd('not-verified', `${form.id} is not verified on ${ctx.os}${v && v.reason ? `: ${v.reason}` : ''}`)
-  if ((form.forwardOnlyHosts || []).some((x) => x.toLowerCase() === h)) return fwd('not-verified', `${host} is forward-only for ${form.id} until it is verified there`)
+  if ((form.forwardOnlyHosts || []).some((x) => x.toLowerCase() === h)) return fwd('forward-only-host', `${host} is forward-only for ${form.id}`)
   if (form.hostTree && !(hostSet || desc.hosts || []).some((x) => x.toLowerCase() === h)) return fwd('outside-host-set', `${host} is outside ${form.id}'s host set; the host program's other connections are forwarded`)
   if (record.carrierInstalledAt && record.carrierInstalledAt.error) return fwd('config-unreadable', `a setting that may name ${form.id}'s certificate file could not be read: ${why(record.carrierInstalledAt)}`, { unread: true }) // rule U (4.11 P4)
   const sv = startVerdict(facts.startedAt, record.carrierInstalledAt)

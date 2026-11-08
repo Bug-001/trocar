@@ -85,7 +85,7 @@ test('D38 the scan fails on a name outside the set (planted tree)', () => {
 // 4.6 §记录「连接行」: an untracked / untrusted row's class is its reason's — forwarded by design is expected, every other reason
 // and none is a failure. The by-design lists are the spec's words, written out here (W38): a reason added to either set must be added in both.
 test('4.6 连接行: untracked / untrusted rows forwarded by design are expected; pid-unresolved, a trust reason and no reason stay failures', () => {
-  const SPEC = { untracked: ['not-an-agent', 'agent-helper', 'harness-off', 'group-off', 'outside-host-set', 'other-user'], untrusted: ['not-verified', 'outside-host-set'] }
+  const SPEC = { untracked: ['not-an-agent', 'agent-helper', 'harness-off', 'group-off', 'outside-host-set', 'other-user'], untrusted: ['not-verified', 'forward-only-host', 'outside-host-set'] }
   for (const nc of Object.keys(SPEC)) {
     for (const reason of [null, ...new Set([...UNTRACKED_REASONS, ...TRUST_REASONS])]) {
       const row = { flow_id: 'f', decision: 'splice', not_captured: nc, reason }

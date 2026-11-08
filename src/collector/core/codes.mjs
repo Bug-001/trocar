@@ -34,7 +34,8 @@ export const TRUST_REASON = Object.freeze({
   'no-marker': 'the trust plugin did not report adding the trocar CA for this process, and no known reason explains why (plugin file missing, or the process predates it)',
   'config-unreadable': 'a configuration file of this agent exists but cannot be read',
   'hook-inherited': "this process inherited trocar's proxy from its parent but did not load trocar's plugin itself, so it holds no trocar CA and is only forwarded; start it directly, with its plugins loaded",
-  'not-verified': 'this process, its form on this OS, or this host is not verified for decryption on this platform; forwarded only',
+  'not-verified': 'this process, or its form on this OS, is not verified for decryption on this platform; forwarded only',
+  'forward-only-host': 'the form lists this host as forward-only (its own sign-in, update or download host); forwarded by design',
   'outside-host-set': 'a host program carrying the agent talked to a host outside the form\'s host set; forwarded only',
 })
 
