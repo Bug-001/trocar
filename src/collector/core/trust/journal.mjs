@@ -200,7 +200,8 @@ export function inheritDirs({ dir, manifest, entry, from, fs = nodeFs }) {
   entry.undo_by_hand = undoByHand(entry)
   saveManifest(dir, manifest, fs)
 }
-const refuseChanged = (j) => new Error(`${j.entry.path}: ${j.why}; trocar leaves it as it is — run "trocar off", then "trocar on", to write the entry again`)
+// the way back is the command that writes that entry: install for its own items (D55①: off and on never write them), on for on's
+const refuseChanged = (j) => new Error(`${j.entry.path}: ${j.why}; trocar leaves it as it is — ${j.entry.phase === 'install' ? 'run "trocar install" to place it again' : 'run "trocar off", then "trocar on", to write the entry again'}`)
 // D62①: `defer` (the routes of one `on`) leaves the save after a write to the next save — the next file's intent, which is saved before that file
 // changes, or flushResults at the end of the run. The intent is durable before its file changes as always; a crash between the two leaves the
 // record with no post_sha256, the state a crash between the write and its own save left, and the next run finishes it the same way.

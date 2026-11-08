@@ -507,3 +507,42 @@ test('4.11 P4 · an unrecorded registration under trocar\'s name is backed up, t
   const bk = path.join(w.home, '.trocar', 'backup')
   assert.ok(fs.readdirSync(bk).some((n) => fs.readFileSync(path.join(bk, n)).equals(old)), 'the registered bytes are kept')
 })
+
+// 4.11 P4b: install's own carrier item that is gone is placed again by install — the one way to put it back (on writes no certificate item, D55①).
+// The old record leaves the manifest and the new one owns what the old one created; a value the user put in its place is the user's (rule U).
+for (const os of ['darwin', 'win32']) {
+  const zcode = async () => {
+    const w = await modelWorld({ os })
+    fs.mkdirSync(path.join(w.home, '.zcode'), { recursive: true })
+    const r1 = await w.install({ wrapperKit: { renderWrapper } })
+    assert.equal(r1.exit, 0, JSON.stringify({ p: r1.problems, pe: r1.pending }))
+    return { w, cfg: path.join(w.home, '.zcode', 'cli', 'config.json') }
+  }
+  const keyRecords = (w, cfg) => readManifest(w.dir).entries.filter((e) => e.kind === 'json-key' && e.path === cfg && e.phase === 'install')
+  // the agent rewrote its config without trocar's key, or the file is gone (the directories install made for it stay owned: uninstall takes them away)
+  for (const [how, gone, after] of [['rewrote its file without', (cfg) => fs.writeFileSync(cfg, JSON.stringify({ theme: 'dark' })), { theme: 'dark' }], ['removed its file with', (cfg) => fs.rmSync(cfg), {}]]) {
+    test(`4.11 P4b · ${os}: an install key the agent ${how} it is placed again by install, exit 0; the old record retired`, async () => {
+      const { w, cfg } = await zcode()
+      const bundle = json(cfg).network.caCertFile
+      const [old] = keyRecords(w, cfg)
+      gone(cfg)
+      const r2 = await w.install({ wrapperKit: { renderWrapper }, now: later })
+      assert.equal(r2.exit, 0, JSON.stringify({ p: r2.problems, pe: r2.pending }))
+      assert.deepEqual(json(cfg), { ...after, network: { caCertFile: bundle } }, 'placed again, the agent\'s keys kept')
+      const recs = keyRecords(w, cfg)
+      assert.equal(recs.length, 1, 'one record: the old one retired')
+      assert.notEqual(recs[0].installed_at, old.installed_at)
+      if (!Object.keys(after).length) for (const d of old.created_dirs || []) assert.ok(recs[0].created_dirs.includes(d), `${d}: still owned`)
+    })
+  }
+  test(`4.11 P4b · ${os}: an install key whose value the user replaced with their own is the user's: left, rule U, exit 0`, async () => {
+    const { w, cfg } = await zcode()
+    const mine = path.join(w.home, 'certs', 'z.pem'); put(mine, USER_PEM)
+    fs.writeFileSync(cfg, JSON.stringify({ network: { caCertFile: mine } }))
+    const before = fs.readFileSync(cfg)
+    const r2 = await w.install({ wrapperKit: { renderWrapper }, now: later })
+    assert.equal(r2.exit, 0, JSON.stringify({ p: r2.problems, pe: r2.pending }))
+    assert.deepEqual(fs.readFileSync(cfg), before, 'the user\'s value stays')
+    assert.equal(r2.carriers.find((c) => c.harness === 'z-code' && c.carrier === 'pem-block').state, 'placed')
+  })
+}
