@@ -12,6 +12,24 @@ export const sha256 = (data) => (data == null ? null : crypto.createHash('sha256
 /** The file's bytes, or null when it is not there; any other error is thrown. */
 export function readOrNull(fs, file) { try { return fs.readFileSync(file) } catch (e) { if (e.code === 'ENOENT') return null; throw e } }
 
+/** What readBounded throws for a path that is no regular file: a class of its own, not an Error `code`, since it never reaches a record. */
+export class NotRegularFile extends Error { constructor() { super('not a regular file') } }
+
+/** At most `limit` bytes of a regular file. Throws for anything else, the file's own error or NotRegularFile. A path swapped for a FIFO after the stat
+ *  still cannot block: O_NONBLOCK, then fstat what was opened. Windows has no O_NONBLOCK, and its stat calls a link to a named pipe a file, so there the fstat is all that stands
+ *  before a read that never returns. */
+export function readBounded(fs, file, limit) {
+  if (!fs.statSync(file).isFile()) throw new NotRegularFile()
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK || 0))
+  try {
+    if (!fs.fstatSync(fd).isFile()) throw new NotRegularFile()
+    const buf = Buffer.allocUnsafe(limit)
+    let got = 0
+    for (let n; got < limit && (n = fs.readSync(fd, buf, got, limit - got, got)) > 0;) got += n
+    return buf.subarray(0, got)
+  } finally { fs.closeSync(fd) }
+}
+
 // A directory cannot be fsynced everywhere (Windows refuses the open or the fsync with EPERM / EISDIR / EBADF, some network
 // file systems with EINVAL / ENOTSUP): that is not a failed write, the rename is done. Anything ELSE is a real failure and is
 // thrown — swallowing it is what left every Windows segment with its plaintext beside the sealed file (tested 2026-10-18).
