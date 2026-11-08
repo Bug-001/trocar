@@ -8,6 +8,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { probe, shoot, layoutFaults, launchChrome } from './harness.mjs'
+import { mark } from '../../../web/legacy/core/ui.mjs'
 import { BOARD_LINES } from '../perf-lines.mjs'
 import { modelWorld } from '../../helpers/model-world.mjs'
 import { liveUnit, withScratchCwd, boardPortOf, servableWorld } from '../../helpers/model-daemon.mjs'
@@ -155,6 +156,37 @@ test('an expanded problem row: nothing drawn on one another, the two right-hand 
         assert.deepEqual(b.errors, [])
       } finally { await b.close() }
     }
+  })
+})
+
+// 1.6 C.3 `inferred`: a route whose hop is reached by an inferred edge (an app with no PAC, drawn direct) shows the inferred mark in the open row's
+// technical details; the measured hop beside it does not
+test('an inferred edge on a route: its hop is marked inferred in the technical details', { skip, timeout: 240_000 }, async () => {
+  await withDaemonBoard(async (ctx) => {
+    const b = await open(gate.chromium, ctx, { width: 1280 })
+    try {
+      const now = new Date().toISOString()
+      await b.page.route((u) => new URL(u).pathname === '/api/status', async (r) => {
+        const res = await r.fetch(), j = await res.json()
+        j.harnesses.codex = { ...j.harnesses.codex, desired: 'on', captured: false, reason: 'config-after-start', why: [] }
+        j.topology = { ...(j.topology || {}), codex: { at: now, routing: 'proxy', captured: false, reason: 'config-after-start', findings: ['config-after-start'],
+          nodes: [{ id: 'a', name: 'codex' }, { id: 'x', name: 'internet' }, { id: 'b', name: 'codex-ws' }, { id: 'y', name: 'relay.example' }],
+          edges: [{ from: 'a', to: 'x', via: 'direct', inferred: true }, { from: 'b', to: 'y', via: 'direct' }],
+          branches: [{ name: 'http', path: ['a', 'x'] }, { name: 'ws', path: ['b', 'y'] }] } }
+        await r.fulfill({ response: res, json: j })
+      })
+      await b.page.reload({ waitUntil: 'load' })
+      const row = '.crow[data-h="codex"] .cexp:not([hidden])'
+      await b.page.waitForSelector(`${row} .exp-tech`, { timeout: 30000 })
+      const trigger = await b.page.$(`${row} .exp-tech .disc-t`)
+      if (trigger && (await trigger.getAttribute('aria-expanded')) !== 'true') await trigger.click()
+      await b.page.waitForSelector(`${row} .exp-tech .disc-b`, { state: 'visible', timeout: 30000 })
+      const tech = await b.page.$eval(`${row} .exp-tech`, (el) => el.textContent)
+      const INF = mark('inf').replace(/<[^>]*>/g, '')
+      assert.ok(tech.includes(`codex → internet ${INF}`), tech)
+      assert.ok(tech.includes('codex-ws → relay.example') && !tech.includes(`relay.example ${INF}`), tech)
+      assert.deepEqual(b.errors, [])
+    } finally { await b.close() }
   })
 })
 

@@ -41,6 +41,8 @@ async function text(w, h, cmd, argv) {
 const tagOf = (r) => r.door_sha256 ?? sha256(r.door)
 const sha256 = (s) => crypto.createHash('sha256').update(String(s)).digest('hex')
 const status = async (w, h) => (await statusDoc(w, h)).harnesses[h]
+// the form whose route is the record's (a PAC route serves one form)
+const pacFormOf = (w, e) => w.harnesses.find((d) => d.name === e.harness).proxyMode.forms.find((f) => f.route === e.route).id
 const reasonsIn = (doc) => [...new Set(JSON.stringify(doc).match(/"reason":"[a-z-]+"/g).map((x) => x.slice(10, -1)))]
 
 test('P10: status names trocar\'s stale PAC address with trocar on; on rewrites it; a value put there by hand is the user\'s change', async (t) => {
@@ -71,6 +73,14 @@ test('P10: status names trocar\'s stale PAC address with trocar on; on rewrites 
   const doc = await statusDoc(w, h), x = doc.harnesses[h]
   assert.deepEqual([x.captured, x.reason], [false, 'pac-address-stale'])
   assert.deepEqual(reasonsIn(doc).filter((c) => c.startsWith('entry-')), [], 'the summary and the detail say the same reason')
+  // the PAC form itself: its entry is not intact and nothing connects through it (the door refuses the address); its route is drawn without trocar, direct, inferred
+  const pacForm = x.forms.find((f) => f.form === pacFormOf(w, e))
+  assert.deepEqual([pacForm.proxy.entry_intact, pacForm.proxy.connected], [false, false])
+  const br = doc.topology[h].branches.find((b) => b.form === pacForm.form), nodes = new Map(doc.topology[h].nodes.map((n) => [n.id, n]))
+  assert.deepEqual([br.on_path, br.captured, br.reason], [false, false, 'pac-address-stale'])
+  assert.ok(br.path.every((id) => !nodes.get(id).trocar), 'trocar is not on its path')
+  const first = doc.topology[h].edges.find((x) => x.from === br.path[0] && x.to === br.path[1])
+  assert.deepEqual([first.via, first.inferred], ['direct', true])
   await on()
   assert.notEqual(valueNow(), was, 'on wrote the current address')
   assert.deepEqual([...new Set(pacs().map(tagOf))], [sha256(valueNow())], 'its records tagged with what it wrote')
