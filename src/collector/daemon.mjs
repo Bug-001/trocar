@@ -580,7 +580,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     const first = await engine.listen({ port: want, hosts: ['127.0.0.1'] }).catch((e) => {
       // G3: the port is squatted (chosen at install). Nothing is steered
       // (the helper is not spawned yet), so the agents' connections stay direct; say so, and how to get a new port.
-      if (e.code === 'EADDRINUSE') throw Object.assign(new Error(`the engine port 127.0.0.1:${want} recorded at install is held by another process; nothing is steered, agent connections go direct. Free the port, or run "trocar uninstall" and "trocar on" to pick a new one`), { code: CODE.enginePortTaken, errno: 'EADDRINUSE' }) // recorded under its closed-set code; the daemon never picks another port (decision #16)
+      if (e.code === 'EADDRINUSE') throw Object.assign(new Error(`the engine port 127.0.0.1:${want} recorded at install is held by another process; nothing is steered, agent connections go direct. Free the port, or start over to get a new one: run "trocar off", then "trocar uninstall", then "trocar install", then "trocar on"`), { code: CODE.enginePortTaken, errno: 'EADDRINUSE' }) // recorded under its closed-set code; the daemon never picks another port (decision #16)
       throw e
     })
     const port = first.port

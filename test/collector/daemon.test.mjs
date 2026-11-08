@@ -673,13 +673,15 @@ for (const body of [{}, { harnesses: [cc.name] }]) {
   })
 }
 
+// starting over is followed in order: off (uninstall refuses while a harness is on), uninstall, install (on never installs, D55), then on
+const startsOver = (msg) => { const at = ['off', 'uninstall', 'install', 'on'].map((v) => msg.indexOf(`"trocar ${v}"`)); return at.every((x, i) => x >= 0 && (i === 0 || x > at[i - 1])) }
 test('daemon: the install-time engine port held by another process → start fails with the reason, no helper spawned, nothing steered (G3)', async () => {
   const s = sandbox(); const p = fakeProc()
   const squat = net.createServer(); await new Promise((r) => squat.listen(0, '127.0.0.1', r))
   try {
     await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [cc], freePort: async () => squat.address().port })
     const { arch, clients } = fakeArch(p)
-    await assert.rejects(startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc] }), /recorded at install is held by another process; nothing is steered, agent connections go direct\. Free the port, or run "trocar uninstall" and "trocar on" to pick a new one$/)
+    await assert.rejects(startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc] }), (e) => /recorded at install is held by another process/.test(e.message) && startsOver(e.message))
     assert.ok(flowsOf(s).some((f) => f.event === 'failure' && f.where === 'start' && f.code === 'engine-port-taken' && /held by another process/.test(f.reason)), 'the refusal to start is recorded under engine-port-taken (D38); the daemon picks no other port')
     assert.equal(clients.length, 0, 'the helper was never spawned, so no connection is redirected')
     assert.ok(!fs.existsSync(path.join(s.collector, 'lock')))
