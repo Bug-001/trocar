@@ -81,19 +81,22 @@ function fingerprints(texts, cap) {
 const CHAIN_K = 12, TAIL = 4, CHAIN_CAP = 32, RECENT = 12, MIN_ITEMS = 2, ENDS = 2;
 const h16 = (s) => createHash('sha256').update(s, 'utf8').digest('hex').slice(0, 16);
 const bare = (k, v) => (k === 'cache_control' ? undefined : v);
+// the replacer's bytes, paid only when the key is there: a key always serializes as `"cache_control"`; a string holding it is a false hit, re-encoded
+const enc = (it) => { const j = JSON.stringify(it) ?? 'null'; return j.includes('"cache_control"') ? JSON.stringify(it, bare) ?? 'null' : j; };
 const fromModel = (it) => !!it && (it.role === 'assistant' || it.type === 'reasoning' || /_call$/.test(it.type ?? ''));
 function chainOf(body) {
   const b = body || {};
   const items = Array.isArray(b.messages) ? b.messages : Array.isArray(b.input) ? b.input : typeof b.input === 'string' ? [b.input] : [];
-  const out = [], recent = [];
+  const out = [], js = new Array(items.length);
   let c = null;
   items.forEach((it, i) => {
-    const j = JSON.stringify(it, bare) ?? 'null';
-    c = h16(c == null ? j : c + '\n' + j);
+    const j = (js[i] = enc(it)), h = createHash('sha256'); // streamed: the same digest as of `c + '\n' + j`, without the copy
+    c = (c == null ? h : h.update(c).update('\n')).update(j, 'utf8').digest('hex').slice(0, 16);
     if (i >= items.length - TAIL || (fromModel(items[i + 1]) && !fromModel(it))) out.push(c);
-    if (it?.role !== 'system' && it?.role !== 'developer') recent.push(h16(j).slice(0, 8)); // every agent of the group has those
   });
-  return { chain: out.slice(-CHAIN_K), items: recent.slice(-RECENT) };
+  const recent = []; // own hashes of the last RECENT items only; system / developer items left out: every agent of the group has those
+  for (let i = items.length - 1; i >= 0 && recent.length < RECENT; i--) if (items[i]?.role !== 'system' && items[i]?.role !== 'developer') recent.push(h16(js[i]).slice(0, 8));
+  return { chain: out.slice(-CHAIN_K), items: recent.reverse() };
 }
 
 /** What a call brings to the rule, or null when it takes no part in it. Keyless → {harness, ms, hash, fp, probe, late, chain, items, mark}: `fp` is the
@@ -118,18 +121,17 @@ function factsOf(rec) {
   const key = sessionKeyOf(rec).key;
   const body = bodyOf(rec), texts = userTextsOf(body), fp = fingerprints([...texts].reverse(), FP_CAP);
   if (key) return { harness: h.id, ms, key, fp };
-  const probe = compactionRequest(rec, h.row) ? fingerprints(texts, PROBE_CAP) : null;
+  const hint = hintsOf(rec), probe = compactionRequest(rec, h.row, hint) ? fingerprints(texts, PROBE_CAP) : null;
   // `late`: how many of `fp` (a prefix: the texts are taken newest first) come from user texts after the first one
   return { harness: h.id, ms, hash: createHash('sha256').update(systemTextOf(body), 'utf8').digest('hex'), fp, probe,
-    late: fingerprints([...texts.slice(1)].reverse(), FP_CAP).length, ...chainOf(body), mark: !probe && hintsOf(rec).compactionMarker === true };
+    late: fingerprints([...texts.slice(1)].reverse(), FP_CAP).length, ...chainOf(body), mark: !probe && hint.compactionMarker === true };
 }
 
 // The call that is the compaction request: a header / request-kind hint, or its harness's text marker in one block of its own system
 // text (pi's summary request; on the Anthropic OAuth wire pi's prompt is the second block, after Claude Code's identity block), each
 // block read as a JSON string so a marker anchored on a string's start holds. A marker in the history (Hermes
 // keeps one in every later call) marks a turn of the session it is in, not a call looking for one (3.4 按内容认亲).
-function compactionRequest(rec, row) {
-  const hint = hintsOf(rec);
+function compactionRequest(rec, row, hint) {
   if (hint.compaction === true) return true;
   if (!hint.compactionMarker) return false;
   const blocks = systemPartsOf(bodyOf(rec)).map((t) => JSON.stringify(t));
