@@ -406,6 +406,8 @@ which one has been shown to capture verbatim on which platform is the table at t
 **Linux** is driver mode (RFC 4.6, D31): an eBPF helper steers only the connections of agent processes you run to a
 loopback engine, which decrypts only for agents that trust the collector CA. Everything else, including other users,
 goes direct. `install` writes the CA under `~/.trocar/collector/ca/` and the trust entry of each agent on this machine (table below).
+Kimi Code's VS Code extension is not captured on Linux: VS Code's own certificate list takes trocar's only through your login
+environment, which trocar does not change. When the extension is installed, `install`, `on` and `status` say so.
 trocar can also run in a pid namespace of its own, as it does inside a container. The helper then numbers processes in
 that namespace, on kernels whose cgroup programs can read a process's pid there (6.8 can). Inside a container the
 helper also needs `cap_bpf`, `cap_net_admin` and `cap_perfmon` in the container's bounding set, a seccomp profile that

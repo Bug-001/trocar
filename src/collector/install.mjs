@@ -7,6 +7,7 @@
 import { retriedNote, SETUP_WHY } from '../cli/words.mjs'
 import { UNDO_WORDS, setupBlocked, setupError } from '../cli/receipt.mjs'
 import { driverSetup, driverCtx, driverForms } from './driver-setup.mjs'
+import { uncapturedOf } from './core/proxymode/sources.mjs'
 import { isModelOs } from './model-install.mjs' // macOS / Windows: their on is turnOnModel (src/cli/on-model.mjs); this turnOn is Linux's
 import fs from 'node:fs'
 import net from 'node:net'
@@ -188,6 +189,9 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
   const draft = planTrust({ descriptors: descs, ctxFor, caCertPem: null, collectorDir: dir, roots: R })
   const daemon = unit ? daemonEnv(env, dir) : null
   if (daemon && daemon.note) draft.notes.push(daemon.note)
+  // a form trocar cannot capture whose places are here: said for every harness asked, its own footprint here or not, refused or not (4.6 「不采的形态」, D38)
+  const unseen = asked.flatMap((d) => uncapturedOf(d, ctxFor(d)).map((u) => ({ harness: d.name, code: CODE.harnessNote, reason: `${d.name}: ${u.why} (${u.paths.join(', ')})` })))
+  draft.notes.push(...unseen.map((r) => r.reason)) // not in draft.records: those are the reasons a harness is skipped
 
   // per item: written, intact, resumed, or changed by the user since (R9)
   const steps = []
@@ -258,9 +262,10 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
     ...(logs.length ? { logs } : {}), // D46: named in the plan's own listing (every file, R3), written by the unit's write step
     watch: draft.watch,
     notes: draft.notes,
+    uncaptured: unseen.map((r) => r.reason), // said by an install that has nothing to write too
     records: path.join(dir, 'flows'), // install notes are kept here as install-note events (D38)
     events: path.join(dir, 'flows', `${day}.ndjson`), // install-note lines are appended here (D-28)
-    _: { dir, prior, ca, descs, ctxFor, R, daemon, draft, unit },
+    _: { dir, prior, ca, descs, ctxFor, R, daemon, draft, unit, unseen },
   }
 }
 
@@ -294,7 +299,7 @@ async function writeInstall(args) {
   try { return await writeInstallSteps(args, written) } catch (e) { if (e && e.stopsRun) e.written = written; throw e } // what was done before the stop is said
 }
 async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePort, now, fs, guard = () => {}, confirmed = false, certs = true, keepCode = false }, written) {
-  const { ca, descs, ctxFor, R, daemon, draft, unit } = plan._
+  const { ca, descs, ctxFor, R, daemon, draft, unit, unseen } = plan._
   const body = () => JSON.stringify(m)
   let saved = body()
   const save = () => { if (body() !== saved) { saveManifest(dir, m, fs); saved = body() } }
@@ -306,6 +311,7 @@ async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePo
   if (m.engine_port == null) m.engine_port = await freePort()
   const final = planTrust({ descriptors: descs, ctxFor, caCertPem: certPem, collectorDir: dir, roots: R })
   if (daemon && daemon.note) { final.notes.push(daemon.note); final.records.push({ code: CODE.unitEnvNotCarried, reason: daemon.note }) }
+  for (const r of unseen) { final.notes.push(r.reason); final.records.push(r) }
   if (JSON.stringify(final.paths) !== JSON.stringify(draft.paths)) throw new Error(`the files to change moved while installing (${draft.paths.join(', ')} → ${final.paths.join(', ')}); only the CA was written; run "trocar uninstall", then "trocar on"`)
   m.planned = final.paths
   // what `off` needs to judge, from this manifest alone, which live process may hold what trocar wrote for a harness (4.6 撤销顺序): written before any user
@@ -406,6 +412,7 @@ export async function installCollector({ home = os.homedir(), ...opts } = {}) {
     if (installComplete(plan._.prior) && !plan.writing) {
       const entryBefore = opts.unit && typeof opts.unit.registered === 'function' ? opts.unit.registered().state : null // the receipt's head: "nothing was changed" only if the entry was there
       const put = runEventWriter({ dir, base: { run }, notes: [], fs })
+      for (const r of plan._.unseen) put({ event: EVENT.installNote, where: 'install', kind: 'note', ...r }) // every install records it (4.6 「不采的形态」)
       const dmn = await register(put, false)
       // a run that put the entry back or started the daemon changed something: its result is on record like any install's (1.6 §1.2)
       if (dmn && (dmn.started || (entryBefore && entryBefore !== 'present'))) put({ event: EVENT.installNote, where: 'install', kind: 'result', outcome: dmn.problems.length ? 'partial' : 'installed', reason: `the certificates were in place; the login entry was ${entryBefore}${dmn.started ? ' and the collector was started' : ''}${dmn.problems.length ? `; not done: ${dmn.problems.join('; ')}` : ''}` })
@@ -485,9 +492,9 @@ export async function turnOn(opts = {}) {
     if (!isModelOs(osName) && !installComplete(plan._.prior)) { const message = 'certificates are not installed. Run: trocar install'; return { receipt: unwritten({ ...fresh(), ok: false, error: { code: CODE.certNotInstalled, message }, notes: [message] }), manifest: plan._.prior, plan, exit: 1 } }
     const setupBlk = setupBlocked({ refused })
     if (refused.length && !plan.targets.length) { // nothing left to turn on: a real run still leaves its result line (1.6 §1); a dry run changes nothing
-      const r0 = unwritten({ ...fresh(), ok: !!dryRun, harnesses: [], refused, blocked: setupBlk, skipped: plan.skipped, notes: setupNotes, ...(dryRun ? { dry_run: true } : { error: setupError(setupBlk) }) })
+      const r0 = unwritten({ ...fresh(), ok: !!dryRun, harnesses: [], refused, blocked: setupBlk, skipped: plan.skipped, notes: [...plan.uncaptured, ...setupNotes], ...(dryRun ? { dry_run: true } : { error: setupError(setupBlk) }) })
       if (dryRun) return { receipt: r0, manifest: plan._.prior, plan, exit: 0 }
-      const put = noteRun({ dir, run, final: { records: [] }, written: { entries: [] }, notes: r0.notes, fs, log: opts.log })
+      const put = noteRun({ dir, run, final: { records: plan._.unseen }, written: { entries: [] }, notes: r0.notes, fs, log: opts.log })
       put({ event: EVENT.installNote, where: 'install', kind: 'result', outcome: 'failed', harnesses: [], refused: refused.map((x) => x.harness), reason: `on did not finish: ${r0.error.message}` })
       return { receipt: { ...r0, log: path.join(dir, 'flows') }, manifest: plan._.prior, plan, exit: 1 }
     }

@@ -157,12 +157,18 @@ function proxyModeProblems(pm) {
   return bad
 }
 
-/** A descriptor with `inject` (driver mode) names its Linux footprint: a non-empty top-level `present` of `<loc>` (no perOs: one OS) or `{ command }` (spec 4.11 校验, 4.6). */
+/** A descriptor with `inject` (driver mode) names its Linux footprint: a non-empty top-level `present` of `<loc>` (no perOs: one OS) or `{ command }` (spec 4.11 校验, 4.6),
+ *  and the forms it cannot capture, `uncaptured: [{ form, present, why }]`, their `present` of the same shape (4.6 「不采的形态」). */
 function presentProblems(d) {
-  if (typeof d.inject !== 'function') return []
-  if (!Array.isArray(d.present) || !d.present.length) return ['present: no top-level present list: trocar could not tell whether the harness is installed on Linux']
-  return d.present.flatMap((p, k) => (obj(p) && 'command' in p ? (nonEmpty(p.command) ? [] : [`shape: present[${k}].command is empty`])
-    : obj(p) && PM.base.includes(p.base) && !('perOs' in p) ? [] : [`shape: present[${k}] is not a <loc> without perOs or { command }`]))
+  const places = (list, at) => list.flatMap((p, k) => (obj(p) && 'command' in p ? (nonEmpty(p.command) ? [] : [`shape: ${at}[${k}].command is empty`])
+    : obj(p) && PM.base.includes(p.base) && !('perOs' in p) ? [] : [`shape: ${at}[${k}] is not a <loc> without perOs or { command }`]))
+  const uncaptured = d.uncaptured === undefined ? [] : Array.isArray(d.uncaptured) ? d.uncaptured : null
+  const bad = uncaptured ? uncaptured.flatMap((u, k) => (obj(u) && nonEmpty(u.form) && nonEmpty(u.why) && Array.isArray(u.os) && u.os.length && u.os.every((o) => ['linux', 'darwin', 'win32'].includes(o)) && Array.isArray(u.present) && u.present.length
+    ? places(u.present, `uncaptured[${k}].present`) : [`shape: uncaptured[${k}] is not { form, os, present, why }`]))
+    : ['shape: uncaptured is not a list']
+  if (typeof d.inject !== 'function') return bad
+  if (!Array.isArray(d.present) || !d.present.length) return ['present: no top-level present list: trocar could not tell whether the harness is installed on Linux', ...bad]
+  return [...places(d.present, 'present'), ...bad]
 }
 
 export async function loadHarnesses(dirUrl = new URL('./', import.meta.url)) {

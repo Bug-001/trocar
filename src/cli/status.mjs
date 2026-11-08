@@ -237,6 +237,7 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
     // the API hosts its own config names (4.11 configHosts: files only, the same for every asker): the direct hop is drawn from them, never from the descriptor's list.
     // All loopback (a relay on this machine) = its model calls never reach the door (P6), proxy mode only; a config not read says nothing
     const hd = desc.value ? desc.value.find((d) => d.name === id) : null
+    const ownHere = here ? (here[id] || []).some((x) => !((hd && hd.uncaptured) || []).some((u) => u.form === x)) : null // a form of its own, not one trocar does not capture (4.6 「不采的形态」)
     const read = hd ? configuredHosts(hd, { home, os: platform, readFile: (p) => fs.readFileSync(p, 'utf8'), readdir: (p) => fs.readdirSync(p) }) : { hosts: [], errors: [] }
     const hosts = read.errors.length ? [] : read.hosts
     const localUpstream = isProxyMode(platform) && hosts.length > 0 && hosts.every(isLoopbackHost)
@@ -248,7 +249,7 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
     const judged = judge()
     if (f.daemon.state === 'unknown' && desired === 'on') why.push(f.daemon.reason)
     if (desired === 'on' && f.daemon.state === 'running' && f.link.helper !== 'missing' && att.attached === null) why.push(att.reason) // the path in is what the verdict waits for, and the daemon could not say
-    f.harnesses.push({ id, installed: installedIds.includes(id), desired, entry, installedAt, procs, formsHere, hosts, localUpstream, judged, judge, why: [...new Set(why.filter(Boolean))] })
+    f.harnesses.push({ id, installed: installedIds.includes(id), desired, entry, installedAt, procs, formsHere, ownHere, hosts, localUpstream, judged, judge, why: [...new Set(why.filter(Boolean))] })
   }
   // how many connections are still relayed after an off (§1.3): the daemon says; with no daemon there is no engine, so none; with one that does not answer or does not say, not known
   const rc = reply && reply.relayed
@@ -510,7 +511,7 @@ export function statusDocOf(f) {
     ...newReceipt('status'), ok: statusExit(f) === EXIT.ok, ...(health ? { health } : {}), changed: changedOf(f),
     daemon: { running: d.state === 'running' ? true : d.state === 'not-running' ? false : null, pid: d.state === 'running' ? d.pid : null, responding: d.state === 'running' ? true : d.state === 'not-responding' ? false : null, since: (d.reply && d.reply.since) || (d.lock && d.lock.started_at) || null, code: (d.state === 'running' && d.reply && typeof d.reply.code === 'string' && d.reply.code) || null, error: d.reason || null }, // code: the daemon's own answer (C.3, D67⑤)
     harnesses: Object.fromEntries(f.harnesses.map((h) => [h.id, {
-      desired: h.desired ?? null, captured: h.judged.captured, reason: reasonOf(h.judged), why: h.why,
+      desired: h.desired ?? null, captured: h.judged.captured, reason: reasonOf(h.judged), why: h.why, present: h.ownHere ?? null,
       setup: setupDocOf(f, h.id), forms: forms[h.id] || [], processes: h.judged.rows.filter((r) => r.pid != null).map((r) => ({ pid: r.pid, name: r.name ?? null, captured: r.captured, reason: r.reason ?? null, ...(r.cause ? { cause: r.cause } : {}), ...(r.negatives ? { negatives: r.negatives } : {}) })),
       ...(f.identity && f.identity[h.id] ? { identity: f.identity[h.id] } : {}),
     }])),
@@ -578,9 +579,9 @@ export async function statusRun(argv, { io, env = process.env, home = nodeOs.hom
     detail.forEach((h, i) => {
       if (i) io.out('')
       const finding = found.find((x) => x.harness === h && x.class !== 'note') || null
-      for (const l of statusDetail(doc, h, { finding, now, colors: c })) io.out(l)
+      for (const l of statusDetail(doc, h, { finding, now, colors: c, home })) io.out(l)
     })
-  } else for (const l of statusSummary(doc, { now, colors: c })) io.out(l)
+  } else for (const l of statusSummary(doc, { now, colors: c, home })) io.out(l)
   if (failures) { io.out(''); for (const l of failuresBlock(doc.failures, effectiveHealth(f).health, { now })) io.out(l) }
   return { exit, f }
 }
