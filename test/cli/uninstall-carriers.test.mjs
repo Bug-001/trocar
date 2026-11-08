@@ -15,6 +15,9 @@ import { runUninstall } from '../../src/cli/uninstall.mjs'
 import { manifestPath } from '../../src/off/manifest.mjs'
 import { recordingExec } from './fixtures/on-ctx.mjs'
 import { formatUninstallReceipt } from '../../src/cli/receipt.mjs'
+import { turnOnModel } from '../../src/collector/model-on.mjs'
+import { renderHook } from '../../src/collector/harness/templates/index.mjs'
+import { startControlServer } from '../../src/collector/core/control.mjs'
 
 const MACHO = Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 1, 2, 3, 4])
 const USER_PEM = `${tls.rootCertificates[2].trim()}\n`
@@ -62,6 +65,26 @@ for (const os of ['darwin', 'win32']) {
     assert.equal(new Set(out).size, out.length, `one row per file (1.6 §3.4): ${JSON.stringify(out)}`)
     assert.deepEqual(receipt.skipped.filter((s) => out.includes(s.what)), [], 'no file is both undone and skipped')
     assert.deepEqual(receipt.notes.filter((n) => out.some((p) => n.startsWith(`${p}:`))), [], 'a file the receipt lists as undone is not said again as a note')
+  })
+
+  // a file install created and `on` then wrote into (Z-Code's cli config: install's certificate key, on's proxy key): `on` backed up the file as install
+  // left it, so its only backup holds trocar's own value — with no record it is still trocar's file, and goes once both keys are out (measured on Windows:
+  // it stayed as {"network":{}}). The undo judges JSON alike on every OS; `on` on win32 asks the daemon over a named pipe, which this host has none of
+  if (os === 'darwin') test(`${os}: install created a file and on wrote into it, the record deleted, uninstall → the file is gone`, async () => {
+    const w = await world(os, { keepRecord: true })
+    const zc = path.join(w.home, '.zcode', 'cli', 'config.json')
+    assert.ok(!w.before[path.relative(w.home, zc)] && fs.existsSync(zc), 'install created it')
+    const sock = path.join(w.home, 'c.sock'), token = 'k'.repeat(32)
+    fs.writeFileSync(path.join(w.dir, 'control.json'), JSON.stringify({ path: sock, token }))
+    const server = await startControlServer({ socketPath: sock, token, routes: {
+      'GET /status': async () => ({ doors: {} }),
+      'POST /on': async ({ body }) => ({ doors: Object.fromEntries(Object.entries(body.groups).map(([g, port]) => [g, `http://127.0.0.1:${port}`])) }),
+    } })
+    try { const r = await turnOnModel({ os, home: w.home, env: w.env, harnesses: w.harnesses, ctx: w.ctx, isFree: async () => true, renderHook }); assert.equal(r.exit, 0, JSON.stringify(r.problems || r)) } finally { await server.close() }
+    assert.match(fs.readFileSync(zc, 'utf8'), /httpProxy/, 'on wrote its proxy key there')
+    fs.rmSync(manifestPath(w.dir)) // the record is lost
+    const { receipt } = await w.uninstall()
+    assert.equal(fs.existsSync(zc), false, `${fs.existsSync(zc) ? fs.readFileSync(zc, 'utf8') : ''} ${JSON.stringify(receipt.left)}`)
   })
 
   test(`${os}: the plan of an uninstall with no record names the carriers it would take out`, async () => {

@@ -280,7 +280,9 @@ function undoOne(item, home, fs) {
   if (!keyList) return { result: 'error', reason: `${item.path} changed while off read it: run off again` } // planned as not parsing, parses now: judged key by key next time
   const mine = keyList.filter((k) => ours(getPath(doc, k)))
   if (!mine.length) return { result: 'already-clean' }
-  const pre = before(item.path, home, fs, (d) => mine.some((k) => { const v = getPath(d, k); return typeof v === 'string' && ours(v) }))
+  const doors = door ? null : doorPorts(collectorIn(root), fs).ports // a door value in a trust key's backup is trocar's too
+  const trocars = (v) => under(v, root) || ours(v) || (!!doors && isDoorValue(v, doors))
+  const pre = before(item.path, home, fs, (d) => mine.some((k) => { const v = getPath(d, k); return typeof v === 'string' && ours(v) }), trocars)
   const was = (k) => (pre.doc ? getPath(pre.doc, k) : undefined)
   // a value not found while a backup was skipped: the user's value may be in that one, so the file stays as it is and is said not undone (D38)
   if (pre.unread.length && mine.some((k) => typeof was(k) !== 'string')) return { result: 'left-unreadable', reason: `${item.path}: ${at} was left with trocar's value: trocar could not read ${pre.unread.length === 1 ? 'the backup' : 'the backups'} that may hold the value it replaced: ${pre.unread.map((u) => `${u.path} (${u.why})`).join('; ')}`, backups: pre.unread.map((u) => u.path) }
@@ -340,15 +342,20 @@ const emptyTree = (v) => !!v && typeof v === 'object' && !Array.isArray(v) && Ob
 
 // the file as it was before `on`: the newest backup `isOn` does not say holds trocar's value. A backup that cannot be read (the read fails, its bytes prove no
 // encoding, it is not JSON) is skipped, never taken for "no value": an older one is looked at. → { doc (null: none), saved, unread: [{ path, why }], any }
-function before(file, home, fs, isOn) {
+function before(file, home, fs, isOn, trocars = () => false) {
   const all = backupsOf({ home, file, fs }), unread = []
+  let any = false
   for (const b of [...all].reverse()) {
     let d
-    try { const s = readText(readOrNull(fs, b)); if (s.why) throw new Error(WHY_TEXT[s.why]); d = parseJsonText(s.text) } catch (e) { unread.push({ path: b, why: String((e && e.message) || e) }); continue }
-    if (!isOn(d)) return { doc: d, saved: b, unread, any: true }
+    try { const s = readText(readOrNull(fs, b)); if (s.why) throw new Error(WHY_TEXT[s.why]); d = parseJsonText(s.text) } catch (e) { unread.push({ path: b, why: String((e && e.message) || e) }); any = true; continue }
+    // a backup holding nothing but trocar's values (in objects) is of a file trocar created — `on` saved what `install` wrote: not the user's file
+    if (onlyTrocars(d, trocars)) continue
+    any = true
+    if (!isOn(d)) return { doc: d, saved: b, unread, any }
   }
-  return { doc: null, saved: null, unread, any: all.length > 0 }
+  return { doc: null, saved: null, unread, any }
 }
+const onlyTrocars = (d, trocars) => { let seen = false; const walk = (v) => (typeof v === 'string' ? (seen = seen || trocars(v)) && trocars(v) : !!v && typeof v === 'object' && !Array.isArray(v) && Object.values(v).every(walk)); return walk(d) && seen }
 
 // the entry trocar created is gone: the meta file's key that selects it comes back from the meta's backup (none there → it goes); a meta file left `{}`
 // with no backup is trocar's too and goes. Nothing is written here: → null (nothing to do), { apply } (writes the meta), or a left-unreadable result,
