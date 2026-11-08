@@ -208,10 +208,11 @@ for (const platform of ['darwin', 'win32']) {
         const status = (live) => statusDoc({ w, platform, box, a, all: three, live })
         const doc = await status([PID, inWin.pid, offStart.pid])
         const rows = Object.fromEntries(doc.harnesses.codex.processes.map((r) => [r.pid, [r.captured, r.reason]]))
-        assert.deepEqual(rows, { [PID]: [true, null], [inWin.pid]: [true, null], [offStart.pid]: [false, 'config-after-start'] }, JSON.stringify(doc.harnesses.codex))
+        // codex reads its entry under CODEX_HOME, a place the macOS / Windows table cannot read from another process: one that never connected is not seen yet (4.11 P11 step 4)
+        assert.deepEqual(rows, { [PID]: [true, null], [inWin.pid]: [null, 'not-seen'], [offStart.pid]: [false, 'config-after-start'] }, JSON.stringify(doc.harnesses.codex))
         // the topology (and the doctor's findings on it) carries the same verdicts: without the off-start process nothing there needs a restart
         const t = (await status([PID, inWin.pid])).topology.codex
-        assert.deepEqual([t.captured, t.reason, t.branches.map((b) => b.captured), t.findings.includes('config-after-start')], [true, null, t.branches.map(() => true), false], JSON.stringify(t))
+        assert.deepEqual([t.captured, t.reason, t.branches.map((b) => b.captured), t.findings.includes('config-after-start')], [true, 'not-seen', t.branches.map(() => true), false], JSON.stringify(t)) // captured, with one not seen yet (1.6 §2)
       } finally {
         for (const s of open) s.destroy()
         await box.stop()
