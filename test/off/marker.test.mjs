@@ -229,3 +229,114 @@ test('a switch file that is a link: the link goes, the file it names stays byte 
   assert.throws(() => fs.lstatSync(link), { code: 'ENOENT' })
   assert.equal(read(mine), 'the user\'s own bytes\n')
 })
+
+// macOS / Windows: a json-key route's value carries no sentinel; it is trocar's when it points at one of trocar's doors — a loopback URL on a door port
+// ingress.json records (1.6 R3 「指向 trocar 的值」). The value it replaced comes back from the newest backup, key by key; no such key there, the key goes.
+// A loopback proxy of the user's own (a port that is no door) stays; with ingress.json unreadable nothing is guessed, and the receipt says so.
+const PORT = 18001
+const putIngress = (dir, port) => fs.writeFileSync(path.join(dir, 'ingress.json'), JSON.stringify({ enginePort: 17990, groupPorts: { a: port }, ingressToken: 'a'.repeat(32), listenerToken: 'b'.repeat(32) }))
+const { parseJsonText, getPath: valueAt, removeKey: dropKey } = await import('../../src/off/json-text.mjs')
+const without = (t, keys) => keys.reduce((s, k) => (dropKey(s, k) || { text: s }).text, t) // null: no such key
+for (const { h, id, r } of (await loadHarnesses()).flatMap((d) => Object.entries((d.proxyMode && d.proxyMode.routes) || {}).map(([id, r]) => ({ h: d, id, r }))).filter((x) => x.r.kind === 'json-key' && ['door-url', 'pac-url'].includes(x.r.value))) {
+  for (const os of ['darwin', 'win32']) {
+    // the user's file before `on`: content of theirs and, where `on` writes over one (not a PAC route: it is not written over an own egress), a proxy of theirs
+    const setup = (userProxy) => {
+      const w = world({ os })
+      if (os === 'win32') Object.assign(w.ctx.env, { APPDATA: path.join(w.root, 'roaming'), LOCALAPPDATA: path.join(w.root, 'local') })
+      w.ctx.dirs = dirsFor(os, w.home, w.ctx.env)
+      const ctx = { ...w.ctx, harness: h.name, routeId: id, route: r }
+      let file
+      if (r.select) {
+        const dir = resolveLoc(r.select.dir, ctx)[0]
+        if (!dir) return null
+        fs.mkdirSync(dir, { recursive: true })
+        fs.writeFileSync(path.join(dir, r.select.meta), JSON.stringify({ [r.select.idKey]: 'mine' }))
+        file = path.join(dir, 'mine.json')
+      } else { file = resolveLoc(r.file, ctx)[0]; if (!file) return null }
+      fs.mkdirSync(path.dirname(file), { recursive: true })
+      const doc = { keep: 1 }
+      if (userProxy) { let at = doc; r.proxyKeys[0].slice(0, -1).forEach((k) => { at = at[k] = {} }); at[r.proxyKeys[0].at(-1)] = userProxy }
+      fs.writeFileSync(file, `${JSON.stringify(doc, null, 2)}\n`)
+      return { w, ctx, file }
+    }
+    const own = r.value === 'pac-url' ? null : 'http://corp.example:8080'
+    test(`${h.name} · ${id} (json-key) · ${os}: the door value \`on\` wrote goes with the manifest gone, the replaced value back from the backup, every other byte as it was`, () => {
+      const s = setup(own)
+      if (!s) return
+      putIngress(s.w.dir, PORT)
+      const res = routeEntry('json-key').write(s.ctx, door(PORT))
+      assert.ok(res.ok, JSON.stringify(res))
+      const on = read(s.file)
+      const plan = planByMarker({ home: s.w.home, env: s.w.ctx.env, platform: os, ids: [h.name] }).filter((x) => x.path === s.file)
+      assert.equal(plan.length, r.proxyKeys.length, 'each door key of the file is found')
+      assert.deepEqual(undoByMarker(plan, { home: s.w.home }).map((x) => x.result), plan.map(() => 'undone-by-marker'))
+      const out = read(s.file), doc = parseJsonText(out)
+      r.proxyKeys.forEach((k, i) => assert.equal(valueAt(doc, k), i === 0 && own ? own : undefined, k.join('.')))
+      assert.equal(without(out, r.proxyKeys), without(on, r.proxyKeys), 'only the door keys changed')
+    })
+    test(`${h.name} · ${id} (json-key) · ${os}: a loopback proxy of the user's own (no door port) stays, and with ingress.json unreadable no value is guessed a door`, () => {
+      const s = setup(null)
+      if (!s) return
+      putIngress(s.w.dir, PORT)
+      for (const value of ['http://127.0.0.1:7890', `http://corp.example:${PORT}`]) { // a loopback port that is no door; a door port on a host that is not loopback
+        const mine = setup(value)
+        putIngress(mine.w.dir, PORT)
+        const before = read(mine.file)
+        const plan = planByMarker({ home: mine.w.home, env: mine.w.ctx.env, platform: os, ids: [h.name] })
+        assert.deepEqual(plan.filter((x) => x.path === mine.file), [], value)
+        undoByMarker(plan, { home: mine.w.home })
+        assert.equal(read(mine.file), before, value)
+      }
+      // the door written, then ingress.json gone: not undone, and said
+      assert.ok(routeEntry('json-key').write(s.ctx, door(PORT)).ok)
+      fs.rmSync(path.join(s.w.dir, 'ingress.json'))
+      const on = read(s.file), notes = []
+      const plan2 = planByMarker({ home: s.w.home, env: s.w.ctx.env, platform: os, ids: [h.name], notes })
+      assert.deepEqual(plan2.filter((x) => x.path === s.file), [])
+      undoByMarker(plan2, { home: s.w.home })
+      assert.equal(read(s.file), on)
+      assert.ok(notes.some((n) => n.includes(s.file)), JSON.stringify(notes))
+    })
+    test(`${h.name} · ${id} (json-key) · ${os}: a file holding a door value that no longer parses is left as it is and said (left-unparsable); with ingress.json unreadable it is said, not guessed`, () => {
+      const s = setup(null)
+      if (!s) return
+      putIngress(s.w.dir, PORT)
+      assert.ok(routeEntry('json-key').write(s.ctx, door(PORT)).ok)
+      fs.appendFileSync(s.file, '{ broken')
+      const broken = read(s.file)
+      const plan = planByMarker({ home: s.w.home, env: s.w.ctx.env, platform: os, ids: [h.name] }).filter((x) => x.path === s.file)
+      assert.equal(plan.length, 1, 'the file is planned: a door is in it')
+      assert.deepEqual(undoByMarker(plan, { home: s.w.home }).map((x) => x.result), ['left-unparsable'])
+      assert.equal(read(s.file), broken)
+      fs.rmSync(path.join(s.w.dir, 'ingress.json'))
+      const notes = []
+      assert.deepEqual(planByMarker({ home: s.w.home, env: s.w.ctx.env, platform: os, ids: [h.name], notes }).filter((x) => x.path === s.file), [])
+      assert.ok(notes.some((n) => n.includes(s.file)), JSON.stringify(notes))
+    })
+  }
+}
+
+// the same through `off` itself on macOS (runOff, its receipt, its --dry-run): the door value is undone after a yes, and with ingress.json unreadable the
+// receipt names the file it left. One route stands for all: the generated cases above cover each.
+test('off on darwin with the manifest gone: --yes takes the door value out (undone-by-marker); with ingress.json unreadable the receipt, real and dry run, names the file and it stays', async () => {
+  const { runOff } = await import('../../src/off/orchestrate.mjs')
+  const zc = (await loadHarnesses()).find((d) => d.name === 'z-code')
+  const [id, r] = Object.entries(zc.proxyMode.routes).find(([, x]) => x.kind === 'json-key')
+  const s = (() => { const w = world({ os: 'darwin' }); const ctx = { ...w.ctx, harness: zc.name, routeId: id, route: r }; return { w, ctx, file: resolveLoc(r.file, ctx)[0] } })()
+  fs.mkdirSync(path.dirname(s.file), { recursive: true }); fs.writeFileSync(s.file, '{ "keep": 1 }\n')
+  putIngress(s.w.dir, PORT)
+  assert.ok(routeEntry('json-key').write(s.ctx, door(PORT)).ok)
+  const off = (o) => runOff({ home: s.w.home, env: { HOME: s.w.home }, ids: [zc.name], ...o, deps: { platform: 'darwin', exec: () => ({ status: 1, stdout: '', stderr: 'no tool here' }), procs: async () => [], sleep: async () => {} } })
+  fs.rmSync(manifestPath(s.w.dir))
+  const on = read(s.file)
+  fs.rmSync(path.join(s.w.dir, 'ingress.json'))
+  for (const o of [{ dryRun: true }, { yes: true }]) {
+    const { receipt } = await off(o)
+    assert.ok(receipt.notes.some((n) => n.includes(s.file)), `${JSON.stringify(o)}: ${JSON.stringify(receipt.notes)}`)
+    assert.equal(read(s.file), on)
+  }
+  putIngress(s.w.dir, PORT)
+  const { receipt, exit } = await off({ yes: true })
+  assert.deepEqual([exit, receipt.undone_by_marker], [0, true], JSON.stringify(receipt.problems))
+  r.proxyKeys.forEach((k) => assert.equal(valueAt(parseJsonText(read(s.file)), k), undefined, k.join('.')))
+})

@@ -33,6 +33,7 @@
 // needs unreadable, the parent gone after a door) is `unknown`: the system proxy if there is one (follower or not), else direct, with code
 // `prior-proxy-unknown` (and the unread file's `detail`).
 import { CODE } from '../codes.mjs'
+import { isLoopbackHost } from '../../../off/door-value.mjs'
 
 export const HOOK_ENV = 'TROCAR_PRIOR_PROXY'
 export const HOOK_PID_ENV = 'TROCAR_HOOK_PID' // an in-process plugin hook's own pid, written once it added the root and pointed the env at the door (P11 rule 4)
@@ -44,12 +45,8 @@ const NO_PROXY = ['NO_PROXY', 'no_proxy']
 
 const textOf = (v) => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null)
 const envGet = (env, name) => (env instanceof Map ? env.get(name) : env[name])
-/** Loopback, as the door and the PAC judge it (4.11 P10): `localhost` and every `*.localhost` name, 127.0.0.0/8, `::1`; case, IPv6 brackets and a
- *  trailing dot as a host may carry them. pac.mjs writes this same test as PAC text, so what the PAC sends DIRECT is what the door calls loopback. */
-export const isLoopbackHost = (host) => {
-  const h = String(host).toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '')
-  return h === 'localhost' || h.endsWith('.localhost') || h === '::1' || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h)
-}
+// isLoopbackHost: one copy, in src/off (the marker undo judges a door value by it too); pac.mjs writes the same test as PAC text
+export { isLoopbackHost }
 
 /** Is a proxy text one of trocar's doors? A loopback address with trocar's credentials (a user and a hex token: the door URL `on` writes, and the
  *  steer value of an older trocar), or a loopback address on one of `ports` (an open door, e.g. a PAC-served one, carries no credentials). */
