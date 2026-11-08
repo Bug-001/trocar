@@ -59,7 +59,7 @@ export const sessionDir = (home, sessionKey) => path.join(ctxDir(home), hashOf(s
 export const projectionFile = (home, sessionKey) => path.join(sessionDir(home, sessionKey), 'extract.0.ndjson');
 
 /** migrateFlat({home, fs, key}): the flat layout's files of the session (`ctx/<k>.ndjson`, `<k>.idx`, `<k>.fold.ndjson`,
- *  `<k>.fold.idx`) renamed into `ctx/<k>/` (4.3 §4 迁移): rename only, never a copy (D27③); offsets do not change, so the sidecars
+ *  `<k>.fold.idx`) renamed into `ctx/<k>/` (4.3 §4 迁移): rename only, never a copy; offsets do not change, so the sidecars
  *  still hold. The directory may be there already with answer files only (the start-up sweep's tier-0 head comes before any read);
  *  one that holds a projection or fold log of its own makes the flat files an older copy, and they are deleted (derived, D69②). */
 export function migrateFlat({ home = trocarHome(), fs = nodeFs, key }) {
