@@ -83,40 +83,65 @@ function fingerprints(texts, cap) {
   return [...out];
 }
 const BASE2 = 0x5bd1e995, TOP2 = (() => { let p = 1; for (let i = 1; i < WIN; i++) p = Math.imul(p, BASE2); return p; })();
-const hex8 = (x) => (x >>> 0).toString(16).padStart(8, '0');
 const collapse = (t) => t.replace(/\s+/g, ' ').trim();
-// the sampled windows of one collapsed text, in order: kept where the fingerprint rule keeps one, as two 32-bit rolling hashes
-function windowsOf(t, cap) {
-  const out = [];
-  let h = 0, g = 0;
-  for (let i = 0; i < t.length && out.length < cap; i++) {
+// the sampled windows of one collapsed text, in order, kept where the fingerprint rule keeps one: two 32-bit rolling hashes (h, g)
+// each, flat in a Uint32Array (8 B a window, off the V8 heap)
+function windowsOf(t) {
+  let out = new Uint32Array(64), n = 0, h = 0, g = 0;
+  for (let i = 0; i < t.length; i++) {
     const c = t.charCodeAt(i);
     if (i >= WIN) { const o = t.charCodeAt(i - WIN); h = (h - Math.imul(o, TOP)) | 0; g = (g - Math.imul(o, TOP2)) | 0; }
     h = (Math.imul(h, BASE) + c) | 0; g = (Math.imul(g, BASE2) + c) | 0;
-    if (i >= WIN - 1 && (h >>> 0) % SAMPLE === 0) out.push(hex8(h) + hex8(g));
+    if (i >= WIN - 1 && (h >>> 0) % SAMPLE === 0) {
+      if (n === out.length) { const o = new Uint32Array(2 * n); o.set(out); out = o; }
+      out[n++] = h; out[n++] = g;
+    }
   }
-  return out;
+  return out.subarray(0, n);
 }
-const digestOf = (ws) => createHash('sha256').update(ws.join(' '), 'utf8').digest('hex').slice(0, 16);
-/** A text as an item: `n head… tail… digest` (one string, so the index keeps it as a scalar), or null when it is too short to tell. */
+const bytesOf = (u) => Buffer.from(u.buffer, u.byteOffset, u.byteLength);
+const wordsOf = (s) => { const b = Buffer.from(s, 'base64'), u = new Uint32Array(b.length >> 2); bytesOf(u).set(b.subarray(0, 4 * u.length)); return u; };
+const digestOf = (w) => createHash('sha256').update(bytesOf(w)).digest().subarray(0, 8);
+const DIG = 1 + 4 * ENDS_W; // where an item's digest starts, in words: after n and its first and last ENDS_W windows
+/** A text as an item: n, its first and last ENDS_W windows and the digest, as base64 (one string, so the index keeps it as a scalar),
+ *  or null when it is too short to tell. */
 function itemOf(text) {
   const t = collapse(text);
   if (t.length < REPLY_MIN) return null;
-  const ws = windowsOf(t, Infinity);
-  return ws.length < MIN_WIN ? null : [ws.length, ...ws.slice(0, ENDS_W), ...ws.slice(-ENDS_W), digestOf(ws)].join(' ');
+  const w = windowsOf(t), n = w.length / 2;
+  if (n < MIN_WIN) return null;
+  const u = new Uint32Array(DIG + 2);
+  u[0] = n; u.set(w.subarray(0, 2 * ENDS_W), 1); u.set(w.subarray(-2 * ENDS_W), 1 + 2 * ENDS_W); bytesOf(u).set(digestOf(w), 4 * DIG);
+  return bytesOf(u).toString('base64');
 }
-const unpack = (s) => { const a = s.split(' '); return { n: Number(a[0]), head: a.slice(1, 1 + ENDS_W).join(' '), tail: a.slice(1 + ENDS_W, 1 + 2 * ENDS_W).join(' '), dig: a[1 + 2 * ENDS_W] }; };
-// where each run of ENDS_W windows starts in a call's list
-function runsOf(ws) {
+// A compaction request's last HEAD_CAP windows of its user texts (space-joined, collapsed), as base64. Walked over their end only, so
+// the work is bounded by what is kept, not by the request's length: a suffix of the raw text collapses to a suffix of the collapsed
+// text, and a window is its WIN chars alone, so the suffix's windows are the whole's last ones exactly; the suffix doubles until it
+// holds HEAD_CAP of them or is the whole text.
+function headsOf(texts) {
+  for (let need = HEAD_CAP * SAMPLE * 1.2; ; need *= 2) {
+    const tail = [];
+    let len = -1;
+    for (let i = texts.length - 1; i >= 0 && len < need; i--) { tail.push(texts[i]); len += texts[i].length + 1; }
+    const s = tail.reverse().join(' '), all = s.length <= need && tail.length === texts.length, w = windowsOf(collapse(all ? s : s.slice(-need)));
+    if (all || w.length >= 2 * HEAD_CAP) return bytesOf(w.subarray(-2 * HEAD_CAP)).toString('base64');
+  }
+}
+// where each window starts in a call's list, by its first hash (a multiple of SAMPLE, so h / SAMPLE is a small integer)
+function startsOf(w) {
   const at = new Map();
-  for (let i = 0; i + ENDS_W <= ws.length; i++) { const k = ws.slice(i, i + ENDS_W).join(' '), a = at.get(k); if (a) a.push(i); else at.set(k, [i]); }
+  for (let i = 0; 2 * i < w.length; i++) { const k = w[2 * i] / SAMPLE, a = at.get(k); if (a) a.push(i); else at.set(k, [i]); }
   return at;
 }
-// whether the call's windows hold the item whole: a run that starts with its first windows, ends n later with its last, and hashes to its digest
-function holds(ws, at, it) {
-  for (const p of at.get(it.head) || []) {
-    const q = p + it.n - ENDS_W;
-    if (q + ENDS_W <= ws.length && ws.slice(q, q + ENDS_W).join(' ') === it.tail && digestOf(ws.slice(p, p + it.n)) === it.dig) return true;
+// whether the call's windows `w` hold the item `it` (wordsOf) whole: a run that starts with its first windows, ends n later with its
+// last, and hashes to its digest
+function holds(w, at, it) {
+  const n = it[0], m = w.length / 2;
+  for (const p of at.get(it[1] / SAMPLE) || []) {
+    if (p + n > m) break;
+    let ok = true;
+    for (let j = 0; ok && j < 2 * ENDS_W; j++) ok = w[2 * p + j] === it[1 + j] && w[2 * (p + n - ENDS_W) + j] === it[1 + 2 * ENDS_W + j];
+    if (ok && digestOf(w.subarray(2 * p, 2 * (p + n))).equals(bytesOf(it).subarray(4 * DIG))) return true;
   }
   return false;
 }
@@ -169,7 +194,7 @@ export function createSynthKeys({ gapMs = SYNTH_GAP_MS } = {}) {
 
 /** What a call brings to the rule, or null when it takes no part in it. Keyless → {harness, ms, hash, fp, probe, reply, heads, late, chain, items, mark}: `fp` is the
  *  fingerprints its session is recognized by, `probe` the ones it looks for its session with when it is the harness's
- *  compaction request, else null; `reply` its reply as an item (itemOf) or null, `heads` a compaction request's user-text windows; `chain` its history's last cumulative hashes and `items` its last items' own (chainOf); `mark` whether it carries its harness's
+ *  compaction request, else null; `reply` its reply as an item (itemOf) or null, `heads` a compaction request's last user-text windows (headsOf); `chain` its history's last cumulative hashes and `items` its last items' own (chainOf); `mark` whether it carries its harness's
  *  compaction text marker without being the compaction request (Hermes's call after a compaction). Keyed (a `synth: true` harness only) → {harness, ms, key, fp, reply}: a keyed call never opens or moves a synthesized group;
  *  where its row has `chainLane` and it declares no lane, also {hash, chain, items}, for its chain inside its keyed session. A reader that cannot afford the body later (the
  *  segment index, 1.6 §4.1) stores these and asks the assigner below with them. `memo` (a Map, optional): the last keyless call of
@@ -201,7 +226,7 @@ function factsOf(rec, memo) {
   if (key) return { harness: h.id, ms, key, fp, reply, hash, chain, items };
   const asks = compactionRequest(rec, h.row, hint), probe = asks ? fingerprints(texts, PROBE_CAP) : null;
   // `late`: how many of `fp` (a prefix: the texts are taken newest first) come from user texts after the first one
-  return { harness: h.id, ms, hash, fp, probe, reply, heads: asks ? windowsOf(collapse(texts.join(' ')), Infinity).slice(-HEAD_CAP) : null,
+  return { harness: h.id, ms, hash, fp, probe, reply, heads: asks ? headsOf(texts) : null,
     late: fingerprints([...texts.slice(1)].reverse(), FP_CAP).length, chain, items, mark: !probe && hint.compactionMarker === true };
 }
 
@@ -234,8 +259,9 @@ export function createSynthAssigner({ gapMs = SYNTH_GAP_MS, open = new Map() } =
   // session's chains `\u0002${harness}\0${session key}\0${hash}\0${chain}` as the first, without fp (fp: a
   // Set, replaced, never mutated, so a shallow copy of an entry is a snapshot). A caller that resumes the rule part-way
   // (src/query/rows.mjs) hands in the state it saved.
-  // a reply kept for kinship `\u0003${harness}\0${digest}` → { lastMs, n, head, tail, dig, owners }: the session keys it was kept under (an
-  // array, replaced, never mutated), the latest last; the entries in the order they were last kept, so the first is the oldest
+  // a reply kept for kinship `\u0003${harness}\0${item}` (itemOf) → { lastMs, owners }: the session keys it was kept under, the latest
+  // last; the entries in the order they were last kept, so the first is the oldest. An entry is replaced, never mutated, so a copy
+  // of `open` may share it (src/query/rows.mjs copyOpen)
   const mine = (g, harness) => g.startsWith(harness + '\0') || g.startsWith('\u0001' + harness + '\0') || g.startsWith('\u0002' + harness + '\0') || g.startsWith(REPLY + harness + '\0');
   let counts = null; // harness → how many replies it keeps, from `open` the first time it is asked
   const count = (harness, d = 0) => {
@@ -246,18 +272,19 @@ export function createSynthAssigner({ gapMs = SYNTH_GAP_MS, open = new Map() } =
   };
   const keep = (harness, item, key, ms) => {
     if (!item || key == null) return;
-    const pre = REPLY + harness + '\0', it = unpack(item), g = pre + it.dig, cur = open.get(g);
+    const pre = REPLY + harness + '\0', g = pre + item, cur = open.get(g);
     if (cur) open.delete(g);
     else if (count(harness, 1) > REPLY_CAP) for (const x of open.keys()) if (x.startsWith(pre)) { open.delete(x); count(harness, -1); break; }
     const owners = !cur ? [key] : cur.owners[cur.owners.length - 1] === key ? cur.owners : [...cur.owners.filter((k) => k !== key), key].slice(-OWNERS);
-    open.set(g, { ...it, lastMs: Math.max(cur ? cur.lastMs : ms, ms), owners });
+    open.set(g, { lastMs: Math.max(cur ? cur.lastMs : ms, ms), owners });
   };
   // the session the replies a compaction request carries name (3.4 按内容认亲): the latest kept of them, when one session kept it;
   // kept under several, the one of those holding the most of the replies; else none
-  const byReplies = (harness, ws, ms) => {
-    if (!ws || ws.length < MIN_WIN) return null;
-    const at = runsOf(ws), pre = REPLY + harness + '\0', hits = [];
-    for (const [g, e] of open) if (g.startsWith(pre) && ms - e.lastMs <= SYNTH_TTL_MS && holds(ws, at, e)) hits.push(e);
+  const byReplies = (harness, heads, ms) => {
+    const w = heads ? wordsOf(heads) : null;
+    if (!w || w.length < 2 * MIN_WIN) return null;
+    const at = startsOf(w), pre = REPLY + harness + '\0', hits = [];
+    for (const [g, e] of open) if (g.startsWith(pre) && ms - e.lastMs <= SYNTH_TTL_MS && holds(w, at, wordsOf(g.slice(pre.length)))) hits.push(e);
     if (!hits.length) return null;
     const last = hits[hits.length - 1].owners;
     if (last.length === 1) return last[0];

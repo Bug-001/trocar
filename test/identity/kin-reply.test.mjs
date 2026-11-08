@@ -91,6 +91,12 @@ test('kinship by reply: the latest reply at the end of a long request is still s
   assert.equal(run([turn('responses', 0, 0, r, T0), summary('responses', [filler, r], T0 + MIN)])[1].key, 'sid-0')
 })
 
+test('kinship by reply: a reply among the last windows is seen however much whitespace follows it', () => {
+  // 40 K collapsed chars after the reply, spread over 400 K raw ones: the windows are the collapsed text's
+  const r = prose(14, 600), loose = prose(15, 40_000).split(' ').join(' \n'.repeat(5))
+  assert.equal(run([turn('responses', 0, 0, r, T0), summary('responses', [prose(16, 100_000), r, loose], T0 + MIN)])[1].key, 'sid-0')
+})
+
 test('kinship by reply: a reply past SYNTH_TTL_MS names no session; within it, past the fingerprint window, it does', () => {
   const r = prose(11, 800)
   assert.equal(run([turn('responses', 0, 0, r, T0), summary('responses', [r], T0 + SYNTH_TTL_MS - MIN)])[1].key, 'sid-0', 'within the TTL')
