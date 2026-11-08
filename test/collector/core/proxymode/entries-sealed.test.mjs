@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
-import { routeEntry, recordsOf } from '../../../../src/collector/core/proxymode/entries.mjs'
+import { routeEntry, recordsOf, pacAddress } from '../../../../src/collector/core/proxymode/entries.mjs'
 import { resolveLoc } from '../../../../src/collector/core/proxymode/sources.mjs'
 import { readManifest } from '../../../../src/off/manifest.mjs'
 import { backupDir } from '../../../../src/off/paths.mjs'
@@ -24,7 +24,9 @@ function setup({ h, id, r, os }, fsx) {
   const file = r.file ? resolveLoc(r.file, ctx)[0] : null
   if (file) put(file, r.kind === 'dotenv-block' ? 'A=1\n' : '{"unrelated":"keep"}\n') // present: a route with absent 'not-routed' is written too
   const mf = path.join(w.dir, 'install-manifest.json')
-  return { w, ctx, mf, bytes: () => fs.readFileSync(mf, 'utf8'), label: `${h.name}.${id} (${r.kind}) · ${os}` }
+  // what the records are tagged with: the door, or for a PAC route the address written, the install's key in it (4.11 P10)
+  const tag = r.value === 'pac-url' ? pacAddress(ctx.pacToken, door()) : door()
+  return { w, ctx, mf, tag, bytes: () => fs.readFileSync(mf, 'utf8'), label: `${h.name}.${id} (${r.kind}) · ${os}` }
 }
 // an fs whose renameSync onto anything but the manifest or a backup (the agent's file, a switch file) is seen by `onAgent`
 const watching = (w, onAgent) => new Proxy(fs, { get: (t, k) => (k !== 'renameSync' ? Reflect.get(t, k) : (from, to) => {
@@ -38,7 +40,7 @@ test('S1: after write, the manifest on disk holds no door password; every on rec
     assert.equal(routeEntry(c.r.kind).write(s.ctx, door()).ok, true, s.label)
     assert.ok(!s.bytes().includes(PW), s.label)
     const recs = recordsOf(readManifest(s.w.dir), c.h.name, c.id)
-    assert.ok(recs.length > 0 && recs.every((x) => x.door_sha256 === sha256(door()) && !('door' in x)), s.label)
+    assert.ok(recs.length > 0 && recs.every((x) => x.door_sha256 === sha256(s.tag) && !('door' in x)), s.label)
   }
 })
 
@@ -54,7 +56,7 @@ test('S2: a crash at the intent (the rename onto the agent\'s file fails) leaves
     assert.ok(at && snap, s.label)
     assert.ok(!snap.includes(PW), s.label)
     const m = JSON.parse(snap)
-    assert.ok([...m.entries, ...m.files].some((x) => x.harness === c.h.name && (x.real_path || x.path) === at && x.door_sha256 === sha256(door()) && x.route === c.id), `${s.label}: the intent for ${at}, naming its route`)
+    assert.ok([...m.entries, ...m.files].some((x) => x.harness === c.h.name && (x.real_path || x.path) === at && x.door_sha256 === sha256(s.tag) && x.route === c.id), `${s.label}: the intent for ${at}, naming its route`)
   }
 })
 
@@ -66,7 +68,7 @@ test('S3: a clear v3 record (the door and the password in clear) is sealed at th
     const m = JSON.parse(s.bytes())
     for (const x of [...m.entries, ...m.files].filter((y) => y.door_sha256)) {
       for (const p of (x.secret && x.secret.fields) || []) { const o = p.slice(0, -1).reduce((a, k) => a[k], x); o[p.at(-1)] = o[p.at(-1)].split('***').join(PW) }
-      x.door = door(); delete x.secret; delete x.door_sha256
+      x.door = s.tag; delete x.secret; delete x.door_sha256
     }
     fs.writeFileSync(s.mf, JSON.stringify(m, null, 2) + '\n')
     assert.ok(s.bytes().includes(PW), `${s.label}: the clear shape holds the password`)
