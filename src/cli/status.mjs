@@ -209,6 +209,7 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
     const formsOf = (p) => { const may = new Set(judgedForms(dsc, platform, null, p.exe ?? null, p.argv ?? null).map((x) => x.id)); return (present ? forms.filter((x) => present.includes(x.id) && holds(x, p)) : forms).filter((x) => may.has(x.id)) }
     // the forms each process can be on, by the one predicate (formsOf): carried on its row, so the topology draws it on the same forms (status-facts netFormsOf)
     const onForms = (p) => (forms.length ? { forms: formsOf(p).map((x) => x.id) } : {})
+    const routeOf = Object.fromEntries(forms.map((x) => [x.id, x.route])) // the route each form is on: the door judges a process on the route it came in by
     const startOf = (p) => {
       if (!forms.length) return {}
       const mine = formsOf(p)
@@ -244,7 +245,7 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
     const hosts = read.errors.length ? [] : read.hosts
     const localUpstream = isProxyMode(platform) && hosts.length > 0 && hosts.every(isLoopbackHost)
     const judge = (cert = true, blocked = {}) => {
-      const j = judgeHarness({ desired, entryIntact: entry.state === 'intact' ? true : entry.state === 'unknown' ? null : false, entryWhy: entry.state === 'changed' ? 'entry-changed' : 'entry-missing', attached: att.attached, helper: f.link.helper, daemon: f.daemon.state, procs, installedAt, deadDoor: isProxyMode(platform), formsHere, cert, localUpstream, blocked })
+      const j = judgeHarness({ desired, entryIntact: entry.state === 'intact' ? true : entry.state === 'unknown' ? null : false, entryWhy: entry.state === 'changed' ? 'entry-changed' : 'entry-missing', attached: att.attached, helper: f.link.helper, daemon: f.daemon.state, procs, installedAt, deadDoor: isProxyMode(platform), formsHere, cert, localUpstream, blocked, routeOf })
       if (merged) j.rows = j.rows.map((r) => { const name = r.pid != null ? hitName(tableOf.get(r.pid), merged[id]) : null; return name ? { ...r, name } : r }) // the name the process matched (1.6 §9.7)
       return j
     }
@@ -287,6 +288,8 @@ function judgeCertificates(f) {
     // a certificate not known (D38) says what could not be read, once
     // a blocker not read (4.11 ⑩) says which setting, once
     if (h.judged.captured === null && Array.isArray(h.why)) for (const x of forms) { const w = x.route && x.route.reason === 'blocker-unreadable' && `could not read ${x.route.at}`; if (w && !h.why.includes(w)) h.why.push(w) }
+    // a process whose routes disagree (verdict.mjs byRoute) says which way each goes, once
+    if (Array.isArray(h.why)) for (const r of h.judged.rows) { const w = r.split && `not known whether pid ${r.pid} is captured: decrypted through ${r.split.decrypted.join(', ')}, forwarded through ${r.split.forwarded.join(', ')}`; if (w && !h.why.includes(w)) h.why.push(w) }
     if (cert === null && Array.isArray(h.why)) for (const x of forms) { const u = x.certificate && x.certificate.in_effect === null && x.certificate.user_file, w = u && u.reason && `could not read ${u.reason}`; if (w && !h.why.includes(w)) h.why.push(w) }
   }
 }

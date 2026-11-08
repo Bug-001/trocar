@@ -138,3 +138,22 @@ test('4.11 P11 · status: a process on a blocked form and an unblocked one is no
   assert.equal(row(['resources\\glm\\zcode.cjs', '-p', 'hi']).captured, true, 'the CLI with -p is the CLI only: the desktop setting does not reach it')
   assert.deepEqual([row(['resources\\glm\\zcode.cjs', 'app-server']).captured, row(['resources\\glm\\zcode.cjs', 'app-server']).reason], [false, 'not-routed'])
 })
+
+// The same per route: the door judges a process against the forms of the route it came in on. Claude Code's CLI and VS Code forms share the settings
+// route, its desktop is on the library route. A process status can tie to one route takes that route's word; one that may be on either, with the routes
+// disagreeing, is not known (never captured on a guess), and says which way each goes.
+test('4.11 P11 · status: a process is judged per route, as the door judges it; routes that disagree leave it not known', async () => {
+  const { judgeHarness, routeOfForms } = await import('../../src/netenv/verdict.mjs')
+  const { loadHarnesses } = await import('../../src/collector/harness/index.mjs')
+  const cc = (await loadHarnesses()).find((d) => d.name === 'claude-code')
+  const routeOf = Object.fromEntries(cc.proxyMode.forms.map((f) => [f.id, f.route]))
+  const ready = { desired: 'on', entryIntact: true, attached: true, daemon: 'running', routeOf }
+  const row = (blockedIds, forms) => judgeHarness({ ...ready, blocked: routeOfForms(blockedIds.map((id) => ({ id, route: { reason: 'blocker' } }))), procs: [{ pid: 7, trusted: null, start: null, forms }] }).rows[0]
+  const SETTINGS = ['claude-code.cli', 'claude-code.vscode'], DESKTOP = ['claude-code.desktop']
+  assert.deepEqual([row(DESKTOP, SETTINGS).captured, row(DESKTOP, SETTINGS).split], [true, undefined], "the CLI by name: the desktop's policy is on another route")
+  assert.equal(row(SETTINGS, DESKTOP).captured, true, "the reverse: a managed proxy for the CLI does not reach the desktop's route")
+  assert.deepEqual([row(SETTINGS, SETTINGS).captured, row(SETTINGS, SETTINGS).reason], [false, 'not-routed'])
+  const both = row(DESKTOP, [...SETTINGS, ...DESKTOP])
+  assert.deepEqual([both.captured, both.reason, both.split], [null, null, { decrypted: ['settings'], forwarded: ['library'] }], 'either route: not known')
+  assert.deepEqual([row([...SETTINGS, ...DESKTOP], [...SETTINGS, ...DESKTOP]).captured], [false], 'every route forwards it')
+})

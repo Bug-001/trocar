@@ -188,7 +188,7 @@ export function netFormsOf({ model, status, procs = {}, systemProxy = null, sett
     const can = (p) => list.filter((x) => !Array.isArray(p.forms) || p.forms.includes(x.id))
     const on = (p) => { const c = can(p), saw = c.filter((x) => seen(x).has(p.pid)); return saw.length ? saw : c }
     forms[h] = list.map((x) => ({ id: x.id, setting: x.setting || settings[h] || { value: null, scheme: null, host: null, port: null, source: [], sha256: null }, systemProxy, procs: (procs[h] || []).filter((p) => on(p).includes(x)),
-      entry: x.entry, route: x.plan, hook: x.hook, certificate: x.certificate, proxy: x.proxy, notes: x.notes, restart: x.restart, paths: x.paths, follows: x.follows }))
+      entry: x.entry, route: x.plan, routeId: x.route, hook: x.hook, certificate: x.certificate, proxy: x.proxy, notes: x.notes, restart: x.restart, paths: x.paths, follows: x.follows }))
     for (const x of list) {
       const written = x.proxy.written ? parseProxyUrl(x.proxy.written) : null
       const port = doors[`${h}:${x.route}`] ?? (written ? written.port : null)
