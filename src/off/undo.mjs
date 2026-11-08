@@ -288,6 +288,7 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
       for (const e of originals) {
         if (e.harness !== f.harness || leftEntries.includes(e) || !namesFile(e, f.path)) continue
         leftEntries.push(e)
+        if (e.backup && !fs.existsSync(e.backup)) delete e.backup // dropped in step 1 (the file was back at bytes trocar knew): the row names no backup that is gone
         if (!manifest.entries.includes(e)) manifest.entries.push(e)
         out.left.push(leftRow(e, `${e.path} still names ${f.path}, the bundle trocar made for ${f.harness}, though its entry was reported as undone; trocar did not take the bundle away under it: edit the file so it no longer names it`, 'left-text'))
       }
