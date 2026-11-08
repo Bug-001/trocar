@@ -73,8 +73,12 @@ export function removeRow(desk, row) {
   desk.rows.delete(row.rid)
 }
 
+// the token-count calls the server names (`probes`: {count, series}; a tier-0 head may carry the bare count) as the count the desk holds
+export const probeCount = (p) => (typeof p === 'number' ? p : p && p.count) || 0
+
 function scalars(desk, a) {
-  for (const k of ['truncated', 'meta', 'stats', 'logged', 'probes']) if (k in a) desk[k] = a[k]
+  for (const k of ['truncated', 'meta', 'stats', 'logged']) if (k in a) desk[k] = a[k]
+  if ('probes' in a) desk.probes = probeCount(a.probes)
   desk.pending = a.pending ?? null
   if (!a.pending || a.pending.seen) desk.firstPending = false
   if (a.base == null || 'unknown' in a) desk.unknown = a.unknown ?? null // a delta carries `unknown` only where it changed (3.5 §会话读)

@@ -18,7 +18,7 @@
 // than the head's.
 // desk.newest = the newest member the desk holds in record order (placeOf / after): the head's mark or a held `{r}` id (1.5 K-32).
 
-import { changed, addRow, removeRow, newHeld, boardDef, putLane } from './model.mjs'
+import { changed, addRow, removeRow, newHeld, boardDef, putLane, probeCount } from './model.mjs'
 
 const enc = new TextEncoder(), dec = new TextDecoder()
 
@@ -180,7 +180,7 @@ function mergeHeads(desk, touched) {
   }
 }
 
-const SCALARS = ['mark', 'pending', 'truncated', 'meta', 'stats', 'logged', 'probes', 'unknown']
+const SCALARS = ['mark', 'pending', 'truncated', 'meta', 'stats', 'unknown'] // logged and probes: set below, with their defaults
 export function applyHead(desk, head) {
   changed(desk)
   const touched = new Set([...(desk.head?.lanes || []), ...(head.lanes || [])].map((h) => h.lane))
@@ -190,7 +190,7 @@ export function applyHead(desk, head) {
   desk.head = head
   held(desk, head.mark)
   for (const k of SCALARS) desk[k] = head[k] ?? null
-  desk.logged = head.logged ?? 0; desk.probes = head.probes ?? 0
+  desk.logged = head.logged ?? 0; desk.probes = probeCount(head.probes)
   if (!head.pending || head.pending.seen) desk.firstPending = false
   desk.errors = [...(head.errors || []), ...desk.errors.filter((x) => FAILS.has(x))]
   mergeHeads(desk, touched)

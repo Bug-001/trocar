@@ -9,7 +9,7 @@ import { harnessKey, harnessName, harnessRaw, harnessIconUrl } from '../../../le
 import { cacheState, isFailed, breakCost, usageOf, priceMatch, costOf, hitTier } from '../../../legacy/core/metrics.mjs'
 import { CT_ORDER, segTax, TAX_ORDER, hasChangeLine, callFacts, refRowOf } from '../../../legacy/replay/analysis.mjs'
 import { stepRef, stepsOf } from '../../../legacy/replay/lanes.mjs'
-import { stepOf, askOrdinal, ridAt } from '../../../legacy/replay/model.mjs'
+import { stepOf, askOrdinal, ridAt, probeCount } from '../../../legacy/replay/model.mjs'
 import { chapterAt, chapterJump, problemSteps, problemTarget, landing, OVW_BARCAP, BAR_KEYS } from '../../../legacy/replay/timeline.mjs'
 import { railToggles } from '../../../legacy/replay/rails.mjs'
 import { cacheLabel, costLabel, contentRefOf, contentRefKOf, priceStateNote } from '../../../legacy/replay/stepbar.mjs'
@@ -172,7 +172,7 @@ function infoRows(s) {
   // full counts; the token-count lane the front end builds (buildLanes) is no background call
   const subN = lanes.filter((l) => l.kind === 'subagent').length
   const bgN = lanes.filter((l) => l.kind !== 'main' && l.kind !== 'subagent' && l.kind !== 'token-count').reduce((n, l) => n + (l.count ?? l.calls.length), 0)
-  const probeN = (typeof desk.probes === 'number' ? desk.probes : desk.probes && desk.probes.count) || 0
+  const probeN = probeCount(desk.probes)
   if (subN || bgN || probeN) rows.push({ key: 'counts', sub: subN, bg: bgN, probe: probeN, text: [subN && W.COUNTS_LINE.sub(subN), bgN && W.COUNTS_LINE.bg(bgN), probeN && W.COUNTS_LINE.probe(probeN)].filter(Boolean).join(' · ') })
   const stats = rows.length
   // 7: the duration only (the start is on the head), from the main lane header's first … last rows
