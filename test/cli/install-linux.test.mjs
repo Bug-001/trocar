@@ -230,3 +230,19 @@ test('Linux install: the CA file Z-Code\'s desktop setting names gets trocar\'s 
   assert.ok(text.startsWith(own), 'the user\'s bytes first, as they were')
   assert.deepEqual(fps(text), [...fps(own), ...fps(root)], 'trocar\'s root appended once')
 })
+
+// 4.6 check 10 (plan = act): the dry run names the desktop CA file the real run appends to, and touches nothing
+test('Linux install --dry-run: the plan names the CA file Z-Code\'s desktop setting names, as the run then changes it, and writes nothing', async () => {
+  const home = tmpDir('trocar-install-zcode-dry-')
+  const own = createCa({ commonName: 'desktop proxy CA' }).certPem
+  const desk = path.join(home, 'certs', 'relay-ca.pem')
+  fs.mkdirSync(path.dirname(desk), { recursive: true }); fs.writeFileSync(desk, own)
+  fs.mkdirSync(path.join(home, '.zcode', 'v2'), { recursive: true }); fs.writeFileSync(path.join(home, '.zcode', 'v2', 'setting.json'), JSON.stringify({ httpProxyCaCertPath: desk }))
+  const before = snapshot(home)
+  const dry = fakeIo()
+  assert.equal(await runInstallCli(['--dry-run', '--json'], { ...onCtx(home, dry, { harnesses: [zcode] }), platform: 'linux' }), 0, dry.text())
+  assert.ok(dry.json().planned.some((p) => p.path === desk), `the desktop CA file is planned: ${JSON.stringify(dry.json().planned)}`)
+  assert.deepEqual(snapshot(home), before, 'a dry run writes nothing')
+  assert.equal(await runInstallCli(['--yes'], { ...onCtx(home, fakeIo(), { harnesses: [zcode] }), platform: 'linux' }), 0)
+  assert.ok(changedFiles(before, snapshot(home)).includes(path.relative(home, desk)), 'and the run changes that file')
+})
