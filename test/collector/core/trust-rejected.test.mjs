@@ -13,6 +13,7 @@ import { appendEvent, createFailureRecorder } from '../../../src/collector/core/
 import { captureHealth } from '../../../src/health/read.mjs'
 import { HARNESS_IDS } from '../../../src/off/harness-names.mjs'
 import { LEVELS, UNFOLDED_CODES, CODES } from '../../../src/health/codes.mjs'
+import { TRUSTED_THRESHOLD } from '../../../src/collector/core/engine/negcache.mjs'
 import { tmpDir } from '../../helpers/tmp.mjs'
 import { closeWithin } from '../../helpers/bounded.mjs'
 import { sandbox } from '../../cli/fixtures/dispatch-ctx.mjs'
@@ -186,27 +187,27 @@ test('4.6 §引擎 5: trusted before, then its process is gone → the closes co
 test('4.6 §引擎 5: trusted before, process still alive → judged as any close after the hold: negative and one critical trust-rejected', T, async () => {
   const s = await windowRig({ alive: () => true, holdCloseMs: H })
   const open = await s.used(); open.end(); await s.settled(1)
-  await s.rejecting(); await s.settled(2); await s.rejecting(); await s.settled(3)
+  for (let i = 0; i < TRUSTED_THRESHOLD; i++) { await s.rejecting(); await s.settled(2 + i) } // a trusted key: TRUSTED_THRESHOLD in a row (4.6 §引擎 5)
   assert.equal(tr(s).length, 1)
-  assert.deepEqual(s.flows.slice(1).map((f) => f.not_captured), ['client-rejected-leaf', 'client-rejected-leaf'])
+  assert.deepEqual(s.flows.slice(1).map((f) => f.not_captured), [...Array(TRUSTED_THRESHOLD - 1).fill('client-closed-no-data'), 'client-rejected-leaf'])
   await s.close()
 })
 test('4.6 §引擎 5: the engine stopping during the hold judges the held closes as any other, never drops them', T, async () => {
   const s = await windowRig({ alive: () => false, holdCloseMs: 60_000 })
   const open = await s.used(); open.end(); await s.settled(1)
-  await s.rejecting(); await s.rejecting()
+  for (let i = 0; i < TRUSTED_THRESHOLD; i++) await s.rejecting()
   await new Promise((r) => setTimeout(r, 100))
   assert.equal(s.flows.length, 1, 'held: the rows wait for the judgment')
   await s.close()
   assert.equal(tr(s).length, 1)
-  assert.deepEqual(s.flows.slice(1).map((f) => f.not_captured), ['client-rejected-leaf', 'client-rejected-leaf'])
+  assert.deepEqual(s.flows.slice(1).map((f) => f.not_captured), [...Array(TRUSTED_THRESHOLD - 1).fill('client-closed-no-data'), 'client-rejected-leaf'])
 })
 
 test('4.6 §引擎 5: an alive check that throws or answers anything but false is alive — the held closes are judged', T, async () => {
   for (const alive of [() => { throw new Error('table unreadable') }, () => undefined, async () => null]) {
     const s = await windowRig({ alive, holdCloseMs: H })
     const open = await s.used(); open.end(); await s.settled(1)
-    await s.rejecting(); await s.settled(2); await s.rejecting(); await s.settled(3)
+    for (let i = 0; i < TRUSTED_THRESHOLD; i++) { await s.rejecting(); await s.settled(2 + i) }
     assert.equal(tr(s).length, 1)
     await s.close()
   }
@@ -215,11 +216,11 @@ test('4.6 §引擎 5: a stop while the alive check is still asking judges the he
   let ask = null
   const s = await windowRig({ alive: () => new Promise((r) => { ask = r }), holdCloseMs: H }) // a process-table read that does not come back
   const open = await s.used(); open.end(); await s.settled(1)
-  await s.rejecting(); await s.rejecting()
+  for (let i = 0; i < TRUSTED_THRESHOLD; i++) await s.rejecting()
   await new Promise((r) => setTimeout(r, H + 100))
   assert.ok(ask, 'the hold is asking')
   await s.close()
   assert.equal(tr(s).length, 1)
-  assert.deepEqual(s.flows.slice(1).map((f) => f.not_captured), ['client-rejected-leaf', 'client-rejected-leaf'])
+  assert.deepEqual(s.flows.slice(1).map((f) => f.not_captured), [...Array(TRUSTED_THRESHOLD - 1).fill('client-closed-no-data'), 'client-rejected-leaf'])
   ask(false) // the late answer changes nothing
 })
