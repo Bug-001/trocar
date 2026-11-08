@@ -871,7 +871,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
   })
   collector = createModelCollector({ harnesses: list, dir: P.dir, identify: registry.match, ownerOf: parts.ownerOf, factsOf: parts.factsOf, proc: parts.proc,
     ctx: sourcesCtx({ os: A.os, home, env, dirs: b.dirs, policy: b.policy }), systemProxy: parts.systemProxy, custody: b.custody || 'unavailable', rootPem, procTable: parts.procTable,
-    record: event, event, proxyOf: parts.proxyOf, templates: TEMPLATES, agentList: () => ({ entries: agents }), ownSid: parts.ownSid || null, openConns: () => engine.stats().active,
+    record: event, event, proxyOf: parts.proxyOf, bypassOf: parts.bypassOf, templates: TEMPLATES, agentList: () => ({ entries: agents }), ownSid: parts.ownSid || null, openConns: () => engine.stats().active,
     drain: ({ harnesses: hs, now, by }) => engine.drain({ agents: hs ? new Set(hs) : null, now, ...drainBy(by) }), // null: every connection (an off that stops the daemon)
     upstreamRoots: upstreamRootsOf({ A, env, upstreamCa, event }),
     // the process of a negative-cache key exited, or its door closed: its entries go, as runDaemon's onGone does (4.8 §5.5; the fold clears by neg_key)

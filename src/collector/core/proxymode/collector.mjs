@@ -1,7 +1,7 @@
 // collector.mjs (core/proxymode) — the collector model's daemon half (RFC 4.11 §1 on / off, §3 ① ② ③ ⑥, P2, P7, P10, P11, P12; 4.6 §代理模式的门):
 // one OS-neutral collector the darwin / win32 daemon runs. It opens a door per entry group from `POST /on`'s
 // `{ harnesses, groups: { '<h>:<route>': port } }`, judges each connection at the door — identity (door-identity.mjs, D51), the upstream per connection
-// (chain.mjs P7; an unidentified process uses its own hook value, then steps 2, 4, 5, ⑥; an auth:false door dials its PAC's own leg, pac.mjs pacLeg, P10), decrypt by verdict.mjs P11 keyed by pid + start — serves the PAC on the
+// (chain.mjs P7; an unidentified process uses its own hook value, step 2, step 3 by its nearest routed agent ancestor, then 4, 5, ⑥; an auth:false door dials its PAC's own leg, pac.mjs pacLeg, P10), decrypt by verdict.mjs P11 keyed by pid + start — serves the PAC on the
 // auth:false door (P10), keeps doors forward-only while holders live after `off` (P12), and signs leaves through the issuer over the key custody (P2).
 // It never writes an agent file or ingress.json (§3 ①): ports and the token are read from ingress.json, never picked. Names no harness and no OS;
 // every reader of the world is injected (0.1 §3).
@@ -12,7 +12,7 @@ import tls from 'node:tls'
 import { createDoorIdentity, DOOR_HANG_MS } from '../engine/door-identity.mjs'
 import { processNames } from '../../../off/identity.mjs'
 import { verdictOf, judgedForms, carrierAt } from './verdict.mjs'
-import { upstreamFor, isTrocarDoorUrl, isLoopbackHost, HOOK_ENV, HOOK_PID_ENV } from './chain.mjs'
+import { upstreamFor, isTrocarDoorUrl, isLoopbackHost, HOOK_ENV, HOOK_PID_ENV, MAX_DEPTH } from './chain.mjs'
 import { pacHandler, pacLeg, peerAllowed } from './pac.mjs'
 import { createDoorSeen, createHolderPoll, mayExit, HOLDER_POLL_MS } from './holders.mjs'
 import { notCapturedClass } from '../../../health/codes.mjs'
@@ -34,16 +34,17 @@ import { proxyFileValues } from '../../../netenv/adopt.mjs'
 
 const untracked = (reason, unread) => ({ not_captured: 'untracked', reason, ...(unread ? { unread } : {}) })
 const split = (g) => { const i = String(g).lastIndexOf(':'); return { harness: g.slice(0, i), routeId: g.slice(i + 1) } }
+const UNREAD = Symbol('unread'), GONE = Symbol('gone') // agentAt's two answers that are no harness
 const safe = async (f) => { try { return (await f()) ?? null } catch { return null } }
 const ISSUER_CODES = new Set([CODE.certIntermediateUnavailable, CODE.certKeyMissing]) // verdicts on the issuer's state, which changes (P2)
 const CACHE_MAX = 4096 // every per-process map is bounded, the oldest entry goes first (the arch's caches' bound)
 const keep = (m, k, v) => { m.delete(k); m.set(k, v); if (m.size > CACHE_MAX) m.delete(m.keys().next().value) }
 const PID_KEY = /^(\d+)(?:@(.+))?$/ // a negative-cache key of a process: "<pid>@<start>", or "<pid>" when the start time was not read
-/** Every env name a descriptor's proxy-mode data reads (trust sources, blockers, directory overrides), its proxy variables and the variables that move its proxy files, the hook's and the
+/** Every env name a descriptor's proxy-mode data reads (trust sources, blockers, directory overrides), its proxy variables, NO_PROXY (an agent ancestor's, ⑥) and the variables that move its proxy files, the hook's and the
  *  certificate variables the union reads (⑭, CERT_VARS): what
  *  `proc.envOf` is asked for — never the whole environment (4.9 §5.2). */
 function envNamesOf(desc) {
-  const out = new Set([...((desc.proxy && desc.proxy.env) || []), HOOK_ENV, HOOK_PID_ENV, ...CERT_VARS])
+  const out = new Set([...((desc.proxy && desc.proxy.env) || []), 'NO_PROXY', 'no_proxy', HOOK_ENV, HOOK_PID_ENV, ...CERT_VARS])
   const walk = (v) => { if (Array.isArray(v)) v.forEach(walk); else if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) (k === 'env' && typeof x === 'string' ? out.add(x) : walk(x)) }
   walk(desc.proxyMode)
   for (const f of (desc.proxy && desc.proxy.files) || []) if (typeof f.env === 'string') out.add(f.env)
@@ -52,12 +53,13 @@ function envNamesOf(desc) {
 
 /**
  * createModelCollector({ harnesses, dir, identify, ownerOf, factsOf, proc, ctx, systemProxy, custody, rootPem, procTable, record, event, clock, timers,
- *   readState, readIngress, readManifest, proxyOf, templates, hostsOf, ownUid, ownSid, agentList, openConns, drain, pid, fs, upstreamRoots })
+ *   readState, readIngress, readManifest, proxyOf, bypassOf, templates, hostsOf, ownUid, ownSid, agentList, openConns, drain, pid, fs, upstreamRoots })
  *   upstreamRoots = { os: async () => PEM, node: PEM[], extra: PEM[] }: the bases the door verifies an upstream with (4.11 §3 ⑭; upstream-trust.mjs); absent → the engine's own union
  *   readState / readIngress / readManifest  default: state.json, ingress.json and the install manifest in `dir`, read through `fs` — never written
  *   proc       { envOf(pid, names) → {} | null, cwdOf(pid) → text | null, parentOf(pid) → { ppid, startedAt } | null }: read once per pid + start (P7)
  *   ctx        sources.mjs's ctx for the verdict (os, home, dirs, readFile, readdir, policy, join)
  *   proxyOf    (proxy text) → { kind: 'http' | 'socks5', host, port, auth? } | null: the arch's reading of a proxy address (parseProxyText + proxyAuthOf)
+ *   bypassOf   (NO_PROXY text) → bypass rows: the arch's reading of a NO_PROXY list (translateBypass 'no-proxy'), for an agent ancestor's (⑥)
  *   templates  the hook templates (harness/templates TEMPLATES): a form whose cert's template says `sendsUpstreamHeader` may send X-Trocar-Upstream
  *   custody    the key custody, or 'unavailable' (no backend): then no issuer, every verdict forward-only (P2)
  *   forget     (negKey, pid | null) → void: the engine's entries of a key whose process exited, or whose door closed, are to go (4.8 §5.5); the daemon
@@ -73,8 +75,9 @@ export const replacesDaemon = ({ exit, by }) => !!(exit && by && by !== 'uninsta
 
 export function createModelCollector({ harnesses, dir, identify, ownerOf = null, factsOf = null, proc = {}, ctx, systemProxy = () => null, custody = null, rootPem = null,
   procTable = async () => [], record = () => {}, event = () => {}, clock = Date.now, timers = globalThis, readState = null, readIngress = null, readManifest = null,
-  proxyOf, templates = {}, hostsOf = () => null, ownUid = process.getuid?.() ?? null, ownSid = null, agentList = () => null, openConns = () => 0, drain = null, pid = process.pid, fs = nodeFs, upstreamRoots = null, forget = () => {}, holds = () => true, doorHangMs = DOOR_HANG_MS } = {}) {
+  proxyOf, bypassOf, templates = {}, hostsOf = () => null, ownUid = process.getuid?.() ?? null, ownSid = null, agentList = () => null, openConns = () => 0, drain = null, pid = process.pid, fs = nodeFs, upstreamRoots = null, forget = () => {}, holds = () => true, doorHangMs = DOOR_HANG_MS } = {}) {
   if (typeof proxyOf !== 'function') throw new TypeError('createModelCollector needs proxyOf: how a proxy address is dialled is the arch\'s reading')
+  if (typeof bypassOf !== 'function') throw new TypeError('createModelCollector needs bypassOf: how a NO_PROXY list reads is the arch\'s reading')
   const byName = new Map(harnesses.map((d) => [d.name, d]))
   const readSt = readState || (() => readStateFile(path.join(dir, 'state.json'), { fs }).state)
   const readIng = readIngress || (() => readIngressConfig({ dir, fs }))
@@ -157,6 +160,23 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     return of(p, start)
   }
 
+  /** The harness a process is by the D51 name list, or null (not one, another user's), GONE (another life of the pid: the process asked about left),
+   *  UNREAD (its facts did not read, or the registry answers `pending`: no answer yet, D38): once per pid + start (⑥'s ancestor walk); UNREAD and an
+   *  answer whose start time is unknown are asked again (4.8 W78). */
+  const acache = new Map()
+  async function agentAt(q, s) {
+    const k = `${q}\0${s ?? ''}`
+    if (acache.has(k)) return acache.get(k)
+    const f = await safe(() => factsOf && factsOf(q, {}))
+    if (!f) return UNREAD
+    if (s != null && f.startedAt != null && f.startedAt !== s) return GONE
+    const m = f.uid != null && ownUid != null && f.uid !== ownUid ? {} : identify(f) || {}
+    if (m.reason === 'pending') return UNREAD
+    const agent = m.reason === 'match' && byName.has(m.agent) ? m.agent : null
+    if (s != null) keep(acache, k, agent)
+    return agent
+  }
+
   /** P11 for one process at one host, judged once per pid + start + host: every form the process may be must decrypt; the first that does not gives
    *  the code (D38, recorded once). The forms it may be: its harness's forms on this OS (on its own harness's door, those of that route), and of
    *  those only the ones verified here when any is — D51 names a harness, not a form, and an unmeasured or out-of-scope sibling cannot be told apart
@@ -217,13 +237,32 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     const ask = (what, p, answer) => { if (!late()) asking = what; return within(p, answer) }
     const bound = (f) => ({ ...f, parentOf: async () => { const up = await ask('waiting for a parent process', f.parentOf(), null); return up && bound(up) } }) // a copy: pcache's answer is every connection's
     const read = async (q, s, of) => bound(await ask('waiting for the process env and cwd', procFacts(q, s, of), { pid: q, start: s, env: null, cwd: null, parentOf: async () => null }))
+    let pid0 = { pid: id.pid, start } // whose own proxy files step 3 reads: the process's, or the ancestor's it runs for
+    /** ⑥: the nearest named ancestor of an unidentified process whose harness is on, or is the door's own (a door kept after off, P12), read as the
+     *  door's agent; an agent of another harness that is off is walked past. Null when the chain ends (the root, a parent gone) or passes MAX_DEPTH;
+     *  a parent or an ancestor's facts that did not read is facts with no env: step 3 answers `unknown`, recorded (D38). Asked only when step 3 runs. */
+    const ancestor = async () => {
+      const unread = (q, s) => ({ pid: q, start: s, env: null, cwd: null, parentOf: async () => null })
+      let q = id.pid, s = start
+      for (let depth = 0; depth < MAX_DEPTH; depth++) {
+        let up
+        try { up = await ask('waiting for a parent process', Promise.resolve().then(() => proc.parentOf ? proc.parentOf(q, s != null ? { startedAt: s } : {}) : null), null) } catch { return unread(q, s) }
+        if (!up || up.ppid == null) return null
+        q = up.ppid; s = up.startedAt ?? null
+        const agent = await ask('waiting for the process facts', agentAt(q, s), null)
+        if (agent === UNREAD) return unread(q, s)
+        if (agent === GONE) return null
+        if (agent && (onSet.has(agent) || agent === d.harness)) return (pid0 = { pid: q, start: s }, read(q, s, desc))
+      }
+      return null
+    }
     // an unidentified process with the door's credentials had its env written by a hook (an agent's tool subprocess): its own hook value first (⑥)
-    const pf = known ? await read(id.pid, start, desc) : d.auth ? { ...(id.pid != null ? await read(id.pid, start, null) : { env: null }), hookOnly: true } : null
+    const pf = known ? await read(id.pid, start, desc) : d.auth ? { ...(id.pid != null ? await read(id.pid, start, null) : { env: null }), hookOnly: true, ...(id.pid != null ? { ancestor } : {}) } : null
     const own = known ? formsOn(byName.get(id.agent), id.agent === d.harness ? d.routeId : null) : []
     const allowed = own.length > 0 && own.every((f) => sendsHeader(byName.get(id.agent), f)) // only a form whose hook sends the header (P7 step 1)
     const ports = [...doors.values()].map((x) => x.port)
     const isTrocarDoor = (v) => isTrocarDoorUrl(v, { ports })
-    const up = d.auth ? await upstreamFor({ desc, facts: pf, recordedPrior: priorOf(d), systemProxy: systemProxy(), header, headerAllowed: allowed, isTrocarDoor, proxyFile: proxyFileOf(desc, id.pid, start) })
+    const up = d.auth ? await upstreamFor({ desc, facts: pf, recordedPrior: priorOf(d), systemProxy: systemProxy(), header, headerAllowed: allowed, isTrocarDoor, bypassOf, proxyFile: (env) => proxyFileOf(desc, pid0.pid, pid0.start)(env) })
       : await pacLeg({ systemProxy: systemProxy(), header, isTrocarDoor }) // an auth:false door is a PAC's: it dials the own leg that PAC names (P10)
     if (known) answered(d.g, id.pid, up)
     if ((up.notes || []).some((n) => n.note === 'header-ignored')) fail(CODE.upstreamHeaderIgnored, `pid ${id.pid ?? '?'} sent X-Trocar-Upstream at the ${d.g} door, but no hook of its form sends it: ignored (its value is not recorded)`, { door: d.g, pid: id.pid })

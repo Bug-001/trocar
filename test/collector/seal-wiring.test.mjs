@@ -27,7 +27,7 @@ import { tmpDir } from '../helpers/tmp.mjs'
 process.execArgv = process.execArgv.map((a) => (a.startsWith('./') ? path.resolve(a) : a.replace(/^(--require=)(\.\/.*)$/, (_, f, rel) => f + path.resolve(rel))))
 
 const FAKE = fileURLToPath(new URL('./arch/linux/fixtures/fake-loader.mjs', import.meta.url))
-const NOBODY = { ownerOf: async () => null, factsOf: async () => null, proc: {}, proxyOf: () => null, systemProxy: () => null, procTable: async () => [], close: () => {} }
+const NOBODY = { ownerOf: async () => null, factsOf: async () => null, proc: {}, proxyOf: () => null, bypassOf: () => [], systemProxy: () => null, procTable: async () => [], close: () => {} }
 const CLOSED = '20261017T100000Z'
 const LINE = Buffer.from(JSON.stringify({ id: 'req_left_over', ts: '2026-10-17T10:00:00.000Z', req_body: 'z'.repeat(60) }) + '\n')
 const CAPTURE = Buffer.from(JSON.stringify({ id: 'req_old', ts: '2026-10-16T08:00:00.000Z', req_body: 'y'.repeat(60) }) + '\n')

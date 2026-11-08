@@ -11,7 +11,7 @@ import { withScratchCwd } from '../helpers/model-daemon.mjs'
 import { startDaemon } from '../../src/collector/daemon.mjs'
 import { checkRecord } from '../../src/health/codes.mjs'
 
-const NOBODY = { ownerOf: async () => null, factsOf: async () => null, proc: {}, proxyOf: () => null, systemProxy: () => null, procTable: async () => [], close: () => {} }
+const NOBODY = { ownerOf: async () => null, factsOf: async () => null, proc: {}, proxyOf: () => null, bypassOf: () => [], systemProxy: () => null, procTable: async () => [], close: () => {} }
 
 const flowsOf = (dir) => {
   const d = path.join(dir, 'flows')

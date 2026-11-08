@@ -13,7 +13,7 @@ import { loadIngressConfig, INGRESS_FILE } from '../../src/collector/core/ingres
 import { tmpDir } from './tmp.mjs'
 
 // the world outside trocar as no OS answers it: liveUnit's and the forked daemon child's one copy
-export const NOBODY = { ownerOf: async () => null, factsOf: async () => null, proc: {}, proxyOf: () => null, systemProxy: () => null, procTable: async () => [], close: () => {} }
+export const NOBODY = { ownerOf: async () => null, factsOf: async () => null, proc: {}, proxyOf: () => null, bypassOf: () => [], systemProxy: () => null, procTable: async () => [], close: () => {} }
 
 /** Can this host serve `platform`'s control endpoint for real? A platform whose endpoint is a pipe name (its control-path exports PIPE_PREFIX) is
  *  served everywhere: on a POSIX host as a relative unix socket (withScratchCwd). A platform whose endpoint is a unix socket in the tmp directory
