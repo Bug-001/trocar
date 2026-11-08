@@ -176,7 +176,7 @@ test('W36 one entry per code row of §10.4 — no more, no less — and each ent
   assert.deepEqual(Object.keys(FINDINGS_WIN32), [
     'not-routed', 'entry-changed', 'egress-differs', 'elevated-agent', 'proxy-dead',
     'upstream-unreachable', 'engine-port-taken', 'forwarder-down', 'form-unsupported', 'proxy-unsupported',
-    'system-proxy-pac', 'other-redirector', 'socktable-unavailable', 'cause-unknown',
+    'system-proxy-pac', 'other-redirector', 'socktable-unavailable', 'cause-unknown', 'cert-intermediate-unavailable',
   ])
   for (const [code, entry] of Object.entries(FINDINGS_WIN32)) {
     assert.equal(typeof entry.commands, 'function', `${code}: the commands are a function of the context`)

@@ -118,4 +118,9 @@ export const FINDINGS_WIN32 = {
     commands: (c) => [trocar(c, `trocar off ${c.h}`), gui(`Try ${c.h} again: if it still fails, trocar is not the cause`)],
     verify: (c) => `Try ${c.h} again`,
   },
+  // the root key is a CNG key of the user's (custody.ps1: the TPM, else the Software Key Storage Provider); no keychain here. The issuer retries every hour (4.11 ⑬)
+  'cert-intermediate-unavailable': {
+    why: () => 'Windows key storage (the TPM, or the Microsoft Software Key Storage Provider) did not sign with trocar\'s key. It works only while you are logged in to this PC\'s desktop; trocar tries again every hour.',
+    commands: (c) => [gui('Log in to this PC\'s desktop as the user who ran trocar install'), trocar(c, 'trocar status')],
+  },
 }
