@@ -222,7 +222,7 @@ async function kickedSessions(ctx) {
 function giveWay() {
   for (const s of follow) {
     if (rereadOf(s) && (!opened.has(s) || opened.has(target))) continue
-    if (up && up[0] === target) { upgrade?.unshift(up); up = null } else { follow.delete(target); follow.add(target) }
+    if (up && up[0] === target) { upgrade?.unshift(up); up = null } else if (user) { follow.delete(target); follow.add(target) } // the newest scan's: dropped
     follow.delete(s); target = s; user = true
     return
   }
@@ -345,7 +345,8 @@ process.stdin.on('data', (d) => {
     busy++; once = {}; newestDone = false; gcDone = false; sealing = false; clearTimeout(timer) // a new idle period begins after this one is answered
     chain = chain.then(() => serve(line)).then((asked) => {
       const id = asked && (asked.name === 'session' || asked.name === 'lane') && asked.params && asked.params.id
-      if (id != null && id !== '') { if (target != null && target !== String(id)) follow.add(target); target = String(id); user = true; answered.add(String(id)); opened.add(String(id)) } // a followed session keeps its turn
+      // a followed session keeps its turn; an upgrade target goes back to its queue, the newest scan's is dropped
+      if (id != null && id !== '') { if (target != null && target !== String(id)) { if (up && up[0] === target) { upgrade?.unshift(up); up = null } else if (user) follow.add(target) } target = String(id); user = true; answered.add(String(id)); opened.add(String(id)) }
     }, say).finally(() => { busy--; lastAt = Date.now(); kick() })
   }
 })
