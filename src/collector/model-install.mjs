@@ -19,7 +19,7 @@ import { standaloneFiles, switchFileIn } from '../off/paths.mjs'
 import { missingDirs, pathKey } from '../off/fsutil.mjs'
 import { resolveLoc, readSrc, holds, isPresent } from './core/proxymode/sources.mjs'
 import { noProxyNames } from './core/proxymode/entries.mjs'
-import { placeWrapper, managedTree } from './core/proxymode/hooks/wrapper.mjs'
+import { placeWrapper, managedTree, targetOf } from './core/proxymode/hooks/wrapper.mjs'
 import { lineComment, removeTrocarText } from '../off/text-edit.mjs'
 import { livenessOf } from './core/registry.mjs'
 import { readAgentList } from '../off/identity.mjs'
@@ -266,8 +266,7 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
         const pdir = resolveLoc(c.dir, ctx)[0], loader = c.loader ? resolveLoc(c.loader.file, ctx)[0] : null // no loader: the host finds files in the folder
         if (!pdir || (c.loader && !loader)) return { state: 'skipped', code: 'not-routed', why: 'the plugin folder or its loader does not resolve here' }
         if (!renderHook) return { state: 'skipped', code: 'not-routed', why: 'this build was given no hook renderer' }
-        const names = (desc.proxy && desc.proxy.env) || []
-        const hook = renderHook(c.template, { CA_FILE: ca.pem, SWITCH: switchFileIn(dir, desc.name), PROXY_ENV: names, PROXY_NAMES: names, NO_PROXY_ENV: noProxyNames(desc) })
+        const hook = hookOf(desc, c, dir, renderHook)
         const file = path.join(pdir, hook.name), text = hook.text
         owned(file, 'plugin', desc.name, text, 0o644)
         if (!c.loader) return { state: 'placed' }
@@ -316,6 +315,44 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
     } catch (e) { carriers.push({ harness: desc.name, carrier: 'pem-block', path: file, state: 'skipped', code: e.code || NOT_USERS, why: errText(e) }) }
   }
 }
+
+// a plug-in carrier's file as install writes it → { name, text }: the same bytes for the same harness and HOME, whatever the root (the CA is named by path)
+function hookOf(desc, c, dir, renderHook) {
+  const names = (desc.proxy && desc.proxy.env) || []
+  return renderHook(c.template, { CA_FILE: caPaths(path.join(dir, 'ca')).pem, SWITCH: switchFileIn(dir, desc.name), PROXY_ENV: names, PROXY_NAMES: names, NO_PROXY_ENV: noProxyNames(desc) })
+}
+
+/** Where install's certificate carriers would be on this machine, for an uninstall with no install record (1.6 R3, 4.11 §1 uninstall): every form of
+ *  this OS, present or not (the agent may be gone since), each carrier resolved as install resolves it (`ctx.facts` for a wrapper's file name) →
+ *  places for src/off/marker.mjs planByMarker: a config key's value under ~/.trocar (json-value), the wrapper and the real program it runs (wrapper),
+ *  a plug-in by the bytes install writes (owned-file `exact`) and the row that loads it by its mark and the plug-in's path (line `names`), and rule U's
+ *  files by the marked block (pem-block). Reads nothing but the settings rule U reads. → { places, unseen }: `unseen`, the variables (by the
+ *  descriptors) that may have named a rule U file at install and name none now, of each harness on this OS none of whose settings names one. */
+export function carrierPlaces({ os, harnesses, ctx, home, owns, renderHook, fs = nodeFs }) {
+  const dir = collectorHome(path.join(home, '.trocar')), out = [], unseen = new Set()
+  for (const desc of harnesses.filter((d) => d.proxyMode)) {
+    const h = desc.name, pm = desc.proxyMode, forms = pm.forms.filter((f) => f.os.includes(os))
+    for (const c of [...new Set(forms.map((f) => pm.certs[f.cert]).filter(Boolean))]) {
+      if (c.kind === 'config-key' && c.format === 'json') for (const file of resolveLoc(c.file, ctx)) out.push({ harness: h, how: 'json-value', file, keys: c.keys })
+      if (c.kind === 'wrapper') { const t = targetOf(ctx, c); if (t) out.push({ harness: h, how: 'wrapper', file: t.file, real: t.real }) }
+      if (c.kind !== 'plugin') continue
+      const pdir = resolveLoc(c.dir, ctx)[0]
+      if (!pdir) continue
+      const hook = hookOf(desc, c, dir, renderHook), file = path.join(pdir, hook.name)
+      out.push({ harness: h, how: 'owned-file', file, exact: hook.text })
+      const loader = c.loader ? resolveLoc(c.loader.file, ctx)[0] : null
+      if (loader) out.push({ harness: h, how: 'line', file: loader, yaml: true, names: [JSON.stringify(file)] })
+    }
+    // rule U's file once, whichever harness names it first (SSL_CERT_FILE, NODE_EXTRA_CA_CERTS are read by more than one): the receipt counts files (1.6 §3.4)
+    const files = forms.length ? ruleUFiles(desc, ctx, { home, owns, fs }) : []
+    for (const { file } of files) if (!out.some((p) => p.how === 'pem-block' && p.file === file)) out.push({ harness: h, how: 'pem-block', file })
+    if (forms.length && !files.length) for (const n of certVars(desc)) unseen.add(n)
+  }
+  return { places: out, unseen: [...unseen] }
+}
+
+/** The environment variables a harness's `userCertFiles` reads (4.11 P4), in the descriptor's order. */
+export const certVars = (desc) => [...new Set(((desc.proxyMode && desc.proxyMode.userCertFiles) || []).flat().filter((s) => s && typeof s.env === 'string').map((s) => s.env))]
 
 // the base64 of a root, and whether a pem-block record holds it: how a block of this root is told from one of an older root (㉒; the Set up plan, too)
 export const pemBody = (pem) => pem.replace(/-----[A-Z ]+-----|\s/g, '')

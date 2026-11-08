@@ -11,6 +11,10 @@
 //   owned-file   a plugin or shim trocar wrote (its sentinel in it, or exactly trocar's own plugin manifest), or a switch file `on` wrote for a harness
 //                (paths.mjs switchFileIn: in trocar's own tree, so trocar's by where it is, whatever it holds; a link there goes, never what it points at)
 // The certificate carriers among them (`phase: 'install'`) are install's (D55①): `off` never looks at them, `uninstall` does (planByMarker `phases`).
+// On macOS / Windows `uninstall` also hands in `places`: where install's carriers are by the harness descriptors (model-install.mjs carrierPlaces),
+// each with what trocar's looks like there: a json-value or a line (its `names`: the plug-in path a loader row holds), an owned-file by the exact bytes
+// install writes (another file at that name is left and said), a `pem-block` (rule U's marked block with a certificate in it, in the user's file), and a
+// `wrapper` (the install-folder wrapper, by the real program's path in its bytes: the real program comes back from .trocar-real by a rename).
 // Nothing else is touched, and no byte of a file outside those marks changes. The result says `undone-by-marker` (the code `off` records and the
 // receipt shows, 1.6 R3). Not done here, said in the docs: a combined bundle (no manifest, so nobody can say who holds it — `uninstall` removes it with the
 // CA); a home install used under a variable value since cleared or changed (only the manifest knew that value). Every place is resolved as its
@@ -27,6 +31,7 @@ import { writeDurable, editTarget, removeEmptyDirs, readOrNull } from './fsutil.
 import { backupsOf } from './backup.mjs'
 import { trocarHome, collectorIn, switchFileIn } from './paths.mjs'
 import { CODE_OFF } from './names.mjs'
+import { shellWord } from './manifest.mjs'
 import { decodeText, encodeText, CHARSETS, WHY_TEXT } from './text-codec.mjs'
 import { resolveLoc, dirsFor, homeRoot } from './loc.mjs'
 import { doorPorts, isDoorValue, loopbackUrl, LOOPBACK_HOSTS } from './door-value.mjs'
@@ -118,7 +123,15 @@ function blocksIn(t, root) {
 }
 // whether a YAML text still holds content (a line that is not blank and not only a comment), read as insertLine reads a yaml-list
 const yamlItems = (t) => t.split('\n').some((l) => l.replace(/\r$/, '').replace(/(^|\s)#.*$/, '').trim() !== '')
-const lineHits = (t, root) => linesOf(t).filter((l) => l.line.includes(LINE_MARK) && l.line.includes(root + path.sep))
+// a line trocar wrote: its mark, and a path under trocar's home or one of the files a descriptor's place says trocar put there (`names`: the plug-in a row loads)
+const lineHits = (t, root, names = []) => linesOf(t).filter((l) => l.line.includes(LINE_MARK) && (l.line.includes(root + path.sep) || names.some((n) => l.line.includes(n))))
+// the marked certificate blocks rule U appended (4.11 P4): from a block's open line through its close line and that line's ending, a PEM inside → [{ from, to }]
+const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+const PEM_BLOCK = new RegExp(`(?<=^|\\n)${esc(BLOCK_OPEN)}[^\\n]*\\n(?:(?!${esc(BLOCK_OPEN)})[^\\n]*\\n)*?${esc(BLOCK_END)}\\r?(?:\\n|$)`, 'g')
+const pemBlocksIn = (t) => [...t.slice(markLen(t)).matchAll(PEM_BLOCK)].filter((m) => m[0].includes('-----BEGIN ')).map((m) => ({ from: m.index + markLen(t), to: m.index + markLen(t) + m[0].length }))
+// whether a file is trocar's install-folder wrapper for the real program at `real`: the wrapper runs it, so its bytes name that path (a script as text,
+// a compiled stub as a UTF-16 string)
+const wraps = (buf, real) => buf.includes(Buffer.from(real, 'utf8')) || buf.includes(Buffer.from(real, 'utf16le'))
 
 // the entry a select route names: <dir>/<id>.json, id = the meta file's idKey (one plain file name, nothing outside the directory); none → []
 function selected(sel, ctx, fs) {
@@ -131,10 +144,11 @@ function selected(sel, ctx, fs) {
 
 // the candidate files of a spec for this home, each file once per kind of mark (a route place and a fixed path can name the same one; a door key
 // and a trust key can share a file): [{ file, spec }]
-function candidates(home, harness, fs, env, platform, phases) {
+function candidates(home, harness, fs, env, platform, phases, places) {
   const out = [], seen = new Set()
   const ctx = { os: platform, home, env, dirs: dirsFor(platform, home, env) }
   const push = (file, spec) => { const k = `${spec.door ? 'door' : ''}\0${file}`; if (!seen.has(k)) { seen.add(k); out.push({ file, spec }) } }
+  for (const spec of places) if (spec.harness === harness && phases.includes(spec.phase || 'install')) push(spec.file, spec) // first: a descriptor's place knows more (the plug-in its row loads)
   for (const spec of MARKER_PATHS[harness]) {
     if ((spec.os && !spec.os.includes(platform)) || !phases.includes(spec.phase || 'on')) continue
     if (spec.route) for (const at of spec.route.select ? selected(spec.route.select, ctx, fs) : spec.route.dir ? resolveLoc(spec.route.dir, ctx).map((d) => path.join(d, spec.route.name)) : resolveLoc(spec.route.file, ctx)) push(at, spec)
@@ -155,13 +169,19 @@ function candidates(home, harness, fs, env, platform, phases) {
 /** What trocar's own marks say it changed for these harnesses (`ids` null: all) in the commands `phases` names (`off` ['on'], the default; `uninstall` both), without a manifest: `[{ harness, path, how, detail }]`, in the order to
  *  undo them (values and blocks, then lines, then plugins and shims). Reads only; a file it cannot read or parse is planned only if a mark is in it.
  *  `notes` gets a sentence for each loopback proxy value it could not judge (ingress.json unreadable): left, and said. */
-export function planByMarker({ home, ids = null, fs = nodeFs, env = process.env, platform = process.platform, phases = ['on'], notes = [] }) {
+export function planByMarker({ home, ids = null, fs = nodeFs, env = process.env, platform = process.platform, phases = ['on'], notes = [], places = [] }) {
   const root = trocarHome(home)
   const plan = []
   let ports // the door ports, read once when a door key is looked at
-  for (const harness of Object.keys(MARKER_PATHS)) {
+  for (const harness of [...new Set([...Object.keys(MARKER_PATHS), ...places.map((p) => p.harness)])]) {
     if (ids && !ids.includes(harness)) continue
-    for (const { file, spec } of candidates(home, harness, fs, env, platform, phases)) {
+    for (const { file, spec } of candidates(home, harness, fs, env, platform, phases, places)) {
+      if (spec.how === 'wrapper') { // a program, not text: trocar's wrapper by the real program it names, or the real program trocar moved aside
+        let cur = null, real = false
+        try { cur = readOrNull(fs, file); real = fs.existsSync(spec.real) } catch { /* unreadable: judged by what can be read */ }
+        if ((cur && wraps(cur, spec.real)) || real) plan.push({ harness, path: file, how: 'wrapper', detail: { real: spec.real } })
+        continue
+      }
       let b
       try { b = readOrNull(fs, file) } catch { continue }
       if (b == null) continue
@@ -175,8 +195,11 @@ export function planByMarker({ home, ids = null, fs = nodeFs, env = process.env,
         const blocks = blocksIn(t, root)
         if (blocks.length || commented) add({ blocks: blocks.length, commented })
       } else if (spec.how === 'line') {
-        const hits = lineHits(t, root)
-        if (hits.length) add({ lines: hits.map((h) => h.line), yaml: !!spec.yaml })
+        const hits = lineHits(t, root, spec.names)
+        if (hits.length) add({ lines: hits.map((h) => h.line), yaml: !!spec.yaml, ...(spec.names ? { names: spec.names, keep: true } : {}) })
+      } else if (spec.how === 'pem-block') {
+        const n = pemBlocksIn(t).length
+        if (n) add({ blocks: n })
       } else if (spec.how === 'json-value') {
         let doc
         try { doc = parseJsonText(t) } catch { doc = undefined }
@@ -196,10 +219,11 @@ export function planByMarker({ home, ids = null, fs = nodeFs, env = process.env,
           else if (ports.why && loopbackUrl(v)) unknown(keys.join('.'))
         }
         if (doors.length) add({ keys: doors, door: true, route: spec.route })
-      } else if (spec.how === 'owned-file' && (spec.ours || (spec.exact ? t === spec.exact : t.includes(SENTINEL)))) add(spec.ours ? { ours: true } : spec.exact ? { exact: spec.exact } : {})
+      } else if (spec.how === 'owned-file' && spec.harness) add({ exact: spec.exact, keep: true }) // a file at the name a descriptor's place gives trocar's own: the undo judges its bytes
+      else if (spec.how === 'owned-file' && (spec.ours || (spec.exact ? t === spec.exact : t.includes(SENTINEL)))) add(spec.ours ? { ours: true } : spec.exact ? { exact: spec.exact } : {})
     }
   }
-  const rank = { 'json-value': 0, block: 0, line: 1, 'owned-file': 2 }
+  const rank = { 'json-value': 0, block: 0, 'pem-block': 0, line: 1, 'owned-file': 2, wrapper: 2 }
   return plan.sort((a, b) => rank[a.how] - rank[b.how])
 }
 
@@ -213,6 +237,7 @@ function undoOne(item, home, fs) {
     removeEmptyDirs([path.dirname(item.path)], fs)
     return done({ removed: true })
   }
+  if (item.how === 'wrapper') return undoWrapperByMarker(item, fs)
   let file
   try { file = editTarget(item.path, fs) } catch (e) { return { result: 'error', reason: String((e && e.message) || e) } }
   const buf = readOrNull(fs, file)
@@ -222,8 +247,12 @@ function undoOne(item, home, fs) {
   const t = read.text, mode = fs.statSync(file).mode & 0o777
   const put = (out) => writeDurable(file, encodeText(out, read.charset), mode, fs) // in the form the file has
   if (item.how === 'owned-file') {
-    if (!((item.detail || {}).exact ? t === item.detail.exact : t.includes(SENTINEL))) return { result: 'already-clean' } // not trocar's (any more): a plan is never trusted over the file
+    const keep = !!(item.detail || {}).keep
+    if (!((item.detail || {}).exact ? t === item.detail.exact : t.includes(SENTINEL))) { // not trocar's (any more): a plan is never trusted over the file
+      return keep ? { result: 'left-text', reason: `${item.path} has the name trocar gives its file there, but not the bytes trocar writes (edited, or written by another trocar); trocar left it: if it is not yours, delete it`, command: `rm ${shellWord(item.path)}` } : { result: 'already-clean' }
+    }
     fs.rmSync(file, { force: true })
+    if (keep) return done({ removed: true }) // the folder is the agent's, not trocar's
     const dirs = [path.dirname(item.path)] // the directory it was in, and, inside trocar's collector dir, the ones above it that are empty now (outermost first)
     for (let d = path.dirname(dirs[0]); under(d, path.join(root, 'collector')); d = path.dirname(d)) dirs.unshift(d)
     removeEmptyDirs(dirs, fs)
@@ -240,16 +269,25 @@ function undoOne(item, home, fs) {
     if (out !== t) put(out)
     return done({ blocks: blocks.length, restored: r.restored, ...(r.prior_left.length ? { prior_left: r.prior_left } : {}) })
   }
+  if (item.how === 'pem-block') {
+    const blocks = pemBlocksIn(t)
+    if (!blocks.length) return { result: 'already-clean' }
+    let out = t
+    for (const b of blocks.reverse()) out = out.slice(0, b.from) + out.slice(b.to)
+    put(out)
+    return done({ blocks: blocks.length })
+  }
   if (item.how === 'line') {
-    const hits = lineHits(t, root).reverse()
+    const d = item.detail || {}
+    const hits = lineHits(t, root, d.names).reverse()
     if (!hits.length) return { result: 'already-clean' }
     const drop = (text) => hits.reduce((o, h) => o.slice(0, h.at) + o.slice(h.next), text) // hits run bottom-up: earlier offsets stay valid
     // a YAML list whose only item was trocar's row stays a list: `[]` where the topmost row was, its line end kept (install replaced a `[]` there, so
     // that is byte-exact), the user's comments and blank lines as they were; dsh will not start on a patch file with no list in it (4.6)
     const top = hits[hits.length - 1], rest = drop(t)
-    const asList = (item.detail || {}).yaml && rest !== '' && !yamlItems(rest) // nothing at all left (a file install created): deleted below
+    const asList = d.yaml && rest !== '' && !yamlItems(rest) // nothing at all left (a file install created): deleted below
     const out = !asList ? rest : hits.reduce((o, h) => (h === top ? o.slice(0, h.at) + (h.line.endsWith('\r') ? '[]\r' : '[]') + o.slice(h.at + h.line.length) : o.slice(0, h.at) + o.slice(h.next)), t)
-    if ((item.detail || {}).yaml && out.trim() === '') { fs.rmSync(file, { force: true }); removeEmptyDirs([path.dirname(item.path)], fs); return done({ lines: hits.length, deleted: true }) } // dsh will not start on an empty patch file; with no row there is nothing to read
+    if (d.yaml && out.trim() === '') { fs.rmSync(file, { force: true }); if (!d.keep) removeEmptyDirs([path.dirname(item.path)], fs); return done({ lines: hits.length, deleted: true }) } // dsh will not start on an empty patch file; with no row there is nothing to read
     put(out)
     return done({ lines: hits.length })
   }
@@ -285,12 +323,12 @@ function undoOne(item, home, fs) {
       const v = getPath(now(), a.keys)
       if (Array.isArray(v) && !v.length && had === undefined) restore(a.keys, undefined)
     }
-    // the objects trocar made to hold these keys, left empty: out, unless the file before `on` had them
-    for (const k of [...mine, ...(route.noProxyKeys || [])]) for (let d = k.length - 1; d > 0; d--) { const c = getPath(now(), k.slice(0, d)); if (isEmptyObject(c) && was(k.slice(0, d)) === undefined) restore(k.slice(0, d), undefined) }
   }
-  // a door file left `{}` with no backup at all is one trocar created: it goes, and with it the meta key that selects it
+  // the objects trocar made to hold these keys, left empty: out, unless the file before trocar wrote them had them (a trust key: only when a backup says so)
+  if (door || pre.doc) for (const k of [...mine, ...(route.noProxyKeys || [])]) for (let d = k.length - 1; d > 0; d--) { const c = getPath(now(), k.slice(0, d)); if (isEmptyObject(c) && was(k.slice(0, d)) === undefined) restore(k.slice(0, d), undefined) }
+  // a file left holding nothing but empty objects, with no backup at all, is one trocar created: it goes, and with a door file the meta key that selects it
   // (the meta is judged before either file is written: when its backup cannot be read, both stay as they are)
-  if (door && !pre.any && isEmptyObject(now())) {
+  if (!pre.any && emptyTree(now())) {
     const meta = route.select ? unselect(item.path, route.select, home, fs) : null
     if (meta && meta.result) return meta
     fs.rmSync(file, { force: true })
@@ -303,7 +341,25 @@ function undoOne(item, home, fs) {
   return done(prior != null ? { restored_from: pre.saved, value: prior } : { removed: true, ...(pre.saved ? { backup: pre.saved } : {}) })
 }
 
+// trocar's install-folder wrapper (4.11 P8) with no record: while the file is trocar's wrapper and the real program is in .trocar-real, the real program goes
+// back by a rename (its bytes, name and mode as they were); anything else — the real program gone, or a file there that is not trocar's wrapper while
+// .trocar-real holds a program — is left as it is and said, with what to do by hand (no record says which program is the user's)
+function undoWrapperByMarker(item, fs) {
+  const real = item.detail.real, cur = readOrNull(fs, item.path), hasReal = fs.existsSync(real)
+  const ours = !!cur && wraps(cur, real)
+  if (ours && hasReal) {
+    fs.renameSync(real, item.path)
+    try { fs.rmdirSync(path.dirname(real)) } catch { /* not empty, or gone */ }
+    return { result: CODE_OFF.undoneByMarker, restored: true }
+  }
+  if (!ours && !hasReal) return { result: 'already-clean' }
+  return ours
+    ? { result: 'left-text', reason: `${item.path} is trocar's wrapper, but the real program it runs (${real}) is gone; trocar left the wrapper: reinstall the agent` }
+    : { result: 'left-text', reason: `${real} holds a program trocar moved aside, but ${item.path} is no longer trocar's wrapper (the agent was updated or reinstalled); trocar left both: once ${item.path} runs, delete ${path.dirname(real)}`, command: `rm -r ${shellWord(path.dirname(real))}` }
+}
+
 const isEmptyObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v) && !Object.keys(v).length
+const emptyTree = (v) => !!v && typeof v === 'object' && !Array.isArray(v) && Object.values(v).every(emptyTree)
 
 // the file as it was before `on`: the newest backup `isOn` does not say holds trocar's value. A backup that cannot be read (the read fails, its bytes prove no
 // encoding, it is not JSON) is skipped, never taken for "no value": an older one is looked at. → { doc (null: none), saved, unread: [{ path, why }], any }

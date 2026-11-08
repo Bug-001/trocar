@@ -78,7 +78,7 @@ const unsignedWhy = (liveness, h) => (liveness[h]
  *  part-way (the last write of the manifest: ENOSPC, EACCES, a failed rename) is thrown with `partial` on it: the same object, as far as it got — the files that were
  *  changed or removed by then are in it, because a receipt that said "nothing was changed" over a settings.json that was put back would be untrue (1.6 R1, V3). */
 export async function undoHarnesses(args) {
-  const out = { results: [], kept_bundles: [], removed: [], still_trusting: [], holders: [], trust_unknown: [], left: [], residue: [], changed: [], notes: [], procs_error: null, manifest: args.manifest }
+  const out = { results: [], kept_bundles: [], removed: [], still_trusting: [], holders: [], trust_unknown: [], left: [], residue: [], changed: [], restored: [], notes: [], procs_error: null, manifest: args.manifest }
   try { return await undoInto(args, out) } catch (e) {
     if (e && typeof e === 'object') e.partial = out
     throw e
@@ -329,6 +329,7 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
       if (r.result === 'kept-changed' && f.role !== 'config-entry') { fail(f, `${f.path}, trocar's ${f.role}, is not what trocar wrote (its bytes differ from the install manifest's record${f.sha256 ? '' : ', which holds none'}), so it was left as it is; delete it by hand if it is not yours, then run it again`); continue }
       if (r.result === 'kept-changed') out.notes.push(`${f.path}, the ${f.role} trocar created, was changed while trocar was on: it holds the user's settings now, so it is kept (trocar's own key in it was undone by its entry)`)
       if (r.result === 'removed') out.removed.push(r.path)
+      if (r.result === 'restored') out.restored.push({ harness: f.harness, path: r.path, role: f.role }) // put back as it was before install
       if (r.changed) out.changed.push({ harness: f.harness, path: f.path, role: f.role }) // not what trocar wrote: removed all the same, and said
       without(manifest.files, f)
     } catch (err) { fail(f, `${f.path}, trocar's ${f.role}, could not be removed: ${String((err && err.message) || err)}`) }
