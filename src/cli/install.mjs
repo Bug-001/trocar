@@ -7,9 +7,10 @@ import nodeOs from 'node:os'
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { EXIT, newReceipt, UNDO_LINE } from '../off/schema.mjs'
-import { refuseOldManifest, readManifest, saveManifest } from '../off/manifest.mjs'
+import { refuseOldManifest, readManifest, saveManifest, manifestPath } from '../off/manifest.mjs'
 import { samePath, MARKED_WITHOUT_RECORD } from '../collector/core/trust/journal.mjs'
 import { replacedNote } from '../off/backup.mjs'
+import { COMMAND_INDENT } from '../off/receipt.mjs'
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
 import { opLockFile, standalonePath, standaloneFiles, launcherPath, standaloneCommand, homeMismatch, accountHomeOf, collectorDir, backupDir } from '../off/paths.mjs'
 import { isInteractive, confirm } from '../off/io.mjs'
@@ -81,6 +82,21 @@ async function placePath({ home, env, platform, fs, deps }) {
 }
 const pathRow = (p) => p && p.rec ? [['PATH', p.rec.element ? `${p.rec.path}: ${p.rec.element} added` : `${p.rec.path}: line added (open a new terminal)`]] : []
 
+/** 1.6 §3.2: an install record install cannot build on, and the way out of each case; null when there is none, or it is usable (an older record is refuseOldManifest's). */
+function unusableRecord(home, fs) {
+  const file = manifestPath(path.join(home, '.trocar', 'collector'))
+  try {
+    const m = readManifest(path.dirname(file), fs)
+    if (!m || !m.unsupported) return null
+    const reason = `it is version ${JSON.stringify(m.version)}, which this build does not read`
+    return { file, reason, message: `the install record ${file} is version ${JSON.stringify(m.version)}, which this build does not read, so trocar changed nothing. Use the trocar that wrote it.` }
+  } catch (e) {
+    if (e && e.code) return { file, reason: String(e.message || e), message: `the install record ${file} could not be read (${e.code}), so trocar changed nothing. Put that right, then run trocar install again.` }
+    return { file, reason: String((e && e.message) || e).replace(file, 'it').replace(/\s+/g, ' '), command: 'trocar uninstall', // uninstall leaves the damaged file where it is (§3.6)
+      message: [`the install record ${file} is damaged, and nothing else lists what trocar changed, so trocar changed nothing. Take out what trocar's marks show, move the file aside, then install again:`, `${COMMAND_INDENT}trocar uninstall`, `${COMMAND_INDENT}mv '${file}' '${file}.damaged'`, `${COMMAND_INDENT}trocar install`].join('\n') }
+  }
+}
+
 export async function runInstallCli(argv, { io, env = process.env, home = nodeOs.homedir(), platform = process.platform, deps = {} } = {}) {
   const flags = new Set()
   for (const a of argv) { if (!FLAGS.has(a)) { io.err(`trocar install: ${a.startsWith('-') ? `unknown option '${a.split('=')[0]}'` : 'takes no agent name: it installs for every agent found on this machine'}\n${USAGE}`); return EXIT.usage } flags.add(a) }
@@ -103,6 +119,14 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
   if (away) { if (json) printJson(io, { ...newReceipt('install'), ok: false, error: { code: away.code, message: away.message }, notes: [away.message] }); else io.err(fit([`trocar install: ${away.message}`]).join('\n')); return EXIT.usage }
   const old = refuseOldManifest({ home, platform, fs })
   if (old) { if (json) printJson(io, { ...newReceipt('install'), ok: false, error: { code: 'older-install', message: old.message }, notes: [old.message] }); else io.err(fit([`trocar install: ${old.message}`], { home }).join('\n')); return EXIT.incomplete }
+  // 1.6 §3.2: a record that cannot be read: installing over it would lose what it lists, and uninstall takes that out by trocar's marks
+  const unusable = unusableRecord(home, fs)
+  if (unusable) {
+    const dry = flags.has('--dry-run'), { file, reason, message, command } = unusable
+    if (json) printJson(io, { ...newReceipt('install'), ok: false, ...(dry ? { dry_run: true, planned: [], blocked: [{ what: file, reason }] } : { notes: [message, reason] }), error: { code: 'manifest-unreadable', message, ...(command ? { command } : {}) } })
+    else io.err(fit([`trocar install: ${message}`], { home }).join('\n'))
+    return dry ? EXIT.ok : EXIT.incomplete
+  }
   const { isModelOs } = await import('../collector/model-install.mjs')
   const model = isModelOs(platform)
   // R12: the writes run under op.lock, taken after the yes (a plan that is only printed takes nothing and writes nothing)

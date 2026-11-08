@@ -15,7 +15,6 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { ERROR_CODES } from '../../src/cli/json.mjs'
 import { CUSTODY_FAILED, custodyPreflight } from '../../src/collector/model-install.mjs'
 import { backendsFor } from '../../src/collector/arch/model-backends.mjs'
-import { snapshot } from './fixtures/on-ctx.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
 import { BOARD_RANGE } from '../../src/collector/core/ingress-config.mjs'
 import { onCtx, snapshot } from './fixtures/on-ctx.mjs'
@@ -559,3 +558,43 @@ for (const os of ['darwin', 'win32']) {
     for (const f of marked) assert.ok(lines.includes(path.join('~', path.relative(w.home, f))), `${f} prints whole on a line of its own:\n${text.text()}`)
   })
 }
+
+// 1.6 §3.2: a record install cannot build on is refused before the plan, whatever the OS: writing over it would lose what it lists. Each case has its own way out
+for (const platform of ['darwin', 'win32', 'linux']) {
+  const cases = [
+    ['not JSON', (f) => fs.writeFileSync(f, '{ not json'), 'trocar uninstall'],
+    ['a list', (f) => fs.writeFileSync(f, '[]'), 'trocar uninstall'],
+    ['of a version this build does not read', (f) => fs.writeFileSync(f, JSON.stringify({ version: 99 })), undefined],
+    ['not readable (a directory)', (f) => fs.mkdirSync(f), undefined],
+  ]
+  for (const [what, make, command] of cases) {
+    test(`1.6 §3.2 · ${platform}: an install record that is ${what} refuses: manifest-unreadable, its own way out, the file named, nothing written`, async () => {
+      const home = tmpDir(), dir = path.join(home, '.trocar', 'collector'), file = path.join(dir, 'install-manifest.json')
+      fs.mkdirSync(dir, { recursive: true }); make(file)
+      const was = fs.statSync(file).isDirectory() ? null : fs.readFileSync(file)
+      for (const [flags, code] of [[['--yes', '--json'], 1], [['--json'], 1], [['--dry-run', '--json'], 0]]) { // §1.4: a dry run exits 0 and says what stops the run
+        const io = fakeIo()
+        const exit = await runInstallCli(flags, { io, env: {}, home, platform, deps: { getuid: () => 501 } })
+        const doc = io.json()
+        assert.equal(exit, code, io.text())
+        assert.deepEqual([doc.ok, doc.error.code, doc.error.command], [false, 'manifest-unreadable', command])
+        assert.ok(doc.error.message.includes(file), doc.error.message)
+        assert.deepEqual(validateReceipt(doc), [])
+      }
+      assert.deepEqual([fs.readdirSync(path.join(home, '.trocar')), fs.readdirSync(dir)], [['collector'], ['install-manifest.json']], 'nothing was written')
+      if (was) assert.deepEqual(fs.readFileSync(file), was)
+    })
+  }
+}
+// the way out of a damaged record really is one: with the file moved where the refusal says, the same install goes on
+test('1.6 §3.2: a damaged record moved aside as the refusal says: install no longer refuses', async () => {
+  const home = tmpDir(), dir = path.join(home, '.trocar', 'collector'), file = path.join(dir, 'install-manifest.json')
+  fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(file, '{ not json')
+  const said = fakeIo()
+  await runInstallCli(['--yes', '--json'], { io: said, env: {}, home, platform: 'darwin', deps: { getuid: () => 501 } })
+  const [, from, to] = said.json().error.message.split('\n').find((l) => l.trim().startsWith('mv ')).match(/^\s*mv '(.+)' '(.+)'$/)
+  assert.equal(from, file)
+  const { io } = await cli(['--dry-run', '--json'], { setup: (w) => { fs.mkdirSync(w.dir, { recursive: true }); fs.writeFileSync(path.join(w.dir, path.basename(to)), '{ not json') } }) // what is left once it is moved
+  assert.equal(io.json().error, undefined, io.text())
+  assert.ok(io.json().planned.length > 0)
+})
