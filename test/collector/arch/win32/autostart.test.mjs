@@ -445,9 +445,9 @@ test('W24 a /Query that did not run (timeout, blocked, no schtasks) is a failure
 
 /** The task's XML as `schtasks /Query /TN \trocar\collector /XML` prints it, shortened to the elements the answer turns on (a Windows test machine, 2026-10-19, pass C /
  *  win-6): `<Enabled>false</Enabled>` is in `<Settings>` only when the task is switched off — an enabled task has no such element at all. */
-const TASK_XML = (enabled) => ['<?xml version="1.0" encoding="UTF-16"?>', '<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">', '  <Settings>',
+const TASK_XML = (enabled, exec = inner(xml(), 'Exec')) => ['<?xml version="1.0" encoding="UTF-16"?>', '<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">', '  <Settings>',
   '    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>', ...(enabled ? [] : ['    <Enabled>false</Enabled>']), '    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>', '  </Settings>',
-  '  <Triggers>', '    <LogonTrigger>', '      <UserId>TESTMACHINE\\tester</UserId>', '    </LogonTrigger>', '  </Triggers>', '</Task>'].join('\r\n')
+  '  <Triggers>', '    <LogonTrigger>', '      <UserId>TESTMACHINE\\tester</UserId>', '    </LogonTrigger>', '  </Triggers>', '  <Actions Context="Author">', `    <Exec>${exec}</Exec>`, '  </Actions>', '</Task>'].join('\r\n')
 /** schtasks writes that XML as UTF-16LE with a BOM on a redirected stdout, and execTool decodes UTF-8 (and trims): what the code really gets is every ASCII character followed by a NUL. */
 const asSchtasksPrintsIt = (xml) => Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(xml, 'utf16le')]).toString('utf8').trim()
 /** A `schtasks` whose task is registered and answers `xml` to `/Query /XML` (null = the query fails), with no Run value of ours. */
@@ -455,10 +455,10 @@ const taskThatAnswers = (xml) => fakeTools({ 'schtasks /Query': (file, args) => 
 
 test('D61 registered() answers the one question 1.6 §3.3 asks — registered AND enabled: a DISABLED task is not "present", in either encoding schtasks may print its XML in', () => {
   for (const [how, form] of [['UTF-16LE decoded as UTF-8, as execTool gets it', asSchtasksPrintsIt], ['plain text', (x) => x]]) {
-    const on = userUnit({ ...withHome(), run: taskThatAnswers(form(TASK_XML(true))) })
+    const on = installed(userUnit({ ...withHome(), run: taskThatAnswers(form(TASK_XML(true))) }))
     assert.equal(on.registered().state, 'present', `${how}: an enabled task is the login entry`)
     assert.equal(autostartBlock({ unit: on, osName: 'win32' }), null, `${how}: so \`on\` goes on`)
-    const off = userUnit({ ...withHome(), run: taskThatAnswers(form(TASK_XML(false))) })
+    const off = installed(userUnit({ ...withHome(), run: taskThatAnswers(form(TASK_XML(false))) }))
     assert.equal(off.registered().state, 'disabled', `${how}: /Query /TN exits 0 for a disabled task too, so the XML is what tells`)
     assert.match(autostartBlock({ unit: off, osName: 'win32' }), /trocar install$/, `${how}: and \`on\` refuses — nothing starts at the next login`)
   }
@@ -471,7 +471,7 @@ test('D61 registered() answers the one question 1.6 §3.3 asks — registered AN
 test('D62 (1.6 §3.1): a registered login entry is ONE schtasks start — `/Query /TN <task> /XML` answers both halves, and the second query is asked only when it did not', () => {
   const asked = (xml) => {
     const run = fakeTools({ 'schtasks /Query': (file, args) => (args.includes('/XML') ? (xml === null ? { status: 1, stderr: 'ERROR: The system cannot find the file specified.' } : { status: 0, stdout: xml }) : { status: 0 }), ...NO_RUN_VALUE })
-    const state = userUnit({ ...withHome(), run }).registered().state
+    const state = installed(userUnit({ ...withHome(), run })).registered().state
     return { state, queries: run.calls.filter((c) => c[0] === 'schtasks' && c.includes('/Query')).map((c) => c.slice(1).join(' ')) }
   }
   const enabled = asked(TASK_XML(true))
@@ -546,7 +546,7 @@ test('W24 a /Create that schtasks refused: the Run value is written with the sam
   assert.match(r.event.reason, /Access is denied/)
   assert.match(r.event.reason, /Run/, 'the event names the entry that is used instead')
   assert.deepEqual(checkRecord(r.event), [], 'a record of the closed set')
-  assert.deepEqual(run.calls.map((c) => c.slice(0, 2).join(' ')), ['schtasks /Create', 'reg query', 'reg add', 'reg query', 'schtasks /Query'], 'create, look at the old value, write, read it back, look whether an earlier task is there to switch off; no /Run (there is no task)')
+  assert.deepEqual(run.calls.map((c) => c.slice(0, 2).join(' ')), ['schtasks /Create', 'reg query', 'reg add', 'reg query', 'schtasks /Query', 'schtasks /Query'], 'create, look at the old value, write, read it back, look whether a task is there to switch off; no /Run (there is no task)')
   assert.deepEqual(run.calls[2], ['reg', 'add', RUN_PATH, '/v', 'trocar-collector', '/t', 'REG_SZ', '/d', COMMAND, '/f'])
   assert.equal(run.reg.value.value, COMMAND)
   assert.equal(COMMAND, `conhost.exe ${inner(x2(u.text({})), 'Arguments')}`, 'the command is the task\'s action: the same supervised one')
@@ -706,11 +706,11 @@ test('W24 exactly one login mechanism is live: enable by the task takes trocar\'
   const odd = installed(userUnit({ ...withHome(), run: fakeTools({ 'reg query': { status: 0, stdout: 'garbage' } }) })).enable({ now: false })
   assert.equal(odd.runKey, 'failed')
   assert.match(odd.warn, /Run/)
-  // the other way round: the Task Scheduler refuses, the Run value is written, and an earlier task is switched off
+  // the other way round: the Task Scheduler refuses, the Run value is written, and a task under trocar's name (here one someone else put there) is switched off
   const earlier = (over = {}) => {
     const reg = fakeRegistry()
     const run = (file, args, opts) => {
-      if (file === 'schtasks' && args[0] === '/Query') return { status: 0, stdout: '', stderr: '' }
+      if (file === 'schtasks' && args[0] === '/Query') return { status: 0, stdout: args.includes('/XML') ? asSchtasksPrintsIt(TASK_XML(true, '<Command>C:\\other\\run.exe</Command><Arguments>/token s3cret</Arguments>')) : '', stderr: '' }
       if (file === 'schtasks' && args[0] === '/Change') return { stdout: '', stderr: '', ...(over.change || { status: 0 }) }
       return reg(file, args, opts)
     }
@@ -726,6 +726,7 @@ test('W24 exactly one login mechanism is live: enable by the task takes trocar\'
   assert.deepEqual([g.code, g.via, g.task], [0, 'run-key', 'failed'])
   assert.match(g.warn, /\\trocar\\collector/)
   assert.match(g.warn, /Access is denied/)
+  assert.ok(g.warn.includes('C:\\other\\run.exe') && !g.warn.includes('s3cret'), 'the task is named by its program, never its arguments')
   const none = fakeRegistry() // schtasks /Query answers 1: no task, nothing to switch off
   const h = installed(userUnit({ ...withHome(), run: none })).enable({ now: false })
   assert.deepEqual([h.code, h.via, h.task, h.warn], [0, 'run-key', undefined, undefined])
@@ -1151,4 +1152,37 @@ test('4.11 P4 · registeredBytes: the task\'s XML when one is registered under t
   assert.equal(String(there.registeredBytes()), xml)
   const none = userUnit({ ...withHome(), run: fakeTools({ 'schtasks /Query': { status: 1, stdout: '' } }) })
   assert.equal(none.registeredBytes(), null)
+})
+
+// A task under trocar's name that install did not write (someone's, or left with no record): `on` must not run it, and it is not trocar's login entry. Only its
+// program is said, never its arguments: a stranger's command line can carry anything.
+test('W24 a task whose action is not the one install wrote is not started and is not the login entry; only its program is named', () => {
+  const foreign = '<Command>C:\\Tools\\other.exe</Command><Arguments>--token s3cret</Arguments>'
+  for (const [label, withRecord] of [['install wrote another task', true], ['no record of a task at all', false]]) {
+    const run = taskThatAnswers(asSchtasksPrintsIt(TASK_XML(true, foreign)))
+    const u0 = userUnit({ ...withHome(), run }), u = withRecord ? installed(u0) : u0
+    const q = u.registered()
+    assert.equal(q.state, 'absent', label)
+    assert.match(autostartBlock({ unit: u, osName: 'win32' }), /other\.exe/, `${label}: the refusal names its program`)
+    assert.doesNotMatch(autostartBlock({ unit: u, osName: 'win32' }), /s3cret/, `${label}: never its arguments`)
+    const r = u.startNow()
+    assert.notEqual(r.code, 0, label)
+    assert.doesNotMatch(r.err, /s3cret/)
+    assert.equal(run.calls.filter((c) => c[1] === '/Run').length, 0, `${label}: it was not run`)
+  }
+  // trocar's own task under a profile whose path is not ASCII, or holds `&`, as schtasks prints it back: still ours. With a second action beside it: not
+  for (const user of ['张三', 'Zoë', 'R&D']) {
+    const h = withHome(), home = path.join(h.home, user), o = { ...h, home, script: path.join(home, 'trocar', 'bin', 'trocar.mjs') }
+    const text = userUnit(o).text({})
+    const u = installed(userUnit({ ...o, run: taskThatAnswers(asSchtasksPrintsIt(text)) }))
+    assert.equal(u.registered().state, 'present', `${user}: trocar's own task`)
+    const twice = installed(userUnit({ ...o, run: taskThatAnswers(asSchtasksPrintsIt(text.replace('</Exec>', '</Exec><Exec><Command>calc.exe</Command></Exec>'))) }))
+    assert.equal(twice.registered().state, 'absent', `${user}: a second action makes it not trocar's`)
+  }
+  // the task install wrote, as schtasks prints it back: it is ours, and it is run
+  const run = taskThatAnswers(asSchtasksPrintsIt(TASK_XML(true)))
+  const u = installed(userUnit({ ...withHome(), run }))
+  assert.equal(u.registered().state, 'present')
+  u.startNow()
+  assert.equal(run.calls.filter((c) => c[1] === '/Run').length, 1)
 })
