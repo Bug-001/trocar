@@ -1,4 +1,4 @@
-// screens/replay/models.mjs — the replay desk's session head (1.2 §会话头), step head (2.2 §步头) and scope (1.3) as data.
+// screens/replay/models.mjs — the replay desk's session head (1.2 §会话头), step head (2.2 §步头), scope (1.3) and Tracks menu (2.1 ⑥) as data.
 // Framework-free (D75②): no DOM, no timers, no HTML. Each function reads the controller's state object `s` (replay.mjs openDesk:
 // desk, meta, lanes, anchor, playhead, playRid, span, sawView, problems, pricing, diffRef, follow, staleErr, gap, reviewRange) and
 // returns plain data; DeskHead / StepHead / Scope only render it. Every word comes from labels/replay.mjs; every number from
@@ -10,7 +10,8 @@ import { cacheState, isFailed, breakCost, usageOf, priceMatch, costOf, hitTier }
 import { CT_ORDER, segTax, TAX_ORDER, hasChangeLine, callFacts, refRowOf } from '../../../legacy/replay/analysis.mjs'
 import { stepRef, stepsOf } from '../../../legacy/replay/lanes.mjs'
 import { stepOf, askOrdinal, ridAt } from '../../../legacy/replay/model.mjs'
-import { chapterAt, chapterJump, problemSteps, landing, OVW_BARCAP, BAR_KEYS } from '../../../legacy/replay/timeline.mjs'
+import { chapterAt, chapterJump, problemSteps, problemTarget, landing, OVW_BARCAP, BAR_KEYS } from '../../../legacy/replay/timeline.mjs'
+import { railToggles } from '../../../legacy/replay/rails.mjs'
 import { cacheLabel, costLabel, contentRefOf, contentRefKOf, priceStateNote } from '../../../legacy/replay/stepbar.mjs'
 import { totalsOf } from '../../../legacy/replay/header.mjs'
 import { FLAG, cellsOf } from '../../../../src/view/head-cols.mjs'
@@ -455,4 +456,13 @@ export function overviewModel(s) {
     marks.push({ g: (lo + hi - 1) / 2, v: clamp01(v), failed: f })
   }
   return { mode: N <= OVW_BARCAP ? 'bars' : N > B ? 'buckets' : 'line', sampled: N > B, marks, parts: partsOf(s) }
+}
+
+// the Tracks menu's two groups (2.1 ⑥), computed only while it is open: the problem pager, null without a problem, and the rails' toggles
+export function tracksModel(s) {
+  const probs = s.problems || [], at = probs.indexOf(s.playhead)
+  return {
+    pager: probs.length ? { name: W.problemPager(at >= 0 ? at + 1 : null, probs.length), prev: problemTarget(probs, s.playhead, -1) != null, next: problemTarget(probs, s.playhead, 1) != null } : null,
+    rails: railToggles(s),
+  }
 }

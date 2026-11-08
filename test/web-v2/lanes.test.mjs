@@ -5,7 +5,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { stepPos, windowCalls, buildLanes, anchorLane, turnsReviewed, nearestByTs, stepOfMark } from '../../web/legacy/replay/lanes.mjs'
-import { renderTicks, renderRails, wireRails } from '../../web/legacy/replay/rails.mjs'
+import { renderTicks, renderRails, railToggles, flipRail, wireRails, hasRails } from '../../web/legacy/replay/rails.mjs'
 import { wireTimeline } from '../../web/legacy/replay/timeline.mjs'
 import { wireDetail } from '../../web/legacy/replay/detail.mjs'
 import { deskOf } from './desk-world.mjs'
@@ -79,7 +79,11 @@ const drawnMarks = (lane, s) => [...renderTicks(lane, s).matchAll(/<span ([^>]*)
 function wiredRails(s) {
   const on = {}
   wireRails({ addEventListener: (k, f) => { on[k] = f }, removeEventListener() {} }, s)
-  const event = (dataset) => ({ target: { closest: (sel) => (sel === '.tick, .pbar' ? { dataset } : sel === '.railbody[data-lane]' ? { dataset: { lane: dataset.lane } } : null) } })
+  const event = (dataset) => ({ target: { closest: (sel) => {
+    if (sel === '[data-toggle]') return dataset.toggle != null ? { dataset } : null
+    if (sel === '[data-grouptoggle]') return dataset.grouptoggle != null ? { dataset } : null
+    return sel === '.tick, .pbar' ? { dataset } : sel === '.railbody[data-lane]' ? { dataset: { lane: dataset.lane } } : null
+  } } })
   return { click: (d) => on.click(event(d)), move: (d) => on.mousemove(event(d)) }
 }
 
@@ -153,4 +157,73 @@ test('2.1 #12: a review call flagged true draws no mark, folded or open, and the
   renderRails(el, s)
   assert.doesNotMatch(el.innerHTML, flag)
   assert.doesNotMatch(el.innerHTML, /flagged/i)
+})
+
+// ── what can fold: the gutter and the Tracks menu read one list (2.1 ⑥) ─────────────────────────────────────────────────────────────────────
+const lane = (id, kind, n) => ({ id, kind, calls: Array.from({ length: n }, (_, i) => ({ rid: `${id}-${i}`, ts: iso(T0 + (i + 1) * 1000), ctx: 10 })), peakCtx: 10 })
+function railDesk({ subs, bgs, tc, subgroupOpen = false, bgOpen = false, rawPanelGone }) {
+  const main = lane('main', 'main', 3)
+  const lanes = [main, ...Array.from({ length: subs }, (_, i) => lane(`sub${i}`, 'subagent', i + 1)), ...Array.from({ length: bgs }, (_, i) => lane(`bg${i}`, i % 2 ? 'notify' : 'monitor', i + 2)), ...(tc ? [lane('token-count', 'token-count', 2)] : [])]
+  return { lanes, anchor: main, anchorTs: main.calls.map((c) => Date.parse(c.ts)), view: { lo: 0, hi: 3 }, selTick: null, collapsedRails: new Set(), subSeeded: new Set(), subgroupOpen, bgOpen, rawPanelGone }
+}
+const railWorlds = function* () {
+  for (const subs of [0, 1, 2, 3]) for (const bgs of [0, 1, 2]) for (const tc of [false, true]) for (const subgroupOpen of [false, true]) for (const bgOpen of [false, true]) {
+    const axes = { subs, bgs, tc, subgroupOpen, bgOpen }, s = railDesk(axes)
+    renderRails({}, s) // the first draw seeds the subagent lanes closed
+    yield { s, axes, where: JSON.stringify(axes) }
+  }
+}
+// the gutter as a click reads it: the attributes renderRails wrote, in document order
+function gutterRows(s) {
+  const el = {}
+  renderRails(el, s)
+  return [...el.innerHTML.matchAll(/<div ([^>]*data-(?:group)?toggle="[^>]*)>/g)].map(([, a]) => {
+    const at = Object.fromEntries([...a.matchAll(/([\w-]+)="([^"]*)"/g)].map((m) => [m[1], m[2]]))
+    const group = at['data-grouptoggle']
+    return { id: group != null ? `group:${group}` : at['data-toggle'], dataset: group != null ? { grouptoggle: group } : { toggle: at['data-toggle'] }, open: !at.class.split(/\s+/).includes('col') }
+  })
+}
+const foldState = (s) => ({ collapsed: [...s.collapsedRails].sort(), sub: s.subgroupOpen, bg: s.bgOpen })
+
+test('2.1 #17: railToggles lists what the gutter draws, in its order and with its open state', () => {
+  for (const { s, where } of railWorlds()) {
+    for (const opened of [null, s.lanes.find((l) => l.kind === 'subagent')]) {
+      if (opened) s.collapsedRails.delete(opened.id)
+      assert.deepEqual(railToggles(s).map(({ id, open }) => ({ id, open })), gutterRows(s).map(({ id, open }) => ({ id, open })), where)
+    }
+  }
+})
+
+test('2.1 #17: hasRails is true exactly when the gutter has a row to open or close', () => {
+  for (const { s, where } of railWorlds()) {
+    assert.equal(hasRails(s), railToggles(s).length > 0, where)
+    const only = { ...s, lanes: s.lanes.filter((l) => l === s.anchor || l.kind === 'main') }
+    assert.equal(hasRails(only), false, `${where}, main lanes only`)
+  }
+})
+
+test('2.1 #17: flipRail flips that row and no other, and the gutter click leaves the same state', () => {
+  for (const { s: seen, axes, where } of railWorlds()) {
+    for (const { id, dataset } of gutterRows(seen)) {
+      const s = railDesk(axes), g = railDesk(axes)
+      renderRails({}, s); renderRails({}, g)
+      const was = new Map(railToggles(s).map((t) => [t.id, t.open]))
+      flipRail(s, id)
+      for (const t of railToggles(s)) if (was.has(t.id)) assert.equal(t.open, t.id === id ? !was.get(t.id) : was.get(t.id), `${where} flip ${id}: ${t.id}`)
+      wiredRails(g).click(dataset)
+      assert.deepEqual(foldState(g), foldState(s), `${where} click ${id}`)
+    }
+  }
+})
+
+test('2.1 #17: the narrow new desk draws no fold row; the old desk keeps it', () => {
+  const had = Object.getOwnPropertyDescriptor(globalThis, 'matchMedia')
+  globalThis.matchMedia = () => ({ matches: true })
+  try {
+    const drawn = (rawPanelGone) => { const el = {}; renderRails(el, railDesk({ subs: 2, bgs: 1, tc: true, rawPanelGone })); return el.innerHTML }
+    assert.doesNotMatch(drawn(true), /data-railunfold/)
+    assert.match(drawn(undefined), /data-railunfold/)
+  } finally {
+    if (had) Object.defineProperty(globalThis, 'matchMedia', had); else delete globalThis.matchMedia
+  }
 })

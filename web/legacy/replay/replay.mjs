@@ -456,6 +456,7 @@ function openDesk(ctx, route0, makeView = legacyView) {
   // draw these once, for the playhead then, once its frame is out and the reader has stopped. A tick's drawer opens in that task too, after them
   let sideDue = false, sidesWanted = false, detailDue = null
   const drawRails = () => onEls(() => { renderRails(E.rails, s); watchRails() })
+  s.drawRails = drawRails // the Tracks menu flips a row from outside this closure
   const nextTask = () => {
     if (sideDue) return
     sideDue = true
