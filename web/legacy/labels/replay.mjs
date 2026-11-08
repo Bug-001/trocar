@@ -430,6 +430,8 @@ export const CTX_BTN = 'Context'
 export const COST_BTN = 'Estimate'
 // 1.3 §排布: a content type's share of the playhead step in the main track's name cell (an estimate)
 export const approxShare = (pct) => `≈ ${pct}%`
+// the main track's gutter: the content types whose shares did not fit its lines (1.3 §排布)
+export const moreShares = (n) => `+${n} more`
 export const approxUsd = (v) => `≈ ${v}`
 export const COST_NONE = '≈ —'
 export const PRICES_LOADING = 'The price table is loading'
