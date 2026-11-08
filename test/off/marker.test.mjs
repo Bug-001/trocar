@@ -193,3 +193,39 @@ test('undo by marker of the Kimi rc line: a file with no final line end gets exa
     assert.equal(read(rc), before + eol, JSON.stringify(before))
   }
 })
+
+// Class 2 (4.11 P5): the switch file `on` writes for a hook-read route, <collector>/switch/<harness>, holding the door. It is in trocar's own tree and
+// trocar created it, so with the manifest lost it is trocar's by where it is (1.6 R3 「trocar 建的开关文件」): a switch file left behind names a door the
+// same off just closed, and the harness's next start cannot connect (invariant 5).
+for (const { h, id, r } of (await loadHarnesses()).flatMap((d) => Object.entries((d.proxyMode && d.proxyMode.routes) || {}).map(([id, r]) => ({ h: d, id, r }))).filter((x) => x.r.kind === 'switch-file')) {
+  for (const os of ['darwin', 'win32']) {
+    test(`${h.name} · ${id} (switch-file) · ${os}: the switch file \`on\` wrote goes with the manifest gone, and the switch file of another harness stays`, async () => {
+      const w = world({ os })
+      const res = routeEntry('switch-file').write({ ...w.ctx, harness: h.name, routeId: id, route: r }, door())
+      assert.ok(res.ok, JSON.stringify(res))
+      const file = res.records[0].path
+      assert.ok(fs.existsSync(file), file)
+      const otherName = HARNESS_IDS.find((x) => x !== h.name)
+      const other = routeEntry('switch-file').write({ ...w.ctx, harness: otherName, routeId: id, route: r }, door()).records[0].path // another harness's, through the same writer
+      const plan = planByMarker({ home: w.home, env: w.ctx.env, platform: os, ids: [h.name] })
+      assert.deepEqual(plan.map((x) => [x.harness, x.path, x.how]), [[h.name, file, 'owned-file']])
+      assert.deepEqual(undoByMarker(plan, { home: w.home }).map((x) => x.result), ['undone-by-marker'])
+      assert.ok(!fs.existsSync(file), 'the switch file is gone: the next start goes direct')
+      assert.equal(read(other), door(), 'the switch file of a harness off was not asked about stays')
+    })
+  }
+}
+
+test('a switch file that is a link: the link goes, the file it names stays byte for byte', () => {
+  const w = world({ os: 'darwin' })
+  const mine = path.join(w.home, 'mine.txt')
+  fs.writeFileSync(mine, 'the user\'s own bytes\n')
+  const link = path.join(w.dir, 'switch', 'pi')
+  fs.mkdirSync(path.dirname(link), { recursive: true })
+  fs.symlinkSync(mine, link)
+  const plan = planByMarker({ home: w.home, env: w.ctx.env, platform: 'darwin', ids: ['pi'] })
+  assert.deepEqual(plan.map((x) => x.path), [link])
+  assert.deepEqual(undoByMarker(plan, { home: w.home }).map((x) => x.result), ['undone-by-marker'])
+  assert.throws(() => fs.lstatSync(link), { code: 'ENOENT' })
+  assert.equal(read(mine), 'the user\'s own bytes\n')
+})

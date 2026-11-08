@@ -6,7 +6,8 @@
 //   line         a line with the sentinel comment `# trocar collector: …` that points under ~/.trocar (the Kimi PATH line, the dsh patch row)
 //   json-value   a JSON string that points under ~/.trocar (a CC / Z-Code trust key): the value trocar replaced comes back from the NEWEST backup of that
 //                file (R2), one key at a time — never the whole file (1.6 R2); no value in the backup, the key goes
-//   owned-file   a plugin or shim trocar wrote (its sentinel in it, or exactly trocar's own plugin manifest)
+//   owned-file   a plugin or shim trocar wrote (its sentinel in it, or exactly trocar's own plugin manifest), or a switch file `on` wrote for a harness
+//                (paths.mjs switchFileIn: in trocar's own tree, so trocar's by where it is, whatever it holds; a link there goes, never what it points at)
 // Nothing else is touched, and no byte of a file outside those marks changes. The result says `undone-by-marker` (the code `off` records and the
 // receipt shows, 1.6 R3). Not done here, said in the docs: a combined bundle (no manifest, so nobody can say who holds it — `uninstall` removes it with the
 // CA), and an install-phase entry at a home the default places do not name. A `route` place (what `on` writes on macOS / Windows) is resolved as `on`
@@ -18,7 +19,7 @@ import { foldsEnvNames } from './env-names.mjs'
 import { getPath, setKey, removeKey, parseJsonText, unreadableJson, markLen } from './json-text.mjs'
 import { writeDurable, editTarget, removeEmptyDirs, readOrNull } from './fsutil.mjs'
 import { backupsOf } from './backup.mjs'
-import { trocarHome } from './paths.mjs'
+import { trocarHome, collectorIn, switchFileIn } from './paths.mjs'
 import { CODE_OFF } from './names.mjs'
 import { decodeText, encodeText, CHARSETS, WHY_TEXT } from './text-codec.mjs'
 import { resolveLoc, dirsFor } from './loc.mjs'
@@ -92,6 +93,7 @@ function candidates(home, harness, fs, env, platform) {
       for (const n of names) push(path.join(home, spec.eachDir, n, spec.file), spec)
     } else push(path.join(home, spec.file), spec)
   }
+  push(switchFileIn(collectorIn(trocarHome(home)), harness), { how: 'owned-file', ours: true }) // every harness: only one on a switch-file route ever has one
   return out
 }
 
@@ -122,7 +124,7 @@ export function planByMarker({ home, ids = null, fs = nodeFs, env = process.env,
         let v
         try { v = getPath(parseJsonText(t), spec.keys) } catch { continue }
         if (under(v, root)) add({ keys: spec.keys, value: v })
-      } else if (spec.how === 'owned-file' && (spec.exact ? t === spec.exact : t.includes(SENTINEL))) add(spec.exact ? { exact: spec.exact } : {})
+      } else if (spec.how === 'owned-file' && (spec.ours || (spec.exact ? t === spec.exact : t.includes(SENTINEL)))) add(spec.ours ? { ours: true } : spec.exact ? { exact: spec.exact } : {})
     }
   }
   const rank = { 'json-value': 0, block: 0, line: 1, 'owned-file': 2 }
@@ -133,6 +135,12 @@ export function planByMarker({ home, ids = null, fs = nodeFs, env = process.env,
 function undoOne(item, home, fs) {
   const root = trocarHome(home)
   const done = (extra = {}) => ({ result: CODE_OFF.undoneByMarker, ...extra })
+  if ((item.detail || {}).ours) { // the switch file: the path itself goes (a link, not what it names); nothing in it is read
+    try { fs.lstatSync(item.path) } catch { return { result: 'already-clean' } }
+    fs.rmSync(item.path, { force: true })
+    removeEmptyDirs([path.dirname(item.path)], fs)
+    return done({ removed: true })
+  }
   let file
   try { file = editTarget(item.path, fs) } catch (e) { return { result: 'error', reason: String((e && e.message) || e) } }
   const buf = readOrNull(fs, file)
