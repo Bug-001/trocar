@@ -45,7 +45,7 @@ export const VERBS = Object.freeze({
   },
   /** POST /control/harness: `trocar on` (runOn, with --json and --dry-run / --yes) or `trocar off` (runOff) for one harness, planned then confirmed;
    *  the receipt is the one `--json` prints, a refusal included. `source:'board'` marks every flows/ record the run writes. The plan is the dry-run
-   *  receipt's `planned` — for an off with an install record that is [] (1.6 附录 C.2), so its plan_id binds nothing but the harness. */
+   *  receipt's `planned` (1.6 附录 C.2). */
   async harness({ harness, on, confirm }, { home, deps }) {
     const [{ resolveHarnesses }, { newReceipt }] = await Promise.all([import('../off/harness-names.mjs'), import('../cli/schema.mjs')])
     const named = typeof harness === 'string' ? resolveHarnesses([harness]) : { ok: false }

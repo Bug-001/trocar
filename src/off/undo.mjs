@@ -54,6 +54,7 @@ const known = (item) => KNOWN_KINDS.includes(item.kind)
 // D48②); a wrapper is put back by its own rule
 const unlessChanged = (f, fs) => removeOwnedFile(f, fs, { unlessChanged: true })
 const OWNED_UNDO = { plugin: unlessChanged, shim: unlessChanged, switch: unlessChanged, 'config-entry': unlessChanged, wrapper: undoWrapper }
+export const OWNED_ROLES = Object.freeze(Object.keys(OWNED_UNDO)) // what a run deletes or takes back by its role; a dry run says the same
 // what `install` wrote (D55①: phase 'install' — the root's key, its CA file, the certificate carriers: config keys, bundles, pem-blocks, wrappers, plugins and
 // their loader lines): `off` lists them and leaves them (1.6 §1.1 「证书一项不碰」), `uninstall` undoes them (the key last: undoRootKeys, after the trust
 // store's root). The phase, never a list of kinds: a carrier of a new kind is spared by the same rule.
