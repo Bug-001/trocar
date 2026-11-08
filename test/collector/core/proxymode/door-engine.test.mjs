@@ -46,7 +46,7 @@ async function world(t) {
     isRecording: (meta) => c.isOn(meta && meta.agent), onFailure: () => {},
   })
   c = createModelCollector({
-    harnesses: pair, dir: tmpDir(), custody: stub, rootPem: certPem(stub.rootDer), proxyOf, templates: TEMPLATES, ownUid: 501,
+    harnesses: pair, dir: tmpDir(), custody: stub, rootPem: certPem(stub.rootDer), proxyOf, bypassOf: () => [], templates: TEMPLATES, ownUid: 501,
     ctx: { os: 'darwin', home: '/h', dirs: {}, join: path.posix.join, readFile: ctx0.readFile, readdir: ctx0.readdir, exists: ctx0.exists, policy: ctx0.policy },
     identify: (f) => (f.agent ? { reason: 'match', agent: f.agent } : { reason: 'no-match' }),
     ownerOf: async ({ peer }) => (owners.has(peer.port) ? { pid: owners.get(peer.port), source: 'socket-table', ms: 1 } : { pid: null, why: 'no-row' }),
