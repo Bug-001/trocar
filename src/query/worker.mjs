@@ -51,7 +51,8 @@ import { hasHead, headFile, readHead, skipFile, tier0Doc, writeHead, writeSkip }
 const home = process.argv[2]
 // The board's control verbs (`{control, body}`, 4.4 §控制面) run the CLI's own functions, which take `deps` for what they ask of the machine.
 // The daemon never passes argv[3]; a test fork names an ES module whose default export is that `deps` object.
-const depsP = process.argv[3] ? import(pathToFileURL(process.argv[3]).href).then((m) => m.default) : Promise.resolve({})
+// `loginCache`: the board asks status every 1.5 s, so this worker keeps the login entry's answer (1.6 §3.5 Login; src/cli/status.mjs); the CLI asks each time.
+const depsP = (process.argv[3] ? import(pathToFileURL(process.argv[3]).href).then((m) => m.default) : Promise.resolve({})).then((d) => ({ ...d, loginCache: true }))
 // What the CLI's own environment may change about an answer goes local (client.mjs LOCAL_ENV); this worker serves
 // every caller, so it answers as a clean environment would and never as the daemon's happened to be.
 for (const k of LOCAL_ENV) delete process.env[k]

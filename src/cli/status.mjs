@@ -13,6 +13,7 @@ import { HARNESS_IDS, resolveHarnesses } from '../off/harness-names.mjs'
 import { collectorDir, stateFile, trocarHome } from '../off/paths.mjs'
 import { readStateFile } from '../off/state.mjs'
 import { readManifest, itemsOfPhase, daemonMayStart } from '../off/manifest.mjs'
+import { statKey } from '../query/warm.mjs'
 import { readIngressConfig } from '../collector/core/ingress-config.mjs'
 import { holdersOf, judgeLife } from '../off/holders.mjs'
 import { readDoorSeen, validRow } from '../off/door-seen.mjs'
@@ -126,6 +127,9 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   if (f.manifest.value && f.manifest.value.unsupported) { f.manifest.error = `${path.join(dir, 'install-manifest.json')} is version ${JSON.stringify(f.manifest.value.version)}, which this trocar does not read`; f.manifest.value = null }
   const m = f.manifest.value
   f.boardPort = readIngressConfig({ dir, fs }).boardPort ?? null // the board's url (C.3 `board`): install's record, read only
+  // D61 / 1.6 §3.5: the login entry, asked as `on` asks it (the arch unit's registered()); only of an install — with none there is nothing to ask.
+  // `deps.loginCache`: the query worker's (src/query/worker.mjs) — it keeps the answer while the files trocar's own commands write are unchanged
+  const autostartP = daemonMayStart(m) ? import('../collector/net-deps.mjs').then((nd) => nd.loginEntry({ platform, home, env, run: deps.exec || null, script: deps.script || process.argv[1], unit: deps.unit, now: ms, stamp: deps.loginCache ? `${statKey(path.join(dir, 'install-manifest.json'), fs)}|${statKey(stateF, fs)}` : null })).catch((e) => { rethrowSandbox(e); return { entry: null, state: 'unknown', reason: `the login entry could not be read (${errMessage(e)})` } }) : null
   const certP = installCertOf({ f, m, dir, fs, platform, home, env, deps }) // the certificate axis: its root-store read and its own import run while the harnesses are judged
   const installedIds = m ? [...new Set([...(m.entries || []), ...(m.files || [])].map((x) => x.harness).filter((h) => typeof h === 'string'))] : []
   let state = null
@@ -279,6 +283,7 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   try { f.health = deps.captureHealth ? deps.captureHealth({ home: trocarHome(home), harnesses: HARNESS_IDS }) : captureHealth({ home: trocarHome(home), harnesses: HARNESS_IDS, fs, alive, identity, now: ms() }) } catch (e) { rethrowSandbox(e); f.health = null; f.health_error = errText(e) }
   if (merged) f.identity = identityBlocks({ ids: f.harnesses.map((h) => h.id), merged, health: effectiveHealth(f).health })
   Object.assign(f, await certP)
+  f.autostart = autostartP ? await autostartP : null
   return f
 }
 
@@ -472,8 +477,8 @@ function changedOf(f) {
 /** The exit code of `status` (§3.5): 0 every harness that is on is captured · 1 some are not · 3 that cannot be judged. A stale record never decides it: the daemon's own answer does. */
 export function statusExit(f) {
   if (f.health_error) return EXIT.unknown // the capture health could not be read: it cannot be judged, and that is never a pass (D-2, R4)
-  if (f.harnesses.some((h) => h.judged.captured === null)) return EXIT.unknown
-  const failing = f.harnesses.some((h) => h.desired === 'on' && h.judged.captured === false) || certNeedsUser(f)
+  if (f.harnesses.some((h) => h.judged.captured === null) || (f.autostart && f.autostart.state === 'unknown')) return EXIT.unknown
+  const failing = f.harnesses.some((h) => h.desired === 'on' && h.judged.captured === false) || certNeedsUser(f) || (!!f.autostart && f.autostart.state !== 'present')
   return failing ? EXIT.incomplete : EXIT.ok
 }
 
@@ -490,6 +495,9 @@ function boardOf(f) {
   if (b.state === 'serving') return say('serving', null)
   return say(b.state === 'port-taken' ? 'port-taken' : 'not-running', b.reason || `the daemon says the board is ${b.state}`)
 }
+
+/** C.3 `autostart` (D61): the login entry as registered() answered; null when trocar is not installed or the platform has no autostart unit. */
+const autostartOf = (f) => { const a = f.autostart; if (!a) return null; return { entry: a.entry, state: a.state, code: a.code || null, command: a.state === 'present' ? null : 'trocar install', reason: a.reason } }
 
 /** C.3 `harnesses[h].setup` (4.11 P4b, 4.6, D65④): the one judgement, read with the network facts; what was not read is `unknown` with its reason, never `ready` (D38). */
 function setupDocOf(f, id) {
@@ -532,7 +540,7 @@ export function statusDocOf(f) {
     }])),
     // a harness's topology says its verdict, the one `harnesses[h]` says (1.6 C.3), never one branch's
     ...(f.topology ? { topology: Object.fromEntries(Object.entries(f.topology).map(([h, x]) => { const j = f.harnesses.find((y) => y.id === h); return [h, j ? { ...x, captured: j.judged.captured, reason: reasonOf(j.judged) } : x] })) } : {}), ...(f.topology_error ? { topology_error: f.topology_error } : {}),
-    board: boardOf(f),
+    board: boardOf(f), autostart: autostartOf(f),
     install: f.install, cert: f.cert, holders: f.holders, relayed: f.relayed, ...(f.relayed === 'unknown' ? { relayed_reason: f.relayed_reason } : {}),
     connections: f.connections, ...(f.connections === 'unknown' ? { connections_reason: f.connections_reason } : {}),
     ...(f.linger ? f.linger : {}), user: f.user, agent_list: f.agent_list, restart: restartOf(f), critical: criticalOf(f), failures, errors,

@@ -9,6 +9,7 @@ import { UNDO_WORDS, setupBlocked, setupError } from '../cli/receipt.mjs'
 import { driverSetup, driverCtx, driverForms } from './driver-setup.mjs'
 import { uncapturedOf } from './core/proxymode/sources.mjs'
 import { takeEarly } from '../cli/on-start.mjs'
+import { entryWords, entryState, AUTOSTART_MISSING } from './net-deps.mjs' // the login entry in the platform's own words: status says it the same way (D61)
 import { isModelOs, ruleUFiles } from './model-install.mjs' // macOS / Windows: their on is turnOnModel (src/cli/on-model.mjs); this turnOn is Linux's
 import fs from 'node:fs'
 import net from 'node:net'
@@ -38,6 +39,10 @@ import { newReceipt, UNDO_LINE } from '../off/schema.mjs'
 import { OFF_VERSION, installComplete, daemonMayStart } from '../off/manifest.mjs'
 import { writeStandalone, standaloneDue } from '../off/standalone.mjs'
 import { codeId, setupHelperCommand } from '../version.mjs'
+
+// an entry under trocar's name: replaced, never silently (1.6 §3.5 Login)
+const isMasked = (unit) => !!(unit && unit.masked && unit.masked())
+const MASKED_NOTE = 'your unit was masked (a link to /dev/null); trocar replaces it with its own, so the collector starts at login again'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -125,13 +130,7 @@ const processUid = () => (typeof process.getuid === 'function' ? process.getuid(
 const act = (a) => a !== 'skip-intact' && a !== 'skip-user-changed'
 const shortLine = (l) => String(l).split(' # ')[0].trim()
 const DAEMON_CMD = 'trocar daemon' // 1.6 §2: the autostart unit's ExecStart is this command (units written before the rename run its alias `collector start`)
-/** The login entry in the platform's own words (a Windows user told to run `systemctl` has been handed nothing; tested on Windows 2026-10-11 and macOS 2026-10-18). */
-const entryWords = (osName, unit) => (osName === 'win32' ? 'the scheduled task \\trocar\\collector' : osName === 'darwin' ? `the LaunchAgent ${(unit && unit.name) || 'com.trocar.collector'}` : 'the systemd user unit trocar-collector.service')
-/** `registered()`'s answer in one phrase: the refusal below and install's read-back of the entry it registered (ensureDaemonUp) say it the same way. */
-const entryState = (osName, unit, q) => `${entryWords(osName, unit)} ${q.state === 'absent' ? 'is not registered' : q.state === 'disabled' ? 'is registered but switched off' : `could not be read (${q.err || 'no reason given'})`}`
-
-/** 附录 C.1: the code of the refusal below (one place, mirrored by src/cli/json.mjs's ERROR_CODES). */
-export const AUTOSTART_MISSING = 'autostart-missing'
+export { AUTOSTART_MISSING } // 附录 C.1: the code of the refusal below (defined in net-deps.mjs with the entry's words; mirrored by src/cli/json.mjs's ERROR_CODES)
 /** D61 / 1.6 §3.3: the login entry is `install`'s and `on` never touches it, so an `on` whose entry is not registered would leave the agents'
  *  rewritten configs pointing at doors that nobody opens after the next login (without it nothing starts after a reboot and no agent can reach a door).
  *  One question per OS, asked of the arch's own autostart unit (`registered()`: launchctl print · schtasks /Query · systemctl --user is-enabled),
@@ -215,6 +214,7 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
   // a form trocar cannot capture whose places are here: said for every harness asked, its own footprint here or not, refused or not (4.6 「不采的形态」, D38)
   const unseen = asked.flatMap((d) => uncapturedOf(d, ctxFor(d)).map((u) => ({ harness: d.name, code: CODE.harnessNote, reason: `${d.name}: ${u.why} (${u.paths.join(', ')})` })))
   draft.notes.push(...unseen.map((r) => r.reason)) // not in draft.records: those are the reasons a harness is skipped
+  if (isMasked(unit)) draft.notes.push(MASKED_NOTE)
 
   // per item: written, intact, resumed, or changed by the user since (R9)
   const steps = []
@@ -240,7 +240,7 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
   })
   const unitJ = unit ? judgeOwned({ manifest: prior, file: unit.path, planned: sha256(Buffer.from(unit.text(daemon.env))), fs }) : null
   // 4.11 P4: a unit under trocar's fixed name the record does not list is trocar's: replaced, its bytes backed up first (writeOwnedFile)
-  const unitWhy = unitJ && unitJ.action === 'write' && fs.existsSync(unit.path) ? `${unit.path}: ${replacedNote(backupDir(home))}` : unitJ && unitJ.why
+  const unitWhy = unitJ && unitJ.action === 'write' && fs.existsSync(unit.path) && !isMasked(unit) ? `${unit.path}: ${replacedNote(backupDir(home))}` : unitJ && unitJ.why
   if (unitJ) steps.push({ harness: null, path: unit.path, kind: 'unit', action: unitJ.action, ...(unitWhy ? { why: unitWhy } : {}) })
 
   // who is on, and who has nothing to do here (no entry, no file, not installed before): said, with the descriptor's own reason
@@ -336,6 +336,7 @@ async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePo
   const final = planTrust({ descriptors: descs, ctxFor, caCertPem: certPem, collectorDir: dir, roots: R })
   if (daemon && daemon.note) { final.notes.push(daemon.note); final.records.push({ code: CODE.unitEnvNotCarried, reason: daemon.note }) }
   for (const r of unseen) { final.notes.push(r.reason); final.records.push(r) }
+  if (isMasked(unit)) final.notes.push(MASKED_NOTE)
   if (JSON.stringify(final.paths) !== JSON.stringify(draft.paths)) throw new Error(`the files to change moved while installing (${draft.paths.join(', ')} → ${final.paths.join(', ')}); only the CA was written; run "trocar uninstall", then "trocar on"`)
   m.planned = final.paths
   // what `off` needs to judge, from this manifest alone, which live process may hold what trocar wrote for a harness (4.6 撤销顺序): written before any user
@@ -389,6 +390,7 @@ async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePo
   if (unit) {
     const text = unit.text(daemon.env)
     const j = judgeOwned({ manifest: m, file: unit.path, planned: sha256(Buffer.from(text)), fs })
+    if (isMasked(unit)) fs.rmSync(unit.path) // the link, not what it points at
     if (j.action !== 'skip-intact') { guard(); writeOwnedFile({ dir, manifest: m, role: 'unit', phase: 'install', file: unit.path, data: text, mode: 0o644, home, now: now(), fs }); written.unit = j.action }
     // D46: the daemon's own log sinks the unit names — directory 0700, two files 0600, made here at unit-write time and listed in the manifest like
     // every file trocar owns; NEVER rewritten afterwards (a later on only lists what the manifest does not know yet, so no log line is ever truncated)

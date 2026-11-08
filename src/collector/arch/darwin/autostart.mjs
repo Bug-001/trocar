@@ -137,6 +137,14 @@ const agentState = ({ run, env, uid }) => {
   return { state: 'absent' }
 }
 
+/** Is the job that `print` found enabled? A job `launchctl disable` switched off stays loaded and running (`print` exits 0), and launchd does not load it at the next login.
+ *  Its own line in `print-disabled` says so; no line = never disabled. An answer not read is not a verdict (D38). `true` is how older launchctl writes disabled. */
+const agentEnabled = ({ run, env, uid }) => {
+  const r = launchctl(['print-disabled', domainOf(uid)], { run, env })
+  if (r.code !== 0) return { state: 'unknown', err: `the LaunchAgent ${AGENT_LABEL} is registered, and whether it is enabled could not be read (launchctl print-disabled: ${r.err || (r.code === null ? 'it did not run' : `exit ${r.code}`)})` }
+  return String(r.out).split('\n').some((l) => { const m = l.match(/^\s*"([^"]+)"\s*=>\s*(\S+)\s*$/); return m && m[1] === AGENT_LABEL && (m[2] === 'disabled' || m[2] === 'true') }) ? { state: 'disabled' } : { state: 'present' }
+}
+
 /**
  * The environment of a daemon that is started directly (`start()`, the fallback when launchd refuses to start it): the installer shell's, without the variables that change what the daemon trusts or whom it
  * dials (Node's CA, TLS and proxy switches, OpenSSL's CA file and directory, the `*_PROXY` family, any case — on darwin names are case sensitive and the lowercase spellings
@@ -212,8 +220,8 @@ export function userUnit({ home, node, script, run = null, env = process.env, fs
     // (`install` made it). A job that is not loaded answers non-zero, and ensureDaemonUp falls back to `start()`, reason said.
     startNow: () => launchctl(['kickstart', `${domainOf(tools.uid)}/${AGENT_LABEL}`], tools, { timeoutMs: KICKSTART_TIMEOUT_MS }),
     // D61 / 1.6 §3.3: is the login entry registered and enabled? The question `on` asks BEFORE it writes anything (an `on` with no
-    // entry opens doors that nobody opens after the next login) — `launchctl print`, the question this file already asks (agentState).
-    registered: () => agentState(tools),
+    // entry opens doors that nobody opens after the next login) — `launchctl print`, the question this file already asks (agentState), then whether it is enabled.
+    registered: () => { const q = agentState(tools); return q.state === 'present' ? agentEnabled(tools) : q },
     reload: () => ({ ...ok }),
     remove: undo,
   }
