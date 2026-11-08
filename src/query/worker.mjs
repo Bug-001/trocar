@@ -20,7 +20,8 @@
 // and its last byte this process does nothing else, so that work can neither delay the answer nor, if it fails or runs the heap
 // out, cost the caller the answer it was already sent.
 //
-// THE WRITER (4.3 §4 写者): this process alone writes the context projections (`writer: true` on every answer's ctx). BACKGROUND
+// THE WRITER (4.3 §4 写者): the role whose `ROLES[role].writes` (warm.mjs) is true writes the context projections (its answers' ctx carry
+// `writer` as that says; it is the main role, the one that reads the rows and runs the background). BACKGROUND
 // WORK (3.5 后台抽取), one scheduler: from boot it reads the rows, then every session's title (readRows, 3.5 §行表先读; until the rows are read a
 // request that needs them is answered `102`, ask again, and until the titles are done no slice runs); then, while no request line is waiting or being answered (the last frame written whole), it runs
 // slices of ≤ SLICE_MS — the members of the session last answered (session / lane) extracted until none is left, then those of the
@@ -51,6 +52,7 @@ import { pathToFileURL } from 'node:url'
 import { LOCAL_ENV } from './client.mjs'
 import { QUERIES } from './named/index.mjs'
 import { answer } from './answers.mjs'
+import { ROLES } from './warm.mjs'
 import { lowerPriority } from '../low-priority.mjs'
 import { READING_MS, extendSession, heapHasRoom, indexed, openSessions, rereadingNow, saveIndexes, sealParts } from './named/session.mjs'
 import { indexRows, sessionGroups } from './rows.mjs'
@@ -65,6 +67,7 @@ const home = process.argv[2]
 // and `beforeServe`, a test's alone, are awaited before the row pass starts, before the title pass behind it and before a query is answered.
 // `loginCache`: the board asks status every 1.5 s, so this worker keeps the login entry's answer (1.6 §3.5 Login; src/cli/status.mjs); the CLI asks each time.
 const role = process.argv[4] || 'main', light = role === 'light'
+const writes = ROLES[role].writes // the one place that says which role writes answer files (warm.mjs ROLES)
 const depsP = (process.argv[3] ? import(pathToFileURL(process.argv[3]).href).then((m) => m.default) : Promise.resolve({})).then((d) => ({ ...d, loginCache: true }))
 // What the CLI's own environment may change about an answer goes local (client.mjs LOCAL_ENV); this worker serves
 // every caller, so it answers as a clean environment would and never as the daemon's happened to be.
@@ -116,7 +119,7 @@ async function serve(line) {
       const deps = await depsP;
       await deps.beforeServe?.(name);
       ({ status, bytes, enc, tag } = await answer({ name, params: params || {}, indent, gzip: wants === true, etag: typeof etag === 'string' ? etag : null },
-        { home, fs: nodeFs, writer: !light, warmOnly: light, persist, progress, later: (fn) => after.push(fn), userHome: path.dirname(home), env: deps.env || process.env, platform: deps.platform || process.platform, deps }))
+        { home, fs: nodeFs, writer: writes, warmOnly: light, persist, progress, later: (fn) => after.push(fn), userHome: path.dirname(home), env: deps.env || process.env, platform: deps.platform || process.platform, deps }))
     }
   } catch (e) { // a line that is not a request
     status = 500
@@ -214,7 +217,8 @@ const notIdle = () => {
 async function background() {
   if (busy || !rowsRead || sweeping) return
   // `progress`: the segment index read before the first slice is background work too, reported per segment and chunk (3.5 后台抽取与归约)
-  const ctx = { home, fs: nodeFs, writer: true, persist, once, progress }
+  // `writer: writes`: ROLES says who writes (background() runs only in the main role, which reads the rows)
+  const ctx = { home, fs: nodeFs, writer: writes, persist, once, progress }
   if (kicked.size) {
     try { await kickedSessions(ctx) } catch (e) { say(e) }
     if (busy) return // a request came during the look: it goes first, and kicks when it is answered

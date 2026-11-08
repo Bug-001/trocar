@@ -53,6 +53,16 @@ export const LIGHT_MEMORY_MB = 128
  *  configs that grow by themselves (an agent's own state file can pass 16 MB) and that run is not measured, so the role keeps the 384 MB the verbs had on
  *  the main role: no verb gets less room than before. */
 export const CONTROL_MEMORY_MB = 384
+/** Every query role (3.5 §内存有界 · §谁执行它「三个角色」): its heap cap and whether it writes answer files. forkOptions (and the tests' fork)
+ *  take every cap from here, the worker passes `writer` as `ROLES[role].writes`, and the writer's heap bound is asserted against every cap
+ *  whose role writes. A new writing role still needs worker.mjs: it reads the rows, and so runs the background slices that write, only
+ *  for `main`. No prototype: a role named like an Object method is unknown, and throws. */
+export const ROLES = Object.freeze({
+  __proto__: null,
+  main: { capMb: WORKER_MEMORY_MB, writes: true },
+  light: { capMb: LIGHT_MEMORY_MB, writes: false },
+  control: { capMb: CONTROL_MEMORY_MB, writes: false },
+});
 /** The flags that give a process a heap of `mb` MB: V8's `--max-heap-size`, the young generation inside it, so V8's heap_size_limit
  *  is `mb` and the used heap (both generations) is measured against the heap it can use. `--max-old-space-size` adds the young
  *  generation on top (3 × its semi-space, 48 MB at V8's default): a process started with it reckons its budget and ceiling past its

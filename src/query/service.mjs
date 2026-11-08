@@ -29,7 +29,7 @@
 import { fork } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { QUERY_PATH, QUERY_NAMES, WINDOW_PARAMS, paramsOf } from './client.mjs'
-import { CONTROL_MEMORY_MB, LIGHT_MEMORY_MB, heapFlags, workerEnv } from './warm.mjs'
+import { ROLES, heapFlags, workerEnv } from './warm.mjs'
 import { lowFork } from '../low-priority.mjs'
 import { QUERY_WAIT_PROBLEMS } from '../health/codes.mjs'
 import { SCHEMA_VERSION } from '../off/schema.mjs'
@@ -93,9 +93,10 @@ const NO_WORKER = JSON.stringify({ error: 'no warm query worker in this daemon y
 const SERVE_ORDER = Object.freeze(['block', 'status', 'sessions', 'lane', 'session'])
 const rank = (name) => { const i = SERVE_ORDER.indexOf(name); return i < 0 ? SERVE_ORDER.length : i }
 
-/** forkOptions(role) → how a worker of `role` starts. The main and control roles stay low (`lowFork`, 4.9 §4); the light one follows the daemon, so `status`
- *  answers under load (3.5 §谁执行它). Each role's heap is its own constant (warm.mjs). */
-export const forkOptions = (role, o) => (role === 'light' ? { execArgv: heapFlags(LIGHT_MEMORY_MB) } : lowFork(heapFlags(role === 'control' ? CONTROL_MEMORY_MB : undefined), o))
+/** forkOptions(role) → how a worker of `role` starts. Its heap cap comes from `ROLES[role]` (warm.mjs), the one place that sizes a role. An absent
+ *  role is the main role (as in `worker.mjs`); an unknown role throws, the same on both sides. The light role follows the daemon, so `status`
+ *  answers under load; the main and control roles stay low (`lowFork`, 4.9 §4; 3.5 §谁执行它). */
+export const forkOptions = (role, o) => { const cap = heapFlags(ROLES[role || 'main'].capMb); return role === 'light' ? { execArgv: cap } : lowFork(cap, o) }
 /** `argv` after the home is the worker's own: the deps path ('' for none) and the role. */
 export const forkWorker = (home, ...argv) => fork(WORKER, [home, ...argv], { stdio: ['pipe', 'pipe', 'pipe', 'ipc'], ...forkOptions(argv[1]), env: workerEnv() })
 
