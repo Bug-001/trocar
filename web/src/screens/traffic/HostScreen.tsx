@@ -207,7 +207,7 @@ export default function HostScreen({ route, router }: ScreenProps) {
       <div className="d-head"><Button className="iconbtn dclose" aria-label={W.CLOSE_DETAIL} onPress={() => router.setParams({ ref: null })}>×</Button></div>
       {m && m.rec
         ? <RequestView view={rm && rm.rec ? requestView(rm, { revealed: name }) : requestView(m, { revealed: null })} onReveal={(n) => setRevealed({ ref, name: n })} />
-        : <ReadFail cls="d-err" fail={failOf(W.THIS_REQUEST, { status: r.ok ? null : r.status, error: (m && m.error) || r.error })} onRetry={() => { void base.refetch() }} />}
+        : <ReadFail cls="d-err" fail={failOf(W.THIS_REQUEST, r.ok ? { status: null, error: m && m.error } : { ...r, error: (m && m.error) || r.error })} onRetry={() => { void base.refetch() }} />}
     </>
   }
 
