@@ -54,8 +54,9 @@ export const columns = (slotOf) => ({ at: -1, slotOf, ts: [], ln: new Int32Array
   cx: new Float64Array(0), cb: new Uint8Array(0), fl: new Uint8Array(0),
   keys: new Map(), order: [], by: [], lanes: new Set(), heads: new Map(), its: null, sorted: null });
 const tsOf = (cols, rid) => cols.ts[cols.slotOf(rid)];
-// The flag bits of a step: one definition with the board (src/view/head-cols.mjs). A cache break counts when its cause is outside the quiet
-// ones (web/legacy/core/metrics.mjs QUIET_CAUSES).
+// The flag bits of a step: one definition with the board (src/view/head-cols.mjs). The cacheBreak bit marks a changed prefix: the cause is
+// outside the quiet ones (web/legacy/core/metrics.mjs QUIET_CAUSES), the fact the context window's change line draws (1.4 ④). Whether
+// the step is a cache break is 2.2's call, which also reads the hit ratio.
 export { FLAG };
 const QUIET = new Set(['append', 'first-call', 'volatile-nonce-only']);
 const EVENT_FLAG = { user: FLAG.user, summarize: FLAG.summarize, spawn: FLAG.spawn };

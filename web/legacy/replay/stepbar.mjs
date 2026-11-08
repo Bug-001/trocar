@@ -26,11 +26,10 @@ export function costCellHtml(model, u, table, tableErr) {
 // the button's word follows the predicate (2.2 §缓存判定): 失败 → — → N% (a vendor of uncertain cache numbers adds ?)
 export function cacheLabel(call) {
   const st = cacheState(call)
-  if (st.state === 'failed') return 'cache failed'
-  if (st.state === 'no-usage') return 'cache —'
-  const pct = st.hit != null ? Math.round(st.hit * 100) : null
-  const q = call && call.wire && call.wire.cacheSemanticsKnown === false
-  return pct == null ? 'cache —' : `cache ${pct}%${q ? '?' : ''}`
+  if (st.state === 'failed') return W.CACHE_CELL_FAILED
+  const pct = st.state !== 'no-usage' && st.hit != null ? Math.round(st.hit * 100) : null
+  if (pct == null) return W.CACHE_CELL_NONE
+  return call && call.wire && call.wire.cacheSemanticsKnown === false ? W.cacheCellUnknown(pct) : W.cacheCellPct(pct)
 }
 // ── the ≈ $ button ──────────────────────────────────────────────────────────────────────────────────────────────────
 export function costLabel(call, table) {
