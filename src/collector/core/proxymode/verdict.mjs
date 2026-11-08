@@ -69,11 +69,17 @@ export function judgedForms(desc, os, routeId = null) {
   return ok.length ? ok : all
 }
 
-/** The carrier time of a form (rule 3): the latest install item of its harness, or the root in the user's store for a root-trust form. Unknown → null. */
-export function carrierAt(manifest, desc, f) {
+/** The carrier time of a form (rule 3): the latest install item of its harness, or the root in the user's store for a root-trust form; and rule U's
+ *  block in a file `files()` names (the files its settings name for the process, userCertFilesOf; asked only when a block is recorded), whichever
+ *  harness it is recorded under, its own included (4.11 P4: one block per file, recorded once, serves every harness that names it). The newest
+ *  time wins: it errs toward forwarding. Unknown → null. */
+export function carrierAt(manifest, desc, f, files = () => []) {
   const items = itemsOfPhase(manifest, 'install')
   const own = f.cert !== 'root' && (desc.proxyMode.certs || {})[f.cert] ? items.filter((i) => i.harness === desc.name) : []
-  const t = (own.length ? own : items.filter((i) => i.kind === 'system-root')).map((i) => ms(i.installed_at)).filter(Number.isFinite)
+  const blocks = items.filter((i) => i.kind === 'text' && i.format === 'pem-block')
+  const named = blocks.length ? files() : []
+  const shared = blocks.filter((i) => named.includes(i.path))
+  const t = [...(own.length ? own : items.filter((i) => i.kind === 'system-root')), ...shared].map((i) => ms(i.installed_at)).filter(Number.isFinite)
   return t.length ? Math.max(...t) : null
 }
 

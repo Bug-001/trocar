@@ -6,7 +6,7 @@
 import nodeFs from 'node:fs'
 import { itemsOfPhase } from '../../../off/manifest.mjs'
 import { judgeEntry, judgeOwned } from '../trust/journal.mjs'
-import { isPresent, readSrc, holds, presentPaths } from './sources.mjs'
+import { isPresent, holds, presentPaths, userCertFilesOf as userFilesOf } from './sources.mjs'
 import { planRoutes, priorRecordOf, loopbackDirect, loopbackNote } from './entries.mjs'
 import { upstreamFor, isTrocarDoorUrl } from './chain.mjs'
 import { pacLeg } from './pac.mjs'
@@ -26,8 +26,6 @@ const latest = (items) => { const t = items.map((i) => Date.parse(i.installed_at
 export const writtenOf = (x) => x.door ?? ([x.value, ...Object.values(x.vars || {}), x.line].map((v) => typeof v === 'string' && /[a-z][a-z0-9+.-]*:\/\/[^\s"']+/i.exec(v)).find(Boolean) || [null])[0]
 export const intactOf = (m, e, fs) => { try { return (e.kind === 'owned-file' ? judgeOwned({ manifest: m, file: e.path, fs }) : judgeEntry({ manifest: m, planned: e, fs })).action === 'skip-intact' } catch { return false } }
 
-/** The files a harness's `userCertFiles` keys name now, in the descriptor's order. */
-const userFilesOf = (desc, ctx) => ((desc.proxyMode || {}).userCertFiles || []).map((src) => readSrc(src, ctx)).filter((r) => r.set && typeof r.value === 'string').map((r) => r.value)
 /** The install items that carry a harness's certificate: its own, and the pem-block in a user file its settings name that another harness's entry holds —
  *  one block per file, recorded once (4.11 P4 rule U, shared_with), yet it serves both. */
 const itemsFor = (desc, inst, ctx) => { const files = userFilesOf(desc, ctx); return inst.filter((i) => i.harness === desc.name || (i.kind === 'text' && i.format === 'pem-block' && files.includes(i.path))) }
@@ -123,8 +121,9 @@ export async function modelFormFacts({ harnesses, os, manifest: m, reply = null,
       const r = root || {}
       const bad = carrier === 'root' ? (r.state === 'in-place' ? null : { reason: root ? r.code ?? null : CODE.certNotInstalled, command: r.command || INSTALL }) // a root status could not read (no code): not known, never a made-up code
         : d || (own.length ? null : { reason: 'entry-missing', command: INSTALL })
-      const certificate = { in_effect: !bad, carrier, user_file: carrier === 'root' ? null : uf, since: latest(carrier === 'root' ? inst.filter((i) => i.kind === 'system-root') : own), code: bad ? bad.reason : null, command: bad ? bad.command || INSTALL : null }
-      if (certificate.in_effect && uf && uf.state !== 'intact' && carrier !== 'root') Object.assign(certificate, { in_effect: false, code: uf.state === 'changed' ? 'entry-changed' : CODE.notUsersFile, command: INSTALL })
+      const certificate = { in_effect: !bad, carrier, user_file: uf, since: latest(carrier === 'root' ? inst.filter((i) => i.kind === 'system-root') : own), code: bad ? bad.reason : null, command: bad ? bad.command || INSTALL : null }
+      // the user file a setting names carries the form whatever its carrier: a root form's file replaces the system roots (rule U, SSL_CERT_FILE)
+      if (certificate.in_effect && uf && uf.state !== 'intact') Object.assign(certificate, { in_effect: false, code: uf.state === 'changed' ? 'entry-changed' : CODE.notUsersFile, command: INSTALL })
       const g = `${h}:${f.route}`, route = pm.routes[f.route] || {}
       const es = on.filter((i) => i.harness === h && i.route === f.route)
       const main = es.find((i) => i.door_sha256 || i.door) || es[0] || null
