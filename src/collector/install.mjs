@@ -708,11 +708,12 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = nul
         }
         notes.push(unitFailed); problems.push(unitFailed)
       } else if (!was.up) {
+        // asked every 25 ms for the first 0.5 s (a daemon is often up within it, D62 ①), then every 250 ms: about 15 s in all
         // a daemon that refuses to start (node-too-old, elevated-token, root-token) writes its own {where:'start'} record and exits 0, so nothing will answer:
         // one read of the newest flows tail per poll, and its reason is the problem (D38: the daemon's words, no start-failed on top). Unreadable = keep polling.
         const refusedSince = () => { try { return readFlows({ dir, fs, maxBytes: 64 * 1024 }).records.find((r) => r.event === EVENT.failure && r.where === 'start' && REFUSED_START.has(r.code) && Date.parse(r.ts) >= startAt) || null } catch { return null } }
         let refusal = null
-        for (let i = 0; i < 60 && !up && !halt; i++) { up = (await probe()).up; if (!up && (refusal = refusedSince())) break; if (!up) { await pause(250); if (halted()) halt = true } } // an off that lands while the daemon starts is seen within a poll, not after 15 s (R12)
+        for (let i = 0; i < 78 && !up && !halt; i++) { up = (await probe()).up; if (!up && (refusal = refusedSince())) break; if (!up) { await pause(i < 20 ? 25 : 250); if (halted()) halt = true } } // an off that lands while the daemon starts is seen within a poll, not after 15 s (R12)
         if (refusal) problems.push(refusal.reason || refusal.code)
         else if (!up && !halt) {
           const where = osName === 'darwin' ? 'launchctl print gui/$(id -u)/com.trocar.collector' : osName === 'win32' ? 'schtasks /Query /TN \\trocar\\collector (and "trocar status" for the daemon)' : `systemctl --user status ${UNIT_NAME_HINT}` // the autostart's own status question, in the platform's words (4.9 §4: the LaunchAgent, not a systemd unit; 4.8 §7: the task, not a unit)

@@ -50,17 +50,18 @@ export function guard(req) {
 }
 
 /** Every file of the static plane, read once: `/<path under webDir>` (the committed src/web/board/ unless a test serves another build). A lookup in this map is
- *  the whole path-safety story: `..`, encoded or not, names nothing in it. */
-function loadStatic(webDir) {
+ *  the whole path-safety story: `..`, encoded or not, names nothing in it. Read without blocking: a cold walk took 470 ms on Linux, and the daemon's
+ *  event loop answers `on` meanwhile (D62 ①). */
+async function loadStatic(webDir) {
   const files = new Map();
-  const walk = (dir, url) => {
-    for (const e of nodeFs.readdirSync(dir, { withFileTypes: true })) {
+  const walk = async (dir, url) => {
+    for (const e of await nodeFs.promises.readdir(dir, { withFileTypes: true })) {
       const abs = path.join(dir, e.name);
-      if (e.isDirectory()) walk(abs, `${url}${e.name}/`);
-      else if (e.isFile()) files.set(`${url}${e.name}`, nodeFs.readFileSync(abs));
+      if (e.isDirectory()) await walk(abs, `${url}${e.name}/`);
+      else if (e.isFile()) files.set(`${url}${e.name}`, await nodeFs.promises.readFile(abs));
     }
   };
-  walk(webDir, '/');
+  await walk(webDir, '/');
   return files;
 }
 
@@ -108,7 +109,9 @@ export function tipTable() {
 let named = null; // the query core, imported on the first /api request (it is most of a cold start)
 
 export function createServer({ home, token, query, tips, uid = process.getuid?.(), fs, now, env, webDir = WEB_DIR } = {}) {
-  const files = loadStatic(webDir);
+  // the static plane is read on its first use, never by the mount: the daemon reads it once the board listens (daemon.mjs boardFor)
+  let files = null;
+  const statics = () => (files ??= loadStatic(webDir));
   const want = Buffer.from(String(token ?? ''));
   const tokenOk = (got) => {
     if (!want.length || typeof got !== 'string') return false; // no token configured → nothing passes
@@ -247,9 +250,9 @@ export function createServer({ home, token, query, tips, uid = process.getuid?.(
     return query.relay({ name, params, res, etag: held, gzip });
   }
 
-  function staticFile(req, res, url) {
+  async function staticFile(req, res, url) {
     const p = url.pathname === '/' ? '/index.html' : url.pathname;
-    const buf = files.get(p);
+    const buf = (await statics()).get(p);
     if (!buf) return sendJson(res, 404, { error: 'not found' });
     if (req.method !== 'GET' && req.method !== 'HEAD') return sendJson(res, 405, { error: 'method not allowed' });
     if (p.endsWith('.html')) query?.warm({ name: 'sessions', params: {} }); // the first session opened is not cold (4.4, D64①)
@@ -263,7 +266,7 @@ export function createServer({ home, token, query, tips, uid = process.getuid?.(
       const denied = guard(req);
       if (denied) return sendJson(res, 403, { error: denied });
       const plane = /^\/(api|control)(\/|$)/.exec(url.pathname)?.[1];
-      if (!plane) return staticFile(req, res, url);
+      if (!plane) return await staticFile(req, res, url);
       if (!tokenOk(req.headers[CONTROL_TOKEN_HEADER])) return sendJson(res, 403, { error: 'forbidden: the board token is missing or wrong' });
       if (plane === 'api') return await api(req, res, url);
       const handler = control[`${req.method} ${url.pathname.slice(plane.length + 2)}`];
@@ -275,5 +278,5 @@ export function createServer({ home, token, query, tips, uid = process.getuid?.(
       else res.destroy(); // a head already went out: abort, never end a 200 whose body is short (4.4 D66 ③)
     }
   });
-  return { server };
+  return { server, statics };
 }

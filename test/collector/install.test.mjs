@@ -673,6 +673,28 @@ test('ensureDaemonUp: a start call the OS held back is said in the notes with th
   assert.deepEqual([fast.up, fast.notes], [true, []], 'a start that did not block says nothing')
 })
 
+// R12 / D62: while the daemon starts, `on` asks it again and again until a deadline of about 15 s; an `off` that lands meanwhile stops the wait.
+// The clock is the pauses themselves, so this asserts what is found, never how fast.
+test('ensureDaemonUp: a daemon that answers late in the wait is found, one that never answers is a start failure, and an off seen meanwhile halts', async () => {
+  const run = async ({ upAt = Infinity, haltAfter = Infinity } = {}) => {
+    let clock = 0, polls = 0
+    const unit = { path: '/u/com.trocar.collector.plist', registered: () => ({ state: 'present' }), startNow: () => ({ code: 0 }) }
+    return ensureDaemonUp({
+      osName: 'darwin', dir: '/nope/collector', env: {}, unit, socketPath: '/tmp/trocar-test.sock',
+      request: async () => { if (clock < upAt) throw Object.assign(new Error('not there'), { code: 'ENOENT' }); return { doors: {} } },
+      pause: async (ms) => { clock += ms }, ms: () => clock, halted: () => ++polls > haltAfter,
+    })
+  }
+  const late = await run({ upAt: 14_000 })
+  assert.deepEqual([late.up, late.started, late.problems], [true, true, []])
+  const soon = await run({ upAt: 1 })
+  assert.deepEqual([soon.up, soon.problems], [true, []])
+  const never = await run()
+  assert.deepEqual([never.up, never.problems.length], [false, 1])
+  const halted = await run({ haltAfter: 3 })
+  assert.deepEqual([halted.up, halted.halt, halted.problems], [false, true, []])
+})
+
 // A daemon that refuses to start (node-too-old, elevated-token, root-token) writes its own {where:'start'} record and exits 0, so nothing ever answers. The poll reads
 // the start records written since the start was asked and stops on one, its reason the problem (D38: the daemon's words), with no start-failed on top.
 // A start record from before this start is not this start's answer, and a daemon that only never answers ends as before.
