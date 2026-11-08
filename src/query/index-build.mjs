@@ -29,7 +29,7 @@
 import nodeFs from 'node:fs';
 import path from 'node:path';
 import { parseSegment, recordId } from '../collector/core/record/segments.mjs';
-import { harnessOf, sessionKeyOf, headerOf } from '../dissect/harnesses.mjs';
+import { harnessOf, sessionKeyOf, headerOf, entrypointOf } from '../dissect/harnesses.mjs';
 import { synthFactsOf } from '../dissect/synth-key.mjs';
 import { isLogOnly } from '../dissect/capture-labels.mjs';
 import { expandRequestBody } from '../dissect/request-body.mjs';
@@ -44,7 +44,7 @@ import { rowTable, isRowTable, heapOf } from './row-table.mjs';
 
 const rawDir = (home = trocarHome()) => path.join(home, 'raw');
 export const indexDir = (home = trocarHome()) => path.join(home, 'index');
-const INDEX_V = 8;
+const INDEX_V = 9;
 const CHUNK = 1 << 20;
 /** How long a scan that was given `ease` holds the event loop at most, give or take a chunk or EASE_EVERY records (3.5 §行表先读). */
 const EASE_MS = 50, EASE_EVERY = 64;
@@ -67,12 +67,6 @@ const finite = (v) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v
 // What a session is made of, per record, so `sessions` never reads a record back (1.6 §4.1 速度目标 ≤ 1 s).
 // Each is a fact of THIS record; the grouping and the counting are the read side's (src/query/rows.mjs), and
 // the session key is the ONE table's answer (3.4, body keys included), not a header list of this file's own.
-const entrypointOf = (e) => {
-  const app = String(headerOf(e, 'x-app') || '').toLowerCase(), ua = String(headerOf(e, 'user-agent') || headerOf(e, 'originator') || '').toLowerCase();
-  if (app === 'desktop' || /desktop/.test(ua)) return 'desktop';
-  if (app === 'cli' || /cli|sdk-cli/.test(ua)) return 'cli';
-  return null;
-};
 
 // ── one line → one index record ───────────────────────────────────────────
 // A line that is not JSON can never be indexed (its bytes are still on disk and `raw cat` still prints
