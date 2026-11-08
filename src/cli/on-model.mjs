@@ -38,7 +38,7 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
   const [{ turnOnModel }, { backendsFor, sourcesCtx }, { renderHook }] = await Promise.all([import('../collector/model-on.mjs'), import('../collector/arch/model-backends.mjs'), import('../collector/harness/templates/index.mjs')])
   const b = deps.backends || (await backendsFor({ os, home, run: deps.exec || null, env, fs }))
   const ctx = sourcesCtx({ os, home, env, dirs: b.dirs, policy: b.policy, which: deps.which || null, fs })
-  const args = { os, home, env, ids, harnesses: deps.harnesses || parts.harnesses, ctx, fs, renderHook, rootStore: b.rootStore || null, source, ...(deps.now ? { now: deps.now } : {}) }
+  const args = { os, home, env, ids, harnesses: deps.harnesses || parts.harnesses, ctx, fs, renderHook, rootStore: b.rootStore || null, persistentEnv: (b.facts && b.facts.persistentEnv) || null, source, ...(deps.now ? { now: deps.now } : {}) }
   const out = (receipt, exit) => {
     if (json) printJson(io, receipt)
     else io.out(fit([receipt.dry_run ? `trocar on would start capturing ${receipt.harnesses.join(', ') || 'no agent'}. Nothing was written.`

@@ -170,3 +170,24 @@ test('1.6 §3.3: the plan of on lists every path once, and speaks of an earlier 
   once(later)
   assert.match(later.find((l) => l.includes(env)) || '', /new since you last said yes/, `the new row says so\n${later.join('\n')}`)
 })
+
+// 4.11 P6 ⑤: the user's NO_PROXY of the OS's persistent environment (the backend's platform facts) is in the NO_PROXY on writes, after the
+// loopback hosts — through `trocar on` itself, not only when a caller hands it to turnOnModel
+test('4.11 P6: on writes the user\'s persistent NO_PROXY into the entries it writes, after the loopback hosts', async () => {
+  const w = await modelWorld({ os: 'darwin', commands: ['codex'] })
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  const sock = path.join(w.home, 'c.sock'), token = 't'.repeat(32)
+  fs.writeFileSync(path.join(w.dir, 'control.json'), JSON.stringify({ path: sock, token }))
+  const server = await startControlServer({ socketPath: sock, token, routes: {
+    'GET /status': async () => ({ doors: {} }),
+    'POST /on': async ({ body }) => ({ doors: Object.fromEntries(Object.entries(body.groups).map(([g, port]) => [g, `http://127.0.0.1:${port}`])) }),
+  } })
+  try {
+    const facts = { persistentEnv: (names) => (names.includes('NO_PROXY') ? { NO_PROXY: 'corp.example,.wq.internal' } : {}) }
+    const deps = { getuid: () => 501, backends: { dirs: w.ctx.dirs, facts }, harnesses: w.harnesses, which: w.ctx.which, parts: { os: 'darwin', harnesses: w.harnesses, arch: { unit: { userUnit: () => neverStarts } } } }
+    const io = fakeIo()
+    assert.equal(await runOn({ io, env: w.env, home: w.home, platform: 'darwin', deps, ids: ['codex'], flags: new Set(['--yes']), json: true }), 0, io.text())
+    const line = fs.readFileSync(path.join(w.home, '.codex', '.env'), 'utf8').split(/\r?\n/).find((l) => l.startsWith('NO_PROXY='))
+    assert.equal(line, 'NO_PROXY=localhost,127.0.0.1,::1,corp.example,.wq.internal')
+  } finally { await server.close() }
+})
