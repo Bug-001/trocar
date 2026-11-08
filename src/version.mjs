@@ -49,24 +49,34 @@ export function headSha(dir) {
 /** `<version>+<first 7 of a commit>`, the one place that format is composed: `null` / no sha is the plain version. */
 export const codeIdOf = (version, sha) => (sha ? `${version}+${String(sha).slice(0, 7)}` : version)
 
-// The code itself, outside a git checkout: sha256 over the code files under bin/ and src/ — each file's path from `root` and its bytes, in path
-// order. Only code (CODE_FILE): what a build or the OS writes beside it (the Linux helper's objects and binary, .DS_Store, an editor's swap file)
-// never changes it. null when there is none to read. Asked once per root and process.
-const CODE_FILE = /^[^.].*\.(mjs|cjs|js|json|tmpl|ps1|sh|cs)$/
+// The code itself, outside a git checkout: sha256 over every file under bin/ and src/ that ships — each file's path from `root` and its bytes, in path
+// order — leaving out dotfiles and what a `.gitignore` there names (a build's outputs: the Linux helper's objects, header and binary), so a build or
+// the OS writing beside the code never changes it. null when there is none to read. Asked once per root and process; a read that failed is the plain
+// version for that process (an install then sees other code and replaces the collector: the safe way).
 const byName = (a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
-// the walk once, as the reads it needs: `yield ['dir', p]` → its entries (null when unreadable), `yield ['file', p]` → its bytes
+// a .gitignore's lines (blank and # skipped, no negation) → a test of a path relative to its directory: `*` is any run of non-slash characters
+const ignoredBy = (text) => {
+  const res = String(text || '').split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith('#') && !l.startsWith('!'))
+    .map((l) => new RegExp(`^${l.replace(/^\//, '').replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*')}(/.*)?$`))
+  return (rel) => res.some((re) => re.test(rel))
+}
+// the walk once, as the reads it needs: `yield ['dir', p]` → its entries (null when unreadable), `yield ['file', p]` → its bytes (a .gitignore: null
+// when there is none)
 function* hashSteps(root) {
   const h = crypto.createHash('sha256')
   let n = 0
-  function* walk(rel) {
+  function* walk(rel, rules) {
     const ents = yield ['dir', path.join(root, rel)]
-    for (const e of (ents || []).sort(byName)) {
+    if (!ents) return
+    const here = ents.some((e) => e.name === '.gitignore' && e.isFile()) ? [...rules, { at: rel, test: ignoredBy(yield ['file', path.join(root, rel, '.gitignore')]) }] : rules
+    for (const e of ents.sort(byName)) {
       const r = `${rel}/${e.name}`
-      if (e.isDirectory() && !e.name.startsWith('.')) yield* walk(r)
-      else if (e.isFile() && CODE_FILE.test(e.name)) { h.update(`${r}\0`); h.update(yield ['file', path.join(root, r)]); h.update('\0'); n++ }
+      if (e.name.startsWith('.') || here.some((g) => g.test(r.slice(g.at.length + 1)))) continue
+      if (e.isDirectory()) yield* walk(r, here)
+      else if (e.isFile()) { h.update(`${r}\0`); h.update(yield ['file', path.join(root, r)]); h.update('\0'); n++ }
     }
   }
-  yield* walk('bin'); yield* walk('src')
+  yield* walk('bin', []); yield* walk('src', [])
   return n ? h.digest('hex') : null
 }
 const DIR = { withFileTypes: true }

@@ -35,8 +35,14 @@ test('outside a git checkout the code id is the version and 7 hex of the code: t
     assert.notEqual(c, a, `${why}: another id`)
   }
   assert.equal(codeId(tree({})), '1.2.3', 'no code to hash: the plain version, never a guess')
-  // what a build or the OS writes beside the code is not code: the Linux helper's objects, header and binary, a .DS_Store, an editor's swap file
-  assert.equal(codeId(tree({ ...CODE, 'src/collector/arch/linux/bpf/redirect.o': 'ELF', 'src/collector/arch/linux/vmlinux.h': '', 'src/collector/arch/linux/trocar-redirector': 'ELF', 'src/.DS_Store': 'x', 'src/off/.a.mjs.swp': 'x' })), a, 'a build beside the code: the same id')
+  // what a build writes beside the code (the outputs a .gitignore there names) and what the OS or an editor leaves (dotfiles) is not code
+  const IGNORE = { 'src/arch/.gitignore': '# build outputs\nbpf/*.o\nbpf/vmlinux.h\nhelper\n' }
+  const built = codeId(tree({ ...CODE, ...IGNORE }))
+  assert.equal(codeId(tree({ ...CODE, ...IGNORE, 'src/arch/bpf/redirect.o': 'ELF', 'src/arch/bpf/vmlinux.h': '', 'src/arch/helper': 'ELF', 'src/.DS_Store': 'x', 'src/off/.a.mjs.swp': 'x' })), built, 'a build beside the code: the same id')
+  // every file that ships counts, whatever its name: a shell shim with no extension, the board's page and styles
+  for (const [rel, text] of [['src/shims/kimi', '#!/bin/sh\n'], ['src/web/index.html', '<p>'], ['src/web/a.css', 'p{}'], ['src/arch/bpf/redirect.c', 'int x;']]) {
+    assert.notEqual(codeId(tree({ ...CODE, ...IGNORE, [rel]: text })), built, `${rel}: a file that ships changes the id`)
+  }
 })
 
 test('the daemon\'s way, without holding the event loop, gives the same id', async () => {
