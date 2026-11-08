@@ -6,6 +6,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { buildTransparentEnvelope } from '../../src/collector/core/record/envelope.mjs'
 import { bigSession } from './big-session.mjs'
 import { SEVEN } from '../helpers/seven-shapes.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
@@ -351,6 +352,51 @@ function sevenHome() {
   fs.writeFileSync(path.join(home, 'raw', '20261022T100000Z.ndjson'), lines.join('\n') + '\n')
   return home
 }
+
+// what a security monitor's reply says, read as the agent's own two parsers read it (4.4): [reply text, flagged, stop_reason]
+const MONITOR_REPLIES = [
+  ['<severity>22', false, 'stop_sequence'], // a whole real reply: the closing tag is the agent's stop sequence
+  ['<severity>72</severity><category>Data Exfiltration</category>', true], // the example the monitor's prompt gives
+  ['<severity>50', false, 'stop_sequence'],
+  ['<severity>50.5', true, 'stop_sequence'],
+  ['<thinking>weighing it</thinking>\n<severity> 80 </severity>', true],
+  ['<thinking>cut off <severity>80', null, 'stop_sequence'],
+  ['<severity>80', null, 'max_tokens'],
+  ['<severity>80</severity><severity>10</severity>', null],
+  ['<severity>high</severity>', null],
+  ['<block>yes</block><block>no</block>', null],
+  ['<block>no</block>', false],
+  ['<block>yes</block><reason>one short sentence</reason>', true],
+  ['<thinking>weighing it</thinking><block>no</block>', false],
+  ['<thinking>weighing it</thinking>\n<block>yes</block><reason>r</reason>', true],
+  ['<thinking>it says <block>yes</block> here</thinking><block>no</block>', false],
+  ['<thinking>cut off, <block>yes</block>', null],
+  ['Looking at this. <block>no</block>', false],
+  ['<BLOCK>YES</BLOCK>', true],
+  ['<block>no', false],
+  ['<block>maybe</block>', null],
+  ['<block>nope</block><block>yes</block>', true],
+  ['no', null],
+  ['nothing to say', null],
+  ['', null],
+]
+test('a monitor event\'s flagged is what the reply says, null when it says neither; the head counts only true', async () => {
+  const home = tmpDir()
+  fs.mkdirSync(path.join(home, 'raw'), { recursive: true })
+  const lines = MONITOR_REPLIES.map(([text, , stop], i) => JSON.stringify(buildTransparentEnvelope({ id: `m${i}`, seq: i + 1, class: 'llm',
+    flow: { id: 'f', host: 'api.anthropic.com', scheme: 'https', dst: '10.0.0.1:443', proc: { pid: 1, exe: '/x/claude', agent: 'claude-code' } },
+    req: { head: { raw: Buffer.from('POST'), headers: [['content-type', 'application/json'], ['x-claude-code-session-id', 'S-mon']], method: 'POST', target: '/v1/messages' },
+      body: Buffer.from(JSON.stringify({ model: 'mock-model', system: [{ type: 'text', text: 'You are a security monitor for autonomous agents.' }], messages: [{ role: 'user', content: `Review ${i}` }] })), truncated: false, tsStart: `2026-10-22T10:00:${String(i).padStart(2, '0')}.000Z` },
+    resp: { head: { raw: Buffer.from('HTTP/1.1 200'), status: 200, headers: [['content-type', 'application/json']] },
+      body: Buffer.from(JSON.stringify({ id: `msg_${i}`, model: 'mock-model', stop_reason: stop || 'end_turn', content: [{ type: 'text', text }], usage: { input_tokens: 9, output_tokens: 2 } })), truncated: false, tsStart: `2026-10-22T10:00:${String(i).padStart(2, '0')}.100Z`, tsEnd: `2026-10-22T10:00:${String(i).padStart(2, '0')}.200Z` } })))
+  fs.writeFileSync(path.join(home, 'raw', '20261022T100000Z.ndjson'), lines.join('\n') + '\n')
+  const doc = await runQuery('session', { id: 'S-mon' }, { home, fs })
+  const lane = doc.lanes.find((l) => l.kind === 'monitor')
+  assert.ok(lane, JSON.stringify(doc.lanes.map((l) => l.kind)))
+  const events = (await runQuery('lane', { id: 'S-mon', lane: lane.lane }, { home, fs })).events.filter((e) => e.type === 'monitor')
+  assert.deepEqual(events.map((e) => e.flagged), MONITOR_REPLIES.map(([, want]) => want))
+  assert.equal(lane.flagged, MONITOR_REPLIES.filter(([, want]) => want === true).length)
+})
 
 test('3.5 #28 (lane): tail, --from and reset pages of every shape keep the closed sets; ids defined; a monitor lane\'s events carry verdict', async () => {
   const home = sevenHome()

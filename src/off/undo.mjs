@@ -26,7 +26,7 @@ import nodeFs from 'node:fs'
 import path from 'node:path'
 import { undoEntry, removeOwnedFile, undoWrapper, describeEntry } from './journal.mjs'
 import { saveManifest, KNOWN_KINDS, FILE_ENTRY_KINDS, PHASES, undoByHand, restoreByHand } from './manifest.mjs'
-import { undoRunKey, undoScheduledTask } from './win32.mjs'
+import { undoRunKey, undoScheduledTask, TASK_FILE } from './win32.mjs'
 import { dropBackup } from './backup.mjs'
 import { backupDir, trocarHome } from './paths.mjs'
 import { removeEmptyDirs, sweepTemps, writeDurable, sha256, strictlyInside } from './fsutil.mjs'
@@ -150,8 +150,8 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
       return { path: `${e.hive ?? 'HKCU'}\\${e.key ?? ''}\\${e.name ?? ''}`, harness: e.harness, change, gone: r.result === 'removed', result: r.ok ? (r.result === 'absent' ? 'already-restored' : 'restored') : 'error', ...(r.result === 'left' ? { result: 'left-user-value' } : {}), ...(r.ok ? {} : { reason: r.reason }) }
     }
     if (e.kind === 'scheduled-task') {
-      const r = undoScheduledTask({ uninstall: dropCa, prior: e.prior ?? null, run: exec, env })
-      return { path: e.path ?? '\\trocar\\collector', harness: e.harness, change: r.task === 'deleted' ? 'the task deleted' : 'the task switched off', gone: r.task === 'deleted', result: r.ok ? (r.task === 'absent' ? 'already-restored' : 'restored') : 'error', ...(r.ok ? {} : { reason: [r.reason, r.runKeyReason].filter(Boolean).join('; ') }) }
+      const r = undoScheduledTask({ uninstall: dropCa, prior: e.prior ?? null, run: exec, env, file: path.join(dir, TASK_FILE), fs })
+      return { path: e.path ?? '\\trocar\\collector', harness: e.harness, change: r.task === 'deleted' ? 'the task deleted' : 'the task switched off', gone: r.task === 'deleted', ...(r.why ? { why: r.why } : {}), result: r.ok ? (r.task === 'absent' ? 'already-restored' : r.task === 'not-trocars' ? 'left-user-value' : 'restored') : 'error', ...(r.ok ? {} : { reason: [r.reason, r.runKeyReason].filter(Boolean).join('; ') }) }
     }
     if (e.kind === 'forwarder-binary') { // uninstall only (the entries filter keeps it out of an `off`)
       const file = e.path || e.real_path

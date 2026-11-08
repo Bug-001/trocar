@@ -7,6 +7,10 @@
 // never runs out of a JSON string either. The sub-delims RFC 3986 lets a password carry raw (`!$&'()*+,;=`) are inside it. A user alone and a
 // password alone are hidden the same way. Idempotent; text without a URL passes as it is.
 const USERINFO = /([a-z][a-z0-9+.-]*:\/\/)[^\s/?#"`<>\\@]*(?:@[^\s/?#"`<>\\@]*)*@/gi
-export const hideUserinfo = (s) => String(s).replace(USERINFO, '$1***@')
+// The key in trocar's PAC address (`/<key>/trocar.pac`, 4.11 P10) is a capability like a password: `/***/trocar.pac` wherever it is shown. Only the
+// agent's entry holds it as written.
+const PAC_KEY = /\/[^\s/?#"`<>\\]+(\/trocar\.pac)\b/g
+export const hidePacKey = (s) => String(s).replace(PAC_KEY, '/***$1')
+export const hideUserinfo = (s) => hidePacKey(String(s).replace(USERINFO, '$1***@'))
 /** The same over a JSON value (a receipt, a key's value): every string in it, as JSON; hideUserinfo never runs out of a JSON string. */
 export const hideUserinfoIn = (v) => (v === undefined ? v : JSON.parse(hideUserinfo(JSON.stringify(v))))

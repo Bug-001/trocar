@@ -2,6 +2,7 @@
 // install notes `doctor` prints (formatInstallNotes), which used to live in src/collector/cli.mjs. English, ASCII, 80 columns, conclusion first (D58).
 // Everything here renders from the status document (附录 C.3) and the facts it was built from; nothing is computed twice and nothing is written.
 import { columns, pairs, wrap, unknown, ago, noColor, tilde, WIDTH } from './text.mjs'
+import { codeId } from '../version.mjs'
 import { renderRoutes, routeNotes } from '../netenv/topology-text.mjs'
 import { failureBrief, failureWord, squashed, statusNote } from './words.mjs'
 import { carrierWords } from './receipt.mjs'
@@ -18,7 +19,11 @@ const upFor = (since, now) => { const t = Date.parse(since); if (!Number.isFinit
 
 /** The daemon in one clause, from the daemon's own answer — never a stale pid as the present state (§1.1). */
 function daemonClause(d, now) {
-  if (d.running === true) { const up = d.since ? upFor(d.since, now) : null; return `Daemon running (pid ${d.pid ?? 'unknown'}${up ? `, up ${up}` : ''}).` }
+  if (d.running === true) {
+    const up = d.since ? upFor(d.since, now) : null, base = `Daemon running (pid ${d.pid ?? 'unknown'}${up ? `, up ${up}` : ''})`
+    // §3.5: the collector on other code than this trocar (its files replaced, the collector not restarted): what this version changed in it is not in effect
+    return d.runs_this_code === false ? `${base} on other code, ${d.code}; this trocar is ${codeId()}. Put it on this code: trocar install` : `${base}.`
+  }
   if (d.running === false) return `Daemon not running${d.error ? ` (${d.error})` : ''}; nothing is captured. Start it: trocar on`
   if (d.responding === false) return `Daemon does not answer${d.error ? ` (${d.error})` : ''}; new connections are not captured.`
   return `Daemon: ${unknown(d.error || 'its state could not be read')}.`
@@ -33,13 +38,17 @@ const CAPTURED = (h) => (h.captured === true ? 'yes' : h.desired === 'off' ? 'of
 const needsSetup = (x) => x.setup?.state === 'needed' && (x.setup.missing || []).some((m) => m.what !== 'root-missing')
 
 /** The one-screen summary of `trocar status` (§3.5). `doc` is the 附录 C.3 document. */
+/** C.3 `out_of_scope` (4.11 CM43): why an app on this machine is not captured. */
+const outOfScopeLines = (doc, h = null) => (doc.out_of_scope || []).filter((o) => !h || o.harness === h).map((o) => `  out of scope: ${o.what} (${o.harness} is not captured)`)
+
 export function statusSummary(doc, { now = Date.now(), colors: c = noColor(), home = null } = {}) {
   const names = Object.keys(doc.harnesses || {})
   const installed = (doc.install && doc.install.harnesses) || []
   const shown = names.filter((h) => installed.length === 0 || installed.includes(h) || needsSetup(doc.harnesses[h]))
   const on = shown.filter((h) => doc.harnesses[h].desired === 'on')
   const captured = shown.filter((h) => doc.harnesses[h].captured === true)
-  if (!shown.length) return [c.bold('No harness is set up for capture yet.'), '', ...readErrorLines(doc), 'Next: trocar install']
+  // only an app trocar does not cover: install cannot help, so it is not the next step
+  if (!shown.length) return [c.bold('No harness is set up for capture yet.'), ...outOfScopeLines(doc), '', ...readErrorLines(doc), ...((doc.out_of_scope || []).length ? [] : ['Next: trocar install'])]
   const unknown = shown.filter((h) => doc.harnesses[h].captured === null).length // never counted as not capturing (1.6 §2)
   const head = `Capturing ${captured.length} of ${shown.length} installed harness${shown.length === 1 ? '' : 'es'}${unknown ? `; ${unknown} not known yet` : ''}.`
   const daemon = daemonClause(doc.daemon, now)
@@ -57,6 +66,7 @@ export function statusSummary(doc, { now = Date.now(), colors: c = noColor(), ho
   if (missing.length) lines.push(`  not installed: ${missing.sort().join(', ')}`)
   const unseen = names.flatMap((h) => uncapturedText(doc.harnesses[h], home).map((t) => `Note: ${h}: ${t}`))
   if (unseen.length) lines.push('', ...unseen.flatMap((t) => wrap(t, WIDTH)))
+  lines.push(...outOfScopeLines(doc))
   lines.push('', ...pairs(summaryPairs(doc, now)))
   const first = on.find((h) => doc.harnesses[h].captured !== true) || shown[0]
   lines.push('', `More: ${[first ? `trocar status ${first}` : null, 'trocar status --failures', 'trocar doctor'].filter(Boolean).join('   ')}`)
@@ -89,7 +99,7 @@ function summaryPairs(doc, now) {
     const hosts = [...new Set(crit.map((x) => x.host).filter(Boolean))]
     rows.push(['Not captured', `${who.length ? who.join(', ') : 'a program'} refused trocar's certificate${hosts.length ? ` for ${hosts.length} host${hosts.length === 1 ? '' : 's'}` : ''}; restart it. Which hosts: trocar status --failures`])
   }
-  rows.push(['Problems', !fl ? unknown(errorReason(doc, 'capture health') || 'capture health could not be read') : fl.problem === 0 ? 'none in the last 24 hours' : `${fl.problem} in the last 24 hours, latest ${ago(fl.latest, now)}`])
+  rows.push(['Problems', !fl ? unknown(errorReason(doc, 'capture health') || 'capture health could not be read') : fl.problem === 0 ? `none ${windowWords(fl, now)}` : `${fl.problem} ${windowWords(fl, now)}, latest ${ago(fl.latest, now)}`])
   const b = doc.board // §3.5: the address without the token; `trocar board` prints the one with it
   if (b) rows.push(['Board', b.state === 'serving' ? `${b.url}  open it with: trocar board` : b.state === 'unknown' ? unknown(b.reason) : `not running: ${b.reason}`])
   const login = loginRow(doc.autostart)
@@ -109,11 +119,11 @@ const DESIRED = { on: 'on', off: 'off' }
 /** One named harness's section. `finding` is the problem (or expected) finding that explains it, from the one catalogue (附录 B). */
 export function statusDetail(doc, h, { finding = null, now = Date.now(), colors: c = noColor(), home = null } = {}) {
   const x = doc.harnesses[h]
-  if (!x) return [`${h}: ${unknown('it is not set up on this machine')}`]
+  if (!x) return [`${h}: ${unknown('it is not set up on this machine')}`, ...outOfScopeLines(doc, h)]
   // here only as forms trocar does not capture, and in no install record: nothing to turn on or fix, only why (4.6 「不采的形态」)
   if (x.present === false && !((doc.install && doc.install.harnesses) || []).includes(h) && uncapturedText(x, home).length) return [c.bold(`${h}: not captured on this machine`), '', ...uncapturedText(x, home).flatMap((s) => wrap(`Note: ${s}`, WIDTH - 2, '      ').map((t) => `  ${t}`))]
   const verdict = x.captured === true ? ['captured', notSeenYet(x)].filter(Boolean).join(', ') : x.captured === null ? openText(x, h, unknown) : x.desired === 'off' ? 'capture is off' : 'not captured'
-  const lines = [c.bold(`${h}: ${DESIRED[x.desired] || unknown('its on/off state could not be read')}, ${verdict}`), '']
+  const lines = [c.bold(`${h}: ${DESIRED[x.desired] || unknown('its on/off state could not be read')}, ${verdict}`), ...outOfScopeLines(doc, h), '']
   const rows = []
   if (finding) {
     rows.push(['Why', finding.what])
@@ -171,12 +181,14 @@ const commandsOf = (reason) => [...String(reason || '').matchAll(COMMAND)].map((
 const reasonOf = (reason) => squashed(String(reason || '').replace(COMMAND, commandsOf(reason).length > 1 ? 'the lines below' : 'the line below'))
 const failureLine = (g0) => { const g = { ...g0, reason: reasonOf(g0.reason) }; const r = failureWord(g.where, g.code, g.harness || '') && g.reason; const s = r ? `${failureBrief(g)}: ${r}` : failureBrief(g, { max: Infinity }); return g.harness ? `${g.harness}: ${s}` : s } // no nested brackets (§1.1②): a reason has its own
 
+/** The window `failures` covers, said as it is (1.6 C.3 `since`): the last 24 hours, or since this install when it began inside them. */
+const windowWords = (fl, now) => (Date.parse(fl.since) > now - 24 * 3600e3 + 60e3 ? `since this install (${ago(fl.since, now)})` : 'in the last 24 hours') // a minute's slack: the document is read a moment before it is printed
 /** The whole wall of the last 24 hours: one line per `level:'problem'` group of the document's `failures` (C.3, the board's capture log reads the same
  *  groups and words), then the `Expected` section (what is not a problem by design). */
 export function failuresBlock(failures, health, { now = Date.now() } = {}) {
   if (!failures || !health) return [`Problems: ${unknown('capture health could not be read')}`]
   const groups = failures.groups.filter((g) => g.level === 'problem')
-  const lines = [groups.length ? `Problems in the last 24 hours: ${groups.reduce((n, g) => n + g.count, 0)} in ${groups.length} kind${groups.length === 1 ? '' : 's'}` : 'No problems in the last 24 hours.']
+  const lines = [groups.length ? `Problems ${windowWords(failures, now)}: ${groups.reduce((n, g) => n + g.count, 0)} in ${groups.length} kind${groups.length === 1 ? '' : 's'}` : `No problems ${windowWords(failures, now)}.`]
   if (groups.length) { // §1.1⑥: each row folds inside 80 columns, under its own text
     const heads = columns(groups.map((g) => [ago(g.last_ts, now), `x${g.count}`, ''])).map((h) => `  ${h}  `), col = Math.max(...heads.map((h) => h.length))
     groups.forEach((g, i) => lines.push(...wrap(failureLine(g), WIDTH - col).map((t, j) => (j ? ' '.repeat(col) : heads[i].padEnd(col)) + t), ...commandsOf(g.reason).map((x) => ' '.repeat(col + 2) + x))) // a command sits two deeper than the reason's folds (§3.5, §1.1⑥)
@@ -184,7 +196,7 @@ export function failuresBlock(failures, health, { now = Date.now() } = {}) {
   const exp = Object.entries((health.collector && health.collector.expected) || {})
   lines.push('', 'Expected')
   if (exp.length) lines.push(...exp.flatMap(([k, n]) => wrap(`${expectedText(k)}: ${n}`, WIDTH - 4).map((t, j) => (j ? '    ' : '  ') + t)))
-  else lines.push('  nothing was skipped by design in the last 24 hours')
+  else lines.push(`  nothing was skipped by design ${windowWords(failures, now)}`)
   return lines
 }
 
@@ -230,7 +242,7 @@ function daemonText(h) {
   if (d.last_stop) return `the background process is not running - stopped${d.last_stop.signal ? ` by ${d.last_stop.signal}` : ''} at ${d.last_stop.ts}${at}`
   return `the background process is not running${at}`
 }
-const groupLine = (g) => `  ${g.last_ts} ${g.last.event === 'failure' ? `problem (${g.last.where}/${g.last.code})` : g.last.event || `a connection was not captured: ${g.last.not_captured || g.last.reason}`}${g.last.pid != null ? ` pid ${g.last.pid}` : ''}${g.last.agent ? ` ${g.last.agent}` : ''}: ${g.last.reason || (g.last.error && g.last.error.message) || ''}${g.count > 1 ? ` (x${g.count} in 24 h)` : ''}${g.last.hint ? ` - ${g.last.hint}` : ''}`
+const groupLine = (g) => `  ${g.last_ts} ${g.last.event === 'failure' ? `problem (${g.last.where}/${g.last.code})` : g.last.event || `a connection was not captured: ${g.last.not_captured || g.last.reason}`}${g.last.pid != null ? ` pid ${g.last.pid}` : ''}${g.last.agent ? ` ${g.last.agent}` : ''}: ${g.last.reason || (g.last.error && g.last.error.message) || ''}${g.count > 1 ? ` (x${g.count})` : ''}${g.last.hint ? ` - ${g.last.hint}` : ''}`
 const condLine = (c) => `  now: ${c.kind}${c.pid != null ? ` pid ${c.pid}` : ''}${c.agent ? ` ${c.agent}` : ''}${c.host ? ` ${c.host}` : ''} since ${c.since}: ${c.reason || ''}`
 export function formatHealth(h, { daemonLine = true } = {}) {
   const c = h.collector, lines = []
@@ -238,9 +250,9 @@ export function formatHealth(h, { daemonLine = true } = {}) {
   lines.push(`capture health: ${(SUMMARY[h.summary.state] || ((x) => String(x.state)))(h.summary)}${h.summary.read_errors ? ' - some files could not be read (below)' : ''}`)
   if (c.conditions && c.conditions.length) lines.push(c.conditions_as_of ? `conditions as of ${c.conditions_as_of}:` : 'conditions now:', ...c.conditions.map(condLine))
   const open = (c.failures || []).filter((g) => !g.resolved) // a resolved group is in --failures and --json as a note (C.3)
-  if (open.length) lines.push(`problems in the last 24 hours (${open.length} kind(s)):`, ...open.map(groupLine))
+  if (open.length) lines.push(`problems ${windowWords(h.read, Date.parse(h.generated_at))} (${open.length} kind(s)):`, ...open.map(groupLine))
   const exp = Object.entries(c.expected || {})
-  if (exp.length) lines.push(`not captured by design (last 24 hours): ${exp.map(([k, n]) => `${k} ${n}`).join(', ')}`)
+  if (exp.length) lines.push(`not captured by design (${windowWords(h.read, Date.parse(h.generated_at))}): ${exp.map(([k, n]) => `${k} ${n}`).join(', ')}`)
   for (const p of (h.raw && h.raw.problems) || []) lines.push(`raw layer: ${p.op} ${p.outcome} ${p.file || p.target || ''}: ${p.reason || ''}`)
   for (const e of h.read.errors) lines.push(`could not read ${e.file}: ${e.error}`)
   if (h.read.truncated) lines.push('(older records were left out: only the most recent part was read)')

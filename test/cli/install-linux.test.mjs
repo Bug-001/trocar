@@ -15,6 +15,7 @@ import { unitPath, UNIT_NAME } from '../../src/collector/arch/linux/unit.mjs'
 import { X509Certificate } from 'node:crypto'
 import zcode from '../../src/collector/harness/z-code.mjs'
 import { createCa } from '../../src/collector/core/tls/ca.mjs'
+import { validateReceipt } from '../../src/cli/schema.mjs'
 
 const fps = (text) => (String(text).match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g) || []).map((p) => new X509Certificate(p).fingerprint256)
 const certBytes = (home) => Object.fromEntries(Object.entries(snapshot(home)).filter(([k]) => k.startsWith('.trocar/collector/ca/') || k === '.claude/settings.json'))
@@ -279,12 +280,37 @@ test('Linux install over a masked unit: replaced, and said in the plan and the r
     fs.mkdirSync(path.dirname(unit), { recursive: true }); fs.rmSync(unit, { force: true }); fs.symlinkSync('/dev/null', unit)
     const dry = fakeIo()
     assert.equal(await runInstallCli(['--dry-run', '--json'], ctx(dry)), 0, dry.text())
-    assert.ok(JSON.stringify(dry.json()).includes('masked'), `${seeded}: the plan says it`)
+    const plan = dry.json()
+    assert.equal(plan.planned.filter((p) => p.path === unit).length, 1, `${seeded}: the unit is one row of the plan: ${JSON.stringify(plan.planned)}`)
+    assert.ok(plan.planned.find((p) => p.path === unit).detail.includes('masked'), `${seeded}: and that row says it is masked`)
+    assert.equal(plan.changed.filter((c) => c.path === unit).length, 1, `${seeded}: the user's link is a change of a file of theirs`)
     assert.equal(fs.lstatSync(unit).isSymbolicLink(), true, 'a dry run leaves it')
     const io = fakeIo()
     assert.equal(await runInstallCli(['--yes', '--json'], ctx(io)), 0, io.text())
-    assert.ok(io.json().notes.some((n) => /masked/.test(n)), `${seeded}: the receipt says it`)
+    const done = io.json()
+    const row = done.changed.find((c) => c.path === unit)
+    assert.deepEqual(validateReceipt(done), [], 'the receipt keeps the schema, why_no_backup included')
+    assert.ok(row && row.backup === null && !done.created.includes(unit), `${seeded}: the receipt lists the link as changed, not as trocar's own file: ${JSON.stringify([done.changed, done.created])}`)
     assert.equal(fs.lstatSync(unit).isSymbolicLink(), false, `${seeded}: the link is replaced`)
     assert.match(fs.readFileSync(unit, 'utf8'), /\[Service\]/)
   }
+})
+
+// 1.6 §1.1②: one fact once. A harness install skips is said under Skipped: in the plan, with its reason; the receipt does not say the same reason
+// again as a Note (a real Linux run listed codex and z-code both ways)
+test('Linux install: a skipped harness\'s reason is said once, not again as a note; the documents keep each skip, the dry run\'s too', async () => {
+  const { loadHarnesses } = await import('../../src/collector/harness/index.mjs')
+  const linux = (await loadHarnesses()).filter((d) => d.trust) // the Linux descriptors: most have no home here
+  const run = async (argv, home = tmpDir('trocar-skip-once-')) => { if (!fs.existsSync(path.join(home, '.claude'))) seedClaude(home); const io = fakeIo(); assert.equal(await runInstallCli(argv, { ...onCtx(home, io, { harnesses: linux }), platform: 'linux' }), 0, io.text()); return { io, home } }
+  const d = await run(['--dry-run', '--json']), dry = d.io.json()
+  assert.ok(dry.skipped.length && dry.skipped.every((x) => x.what && x.reason), 'the dry run\'s document keeps each skip with its reason (C.1)')
+  assert.deepEqual(validateReceipt(dry), [])
+  const doc = (await run(['--yes', '--json'])).io.json()
+  assert.deepEqual(doc.skipped.map((x) => x.what), dry.skipped.map((x) => x.what), 'the same skips as the plan')
+  assert.deepEqual(validateReceipt(doc), [])
+  for (const s of doc.skipped) assert.ok(!(doc.notes || []).some((n) => String(n).startsWith(`${s.what}: `)), `${s.what}: skipped, and not again a note`)
+  // the text of an install in the dry run's home (a dry run changes nothing): each reason once, as printed (HOME as ~, folded lines joined)
+  const flat = (t) => t.split(d.home).join('~').replace(/\s+/g, ' ')
+  const text = flat((await run(['--yes'], d.home)).io.text())
+  for (const s of dry.skipped) assert.equal(text.split(flat(s.reason)).length - 1, 1, `${s.what}: its reason said once: ${s.reason}`)
 })

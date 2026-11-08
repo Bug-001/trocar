@@ -81,7 +81,7 @@ export function detailHtml(s, lane, i) {
   } else {
     const st = s.desk && c.rid != null ? stepOf(s.desk, c.rid) : null
     const unknown = !W.LANE_KIND[lane.kind]
-    const tech = [[lane.note ? 'note' : '', lane.note || ''], unknown ? ['kind', lane.kind] : '', c.flagged != null ? ['flagged', String(c.flagged)] : '', c.rec && c.rec.id ? ['id', String(c.rec.id)] : ''].filter((x) => x && x[0])
+    const tech = [[lane.note ? 'note' : '', lane.note || ''], unknown ? ['kind', lane.kind] : '', c.rec && c.rec.id ? ['id', String(c.rec.id)] : ''].filter((x) => x && x[0])
     body = `<div class="din">${esc(W.laneKind(lane.kind).hint)}</div>` +
       outputHtml(c, st) + costRowHtml(c, s.pricing, s.pricingErr) + inputHtml(c, st && st.held ? st.flat : null) +
       (tech.length ? techDetailsHtml(tech, { id: 'dtech' }) : '')

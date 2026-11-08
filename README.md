@@ -202,12 +202,13 @@ On Linux the machine's capability helper is one more step, with `sudo`. Installe
 `sudo "$(command -v node)" "$(command -v trocar)" setup-helper --remove`.
 
 Installed with the script, `uninstall` also removes trocar itself as its last step: `~/.trocar/app` (the code and its
-Node), the `trocar` launcher and the PATH item. On Windows the folder goes as soon as the command exits. On Linux,
-removing the helper needs that code, so while the helper is installed the code, the launcher and the PATH item stay,
-no captured record is deleted (even with `--purge-data`), `uninstall` exits 1 and prints the
-`sudo ... setup-helper --remove` line with full paths. Run that line, then `trocar uninstall` once more: the second
-run removes the code, the launcher and the PATH item. Once trocar itself is gone, the receipt names the kept folders to
-delete by hand.
+Node), the `trocar` launcher and the PATH item. On Windows the folder goes as soon as the command exits. On Linux the
+helper is one per machine and other accounts may use it, so while it is installed `uninstall` removes everything else
+of yours as usual and keeps only the code, the launcher and the PATH item, which removing the helper needs. It exits 0
+and prints the `sudo ... setup-helper --remove` line with full paths. If no other account uses trocar, run that line,
+then `trocar uninstall` once more: the second run removes the code, the launcher and the PATH item. `--remove` checks
+every other account's home for a trocar install and removes nothing while it finds one or cannot read a home, naming
+them. Once trocar itself is gone, the receipt names the kept folders to delete by hand.
 
 `uninstall` always prints its plan and asks first; without a terminal and without `--yes` it changes
 nothing and exits 2. `uninstall` never does `off` for you. While a harness is on, or (macOS / Windows) a process started during `on` still
@@ -272,6 +273,9 @@ holds the detail):
 - **Response: compressed on the wire; only the decompressed text is stored**: the reply arrived compressed and the record keeps only its
   decompressed text, not the compressed bytes that were on the wire. Records captured since trocar keeps those
   bytes do not carry it.
+- **Agent closed the connection after the reply**: the reply arrived whole, up to its own last event, and the agent
+  then closed the connection before the server ended the exchange. The call is not failed: its reply, usage and cost
+  are read as usual. A reply that stopped before its last event says **Reply never finished** and stays failed.
 - **N records no parser can read; not drawn** (in the session's own fidelity line): records no dissector reads are
   counted, never drawn as something else — also when only some records of a session are unrecognized. One
   session may mix wire formats; each call is read by its own.
@@ -453,7 +457,11 @@ agent group, loopback only, no TUN, never the system proxy, nothing written into
   marked block to that file and leaves the setting alone. Nothing needs administrator rights and no launcher is added.
   The one thing that reaches your login environment is the `PATH` item a copy from the install script adds (see
   [Install](#install)); a copy from npm or git adds nothing there. Each harness's carrier is in its
-  descriptor (`proxyMode` in `src/collector/harness/<harness>.mjs`), one entry per form.
+  descriptor (`proxyMode` in `src/collector/harness/<harness>.mjs`), one entry per form. The root's key cannot be taken,
+  but it can be used: any program running as you can have it sign (on Windows by calling the key, on macOS through
+  trocar's signing helper, as often as it asks), so a program you do not trust could make certificates your apps accept
+  until the root is replaced. If you suspect that, make a new root: `trocar off`, `trocar uninstall`, `trocar install`,
+  `trocar on`.
 - `on` asks the daemon to open the doors, then writes only proxy entries: a proxy key in the agent's own config
   (Claude Code's `settings.json` and Codex's and Hermes's `.env` get every proxy variable the agent reads, `HTTPS_PROXY`,
   `HTTP_PROXY` and for Codex and Hermes `ALL_PROXY`, in both spellings, so the programs they start reach the door too,

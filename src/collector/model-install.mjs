@@ -17,7 +17,7 @@ import { installComplete, itemsOfPhase, undoByHand, OFF_VERSION } from '../off/m
 import { writeStandalone } from '../off/standalone.mjs'
 import { standaloneFiles, switchFileIn } from '../off/paths.mjs'
 import { missingDirs } from '../off/fsutil.mjs'
-import { resolveLoc, readSrc, holds, isPresent, fileOf, inTrocar } from './core/proxymode/sources.mjs'
+import { resolveLoc, readSrc, holds, formsHere, fileOf, inTrocar } from './core/proxymode/sources.mjs'
 import { noProxyNames } from './core/proxymode/entries.mjs'
 import { placeWrapper, managedTree, targetOf } from './core/proxymode/hooks/wrapper.mjs'
 import { lineComment, removeTrocarText } from '../off/text-edit.mjs'
@@ -101,6 +101,7 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
   const m = readManifest(dir, fs) || newManifest(now())
   const stray = await strayRootRefusal({ os, m, rootStore }) // ㉔: before the first write
   if (stray) return { refusal: stray, manifest: null, fp256: null, items: [], carriers: [], pending: [], problems: [stray.reason], notes: [], exit: 1 }
+  if (!m.install) m.created_at = now().toISOString() // a manifest an unclean uninstall kept (install: null): this install starts now (1.6 C.3 failures.since)
   const before = JSON.stringify(m)
   const items = [], carriers = [], pending = [], problems = [], notes = [], installedHarnesses = [] // the last: read by finish(), which an install with no root reaches early
   // R5 / 附录 C.1: an item that is about no harness carries NO harness field (a `harness: null` is drift validateReceipt reports, a Windows test machine 2026-10-18)
@@ -203,7 +204,7 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
   // c · the carriers of every present form (P4) — of one harness's only, for the board's Set up (4.4 §控制面); the others' stay as they are
   for (const desc of harnesses.filter((d) => d.proxyMode && (!only || d.name === only))) {
     const pm = desc.proxyMode
-    const forms = pm.forms.filter((f) => f.os.includes(os) && isPresent(f, ctx))
+    const forms = formsHere(pm, os, ctx)
     if (!forms.length) continue
     installedHarnesses.push(desc.name)
     const done = new Map()
@@ -449,7 +450,7 @@ export function planInstall({ os, harnesses, ctx, home, owns, hookFile = null, f
     return why ? { file: loader, why } : null
   }
   for (const desc of harnesses.filter((d) => d.proxyMode)) {
-    const forms = desc.proxyMode.forms.filter((x) => x.os.includes(os) && isPresent(x, ctx))
+    const forms = formsHere(desc.proxyMode, os, ctx)
     for (const f of forms) {
       const c = f.cert === 'root' ? null : desc.proxyMode.certs[f.cert]
       const when = c && c.when ? holds(c.when, ctx) : true

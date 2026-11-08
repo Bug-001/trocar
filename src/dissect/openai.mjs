@@ -23,7 +23,7 @@ export const OPENAI_SECTIONS = [
 ];
 
 import { parsedRequestBody } from './request-body.mjs';
-import { endpointOf } from './endpoints.mjs';
+import { endpointOf, endOf } from './endpoints.mjs';
 import { streamParts } from './sse-spans.mjs';
 
 // ── detection ───────────────────────────────────────────────────────────────────────────────
@@ -161,14 +161,33 @@ export function itemToBlocks(item) {
 }
 
 // ── board projection: raw Responses request → flat block descriptors (same vocab as CC linearContext).
+const isObj = (x) => !!x && typeof x === 'object' && !Array.isArray(x);
+const isToolList = (x) => Array.isArray(x) && x.every(isObj);
+// Codex offers tools in an `additional_tools` item of input[]: tool definitions, not a conversation item. A tool list of another shape stays a json block.
+const isToolsItem = (it) => isObj(it) && it.type === 'additional_tools' && isToolList(it.tools) && it.tools.length > 0;
+// every tool entry of a Responses request and where it stands: tools[], then each additional_tools item. A `namespace` entry is one
+// (its name and description); its tools follow, each one of its own.
+function toolEntries(req) {
+  const out = [];
+  const walk = (list, path) => list.forEach((t, i) => {
+    const at = [...path, i], inner = isObj(t) && isToolList(t.tools) ? t.tools : null;
+    // a namespace's block is its own words (description, else name): its tools' bytes are theirs, never counted twice
+    const own = inner ? (typeof t.description === 'string' ? [...at, 'description'] : typeof t.name === 'string' ? [...at, 'name'] : at) : at;
+    out.push({ t, at: own, inner, input: path[0] === 'input' });
+    if (inner) walk(inner, [...at, 'tools']);
+  });
+  if (Array.isArray(req && req.tools)) walk(req.tools, ['tools']);
+  if (Array.isArray(req && req.input)) req.input.forEach((it, i) => { if (isToolsItem(it)) walk(it.tools, ['input', i, 'tools']); });
+  return out;
+}
 // Downstream board code (context window, callComp, flatBlockText, cacheBreak) reads sec/kind/role/name/
 // desc/schema/text/block — identical to CC — so Codex renders with ZERO board changes.
 export function boardFlat(req) {
   const flat = [];
-  const tools = Array.isArray(req && req.tools) ? req.tools : [];
-  tools.forEach((t, i) => {
-    const name = t.name || t.type || ('tool_' + i);         // built-in tools (tool_search/web_search) have no name
-    const schema = t.parameters !== undefined ? t.parameters : t;
+  for (const { t, at, inner, input } of toolEntries(req)) {
+    const name = t.name || t.type || ('tool_' + at.filter((x) => typeof x === 'number').pop());         // built-in tools (tool_search/web_search) have no name
+    // a namespace's tools are blocks of their own, not its bytes twice
+    const schema = t.parameters !== undefined ? t.parameters : inner ? { ...t, tools: undefined } : t;
     const desc = typeof t.description === 'string' ? t.description : '';
     const props = schema && schema.properties ? Object.keys(schema.properties) : [];
     const mcp = /^mcp/.test(name);
@@ -176,9 +195,9 @@ export function boardFlat(req) {
       sec: 'tools', kind: 'tool', role: 'tool', name, ttype: t.type || 'function',
       props, descChars: desc.length, cc: null, mcp, verbatim: true,
       desc, schema, resKey: mcp ? 'mcp::' + (name.split(/[._]/)[1] || name) : '',
-      key: 'T:' + name + ':' + desc.length + ':' + props.length, path: ['tools', i],
+      key: 'T:' + name + ':' + desc.length + ':' + props.length, path: at, ...(input ? { input: true } : {}),
     });
-  });
+  }
   const instr = typeof (req && req.instructions) === 'string' ? req.instructions : (req && req.instructions != null ? JSON.stringify(req.instructions) : '');
   if (instr) flat.push({ sec: 'system', kind: 'system', role: 'system', si: 0, label: sysLabel(instr), text: instr, chars: instr.length, volatile: false, cc: null, path: ['instructions'] });
   if (typeof (req && req.input) === 'string') { // the Responses API accepts a bare string input: one user block
@@ -188,6 +207,7 @@ export function boardFlat(req) {
   const input = Array.isArray(req && req.input) ? req.input : [];
   let mi = 0;
   for (const item of input) {
+    if (isToolsItem(item)) { mi++; continue } // the tools section's, above; mi stays the item's place in input[]
     let bi = 0;
     for (const { role, block, sub } of itemToBlocks(item)) {
       const type = block.type;
@@ -292,16 +312,19 @@ export function normRespChat(rec) {
   const events = Array.isArray(resp.raw_sse) ? resp.raw_sse : [];
   const body = resp.body && typeof resp.body === 'object' ? resp.body : null;
   const frames = events.length ? events : (body ? [body] : []);
-  let text = '', thinking = '', model = null, id = null, stop = null, usage = {};
+  let text = '', thinking = '', model = null, id = null, stop = null, usage = {}, error = false;
+  const open = new Set(), done = new Set();                   // choices seen that have not finished (n > 1: each must end)
   const acc = new Map();                                       // tool_calls arrive split across deltas
   for (const e of frames) {
     if (!e || typeof e !== 'object') continue;
+    if (e.error) error = true;                                // an error chunk: the stream's own failure
     if (e.usage) usage = e.usage;
     if (e.model) model = e.model;
     if (e.id) id = e.id;
     for (const c of Array.isArray(e.choices) ? e.choices : []) {
       if (!c || typeof c !== 'object') continue;
-      if (c.finish_reason) stop = c.finish_reason;
+      const ci = c.index ?? 0;
+      if (c.finish_reason) { stop = c.finish_reason; open.delete(ci); done.add(ci); } else if (!done.has(ci)) open.add(ci);
       if (c.usage) usage = c.usage;                             // Kimi reports usage inside the choice
       const d = c.delta || c.message || {};
       if (typeof d.reasoning_content === 'string') thinking += d.reasoning_content;
@@ -319,9 +342,10 @@ export function normRespChat(rec) {
     }
   }
   const tools = [...acc.values()].map((t) => ({ id: t.id, name: t.name, input: safeJson(t.args) }));
-  return { model, id, stop_reason: stop, usage, text, thinking: thinking || undefined, tools };
+  return { model, id, stop_reason: stop, usage, text, thinking: thinking || undefined, tools, ...(error ? { error } : {}), ...(open.size ? { unfinished: open.size } : {}) };
 }
 
+const messagesOf = (req) => (Array.isArray(req && req.input) ? req.input.filter((it) => !isToolsItem(it)).length : 0);
 // derived per-call counts the board header reads, per wire shape (Responses: input[]/instructions;
 // Chat: messages[] with the leading system messages as the system text).
 export function reqCountsFor(shape, req) {
@@ -333,8 +357,8 @@ export function reqCountsFor(shape, req) {
     return { message_count: Math.max(0, msgs.length - lead), tool_count: Array.isArray(req && req.tools) ? req.tools.length : 0, system_chars: sysChars };
   }
   return {
-    message_count: Array.isArray(req && req.input) ? req.input.length : 0,
-    tool_count: Array.isArray(req && req.tools) ? req.tools.length : 0,
+    message_count: messagesOf(req),
+    tool_count: toolEntries(req).length,
     system_chars: typeof (req && req.instructions) === 'string' ? req.instructions.length : 0,
   };
 }
@@ -347,7 +371,7 @@ export function reqCountsFor(shape, req) {
 // arrive as one server message each. A terminal response.completed / .incomplete / .failed carries the
 // output and usage; an `error` event with no terminal response is stop_reason 'error'. (Before the split an HTTP
 // stream ending in response.failed or an `error` event read as stop_reason null; it now says 'failed' / 'error',
-// and the `failed` hook below makes such a call an error step that is never a cache baseline — as on WebSocket.)
+// and the `ended` hook below makes such a call an error step that is never a cache baseline — as on WebSocket.)
 export function normEvents(events) {
   let completed = null;
   for (const e of events || []) if (e && /^response\.(completed|incomplete|failed)$/.test(e.type)) completed = e.response || completed;
@@ -362,9 +386,9 @@ export function normEvents(events) {
   }
   // fallback: if no response.completed (interrupted), stitch text from output_text.delta events
   if (!completed) for (const e of events || []) if (e && e.type === 'response.output_text.delta') text += e.delta || '';
-  const errored = !completed && (events || []).some((e) => e && e.type === 'error');
+  const errorEvent = (events || []).some((e) => e && e.type === 'error'), errored = !completed && errorEvent;
   return { model: (completed && completed.model) || null, id: (completed && completed.id) || null,
-    stop_reason: (completed && completed.status) || (errored ? 'error' : null), usage, text, thinking: undefined, tools: toolCalls };
+    stop_reason: (completed && completed.status) || (errored ? 'error' : null), usage, text, thinking: undefined, tools: toolCalls, ...(errorEvent ? { errorEvent } : {}) };
 }
 export function normResp(rec) {
   const resp = (rec && rec.resp) || (rec && rec.response) || {};
@@ -428,19 +452,23 @@ const CHAT_REPLY = {
   jsonBlocks: (body) => (Array.isArray(body.choices) ? body.choices : []).flatMap((c) => (c && c.message ? chatMessageToBlocks(c.message).map((x) => x.block) : [])),
 };
 
+// The reply's own terminal (3.1 `ended`), a closed list per wire: anything not named is null and keeps the rest of the failed rule.
+const RESPONSES_ENDS = Object.freeze({ ok: ['completed', 'incomplete'], failed: ['failed', 'error'] }); // normEvents: 'error' = an error event, no terminal
+const CHAT_ENDS = Object.freeze({ ok: ['stop', 'length', 'tool_calls', 'function_call', 'content_filter'], failed: [] }); // a failure is an error chunk
+export const responsesEnded = (norm) => endOf(RESPONSES_ENDS, [norm.stop_reason, ...(norm.errorEvent ? ['error'] : [])]); // an error event anywhere fails it
 export const RESPONSES = Object.freeze({
   id: 'openai-responses', provider: 'openai', blockKeys: ['tools', 'instructions', 'input'], fold: 'flat', rules: REPLY_RULES,
   boardFlat: (req) => boardFlat(req), normResp: (rec) => normResp(rec),
   reqCounts: (req) => reqCountsFor('responses', req), ctxTokens,
-  // the stream's terminal says the response failed, or an `error` event arrived with no terminal (normEvents)
-  failed: (norm) => norm.stop_reason === 'failed' || norm.stop_reason === 'error',
+  ended: responsesEnded,
   replyParts: (rec) => streamParts(rec, RESPONSES_REPLY),
-  messageCount: (req) => (Array.isArray(req && req.input) ? req.input.length : typeof (req && req.input) === 'string' ? 1 : 0),
+  messageCount: (req) => (typeof (req && req.input) === 'string' ? 1 : messagesOf(req)),
 });
 export const CHAT = Object.freeze({
   id: 'openai-chat', provider: 'openai', blockKeys: ['tools', 'messages'], fold: 'flat', rules: REPLY_RULES,
   boardFlat: (req) => boardFlatChat(req), normResp: (rec) => normRespChat(rec),
   reqCounts: (req) => reqCountsFor('chat', req), ctxTokens,
+  ended: (norm) => (norm.error ? 'failed' : norm.unfinished ? null : endOf(CHAT_ENDS, [norm.stop_reason])),
   replyParts: (rec) => streamParts(rec, CHAT_REPLY),
   messageCount: (req) => (Array.isArray(req && req.messages) ? req.messages.length : 0),
 });

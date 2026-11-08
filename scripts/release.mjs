@@ -6,6 +6,7 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { NATIVE, pins, sha256 } from '../src/collector/arch/darwin/native.mjs'
+import { isMain } from './is-main.mjs'
 
 const NATIVE_DIR = 'src/collector/arch/darwin/native'
 const LIFECYCLE = 'prepare prepack postpack prepublish prepublishOnly publish postpublish preinstall install postinstall preuninstall uninstall postuninstall preversion version postversion dependencies'.split(' ')
@@ -181,4 +182,4 @@ export async function main(argv, { io = stdio, root = REPO, run = realRun, fetch
   return 0
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) process.exitCode = await main(process.argv.slice(2))
+if (isMain(import.meta.url)) process.exitCode = await main(process.argv.slice(2))

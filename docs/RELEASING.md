@@ -77,7 +77,7 @@ Do the steps in order. If a step before step 6 fails, fix the cause on a branch,
 
 9. **Verify from the registry on a clean machine.**
    - `npm i -g trocar-cli@<x>`
-   - `trocar --version` prints `trocar <x>`
+   - `trocar --version` prints `trocar <x>+` and 7 hex (a hash of the code)
    - On the clean macOS and Windows test machines, run the one-line install exactly as the README shows it; it ends in `trocar install`'s plan.
    - `npm view trocar-cli@<x> dist.integrity` equals the integrity of the local tarball: `sha512-` followed by `openssl dgst -sha512 -binary dist/trocar-cli-<x>.tgz | openssl base64 -A`
 

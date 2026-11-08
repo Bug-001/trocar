@@ -37,8 +37,10 @@ import { gatherNetFacts } from '../netenv/facts.mjs'
 import { readAdopted } from '../netenv/adopt.mjs'
 import { buildTopology } from '../netenv/topology.mjs'
 import { diagnose } from '../netenv/findings.mjs'
+import { codeId } from '../version.mjs'
 import { captureHealth } from '../health/read.mjs'
-import { trustReasonText } from '../collector/core/codes.mjs'
+import { trustReasonText, CODE } from '../collector/core/codes.mjs'
+import { pacStale } from '../collector/core/proxymode/entries.mjs'
 import { formatStatus, formatHealth, failuresBlock, statusSummary, statusDetail } from './status-text.mjs'
 import { colors, noColor, tildeText, unknown as unknownText2 } from './text.mjs'
 import { squashed } from './words.mjs'
@@ -126,7 +128,10 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   try { f.manifest = { value: readManifest(dir, fs), error: null } } catch (e) { f.manifest = { value: null, error: `${path.join(dir, 'install-manifest.json')}: ${errText(e)}` } }
   if (f.manifest.value && f.manifest.value.unsupported) { f.manifest.error = `${path.join(dir, 'install-manifest.json')} is version ${JSON.stringify(f.manifest.value.version)}, which this trocar does not read`; f.manifest.value = null }
   const m = f.manifest.value
-  f.boardPort = readIngressConfig({ dir, fs }).boardPort ?? null // the board's url (C.3 `board`): install's record, read only
+  const ing = readIngressConfig({ dir, fs })
+  f.boardPort = ing.boardPort ?? null // the board's url (C.3 `board`): install's record, read only
+  const token = typeof ing.listenerToken === 'string' ? ing.listenerToken : null // the PAC key's source (P10): read only, never printed
+  const hd0 = (id) => (desc.value ? desc.value.find((d) => d.name === id) : null)
   // D61 / 1.6 §3.5: the login entry, asked as `on` asks it (the arch unit's registered()); only of an install — with none there is nothing to ask.
   // `deps.loginCache`: the query worker's (src/query/worker.mjs) — it keeps the answer while the files trocar's own commands write are unchanged
   const autostartP = daemonMayStart(m) ? import('../collector/net-deps.mjs').then((nd) => nd.loginEntry({ platform, home, env, run: deps.exec || null, script: deps.script || process.argv[1], unit: deps.unit, now: ms, stamp: deps.loginCache ? `${statKey(path.join(dir, 'install-manifest.json'), fs)}|${statKey(stateF, fs)}` : null })).catch((e) => { rethrowSandbox(e); return { entry: null, state: 'unknown', reason: `the login entry could not be read (${errMessage(e)})` } }) : null
@@ -184,6 +189,7 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   if (desc.value) {
     try { here = await (deps.presentForms || (await import('../collector/net-deps.mjs')).presentForms)({ os: platform, home, env, harnesses: desc.value, fs }) } catch (e) { rethrowSandbox(e); hereError = `which harnesses are on this machine could not be read (${errMessage(e)})` }
     if (isProxyMode(platform)) try { programs = await (deps.formPrograms || (await import('../collector/net-deps.mjs')).formPrograms)({ os: platform, home, env, harnesses: desc.value }) } catch (e) { rethrowSandbox(e); programs = null }
+    if (daemonMayStart(m)) try { f.outOfScope = await (deps.outOfScopeForms || (await import('../collector/net-deps.mjs')).outOfScopeForms)({ os: platform, home, env, harnesses: desc.value, fs }) } catch (e) { rethrowSandbox(e); f.outOfScope = [] } // it only says more: not knowing it changes no verdict
   }
   // a form a process can be on: of a host-program form only the host's own processes (its `hosts.processes`, D51 names); of a form carried by the
   // install-folder wrapper only its program, at its place or moved aside (4.11 P8). An exe not known, or programs not known, rules nothing out
@@ -199,9 +205,12 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
     const why = []
     const desired = fromReply && fromReply[id] ? (fromReply[id].desired === 'on' ? 'on' : 'off') : state ? (state.harnesses[id] && state.harnesses[id].desired === 'on' ? 'on' : 'off') : null
     if (desired === null) why.push(f.state.error)
-    const items = m ? entriesOf(m, id).map((e) => ({ item: e, ...entryState(e, fs) })) : []
+    const routes = (hd0(id) || {}).proxyMode ? hd0(id).proxyMode.routes || {} : {}
+    // trocar's stale PAC address, still in the entry: the app's fetch of it is refused (P10) until on writes the current one
+    const stale = (e) => pacStale(e, routes[e.route], token)
+    const items = m ? entriesOf(m, id).map((e) => { const s = entryState(e, fs); return { item: e, ...(s.state === 'intact' && stale(e) ? { state: 'changed', code: CODE.pacAddressStale, why: `${e.path}#${e.keys.join('.')} holds trocar's proxy settings address from before this install's key` } : s) } }) : []
     const bad = items.filter((x) => x.state === 'missing' || x.state === 'changed')
-    const entry = !m ? { state: 'unknown', why: f.manifest.error || `no install manifest in ${dir}` } : !installedIds.includes(id) ? { state: 'missing', why: 'the install manifest lists no entry of trocar\'s for it' } : bad.length ? { state: bad.some((x) => x.state === 'missing') ? 'missing' : 'changed', why: bad.map((x) => x.why).join('; ') } : items.find((x) => x.state === 'unknown') ? { state: 'unknown', why: items.filter((x) => x.state === 'unknown').map((x) => x.why).join('; ') } : { state: 'intact' }
+    const entry = !m ? { state: 'unknown', why: f.manifest.error || `no install manifest in ${dir}` } : !installedIds.includes(id) ? { state: 'missing', why: 'the install manifest lists no entry of trocar\'s for it' } : bad.length ? { state: bad.some((x) => x.state === 'missing') ? 'missing' : 'changed', why: bad.map((x) => x.why).join('; '), ...(bad.every((x) => x.code) ? { code: bad[0].code } : {}) } : items.find((x) => x.state === 'unknown') ? { state: 'unknown', why: items.filter((x) => x.state === 'unknown').map((x) => x.why).join('; ') } : { state: 'intact' }
     if (entry.state === 'unknown') why.push(entry.why)
     let procs
     // a process the daemon has not judged (proxy mode): the door's own rule (4.11 P11 status) — started after its forms' carriers, and inside an on
@@ -254,7 +263,7 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
     const hosts = read.errors.length ? [] : read.hosts
     const localUpstream = isProxyMode(platform) && hosts.length > 0 && hosts.every(isLoopbackHost)
     const judge = (cert = true, blocked = {}) => {
-      const j = judgeHarness({ desired, entryIntact: entry.state === 'intact' ? true : entry.state === 'unknown' ? null : false, entryWhy: entry.state === 'changed' ? 'entry-changed' : 'entry-missing', attached: att.attached, helper: f.link.helper, daemon: f.daemon.state, procs, installedAt, deadDoor: isProxyMode(platform), formsHere, cert, localUpstream, blocked, routeOf })
+      const j = judgeHarness({ desired, entryIntact: entry.state === 'intact' ? true : entry.state === 'unknown' ? null : false, entryWhy: entry.code || (entry.state === 'changed' ? 'entry-changed' : 'entry-missing'), attached: att.attached, helper: f.link.helper, daemon: f.daemon.state, procs, installedAt, deadDoor: isProxyMode(platform), formsHere, cert, localUpstream, blocked, routeOf })
       if (merged) j.rows = j.rows.map((r) => { const name = r.pid != null ? hitName(tableOf.get(r.pid), merged[id]) : null; return name ? { ...r, name } : r }) // the name the process matched (1.6 §9.7)
       return j
     }
@@ -532,7 +541,7 @@ export function statusDocOf(f) {
   const health = healthDocOf(f)
   const doc = {
     ...newReceipt('status'), ok: statusExit(f) === EXIT.ok, ...(health ? { health } : {}), changed: changedOf(f),
-    daemon: { running: d.state === 'running' ? true : d.state === 'not-running' ? false : null, pid: d.state === 'running' ? d.pid : null, responding: d.state === 'running' ? true : d.state === 'not-responding' ? false : null, since: (d.reply && d.reply.since) || (d.lock && d.lock.started_at) || null, code: (d.state === 'running' && d.reply && typeof d.reply.code === 'string' && d.reply.code) || null, error: d.reason || null }, // code: the daemon's own answer (C.3, D67⑤)
+    daemon: { running: d.state === 'running' ? true : d.state === 'not-running' ? false : null, pid: d.state === 'running' ? d.pid : null, responding: d.state === 'running' ? true : d.state === 'not-responding' ? false : null, since: (d.state === 'running' && d.reply && typeof d.reply.since === 'string' && d.reply.since) || null, code: (d.state === 'running' && d.reply && typeof d.reply.code === 'string' && d.reply.code) || null, runs_this_code: d.state === 'running' && d.reply && typeof d.reply.code === 'string' && d.reply.code ? d.reply.code === codeId() : null, error: d.reason || null }, // code: the daemon's own answer (C.3, D67⑤)
     harnesses: Object.fromEntries(f.harnesses.map((h) => [h.id, {
       desired: h.desired ?? null, captured: h.judged.captured, reason: reasonOf(h.judged), why: h.why, present: h.ownHere ?? null,
       setup: setupDocOf(f, h.id), forms: forms[h.id] || [], processes: h.judged.rows.filter((r) => r.pid != null).map((r) => ({ pid: r.pid, name: r.name ?? null, captured: r.captured, reason: r.reason ?? null, ...(r.cause ? { cause: r.cause } : {}), ...(r.negatives ? { negatives: r.negatives } : {}) })),
@@ -541,6 +550,7 @@ export function statusDocOf(f) {
     // a harness's topology says its verdict, the one `harnesses[h]` says (1.6 C.3), never one branch's
     ...(f.topology ? { topology: Object.fromEntries(Object.entries(f.topology).map(([h, x]) => { const j = f.harnesses.find((y) => y.id === h); return [h, j ? { ...x, captured: j.judged.captured, reason: reasonOf(j.judged) } : x] })) } : {}), ...(f.topology_error ? { topology_error: f.topology_error } : {}),
     board: boardOf(f), autostart: autostartOf(f),
+    ...(f.outOfScope && f.outOfScope.length ? { out_of_scope: f.outOfScope } : {}),
     install: f.install, cert: f.cert, holders: f.holders, relayed: f.relayed, ...(f.relayed === 'unknown' ? { relayed_reason: f.relayed_reason } : {}),
     connections: f.connections, ...(f.connections === 'unknown' ? { connections_reason: f.connections_reason } : {}),
     ...(f.linger ? f.linger : {}), user: f.user, agent_list: f.agent_list, restart: restartOf(f), critical: criticalOf(f), failures, errors,

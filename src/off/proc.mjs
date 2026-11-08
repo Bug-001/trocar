@@ -448,7 +448,7 @@ async function winTableViaDaemon(m) {
     // questions of `on` and `off` (op.lock's own pid, the daemon lock's) be answered without a powershell.exe start (D62, 1.6 §3.1).
     if (s && s.boot_id != null) m.winBoot = s.boot_id
     return rows
-  } catch (e) { m.notes.push(String((e && e.message) || e)); return null }
+  } catch (e) { m.notes.push(String((e && (e.reason || e.message)) || e)); return null }
 }
 /** The Windows table: the daemon's warm helper when this scope has a reader and it answers, else the one fixed PowerShell question. */
 async function procsOfWin({ exec, env }) {

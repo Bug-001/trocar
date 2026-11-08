@@ -19,6 +19,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { median } from './perf-query.mjs'
+import { isMain } from './is-main.mjs'
 
 const CLI = path.join(import.meta.dirname, '..', 'bin', 'trocar.mjs')
 const SELF = import.meta.filename
@@ -345,4 +346,4 @@ async function main(argv) {
   if (args.json) fs.writeFileSync(args.json, JSON.stringify(out, null, 2))
 }
 
-if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) main(process.argv.slice(2))
+if (isMain(import.meta.url)) main(process.argv.slice(2))

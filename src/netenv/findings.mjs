@@ -98,6 +98,16 @@ function notRoutedOf(c) {
   return { why: 'This form has no entry trocar can use.', commands: [gui(`Use ${c.h}'s CLI form instead`), trocar(c, `trocar status ${c.h}`)] }
 }
 
+/** A route `on` did not write, for its receipt's row (which names the place): `{ why, steps }` in the doctor's words (1.6 附录 B) — the steps as text,
+ *  the last one the command that writes it then. Only the reasons that need no more than the place: any other is null (the receipt keeps its code). */
+export function routeRefusal({ h, reason, at }) {
+  if (!['own-egress', 'blocker', 'unreadable', 'blocker-unreadable', 'absent', 'credentialed-own-leg', 'no-path', 'no-applied-entry'].includes(reason)) return null
+  // the receipt's row already names the place: the setting of the user's is "there", said once
+  if (reason === 'own-egress' || reason === 'blocker') return { why: `It holds a setting of yours, which keeps ${h} off any entry trocar can use.`, steps: ['Remove your value there', `run: trocar on ${h}`] }
+  const r = notRoutedOf({ h, sh: 'sh', fm: { route: { reason, at } } })
+  return { why: r.why, steps: r.commands.map((x) => (x.shell === 'gui' ? x.run : `run: ${x.run}`)) }
+}
+
 /** The catalogue (附录 B). `applies` is `diagnose`'s business; each entry says what it is. `cls` is the class, or a function of the context where it depends (`proxy-changed`). */
 // a negative-cache finding's words by the cause the engine recorded for this harness's processes (any cause else: trocar's certificate refused). The
 // sentence names every pid and host of that cause in this harness's entries (hf.negatives), and when trocar tries them again (the latest retry_at),
@@ -138,6 +148,8 @@ export const FINDINGS = {
   'link-missing': { cls: 'problem', trocarFirst: true, what: () => 'Capture is on, but trocar is not attached, so nothing is captured.', why: () => 'New connections go straight out.', commands: (c) => [trocar(c, `trocar on${c.h ? ` ${c.h}` : ''}`)], verify: () => 'trocar status' },
   'entry-missing': { cls: 'problem', trocarFirst: true, what: (c) => `${c.h}'s setting that points at trocar is gone.`, why: () => 'It was removed, or it was never written.', commands: (c) => installFix(c) || [trocar(c, `trocar on ${c.h}`)], verify: (c) => `trocar status ${c.h}` },
   'entry-changed': { cls: 'problem', trocarFirst: true, what: (c) => `${c.h}'s setting that points at trocar holds something else now.`, why: () => 'You, or another program, changed what trocar wrote.', commands: (c) => installFix(c) || [trocar(c, `trocar off ${c.h}`), trocar(c, `trocar on ${c.h}`)], verify: (c) => `trocar status ${c.h}` },
+  // 4.11 P10: trocar's own earlier PAC address, still in the entry; on writes the current one over it
+  'pac-address-stale': { cls: 'problem', trocarFirst: true, what: (c) => `${c.h}'s setting holds trocar's proxy settings address from before this install's key, so its calls are not captured.`, why: () => 'trocar refuses that address, so the app has no proxy settings from trocar and connects without it.', commands: (c) => [trocar(c, `trocar on ${c.h}`)], verify: (c) => `trocar status ${c.h}` },
   // by the engine's cause (1.6 附录 B): an entry ends at its retry time, or now by `trocar on <harness>`; a restart helps only a refused trocar certificate
   'negative-cache': { cls: 'problem', trocarFirst: true, what: (c) => NEG[negCause(c)].what(negOf(c)), why: (c) => NEG[negCause(c)].why(negOf(c)), commands: (c) => NEG[negCause(c)].commands(c), verify: (c) => `trocar status ${c.h}` },
   // 4.11 P11 status 4–5: the door has not seen this life and history cannot tell — a note with no restart step (1.6 附录 B, §2 判词)
@@ -198,7 +210,9 @@ export const FINDINGS = {
   'prior-proxy-unknown': { cls: 'note', trocarFirst: false, what: (c) => `trocar could not recover the proxy ${c.h}${c.pids && c.pids.length ? ` (pid ${c.pids.join(', ')})` : ''} started with.`,
     why: () => 'The process that set it has quit, so trocar uses the system proxy, or none.', commands: (c) => [gui(setAt(c.h, placeOf(c.hf, null), unknownValue('proxy address', 'env-unreadable'))), trocar(c, `trocar on ${c.h}`), gui(`Restart ${c.h}`)],
     verify: (c) => `trocar status ${c.h}` },
-  'collectors-online': { cls: 'problem', trocarFirst: true, what: (c) => `Capture is still on${c.online ? ` for ${c.online}` : ''}, so nothing was uninstalled.`, why: () => 'trocar never turns capture off for you.', commands: (c) => [trocar(c, 'trocar off'), trocar(c, 'trocar uninstall')], verify: () => 'trocar status' },
+  'collectors-online': { cls: 'problem', trocarFirst: true, what: (c) => `Capture is still on${c.online ? ` for ${c.online}` : ''}, so nothing was uninstalled.`, why: () => 'trocar never turns capture off for you.', commands: (c) => [...(c.online || !(c.holders || []).length ? [trocar(c, 'trocar off')] : []),
+    // a process started while capture was on keeps trocar in its environment until it exits, and off cannot end it: quit it, and end what outlives that
+    ...[...new Set((c.holders || []).map((x) => x.harness))].flatMap((h) => [gui(`Quit ${h}; if one of these is still running after that, end it:`), ...c.holders.filter((x) => x.harness === h).map((x) => os(c, { linux: `kill ${x.pid}`, darwin: `kill ${x.pid}`, win32: `Stop-Process -Id ${x.pid}` }))]), trocar(c, 'trocar uninstall')], verify: () => 'trocar status' },
   // The user named the harness, and nothing in the facts explains it. trocar has no fact that says an agent cannot connect, so this does not claim it: a condition, a note.
   'cause-unknown': { cls: 'note', trocarFirst: true, what: (c) => `If ${c.h} still cannot connect: trocar found no cause on its side.`, why: () => 'Nothing trocar read explains it.',
     commands: (c) => [trocar(c, `trocar off ${c.h}`), gui(`Try ${c.h} again: if it still fails, trocar is not the cause; if it works, run trocar on ${c.h} and then trocar doctor ${c.h}`)], verify: (c) => `Try ${c.h} again` },

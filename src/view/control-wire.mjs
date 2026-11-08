@@ -22,6 +22,7 @@
 // in the detail form too; ctl.omitted names them whenever the record has them.
 // Envelope fields only — no provider knowledge, no host or endpoint literal (invariant 3). Pure over the record.
 import { captureLabelsOf, bodyRetentionOf, reqIncompleteOf, isLogOnly } from '../dissect/capture-labels.mjs';
+import { closedAfterEnd } from '../dissect/registry.mjs';
 import { nonIdentityEncoding, requestEncodingOf } from '../dissect/request-body.mjs';
 import { headerOf } from '../dissect/harnesses.mjs';
 import { isSecretHeader } from '../capture/redact.mjs';
@@ -191,7 +192,7 @@ export function controlRecordWire(input, { detail = true, reveal = null } = {}) 
   try {
     const hostHeader = headerOf(rec, 'host');
     const norm = (h) => (h ? String(h).toLowerCase().replace(/:\d+$/, '') : null);
-    const labels = captureLabelsOf(rec);
+    const labels = captureLabelsOf(rec, !!closedAfterEnd(rec));
     const inc = reqIncompleteOf(rec); // the request-body labels live in reqIncompleteOf (capture-labels.mjs), not in captureLabelsOf
     if (inc) labels.push({ id: 'req-incomplete', label: inc.truncated ? 'Request cut at the capture cap' : 'Request never finished', text: inc.text });
     const ctl = {

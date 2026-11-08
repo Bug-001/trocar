@@ -78,6 +78,7 @@ export const CODE = Object.freeze({
   upstreamHeaderIgnored: 'upstream-header-ignored', // X-Trocar-Upstream from a form whose hook does not send it: ignored, recorded without its value (4.11 P7 · ⑥)
   holdersUnreadable: 'holders-unreadable', // the holder poll could not read the process table: the doors kept for holders stay (4.11 P12)
   pacPeerRefused: 'pac-peer-refused', // the PAC door (no credentials) refused a peer that is not this user's process, or whose user could not be told (4.11 P10)
+  pacAddressStale: 'pac-address-stale', // this user's program asked for the PAC at an address without the install's key (written before it): refused, way out trocar on (4.11 P10)
   pacOwnerUnread: 'pac-owner-unread', // the PAC door could not tell whose process asked for the PAC, and served it without the door (4.11 P10)
 })
 

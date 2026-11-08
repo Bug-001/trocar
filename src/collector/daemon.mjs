@@ -10,7 +10,7 @@ import tls from 'node:tls'
 import os from 'node:os'
 import path from 'node:path'
 import { trocarHome, collectorHome, rawHome } from '../paths.mjs'
-import { codeId, setupHelperCommand } from '../version.mjs'
+import { codeIdAsync, setupHelperCommand } from '../version.mjs'
 import { startSealing, forkSealer } from './seal-queue.mjs'
 import { createIndexKeeper } from './index-keeper.mjs'
 import { parseSegment } from './core/record/segments.mjs'
@@ -50,6 +50,9 @@ import { createModelCollector, replacesDaemon } from './core/proxymode/collector
 import { TEMPLATES } from './harness/templates/index.mjs'
 import { readStateFile } from '../off/state.mjs'
 
+/** When this process started, from the OS's own clock of it: the daemon's uptime (1.6 C.3 `daemon.since`). Set once, as the module loads in the daemon. */
+const SINCE = new Date(Date.now() - Math.round(process.uptime() * 1000)).toISOString()
+
 export { loadArch } // the CLI reaches arch only through this file (layering rule 5)
 
 /** What `trocar status` and `doctor` need to draw the network topology (1.6 §9.7). It lives in ./net-deps.mjs — the small arch-facing entry, so a
@@ -62,7 +65,13 @@ const errText = (e) => String((e && e.message) || e)
 const BUNDLE_BUSY_MS = 2000 // a bundle rebuild that found the op lock held (1.6 R12) is tried again after this long ...
 const BUNDLE_BUSY_RETRIES = 30 // ... at most this many times; the daily round is the next chance after that
 const OFF_HINT = 'capture is switched off for this harness (its desired state is off); it is not judged, not watched and not counted as untrusted'
-const VERSION = (() => { try { return codeId() } catch { return null } })() // which code this daemon runs (D67⑤): `code` on the control channel, and the version of its daemon-start record. null: said as unknown in daemon-start
+// which code this daemon runs (D67⑤): `code` on the control channel, and the version of its daemon-start record. Outside a git checkout it is a hash of
+// the code: read without holding the event loop, started at the daemon's entry so it runs beside the rest of the start, and awaited only where the code
+// is said (D62①: `on`'s first question is answered as soon as the daemon listens). null: said as unknown
+let ownCode
+const VERSION = () => (ownCode ??= codeIdAsync().catch(() => null))
+// `code` is a value a test passes, or VERSION itself
+const codeOf = async (c) => (typeof c === 'function' ? c() : c)
 // (startDaemon's `code` defaults to it; a test's stand-in login entry passes the code it stands for, since the daemon it starts runs in-process)
 // Every failure record carries a code (trocar's name from src/health/codes.mjs, or the errno): the fold key (D-3).
 const coded = (e, code) => Object.assign(new Error(errText(e)), { code: (e && e.code) || code })
@@ -325,13 +334,15 @@ function boardFor({ P, failure, query, tips, log = () => {} }) {
     start() { started = listen(); return started },
     state: () => ({ ...st }),
     tokenAnswer,
-    routes: (r) => ({ ...r, 'GET /status': async (q) => { const a = await r['GET /status'](q); await started; return { ...a, board: { ...st } } }, 'GET /board': tokenAnswer }),
+    // every daemon's GET /status passes here: the board's state, and `since`, this process's own start (1.6 C.3 `daemon.since`), not a token from its lock
+    routes: (r) => ({ ...r, 'GET /status': async (q) => { const a = await r['GET /status'](q); await started; return { ...a, since: SINCE, board: { ...st } } }, 'GET /board': tokenAnswer }),
     stop() { stopped = true; if (server) { server.close(); server.closeAllConnections(); server = null } },
   }
 }
 
 async function runDaemon({ dir, env = process.env, arch = null, harnesses = null, socketPath = null, enginePort = null, upstreamCa = undefined, log, identity = null, code = VERSION, lockRefreshMs = 1000, stopGraceMs = 2000, foreground = false, caCheckMs = 24 * 3600e3, bundleMs = 24 * 3600e3, checkMs = 5000, foldMs = 10_000, home = null, model = {}, fork, queryIdleMs }) {
   const P = collectorPaths(dir)
+  codeOf(code) // the code's hash starts now, beside the rest of the start (awaited where it is said)
   const netHome = home || env.HOME || os.homedir() // whose agents' settings the 5 s check looks at: the user the daemon runs as
   const failure = createFailureRecorder(P.dir, { log })
   // The arch is loaded once, here at the entry (loadParts below takes it back): the platform's start gates and endpoint come before anything is claimed.
@@ -673,10 +684,6 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     const loopWatch = createLoopWatch({ everyMs: lockRefreshMs, write: failure.event }) // failure.event for its fold; the record's own event wins, so it stays a state event
     const lockTimer = setInterval(() => { loopWatch.tick(); bumpLock() }, lockRefreshMs)
     lockTimer.unref()
-    // lifecycle (D-24): readers fold conditions from the last daemon-start; upstream_ca = the daemon's own
-    // NODE_EXTRA_CA_CERTS (W-4: relays with a private CA rely on it), linger = whether logout ends this daemon
-    failure.write({ event: 'daemon-start', pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, version: code, foreground: !!foreground,
-      upstream_ca: env.NODE_EXTRA_CA_CERTS || null, linger: typeof redirector.linger === 'function' ? redirector.linger() : null })
     syncTracker() // before the first rescan: a harness that is off at start is never judged
     tracker.start()
     if (sw.anyOn()) await tracker.rescan() // with nothing on no helper follows exec / exit, so a table built now could not be kept true; the first `on` scans
@@ -747,7 +754,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       // processes of this user whose exe cannot be read and whose command line fits no harness: seen, not judged (4.6 exe-unreadable)
       const unjudged = (typeof redirector.unreadable === 'function' ? redirector.unreadable() : []).filter((u) => !registry.couldMatch({ os: A.os, exe: null, env: null, argv: u.argv, comm: u.comm }).length)
       return {
-        code, // D67⑤: which code this daemon runs, as `trocar --version` says it — `trocar update` compares the two
+        code: await codeOf(code), // D67⑤: which code this daemon runs, as `trocar --version` says it — `trocar update` compares the two
         ...(await sw.report()),
         engine: { port, v6: v6Error ? null : port, v6_error: v6Error, ...engine.stats() },
         negatives: engine.negatives(), // (pid, host) pairs no longer decrypted until the process exits (D-12)
@@ -810,6 +817,11 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     markReady()
     board.start() // never fails the start: a board that cannot listen is a state and a record
     query.svc.sweep() // the read route is up: a tier-0 head for every session without one (4.4 §答案文件, 3.5 §谁执行它)
+    // lifecycle (D-24): readers fold conditions from the last daemon-start (and keep what came up to 60 s before it); upstream_ca = the daemon's own
+    // NODE_EXTRA_CA_CERTS (W-4: relays with a private CA rely on it), linger = whether logout ends this daemon. Written once the daemon answers, as the
+    // model daemon writes it: it carries the code, and `on`'s first question never waits for that hash (D62①)
+    failure.write({ event: 'daemon-start', pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, version: await codeOf(code), foreground: !!foreground,
+      upstream_ca: env.NODE_EXTRA_CA_CERTS || null, linger: typeof redirector.linger === 'function' ? redirector.linger() : null })
 
     // stop({signal}) — signal: what stopped it (SIGTERM, SIGINT, SIGHUP = the terminal closed or the user logged out,
     // SIGQUIT), else `reason`. Returns {failed: [where…]}: a step that failed makes `collector start` exit non-zero. It
@@ -912,7 +924,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
     // what it holds in memory, so this costs nothing. Without it `status` said "Connections unknown (the daemon's reply does not
     // carry the connection counts)" on every model-mode machine — a reason about trocar's own IPC (a macOS test machine 2026-10-18).
     const off = new Set(list.filter((x) => !collector.isOn(x.name)).map((x) => x.name))
-    return { code, pid: process.pid, doors: collector.doors(), upstreams: collector.upstreams(), harnesses: hs, holders: collector.polledHolders(), agents: collector.verdicts(), negatives: engine.negatives(), relayed: relayedOf(engine, off, collector.leaving()), cert: { key: st === 'key-missing' ? 'missing' : st === 'unavailable' ? 'unknown' : 'present', intermediate: st, expires: collector.issuer.expires() }, engine: engine.stats() }
+    return { code: await codeOf(code), pid: process.pid, doors: collector.doors(), upstreams: collector.upstreams(), harnesses: hs, holders: collector.polledHolders(), agents: collector.verdicts(), negatives: engine.negatives(), relayed: relayedOf(engine, off, collector.leaving()), cert: { key: st === 'key-missing' ? 'missing' : st === 'unavailable' ? 'unknown' : 'present', intermediate: st, expires: collector.issuer.expires() }, engine: engine.stats() }
   }
   const body = (q) => (q && q.body && typeof q.body === 'object' ? q.body : {})
   // the daemon's own identity, as it writes it into its lock (below): the read route hands it back, and an answer on the token-checked channel is
@@ -936,13 +948,13 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
     'POST /helper': gate(async (q) => {
       const { verb, args } = body(q)
       const self = selfId ? { pid: process.pid, start_time: selfId.start_time ?? null, boot_id: selfId.boot_id ?? null } : null
-      const no = (error) => ({ ok: false, error, ...(self ? { self } : {}) })
+      const no = (error, code = null) => ({ ok: false, error, ...(code ? { error_code: code } : {}), ...(self ? { self } : {}) }) // the code apart, so the reader says it in words
       if (!DAEMON_READ_VERBS.includes(verb)) return no(`${JSON.stringify(verb ?? null)} is not one of the daemon's read verbs`)
       if (!parts.helper) return no('this daemon reads the OS without a resident helper, so it has none to ask')
       // `reg-read` names a registry key, so the ARGUMENTS are checked here too, against the one allow-list the helper itself checks against
       // (4.8 §7, W26: the daemon refuses an out-of-list key before its helper is asked). No checker, no reg-read.
       if (verb === 'reg-read' && !(typeof parts.regReadAllowed === 'function' && parts.regReadAllowed(args && typeof args === 'object' ? args : {}))) return no(`reg-read outside the allow-list: ${JSON.stringify(args ?? null)}`)
-      try { return { ok: true, data: await parts.helper.call(verb, args && typeof args === 'object' ? args : {}, { timeoutMs: verb === 'ps' ? 10000 : 2000 }), ...(self ? { self } : {}) } } catch (e) { return no(`${verb}: ${String((e && (e.code || e.message)) || e)}`) }
+      try { return { ok: true, data: await parts.helper.call(verb, args && typeof args === 'object' ? args : {}, { timeoutMs: verb === 'ps' ? 10000 : 2000 }), ...(self ? { self } : {}) } } catch (e) { return no(`${verb}: ${String((e && e.message) || e)}`, (e && e.code) || null) }
     }),
     'POST /on': gate(async (q) => { exitAsked++; clearInterval(exitTimer); const b = body(q); return { ...(await collector.on(b)), retried: retryNow(engine, failure, Array.isArray(b.harnesses) ? b.harnesses : []) } }),
     // `exit` stops the daemon once it may (no harness on, no holder, no connection); with `now` its connections were just cut and it stops at
@@ -978,7 +990,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
     const loopWatch = createLoopWatch({ everyMs: lockRefreshMs, write: failure.event }) // see runDaemon's copy
     const lockTimer = setInterval(() => { loopWatch.tick(); bumpLock() }, lockRefreshMs); lockTimer.unref()
     const listTimer = setInterval(() => { const l = nextAgentList(); if (l) { agents = l.entries; registry.replaceAgentList(agents) } }, 5000); listTimer.unref()
-    failure.write({ event: 'daemon-start', pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, version: code, foreground: !!foreground, upstream_ca: env.NODE_EXTRA_CA_CERTS || null, linger: null })
+    failure.write({ event: 'daemon-start', pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, version: await codeOf(code), foreground: !!foreground, upstream_ca: env.NODE_EXTRA_CA_CERTS || null, linger: null })
     let stopping = null, markExited
     const exited = new Promise((r) => { markExited = r })
     const doStop = async ({ signal = null, reason = null, who = null, seal: sealLast = false } = {}) => {

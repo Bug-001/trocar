@@ -11,6 +11,7 @@ import { capCard } from '../../web/src/screens/overview/model.mjs'
 import { ALIASES, harnessKey } from '../../web/legacy/core/chips.mjs'
 import { COMMANDS, CHANGE_REMOVAL, UNKNOWN_REASON, CONDITION_KIND, LOG } from '../../web/legacy/labels/capture.mjs'
 import { redactUrlCredentials } from '../../web/legacy/core/sensitive.mjs'
+import { mark } from '../../web/legacy/core/ui.mjs'
 import { failureWord, FAILURE_WORDS } from '../../src/cli/words.mjs'
 import { STATUS_REASONS } from '../../src/health/codes.mjs'
 import { foldFlows } from '../../src/health/flows.mjs'
@@ -76,6 +77,19 @@ test('M3: a proxy URL\'s userinfo is hidden everywhere in the model, product and
   assert.ok(all.includes('***@'))
   for (const s of [r.copy, r.diag]) assert.ok(s.includes('***@'), s)
   for (const s of [all, r.copy, r.diag, m.service.copy, m.service.diag]) for (const bad of ['alice:pw', 'PlantedVpnName', 'PlantedProductName']) assert.equal(s.includes(bad), false, bad)
+})
+
+test('1.6 C.3 inferred: a hop reached by an inferred edge is marked inferred on the path, as an inferred node is; a measured one is not', () => {
+  const INF = mark('inf').replace(/<[^>]*>/g, '')
+  const pathOf = (edges, nodes = [{ id: 'a', name: 'claude-code' }, { id: 'x', name: 'internet' }]) => {
+    const r = rowOf(model(doc({ hs: { codex: {} }, topology: { codex: { at: T, routing: 'proxy', captured: false, nodes, edges, branches: [{ path: ['a', 'x'] }] } } })), 'codex')
+    const p = r.tech.find((x) => x.k === 'path')
+    return p.v.text ?? p.v.mono ?? JSON.stringify(p.v)
+  }
+  assert.ok(pathOf([{ from: 'a', to: 'x', via: 'direct', inferred: true }]).includes(`internet ${INF}`))
+  assert.ok(!pathOf([{ from: 'a', to: 'x', via: 'direct' }]).includes(INF))
+  assert.ok(!pathOf([{ from: 'x', to: 'a', via: 'direct', inferred: true }]).includes(INF), 'only the edge that reaches the hop on this path')
+  assert.ok(pathOf([{ from: 'a', to: 'x', via: 'direct' }], [{ id: 'a', name: 'claude-code' }, { id: 'x', name: 'internet', inferred: true }]).includes(`internet ${INF}`))
 })
 
 // the userinfo a proxy URL can carry: [userinfo as written, the parts that must not show]

@@ -26,7 +26,7 @@ import { makeIssuer } from '../tls/issuer.mjs'
 import { bypassHit } from '../upstream-shape.mjs'
 import { hostSetOf } from '../host-agent.mjs'
 import { configuredHosts, userCertFilesOf } from './sources.mjs'
-import { priorRecordOf } from './entries.mjs'
+import { priorRecordOf, pacPath } from './entries.mjs'
 import { CODE } from '../codes.mjs'
 import { agentTrustSet, createAgentTrust, CERT_VARS } from './upstream-trust.mjs'
 import { redactProxyUrl } from '../../../netenv/redact.mjs'
@@ -291,11 +291,21 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
   const servePac = limited(async ({ peer, user, path: p, left = async () => false }, { within, late }) => {
     const d = doors.get(user)
     if (!d || d.auth) return null
+    // the install's key first, whoever asks (P10): the PAC is a capability, since an owner that cannot be read may be another user's (macOS, no root)
+    let at = null
+    try { at = pacPath(tokenOf().listenerToken) } catch { /* no ingress.json to read: no key, nothing served */ }
+    const keyed = !!at && new URL(p, 'http://door').pathname === at
     const { pid: q, why: ownerWhy, sameUser } = await within(ident.owningPid(peer), { pid: null })
     const read = q != null ? await within(ident.factsCached(q), null) : null
     const facts = read || (sameUser ? { sameUser: true } : null) // the socket table's own-user proof stands when the pid's facts cannot be read (P10)
     const why = late() ? 'door-deadline' : ownerWhy || (q != null && !read ? (ident.cache.get(q) || {}).unread || null : null)
     const a = peerAllowed({ ...(facts || {}), pid: q }, self), mine = a.ok
+    // no key: refused whoever asks; the owner only names the reason (D38) — this user's own app at an address from before the key is not a stranger
+    if (!keyed) {
+      record(mine ? { event: 'failure', where: 'ingress', code: CODE.pacAddressStale, peer, reason: "your program asked for trocar's proxy settings file (PAC) at an address without this install's key, written before it; it was refused, so the app has no PAC. Run: trocar on" }
+        : { event: 'failure', where: 'ingress', code: CODE.pacPeerRefused, peer, reason: "a request for trocar's proxy settings file (PAC) was refused: it did not carry this install's key" })
+      return null
+    }
     if (!mine && !a.unread) { // another user's, for certain: refused (P10)
       record({ event: 'failure', where: 'ingress', code: a.code, peer, reason: `a request for trocar's proxy settings file (PAC) was refused: ${a.detail}` })
       return null
@@ -308,7 +318,7 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     if (mine && m.reason === 'match' && onSet.has(m.agent)) seen.add({ harness: m.agent, group: d.g, pid: q, start: facts.startedAt ?? null, kind: 'pac' }) // taking the PAC is reading the entry (P12)
     const leg = await pacLeg({ systemProxy: systemProxy(), isTrocarDoor: (v) => isTrocarDoorUrl(v, { ports: [...doors.values()].map((x) => x.port) }) }) // what this door dials too
     let res = { status: 404, headers: {}, body: '' }
-    pacHandler({ state: () => ({ door: mine && onSet.has(d.harness) ? `127.0.0.1:${d.port}` : null, ownLeg: leg.url, bypass: leg.bypass }) })({ method: 'GET', url: p }, { writeHead: (status, headers) => { res = { status, headers, body: '' } }, end: (b) => { res.body = b } })
+    pacHandler({ path: at, state: () => ({ door: mine && onSet.has(d.harness) ? `127.0.0.1:${d.port}` : null, ownLeg: leg.url, bypass: leg.bypass }) })({ method: 'GET', url: p }, { writeHead: (status, headers) => { res = { status, headers, body: '' } }, end: (b) => { res.body = b } })
     return res
   })
 

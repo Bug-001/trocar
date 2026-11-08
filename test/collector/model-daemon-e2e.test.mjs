@@ -63,6 +63,8 @@ for (const platform of ['darwin', 'win32']) {
         assert.deepEqual([notes.at(-1).kind, notes.at(-1).outcome, notes.at(-1).harnesses], ['result', 'on', ['codex']], JSON.stringify(notes.at(-1)))
         const ep = controlEndpointFor({ platform, dir: w.dir, env: w.env })
         const st = await ep.request({ socketPath: ep.socketPath, method: 'GET', path: '/status' })
+        // C.3 `daemon.since`: the daemon's own start, an ISO time not after now (`trocar status` prints its uptime from it)
+        assert.ok(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$/.test(st.since) && Date.parse(st.since) <= Date.now(), `since: ${st.since}`)
         const [g, port] = Object.entries(st.doors).find(([k]) => k.startsWith('codex:')) || []
         assert.ok(g, `the daemon opened codex's door: ${JSON.stringify(st.doors)}`)
         assert.equal(await canConnect(port), true, 'the door listens')
@@ -74,6 +76,7 @@ for (const platform of ['darwin', 'win32']) {
         assert.equal(sr.exit, STATUS_EXIT, io3.text())
         const sj = JSON.parse(io3.text().slice(io3.text().indexOf('{')))
         assert.deepEqual(validateReceipt(sj), [], 'status --json validates')
+        assert.equal(sj.daemon.since, st.since, 'status carries the daemon\'s own start')
         assert.equal(sj.harnesses.codex.captured, true, io3.text()) // 附录 C.3: the harnesses are a map, each with its own forms
         assert.equal(sj.cert.intermediate.state, 'current'); assert.match(sj.cert.intermediate.expires, /^\d{4}-/)
         assert.equal(sj.install.state, 'complete')

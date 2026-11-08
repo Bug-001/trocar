@@ -37,10 +37,15 @@ export function sourcesCtx({ os, home, env = process.env, cwd = process.cwd(), d
  *  { <harness>: [form id] } — an empty list = none of them is installed. With no names `status` lists the harnesses with one beside the ones trocar's
  *  own records know (1.6 §3.5); a harness with none is not captured (4.11 P5). Reads only. */
 export async function presentForms({ os, home, env = process.env, harnesses, fs = nodeFs }) {
-  const [{ dirsOf }, { isPresent }] = await Promise.all([os === 'darwin' ? import('./darwin/policy.mjs') : import('./win32/policy.mjs'), import('../core/proxymode/sources.mjs')])
+  const [{ dirsOf }, { formsHere }] = await Promise.all([os === 'darwin' ? import('./darwin/policy.mjs') : import('./win32/policy.mjs'), import('../core/proxymode/sources.mjs')])
   const ctx = sourcesCtx({ os, home, env, dirs: dirsOf(home, env), fs })
-  const here = (d) => d.proxyMode.forms.filter((f) => f.os.includes(os))
-  return Object.fromEntries(harnesses.filter((d) => d.proxyMode && here(d).length).map((d) => [d.name, here(d).filter((f) => isPresent(f, ctx)).map((f) => f.id)]))
+  return Object.fromEntries(harnesses.filter((d) => d.proxyMode && d.proxyMode.forms.some((f) => f.os.includes(os))).map((d) => [d.name, formsHere(d.proxyMode, os, ctx).map((f) => f.id)]))
+}
+
+/** 4.11 CM43, C.3 `out_of_scope`: the out-of-scope forms status names on this machine (sources.mjs scopeNamed). Reads only. */
+export async function outOfScopeForms({ os, home, env = process.env, harnesses, fs = nodeFs }) {
+  const [{ dirsOf }, { scopeNamed }] = await Promise.all([os === 'darwin' ? import('./darwin/policy.mjs') : import('./win32/policy.mjs'), import('../core/proxymode/sources.mjs')])
+  return scopeNamed(harnesses, os, sourcesCtx({ os, home, env, dirs: dirsOf(home, env), fs }))
 }
 
 /** The program files a process of a form runs, for each form of this OS whose certificate carrier is the install-folder wrapper (4.11 P8: one native
@@ -48,7 +53,7 @@ export async function presentForms({ os, home, env = process.env, harnesses, fs 
  *  it) is on none of those forms (4.11 P5). Paths only, nothing is read. */
 export async function formPrograms({ os, home, env = process.env, harnesses }) {
   const [{ dirsOf, platformFacts }, { targetOf }] = await Promise.all([os === 'darwin' ? import('./darwin/policy.mjs') : import('./win32/policy.mjs'), import('../core/proxymode/hooks/wrapper.mjs')])
-  const ctx = { ...sourcesCtx({ os, home, env, dirs: dirsOf(home, env) }), facts: typeof platformFacts === 'function' ? platformFacts({ env }) : platformFacts }
+  const ctx = { ...sourcesCtx({ os, home, env, dirs: dirsOf(home, env) }), facts: platformFacts({ env }) }
   const out = {}
   for (const d of harnesses) {
     for (const f of (d.proxyMode && d.proxyMode.forms) || []) {
@@ -86,7 +91,7 @@ export async function backendsFor({ os, home, run = null, env = process.env, fs 
       // the gate before install writes anything asks the helper trocar ships: the one in ~/.trocar/bin is install's to place (1.6 §3.2)
       gateCustody: keychainCustody({ helperPath: nativePath(NATIVE.signHelper, env), run, env }), rootStore: userRootStore({ home, run, env, fs }),
       installHelper: (interactive) => installHelper({ dest: helperPath, interactive, run, env, fs }),
-      wrapperKit: { renderWrapper }, facts: pol.platformFacts, dirs: pol.dirsOf(home), policy: pol.policyReader({ run, env }),
+      wrapperKit: { renderWrapper }, facts: pol.platformFacts({ run, env }), dirs: pol.dirsOf(home), policy: pol.policyReader({ run, env }),
     }
   }
   if (os === 'win32') {
@@ -183,16 +188,18 @@ export async function doorPartsFor({ os, env = process.env, event = () => {}, fa
 /** The proxy-mode half of status's facts on macOS / Windows (1.6 §9.7, 4.11 CM21): the model's per-form reader over this user's install manifest, the daemon's
  *  reply and `chainSp` (the arch's system proxy in the chain's shape) → { forms, forwarder } for gatherNetFacts. Read-only: the manifest is read, nothing written. */
 export async function modelNetForms({ os, home, env = process.env, status, settings = {}, harnesses, procs, systemProxy, chainSp, dirs, fs = nodeFs }) {
-  const [{ readManifest }, { modelFormFacts, netFormsOf, setupOf, setupSteps }, { collectorHome }] = await Promise.all([
-    import('../core/trust/journal.mjs'), import('../core/proxymode/status-facts.mjs'), import('../../paths.mjs')])
+  const [{ readManifest }, { modelFormFacts, netFormsOf, setupOf, setupSteps }, { collectorHome }, { readIngressConfig }] = await Promise.all([
+    import('../core/trust/journal.mjs'), import('../core/proxymode/status-facts.mjs'), import('../../paths.mjs'), import('../core/ingress-config.mjs')])
   let m = null, unread = null
-  try { m = readManifest(collectorHome(path.join(home, '.trocar')), fs) } catch (e) { if (e && e.code === 'ESANDBOX') throw e; unread = { error: String((e && e.message) || e) } } // unreadable: no installed harness to draw, setup unknown
+  const dir = collectorHome(path.join(home, '.trocar'))
+  const ing = readIngressConfig({ dir, fs }), token = typeof ing.listenerToken === 'string' ? ing.listenerToken : null // the PAC key's source (P10): read only, never printed
+  try { m = readManifest(dir, fs) } catch (e) { if (e && e.code === 'ESANDBOX') throw e; unread = { error: String((e && e.message) || e) } } // unreadable: no installed harness to draw, setup unknown
   const ctx = sourcesCtx({ os, home, env, dirs, fs })
   const root = status.cert && status.cert.root
   // 4.11 P4b: each harness's setup, the one judgement `on`'s precondition ⑪ makes too (with status's root); the forms' certificate codes read it as before
   const setup = Object.fromEntries(harnesses.filter((d) => d.proxyMode).map((d) => [d.name, setupOf(d, { os, manifest: unread || m, ctx, root, fs })]))
   const DRIFT = { 'carrier-absent': 'entry-missing', 'carrier-overwritten': 'entry-changed', 'bundle-lacks-ca': 'bundle-lacks-ca', 'marked-without-record': 'marked-without-record' }
   const drift = (h) => { const s = setup[h]; if (!s || s.state === 'ready') return null; const x = s.missing.find((y) => y.form); return s.state === 'unknown' ? { reason: null, command: 'trocar install' } : x ? { reason: DRIFT[x.what], command: setupSteps(x.what)[0] } : null }
-  const model = await modelFormFacts({ harnesses, os, manifest: m, reply: status.daemon && status.daemon.reply, root, rootFp256: status.cert && status.cert.fp256, systemProxy: chainSp, ctx, fs, drift })
+  const model = await modelFormFacts({ harnesses, os, manifest: m, reply: status.daemon && status.daemon.reply, root, rootFp256: status.cert && status.cert.fp256, systemProxy: chainSp, token, ctx, fs, drift })
   return { ...netFormsOf({ model, status, procs, systemProxy, settings }), setup }
 }

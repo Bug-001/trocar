@@ -4,7 +4,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import vm from 'node:vm'
 import { pacText, pacHandler, peerAllowed } from '../../../../src/collector/core/proxymode/pac.mjs'
-import { PAC_PATH } from '../../../../src/collector/core/proxymode/entries.mjs'
+import { pacPath } from '../../../../src/collector/core/proxymode/entries.mjs'
 import { isLoopbackHost } from '../../../../src/collector/core/proxymode/chain.mjs'
 import { checkRecord } from '../../../../src/health/codes.mjs'
 import { bypassHit } from '../../../../src/collector/core/upstream-shape.mjs'
@@ -52,9 +52,10 @@ test('an own leg keeps its scheme\'s default port; a scheme with no PAC word is 
   assert.throws(() => pacText({ door: null, ownLeg: 'ftp://p:21' }), /no PAC word/)
 })
 
-test('pacHandler serves GET /trocar.pac from state() per request, and leaves every other request to the door', () => {
+test('pacHandler serves GET <the keyed path> from state() per request, and leaves every other request to the door', () => {
   let st = { door: '127.0.0.1:47001', ownLeg: null, bypass: [] }
-  const h = pacHandler({ state: () => st })
+  const PAC_PATH = pacPath('ab'.repeat(16))
+  const h = pacHandler({ state: () => st, path: PAC_PATH })
   const res = () => { const r = { head: null, body: null, writeHead(s, hd) { r.head = [s, hd] }, end(b) { r.body = b } }; return r }
   const a = res()
   assert.equal(h({ method: 'GET', url: PAC_PATH }, a), true)
@@ -63,6 +64,7 @@ test('pacHandler serves GET /trocar.pac from state() per request, and leaves eve
   const b = res(); h({ method: 'GET', url: `${PAC_PATH}?x=1` }, b)
   assert.ok(!b.body.includes('47001'))
   assert.equal(h({ method: 'GET', url: '/other' }, res()), false)
+  assert.equal(h({ method: 'GET', url: '/trocar.pac' }, res()), false, 'the path without the key is not the PAC')
   assert.equal(h({ method: 'POST', url: PAC_PATH }, res()), false)
 })
 

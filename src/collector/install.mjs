@@ -42,7 +42,8 @@ import { codeId, setupHelperCommand } from '../version.mjs'
 
 // an entry under trocar's name: replaced, never silently (1.6 §3.5 Login)
 const isMasked = (unit) => !!(unit && unit.masked && unit.masked())
-const MASKED_NOTE = 'your unit was masked (a link to /dev/null); trocar replaces it with its own, so the collector starts at login again'
+// the masked unit is the user's link, replaced: a change of a file of theirs (1.6 §3.2), with nothing to back up (a link to /dev/null holds no bytes)
+const maskedChange = (unit) => ({ path: unit.path, change: "your link to /dev/null (which masked it) replaced with trocar's unit", backup: null, why_no_backup: 'the link held nothing to keep' })
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -214,7 +215,7 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
   // a form trocar cannot capture whose places are here: said for every harness asked, its own footprint here or not, refused or not (4.6 「不采的形态」, D38)
   const unseen = asked.flatMap((d) => uncapturedOf(d, ctxFor(d)).map((u) => ({ harness: d.name, code: CODE.harnessNote, reason: `${d.name}: ${u.why} (${u.paths.join(', ')})` })))
   draft.notes.push(...unseen.map((r) => r.reason)) // not in draft.records: those are the reasons a harness is skipped
-  if (isMasked(unit)) draft.notes.push(MASKED_NOTE)
+
 
   // per item: written, intact, resumed, or changed by the user since (R9)
   const steps = []
@@ -269,8 +270,8 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
   const logs = unit && typeof unit.logFiles === 'function' ? unit.logFiles().filter((f) => !fs.existsSync(f.path)).map((f) => f.path) : []
   return {
     first, newPaths, steps, targets, skipped, foreign, restart, writing, installed: [...installed],
-    changed: draft.entries.map((e, i) => ({ e, j: entryJ[i], i })).filter((x) => act(x.j.action)).map((x) => ({ path: x.e.path, change: changeText(x.e, x.j.entry ? x.j.entry.prior_value : preview[x.i].prior), backup: null })),
-    created: [...(prior ? [] : [manifestPath(dir)]), ...(caNew ? [ca.key, ca.pem] : []), ...steps.filter((s) => act(s.action) && s.kind !== 'entry').map((s) => s.path), ...logs],
+    changed: [...draft.entries.map((e, i) => ({ e, j: entryJ[i], i })).filter((x) => act(x.j.action)).map((x) => ({ path: x.e.path, change: changeText(x.e, x.j.entry ? x.j.entry.prior_value : preview[x.i].prior), backup: null })), ...(isMasked(unit) ? [maskedChange(unit)] : [])],
+    created: [...(prior ? [] : [manifestPath(dir)]), ...(caNew ? [ca.key, ca.pem] : []), ...steps.filter((s) => act(s.action) && s.kind !== 'entry' && !(isMasked(unit) && s.path === unit.path)).map((s) => s.path), ...logs],
     unchanged: steps.filter((s) => s.action === 'skip-intact').map((s) => s.path),
     // what onPlan prints (formatPlan): every file this run would write or change, and nothing it would leave alone — the manifest only when it is
     // written (the first on, or an on that writes something), the CA only when it is not there yet, the runtime directory only when it is made, the backup
@@ -282,7 +283,7 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
     files: draft.files.filter((f, i) => act(fileJ[i].action)).map((f) => ({ harness: f.harness, path: f.path, sources: f.sources })),
     owned: draft.owned.filter((o, i) => act(ownedJ[i].action)).map((o) => ({ harness: o.harness, path: o.path, role: o.role })),
     entries: draft.entries.map((e, i) => [e, i]).filter(([, i]) => act(entryJ[i].action)).map(([e, i]) => entryRow(e, i)),
-    ...(unit && act(unitJ.action) ? { unit: { path: unit.path, env: daemon.env, links: unit.links || [] } } : {}),
+    ...(unit && act(unitJ.action) ? { unit: { path: unit.path, env: daemon.env, links: unit.links || [], ...(isMasked(unit) ? { masked: true } : {}) } } : {}),
     ...(logs.length ? { logs } : {}), // D46: named in the plan's own listing (every file, R3), written by the unit's write step
     watch: draft.watch,
     notes: draft.notes,
@@ -336,7 +337,7 @@ async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePo
   const final = planTrust({ descriptors: descs, ctxFor, caCertPem: certPem, collectorDir: dir, roots: R })
   if (daemon && daemon.note) { final.notes.push(daemon.note); final.records.push({ code: CODE.unitEnvNotCarried, reason: daemon.note }) }
   for (const r of unseen) { final.notes.push(r.reason); final.records.push(r) }
-  if (isMasked(unit)) final.notes.push(MASKED_NOTE)
+
   if (JSON.stringify(final.paths) !== JSON.stringify(draft.paths)) throw new Error(`the files to change moved while installing (${draft.paths.join(', ')} → ${final.paths.join(', ')}); only the CA was written; run "trocar uninstall", then "trocar on"`)
   m.planned = final.paths
   // what `off` needs to judge, from this manifest alone, which live process may hold what trocar wrote for a harness (4.6 撤销顺序): written before any user

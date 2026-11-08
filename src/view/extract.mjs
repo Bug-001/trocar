@@ -19,10 +19,10 @@ import { scannedRequestBody, sharesBody, parsedRequestBody, storedRequestBody, r
 import { fieldTextOf, respOf, headersOf } from '../dissect/record-fields.mjs';
 import { composeTextRef, mintRawRef } from '../raw/refs.mjs';
 import { V0_CONVERTED } from '../raw/ingest.mjs';
-import { boardDissectorFor, flatLaneOf, contextStateOf, blockKeysOf, MULTI_LANE_CONTEXT } from '../dissect/registry.mjs';
+import { boardDissectorFor, flatLaneOf, contextStateOf, blockKeysOf, MULTI_LANE_CONTEXT, closedAfterEnd } from '../dissect/registry.mjs';
 import { hintsOf, sessionKeyOf, observerEffectsOf, harnessOf } from '../dissect/harnesses.mjs';
 import { vendorOf } from '../dissect/vendors.mjs';
-import { failedOf } from '../dissect/endpoints.mjs';
+import { failedOf, cutOf } from '../dissect/endpoints.mjs';
 import { mapUsage, boardUsage } from '../model/schema.mjs';
 import { replyIdOf, patchSystem } from '../dissect/cc-threads.mjs';
 import { hasCompactionPreamble } from '../identity/session-identity.mjs';
@@ -111,6 +111,10 @@ export function callWireOf(r) {
   return d ? { d, format: d.id } : null;
 }
 const NO_STREAM = 'the record carries no id or stream to address';
+// The record a call is read as (3.5 §访问模式 ②): a reply the agent closed after its own success terminal is read as that reply (its
+// `error` kept: registry.mjs closedAfterEnd); every other record is itself. Only the call's reading and facts take it; its refs to the
+// stored bytes and its reply blocks keep the stored record.
+export const replied = (rec) => closedAfterEnd(rec) || rec;
 
 // The board path's per-fold steps, keyed by the dissector's `fold` (3.1): `read` the call once (a tree wire's hydrated record `h`,
 // or a flat-lane wire's parsed request `req`, `unparsed`); its request `blocks`; its `call` facts (callX below).
@@ -123,12 +127,12 @@ const FOLD_PATHS = {
       if (body != null) try { spans = blockSpans(read.h); } catch { spans = null; }
       return { flat, at: flat.map((_, i) => locate(base, body, spans && spans[i])) };
     },
-    call: (rec, { format }, { h }, common) => {
+    call: (rec, { format }, { h }, common, st, closed) => {
       const facts = callFacts(h);
       const lane = facts.sub ? 'subagent' : facts.monitor ? 'monitor' : hintsOf(rec).lane || 'main';
-      return jsonClean({ ...common, facts, lane, wire: wireOf(h, format, null), rq: slimRec(h).request,
+      return jsonClean({ ...common, facts, lane, wire: wireOf(h, format, null, null, closed), rq: slimRec(h).request,
         usage: boardUsage(mapUsage(format, facts.usage || {}, { vendor: vendorOf(h) })),
-        error: !!rec.error || !!facts.failed, replyId: replyIdOf(rec), stop_reason: normResp(h).stop_reason ?? null });
+        error: !!facts.failed, replyId: replyIdOf(rec), stop_reason: normResp(h).stop_reason ?? null });
     },
   },
   flat: {
@@ -141,13 +145,13 @@ const FOLD_PATHS = {
       const root = body != null ? scannedRequestBody(rec) : null;
       return { flat, at: flat.map((b) => locate(base, body, root && Array.isArray(b.path) ? spanAt(root, b.path) : null)) };
     },
-    call: (rec, { d, format }, { h, req, unparsed }, common, st) => {
+    call: (rec, { d, format }, { h, req, unparsed }, common, st, closed) => {
       const norm = d.normResp(rec);
       // `agent`: the wire's own agent (a WebSocket connection), what a subagent's lane is folded by when the harness names none
       return jsonClean({ ...common, lane: flatLaneOf(d, rec), hints: hintsOf(rec), chain: rec._chain, msgCount: d.messageCount ? d.messageCount(req) : (req.message_count || 0),
         agent: d.agentOf ? d.agentOf(rec) ?? undefined : undefined, rq: slimRec(h).request, ctx: d.ctxTokens(norm), nu: norm.usage,
         reqIncomplete: reqIncompleteOf(rec), wsIncomplete: wsIncompleteOf(rec), respIncomplete: respIncompleteOf(rec),
-        model: req.model, unparsed, error: failedOf({ status: st, ws: rec.transport === 'ws', error: !!rec.error || unparsed || !!(d.failed && d.failed(norm, rec)) }), wire: wireOf(rec, d.id, null, norm), usage: boardUsage(mapUsage(format, norm.usage || {}, { vendor: vendorOf(rec) })),
+        model: req.model, unparsed, error: failedOf({ status: st, ws: rec.transport === 'ws', error: !!rec.error || unparsed, ended: d.ended ? d.ended(norm, rec) : null, cut: cutOf(rec) }), wire: wireOf(rec, d.id, null, norm, closed), usage: boardUsage(mapUsage(format, norm.usage || {}, { vendor: vendorOf(rec) })),
         stop_reason: norm.stop_reason, replyId: norm.id ?? null });
     },
   },
@@ -425,7 +429,7 @@ export function extract(rec, ctx) {
   const rules = wire.d.rules;
   const rp = replyBlocks(rec, wire), reply = rp.map((p) => take(p.b, p).bid);
   const rmb = rp.flatMap((p, j) => (j === 0 || p.unit !== rp[j - 1].unit ? [j] : []));
-  const read = readCall(rec, wire), x = callX(rec, wire, read);
+  const rr = replied(rec), read = readCall(rr, wire), x = callX(rr, wire, read, rr !== rec);
   const linker = wire.d.linker || wire.d;
   const st = linker && linker.stitchOf ? linker.stitchOf(rec) : null;
   // the call's own blocks, by section
@@ -441,12 +445,15 @@ export function extract(rec, ctx) {
   const pred = st && st.cont ? ctx.linked(st.scope, st.prev) : null;
   // what a continuation inherits of its predecessor's messages and reply, as they stand there: block ids, attributes and message
   // starts by position from the first message (no object a position)
+  let tin = own.tools.filter((e) => e.b.input).length
   let tools = own.tools, system = own.system, inh = { bids: [], attrs: {}, starts: [] }, predX = null, base = null, state = null;
   if (pred) {
     predX = pred.x;
     const P = ctx.listsOf(pred.rid), [pt, ps] = predX.secs, lo = pt + ps;
     const ent = (from, to) => P.list.slice(from, to).map((bid, k) => ({ bid, a: P.attrs[from + k] || null }));
     if (st.inherit.tools !== 'own') tools = ent(0, pt);
+    // tools defined in the input (openai.mjs, additional_tools) are input the server keeps: a continuation that does not send them again has them
+    else if (predX.tin && !tin) { tools = [...own.tools, ...ent(pt - predX.tin, pt)]; tin = predX.tin; }
     if (st.inherit.system === 'inherit') system = ent(pt, lo);
     else if (st.inherit.system === 'patch') system = patchSystem(ent(pt, lo), own.system, (e) => !!(e.a && e.a.volatile));
     inh = { bids: P.list.slice(lo).concat(pred.reply), attrs: {}, starts: P.mb.filter((i) => i >= lo).map((i) => i - lo) };
@@ -495,6 +502,7 @@ export function extract(rec, ctx) {
     stitchedFacts(x, { rec, st, predX, state, tools: tools.length, ownMsgs: (read.h.request && read.h.request.messages) || null });
   }
   x.secs = [tools.length, system.length];
+  if (tin) x.tin = tin; // how many of the section's last tools came in the input
   x.hint = laneHintOf(rec, wire.format, x.lane);
   if (!pred) { const prev = ctx.prevOf(x.hint); base = prev && prev.depth < KEYFRAME ? prev : null; }
   const d = delta(base && base.list, list);
@@ -528,11 +536,11 @@ function stitchedFacts(x, { rec, st, predX, state, tools, ownMsgs }) {
 
 // x: the per-call facts (3.5 §会话读), all from this record. `nonBlockKeys`: the request's top-level keys that are no block
 // (refs into the body and short scalars, never a body: nonBlockKeysOf below), what a lane answer's step detail ships (3.5 §会话读).
-function callX(rec, wire, read) {
+function callX(rec, wire, read, closed = false) {
   const st = (respOf(rec) || {}).status ?? null;
   const common = { item: itemFacts(rec), format: wire.format, respRefs: respRefsOf(rec), ...(extraMessagesOf(rec) || {}), ts: rec.ts_request || rec.ts || '', status: st,
     nonBlockKeys: nonBlockKeysOf(rec, wire.format) };
-  return FOLD_PATHS[wire.d.fold].call(rec, wire, read, common, st);
+  return FOLD_PATHS[wire.d.fold].call(rec, wire, read, common, st, closed);
 }
 
 // ── the build driver ────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -722,8 +730,8 @@ function cacheSemanticsKnown(vendor, wireFormat) {
 // incompleteness labels (4.6 §记录 「不完整的标注」 — shown on the call, never dropped). Cheap: no body parse.
 // A cross-record context (ctx, from the dissector) brings its own state and, when partial, what is missing;
 // `norm.unread` counts reply messages the dissector could not read (D38: never skipped without a trace).
-export function wireOf(rec, format, ctx = null, norm = null) {
-  const labels = captureLabelsOf(rec);
+export function wireOf(rec, format, ctx = null, norm = null, closed = false) {
+  const labels = captureLabelsOf(rec, closed);
   const unread = norm && norm.unread;
   if (unread) labels.push({ id: 'reply-unread', label: `${unread} reply message${unread > 1 ? 's' : ''} not read`,
     text: `${unread} server message${unread > 1 ? 's' : ''} of this call are not JSON text (binary, past the size cap, or not decodable); the reply shown is read from the others` });

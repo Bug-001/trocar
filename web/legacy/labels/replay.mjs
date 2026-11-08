@@ -13,7 +13,7 @@ import { L } from '../core/labels.mjs'
 export const LANE_KIND = Object.freeze({
   main: { word: 'main thread', row: 'saw', bucket: 'main', hint: 'The exchange between the agent and the model itself; the horizontal axis follows its steps' },
   subagent: { word: 'sub-agent', row: 'sub', bucket: 'sub', hint: 'A separate thread the main agent opened, with its own context' },
-  monitor: { word: 'safety review', row: 'bg', bucket: 'bg', hint: 'The agent asks the model to review an action; it reads the full context. Hover to see the step it most likely reviewed (inferred)' },
+  monitor: { word: 'safety review', row: 'bg', bucket: 'bg', hint: 'The agent asks the model to review an action; it reads the full context. Hover to see the step it most likely reviewed (inferred). The agent decides with its own thresholds, which aren\'t in the traffic' },
   notify: { word: 'notification summary', row: 'bg', bucket: 'bg', hint: 'The agent asks the model to sum up recent activity in a one-line notification' },
   titlegen: { word: 'title generation', row: 'bg', bucket: 'bg', hint: 'The agent asks the model to give the session a title' },
   quota: { word: 'keep-alive check', row: 'bg', bucket: 'bg', hint: 'A check call with a tiny reply limit; the reply is not used' },
@@ -313,7 +313,6 @@ export const laneTimes = (word, n) => `${word} · ${count(n, 'call')}`
 export const callsWord = (n) => count(n, 'call')
 export const TC_SAMPLED_TIP = (m, n) => `${m} of ${n} drawn; clicking anywhere opens the nearest one`
 export const TC_NO_SIZE = (j) => `${j} of them returned no size and are not drawn`
-export const FLAGGED_WORD = 'flagged a problem' // S13 landed: flagged === true draws a mark on the collapsed 后台调用 row
 export const REVIEW_TIP = (k) => `Inferred from timing: when this call was sent, the main thread was at step ${k}`
 
 // ── the outline (2.5) ────────────────────────────────────────────────────────────────────────────────────────────────

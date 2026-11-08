@@ -126,7 +126,7 @@ export function planItems(p, { home = null, platform = 'linux' } = {}) {
   for (const f of p.files || []) add(f.harness, f.path, `${t(f.path)}: ${f.sources.length ? `the certificates of ${f.sources.map((x) => String(x).split(/[\\/]/).pop()).join(', ')} plus trocar's` : "trocar's certificate"}`)
   for (const o of p.owned || []) add(o.harness, o.path, `${t(o.path)}: trocar's ${o.role}`)
   for (const e of p.entries || []) add(e.harness, e.path, `${t(e.path)}${e.real_path ? ` -> ${t(e.real_path)}` : ''}: ${e.what || e.keys.join('.')}`)
-  if (p.unit) add('autostart', p.unit.path, `${t(p.unit.path)}: starts the collector at login`)
+  if (p.unit) add('autostart', p.unit.path, p.unit.masked ? `${t(p.unit.path)}: your unit is masked (a link to /dev/null); trocar replaces it with its own, which starts the collector at login` : `${t(p.unit.path)}: starts the collector at login`)
   // §1.4「计划写全」: the symlink `enable` makes is a file of the user's too, so it is named as well
   if (p.unit) for (const l of p.unit.links || []) add('autostart', l, `${t(l)}: the link that enables it`)
   for (const l of p.logs || []) add('log', l, `${t(l)}: the collector's own output`)
@@ -174,7 +174,7 @@ export function changeLines(r, { past = true, home = null } = {}) {
   const lines = []
   if (r.changed.length) {
     lines.push(past ? 'Changed:' : 'Will change:')
-    lines.push(...pairs(r.changed.map((x) => [t(x.path), `${x.change}${x.backup ? ` (backup ${t(x.backup)})` : past ? ' (trocar made this file; there was nothing to back up)' : ' (a copy is kept first)'}`]), { home }))
+    lines.push(...pairs(r.changed.map((x) => [t(x.path), `${x.change}${x.backup ? ` (backup ${t(x.backup)})` : x.why_no_backup ? ` (no backup: ${x.why_no_backup})` : past ? ' (trocar made this file; there was nothing to back up)' : ' (a copy is kept first)'}`]), { home }))
   } else lines.push(past ? 'No file of yours was changed.' : 'No file of yours will be changed.')
   if (r.created.length) lines.push(...pathList(past ? "trocar's own files:" : 'trocar will make:', r.created, home))
   return lines
@@ -182,7 +182,10 @@ export function changeLines(r, { past = true, home = null } = {}) {
 
 // 1.6 §3.3: a harness that needs setup — the fix is two commands, never the code (§1.1); both modes' `on` say it this way
 // a refusal's two commands, each whole on a line of its own (§1.1⑥)
-export const refusedLines = (r, { past = true } = {}) => [`${r.harness} ${past ? 'was not' : 'will not be'} turned on: ${r.why}. Run, in order:`, ...(r.commands || [r.command]).map(commandLine), commandLine(`trocar on ${r.harness}`)]
+export const refusedLines = (r, { past = true } = {}) => {
+  const head = `${r.harness} ${past ? 'was not' : 'will not be'} turned on: ${r.why}.`, commands = r.commands || (r.command ? [r.command] : [])
+  return commands.length ? [`${head} Run, in order:`, ...commands.map(commandLine), commandLine(`trocar on ${r.harness}`)] : [head] // no command (a form not on this machine): the reason is the line
+}
 /** 1.6 §3.3 (D65④): the harnesses `on` refused because their setup is needed — `blocked` of a dry run, `error` of a real one (exit 1). */
 export const setupBlocked = (r) => (r.refused || []).filter((x) => x.reason === 'setup-needed').map((x) => ({ what: x.harness, reason: x.why }))
 /** A run whose only shortfall is the harnesses refused for setup: the others were turned on (exit 1 all the same). */
@@ -303,7 +306,7 @@ export function formatUninstallReceipt(r, { home = null, platform = process.plat
   // §3.6 / §1.1③: a refusal (error) and a left row with its own command already say the next step — a second one would only repeat it
   const ownStep = !!r.error || ((r.left || []).length > 0 && r.left.every((l) => l.command) && !(r.problems || []).length)
   if (!past) lines.push('Nothing was changed. Run it with --yes to do it.')
-  else if (r.ok === false && ownStep) { /* said above */ }
+  else if (ownStep) { /* said above: a refusal, or left rows that each carry their own next step (a shared one leaves ok true, §3.6) */ }
   else if (r.ok === false) lines.push('Fix what is above, then run: trocar uninstall')
   else if (!r.purge_data && keptWhat.length && codeGone) lines.push(`trocar itself is removed. To delete what was kept (${and(keptWhat)}), delete ${and(r.kept.map((k) => asDir(t(k.path), platform)))} by hand.`)
   else if (!r.purge_data && keptWhat.length) lines.push(`To delete what was kept (${and(keptWhat)}), run:`, commandLine('trocar uninstall --purge-data'))
