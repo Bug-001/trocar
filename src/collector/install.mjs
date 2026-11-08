@@ -210,6 +210,17 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
     descs = descs.filter((d) => !foreign.some((x) => x.harness === d.name))
     draft = planTrust({ descriptors: descs, ctxFor, caCertPem: null, collectorDir: dir, roots: R })
   }
+  // `on` (a judge is handed in): a harness one of whose own files cannot take its entry (not JSON, a dangling link) is refused alone, planned again
+  // without it, so it stops nothing else (1.6 §3.3 ⑪, D38); `install` keeps the whole-run refusal of the preview below
+  const unwritable = []
+  if (judge) for (const e of draft.entries) {
+    if (unwritable.some((x) => x.harness === e.harness) || judgeEntry({ manifest: prior, planned: e, fs }).action !== 'write') continue
+    try { if (e.kind === 'text') previewTextEntry({ file: e.path, edit: e, fs }); else previewJsonKey({ file: e.path, keys: e.keys, value: e.value, fs }) } catch (err) { unwritable.push({ harness: e.harness, what: e.path, reason: String((err && err.message) || err) }) }
+  }
+  if (unwritable.length) {
+    descs = descs.filter((d) => !unwritable.some((x) => x.harness === d.name))
+    draft = planTrust({ descriptors: descs, ctxFor, caCertPem: null, collectorDir: dir, roots: R })
+  }
   const daemon = unit ? daemonEnv(env, dir) : null
   if (daemon && daemon.note) draft.notes.push(daemon.note)
   // a form trocar cannot capture whose places are here: said for every harness asked, its own footprint here or not, refused or not (4.6 「不采的形态」, D38)
@@ -247,12 +258,12 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
   // who is on, and who has nothing to do here (no entry, no file, not installed before): said, with the descriptor's own reason
   const installed = new Set([...((prior && prior.entries) || []), ...((prior && prior.files) || [])].map((x) => x.harness).filter(Boolean))
   const withItems = new Set([...draft.entries, ...draft.files, ...draft.owned].map((x) => x.harness))
-  const targets = kept.map((d) => d.name).filter((n) => withItems.has(n) || installed.has(n))
+  const targets = kept.map((d) => d.name).filter((n) => !unwritable.some((x) => x.harness === n) && (withItems.has(n) || installed.has(n)))
   const reasonOf = (name) => draft.records.filter((r) => r.harness === name).map((r) => r.reason.replace(`${name}: `, '')).join('; ') || `no ${name} configuration was found on this machine: nothing to change for it`
   const hint = new Set(certs ? [] : draft.entries.filter((e, i) => replaceable(entryJ[i])).map((e) => e.path))
   const skipped = [
     ...foreign.map((x) => ({ what: x.what, reason: x.reason })),
-    ...kept.map((d) => d.name).filter((n) => !targets.includes(n) && !foreign.some((x) => x.harness === n)).map((n) => ({ what: n, reason: reasonOf(n) })),
+    ...kept.map((d) => d.name).filter((n) => !targets.includes(n) && !foreign.some((x) => x.harness === n) && !unwritable.some((x) => x.harness === n)).map((n) => ({ what: n, reason: reasonOf(n) })),
     ...steps.filter((s) => s.action === 'skip-user-changed').map((s) => ({ what: s.path, reason: hint.has(s.path) ? `${s.why}; run "trocar install" to place it again` : s.why })), // a certificate item install can place again (replaceable): on never does (D55⑥), so it names the fix
   ]
   // what is written, and what the user has not yet confirmed (1.6 §1.6: the paths beyond the manifest's `confirmed_paths`; an installed one counts as confirmed)
@@ -269,7 +280,7 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
   // D46: the daemon's log files the unit's write makes (a dry run names them too — the receipt lists every file the real run writes, V3); once they exist a later on lists none of them
   const logs = unit && typeof unit.logFiles === 'function' ? unit.logFiles().filter((f) => !fs.existsSync(f.path)).map((f) => f.path) : []
   return {
-    first, newPaths, steps, targets, skipped, foreign, restart, writing, installed: [...installed],
+    first, newPaths, steps, targets, skipped, foreign, unwritable, restart, writing, installed: [...installed],
     changed: [...draft.entries.map((e, i) => ({ e, j: entryJ[i], i })).filter((x) => act(x.j.action)).map((x) => ({ path: x.e.path, change: changeText(x.e, x.j.entry ? x.j.entry.prior_value : preview[x.i].prior), backup: null })), ...(isMasked(unit) ? [maskedChange(unit)] : [])],
     created: [...(prior ? [] : [manifestPath(dir)]), ...(caNew ? [ca.key, ca.pem] : []), ...steps.filter((s) => act(s.action) && s.kind !== 'entry' && !(isMasked(unit) && s.path === unit.path)).map((s) => s.path), ...logs],
     unchanged: steps.filter((s) => s.action === 'skip-intact').map((s) => s.path),
@@ -526,7 +537,8 @@ export async function turnOn(opts = {}) {
       refused.push({ harness: d.name, reason: CODE.setupNeeded, why: [...new Set(s.missing.map((x) => SETUP_WHY[x.what]))].join('; '), command: 'trocar install' })
       return true
     }).map((d) => d.name)
-    const plan = await planOn({ home, env, ids, osName, harnesses, scan, match, arch, roots, unit: null, userFilesFor, fs, now, judge }) // D61: the login entry is `install`'s and `on` never writes it, so the writing side is handed no unit at all
+    const plan = await planOn({ home, env, ids, osName, harnesses, scan, match, arch, roots, unit: null, userFilesFor, fs, now, judge })
+    for (const x of plan.unwritable || []) refused.push({ harness: x.harness, reason: CODE.configUnreadable, why: x.reason }) // its own file cannot take the entry: refused alone // D61: the login entry is `install`'s and `on` never writes it, so the writing side is handed no unit at all
     // D55⑥ / override #15: `on` never writes a certificate, so it never installs silently — no install record, no on (macOS / Windows: turnOnModel)
     // 附录 C.1: the refusal's code lives in `error`, the one place a client looks (never a top-level `code`)
     if (!isModelOs(osName) && !installComplete(plan._.prior)) { const message = 'certificates are not installed. Run: trocar install'; return { receipt: unwritten({ ...fresh(), ok: false, error: { code: CODE.certNotInstalled, message }, notes: [message] }), manifest: plan._.prior, plan, exit: 1 } }
