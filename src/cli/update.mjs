@@ -138,7 +138,8 @@ async function update({ io, env, home, platform, deps, flags }) {
     if (ran.status !== 0 || !got) return no('installer-failed', `the download failed: ${said(ran.stderr) || (ran.error && ran.error.message) || `the installer exited ${ran.status}`}. Nothing changed.`)
     const [, kind, v, staged] = got
     r.to = v
-    if (kind === 'up-to-date' || v === r.from) { lines.push(`trocar update: already up to date (${r.from}).`); return done(EXIT.ok) }
+    // the installer names a version; this copy's code id is that version, then which code it is
+    if (kind === 'up-to-date' || v === r.from.split('+')[0]) { lines.push(`trocar update: already up to date (${r.from}).`); return done(EXIT.ok) }
     const on = harnessesOn({ home, fs })
     if (on.error) return no('state-unreadable', on.error)
     r.harnesses = on.ids
