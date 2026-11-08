@@ -26,7 +26,7 @@ The v1 harnesses (D37): **Claude Code**, **Codex**, **OpenCode**, **Kimi Code**,
 `yes` = at least one of that harness's main forms (CLI, VS Code extension, desktop app) was driven end to end on that
 OS and its calls came out verbatim; `not yet` = that has not been shown there. What is not shown is not claimed.
 
-## See it in 30 seconds, with no capture and no setup
+## What a capture looks like
 
 ```sh
 git clone https://github.com/Bug-001/trocar && cd trocar && npm install --omit=dev
@@ -34,7 +34,7 @@ git clone https://github.com/Bug-001/trocar && cd trocar && npm install --omit=d
 
 A small **synthetic** sample session ships in `samples/demo-session.ndjson` (fabricated, no real
 prompts or credentials) so you can read what the tool records before pointing it at anything of your
-own. Everything below is about capturing your own traffic.
+own. The file is one record per line, readable with any JSON tool. Everything below is about capturing your own traffic.
 
 ## Questions it answers that your logs cannot
 
@@ -181,12 +181,12 @@ login in between): `install` records which code ran it, and until that is the ne
 another copy the collector comes back on the copy the entry starts, and `update` says so and exits 1.
 
 A machine that ran the build from before the rename moves over once, by hand: that build's own `uninstall`, then
-a clone of this repo and `trocar install`. Nothing the old name left is read or kept.
+install trocar as described under [Install](#install). Nothing the old name left is read or kept.
 
 ## Uninstall
 
 ```sh
-trocar off                     # first: uninstall refuses while capture is on
+trocar off                     # first on macOS and Windows: uninstall refuses while capture is on
 trocar uninstall               # removes all of trocar's changes; keeps your records (~/.trocar/raw, ~/.trocar/collector/flows), the last ones sealed first
 trocar uninstall --purge-data  # also deletes the records and their index (asks first)
 ```
@@ -211,7 +211,7 @@ every other account's home for a trocar install and removes nothing while it fin
 them. Once trocar itself is gone, the receipt names the kept folders to delete by hand.
 
 `uninstall` always prints its plan and asks first; without a terminal and without `--yes` it changes
-nothing and exits 2. `uninstall` never does `off` for you. While a harness is on, or (macOS / Windows) a process started during `on` still
+nothing and exits 2. On macOS and Windows `uninstall` never does `off` for you (on Linux it turns capture off itself): while a harness is on, or a process started during `on` still
 holds a door, it changes nothing, exits 1 with `error.code` `collectors-online` and names the harnesses and the pids.
 If the system's prompt to remove trocar's root certificate is not answered, `uninstall` exits 1, names the
 certificate and the command to remove it by hand, and the next `trocar uninstall` tries again.
@@ -633,9 +633,9 @@ Whether Desktop's own model calls come out decrypted verbatim is not claimed her
 
 ## Limits
 
-- **Long sessions are tail-bounded.** One assembled view is capped at 6 MB of source bytes, so a
-  several-hundred-call session shows only its most recent calls. Omitted calls are disclosed in the UI,
-  never silently dropped; raise it with `TROCAR_SESSION_MAX_MB`. The raw NDJSON always holds everything.
+- **Very large sessions may show only their newest calls.** When a session does not fit in the query worker's
+  memory, the board shows the newest calls that fit and says so (**Showing only the latest N / M calls**);
+  nothing is dropped silently. The raw NDJSON always holds everything.
 - **Resource lifecycle is Claude Code only.** It is built on Claude Code's tool vocabulary. Codex, OpenCode
   and the other harnesses get context replay, blocks, cache analysis and usage — their resource lanes render empty
   rather than guessing.
@@ -657,8 +657,8 @@ Whether Desktop's own model calls come out decrypted verbatim is not claimed her
   reverse proxy carry no `proc.agent`, so the board names their agent from the User-Agent and it is
   marked **inferred** (from the request headers, not the process). Sessions from the per-process collector are named by process, never by UA.
 - **The read side is a fixed set of questions, not an analytics product.** `trocar query <name>` has
-  the named queries the board asks (sessions, calls, blocks, classes, segments, pricing, status,
-  doctor) and no query language. For anything else, read the segments: `trocar raw <segment>` prints
+  the named queries the board asks (sessions, session, lane, calls, block, traffic, overview, classes,
+  segments, pricing, status, doctor) and no query language. For anything else, read the segments: `trocar raw <segment>` prints
   the records byte for byte.
 - **Non-verbatim data is labelled in place.** The raw segments are the only source of truth; the
   segment index under `~/.trocar/index/` is a deletable accelerator, rebuilt from them. SSE replies are faithful reconstructions of the streamed frames. Data imported
