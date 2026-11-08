@@ -191,3 +191,26 @@ test('4.11 P6: on writes the user\'s persistent NO_PROXY into the entries it wri
     assert.equal(line, 'NO_PROXY=localhost,127.0.0.1,::1,corp.example,.wq.internal')
   } finally { await server.close() }
 })
+
+// the same through the default backends on macOS: launchd's NO_PROXY (`launchctl getenv`, by name) is the persistent one
+test('4.11 P6 ⑤ (darwin, default backends): on reads launchd\'s NO_PROXY by name and writes it after the loopback hosts', async () => {
+  const w = await modelWorld({ os: 'darwin', commands: ['codex'] })
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  const sock = path.join(w.home, 'c.sock'), token = 't'.repeat(32)
+  fs.writeFileSync(path.join(w.dir, 'control.json'), JSON.stringify({ path: sock, token }))
+  const server = await startControlServer({ socketPath: sock, token, routes: {
+    'GET /status': async () => ({ doors: {} }),
+    'POST /on': async ({ body }) => ({ doors: Object.fromEntries(Object.entries(body.groups).map(([g, port]) => [g, `http://127.0.0.1:${port}`])) }),
+  } })
+  const asked = []
+  const exec = (file, args) => { if (file === 'launchctl') asked.push(args); return file === 'launchctl' && args[0] === 'getenv' && args[1] === 'NO_PROXY' ? { status: 0, stdout: 'corp.example\n', stderr: '' } : { status: 1, stdout: '', stderr: '' } }
+  try {
+    const deps = { getuid: () => 501, exec, harnesses: w.harnesses, which: w.ctx.which, parts: { os: 'darwin', harnesses: w.harnesses, arch: { unit: { userUnit: () => neverStarts } } } }
+    const io = fakeIo()
+    assert.equal(await runOn({ io, env: w.env, home: w.home, platform: 'darwin', deps, ids: ['codex'], flags: new Set(['--yes']), json: true }), 0, io.text())
+    const line = fs.readFileSync(path.join(w.home, '.codex', '.env'), 'utf8').split(/\r?\n/).find((l) => l.startsWith('NO_PROXY='))
+    assert.equal(line, 'NO_PROXY=localhost,127.0.0.1,::1,corp.example')
+    assert.ok(asked.length && asked.every((a) => a[0] === 'getenv' && a.length === 2), JSON.stringify(asked))
+  } finally { await server.close() }
+})
+

@@ -29,13 +29,26 @@ export function policyReader({ user = os.userInfo().username, run = null, env = 
   }
 }
 
+/** persistentEnv(names, { run, env }) → { <name>: value } of launchd's user environment (`launchctl setenv`, which the apps and shells the user
+ *  starts inherit, 4.11 ⑤): each asked name and its lower-case spelling, read by name with `launchctl getenv` — never the whole environment. A name
+ *  that is not set (launchctl exits 1) or cannot be read adds nothing. */
+export function persistentEnv(names, { run = null, env = process.env } = {}) {
+  const out = {}
+  for (const n of [...new Set(names.flatMap((x) => [x, x.toLowerCase()]))]) {
+    const r = execTool('launchctl', ['getenv', n], { run, env })
+    const v = r.code === 0 ? String(r.out || '') : '' // execTool trims the answer
+    if (v) out[n] = v
+  }
+  return out
+}
+
 /** The platform facts core asks for (4.11 OS backends): environment names are case-sensitive, a path is keyed as is (after its
- *  real path), and macOS has no persistent user environment to read (ruling ⑤: no launchctl setenv / login-profile reading). */
-export const platformFacts = Object.freeze({
+ *  real path), and the persistent environment is launchd's. */
+export const platformFacts = ({ run = null, env = process.env } = {}) => Object.freeze({
   envCaseInsensitive: false,
   exeSuffix: '', // a command's program file name (4.11 P8)
   pathKey: (p) => pathKey(p, { platform: 'darwin' }),
-  persistentEnv: () => ({}),
+  persistentEnv: (names) => persistentEnv(names, { run, env }),
 })
 
 /** sources.mjs's ctx.dirs on macOS: `appSupport` is Electron's appData (~/Library/Application Support); no localAppData. */
