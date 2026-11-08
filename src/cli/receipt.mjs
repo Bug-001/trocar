@@ -181,7 +181,8 @@ export function changeLines(r, { past = true, home = null } = {}) {
 }
 
 // 1.6 §3.3: a harness that needs setup — the fix is two commands, never the code (§1.1); both modes' `on` say it this way
-export const refusedLine = (r, { past = true } = {}) => `${r.harness} ${past ? 'was not' : 'will not be'} turned on: ${r.why}. Run: ${r.command}, then: trocar on ${r.harness}`
+// a refusal's two commands, each whole on a line of its own (§1.1⑥)
+export const refusedLines = (r, { past = true } = {}) => [`${r.harness} ${past ? 'was not' : 'will not be'} turned on: ${r.why}. Run, in order:`, commandLine(r.command), commandLine(`trocar on ${r.harness}`)]
 /** 1.6 §3.3 (D65④): the harnesses `on` refused because their setup is needed — `blocked` of a dry run, `error` of a real one (exit 1). */
 export const setupBlocked = (r) => (r.refused || []).filter((x) => x.reason === 'setup-needed').map((x) => ({ what: x.harness, reason: x.why }))
 /** A run whose only shortfall is the harnesses refused for setup: the others were turned on (exit 1 all the same). */
@@ -207,7 +208,7 @@ export function formatOnReceipt(r, { tense = 'past', home = null, platform = 'li
   if (r.unchanged && r.unchanged.length) { // the display caps at three names; the whole list is in --json, and none of them is rewritten by a second on
     lines.push(...pathList('Already in place, not rewritten:', r.unchanged.slice(0, 3), home, r.unchanged.length > 3 ? `and ${r.unchanged.length - 3} more (all of them: --json)` : null))
   }
-  lines.push(...(r.refused || []).map((x) => refusedLine(x, { past })))
+  lines.push(...(r.refused || []).flatMap((x) => refusedLines(x, { past })))
   if (r.skipped.length) lines.push(`Skipped: ${r.skipped.map((s) => `${t(s.what)} (${s.reason})`).join('; ')}`)
   if (lingerText(r)) lines.push(lingerText(r))
   for (const [h, x] of Object.entries(r.adopted || {})) if (saysSomething(x)) lines.push(...adoptedLines(h, x, topology && topology[h]))

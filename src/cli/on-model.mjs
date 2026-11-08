@@ -13,7 +13,7 @@ import { opLockFile } from '../off/paths.mjs'
 import { daemonReader } from '../off/daemon-read.mjs'
 import { readManifest, saveManifest } from '../collector/core/trust/journal.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
-import { fit, tilde, formWords, routeWords, refusedLine, setupBlocked, setupError, routeReason, ownTreeItem } from './receipt.mjs'
+import { fit, tilde, formWords, routeWords, refusedLines, setupBlocked, setupError, routeReason, ownTreeItem, commandLine } from './receipt.mjs'
 import { pairs } from './text.mjs'
 import { printJson } from './json.mjs'
 
@@ -42,7 +42,7 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
     else io.out(fit([receipt.dry_run ? `trocar on would start capturing ${receipt.harnesses.join(', ') || 'no agent'}. Nothing was written.`
       : exit === 0 ? `Capturing ${receipt.harnesses.join(', ') || 'no agent'}.${receipt.daemon && receipt.daemon.state === 'running' ? ' The collector is running.' : ''}`
         : `trocar on did not finish${unfinished(receipt).length ? ` for ${unfinished(receipt).join(', ')}` : ''}. What stopped it is below.`,
-      ...receipt.refused.map(refusedLine),
+      ...receipt.refused.flatMap(refusedLines),
       // §1.1: no two rows the same. One agent with several routes (Claude Code's settings and its config library) said "the setting is in place"
       // twice (a Windows test machine 2026-10-18): the row names the file the setting is in, so each row is the fact it reports
       ...pairs([...new Map((receipt.routes || []).map((r) => {
