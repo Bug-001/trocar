@@ -26,7 +26,7 @@ The v1 harnesses (D37): **Claude Code**, **Codex**, **OpenCode**, **Kimi Code**,
 `yes` = at least one of that harness's main forms (CLI, VS Code extension, desktop app) was driven end to end on that
 OS and its calls came out verbatim; `not yet` = that has not been shown there. What is not shown is not claimed.
 
-## See it in 30 seconds, with no capture and no setup
+## What a capture looks like
 
 ```sh
 git clone https://github.com/Bug-001/trocar && cd trocar && npm install --omit=dev
@@ -34,7 +34,7 @@ git clone https://github.com/Bug-001/trocar && cd trocar && npm install --omit=d
 
 A small **synthetic** sample session ships in `samples/demo-session.ndjson` (fabricated, no real
 prompts or credentials) so you can read what the tool records before pointing it at anything of your
-own. Everything below is about capturing your own traffic.
+own. The file is one record per line, readable with any JSON tool. Everything below is about capturing your own traffic.
 
 ## Questions it answers that your logs cannot
 
@@ -186,7 +186,7 @@ install trocar as described under [Install](#install). Nothing the old name left
 ## Uninstall
 
 ```sh
-trocar off                     # first: uninstall refuses while capture is on
+trocar off                     # first on macOS and Windows: uninstall refuses while capture is on
 trocar uninstall               # removes all of trocar's changes; keeps your records (~/.trocar/raw, ~/.trocar/collector/flows), the last ones sealed first
 trocar uninstall --purge-data  # also deletes the records and their index (asks first)
 ```
@@ -211,7 +211,7 @@ every other account's home for a trocar install and removes nothing while it fin
 them. Once trocar itself is gone, the receipt names the kept folders to delete by hand.
 
 `uninstall` always prints its plan and asks first; without a terminal and without `--yes` it changes
-nothing and exits 2. `uninstall` never does `off` for you. While a harness is on, or (macOS / Windows) a process started during `on` still
+nothing and exits 2. On macOS and Windows `uninstall` never does `off` for you (on Linux it turns capture off itself): while a harness is on, or a process started during `on` still
 holds a door, it changes nothing, exits 1 with `error.code` `collectors-online` and names the harnesses and the pids.
 If the system's prompt to remove trocar's root certificate is not answered, `uninstall` exits 1, names the
 certificate and the command to remove it by hand, and the next `trocar uninstall` tries again.
