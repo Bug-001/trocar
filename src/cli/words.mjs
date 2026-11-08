@@ -333,7 +333,7 @@ export function statusReason(code, { harness = '', pid = null, cause = null } = 
     'prior-proxy-unknown': [`trocar could not recover the proxy ${h}${pid != null ? ` (pid ${pid})` : ''} started with`, `put that proxy in ${h}'s own setting, then restart ${h}`, `trocar on ${h}`],
     'collectors-online': [`capture is still on for ${h}, so nothing was uninstalled`, 'turn capture off, then uninstall again', 'trocar off'],
     'cause-unknown': [`if ${h} still cannot connect: trocar found no cause on its side`, `turn capture off for ${h} and try again`, `trocar off ${h}`],
-    'engine-port-taken': ['another program holds the port trocar listens on, so nothing is captured', 'turn capture off and on again, and trocar picks another port'],
+    'engine-port-taken': ['another program holds the port trocar listens on, so nothing is captured', ...(harness ? [`turn capture on for ${h} again, and trocar picks another port`, `trocar on ${h}`] : ['turn capture on again for the agent that uses it, and trocar picks another port'])],
     'socktable-unavailable': ['Windows did not say which program owns a connection, so it was forwarded only', 'no action is needed; the next connection is asked again'],
   }
   if (!Object.hasOwn(M, code)) return null
