@@ -30,7 +30,7 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
   const dir = path.join(home, '.trocar', 'collector')
   const run = new Date().toISOString() // on every line this run writes, so the board's "last on" is this run's lines (as install's, 1.6 §1)
   const put = (rec) => { try { if (fs.existsSync(dir)) appendEvent(dir, { ...rec, run, ...(source ? { source } : {}) }) } catch { /* the receipt carries it (R11) */ } }
-  const [{ turnOnModel }, { backendsFor, sourcesCtx }, { renderHook }] = await Promise.all([import('../collector/model-on.mjs'), import('../collector/arch/model-backends.mjs'), import('../collector/harness/templates/index.mjs')])
+  const [{ turnOnModel, offSince, offWords, STOPPED_BY_OFF }, { backendsFor, sourcesCtx }, { renderHook }] = await Promise.all([import('../collector/model-on.mjs'), import('../collector/arch/model-backends.mjs'), import('../collector/harness/templates/index.mjs')])
   const b = deps.backends || (await backendsFor({ os, home, run: deps.exec || null, env, fs }))
   const ctx = deps.ctx || sourcesCtx({ os, home, env, dirs: b.dirs, policy: b.policy, which: deps.which || null, fs })
   const args = { os, home, env, ids, harnesses: deps.harnesses || parts.harnesses, ctx, fs, renderHook, rootStore: b.rootStore || null, source, ...(deps.now ? { now: deps.now } : {}) }
@@ -106,14 +106,23 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
   // another command holds the lock: nothing was written, and the run says so like every failed run — a result line in flows/ and its receipt (1.6 §1)
   try { lock = await acquireOpLock({ file: opLockFile(home), waitMs: deps.lockWaitMs ?? 10_000, fs }) } catch (e) { if (e && e.code === LOCK_BUSY) return done(receiptOf({ ...plan, routes: [], problems: [errText(e)], exit: EXIT.incomplete }, { undo: null }), EXIT.incomplete); throw e }
   try {
-    const up = await ensureDaemonUp({ osName: os, dir, env, fs, unit, put, ...(deps.sleep ? { pause: deps.sleep } : {}) })
-    const r = up.up ? await turnOnModel({ ...args, root: plan.root }) : { ...plan, routes: [], problems: up.problems.length ? up.problems : up.notes, exit: EXIT.incomplete }
+    // 1.6 §1.6 (R12): what was on when the lock was taken; an off that comes in meanwhile marks one of these off, and on stops at its next look
+    const stateF = path.join(dir, 'state.json')
+    const notOn = offSince(stateF, plan.on, { fs })
+    const wasOn = plan.on.filter((h) => !notOn.includes(h))
+    let offCame = []
+    const halted = () => (offCame = offSince(stateF, wasOn, { fs })).length > 0
+    const up = await ensureDaemonUp({ osName: os, dir, env, fs, unit, put, halted, ...(deps.sleep ? { pause: deps.sleep } : {}) })
+    if (up.halt && offCame.length) { const message = offWords(offCame, stateF); return done(receiptOf({ ...plan, routes: [], problems: [message], exit: EXIT.incomplete }, { error: { code: STOPPED_BY_OFF, message } }), EXIT.incomplete) }
+    const r = up.up ? await turnOnModel({ ...args, root: plan.root, wasOn }) : { ...plan, routes: [], problems: up.problems.length ? up.problems : up.notes, exit: EXIT.incomplete }
     if (up.up) r.notes.push(...up.notes.map((text) => ({ harness: null, text })))
     if (fresh.length && r.on.length && up.up) { // nothing new: nothing to save. A failure here is this run's problem, not a throw that loses its receipt (V104)
       try { const now = readManifest(dir, fs); now.confirmed_paths = [...new Set([...(now.confirmed_paths || []), ...plan.planned.flatMap((p) => p.paths)])]; saveManifest(dir, now, fs) } catch (e) { r.problems.push(`trocar could not record the files you said yes to (${errText(e)}); the next trocar on asks again`); r.exit = EXIT.incomplete }
     }
     const b = setupBlocked(r)
-    return done(receiptOf(r, { planned: plan.planned, daemon: { state: up.state, started: up.started }, ...(b.length ? { blocked: b, error: setupError(b), ...(r.on.length && up.up ? { undo: UNDO_LINE.on } : {}) } : {}) }), r.exit, up.up ? (r.turnedOn || []) : [])
+    // an on that an off stopped: its code is the receipt's error, and the harnesses it wrote before are undone by `trocar off` (附录 C.1)
+    const offErr = r.error && r.error.code === STOPPED_BY_OFF ? { error: r.error, ...((r.turnedOn || []).length ? { undo: UNDO_LINE.on } : {}) } : {}
+    return done(receiptOf(r, { planned: plan.planned, daemon: { state: up.state, started: up.started }, ...offErr, ...(b.length ? { blocked: b, error: setupError(b), ...(r.on.length && up.up ? { undo: UNDO_LINE.on } : {}) } : {}) }), r.exit, up.up ? (r.turnedOn || []) : [])
   } catch (e) { // a throw under the lock is a failed run too: its result line names what turned on before the throw (turnOnModel attaches it; none when it is not known), then the error goes on
     put({ event: 'install-note', where: 'install', kind: 'result', outcome: 'failed', harnesses: Array.isArray(e && e.turnedOn) ? e.turnedOn : [], refused: [], reason: `on did not finish: ${errText(e)}` })
     throw e

@@ -42,9 +42,23 @@ export async function rootOf({ dir, m, rootStore, fs }) {
 }
 const groupOf = (harness, routeId) => `${harness}:${routeId}`
 
-/** turnOnModel({ os, home, env, ids, harnesses, ctx, … }) → { on, refused, routes, notes, problems, doors, exit }. `request` / `isFree` replace the
- *  world in a test that needs to; the default asks the endpoint controlEndpointFor resolves (no socket path is ever passed in). */
-export async function turnOnModel({ os, home, env = process.env, ids = null, harnesses, ctx, fs = nodeFs, now = () => new Date(), request = null, isFree = freeOnLoopback, persistentEnv = null, systemProxy = null, renderHook = null, newId = undefined, dryRun = false, rootStore = null, source = null, root: rootAsked = undefined }) {
+/** 1.6 §1.6 (R12): the receipt's code of an on that stopped because an off wrote desired off while it ran (src/cli/json.mjs ERROR_CODES). */
+export const STOPPED_BY_OFF = CODE.stoppedByOff
+/** Which of `ids` the state file no longer says are on — off's mark, read with the reader off writes it for (src/off/state.mjs). A file that cannot
+ *  be read names them all: whether an off was asked is not known, and off wins (R12). One read, no fsync: it runs before each harness (D62). */
+export function offSince(stateF, ids, { fs = nodeFs, now = new Date() } = {}) {
+  if (!ids.length) return []
+  let st
+  try { st = readStateFile(stateF, { fs, installed: ids, now }).state } catch { return [...ids] }
+  return ids.filter((id) => !(st.harnesses[id] && st.harnesses[id].desired === 'on'))
+}
+export const offWords = (gone, stateF) => `${gone.join(', ')} ${gone.length > 1 ? 'were' : 'was'} turned off while this on ran (${stateF}), and the off wins: on stopped there and started nothing more. What it wrote before is recorded; trocar off undoes it`
+
+/** turnOnModel({ os, home, env, ids, harnesses, ctx, … }) → { on, refused, routes, notes, problems, doors, exit, error? }. `request` / `isFree` replace the
+ *  world in a test that needs to; the default asks the endpoint controlEndpointFor resolves (no socket path is ever passed in). `wasOn`: the harnesses
+ *  the state file said were on when the caller took op.lock (default: as read here). Before the desired state is written, before POST /on and before
+ *  each harness's entries, the state file is read again: one of them off there = an off came in (R12) — on stops, `error.code` STOPPED_BY_OFF, exit 1. */
+export async function turnOnModel({ os, home, env = process.env, ids = null, harnesses, ctx, fs = nodeFs, now = () => new Date(), request = null, isFree = freeOnLoopback, persistentEnv = null, systemProxy = null, renderHook = null, newId = undefined, dryRun = false, rootStore = null, source = null, root: rootAsked = undefined, wasOn = null }) {
   const dir = collectorHome(path.join(home, '.trocar'))
   const m = readManifest(dir, fs)
   if (!installUsable(m)) return { code: CODE.certNotInstalled, on: [], refused: [], routes: [], notes: [], problems: [`trocar is not installed for this user (no install record with a root): run ${INSTALL_HINT} first`], exit: 1 }
@@ -74,6 +88,10 @@ export async function turnOnModel({ os, home, env = process.env, ids = null, har
   const stateF = path.join(dir, 'state.json')
   let st
   try { st = readStateFile(stateF, { fs, installed: on, now: now() }).state } catch { st = null }
+  const stopped = (gone, turnedOn = []) => { const message = offWords(gone, stateF); out.problems.push(message); return { ...out, error: { code: STOPPED_BY_OFF, message }, turnedOn, exit: 1 } }
+  const before = wasOn ? on.filter((h) => wasOn.includes(h)) : on.filter((h) => st && st.harnesses[h] && st.harnesses[h].desired === 'on')
+  const goneFirst = offSince(stateF, before, { fs, now: now() })
+  if (goneFirst.length) return stopped(goneFirst) // an off came in before this on wrote desired on: writing on over it would undo the off's mark
   // D54: a harness already on keeps its state and its window — a later on_at would drop a holder started in between
   const fresh = on.filter((h) => !(st && st.harnesses[h] && st.harnesses[h].desired === 'on' && m.liveness[h] && m.liveness[h].on_at && !m.liveness[h].off_at))
   if (fresh.length) {
@@ -120,6 +138,8 @@ export async function turnOnModel({ os, home, env = process.env, ids = null, har
     out.notes.push({ harness: g.slice(0, g.indexOf(':')), code: CODE.enginePortTaken, text: `${CODE.enginePortTaken}: port ${from} of ${g} was taken by another program; trocar moved it to ${to} and rewrote the entries` })
   }
   let doors = null
+  const goneAsk = offSince(stateF, on, { fs, now: now() })
+  if (goneAsk.length) return stopped(goneAsk)
   if (!ep.socketPath) out.problems.push(`no daemon to ask: ${ep.why || 'no control endpoint'}; start it (trocar daemon), then run trocar on again`)
   else {
     try {
@@ -132,9 +152,11 @@ export async function turnOnModel({ os, home, env = process.env, ids = null, har
   out.doors = doors || {}
   // V104: turned on = at least one of its entries now leads to a door — what the run's result line lists, also when a throw cuts the run short
   const turned = () => on.filter((h) => out.routes.some((r) => r.harness === h && r.ok))
+  let gone = []
   if (doors) {
     try {
       for (const { h } of planned) {
+        if ((gone = offSince(stateF, on, { fs, now: now() })).length) break // the harnesses already written stay recorded; the next one is not started
         const doorOf = (rid) => { const u = doors[groupOf(h, rid)]; if (!u) throw Object.assign(new Error(`the daemon opened no door for ${groupOf(h, rid)}`), { code: 'not-routed' }); return u }
         const w = writeRoutes(byName.get(h), { ...wctx, harness: h }, doorOf)
         for (const r of w.results) out.routes.push({ harness: h, ...r })
@@ -146,6 +168,7 @@ export async function turnOnModel({ os, home, env = process.env, ids = null, har
       try { flushResults(dir, m, fs) } catch (e) { out.problems.push(`the entries were written but trocar could not save its record of them (${errText(e)}); trocar off still undoes them; fix that, then run trocar on again`) }
     }
   }
+  if (gone.length) return stopped(gone, turned())
   out.turnedOn = turned()
   out.exit = !refused.length && !pending.length && doors && out.routes.every((r) => r.ok) && !out.problems.length ? 0 : 1
   return out

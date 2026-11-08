@@ -242,3 +242,46 @@ test('1.6 §3.3: the plan of on lists every path once, and speaks of an earlier 
   once(later)
   assert.match(later.find((l) => l.includes(env)) || '', /new since you last said yes/, `the new row says so\n${later.join('\n')}`)
 })
+
+// 1.6 §1.6 (R12): off goes first — it writes desired off before it waits for the lock, and an on that is part way through stops when it sees that:
+// the first harness's entries were written (and are recorded, so off undoes them), the second is not started, the receipt carries stopped-by-off and
+// on exits non-zero. Then off, with the lock free, takes out everything: no entry of on is left outside ~/.trocar.
+test('1.6 §1.6 (darwin): off writes off after on wrote its first harness → on stops before the second, stopped-by-off, exit 1; off then leaves no entry', async () => {
+  const { desiredOff, offWorld, runOff } = await import('../../src/off/orchestrate.mjs')
+  const w = await modelWorld({ os: 'darwin', commands: ['codex', 'opencode'] })
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  const sock = path.join(w.home, 'c.sock'), token = 't'.repeat(32), trocar = path.join(w.home, '.trocar')
+  fs.writeFileSync(path.join(w.dir, 'control.json'), JSON.stringify({ path: sock, token }))
+  const mine = (h) => Object.fromEntries(Object.entries(snapshot(h)).filter(([k]) => !k.startsWith('.trocar') && k !== 'c.sock'))
+  const before = mine(w.home)
+  let offAt = null
+  // another process's off, at the first agent file on writes: the very writer off uses when it finds the lock held
+  const full = new Proxy(fs, { get(t, k) {
+    if (k === 'renameSync') return (a, b) => { const r = t.renameSync(a, b); if (!offAt && !b.startsWith(trocar)) { offAt = b; desiredOff(offWorld({ home: w.home, env: w.env, deps: { platform: 'darwin' } }), null, ['codex', 'opencode']) } return r }
+    return typeof t[k] === 'function' ? t[k].bind(t) : t[k]
+  } })
+  const server = await startControlServer({ socketPath: sock, token, routes: {
+    'GET /status': async () => ({ doors: {} }),
+    'POST /on': async ({ body }) => ({ doors: Object.fromEntries(Object.entries(body.groups).map(([g, port]) => [g, `http://127.0.0.1:${port}`])) }),
+  } })
+  let doc, exit
+  try {
+    const deps = { fs: full, getuid: () => 501, backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: { os: 'darwin', harnesses: w.harnesses, arch: { unit: { userUnit: () => neverStarts } } } }
+    const io = fakeIo()
+    exit = await runOn({ io, env: w.env, home: w.home, platform: 'darwin', deps, ids: null, flags: new Set(['--yes']), json: true })
+    doc = io.json()
+  } finally { await server.close() }
+  assert.ok(offAt, 'on wrote an agent file')
+  assert.equal(exit, 1, JSON.stringify(doc))
+  assert.equal(doc.ok, false)
+  assert.equal(doc.error && doc.error.code, 'stopped-by-off', JSON.stringify(doc))
+  const started = [...new Set(doc.routes.map((r) => r.harness))]
+  assert.equal(started.length, 1, `only the first harness was started: ${JSON.stringify(doc.routes)}`)
+  const last = fs.readdirSync(path.join(w.dir, 'flows')).flatMap((n) => fs.readFileSync(path.join(w.dir, 'flows', n), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))).filter((l) => l.event === 'install-note' && l.kind === 'result').at(-1)
+  assert.deepEqual([last.outcome, last.harnesses], ['failed', started], JSON.stringify(last)); assert.deepEqual(checkRecord(last), [])
+  const st = JSON.parse(fs.readFileSync(path.join(w.dir, 'state.json'), 'utf8'))
+  assert.deepEqual(Object.values(st.harnesses).map((h) => h.desired), ['off', 'off'], 'the off on wrote stays: on does not write on over it')
+  const off = await runOff({ home: w.home, env: w.env, deps: { platform: 'darwin', exec: () => ({ status: 1, stdout: '', stderr: 'no launchctl here' }), procs: async () => [], sleep: async () => {} } })
+  assert.equal(off.exit, 0, JSON.stringify(off.receipt.problems))
+  assert.deepEqual(mine(w.home), before, 'off took out every entry on wrote')
+})

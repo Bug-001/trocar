@@ -151,7 +151,7 @@ export function changeText(e, prior = null) {
 }
 
 // An error that is not a failure of trocar: an `off` asked for while this `on` ran (R12: off wins), or a step that has to stop the run.
-const stop = (message) => Object.assign(new Error(message), { stopsRun: true })
+const stop = (message, code = null) => Object.assign(new Error(message), { stopsRun: true, ...(code ? { code } : {}) })
 
 /** What `on` would do, read from the disk and the manifest, written nowhere. Refusals come first, so a refused plan writes nothing at all (not even the
  *  manifest): a file that is not JSON, a dangling link, a plugin file already there, a manifest this build cannot read, a CA that cannot be used.
@@ -552,14 +552,14 @@ export async function turnOn(opts = {}) {
       let st
       try { st = readState().state } catch (e) { throw stop(`${stateF} cannot be read (${String((e && e.message) || e)}), so it is not known whether an off was asked; stopped (1.6 R12)`) }
       const off = plan.targets.filter((id) => !(st.harnesses[id] && st.harnesses[id].desired === 'on'))
-      if (off.length) throw stop(`${off.join(', ')} was turned off while this on ran (${stateF}); stopped, the off wins (1.6 R12). What was written is a resumable install: trocar on finishes it`)
+      if (off.length) throw stop(`${off.join(', ')} was turned off while this on ran (${stateF}); stopped, the off wins (1.6 R12). What was written is a resumable install: trocar on finishes it`, CODE.stoppedByOff)
     }
     const notes = r.notes
     const problems = []
-    let written = null, final = null, halt = false
+    let written = null, final = null, halt = false, offCame = null // offCame: the off's stop, whose code is the receipt's error (1.6 §3.1)
     try { ({ final, written } = await writeInstall({ dir, home, plan, m, osName, harnesses, freePort, now, fs, guard, confirmed: true, certs: isModelOs(osName) })) } catch (e) {
       if (!e.stopsRun) throw e
-      written = e.written; halt = true
+      written = e.written; halt = true; if (e.code === CODE.stoppedByOff) offCame = e
       problems.push(e.message)
     }
     if (written && written.needInstall.length) problems.push(`these certificate items are not in place and on does not write them: ${written.needInstall.join(', ')}; run trocar install (D55①)`)
@@ -578,6 +578,7 @@ export async function turnOn(opts = {}) {
       const counts = { entries: m.entries.length, changed: receipt.changed.length, notes: notes.length + problems.length }
       put({ event: EVENT.installNote, where: 'install', kind: 'result', outcome, harnesses: on, refused: refused.map((x) => x.harness), counts, reason }) // before the notes are taken: a result line that cannot be written adds its own "not recorded" (R11)
       receipt.notes = [...notes, ...problems]
+      if (offCame) receipt.error = { code: offCame.code, message: offCame.message }
       receipt.problems = problems // the renderer labels exactly these 问题: — a failed run's SUCCESS notes (the kernel's "downloaded and both digests
       // verified") must not wear the problem label, which is what a whole-receipt ok===false test did (seen on a macOS test machine, 2026-10-11)
       return { receipt, manifest: m, plan, exit: receipt.ok ? 0 : 1 }
@@ -585,7 +586,7 @@ export async function turnOn(opts = {}) {
     if (halt) { put({ event: EVENT.failure, where: 'install', code: 'install-error', reason: problems[0] }); return finish('stopped', `on stopped: ${problems[0]}`) }
 
     // ── the unit and the daemon: started when nothing answers, never started a second time (拉起不是重启, R8) ──
-    const checked = (fn) => { try { fn() } catch (e) { if (!e.stopsRun) throw e; problems.push(e.message); halt = true } }
+    const checked = (fn) => { try { fn() } catch (e) { if (!e.stopsRun) throw e; problems.push(e.message); halt = true; if (e.code === CODE.stoppedByOff) offCame = e } }
     const d = await ensureDaemonUp({ osName, dir, env, fs, unit, socketPath, request, pause, put, halted: () => { checked(() => guard()); return halt } })
     const { sock, ask, started, unitFailed } = d
     const up = d.up
