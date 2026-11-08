@@ -103,7 +103,8 @@ test('install --yes --json: the receipt (fingerprint, carriers, residual risk, c
   const r = io.json()
   assert.deepEqual([r.command, r.ok, typeof r.fp256, r.commands.includes('trocar uninstall')], ['install', true, 'string', true])
   // D61: install registers the login autostart, enables it (an `enable` clears a disable an earlier version left) and starts the daemon now
-  assert.deepEqual(launchctl.calls.filter((c) => /enable|bootstrap/.test(c)), ['launchctl enable gui/501/com.trocar.collector', `launchctl bootstrap gui/501 ${path.join(w.home, 'Library', 'LaunchAgents', 'com.trocar.collector.plist')}`], launchctl.calls.join(' | '))
+  const uid = typeof process.getuid === 'function' ? process.getuid() : -1 // the launchd domain is this process's own uid (autostart.mjs processUid), whatever deps.getuid says
+  assert.deepEqual(launchctl.calls.filter((c) => /enable|bootstrap/.test(c)), [`launchctl enable gui/${uid}/com.trocar.collector`, `launchctl bootstrap gui/${uid} ${path.join(w.home, 'Library', 'LaunchAgents', 'com.trocar.collector.plist')}`], launchctl.calls.join(' | '))
   assert.deepEqual([r.daemon.state, r.daemon.started], ['running', true])
   // 附录 C.2: the receipt confirms the login entry it registered, and carries no key C.2 does not name (H-1)
   assert.deepEqual(r.autostart, { entry: path.join(w.home, 'Library', 'LaunchAgents', 'com.trocar.collector.plist'), enabled: true })

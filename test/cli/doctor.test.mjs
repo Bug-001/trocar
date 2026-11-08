@@ -60,19 +60,22 @@ test('no record read = cannot judge: an empty capture file, or none at all, is e
   assert.equal(r.err, '', 'nothing on stderr for a clean capture')
 })
 
-test('a capture file others can read (0644, 0640) is exit 1 with the words, the file and its mode and the chmod line filled in; owner-only again is exit 0', async () => {
+// the finding by its code and its command (§3.7 findings wrap at 80 columns, so a sentence is not a layout-proof fact)
+const readable = async (s, src, file) => (await doctor(s, ['--json'], { source: src })).io.json().findings.some((x) => x.code === 'file-readable-by-others' && x.class === 'problem' && x.commands.some((c) => c.run.includes('chmod 600') && c.run.includes(file)))
+
+test('a capture file others can read (0644, 0640) is exit 1 with its finding and the chmod line filled in; owner-only again is exit 0', async () => {
   const s = plain()
   const src = path.join(s.home, 'src')
   const f = capture(src, { mode: 0o644 })
   let r = await doctor(s, [], { source: src })
   assert.equal(r.exit, 1, r.text)
   assert.match(r.out, /^trocar doctor: 1 problem\.$/m)
-  assert.ok(r.out.includes(f) && r.out.includes('(mode 0644) can be read by someone else'), r.out)
   assert.ok(r.out.includes(`chmod 600`) && r.out.includes(f), `the command, with the path filled in:\n${r.out}`)
+  assert.ok(await readable(s, src, f), 'the finding names the file and the chmod line')
   assert.ok(!/credential leak|redact firewall/.test(r.text), 'the old wording (the credential is stored verbatim on purpose) is gone')
   fs.chmodSync(f, 0o640)
   r = await doctor(s, [], { source: src })
-  assert.equal(r.exit, 1); assert.match(r.out, /\(mode 0640\) can be read by someone else/)
+  assert.equal(r.exit, 1); assert.ok(await readable(s, src, f))
   fs.chmodSync(f, 0o600)
   r = await doctor(s, [], { source: src })
   assert.equal(r.exit, 0, r.text)
@@ -102,7 +105,7 @@ test('④b covers ~/.trocar/backup/: a backup of a user\'s file that others can 
   fs.chmodSync(b, 0o644)
   r = await doctor(s, [], { source: src })
   assert.equal(r.exit, 1, r.text)
-  assert.ok(r.out.includes(b) && r.out.includes('(mode 0644) can be read by someone else'), r.out)
+  assert.ok(await readable(s, src, b), r.out)
 })
 
 // the network reads of the topology (1.6 §9.7, V50): `ss` and `ip` only read; the tests below are about what doctor starts, stops or changes, so these are set aside
@@ -176,7 +179,8 @@ test('a stale standalone copy is a problem with its reason (exit 1); where nothi
   const src = path.join(s.home, 'src'); capture(src)
   fs.appendFileSync(path.join(s.home, '.trocar', 'bin', 'trocar-off'), '\n// edited\n')
   let r = await doctor(s, [], { source: src })
-  assert.match(r.out, /is not the current version, so it may not undo everything\./); assert.equal(r.exit, 1, r.out)
+  assert.equal(r.exit, 1, r.out)
+  assert.ok((await doctor(s, ['--json'], { source: src })).io.json().findings.some((x) => x.code === 'standalone-stale' && x.class === 'problem'), r.out)
   assert.ok(r.out.includes(path.join(s.home, '.trocar', 'bin', 'trocar-off')), 'the copy is named')
   const n = plain(); const nsrc = path.join(n.home, 'src'); capture(nsrc)
   r = await doctor(n, [], { source: nsrc })

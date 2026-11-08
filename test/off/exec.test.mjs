@@ -205,7 +205,7 @@ test('MA16 the limit is a limit: what does not answer is null just past it, whet
 // untouched, and an argument cmd.exe cannot quote is refused before anything runs.
 test('execTool on win32: a tool that resolves to a .cmd runs through cmd.exe /d /s /c with its path and arguments; an .exe and other OSes run as named', () => {
   const dir = tmpDir('trocar-exec-win-'), spaced = path.join(dir, 'Program Files', 'nodejs')
-  fs.mkdirSync(spaced, { recursive: true }); fs.writeFileSync(path.join(spaced, 'npm.cmd'), ''); fs.writeFileSync(path.join(dir, 'git.exe'), '')
+  fs.mkdirSync(spaced, { recursive: true }); fs.writeFileSync(path.join(spaced, 'npm.CMD'), ''); fs.writeFileSync(path.join(dir, 'git.EXE'), '') // PATHEXT's case: win32's disk is case-blind, the disk this runs on may not be
   const env = { PATH: `${dir};${spaced}`, PATHEXT: '.COM;.EXE;.BAT;.CMD' }
   const seen = []
   const run = (file, args, opts) => (seen.push({ file, args, verbatim: opts.windowsVerbatimArguments === true }), { status: 0, stdout: '', stderr: '' })
@@ -215,7 +215,7 @@ test('execTool on win32: a tool that resolves to a .cmd runs through cmd.exe /d 
   const [npm, git, mac] = seen
   assert.deepEqual([npm.file, npm.args.slice(0, 3), npm.verbatim], ['cmd.exe', ['/d', '/s', '/c'], true])
   const line = npm.args[3]
-  assert.ok(line.toLowerCase().startsWith(`""${path.join(spaced, 'npm.cmd')}" `.toLowerCase()) && line.endsWith('"'), line) // PATHEXT's case on a case-blind disk
+  assert.ok(line.toLowerCase().startsWith(`""${path.join(spaced, 'npm.cmd')}" `.toLowerCase()) && line.endsWith('"'), line)
   assert.deepEqual(line.slice(1, -1).split('" ')[1].split(' '), ['install', '--omit=dev', '--no-audit', '--no-fund'])
   assert.deepEqual([git.file, git.args, git.verbatim], ['git', ['status'], false])
   assert.deepEqual([mac.file, mac.args], ['npm', ['install']])
