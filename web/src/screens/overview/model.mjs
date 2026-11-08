@@ -235,7 +235,7 @@ export function readFail(what, answer) {
   const obj = answer != null && typeof answer === 'object'
   const status = obj && typeof answer.status === 'number' ? answer.status : null
   const why = obj ? answer.error : answer
-  return { line: READ_FAIL(what, status), pairs: [...(status != null ? [['status', String(status)]] : []), ['error', why == null || why === '' ? '—' : hide(String(why))]] }
+  return { line: READ_FAIL(what, status, obj && answer.timedOut === true), pairs: [...(status != null ? [['status', String(status)]] : []), ['error', why == null || why === '' ? '—' : hide(String(why))]] }
 }
 
 // the page head's window links (the window is a route param, 1.2 §路由)

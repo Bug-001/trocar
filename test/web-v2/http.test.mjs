@@ -80,7 +80,7 @@ test('1.5 K-29 read deadline: a read with no answer within READ_DEADLINE_MS fail
       await Promise.resolve()
       mock.timers.tick(READ_DEADLINE_MS)
       const r = await p
-      assert.equal(r.ok, false); assert.equal(r.status, 0)
+      assert.equal(r.ok, false); assert.equal(r.status, 0); assert.equal(r.timedOut, true, 'a deadline is its own cause class')
       assert.equal(calls[0].init.signal.aborted, true)
     })
   } finally { mock.timers.reset() }
