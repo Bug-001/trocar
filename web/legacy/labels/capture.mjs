@@ -93,8 +93,8 @@ export const LOG = Object.freeze({
   window: (t) => `since ${t}`,
   filterRule: "by each group's own agent; a group counts once",
   truncated: 'only the latest part of the records was read; the list may be incomplete',
-  none: 'No capture failures in the last 24 hours',
+  none: 'No capture failures', // the window is the page's own `since` line (1.6 C.3 failures.since)
   metadataOnly: 'metadata only; no request or response bytes',
   manifestError: 'the install manifest could not be read',
-  expectedTitle: 'Not recorded by design, last 24 hours',
+  expectedTitle: 'Not recorded by design',
 })

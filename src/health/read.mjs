@@ -148,7 +148,7 @@ function collectorHealth({ dir, harnesses, now, fs, alive, identity, maxBytes, r
   if (flows.truncated) read.truncated = true
   // 1.6 C.3 failures.since: health judges what this install can act on — an install begun inside the 24 h starts the window (a previous install's
   // failures stay in flows/, read by query and the board; they are not this one's)
-  const began = installed ? Date.parse(m.created_at) : NaN
+  const began = m && m.install ? Date.parse(m.created_at) : NaN // an install begun, finished or not
   const windowMs = began > now - WINDOW_MS && began <= now ? now - began : WINDOW_MS
   Object.assign(read, { since: new Date(now - windowMs).toISOString(), window_hours: windowMs / 3600e3 })
   const fold = foldFlows(flows.records, { now, windowMs })

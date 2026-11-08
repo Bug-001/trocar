@@ -309,7 +309,7 @@ test('cli: runCli in a child node runs `status` without a runtime dir on a HOME 
   const groups = [{ key: 'agent-untrusted:config-after-start', count: 1, last_ts: 'T1', last: { ts: 'T1', event: 'agent-untrusted', pid: 11, agent: 'claude-code', code: 'config-after-start', reason: 'restart it' } },
     { key: 'engine/lookup-miss', count: 4, last_ts: 'T2', last: { ts: 'T2', event: 'failure', where: 'engine', code: 'lookup-miss', reason: 'no original destination', suppressed: 3 } }]
   const health = { generated_at: 'T3', summary: { state: 'failing', n: 3 }, collector: { installed: true, daemon: { state: 'running' }, conditions: [{ kind: 'untrusted', pid: 11, agent: 'claude-code', since: 'T1', reason: 'config-after-start' }], failures: groups, expected: {} }, raw: { problems: [] }, read: { errors: [], truncated: false } }
-  assert.match(formatStatus({ ...STATUS, health }), /capture health: 3 problem\(s\)[^\n]*\nconditions now:\n  now: untrusted pid 11 claude-code since T1: config-after-start\nproblems in the last 24 hours \(2 kind\(s\)\):\n  T1 agent-untrusted pid 11 claude-code: restart it\n  T2 problem \(engine\/lookup-miss\): no original destination \(x4 in 24 h\)$/, 'status prints the durable failure records by kind (D38)')
+  assert.match(formatStatus({ ...STATUS, health }), /capture health: 3 problem\(s\)[^\n]*\nconditions now:\n  now: untrusted pid 11 claude-code since T1: config-after-start\nproblems in the last 24 hours \(2 kind\(s\)\):\n  T1 agent-untrusted pid 11 claude-code: restart it\n  T2 problem \(engine\/lookup-miss\): no original destination \(x4\)$/, 'status prints the durable failure records by kind (D38)')
   fs.rmSync(home, { recursive: true, force: true })
 })
 

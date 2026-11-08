@@ -46,7 +46,7 @@ export const HEALTH_READ = Object.freeze({
   partial: ' · partly unreadable',
   agents: (n) => `${n} agent${n === 1 ? ' is' : 's are'} not fully captured`,
   others: (n) => `${n} other problem${n === 1 ? '' : 's'} open`,
-  groups: (n) => `${n} failure group${n === 1 ? '' : 's'} in the last 24 hours`,
+  groups: (n) => `${n} failure group${n === 1 ? '' : 's'}`, // the window is the capture log's `since` (1.6 C.3), not a fixed 24 h
 })
 
 // the words more than one screen shows the same way

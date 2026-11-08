@@ -66,6 +66,7 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
   const dir = collectorHome(path.join(home, '.trocar'))
   const ca = caPaths(path.join(dir, 'ca'))
   const m = readManifest(dir, fs) || newManifest(now())
+  if (!m.install) m.created_at = now().toISOString() // a manifest an unclean uninstall kept (install: null): this install starts now (1.6 C.3 failures.since)
   const before = JSON.stringify(m)
   const items = [], carriers = [], pending = [], problems = [], notes = [], installedHarnesses = [] // the last: read by finish(), which an install with no root reaches early
   // R5 / 附录 C.1: an item that is about no harness carries NO harness field (a `harness: null` is drift validateReceipt reports, a Windows test machine 2026-10-18)
