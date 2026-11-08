@@ -7,6 +7,8 @@ import assert from 'node:assert/strict'
 import { probe, withBoard, serveWorld } from './harness.mjs'
 import { world } from '../desk-world.mjs'
 import { WRITE_GAP_MS } from '../../../web/legacy/core/router.mjs'
+import { compareStep } from '../../../src/view/step-order.mjs'
+import { CALL_NOT_HERE, CALL_NOT_SHOWN } from '../../../web/legacy/labels/replay.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
@@ -79,5 +81,148 @@ test('1.2 #13 a lone step change is in the URL before a reload; a URL naming the
     await page.evaluate((k) => { location.hash = `#/replay/p/S?step=${k}`; location.reload() }, M)
     await bar(page, M, M)
     assert.deepEqual(await view(page), { n: M, m: M, follow: 'false', step: String(M) })
+  } finally { await b.stop() }
+})
+
+// 1.2 §路由 `call=<record id>` (#13 「`call=` 的三种情况」): the skeleton row whose rid it names. The expected steps come from the world's
+// rows in step order (3.5 §会话读); a small pack size puts the early steps in sealed packs, read after the tails.
+const rows = w.full(w.marks[last]).calls.slice().sort((a, b) => compareStep(a.ts, a.rid, b.ts, b.rid))
+const mainKey = w.full(w.marks[last]).lanes.find((l) => l.kind === 'main').lane
+const mains = rows.filter((r) => r.lane === mainKey), M0 = mains.length
+const nearest = (ts) => { let b = 0; mains.forEach((r, i) => { if (Math.abs(Date.parse(r.ts) - Date.parse(ts)) < Math.abs(Date.parse(mains[b].ts) - Date.parse(ts))) b = i }); return b }
+const urlOf = (page) => page.evaluate(() => Object.fromEntries(['step', 'call'].map((k) => [k, new URLSearchParams(location.hash.split('?')[1] || '').get(k)])))
+
+test('1.2 #13 call= of the main lane lands on its step with follow off, from a following desk and on a reload; the URL keeps it until follow is turned on', { skip }, async () => {
+  const K = Math.ceil(M0 / 2), rid = mains[K - 1].rid
+  const { b } = await desk({ from: last, pack: 2 })
+  try {
+    const { page } = b
+    await page.evaluate(() => { location.hash = '#/replay/p/S' })
+    await bar(page, M0, M0)
+    await page.evaluate((r) => { location.hash = `#/replay/p/S?call=${encodeURIComponent(r)}` }, rid)
+    await bar(page, K, M0)
+    assert.equal((await view(page)).follow, 'false')
+    await page.waitForTimeout(WRITE_GAP_MS * 2)
+    assert.deepEqual(await urlOf(page), { step: null, call: rid })
+    await page.reload({ waitUntil: 'load' })
+    await bar(page, K, M0)
+    await page.waitForTimeout(WRITE_GAP_MS * 2)
+    assert.equal((await view(page)).follow, 'false')
+    assert.deepEqual(await urlOf(page), { step: null, call: rid })
+    await page.evaluate(() => document.querySelector('.sh-follow').click())
+    await bar(page, M0, M0)
+    assert.deepEqual(await urlOf(page), { step: null, call: null })
+  } finally { await b.stop() }
+})
+
+test('1.2 #13 call= of another lane lands on the main step nearest in time, follow off, the call open in the drawer; a reload does the same', { skip }, async () => {
+  const c = rows.filter((r) => r.lane !== mainKey)[1], n = nearest(c.ts) + 1, kind = w.full(w.marks[last]).lanes.find((l) => l.lane === c.lane).kind
+  const { b } = await desk({ from: last, pack: 2 })
+  try {
+    const { page } = b
+    const drawer = () => until(page, ([k, back]) => {
+      const d = document.querySelector('#detail.open')
+      return !!d && d.classList.contains('k-' + k) && d.querySelector('.dback')?.dataset.back === back
+    }, [kind, mains[n - 1].rid])
+    await page.evaluate((r) => { location.hash = `#/replay/p/S?call=${encodeURIComponent(r)}` }, c.rid)
+    await bar(page, n, M0)
+    await drawer()
+    assert.equal((await view(page)).follow, 'false')
+    await page.waitForTimeout(WRITE_GAP_MS * 2)
+    assert.deepEqual(await urlOf(page), { step: null, call: c.rid })
+    await page.reload({ waitUntil: 'load' })
+    await bar(page, n, M0)
+    await drawer()
+    assert.deepEqual(await urlOf(page), { step: null, call: c.rid })
+    // closing the drawer is a move: the URL then names the drawn step, and no call
+    await page.evaluate(() => document.querySelector('#dclose').click())
+    await until(page, () => !document.querySelector('#detail.open'))
+    await page.waitForTimeout(WRITE_GAP_MS * 2)
+    assert.deepEqual(await urlOf(page), { step: String(n), call: null })
+  } finally { await b.stop() }
+})
+
+test('1.2 #13 call= naming no row of the session lands on step 1 with the note, and only after every pack has been read', { skip }, async () => {
+  const packs = w.files(w.marks[last], 2).head.packs.flatMap((p) => [`p${p.n}.main`, `p${p.n}.rest`])
+  assert.ok(packs.length > 2, 'the session comes in packs')
+  const { b } = await desk({ from: last, pack: 2, latency: 50 })
+  try {
+    const { page } = b
+    await page.evaluate(([note, names]) => {
+      performance.setResourceTimingBufferSize(100000)
+      window.__packsAtNote = null
+      new MutationObserver(() => {
+        if (window.__packsAtNote != null || ![...document.querySelectorAll('.toast')].some((e) => e.textContent === note)) return
+        const done = new Set(performance.getEntriesByType('resource').map((e) => (/\/api\/d\/(p\d+\.(?:main|rest))/.exec(e.name) || [])[1]).filter(Boolean))
+        window.__packsAtNote = names.filter((x) => !done.has(x))
+      }).observe(document.body, { childList: true, subtree: true })
+      location.hash = '#/replay/p/S?call=no-such-call'
+    }, [CALL_NOT_HERE, packs])
+    await bar(page, 1, M0)
+    await until(page, () => window.__packsAtNote != null)
+    assert.deepEqual(await page.evaluate(() => window.__packsAtNote), [], 'every pack had been read when the note came')
+    assert.equal((await view(page)).follow, 'false')
+  } finally { await b.stop() }
+})
+
+test('1.2 #13 call= naming no row of a truncated session says the call is not in the part shown, never that it is not in the session', { skip }, async () => {
+  const { b } = await desk({ from: last, pack: 2, truncated: { shown: 40, total: 400, kept_mb: 1, file_mb: 10 } }) // the cut: 3.5 session head
+  try {
+    const { page } = b
+    await page.evaluate(() => {
+      window.__notes = []
+      new MutationObserver(() => { for (const e of document.querySelectorAll('.toast')) if (!window.__notes.includes(e.textContent)) window.__notes.push(e.textContent) })
+        .observe(document.body, { childList: true, subtree: true })
+      location.hash = '#/replay/p/S?call=no-such-call'
+    })
+    await bar(page, 1, M0)
+    await until(page, (note) => window.__notes.includes(note), CALL_NOT_SHOWN)
+    assert.ok(!(await page.evaluate(() => window.__notes)).includes(CALL_NOT_HERE))
+  } finally { await b.stop() }
+})
+
+test('1.2 #13 a drawer closed while the rows still come stays closed, and the URL holds the step', { skip }, async () => {
+  const c = rows.filter((r) => r.lane !== mainKey)[1]
+  const packs = w.files(w.marks[last], 2).head.packs.flatMap((p) => [`p${p.n}.main`, `p${p.n}.rest`])
+  const { b } = await desk({ from: last, pack: 2, latency: 150 })
+  try {
+    const { page } = b
+    await page.evaluate(() => performance.setResourceTimingBufferSize(100000))
+    await page.evaluate((r) => { location.hash = `#/replay/p/S?call=${encodeURIComponent(r)}` }, c.rid)
+    await until(page, () => !!document.querySelector('#detail.open'))
+    const unread = (names) => {
+      const done = new Set(performance.getEntriesByType('resource').map((e) => (/\/api\/d\/(p\d+\.(?:main|rest))/.exec(e.name) || [])[1]).filter(Boolean))
+      return names.filter((x) => !done.has(x)).length
+    }
+    const left = await page.evaluate(([names, f]) => { document.querySelector('#dclose').click(); return new Function('names', `return (${f})(names)`)(names) }, [packs, unread.toString()])
+    assert.ok(left > 0, 'closed while pack parts were still to come')
+    await until(page, ([names, f]) => new Function('names', `return (${f})(names)`)(names) === 0, [packs, unread.toString()])
+    await page.waitForTimeout(WRITE_GAP_MS * 2 + 500) // the last pack placed
+    assert.equal(await page.evaluate(() => !!document.querySelector('#detail.open')), false, `closed with ${left} pack parts still to come`)
+    const u = await urlOf(page)
+    assert.equal(u.call, null); assert.ok(u.step != null)
+  } finally { await b.stop() }
+})
+
+test('1.2 #13 step= and call= together: the step wins and no drawer opens; after a step key the URL names the step and no call', { skip }, async () => {
+  const other = rows.filter((r) => r.lane !== mainKey)[1], K = Math.ceil(M0 / 2), rid = mains[K - 1].rid
+  const { b } = await desk({ from: last, pack: 2 })
+  try {
+    const { page } = b
+    await page.evaluate(([k, r]) => { location.hash = `#/replay/p/S?step=${k}&call=${encodeURIComponent(r)}` }, [K + 1, other.rid])
+    await bar(page, K + 1, M0)
+    await page.waitForTimeout(WRITE_GAP_MS * 2)
+    assert.equal((await view(page)).follow, 'false')
+    assert.equal(await page.evaluate(() => !!document.querySelector('#detail.open')), false)
+    // a main-lane call link, then the reader moves one step
+    await page.evaluate((r) => { location.hash = `#/replay/p/S?call=${encodeURIComponent(r)}` }, rid)
+    await bar(page, K, M0)
+    await page.waitForTimeout(WRITE_GAP_MS * 2)
+    assert.deepEqual(await urlOf(page), { step: null, call: rid })
+    await page.keyboard.press('ArrowLeft')
+    await bar(page, K - 1, M0)
+    await page.waitForTimeout(WRITE_GAP_MS * 2)
+    assert.deepEqual(await urlOf(page), { step: String(K - 1), call: null })
+    assert.equal((await view(page)).follow, 'false')
   } finally { await b.stop() }
 })
