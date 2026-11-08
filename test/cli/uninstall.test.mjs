@@ -577,3 +577,11 @@ test('formatUninstallReceipt: each left row names its file once, whether or not 
     assert.equal(text.split(name).length - 1, 1, `${l.path} is named once:\n${text}`)
   }
 })
+
+test('formatUninstallReceipt (win32): the scheduled task it deleted is not printed as a path relative to the current drive', () => {
+  const home = 'C:\\Users\\u', task = '\\trocar\\collector' // what autostart.removed carries on Windows: a task name, never a file
+  const text = formatUninstallReceipt({ ok: true, removed: [task, `${home}\\.trocar\\collector\\ca`], autostart: { disabled: true, removed: [task] }, problems: [], notes: [], kept: [] }, { home, platform: 'win32' })
+  const rows = text.split('\n').filter((l) => /^ {2}\S/.test(l))
+  assert.ok(rows.some((l) => l.includes(task)), `the task is said:\n${text}`)
+  for (const l of rows) assert.ok(!/^ {2}\\(?!\\)/.test(l), `no Removed row starts with a drive-relative path: ${l}`)
+})
