@@ -253,8 +253,9 @@ test('the entry on disk decides when no process does: intact when the value is t
   const cur = JSON.parse(fs.readFileSync(settings, 'utf8'))
   fs.writeFileSync(settings, JSON.stringify({ ...cur, env: { ...cur.env, NODE_EXTRA_CA_CERTS: '/elsewhere/ca.pem' } }))
   assert.deepEqual(await verdict(), [false, 'entry-changed', 1])
-  // the summary says it in words, once (§3.5: one short clause per row, no code name)
-  assert.match((await run(s, [], { request: asDaemon(reply()) })).text, /^ {2}claude-code {2}no {8}the setting that points at trocar holds something else$/m)
+  // the summary says it in words, once (§3.5: one short clause per row, no code name). On Linux that setting is install's certificate carrier, so setup
+  // is needed too, and the row gives the step that puts it back (1.6 §3.5: needed → set up first: trocar install)
+  assert.match((await run(s, [], { request: asDaemon(reply()) })).text, /^ {2}claude-code {2}no {8}set up first: trocar install$/m)
   fs.writeFileSync(settings, JSON.stringify({ theme: 'dark' }))
   assert.deepEqual(await verdict(), [false, 'entry-missing', 1])
   fs.rmSync(settings)

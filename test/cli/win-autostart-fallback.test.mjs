@@ -27,8 +27,9 @@ function windows({ refuse = true, value = null } = {}) {
     w.calls.push(cmd)
     const ok = (stdout = '') => ({ status: 0, stdout, stderr: '' })
     if (file === 'schtasks') {
-      if (args[0] === '/Create') { if (w.refuse) return { status: 1, stdout: '', stderr: 'ERROR: Access is denied.' }; w.task = true; return ok() }
-      if (args[0] === '/Query') return w.task ? ok(args.includes('/XML') ? TASK_XML : '') : { status: 1, stdout: '', stderr: '' }
+      // the task registered is the XML /Create was handed (schtasks reads it before trocar deletes its copy), and /Query /XML prints that back
+      if (args[0] === '/Create') { if (w.refuse) return { status: 1, stdout: '', stderr: 'ERROR: Access is denied.' }; w.task = true; const x = args.indexOf('/XML'); w.xml = x >= 0 ? fs.readFileSync(args[x + 1]).toString('utf16le').replace(/^\uFEFF/, '') : TASK_XML; return ok() }
+      if (args[0] === '/Query') return w.task ? ok(args.includes('/XML') ? w.xml || TASK_XML : '') : { status: 1, stdout: '', stderr: '' }
       if (args[0] === '/Delete') { w.task = false; return ok() }
       return ok()
     }
@@ -171,7 +172,8 @@ for (const task of [false, true]) {
     const win = windows()
     const w = await world(win)
     await install1(w)
-    win.task = task
+    win.task = task // registered meanwhile: trocar's own task, the one install wrote (uninstall leaves a task that is not trocar's, 4.8 §7)
+    if (task) win.xml = fs.readFileSync(path.join(w.dir, 'trocar-collector.task.xml'), 'utf8')
     const r = await uninstallWin(w, win)
     assert.ok(win.calls.some((c) => c.startsWith(`reg delete ${RUN} /v ${RUN_KEY.name}`)), `reg delete issued: ${JSON.stringify([r.receipt.problems, r.receipt.left])}`)
     assert.equal(win.value, null, 'no Run value left')
