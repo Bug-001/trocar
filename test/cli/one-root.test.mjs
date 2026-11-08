@@ -150,14 +150,14 @@ for (const os of ['darwin', 'win32']) {
   })
 }
 
-// an install record that does not parse is not the stray-root check's (as the older-install check): the plan goes on as without the check,
-// and the run's own read of the record says it
+// an install record that does not parse is not the stray-root check's: the stray-root check does not crash on it, and the record's own refusal
+// (1.6 §1.4: manifest-unreadable, before the plan; a dry run exits 0 with it in `blocked`) is what the run says
 for (const os of ['darwin', 'win32']) {
-  test(`CM40 ${os}: a corrupt install record does not crash the stray-root check; the dry run plans`, async () => {
+  test(`CM40 ${os}: a corrupt install record does not crash the stray-root check; the dry run is blocked by manifest-unreadable`, async () => {
     const w = await world(os)
     fs.mkdirSync(w.dir, { recursive: true }); fs.writeFileSync(manifestPath(w.dir), '{ not json\n')
     const r = await w.install(['--dry-run', '--json'])
     const doc = r.io.json()
-    assert.deepEqual([r.exit, doc.ok, doc.error], [0, true, undefined], r.io.text())
+    assert.deepEqual([r.exit, doc.error && doc.error.code, doc.blocked.map((b) => b.what)], [0, 'manifest-unreadable', [manifestPath(w.dir)]], r.io.text())
   })
 }
