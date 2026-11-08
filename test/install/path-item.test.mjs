@@ -17,6 +17,7 @@ import { setupHelperCommand } from '../../src/version.mjs'
 import { unitPath } from '../../src/collector/arch/linux/unit.mjs'
 import { COMMANDS } from '../../src/cli/commands.mjs'
 import { DEFAULT_REDIRECTOR_BIN } from '../../src/collector/arch/linux/redirector-client.mjs'
+import { flowEvents } from '../off/fixtures/off-ctx.mjs'
 
 test('V112: the start file is the one the (system, shell, ZDOTDIR) row names', () => {
   const h = '/h'
@@ -152,7 +153,12 @@ test('1.6 §3.6: a helper still installed: exit 0, one shared left row with the 
 test('D38: a PATH item record that cannot be read is said, never taken as no PATH item', async () => {
   const s = scriptLinux({ helper: true })
   assert.equal(await runInstallCli(['--yes'], s.ctx(fakeIo(), false)), 0)
-  assert.equal(await runUninstallCli(['--yes', '--json'], s.ctx(fakeIo())), 0)
+  // the flows result counts every left row the receipt has: a shared one apart from one left undone (one document never contradicts itself)
+  const counted = (io) => { const r = JSON.parse(io.text()), c = flowEvents(path.join(s.home, '.trocar', 'collector')).filter((e) => e.kind === 'result').at(-1).counts
+    return [c.left, c.shared, r.left.filter((l) => !l.shared).length, r.left.filter((l) => l.shared).length] }
+  const first = fakeIo()
+  assert.equal(await runUninstallCli(['--yes', '--json'], s.ctx(first)), 0)
+  assert.deepEqual(counted(first), [0, 1, 0, 1])
   const rec = path.join(s.home, '.trocar', 'collector', 'path-item.json')
   fs.writeFileSync(rec, '{ not json')
   const dry = fakeIo()
@@ -162,6 +168,7 @@ test('D38: a PATH item record that cannot be read is said, never taken as no PAT
   assert.equal(await runUninstallCli(['--yes', '--json'], s.ctx(io, false)), 1, io.text())
   const r = JSON.parse(io.text())
   assert.deepEqual(r.left.map((l) => [l.path, l.shared ?? false]), [[rec, false]], 'the record is a left row that names it, not a crash')
+  assert.deepEqual(counted(io), [1, 0, 1, 0])
   assert.ok(fs.readFileSync(s.rc, 'utf8').includes('.trocar/bin'), 'the PATH item is not quietly left behind as if gone')
 })
 
