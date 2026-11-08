@@ -51,6 +51,13 @@ export function urlHostsDeep(value, keyRe, out = []) {
 // Whether a variable is set to a true-ish value ('1', 'true', 'yes', 'on').
 export const truthy = (v) => /^(1|true|yes|on)$/i.test(String(v || '').trim())
 
+/** `present` places of an agent installed as a VS Code extension, `<id>-<version>[-<target>]` in the dir the desktop editor (`desktop`) or a
+ *  remote one's server on this machine (`remote`, Remote-SSH) installs extensions into (4.6 「这个 harness 装好了没有」, 4.11 §2.3).
+ *  shortcut: `<id>-*` also matches a longer id that starts with `<id>-`, and a folder VS Code has marked .obsolete until it restarts; both only
+ *  make the agent count as present (its carrier is placed), upgrade to reading extensions.json if that misleads. */
+const EDITOR_EXT = { desktop: '.vscode/extensions', remote: '.vscode-server/extensions' }
+export const editorExtension = (id, where = ['desktop', 'remote']) => where.map((w) => ({ base: 'home', path: EDITOR_EXT[w], glob: `${id}-*` }))
+
 // A value that differs per OS, as plain tagged data (spec 4.11 §2.3): core/proxymode/sources.mjs picks the entry of ctx.os. Not a function value, so
 // a descriptor's proxyMode stays data only.
 export const perOs = ({ darwin, win32 }) => ({ perOs: { ...(darwin !== undefined ? { darwin } : {}), ...(win32 !== undefined ? { win32 } : {}) } })

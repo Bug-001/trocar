@@ -18,8 +18,10 @@
 import path from 'node:path'
 import { parseTomlLite, parseDotenv, hostOf, dig, expandHome } from '../core/config-read.mjs'
 import { CODE } from '../core/codes.mjs'
-import { envProxies, argAfter, dotenvLayer, isOwnPath, perOs } from './_common.mjs'
+import { envProxies, argAfter, dotenvLayer, isOwnPath, perOs, editorExtension } from './_common.mjs'
 import { ROUTE_PLACES } from '../../off/marker.mjs'
+
+const EXTENSION = 'openai.chatgpt' // the VS Code extension id (its dir is `<id>-<version>[-<target>]`)
 
 const ETC_CONFIG = '/etc/codex/config.toml'
 const SYSTEM_CONFIG = { linux: ETC_CONFIG, darwin: ETC_CONFIG }
@@ -90,7 +92,7 @@ const proxyMode = {
   forms: [
     { id: 'codex.cli', os: ['darwin', 'win32'], route: 'env', cert: 'root', trust: 'os', present: [{ command: 'codex' }], verified: { darwin: true, win32: true } },
     { id: 'codex.cli-standalone', os: ['darwin', 'win32'], route: 'env', cert: 'root', trust: 'os', present: [{ command: 'codex' }], verified: { darwin: true, win32: true } },
-    { id: 'codex.vscode', os: ['darwin', 'win32'], route: 'env', cert: 'root', trust: 'os', present: [{ base: 'home', path: '.vscode/extensions', glob: 'openai.chatgpt-*' }], verified: { darwin: true, win32: true },
+    { id: 'codex.vscode', os: ['darwin', 'win32'], route: 'env', cert: 'root', trust: 'os', present: editorExtension(EXTENSION, ['desktop']), verified: { darwin: true, win32: true },
       // the extension starts (and ends) its own `codex … app-server`: the user cannot quit it, and killing it is the editor's business — a window reload is
       // what makes it start one that reads .env again (mac machine 2026-10-19: the CLI's kill step was printed for these processes)
       restart: { hint: 'In VS Code, run Developer: Reload Window (the ChatGPT extension then starts its codex again); or quit VS Code and start it again' } },
@@ -132,7 +134,7 @@ export default {
   layers: (ctx) => [dotenvLayer(ctx, path.join(codexHome(ctx.environ, ctx.home), '.env'), { name: '$CODEX_HOME/.env', drop: (k) => /^CODEX_/.test(k), live: false })],
   configHosts,
   proxies: (ctx) => envProxies(ctx.env, ['HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy', 'HTTP_PROXY', 'http_proxy']),
-  present: [{ base: 'home', dir: '.codex', env: 'CODEX_HOME' }, { command: 'codex' }],
+  present: [{ base: 'home', dir: '.codex', env: 'CODEX_HOME' }, { command: 'codex' }, ...editorExtension(EXTENSION)],
   inject,
   trust: {
     chain: [{ var: 'SSL_CERT_FILE', semantic: 'append' }, { var: 'CODEX_CA_CERTIFICATE', semantic: 'append' }], // both count (lab ①)

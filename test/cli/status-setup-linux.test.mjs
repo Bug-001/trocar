@@ -55,7 +55,7 @@ test('V91-S2: an unreadable install manifest gives setup unknown with a reason, 
   }
 })
 
-const homePlaces = (d, home, env) => d.present.filter((p) => p && p.base === 'home').flatMap((p) => resolveLoc(p, { os: 'linux', home, env }))
+const homePlaces = (d, home, env) => d.present.filter((p) => p && p.base === 'home').flatMap((p) => resolveLoc(p, { os: 'linux', home, env, readdir: (dir) => { try { return fs.readdirSync(dir) } catch { return [] } } }))
 const unseed = (d, home, env) => { for (const f of homePlaces(d, home, env)) fs.rmSync(f, { recursive: true, force: true }) }
 
 test('1.6 §3.5 listing over harness × footprint: with no names a harness is listed when present or known to the install record; named it always is; trocar not installed adds none', async () => {

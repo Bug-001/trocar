@@ -129,7 +129,7 @@ test('V91-O8 · trocar on --json (real and --dry-run): `planned` has no row for 
 })
 
 const ALL = await loadHarnesses()
-const homePlaces = (d, home, env) => d.present.filter((p) => p && p.base === 'home').flatMap((p) => resolveLoc(p, { os: 'linux', home, env }))
+const homePlaces = (d, home, env) => d.present.filter((p) => p && p.base === 'home').flatMap((p) => resolveLoc(p, { os: 'linux', home, env, readdir: (dir) => { try { return fs.readdirSync(dir) } catch { return [] } } }))
 // a harness that is there by its footprint alone (4.6): what its inject reads is missing, so install placed nothing for it → carrier-absent
 const LATE = {
   'kimi-code': { keep: ['.kimi-code', '.bashrc'], seed: (home) => fs.writeFileSync(path.join(home, '.bashrc'), "alias ll='ls -l'\n") },

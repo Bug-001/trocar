@@ -14,8 +14,10 @@
 // over into extra-cc.pem (its certificate blocks + the trocar CA); with none, the key points at trocar-ca.pem.
 import path from 'node:path'
 import { parseJsonc } from '../core/config-read.mjs'
-import { envHosts, argAfter, isOwnPath, perOs } from './_common.mjs'
+import { envHosts, argAfter, isOwnPath, perOs, editorExtension } from './_common.mjs'
 import { chromiumRole, NETWORK_SERVICE_ARG } from '../../off/chromium.mjs'
+
+const EXTENSION = 'anthropic.claude-code' // the VS Code extension id (its dir is `<id>-<version>[-<target>]`)
 
 const BASE_URL_KEYS = ['ANTHROPIC_BASE_URL', 'ANTHROPIC_BEDROCK_BASE_URL', 'ANTHROPIC_VERTEX_BASE_URL', 'ANTHROPIC_FOUNDRY_BASE_URL', 'ANTHROPIC_BEDROCK_MANTLE_BASE_URL']
 const HOST_MANAGED_DROPS = new Set(['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'NO_PROXY', 'no_proxy', 'NODE_EXTRA_CA_CERTS', 'NODE_TLS_REJECT_UNAUTHORIZED'])
@@ -166,7 +168,7 @@ const DESKTOP_POLICY = (key) => ({ policy: { darwin: { domain: 'com.anthropic.cl
 const proxyMode = {
   forms: [
     { id: 'claude-code.cli', os: ['darwin', 'win32'], route: 'settings', cert: 'bundled', trust: 'bundled', present: [{ command: 'claude' }, perOs({ darwin: { base: 'home', path: '.local/bin/claude' }, win32: { base: 'home', path: '.local/bin/claude.exe' } })], verified: { darwin: true, win32: true } },
-    { id: 'claude-code.vscode', os: ['darwin', 'win32'], route: 'settings', cert: 'bundled', trust: 'bundled', present: [{ base: 'home', path: '.vscode/extensions', glob: 'anthropic.claude-code-*' }], verified: { darwin: true, win32: true } },
+    { id: 'claude-code.vscode', os: ['darwin', 'win32'], route: 'settings', cert: 'bundled', trust: 'bundled', present: editorExtension(EXTENSION, ['desktop']), verified: { darwin: true, win32: true } },
     // the app with its Code tab (the bundled `claude` takes HTTPS_PROXY from the PAC's first PROXY); verified in 3p mode (R4-M, R4-W); its own first-party
     // hosts stay forward-only until a logged-in cell passes (ruling ⑲): sign-in, the updater and the Code-tab engine download
     { id: 'claude-code.desktop', os: ['darwin', 'win32'], route: 'library', cert: 'root', trust: 'root',
@@ -202,7 +204,8 @@ export default {
   proxy,
   proxyMode,
   layers,
-  present: [{ base: 'home', path: '.local/bin/claude' }, { command: 'claude' }, { base: 'home', dir: '.claude', env: 'CLAUDE_CONFIG_DIR' }, { base: 'home', env: 'CLAUDE_CONFIG_DIR', path: '.claude.json' }],
+  present: [{ base: 'home', path: '.local/bin/claude' }, { command: 'claude' }, { base: 'home', dir: '.claude', env: 'CLAUDE_CONFIG_DIR' }, { base: 'home', env: 'CLAUDE_CONFIG_DIR', path: '.claude.json' },
+    ...editorExtension(EXTENSION)],
   inject,
   configHosts: (ctx) => envHosts(ctx.env, BASE_URL_KEYS),
   trust: {
