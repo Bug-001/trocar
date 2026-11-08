@@ -47,6 +47,16 @@ const PARSE = {
   dotenv: (t) => Object.fromEntries(parseDotenv(t)),
 }
 
+// `expand: 'env'` (descriptor data): the program reads `${NAME}` in the value from its environment (`ctx.env`), as Hermes reads config.yaml. A reference
+// to a name that is not set stays as written there, names no file, and the program falls back to its default trust: that value is not in effect here
+const REF = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g
+const expanded = (value, env) => {
+  if (typeof value !== 'string') return value
+  let unset = false
+  const v = value.replace(REF, (m, k) => { const x = get(env, k); if (!isSet(x)) { unset = true; return m } return x })
+  return unset ? undefined : v
+}
+
 /** A setting: { set: true, value, where, all: [{ value, where }] } | { set: false } | { error, where }. */
 export function readSrc(src, ctx) {
   if (Array.isArray(src)) {
@@ -69,7 +79,10 @@ export function readSrc(src, ctx) {
     try { text = ctx.readFile(f) } catch (e) { if (absent(e)) continue; return { error: why(e), where: f } }
     let data
     try { data = PARSE[src.format](String(text)) } catch (e) { return { error: `unparsable ${src.format}: ${(e && e.message) || e}`, where: f } }
-    for (const m of walk(data, src.keys)) all.push({ value: m.value, where: `${f}#${m.keys.join('.')}` })
+    for (const m of walk(data, src.keys)) {
+      const value = src.expand === 'env' ? expanded(m.value, ctx.env) : m.value
+      if (value !== undefined) all.push({ value, where: `${f}#${m.keys.join('.')}` })
+    }
   }
   return all.length ? { set: true, value: all[0].value, where: all[0].where, all } : { set: false }
 }
