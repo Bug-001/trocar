@@ -286,6 +286,7 @@ export function formatUninstallReceipt(r, { home = null, platform = process.plat
   const d = r.daemon || {}
   if (d.state === 'stopped') lines.push(`The collector${d.pid ? ` (pid ${d.pid})` : ''} was stopped.`)
   else if (d.state === 'unresponsive' && d.pid) lines.push(`The collector (pid ${d.pid}) did not answer and could not be stopped. Stop it yourself: kill -9 ${d.pid}`)
+  for (const x of r.sealed || []) lines.push(`Sealed ${x.segment} (${size(x.bytes)} → ${size(x.sealed_bytes)}).`) // 1.6 §3.6: sealed by the daemon before it exited
   // §1.1: a connection nothing else would end was cut — how many is said, never left to --json alone
   if ((r.relayed || {}).cut) lines.push(`${r.relayed.cut} connection${r.relayed.cut === 1 ? '' : 's'} that would not end by itself ${r.relayed.cut === 1 ? 'was' : 'were'} cut.`)
   for (const n of r.non_identical || []) lines.push(`Not byte for byte what it was (you changed it after trocar did; only trocar's part was taken out): ${t(n.path)} (backup ${t(n.backup)})`)

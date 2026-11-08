@@ -44,6 +44,7 @@ import { NATIVE } from '../collector/arch/darwin/native.mjs'
 import { daemonLogPaths } from '../collector/arch/daemon-logs.mjs'
 import { isModelOs, STORE } from '../collector/model-install.mjs' // macOS / Windows run the collector model (4.11): uninstall never does off — it refuses while capture is online (1.6 §1.1, CM24)
 import { printJson } from './json.mjs'
+import { size } from './text.mjs'
 
 /** Is the daemon's holder (its `start`) the life `p` of a fresh table? The daemon's start and this CLI's may come from different readers (on Windows its
  *  resident helper, here the one PowerShell question when the daemon's helper is not asked): they agree to within START_AGREE_MS (4.8 §7), or the
@@ -94,6 +95,22 @@ const bytesUnder = (p, fs) => { // the size of a directory (or of a file), for t
 const keptOf = (home, fs) => KEEPS.map(([dir, what]) => ({ what, path: dir(trocarHome(home)), bytes: 0 })).filter((k) => fs.existsSync(k.path)).map((k) => ({ ...k, bytes: bytesUnder(k.path, fs) }))
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
 const errText = (e) => String((e && e.message) || e)
+
+/** 1.6 §3.6 「封最后一段」: the plaintext segments in raw/ before the daemon is asked to go (what an uninstall stop seals). */
+const plaintextIn = (raw, fs) => { try { return fs.readdirSync(raw).filter((n) => /\.ndjson$/.test(n)).sort() } catch { return [] } }
+/** What came of each of them: sealed now (its last ok journal line gives the sizes: `sealed[]`), or still plaintext, which stays so until a daemon
+ *  starts again (a note, D38); a file gone without a seal line is nothing to say. */
+function sealedOf(names, raw, fs, receipt) {
+  const ok = new Map()
+  let lines = []
+  try { lines = fs.readFileSync(path.join(raw, 'journal.jsonl'), 'utf8').trim().split('\n') } catch { /* no journal: nothing was sealed */ }
+  for (const l of lines) { try { const e = JSON.parse(l); if (e && e.op === 'seal' && e.outcome === 'ok') ok.set(e.segment, e) } catch { /* a torn line */ } }
+  for (const n of names) {
+    const segment = n.replace(/\.ndjson$/, ''), e = ok.get(segment)
+    if (fs.existsSync(path.join(raw, n))) receipt.notes.push(`${segment} stays unsealed until trocar runs again`)
+    else if (e) (receipt.sealed ||= []).push({ segment, bytes: e.bytes, sealed_bytes: e.sealedBytes })
+  }
+}
 
 /** What `uninstall --dry-run` would do (and what is printed when a yes is missing), read and written nowhere → the receipt fields. */
 function planUninstall(w, m, purgeData = false, root = packageRoot(), places = []) {
@@ -205,7 +222,11 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     if (w.deps.releaseHeld) await w.deps.releaseHeld(null) // 5.1: held requests are released unchanged (a seam; 5.1 is not built)
 
     // 2: the daemon is asked to go and drains, the routing confirmed off; 3 · 4, only once it is: the autostart is disabled, the daemon stopped
-    const { routing, drained } = await drainDaemon(w, { drainMs: deps.drainMs, by: 'uninstall', keepUnanswering: true }) // the one drain-then-stop path; `update`'s daemon replacement takes it too (D67①)
+    // the one drain-then-stop path; `update`'s daemon replacement takes it too (D67①). The daemon seals the segment it was writing before it exits (not when
+    // the data is purged after), and says how far it is: the wait lasts while it does (1.6 §3.6)
+    const sealing = (x) => `${x.step === 'verify' ? 'checking' : 'sealing'} ${x.segment}: ${Number.isFinite(x.total) ? `${size(x.done)} of ${size(x.total)}` : x.step === 'index' ? 'indexing it' : 'writing it out'}`
+    const raw = rawHome(trocarHome(home)), plain = purgeData ? [] : plaintextIn(raw, fs) // what the daemon is to seal before it exits
+    const { routing, drained } = await drainDaemon(w, { drainMs: deps.drainMs, by: 'uninstall', keepUnanswering: true, seal: !purgeData, onSealing: (x) => { if (say) say(sealing(x)) } })
     receipt.routing = { confirmed: routing.confirmed, state: routing.state, how: routing.how }
     receipt.daemon = routing.daemon; receipt.relayed = routing.relayed
     if (routing.relayed_reason) receipt.relayed_reason = routing.relayed_reason
@@ -254,6 +275,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
       }
     }
     const gone = routing.confirmed && (!stop || stop.stopped)
+    sealedOf(plain, raw, fs, receipt) // what came of the seal of each plaintext segment (D38)
 
     // 5 · the entries
     // 4.11 §3 ㉔: every trocar root the record does not list goes too — inside the record's undo, before its key; without a record (or one that

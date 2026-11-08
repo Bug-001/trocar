@@ -42,6 +42,7 @@ import { harnessOf } from '../../src/dissect/harnesses.mjs'
 import { workerFork } from '../helpers/worker-fork.mjs'
 import { foldLogFile } from '../../src/query/fold-log.mjs'
 import { recordId } from '../../src/collector/core/record/segments.mjs'
+import { openSealed } from '../../src/raw/reader.mjs'
 
 const FAKE = fileURLToPath(new URL('./arch/linux/fixtures/fake-loader.mjs', import.meta.url))
 const UID = process.getuid()
@@ -185,6 +186,63 @@ test('daemon: CC trusted through the installed settings key is decrypted and rec
     assert.equal(after.trim().split('\n').length, 2, 'the first call and the one that was in flight when off came')
     await until(() => flowsOf(s).some((f) => f.decision === 'decrypt' && f.agent === 'claude-code' && f.pid === 4242))
   } finally { await d.stop(); up.close(); p.done(); s.done() }
+})
+
+// 4.2 §自动封存 · 1.6 §3.6 (V127): after `uninstall` there is no next start, so the daemon it stops seals the segment its stop closes before it exits;
+// a stop by `off`, and an uninstall's with seal:false (--purge-data), leave it for the next start. A real daemon captures one call into a real segment,
+// then the exit request goes over the real control socket.
+for (const [what, body, sealed] of [['uninstall', { exit: true, by: 'uninstall' }, true], ['off', { exit: true }, false], ['uninstall --purge-data', { exit: true, by: 'uninstall', seal: false }, false]]) {
+  test(`daemon: a whole-daemon stop by ${what} ${sealed ? 'seals the segment it closes before it exits' : 'leaves the segment it closes for the next start'} (V127)`, { timeout: 30_000 }, async () => {
+    const s = sandbox(); const p = fakeProc(); const up = await relay()
+    const relayCa = path.join(s.home, 'relay-ca.pem'); fs.writeFileSync(relayCa, up.ca.certPem)
+    fs.mkdirSync(path.join(s.home, '.claude'))
+    fs.writeFileSync(path.join(s.home, '.claude', 'settings.json'), JSON.stringify({ env: { ANTHROPIC_BASE_URL: `https://relay.asight.test:${up.port}`, NODE_EXTRA_CA_CERTS: relayCa } }))
+    await install(s)
+    const { arch, clients } = fakeArch(p)
+    const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], env: { ...process.env, HOME: s.home }, upstreamCa: up.ca.certPem })
+    const rawDir = path.join(s.home, '.trocar', 'raw')
+    try {
+      await req(s.sock, 'POST', '/on', {})
+      p.add(4242, { uid: UID, exe: CC_EXE, argv: ['claude', '-p', 'hi'], cwd: s.home, env: { HOME: s.home }, startTicks: nowTicks(p) })
+      await clients[0].raw({ op: '__emit', ev: 'exec', tgid: 4242, pid: 4242, comm: 'claude', filename: CC_EXE, ts_ns: 1 })
+      await until(async () => (await req(s.sock, 'GET', '/status')).agents.find((a) => a.pid === 4242 && a.trusted))
+      const raw = net.connect(d.port, '127.0.0.1'); await once(raw, 'connect')
+      await clients[0].raw({ op: '__inject_port', port: raw.localPort, family: 4, dst: { address: '127.0.0.1', port: up.port, family: 4 }, pid: 4242, decrypt: 1 })
+      const c = tls.connect({ socket: raw, servername: 'relay.asight.test', ca: fs.readFileSync(path.join(s.collector, 'ca', 'extra-cc.pem'), 'utf8') }); await once(c, 'secureConnect')
+      const msg = JSON.stringify({ model: 'claude-x', max_tokens: 16, messages: [{ role: 'user', content: [{ type: 'text', text: 'trocar-seal-at-stop' }] }] })
+      c.write(`POST /v1/messages HTTP/1.1\r\nhost: relay.asight.test:${up.port}\r\nanthropic-version: 2023-06-01\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(msg)}\r\n\r\n${msg}`)
+      const seg = await until(() => (fs.existsSync(rawDir) ? fs.readdirSync(rawDir) : []).find((n) => n.endsWith('.ndjson') && fs.readFileSync(path.join(rawDir, n), 'utf8').includes('trocar-seal-at-stop')))
+      const bytes = await until(() => { const b = fs.readFileSync(path.join(rawDir, seg)); return b.length && b[b.length - 1] === 0x0a && b })
+      // a closed segment the queue never got, and the temp file of an interrupted seal: nothing of them may outlive the uninstall
+      const stray = '20261001T000000Z.ndjson', temp = `.20261001T000000Z.4242-deadbeef.tmp`
+      fs.writeFileSync(path.join(rawDir, stray), '{"id":"req_stray"}\n', { mode: 0o600 }); fs.writeFileSync(path.join(rawDir, temp), 'half', { mode: 0o600 })
+      await req(s.sock, 'POST', '/off', body)
+      await d.exited
+      const names = fs.readdirSync(rawDir).filter((n) => n.startsWith(seg.replace(/\.ndjson$/, '')))
+      if (!sealed) { assert.deepEqual(names, [seg], 'the plaintext is left for the next start'); return }
+      assert.deepEqual(fs.readdirSync(rawDir).filter((n) => n.endsWith('.ndjson') || n.endsWith('.tmp')), [], 'every plaintext segment sealed, no temp left')
+      assert.deepEqual(names, [seg.replace(/\.ndjson$/, '.sealed')], 'sealed, and the plaintext is gone')
+      const f = openSealed(path.join(rawDir, names[0]))
+      try { assert.deepEqual(Buffer.concat([...f.lines()].map((x) => x.line)), bytes, 'the sealed file rebuilds the segment byte for byte') } finally { f.close() }
+      assert.equal(fs.existsSync(path.join(s.collector, 'lock')), false, 'the stop still finished: the lock is gone')
+    } finally { await d.stop(); up.close(); p.done(); s.done() }
+  })
+}
+
+// D38: a segment the uninstall stop could not seal keeps its plaintext, is said as a seal-failed failure, and daemon-stop names `raw` among the steps
+// that failed. A directory under a segment's name is a plaintext segment the sealer refuses.
+test('daemon: an uninstall stop whose seal fails says so in daemon-stop (failed: raw) (V127, D38)', { timeout: 30_000 }, async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  const rawDir = path.join(s.home, '.trocar', 'raw'); fs.mkdirSync(path.join(rawDir, '20261002T000000Z.ndjson'), { recursive: true })
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: fakeArch(p).arch, harnesses: [cc], env: { ...process.env, HOME: s.home } })
+  try {
+    await req(s.sock, 'POST', '/off', { exit: true, by: 'uninstall' })
+    await d.exited
+    const f = flowsOf(s)
+    assert.deepEqual(f.filter((x) => x.event === 'daemon-stop').map((x) => x.failed), [['raw']])
+    assert.ok(f.some((x) => x.code === 'seal-failed'), 'the failed seal is said')
+  } finally { await d.stop(); p.done(); s.done() }
 })
 
 // 3.5 #32 (§后台抽取与归约 kick, D63 ①): a session is folded as it is captured. The real daemon records LLM calls of one session and
