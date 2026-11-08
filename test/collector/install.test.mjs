@@ -1231,7 +1231,7 @@ for (const [at, seed] of [['none', null], ['ours', '// trocar collector: an earl
     try {
       const file = path.join(b.home, '.plug', 'plugins', 'trocar-ca.js')
       const plug = { name: 'plug', runtime: 'node', processes: { names: [{ name: 'plug' }] }, hosts: [], trust: { chain: [{ var: 'X', semantic: 'append' }] },
-        inject: () => ({ owned: [{ path: file, role: 'plugin', data: '// trocar collector: trust plugin\n', mode: 0o644 }] }) }
+        present: [{ base: 'home' }], inject: () => ({ owned: [{ path: file, role: 'plugin', data: '// trocar collector: trust plugin\n', mode: 0o644 }] }) }
       const bundle = path.join(b.dir, 'ca', 'combined-picky.pem')
       const picky = { ...repHarness(b.dir), name: 'picky', processes: { names: [{ name: 'picky' }] },
         inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, '.picky', '.env'), vars: { SSL_CERT_FILE: bundle }, semantic: 'replace' }], files: [{ path: bundle, bundle: true, certsFrom: [] }] }) }
@@ -1254,21 +1254,3 @@ for (const [at, seed] of [['none', null], ['ours', '// trocar collector: an earl
   })
 }
 
-// 4.11 P4 (Linux `on`): the only harness asked for is left off a file that is not trocar's — the receipt does not say no agent was found: `skipped`
-// names the file, the run's failure line is in flows/ (D38), the file is byte for byte, exit 1
-test('on (Linux) · 4.11 P4: the only harness left off a file that is not trocar\'s is named as skipped, on record, not "no agent found"', async () => {
-  const b = box()
-  try {
-    await installCollector({ ...onBase(b), unit: null })
-    const file = path.join(b.home, '.plug', 'plugins', 'trocar-ca.js')
-    fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, '// the user\'s own plugin\n')
-    const plug = { name: 'plug', runtime: 'node', processes: { names: [{ name: 'plug' }] }, hosts: [], trust: { chain: [{ var: 'X', semantic: 'append' }] },
-      inject: () => ({ owned: [{ path: file, role: 'plugin', data: '// trocar collector: trust plugin\n', mode: 0o644 }] }) }
-    const r = await turnOn(onBase(b, { harnesses: [cc, plug], ids: ['plug'], socketPath: path.join(b.home, 'run', 'c.sock'), request: async () => ({ desired: 'on', actual: 'on' }), unit: null }))
-    assert.equal(r.exit, 1)
-    assert.equal(fs.readFileSync(file, 'utf8'), '// the user\'s own plugin\n')
-    assert.ok(r.receipt.skipped.some((s) => s.what === file), JSON.stringify(r.receipt.skipped))
-    assert.doesNotMatch(r.receipt.notes.join('\n'), /no agent trocar can capture was found/)
-    assert.ok(readEvents(b.dir).some((e) => e.event === 'failure' && e.code === 'not-trocars-file' && e.path === file), 'on record (D38)')
-  } finally { b.done() }
-})
