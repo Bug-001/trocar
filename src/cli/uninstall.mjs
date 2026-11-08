@@ -183,7 +183,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     if (wrote) put({ kind: 'desired-off', harnesses: wrote.ids, reason: `desired state off for ${wrote.ids.join(', ')}${wrote.unreadable ? ` (the state file could not be read: ${wrote.unreadable}; it was written again with everything off)` : ''}` })
     if (w.deps.releaseHeld) await w.deps.releaseHeld(null) // 5.1: held requests are released unchanged (a seam; 5.1 is not built)
 
-    // 2 · 3 · 4: the daemon is asked to go and drains, the autostart is disabled, the daemon is stopped, the link is confirmed gone
+    // 2: the daemon is asked to go and drains, the routing confirmed off; 3 · 4, only once it is: the autostart is disabled, the daemon stopped
     const { routing, drained } = await drainDaemon(w, { drainMs: deps.drainMs, by: 'uninstall' }) // the one drain-then-stop path; `update`'s daemon replacement takes it too (D67①)
     receipt.routing = { confirmed: routing.confirmed, state: routing.state, how: routing.how }
     receipt.daemon = routing.daemon; receipt.relayed = routing.relayed
@@ -191,6 +191,13 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     receipt.problems.push(...routing.problems); receipt.notes.push(...routing.notes)
     for (const ev of routing.events) put(ev)
     for (const f of routing.failures) failed.push(f)
+    // not confirmed off: the agents' entries still point at the daemon, so its autostart and the daemon itself stay (invariant 5, 1.6 §3.6)
+    if (!routing.confirmed && !routing.unstoppable) {
+      for (const f of failed) put({ event: 'failure', ...f })
+      put({ kind: 'result', outcome: 'failed', reason: `uninstall stopped: ${routing.problems[0] || 'the routing was not confirmed off'}` })
+      receipt.ok = false
+      return { receipt, exit: EXIT.incomplete }
+    }
     // the platform's own way out: darwin boots the LaunchAgent out and removes the plist (the same arm `off` uses, 4.9 §4 flip checklist ①),
     // Windows' task is DELETED here by the uninstall itself (the registration survives any manifest, so claiming it without asking schtasks left
     // the task registered at every login while the receipt said otherwise; the Run value stays a ledger entry), Linux disables the systemd unit
@@ -220,12 +227,6 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
       }
     }
     const gone = routing.confirmed && (!stop || stop.stopped)
-    if (!routing.confirmed && !routing.unstoppable) {
-      for (const f of failed) put({ event: 'failure', ...f })
-      put({ kind: 'result', outcome: 'failed', reason: `uninstall stopped: ${routing.problems[0] || 'the routing was not confirmed off'}` })
-      receipt.ok = false
-      return { receipt, exit: EXIT.incomplete }
-    }
 
     // 5 · the entries
     const u = await undoSide(w, { ids: null, manifest: m, manifestError: merr, yes, interactive, io, say, dropCa: true })
