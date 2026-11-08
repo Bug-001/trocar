@@ -31,6 +31,16 @@ import { absTarget, forwardHttp, withCredential } from './forward.mjs'
 const HEAD_MAX = 16 * 1024        // no opener or proxy reply head is longer
 const HOLD_MAX = 256 * 1024       // what a client may send while the upstream is being dialled
 const sha = (s) => crypto.createHash('sha256').update(s).digest()
+// The unanswered challenge's specifics for a person (1.6 §1.1, 4.8 §5.1): which agent's proxy, how often, how long, what came instead. The
+// headline (words.mjs) already says it was asked and did not answer, and status prints the program and pid from the record's own fields;
+// the agent is the group id's harness part (`<harness>:<route>`, the record's `user` keeps the id). Never a credential.
+const SENT_WORDS = { 'no-credentials': 'no password', 'not-basic': 'a login of another kind than a password', 'malformed-basic': 'a password it could not read' }
+const plural = (n, one) => `${n} ${one}${n === 1 ? '' : 's'}`
+function challengeReason({ count, sent }, group, ms) {
+  const at = group ? ` at ${group.split(':')[0]}'s proxy` : '', wait = ms % 1000 ? `${ms} ms` : plural(ms / 1000, 'second')
+  const asked = count === 1 ? `asked once${at} and not answered within ${wait}` : `asked ${count === 2 ? 'twice' : `${count} times`}${at} in ${wait}, never answered`
+  return `${asked}; it sent ${[...sent].map((x) => SENT_WORDS[x] || 'something else').join(' and ')}`
+}
 const printable = (s, n = 80) => String(s).replace(/[^\x20-\x7e]/g, '?').slice(0, n)
 const ROUTE_NAME = /^[\w-]+\.[\w.-]+$/ // the user an trocar-written route or block authenticates as: <route>.<group>
 const msgOf = (e) => String((e && e.message) || e)
@@ -160,10 +170,13 @@ function ip6bytes(h) {
   return Buffer.from([...left, ...mid, ...right].flatMap((x) => { const n = parseInt(x, 16); return [n >> 8, n & 255] }))
 }
 const authority = (t) => (t.host.includes(':') ? `[${t.host}]:${t.port}` : `${t.host}:${t.port}`)
+// → {user, pass}, or {none} when the header gives no credential to check: what came instead is the challenge's `sent` (4.8 §5.1)
 function basicOf(headers) {
   const h = headers.find(([k]) => k.toLowerCase() === 'proxy-authorization')
-  const m = h && /^basic\s+(\S+)$/i.exec(h[1])
-  if (!m) return null
+  if (!h) return { none: 'no-credentials' }
+  const m = /^basic\s+(\S+)$/i.exec(h[1])
+  if (!m) return { none: 'not-basic' }
+  if (!/^[A-Za-z0-9+/_-]+={0,2}$/.test(m[1])) return { none: 'malformed-basic' }
   const text = Buffer.from(m[1], 'base64').toString('utf8'), i = text.lastIndexOf(':') // the last colon: a door's user is its group id `<harness>:<route>`, the token is hex
   return i < 0 ? { user: text, pass: '' } : { user: text.slice(0, i), pass: text.slice(i + 1) }
 }
@@ -242,7 +255,8 @@ async function viaSocks5(sock, up, target, deadline) {
  *   refuse           (meta, info) — the flows/ row of a connection the upstream refused or could not be reached (no flow started)
  *   ownerOfPeer      optional async (peer) → { pid, process?, why? }: who holds the client's end (the door's own owner question); an `ingress-unknown`
  *                    record names that process, or says why it could not be told (`owner_unread`)
- *   timing           {ingressOpenerMs = 10000, ingressHealthIdleMs = 30000, ingressDialMs = 0 (no limit), upstreamSlowMs = 5000 (one upstream-slow event while a proxy has not answered)}
+ *   timing           {ingressOpenerMs = 10000, ingressHealthIdleMs = 30000, ingressDialMs = 0 (no limit), upstreamSlowMs = 5000 (one upstream-slow event while a proxy has not answered),
+ *                    ingressChallengeMs = 10000 (a 407 challenge its source has not answered by then is one ingress-challenge-unanswered)}
  * The connection handlers take an optional DOOR (D47, 4.9 §3): `null` = the engine's own ingress (the global token, the client's own user),
  * `{ user, token, open }` = one of the engine's per-group doors — `user` is the group id the lookup is asked with (whoever the client did or did
  * not authenticate as), `token` that door's password (the listener token), `open:true` a door that takes no credentials at all (the desktop
@@ -272,6 +286,40 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
     if (waited >= (timing.slowEngineMs ?? SLOW_ENGINE_MS)) failure({ event: 'client-left-held', where: 'ingress', code: 'client-left-held', peer, waited_ms: waited, reason: `a client left after waiting ${waited} ms at the door` })
   }
   const now = timing.now || Date.now, lastUnreachable = new Map() // door group → when its upstream-unreachable event was written (1.6 §9.7: at most one per form per 60 s)
+  // An unanswered 407 challenge (4.8 §5.1, D38). The 407 closes the connection, so the answer comes on a new one: the source is the door and the
+  // pid holding the client's end (asked before the 407 is sent: a client that exits on it leaves no holder to ask; '' when not told). The caller
+  // awaits this, so the 407 waits for the owner question, bounded by that question's own budget. No connection of that source through the lookup within challengeMs →
+  // one ingress-challenge-unanswered; then quiet for the source until it gets through or goes quiet for quietMs. Never a credential value.
+  const challengeMs = timing.ingressChallengeMs ?? 10_000, quietMs = 10 * 60_000, SOURCES_MAX = 1024
+  const sources = new Map() // `${door}\0${pid}` → { first, last, count, sent:Set, said, timer, pid, process }
+  const okAt = new Map() // `${door}\0${pid}` → when a connection of that source last passed the lookup
+  const bounded = (m) => { if (m.size > SOURCES_MAX) { const [k, v] = m.entries().next().value; if (v && v.timer) clearTimeout(v.timer); m.delete(k) } }
+  const keyOf = (door, pid) => `${door}\0${pid ?? ''}`
+  function answered(door, pid) { const t = now(); for (const k of new Set([keyOf(door, pid), keyOf(door, null)])) { okAt.delete(k); okAt.set(k, t); bounded(okAt); const e = sources.get(k); if (e) { clearTimeout(e.timer); sources.delete(k) } } }
+  function challenged(door, peer, sent) {
+    counters.challenged++
+    const at = now()
+    return Promise.resolve(ownerOfPeer ? ownerOfPeer(peer) : null).catch(() => null).then((o) => {
+      const pid = o && o.pid != null ? o.pid : null, k = keyOf(door, pid)
+      if ((okAt.get(k) ?? -Infinity) >= at) return // answered while its owner was asked
+      let e = sources.get(k)
+      if (e && at - e.last > quietMs) { clearTimeout(e.timer); sources.delete(k); e = null }
+      if (!e) { e = { first: at, last: at, count: 0, sent: new Set(), said: false, timer: null, pid, process: o && o.process }; sources.set(k, e); bounded(sources) }
+      e.count++; e.sent.add(sent); e.last = Math.max(e.last, at)
+      if (e.said || e.timer) return
+      e.timer = setTimeout(() => {
+        e.timer = null
+        if (sources.get(k) !== e) return
+        e.said = true
+        failure({
+          where: 'ingress', code: 'ingress-challenge-unanswered', ...(door ? { user: printable(door) } : {}), ...(pid != null ? { pid, ...(e.process ? { process: printable(e.process) } : {}) } : {}),
+          challenges: e.count, sent: [...e.sent],
+          reason: challengeReason(e, door ? printable(door) : '', challengeMs),
+        })
+      }, challengeMs)
+      if (e.timer.unref) e.timer.unref()
+    })
+  }
   const idle = new Set() // sockets that are not a flow: still in the handshake, or a health tunnel (closeIdle ends them; flows finish on their own)
 
   async function handle(socket, door = null) {
@@ -331,7 +379,7 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
       }
       r.holdBack() // a request body may be large and arrive while the flow is looked up: the client waits, it is not cut (§5.1)
       const c = basicOf(m.head.headers)
-      o = { target, user: c ? c.user : '', pass: c ? c.pass : null, authed: false, forward: { head: m }, ok: () => {}, ...httpSays }
+      o = { target, user: c.none ? '' : c.user, pass: c.none ? null : c.pass, none: c.none, authed: false, forward: { head: m }, ok: () => {}, ...httpSays }
     } else if (first.kind === 'connect') {
       const m = await r.take(headOf, deadline)
       if (m.gone) return void r.detach()
@@ -343,7 +391,7 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
       const c = basicOf(m.head.headers)
       const hh = m.head.headers.find(([k]) => k.toLowerCase() === UPSTREAM_HEADER) // the hook's prior proxy (4.11 P7 step 1): handed to the lookup, never forwarded (the ingress writes its own prelude) nor recorded
       o = {
-        target, user: c ? c.user : '', pass: c ? c.pass : null, authed: false, ...(hh ? { header: hh[1] } : {}),
+        target, user: c.none ? '' : c.user, pass: c.none ? null : c.pass, none: c.none, authed: false, ...(hh ? { header: hh[1] } : {}),
         ok: () => say('HTTP/1.1 200 Connection established\r\n\r\n'), ...httpSays,
       }
     } else {
@@ -378,8 +426,9 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
     //    (D47) takes no credentials at all: the connection is judged by its process, not by a password any process could copy.
     //    A CONNECT with no Proxy-Authorization at all is the first leg of Basic auth (RFC 7235), not a wrong credential: Chromium (VS Code's
     //    network service) sends none until a 407 asks, then answers from http.proxy's user:token. It gets the 407 challenge, is counted
-    //    (`challenged`), and writes no failure line; a wrong token is `ingress-auth-failed` (4.8 §5.1).
-    if (!o.authed && !(door && door.open) && o.pass === null) { counters.challenged++; r.detach(); return o.denied() }
+    //    (`challenged`), and writes no failure line unless the challenge goes unanswered (challenged()); a wrong token is `ingress-auth-failed` (4.8 §5.1).
+    const source = door && typeof door.user === 'string' ? door.user : ''
+    if (!o.authed && !(door && door.open) && o.pass === null) { await challenged(source, peer, o.none); r.detach(); return o.denied() }
     if (!o.authed && !(door && door.open) && !tokenOk(o.pass, doorHash ?? tokenHash)) { authFailed(o.user, 'token mismatch'); r.detach(); return o.denied() }
     // who this connection is for: a door names its group (the client's own user is only the engine's own ingress's to say), and the lookup
     // answers it with the process the socket belongs to, not with anything the credentials claim
@@ -439,6 +488,7 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
         r.detach(); return o.badGateway('lookup')
       }
       if (!meta) { authFailed(o.user, 'unknown user'); r.detach(); return o.denied() }
+      if (!meta.refuse) answered(source, meta.pid)
       // a door that refused this process (the PAC door, 4.11 P10): one record of its own code, and the connection closed unanswered — a 407 would ask
       // for credentials the door never takes (and Chromium does not fall over to the PAC's next entry on one). A refusal for an owner that could not be
       // read (`unread`) of a client that had left is no refusal: a client that closed has no holder, hence the unread owner; it is counted `left`
@@ -565,6 +615,6 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
     handle,
     stats: () => ({ ...counters }),
     /** end what is not a flow (handshakes, health tunnels): engine.close() waits for flows, never for these */
-    closeIdle() { for (const s of [...idle]) s.destroy() },
+    closeIdle() { for (const s of [...idle]) s.destroy(); for (const e of sources.values()) clearTimeout(e.timer); sources.clear() },
   }
 }

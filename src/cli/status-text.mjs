@@ -3,7 +3,7 @@
 // Everything here renders from the status document (附录 C.3) and the facts it was built from; nothing is computed twice and nothing is written.
 import { columns, pairs, wrap, unknown, ago, noColor, tilde, WIDTH } from './text.mjs'
 import { renderRoutes, routeNotes } from '../netenv/topology-text.mjs'
-import { briefText, failureBrief, failureWord, squashed, statusNote } from './words.mjs'
+import { failureBrief, failureWord, squashed, statusNote } from './words.mjs'
 import { carrierWords } from './receipt.mjs'
 
 // ── the summary (§3.5) ────────────────────────────────────────────────────────────────────────────────────────────
@@ -146,30 +146,12 @@ export const portOf = (url) => { const m = /^(?:\w+:\/\/)?(?:[^@/]*@)?(?:127\.0\
 
 // ── `--failures` (§3.5: one line per kind of problem, then Expected) ──────────────────────────────────────────────
 /** One group's line: its harness when the group names one (D38: for whom), the shared sentence, then (when the sentence stands for a known code) the
- *  record's own reason — the CLI has no technical details to fold it into. §3.5 · §1.1⑥: a backquoted span of a reason is a command to copy (the
- *  helper's `sudo … setup-helper`, §3.2): the line briefs the whole reason with each span said as the pointer (`the line below`, `the lines below`
- *  for two or more); when it does not fit, the clause holding the last pointer stays whole and the words before it are cut (only a clause too long by
- *  itself is cut, the pointer then put back at the end), and each command follows whole on its own line; a reason with no span is briefed as it is. */
+ *  record's own reason — the CLI has no technical details to fold it into. §3.5 · §1.1⑥: --failures is where the digest's cut reasons move to (R11),
+ *  so the reason is printed whole and folds inside 80 columns, never cut; a backquoted span of it is a command to copy (the helper's
+ *  `sudo … setup-helper`, §3.2): said as the pointer (`the line below`, `the lines below` for two or more), each command follows whole on its own line. */
 const COMMAND = /`([^`]+)`/g
 const commandsOf = (reason) => [...String(reason || '').matchAll(COMMAND)].map((m) => squashed(m[1]))
-// §3.5 / §1.1⑥: a brief never cuts a path (a word with `/` or `\\`) out of a reason: when the cut would drop one, the reason stays whole and the 80-column fold
-// gives the path a line of its own (R11: the reason is moved, never lost)
-const reasonOf = (reason, max = 100) => {
-  const n = commandsOf(reason).length, pointer = n > 1 ? 'the lines below' : 'the line below'
-  const whole = squashed(String(reason || '').replace(COMMAND, pointer)), cut = briefOf(whole, n, pointer, max), kept = new Set(cut.split(' '))
-  return whole.split(' ').some((w) => /[\\/]/.test(w) && !kept.has(w)) ? whole : cut
-}
-const briefOf = (whole, n, pointer, max) => {
-  const head = briefText(whole, max)
-  if (!n || head === whole) return head
-  // the clause that holds the last pointer says what the command is for: it stays whole, the words before it are cut (§3.5); a boundary whose
-  // clause would be the pointer alone (`…, run: <pointer>`) is skipped, so the verb stays with it
-  const at = whole.lastIndexOf(pointer), start = Math.max(0, ...[...whole.slice(0, at).matchAll(/[;:.]\s/g)].map((m) => m.index + m[0].length).filter((b) => !whole.slice(b).trim().startsWith(pointer)))
-  const clause = whole.slice(start), room = max - clause.length - 1
-  const lead = whole.slice(0, start).trimEnd(), cut = lead.slice(0, room - 2).lastIndexOf(' ') // at a word boundary, or no word at all (§1.1⑦)
-  if (start > 0 && room >= 3) return `${cut > 0 ? lead.slice(0, cut).replace(/[\s,;:]+$/, '') : ''}... ${clause}`
-  return head.slice(0, -3).includes(pointer) ? head : `${briefText(whole, max - pointer.length - 1)} ${pointer}`
-}
+const reasonOf = (reason) => squashed(String(reason || '').replace(COMMAND, commandsOf(reason).length > 1 ? 'the lines below' : 'the line below'))
 const failureLine = (g0) => { const g = { ...g0, reason: reasonOf(g0.reason) }; const r = failureWord(g.where, g.code, g.harness || '') && g.reason; const s = r ? `${failureBrief(g)}: ${r}` : failureBrief(g, { max: Infinity }); return g.harness ? `${g.harness}: ${s}` : s } // no nested brackets (§1.1②): a reason has its own
 
 /** The whole wall of the last 24 hours: one line per `level:'problem'` group of the document's `failures` (C.3, the board's capture log reads the same

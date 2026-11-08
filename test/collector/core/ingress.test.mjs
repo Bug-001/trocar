@@ -17,6 +17,7 @@ import { startMockProxy } from '../../lab/mock-upstream/proxy.mjs'
 import { createCa, loadCa } from '../../../src/collector/core/tls/ca.mjs'
 import { createLeafIssuer } from '../../../src/collector/core/tls/leaf.mjs'
 import { checkRecord, isFailure } from '../../../src/health/codes.mjs'
+import { failureWord } from '../../../src/cli/words.mjs'
 import { within, closeWithin } from '../../helpers/bounded.mjs'
 
 const T = { timeout: 20_000 }
@@ -137,6 +138,86 @@ test('W13 the Basic challenge round trip (VS Code\'s Chromium): no credentials �
   again.sock.destroy()
   assert.deepEqual(L.failures, [])
   assert.equal(L.engine.stats().ingress.challenged, 1)
+})
+
+// A challenged client that never comes back with the right credentials is a silent loss (4.8 §5.1, D38): after ingressChallengeMs one
+// ingress-challenge-unanswered for the source (door + the pid that holds the client's end), never a credential value; one per episode.
+const CHALLENGE_MS = 150
+const SENT = [['no-credentials', ''], ['not-basic', 'Proxy-Authorization: Bearer abc.def-secret\r\n'], ['malformed-basic', 'Proxy-Authorization: Basic !!not*base64%%\r\n']]
+const challengeLab = (t) => { const redirector = createStaticRedirector(); redirector.ownerOfPeer = async () => ({ pid: 4242, process: 'Code Helper' }); return lab(t, { redirector, timing: { ingressChallengeMs: CHALLENGE_MS } }) }
+const challenge = async (L, header) => {
+  const target = `127.0.0.1:${L.echoPort}`
+  const c = L.client(); c.write(`CONNECT ${target} HTTP/1.1\r\nHost: ${target}\r\n${header}\r\n`)
+  assert.match(await c.head(), /^HTTP\/1\.1 407 /); await c.closed()
+}
+const unanswered = (L) => L.failures.filter((f) => f.code === 'ingress-challenge-unanswered')
+
+for (const [kind, header] of SENT) {
+  test(`W13 a 407 challenge (${kind}) the client never answers: one ingress-challenge-unanswered with the source and what was sent, no credential value`, T, async (t) => {
+    const L = await challengeLab(t)
+    await challenge(L, header)
+    await sleep(CHALLENGE_MS * 3)
+    const got = unanswered(L)
+    assert.equal(got.length, 1)
+    assert.deepEqual([got[0].event, got[0].where, got[0].pid, got[0].challenges, got[0].sent], ['failure', 'ingress', 4242, 1, [kind]])
+    assert.deepEqual(checkRecord(got[0]), []); assert.equal(isFailure(got[0]), true)
+    // the program and its pid are the record's fields (status prints them); the reason is for a person (1.6 §1.1): neither again, and no closed code of what was sent
+    assert.deepEqual([got[0].pid, got[0].process], [4242, 'Code Helper'])
+    assert.equal(got[0].reason.includes('Code Helper') || got[0].reason.includes('4242'), false, got[0].reason)
+    assert.equal(got[0].reason.includes(kind), false, got[0].reason)
+    const all = JSON.stringify(L.failures)
+    for (const secret of ['abc.def-secret', '!!not*base64%%', TOKEN]) assert.equal(all.includes(secret), false, 'no credential value in any record')
+    assert.equal(L.upConns.length, 0)
+  })
+}
+
+test('W13 a challenge answered by the same source with the right credentials writes no failure', T, async (t) => {
+  const L = await challengeLab(t)
+  for (const [, header] of SENT) {
+    await challenge(L, header)
+    const again = L.client(); again.write(connectHead(`127.0.0.1:${L.echoPort}`))
+    assert.match(await again.head(), /^HTTP\/1\.1 200 /); again.sock.destroy()
+  }
+  await sleep(CHALLENGE_MS * 3)
+  assert.deepEqual(L.failures, [])
+})
+
+test('W13 one source challenged again and again without answering: one record for the episode, the challenges counted', T, async (t) => {
+  const L = await challengeLab(t)
+  for (let i = 0; i < 4; i++) await challenge(L, SENT[i % 3][1])
+  await sleep(CHALLENGE_MS * 3)
+  for (let i = 0; i < 3; i++) await challenge(L, '')
+  await sleep(CHALLENGE_MS * 3)
+  const got = unanswered(L)
+  assert.equal(got.length, 1, 'one record, not one per challenge')
+  assert.equal(got[0].challenges >= 4, true)
+  assert.deepEqual([...got[0].sent].sort(), SENT.map(([k]) => k).sort())
+  assert.equal(L.engine.stats().ingress.challenged, 7)
+})
+
+// A group's door (its user is the group id trocar chose) challenged by a client that exits on the 407, like curl: the owner of its end is asked
+// before the 407 goes out, the record names the group as it is, and the reason adds only what the headline does not say (4.8 §5.1).
+test('W13 an unanswered challenge at a group door: the group id as user, the owner asked while the client still holds its end, a reason that is not the headline', T, async (t) => {
+  const records = [], open = new Map() // the client's local port → its socket, while it is open
+  const ownerOfPeer = async (peer) => { await sleep(50); const s = open.get(peer.port); return s && !s.destroyed ? { pid: 777, process: 'curl' } : { pid: null, why: 'no-row' } }
+  const ing = createIngress({ token: TOKEN, timing: { ingressChallengeMs: CHALLENGE_MS }, ownerOfPeer, failure: (r) => records.push(r), handleFlow: () => {}, connectUpstream: () => { throw new Error('no upstream in this test') }, lookupIngress: async () => null })
+  const srv = net.createServer((s) => ing.connection(s, { user: 'claude-code:settings', token: TOKEN, open: false }))
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r)); t.after(() => new Promise((r) => srv.close(r)))
+  const s = net.connect(srv.address().port, '127.0.0.1'); s.on('error', () => {})
+  await new Promise((r) => s.once('connect', r)); open.set(s.localPort, s)
+  const got = new Promise((r) => s.once('data', (d) => { s.destroy(); r(d.toString('latin1')) })) // gone the moment the answer comes
+  s.write('CONNECT example.test:443 HTTP/1.1\r\nHost: example.test:443\r\n\r\n')
+  assert.match(await within(got, 2000, 'the 407'), /^HTTP\/1\.1 407 /)
+  await sleep(CHALLENGE_MS * 3)
+  const [rec, ...more] = records.filter((f) => f.code === 'ingress-challenge-unanswered')
+  assert.deepEqual([rec && rec.user, rec && rec.pid, rec && rec.process, more.length], ['claude-code:settings', 777, 'curl', 0])
+  assert.equal(JSON.stringify(records).includes('(not a route name)'), false)
+  // the reason names the agent (the group id's harness part), not the group id, and not the program or pid the record's fields carry
+  assert.ok(rec.reason.includes('claude-code'), rec.reason)
+  for (const x of [':settings', '777', 'curl']) assert.equal(rec.reason.includes(x), false, rec.reason)
+  const runs = (s, n = 4) => { const w = s.toLowerCase().split(/[\s,;:]+/).filter(Boolean); return w.slice(n - 1).map((_, i) => w.slice(i, i + n).join(' ')) }
+  const headline = new Set(runs(failureWord('ingress', 'ingress-challenge-unanswered')))
+  assert.deepEqual(runs(rec.reason).filter((x) => headline.has(x)), [], `the reason does not say the headline again: ${rec.reason}`)
 })
 
 test('W13 no token reaches a record through the user field: the token sent as a username, or as a credential with no colon, is written as "(not a route name)"; a real route name is kept', T, async (t) => {
