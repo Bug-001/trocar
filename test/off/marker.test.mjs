@@ -285,7 +285,7 @@ test('undo by marker of the Kimi rc line: a file with no final line end gets exa
     await installCollector({ home, env: { HOME: home }, osName: 'linux', harnesses: (await loadHarnesses()).filter((h) => h.name === 'kimi-code'), freePort: async () => 47011, scan: async () => [], roots })
     assert.notEqual(read(rc), before, 'installed')
     fs.rmSync(manifestPath(path.join(home, '.trocar', 'collector')))
-    undoByMarker(planByMarker({ home, ids: ['kimi-code'], env: { HOME: home } }), { home })
+    undoByMarker(planByMarker({ home, ...UNINSTALL, ids: ['kimi-code'], env: { HOME: home } }), { home })
     assert.equal(read(rc), before + eol, JSON.stringify(before))
   }
 })
