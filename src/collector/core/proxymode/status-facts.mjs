@@ -7,7 +7,7 @@ import nodeFs from 'node:fs'
 import path from 'node:path'
 import { itemsOfPhase } from '../../../off/manifest.mjs'
 import { judgeEntry, judgeOwned, markedWithoutRecord, samePath } from '../trust/journal.mjs'
-import { formsHere, holds, presentPaths, userCertFilesOf, rootHeldIn, inTrocar } from './sources.mjs'
+import { formsHere, readSrc, holds, presentPaths, userCertFilesOf, rootHeldIn, inTrocar } from './sources.mjs'
 import { planRoutes, priorRecordOf, loopbackDirect, loopbackNote, blockerOf, pacStale } from './entries.mjs'
 import { judgedWith } from './verdict.mjs'
 import { upstreamFor, isTrocarDoorUrl } from './chain.mjs'
@@ -72,7 +72,7 @@ function bundleGap(desc, c, inst, ctx, fs) {
   let inBundle
   for (const src of c.merges) {
     let r
-    try { r = readSrc(src, ctx) } catch { continue }
+    try { r = readSrc(src, ctx) } catch (e) { if (e instanceof ReferenceError || e instanceof TypeError) throw e; continue } // a source that cannot be read is not known; a bug is not one
     for (const { value } of r.set && !r.error ? r.all : []) {
       const file = typeof value === 'string' ? value.trim() : ''
       if (!path.isAbsolute(file) || inTrocar(file, ctx.home, ctx.os)) continue // install merges no file of trocar's own (model-install.mjs userCertsOf)
