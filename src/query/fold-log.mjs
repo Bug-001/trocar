@@ -1,21 +1,22 @@
 // src/query/fold-log.mjs — the FOLD LOG's store (RFC 4.3 §4 折叠日志): one append-only NDJSON line file per session beside its
 // projection, `index/ctx/<the projection's hash>/fold.*` (4.3 §4 目录 · 分片), that keeps what the reduction produced so a cold open reads it back
 // instead of folding again. Storage only: it knows a line by its kind and key, nothing of its contents (the one exception, a
-// frontier's `pb`, ties the log to the projection's bytes). A projection like the index (invariant 2, D59): delete it and the next
+// frontier's `pb` and `h`, ties the log to the projection's bytes). A projection like the index (invariant 2, D59): delete it and the next
 // fold writes it again.
 //
 // Lines, the kind = the line's first key, its value the line's rid or lane key: `{v: FOLD_V, pid}` the header (`pid` = the
 // projection header's id); `{c: rid, …, p}` a call; `{g: rid, p}` a rid that is no longer a call; `{l: key, …, p}` a lane's head;
 // `{lg: key, p}` a lane gone; `{i: rid, …}` an item (a member that is not a call); `{x: rid, …}` a member that failed; `{f: rid, n,
-// pb}` a frontier, after each fold step (`pb` = the projection's bytes then). `p` (set by append) = the offset of the previous line
+// pb}` a frontier, after each fold step (`pb` = the projection's bytes then; `h: 1` when it held `t` rows then). `p` (set by append) = the offset of the previous line
 // of the same rid (calls and gones) or lane key (lanes and lane gones), null for the first: versionAt walks it.
 //   In the heap: rid → its latest call / gone line, lane key → its latest line, rid → its latest item line and its latest failed line
 // (offset and length in typed columns, an index per kind, its slots also linked in the order of their latest offset so what changed
 // past an offset is found from the newest back: changedSince, `since`), frontier rid → offset; nothing else per line. Lines are read back by offset through a cache of two times LOG_BYTES of heap (projection.mjs lru).
 //   Open: a header of another FOLD_V or a pid not the projection's id, or a line that does not parse before the last → the file is
-// deleted and the log starts empty, with one `projection-rebuilt` note (D38). Then it is cut back to the last frontier whose `pb` ≤
+// deleted and the log starts empty, with one `projection-rebuilt` note (D38). Then it is cut back to the last frontier with no `h` whose `pb` ≤
 // the projection's bytes (a step whose frontier is missing or torn, or that the projection no longer holds, is dropped with all
-// after it), cut from the file before the next append. The lines sit on src/query/line-file.mjs: `write: false` and a write that
+// after it; the `t` rows an `h` frontier folded are cut and extracted again, and the projection can grow back to the same bytes, so
+// `pb` cannot tell), cut from the file before the next append. The lines sit on src/query/line-file.mjs: `write: false` and a write that
 // fails keep them in the off-heap arena at the offsets they will have; `projection-write-failed` once per episode.
 //   Its sidecar (4.3 §4 旁索引, `fold.idx`, saveIndex) holds the indexes and frontiers up to the end of a frontier line: an
 // open whose header names the projection loads it when it is of this FOLD_V and its frontier's `pb` ≤ the projection's bytes, and
@@ -128,7 +129,7 @@ export function openFoldLog({ home = trocarHome(), fs = nodeFs, key, write = tru
       }
       const k = l.nl ? kindOf(o) : undefined;
       if (!k) { bad = `Line at byte ${l.off} of the stored fold log does not parse; it is folded again.`; continue; }
-      if (k === 'f' && o.pb > projection.bytes) return false; // a step the projection no longer holds: it and all after it are dropped
+      if (k === 'f' && (o.pb > projection.bytes || o.h)) return false; // a step the projection no longer holds: it and all after it are dropped
       step.push([k, o[k], l.off, l.len]);
       if (k === 'f') { for (const t of step) take(...t); step = []; end = l.off + l.len + 1; }
     }
