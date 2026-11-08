@@ -816,6 +816,9 @@ function openDesk(ctx, route0, makeView) {
     // 2.3 §读与画 takes the followed step out of the rest's own-then-near reads).
     // The wait is 车道未到手's BUSY_MS from the answer landing (2.3 快速拖动): past it the step is drawn and this read fills its rows.
     if (s.follow && moved && !first && host && !idle()) {
+      // the step reads follow the playhead now, not when it is drawn: the left step's read still waiting in the loader is aborted
+      // before its turn, so a delta stays one `block` read (4.4 live-poll)
+      if (s.playRid !== targeted) { targeted = s.playRid; steps.target(s.playRid) }
       const rid = s.playRid, refs = openRefs(rid)
       if (refs.length) {
         const got = loadBodies({ get: (n, p, o) => via(0, n, p, o) }, [...refs, ...nearRefs(rid)], { signal })
