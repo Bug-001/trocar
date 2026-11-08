@@ -323,8 +323,9 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
   const pathItem = await pathPlan({ root, home, env, platform, fs })
   const daemonItem = [...staleItem(stale, root), ...(pathItem ? [pathItem] : [])]
   const planned = [...planItems({ ...plan, standalone: due }, { home, platform }), ...daemonItem]
-  say([formatPlan({ ...plan, standalone: due }, { home, platform, command: 'install' }), ...pairs(daemonItem.map((p) => [p.what, p.detail]), { home }), ...wrap(COST), ...(stale ? wrap(CUT) : [])].join('\n'))
-  if (flags.has('--dry-run')) { if (json) printJson(io, { ...newReceipt('install'), dry_run: true, planned, harnesses: plan.targets, changed: plan.changed, created: [...due, ...plan.created], skipped: plan.skipped || [] }); return EXIT.ok }
+  const why = (plan._ && plan._.drift) || [] // a bundle written again says why in the plan too (D38), not only in the receipt
+  say([formatPlan({ ...plan, standalone: due }, { home, platform, command: 'install' }), ...pairs(daemonItem.map((p) => [p.what, p.detail]), { home }), ...fit(why.map((n) => `Note: ${n}`), { home }), ...wrap(COST), ...(stale ? wrap(CUT) : [])].join('\n'))
+  if (flags.has('--dry-run')) { if (json) printJson(io, { ...newReceipt('install'), dry_run: true, planned, harnesses: plan.targets, changed: plan.changed, created: [...due, ...plan.created], skipped: plan.skipped || [], ...(why.length ? { notes: why } : {}) }); return EXIT.ok }
   if ((plan.writing || stdNew || stale || pathItem) && !flags.has('--yes')) {
     if (json || !isInteractive(io)) return needsYes(io, json, planned)
     if (!(await confirm({ ...io, prompt: io.stdout }, 'Proceed?'))) { io.err('You said no: nothing was changed'); return EXIT.incomplete }

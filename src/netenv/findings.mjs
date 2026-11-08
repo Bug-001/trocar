@@ -18,6 +18,8 @@ const nodeOf = (t, id) => t.nodes.find((n) => n.id === id)
 // ── what a command is ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 const trocar = (ctx, run) => ({ run, shell: ctx.sh })
 /** An install item of the form that drifted (proxy mode: the carrier, a wrapper or a plugin; 1.6 §9.3 row 31): the command its `certificate` names, `trocar install`. */
+/** 4.11 P4b: a `setup.missing[].what` → the finding that says it, one mapping for both readers (proxy mode's form certificate, driver mode's setup). */
+export const SETUP_FINDING = Object.freeze({ 'carrier-absent': 'entry-missing', 'carrier-overwritten': 'entry-changed', 'bundle-lacks-ca': 'bundle-lacks-ca', 'marked-without-record': 'marked-without-record' })
 const installFix = (c) => (c.fm && c.fm.certificate && c.fm.certificate.command ? [trocar(c, c.fm.certificate.command)] : null)
 const os = (ctx, byPlatform) => ({ run: byPlatform[ctx.platform] || byPlatform.linux, shell: ctx.platform === 'win32' ? 'powershell' : 'sh' })
 const gui = (run) => ({ run, shell: 'gui' })
@@ -302,6 +304,8 @@ export function diagnose({ facts: F, topology: T, harnesses = null, user = null 
     for (const fm of hf.forms || []) { const fwf = F.forwarder && F.forwarder.forms && F.forwarder.forms[fm.id]; if (fwf && fwf.source === 'unknown') add('prior-proxy-unknown', { pids: fm.procs.map((p) => p.pid) }) }
     // the certificate axis of each form (proxy mode, 1.6 §9.4): one that is not in effect gives its own code, with the form's command (4.11 §3 ⑱)
     for (const fm of hf.forms || []) { const k = fm.certificate; if (k && !k.in_effect && k.code && FINDINGS[k.code]) add(k.code, { fm }) }
+    // driver mode (Linux) has no per-form certificate: the setup `on`'s ⑪ judges says the same codes, whatever the capture state (a bundle that lacks a CA breaks the agent off too)
+    if (F.routing === 'driver' && hf.installed && hf.setup && hf.setup.state === 'needed') for (const x of hf.setup.missing || []) if (SETUP_FINDING[x.what]) add(SETUP_FINDING[x.what], { fm: { certificate: { command: 'trocar install' } } })
     if (hf.fakeIp === true) add('fake-ip')
     if (inferred(F, hf)) add('inferred-behaviour')
     const listPath = F.agentList ? F.agentList.path : null
