@@ -199,7 +199,14 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
     const routes = (hd0(id) || {}).proxyMode ? hd0(id).proxyMode.routes || {} : {}
     // a PAC route's record tagged with another address than the one on writes now (the key changed, or a version before the key wrote it): trocar's
     // stale value, still in the entry; the app's fetch of it is refused (P10) until on writes the current one
-    const stale = (e) => e.door && routes[e.route] && routes[e.route].value === 'pac-url' && token && e.door !== pacAddress(token, e.door)
+    // (the tag held clear or as its fingerprint; the door's origin is in the address the record wrote)
+    const stale = (e) => {
+      const r = routes[e.route], fp = e.door_sha256 ?? (typeof e.door === 'string' ? sha256(e.door) : null)
+      if (!r || r.value !== 'pac-url' || !token || !fp) return false
+      let origin
+      try { origin = new URL(typeof e.door === 'string' ? e.door : e.value).origin } catch { return false } // a record that wrote no address (the applied id) says nothing
+      return fp !== sha256(pacAddress(token, origin))
+    }
     const items = m ? entriesOf(m, id).map((e) => { const s = entryState(e, fs); return { item: e, ...(s.state === 'intact' && stale(e) ? { state: 'changed', code: CODE.pacAddressStale, why: `${e.path}#${e.keys.join('.')} holds trocar's proxy settings address from before this install's key` } : s) } }) : []
     const bad = items.filter((x) => x.state === 'missing' || x.state === 'changed')
     const entry = !m ? { state: 'unknown', why: f.manifest.error || `no install manifest in ${dir}` } : !installedIds.includes(id) ? { state: 'missing', why: 'the install manifest lists no entry of trocar\'s for it' } : bad.length ? { state: bad.some((x) => x.state === 'missing') ? 'missing' : 'changed', why: bad.map((x) => x.why).join('; '), ...(bad.every((x) => x.code) ? { code: bad[0].code } : {}) } : items.find((x) => x.state === 'unknown') ? { state: 'unknown', why: items.filter((x) => x.state === 'unknown').map((x) => x.why).join('; ') } : { state: 'intact' }

@@ -5,6 +5,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import net from 'node:net'
+import crypto from 'node:crypto'
 import { modelWorld } from '../helpers/model-world.mjs'
 import { turnOnModel } from '../../src/collector/model-on.mjs'
 import { renderHook } from '../../src/collector/harness/templates/index.mjs'
@@ -36,6 +37,9 @@ async function text(w, h, cmd, argv) {
   await cmd(argv, { io, home: w.home, platform: 'darwin', env: w.env, deps: { request: async (q) => (q.path === '/status' ? r : { }), socketPath: SOCK, procs: async () => [], spawn: absentSpawn, exec: () => ({ status: 0, stdout: '', stderr: '' }), identity: () => ({ start_time: '111', boot_id: 'boot-1' }), fs: fsx } })
   return io.stdoutText()
 }
+// a record's tag, held clear or as its fingerprint
+const tagOf = (r) => r.door_sha256 ?? sha256(r.door)
+const sha256 = (s) => crypto.createHash('sha256').update(String(s)).digest('hex')
 const status = async (w, h) => (await statusDoc(w, h)).harnesses[h]
 const reasonsIn = (doc) => [...new Set(JSON.stringify(doc).match(/"reason":"[a-z-]+"/g).map((x) => x.slice(10, -1)))]
 
@@ -69,7 +73,7 @@ test('P10: status names trocar\'s stale PAC address with trocar on; on rewrites 
   assert.deepEqual(reasonsIn(doc).filter((c) => c.startsWith('entry-')), [], 'the summary and the detail say the same reason')
   await on()
   assert.notEqual(valueNow(), was, 'on wrote the current address')
-  assert.deepEqual([...new Set(pacs().map((r) => r.door))], [valueNow()], 'its records tagged with what it wrote')
+  assert.deepEqual([...new Set(pacs().map(tagOf))], [sha256(valueNow())], 'its records tagged with what it wrote')
   const after = await statusDoc(w, h)
   assert.notEqual(after.harnesses[h].reason, 'pac-address-stale')
   // the key is a capability (P10): only the entry holds it. Every face that shows the address masks it, the same way
@@ -80,7 +84,7 @@ test('P10: status names trocar\'s stale PAC address with trocar on; on rewrites 
 
   // the record an older tip wrote: the address with no key, tagged with the door — a tag that differs like any other, the entry holding its value
   const m = readManifest(w.dir), origin = new URL(valueNow()).origin, old = `${origin}/trocar.pac`
-  for (const r of m.entries.filter((r) => pacRoutes.has(`${r.harness}:${r.route}`))) { r.door = origin; if (r.keys.join('.') === key.join('.')) r.value = old }
+  for (const r of m.entries.filter((r) => pacRoutes.has(`${r.harness}:${r.route}`))) { delete r.door_sha256; r.door = origin; if (r.keys.join('.') === key.join('.')) r.value = old }
   saveManifest(w.dir, m)
   setValue(fileNow(), old)
   assert.equal((await status(w, h)).reason, 'pac-address-stale')

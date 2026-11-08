@@ -6,6 +6,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
+import crypto from 'node:crypto'
 import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
 import { routeEntry, mergeNoProxy, pacPath } from '../../../../src/collector/core/proxymode/entries.mjs'
 import { resolveLoc } from '../../../../src/collector/core/proxymode/sources.mjs'
@@ -146,6 +147,10 @@ test('P6 mergeNoProxy: loopback first, then the user\'s values (both spellings),
   assert.equal(mergeNoProxy({ userValues: [], persistent: ['10.0.0.0/8'] }), 'localhost,127.0.0.1,::1,10.0.0.0/8')
 })
 
+// a record's tag, held clear or as its fingerprint
+const tagOf = (r) => r.door_sha256 ?? sha256(r.door)
+const sha256 = (s) => crypto.createHash('sha256').update(String(s)).digest('hex')
+
 // P10 · invariant 5: a PAC address trocar wrote before (an earlier key, or the address an earlier version wrote, with no key) is trocar's own stale
 // value, not the user's egress: on writes the current address over it. An address of the user's own still stops it (own-egress)
 for (const os of ['darwin', 'win32']) test(`P10 ${os} — on over trocar's own earlier PAC address (another key, or none) writes the keyed one; over the user's own it stops`, () => {
@@ -156,7 +161,7 @@ for (const os of ['darwin', 'win32']) test(`P10 ${os} — on over trocar's own e
   const again = routeEntry('json-key').write({ ...L.ctx, pacToken: KEY2 }, DOOR)
   assert.equal(again.ok, true, `a new key over trocar's recorded address: ${JSON.stringify(again)}`)
   assert.equal(read(f)[L.key], PAC2)
-  assert.ok(L.w.ctx.manifest.entries.some((e) => e.door === PAC2), 'the record names the address it wrote, so the next key change is seen')
+  assert.ok(L.w.ctx.manifest.entries.some((e) => tagOf(e) === sha256(PAC2)), 'the record names the address it wrote, so the next key change is seen')
   routeEntry('json-key').undo(L.ctx, L.w.ctx.manifest.entries.filter((e) => e.harness === L.ctx.harness))
   assert.equal(read(f)[L.key], undefined)
   // the record an earlier version wrote: the address with no key in it, tagged with the door (what its on wrote). Its tag is not the address on
@@ -165,7 +170,7 @@ for (const os of ['darwin', 'win32']) test(`P10 ${os} — on over trocar's own e
   Object.assign(old, { route: L.ctx.routeId, door: DOOR })
   assert.equal(routeEntry('json-key').write({ ...L.ctx, pacToken: KEY2 }, DOOR).ok, true)
   assert.equal(read(f)[L.key], PAC2)
-  assert.deepEqual(L.w.ctx.manifest.entries.filter((e) => e.harness === L.ctx.harness).map((e) => e.door), [PAC2], 'one record, naming the keyed address')
+  assert.deepEqual(L.w.ctx.manifest.entries.filter((e) => e.harness === L.ctx.harness).map(tagOf), [sha256(PAC2)], 'one record, naming the keyed address')
   // a value put there by hand, whatever it looks like (an address of trocar's door, or another): it differs from what the record says was written, so it
   // is the user's change — kept and refused with that reason, never taken for the user's egress
   for (const hand of [`${DOOR}/trocar.pac`, 'http://proxy.corp.example/proxy.pac']) {
