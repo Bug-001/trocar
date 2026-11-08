@@ -80,7 +80,10 @@ export function offWorld({ home = nodeOs.homedir(), env = process.env, deps = {}
  *  stopping the daemon takes its helper and the links with it, and then the command is run again. On darwin the agent is booted out first — a daemon stopped under a loaded LaunchAgent is pulled right back by KeepAlive (4.9 §4). */
 const wayOut = (w, pid) => w.unitManaged()
   ? (w.platform === 'darwin' ? `To go on, stop the autostart (launchctl bootout gui/${typeof process.getuid === 'function' ? process.getuid() : -1}/${AGENT_LABEL}), so the daemon is not started again, then run the command again` : `To go on, stop the daemon (systemctl --user stop trocar-collector.service), which takes its links off with it, then run the command again`)
-  : `To go on, stop the daemon (${Number.isInteger(pid) ? `kill ${pid}` : "no pid is on record: find it with pgrep -f 'trocar.* (daemon|collector start)'"}), which takes its links off with it, then run the command again`
+  : `To go on, stop the daemon (${Number.isInteger(pid) ? killBy(w, pid) : `no pid is on record: find it with ${findDaemon(w)}`}), which takes its links off with it, then run the command again`
+// the commands of this OS that find and stop a daemon by hand: Windows has no pgrep and no kill <pid>
+const findDaemon = (w) => (w.platform === 'win32' ? `Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object CommandLine -match 'trocar.*(daemon|collector start)' | Select-Object ProcessId` : "pgrep -f 'trocar.* (daemon|collector start)'")
+const killBy = (w, pid) => (w.platform === 'win32' ? `taskkill /PID ${pid} /F` : `kill ${pid}`)
 
 /** Is the autostart going to bring the daemon back the moment it is stopped — systemd's Restart=on-failure mid-wait, or launchd's KeepAlive with the agent still loaded (4.9 §4)? A tool that cannot be asked says no: the lock decides. */
 const unitIsUp = (w) => {
@@ -233,7 +236,7 @@ export async function switchRoutingOff(w, { ids = null, now = false, exit = fals
       if (s.stopped) { r.confirmed = true; r.daemon = { pid: null, state: 'none' } } // there was no engine: nothing was relayed, and what the stop did is on `stop`
       else { r.unstoppable = true; fail('stop-failed', w.platform === 'darwin' ? `the LaunchAgent could not be booted out${s.error ? ` (${s.error})` : ''}; the entries are undone all the same, but launchd may bring a daemon back with nothing attached; run: launchctl bootout gui/${typeof process.getuid === 'function' ? process.getuid() : -1}/${AGENT_LABEL}, then run trocar off again` : `systemd keeps the autostart unit up or restarting${s.error ? ` (${s.error})` : ''}; the entries are undone all the same, but a daemon may come back with nothing attached; stop it: systemctl --user stop trocar-collector.service, then run trocar off again`) }
     } else { r.confirmed = true; r.how = 'no-daemon'; r.daemon = { pid: null, state: 'none' } }
-  } else fail('control-error', `${st.reason || 'whether a daemon runs is not known'}; the entries are left as they are. If no trocar daemon runs (pgrep -f 'trocar.* (daemon|collector start)' finds none), delete ${w.lockFile} and run trocar off again; if one does, stop it by hand first`)
+  } else fail('control-error', `${st.reason || 'whether a daemon runs is not known'}; the entries are left as they are. If no trocar daemon runs (${findDaemon(w)} finds none), delete ${w.lockFile} and run trocar off again; if one does, stop it by hand first`)
   return r
 }
 
