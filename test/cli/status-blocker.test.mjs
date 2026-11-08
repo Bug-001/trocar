@@ -37,11 +37,11 @@ async function zcodeWorld(setting, { app = true } = {}) {
   return w
 }
 
-async function status(w, argv) {
+async function status(w, argv, table = []) {
   const r = { pid: 99, doors: w.doors, harnesses: { 'z-code': { desired: 'on', attached: true } }, holders: null, agents: [], negatives: [], cert: { key: 'present', intermediate: 'ready', expires: '2026-12-22T09:00:02Z' }, engine: {} }
   const io = fakeIo()
   const fsx = { ...fs, existsSync: (p) => (w.app && p === APP) || (String(p).startsWith(w.home + path.sep) && fs.existsSync(p)) }
-  await runStatusCli(argv, { io, home: w.home, platform: 'darwin', env: w.env, deps: { request: async (q) => (q.path === '/status' ? r : assert.fail(q.path)), socketPath: SOCK, procs: async () => [], spawn: absentSpawn, exec: () => ({ status: 0, stdout: '', stderr: '' }), identity: () => ({ start_time: '111', boot_id: 'b' }), alive: () => true, netFactsDeps: async () => ({ harnesses: w.harnesses, archFacts: darwinNetFacts }), rootStore: w.store, user: 'alice', fs: fsx } })
+  await runStatusCli(argv, { io, home: w.home, platform: 'darwin', env: w.env, deps: { request: async (q) => (q.path === '/status' ? r : assert.fail(q.path)), socketPath: SOCK, procs: async () => table, spawn: absentSpawn, exec: () => ({ status: 0, stdout: '', stderr: '' }), identity: () => ({ start_time: '111', boot_id: 'b' }), alive: () => true, netFactsDeps: async () => ({ harnesses: w.harnesses, archFacts: darwinNetFacts }), rootStore: w.store, user: 'alice', fs: fsx } })
   return io.stdoutText()
 }
 
@@ -119,3 +119,55 @@ test('4.11 P11 · status: with the desktop app absent, a desktop setting left be
   assert.match((await status(w, ['z-code'])).replace(/\s+/g, ' '), /z-code\.cli-node .*points at trocar/)
 })
 
+
+// 4.11 P11 in status, per process, as the door judges it: a process the door judges as several forms is forwarded when any of them is blocked
+// (the door needs every form to decrypt). The seed: on a Windows test machine (ZCode 3.14.5) the desktop's Chromium network service, ZCode.exe with
+// neither the desktop's nor the CLI's word, read captured while the desktop's CA setting was set; the door would judge it as the CLI and the desktop.
+test('4.11 P11 · status: a process on a blocked form and an unblocked one is not captured, as at the door', async () => {
+  const { judgeHarness, routeOfForms } = await import('../../src/netenv/verdict.mjs')
+  const { judgedForms } = await import('../../src/collector/core/proxymode/verdict.mjs')
+  const { loadHarnesses } = await import('../../src/collector/harness/index.mjs')
+  const zc = (await loadHarnesses()).find((d) => d.name === 'z-code')
+  const exe = 'C:\\Users\\u\\AppData\\Local\\Programs\\ZCode\\ZCode.exe'
+  const formsOf = (argv) => judgedForms(zc, 'win32', null, exe, [exe, ...argv]).filter((f) => f.id !== 'z-code.cli-node').map((f) => f.id)
+  const blocked = routeOfForms([{ id: 'z-code.desktop', route: { reason: 'blocker' } }, { id: 'z-code.cli', route: null }])
+  const ready = { desired: 'on', entryIntact: true, attached: true, daemon: 'running', blocked }
+  const row = (argv) => judgeHarness({ ...ready, procs: [{ pid: 12476, startedAt: new Date(Date.now() + 60_000).toISOString(), trusted: null, start: null, forms: formsOf(argv) }] }).rows[0]
+  assert.deepEqual(formsOf(['--type=utility', '--utility-sub-type=network.mojom.NetworkService']), ['z-code.cli', 'z-code.desktop'], 'neither word: the door judges both')
+  assert.deepEqual([row(['--type=utility', '--utility-sub-type=network.mojom.NetworkService']).captured, row(['--type=utility']).reason], [false, 'not-routed'])
+  assert.equal(row(['resources\\glm\\zcode.cjs', '-p', 'hi']).captured, true, 'the CLI with -p is the CLI only: the desktop setting does not reach it')
+  assert.deepEqual([row(['resources\\glm\\zcode.cjs', 'app-server']).captured, row(['resources\\glm\\zcode.cjs', 'app-server']).reason], [false, 'not-routed'])
+})
+
+// The same per route: the door judges a process against the forms of the route it came in on. Claude Code's CLI and VS Code forms share the settings
+// route, its desktop is on the library route. A process status can tie to one route takes that route's word; one that may be on either, with the routes
+// disagreeing, is not known (never captured on a guess), and says which way each goes.
+test('4.11 P11 · status: a process is judged per route, as the door judges it; routes that disagree leave it not known', async () => {
+  const { judgeHarness, routeOfForms } = await import('../../src/netenv/verdict.mjs')
+  const { loadHarnesses } = await import('../../src/collector/harness/index.mjs')
+  const cc = (await loadHarnesses()).find((d) => d.name === 'claude-code')
+  const routeOf = Object.fromEntries(cc.proxyMode.forms.map((f) => [f.id, f.route]))
+  const ready = { desired: 'on', entryIntact: true, attached: true, daemon: 'running', routeOf }
+  const row = (blockedIds, forms) => judgeHarness({ ...ready, blocked: routeOfForms(blockedIds.map((id) => ({ id, route: { reason: 'blocker' } }))), procs: [{ pid: 7, trusted: null, start: null, forms }] }).rows[0]
+  const SETTINGS = ['claude-code.cli', 'claude-code.vscode'], DESKTOP = ['claude-code.desktop']
+  assert.deepEqual([row(DESKTOP, SETTINGS).captured, row(DESKTOP, SETTINGS).split], [true, undefined], "the CLI by name: the desktop's policy is on another route")
+  assert.equal(row(SETTINGS, DESKTOP).captured, true, "the reverse: a managed proxy for the CLI does not reach the desktop's route")
+  assert.deepEqual([row(SETTINGS, SETTINGS).captured, row(SETTINGS, SETTINGS).reason], [false, 'not-routed'])
+  const both = row(DESKTOP, [...SETTINGS, ...DESKTOP])
+  assert.deepEqual([both.captured, both.reason, both.split], [null, null, { decrypted: SETTINGS, forwarded: DESKTOP }], 'either route: not known')
+  assert.deepEqual([row([...SETTINGS, ...DESKTOP], [...SETTINGS, ...DESKTOP]).captured], [false], 'every route forwards it')
+  const gone = judgeHarness({ ...ready, entryIntact: false, blocked: routeOfForms([{ id: DESKTOP[0], route: { reason: 'blocker' } }]), procs: [{ pid: 7, trusted: null, start: null, forms: [...SETTINGS, ...DESKTOP] }] }).rows[0]
+  assert.deepEqual([gone.captured, gone.reason], [false, 'entry-missing'], 'not known by route gives way to a certain no after it')
+})
+
+// The same through `status` and its drawing: a Z-Code process status cannot tie to one form (its program file not read: every form of the one route),
+// with the desktop's CA setting set, reads not captured, and the CLI form's branch draws what the door does with it: through trocar's door, forwarded only.
+test('4.11 P11 · status: a process on a blocked form and its form\'s branch agree: not captured, through the door, forwarded only', async () => {
+  const w = await zcodeWorld(SHAPES.set.write)
+  const p = { pid: 4321, ppid: 1, uid: 501, startedAt: Date.now() + 60_000, exe: null, argv: ['zcode-cli'], env: () => new Map() }
+  const doc = JSON.parse(await status(w, ['--json', 'z-code'], [p]))
+  assert.deepEqual(doc.harnesses['z-code'].processes.map((x) => [x.pid, x.captured, x.reason]), [[4321, false, 'not-routed']])
+  const t = doc.topology['z-code'], b = t.branches.find((x) => x.form === 'z-code.cli')
+  const kinds = b.path.map((id) => t.nodes.find((n) => n.id === id).kind)
+  assert.deepEqual([b.on_path, b.captured, b.reason, kinds.includes('trocar-forwarder')], [true, false, 'not-routed', true], JSON.stringify(kinds))
+})

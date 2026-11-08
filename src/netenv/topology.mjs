@@ -9,7 +9,7 @@
 // Driver mode (Linux eBPF) is `driverTopology`; proxy mode (4.8 §10: the agent's proxy entry points at trocar's own kernel, one branch per form) is `proxyTopology`, from the facts the Windows branch's
 // archFacts gives (`harnesses[h].forms`, `forwarder`); the macOS old capture (§4) is `legacyTopology`.
 //
-import { judgeHarness, certOfForms } from './verdict.mjs'
+import { judgeHarness, certOfForms, routeOfForms } from './verdict.mjs'
 import { parseProxyUrl } from './redact.mjs'
 
 export { renderCompact, renderDetail, renderPathBlock, verdictText, firstHopAfterTrocar, firstHopOff, hopKey, ROUTING_TEXT } from './topology-text.mjs' // the words of the topology, rendered from the object below
@@ -92,6 +92,9 @@ function platformUp(F, h) {
   if (F.link.helper === 'missing' || F.link.attached === false) return false
   return F.link.attached === true ? true : null
 }
+// the forms' blockers and routes, for a process the door has not judged on the forms it may be (status reads the same, verdict.mjs byRoute)
+const formRoutes = (hf) => ({ blocked: routeOfForms(hf.forms), routeOf: Object.fromEntries((hf.forms || []).filter((x) => x.routeId).map((x) => [x.id, x.routeId])) })
+const knownForms = (hf, p) => (Array.isArray(p.forms) ? p.forms.filter((id) => (hf.forms || []).some((x) => x.id === id)) : p.forms) // forms the facts carry, so every one has its route
 const entryIntact = (hf) => (hf.entry.state === 'intact' ? true : hf.entry.state === 'unknown' ? null : false)
 const steeredOf = (p) => (p.watched === 'decrypt' ? true : p.watched === 'unknown' ? null : false)
 
@@ -181,9 +184,10 @@ function formVerdict(F, h, hf, fm, fwf) {
   if (F.daemon.state === 'not-running' || F.daemon.state === 'not-responding') return none(true, false, `daemon-${F.daemon.state}`)
   if (co) return none(true, false, 'not-routed') // the door forwards it: trocar on the path, forwarded only, never captured (4.11 ⑩)
   if (fwf.upstream_error) return { on: true, captured: false, reason: 'upstream-unreachable', engine: true } // the engine could not dial the upstream (the platform's last 60 s of it)
-  const j = judgeHarness({ localUpstream: hf.localUpstream === true, desired: 'on', entryIntact: entryIntact(hf), entryWhy: 'entry-missing', attached: fwf.state === 'on', helper: 'ok', daemon: F.daemon.state, procs: fm.procs.map((p) => ({ pid: p.pid, startedAt: p.startedAt, trusted: p.trusted, reason: p.reason, negative: p.negative, start: p.start })), installedAt: hf.installedAt, cert: certOfForms([fm]) })
+  const j = judgeHarness({ localUpstream: hf.localUpstream === true, desired: 'on', entryIntact: entryIntact(hf), entryWhy: 'entry-missing', attached: fwf.state === 'on', helper: 'ok', daemon: F.daemon.state, procs: fm.procs.map((p) => ({ pid: p.pid, startedAt: p.startedAt, trusted: p.trusted, reason: p.reason, negative: p.negative, start: p.start, forms: knownForms(hf, p) })), installedAt: hf.installedAt, cert: certOfForms([fm]), ...(fm.procs.length ? formRoutes(hf) : {}) }) // this form's own blocker is judged above; the others reach only its processes (the forms each may be)
   const reason = (j.rows.find((r) => r.reason) || {}).reason ?? null
   if (reason === 'local-upstream' && j.captured !== true) return none(false, false, reason) // its config names only hosts on this machine: loopback never reaches the door (4.11 P6), trocar is off its path
+  if (j.captured === false && reason === 'not-routed') return none(true, false, reason) // a process the door judges with a blocked form: it reaches the door, which forwards it unread (4.11 P11)
   return { on: true, captured: j.captured, reason, engine: true }
 }
 
@@ -209,7 +213,7 @@ function proxyTopology(F, h, hf) {
     // file is the user's own again — the agent's live connection to the group's port (row k). In the drain the edge names no entry: the file no longer points here; the agent holds the address it
     // read at startup, and the note says what restart ends it.
     const wired = !!(fwf
-      && (F.desired[h] === 'off' ? (fwf.clients || []).length > 0 : !fm.hook && fm.entry && fm.entry.intact === true && vd.reason !== 'local-upstream' && (vd.reason !== 'not-routed' || !!(fm.route && fm.route.via))))
+      && (F.desired[h] === 'off' ? (fwf.clients || []).length > 0 : !fm.hook && fm.entry && fm.entry.intact === true && vd.reason !== 'local-upstream' && (vd.reason !== 'not-routed' || vd.on === true)))
     const hfSys = { ...hf, systemProxy: fm.systemProxy }
     const split = (hf.behaviour.branches || []).join() === 'http,ws' && fm.systemProxy
     if (vd.reason === 'desired-off' && fwf && (fwf.clients || []).length) notes.push(`${fwf.clients.length} process(es) are still connected through trocar, forwarded only; trocar exits once they do`)
