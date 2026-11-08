@@ -86,6 +86,15 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
     // fail-open). handleFlow then sees the socket already destroyed and finalizes the flow.
     const duringLookup = () => {}
     socket.on('error', duringLookup)
+    // RFC 4.6 §引擎 1: no envelope, no connection row — but the connection is closed, so it is not silent (D38)
+    const miss = (peer, reason) => {
+      counters.lookupMisses++
+      failure({ code: 'lookup-miss', peer, reason })
+      socket.destroy()
+      onError(Object.assign(new Error(reason), { code: 'lookup-miss' }))
+    }
+    // a client already gone leaves no address to ask about: not looked up, peer null
+    if (!socket.remoteAddress || !Number.isInteger(socket.remotePort)) return miss(null, 'a connection closed by its client before trocar could read its address; nothing was forwarded')
     const peer = { address: socket.remoteAddress, port: socket.remotePort }
     let meta = null
     try { meta = await redirector.lookup(peer) }
@@ -98,15 +107,7 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
       onError(Object.assign(new Error(reason), { code }))
       return
     }
-    // RFC 4.6 §引擎 1: no envelope, no connection row — but the connection is closed, so it is not silent (D38)
-    if (!meta) {
-      counters.lookupMisses++
-      const reason = `no original destination for ${peer.address}:${peer.port}; the steered connection was closed`
-      failure({ code: 'lookup-miss', peer, reason })
-      socket.destroy()
-      onError(Object.assign(new Error(reason), { code: 'lookup-miss' }))
-      return
-    }
+    if (!meta) return miss(peer, `no original destination for ${peer.address}:${peer.port}; the steered connection was closed`)
     runFlow(socket, { ...meta, acceptedAt }, connectUpstream || defaultConnect, duringLookup)
   }
 
