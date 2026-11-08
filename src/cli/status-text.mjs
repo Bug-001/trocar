@@ -2,6 +2,7 @@
 // install notes `doctor` prints (formatInstallNotes), which used to live in src/collector/cli.mjs. English, ASCII, 80 columns, conclusion first (D58).
 // Everything here renders from the status document (附录 C.3) and the facts it was built from; nothing is computed twice and nothing is written.
 import { columns, pairs, wrap, unknown, ago, noColor, WIDTH } from './text.mjs'
+import { codeId } from '../version.mjs'
 import { renderRoutes, routeNotes } from '../netenv/topology-text.mjs'
 import { briefText, failureBrief, failureWord, squashed, statusNote } from './words.mjs'
 import { carrierWords } from './receipt.mjs'
@@ -18,7 +19,11 @@ const upFor = (since, now) => { const t = Date.parse(since); if (!Number.isFinit
 
 /** The daemon in one clause, from the daemon's own answer — never a stale pid as the present state (§1.1). */
 function daemonClause(d, now) {
-  if (d.running === true) { const up = d.since ? upFor(d.since, now) : null; return `Daemon running (pid ${d.pid ?? 'unknown'}${up ? `, up ${up}` : ''}).` }
+  if (d.running === true) {
+    const up = d.since ? upFor(d.since, now) : null, base = `Daemon running (pid ${d.pid ?? 'unknown'}${up ? `, up ${up}` : ''})`
+    // §3.5: the collector on other code than this trocar (its files replaced, the collector not restarted): what this version changed in it is not in effect
+    return d.runs_this_code === false ? `${base} on other code, ${d.code}; this trocar is ${codeId()}. Put it on this code: trocar install` : `${base}.`
+  }
   if (d.running === false) return `Daemon not running${d.error ? ` (${d.error})` : ''}; nothing is captured. Start it: trocar on`
   if (d.responding === false) return `Daemon does not answer${d.error ? ` (${d.error})` : ''}; new connections are not captured.`
   return `Daemon: ${unknown(d.error || 'its state could not be read')}.`

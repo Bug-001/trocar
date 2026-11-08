@@ -106,7 +106,7 @@ export const CODES_BY_PART = Object.freeze({
   ca: ['ca-invalid', 'cert-key-missing', 'cert-intermediate-unavailable'], // the last two: the issuer's (4.11 P2, ⑱): the root key is not in its custody; the custody did not issue an intermediate
   install: ['install-error', 'uninstall-error', 'left-unparsable', 'left-link', 'entry-not-undone', 'reverted-not-identical', 'already-restored', 'missing', 'left-user-value', 'still-trusting', 'bundle-kept', 'residue-not-removed', 'unit-not-enabled', 'unit-not-disabled', 'not-users-file', 'cert-not-installed', 'install-pending', 'collectors-online', 'setup-needed'], // not-users-file: install skipped a P8 install-folder wrapper, the program is not this user's one native file (4.11 P8) (4.8 §4.2; the kernel-not-off row retired with the kernel, D47's twin)
   // names no writer produces any more, kept so old records still read (4.8 §12 「旧 flows/ 行照读」): the old MITM's, and macOS Hermes' route-without-ca (4.11 §3 ⑱)
-  doctor: ['file-readable-by-others', 'standalone-unreadable', 'standalone-stale', 'backup-unclaimed'], // doctor's own findings (1.6 §3.7), beside the network ones of 附录 B
+  doctor: ['file-readable-by-others', 'standalone-unreadable', 'standalone-stale', 'backup-unclaimed', 'daemon-other-code'], // doctor's own findings (1.6 §3.7), beside the network ones of 附录 B
   legacy: ['retention-unparsable', 'retention-unreadable', 'retention-log-failed', 'route-without-ca', 'tls-client-error', 'client-rejected-leaf', 'upstream-aborted', 'decode-failed', 'autostart-load-failed', 'steer-unreadable', 'steer-missing', 'shard-failed'],
 })
 export const CODES = Object.freeze([...new Set(Object.values(CODES_BY_PART).flat())])

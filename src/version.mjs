@@ -1,9 +1,11 @@
 // version.mjs — the one place that says which code this is (RFC 1.6 §2, §5.5; D67⑤).
-//   codeId()  `<package.json version>+<first 7 of HEAD>` in a git checkout, `<version>` anywhere else.
+//   codeId()  `<package.json version>+<first 7 of HEAD>` in a git checkout; anywhere else `<version>+<first 7 of a hash of the code>` (bin/ and
+//             src/, each file's path and bytes), so two trees of one version tell apart; the plain version when neither reads.
 // `trocar --version` prints it, the daemon reports it as `code` on its control channel, and `trocar update` compares the two to tell
 // whether the daemon runs this code. Files are read, nothing is spawned: git may be absent, and this is asked on a daemon's start path.
 // Anything that cannot be read (no `.git`, an unreadable HEAD, a ref nowhere to be found) is the plain version, never a guess.
 //   channelOf(root)  how the code at `root` came here: 'git' | 'npm' | 'script' | null — the one place that is told apart (D67②, D74).
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -47,11 +49,33 @@ export function headSha(dir) {
 /** `<version>+<first 7 of a commit>`, the one place that format is composed: `null` / no sha is the plain version. */
 export const codeIdOf = (version, sha) => (sha ? `${version}+${String(sha).slice(0, 7)}` : version)
 
-/** This code's version: `0.1.0+1a2b3c4` in a git checkout, `0.1.0` outside one. */
+// The code itself, outside a git checkout: sha256 over bin/ and src/ — each file's path from `root` and its bytes, in path order. null when there
+// is none to read. Asked once per root and process (a CLI's commands and a daemon's start ask it again).
+const hashes = new Map()
+function codeHash(root) {
+  if (hashes.has(root)) return hashes.get(root)
+  const h = crypto.createHash('sha256')
+  let n = 0
+  const walk = (rel) => {
+    let ents
+    try { ents = fs.readdirSync(path.join(root, rel), { withFileTypes: true }) } catch { return }
+    for (const e of ents.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
+      const r = `${rel}/${e.name}`
+      if (e.isDirectory()) walk(r)
+      else if (e.isFile()) { h.update(`${r}\0`); h.update(fs.readFileSync(path.join(root, r))); h.update('\0'); n++ }
+    }
+  }
+  let out = null
+  try { walk('bin'); walk('src'); out = n ? h.digest('hex') : null } catch { out = null }
+  hashes.set(root, out)
+  return out
+}
+
+/** This code's version: `0.1.0+1a2b3c4` — HEAD in a git checkout, a hash of the code outside one; `0.1.0` when neither reads. */
 export function codeId(root = packageRoot()) {
   const version = JSON.parse(read(path.join(root, 'package.json')) || '{}').version || '0.0.0'
   const dir = gitDir(root)
-  return codeIdOf(version, dir && headSha(dir))
+  return codeIdOf(version, (dir && headSha(dir)) || codeHash(root))
 }
 
 /** The `name` in the package.json at `root`, or null. */
