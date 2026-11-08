@@ -258,6 +258,22 @@ test('a session whose first read failed: one sentence and Retry; the reason only
   } finally { await b.stop() }
 })
 
+// 1.2 §会话不存在 · 1.5 K-29: a head answered 503 still-reading has not answered yet: the desk waits and reads again, no failure line
+test('a first head answered 503 still-reading is a wait: no failure line or Retry, and the head is read again', { skip, timeout: 120_000 }, async () => {
+  const b = await withBoard({ bytes: BYTES, width: 1280, chromium: gate.chromium })
+  try {
+    let reads = 0
+    await b.page.route((u) => new URL(u).pathname === '/api/d/head', (r) => { reads++; return r.fulfill({ status: 503, json: { error: 'reading', errors: [{ code: 'still-reading' }] } }).catch(() => {}) }) // a round still out when the page closes
+    const rows = (await b.get('sessions')).doc.sessions.filter((x) => x.calls > 0)
+    await b.page.evaluate((h) => { location.hash = h }, `#/replay/${encodeURIComponent(rows[0].project_slug)}/${encodeURIComponent(rows[0].session_id)}`)
+    for (const until = Date.now() + 15_000; reads < 2 && Date.now() < until;) await b.page.waitForTimeout(100)
+    assert.ok(reads >= 2, `the head is read again (${reads} reads)`)
+    // a count, not the handle: a failed assert prints its actual, and a Playwright handle prints as its whole connection
+    assert.equal(await b.page.locator('#ctxwin [data-retry]').count(), 0, 'no failure line with Retry while the head is still being read')
+    assert.deepEqual(b.errors, [])
+  } finally { await b.stop() }
+})
+
 // 1.2 #8 §窄屏 on one open desk, resized in place: at each width the sidebar or the bottom row is there, what the narrower widths take
 // away is gone, #ctxwin holds half the available height, and nothing scrolls sideways. A tab raises the panel, Escape lowers it, and
 // crossing 1200 px and back leaves the side boundary's stored layout as the reader left it.

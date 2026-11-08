@@ -40,6 +40,7 @@ import { buildLanes, anchorLane, stepsOf, nearestByTs, placeOf, stepOfMark } fro
 import { createDesk, readLedger, applyLedger, indexOf, ridAt, stepOf as deskStep } from './model.mjs'
 import { lineSlices, applyFile, applyHead } from './packs.mjs'
 import { get, getText } from '../core/http.mjs'
+import { QUERY_WAIT_PROBLEMS } from '../../../src/health/codes.mjs'
 import { breakSteps } from './analysis.mjs'
 import { loadFold, saveFold } from './fold.mjs'
 import { landPlayhead, createStepReads, packOrder } from './follow.mjs'
@@ -742,6 +743,9 @@ function openDesk(ctx, route0, makeView) {
     const stale = () => s.dead || key !== sessionKey() || signal.aborted
     const h = await get('/api/d/head', { id: s.id }, { signal, hold: false, cond: !!desk.head })
     if (stale()) return
+    // not answered yet (1.2 §会话不存在): a desk that never drew keeps waiting and the next round asks again; one that drew says it is not
+    // refreshed, as for any failed round (1.5 K-29)
+    if (!h.ok && h.status === 503 && QUERY_WAIT_PROBLEMS.includes(h.code) && s.goodKey !== key) return { ok: true }
     if (!h.ok || (!h.data && !desk.head)) return readFailed(h.ok ? { status: h.status, error: 'no head' } : h)
     const lastGood = s.goodAt
     s.goodKey = key; s.goodAt = api.now()

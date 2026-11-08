@@ -48,7 +48,8 @@ const CUT = Object.freeze({ ok: false, status: 0, error: CUT_OFF })
 // rightly take longer passes deadlineMs, 1.8 §数据与刷新); a read the caller
 // cancels (a screen change, web/src/LegacyScreen.tsx) ends as ABORTED, which no screen shows or retries
 export const READ_DEADLINE_MS = 60_000
-const timedOutAfter = (ms) => `no answer within ${ms / 1000} s`
+// a read the deadline ended: status 0 like any read with no full answer, and `timedOut`, its own cause class (labels READ_FAIL)
+const timedOutAfter = (ms) => ({ ok: false, status: 0, timedOut: true, error: `no answer within ${ms / 1000} s` })
 export const ABORTED = 'cancelled'
 async function readBody(r) {
   let b
@@ -101,7 +102,7 @@ export async function get(path, params, { signal, hold = true, cond = true, dead
   const timer = setTimeout(() => { timedOut = true; ac.abort() }, deadlineMs)
   const cancel = () => ac.abort()
   if (signal) signal.addEventListener('abort', cancel, { once: true })
-  const ended = (fallback) => (timedOut ? { ok: false, status: 0, error: timedOutAfter(deadlineMs) } : signal && signal.aborted ? { ok: false, status: 0, error: ABORTED } : fallback)
+  const ended = (fallback) => (timedOut ? timedOutAfter(deadlineMs) : signal && signal.aborted ? { ok: false, status: 0, error: ABORTED } : fallback)
   let r, b
   try {
     try { r = await fetch(url, { cache: 'no-store', headers, signal: ac.signal }) } catch (e) { return ended({ ok: false, status: 0, error: String((e && e.message) || e) }) }
@@ -137,7 +138,7 @@ export async function getText(path, params, { range = null, tag = null, signal }
   const timer = setTimeout(() => { timedOut = true; ac.abort() }, READ_DEADLINE_MS)
   const cancel = () => ac.abort()
   if (signal) signal.addEventListener('abort', cancel, { once: true })
-  const ended = (fallback) => (timedOut ? { ok: false, status: 0, error: timedOutAfter(READ_DEADLINE_MS) } : signal && signal.aborted ? { ok: false, status: 0, error: ABORTED } : fallback)
+  const ended = (fallback) => (timedOut ? timedOutAfter(READ_DEADLINE_MS) : signal && signal.aborted ? { ok: false, status: 0, error: ABORTED } : fallback)
   let r, text
   try {
     try { r = await fetch(path + qs(params), { cache: 'no-store', headers, signal: ac.signal }) } catch (e) { return ended({ ok: false, status: 0, error: String((e && e.message) || e) }) }

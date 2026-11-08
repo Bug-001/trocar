@@ -96,7 +96,7 @@ export function readFailure(what, r, { id = 'read-fail' } = {}) {
   const status = obj && typeof r.status === 'number' ? r.status : null
   const why = obj ? r.error : r
   const rows = [...(status != null ? [['status', String(status)]] : []), ['error', why == null || why === '' ? '—' : String(why)]]
-  return { line: READ_FAIL(what, status), tech: techDetailsHtml(rows, { id }) }
+  return { line: READ_FAIL(what, status, obj && r.timedOut === true), tech: techDetailsHtml(rows, { id }) }
 }
 
 // the confirm dialog (4.6 of the visual doc): a question, the impact, what trocar will change; the default focus sits

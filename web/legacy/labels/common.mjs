@@ -51,9 +51,10 @@ export const HEALTH_READ = Object.freeze({
 
 // the words more than one screen shows the same way
 // a failed /api read (1.5 K-29): what could not be read + the cause class, in the board's own words — never the server's text.
-// status 0 = no full answer (cannot connect, cut, timed out); a number = the code the service answered; none = no class known
-export const READ_FAIL = (what, status) => `${what} could not be read${status === 0 ? ': cannot reach the trocar service'
-  : typeof status === 'number' ? `: the trocar service returned ${status}` : ''}`
+// status 0 = no full answer (cannot connect, cut); `late` = the read deadline ended it (status 0 too: the service is there, it did not
+// answer in time); a number = the code the service answered; none = no class known
+export const READ_FAIL = (what, status, late = false) => `${what} could not be read${late ? ': trocar did not answer in time'
+  : status === 0 ? ': cannot reach the trocar service' : typeof status === 'number' ? `: the trocar service returned ${status}` : ''}`
 export const READING = 'Reading…' // the content area while a screen module loads (web/src/LegacyScreen.tsx)
 // a first read of the list that is taking long (1.8 §载入). True with no update too: a deleted index is built the same way
 export const LIST_WAIT = 'Building the session list. This can take a few minutes.'
