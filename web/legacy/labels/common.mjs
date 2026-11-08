@@ -61,4 +61,8 @@ export const WINDOW_LABEL = Object.freeze({ '24h': '24 hours', '7d': '7 days', a
 export const UNTITLED = 'No prompt captured'
 // a title this read could not take from its record (1.8 §标题规则): a read failure, not a fact about the session; the next read tries again
 export const PROMPT_UNREAD = 'Prompt could not be read'
+// a title the answer does not hold: a title_source the board does not know, or none, as in a list stored by the release before
+// (title_source 'pending', 1.8 §标题规则 rule 4): not a fact about the session
+export const TITLE_PENDING = 'Title not read yet'
+export const TITLE_PENDING_TIP = 'The title is still being read from the captured requests; it shows on the next refresh'
 export const PROMPT_UNREAD_TIP = 'The record that holds this session\'s first prompt could not be read. The next read tries again'

@@ -18,7 +18,7 @@ import { useAfter } from '../../ui/useAfter'
 import { rowModel, dayHead, captionFacts as captionFactsJs, emptyBoardState, filteredAgentLine } from './model.mjs'
 import type { Failed, Session, SessionsData } from './useSessions'
 
-export type Entry = { key: string, g?: string, s?: Session }
+export type Entry = { key: string, g?: string, s?: Session, n?: number }
 type Pairs = Array<[string, TechValue]>
 type Fact = { kind: 'not-all', n: number } | { kind: 'stored', at: string }
 const captionFacts = captionFactsJs as (errors: unknown, stored: string | null) => { facts: Fact[], tech: string[] }
@@ -61,8 +61,8 @@ const DayHead = ({ g, now }: { g: string, now: number }) => {
   return <div className="lgroup"><span className="lday">{h.word}</span>{h.date ? <span className="ldate">{h.date}</span> : null}</div>
 }
 
-export function VRows({ v, entries, sel, now, onOpen }:
-  { v: Virtualizer<HTMLDivElement, Element>, entries: Entry[], sel: string | null, now: number, onOpen: (s: Session) => void }) {
+export function VRows({ v, entries, sel, now, onOpen, onShowBg }:
+  { v: Virtualizer<HTMLDivElement, Element>, entries: Entry[], sel: string | null, now: number, onOpen: (s: Session) => void, onShowBg: () => void }) {
   return (
     <div style={{ position: 'relative', width: '100%', height: v.getTotalSize() }}>
       {v.getVirtualItems().map((it) => {
@@ -71,7 +71,9 @@ export function VRows({ v, entries, sel, now, onOpen }:
         return (
           // a row is as tall as its content (one line or two); the virtualizer measures it
           <div key={it.key as string} className="vrow" data-index={it.index} ref={v.measureElement} style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${it.start}px)` }}>
-            {e.s ? <Row s={e.s} on={e.key === sel} now={now} onOpen={onOpen} /> : <DayHead g={e.g!} now={now} />}
+            {e.s ? <Row s={e.s} on={e.key === sel} now={now} onOpen={onOpen} />
+              : e.n != null ? <div className="libbg dimline" data-bg-hidden={e.n}>{`${W.bgHidden(e.n)} · `}<button type="button" className="linkbtn" aria-label={W.showBg(e.n)} onClick={onShowBg}>{W.SHOW}</button></div>
+              : <DayHead g={e.g!} now={now} />}
           </div>
         )
       })}

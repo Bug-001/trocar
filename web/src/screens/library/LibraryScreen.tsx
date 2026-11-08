@@ -45,7 +45,9 @@ export default function LibraryScreen({ route, router }: ScreenProps) {
   const now = shown.at
   const all = useMemo(() => flattenSessions(shown.data) as Session[], [shown.data])
   const rows = useMemo(() => applyFilters(all, f, now) as Session[], [all, f, now])
-  const entries = useMemo(() => listEntries(rows, f.sort) as Entry[], [rows, f.sort])
+  // the background-only sessions the filters would list and the default hides: the list's last line says how many (1.8)
+  const hidden = useMemo(() => (f.bg ? 0 : applyFilters(all, { ...f, bg: true }, now).length - rows.length), [all, f, now, rows])
+  const entries = useMemo(() => [...listEntries(rows, f.sort) as Entry[], ...(hidden ? [{ key: 'bg:hidden', n: hidden }] : [])], [rows, f.sort, hidden])
   const sel = selectedKey(rows, f.sel) as string | null
 
   const open = useCallback((s: Session) => {
@@ -53,6 +55,7 @@ export default function LibraryScreen({ route, router }: ScreenProps) {
     router.go({ area: 'replay', screen: 'replay', project: s.project_slug, id: s.session_id, params: {} } as Route)
   }, [router])
   const clear = useCallback(() => set({ q: null, h: null, project: null, window: null }), [set])
+  const showBg = useCallback(() => set({ bg: '1' }), [set])
   const retry = useCallback(() => { void q.refetch() }, [q])
 
   // the one-shot capture-health read: the 空态 and the filtered agent read it once, when they want it
@@ -116,8 +119,8 @@ export default function LibraryScreen({ route, router }: ScreenProps) {
   if (!shown.data && !shown.err) body = <LoadingState />
   else if (!shown.data) body = <ReadFailState err={shown.err!} onRetry={retry} />
   else if (!all.length) body = <NoSessionsState shot={shot} />
-  else if (!rows.length) body = <FilteredState shot={shot} h={f.h} onClear={clear} />
-  else body = <VRows v={v} entries={entries} sel={sel} now={now} onOpen={open} />
+  else if (!rows.length && !hidden) body = <FilteredState shot={shot} h={f.h} onClear={clear} />
+  else body = <VRows v={v} entries={entries} sel={sel} now={now} onOpen={open} onShowBg={showBg} />
 
   return (
     <div className="page">

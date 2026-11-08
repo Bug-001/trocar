@@ -71,7 +71,7 @@ function bumped() {
 }
 const code = o['no-bump'] ? checkout : bumped()
 const from = (file) => import(path.join(code, file)) // anything versioned is read by the code under check, never by this checkout
-const { clone, p95, preRead, rawDiff, rawList, requestsByPath, rereading, segmentCheck, verdict } = await from('scripts/deploy-check-lib.mjs')
+const { clone, listCheck, p95, preRead, rawDiff, rawList, requestsByPath, rereading, segmentCheck, verdict } = await from('scripts/deploy-check-lib.mjs')
 const { withBoard } = await from('test/web-v2/browser/harness.mjs')
 const { NO_SESSIONS } = await from('web/legacy/labels/library.mjs')
 const { FIRST_LIST_DEADLINE_MS, LIST_WAIT_MS } = await from('web/legacy/library/logic.mjs')
@@ -120,6 +120,7 @@ async function theBoard() {
         const look = () => {
           if (document.body && document.body.innerText.includes(empty)) globalThis.__sawEmpty = true
           if (document.querySelector('[data-list-wait]')) globalThis.__sawWait = true
+          if (document.querySelector('[data-stored]')) globalThis.__sawStored = true
           if (document.querySelector('[data-read-fail], [data-g="sessions"]')) globalThis.__sawFail = true
         }
         new MutationObserver(look).observe(document, { childList: true, subtree: true, characterData: true })
@@ -130,7 +131,8 @@ async function theBoard() {
     },
   })
   try {
-    const notRead = async () => { if (/not read yet/i.test(await b.page.evaluate(() => document.body.innerText))) fail('the page says something is not read yet') }
+    // a stored answer of the release before may say a title is not read yet (1.8 §标题规则 4): the rule holds only where none was shown
+    const notRead = async () => { if (!(await b.page.$('[data-stored]')) && /not read yet/i.test(await b.page.evaluate(() => document.body.innerText))) fail('the page says something is not read yet') }
     // 1 the list, from the moment the page was asked for
     await b.page.evaluate(() => { location.hash = '#/sessions' })
     const asked = performance.now()
@@ -149,11 +151,13 @@ async function theBoard() {
       if (onPage > LIST_WAIT_MS + 250 && !saw.wait) fail(`the list took ${Math.round(onPage)} ms on the page and the page never said what it was doing`) // 250: the screen mounts after the hash is set
     }
     await notRead()
-    const list = docOf(await get('/api/sessions?limit=500'))
-    const rows = (list && list.sessions) || []
-    if (!rows.length) fail('the session list is empty')
-    report.sessions = { listed: rows.length, titled: rows.filter((s) => s.title != null).length, unread: rows.filter((s) => s.title_source === 'unread').length }
-    for (const s of rows) if (![null, undefined, 'wire', 'unread'].includes(s.title_source)) fail(`title_source ${JSON.stringify(s.title_source)}`)
+    // the stored answer stands in until the fresh list lands: ask until an answer without `stored` (bounded), then hold that one to the rules
+    let list = docOf(await get('/api/sessions?limit=500'))
+    for (const until = Date.now() + FIRST_LIST_DEADLINE_MS; list && list.stored && Date.now() < until;) { await new Promise((ok) => setTimeout(ok, 2000)); list = docOf(await get('/api/sessions?limit=500')) }
+    if (list && list.stored) fail(`no fresh session list within ${FIRST_LIST_DEADLINE_MS / 1000} s: only the stored answer of ${list.stored.at}`)
+    const rows = (list && list.sessions) || [], checked = listCheck(list)
+    report.sessions = checked.sessions
+    checked.failures.forEach(fail)
 
     // 2 the biggest session
     const big = rows.slice().sort((x, y) => (y.calls || 0) - (x.calls || 0))[0], enc = encodeURIComponent

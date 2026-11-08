@@ -114,7 +114,8 @@ export async function get(path, params, { signal, hold = true, cond = true, dead
   }
   if (b.cut) return ended(CUT)
   const body = 'json' in b ? b.json : null
-  if (!r.ok) return { ok: false, status: r.status, error: (body && body.error) || 'HTTP ' + r.status }
+  // `code`: the answer's first error code (a 503 `still-reading` is a wait, not a failure: 1.5 K-29)
+  if (!r.ok) return { ok: false, status: r.status, error: (body && body.error) || 'HTTP ' + r.status, code: body?.errors?.[0]?.code }
   if (b.bad) return { ok: false, status: r.status, error: 'not JSON' }
   const etag = r.headers.get('etag')
   if (etag) { if (hold) remember(held, url, { etag, data: body }); else remember(tags, url, etag) }

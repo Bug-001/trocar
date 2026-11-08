@@ -42,10 +42,11 @@ test('1.8 (17): the stored list paints at once with the refreshing fact; the fre
     const before = await b.page.$$eval('.lrow[data-key]', (as) => as.map((a) => a.dataset.key))
     assert.ok(!before.some((k) => keyId(k) === NEW_ID))
 
-    // a new session arrives after it; the worker goes (the open page goes first: its polls would fork the read roles again, so none gone at once)
+    // a new session arrives after it, a main-thread call (a call with no messages or tools reads as background-only, which the list hides: 1.8);
+    // the worker goes (the open page goes first: its polls would fork the read roles again, so none gone at once)
     await b.page.goto('about:blank')
     const ts = '2099-01-01T00:00:00.000Z'
-    writeSegment(home.home, '20990101T000000Z', [JSON.stringify({ ts, endpoint: '/v1/messages', method: 'POST', req_headers: { 'content-type': 'application/json', 'x-claude-code-session-id': NEW_ID }, req_body: '{"model":"m"}', resp: { status: 200, kind: 'json' }, id: 'req_later', ts_request: ts, is_llm_call: true, capture: 'transparent', host: 'api.anthropic.com', traffic_class: 'llm', proc: { pid: 7, exe: '/x', agent: 'claude-code' } })])
+    writeSegment(home.home, '20990101T000000Z', [JSON.stringify({ ts, endpoint: '/v1/messages', method: 'POST', req_headers: { 'content-type': 'application/json', 'x-claude-code-session-id': NEW_ID }, req_body: JSON.stringify({ model: 'm', tools: [{ name: 'Read', input_schema: { type: 'object' } }], messages: [{ role: 'user', content: 'later' }] }), resp: { status: 200, kind: 'json' }, id: 'req_later', ts_request: ts, is_llm_call: true, capture: 'transparent', host: 'api.anthropic.com', traffic_class: 'llm', proc: { pid: 7, exe: '/x', agent: 'claude-code' } })])
     b.face.killWorker()
     await until('the worker gone', () => b.face.workers().length === 0)
 
