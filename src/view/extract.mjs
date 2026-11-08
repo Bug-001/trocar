@@ -10,23 +10,21 @@
 // depends on the block's place in a call (a turn boundary, a volatile block, the links between a file's tool_use and its result) is
 // the row's `attrs`, by list position.
 import { createHash } from 'node:crypto';
-import { admitted, flatBlockText, blockFacts, callFacts, normResp, replyPartsAnthropic, linearContext } from './analyze.mjs';
+import { admitted, flatBlockText, blockFacts, callFacts, normResp, linearContext } from './analyze.mjs';
 import { slimBlock, compBucket, firstHuman, blockQuery } from './blockmeta.mjs';
 import { renderOf } from './render-kind.mjs';
 import { blockSpans } from '../dissect/cc-spans.mjs';
-import { resourceRef as ccResourceRef } from '../dissect/cc.mjs';
-import { resourceRef as oaResourceRef, faithfulness as oaFaithfulness } from '../dissect/openai.mjs';
 import { scanJson, spanAt } from '../dissect/json-scan.mjs';
 import { scannedRequestBody, sharesBody, parsedRequestBody, storedRequestBody, requestEncodingOf } from '../dissect/request-body.mjs';
 import { fieldTextOf, respOf, headersOf } from '../dissect/record-fields.mjs';
 import { composeTextRef, mintRawRef } from '../raw/refs.mjs';
 import { V0_CONVERTED } from '../raw/ingest.mjs';
-import { boardDissectorFor, wireFormatOf, flatLaneOf, contextStateOf, blockKeysOf, MULTI_LANE_CONTEXT } from '../dissect/registry.mjs';
+import { boardDissectorFor, flatLaneOf, contextStateOf, blockKeysOf, MULTI_LANE_CONTEXT } from '../dissect/registry.mjs';
 import { hintsOf, sessionKeyOf, observerEffectsOf } from '../dissect/harnesses.mjs';
 import { vendorOf } from '../dissect/vendors.mjs';
 import { failedOf } from '../dissect/endpoints.mjs';
 import { mapUsage, boardUsage } from '../model/schema.mjs';
-import { CC_THREADS, replyIdOf, patchSystem } from '../dissect/cc-threads.mjs';
+import { replyIdOf, patchSystem } from '../dissect/cc-threads.mjs';
 import { hasCompactionPreamble } from '../identity/session-identity.mjs';
 import { posCmp, num52, numTable } from '../query/projection.mjs';
 import { bodyRetentionOf, retentionLabelOf, reqIncompleteOf, wsIncompleteOf, respIncompleteOf, isLogOnly, captureLabelsOf } from '../dissect/capture-labels.mjs';
@@ -104,34 +102,60 @@ export function definition(b, ref, exact, why = null, bid = bidFor(b, ref, exact
 }
 
 // ── what a record's own bytes hold ──────────────────────────────────────────────────────────────────────────────────────────────
-// The wire a call is read on: a flat-lane dissector, the Anthropic wire, or null (no call: counted, never guessed at).
+// The wire a call is read on: its board dissector (a flat-lane wire or the tree-folded Anthropic wire), or null (no call: counted,
+// never guessed at).
 export function callWireOf(r) {
   if (!r || !r.is_llm_call || isLogOnly(r)) return null; // D40: a call kept as a log line is no step (the session's `logged`)
   let d = boardDissectorFor(r);
   if (d && d.admits && !d.admits(r)) d = null;
-  if (d) return { d, format: d.id };
-  return wireFormatOf(r) === 'anthropic' ? { d: null, format: 'anthropic' } : null;
+  return d ? { d, format: d.id } : null;
 }
 const NO_STREAM = 'the record carries no id or stream to address';
 
-// The call read once: the Anthropic wire's hydrated record (`h`), or a flat-lane wire's parsed request (`req`, `unparsed`).
-function readCall(rec, { d, format }) {
-  if (format === 'anthropic') return { h: admitted(hydrateForBoard(rec, null)) };
-  const copy = sharesBody({ ...rec }, rec); // flatRequest sets `request` on the record it is given: the caller's record stays as it was
-  return { h: copy, ...flatRequest(d, copy, null) };
-}
+// The board path's per-fold steps, keyed by the dissector's `fold` (3.1): `read` the call once (a tree wire's hydrated record `h`,
+// or a flat-lane wire's parsed request `req`, `unparsed`); its request `blocks`; its `call` facts (callX below).
+const FOLD_PATHS = {
+  tree: {
+    read: (rec) => ({ h: admitted(hydrateForBoard(rec, null)) }),
+    blocks: (rec, wire, read, base, body) => {
+      const flat = anthropicFlat(read.h.request);
+      let spans = null;
+      if (body != null) try { spans = blockSpans(read.h); } catch { spans = null; }
+      return { flat, at: flat.map((_, i) => locate(base, body, spans && spans[i])) };
+    },
+    call: (rec, { format }, { h }, common) => {
+      const facts = callFacts(h);
+      const lane = facts.sub ? 'subagent' : facts.monitor ? 'monitor' : hintsOf(rec).lane || 'main';
+      return jsonClean({ ...common, facts, lane, wire: wireOf(h, format, null), rq: slimRec(h).request,
+        usage: boardUsage(mapUsage(format, facts.usage || {}, { vendor: vendorOf(h) })),
+        error: !!rec.error || !!facts.failed, replyId: replyIdOf(rec), stop_reason: normResp(h).stop_reason ?? null });
+    },
+  },
+  flat: {
+    read: (rec, d) => {
+      const copy = sharesBody({ ...rec }, rec); // flatRequest sets `request` on the record it is given: the caller's record stays as it was
+      return { h: copy, ...flatRequest(d, copy, null) };
+    },
+    blocks: (rec, wire, read, base, body) => {
+      const flat = wire.d.boardFlat(read.req, read.h);
+      const root = body != null ? scannedRequestBody(rec) : null;
+      return { flat, at: flat.map((b) => locate(base, body, root && Array.isArray(b.path) ? spanAt(root, b.path) : null)) };
+    },
+    call: (rec, { d, format }, { h, req, unparsed }, common, st) => {
+      const norm = d.normResp(rec);
+      // `agent`: the wire's own agent (a WebSocket connection), what a subagent's lane is folded by when the harness names none
+      return jsonClean({ ...common, lane: flatLaneOf(d, rec), hints: hintsOf(rec), msgCount: d.messageCount ? d.messageCount(req) : (req.message_count || 0),
+        agent: d.agentOf ? d.agentOf(rec) ?? undefined : undefined, rq: slimRec(h).request, ctx: d.ctxTokens(norm), nu: norm.usage,
+        reqIncomplete: reqIncompleteOf(rec), wsIncomplete: wsIncompleteOf(rec), respIncomplete: respIncompleteOf(rec),
+        model: req.model, unparsed, error: failedOf({ status: st, ws: rec.transport === 'ws', error: !!rec.error || unparsed || !!(d.failed && d.failed(norm, rec)) }), wire: wireOf(rec, d.id, null, norm), usage: boardUsage(mapUsage(format, norm.usage || {}, { vendor: vendorOf(rec) })),
+        stop_reason: norm.stop_reason, replyId: norm.id ?? null });
+    },
+  },
+};
+const readCall = (rec, wire) => FOLD_PATHS[wire.d.fold].read(rec, wire.d);
 /** requestBlocks(rec, wire, read?) → { flat, at: [{ref, exact, why}] } — the request's blocks, each with the exact text its ref names. */
 export function requestBlocks(rec, wire, read = readCall(rec, wire)) {
-  const base = rawRefOf(rec), body = spanBody(rec);
-  if (wire.format === 'anthropic') {
-    const flat = anthropicFlat(read.h.request);
-    let spans = null;
-    if (body != null) try { spans = blockSpans(read.h); } catch { spans = null; }
-    return { flat, at: flat.map((_, i) => locate(base, body, spans && spans[i])) };
-  }
-  const flat = wire.d.boardFlat(read.req, read.h);
-  const root = body != null ? scannedRequestBody(rec) : null;
-  return { flat, at: flat.map((b) => locate(base, body, root && Array.isArray(b.path) ? spanAt(root, b.path) : null)) };
+  return FOLD_PATHS[wire.d.fold].blocks(rec, wire, read, rawRefOf(rec), spanBody(rec));
 }
 const locate = (base, text, span, field = null) => {
   if (!span || text == null) return { ref: null, exact: null, why: null };
@@ -139,15 +163,11 @@ const locate = (base, text, span, field = null) => {
   return { ref: composeTextRef(base, span, field), exact: text.slice(span[0], span[1]), why: null, span };
 };
 
-// a reply part as a flat entry of the same vocabulary (section messages, role assistant)
-const WIRE_RULES = {
-  anthropic: { links: true, resourceRef: ccResourceRef, faith: (bl) => ((bl.type === 'thinking' || bl.type === 'redacted_thinking') && bl.signature && !(bl.thinking || bl.text) ? 'opaque' : undefined) },
-  openai: { resourceRef: oaResourceRef, faith: (bl) => (bl.type === 'thinking' ? oaFaithfulness(bl) : undefined) },
-};
+// a reply part as a flat entry of the same vocabulary (section messages, role assistant), by the dissector's `rules`
 /** replyBlocks(rec, wire) → [{ b, ref, exact, why }] in reply order: the call's own reply blocks (a part with no block has none). */
-export function replyBlocks(rec, { d, format }) {
-  const parts = format === 'anthropic' ? replyPartsAnthropic(rec) : d && d.replyParts ? d.replyParts(rec) : [];
-  const rules = WIRE_RULES[format === 'anthropic' ? 'anthropic' : 'openai'], base = rawRefOf(rec);
+export function replyBlocks(rec, { d }) {
+  const parts = d && d.replyParts ? d.replyParts(rec) : [];
+  const rules = d.rules, base = rawRefOf(rec);
   const out = [];
   for (const p of parts) {
     const bl = p.block;
@@ -402,11 +422,11 @@ export function extract(rec, ctx) {
     local.add(bid); defs.push(def);
     return { bid, query };
   };
-  const rules = WIRE_RULES[wire.format === 'anthropic' ? 'anthropic' : 'openai'];
+  const rules = wire.d.rules;
   const rp = replyBlocks(rec, wire), reply = rp.map((p) => take(p.b, p).bid);
   const rmb = rp.flatMap((p, j) => (j === 0 || p.unit !== rp[j - 1].unit ? [j] : []));
   const read = readCall(rec, wire), x = callX(rec, wire, read);
-  const linker = wire.format === 'anthropic' ? CC_THREADS : wire.d;
+  const linker = wire.d.linker || wire.d;
   const st = linker && linker.stitchOf ? linker.stitchOf(rec) : null;
   // the call's own blocks, by section
   const { flat, at } = requestBlocks(rec, wire, read);
@@ -508,24 +528,11 @@ function stitchedFacts(x, { rec, st, predX, state, tools, ownMsgs }) {
 
 // x: the per-call facts (3.5 §会话读), all from this record. `nonBlockKeys`: the request's top-level keys that are no block
 // (refs into the body and short scalars, never a body: nonBlockKeysOf below), what a lane answer's step detail ships (3.5 §会话读).
-function callX(rec, { d, format }, { h, req, unparsed }) {
+function callX(rec, wire, read) {
   const st = (respOf(rec) || {}).status ?? null;
-  const common = { item: itemFacts(rec), format, respRefs: respRefsOf(rec), ...(extraMessagesOf(rec) || {}), ts: rec.ts_request || rec.ts || '', status: st,
-    nonBlockKeys: nonBlockKeysOf(rec, format) };
-  if (format === 'anthropic') {
-    const facts = callFacts(h);
-    const lane = facts.sub ? 'subagent' : facts.monitor ? 'monitor' : hintsOf(rec).lane || 'main';
-    return jsonClean({ ...common, facts, lane, wire: wireOf(h, format, null), rq: slimRec(h).request,
-      usage: boardUsage(mapUsage(format, facts.usage || {}, { vendor: vendorOf(h) })),
-      error: !!rec.error || !!facts.failed, replyId: replyIdOf(rec), stop_reason: normResp(h).stop_reason ?? null });
-  }
-  const norm = d.normResp(rec);
-  // `agent`: the wire's own agent (a WebSocket connection), what a subagent's lane is folded by when the harness names none
-  return jsonClean({ ...common, lane: flatLaneOf(d, rec), hints: hintsOf(rec), msgCount: d.messageCount ? d.messageCount(req) : (req.message_count || 0),
-    agent: d.agentOf ? d.agentOf(rec) ?? undefined : undefined, rq: slimRec(h).request, ctx: d.ctxTokens(norm), nu: norm.usage,
-    reqIncomplete: reqIncompleteOf(rec), wsIncomplete: wsIncompleteOf(rec), respIncomplete: respIncompleteOf(rec),
-    model: req.model, unparsed, error: failedOf({ status: st, ws: rec.transport === 'ws', error: !!rec.error || unparsed || !!(d.failed && d.failed(norm, rec)) }), wire: wireOf(rec, d.id, null, norm), usage: boardUsage(mapUsage(format, norm.usage || {}, { vendor: vendorOf(rec) })),
-    stop_reason: norm.stop_reason, replyId: norm.id ?? null });
+  const common = { item: itemFacts(rec), format: wire.format, respRefs: respRefsOf(rec), ...(extraMessagesOf(rec) || {}), ts: rec.ts_request || rec.ts || '', status: st,
+    nonBlockKeys: nonBlockKeysOf(rec, wire.format) };
+  return FOLD_PATHS[wire.d.fold].call(rec, wire, read, common, st);
 }
 
 // ── the build driver ────────────────────────────────────────────────────────────────────────────────────────────────────────────

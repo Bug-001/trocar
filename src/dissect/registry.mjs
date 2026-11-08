@@ -2,12 +2,13 @@
 // recorded per call; never from the UA or the harness). The board (src/view/extract.mjs) and the ETL
 // adapters both dispatch through this, so the two readers cannot disagree about what a record is.
 // Leaf module.
-import { detect as anthropicShape, serverEdited, CC_SECTIONS } from './cc.mjs';
+import { detect as anthropicShape, serverEdited } from './cc.mjs';
 import { contextStateOfRequest } from './capture-labels.mjs';
 import { wireShape, RESPONSES, CHAT } from './openai.mjs';
 import { isWsHandshake } from './ws-handshake.mjs';
 import { hintsOf } from './harnesses.mjs';
 import { RESPONSES_WS } from './openai-ws.mjs';
+import { ANTHROPIC } from './anthropic-board.mjs';
 import { CC_THREADS, isContinuation } from './cc-threads.mjs';
 import { endpointOf, pathOf } from './endpoints.mjs';
 
@@ -43,11 +44,12 @@ export function wireFormatOf(rec) {
   return anthropicShape(rec) ? 'anthropic' : null;
 }
 
-// Board dissectors for the flat-lane wires (D25: dissector = adapter; the shared assembler only calls
-// them). The Anthropic wire is assembled by the multi-lane analyzer (src/view/analyze.mjs), so it has no
-// row here. Adding a wire = one dissector object + one row. The WebSocket row's object also carries the
-// cross-record hooks (prepare → a planner with context(rec) / admits / laneOf / failed, src/dissect/openai-ws.mjs).
-const BOARD = { 'openai-responses': RESPONSES, 'openai-chat': CHAT, 'openai-responses-ws': RESPONSES_WS };
+// Board dissectors (D25: dissector = adapter; the shared assembler only calls them). Every wire is a row;
+// its `fold` says how the board folds it: 'flat' (one lane per call, the OpenAI wires) or 'tree' (lanes with
+// sub-agents, the Anthropic wire, ./anthropic-board.mjs). Adding a wire = one dissector object + one row. The
+// WebSocket row's object also carries the cross-record hooks (prepare → a planner with context(rec) / admits /
+// laneOf / failed, src/dissect/openai-ws.mjs).
+const BOARD = { anthropic: ANTHROPIC, 'openai-responses': RESPONSES, 'openai-chat': CHAT, 'openai-responses-ws': RESPONSES_WS };
 export function boardDissectorFor(rec) {
   return BOARD[wireFormatOf(rec)] || null;
 }
@@ -68,9 +70,7 @@ export function flatLaneOf(d, rec) {
 
 // The request's top-level keys that become context blocks, per wire format; every other top-level key is a
 // non-block key the board lists one by one (4.6 R2 「不成块的顶层键逐个列出」).
-const ANTHROPIC_BLOCK_KEYS = Object.freeze(CC_SECTIONS.map((x) => x.id));
 export function blockKeysOf(format) {
-  if (format === 'anthropic') return ANTHROPIC_BLOCK_KEYS;
   return (BOARD[format] && BOARD[format].blockKeys) || [];
 }
 

@@ -15,7 +15,7 @@ import { createAnalyzer, stepOrder, OrderBound, breakOf, blockDiff, compactionMe
 import { callRow, itemsView } from './board.mjs';
 import { compareStep } from './step-order.mjs';
 import { compactionVerdict } from '../identity/session-identity.mjs';
-import { boardDissectorOf } from '../dissect/registry.mjs';
+import { boardDissectorOf as dOf } from '../dissect/registry.mjs';
 import { askOf, COMP_KEYS, departer, departs, taskOf, HEAD } from './blockmeta.mjs';
 import { posCmp, lru, num52, numTable } from '../query/projection.mjs';
 import { materializeAttrs } from './extract.mjs';
@@ -63,6 +63,12 @@ export const FLAT_LANES = {
   aux: { kind: 'aux', icon: '⚙', label: 'other util' },
   probe: { kind: 'probe', icon: '👁', label: 'warm-up / probe requests',
     note: 'A request the harness itself marks as a warm-up or probe (a request-kind hint, or a request that asks for no output): it primes the cache and is not a conversation turn. Its body is kept verbatim like any call, and a later call may build on it.' },
+};
+// A wire's reduction by its dissector's `fold` (3.1): the fold itself, a lane header's kind meta, and whether its lanes count once
+// per kind in the stats (a flat wire's lanes of one kind are one stream) or each on its own (a tree's lanes).
+const FOLDS = {
+  tree: { fold: anthropicFold, lane: (kind) => ({ kind, ...laneMeta(kind) }), perKind: false },
+  flat: { fold: flatFold, lane: (kind) => FLAT_LANES[kind], perKind: true },
 };
 
 const CPS = 256; // the lane states a reduction keeps of its last takes, for a late call to go back to (pushOf)
@@ -353,7 +359,7 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
     F.flat.get(x.format).push(rid, row);
   }
   // a wire's fold, from its state in a snapshot or anew
-  const foldOf = (fmt, s = null) => (fmt === 'anthropic' ? anthropicFold(K, F, s) : flatFold(boardDissectorOf(fmt), K, F, s));
+  const foldOf = (fmt, s = null) => { const d = dOf(fmt); return FOLDS[d.fold].fold(d, K, F, s); };
   if (st.F) { const { flat, ...rest } = st.F; Object.assign(F, rest); for (const [fmt, s] of flat) F.flat.set(fmt, foldOf(fmt, s)); }
   // the break detail of a pair of blocks: from the projection, else from both blocks' texts (once)
   const blockOf = (bid) => {
@@ -464,7 +470,8 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
     }
     n++;
     ts[k] = x.item ? x.item.ts_request : null;
-    const c = !isCall(row) ? ts[k] : x.format === 'anthropic' ? (x.facts || {}).ts_request : x.ts; // the call's own ts (its step order)
+    const d = isCall(row) ? dOf(x.format) : null;
+    const c = !isCall(row) ? ts[k] : d && d.tsOf ? d.tsOf(x) : x.ts; // the call's own ts (its step order)
     cts[k] = c === ts[k] ? ts[k] : c;
     return row;
   }
@@ -552,7 +559,7 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
     if (!F.relink && !F.fresh.length && !F.subsNew.length) return false;
     const order = (a, b) => before(a.S.rids[0], b.S.rids[0]) || before(a.k, b.k) || a.i - b.i;
     const matches = (S, sp) => { const p = sp.head; return p && F.firstText(S).includes(p.slice(0, 40)); };
-    const subs = [...F.subs.values()].filter((S) => S.fmt === 'anthropic' && S.kind === 'subagent' && S.rids.length);
+    const subs = [...F.subs.values()].filter((S) => dOf(S.fmt).spawns && S.kind === 'subagent' && S.rids.length);
     const best = F.best || (F.best = new Map());
     const scan = (S, list) => {
       const was = best.get(S) || null;
@@ -590,8 +597,8 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
         if (lastK < 0 || before(l, lastK) > 0) lastK = l;
       }
       const lead = parts.slice().sort((a, b) => before(I.ff.get(a.fmt), I.ff.get(b.fmt)))[0], firstS = parts.find((S) => S.rids[0] === d.first);
-      const meta = lead.fmt === 'anthropic' ? { kind: lead.kind, ...laneMeta(lead.kind) } : FLAT_LANES[lead.kind];
-      const sp = lead.fmt === 'anthropic' && lead.kind === 'subagent' ? best.get(lead) : null;
+      const meta = FOLDS[dOf(lead.fmt).fold].lane(lead.kind);
+      const sp = dOf(lead.fmt).spawns && lead.kind === 'subagent' ? best.get(lead) : null;
       const h = { lane: ridAt(d.first), kind: meta.kind, icon: meta.icon, label: meta.label, task: sp ? sp.arg || taskOf(lead.ask) : null,
         ...(meta.note ? { note: meta.note } : null), count, first: ridAt(d.first), last: ridAt(lastK), peakCtx: peak,
         spawnRid: sp ? ridAt(sp.k) : null, parent: sp ? keyOf(sp.S) : null, flagged };
@@ -634,10 +641,11 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
     for (const S of F.subs.values()) {
       if (!S.rids.length) continue;
       s.calls += S.rids.length; s.compactions += S.cmp; s.totalIn += S.tin; s.totalOut += S.tout; if (S.peak > s.peakCtx) s.peakCtx = S.peak;
-      if (S.fmt !== 'anthropic') { const kk = `${S.fmt}\n${S.kind}`; if (kinds.has(kk)) continue; kinds.add(kk); }
+      const d = dOf(S.fmt);
+      if (FOLDS[d.fold].perKind) { const kk = `${S.fmt}\n${S.kind}`; if (kinds.has(kk)) continue; kinds.add(kk); }
       s.streams++;
       if (S.kind === 'subagent') s.subagents++;
-      if (S.fmt === 'anthropic' && S.kind === 'monitor') s.monitors += S.rids.length;
+      if (d.monitors && S.kind === 'monitor') s.monitors += S.rids.length;
     }
     I.st = s; I.kinds = kinds;
     return { ...s };
@@ -649,9 +657,10 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
     T.calls++; T.compactions += call.compaction ? 1 : 0; T.totalIn += usage.input_tokens || 0; T.totalOut += usage.output_tokens || 0; if (S.peak > T.peakCtx) T.peakCtx = S.peak;
     if (S.rids.length === 1) {
       const kk = `${S.fmt}\n${S.kind}`;
-      if (S.fmt === 'anthropic' || !F.inc.kinds.has(kk)) { if (S.fmt !== 'anthropic') F.inc.kinds.add(kk); T.streams++; if (S.kind === 'subagent') T.subagents++; }
+      const per = FOLDS[dOf(S.fmt).fold].perKind;
+      if (!per || !F.inc.kinds.has(kk)) { if (per) F.inc.kinds.add(kk); T.streams++; if (S.kind === 'subagent') T.subagents++; }
     }
-    if (S.fmt === 'anthropic' && S.kind === 'monitor') T.monitors++;
+    if (dOf(S.fmt).monitors && S.kind === 'monitor') T.monitors++;
   }
   const R = {
     add, has, log,
@@ -752,7 +761,7 @@ const recFacts = (it) => (it ? { ts_request: it.ts_request, is_llm_call: !!it.is
 
 // The Anthropic wire's fold: the analyzer's lanes (createAnalyzer, fed call views, keeping nothing), each call baked against its
 // lane's base and written out.
-function anthropicFold({ at, B, cacheOf, pushOf, emit, newSub, baseOf, lastOf, int }, F, from) {
+function anthropicFold(d, { at, B, cacheOf, pushOf, emit, newSub, baseOf, lastOf, int }, F, from) {
   const an = createAnalyzer({ keep: false, from: from && from.an });
   F.firstText = (S) => an.firstText(S.stream);
   // a call's view: its messages' roles from the columns, their tool uses and block facts read when the analyzer asks (the messages
@@ -776,7 +785,7 @@ function anthropicFold({ at, B, cacheOf, pushOf, emit, newSub, baseOf, lastOf, i
     const call = an.pushView(view(row, list, e.mb));
     const lane = an.laneOf(call);
     let S = F.subs.get(lane);
-    if (!S) { S = newSub('anthropic', lane.kind, lane.kind === 'subagent' ? `\0${F.uid}` : lane.kind); S.stream = lane; F.subs.set(lane, S); }
+    if (!S) { S = newSub(d.id, lane.kind, lane.kind === 'subagent' ? `\0${F.uid}` : lane.kind); S.stream = lane; F.subs.set(lane, S); }
     if (!S.rids.length) S.ask = firstHumanOf(list, B);
     call.wire = x.wire;
     call.respRefs = x.respRefs;
