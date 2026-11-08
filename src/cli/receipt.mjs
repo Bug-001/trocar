@@ -165,17 +165,25 @@ export function changeLines(r, { past = true, home = null } = {}) {
   return lines
 }
 
+// 1.6 §3.3: a harness that needs setup — the fix is two commands, never the code (§1.1); both modes' `on` say it this way
+export const refusedLine = (r, { past = true } = {}) => `${r.harness} ${past ? 'was not' : 'will not be'} turned on: ${r.why}. Run: ${r.command}, then: trocar on ${r.harness}`
+/** 1.6 §3.3 (D65④): the harnesses `on` refused because their setup is needed — `blocked` of a dry run, `error` of a real one (exit 1). */
+export const setupBlocked = (r) => (r.refused || []).filter((x) => x.reason === 'setup-needed').map((x) => ({ what: x.harness, reason: x.why }))
+/** A run whose only shortfall is the harnesses refused for setup: the others were turned on (exit 1 all the same). */
+export const onlyRefused = (r) => !!r.error && r.error.code === 'setup-needed' && !(r.problems || []).length && !!(r.harnesses || []).length
+export const setupError = (b) => ({ code: 'setup-needed', message: `${b.map((x) => x.what).join(', ')} ${b.length === 1 ? 'is' : 'are'} not set up for capture; run trocar install, then trocar on again` })
+
 /** The receipt of `trocar on` as text (the verdict first, then every file it changed). `tense`: 'past' | 'future' (the dry run). `fresh` = the set of
  *  harnesses THIS run newly wired (their one-time notes print; the rest live in `doctor` and `--json`); null prints every note. */
 export function formatOnReceipt(r, { tense = 'past', home = null, platform = 'linux', fresh = null, topology = null, colors: c = noColor() } = {}) { // `topology`: { <h>: HarnessTopology }, what the route lines degrade from (A.1)
   const past = tense !== 'future'
   const t = (x) => tilde(x, home)
   // an on that wrote everything but has no collector running is done and exits 0, yet captures nothing yet: the header says so
-  const idle = past && r.ok !== false && r.daemon && r.daemon.state !== 'running'
+  const idle = past && (r.ok !== false || onlyRefused(r)) && r.daemon && r.daemon.state !== 'running'
   const named = (r.harnesses || []).length ? (r.harnesses || []).join(', ') : 'no agent'
   const daemonBit = r.daemon && r.daemon.state === 'running' ? `Collector running${r.daemon.pid ? ` (pid ${r.daemon.pid})` : ''}${r.daemon.started ? ', started by this run' : ''}.` : null
   const lines = [
-    r.ok === false && past ? `${c.red('x')} trocar on did not finish. What stopped it is below.`
+    r.ok === false && past && !onlyRefused(r) ? `${c.red('x')} trocar on did not finish. What stopped it is below.`
       : idle ? `The settings are in place, but no collector is running: nothing is captured until it is.`
         : past ? `${c.green('Capturing')} ${named}. ${daemonBit || 'Whether the collector is running is unknown.'}`
           : `trocar will start capturing ${named}.`,
@@ -184,6 +192,7 @@ export function formatOnReceipt(r, { tense = 'past', home = null, platform = 'li
   if (r.unchanged && r.unchanged.length) { // the display caps at three names; the whole list is in --json, and none of them is rewritten by a second on
     lines.push(...pathList('Already in place, not rewritten:', r.unchanged.slice(0, 3), home, r.unchanged.length > 3 ? `and ${r.unchanged.length - 3} more (all of them: --json)` : null))
   }
+  lines.push(...(r.refused || []).map((x) => refusedLine(x, { past })))
   if (r.skipped.length) lines.push(`Skipped: ${r.skipped.map((s) => `${t(s.what)} (${s.reason})`).join('; ')}`)
   if (lingerText(r)) lines.push(lingerText(r))
   for (const [h, x] of Object.entries(r.adopted || {})) if (saysSomething(x)) lines.push(...adoptedLines(h, x, topology && topology[h]))

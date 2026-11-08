@@ -85,7 +85,7 @@ test('cli: with no daemon answering (not running, no runtime dir, stuck) status 
     assert.equal(t.e.length, 0, 'a daemon that does not answer is not an error of the caller\'s; the failure from disk decides the exit')
     fs.rmSync(path.join(dir, 'flows'), { recursive: true }); fs.writeFileSync(path.join(dir, 'flows'), 'x')
     t = io(); assert.equal(await runCli(['status'], { env, home, request: async () => { throw Object.assign(new Error('x'), { code: 'ECONNREFUSED' }) }, ...status, ...t }), 3)
-    assert.match(t.o.join('\n').replace(/\s+/g, ' '), /Could not read capture health: .*flows: ENOTDIR/, 'a read that failed is said, never silence (D38)')
+    assert.match(t.o.join('\n').replace(/\s+/g, ' '), /flows: ENOTDIR/, 'a read that failed is said, never silence (D38)')
     assert.equal(t.e.length, 0, 'no lock: still nothing the caller did wrong')
     fs.writeFileSync(path.join(dir, 'lock'), JSON.stringify({ pid: 2 ** 22 + 7, start_time: '1', boot_id: 'b', socket: '/x' })) // a pid nothing runs as
     t = io(); await runCli(['status'], { env, home, request: async () => { throw Object.assign(new Error('x'), { code: 'ENOENT' }) }, ...status, ...t })

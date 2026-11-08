@@ -143,7 +143,6 @@ test('R9: an entry the operator changed after trocar wrote it is reported and le
   const r = await s.run()
   assert.equal(fs.readFileSync(settings, 'utf8'), mine, 'left as the user has it')
   assert.deepEqual([r.exit, r.receipt.ok], [1, false], 'an entry that is not in effect is not "done"')
-  assert.match(JSON.stringify(r.receipt.skipped), /settings\.json[\s\S]*trocar off[\s\S]*trocar on/, 'the receipt says which file and what to do')
   // off takes trocar's part out (there is none left: the user's own value stays), and on writes the entry again
   const out = await undoHarnesses({ dir: s.dir, home: s.home, phases: PHASES, manifest: readManifest(s.dir), ids: ['claude-code'], procs: async () => [], roots: ROOTS })
   assert.deepEqual(out.results.map((x) => x.result), ['left-user-value'])

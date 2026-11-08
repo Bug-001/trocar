@@ -4,8 +4,9 @@
 // harness or an OS: the descriptors declare their entries (`inject`), the caller passes `scan` / `match` (the
 // process table) from daemon.mjs. Install lists every file before touching one. The way back — `trocar off` and
 // `trocar uninstall` — is src/off/ (the entries, the daemon stop, the lock) and src/cli/uninstall.mjs (1.6 §1.4, R3).
-import { retriedNote } from '../cli/words.mjs'
-import { UNDO_WORDS } from '../cli/receipt.mjs'
+import { retriedNote, SETUP_WHY } from '../cli/words.mjs'
+import { UNDO_WORDS, setupBlocked, setupError } from '../cli/receipt.mjs'
+import { driverSetup, driverCtx } from './driver-setup.mjs'
 import { isModelOs } from './model-install.mjs' // macOS / Windows: their on is turnOnModel (src/cli/on-model.mjs); this turnOn is Linux's
 import fs from 'node:fs'
 import net from 'node:net'
@@ -19,11 +20,10 @@ import { planTrust } from './core/trust/plan.mjs'
 import { livenessOf } from './core/registry.mjs'
 import { readAgentList } from '../off/identity.mjs'
 import { patternsOf } from '../off/signature.mjs'
-import { readManifest, saveManifest, newManifest, missingDirs, applyJsonKey, previewJsonKey, applyTextEntry, previewTextEntry, writeOwnedFile, manifestPath, describeEntry, judgeEntry, judgeOwned, sha256 } from './core/trust/journal.mjs'
+import { readManifest, saveManifest, newManifest, missingDirs, applyJsonKey, previewJsonKey, applyTextEntry, previewTextEntry, writeOwnedFile, manifestPath, describeEntry, judgeEntry, judgeOwned, sha256, replaceable, retireEntry, inheritDirs } from './core/trust/journal.mjs'
 import { EVENT, CODE } from './core/codes.mjs'
 import { RESTART_REASONS } from '../health/codes.mjs'
 import { controlRequest, controlEndpointFor } from './core/control.mjs'
-import { readText, readTextOrError } from './core/config-read.mjs'
 import { appendEvent } from './core/events.mjs'
 import { runEventWriter } from '../off/events.mjs'
 import { hideUserinfoIn } from '../off/userinfo.mjs'
@@ -36,7 +36,6 @@ import { writeStandalone, standaloneDue } from '../off/standalone.mjs'
 import { codeId, setupHelperCommand } from '../version.mjs'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-const listDir = (d) => { try { return fs.readdirSync(d) } catch { return [] } }
 
 // An engine port that is free on both loopback families now (4.6 OPEN「按实例分配」, gate G3): recorded in the
 // manifest, the daemon listens there on every start. A port whose [::1] side is taken is skipped (the daemon would
@@ -160,7 +159,7 @@ const stop = (message) => Object.assign(new Error(message), { stopsRun: true })
  *  `_` is what the writing needs (the manifest as read, the draft, the roots). `ids`: the harness code ids named, or null for every one found.
  *  The combined bundles' roots are `roots` when given (a test's, an embedder's), else the arch's (tls/roots.mjs bundleRoots: `missing` is said per
  *  bundle by planTrust; a read that fails throws here, before anything is written). */
-export async function planOn({ home = os.homedir(), env = process.env, ids = null, osName, harnesses, scan = async () => [], match = () => ({ agent: null }), arch = null, roots = null, unit = null, fs = nodeFs, now = () => new Date() } = {}) {
+export async function planOn({ home = os.homedir(), env = process.env, ids = null, osName, harnesses, scan = async () => [], match = () => ({ agent: null }), arch = null, roots = null, unit = null, fs = nodeFs, now = () => new Date(), judge = null, certs = false } = {}) {
   const dir = collectorHome(path.join(home, '.trocar'))
   let prior
   try { prior = readManifest(dir, fs) } catch (e) { // not written over: it is the only list of what trocar changed; `off` has the way back by trocar's own marks (R3)
@@ -175,14 +174,13 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
   }
   if (prior && prior.pending_bundles) throw new Error(`an earlier uninstall kept combined bundles that running agents still use (${prior.files.filter((f) => f.role === 'bundle' || f.role === 'trust-file').map((f) => f.path).join(', ')}); run "trocar uninstall" again once they exit`)
   if (prior && prior.uninstall_left) throw new Error(`an earlier uninstall could not undo ${prior.uninstall_left.length} item(s) (${prior.uninstall_left.map((l) => l.path).join(', ')}); fix them, run "trocar uninstall" again, then "trocar on"`)
-  const descs = ids ? harnesses.filter((d) => ids.includes(d.name)) : harnesses
+  // `judge(descs, prior)` → the names held back before anything of theirs is read for writing (on's 1.6 §3.3 ⑪): asked only of a complete install
+  const asked = ids ? harnesses.filter((d) => ids.includes(d.name)) : harnesses
+  const held = new Set(judge && installComplete(prior) ? judge(asked, prior) : [])
+  const descs = asked.filter((d) => !held.has(d.name))
   const ca = caPaths(path.join(dir, 'ca'))
   const facts = await scan()
-  const envMap = new Map(Object.entries(env).filter(([, v]) => typeof v === 'string'))
-  const ctxFor = (d) => ({
-    os: osName, home, env: envMap, running: facts.filter((f) => match(f).agent === d.name).map((f) => f.env || new Map()),
-    readText: (f) => readText(f), readTextOrError: (f) => readTextOrError(f), readBytes: (f) => { try { return fs.readFileSync(f) } catch { return null } }, listDir, collectorDir: dir, caPem: ca.pem,
-  })
+  const ctxFor = (d) => driverCtx({ os: osName, home, env, fs, running: facts.filter((f) => match(f).agent === d.name).map((f) => f.env || new Map()) }) // the one inject ctx (status and on's setup judgement read the same)
   const R = roots || await bundleRoots(arch)
   const draft = planTrust({ descriptors: descs, ctxFor, caCertPem: null, collectorDir: dir, roots: R })
   const daemon = unit ? daemonEnv(env, dir) : null
@@ -190,13 +188,16 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
 
   // per item: written, intact, resumed, or changed by the user since (R9)
   const steps = []
+  // install (certs) places again a carrier item that is gone or changed (`replaceable`): planned as new, its preview said when it cannot be (D38)
+  const previewOf = (e) => (e.kind === 'text' ? previewTextEntry({ file: e.path, edit: e, fs }) : previewJsonKey({ file: e.path, keys: e.keys, value: e.value, fs }))
   const entryJ = draft.entries.map((e) => {
-    const j = judgeEntry({ manifest: prior, planned: e, fs })
+    let j = judgeEntry({ manifest: prior, planned: e, fs })
+    if (certs && replaceable(j)) { try { previewOf(e); j = { action: 'rewrite', entry: null, why: j.why } } catch (err) { j = { ...j, why: `${j.why}; trocar install cannot place it again (${String((err && err.message) || err)})` } } }
     steps.push({ harness: e.harness, path: e.path, kind: 'entry', action: j.action, ...(j.why ? { why: j.why } : {}) })
     return j
   })
   // every per-file refusal too, for what is to be written (a dangling link, a file that is not JSON, a patch file that is not a list) — before onPlan, before any write
-  const preview = draft.entries.map((e, i) => (entryJ[i].action !== 'write' ? null : e.kind === 'text' ? previewTextEntry({ file: e.path, edit: e, fs }) : previewJsonKey({ file: e.path, keys: e.keys, value: e.value, fs })))
+  const preview = draft.entries.map((e, i) => (entryJ[i].action !== 'write' && entryJ[i].action !== 'rewrite' ? null : previewOf(e)))
   const fileJ = draft.files.map((f) => {
     const j = judgeOwned({ manifest: prior, file: f.path, fs })
     steps.push({ harness: f.harness, path: f.path, kind: f.role, action: j.action, ...(j.why ? { why: j.why } : {}) })
@@ -217,9 +218,10 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
   const withItems = new Set([...draft.entries, ...draft.files, ...draft.owned].map((x) => x.harness))
   const targets = descs.map((d) => d.name).filter((n) => withItems.has(n) || installed.has(n))
   const reasonOf = (name) => draft.records.filter((r) => r.harness === name).map((r) => r.reason.replace(`${name}: `, '')).join('; ') || `no ${name} configuration was found on this machine: nothing to change for it`
+  const hint = new Set(certs ? [] : draft.entries.filter((e, i) => replaceable(entryJ[i])).map((e) => e.path))
   const skipped = [
     ...descs.map((d) => d.name).filter((n) => !targets.includes(n)).map((n) => ({ what: n, reason: reasonOf(n) })),
-    ...steps.filter((s) => s.action === 'skip-user-changed').map((s) => ({ what: s.path, reason: `${s.why}; run "trocar off", then ${isModelOs(osName) ? '"trocar on"' : '"trocar install" and "trocar on"'}, to write it again` })), // D55⑥: off then install writes a certificate item again; on never does (macOS / Windows: turnOnModel)
+    ...steps.filter((s) => s.action === 'skip-user-changed').map((s) => ({ what: s.path, reason: hint.has(s.path) ? `${s.why}; run "trocar install" to place it again` : s.why })), // a certificate item install can place again (replaceable): on never does (D55⑥), so it names the fix
   ]
   // what is written, and what the user has not yet confirmed (1.6 §1.6: the paths beyond the manifest's `confirmed_paths`; an installed one counts as confirmed)
   const known = new Set([...((prior && prior.confirmed_paths) || []), ...((prior && prior.entries) || []).map((x) => x.path), ...((prior && prior.files) || []).filter((x) => x.role !== 'ca-key' && x.role !== 'ca-cert').map((x) => x.path)])
@@ -288,7 +290,7 @@ async function writeInstall(args) {
   const written = { entries: [], files: [], owned: [], unit: null, caCreated: false, intact: [], userChanged: [], needInstall: [] }
   try { return await writeInstallSteps(args, written) } catch (e) { if (e && e.stopsRun) e.written = written; throw e } // what was done before the stop is said
 }
-async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePort, now, fs, guard = () => {}, confirmed = false, certs = true }, written) {
+async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePort, now, fs, guard = () => {}, confirmed = false, certs = true, keepCode = false }, written) {
   const { ca, descs, ctxFor, R, daemon, draft, unit } = plan._
   const body = () => JSON.stringify(m)
   let saved = body()
@@ -332,15 +334,21 @@ async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePo
     writeOwnedFile({ dir, manifest: m, harness: o.harness, role: o.role, phase: 'install', file: o.path, data: o.data, mode: o.mode, exclusive: j.action === 'write', now: now(), fs })
     written.owned.push(o.path)
   }
-  for (const e of final.entries) {
+  const entrySteps = plan.steps.filter((s) => s.kind === 'entry') // planOn pushed one per draft entry, in order; final.paths == draft.paths (checked above)
+  for (const [i, e] of final.entries.entries()) {
     const j = judgeEntry({ manifest: m, planned: e, fs })
     if (j.action === 'skip-intact') { written.intact.push(e.path); continue }
-    if (j.action === 'skip-user-changed') { written.userChanged.push({ path: e.path, why: j.why }); continue }
+    const step = entrySteps[i]
+    const again = certs && replaceable(j) && !!step && step.harness === e.harness && step.path === e.path && step.action === 'rewrite' // this very item, as the plan said
+    if (!certs && j.unreadable) continue // on writes no certificate item: one it cannot read is setup `unknown` (4.11 P4b), said by the plan's note, not "changed"
+    if (j.action === 'skip-user-changed' && !again) { written.userChanged.push({ path: e.path, why: j.why }); continue }
     if (certItem(e.path)) continue
     guard()
+    const retired = j.action === 'skip-user-changed' ? retireEntry({ dir, manifest: m, entry: j.entry, now: now(), fs }) : null // placed again as a new entry (planOn planned it so)
     const entry = e.kind === 'text'
       ? applyTextEntry({ dir, manifest: m, harness: e.harness, phase: 'install', file: e.path, edit: e, home, now: now(), fs }) // a backup of the file first (1.6 R2): no backup, no change
       : applyJsonKey({ dir, manifest: m, harness: e.harness, phase: 'install', file: e.path, keys: e.keys, value: e.value, home, now: now(), fs })
+    if (entry && retired) inheritDirs({ dir, manifest: m, entry, from: retired, fs })
     if (entry) written.entries.push(entry)
   }
   // the per-user autostart unit (arch: systemd --user on Linux), listed like every other file. The manifest is complete before the unit starts the
@@ -359,7 +367,7 @@ async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePo
   // D55: install's own record (before P10 the `on` that writes the certificates sets it): kept as it is once complete, so a second `on` saves nothing (D54).
   // `code` is the code that ran install (1.6 §5.5: an npm copy's update finishes until it is this code): install (certs) writes it, `on` keeps install's
   const names = [...new Set([...((m.install && m.install.harnesses) || []), ...descs.map((d) => d.name)])].sort()
-  const ran = certs ? codeId() : installComplete(m) ? m.install.code : undefined
+  const ran = certs && !keepCode ? codeId() : installComplete(m) ? m.install.code : undefined // keepCode: the board's Set up is not an install run (4.6)
   if (!installComplete(m) || JSON.stringify(names) !== JSON.stringify(m.install.harnesses) || ran !== m.install.code) m.install = { state: 'complete', at: installComplete(m) ? m.install.at : now().toISOString(), pending: [], harnesses: names, ...(ran ? { code: ran } : {}) }
   if (confirmed) m.confirmed_paths = [...new Set([...(m.confirmed_paths || []), ...final.paths, ...(unit ? [unit.path] : [])])] // what the operator was shown and said yes to (1.6 §1.6)
   save()
@@ -388,7 +396,7 @@ export async function installCollector({ home = os.homedir(), ...opts } = {}) {
   return recorded(dir, 'install', async (run) => {
     const fs = opts.fs || nodeFs
     const now = opts.now || (() => new Date())
-    const plan = await planOn({ home, ...opts })
+    const plan = await planOn({ home, ...opts, certs: true }) // install's plan places a gone or changed certificate item again (replaceable)
     // D61: the login registration and the daemon, through the one seam every command uses — so Linux's install probes before it starts too
     // (拉起不是重启, R8: a daemon someone started by hand is never started a second time), and no `--now` is issued blind.
     const register = (put, reload) => (opts.unit ? ensureDaemonUp({ osName: opts.osName, dir, env: opts.env || process.env, fs, unit: opts.unit, register: true, reload, put, ...(opts.request ? { request: opts.request } : {}), ...(opts.socketPath ? { socketPath: opts.socketPath } : {}), ...(opts.sleep ? { pause: opts.sleep } : {}) }) : null)
@@ -399,13 +407,13 @@ export async function installCollector({ home = os.homedir(), ...opts } = {}) {
       // a run that put the entry back or started the daemon changed something: its result is on record like any install's (1.6 §1.2)
       if (dmn && (dmn.started || (entryBefore && entryBefore !== 'present'))) put({ event: EVENT.installNote, where: 'install', kind: 'result', outcome: dmn.problems.length ? 'partial' : 'installed', reason: `the certificates were in place; the login entry was ${entryBefore}${dmn.started ? ' and the collector was started' : ''}${dmn.problems.length ? `; not done: ${dmn.problems.join('; ')}` : ''}` })
       // nothing to write but the record of which code ran install, when that is another code (1.6 §5.5): an npm copy's update finishes until it says this one
-      if (plan._.prior.install.code !== codeId()) { plan._.prior.install = { ...plan._.prior.install, code: codeId() }; saveManifest(dir, plan._.prior, fs) }
+      if (!opts.keepCode && plan._.prior.install.code !== codeId()) { plan._.prior.install = { ...plan._.prior.install, code: codeId() }; saveManifest(dir, plan._.prior, fs) }
       return { already: true, entryBefore, manifest: plan._.prior, plan: null, daemon: dmn }
     }
     const onPlan = opts.onPlan || (() => {})
     onPlan(plan)
     const m = openManifest({ dir, plan, now, fs })
-    const { manifest, final, written } = await writeInstall({ dir, home, plan, m, osName: opts.osName, harnesses: opts.harnesses, freePort: opts.freePort || freeEnginePort, now, fs })
+    const { manifest, final, written } = await writeInstall({ dir, home, plan, m, osName: opts.osName, harnesses: opts.harnesses, freePort: opts.freePort || freeEnginePort, now, fs, keepCode: !!opts.keepCode })
     const put = noteRun({ dir, run, final, written, notes: final.notes, fs })
     const dmn = await register(put, written.unit === 'rewrite')
     if (dmn) for (const n of dmn.notes) if (!final.notes.includes(n) && !dmn.problems.includes(n)) final.notes.push(n) // a problem is said once, as a problem (附录 C.1)
@@ -430,7 +438,7 @@ export async function turnOn(opts = {}) {
   const dir = collectorHome(path.join(home, '.trocar'))
   const stateF = path.join(dir, 'state.json')
   const username = (() => { try { return user || os.userInfo().username } catch { return String(env.USER || '') } })()
-  const fresh = () => ({ ...newReceipt('on'), user: username, relayed: { closing: 0, waiting: 0, cut: 0 }, undo: UNDO_LINE.on, standalone: standalonePath(home), commands: ['trocar on', 'trocar off', 'trocar status', 'trocar uninstall'], log: path.join(dir, 'flows') }) // on relays nothing: zeros on purpose; `undo` is the ONE line that undoes an on (C.1), and the four commands are what V29 asks the first receipt to carry
+  const fresh = () => ({ ...newReceipt('on'), refused: [], user: username, relayed: { closing: 0, waiting: 0, cut: 0 }, undo: UNDO_LINE.on, standalone: standalonePath(home), commands: ['trocar on', 'trocar off', 'trocar status', 'trocar uninstall'], log: path.join(dir, 'flows') }) // on relays nothing: zeros on purpose; `undo` is the ONE line that undoes an on (C.1), and the four commands are what V29 asks the first receipt to carry
   // A receipt of a run that wrote nothing and could not go on: no change, no file made, and no way to undo or log to point at — what is not there (R1: the receipt is what was done).
   // `commands` (the four a user types) stay: they are true whether or not this run wrote anything.
   const unwritten = (r) => { const { standalone: _unwritten, ...rest } = r; return { ...rest, changed: [], created: [], undo: null, log: null } }
@@ -457,10 +465,29 @@ export async function turnOn(opts = {}) {
     return v === true || v === false ? { linger: v } : { linger: 'unknown', linger_reason: linger ? 'the linger state could not be read (/var/lib/systemd/linger)' : 'nothing reads it here' }
   } catch (e) { return { linger: 'unknown', linger_reason: String((e && e.message) || e) } } }
   return recorded(dir, 'install', async (run) => {
-    const plan = await planOn({ home, env, ids, osName, harnesses, scan, match, arch, roots, unit: null, fs, now }) // D61: the login entry is `install`'s and `on` never writes it, so the writing side is handed no unit at all
+    // 1.6 §3.3 前提 ⑪ (D65④, 4.6「这个 harness 装好了没有」): a harness whose setup is needed is refused alone, judged before planOn reads its files, so
+    // not one byte is planned or written for it (no desired on, not in POST /on) and nothing of its own stops the others; the judgement reads the manifest
+    // planOn read, as `status` does (V91). `unknown` goes on with a note. macOS / Windows judge it in turnOnModel.
+    const refused = [], setupNotes = []
+    const judge = isModelOs(osName) ? null : (descs, prior) => descs.filter((d) => {
+      const s = driverSetup(d, { os: osName, home, env, manifest: prior, fs })
+      if (s.state === 'unknown') setupNotes.push(`whether ${d.name} is set up could not be told (${s.reason})`)
+      if (s.state !== 'needed') return false
+      refused.push({ harness: d.name, reason: CODE.setupNeeded, why: [...new Set(s.missing.map((x) => SETUP_WHY[x.what]))].join('; '), command: 'trocar install' })
+      return true
+    }).map((d) => d.name)
+    const plan = await planOn({ home, env, ids, osName, harnesses, scan, match, arch, roots, unit: null, fs, now, judge }) // D61: the login entry is `install`'s and `on` never writes it, so the writing side is handed no unit at all
     // D55⑥ / override #15: `on` never writes a certificate, so it never installs silently — no install record, no on (macOS / Windows: turnOnModel)
     // 附录 C.1: the refusal's code lives in `error`, the one place a client looks (never a top-level `code`)
     if (!isModelOs(osName) && !installComplete(plan._.prior)) { const message = 'certificates are not installed. Run: trocar install'; return { receipt: unwritten({ ...fresh(), ok: false, error: { code: CODE.certNotInstalled, message }, notes: [message] }), manifest: plan._.prior, plan, exit: 1 } }
+    const setupBlk = setupBlocked({ refused })
+    if (refused.length && !plan.targets.length) { // nothing left to turn on: a real run still leaves its result line (1.6 §1); a dry run changes nothing
+      const r0 = unwritten({ ...fresh(), ok: !!dryRun, harnesses: [], refused, blocked: setupBlk, skipped: plan.skipped, notes: setupNotes, ...(dryRun ? { dry_run: true } : { error: setupError(setupBlk) }) })
+      if (dryRun) return { receipt: r0, manifest: plan._.prior, plan, exit: 0 }
+      const put = noteRun({ dir, run, final: { records: [] }, written: { entries: [] }, notes: r0.notes, fs, log: opts.log })
+      put({ event: EVENT.installNote, where: 'install', kind: 'result', outcome: 'failed', harnesses: [], refused: refused.map((x) => x.harness), reason: `on did not finish: ${r0.error.message}` })
+      return { receipt: { ...r0, log: path.join(dir, 'flows') }, manifest: plan._.prior, plan, exit: 1 }
+    }
     // the copy of the undo side that needs no source tree (R3) is one more file trocar writes: listed in the plan and the dry run when it is missing or not what src/off generates now
     let due
     try { due = standaloneDue({ home, version: OFF_VERSION, platform: osName, fs }).map((d) => d.file) } catch { due = standaloneFiles(home, osName) } // a build that fails is said by the write below
@@ -473,7 +500,7 @@ export async function turnOn(opts = {}) {
     const stateRead = (() => { try { return { ...readState(), error: null } } catch (e) { return { state: emptyState(), from: null, error: e } } })()
     const need = plan.targets.filter((id) => !(stateRead.state.harnesses[id] && stateRead.state.harnesses[id].desired === 'on'))
     const stateWrite = need.length > 0 || stateRead.from === 1 // an unreadable file is `need` too: every target is not on
-    const r = { ...fresh(), ...(osName === 'win32' || osName === 'darwin' ? {} : lingerNow()), harnesses: plan.targets, changed: plan.changed, created: [...plan.created, ...(stateWrite ? [stateF] : [])], skipped: [...plan.skipped], restart: plan.restart, unchanged: plan.unchanged, notes: [...plan.notes] }
+    const r = { ...fresh(), ...(osName === 'win32' || osName === 'darwin' ? {} : lingerNow()), harnesses: plan.targets, refused, changed: plan.changed, created: [...plan.created, ...(stateWrite ? [stateF] : [])], skipped: [...plan.skipped], restart: plan.restart, unchanged: plan.unchanged, notes: [...plan.notes, ...setupNotes] }
     if (stateRead.error) r.notes.push(`${stateF} could not be read (${String(stateRead.error.message || stateRead.error)}); it is written again`)
     if (!plan.targets.length) return { receipt: unwritten({ ...r, ok: false, notes: [...r.notes, 'no agent trocar can capture was found: nothing was changed. Install one, then run trocar on again'] }), manifest: plan._.prior, plan, exit: 1 }
     const named = !!ids && plan.skipped.some((s) => ids.includes(s.what)) // a harness asked for by name that has nothing to install: not done
@@ -482,7 +509,7 @@ export async function turnOn(opts = {}) {
     if (edited.length) r.notes.push(...edited.map((e) => `you changed the proxy setting of ${e.harness}: ${e.where || 'the proxy field'} is now ${e.now ?? 'empty'} (trocar left ${e.was ?? 'empty'} there); on takes that as the upstream and points the setting back at trocar`))
     if (dryRun) {
       const blk = autostartBlock({ unit, osName })
-      return { receipt: { ...r, dry_run: true, ok: !named, ...(blk || helperBlock ? { blocked: [...(blk ? [{ what: 'trocar on', reason: blk }] : []), ...(helperBlock ? [helperStop] : [])], notes: [...r.notes, ...(blk ? [`${blk} (a real trocar on stops there)`] : []), ...(helperBlock ? [`${helperBlock} (a real trocar on stops there). Install it with the line below, then run trocar on again`] : [])] } : {}) }, manifest: plan._.prior, plan, exit: named ? 1 : 0 }
+      return { receipt: { ...r, dry_run: true, ok: !named, ...(blk || helperBlock || setupBlk.length ? { blocked: [...(blk ? [{ what: 'trocar on', reason: blk }] : []), ...(helperBlock ? [helperStop] : []), ...setupBlk], notes: [...r.notes, ...(blk ? [`${blk} (a real trocar on stops there)`] : []), ...(helperBlock ? [`${helperBlock} (a real trocar on stops there). Install it with the line below, then run trocar on again`] : [])] } : {}) }, manifest: plan._.prior, plan, exit: named ? 1 : 0 }
     }
     if (plan.writing || stateWrite || edited.length) onPlan({ ...plan, state: stateWrite ? stateF : null, edited })
     if (plan.first || plan.newPaths.length || edited.length) {
@@ -533,12 +560,13 @@ export async function turnOn(opts = {}) {
       created: [...(plan._.prior ? [] : [manifestPath(dir)]), ...(stateWrite ? [stateF] : []), ...standalone.files, ...(written && written.caCreated ? plan._.ca ? [plan._.ca.key, plan._.ca.pem] : [] : []), ...(written ? [...written.files, ...written.owned] : [])],
       unchanged: written ? written.intact : [],
     }
-    // the result line is the one proxy mode writes (1.6 §1): `harnesses` = the ones this run turned on (the daemon up and the run not halted), `refused` = none
-    // (driver mode refuses no single harness)
+    // the result line is the one proxy mode writes (1.6 §1): `harnesses` = the ones this run turned on (the daemon up and the run not halted), `refused` = the
+    // ones refused for setup (1.6 §3.3), which make the run not done (exit 1) while the others went on
+    if (refused.length) Object.assign(receipt, { blocked: setupBlk, error: setupError(setupBlk) })
     const finish = (outcome, reason, on = []) => {
-      receipt.ok = !problems.length && !named && !(written && written.userChanged.length) // an entry the user changed is left, and not in effect: not "done"
+      receipt.ok = !problems.length && !named && !refused.length && !(written && written.userChanged.length) // an entry the user changed is left, and not in effect: not "done"
       const counts = { entries: m.entries.length, changed: receipt.changed.length, notes: notes.length + problems.length }
-      put({ event: EVENT.installNote, where: 'install', kind: 'result', outcome, harnesses: on, refused: [], counts, reason }) // before the notes are taken: a result line that cannot be written adds its own "not recorded" (R11)
+      put({ event: EVENT.installNote, where: 'install', kind: 'result', outcome, harnesses: on, refused: refused.map((x) => x.harness), counts, reason }) // before the notes are taken: a result line that cannot be written adds its own "not recorded" (R11)
       receipt.notes = [...notes, ...problems]
       receipt.problems = problems // the renderer labels exactly these 问题: — a failed run's SUCCESS notes (the kernel's "downloaded and both digests
       // verified") must not wear the problem label, which is what a whole-receipt ok===false test did (seen on a macOS test machine, 2026-10-11)
