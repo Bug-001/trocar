@@ -221,3 +221,23 @@ test('rule U · a replace-marked file with no block on record reads as the door 
     }
   }
 })
+
+// 4.11 P11 / ⑩: a blocked form's blocker reaches, in status as at the door, the forms whose program file the door cannot tell from it (`exe`). The
+// Z-Code desktop's CA setting: on macOS its agent is the app's Helper, so no other form reads it; on Windows the CLI is the same ZCode.exe, so the
+// CLI reads it too (`plan.via`), and the Node CLI, a node process, never does.
+for (const [os, together] of [['darwin', []], ['win32', ['z-code.cli']]]) test(`4.11 P11 · ${os}: the Z-Code desktop's CA setting reaches the forms the door cannot tell from the desktop: ${together.join(', ') || 'none'}`, async () => {
+  const w = await modelWorld({ os })
+  const app = os === 'darwin' ? '/Applications/ZCode.app' : path.join(w.home, 'AppData', 'Local', 'Programs', 'ZCode')
+  const inner = w.ctx.exists
+  w.ctx.exists = (p) => p === app || inner(p)
+  fs.mkdirSync(path.join(w.home, '.zcode', 'v2'), { recursive: true })
+  fs.mkdirSync(path.join(w.home, '.zcode', 'cli'), { recursive: true })
+  assert.equal((await w.install()).exit, 0)
+  fs.writeFileSync(path.join(w.home, '.zcode', 'v2', 'setting.json'), JSON.stringify({ httpProxyCaCertPath: path.join(w.home, 'ca.pem') }))
+  const out = (await modelFormFacts({ harnesses: w.harnesses, os, manifest: readManifest(w.dir), root: ROOT_OK, ctx: w.ctx }))['z-code']
+  const plan = Object.fromEntries(out.map((x) => [x.id, x.plan]))
+  assert.equal(plan['z-code.desktop'] && plan['z-code.desktop'].reason, 'blocker', JSON.stringify(plan))
+  assert.deepEqual(out.filter((x) => x.plan && x.plan.via).map((x) => x.id), together, JSON.stringify(plan))
+  for (const id of together) assert.equal(plan[id].via, 'z-code.desktop')
+  assert.equal(plan['z-code.cli-node'], null, 'the Node CLI is a node process: the desktop setting never reaches it')
+})

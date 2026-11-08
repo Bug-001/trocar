@@ -190,7 +190,7 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     const desc = byName.get(id.agent)
     const pf = await procFacts(id.pid, id.facts.startedAt ?? null, desc)
     const facts = { name: id.agent, pid: id.pid, startedAt: id.facts.startedAt ?? null, env: pf.env, cwd: pf.cwd }
-    const forms = judgedForms(desc, ctx.os, id.agent === d.harness ? d.routeId : null)
+    const forms = judgedForms(desc, ctx.os, id.agent === d.harness ? d.routeId : null, id.exe ?? null) // the forms its program file may be (P11)
     let v = forms.length ? { decrypt: true } : { decrypt: false, code: 'not-verified', detail: `${id.agent} has no form on ${ctx.os}` }
     let named = null
     const files = () => (named ||= userCertFilesOf(desc, { ...ctx, env: pf.env || {}, cwd: pf.cwd ?? undefined })) // the user files this process's settings name (rule U)

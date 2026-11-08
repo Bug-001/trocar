@@ -114,6 +114,29 @@ for (const d of descs) for (const os of ['darwin', 'win32']) {
   })
 }
 
+// 4.11 P11, the forms a process may be: of its route's forms, those whose `exe` names the process's program file (never argv or the title: both
+// Z-Code forms retitle to zcode-cli before they connect, measured on ZCode 3.14.4); none matching → all of them (forwarded rather than broken).
+// The desktop's CA setting blocks z-code.desktop only: a process the door can tell is not the desktop decrypts, one it cannot is forwarded.
+const ZC = descs.find((d) => d.name === 'z-code')
+const ZC_EXE = {
+  darwin: [['/Applications/ZCode.app/Contents/Frameworks/ZCode Helper.app/Contents/MacOS/ZCode Helper', false], ['/Users/u/Applications/ZCode.app/Contents/Frameworks/ZCode Helper.app/Contents/MacOS/ZCode Helper', false],
+    ['/Applications/ZCode.app/Contents/MacOS/ZCode', true], ['/opt/homebrew/bin/node', true], ['/bin/x', false]],
+  win32: [['C:\\Users\\u\\AppData\\Local\\Programs\\ZCode\\ZCode.exe', false], ['C:\\Program Files\\nodejs\\node.exe', true], ['C:\\x\\x.exe', false]],
+}
+for (const os of ['darwin', 'win32']) test(`4.11 P11 · z-code · ${os}: the desktop's CA setting keeps off only the processes the door cannot tell from the desktop, by the program file`, async () => {
+  const r = await rig({ desc: ZC, os, upstreamRoots: { os: async () => STUB_PEM, node: [STUB_PEM], extra: [] } })
+  await r.c.on({ harnesses: ['z-code'], groups: { 'z-code:cli-config': 18500 } })
+  const i = ZC.proxyMode.blockers.findIndex((b) => b.at.keys && b.at.keys.includes('httpProxyCaCertPath'))
+  const { w, facts } = worldOf(ZC, ZC.proxyMode.forms.find((f) => f.id === 'z-code.cli'), os, { blocker: i })
+  const base = ctxOf(w)
+  for (const [exe, decrypt] of ZC_EXE[os]) {
+    Object.assign(r.w, { pid: ++pid, facts: { exe, argv: ['zcode-cli'], uid: 501, agent: 'z-code', startedAt: facts.startedAt }, env: w.env, cwd: w.cwd, ctx: { ...base, readFile: (p) => base.readFile(p).replace(ROOT.pem, STUB_PEM) } })
+    const meta = await r.c.lookupIngress({ peer: PEER, user: 'z-code:cli-config', target: { address: ZC.hosts[0], port: 443 } })
+    assert.equal(meta.decrypt, decrypt, `${exe}: ${JSON.stringify(meta)}`)
+  }
+  r.c.close()
+})
+
 // CM22 at the door, the host tree (4.8 §3, W69): for every shipped hostTree form, a process named only by the form's hosts.processes (on no name list) is
 // its harness's at a host of the harness's own set — the door's decrypt is then that form's verdict — and forwarded `outside-host-set` anywhere else.
 // No hostsOf answer is injected: the set is the collector's own default (the descriptor's hosts), the product path.
