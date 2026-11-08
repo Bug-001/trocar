@@ -132,10 +132,29 @@ export function setupHelper(opts = {}) {
   return { ok: true, bin: cfg.helperBin, caps: cfg.caps, swept }
 }
 
-// `root` / `exec`: the root check and the tool runner, for a test that runs the real function over a temp dir (0.1 §6 #13: its return is what the CLI reads)
-export function uninstallHelper({ root = requireRoot, exec = run, ...opts } = {}) {
+/** 1.6 §5.3: the homes of the accounts in `passwd` (but uid 0 and `self`, the sudo user's uid) that hold a trocar install record, or that `stat` cannot
+ *  look into (counted as in use) → [{ home, readable, code? }]. Existence only: the record is never read. A home that is not absolute is skipped. */
+export function otherInstalls({ passwd, stat, self }) {
+  const homes = new Map()
+  for (const line of passwd.split('\n')) {
+    const f = line.split(':')
+    const home = f[5]
+    if (f.length < 6 || f[2] === '0' || f[2] === String(self) || !path.isAbsolute(home || '') || homes.has(home)) continue
+    try { stat(path.join(home, '.trocar', 'collector', 'install-manifest.json')); homes.set(home, { home, readable: true }) } catch (e) {
+      if (e.code !== 'ENOENT' && e.code !== 'ENOTDIR') homes.set(home, { home, readable: false, code: e.code || String(e.message || e) })
+    }
+  }
+  return [...homes.values()]
+}
+
+// `root` / `exec` / `fsys` / `env`: the root check, the tool runner, the file system and the environment, for a test that runs the real function over a temp dir
+// (0.1 §6 #13: its return is what the CLI reads). → { removed: false, others } while another account may use trocar: nothing is removed then (1.6 §5.3).
+export function uninstallHelper({ root = requireRoot, exec = run, fsys = fs, env = process.env, ...opts } = {}) {
   root()
   const cfg = { ...DEFAULTS, ...opts }
+  const getent = exec('getent', ['passwd'])
+  const others = otherInstalls({ passwd: getent.code === 0 ? getent.out : fsys.readFileSync('/etc/passwd', 'utf8'), stat: (p) => fsys.statSync(p), self: env.SUDO_UID })
+  if (others.length) return { ok: false, removed: false, others, warnings: [], swept: [] }
   // Warn (do not fail) if any loader is still running: it keeps working until it exits; later
   // starts fail open and `doctor` reports the missing helper.
   const running = exec('pgrep', ['-f', cfg.helperBin])
