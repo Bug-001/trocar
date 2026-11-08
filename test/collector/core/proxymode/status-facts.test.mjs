@@ -44,6 +44,16 @@ for (const os of OSES) {
       const out = await modelFormFacts({ harnesses: all, os, manifest: m, reply: { doors: {} }, root: ROOT_OK, systemProxy: null, ctx: ctxOf(os, home) })
       for (const x of out[desc.name]) assert.deepEqual([x.proxy.upstream.source, x.proxy.door_up, x.proxy.connected], ['direct', false, false])
     })
+    // the user's own NO_PROXY is recorded as a prior too: it is a bypass list, never the upstream proxy (4.11 P7 step 2 reads the proxy keys' prior)
+    for (const [rid, r] of Object.entries(desc.proxyMode.routes).filter(([, x]) => x.kind === 'json-key' && x.noProxyKeys && x.auth !== false)) {
+      test(`V70 ${os} ${desc.name}.${rid}: a NO_PROXY of the user's and no proxy of theirs — the upstream is direct, no prior`, async () => {
+        const { home, m, doors } = world(desc)
+        const own = m.entries.find((e) => e.phase === 'on' && e.route === rid)
+        m.entries.unshift({ ...own, keys: r.noProxyKeys[0], prior_value: 'corp.example' })
+        const out = await modelFormFacts({ harnesses: all, os, manifest: m, reply: { doors }, root: ROOT_OK, systemProxy: null, ctx: ctxOf(os, home) })
+        for (const x of out[desc.name].filter((y) => y.route === rid)) assert.deepEqual([x.proxy.upstream.source, x.proxy.prior], ['direct', null], x.id)
+      })
+    }
     test(`CM31 / CM32 ${os} ${desc.name}: only present forms are listed; hostTree forms, descriptor effects and notes carry their harness-note`, async () => {
       const { home, m, doors } = world(desc)
       const none = await modelFormFacts({ harnesses: all, os, manifest: m, reply: { doors }, root: ROOT_OK, ctx: ctxOf(os, home, false) })

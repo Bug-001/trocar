@@ -7,7 +7,7 @@ import nodeFs from 'node:fs'
 import { itemsOfPhase } from '../../../off/manifest.mjs'
 import { judgeEntry, judgeOwned } from '../trust/journal.mjs'
 import { isPresent, readSrc, holds, presentPaths } from './sources.mjs'
-import { planRoutes } from './entries.mjs'
+import { planRoutes, priorRecordOf } from './entries.mjs'
 import { upstreamFor, isTrocarDoorUrl } from './chain.mjs'
 import { pacLeg } from './pac.mjs'
 import { redactProxyUrl, parseProxyUrl } from '../../../netenv/redact.mjs'
@@ -125,7 +125,7 @@ export async function modelFormFacts({ harnesses, os, manifest: m, reply = null,
       const g = `${h}:${f.route}`, route = pm.routes[f.route] || {}
       const es = on.filter((i) => i.harness === h && i.route === f.route)
       const main = es.find((i) => i.door) || es[0] || null
-      const priorItem = es.find((i) => typeof i.prior_value === 'string') ?? null
+      const priorItem = priorRecordOf(route, es)
       const priorRaw = priorItem ? priorItem.prior_value : null
       const intact = es.length > 0 && es.every((i) => intactOf(m, i, fs))
       const door_up = doors[g] != null
