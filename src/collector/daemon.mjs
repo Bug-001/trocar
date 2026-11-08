@@ -636,10 +636,6 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     const loopWatch = createLoopWatch({ everyMs: lockRefreshMs, write: failure.event }) // failure.event for its fold; the record's own event wins, so it stays a state event
     const lockTimer = setInterval(() => { loopWatch.tick(); bumpLock() }, lockRefreshMs)
     lockTimer.unref()
-    // lifecycle (D-24): readers fold conditions from the last daemon-start; upstream_ca = the daemon's own
-    // NODE_EXTRA_CA_CERTS (W-4: relays with a private CA rely on it), linger = whether logout ends this daemon
-    failure.write({ event: 'daemon-start', pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, version: await codeOf(code), foreground: !!foreground,
-      upstream_ca: env.NODE_EXTRA_CA_CERTS || null, linger: typeof redirector.linger === 'function' ? redirector.linger() : null })
     syncTracker() // before the first rescan: a harness that is off at start is never judged
     tracker.start()
     await tracker.rescan()
@@ -772,6 +768,11 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     markReady()
     board.start() // never fails the start: a board that cannot listen is a state and a record
     query.svc.sweep() // the read route is up: a tier-0 head for every session without one (4.4 §答案文件, 3.5 §谁执行它)
+    // lifecycle (D-24): readers fold conditions from the last daemon-start (and keep what came up to 60 s before it); upstream_ca = the daemon's own
+    // NODE_EXTRA_CA_CERTS (W-4: relays with a private CA rely on it), linger = whether logout ends this daemon. Written once the daemon answers, as the
+    // model daemon writes it: it carries the code, and `on`'s first question never waits for that hash (D62①)
+    failure.write({ event: 'daemon-start', pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, version: await codeOf(code), foreground: !!foreground,
+      upstream_ca: env.NODE_EXTRA_CA_CERTS || null, linger: typeof redirector.linger === 'function' ? redirector.linger() : null })
 
     // stop({signal}) — signal: what stopped it (SIGTERM, SIGINT, SIGHUP = the terminal closed or the user logged out,
     // SIGQUIT), else `reason`. Returns {failed: [where…]}: a step that failed makes `collector start` exit non-zero. It

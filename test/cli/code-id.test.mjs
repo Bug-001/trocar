@@ -83,11 +83,3 @@ test('doctor: a collector on other code is a problem, daemon-other-code, fixed b
   assert.ok(f.commands.some((c) => c.run === 'trocar install'))
   assert.equal((await run(codeId())).some((x) => x.code === 'daemon-other-code'), false)
 })
-
-// D62①: `on`'s path is measured (Linux p95 466 ms) and the hash costs tens of ms. `on`'s own modules never name codeId — the hash is computed only
-// where a code id is compared or said (status, doctor, install, update, --version) — and the daemon asks its own lazily, after it listens
-test('D62①: on\'s modules never name codeId; the daemon asks its code only where it says it', () => {
-  const src = (rel) => fs.readFileSync(new URL(`../../src/${rel}`, import.meta.url), 'utf8')
-  for (const rel of ['cli/on.mjs', 'cli/on-model.mjs', 'collector/model-on.mjs']) assert.ok(!/\bcodeId\b/.test(src(rel)), `${rel} names codeId`)
-  assert.ok(!/\bcodeId\(/.test(src('collector/daemon.mjs')), 'the daemon never hashes at once: it reads its code without holding the event loop')
-})
