@@ -447,7 +447,7 @@ test('V35: `trocar doctor` says nothing of a copy that is current, and makes a f
   fs.rmSync(file)
   assert.match(flat(doctor()), new RegExp(`${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} is not there`))
   assert.ok(!fs.existsSync(file), 'doctor reads: it does not write the copy')
-  assert.deepEqual((fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : '').split('\n').filter((c) => /^(systemctl|loginctl) |^certutil (?!-L )|^launchctl (?!list |getenv |print )/.test(c)), [], 'and runs none of the tools that change a machine (`certutil -L` is the question doctor asks of the user trust store on Linux, `launchctl list` / `getenv` the ones it asks on a Mac, `launchctl print` the login entry\'s read (D61); 1.6 §2)')
+  assert.deepEqual((fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : '').split('\n').filter((c) => /^systemctl (?!--user (is-enabled|is-active) )|^loginctl |^certutil (?!-L )|^launchctl (?!list |getenv |print )/.test(c)), [], 'and runs none of the tools that change a machine (`systemctl --user is-enabled` / `is-active` the questions it asks of the login entry on Linux, `certutil -L` is the question doctor asks of the user trust store on Linux, `launchctl list` / `getenv` the ones it asks on a Mac, `launchctl print` the login entry\'s read (D61); 1.6 §2)')
 })
 
 test('V35: every `on` writes the copy again — after the first on it is what src/off generates, and a copy that was changed is put back by the next on', async () => {
