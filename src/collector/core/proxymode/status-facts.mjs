@@ -7,7 +7,7 @@ import nodeFs from 'node:fs'
 import { itemsOfPhase } from '../../../off/manifest.mjs'
 import { judgeEntry, judgeOwned } from '../trust/journal.mjs'
 import { isPresent, readSrc, holds, presentPaths } from './sources.mjs'
-import { planRoutes, priorRecordOf } from './entries.mjs'
+import { planRoutes, priorRecordOf, loopbackDirect, loopbackNote } from './entries.mjs'
 import { upstreamFor, isTrocarDoorUrl } from './chain.mjs'
 import { pacLeg } from './pac.mjs'
 import { redactProxyUrl, parseProxyUrl } from '../../../netenv/redact.mjs'
@@ -153,7 +153,8 @@ export async function modelFormFacts({ harnesses, os, manifest: m, reply = null,
         restart: f.restart || null, paths: presentPaths(f, ctx), follows: f.systemProxy || null, // the form's own OS-proxy behaviour (4.11 form `systemProxy`), else the harness's
         hook: HOOKS.has(carrier) && !certificate.in_effect && ['entry-changed', 'entry-missing'].includes(certificate.code) ? certificate.code : null,
         setting: main ? settingOf(priorRaw, priorItem || main) : null,
-        notes: plan.notes.filter((n) => !n.form || n.form === f.id).map((n) => ({ code: n.code, text: n.text, ...(n.paths ? { paths: n.paths } : {}) })),
+        notes: [...plan.notes.filter((n) => !n.form || n.form === f.id), ...(intact && plan.routes.some((p) => p.id === f.route && loopbackDirect(desc, p)) ? [loopbackNote()] : [])] // 1.6 §3.3: its route in place
+          .map((n) => ({ code: n.code, text: n.text, ...(n.paths ? { paths: n.paths } : {}) })),
       })
     }
     out[h] = forms

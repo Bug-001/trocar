@@ -21,12 +21,21 @@ import { parseDotenv } from '../config-read.mjs'
 import { resolveLoc, readSrc, holds, isPresent } from './sources.mjs'
 import { entryGate } from '../entry-forms.mjs'
 import { CODE } from '../codes.mjs'
+import { loopbackWords } from '../../../cli/words.mjs'
 import { unseal, doorFp } from '../../../off/seal.mjs'
 
 export const LOOPBACK = LOOPBACK_HOSTS
 export const PAC_PATH = '/trocar.pac' // P10: the daemon serves the PAC here on the PAC group's door
 // a hostTree form's note (CM31): it names the form, since status prints it under the harness, beside forms that run on their own
 const hostTreeNote = (form) => `${form} runs inside another program: every other extension there connects through trocar too, and trocar passes those connections on without capturing them`
+// P6 · P9 · P10: a route that sends loopback direct — a class 1 entry with its NO_PROXY, a plugin hook rendered with the agent's NO_PROXY
+// names (the route's own plugin file, or the switch file of forms whose carrier is a plugin), a PAC. The P8 wrapper sends loopback to the door.
+const plugin = (desc, f) => ((desc.proxyMode.certs || {})[f.cert] || {}).kind === 'plugin'
+// `p` is a planned route ({ route, forms: [form id] })
+export const loopbackDirect = (desc, { route: r, forms }) => (r.noProxyKeys || []).length > 0 || r.value === 'pac-url'
+  || (noProxyNames(desc).length > 0 && (r.kind === 'plugin-file' || (r.kind === 'switch-file' && desc.proxyMode.forms.filter((f) => forms.includes(f.id)).every((f) => plugin(desc, f)))))
+// 1.6 §3.3: no harness of its own — the receipt says it once for the whole run
+export const loopbackNote = () => ({ code: CODE.loopbackDirect, harness: null, hosts: [...LOOPBACK], text: loopbackWords(LOOPBACK) })
 const ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/ // an entry id that names a file in the library and nothing outside it
 
 /** P6: loopback ∪ the user's values at the entry place (both spellings) ∪ the persistent env's NO_PROXY; case-insensitive dedupe, first spelling kept, order kept. */
@@ -280,5 +289,7 @@ export function writeRoutes(desc, ctx, doorOf) {
   const planned = new Set(plan.routes.map((x) => x.id)), m = ctx.manifest
   const stale = [...new Set([...m.entries, ...m.files].filter((x) => x.harness === desc.name && x.phase === 'on' && typeof x.route === 'string' && !planned.has(x.route)).map((x) => x.route))]
   for (const id of stale) for (const l of dropRoute({ ...ctx, harness: desc.name }, desc.name, id)) results.push({ route: id, ok: false, ...l })
-  return { results, notRouted: plan.notRouted, notes: plan.notes }
+  // 1.6 §3.3: said when a loopback-direct route is in place after this on (written now, or already in place); not-routed or refused, not
+  const inPlace = plan.routes.some((p, i) => results[i].ok && loopbackDirect(desc, p))
+  return { results, notRouted: plan.notRouted, notes: inPlace ? [...plan.notes, loopbackNote()] : plan.notes }
 }
