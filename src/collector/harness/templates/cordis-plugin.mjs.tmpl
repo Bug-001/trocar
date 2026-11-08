@@ -102,31 +102,26 @@ if (rooted) try {
 
 // node:http(s): one connection through the door, by the switch file the undici path reads (the same door, the same header)
 function readDoor() { try { return fs.readFileSync(SWITCH, 'utf8').split(/\r?\n/)[0] || null } catch { return null } }
+// The tunnel is Node's own CONNECT client (the 'connect' event): trocar writes and reads no byte of it. The door is on loopback, so the wrapped
+// createConnection below leaves this request's own connection to Node. A door that closes, refuses or stays quiet ends it with an error.
 function tunnel(door, host, port, upstream, timeout, done) {
   let d
   try { d = new URL(door) } catch (e) { done(e); return }
-  const auth = d.username ? `Proxy-Authorization: Basic ${Buffer.from(`${decodeURIComponent(d.username)}:${decodeURIComponent(d.password)}`).toString('base64')}\r\n` : ''
   const target = net.isIPv6(host) ? `[${host}]:${port}` : `${host}:${port}`
-  const sock = net.connect({ port: Number(d.port), host: d.hostname, ...(timeout > 0 ? { timeout } : {}) })
-  let head = Buffer.alloc(0), settled = false
-  const fail = (e) => { if (settled) return; settled = true; sock.destroy(); done(e) }
-  // a door that closes or goes quiet before it answers ends the request with an error, as Node's own proxy tunnel does — never a request left waiting
-  const closed = () => fail(new Error('the door closed before it answered CONNECT')), quiet = () => fail(new Error('the door did not answer CONNECT in time'))
-  sock.once('error', fail); sock.once('close', closed); sock.once('timeout', quiet)
-  sock.once('connect', () => sock.write(`CONNECT ${target} HTTP/1.1\r\nHost: ${target}\r\n${auth}X-Trocar-Upstream: ${upstream}\r\n\r\n`))
-  const onData = (chunk) => {
-    head = Buffer.concat([head, chunk])
-    const end = head.indexOf('\r\n\r\n')
-    if (end < 0) { if (head.length > 16384) fail(new Error('the door sent no answer to CONNECT')); return }
-    sock.removeListener('data', onData)
-    const status = Number((/^HTTP\/1\.[01] (\d{3})/.exec(head.subarray(0, end).toString('latin1')) || [])[1])
-    if (!(status >= 200 && status < 300)) { fail(new Error(`the door answered CONNECT ${target} with ${status || 'no status'}`)); return }
-    settled = true; sock.removeListener('error', fail); sock.removeListener('close', closed); sock.removeListener('timeout', quiet); sock.setTimeout(0)
-    const rest = head.subarray(end + 4)
-    if (rest.length) sock.unshift(rest)
-    done(null, sock)
-  }
-  sock.on('data', onData)
+  const headers = { Host: target, 'X-Trocar-Upstream': upstream, ...(d.username ? { 'Proxy-Authorization': `Basic ${Buffer.from(`${decodeURIComponent(d.username)}:${decodeURIComponent(d.password)}`).toString('base64')}` } : {}) }
+  let settled = false
+  const end = (e, sock) => { if (settled) return; settled = true; done(e, sock) }
+  const req = http.request({ host: d.hostname, port: d.port, method: 'CONNECT', path: target, headers, agent: false, ...(timeout > 0 ? { timeout } : {}) })
+  req.once('connect', (res, sock, head) => {
+    if (!(res.statusCode >= 200 && res.statusCode < 300)) { sock.destroy(); end(new Error(`the door answered CONNECT ${target} with ${res.statusCode}`)); return }
+    sock.setTimeout(0)
+    if (head && head.length) sock.unshift(head)
+    end(null, sock)
+  })
+  req.once('timeout', () => req.destroy(new Error('the door did not answer CONNECT in time')))
+  req.once('error', (e) => end(e))
+  req.once('close', () => end(new Error('the door closed before it answered CONNECT')))
+  req.end()
 }
 // The proxy node:http itself would use for this connection, by Node's own rules: only an agent with a proxy configuration (the global agents
 // under NODE_USE_ENV_PROXY / --use-env-proxy, an Agent made with proxyEnv), the lower-case name first, https_proxy for https and http_proxy for
@@ -163,7 +158,10 @@ if (rooted) try {
         if (e) { cb(e); return }
         sock[ROUTE] = d
         if (!secure) { cb(null, sock); return }
-        const s = tls.connect({ ...o, socket: sock, servername: o.servername || (net.isIP(host) ? undefined : host) })
+        // TLS on the tunnel socket, with the caller's options (servername, ca, rejectUnauthorized); not Node's https connection, which would
+        // tunnel again through a proxy the agent is configured with
+        let s
+        try { s = tls.connect({ ...o, socket: sock, servername: o.servername || (net.isIP(host) ? undefined : host) }) } catch (err) { cb(err); return }
         s[ROUTE] = d
         s.once('secureConnect', () => cb(null, s)); s.once('error', (err) => cb(err))
       })

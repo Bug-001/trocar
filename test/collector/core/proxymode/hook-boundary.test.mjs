@@ -37,11 +37,16 @@ const RULES = {
   ],
 }
 const langOf = (rel) => (rel.endsWith('.dash.tmpl') ? 'sh' : rel.endsWith('.cs') ? 'cs' : 'js')
-const violations = (rel, text) => RULES[langOf(rel)].filter(([, re]) => re.test(code(text, langOf(rel)))).map(([what]) => `${rel}: ${what}`)
+// a CONNECT to the door by Node's own client (the tunnel a node:http connection is handed to): a route, judged by `routes` below, not a connection of its own
+const TUNNEL = /\bhttp\.request\(\s*\{\s*host:\s*(\w+)\.hostname,\s*port:\s*\1\.port,\s*method:\s*'CONNECT'/g
+// TLS on a socket it is given (that tunnel's): it opens no connection of its own
+const ON_SOCKET = /\btls\.connect\(\s*\{[^}]*\bsocket:\s*\w+/g
+const violations = (rel, text) => RULES[langOf(rel)].filter(([, re]) => re.test(langOf(rel) === 'js' ? code(text, 'js').replace(TUNNEL, '').replace(ON_SOCKET, '') : code(text, langOf(rel)))).map(([what]) => `${rel}: ${what}`)
 
 const DOOR_ID = /^(d|door|DOOR)$/
-// the identifier each route points at: a ProxyAgent's uri, fetch's proxy option, or `env[k] = <id>` over PROXY_NAMES
+// the identifier each route points at: a ProxyAgent's uri, fetch's proxy option, `env[k] = <id>` over PROXY_NAMES, or a CONNECT tunnel's host
 const routes = (c) => [
+  ...c.matchAll(TUNNEL),
   ...c.matchAll(/new\s+[\w.]*ProxyAgent\s*\(\s*\{\s*uri:\s*(\w+)/g),
   ...c.matchAll(/proxy:\s*(\w+)\s*\}/g),
   ...c.matchAll(/for\s*\(\s*const\s+(\w+)\s+of\s+PROXY_NAMES\s*\)\s*\w+\[\1\]\s*=\s*(\w+)/g),
@@ -60,7 +65,7 @@ test('CM14 hook contract: no template writes a file, connects anywhere but the d
 
 test('CM14 the scan fails on a planted violation of every rule', () => {
   const PLANTS = {
-    js: ["fs.writeFileSync('/x', 'y')", "import('node:child_process')", "https.request('https://evil')", "res.text()", "opts.body = 'x'", "new u.Agent()"],
+    js: ["fs.writeFileSync('/x', 'y')", "import('node:child_process')", "https.request('https://evil')", "res.text()", "opts.body = 'x'", "new u.Agent()", "http.request({ host: d.hostname, port: 9, method: 'GET' })", "tls.connect({ host: 'x', port: 443 })"],
     sh: ['echo x > ~/.kimi/config', 'curl https://x', 'env -i kimi'],
     cs: ['File.WriteAllText(p, s);', 'new HttpClient();', 'Process.Start("x");'],
   }
@@ -69,7 +74,7 @@ test('CM14 the scan fails on a planted violation of every rule', () => {
     for (const p of plants) assert.notDeepEqual(violations(rel, p), [], `${lang}: ${p}`)
   }
   assert.deepEqual(violations('x.dash.tmpl', 'IFS= read -r d 2>/dev/null <"$1"'), [], 'reading the switch file, errors silenced, is allowed')
-  for (const p of ['for (const k of PROXY_NAMES) env[k] = upstream', 'new u.ProxyAgent({ uri: other })', 'inner(input, { proxy: other })']) {
+  for (const p of ['for (const k of PROXY_NAMES) env[k] = upstream', 'new u.ProxyAgent({ uri: other })', 'inner(input, { proxy: other })', "http.request({ host: other.hostname, port: other.port, method: 'CONNECT' })"]) {
     assert.notDeepEqual(routes(code(p, 'js')).filter((id) => !DOOR_ID.test(id)), [], `a route not to the door: ${p}`)
   }
 })
