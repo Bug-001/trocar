@@ -201,15 +201,17 @@ function queryOf(b, raw, max = PREVIEW_MAX) {
 // prompt is kept to find a sub-agent's words in (sharedLines).
 export const TASK_MAX = 80;
 export const TASK_HEAD = 4096;
+// how much of a first prompt is read for its question: a wrapper injected before it (a skills bootstrap) runs to many KiB (askOf)
+export const ASK_HEAD = 16384;
 /** taskOf(text) → the text squashed (whitespace runs → one space, trimmed), ≤ TASK_MAX characters, or null. */
 export const taskOf = (text) => (text ? shorten(text, TASK_MAX) || null : null);
 /** firstHuman(flat) → the first human prompt of a context (blockQuery's rule: a user text block, <system-reminder> stripped, not empty),
- *  trimmed, its first TASK_HEAD characters, as a string of its own (a slice would keep the block's whole text alive) — or null. */
+ *  trimmed, its first ASK_HEAD characters, as a string of its own (a slice would keep the block's whole text alive) — or null. */
 export function firstHuman(flat) {
   for (const b of flat || []) {
     if (!isUserText(b)) continue;
     const human = String(bodyTextOf(b) || '').replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim();
-    if (human) return (' ' + human.slice(0, TASK_HEAD)).slice(1);
+    if (human) return (' ' + human.slice(0, ASK_HEAD)).slice(1);
   }
   return null;
 }
@@ -219,7 +221,7 @@ function unwrapped(text) {
   let rest = text, attached = null;
   for (let m; (m = OPENS.exec(rest));) {
     const end = rest.indexOf(`</${m[1]}>`, m[0].length);
-    if (end < 0) break; // unclosed within the text kept (TASK_HEAD): not a wrapper
+    if (end < 0) break; // unclosed within the text kept (ASK_HEAD): not a wrapper
     if (attached == null && m[2] && m[2].trim()) attached = rest.slice(m[0].length, end).trim() || null;
     rest = rest.slice(end + m[1].length + 3).trimStart();
   }

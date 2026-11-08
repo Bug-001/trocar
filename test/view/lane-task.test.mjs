@@ -142,3 +142,64 @@ for (const flat of ['chat', 'ws'])
     for (const l of subs) assert.ok(l.task && !PREAMBLE.startsWith(l.task.slice(0, 20)), `lane ${l.lane} is not named by the preamble: ${l.task}`)
     assert.equal(new Set(subs.map((l) => l.task)).size, subs.length, 'each sub-agent its own task')
   })
+
+// The question past injected wrappers (4.4 #20), through the whole pipeline: the main lane's task, the session's title and the list's title
+// say the same. `want` is the fixture's text squashed and cut at 80: what a title is, never what the code printed.
+const U = (...texts) => ({ role: 'user', content: texts.map((text) => ({ type: 'text', text })) })
+const A = { role: 'assistant', content: [{ type: 'text', text: 'ok' }] }
+const BOOT = '<boot>a</boot>', LONG = `<boot>${'x '.repeat(9000)}</boot>\nFix it`
+const ASKS = [
+  ['a wrapper before the question', [[U('<EXTREMELY_IMPORTANT>\nboot\n</EXTREMELY_IMPORTANT>\n\nFix the retry queue')]], 'Fix the retry queue'],
+  ['two wrappers, the second with attributes, before the question', [[U('<boot>a</boot>\n<env cwd="/w" os="x">b</env>\nFix the retry queue')]], 'Fix the retry queue'],
+  ['a wrapper alone in its block: the next block of the message', [[U(BOOT, 'Fix it')]], 'Fix it'],
+  ['a wrapper alone in its message: the next user message', [[U(BOOT), A, U('Fix it')]], 'Fix it'],
+  ['all wrapped: the inner text of a span with attributes', [[U('<file name="brief.md">Build the parser</file>')]], 'Build the parser'],
+  ['all wrapped, no attributes: the text as it was', [[U('<boot>skills</boot>')]], squashed('<boot>skills</boot>')],
+  ['all wrapped over two texts: the attributed span of the second', [[U(BOOT, '<file name="b">c</file>')]], 'c'],
+  ['an attributed span with nothing inside: the text as it was', [[U('<file name="a"></file>')]], squashed('<file name="a"></file>')],
+  ['never closed: not a wrapper', [[U('<boot>never closed\nFix it')]], squashed('<boot>never closed\nFix it')],
+  ['a self-closed tag: not a wrapper', [[U('<br/> Fix it')]], squashed('<br/> Fix it')],
+  ['closed past the question\'s read (ASK_HEAD): not a wrapper', [[U(LONG)]], squashed(LONG)],
+  ['a tag inside the text stays', [[U('Why does <file name="a">b</file> fail?')]], 'Why does <file name="a">b</file> fail?'],
+  ['reminders go first, then the wrapper', [[U(`${R('date')}${BOOT}\nFix it`)]], 'Fix it'],
+  ['a later call is not read', [[U(BOOT)], [U(BOOT), A, U('Fix it')]], squashed(BOOT)],
+]
+for (const [name, calls, want] of ASKS)
+  test(`the question: ${name}`, async () => {
+    const home = homeWith(calls.map((messages, i) => rec(i + 1, messages)))
+    const doc = await query(home, 'session', { id: 'S' }), { sessions } = await query(home, 'sessions')
+    assert.deepEqual([doc.lanes.find((l) => l.kind === 'main').task, doc.meta.title, sessions[0].title], [want, want, want])
+  })
+
+test('a wrapper goes by its shape: any name, with or without attributes, any space after it', () => {
+  for (const n of ['system', 'EXTREMELY_IMPORTANT', 'environment_context', 'user-prompt.v2', 'ns:tag'])
+    for (const a of ['', ' a="1"'])
+      for (const sep of ['', '\n', '\n\n  '])
+        assert.equal(askOf([`<${n}${a}>body</${n}>${sep}Fix it`]), 'Fix it', JSON.stringify([n, a, sep]))
+})
+
+for (const wire of ['http', 'chat', 'threads', 'ws'])
+  test(`${wire}: a sub-agent's task skips the wrapper its first prompt opens with`, async () => {
+    const home = path.join(tmpDir('trocar-lanetask-'), '.trocar')
+    // one sub-agent lane: a sibling's departure line would hide the wrapper
+    const s = bigSession({ home, wire, growth: 600, subEvery: 3, subLanes: 1, subLen: 100, preamble: '<boot>injected</boot>' })
+    s.append(18)
+    const recs = fs.readFileSync(s.file, 'utf8').trim().split('\n').map((l) => JSON.parse(l))
+    const subs = (await runQuery('session', { id: s.id }, { home })).lanes.filter((l) => l.kind === 'subagent')
+    assert.equal(subs.length, 1)
+    for (const l of subs) {
+      // the prompt as a wire reader takes it, wrapper and all: what is left of it is where the task starts (the task is its first line
+      // few lanes share, so a start of it)
+      const want = firstAskOf(recs[Number(String(l.first).split(':').pop()) - 1], recs).replace('<boot>injected</boot> ', '').replace(/…$/, '')
+      assert.ok(want && l.task && !l.task.includes('<boot>') && want.startsWith(l.task.replace(/…$/, '')), `lane ${l.lane}: ${l.task}`)
+    }
+  })
+
+for (const text of ['<boot>a</boot>\nFix it', '<boot>a</boot>'])
+  test(`the turn keeps its text: ${JSON.stringify(text)}`, async () => {
+    const home = homeWith([rec(1, [U(text)])])
+    const { lanes } = await query(home, 'session', { id: 'S' })
+    const page = await query(home, 'lane', { id: 'S', lane: lanes.find((l) => l.kind === 'main').lane })
+    assert.deepEqual(Object.values(page.steps[0].attrs).map((a) => a.query).filter(Boolean), [squashed(text)])
+    assert.equal(page.events.filter((e) => e.type === 'user').length, 1)
+  })

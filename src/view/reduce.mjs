@@ -636,7 +636,8 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
       const h = { lane: ridAt(d.first), kind: meta.kind, icon: meta.icon, label: meta.label, task: meta.kind === 'subagent' ? null : taskOf(firstS.ask),
         ...(meta.note ? { note: meta.note } : null), count, first: ridAt(d.first), last: ridAt(lastK), peakCtx: peak,
         spawnRid: sp ? ridAt(sp.k) : null, parent: sp ? keyOf(sp.S) : null, flagged, parts: chapters };
-      if (meta.kind === 'subagent') h[HEAD] = { text: (firstS.stream ? F.firstText(firstS) : firstS.ask) || '', arg: sp && sp.arg };
+      // a streamed lane's first text, past the wrappers it opens with (askOf), as every wire's question is
+      if (meta.kind === 'subagent') h[HEAD] = { text: (firstS.stream ? askOf([F.firstText(firstS)]) : firstS.ask) || '', arg: sp && sp.arg };
       return h;
     };
     const ds = I.all ? [...F.dls.values()] : [...I.dirty];
