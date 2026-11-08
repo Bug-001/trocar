@@ -135,3 +135,10 @@ test('no-load-control: the read-state line, in every state, is words only: no co
     cleanup()
   }
 })
+
+test('1.2 不留空白屏: before the session answer the head holds the way back alone, so the frame has words from its first paint', () => {
+  const desk$ = reactView({ project: 'p', id: 'i', view: { lo: 0, hi: 0 }, lanes: [], follow: false }, () => {}, () => {})
+  const el = render(<DeskHead desk={desk$} />).container.querySelector('#deskhead')!
+  expect([...el.querySelectorAll('.sesshead > *')].map((c) => c.className)).toEqual(['sh-back'])
+  expect(el.querySelector('.sh-back')!.getAttribute('href')).toBe('#/sessions')
+})

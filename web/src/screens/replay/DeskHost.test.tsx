@@ -3,7 +3,7 @@
 // controller does, and records the routes it is handed): routes reach the desk inside the announcing call, the desk's root hangs in the
 // host only while it is read, an evicted desk's subtree is gone, and the controller is handed the frame once. And 1.2 #19 for the
 // desk's module: one that fails to load says why where the desk would be.
-import { afterEach, expect, test, vi } from 'vitest'
+import { afterEach, beforeAll, expect, test, vi } from 'vitest'
 import { act, cleanup, render, type RenderResult } from '@testing-library/react'
 import { createBoardRouter } from '../../router'
 import { ScreenBoundary, lazyScreen } from '../../ScreenOutlet'
@@ -15,6 +15,7 @@ import type { DeskState, DeskView } from './view'
 
 type Board = ReturnType<typeof createBoardRouter>
 let board: Board | null = null
+beforeAll(() => { globalThis.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver })
 afterEach(() => { cleanup(); board?.dispose(); board = null; document.body.replaceChildren(); history.replaceState(null, '', '#/') })
 
 const isDesk = (r: Route) => !r.unknown && r.screen === 'replay'
@@ -76,11 +77,11 @@ test('decision 2: show and leave attach and detach the desk\'s root inside the a
 test('decision 2: a desk the session cache evicts is disposed, and its subtree and portal content are gone', () => {
   const { router, desk } = host({ maxSessions: 1 })
   act(() => { router.go(deskAt('a')) })
-  expect(desk('a').view.root.querySelector('#pages')).not.toBeNull()
+  expect(desk('a').view.root.querySelector('#saw')).not.toBeNull()
   act(() => { router.go(deskAt('b')) })
   expect(desk('a').disposed).toBe(1)
   expect(desk('a').view.root.childElementCount).toBe(0)
-  expect(desk('b').view.root.querySelector('#pages')).not.toBeNull()
+  expect(desk('b').view.root.querySelector('#saw')).not.toBeNull()
 })
 
 test('decision 2: els() is null until the frame is there; the first commit hands it over once, and a desk hidden and shown again does not again', () => {
@@ -90,7 +91,8 @@ test('decision 2: els() is null until the frame is there; the first commit hands
   expect(a.elsAtAttach).toBeNull()
   expect(a.framed).toBe(1)
   const E = a.view.els()!
-  for (const k of ['rails', 'ctxnav', 'resexp', 'rawpanel'] as const) expect(E[k] && a.view.root.contains(E[k]), k).toBe(true)
+  expect(a.view.root.contains(E.rails)).toBe(true)
+  expect(E.resexp).toBe(a.view.resexp)
   act(() => { router.go(deskAt('b')) })
   act(() => { router.go(deskAt('a')) })
   expect(a.framed).toBe(1)

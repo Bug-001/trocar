@@ -388,6 +388,7 @@ export const RAW_REPLY = 'Raw reply'
 export const rawReplyRow = (chars) => `Raw reply · ${chars} characters ›`
 export const rawReplyNth = (k) => `Raw reply ${k}`
 export const NO_RAW_REPLY = 'The raw reply has no bytes to read back'
+export const NO_BYTES = 'No bytes to read back'
 export const REQ_PARAMS = 'Request parameters'
 export const NO_PARAMS = 'This record has no request parameters to read back'
 export const UNPARSED_PARAMS = 'The request body could not be parsed, so no parameters can be listed'
@@ -459,3 +460,24 @@ export const SAMPLED_TIP = 'Sampled: one point per bucket, not one per step (the
 export const MAINDIV_TIP = 'Drag to resize the outline · double-click to reset'
 export const DIVIDER_TIP = 'Drag to resize the right page · double-click to reset'
 export const RPBAR_TIP = 'Expand the right page'
+// the desk's frame (1.2 §回放台布局): the two boundaries and the sidebar
+export const SIDE_SPLIT_TIP = 'Drag to resize the sidebar · double-click to reset'
+export const SCOPE_SPLIT_TIP = 'Drag to resize the tracks · double-click to reset'
+export const SIDE_TABS = 'Session panels'
+export const TAB_OVERVIEW = 'Overview'
+export const TAB_RESOURCES = 'Resources'
+export const COLLAPSE_SIDE = 'Collapse the sidebar'
+export const EXPAND_SIDE = 'Expand the sidebar'
+export const RAISE_PANEL = 'Raise the panel'
+export const LOWER_PANEL = 'Lower the panel'
+// 2.5: a chapter's name (k: compactions before it), a group, a row's step and calls
+export const partName = (k, inferred) => `${k === 0 ? 'Before the first compaction' : `Since compaction ${k}`}${inferred ? ' (inferred)' : ''}`
+export const GRP_AGENTS = 'Sub-agents'
+export const rowStep = (n) => `step ${n}`
+export const agentCalls = (n) => count(n, 'call')
+export const NO_PROMPTS_HERE = 'No prompts in these steps'
+// 2.6 §A: the folded row after the reply
+export const CALL_DETAILS = 'Call details'
+export const CD_EXTRA_MSGS = (n) => `Messages the client sent later in this call · ${n}`
+// 2.5: a chapter head's compaction numbers (the landing step's compaction-landed event); an empty side reads —
+export const partCompaction = (from, to) => `${from ?? '—'} → ${to ?? '—'} messages`

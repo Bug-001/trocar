@@ -5,7 +5,7 @@
 // Runs only under `npm run test:browser`.
 import test, { before, after } from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard } from '../harness.mjs'
+import { probe, withBoard, DESK_NEXT } from '../harness.mjs'
 import { makeWorld, mainCount } from './world.mjs'
 import { installProbe, snap } from './probe.mjs'
 import { check, rateFaults } from './invariants.mjs'
@@ -182,6 +182,19 @@ test('V-mem the DOM inflated across a revisit', { skip }, async () => {
   await b.page.evaluate(() => { const box = document.createElement('div'); box.hidden = true; for (let i = 0; i < 30000; i++) box.append(document.createElement('i')); document.body.append(box) })
   await revisit()
   assert.ok(ids(await check(ctx())).includes('I-mem'))
+})
+
+test('V-heap 40 MB more held across a revisit; what the page read for its desks may stay', { skip }, async () => {
+  const hold = () => b.page.evaluate(() => { window.__held = Array.from({ length: 5e6 }, (_, i) => i + 0.5) }) // 8 bytes each
+  const warm = async () => { await fresh(); await check(ctx()); await revisit(); await check(ctx()) } // the first visit, then the heap's baseline
+  await warm()
+  await hold(); await revisit()
+  assert.ok(ids(await check(ctx())).includes('I-heap'), 'a page that read nothing')
+  await warm()
+  await b.page.route('**/api/block?ref=seq-read', (r) => r.fulfill({ body: Buffer.alloc(30 * 2 ** 20) }))
+  try { await b.page.evaluate(() => fetch('/api/block?ref=seq-read').then((r) => r.arrayBuffer())) } finally { await b.page.unroute('**/api/block?ref=seq-read') }
+  await hold(); await revisit()
+  assert.ok(!ids(await check(ctx())).includes('I-heap'), 'a page that read 30 MB for its desks')
 })
 
 test('V-follow following, the session grows and its reads are aborted', { skip }, async () => {
@@ -412,4 +425,19 @@ test('V-select a click that ends a drag-select folds a block', { skip }, async (
     act('select'); await quiet()
     assert.ok(ids(await check(ctx({ drag: c.lastDrag }))).includes('I-select'))
   } finally { await b.page.evaluate(() => window.removeEventListener('click', window.__plantFold, true)) }
+})
+
+// I-jump (2.5 #5): an Overview row whose click never reaches the desk. The planted listener sits on window in the capture phase, ahead
+// of React's root, and stops every click on a row; the reader's ovjump step then sees no landing.
+test('V-jump a click on an Overview row that never reaches the desk does not land', { skip: skip || (DESK_NEXT ? false : "the new desk's Overview (D80)") }, async () => {
+  await fresh(); await following()
+  await b.page.evaluate(() => { window.__plantStop = (e) => { if (e.target.closest?.('[data-ovjump]')) e.stopPropagation() }; window.addEventListener('click', window.__plantStop, true) })
+  try {
+    const jump = ACTIONS.find((x) => x.a === 'ovjump'), c = { page: b.page }
+    const r = await jump.run(c, { f: 0 })
+    assert.notEqual(r?.skipped, true, 'an Overview row to click')
+    assert.equal(c.lastJump.landed, false)
+    act('ovjump'); await quiet()
+    assert.ok(ids(await check(ctx({ jump: c.lastJump }))).includes('I-jump'))
+  } finally { await b.page.evaluate(() => window.removeEventListener('click', window.__plantStop, true)) }
 })
