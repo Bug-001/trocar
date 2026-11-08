@@ -3,7 +3,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { createSynthAssigner, synthFactsOf, SYNTH_TTL_MS } from '../../src/dissect/synth-key.mjs'
+import { createSynthAssigner, synthFactsOf, SYNTH_TTL_MS, REPLY_CAP } from '../../src/dissect/synth-key.mjs'
 import { indexRows } from '../../src/query/rows.mjs'
 import { rawHome, writeSegment } from '../query/raw-home.mjs'
 
@@ -101,6 +101,18 @@ test('kinship by reply: a reply past SYNTH_TTL_MS names no session; within it, p
   const r = prose(11, 800)
   assert.equal(run([turn('responses', 0, 0, r, T0), summary('responses', [r], T0 + SYNTH_TTL_MS - MIN)])[1].key, 'sid-0', 'within the TTL')
   assert.equal(run([turn('responses', 0, 0, r, T0), summary('responses', [r], T0 + SYNTH_TTL_MS + MIN)])[1].kin, false, 'past it')
+})
+
+test('kinship by reply: at the reply cap, a reply expiring at a segment\'s first record leaves live and cold the same', () => {
+  const r0 = prose(30, 600), item = synthFactsOf(turn('responses', 0, 0, r0, T0)).reply
+  const facts = [turn('responses', 1, 0, prose(31, 600), T0 + MIN), turn('responses', 2, 0, prose(32, 600), T0 + 2 * MIN), summary('responses', [r0], T0 + 3 * MIN)].map((r) => synthFactsOf(r))
+  // the store at the cap, oldest first: a reply past SYNTH_TTL_MS, session 0's reply, filler
+  const full = () => new Map([['\u0003pi\0old', { lastMs: T0 - SYNTH_TTL_MS - HOUR, owners: ['sid-9'] }], [`\u0003pi\0${item}`, { lastMs: T0, owners: ['sid-0'] }],
+    ...Array.from({ length: REPLY_CAP - 2 }, (_, i) => [`\u0003pi\0f${i}`, { lastMs: T0, owners: ['sid-9'] }])])
+  const cold = full(), live = full(), one = createSynthAssigner({ open: cold })
+  // cold: one assigner for the segment; live: one per growth step, over the same state
+  assert.deepEqual(facts.map((f) => createSynthAssigner({ open: live })(f)), facts.map((f) => one(f)))
+  assert.equal(cold.size, live.size)
 })
 
 // the same membership, read cold in one pass, cut into two segments anywhere, and as the live segment grows record by record,

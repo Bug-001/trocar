@@ -56,7 +56,7 @@ const WIN = 32, SAMPLE = 8, FP_CAP = 64, PROBE_CAP = 1024, STATE_CAP = 4096, MIN
 // ENDS_W, and a 64-bit digest of the whole list; a call carries the windows of its user texts, in order, the last HEAD_CAP (a compaction request's latest replies are at its end). A reply of
 // REPLY_MIN collapsed chars has about 28 windows; one with fewer than MIN_WIN is not kept. REPLY_CAP: twice the most replies one
 // harness kept in any 24 h of a real capture, rounded up to a power of two; OWNERS: the sessions one reply text is kept under, the latest.
-const REPLY_MIN = 256, MIN_WIN = 6, ENDS_W = 3, HEAD_CAP = 8192, REPLY_CAP = 4096, OWNERS = 8;
+export const REPLY_MIN = 256, MIN_WIN = 6, ENDS_W = 3, HEAD_CAP = 8192, REPLY_CAP = 4096, OWNERS = 8;
 export const userTextsOf = (body) => {
   const b = body || {};
   if (typeof b.input === 'string') return [b.input];
@@ -296,6 +296,7 @@ export function createSynthAssigner({ gapMs = SYNTH_GAP_MS, open = new Map() } =
   // past 2 × gapMs a chain keeps only what step 2 reads (its tail), until SYNTH_TTL_MS; a keyed entry goes, and a chain with no tail;
   // a reply stays until SYNTH_TTL_MS after it was last kept
   const prune = (harness, ms) => {
+    count(harness); // the counts from `open` before this deletes from it
     for (const [g, e] of open) {
       if (!mine(g, harness) || ms - e.lastMs <= 2 * gapMs) continue;
       if (g[0] === REPLY) { if (ms - e.lastMs > SYNTH_TTL_MS) { open.delete(g); count(harness, -1); } continue; }
