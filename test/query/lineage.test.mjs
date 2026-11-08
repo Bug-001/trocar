@@ -1,4 +1,4 @@
-// test/query/lineage.test.mjs — a session's DECLARED lineage (RFC 3.4 §血缘 · 3.5 #64): the parent / fork id the first model call
+// test/query/lineage.test.mjs — a session's DECLARED lineage (RFC 3.4 §血缘 · 3.5 #70): the parent / fork id the first model call
 // trocar captured declares in its harness's keys, verbatim, computed with the title and kept in the title table (4.2 §标题表).
 // `lineage_source` is closed: 'wire' carries both id keys (null = declares none); 'no-keys' and 'unread' carry neither, so a reader
 // that ignores the source can never take "not known" for "none".
@@ -77,7 +77,7 @@ const WANT = {
   'cc-a': { lineage_source: 'no-keys' },
 }
 
-test('3.5 #64: declared ids from the wire, `null` where none or blank is declared; a harness with no keys says so and carries no id key', async () => {
+test('3.5 #70: declared ids from the wire, `null` where none or blank is declared; a harness with no keys says so and carries no id key', async () => {
   const home = homeWith(SHAPES)
   const doc = await list(home)
   assert.deepEqual(doc.errors, [])
@@ -88,7 +88,7 @@ test('3.5 #64: declared ids from the wire, `null` where none or blank is declare
   for (const s of doc.sessions.filter((x) => x.lineage_source !== 'wire')) for (const k of KEYS.slice(1)) assert.ok(!Object.hasOwn(s, k), `${s.session_id}: no ${k}`)
 })
 
-test('3.5 #64: the `sessions` row, the `session` meta and the head say the same; a table of another version rebuilds to the same answer; the next `sessions` opens no record', async () => {
+test('3.5 #70: the `sessions` row, the `session` meta and the head say the same; a table of another version rebuilds to the same answer; the next `sessions` opens no record', async () => {
   const home = homeWith(SHAPES)
   const doc = await saved(home)
   assert.equal(JSON.parse(fs.readFileSync(titlesFile(home), 'utf8')).v, TITLE_V)
@@ -109,7 +109,7 @@ test('3.5 #64: the `sessions` row, the `session` meta and the head say the same;
   assert.deepEqual(byId(await list(home)), byId(doc), 'another version is an empty table')
 })
 
-test('3.5 #64: a first record that cannot be read: `unread`, no id key, one `errors` entry, nothing in the table', async () => {
+test('3.5 #70: a first record that cannot be read: `unread`, no id key, one `errors` entry, nothing in the table', async () => {
   const home = homeWith([call({ harness: 'opencode', headers: { 'x-opencode-session-id': 'oc-c', 'x-opencode-parent-session-id': 'oc-p' } })])
   const f = faulty(home)
   await runQuery('segments', {}, { home, fs: f })
@@ -122,7 +122,7 @@ test('3.5 #64: a first record that cannot be read: `unread`, no id key, one `err
   assert.deepEqual((await saved(home, { fs: f })).sessions.map(lin), [wire('oc-p', null)])
 })
 
-test('3.5 #64: a model call landing before the first one, on an entry with no main call, recomputes the lineage', async () => {
+test('3.5 #70: a model call landing before the first one, on an entry with no main call, recomputes the lineage', async () => {
   const sub = (parentSession, t) => call({ harness: 'dsh', t, headers: { 'x-deepseek-harness-session-id': 'ds-late' }, body: { dsh_session_log: { session: { origin: 'subagent', ...(parentSession ? { parentSession } : {}) } } } })
   const home = homeWith(Array.from({ length: 12 }, (_, i) => sub(null, 100 + i))) // c = 12: one new call is short of c*9/8
   assert.deepEqual(byId(await saved(home)), { 'ds-late': wire(null, null) })
@@ -131,7 +131,7 @@ test('3.5 #64: a model call landing before the first one, on an entry with no ma
   assert.deepEqual(byId(await saved(home)), { 'ds-late': wire('ds-early', null) })
 })
 
-test('3.5 #64: a tier-0 head written before the first call is read says `unread`, never null ids; the sweep rewrites it once lineage is known', { timeout: 60_000 }, async () => {
+test('3.5 #70: a tier-0 head written before the first call is read says `unread`, never null ids; the sweep rewrites it once lineage is known', { timeout: 60_000 }, async () => {
   const home = homeWith([call({ harness: 'opencode', headers: { 'x-opencode-session-id': 'oc-h', 'x-opencode-parent-session-id': 'oc-hp' } })])
   const f = faulty(home)
   await runQuery('segments', {}, { home, fs: f })
