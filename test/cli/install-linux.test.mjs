@@ -12,7 +12,11 @@ import { readManifest, saveManifest } from '../../src/off/manifest.mjs'
 import { codeId, selfCommand } from '../../src/version.mjs'
 import { fakeIo, fakeSystem, onCtx, seedClaude, snapshot, changedFiles } from './fixtures/on-ctx.mjs'
 import { unitPath, UNIT_NAME } from '../../src/collector/arch/linux/unit.mjs'
+import { X509Certificate } from 'node:crypto'
+import zcode from '../../src/collector/harness/z-code.mjs'
+import { createCa } from '../../src/collector/core/tls/ca.mjs'
 
+const fps = (text) => (String(text).match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g) || []).map((p) => new X509Certificate(p).fingerprint256)
 const certBytes = (home) => Object.fromEntries(Object.entries(snapshot(home)).filter(([k]) => k.startsWith('.trocar/collector/ca/') || k === '.claude/settings.json'))
 
 test('Linux install: CA + trust entries (phase install) + trocar-off, no unit, no state; a second install changes nothing; the on after it leaves every certificate byte as install wrote it', async () => {
@@ -228,4 +232,36 @@ test('Linux install --json: the receipt\'s skipped names each agent install had 
   for (const d of all.filter((x) => !['claude-code', 'codex'].includes(x.name))) assert.ok(names.includes(d.name), `${d.name} is not here: skipped`)
   assert.ok(!names.includes('claude-code'), 'the agent install set up is not skipped')
   assert.ok(doc.skipped.every((s) => typeof s.reason === 'string' && s.reason.length > 0), 'each with its reason')
+})
+
+// Rule U through the command itself (4.11 P4): the CLI hands the plan its finder of the user's own certificate files. Without it the plan finds
+// none and Z-Code's desktop CA file silently gets no block, so this goes through runInstallCli, not installCollector.
+test('Linux install: the CA file Z-Code\'s desktop setting names gets trocar\'s root appended after the user\'s own bytes', async () => {
+  const home = tmpDir('trocar-install-zcode-')
+  const own = createCa({ commonName: 'desktop proxy CA' }).certPem
+  const desk = path.join(home, 'certs', 'relay-ca.pem')
+  fs.mkdirSync(path.dirname(desk), { recursive: true }); fs.writeFileSync(desk, own)
+  fs.mkdirSync(path.join(home, '.zcode', 'v2'), { recursive: true }); fs.writeFileSync(path.join(home, '.zcode', 'v2', 'setting.json'), JSON.stringify({ httpProxyCaCertPath: desk }))
+  const io = fakeIo()
+  assert.equal(await runInstallCli(['--yes'], { ...onCtx(home, io, { harnesses: [zcode] }), platform: 'linux' }), 0, io.text())
+  const root = fs.readFileSync(path.join(home, '.trocar', 'collector', 'ca', 'trocar-ca.pem'), 'utf8')
+  const text = fs.readFileSync(desk, 'utf8')
+  assert.ok(text.startsWith(own), 'the user\'s bytes first, as they were')
+  assert.deepEqual(fps(text), [...fps(own), ...fps(root)], 'trocar\'s root appended once')
+})
+
+// 4.6 check 10 (plan = act): the dry run names the desktop CA file the real run appends to, and touches nothing
+test('Linux install --dry-run: the plan names the CA file Z-Code\'s desktop setting names, as the run then changes it, and writes nothing', async () => {
+  const home = tmpDir('trocar-install-zcode-dry-')
+  const own = createCa({ commonName: 'desktop proxy CA' }).certPem
+  const desk = path.join(home, 'certs', 'relay-ca.pem')
+  fs.mkdirSync(path.dirname(desk), { recursive: true }); fs.writeFileSync(desk, own)
+  fs.mkdirSync(path.join(home, '.zcode', 'v2'), { recursive: true }); fs.writeFileSync(path.join(home, '.zcode', 'v2', 'setting.json'), JSON.stringify({ httpProxyCaCertPath: desk }))
+  const before = snapshot(home)
+  const dry = fakeIo()
+  assert.equal(await runInstallCli(['--dry-run', '--json'], { ...onCtx(home, dry, { harnesses: [zcode] }), platform: 'linux' }), 0, dry.text())
+  assert.ok(dry.json().planned.some((p) => p.path === desk), `the desktop CA file is planned: ${JSON.stringify(dry.json().planned)}`)
+  assert.deepEqual(snapshot(home), before, 'a dry run writes nothing')
+  assert.equal(await runInstallCli(['--yes'], { ...onCtx(home, fakeIo(), { harnesses: [zcode] }), platform: 'linux' }), 0)
+  assert.ok(changedFiles(before, snapshot(home)).includes(path.relative(home, desk)), 'and the run changes that file')
 })

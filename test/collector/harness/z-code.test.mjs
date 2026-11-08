@@ -12,6 +12,7 @@ import zcode from '../../../src/collector/harness/z-code.mjs'
 import { createRegistry } from '../../../src/collector/core/registry.mjs'
 import { planTrust } from '../../../src/collector/core/trust/plan.mjs'
 import { installCollector } from '../../../src/collector/install.mjs'
+import { userFilesFor } from '../../../src/collector/arch/model-backends.mjs'
 import { uninstallCollector } from '../../helpers/uninstall.mjs'
 import { createCa } from '../../../src/collector/core/tls/ca.mjs'
 import { sandbox, ctxFor, facts, judge, matchOf, CA, OTHER } from './_ctx.mjs'
@@ -101,10 +102,10 @@ test('z-code: a user config written after start is not believed; relay hosts fro
 
 const planFor = (s, env = {}, running = []) => {
   const dir = path.join(s.home, '.trocar', 'collector')
-  return planTrust({ descriptors: [zcode], ctxFor: () => ({ os: 'none', home: s.home, env: new Map(Object.entries(env)), running: running.map((e) => new Map(Object.entries(e))), collectorDir: dir, caPem: path.join(dir, 'ca', 'trocar-ca.pem'), readText: (f) => { try { return fs.readFileSync(f, 'utf8') } catch { return null } }, readBytes: (f) => { try { return fs.readFileSync(f) } catch { return null } }, listDir: (d) => { try { return fs.readdirSync(d) } catch { return [] } } }), caCertPem: CA.certPem, collectorDir: dir, roots: { node: [], osText: '' } })
+  return planTrust({ descriptors: [zcode], ctxFor: () => ({ os: 'none', home: s.home, env: new Map(Object.entries(env)), userFiles: userFilesFor({ os: 'none', home: s.home, env: new Map(Object.entries(env)) }), running: running.map((e) => new Map(Object.entries(e))), collectorDir: dir, caPem: path.join(dir, 'ca', 'trocar-ca.pem'), readText: (f) => { try { return fs.readFileSync(f, 'utf8') } catch { return null } }, readBytes: (f) => { try { return fs.readFileSync(f) } catch { return null } }, listDir: (d) => { try { return fs.readdirSync(d) } catch { return [] } } }), caCertPem: CA.certPem, collectorDir: dir, roots: { node: [], osText: '' } })
 }
 
-test('z-code inject: network.caCertFile in ~/.zcode/cli/config.json = combined-z-code.pem, which carries the CAs it covers or makes ineffective; the desktop setting and a set ZCODE_AGENT_CA_CERT are named (T10, T14)', () => {
+test('z-code inject: network.caCertFile in ~/.zcode/cli/config.json = combined-z-code.pem, which carries the CAs it covers or makes ineffective; the files the desktop setting and ZCODE_AGENT_CA_CERT name take a block, an empty ZCODE_AGENT_CA_CERT is named (T10, T14)', () => {
   const s = sandbox()
   try {
     const none = planFor(s)
@@ -116,13 +117,12 @@ test('z-code inject: network.caCertFile in ~/.zcode/cli/config.json = combined-z
     const dir = path.join(s.home, '.trocar', 'collector')
     const bundle = path.join(dir, 'ca', 'combined-z-code.pem')
     const p = planFor(s, { NODE_EXTRA_CA_CERTS: shell, ZCODE_AGENT_CA_CERT: corp }, [{ NODE_EXTRA_CA_CERTS: bundle }, { NODE_EXTRA_CA_CERTS: 'rel.pem' }])
-    assert.deepEqual(p.entries.map((e) => [e.kind, e.path, e.keys, e.value]), [['json-key', path.join(s.home, '.zcode/cli/config.json'), ['network', 'caCertFile'], bundle]])
+    assert.deepEqual(p.entries.map((e) => [e.kind, e.path, e.keys, e.value]), [['json-key', path.join(s.home, '.zcode/cli/config.json'), ['network', 'caCertFile'], bundle], ['text', desk, undefined, undefined], ['text', corp, undefined, undefined]], 'the key, and a block in each file the desktop setting and the shell\'s ZCODE_AGENT_CA_CERT name (rule U)')
     assert.deepEqual([p.files[0].path, p.files[0].role, p.files[0].sources], [bundle, 'bundle', [corp, desk, shell]], 'the caCertFile it replaces, the desktop setting, the install shell; never trocar\'s own')
     assert.deepEqual(fps(p.files[0].data), [fp(OTHER), fp(DESK), fp(SHELL), fp(CA)])
     const codes = p.records.map((r) => r.code)
     assert.deepEqual(codes.filter((c) => c !== 'harness-note'), ['relative-path'], 'nothing unreadable: trocar\'s own bundle is not a source')
-    assert.ok(p.records.some((r) => r.code === 'harness-note' && r.reason.includes('httpProxyCaCertPath') && r.reason.includes(desk)), 'the desktop setting that wins is named')
-    assert.ok(p.records.some((r) => r.code === 'harness-note' && /^(?:z-code: )?ZCODE_AGENT_CA_CERT is set in this shell/.test(r.reason)), 'a ZCODE_AGENT_CA_CERT in the install shell is named')
+    assert.ok(planFor(s, { ZCODE_AGENT_CA_CERT: '' }).records.some((r) => r.code === 'harness-note' && r.reason.includes('ZCODE_AGENT_CA_CERT')), 'an empty ZCODE_AGENT_CA_CERT in the install shell is named')
     fs.rmSync(path.join(s.home, '.zcode', 'cli'), { recursive: true })
     assert.equal(planFor(s).entries[0].path, path.join(s.home, '.zcode/cli/config.json'), 'the CLI config is created when only the desktop has run')
   } finally { s.done() }
@@ -145,6 +145,55 @@ test('z-code through install / uninstall: the user\'s caCertFile is replaced and
     assert.equal(fs.readFileSync(cfg, 'utf8'), before)
     assert.deepEqual((await uninstallCollector({ home: s.home, env: {}, stop: async () => 'none', roots: { node: [], osText: '' } })).kept_bundles, [])
     assert.ok(!fs.existsSync(bundle))
+  } finally { s.done() }
+})
+
+// The desktop setting naming the user's own CA file (the measured setting.json shape: the app's other keys, 2-space JSON): it reaches the desktop agent as
+// ZCODE_AGENT_CA_CERT and replaces caCertFile, so install appends trocar's marked block to that file (rule U, 4.11 P4) and leaves the setting alone; the
+// agent then trusts trocar by the file it was given. uninstall takes the block out by its marks; a file in a package-manager tree is not the user's own.
+test('z-code: the desktop setting httpProxyCaCertPath names the user\'s CA file → install appends trocar\'s block there, the setting untouched, and the agent started with it is trusted; uninstall restores the file (rule U)', async () => {
+  const s = sandbox()
+  try {
+    const DESK = createCa({ commonName: 'desktop proxy CA' })
+    const desk = s.put('certs/relay-ca.pem', DESK.certPem)
+    const setting = s.put('.zcode/v2/setting.json', JSON.stringify({ recentProjects: [], locale: 'zh-CN', terminalInheritSystemProfile: true, httpProxyCaCertPath: desk, closeToTrayOnWindows: true }, null, 2))
+    const settingBefore = fs.readFileSync(setting)
+    await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [zcode], userFilesFor, freePort: async () => 47016, roots: { node: [], osText: '' } })
+    const root = fs.readFileSync(path.join(s.home, '.trocar', 'collector', 'ca', 'trocar-ca.pem'), 'utf8')
+    const text = fs.readFileSync(desk, 'utf8')
+    assert.ok(text.startsWith(DESK.certPem), 'the user\'s bytes first, as they were')
+    assert.deepEqual(fps(text), [fp(DESK), ...fps(root)], 'trocar\'s root appended once')
+    assert.deepEqual(fs.readFileSync(setting), settingBefore, 'the setting itself is not written')
+    const env = { ...Object.fromEntries(AS_NODE), ZCODE_AGENT_CA_CERT: desk, NODE_EXTRA_CA_CERTS: desk }
+    const r = judge(zcode, ctxFor({ home: s.home, argv: [EXE, CJS, 'app-server', '--stdio'], env }), { caCertPem: root })
+    assert.deepEqual([r.trust.trusted, r.trust.var], [true, 'ZCODE_AGENT_CA_CERT'], 'the desktop agent trusts trocar through its own file')
+    // the app-server reads that file again for each new task (measured on Linux, Z-Code 3.17.2: a root appended while it ran was trusted at the next New task, same pid),
+    // so one started before install counts too
+    const before = judge(zcode, ctxFor({ home: s.home, argv: [EXE, CJS, 'app-server', '--stdio'], env, startedAt: Date.now() - 3_600_000 }), { caCertPem: root })
+    assert.equal(before.trust.trusted, true, 'started before the block was appended: trusted from its next session')
+    await uninstallCollector({ home: s.home, env: {}, stop: async () => 'none', roots: { node: [], osText: '' } })
+    assert.equal(fs.readFileSync(desk, 'utf8'), DESK.certPem, 'uninstall takes the block out byte for byte')
+  } finally { s.done() }
+  const t = sandbox()
+  try {
+    const managed = t.put('.npm-global/lib/certs/ca.pem', OTHER.certPem)
+    t.put('.zcode/v2/setting.json', JSON.stringify({ httpProxyCaCertPath: managed }, null, 2))
+    const r = await installCollector({ home: t.home, env: { HOME: t.home }, osName: 'none', harnesses: [zcode], userFilesFor, freePort: async () => 47016, roots: { node: [], osText: '' } })
+    assert.equal(fs.readFileSync(managed, 'utf8'), OTHER.certPem, 'a file a package manager rewrites is never appended to')
+    assert.ok(r.plan.records.some((x) => x.code === 'harness-note' && x.reason.includes(managed)), 'the skipped file is named in a note')
+  } finally { t.done() }
+})
+
+test('z-code on Linux: with ZCODE_HTTP_PROXY in the process environment caCertFile is not read, so only ZCODE_AGENT_CA_CERT or NODE_EXTRA_CA_CERTS can carry trocar (4.11 Z-Code network group)', () => {
+  const s = sandbox()
+  try {
+    const bundle = s.put('.trocar/collector/ca/combined-z-code.pem', CA.certPem)
+    s.put('.zcode/cli/config.json', JSON.stringify({ network: { caCertFile: bundle } }))
+    const at = (env) => judge(zcode, ctxFor({ home: s.home, argv: [EXE, CJS, 'app-server', '--stdio'], env: { ELECTRON_RUN_AS_NODE: '1', ...env } })).trust.trusted
+    assert.equal(at({}), true, 'caCertFile carries trocar')
+    assert.equal(at({ ZCODE_HTTP_PROXY: 'http://proxy.corp:3128' }), false, 'not while the network settings come from the environment')
+    assert.equal(judge(zcode, ctxFor({ home: s.home, argv: [EXE, CJS, 'app-server'], env: { ELECTRON_RUN_AS_NODE: '1', ZCODE_HTTP_PROXY: 'http://proxy.corp:3128' } })).trust.reason, 'zcode-env-network', 'named as such: trocar install cannot fix it')
+    assert.equal(at({ ZCODE_HTTP_PROXY: 'http://proxy.corp:3128', ZCODE_AGENT_CA_CERT: bundle }), true, 'the environment\'s own CA file does')
   } finally { s.done() }
 })
 

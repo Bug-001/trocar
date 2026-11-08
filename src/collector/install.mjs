@@ -9,7 +9,7 @@ import { UNDO_WORDS, setupBlocked, setupError } from '../cli/receipt.mjs'
 import { driverSetup, driverCtx, driverForms } from './driver-setup.mjs'
 import { uncapturedOf } from './core/proxymode/sources.mjs'
 import { takeEarly } from '../cli/on-start.mjs'
-import { isModelOs } from './model-install.mjs' // macOS / Windows: their on is turnOnModel (src/cli/on-model.mjs); this turnOn is Linux's
+import { isModelOs, ruleUFiles } from './model-install.mjs' // macOS / Windows: their on is turnOnModel (src/cli/on-model.mjs); this turnOn is Linux's
 import fs from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
@@ -145,9 +145,13 @@ export function autostartBlock({ unit, osName }) {
   return `${entryState(osName, unit, q)}: the collector would not start at the next login, ${after}. Nothing was changed. Run: trocar install`
 }
 
+// the plan asks only whether the file takes a block; the root's bytes exist once the CA is made (a fresh install), so the preview places a block's shape
+const PEM_SHAPE = '-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----'
+
 /** What the receipt says an entry did, in one phrase — the same words in the dry run (from the preview) and in the real run (from the entry). */
 export function changeText(e, prior = null) {
   if (e.kind === 'text') {
+    if (e.format === 'pem-block') return "trocar's certificate block added at the end"
     if (e.vars) return `trocar block added at the top (${Object.keys(e.vars).join(', ')})${prior ? `; your own ${Object.keys(prior).join(', ')} commented out` : ''}`
     return `one line added (${shortLine(e.line)})`
   }
@@ -164,7 +168,7 @@ const stop = (message, code = null) => Object.assign(new Error(message), { stops
  *  `_` is what the writing needs (the manifest as read, the draft, the roots). `ids`: the harness code ids named, or null for every one found.
  *  The combined bundles' roots are `roots` when given (a test's, an embedder's), else the arch's (tls/roots.mjs bundleRoots: `missing` is said per
  *  bundle by planTrust; a read that fails throws here, before anything is written). */
-export async function planOn({ home = os.homedir(), env = process.env, ids = null, osName, harnesses, scan = async () => [], match = () => ({ agent: null }), arch = null, roots = null, unit = null, fs = nodeFs, now = () => new Date(), judge = null, certs = false } = {}) {
+export async function planOn({ home = os.homedir(), env = process.env, ids = null, osName, harnesses, scan = async () => [], match = () => ({ agent: null }), arch = null, roots = null, unit = null, userFilesFor = null, fs = nodeFs, now = () => new Date(), judge = null, certs = false } = {}) {
   const dir = collectorHome(path.join(home, '.trocar'))
   let prior
   try { prior = readManifest(dir, fs) } catch (e) { // not written over: it is the only list of what trocar changed; `off` has the way back by trocar's own marks (R3)
@@ -185,7 +189,8 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
   const kept = asked.filter((d) => !held.has(d.name))
   const ca = caPaths(path.join(dir, 'ca'))
   const facts = await scan()
-  const ctxFor = (d) => driverCtx({ os: osName, home, env, fs, running: facts.filter((f) => match(f).agent === d.name).map((f) => f.env || new Map()) }) // the one inject ctx (status and on's setup judgement read the same)
+  const userFiles = userFilesFor ? userFilesFor({ os: osName, home, env: new Map(Object.entries(env).filter(([, v]) => typeof v === 'string')), fs }) : null // rule U's finder (arch/model-backends.mjs), handed in by the caller
+  const ctxFor = (d) => ({ ...driverCtx({ os: osName, home, env, fs, running: facts.filter((f) => match(f).agent === d.name).map((f) => f.env || new Map()) }), userFiles }) // the one inject ctx (status and on's setup judgement read the same)
   // only a harness whose own footprint is here gets carriers, and only it joins install.harnesses (4.6 「这个 harness 装好了没有」); one already in the
   // manifest stays a target below, its carriers kept until uninstall
   const descs = kept.filter((d) => driverForms(d, ctxFor(d)).length)
@@ -200,7 +205,7 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
   // per item: written, intact, resumed, or changed by the user since (R9)
   const steps = []
   // install (certs) places again a carrier item that is gone or changed (`replaceable`): planned as new, its preview said when it cannot be (D38)
-  const previewOf = (e) => (e.kind === 'text' ? previewTextEntry({ file: e.path, edit: e, fs }) : previewJsonKey({ file: e.path, keys: e.keys, value: e.value, fs }))
+  const previewOf = (e) => (e.kind === 'text' ? previewTextEntry({ file: e.path, edit: e.format === 'pem-block' && !e.pem ? { ...e, pem: PEM_SHAPE } : e, fs }) : previewJsonKey({ file: e.path, keys: e.keys, value: e.value, fs }))
   const entryJ = draft.entries.map((e) => {
     let j = judgeEntry({ manifest: prior, planned: e, fs })
     if (certs && replaceable(j)) { try { previewOf(e); j = { action: 'rewrite', entry: null, why: j.why } } catch (err) { j = { ...j, why: `${j.why}; trocar install cannot place it again (${String((err && err.message) || err)})` } } }
@@ -447,7 +452,7 @@ export async function installCollector({ home = os.homedir(), ...opts } = {}) {
  *    arch       the arch, asked for the combined bundles' OS roots (planOn)   roots  overrides them
  *  → { receipt, manifest, plan, exit }. */
 export async function turnOn(opts = {}) {
-  const { home = os.homedir(), env = process.env, ids = null, osName, harnesses, scan, match, arch = null, roots = null, unit = null, freePort = freeEnginePort, onPlan = () => {}, confirm = null, dryRun = false, networkEdited = null, request = null, now = () => new Date(), fs = nodeFs, getuid, helperState = null, linger = null, lingerRead = null, socketPath = null, sleep: pause = sleep, user = null, lockWaitMs = OP_LOCK_WAIT_MS } = opts
+  const { home = os.homedir(), env = process.env, ids = null, osName, harnesses, scan, match, arch = null, roots = null, unit = null, userFilesFor = null, freePort = freeEnginePort, onPlan = () => {}, confirm = null, dryRun = false, networkEdited = null, request = null, now = () => new Date(), fs = nodeFs, getuid, helperState = null, linger = null, lingerRead = null, socketPath = null, sleep: pause = sleep, user = null, lockWaitMs = OP_LOCK_WAIT_MS } = opts
   refuseRoot('on', getuid)
   const dir = collectorHome(path.join(home, '.trocar'))
   const stateF = path.join(dir, 'state.json')
@@ -496,7 +501,7 @@ export async function turnOn(opts = {}) {
       refused.push({ harness: d.name, reason: CODE.setupNeeded, why: [...new Set(s.missing.map((x) => SETUP_WHY[x.what]))].join('; '), command: 'trocar install' })
       return true
     }).map((d) => d.name)
-    const plan = await planOn({ home, env, ids, osName, harnesses, scan, match, arch, roots, unit: null, fs, now, judge }) // D61: the login entry is `install`'s and `on` never writes it, so the writing side is handed no unit at all
+    const plan = await planOn({ home, env, ids, osName, harnesses, scan, match, arch, roots, unit: null, userFilesFor, fs, now, judge }) // D61: the login entry is `install`'s and `on` never writes it, so the writing side is handed no unit at all
     // D55⑥ / override #15: `on` never writes a certificate, so it never installs silently — no install record, no on (macOS / Windows: turnOnModel)
     // 附录 C.1: the refusal's code lives in `error`, the one place a client looks (never a top-level `code`)
     if (!isModelOs(osName) && !installComplete(plan._.prior)) { const message = 'certificates are not installed. Run: trocar install'; return { receipt: unwritten({ ...fresh(), ok: false, error: { code: CODE.certNotInstalled, message }, notes: [message] }), manifest: plan._.prior, plan, exit: 1 } }

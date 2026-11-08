@@ -123,6 +123,15 @@ export function statusDetail(doc, h, { finding = null, now = Date.now(), colors:
     const w = Math.max(...forms.map((f) => String(f.form).length))
     for (const f of forms) {
       const k = f.certificate || {}, p = f.proxy || {}
+      // a form a blocker keeps off the route (4.11 ⑩): that leads, and its certificate and proxy rows would read as fine, so they are not drawn
+      if (f.route) {
+        const setting = `a setting of yours${f.route.at ? ` (${f.route.at})` : ''}`, place = f.route.at || 'a setting it needs'
+        // a form the door cannot tell from the blocked one reaches trocar and is forwarded unread, whether the setting held or could not be read (1.6 附录 C)
+        const text = f.route.form ? `forwarded only: ${f.route.reason === 'blocker' ? `trocar cannot tell it from ${f.route.form}, which ${setting} keeps off trocar` : `trocar cannot read ${place}, so it cannot tell it from ${f.route.form}`}`
+          : f.route.reason !== 'blocker' ? unknown(`trocar cannot read ${place}`) : `not routed: ${setting} keeps it off trocar`
+        lines.push(...columns([[String(f.form).padEnd(w), 'route'.padEnd('certificate'.length), text]], { width: WIDTH - 2 }).map((l) => `  ${l}`))
+        continue
+      }
       const rows = [[String(f.form).padEnd(w), 'certificate', k.in_effect ? `in effect (${k.carrier ? carrierWords(k.carrier) : 'unknown carrier'})` : k.in_effect === null && k.user_file && k.user_file.reason ? unknown(`could not read ${k.user_file.reason}`) : noteText(k.code, { harness: h }) || unknown(k.carrier && k.carrier !== 'root' ? 'the file that carries it could not be read' : 'your trust store could not be read')],
         ['', 'proxy', p.written ? `points at trocar ${portOf(p.written)}` : p.connected ? 'connected' : 'not connected']]
       if (p.prior) rows.push(['', '', `(was: ${p.prior})`]) // only a value `on` recorded: no record is not "none"
