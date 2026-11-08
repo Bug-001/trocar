@@ -531,7 +531,7 @@ function openDesk(ctx, route0, makeView) {
       },
     })
   }
-  // bodies came for step `rid`: its window and raw panel take them if it is still the one drawn
+  // bodies came for step `rid`: its window takes them if it is still the one drawn
   function bodiesIn(rid) {
     if (rid !== s.playRid || !s.anchor) return
     if (host && E) view.window({ kind: 'step', busy: false }); else { s.lastPhSig = null; missed = true }

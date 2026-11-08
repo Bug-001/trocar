@@ -430,7 +430,7 @@ export const KEY_LIST = Object.freeze([
 // ── the desk's models (web/src/screens/replay/models.mjs): the words its session head, step head and scope read ──
 // 1.2 §会话头 开始时间: the tip gives the full moment
 export const startTip = (stamp) => `First step at ${stamp}`
-// the desk's untitled head carries no start time beside 「Untitled」 (the start time has its own word), so its tip does not explain one
+// the desk's untitled head: 「No prompt captured」 says why, and its tip says it in full (the start time has its own word)
 export const TITLE_UNTITLED_NEXT_TIP = 'The captured requests of this session hold no prompt on the main thread'
 // 1.3 §提问刻度: the prompts row's name — K and P known · only P · only K · neither
 export const askRowName = (k, p) => (k != null && p != null ? `Prompt ${k} / ${p}` : p != null ? count(p, 'prompt') : k != null ? `Prompt ${k}` : 'Prompts')

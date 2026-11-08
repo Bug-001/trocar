@@ -12,7 +12,6 @@ import { reasonsWith } from '../../../../test/web-v2/visible.mjs'
 import * as W from '../../../legacy/labels/replay.mjs'
 import { DeskHead } from './DeskHead'
 import { reactView } from './view'
-import * as W from '../../../legacy/labels/replay.mjs'
 
 afterEach(() => { cleanup(); document.body.replaceChildren() })
 

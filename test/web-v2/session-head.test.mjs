@@ -199,3 +199,12 @@ test('1.2 #7 · model: the declared parent and fork, each its own line linked by
   for (const src of ['other', 'toString', 'constructor']) assert.deepEqual(rowsOf({ lineage_source: src, parent_session_id: 'P-1' }), [], `${src}: not in the closed set, nothing`)
 })
 
+
+// 1.2 §读取状态: catching up counts pending.calls; an answer without calls falls back to total − done
+test('1.2 §读取状态: catching up counts pending.calls, and total − done when the answer has none', () => {
+  for (const [pending, n] of [[{ done: 1, total: 9, seen: true, calls: 3 }, 3], [{ done: 1, total: 9 }, 8]]) {
+    const s = headState([{ kind: 'main', rows: mainRows() }])
+    s.desk.pending = pending; s.desk.firstPending = false
+    assert.deepEqual([sessionHeadModel(s).read.state, sessionHeadModel(s).read.n], ['catching-up', n], JSON.stringify(pending))
+  }
+})
