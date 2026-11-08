@@ -49,26 +49,64 @@ export function headSha(dir) {
 /** `<version>+<first 7 of a commit>`, the one place that format is composed: `null` / no sha is the plain version. */
 export const codeIdOf = (version, sha) => (sha ? `${version}+${String(sha).slice(0, 7)}` : version)
 
-// The code itself, outside a git checkout: sha256 over bin/ and src/ — each file's path from `root` and its bytes, in path order. null when there
-// is none to read. Asked once per root and process (a CLI's commands and a daemon's start ask it again).
-const hashes = new Map()
-function codeHash(root) {
-  if (hashes.has(root)) return hashes.get(root)
+// The code itself, outside a git checkout: sha256 over the code files under bin/ and src/ — each file's path from `root` and its bytes, in path
+// order. Only code (CODE_FILE): what a build or the OS writes beside it (the Linux helper's objects and binary, .DS_Store, an editor's swap file)
+// never changes it. null when there is none to read. Asked once per root and process.
+const CODE_FILE = /^[^.].*\.(mjs|cjs|js|json|tmpl|ps1|sh|cs)$/
+const byName = (a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
+// the walk once, as the reads it needs: `yield ['dir', p]` → its entries (null when unreadable), `yield ['file', p]` → its bytes
+function* hashSteps(root) {
   const h = crypto.createHash('sha256')
   let n = 0
-  const walk = (rel) => {
-    let ents
-    try { ents = fs.readdirSync(path.join(root, rel), { withFileTypes: true }) } catch { return }
-    for (const e of ents.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
+  function* walk(rel) {
+    const ents = yield ['dir', path.join(root, rel)]
+    for (const e of (ents || []).sort(byName)) {
       const r = `${rel}/${e.name}`
-      if (e.isDirectory()) walk(r)
-      else if (e.isFile()) { h.update(`${r}\0`); h.update(fs.readFileSync(path.join(root, r))); h.update('\0'); n++ }
+      if (e.isDirectory() && !e.name.startsWith('.')) yield* walk(r)
+      else if (e.isFile() && CODE_FILE.test(e.name)) { h.update(`${r}\0`); h.update(yield ['file', path.join(root, r)]); h.update('\0'); n++ }
     }
   }
+  yield* walk('bin'); yield* walk('src')
+  return n ? h.digest('hex') : null
+}
+const DIR = { withFileTypes: true }
+const hashes = new Map()
+/** At once, for a CLI that compares it (status, doctor, install, update, --version). */
+function codeHash(root) {
+  if (hashes.has(root)) return hashes.get(root)
   let out = null
-  try { walk('bin'); walk('src'); out = n ? h.digest('hex') : null } catch { out = null }
+  try {
+    const g = hashSteps(root)
+    for (let step = g.next(); ; ) {
+      if (step.done) { out = step.value; break }
+      const [kind, p] = step.value
+      let v = null
+      if (kind === 'dir') { try { v = fs.readdirSync(p, DIR) } catch { v = null } } else v = fs.readFileSync(p)
+      step = g.next(v)
+    }
+  } catch { out = null }
   hashes.set(root, out)
   return out
+}
+/** Without holding the event loop, for a daemon that asks it as it starts (D62①): the same id codeId gives. */
+export async function codeIdAsync(root = packageRoot()) {
+  const version = JSON.parse(read(path.join(root, 'package.json')) || '{}').version || '0.0.0'
+  const dir = gitDir(root)
+  const sha = dir && headSha(dir)
+  if (sha || hashes.has(root)) return codeIdOf(version, sha || hashes.get(root))
+  let out = null
+  try {
+    const g = hashSteps(root)
+    for (let step = g.next(); ; ) {
+      if (step.done) { out = step.value; break }
+      const [kind, p] = step.value
+      let v = null
+      if (kind === 'dir') { try { v = await fs.promises.readdir(p, DIR) } catch { v = null } } else v = await fs.promises.readFile(p)
+      step = g.next(v)
+    }
+  } catch { out = null }
+  hashes.set(root, out)
+  return codeIdOf(version, out)
 }
 
 /** This code's version: `0.1.0+1a2b3c4` — HEAD in a git checkout, a hash of the code outside one; `0.1.0` when neither reads. */

@@ -35,6 +35,13 @@ test('outside a git checkout the code id is the version and 7 hex of the code: t
     assert.notEqual(c, a, `${why}: another id`)
   }
   assert.equal(codeId(tree({})), '1.2.3', 'no code to hash: the plain version, never a guess')
+  // what a build or the OS writes beside the code is not code: the Linux helper's objects, header and binary, a .DS_Store, an editor's swap file
+  assert.equal(codeId(tree({ ...CODE, 'src/collector/arch/linux/bpf/redirect.o': 'ELF', 'src/collector/arch/linux/vmlinux.h': '', 'src/collector/arch/linux/trocar-redirector': 'ELF', 'src/.DS_Store': 'x', 'src/off/.a.mjs.swp': 'x' })), a, 'a build beside the code: the same id')
+})
+
+test('the daemon\'s way, without holding the event loop, gives the same id', async () => {
+  const { codeIdAsync } = await import('../../src/version.mjs')
+  for (const files of [CODE, {}]) { const root = tree(files), r2 = tree(files); assert.equal(await codeIdAsync(root), codeId(r2)) }
 })
 
 test('in a git checkout the code id is the version and HEAD\'s first 7, as before', () => {
@@ -69,4 +76,12 @@ test('doctor: a collector on other code is a problem, daemon-other-code, fixed b
   assert.ok(f && f.class === 'problem', JSON.stringify(f))
   assert.ok(f.commands.some((c) => c.run === 'trocar install'))
   assert.equal((await run(codeId())).some((x) => x.code === 'daemon-other-code'), false)
+})
+
+// D62①: `on`'s path is measured (Linux p95 466 ms) and the hash costs tens of ms. `on`'s own modules never name codeId — the hash is computed only
+// where a code id is compared or said (status, doctor, install, update, --version) — and the daemon asks its own lazily, after it listens
+test('D62①: on\'s modules never name codeId; the daemon asks its code only where it says it', () => {
+  const src = (rel) => fs.readFileSync(new URL(`../../src/${rel}`, import.meta.url), 'utf8')
+  for (const rel of ['cli/on.mjs', 'cli/on-model.mjs', 'collector/model-on.mjs']) assert.ok(!/\bcodeId\b/.test(src(rel)), `${rel} names codeId`)
+  assert.ok(!/\bcodeId\(/.test(src('collector/daemon.mjs')), 'the daemon never hashes at once: it reads its code without holding the event loop')
 })

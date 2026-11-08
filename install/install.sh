@@ -285,7 +285,7 @@ main() {
   got=$("$ndir/bin/node" --version </dev/null 2>"$STAGE/err") || got=
   [ "$got" = "v$nver" ] || die "This Node build does not run here: $(head -c 300 "$STAGE/err" 2>/dev/null)"
   got=$("$ndir/bin/node" "$pkgdir/bin/trocar.mjs" --version </dev/null 2>"$STAGE/err") || got=
-  [ "$got" = "trocar $v" ] || die "trocar $v does not start on Node $nver: $got $(head -c 300 "$STAGE/err" 2>/dev/null)"
+  case "$got" in "trocar $v" | "trocar $v+"*) ;; *) die "trocar $v does not start on Node $nver: $got $(head -c 300 "$STAGE/err" 2>/dev/null)" ;; esac # the version, then what code it is
 
   if [ ! -x "$APP/node/$nid/bin/node" ]; then mv "$STAGE/node" "$APP/node/$nid" || die "Cannot place Node in $APP/node."; fi
   if [ ! -f "$APP/$v/bin/trocar.mjs" ]; then mv "$STAGE/$v" "$APP/$v" || die "Cannot place trocar in $APP."; fi

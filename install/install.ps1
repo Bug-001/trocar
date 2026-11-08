@@ -93,7 +93,7 @@ function Place([string]$from, [string]$to) { # Move-Item, retried while Defender
 function Gate([string]$exe, [string[]]$a, [string]$want, [string]$what) {
   $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
   try { $got = (& $exe @a 2>&1 | Out-String).Trim() } catch { Fail "Windows blocked this program in your profile: $($_.Exception.Message)" } finally { $ErrorActionPreference = $eap }
-  if ($got -ne $want) { Fail "$what does not run here: $got" }
+  if ($got -ne $want -and -not $got.StartsWith("$want+")) { Fail "$what does not run here: $got" } # trocar says the version, then which code it is
 }
 
 function Handoff([string]$root, [string]$verb) { # `trocar install` / `update` on a terminal, else the command to run
