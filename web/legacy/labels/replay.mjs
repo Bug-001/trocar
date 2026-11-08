@@ -13,7 +13,7 @@ import { L } from '../core/labels.mjs'
 export const LANE_KIND = Object.freeze({
   main: { word: 'main thread', row: 'saw', bucket: 'main', hint: 'The exchange between the agent and the model itself; the horizontal axis follows its steps' },
   subagent: { word: 'sub-agent', row: 'sub', bucket: 'sub', hint: 'A separate thread the main agent opened, with its own context' },
-  monitor: { word: 'safety review', row: 'bg', bucket: 'bg', hint: 'The agent asks the model to review an action; it reads the full context. Hover to see the step it most likely reviewed (inferred)' },
+  monitor: { word: 'safety review', row: 'bg', bucket: 'bg', hint: 'The agent asks the model to review an action; it reads the full context. Hover to see the step it most likely reviewed (inferred). The agent decides with its own thresholds, which aren\'t in the traffic' },
   notify: { word: 'notification summary', row: 'bg', bucket: 'bg', hint: 'The agent asks the model to sum up recent activity in a one-line notification' },
   titlegen: { word: 'title generation', row: 'bg', bucket: 'bg', hint: 'The agent asks the model to give the session a title' },
   quota: { word: 'keep-alive check', row: 'bg', bucket: 'bg', hint: 'A check call with a tiny reply limit; the reply is not used' },

@@ -39,6 +39,20 @@ const SPAWN_OPS = new Set(['Agent', 'Task'])
 const sysText = (r) => (r.request?.system || []).map((b) => b.text || '').join('\n')
 const isSub = (sys) => /cc_is_subagent=true/.test(sys)
 const isMonitor = (sys) => /you are a security monitor/i.test(sys)
+// What a monitor's reply says, read the way the agent's own parsers read it (4.4): a reply that gives a <severity> is a score, once,
+// after a closed <thinking> (one left open = no answer), from a reply that ended or hit its stop sequence; above the boundary its
+// prompt states = it blocks. Otherwise <block>yes|no outside <thinking> (a cut-off one to the end), yes and no both = no answer.
+// true = it blocks, false = it allows, null = it says neither.
+const SEVERITY_BOUNDARY = 50 // the monitor's prompt: "50 is exactly the allow/block boundary"; the agent's own thresholds are its config
+const monitorFlag = (text, stop) => {
+  const closed = text.replace(/<thinking>[\s\S]*?<\/thinking>/g, '')
+  if (/<severity>/.test(closed)) {
+    const n = [...closed.matchAll(/<severity>\s*(\d+(?:\.\d+)?)\s*(<\/severity>)?/g)]
+    return closed.includes('<thinking>') || n.length !== 1 || !['end_turn', 'stop_sequence'].includes(stop) ? null : Number(n[0][1]) > SEVERITY_BOUNDARY
+  }
+  const said = new Set([...closed.replace(/<thinking>[\s\S]*$/, '').matchAll(/<block>(yes|no)\b/gi)].map((m) => m[1].toLowerCase()))
+  return said.size === 1 ? said.has('yes') : null
+}
 const userTextOf = (r) => (r.request?.messages || [])
   .map((m) => Array.isArray(m.content) ? m.content.map((b) => (b.type === 'text' ? b.text || '' : '')).join('') : String(m.content || ''))
   .join(' ')
@@ -398,6 +412,7 @@ export function callFacts(r) {
       tools: (nr.tools || []).map((c) => defined({ id: c.id, name: c.name, input: c.input })),
       summarize: /^\s*<analysis>/.test(text),
       verdict: monitor ? text.replace(/<\/?block>/g, '').trim() : undefined,
+      flagged: monitor ? monitorFlag(text, nr.stop_reason) : undefined,
       seen: seenRuns(text),
     }),
   })
@@ -666,7 +681,7 @@ export function createAnalyzer({ keep = true, from = null } = {}) {
       if (step.error) { E.push({ type: 'error', step: step.at, streamId: s.id, msg: step.errMsg }); return }
       if (s.kind === 'monitor') {
         const v = reply.verdict
-        step.flagged = !/^no\b/i.test(v)
+        step.flagged = reply.flagged
         step.verdict = v
         E.push({ type: 'monitor', step: step.at, streamId: s.id, verdict: v, flagged: step.flagged })
       } else {
