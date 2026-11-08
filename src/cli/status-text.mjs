@@ -182,7 +182,7 @@ const reasonOf = (reason) => squashed(String(reason || '').replace(COMMAND, comm
 const failureLine = (g0) => { const g = { ...g0, reason: reasonOf(g0.reason) }; const r = failureWord(g.where, g.code, g.harness || '') && g.reason; const s = r ? `${failureBrief(g)}: ${r}` : failureBrief(g, { max: Infinity }); return g.harness ? `${g.harness}: ${s}` : s } // no nested brackets (§1.1②): a reason has its own
 
 /** The window `failures` covers, said as it is (1.6 C.3 `since`): the last 24 hours, or since this install when it began inside them. */
-const windowWords = (fl, now) => (Date.parse(fl.since) > now - 24 * 3600e3 + 60e3 ? `since this install (${ago(fl.since, now)})` : 'in the last 24 hours') // a minute's slack: the document is read a moment before it is printed
+export const windowWords = (fl, now) => (Date.parse(fl.since) > now - 24 * 3600e3 + 60e3 ? `since this install (${ago(fl.since, now)})` : 'in the last 24 hours') // a minute's slack: the document is read a moment before it is printed
 /** The whole wall of the last 24 hours: one line per `level:'problem'` group of the document's `failures` (C.3, the board's capture log reads the same
  *  groups and words), then the `Expected` section (what is not a problem by design). */
 export function failuresBlock(failures, health, { now = Date.now() } = {}) {
