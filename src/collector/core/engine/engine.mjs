@@ -49,7 +49,7 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
   const defaultConnect = (dst) => net.connect(dst.port, dst.address)
   // A capture failure is never silent (D38, 4.6 §记录): one shaped record {event:'failure', where:'engine', code,
   // reason, …} the moment it happens, handed to onFailure — the daemon's failure recorder, which writes it to flows/
-  // with its own descriptor, folded per where + code (core/events.mjs). The WebSocket recorder's go the same way
+  // with its own descriptor, folded per where + code + harness (core/events.mjs). The WebSocket recorder's go the same way
   // (where:'ws'). No sink wired is a wiring fault, reported through onError (stderr) instead of being dropped.
   function failure(rec) {
     const r = { event: 'failure', where: 'engine', ...rec }
