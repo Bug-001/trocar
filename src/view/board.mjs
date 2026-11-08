@@ -35,6 +35,9 @@ function sessionDoc(base) {
     probes: base.probes || 0,
     other: base.other || 0,
     has_subagent: !!base.has_subagent,
+    // declared lineage (3.4 §血缘, src/query/titles.mjs): the id keys exist only when the first call was read; not known is never "none"
+    lineage_source: base.lineage_source ?? 'unread',
+    ...(base.lineage_source === 'wire' ? { parent_session_id: base.parent_session_id ?? null, fork_of_session_id: base.fork_of_session_id ?? null } : null),
     last_ts: base.last_ts || '',
   };
 }

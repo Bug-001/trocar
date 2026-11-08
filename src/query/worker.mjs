@@ -55,7 +55,7 @@ import { indexRows, sessionGroups } from './rows.mjs'
 import { dirUse, gcProjections, posCmp, projectionStale, sessionDir } from './projection.mjs'
 import { foldStale } from './fold-log.mjs'
 import { hasHead, hasReread, headFile, readHead, skipFile, tier0Doc, writeHead, writeSkip } from './ctx-files.mjs'
-import { saveTitles, titleOf } from './titles.mjs'
+import { lineageFields, lineageKnown, saveTitles, titleOf, withLineage } from './titles.mjs'
 
 const home = process.argv[2]
 // The board's control verbs (`{control, body}`, 4.4 §控制面) run the CLI's own functions, which take `deps` for what they ask of the machine.
@@ -253,7 +253,11 @@ async function background() {
             // a head under the name its pending does not say (one written before the names did) is put under the right one: the daemon
             // tells a folding head by its name only, so a misnamed one would never be followed (3.5 §谁执行它「答案文件」)
             const misnamed = d && d.pending && !d.pending.stopped && nodeFs.existsSync(headFile(home, id))
-            const head = d && d.tier === 0 && (d.meta.title !== said.title || (d.meta.title_source ?? null) !== (said.title_source ?? null) || (d.meta.project_path ?? null) !== said.project_path) ? { ...tier0Doc(id, ms, index.errors, said), pending: d.pending } // a stop stays the session's record (D38)
+            // the table is lineage's one home: a head that differs is brought to it, of any tier, only when the table holds a verdict
+            // (`unread` included: a call with a hidden body landed first); lineage not computed moves no head
+            const known = lineageKnown({ home, fs: nodeFs, id }), behind = !!d?.meta && known && JSON.stringify(lineageFields(d.meta)) !== JSON.stringify(lineageFields(said))
+            const head = d && d.tier === 0 && (d.meta.title !== said.title || (d.meta.title_source ?? null) !== (said.title_source ?? null) || (d.meta.project_path ?? null) !== said.project_path || behind) ? { ...tier0Doc(id, ms, index.errors, known ? said : { ...said, ...lineageFields(d.meta) }), pending: d.pending } // a stop stays the session's record (D38)
+              : behind ? { ...d, meta: withLineage(d.meta, said) } // nothing else moves
               : misnamed ? d : hasHead(home, id) ? null : tier0Doc(id, ms, index.errors, said)
             if (head && writeHead(home, id, head)) wrote++
           }
