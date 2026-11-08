@@ -155,7 +155,7 @@ test('D38: a PATH item record that cannot be read is said, never taken as no PAT
   assert.equal(await runInstallCli(['--yes'], s.ctx(fakeIo(), false)), 0)
   // the flows result counts every left row the receipt has: a shared one apart from one left undone (one document never contradicts itself)
   const counted = (io) => { const r = JSON.parse(io.text()), c = flowEvents(path.join(s.home, '.trocar', 'collector')).filter((e) => e.kind === 'result').at(-1).counts
-    return [c.left, c.shared, r.left.filter((l) => !l.shared).length, r.left.filter((l) => l.shared).length] }
+    return [c.left, c.shared ?? 0, r.left.filter((l) => !l.shared).length, r.left.filter((l) => l.shared).length] }
   const first = fakeIo()
   assert.equal(await runUninstallCli(['--yes', '--json'], s.ctx(first)), 0)
   assert.deepEqual(counted(first), [0, 1, 0, 1])
