@@ -285,8 +285,9 @@ test('an answer that cannot be written ends that session\'s turn: reread stays, 
   aged(home, broken, 60); aged(home, next, 3600)
   fs.rmSync(tail)
   fs.mkdirSync(path.join(tail, 'in-the-way'), { recursive: true })
-  // what the two folds have written: the worker's reports would go on through a loop on the failed write, this stops
-  const folded = () => [broken, next].flatMap((id) => { const d = sessionDir(home, id); return fs.readdirSync(d).filter((n) => /^(extract|fold)\./.test(n)).map((n) => fs.statSync(path.join(d, n)).size) }).reduce((a, b) => a + b, 0)
+  // what the two folds have written: the worker's reports would go on through a loop on the failed write, this stops. A file gone
+  // between the listing and its stat (a `.tmp` the worker renamed to its final name) counts 0: it is counted under that name next
+  const folded = () => [broken, next].flatMap((id) => { const d = sessionDir(home, id); return fs.readdirSync(d).filter((n) => /^(extract|fold)\./.test(n)).map((n) => { try { return fs.statSync(path.join(d, n)).size } catch { return 0 } }) }).reduce((a, b) => a + b, 0)
   const { r, svc } = serviceOf(home)
   try {
     svc.sweep()
