@@ -145,11 +145,13 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
     if (FILE_ENTRY_KINDS.includes(e.kind)) return undoEntry(e, { fs })
     if (e.kind === 'run-key') {
       const r = undoRunKey({ prior: e.prior ?? null, run: exec, env })
-      return { path: `${e.hive ?? 'HKCU'}\\${e.key ?? ''}\\${e.name ?? ''}`, harness: e.harness, result: r.ok ? (r.result === 'absent' ? 'already-restored' : 'restored') : 'error', ...(r.result === 'left' ? { result: 'left-user-value' } : {}), ...(r.ok ? {} : { reason: r.reason }) }
+      // what the receipt row says it lost: a registry value is no file of lines (a Windows test machine: "trocar's lines removed" over a value set back)
+      const change = r.result === 'restored' ? 'set back to the value that was there before' : 'removed'
+      return { path: `${e.hive ?? 'HKCU'}\\${e.key ?? ''}\\${e.name ?? ''}`, harness: e.harness, change, gone: r.result === 'removed', result: r.ok ? (r.result === 'absent' ? 'already-restored' : 'restored') : 'error', ...(r.result === 'left' ? { result: 'left-user-value' } : {}), ...(r.ok ? {} : { reason: r.reason }) }
     }
     if (e.kind === 'scheduled-task') {
       const r = undoScheduledTask({ uninstall: dropCa, prior: e.prior ?? null, run: exec, env })
-      return { path: e.path ?? '\\trocar\\collector', harness: e.harness, result: r.ok ? (r.task === 'absent' ? 'already-restored' : 'restored') : 'error', ...(r.ok ? {} : { reason: [r.reason, r.runKeyReason].filter(Boolean).join('; ') }) }
+      return { path: e.path ?? '\\trocar\\collector', harness: e.harness, change: r.task === 'deleted' ? 'the task deleted' : 'the task switched off', gone: r.task === 'deleted', result: r.ok ? (r.task === 'absent' ? 'already-restored' : 'restored') : 'error', ...(r.ok ? {} : { reason: [r.reason, r.runKeyReason].filter(Boolean).join('; ') }) }
     }
     if (e.kind === 'forwarder-binary') { // uninstall only (the entries filter keeps it out of an `off`)
       const file = e.path || e.real_path
@@ -180,7 +182,8 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
   const kept = [...manifest.entries, ...manifest.files].filter((x) => spared(x) && (x.harness == null ? ids == null : inScope(x.harness))).map(keyWhere)
   out.install_items = [...new Set(kept)] // what install wrote, for `--json` (附录 C.2): §3.4's sample receipt names no count of it, so the human text says nothing here
 
-  const entries = [...manifest.entries].reverse().filter((e) => inScope(e.harness) && !spared(e) && (FILE_ENTRY_KINDS.includes(e.kind) || e.kind === 'run-key' || e.kind === 'scheduled-task' || (e.kind === 'forwarder-binary' && dropCa)))
+  // install's Run-value fallback (4.8 §7) belongs to no harness: a whole-machine run takes it
+  const entries = [...manifest.entries].reverse().filter((e) => (inScope(e.harness) || (e.harness == null && ids == null && e.kind === 'run-key')) && !spared(e) && (FILE_ENTRY_KINDS.includes(e.kind) || e.kind === 'run-key' || e.kind === 'scheduled-task' || (e.kind === 'forwarder-binary' && dropCa)))
   const config = (e) => !((e.kind === 'text' || e.kind === 'trust-entry') && e.format !== 'dotenv-block') // step 1; the rest are step 4's (json-key and proxy-entry are config, a text/trust block is config only as dotenv)
   const originals = entries.filter(config) // step 1's, as they are now: undoing takes them out of the manifest, and a bundle is judged after that
   for (const e of entries) if (config(e)) undoOne(e)
