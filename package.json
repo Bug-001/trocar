@@ -1,6 +1,6 @@
 {
   "name": "trocar-cli",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "description": "Records every byte an AI agent app sends to and receives from its LLM, and replays each step on a local board.",
   "keywords": [
