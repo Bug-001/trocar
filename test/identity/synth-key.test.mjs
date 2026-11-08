@@ -888,7 +888,7 @@ test('gemini: contents and systemInstruction anchor the chain; two unrelated con
   const f = synthFactsOf(a1)
   assert.equal(f.hash, createHash('sha256').update('You are pi.', 'utf8').digest('hex'), 'the system text is systemInstruction')
   assert.ok(f.chain.length > 0, 'the history is contents')
-  const { keyOf } = createSynthKeys()
+  const keyOf = keysOf()
   const [ka1, kb1, ka2] = [a1, b1, a2].map(keyOf)
   assert.notEqual(kb1, ka1, 'an unrelated conversation is another session')
   assert.equal(ka2, ka1, 'a conversation that extends stays one session')
