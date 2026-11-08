@@ -203,13 +203,13 @@ test('P13 uninstall: a wrapper the agent updated over is left in place and only 
   const m = readManifest(s.b.dir)
   const bin = write(s.b, 'bin/aa', '#!/bin/dash\nexec real\n'), real = write(s.b, 'bin/.trocar-real/aa', 'OLD PROGRAM')
   m.files.push({ phase: 'install', kind: 'owned-file', role: 'wrapper', harness: 'aa', path: bin, real, sha256: sha(bin), real_sha256: sha(real) })
-  m.entries.push({ phase: 'install', kind: 'root-key', harness: null, path: 'file:/k', custody: { kind: 'file', id: '/k' }, fp256: 'AB' })
+  m.entries.push({ phase: 'install', kind: 'root-key', harness: null, path: 'keychain:trocar-root', custody: { kind: 'keychain', id: 'trocar-root' }, fp256: 'AB' })
   fs.writeFileSync(bin, 'NEW PROGRAM') // the agent's update replaced it by name
   const r = await s.run({ manifest: m, dropCa: true })
   assert.deepEqual([fs.readFileSync(bin, 'utf8'), fs.existsSync(real), r.removed.includes(real), r.left], ['NEW PROGRAM', false, true, []])
   const k = await undoRootKeys({ dir: s.b.dir, manifest: readManifest(s.b.dir) })
-  assert.deepEqual(k.left.map((l) => [l.path, l.result]), [['file:/k', 'error']])
-  assert.match(k.left[0].reason, /no custody backend.*by hand: rm \/k/)
+  assert.deepEqual(k.left.map((l) => [l.path, l.result]), [['keychain:trocar-root', 'error']])
+  assert.match(k.left[0].reason, /no custody backend.*by hand: open Keychain Access/)
 })
 
 test('P13 liveness.<h> may carry on_at / off_at or not: the judgement is the same and the fields are kept', async () => {

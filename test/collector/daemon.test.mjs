@@ -138,6 +138,10 @@ test('daemon: CC trusted through the installed settings key is decrypted and rec
     await clients[0].raw({ op: '__inject_port', port: raw.localPort, family: 4, dst: { address: '127.0.0.1', port: up.port, family: 4 }, pid: 4242, decrypt: 1 })
     const extraCc = fs.readFileSync(path.join(s.collector, 'ca', 'extra-cc.pem'), 'utf8') // what CC now trusts: relay CA + trocar CA
     const c = tls.connect({ socket: raw, servername: 'relay.asight.test', ca: extraCc }); await once(c, 'secureConnect')
+    // Linux has no custody: the daemon reads the CA install minted (readCa) and the leaf it serves is signed by that root itself
+    const trocarRoot = new crypto.X509Certificate(fs.readFileSync(path.join(s.collector, 'ca', 'trocar-ca.pem')))
+    const leaf = c.getPeerX509Certificate()
+    assert.ok(leaf.checkHost('relay.asight.test') && leaf.checkIssued(trocarRoot) && leaf.verify(trocarRoot.publicKey), 'the leaf for the host chains to the installed trocar root')
     const sid = '6a1b7c2d-0000-4000-8000-000000000001'
     const post = (text) => {
       const body = JSON.stringify({ model: 'claude-x', max_tokens: 16, system: [{ type: 'text', text: 'You are a test.' }], messages: [{ role: 'user', content: [{ type: 'text', text }] }] })
