@@ -10,8 +10,8 @@ import * as W from '../labels/replay.mjs'
 const modelOf = (c) => (c && c.rec && c.rec.request && c.rec.request.model) || null
 
 // ── the cost cell (D14 — a LOCAL estimate, never a wire fact) ───────────────────────────────────────────────
-// the state of the price table itself, when there is no table to look a price up in: a failed read names its reason; an
-// unanswered one says nothing (no "loading" word anywhere, 2.3:173). Empty when the table is there.
+// the state of the price table itself, when there is no table to look a price up in: a failed read names its reason. Empty when the
+// table is there or not answered yet (the callers that say "loading" use PRICES_LOADING).
 export const priceStateNote = (table, err) => (table || !err ? '' : `The price table could not be read: ${err}`)
 // one cost: usage missing → 「—」 · no table (unreadable / not yet loaded) → 「—」 + why · no price row → 「没有这个模型的单价」 ·
 // else dollars, ≈-marked by the caller (unknown is never $0)

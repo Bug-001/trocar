@@ -12,6 +12,7 @@ import { isBreak, isFailed, breakCost, hitRatio, refOf } from '../../web/legacy/
 import { FLAG } from '../../src/view/head-cols.mjs'
 import { L } from '../../web/legacy/core/labels.mjs'
 import * as W from '../../web/legacy/labels/replay.mjs'
+import { priceStateNote } from '../../web/legacy/replay/stepbar.mjs'
 
 const U = (read, create, fresh, out = 10) => ({ read, create, fresh, out })
 const PRICES = { m: [3, 15, 3.75, 0.3] }
@@ -186,6 +187,11 @@ test('1.3 #14 · cost view: ≈ on the peak and hovers; no price or no usage is 
     if (!b.hatched) assert.ok(b.h > 0 && b.tip.includes('≈'))
     assert.doesNotMatch(b.tip, /\$0(?![.\d])/)
   })
+  // no table yet, or an unreadable one: a hatched bar gives the table's reason, never "no unit price"
+  for (const [extra, why] of [[{ pricing: null }, W.PRICES_LOADING], [{ pricing: null, pricingErr: 'E-read' }, priceStateNote(null, 'E-read')]]) {
+    const n = scopeModel(stateOf(deskOf([{ kind: 'main', rows }]), { sawView: 'cost', ...extra }), 60)
+    rows.forEach((r, i) => { if (!r.error && r.usage) assert.ok(n.bars[i].hatched && n.bars[i].tip.includes(why) && !n.bars[i].tip.includes(W.COST_WHY['no-price']), `step ${i}`) })
+  }
   s.sawView = 'ctx'
   const c = scopeModel(s, 60), pk = s.anchor.peakCtx
   rows.forEach((r, i) => { if (!r.error && r.ctx / pk >= 3 / 72) assert.equal(c.bars[i].h, Math.min(1, r.ctx / pk)) })

@@ -18,6 +18,8 @@ import { FLAG, cellsOf } from '../../../../src/view/head-cols.mjs'
 import { ENTRY, ENTRY_TIP } from '../../../legacy/labels/library.mjs'
 import { stepCount, partsOf, stepAt, placeSpan } from './strip-layout.mjs'
 import * as W from '../../../legacy/labels/replay.mjs'
+// no price table yet, or an unreadable one: the one reason an unpriced number gives (2.2 §「≈ $」按钮), never "no unit price"
+const tableWhy = (s) => (s.pricingErr ? priceStateNote(null, s.pricingErr) : W.PRICES_LOADING)
 
 const has = (o, k) => o != null && Object.prototype.hasOwnProperty.call(o, k)
 const modelOf = (c) => (c && c.rec && c.rec.request && c.rec.request.model) || null
@@ -143,10 +145,12 @@ function infoRows(s) {
   const t = totalsOf(s), rows = []
   const c = t.cost.total
   if (c.priced || c.unpriced || c.failed) {
-    const some = c.priced > 0
-    rows.push({ key: 'cost', approx: true, usd: some ? c.usd : null, text: `${W.COST_LINE} ${some ? usd(c.usd) : '—'}${c.unpriced ? ` ${W.COST_FROM}` : ''}`,
+    const some = c.priced > 0, table = !!s.pricing
+    // no table yet (or an unreadable one): nothing is priced, and the one reason is the table's, never "no unit price" (1.2 §信息弹出层 row 1)
+    const notes = !table ? [tableWhy(s)] : [c.unpriced ? W.noPriceCalls(c.unpriced) : null, some ? null : W.NO_ANY_PRICE].filter(Boolean)
+    rows.push({ key: 'cost', approx: true, usd: some ? c.usd : null, text: `${W.COST_LINE} ${some ? usd(c.usd) : '—'}${some && c.unpriced ? ` ${W.COST_FROM}` : ''}`,
       buckets: ['main', 'sub', 'bg'].map((k) => ({ key: k, word: W.BUCKETS[k], usd: t.cost[k] && t.cost[k].priced ? t.cost[k].usd : null })),
-      notes: [c.unpriced ? W.noPriceCalls(c.unpriced) : null, some ? null : W.NO_ANY_PRICE].filter(Boolean), prices: { text: W.SEE_PRICES, href: '#/settings/prices' } })
+      notes, prices: { text: W.SEE_PRICES, href: '#/settings/prices' } })
   }
   const main = lanes.find((l) => l.kind === 'main')
   if (t.hitSteps) {
@@ -224,7 +228,8 @@ function cacheRows(s, call, ref, model) {
   }
   if (st.isBreak) {
     const bc = breakCost(call, ref, s.pricing ? priceMatch(s.pricing, model) : null)
-    rows.push({ key: 'extra', approx: true, usd: bc.usd, text: bc.usd != null ? `${W.BREAK_COST_LINE} ${usd(bc.usd)}` : (W.BREAK_COST_WHY[bc.why] || W.BREAK_COST_WHY['no-ref']) })
+    const why = bc.why === 'no-price' && !s.pricing ? `${W.BREAK_COST_WHY['no-ref']}: ${tableWhy(s)}` : W.BREAK_COST_WHY[bc.why] || W.BREAK_COST_WHY['no-ref']
+    rows.push({ key: 'extra', approx: true, usd: bc.usd, text: bc.usd != null ? `${W.BREAK_COST_LINE} ${usd(bc.usd)}` : why })
   }
   if (hasChangeLine(call, flatOf(s, call))) rows.push({ key: 'jump', text: W.JUMP_TO_CHANGE })
   if (call.wire && call.wire.cacheSemanticsKnown === false) rows.push({ key: 'unknown', text: W.CACHE_SEMANTICS_UNKNOWN })
@@ -261,7 +266,7 @@ function costRows(s, call, model) {
   const rows = [{ key: 'calibre', text: W.COST_CALIBRE }]
   if (m && m.exact === false) rows.push({ key: 'by-key', text: W.PRICE_BY_KEY(m.key) })
   if (!m) {
-    const why = isFailed(call) ? W.COST_WHY.failed : !u ? W.COST_WHY['no-usage'] : !table ? (s.pricingErr ? priceStateNote(table, s.pricingErr) : W.PRICES_LOADING) : W.COST_WHY['no-price']
+    const why = isFailed(call) ? W.COST_WHY.failed : !u ? W.COST_WHY['no-usage'] : !table ? tableWhy(s) : W.COST_WHY['no-price']
     rows.push({ key: 'why', text: why })
   }
   rows.push({ key: 'prices', text: W.SEE_PRICES, href: '#/settings/prices' })
@@ -311,7 +316,7 @@ export function scopeModel(s, K) {
     if (b.fail) Object.assign(b, { h: FAIL_H, tip: W.barTip(main, g + 1, W.failTip(g + 1, errMsgOf(c))) })
     else if (cost) {
       const x = costs[col]
-      if (x.v == null) Object.assign(b, { hatched: true, tip: W.barTip(main, g + 1, !x.u ? W.CACHE_CELL_NONE_TIP : W.COST_WHY['no-price']) })
+      if (x.v == null) Object.assign(b, { hatched: true, tip: W.barTip(main, g + 1, !x.u ? W.CACHE_CELL_NONE_TIP : !s.pricing ? tableWhy(s) : W.COST_WHY['no-price']) })
       else Object.assign(b, { h: Math.max(MIN_H, x.v / Math.max(1e-9, maxCost)), tip: W.barTip(main, g + 1, W.approxUsd(usd(x.v)) + (x.m.exact ? '' : ` · ${W.PRICE_BY_KEY(x.m.key)}`)) })
     } else {
       b.h = Math.max(MIN_H, Math.min(1, (c.ctx || 0) / pk)); b.segs = compShares(c.comp); b.hatched = !b.segs

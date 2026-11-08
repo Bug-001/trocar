@@ -132,6 +132,13 @@ test('2.2 row 6′ · 缓存 popover: a changed prefix still mostly read says so
   assert.ok(miss.some((r) => r.key === 'extra'), 'a break below LOW_HIT carries its extra cost row')
 })
 
+test('2.2 多花 · no price table yet, or an unreadable one: the extra cost row gives the table\'s reason, never "no unit price"', () => {
+  for (const [extra, why] of [[{}, W.PRICES_LOADING], [{ pricingErr: 'E-read' }, priceStateNote(null, 'E-read')]]) {
+    const r = rowsOf(head([{ usage: U(0, 100, 10) }, { usage: U(0, 100, 10), cacheBreak: { cause: 'content-changed' } }], { at: 1, ...extra }), 'cacheRows').find((x) => x.key === 'extra')
+    assert.equal(r.usd, null); assert.ok(r.text.includes(why) && r.text !== W.BREAK_COST_WHY['no-price'], JSON.stringify(extra))
+  }
+})
+
 test('2.2 #15 · 跳到变化处 only when the cause is outside QUIET_CAUSES (a failed step too) and the step\'s blocks reach the change', () => {
   const blocks = [[blk('system', 'system', 10)], [blk('system', 'system', 10), blk('messages', 'user', 5)]]
   for (const cause of ['append', 'first-call', 'volatile-nonce-only', 'content-changed', 'tool-array-reorder', 'compaction']) {
