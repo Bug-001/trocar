@@ -336,7 +336,10 @@ the same bytes the board opens from.
 steps after that call, `--to <call>` the page that ends just before it. Each step is its block list as changes
 against the step before, with the definitions of the blocks the page brings, the files the lane has seen and
 the resources it holds. When those do not all fit in the 1 MB page beside the steps, the answer's `ledger_next`
-names the rest: `--ledger <ledger_next>` gives the next part, until `ledger_next` is null. `--pack <n>.main` (or
+names the rest: `--ledger <ledger_next>` gives the next part, until `ledger_next` is null. A lane of an agent whose
+records keep no resource information (any OpenAI-style wire) answers `resources` and `seen` as `null` with
+`resources_note: "no-ledger"`, which means not known; an empty list means none were recorded. A lane where only
+some calls keep that information answers what they kept with `resources_note: "partial-ledger"`. `--pack <n>.main` (or
 `.rest`) gives the board's file for the session's n-th settled group of 512 calls (counting from 0), and `--tail main` (or `rest`) the file
 of the part still growing. `trocar query block --ref <ref>` opens one block's verbatim bytes; give `--ref` more than
 once to get several in one answer, in the order asked (a ref that cannot be read says why in `errors`).
