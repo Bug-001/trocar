@@ -131,6 +131,7 @@ const processUid = () => (typeof process.getuid === 'function' ? process.getuid(
 const act = (a) => a !== 'skip-intact' && a !== 'skip-user-changed'
 const shortLine = (l) => String(l).split(' # ')[0].trim()
 const DAEMON_CMD = 'trocar daemon' // 1.6 §2: the autostart unit's ExecStart is this command (units written before the rename run its alias `collector start`)
+const UNREADABLE = 'unreadable' // 附录 C.1: an ERROR_CODES receipt code (src/cli/json.mjs), a refusal's, not a D38 record
 export { AUTOSTART_MISSING } // 附录 C.1: the code of the refusal below (defined in net-deps.mjs with the entry's words; mirrored by src/cli/json.mjs's ERROR_CODES)
 /** D61 / 1.6 §3.3: the login entry is `install`'s and `on` never touches it, so an `on` whose entry is not registered would leave the agents'
  *  rewritten configs pointing at doors that nobody opens after the next login (without it nothing starts after a reboot and no agent can reach a door).
@@ -543,8 +544,10 @@ export async function turnOn(opts = {}) {
     // 附录 C.1: the refusal's code lives in `error`, the one place a client looks (never a top-level `code`)
     if (!isModelOs(osName) && !installComplete(plan._.prior)) { const message = 'certificates are not installed. Run: trocar install'; return { receipt: unwritten({ ...fresh(), ok: false, error: { code: CODE.certNotInstalled, message }, notes: [message] }), manifest: plan._.prior, plan, exit: 1 } }
     const setupBlk = setupBlocked({ refused })
+    // 附录 C.1: the setup refusal's error when there is one; a harness refused only for its own file is that file's error, never "run install"
+    const refusedError = () => (setupBlk.length ? setupError(setupBlk) : { code: UNREADABLE, message: refused.map((x) => `${x.harness}: ${x.why}`).join('; ') })
     if (refused.length && !plan.targets.length) { // nothing left to turn on: a real run still leaves its result line (1.6 §1); a dry run changes nothing
-      const r0 = unwritten({ ...fresh(), ok: !!dryRun, harnesses: [], refused, blocked: setupBlk, skipped: plan.skipped, notes: [...plan.uncaptured, ...setupNotes], ...(dryRun ? { dry_run: true } : { error: setupError(setupBlk) }) })
+      const r0 = unwritten({ ...fresh(), ok: !!dryRun, harnesses: [], refused, blocked: setupBlk, skipped: plan.skipped, notes: [...plan.uncaptured, ...setupNotes], ...(dryRun ? { dry_run: true } : { error: refusedError() }) })
       if (dryRun) return { receipt: r0, manifest: plan._.prior, plan, exit: 0 }
       const put = noteRun({ dir, run, final: { records: plan._.unseen }, written: { entries: [] }, notes: r0.notes, fs, log: opts.log })
       put({ event: EVENT.installNote, where: 'install', kind: 'result', outcome: 'failed', harnesses: [], refused: refused.map((x) => x.harness), reason: `on did not finish: ${r0.error.message}` })
@@ -630,7 +633,7 @@ export async function turnOn(opts = {}) {
     }
     // the result line is the one proxy mode writes (1.6 §1): `harnesses` = the ones this run turned on (the daemon up and the run not halted), `refused` = the
     // ones refused for setup (1.6 §3.3), which make the run not done (exit 1) while the others went on
-    if (refused.length) Object.assign(receipt, { blocked: setupBlk, error: setupError(setupBlk) })
+    if (refused.length) Object.assign(receipt, { blocked: setupBlk, error: refusedError() })
     const finish = (outcome, reason, on = []) => {
       receipt.ok = !problems.length && !named && !refused.length && !plan.foreign.length && !(written && written.userChanged.length) // an entry the user changed is left, and not in effect: not "done"; a carrier left off someone else's file neither
       const counts = { entries: m.entries.length, changed: receipt.changed.length, notes: notes.length + problems.length }
