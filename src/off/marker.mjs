@@ -199,7 +199,7 @@ export function planByMarker({ home, ids = null, fs = nodeFs, env = process.env,
   return plan.sort((a, b) => rank[a.how] - rank[b.how])
 }
 
-// one plan item undone; → { result, ...what happened } (result: undone-by-marker | already-clean | left-unparsable | left-unreadable | error)
+// one plan item undone; → { result, ...what happened } (result: undone-by-marker | already-clean | left-unparsable | left-unreadable (the file, or every backup that could hold a replaced JSON value) | error)
 function undoOne(item, home, fs) {
   const root = trocarHome(home)
   const done = (extra = {}) => ({ result: CODE_OFF.undoneByMarker, ...extra })
@@ -257,16 +257,20 @@ function undoOne(item, home, fs) {
   try { doc = parseJsonText(t) } catch (e) { return { result: 'left-unparsable', reason: unreadableJson(item.path, t, e, `trocar's value under ${at}`) } }
   if (!keys) return { result: 'error', reason: `${item.path} changed while off read it: run off again` } // planned as not parsing, parses now: judged key by key next time
   if (!ours(getPath(doc, keys))) return { result: 'already-clean' }
-  // the newest backup whose value here is not trocar's own (`on` saves the file before each key it writes, so a newer one can hold trocar's first key)
+  // the newest backup whose value here is not trocar's own (`on` saves the file before each key it writes, so a newer one can hold trocar's first key).
+  // A backup that cannot be read (the read fails, its bytes prove no encoding, it is not JSON) is skipped, never taken for "no value": an older one is looked at
   let saved = null, prior = null
+  const unread = []
   for (const b of backupsOf({ home, file: item.path, fs }).reverse()) {
     let v
-    try { const s = readText(readOrNull(fs, b)); v = s.why ? undefined : getPath(parseJsonText(s.text), keys) } catch { /* a backup that is not JSON holds no value */ }
+    try { const s = readText(readOrNull(fs, b)); if (s.why) throw new Error(WHY_TEXT[s.why]); v = getPath(parseJsonText(s.text), keys) } catch (e) { unread.push({ path: b, why: String((e && e.message) || e) }); continue }
     if (typeof v === 'string' && ours(v)) continue
     saved = b
     if (typeof v === 'string') prior = v
     break
   }
+  // no value found while a backup was skipped: the user's value may be in that one, so the key stays as it is and the file is said not undone (D38)
+  if (prior == null && unread.length) return { result: 'left-unreadable', reason: `${item.path}: ${at} was left with trocar's value: trocar could not read ${unread.length === 1 ? 'the backup' : 'the backups'} that may hold the value it replaced: ${unread.map((u) => `${u.path} (${u.why})`).join('; ')}`, backups: unread.map((u) => u.path) }
   put(prior != null ? setKey(t, keys, prior).text : removeKey(t, keys).text)
   return done(prior != null ? { restored_from: saved, value: prior } : { removed: true, ...(saved ? { backup: saved } : {}) })
 }

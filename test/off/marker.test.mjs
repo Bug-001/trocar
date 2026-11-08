@@ -115,6 +115,35 @@ test('a replaced JSON value comes back from the NEWEST backup of that file; a ba
   assert.equal(read(file), broken)
 })
 
+// the axes: how the newest backup cannot be read × what the older ones hold. A backup that cannot be read is skipped, never taken for "no value": the value
+// comes back from an older one; with none found and one skipped, the key stays and the result says which backup could not be read (D38)
+for (const [bad, write] of [['not JSON', (f) => fs.writeFileSync(f, '{ not json')], ['no encoding', (f) => fs.writeFileSync(f, Buffer.from([0xff, 0xfe, 0x41]))], ['unreadable', (f) => { fs.rmSync(f); fs.mkdirSync(f) }]]) {
+  for (const older of ['a value', 'no such key', 'unreadable too', 'none']) {
+    test(`marker undo, the newest backup ${bad}, the older ones: ${older}`, () => {
+      const home = tmpDir('trocar-marker-bk-')
+      const file = path.join(home, '.claude', 'settings.json'); fs.mkdirSync(path.dirname(file), { recursive: true })
+      const ours = path.join(home, '.trocar', 'collector', 'ca', 'trocar-ca.pem')
+      let n = 0
+      const bk = (doc) => writeBackup({ home, file, data: Buffer.from(JSON.stringify(doc)), now: new Date(Date.UTC(2026, 9, 7, 1, 0, ++n)) })
+      if (older === 'a value') bk({ env: { NODE_EXTRA_CA_CERTS: '/corp/older.pem' } })
+      if (older === 'no such key') bk({ env: {} })
+      if (older === 'unreadable too') write(bk({}))
+      const newest = bk({}); write(newest)
+      const text = `{ "env": { "NODE_EXTRA_CA_CERTS": ${JSON.stringify(ours)}, "A": "1" }, "model": "m" }`
+      fs.writeFileSync(file, text)
+      const [r] = undoByMarker([{ harness: 'claude-code', path: file, how: 'json-value', detail: { keys: ['env', 'NODE_EXTRA_CA_CERTS'] } }], { home })
+      if (older === 'a value') {
+        assert.deepEqual([r.result, r.value, r.restored_from], ['undone-by-marker', '/corp/older.pem', backupsOf({ home, file })[0]])
+        assert.equal(read(file), text.replace(JSON.stringify(ours), '"/corp/older.pem"'), 'that one value: every other byte as it was')
+      } else {
+        assert.notEqual(r.result, 'undone-by-marker', 'the user\'s value may be in the backup that could not be read: the key is not removed')
+        assert.equal(read(file), text, 'the file is not touched')
+        assert.ok(r.backups.includes(newest), 'the result names the backup that could not be read')
+      }
+    })
+  }
+}
+
 test('a block whose close line the user deleted still goes (its variables under ~/.trocar with it), a dsh patch file with the user\'s rows keeps them, and the plugin manifest text is the collector\'s own', async () => {
   const home = tmpDir('trocar-marker-block-')
   const root = path.join(home, '.trocar')
