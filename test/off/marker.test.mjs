@@ -22,6 +22,8 @@ import { routeEntry, noProxyNames } from '../../src/collector/core/proxymode/ent
 import { renderHook } from '../../src/collector/harness/templates/index.mjs'
 import { resolveLoc, dirsFor } from '../../src/off/loc.mjs'
 
+// these Linux cases look as `uninstall` does with its record lost: install's certificate carriers too (`off` spares them, tested below)
+const UNINSTALL = { phases: ['install', 'on'], platform: 'linux' }
 const roots = { node: [createCa({ commonName: 'marker root' }).certPem], osText: '' }
 const read = (f) => fs.readFileSync(f, 'utf8')
 
@@ -44,12 +46,12 @@ async function lostManifest() {
 
 test('planByMarker finds, with no manifest, every change of every harness by trocar\'s own marks, and plans the values and blocks before the lines before the plugins', async () => {
   const s = await lostManifest()
-  const plan = planByMarker({ home: s.home })
+  const plan = planByMarker({ home: s.home, ...UNINSTALL })
   const rank = (p) => (p.how === 'owned-file' ? 2 : p.how === 'line' ? 1 : 0)
   assert.deepEqual(plan.map(rank), plan.map(rank).sort(), 'values and blocks, then lines, then owned files')
   assert.deepEqual([...new Set(plan.map((p) => p.harness))].sort(), [...HARNESS_IDS].sort(), 'every harness installed is found')
   assert.deepEqual(plan.find((p) => p.harness === 'hermes').detail, { blocks: 1, commented: 1 }, 'the block, and the line of the user it put out of effect')
-  assert.deepEqual(planByMarker({ home: s.home, ids: ['codex', 'kimi-code'] }).map((p) => [p.harness, p.how]), [['codex', 'block'], ['kimi-code', 'line'], ['kimi-code', 'owned-file']])
+  assert.deepEqual(planByMarker({ home: s.home, ...UNINSTALL, ids: ['codex', 'kimi-code'] }).map((p) => [p.harness, p.how]), [['codex', 'block'], ['kimi-code', 'line'], ['kimi-code', 'owned-file']])
   assert.deepEqual(Object.keys(MARKER_PATHS).sort(), [...HARNESS_IDS].sort(), 'every harness has places to look')
 })
 
@@ -57,7 +59,7 @@ test('undoByMarker takes trocar out of each file and nothing else: blocks and li
   const s = await lostManifest()
   const cc = s.sh.files['claude-code'][0]
   const doc = JSON.parse(read(cc)); doc.theme = 'dark'; fs.writeFileSync(cc, JSON.stringify(doc, null, 2) + '\n') // the user edits the file after install (CC rewrites its settings)
-  const plan = planByMarker({ home: s.home })
+  const plan = planByMarker({ home: s.home, ...UNINSTALL })
   const results = undoByMarker(plan, { home: s.home })
   assert.deepEqual(results.map((r) => r.result), plan.map(() => 'undone-by-marker'), 'the code `off` records and the receipt shows')
   const by = (h, how) => results.find((r) => r.harness === h && r.how === how)
@@ -71,8 +73,8 @@ test('undoByMarker takes trocar out of each file and nothing else: blocks and li
   assert.ok(!fs.existsSync(s.sh.files['deepseek-dsh'][0]), 'the dsh patch file held only trocar\'s row (it was `[]`): dsh does not start on an empty file, so it is removed')
   for (const gone of ['.config/opencode/plugins', '.trocar/collector/bin', '.trocar/collector/plugins']) assert.ok(!fs.existsSync(path.join(s.home, gone)), `${gone} is gone, the directory too`)
   assert.ok(fs.existsSync(path.join(s.home, '.trocar', 'collector', 'ca', 'trocar-ca.pem')), 'the CA is trocar\'s, not an entry: marker undo leaves it for uninstall')
-  assert.deepEqual(planByMarker({ home: s.home }), [], 'nothing of trocar\'s is left to find')
-  assert.deepEqual(undoByMarker(planByMarker({ home: s.home }), { home: s.home }), [], 'and a second run does nothing')
+  assert.deepEqual(planByMarker({ home: s.home, ...UNINSTALL }), [], 'nothing of trocar\'s is left to find')
+  assert.deepEqual(undoByMarker(planByMarker({ home: s.home, ...UNINSTALL }), { home: s.home }), [], 'and a second run does nothing')
 })
 
 test('what is not trocar\'s is not touched: a plugin file of the user\'s, a PATH line without the sentinel comment, a JSON value that does not point under ~/.trocar, a conda block', async () => {
@@ -83,7 +85,7 @@ test('what is not trocar\'s is not touched: a plugin file of the user\'s, a PATH
   const cc = put('.claude/settings.json', JSON.stringify({ env: { NODE_EXTRA_CA_CERTS: '/corp/relay.pem' } }))
   const env = put('.codex/.env', `# >>> something else >>>\nSSL_CERT_FILE=${path.join(home, '.trocar', 'collector', 'ca', 'x.pem')}\n`)
   const before = [plugin, rc, cc, env].map(read)
-  assert.deepEqual(planByMarker({ home }), [])
+  assert.deepEqual(planByMarker({ home, ...UNINSTALL }), [])
   const forged = [{ harness: 'opencode', path: plugin, how: 'owned-file', detail: {} }, { harness: 'kimi-code', path: rc, how: 'line', detail: {} }, { harness: 'claude-code', path: cc, how: 'json-value', detail: { keys: ['env', 'NODE_EXTRA_CA_CERTS'] } }]
   assert.deepEqual(undoByMarker(forged, { home }).map((r) => r.result), ['already-clean', 'already-clean', 'already-clean'], 'a plan is never trusted over the file: the mark is looked for again')
   assert.deepEqual([plugin, rc, cc, env].map(read), before)
@@ -97,18 +99,18 @@ test('a replaced JSON value comes back from the NEWEST backup of that file; a ba
   const bk = (v) => writeBackup({ home, file, data: Buffer.from(JSON.stringify({ env: v === undefined ? {} : { NODE_EXTRA_CA_CERTS: v }, model: 'old' })), now: new Date(Date.UTC(2026, 9, 7, 1, 0, ++n)) })
   bk('/corp/first.pem'); bk('/corp/second.pem')
   fs.writeFileSync(file, `{ "env": { "NODE_EXTRA_CA_CERTS": ${JSON.stringify(ours)} }, "model": "edited by the user" }`)
-  const [r] = undoByMarker(planByMarker({ home }), { home })
+  const [r] = undoByMarker(planByMarker({ home, ...UNINSTALL }), { home })
   assert.deepEqual([r.result, r.value], ['undone-by-marker', '/corp/second.pem'])
   assert.equal(read(file), '{ "env": { "NODE_EXTRA_CA_CERTS": "/corp/second.pem" }, "model": "edited by the user" }', 'a text splice of one value: every other byte of the file as it is')
   // the newest backup has no such key: the key goes
   bk(undefined)
   fs.writeFileSync(file, `{ "env": { "NODE_EXTRA_CA_CERTS": ${JSON.stringify(ours)}, "A": "1" } }`)
-  const [r2] = undoByMarker(planByMarker({ home }), { home })
+  const [r2] = undoByMarker(planByMarker({ home, ...UNINSTALL }), { home })
   assert.deepEqual([r2.result, r2.removed, JSON.parse(read(file))], ['undone-by-marker', true, { env: { A: '1' } }])
   // a file that does not parse: left
   const broken = `{ "env": { "NODE_EXTRA_CA_CERTS": ${JSON.stringify(ours)} } trailing`
   fs.writeFileSync(file, broken)
-  assert.deepEqual(planByMarker({ home }), [], 'it cannot be read as JSON, so no value of it is found')
+  assert.deepEqual(planByMarker({ home, ...UNINSTALL }), [], 'it cannot be read as JSON, so no value of it is found')
   assert.deepEqual(undoByMarker([{ harness: 'claude-code', path: file, how: 'json-value', detail: { keys: ['env', 'NODE_EXTRA_CA_CERTS'] } }], { home }).map((x) => x.result), ['left-unparsable'])
   assert.equal(read(file), broken)
 })
@@ -120,11 +122,22 @@ test('a block whose close line the user deleted still goes (its variables under 
   fs.writeFileSync(env, `# >>> trocar collector >>> written by \`trocar collector install\`; \`trocar collector uninstall\` removes this block\nSSL_CERT_FILE=${root}/collector/ca/combined-codex.pem\nOPENAI_API_KEY=sk-1\n#trocar-collector-off# SSL_CERT_FILE=/corp/own.pem\n`)
   const patch = path.join(home, '.dsh', 'cordis.patch.yml'); fs.mkdirSync(path.dirname(patch), { recursive: true })
   fs.writeFileSync(patch, `- set: {a: 1}\n- insert: [{ name: "${root}/collector/plugins/dsh/index.js" }] # trocar collector: loads trocar's CA trust plugin\n- insert: [{ name: mine }]\n`)
-  assert.deepEqual(undoByMarker(planByMarker({ home }), { home }).map((r) => r.result), ['undone-by-marker', 'undone-by-marker'])
+  assert.deepEqual(undoByMarker(planByMarker({ home, ...UNINSTALL }), { home }).map((r) => r.result), ['undone-by-marker', 'undone-by-marker'])
   assert.equal(read(env), 'OPENAI_API_KEY=sk-1\nSSL_CERT_FILE=/corp/own.pem\n', 'the open line and the variable under ~/.trocar are out, the user\'s API key stays, the commented line is back')
   assert.equal(read(patch), '- set: {a: 1}\n- insert: [{ name: mine }]\n')
   assert.equal(ANONYMOUS_MODULE_MANIFEST, '{"type":"module"}\n', 'src/off keeps its own copy of trocar\'s plugin manifest text; this is what keeps it equal')
   assert.ok(MARKER_PATHS['deepseek-dsh'].some((p) => p.exact === ANONYMOUS_MODULE_MANIFEST))
+})
+
+test('on Linux, install\'s certificate block in a CODEX_HOME other than ~/.codex: uninstall (install and on) finds it there, off (on) does not', () => {
+  const home = tmpDir('trocar-marker-codexhome-')
+  const ch = path.join(home, 'elsewhere', 'codex')
+  fs.mkdirSync(ch, { recursive: true })
+  const file = path.join(ch, '.env')
+  fs.writeFileSync(file, `# >>> trocar collector >>>\nSSL_CERT_FILE=${path.join(home, '.trocar', 'collector', 'ca', 'combined-codex.pem')}\n# <<< trocar collector <<<\nOPENAI_API_KEY=sk-x\n`)
+  const env = { HOME: home, CODEX_HOME: ch }
+  assert.deepEqual(planByMarker({ home, ids: ['codex'], env, ...UNINSTALL }).map((p) => [p.path, p.how]), [[file, 'block']])
+  assert.deepEqual(planByMarker({ home, ids: ['codex'], env, platform: 'linux', phases: ['on'] }), [])
 })
 
 test('D48② with no manifest: a key the user set while on keeps the user\'s value — its old line stays out of effect and is reported (prior_left); a key the user did not set comes back, also on line 1 after a mark and when an editor indented the prefix', async () => {
@@ -136,7 +149,7 @@ test('D48② with no manifest: a key the user set while on keeps the user\'s val
   const block = `${blockBegin()}\nSSL_CERT_FILE=${ca}\n${BLOCK_END}\n`
   // the user set SSL_CERT_FILE again while on (below trocar's block); HTTPS_PROXY and NO_PROXY they left alone
   fs.writeFileSync(f, `﻿${OFF_PREFIX}HTTPS_PROXY=http://corp.example:8080\n${block}SSL_CERT_FILE=/mine/ca.pem\n${OFF_PREFIX}SSL_CERT_FILE=/corp/ca.pem\n  ${OFF_PREFIX}NO_PROXY=localhost\nOPENAI_API_KEY=sk-x\n`)
-  const [r] = undoByMarker(planByMarker({ home, ids: ['codex'] }), { home })
+  const [r] = undoByMarker(planByMarker({ home, ...UNINSTALL, ids: ['codex'] }), { home })
   assert.equal(r.result, 'undone-by-marker')
   const out = read(f)
   assert.equal(out, `﻿HTTPS_PROXY=http://corp.example:8080\nSSL_CERT_FILE=/mine/ca.pem\n${OFF_PREFIX}SSL_CERT_FILE=/corp/ca.pem\n  NO_PROXY=localhost\nOPENAI_API_KEY=sk-x\n`, 'the block goes; the user\'s new value wins, the old line stays out of effect; the others come back')
@@ -340,3 +353,77 @@ test('off on darwin with the manifest gone: --yes takes the door value out (undo
   assert.deepEqual([exit, receipt.undone_by_marker], [0, true], JSON.stringify(receipt.problems))
   r.proxyKeys.forEach((k) => assert.equal(valueAt(parseJsonText(read(s.file)), k), undefined, k.join('.')))
 })
+
+// D55① with the manifest gone: the certificate carriers are `install`'s, so `off --yes` undoing by trocar's marks leaves every one of them byte for
+// byte (4.6 §安装清单与卸载: 证书块、合并包、信任插件与 CA 按标记撤销也不碰), while what `on` wrote still goes. The carriers are every install-phase item
+// the real install recorded, on Linux (installCollector) and on macOS (runInstall, every harness present), the Kimi shim and its rc line among them.
+const { itemsOfPhase, readManifest } = await import('../../src/off/manifest.mjs')
+const quietDeps = (platform) => ({ platform, exec: () => ({ status: 1, stdout: '', stderr: 'no tool here' }), procs: async () => [], sleep: async () => {} })
+const carriersOf = (dir) => [...new Set(itemsOfPhase(readManifest(dir), 'install').filter((x) => x.harness).map((x) => x.path))]
+const bytesOf = (files) => Object.fromEntries(files.map((f) => [f, fs.existsSync(f) ? fs.readFileSync(f, 'latin1') : null]))
+for (const os of ['linux', 'darwin']) {
+  test(`${os}: off --yes with the manifest gone leaves every install-phase certificate carrier byte for byte; what on wrote goes`, async () => {
+    const { runOff } = await import('../../src/off/orchestrate.mjs')
+    let home, dir, onFile, onKeys, carriers
+    if (os === 'linux') {
+      ;({ home, dir } = await lostManifestKeep())
+      carriers = carriersOf(dir)
+    } else {
+      const { modelWorld } = await import('../helpers/model-world.mjs')
+      const w = await modelWorld({ commands: ['claude', 'codex', 'dsh', 'kimi'], env: { CLAUDE_CODE_CERT_STORE: 'bundled' } })
+      for (const d of ['.zcode', '.dsh', '.pi/agent']) fs.mkdirSync(path.join(w.home, d), { recursive: true })
+      await w.install()
+      ;({ home, dir } = w)
+      carriers = carriersOf(dir)
+      // what `on` writes next to an install-phase key: Z-Code's door, in the config.json that holds caCertFile (a macOS test machine: off took both)
+      const zc = (await loadHarnesses()).find((d) => d.name === 'z-code')
+      const [id, r] = Object.entries(zc.proxyMode.routes).find(([, x]) => x.kind === 'json-key')
+      putIngress(dir, PORT)
+      const res = routeEntry('json-key').write({ ...world({ os }).ctx, home, dir, env: { HOME: home }, dirs: dirsFor(os, home, { HOME: home }), harness: zc.name, routeId: id, route: r }, door(PORT))
+      assert.ok(res.ok, JSON.stringify(res))
+      onFile = res.records[0].path; onKeys = r.proxyKeys
+    }
+    assert.ok(carriers.length >= 5, JSON.stringify(carriers))
+    const before = bytesOf(carriers)
+    fs.rmSync(manifestPath(dir))
+    const { receipt } = await runOff({ home, env: { HOME: home }, yes: true, deps: quietDeps(os) })
+    const after = bytesOf(carriers)
+    const but = (f, t) => (f === onFile && t != null ? without(t, onKeys) : t) // the file that also holds on's door: every byte but its keys
+    assert.deepEqual(carriers.filter((f) => but(f, after[f]) !== but(f, before[f])), [], 'changed by off')
+    if (onFile) onKeys.forEach((k) => assert.equal(valueAt(parseJsonText(read(onFile)), k), undefined, `${k.join('.')} (on's) is undone`))
+  })
+}
+// lostManifest, the manifest kept for the caller to read first
+async function lostManifestKeep() {
+  const home = tmpDir('trocar-marker-keep-')
+  const sh = sevenHomes(home)
+  await installCollector({ home, env: { HOME: home }, osName: 'linux', harnesses: await loadHarnesses(), freePort: async () => 47011, scan: async () => [], roots })
+  return { home, sh, dir: path.join(home, '.trocar', 'collector') }
+}
+
+// Linux, the record lost: the Kimi launch shim and its rc PATH line are install's (4.6 Kimi row, D55①), in whichever rc file holds the installer's line.
+// `off --yes` leaves both byte for byte; `uninstall`'s marker undo (both phases) takes them, and the rc file is as it was before install.
+for (const rcName of MARKER_PATHS['kimi-code'].filter((x) => x.how === 'line').map((x) => x.file)) {
+  test(`linux, ${rcName}: off by marker leaves the Kimi shim and rc line byte for byte; uninstall by marker takes them`, async () => {
+    const { runOff } = await import('../../src/off/orchestrate.mjs')
+    const home = tmpDir('trocar-marker-kimi-')
+    sevenHomes(home)
+    fs.rmSync(path.join(home, '.bashrc'))
+    const rc = path.join(home, rcName), shim = path.join(home, '.trocar', 'collector', 'bin', 'kimi')
+    const original = '# kimi-code\nexport PATH="$HOME/.kimi-code/bin:$PATH"\n'
+    fs.writeFileSync(rc, original)
+    await installCollector({ home, env: { HOME: home }, osName: 'linux', harnesses: (await loadHarnesses()).filter((d) => d.name === 'kimi-code'), freePort: async () => 47011, scan: async () => [], roots })
+    const dir = path.join(home, '.trocar', 'collector')
+    const before = bytesOf([rc, shim])
+    assert.ok(before[shim] != null && before[rc] !== original, 'install wrote the shim and the rc line')
+    fs.rmSync(manifestPath(dir))
+    assert.deepEqual(planByMarker({ home, env: { HOME: home }, platform: 'linux', ids: ['kimi-code'] }), [], 'off plans nothing for Kimi')
+    const { exit } = await runOff({ home, env: { HOME: home }, yes: true, deps: quietDeps('linux') })
+    assert.equal(exit, 0)
+    assert.deepEqual(bytesOf([rc, shim]), before, 'off left both')
+    const plan = planByMarker({ home, env: { HOME: home }, ids: ['kimi-code'], ...UNINSTALL })
+    assert.deepEqual(plan.map((p) => [p.path, p.how]), [[rc, 'line'], [shim, 'owned-file']])
+    assert.deepEqual(undoByMarker(plan, { home }).map((r) => r.result), ['undone-by-marker', 'undone-by-marker'])
+    assert.deepEqual([read(rc), fs.existsSync(shim)], [original, false])
+  })
+}

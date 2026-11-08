@@ -10,6 +10,7 @@
 //                whole file (1.6 R2); no value in the backup, the key goes
 //   owned-file   a plugin or shim trocar wrote (its sentinel in it, or exactly trocar's own plugin manifest), or a switch file `on` wrote for a harness
 //                (paths.mjs switchFileIn: in trocar's own tree, so trocar's by where it is, whatever it holds; a link there goes, never what it points at)
+// The certificate carriers among them (`phase: 'install'`) are install's (D55①): `off` never looks at them, `uninstall` does (planByMarker `phases`).
 // Nothing else is touched, and no byte of a file outside those marks changes. The result says `undone-by-marker` (the code `off` records and the
 // receipt shows, 1.6 R3). Not done here, said in the docs: a combined bundle (no manifest, so nobody can say who holds it — `uninstall` removes it with the
 // CA), and an install-phase entry at a home the default places do not name. A `route` place (what `on` writes on macOS / Windows) is resolved as `on`
@@ -56,16 +57,20 @@ const URL_IN_TEXT = /https?:\/\/[^\s"'`,{}[\]\\]+/g // the URLs in a text that d
 const doorAt = (h) => Object.values(DOOR_ROUTES[h]).map((route) => ({ how: 'json-value', route, door: true, os: ['darwin', 'win32'] }))
 
 /** Where each harness's entries are, relative to HOME (`route`: a ROUTE_PLACES place, resolved against the environment and per-user folders off runs in). `how` says what trocar's mark looks like there (see the header); `eachDir` + `file`: the file in
- *  every subdirectory of a directory (Hermes profiles). The plan of 1.6 / 4.6 §身份与信任 is the authority; a harness not listed here has no marker undo. */
+ *  every subdirectory of a directory (Hermes profiles); `os`: only there. `phase: 'install'`: a certificate carrier `install` writes (a certificate block, a
+ *  certificate key's value, a trust plugin and its loader row, the Kimi launch shim and its rc PATH line): it is `install`'s (D55①), so only a run that undoes install's items (`uninstall`) looks at it,
+ *  never `off` (4.6 §安装清单与卸载). The plan of 1.6 / 4.6 §身份与信任 is the authority; a harness not listed here has no marker undo. */
+const INSTALLS = { phase: 'install' }
+const ROUTED = ['darwin', 'win32'] // where `on` writes class-1 routes (on Linux a block in the same file is install's certificate block, at every CODEX_HOME in use)
 export const MARKER_PATHS = Object.freeze({
-  'claude-code': [{ how: 'json-value', file: '.claude/settings.json', keys: ['env', 'NODE_EXTRA_CA_CERTS'] }, ...doorAt('claude-code')],
-  codex: [{ how: 'block', file: '.codex/.env' }, { how: 'block', route: ROUTE_PLACES.codex }],
-  hermes: [{ how: 'block', file: '.hermes/.env' }, { how: 'block', route: ROUTE_PLACES.hermes }, { how: 'block', eachDir: '.hermes/profiles', file: '.env' }],
-  opencode: [{ how: 'owned-file', file: '.config/opencode/plugins/trocar-ca.js' }, { how: 'owned-file', route: ROUTE_PLACES.opencode }],
-  'deepseek-dsh': [{ how: 'line', file: '.dsh/cordis.patch.yml', yaml: true }, { how: 'owned-file', file: '.trocar/collector/plugins/dsh/index.js' }, { how: 'owned-file', file: '.trocar/collector/plugins/dsh/package.json', exact: PLUGIN_MANIFEST }],
-  'kimi-code': [...RC_FILES.map((f) => ({ how: 'line', file: f })), { how: 'owned-file', file: '.trocar/collector/bin/kimi' }, ...doorAt('kimi-code')],
-  'z-code': [{ how: 'json-value', file: '.zcode/cli/config.json', keys: ['network', 'caCertFile'] }, ...doorAt('z-code')],
-  pi: [{ how: 'owned-file', file: '.pi/agent/extensions/trocar-ca.js' }],
+  'claude-code': [{ how: 'json-value', file: '.claude/settings.json', keys: ['env', 'NODE_EXTRA_CA_CERTS'], ...INSTALLS }, ...doorAt('claude-code')],
+  codex: [{ how: 'block', file: '.codex/.env', ...INSTALLS }, { how: 'block', route: ROUTE_PLACES.codex, os: ['linux'], ...INSTALLS }, { how: 'block', route: ROUTE_PLACES.codex, os: ROUTED }],
+  hermes: [{ how: 'block', file: '.hermes/.env', ...INSTALLS }, { how: 'block', route: ROUTE_PLACES.hermes, os: ROUTED }, { how: 'block', eachDir: '.hermes/profiles', file: '.env', ...INSTALLS }],
+  opencode: [{ how: 'owned-file', file: '.config/opencode/plugins/trocar-ca.js', ...INSTALLS }, { how: 'owned-file', route: ROUTE_PLACES.opencode }],
+  'deepseek-dsh': [{ how: 'line', file: '.dsh/cordis.patch.yml', yaml: true, ...INSTALLS }, { how: 'owned-file', file: '.trocar/collector/plugins/dsh/index.js', ...INSTALLS }, { how: 'owned-file', file: '.trocar/collector/plugins/dsh/package.json', exact: PLUGIN_MANIFEST, ...INSTALLS }],
+  'kimi-code': [...RC_FILES.map((f) => ({ how: 'line', file: f, ...INSTALLS })), { how: 'owned-file', file: '.trocar/collector/bin/kimi', ...INSTALLS }, ...doorAt('kimi-code')],
+  'z-code': [{ how: 'json-value', file: '.zcode/cli/config.json', keys: ['network', 'caCertFile'], ...INSTALLS }, ...doorAt('z-code')],
+  pi: [{ how: 'owned-file', file: '.pi/agent/extensions/trocar-ca.js', ...INSTALLS }],
 })
 
 const under = (v, root) => typeof v === 'string' && v.startsWith(root + path.sep)
@@ -109,12 +114,12 @@ function selected(sel, ctx, fs) {
 
 // the candidate files of a spec for this home, each file once per kind of mark (a route place and a fixed path can name the same one; a door key
 // and a trust key can share a file): [{ file, spec }]
-function candidates(home, harness, fs, env, platform) {
+function candidates(home, harness, fs, env, platform, phases) {
   const out = [], seen = new Set()
   const ctx = { os: platform, home, env, dirs: dirsFor(platform, home, env) }
   const push = (file, spec) => { const k = `${spec.door ? 'door' : ''}\0${file}`; if (!seen.has(k)) { seen.add(k); out.push({ file, spec }) } }
   for (const spec of MARKER_PATHS[harness]) {
-    if (spec.os && !spec.os.includes(platform)) continue
+    if ((spec.os && !spec.os.includes(platform)) || !phases.includes(spec.phase || 'on')) continue
     if (spec.route) for (const at of spec.route.select ? selected(spec.route.select, ctx, fs) : spec.route.dir ? resolveLoc(spec.route.dir, ctx).map((d) => path.join(d, spec.route.name)) : resolveLoc(spec.route.file, ctx)) push(at, spec)
     else if (spec.eachDir) {
       let names = []
@@ -126,16 +131,16 @@ function candidates(home, harness, fs, env, platform) {
   return out
 }
 
-/** What trocar's own marks say it changed for these harnesses (`ids` null: all), without a manifest: `[{ harness, path, how, detail }]`, in the order to
+/** What trocar's own marks say it changed for these harnesses (`ids` null: all) in the commands `phases` names (`off` ['on'], the default; `uninstall` both), without a manifest: `[{ harness, path, how, detail }]`, in the order to
  *  undo them (values and blocks, then lines, then plugins and shims). Reads only; a file it cannot read or parse is planned only if a mark is in it.
  *  `notes` gets a sentence for each loopback proxy value it could not judge (ingress.json unreadable): left, and said. */
-export function planByMarker({ home, ids = null, fs = nodeFs, env = process.env, platform = process.platform, notes = [] }) {
+export function planByMarker({ home, ids = null, fs = nodeFs, env = process.env, platform = process.platform, phases = ['on'], notes = [] }) {
   const root = trocarHome(home)
   const plan = []
   let ports // the door ports, read once when a door key is looked at
   for (const harness of Object.keys(MARKER_PATHS)) {
     if (ids && !ids.includes(harness)) continue
-    for (const { file, spec } of candidates(home, harness, fs, env, platform)) {
+    for (const { file, spec } of candidates(home, harness, fs, env, platform, phases)) {
       let b
       try { b = readOrNull(fs, file) } catch { continue }
       if (b == null) continue
