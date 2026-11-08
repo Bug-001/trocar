@@ -14,7 +14,7 @@ import { projectionFile, sessionDir, PROJ_V } from '../../../src/query/projectio
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
-const CALLS = 5000, NEW = 5, STEP = 500 // CALLS: the re-read spans several of the desk's head polls (1.5 s apart) even at the fastest re-read rate seen, ~930 calls/s
+const CALLS = 10000, NEW = 5, STEP = 500 // CALLS: the re-read spans three of the desk's head polls (1.5 s apart) at twice the fastest re-read rate seen on a loaded machine (~930 calls/s)
 const BOUND = 120_000 // the fold of a whole session by a niced worker; a wait past it is a stall
 
 const until = async (ok, what) => {
