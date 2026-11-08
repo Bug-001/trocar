@@ -106,7 +106,10 @@ function rowList(segs, old) {
   for (let j = i; j < segs.length; j++) {
     const { segment, records: view, entry } = segs[j], was = grown && j === i ? old.parts[i] : null;
     const start = was ? was.start : j ? parts[j - 1].end : 0, k0 = was ? was.end - was.start : 0;
-    const open = was ? copyOpen(was.open) : stateAt(parts, j), assign = createSynthAssigner({ open });
+    // the part before, built here and kept by no one (shed below), hands its state on as it is: copying it for every segment
+    // churned every kept reply once per segment
+    const prev = j > i && !kept(j - 1, segs.length) ? parts[j - 1].open : null;
+    const open = was ? copyOpen(was.open) : prev || stateAt(parts, j), assign = createSynthAssigner({ open });
     const derived = [];
     for (let k = k0; k < view.length; k++) {
       const r = view.at(k);
