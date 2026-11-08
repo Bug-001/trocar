@@ -753,6 +753,43 @@ test('1.6 V32 `attached` · the daemon\'s own answer: every group ingress.json r
   absent.c.close()
 })
 
+// 4.8 §5.3 W16 (trust verdict): at one door of a group with two forms (claude-code:settings), each process is judged on its own facts against
+// every form of the route — one whose settings trust the root decrypts, one whose settings do not is forwarded untrusted. CM22 checks one
+// process per door of the shipped descriptor; this adds a second, failing process at the same multi-form door.
+test('two processes at one door of a two-form group are each judged on their own facts: the trusted one decrypts, the other is forwarded untrusted', async () => {
+  const d = descs.find((x) => x.name === 'claude-code'), g = 'claude-code:settings'
+  const forms = d.proxyMode.forms.filter((f) => f.route === 'settings' && f.os.includes('darwin'))
+  assert.ok(forms.length >= 2, 'the group carries two forms')
+  const r = await rig({ desc: d })
+  await r.c.on({ harnesses: [d.name], groups: { [g]: 18400 } })
+  const t = d.proxyMode.trusts[forms[0].trust]
+  const ask = async (p, { c: cs, w, facts }) => {
+    const base = ctxOf(w)
+    Object.assign(r.w, { pid: p, facts: { exe: '/bin/x', uid: 501, agent: d.name, startedAt: facts.startedAt }, env: w.env, cwd: w.cwd, ctx: { ...base, readFile: (q) => base.readFile(q).replace(ROOT.pem, STUB_PEM) } })
+    return r.c.lookupIngress({ peer: PEER, user: g, target: { address: cs.host, port: 443 } })
+  }
+  const trusted = await ask(7101, worldOf(d, forms[0], 'darwin', {}))
+  const other = await ask(7102, worldOf(d, forms[1], 'darwin', { sources: t.sources.map(() => 'lacks') }))
+  assert.deepEqual([trusted.decrypt, other.decrypt, other.skip && other.skip.not_captured], [true, false, 'untrusted'])
+  r.c.close()
+})
+
+// 4.8 §3: a group gets a door only while its harness is on (or a holder of it lives: V55); the PAC group, which takes no credentials, likewise
+test('a recorded group whose harness is off and has no holder gets no door; the PAC group has its door only while its harness is on', async () => {
+  const cc = descs.find((x) => x.name === 'claude-code'), other = descs.find((x) => x.name === 'codex')
+  const groupsOf = (d, base) => Object.fromEntries(Object.keys(d.proxyMode.routes).map((rt, i) => [`${d.name}:${rt}`, base + i]))
+  const ccGroups = groupsOf(cc, 18500), otherGroups = groupsOf(other, 18520)
+  const gPac = Object.keys(ccGroups).find((g) => cc.proxyMode.routes[g.split(':')[1]].auth === false)
+  assert.ok(gPac, 'claude-code has a group that takes no credentials')
+  const { c } = await rig({ desc: other, others: [cc], ingress: { groupPorts: { ...ccGroups, ...otherGroups }, listenerToken: TOKEN }, w: { state: { harnesses: { [other.name]: { desired: 'on' }, [cc.name]: { desired: 'off' } } } } })
+  assert.deepEqual(c.doors(), otherGroups, 'at start: the on harness\'s doors only')
+  await c.on({ harnesses: [cc.name], groups: { [gPac]: ccGroups[gPac] } })
+  assert.equal(c.doors()[gPac], ccGroups[gPac], 'the PAC door opens with its harness')
+  await c.off({ harnesses: [cc.name] })
+  assert.deepEqual(c.doors(), otherGroups, 'off with no holder: the PAC door is closed, the other harness\'s doors stay')
+  c.close()
+})
+
 // 4.6 §开关 proxy mode (D38): at start, a harness desired on whose ingress.json cannot be read opens no door and leaves one failure record with a known
 // code; with no harness desired on, ingress.json is not needed (a never-turned-on install has none) and nothing is recorded.
 for (const ingress of [{ missing: true }, { error: 'EACCES' }]) for (const anyOn of [true, false]) {
