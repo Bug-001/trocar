@@ -99,7 +99,7 @@ function summaryPairs(doc, now) {
     const hosts = [...new Set(crit.map((x) => x.host).filter(Boolean))]
     rows.push(['Not captured', `${who.length ? who.join(', ') : 'a program'} refused trocar's certificate${hosts.length ? ` for ${hosts.length} host${hosts.length === 1 ? '' : 's'}` : ''}; restart it. Which hosts: trocar status --failures`])
   }
-  rows.push(['Problems', !fl ? unknown(errorReason(doc, 'capture health') || 'capture health could not be read') : fl.problem === 0 ? 'none in the last 24 hours' : `${fl.problem} in the last 24 hours, latest ${ago(fl.latest, now)}`])
+  rows.push(['Problems', !fl ? unknown(errorReason(doc, 'capture health') || 'capture health could not be read') : fl.problem === 0 ? `none ${windowWords(fl, now)}` : `${fl.problem} ${windowWords(fl, now)}, latest ${ago(fl.latest, now)}`])
   const b = doc.board // §3.5: the address without the token; `trocar board` prints the one with it
   if (b) rows.push(['Board', b.state === 'serving' ? `${b.url}  open it with: trocar board` : b.state === 'unknown' ? unknown(b.reason) : `not running: ${b.reason}`])
   const login = loginRow(doc.autostart)
@@ -181,12 +181,14 @@ const commandsOf = (reason) => [...String(reason || '').matchAll(COMMAND)].map((
 const reasonOf = (reason) => squashed(String(reason || '').replace(COMMAND, commandsOf(reason).length > 1 ? 'the lines below' : 'the line below'))
 const failureLine = (g0) => { const g = { ...g0, reason: reasonOf(g0.reason) }; const r = failureWord(g.where, g.code, g.harness || '') && g.reason; const s = r ? `${failureBrief(g)}: ${r}` : failureBrief(g, { max: Infinity }); return g.harness ? `${g.harness}: ${s}` : s } // no nested brackets (§1.1②): a reason has its own
 
+/** The window `failures` covers, said as it is (1.6 C.3 `since`): the last 24 hours, or since this install when it began inside them. */
+const windowWords = (fl, now) => (Date.parse(fl.since) > now - 24 * 3600e3 + 60e3 ? `since this install (${ago(fl.since, now)})` : 'in the last 24 hours') // a minute's slack: the document is read a moment before it is printed
 /** The whole wall of the last 24 hours: one line per `level:'problem'` group of the document's `failures` (C.3, the board's capture log reads the same
  *  groups and words), then the `Expected` section (what is not a problem by design). */
 export function failuresBlock(failures, health, { now = Date.now() } = {}) {
   if (!failures || !health) return [`Problems: ${unknown('capture health could not be read')}`]
   const groups = failures.groups.filter((g) => g.level === 'problem')
-  const lines = [groups.length ? `Problems in the last 24 hours: ${groups.reduce((n, g) => n + g.count, 0)} in ${groups.length} kind${groups.length === 1 ? '' : 's'}` : 'No problems in the last 24 hours.']
+  const lines = [groups.length ? `Problems ${windowWords(failures, now)}: ${groups.reduce((n, g) => n + g.count, 0)} in ${groups.length} kind${groups.length === 1 ? '' : 's'}` : `No problems ${windowWords(failures, now)}.`]
   if (groups.length) { // §1.1⑥: each row folds inside 80 columns, under its own text
     const heads = columns(groups.map((g) => [ago(g.last_ts, now), `x${g.count}`, ''])).map((h) => `  ${h}  `), col = Math.max(...heads.map((h) => h.length))
     groups.forEach((g, i) => lines.push(...wrap(failureLine(g), WIDTH - col).map((t, j) => (j ? ' '.repeat(col) : heads[i].padEnd(col)) + t), ...commandsOf(g.reason).map((x) => ' '.repeat(col + 2) + x))) // a command sits two deeper than the reason's folds (§3.5, §1.1⑥)
@@ -194,7 +196,7 @@ export function failuresBlock(failures, health, { now = Date.now() } = {}) {
   const exp = Object.entries((health.collector && health.collector.expected) || {})
   lines.push('', 'Expected')
   if (exp.length) lines.push(...exp.flatMap(([k, n]) => wrap(`${expectedText(k)}: ${n}`, WIDTH - 4).map((t, j) => (j ? '    ' : '  ') + t)))
-  else lines.push('  nothing was skipped by design in the last 24 hours')
+  else lines.push(`  nothing was skipped by design ${windowWords(failures, now)}`)
   return lines
 }
 
@@ -240,7 +242,7 @@ function daemonText(h) {
   if (d.last_stop) return `the background process is not running - stopped${d.last_stop.signal ? ` by ${d.last_stop.signal}` : ''} at ${d.last_stop.ts}${at}`
   return `the background process is not running${at}`
 }
-const groupLine = (g) => `  ${g.last_ts} ${g.last.event === 'failure' ? `problem (${g.last.where}/${g.last.code})` : g.last.event || `a connection was not captured: ${g.last.not_captured || g.last.reason}`}${g.last.pid != null ? ` pid ${g.last.pid}` : ''}${g.last.agent ? ` ${g.last.agent}` : ''}: ${g.last.reason || (g.last.error && g.last.error.message) || ''}${g.count > 1 ? ` (x${g.count} in 24 h)` : ''}${g.last.hint ? ` - ${g.last.hint}` : ''}`
+const groupLine = (g) => `  ${g.last_ts} ${g.last.event === 'failure' ? `problem (${g.last.where}/${g.last.code})` : g.last.event || `a connection was not captured: ${g.last.not_captured || g.last.reason}`}${g.last.pid != null ? ` pid ${g.last.pid}` : ''}${g.last.agent ? ` ${g.last.agent}` : ''}: ${g.last.reason || (g.last.error && g.last.error.message) || ''}${g.count > 1 ? ` (x${g.count})` : ''}${g.last.hint ? ` - ${g.last.hint}` : ''}`
 const condLine = (c) => `  now: ${c.kind}${c.pid != null ? ` pid ${c.pid}` : ''}${c.agent ? ` ${c.agent}` : ''}${c.host ? ` ${c.host}` : ''} since ${c.since}: ${c.reason || ''}`
 export function formatHealth(h, { daemonLine = true } = {}) {
   const c = h.collector, lines = []
@@ -248,9 +250,9 @@ export function formatHealth(h, { daemonLine = true } = {}) {
   lines.push(`capture health: ${(SUMMARY[h.summary.state] || ((x) => String(x.state)))(h.summary)}${h.summary.read_errors ? ' - some files could not be read (below)' : ''}`)
   if (c.conditions && c.conditions.length) lines.push(c.conditions_as_of ? `conditions as of ${c.conditions_as_of}:` : 'conditions now:', ...c.conditions.map(condLine))
   const open = (c.failures || []).filter((g) => !g.resolved) // a resolved group is in --failures and --json as a note (C.3)
-  if (open.length) lines.push(`problems in the last 24 hours (${open.length} kind(s)):`, ...open.map(groupLine))
+  if (open.length) lines.push(`problems ${windowWords(h.read, Date.parse(h.generated_at))} (${open.length} kind(s)):`, ...open.map(groupLine))
   const exp = Object.entries(c.expected || {})
-  if (exp.length) lines.push(`not captured by design (last 24 hours): ${exp.map(([k, n]) => `${k} ${n}`).join(', ')}`)
+  if (exp.length) lines.push(`not captured by design (${windowWords(h.read, Date.parse(h.generated_at))}): ${exp.map(([k, n]) => `${k} ${n}`).join(', ')}`)
   for (const p of (h.raw && h.raw.problems) || []) lines.push(`raw layer: ${p.op} ${p.outcome} ${p.file || p.target || ''}: ${p.reason || ''}`)
   for (const e of h.read.errors) lines.push(`could not read ${e.file}: ${e.error}`)
   if (h.read.truncated) lines.push('(older records were left out: only the most recent part was read)')

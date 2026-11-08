@@ -213,6 +213,19 @@ async function lostKeyWorld() {
   return { w, r1, at1: carrierTimes(w) }
 }
 const later = () => new Date(Date.now() + 3600e3)
+
+test('1.6 C.3 failures.since: an install over the manifest an unclean uninstall kept (install: null) starts now; one over a complete install keeps its start', async () => {
+  const w = await everything()
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  const first = readManifest(w.dir).created_at
+  await w.install({ wrapperKit: { renderWrapper }, now: later })
+  assert.equal(readManifest(w.dir).created_at, first, 'the same install, run again')
+  const f = path.join(w.dir, 'install-manifest.json')
+  fs.writeFileSync(f, JSON.stringify({ ...json(f), install: null, created_at: '2026-01-01T00:00:00.000Z' }))
+  const at = later()
+  await w.install({ wrapperKit: { renderWrapper }, now: () => at })
+  assert.equal(readManifest(w.dir).created_at, at.toISOString())
+})
 const bundleOf = (w) => json(path.join(w.home, '.zcode', 'cli', 'config.json')).network.caCertFile
 const fpsIn = (f) => certBlocks(fs.readFileSync(f, 'utf8')).map((b) => b.fp)
 function carrierTimes(w) {

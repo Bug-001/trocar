@@ -58,8 +58,8 @@ export const COMMANDS = Object.freeze([
   { name: 'status',
     group: 'Capture', mutates: false, run: via('./status.mjs', 'runStatusCli'),
     usage: `trocar status ${HARNESS} [--failures] [--json]`,
-    summary: 'Says which agents are being captured and why not, for the ones that are not. With no name it is one screen: the collector, the agents, the connections still going through trocar, and what failed in the last day. Name an agent for its details.',
-    options: [['--failures', 'list every failure of the last day, not just the newest'], JSON_OPT],
+    summary: 'Says which agents are being captured and why not, for the ones that are not. With no name it is one screen: the collector, the agents, the connections still going through trocar, and what failed in the last 24 hours (or since this install, when that is later). Name an agent for its details.',
+    options: [['--failures', 'list every failure of that window, not just the newest'], JSON_OPT],
     exits: [[0, 'every agent is being captured'], [1, 'some are not'], [2, 'a usage error, or an unknown agent'], [3, 'it could not be read; the reason is in the output']] },
   { name: 'uninstall',
     group: 'Capture', mutates: true, recordsPath: false, run: via('./uninstall.mjs', 'runUninstallCli'), // 4.11 present: it deletes the recorded PATH

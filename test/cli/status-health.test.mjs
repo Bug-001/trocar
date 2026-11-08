@@ -19,7 +19,7 @@ const STATES = ['not-running', 'not-responding', 'failing', 'unknown', 'off', 'o
 function healthOver(recs) {
   const h = tmpDir('trocar-health-'), c = path.join(h, 'collector')
   fs.mkdirSync(path.join(c, 'flows'), { recursive: true })
-  fs.writeFileSync(path.join(c, 'install-manifest.json'), JSON.stringify({ version: 3, install: { state: 'complete' }, created_at: at(9999), entries: [], files: [] }))
+  fs.writeFileSync(path.join(c, 'install-manifest.json'), JSON.stringify({ version: 3, install: { state: 'complete' }, created_at: at(99999), entries: [], files: [] }))
   fs.writeFileSync(path.join(c, 'lock'), JSON.stringify({ pid: 4242, start_time: '900', boot_id: 'b1' }))
   fs.writeFileSync(path.join(c, 'flows', `${at(0).slice(0, 10)}.ndjson`), [{ ts: at(600), event: 'daemon-start', pid: 4242 }, ...recs].map((r) => JSON.stringify(r) + '\n').join(''))
   return captureHealth({ harnesses: HARNESS_IDS, home: h, now: NOW, alive: () => true, identity: () => ({ start_time: '900', boot_id: 'b1' }) })
