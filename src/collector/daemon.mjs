@@ -50,8 +50,10 @@ import { createModelCollector, replacesDaemon } from './core/proxymode/collector
 import { TEMPLATES } from './harness/templates/index.mjs'
 import { readStateFile } from '../off/state.mjs'
 
-/** When this process started, from the OS's own clock of it: the daemon's uptime (1.6 C.3 `daemon.since`). Set once, as the module loads in the daemon. */
+/** When this process started, from the OS's own clock of it (1.6 C.3 `daemon.since`). Set once, as the module loads in the daemon. A daemon started
+ *  later in the same process (only tests run two) answers its own start instead: install compares it with the login entry's time (1.6 §3.2 step 5). */
 const SINCE = new Date(Date.now() - Math.round(process.uptime() * 1000)).toISOString()
+let boards = 0 // the daemons this process started (boardFor runs once per daemon)
 
 export { loadArch } // the CLI reaches arch only through this file (layering rule 5)
 
@@ -306,6 +308,7 @@ function boardToken(dir) {
  *  routes(r) adds the board to the control routes: `GET /status` gains `board: {port, state, reason}` (never the token), and
  *  `GET /board` answers `{port, state, reason, token}` for `trocar board`. start() once the daemon is ready; stop() before the control server closes. */
 function boardFor({ P, failure, query, tips, log = () => {} }) {
+  const since = boards++ ? new Date().toISOString() : SINCE
   let st = { port: null, state: 'no-port', reason: 'no board port recorded: run trocar install' }
   let server = null, token = null, started = Promise.resolve(), stopped = false
   async function listen() {
@@ -335,7 +338,7 @@ function boardFor({ P, failure, query, tips, log = () => {} }) {
     state: () => ({ ...st }),
     tokenAnswer,
     // every daemon's GET /status passes here: the board's state, and `since`, this process's own start (1.6 C.3 `daemon.since`), not a token from its lock
-    routes: (r) => ({ ...r, 'GET /status': async (q) => { const a = await r['GET /status'](q); await started; return { ...a, since: SINCE, board: { ...st } } }, 'GET /board': tokenAnswer }),
+    routes: (r) => ({ ...r, 'GET /status': async (q) => { const a = await r['GET /status'](q); await started; return { ...a, since, board: { ...st } } }, 'GET /board': tokenAnswer }),
     stop() { stopped = true; if (server) { server.close(); server.closeAllConnections(); server = null } },
   }
 }
