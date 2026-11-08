@@ -138,7 +138,7 @@ export function applySession(desk, a, { before = false } = {}) {
 // `ledgered` = a page carrying the whole ledger at its mark (a base:null lane answer) was applied: the cursors then say what is left;
 // `pending` = the last lane answer stood behind the fold, so the ledger is not whole however the cursors stand (2.4 还在读)
 export const newHeld = () => ({ steps: new Map(), rids: [], prev: null, next: null, resources: new Map(), seen: new Map(), events: new Map(), kf: new Map(),
-  cursors: new Set(), byI: null, ledgered: false, pending: false })
+  cursors: new Set(), byI: null, ledgered: false, note: null, noLedger: false, pending: false })
 
 // drop held steps from index i on, with their cached keyframes and lane events
 function cut(h, i) {
@@ -155,7 +155,12 @@ export const resKeyOf = (r) => r.resKey || r.key || r.kind + '::' + r.label
 /** Does block `b` carry resource `key`: its `resKey`, or any of `resKeys` (a shell read of several files, 2.4). */
 export const carriesRes = (b, key) => b.resKey === key || (Array.isArray(b.resKeys) && b.resKeys.includes(key))
 
+// a ledger part of a lane answer. `resources: null` = the lane's ledger cannot be known (3.5 resources_note 'no-ledger'): it replaces
+// what is held, a --from page's too, so no earlier entry lingers; `resources_note` says so, or that the lists are only part of the lane
 function mergeLedger(h, a) {
+  h.note = a.resources_note ?? null
+  h.noLedger = a.resources === null
+  if (h.noLedger) { h.resources = new Map(); h.seen = new Map(); return }
   merge(h.resources, a.resources, resKeyOf)
   merge(h.seen, a.seen, (x) => x.path)
 }

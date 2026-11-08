@@ -350,6 +350,8 @@ export const SEEN_GROUP_TIP = 'Names picked from tool results and text because t
 export const SHOW_ALL = (n) => `Show all ${n}`
 export const HIDE_ALL = 'Show fewer'
 export const NO_RESOURCES = 'No resource records (this agent may not provide them)'
+export const NO_LEDGER = 'This agent\'s records have no resource information'
+export const PARTIAL_LEDGER = 'This agent kept resource records for only some calls; the list below covers only those calls'
 export const DIR_WORD = 'directory'
 export const LINK_WORD = 'link'
 export const compactRow = (at, from, to) => `${at} · compaction: ${from} → ${to} messages`

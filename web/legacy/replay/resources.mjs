@@ -31,7 +31,8 @@ const stepWordOf = (s) => {
 // `pending` = its last lane answer stood behind the fold, so what it lacks says nothing yet (2.4 还在读)
 function ledgerOf(s) {
   const h = s.desk && s.anchor && s.desk.held.get(s.anchor.id)
-  return h ? { res: [...h.resources.values()], seen: seenFiles(s.desk, s.anchor.id), events: laneEvents(s.desk, s.anchor.id), done: ledgerDone(s.desk, s.anchor.id), pending: h.pending } : null
+  return h ? { res: [...h.resources.values()], seen: seenFiles(s.desk, s.anchor.id), events: laneEvents(s.desk, s.anchor.id), done: ledgerDone(s.desk, s.anchor.id), pending: h.pending,
+    note: h.note, noLedger: h.noLedger } : null
 }
 
 // a read file's visible name is cut in the middle past this many characters; the hover keeps the full path (2.4)
@@ -50,7 +51,7 @@ export function resourceUnits(s) {
   const rp = (p) => esc(midClip(relPath(cwd, p), NAME_MAX))
   const ledger = ledgerOf(s)
   if (!ledger) return [BUSY]
-  const { res, seen, events, done, pending } = ledger
+  const { res, seen, events, done, pending, note, noLedger } = ledger
   const none = () => (pending ? SO_FAR(s) : EMPTY())
   // a count the ledger gives is not known until its chain is read: an empty busy box, never a digit (2.4:67, invariant 4)
   const ct = (n) => (done ? n : null)
@@ -80,7 +81,11 @@ export function resourceUnits(s) {
   const rowsOf = (rs, row) => keyed(rs.map((r) => ({ key: resKeyOf(r), html: row(r) })))
   // the ledger statement sits at the TOP of the list (2.4 element table) and is about the LEDGER, not a fallback for
   // "nothing rendered": an existing-but-empty ledger (or no key) with nothing tracked says so (#7)
-  if ((done || pending) && !res.length && !seen.length) out.push(none())
+  // the ledger cannot be known (2.4 没有资源信息): that sentence alone, a code other than 'no-ledger' on hover; only part of it kept: a line on top
+  if (noLedger) out.push({ key: 'empty', html: `<div class="navsub empty"${note && note !== 'no-ledger' ? ` title="${esc(note)}"` : ''}>${esc(W.NO_LEDGER)}</div>` })
+  else if ((done || pending) && !res.length && !seen.length) out.push(none())
+  if (!noLedger && note === 'partial-ledger') out.push({ key: 'partial', html: `<div class="navsub empty">${esc(W.PARTIAL_LEDGER)}</div>` })
+  const top = out.length // the lines above are about the ledger, not groups: the quiet groups still stand on their own after them
 
   const fileRow = (r) => { const l = life(r)
     return `<div class="navsub ${l.cls}" data-navstep="${l.enter}" data-navres="${esc(resKeyOf(r))}">` +
@@ -143,7 +148,7 @@ export function resourceUnits(s) {
     const nOthers = runtime.length + seen.length + skills.length + caps.length + dl.length + comps.length + others.length
     // a session with nothing above: the groups stand on their own — a lone 「N more」 row would hide the only content.
     // N holds ledger counts: while the chain is unread the row says 「more」 with the busy box in the count's place
-    if (!out.length) out.push(...inner)
+    if (out.length === top) out.push(...inner)
     else out.push(...(done ? navGroup(s, 'life-others', W.OTHERS_ROW(nOthers), '', inner) : navGroup(s, 'life-others', W.OTHERS_ROW('').trim(), null, inner)))
   }
   // entries exist but none renderable: never a blank page; a ledger still on its way is a sized empty row, not "none"
