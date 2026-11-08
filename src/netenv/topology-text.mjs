@@ -65,14 +65,29 @@ function chain(t, ids, detail = false, labels = true) {
 
 // Which words a branch's line needs in front: its form when the harness has more than one, HTTP / WebSocket when the branches of its form do not all go the same way (`key`: the path with trocar, or without).
 const sameWay = (t, b, key) => new Set(t.branches.filter((x) => x.form === b.form).map((x) => x[key].join())).size === 1
-const prefixOf = (t, b, key = 'path') => [new Set(t.branches.map((x) => x.form).filter(Boolean)).size > 1 ? b.form : null, sameWay(t, b, key) ? null : BRANCH_TEXT[b.name]].filter(Boolean).map((x) => `${x} `).join('')
-// the branches that go the same way (same form, same path) are one line
-const distinct = (t) => t.branches.filter((b, i) => t.branches.findIndex((x) => x.form === b.form && x.path.join() === b.path.join()) === i)
+// The lines of a harness (`key`: the path with trocar, or without): branches that go the same way are one line, whatever form or kind they are. A
+// line is named only when the harness has another line: by the forms on it (when they are not all of them) and HTTP / WebSocket (when that form's
+// branches split by kind) — one process can stand for every form: a Windows run printed one line five times. → [{ b, prefix }]
+function linesOf(t, key = 'path') {
+  const forms = new Set(t.branches.map((x) => x.form).filter(Boolean)), out = new Map()
+  for (const b of t.branches) {
+    const k = b[key].join(), m = { form: b.form || null, text: sameWay(t, b, key) ? null : BRANCH_TEXT[b.name] }
+    if (!out.has(k)) out.set(k, { b, members: [] })
+    const ms = out.get(k).members
+    if (!ms.some((x) => x.form === m.form && x.text === m.text)) ms.push(m)
+  }
+  const named = ({ members }) => {
+    const texts = new Set(members.map((x) => x.text)), on = new Set(members.map((x) => x.form).filter(Boolean))
+    if (forms.size < 2 || (on.size === forms.size && texts.size === 1)) return [...texts].filter(Boolean) // every form, one kind: the kind alone, if any
+    return members.map((x) => [x.form, x.text].filter(Boolean).join(' '))
+  }
+  return [...out.values()].map((l) => { const n = out.size > 1 ? named(l) : []; return { b: l.b, prefix: n.length ? `${n.join(', ')} ` : '' } })
+}
 
 /** Between the branches of one harness when they are said on one line (renderCompact's lines joined; `adopted.<h>.chain`, C.1). */
 export const BRANCH_SEP = ' ; '
 /** One line per way a harness's traffic goes: the path with trocar on it (HTTP and WebSocket that take the same path are one line). */
-export const renderCompact = (t) => distinct(t).map((b) => `${prefixOf(t, b)}${chain(t, b.path)}`)
+export const renderCompact = (t) => linesOf(t).map(({ b, prefix }) => `${prefix}${chain(t, b.path)}`)
 
 // a branch cut to its agent, trocar and the hop after trocar (附录 A.1's last tier); a branch with no trocar on it keeps its first two hops
 function cutPath(t, path) {
@@ -85,7 +100,7 @@ function cutPath(t, path) {
  *  branch cut to `agent -> trocar -> <next hop> -> ...`. Each tier is drawn from the topology, never by re-reading text (a hop written in brackets, an IPv6
  *  host, is a hop). Never folded: a line still too long stays one line. */
 export function fitCompact(t, room) {
-  const line = (draw) => distinct(t).map((b) => `${prefixOf(t, b)}${draw(b)}`).join(BRANCH_SEP)
+  const line = (draw) => linesOf(t).map(({ b, prefix }) => `${prefix}${draw(b)}`).join(BRANCH_SEP)
   const tiers = [line((b) => chain(t, b.path)), line((b) => chain(t, b.path, false, false)),
     line((b) => { const ids = cutPath(t, b.path); return `${chain(t, ids, false, false)}${ids.length < b.path.length ? ' -> ...' : ''}` })]
   return tiers.find((x) => x.length <= room) || tiers[2]
@@ -120,8 +135,8 @@ function routeRows(t, { labels = true } = {}) {
   const rows = []
   // a branch drawn from a process its door group saw is that process's; else it is the path a new process takes (1.6 A.1)
   const who = (b) => { const a = nodeOf(t, b.path[0]); return a && a.pid ? `pid ${a.pid}` : 'new processes' }
-  for (const b of distinct(t)) rows.push([`${who(b)}${prefixOf(t, b) ? ` (${prefixOf(t, b).trim()})` : ''}`, chain(t, b.path, true, labels)])
-  if (t.branches.some((b) => b.path.some((id) => isTrocar(nodeOf(t, id))))) for (const b of distinct(t)) rows.push([`without trocar${prefixOf(t, b, 'off_path') ? ` (${prefixOf(t, b, 'off_path').trim()})` : ''}`, chain(t, b.off_path, true, labels)])
+  for (const { b, prefix } of linesOf(t)) rows.push([`${who(b)}${prefix ? ` (${prefix.trim()})` : ''}`, chain(t, b.path, true, labels)])
+  if (t.branches.some((b) => b.path.some((id) => isTrocar(nodeOf(t, id))))) for (const { b, prefix } of linesOf(t, 'off_path')) rows.push([`without trocar${prefix ? ` (${prefix.trim()})` : ''}`, chain(t, b.off_path, true, labels)])
   for (const r of t.running || []) rows.push([`pid ${r.pid} now`, chain(t, r.path, true, labels)])
   return rows
 }
