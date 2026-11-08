@@ -3,7 +3,7 @@
 // (through page.evaluate, a route, an unrecorded keydown, or growth with the session reads aborted) and check() names it; a tiny
 // static page the harness serves (not the board) proves the probe sees a long task; two more static pages break I-chapter and I-pack.
 // Runs only under `npm run test:browser`.
-import test, { before, after } from 'node:test'
+import test, { before, beforeEach, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { probe, withBoard } from '../harness.mjs'
 import { makeWorld, mainCount } from './world.mjs'
@@ -61,6 +61,7 @@ before(async () => {
   await drawn(b.page)
   await following()
 })
+beforeEach(() => { b?.renew() }) // each case its own deadline on the shared board (0.1 §3 约定 13)
 after(async () => { await b?.stop() })
 
 // The desk reads `sessions` with every 1.5 s tick (replay.mjs pollOnce → loadSessions), against 4.4's 3 s for that name, so at the
