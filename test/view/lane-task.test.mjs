@@ -9,7 +9,7 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession, firstAskOf, firstPromptOf, rng } from '../query/big-session.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
 import { SEGMENT, homeWith, query, sessionDoc } from '../helpers/session-doc.mjs'
-import { askOf } from '../../src/view/blockmeta.mjs'
+import { askOf, TASK_HEAD } from '../../src/view/blockmeta.mjs'
 
 // Every sub-agent's first prompt opens with these lines, more of them than the lanes' own: only the lanes' own lines say a task.
 const PREAMBLE = Array.from({ length: 40 }, (_, i) => `[workflow] shared instruction ${i}: work only in the given worktree and report back.`).join('\n')
@@ -31,6 +31,20 @@ for (const wire of ['http', 'chat', 'threads', 'ws']) {
       assert.equal(l.task, l.kind === 'subagent' ? squashed(own) : firstAskOf(rec, recs), `lane ${l.lane}`)
       assert.ok(!String(l.label).includes('subagent:'), l.label)
     }
+  })
+}
+
+// The sub-agent rule reads a lane's first TASK_HEAD characters (4.4): a line past them is neither the lane's task nor counted toward
+// what is shared. The first lane holds the marker only past that head, the next two inside it: the marker is held by fewer than 3, so
+// it is the two later lanes' task, and the first has no line with words in its head at all (a flat wire's one doc lane is the first's).
+const DASHES = Array.from({ length: Math.ceil(TASK_HEAD / 60) + 2 }, () => '-'.repeat(59)).join('\n')
+for (const wire of ['http', 'chat', 'threads', 'ws']) {
+  test(`${wire}: a sub-agent's text past its first ${TASK_HEAD} characters is neither its task nor counted as shared`, async () => {
+    const home = path.join(tmpDir('trocar-lanetask-'), '.trocar'), marker = 'Write the migration for the ledger.'
+    const s = bigSession({ home, wire, growth: 600, subEvery: 3, subLanes: 3, subLen: 1000, preamble: (k) => (k ? `${marker}\n${DASHES}` : `${DASHES}\n${marker}`) })
+    s.append(24)
+    const tasks = subTasks(await runQuery('session', { id: s.id }, { home }))
+    assert.deepEqual(tasks, tasks.length < 3 ? [null] : [null, squashed(marker), squashed(marker)])
   })
 }
 

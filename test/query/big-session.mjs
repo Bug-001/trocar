@@ -11,7 +11,8 @@
 // `subLanes` subagents run side by side (their turns taken in turn), and a subagent's call that finished up to `late` calls (seeded)
 // after the ones started after it is written then — as the collector writes a call when it ends — so its line sorts before lines
 // already written, and before lines of other subagents that ended sooner.
-// `preamble`: text every subagent's first prompt starts with (a workflow's own instructions, shared by all its subagents).
+// `preamble`: text every subagent's first prompt starts with (a workflow's own instructions, shared by all its subagents); a function:
+//   of the side-by-side subagent's index (0 … subLanes − 1), its own text.
 // `cc`: the Anthropic wires send what Claude Code sends besides the conversation — `cc` tool definitions with every request (as a
 // thread's continuation does too) and the cache markers (`cache_control` on the system block and on the last message's last block) —
 // so a request body has the size and the long keys a real one has.
@@ -123,7 +124,8 @@ export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire 
     if (every(imageEvery) && (wire === 'http' || wire === 'threads')) lane.msgs.at(-3).content.push({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: PNG } })
     const failed = every(failEvery) && wire !== 'ws', sentBefore = lane.sent
     if (!sub) nmain++
-    if (sub && preamble && lane.msgs.length === 3) lane.msgs[0].content[0].text = `${preamble}\n${lane.msgs[0].content[0].text}` // a subagent's first prompt
+    const pre = typeof preamble === 'function' ? preamble(lane.k) : preamble
+    if (sub && pre && lane.msgs.length === 3) lane.msgs[0].content[0].text = `${pre}\n${lane.msgs[0].content[0].text}` // a subagent's first prompt
     if (prompt && lane.msgs.length === 3) t[0].content.unshift(everyLane, remind(words(xr, prompt / 2)))
     else if (prompt) { t[2].content.push(remind(words(xr, 240))); if (n % 2) t[0].content.unshift(remind(words(xr, 160))) } // as Claude Code adds to a turn
     if (paths) {
