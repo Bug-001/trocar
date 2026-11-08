@@ -35,6 +35,8 @@ const MUTATIONS = {
   'write-target (cwd)': (pm) => { pm.routes[firstRoute(pm)].file = { base: 'cwd', path: '.agent/settings.json' } },
   'shape (exe name)': (pm) => { pm.forms[0].exe = { [pm.forms[0].os[0]]: ['/Applications/Editor.app/Contents/MacOS/Editor Helper'] } }, // a path, not the program name
   'shape (exe os)': (pm) => { pm.forms[0].exe = { linux: ['editor'] } }, // an OS the form is not on
+  'shape (argv os)': (pm) => { pm.forms[0].argv = { linux: ['serve'] } }, // an OS the form is not on
+  'shape (argv words)': (pm) => { pm.forms[0].argv = { [pm.forms[0].os[0]]: [] } }, // no word: nothing to tell the form by
   'shape (notes)': (pm) => { pm.notes = [{ id: 'launch-flag' }] },
   'shape (notes list)': (pm) => { pm.notes = 'a launch flag skips the hook' },
   'shape (effects list)': (pm) => { pm.effects = { id: 'residue' } },
