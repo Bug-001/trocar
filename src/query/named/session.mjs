@@ -44,6 +44,7 @@ import { parseTextRef } from '../../raw/refs.mjs';
 import { QueryArgError } from './index.mjs';
 import { columns, dumpColumns, loadColumns, sync, viewOf, pageOf, deltaOf, limitOf, markOf } from '../session-doc.mjs';
 import { titleOf } from '../titles.mjs';
+import { projectFields } from '../../dissect/project.mjs';
 import { clearReread, endReread, setMtimes, filesAt, filesParts, filesReach, forget, hasHead, hasReread, headDoc, markDone, markReread, packsOf, pendingHead, readHead, seenOf, tailsReach, tier0Doc, writeFiles, writeHead, writeInFlight, memoBytes, CTX_V, PACK_MEMBERS } from '../ctx-files.mjs';
 
 export const about = Object.freeze({
@@ -767,7 +768,7 @@ function reachOf(ctx, id, log, members) {
 // What a head says of the title: titleOf's. `unread` alone changes no head: the head on disk's stands (4.4 §人类标题的来源).
 function headTitle(ctx, id, said) {
   const m = said.title_source === 'unread' && readHead(ctx.home ?? trocarHome(), id, ctx.fs || nodeFs)?.meta;
-  return m ? { title: m.title, title_source: m.title_source } : said;
+  return m ? { title: m.title, title_source: m.title_source, ...projectFields(m.project_path ?? null) } : said;
 }
 
 /** sessionState(ctx, id) → null (no such session) | {id, rows, store, mark, pending, truncated, V, failed, errors, plan}: the
