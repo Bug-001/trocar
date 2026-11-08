@@ -693,9 +693,10 @@ test('uninstall --purge-data asks the daemon not to seal, and says nothing of th
 
 test('uninstall: a sealed segment never hides how to stop a daemon that did not answer (1.6 §3.6)', async () => {
   const { io } = await sealingUninstall({ seals: true, argv: ['--json'] })
-  const r = { ...io.json(), daemon: { state: 'unresponsive', pid: 4321 } }
+  const json = io.json()
+  const r = { ...json, daemon: { state: 'unresponsive', pid: 4321 }, problems: [...(json.problems || []), 'the daemon (pid 4321) could not be stopped:\n    kill -9 4321'] }
   assert.ok(r.sealed && r.sealed.length)
-  assert.match(formatUninstallReceipt(r, {}), /kill -9 4321/)
+  assert.ok(formatUninstallReceipt(r, {}).split('\n').includes('    kill -9 4321'), 'the stop command, whole on its own line')
 })
 
 // A daemon `off` already stopped leaves its lock when it could not remove it (a forced end on Windows): this uninstall stopped nothing and must not say it did.

@@ -111,6 +111,15 @@ const defaultKill = (pid, signal) => { if (process.env.TROCAR_TEST_SANDBOX === '
 /** The supervisor's lock, beside the daemon's (`<collector>/supervisor.lock`, written by arch/win32/autostart.mjs superviseChild).
  *  The test holds the name equal to the arch module's, which cannot be imported here (src/off imports only node:* and src/off, 0.1 §2). */
 export const SUPERVISOR_LOCK = 'supervisor.lock'
+/** The commands a person runs to stop a daemon stopDaemon could not (`dir`: the collector's, where both locks are): on win32 the supervisor that
+ *  supervisor.lock names first (it starts a killed daemon again), then the daemon, through taskkill (PowerShell's kill is Stop-Process, which has
+ *  no -9); elsewhere `kill -9`. One command per element, each a line of its own where it is printed. */
+export function stopByHand({ platform, dir, pid, fs = nodeFs }) {
+  if (platform !== 'win32') return [`kill -9 ${pid}`]
+  let sup = null
+  try { const o = JSON.parse(fs.readFileSync(path.join(dir, SUPERVISOR_LOCK), 'utf8')); if (Number.isSafeInteger(o.pid) && o.pid > 0 && o.pid !== pid) sup = o.pid } catch { /* no supervisor on record: the daemon alone */ }
+  return [...(sup ? [`taskkill /PID ${sup} /F`] : []), `taskkill /PID ${pid} /F`]
+}
 /** The same 2 s as the arch module's LOCK_START_TOLERANCE_MS (the lock's start time is "now minus uptime", the OS's is the creation
  *  time: the same process agrees to within this). The test holds the two equal. */
 export const SUPERVISOR_START_TOLERANCE_MS = 2000

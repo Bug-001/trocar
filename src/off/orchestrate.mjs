@@ -26,7 +26,7 @@ import { readManifest, refuseOldManifest, unknownItems, undoByHand, MANIFEST_VER
 import { undoHarnesses, undoRootKeys, OWNED_ROLES } from './undo.mjs'
 import { planByMarker, undoByMarker } from './marker.mjs'
 import { pathKey } from './fsutil.mjs'
-import { daemonState, stopDaemon, helperGone, isRedirectorHelper, clearStaleSupervisorLock, SUPERVISOR_LOCK } from './daemon-stop.mjs'
+import { daemonState, stopDaemon, helperGone, isRedirectorHelper, clearStaleSupervisorLock, stopByHand } from './daemon-stop.mjs'
 import { controlRequest, controlEndpointFor } from './control-client.mjs'
 import { unitFilePath, UNIT_FILE_NAME } from './autostart.mjs'
 import { isProxyMode } from './mode.mjs'
@@ -90,8 +90,7 @@ const withCommands = (sentence, commands, after = null) => [sentence, ...command
 // The Windows query is one pipeline split after its pipes, so each line fits the width and a paste of the lines runs it whole.
 const SUPERVISE_FIRST = 'Of what it lists, end the one whose command line ends in "daemon --supervise" first, then the daemon, each with taskkill /PID and its ProcessId, then /F.'
 const findDaemon = (w) => (w.platform === 'win32' ? ['Get-CimInstance Win32_Process -Filter "Name=\'node.exe\'" |', "Where-Object CommandLine -match 'trocar.*(daemon|collector start)' |", 'Select-Object ProcessId,CommandLine'] : ["pgrep -f 'trocar.* (daemon|collector start)'"])
-const supervisorPid = (w) => { try { const o = JSON.parse(w.fs.readFileSync(path.join(path.dirname(w.lockFile), SUPERVISOR_LOCK), 'utf8')); return Number.isSafeInteger(o.pid) && o.pid > 0 ? o.pid : null } catch { return null } }
-const killBy = (w, pid) => { if (w.platform !== 'win32') return [`kill ${pid}`]; const sup = supervisorPid(w); return [...(sup ? [`taskkill /PID ${sup} /F`] : findDaemon(w)), `taskkill /PID ${pid} /F`] }
+const killBy = (w, pid) => stopByHand({ platform: w.platform, dir: path.dirname(w.lockFile), pid, fs: w.fs })
 
 /** Is the autostart going to bring the daemon back the moment it is stopped — systemd's Restart=on-failure mid-wait, or launchd's KeepAlive with the agent still loaded (4.9 §4)? A tool that cannot be asked says no: the lock decides. */
 const unitIsUp = (w) => {
@@ -214,7 +213,7 @@ export async function switchRoutingOff(w, { ids = null, now = false, exit = fals
       r.relayed = 'unknown'; r.relayed_reason = `the daemon ${why}, so it could not say how many connections it relayed; it was stopped and they went with it`
     } else {
       r.unstoppable = true; r.daemon = { pid: s.pid, state: 'unresponsive' }; r.relayed_reason = 'the daemon does not answer'
-      fail('stop-failed', `the daemon (pid ${s.pid}) ${why} and could not be stopped${s.error ? ` (${s.error})` : ''}; the entries are undone all the same, new connections are direct while its heartbeat is stale; stop it by hand: kill -9 ${s.pid}`)
+      fail('stop-failed', withCommands(`the daemon (pid ${s.pid}) ${why} and could not be stopped${s.error ? ` (${s.error})` : ''}; the entries are undone all the same, new connections are direct while its heartbeat is stale. Stop it by hand:`, killBy(w, s.pid)))
     }
   }
   if (st.state === 'running') {

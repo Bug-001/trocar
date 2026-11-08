@@ -5,7 +5,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { daemonState, stopDaemon, helperGone, readDaemonLock, DAEMON_LOCK_FRESH_MS } from '../../src/off/daemon-stop.mjs'
+import { daemonState, stopDaemon, helperGone, readDaemonLock, stopByHand, DAEMON_LOCK_FRESH_MS } from '../../src/off/daemon-stop.mjs'
 import { lockState, LOCK_FRESH_MS } from '../../src/health/read.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { psIdentity, identityFor } from '../../src/off/proc.mjs'
@@ -225,3 +225,11 @@ for (const [platform, managerStop] of [['darwin', 'launchctl-bootout'], ['linux'
     assert.ok(sentAt[1][1] - sentAt[0][1] >= 10_000, `SIGKILL ${sentAt[1][1] - sentAt[0][1]} ms after SIGTERM`)
   })
 }
+
+test('stopByHand: on win32 the supervisor supervisor.lock names goes first, then the daemon, through taskkill; elsewhere kill -9; no lock, the daemon alone', () => {
+  const dir = tmpDir()
+  assert.deepEqual(stopByHand({ platform: 'win32', dir, pid: 4242 }), ['taskkill /PID 4242 /F'])
+  fs.writeFileSync(path.join(dir, 'supervisor.lock'), JSON.stringify({ pid: 5000, startedAt: 1 }))
+  assert.deepEqual(stopByHand({ platform: 'win32', dir, pid: 4242 }), ['taskkill /PID 5000 /F', 'taskkill /PID 4242 /F'])
+  for (const platform of ['darwin', 'linux']) assert.deepEqual(stopByHand({ platform, dir, pid: 4242 }), ['kill -9 4242'])
+})
