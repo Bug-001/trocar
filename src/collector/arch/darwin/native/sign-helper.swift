@@ -6,6 +6,7 @@
 //   trocar-sign-helper create --subject <cn>        → {"rootDer":b64}        (exit 5 + {"error":"exists"} when a key is there)
 //   trocar-sign-helper exists                       → {"exists":true|false}
 //   trocar-sign-helper issue --spki <b64 P-256 SPKI> --serial <hex> --not-before <iso>  → {"certDer":b64}
+//     (--not-before outside [now − 1 h, now + 5 min] by this helper's clock: exit 2)
 //   trocar-sign-helper remove                       → {"removed":true|false}
 // No GUI session (CSSMERR_CSP_NO_USER_INTERACTION over ssh, R3-M3), interaction not allowed, a locked keychain:
 // {"error":"unavailable"}, exit 3. No key: {"error":"no-key"}, exit 4. Bad argv: exit 2. Anything else: exit 1.
@@ -126,6 +127,10 @@ case "issue":
   let serialHex = arg("--serial")
   guard serialHex.count % 2 == 0, (2...40).contains(serialHex.count), serialHex.allSatisfy(\.isHexDigit) else { usage("--serial is not 1-20 bytes of hex") }
   guard let nb = iso(arg("--not-before")) else { usage("--not-before is not an ISO 8601 time") }
+  // the window is the helper's, not the caller's: an intermediate starts within an hour before this helper's now and five minutes after
+  // (a later or earlier start would let a caller mint one for a week it chooses and keep it)
+  let now = Date()
+  guard nb >= now - 3600, nb <= now + 300 else { usage("--not-before is not within an hour before now or five minutes after") }
   guard let found = findKey() else { emit(["error": "no-key"], 4) }
   let (k, cn) = found
   let point = spki.suffix(65), rootPoint = pointOf(k)
