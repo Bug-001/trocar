@@ -109,3 +109,18 @@ test('C.3 failures: each count is the sum of its level\'s group counts, a resolv
   assert.ok(f.note >= 1, 'the helper-down condition is a note group')
   assert.equal(Date.parse(f.since), Date.parse(health.generated_at) - 24 * 3600e3)
 })
+
+test('D38: doctor counts the capture failures status counts, from the same read: one failure fed, both documents carry it', async () => {
+  const s = sandbox()
+  for (const [recs, n] of [[[{ ts: at(60), event: 'failure', where: 'engine', code: 'upstream-cert', reason: 'r' }], 1], [[], 0]]) {
+    const deps = { captureHealth: () => healthOver(recs) }
+    const st = (await s.run(['status', '--json'], { deps })).io.json()
+    const run = await s.run(['doctor', '--json'], { deps })
+    const dr = run.io.json()
+    assert.equal(st.failures.problem, n)
+    assert.equal(dr.status.failures.problem, n)
+    const mine = (dr.findings || []).filter((x) => x.code === 'capture-failures')
+    assert.deepEqual(mine.map((x) => [x.class, x.count]), n ? [['problem', n]] : [])
+    if (n) { assert.ok(dr.summary && dr.summary.problem >= 1, JSON.stringify(dr.summary)); assert.notEqual(run.exit, EXIT.ok) }
+  }
+})
