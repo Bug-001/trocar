@@ -21,6 +21,7 @@ import { EVENT, CODE } from '../collector/core/codes.mjs'
 import { codeId, packageRoot, channelOf, setupHelperCommand } from '../version.mjs'
 import { CUT, daemonCode, replaceDaemon } from './replace-daemon.mjs'
 import { printJson } from './json.mjs'
+import { findingFor } from '../netenv/findings.mjs'
 
 const NEEDS_YES = 'Nothing was changed. Read the plan above, then run it again with --yes'
 // R5 / R6: no terminal and no --yes — the plan was printed, nothing written, exit 2; with --json stdout is the one receipt, with the plan in `planned`
@@ -225,9 +226,11 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
     if (rep) { dmnNotes.push(...rep.notes); if (!rep.replaced) r.exit = 1 }
     // a refusal carries `error: {code, message}` (附录 C.1): the first pending item that named a code is why install could not go on
     const refusal = r.pending.find((p) => p.code)
-    // 1.6 §3.2: the carriers skipped for trocar's marked text no record lists — the receipt is that refusal's: each file a problem, the code, and the uninstall that takes the text out
+    // 1.6 §3.2: the carriers skipped for trocar's marked text no record lists — the receipt is that refusal's: each file a problem, the code, and the
+    // finding's steps (附录 B): uninstall takes the text out, and it refuses while a harness is on, which is the usual case when install runs again
     const marked = [...new Set(r.carriers.filter((c) => c.code === MARKED_WITHOUT_RECORD && c.path).map((c) => c.path))]
-    const mwr = marked.length ? markedRefusal('install', { code: MARKED_WITHOUT_RECORD, message: `${marked.length === 1 ? 'this file holds' : 'these files hold'} trocar's text from an earlier install whose record is gone, so trocar left ${marked.length === 1 ? 'it' : 'them'} and installed the rest. The line below takes that text out by trocar's own marks; then run trocar install again.`, paths: marked }) : null
+    const mwr = marked.length ? markedRefusal('install', { code: MARKED_WITHOUT_RECORD, message: `${marked.length === 1 ? 'this file holds' : 'these files hold'} trocar's text from an earlier install whose record is gone, so trocar left ${marked.length === 1 ? 'it' : 'them'} and installed the rest. Uninstall takes that text out by trocar's own marks, and it runs only once capture is off. Run these, in order:`, paths: marked },
+      findingFor(MARKED_WITHOUT_RECORD, { platform }).commands.map((c) => c.run)) : null
     if (mwr) r.problems.push(...mwr.problems)
     const receipt = { ...newReceipt('install'), ok: r.exit === 0, skipped: r.carriers.filter((c) => c.code === CODE.notTrocarsFile && c.path).map((c) => ({ what: c.path, reason: c.why })), undo: r.refused ? null : UNDO_LINE.install, fp256: r.fp256, items: r.items, carriers: r.carriers, pending: only ? r.pending.map((p) => ({ ...p, command: 'trocar install' })) : r.pending, problems: r.problems, notes: [...r.notes, ...dmnNotes], ...(r.refused ? {} : { standalone: standalonePath(home), residual_risk: RISK }), daemon: daemonRow(dmn, rep), ...(unit && !only && !r.refused ? { autostart: { entry: dmn.entry || (platform === 'win32' ? '\\trocar\\collector' : unit.path), enabled: !dmn.unitFailed } } : {}),
       ...(refusal ? { error: { code: refusal.code, message: refusal.reason } } : mwr ? { error: mwr.error } : {}),

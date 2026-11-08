@@ -240,13 +240,14 @@ export function formatOnReceipt(r, { tense = 'past', home = null, platform = 'li
  *  'future' (`--dry-run`, or the plan printed when a yes is missing). */
 /** 1.6 §3.6: the uninstall receipt's first line, true on each platform — the root is in the user's trust store on macOS and Windows only; on Linux it
  *  reached the agents through the certificate settings install gave them (4.6), so that is what is said gone. The one place this line is decided. */
-/** A refusal that names files and the one line that gets past it (1.6 §1.1⑥): the sentence, each file on a line of its own (each problem
- *  starts with its path), then `error.command` whole on a line of its own. → lines */
+/** A refusal that names files and the lines that get past it (1.6 §1.1⑥): the sentence, each file on a line of its own (each problem
+ *  starts with its path), then `error.commands` (else `error.command`), each whole on a line of its own. → lines */
 // `paths`: each file alone on its line (the sentence above says what they are), printed whole (§1.1⑥)
-export const formatRefusal = (r, { home = null, paths = null } = {}) => fit([`trocar ${r.command}: ${r.error.message}`, ...(paths || r.problems || []).map((p) => wholeLine(`  ${p}`)), ...(r.error.command ? [commandLine(r.error.command)] : [])], { home }) // a path prints whole (§1.1⑥)
+export const formatRefusal = (r, { home = null, paths = null } = {}) => fit([`trocar ${r.command}: ${r.error.message}`, ...(paths || r.problems || []).map((p) => wholeLine(`  ${p}`)), ...(r.error.commands || (r.error.command ? [r.error.command] : [])).map(commandLine)], { home }) // a path prints whole (§1.1⑥)
 /** 1.6 §3.2 「标记却没有记录」: the refusal document of `install` or `on` (`command`) from the plan's error (`code`, `paths`): every file named, and
- *  `error.command` the uninstall that takes the text out by trocar's marks. */
-export const markedRefusal = (command, e) => ({ ...newReceipt(command), ok: false, error: { code: e.code, message: e.message, command: UNDO_LINE.install }, problems: e.paths.map((f) => `${f} holds trocar's text, and no install record lists it`) })
+ *  `error.command` the uninstall that takes the text out by trocar's marks; with `steps` (macOS / Windows install, where a harness may be on) those
+ *  lines in order as `error.commands`, and `error.command` the first. */
+export const markedRefusal = (command, e, steps = null) => ({ ...newReceipt(command), ok: false, error: { code: e.code, message: e.message, command: steps ? steps[0] : UNDO_LINE.install, ...(steps ? { commands: steps } : {}) }, problems: e.paths.map((f) => `${f} holds trocar's text, and no install record lists it`) })
 
 export function uninstallHeadline({ platform = process.platform, past = true } = {}) {
   const linux = platform === 'linux'

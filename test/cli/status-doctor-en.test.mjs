@@ -72,6 +72,14 @@ test('§3.5 a harness that needs setting up has its own row, says so before `on`
   const detail = statusDetail(doc({ harnesses: { hermes: harness({ ...off, ...setup('needed', 'carrier-absent') }) } }), 'hermes', { now: NOW })
   clean(detail, 'status <harness>')
   for (const cmd of ['trocar install', 'trocar on hermes']) assert.ok(detail.some((l) => l.includes(cmd)), `the detail names ${cmd}: ${detail.join('|')}`)
+  // 附录 B: trocar's marked text with no record is not set up by install alone; the steps are the finding's, each a line of its own, then on
+  const mwr = statusDetail(doc({ harnesses: { hermes: harness({ ...off, ...setup('needed', 'marked-without-record') }) } }), 'hermes', { now: NOW })
+  const steps = [...findingFor('marked-without-record').commands.map((c) => c.run), 'trocar on hermes']
+  const at = steps.map((s) => mwr.findIndex((l) => l.trimEnd().endsWith(` ${s}`)))
+  assert.ok(at.every((x, i) => x >= 0 && (i === 0 || x > at[i - 1])), `the steps, in order, a line each: ${mwr.join('|')}`)
+  const note = statusSummary(doc({ harnesses: { hermes: harness({ ...off, ...setup('needed', 'marked-without-record') }) }, install: { state: 'complete', harnesses: [], pending: [] } }), { now: NOW }).join(' ')
+  const named = steps.slice(0, -1).map((s) => note.indexOf(s))
+  assert.ok(named.every((x, i) => x >= 0 && (i === 0 || x > named[i - 1])), `the NOTE names the steps in order: ${note}`)
 })
 
 test('§1.1 · §3.5 a long NOTE folds under its own column: every line of the summary inside 80 columns, for every reason and harness name', () => {
