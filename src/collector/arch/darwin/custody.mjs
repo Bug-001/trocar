@@ -8,17 +8,27 @@
 import crypto from 'node:crypto'
 import nodeFs from 'node:fs'
 import path from 'node:path'
-import { cliCustody } from '../../core/tls/custody-cli.mjs'
+import { cliCall, cliCustody, UNAVAILABLE } from '../../core/tls/custody-cli.mjs'
 import { NATIVE, nativePath, pins, sha256 } from './native.mjs'
 
 /** The helper may show the keychain's prompt (interactive install): the same wait the root store gives the OS's own. */
 const HELPER_TIMEOUT_MS = 120000
 
-/** keychainCustody({ helperPath, run, env }) → { kind:'keychain', create, exists, issueIntermediate, remove }. `helperPath` is the
+/** keychainCustody({ helperPath, run, env }) → { kind:'keychain', create, exists, canCreate, issueIntermediate, remove }. `helperPath` is the
  *  INSTALLED helper (the caller resolves it); `run` is execTool's injected runner. The verbs, the argv and the 'unavailable' value
- *  are core/tls/custody-cli.mjs's, shared with the Windows custody script. */
-export const keychainCustody = ({ helperPath, run = null, env = process.env }) =>
-  cliCustody({ kind: 'keychain', file: helperPath, name: NATIVE.signHelper, run, env, timeoutMs: HELPER_TIMEOUT_MS })
+ *  are core/tls/custody-cli.mjs's, shared with the Windows custody script. canCreate() is the keychain's own (4.11 P1): looking up a
+ *  missing key needs no GUI, making one does, so it asks the helper's `session` and throws code 'unavailable' without graphic access. */
+export const keychainCustody = ({ helperPath, run = null, env = process.env }) => {
+  const program = { file: helperPath, name: NATIVE.signHelper, run, env, timeoutMs: HELPER_TIMEOUT_MS }
+  const call = cliCall(program)
+  return {
+    ...cliCustody({ kind: 'keychain', ...program }),
+    canCreate() {
+      const o = call(['session'])
+      if (o === 'unavailable' || o.graphic !== true) throw Object.assign(new Error(`${NATIVE.signHelper} session: this session has no graphical access, so the login keychain cannot make a key here`), { code: UNAVAILABLE })
+    },
+  }
+}
 
 /** installHelper({ dest, interactive, run, fs, src }) → { replaced, why? , prompted? }: puts the packaged helper at `dest` (resolved
  *  by the caller, under ~/.trocar/bin). It writes `<dest>.new-<rand>` and renames it over `dest`, never an in-place overwrite (one

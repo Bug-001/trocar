@@ -7,6 +7,7 @@
 //   trocar-sign-helper exists                       → {"exists":true|false}
 //   trocar-sign-helper issue --spki <b64 P-256 SPKI> --serial <hex> --not-before <iso>  → {"certDer":b64}
 //   trocar-sign-helper remove                       → {"removed":true|false}
+//   trocar-sign-helper session                      → {"graphic":true|false}  (can this security session show the keychain's UI: create needs it; never touches the keychain)
 // No GUI session (CSSMERR_CSP_NO_USER_INTERACTION over ssh), interaction not allowed, a locked keychain:
 // {"error":"unavailable"}, exit 3. No key: {"error":"no-key"}, exit 4. Bad argv: exit 2. Anything else: exit 1.
 // Build: scripts/build-darwin-native.sh (universal, pinned in native/pins.json). Never run it in a test: it writes the keychain.
@@ -138,6 +139,11 @@ case "remove":
   let st = SecItemDelete(query as CFDictionary)
   if st != errSecSuccess && st != errSecItemNotFound { fail(Int(st), "remove") }
   emit(["removed": st == errSecSuccess])
+case "session":
+  var sid = SecuritySessionId(0), attrs = SessionAttributeBits(rawValue: 0)
+  let st = SessionGetInfo(callerSecuritySession, &sid, &attrs)
+  if st != errSecSuccess { fail(Int(st), "session") }
+  emit(["graphic": attrs.contains(.sessionHasGraphicAccess)])
 default:
-  usage("trocar-sign-helper create --subject <cn> | exists | issue --spki <b64> --serial <hex> --not-before <iso> | remove")
+  usage("trocar-sign-helper create --subject <cn> | exists | issue --spki <b64> --serial <hex> --not-before <iso> | remove | session")
 }

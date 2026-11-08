@@ -78,11 +78,13 @@ export async function carrierPlacesFor({ os, home, env = process.env, harnesses,
 /** backendsFor({ os, home, run, env, fs }) → { custody, rootStore, installHelper, wrapperKit, facts, dirs, policy } for macOS / Windows. */
 export async function backendsFor({ os, home, run = null, env = process.env, fs = nodeFs }) {
   if (os === 'darwin') {
-    const [{ keychainCustody, installHelper }, { NATIVE }, { userRootStore }, { renderWrapper }, pol] = await Promise.all([
+    const [{ keychainCustody, installHelper }, { NATIVE, nativePath }, { userRootStore }, { renderWrapper }, pol] = await Promise.all([
       import('./darwin/custody.mjs'), import('./darwin/native.mjs'), import('./darwin/root-store.mjs'), import('./darwin/wrapper.mjs'), import('./darwin/policy.mjs')])
     const helperPath = signHelperPath(home, NATIVE.signHelper)
     return {
-      custody: keychainCustody({ helperPath, run, env }), rootStore: userRootStore({ home, run, env, fs }),
+      custody: keychainCustody({ helperPath, run, env }),
+      // the gate before install writes anything asks the helper trocar ships: the one in ~/.trocar/bin is install's to place (1.6 §3.2)
+      gateCustody: keychainCustody({ helperPath: nativePath(NATIVE.signHelper, env), run, env }), rootStore: userRootStore({ home, run, env, fs }),
       installHelper: (interactive) => installHelper({ dest: helperPath, interactive, run, env, fs }),
       wrapperKit: { renderWrapper }, facts: pol.platformFacts, dirs: pol.dirsOf(home), policy: pol.policyReader({ run, env }),
     }
