@@ -122,7 +122,8 @@ function argPreview(bl) {
 function blockHead(b) {
   if (!b) return { role: '', tag: '', label: '' };
   if (b.sec === 'tools') return { role: 'tool', tag: 'def' + (b.mcp ? ' · MCP' : ''), label: b.name || '' };
-  if (b.sec === 'system') return { role: 'system', tag: b.label || '', label: '' };
+  // the tag is harness-free and closed (2.3 块头 tag 的词): instructions, or a reminder; the harness's own name for the block is the label
+  if (b.sec === 'system') return b.label === 'system-reminder' ? { role: 'system', tag: 'system-reminder', label: '' } : { role: 'system', tag: 'def', label: b.label || '' };
   const r = b.role, k = b.kind, bl = b.block;
   if (k === 'thinking' || k === 'redacted_thinking') return { role: 'assistant', tag: 'thinking', label: '' };
   if (k === 'tool_use' || k === 'server_tool_use') return { role: 'assistant', tag: 'action · ' + (b.toolName || ''), label: shorten(argPreview(bl)) };
