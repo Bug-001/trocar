@@ -44,6 +44,22 @@ const CUSTODY_ADVICE = Object.freeze({
   darwin: 'trocar needs the login keychain of this user: log in to this Mac at its own desktop once (that is where the keychain is made), then run trocar install again there',
   win32: 'run trocar install again from a terminal of your own desktop session',
 })
+/** A custody verb that threw, as the refusal install carries in `pending` (its `code` becomes the receipt's `error.code`). */
+// the log-in advice answers the keychain's own failure (the helper's error word 'failed', with its OSStatus) and a session that cannot make a key ('unavailable'); a helper that did not run at all is another matter
+// 'unavailable': the keychain is there but this session cannot use it (an ssh login has no access to the desktop's, even while the user is logged in there; or it is locked)
+const ADVICE_SESSION = 'Run trocar install from a Terminal in your desktop session: an ssh login cannot use the login keychain, even while you are logged in at the desktop'
+const ADVICE_HELPER = 'trocar\'s own signing helper could not be run, so this copy of trocar is incomplete: install trocar again, then run trocar install'
+const custodyFailed = (os, verb, e) => ({ item: 'root-key', state: 'failed', code: CUSTODY_FAILED,
+  reason: `the key that signs certificates could not be ${verb === 'create' ? 'made' : 'read'} (${errText(e)}). ${os !== 'darwin' ? CUSTODY_ADVICE[os] || CUSTODY_ADVICE.win32 : e && e.code === 'unavailable' ? ADVICE_SESSION : e && e.code === 'failed' ? CUSTODY_ADVICE.darwin : ADVICE_HELPER}` })
+/** Asked before install prints its plan, takes its lock or writes anything: does the custody answer at all? → `{}` or `{ refusal }` (the pending item):
+ *  a custody that cannot be used leaves the HOME as it was. Only a gate: runInstall asks exists() again under the lock, where another install may have made the key since. */
+export async function custodyPreflight({ os, custody }) {
+  let has
+  try { has = await custody.exists() } catch (e) { return { refusal: custodyFailed(os, 'exists', e) } }
+  // a missing key is looked up without a GUI, but made only with one (4.11 P1): ask whether this session can make it
+  if (!has && typeof custody.canCreate === 'function') try { await custody.canCreate() } catch (e) { return { refusal: custodyFailed(os, 'create', e) } }
+  return {}
+}
 // an OS prompt that was not answered (timeout, no GUI session) is pending; one the user answered no is declined (1.6 §1.6)
 const promptState = (r) => r.state || (/time[d ]?out|no gui|interaction|session|unavailable/i.test(String(r.reason || '')) ? 'pending' : 'declined')
 
@@ -83,12 +99,13 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
   let custodyWhy = null
   const ask = async (verb, arg) => {
     try { return await custody[verb](arg) } catch (e) {
-      custodyWhy = `the key that signs certificates could not be ${verb === 'create' ? 'made' : 'read'} (${errText(e)}). ${CUSTODY_ADVICE[os] || CUSTODY_ADVICE.win32}`
-      pending.push({ item: 'root-key', state: 'failed', code: CUSTODY_FAILED, reason: custodyWhy })
+      const p = custodyFailed(os, verb, e)
+      custodyWhy = p.reason
+      pending.push(p)
       return null
     }
   }
-  const has = await ask('exists')
+  const has = await ask('exists') // under the lock: another install may have made the key since the preflight asked
   if (custodyWhy) return finish()
   if (has === 'unavailable') { pending.push({ item: 'root-key', state: 'pending', reason: 'the key custody is not reachable (macOS: no graphical login session); run trocar install again in a terminal of that session' }) }
   else if (rec && has === true && fs.existsSync(ca.pem)) { rootDer = pemToDer(fs.readFileSync(ca.pem, 'utf8')); said('root-key', 'intact', { fp256: rec.fp256 }) }

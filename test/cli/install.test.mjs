@@ -12,6 +12,9 @@ import { unservable } from '../helpers/model-daemon.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { ERROR_CODES } from '../../src/cli/json.mjs'
+import { CUSTODY_FAILED, custodyPreflight } from '../../src/collector/model-install.mjs'
+import { backendsFor } from '../../src/collector/arch/model-backends.mjs'
+import { snapshot } from './fixtures/on-ctx.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
 import { BOARD_RANGE } from '../../src/collector/core/ingress-config.mjs'
 
@@ -161,6 +164,112 @@ for (const platform of ['darwin', 'win32']) {
     assert.equal(doc.fp256, null, 'no root was made')
   })
 }
+
+// the refusal is asked before the first write: a custody that cannot be used leaves the HOME as it was — no trocar-off, no record, no login entry
+for (const platform of ['darwin', 'win32']) {
+  test(`${platform}: an install whose key custody cannot be used writes nothing, with the same exit and error.code`, async () => {
+    const w = await modelWorld({ os: platform, commands: ['codex'] })
+    w.custody.switches.failed = true
+    const exec = fakeLaunchctl()
+    const { userUnit } = await import(`../../src/collector/arch/${platform}/autostart.mjs`)
+    const unit = userUnit({ home: w.home, node: process.execPath, script: '/repo/bin/trocar.mjs', run: exec.run, env: w.env, spawn: () => assert.fail('nothing is started') })
+    const deps = { getuid: () => 501, exec: exec.run, request: async () => { throw Object.assign(new Error('nothing answers'), { code: 'ENOENT' }) }, sleep: async () => {}, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, unit }
+    const before = snapshot(w.home)
+    const io = fakeIo()
+    assert.equal(await runInstallCli(['--yes', '--json'], { io, env: w.env, home: w.home, platform, deps }), 1, io.text())
+    assert.equal(io.json().error.code, CUSTODY_FAILED)
+    assert.deepEqual(validateReceipt(io.json()), [])
+    assert.equal(io.json().undo, null, 'nothing was installed, so there is nothing to undo')
+    for (const k of ['standalone', 'residual_risk']) assert.equal(k in io.json(), false, `${k}: about an install that did not happen`)
+    assert.deepEqual(snapshot(w.home), before, 'the HOME is byte for byte as it was')
+    // a dry run says the run's refusal in `blocked` (C.2), and no plan is offered for a run that would refuse: without --yes it is the run's receipt
+    const d = fakeIo()
+    assert.equal(await runInstallCli(['--dry-run', '--json'], { io: d, env: w.env, home: w.home, platform, deps }), 0, d.text())
+    assert.equal(d.json().error.code, CUSTODY_FAILED)
+    assert.ok(d.json().blocked.length, d.text())
+    assert.deepEqual(validateReceipt(d.json()), [])
+    const p = fakeIo()
+    assert.equal(await runInstallCli(['--json'], { io: p, env: w.env, home: w.home, platform, deps }), 1, p.text())
+    assert.equal(p.json().error.code, CUSTODY_FAILED)
+    assert.deepEqual(snapshot(w.home), before, 'the plan and the dry run wrote nothing either')
+  })
+}
+
+// two installs that overlap (update's install and the user's, or the board's Set up): the answer asked before the lock is only a gate. B asks first and
+// sees no key, A then runs to its end (key made, root added, record written), then B goes on under the lock: it must read the key again, and remove nothing
+// macOS: the custody's helper is one of the things install places. The gate before any write asks the copy trocar ships with, through the
+// real backends on a clean HOME, with a runner that answers only for a file that is really there (a stand-in that answers for any path hid this)
+test('darwin: a first install on a clean HOME is not refused for the custody: the gate asks the helper trocar ships, not the one install has yet to place', async () => {
+  const w = await modelWorld({ os: 'darwin', commands: ['codex'] })
+  const asked = []
+  const run = (file, args) => {
+    if (!fs.existsSync(file)) throw Object.assign(new Error(`spawn ${file} ENOENT`), { code: 'ENOENT', errno: -2, syscall: `spawn ${file}`, path: file })
+    asked.push(file)
+    return { status: 0, stdout: JSON.stringify(args[0] === 'session' ? { graphic: true } : { exists: false }), stderr: '' }
+  }
+  const real = await backendsFor({ os: 'darwin', home: w.home, run, env: w.env })
+  assert.equal(fs.existsSync(path.join(w.home, '.trocar')), false, 'a clean HOME')
+  const deps = { getuid: () => 501, backends: { ...real, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which }
+  const io = fakeIo()
+  assert.equal(await runInstallCli(['--dry-run', '--json'], { io, env: w.env, home: w.home, platform: 'darwin', deps }), 0, io.text())
+  assert.equal(io.json().error, undefined, io.text())
+  assert.ok(asked.length > 0 && asked.every((f) => !f.startsWith(w.home)), `the shipped helper was asked: ${asked}`)
+})
+
+// the advice to log in at the desktop is for the keychain's own failure; a helper that could not be run at all is not that
+test('darwin: a custody helper that cannot be run is refused without the advice to log in', async () => {
+  const run = (file) => { throw Object.assign(new Error(`spawn ${file} ENOENT`), { code: 'ENOENT' }) }
+  const real = await backendsFor({ os: 'darwin', home: tmpDir(), run, env: {} })
+  const { refusal } = await custodyPreflight({ os: 'darwin', custody: real.custody })
+  assert.equal(refusal.code, CUSTODY_FAILED)
+  assert.doesNotMatch(refusal.reason, /log in/)
+})
+
+// macOS: looking up a missing key needs no graphical session, making one does. With no key the gate also asks whether this
+// session can make it (the helper's `session`); with a key it does not ask, since signing with an existing key needs no prompt
+for (const [key, graphic, refused] of [[false, false, true], [false, true, false], [true, false, false]]) {
+  test(`darwin: key ${key ? 'present' : 'absent'}, graphical session ${graphic}: the custody gate ${refused ? 'refuses and writes nothing' : 'lets install go on'}`, async () => {
+    const w = await modelWorld({ os: 'darwin', commands: ['codex'] })
+    const asked = []
+    const run = (file, args) => {
+      asked.push(args[0])
+      return { status: 0, stdout: JSON.stringify(args[0] === 'session' ? { graphic } : { exists: key }), stderr: '' }
+    }
+    const real = await backendsFor({ os: 'darwin', home: w.home, run, env: w.env })
+    const deps = { getuid: () => 501, backends: { ...real, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, unit: null }
+    const before = snapshot(w.home)
+    const io = fakeIo()
+    if (refused) {
+      assert.equal(await runInstallCli(['--yes', '--json'], { io, env: w.env, home: w.home, platform: 'darwin', deps }), 1, io.text())
+      assert.equal(io.json().error.code, CUSTODY_FAILED)
+      assert.deepEqual(snapshot(w.home), before, 'the HOME is byte for byte as it was')
+    } else {
+      assert.equal(await runInstallCli(['--dry-run', '--json'], { io, env: w.env, home: w.home, platform: 'darwin', deps }), 0, io.text())
+      assert.equal(io.json().error, undefined, io.text())
+    }
+    assert.equal(asked.includes('session'), !key, `asked: ${asked}`)
+  })
+}
+
+test('an install that waited behind another reads the key again under the lock: the root and record the first one made stay', async () => {
+  const w = await modelWorld({ commands: ['codex'] })
+  const run = async (custody) => {
+    const io = fakeIo()
+    const deps = { getuid: () => 501, backends: { custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, unit: null }
+    return { exit: await runInstallCli(['--yes', '--json'], { io, env: w.env, home: w.home, platform: 'darwin', deps }), io }
+  }
+  let a = null
+  const b = await run({ ...w.custody, exists: async () => { const has = w.custody.exists(); if (!a) a = await run(w.custody); return has } })
+  assert.ok(a, 'A ran between B\'s first question and B\'s run')
+  const fp = a.io.json().fp256
+  assert.ok(fp, a.io.text())
+  const m = JSON.parse(fs.readFileSync(path.join(w.dir, 'install-manifest.json'), 'utf8'))
+  assert.equal(m.entries.find((e) => e.kind === 'root-key')?.fp256, fp, `A's key record stays: ${b.io.text()}`)
+  assert.ok(m.entries.some((e) => e.kind === 'system-root' && e.fp256 === fp), "A's root-store record stays")
+  assert.ok(w.store.held.has(fp), "A's root is still in the store")
+  assert.ok(!w.store.calls.includes('remove'), 'nothing was removed from the store')
+  assert.equal(w.custody.calls.filter((c) => c.verb === 'remove').length, 0, 'the key was not removed')
+})
 
 // §1.1 / D58 (macOS and Windows test machines, 2026-10-18): a receipt has no two identical rows, and it never prints trocar's own ids at a person — a form id
 // (`codex.vscode`) and a carrier kind (`config-key`) are read out in words (src/cli/receipt.mjs formWords / carrierWords, one vocabulary).
