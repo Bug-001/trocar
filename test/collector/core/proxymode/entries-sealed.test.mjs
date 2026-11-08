@@ -42,7 +42,7 @@ test('S1: after write, the manifest on disk holds no door password; every on rec
   }
 })
 
-test('S2: a crash at the intent (the rename onto the agent\'s file fails) leaves an intent on disk and no door password', () => {
+test('S2: a crash at the intent (the rename onto the agent\'s file fails) leaves an intent on disk that names its route, and no door password', () => {
   for (const c of CASES) {
     let at = null, snap = null
     const s = setup(c, (w) => watching(w, (to) => {
@@ -54,7 +54,7 @@ test('S2: a crash at the intent (the rename onto the agent\'s file fails) leaves
     assert.ok(at && snap, s.label)
     assert.ok(!snap.includes(PW), s.label)
     const m = JSON.parse(snap)
-    assert.ok([...m.entries, ...m.files].some((x) => x.harness === c.h.name && (x.real_path || x.path) === at && x.door_sha256 === sha256(door())), `${s.label}: the intent for ${at}`)
+    assert.ok([...m.entries, ...m.files].some((x) => x.harness === c.h.name && (x.real_path || x.path) === at && x.door_sha256 === sha256(door()) && x.route === c.id), `${s.label}: the intent for ${at}, naming its route`)
   }
 })
 

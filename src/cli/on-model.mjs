@@ -109,7 +109,9 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
     const up = await ensureDaemonUp({ osName: os, dir, env, fs, unit, put, ...(deps.sleep ? { pause: deps.sleep } : {}) })
     const r = up.up ? await turnOnModel({ ...args, root: plan.root }) : { ...plan, routes: [], problems: up.problems.length ? up.problems : up.notes, exit: EXIT.incomplete }
     if (up.up) r.notes.push(...up.notes.map((text) => ({ harness: null, text })))
-    if (fresh.length && r.on.length && up.up) { const now = readManifest(dir, fs); now.confirmed_paths = [...new Set([...(now.confirmed_paths || []), ...plan.planned.flatMap((p) => p.paths)])]; saveManifest(dir, now, fs) } // nothing new: nothing to save
+    if (fresh.length && r.on.length && up.up) { // nothing new: nothing to save. A failure here is this run's problem, not a throw that loses its receipt (V104)
+      try { const now = readManifest(dir, fs); now.confirmed_paths = [...new Set([...(now.confirmed_paths || []), ...plan.planned.flatMap((p) => p.paths)])]; saveManifest(dir, now, fs) } catch (e) { r.problems.push(`trocar could not record the files you said yes to (${errText(e)}); the next trocar on asks again`); r.exit = EXIT.incomplete }
+    }
     const b = setupBlocked(r)
     return done(receiptOf(r, { planned: plan.planned, daemon: { state: up.state, started: up.started }, ...(b.length ? { blocked: b, error: setupError(b), ...(r.on.length && up.up ? { undo: UNDO_LINE.on } : {}) } : {}) }), r.exit, up.up ? (r.turnedOn || []) : [])
   } catch (e) { // a throw under the lock is a failed run too: its result line names what turned on before the throw (turnOnModel attaches it; none when it is not known), then the error goes on

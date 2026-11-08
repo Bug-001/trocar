@@ -77,7 +77,9 @@ export function tryOpLock({ file, identity = procIdentity, alive = pidAlive, fs 
       if (!e || e.code !== 'EEXIST') throw e
       continue // created between the two calls
     }
-    try { fs.writeSync(fd, JSON.stringify(mine) + '\n'); fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
+    // no fsync (D62①): a lock only says who runs now. A process that dies leaves its bytes in the page cache, where the next reader sees them; a power
+    // loss ends every holder, and what it leaves (the old bytes, or a file that names no pid and is older than the grace) is judged stale above.
+    try { fs.writeSync(fd, JSON.stringify(mine) + '\n') } finally { fs.closeSync(fd) }
     let released = false
     return { lock: { release() {
       if (released) return
