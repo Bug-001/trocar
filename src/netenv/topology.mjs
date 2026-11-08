@@ -34,7 +34,13 @@ function graph() {
     keyed.set(k, id)
     return id
   }
-  const edge = (from, to, via, extra = {}) => { if (!edges.some((e) => e.from === from && e.to === to)) edges.push({ from, to, via, ...drop(extra) }); return to }
+  // one edge per (from, to); a hop any branch draws as inferred stays marked inferred, whichever branch drew it first (1.6 C.3, invariant 4)
+  const edge = (from, to, via, extra = {}) => {
+    const had = edges.find((e) => e.from === from && e.to === to)
+    if (!had) edges.push({ from, to, via, ...drop(extra) })
+    else if (extra.inferred === true) had.inferred = true
+    return to
+  }
   return { nodes, edges, node, edge }
 }
 
@@ -174,6 +180,7 @@ function formVerdict(F, h, hf, fm, fwf) {
   if (fm.route && fm.route.reason === 'blocker-unreadable') return none(null, null, 'not-routed')
   if (fm.hook) return none(false, false, fm.hook) // the wrapper / plugin that applies the route was replaced or is gone: the agent runs without it (1.6 §9.3 row 31; its command is `trocar install`)
   if (!fm.entry) return none(false, false, 'not-routed') // anything else the plan left unwired is not-routed, the why on the form's `route`
+  if (fm.entry.code) return none(false, false, fm.entry.code) // the entry's own code (pac-address-stale, P10): trocar's value, but one the door refuses
   if (fm.entry.intact === null) return none(null, null, null)
   if (fm.entry.intact === false) return none(false, false, 'proxy-changed')
   if (!F.forwarder || F.forwarder.up === false || !fwf || fwf.down) return none(true, false, 'forwarder-down')
@@ -230,6 +237,12 @@ function proxyTopology(F, h, hf) {
       const a = agentOf(g, h, main), off = tail(g, F, hfSys, fm.setting, (fm.follows || hf.behaviour.follows)[name === 'ws' ? 'ws' : 'http'])
       let path = [a, ...off.ids]
       g.edge(a, off.ids[0], off.first.via, { evidence: off.first.evidence, inferred: off.first.inferred })
+      if (fm.entry && fm.entry.code === 'pac-address-stale') {
+        // this form's setting still names trocar's PAC, whose fetch the door refuses (P10): it has no PAC and connects without one, not the way it would after
+        // off (measured: the Claude desktop app on macOS goes direct, around the system proxy too) — drawn direct, inferred
+        const d = tail(g, F, hf, { value: null, source: [] }, false)
+        g.edge(a, d.ids[0], d.first.via, { evidence: d.first.evidence, inferred: true }); path = [a, ...d.ids]
+      }
       if (wired) {
         const forwardOnly = F.desired[h] === 'off' || vd.reason === 'elevated-agent' || !vd.engine && vd.on
         const f = g.node({ kind: 'trocar-forwarder', name: 'trocar', pid: F.forwarder.pid, addr: '127.0.0.1', port: fwf.port, trocar: true, mode: vd.reason === 'forwarder-down' ? 'down' : forwardOnly ? 'forward-only' : 'on' })

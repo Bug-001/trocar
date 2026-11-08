@@ -8,7 +8,7 @@ import path from 'node:path'
 import { itemsOfPhase } from '../../../off/manifest.mjs'
 import { judgeEntry, judgeOwned, markedWithoutRecord, samePath } from '../trust/journal.mjs'
 import { formsHere, routedForms, holds, presentPaths, userCertFilesOf, rootHeldIn, readSrc, inTrocar } from './sources.mjs'
-import { planRoutes, priorRecordOf, loopbackDirect, loopbackNote } from './entries.mjs'
+import { planRoutes, priorRecordOf, loopbackDirect, loopbackNote, pacStale } from './entries.mjs'
 import { upstreamFor, isTrocarDoorUrl } from './chain.mjs'
 import { pacLeg } from './pac.mjs'
 import { redactProxyUrl, parseProxyUrl } from '../../../netenv/redact.mjs'
@@ -141,15 +141,15 @@ const settingOf = (prior, e) => {
 }
 
 /**
- * modelFormFacts({ harnesses, os, manifest, reply, root, systemProxy, ctx, fs, drift }) → { <h>: [FormFacts] }
+ * modelFormFacts({ harnesses, os, manifest, reply, root, systemProxy, token, ctx, fs, drift }) → { <h>: [FormFacts] }  token: ingress.json's listenerToken, the PAC key's source (P10)
  *   reply        the daemon's GET /status ({ doors: { '<h>:<route>': port }, upstreams?: { '<h>:<route>': [{ pid, source, url_redacted }] } }), or null
  *   root         status's `cert.root` ({ state, code, command }): the carrier of a root-trust form
  *   rootFp256    status's `cert.fp256`: the trocar root a file a replacing setting names must hold (P11 rule 4)
  *   systemProxy  chain.mjs's shape (null · { url, bypass } · { pac } · { ok: false })
  *   drift(h)     precondition ⑪ for h: null, or { reason: 'entry-missing' | 'entry-changed', path, command }
- * FormFacts = { id, route, certificate, proxy, entry: { where, kind, trocar, intact } | null, plan: { reason, at, code } | null, setting, notes: [harness-note] }
+ * FormFacts = { id, route, certificate, proxy, entry: { where, kind, trocar, intact, code? } | null, plan: { reason, at, code } | null, setting, notes: [harness-note] }
  */
-export async function modelFormFacts({ harnesses, os, manifest: m, reply = null, root = null, rootFp256 = null, systemProxy = null, ctx, fs = nodeFs, drift = () => null }) {
+export async function modelFormFacts({ harnesses, os, manifest: m, reply = null, root = null, rootFp256 = null, systemProxy = null, token = null, ctx, fs = nodeFs, drift = () => null }) {
   const out = {}
   const installed = (m && m.install && m.install.harnesses) || []
   const inst = itemsOfPhase(m, 'install'), on = itemsOfPhase(m, 'on')
@@ -176,7 +176,11 @@ export async function modelFormFacts({ harnesses, os, manifest: m, reply = null,
       const main = es.find((i) => i.door_sha256 || i.door) || es[0] || null
       const priorItem = priorRecordOf(route, es)
       const priorRaw = priorItem ? priorItem.prior_value : null
-      const intact = es.length > 0 && es.every((i) => intactOf(m, i, fs))
+      // trocar's stale PAC address (P10) is still trocar's value, but not one that connects: the app's fetch of it is refused, so the entry is not intact
+      // stale only while every record still holds what trocar wrote (one the user changed makes it the user's change, as status says)
+      const held = es.length > 0 && es.every((i) => intactOf(m, i, fs))
+      const stale = held && es.some((i) => pacStale(i, route, token)) ? CODE.pacAddressStale : null
+      const intact = held && !stale
       const door_up = doors[g] != null
       const ans = (answers[g] || []).at(-1)
       let upstream
@@ -192,7 +196,7 @@ export async function modelFormFacts({ harnesses, os, manifest: m, reply = null,
       forms.push({
         id: f.id, route: f.route, certificate,
         proxy: { connected: intact && door_up, entry_intact: intact, door_up, upstream, written: main ? red(writtenOf(main)) : null, prior: red(priorRaw) },
-        entry: main ? { where: main.keys ? `${main.path}#${main.keys.join('.')}` : main.path, kind: route.kind || main.kind, trocar: true, intact } : null,
+        entry: main ? { where: main.keys ? `${main.path}#${main.keys.join('.')}` : main.path, kind: route.kind || main.kind, trocar: true, intact, ...(stale ? { code: stale } : {}) } : null,
         plan: blocked ? { reason: blocked.reason, at: blocked.at ?? null, code: blocked.code } : null,
         // the form's own way of being made to read its settings again, and the places it runs from: the doctor's restart steps come from the form the
         // process belongs to, never one fixed sentence (1.6 附录 B). No `restart` of its own: the harness's (`proxy.restart`), through the facts' behaviour.

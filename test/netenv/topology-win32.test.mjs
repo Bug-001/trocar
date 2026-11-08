@@ -275,3 +275,20 @@ test('W36 the static scans (4.8 E6): findings-win32.mjs has no command that chan
   for (const bad of ['Set-ItemProperty', 'reg add', 'CI\\Policy', 'Get-NetTCPConnection']) assert.ok(!src.includes(bad), `${bad} is not in the Windows doctor table`)
   assert.ok((src.match(/netstat -ano -p TCP \| findstr/g) || []).length >= 1, 'the port check is the netstat + findstr form')
 })
+
+// 4.11 P10 · 1.6 C.3: a form whose entry holds trocar's stale PAC address is drawn direct with the edge inferred, whatever form drew that hop first;
+// a form beside it with its own entry intact is not judged by it
+test('a stale PAC form: off the path, drawn direct and inferred, also after a form whose own direct hop was drawn first', () => {
+  const measured = form('claude-code.cli', { entry: null }) // its own way, direct and measured, drawn first
+  const stale = form('claude-code.desktop', { entry: { where: 'configLibrary/x.json#egressProxyPacUrl', trocar: true, opt_in: false, intact: false, code: 'pac-address-stale' } })
+  const F = pfacts('claude-code', measured, fwForm(17991, { state: 'forward-only' }))
+  F.harnesses['claude-code'].forms = [measured, stale]
+  F.forwarder.forms[stale.id] = fwForm(17993)
+  const t = buildTopology(F)['claude-code']
+  const br = t.branches.find((b) => b.form === stale.id), nodes = new Map(t.nodes.map((n) => [n.id, n]))
+  assert.deepEqual([br.on_path, br.captured, br.reason], [false, false, 'pac-address-stale'])
+  assert.ok(br.path.every((id) => !nodes.get(id).trocar), JSON.stringify(br))
+  const e = t.edges.find((x) => x.from === br.path[0] && x.to === br.path[1])
+  assert.deepEqual([e.via, e.inferred], ['direct', true])
+  assert.notEqual(t.branches.find((b) => b.form === measured.id).reason, 'pac-address-stale', 'the other form keeps its own verdict')
+})
