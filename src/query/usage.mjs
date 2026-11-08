@@ -84,6 +84,11 @@ export const readUsage = ({ home = trocarHome(), segment, fs = nodeFs } = {}) =>
   });
 
 const tick = () => new Promise((r) => setImmediate(r));
+let gate = null;
+/** pauseFill(fn): `fn() → Promise` is awaited before each chunk of a fill (the query worker: until no session work is pending, 3.5
+ *  后台抽取与归约); null (the default): no pause. */
+export function pauseFill(fn) { gate = fn; }
+const step = async () => { await tick(); if (gate) await gate(); };
 const callLine = ({ line, lane, model, failed, cache_known, usage }) => `${JSON.stringify({ line, lane, model, failed, cache_known, usage })}\n`;
 const problemLine = (p) => `${JSON.stringify({ p })}\n`;
 const markLine = (m) => `${JSON.stringify({ m, v: USAGE_V })}\n`;
@@ -126,7 +131,7 @@ export function takeFillProblem({ home = trocarHome(), fs = nodeFs } = {}) {
 }
 
 async function fillOne({ home, fs, segment }) {
-  await tick();
+  await step();
   // the segment's rows of the shared row list: its session_id is the one `session` groups by (3.4 合成键 included)
   const rows = (await indexRows({ home, fs })).filter((r) => r.segment === segment);
   const needed = isModelCall;
@@ -143,7 +148,7 @@ async function fillOne({ home, fs, segment }) {
       const got = chunkLines({ home, fs, rows: chunk.filter(needed) });
       if (got.io) return; // a failed read is never remembered: the next warm `overview` reports it and this retries
       lines.push(...got.lines);
-      await tick();
+      await step();
     }
     lines.push(markLine(sealedMark(fs, source)));
     storeIndex(fs, file, lines, problems, null);
@@ -166,7 +171,7 @@ async function fillOne({ home, fs, segment }) {
     said();
     if (problems.some((p) => p.code === 'index-unwritable')) return;
     at = (at ?? 0) + Buffer.byteLength(lines.join(''));
-    await tick();
+    await step();
   }
 }
 

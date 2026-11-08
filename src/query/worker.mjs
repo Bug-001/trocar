@@ -56,6 +56,7 @@ import { ROLES } from './warm.mjs'
 import { lowerPriority } from '../low-priority.mjs'
 import { READING_MS, extendSession, heapHasRoom, indexed, openSessions, rereadingNow, saveIndexes, sealParts } from './named/session.mjs'
 import { indexRows, sessionGroups } from './rows.mjs'
+import { pauseFill } from './usage.mjs'
 import { dirUse, gcProjections, posCmp, projectionStale, sessionDir } from './projection.mjs'
 import { foldStale } from './fold-log.mjs'
 import { hasHead, hasReread, headFile, readHead, skipFile, tier0Doc, writeHead, writeSkip } from './ctx-files.mjs'
@@ -136,7 +137,8 @@ const SLICE_MS = 50, IDLE_SLICE_MS = READING_MS
 const ease = () => new Promise((r) => setImmediate(r))
 const say = (e) => process.stderr.write(`trocar query worker: background work failed: ${(e && e.stack) || e}\n`) // the daemon keeps stderr (D38)
 // newestDone starts true: only a request opens the newest-session scan, never a kick (a worker forked for a kick has none to follow).
-let busy = 0, lastAt = Date.now(), target = null, newestDone = true, gcDone = false, queued = false, timer = null, once = {}
+// `user`: `target` came from a request or the followed ones (a kick's, the board's), not the upgrade queue or the newest-session scan
+let busy = 0, lastAt = Date.now(), target = null, user = false, newestDone = true, gcDone = false, queued = false, timer = null, once = {}
 // the idle save's parts still to seal (session.mjs sealParts): a slice at a time; a request or kick stops it, the next idle period goes on
 let sealing = false
 let rowsRead = false // the boot's pass over the rows has ended (readRows)
@@ -177,6 +179,25 @@ async function upgradeQueue(ctx) {
 const answered = new Set() // the sessions this worker answered: never collected under it
 const follow = new Set() // the sessions the daemon kicked or followed (3.5 §后台抽取与归约): folded in turn from their checkpoints
 const noRoom = new Set() // the sessions a background slice stopped on heap-no-room: back to `follow` at an idle period with room, never before
+const waitRoom = new Set() // the sessions a background slice found the heap held by others on (heap-busy): back to `follow` once it has room
+/** Session work pending: a request read or in flight, or a session read for a user (a request's, a follow's, a kick's). The usage fill waits
+ *  for none (3.5 后台抽取与归约); a session fully read is no longer `target` nor followed, so it holds nothing. */
+const sessionWork = () => busy > 0 || (target != null && user) || follow.size > 0
+if (role === 'main') pauseFill(async () => { while (sessionWork()) await new Promise((r) => setTimeout(r, 50)) })
+// The heap is looked at (a full collection, the warm entries let go) at most once per ROOM_MS while sessions wait for it, never under session work.
+const ROOM_MS = 2000
+let roomTimer = null
+const roomLater = () => {
+  if (roomTimer) return
+  roomTimer = setTimeout(() => {
+    roomTimer = null
+    if (!waitRoom.size) return
+    if (sessionWork() || !heapHasRoom()) return roomLater()
+    for (const id of waitRoom) follow.add(id)
+    waitRoom.clear()
+    kick()
+  }, ROOM_MS)
+}
 const kicked = new Set() // the record ids of the kicked model calls, not yet looked up: their sessions go to `follow`
 const opened = new Set() // the sessions a request or a follow of a re-read asked for, until their turn ends: a re-read gives way to these (giveWay)
 /** The sessions of the kicked records, by the one session rule (sessionGroups: a synthesized key too). The kicked calls are the
@@ -202,7 +223,7 @@ function giveWay() {
   for (const s of follow) {
     if (rereadOf(s) && (!opened.has(s) || opened.has(target))) continue
     if (up && up[0] === target) { upgrade?.unshift(up); up = null } else { follow.delete(target); follow.add(target) }
-    follow.delete(s); target = s
+    follow.delete(s); target = s; user = true
     return
   }
 }
@@ -224,21 +245,24 @@ async function background() {
     if (busy) return // a request came during the look: it goes first, and kicks when it is answered
   }
   if (target != null && follow.size && rereadOf(target)) giveWay()
-  if (target == null && follow.size) { const [k] = follow; follow.delete(k); target = k }
+  if (target == null && follow.size) { const [k] = follow; follow.delete(k); target = k; user = true }
   if (target == null && !newestDone) {
     if (notIdle()) return
     newestDone = true
     let best = null
     for (const [id, ms] of sessionGroups((await indexed(ctx)).rows)) for (const r of ms) if (best == null || posCmp(String(r.id), best[1]) > 0) best = [id, String(r.id)]
-    target = best && !noRoom.has(best[0]) ? best[0] : null
+    target = best && !noRoom.has(best[0]) && !waitRoom.has(best[0]) ? best[0] : null; user = false
   }
   if (target != null) {
     let more = false
     const id = target // a request answered during the slice may change `target`
-    noRoom.delete(id)
-    try { more = await extendSession(ctx, id, SLICE_MS) } catch (e) { say(e); if (e?.code === 'heap-no-room') noRoom.add(id) }
+    noRoom.delete(id); waitRoom.delete(id)
+    try { more = await extendSession(ctx, id, SLICE_MS) } catch (e) {
+      if (e?.code === 'heap-busy') { waitRoom.add(id); roomLater() } else say(e) // heap-busy is no failure: the session waits for room
+      if (e?.code === 'heap-no-room') noRoom.add(id)
+    }
     if (more === null) noRoom.add(id) // its state went in the slice: the heap again, not the session
-    if (!more && !noRoom.has(id) && up && up[0] === target && !answered.has(target) && !follow.has(target) && !nodeFs.existsSync(path.join(sessionDir(home, target), 'open.main.ndjson'))) {
+    if (!more && !noRoom.has(id) && !waitRoom.has(id) && up && up[0] === target && !answered.has(target) && !follow.has(target) && !nodeFs.existsSync(path.join(sessionDir(home, target), 'open.main.ndjson'))) {
       try { writeSkip(home, target, up[1]) } catch { /* the next worker tries again */ }
     }
     if (!more) { opened.delete(target); target = null; up = null }
@@ -284,7 +308,7 @@ async function background() {
   }
   if (upgrade.length) {
     if (busy || notIdle()) return
-    up = upgrade.shift(); target = up[0]
+    up = upgrade.shift(); target = up[0]; user = false
     return kick()
   }
   if (sealing ? busy : gcDone || busy || notIdle()) return // once per idle period, IDLE_SLICE_MS after the last request or kick: not after every burst
@@ -321,7 +345,7 @@ process.stdin.on('data', (d) => {
     busy++; once = {}; newestDone = false; gcDone = false; sealing = false; clearTimeout(timer) // a new idle period begins after this one is answered
     chain = chain.then(() => serve(line)).then((asked) => {
       const id = asked && (asked.name === 'session' || asked.name === 'lane') && asked.params && asked.params.id
-      if (id != null && id !== '') { if (target != null && target !== String(id)) follow.add(target); target = String(id); answered.add(String(id)); opened.add(String(id)) } // a followed session keeps its turn
+      if (id != null && id !== '') { if (target != null && target !== String(id)) follow.add(target); target = String(id); user = true; answered.add(String(id)); opened.add(String(id)) } // a followed session keeps its turn
     }, say).finally(() => { busy--; lastAt = Date.now(); kick() })
   }
 })
@@ -331,7 +355,7 @@ process.stdin.on('data', (d) => {
 // must not hold off the idle save and the GC).
 process.on('message', (m) => {
   if (m && m.sweep === true) { sweepDue = true; kick(); return }
-  if (m && typeof m.follow === 'string') { if (rereadOf(m.follow)) opened.add(m.follow); if (target !== m.follow) follow.add(m.follow); kick(); return }
+  if (m && typeof m.follow === 'string') { if (rereadOf(m.follow)) opened.add(m.follow); if (target !== m.follow && !waitRoom.has(m.follow)) follow.add(m.follow); kick(); return } // a session waiting for room: its timer tries it
   if (!m || !Array.isArray(m.kick)) return
   for (const id of m.kick) kicked.add(String(id))
   once = {}; gcDone = false; sealing = false; lastAt = Date.now()

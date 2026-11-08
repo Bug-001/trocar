@@ -566,6 +566,7 @@ async function advance(ctx, id, { budgetMs, request, said = [] }) {
     if (!b) throw new BlockUnread('field-missing', `record ${rid} has no block at ${ref}`);
     return b;
   };
+  let retried = false;
   for (;;) {
     keeping = true; // a HeapBound retry keeps what it reads again
     const plan = planOf(members, k, store, id);
@@ -586,7 +587,16 @@ async function advance(ctx, id, { budgetMs, request, said = [] }) {
       // the measured bound: the rows the stopped fold got through are the rows that fit, never fewer than half those asked for,
       // rounded down to a quarter power of two (3.5 §内存有界); the stopped state is closed and garbage by now
       const got = Math.max(e.rows, Math.floor(plan.read.length / 2)) - 1, fit = got < 1 ? 0 : Math.floor(2 ** (Math.floor(Math.log2(got) * 4) / 4));
-      if (fit < 1 || beside) throw Object.assign(new Error(`the heap holds no room for this session${beside ? ' beside the one being read' : ''} (${mb(heapBudget())} MB budget)`), { code: 'heap-no-room' });
+      if (fit < 1 || beside) {
+        // once more, every warm entry let go first; never beside the reader, which holds its state whatever gives way
+        if (!retried && !beside) { retried = true; yieldCaches(); continue; }
+        // this fold's state is closed and its plan holds every member (PLAN_PER_MEMBER): a live heap past the line without the plan is
+        // held by others (another session's state, the fill), and the session waits for room (heap-busy); else it does not fit with the
+        // heap otherwise free (heap-no-room, 3.5 §内存有界)
+        kept.clear();
+        const busy = beside || liveHeap() - members.length * PLAN_PER_MEMBER > heapLine();
+        throw Object.assign(new Error(`the heap holds no room for this session${beside ? ' beside the one being read' : busy ? ' while other work holds it' : ''} (${mb(heapBudget())} MB budget)`), { code: busy ? 'heap-busy' : 'heap-no-room' });
+      }
       fits.delete(k);
       fits.set(k, fit);
       if (fits.size > FITS_KEPT) fits.delete(fits.keys().next().value);
@@ -662,7 +672,7 @@ function shapeOf(s) {
 // that does not throw clears it (extendSession). A request's own failure is its answer (a 500), not a stop.
 const stops = new Set(); // the session ids whose last background slice threw
 async function stopped(ctx, id, e) {
-  if (ctx.writer !== true || e instanceof HandOff) return;
+  if (ctx.writer !== true || e instanceof HandOff || e?.code === 'heap-busy') return; // heap-busy: the session waits for room, no stop
   const stop = { code: e && e.code === 'heap-no-room' ? 'heap-no-room' : 'fold-failed', reason: String((e && e.message) || e).split('\n')[0] };
   const home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs, sig = JSON.stringify(['stopped', stop]), h = heads.get(id);
   stops.add(id);
@@ -844,7 +854,15 @@ export async function run(ctx) {
   const asHead = p.head != null && p.head !== false && p.head !== 'false' && p.head !== '0';
   if (asHead && (since != null || before != null || p.limit != null)) throw new QueryArgError('trocar query session: --head cannot be given with --since, --before or --limit');
   const limit = limitOf(p.limit);
-  const s = await sessionState(ctx, id);
+  let s;
+  try { s = await sessionState(ctx, id); } catch (e) {
+    if (!asHead || e?.code !== 'heap-busy') throw e;
+    // others hold the heap: the head as it stands, the file's or the tier-0 one, with its pending (3.5 §内存有界)
+    const idx = await indexed(ctx), members = sessionGroups(idx.rows).get(id), home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs;
+    const doc = headStanding(ctx, { id, rows: members, indexErrors: idx.errors, title: titleOf({ home, fs, id, members }) });
+    errors.push(...doc.errors);
+    return doc;
+  }
   if (!s) {
     const idx = await indexed(ctx);
     errors.push(...idx.errors, { where: `session/${id}`, code: 'session-unknown', reason: 'no session with this id among the captured records' });

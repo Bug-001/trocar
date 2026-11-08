@@ -68,7 +68,7 @@ for (const [last, then] of [['read', 'left'], ['folded', 'opened']]) {
       const end = await r.next()
       assert.equal(end.reopens, 0, 'the read session kept its state')
       assert.deepEqual(end.errors, [], 'every page answered whole')
-      assert.ok(end.stopped === null || end.stopped === 'heap-no-room', `the fold gave way, if at all, for lack of room: ${end.stopped}`)
+      assert.ok(end.stopped === null || end.stopped === 'heap-busy', `the fold gave way, if at all, to the reader's heap: ${end.stopped}`)
       if (then === 'left') assert.equal(end.room, true, 'at idle what the reader left is no lack of room')
       assert.deepEqual([end.tier, end.pending, end.truncated], [1, null, null], 'the fold ends whole')
     } finally {
