@@ -96,6 +96,10 @@ function Gate([string]$exe, [string[]]$a, [string]$want, [string]$what) {
   if ($got -cne $want -and $got -cnotmatch ('^' + [regex]::Escape($want) + '\+[0-9a-f]{7}$')) { Fail "$what does not run here: $got" } # trocar says the version, or the version, + and 7 hex of its code
 }
 
+# trocar's install record; with none (a first `trocar install` cancelled, or `uninstall` kept the code) the next command is `install`, which
+# shows its plan and asks; with one it is `update`. trocar keeps it under this profile's .trocar (src/off/manifest.mjs).
+function Installed([string]$root) { Test-Path -LiteralPath "$root\collector\install-manifest.json" }
+
 function Handoff([string]$root, [string]$verb) { # `trocar install` / `update` on a terminal, else the command to run
   $bin = Join-Path $root 'bin'
   $other = Get-Command trocar -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -150,7 +154,7 @@ function Main([string[]]$argv) {
   if ($cur[0] -eq $v -and $cur[1] -and (Test-Path -LiteralPath "$app\node\$($cur[1])\node.exe")) {
     if ($mode -eq 'stage') { "trocar-installer: up-to-date $v"; return }
     Say "trocar $v is already installed: $root\bin\trocar.cmd"
-    Handoff $root 'update' # a first run whose `trocar install` was cancelled leaves the pointer: the re-run still says what comes next
+    Handoff $root $(if (Installed $root) { 'update' } else { 'install' })
     return
   }
   if ($cur[0] -and (Older $v $cur[0])) {
@@ -203,7 +207,7 @@ function Main([string[]]$argv) {
   } finally { Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue }
   if ($mode -eq 'stage') { "trocar-installer: staged $v $app\$v"; return }
 
-  $verb = if ($cur[0]) { 'update' } else { 'install' }
+  $verb = if ($cur[0] -and (Installed $root)) { 'update' } else { 'install' }
   & "$app\node\$nid\node.exe" "$app\$v\bin\trocar.mjs" place "$app\$v"
   if ($LASTEXITCODE -ne 0) { Fail "Could not switch to trocar $v (trocar place failed). The version that was active stays active." }
   Handoff $root $verb

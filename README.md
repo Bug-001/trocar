@@ -86,6 +86,13 @@ and nodejs.org first and moves to npmmirror when that source fails or is too slo
 curl.exe -fsSLo "%TEMP%\trocar-install.ps1" https://github.com/Bug-001/trocar/releases/latest/download/install.ps1 && powershell -NoProfile -ExecutionPolicy Bypass -File "%TEMP%\trocar-install.ps1" & del "%TEMP%\trocar-install.ps1"
 ```
 
+If the one-line command prints nothing and a new terminal has no `trocar` command, the download failed: a pipe into
+`sh` that gets nothing still exits 0. Use the jsDelivr address above, or download the script first and run it as a file:
+
+```sh
+curl -fsSLo install.sh https://github.com/Bug-001/trocar/releases/latest/download/install.sh && sh install.sh
+```
+
 `trocar install` adds `~/.trocar/bin` at the end of your PATH (one marked line in your shell's start file; on
 Windows one element of your user `Path`), so `trocar` works in a new terminal. A shell that is not interactive may not
 read that file (Ubuntu's `~/.bashrc` stops early for one, so `ssh host trocar` does not find it): use `~/.trocar/bin/trocar`
