@@ -91,7 +91,7 @@ function daemonLines(r, past, cutNote) {
   // D62 ⑥: off never asks the daemon to exit, so it idles on and the next `on` just asks it. A holder keeps one door open, passing its traffic on and
   // recording nothing of it (P12), until it exits: the receipt says which of the two it is, and never both. The pid is missing in a `--dry-run`
   // (nothing was asked of any daemon), so this line is said without it rather than left out (item 5).
-  else if (d.state === 'running') lines.push(...fit(!r.all ? `The daemon${pid} ${past ? 'keeps' : 'will keep'} serving the other harnesses.`
+  else if (d.state === 'running') lines.push(...fit((r.still_on || []).length ? `The daemon${pid} ${past ? 'keeps' : 'will keep'} serving ${r.still_on.join(', ')}.`
     : heldOpen(r) ? `The daemon${pid} ${past ? 'keeps' : 'will keep'} running, with one door still open for the connections below.`
     : `The daemon${pid} ${past ? 'keeps' : 'will keep'} running.`))
   else if (d.state === 'unresponsive') lines.push(`The daemon${pid} does not answer and could not be stopped.`, `Stop it by hand: kill -9 ${d.pid}`)

@@ -243,9 +243,21 @@ test('V5: off claude-code takes only Claude Code\'s routing: no certificate item
   assert.deepEqual([s.state().harnesses['claude-code'].desired, s.state().harnesses.codex.desired], ['off', 'on'])
   assert.deepEqual([s.sys.daemon.isRecording('claude-code'), s.sys.daemon.isRecording('codex')], [false, true], 'the daemon still has codex attached')
   assert.deepEqual([receipt.harnesses, receipt.all, receipt.daemon.state], [[{ harness: 'claude-code', ok: true, reason: null, undone: [], kept_backups: [] }], false, 'running'], 'appendix C.2: one object per harness named')
+  assert.deepEqual(receipt.still_on, ['codex'], 'appendix C.2: the harnesses still on after this off')
   assert.deepEqual(receipt.changed, [], 'off changed no file of the user')
   assert.ok(s.sys.exec.calls.every((c) => !/disable/.test(c)), 'a named off leaves the autostart alone')
   assert.ok(['codex', 'claude-code'].every((h) => readManifest(s.dir).entries.some((e) => e.harness === h)), 'both are still installed')
+})
+
+test('appendix C.2: still_on names the harnesses left on after a named off, and is empty once the last one is off', async () => {
+  const s = await installedHome({ names: ['claude-code', 'codex'] })
+  const a = await s.off({ ids: ['codex'], dryRun: true })
+  assert.deepEqual(a.receipt.still_on, ['claude-code'], 'a dry run says which would stay on')
+  assert.deepEqual((await s.off({ ids: ['codex'] })).receipt.still_on, ['claude-code'])
+  const { receipt, exit } = await s.off({ ids: ['claude-code'] })
+  assert.equal(exit, 0, JSON.stringify(receipt.problems))
+  assert.deepEqual(validateReceipt(receipt), [])
+  assert.deepEqual(receipt.still_on, [], 'no harness is left on')
 })
 
 test('V21: off,off changes nothing — the second run leaves state.json, the manifest and every user file as they were; per-harness: the bundle install wrote stays, CA and all, and so does the .env naming it', async () => {
