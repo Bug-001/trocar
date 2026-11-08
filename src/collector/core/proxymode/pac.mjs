@@ -1,9 +1,9 @@
 // pac.mjs (core/proxymode) — P10, the PAC the daemon serves for a route whose value is `pac-url` (RFC 4.11 P10): on the PAC group's door
 // (auth:false) at GET /trocar.pac. Loopback (chain.mjs isLoopbackHost: localhost, *.localhost, 127.0.0.0/8, ::1) goes DIRECT; the user's bypass list `PROXY <door>; DIRECT` (the door dials it direct: bypassHit, as for
 // the env routes — 2026-10-17 a bypass-list host went DIRECT and Claude Desktop's turns were never seen); everything else `PROXY <door>; <own leg>`,
-// the own leg being the app's way without trocar (the user's fixed system proxy, else DIRECT). A plain `http:` URL, and every URL after `off` (door
-// null), gets only the app's own way: the PAC does not hand plain http to the door (P10: plain http on the PAC route is not captured), and once
-// the door accepted a connection the `; …` after it never applies. The PAC door takes no
+// the own leg being the app's way without trocar (the user's fixed system proxy, else DIRECT). Every scheme alike: the door takes absolute-form
+// plain http as it takes a CONNECT (4.8 §5.1). After `off` (door null) every URL gets only the app's own way; once the door accepted a connection
+// the `; …` after it never applies. The PAC door takes no
 // credentials, so at accept it forwards only a peer of this user (peerAllowed). When a PAC route is not written at all (the four not-routed
 // conditions of ruling ③) is entries.mjs's pacGate, not this file's. The handler is registered on the door.
 import { PAC_PATH } from './entries.mjs'
@@ -60,9 +60,7 @@ export function pacText({ door = null, ownLeg = null, bypass = [] } = {}) {
     '  host = String(host).toLowerCase().replace(/^\\[|\\]$/g, "").replace(/\\.$/, "");',
     `  if (${LOOPBACK_TEST}) return "DIRECT";`,
     ...(byp.length ? [`  var bypass = ${byp.join(' ||\n      ')};`] : []),
-    // every scheme but plain http goes to the door (it CONNECTs); plain http, and after `off` everything, takes the app's own way
-    ...(door == null ? [] : [`  if (String(url).substring(0, 5).toLowerCase() !== "http:") return ${answer((w) => `${pacProxy(door)}; ${w}`)};`]),
-    `  return ${answer((w) => w)};`,
+    `  return ${answer((w) => (door == null ? w : `${pacProxy(door)}; ${w}`))};`, // after `off` only the app's own way
     '}',
     '',
   ].join('\n')
