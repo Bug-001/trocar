@@ -57,6 +57,8 @@ test('judgeEntry: an intent a crash left (no post_sha256) is resume when the fil
     assert.deepEqual([m.entries.length, fs.readFileSync(file).equals(written)], [1, true], 'resumed: written once, one entry')
     m.entries[0].post_sha256 = null; fs.writeFileSync(file, '{"something":"else"}')
     assert.equal(judgeEntry({ manifest: m, planned: planned(file) }).action, 'skip-user-changed')
+    // install cannot place this one again by itself (its undo is the only record of that write): the way out puts the file right first, then install
+    assert.throws(() => applyJsonKey({ phase: 'install', home: b.root, dir: b.dir, manifest: m, harness: 'h', file, keys: K, value: b.value }), (e) => /take trocar's text out of .*, then run "trocar install"/.test(e.message), 'the file first, then install')
   } finally { b.done() }
 })
 
