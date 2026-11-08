@@ -89,20 +89,6 @@ export function wireShape(rec) {
 }
 export function detect(rec) { return wireShape(rec) !== null; }
 
-// ── small self-contained content hasher (a stable per-block key for prefix-diffing / cacheBreak;
-// scheme is OpenAI-local — cacheBreak only ever compares blocks within one OpenAI session) ─────
-function blockText(b) {
-  if (b == null) return '';
-  if (typeof b === 'string') return b;
-  if (b.type === 'text') return b.text || '';
-  if (b.type === 'thinking') return b.thinking || b.signature || '';
-  if (b.type === 'tool_use') return (b.name || '') + '::' + JSON.stringify(b.input || {});
-  if (b.type === 'tool_result') return (b.tool_use_id || '') + '::' + (typeof b.content === 'string' ? b.content : JSON.stringify(b.content));
-  if (b.type === 'image') return 'image:' + (b.source && (b.source.media_type || b.source.type) || '');
-  return JSON.stringify(b);
-}
-function hash(s) { let h = 0; for (let i = 0; i < s.length; i++) h = (Math.imul(31, h) + s.charCodeAt(i)) | 0; return (h >>> 0).toString(36); }
-const okey = (prefix, b) => prefix + hash(blockText(b).slice(0, 4096));
 const safeJson = (s) => { if (typeof s !== 'string') return s || {}; try { return JSON.parse(s); } catch { return { _unparsed: s }; } };
 
 // ── shared classifiers ────────────────────────────────────────────────────────────────────────
@@ -192,10 +178,10 @@ export function boardFlat(req) {
     });
   });
   const instr = typeof (req && req.instructions) === 'string' ? req.instructions : (req && req.instructions != null ? JSON.stringify(req.instructions) : '');
-  if (instr) flat.push({ sec: 'system', kind: 'system', role: 'system', si: 0, label: sysLabel(instr), text: instr, chars: instr.length, volatile: false, cc: null, key: okey('S:', { type: 'text', text: instr }), path: ['instructions'] });
+  if (instr) flat.push({ sec: 'system', kind: 'system', role: 'system', si: 0, label: sysLabel(instr), text: instr, chars: instr.length, volatile: false, cc: null, path: ['instructions'] });
   if (typeof (req && req.input) === 'string') { // the Responses API accepts a bare string input: one user block
     const block = { type: 'text', text: req.input };
-    flat.push({ sec: 'messages', kind: 'text', role: 'user', mi: 0, bi: 0, block, toolName: '', cc: null, resKey: '', key: okey('M:user:text:', block), path: ['input'] });
+    flat.push({ sec: 'messages', kind: 'text', role: 'user', mi: 0, bi: 0, block, toolName: '', cc: null, resKey: '', path: ['input'] });
   }
   const input = Array.isArray(req && req.input) ? req.input : [];
   let mi = 0;
@@ -203,7 +189,7 @@ export function boardFlat(req) {
     let bi = 0;
     for (const { role, block, sub } of itemToBlocks(item)) {
       const type = block.type;
-      const d = { sec: 'messages', kind: type, role, mi, bi, block, toolName: type === 'tool_use' || type === 'server_tool_use' ? (block.name || '') : '', cc: null, resKey: resourceRef(block), key: okey('M:' + role + ':' + type + ':', block), path: ['input', mi, ...sub] };
+      const d = { sec: 'messages', kind: type, role, mi, bi, block, toolName: type === 'tool_use' || type === 'server_tool_use' ? (block.name || '') : '', cc: null, resKey: resourceRef(block), path: ['input', mi, ...sub] };
       if (type === 'thinking') d.faithfulness = faithfulness(block);
       flat.push(d);
       bi++;
@@ -284,14 +270,14 @@ export function boardFlatChat(req) {
   while (lead < msgs.length && msgs[lead] && (msgs[lead].role === 'system' || msgs[lead].role === 'developer')) lead++;
   for (let i = 0; i < lead; i++) {
     const text = chatText(msgs[i].content);
-    flat.push({ sec: 'system', kind: 'system', role: 'system', si: i, label: sysLabel(text), text, chars: text.length, volatile: false, cc: null, key: okey('S:', { type: 'text', text }), path: ['messages', i, 'content'] });
+    flat.push({ sec: 'system', kind: 'system', role: 'system', si: i, label: sysLabel(text), text, chars: text.length, volatile: false, cc: null, path: ['messages', i, 'content'] });
   }
   let mi = 0;
   for (let i = lead; i < msgs.length; i++) {
     let bi = 0;
     for (const { role, block, sub } of chatMessageToBlocks(msgs[i])) {
       const type = block.type;
-      flat.push({ sec: 'messages', kind: type, role, mi, bi, block, toolName: type === 'tool_use' || type === 'server_tool_use' ? (block.name || '') : '', cc: null, resKey: resourceRef(block), key: okey('M:' + role + ':' + type + ':', block), path: ['messages', i, ...sub] });
+      flat.push({ sec: 'messages', kind: type, role, mi, bi, block, toolName: type === 'tool_use' || type === 'server_tool_use' ? (block.name || '') : '', cc: null, resKey: resourceRef(block), path: ['messages', i, ...sub] });
       bi++;
     }
     mi++;
