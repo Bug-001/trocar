@@ -55,9 +55,9 @@ async function cli(argv, { tty = false, over = {}, setup = null } = {}) {
 }
 
 test('0.1 §3: what is installed is asked of the world the test gives, never of the machine under the test', async () => {
-  const app = '/Applications/Kimi Code.app'
+  const app = '/Applications/DeepSeek Harness.app' // an app in scope, at an absolute path, that a test machine has no reason to hold
   const { io } = await cli(['--dry-run', '--json'], { setup: (w) => { const { exists } = w.ctx; w.ctx.exists = (p) => p === app || exists(p) } })
-  assert.ok(io.json().planned.some((r) => r.harness === 'kimi-code'))
+  assert.ok(io.json().planned.some((r) => r.harness === 'deepseek-dsh'))
 })
 
 test('install is a command of its own (and the hidden `collector install` alias is gone, 1.6 §2: one feature, one name)', () => {
@@ -478,7 +478,7 @@ test('4.11 P4 · win32: the plan asks what is registered under trocar\'s task na
 test('1.6 §3.2 (linux): marked text no record lists, in two files → refused, both named, the command given, the home byte for byte as it was', async () => {
   const home = tmpDir('trocar-mwr-')
   const env = (dir) => ({ name: dir, runtime: 'rust', processes: { names: [{ name: dir }] }, hosts: [], trust: { chain: [{ var: 'EXTRA_CA', semantic: 'append' }] },
-    inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, `.${dir}`, '.env'), vars: { EXTRA_CA: path.join(ctx.collectorDir, 'ca', 'trocar-ca.pem') }, semantic: 'append' }] }) })
+    present: [{ base: 'home' }], inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, `.${dir}`, '.env'), vars: { EXTRA_CA: path.join(ctx.collectorDir, 'ca', 'trocar-ca.pem') }, semantic: 'append' }] }) })
   const files = ['a', 'b'].map((d) => path.join(home, `.${d}`, '.env'))
   for (const f of files) { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, `${BLOCK_OPEN}\nSSL_CERT_FILE=/x\n${BLOCK_END}\nKEY=1\n`) }
   const before = snapshot(home)
@@ -497,7 +497,7 @@ test('1.6 §3.2 (linux): a marked file of a harness dropped for a foreign file i
   const home = tmpDir('trocar-mwr-order-')
   const plug = path.join(home, '.p', 'plugins', 'trocar-ca.js')
   const env = (dir, owned = false) => ({ name: dir, runtime: 'rust', processes: { names: [{ name: dir }] }, hosts: [], trust: { chain: [{ var: 'EXTRA_CA', semantic: 'append' }] },
-    inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, `.${dir}`, '.env'), vars: { EXTRA_CA: path.join(ctx.collectorDir, 'ca', 'trocar-ca.pem') }, semantic: 'append' }], ...(owned ? { owned: [{ path: plug, role: 'plugin', data: '// trocar collector: plugin\n', mode: 0o644 }] } : {}) }) })
+    present: [{ base: 'home' }], inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, `.${dir}`, '.env'), vars: { EXTRA_CA: path.join(ctx.collectorDir, 'ca', 'trocar-ca.pem') }, semantic: 'append' }], ...(owned ? { owned: [{ path: plug, role: 'plugin', data: '// trocar collector: plugin\n', mode: 0o644 }] } : {}) }) })
   const files = ['a', 'p'].map((d) => path.join(home, `.${d}`, '.env'))
   for (const f of files) { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, `${BLOCK_OPEN}\nSSL_CERT_FILE=/x\n${BLOCK_END}\n`) }
   fs.mkdirSync(path.dirname(plug), { recursive: true }); fs.writeFileSync(plug, '// the user\'s own plugin\n')

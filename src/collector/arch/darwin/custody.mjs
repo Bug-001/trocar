@@ -34,25 +34,38 @@ export const keychainCustody = ({ helperPath, run = null, env = process.env }) =
  *  by the caller, under ~/.trocar/bin). It writes `<dest>.new-<rand>` and renames it over `dest`, never an in-place overwrite (one
  *  gets SIGKILLed). Same hash: nothing to do. A different installed hash is replaced only when `interactive`: the keychain
  *  then asks again for the new code hash, so one `issue` runs right here in the foreground and the prompt lands on the user's
- *  terminal, not on the background daemon. Non-interactive: the installed copy stays, and `why` says so. The packaged binary must
- *  match its pin (native/pins.json), or nothing is written. */
+ *  terminal, not on the background daemon. Non-interactive: the installed copy stays, and `why` says so (`kept`: it still signs, which is
+ *  a note for the caller, not a failure). An issue that does not sign (the box denied or timed out, no GUI session) puts the old bytes
+ *  back the same way: the new copy has no access to the key, so the daemon would stop signing with it. The packaged binary must match
+ *  its pin (native/pins.json), or nothing is written. */
 export function installHelper({ dest, interactive, run = null, env = process.env, fs = nodeFs, src = nativePath(NATIVE.signHelper) }) {
   const bytes = fs.readFileSync(src)
   if (sha256(bytes) !== pins(fs)[NATIVE.signHelper]) throw new Error(`${src} is not the pinned ${NATIVE.signHelper} (native/pins.json): nothing installed`)
   let installed = null
   try { installed = sha256(fs.readFileSync(dest)) } catch (e) { if (e.code !== 'ENOENT') throw e }
   if (installed === sha256(bytes)) return { replaced: false, why: 'same' }
-  if (installed !== null && !interactive) return { replaced: false, why: `the installed ${NATIVE.signHelper} differs; replacing it makes the keychain ask for the login password, so only an interactive install replaces it` }
+  if (installed !== null && !interactive) return { replaced: false, kept: true, why: `the installed ${NATIVE.signHelper} keeps signing; replacing it makes macOS ask once to let the new one use trocar's key, so run trocar install in a terminal to replace it` }
   fs.mkdirSync(path.dirname(dest), { recursive: true, mode: 0o700 })
-  const tmp = `${dest}.new-${crypto.randomBytes(6).toString('hex')}`
+  const put = (data) => { // <dest>.new-* renamed over dest: never an in-place overwrite
+    const tmp = `${dest}.new-${crypto.randomBytes(6).toString('hex')}`
+    try {
+      fs.writeFileSync(tmp, data, { mode: 0o755 })
+      fs.renameSync(tmp, dest)
+    } catch (e) { try { fs.rmSync(tmp, { force: true }) } catch { /* the error below is the news */ } throw e }
+  }
+  const old = installed === null ? null : fs.readFileSync(dest)
+  put(bytes)
+  if (old === null) return { replaced: true }
+  let r
   try {
-    fs.writeFileSync(tmp, bytes, { mode: 0o755 })
-    fs.renameSync(tmp, dest)
-  } catch (e) { try { fs.rmSync(tmp, { force: true }) } catch { /* the error below is the news */ } throw e }
-  if (installed === null) return { replaced: true }
-  const custody = keychainCustody({ helperPath: dest, run, env })
-  if (custody.exists() !== true) return { replaced: true }
-  const k = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' }) // a throwaway: only the prompt matters
-  const r = custody.issueIntermediate({ spkiDer: k.publicKey.export({ type: 'spki', format: 'der' }), serial: Buffer.from([1]), notBefore: new Date() })
-  return { replaced: true, prompted: Buffer.isBuffer(r) ? 'signed' : r }
+    const custody = keychainCustody({ helperPath: dest, run, env })
+    const has = custody.exists()
+    if (has === false) return { replaced: true } // no key yet: nothing the new copy must be let at
+    const k = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' }) // a throwaway: only the prompt matters
+    r = has !== true ? has : custody.issueIntermediate({ spkiDer: k.publicKey.export({ type: 'spki', format: 'der' }), serial: Buffer.from([1]), notBefore: new Date() })
+  } catch (e) { r = e }
+  if (Buffer.isBuffer(r)) return { replaced: true, prompted: 'signed' }
+  put(old) // the new copy cannot use the key: the old one goes back, and keeps signing
+  const why = r === 'unavailable' ? 'this session cannot show the keychain\'s question (no GUI session, or the keychain is locked)' : `the keychain did not let it sign (${String((r && r.message) || r)})`
+  return { replaced: false, kept: true, why: `the new ${NATIVE.signHelper} was not given trocar's key: ${why}, so the installed one stays and keeps signing. Run trocar install in a terminal and choose Always Allow when macOS asks` }
 }

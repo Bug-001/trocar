@@ -11,6 +11,7 @@ import { planInstall, ruleUFiles } from '../../src/collector/model-install.mjs'
 import { BLOCK_OPEN, BLOCK_END } from '../../src/off/text-edit.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { readManifest } from '../../src/off/manifest.mjs'
+import { backupDir } from '../../src/off/paths.mjs'
 import { codeId } from '../../src/version.mjs'
 import { certBlocks } from '../../src/off/pem.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
@@ -151,6 +152,16 @@ test('D54 · CM1: install; install changes no byte, makes no second key, raises 
   assert.equal(readManifest(w.dir).install.code, codeId(), 'the record names the code that ran install (1.6 §5.5: what update compares)')
 })
 
+// 4.11 §1: a key helper kept (no terminal to answer the key's box, or the box not answered) still signs: install says so as a note and exits 0,
+// so an update goes on to on (a refusal there would leave every agent off)
+test('macOS: a key helper kept, not replaced, is a note: exit 0, the way out said', async () => {
+  const w = await everything()
+  const why = 'the installed trocar-sign-helper keeps signing; run trocar install in a terminal to replace it'
+  const r = await w.install({ wrapperKit: { renderWrapper }, installHelper: () => ({ replaced: false, kept: true, why }) })
+  assert.equal(r.exit, 0, JSON.stringify({ p: r.problems, pend: r.pending }))
+  assert.ok(r.notes.includes(why) && !r.problems.includes(why))
+})
+
 test('CM25 · CM26: no admin item, nothing root-owned under HOME, and no write to a login environment (rc / profile / environment.d) — a recording fs over every harness present', async () => {
   const w = await everything()
   const wrote = []
@@ -269,6 +280,26 @@ test('CM35: the old root\'s removal refused → the new root is installed all th
   assert.deepEqual(r2.items.find((i) => i.item === 'old-root'), { item: 'old-root', state: 'orphan', fp256: r1.fp256 })
   assert.ok(readManifest(w.dir).entries.some((e) => e.kind === 'system-root' && e.fp256 === r1.fp256 && e.orphan), 'kept on record: uninstall removes it')
   assertOnlyNewRoot(w, r1, r2, at1)
+})
+
+// 1.6 R2: the older root's block comes out of the user's file only after a copy of its bytes is in the backup folder, and through the link a
+// dotfiles setup has there (the link stays a link, the file it names is what changes)
+test('CM35 · R2: the older root\'s block leaves the user\'s file after a backup of its bytes, and through its link', async () => {
+  const { w, r1 } = await lostKeyWorld()
+  const real = w.env.SSL_CERT_FILE, link = path.join(w.home, 'certs', 'via-link.pem')
+  fs.symlinkSync(real, link)
+  w.env.SSL_CERT_FILE = link
+  const f = path.join(w.dir, 'install-manifest.json'), m = json(f)
+  for (const e of m.entries.filter((x) => x.format === 'pem-block')) e.path = link // the block was placed through the link
+  fs.writeFileSync(f, JSON.stringify(m))
+  const before = fs.readFileSync(real)
+  w.custody.switches.keyLost = true
+  const r2 = await w.install({ wrapperKit: { renderWrapper }, now: later })
+  assert.equal(r2.exit, 0, JSON.stringify({ c: r2.carriers, p: r2.problems, pe: r2.pending }))
+  assert.ok(fs.lstatSync(link).isSymbolicLink(), 'the link stays a link')
+  assert.deepEqual(fpsIn(real), [certBlocks(USER_PEM)[0].fp, r2.fp256])
+  const dir = backupDir(w.home)
+  assert.ok(fs.readdirSync(dir).some((n) => fs.readFileSync(path.join(dir, n)).equals(before)), `the bytes with ${r1.fp256}'s block are in the backup folder`)
 })
 
 // the reverse: the key is there but trocar cannot read its root back — trocar-ca.pem gone, or the manifest's record gone — install must not crash on
