@@ -14,7 +14,7 @@ import { planByMarker } from '../off/marker.mjs'
 import { userProcessesOf } from '../off/user-procs.mjs'
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
 import { readManifest, saveManifest, manifestPath, refuseOldManifest, undoByHand, PHASES } from '../off/manifest.mjs'
-import { rootStore, sameRoot } from '../off/root-store.mjs'
+import { rootName, rootStore, sameRoot, strayRoots as strayRootsOf } from '../off/root-store.mjs'
 import { disableAutostart, unitFilePath, removeWantsLinks } from '../off/autostart.mjs'
 import { undoAutostart, plistFilePath, AGENT_LABEL } from '../off/darwin.mjs'
 import { findingFor } from '../netenv/findings.mjs'
@@ -402,17 +402,12 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
 const storeOf = (w) => w.deps.rootStore || rootStore({ platform: w.platform, run: w.exec, home: w.home, env: w.env, fs: w.fs })
 const storeWhere = (w) => (w.platform === 'win32' ? 'Cert:\\CurrentUser\\Root' : path.join(w.home, 'Library', 'Keychains', 'login.keychain-db'))
 const ask = async (fn) => { try { return (await fn()) || { error: 'no answer' } } catch (e) { return { error: errText(e) } } }
-const nameOf = (id) => (id.fp256 ? `SHA-256 ${id.fp256}` : `thumbprint ${id.sha1}`)
+const nameOf = rootName
 // the fingerprint last, a word of its own: too long for any line, it gets one to itself, whole (1.6 §1.1⑥), and no bracket is split from it
 const strayChange = (id) => `a trocar root that no install record listed, taken out of your trust store: ${nameOf(id)}` // no tense: the plan and the receipt say it alike
 const recordKeyed = (m) => !!(m && !m.unsupported && m.entries.some((e) => e.kind === 'root-key'))
 const custodyKey = (c) => `${(c && c.kind) || 'custody'}:?`
-/** The trocar roots the store holds that the record `m` does not list → { roots } | { error }. */
-async function strayRoots(w, m) {
-  const listed = ((m && !m.unsupported && m.entries) || []).filter((e) => e && e.kind === 'system-root').map((e) => ({ fp256: e.fp256, sha1: e.thumbprint }))
-  const r = await ask(() => storeOf(w).list())
-  return r.error || !Array.isArray(r.roots) ? { error: r.error || 'no list' } : { roots: r.roots.filter((x) => !listed.some((e) => sameRoot(x, e))) }
-}
+const strayRoots = (w, m) => strayRootsOf(storeOf(w), m)
 /** What the sweep below would do, for the plan and --dry-run (1.6 §1.4: the same receipt as the run): one changed row per stray root, the key when the
  *  record names none; a store that cannot be listed is a note, never an empty plan. Reads the store once and writes nothing. */
 async function strayPlan(w, m) {
