@@ -45,7 +45,7 @@ function inject(ctx) {
     }],
     watch: ['package.json', 'package-lock.json', 'bun.lock', 'node_modules'].map((n) => ({ path: path.join(dir, n), why: 'OpenCode installs @opencode-ai/plugin there on its first run with any plugin' })),
     notes: [
-      { code: 'harness-note', text: `with any plugin present, OpenCode's next first run fetches @opencode-ai/plugin from the npm registry once and may write package.json, package-lock.json and node_modules/ in ${dir}; uninstall reports those and never deletes them` },
+      { code: 'harness-note', text: `with any plugin present, OpenCode's next first run fetches @opencode-ai/plugin from the npm registry and may write package.json, package-lock.json and node_modules/ in ${dir}; every OpenCode start waits for that install until it succeeds once, so where the npm registry cannot be reached each start stalls until the install gives up (about 6.5 minutes measured); uninstall reports those files and never deletes them` },
       { code: 'harness-note', text: 'OpenCode loads trocar\'s plugin also under --pure / OPENCODE_PURE (they skip only npm plugins), so such a run is captured too' },
     ],
   }
@@ -91,7 +91,7 @@ const proxyMode = {
   trusts: {},
   userCertFiles: [],
   blockers: [],
-  effects: [{ id: 'opencode-1x-npm', paths: [CONFIG('package.json'), CONFIG('bun.lock'), CONFIG('node_modules')], when: 'the first OpenCode 1.x run with a plugin installs @opencode-ai/plugin in the config directory; off reports it and deletes nothing' }],
+  effects: [{ id: 'opencode-1x-npm', paths: [CONFIG('package.json'), CONFIG('bun.lock'), CONFIG('node_modules')], when: 'the first OpenCode 1.x run with a plugin installs @opencode-ai/plugin in the config directory; every OpenCode start waits for that install until it succeeds once, so where the npm registry cannot be reached each start stalls until the install gives up (about 6.5 minutes measured); off reports it and deletes nothing' }],
 }
 
 export default {

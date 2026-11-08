@@ -79,7 +79,7 @@ test('opencode inject: trocar\'s plugin file in OpenCode\'s plugin dir (XDG_CONF
     assert.deepEqual([p.paths, p.entries, p.files], [[plug], [], []], 'one file, nothing in OpenCode\'s config, no environment')
     assert.ok(p.owned[0].data.includes(JSON.stringify(path.join(dir, 'ca', 'trocar-ca.pem'))) && p.owned[0].data.includes(JSON.stringify(path.join(dir, 'run', 'trust'))))
     assert.deepEqual(p.watch.map((w) => path.basename(w.path)), ['package.json', 'package-lock.json', 'bun.lock', 'node_modules'])
-    assert.ok(p.records.every((r) => r.code === 'harness-note') && p.records.some((r) => /npm registry once/.test(r.reason)))
+    assert.ok(p.records.every((r) => r.code === 'harness-note') && p.records.some((r) => r.reason.includes('@opencode-ai/plugin')), 'the npm install OpenCode does is told')
     const xdg = planTrust({ descriptors: [oc], ctxFor: () => ({ ...ctx, env: new Map([['XDG_CONFIG_HOME', path.join(s.home, 'xdg')]]) }), caCertPem: CA.certPem, collectorDir: dir })
     assert.deepEqual(xdg.paths, [path.join(s.home, 'xdg', 'opencode', 'plugins', 'trocar-ca.js')])
   } finally { s.done() }

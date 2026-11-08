@@ -63,9 +63,9 @@ const ROWS = [
     parentKeys: [H('x-opencode-parent-session-id')],
     observerEffects: [
       effect('opencode-plugin', 'trocar trust plugin',
-        'trocar code runs inside the agent process; the first run adds one npm registry fetch of @opencode-ai/plugin', LINUX),
+        'trocar code runs inside the agent process; the first run adds an npm registry fetch of @opencode-ai/plugin, repeated at each start until one succeeds', LINUX),
       effect('opencode-route-plugin', 'trocar route plugin',
-        'trocar code runs inside the agent process; OpenCode 1.x\'s first run with a plugin adds one npm registry fetch of @opencode-ai/plugin', DOOR)] },
+        'trocar code runs inside the agent process; OpenCode 1.x\'s first run with a plugin adds an npm registry fetch of @opencode-ai/plugin, repeated at each start until one succeeds', DOOR)] },
   { ...ROW, id: 'kimi',
     sessionKeys: [B(['prompt_cache_key']), B(['metadata', 'user_id'])],
     synth: true }, // without a body key → a synthesized key (src/dissect/synth-key.mjs, gate G11)
