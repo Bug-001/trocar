@@ -377,3 +377,22 @@ for (const os of ['darwin', 'win32']) {
     })
   }
 }
+
+// 4.9 §4 uninstall: launchctl has no verb that drops a job's enable/disable override, so the `enable` install ran stays listed by
+// `launchctl print-disabled` after uninstall. The receipt says so on macOS once trocar's LaunchAgent was there, and never on Windows.
+const overrideNote = (receipt) => receipt.notes.filter((n) => n.includes('com.trocar.collector'))
+test('4.9 §4 · uninstall on macOS notes the launchd override it cannot remove; Windows has no such note', async () => {
+  const mac = await installed()
+  const plist = path.join(mac.home, 'Library', 'LaunchAgents', 'com.trocar.collector.plist')
+  fs.mkdirSync(path.dirname(plist), { recursive: true }); fs.writeFileSync(plist, '<plist/>')
+  const m = await uninstall(mac)
+  assert.equal(m.exit, 0, JSON.stringify(m.receipt.problems))
+  assert.equal(overrideNote(m.receipt).length, 1, JSON.stringify(m.receipt.notes))
+  const never = await modelWorld({ commands: ['codex'] }) // no LaunchAgent was ever there: launchd answers "not loaded", no plist
+  const n = await uninstall(never, { exec: recordingExec({ fail: (cmd) => (cmd.startsWith('launchctl print') ? { status: 113 } : null) }).run })
+  assert.deepEqual(overrideNote(n.receipt), [], JSON.stringify(n.receipt.notes))
+  const win = await modelWorld({ os: 'win32', commands: ['codex'] })
+  assert.equal((await win.install()).exit, 0)
+  const r = await uninstall(win, { platform: 'win32' })
+  assert.deepEqual(overrideNote(r.receipt), [], JSON.stringify(r.receipt.notes))
+})
