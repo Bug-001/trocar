@@ -945,11 +945,14 @@ test('off by trocar\'s marks keeps the backups no record names, and its receipt 
   assert.ok(!text.includes(s.home), text)
 })
 
+// the supervisor supervisor.lock names (pid 4040) still runs: the one powershell question stopByHand asks, answered
+const supervisorRuns = (file, args) => (file === 'powershell' && args.join(' ').includes('Get-Process -Id 4040 ') ? { status: 0, stdout: '1000000000001', stderr: '' } : { status: 1, stdout: '', stderr: 'not this question' })
+
 test('semantics 5 on win32: the way out finds and stops the daemon with Windows\' own commands, never pgrep or kill', async () => {
   const { switchRoutingOff } = await import('../../src/off/orchestrate.mjs')
   // supervisor.lock beside the daemon's lock names the supervisor, which goes first (it restarts a killed daemon)
-  const fs = { readFileSync: (f) => { if (/supervisor\.lock$/.test(f)) return JSON.stringify({ pid: 4040, startedAt: 1 }); throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) } }
-  const w = (state, pid) => ({ platform: 'win32', fs, unitManaged: () => false, lockFile: 'C:\\t\\lock', daemonState: async () => ({ state, socket: '\\\\.\\pipe\\t', lock: pid ? { pid } : null, reason: state === 'unknown' ? 'unreadable lock' : undefined }),
+  const fs = { readFileSync: (f) => { if (/supervisor\.lock$/.test(f)) return JSON.stringify({ pid: 4040, startedAt: 1000000000001 }); throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) } }
+  const w = (state, pid) => ({ platform: 'win32', fs, exec: supervisorRuns, unitManaged: () => false, lockFile: 'C:\\t\\lock', daemonState: async () => ({ state, socket: '\\\\.\\pipe\\t', lock: pid ? { pid } : null, reason: state === 'unknown' ? 'unreadable lock' : undefined }),
     request: async () => ({ actual: 'on', confirmed: false, relayed: { closing: 0, waiting: 0, cut: 0 } }) })
   const texts = [(await switchRoutingOff(w('running', 5151))).problems.join('\n'), (await switchRoutingOff(w('running', null))).problems.join('\n'), (await switchRoutingOff(w('unknown', null))).problems.join('\n')]
   for (const t of texts) assert.doesNotMatch(t, /\bpgrep\b|\bkill \d/, t)
@@ -960,11 +963,11 @@ test('semantics 5 on win32: the way out finds and stops the daemon with Windows\
 test('semantics 5 on every platform: a way out\'s commands are lines of their own, and the receipt prints each whole, unfolded, within 80 columns', async () => {
   const { switchRoutingOff } = await import('../../src/off/orchestrate.mjs')
   const { formatOffReceipt, isCommandLine } = await import('../../src/off/receipt.mjs')
-  const fs = { readFileSync: (f) => { if (/supervisor\.lock$/.test(f)) return JSON.stringify({ pid: 4040, startedAt: 1 }); throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) } }
+  const fs = { readFileSync: (f) => { if (/supervisor\.lock$/.test(f)) return JSON.stringify({ pid: 4040, startedAt: 1000000000001 }); throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) } }
   for (const platform of ['win32', 'darwin', 'linux']) {
     for (const unit of [false, true]) {
       if (unit && platform === 'win32') continue
-      const w = (state, pid) => ({ platform, fs, unitManaged: () => unit, lockFile: '/t/lock', daemonState: async () => ({ state, socket: '/t/sock', lock: pid ? { pid } : null, reason: state === 'unknown' ? 'unreadable lock' : undefined }),
+      const w = (state, pid) => ({ platform, fs, exec: supervisorRuns, unitManaged: () => unit, lockFile: '/t/lock', daemonState: async () => ({ state, socket: '/t/sock', lock: pid ? { pid } : null, reason: state === 'unknown' ? 'unreadable lock' : undefined }),
         request: async () => ({ actual: 'on', confirmed: false, relayed: { closing: 0, waiting: 0, cut: 0 } }) })
       for (const r of [await switchRoutingOff(w('running', 5151)), await switchRoutingOff(w('running', null)), await switchRoutingOff(w('unknown', null))]) {
         const cmds = r.problems.flatMap((p) => p.split('\n').filter(isCommandLine)).map((l) => l.trim())

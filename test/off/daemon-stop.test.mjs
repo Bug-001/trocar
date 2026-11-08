@@ -226,10 +226,6 @@ for (const [platform, managerStop] of [['darwin', 'launchctl-bootout'], ['linux'
   })
 }
 
-test('stopByHand: on win32 the supervisor supervisor.lock names goes first, then the daemon, through taskkill; elsewhere kill -9; no lock, the daemon alone', () => {
-  const dir = tmpDir()
-  assert.deepEqual(stopByHand({ platform: 'win32', dir, pid: 4242 }), ['taskkill /PID 4242 /F'])
-  fs.writeFileSync(path.join(dir, 'supervisor.lock'), JSON.stringify({ pid: 5000, startedAt: 1 }))
-  assert.deepEqual(stopByHand({ platform: 'win32', dir, pid: 4242 }), ['taskkill /PID 5000 /F', 'taskkill /PID 4242 /F'])
-  for (const platform of ['darwin', 'linux']) assert.deepEqual(stopByHand({ platform, dir, pid: 4242 }), ['kill -9 4242'])
+test('stopByHand off Windows: kill -9 the daemon, nothing after', () => {
+  for (const platform of ['darwin', 'linux']) assert.deepEqual(stopByHand({ platform, dir: tmpDir(), pid: 4242 }), { commands: ['kill -9 4242'], after: null })
 })

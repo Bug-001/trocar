@@ -111,14 +111,24 @@ const defaultKill = (pid, signal) => { if (process.env.TROCAR_TEST_SANDBOX === '
 /** The supervisor's lock, beside the daemon's (`<collector>/supervisor.lock`, written by arch/win32/autostart.mjs superviseChild).
  *  The test holds the name equal to the arch module's, which cannot be imported here (src/off imports only node:* and src/off, 0.1 §2). */
 export const SUPERVISOR_LOCK = 'supervisor.lock'
-/** The commands a person runs to stop a daemon stopDaemon could not (`dir`: the collector's, where both locks are): on win32 the supervisor that
- *  supervisor.lock names first (it starts a killed daemon again), then the daemon, through taskkill (PowerShell's kill is Stop-Process, which has
- *  no -9); elsewhere `kill -9`. One command per element, each a line of its own where it is printed. */
-export function stopByHand({ platform, dir, pid, fs = nodeFs }) {
-  if (platform !== 'win32') return [`kill -9 ${pid}`]
-  let sup = null
-  try { const o = JSON.parse(fs.readFileSync(path.join(dir, SUPERVISOR_LOCK), 'utf8')); if (Number.isSafeInteger(o.pid) && o.pid > 0 && o.pid !== pid) sup = o.pid } catch { /* no supervisor on record: the daemon alone */ }
-  return [...(sup ? [`taskkill /PID ${sup} /F`] : []), `taskkill /PID ${pid} /F`]
+/** Windows has no pgrep: the query that lists trocar's node processes, one pipeline split after its pipes (each line fits the width, a paste of
+ *  the lines runs it whole), and the sentence that says which of them to end first — the daemon's `daemon --supervise` parent starts it again. */
+export const WIN_FIND_DAEMON = ['Get-CimInstance Win32_Process -Filter "Name=\'node.exe\'" |', "Where-Object CommandLine -match 'trocar.*(daemon|collector start)' |", 'Select-Object ProcessId,CommandLine']
+export const SUPERVISE_FIRST = 'Of what it lists, end the one whose command line ends in "daemon --supervise" first, then the daemon, each with taskkill /PID and its ProcessId, then /F.'
+/** What a person runs to stop a daemon stopDaemon could not (`dir`: the collector's, where both locks are) → `{ commands, after }`: one command
+ *  per element, each a line of its own where it is printed, then `after` (a sentence, or null). Elsewhere `kill -9`. On win32 through taskkill
+ *  (PowerShell's kill is Stop-Process, which has no -9), the supervisor first (it starts a killed daemon again) — but only one supervisor.lock
+ *  names and `supervisorHolderAlive` proves still running: a lock taskkill /F left behind names a pid Windows soon gives to another process.
+ *  Proven gone, or no lock: the daemon alone. Not knowable: the query and which one to end first, no supervisor pid (nothing on a guess). */
+export function stopByHand({ platform, dir, pid, fs = nodeFs, run = null, env = process.env }) {
+  if (platform !== 'win32') return { commands: [`kill -9 ${pid}`], after: null }
+  const daemon = { commands: [`taskkill /PID ${pid} /F`], after: null }
+  const file = path.join(dir, SUPERVISOR_LOCK)
+  const unknown = { commands: WIN_FIND_DAEMON, after: SUPERVISE_FIRST }
+  const sup = readSupervisorLock({ file, fs })
+  if (!sup) return fs.existsSync(file) ? unknown : daemon
+  if (sup.pid === pid) return daemon
+  try { return supervisorHolderAlive(sup, { run, env }) ? { commands: [`taskkill /PID ${sup.pid} /F`, ...daemon.commands], after: null } : daemon } catch { return unknown }
 }
 /** The same 2 s as the arch module's LOCK_START_TOLERANCE_MS (the lock's start time is "now minus uptime", the OS's is the creation
  *  time: the same process agrees to within this). The test holds the two equal. */
