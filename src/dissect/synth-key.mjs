@@ -136,14 +136,19 @@ function startsOf(w) {
   return at;
 }
 // whether the call's windows `w` hold the item `it` (wordsOf) whole: a run that starts with its first windows, ends n later with its
-// last, and hashes to its digest
+// last, and hashes to its digest. Ends that match with another digest come from a run that repeats (the same windows over and over):
+// past MISSES of them the item is taken as not held, so one item costs at most MISSES digests of its n windows, however long the run
+const MISSES = 8;
 function holds(w, at, it) {
   const n = it[0], m = w.length / 2;
+  let miss = 0;
   for (const p of at.get(it[1] / SAMPLE) || []) {
     if (p + n > m) break;
     let ok = true;
     for (let j = 0; ok && j < 2 * ENDS_W; j++) ok = w[2 * p + j] === it[1 + j] && w[2 * (p + n - ENDS_W) + j] === it[1 + 2 * ENDS_W + j];
-    if (ok && digestOf(w.subarray(2 * p, 2 * (p + n))).equals(bytesOf(it).subarray(4 * DIG))) return true;
+    if (!ok) continue;
+    if (digestOf(w.subarray(2 * p, 2 * (p + n))).equals(bytesOf(it).subarray(4 * DIG))) return true;
+    if (++miss === MISSES) return false;
   }
   return false;
 }

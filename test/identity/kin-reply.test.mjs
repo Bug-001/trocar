@@ -102,6 +102,12 @@ test('kinship by reply: a request is read over a bounded tail: a reply before 2 
   assert.equal(run([turn('responses', 0, 0, r, T0), summary('responses', [r, filler], T0 + MIN)])[1].kin, false)
 })
 
+test('kinship by reply: edited copies of a reply before it, ends the same, do not hide the whole copy', () => {
+  // one char changed in the middle: the same length, so a copy that keeps the window count matches the reply's ends and misses its digest
+  const r = prose(41, 900), edited = (i) => r.slice(0, 400 + 20 * i) + '#' + r.slice(401 + 20 * i)
+  assert.equal(run([turn('responses', 0, 0, r, T0), summary('responses', [1, 2, 3, 4, 5, 6].map(edited).concat(r), T0 + MIN)])[1].key, 'sid-0')
+})
+
 test('kinship by reply: a reply past SYNTH_TTL_MS names no session; within it, past the fingerprint window, it does', () => {
   const r = prose(11, 800)
   assert.equal(run([turn('responses', 0, 0, r, T0), summary('responses', [r], T0 + SYNTH_TTL_MS - MIN)])[1].key, 'sid-0', 'within the TTL')
