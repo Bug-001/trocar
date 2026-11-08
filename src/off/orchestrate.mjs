@@ -26,7 +26,7 @@ import { readManifest, refuseOldManifest, unknownItems, undoByHand, MANIFEST_VER
 import { undoHarnesses, undoRootKeys, OWNED_ROLES } from './undo.mjs'
 import { planByMarker, undoByMarker } from './marker.mjs'
 import { pathKey } from './fsutil.mjs'
-import { daemonState, stopDaemon, helperGone, isRedirectorHelper, clearStaleSupervisorLock } from './daemon-stop.mjs'
+import { daemonState, stopDaemon, helperGone, isRedirectorHelper, clearStaleSupervisorLock, SUPERVISOR_LOCK } from './daemon-stop.mjs'
 import { controlRequest, controlEndpointFor } from './control-client.mjs'
 import { unitFilePath, UNIT_FILE_NAME } from './autostart.mjs'
 import { isProxyMode } from './mode.mjs'
@@ -81,9 +81,13 @@ export function offWorld({ home = nodeOs.homedir(), env = process.env, deps = {}
 const wayOut = (w, pid) => w.unitManaged()
   ? (w.platform === 'darwin' ? `To go on, stop the autostart (launchctl bootout gui/${typeof process.getuid === 'function' ? process.getuid() : -1}/${AGENT_LABEL}), so the daemon is not started again, then run the command again` : `To go on, stop the daemon (systemctl --user stop trocar-collector.service), which takes its links off with it, then run the command again`)
   : `To go on, stop the daemon (${Number.isInteger(pid) ? killBy(w, pid) : `no pid is on record: find it with ${findDaemon(w)}`}), which takes its links off with it, then run the command again`
-// the commands of this OS that find and stop a daemon by hand: Windows has no pgrep and no kill <pid>
-const findDaemon = (w) => (w.platform === 'win32' ? `Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object CommandLine -match 'trocar.*(daemon|collector start)' | Select-Object ProcessId` : "pgrep -f 'trocar.* (daemon|collector start)'")
-const killBy = (w, pid) => (w.platform === 'win32' ? `taskkill /PID ${pid} /F` : `kill ${pid}`)
+// the commands of this OS that find and stop a daemon by hand: Windows has no pgrep and no kill <pid>. On Windows the daemon is the child of a
+// `daemon --supervise` parent that starts it again after any non-zero exit (arch/win32/autostart.mjs superviseChild), so the supervisor goes
+// first, as stopDaemon does it (daemon-stop.mjs): its pid from supervisor.lock, else the process to end named by its command line
+const SUPERVISE_FIRST = 'end the one whose command line ends in "daemon --supervise" first'
+const findDaemon = (w) => (w.platform === 'win32' ? `Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object CommandLine -match 'trocar.*(daemon|collector start)' | Select-Object ProcessId,CommandLine; ${SUPERVISE_FIRST}` : "pgrep -f 'trocar.* (daemon|collector start)'")
+const supervisorPid = (w) => { try { const o = JSON.parse(w.fs.readFileSync(path.join(path.dirname(w.lockFile), SUPERVISOR_LOCK), 'utf8')); return Number.isSafeInteger(o.pid) && o.pid > 0 ? o.pid : null } catch { return null } }
+const killBy = (w, pid) => { if (w.platform !== 'win32') return `kill ${pid}`; const sup = supervisorPid(w); return `${sup ? `taskkill /PID ${sup} /F` : `the supervisor first (${findDaemon(w)})`}, then taskkill /PID ${pid} /F` }
 
 /** Is the autostart going to bring the daemon back the moment it is stopped — systemd's Restart=on-failure mid-wait, or launchd's KeepAlive with the agent still loaded (4.9 §4)? A tool that cannot be asked says no: the lock decides. */
 const unitIsUp = (w) => {

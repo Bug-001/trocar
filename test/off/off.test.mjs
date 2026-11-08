@@ -950,10 +950,12 @@ test('off by trocar\'s marks keeps the backups no record names, and its receipt 
 
 test('semantics 5 on win32: the way out finds and stops the daemon with Windows\' own commands, never pgrep or kill', async () => {
   const { switchRoutingOff } = await import('../../src/off/orchestrate.mjs')
-  const w = (state, pid) => ({ platform: 'win32', unitManaged: () => false, lockFile: 'C:\\t\\lock', daemonState: async () => ({ state, socket: '\\\\.\\pipe\\t', lock: pid ? { pid } : null, reason: state === 'unknown' ? 'unreadable lock' : undefined }),
+  // supervisor.lock beside the daemon's lock names the supervisor, which goes first (it restarts a killed daemon)
+  const fs = { readFileSync: (f) => { if (/supervisor\.lock$/.test(f)) return JSON.stringify({ pid: 4040, startedAt: 1 }); throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) } }
+  const w = (state, pid) => ({ platform: 'win32', fs, unitManaged: () => false, lockFile: 'C:\\t\\lock', daemonState: async () => ({ state, socket: '\\\\.\\pipe\\t', lock: pid ? { pid } : null, reason: state === 'unknown' ? 'unreadable lock' : undefined }),
     request: async () => ({ actual: 'on', confirmed: false, relayed: { closing: 0, waiting: 0, cut: 0 } }) })
   const texts = [(await switchRoutingOff(w('running', 5151))).problems.join('\n'), (await switchRoutingOff(w('running', null))).problems.join('\n'), (await switchRoutingOff(w('unknown', null))).problems.join('\n')]
   for (const t of texts) assert.doesNotMatch(t, /\bpgrep\b|\bkill \d/, t)
-  assert.match(texts[0], /taskkill \/PID 5151\b/)
+  assert.match(texts[0], /taskkill \/PID 4040\b[^]*taskkill \/PID 5151\b/, 'the supervisor is stopped before the daemon')
   for (const t of texts.slice(1)) assert.match(t, /Get-CimInstance Win32_Process/)
 })
