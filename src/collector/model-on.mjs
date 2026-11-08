@@ -21,6 +21,7 @@ import { controlEndpointFor } from '../off/control-client.mjs'
 import { CODE } from './core/codes.mjs'
 import { appendEvent } from './core/events.mjs'
 import { retriedNote, SETUP_WHY } from '../cli/words.mjs'
+import { lockState } from '../health/read.mjs'
 
 const INSTALL_HINT = 'trocar install'
 const errText = (e) => String((e && e.message) || e)
@@ -115,11 +116,25 @@ export async function turnOnModel({ os, home, env = process.env, ids = null, har
   const groups = planned.flatMap(({ h, plan }) => plan.routes.map((r) => groupOf(h, r.id)))
   const ep = controlEndpointFor({ platform: os, dir, env, fs })
   const ask = request || ep.request
-  let doorsNow = {}
-  try { doorsNow = ep.socketPath ? ((await ask({ socketPath: ep.socketPath, method: 'GET', path: '/status', timeoutMs: 2000 })).doors || {}) : {} } catch { doorsNow = {} }
+  let doorsNow = {}, unanswered = null
+  try { doorsNow = ep.socketPath ? ((await ask({ socketPath: ep.socketPath, method: 'GET', path: '/status', timeoutMs: 2000 })).doors || {}) : {} } catch (e) { doorsNow = {}; unanswered = e || {} }
+  // our daemon is there but did not answer: something listens on its control endpoint (a timeout or an HTTP error, not ENOENT / ECONNREFUSED — the
+  // control server is up before the doors and the lock, and refuses to start while another daemon answers: still starting) or its lock lives (stuck).
+  // A held recorded port is then its own door as far as on can tell — kept, not engine-port-taken.
+  const ownDaemon = !!unanswered && (unanswered.code === 'ETIMEDOUT' || unanswered.status != null || ['running', 'unresponsive'].includes(lockState({ file: path.join(dir, 'lock'), fs }).state))
   const was = await loadIngressConfig({ dir, groups, isFree, fs })
+  const unconfirmed = []
   // 4.11 §3 ㉓: a group of an id outside the table is another copy's — its port is never moved (the picker still avoids it)
-  const cfg = await rebindTaken(was, async (port, g) => !byName.has(g.split(':')[0]) || doorsNow[g] === port || isFree(port), { dir, isFree, fs })
+  const cfg = await rebindTaken(was, async (port, g) => {
+    if (!byName.has(g.split(':')[0]) || doorsNow[g] === port || await isFree(port)) return true
+    if (ownDaemon) unconfirmed.push(g)
+    return ownDaemon
+  }, { dir, isFree, fs })
+  // the reason is what the code's words (words.mjs) do not say; the group id stays in `door`, the agent in `harness`, which status names the line by
+  const hOf = (g) => g.slice(0, g.indexOf(':'))
+  for (const g of unconfirmed) {
+    try { appendEvent(dir, { event: 'failure', where: 'ingress', code: CODE.doorUnconfirmed, harness: hOf(g), door: g, port: was.groupPorts[g], reason: `port ${was.groupPorts[g]} was kept`, ...(source ? { source } : {}) }) } catch { /* the daemon's answer to POST /on says the rest */ }
+  }
   // a door group whose port or token is new (P12): when every group of h moved, the earlier windows lead nowhere now — they go and the history
   // restarts here (`since`); when some moved, `door_since` marks those groups, and a process from an earlier window may have read the old value
   const changed = new Set(was.created ? groups : [...was.added, ...cfg.rebound])
@@ -133,9 +148,9 @@ export async function turnOnModel({ os, home, env = process.env, ids = null, har
   // §3 ①: a group port another socket holds is engine-port-taken — said in the receipt and recorded (D38), then the group's entries follow the new door
   for (const g of cfg.rebound) {
     const [from, to] = [was.groupPorts[g], cfg.config.groupPorts[g]]
-    const reason = `trocar's local proxy port ${from} for ${g} is held by another program; trocar on moved it to ${to} and rewrites its entries`
-    try { appendEvent(dir, { event: 'failure', where: 'ingress', code: CODE.enginePortTaken, door: g, port: from, moved_to: to, reason, ...(source ? { source } : {}) }) } catch { /* the receipt's note carries it (R11) */ }
-    out.notes.push({ harness: g.slice(0, g.indexOf(':')), code: CODE.enginePortTaken, text: `${CODE.enginePortTaken}: port ${from} of ${g} was taken by another program; trocar moved it to ${to} and rewrote the entries` })
+    const reason = `another program held port ${from}; trocar on moved it to ${to} and rewrote the entries`
+    try { appendEvent(dir, { event: 'failure', where: 'ingress', code: CODE.enginePortTaken, harness: hOf(g), door: g, port: from, moved_to: to, reason, ...(source ? { source } : {}) }) } catch { /* the receipt's note carries it (R11) */ }
+    out.notes.push({ harness: hOf(g), code: CODE.enginePortTaken, text: reason })
   }
   let doors = null
   const goneAsk = offSince(stateF, on, { fs, now: now() })

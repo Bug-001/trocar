@@ -101,11 +101,15 @@ test('a system proxy change is one netenv-change (netenv-changed, captured), nev
     try {
       for (const s of [null, { on: false }, null, { on: false }]) { box.s = s; await u.poll() }
       assert.deepEqual(events, [], os)
-      box.s = null // and one that stays: said once, when the hold is over
+      box.s = null // and one that stays: a read failure once the hold is over, never a change (unreadable is not absent, not changed: D38)
       await u.poll()
       assert.deepEqual(events, [], `${os}: not said before the hold is over`)
       hold()
-      assert.deepEqual(events.map((e) => [e.from, e.to]), [['off', 'system-proxy-unreadable']], os)
+      assert.deepEqual(events.map((e) => [e.event, e.where, e.code]), [['failure', 'netenv', 'system-proxy-unreadable']], os)
+      assert.ok(events.every((e) => checkRecord(e).length === 0), `${os}: ${JSON.stringify(events.map(checkRecord))}`)
+      box.s = { on: true, host: '10.1.2.3', port: 3128 } // read again: compared with the last reading that was read
+      await u.poll()
+      assert.deepEqual(events.slice(1).map((e) => [e.event, e.code, e.from, e.to]), [['netenv-change', 'netenv-changed', 'off', 'http://10.1.2.3:3128']], os)
     } finally { u.stop() }
     // a stop inside the hold window (the daemon exits) says the held state instead of dropping it (D38)
     events.length = 0
@@ -115,11 +119,11 @@ test('a system proxy change is one netenv-change (netenv-changed, captured), nev
     await v.poll()
     assert.deepEqual(events, [], `${os}: still held`)
     v.stop()
-    assert.deepEqual(events.map((e) => [e.from, e.to]), [['off', 'system-proxy-unreadable']], `${os}: the hold the stop found is written, not dropped`)
+    assert.deepEqual(events.map((e) => [e.event, e.code]), [['failure', 'system-proxy-unreadable']], `${os}: the hold the stop found is written as a read failure, not dropped`)
   }
 })
 
-test('while one unreadable reading is held, the door keeps dialing the last reading that could be read (one failed read never sends it direct around the user\'s proxy); once the hold is over it is the state', async () => {
+test('an unreadable reading never moves the door\'s upstream: held or not, the door keeps dialing the last reading that could be read (a failed read never sends it direct around the user\'s proxy)', async () => {
   for (const os of Object.keys(OS)) {
     const box = { s: { on: true, host: '127.0.0.1', port: 7897 } }
     let hold = null
@@ -130,7 +134,7 @@ test('while one unreadable reading is held, the door keeps dialing the last read
       await w.poll()
       assert.equal(w.now().url, 'http://127.0.0.1:7897', `${os}: held, so the last good reading`)
       hold()
-      assert.equal(w.now().ok, false, `${os}: still unreadable when the hold is over: said, and dialed as it is`)
+      assert.equal(w.now().url, 'http://127.0.0.1:7897', `${os}: still unreadable when the hold is over: not recomputed`)
     } finally { w.stop() }
   }
 })
