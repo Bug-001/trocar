@@ -11,7 +11,7 @@ import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 import { createCa } from '../../src/collector/core/tls/ca.mjs'
 import { ANONYMOUS_MODULE_MANIFEST } from '../../src/collector/harness/_plugins.mjs'
 import { HARNESS_IDS } from '../../src/off/harness-names.mjs'
-import { planByMarker, undoByMarker, MARKER_PATHS } from '../../src/off/marker.mjs'
+import { planByMarker, undoByMarker, MARKER_PATHS, DOOR_ROUTES } from '../../src/off/marker.mjs'
 import { backupsOf, writeBackup } from '../../src/off/backup.mjs'
 import { manifestPath } from '../../src/off/manifest.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -66,7 +66,7 @@ test('undoByMarker takes trocar out of each file and nothing else: blocks and li
   assert.equal(read(s.sh.files['kimi-code'][0]), s.original[s.sh.files['kimi-code'][0]], 'a line')
   assert.deepEqual(JSON.parse(read(cc)), { model: 'x', env: { NODE_EXTRA_CA_CERTS: s.sh.corp }, theme: 'dark' }, 'the user\'s value is back from the backup and the edit made since stays: one key, never the whole file')
   assert.equal(by('claude-code', 'json-value').restored_from, backupsOf({ home: s.home, file: cc }).at(-1))
-  assert.deepEqual(JSON.parse(read(s.sh.files['z-code'][0])), { model: 'lab/m', network: {} }, 'a key trocar added, with no backup of a value, just goes')
+  assert.equal(read(s.sh.files['z-code'][0]), s.original[s.sh.files['z-code'][0]], 'a key trocar added, with no backup of a value, just goes, and the object it made for it, empty now, too: byte for byte')
   assert.ok(!fs.existsSync(s.sh.files['deepseek-dsh'][0]), 'the dsh patch file held only trocar\'s row (it was `[]`): dsh does not start on an empty file, so it is removed')
   for (const gone of ['.config/opencode/plugins', '.trocar/collector/bin', '.trocar/collector/plugins']) assert.ok(!fs.existsSync(path.join(s.home, gone)), `${gone} is gone, the directory too`)
   assert.ok(fs.existsSync(path.join(s.home, '.trocar', 'collector', 'ca', 'trocar-ca.pem')), 'the CA is trocar\'s, not an entry: marker undo leaves it for uninstall')
@@ -229,7 +229,7 @@ test('a switch file that is a link: the link goes, the file it names stays byte 
 // A loopback proxy of the user's own (a port that is no door) stays; with ingress.json unreadable nothing is guessed, and the receipt says so.
 const PORT = 18001
 const putIngress = (dir, port) => fs.writeFileSync(path.join(dir, 'ingress.json'), JSON.stringify({ enginePort: 17990, groupPorts: { a: port }, ingressToken: 'a'.repeat(32), listenerToken: 'b'.repeat(32) }))
-const { parseJsonText, getPath: valueAt, removeKey: dropKey } = await import('../../src/off/json-text.mjs')
+const { parseJsonText, getPath: valueAt, removeKey: dropKey, setKey } = await import('../../src/off/json-text.mjs')
 const without = (t, keys) => keys.reduce((s, k) => (dropKey(s, k) || { text: s }).text, t) // null: no such key
 for (const { h, id, r } of (await loadHarnesses()).flatMap((d) => Object.entries((d.proxyMode && d.proxyMode.routes) || {}).map(([id, r]) => ({ h: d, id, r }))).filter((x) => x.r.kind === 'json-key' && ['door-url', 'pac-url'].includes(x.r.value))) {
   for (const os of ['darwin', 'win32']) {
@@ -258,15 +258,15 @@ for (const { h, id, r } of (await loadHarnesses()).flatMap((d) => Object.entries
       const s = setup(own)
       if (!s) return
       putIngress(s.w.dir, PORT)
+      const original = read(s.file)
       const res = routeEntry('json-key').write(s.ctx, door(PORT))
       assert.ok(res.ok, JSON.stringify(res))
-      const on = read(s.file)
       const plan = planByMarker({ home: s.w.home, env: s.w.ctx.env, platform: os, ids: [h.name] }).filter((x) => x.path === s.file)
       assert.equal(plan.length, r.proxyKeys.length, 'each door key of the file is found')
       assert.deepEqual(undoByMarker(plan, { home: s.w.home }).map((x) => x.result), plan.map(() => 'undone-by-marker'))
       const out = read(s.file), doc = parseJsonText(out)
       r.proxyKeys.forEach((k, i) => assert.equal(valueAt(doc, k), i === 0 && own ? own : undefined, k.join('.')))
-      assert.equal(without(out, r.proxyKeys), without(on, r.proxyKeys), 'only the door keys changed')
+      assert.equal(out, original, 'every byte as it was before on: the door keys and what on wrote beside them are out')
     })
     test(`${h.name} · ${id} (json-key) · ${os}: a loopback proxy of the user's own (no door port) stays, and with ingress.json unreadable no value is guessed a door`, () => {
       const s = setup(null)
@@ -309,6 +309,101 @@ for (const { h, id, r } of (await loadHarnesses()).flatMap((d) => Object.entries
     })
   }
 }
+
+// What `on` writes BESIDE a door value in the same file (4.11 P5 / P6): the bypass list (`noProxyKeys`, loopback ∪ the user's values ∪ the persistent env)
+// and an array item (`arrayItems`). With the manifest gone (1.6 R3) each is undone when it holds exactly what `on` writes, judged against the backup of
+// the file as it was before `on`; one off cannot tell is left and named, and a file left as `{}` stays and is named. Generated over every route with companions.
+const nested = (keys, value, into = {}) => { let at = into; keys.slice(0, -1).forEach((k) => { at = at[k] = at[k] || {} }); at[keys.at(-1)] = value; return into }
+const withCompanions = (await loadHarnesses()).flatMap((d) => Object.entries((d.proxyMode && d.proxyMode.routes) || {}).map(([id, r]) => ({ h: d, id, r }))).filter((x) => x.r.kind === 'json-key' && (x.r.noProxyKeys || x.r.arrayItems))
+test('there are routes with companions, and their companion data is the marker module\'s (one copy)', () => {
+  assert.ok(withCompanions.length)
+  for (const { h, id, r } of withCompanions) for (const k of ['noProxyKeys', 'arrayItems']) assert.equal(r[k], DOOR_ROUTES[h.name][id][k], `${h.name}.${id}.${k}`)
+})
+for (const { h, id, r } of withCompanions) {
+  for (const os of ['darwin', 'win32']) {
+    const label = `${h.name} · ${id} · ${os}`
+    const setup = (text) => {
+      const w = world({ os })
+      if (os === 'win32') Object.assign(w.ctx.env, { APPDATA: path.join(w.root, 'roaming'), LOCALAPPDATA: path.join(w.root, 'local') })
+      w.ctx.dirs = dirsFor(os, w.home, w.ctx.env)
+      const ctx = { ...w.ctx, harness: h.name, routeId: id, route: r }
+      const file = resolveLoc(r.file, ctx)[0]
+      if (text != null) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text) }
+      putIngress(w.dir, PORT)
+      assert.ok(routeEntry('json-key').write(ctx, door(PORT)).ok)
+      return { w, file }
+    }
+    const offOf = ({ w, file }) => { const notes = []; const plan = planByMarker({ home: w.home, env: w.ctx.env, platform: os, ids: [h.name], notes }).filter((x) => x.path === file); return { plan, results: undoByMarker(plan, { home: w.home, notes }), notes } }
+    const companionKeys = [...(r.noProxyKeys || []), ...(r.arrayItems || []).map((a) => a.keys)]
+    test(`${label}: a file \`on\` created — the companions holding exactly on's values go with the door, and the file left as {} stays and is named`, () => {
+      const s = setup(null)
+      const { results, notes } = offOf(s)
+      assert.ok(results.length && results.every((x) => x.result === 'undone-by-marker'), JSON.stringify(results))
+      const doc = parseJsonText(read(s.file))
+      assert.deepEqual(doc, {}, read(s.file))
+      assert.ok(notes.some((n) => n.includes(s.file) && n.includes('{}')), JSON.stringify(notes))
+    })
+    test(`${label}: a file of the user's (their own bypass list, their own array items) comes back byte for byte`, () => {
+      const doc = { keep: 1 }
+      if (r.noProxyKeys) nested(r.noProxyKeys[0], 'corp.example', doc)
+      for (const a of r.arrayItems || []) nested(a.keys, ['mine'], doc)
+      const original = `${JSON.stringify(doc, null, 2)}\n`
+      const s = setup(original)
+      for (const a of r.arrayItems || []) assert.ok(valueAt(parseJsonText(read(s.file)), a.keys).includes(a.value), 'on appended its item')
+      const { notes } = offOf(s)
+      assert.equal(read(s.file), original)
+      assert.ok(!notes.some((n) => n.includes(s.file)), JSON.stringify(notes))
+    })
+    if (r.arrayItems) test(`${label}: an array item the user had before \`on\` stays`, () => {
+      const doc = { keep: 1 }
+      for (const a of r.arrayItems) nested(a.keys, [a.value], doc)
+      const original = `${JSON.stringify(doc, null, 2)}\n`
+      const s = setup(original)
+      offOf(s)
+      assert.equal(read(s.file), original)
+    })
+    if (r.noProxyKeys) test(`${label}: a companion the user changed after \`on\` is left and named; the rest of trocar's goes`, () => {
+      const s = setup(null)
+      const [first, ...rest] = companionKeys // the first a bypass key where the route has one (an array item holds no value of the user's to change)
+      fs.writeFileSync(s.file, setKey(read(s.file), first, 'mine.example').text)
+      const { notes } = offOf(s)
+      const doc = parseJsonText(read(s.file))
+      assert.equal(valueAt(doc, first), 'mine.example')
+      for (const k of rest) assert.equal(valueAt(doc, k), undefined, k.join('.'))
+      for (const k of r.proxyKeys) assert.equal(valueAt(doc, k), undefined, k.join('.'))
+      assert.ok(notes.some((n) => n.includes(s.file) && n.includes(first.join('.'))), JSON.stringify(notes))
+    })
+    test(`${label}: a file with no door value is not touched, whatever its bypass list and arrays hold`, () => {
+      const w = world({ os })
+      if (os === 'win32') Object.assign(w.ctx.env, { APPDATA: path.join(w.root, 'roaming'), LOCALAPPDATA: path.join(w.root, 'local') })
+      w.ctx.dirs = dirsFor(os, w.home, w.ctx.env)
+      const file = resolveLoc(r.file, { ...w.ctx })[0]
+      const doc = {}
+      for (const k of r.noProxyKeys || []) nested(k, 'localhost,127.0.0.1,::1', doc)
+      for (const a of r.arrayItems || []) nested(a.keys, [a.value], doc)
+      const text = `${JSON.stringify(doc, null, 2)}\n`
+      fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text)
+      putIngress(w.dir, PORT)
+      const plan = planByMarker({ home: w.home, env: w.ctx.env, platform: os, ids: [h.name] })
+      assert.deepEqual(plan.filter((x) => x.path === file), [])
+      undoByMarker(plan, { home: w.home })
+      assert.equal(read(file), text)
+    })
+  }
+}
+test('off --yes on darwin with the manifest gone: what a marker undo leaves of trocar\'s (a file left as {}) is named in the receipt', async () => {
+  const { runOff } = await import('../../src/off/orchestrate.mjs')
+  const { h, id, r } = withCompanions[0]
+  const w = world({ os: 'darwin' })
+  const ctx = { ...w.ctx, harness: h.name, routeId: id, route: r }
+  putIngress(w.dir, PORT)
+  assert.ok(routeEntry('json-key').write(ctx, door(PORT)).ok)
+  const file = resolveLoc(r.file, ctx)[0]
+  fs.rmSync(manifestPath(w.dir), { force: true })
+  const { receipt, exit } = await runOff({ home: w.home, env: w.ctx.env, ids: [h.name], yes: true, deps: { platform: 'darwin', exec: () => ({ status: 1, stdout: '', stderr: 'no tool here' }), procs: async () => [], sleep: async () => {} } })
+  assert.deepEqual([exit, receipt.undone_by_marker], [0, true], JSON.stringify(receipt.problems))
+  assert.ok(receipt.notes.some((n) => n.includes(file) && n.includes('{}')), JSON.stringify(receipt.notes))
+})
 
 // the same through `off` itself on macOS (runOff, its receipt, its --dry-run): the door value is undone after a yes, and with ingress.json unreadable the
 // receipt names the file it left. One route stands for all: the generated cases above cover each.

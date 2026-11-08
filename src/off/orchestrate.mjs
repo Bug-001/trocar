@@ -393,7 +393,7 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
     u.problems.push(`trocar's own record of what it wrote ${manifestError ? 'cannot be read' : 'is missing'}, so the ${items.length} file${items.length === 1 ? '' : 's'} above ${items.length === 1 ? 'was' : 'were'} left as ${items.length === 1 ? 'it is' : 'they are'}.`, `Undo ${items.length === 1 ? 'it' : 'them'} by the marks trocar left in ${items.length === 1 ? 'it' : 'them'}: trocar off --yes`)
     return u
   }
-  for (const r of undoByMarker(plan, { home: w.home, fs: w.fs })) {
+  for (const r of undoByMarker(plan, { home: w.home, fs: w.fs, notes: u.notes })) { // notes: what it left of trocar's and could not tell (D38)
     if (r.result === CODE_OFF.undoneByMarker) {
       u.undone_by_marker = true
       if (r.how === 'owned-file') u.removed.push(r.path)

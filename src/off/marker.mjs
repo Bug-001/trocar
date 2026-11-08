@@ -7,7 +7,9 @@
 //   json-value   a JSON string that points under ~/.trocar (a CC / Z-Code trust key), or, at a proxy key `on` writes on macOS / Windows (DOOR_ROUTES),
 //                one of trocar's doors (door-value.mjs: a loopback URL on a door port ingress.json records; that record unreadable, none is judged a
 //                door and a note says so): the value trocar replaced comes back from the NEWEST backup of that file (R2), one key at a time — never the
-//                whole file (1.6 R2); no value in the backup, the key goes
+//                whole file (1.6 R2); no value in the backup, the key goes (and an object above it `on` made, empty now). What `on` wrote beside a door
+//                (DOOR_ROUTES noProxyKeys / arrayItems) goes by the same rule when it holds exactly what `on` writes; one off cannot tell, and a file
+//                left as `{}`, are left and named (undoByMarker `notes`)
 //   owned-file   a plugin or shim trocar wrote (its sentinel in it, or exactly trocar's own plugin manifest), or a switch file `on` wrote for a harness
 //                (paths.mjs switchFileIn: in trocar's own tree, so trocar's by where it is, whatever it holds; a link there goes, never what it points at)
 // The certificate carriers among them (`phase: 'install'`) are install's (D55①): `off` never looks at them, `uninstall` does (planByMarker `phases`).
@@ -19,14 +21,14 @@ import nodeFs from 'node:fs'
 import path from 'node:path'
 import { SENTINEL, BLOCK_OPEN, BLOCK_END, LINE_MARK, restoreOffLines } from './text-edit.mjs'
 import { foldsEnvNames } from './env-names.mjs'
-import { getPath, setKey, removeKey, parseJsonText, unreadableJson, markLen } from './json-text.mjs'
+import { getPath, setKey, removeKey, removeItem, parseJsonText, unreadableJson, markLen } from './json-text.mjs'
 import { writeDurable, editTarget, removeEmptyDirs, readOrNull } from './fsutil.mjs'
 import { backupsOf } from './backup.mjs'
 import { trocarHome, collectorIn, switchFileIn } from './paths.mjs'
 import { CODE_OFF } from './names.mjs'
 import { decodeText, encodeText, CHARSETS, WHY_TEXT } from './text-codec.mjs'
 import { resolveLoc, dirsFor } from './loc.mjs'
-import { doorPorts, isDoorValue, loopbackUrl } from './door-value.mjs'
+import { doorPorts, isDoorValue, loopbackUrl, mergeNoProxy } from './door-value.mjs'
 
 const RC_FILES = ['.bashrc', '.bash_profile', '.bash_login', '.profile', '.zshrc', '.zshenv', '.zprofile', '.zlogin'] // where the Kimi installer's PATH line, and so trocar's, can be
 const PLUGIN_MANIFEST = '{"type":"module"}\n' // the anonymous package.json of trocar's dsh plugin directory (collector/harness/_plugins.mjs: ANONYMOUS_MODULE_MANIFEST)
@@ -41,16 +43,17 @@ export const ROUTE_PLACES = Object.freeze({
   hermes: Object.freeze({ file: Object.freeze(HERMES_ENV) }),
 })
 /** The json-key routes `on` writes a door into on macOS / Windows (4.11 §2.3): the file (`file`, a <loc>; or `select`: the entry a meta file's `idKey`
- *  names in the directory `dir`) and the keys that hold the door (`proxyKeys`). The descriptor's route takes these from here, so the marker undo looks
- *  where `on` wrote, at the keys it wrote — one copy of each. */
+ *  names in the directory `dir`), the keys that hold the door (`proxyKeys`) and what `on` writes beside them (4.11 P5 / P6: the bypass list at
+ *  `noProxyKeys`, an element added to an array, `arrayItems`). The descriptor's route takes these from here, so the marker undo looks where `on` wrote,
+ *  at the keys it wrote — one copy of each. */
 const CC_SETTINGS = { base: 'home', dir: '.claude', env: 'CLAUDE_CONFIG_DIR', path: 'settings.json' }
 const CLAUDE_3P = (base) => ({ base, path: 'Claude-3p/configLibrary' })
 export const DOOR_ROUTES = Object.freeze({
   'claude-code': Object.freeze({
-    settings: Object.freeze({ file: CC_SETTINGS, proxyKeys: [['env', 'HTTPS_PROXY'], ['env', 'https_proxy'], ['env', 'HTTP_PROXY'], ['env', 'http_proxy']] }), // every proxy variable it reads: its children inherit this env, and their plain http goes to the door too (4.8 §5.1)
+    settings: Object.freeze({ file: CC_SETTINGS, proxyKeys: [['env', 'HTTPS_PROXY'], ['env', 'https_proxy'], ['env', 'HTTP_PROXY'], ['env', 'http_proxy']], noProxyKeys: [['env', 'NO_PROXY'], ['env', 'no_proxy']] }), // every proxy variable it reads: its children inherit this env, and their plain http goes to the door too (4.8 §5.1)
     library: Object.freeze({ select: { dir: { perOs: { darwin: CLAUDE_3P('appSupport'), win32: CLAUDE_3P('localAppData') } }, meta: '_meta.json', idKey: 'appliedId', createIfNone: true }, proxyKeys: [['egressProxyPacUrl']] }),
   }),
-  'kimi-code': Object.freeze({ vscode: Object.freeze({ file: { base: 'appSupport', path: 'Code/User/settings.json' }, proxyKeys: [['http.proxy']] }) }),
+  'kimi-code': Object.freeze({ vscode: Object.freeze({ file: { base: 'appSupport', path: 'Code/User/settings.json' }, proxyKeys: [['http.proxy']], arrayItems: [{ keys: ['settingsSync.ignoredSettings'], value: 'http.proxy' }] }) }),
   'z-code': Object.freeze({ 'cli-config': Object.freeze({ file: { base: 'home', path: '.zcode/cli/config.json' }, proxyKeys: [['network', 'httpProxy']] }) }),
 })
 const URL_IN_TEXT = /https?:\/\/[^\s"'`,{}[\]\\]+/g // the URLs in a text that does not parse as JSON, each judged as a value would be
@@ -168,11 +171,13 @@ export function planByMarker({ home, ids = null, fs = nodeFs, env = process.env,
           else if (ports.why && urls.some(loopbackUrl)) unknown('the file')
           continue
         }
+        const n = plan.length
         for (const keys of spec.route.proxyKeys) {
           const v = getPath(doc, keys)
           if (ports.ports && isDoorValue(v, ports.ports)) add({ keys, door: true }) // the value itself is not kept: a door URL holds its token
           else if (ports.why && loopbackUrl(v)) unknown(keys.join('.'))
         }
+        if (plan.length > n && (spec.route.noProxyKeys || spec.route.arrayItems)) plan.at(-1).detail.route = spec.route // the file's last door key judges what `on` wrote beside the door
       } else if (spec.how === 'owned-file' && (spec.ours || (spec.exact ? t === spec.exact : t.includes(SENTINEL)))) add(spec.ours ? { ours: true } : spec.exact ? { exact: spec.exact } : {})
     }
   }
@@ -181,7 +186,7 @@ export function planByMarker({ home, ids = null, fs = nodeFs, env = process.env,
 }
 
 // one plan item undone; → { result, ...what happened } (result: undone-by-marker | already-clean | left-unparsable | left-unreadable | error)
-function undoOne(item, home, fs) {
+function undoOne(item, home, fs, notes) {
   const root = trocarHome(home)
   const done = (extra = {}) => ({ result: CODE_OFF.undoneByMarker, ...extra })
   if ((item.detail || {}).ours) { // the switch file: the path itself goes (a link, not what it names); nothing in it is read
@@ -226,33 +231,82 @@ function undoOne(item, home, fs) {
     put(out)
     return done({ lines: hits.length })
   }
-  // json-value: the value trocar replaced comes back from the newest backup of this file, this key only; none there → the key goes
+  // json-value: the value trocar replaced comes back from the newest backup of this file, this key only; none there → the key goes; the file's last door
+  // key (detail.route) also judges what `on` wrote beside the doors
   const keys = item.detail.keys, at = keys ? keys.join('.') : 'its proxy keys' // null: found in a file that did not parse, key unknown
   let ours = (v) => under(v, root)
   if (item.detail.door) { const p = doorPorts(collectorIn(root), fs); if (!p.ports) return { result: 'error', reason: `${item.path}: ${at} was not undone: ${p.why}` }; ours = (v) => isDoorValue(v, p.ports) }
   let doc
   try { doc = parseJsonText(t) } catch (e) { return { result: 'left-unparsable', reason: unreadableJson(item.path, t, e, `trocar's value under ${at}`) } }
   if (!keys) return { result: 'error', reason: `${item.path} changed while off read it: run off again` } // planned as not parsing, parses now: judged key by key next time
-  if (!ours(getPath(doc, keys))) return { result: 'already-clean' }
-  // the newest backup whose value here is not trocar's own (`on` saves the file before each key it writes, so a newer one can hold trocar's first key)
-  let saved = null, prior = null
-  for (const b of backupsOf({ home, file: item.path, fs }).reverse()) {
-    let v
-    try { const s = readText(readOrNull(fs, b)); v = s.why ? undefined : getPath(parseJsonText(s.text), keys) } catch { /* a backup that is not JSON holds no value */ }
-    if (typeof v === 'string' && ours(v)) continue
-    saved = b
-    if (typeof v === 'string') prior = v
-    break
+  // the newest backup `isOurs` does not find trocar's value in (`on` saves the file before each key it writes, so a newer one can hold trocar's first
+  // key) → { saved, doc } (doc undefined: that backup is not JSON); none → { saved: null }
+  const before = (isOurs) => {
+    for (const b of backupsOf({ home, file: item.path, fs }).reverse()) {
+      let d
+      try { const s = readText(readOrNull(fs, b)); d = s.why ? undefined : parseJsonText(s.text) } catch { /* a backup that is not JSON holds no value */ }
+      if (d !== undefined && isOurs(d)) continue
+      return { saved: b, doc: d }
+    }
+    return { saved: null }
   }
-  put(prior != null ? setKey(t, keys, prior).text : removeKey(t, keys).text)
-  return done(prior != null ? { restored_from: saved, value: prior } : { removed: true, ...(saved ? { backup: saved } : {}) })
+  let out = t, res = { result: 'already-clean' }
+  if (ours(getPath(doc, keys))) {
+    const base = before((d) => { const v = getPath(d, keys); return typeof v === 'string' && ours(v) }), saved = base.saved
+    const v = base.doc === undefined ? undefined : getPath(base.doc, keys), prior = typeof v === 'string' ? v : null
+    out = prior != null ? setKey(t, keys, prior).text : prune(removeKey(t, keys).text, keys, base)
+    res = done(prior != null ? { restored_from: saved, value: prior } : { removed: true, ...(saved ? { backup: saved } : {}) })
+  }
+  if (item.detail.route) out = besideDoor(out, item.detail.route, before((d) => item.detail.route.proxyKeys.some((k) => ours(getPath(d, k)))), item.path, notes)
+  if (out === t) return res
+  put(out)
+  if (/^\s*\{\s*\}\s*$/.test(out.slice(markLen(out)))) notes.push(`${item.path} holds nothing but {} now: trocar may have created it, and with no install record it cannot tell, so the file was left in place`)
+  return res.result === 'already-clean' ? done() : res
+}
+
+// the objects above a removed key that `on` created (none of them in `base`, the backup of the file before `on`: { saved, doc }), when the removal left
+// them empty, go too: the file is as it was before `on` wrote its first key. A backup that is not JSON says nothing, so nothing more goes.
+function prune(t, keys, base) {
+  for (let d = keys.length - 1; d > 0; d--) {
+    const p = keys.slice(0, d), v = getPath(parseJsonText(t), p)
+    if (!v || typeof v !== 'object' || Array.isArray(v) || Object.keys(v).length || (base.saved && (base.doc === undefined || getPath(base.doc, p) !== undefined))) break
+    t = removeKey(t, p).text
+  }
+  return t
+}
+
+// What `on` wrote beside a door (4.11 P5 / P6), judged against `base` (the backup of the file before `on`: { saved, doc }): a bypass key holding exactly the
+// list `on` computes from the backup's two keys (the persistent env's part is not known here: a list holding it is left) goes, its old value back; an
+// array element the backup's array lacks goes, the key with it when that leaves it empty and the backup had none. One off cannot tell is left and named. → text
+function besideDoor(t, route, base, file, notes) {
+  const left = (what) => notes.push(`${file}: ${what} may be trocar's, but trocar cannot tell, so it was left as it is`)
+  const now = (k) => getPath(parseJsonText(t), k)
+  const unknown = base.saved && base.doc === undefined // that backup cannot be read as JSON
+  const was = (k) => (base.doc ? getPath(base.doc, k) : undefined)
+  const want = route.noProxyKeys && mergeNoProxy({ userValues: route.noProxyKeys.map(was) })
+  for (const k of route.noProxyKeys || []) {
+    const v = now(k), prior = was(k)
+    if (v === undefined) continue
+    if (unknown || v !== want || (prior !== undefined && typeof prior !== 'string')) { left(k.join('.')); continue }
+    t = prior !== undefined ? setKey(t, k, prior).text : prune(removeKey(t, k).text, k, base)
+  }
+  for (const a of route.arrayItems || []) {
+    const v = now(a.keys), prior = was(a.keys)
+    if (!Array.isArray(v) || !v.includes(a.value)) continue
+    if (unknown) { left(`${a.keys.join('.')} (${JSON.stringify(a.value)})`); continue }
+    if (Array.isArray(prior) && prior.includes(a.value)) continue // the user's own
+    t = removeItem(t, a.keys, a.value).text
+    if (prior === undefined && now(a.keys).length === 0) t = prune(removeKey(t, a.keys).text, a.keys, base)
+  }
+  return t
 }
 
 /** Undoes a plan from planByMarker, item by item; one that fails does not stop the rest. → [{ harness, path, how, result, … }] with `result`
  *  `undone-by-marker` (the code), `already-clean` (nothing of trocar's was there any more), `left-unparsable` (a JSON file that no longer parses: untouched), `left-unreadable` (a marked file whose bytes prove no encoding: untouched) or
- *  `error` (+ `reason`). Backups are left where they are: whether to remove them is `off`'s call (R2). */
-export function undoByMarker(plan, { home, fs = nodeFs }) {
+ *  `error` (+ `reason`). `notes` gets a sentence for what of trocar's it left because it could not tell, and for a file left as `{}` (D38).
+ *  Backups are left where they are: whether to remove them is `off`'s call (R2). */
+export function undoByMarker(plan, { home, fs = nodeFs, notes = [] }) {
   return plan.map((item) => {
-    try { return { harness: item.harness, path: item.path, how: item.how, ...undoOne(item, home, fs) } } catch (e) { return { harness: item.harness, path: item.path, how: item.how, result: 'error', reason: String((e && e.message) || e) } }
+    try { return { harness: item.harness, path: item.path, how: item.how, ...undoOne(item, home, fs, notes) } } catch (e) { return { harness: item.harness, path: item.path, how: item.how, result: 'error', reason: String((e && e.message) || e) } }
   })
 }

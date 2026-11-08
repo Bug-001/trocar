@@ -6,6 +6,18 @@ import path from 'node:path'
 
 export const INGRESS_FILE = 'ingress.json'
 
+export const LOOPBACK = Object.freeze(['localhost', '127.0.0.1', '::1'])
+/** P6 (4.11): the bypass list `on` writes beside a door — loopback ∪ the user's values at the entry place (both spellings) ∪ the persistent env's NO_PROXY;
+ *  case-insensitive dedupe, first spelling kept, order kept. Here so the marker undo recomputes it with no collector tree. */
+export function mergeNoProxy({ userValues = [], persistent = {} } = {}) {
+  const seen = new Set(), out = []
+  const more = Array.isArray(persistent) ? persistent : Object.values(persistent || {})
+  for (const v of [LOOPBACK.join(','), ...userValues, ...more]) {
+    for (const h of String(v ?? '').split(',').map((x) => x.trim()).filter(Boolean)) if (!seen.has(h.toLowerCase())) { seen.add(h.toLowerCase()); out.push(h) }
+  }
+  return out.join(',')
+}
+
 /** Loopback, as the door and the PAC judge it (4.11 P10): `localhost` and every `*.localhost` name, 127.0.0.0/8, `::1`; case, IPv6 brackets and a
  *  trailing dot as a host may carry them. */
 export const isLoopbackHost = (host) => {

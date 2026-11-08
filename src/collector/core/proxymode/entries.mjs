@@ -14,26 +14,18 @@ import { applyJsonKey, applyJsonArrayItem, applyTextEntry, writeOwnedFile, judge
 import { parseJsonText, getPath } from '../../../off/json-text.mjs'
 import { decodeText } from '../../../off/text-codec.mjs'
 import { switchFileIn } from '../../../off/paths.mjs'
+import { LOOPBACK, mergeNoProxy } from '../../../off/door-value.mjs'
 import { parseDotenv } from '../config-read.mjs'
 import { resolveLoc, readSrc, holds, isPresent } from './sources.mjs'
 import { entryGate } from '../entry-forms.mjs'
 import { CODE } from '../codes.mjs'
 
-export const LOOPBACK = Object.freeze(['localhost', '127.0.0.1', '::1'])
 export const PAC_PATH = '/trocar.pac' // P10: the daemon serves the PAC here on the PAC group's door
 // a hostTree form's note (CM31): it names the form, since status prints it under the harness, beside forms that run on their own
 const hostTreeNote = (form) => `${form} runs inside another program: every other extension there connects through trocar too, and trocar passes those connections on without capturing them`
 const ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/ // an entry id that names a file in the library and nothing outside it
 
-/** P6: loopback ∪ the user's values at the entry place (both spellings) ∪ the persistent env's NO_PROXY; case-insensitive dedupe, first spelling kept, order kept. */
-export function mergeNoProxy({ userValues = [], persistent = {} } = {}) {
-  const seen = new Set(), out = []
-  const more = Array.isArray(persistent) ? persistent : Object.values(persistent || {})
-  for (const v of [LOOPBACK.join(','), ...userValues, ...more]) {
-    for (const h of String(v ?? '').split(',').map((x) => x.trim()).filter(Boolean)) if (!seen.has(h.toLowerCase())) { seen.add(h.toLowerCase()); out.push(h) }
-  }
-  return out.join(',')
-}
+export { LOOPBACK, mergeNoProxy } // P6, in src/off: the marker undo recomputes what `on` wrote
 
 /** P6 for a hook (P8 wrapper, P9 plugin): the bypass-list names it writes — NO_PROXY / no_proxy, in the spellings of the agent's own proxy names. */
 export const noProxyNames = (desc) => [...new Set(((desc.proxy && desc.proxy.env) || []).map((n) => (n === n.toUpperCase() ? 'NO_PROXY' : 'no_proxy')))]
