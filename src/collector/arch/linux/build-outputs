@@ -1,0 +1,6 @@
+# What `make` writes in this directory, never shipped and never part of trocar's code id (src/version.mjs). A file every channel ships: npm
+# never packs a .gitignore. The .gitignore beside it names the same paths for git (test/cli/code-id.test.mjs holds them equal).
+bpf/vmlinux.h
+bpf/*.o
+redirector/*.skel.h
+trocar-redirector

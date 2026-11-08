@@ -9,6 +9,7 @@
 // does not change the exit (review B-7). Everything the world gives is a `deps` entry a test replaces (0.1 §3): `has(bin)` (dependency probe), `verify()` (the trust-store check), and the
 // ones `runStatusCli` takes (`request`, `procs`, `lingerRead`, …). With none, `has` looks at PATH, `verify` asks the user trust store of THIS home, everything else is real.
 import nodeFs from 'node:fs'
+import { codeId } from '../version.mjs'
 import nodeOs from 'node:os'
 import path from 'node:path'
 import { EXIT, newReceipt } from '../off/schema.mjs' // as in status.mjs: the keys and the exit codes, not ./schema.mjs's checker (D62)
@@ -150,6 +151,9 @@ async function doctorDocOf({ names, home, env, platform, deps }) {
   const standalone = installed ? (() => { try { return checkStandalone({ home, platform, fs }) } catch (e) { rethrowSandbox(e); return { ok: false, error: errText(e) } } })() : { ok: true }
   if (standalone.error) extra.push({ code: 'standalone-unreadable', class: 'problem', what: 'The standalone undo program could not be checked.', why: standalone.error, commands: [{ run: 'trocar install', shell: 'sh' }], verify: 'trocar doctor' })
   else if (!standalone.ok) extra.push({ code: 'standalone-stale', class: 'problem', what: `${standalone.path} ${standalone.missing ? 'is not there' : 'is not the current version'}, so it may not undo everything.`, why: standalone.reason || 'its bytes are not the ones this trocar writes', commands: [{ run: 'trocar install', shell: 'sh' }], verify: 'trocar doctor' })
+  // §3.7: the collector on other code than this trocar (it reports `code`, D67⑤): what this version changed in the collector is not in effect
+  const dc = status.daemon || {}
+  if (dc.runs_this_code === false) extra.push({ code: 'daemon-other-code', class: 'problem', what: `trocar's collector runs other code (${dc.code}) than this trocar (${codeId()}), so what this version changed in the collector is not in effect.`, why: 'The collector was started from other code: another copy of trocar, or this one before its files were replaced.', commands: [{ run: 'trocar install', shell: 'sh' }], verify: 'trocar status' })
   let orphans = [], orphansError = null
   try { const m = readManifest(collectorDir(home), fs); orphans = m && m.unsupported ? null : orphanBackups({ home, manifest: m, fs }); if (orphans === null) orphansError = 'the install record is of a version this trocar does not read, so which backups it names cannot be said' } catch (e) { orphansError = `${manifestPath(collectorDir(home))}: ${errText(e)}` }
   if (orphans && orphans.length) extra.push({ code: 'backup-unclaimed', class: 'note', what: `${orphans.length} backup file(s) belong to no install record.`, why: 'An edit that was interrupted left them behind.', commands: [{ run: `Look at them, then remove them: ${orphans[0]}`, shell: 'sh' }], verify: 'trocar doctor' })
