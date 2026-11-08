@@ -52,6 +52,18 @@ const PARSE = {
 const REF = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g
 /** Whether a value read under `expand: 'env'` names the environment (`${NAME}`): with that environment unread, its file is not known (D38). */
 export const namesEnv = (value) => typeof value === 'string' && /\$\{[A-Za-z_][A-Za-z0-9_]*\}/.test(value)
+/** The environment names the `expand: 'env'` settings of a descriptor reference now, read against `ctx` as written: what a reader asks a process for
+ *  besides the names its data declares (the door asks for only the names it needs, 4.9 §5.2). A setting that cannot be read names none. */
+export function envRefsOf(desc, ctx) {
+  const out = new Set()
+  for (const src of ((desc && desc.proxyMode) || {}).userCertFiles || []) {
+    if (src.expand !== 'env') continue
+    const r = readSrc({ ...src, expand: undefined }, ctx)
+    for (const x of (r.set && r.all) || []) if (typeof x.value === 'string') for (const m of x.value.matchAll(REF)) out.add(m[1])
+  }
+  return [...out].slice(0, MAX_REFS) // bounded: names only (`${NAME}` and nothing else of the text), at most MAX_REFS asked of a process
+}
+const MAX_REFS = 32
 const expanded = (value, env) => {
   if (typeof value !== 'string') return value
   let unset = false
