@@ -40,6 +40,8 @@ import { diagnose } from '../netenv/findings.mjs'
 import { captureHealth } from '../health/read.mjs'
 import { failuresBlock, statusSummary, statusDetail } from './status-text.mjs'
 import { colors } from './text.mjs'
+import { CODE } from '../collector/core/codes.mjs'
+import { pacAddress } from '../collector/core/proxymode/entries.mjs'
 import { squashed } from './words.mjs'
 import { routeReadsEnv } from '../off/loc.mjs'
 import { isProxyMode } from '../off/mode.mjs' // proxy mode or driver mode (D47), decided in ONE place (src/cli may import src/off; the collector's copy is isModelOs)
@@ -124,7 +126,10 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   try { f.manifest = { value: readManifest(dir, fs), error: null } } catch (e) { f.manifest = { value: null, error: `${path.join(dir, 'install-manifest.json')}: ${errText(e)}` } }
   if (f.manifest.value && f.manifest.value.unsupported) { f.manifest.error = `${path.join(dir, 'install-manifest.json')} is version ${JSON.stringify(f.manifest.value.version)}, which this trocar does not read`; f.manifest.value = null }
   const m = f.manifest.value
-  f.boardPort = readIngressConfig({ dir, fs }).boardPort ?? null // the board's url (C.3 `board`): install's record, read only
+  const ing = readIngressConfig({ dir, fs })
+  f.boardPort = ing.boardPort ?? null // the board's url (C.3 `board`): install's record, read only
+  const token = typeof ing.listenerToken === 'string' ? ing.listenerToken : null // the PAC key's source (P10): read only, never printed
+  const hd0 = (id) => (desc.value ? desc.value.find((d) => d.name === id) : null)
   // D61 / 1.6 §3.5: the login entry, asked as `on` asks it (the arch unit's registered()); only of an install — with none there is nothing to ask.
   // `deps.loginCache`: the query worker's (src/query/worker.mjs) — it keeps the answer while the files trocar's own commands write are unchanged
   const autostartP = daemonMayStart(m) ? import('../collector/net-deps.mjs').then((nd) => nd.loginEntry({ platform, home, env, run: deps.exec || null, script: deps.script || process.argv[1], unit: deps.unit, now: ms, stamp: deps.loginCache ? `${statKey(path.join(dir, 'install-manifest.json'), fs)}|${statKey(stateF, fs)}` : null })).catch((e) => { rethrowSandbox(e); return { entry: null, state: 'unknown', reason: `the login entry could not be read (${errMessage(e)})` } }) : null
@@ -198,9 +203,20 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
     const why = []
     const desired = fromReply && fromReply[id] ? (fromReply[id].desired === 'on' ? 'on' : 'off') : state ? (state.harnesses[id] && state.harnesses[id].desired === 'on' ? 'on' : 'off') : null
     if (desired === null) why.push(f.state.error)
-    const items = m ? entriesOf(m, id).map((e) => ({ item: e, ...entryState(e, fs) })) : []
+    const routes = (hd0(id) || {}).proxyMode ? hd0(id).proxyMode.routes || {} : {}
+    // a PAC route's record tagged with another address than the one on writes now (the key changed, or a version before the key wrote it): trocar's
+    // stale value, still in the entry; the app's fetch of it is refused (P10) until on writes the current one
+    // (the tag held clear or as its fingerprint; the door's origin is in the address the record wrote)
+    const stale = (e) => {
+      const r = routes[e.route], fp = e.door_sha256 ?? (typeof e.door === 'string' ? sha256(e.door) : null)
+      if (!r || r.value !== 'pac-url' || !token || !fp) return false
+      let origin
+      try { origin = new URL(typeof e.door === 'string' ? e.door : e.value).origin } catch { return false } // a record that wrote no address (the applied id) says nothing
+      return fp !== sha256(pacAddress(token, origin))
+    }
+    const items = m ? entriesOf(m, id).map((e) => { const s = entryState(e, fs); return { item: e, ...(s.state === 'intact' && stale(e) ? { state: 'changed', code: CODE.pacAddressStale, why: `${e.path}#${e.keys.join('.')} holds trocar's proxy settings address from before this install's key` } : s) } }) : []
     const bad = items.filter((x) => x.state === 'missing' || x.state === 'changed')
-    const entry = !m ? { state: 'unknown', why: f.manifest.error || `no install manifest in ${dir}` } : !installedIds.includes(id) ? { state: 'missing', why: 'the install manifest lists no entry of trocar\'s for it' } : bad.length ? { state: bad.some((x) => x.state === 'missing') ? 'missing' : 'changed', why: bad.map((x) => x.why).join('; ') } : items.find((x) => x.state === 'unknown') ? { state: 'unknown', why: items.filter((x) => x.state === 'unknown').map((x) => x.why).join('; ') } : { state: 'intact' }
+    const entry = !m ? { state: 'unknown', why: f.manifest.error || `no install manifest in ${dir}` } : !installedIds.includes(id) ? { state: 'missing', why: 'the install manifest lists no entry of trocar\'s for it' } : bad.length ? { state: bad.some((x) => x.state === 'missing') ? 'missing' : 'changed', why: bad.map((x) => x.why).join('; '), ...(bad.every((x) => x.code) ? { code: bad[0].code } : {}) } : items.find((x) => x.state === 'unknown') ? { state: 'unknown', why: items.filter((x) => x.state === 'unknown').map((x) => x.why).join('; ') } : { state: 'intact' }
     if (entry.state === 'unknown') why.push(entry.why)
     let procs
     // a process the daemon has not judged (proxy mode): the door's own rule (4.11 P11 status) — started after its forms' carriers, and inside an on
@@ -250,7 +266,7 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
     const hosts = read.errors.length ? [] : read.hosts
     const localUpstream = isProxyMode(platform) && hosts.length > 0 && hosts.every(isLoopbackHost)
     const judge = (cert = true) => {
-      const j = judgeHarness({ desired, entryIntact: entry.state === 'intact' ? true : entry.state === 'unknown' ? null : false, entryWhy: entry.state === 'changed' ? 'entry-changed' : 'entry-missing', attached: att.attached, helper: f.link.helper, daemon: f.daemon.state, procs, installedAt, deadDoor: isProxyMode(platform), formsHere, cert, localUpstream })
+      const j = judgeHarness({ desired, entryIntact: entry.state === 'intact' ? true : entry.state === 'unknown' ? null : false, entryWhy: entry.code || (entry.state === 'changed' ? 'entry-changed' : 'entry-missing'), attached: att.attached, helper: f.link.helper, daemon: f.daemon.state, procs, installedAt, deadDoor: isProxyMode(platform), formsHere, cert, localUpstream })
       if (merged) j.rows = j.rows.map((r) => { const name = r.pid != null ? hitName(tableOf.get(r.pid), merged[id]) : null; return name ? { ...r, name } : r }) // the name the process matched (1.6 §9.7)
       return j
     }

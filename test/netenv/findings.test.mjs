@@ -46,6 +46,7 @@ const SETS = {
   'link-missing': { h: 'claude-code', facts: facts('claude-code', { link: { attached: false, helper: 'ok', ids: [] } }), codes: ['link-missing'] },
   'entry-missing': { h: 'claude-code', facts: facts('claude-code', {}, { entry: { state: 'missing' }, procs: [] }), codes: ['entry-missing'] },
   'entry-changed': { h: 'claude-code', facts: facts('claude-code', {}, { entry: { state: 'changed' }, procs: [] }), codes: ['entry-changed'] },
+  'pac-address-stale': { h: 'claude-code', facts: facts('claude-code', {}, { entry: { state: 'changed', code: 'pac-address-stale' }, procs: [] }), codes: ['pac-address-stale'] },
   'not-routed': { h: 'codex', facts: row(11).facts, codes: row(11).findings },
   'system-proxy-pac': { h: 'codex', facts: row(22).facts, codes: row(22).findings },
   'route-loop': { h: 'codex', facts: pfacts('codex', form('codex.cli', { routeLoop: true, entry: null, procs: [proc(5530, { name: 'codex app-server' })] }), fwForm(17992)), codes: ['route-loop'] },
@@ -80,7 +81,7 @@ const IDENTITY_CODES = ['process-unknown', 'agent-list-invalid']
 const CERT_CODES = ['cert-key-missing', 'cert-intermediate-unavailable', 'not-users-file', 'bundle-lacks-ca', 'marked-without-record'] // 1.6 §9.7's cert group, as findings
 const MACHINE_CODES = ['autostart-missing'] // status's read of the login entry (D61), a finding of the machine
 const REFUSAL_CODES = ['collectors-online'] // a command's refusal (uninstall), rendered by findingFor, not by diagnose
-const STATUS_REASONS_IN_CATALOGUE = ['config-after-start', 'daemon-not-running', 'daemon-not-responding', 'helper-missing', 'link-missing', 'entry-missing', 'entry-changed', 'desired-off', 'negative-cache', 'not-seen', 'local-upstream']
+const STATUS_REASONS_IN_CATALOGUE = ['config-after-start', 'daemon-not-running', 'daemon-not-responding', 'helper-missing', 'link-missing', 'entry-missing', 'entry-changed', 'pac-address-stale', 'desired-off', 'negative-cache', 'not-seen', 'local-upstream']
 
 for (const [code, set] of Object.entries(SETS)) {
   test(`V49 ${code}: its facts call for exactly ${JSON.stringify([...set.codes].sort())}`, () => {
@@ -581,4 +582,15 @@ for (const platform of ['darwin', 'win32']) for (const reason of ['blocker', 'bl
   assert.equal(by('codex.cli').captured, true)
   const f = findingsOf(F).find((x) => x.code === 'not-routed')
   assert.ok(f && f.why.includes(at) && f.commands.some((c) => c.run.includes(at)), JSON.stringify(f))
+})
+
+// on's receipt says a route it did not write in these words (1.6 附录 B), on the row that names the place: why, and steps whose last one is the command that writes it then —
+// a refusal never leaves the user with a bare code (own-egress after the user's value outlived an off, mac 2026-11-07)
+test('routeRefusal: own-egress ends in trocar on <harness>, with a step before it; a reason it has no words for is null', async () => {
+  const { routeRefusal } = await import('../../src/netenv/findings.mjs')
+  const at = '~/Library/Application Support/Claude-3p/configLibrary/u1.json#egressProxyPacUrl'
+  const r = routeRefusal({ h: 'claude-code', reason: 'own-egress', at })
+  assert.equal(r.steps.at(-1), 'run: trocar on claude-code')
+  assert.ok(r.steps.length >= 2, 'a step before it: what to do with the value')
+  assert.equal(routeRefusal({ h: 'claude-code', reason: 'system-pac', at }), null)
 })

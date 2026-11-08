@@ -353,7 +353,7 @@ test('CM19 / CM33 · the PAC door: this user\'s process gets the PAC (door leg w
   const stale = await wrote({ ...pacReq, path: '/trocar.pac' })
   assert.equal(stale.res, null, 'refused: no compatibility path')
   assert.deepEqual(stale.got.map((r) => [r.event, r.code, r.peer]), [['failure', 'pac-address-stale', PEER]], 'this user\'s program: its own code')
-  assert.match(stale.got[0].reason, /trocar update/, 'with the way out')
+  assert.match(stale.got[0].reason, /trocar on\b/, 'with the way out')
   assert.equal(on.status, 200); assert.match(on.body, /PROXY 127\.0\.0\.1:18103; PROXY sys\.corp:8080/)
   w.facts = { uid: 502, startedAt: INSTALLED + 1 }
   const refused = await wrote(pacReq)

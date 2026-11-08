@@ -16,6 +16,7 @@ import { appendEvent } from '../collector/core/events.mjs'
 import { fit, tilde, formWords, routeWords, routeReason, ownTreeItem, commandLine } from './receipt.mjs'
 import { pairs } from './text.mjs'
 import { printJson } from './json.mjs'
+import { routeRefusal } from '../netenv/findings.mjs'
 
 const errText = (e) => String((e && e.message) || e)
 const NEEDS_YES = 'Nothing was changed. Read the plan above, then run it again with --yes'
@@ -54,7 +55,8 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
       // twice (a Windows test machine 2026-10-18): the row names the file the setting is in, so each row is the fact it reports
       ...pairs([...new Map((receipt.routes || []).map((r) => {
         const where = r.at ? tilde(r.at, home) : r.route ? formWords(`.${r.route}`) : ''
-        return [`${r.harness}|${where}|${r.ok}|${r.reason || ''}`, [r.harness, `${where ? `${where}: ` : ''}${r.ok ? 'the setting is in place' : `not written: ${routeReason(r)}`}`]]
+        const w = r.ok ? null : routeRefusal({ h: r.harness, reason: r.reason, at: r.at ? tilde(r.at, home) : where }) // the steps that write it then: never a dead end
+        return [`${r.harness}|${where}|${r.ok}|${r.reason || ''}`, [r.harness, `${where ? `${where}: ` : ''}${r.ok ? 'the setting is in place' : `not written: ${routeReason(r)}${w ? `. ${w.steps.join(', then ')}.` : ''}`}`]]
       })).values()], { home }),
       ...receipt.notes.map(noteLine), ...receipt.problems.map((p) => `Problem: ${p}`)], { home }).join('\n'))
     return exit

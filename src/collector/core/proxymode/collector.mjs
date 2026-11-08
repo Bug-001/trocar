@@ -302,7 +302,7 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     const a = peerAllowed({ ...(facts || {}), pid: q }, self), mine = a.ok
     // no key: refused whoever asks; the owner only names the reason (D38) — this user's own app at an address from before the key is not a stranger
     if (!keyed) {
-      record(mine ? { event: 'failure', where: 'ingress', code: CODE.pacAddressStale, peer, reason: "your program asked for trocar's proxy settings file (PAC) at an address without this install's key, written before it; it was refused, so the app has no PAC. Run: trocar update" }
+      record(mine ? { event: 'failure', where: 'ingress', code: CODE.pacAddressStale, peer, reason: "your program asked for trocar's proxy settings file (PAC) at an address without this install's key, written before it; it was refused, so the app has no PAC. Run: trocar on" }
         : { event: 'failure', where: 'ingress', code: CODE.pacPeerRefused, peer, reason: "a request for trocar's proxy settings file (PAC) was refused: it did not carry this install's key" })
       return null
     }
