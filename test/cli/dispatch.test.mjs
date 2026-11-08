@@ -182,7 +182,7 @@ test('V26: one case per exit code — 0 done, 1 not done, 2 usage, 3 status cann
   assert.equal((await s.run(['daemon'], { deps: { startDaemon: async () => { throw new Error('the port is taken') } } })).exit, 1)
 })
 
-test('the real bin: --version, help, help off, an unknown command and `daemon --bogus` (sandbox HOME, no OS tool)', () => {
+test('the real bin: --version, help, help off, an unknown command, `daemon --bogus` and `classes set` of an unknown class (sandbox HOME, no OS tool)', () => {
   const home = tmpDir('trocar-bin-')
   const env = { PATH: process.env.PATH, HOME: home, TMPDIR: process.env.TMPDIR || '/tmp', TROCAR_TEST_SANDBOX: '1' }
   const run = (...args) => spawnSync(process.execPath, [BIN, ...args], { env, encoding: 'utf8' })
@@ -191,6 +191,7 @@ test('the real bin: --version, help, help off, an unknown command and `daemon --
   const o = run('help', 'off'); assert.equal(o.status, 0); assert.match(o.stdout, /trocar off \[<harness>\.\.\.\]/); assert.ok(!/trocar serve/.test(o.stdout))
   const n = run('nope'); assert.equal(n.status, 2); assert.equal(n.stdout, ''); assert.match(n.stderr, /unknown command 'nope'/)
   const d = run('daemon', '--bogus'); assert.deepEqual([d.status, d.stdout], [2, '']); assert.match(d.stderr, /trocar daemon: unknown option '--bogus'/)
+  const c = run('classes', 'set', 'nope', 'log'); assert.deepEqual([c.status, c.stdout], [2, '']); assert.ok(c.stderr.trim()) // 4.6 classes #5
   assert.deepEqual(fs.readdirSync(home), [], 'nothing was written')
 })
 
