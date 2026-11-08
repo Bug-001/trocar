@@ -1,7 +1,7 @@
 // negcache.test.mjs — the (pid, host) negative cache (RFC 4.6 §引擎 5 负缓存, D37).
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createNegativeCache, negKey, NEG_BACKOFF } from '../../../src/collector/core/engine/negcache.mjs'
+import { createNegativeCache, negKey, NEG_BACKOFF, TRUSTED_THRESHOLD, TRUSTED_CLOSES, TRUSTED_WINDOW_MS } from '../../../src/collector/core/engine/negcache.mjs'
 
 test('negative cache: CONSECUTIVE leaf rejections per (pid, host), a used connection resets the count; an upstream-cert failure is negative at once', () => {
   const n = createNegativeCache({ now: () => 42 })
@@ -105,9 +105,11 @@ test('W22d negative cache: application data after a renewal clears the history a
   assert.equal(n.trusts(k), false)
   n.observe(k, { rejected: false, used: true, meta, host })
   assert.equal(n.trusts(k), true); assert.equal(n.trusts(negKey(meta, 'other.test')), false); assert.equal(n.trusts(negKey({ pid: 10 }, host)), false)
-  reject(n); assert.equal(reject(n), true, 'the strikes were cleared: two rejections again')
+  for (let i = 1; i < TRUSTED_THRESHOLD; i++) assert.equal(reject(n), false, 'a key that sent data takes more than two')
+  assert.equal(reject(n), true, 'the strikes were cleared: the whole count again')
   const e = n.get(k)
   assert.equal(e.renewals, 0); assert.equal(e.retry_at - e.at, NEG_BACKOFF.costly.base)
+  now.set(e.retry_at); assert.equal(n.has(k), false); assert.equal(reject(n), true, 'on probation after the entry expires: one rejection renews it, trusted or not')
   n.forgetKey(meta.pid)
   assert.equal(n.trusts(k), false); assert.equal(n.holds(meta.pid), false)
 })
@@ -120,4 +122,22 @@ test('W22e negative cache: holds(who) is true while only the renewal history rem
   assert.equal(n.strikes(k), 0)
   assert.equal(n.holds(meta.pid), true)
   assert.equal(n.holds(10), false)
+})
+
+// 4.6 §引擎 5: a trusted key's second line. Data resets the count in a row, so a client refusing beside a busy one reaches only this
+test('a trusted key: zero-data closes with data between go negative at the window\'s count; a slow trickle never does, for hours; forgetKey drops the window', () => {
+  const now = clock(), n = createNegativeCache({ now }), data = () => n.observe(k, { rejected: false, used: true, meta, host })
+  data()
+  for (let i = 1; i < TRUSTED_CLOSES; i++) { assert.equal(reject(n), false, `close ${i}`); data() }
+  assert.equal(reject(n), true, 'the last close of the window, with data before every one')
+  const slow = clock(), q = createNegativeCache({ now: slow }), qd = () => q.observe(k, { rejected: false, used: true, meta, host })
+  qd()
+  const gap = Math.ceil(TRUSTED_WINDOW_MS / (TRUSTED_CLOSES - 1)) + 1 // never TRUSTED_CLOSES inside one window
+  for (let t = 0; t < 4 * 3600_000; t += gap) { slow.set(slow() + gap); assert.equal(reject(q), false, `at ${t} ms`); qd() }
+  assert.equal(q.has(k), false)
+  const f = createNegativeCache({ now: clock() }), fd = () => f.observe(k, { rejected: false, used: true, meta, host })
+  fd(); reject(f); fd()
+  assert.equal(f.holds(meta.pid), true, 'the window is something to clear when the process goes')
+  f.forgetKey(meta.pid)
+  assert.equal(f.holds(meta.pid), false)
 })

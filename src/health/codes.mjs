@@ -187,6 +187,7 @@ export const isWhere = (w) => sets.where.has(w)
 export const NOT_CAPTURED_BY_DESIGN = Object.freeze({
   untracked: Object.freeze(['not-an-agent', 'agent-helper', 'harness-off', 'group-off', 'outside-host-set', 'other-user']),
   untrusted: Object.freeze(['not-verified', 'forward-only-host', 'outside-host-set']),
+  'client-closed-no-data': Object.freeze(['trusted-before']), // not by design, but nothing was lost: the process already accepted the leaf there (4.6 §引擎 5)
 })
 const byDesign = Object.fromEntries(Object.entries(NOT_CAPTURED_BY_DESIGN).map(([k, v]) => [k, new Set(v)]))
 
