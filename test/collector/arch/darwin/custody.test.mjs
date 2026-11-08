@@ -113,7 +113,8 @@ test('installHelper: fresh â†’ written via <dest>.new-* and renamed; same hash â
   keychainCustody({ helperPath: dest }).create({ subject: 'trocar root (test)' })
   const r = installHelper({ dest, interactive: false, fs: fsSpy })
   assert.equal(r.replaced, false)
-  assert.match(r.why, /differs/)
+  assert.match(r.why, /trocar install/, 'the way out')
+  assert.equal(r.kept, true, 'it still signs: the caller says it as a note')
   assert.equal(fs.readFileSync(dest, 'utf8'), STUB, 'non-interactive: the installed copy stays')
 
   const issued = []

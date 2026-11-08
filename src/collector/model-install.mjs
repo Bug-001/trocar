@@ -110,7 +110,8 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
   if (!fs.existsSync(dir)) { fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); save() }
   const stdl = writeStandalone({ home, version: OFF_VERSION, platform: os, fs }) // the way back first (R3)
   for (const file of standaloneFiles(home, os)) said('trocar-off', stdl.files.includes(file) ? 'written' : 'intact', { path: file }) // trocar-off.cmd too on Windows
-  if (installHelper) { const h = installHelper(interactive); if (h && h.why && h.why !== 'same') problems.push(h.why) }
+  // a helper kept (no terminal, or the key's box not answered) still signs: a note, never a failure that stops an update before on
+  if (installHelper) { const h = installHelper(interactive); if (h && h.why && h.why !== 'same') (h.kept ? notes : problems).push(h.why) }
 
   // a · the root's key (P1): created only when the custody has none; the root it returns must have the ROOT profile (T12)
   let rootDer = null

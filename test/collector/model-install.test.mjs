@@ -151,6 +151,16 @@ test('D54 · CM1: install; install changes no byte, makes no second key, raises 
   assert.equal(readManifest(w.dir).install.code, codeId(), 'the record names the code that ran install (1.6 §5.5: what update compares)')
 })
 
+// 4.11 §1: a key helper kept (no terminal to answer the key's box, or the box not answered) still signs: install says so as a note and exits 0,
+// so an update goes on to on (a refusal there would leave every agent off)
+test('macOS: a key helper kept, not replaced, is a note: exit 0, the way out said', async () => {
+  const w = await everything()
+  const why = 'the installed trocar-sign-helper keeps signing; run trocar install in a terminal to replace it'
+  const r = await w.install({ wrapperKit: { renderWrapper }, installHelper: () => ({ replaced: false, kept: true, why }) })
+  assert.equal(r.exit, 0, JSON.stringify({ p: r.problems, pend: r.pending }))
+  assert.ok(r.notes.includes(why) && !r.problems.includes(why))
+})
+
 test('CM25 · CM26: no admin item, nothing root-owned under HOME, and no write to a login environment (rc / profile / environment.d) — a recording fs over every harness present', async () => {
   const w = await everything()
   const wrote = []
