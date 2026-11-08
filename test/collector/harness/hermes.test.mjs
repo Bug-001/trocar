@@ -38,7 +38,6 @@ test('hermes: the bootstrap interpreter (hermes and hermes-acp) and the TUI gate
     [PY, ['python3', '-I', '-B', '-c', 'import packaging, tomli_w, truststore; import hermes_bootstrap'], 'a dependency helper (-I -B -c)'],
     [PY, ['python3', '-I', '-c', 'import hermes_cli.main'], 'a desktop-entry probe: no bootstrap'],
     [PY, ['python3', '-I', '-c', 'import hermes_bootstrap; print(hermes_bootstrap.__file__)'], 'the bootstrap without an entry module'],
-    [PY, ['python3', '-c', boot(root)], 'not isolated (-I): not how a launcher starts it'],
     [PY, ['python3', '-c', 'import sys; print(sys.version)'], 'a version probe'],
     [PY, ['python3', '-c', 'watcher', '42', 'gateway', 'run'], 'the gateway restart watcher'],
     [PY, ['python3', '-m', 'tui_gateway.compute_host'], 'not an agent child'],
@@ -51,6 +50,43 @@ test('hermes: the bootstrap interpreter (hermes and hermes-acp) and the TUI gate
   assert.equal(reg.isLongLived(hermes, facts({ exe: PY, argv: cli(root, 'gateway', 'run') })), true)
   assert.equal(reg.isLongLived(hermes, facts({ exe: '/usr/bin/python3.12', argv: ['python', '/home/u/.local/bin/hermes', 'gateway', 'run'] })), true, 'a pip gateway')
   assert.equal(reg.isLongLived(hermes, facts({ exe: PY, argv: cli(root, '-z', 'hi') })), false)
+})
+
+test('hermes: python -c whose code loads the entry module is Hermes, whatever the interpreter flags before -c; a string naming it, other -c code and the pm worker are not (R1)', () => {
+  const MAC = '/Users/u/Library/Application Support/Hermes/agent-payload/tools/python-3.14.7+20260901-darwin-arm64/bin/python3'
+  const site = (mod) => `import os, site, sys; sys.argv[0]='hermes'; site.addsitedir(os.environ['HERMES_SITE']); from ${mod} import main; sys.exit(main())`
+  const yes = (exe, argv, why) => assert.equal(matchOf([hermes], facts({ os: 'darwin', exe, argv })).agent, 'hermes', why)
+  const no = (exe, argv, why) => assert.equal(matchOf([hermes], facts({ os: 'darwin', exe, argv })).agent, null, why)
+  // seeds: the prebuilt desktop backend and its bundled launcher (measured on macOS), also as a `ps` line split on white space
+  yes(MAC, [MAC, '-P', '-c', site('hermes_cli.main'), 'serve', '--host', '127.0.0.1', '--port', '0'], 'the prebuilt desktop backend')
+  yes(MAC, [MAC, '-P', '-c', site('hermes_cli.main'), '-z', 'hi'], 'the bundled launcher')
+  const split = [MAC, '-P', '-c', site('hermes_cli.main'), 'serve', '--host', '127.0.0.1', '--port', '0'].join(' ').split(' ')
+  assert.equal(matchOf([hermes], { ...facts({ os: 'darwin', exe: MAC, argv: split }), argvSplit: true }).agent, 'hermes', 'the backend as a ps line')
+  // darwin's `ps` prints a line break in the code as a literal \\012, and `rest` turns the backslash into a slash: a load on a later line is still a load
+  const psLine = [MAC, '-P', '-c', 'import os\\012from hermes_cli.main import main\\012main()', 'serve', '--host', '127.0.0.1'].join(' ').split(' ')
+  assert.equal(matchOf([hermes], { ...facts({ os: 'darwin', exe: MAC, argv: psLine }), argvSplit: true }).agent, 'hermes', 'a load on a later line, as ps prints it')
+  // axis: flags before -c × load form × entry module
+  const loads = (m) => [`from ${m} import main\nmain()`, `import os, sys; import hermes_bootstrap; import ${m} as e; e.main()`, `import runpy; runpy.run_module('${m}', run_name='__main__')`, site(m)]
+  for (const flags of [[], ['-I'], ['-P'], ['-E'], ['-s'], ['-I', '-P'], ['-E', '-s', '-P'], ['-X', 'utf8', '-I'], ['-W', 'ignore', '-B', '-s'], ['-IPc']]) {
+    for (const m of ['hermes_cli.main', 'acp_adapter.entry']) {
+      for (const code of loads(m)) {
+        const argv = flags.at(-1) === '-IPc' ? ['python3', ...flags, code] : ['python3', ...flags, '-c', code]
+        yes(MAC, argv, argv.join(' '))
+      }
+    }
+  }
+  for (const flags of [[], ['-P'], ['-I', '-P']]) {
+    for (const [code, why] of [
+      ["print('hermes_cli.main')", 'a string naming the module'],
+      ["import os; print(os.path.join('/opt/hermes', 'hermes_cli', 'main.py'))", 'hermes in a path it prints'],
+      ['import hermes_cli.main', 'an import probe: no bootstrap, no entry call'],
+      ['from hermes_cli.mainframe import x', 'another module that starts with the name'],
+      ['import os', 'unrelated -c code'],
+      ['import sys; print(sys.version)', 'a version probe'],
+    ]) no(MAC, ['python3', ...flags, '-c', code], `${flags.join(' ')} ${why}`)
+  }
+  no(MAC, ['python3', '-I', '-B', '/Users/u/.hermes/hermes-agent/pm/worker.py'], 'a package-manager worker')
+  no(MAC, ['python3', '-P', '-c', 'import os'], '-P -c import os')
 })
 
 test('hermes: SSL_CERT_FILE from the profile .env trusts; HERMES_CA_BUNDLE without the CA shadows it on a release build ≤ v2026.9.24 or an unknown one, never on main (T12)', () => {
