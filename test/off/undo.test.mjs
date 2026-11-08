@@ -146,6 +146,24 @@ test('two entries in one file, the file back to its bytes before the first: both
   assert.deepEqual(fs.readFileSync(file), pre)
 })
 
+// the same file naming the bundle trocar made for its harness (a value the user had there before `on`): step 1 drops its backups as already restored, the
+// bundle step then puts its entries back among the left ones — and no row may point at a backup that is gone
+test('an entry put back among the left ones after step 1 dropped its backup names no backup that is gone', async () => {
+  const s = await setup((b) => [repH(b, 'aa')])
+  const m = readManifest(s.b.dir)
+  const file = write(s.b, '.aa/vs/settings.json', `{\n  "ca": ${JSON.stringify(s.b.ca('combined-aa.pem'))}\n}\n`), pre = fs.readFileSync(file)
+  const at = { dir: s.b.dir, manifest: m, harness: 'aa', phase: 'on', home: s.b.home, now: new Date(), fs }
+  applyJsonArrayItem({ ...at, file, keys: ['settingsSync.ignoredSettings'], item: 'http.proxy' })
+  applyJsonKey({ ...at, file, keys: ['http.proxy'], value: 'http://127.0.0.1:47011' })
+  saveManifest(s.b.dir, m, fs)
+  fs.writeFileSync(file, pre)
+  const r = await s.run({ dropCa: true })
+  const mine = r.left.filter((l) => l.path === file)
+  assert.ok(mine.length > 0, `the bundle step put the file's entries back among the left ones: ${JSON.stringify(r.left.map((l) => [l.path, l.result]))}`)
+  for (const l of r.left) assert.ok(!l.backup || fs.existsSync(l.backup), `${l.path}: names a backup that is gone (${l.backup})`)
+  for (const l of mine) assert.ok(!/is kept at/.test(l.reason), l.reason)
+})
+
 // the user edited the file between trocar's two writes: the later backup is the only copy of that edit, so the file back at its first bytes does not make
 // it needless — that entry is judged by its own bytes, and its backup stays
 test('two entries in one file with a user edit between them: the later backup is kept, the file back at its first bytes or not', async () => {
