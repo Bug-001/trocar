@@ -58,7 +58,7 @@ export function judgeHarness({ desired, entryIntact = null, entryWhy = 'entry-mi
     if (p.trusted === true) return row(p.negative ? { ...verdict(false, 'negative-cache'), ...(p.cause ? { cause: p.cause } : {}), ...(p.negatives ? { negatives: p.negatives } : {}) } : verdict(true)) // the engine's cause picks the words (1.6 附录 B)
     if (local) return row(local)
     if (absent) return row(absent)
-    const own = Array.isArray(p.forms) && p.forms.length ? (p.forms.every((f) => f in blocked) ? notRouted(p.forms) : null) : null // on blocked forms only
+    const own = Array.isArray(p.forms) && p.forms.length ? notRouted(p.forms) : null // on any blocked form: the door judges every form it may be, and forwards it for one (4.11 P11)
     if (own) return row(own)
     if (entry) return row(entry)
     if (certificate) return row(certificate)

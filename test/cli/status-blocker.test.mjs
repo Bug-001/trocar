@@ -119,3 +119,22 @@ test('4.11 P11 · status: with the desktop app absent, a desktop setting left be
   assert.match((await status(w, ['z-code'])).replace(/\s+/g, ' '), /z-code\.cli-node .*points at trocar/)
 })
 
+
+// 4.11 P11 in status, per process, as the door judges it: a process the door judges as several forms is forwarded when any of them is blocked
+// (the door needs every form to decrypt). The seed: on a Windows test machine (ZCode 3.14.5) the desktop's Chromium network service, ZCode.exe with
+// neither the desktop's nor the CLI's word, read captured while the desktop's CA setting was set; the door would judge it as the CLI and the desktop.
+test('4.11 P11 · status: a process on a blocked form and an unblocked one is not captured, as at the door', async () => {
+  const { judgeHarness, routeOfForms } = await import('../../src/netenv/verdict.mjs')
+  const { judgedForms } = await import('../../src/collector/core/proxymode/verdict.mjs')
+  const { loadHarnesses } = await import('../../src/collector/harness/index.mjs')
+  const zc = (await loadHarnesses()).find((d) => d.name === 'z-code')
+  const exe = 'C:\\Users\\u\\AppData\\Local\\Programs\\ZCode\\ZCode.exe'
+  const formsOf = (argv) => judgedForms(zc, 'win32', null, exe, [exe, ...argv]).filter((f) => f.id !== 'z-code.cli-node').map((f) => f.id)
+  const blocked = routeOfForms([{ id: 'z-code.desktop', route: { reason: 'blocker' } }, { id: 'z-code.cli', route: null }])
+  const ready = { desired: 'on', entryIntact: true, attached: true, daemon: 'running', blocked }
+  const row = (argv) => judgeHarness({ ...ready, procs: [{ pid: 12476, startedAt: new Date(Date.now() + 60_000).toISOString(), trusted: null, start: null, forms: formsOf(argv) }] }).rows[0]
+  assert.deepEqual(formsOf(['--type=utility', '--utility-sub-type=network.mojom.NetworkService']), ['z-code.cli', 'z-code.desktop'], 'neither word: the door judges both')
+  assert.deepEqual([row(['--type=utility', '--utility-sub-type=network.mojom.NetworkService']).captured, row(['--type=utility']).reason], [false, 'not-routed'])
+  assert.equal(row(['resources\\glm\\zcode.cjs', '-p', 'hi']).captured, true, 'the CLI with -p is the CLI only: the desktop setting does not reach it')
+  assert.deepEqual([row(['resources\\glm\\zcode.cjs', 'app-server']).captured, row(['resources\\glm\\zcode.cjs', 'app-server']).reason], [false, 'not-routed'])
+})
