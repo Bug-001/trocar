@@ -5,7 +5,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { gzipSync } from 'node:zlib'
+import { gzipSync, gunzipSync } from 'node:zlib'
 import { probe, withBoard } from './harness.mjs'
 import { tmpDir } from '../../helpers/tmp.mjs'
 import { bigSession } from '../../query/big-session.mjs'
@@ -14,7 +14,7 @@ import { projectionFile, sessionDir, PROJ_V } from '../../../src/query/projectio
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
-const CALLS = 1300, NEW = 5, STEP = 500
+const CALLS = 5000, NEW = 5, STEP = 500 // CALLS: the re-read spans several of the desk's head polls (1.5 s apart) even at the fastest re-read rate seen, ~930 calls/s
 const BOUND = 120_000 // the fold of a whole session by a niced worker; a wait past it is a stall
 
 const until = async (ok, what) => {
@@ -29,7 +29,7 @@ const placeOf = (page) => page.evaluate(() => {
 })
 const lineOf = (page) => page.evaluate(() => { const e = document.querySelector('.readstate'); return e ? { state: e.dataset.readState, text: e.textContent } : null })
 
-test('3.5 重读 #43: through a re-read and past the switch the desk keeps its step, scroll and open block, and ends on the new answer', { skip, timeout: 4 * BOUND }, async () => {
+test('3.5 重读 #43: through a re-read and past the switch the desk keeps its step, scroll and open block, and ends on the new answer', { skip, timeout: 4 * BOUND }, async (t) => {
   const userHome = tmpDir('trocar-reread-desk-'), home = path.join(userHome, '.trocar')
   fs.mkdirSync(path.join(home, 'raw'), { recursive: true, mode: 0o700 })
   const s = bigSession({ home, id: 'big-0000-4a1b-9c2d-000000000001', segment: '20261020T164731Z', growth: 120, compactAt: 6_000 }), { id } = s
@@ -50,24 +50,37 @@ test('3.5 重读 #43: through a re-read and past the switch the desk keeps its s
 
     // the last version's answer: a new worker finds the projection stale, the packs under other tags, and new calls behind them
     face.killWorker()
-    await until(() => face.workers().length === 0, 'the worker is gone')
+    // a poll of the page can fork a new worker right behind the kill, and its polls keep it warm: kill until none is left
+    await until(() => face.workers().length === 0 || (face.killWorker(), false), 'the worker is gone')
     for (const n of fs.readdirSync(sessionDir(home, id))) if (n.startsWith('extract.')) fs.rmSync(path.join(sessionDir(home, id), n))
     fs.writeFileSync(projectionFile(home, id), `${JSON.stringify({ v: PROJ_V + 1 })}\n`)
     fs.writeFileSync(headFile(home, id), gzipSync(Buffer.from(JSON.stringify({ ...was, packs: was.packs.map((p) => ({ ...p, tag: 'last' })) }), 'utf8')))
     s.append(NEW)
+    // the line can say "updating" only once the page holds a head carrying `pending.read`: wait for one, never pass without it
+    const gotRead = page.waitForResponse(async (r) => {
+      if (new URL(r.url()).pathname !== '/api/d/head' || r.status() !== 200) return false
+      let buf
+      try { buf = await r.body() } catch { return false } // the page let the response go
+      let doc
+      try { doc = JSON.parse(buf.toString('utf8')) } catch { doc = JSON.parse(gunzipSync(buf).toString('utf8')) }
+      return doc?.pending?.read != null
+    }, { timeout: BOUND }).then(() => true, () => false)
     face.sweep()
 
     const words = new Set()
-    let began = false, samples = 0
+    let began = false, samples = 0, from = 0
     await until(async () => {
       const on = fs.existsSync(rereadFile(home, id)), line = await lineOf(page)
+      if (on && !began) from = Date.now()
       began ||= on
       if (line) words.add(line.state)
       assert.deepEqual(await placeOf(page), place, 'the desk holds its place')
       samples++
       return began && !on
     }, 'the re-read ended')
+    t.diagnostic(`the re-read of ${CALLS + NEW} calls took ${Date.now() - from} ms`)
     assert.ok(samples > 3, 'sampled along the re-read')
+    assert.ok(await gotRead, 'the page received a head carrying pending.read while the re-read ran')
     assert.ok(words.has('updating'), `the line said it: ${[...words]}`)
 
     const now = readHead(home, id)
