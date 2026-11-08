@@ -16,7 +16,7 @@ import { callRow, itemsView } from './board.mjs';
 import { compareStep } from './step-order.mjs';
 import { compactionVerdict } from '../identity/session-identity.mjs';
 import { boardDissectorOf } from '../dissect/registry.mjs';
-import { COMP_KEYS, departer, departs, taskOf, HEAD } from './blockmeta.mjs';
+import { askOf, COMP_KEYS, departer, departs, taskOf, HEAD } from './blockmeta.mjs';
 import { posCmp, lru, num52, numTable } from '../query/projection.mjs';
 import { materializeAttrs } from './extract.mjs';
 import { openFoldLog } from '../query/fold-log.mjs';
@@ -836,11 +836,9 @@ function flatFold(d, { at, B, cacheOf, pushOf, emit, newSub, baseOf, lastOf, int
   return { push: pushOf(take, () => {}), snapshot: () => ({ lanes }) };
 }
 
-// The first human prompt of a list (blockmeta firstHuman, from each user text's `human` fact).
-function firstHumanOf(list, B) {
-  for (const k of list) { const f = B.f(k); if (f && f.human) return f.human; }
-  return null;
-}
+// A list's question (blockmeta askOf, over each user text's `human` fact, read only as far as the rule needs).
+function* humansOf(list, B) { for (const k of list) { const f = B.f(k); if (f && f.human) yield f.human; } }
+function firstHumanOf(list, B) { return askOf(humansOf(list, B)); }
 // The composition: the lane's previous call's, minus its blocks after the shared prefix, plus this call's.
 function compOf(last, list, B) {
   const c = {};
